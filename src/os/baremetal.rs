@@ -10,6 +10,20 @@ use core::{alloc::Layout, ptr::NonNull, slice::from_raw_parts_mut};
 /// An implementation of Mmap trait
 pub struct DefaultMmap;
 
+pub(crate) fn current_thread_id() -> usize {
+    0
+}
+
+pub(crate) unsafe fn register_thread_destructor(
+    _destructor: unsafe extern "C" fn(*mut core::ffi::c_void),
+    _value: *mut core::ffi::c_void,
+) {
+}
+
+pub(crate) unsafe fn get_thread_local_ptr() -> *mut core::ffi::c_void {
+    core::ptr::null_mut()
+}
+
 impl Mmap for DefaultMmap {
     unsafe fn mmap(
         addr: Option<usize>,

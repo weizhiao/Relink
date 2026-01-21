@@ -5,6 +5,7 @@ use crate::{
     input::ElfReader,
     os::{DefaultMmap, Mmap},
     segment::{ElfSegments, SegmentBuilder, program::ProgramSegments, section::SectionSegments},
+    tls::{DefaultTlsResolver, TlsResolver},
 };
 use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
 use core::marker::PhantomData;
@@ -162,20 +163,21 @@ pub(crate) type FnHandler = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
 /// let bytes = std::fs::read("liba.so").unwrap();
 /// let lib = loader.load_dylib(ElfBinary::new("liba.so", &bytes)).unwrap();
 /// ```
-pub struct Loader<M, H, D = ()>
+pub struct Loader<M, H, D = (), Tls = DefaultTlsResolver>
 where
     M: Mmap,
     H: LoadHook<D>,
     D: Default + 'static,
+    Tls: TlsResolver,
 {
     pub(crate) buf: ElfBuf,
-    pub(crate) init_fn: FnHandler,
-    pub(crate) fini_fn: FnHandler,
-    pub(crate) hook: H,
-    _marker: PhantomData<(M, D)>,
+    init_fn: FnHandler,
+    fini_fn: FnHandler,
+    hook: H,
+    _marker: PhantomData<(M, D, Tls)>,
 }
 
-impl Loader<DefaultMmap, (), ()> {
+impl Loader<DefaultMmap, (), (), DefaultTlsResolver> {
     /// Creates a new `Loader` with default settings.
     pub fn new() -> Self {
         let c_abi = Arc::new(|func: Option<fn()>, func_array: Option<&[fn()]>| {
@@ -193,7 +195,13 @@ impl Loader<DefaultMmap, (), ()> {
     }
 }
 
-impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
+impl<M, H, D, Tls> Loader<M, H, D, Tls>
+where
+    H: LoadHook<D>,
+    M: Mmap,
+    D: Default + 'static,
+    Tls: TlsResolver,
+{
     /// Sets the initialization function handler.
     ///
     /// This handler is responsible for calling the initialization functions
@@ -222,7 +230,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     /// # Type Parameters
     /// * `NewD` - The new user data type.
     /// * `NewHook` - The new hook type.
-    pub fn with_hook<NewD, NewHook>(self, hook: NewHook) -> Loader<M, NewHook, NewD>
+    pub fn with_hook<NewD, NewHook>(self, hook: NewHook) -> Loader<M, NewHook, NewD, Tls>
     where
         NewD: Default,
         NewHook: LoadHook<NewD>,
@@ -237,7 +245,21 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     }
 
     /// Returns a new loader with a custom `Mmap` implementation.
-    pub fn with_mmap<NewMmap: Mmap>(self) -> Loader<NewMmap, H, D> {
+    pub fn with_mmap<NewMmap: Mmap>(self) -> Loader<NewMmap, H, D, Tls> {
+        Loader {
+            buf: self.buf,
+            init_fn: self.init_fn,
+            fini_fn: self.fini_fn,
+            hook: self.hook,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Consumes the current loader and returns a new one with the specified TLS resolver.
+    pub fn with_tls_resolver<NewTls>(self) -> Loader<M, H, D, NewTls>
+    where
+        NewTls: crate::tls::TlsResolver,
+    {
         Loader {
             buf: self.buf,
             init_fn: self.init_fn,
@@ -261,53 +283,46 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
         self.buf.prepare_phdrs(ehdr, object)
     }
 
-    pub(crate) fn load_static_impl(
-        hook: &H,
-        init_fn: &FnHandler,
-        fini_fn: &FnHandler,
+    fn create_builder(
+        &mut self,
         ehdr: ElfHeader,
         phdrs: &[ElfPhdr],
         mut object: impl ElfReader,
-    ) -> Result<StaticImage<D>> {
-        let init_fn = init_fn.clone();
-        let fini_fn = fini_fn.clone();
+    ) -> Result<ImageBuilder<'_, H, M, Tls, D>> {
+        let init_fn = self.init_fn.clone();
+        let fini_fn = self.fini_fn.clone();
         let mut phdr_segments =
             ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
-        let builder: ImageBuilder<'_, H, M, D> = ImageBuilder::new(
-            hook,
+        let builder = ImageBuilder::new(
+            &self.hook,
             segments,
             object.shortname().to_owned(),
             ehdr,
             init_fn,
             fini_fn,
         );
+        Ok(builder)
+    }
+
+    pub(crate) fn load_static_impl(
+        &mut self,
+        ehdr: ElfHeader,
+        phdrs: &[ElfPhdr],
+        object: impl ElfReader,
+    ) -> Result<StaticImage<D>> {
+        let builder = self.create_builder(ehdr, phdrs, object)?;
         Ok(builder.build_static(phdrs)?)
     }
 
     pub(crate) fn load_dynamic_impl(
-        hook: &H,
-        init_fn: &FnHandler,
-        fini_fn: &FnHandler,
+        &mut self,
         ehdr: ElfHeader,
         phdrs: &[ElfPhdr],
-        mut object: impl ElfReader,
+        object: impl ElfReader,
     ) -> Result<DynamicImage<D>> {
-        let init_fn = init_fn.clone();
-        let fini_fn = fini_fn.clone();
-        let mut phdr_segments =
-            ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
-        let segments = phdr_segments.load_segments::<M>(&mut object)?;
-        phdr_segments.mprotect::<M>()?;
-        let builder: ImageBuilder<'_, H, M, D> = ImageBuilder::new(
-            hook,
-            segments,
-            object.shortname().to_owned(),
-            ehdr,
-            init_fn,
-            fini_fn,
-        );
+        let builder = self.create_builder(ehdr, phdrs, object)?;
         Ok(builder.build_dynamic(phdrs)?)
     }
 
@@ -327,7 +342,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
             shdr_segments.mprotect::<M>()?;
             Ok(())
         });
-        let builder = ObjectBuilder::new(
+        let builder: ObjectBuilder<Tls> = ObjectBuilder::new(
             object.shortname().to_owned(),
             shdrs,
             init_fn,
@@ -336,6 +351,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
             mprotect,
             pltgot,
         );
+
         Ok(builder.build())
     }
 }

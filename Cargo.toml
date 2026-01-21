@@ -72,6 +72,11 @@ default-features = false
 optional = true
 features = ["alloc"]
 
+[dependencies.spin]
+version = "0.9"
+default-features = false
+features = ["mutex", "rwlock", "spin_mutex"]
+
 [dependencies.hashbrown]
 version = "0.16.0"
 default-features = false

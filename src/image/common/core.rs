@@ -85,6 +85,30 @@ impl<D> LoadedCore<D> {
         self.core.base()
     }
 
+    /// Gets the memory length of the ELF object map
+    #[inline]
+    pub fn mapped_len(&self) -> usize {
+        self.core.mapped_len()
+    }
+
+    /// Gets the user-defined data associated with the ELF object
+    #[inline]
+    pub fn user_data(&self) -> &D {
+        self.core.user_data()
+    }
+
+    /// Gets the TLS module ID of the ELF object
+    #[inline]
+    pub fn tls_mod_id(&self) -> Option<usize> {
+        self.core.tls_mod_id()
+    }
+
+    /// Gets the TLS thread pointer offset of the ELF object
+    #[inline]
+    pub fn tls_tp_offset(&self) -> Option<isize> {
+        self.core.tls_tp_offset()
+    }
+
     /// Creates a [`LoadedCore`] from an [`ElfCore`] and its explicit dependencies.
     ///
     /// # Safety
@@ -139,11 +163,24 @@ impl<D> LoadedCore<D> {
         phdrs: &'static [ElfPhdr],
         memory: (NonNull<c_void>, usize),
         munmap: unsafe fn(NonNull<c_void>, usize) -> Result<()>,
+        tls_mod_id: Option<usize>,
+        tls_tp_offset: Option<isize>,
         user_data: D,
     ) -> Self {
         let segments = ElfSegments::new(memory.0, memory.1, munmap);
         Self {
-            core: unsafe { ElfCore::from_raw(name, base, dynamic_ptr, phdrs, segments, user_data) },
+            core: unsafe {
+                ElfCore::from_raw(
+                    name,
+                    base,
+                    dynamic_ptr,
+                    phdrs,
+                    segments,
+                    tls_mod_id,
+                    tls_tp_offset,
+                    user_data,
+                )
+            },
             deps: Arc::from([]),
         }
     }
@@ -281,6 +318,15 @@ pub(crate) struct CoreInner<D = ()> {
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo>>,
 
+    /// TLS module ID
+    pub(crate) tls_mod_id: Option<usize>,
+
+    /// TLS thread pointer offset (for static TLS)
+    pub(crate) tls_tp_offset: Option<isize>,
+
+    /// TLS resolver unregister function
+    pub(crate) tls_unregister: fn(usize),
+
     /// Memory segments
     pub(crate) segments: ElfSegments,
 }
@@ -290,6 +336,9 @@ impl<D> Drop for CoreInner<D> {
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed) {
             (self.fini_handler)(self.fini, self.fini_array);
+        }
+        if let Some(mod_id) = self.tls_mod_id {
+            (self.tls_unregister)(mod_id);
         }
     }
 }
@@ -427,6 +476,18 @@ impl<D> ElfCore<D> {
         &self.inner.segments
     }
 
+    /// Gets the TLS module ID of the ELF object
+    #[inline]
+    pub fn tls_mod_id(&self) -> Option<usize> {
+        self.inner.tls_mod_id
+    }
+
+    /// Gets the TLS thread pointer offset of the ELF object
+    #[inline]
+    pub fn tls_tp_offset(&self) -> Option<isize> {
+        self.inner.tls_tp_offset
+    }
+
     /// Creates an ElfCore from raw components
     unsafe fn from_raw(
         name: String,
@@ -434,6 +495,8 @@ impl<D> ElfCore<D> {
         dynamic_ptr: *const Dyn,
         phdrs: &'static [ElfPhdr],
         mut segments: ElfSegments,
+        tls_mod_id: Option<usize>,
+        tls_tp_offset: Option<isize>,
         user_data: D,
     ) -> Self {
         segments.offset = (segments.memory.as_ptr() as usize).wrapping_sub(base);
@@ -449,6 +512,9 @@ impl<D> ElfCore<D> {
                     phdrs: ElfPhdrs::Mmap(phdrs),
                     lazy_scope: None,
                 })),
+                tls_mod_id,
+                tls_tp_offset,
+                tls_unregister: |_mod_id| {}, // We don't have a resolver for raw segments loading
                 segments,
                 fini: None,
                 fini_array: None,

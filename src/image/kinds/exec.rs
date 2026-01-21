@@ -12,6 +12,7 @@ use crate::{
     parse_ehdr_error,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
     segment::ElfSegments,
+    tls::TlsResolver,
 };
 use alloc::string::String;
 use core::fmt::Debug;
@@ -43,6 +44,14 @@ impl<D> StaticImage<D> {
     pub fn entry(&self) -> usize {
         self.inner.entry
     }
+
+    pub fn tls_mod_id(&self) -> Option<usize> {
+        self.inner.tls_mod_id
+    }
+
+    pub fn tls_tp_offset(&self) -> Option<isize> {
+        self.inner.tls_tp_offset
+    }
 }
 
 pub(crate) struct StaticImageInner<D> {
@@ -56,6 +65,12 @@ pub(crate) struct StaticImageInner<D> {
 
     /// Memory segments
     pub(crate) segments: ElfSegments,
+
+    /// TLS module ID
+    pub(crate) tls_mod_id: Option<usize>,
+
+    /// TLS thread pointer offset
+    pub(crate) tls_tp_offset: Option<isize>,
 }
 
 impl<D: 'static> Relocatable<D> for RawExec<D> {
@@ -159,6 +174,20 @@ impl<D: 'static> RawExec<D> {
         }
     }
 
+    pub fn tls_mod_id(&self) -> Option<usize> {
+        match &self.inner {
+            ExecImageInner::Dynamic(image) => image.tls_mod_id(),
+            ExecImageInner::Static(image) => image.tls_mod_id(),
+        }
+    }
+
+    pub fn tls_tp_offset(&self) -> Option<isize> {
+        match &self.inner {
+            ExecImageInner::Dynamic(image) => image.tls_tp_offset(),
+            ExecImageInner::Static(image) => image.tls_tp_offset(),
+        }
+    }
+
     /// Returns the total length of memory that will be occupied by the executable after relocation.
     pub fn mapped_len(&self) -> usize {
         match &self.inner {
@@ -168,7 +197,13 @@ impl<D: 'static> RawExec<D> {
     }
 }
 
-impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
+impl<M, H, D, Tls> Loader<M, H, D, Tls>
+where
+    M: Mmap,
+    H: LoadHook<D>,
+    D: Default,
+    Tls: TlsResolver,
+{
     /// Loads an executable file into memory.
     ///
     /// This method loads an executable ELF file into memory and prepares it
@@ -195,10 +230,10 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
         I: IntoElfReader<'a>,
     {
         let object = input.into_reader()?;
-        self.load_exec_internal(object)
+        self.load_exec_impl(object)
     }
 
-    pub(crate) fn load_exec_internal(&mut self, mut object: impl ElfReader) -> Result<RawExec<D>> {
+    pub(crate) fn load_exec_impl(&mut self, mut object: impl ElfReader) -> Result<RawExec<D>> {
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
 
@@ -207,33 +242,19 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
             return Err(parse_ehdr_error("file type mismatch"));
         }
 
-        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?.to_vec();
         let has_dynamic = phdrs.iter().any(|phdr| phdr.p_type == PT_DYNAMIC);
 
         if has_dynamic {
             // Load the relocated common part
-            let inner = Self::load_dynamic_impl(
-                &self.hook,
-                &self.init_fn,
-                &self.fini_fn,
-                ehdr,
-                phdrs,
-                object,
-            )?;
+            let inner = self.load_dynamic_impl(ehdr, &phdrs, object)?;
             // Wrap in RawExec and return
             Ok(RawExec {
                 inner: ExecImageInner::Dynamic(inner),
             })
         } else {
             // Load as a static module without dynamic section
-            let inner = Self::load_static_impl(
-                &self.hook,
-                &self.init_fn,
-                &self.fini_fn,
-                ehdr,
-                phdrs,
-                object,
-            )?;
+            let inner = self.load_static_impl(ehdr, &phdrs, object)?;
             Ok(RawExec {
                 inner: ExecImageInner::Static(inner),
             })
@@ -307,11 +328,28 @@ impl<D> LoadedExec<D> {
             LoadedExecInner::Static(_) => None,
         }
     }
+
+    pub fn tls_mod_id(&self) -> Option<usize> {
+        match &self.inner {
+            LoadedExecInner::Dynamic(module) => module.core.tls_mod_id(),
+            LoadedExecInner::Static(static_image) => static_image.tls_mod_id(),
+        }
+    }
+
+    pub fn tls_tp_offset(&self) -> Option<isize> {
+        match &self.inner {
+            LoadedExecInner::Dynamic(module) => module.core.tls_tp_offset(),
+            LoadedExecInner::Static(static_image) => static_image.tls_tp_offset(),
+        }
+    }
 }
 
-impl<'hook, H, M: Mmap, D: Default> ImageBuilder<'hook, H, M, D>
+impl<'hook, H, M, Tls, D> ImageBuilder<'hook, H, M, Tls, D>
 where
+    M: Mmap,
+    D: Default,
     H: LoadHook<D>,
+    Tls: TlsResolver,
 {
     pub(crate) fn build_static(mut self, phdrs: &[ElfPhdr]) -> Result<StaticImage<D>> {
         // Parse all program headers
@@ -325,6 +363,8 @@ where
             name: self.name,
             user_data: self.user_data,
             segments: self.segments,
+            tls_mod_id: self.tls_mod_id,
+            tls_tp_offset: self.tls_tp_offset,
         };
         Ok(StaticImage {
             inner: Arc::new(static_inner),

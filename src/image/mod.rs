@@ -277,18 +277,18 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
 
         match ehdr.e_type {
             elf::abi::ET_REL => Ok(RawElf::Object(self.load_object_internal(object)?)),
-            elf::abi::ET_EXEC => Ok(RawElf::Exec(self.load_exec_internal(object)?)),
+            elf::abi::ET_EXEC => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
             elf::abi::ET_DYN => {
                 let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
                 let has_dynamic = phdrs.iter().any(|p| p.p_type == PT_DYNAMIC);
                 let is_pie = phdrs.iter().any(|p| p.p_type == PT_INTERP) || !has_dynamic;
                 if is_pie {
-                    Ok(RawElf::Exec(self.load_exec_internal(object)?))
+                    Ok(RawElf::Exec(self.load_exec_impl(object)?))
                 } else {
-                    Ok(RawElf::Dylib(self.load_dylib_internal(object)?))
+                    Ok(RawElf::Dylib(self.load_dylib_impl(object)?))
                 }
             }
-            _ => Ok(RawElf::Exec(self.load_exec_internal(object)?)),
+            _ => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
         }
     }
 }

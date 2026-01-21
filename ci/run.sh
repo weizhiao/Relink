@@ -7,8 +7,14 @@ set -ex
 export CARGO_NET_RETRY=5
 export CARGO_NET_TIMEOUT=10
 
-cargo install --locked cross --git https://github.com/cross-rs/cross
-CARGO=cross
+# Use cargo for x86_64 if it's not a bare-metal (none) target, as those require specialized sysroots or build-std.
+if echo "${TARGET}" | grep -q "x86_64"; then
+	CARGO=cargo
+	rustup target add "${TARGET}" || true
+else
+	cargo install --locked cross --git https://github.com/cross-rs/cross
+	CARGO=cross
+fi
 
 cargo clean
 

@@ -1,12 +1,12 @@
 use crate::{
     LoadHook, Result,
-    elf::{Dyn, ElfPhdr, ElfRelType},
-    elf::{ElfDynamic, ElfPhdrs, SymbolTable},
+    elf::{Dyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfRelType, SymbolTable},
     image::{ElfCore, ImageBuilder, common::CoreInner},
     loader::FnHandler,
     os::Mmap,
     relocation::{DynamicRelocation, SymbolLookup},
     segment::{ELFRelro, ElfSegments},
+    tls::TlsResolver,
 };
 use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{
@@ -59,6 +59,9 @@ struct ElfExtraData {
 
     /// List of needed library names from the dynamic section
     needed_libs: Box<[&'static str]>,
+
+    /// Function to get TLS address
+    tls_get_addr: extern "C" fn(*const crate::tls::TlsIndex) -> *mut u8,
 }
 
 /// Data structure used during lazy parsing of ELF objects
@@ -103,6 +106,18 @@ enum State<D> {
         /// GNU_RELRO segment information
         relro: Option<ELFRelro>,
 
+        /// TLS module ID
+        tls_mod_id: Option<usize>,
+
+        /// TLS thread pointer offset
+        tls_tp_offset: Option<isize>,
+
+        /// TLS resolver unregister function
+        tls_unregister: fn(usize),
+
+        /// TLS get addr function
+        tls_get_addr: extern "C" fn(*const crate::tls::TlsIndex) -> *mut u8,
+
         /// User-defined data
         user_data: D,
     },
@@ -126,6 +141,10 @@ impl<D> State<D> {
                 dynamic_ptr,
                 segments,
                 relro,
+                tls_mod_id,
+                tls_tp_offset,
+                tls_unregister,
+                tls_get_addr,
                 user_data,
                 init_handler,
                 fini_handler,
@@ -183,6 +202,9 @@ impl<D> State<D> {
                         runpath: dynamic
                             .runpath_off
                             .map(|runpath_off| symtab.strtab().get_str(runpath_off.get())),
+
+                        // Store TLS get addr function
+                        tls_get_addr,
                     },
                     module: ElfCore {
                         inner: Arc::new(CoreInner {
@@ -192,7 +214,6 @@ impl<D> State<D> {
                             fini: dynamic.fini_fn,
                             fini_array: dynamic.fini_array_fn,
                             fini_handler,
-                            segments,
                             user_data,
                             dynamic_info: Some(Arc::new(DynamicInfo {
                                 dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
@@ -202,6 +223,10 @@ impl<D> State<D> {
                                 phdrs,
                                 lazy_scope: None,
                             })),
+                            tls_mod_id,
+                            tls_tp_offset,
+                            tls_unregister,
+                            segments,
                         }),
                     },
                 }
@@ -322,6 +347,19 @@ impl<D> DynamicImage<D> {
     #[inline]
     pub fn entry(&self) -> usize {
         self.entry
+    }
+
+    pub fn tls_mod_id(&self) -> Option<usize> {
+        self.data.module.tls_mod_id()
+    }
+
+    /// Gets the TLS thread pointer offset
+    pub fn tls_tp_offset(&self) -> Option<isize> {
+        self.data.module.tls_tp_offset()
+    }
+
+    pub(crate) fn tls_get_addr(&self) -> extern "C" fn(*const crate::tls::TlsIndex) -> *mut u8 {
+        self.data.extra.tls_get_addr
     }
 
     /// Gets the core component reference of the ELF object.
@@ -487,9 +525,12 @@ impl<D> DynamicImage<D> {
     }
 }
 
-impl<'hook, H, M: Mmap, D: Default> ImageBuilder<'hook, H, M, D>
+impl<'hook, H, M, Tls, D> ImageBuilder<'hook, H, M, Tls, D>
 where
     H: LoadHook<D>,
+    Tls: TlsResolver,
+    M: Mmap,
+    D: Default,
 {
     /// Build the final DynamicImage object
     ///
@@ -533,6 +574,10 @@ where
                     dynamic_ptr,
                     segments: self.segments,
                     relro: self.relro,
+                    tls_mod_id: self.tls_mod_id,
+                    tls_tp_offset: self.tls_tp_offset,
+                    tls_unregister: Tls::unregister,
+                    tls_get_addr: Tls::tls_get_addr,
                     user_data: self.user_data,
                 }),
             },

@@ -15,6 +15,7 @@
 
 mod dynamic;
 mod r#static;
+mod tls;
 mod traits;
 mod utils;
 
@@ -26,4 +27,5 @@ pub(crate) use utils::{
     reloc_error, unlikely,
 };
 
+pub use crate::tls::TlsResolver;
 pub use traits::{RelocationContext, RelocationHandler, SymbolLookup};

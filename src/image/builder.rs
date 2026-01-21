@@ -1,17 +1,17 @@
 use crate::{
     LoadHook, LoadHookContext, Result,
-    elf::{Dyn, ElfPhdr, ElfRelType, ElfShdr, ElfSymbol},
-    elf::{ElfHeader, ElfPhdrs, SymbolTable},
+    elf::{Dyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfRelType, ElfShdr, ElfSymbol, SymbolTable},
     loader::FnHandler,
     os::Mmap,
     relocation::StaticRelocation,
     segment::{ELFRelro, ElfSegments, section::PltGotSection},
+    tls::{TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{ffi::c_char, marker::PhantomData, ptr::NonNull};
 use elf::abi::{
-    PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_PHDR, SHN_UNDEF, SHT_INIT_ARRAY, SHT_REL,
-    SHT_RELA, SHT_SYMTAB, STT_FILE,
+    PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_PHDR, PT_TLS, SHN_UNDEF, SHT_INIT_ARRAY,
+    SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE,
 };
 
 /// Builder for creating relocated ELF objects
@@ -19,10 +19,12 @@ use elf::abi::{
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocated ELF file before
 /// building the final RelocatedCommonPart object.
-pub(crate) struct ImageBuilder<'hook, H, M: Mmap, D = ()>
+pub(crate) struct ImageBuilder<'hook, H, M, Tls, D = ()>
 where
     H: LoadHook<D>,
+    M: Mmap,
     D: Default,
+    Tls: TlsResolver,
 {
     /// Hook function for processing program headers (always present)
     hook: &'hook H,
@@ -42,6 +44,12 @@ where
     /// Pointer to the dynamic section
     pub(crate) dynamic_ptr: Option<NonNull<Dyn>>,
 
+    /// TLS module ID
+    pub(crate) tls_mod_id: Option<usize>,
+
+    /// TLS thread pointer offset
+    pub(crate) tls_tp_offset: Option<isize>,
+
     /// User-defined data
     pub(crate) user_data: D,
 
@@ -58,12 +66,15 @@ where
     pub(crate) interp: Option<NonNull<c_char>>,
 
     /// Phantom data to maintain Mmap type information
-    _marker: PhantomData<M>,
+    _marker: PhantomData<(M, Tls)>,
 }
 
-impl<'hook, H, M: Mmap, D: Default> ImageBuilder<'hook, H, M, D>
+impl<'hook, H, M, Tls, D> ImageBuilder<'hook, H, M, Tls, D>
 where
     H: LoadHook<D>,
+    Tls: TlsResolver,
+    D: Default,
+    M: Mmap,
 {
     /// Create a new ImageBuilder
     ///
@@ -92,6 +103,8 @@ where
             ehdr,
             relro: None,
             dynamic_ptr: None,
+            tls_mod_id: None,
+            tls_tp_offset: None,
             segments,
             user_data: D::default(),
             init_fn,
@@ -142,6 +155,18 @@ where
                     Some(NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize)).unwrap());
             }
 
+            // Store TLS segment information
+            PT_TLS => {
+                let tls_info = TlsInfo::new(phdr);
+                let tls_image = self
+                    .segments
+                    .get_slice::<u8>(phdr.p_vaddr as usize, phdr.p_filesz as usize);
+                let mod_id = Tls::register(&tls_info, tls_image)
+                    .ok_or_else(|| crate::tls_error("Failed to get TLS module ID"))?;
+                self.tls_mod_id = Some(mod_id);
+                self.tls_tp_offset = Tls::tp_offset(mod_id);
+            }
+
             // Ignore other program header types
             _ => {}
         };
@@ -190,7 +215,7 @@ where
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocatable ELF file before
 /// building the final ElfRelocatable object.
-pub(crate) struct ObjectBuilder {
+pub(crate) struct ObjectBuilder<T> {
     /// Name of the ELF file
     pub(crate) name: String,
 
@@ -217,9 +242,18 @@ pub(crate) struct ObjectBuilder {
 
     /// PLT/GOT section information
     pub(crate) pltgot: PltGotSection,
+
+    /// TLS module ID
+    pub(crate) tls_mod_id: Option<usize>,
+
+    /// TLS thread pointer offset
+    pub(crate) tls_tp_offset: Option<isize>,
+
+    /// TLS resolver
+    _marker_tls: PhantomData<T>,
 }
 
-impl ObjectBuilder {
+impl<T: TlsResolver> ObjectBuilder<T> {
     /// Create a new RelocatableBuilder
     ///
     /// This method initializes a new RelocatableBuilder with the provided
@@ -315,6 +349,9 @@ impl ObjectBuilder {
             relocation: StaticRelocation::new(relocation),
             pltgot,
             init_array,
+            tls_mod_id: None,
+            tls_tp_offset: None,
+            _marker_tls: PhantomData,
         }
     }
 }

@@ -12,6 +12,7 @@ use crate::{
     os::Mmap,
     relocation::{Relocatable, RelocationHandler, Relocator, StaticRelocation, SymbolLookup},
     segment::section::PltGotSection,
+    tls::TlsResolver,
 };
 use alloc::boxed::Box;
 use core::{borrow::Borrow, fmt::Debug, ops::Deref, sync::atomic::AtomicBool};
@@ -57,7 +58,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     }
 }
 
-impl ObjectBuilder {
+impl<Tls: TlsResolver> ObjectBuilder<Tls> {
     /// Build the final RawObject
     ///
     /// This method constructs the final RawObject from the
@@ -76,6 +77,9 @@ impl ObjectBuilder {
             fini_handler: self.fini_fn,
             user_data: (),
             dynamic_info: None,
+            tls_mod_id: self.tls_mod_id,
+            tls_tp_offset: self.tls_tp_offset,
+            tls_unregister: Tls::unregister,
             segments: self.segments,
         };
 
@@ -162,7 +166,7 @@ impl Relocatable<()> for RawObject {
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        LazyS: SymbolLookup,
+        LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler,
         PostH: RelocationHandler,
     {

@@ -83,9 +83,18 @@ impl<D> DynamicImage<D> {
         }
 
         let is_lazy = lazy.unwrap_or(self.is_lazy());
+        let tls_get_addr = self.tls_get_addr();
+
+        let hooked_pre_find = |name: &str| -> Option<*const ()> {
+            if name == "__tls_get_addr" {
+                return Some(tls_get_addr as *const ());
+            }
+            pre_find.lookup(name)
+        };
+
         let mut helper = RelocHelper {
             scope,
-            pre_find,
+            pre_find: &hooked_pre_find,
             post_find,
             pre_handler: &mut pre_handler,
             post_handler: &mut post_handler,
@@ -378,7 +387,7 @@ impl<D> DynamicImage<D> {
             if !helper.handle_pre(&hctx)? {
                 continue;
             }
-            let r_type = rel.r_type() as _;
+            let r_type = rel.r_type() as u32;
             let r_sym = rel.r_symbol();
             let r_addend = rel.r_addend(base);
 
@@ -392,19 +401,6 @@ impl<D> DynamicImage<D> {
                             helper.dependency_flags[idx] = true;
                         }
                         segments.write(rel.r_offset(), symbol + r_addend);
-                        continue;
-                    }
-                }
-                // Handle TLS (Thread Local Storage) offset relocations
-                REL_DTPOFF => {
-                    if let Some((symdef, idx)) = hctx.find_symdef(r_sym) {
-                        if let Some(idx) = idx {
-                            helper.dependency_flags[idx] = true;
-                        }
-                        // Calculate offset within TLS block
-                        let tls_val = RelocValue::new(symdef.sym.unwrap().st_value()) + r_addend
-                            - TLS_DTV_OFFSET;
-                        segments.write(rel.r_offset(), tls_val);
                         continue;
                     }
                 }
@@ -429,6 +425,12 @@ impl<D> DynamicImage<D> {
                     let addr = RelocValue::new(base) + r_addend;
                     segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                     continue;
+                }
+                // Handle TLS (Thread Local Storage) relocations
+                REL_DTPOFF | REL_DTPMOD | REL_TPOFF => {
+                    if super::tls::handle_tls_reloc(&hctx, rel, helper) {
+                        continue;
+                    }
                 }
                 // No relocation needed
                 REL_NONE => continue,

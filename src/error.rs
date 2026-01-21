@@ -78,6 +78,12 @@ pub enum Error {
         /// A descriptive message about the custom error.
         msg: Cow<'static, str>,
     },
+
+    /// An error occurred during TLS (Thread Local Storage) processing.
+    Tls {
+        /// A descriptive message about the TLS error.
+        msg: Cow<'static, str>,
+    },
 }
 
 impl Display for Error {
@@ -93,6 +99,7 @@ impl Display for Error {
             Error::ParseEhdr { msg } => write!(f, "ELF header parsing error: {msg}"),
             Error::ParsePhdr { msg, .. } => write!(f, "Program header parsing error: {msg}"),
             Error::Custom { msg } => write!(f, "Custom error: {msg}"),
+            Error::Tls { msg } => write!(f, "TLS error: {msg}"),
         }
     }
 }
@@ -174,4 +181,19 @@ pub(crate) fn parse_ehdr_error(msg: impl Into<Cow<'static, str>>) -> Error {
 #[allow(unused)]
 pub fn custom_error(msg: impl Into<Cow<'static, str>>) -> Error {
     Error::Custom { msg: msg.into() }
+}
+
+/// Creates a TLS error with the specified message.
+///
+/// This is a convenience function for creating `Error::Tls` variants.
+///
+/// # Arguments
+/// * `msg` - The error message.
+///
+/// # Returns
+/// An `Error::Tls` variant with the specified message.
+#[cold]
+#[inline(never)]
+pub(crate) fn tls_error(msg: impl Into<Cow<'static, str>>) -> Error {
+    Error::Tls { msg: msg.into() }
 }

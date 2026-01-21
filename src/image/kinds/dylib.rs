@@ -12,6 +12,7 @@ use crate::{
     os::Mmap,
     parse_ehdr_error,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
+    tls::TlsResolver,
 };
 use core::{borrow::Borrow, fmt::Debug, ops::Deref};
 
@@ -191,7 +192,13 @@ impl<D> RawDylib<D> {
     }
 }
 
-impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
+impl<M, H, D, Tls> Loader<M, H, D, Tls>
+where
+    M: Mmap,
+    H: LoadHook<D>,
+    D: Default,
+    Tls: TlsResolver,
+{
     /// Loads a dynamic library into memory.
     ///
     /// This method loads a dynamic library (shared object) file into memory
@@ -218,13 +225,10 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
         I: IntoElfReader<'a>,
     {
         let object = input.into_reader()?;
-        self.load_dylib_internal(object)
+        self.load_dylib_impl(object)
     }
 
-    pub(crate) fn load_dylib_internal(
-        &mut self,
-        mut object: impl ElfReader,
-    ) -> Result<RawDylib<D>> {
+    pub(crate) fn load_dylib_impl(&mut self, mut object: impl ElfReader) -> Result<RawDylib<D>> {
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
 
@@ -233,17 +237,10 @@ impl<M: Mmap, H: LoadHook<D>, D: Default> Loader<M, H, D> {
             return Err(parse_ehdr_error("file type mismatch"));
         }
 
-        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?.to_vec();
 
         // Load the relocated common part
-        let inner = Self::load_dynamic_impl(
-            &self.hook,
-            &self.init_fn,
-            &self.fini_fn,
-            ehdr,
-            phdrs,
-            object,
-        )?;
+        let inner = self.load_dynamic_impl(ehdr, &phdrs, object)?;
 
         // Wrap in RawDylib and return
         Ok(RawDylib { inner })

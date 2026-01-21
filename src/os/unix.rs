@@ -7,11 +7,62 @@ use alloc::{
     ffi::CString,
     string::{String, ToString},
 };
-use core::{ffi::c_void, ptr::NonNull, str::FromStr};
+use core::{ffi::c_void, ptr::NonNull, str::FromStr, sync::atomic::{AtomicUsize, Ordering}};
 use libc::{O_RDONLY, SEEK_SET, mmap, mprotect, munmap};
 
 /// An implementation of Mmap trait
 pub struct DefaultMmap;
+
+pub(crate) fn current_thread_id() -> usize {
+    unsafe { libc::pthread_self() as usize }
+}
+
+static TLS_CLEANUP_KEY: AtomicUsize = AtomicUsize::new(0);
+
+/// Registers a destructor that will be called when the current thread exits.
+/// This is used to clean up thread-local storage and also sets the initial value.
+pub(crate) unsafe fn register_thread_destructor(
+    destructor: unsafe extern "C" fn(*mut c_void),
+    value: *mut c_void,
+) {
+    let mut key = TLS_CLEANUP_KEY.load(Ordering::Acquire);
+
+    // 1. Ensure the key is created
+    if key == 0 {
+        let mut new_key: libc::pthread_key_t = 0;
+        if unsafe { libc::pthread_key_create(&mut new_key, Some(destructor)) } == 0 {
+            let encoded = (new_key as usize).wrapping_add(1);
+            match TLS_CLEANUP_KEY.compare_exchange(
+                0,
+                encoded,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => key = encoded,
+                Err(actual) => {
+                    unsafe { libc::pthread_key_delete(new_key) };
+                    key = actual;
+                }
+            }
+        }
+    }
+
+    // 2. Set thread-specific value to trigger destructor on exit
+    if key != 0 {
+        let actual_key = (key - 1) as libc::pthread_key_t;
+        unsafe {
+            libc::pthread_setspecific(actual_key, value)
+        };
+    }
+}
+
+pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
+    let key = TLS_CLEANUP_KEY.load(Ordering::Acquire);
+    if key == 0 {
+        return core::ptr::null_mut();
+    }
+    unsafe { libc::pthread_getspecific((key - 1) as libc::pthread_key_t) }
+}
 
 pub(crate) struct RawFile {
     name: String,

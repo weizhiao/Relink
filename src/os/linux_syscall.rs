@@ -15,6 +15,21 @@ use syscalls::Sysno;
 /// An implementation of Mmap trait
 pub struct DefaultMmap;
 
+pub(crate) fn current_thread_id() -> usize {
+    // For now return 0 or implement gettid via syscall if needed
+    0
+}
+
+pub(crate) unsafe fn register_thread_destructor(
+    _destructor: unsafe extern "C" fn(*mut c_void),
+    _value: *mut c_void,
+) {
+}
+
+pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
+    core::ptr::null_mut()
+}
+
 pub(crate) struct RawFile {
     name: CString,
     fd: isize,
