@@ -186,6 +186,7 @@ impl RelocType {
 }
 
 /// Represents a relocation entry to be generated.
+#[derive(Clone, Debug)]
 pub struct RelocEntry {
     /// Symbol name that this relocation references.
     pub symbol_name: String,
@@ -248,6 +249,11 @@ impl RelocEntry {
     /// Create a DTPOFF relocation for the given architecture.
     pub fn dtpoff(symbol_name: impl Into<String>, arch: crate::Arch) -> Self {
         Self::with_name(symbol_name, arch.dtpoff_reloc())
+    }
+
+    /// Create a DTPMOD relocation for the given architecture.
+    pub fn dtpmod(symbol_name: impl Into<String>, arch: crate::Arch) -> Self {
+        Self::with_name(symbol_name, arch.dtpmod_reloc())
     }
 
     /// Create an absolute relocation for the given architecture.

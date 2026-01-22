@@ -183,9 +183,13 @@ impl DylibWriter {
         symbols: &[SymbolDesc],
     ) -> Result<ElfWriteOutput> {
         let is_64 = self.arch.is_64();
+
+        // Preprocess relocations
+        let final_relocs = RelocMetaData::preprocess(self.arch, raw_relocs);
+
         let mut allocator = SectionAllocator::new();
-        let mut symtab = SymTabMetadata::new(self.arch, symbols, raw_relocs, &mut allocator);
-        let mut reloc = RelocMetaData::new(self.arch, raw_relocs, &symtab, &mut allocator)?;
+        let mut symtab = SymTabMetadata::new(self.arch, symbols, &final_relocs, &mut allocator);
+        let mut reloc = RelocMetaData::new(self.arch, &final_relocs, &symtab, &mut allocator)?;
 
         let data = DataMetaData::new(&reloc, &symtab, &mut allocator);
         let mut text = CodeMetaData::new(&symtab, &mut allocator);
@@ -238,6 +242,8 @@ impl DylibWriter {
             got_plt_vaddr,
             resolver_val,
             &symtab,
+            &reloc,
+            &shdr_manager,
             &mut allocator,
         );
 

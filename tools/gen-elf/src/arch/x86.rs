@@ -111,3 +111,67 @@ pub(crate) fn patch_ifunc_resolver(
     let imm32 = (target_vaddr as i64 - (resolver_vaddr + 5) as i64) as i32;
     text_data[offset + 7..offset + 11].copy_from_slice(&imm32.to_le_bytes());
 }
+
+pub(crate) fn generate_tls_helper_code() -> Vec<u8> {
+    let mut code = vec![0x90; 64];
+
+    // 0x00: push ebp; mov ebp, esp
+    code[0] = 0x55;
+    code[1] = 0x89; code[2] = 0xe5;
+
+    // 0x03: push ebx
+    code[3] = 0x53;
+
+    // 0x04: call +0 (to get EIP)
+    code[4] = 0xe8;
+    code[5] = 0x00; code[6] = 0x00; code[7] = 0x00; code[8] = 0x00;
+
+    // 0x09: pop ebx (ebx = helper_vaddr + 9)
+    code[9] = 0x5b;
+
+    // 0x0a: add ebx, imm32 (offset to GOT)
+    code[10] = 0x81; code[11] = 0xc3;
+
+    // 0x10: lea eax, [ebx + imm32] (offset to reloc_vaddr from GOT)
+    code[16] = 0x8d; code[17] = 0x83;
+
+    // 0x16: push eax (argument for __tls_get_addr)
+    code[22] = 0x50;
+
+    // 0x17: call rel32 (patch to __tls_get_addr@plt)
+    code[23] = 0xe8;
+
+    // 0x1c: add esp, 4 (cleanup push)
+    code[28] = 0x83; code[29] = 0xc4; code[30] = 0x04;
+
+    // 0x1f: pop ebx; pop ebp; ret
+    code[31] = 0x5b;
+    code[32] = 0x5d;
+    code[33] = 0xc3;
+
+    code
+}
+
+pub(crate) fn patch_tls_tester(
+    text_data: &mut [u8],
+    offset: usize,
+    helper_vaddr: u64,
+    reloc_vaddr: u64,
+    tls_get_addr_vaddr: u64,
+    got_vaddr: u64,
+) {
+    // 0x0a: add ebx, imm32
+    // ebx is helper_vaddr + 9 after pop.
+    let got_off = (got_vaddr as i64 - (helper_vaddr + 9) as i64) as i32;
+    text_data[offset + 12..offset + 16].copy_from_slice(&got_off.to_le_bytes());
+
+    // 0x10: lea eax, [ebx + imm32]
+    // ebx is now got_vaddr. We want eax = reloc_vaddr.
+    let reloc_off = (reloc_vaddr as i64 - got_vaddr as i64) as i32;
+    text_data[offset + 18..offset + 22].copy_from_slice(&reloc_off.to_le_bytes());
+
+    // 0x17: call rel32
+    // Next instruction is at helper_vaddr + 28.
+    let rel_off = (tls_get_addr_vaddr as i64 - (helper_vaddr + 28) as i64) as i32;
+    text_data[offset + 24..offset + 28].copy_from_slice(&rel_off.to_le_bytes());
+}

@@ -16,8 +16,7 @@ use syscalls::Sysno;
 pub struct DefaultMmap;
 
 pub(crate) fn current_thread_id() -> usize {
-    // For now return 0 or implement gettid via syscall if needed
-    0
+    unsafe { syscalls::raw_syscall!(Sysno::gettid) }
 }
 
 pub(crate) unsafe fn register_thread_destructor(

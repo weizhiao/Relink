@@ -1,20 +1,14 @@
 use crate::{
     arch::*,
     elf::ElfRelType,
-    relocation::{RelocHelper, RelocValue, RelocationContext, RelocationHandler, SymbolLookup},
+    relocation::{RelocValue, RelocationContext},
 };
 
-pub(crate) fn handle_tls_reloc<D, PreS, PostS, PreH, PostH>(
+pub(crate) fn handle_tls_reloc<D>(
     hctx: &RelocationContext<'_, D>,
     rel: &ElfRelType,
-    helper: &mut RelocHelper<'_, '_, D, PreS, PostS, PreH, PostH>,
-) -> bool
-where
-    PreS: SymbolLookup + ?Sized,
-    PostS: SymbolLookup + ?Sized,
-    PreH: RelocationHandler + ?Sized,
-    PostH: RelocationHandler + ?Sized,
-{
+    dependency_flags: &mut [bool],
+) -> bool {
     let r_type = rel.r_type() as u32;
     let r_sym = rel.r_symbol();
     let r_addend = rel.r_addend(hctx.lib().segments().base());
@@ -24,7 +18,7 @@ where
         REL_DTPOFF => {
             if let Some((symdef, idx)) = hctx.find_symdef(r_sym) {
                 if let Some(idx) = idx {
-                    helper.dependency_flags[idx] = true;
+                    dependency_flags[idx] = true;
                 }
                 // Calculate offset within TLS block
                 let tls_val = RelocValue::new(symdef.sym.unwrap().st_value() as usize) + r_addend
@@ -50,7 +44,7 @@ where
         REL_TPOFF => {
             if let Some((symdef, idx)) = hctx.find_symdef(r_sym) {
                 if let Some(idx) = idx {
-                    helper.dependency_flags[idx] = true;
+                    dependency_flags[idx] = true;
                 }
                 let sym = symdef.sym.unwrap();
                 if let Some(tp_offset) = symdef.lib.tls_tp_offset() {

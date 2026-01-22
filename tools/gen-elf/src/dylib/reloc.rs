@@ -27,6 +27,21 @@ pub(crate) struct RelocMetaData {
 }
 
 impl RelocMetaData {
+    pub(crate) fn preprocess(arch: Arch, raw: &[RelocEntry]) -> Vec<RelocEntry> {
+        let mut relocs = raw.to_vec();
+        if relocs.iter().any(|r| r.r_type.is_tls_reloc(arch))
+            && !relocs
+                .iter()
+                .any(|r| r.symbol_name == crate::dylib::symtab::TLS_GET_ADDR_NAME)
+        {
+            relocs.push(RelocEntry::jump_slot(
+                crate::dylib::symtab::TLS_GET_ADDR_NAME,
+                arch,
+            ));
+        }
+        relocs
+    }
+
     pub(crate) fn new(
         arch: Arch,
         raw: &[RelocEntry],
@@ -198,6 +213,16 @@ impl RelocMetaData {
     fn got_plt_size(&self) -> u64 {
         let word_size = self.word_size();
         ((3 + self.plt_count) * word_size) as u64
+    }
+
+    pub(crate) fn find_tls_reloc_vaddr(&self, sym_idx: u64, shdr: &ShdrManager) -> Option<u64> {
+        let got_vaddr = shdr.get_vaddr(SectionKind::Got);
+        for r in &self.relocs {
+            if r.sym_idx == sym_idx && r.r_type.is_tls_reloc(self.arch) {
+                return Some(got_vaddr + r.offset);
+            }
+        }
+        None
     }
 
     pub(crate) fn get_relocation_infos(&self) -> Vec<RelocationInfo> {

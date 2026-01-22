@@ -10,6 +10,7 @@ use crate::{
     os::Mmap,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
 };
+use alloc::vec::Vec;
 use core::fmt::Debug;
 use elf::abi::{PT_DYNAMIC, PT_INTERP};
 
@@ -199,11 +200,11 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
 
     fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
-        scope: &[LoadedCore<D>],
+        scope: Vec<LoadedCore<D>>,
         pre_find: &PreS,
         post_find: &PostS,
-        pre_handler: PreH,
-        post_handler: PostH,
+        pre_handler: &PreH,
+        post_handler: &PostH,
         lazy: Option<bool>,
         lazy_scope: Option<LazyS>,
     ) -> Result<Self::Output>
@@ -212,8 +213,8 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyS: SymbolLookup + Send + Sync + 'static,
-        PreH: RelocationHandler,
-        PostH: RelocationHandler,
+        PreH: RelocationHandler + ?Sized,
+        PostH: RelocationHandler + ?Sized,
     {
         match self {
             RawElf::Dylib(dylib) => {
@@ -245,7 +246,7 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
             RawElf::Object(relocatable) => {
                 let relocated = Relocatable::relocate(
                     relocatable,
-                    &[],
+                    Vec::new(),
                     pre_find,
                     post_find,
                     pre_handler,

@@ -204,3 +204,53 @@ pub(crate) fn patch_ifunc_resolver(
     let rel_off = target_vaddr as i64 - resolver_vaddr as i64;
     text_data[offset + 16..offset + 24].copy_from_slice(&rel_off.to_le_bytes());
 }
+
+const REG_RA: u32 = 1;
+const REG_SP: u32 = 2;
+const REG_A0: u32 = 10;
+
+pub(crate) fn generate_tls_helper_code() -> Vec<u8> {
+    let mut code = vec![0; 36];
+    // Fill with NOPs (addi x0, x0, 0 -> 0x00000013)
+    for i in (0..36).step_by(4) {
+        code[i..i+4].copy_from_slice(&[0x13, 0x00, 0x00, 0x00]);
+    }
+
+    // 0x00: addi sp, sp, -16
+    code[0..4].copy_from_slice(&encode_itype(0x13, REG_SP, REG_SP, (-16i32) as u32).to_le_bytes());
+    // 0x04: sd ra, 8(sp)
+    code[4..8].copy_from_slice(&[0x23, 0x34, 0x11, 0x00]); // 0x00113423
+
+    // 0x18: ld ra, 8(sp)
+    code[24..28].copy_from_slice(&[0x83, 0x30, 0x81, 0x00]); // 0x00813083
+    // 0x1c: addi sp, sp, 16
+    code[28..32].copy_from_slice(&encode_itype(0x13, REG_SP, REG_SP, 16).to_le_bytes());
+    // 0x20: ret (jalr x0, ra, 0)
+    code[32..36].copy_from_slice(&[0x67, 0x80, 0x00, 0x00]);
+
+    code
+}
+
+pub(crate) fn patch_tls_tester(
+    text_data: &mut [u8],
+    offset: usize,
+    helper_vaddr: u64,
+    reloc_vaddr: u64,
+    tls_get_addr_vaddr: u64,
+) {
+    // 0x08: auipc a0, hi(reloc_vaddr)
+    // 0x0c: addi a0, a0, lo(reloc_vaddr)
+    let (hi, lo) = split_addr(helper_vaddr + 8, reloc_vaddr);
+    let auipc_a0 = encode_utype(0x17, REG_A0, hi);
+    let addi_a0 = encode_itype(0x13, REG_A0, REG_A0, lo);
+    text_data[offset + 8..offset + 12].copy_from_slice(&auipc_a0.to_le_bytes());
+    text_data[offset + 12..offset + 16].copy_from_slice(&addi_a0.to_le_bytes());
+
+    // 0x10: auipc t0, hi(tls_get_addr_vaddr)
+    // 0x14: jalr ra, t0, lo(tls_get_addr_vaddr)
+    let (hi_call, lo_call) = split_addr(helper_vaddr + 16, tls_get_addr_vaddr);
+    let auipc_call = encode_utype(0x17, REG_T0, hi_call);
+    let jalr_call = encode_itype(0x67, REG_RA, REG_T0, lo_call);
+    text_data[offset + 16..offset + 20].copy_from_slice(&auipc_call.to_le_bytes());
+    text_data[offset + 20..offset + 24].copy_from_slice(&jalr_call.to_le_bytes());
+}

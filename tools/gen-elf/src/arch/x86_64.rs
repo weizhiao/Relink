@@ -86,6 +86,44 @@ pub(crate) fn patch_helper(
     text_data[helper_text_off + 1..helper_text_off + 5].copy_from_slice(&rel_off.to_le_bytes());
 }
 
+pub(crate) fn generate_tls_helper_code() -> Vec<u8> {
+    // For x86_64 (16-byte stack alignment required for call):
+    // 55                   (push rbp)
+    // 48 89 E5             (mov rbp, rsp)
+    // 48 8D 3D 00 00 00 00 (lea rdi, [rip + offset])
+    // E8 00 00 00 00       (call rel32)
+    // 5D                   (pop rbp)
+    // C3                   (ret)
+    let mut code = vec![0x90; 32];
+    code[0] = 0x55;
+    code[1..4].copy_from_slice(&[0x48, 0x89, 0xe5]);
+    code[4..7].copy_from_slice(&[0x48, 0x8d, 0x3d]);
+    code[11] = 0xe8;
+    code[16] = 0x5d;
+    code[17] = 0xc3;
+    code
+}
+
+pub(crate) fn patch_tls_tester(
+    text_data: &mut [u8],
+    offset: usize,
+    helper_vaddr: u64,
+    reloc_vaddr: u64,
+    tls_get_addr_vaddr: u64,
+) {
+    // 1. Patch LEA RDI, [rip + offset]
+    // Instruction starts at helper_vaddr + 4, length 7
+    // rip = helper_vaddr + 4 + 7 = helper_vaddr + 11
+    let lea_off = (reloc_vaddr as i64 - (helper_vaddr + 11) as i64) as i32;
+    text_data[offset + 7..offset + 11].copy_from_slice(&lea_off.to_le_bytes());
+
+    // 2. Patch CALL rel32
+    // Instruction starts at helper_vaddr + 11, length 5
+    // rip = helper_vaddr + 11 + 5 = helper_vaddr + 16
+    let call_off = (tls_get_addr_vaddr as i64 - (helper_vaddr + 16) as i64) as i32;
+    text_data[offset + 12..offset + 16].copy_from_slice(&call_off.to_le_bytes());
+}
+
 pub(crate) fn get_ifunc_resolver_code() -> Vec<u8> {
     // lea rax, [rip + offset]
     // ret

@@ -142,3 +142,58 @@ pub(crate) fn patch_ifunc_resolver(
     text_data[offset..offset + 4].copy_from_slice(&pcalau12i.to_le_bytes());
     text_data[offset + 4..offset + 8].copy_from_slice(&addi.to_le_bytes());
 }
+
+pub(crate) fn generate_tls_helper_code() -> Vec<u8> {
+    let mut code = vec![0; 40];
+    // Fill with NOPs (0x03400000)
+    for i in (0..40).step_by(4) {
+        code[i..i + 4].copy_from_slice(&[0x00, 0x00, 0x40, 0x03]);
+    }
+
+    // 0x00: addi.d $sp, $sp, -16
+    let addi_sp_neg = 0x02c00000u32 | (3 << 0) | (3 << 5) | ((-16i32 as u32 & 0xfff) << 10);
+    code[0..4].copy_from_slice(&addi_sp_neg.to_le_bytes());
+
+    // 0x04: st.d $ra, $sp, 8
+    let st_ra = 0x29c00000u32 | (1 << 0) | (3 << 5) | (8 << 10);
+    code[4..8].copy_from_slice(&st_ra.to_le_bytes());
+
+    // 0x18: ld.d $ra, $sp, 8
+    let ld_ra = 0x28c00000u32 | (1 << 0) | (3 << 5) | (8 << 10);
+    code[24..28].copy_from_slice(&ld_ra.to_le_bytes());
+
+    // 0x1c: addi.d $sp, $sp, 16
+    let addi_sp_pos = 0x02c00000u32 | (3 << 0) | (3 << 5) | (16 << 10);
+    code[28..32].copy_from_slice(&addi_sp_pos.to_le_bytes());
+
+    // 0x20: jirl $zero, $ra, 0 (ret)
+    let ret = 0x4c000000u32 | (0 << 0) | (1 << 5) | (0 << 10);
+    code[32..36].copy_from_slice(&ret.to_le_bytes());
+
+    code
+}
+
+pub(crate) fn patch_tls_tester(
+    text_data: &mut [u8],
+    offset: usize,
+    helper_vaddr: u64,
+    reloc_vaddr: u64,
+    tls_get_addr_vaddr: u64,
+) {
+    // 0x08: pcalau12i $a0, %gd_hi20(reloc_vaddr)
+    // 0x0c: addi.d $a0, $a0, %gd_lo12(reloc_vaddr)
+    let pc = helper_vaddr + 8;
+    let hi = (reloc_vaddr as i64 - (pc as i64 & !0xfff) + 0x800) >> 12;
+    let lo = reloc_vaddr & 0xfff;
+
+    let pcalau12i_a0 = 0x1a000000u32 | (4 << 0) | ((hi as u32 & 0xfffff) << 5);
+    let addi_a0 = 0x02c00000u32 | (4 << 0) | (4 << 5) | ((lo as u32 & 0xfff) << 10);
+
+    text_data[offset + 8..offset + 12].copy_from_slice(&pcalau12i_a0.to_le_bytes());
+    text_data[offset + 12..offset + 16].copy_from_slice(&addi_a0.to_le_bytes());
+
+    // 0x10: bl __tls_get_addr
+    let bl_off = (tls_get_addr_vaddr as i64 - (helper_vaddr as i64 + 16)) >> 2;
+    let bl = 0x54000000u32 | encode_imm26(bl_off as i32);
+    text_data[offset + 16..offset + 20].copy_from_slice(&bl.to_le_bytes());
+}

@@ -4,6 +4,8 @@
 //! (shared objects) that have been loaded but not yet relocated. It includes
 //! support for synchronous loading of dynamic libraries.
 
+use alloc::vec::Vec;
+
 use crate::{
     LoadHook, Loader, Result,
     elf::{Dyn, ElfPhdr},
@@ -48,11 +50,11 @@ impl<D> Relocatable<D> for RawDylib<D> {
 
     fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
-        scope: &[LoadedCore<D>],
+        scope: Vec<LoadedCore<D>>,
         pre_find: &PreS,
         post_find: &PostS,
-        pre_handler: PreH,
-        post_handler: PostH,
+        pre_handler: &PreH,
+        post_handler: &PostH,
         lazy: Option<bool>,
         lazy_scope: Option<LazyS>,
     ) -> Result<Self::Output>
@@ -60,8 +62,8 @@ impl<D> Relocatable<D> for RawDylib<D> {
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyS: SymbolLookup + Send + Sync + 'static,
-        PreH: RelocationHandler,
-        PostH: RelocationHandler,
+        PreH: RelocationHandler + ?Sized,
+        PostH: RelocationHandler + ?Sized,
     {
         let inner = self.inner.relocate_impl(
             scope,

@@ -4,7 +4,7 @@ use crate::{
     elf::ElfRelType,
     image::{ElfCore, LoadedCore},
 };
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
 
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::Arc;
@@ -94,7 +94,7 @@ impl SymbolLookup for () {
 /// struct CustomHandler;
 ///
 /// impl RelocationHandler for CustomHandler {
-///     fn handle<D>(&mut self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
+///     fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
 ///         let rel = ctx.rel();
 ///         // Handle specific relocation types
 ///         match rel.r_type() {
@@ -118,7 +118,7 @@ pub trait RelocationHandler {
     /// * `Some(Ok(Some(idx)))` - Handled successfully, used library at `scope[idx]`.
     /// * `Some(Err(e))` - Handled but failed with error.
     /// * `None` - Not handled, fall through to default behavior.
-    fn handle<D>(&mut self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>>;
+    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>>;
 }
 
 /// Context passed to `RelocationHandler::handle` containing relocation details.
@@ -170,19 +170,19 @@ impl<'a, D> RelocationContext<'a, D> {
 }
 
 impl RelocationHandler for () {
-    fn handle<D>(&mut self, _ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
+    fn handle<D>(&self, _ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
         None
     }
 }
 
 impl<H: RelocationHandler + ?Sized> RelocationHandler for &mut H {
-    fn handle<D>(&mut self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
+    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
         (**self).handle(ctx)
     }
 }
 
 impl<H: RelocationHandler + ?Sized> RelocationHandler for Box<H> {
-    fn handle<D>(&mut self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
+    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
         (**self).handle(ctx)
     }
 }
@@ -211,11 +211,11 @@ pub trait Relocatable<D = ()>: Sized {
     /// The relocated object on success.
     fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
-        scope: &[LoadedCore<D>],
+        scope: Vec<LoadedCore<D>>,
         pre_find: &PreS,
         post_find: &PostS,
-        pre_handler: PreH,
-        post_handler: PostH,
+        pre_handler: &PreH,
+        post_handler: &PostH,
         lazy: Option<bool>,
         lazy_scope: Option<LazyS>,
     ) -> Result<Self::Output>
@@ -223,6 +223,6 @@ pub trait Relocatable<D = ()>: Sized {
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyS: SymbolLookup + Send + Sync + 'static,
-        PreH: RelocationHandler,
-        PostH: RelocationHandler;
+        PreH: RelocationHandler + ?Sized,
+        PostH: RelocationHandler + ?Sized;
 }

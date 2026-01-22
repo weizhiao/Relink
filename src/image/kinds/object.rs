@@ -14,7 +14,7 @@ use crate::{
     segment::section::PltGotSection,
     tls::TlsResolver,
 };
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
 use core::{borrow::Borrow, fmt::Debug, ops::Deref, sync::atomic::AtomicBool};
 
 #[cfg(not(feature = "portable-atomic"))]
@@ -155,11 +155,11 @@ impl Relocatable<()> for RawObject {
 
     fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
-        scope: &[LoadedCore<()>],
+        scope: Vec<LoadedCore<()>>,
         pre_find: &PreS,
         post_find: &PostS,
-        _pre_handler: PreH,
-        _post_handler: PostH,
+        _pre_handler: &PreH,
+        _post_handler: &PostH,
         _lazy: Option<bool>,
         _lazy_scope: Option<LazyS>,
     ) -> Result<Self::Output>
@@ -167,10 +167,10 @@ impl Relocatable<()> for RawObject {
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyS: SymbolLookup + Send + Sync + 'static,
-        PreH: RelocationHandler,
-        PostH: RelocationHandler,
+        PreH: RelocationHandler + ?Sized,
+        PostH: RelocationHandler + ?Sized,
     {
-        let inner = self.relocate_impl(scope, pre_find, post_find)?;
+        let inner = self.relocate_impl(&scope, pre_find, post_find)?;
         Ok(LoadedObject { inner })
     }
 }

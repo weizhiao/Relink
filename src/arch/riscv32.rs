@@ -8,15 +8,15 @@ use elf::abi::*;
 /// The ELF machine type for RISC-V architecture.
 pub const EM_ARCH: u16 = EM_RISCV;
 /// Offset for TLS Dynamic Thread Vector.
-/// For RISC-V, the DTV pointers point 0x800 past the start of each TLS block.
-pub const TLS_DTV_OFFSET: usize = 0x800;
+/// In our software-based TLS implementation, we use 0 offset for simplicity.
+pub const TLS_DTV_OFFSET: usize = 0;
 
 /// Relative relocation type - add base address to relative offset.
 pub const REL_RELATIVE: u32 = R_RISCV_RELATIVE;
 /// GOT entry relocation type - set GOT entry to symbol address.
 pub const REL_GOT: u32 = R_RISCV_32;
 /// TLS DTPMOD relocation type - set to TLS module ID.
-pub const REL_DTPMOD: u32 = R_RISCV_TLS_DTPMOD64;
+pub const REL_DTPMOD: u32 = R_RISCV_TLS_DTPMOD32;
 /// Symbolic relocation type - set to absolute symbol address.
 pub const REL_SYMBOLIC: u32 = R_RISCV_32;
 /// PLT jump slot relocation type - set PLT entry to symbol address.

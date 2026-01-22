@@ -1,13 +1,15 @@
 use elf_loader::{
     Loader,
     arch::{
-        REL_COPY, REL_DTPOFF, REL_GOT, REL_IRELATIVE, REL_JUMP_SLOT, REL_RELATIVE, REL_SYMBOLIC,
+        REL_COPY, REL_DTPMOD, REL_DTPOFF, REL_GOT, REL_IRELATIVE, REL_JUMP_SLOT, REL_RELATIVE,
+        REL_SYMBOLIC,
     },
     input::ElfBinary,
 };
 use gen_elf::{Arch, DylibWriter, ElfWriterConfig, ObjectWriter, RelocEntry, SymbolDesc};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
+use std::thread;
 
 const EXTERNAL_FUNC_NAME: &str = "external_func";
 const EXTERNAL_FUNC_NAME2: &str = "external_func2";
@@ -68,6 +70,8 @@ type ExternalFunc = extern "C" fn(
     f64,
 ) -> f64;
 
+type TlsHelperFunc = extern "C" fn() -> *mut u32;
+
 static mut EXTERNAL_VAR: i32 = 100;
 
 pub fn get_symbol_lookup() -> (
@@ -106,7 +110,9 @@ fn get_relocs_dynamic() -> Vec<RelocEntry> {
         RelocEntry::with_name(EXTERNAL_VAR_NAME, REL_GOT),
         RelocEntry::with_name(LOCAL_VAR_NAME, REL_SYMBOLIC),
         RelocEntry::with_name(COPY_VAR_NAME, REL_COPY),
+        RelocEntry::with_name(EXTERNAL_TLS_NAME, REL_DTPMOD),
         RelocEntry::with_name(EXTERNAL_TLS_NAME, REL_DTPOFF),
+        RelocEntry::with_name(EXTERNAL_TLS_NAME2, REL_DTPMOD),
         RelocEntry::with_name(EXTERNAL_TLS_NAME2, REL_DTPOFF),
         RelocEntry::new(REL_RELATIVE),
         RelocEntry::new(REL_IRELATIVE),
@@ -218,7 +224,7 @@ fn run_dynamic_linking(is_lazy: bool) {
     assert!((result - expected).abs() < 0.0001);
     println!("✓ Direct call verified");
 
-    let helper_name = format!("{}@helper", EXTERNAL_FUNC_NAME);
+    let helper_name = format!("{}@plt_helper", EXTERNAL_FUNC_NAME);
     unsafe {
         let helper_func: ExternalFunc = core::mem::transmute(
             relocated
@@ -261,6 +267,10 @@ fn run_dynamic_linking(is_lazy: bool) {
                     let (_, sym_info) = relocated.symtab().symbol_idx(reloc_info.sym_idx as usize);
                     let sym_name = sym_info.name();
 
+                    if sym_name == "__tls_get_addr" {
+                        continue;
+                    }
+
                     let s = if let Some(addr) = symbol_map.get(sym_name) {
                         *addr as u64
                     } else {
@@ -301,6 +311,12 @@ fn run_dynamic_linking(is_lazy: bool) {
                             actual_value
                         );
                     }
+                }
+                REL_DTPMOD => {
+                    assert!(
+                        actual_value > 0,
+                        "    ✗ DTPMOD must be greater than 0, got 0"
+                    );
                 }
                 REL_DTPOFF => {
                     let (_, name_info) = relocated.symtab().symbol_idx(reloc_info.sym_idx as usize);
@@ -353,6 +369,78 @@ fn run_dynamic_linking(is_lazy: bool) {
         "✓ All {} relocations verified",
         elf_output.relocations.len()
     );
+
+    // 4. TLS Multi-threaded Test
+    println!("✓ Starting TLS multi-threaded test");
+    let tls1_helper_name = format!("{}@tls_helper", EXTERNAL_TLS_NAME);
+    let tls2_helper_name = format!("{}@tls_helper", EXTERNAL_TLS_NAME2);
+
+    let tls1_helper_addr = unsafe {
+        relocated
+            .get::<*const ()>(&tls1_helper_name)
+            .expect("Failed to get TLS 1 helper")
+            .into_raw()
+    };
+    let tls2_helper_addr = unsafe {
+        relocated
+            .get::<*const ()>(&tls2_helper_name)
+            .expect("Failed to get TLS 2 helper")
+            .into_raw()
+    };
+
+    let tls1_helper: TlsHelperFunc = unsafe { core::mem::transmute(tls1_helper_addr) };
+    let tls2_helper: TlsHelperFunc = unsafe { core::mem::transmute(tls2_helper_addr) };
+
+    let num_threads = 4;
+    let barrier = Arc::new(Barrier::new(num_threads));
+    let mut handles = vec![];
+
+    for i in 0..num_threads {
+        let b = barrier.clone();
+        handles.push(thread::spawn(move || {
+            let p1 = tls1_helper();
+            let p2 = tls2_helper();
+
+            println!("Thread {}: p1={:p}, p2={:p}", i, p1, p2);
+
+            // Verify initial values from helper.so
+            // libhelper.so:
+            //   EXTERNAL_TLS_NAME:  [0xAA, 0xBB, 0xCC, 0xDD] -> 0xDDCCBBAA
+            //   EXTERNAL_TLS_NAME2: [0x11, 0x22, 0x33, 0x44] -> 0x44332211
+            unsafe {
+                if p1.is_null() || p2.is_null() {
+                    panic!("TLS pointer is NULL");
+                }
+                assert!((p1 as usize) % 4 == 0, "p1 is misaligned: {:p}", p1);
+                assert!((p2 as usize) % 4 == 0, "p2 is misaligned: {:p}", p2);
+                assert_eq!(*p1, 0xDDCCBBAA);
+                assert_eq!(*p2, 0x44332211);
+            }
+
+            // Sync threads
+            b.wait();
+
+            // Modify values uniquely to this thread
+            unsafe {
+                *p1 = (i as u32) + 0x100;
+                *p2 = (i as u32) + 0x200;
+            }
+
+            // Sync threads again to ensure all have modified their local storage
+            b.wait();
+
+            // Verify values are still what this thread set (no crosstalk)
+            unsafe {
+                assert_eq!(*p1, (i as u32) + 0x100);
+                assert_eq!(*p2, (i as u32) + 0x200);
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("Thread panicked during TLS test");
+    }
+    println!("✓ TLS multi-threaded test passed");
 }
 
 #[test]

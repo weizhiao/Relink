@@ -18,32 +18,25 @@ use alloc::sync::Arc;
 use portable_atomic_util::Arc;
 
 /// Internal context for managing relocation state and handlers.
-pub(crate) struct RelocHelper<
-    'a,
-    'find,
-    D,
-    PreS: ?Sized,
-    PostS: ?Sized,
-    PreH: ?Sized,
-    PostH: ?Sized,
-> {
-    pub(crate) scope: &'a [LoadedCore<D>],
+pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized> {
+    pub(crate) scope: Vec<LoadedCore<D>>,
     pub(crate) pre_find: &'find PreS,
     pub(crate) post_find: &'find PostS,
-    pub(crate) pre_handler: &'a mut PreH,
-    pub(crate) post_handler: &'a mut PostH,
+    pub(crate) pre_handler: &'find PreH,
+    pub(crate) post_handler: &'find PostH,
     pub(crate) dependency_flags: Vec<bool>,
 }
 
-impl<'a, 'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized>
-    RelocHelper<'a, 'find, D, PreS, PostS, PreH, PostH>
+impl<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized>
+    RelocHelper<'find, D, PreS, PostS, PreH, PostH>
 where
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
     #[inline]
-    pub(crate) fn handle_pre(&mut self, hctx: &RelocationContext<'_, D>) -> Result<bool> {
-        let opt = self.pre_handler.handle(hctx);
+    pub(crate) fn handle_pre(&mut self, rel: &ElfRelType, lib: &ElfCore<D>) -> Result<bool> {
+        let hctx = RelocationContext::new(rel, lib, &self.scope);
+        let opt = self.pre_handler.handle(&hctx);
         if let Some(r) = opt {
             if let Some(idx) = r? {
                 self.dependency_flags[idx] = true;
@@ -54,8 +47,9 @@ where
     }
 
     #[inline]
-    pub(crate) fn handle_post(&mut self, hctx: &RelocationContext<'_, D>) -> Result<bool> {
-        let opt = self.post_handler.handle(hctx);
+    pub(crate) fn handle_post(&mut self, rel: &ElfRelType, lib: &ElfCore<D>) -> Result<bool> {
+        let hctx = RelocationContext::new(rel, lib, &self.scope);
+        let opt = self.post_handler.handle(&hctx);
         if let Some(r) = opt {
             if let Some(idx) = r? {
                 self.dependency_flags[idx] = true;
@@ -217,6 +211,20 @@ where
         self
     }
 
+    /// Adds more libraries to the search scope.
+    ///
+    /// This appends libraries to the existing scope. Symbols will be searched
+    /// in the order they were added.
+    pub fn add_scope<I, R>(mut self, scope: I) -> Self
+    where
+        I: IntoIterator<Item = R>,
+        R: core::borrow::Borrow<LoadedCore<D>>,
+    {
+        self.scope
+            .extend(scope.into_iter().map(|r| r.borrow().clone()));
+        self
+    }
+
     /// Sets the pre-processing relocation handler.
     ///
     /// This handler is called before the default relocation logic.
@@ -305,11 +313,11 @@ where
         D: 'static,
     {
         self.object.relocate(
-            &self.scope,
+            self.scope,
             &self.pre_find,
             &self.post_find,
-            self.pre_handler,
-            self.post_handler,
+            &self.pre_handler,
+            &self.post_handler,
             self.lazy,
             self.lazy_scope,
         )

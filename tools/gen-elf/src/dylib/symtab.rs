@@ -1,15 +1,18 @@
 use crate::common::{SectionKind, SymbolDesc, SymbolScope, SymbolType};
 use crate::dylib::{
     StringTable,
-    shdr::{Section, SectionAllocator, SectionHeader, SectionId},
+    reloc::RelocMetaData,
+    shdr::{Section, SectionAllocator, SectionHeader, SectionId, ShdrManager},
 };
 use crate::{Arch, RelocEntry, arch};
 use byteorder::{LittleEndian, WriteBytesExt};
 use object::elf::*;
 use std::collections::HashMap;
 
-const HELPER_SUFFIX: &str = "@helper";
+const HELPER_SUFFIX: &str = "@plt_helper";
+const TLS_HELPER_SUFFIX: &str = "@tls_helper";
 pub(crate) const IFUNC_RESOLVER_NAME: &str = "__ifunc_resolver";
+pub(crate) const TLS_GET_ADDR_NAME: &str = "__tls_get_addr";
 
 pub(crate) struct Symbol {
     name_idx: u32,
@@ -47,7 +50,8 @@ pub(crate) struct SymTabMetadata {
     dynsym: Vec<Symbol>,
     dynsym_shdr_types: Vec<SectionKind>,
     sym_index: HashMap<String, usize>,
-    helper_index: HashMap<usize, usize>,
+    helper_index: HashMap<usize, usize>, // plt_sym_idx -> helper_sym_idx
+    tls_helper_index: HashMap<usize, usize>, // tls_sym_idx -> helper_sym_idx
     symbols: Vec<SymbolDesc>,
     dynsym_id: SectionId,
     dynsym_size: u64,
@@ -89,6 +93,7 @@ impl SymTabMetadata {
             dynsym_shdr_types: vec![],
             sym_index: HashMap::new(),
             helper_index: HashMap::new(),
+            tls_helper_index: HashMap::new(),
             symbols: vec![],
             dynsym_id,
             dynstr_id,
@@ -120,6 +125,7 @@ impl SymTabMetadata {
         // Add provided symbols
         symtab.add_symbols(symbols);
         symtab.add_plt_symbols(relocs);
+        symtab.add_tls_symbols(relocs);
 
         // Create .dynstr section
         let dynstr = allocator.get_mut(&dynstr_id);
@@ -355,6 +361,33 @@ impl SymTabMetadata {
         }
     }
 
+    pub(crate) fn add_tls_symbols(&mut self, relocs: &[RelocEntry]) {
+        let arch = self.arch;
+        // Add __tls_get_addr as undefined symbol if not present
+        if self.get_sym_idx(TLS_GET_ADDR_NAME).is_none() {
+            let desc = SymbolDesc::undefined_func(TLS_GET_ADDR_NAME);
+            self.add_single_symbol(desc);
+        }
+
+        for reloc in relocs.iter().filter(|r| r.r_type.is_tls_reloc(arch)) {
+            let tls_name = reloc.symbol_name.as_str();
+            if tls_name.is_empty() {
+                continue;
+            }
+            let tls_idx = self.get_sym_idx(tls_name).expect("TLS symbol must exist");
+
+            let test_helper = format!("{}{}", tls_name, TLS_HELPER_SUFFIX);
+            if self.get_sym_idx(&test_helper).is_some() {
+                continue;
+            }
+
+            let helper_code = crate::arch::generate_tls_helper_code(self.arch);
+            let helper_desc = SymbolDesc::global_func(test_helper, &helper_code);
+            let helper_idx = self.add_single_symbol(helper_desc);
+            self.tls_helper_index.insert(tls_idx, helper_idx);
+        }
+    }
+
     pub(crate) fn update_symbol_values(
         &mut self,
         plt_vaddr: u64,
@@ -407,14 +440,14 @@ impl SymTabMetadata {
         }
     }
 
-    pub(crate) fn patch_helpers(&self, text_data: &mut [u8], text_vaddr: u64, got_vaddr: u64) {
+    pub(crate) fn patch_plt_testers(&self, text_data: &mut [u8], text_vaddr: u64, got_vaddr: u64) {
         for (&plt_idx, &helper_idx) in &self.helper_index {
             let plt_sym = &self.dynsym[plt_idx];
             let helper_sym = &self.dynsym[helper_idx];
             let helper_text_off = (helper_sym.value - text_vaddr) as usize;
             let target_plt_vaddr = plt_sym.value;
 
-            crate::arch::patch_helper(
+            crate::arch::patch_plt_testers(
                 self.arch,
                 text_data,
                 helper_text_off,
@@ -422,6 +455,39 @@ impl SymTabMetadata {
                 target_plt_vaddr,
                 got_vaddr,
             );
+        }
+    }
+
+    pub(crate) fn patch_tls_testers(
+        &self,
+        text_data: &mut [u8],
+        text_vaddr: u64,
+        reloc: &RelocMetaData,
+        shdr: &ShdrManager,
+        got_vaddr: u64,
+    ) {
+        let plt_name = format!("{}@plt", TLS_GET_ADDR_NAME);
+        let tls_get_addr_vaddr = self
+            .get_sym_idx(&plt_name)
+            .or_else(|| self.get_sym_idx(TLS_GET_ADDR_NAME))
+            .map(|idx| self.dynsym[idx].value)
+            .unwrap_or(0);
+
+        for (&tls_idx, &helper_idx) in &self.tls_helper_index {
+            let helper_sym = &self.dynsym[helper_idx];
+            let helper_text_off = (helper_sym.value - text_vaddr) as usize;
+
+            if let Some(reloc_vaddr) = reloc.find_tls_reloc_vaddr(tls_idx as u64, shdr) {
+                crate::arch::patch_tls_tester(
+                    self.arch,
+                    text_data,
+                    helper_text_off,
+                    helper_sym.value,
+                    reloc_vaddr,
+                    tls_get_addr_vaddr,
+                    got_vaddr,
+                );
+            }
         }
     }
 

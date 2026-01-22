@@ -141,14 +141,27 @@ impl Arch {
         }
     }
 
+    pub fn dtpmod_reloc(&self) -> u32 {
+        match self {
+            Arch::X86_64 => R_X86_64_DTPMOD64,
+            Arch::X86 => R_386_TLS_DTPMOD32,
+            Arch::Aarch64 => R_AARCH64_TLS_DTPMOD,
+            Arch::Arm => R_ARM_TLS_DTPMOD32,
+            Arch::Riscv64 => R_RISCV_TLS_DTPMOD64,
+            Arch::Riscv32 => R_RISCV_TLS_DTPMOD32,
+            Arch::Loongarch64 => R_LARCH_TLS_DTPMOD64,
+        }
+    }
+
     pub fn dtpoff_reloc(&self) -> u32 {
         match self {
             Arch::X86_64 => R_X86_64_DTPOFF64,
             Arch::X86 => R_386_TLS_DTPOFF32,
-            Arch::Aarch64 => R_AARCH64_TLS_DTPMOD, // Simplified
+            Arch::Aarch64 => R_AARCH64_TLS_DTPREL,
             Arch::Arm => R_ARM_TLS_DTPOFF32,
-            Arch::Riscv64 | Arch::Riscv32 => R_RISCV_TLS_DTPMOD64,
-            Arch::Loongarch64 => R_LARCH_TLS_DTPMOD64,
+            Arch::Riscv64 => R_RISCV_TLS_DTPREL64,
+            Arch::Riscv32 => R_RISCV_TLS_DTPREL32,
+            Arch::Loongarch64 => R_LARCH_TLS_DTPREL64,
         }
     }
 }
@@ -269,10 +282,15 @@ impl RelocType {
                     || r_type == R_ARM_TLS_DTPOFF32
                     || r_type == R_ARM_TLS_TPOFF32
             }
-            Arch::Riscv64 | Arch::Riscv32 => {
+            Arch::Riscv64 => {
                 r_type == R_RISCV_TLS_DTPMOD64
                     || r_type == R_RISCV_TLS_DTPREL64
                     || r_type == R_RISCV_TLS_TPREL64
+            }
+            Arch::Riscv32 => {
+                r_type == R_RISCV_TLS_DTPMOD32
+                    || r_type == R_RISCV_TLS_DTPREL32
+                    || r_type == R_RISCV_TLS_TPREL32
             }
             Arch::Loongarch64 => {
                 r_type == R_LARCH_TLS_DTPMOD64
@@ -324,7 +342,19 @@ pub fn generate_helper_code(arch: Arch) -> Vec<u8> {
     }
 }
 
-pub fn patch_helper(
+pub fn generate_tls_helper_code(arch: Arch) -> Vec<u8> {
+    match arch {
+        Arch::X86_64 => x86_64::generate_tls_helper_code(),
+        Arch::X86 => x86::generate_tls_helper_code(),
+        Arch::Aarch64 => aarch64::generate_tls_helper_code(),
+        Arch::Arm => arm::generate_tls_helper_code(),
+        Arch::Riscv64 => riscv64::generate_tls_helper_code(),
+        Arch::Riscv32 => riscv32::generate_tls_helper_code(),
+        Arch::Loongarch64 => loongarch64::generate_tls_helper_code(),
+    }
+}
+
+pub fn patch_plt_testers(
     arch: Arch,
     text_data: &mut [u8],
     helper_text_off: usize,
@@ -356,6 +386,69 @@ pub fn patch_helper(
         Arch::Loongarch64 => {
             loongarch64::patch_helper(text_data, helper_text_off, helper_vaddr, target_plt_vaddr)
         }
+    }
+}
+
+pub fn patch_tls_tester(
+    arch: Arch,
+    text_data: &mut [u8],
+    helper_text_off: usize,
+    helper_vaddr: u64,
+    reloc_vaddr: u64,
+    tls_get_addr_vaddr: u64,
+    got_vaddr: u64,
+) {
+    match arch {
+        Arch::X86_64 => x86_64::patch_tls_tester(
+            text_data,
+            helper_text_off,
+            helper_vaddr,
+            reloc_vaddr,
+            tls_get_addr_vaddr,
+        ),
+        Arch::X86 => x86::patch_tls_tester(
+            text_data,
+            helper_text_off,
+            helper_vaddr,
+            reloc_vaddr,
+            tls_get_addr_vaddr,
+            got_vaddr,
+        ),
+        Arch::Aarch64 => aarch64::patch_tls_tester(
+            text_data,
+            helper_text_off,
+            helper_vaddr,
+            reloc_vaddr,
+            tls_get_addr_vaddr,
+        ),
+        Arch::Arm => arm::patch_tls_tester(
+            text_data,
+            helper_text_off,
+            helper_vaddr,
+            reloc_vaddr,
+            tls_get_addr_vaddr,
+        ),
+        Arch::Riscv64 => riscv64::patch_tls_tester(
+            text_data,
+            helper_text_off,
+            helper_vaddr,
+            reloc_vaddr,
+            tls_get_addr_vaddr,
+        ),
+        Arch::Riscv32 => riscv32::patch_tls_tester(
+            text_data,
+            helper_text_off,
+            helper_vaddr,
+            reloc_vaddr,
+            tls_get_addr_vaddr,
+        ),
+        Arch::Loongarch64 => loongarch64::patch_tls_tester(
+            text_data,
+            helper_text_off,
+            helper_vaddr,
+            reloc_vaddr,
+            tls_get_addr_vaddr,
+        ),
     }
 }
 

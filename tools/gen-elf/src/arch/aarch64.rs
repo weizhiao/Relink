@@ -152,6 +152,51 @@ pub(crate) fn patch_ifunc_resolver(
     text_data[offset + 4..offset + 8].copy_from_slice(&add.to_le_bytes());
 }
 
+pub(crate) fn generate_tls_helper_code() -> Vec<u8> {
+    let mut code = vec![0; 32];
+    // Fill with NOPs (0xd503201f)
+    for i in (0..32).step_by(4) {
+        code[i..i + 4].copy_from_slice(&[0x1f, 0x20, 0x03, 0xd5]);
+    }
+
+    // 0x00: stp x29, x30, [sp, #-16]!
+    code[0..4].copy_from_slice(&[0xfd, 0x7b, 0xbf, 0xa9]);
+    // 0x04: mov x29, sp
+    code[4..8].copy_from_slice(&[0xfd, 0x03, 0x00, 0x91]);
+
+    // 0x14: ldp x29, x30, [sp], #16
+    code[20..24].copy_from_slice(&[0xfd, 0x7b, 0xc1, 0xa8]);
+    // 0x18: ret
+    code[24..28].copy_from_slice(&[0xc0, 0x03, 0x5f, 0xd6]);
+
+    code
+}
+
+pub(crate) fn patch_tls_tester(
+    text_data: &mut [u8],
+    offset: usize,
+    helper_vaddr: u64,
+    reloc_vaddr: u64,
+    tls_get_addr_vaddr: u64,
+) {
+    // 0x08: adrp x0, Page(RelocVAddr)
+    let adrp = encode_adrp(0, helper_vaddr + 8, reloc_vaddr);
+    text_data[offset + 8..offset + 12].copy_from_slice(&adrp.to_le_bytes());
+
+    // 0x0c: add x0, x0, :lo12:reloc_vaddr
+    let add = encode_add_imm12(0, 0, (reloc_vaddr & 0xfff) as u32);
+    text_data[offset + 12..offset + 16].copy_from_slice(&add.to_le_bytes());
+
+    // 0x10: bl __tls_get_addr
+    let bl = encode_bl(helper_vaddr + 16, tls_get_addr_vaddr);
+    text_data[offset + 16..offset + 20].copy_from_slice(&bl.to_le_bytes());
+}
+
+fn encode_bl(pc: u64, target: u64) -> u32 {
+    let offset = (target as i64 - pc as i64) / 4;
+    0x94000000 | (offset as u32 & 0x03ffffff)
+}
+
 fn encode_add_imm(rd: u32, rn: u32, imm: u32) -> u32 {
     0x91000000 | (imm << 10) | (rn << 5) | rd
 }

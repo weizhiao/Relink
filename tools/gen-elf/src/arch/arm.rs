@@ -166,3 +166,47 @@ pub(crate) fn patch_ifunc_resolver(
     let off = (target_vaddr as i64 - pc as i64) as i32;
     text_data[offset + 12..offset + 16].copy_from_slice(&off.to_le_bytes());
 }
+
+pub(crate) fn generate_tls_helper_code() -> Vec<u8> {
+    let mut code = vec![0; 32];
+    // Fill with NOPs (mov r0, r0 -> 0xe1a00000)
+    for i in (0..32).step_by(4) {
+        code[i..i + 4].copy_from_slice(&[0x00, 0x00, 0xa0, 0xe1]);
+    }
+
+    // 0x00: push {r4, lr} (to keep stack 8-byte aligned)
+    code[0..4].copy_from_slice(&[0x10, 0x40, 0x2d, 0xe9]);
+
+    // 0x10: pop {r4, pc} (restore r4 and return)
+    code[16..20].copy_from_slice(&[0x10, 0x80, 0xbd, 0xe8]);
+
+    code
+}
+
+pub(crate) fn patch_tls_tester(
+    text_data: &mut [u8],
+    offset: usize,
+    helper_vaddr: u64,
+    reloc_vaddr: u64,
+    tls_get_addr_vaddr: u64,
+) {
+    // 0x04: ldr r0, [pc, #12] (load offset to GOT slot from offset 24)
+    // PC points to helper_vaddr + 4 + 8 = helper_vaddr + 12
+    // Data is at helper_vaddr + 24. Offset = 24 - 12 = 12.
+    text_data[offset + 4..offset + 8].copy_from_slice(&[0x0c, 0x00, 0x9f, 0xe5]);
+
+    // 0x08: add r0, pc, r0
+    // PC points to helper_vaddr + 8 + 8 = helper_vaddr + 16
+    // r0 will be (reloc_vaddr - (helper_vaddr + 16)) + (helper_vaddr + 16) = reloc_vaddr
+    text_data[offset + 8..offset + 12].copy_from_slice(&[0x00, 0x00, 0x8f, 0xe0]);
+
+    // 0x0c: bl __tls_get_addr
+    // PC points to helper_vaddr + 12 + 8 = helper_vaddr + 20
+    let bl_off = (tls_get_addr_vaddr as i64 - (helper_vaddr as i64 + 20)) >> 2;
+    let bl = 0xeb000000u32 | (bl_off as u32 & 0x00ffffff);
+    text_data[offset + 12..offset + 16].copy_from_slice(&bl.to_le_bytes());
+
+    // Data at offset 24: reloc_vaddr - (helper_vaddr + 16)
+    let data_val = (reloc_vaddr as i64 - (helper_vaddr as i64 + 16)) as i32;
+    text_data[offset + 24..offset + 28].copy_from_slice(&data_val.to_le_bytes());
+}

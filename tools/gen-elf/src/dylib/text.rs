@@ -1,6 +1,7 @@
 use crate::common::SectionKind;
 use crate::dylib::{
-    shdr::{Section, SectionAllocator, SectionHeader, SectionId},
+    reloc::RelocMetaData,
+    shdr::{Section, SectionAllocator, SectionHeader, SectionId, ShdrManager},
     symtab::SymTabMetadata,
 };
 
@@ -59,14 +60,19 @@ impl CodeMetaData {
         got_plt_vaddr: u64,
         resolver_val: u64,
         symtab: &SymTabMetadata,
+        reloc: &RelocMetaData,
+        shdr: &ShdrManager,
         allocator: &mut SectionAllocator,
     ) {
         let text_data = allocator.get_mut(&self.text_id);
         // Update IFUNC resolver
         symtab.patch_ifunc_resolver(text_data, text_vaddr, resolver_val);
 
-        // Update helpers
-        symtab.patch_helpers(text_data, text_vaddr, got_plt_vaddr);
+        // Update plt testers
+        symtab.patch_plt_testers(text_data, text_vaddr, got_plt_vaddr);
+
+        // Update tls testers
+        symtab.patch_tls_testers(text_data, text_vaddr, reloc, shdr, got_plt_vaddr);
 
         // Update PLT entries
         let plt_data = allocator.get_mut(&self.plt_id);

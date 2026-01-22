@@ -26,10 +26,14 @@ where
     /// Weak references to the local libraries for symbol lookup
     libs: Vec<ElfCoreRef<D>>,
     custom_scope: Option<S>,
+    tls_get_addr: usize,
 }
 
 impl<D, S: SymbolLookup> SymbolLookup for LazyScope<D, S> {
     fn lookup(&self, name: &str) -> Option<*const ()> {
+        if name == "__tls_get_addr" {
+            return Some(self.tls_get_addr as *const ());
+        }
         // First try the parent scope if available
         if let Some(parent) = &self.custom_scope {
             if let Some(sym) = parent.lookup(name) {
@@ -59,11 +63,11 @@ unsafe fn resolve_ifunc(addr: RelocValue<usize>) -> RelocValue<usize> {
 impl<D> DynamicImage<D> {
     pub(crate) fn relocate_impl<PreS, PostS, LazyS, PreH, PostH>(
         self,
-        scope: &[LoadedCore<D>],
+        scope: Vec<LoadedCore<D>>,
         pre_find: &PreS,
         post_find: &PostS,
-        mut pre_handler: PreH,
-        mut post_handler: PostH,
+        pre_handler: &PreH,
+        post_handler: &PostH,
         lazy: Option<bool>,
         lazy_scope: Option<LazyS>,
     ) -> Result<LoadedCore<D>>
@@ -72,8 +76,8 @@ impl<D> DynamicImage<D> {
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyS: SymbolLookup + Send + Sync + 'static,
-        PreH: RelocationHandler,
-        PostH: RelocationHandler,
+        PreH: RelocationHandler + ?Sized,
+        PostH: RelocationHandler + ?Sized,
     {
         // Optimization: check if relocation is empty
         if self.relocation().is_empty() {
@@ -93,12 +97,12 @@ impl<D> DynamicImage<D> {
         };
 
         let mut helper = RelocHelper {
+            dependency_flags: alloc::vec![false; scope.len()],
             scope,
             pre_find: &hooked_pre_find,
             post_find,
-            pre_handler: &mut pre_handler,
-            post_handler: &mut post_handler,
-            dependency_flags: alloc::vec![false; scope.len()],
+            pre_handler,
+            post_handler,
         };
 
         self.relocate_relative().relocate_dynrel(&mut helper)?;
@@ -107,18 +111,15 @@ impl<D> DynamicImage<D> {
             let needed_libs = self.needed_libs();
 
             let lazy_scope = if is_lazy {
-                let libs = if lazy_scope.is_none() {
-                    scope
-                        .iter()
-                        .filter(|lib| needed_libs.contains(&lib.name()))
-                        .map(|lib| lib.core.downgrade())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let libs = helper.scope
+                    .iter()
+                    .filter(|lib| needed_libs.contains(&lib.name()))
+                    .map(|lib| lib.core.downgrade())
+                    .collect();
                 Some(LazyScope {
                     libs,
                     custom_scope: lazy_scope,
+                    tls_get_addr: tls_get_addr as *const () as usize,
                 })
             } else {
                 None
@@ -127,11 +128,17 @@ impl<D> DynamicImage<D> {
             self.relocate_pltrel(is_lazy, lazy_scope, &mut helper)?
                 .finish();
 
+            let RelocHelper {
+                scope,
+                dependency_flags,
+                ..
+            } = helper;
+
             scope
-                .iter()
-                .zip(helper.dependency_flags)
+                .into_iter()
+                .zip(dependency_flags)
                 .filter_map(|(module, flag)| {
-                    (flag || needed_libs.contains(&module.name())).then(|| module.clone())
+                    (flag || needed_libs.contains(&module.name())).then(|| module)
                 })
                 .collect::<Vec<_>>()
         };
@@ -213,7 +220,7 @@ impl<D> DynamicImage<D> {
         &self,
         is_lazy: bool,
         lazy_scope: Option<LazyS>,
-        helper: &mut RelocHelper<'_, '_, D, PreS, PostS, PreH, PostH>,
+        helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
         PreS: SymbolLookup + ?Sized,
@@ -222,9 +229,6 @@ impl<D> DynamicImage<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        let scope = helper.scope;
-        let pre_find = helper.pre_find;
-        let post_find = helper.post_find;
         let core = self.core_ref();
         let base = core.base();
         let segments = core.segments();
@@ -233,8 +237,7 @@ impl<D> DynamicImage<D> {
 
         // Process PLT relocations
         for rel in reloc.pltrel {
-            let hctx = RelocationContext::new(rel, core, scope);
-            if !helper.handle_pre(&hctx)? {
+            if !helper.handle_pre(rel, core)? {
                 continue;
             }
             let r_type = rel.r_type() as u32;
@@ -253,9 +256,14 @@ impl<D> DynamicImage<D> {
                         ptr.write(new_val);
                     }
                 } else {
-                    if let Some((symbol, idx)) =
-                        find_symbol_addr(pre_find, post_find, core, symtab, scope, r_sym)
-                    {
+                    if let Some((symbol, idx)) = find_symbol_addr(
+                        helper.pre_find,
+                        helper.post_find,
+                        core,
+                        symtab,
+                        &helper.scope,
+                        r_sym,
+                    ) {
                         if let Some(idx) = idx {
                             helper.dependency_flags[idx] = true;
                         }
@@ -270,7 +278,7 @@ impl<D> DynamicImage<D> {
                 continue;
             }
             // Handle unknown relocations with the provided handler
-            if helper.handle_post(&hctx)? {
+            if helper.handle_post(rel, core)? {
                 return Err(reloc_error(rel, "Unhandled relocation", core));
             }
         }
@@ -357,7 +365,7 @@ impl<D> DynamicImage<D> {
     /// Perform dynamic relocations (non-PLT, non-relative)
     fn relocate_dynrel<PreS, PostS, PreH, PostH>(
         &self,
-        helper: &mut RelocHelper<'_, '_, D, PreS, PostS, PreH, PostH>,
+        helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
         PreS: SymbolLookup + ?Sized,
@@ -365,9 +373,6 @@ impl<D> DynamicImage<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        let scope = helper.scope;
-        let pre_find = helper.pre_find;
-        let post_find = helper.post_find;
         /*
             Relocation formula components:
             A = Addend used to compute the value of the relocatable field
@@ -383,8 +388,7 @@ impl<D> DynamicImage<D> {
 
         // Process each dynamic relocation entry
         for rel in reloc.dynrel {
-            let hctx = RelocationContext::new(rel, core, scope);
-            if !helper.handle_pre(&hctx)? {
+            if !helper.handle_pre(rel, core)? {
                 continue;
             }
             let r_type = rel.r_type() as u32;
@@ -394,9 +398,14 @@ impl<D> DynamicImage<D> {
             match r_type {
                 // Handle GOT and symbolic relocations
                 REL_GOT | REL_SYMBOLIC => {
-                    if let Some((symbol, idx)) =
-                        find_symbol_addr(pre_find, post_find, core, symtab, scope, r_sym)
-                    {
+                    if let Some((symbol, idx)) = find_symbol_addr(
+                        helper.pre_find,
+                        helper.post_find,
+                        core,
+                        symtab,
+                        &helper.scope,
+                        r_sym,
+                    ) {
                         if let Some(idx) = idx {
                             helper.dependency_flags[idx] = true;
                         }
@@ -406,6 +415,7 @@ impl<D> DynamicImage<D> {
                 }
                 // Handle copy relocations (typically for global data)
                 REL_COPY => {
+                    let hctx = RelocationContext::new(rel, core, &helper.scope);
                     if let Some((symdef, idx)) = hctx.find_symdef(r_sym) {
                         let len = hctx.lib().symtab().symbol_idx(r_sym).0.st_size();
                         if let Some(idx) = idx {
@@ -428,7 +438,8 @@ impl<D> DynamicImage<D> {
                 }
                 // Handle TLS (Thread Local Storage) relocations
                 REL_DTPOFF | REL_DTPMOD | REL_TPOFF => {
-                    if super::tls::handle_tls_reloc(&hctx, rel, helper) {
+                    let hctx = RelocationContext::new(rel, core, &helper.scope);
+                    if super::tls::handle_tls_reloc(&hctx, rel, &mut helper.dependency_flags) {
                         continue;
                     }
                 }
@@ -439,7 +450,7 @@ impl<D> DynamicImage<D> {
             }
 
             // Handle unknown relocations with the provided handler
-            if helper.handle_post(&hctx)? {
+            if helper.handle_post(rel, core)? {
                 return Err(reloc_error(rel, "Unhandled relocation", core));
             }
         }
