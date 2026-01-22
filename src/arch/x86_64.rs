@@ -5,7 +5,9 @@
 
 use crate::{
     elf::ElfRelType,
-    relocation::{RelocValue, StaticReloc, SymbolLookup, find_symbol_addr, reloc_error},
+    relocation::{
+        RelocHelper, RelocValue, RelocationHandler, StaticReloc, SymbolLookup, reloc_error,
+    },
     segment::section::{GotEntry, PltEntry, PltGotSection},
 };
 use elf::abi::*;
@@ -195,52 +197,47 @@ impl StaticReloc for X86_64Relocator {
     ///
     /// # Returns
     /// `Ok(())` on success, or an error if relocation fails
-    fn relocate<PreS, PostS>(
-        core: &crate::image::ElfCore<()>,
-        rel_type: &ElfRelType,
+    fn relocate<D, PreS, PostS, PreH, PostH>(
+        helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
+        rel: &ElfRelType,
         pltgot: &mut PltGotSection,
-        scope: &[crate::image::LoadedCore<()>],
-        pre_find: &PreS,
-        post_find: &PostS,
     ) -> crate::Result<()>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
+        PreH: RelocationHandler + ?Sized,
+        PostH: RelocationHandler + ?Sized,
     {
-        let symtab = core.symtab();
-        let r_sym = rel_type.r_symbol();
-        let r_type = rel_type.r_type();
-        let base = core.base();
-        let segments = core.segments();
-        let append = rel_type.r_addend(base);
-        let offset = rel_type.r_offset();
-        let p = base + rel_type.r_offset();
-        let find_symbol = |r_sym: usize| {
-            find_symbol_addr(pre_find, post_find, core, symtab, scope, r_sym).map(|(val, _)| val)
-        };
-        let boxed_error = || reloc_error(rel_type, "unknown symbol", core);
+        let r_sym = rel.r_symbol();
+        let r_type = rel.r_type();
+        let base = helper.core.base();
+        let segments = helper.core.segments();
+        let append = rel.r_addend(base);
+        let offset = rel.r_offset();
+        let p = base + rel.r_offset();
+        let boxed_error = || reloc_error(rel, "unknown symbol", helper.core);
         match r_type as _ {
             R_X86_64_64 => {
-                let Some(sym) = find_symbol(r_sym) else {
+                let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
                 segments.write(offset, sym + append);
             }
             R_X86_64_PC32 => {
-                let Some(sym) = find_symbol(r_sym) else {
+                let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
                 let val: RelocValue<i32> = (sym + append - p).try_into().map_err(|_| {
                     reloc_error(
-                        rel_type,
+                        rel,
                         "out of range integral type conversion attempted",
-                        core,
+                        helper.core,
                     )
                 })?;
                 segments.write(offset, val);
             }
             R_X86_64_PLT32 => {
-                let Some(sym) = find_symbol(r_sym) else {
+                let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
                 let val: RelocValue<i32> = if let Ok(val) = (sym + append - p).try_into() {
@@ -263,7 +260,7 @@ impl StaticReloc for X86_64Relocator {
                 segments.write(offset, val);
             }
             R_X86_64_GOTPCREL => {
-                let Some(sym) = find_symbol(r_sym) else {
+                let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
                 let got_entry = pltgot.add_got_entry(r_sym);
@@ -278,27 +275,27 @@ impl StaticReloc for X86_64Relocator {
                 segments.write(offset, val);
             }
             R_X86_64_32 => {
-                let Some(sym) = find_symbol(r_sym) else {
+                let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
                 let val: RelocValue<u32> = (sym + append).try_into().map_err(|_| {
                     reloc_error(
-                        rel_type,
+                        rel,
                         "out of range integral type conversion attempted",
-                        core,
+                        helper.core,
                     )
                 })?;
                 segments.write(offset, val);
             }
             R_X86_64_32S => {
-                let Some(sym) = find_symbol(r_sym) else {
+                let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
                 let val: RelocValue<i32> = (sym + append).try_into().map_err(|_| {
                     reloc_error(
-                        rel_type,
+                        rel,
                         "out of range integral type conversion attempted",
-                        core,
+                        helper.core,
                     )
                 })?;
                 segments.write(offset, val);

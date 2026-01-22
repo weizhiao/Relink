@@ -42,7 +42,7 @@ where
     Exec(RawExec<D>),
 
     /// A relocatable object file (typically `.o`).
-    Object(RawObject),
+    Object(RawObject<D>),
 }
 
 /// A fully relocated and ready-to-use ELF module.
@@ -61,7 +61,7 @@ pub enum LoadedElf<D> {
     Exec(LoadedExec<D>),
 
     /// A relocated object file.
-    Object(LoadedObject<()>),
+    Object(LoadedObject<D>),
 }
 
 impl<D: 'static> RawElf<D> {
@@ -138,7 +138,7 @@ impl<D> LoadedElf<D> {
     /// * `Some(object)` - If this is an Object variant
     /// * `None` - If this is a Dylib or Exec variant
     #[inline]
-    pub fn into_object(self) -> Option<LoadedObject<()>> {
+    pub fn into_object(self) -> Option<LoadedObject<D>> {
         match self {
             LoadedElf::Object(object) => Some(object),
             _ => None,
@@ -177,7 +177,7 @@ impl<D> LoadedElf<D> {
     /// * `Some(object)` - If this is an Object variant
     /// * `None` - If this is a Dylib or Exec variant
     #[inline]
-    pub fn as_object(&self) -> Option<&LoadedObject<()>> {
+    pub fn as_object(&self) -> Option<&LoadedObject<D>> {
         match self {
             LoadedElf::Object(object) => Some(object),
             _ => None,

@@ -2,8 +2,8 @@ use crate::{
     Result,
     arch::StaticRelocator,
     elf::ElfRelType,
-    image::{ElfCore, LoadedCore, RawObject},
-    relocation::SymbolLookup,
+    image::{LoadedCore, RawObject},
+    relocation::{RelocHelper, RelocationHandler, SymbolLookup},
     segment::section::PltGotSection,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -20,27 +20,38 @@ impl StaticRelocation {
     }
 }
 
-impl RawObject {
-    pub(crate) fn relocate_impl<PreS, PostS>(
+impl<D: 'static> RawObject<D> {
+    pub(crate) fn relocate_impl<PreS, PostS, PreH, PostH>(
         mut self,
-        scope: &[LoadedCore<()>],
+        scope: &[LoadedCore<D>],
         pre_find: &PreS,
         post_find: &PostS,
-    ) -> Result<LoadedCore<()>>
+        pre_handler: &PreH,
+        post_handler: &PostH,
+    ) -> Result<LoadedCore<D>>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
+        PreH: RelocationHandler + ?Sized,
+        PostH: RelocationHandler + ?Sized,
     {
+        let mut helper = RelocHelper::new(
+            &self.core,
+            scope.to_vec(),
+            pre_find,
+            post_find,
+            pre_handler,
+            post_handler,
+        );
         for reloc in self.relocation.relocation.iter() {
             for rel in *reloc {
-                StaticRelocator::relocate(
-                    &self.core,
-                    rel,
-                    &mut self.pltgot,
-                    scope,
-                    pre_find,
-                    post_find,
-                )?;
+                if !helper.handle_pre(rel)? {
+                    continue;
+                }
+                StaticRelocator::relocate(&mut helper, rel, &mut self.pltgot)?;
+                if !helper.handle_post(rel)? {
+                    continue;
+                }
             }
         }
         (self.mprotect)()?;
@@ -50,17 +61,16 @@ impl RawObject {
 }
 
 pub(crate) trait StaticReloc {
-    fn relocate<PreS, PostS>(
-        core: &ElfCore<()>,
-        rel_type: &ElfRelType,
+    fn relocate<D, PreS, PostS, PreH, PostH>(
+        helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
+        rel: &ElfRelType,
         pltgot: &mut PltGotSection,
-        scope: &[LoadedCore<()>],
-        pre_find: &PreS,
-        post_find: &PostS,
     ) -> Result<()>
     where
         PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized;
+        PostS: SymbolLookup + ?Sized,
+        PreH: RelocationHandler + ?Sized,
+        PostH: RelocationHandler + ?Sized;
 
     fn needs_got(_rel_type: u32) -> bool {
         false

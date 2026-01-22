@@ -3,11 +3,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    let fixture_path = PathBuf::from("tests/fixtures");
+    let fixture_path = PathBuf::from("examples/fixtures");
     if !fixture_path.exists() {
         return;
     }
 
+    println!("cargo:rerun-if-changed=examples/fixtures");
     println!("cargo:rerun-if-changed=tests/fixtures");
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -24,8 +25,8 @@ fn main() {
     // Re-create small set of runtime fixtures required by doctests/examples
     // (liba/libb/libc) from `examples/fixtures/rust` so doctests that load
     // `liba.so` continue to work.
-    let rust_dylibs = [("liba", "a"), ("libb", "b"), ("libc", "c")];
-    for (filename, crate_name) in &rust_dylibs {
+    let rust_code = [("liba", "a"), ("libb", "b"), ("libc", "c")];
+    for (filename, crate_name) in &rust_code {
         let src = format!("examples/fixtures/{}.rs", filename);
         let mut cmd = Command::new("rustc");
         cmd.arg(&src)
@@ -44,6 +45,25 @@ fn main() {
 
         let status = cmd.status().expect("Failed to run rustc");
         assert!(status.success(), "Failed to compile {}", filename);
+    }
+
+    // Build .o files for object loading examples
+    for (filename, crate_name) in &rust_code {
+        let src = format!("examples/fixtures/{}.rs", filename);
+        let mut cmd = Command::new("rustc");
+        cmd.arg(&src)
+            .arg("--crate-type=lib")
+            .arg("--emit=obj")
+            .arg("-o")
+            .arg(out_dir.join(format!("{}.o", crate_name)))
+            .arg("--target")
+            .arg(&target)
+            .arg("-O")
+            .arg("-C")
+            .arg("panic=abort");
+
+        let status = cmd.status().expect("Failed to run rustc");
+        assert!(status.success(), "Failed to compile {} to object", filename);
     }
 
     // Get the compiler/linker to use
@@ -69,11 +89,30 @@ fn main() {
     }
     let _ = cmd.status();
 
-    // Copy exec_a to target/exec_a for mini-loader tests
+    // Copy built files to target/ for examples/doctests to find
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let target_dir = manifest_dir.join("target");
-    if target_dir.exists() {
-        let dest = target_dir.join("exec_a");
-        let _ = std::fs::copy(&exec_a, &dest);
+    if !target_dir.exists() {
+        let _ = std::fs::create_dir_all(&target_dir);
     }
+
+    // Copy .so files
+    for (_, crate_name) in &rust_code {
+        let name = format!("lib{}.so", crate_name);
+        let src = out_dir.join(&name);
+        let dest = target_dir.join(&name);
+        let _ = std::fs::copy(&src, &dest);
+    }
+
+    // Copy .o files
+    for (_, crate_name) in &rust_code {
+        let name = format!("{}.o", crate_name);
+        let src = out_dir.join(&name);
+        let dest = target_dir.join(&name);
+        let _ = std::fs::copy(&src, &dest);
+    }
+
+    // Copy exec_a
+    let dest = target_dir.join("exec_a");
+    let _ = std::fs::copy(&exec_a, &dest);
 }

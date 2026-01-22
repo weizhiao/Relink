@@ -92,16 +92,14 @@ impl<D> DynamicImage<D> {
             pre_find.lookup(name)
         };
 
-        let core_ref = self.core_ref();
-        let mut helper = RelocHelper {
-            core: core_ref,
-            dependency_flags: alloc::vec![false; scope.len()],
+        let mut helper = RelocHelper::new(
+            self.core_ref(),
             scope,
-            pre_find: &hooked_pre_find,
+            &hooked_pre_find,
             post_find,
             pre_handler,
             post_handler,
-        };
+        );
 
         self.relocate_relative()
             .relocate_dynrel(&mut helper)?

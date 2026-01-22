@@ -14,19 +14,18 @@ cfg_if::cfg_if! {
         ];
 
         impl crate::relocation::StaticReloc for DummyRelocator {
-            fn relocate<PreS, PostS>(
-                _core: &crate::image::ElfCore<()>,
-                _rel_type: &crate::elf::ElfRelType,
+            fn relocate<D, PreS, PostS, PreH, PostH>(
+                _helper: &mut crate::relocation::RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
+                _rel: &crate::elf::ElfRelType,
                 _pltgot: &mut crate::segment::section::PltGotSection,
-                _scope: &[crate::image::LoadedCore<()>],
-                _pre_find: &PreS,
-                _post_find: &PostS,
             ) -> crate::Result<()>
             where
                 PreS: crate::relocation::SymbolLookup + ?Sized,
                 PostS: crate::relocation::SymbolLookup + ?Sized,
+                PreH: crate::relocation::RelocationHandler + ?Sized,
+                PostH: crate::relocation::RelocationHandler + ?Sized,
             {
-                todo!()
+                Ok(())
             }
         }
     }

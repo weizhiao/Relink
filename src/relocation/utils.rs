@@ -5,7 +5,7 @@ use crate::{
     relocate_error,
     relocation::{Relocatable, RelocationContext, RelocationHandler, SymbolLookup},
 };
-use alloc::{format, string::ToString, vec::Vec};
+use alloc::{format, string::ToString, vec, vec::Vec};
 use core::{
     ops::{Add, Sub},
     ptr::null,
@@ -28,14 +28,33 @@ pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Size
     pub(crate) dependency_flags: Vec<bool>,
 }
 
-impl<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized>
-    RelocHelper<'find, D, PreS, PostS, PreH, PostH>
+impl<'find, D, PreS, PostS, PreH, PostH> RelocHelper<'find, D, PreS, PostS, PreH, PostH>
 where
-    PreS: SymbolLookup,
-    PostS: SymbolLookup,
-    PreH: RelocationHandler,
-    PostH: RelocationHandler,
+    PreS: SymbolLookup + ?Sized,
+    PostS: SymbolLookup + ?Sized,
+    PreH: RelocationHandler + ?Sized,
+    PostH: RelocationHandler + ?Sized,
 {
+    pub(crate) fn new(
+        core: &'find ElfCore<D>,
+        scope: Vec<LoadedCore<D>>,
+        pre_find: &'find PreS,
+        post_find: &'find PostS,
+        pre_handler: &'find PreH,
+        post_handler: &'find PostH,
+    ) -> Self {
+        let dependency_flags = vec![false; scope.len()];
+        Self {
+            core,
+            scope,
+            pre_find,
+            post_find,
+            pre_handler,
+            post_handler,
+            dependency_flags,
+        }
+    }
+
     #[inline]
     pub(crate) fn handle_pre(&mut self, rel: &ElfRelType) -> Result<bool> {
         let hctx = RelocationContext::new(rel, self.core, &self.scope);
@@ -181,10 +200,13 @@ where
     }
 
     /// Sets the preferred symbol lookup strategy using a closure.
-    pub fn pre_find_fn(
+    pub fn pre_find_fn<F>(
         self,
-        pre_find: impl Fn(&str) -> Option<*const ()>,
-    ) -> Relocator<T, impl Fn(&str) -> Option<*const ()>, PostS, LazyS, PreH, PostH, D> {
+        pre_find: F,
+    ) -> Relocator<T, F, PostS, LazyS, PreH, PostH, D>
+    where
+        F: Fn(&str) -> Option<*const ()>,
+    {
         Relocator {
             object: self.object,
             scope: self.scope,
@@ -201,10 +223,13 @@ where
     ///
     /// This strategy will be used if a symbol is not found in the preferred
     /// strategy or the default scope.
-    pub fn post_find_fn(
+    pub fn post_find_fn<F>(
         self,
-        post_find: impl Fn(&str) -> Option<*const ()>,
-    ) -> Relocator<T, PreS, impl Fn(&str) -> Option<*const ()>, LazyS, PreH, PostH, D> {
+        post_find: F,
+    ) -> Relocator<T, PreS, F, LazyS, PreH, PostH, D>
+    where
+        F: Fn(&str) -> Option<*const ()>,
+    {
         Relocator {
             object: self.object,
             scope: self.scope,

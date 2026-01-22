@@ -215,7 +215,7 @@ where
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocatable ELF file before
 /// building the final ElfRelocatable object.
-pub(crate) struct ObjectBuilder<T> {
+pub(crate) struct ObjectBuilder<Tls, D = ()> {
     /// Name of the ELF file
     pub(crate) name: String,
 
@@ -249,11 +249,14 @@ pub(crate) struct ObjectBuilder<T> {
     /// TLS thread pointer offset
     pub(crate) tls_tp_offset: Option<isize>,
 
+    /// User-defined data
+    pub(crate) user_data: D,
+
     /// TLS resolver
-    _marker_tls: PhantomData<T>,
+    _marker_tls: PhantomData<Tls>,
 }
 
-impl<T: TlsResolver> ObjectBuilder<T> {
+impl<T: TlsResolver, D> ObjectBuilder<T, D> {
     /// Create a new RelocatableBuilder
     ///
     /// This method initializes a new RelocatableBuilder with the provided
@@ -267,6 +270,7 @@ impl<T: TlsResolver> ObjectBuilder<T> {
     /// * `segments` - Memory segments of the ELF file
     /// * `mprotect` - Memory protection function
     /// * `pltgot` - PLT/GOT section information
+    /// * `user_data` - User-defined data
     ///
     /// # Returns
     /// A new RelocatableBuilder instance
@@ -278,6 +282,7 @@ impl<T: TlsResolver> ObjectBuilder<T> {
         segments: ElfSegments,
         mprotect: Box<dyn Fn() -> Result<()>>,
         mut pltgot: PltGotSection,
+        user_data: D,
     ) -> Self {
         // Calculate the base address for relocations
         let base = segments.base();
@@ -351,6 +356,7 @@ impl<T: TlsResolver> ObjectBuilder<T> {
             init_array,
             tls_mod_id: None,
             tls_tp_offset: None,
+            user_data,
             _marker_tls: PhantomData,
         }
     }

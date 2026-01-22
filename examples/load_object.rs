@@ -26,7 +26,7 @@ fn main() {
         .relocate()
         .unwrap();
     let b = loader
-        .load_object(ElfFile::from_path("target/b.o").unwrap())
+        .load_dylib(ElfFile::from_path("target/libb.so").unwrap())
         .unwrap()
         .relocator()
         .pre_find(pre_find.clone())
@@ -38,7 +38,8 @@ fn main() {
         .unwrap()
         .relocator()
         .pre_find(pre_find.clone())
-        .scope([&a, &b])
+        .scope([&a])
+        .add_scope([&b])
         .relocate()
         .unwrap();
     let f = unsafe { a.get::<extern "C" fn() -> i32>("a").unwrap() };

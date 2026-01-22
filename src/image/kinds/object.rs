@@ -44,7 +44,7 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
     /// let bytes = &[]; // Relocatable ELF bytes
     /// let rel = loader.load_object(ElfBinary::new("liba.o", bytes)).unwrap();
     /// ```
-    pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject>
+    pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject<D>>
     where
         I: IntoElfReader<'a>,
     {
@@ -52,13 +52,13 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
         self.load_object_internal(object)
     }
 
-    pub(crate) fn load_object_internal(&mut self, mut object: impl ElfReader) -> Result<RawObject> {
+    pub(crate) fn load_object_internal(&mut self, mut object: impl ElfReader) -> Result<RawObject<D>> {
         let ehdr = self.buf.prepare_ehdr(&mut object).unwrap();
         self.load_object_impl(ehdr, object)
     }
 }
 
-impl<Tls: TlsResolver> ObjectBuilder<Tls> {
+impl<Tls: TlsResolver, D> ObjectBuilder<Tls, D> {
     /// Build the final RawObject
     ///
     /// This method constructs the final RawObject from the
@@ -66,7 +66,7 @@ impl<Tls: TlsResolver> ObjectBuilder<Tls> {
     ///
     /// # Returns
     /// A RawObject instance ready for relocation
-    pub(crate) fn build(self) -> RawObject {
+    pub(crate) fn build(self) -> RawObject<D> {
         // Create the inner component structure
         let inner = CoreInner {
             is_init: AtomicBool::new(false),
@@ -75,7 +75,7 @@ impl<Tls: TlsResolver> ObjectBuilder<Tls> {
             fini: None,
             fini_array: None,
             fini_handler: self.fini_fn,
-            user_data: (),
+            user_data: self.user_data,
             dynamic_info: None,
             tls_mod_id: self.tls_mod_id,
             tls_tp_offset: self.tls_tp_offset,
@@ -102,9 +102,9 @@ impl<Tls: TlsResolver> ObjectBuilder<Tls> {
 /// This structure represents a relocatable ELF file (typically a `.o` file)
 /// that has been loaded into memory and is ready for relocation. It contains
 /// all the necessary information to perform the relocation process.
-pub struct RawObject {
+pub struct RawObject<D = ()> {
     /// Core component containing basic ELF information.
-    pub(crate) core: ElfCore<()>,
+    pub(crate) core: ElfCore<D>,
 
     /// Static relocation information.
     pub(crate) relocation: StaticRelocation,
@@ -122,8 +122,8 @@ pub struct RawObject {
     pub(crate) init_array: Option<&'static [fn()]>,
 }
 
-impl Deref for RawObject {
-    type Target = ElfCore<()>;
+impl<D> Deref for RawObject<D> {
+    type Target = ElfCore<D>;
 
     /// Dereferences to the underlying [`ElfCore`].
     fn deref(&self) -> &Self::Target {
@@ -131,14 +131,14 @@ impl Deref for RawObject {
     }
 }
 
-impl RawObject {
+impl<D: 'static> RawObject<D> {
     /// Creates a builder for relocating the relocatable file.
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), ()> {
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
     }
 }
 
-impl Debug for RawObject {
+impl<D> Debug for RawObject<D> {
     /// Formats the [`RawObject`] for debugging purposes.
     ///
     /// This implementation provides a debug representation that includes
@@ -150,16 +150,16 @@ impl Debug for RawObject {
     }
 }
 
-impl Relocatable<()> for RawObject {
-    type Output = LoadedObject<()>;
+impl<D: 'static> Relocatable<D> for RawObject<D> {
+    type Output = LoadedObject<D>;
 
     fn relocate<PreS, PostS, LazyS, PreH, PostH>(
         self,
-        scope: Vec<LoadedCore<()>>,
+        scope: Vec<LoadedCore<D>>,
         pre_find: &PreS,
         post_find: &PostS,
-        _pre_handler: &PreH,
-        _post_handler: &PostH,
+        pre_handler: &PreH,
+        post_handler: &PostH,
         _lazy: Option<bool>,
         _lazy_scope: Option<LazyS>,
     ) -> Result<Self::Output>
@@ -170,7 +170,7 @@ impl Relocatable<()> for RawObject {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        let inner = self.relocate_impl(&scope, pre_find, post_find)?;
+        let inner = self.relocate_impl(&scope, pre_find, post_find, pre_handler, post_handler)?;
         Ok(LoadedObject { inner })
     }
 }

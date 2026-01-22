@@ -329,12 +329,12 @@ where
     /// Load a relocatable ELF object
     pub(crate) fn load_object_impl(
         &mut self,
-        ehdr: ElfHeader,
+        _ehdr: ElfHeader,
         mut object: impl ElfReader,
-    ) -> Result<RawObject> {
+    ) -> Result<RawObject<D>> {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
-        let shdrs = self.buf.prepare_shdrs_mut(&ehdr, &mut object).unwrap();
+        let shdrs = self.buf.prepare_shdrs_mut(&_ehdr, &mut object).unwrap();
         let mut shdr_segments = SectionSegments::new(shdrs, &mut object);
         let segments = shdr_segments.load_segments::<M>(&mut object)?;
         let pltgot = shdr_segments.take_pltgot();
@@ -342,7 +342,7 @@ where
             shdr_segments.mprotect::<M>()?;
             Ok(())
         });
-        let builder: ObjectBuilder<Tls> = ObjectBuilder::new(
+        let builder: ObjectBuilder<Tls, D> = ObjectBuilder::new(
             object.shortname().to_owned(),
             shdrs,
             init_fn,
@@ -350,6 +350,7 @@ where
             segments,
             mprotect,
             pltgot,
+            D::default(),
         );
 
         Ok(builder.build())

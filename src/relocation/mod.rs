@@ -23,8 +23,7 @@ pub(crate) use dynamic::{DynamicRelocation, dl_fixup};
 pub(crate) use r#static::{StaticReloc, StaticRelocation};
 pub(crate) use traits::Relocatable;
 pub(crate) use utils::{
-    RelocHelper, RelocValue, Relocator, SymDef, find_symbol_addr, find_symdef_impl, likely,
-    reloc_error, unlikely,
+    RelocHelper, RelocValue, Relocator, SymDef, find_symdef_impl, likely, reloc_error, unlikely,
 };
 
 pub use crate::tls::TlsResolver;
