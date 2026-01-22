@@ -450,7 +450,7 @@ impl<D> DynamicImage<D> {
     /// This method marks the ELF object as fully initialized and calls
     /// any registered initialization functions.
     #[inline]
-    pub(crate) fn finish(&self) {
+    pub(crate) fn call_init(&self) {
         self.data.module.set_init();
         self.data.extra.init.as_ref()();
     }
@@ -471,12 +471,6 @@ impl<D> DynamicImage<D> {
     #[inline]
     pub(crate) fn user_data_mut(&mut self) -> Option<&mut D> {
         self.data.module.user_data_mut()
-    }
-
-    /// Gets the symbol table of the ELF object
-    #[inline]
-    pub(crate) fn symtab(&self) -> &SymbolTable {
-        self.data.module.symtab()
     }
 
     /// Gets the base address of the loaded ELF object

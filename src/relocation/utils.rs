@@ -19,6 +19,7 @@ use portable_atomic_util::Arc;
 
 /// Internal context for managing relocation state and handlers.
 pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized> {
+    pub(crate) core: &'find ElfCore<D>,
     pub(crate) scope: Vec<LoadedCore<D>>,
     pub(crate) pre_find: &'find PreS,
     pub(crate) post_find: &'find PostS,
@@ -30,12 +31,14 @@ pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Size
 impl<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized>
     RelocHelper<'find, D, PreS, PostS, PreH, PostH>
 where
+    PreS: SymbolLookup,
+    PostS: SymbolLookup,
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
     #[inline]
-    pub(crate) fn handle_pre(&mut self, rel: &ElfRelType, lib: &ElfCore<D>) -> Result<bool> {
-        let hctx = RelocationContext::new(rel, lib, &self.scope);
+    pub(crate) fn handle_pre(&mut self, rel: &ElfRelType) -> Result<bool> {
+        let hctx = RelocationContext::new(rel, self.core, &self.scope);
         let opt = self.pre_handler.handle(&hctx);
         if let Some(r) = opt {
             if let Some(idx) = r? {
@@ -47,8 +50,8 @@ where
     }
 
     #[inline]
-    pub(crate) fn handle_post(&mut self, rel: &ElfRelType, lib: &ElfCore<D>) -> Result<bool> {
-        let hctx = RelocationContext::new(rel, lib, &self.scope);
+    pub(crate) fn handle_post(&mut self, rel: &ElfRelType) -> Result<bool> {
+        let hctx = RelocationContext::new(rel, self.core, &self.scope);
         let opt = self.post_handler.handle(&hctx);
         if let Some(r) = opt {
             if let Some(idx) = r? {
@@ -57,6 +60,42 @@ where
             return Ok(false);
         }
         Ok(true)
+    }
+
+    #[inline]
+    pub(crate) fn find_symbol(&mut self, r_sym: usize) -> Option<RelocValue<usize>> {
+        let (symbol, idx) = find_symbol_addr(
+            self.pre_find,
+            self.post_find,
+            self.core,
+            self.core.symtab(),
+            &self.scope,
+            r_sym,
+        )?;
+        if let Some(idx) = idx {
+            self.dependency_flags[idx] = true;
+        }
+        Some(symbol)
+    }
+
+    #[inline]
+    pub(crate) fn find_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, D>> {
+        let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
+        let (symdef, idx) = find_symdef_impl(self.core, &self.scope, dynsym, &syminfo)?;
+        if let Some(idx) = idx {
+            self.dependency_flags[idx] = true;
+        }
+        Some(symdef)
+    }
+
+    pub(crate) fn finish(self, needed_libs: &[&str]) -> Vec<LoadedCore<D>> {
+        self.scope
+            .into_iter()
+            .zip(self.dependency_flags)
+            .filter_map(|(module, flag)| {
+                (flag || needed_libs.contains(&module.name())).then(|| module)
+            })
+            .collect()
     }
 }
 

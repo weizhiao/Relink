@@ -3,10 +3,9 @@ use crate::{
     Result,
     arch::*,
     elf::{ElfRelType, ElfRelr},
-    image::{CoreInner, DynamicImage, ElfCoreRef, LoadedCore},
+    image::{CoreInner, DynamicImage, LoadedCore},
     relocation::{
-        RelocHelper, RelocValue, RelocationContext, RelocationHandler, SymbolLookup,
-        find_symbol_addr, likely, reloc_error, unlikely,
+        RelocHelper, RelocValue, RelocationHandler, SymbolLookup, likely, reloc_error, unlikely,
     },
 };
 use alloc::vec::Vec;
@@ -23,8 +22,8 @@ struct LazyScope<D = (), S: SymbolLookup = ()>
 where
     S: SymbolLookup,
 {
-    /// Weak references to the local libraries for symbol lookup
-    libs: Vec<ElfCoreRef<D>>,
+    /// Strong references to the local libraries for symbol lookup
+    libs: Arc<[LoadedCore<D>]>,
     custom_scope: Option<S>,
     tls_get_addr: usize,
 }
@@ -41,12 +40,9 @@ impl<D, S: SymbolLookup> SymbolLookup for LazyScope<D, S> {
             }
         }
         // Then try the local libraries
-        self.libs.iter().find_map(|lib| unsafe {
-            let core = lib.upgrade()?;
-            LoadedCore::from_core(core)
-                .get::<()>(name)
-                .map(|sym| sym.into_raw())
-        })
+        self.libs
+            .iter()
+            .find_map(|lib| unsafe { lib.get::<()>(name).map(|sym| sym.into_raw()) })
     }
 }
 
@@ -96,7 +92,9 @@ impl<D> DynamicImage<D> {
             pre_find.lookup(name)
         };
 
+        let core_ref = self.core_ref();
         let mut helper = RelocHelper {
+            core: core_ref,
             dependency_flags: alloc::vec![false; scope.len()],
             scope,
             pre_find: &hooked_pre_find,
@@ -105,43 +103,22 @@ impl<D> DynamicImage<D> {
             post_handler,
         };
 
-        self.relocate_relative().relocate_dynrel(&mut helper)?;
+        self.relocate_relative()
+            .relocate_dynrel(&mut helper)?
+            .relocate_pltrel(is_lazy, &mut helper)?;
 
-        let deps = {
-            let needed_libs = self.needed_libs();
+        let needed_libs = self.needed_libs();
+        let deps: Arc<[LoadedCore<D>]> = Arc::from(helper.finish(needed_libs));
 
-            let lazy_scope = if is_lazy {
-                let libs = helper.scope
-                    .iter()
-                    .filter(|lib| needed_libs.contains(&lib.name()))
-                    .map(|lib| lib.core.downgrade())
-                    .collect();
-                Some(LazyScope {
-                    libs,
-                    custom_scope: lazy_scope,
-                    tls_get_addr: tls_get_addr as *const () as usize,
-                })
-            } else {
-                None
-            };
+        if is_lazy {
+            self.set_lazy_scope(LazyScope {
+                libs: deps.clone(),
+                custom_scope: lazy_scope,
+                tls_get_addr: tls_get_addr as *const () as usize,
+            });
+        }
 
-            self.relocate_pltrel(is_lazy, lazy_scope, &mut helper)?
-                .finish();
-
-            let RelocHelper {
-                scope,
-                dependency_flags,
-                ..
-            } = helper;
-
-            scope
-                .into_iter()
-                .zip(dependency_flags)
-                .filter_map(|(module, flag)| {
-                    (flag || needed_libs.contains(&module.name())).then(|| module)
-                })
-                .collect::<Vec<_>>()
-        };
+        self.call_init();
 
         Ok(unsafe { LoadedCore::from_core_deps(self.into_core(), deps) })
     }
@@ -216,16 +193,14 @@ pub(crate) struct DynamicRelocation {
 
 impl<D> DynamicImage<D> {
     /// Relocate PLT (Procedure Linkage Table) entries
-    fn relocate_pltrel<PreS, PostS, LazyS, PreH, PostH>(
+    fn relocate_pltrel<PreS, PostS, PreH, PostH>(
         &self,
         is_lazy: bool,
-        lazy_scope: Option<LazyS>,
         helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        LazyS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
@@ -233,11 +208,10 @@ impl<D> DynamicImage<D> {
         let base = core.base();
         let segments = core.segments();
         let reloc = self.relocation();
-        let symtab = self.symtab();
 
         // Process PLT relocations
         for rel in reloc.pltrel {
-            if !helper.handle_pre(rel, core)? {
+            if !helper.handle_pre(rel)? {
                 continue;
             }
             let r_type = rel.r_type() as u32;
@@ -256,17 +230,7 @@ impl<D> DynamicImage<D> {
                         ptr.write(new_val);
                     }
                 } else {
-                    if let Some((symbol, idx)) = find_symbol_addr(
-                        helper.pre_find,
-                        helper.post_find,
-                        core,
-                        symtab,
-                        &helper.scope,
-                        r_sym,
-                    ) {
-                        if let Some(idx) = idx {
-                            helper.dependency_flags[idx] = true;
-                        }
+                    if let Some(symbol) = helper.find_symbol(r_sym) {
                         segments.write(rel.r_offset(), symbol);
                     }
                 }
@@ -278,7 +242,7 @@ impl<D> DynamicImage<D> {
                 continue;
             }
             // Handle unknown relocations with the provided handler
-            if helper.handle_post(rel, core)? {
+            if helper.handle_post(rel)? {
                 return Err(reloc_error(rel, "Unhandled relocation", core));
             }
         }
@@ -290,18 +254,6 @@ impl<D> DynamicImage<D> {
                     self.got().unwrap().as_ptr(),
                     Arc::as_ptr(&core.inner) as usize,
                 );
-            }
-
-            // Ensure lazy scope is available
-            assert!(
-                reloc.pltrel.is_empty() || lazy_scope.is_some(),
-                "{}: lazy scope is not set",
-                core.name()
-            );
-
-            // Set the lazy scope if provided
-            if let Some(lazy_scope) = lazy_scope {
-                self.set_lazy_scope(lazy_scope);
             }
         } else {
             // Apply RELRO (RELocation Read-Only) protection if available
@@ -382,13 +334,12 @@ impl<D> DynamicImage<D> {
 
         let core = self.core_ref();
         let reloc = self.relocation();
-        let symtab = self.symtab();
         let segments = core.segments();
         let base = core.base();
 
         // Process each dynamic relocation entry
         for rel in reloc.dynrel {
-            if !helper.handle_pre(rel, core)? {
+            if !helper.handle_pre(rel)? {
                 continue;
             }
             let r_type = rel.r_type() as u32;
@@ -398,29 +349,15 @@ impl<D> DynamicImage<D> {
             match r_type {
                 // Handle GOT and symbolic relocations
                 REL_GOT | REL_SYMBOLIC => {
-                    if let Some((symbol, idx)) = find_symbol_addr(
-                        helper.pre_find,
-                        helper.post_find,
-                        core,
-                        symtab,
-                        &helper.scope,
-                        r_sym,
-                    ) {
-                        if let Some(idx) = idx {
-                            helper.dependency_flags[idx] = true;
-                        }
+                    if let Some(symbol) = helper.find_symbol(r_sym) {
                         segments.write(rel.r_offset(), symbol + r_addend);
                         continue;
                     }
                 }
                 // Handle copy relocations (typically for global data)
                 REL_COPY => {
-                    let hctx = RelocationContext::new(rel, core, &helper.scope);
-                    if let Some((symdef, idx)) = hctx.find_symdef(r_sym) {
-                        let len = hctx.lib().symtab().symbol_idx(r_sym).0.st_size();
-                        if let Some(idx) = idx {
-                            helper.dependency_flags[idx] = true;
-                        }
+                    if let Some(symdef) = helper.find_symdef(r_sym) {
+                        let len = core.symtab().symbol_idx(r_sym).0.st_size();
                         let dest = core.segments().get_slice_mut::<u8>(rel.r_offset(), len);
                         let src = symdef
                             .lib
@@ -438,8 +375,7 @@ impl<D> DynamicImage<D> {
                 }
                 // Handle TLS (Thread Local Storage) relocations
                 REL_DTPOFF | REL_DTPMOD | REL_TPOFF => {
-                    let hctx = RelocationContext::new(rel, core, &helper.scope);
-                    if super::tls::handle_tls_reloc(&hctx, rel, &mut helper.dependency_flags) {
+                    if super::tls::handle_tls_reloc(helper, rel) {
                         continue;
                     }
                 }
@@ -450,7 +386,7 @@ impl<D> DynamicImage<D> {
             }
 
             // Handle unknown relocations with the provided handler
-            if helper.handle_post(rel, core)? {
+            if helper.handle_post(rel)? {
                 return Err(reloc_error(rel, "Unhandled relocation", core));
             }
         }

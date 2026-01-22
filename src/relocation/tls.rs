@@ -1,25 +1,27 @@
 use crate::{
     arch::*,
     elf::ElfRelType,
-    relocation::{RelocValue, RelocationContext},
+    relocation::{RelocHelper, RelocValue, RelocationHandler, SymbolLookup},
 };
 
-pub(crate) fn handle_tls_reloc<D>(
-    hctx: &RelocationContext<'_, D>,
+pub(crate) fn handle_tls_reloc<D, PreS, PostS, PreH, PostH>(
+    helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
     rel: &ElfRelType,
-    dependency_flags: &mut [bool],
-) -> bool {
+) -> bool
+where
+    PreS: SymbolLookup + ?Sized,
+    PostS: SymbolLookup + ?Sized,
+    PreH: RelocationHandler + ?Sized,
+    PostH: RelocationHandler + ?Sized,
+{
     let r_type = rel.r_type() as u32;
     let r_sym = rel.r_symbol();
-    let r_addend = rel.r_addend(hctx.lib().segments().base());
-    let segments = hctx.lib().segments();
+    let r_addend = rel.r_addend(helper.core.segments().base());
+    let segments = helper.core.segments();
 
     match r_type {
         REL_DTPOFF => {
-            if let Some((symdef, idx)) = hctx.find_symdef(r_sym) {
-                if let Some(idx) = idx {
-                    dependency_flags[idx] = true;
-                }
+            if let Some(symdef) = helper.find_symdef(r_sym) {
                 // Calculate offset within TLS block
                 let tls_val = RelocValue::new(symdef.sym.unwrap().st_value() as usize) + r_addend
                     - TLS_DTV_OFFSET;
@@ -29,8 +31,8 @@ pub(crate) fn handle_tls_reloc<D>(
         }
         REL_DTPMOD => {
             let mod_id = if r_sym == 0 {
-                hctx.lib().tls_mod_id()
-            } else if let Some((symdef, _)) = hctx.find_symdef(r_sym) {
+                helper.core.tls_mod_id()
+            } else if let Some(symdef) = helper.find_symdef(r_sym) {
                 symdef.lib.tls_mod_id()
             } else {
                 None
@@ -42,10 +44,7 @@ pub(crate) fn handle_tls_reloc<D>(
             }
         }
         REL_TPOFF => {
-            if let Some((symdef, idx)) = hctx.find_symdef(r_sym) {
-                if let Some(idx) = idx {
-                    dependency_flags[idx] = true;
-                }
+            if let Some(symdef) = helper.find_symdef(r_sym) {
                 let sym = symdef.sym.unwrap();
                 if let Some(tp_offset) = symdef.lib.tls_tp_offset() {
                     let tls_val =

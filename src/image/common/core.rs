@@ -13,7 +13,7 @@ use crate::{
     relocation::SymDef,
     segment::ElfSegments,
 };
-use alloc::{string::String, vec::Vec};
+use alloc::string::String;
 use core::{
     ffi::c_void,
     fmt::Debug,
@@ -118,11 +118,8 @@ impl<D> LoadedCore<D> {
     /// * `core` - The [`ElfCore`] to wrap.
     /// * `deps` - A vector of dependencies.
     #[inline]
-    pub unsafe fn from_core_deps(core: ElfCore<D>, deps: Vec<LoadedCore<D>>) -> Self {
-        LoadedCore {
-            core,
-            deps: Arc::from(deps),
-        }
+    pub unsafe fn from_core_deps(core: ElfCore<D>, deps: Arc<[LoadedCore<D>]>) -> Self {
+        LoadedCore { core, deps }
     }
 
     /// Gets the core component reference of the ELF object
