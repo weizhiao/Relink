@@ -4,19 +4,18 @@
 //! (shared objects) that have been loaded but not yet relocated. It includes
 //! support for synchronous loading of dynamic libraries.
 
-use alloc::vec::Vec;
-
 use crate::{
     LoadHook, Loader, Result,
-    elf::{Dyn, ElfPhdr},
-    image::{LoadedCore, common::DynamicImage},
+    elf::{ElfDyn, ElfPhdr},
+    image::{ElfCore, LoadedCore, common::DynamicImage},
     input::{ElfReader, IntoElfReader},
     os::Mmap,
     parse_ehdr_error,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
     tls::TlsResolver,
 };
-use core::{borrow::Borrow, fmt::Debug, ops::Deref};
+use alloc::vec::Vec;
+use core::{borrow::Borrow, fmt::Debug, ops::Deref, ptr::NonNull};
 
 /// An unrelocated dynamic library.
 ///
@@ -87,19 +86,19 @@ impl<D> RawDylib<D> {
 
     /// Gets the core component reference of the ELF object.
     #[inline]
-    pub fn core_ref(&self) -> &crate::image::ElfCore<D> {
+    pub fn core_ref(&self) -> &ElfCore<D> {
         self.inner.core_ref()
     }
 
     /// Gets the core component of the ELF object.
     #[inline]
-    pub fn core(&self) -> crate::image::ElfCore<D> {
+    pub fn core(&self) -> ElfCore<D> {
         self.inner.core()
     }
 
     /// Converts this object into its core component.
     #[inline]
-    pub fn into_core(self) -> crate::image::ElfCore<D> {
+    pub fn into_core(self) -> ElfCore<D> {
         self.inner.into_core()
     }
 
@@ -166,7 +165,7 @@ impl<D> RawDylib<D> {
     ///
     /// # Returns
     /// An optional NonNull pointer to the dynamic section
-    pub fn dynamic_ptr(&self) -> Option<core::ptr::NonNull<Dyn>> {
+    pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn>> {
         self.inner.dynamic_ptr()
     }
 

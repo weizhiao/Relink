@@ -1,12 +1,12 @@
 use crate::{
     LoadHook, Result,
-    elf::{Dyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfRelType, SymbolTable},
+    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfRelType, SymbolTable},
     image::{ElfCore, ImageBuilder, common::CoreInner},
     loader::FnHandler,
     os::Mmap,
     relocation::{DynamicRelocation, SymbolLookup},
     segment::{ELFRelro, ElfSegments},
-    tls::TlsResolver,
+    tls::{TlsIndex, TlsResolver},
 };
 use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{
@@ -23,12 +23,11 @@ use alloc::sync::Arc;
 use portable_atomic_util::Arc;
 
 pub(crate) struct DynamicInfo {
-    pub(crate) dynamic_ptr: NonNull<Dyn>,
+    pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
+    pub(crate) dynamic_ptr: NonNull<ElfDyn>,
     pub(crate) pltrel: Option<NonNull<ElfRelType>>,
     pub(crate) phdrs: ElfPhdrs,
-    /// Lazy binding scope for symbol resolution during lazy binding
-    /// Stored as trait object for type erasure of different SymbolLookup implementations
-    pub(crate) lazy_scope: Option<Arc<dyn SymbolLookup>>,
+    pub(crate) lazy_scope: Option<Box<dyn SymbolLookup>>,
 }
 
 /// Extra data associated with ELF objects during relocation
@@ -98,7 +97,7 @@ enum State<D> {
         name: String,
 
         /// Pointer to the dynamic section
-        dynamic_ptr: NonNull<Dyn>,
+        dynamic_ptr: NonNull<ElfDyn>,
 
         /// Memory segments
         segments: ElfSegments,
@@ -120,6 +119,9 @@ enum State<D> {
 
         /// User-defined data
         user_data: D,
+
+        /// EH frame header pointer
+        eh_frame_hdr: Option<NonNull<u8>>,
     },
 
     /// Initialized state with all data ready for relocation
@@ -149,6 +151,7 @@ impl<D> State<D> {
                 init_handler,
                 fini_handler,
                 phdrs,
+                eh_frame_hdr,
             } => {
                 // If we have a dynamic section, parse it and prepare relocation data
 
@@ -216,6 +219,7 @@ impl<D> State<D> {
                             fini_handler,
                             user_data,
                             dynamic_info: Some(Arc::new(DynamicInfo {
+                                eh_frame_hdr,
                                 dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
                                 pltrel: NonNull::new(
                                     dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _,
@@ -345,44 +349,44 @@ where
 impl<D> DynamicImage<D> {
     /// Gets the entry point of the ELF object.
     #[inline]
-    pub fn entry(&self) -> usize {
+    pub(crate) fn entry(&self) -> usize {
         self.entry
     }
 
-    pub fn tls_mod_id(&self) -> Option<usize> {
+    pub(crate) fn tls_mod_id(&self) -> Option<usize> {
         self.data.module.tls_mod_id()
     }
 
     /// Gets the TLS thread pointer offset
-    pub fn tls_tp_offset(&self) -> Option<isize> {
+    pub(crate) fn tls_tp_offset(&self) -> Option<isize> {
         self.data.module.tls_tp_offset()
     }
 
-    pub(crate) fn tls_get_addr(&self) -> extern "C" fn(*const crate::tls::TlsIndex) -> *mut u8 {
+    pub(crate) fn tls_get_addr(&self) -> extern "C" fn(*const TlsIndex) -> *mut u8 {
         self.data.extra.tls_get_addr
     }
 
     /// Gets the core component reference of the ELF object.
     #[inline]
-    pub fn core_ref(&self) -> &ElfCore<D> {
+    pub(crate) fn core_ref(&self) -> &ElfCore<D> {
         &self.data.module
     }
 
     /// Gets the core component of the ELF object.
     #[inline]
-    pub fn core(&self) -> ElfCore<D> {
+    pub(crate) fn core(&self) -> ElfCore<D> {
         self.core_ref().clone()
     }
 
     /// Converts this object into its core component.
     #[inline]
-    pub fn into_core(self) -> ElfCore<D> {
+    pub(crate) fn into_core(self) -> ElfCore<D> {
         self.core()
     }
 
     /// Whether lazy binding is enabled for the current ELF object
     #[inline]
-    pub fn is_lazy(&self) -> bool {
+    pub(crate) fn is_lazy(&self) -> bool {
         self.data.extra.lazy
     }
 
@@ -391,7 +395,7 @@ impl<D> DynamicImage<D> {
     /// # Returns
     /// An optional string slice containing the RPATH value
     #[inline]
-    pub fn rpath(&self) -> Option<&str> {
+    pub(crate) fn rpath(&self) -> Option<&str> {
         self.data.extra.rpath
     }
 
@@ -400,7 +404,7 @@ impl<D> DynamicImage<D> {
     /// # Returns
     /// An optional string slice containing the RUNPATH value
     #[inline]
-    pub fn runpath(&self) -> Option<&str> {
+    pub(crate) fn runpath(&self) -> Option<&str> {
         self.data.extra.runpath
     }
 
@@ -409,18 +413,18 @@ impl<D> DynamicImage<D> {
     /// # Returns
     /// An optional string slice containing the interpreter path
     #[inline]
-    pub fn interp(&self) -> Option<&str> {
+    pub(crate) fn interp(&self) -> Option<&str> {
         self.interp
     }
 
     /// Gets the name of the ELF object
     #[inline]
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     /// Gets the program headers of the ELF object
-    pub fn phdrs(&self) -> &[ElfPhdr] {
+    pub(crate) fn phdrs(&self) -> &[ElfPhdr] {
         match &self.phdrs {
             ElfPhdrs::Mmap(phdrs) => &phdrs,
             ElfPhdrs::Vec(phdrs) => &phdrs,
@@ -474,17 +478,17 @@ impl<D> DynamicImage<D> {
     }
 
     /// Gets the base address of the loaded ELF object
-    pub fn base(&self) -> usize {
+    pub(crate) fn base(&self) -> usize {
         self.data.module.base()
     }
 
     /// Gets the total length of mapped memory for the ELF object
-    pub fn mapped_len(&self) -> usize {
+    pub(crate) fn mapped_len(&self) -> usize {
         self.data.module.segments().len()
     }
 
     /// Gets the list of needed library names from the dynamic section
-    pub fn needed_libs(&self) -> &[&str] {
+    pub(crate) fn needed_libs(&self) -> &[&str] {
         &self.data.extra.needed_libs
     }
 
@@ -492,12 +496,12 @@ impl<D> DynamicImage<D> {
     ///
     /// # Returns
     /// An optional NonNull pointer to the dynamic section
-    pub fn dynamic_ptr(&self) -> Option<NonNull<Dyn>> {
+    pub(crate) fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn>> {
         self.data.module.dynamic_ptr()
     }
 
     /// Gets a reference to the user data
-    pub fn user_data(&self) -> &D {
+    pub(crate) fn user_data(&self) -> &D {
         self.data.module.user_data()
     }
 
@@ -515,7 +519,7 @@ impl<D> DynamicImage<D> {
             &mut *(Arc::as_ptr(&self.data.module.inner.dynamic_info.as_ref().unwrap())
                 as *mut DynamicInfo)
         };
-        info.lazy_scope = Some(Arc::new(lazy_scope));
+        info.lazy_scope = Some(Box::new(lazy_scope));
     }
 }
 
@@ -573,6 +577,7 @@ where
                     tls_unregister: Tls::unregister,
                     tls_get_addr: Tls::tls_get_addr,
                     user_data: self.user_data,
+                    eh_frame_hdr: self.eh_frame_hdr,
                 }),
             },
         })

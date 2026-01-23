@@ -6,7 +6,7 @@
 
 use crate::{
     Result,
-    elf::{Dyn, ElfPhdr},
+    elf::{ElfDyn, ElfPhdr},
     elf::{ElfDynamic, ElfPhdrs, SymbolInfo, SymbolTable},
     image::{Symbol, common::DynamicInfo},
     loader::FnHandler,
@@ -97,6 +97,54 @@ impl<D> LoadedCore<D> {
         self.core.user_data()
     }
 
+    /// Returns a mutable reference to the user-defined data.
+    #[inline]
+    pub fn user_data_mut(&mut self) -> Option<&mut D> {
+        self.core.user_data_mut()
+    }
+
+    /// Returns whether the ELF object has been initialized.
+    #[inline]
+    pub fn is_init(&self) -> bool {
+        self.core.is_init()
+    }
+
+    /// Returns the program headers of the ELF object.
+    #[inline]
+    pub fn phdrs(&self) -> Option<&[ElfPhdr]> {
+        self.core.phdrs()
+    }
+
+    /// Gets the EH frame header pointer
+    #[inline]
+    pub fn eh_frame_hdr(&self) -> Option<NonNull<u8>> {
+        self.core.eh_frame_hdr()
+    }
+
+    /// Gets a pointer to the dynamic section
+    #[inline]
+    pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn>> {
+        self.core.dynamic_ptr()
+    }
+
+    /// Gets the number of strong references to the ELF object
+    #[inline]
+    pub fn strong_count(&self) -> usize {
+        self.core.strong_count()
+    }
+
+    /// Gets the number of weak references to the ELF object
+    #[inline]
+    pub fn weak_count(&self) -> usize {
+        self.core.weak_count()
+    }
+
+    /// Creates a weak reference to this ELF core.
+    #[inline]
+    pub fn downgrade(&self) -> ElfCoreRef<D> {
+        self.core.downgrade()
+    }
+
     /// Gets the TLS module ID of the ELF object
     #[inline]
     pub fn tls_mod_id(&self) -> Option<usize> {
@@ -156,7 +204,7 @@ impl<D> LoadedCore<D> {
     pub unsafe fn new_unchecked(
         name: String,
         base: usize,
-        dynamic_ptr: *const Dyn,
+        dynamic_ptr: *const ElfDyn,
         phdrs: &'static [ElfPhdr],
         memory: (NonNull<c_void>, usize),
         munmap: unsafe fn(NonNull<c_void>, usize) -> Result<()>,
@@ -388,6 +436,12 @@ unsafe impl<D> Sync for CoreInner<D> {}
 unsafe impl<D> Send for CoreInner<D> {}
 
 impl<D> ElfCore<D> {
+    /// Returns whether the ELF object has been initialized.
+    #[inline]
+    pub fn is_init(&self) -> bool {
+        self.inner.is_init.load(Ordering::Relaxed)
+    }
+
     /// Marks the component as initialized
     #[inline]
     pub(crate) fn set_init(&self) {
@@ -460,11 +514,20 @@ impl<D> ElfCore<D> {
 
     /// Gets a pointer to the dynamic section
     #[inline]
-    pub fn dynamic_ptr(&self) -> Option<NonNull<Dyn>> {
+    pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn>> {
         self.inner
             .dynamic_info
             .as_ref()
             .map(|info| info.dynamic_ptr)
+    }
+
+    /// Gets the EH frame header pointer
+    #[inline]
+    pub fn eh_frame_hdr(&self) -> Option<NonNull<u8>> {
+        self.inner
+            .dynamic_info
+            .as_ref()
+            .and_then(|info| info.eh_frame_hdr)
     }
 
     /// Gets the segments
@@ -489,7 +552,7 @@ impl<D> ElfCore<D> {
     unsafe fn from_raw(
         name: String,
         base: usize,
-        dynamic_ptr: *const Dyn,
+        dynamic_ptr: *const ElfDyn,
         phdrs: &'static [ElfPhdr],
         mut segments: ElfSegments,
         tls_mod_id: Option<usize>,
@@ -504,6 +567,7 @@ impl<D> ElfCore<D> {
                 is_init: AtomicBool::new(true),
                 symtab: SymbolTable::from_dynamic(&dynamic),
                 dynamic_info: Some(Arc::new(DynamicInfo {
+                    eh_frame_hdr: None,
                     dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
                     pltrel: None,
                     phdrs: ElfPhdrs::Mmap(phdrs),

@@ -1,6 +1,6 @@
 use crate::{
     LoadHook, LoadHookContext, Result,
-    elf::{Dyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfRelType, ElfShdr, ElfSymbol, SymbolTable},
+    elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfRelType, ElfShdr, ElfSymbol, SymbolTable},
     loader::FnHandler,
     os::Mmap,
     relocation::StaticRelocation,
@@ -10,8 +10,8 @@ use crate::{
 use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{ffi::c_char, marker::PhantomData, ptr::NonNull};
 use elf::abi::{
-    PT_DYNAMIC, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_PHDR, PT_TLS, SHN_UNDEF, SHT_INIT_ARRAY,
-    SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE,
+    PT_DYNAMIC, PT_GNU_EH_FRAME, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_PHDR, PT_TLS, SHN_UNDEF,
+    SHT_INIT_ARRAY, SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE,
 };
 
 /// Builder for creating relocated ELF objects
@@ -42,7 +42,7 @@ where
     pub(crate) relro: Option<ELFRelro>,
 
     /// Pointer to the dynamic section
-    pub(crate) dynamic_ptr: Option<NonNull<Dyn>>,
+    pub(crate) dynamic_ptr: Option<NonNull<ElfDyn>>,
 
     /// TLS module ID
     pub(crate) tls_mod_id: Option<usize>,
@@ -64,6 +64,9 @@ where
 
     /// Pointer to the interpreter path (PT_INTERP)
     pub(crate) interp: Option<NonNull<c_char>>,
+
+    /// Pointer to the .eh_frame_hdr section (PT_GNU_EH_FRAME)
+    pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
 
     /// Phantom data to maintain Mmap type information
     _marker: PhantomData<(M, Tls)>,
@@ -110,6 +113,7 @@ where
             init_fn,
             fini_fn,
             interp: None,
+            eh_frame_hdr: None,
             _marker: PhantomData,
         }
     }
@@ -152,6 +156,11 @@ where
             // Store interpreter path
             PT_INTERP => {
                 self.interp =
+                    Some(NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize)).unwrap());
+            }
+
+            PT_GNU_EH_FRAME => {
+                self.eh_frame_hdr =
                     Some(NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize)).unwrap());
             }
 

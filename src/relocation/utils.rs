@@ -200,10 +200,7 @@ where
     }
 
     /// Sets the preferred symbol lookup strategy using a closure.
-    pub fn pre_find_fn<F>(
-        self,
-        pre_find: F,
-    ) -> Relocator<T, F, PostS, LazyS, PreH, PostH, D>
+    pub fn pre_find_fn<F>(self, pre_find: F) -> Relocator<T, F, PostS, LazyS, PreH, PostH, D>
     where
         F: Fn(&str) -> Option<*const ()>,
     {
@@ -223,10 +220,7 @@ where
     ///
     /// This strategy will be used if a symbol is not found in the preferred
     /// strategy or the default scope.
-    pub fn post_find_fn<F>(
-        self,
-        post_find: F,
-    ) -> Relocator<T, PreS, F, LazyS, PreH, PostH, D>
+    pub fn post_find_fn<F>(self, post_find: F) -> Relocator<T, PreS, F, LazyS, PreH, PostH, D>
     where
         F: Fn(&str) -> Option<*const ()>,
     {

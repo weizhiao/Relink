@@ -74,6 +74,12 @@ impl<S: SymbolLookup + ?Sized> SymbolLookup for Arc<S> {
     }
 }
 
+impl<S: SymbolLookup + ?Sized> SymbolLookup for &Arc<S> {
+    fn lookup(&self, name: &str) -> Option<*const ()> {
+        (**self).lookup(name)
+    }
+}
+
 impl SymbolLookup for () {
     fn lookup(&self, _name: &str) -> Option<*const ()> {
         None
@@ -175,6 +181,12 @@ impl RelocationHandler for () {
     }
 }
 
+impl<H: RelocationHandler + ?Sized> RelocationHandler for &H {
+    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
+        (**self).handle(ctx)
+    }
+}
+
 impl<H: RelocationHandler + ?Sized> RelocationHandler for &mut H {
     fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
         (**self).handle(ctx)
@@ -182,6 +194,12 @@ impl<H: RelocationHandler + ?Sized> RelocationHandler for &mut H {
 }
 
 impl<H: RelocationHandler + ?Sized> RelocationHandler for Box<H> {
+    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
+        (**self).handle(ctx)
+    }
+}
+
+impl<H: RelocationHandler + ?Sized> RelocationHandler for Arc<H> {
     fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
         (**self).handle(ctx)
     }

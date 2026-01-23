@@ -1,7 +1,7 @@
 //! Parsing `.dynamic` section
 use crate::{
     Result,
-    elf::{DT_RELR, DT_RELRSZ, Dyn, ElfRel, ElfRelType, ElfRela, ElfRelr},
+    elf::{DT_RELR, DT_RELRSZ, ElfDyn, ElfRel, ElfRelType, ElfRela, ElfRelr},
     parse_dynamic_error,
     segment::ElfSegments,
 };
@@ -15,7 +15,7 @@ use elf::abi::*;
 
 impl ElfDynamic {
     /// Parse the dynamic section of an ELF file
-    pub fn new(dynamic_ptr: *const Dyn, segments: &ElfSegments) -> Result<Self> {
+    pub fn new(dynamic_ptr: *const ElfDyn, segments: &ElfSegments) -> Result<Self> {
         // These are required fields in a valid ELF dynamic library
         let mut symtab_off = 0; // Symbol table offset
         let mut strtab_off = 0; // String table offset
@@ -277,7 +277,7 @@ impl SubAssign<usize> for ElfDynamicHashTab {
 /// Information from the ELF dynamic section.
 pub(crate) struct ElfDynamic {
     /// Pointer to the dynamic section.
-    pub dyn_ptr: *const Dyn,
+    pub dyn_ptr: *const ElfDyn,
     /// Hash table information.
     pub hashtab: ElfDynamicHashTab,
     /// Symbol table address.

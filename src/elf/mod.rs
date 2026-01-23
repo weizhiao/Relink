@@ -19,6 +19,6 @@ pub(crate) use symbol::{ElfStringTable, SymbolInfo, SymbolTable};
 
 // Public API exports
 /// Core ELF data types for program headers, relocations, and symbols.
-pub use defs::{ElfPhdr, ElfRel, ElfRela, ElfSymbol};
+pub use defs::{ElfDyn, ElfPhdr, ElfRel, ElfRela, ElfSymbol};
 /// ELF ABI constants and definitions from the elf crate.
 pub use elf::abi::*;

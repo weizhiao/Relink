@@ -25,7 +25,7 @@ use portable_atomic_util::Arc;
 
 #[derive(Clone)]
 pub(crate) struct StaticImage<D> {
-    pub(crate) inner: Arc<StaticImageInner<D>>,
+    inner: Arc<StaticImageInner<D>>,
 }
 
 impl<D> Debug for StaticImage<D> {
@@ -54,23 +54,24 @@ impl<D> StaticImage<D> {
     }
 }
 
-pub(crate) struct StaticImageInner<D> {
+struct StaticImageInner<D> {
     /// File name of the ELF object
-    pub(crate) name: String,
+    name: String,
 
-    pub(crate) entry: usize,
+    /// Entry point of the executable
+    entry: usize,
 
     /// User-defined data
-    pub(crate) user_data: D,
+    user_data: D,
 
     /// Memory segments
-    pub(crate) segments: ElfSegments,
+    segments: ElfSegments,
 
     /// TLS module ID
-    pub(crate) tls_mod_id: Option<usize>,
+    tls_mod_id: Option<usize>,
 
     /// TLS thread pointer offset
-    pub(crate) tls_tp_offset: Option<isize>,
+    tls_tp_offset: Option<isize>,
 }
 
 impl<D: 'static> Relocatable<D> for RawExec<D> {

@@ -123,7 +123,7 @@ impl<'a, D> LoadHookContext<'a, D> {
 /// struct MyHook;
 ///
 /// impl LoadHook<()> for MyHook {
-///     fn call<'a>(&'a self, ctx: &'a mut LoadHookContext<'a, ()>) -> Result<()> {
+///     fn call<'a>(&self, ctx: &'a mut LoadHookContext<'a, ()>) -> Result<()> {
 ///         println!("Processing segment: {:?}", ctx.phdr());
 ///         Ok(())
 ///     }
@@ -131,20 +131,20 @@ impl<'a, D> LoadHookContext<'a, D> {
 /// ```
 pub trait LoadHook<D = ()> {
     /// Executes the hook with the provided context.
-    fn call<'a>(&'a self, ctx: &'a mut LoadHookContext<'a, D>) -> Result<()>;
+    fn call<'a>(&self, ctx: &'a mut LoadHookContext<'a, D>) -> Result<()>;
 }
 
 impl<F, D> LoadHook<D> for F
 where
     F: for<'a> Fn(&'a mut LoadHookContext<'a, D>) -> Result<()>,
 {
-    fn call<'a>(&'a self, ctx: &'a mut LoadHookContext<'a, D>) -> Result<()> {
+    fn call<'a>(&self, ctx: &'a mut LoadHookContext<'a, D>) -> Result<()> {
         (self)(ctx)
     }
 }
 
-impl LoadHook for () {
-    fn call<'a>(&'a self, _ctx: &'a mut LoadHookContext<'a, ()>) -> Result<()> {
+impl<D> LoadHook<D> for () {
+    fn call<'a>(&self, _ctx: &'a mut LoadHookContext<'a, D>) -> Result<()> {
         Ok(())
     }
 }
@@ -209,7 +209,7 @@ where
     ///
     /// Note: glibc passes `argc`, `argv`, and `envp` to functions in `.init_array`
     /// as a non-standard extension.
-    pub fn with_init(&mut self, init_fn: FnHandler) -> &mut Self {
+    pub fn with_init(mut self, init_fn: FnHandler) -> Self {
         self.init_fn = init_fn;
         self
     }
@@ -218,9 +218,27 @@ where
     ///
     /// This handler is responsible for calling the finalization functions
     /// (e.g., `.fini` and `.fini_array`) of the loaded ELF object.
-    pub fn with_fini(&mut self, fini_fn: FnHandler) -> &mut Self {
+    pub fn with_fini(mut self, fini_fn: FnHandler) -> Self {
         self.fini_fn = fini_fn;
         self
+    }
+
+    /// Consumes the current loader and returns a new one with the specified user data type.
+    /// This allows replacing the user data type while keeping the same hook type.
+    /// # Type Parameters
+    /// * `NewD` - The new user data type.
+    pub fn with_data_type<NewD>(self) -> Loader<M, H, NewD, Tls>
+    where
+        NewD: Default + 'static,
+        H: LoadHook<NewD>,
+    {
+        Loader {
+            buf: self.buf,
+            init_fn: self.init_fn,
+            fini_fn: self.fini_fn,
+            hook: self.hook,
+            _marker: PhantomData,
+        }
     }
 
     /// Consumes the current loader and returns a new one with the specified hook.
@@ -230,10 +248,9 @@ where
     /// # Type Parameters
     /// * `NewD` - The new user data type.
     /// * `NewHook` - The new hook type.
-    pub fn with_hook<NewD, NewHook>(self, hook: NewHook) -> Loader<M, NewHook, NewD, Tls>
+    pub fn with_hook<NewHook>(self, hook: NewHook) -> Loader<M, NewHook, D, Tls>
     where
-        NewD: Default,
-        NewHook: LoadHook<NewD>,
+        NewHook: LoadHook<D>,
     {
         Loader {
             buf: self.buf,

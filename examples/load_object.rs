@@ -1,7 +1,6 @@
 use core::str;
 use elf_loader::{Loader, input::ElfFile};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 fn main() {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
@@ -13,23 +12,21 @@ fn main() {
 
     let mut map = HashMap::new();
     map.insert("print", print as *const () as usize);
-    let pre_find = Arc::new(move |name: &str| -> Option<*const ()> {
-        map.get(name).copied().map(|p| p as *const ())
-    });
+    let pre_find =
+        |name: &str| -> Option<*const ()> { map.get(name).copied().map(|p| p as *const ()) };
     let mut loader = Loader::new();
-    let object = ElfFile::from_path("target/a.o").unwrap();
     let a = loader
-        .load_object(object)
+        .load_object("target/a.o")
         .unwrap()
         .relocator()
-        .pre_find(pre_find.clone())
+        .pre_find(&pre_find)
         .relocate()
         .unwrap();
     let b = loader
         .load_dylib(ElfFile::from_path("target/libb.so").unwrap())
         .unwrap()
         .relocator()
-        .pre_find(pre_find.clone())
+        .pre_find(&pre_find)
         .scope([&a])
         .relocate()
         .unwrap();
@@ -37,7 +34,7 @@ fn main() {
         .load_object(ElfFile::from_path("target/c.o").unwrap())
         .unwrap()
         .relocator()
-        .pre_find(pre_find.clone())
+        .pre_find(&pre_find)
         .scope([&a])
         .add_scope([&b])
         .relocate()
