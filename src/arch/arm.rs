@@ -30,6 +30,18 @@ pub const REL_COPY: u32 = R_ARM_COPY;
 /// TLS TPOFF relocation type - set to TLS offset relative to thread pointer.
 pub const REL_TPOFF: u32 = R_ARM_TLS_TPOFF32;
 
+/// Get the current thread pointer using architecture-specific register.
+#[inline(always)]
+pub(crate) unsafe fn get_thread_pointer() -> *mut u8 {
+    let tp: *mut u8;
+    // Read TPIDRURO (User Read-Only Thread ID Register) - c13, c0, 3
+    // This is the standard TLS register for Linux user space.
+    unsafe {
+        core::arch::asm!("mrc p15, 0, {}, c13, c0, 3", out(reg) tp);
+    }
+    tp
+}
+
 /// Offset in GOT for dynamic library handle.
 pub(crate) const DYLIB_OFFSET: usize = 1;
 /// Offset in GOT for resolver function pointer.

@@ -1,4 +1,8 @@
-use crate::tls::{TlsIndex, TlsInfo, TlsResolver};
+use crate::{
+    Result,
+    tls::{TlsIndex, TlsInfo, TlsResolver},
+    tls_error,
+};
 use alloc::{
     alloc::{alloc, dealloc, handle_alloc_error},
     boxed::Box,
@@ -25,6 +29,7 @@ struct ModuleTlsTemplate {
     image: &'static [u8],
     memsz: usize,
     align: usize,
+    tp_offset: Option<isize>,
 }
 
 /// Global registry for all loaded modules' TLS metadata.
@@ -38,7 +43,7 @@ static NEXT_MODULE_ID: AtomicUsize = AtomicUsize::new(1);
 /// DTVs use this to detect if they are stale and need updating.
 static GLOBAL_GENERATION: AtomicUsize = AtomicUsize::new(0);
 
-fn register_module(tls_info: &TlsInfo, tls_image: &'static [u8]) -> usize {
+fn register_module(tls_info: &TlsInfo, tp_offset: Option<isize>) -> usize {
     let mut registry = MODULE_REGISTRY.write();
 
     // Try to find a free slot (excluding index 0 as it's typically unused/reserved)
@@ -58,9 +63,10 @@ fn register_module(tls_info: &TlsInfo, tls_image: &'static [u8]) -> usize {
     }
 
     let template = ModuleTlsTemplate {
-        image: tls_image,
+        image: tls_info.image,
         memsz: tls_info.memsz,
         align: tls_info.align,
+        tp_offset,
     };
 
     // Increment global generation
@@ -101,17 +107,33 @@ fn get_module_template(mod_id: usize) -> Option<ModuleTlsTemplate> {
 /// A single entry in the Dynamic Thread Vector (DTV).
 /// Points to the actual TLS data block for a specific module.
 #[derive(Debug)]
-struct DtvEntry {
-    ptr: *mut u8,
-    layout: Layout, // We store layout to deallocate properly
+enum DtvEntry {
+    Allocated {
+        ptr: *mut u8,
+        layout: Layout, // We store layout to deallocate properly
+    },
+    Static {
+        ptr: *mut u8,
+    },
 }
 
 unsafe impl Send for DtvEntry {}
 unsafe impl Sync for DtvEntry {}
 
+impl DtvEntry {
+    fn ptr(&self) -> *mut u8 {
+        match self {
+            DtvEntry::Allocated { ptr, .. } => *ptr,
+            DtvEntry::Static { ptr } => *ptr,
+        }
+    }
+}
+
 impl Drop for DtvEntry {
     fn drop(&mut self) {
-        unsafe { dealloc(self.ptr, self.layout) };
+        if let DtvEntry::Allocated { ptr, layout } = self {
+            unsafe { dealloc(*ptr, *layout) };
+        }
     }
 }
 
@@ -125,9 +147,28 @@ struct ThreadDtv {
 
 impl ThreadDtv {
     fn new() -> Self {
+        let registry = MODULE_REGISTRY.read();
+        let mut dtv = Vec::with_capacity(registry.len());
+        for slot in registry.iter() {
+            let entry = slot.template.as_ref().and_then(|t| {
+                if let Some(offset) = t.tp_offset {
+                    // Safety: We assume that if `tp_offset` is set, the TLS block is
+                    // accessible via `tp + offset`.
+                    unsafe {
+                        let tp = crate::arch::get_thread_pointer();
+                        Some(DtvEntry::Static {
+                            ptr: tp.offset(offset),
+                        })
+                    }
+                } else {
+                    None
+                }
+            });
+            dtv.push(entry);
+        }
         Self {
-            generation: 0,
-            dtv: Vec::new(),
+            generation: GLOBAL_GENERATION.load(Ordering::Acquire),
+            dtv,
         }
     }
 
@@ -164,7 +205,7 @@ impl ThreadDtv {
 
         // Check if already allocated
         if let Some(entry) = &self.dtv[mod_id] {
-            return Some(entry.ptr);
+            return Some(entry.ptr());
         }
 
         // Need to allocate. Look up template from global registry.
@@ -182,12 +223,12 @@ impl ThreadDtv {
             let slice = core::slice::from_raw_parts_mut(ptr, template.memsz);
             let image_len = template.image.len();
             // Copy initialized data
-            slice[..image_len].copy_from_slice(&template.image);
+            slice[..image_len].copy_from_slice(template.image);
             // Zero initialize remaining part (BSS)
             slice[image_len..].fill(0);
         }
 
-        self.dtv[mod_id] = Some(DtvEntry { ptr, layout });
+        self.dtv[mod_id] = Some(DtvEntry::Allocated { ptr, layout });
 
         Some(ptr)
     }
@@ -258,15 +299,18 @@ impl Default for DefaultTlsResolver {
 }
 
 impl TlsResolver for DefaultTlsResolver {
-    fn register(tls_info: &TlsInfo, tls_image: &'static [u8]) -> Option<usize> {
-        let id = register_module(tls_info, tls_image);
-        Some(id)
+    fn register(tls_info: &TlsInfo) -> Result<usize> {
+        let id = register_module(tls_info, None);
+        Ok(id)
     }
 
-    fn tp_offset(_mod_id: usize) -> Option<isize> {
-        // Since we don't use static TLS offsets (fs:offset), we return None.
-        // This forces relocations to use __tls_get_addr (Dynamic model).
-        None
+    fn register_static(_tls_info: &TlsInfo) -> Result<(usize, isize)> {
+        Err(tls_error("unsupport static tls"))
+    }
+
+    fn add_static_tls(tls_info: &TlsInfo, offset: isize) -> Result<usize> {
+        let id = register_module(tls_info, Some(offset));
+        Ok(id)
     }
 
     fn unregister(mod_id: usize) {

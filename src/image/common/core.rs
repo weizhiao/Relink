@@ -6,12 +6,12 @@
 
 use crate::{
     Result,
-    elf::{ElfDyn, ElfPhdr},
-    elf::{ElfDynamic, ElfPhdrs, SymbolInfo, SymbolTable},
+    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolInfo, SymbolTable},
     image::{Symbol, common::DynamicInfo},
     loader::FnHandler,
     relocation::SymDef,
     segment::ElfSegments,
+    tls::TlsResolver,
 };
 use alloc::string::String;
 use core::{
@@ -21,6 +21,7 @@ use core::{
     ptr::NonNull,
     sync::atomic::{AtomicBool, Ordering},
 };
+use elf::abi::{PT_DYNAMIC, PT_GNU_EH_FRAME, PT_TLS};
 
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::{Arc, Weak};
@@ -73,10 +74,16 @@ impl<D> LoadedCore<D> {
         &self.deps
     }
 
-    /// Gets the name of the ELF object
+    /// Gets the name (full path) of the ELF object
     #[inline]
     pub fn name(&self) -> &str {
         self.core.name()
+    }
+
+    /// Gets the short name of the ELF object
+    #[inline]
+    pub fn short_name(&self) -> &str {
+        self.core.short_name()
     }
 
     /// Gets the base address of the ELF object
@@ -191,43 +198,103 @@ impl<D> LoadedCore<D> {
     ///
     /// # Arguments
     /// * `name` - The name of the ELF file
-    /// * `base` - The base address where the ELF is loaded
-    /// * `dynamic_ptr` - Pointer to the dynamic section
     /// * `phdrs` - The program headers
     /// * `memory` - The mapped memory (pointer and length)
     /// * `munmap` - Function to unmap the memory
+    /// * `tls_tp_offset` - TLS thread pointer offset
     /// * `user_data` - User-defined data to associate with the ELF
     ///
     /// # Returns
     /// A new LoadedCore instance
     #[inline]
-    pub unsafe fn new_unchecked(
+    pub unsafe fn new_unchecked<Tls: TlsResolver>(
         name: String,
-        base: usize,
-        dynamic_ptr: *const ElfDyn,
         phdrs: &'static [ElfPhdr],
         memory: (NonNull<c_void>, usize),
         munmap: unsafe fn(NonNull<c_void>, usize) -> Result<()>,
-        tls_mod_id: Option<usize>,
         tls_tp_offset: Option<isize>,
         user_data: D,
-    ) -> Self {
+    ) -> Result<Self> {
         let segments = ElfSegments::new(memory.0, memory.1, munmap);
-        Self {
+        let base = segments.base();
+        let mut tls_mod_id = None;
+        let mut actual_tls_tp_offset = tls_tp_offset;
+
+        let mut dynamic_ptr = core::ptr::null();
+        let mut eh_frame_hdr = None;
+        let mut tls_phdr = None;
+
+        for phdr in phdrs {
+            match phdr.p_type {
+                PT_DYNAMIC => {
+                    dynamic_ptr = (base + phdr.p_vaddr as usize) as *const ElfDyn;
+                }
+                PT_GNU_EH_FRAME => {
+                    eh_frame_hdr = NonNull::new((base + phdr.p_vaddr as usize) as *mut u8);
+                }
+                PT_TLS => {
+                    tls_phdr = Some(phdr);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(phdr) = tls_phdr {
+            unsafe {
+                let template = core::slice::from_raw_parts(
+                    (base + phdr.p_vaddr as usize) as *const u8,
+                    phdr.p_filesz as usize,
+                );
+                let info = crate::tls::TlsInfo::new(phdr, core::mem::transmute(template));
+
+                let mut static_tls = actual_tls_tp_offset.is_some();
+                if !static_tls && !dynamic_ptr.is_null() {
+                    let mut cur = dynamic_ptr;
+                    while (*cur).d_tag != 0 {
+                        if (*cur).d_tag == crate::elf::DT_FLAGS as _ {
+                            if (*cur).d_un as usize & crate::elf::DF_STATIC_TLS as usize != 0 {
+                                static_tls = true;
+                                break;
+                            }
+                        }
+                        cur = cur.add(1);
+                    }
+                }
+
+                // The Tls::register will register the TLS module and return the ID.
+                if static_tls {
+                    if let Some(offset) = actual_tls_tp_offset {
+                        if let Ok(mid) = Tls::add_static_tls(&info, offset) {
+                            tls_mod_id = Some(mid);
+                        }
+                    } else {
+                        if let Ok((mid, offset)) = Tls::register_static(&info) {
+                            tls_mod_id = Some(mid);
+                            actual_tls_tp_offset = Some(offset);
+                        }
+                    }
+                } else {
+                    tls_mod_id = Tls::register(&info).ok();
+                }
+            }
+        }
+        Ok(Self {
             core: unsafe {
                 ElfCore::from_raw(
                     name,
                     base,
                     dynamic_ptr,
                     phdrs,
+                    eh_frame_hdr,
                     segments,
                     tls_mod_id,
-                    tls_tp_offset,
+                    actual_tls_tp_offset,
+                    Tls::unregister,
                     user_data,
                 )
             },
             deps: Arc::from([]),
-        }
+        })
     }
 
     /// Gets the symbol table
@@ -342,7 +409,7 @@ pub(crate) struct CoreInner<D = ()> {
     /// Indicates whether the component has been initialized
     pub(crate) is_init: AtomicBool,
 
-    /// File short name of the ELF object
+    /// Full path of the ELF object
     pub(crate) name: String,
 
     /// ELF symbols table
@@ -488,10 +555,19 @@ impl<D> ElfCore<D> {
         Arc::weak_count(&self.inner)
     }
 
-    /// Gets the name of the ELF object
+    /// Gets the name (full path) of the ELF object
     #[inline]
     pub fn name(&self) -> &str {
         &self.inner.name
+    }
+
+    /// Gets the short name of the ELF object
+    #[inline]
+    pub fn short_name(&self) -> &str {
+        let name = self.name();
+        name.rsplit(|c| c == '/' || c == '\\')
+            .next()
+            .unwrap_or(name)
     }
 
     /// Gets the base address of the ELF object
@@ -554,9 +630,11 @@ impl<D> ElfCore<D> {
         base: usize,
         dynamic_ptr: *const ElfDyn,
         phdrs: &'static [ElfPhdr],
+        eh_frame_hdr: Option<NonNull<u8>>,
         mut segments: ElfSegments,
         tls_mod_id: Option<usize>,
         tls_tp_offset: Option<isize>,
+        tls_unregister: fn(usize),
         user_data: D,
     ) -> Self {
         segments.offset = (segments.memory.as_ptr() as usize).wrapping_sub(base);
@@ -567,7 +645,7 @@ impl<D> ElfCore<D> {
                 is_init: AtomicBool::new(true),
                 symtab: SymbolTable::from_dynamic(&dynamic),
                 dynamic_info: Some(Arc::new(DynamicInfo {
-                    eh_frame_hdr: None,
+                    eh_frame_hdr,
                     dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
                     pltrel: None,
                     phdrs: ElfPhdrs::Mmap(phdrs),
@@ -575,7 +653,7 @@ impl<D> ElfCore<D> {
                 })),
                 tls_mod_id,
                 tls_tp_offset,
-                tls_unregister: |_mod_id| {}, // We don't have a resolver for raw segments loading
+                tls_unregister,
                 segments,
                 fini: None,
                 fini_array: None,
@@ -591,6 +669,7 @@ impl<D> Debug for ElfCore<D> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfCore")
             .field("name", &self.inner.name)
+            .field("short_name", &self.short_name())
             .finish()
     }
 }

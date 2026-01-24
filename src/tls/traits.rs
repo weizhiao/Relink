@@ -1,4 +1,4 @@
-use crate::elf::ElfPhdr;
+use crate::{Result, elf::ElfPhdr};
 use elf::abi::PT_TLS;
 
 /// Information about a TLS segment from ELF headers.
@@ -12,17 +12,20 @@ pub struct TlsInfo {
     pub memsz: usize,
     /// Alignment requirement of the TLS block.
     pub align: usize,
+    /// The initial TLS data (template).
+    pub image: &'static [u8],
 }
 
 impl TlsInfo {
     /// Creates a new `TlsInfo` from an ELF program header.
-    pub fn new(phdr: &ElfPhdr) -> Self {
+    pub fn new(phdr: &ElfPhdr, image: &'static [u8]) -> Self {
         assert_eq!(phdr.p_type, PT_TLS);
         Self {
             vaddr: phdr.p_vaddr as usize,
             filesz: phdr.p_filesz as usize,
             memsz: phdr.p_memsz as usize,
             align: phdr.p_align as usize,
+            image,
         }
     }
 }
@@ -41,19 +44,39 @@ pub struct TlsIndex {
 /// Implement this trait to provide custom TLS module IDs and thread pointer offsets.
 /// This is essential for supporting TLS in environments with custom thread management.
 pub trait TlsResolver {
-    /// Returns the module ID for the given ELF object.
+    /// Register a module with dynamic TLS.
     ///
     /// # Arguments
-    /// * `name` - The name of the ELF object.
-    /// * `tls_info` - TLS metadata for the ELF object.
-    /// * `tls_image` - The initial TLS data (template).
-    fn register(tls_info: &TlsInfo, tls_image: &'static [u8]) -> Option<usize>;
+    /// * `tls_info` - TLS metadata and template for the ELF object.
+    ///
+    /// # Returns
+    /// * `Result<usize>` - The module ID.
+    fn register(tls_info: &TlsInfo) -> Result<usize>;
 
-    /// Returns the offset from the thread pointer for a given symbol.
+    /// Register a module with static TLS.
+    ///
+    /// The resolver should choose a suitable offset for the TLS block.
     ///
     /// # Arguments
-    /// * `mod_id` - The module ID of the ELF object containing the symbol.
-    fn tp_offset(mod_id: usize) -> Option<isize>;
+    /// * `tls_info` - TLS metadata and template for the ELF object.
+    ///
+    /// # Returns
+    /// * `Result<(usize, isize)>` - The module ID and its thread pointer offset.
+    fn register_static(tls_info: &TlsInfo) -> Result<(usize, isize)>;
+
+    /// Record an existing static TLS module.
+    ///
+    /// This is used when the TLS block is already set up (e.g., by the OS or a
+    /// bootloader) and its offset from the thread pointer is known. The
+    /// resolver just records this metadata and assigns a module ID.
+    ///
+    /// # Arguments
+    /// * `tls_info` - TLS metadata and template for the ELF object.
+    /// * `offset` - Static TLS offset from thread pointer.
+    ///
+    /// # Returns
+    /// * `Result<usize>` - The module ID.
+    fn add_static_tls(tls_info: &TlsInfo, offset: isize) -> Result<usize>;
 
     /// Called when the module is unloaded.
     /// Implementations should release any resources associated with this module.

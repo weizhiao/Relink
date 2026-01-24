@@ -112,7 +112,7 @@ where
             .into_iter()
             .zip(self.dependency_flags)
             .filter_map(|(module, flag)| {
-                (flag || needed_libs.contains(&module.name())).then(|| module)
+                (flag || needed_libs.contains(&module.short_name())).then(|| module)
             })
             .collect()
     }

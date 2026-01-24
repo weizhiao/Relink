@@ -38,6 +38,16 @@ pub const REL_COPY: u32 = R_X86_64_COPY;
 /// TLS TPOFF relocation type - set to TLS offset relative to thread pointer.
 pub const REL_TPOFF: u32 = R_X86_64_TPOFF64;
 
+/// Get the current thread pointer using architecture-specific register.
+#[inline(always)]
+pub(crate) unsafe fn get_thread_pointer() -> *mut u8 {
+    let tp: *mut u8;
+    unsafe {
+        core::arch::asm!("mov {}, fs:0", out(reg) tp);
+    }
+    tp
+}
+
 /// Offset in GOT for dynamic library handle.
 pub(crate) const DYLIB_OFFSET: usize = 1;
 /// Offset in GOT for resolver function pointer.

@@ -1,6 +1,7 @@
 use crate::{
-    ElfReader, Error, Result, io_error,
-    mmap::{MapFlags, Mmap, ProtFlags},
+    Result, Error, io_error,
+    input::ElfReader,
+    os::{MapFlags, Mmap, ProtFlags},
 };
 use alloc::{ffi::CString, format, vec::Vec};
 use core::{

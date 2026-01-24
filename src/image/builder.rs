@@ -44,11 +44,11 @@ where
     /// Pointer to the dynamic section
     pub(crate) dynamic_ptr: Option<NonNull<ElfDyn>>,
 
-    /// TLS module ID
-    pub(crate) tls_mod_id: Option<usize>,
+    /// TLS information
+    pub(crate) tls_info: Option<TlsInfo>,
 
-    /// TLS thread pointer offset
-    pub(crate) tls_tp_offset: Option<isize>,
+    /// Whether to use static TLS
+    pub(crate) static_tls: bool,
 
     /// User-defined data
     pub(crate) user_data: D,
@@ -98,6 +98,7 @@ where
         ehdr: ElfHeader,
         init_fn: FnHandler,
         fini_fn: FnHandler,
+        static_tls: bool,
     ) -> Self {
         Self {
             hook,
@@ -106,8 +107,8 @@ where
             ehdr,
             relro: None,
             dynamic_ptr: None,
-            tls_mod_id: None,
-            tls_tp_offset: None,
+            tls_info: None,
+            static_tls,
             segments,
             user_data: D::default(),
             init_fn,
@@ -166,14 +167,10 @@ where
 
             // Store TLS segment information
             PT_TLS => {
-                let tls_info = TlsInfo::new(phdr);
                 let tls_image = self
                     .segments
                     .get_slice::<u8>(phdr.p_vaddr as usize, phdr.p_filesz as usize);
-                let mod_id = Tls::register(&tls_info, tls_image)
-                    .ok_or_else(|| crate::tls_error("Failed to get TLS module ID"))?;
-                self.tls_mod_id = Some(mod_id);
-                self.tls_tp_offset = Tls::tp_offset(mod_id);
+                self.tls_info = Some(TlsInfo::new(phdr, tls_image));
             }
 
             // Ignore other program header types

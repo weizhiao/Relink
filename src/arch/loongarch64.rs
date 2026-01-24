@@ -39,6 +39,17 @@ pub const REL_DTPOFF: u32 = R_LARCH_TLS_DTPREL64;
 pub const REL_IRELATIVE: u32 = R_LARCH_IRELATIVE;
 /// TLS TPOFF relocation type - set to TLS offset relative to thread pointer.
 pub const REL_TPOFF: u32 = R_LARCH_TLS_TPREL64;
+
+/// Get the current thread pointer using architecture-specific register.
+#[inline(always)]
+pub(crate) unsafe fn get_thread_pointer() -> *mut u8 {
+    let tp: *mut u8;
+    unsafe {
+        core::arch::asm!("move {}, $tp", out(reg) tp);
+    }
+    tp
+}
+
 /// GOT entry relocation type - set GOT entry to symbol address.
 pub const REL_GOT: u32 = R_LARCH_64;
 

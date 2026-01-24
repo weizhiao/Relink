@@ -174,6 +174,7 @@ where
     init_fn: FnHandler,
     fini_fn: FnHandler,
     hook: H,
+    force_static_tls: bool,
     _marker: PhantomData<(M, D, Tls)>,
 }
 
@@ -190,6 +191,7 @@ impl Loader<DefaultMmap, (), (), DefaultTlsResolver> {
             init_fn: c_abi.clone(),
             fini_fn: c_abi,
             buf: ElfBuf::new(),
+            force_static_tls: false,
             _marker: PhantomData,
         }
     }
@@ -223,10 +225,7 @@ where
         self
     }
 
-    /// Consumes the current loader and returns a new one with the specified user data type.
-    /// This allows replacing the user data type while keeping the same hook type.
-    /// # Type Parameters
-    /// * `NewD` - The new user data type.
+    /// Consumes the current loader and returns a new one with the specified context data type.
     pub fn with_data_type<NewD>(self) -> Loader<M, H, NewD, Tls>
     where
         NewD: Default + 'static,
@@ -237,17 +236,12 @@ where
             init_fn: self.init_fn,
             fini_fn: self.fini_fn,
             hook: self.hook,
+            force_static_tls: self.force_static_tls,
             _marker: PhantomData,
         }
     }
 
     /// Consumes the current loader and returns a new one with the specified hook.
-    ///
-    /// This allows replacing the hook type and user data type.
-    ///
-    /// # Type Parameters
-    /// * `NewD` - The new user data type.
-    /// * `NewHook` - The new hook type.
     pub fn with_hook<NewHook>(self, hook: NewHook) -> Loader<M, NewHook, D, Tls>
     where
         NewHook: LoadHook<D>,
@@ -257,6 +251,7 @@ where
             init_fn: self.init_fn,
             fini_fn: self.fini_fn,
             hook,
+            force_static_tls: self.force_static_tls,
             _marker: PhantomData,
         }
     }
@@ -268,6 +263,7 @@ where
             init_fn: self.init_fn,
             fini_fn: self.fini_fn,
             hook: self.hook,
+            force_static_tls: self.force_static_tls,
             _marker: PhantomData,
         }
     }
@@ -282,8 +278,15 @@ where
             init_fn: self.init_fn,
             fini_fn: self.fini_fn,
             hook: self.hook,
+            force_static_tls: self.force_static_tls,
             _marker: PhantomData,
         }
+    }
+
+    /// Sets whether to force static TLS for all loaded modules.
+    pub fn with_static_tls(mut self, enabled: bool) -> Self {
+        self.force_static_tls = enabled;
+        self
     }
 
     /// Reads the ELF header.
@@ -305,6 +308,7 @@ where
         ehdr: ElfHeader,
         phdrs: &[ElfPhdr],
         mut object: impl ElfReader,
+        force_static_tls: bool,
     ) -> Result<ImageBuilder<'_, H, M, Tls, D>> {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
@@ -312,13 +316,15 @@ where
             ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
+
         let builder = ImageBuilder::new(
             &self.hook,
             segments,
-            object.shortname().to_owned(),
+            object.file_name().to_owned(),
             ehdr,
             init_fn,
             fini_fn,
+            force_static_tls,
         );
         Ok(builder)
     }
@@ -329,7 +335,8 @@ where
         phdrs: &[ElfPhdr],
         object: impl ElfReader,
     ) -> Result<StaticImage<D>> {
-        let builder = self.create_builder(ehdr, phdrs, object)?;
+        let force_static_tls = self.force_static_tls;
+        let builder = self.create_builder(ehdr, phdrs, object, force_static_tls)?;
         Ok(builder.build_static(phdrs)?)
     }
 
@@ -339,7 +346,8 @@ where
         phdrs: &[ElfPhdr],
         object: impl ElfReader,
     ) -> Result<DynamicImage<D>> {
-        let builder = self.create_builder(ehdr, phdrs, object)?;
+        let force_static_tls = self.force_static_tls;
+        let builder = self.create_builder(ehdr, phdrs, object, force_static_tls)?;
         Ok(builder.build_dynamic(phdrs)?)
     }
 
@@ -360,7 +368,7 @@ where
             Ok(())
         });
         let builder: ObjectBuilder<Tls, D> = ObjectBuilder::new(
-            object.shortname().to_owned(),
+            object.file_name().to_owned(),
             shdrs,
             init_fn,
             fini_fn,

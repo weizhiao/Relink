@@ -7,7 +7,7 @@
 use crate::{
     Result,
     arch::EM_ARCH,
-    elf::{E_CLASS, EHDR_SIZE, Ehdr},
+    elf::{E_CLASS, EHDR_SIZE, ElfEhdr},
     parse_ehdr_error,
 };
 use core::ops::Deref;
@@ -21,7 +21,7 @@ use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, ET_EXEC, EV_CURRENT};
 #[repr(transparent)]
 pub struct ElfHeader {
     /// The underlying ELF header structure
-    ehdr: Ehdr,
+    ehdr: ElfEhdr,
 }
 
 impl Clone for ElfHeader {
@@ -31,7 +31,7 @@ impl Clone for ElfHeader {
     /// to avoid potential issues with automatic derivation.
     fn clone(&self) -> Self {
         Self {
-            ehdr: Ehdr {
+            ehdr: ElfEhdr {
                 e_ident: self.e_ident,
                 e_type: self.e_type,
                 e_machine: self.e_machine,
@@ -52,7 +52,7 @@ impl Clone for ElfHeader {
 }
 
 impl Deref for ElfHeader {
-    type Target = Ehdr;
+    type Target = ElfEhdr;
 
     /// Dereferences to the underlying ELF header structure
     ///
@@ -80,10 +80,10 @@ impl ElfHeader {
     /// # Safety
     /// The caller must ensure that the data slice contains at least
     /// EHDR_SIZE bytes of valid ELF header data.
-    pub(crate) fn new(data: &[u8]) -> Result<&Self> {
+    pub fn new(data: &[u8]) -> Result<&Self> {
         debug_assert!(data.len() >= EHDR_SIZE);
         let ehdr: &ElfHeader = unsafe { &*(data.as_ptr().cast()) };
-        ehdr.vaildate()?;
+        ehdr.validate()?;
         Ok(ehdr)
     }
 
@@ -125,7 +125,7 @@ impl ElfHeader {
     /// # Returns
     /// * `Ok(())` - If all validation checks pass
     /// * `Err(Error)` - If any validation check fails
-    pub(crate) fn vaildate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         // Check ELF magic bytes
         if self.e_ident[0..4] != ELFMAGIC {
             return Err(parse_ehdr_error("invalid ELF magic"));
@@ -154,7 +154,7 @@ impl ElfHeader {
     /// # Returns
     /// The number of program header entries in the ELF file
     #[inline]
-    pub(crate) fn e_phnum(&self) -> usize {
+    pub fn e_phnum(&self) -> usize {
         self.ehdr.e_phnum as usize
     }
 
@@ -163,7 +163,7 @@ impl ElfHeader {
     /// # Returns
     /// The size in bytes of each program header entry
     #[inline]
-    pub(crate) fn e_phentsize(&self) -> usize {
+    pub fn e_phentsize(&self) -> usize {
         self.ehdr.e_phentsize as usize
     }
 
@@ -172,7 +172,7 @@ impl ElfHeader {
     /// # Returns
     /// The file offset in bytes where the program header table begins
     #[inline]
-    pub(crate) fn e_phoff(&self) -> usize {
+    pub fn e_phoff(&self) -> usize {
         self.ehdr.e_phoff as usize
     }
 
@@ -181,7 +181,7 @@ impl ElfHeader {
     /// # Returns
     /// The file offset in bytes where the section header table begins
     #[inline]
-    pub(crate) fn e_shoff(&self) -> usize {
+    pub fn e_shoff(&self) -> usize {
         self.ehdr.e_shoff as usize
     }
 
@@ -190,7 +190,7 @@ impl ElfHeader {
     /// # Returns
     /// The size in bytes of each section header entry
     #[inline]
-    pub(crate) fn e_shentsize(&self) -> usize {
+    pub fn e_shentsize(&self) -> usize {
         self.ehdr.e_shentsize as usize
     }
 
@@ -199,7 +199,7 @@ impl ElfHeader {
     /// # Returns
     /// The number of section header entries in the ELF file
     #[inline]
-    pub(crate) fn e_shnum(&self) -> usize {
+    pub fn e_shnum(&self) -> usize {
         self.ehdr.e_shnum as usize
     }
 
@@ -213,7 +213,7 @@ impl ElfHeader {
     /// 1. The start offset of the program header table
     /// 2. The end offset of the program header table
     #[inline]
-    pub(crate) fn phdr_range(&self) -> (usize, usize) {
+    pub fn phdr_range(&self) -> (usize, usize) {
         let phdrs_size = self.e_phentsize() * self.e_phnum();
         let phdr_start = self.e_phoff();
         let phdr_end = phdr_start + phdrs_size;
@@ -230,7 +230,7 @@ impl ElfHeader {
     /// 1. The start offset of the section header table
     /// 2. The end offset of the section header table
     #[inline]
-    pub(crate) fn shdr_range(&self) -> (usize, usize) {
+    pub fn shdr_range(&self) -> (usize, usize) {
         let shdrs_size = self.e_shentsize() * self.e_shnum();
         let shdr_start = self.e_shoff();
         let shdr_end = shdr_start + shdrs_size;

@@ -2,17 +2,14 @@ use crate::{
     LoadHook, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfRelType, SymbolTable},
     image::{ElfCore, ImageBuilder, common::CoreInner},
-    loader::FnHandler,
     os::Mmap,
     relocation::{DynamicRelocation, SymbolLookup},
-    segment::{ELFRelro, ElfSegments},
+    segment::ELFRelro,
     tls::{TlsIndex, TlsResolver},
 };
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use core::{
-    cell::Cell,
     ffi::CStr,
-    ops::{Deref, DerefMut},
     ptr::{NonNull, null},
     sync::atomic::AtomicBool,
 };
@@ -63,273 +60,12 @@ struct ElfExtraData {
     tls_get_addr: extern "C" fn(*const crate::tls::TlsIndex) -> *mut u8,
 }
 
-/// Data structure used during lazy parsing of ELF objects
-///
-/// This structure holds the data needed to initialize an ELF object
-/// during the relocation process.
-struct LazyData<D> {
-    /// Core component containing the basic ELF object information
-    module: ElfCore<D>,
-    /// Extra data needed for relocation
-    extra: ElfExtraData,
-}
-
-/// State of an ELF object during the loading/relocation process
-///
-/// This enum represents the different states an ELF object can be in
-/// during the loading and relocation process.
-enum State<D> {
-    /// Initial empty state
-    Empty,
-
-    /// Uninitialized state with all necessary data to perform initialization
-    Uninit {
-        /// Program headers
-        phdrs: ElfPhdrs,
-
-        /// Initialization function handler
-        init_handler: FnHandler,
-
-        /// Finalization function handler
-        fini_handler: FnHandler,
-
-        /// Name of the ELF file
-        name: String,
-
-        /// Pointer to the dynamic section
-        dynamic_ptr: NonNull<ElfDyn>,
-
-        /// Memory segments
-        segments: ElfSegments,
-
-        /// GNU_RELRO segment information
-        relro: Option<ELFRelro>,
-
-        /// TLS module ID
-        tls_mod_id: Option<usize>,
-
-        /// TLS thread pointer offset
-        tls_tp_offset: Option<isize>,
-
-        /// TLS resolver unregister function
-        tls_unregister: fn(usize),
-
-        /// TLS get addr function
-        tls_get_addr: extern "C" fn(*const crate::tls::TlsIndex) -> *mut u8,
-
-        /// User-defined data
-        user_data: D,
-
-        /// EH frame header pointer
-        eh_frame_hdr: Option<NonNull<u8>>,
-    },
-
-    /// Initialized state with all data ready for relocation
-    Init(LazyData<D>),
-}
-
-impl<D> State<D> {
-    /// Initialize the state by parsing the dynamic section and preparing relocation data
-    ///
-    /// This method processes the dynamic section of the ELF file and prepares
-    /// all the data needed for relocation.
-    ///
-    /// # Returns
-    /// The initialized state
-    fn init(self) -> Self {
-        let lazy_data = match self {
-            State::Uninit {
-                name,
-                dynamic_ptr,
-                segments,
-                relro,
-                tls_mod_id,
-                tls_tp_offset,
-                tls_unregister,
-                tls_get_addr,
-                user_data,
-                init_handler,
-                fini_handler,
-                phdrs,
-                eh_frame_hdr,
-            } => {
-                // If we have a dynamic section, parse it and prepare relocation data
-
-                let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &segments).unwrap();
-                let relocation = DynamicRelocation::new(
-                    dynamic.pltrel,
-                    dynamic.dynrel,
-                    dynamic.relr,
-                    dynamic.rel_count,
-                );
-
-                // Create symbol table from dynamic section
-                let symtab = SymbolTable::from_dynamic(&dynamic);
-
-                // Collect needed library names
-                let needed_libs: Vec<&'static str> = dynamic
-                    .needed_libs
-                    .iter()
-                    .map(|needed_lib| symtab.strtab().get_str(needed_lib.get()))
-                    .collect();
-
-                // Create the lazy data structure
-                LazyData {
-                    extra: ElfExtraData {
-                        // Determine if lazy binding should be enabled
-                        lazy: !dynamic.bind_now,
-
-                        // Store GNU_RELRO segment information
-                        relro,
-
-                        // Store relocation information
-                        relocation,
-
-                        // Create initialization function
-                        init: Box::new(move || {
-                            init_handler(dynamic.init_fn, dynamic.init_array_fn)
-                        }),
-
-                        // Store GOT pointer
-                        got_plt: dynamic.got_plt,
-
-                        // Store RPATH value
-                        rpath: dynamic
-                            .rpath_off
-                            .map(|rpath_off| symtab.strtab().get_str(rpath_off.get())),
-
-                        // Store needed library names
-                        needed_libs: needed_libs.into_boxed_slice(),
-
-                        // Store RUNPATH value
-                        runpath: dynamic
-                            .runpath_off
-                            .map(|runpath_off| symtab.strtab().get_str(runpath_off.get())),
-
-                        // Store TLS get addr function
-                        tls_get_addr,
-                    },
-                    module: ElfCore {
-                        inner: Arc::new(CoreInner {
-                            is_init: AtomicBool::new(false),
-                            name,
-                            symtab,
-                            fini: dynamic.fini_fn,
-                            fini_array: dynamic.fini_array_fn,
-                            fini_handler,
-                            user_data,
-                            dynamic_info: Some(Arc::new(DynamicInfo {
-                                eh_frame_hdr,
-                                dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
-                                pltrel: NonNull::new(
-                                    dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _,
-                                ),
-                                phdrs,
-                                lazy_scope: None,
-                            })),
-                            tls_mod_id,
-                            tls_tp_offset,
-                            tls_unregister,
-                            segments,
-                        }),
-                    },
-                }
-            }
-            State::Empty | State::Init(_) => unreachable!(),
-        };
-        State::Init(lazy_data)
-    }
-}
-
-/// Lazy parser for ELF object data
-///
-/// This structure implements lazy parsing of ELF object data, only
-/// initializing the data when it's actually needed.
-struct LazyParse<D> {
-    /// The current state of the parser
-    state: Cell<State<D>>,
-}
-
-impl<D> LazyParse<D> {
-    /// Force initialization of the parser and return a reference to the lazy data
-    ///
-    /// This method ensures that the ELF object data is initialized and returns
-    /// a reference to it. If the data is already initialized, it returns
-    /// immediately. Otherwise, it performs the initialization.
-    ///
-    /// # Returns
-    /// A reference to the initialized lazy data
-    fn force(&self) -> &LazyData<D> {
-        // Fast path - if already initialized, return immediately
-        if let State::Init(lazy_data) = unsafe { &*self.state.as_ptr() } {
-            return lazy_data;
-        }
-
-        // Initialize the data
-        self.state.set(self.state.replace(State::Empty).init());
-
-        // Return the initialized data
-        match unsafe { &*self.state.as_ptr() } {
-            State::Empty | State::Uninit { .. } => unreachable!(),
-            State::Init(lazy_data) => lazy_data,
-        }
-    }
-
-    /// Force initialization of the parser and return a mutable reference to the lazy data
-    ///
-    /// This method ensures that the ELF object data is initialized and returns
-    /// a mutable reference to it. If the data is already initialized, it returns
-    /// immediately. Otherwise, it performs the initialization.
-    ///
-    /// # Returns
-    /// A mutable reference to the initialized lazy data
-    fn force_mut(&mut self) -> &mut LazyData<D> {
-        // Fast path - if already initialized, return immediately
-        // 快路径加速
-        if let State::Init(lazy_data) = self.state.get_mut() {
-            return unsafe { core::mem::transmute(lazy_data) };
-        }
-
-        // Initialize the data
-        self.state.set(self.state.replace(State::Empty).init());
-
-        // Return the initialized data
-        match unsafe { &mut *self.state.as_ptr() } {
-            State::Empty | State::Uninit { .. } => unreachable!(),
-            State::Init(lazy_data) => lazy_data,
-        }
-    }
-}
-
-impl<D> Deref for LazyParse<D> {
-    type Target = LazyData<D>;
-
-    /// Dereference to the lazy data
-    ///
-    /// This implementation allows direct access to the lazy data through
-    /// the LazyParse wrapper.
-    #[inline]
-    fn deref(&self) -> &LazyData<D> {
-        self.force()
-    }
-}
-
-impl<D> DerefMut for LazyParse<D> {
-    /// Mutable dereference to the lazy data
-    ///
-    /// This implementation allows direct mutable access to the lazy data
-    /// through the LazyParse wrapper.
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.force_mut()
-    }
-}
-
 /// A common part of relocated ELF objects.
 ///
 /// This structure represents the common components shared by all relocated
 /// ELF objects, whether they are dynamic libraries or executables.
 /// It contains basic information like entry point, name, and program headers,
-/// as well as lazily parsed data required for relocation and symbol lookup.
+/// as well as the parsed data required for relocation and symbol lookup.
 pub(crate) struct DynamicImage<D>
 where
     D: 'static,
@@ -338,12 +74,12 @@ where
     entry: usize,
     /// PT_INTERP segment value (interpreter path).
     interp: Option<&'static str>,
-    /// Name of the ELF file.
-    name: &'static str,
     /// Program headers.
     phdrs: ElfPhdrs,
-    /// Data parsed lazily.
-    data: LazyParse<D>,
+    /// Core component containing the basic ELF object information
+    module: ElfCore<D>,
+    /// Extra data needed for relocation
+    extra: ElfExtraData,
 }
 
 impl<D> DynamicImage<D> {
@@ -354,22 +90,22 @@ impl<D> DynamicImage<D> {
     }
 
     pub(crate) fn tls_mod_id(&self) -> Option<usize> {
-        self.data.module.tls_mod_id()
+        self.module.tls_mod_id()
     }
 
     /// Gets the TLS thread pointer offset
     pub(crate) fn tls_tp_offset(&self) -> Option<isize> {
-        self.data.module.tls_tp_offset()
+        self.module.tls_tp_offset()
     }
 
     pub(crate) fn tls_get_addr(&self) -> extern "C" fn(*const TlsIndex) -> *mut u8 {
-        self.data.extra.tls_get_addr
+        self.extra.tls_get_addr
     }
 
     /// Gets the core component reference of the ELF object.
     #[inline]
     pub(crate) fn core_ref(&self) -> &ElfCore<D> {
-        &self.data.module
+        &self.module
     }
 
     /// Gets the core component of the ELF object.
@@ -387,7 +123,7 @@ impl<D> DynamicImage<D> {
     /// Whether lazy binding is enabled for the current ELF object
     #[inline]
     pub(crate) fn is_lazy(&self) -> bool {
-        self.data.extra.lazy
+        self.extra.lazy
     }
 
     /// Gets the DT_RPATH value
@@ -396,7 +132,7 @@ impl<D> DynamicImage<D> {
     /// An optional string slice containing the RPATH value
     #[inline]
     pub(crate) fn rpath(&self) -> Option<&str> {
-        self.data.extra.rpath
+        self.extra.rpath
     }
 
     /// Gets the DT_RUNPATH value
@@ -405,7 +141,7 @@ impl<D> DynamicImage<D> {
     /// An optional string slice containing the RUNPATH value
     #[inline]
     pub(crate) fn runpath(&self) -> Option<&str> {
-        self.data.extra.runpath
+        self.extra.runpath
     }
 
     /// Gets the PT_INTERP value
@@ -420,7 +156,7 @@ impl<D> DynamicImage<D> {
     /// Gets the name of the ELF object
     #[inline]
     pub(crate) fn name(&self) -> &str {
-        &self.name
+        self.module.name()
     }
 
     /// Gets the program headers of the ELF object
@@ -437,7 +173,7 @@ impl<D> DynamicImage<D> {
     /// An optional NonNull pointer to the GOT
     #[inline]
     pub(crate) fn got(&self) -> Option<NonNull<usize>> {
-        self.data.extra.got_plt
+        self.extra.got_plt
     }
 
     /// Gets the dynamic relocation information
@@ -446,7 +182,7 @@ impl<D> DynamicImage<D> {
     /// A reference to the DynamicRelocation structure
     #[inline]
     pub(crate) fn relocation(&self) -> &DynamicRelocation {
-        &self.data.extra.relocation
+        &self.extra.relocation
     }
 
     /// Marks the ELF object as finished and calls the initialization function
@@ -455,8 +191,8 @@ impl<D> DynamicImage<D> {
     /// any registered initialization functions.
     #[inline]
     pub(crate) fn call_init(&self) {
-        self.data.module.set_init();
-        self.data.extra.init.as_ref()();
+        self.module.set_init();
+        self.extra.init.as_ref()();
     }
 
     /// Gets the GNU_RELRO segment information
@@ -465,7 +201,7 @@ impl<D> DynamicImage<D> {
     /// An optional reference to the ELFRelro structure
     #[inline]
     pub(crate) fn relro(&self) -> Option<&ELFRelro> {
-        self.data.extra.relro.as_ref()
+        self.extra.relro.as_ref()
     }
 
     /// Gets a mutable reference to the user data
@@ -474,22 +210,22 @@ impl<D> DynamicImage<D> {
     /// An optional mutable reference to the user data
     #[inline]
     pub(crate) fn user_data_mut(&mut self) -> Option<&mut D> {
-        self.data.module.user_data_mut()
+        self.module.user_data_mut()
     }
 
     /// Gets the base address of the loaded ELF object
     pub(crate) fn base(&self) -> usize {
-        self.data.module.base()
+        self.module.base()
     }
 
     /// Gets the total length of mapped memory for the ELF object
     pub(crate) fn mapped_len(&self) -> usize {
-        self.data.module.segments().len()
+        self.module.segments().len()
     }
 
     /// Gets the list of needed library names from the dynamic section
     pub(crate) fn needed_libs(&self) -> &[&str] {
-        &self.data.extra.needed_libs
+        &self.extra.needed_libs
     }
 
     /// Gets the dynamic section pointer
@@ -497,12 +233,12 @@ impl<D> DynamicImage<D> {
     /// # Returns
     /// An optional NonNull pointer to the dynamic section
     pub(crate) fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn>> {
-        self.data.module.dynamic_ptr()
+        self.module.dynamic_ptr()
     }
 
     /// Gets a reference to the user data
     pub(crate) fn user_data(&self) -> &D {
-        self.data.module.user_data()
+        self.module.user_data()
     }
 
     /// Sets the lazy scope for this component
@@ -516,7 +252,7 @@ impl<D> DynamicImage<D> {
         LazyS: SymbolLookup + Send + Sync + 'static,
     {
         let info = unsafe {
-            &mut *(Arc::as_ptr(&self.data.module.inner.dynamic_info.as_ref().unwrap())
+            &mut *(Arc::as_ptr(&self.module.inner.dynamic_info.as_ref().unwrap())
                 as *mut DynamicInfo)
         };
         info.lazy_scope = Some(Box::new(lazy_scope));
@@ -553,7 +289,41 @@ where
         let dynamic_ptr = self.dynamic_ptr.expect("dynamic section not found");
 
         // Create program headers representation
-        let phdrs = self.create_phdrs(phdrs);
+        let phdrs_repr = self.create_phdrs(phdrs);
+
+        let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &self.segments).unwrap();
+        let relocation = DynamicRelocation::new(
+            dynamic.pltrel,
+            dynamic.dynrel,
+            dynamic.relr,
+            dynamic.rel_count,
+        );
+
+        let static_tls = self.static_tls | dynamic.static_tls;
+
+        // Create symbol table from dynamic section
+        let symtab = SymbolTable::from_dynamic(&dynamic);
+
+        // Collect needed library names
+        let needed_libs: Vec<&'static str> = dynamic
+            .needed_libs
+            .iter()
+            .map(|needed_lib| symtab.strtab().get_str(needed_lib.get()))
+            .collect();
+
+        let init_handler = self.init_fn;
+
+        let (tls_mod_id, tls_tp_offset) = if let Some(info) = &self.tls_info {
+            // The Tls::register will register the TLS module and return the ID.
+            if static_tls {
+                let (mod_id, offset) = Tls::register_static(info)?;
+                (Some(mod_id), Some(offset))
+            } else {
+                (Tls::register(info).ok(), None)
+            }
+        } else {
+            (None, None)
+        };
 
         // Build and return the relocated common part
         Ok(DynamicImage {
@@ -561,23 +331,59 @@ where
             interp: self
                 .interp
                 .map(|s| unsafe { CStr::from_ptr(s.as_ptr()).to_str().unwrap() }),
-            name: unsafe { core::mem::transmute::<&str, &str>(&self.name) },
-            phdrs: phdrs.clone(),
-            data: LazyParse {
-                state: Cell::new(State::Uninit {
-                    phdrs,
-                    init_handler: self.init_fn,
-                    fini_handler: self.fini_fn,
+            phdrs: phdrs_repr.clone(),
+            extra: ElfExtraData {
+                // Determine if lazy binding should be enabled
+                lazy: !dynamic.bind_now,
+
+                // Store GNU_RELRO segment information
+                relro: self.relro,
+
+                // Store relocation information
+                relocation,
+
+                // Create initialization function
+                init: Box::new(move || init_handler(dynamic.init_fn, dynamic.init_array_fn)),
+
+                // Store GOT pointer
+                got_plt: dynamic.got_plt,
+
+                // Store RPATH value
+                rpath: dynamic
+                    .rpath_off
+                    .map(|rpath_off| symtab.strtab().get_str(rpath_off.get())),
+
+                // Store needed library names
+                needed_libs: needed_libs.into_boxed_slice(),
+
+                // Store RUNPATH value
+                runpath: dynamic
+                    .runpath_off
+                    .map(|runpath_off| symtab.strtab().get_str(runpath_off.get())),
+
+                // Store TLS get addr function
+                tls_get_addr: Tls::tls_get_addr,
+            },
+            module: ElfCore {
+                inner: Arc::new(CoreInner {
+                    is_init: AtomicBool::new(false),
                     name: self.name,
-                    dynamic_ptr,
-                    segments: self.segments,
-                    relro: self.relro,
-                    tls_mod_id: self.tls_mod_id,
-                    tls_tp_offset: self.tls_tp_offset,
-                    tls_unregister: Tls::unregister,
-                    tls_get_addr: Tls::tls_get_addr,
+                    symtab,
+                    fini: dynamic.fini_fn,
+                    fini_array: dynamic.fini_array_fn,
+                    fini_handler: self.fini_fn,
                     user_data: self.user_data,
-                    eh_frame_hdr: self.eh_frame_hdr,
+                    dynamic_info: Some(Arc::new(DynamicInfo {
+                        eh_frame_hdr: self.eh_frame_hdr,
+                        dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
+                        pltrel: NonNull::new(dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _),
+                        phdrs: phdrs_repr,
+                        lazy_scope: None,
+                    })),
+                    tls_mod_id,
+                    tls_tp_offset,
+                    tls_unregister: Tls::unregister,
+                    segments: self.segments,
                 }),
             },
         })

@@ -32,7 +32,7 @@ cfg_if::cfg_if! {
         pub(crate) type Phdr = elf::segment::Elf64_Phdr;
         pub(crate) type Shdr = elf::section::Elf64_Shdr;
         pub type ElfDyn = elf::dynamic::Elf64_Dyn;
-        pub(crate) type Ehdr = elf::file::Elf64_Ehdr;
+        pub(crate) type ElfEhdr = elf::file::Elf64_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf64_Rela;
         pub(crate) type Rel = elf::relocation::Elf64_Rel;
         pub(crate) type Relr = u64;
@@ -45,7 +45,7 @@ cfg_if::cfg_if! {
         pub(crate) type Phdr = elf::segment::Elf32_Phdr;
         pub(crate) type Shdr = elf::section::Elf32_Shdr;
         pub type ElfDyn = elf::dynamic::Elf32_Dyn;
-        pub(crate) type Ehdr = elf::file::Elf32_Ehdr;
+        pub(crate) type ElfEhdr = elf::file::Elf32_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf32_Rela;
         pub(crate) type Rel = elf::relocation::Elf32_Rel;
         pub(crate) type Relr = u32;

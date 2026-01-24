@@ -193,6 +193,7 @@ impl ElfDynamic {
             strtab: strtab_off + base,
             // Check if binding should be done immediately
             bind_now: flags & DF_BIND_NOW as usize != 0 || flags_1 & DF_1_NOW as usize != 0,
+            static_tls: flags & DF_STATIC_TLS as usize != 0,
             got_plt: NonNull::new(
                 got_off
                     .map(|off| (base + off.get()) as *mut usize)
@@ -286,6 +287,8 @@ pub(crate) struct ElfDynamic {
     pub strtab: usize,
     /// Whether to bind symbols immediately.
     pub bind_now: bool,
+    /// Whether the object uses static thread-local storage.
+    pub static_tls: bool,
     /// Global Offset Table address.
     pub got_plt: Option<NonNull<usize>>,
     /// Initialization function.

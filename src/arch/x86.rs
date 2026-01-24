@@ -31,6 +31,16 @@ pub const REL_IRELATIVE: u32 = R_386_IRELATIVE;
 pub const REL_COPY: u32 = R_386_COPY;
 pub const REL_TPOFF: u32 = R_386_TLS_TPOFF;
 
+/// Get the current thread pointer using architecture-specific register.
+#[inline(always)]
+pub(crate) unsafe fn get_thread_pointer() -> *mut u8 {
+    let tp: *mut u8;
+    unsafe {
+        core::arch::asm!("mov {}, gs:0", out(reg) tp);
+    }
+    tp
+}
+
 pub(crate) const DYLIB_OFFSET: usize = 1;
 pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
 

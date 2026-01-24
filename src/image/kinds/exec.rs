@@ -359,13 +359,22 @@ where
         }
 
         let entry = self.ehdr.e_entry as usize;
+
+        let (tls_mod_id, tls_tp_offset) = if let Some(info) = &self.tls_info {
+            // Static executables always use static TLS if PT_TLS is present.
+            let (mod_id, offset) = Tls::register_static(info)?;
+            (Some(mod_id), Some(offset))
+        } else {
+            (None, None)
+        };
+
         let static_inner = StaticImageInner {
             entry,
             name: self.name,
             user_data: self.user_data,
             segments: self.segments,
-            tls_mod_id: self.tls_mod_id,
-            tls_tp_offset: self.tls_tp_offset,
+            tls_mod_id,
+            tls_tp_offset,
         };
         Ok(StaticImage {
             inner: Arc::new(static_inner),
