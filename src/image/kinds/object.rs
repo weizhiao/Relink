@@ -22,7 +22,13 @@ use alloc::sync::Arc;
 #[cfg(feature = "portable-atomic")]
 use portable_atomic_util::Arc;
 
-impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
+impl<M, H, D, Tls> Loader<M, H, D, Tls>
+where
+    M: Mmap,
+    H: LoadHook,
+    D: Default + 'static,
+    Tls: TlsResolver,
+{
     /// Loads a object ELF file into memory.
     ///
     /// This method loads a relocatable ELF file (typically a `.o` file) into memory
@@ -49,12 +55,16 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
         I: IntoElfReader<'a>,
     {
         let object = input.into_reader()?;
-        self.load_object_internal(object)
+        self.load_object_impl(object)
     }
 
-    pub(crate) fn load_object_internal(&mut self, mut object: impl ElfReader) -> Result<RawObject<D>> {
-        let ehdr = self.buf.prepare_ehdr(&mut object).unwrap();
-        self.load_object_impl(ehdr, object)
+    pub(crate) fn load_object_impl(&mut self, mut object: impl ElfReader) -> Result<RawObject<D>> {
+        let ehdr = self.buf.prepare_ehdr(&mut object)?;
+        let shdrs = self.buf.prepare_shdrs_mut(&ehdr, &mut object)?;
+        let builder = self
+            .inner
+            .create_object_builder::<M, Tls>(ehdr, shdrs, object)?;
+        Ok(builder.build())
     }
 }
 

@@ -261,10 +261,9 @@ impl<D> DynamicImage<D> {
 
 impl<'hook, H, M, Tls, D> ImageBuilder<'hook, H, M, Tls, D>
 where
-    H: LoadHook<D>,
+    H: LoadHook,
     Tls: TlsResolver,
     M: Mmap,
-    D: Default,
 {
     /// Build the final DynamicImage object
     ///

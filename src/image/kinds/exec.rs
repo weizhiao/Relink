@@ -201,7 +201,7 @@ impl<D: 'static> RawExec<D> {
 impl<M, H, D, Tls> Loader<M, H, D, Tls>
 where
     M: Mmap,
-    H: LoadHook<D>,
+    H: LoadHook,
     D: Default,
     Tls: TlsResolver,
 {
@@ -243,19 +243,21 @@ where
             return Err(parse_ehdr_error("file type mismatch"));
         }
 
-        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?.to_vec();
+        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
         let has_dynamic = phdrs.iter().any(|phdr| phdr.p_type == PT_DYNAMIC);
 
         if has_dynamic {
             // Load the relocated common part
-            let inner = self.load_dynamic_impl(ehdr, &phdrs, object)?;
+            let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
+            let inner = builder.build_dynamic(phdrs)?;
             // Wrap in RawExec and return
             Ok(RawExec {
                 inner: ExecImageInner::Dynamic(inner),
             })
         } else {
             // Load as a static module without dynamic section
-            let inner = self.load_static_impl(ehdr, &phdrs, object)?;
+            let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
+            let inner = builder.build_static(phdrs)?;
             Ok(RawExec {
                 inner: ExecImageInner::Static(inner),
             })
@@ -348,8 +350,7 @@ impl<D> LoadedExec<D> {
 impl<'hook, H, M, Tls, D> ImageBuilder<'hook, H, M, Tls, D>
 where
     M: Mmap,
-    D: Default,
-    H: LoadHook<D>,
+    H: LoadHook,
     Tls: TlsResolver,
 {
     pub(crate) fn build_static(mut self, phdrs: &[ElfPhdr]) -> Result<StaticImage<D>> {

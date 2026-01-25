@@ -1,5 +1,6 @@
 //! ELF (Executable and Linkable Format) data structures and utilities.
 
+pub mod abi;
 mod defs;
 mod dynamic;
 mod ehdr;
@@ -20,5 +21,3 @@ pub(crate) use symbol::{ElfStringTable, SymbolInfo, SymbolTable};
 pub use defs::{ElfDyn, ElfPhdr, ElfRel, ElfRela, ElfSymbol};
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::ElfHeader;
-/// ELF ABI constants and definitions from the elf crate.
-pub use elf::abi::*;

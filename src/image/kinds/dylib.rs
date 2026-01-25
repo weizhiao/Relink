@@ -196,7 +196,7 @@ impl<D> RawDylib<D> {
 impl<M, H, D, Tls> Loader<M, H, D, Tls>
 where
     M: Mmap,
-    H: LoadHook<D>,
+    H: LoadHook,
     D: Default,
     Tls: TlsResolver,
 {
@@ -231,17 +231,18 @@ where
 
     pub(crate) fn load_dylib_impl(&mut self, mut object: impl ElfReader) -> Result<RawDylib<D>> {
         // Prepare and validate the ELF header
-        let ehdr = self.buf.prepare_ehdr(&mut object)?;
+        let ehdr = self.read_ehdr(&mut object)?;
 
         // Ensure the file is actually a dynamic library
         if !ehdr.is_dylib() {
             return Err(parse_ehdr_error("file type mismatch"));
         }
 
-        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?.to_vec();
+        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
 
         // Load the relocated common part
-        let inner = self.load_dynamic_impl(ehdr, &phdrs, object)?;
+        let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
+        let inner = builder.build_dynamic(phdrs)?;
 
         // Wrap in RawDylib and return
         Ok(RawDylib { inner })

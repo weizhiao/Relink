@@ -1,7 +1,7 @@
 use crate::{
     Result,
     elf::{EHDR_SIZE, ElfHeader, ElfPhdr, ElfShdr},
-    image::{DynamicImage, ImageBuilder, ObjectBuilder, RawObject, StaticImage},
+    image::{ImageBuilder, ObjectBuilder},
     input::ElfReader,
     os::{DefaultMmap, Mmap},
     segment::{ElfSegments, SegmentBuilder, program::ProgramSegments, section::SectionSegments},
@@ -20,7 +20,7 @@ pub(crate) struct ElfBuf {
 }
 
 impl ElfBuf {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut buf = Vec::new();
         buf.resize(EHDR_SIZE, 0);
         ElfBuf { buf }
@@ -71,25 +71,18 @@ impl ElfBuf {
 }
 
 /// Context provided to hook functions during ELF loading.
-pub struct LoadHookContext<'a, D> {
+pub struct LoadHookContext<'a> {
     name: &'a str,
     phdr: &'a ElfPhdr,
     segments: &'a ElfSegments,
-    user_data: &'a mut D,
 }
 
-impl<'a, D> LoadHookContext<'a, D> {
-    pub(crate) fn new(
-        name: &'a str,
-        phdr: &'a ElfPhdr,
-        segments: &'a ElfSegments,
-        user_data: &'a mut D,
-    ) -> Self {
+impl<'a> LoadHookContext<'a> {
+    pub(crate) fn new(name: &'a str, phdr: &'a ElfPhdr, segments: &'a ElfSegments) -> Self {
         Self {
             name,
             phdr,
             segments,
-            user_data,
         }
     }
 
@@ -107,11 +100,6 @@ impl<'a, D> LoadHookContext<'a, D> {
     pub fn segments(&self) -> &ElfSegments {
         self.segments
     }
-
-    /// Returns mutable access to the user-defined data.
-    pub fn user_data_mut(&mut self) -> &mut D {
-        self.user_data
-    }
 }
 
 /// Hook trait for processing program headers during loading.
@@ -122,34 +110,82 @@ impl<'a, D> LoadHookContext<'a, D> {
 ///
 /// struct MyHook;
 ///
-/// impl LoadHook<()> for MyHook {
-///     fn call<'a>(&self, ctx: &'a mut LoadHookContext<'a, ()>) -> Result<()> {
+/// impl LoadHook for MyHook {
+///     fn call<'a>(&mut self, ctx: &'a LoadHookContext<'a>) -> Result<()> {
 ///         println!("Processing segment: {:?}", ctx.phdr());
 ///         Ok(())
 ///     }
 /// }
 /// ```
-pub trait LoadHook<D = ()> {
+pub trait LoadHook {
     /// Executes the hook with the provided context.
-    fn call<'a>(&self, ctx: &'a mut LoadHookContext<'a, D>) -> Result<()>;
+    fn call<'a>(&mut self, ctx: &'a LoadHookContext<'a>) -> Result<()>;
 }
 
-impl<F, D> LoadHook<D> for F
+impl<F> LoadHook for F
 where
-    F: for<'a> Fn(&'a mut LoadHookContext<'a, D>) -> Result<()>,
+    F: for<'a> FnMut(&'a LoadHookContext<'a>) -> Result<()>,
 {
-    fn call<'a>(&self, ctx: &'a mut LoadHookContext<'a, D>) -> Result<()> {
+    fn call<'a>(&mut self, ctx: &'a LoadHookContext<'a>) -> Result<()> {
         (self)(ctx)
     }
 }
 
-impl<D> LoadHook<D> for () {
-    fn call<'a>(&self, _ctx: &'a mut LoadHookContext<'a, D>) -> Result<()> {
+impl LoadHook for () {
+    fn call<'a>(&mut self, _ctx: &'a LoadHookContext<'a>) -> Result<()> {
         Ok(())
     }
 }
 
 pub(crate) type FnHandler = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
+
+/// Context provided to the user data generator.
+pub struct UserDataLoaderContext<'a> {
+    /// The name of the ELF object being loaded.
+    name: &'a str,
+    /// The ELF header of the object.
+    ehdr: &'a ElfHeader,
+    /// The program headers of the object.
+    phdrs: Option<&'a [ElfPhdr]>,
+    /// The section headers of the object.
+    shdrs: Option<&'a [ElfShdr]>,
+}
+
+impl<'a> UserDataLoaderContext<'a> {
+    pub(crate) fn new(
+        name: &'a str,
+        ehdr: &'a ElfHeader,
+        phdrs: Option<&'a [ElfPhdr]>,
+        shdrs: Option<&'a [ElfShdr]>,
+    ) -> Self {
+        Self {
+            name,
+            ehdr,
+            phdrs,
+            shdrs,
+        }
+    }
+
+    /// Returns the name of the ELF object being loaded.
+    pub fn name(&self) -> &str {
+        self.name
+    }
+
+    /// Returns the ELF header of the object.
+    pub fn ehdr(&self) -> &ElfHeader {
+        self.ehdr
+    }
+
+    /// Returns the program headers of the object.
+    pub fn phdrs(&self) -> Option<&[ElfPhdr]> {
+        self.phdrs
+    }
+
+    /// Returns the section headers of the object.
+    pub fn shdrs(&self) -> Option<&[ElfShdr]> {
+        self.shdrs
+    }
+}
 
 /// The ELF object loader.
 ///
@@ -163,19 +199,23 @@ pub(crate) type FnHandler = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
 /// let bytes = std::fs::read("liba.so").unwrap();
 /// let lib = loader.load_dylib(ElfBinary::new("liba.so", &bytes)).unwrap();
 /// ```
-pub struct Loader<M, H, D = (), Tls = DefaultTlsResolver>
+pub struct Loader<M = DefaultMmap, H = (), D = (), Tls = DefaultTlsResolver>
 where
     M: Mmap,
-    H: LoadHook<D>,
-    D: Default + 'static,
+    H: LoadHook,
     Tls: TlsResolver,
 {
     pub(crate) buf: ElfBuf,
+    pub(crate) inner: LoaderInner<H, D>,
+    _marker: PhantomData<(M, Tls)>,
+}
+
+pub(crate) struct LoaderInner<H, D> {
     init_fn: FnHandler,
     fini_fn: FnHandler,
     hook: H,
     force_static_tls: bool,
-    _marker: PhantomData<(M, D, Tls)>,
+    user_data_loader: Box<dyn Fn(&UserDataLoaderContext) -> D>,
 }
 
 impl Loader<DefaultMmap, (), (), DefaultTlsResolver> {
@@ -187,11 +227,14 @@ impl Loader<DefaultMmap, (), (), DefaultTlsResolver> {
                 .for_each(|init| unsafe { core::mem::transmute::<_, &extern "C" fn()>(init) }());
         });
         Self {
-            hook: (),
-            init_fn: c_abi.clone(),
-            fini_fn: c_abi,
             buf: ElfBuf::new(),
-            force_static_tls: false,
+            inner: LoaderInner {
+                hook: (),
+                init_fn: c_abi.clone(),
+                fini_fn: c_abi,
+                force_static_tls: false,
+                user_data_loader: Box::new(|_| ()),
+            },
             _marker: PhantomData,
         }
     }
@@ -199,9 +242,9 @@ impl Loader<DefaultMmap, (), (), DefaultTlsResolver> {
 
 impl<M, H, D, Tls> Loader<M, H, D, Tls>
 where
-    H: LoadHook<D>,
+    H: LoadHook,
     M: Mmap,
-    D: Default + 'static,
+    D: 'static,
     Tls: TlsResolver,
 {
     /// Sets the initialization function handler.
@@ -212,7 +255,7 @@ where
     /// Note: glibc passes `argc`, `argv`, and `envp` to functions in `.init_array`
     /// as a non-standard extension.
     pub fn with_init(mut self, init_fn: FnHandler) -> Self {
-        self.init_fn = init_fn;
+        self.inner.init_fn = init_fn;
         self
     }
 
@@ -221,22 +264,45 @@ where
     /// This handler is responsible for calling the finalization functions
     /// (e.g., `.fini` and `.fini_array`) of the loaded ELF object.
     pub fn with_fini(mut self, fini_fn: FnHandler) -> Self {
-        self.fini_fn = fini_fn;
+        self.inner.fini_fn = fini_fn;
         self
     }
 
     /// Consumes the current loader and returns a new one with the specified context data type.
-    pub fn with_data_type<NewD>(self) -> Loader<M, H, NewD, Tls>
+    pub fn with_context<NewD>(self) -> Loader<M, H, NewD, Tls>
     where
         NewD: Default + 'static,
-        H: LoadHook<NewD>,
     {
         Loader {
             buf: self.buf,
-            init_fn: self.init_fn,
-            fini_fn: self.fini_fn,
-            hook: self.hook,
-            force_static_tls: self.force_static_tls,
+            inner: LoaderInner {
+                init_fn: self.inner.init_fn,
+                fini_fn: self.inner.fini_fn,
+                hook: self.inner.hook,
+                force_static_tls: self.inner.force_static_tls,
+                user_data_loader: Box::new(|_| NewD::default()),
+            },
+            _marker: PhantomData,
+        }
+    }
+
+    /// Consumes the current loader and returns a new one with the specified user data generator.
+    pub fn with_context_loader<NewD>(
+        self,
+        loader: impl Fn(&UserDataLoaderContext) -> NewD + 'static,
+    ) -> Loader<M, H, NewD, Tls>
+    where
+        NewD: 'static,
+    {
+        Loader {
+            buf: self.buf,
+            inner: LoaderInner {
+                init_fn: self.inner.init_fn,
+                fini_fn: self.inner.fini_fn,
+                hook: self.inner.hook,
+                force_static_tls: self.inner.force_static_tls,
+                user_data_loader: Box::new(loader),
+            },
             _marker: PhantomData,
         }
     }
@@ -244,14 +310,17 @@ where
     /// Consumes the current loader and returns a new one with the specified hook.
     pub fn with_hook<NewHook>(self, hook: NewHook) -> Loader<M, NewHook, D, Tls>
     where
-        NewHook: LoadHook<D>,
+        NewHook: LoadHook,
     {
         Loader {
             buf: self.buf,
-            init_fn: self.init_fn,
-            fini_fn: self.fini_fn,
-            hook,
-            force_static_tls: self.force_static_tls,
+            inner: LoaderInner {
+                init_fn: self.inner.init_fn,
+                fini_fn: self.inner.fini_fn,
+                hook,
+                force_static_tls: self.inner.force_static_tls,
+                user_data_loader: self.inner.user_data_loader,
+            },
             _marker: PhantomData,
         }
     }
@@ -260,10 +329,7 @@ where
     pub fn with_mmap<NewMmap: Mmap>(self) -> Loader<NewMmap, H, D, Tls> {
         Loader {
             buf: self.buf,
-            init_fn: self.init_fn,
-            fini_fn: self.fini_fn,
-            hook: self.hook,
-            force_static_tls: self.force_static_tls,
+            inner: self.inner,
             _marker: PhantomData,
         }
     }
@@ -271,21 +337,18 @@ where
     /// Consumes the current loader and returns a new one with the specified TLS resolver.
     pub fn with_tls_resolver<NewTls>(self) -> Loader<M, H, D, NewTls>
     where
-        NewTls: crate::tls::TlsResolver,
+        NewTls: TlsResolver,
     {
         Loader {
             buf: self.buf,
-            init_fn: self.init_fn,
-            fini_fn: self.fini_fn,
-            hook: self.hook,
-            force_static_tls: self.force_static_tls,
+            inner: self.inner,
             _marker: PhantomData,
         }
     }
 
     /// Sets whether to force static TLS for all loaded modules.
     pub fn with_static_tls(mut self, enabled: bool) -> Self {
-        self.force_static_tls = enabled;
+        self.inner.force_static_tls = enabled;
         self
     }
 
@@ -302,64 +365,63 @@ where
     ) -> Result<&[ElfPhdr]> {
         self.buf.prepare_phdrs(ehdr, object)
     }
+}
 
-    fn create_builder(
+impl<H, D> LoaderInner<H, D>
+where
+    H: LoadHook,
+    D: 'static,
+{
+    pub(crate) fn create_builder<M, Tls>(
         &mut self,
         ehdr: ElfHeader,
         phdrs: &[ElfPhdr],
         mut object: impl ElfReader,
-        force_static_tls: bool,
-    ) -> Result<ImageBuilder<'_, H, M, Tls, D>> {
+    ) -> Result<ImageBuilder<'_, H, M, Tls, D>>
+    where
+        M: Mmap,
+        Tls: TlsResolver,
+    {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
+        let force_static_tls = self.force_static_tls;
         let mut phdr_segments =
             ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
 
+        let user_data = (self.user_data_loader)(&UserDataLoaderContext::new(
+            object.file_name(),
+            &ehdr,
+            Some(phdrs),
+            None,
+        ));
+
         let builder = ImageBuilder::new(
-            &self.hook,
+            &mut self.hook,
             segments,
             object.file_name().to_owned(),
             ehdr,
             init_fn,
             fini_fn,
             force_static_tls,
+            user_data,
         );
         Ok(builder)
     }
 
-    pub(crate) fn load_static_impl(
+    pub(crate) fn create_object_builder<M, Tls>(
         &mut self,
         ehdr: ElfHeader,
-        phdrs: &[ElfPhdr],
-        object: impl ElfReader,
-    ) -> Result<StaticImage<D>> {
-        let force_static_tls = self.force_static_tls;
-        let builder = self.create_builder(ehdr, phdrs, object, force_static_tls)?;
-        Ok(builder.build_static(phdrs)?)
-    }
-
-    pub(crate) fn load_dynamic_impl(
-        &mut self,
-        ehdr: ElfHeader,
-        phdrs: &[ElfPhdr],
-        object: impl ElfReader,
-    ) -> Result<DynamicImage<D>> {
-        let force_static_tls = self.force_static_tls;
-        let builder = self.create_builder(ehdr, phdrs, object, force_static_tls)?;
-        Ok(builder.build_dynamic(phdrs)?)
-    }
-
-    /// Load a relocatable ELF object
-    pub(crate) fn load_object_impl(
-        &mut self,
-        _ehdr: ElfHeader,
+        shdrs: &mut [ElfShdr],
         mut object: impl ElfReader,
-    ) -> Result<RawObject<D>> {
+    ) -> Result<ObjectBuilder<Tls, D>>
+    where
+        M: Mmap,
+        Tls: TlsResolver,
+    {
         let init_fn = self.init_fn.clone();
         let fini_fn = self.fini_fn.clone();
-        let shdrs = self.buf.prepare_shdrs_mut(&_ehdr, &mut object).unwrap();
         let mut shdr_segments = SectionSegments::new(shdrs, &mut object);
         let segments = shdr_segments.load_segments::<M>(&mut object)?;
         let pltgot = shdr_segments.take_pltgot();
@@ -367,6 +429,13 @@ where
             shdr_segments.mprotect::<M>()?;
             Ok(())
         });
+        let user_data = (self.user_data_loader)(&UserDataLoaderContext::new(
+            object.file_name(),
+            &ehdr,
+            None,
+            Some(shdrs),
+        ));
+
         let builder: ObjectBuilder<Tls, D> = ObjectBuilder::new(
             object.file_name().to_owned(),
             shdrs,
@@ -375,9 +444,9 @@ where
             segments,
             mprotect,
             pltgot,
-            D::default(),
+            user_data,
         );
 
-        Ok(builder.build())
+        Ok(builder)
     }
 }

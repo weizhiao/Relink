@@ -11,7 +11,7 @@ use crate::{
     loader::FnHandler,
     relocation::SymDef,
     segment::ElfSegments,
-    tls::TlsResolver,
+    tls::{TlsInfo, TlsResolver},
 };
 use alloc::string::String;
 use core::{
@@ -21,7 +21,7 @@ use core::{
     ptr::NonNull,
     sync::atomic::{AtomicBool, Ordering},
 };
-use elf::abi::{PT_DYNAMIC, PT_GNU_EH_FRAME, PT_TLS};
+use elf::abi::{DF_STATIC_TLS, DT_FLAGS, PT_DYNAMIC, PT_GNU_EH_FRAME, PT_TLS};
 
 #[cfg(not(feature = "portable-atomic"))]
 use alloc::sync::{Arc, Weak};
@@ -227,10 +227,11 @@ impl<D> LoadedCore<D> {
         for phdr in phdrs {
             match phdr.p_type {
                 PT_DYNAMIC => {
-                    dynamic_ptr = (base + phdr.p_vaddr as usize) as *const ElfDyn;
+                    dynamic_ptr = base.wrapping_add(phdr.p_vaddr as usize) as *const ElfDyn;
                 }
                 PT_GNU_EH_FRAME => {
-                    eh_frame_hdr = NonNull::new((base + phdr.p_vaddr as usize) as *mut u8);
+                    eh_frame_hdr =
+                        NonNull::new(base.wrapping_add(phdr.p_vaddr as usize) as *mut u8);
                 }
                 PT_TLS => {
                     tls_phdr = Some(phdr);
@@ -242,17 +243,17 @@ impl<D> LoadedCore<D> {
         if let Some(phdr) = tls_phdr {
             unsafe {
                 let template = core::slice::from_raw_parts(
-                    (base + phdr.p_vaddr as usize) as *const u8,
+                    base.wrapping_add(phdr.p_vaddr as usize) as *const u8,
                     phdr.p_filesz as usize,
                 );
-                let info = crate::tls::TlsInfo::new(phdr, core::mem::transmute(template));
+                let info = TlsInfo::new(phdr, core::mem::transmute(template));
 
                 let mut static_tls = actual_tls_tp_offset.is_some();
                 if !static_tls && !dynamic_ptr.is_null() {
                     let mut cur = dynamic_ptr;
                     while (*cur).d_tag != 0 {
-                        if (*cur).d_tag == crate::elf::DT_FLAGS as _ {
-                            if (*cur).d_un as usize & crate::elf::DF_STATIC_TLS as usize != 0 {
+                        if (*cur).d_tag == DT_FLAGS as _ {
+                            if (*cur).d_un as usize & DF_STATIC_TLS as usize != 0 {
                                 static_tls = true;
                                 break;
                             }

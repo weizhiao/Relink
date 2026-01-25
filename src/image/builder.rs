@@ -21,13 +21,12 @@ use elf::abi::{
 /// building the final RelocatedCommonPart object.
 pub(crate) struct ImageBuilder<'hook, H, M, Tls, D = ()>
 where
-    H: LoadHook<D>,
+    H: LoadHook,
     M: Mmap,
-    D: Default,
     Tls: TlsResolver,
 {
     /// Hook function for processing program headers (always present)
-    hook: &'hook H,
+    hook: &'hook mut H,
 
     /// Mapped program headers
     phdr_mmap: Option<&'static [ElfPhdr]>,
@@ -74,9 +73,8 @@ where
 
 impl<'hook, H, M, Tls, D> ImageBuilder<'hook, H, M, Tls, D>
 where
-    H: LoadHook<D>,
+    H: LoadHook,
     Tls: TlsResolver,
-    D: Default,
     M: Mmap,
 {
     /// Create a new ImageBuilder
@@ -92,13 +90,14 @@ where
     /// # Returns
     /// A new DynamicBuilder instance
     pub(crate) fn new(
-        hook: &'hook H,
+        hook: &'hook mut H,
         segments: ElfSegments,
         name: String,
         ehdr: ElfHeader,
         init_fn: FnHandler,
         fini_fn: FnHandler,
         static_tls: bool,
+        user_data: D,
     ) -> Self {
         Self {
             hook,
@@ -110,7 +109,7 @@ where
             tls_info: None,
             static_tls,
             segments,
-            user_data: D::default(),
+            user_data,
             init_fn,
             fini_fn,
             interp: None,
@@ -132,7 +131,7 @@ where
     /// * `Ok(())` - If parsing succeeds
     /// * `Err(Error)` - If parsing fails
     pub(crate) fn parse_phdr(&mut self, phdr: &ElfPhdr) -> Result<()> {
-        let mut ctx = LoadHookContext::new(&self.name, phdr, &self.segments, &mut self.user_data);
+        let mut ctx = LoadHookContext::new(&self.name, phdr, &self.segments);
         self.hook.call(&mut ctx)?;
 
         // Process different program header types

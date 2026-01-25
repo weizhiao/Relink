@@ -421,6 +421,12 @@ impl Deref for ElfPhdr {
     }
 }
 
+impl DerefMut for ElfPhdr {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.phdr
+    }
+}
+
 impl Clone for ElfPhdr {
     fn clone(&self) -> Self {
         Self {

@@ -20,7 +20,6 @@ mod kinds;
 
 pub(crate) use builder::{ImageBuilder, ObjectBuilder};
 pub(crate) use common::{CoreInner, DynamicImage};
-pub(crate) use kinds::StaticImage;
 
 pub use common::{ElfCore, ElfCoreRef, LoadedCore, Symbol};
 pub use kinds::{LoadedDylib, LoadedExec, LoadedObject, RawDylib, RawExec, RawObject};
@@ -260,7 +259,7 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
     }
 }
 
-impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
+impl<M: Mmap, H: LoadHook, D: Default + 'static> Loader<M, H, D> {
     /// Load an ELF file into memory
     ///
     /// # Arguments
@@ -274,13 +273,13 @@ impl<M: Mmap, H: LoadHook<D>, D: Default + 'static> Loader<M, H, D> {
         I: IntoElfReader<'a>,
     {
         let mut object = input.into_reader()?;
-        let ehdr = self.buf.prepare_ehdr(&mut object)?;
+        let ehdr = self.read_ehdr(&mut object)?;
 
         match ehdr.e_type {
-            elf::abi::ET_REL => Ok(RawElf::Object(self.load_object_internal(object)?)),
+            elf::abi::ET_REL => Ok(RawElf::Object(self.load_object_impl(object)?)),
             elf::abi::ET_EXEC => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
             elf::abi::ET_DYN => {
-                let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+                let phdrs = self.read_phdr(&mut object, &ehdr)?;
                 let has_dynamic = phdrs.iter().any(|p| p.p_type == PT_DYNAMIC);
                 let is_pie = phdrs.iter().any(|p| p.p_type == PT_INTERP) || !has_dynamic;
                 if is_pie {
