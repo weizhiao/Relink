@@ -75,8 +75,13 @@ impl<D> DynamicImage<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
+        #[cfg(feature = "log")]
+        log::info!("Relocating dynamic library: {}", self.name());
+
         // Optimization: check if relocation is empty
         if self.relocation().is_empty() {
+            #[cfg(feature = "log")]
+            log::debug!("No relocations needed for {}", self.name());
             let core = self.into_core();
             let relocated = unsafe { LoadedCore::from_core(core) };
             return Ok(relocated);
@@ -84,6 +89,11 @@ impl<D> DynamicImage<D> {
 
         let is_lazy = lazy.unwrap_or(self.is_lazy());
         let tls_get_addr = self.tls_get_addr();
+
+        #[cfg(feature = "log")]
+        if is_lazy {
+            log::debug!("Using lazy binding for {}", self.name());
+        }
 
         let hooked_pre_find = |name: &str| -> Option<*const ()> {
             if name == "__tls_get_addr" {
@@ -108,6 +118,15 @@ impl<D> DynamicImage<D> {
         let needed_libs = self.needed_libs();
         let deps: Arc<[LoadedCore<D>]> = Arc::from(helper.finish(needed_libs));
 
+        #[cfg(feature = "log")]
+        if !deps.is_empty() {
+            log::debug!(
+                "[{}] Bound dependencies: {:?}",
+                self.name(),
+                deps.iter().map(|d| d.name()).collect::<alloc::vec::Vec<_>>()
+            );
+        }
+
         if is_lazy {
             self.set_lazy_scope(LazyScope {
                 libs: deps.clone(),
@@ -116,7 +135,12 @@ impl<D> DynamicImage<D> {
             });
         }
 
+        #[cfg(feature = "log")]
+        log::debug!("Executing initialization functions for {}", self.name());
         self.call_init();
+
+        #[cfg(feature = "log")]
+        log::info!("Relocation completed for {}", self.name());
 
         Ok(unsafe { LoadedCore::from_core_deps(self.into_core(), deps) })
     }

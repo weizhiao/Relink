@@ -1,13 +1,19 @@
 use crate::{
-    Error, Result, io_error,
-    os::{MapFlags, Mmap, ProtFlags},
+    Error, Result,
     input::ElfReader,
+    io_error,
+    os::{MapFlags, Mmap, ProtFlags},
 };
 use alloc::{
     ffi::CString,
+    format,
     string::{String, ToString},
 };
-use core::{ffi::c_void, ptr::NonNull, str::FromStr, sync::atomic::{AtomicUsize, Ordering}};
+use core::{
+    ffi::c_void,
+    str::FromStr,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 use libc::{O_RDONLY, SEEK_SET, mmap, mprotect, munmap};
 
 /// An implementation of Mmap trait
@@ -32,12 +38,7 @@ pub(crate) unsafe fn register_thread_destructor(
         let mut new_key: libc::pthread_key_t = 0;
         if unsafe { libc::pthread_key_create(&mut new_key, Some(destructor)) } == 0 {
             let encoded = (new_key as usize).wrapping_add(1);
-            match TLS_CLEANUP_KEY.compare_exchange(
-                0,
-                encoded,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
+            match TLS_CLEANUP_KEY.compare_exchange(0, encoded, Ordering::SeqCst, Ordering::SeqCst) {
                 Ok(_) => key = encoded,
                 Err(actual) => {
                     unsafe { libc::pthread_key_delete(new_key) };
@@ -50,9 +51,7 @@ pub(crate) unsafe fn register_thread_destructor(
     // 2. Set thread-specific value to trigger destructor on exit
     if key != 0 {
         let actual_key = (key - 1) as libc::pthread_key_t;
-        unsafe {
-            libc::pthread_setspecific(actual_key, value)
-        };
+        unsafe { libc::pthread_setspecific(actual_key, value) };
     }
 }
 
@@ -78,7 +77,7 @@ impl Mmap for DefaultMmap {
         offset: usize,
         fd: Option<isize>,
         need_copy: &mut bool,
-    ) -> crate::Result<core::ptr::NonNull<c_void>> {
+    ) -> crate::Result<*mut c_void> {
         let ptr = if let Some(fd) = fd {
             unsafe {
                 mmap(
@@ -97,7 +96,7 @@ impl Mmap for DefaultMmap {
         if core::ptr::eq(ptr, libc::MAP_FAILED) {
             return Err(map_error("mmap failed"));
         }
-        Ok(unsafe { NonNull::new_unchecked(ptr) })
+        Ok(ptr)
     }
 
     unsafe fn mmap_anonymous(
@@ -105,7 +104,7 @@ impl Mmap for DefaultMmap {
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> crate::Result<core::ptr::NonNull<c_void>> {
+    ) -> crate::Result<*mut c_void> {
         let ptr = unsafe {
             mmap(
                 addr as _,
@@ -119,34 +118,26 @@ impl Mmap for DefaultMmap {
         if core::ptr::eq(ptr, libc::MAP_FAILED) {
             return Err(map_error("mmap anonymous failed"));
         }
-        Ok(unsafe { NonNull::new_unchecked(ptr) })
+        Ok(ptr)
     }
 
-    unsafe fn munmap(addr: core::ptr::NonNull<core::ffi::c_void>, len: usize) -> crate::Result<()> {
-        let res = unsafe { munmap(addr.as_ptr(), len) };
+    unsafe fn munmap(addr: *mut c_void, len: usize) -> crate::Result<()> {
+        let res = unsafe { munmap(addr, len) };
         if res != 0 {
             return Err(map_error("munmap failed"));
         }
         Ok(())
     }
 
-    unsafe fn mprotect(
-        addr: core::ptr::NonNull<core::ffi::c_void>,
-        len: usize,
-        prot: ProtFlags,
-    ) -> crate::Result<()> {
-        let res = unsafe { mprotect(addr.as_ptr(), len, prot.bits()) };
+    unsafe fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> crate::Result<()> {
+        let res = unsafe { mprotect(addr, len, prot.bits()) };
         if res != 0 {
             return Err(map_error("mprotect failed"));
         }
         Ok(())
     }
 
-    unsafe fn mmap_reserve(
-        addr: Option<usize>,
-        len: usize,
-        use_file: bool,
-    ) -> Result<NonNull<c_void>> {
+    unsafe fn mmap_reserve(addr: Option<usize>, len: usize, use_file: bool) -> Result<*mut c_void> {
         let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS;
         let prot = if use_file {
             ProtFlags::PROT_NONE
@@ -163,7 +154,7 @@ impl Mmap for DefaultMmap {
                 0,
             )
         };
-        Ok(unsafe { NonNull::new_unchecked(ptr) })
+        Ok(ptr)
     }
 }
 
@@ -178,7 +169,7 @@ impl RawFile {
         let name = CString::from_str(path).unwrap();
         let fd = unsafe { libc::open(name.as_ptr(), O_RDONLY) };
         if fd == -1 {
-            return Err(io_error("open failed"));
+            return Err(io_error(format!("open failed: {}", path)));
         }
         Ok(Self {
             name: path.to_string(),

@@ -52,6 +52,10 @@ impl<D> StaticImage<D> {
     pub fn tls_tp_offset(&self) -> Option<isize> {
         self.inner.tls_tp_offset
     }
+
+    pub fn base(&self) -> usize {
+        self.inner.segments.base()
+    }
 }
 
 struct StaticImageInner<D> {
@@ -196,6 +200,13 @@ impl<D: 'static> RawExec<D> {
             ExecImageInner::Static(image) => image.inner.segments.len(),
         }
     }
+
+    pub fn base(&self) -> usize {
+        match &self.inner {
+            ExecImageInner::Dynamic(image) => image.base(),
+            ExecImageInner::Static(image) => image.base(),
+        }
+    }
 }
 
 impl<M, H, D, Tls> Loader<M, H, D, Tls>
@@ -235,18 +246,27 @@ where
     }
 
     pub(crate) fn load_exec_impl(&mut self, mut object: impl ElfReader) -> Result<RawExec<D>> {
+        #[cfg(feature = "log")]
+        log::info!("Loading executable: {}", object.file_name());
+
         // Prepare and validate the ELF header
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
 
         // Ensure the file is actually an executable
         if !ehdr.is_executable() {
+            #[cfg(feature = "log")]
+            log::error!(
+                "File type mismatch for {}: expected executable, found {:?}",
+                object.file_name(),
+                ehdr.e_type
+            );
             return Err(parse_ehdr_error("file type mismatch"));
         }
 
         let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
         let has_dynamic = phdrs.iter().any(|phdr| phdr.p_type == PT_DYNAMIC);
 
-        if has_dynamic {
+        let res = if has_dynamic {
             // Load the relocated common part
             let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
             let inner = builder.build_dynamic(phdrs)?;
@@ -261,7 +281,20 @@ where
             Ok(RawExec {
                 inner: ExecImageInner::Static(inner),
             })
+        };
+
+        #[cfg(feature = "log")]
+        if let Ok(ref exec) = res {
+            log::debug!(
+                "Load executable: {} at [0x{:x}-0x{:x}] ({})",
+                exec.name(),
+                exec.base(),
+                exec.base() + exec.mapped_len(),
+                if has_dynamic { "dynamic" } else { "static" }
+            );
         }
+
+        res
     }
 }
 
@@ -360,7 +393,6 @@ where
         }
 
         let entry = self.ehdr.e_entry as usize;
-
         let (tls_mod_id, tls_tp_offset) = if let Some(info) = &self.tls_info {
             // Static executables always use static TLS if PT_TLS is present.
             let (mod_id, offset) = Tls::register_static(info)?;

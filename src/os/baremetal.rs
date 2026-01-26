@@ -5,7 +5,7 @@ use crate::{
     segment::PAGE_SIZE,
 };
 use alloc::alloc::{dealloc, handle_alloc_error};
-use core::{alloc::Layout, ptr::NonNull, slice::from_raw_parts_mut};
+use core::{alloc::Layout, ffi::c_void, slice::from_raw_parts_mut};
 
 /// An implementation of Mmap trait
 pub struct DefaultMmap;
@@ -15,12 +15,12 @@ pub(crate) fn current_thread_id() -> usize {
 }
 
 pub(crate) unsafe fn register_thread_destructor(
-    _destructor: unsafe extern "C" fn(*mut core::ffi::c_void),
-    _value: *mut core::ffi::c_void,
+    _destructor: unsafe extern "C" fn(*mut c_void),
+    _value: *mut c_void,
 ) {
 }
 
-pub(crate) unsafe fn get_thread_local_ptr() -> *mut core::ffi::c_void {
+pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
     core::ptr::null_mut()
 }
 
@@ -33,11 +33,11 @@ impl Mmap for DefaultMmap {
         _offset: usize,
         _fd: Option<isize>,
         need_copy: &mut bool,
-    ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
+    ) -> crate::Result<*mut c_void> {
         *need_copy = true;
         if let Some(addr) = addr {
             let ptr = addr as *mut u8;
-            Ok(unsafe { NonNull::new_unchecked(ptr as _) })
+            Ok(ptr as _)
         } else {
             // 只有创建整个空间时会走这条路径
             assert!((MapFlags::MAP_FIXED & flags).bits() == 0);
@@ -48,7 +48,7 @@ impl Mmap for DefaultMmap {
             }
             // use this set prot to test no_mmap
             //libc::mprotect(memory as _, len, crate::mmap::ProtFlags::all().bits());
-            Ok(unsafe { NonNull::new_unchecked(memory as _) })
+            Ok(memory as _)
         }
     }
 
@@ -57,28 +57,19 @@ impl Mmap for DefaultMmap {
         len: usize,
         _prot: ProtFlags,
         _flags: MapFlags,
-    ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
+    ) -> crate::Result<*mut c_void> {
         let ptr = addr as *mut u8;
         let dest = unsafe { from_raw_parts_mut(ptr, len) };
         dest.fill(0);
-        Ok(unsafe { NonNull::new_unchecked(ptr as _) })
+        Ok(ptr as _)
     }
 
-    unsafe fn munmap(addr: core::ptr::NonNull<core::ffi::c_void>, len: usize) -> crate::Result<()> {
-        unsafe {
-            dealloc(
-                addr.as_ptr() as _,
-                Layout::from_size_align_unchecked(len, PAGE_SIZE),
-            )
-        };
+    unsafe fn munmap(addr: *mut c_void, len: usize) -> crate::Result<()> {
+        unsafe { dealloc(addr as _, Layout::from_size_align_unchecked(len, PAGE_SIZE)) };
         Ok(())
     }
 
-    unsafe fn mprotect(
-        _addr: NonNull<core::ffi::c_void>,
-        _len: usize,
-        _prot: ProtFlags,
-    ) -> crate::Result<()> {
+    unsafe fn mprotect(_addr: *mut c_void, _len: usize, _prot: ProtFlags) -> crate::Result<()> {
         Ok(())
     }
 }

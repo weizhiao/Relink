@@ -77,6 +77,15 @@ fn register_module(tls_info: &TlsInfo, tp_offset: Option<isize>) -> usize {
         template: Some(template),
     };
 
+    #[cfg(feature = "log")]
+    log::debug!(
+        "Registered TLS module: ID {}, memsz {}, align {}, tp_offset {:?}",
+        mod_id,
+        tls_info.memsz,
+        tls_info.align,
+        tp_offset
+    );
+
     mod_id
 }
 
@@ -93,6 +102,9 @@ fn unregister_module(mod_id: usize) {
         generation: new_gen,
         template: None, // This signals threads to free their local copy
     };
+
+    #[cfg(feature = "log")]
+    log::debug!("Unregistered TLS module: ID {}", mod_id);
 }
 
 fn get_module_template(mod_id: usize) -> Option<ModuleTlsTemplate> {

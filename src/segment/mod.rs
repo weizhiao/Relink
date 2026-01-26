@@ -10,7 +10,6 @@ use crate::{Result, elf::Phdr, relocation::RelocValue};
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::fmt::Debug;
-use core::ptr::NonNull;
 
 pub(crate) mod program;
 pub(crate) mod section;
@@ -210,7 +209,7 @@ impl ElfSegment {
             let len = self.len;
             debug_assert!(len % PAGE_SIZE == 0);
             let addr = self.addr.absolute_addr();
-            unsafe { M::mprotect(NonNull::new(addr as _).unwrap(), len, self.prot) }?;
+            unsafe { M::mprotect(addr as _, len, self.prot) }?;
 
             #[cfg(feature = "log")]
             log::trace!(
@@ -367,7 +366,7 @@ pub(crate) struct ELFRelro {
     /// Size of the RELRO segment
     len: usize,
     /// Function pointer to the mprotect function
-    mprotect: unsafe fn(NonNull<c_void>, usize, ProtFlags) -> Result<()>,
+    mprotect: unsafe fn(*mut c_void, usize, ProtFlags) -> Result<()>,
 }
 
 impl ELFRelro {
@@ -424,22 +423,23 @@ fn rounddown(x: usize, align: usize) -> usize {
 /// layout.
 pub struct ElfSegments {
     /// Pointer to the mapped memory
-    pub(crate) memory: NonNull<c_void>,
+    pub(crate) memory: *mut c_void,
     /// Offset from memory address to base address
     pub(crate) offset: usize,
     /// Total length of the mapped memory
     pub(crate) len: usize,
     /// Function pointer to the munmap function
-    pub(crate) munmap: unsafe fn(NonNull<c_void>, usize) -> Result<()>,
+    pub(crate) munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
 }
 
 impl Debug for ElfSegments {
     /// Format the ElfSegments for debugging
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ELFSegments")
+        f.debug_struct("ElfSegments")
+            .field("base", &format_args!("0x{:x}", self.base()))
             .field("memory", &self.memory)
-            .field("offset", &self.offset)
             .field("len", &self.len)
+            .field("offset", &format_args!("0x{:x}", self.offset))
             .finish()
     }
 }
@@ -456,7 +456,7 @@ impl ELFRelro {
     pub(crate) fn relro(&self) -> Result<()> {
         let end = roundup(self.addr + self.len, PAGE_SIZE);
         let start = self.addr & MASK;
-        let start_addr = unsafe { NonNull::new_unchecked(start as _) };
+        let start_addr = start as *mut c_void;
         unsafe {
             (self.mprotect)(start_addr, end - start, ProtFlags::PROT_READ)?;
         }
@@ -484,9 +484,9 @@ impl ElfSegments {
     /// # Returns
     /// A new ElfSegments instance
     pub(crate) fn new(
-        memory: NonNull<c_void>,
+        memory: *mut c_void,
         len: usize,
-        munmap: unsafe fn(NonNull<c_void>, usize) -> Result<()>,
+        munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
     ) -> Self {
         ElfSegments {
             memory,
@@ -594,6 +594,6 @@ impl ElfSegments {
     /// The base address
     #[inline]
     pub fn base(&self) -> usize {
-        unsafe { self.memory.as_ptr().cast::<u8>().sub(self.offset) as usize }
+        self.memory as usize - self.offset
     }
 }

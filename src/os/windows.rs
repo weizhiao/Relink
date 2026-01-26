@@ -94,7 +94,7 @@ impl Mmap for DefaultMmap {
         offset: usize,
         fd: Option<isize>,
         need_copy: &mut bool,
-    ) -> Result<NonNull<c_void>> {
+    ) -> Result<*mut c_void> {
         let ptr = if let Some(fd) = fd {
             debug_assert!(addr.is_some(), "Address must be specified.");
             let addr = addr.unwrap();
@@ -127,7 +127,7 @@ impl Mmap for DefaultMmap {
             let addr = addr.unwrap();
             addr as _
         };
-        Ok(NonNull::new(ptr).unwrap())
+        Ok(ptr)
     }
 
     unsafe fn mmap_anonymous(
@@ -135,28 +135,28 @@ impl Mmap for DefaultMmap {
         len: usize,
         prot: ProtFlags,
         _flags: MapFlags,
-    ) -> Result<NonNull<c_void>> {
+    ) -> Result<*mut c_void> {
         // TODO： Change implementation using VirtualFree + VirtualAlloc
         let ptr =
             unsafe { Memory::VirtualAlloc(addr as _, len, MEM_COMMIT, prot_win(prot, false)) };
-        Ok(NonNull::new(ptr).unwrap())
+        Ok(ptr)
     }
 
-    unsafe fn munmap(addr: NonNull<c_void>, _len: usize) -> Result<()> {
+    unsafe fn munmap(addr: *mut c_void, _len: usize) -> Result<()> {
         unsafe {
             windows_sys::Win32::System::Memory::UnmapViewOfFile(
                 windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
-                    Value: addr.as_ptr(),
+                    Value: addr,
                 },
             )
         };
         Ok(())
     }
 
-    unsafe fn mprotect(addr: NonNull<c_void>, len: usize, prot: ProtFlags) -> Result<()> {
+    unsafe fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
         let mut old = MaybeUninit::uninit();
         if unsafe {
-            Memory::VirtualProtect(addr.as_ptr(), len, prot_win(prot, false), old.as_mut_ptr())
+            Memory::VirtualProtect(addr, len, prot_win(prot, false), old.as_mut_ptr())
         } == 0
         {
             let err_code = unsafe { GetLastError() };
@@ -171,7 +171,7 @@ impl Mmap for DefaultMmap {
         addr: Option<usize>,
         len: usize,
         use_file: bool,
-    ) -> Result<NonNull<c_void>> {
+    ) -> Result<*mut c_void> {
         let ptr = if use_file {
             if let Some(addr) = addr {
                 unsafe {
@@ -214,7 +214,7 @@ impl Mmap for DefaultMmap {
                 msg: "VirtualAlloc failed".into(),
             });
         }
-        Ok(NonNull::new(ptr).unwrap())
+        Ok(ptr)
     }
 }
 
@@ -254,8 +254,8 @@ impl RawFile {
         if handle == INVALID_HANDLE_VALUE {
             let err_code = unsafe { GetLastError() };
             return Err(io_error(&format!(
-                "CreateFileW failed with error: {}",
-                err_code
+                "CreateFileW failed for {}: error {}",
+                path, err_code
             )));
         }
 

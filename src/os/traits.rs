@@ -1,4 +1,4 @@
-use core::{ffi::c_void, ptr::NonNull};
+use core::ffi::c_void;
 
 use super::{MapFlags, ProtFlags};
 use crate::Result;
@@ -26,7 +26,7 @@ use crate::Result;
 ///         offset: usize,
 ///         fd: Option<isize>,
 ///         need_copy: &mut bool,
-///     ) -> Result<NonNull<c_void>> {
+///     ) -> Result<*mut c_void> {
 ///         // Platform-specific implementation
 ///         todo!()
 ///     }
@@ -66,7 +66,7 @@ pub trait Mmap {
         offset: usize,
         fd: Option<isize>,
         need_copy: &mut bool,
-    ) -> Result<NonNull<c_void>>;
+    ) -> Result<*mut c_void>;
 
     /// Creates an anonymous memory mapping.
     ///
@@ -89,7 +89,7 @@ pub trait Mmap {
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> Result<NonNull<c_void>>;
+    ) -> Result<*mut c_void>;
 
     /// Unmaps a memory region, releasing the associated resources.
     ///
@@ -102,7 +102,7 @@ pub trait Mmap {
     ///
     /// # Safety
     /// Ensure `addr` and `len` match the original mapping. Do not access the region after unmapping.
-    unsafe fn munmap(addr: NonNull<c_void>, len: usize) -> Result<()>;
+    unsafe fn munmap(addr: *mut c_void, len: usize) -> Result<()>;
 
     /// Changes the protection of a memory region.
     ///
@@ -121,7 +121,7 @@ pub trait Mmap {
     /// # Safety
     /// Changing permissions can affect running code. Ensure no code is executing in the region
     /// when removing execute permissions. `addr` must be page-aligned.
-    unsafe fn mprotect(addr: NonNull<c_void>, len: usize, prot: ProtFlags) -> Result<()>;
+    unsafe fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()>;
 
     /// Reserves a region of virtual address space without committing physical memory.
     ///
@@ -145,7 +145,7 @@ pub trait Mmap {
         addr: Option<usize>,
         len: usize,
         _use_file: bool,
-    ) -> Result<NonNull<c_void>> {
+    ) -> Result<*mut c_void> {
         let mut need_copy = false;
         // Reserve address space with PROT_NONE (no physical memory committed)
         unsafe {

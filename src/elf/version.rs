@@ -106,6 +106,14 @@ struct VersionIndexTable {
     ptr: *const VersionIndex,
 }
 
+impl core::fmt::Debug for VersionIndexTable {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("VersionIndexTable")
+            .field("ptr", &self.ptr)
+            .finish()
+    }
+}
+
 impl VersionIndexTable {
     fn get(&self, sym_idx: usize) -> &VersionIndex {
         unsafe { &*self.ptr.add(sym_idx) }
@@ -250,11 +258,29 @@ struct Version {
     hash: u32,
 }
 
+impl core::fmt::Debug for Version {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Version")
+            .field("name", &self.name)
+            .field("hash", &format_args!("0x{:x}", self.hash))
+            .finish()
+    }
+}
+
 pub(crate) struct ELFVersion {
     version_ids: VersionIndexTable,
     // 因为verdef和verneed的idx不重叠，因此我们可以使用数组将其存起来
     // 这样可以加快之后符号版本号的匹配
     versions: Vec<Version>,
+}
+
+impl core::fmt::Debug for ELFVersion {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ELFVersion")
+            .field("version_ids", &self.version_ids)
+            .field("versions", &self.versions)
+            .finish()
+    }
 }
 
 impl ELFVersion {
@@ -336,6 +362,16 @@ pub(crate) struct SymbolVersion<'a> {
     name: &'a str,
     hash: u32,
     hidden: bool,
+}
+
+impl core::fmt::Debug for SymbolVersion<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SymbolVersion")
+            .field("name", &self.name)
+            .field("hash", &format_args!("0x{:x}", self.hash))
+            .field("hidden", &self.hidden)
+            .finish()
+    }
 }
 
 impl<'a> SymbolVersion<'a> {

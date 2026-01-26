@@ -10,6 +10,7 @@ use crate::{
     elf::{ElfShdr, ElfSymbol},
 };
 use core::ffi::CStr;
+use core::fmt::Debug;
 
 /// ELF string table wrapper
 ///
@@ -91,6 +92,15 @@ pub struct SymbolTable {
     pub(crate) version: Option<super::version::ELFVersion>,
 }
 
+impl Debug for SymbolTable {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SymbolTable")
+            .field("hashtab", &self.hashtab)
+            .field("symtab_ptr", &self.symtab)
+            .finish()
+    }
+}
+
 /// Information about a specific symbol.
 pub struct SymbolInfo<'symtab> {
     /// The symbol name.
@@ -102,6 +112,20 @@ pub struct SymbolInfo<'symtab> {
     /// Optional symbol version information.
     #[cfg(feature = "version")]
     version: Option<super::version::SymbolVersion<'symtab>>,
+}
+
+impl<'symtab> Debug for SymbolInfo<'symtab> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut debug = f.debug_struct("SymbolInfo");
+        debug.field("name", &self.name);
+        #[cfg(feature = "version")]
+        {
+            if let Some(v) = &self.version {
+                debug.field("version", v);
+            }
+        }
+        debug.finish()
+    }
 }
 
 impl<'symtab> SymbolInfo<'symtab> {

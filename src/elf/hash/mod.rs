@@ -12,6 +12,7 @@ use crate::elf::{
     ElfDynamic, ElfDynamicHashTab, ElfShdr, ElfStringTable, ElfSymbol, SymbolTable,
     symbol::SymbolInfo,
 };
+use core::fmt::Debug;
 use custom::CustomHash;
 use gnu::ElfGnuHash;
 use sysv::ElfHash;
@@ -46,6 +47,16 @@ pub(crate) enum HashTable {
     /// This is a fallback implementation that can be used when no standard
     /// hash sections are available.
     Custom(CustomHash),
+}
+
+impl Debug for HashTable {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            HashTable::Gnu(_) => write!(f, "GnuHash"),
+            HashTable::Elf(_) => write!(f, "ElfHash"),
+            HashTable::Custom(_) => write!(f, "CustomHash"),
+        }
+    }
 }
 
 /// Precomputed hash values for symbol lookup optimization.

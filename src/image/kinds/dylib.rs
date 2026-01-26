@@ -230,11 +230,20 @@ where
     }
 
     pub(crate) fn load_dylib_impl(&mut self, mut object: impl ElfReader) -> Result<RawDylib<D>> {
+        #[cfg(feature = "log")]
+        log::debug!("Loading dylib: {}", object.file_name());
+
         // Prepare and validate the ELF header
         let ehdr = self.read_ehdr(&mut object)?;
 
         // Ensure the file is actually a dynamic library
         if !ehdr.is_dylib() {
+            #[cfg(feature = "log")]
+            log::error!(
+                "[{}] Type mismatch: expected dylib, found {:?}",
+                object.file_name(),
+                ehdr.e_type
+            );
             return Err(parse_ehdr_error("file type mismatch"));
         }
 
@@ -243,6 +252,14 @@ where
         // Load the relocated common part
         let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
         let inner = builder.build_dynamic(phdrs)?;
+
+        #[cfg(feature = "log")]
+        log::info!(
+            "Loaded dylib: {} at [0x{:x}-0x{:x}]",
+            inner.name(),
+            inner.base(),
+            inner.base() + inner.mapped_len()
+        );
 
         // Wrap in RawDylib and return
         Ok(RawDylib { inner })

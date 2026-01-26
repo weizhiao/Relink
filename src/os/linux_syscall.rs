@@ -5,12 +5,9 @@ use crate::{
     os::{MapFlags, Mmap, ProtFlags},
 };
 use alloc::borrow::ToOwned;
-use alloc::ffi::CString;
+use alloc::{ffi::CString, format};
+use core::ffi::{c_int, c_void};
 use core::str::FromStr;
-use core::{
-    ffi::{c_int, c_void},
-    ptr::NonNull,
-};
 use syscalls::Sysno;
 /// An implementation of Mmap trait
 pub struct DefaultMmap;
@@ -115,7 +112,7 @@ impl Mmap for DefaultMmap {
         offset: usize,
         fd: Option<isize>,
         need_copy: &mut bool,
-    ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
+    ) -> crate::Result<*mut core::ffi::c_void> {
         let ptr = if let Some(fd) = fd {
             mmap(
                 addr.unwrap_or(0) as _,
@@ -129,7 +126,7 @@ impl Mmap for DefaultMmap {
             *need_copy = true;
             addr.unwrap() as _
         };
-        Ok(unsafe { NonNull::new_unchecked(ptr) })
+        Ok(ptr)
     }
 
     unsafe fn mmap_anonymous(
@@ -137,22 +134,22 @@ impl Mmap for DefaultMmap {
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> crate::Result<core::ptr::NonNull<core::ffi::c_void>> {
+    ) -> crate::Result<*mut core::ffi::c_void> {
         let ptr = mmap_anonymous(addr as _, len, prot, flags)?;
-        Ok(unsafe { NonNull::new_unchecked(ptr) })
+        Ok(ptr)
     }
 
-    unsafe fn munmap(addr: core::ptr::NonNull<core::ffi::c_void>, len: usize) -> crate::Result<()> {
-        munmap(addr.as_ptr(), len)?;
+    unsafe fn munmap(addr: *mut core::ffi::c_void, len: usize) -> crate::Result<()> {
+        munmap(addr, len)?;
         Ok(())
     }
 
     unsafe fn mprotect(
-        addr: core::ptr::NonNull<core::ffi::c_void>,
+        addr: *mut core::ffi::c_void,
         len: usize,
         prot: ProtFlags,
     ) -> crate::Result<()> {
-        mprotect(addr.as_ptr(), len, prot)?;
+        mprotect(addr, len, prot)?;
         Ok(())
     }
 
@@ -160,7 +157,7 @@ impl Mmap for DefaultMmap {
         addr: Option<usize>,
         len: usize,
         use_file: bool,
-    ) -> Result<NonNull<c_void>> {
+    ) -> Result<*mut core::ffi::c_void> {
         let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS;
         let prot = if use_file {
             ProtFlags::PROT_NONE
@@ -168,7 +165,7 @@ impl Mmap for DefaultMmap {
             ProtFlags::PROT_WRITE
         };
         let ptr = mmap_anonymous(addr.unwrap_or(0) as _, len, prot, flags)?;
-        Ok(unsafe { NonNull::new_unchecked(ptr) })
+        Ok(ptr)
     }
 }
 
@@ -207,10 +204,11 @@ impl RawFile {
             target_arch = "loongarch64"
         )))]
         let fd = unsafe {
-            from_io_ret(
-                syscalls::raw_syscall!(Sysno::open, name.as_ptr(), RDONLY, 0),
-                "open failed",
-            )?
+            let res = syscalls::raw_syscall!(Sysno::open, name.as_ptr(), RDONLY, 0);
+            if res > -4096isize as usize {
+                return Err(io_error(format!("open failed: {}", path)));
+            }
+            res
         };
         #[cfg(any(
             target_arch = "aarch64",
@@ -219,10 +217,11 @@ impl RawFile {
         ))]
         let fd = unsafe {
             const AT_FDCWD: core::ffi::c_int = -100;
-            from_io_ret(
-                syscalls::raw_syscall!(Sysno::openat, AT_FDCWD, name.as_ptr(), RDONLY, 0),
-                "openat failed",
-            )?
+            let res = syscalls::raw_syscall!(Sysno::openat, AT_FDCWD, name.as_ptr(), RDONLY, 0);
+            if res > -4096isize as usize {
+                return Err(io_error(format!("openat failed: {}", path)));
+            }
+            res
         };
         Ok(RawFile { fd: fd as _, name })
     }

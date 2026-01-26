@@ -60,6 +60,16 @@ struct ElfExtraData {
     tls_get_addr: extern "C" fn(*const crate::tls::TlsIndex) -> *mut u8,
 }
 
+impl core::fmt::Debug for ElfExtraData {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ElfExtraData")
+            .field("lazy", &self.lazy)
+            .field("relro", &self.relro.is_some())
+            .field("needed_libs", &self.needed_libs)
+            .finish()
+    }
+}
+
 /// A common part of relocated ELF objects.
 ///
 /// This structure represents the common components shared by all relocated
@@ -80,6 +90,16 @@ where
     module: ElfCore<D>,
     /// Extra data needed for relocation
     extra: ElfExtraData,
+}
+
+impl<D> core::fmt::Debug for DynamicImage<D> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DynamicImage")
+            .field("entry", &format_args!("0x{:x}", self.entry))
+            .field("module", &self.module)
+            .field("extra", &self.extra)
+            .finish()
+    }
 }
 
 impl<D> DynamicImage<D> {
@@ -291,6 +311,14 @@ where
         let phdrs_repr = self.create_phdrs(phdrs);
 
         let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &self.segments).unwrap();
+
+        #[cfg(feature = "log")]
+        log::trace!(
+            "[{}] Dynamic info: {:?}",
+            self.name,
+            dynamic
+        );
+
         let relocation = DynamicRelocation::new(
             dynamic.pltrel,
             dynamic.dynrel,
@@ -309,6 +337,11 @@ where
             .iter()
             .map(|needed_lib| symtab.strtab().get_str(needed_lib.get()))
             .collect();
+
+        #[cfg(feature = "log")]
+        if !needed_libs.is_empty() {
+            log::debug!("[{}] Dependencies: {:?}", self.name, needed_libs);
+        }
 
         let init_handler = self.init_fn;
 

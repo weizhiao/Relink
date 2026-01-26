@@ -59,12 +59,25 @@ where
     }
 
     pub(crate) fn load_object_impl(&mut self, mut object: impl ElfReader) -> Result<RawObject<D>> {
+        #[cfg(feature = "log")]
+        log::debug!("Loading object: {}", object.file_name());
+
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
         let shdrs = self.buf.prepare_shdrs_mut(&ehdr, &mut object)?;
         let builder = self
             .inner
             .create_object_builder::<M, Tls>(ehdr, shdrs, object)?;
-        Ok(builder.build())
+        let raw = builder.build();
+
+        #[cfg(feature = "log")]
+        log::info!(
+            "Loaded object: {} at [0x{:x}-0x{:x}]",
+            raw.name(),
+            raw.base(),
+            raw.base() + raw.core.inner.segments.len()
+        );
+
+        Ok(raw)
     }
 }
 

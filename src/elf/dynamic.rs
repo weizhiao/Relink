@@ -6,6 +6,7 @@ use crate::{
     segment::ElfSegments,
 };
 use alloc::vec::Vec;
+use core::fmt::Debug;
 use core::{
     num::NonZeroUsize,
     ops::{Add, AddAssign, Sub, SubAssign},
@@ -319,4 +320,21 @@ pub(crate) struct ElfDynamic {
     pub rpath_off: Option<NonZeroUsize>,
     /// Runtime library search path (overrides RPATH).
     pub runpath_off: Option<NonZeroUsize>,
+}
+
+impl Debug for ElfDynamic {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ElfDynamic")
+            .field("dyn_ptr", &self.dyn_ptr)
+            .field("symtab", &format_args!("0x{:x}", self.symtab))
+            .field("strtab", &format_args!("0x{:x}", self.strtab))
+            .field("bind_now", &self.bind_now)
+            .field("static_tls", &self.static_tls)
+            .field("got_plt", &self.got_plt)
+            .field("needed_libs_count", &self.needed_libs.len())
+            .field("pltrel_count", &self.pltrel.map(|r| r.len()).unwrap_or(0))
+            .field("dynrel_count", &self.dynrel.map(|r| r.len()).unwrap_or(0))
+            .field("relr_count", &self.relr.map(|r| r.len()).unwrap_or(0))
+            .finish()
+    }
 }

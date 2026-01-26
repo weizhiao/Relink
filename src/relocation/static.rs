@@ -35,6 +35,9 @@ impl<D: 'static> RawObject<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
+        #[cfg(feature = "log")]
+        log::debug!("Relocating object: {}", self.core.name());
+
         let mut helper = RelocHelper::new(
             &self.core,
             scope.to_vec(),
@@ -55,7 +58,14 @@ impl<D: 'static> RawObject<D> {
             }
         }
         (self.mprotect)()?;
+
+        #[cfg(feature = "log")]
+        log::trace!("[{}] Executing init functions", self.core.name());
         (self.init)(None, self.init_array);
+
+        #[cfg(feature = "log")]
+        log::info!("Relocation completed for {}", self.core.name());
+
         Ok(unsafe { LoadedCore::from_core(self.core) })
     }
 }

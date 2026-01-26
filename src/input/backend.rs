@@ -119,9 +119,17 @@ impl ElfFile {
     /// - `Ok(ElfFile)` - If the file was successfully opened and is accessible.
     /// - `Err` - If the file could not be opened or accessed.
     pub fn from_path(path: impl AsRef<str>) -> Result<Self> {
-        Ok(ElfFile {
-            inner: RawFile::from_path(path.as_ref())?,
-        })
+        let path = path.as_ref();
+        #[cfg(feature = "log")]
+        log::debug!("Opening ELF file: {}", path);
+
+        let inner = RawFile::from_path(path).map_err(|e| {
+            #[cfg(feature = "log")]
+            log::error!("Failed to open ELF file {}: {:?}", path, e);
+            e
+        })?;
+
+        Ok(ElfFile { inner })
     }
 }
 

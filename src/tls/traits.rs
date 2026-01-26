@@ -2,7 +2,7 @@ use crate::{Result, elf::ElfPhdr};
 use elf::abi::PT_TLS;
 
 /// Information about a TLS segment from ELF headers.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct TlsInfo {
     /// Virtual address of the TLS template in the ELF file.
     pub vaddr: usize,
@@ -14,6 +14,18 @@ pub struct TlsInfo {
     pub align: usize,
     /// The initial TLS data (template).
     pub image: &'static [u8],
+}
+
+impl core::fmt::Debug for TlsInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TlsInfo")
+            .field("vaddr", &format_args!("0x{:x}", self.vaddr))
+            .field("filesz", &self.filesz)
+            .field("memsz", &self.memsz)
+            .field("align", &self.align)
+            .field("image_len", &self.image.len())
+            .finish()
+    }
 }
 
 impl TlsInfo {

@@ -35,12 +35,26 @@ use portable_atomic_util::{Arc, Weak};
 ///
 /// It maintains an `Arc` reference to its dependencies to ensure that required
 /// libraries remain in memory as long as this module is alive.
-#[derive(Debug)]
-pub struct LoadedCore<D> {
-    /// The core ELF module data and metadata.
+pub struct LoadedCore<D = ()> {
     pub(crate) core: ElfCore<D>,
-    /// Shared references to the libraries this module depends on.
     pub(crate) deps: Arc<[LoadedCore<D>]>,
+}
+
+impl<D> Debug for LoadedCore<D> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LoadedCore")
+            .field("name", &self.core.name())
+            .field("base", &format_args!("0x{:x}", self.core.base()))
+            .field(
+                "deps",
+                &self
+                    .deps
+                    .iter()
+                    .map(|d| d.name())
+                    .collect::<alloc::vec::Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 impl<D> Clone for LoadedCore<D> {
@@ -210,8 +224,8 @@ impl<D> LoadedCore<D> {
     pub unsafe fn new_unchecked<Tls: TlsResolver>(
         name: String,
         phdrs: &'static [ElfPhdr],
-        memory: (NonNull<c_void>, usize),
-        munmap: unsafe fn(NonNull<c_void>, usize) -> Result<()>,
+        memory: (*mut c_void, usize),
+        munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
         tls_tp_offset: Option<isize>,
         user_data: D,
     ) -> Result<Self> {
@@ -638,7 +652,7 @@ impl<D> ElfCore<D> {
         tls_unregister: fn(usize),
         user_data: D,
     ) -> Self {
-        segments.offset = (segments.memory.as_ptr() as usize).wrapping_sub(base);
+        segments.offset = (segments.memory as usize).wrapping_sub(base);
         let dynamic = ElfDynamic::new(dynamic_ptr, &segments).unwrap();
         Self {
             inner: Arc::new(CoreInner {
@@ -670,7 +684,9 @@ impl<D> Debug for ElfCore<D> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfCore")
             .field("name", &self.inner.name)
-            .field("short_name", &self.short_name())
+            .field("base", &format_args!("0x{:x}", self.base()))
+            .field("mapped_len", &self.mapped_len())
+            .field("tls_mod_id", &self.tls_mod_id())
             .finish()
     }
 }
