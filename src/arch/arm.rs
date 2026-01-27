@@ -30,7 +30,7 @@ pub const REL_COPY: u32 = R_ARM_COPY;
 /// TLS TPOFF relocation type - set to TLS offset relative to thread pointer.
 pub const REL_TPOFF: u32 = R_ARM_TLS_TPOFF32;
 /// TLSDESC relocation type - set to a function pointer and an argument.
-pub const REL_TLSDESC: u32 = 0;
+pub const REL_TLSDESC: u32 = 0xffff_ffff;
 
 /// Get the current thread pointer using architecture-specific register.
 #[inline(always)]
@@ -62,7 +62,6 @@ pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
 /// # Safety
 /// This function uses naked assembly and must be called with the correct
 /// stack layout set up by the PLT stub code.
-#[cfg(target_feature = "vfp2")]
 #[unsafe(naked)]
 pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
@@ -70,48 +69,34 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         // sp has original lr (4 bytes)
         // push r0-r4 (5 regs, 20 bytes). sp aligned to 8 bytes (aligned - 24).
         push {{r0, r1, r2, r3, r4}}
-        vpush {{d0, d1, d2, d3, d4, d5, d6, d7}}
-        
+        ",
+        #[cfg(target_feature = "vfp2")]
+        "vpush {{d0, d1, d2, d3, d4, d5, d6, d7}}",
+        "
         // r0 = link_map (GOT[1])
-        ldr r0, [lr, #-4]
+        // Case for thumb-1 compatibility: mov + sub + ldr
+        mov r0, lr
+        subs r0, r0, #4
+        ldr r0, [r0]
         
         // r1 = index
-        add r1, lr, #4
-        sub r1, ip, r1
-        lsr r1, r1, #2
+        mov r1, lr
+        adds r1, r1, #4
+        mov r2, ip
+        subs r1, r2, r1
+        lsrs r1, r1, #2
         
-        blx {0}
+        bl {fixup}
         
         mov ip, r0
-        
-        vpop {{d0, d1, d2, d3, d4, d5, d6, d7}}
-        pop {{r0, r1, r2, r3, r4, lr}}
-        bx ip
         ",
-        sym crate::relocation::dl_fixup,
-    )
-}
-
-#[cfg(not(target_feature = "vfp2"))]
-#[unsafe(naked)]
-pub(crate) extern "C" fn dl_runtime_resolve() {
-    core::arch::naked_asm!(
+        #[cfg(target_feature = "vfp2")]
+        "vpop {{d0, d1, d2, d3, d4, d5, d6, d7}}",
         "
-        push {{r0, r1, r2, r3, r4}}
-        
-        ldr r0, [lr, #-4]
-        
-        add r1, lr, #4
-        sub r1, ip, r1
-        lsr r1, r1, #2
-        
-        blx {0}
-        
-        mov ip, r0
-        pop {{r0, r1, r2, r3, r4, lr}}
+ 		pop {{r0, r1, r2, r3, r4, lr}}
         bx ip
         ",
-        sym crate::relocation::dl_fixup,
+        fixup = sym crate::relocation::dl_fixup,
     )
 }
 

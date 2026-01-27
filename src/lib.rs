@@ -102,6 +102,7 @@ mod loader;
 pub mod os;
 pub mod relocation;
 mod segment;
+mod sync;
 pub mod tls;
 
 pub(crate) use error::*;

@@ -5,15 +5,11 @@ use crate::{
     input::ElfReader,
     os::{DefaultMmap, Mmap},
     segment::{ElfSegments, SegmentBuilder, program::ProgramSegments, section::SectionSegments},
+    sync::Arc,
     tls::{DefaultTlsResolver, TlsResolver},
 };
 use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
 use core::marker::PhantomData;
-
-#[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::Arc;
-#[cfg(feature = "portable-atomic")]
-use portable_atomic_util::Arc;
 
 pub(crate) struct ElfBuf {
     buf: Vec<u8>,
@@ -137,7 +133,47 @@ impl LoadHook for () {
     }
 }
 
-pub(crate) type FnHandler = Arc<dyn Fn(Option<fn()>, Option<&[fn()]>)>;
+/// Context provided to the initialization/finalization handler.
+pub struct FnContext<'a> {
+    func: Option<fn()>,
+    func_array: Option<&'a [fn()]>,
+}
+
+impl<'a> FnContext<'a> {
+    pub(crate) fn new(func: Option<fn()>, func_array: Option<&'a [fn()]>) -> Self {
+        Self { func, func_array }
+    }
+
+    /// Returns the single initialization/finalization function.
+    pub fn func(&self) -> Option<fn()> {
+        self.func
+    }
+
+    /// Returns the array of initialization/finalization functions.
+    pub fn func_array(&self) -> Option<&[fn()]> {
+        self.func_array
+    }
+}
+
+/// Handler trait for initialization and finalization functions.
+pub trait FnHandler: Send + Sync {
+    /// Executes the handler with the provided context.
+    fn call(&self, ctx: &FnContext);
+}
+
+impl<F> FnHandler for F
+where
+    F: Fn(&FnContext) + Send + Sync,
+{
+    fn call(&self, ctx: &FnContext) {
+        (self)(ctx)
+    }
+}
+
+#[cfg(not(feature = "portable-atomic"))]
+pub(crate) type DynFnHandler = Arc<dyn FnHandler>;
+#[cfg(feature = "portable-atomic")]
+pub(crate) type DynFnHandler = Arc<Box<dyn FnHandler>>;
 
 /// Context provided to the user data generator.
 pub struct UserDataLoaderContext<'a> {
@@ -211,8 +247,8 @@ where
 }
 
 pub(crate) struct LoaderInner<H, D> {
-    init_fn: FnHandler,
-    fini_fn: FnHandler,
+    init_fn: DynFnHandler,
+    fini_fn: DynFnHandler,
     hook: H,
     force_static_tls: bool,
     user_data_loader: Box<dyn Fn(&UserDataLoaderContext) -> D>,
@@ -221,11 +257,20 @@ pub(crate) struct LoaderInner<H, D> {
 impl Loader<DefaultMmap, (), (), DefaultTlsResolver> {
     /// Creates a new `Loader` with default settings.
     pub fn new() -> Self {
-        let c_abi = Arc::new(|func: Option<fn()>, func_array: Option<&[fn()]>| {
-            func.iter()
-                .chain(func_array.unwrap_or(&[]).iter())
+        #[cfg(not(feature = "portable-atomic"))]
+        let c_abi: DynFnHandler = Arc::new(|ctx: &FnContext| {
+            ctx.func()
+                .iter()
+                .chain(ctx.func_array().unwrap_or(&[]).iter())
                 .for_each(|init| unsafe { core::mem::transmute::<_, &extern "C" fn()>(init) }());
         });
+        #[cfg(feature = "portable-atomic")]
+        let c_abi: DynFnHandler = Arc::new(Box::new(|ctx: &FnContext| {
+            ctx.func()
+                .iter()
+                .chain(ctx.func_array().unwrap_or(&[]).iter())
+                .for_each(|init| unsafe { core::mem::transmute::<_, &extern "C" fn()>(init) }());
+        }));
         Self {
             buf: ElfBuf::new(),
             inner: LoaderInner {
@@ -254,8 +299,18 @@ where
     ///
     /// Note: glibc passes `argc`, `argv`, and `envp` to functions in `.init_array`
     /// as a non-standard extension.
-    pub fn with_init(mut self, init_fn: FnHandler) -> Self {
-        self.inner.init_fn = init_fn;
+    pub fn with_init<F>(mut self, init_fn: F) -> Self
+    where
+        F: FnHandler + 'static,
+    {
+        #[cfg(not(feature = "portable-atomic"))]
+        {
+            self.inner.init_fn = Arc::new(init_fn);
+        }
+        #[cfg(feature = "portable-atomic")]
+        {
+            self.inner.init_fn = Arc::new(Box::new(init_fn));
+        }
         self
     }
 
@@ -263,8 +318,18 @@ where
     ///
     /// This handler is responsible for calling the finalization functions
     /// (e.g., `.fini` and `.fini_array`) of the loaded ELF object.
-    pub fn with_fini(mut self, fini_fn: FnHandler) -> Self {
-        self.inner.fini_fn = fini_fn;
+    pub fn with_fini<F>(mut self, fini_fn: F) -> Self
+    where
+        F: FnHandler + 'static,
+    {
+        #[cfg(not(feature = "portable-atomic"))]
+        {
+            self.inner.fini_fn = Arc::new(fini_fn);
+        }
+        #[cfg(feature = "portable-atomic")]
+        {
+            self.inner.fini_fn = Arc::new(Box::new(fini_fn));
+        }
         self
     }
 

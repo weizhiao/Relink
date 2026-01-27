@@ -9,7 +9,7 @@
 <a href="https://crates.io/crates/elf_loader"><img src="https://img.shields.io/crates/v/elf_loader.svg" alt="Crates.io"></a>
 <a href="https://crates.io/crates/elf_loader"><img src="https://img.shields.io/crates/d/elf_loader.svg" alt="Crates.io"></a>
 <a href="https://docs.rs/elf_loader"><img src="https://docs.rs/elf_loader/badge.svg" alt="Docs.rs"></a>
-<img src="https://img.shields.io/badge/rust-1.88.0+-blue.svg" alt="Min. Rust Version">
+<img src="https://img.shields.io/badge/rust-1.93.0+-blue.svg" alt="Min. Rust Version">
 <a href="https://github.com/weizhiao/rust-elfloader/actions"><img src="https://github.com/weizhiao/rust-elfloader/actions/workflows/rust.yml/badge.svg" alt="Build Status"></a>
 <img src="https://img.shields.io/crates/l/elf_loader.svg" alt="License MIT/Apache-2.0">
 </p>

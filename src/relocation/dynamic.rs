@@ -1,4 +1,5 @@
 //! Relocation of elf objects
+use crate::sync::Arc;
 use crate::{
     Result,
     arch::*,
@@ -10,11 +11,6 @@ use crate::{
 };
 use alloc::vec::Vec;
 use core::{num::NonZeroUsize, ptr::null_mut};
-
-#[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::Arc;
-#[cfg(feature = "portable-atomic")]
-use portable_atomic_util::Arc;
 
 /// LazyScope holds both the local scope lookup and an optional parent scope
 /// This avoids requiring D to be 'static by storing weak references to libraries

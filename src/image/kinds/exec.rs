@@ -1,3 +1,4 @@
+use crate::sync::Arc;
 /// Executable file handling
 ///
 /// This module provides functionality for working with executable ELF files
@@ -17,11 +18,6 @@ use crate::{
 use alloc::{string::String, vec::Vec};
 use core::fmt::Debug;
 use elf::abi::PT_DYNAMIC;
-
-#[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::Arc;
-#[cfg(feature = "portable-atomic")]
-use portable_atomic_util::Arc;
 
 #[derive(Clone)]
 pub(crate) struct StaticImage<D> {

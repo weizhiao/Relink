@@ -4,6 +4,7 @@ use crate::{
     image::{ElfCore, LoadedCore},
     relocate_error,
     relocation::{Relocatable, RelocationContext, RelocationHandler, SymbolLookup},
+    sync::Arc,
     tls::TlsDescDynamicArg,
 };
 use alloc::{boxed::Box, format, string::ToString, vec, vec::Vec};
@@ -12,11 +13,6 @@ use core::{
     ptr::null,
 };
 use elf::abi::STT_GNU_IFUNC;
-
-#[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::Arc;
-#[cfg(feature = "portable-atomic")]
-use portable_atomic_util::Arc;
 
 /// Internal context for managing relocation state and handlers.
 pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized> {

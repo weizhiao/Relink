@@ -66,7 +66,7 @@ where
                     // Write resolver function address and TPOFF
                     segments.write(
                         rel.r_offset(),
-                        RelocValue::new(tlsdesc_resolver_static as usize),
+                        RelocValue::new(tlsdesc_resolver_static as *const () as usize),
                     );
                     segments.write(rel.r_offset() + 8, tpoff);
                     return true;
@@ -89,7 +89,7 @@ where
 
                         segments.write(
                             rel.r_offset(),
-                            RelocValue::new(tlsdesc_resolver_dynamic as usize),
+                            RelocValue::new(tlsdesc_resolver_dynamic as *const () as usize),
                         );
                         segments.write(rel.r_offset() + 8, RelocValue::new(arg_ptr));
                         return true;

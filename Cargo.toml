@@ -17,7 +17,7 @@ authors = ["wzhao <1207410841@qq.com>"]
 edition = "2024"
 repository = "https://github.com/weizhiao/elf_loader"
 license = "MIT/Apache-2.0"
-rust-version = "1.88.0"
+rust-version = "1.93.0"
 
 [workspace]
 members = ["crates/windows-elf-loader", "crates/mini-loader", "tools/gen-elf"]
@@ -73,7 +73,7 @@ optional = true
 features = ["alloc"]
 
 [dependencies.spin]
-version = "0.9"
+version = "0.10"
 default-features = false
 features = ["mutex", "rwlock", "spin_mutex"]
 
@@ -110,7 +110,11 @@ version = []
 # Enable logging.
 log = ["dep:log"]
 # support target without native pointer size atomic operation
-portable-atomic = ["dep:portable-atomic", "dep:portable-atomic-util"]
+portable-atomic = [
+	"dep:portable-atomic",
+	"dep:portable-atomic-util",
+	"spin/portable_atomic",
+]
 
 [[example]]
 name = "relocate_dylib"

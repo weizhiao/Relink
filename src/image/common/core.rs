@@ -8,27 +8,17 @@ use crate::{
     Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolInfo, SymbolTable},
     image::{Symbol, common::DynamicInfo},
-    loader::FnHandler,
+    loader::{DynFnHandler, FnContext},
     relocation::SymDef,
     segment::ElfSegments,
+    sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{TlsDescDynamicArg, TlsInfo, TlsResolver},
 };
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::{
-    ffi::c_void,
-    fmt::Debug,
-    marker::PhantomData,
-    ptr::NonNull,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use core::{ffi::c_void, fmt::Debug, marker::PhantomData, ptr::NonNull};
 use elf::abi::{DF_STATIC_TLS, DT_FLAGS, PT_DYNAMIC, PT_GNU_EH_FRAME, PT_TLS};
-
-#[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::{Arc, Weak};
-#[cfg(feature = "portable-atomic")]
-use portable_atomic_util::{Arc, Weak};
 
 /// A fully loaded and relocated ELF module.
 ///
@@ -440,7 +430,7 @@ pub(crate) struct CoreInner<D = ()> {
     pub(crate) fini_array: Option<&'static [fn()]>,
 
     /// Custom finalization handler
-    pub(crate) fini_handler: FnHandler,
+    pub(crate) fini_handler: DynFnHandler,
 
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo>>,
@@ -468,7 +458,7 @@ impl<D> Drop for CoreInner<D> {
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed) {
-            (self.fini_handler)(self.fini, self.fini_array);
+            self.fini_handler.call(&FnContext::new(self.fini, self.fini_array));
         }
         if let Some(mod_id) = self.tls_mod_id {
             (self.tls_unregister)(mod_id);
@@ -689,9 +679,18 @@ impl<D> ElfCore<D> {
                 tls_unregister,
                 tls_desc_args: Box::new([]),
                 segments,
-                fini: None,
+                                fini: None,
                 fini_array: None,
-                fini_handler: Arc::new(|_, _| {}),
+                fini_handler: {
+                    #[cfg(not(feature = "portable-atomic"))]
+                    {
+                        Arc::new(|_: &FnContext| {})
+                    }
+                    #[cfg(feature = "portable-atomic")]
+                    {
+                        Arc::new(Box::new(|_: &FnContext| {}))
+                    }
+                },
                 user_data,
             }),
         }

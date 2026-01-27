@@ -87,8 +87,8 @@ pub fn get_symbol_lookup() -> (
     Arc<dyn Fn(&str) -> Option<*const ()> + Send + Sync>,
 ) {
     let symbol_map = HashMap::from([
-        (EXTERNAL_FUNC_NAME, external_func as usize),
-        (EXTERNAL_FUNC_NAME2, external_func as usize),
+        (EXTERNAL_FUNC_NAME, external_func as *const () as usize),
+        (EXTERNAL_FUNC_NAME2, external_func as *const () as usize),
         (EXTERNAL_VAR_NAME, &raw const EXTERNAL_VAR as usize),
     ]);
 

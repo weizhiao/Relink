@@ -64,6 +64,6 @@ pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
     unsafe {
         got.add(DYLIB_OFFSET).write(dylib);
         got.add(RESOLVE_FUNCTION_OFFSET)
-            .write(dl_runtime_resolve as usize);
+            .write(dl_runtime_resolve as *const () as usize);
     }
 }

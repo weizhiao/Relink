@@ -8,19 +8,15 @@ use crate::{
     LoadHook, Loader, Result,
     image::{ElfCore, LoadedCore, builder::ObjectBuilder, common::CoreInner},
     input::{ElfReader, IntoElfReader},
-    loader::FnHandler,
+    loader::DynFnHandler,
     os::Mmap,
     relocation::{Relocatable, RelocationHandler, Relocator, StaticRelocation, SymbolLookup},
     segment::section::PltGotSection,
+    sync::{Arc, AtomicBool},
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{borrow::Borrow, fmt::Debug, ops::Deref, sync::atomic::AtomicBool};
-
-#[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::Arc;
-#[cfg(feature = "portable-atomic")]
-use portable_atomic_util::Arc;
+use core::{borrow::Borrow, fmt::Debug, ops::Deref};
 
 impl<M, H, D, Tls> Loader<M, H, D, Tls>
 where
@@ -117,7 +113,7 @@ impl<Tls: TlsResolver, D> ObjectBuilder<Tls, D> {
             mprotect: self.mprotect,
             init_array: self.init_array,
             init: self.init_fn,
-            tls_get_addr: Tls::tls_get_addr as usize,
+            tls_get_addr: Tls::tls_get_addr as *const () as usize,
         }
     }
 }
@@ -141,7 +137,7 @@ pub struct RawObject<D = ()> {
     pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
 
     /// Initialization function handler.
-    pub(crate) init: FnHandler,
+    pub(crate) init: DynFnHandler,
 
     /// Initialization function array.
     pub(crate) init_array: Option<&'static [fn()]>,

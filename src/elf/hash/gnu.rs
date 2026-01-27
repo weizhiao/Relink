@@ -192,9 +192,10 @@ impl ElfHashTable for ElfGnuHash {
         }
 
         // Traverse the chain to find the symbol
+        #[cfg(feature = "version")]
         let mut dynsym_idx = chain_start_idx;
-        let mut cur_chain = unsafe { hashtab.chains.add(dynsym_idx - table_start_idx) };
-        let mut cur_symbol_ptr = unsafe { table.symtab.add(dynsym_idx) };
+        let mut cur_chain = unsafe { hashtab.chains.add(chain_start_idx - table_start_idx) };
+        let mut cur_symbol_ptr = unsafe { table.symtab.add(chain_start_idx) };
 
         loop {
             let chain_hash = unsafe { cur_chain.read() };
@@ -223,7 +224,10 @@ impl ElfHashTable for ElfGnuHash {
             // Move to the next entry in the chain
             cur_chain = unsafe { cur_chain.add(1) };
             cur_symbol_ptr = unsafe { cur_symbol_ptr.add(1) };
-            dynsym_idx += 1;
+            #[cfg(feature = "version")]
+            {
+                dynsym_idx += 1;
+            }
         }
 
         // Symbol not found in the chain

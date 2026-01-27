@@ -1,7 +1,9 @@
+use crate::sync::{Arc, AtomicBool};
 use crate::{
     LoadHook, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfRelType, SymbolTable},
     image::{ElfCore, ImageBuilder, common::CoreInner},
+    loader::FnContext,
     os::Mmap,
     relocation::{DynamicRelocation, SymbolLookup},
     segment::ELFRelro,
@@ -11,13 +13,7 @@ use alloc::{boxed::Box, vec::Vec};
 use core::{
     ffi::CStr,
     ptr::{NonNull, null},
-    sync::atomic::AtomicBool,
 };
-
-#[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::Arc;
-#[cfg(feature = "portable-atomic")]
-use portable_atomic_util::Arc;
 
 pub(crate) struct DynamicInfo {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
@@ -371,7 +367,9 @@ where
                 relocation,
 
                 // Create initialization function
-                init: Box::new(move || init_handler(dynamic.init_fn, dynamic.init_array_fn)),
+                init: Box::new(move || {
+                    init_handler.call(&FnContext::new(dynamic.init_fn, dynamic.init_array_fn))
+                }),
 
                 // Store GOT pointer
                 got_plt: dynamic.got_plt,

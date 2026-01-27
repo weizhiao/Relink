@@ -1,5 +1,6 @@
 use crate::{
     Result,
+    sync::{AtomicUsize, Ordering},
     tls::{TlsIndex, TlsInfo, TlsResolver},
     tls_error,
 };
@@ -11,7 +12,7 @@ use alloc::{
 };
 use core::{
     alloc::Layout,
-    sync::atomic::{AtomicUsize, Ordering},
+    ffi::c_void,
 };
 use spin::{Mutex, RwLock};
 
@@ -284,7 +285,7 @@ type ThreadId = usize;
 /// We use Box<ThreadDtv> to ensure the pointer remains stable even if the map rebalances/grows.
 static THREAD_DTVS: Mutex<BTreeMap<ThreadId, Box<ThreadDtv>>> = Mutex::new(BTreeMap::new());
 
-unsafe extern "C" fn dtv_destructor(_ptr: *mut core::ffi::c_void) {
+unsafe extern "C" fn dtv_destructor(_ptr: *mut c_void) {
     cleanup_current_thread_tls();
 }
 
@@ -326,6 +327,12 @@ pub struct DefaultTlsResolver;
 impl DefaultTlsResolver {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Get the current thread pointer.
+    /// This uses architecture-specific methods to retrieve the thread pointer.
+    pub fn get_thread_pointer() -> *mut u8 {
+        unsafe { crate::arch::get_thread_pointer() }
     }
 
     /// Get the raw pointer to the TLS data for the current thread and a specific module.

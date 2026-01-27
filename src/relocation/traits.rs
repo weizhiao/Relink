@@ -3,13 +3,9 @@ use crate::{
     Result,
     elf::ElfRelType,
     image::{ElfCore, LoadedCore},
+    sync::Arc,
 };
 use alloc::{boxed::Box, vec::Vec};
-
-#[cfg(not(feature = "portable-atomic"))]
-use alloc::sync::Arc;
-#[cfg(feature = "portable-atomic")]
-use portable_atomic_util::Arc;
 
 /// A trait for looking up symbols during relocation.
 ///

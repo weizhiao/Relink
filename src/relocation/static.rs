@@ -3,6 +3,7 @@ use crate::{
     arch::StaticRelocator,
     elf::ElfRelType,
     image::{LoadedCore, RawObject},
+    loader::FnContext,
     relocation::{RelocHelper, RelocationHandler, SymbolLookup},
     segment::section::PltGotSection,
 };
@@ -69,7 +70,7 @@ impl<D: 'static> RawObject<D> {
 
         #[cfg(feature = "log")]
         log::trace!("[{}] Executing init functions", self.core.name());
-        (self.init)(None, self.init_array);
+        self.init.call(&FnContext::new(None, self.init_array));
 
         #[cfg(feature = "log")]
         log::info!("Relocation completed for {}", self.core.name());
