@@ -156,6 +156,13 @@ impl<D> DynamicImage<D> {
 }
 
 /// Lazy binding fixup function called by PLT (Procedure Linkage Table)
+///
+/// # Safety
+/// This function is called from assembly (dl_runtime_resolve).
+/// The `dylib` parameter must point to a `CoreInner<D>` structure.
+/// Since `CoreInner` is `#[repr(C)]` and `user_data: D` is at the end,
+/// it is safe to treat any `&CoreInner<D>` as `&CoreInner<()>`.
+#[allow(improper_ctypes_definitions)]
 pub(crate) unsafe extern "C" fn dl_fixup(dylib: &CoreInner, rela_idx: usize) -> usize {
     // Get the relocation entry for this function call
     let dynamic_info = dylib.dynamic_info.as_ref().expect("dynamic_info missing");

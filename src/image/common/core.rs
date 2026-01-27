@@ -422,6 +422,7 @@ impl<D> LoadedCore<D> {
 }
 
 /// Inner structure for ElfCore
+#[repr(C)]
 pub(crate) struct CoreInner<D = ()> {
     /// Indicates whether the component has been initialized
     pub(crate) is_init: AtomicBool,
@@ -441,9 +442,6 @@ pub(crate) struct CoreInner<D = ()> {
     /// Custom finalization handler
     pub(crate) fini_handler: FnHandler,
 
-    /// User-defined data
-    pub(crate) user_data: D,
-
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo>>,
 
@@ -461,6 +459,9 @@ pub(crate) struct CoreInner<D = ()> {
 
     /// Memory segments
     pub(crate) segments: ElfSegments,
+
+    /// User-defined data
+    pub(crate) user_data: D,
 }
 
 impl<D> Drop for CoreInner<D> {
