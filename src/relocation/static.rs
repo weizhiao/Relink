@@ -8,6 +8,7 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 
+
 pub(crate) struct StaticRelocation {
     relocation: Box<[&'static [ElfRelType]]>,
 }
@@ -45,6 +46,7 @@ impl<D: 'static> RawObject<D> {
             post_find,
             pre_handler,
             post_handler,
+            self.tls_get_addr,
         );
         for reloc in self.relocation.relocation.iter() {
             for rel in *reloc {
@@ -57,6 +59,12 @@ impl<D: 'static> RawObject<D> {
                 }
             }
         }
+
+        // Set TLS descriptor arguments collected during relocation
+        unsafe {
+            self.core.set_tls_desc_args(helper.tls_desc_args);
+        }
+
         (self.mprotect)()?;
 
         #[cfg(feature = "log")]

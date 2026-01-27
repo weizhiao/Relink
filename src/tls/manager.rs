@@ -210,6 +210,12 @@ impl ThreadDtv {
 
     /// Retrieve the pointer for a specific module, allocating if necessary.
     fn get_or_allocate(&mut self, mod_id: usize) -> Option<*mut u8> {
+        // Sync with global generation first to cleanup stale modules
+        let global_gen = GLOBAL_GENERATION.load(Ordering::Acquire);
+        if self.generation < global_gen {
+            self.synchronize(global_gen);
+        }
+
         // Ensure DTV is large enough
         if mod_id >= self.dtv.len() {
             self.dtv.resize_with(mod_id + 1, || None);
@@ -243,6 +249,25 @@ impl ThreadDtv {
         self.dtv[mod_id] = Some(DtvEntry::Allocated { ptr, layout });
 
         Some(ptr)
+    }
+
+    fn get(&self, mod_id: usize) -> Option<*mut u8> {
+        let entry = self.dtv.get(mod_id)?.as_ref()?;
+
+        // If our DTV is stale, we check if this specific module has been updated.
+        let global_gen = GLOBAL_GENERATION.load(Ordering::Acquire);
+        if self.generation < global_gen {
+            let registry = MODULE_REGISTRY.read();
+            match registry.get(mod_id) {
+                Some(slot) if slot.generation <= self.generation => {
+                    // This module hasn't been changed since our last sync,
+                    // so the pointer in our DTV is still valid.
+                }
+                _ => return None,
+            }
+        }
+
+        Some(entry.ptr())
     }
 }
 
@@ -302,11 +327,31 @@ impl DefaultTlsResolver {
     pub fn new() -> Self {
         Self
     }
-}
 
-impl Default for DefaultTlsResolver {
-    fn default() -> Self {
-        Self::new()
+    /// Get the raw pointer to the TLS data for the current thread and a specific module.
+    ///
+    /// This will automatically synchronize the thread's TLS state and allocate the
+    /// TLS block if it hasn't been initialized yet.
+    pub fn get_ptr(mod_id: usize) -> Option<*mut u8> {
+        with_current_dtv(|dtv| dtv.get(mod_id))
+    }
+
+    /// Get the TLS data as a slice for the current thread and a specific module.
+    ///
+    /// This will automatically synchronize the thread's TLS state and allocate the
+    /// TLS block if it hasn't been initialized yet.
+    pub fn get_tls_data(mod_id: usize) -> Option<&'static [u8]> {
+        let memsz = get_module_template(mod_id)?.memsz;
+        Self::get_ptr(mod_id).map(|ptr| unsafe { core::slice::from_raw_parts(ptr, memsz) })
+    }
+
+    /// Get the mutable TLS data as a slice for the current thread and a specific module.
+    ///
+    /// This will automatically synchronize the thread's TLS state and allocate the
+    /// TLS block if it hasn't been initialized yet.
+    pub fn get_tls_data_mut(mod_id: usize) -> Option<&'static mut [u8]> {
+        let memsz = get_module_template(mod_id)?.memsz;
+        Self::get_ptr(mod_id).map(|ptr| unsafe { core::slice::from_raw_parts_mut(ptr, memsz) })
     }
 }
 
@@ -333,13 +378,8 @@ impl TlsResolver for DefaultTlsResolver {
         let ti = unsafe { &*ti };
 
         with_current_dtv(|dtv| {
-            // Sync with global generation first to cleanup stale modules
-            let global_gen = GLOBAL_GENERATION.load(Ordering::Acquire);
-            if dtv.generation < global_gen {
-                dtv.synchronize(global_gen);
-            }
-
-            // Ensure the module's TLS block is allocated for this thread
+            // Ensure the module's TLS block is allocated for this thread.
+            // get_or_allocate now handles synchronization internally.
             match dtv.get_or_allocate(ti.ti_module) {
                 Some(base_ptr) => {
                     // Return address: Base of block + Offset

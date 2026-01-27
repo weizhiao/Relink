@@ -142,13 +142,13 @@ impl<'symtab> SymbolInfo<'symtab> {
 
     /// Returns the name of the symbol.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &'symtab str {
         self.name
     }
 
     /// Returns the C-style name of the symbol.
     #[inline]
-    pub fn cname(&self) -> Option<&CStr> {
+    pub fn cname(&self) -> Option<&'symtab CStr> {
         self.cname
     }
 

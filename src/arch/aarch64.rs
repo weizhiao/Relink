@@ -29,6 +29,8 @@ pub const REL_IRELATIVE: u32 = R_AARCH64_IRELATIVE;
 pub const REL_COPY: u32 = R_AARCH64_COPY;
 /// TLS TPOFF relocation type - set to TLS offset relative to thread pointer.
 pub const REL_TPOFF: u32 = R_AARCH64_TLS_TPREL;
+/// TLSDESC relocation type - set to a function pointer and an argument.
+pub const REL_TLSDESC: u32 = R_AARCH64_TLSDESC;
 
 /// Get the current thread pointer using architecture-specific register.
 #[inline(always)]
@@ -146,6 +148,83 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
     )
 }
 
+/// Static TLSDESC resolver for AArch64.
+///
+/// This function is called for TLSDESC relocations when the symbol is
+/// resolved to a static offset. It returns the offset stored in the
+/// second word of the descriptor.
+///
+/// According to the AArch64 TLSDESC ABI:
+/// - x0: address of the TLSDESC structure
+/// - returns: offset in x0
+/// - All other registers preserved.
+#[unsafe(naked)]
+pub(crate) extern "C" fn tlsdesc_resolver_static() {
+    core::arch::naked_asm!("ldr x0, [x0, #8]", "ret");
+}
+
+/// Dynamic TLSDESC resolver for AArch64.
+///
+/// According to the AArch64 TLSDESC ABI:
+/// - x0: address of the TLSDESC structure
+/// - [x0, #8]: pointer to TlsDescDynamicArg
+/// - returns: offset in x0 (addr - TP)
+/// - All other registers preserved.
+#[unsafe(naked)]
+pub(crate) extern "C" fn tlsdesc_resolver_dynamic() {
+    core::arch::naked_asm!(
+        "
+        // Save all registers that must be preserved.
+        // x0 is the descriptor address, we need it but can clobber it for return.
+        // x1-x18 must be preserved.
+        // x30 (LR) must be preserved around the call.
+        // q0-q7 must be preserved.
+        
+        sub sp, sp, #288
+        stp x1, x2, [sp, #0]
+        stp x3, x4, [sp, #16]
+        stp x5, x6, [sp, #32]
+        stp x7, x8, [sp, #48]
+        stp x9, x10, [sp, #64]
+        stp x11, x12, [sp, #80]
+        stp x13, x14, [sp, #96]
+        stp x15, x16, [sp, #112]
+        stp x17, x18, [sp, #128]
+        str x30,      [sp, #144]
+        stp q0, q1, [sp, #160]
+        stp q2, q3, [sp, #192]
+        stp q4, q5, [sp, #224]
+        stp q6, q7, [sp, #256]
+
+        ldr x1, [x0, #8] // Get TlsDescDynamicArg pointer
+        ldr x16, [x1]    // Get tls_get_addr pointer
+        add x0, x1, #8   // Get pointer to TlsIndex (first arg of tls_get_addr)
+        blr x16          // Call tls_get_addr
+        
+        mrs x1, tpidr_el0
+        sub x0, x0, x1
+        // x0 now contains the desired offset.
+        
+        ldp q6, q7, [sp, #256]
+        ldp q4, q5, [sp, #224]
+        ldp q2, q3, [sp, #192]
+        ldp q0, q1, [sp, #160]
+        ldr x30,      [sp, #144]
+        ldp x17, x18, [sp, #128]
+        ldp x15, x16, [sp, #112]
+        ldp x13, x14, [sp, #96]
+        ldp x11, x12, [sp, #80]
+        ldp x9, x10, [sp, #64]
+        ldp x7, x8, [sp, #48]
+        ldp x5, x6, [sp, #32]
+        ldp x3, x4, [sp, #16]
+        ldp x1, x2, [sp, #0]
+        add sp, sp, #288
+        ret
+        ",
+    )
+}
+
 /// Map aarch64 relocation type to human readable name
 pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {
@@ -156,6 +235,8 @@ pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
         R_AARCH64_JUMP_SLOT => "R_AARCH64_JUMP_SLOT",
         R_AARCH64_IRELATIVE => "R_AARCH64_IRELATIVE",
         R_AARCH64_COPY => "R_AARCH64_COPY",
+        R_AARCH64_TLS_TPREL => "R_AARCH64_TLS_TPREL",
+        R_AARCH64_TLSDESC => "R_AARCH64_TLSDESC",
         _ => "UNKNOWN",
     }
 }

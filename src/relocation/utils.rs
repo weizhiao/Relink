@@ -4,8 +4,9 @@ use crate::{
     image::{ElfCore, LoadedCore},
     relocate_error,
     relocation::{Relocatable, RelocationContext, RelocationHandler, SymbolLookup},
+    tls::TlsDescDynamicArg,
 };
-use alloc::{format, string::ToString, vec, vec::Vec};
+use alloc::{boxed::Box, format, string::ToString, vec, vec::Vec};
 use core::{
     ops::{Add, Sub},
     ptr::null,
@@ -26,6 +27,8 @@ pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Size
     pub(crate) pre_handler: &'find PreH,
     pub(crate) post_handler: &'find PostH,
     pub(crate) dependency_flags: Vec<bool>,
+    pub(crate) tls_get_addr: usize,
+    pub(crate) tls_desc_args: Vec<Box<TlsDescDynamicArg>>,
 }
 
 impl<'find, D, PreS, PostS, PreH, PostH> RelocHelper<'find, D, PreS, PostS, PreH, PostH>
@@ -42,6 +45,7 @@ where
         post_find: &'find PostS,
         pre_handler: &'find PreH,
         post_handler: &'find PostH,
+        tls_get_addr: usize,
     ) -> Self {
         let dependency_flags = vec![false; scope.len()];
         Self {
@@ -52,6 +56,8 @@ where
             pre_handler,
             post_handler,
             dependency_flags,
+            tls_get_addr,
+            tls_desc_args: Vec::new(),
         }
     }
 

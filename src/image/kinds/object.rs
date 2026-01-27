@@ -103,6 +103,7 @@ impl<Tls: TlsResolver, D> ObjectBuilder<Tls, D> {
             tls_mod_id: self.tls_mod_id,
             tls_tp_offset: self.tls_tp_offset,
             tls_unregister: Tls::unregister,
+            tls_desc_args: Box::new([]),
             segments: self.segments,
         };
 
@@ -116,6 +117,7 @@ impl<Tls: TlsResolver, D> ObjectBuilder<Tls, D> {
             mprotect: self.mprotect,
             init_array: self.init_array,
             init: self.init_fn,
+            tls_get_addr: Tls::tls_get_addr as usize,
         }
     }
 }
@@ -143,6 +145,9 @@ pub struct RawObject<D = ()> {
 
     /// Initialization function array.
     pub(crate) init_array: Option<&'static [fn()]>,
+
+    /// TLS function address for __tls_get_addr.
+    pub(crate) tls_get_addr: usize,
 }
 
 impl<D> Deref for RawObject<D> {

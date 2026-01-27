@@ -313,11 +313,7 @@ where
         let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &self.segments).unwrap();
 
         #[cfg(feature = "log")]
-        log::trace!(
-            "[{}] Dynamic info: {:?}",
-            self.name,
-            dynamic
-        );
+        log::trace!("[{}] Dynamic info: {:?}", self.name, dynamic);
 
         let relocation = DynamicRelocation::new(
             dynamic.pltrel,
@@ -415,6 +411,7 @@ where
                     tls_mod_id,
                     tls_tp_offset,
                     tls_unregister: Tls::unregister,
+                    tls_desc_args: Box::new([]),
                     segments: self.segments,
                 }),
             },

@@ -39,6 +39,8 @@ pub const REL_DTPOFF: u32 = R_LARCH_TLS_DTPREL64;
 pub const REL_IRELATIVE: u32 = R_LARCH_IRELATIVE;
 /// TLS TPOFF relocation type - set to TLS offset relative to thread pointer.
 pub const REL_TPOFF: u32 = R_LARCH_TLS_TPREL64;
+/// TLSDESC relocation type - set to a function pointer and an argument.
+pub const REL_TLSDESC: u32 = 0;
 
 /// Get the current thread pointer using architecture-specific register.
 #[inline(always)]
@@ -116,7 +118,14 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         sym crate::relocation::dl_fixup,
     )
 }
-
+/// Static TLSDESC resolver dummy for LoongArch64.
+pub(crate) extern "C" fn tlsdesc_resolver_static() {
+    unimplemented!("TLSDESC is not supported on LoongArch64 yet");
+}
+/// Dynamic TLSDESC resolver dummy for LoongArch64.
+pub(crate) extern "C" fn tlsdesc_resolver_dynamic() {
+    unimplemented!("TLSDESC is not supported on LoongArch64 yet");
+}
 /// Map loongarch64 relocation types to human readable names
 pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {

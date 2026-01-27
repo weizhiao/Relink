@@ -29,6 +29,8 @@ pub const REL_IRELATIVE: u32 = R_ARM_IRELATIVE;
 pub const REL_COPY: u32 = R_ARM_COPY;
 /// TLS TPOFF relocation type - set to TLS offset relative to thread pointer.
 pub const REL_TPOFF: u32 = R_ARM_TLS_TPOFF32;
+/// TLSDESC relocation type - set to a function pointer and an argument.
+pub const REL_TLSDESC: u32 = 0;
 
 /// Get the current thread pointer using architecture-specific register.
 #[inline(always)]
@@ -111,6 +113,16 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         ",
         sym crate::relocation::dl_fixup,
     )
+}
+
+/// Static TLSDESC resolver dummy for ARM.
+pub(crate) extern "C" fn tlsdesc_resolver_static() {
+    unimplemented!("TLSDESC is not supported on ARM yet");
+}
+
+/// Dynamic TLSDESC resolver dummy for ARM.
+pub(crate) extern "C" fn tlsdesc_resolver_dynamic() {
+    unimplemented!("TLSDESC is not supported on ARM yet");
 }
 
 /// Map arm relocation type to human readable name

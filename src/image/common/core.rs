@@ -11,9 +11,11 @@ use crate::{
     loader::FnHandler,
     relocation::SymDef,
     segment::ElfSegments,
-    tls::{TlsInfo, TlsResolver},
+    tls::{TlsDescDynamicArg, TlsInfo, TlsResolver},
 };
+use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::{
     ffi::c_void,
     fmt::Debug,
@@ -454,6 +456,9 @@ pub(crate) struct CoreInner<D = ()> {
     /// TLS resolver unregister function
     pub(crate) tls_unregister: fn(usize),
 
+    /// TLS descriptor arguments (for TLSDESC)
+    pub(crate) tls_desc_args: Box<[Box<TlsDescDynamicArg>]>,
+
     /// Memory segments
     pub(crate) segments: ElfSegments,
 }
@@ -639,6 +644,16 @@ impl<D> ElfCore<D> {
         self.inner.tls_tp_offset
     }
 
+    /// Set the TLS descriptor arguments (used for dynamic relocation)
+    /// # Safety
+    /// This should only be called during the relocation process
+    pub(crate) unsafe fn set_tls_desc_args(&self, args: Vec<Box<TlsDescDynamicArg>>) {
+        let inner = Arc::as_ptr(&self.inner) as *mut CoreInner<D>;
+        unsafe {
+            (*inner).tls_desc_args = args.into_boxed_slice();
+        }
+    }
+
     /// Creates an ElfCore from raw components
     unsafe fn from_raw(
         name: String,
@@ -662,13 +677,16 @@ impl<D> ElfCore<D> {
                 dynamic_info: Some(Arc::new(DynamicInfo {
                     eh_frame_hdr,
                     dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
-                    pltrel: None,
+                    pltrel: dynamic
+                        .pltrel
+                        .and_then(|plt| NonNull::new(plt.as_ptr() as *mut _)),
                     phdrs: ElfPhdrs::Mmap(phdrs),
                     lazy_scope: None,
                 })),
                 tls_mod_id,
                 tls_tp_offset,
                 tls_unregister,
+                tls_desc_args: Box::new([]),
                 segments,
                 fini: None,
                 fini_array: None,

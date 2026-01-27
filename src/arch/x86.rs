@@ -30,6 +30,7 @@ pub const REL_DTPOFF: u32 = R_386_TLS_DTPOFF32;
 pub const REL_IRELATIVE: u32 = R_386_IRELATIVE;
 pub const REL_COPY: u32 = R_386_COPY;
 pub const REL_TPOFF: u32 = R_386_TLS_TPOFF;
+pub const REL_TLSDESC: u32 = 0;
 
 /// Get the current thread pointer using architecture-specific register.
 #[inline(always)]
@@ -93,6 +94,14 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
 }
 
 /// Map x86 relocation type to human readable name
+/// Static TLSDESC resolver dummy for x86.
+pub(crate) extern "C" fn tlsdesc_resolver_static() {
+    unimplemented!("TLSDESC is not supported on x86 yet");
+}
+/// Dynamic TLSDESC resolver dummy for RISC-V 32.
+pub(crate) extern "C" fn tlsdesc_resolver_dynamic() {
+    unimplemented!("TLSDESC is not supported on RISC-V 32 yet");
+}
 pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {
         R_386_32 => "R_386_32",

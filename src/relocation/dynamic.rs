@@ -109,11 +109,18 @@ impl<D> DynamicImage<D> {
             post_find,
             pre_handler,
             post_handler,
+            tls_get_addr as *const () as usize,
         );
 
         self.relocate_relative()
             .relocate_dynrel(&mut helper)?
             .relocate_pltrel(is_lazy, &mut helper)?;
+
+        // Set TLS descriptor arguments collected during relocation
+        let tls_desc_args = core::mem::take(&mut helper.tls_desc_args);
+        unsafe {
+            self.core_ref().set_tls_desc_args(tls_desc_args);
+        }
 
         let needed_libs = self.needed_libs();
         let deps: Arc<[LoadedCore<D>]> = Arc::from(helper.finish(needed_libs));
@@ -123,7 +130,9 @@ impl<D> DynamicImage<D> {
             log::debug!(
                 "[{}] Bound dependencies: {:?}",
                 self.name(),
-                deps.iter().map(|d| d.name()).collect::<alloc::vec::Vec<_>>()
+                deps.iter()
+                    .map(|d| d.name())
+                    .collect::<alloc::vec::Vec<_>>()
             );
         }
 
@@ -149,16 +158,10 @@ impl<D> DynamicImage<D> {
 /// Lazy binding fixup function called by PLT (Procedure Linkage Table)
 pub(crate) unsafe extern "C" fn dl_fixup(dylib: &CoreInner, rela_idx: usize) -> usize {
     // Get the relocation entry for this function call
-    let rela = unsafe {
-        &*dylib
-            .dynamic_info
-            .as_ref()
-            .unwrap()
-            .pltrel
-            .unwrap()
-            .add(rela_idx)
-            .as_ptr()
-    };
+    let dynamic_info = dylib.dynamic_info.as_ref().expect("dynamic_info missing");
+    let pltrel = dynamic_info.pltrel.expect("pltrel missing");
+
+    let rela = unsafe { &*pltrel.as_ptr().add(rela_idx) };
     let r_type = rela.r_type();
     let r_sym = rela.r_symbol();
     let segments = &dylib.segments;
@@ -170,13 +173,10 @@ pub(crate) unsafe extern "C" fn dl_fixup(dylib: &CoreInner, rela_idx: usize) -> 
     let (_, syminfo) = dylib.symtab.symbol_idx(r_sym);
 
     // Look up symbol in local scope
-    let symbol = dylib
-        .dynamic_info
-        .as_ref()
-        .unwrap()
+    let symbol = dynamic_info
         .lazy_scope
         .as_ref()
-        .unwrap()
+        .expect("lazy_scope missing")
         .lookup(syminfo.name())
         .expect("lazy bind fail") as usize;
 
@@ -231,6 +231,16 @@ impl<D> DynamicImage<D> {
         let segments = core.segments();
         let reloc = self.relocation();
 
+        if is_lazy {
+            // Prepare for lazy binding if we have PLT relocations
+            if !reloc.pltrel.is_empty() {
+                prepare_lazy_bind(
+                    self.got().expect("GOT not found for lazy binding").as_ptr(),
+                    Arc::as_ptr(&core.inner) as usize,
+                );
+            }
+        }
+
         // Process PLT relocations
         for rel in reloc.pltrel {
             if !helper.handle_pre(rel)? {
@@ -262,6 +272,11 @@ impl<D> DynamicImage<D> {
                 let addr = RelocValue::new(base) + r_addend;
                 segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 continue;
+            } else if unlikely(r_type == REL_TLSDESC) {
+                // Handle TLSDESC relocations
+                if super::tls::handle_tls_reloc(helper, rel) {
+                    continue;
+                }
             }
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)? {
@@ -269,15 +284,7 @@ impl<D> DynamicImage<D> {
             }
         }
 
-        if is_lazy {
-            // Prepare for lazy binding if we have PLT relocations
-            if !reloc.pltrel.is_empty() {
-                prepare_lazy_bind(
-                    self.got().unwrap().as_ptr(),
-                    Arc::as_ptr(&core.inner) as usize,
-                );
-            }
-        } else {
+        if !is_lazy {
             // Apply RELRO (RELocation Read-Only) protection if available
             if let Some(relro) = self.relro() {
                 relro.relro()?;
@@ -396,7 +403,7 @@ impl<D> DynamicImage<D> {
                     continue;
                 }
                 // Handle TLS (Thread Local Storage) relocations
-                REL_DTPOFF | REL_DTPMOD | REL_TPOFF => {
+                REL_DTPOFF | REL_DTPMOD | REL_TPOFF | REL_TLSDESC => {
                     if super::tls::handle_tls_reloc(helper, rel) {
                         continue;
                     }
