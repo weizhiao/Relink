@@ -215,7 +215,7 @@ impl<D> LoadedCore<D> {
     #[inline]
     pub unsafe fn new_unchecked<Tls: TlsResolver>(
         name: String,
-        phdrs: &'static [ElfPhdr],
+        phdrs: impl Into<Vec<ElfPhdr>>,
         memory: (*mut c_void, usize),
         munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
         tls_tp_offset: Option<isize>,
@@ -229,8 +229,9 @@ impl<D> LoadedCore<D> {
         let mut dynamic_ptr = core::ptr::null();
         let mut eh_frame_hdr = None;
         let mut tls_phdr = None;
+        let phdrs = phdrs.into();
 
-        for phdr in phdrs {
+        for phdr in &phdrs {
             match phdr.p_type {
                 PT_DYNAMIC => {
                     dynamic_ptr = base.wrapping_add(phdr.p_vaddr as usize) as *const ElfDyn;
@@ -648,7 +649,7 @@ impl<D> ElfCore<D> {
         name: String,
         base: usize,
         dynamic_ptr: *const ElfDyn,
-        phdrs: &'static [ElfPhdr],
+        phdrs: Vec<ElfPhdr>,
         eh_frame_hdr: Option<NonNull<u8>>,
         mut segments: ElfSegments,
         tls_mod_id: Option<usize>,
@@ -669,7 +670,7 @@ impl<D> ElfCore<D> {
                     pltrel: dynamic
                         .pltrel
                         .and_then(|plt| NonNull::new(plt.as_ptr() as *mut _)),
-                    phdrs: ElfPhdrs::Mmap(phdrs),
+                    phdrs: ElfPhdrs::Vec(phdrs),
                     lazy_scope: None,
                 })),
                 tls_mod_id,
