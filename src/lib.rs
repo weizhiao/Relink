@@ -98,7 +98,7 @@ pub mod elf;
 mod error;
 pub mod image;
 pub mod input;
-mod loader;
+pub mod loader;
 pub mod os;
 pub mod relocation;
 mod segment;
@@ -108,7 +108,7 @@ pub mod tls;
 pub(crate) use error::*;
 
 pub use error::Error;
-pub use loader::{LoadHook, LoadHookContext, Loader};
+pub use loader::Loader;
 
 /// A type alias for `Result`s returned by `elf_loader` functions.
 ///

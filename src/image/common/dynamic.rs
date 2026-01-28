@@ -1,9 +1,9 @@
 use crate::sync::{Arc, AtomicBool};
 use crate::{
-    LoadHook, Result,
+    Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfRelType, SymbolTable},
     image::{ElfCore, ImageBuilder, common::CoreInner},
-    loader::FnContext,
+    loader::{LifecycleContext, LoadHook},
     os::Mmap,
     relocation::{DynamicRelocation, SymbolLookup},
     segment::ELFRelro,
@@ -343,7 +343,7 @@ where
                 let (mod_id, offset) = Tls::register_static(info)?;
                 (Some(mod_id), Some(offset))
             } else {
-                (Tls::register(info).ok(), None)
+                (Some(Tls::register(info)?), None)
             }
         } else {
             (None, None)
@@ -368,7 +368,10 @@ where
 
                 // Create initialization function
                 init: Box::new(move || {
-                    init_handler.call(&FnContext::new(dynamic.init_fn, dynamic.init_array_fn))
+                    init_handler.call(&LifecycleContext::new(
+                        dynamic.init_fn,
+                        dynamic.init_array_fn,
+                    ))
                 }),
 
                 // Store GOT pointer

@@ -5,8 +5,9 @@
 //! relocated and loaded libraries or executables.
 
 use crate::{
-    LoadHook, Loader, Result,
+    Loader, Result,
     input::IntoElfReader,
+    loader::LoadHook,
     os::Mmap,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
 };

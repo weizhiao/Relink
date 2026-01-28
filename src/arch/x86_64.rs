@@ -186,6 +186,8 @@ pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
         R_X86_64_IRELATIVE => "R_X86_64_IRELATIVE",
         R_X86_64_TPOFF64 => "R_X86_64_TPOFF64",
         R_X86_64_TLSDESC => "R_X86_64_TLSDESC",
+        R_X86_64_DTPMOD64 => "R_X86_64_DTPMOD64",
+        R_X86_64_DTPOFF64 => "R_X86_64_DTPOFF64",
         _ => "UNKNOWN",
     }
 }

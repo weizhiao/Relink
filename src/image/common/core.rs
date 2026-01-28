@@ -8,7 +8,7 @@ use crate::{
     Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolInfo, SymbolTable},
     image::{Symbol, common::DynamicInfo},
-    loader::{DynFnHandler, FnContext},
+    loader::{DynLifecycleHandler, LifecycleContext},
     relocation::SymDef,
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
@@ -258,7 +258,7 @@ impl<D> LoadedCore<D> {
                 if !static_tls && !dynamic_ptr.is_null() {
                     let mut cur = dynamic_ptr;
                     while (*cur).d_tag != 0 {
-                        if (*cur).d_tag == DT_FLAGS as _ {
+                        if (*cur).d_tag as u64 == DT_FLAGS as u64 {
                             if (*cur).d_un as usize & DF_STATIC_TLS as usize != 0 {
                                 static_tls = true;
                                 break;
@@ -271,17 +271,14 @@ impl<D> LoadedCore<D> {
                 // The Tls::register will register the TLS module and return the ID.
                 if static_tls {
                     if let Some(offset) = actual_tls_tp_offset {
-                        if let Ok(mid) = Tls::add_static_tls(&info, offset) {
-                            tls_mod_id = Some(mid);
-                        }
+                        tls_mod_id = Some(Tls::add_static_tls(&info, offset)?);
                     } else {
-                        if let Ok((mid, offset)) = Tls::register_static(&info) {
-                            tls_mod_id = Some(mid);
-                            actual_tls_tp_offset = Some(offset);
-                        }
+                        let (mid, offset) = Tls::register_static(&info)?;
+                        tls_mod_id = Some(mid);
+                        actual_tls_tp_offset = Some(offset);
                     }
                 } else {
-                    tls_mod_id = Tls::register(&info).ok();
+                    tls_mod_id = Some(Tls::register(&info)?);
                 }
             }
         }
@@ -430,7 +427,7 @@ pub(crate) struct CoreInner<D = ()> {
     pub(crate) fini_array: Option<&'static [fn()]>,
 
     /// Custom finalization handler
-    pub(crate) fini_handler: DynFnHandler,
+    pub(crate) fini_handler: DynLifecycleHandler,
 
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo>>,
@@ -458,7 +455,8 @@ impl<D> Drop for CoreInner<D> {
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed) {
-            self.fini_handler.call(&FnContext::new(self.fini, self.fini_array));
+            self.fini_handler
+                .call(&LifecycleContext::new(self.fini, self.fini_array));
         }
         if let Some(mod_id) = self.tls_mod_id {
             (self.tls_unregister)(mod_id);
@@ -679,18 +677,9 @@ impl<D> ElfCore<D> {
                 tls_unregister,
                 tls_desc_args: Box::new([]),
                 segments,
-                                fini: None,
+                fini: None,
                 fini_array: None,
-                fini_handler: {
-                    #[cfg(not(feature = "portable-atomic"))]
-                    {
-                        Arc::new(|_: &FnContext| {})
-                    }
-                    #[cfg(feature = "portable-atomic")]
-                    {
-                        Arc::new(Box::new(|_: &FnContext| {}))
-                    }
-                },
+                fini_handler: Arc::new(Box::new(|_: &LifecycleContext| {})),
                 user_data,
             }),
         }

@@ -5,10 +5,11 @@
 //! support for synchronous loading of dynamic libraries.
 
 use crate::{
-    LoadHook, Loader, Result,
+    Loader, Result,
     elf::{ElfDyn, ElfPhdr},
     image::{ElfCore, LoadedCore, common::DynamicImage},
     input::{ElfReader, IntoElfReader},
+    loader::LoadHook,
     os::Mmap,
     parse_ehdr_error,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},

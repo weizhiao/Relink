@@ -166,7 +166,7 @@ fn run_dynamic_linking(is_lazy: bool) {
     let (symbol_map, symbol_lookup) = get_symbol_lookup();
 
     // Load the dynamic library
-    let mut loader = Loader::new();
+    let mut loader = Loader::new().with_default_tls_resolver();
     let helper_relocated = loader
         .load_dylib(ElfBinary::new("libhelper.so", &helper_output.data))
         .expect("Failed to load helper")

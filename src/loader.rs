@@ -1,3 +1,5 @@
+//！ ELF object loader and related types.
+
 use crate::{
     Result,
     elf::{EHDR_SIZE, ElfHeader, ElfPhdr, ElfShdr},
@@ -102,7 +104,7 @@ impl<'a> LoadHookContext<'a> {
 ///
 /// # Examples
 /// ```rust
-/// use elf_loader::{LoadHook, LoadHookContext, Result};
+/// use elf_loader::{loader::{LoadHook, LoadHookContext}, Result};
 ///
 /// struct MyHook;
 ///
@@ -134,12 +136,12 @@ impl LoadHook for () {
 }
 
 /// Context provided to the initialization/finalization handler.
-pub struct FnContext<'a> {
+pub struct LifecycleContext<'a> {
     func: Option<fn()>,
     func_array: Option<&'a [fn()]>,
 }
 
-impl<'a> FnContext<'a> {
+impl<'a> LifecycleContext<'a> {
     pub(crate) fn new(func: Option<fn()>, func_array: Option<&'a [fn()]>) -> Self {
         Self { func, func_array }
     }
@@ -156,24 +158,21 @@ impl<'a> FnContext<'a> {
 }
 
 /// Handler trait for initialization and finalization functions.
-pub trait FnHandler: Send + Sync {
+pub trait LifecycleHandler: Send + Sync {
     /// Executes the handler with the provided context.
-    fn call(&self, ctx: &FnContext);
+    fn call(&self, ctx: &LifecycleContext);
 }
 
-impl<F> FnHandler for F
+impl<F> LifecycleHandler for F
 where
-    F: Fn(&FnContext) + Send + Sync,
+    F: Fn(&LifecycleContext) + Send + Sync,
 {
-    fn call(&self, ctx: &FnContext) {
+    fn call(&self, ctx: &LifecycleContext) {
         (self)(ctx)
     }
 }
 
-#[cfg(not(feature = "portable-atomic"))]
-pub(crate) type DynFnHandler = Arc<dyn FnHandler>;
-#[cfg(feature = "portable-atomic")]
-pub(crate) type DynFnHandler = Arc<Box<dyn FnHandler>>;
+pub(crate) type DynLifecycleHandler = Arc<Box<dyn LifecycleHandler>>;
 
 /// Context provided to the user data generator.
 pub struct UserDataLoaderContext<'a> {
@@ -247,25 +246,17 @@ where
 }
 
 pub(crate) struct LoaderInner<H, D> {
-    init_fn: DynFnHandler,
-    fini_fn: DynFnHandler,
+    init_fn: DynLifecycleHandler,
+    fini_fn: DynLifecycleHandler,
     hook: H,
     force_static_tls: bool,
     user_data_loader: Box<dyn Fn(&UserDataLoaderContext) -> D>,
 }
 
-impl Loader<DefaultMmap, (), (), DefaultTlsResolver> {
+impl Loader<DefaultMmap, (), (), ()> {
     /// Creates a new `Loader` with default settings.
     pub fn new() -> Self {
-        #[cfg(not(feature = "portable-atomic"))]
-        let c_abi: DynFnHandler = Arc::new(|ctx: &FnContext| {
-            ctx.func()
-                .iter()
-                .chain(ctx.func_array().unwrap_or(&[]).iter())
-                .for_each(|init| unsafe { core::mem::transmute::<_, &extern "C" fn()>(init) }());
-        });
-        #[cfg(feature = "portable-atomic")]
-        let c_abi: DynFnHandler = Arc::new(Box::new(|ctx: &FnContext| {
+        let c_abi: DynLifecycleHandler = Arc::new(Box::new(|ctx: &LifecycleContext| {
             ctx.func()
                 .iter()
                 .chain(ctx.func_array().unwrap_or(&[]).iter())
@@ -301,16 +292,9 @@ where
     /// as a non-standard extension.
     pub fn with_init<F>(mut self, init_fn: F) -> Self
     where
-        F: FnHandler + 'static,
+        F: LifecycleHandler + 'static,
     {
-        #[cfg(not(feature = "portable-atomic"))]
-        {
-            self.inner.init_fn = Arc::new(init_fn);
-        }
-        #[cfg(feature = "portable-atomic")]
-        {
-            self.inner.init_fn = Arc::new(Box::new(init_fn));
-        }
+        self.inner.init_fn = Arc::new(Box::new(init_fn));
         self
     }
 
@@ -320,16 +304,9 @@ where
     /// (e.g., `.fini` and `.fini_array`) of the loaded ELF object.
     pub fn with_fini<F>(mut self, fini_fn: F) -> Self
     where
-        F: FnHandler + 'static,
+        F: LifecycleHandler + 'static,
     {
-        #[cfg(not(feature = "portable-atomic"))]
-        {
-            self.inner.fini_fn = Arc::new(fini_fn);
-        }
-        #[cfg(feature = "portable-atomic")]
-        {
-            self.inner.fini_fn = Arc::new(Box::new(fini_fn));
-        }
+        self.inner.fini_fn = Arc::new(Box::new(fini_fn));
         self
     }
 
@@ -404,6 +381,15 @@ where
     where
         NewTls: TlsResolver,
     {
+        Loader {
+            buf: self.buf,
+            inner: self.inner,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Consumes the current loader and returns a new one with the default TLS resolver.
+    pub fn with_default_tls_resolver(self) -> Loader<M, H, D, DefaultTlsResolver> {
         Loader {
             buf: self.buf,
             inner: self.inner,

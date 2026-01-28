@@ -1,7 +1,7 @@
 use crate::{
-    LoadHook, LoadHookContext, Result,
+    Result,
     elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfRelType, ElfShdr, ElfSymbol, SymbolTable},
-    loader::DynFnHandler,
+    loader::{DynLifecycleHandler, LoadHook, LoadHookContext},
     os::Mmap,
     relocation::StaticRelocation,
     segment::{ELFRelro, ElfSegments, section::PltGotSection},
@@ -56,10 +56,10 @@ where
     pub(crate) segments: ElfSegments,
 
     /// Initialization function handler
-    pub(crate) init_fn: DynFnHandler,
+    pub(crate) init_fn: DynLifecycleHandler,
 
     /// Finalization function handler
-    pub(crate) fini_fn: DynFnHandler,
+    pub(crate) fini_fn: DynLifecycleHandler,
 
     /// Pointer to the interpreter path (PT_INTERP)
     pub(crate) interp: Option<NonNull<c_char>>,
@@ -94,8 +94,8 @@ where
         segments: ElfSegments,
         name: String,
         ehdr: ElfHeader,
-        init_fn: DynFnHandler,
-        fini_fn: DynFnHandler,
+        init_fn: DynLifecycleHandler,
+        fini_fn: DynLifecycleHandler,
         static_tls: bool,
         user_data: D,
     ) -> Self {
@@ -231,10 +231,10 @@ pub(crate) struct ObjectBuilder<Tls, D = ()> {
     pub(crate) init_array: Option<&'static [fn()]>,
 
     /// Initialization function handler
-    pub(crate) init_fn: DynFnHandler,
+    pub(crate) init_fn: DynLifecycleHandler,
 
     /// Finalization function handler
-    pub(crate) fini_fn: DynFnHandler,
+    pub(crate) fini_fn: DynLifecycleHandler,
 
     /// Memory segments of the ELF file
     pub(crate) segments: ElfSegments,
@@ -282,8 +282,8 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
     pub(crate) fn new(
         name: String,
         shdrs: &mut [ElfShdr],
-        init_fn: DynFnHandler,
-        fini_fn: DynFnHandler,
+        init_fn: DynLifecycleHandler,
+        fini_fn: DynLifecycleHandler,
         segments: ElfSegments,
         mprotect: Box<dyn Fn() -> Result<()>>,
         mut pltgot: PltGotSection,

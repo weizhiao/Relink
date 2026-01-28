@@ -5,10 +5,10 @@
 //! contain code and data that need to be relocated before they can be executed.
 
 use crate::{
-    LoadHook, Loader, Result,
+    Loader, Result,
     image::{ElfCore, LoadedCore, builder::ObjectBuilder, common::CoreInner},
     input::{ElfReader, IntoElfReader},
-    loader::DynFnHandler,
+    loader::{DynLifecycleHandler, LoadHook},
     os::Mmap,
     relocation::{Relocatable, RelocationHandler, Relocator, StaticRelocation, SymbolLookup},
     segment::section::PltGotSection,
@@ -137,7 +137,7 @@ pub struct RawObject<D = ()> {
     pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
 
     /// Initialization function handler.
-    pub(crate) init: DynFnHandler,
+    pub(crate) init: DynLifecycleHandler,
 
     /// Initialization function array.
     pub(crate) init_array: Option<&'static [fn()]>,

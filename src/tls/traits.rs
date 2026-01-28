@@ -1,5 +1,5 @@
-use crate::Result;
 use super::{TlsIndex, TlsInfo};
+use crate::{Result, tls_error};
 
 /// A trait for resolving TLS (Thread Local Storage) information.
 ///
@@ -46,4 +46,34 @@ pub trait TlsResolver {
 
     /// Returns the address of a thread-local variable.
     extern "C" fn tls_get_addr(ti: *const TlsIndex) -> *mut u8;
+}
+
+impl TlsResolver for () {
+    fn register(_tls_info: &TlsInfo) -> Result<usize> {
+        Err(tls_error(
+            "TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support.",
+        ))
+    }
+
+    fn register_static(_tls_info: &TlsInfo) -> Result<(usize, isize)> {
+        Err(tls_error(
+            "Static TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support.",
+        ))
+    }
+
+    fn add_static_tls(_tls_info: &TlsInfo, _offset: isize) -> Result<usize> {
+        Err(tls_error(
+            "Static TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support.",
+        ))
+    }
+
+    fn unregister(_mod_id: usize) {
+        // No-op for unit resolver as it doesn't maintain any state
+    }
+
+    extern "C" fn tls_get_addr(_ti: *const TlsIndex) -> *mut u8 {
+        panic!(
+            "tls_get_addr called on unit TlsResolver which does not support TLS. Use `with_default_tls_resolver()` to enable TLS support."
+        );
+    }
 }

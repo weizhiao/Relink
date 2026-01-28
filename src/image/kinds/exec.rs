@@ -5,10 +5,11 @@ use crate::sync::Arc;
 /// that have been loaded but not yet relocated. It includes support for
 /// synchronous loading of executable files.
 use crate::{
-    LoadHook, Loader, Result,
+    Loader, Result,
     elf::ElfPhdr,
     image::{DynamicImage, ImageBuilder, LoadedCore},
     input::{ElfReader, IntoElfReader},
+    loader::LoadHook,
     os::Mmap,
     parse_ehdr_error,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
