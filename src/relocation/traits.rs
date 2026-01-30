@@ -201,6 +201,9 @@ impl<H: RelocationHandler + ?Sized> RelocationHandler for Arc<H> {
     }
 }
 
+/// A marker trait for objects that support lazy binding.
+pub trait SupportLazy {}
+
 /// A trait for objects that can be relocated.
 ///
 /// Types implementing this trait can undergo symbol resolution and address fixup.

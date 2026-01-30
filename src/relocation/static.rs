@@ -9,7 +9,6 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 
-
 pub(crate) struct StaticRelocation {
     relocation: Box<[&'static [ElfRelType]]>,
 }
@@ -70,7 +69,8 @@ impl<D: 'static> RawObject<D> {
 
         #[cfg(feature = "log")]
         log::trace!("[{}] Executing init functions", self.core.name());
-        self.init.call(&LifecycleContext::new(None, self.init_array));
+        self.init
+            .call(&LifecycleContext::new(None, self.init_array));
 
         #[cfg(feature = "log")]
         log::info!("Relocation completed for {}", self.core.name());

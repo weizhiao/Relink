@@ -3,7 +3,7 @@ use crate::{
     elf::{ElfRelType, ElfSymbol, SymbolInfo, SymbolTable},
     image::{ElfCore, LoadedCore},
     relocate_error,
-    relocation::{Relocatable, RelocationContext, RelocationHandler, SymbolLookup},
+    relocation::{Relocatable, RelocationContext, RelocationHandler, SupportLazy, SymbolLookup},
     sync::Arc,
     tls::TlsDescDynamicArg,
 };
@@ -330,6 +330,39 @@ where
         }
     }
 
+    /// Executes the relocation process.
+    ///
+    /// This method consumes the relocator and returns the relocated ELF object.
+    /// All configured symbol lookups, handlers, and options are applied.
+    ///
+    /// # Returns
+    /// * `Ok(T::Output)` - The successfully relocated ELF object.
+    /// * `Err(Error)` - If relocation fails for any reason.
+    pub fn relocate(self) -> Result<T::Output>
+    where
+        D: 'static,
+    {
+        self.object.relocate(
+            self.scope,
+            &self.pre_find,
+            &self.post_find,
+            &self.pre_handler,
+            &self.post_handler,
+            self.lazy,
+            self.lazy_scope,
+        )
+    }
+}
+
+impl<T, PreS, PostS, LazyS, PreH, PostH, D> Relocator<T, PreS, PostS, LazyS, PreH, PostH, D>
+where
+    T: Relocatable<D> + SupportLazy,
+    PreS: SymbolLookup,
+    PostS: SymbolLookup,
+    LazyS: SymbolLookup + Send + Sync + 'static,
+    PreH: RelocationHandler,
+    PostH: RelocationHandler,
+{
     /// Enables or disables lazy binding.
     ///
     /// When enabled, some relocations (typically PLT entries) will be resolved
@@ -358,29 +391,6 @@ where
             lazy: self.lazy,
             lazy_scope: Some(scope),
         }
-    }
-
-    /// Executes the relocation process.
-    ///
-    /// This method consumes the relocator and returns the relocated ELF object.
-    /// All configured symbol lookups, handlers, and options are applied.
-    ///
-    /// # Returns
-    /// * `Ok(T::Output)` - The successfully relocated ELF object.
-    /// * `Err(Error)` - If relocation fails for any reason.
-    pub fn relocate(self) -> Result<T::Output>
-    where
-        D: 'static,
-    {
-        self.object.relocate(
-            self.scope,
-            &self.pre_find,
-            &self.post_find,
-            &self.pre_handler,
-            &self.post_handler,
-            self.lazy,
-            self.lazy_scope,
-        )
     }
 }
 

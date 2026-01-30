@@ -27,4 +27,4 @@ pub(crate) use utils::{
 };
 
 pub use crate::tls::TlsResolver;
-pub use traits::{RelocationContext, RelocationHandler, SymbolLookup};
+pub use traits::{RelocationContext, RelocationHandler, SupportLazy, SymbolLookup};

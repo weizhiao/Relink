@@ -280,7 +280,7 @@ impl<M: Mmap, H: LoadHook, D: Default + 'static> Loader<M, H, D> {
             elf::abi::ET_REL => Ok(RawElf::Object(self.load_object_impl(object)?)),
             elf::abi::ET_EXEC => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
             elf::abi::ET_DYN => {
-                let phdrs = self.read_phdr(&mut object, &ehdr)?;
+                let phdrs = self.read_phdr(&mut object, &ehdr)?.unwrap_or_default();
                 let has_dynamic = phdrs.iter().any(|p| p.p_type == PT_DYNAMIC);
                 let is_pie = phdrs.iter().any(|p| p.p_type == PT_INTERP) || !has_dynamic;
                 if is_pie {

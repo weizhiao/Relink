@@ -33,18 +33,21 @@ impl ElfBuf {
         &mut self,
         ehdr: &ElfHeader,
         object: &mut impl ElfReader,
-    ) -> Result<&[ElfPhdr]> {
+    ) -> Result<Option<&[ElfPhdr]>> {
         let (phdr_start, phdr_end) = ehdr.phdr_range();
         let size = phdr_end - phdr_start;
+        if size == 0 {
+            return Ok(None);
+        }
         if size > self.buf.len() {
             self.buf.resize(size, 0);
         }
         object.read(&mut self.buf[..size], phdr_start)?;
         unsafe {
-            Ok(core::slice::from_raw_parts(
+            Ok(Some(core::slice::from_raw_parts(
                 self.buf.as_ptr().cast::<ElfPhdr>(),
                 (phdr_end - phdr_start) / size_of::<ElfPhdr>(),
-            ))
+            )))
         }
     }
 
@@ -52,18 +55,21 @@ impl ElfBuf {
         &mut self,
         ehdr: &ElfHeader,
         object: &mut impl ElfReader,
-    ) -> Result<&mut [ElfShdr]> {
+    ) -> Result<Option<&mut [ElfShdr]>> {
         let (shdr_start, shdr_end) = ehdr.shdr_range();
         let size = shdr_end - shdr_start;
+        if size == 0 {
+            return Ok(None);
+        }
         if size > self.buf.len() {
             self.buf.resize(size, 0);
         }
         object.read(&mut self.buf[..size], shdr_start)?;
         unsafe {
-            Ok(core::slice::from_raw_parts_mut(
+            Ok(Some(core::slice::from_raw_parts_mut(
                 self.buf.as_mut_ptr().cast::<ElfShdr>(),
                 (shdr_end - shdr_start) / size_of::<ElfShdr>(),
-            ))
+            )))
         }
     }
 }
@@ -413,7 +419,7 @@ where
         &mut self,
         object: &mut impl ElfReader,
         ehdr: &ElfHeader,
-    ) -> Result<&[ElfPhdr]> {
+    ) -> Result<Option<&[ElfPhdr]>> {
         self.buf.prepare_phdrs(ehdr, object)
     }
 }

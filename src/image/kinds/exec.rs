@@ -1,3 +1,4 @@
+use crate::relocation::SupportLazy;
 use crate::sync::Arc;
 /// Executable file handling
 ///
@@ -133,6 +134,8 @@ where
     pub(crate) inner: ExecImageInner<D>,
 }
 
+impl<D: 'static> SupportLazy for RawExec<D> {}
+
 pub(crate) enum ExecImageInner<D>
 where
     D: 'static,
@@ -260,7 +263,10 @@ where
             return Err(parse_ehdr_error("file type mismatch"));
         }
 
-        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+        let phdrs = self
+            .buf
+            .prepare_phdrs(&ehdr, &mut object)?
+            .unwrap_or_default();
         let has_dynamic = phdrs.iter().any(|phdr| phdr.p_type == PT_DYNAMIC);
 
         let res = if has_dynamic {

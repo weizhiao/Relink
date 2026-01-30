@@ -59,7 +59,10 @@ where
         log::debug!("Loading object: {}", object.file_name());
 
         let ehdr = self.buf.prepare_ehdr(&mut object)?;
-        let shdrs = self.buf.prepare_shdrs_mut(&ehdr, &mut object)?;
+        let shdrs = self
+            .buf
+            .prepare_shdrs_mut(&ehdr, &mut object)?
+            .ok_or_else(|| crate::parse_ehdr_error("object file must have section headers"))?;
         let builder = self
             .inner
             .create_object_builder::<M, Tls>(ehdr, shdrs, object)?;

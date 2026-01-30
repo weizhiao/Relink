@@ -12,7 +12,7 @@ use crate::{
     loader::LoadHook,
     os::Mmap,
     parse_ehdr_error,
-    relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
+    relocation::{Relocatable, RelocationHandler, Relocator, SupportLazy, SymbolLookup},
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
@@ -31,6 +31,8 @@ where
     /// The common part containing basic ELF object information.
     pub(crate) inner: DynamicImage<D>,
 }
+
+impl<D: 'static> SupportLazy for RawDylib<D> {}
 
 impl<D> Debug for RawDylib<D> {
     /// Formats the [`RawDylib`] for debugging purposes.
@@ -248,7 +250,10 @@ where
             return Err(parse_ehdr_error("file type mismatch"));
         }
 
-        let phdrs = self.buf.prepare_phdrs(&ehdr, &mut object)?;
+        let phdrs = self
+            .buf
+            .prepare_phdrs(&ehdr, &mut object)?
+            .unwrap_or_default();
 
         // Load the relocated common part
         let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;

@@ -33,16 +33,10 @@ pub(crate) struct SectionSegments {
     pltgot: Option<PltGotSection>,
 }
 
-/// Convert protection flags to an index for section unit management
+/// Convert protection flags to an index (0-3: R, RW, RX, RWX)
 fn prot_to_idx(prot: ProtFlags) -> usize {
-    let mut idx = 0;
-    if prot.contains(ProtFlags::PROT_WRITE) {
-        idx |= 0b1;
-    }
-    if prot.contains(ProtFlags::PROT_EXEC) {
-        idx |= 0b10;
-    }
-    idx
+    (prot.contains(ProtFlags::PROT_WRITE) as usize)
+        | ((prot.contains(ProtFlags::PROT_EXEC) as usize) << 1)
 }
 
 /// Convert section flags to an index for section unit management
@@ -93,13 +87,9 @@ impl SectionSegments {
         let mut plt_shdr = PltGotSection::create_plt_shdr(plt_cnt);
 
         // Group sections by their protection flags
-        for shdr in shdrs.iter_mut() {
+        for shdr in shdrs.iter_mut().chain([&mut got_shdr, &mut plt_shdr]) {
             units[flags_to_idx(shdr.sh_flags.into())].add_section(shdr);
         }
-
-        // Add special sections to their respective units
-        units[flags_to_idx(got_shdr.sh_flags.into())].add_section(&mut got_shdr);
-        units[flags_to_idx(plt_shdr.sh_flags.into())].add_section(&mut plt_shdr);
 
         // Create segments from section units
         let mut segments = Vec::new();
@@ -120,7 +110,7 @@ impl SectionSegments {
 
     /// Take ownership of the PLTGOT section
     pub(crate) fn take_pltgot(&mut self) -> PltGotSection {
-        self.pltgot.take().unwrap()
+        self.pltgot.take().expect("PLTGOT already taken")
     }
 }
 
@@ -173,11 +163,10 @@ impl PltGotSection {
         let mut got_set = HashSet::new();
         let mut plt_set = HashSet::new();
 
-        for shdr in shdrs {
-            if !matches!(shdr.sh_type, SHT_REL | SHT_RELA) {
-                continue;
-            }
-
+        for shdr in shdrs
+            .iter()
+            .filter(|s| matches!(s.sh_type, SHT_REL | SHT_RELA))
+        {
             let size = shdr.sh_size as usize;
             let entsize = shdr.sh_entsize as usize;
             if size == 0 || entsize == 0 {
@@ -189,10 +178,7 @@ impl PltGotSection {
                 continue;
             }
 
-            for chunk in buf.chunks(entsize) {
-                if chunk.len() < entsize {
-                    break;
-                }
+            for chunk in buf.chunks_exact(entsize) {
                 // Safety: we read bytes from file, and we are casting to a POD type (ElfRelType)
                 // We use read_unaligned to handle potential misalignment.
                 let rel_entry =
@@ -328,7 +314,7 @@ impl PltGotSection {
 /// Groups sections with the same memory protection requirements
 struct SectionUnit<'shdr> {
     content_sections: Vec<&'shdr mut ElfShdr>, // Sections with file content
-    zero_sectons: Vec<&'shdr mut ElfShdr>,     // Sections initialized to zero (NOBITS)
+    zero_sections: Vec<&'shdr mut ElfShdr>,    // Sections initialized to zero (NOBITS)
 }
 
 impl<'shdr> SectionUnit<'shdr> {
@@ -336,7 +322,7 @@ impl<'shdr> SectionUnit<'shdr> {
     fn new() -> Self {
         Self {
             content_sections: Vec::new(),
-            zero_sectons: Vec::new(), // Note: This appears to be a typo in the original code ("zero_sectons" vs "zero_sections")
+            zero_sections: Vec::new(),
         }
     }
 
@@ -344,131 +330,88 @@ impl<'shdr> SectionUnit<'shdr> {
     fn add_section(&mut self, shdr: &'shdr mut ElfShdr) {
         // NOBITS sections are zero-initialized
         if shdr.sh_type == SHT_NOBITS {
-            self.zero_sectons.push(shdr);
+            self.zero_sections.push(shdr);
         } else {
             self.content_sections.push(shdr);
         }
     }
 
-    /// Calculate the maximum alignment requirement for sections in this unit
-    fn align(&self) -> usize {
-        let mut res = 0;
-        // Find the maximum alignment requirement among all sections
-        for shdr in self.content_sections.iter().chain(self.zero_sectons.iter()) {
-            res = res.max(shdr.sh_addralign);
-        }
-        res as usize
-    }
-
     /// Create a segment from the sections in this unit
-    fn create_segment(&mut self, offset: &mut usize) -> Option<ElfSegment> {
+    fn create_segment(&mut self, base_offset: &mut usize) -> Option<ElfSegment> {
         // Get section flags from the first section (all sections in a unit have the same flags)
-        let sh_flags = if let Some(shdr) = self.content_sections.get(0).or(self.zero_sectons.get(0))
-        {
-            shdr.sh_flags
-        } else {
-            // No sections in this unit
-            return None;
-        };
+        let first_shdr = self
+            .content_sections
+            .first()
+            .or(self.zero_sections.first())?;
 
-        let align = self.align();
-        debug_assert!(align <= PAGE_SIZE);
-        let prot = section_prot(sh_flags.into());
-        let addr = Address::Relative(*offset);
-
-        /// Helper struct to manage memory layout calculations
-        struct Cursor {
-            start: usize, // Starting offset
-            cur: usize,   // Current offset
-        }
-
-        impl Cursor {
-            /// Create a new cursor at the given starting position
-            fn new(start: usize) -> Self {
-                Self { start, cur: start }
-            }
-
-            /// Align the current position to the specified boundary
-            fn roundup(&mut self, align: usize) {
-                self.cur = roundup(self.cur, align);
-            }
-
-            /// Advance the current position by the specified amount
-            fn add(&mut self, size: usize) {
-                self.cur += size;
-            }
-
-            /// Get the current position
-            fn cur(&self) -> usize {
-                self.cur
-            }
-
-            /// Get the offset from the starting position
-            fn cur_offset(&self) -> usize {
-                self.cur - self.start
-            }
-        }
+        let prot = section_prot(first_shdr.sh_flags.into());
+        let segment_start = *base_offset;
+        let addr = Address::Relative(segment_start);
 
         // Process content sections (those with file data)
-        let mut cursor = Cursor::new(*offset);
+        let mut current_offset = segment_start;
         let mut map_info = Vec::new();
         for shdr in &mut self.content_sections {
             if shdr.sh_size == 0 {
                 continue;
             }
-            cursor.roundup(shdr.sh_addralign as usize);
-            shdr.sh_addr = cursor.cur() as _;
+            current_offset = roundup(current_offset, shdr.sh_addralign as usize);
+            shdr.sh_addr = current_offset as _;
             map_info.push(FileMapInfo {
                 filesz: shdr.sh_size as usize,
                 offset: shdr.sh_offset as usize,
-                start: cursor.cur_offset(),
+                start: current_offset - segment_start,
             });
-            cursor.add(shdr.sh_size as usize);
+            current_offset += shdr.sh_size as usize;
         }
 
         // Special handling for a single content section to ensure page alignment
+        // This is necessary because mmap requires the file offset to be page-aligned.
         if map_info.len() == 1 {
+            let info = &mut map_info[0];
+            let file_offset = rounddown(info.offset, PAGE_SIZE);
+            let align_len = info.offset - file_offset;
+
+            // Adjust shdr and map info to stay page-aligned
             let shdr = self
                 .content_sections
                 .iter_mut()
-                .find(|shdr| shdr.sh_offset as usize == map_info[0].offset)
+                .find(|shdr| shdr.sh_offset as usize == info.offset)
                 .unwrap();
-            let file_offset = rounddown(map_info[0].offset, PAGE_SIZE);
-            let align_len = map_info[0].offset - file_offset;
+
             shdr.sh_addr = shdr.sh_addr.wrapping_add(align_len as _);
-            map_info[0].filesz += align_len;
-            map_info[0].offset = file_offset;
-            cursor.add(align_len);
+            info.filesz += align_len;
+            info.offset = file_offset;
+            current_offset += align_len;
         }
 
-        let content_size = cursor.cur_offset();
+        let content_size = current_offset - segment_start;
 
         // Process zero-initialized sections
-        for shdr in &mut self.zero_sectons {
-            cursor.roundup(shdr.sh_addralign as usize);
-            shdr.sh_addr = cursor.cur() as _;
-            cursor.add(shdr.sh_size as usize);
+        for shdr in &mut self.zero_sections {
+            current_offset = roundup(current_offset, shdr.sh_addralign as usize);
+            shdr.sh_addr = current_offset as _;
+            current_offset += shdr.sh_size as usize;
         }
 
-        let zero_size = cursor.cur_offset() - content_size;
-        let len = roundup(content_size + zero_size, PAGE_SIZE);
+        let unaligned_total_size = current_offset - segment_start;
+        let total_size = roundup(unaligned_total_size, PAGE_SIZE);
 
-        if len == 0 {
+        if total_size == 0 {
             return None;
         }
 
-        *offset += len;
-        let segment = ElfSegment {
+        *base_offset += total_size;
+        Some(ElfSegment {
             addr,
             prot,
-            len,
+            len: total_size,
             content_size,
-            zero_size,
+            zero_size: unaligned_total_size - content_size,
             need_copy: false,
             flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
             map_info,
             from_relocatable: true,
-        };
-        Some(segment)
+        })
     }
 }
