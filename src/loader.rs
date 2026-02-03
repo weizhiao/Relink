@@ -1,4 +1,8 @@
-//！ ELF object loader and related types.
+//! The core ELF loading orchestration.
+//!
+//! This module provides the `Loader` struct, which is the primary entry point
+//! for the library. It orchestrates the process of reading ELF headers,
+//! mapping segments into memory, and preparing them for relocation.
 
 use crate::{
     Result,
@@ -108,7 +112,11 @@ impl<'a> LoadHookContext<'a> {
 
 /// Hook trait for processing program headers during loading.
 ///
+/// This trait allows users to inspect or modify the loading process when a program segment
+/// is encountered.
+///
 /// # Examples
+///
 /// ```rust
 /// use elf_loader::{loader::{LoadHook, LoadHookContext}, Result};
 ///
@@ -123,6 +131,8 @@ impl<'a> LoadHookContext<'a> {
 /// ```
 pub trait LoadHook {
     /// Executes the hook with the provided context.
+    ///
+    /// If an error is returned, the loading process will be aborted.
     fn call<'a>(&mut self, ctx: &'a LoadHookContext<'a>) -> Result<()>;
 }
 
@@ -164,6 +174,9 @@ impl<'a> LifecycleContext<'a> {
 }
 
 /// Handler trait for initialization and finalization functions.
+///
+/// Implementations of this trait define how ELF initialization functions (like `.init` and `.init_array`)
+/// and finalization functions (like `.fini` and `.fini_array`) are invoked.
 pub trait LifecycleHandler: Send + Sync {
     /// Executes the handler with the provided context.
     fn call(&self, ctx: &LifecycleContext);
@@ -231,8 +244,11 @@ impl<'a> UserDataLoaderContext<'a> {
 /// The ELF object loader.
 ///
 /// `Loader` is responsible for orchestrating the loading of ELF objects into memory.
+/// It supports customization through various `with_*` methods for memory mapping,
+/// hooks, user data, and TLS resolution.
 ///
 /// # Examples
+///
 /// ```no_run
 /// use elf_loader::{Loader, input::ElfBinary};
 ///

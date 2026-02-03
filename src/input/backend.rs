@@ -18,18 +18,7 @@ pub struct ElfBinary<'bytes> {
 }
 
 impl<'bytes> ElfBinary<'bytes> {
-    /// Creates a new memory-based ELF object.
-    ///
-    /// This constructor creates an [`ElfBinary`] instance from a byte slice
-    /// containing the ELF data and a name for the object.
-    ///
-    /// # Arguments
-    /// - `name` - A string identifier for the ELF object, typically the
-    ///            original file path. Used for error reporting and debugging.
-    /// - `bytes` - A byte slice containing the complete ELF data.
-    ///
-    /// # Returns
-    /// A new [`ElfBinary`] instance.
+    /// Creates a new memory-based ELF object from a byte slice.
     ///
     /// # Examples
     /// ```rust
@@ -53,17 +42,6 @@ impl<'bytes> ElfReader for ElfBinary<'bytes> {
     }
 
     /// Reads data from the memory-based ELF object.
-    ///
-    /// This implementation directly copies data from the in-memory byte slice
-    /// to the provided buffer, making it very efficient.
-    ///
-    /// # Arguments
-    /// - `buf` - A mutable slice where the read data will be stored.
-    /// - `offset` - The byte offset within the ELF data where reading begins.
-    ///
-    /// # Returns
-    /// - `Ok(())` - If the read operation was successful.
-    /// - `Err` - If the read operation would go beyond the available data.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> crate::Result<()> {
         buf.copy_from_slice(&self.bytes[offset..offset + buf.len()]);
         Ok(())
@@ -88,18 +66,7 @@ impl ElfFile {
     /// Creates a new file-based ELF object from an owned file descriptor.
     ///
     /// # Safety
-    /// The caller must ensure that:
-    /// - The `raw_fd` parameter is a valid, open file descriptor.
-    /// - The file descriptor is owned by this object and will not be closed
-    ///   by any other code while this object exists.
-    /// - The file contains valid ELF data.
-    ///
-    /// # Arguments
-    /// - `path` - The file path, used for identification and error reporting.
-    /// - `raw_fd` - The raw file descriptor for the open ELF file.
-    ///
-    /// # Returns
-    /// A new [`ElfFile`] instance.
+    /// The caller must ensure that `raw_fd` is valid and owned by this object.
     pub unsafe fn from_owned_fd(path: &str, raw_fd: i32) -> Self {
         ElfFile {
             inner: RawFile::from_owned_fd(path, raw_fd),
@@ -107,17 +74,6 @@ impl ElfFile {
     }
 
     /// Creates a new file-based ELF object by opening a file at the given path.
-    ///
-    /// This constructor opens the file at the specified path and prepares it
-    /// for use as an ELF object. The file is automatically closed when the
-    /// [`ElfFile`] instance is dropped.
-    ///
-    /// # Arguments
-    /// - `path` - The path to the ELF file to open.
-    ///
-    /// # Returns
-    /// - `Ok(ElfFile)` - If the file was successfully opened and is accessible.
-    /// - `Err` - If the file could not be opened or accessed.
     pub fn from_path(path: impl AsRef<str>) -> Result<Self> {
         let path = path.as_ref();
         #[cfg(feature = "log")]
@@ -140,26 +96,11 @@ impl ElfReader for ElfFile {
     }
 
     /// Reads data from the file-based ELF object.
-    ///
-    /// This implementation reads data from the underlying file using standard
-    /// file I/O operations. For better performance with large files, consider
-    /// using memory mapping when possible.
-    ///
-    /// # Arguments
-    /// - `buf` - A mutable slice where the read data will be stored.
-    /// - `offset` - The byte offset within the file where reading begins.
-    ///
-    /// # Returns
-    /// - `Ok(())` - If the read operation was successful.
-    /// - `Err` - If the read operation failed (e.g., I/O error, invalid offset).
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         self.inner.read(buf, offset)
     }
 
     /// Returns the raw file descriptor for the underlying file.
-    ///
-    /// This enables memory mapping optimizations when available, as the
-    /// file descriptor can be used directly with mmap-like operations.
     fn as_fd(&self) -> Option<isize> {
         self.inner.as_fd()
     }
@@ -176,14 +117,6 @@ impl<'a> ElfReader for &'a [u8] {
     }
 
     /// Reads data from the byte slice at the specified offset.
-    ///
-    /// # Arguments
-    /// - `buf` - A mutable slice where the read data will be stored.
-    /// - `offset` - The byte offset within the slice where reading begins.
-    ///
-    /// # Returns
-    /// - `Ok(())` - If the read operation was successful.
-    /// - `Err` - If the offset is out of bounds.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         if offset + buf.len() > self.len() {
             return Err(crate::Error::Io {

@@ -1,6 +1,7 @@
 use crate::{
-    Result, Error, io_error,
+    Error, Result,
     input::ElfReader,
+    io_error,
     os::{MapFlags, Mmap, ProtFlags},
 };
 use alloc::{ffi::CString, format, vec::Vec};
@@ -145,9 +146,7 @@ impl Mmap for DefaultMmap {
     unsafe fn munmap(addr: *mut c_void, _len: usize) -> Result<()> {
         unsafe {
             windows_sys::Win32::System::Memory::UnmapViewOfFile(
-                windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
-                    Value: addr,
-                },
+                windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS { Value: addr },
             )
         };
         Ok(())
@@ -155,9 +154,8 @@ impl Mmap for DefaultMmap {
 
     unsafe fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
         let mut old = MaybeUninit::uninit();
-        if unsafe {
-            Memory::VirtualProtect(addr, len, prot_win(prot, false), old.as_mut_ptr())
-        } == 0
+        if unsafe { Memory::VirtualProtect(addr, len, prot_win(prot, false), old.as_mut_ptr()) }
+            == 0
         {
             let err_code = unsafe { GetLastError() };
             return Err(Error::MmapError {
@@ -167,11 +165,7 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn mmap_reserve(
-        addr: Option<usize>,
-        len: usize,
-        use_file: bool,
-    ) -> Result<*mut c_void> {
+    unsafe fn mmap_reserve(addr: Option<usize>, len: usize, use_file: bool) -> Result<*mut c_void> {
         let ptr = if use_file {
             if let Some(addr) = addr {
                 unsafe {

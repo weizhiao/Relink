@@ -10,10 +10,7 @@ use alloc::{
     collections::BTreeMap,
     vec::Vec,
 };
-use core::{
-    alloc::Layout,
-    ffi::c_void,
-};
+use core::{alloc::Layout, ffi::c_void};
 use spin::{Mutex, RwLock};
 
 #[derive(Debug)]
@@ -321,6 +318,9 @@ where
 // Public APIs
 // -----------------------------------------------------------------------------
 
+/// A default TLS resolver implementation.
+/// This resolver manages TLS modules and per-thread TLS data
+/// using the global registry and per-thread DTVs.
 #[derive(Debug)]
 pub struct DefaultTlsResolver;
 

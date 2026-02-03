@@ -35,10 +35,6 @@ where
 impl<D: 'static> SupportLazy for RawDylib<D> {}
 
 impl<D> Debug for RawDylib<D> {
-    /// Formats the [`RawDylib`] for debugging purposes.
-    ///
-    /// This implementation provides a debug representation that includes
-    /// the library name and its dependencies.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawDylib")
             .field("name", &self.inner.name())
@@ -111,80 +107,61 @@ impl<D> RawDylib<D> {
         self.inner.is_lazy()
     }
 
-    /// Gets the DT_RPATH value
-    ///
-    /// # Returns
-    /// An optional string slice containing the RPATH value
+    /// Returns the DT_RPATH value.
     #[inline]
     pub fn rpath(&self) -> Option<&str> {
         self.inner.rpath()
     }
 
-    /// Gets the DT_RUNPATH value
-    ///
-    /// # Returns
-    /// An optional string slice containing the RUNPATH value
+    /// Returns the DT_RUNPATH value.
     #[inline]
     pub fn runpath(&self) -> Option<&str> {
         self.inner.runpath()
     }
 
-    /// Gets the PT_INTERP value
-    ///
-    /// # Returns
-    /// An optional string slice containing the interpreter path
+    /// Returns the PT_INTERP value.
     #[inline]
     pub fn interp(&self) -> Option<&str> {
         self.inner.interp()
     }
 
-    /// Gets the name of the ELF object
+    /// Returns the name of the ELF object.
     #[inline]
     pub fn name(&self) -> &str {
         self.inner.name()
     }
 
-    /// Gets the program headers of the ELF object
+    /// Returns the program headers of the ELF object.
     pub fn phdrs(&self) -> &[ElfPhdr] {
         self.inner.phdrs()
     }
 
-    /// Gets the base address of the loaded ELF object
+    /// Returns the base address of the loaded ELF object.
     pub fn base(&self) -> usize {
         self.inner.base()
     }
 
-    /// Gets the total length of mapped memory for the ELF object
+    /// Returns the total length of mapped memory for the ELF object.
     pub fn mapped_len(&self) -> usize {
         self.inner.mapped_len()
     }
 
-    /// Gets the list of needed library names from the dynamic section
+    /// Returns the list of needed library names from the dynamic section.
     pub fn needed_libs(&self) -> &[&str] {
         self.inner.needed_libs()
     }
 
-    /// Gets the dynamic section pointer
-    ///
-    /// # Returns
-    /// An optional NonNull pointer to the dynamic section
+    /// Returns the dynamic section pointer.
     pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn>> {
         self.inner.dynamic_ptr()
     }
 
-    /// Gets a reference to the user data
+    /// Returns a reference to the user data.
     pub fn user_data(&self) -> &D {
         self.inner.user_data()
     }
 
-    /// Returns a mutable reference to the user-defined data associated with this ELF object.
-    ///
-    /// This method provides access to the user-defined data associated
-    /// with this ELF object, allowing modification of the data.
-    ///
-    /// # Returns
-    /// * `Some(data)` - A mutable reference to the user data if available.
-    /// * `None` - If the user data is not available (e.g., already borrowed).
+    /// Returns a mutable reference to the user data.
     #[inline]
     pub fn user_data_mut(&mut self) -> Option<&mut D> {
         self.inner.user_data_mut()
@@ -203,18 +180,7 @@ where
     D: Default,
     Tls: TlsResolver,
 {
-    /// Loads a dynamic library into memory.
-    ///
-    /// This method loads a dynamic library (shared object) file into memory
-    /// and prepares it for relocation. The file is validated to ensure it
-    /// is indeed a dynamic library.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to load as a dynamic library.
-    ///
-    /// # Returns
-    /// * `Ok(RawDylib)` - The loaded dynamic library.
-    /// * `Err(Error)` - If loading fails.
+    /// Loads a dynamic library into memory and prepares it for relocation.
     ///
     /// # Examples
     /// ```no_run

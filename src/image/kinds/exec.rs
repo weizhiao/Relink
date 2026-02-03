@@ -146,10 +146,6 @@ where
 }
 
 impl<D> Debug for RawExec<D> {
-    /// Formats the [`RawExec`] for debugging purposes.
-    ///
-    /// This implementation provides a debug representation that includes
-    /// the executable name.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawExec")
             .field("name", &self.name())
@@ -216,18 +212,7 @@ where
     D: Default,
     Tls: TlsResolver,
 {
-    /// Loads an executable file into memory.
-    ///
-    /// This method loads an executable ELF file into memory and prepares it
-    /// for relocation. The file is validated to ensure it is indeed an
-    /// executable (either a standard executable or a position-independent executable).
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to load as an executable.
-    ///
-    /// # Returns
-    /// * `Ok(RawExec)` - The loaded executable.
-    /// * `Err(Error)` - If loading fails.
+    /// Loads an executable file into memory and prepares it for relocation.
     ///
     /// # Examples
     /// ```no_run

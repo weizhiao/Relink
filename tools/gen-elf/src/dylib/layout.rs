@@ -1,4 +1,4 @@
-use crate::dylib::{align_up, ElfWriterConfig};
+use crate::dylib::{ElfWriterConfig, align_up};
 
 pub(crate) struct ElfLayout {
     pub(crate) base_addr: u64,

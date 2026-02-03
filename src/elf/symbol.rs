@@ -146,7 +146,7 @@ impl<'symtab> SymbolInfo<'symtab> {
         self.name
     }
 
-    /// Returns the C-style name of the symbol.
+    /// Returns the C-style name of the symbol, if available.
     #[inline]
     pub fn cname(&self) -> Option<&'symtab CStr> {
         self.cname
@@ -160,17 +160,7 @@ impl<'symtab> SymbolInfo<'symtab> {
 }
 
 impl SymbolTable {
-    /// Create a symbol table from ELF dynamic section information
-    ///
-    /// This method constructs a SymbolTable from the information provided
-    /// in the ELF dynamic section, including hash tables, symbol tables,
-    /// and string tables.
-    ///
-    /// # Arguments
-    /// * `dynamic` - Reference to the ELF dynamic section information
-    ///
-    /// # Returns
-    /// A new SymbolTable instance
+    /// Creates a symbol table from ELF dynamic section information.
     pub(crate) fn from_dynamic(dynamic: &ElfDynamic) -> Self {
         // Create hash table from dynamic section information
         let hashtab = HashTable::from_dynamic(dynamic);
@@ -199,17 +189,7 @@ impl SymbolTable {
         }
     }
 
-    /// Create a symbol table from section headers
-    ///
-    /// This method constructs a SymbolTable from ELF section headers,
-    /// typically used for relocatable objects that don't have dynamic sections.
-    ///
-    /// # Arguments
-    /// * `symtab` - Reference to the symbol table section header
-    /// * `shdrs` - Slice of all section headers in the ELF file
-    ///
-    /// # Returns
-    /// A new SymbolTable instance
+    /// Creates a symbol table from section headers, typically used for relocatable objects.
     pub(crate) fn from_shdrs(symtab: &ElfShdr, shdrs: &[ElfShdr]) -> Self {
         // Get the string table section header (linked via sh_link)
         let strtab_shdr = &shdrs[symtab.sh_link as usize];
@@ -229,49 +209,24 @@ impl SymbolTable {
         }
     }
 
-    /// Get a reference to the string table
-    ///
-    /// # Returns
-    /// A reference to the string table
+    /// Returns a reference to the string table.
     pub(crate) fn strtab(&self) -> &ElfStringTable {
         &self.strtab
     }
 
+    /// Looks up a symbol by its name.
     pub fn lookup_by_name(&self, name: impl AsRef<str>) -> Option<&ElfSymbol> {
         let info = SymbolInfo::from_str(name.as_ref(), None);
         let mut precompute = info.precompute();
         self.lookup(&info, &mut precompute)
     }
 
-    /// Look up a symbol in the symbol table
-    ///
-    /// This method performs a symbol lookup using the hash table for efficiency.
-    ///
-    /// # Arguments
-    /// * `symbol` - Information about the symbol to look up
-    /// * `precompute` - Precomputed hash values to speed up the lookup
-    ///
-    /// # Returns
-    /// * `Some(symbol)` - A reference to the found symbol
-    /// * `None` - If the symbol was not found
+    /// Looks up a symbol in the symbol table using the hash table for efficiency.
     fn lookup(&self, symbol: &SymbolInfo, precompute: &mut PreCompute) -> Option<&ElfSymbol> {
         self.hashtab.lookup(self, symbol, precompute)
     }
 
-    /// Look up a symbol and filter based on relocation requirements
-    ///
-    /// This method performs a symbol lookup and additionally filters the results
-    /// to only return symbols that are suitable for relocation. This includes
-    /// checking that the symbol is defined, has the correct binding, and is
-    /// of the correct type.
-    ///
-    /// # Arguments
-    /// * `symbol` - Information about the symbol to look up
-    /// * `precompute` - Precomputed hash values to speed up the lookup
-    ///
-    /// # Returns
-    /// * `Some(symbol)` - A reference to the found symbol that meets relocation requirements
-    /// * `None` - If no suitable symbol was found
+    /// Looks up a symbol and filters based on relocation requirements.
     #[inline]
     pub(crate) fn lookup_filter(
         &self,
@@ -291,18 +246,7 @@ impl SymbolTable {
         None
     }
 
-    /// Get a symbol and its information by index
-    ///
-    /// This method retrieves a symbol and its associated information by index
-    /// directly from the symbol table, bypassing the hash table lookup.
-    ///
-    /// # Arguments
-    /// * `idx` - The index of the symbol to retrieve
-    ///
-    /// # Returns
-    /// A tuple containing:
-    /// 1. A reference to the symbol
-    /// 2. SymbolInfo containing the symbol's name and other information
+    /// Returns the symbol and its information for the given index.
     pub fn symbol_idx<'symtab>(
         &'symtab self,
         idx: usize,
@@ -328,10 +272,7 @@ impl SymbolTable {
         )
     }
 
-    /// Get the number of symbols in the symbol table
-    ///
-    /// # Returns
-    /// The number of symbols in the symbol table
+    /// Returns the number of symbols in the symbol table.
     #[inline]
     pub fn count_syms(&self) -> usize {
         self.hashtab.count_syms()

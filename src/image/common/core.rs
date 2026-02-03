@@ -63,10 +63,8 @@ impl<D> LoadedCore<D> {
     /// Wraps an [`ElfCore`] into a [`LoadedCore`] with no dependencies.
     ///
     /// # Safety
-    /// The caller must ensure the ELF object has been properly relocated.
     ///
-    /// # Arguments
-    /// * `core` - The [`ElfCore`] to wrap.
+    /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
     pub unsafe fn from_core(core: ElfCore<D>) -> Self {
         LoadedCore {
@@ -80,19 +78,19 @@ impl<D> LoadedCore<D> {
         &self.deps
     }
 
-    /// Gets the name (full path) of the ELF object
+    /// Returns the name (full path) of the ELF object.
     #[inline]
     pub fn name(&self) -> &str {
         self.core.name()
     }
 
-    /// Gets the short name of the ELF object
+    /// Returns the short name of the ELF object.
     #[inline]
     pub fn short_name(&self) -> &str {
         self.core.short_name()
     }
 
-    /// Gets the base address of the ELF object
+    /// Returns the base address of the ELF object.
     #[inline]
     pub fn base(&self) -> usize {
         self.core.base()

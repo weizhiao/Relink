@@ -159,7 +159,7 @@ pub(crate) fn generate_tls_helper_code() -> Vec<u8> {
     let mut code = vec![0; 36];
     // Fill with NOPs (addi x0, x0, 0 -> 0x00000013)
     for i in (0..36).step_by(4) {
-        code[i..i+4].copy_from_slice(&[0x13, 0x00, 0x00, 0x00]);
+        code[i..i + 4].copy_from_slice(&[0x13, 0x00, 0x00, 0x00]);
     }
 
     // 0x00: addi sp, sp, -16

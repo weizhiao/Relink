@@ -1,9 +1,9 @@
-//! ELF object representations and access traits
+//! ELF input abstraction and data sources.
 //!
-//! This module provides traits and implementations for accessing ELF objects,
-//! whether they are stored in memory or in files. It abstracts the data source
-//! to allow uniform handling of different ELF object types during the loading
-//! and relocation process.
+//! This module provides traits and implementations for accessing ELF data
+//! from diverse sources, such as files in a filesystem or byte buffers in memory.
+//! It abstracts the reading mechanism to allow the loader to operate
+//! uniformly regardless of how the ELF data is stored.
 
 pub use backend::{ElfBinary, ElfFile};
 pub use traits::{ElfReader, IntoElfReader};

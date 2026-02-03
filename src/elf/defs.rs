@@ -31,6 +31,7 @@ cfg_if::cfg_if! {
         pub(crate) const E_CLASS: u8 = elf::abi::ELFCLASS64;
         pub(crate) type Phdr = elf::segment::Elf64_Phdr;
         pub(crate) type Shdr = elf::section::Elf64_Shdr;
+        /// ELF dynamic section entry.
         pub type ElfDyn = elf::dynamic::Elf64_Dyn;
         pub(crate) type ElfEhdr = elf::file::Elf64_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf64_Rela;
@@ -44,6 +45,7 @@ cfg_if::cfg_if! {
         pub(crate) const E_CLASS: u8 = elf::abi::ELFCLASS32;
         pub(crate) type Phdr = elf::segment::Elf32_Phdr;
         pub(crate) type Shdr = elf::section::Elf32_Shdr;
+        /// ELF dynamic section entry.
         pub type ElfDyn = elf::dynamic::Elf32_Dyn;
         pub(crate) type ElfEhdr = elf::file::Elf32_Ehdr;
         pub(crate) type Rela = elf::relocation::Elf32_Rela;
@@ -93,12 +95,6 @@ impl ElfRelr {
 }
 
 /// ELF RELA relocation entry.
-///
-/// # Examples
-/// ```rust
-/// use elf_loader::elf::ElfRela;
-/// // Access relocation info from a RELA entry
-/// ```
 #[repr(transparent)]
 pub struct ElfRela {
     rela: Rela,
@@ -188,18 +184,7 @@ impl ElfRel {
 /// ELF symbol table entry.
 ///
 /// This struct provides a unified interface for accessing ELF symbol information
-/// regardless of whether the ELF file is 32-bit or 64-bit. It wraps the native
-/// symbol type and provides convenient accessor methods.
-///
-/// # Examples
-/// ```rust
-/// use elf_loader::elf::ElfSymbol;
-/// // Create an ElfSymbol from raw symbol data
-/// // (In practice, this would come from parsing an ELF file)
-/// // let symbol: &ElfSymbol = // ... obtain from symbol table
-/// // println!("Symbol value: {}", symbol.st_value());
-/// // println!("Symbol binding: {}", symbol.st_bind());
-/// ```
+/// regardless of whether the ELF file is 32-bit or 64-bit.
 pub struct ElfSymbol {
     sym: Sym,
 }
@@ -290,23 +275,14 @@ impl ElfSymbol {
     }
 }
 
-/// ELF program header.
-///
-/// Program headers describe segments of the ELF file that need to be loaded
-/// into memory or contain other information necessary for execution.
-/// Each program header describes a segment and how it should be mapped.
+/// ELF program header describing segments to be loaded into memory.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct ElfPhdr {
     phdr: Phdr,
 }
 
-/// ELF section header.
-///
-/// Section headers describe the sections of the ELF file. Each section header
-/// provides information about a section, including its name, type, flags,
-/// address, offset, and size. Section headers are used by linkers and loaders
-/// to understand the structure and contents of the ELF file.
+/// ELF section header describing sections of the ELF file.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct ElfShdr {

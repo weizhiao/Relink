@@ -25,18 +25,7 @@ where
     D: Default + 'static,
     Tls: TlsResolver,
 {
-    /// Loads a object ELF file into memory.
-    ///
-    /// This method loads a relocatable ELF file (typically a `.o` file) into memory
-    /// and prepares it for relocation. The file is not yet relocated after this
-    /// operation.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to load.
-    ///
-    /// # Returns
-    /// * `Ok(RawObject)` - The loaded relocatable ELF file.
-    /// * `Err(Error)` - If loading fails.
+    /// Loads a relocatable object file into memory and prepares it for relocation.
     ///
     /// # Examples
     /// ```no_run
@@ -81,13 +70,7 @@ where
 }
 
 impl<Tls: TlsResolver, D> ObjectBuilder<Tls, D> {
-    /// Build the final RawObject
-    ///
-    /// This method constructs the final RawObject from the
-    /// components collected during the building process.
-    ///
-    /// # Returns
-    /// A RawObject instance ready for relocation
+    /// Builds the final [`RawObject`] from the components collected during the building process.
     pub(crate) fn build(self) -> RawObject<D> {
         // Create the inner component structure
         let inner = CoreInner {

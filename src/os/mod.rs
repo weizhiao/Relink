@@ -1,18 +1,9 @@
-//! Memory mapping operations for ELF loader
+//! Operating system and environment abstractions.
 //!
-//! This module provides traits and implementations for memory mapping operations
-//! required by the ELF loader. It abstracts platform-specific memory management
-//! to offer a unified interface for mapping, unmapping, and protecting memory regions.
-//!
-//! Key concepts:
-//! - **Memory Mapping**: Allows files or data to be mapped directly into memory.
-//! - **Protection Flags**: Control read, write, and execute permissions.
-//! - **Mapping Flags**: Specify how the mapping behaves (e.g., private, fixed address).
-//!
-//! # Safety
-//! Memory mapping involves direct manipulation of the process's address space.
-//! Incorrect usage can cause crashes, data corruption, or security issues.
-//! Always ensure proper bounds checking and permission handling.
+//! This module provides traits for low-level memory operations such as
+//! memory mapping (`mmap`) and memory protection (`mprotect`). It allows
+//! the ELF loader to be portable across different operating systems
+//! and bare-metal environments.
 
 use bitflags::bitflags;
 use core::ffi::c_int;
@@ -62,19 +53,19 @@ bitflags! {
 
 cfg_if::cfg_if! {
     if #[cfg(windows)]{
-        pub mod windows;
+        mod windows;
         pub(crate) use windows::{current_thread_id, register_thread_destructor, get_thread_local_ptr};
         pub use windows::DefaultMmap;
     }else if #[cfg(feature = "use-syscall")]{
-        pub(crate) mod linux_syscall;
+        mod linux_syscall;
         pub(crate) use linux_syscall::{current_thread_id, register_thread_destructor, get_thread_local_ptr};
         pub use linux_syscall::*;
     }else if #[cfg(unix)]{
-        pub mod unix;
+        mod unix;
         pub(crate) use unix::{current_thread_id, register_thread_destructor, get_thread_local_ptr, RawFile};
         pub use unix::DefaultMmap;
     }else {
-        pub(crate) mod baremetal;
+        mod baremetal;
         pub(crate) use baremetal::{current_thread_id, register_thread_destructor, get_thread_local_ptr};
         pub use baremetal::*;
     }

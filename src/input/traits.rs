@@ -8,11 +8,7 @@ pub trait ElfReader {
     /// Returns the full name or path of the ELF object.
     fn file_name(&self) -> &str;
 
-    /// Reads a chunk of data from the ELF object into the provided buffer.
-    ///
-    /// # Arguments
-    /// * `buf` - The destination buffer. Its length determines the number of bytes read.
-    /// * `offset` - The starting byte offset within the ELF source.
+    /// Reads data from the ELF object at the given offset into the provided buffer.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()>;
 
     /// Returns the underlying file descriptor if the source is a file.

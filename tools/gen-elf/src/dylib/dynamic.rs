@@ -140,8 +140,14 @@ impl DynamicMetadata {
     ) -> Result<()> {
         let is_64 = self.arch.is_64();
         let is_rela = self.arch.is_rela();
-        self.update_entry(DT_STRTAB as i64, shdr_manager.get_vaddr(SectionKind::DynStr));
-        self.update_entry(DT_SYMTAB as i64, shdr_manager.get_vaddr(SectionKind::DynSym));
+        self.update_entry(
+            DT_STRTAB as i64,
+            shdr_manager.get_vaddr(SectionKind::DynStr),
+        );
+        self.update_entry(
+            DT_SYMTAB as i64,
+            shdr_manager.get_vaddr(SectionKind::DynSym),
+        );
         self.update_entry(DT_HASH as i64, shdr_manager.get_vaddr(SectionKind::Hash));
         self.update_entry(DT_PLTGOT as i64, got_plt_vaddr);
         if is_rela {

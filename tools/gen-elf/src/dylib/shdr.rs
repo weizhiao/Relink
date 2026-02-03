@@ -557,7 +557,11 @@ impl ShdrManager {
         }
 
         // 5. PT_TLS
-        if let Some(tls_sec) = self.shdrs.iter().find(|s| s.header.shtype == SectionKind::Tls) {
+        if let Some(tls_sec) = self
+            .shdrs
+            .iter()
+            .find(|s| s.header.shtype == SectionKind::Tls)
+        {
             self.write_phdr(
                 &mut writer,
                 is_64,

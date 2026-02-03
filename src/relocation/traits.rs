@@ -44,14 +44,7 @@ use alloc::{boxed::Box, vec::Vec};
 /// }
 /// ```
 pub trait SymbolLookup {
-    /// Finds the address of a symbol by its name.
-    ///
-    /// # Arguments
-    /// * `name` - The symbol name to resolve.
-    ///
-    /// # Returns
-    /// * `Some(ptr)` - The symbol's address if found.
-    /// * `None` - Symbol not found.
+    /// Finds the address of a symbol by its name, returning `None` if not found.
     fn lookup(&self, name: &str) -> Option<*const ()>;
 }
 

@@ -1,8 +1,11 @@
-//! ELF file format handling
+//! ELF image management and representation.
 //!
-//! This module provides the core data structures and functionality for working
-//! with ELF files in various stages of processing: from raw ELF files to
-//! relocated and loaded libraries or executables.
+//! This module handles the abstraction of ELF objects in their various states:
+//! * **RawElf**: An ELF file that has been mapped into memory but not yet relocated.
+//! * **LoadedElf**: A fully relocated ELF module ready for execution.
+//!
+//! It provides the core structures for managing memory segments, symbol lookups,
+//! and the lifetime of loaded libraries.
 
 use crate::{
     Loader, Result,

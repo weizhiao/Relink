@@ -1,46 +1,29 @@
 //! # Relink (elf_loader)
 //!
-//! **Relink** is a high-performance runtime linker (JIT Linker) tailor-made for the Rust ecosystem. It efficiently parses various ELF formats—not only from traditional file systems but also directly from memory images—and performs flexible dynamic and static hybrid linking.
+//! **Relink** is a high-performance runtime linker (JIT Linker) tailor-made for the Rust ecosystem.
+//! It efficiently parses Various ELF formats, supporting loading from both traditional file systems
+//! and direct memory images, and performs flexible dynamic and static hybrid linking.
 //!
-//! Whether you are developing **OS kernels**, **embedded systems**, **JIT compilers**, or building **plugin-based applications**, Relink provides a solid foundation with zero-cost abstractions, high-speed execution, and powerful extensibility.
+//! Whether you are developing **OS kernels**, **embedded systems**, **JIT compilers**, or building
+//! **plugin-based applications**, Relink provides a solid foundation with zero-cost abstractions,
+//! high-speed execution, and powerful extensibility.
 //!
-//! ## 🔥 Key Features
+//! ## Core Features
 //!
-//! ### 🛡️ Memory Safety
-//! Leveraging Rust's ownership system and smart pointers, Relink ensures safety at runtime.
-//! * **Lifetime Binding**: Symbols retrieved from a library carry lifetime markers. The compiler ensures they do not outlive the library itself, erasing `use-after-free` risks.
-//! * **Automatic Dependency Management**: Uses `Arc` to automatically maintain dependency trees between libraries, preventing a required library from being dropped prematurely.
+//! * **🛡️ Memory Safety**: Leverages Rust's ownership and `Arc` to manage library lifetimes and dependencies automatically.
+//! * **🔀 Hybrid Linking**: Seamlessly mix Relocatable Object files (`.o`) and Dynamic Shared Objects (`.so`).
+//! * **🎭 Customization**: Deeply intervene in symbol resolution and relocation through `SymbolLookup` and `RelocationHandler`.
+//! * **⚡ Performance & Versatility**: Optimized for `no_std` environments with support for RELR and Lazy Binding.
 //!
-//! ### 🔀 Hybrid Linking Capability
-//! Relink supports mixing **Relocatable Object files (`.o`)** and **Dynamic Shared Objects (`.so`)**. You can load a `.o` file just like a dynamic library and link its undefined symbols to the system or other loaded libraries at runtime.
-//!
-//! ### 🎭 Deep Customization & Interception
-//! By implementing the `SymbolLookup` and `RelocationHandler` traits, users can deeply intervene in the linking process.
-//! * **Symbol Interception**: Intercept and replace external dependency symbols during loading. Perfect for function mocking, behavioral monitoring, or hot-patching.
-//! * **Custom Linking Logic**: Take full control over symbol resolution strategies to build highly flexible plugin systems.
-//!
-//! ### ⚡ Extreme Performance & Versatility
-//! * **Zero-Cost Abstractions**: Built with Rust to provide near-native loading and symbol resolution speeds.
-//! * **`no_std` Support**: The core library has no OS dependencies, making it ideal for **OS kernels**, **embedded devices**, and **bare-metal development**.
-//! * **Modern Features**: Supports **RELR** for modern ELF optimization; supports **Lazy Binding** to improve cold-start times for large dynamic libraries.
-//!
-//! ## 🚀 Quick Start
+//! ## Quick Start
 //!
 //! ```rust,no_run
-//! use elf_loader::Loader;
+//! use elf_loader::{Loader, input::ElfBinary};
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // 1. Load the library and perform instant linking
-//!     let lib = Loader::new().load_dylib("path/to/your_library.so")?
+//!     let lib = Loader::new().load_dylib(ElfBinary::new("my_lib", &[]))?
 //!         .relocator()
-//!         // Optional: Provide custom symbol resolution (e.g., export symbols from host)
-//!         .pre_find_fn(|sym_name| {
-//!             if sym_name == "my_host_function" {
-//!                 Some(my_host_function as *const ())
-//!             } else {
-//!                 None
-//!             }
-//!         })
 //!         .relocate()?; // Complete all relocations
 //!
 //!     // 2. Safely retrieve and call the function
@@ -50,11 +33,6 @@
 //!     let result = awesome_func(42);
 //!     
 //!     Ok(())
-//! }
-//!
-//! // A host function that can be called by the plugin
-//! extern "C" fn my_host_function(value: i32) -> i32 {
-//!     value * 2
 //! }
 //! ```
 #![no_std]

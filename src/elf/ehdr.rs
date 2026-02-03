@@ -64,67 +64,35 @@ impl Deref for ElfHeader {
 }
 
 impl ElfHeader {
-    /// Creates a new ElfHeader from raw data
+    /// Creates a new `ElfHeader` from raw data, validating it for the target architecture.
     ///
-    /// This function parses an ELF header from a byte slice and validates
-    /// that it represents a valid ELF file compatible with the target
-    /// architecture.
+    /// # Errors
     ///
-    /// # Arguments
-    /// * `data` - A byte slice containing the ELF header data
-    ///
-    /// # Returns
-    /// * `Ok(&ElfHeader)` - A reference to the parsed and validated ELF header
-    /// * `Err(Error)` - If the data does not represent a valid ELF header
+    /// Returns an error if the data is too short or doesn't represent a valid ELF header.
     ///
     /// # Safety
-    /// The caller must ensure that the data slice contains at least
-    /// EHDR_SIZE bytes of valid ELF header data.
-    pub fn new(data: &[u8]) -> Result<&Self> {
+    ///
+    /// The caller must ensure that `data` contains at least `EHDR_SIZE` bytes.
+    pub(crate) fn new(data: &[u8]) -> Result<&Self> {
         debug_assert!(data.len() >= EHDR_SIZE);
         let ehdr: &ElfHeader = unsafe { &*(data.as_ptr().cast()) };
         ehdr.validate()?;
         Ok(ehdr)
     }
 
-    /// Checks if the ELF file is a dynamic library (shared object)
-    ///
-    /// This method determines whether the ELF file is a shared object
-    /// (dynamic library) that can be loaded and linked at runtime.
-    ///
-    /// # Returns
-    /// * `true` - If the ELF file is a dynamic library (ET_DYN)
-    /// * `false` - Otherwise
+    /// Returns `true` if the ELF file is a dynamic library (shared object).
     #[inline]
     pub fn is_dylib(&self) -> bool {
         self.ehdr.e_type == ET_DYN
     }
 
-    /// Checks if the ELF file is an executable
-    ///
-    /// This method determines whether the ELF file is an executable
-    /// (either a standard executable or a position-independent executable).
-    ///
-    /// # Returns
-    /// * `true` - If the ELF file is an executable (ET_EXEC or ET_DYN)
-    /// * `false` - Otherwise
+    /// Returns `true` if the ELF file is an executable.
     #[inline]
     pub fn is_executable(&self) -> bool {
         self.ehdr.e_type == ET_EXEC || self.ehdr.e_type == ET_DYN
     }
 
-    /// Validates the ELF header
-    ///
-    /// This method performs several validation checks on the ELF header
-    /// to ensure it is valid and compatible with the target architecture:
-    /// 1. Checks the ELF magic bytes
-    /// 2. Verifies the file class matches the target architecture
-    /// 3. Ensures the ELF version is current
-    /// 4. Confirms the machine architecture matches
-    ///
-    /// # Returns
-    /// * `Ok(())` - If all validation checks pass
-    /// * `Err(Error)` - If any validation check fails
+    /// Validates the ELF header magic, class, version, and architecture.
     pub fn validate(&self) -> Result<()> {
         // Check ELF magic bytes
         if self.e_ident[0..4] != ELFMAGIC {
@@ -149,69 +117,43 @@ impl ElfHeader {
         Ok(())
     }
 
-    /// Gets the number of program headers
-    ///
-    /// # Returns
-    /// The number of program header entries in the ELF file
+    /// Returns the number of program headers.
     #[inline]
     pub fn e_phnum(&self) -> usize {
         self.ehdr.e_phnum as usize
     }
 
-    /// Gets the size of each program header entry
-    ///
-    /// # Returns
-    /// The size in bytes of each program header entry
+    /// Returns the size of each program header entry.
     #[inline]
     pub fn e_phentsize(&self) -> usize {
         self.ehdr.e_phentsize as usize
     }
 
-    /// Gets the file offset of the program header table
-    ///
-    /// # Returns
-    /// The file offset in bytes where the program header table begins
+    /// Returns the file offset of the program header table.
     #[inline]
     pub fn e_phoff(&self) -> usize {
         self.ehdr.e_phoff as usize
     }
 
-    /// Gets the file offset of the section header table
-    ///
-    /// # Returns
-    /// The file offset in bytes where the section header table begins
+    /// Returns the file offset of the section header table.
     #[inline]
     pub fn e_shoff(&self) -> usize {
         self.ehdr.e_shoff as usize
     }
 
-    /// Gets the size of each section header entry
-    ///
-    /// # Returns
-    /// The size in bytes of each section header entry
+    /// Returns the size of each section header entry.
     #[inline]
     pub fn e_shentsize(&self) -> usize {
         self.ehdr.e_shentsize as usize
     }
 
-    /// Gets the number of section headers
-    ///
-    /// # Returns
-    /// The number of section header entries in the ELF file
+    /// Returns the number of section headers.
     #[inline]
     pub fn e_shnum(&self) -> usize {
         self.ehdr.e_shnum as usize
     }
 
-    /// Calculates the byte range of the program header table
-    ///
-    /// This method calculates the start and end file offsets of the
-    /// program header table based on the header information.
-    ///
-    /// # Returns
-    /// A tuple containing:
-    /// 1. The start offset of the program header table
-    /// 2. The end offset of the program header table
+    /// Returns the `(start, end)` file offsets of the program header table.
     #[inline]
     pub fn phdr_range(&self) -> (usize, usize) {
         let phdrs_size = self.e_phentsize() * self.e_phnum();
@@ -220,15 +162,7 @@ impl ElfHeader {
         (phdr_start, phdr_end)
     }
 
-    /// Calculates the byte range of the section header table
-    ///
-    /// This method calculates the start and end file offsets of the
-    /// section header table based on the header information.
-    ///
-    /// # Returns
-    /// A tuple containing:
-    /// 1. The start offset of the section header table
-    /// 2. The end offset of the section header table
+    /// Returns the `(start, end)` file offsets of the section header table.
     #[inline]
     pub fn shdr_range(&self) -> (usize, usize) {
         let shdrs_size = self.e_shentsize() * self.e_shnum();

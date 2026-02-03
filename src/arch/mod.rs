@@ -1,4 +1,8 @@
-//! architectures supported by the ELF loader.
+//! Architecture-specific definitions and relocation logic.
+//!
+//! This module contains target-specific code for various CPU architectures
+//! supported by the ELF loader, including relocation handlers, PLT entry definitions,
+//! and instruction-specific fixups.
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")]{
         pub(crate) type  StaticRelocator = X86_64Relocator;

@@ -117,23 +117,29 @@ pub(crate) fn generate_tls_helper_code() -> Vec<u8> {
 
     // 0x00: push ebp; mov ebp, esp
     code[0] = 0x55;
-    code[1] = 0x89; code[2] = 0xe5;
+    code[1] = 0x89;
+    code[2] = 0xe5;
 
     // 0x03: push ebx
     code[3] = 0x53;
 
     // 0x04: call +0 (to get EIP)
     code[4] = 0xe8;
-    code[5] = 0x00; code[6] = 0x00; code[7] = 0x00; code[8] = 0x00;
+    code[5] = 0x00;
+    code[6] = 0x00;
+    code[7] = 0x00;
+    code[8] = 0x00;
 
     // 0x09: pop ebx (ebx = helper_vaddr + 9)
     code[9] = 0x5b;
 
     // 0x0a: add ebx, imm32 (offset to GOT)
-    code[10] = 0x81; code[11] = 0xc3;
+    code[10] = 0x81;
+    code[11] = 0xc3;
 
     // 0x10: lea eax, [ebx + imm32] (offset to reloc_vaddr from GOT)
-    code[16] = 0x8d; code[17] = 0x83;
+    code[16] = 0x8d;
+    code[17] = 0x83;
 
     // 0x16: push eax (argument for __tls_get_addr)
     code[22] = 0x50;
@@ -142,7 +148,9 @@ pub(crate) fn generate_tls_helper_code() -> Vec<u8> {
     code[23] = 0xe8;
 
     // 0x1c: add esp, 4 (cleanup push)
-    code[28] = 0x83; code[29] = 0xc4; code[30] = 0x04;
+    code[28] = 0x83;
+    code[29] = 0xc4;
+    code[30] = 0x04;
 
     // 0x1f: pop ebx; pop ebp; ret
     code[31] = 0x5b;
