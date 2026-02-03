@@ -131,6 +131,12 @@ impl<D> RawDylib<D> {
         self.inner.name()
     }
 
+    /// Returns the short name of the ELF object.
+    #[inline]
+    pub fn short_name(&self) -> &str {
+        self.inner.core_ref().short_name()
+    }
+
     /// Returns the program headers of the ELF object.
     pub fn phdrs(&self) -> &[ElfPhdr] {
         self.inner.phdrs()

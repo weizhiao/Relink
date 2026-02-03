@@ -79,12 +79,7 @@ impl ElfFile {
         #[cfg(feature = "log")]
         log::debug!("Opening ELF file: {}", path);
 
-        let inner = RawFile::from_path(path).map_err(|e| {
-            #[cfg(feature = "log")]
-            log::error!("Failed to open ELF file {}: {:?}", path, e);
-            e
-        })?;
-
+        let inner = RawFile::from_path(path)?;
         Ok(ElfFile { inner })
     }
 }
