@@ -38,7 +38,7 @@ impl CodeMetaData {
                 size: self.text_size,
                 addralign: 16,
             },
-            data: self.text_id.clone(),
+            data: self.text_id,
         });
         sections.push(Section {
             header: SectionHeader {
@@ -49,7 +49,7 @@ impl CodeMetaData {
                 size: self.plt_size,
                 addralign: 16,
             },
-            data: self.plt_id.clone(),
+            data: self.plt_id,
         });
     }
 

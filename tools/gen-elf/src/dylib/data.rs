@@ -38,7 +38,7 @@ impl DataMetaData {
         };
         sections.push(Section {
             header: data,
-            data: self.data_id.clone(),
+            data: self.data_id,
         });
     }
 }

@@ -9,7 +9,6 @@
 - **TLS and IFUNC Support**: Easily generate Thread-Local Storage (TLS) symbols and Indirect Functions (IFUNC) with automatic resolver generation.
 - **Relocatable Object Generation**: Generates standard relocatable object files (.o).
 - **Customizable Layout**: Configure base address and page size for memory mapping tests.
-- **High-level API**: Provides intent-based interfaces like `RelocEntry::jump_slot` and `SymbolDesc::global_func`, abstracting away complex ELF constants.
 - **Metadata Export**: Exports detailed relocation information and section addresses alongside the ELF data for easy verification in tests.
 
 ## Core Interfaces

@@ -1,3 +1,4 @@
+#![allow(clippy::identity_op)]
 pub(crate) fn generate_plt0_code() -> Vec<u8> {
     vec![0; 32]
 }

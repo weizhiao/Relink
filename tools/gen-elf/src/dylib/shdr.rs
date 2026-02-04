@@ -343,7 +343,7 @@ impl ShdrManager {
         self.shdrs
             .iter()
             .find(|s| s.header.shtype == shtype)
-            .map(|s| s.data.clone())
+            .map(|s| s.data)
             .unwrap()
     }
 

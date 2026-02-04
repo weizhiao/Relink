@@ -8,9 +8,13 @@ license.workspace = true
 rust-version.workspace = true
 description = "A utility for generating ELF files for testing ELF loaders."
 readme = "README.md"
+keywords = ["elf", "testing", "loader", "generation"]
+categories = ["development-tools", "os"]
 
 [dependencies]
 object = { version = "0.38", features = ["write_core"] }
 anyhow = "1.0"
-clap = { version = "4", features = ["derive"] }
 byteorder = "1.4"
+
+[features]
+default = []

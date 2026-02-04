@@ -1,5 +1,4 @@
 use crate::common::RelocType;
-use clap::ValueEnum;
 use object::Architecture;
 use object::elf::*;
 
@@ -12,7 +11,7 @@ pub mod x86;
 pub mod x86_64;
 
 /// Supported CPU architectures for ELF generation.
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Arch {
     X86_64,
     X86,
@@ -313,7 +312,7 @@ pub(crate) fn calculate_addend(
         0
     } else if r_type.is_abs_reloc(arch) {
         (sym_value + 0x10) as i64
-    } else if r_type.is_plt_reloc(arch) {
+    } else if r_type.is_plt_reloc(arch) || r_type.is_copy_reloc(arch) || r_type.is_tls_reloc(arch) {
         0
     } else if r_type.is_relative_reloc(arch) {
         if sym_value != 0 {
@@ -321,10 +320,6 @@ pub(crate) fn calculate_addend(
         } else {
             data_vaddr as i64
         }
-    } else if r_type.is_copy_reloc(arch) {
-        0
-    } else if r_type.is_tls_reloc(arch) {
-        0
     } else {
         reloc_offset as i64
     }

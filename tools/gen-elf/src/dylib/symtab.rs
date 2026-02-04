@@ -236,7 +236,7 @@ impl SymTabMetadata {
             .filter(|s| {
                 s.content
                     .as_ref()
-                    .map_or(false, |c| matches!(c.kind, SectionKind::Text))
+                    .is_some_and(|c| matches!(c.kind, SectionKind::Text))
             })
             .collect();
 

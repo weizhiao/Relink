@@ -23,7 +23,7 @@ pub(crate) mod text;
 mod tls;
 
 fn align_up(val: u64, align: u64) -> u64 {
-    (val + align - 1) / align * align
+    val.div_ceil(align) * align
 }
 
 pub(crate) struct StringTable {
@@ -72,11 +72,6 @@ impl Default for ElfWriterConfig {
 }
 
 impl ElfWriterConfig {
-    /// Create a default configuration
-    pub fn default() -> Self {
-        <Self as Default>::default()
-    }
-
     /// Set custom base address
     pub fn with_base_addr(mut self, addr: u64) -> Self {
         self.base_addr = addr;
