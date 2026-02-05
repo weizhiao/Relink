@@ -301,7 +301,7 @@ dependencies = [
  "delegate",
  "elf",
  "libc",
- "syscalls",
+ "syscalls 0.7.0",
  "windows-sys 0.59.0",
 ]
 
@@ -325,8 +325,8 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "spin",
- "syscalls",
- "windows-sys 0.59.0",
+ "syscalls 0.8.1",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -540,7 +540,7 @@ dependencies = [
  "elf_loader 0.13.0",
  "itoa",
  "linked_list_allocator",
- "syscalls",
+ "syscalls 0.8.1",
 ]
 
 [[package]]
@@ -833,6 +833,12 @@ name = "syscalls"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90db46b5b4962319605d435986c775ea45a0ad2561c09e1d5372b89afeb49cf4"
+
+[[package]]
+name = "syscalls"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81c645a4de0d803ced6ef0388a2646aa1ef8467173b5d59a2c33c88de4ab76e7"
 
 [[package]]
 name = "tinytemplate"

@@ -1,0 +1,26 @@
+version: 2
+updates:
+# 监控 Rust 依赖
+- package-ecosystem: "cargo"
+  directory: "/"
+  schedule:
+    interval: "weekly"
+  open-pull-requests-limit: 10
+  # 自动打标签，方便过滤 PR
+  labels:
+  - "dependencies"
+  - "rust"
+  # 分组更新，减少 PR 数量
+  groups:
+    dependencies:
+      patterns:
+      - "*"
+
+# 监控 GitHub Actions 插件更新
+- package-ecosystem: "github-actions"
+  directory: "/"
+  schedule:
+    interval: "weekly"
+  labels:
+  - "dependencies"
+  - "github-actions"
