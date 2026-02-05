@@ -26,7 +26,7 @@ default-features = false
 features = ["use-syscall"]
 
 [dependencies]
-itoa = "1.0.15"
+itoa = "1.0.17"
 linked_list_allocator = { version = "0.10.5" }
 
 [[bin]]
