@@ -10,6 +10,7 @@ use crate::{
     elf::{E_CLASS, EHDR_SIZE, ElfEhdr},
     parse_ehdr_error,
 };
+use alloc::format;
 use core::ops::Deref;
 use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, ET_EXEC, EV_CURRENT};
 
@@ -101,7 +102,10 @@ impl ElfHeader {
 
         // Check file class (32-bit vs 64-bit)
         if self.e_ident[EI_CLASS] != E_CLASS {
-            return Err(parse_ehdr_error("file class mismatch"));
+            return Err(parse_ehdr_error(format!(
+                "file class mismatch: expected {}, found {}",
+                E_CLASS, self.e_ident[EI_CLASS]
+            )));
         }
 
         // Check ELF version
@@ -111,7 +115,11 @@ impl ElfHeader {
 
         // Check machine architecture
         if self.e_machine != EM_ARCH {
-            return Err(parse_ehdr_error("file arch mismatch"));
+            return Err(parse_ehdr_error(format!(
+                "file arch mismatch: expected {}, found {}",
+                machine_to_str(EM_ARCH),
+                machine_to_str(self.e_machine),
+            )));
         }
 
         Ok(())
@@ -169,5 +177,17 @@ impl ElfHeader {
         let shdr_start = self.e_shoff();
         let shdr_end = shdr_start + shdrs_size;
         (shdr_start, shdr_end)
+    }
+}
+
+fn machine_to_str(machine: u16) -> &'static str {
+    match machine {
+        elf::abi::EM_X86_64 => "x86_64",
+        elf::abi::EM_AARCH64 => "AArch64",
+        elf::abi::EM_RISCV => "RISC-V",
+        elf::abi::EM_386 => "x86",
+        elf::abi::EM_ARM => "ARM",
+        258 => "LoongArch",
+        _ => "unknown",
     }
 }

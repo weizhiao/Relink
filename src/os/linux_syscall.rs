@@ -4,10 +4,8 @@ use crate::{
     Result,
     os::{MapFlags, Mmap, ProtFlags},
 };
-use alloc::borrow::ToOwned;
 use alloc::{ffi::CString, format};
 use core::ffi::{c_int, c_void};
-use core::str::FromStr;
 use syscalls::Sysno;
 /// An implementation of Mmap trait
 pub struct DefaultMmap;
@@ -197,7 +195,9 @@ impl RawFile {
 
     pub(crate) fn from_path(path: &str) -> Result<Self> {
         const RDONLY: u32 = 0;
-        let name = CString::from_str(path).unwrap().to_owned();
+        let name = CString::new(path).map_err(|_| Error::Io {
+            msg: "null byte in path".into(),
+        })?;
         #[cfg(not(any(
             target_arch = "aarch64",
             target_arch = "riscv64",

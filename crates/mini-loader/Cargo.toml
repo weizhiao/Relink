@@ -21,7 +21,7 @@ workspace = true
 workspace = true
 
 [dependencies.elf_loader]
-version = "=0.13.0"
+workspace = true
 default-features = false
 features = ["use-syscall"]
 

@@ -7,13 +7,25 @@ use core::{
     ptr::{addr_of_mut, null},
 };
 use elf_loader::{
-    abi::{DT_NULL, DT_RELA, DT_RELACOUNT, PT_DYNAMIC},
-    arch::{Dyn, ElfPhdr, REL_RELATIVE},
-    load,
+    Loader, Result,
+    arch::REL_RELATIVE,
+    elf::{
+        ElfDyn as Dyn, ElfPhdr,
+        abi::{DT_NULL, DT_RELA, DT_RELACOUNT, PT_DYNAMIC},
+    },
+    image::RawElf,
+    input::ElfFile,
 };
 use itoa::Buffer;
 use linked_list_allocator::LockedHeap;
 use mini_loader::{exit, print_str, println};
+
+#[inline(always)]
+fn load_elf(name: &str) -> Result<RawElf<()>> {
+    let mut loader = Loader::new();
+    let object = ElfFile::from_path(name)?;
+    loader.load(object)
+}
 
 const AT_NULL: u64 = 0;
 const AT_PHDR: u64 = 3;
@@ -26,8 +38,8 @@ const AT_EXECFN: u64 = 31;
 #[global_allocator]
 static mut ALLOCATOR: LockedHeap = LockedHeap::empty();
 
-const HAEP_SIZE: usize = 4096;
-static mut HEAP_BUF: [u8; HAEP_SIZE] = [0; HAEP_SIZE];
+const HEAP_SIZE: usize = 1024 * 1024; // 1MB heap
+static mut HEAP_BUF: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 static mut HEAP_INIT: bool = false;
 
 #[panic_handler]
@@ -135,7 +147,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     }
     // 至此就完成自举，可以进行函数调用了
     unsafe {
-        ALLOCATOR = LockedHeap::new(addr_of_mut!(HEAP_BUF).cast(), HAEP_SIZE);
+        ALLOCATOR = LockedHeap::new(addr_of_mut!(HEAP_BUF).cast(), HEAP_SIZE);
         HEAP_INIT = true;
     }
 
@@ -144,14 +156,16 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     }
     // 加载输入的elf文件
     let argv = unsafe { sp.add(1) };
-    let elf_name = unsafe { CStr::from_ptr(argv.add(1).read() as _) };
-    let elf = load!(elf_name.to_str().unwrap()).unwrap();
+    let elf_name_raw = unsafe { argv.add(1).read() as *const i8 };
+    let elf_name = unsafe { CStr::from_ptr(elf_name_raw as _) };
+
+    let elf = load_elf(elf_name.to_str().unwrap()).unwrap();
     let mut interp_dylib = None;
     // 加载动态加载器ld.so，如果有的话
     if let Some(interp_name) = elf.interp() {
-        interp_dylib = Some(load!(interp_name).unwrap());
+        interp_dylib = Some(load_elf(interp_name).expect("Failed to load interpreter"));
     }
-    let phdrs = elf.phdrs();
+    let phdrs = elf.phdrs().unwrap_or_default();
     // 重新设置aux
     let mut cur_aux_ptr = auxv;
     let mut cur_aux = unsafe { &mut *cur_aux_ptr };
@@ -163,12 +177,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
             AT_PHENT => cur_aux.val = size_of::<ElfPhdr>() as u64,
             AT_ENTRY => cur_aux.val = elf.entry() as u64,
             AT_EXECFN => cur_aux.val = unsafe { argv.add(1).read() } as u64,
-            AT_BASE => {
-                cur_aux.val = interp_dylib
-                    .as_ref()
-                    .map(|dylib| dylib.entry())
-                    .unwrap_or(elf.entry()) as u64
-            }
+            AT_BASE => cur_aux.val = interp_dylib.as_ref().map(|e| e.base()).unwrap_or(0) as u64,
             _ => {}
         }
         cur_aux_ptr = unsafe { cur_aux_ptr.add(1) };

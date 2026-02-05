@@ -10,7 +10,7 @@ readme = "README.md"
 keywords = ["elf", "loader", "jit", "linker", "no-std"]
 categories = ["no-std", "embedded", "os", "parsing", "development-tools"]
 description = "A high-performance, no_std compliant ELF loader and JIT linker for Rust."
-exclude = [".gitignore", "ci", "tests", "examples", "docs"]
+exclude = [".gitignore", "ci", "docs"]
 
 [workspace.package]
 authors = ["wzhao <1207410841@qq.com>"]

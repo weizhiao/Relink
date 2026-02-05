@@ -9,10 +9,12 @@
 
 use crate::{
     Loader, Result,
+    elf::ElfPhdr,
     input::IntoElfReader,
     loader::LoadHook,
     os::Mmap,
     relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
+    tls::TlsResolver,
 };
 use alloc::vec::Vec;
 use core::fmt::Debug;
@@ -104,6 +106,46 @@ impl<D: 'static> RawElf<D> {
             RawElf::Dylib(dylib) => dylib.mapped_len(),
             RawElf::Exec(exec) => exec.mapped_len(),
             RawElf::Object(object) => object.mapped_len(),
+        }
+    }
+
+    /// Returns the entry point of the ELF file.
+    #[inline]
+    pub fn entry(&self) -> usize {
+        match self {
+            RawElf::Dylib(dylib) => dylib.entry(),
+            RawElf::Exec(exec) => exec.entry(),
+            RawElf::Object(_) => 0,
+        }
+    }
+
+    /// Returns the PT_INTERP value.
+    #[inline]
+    pub fn interp(&self) -> Option<&str> {
+        match self {
+            RawElf::Dylib(dylib) => dylib.interp(),
+            RawElf::Exec(exec) => exec.interp(),
+            RawElf::Object(_) => None,
+        }
+    }
+
+    /// Returns the program headers of the ELF file.
+    #[inline]
+    pub fn phdrs(&self) -> Option<&[ElfPhdr]> {
+        match self {
+            RawElf::Dylib(dylib) => Some(dylib.phdrs()),
+            RawElf::Exec(exec) => exec.phdrs(),
+            RawElf::Object(_) => None,
+        }
+    }
+
+    /// Returns the base address of the ELF file.
+    #[inline]
+    pub fn base(&self) -> usize {
+        match self {
+            RawElf::Dylib(dylib) => dylib.base(),
+            RawElf::Exec(exec) => exec.base(),
+            RawElf::Object(object) => object.base(),
         }
     }
 }
@@ -263,7 +305,13 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
     }
 }
 
-impl<M: Mmap, H: LoadHook, D: Default + 'static> Loader<M, H, D> {
+impl<M, H, D, Tls> Loader<M, H, D, Tls>
+where
+    M: Mmap,
+    H: LoadHook,
+    D: Default + 'static,
+    Tls: TlsResolver,
+{
     /// Load an ELF file into memory
     ///
     /// # Arguments

@@ -69,6 +69,9 @@ struct StaticImageInner<D> {
     /// Memory segments
     segments: ElfSegments,
 
+    /// Program headers
+    phdrs: Option<Vec<ElfPhdr>>,
+
     /// TLS module ID
     tls_mod_id: Option<usize>,
 
@@ -186,6 +189,22 @@ impl<D: 'static> RawExec<D> {
         match &self.inner {
             ExecImageInner::Dynamic(image) => image.tls_tp_offset(),
             ExecImageInner::Static(image) => image.tls_tp_offset(),
+        }
+    }
+
+    /// Returns the PT_INTERP value.
+    pub fn interp(&self) -> Option<&str> {
+        match &self.inner {
+            ExecImageInner::Dynamic(image) => image.interp(),
+            ExecImageInner::Static(_) => None,
+        }
+    }
+
+    /// Returns the program headers of the executable.
+    pub fn phdrs(&self) -> Option<&[ElfPhdr]> {
+        match &self.inner {
+            ExecImageInner::Dynamic(image) => Some(image.phdrs()),
+            ExecImageInner::Static(image) => image.inner.phdrs.as_deref(),
         }
     }
 
@@ -394,6 +413,11 @@ where
             name: self.name,
             user_data: self.user_data,
             segments: self.segments,
+            phdrs: if phdrs.is_empty() {
+                None
+            } else {
+                Some(phdrs.to_vec())
+            },
             tls_mod_id,
             tls_tp_offset,
         };
