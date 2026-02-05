@@ -1,0 +1,7 @@
+version: 2
+updates:
+- package-ecosystem: "cargo" # 监控 Rust 的依赖
+  directory: "/"
+  schedule:
+    interval: "weekly" # 可以选 daily, weekly, monthly
+  open-pull-requests-limit: 10 # 限制 PR 数量，防止被淹没

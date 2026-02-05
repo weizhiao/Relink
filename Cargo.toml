@@ -23,13 +23,13 @@ rust-version = "1.93.0"
 members = ["crates/windows-elf-loader", "crates/mini-loader", "tools/gen-elf"]
 
 [workspace.dependencies]
-syscalls = { version = "0.7.0", default-features = false }
+syscalls = { version = "0.8.1", default-features = false }
 elf = { version = "0.8", default-features = false }
 cfg-if = '1.0'
 elf_loader = { path = ".", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
 	'Win32_Foundation',
 	'Win32_System_Memory',
 	'Win32_System_SystemInformation',
