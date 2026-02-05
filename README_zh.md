@@ -71,7 +71,7 @@ drop(lib); // 💥 试图在这里卸载库...
 ### 添加到你的项目
 ```toml
 [dependencies]
-elf_loader = "0.13"  # 你的运行时链接引擎
+elf_loader = "0.14"
 ```
 
 ### 基础示例：加载并调用一个动态库
@@ -80,7 +80,8 @@ use elf_loader::load_dylib;
 
 fn main() {
     // 1. 加载库并执行即时链接
-    let lib = load_dylib!("path/to/your_library.so")?
+    let lib = Loader::new()
+        .load_dylib("path/to/your_library.so")?
         .relocator()
         // 可选：提供自定义符号解析（例如，从主程序导出符号）
         .pre_find_fn(|sym_name| {
@@ -108,7 +109,7 @@ extern "C" fn my_host_function(value: i32) -> i32 {
 
 ## 📊 平台支持
 
-Relink 致力于跨平台支持。以下是当前的支持矩阵：
+Relink 致力于跨平台支持。
 
 | 架构             | 动态链接 | 延迟绑定 | 混合链接 (.o) |
 | :--------------- | :------: | :------: | :-----------: |

@@ -79,18 +79,19 @@ By implementing the `SymbolLookup` and `RelocationHandler` traits, users can dee
 
 ```toml
 [dependencies]
-elf_loader = "0.13"  # Your runtime linking engine
+elf_loader = "0.14"
 
 ```
 
 ### Basic Example: Load and Call a Dynamic Library
 
 ```rust
-use elf_loader::load_dylib;
+use elf_loader::Loader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Load the library and perform instant linking
-    let lib = load_dylib!("path/to/your_library.so")?
+    let lib = Loader::new()
+        .load_dylib("path/to/your_library.so")?
         .relocator()
         // Optional: Provide custom symbol resolution (e.g., export symbols from host)
         .pre_find_fn(|sym_name| {
@@ -121,7 +122,7 @@ extern "C" fn my_host_function(value: i32) -> i32 {
 
 ## 📊 Platform Support
 
-Relink is committed to broad cross-platform support. Current support matrix:
+Relink is committed to broad cross-platform support.
 
 | Architecture     | Dynamic Linking | Lazy Binding | Hybrid Linking (.o) |
 | ---------------- | --------------- | ------------ | ------------------- |

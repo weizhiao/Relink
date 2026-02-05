@@ -14,20 +14,31 @@ fn main() {
     let mut loader = WinElfLoader::new();
     let liba = loader
         .load_file(r".\crates\windows-elf-loader\example_dylib\liba.so")
+        .unwrap()
+        .relocator()
+        .pre_find_fn(&pre_find)
+        .relocate()
         .unwrap();
     let libb = loader
         .load_file(r".\crates\windows-elf-loader\example_dylib\libb.so")
+        .unwrap()
+        .relocator()
+        .pre_find_fn(&pre_find)
+        .scope([&liba])
+        .relocate()
         .unwrap();
     let libc = loader
         .load_file(r".\crates\windows-elf-loader\example_dylib\libc.so")
+        .unwrap()
+        .relocator()
+        .pre_find_fn(&pre_find)
+        .scope([&libb])
+        .relocate()
         .unwrap();
-    let a = liba.relocate([], &pre_find).unwrap();
-    let f = unsafe { a.get::<extern "sysv64" fn() -> i32>("a").unwrap() };
+    let f = unsafe { liba.get::<extern "sysv64" fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
-    let b = libb.relocate([&a], &pre_find).unwrap();
-    let f = unsafe { b.get::<extern "sysv64" fn() -> i32>("b").unwrap() };
+    let f = unsafe { libb.get::<extern "sysv64" fn() -> i32>("b").unwrap() };
     assert!(f() == 2);
-    let c = libc.relocate([&b], &pre_find).unwrap();
-    let f = unsafe { c.get::<extern "sysv64" fn() -> i32>("c").unwrap() };
+    let f = unsafe { libc.get::<extern "sysv64" fn() -> i32>("c").unwrap() };
     assert!(f() == 3);
 }

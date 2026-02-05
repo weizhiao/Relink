@@ -1,23 +1,17 @@
-use elf_loader::{ElfDylib, Loader, mmap::DefaultMmap as WindowsMmap, object::ElfBinary};
-use std::sync::Arc;
+use elf_loader::{
+    Error, Loader,
+    image::RawDylib as ElfDylib,
+    input::{ElfBinary, ElfFile},
+};
 
 /// elf loader
 pub struct WinElfLoader {
-    loader: Loader<WindowsMmap>,
+    loader: Loader,
 }
 
 impl WinElfLoader {
     pub fn new() -> Self {
-        let mut loader = Loader::new();
-        let sysv_abi = Arc::new(|func: Option<fn()>, func_array: Option<&[fn()]>| {
-            func.iter()
-                .chain(func_array.unwrap_or(&[]).iter())
-                .for_each(
-                    |init| unsafe { core::mem::transmute::<_, &extern "sysv64" fn()>(init) }(),
-                );
-        });
-        loader.set_init(sysv_abi.clone());
-        loader.set_fini(sysv_abi);
+        let loader = Loader::new().with_default_tls_resolver();
         Self { loader }
     }
 
@@ -25,13 +19,13 @@ impl WinElfLoader {
         &mut self,
         name: &str,
         bytes: impl AsRef<[u8]>,
-    ) -> Result<ElfDylib, elf_loader::Error> {
+    ) -> Result<ElfDylib<()>, Error> {
         let object = ElfBinary::new(name, bytes.as_ref());
-        self.loader.load_dylib(object, Some(false))
+        self.loader.load_dylib(object)
     }
 
-    pub fn load_file(&mut self, name: &str) -> Result<ElfDylib, elf_loader::Error> {
-        let object = elf_loader::object::ElfFile::from_path(name)?;
-        self.loader.load_dylib(object, None)
+    pub fn load_file(&mut self, name: &str) -> Result<ElfDylib<()>, Error> {
+        let object = ElfFile::from_path(name)?;
+        self.loader.load_dylib(object)
     }
 }

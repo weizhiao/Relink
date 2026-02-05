@@ -16,9 +16,8 @@ fn main() {
         .load_file(r".\crates\windows-elf-loader\example_dylib\liba.so")
         .unwrap()
         .relocator()
-        .symbols(&pre_find)
-        .scope([])
-        .run()
+        .post_find_fn(&pre_find)
+        .relocate()
         .unwrap();
     // Call function a in liba.so
     let f = unsafe { liba.get::<extern "sysv64" fn() -> i32>("a").unwrap() };

@@ -11,6 +11,6 @@ keywords = ["elf", "windows", "loader"]
 categories = ["os", "embedded"]
 
 [dependencies.elf_loader]
-version = "=0.13.0"
+workspace = true
 default-features = false
 features = ["log"]

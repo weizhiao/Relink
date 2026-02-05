@@ -320,16 +320,25 @@ pub(crate) trait SegmentBuilder {
         let segments = self.segments_mut();
         let base = space.base();
 
+        #[cfg(windows)]
+        let mut last_addr = space.memory as usize;
+
         // Process each segment
         for segment in segments.iter_mut() {
             segment.rebase(base);
-            // if object.as_fd().is_some() {
-            //     if segment.addr.absolute_addr() + segment.total_size != space.base() + space.len() {
-            //         let len = param.addr + param.len - *last_address;
-            //         crate::os::virtual_free(*last_address, len)?;
-            //         *last_address = param.addr + param.len;
-            //     }
-            // }
+            #[cfg(windows)]
+            if object.as_fd().is_some() {
+                let addr = segment.addr.absolute_addr();
+                let len = segment.len;
+                if addr > last_addr {
+                    crate::os::virtual_free(last_addr, addr - last_addr)?;
+                }
+                let space_end = space.memory as usize + space.len();
+                if addr + len < space_end {
+                    crate::os::virtual_free(addr + len, space_end - (addr + len))?;
+                }
+                last_addr = addr + len;
+            }
             segment.mmap_segment::<M>(object)?;
             segment.copy_data(object)?;
             segment.fill_zero::<M>()?;

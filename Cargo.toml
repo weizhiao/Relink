@@ -1,16 +1,16 @@
 [package]
 name = "elf_loader"
-version = "0.13.0"
+version = "0.14.0"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
 rust-version.workspace = true
 readme = "README.md"
-keywords = ["elf", "unix", "loader"]
-categories = ["no-std", "os", "embedded"]
+keywords = ["elf", "loader", "jit", "linker", "no-std"]
+categories = ["no-std", "embedded", "os", "parsing", "development-tools"]
 description = "A high-performance, no_std compliant ELF loader and JIT linker for Rust."
-exclude = [".gitignore", "ci", "tests", "examples", "docs", "docker"]
+exclude = [".gitignore", "ci", "tests", "examples", "docs"]
 
 [workspace.package]
 authors = ["wzhao <1207410841@qq.com>"]
@@ -26,6 +26,7 @@ members = ["crates/windows-elf-loader", "crates/mini-loader", "tools/gen-elf"]
 syscalls = { version = "0.7.0", default-features = false }
 elf = { version = "0.8", default-features = false }
 cfg-if = '1.0'
+elf_loader = { path = ".", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -40,10 +41,10 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [target.'cfg(unix)'.dependencies]
-libc = { version = "0.2.171", default-features = false }
+libc = { version = "0.2.180", default-features = false }
 
 [build-dependencies]
-cc = "1.0"
+cc = "1.2"
 
 [dependencies.syscalls]
 workspace = true
@@ -61,13 +62,13 @@ default-features = false
 optional = true
 
 [dependencies.portable-atomic]
-version = "1.3"
+version = "1.13"
 default-features = false
 optional = true
 features = ["require-cas"]
 
 [dependencies.portable-atomic-util]
-version = "0.2"
+version = "0.2.5"
 default-features = false
 optional = true
 features = ["alloc"]
@@ -90,11 +91,11 @@ default-features = false
 bitflags = "2.9.0"
 
 [dev-dependencies]
-criterion = "0.5.1"
-libloading = "0.8.5"
+criterion = "0.8.2"
+libloading = "0.9.0"
 env_logger = "0.11.6"
-gen-elf = { path = "tools/gen-elf" }
-object = "0.38.0"
+gen-elf = "0.1.0"
+object = "0.38.1"
 
 [[bench]]
 name = "benchmark"

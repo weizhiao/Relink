@@ -15,6 +15,11 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let target = env::var("TARGET").unwrap();
 
+    if target.contains("windows") {
+        // Windows build not supported for fixtures
+        return;
+    }
+
     // Expose the output directory to tests
     println!("cargo:rustc-env=TEST_ARTIFACTS={}", out_dir.display());
 

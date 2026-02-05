@@ -54,11 +54,11 @@ bitflags! {
 cfg_if::cfg_if! {
     if #[cfg(windows)]{
         mod windows;
-        pub(crate) use windows::{current_thread_id, register_thread_destructor, get_thread_local_ptr};
+        pub(crate) use windows::{current_thread_id, register_thread_destructor, get_thread_local_ptr, RawFile, virtual_free};
         pub use windows::DefaultMmap;
     }else if #[cfg(feature = "use-syscall")]{
         mod linux_syscall;
-        pub(crate) use linux_syscall::{current_thread_id, register_thread_destructor, get_thread_local_ptr};
+        pub(crate) use linux_syscall::{current_thread_id, register_thread_destructor, get_thread_local_ptr, RawFile};
         pub use linux_syscall::*;
     }else if #[cfg(unix)]{
         mod unix;
@@ -66,7 +66,7 @@ cfg_if::cfg_if! {
         pub use unix::DefaultMmap;
     }else {
         mod baremetal;
-        pub(crate) use baremetal::{current_thread_id, register_thread_destructor, get_thread_local_ptr};
+        pub(crate) use baremetal::{current_thread_id, register_thread_destructor, get_thread_local_ptr, RawFile};
         pub use baremetal::*;
     }
 }

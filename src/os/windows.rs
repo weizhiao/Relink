@@ -6,10 +6,9 @@ use crate::{
 };
 use alloc::{ffi::CString, format, vec::Vec};
 use core::{
-    ffi::{CStr, c_void},
+    ffi::c_void,
     mem::MaybeUninit,
-    ptr::{NonNull, null, null_mut},
-    str::FromStr,
+    ptr::{null, null_mut},
 };
 use windows_sys::Win32::{
     Foundation::{
@@ -126,7 +125,27 @@ impl Mmap for DefaultMmap {
             *need_copy = true;
             debug_assert!(addr.is_some(), "Address must be specified.");
             let addr = addr.unwrap();
-            addr as _
+
+            // If the address is within a placeholder reservation, we must replace it
+            // with a real allocation before we can copy data into it.
+            let ptr = unsafe {
+                Memory::VirtualAlloc2(
+                    GetCurrentProcess(),
+                    addr as _,
+                    len,
+                    MEM_COMMIT | MEM_RESERVE | MEM_REPLACE_PLACEHOLDER,
+                    PAGE_READWRITE,
+                    null_mut(),
+                    0,
+                )
+            };
+
+            if ptr.is_null() {
+                // Fallback: if it's not a placeholder, assume it's already accessible
+                addr as _
+            } else {
+                ptr
+            }
         };
         Ok(ptr)
     }
@@ -137,9 +156,33 @@ impl Mmap for DefaultMmap {
         prot: ProtFlags,
         _flags: MapFlags,
     ) -> Result<*mut c_void> {
-        // TODO： Change implementation using VirtualFree + VirtualAlloc
+        // Try to replace a placeholder first (standard for Windows placeholder-based mapping)
+        let ptr = unsafe {
+            Memory::VirtualAlloc2(
+                GetCurrentProcess(),
+                addr as _,
+                len,
+                MEM_COMMIT | MEM_RESERVE | MEM_REPLACE_PLACEHOLDER,
+                prot_win(prot, false),
+                null_mut(),
+                0,
+            )
+        };
+
+        if !ptr.is_null() {
+            return Ok(ptr);
+        }
+
+        // Fallback for non-placeholder case (e.g. anonymous mapping not in a reserved region,
+        // or a region reserved without MEM_RESERVE_PLACEHOLDER)
         let ptr =
             unsafe { Memory::VirtualAlloc(addr as _, len, MEM_COMMIT, prot_win(prot, false)) };
+        if ptr.is_null() {
+            let err_code = unsafe { GetLastError() };
+            return Err(Error::Mmap {
+                msg: format!("VirtualAlloc failed with error: {}", err_code).into(),
+            });
+        }
         Ok(ptr)
     }
 
@@ -158,8 +201,8 @@ impl Mmap for DefaultMmap {
             == 0
         {
             let err_code = unsafe { GetLastError() };
-            return Err(Error::MmapError {
-                msg: format!("mprotect error! error code: {}", err_code),
+            return Err(Error::Mmap {
+                msg: format!("mprotect error! error code: {}", err_code).into(),
             });
         }
         Ok(())
@@ -170,7 +213,7 @@ impl Mmap for DefaultMmap {
             if let Some(addr) = addr {
                 unsafe {
                     Memory::VirtualAlloc2(
-                        null_mut(),
+                        GetCurrentProcess(),
                         addr as _,
                         len,
                         MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
@@ -182,7 +225,7 @@ impl Mmap for DefaultMmap {
             } else {
                 unsafe {
                     Memory::VirtualAlloc2(
-                        null_mut(),
+                        GetCurrentProcess(),
                         null_mut(),
                         len,
                         MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
@@ -204,7 +247,7 @@ impl Mmap for DefaultMmap {
             }
         };
         if ptr.is_null() {
-            return Err(Error::MmapError {
+            return Err(Error::Mmap {
                 msg: "VirtualAlloc failed".into(),
             });
         }
@@ -222,8 +265,29 @@ impl Drop for RawFile {
 }
 
 impl RawFile {
-    pub(crate) fn from_owned_fd(_path: &str, _raw_fd: i32) -> Self {
-        todo!()
+    pub(crate) fn from_owned_fd(path: &str, raw_fd: i32) -> Self {
+        let handle = raw_fd as isize as HANDLE;
+        let mapping_handle = unsafe {
+            CreateFileMappingW(
+                handle,
+                null_mut(),
+                PAGE_EXECUTE_WRITECOPY,
+                0 as u32,
+                0 as u32,
+                null(),
+            )
+        };
+
+        if mapping_handle.is_null() {
+            let err_code = unsafe { GetLastError() };
+            panic!("CreateFileMappingW failed with error: {}", err_code);
+        }
+
+        Self {
+            name: CString::new(path).unwrap(),
+            fd: handle,
+            mapping: mapping_handle,
+        }
     }
 
     pub(crate) fn from_path(path: &str) -> Result<Self> {
@@ -247,7 +311,7 @@ impl RawFile {
 
         if handle == INVALID_HANDLE_VALUE {
             let err_code = unsafe { GetLastError() };
-            return Err(io_error(&format!(
+            return Err(io_error(format!(
                 "CreateFileW failed for {}: error {}",
                 path, err_code
             )));
@@ -263,15 +327,15 @@ impl RawFile {
                 null(),
             )
         };
-        if mapping_handle == INVALID_HANDLE_VALUE {
+        if mapping_handle.is_null() {
             let err_code = unsafe { GetLastError() };
-            return Err(Error::MmapError {
-                msg: format!("CreateFileMappingW failed with error: {}", err_code),
+            return Err(Error::Mmap {
+                msg: format!("CreateFileMappingW failed with error: {}", err_code).into(),
             });
         }
 
         Ok(Self {
-            name: CString::from_str(path).unwrap(),
+            name: CString::new(path).unwrap(),
             fd: handle,
             mapping: mapping_handle,
         })
@@ -286,7 +350,7 @@ fn win_seek(handle: HANDLE, offset: usize) -> Result<()> {
 
     if res == 0 || new_pos as usize != offset {
         let err_code = unsafe { GetLastError() };
-        return Err(io_error(&format!(
+        return Err(io_error(format!(
             "SetFilePointerEx failed with error: {}",
             err_code
         )));
@@ -316,7 +380,7 @@ fn win_read_exact(handle: HANDLE, mut bytes: &mut [u8]) -> Result<()> {
 
         if result == 0 {
             let err_code = unsafe { GetLastError() };
-            return Err(io_error(&format!(
+            return Err(io_error(format!(
                 "ReadFile failed with error: {}",
                 err_code
             )));
@@ -332,8 +396,8 @@ fn win_read_exact(handle: HANDLE, mut bytes: &mut [u8]) -> Result<()> {
 pub(crate) fn virtual_free(addr: usize, len: usize) -> Result<()> {
     if unsafe { VirtualFree(addr as _, len, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) } == 0 {
         let err_code = unsafe { windows_sys::Win32::Foundation::GetLastError() };
-        return Err(crate::Error::MmapError {
-            msg: alloc::format!("VirtualFree failed with error: {}", err_code),
+        return Err(crate::Error::Mmap {
+            msg: alloc::format!("VirtualFree failed with error: {}", err_code).into(),
         });
     }
     Ok(())
@@ -346,8 +410,8 @@ impl ElfReader for RawFile {
         Ok(())
     }
 
-    fn file_name(&self) -> &CStr {
-        &self.name
+    fn file_name(&self) -> &str {
+        self.name.to_str().unwrap()
     }
 
     fn as_fd(&self) -> Option<isize> {

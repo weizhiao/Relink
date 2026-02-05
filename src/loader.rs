@@ -282,7 +282,16 @@ impl Loader<DefaultMmap, (), (), ()> {
             ctx.func()
                 .iter()
                 .chain(ctx.func_array().unwrap_or(&[]).iter())
-                .for_each(|init| unsafe { core::mem::transmute::<_, &extern "C" fn()>(init) }());
+                .for_each(|init| {
+                    #[cfg(not(windows))]
+                    unsafe {
+                        core::mem::transmute::<_, &extern "C" fn()>(init)()
+                    };
+                    #[cfg(windows)]
+                    unsafe {
+                        core::mem::transmute::<_, &extern "sysv64" fn()>(init)()
+                    };
+                })
         }));
         Self {
             buf: ElfBuf::new(),
