@@ -16,6 +16,10 @@
 
 ---
 
+<p align="center">
+  <a href="README.md">English</a> | <a href="README-zh_cn.md">简体中文</a>
+</p>
+
 ## 🚀 Why Relink?
 
 **Relink** is a high-performance runtime linker (JIT Linker) tailor-made for the Rust ecosystem. It efficiently parses various ELF formats—not only from traditional file systems but also directly from memory images—and performs flexible dynamic and static hybrid linking.
