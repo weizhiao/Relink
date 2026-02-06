@@ -117,12 +117,6 @@ portable-atomic = [
 	"spin/portable_atomic",
 ]
 
-[[example]]
-name = "relocate_dylib"
-
-[[example]]
-name = "load_dylib"
-
 [profile.release]
 panic = "abort"
 opt-level = "s"

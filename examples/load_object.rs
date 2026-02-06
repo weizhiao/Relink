@@ -1,8 +1,8 @@
 use core::str;
-use elf_loader::{Loader, input::ElfFile};
+use elf_loader::{Loader, Result};
 use std::collections::HashMap;
 
-fn main() {
+fn main() -> Result<()> {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     env_logger::init();
 
@@ -16,33 +16,28 @@ fn main() {
         |name: &str| -> Option<*const ()> { map.get(name).copied().map(|p| p as *const ()) };
     let mut loader = Loader::new();
     let a = loader
-        .load_object("target/a.o")
-        .unwrap()
+        .load_object("target/a.o")?
         .relocator()
         .pre_find(&pre_find)
-        .relocate()
-        .unwrap();
+        .relocate()?;
     let b = loader
-        .load_dylib(ElfFile::from_path("target/libb.so").unwrap())
-        .unwrap()
+        .load_dylib("target/libb.so")?
         .relocator()
         .pre_find(&pre_find)
         .scope([&a])
-        .relocate()
-        .unwrap();
+        .relocate()?;
     let c = loader
-        .load_object(ElfFile::from_path("target/c.o").unwrap())
-        .unwrap()
+        .load_object("target/c.o")?
         .relocator()
         .pre_find(&pre_find)
         .scope([&a])
         .add_scope([&b])
-        .relocate()
-        .unwrap();
+        .relocate()?;
     let f = unsafe { a.get::<extern "C" fn() -> i32>("a").unwrap() };
     assert!(f() == 1);
     let f = unsafe { b.get::<extern "C" fn() -> i32>("b").unwrap() };
     assert!(f() == 2);
     let f = unsafe { c.get::<extern "C" fn() -> i32>("c").unwrap() };
     assert!(f() == 3);
+    Ok(())
 }

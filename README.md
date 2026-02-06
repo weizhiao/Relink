@@ -115,8 +115,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 extern "C" fn my_host_function(value: i32) -> i32 {
     value * 2
 }
-
 ```
+
+> **💡 Tip**: Looking for more advanced features like lifecycle hooks or relocation interception? Check out the [examples](examples/) directory.
 
 ---
 
