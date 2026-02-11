@@ -25,6 +25,9 @@ pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Size
     pub(crate) dependency_flags: Vec<bool>,
     pub(crate) tls_get_addr: usize,
     pub(crate) tls_desc_args: Vec<Box<TlsDescDynamicArg>>,
+    /// Static relocation tables from section headers (for .o files).
+    /// Empty for dynamic relocations.
+    pub(crate) static_relocs: &'find [&'static [ElfRelType]],
 }
 
 impl<'find, D, PreS, PostS, PreH, PostH> RelocHelper<'find, D, PreS, PostS, PreH, PostH>
@@ -54,6 +57,7 @@ where
             dependency_flags,
             tls_get_addr,
             tls_desc_args: Vec::new(),
+            static_relocs: &[],
         }
     }
 

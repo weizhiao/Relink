@@ -4,9 +4,11 @@
 //! supported by the ELF loader, including relocation handlers, PLT entry definitions,
 //! and instruction-specific fixups.
 cfg_if::cfg_if! {
-    if #[cfg(target_arch = "x86_64")]{
+    if #[cfg(target_arch = "x86_64")] {
         pub(crate) type  StaticRelocator = X86_64Relocator;
-    }else {
+    } else if #[cfg(target_arch = "riscv64")] {
+        pub(crate) type  StaticRelocator = Riscv64Relocator;
+    } else {
         pub(crate) type  StaticRelocator = DummyRelocator;
         pub(crate) struct DummyRelocator;
         pub(crate) const PLT_ENTRY_SIZE: usize = 16;

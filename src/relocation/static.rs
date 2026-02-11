@@ -48,6 +48,7 @@ impl<D: 'static> RawObject<D> {
             post_handler,
             self.tls_get_addr,
         );
+        helper.static_relocs = &self.relocation.relocation;
         for reloc in self.relocation.relocation.iter() {
             for rel in *reloc {
                 if !helper.handle_pre(rel)? {
