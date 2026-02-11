@@ -155,7 +155,7 @@ fn gen_static_elf(
                 Relocation {
                     offset,
                     symbol: symbol_id,
-                    addend: 0, // Should we allow specifying addend in RelocEntry?
+                    addend: reloc.addend,
                     flags,
                 },
             )?;

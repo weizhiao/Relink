@@ -4,9 +4,11 @@
 //! supported by the ELF loader, including relocation handlers, PLT entry definitions,
 //! and instruction-specific fixups.
 cfg_if::cfg_if! {
-    if #[cfg(target_arch = "x86_64")]{
+    if #[cfg(target_arch = "x86_64")] {
         pub(crate) type  StaticRelocator = X86_64Relocator;
-    }else {
+    } else if #[cfg(target_arch = "riscv64")] {
+        pub(crate) type  StaticRelocator = Riscv64Relocator;
+    } else {
         pub(crate) type  StaticRelocator = DummyRelocator;
         pub(crate) struct DummyRelocator;
         pub(crate) const PLT_ENTRY_SIZE: usize = 16;
@@ -18,7 +20,25 @@ cfg_if::cfg_if! {
         ];
 
         impl crate::relocation::StaticReloc for DummyRelocator {
+            fn new(_relocs: &[&'static [crate::elf::ElfRelType]]) -> Self {
+                Self
+            }
+
+            fn prepare<D, PreS, PostS, PreH, PostH>(
+                &mut self,
+                _relocs: &[&'static [crate::elf::ElfRelType]],
+                _helper: &crate::relocation::RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
+            ) where
+                PreS: crate::relocation::SymbolLookup + ?Sized,
+                PostS: crate::relocation::SymbolLookup + ?Sized,
+                PreH: crate::relocation::RelocationHandler + ?Sized,
+                PostH: crate::relocation::RelocationHandler + ?Sized,
+            {
+                // No preparation needed
+            }
+
             fn relocate<D, PreS, PostS, PreH, PostH>(
+                &mut self,
                 _helper: &mut crate::relocation::RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
                 _rel: &crate::elf::ElfRelType,
                 _pltgot: &mut crate::segment::section::PltGotSection,
