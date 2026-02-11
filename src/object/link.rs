@@ -13,12 +13,14 @@ use alloc::{boxed::Box, vec::Vec};
 
 pub(crate) struct ObjectRelocation<Arch: RelocationArch = crate::arch::NativeArch> {
     sections: Box<[&'static [ElfRelType<Arch>]]>,
+    state: Arch::ObjectRelocationState,
 }
 
 impl<Arch: RelocationArch> ObjectRelocation<Arch> {
     pub(crate) fn new(sections: Vec<&'static [ElfRelType<Arch>]>) -> Self {
         Self {
             sections: sections.into_boxed_slice(),
+            state: Arch::ObjectRelocationState::default(),
         }
     }
 }
@@ -50,12 +52,14 @@ where
             observer,
             self.core.tls_get_addr(),
         );
-        for reloc in self.relocation.sections.iter() {
+        let ObjectRelocation { sections, state } = &mut self.relocation;
+        Arch::prepare_object_relocation(state, &mut helper, sections)?;
+        for reloc in sections.iter() {
             for rel in *reloc {
                 if !helper.handle_pre(rel)?.is_unhandled() {
                     continue;
                 }
-                match Arch::relocate_object(&mut helper, rel, &mut self.pltgot) {
+                match Arch::relocate_object(state, &mut helper, rel, &mut self.pltgot) {
                     Ok(()) => continue,
                     Err(err) => {
                         if helper.handle_post(rel)?.is_unhandled() {

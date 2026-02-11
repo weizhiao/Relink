@@ -69,10 +69,14 @@ impl RelocationArch for X86_64Arch {
     }
 
     #[cfg(feature = "object")]
+    type ObjectRelocationState = ();
+
+    #[cfg(feature = "object")]
     #[doc(hidden)]
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
     fn relocate_object<D, R, PreH, PostH, Obs>(
+        _state: &mut Self::ObjectRelocationState,
         helper: &mut crate::relocation::RelocHelper<
             '_,
             D,

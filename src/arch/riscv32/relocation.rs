@@ -45,6 +45,9 @@ impl RelocationArch for RiscV32Arch {
             _ => "UNKNOWN",
         }
     }
+
+    #[cfg(feature = "object")]
+    type ObjectRelocationState = ();
 }
 
 impl crate::relocation::RelocationValueProvider for RiscV32Arch {}

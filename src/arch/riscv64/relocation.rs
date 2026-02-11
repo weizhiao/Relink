@@ -5,6 +5,8 @@ use elf::abi::*;
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
+#[cfg(feature = "object")]
+use crate::{Result, os::HostRegion};
 
 /// RISC-V 64-bit architecture marker.
 #[derive(Debug, Clone, Copy, Default)]
@@ -37,13 +39,98 @@ impl RelocationArch for RiscV64Arch {
     fn rel_type_to_str(r_type: ElfRelocationType) -> &'static str {
         match r_type.raw() {
             R_RISCV_NONE => "R_RISCV_NONE",
+            R_RISCV_32 => "R_RISCV_32",
             R_RISCV_64 => "R_RISCV_64",
             R_RISCV_RELATIVE => "R_RISCV_RELATIVE",
             R_RISCV_COPY => "R_RISCV_COPY",
             R_RISCV_JUMP_SLOT => "R_RISCV_JUMP_SLOT",
             R_RISCV_IRELATIVE => "R_RISCV_IRELATIVE",
+            R_RISCV_BRANCH => "R_RISCV_BRANCH",
+            R_RISCV_JAL => "R_RISCV_JAL",
+            R_RISCV_CALL => "R_RISCV_CALL",
+            R_RISCV_CALL_PLT => "R_RISCV_CALL_PLT",
+            R_RISCV_GOT_HI20 => "R_RISCV_GOT_HI20",
+            R_RISCV_PCREL_HI20 => "R_RISCV_PCREL_HI20",
+            R_RISCV_PCREL_LO12_I => "R_RISCV_PCREL_LO12_I",
+            R_RISCV_PCREL_LO12_S => "R_RISCV_PCREL_LO12_S",
+            R_RISCV_HI20 => "R_RISCV_HI20",
+            R_RISCV_LO12_I => "R_RISCV_LO12_I",
+            R_RISCV_LO12_S => "R_RISCV_LO12_S",
+            R_RISCV_ADD8 => "R_RISCV_ADD8",
+            R_RISCV_ADD16 => "R_RISCV_ADD16",
+            R_RISCV_ADD32 => "R_RISCV_ADD32",
+            R_RISCV_ADD64 => "R_RISCV_ADD64",
+            R_RISCV_SUB8 => "R_RISCV_SUB8",
+            R_RISCV_SUB16 => "R_RISCV_SUB16",
+            R_RISCV_SUB32 => "R_RISCV_SUB32",
+            R_RISCV_SUB64 => "R_RISCV_SUB64",
+            R_RISCV_SUB6 => "R_RISCV_SUB6",
+            R_RISCV_SET6 => "R_RISCV_SET6",
+            R_RISCV_SET8 => "R_RISCV_SET8",
+            R_RISCV_SET16 => "R_RISCV_SET16",
+            R_RISCV_SET32 => "R_RISCV_SET32",
+            R_RISCV_32_PCREL => "R_RISCV_32_PCREL",
+            R_RISCV_RVC_BRANCH => "R_RISCV_RVC_BRANCH",
+            R_RISCV_RVC_JUMP => "R_RISCV_RVC_JUMP",
             _ => "UNKNOWN",
         }
+    }
+
+    #[cfg(feature = "object")]
+    type ObjectRelocationState = super::object::RiscV64ObjectRelocationState;
+
+    #[cfg(feature = "object")]
+    const OBJECT_RELOCATION_ALLOWS_UNALIGNED_ACCESS: bool = true;
+
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
+    #[allow(private_bounds)]
+    #[allow(private_interfaces)]
+    fn prepare_object_relocation<D, PreH, PostH, Obs>(
+        state: &mut Self::ObjectRelocationState,
+        helper: &mut crate::relocation::RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
+        sections: &[&'static [crate::elf::ElfRelType<Self>]],
+    ) -> Result<()>
+    where
+        D: 'static,
+        PreH: crate::relocation::RelocationHandler<Self> + ?Sized,
+        PostH: crate::relocation::RelocationHandler<Self> + ?Sized,
+        Obs: crate::observer::RelocationObserver<Self> + ?Sized,
+    {
+        Self::prepare_object_relocation_impl(state, helper, sections)
+    }
+
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
+    #[allow(private_bounds)]
+    #[allow(private_interfaces)]
+    fn relocate_object<D, PreH, PostH, Obs>(
+        state: &mut Self::ObjectRelocationState,
+        helper: &mut crate::relocation::RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
+        rel: &crate::elf::ElfRelType<Self>,
+        pltgot: &mut crate::object::layout::PltGotSection,
+    ) -> Result<()>
+    where
+        D: 'static,
+        PreH: crate::relocation::RelocationHandler<Self> + ?Sized,
+        PostH: crate::relocation::RelocationHandler<Self> + ?Sized,
+        Obs: crate::observer::RelocationObserver<Self> + ?Sized,
+    {
+        Self::relocate_object_impl(state, helper, rel, pltgot)
+    }
+
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
+    #[inline]
+    fn object_needs_got(r_type: ElfRelocationType) -> bool {
+        Self::object_needs_got_impl(r_type)
+    }
+
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
+    #[inline]
+    fn object_needs_plt(r_type: ElfRelocationType) -> bool {
+        Self::object_needs_plt_impl(r_type)
     }
 }
 

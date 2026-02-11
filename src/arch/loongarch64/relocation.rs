@@ -55,6 +55,9 @@ impl RelocationArch for LoongArch64Arch {
             _ => "UNKNOWN",
         }
     }
+
+    #[cfg(feature = "object")]
+    type ObjectRelocationState = ();
 }
 
 impl crate::relocation::RelocationValueProvider for LoongArch64Arch {}

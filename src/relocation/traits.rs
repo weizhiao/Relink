@@ -69,6 +69,12 @@ pub trait RelocationArch: 'static {
     /// Cross-architecture implementations normally leave this as `false`.
     const SUPPORTS_NATIVE_RUNTIME: bool = false;
 
+    /// Whether relocatable-object relocation sites may be less aligned than the
+    /// typed value being patched.
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
+    const OBJECT_RELOCATION_ALLOWS_UNALIGNED_ACCESS: bool = false;
+
     /// Returns whether `r_type` is this architecture's TLSDESC relocation.
     #[inline]
     fn is_tlsdesc(r_type: ElfRelocationType) -> bool {
@@ -92,10 +98,36 @@ pub trait RelocationArch: 'static {
 
     #[cfg(feature = "object")]
     #[doc(hidden)]
+    type ObjectRelocationState: Default;
+
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, R, PreH, PostH, Obs>(
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, crate::object::CustomHash>,
+    fn prepare_object_relocation<D, R, PreH, PostH, Obs, H>(
+        _state: &mut Self::ObjectRelocationState,
+        _helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
+        _sections: &[&'static [ElfRelType<Self>]],
+    ) -> Result<()>
+    where
+        Self: Sized,
+        D: 'static,
+        R: RegionAccess,
+        H: ElfHashTable<Self::Layout> + 'static,
+        PreH: RelocationHandler<Self> + ?Sized,
+        PostH: RelocationHandler<Self> + ?Sized,
+        Obs: RelocationObserver<Self> + ?Sized,
+    {
+        Ok(())
+    }
+
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
+    #[allow(private_bounds)]
+    #[allow(private_interfaces)]
+    fn relocate_object<D, R, PreH, PostH, Obs, H>(
+        _state: &mut Self::ObjectRelocationState,
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
         rel: &ElfRelType<Self>,
         _pltgot: &mut crate::object::layout::PltGotSection,
     ) -> Result<()>
@@ -103,15 +135,12 @@ pub trait RelocationArch: 'static {
         Self: Sized,
         D: 'static,
         R: RegionAccess,
+        H: ElfHashTable<Self::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
     {
-        Err(super::reloc_error(
-            rel,
-            RelocReason::Unsupported,
-            helper.core,
-        ))
+        Err(super::reloc_error(rel, RelocReason::Unsupported, helper.core))
     }
 
     #[cfg(feature = "object")]

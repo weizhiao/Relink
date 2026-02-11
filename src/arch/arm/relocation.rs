@@ -49,6 +49,9 @@ impl RelocationArch for ArmArch {
             _ => "UNKNOWN",
         }
     }
+
+    #[cfg(feature = "object")]
+    type ObjectRelocationState = ();
 }
 
 impl crate::relocation::RelocationValueProvider for ArmArch {}

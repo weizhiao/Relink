@@ -58,6 +58,9 @@ impl RelocationArch for X86Arch {
             _ => "UNKNOWN",
         }
     }
+
+    #[cfg(feature = "object")]
+    type ObjectRelocationState = ();
 }
 
 impl crate::relocation::RelocationValueProvider for X86Arch {}

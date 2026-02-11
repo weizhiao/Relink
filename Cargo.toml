@@ -109,6 +109,18 @@ harness = false
 name = "load_object"
 required-features = ["object"]
 
+[[test]]
+name = "riscv64_object_link"
+path = "tests/riscv64_object_link.rs"
+required-features = ["object", "riscv64-tests"]
+harness = false
+
+[[test]]
+name = "riscv64_reloc_test"
+path = "tests/riscv64_reloc_test.rs"
+required-features = ["object", "riscv64-tests"]
+harness = false
+
 [features]
 default = ["tls", "libc"]
 
@@ -126,6 +138,8 @@ tls = ["dep:spin"]
 lazy-binding = []
 # Enable relocatable object (`.o`) loading and lookup support.
 object = ["dep:foldhash", "dep:hashbrown"]
+# Enable RISC-V-only test binaries.
+riscv64-tests = []
 # Enable logging.
 log = ["dep:log"]
 # support target without native pointer size atomic operation

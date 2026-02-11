@@ -4,7 +4,11 @@ use crate::{
     relocation::RelocValue,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{fmt::Debug, mem::size_of, ptr::NonNull};
+use core::{
+    fmt::Debug,
+    mem::{MaybeUninit, size_of},
+    ptr::NonNull,
+};
 
 #[derive(Clone, Copy)]
 struct MappedRange {
@@ -252,6 +256,7 @@ impl<R: RegionAccess> ElfSegments<R> {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub(crate) fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>> {
         debug_assert!(self.contains_range(addr, len));
         unsafe { self.region.host_ptr(self.region_offset(addr)) }
@@ -315,6 +320,65 @@ impl<R: RegionAccess> ElfSegments<R> {
         let value = unsafe { self.region.read_value(region_offset)? };
         let value = update(value);
         unsafe { self.region.write_value(region_offset, value) }
+    }
+
+    #[cfg(feature = "object")]
+    #[inline]
+    unsafe fn read_unaligned_value<T: ByteRepr>(&self, addr: VmAddr) -> Result<T> {
+        let mut value = MaybeUninit::<T>::uninit();
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
+        };
+        self.read_bytes(addr, bytes)?;
+        Ok(unsafe { value.assume_init() })
+    }
+
+    #[cfg(feature = "object")]
+    #[inline]
+    unsafe fn write_unaligned_value<T: ByteRepr>(&self, addr: VmAddr, value: T) -> Result<()> {
+        let bytes = unsafe {
+            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
+        };
+        self.write_bytes(addr, bytes)
+    }
+
+    #[cfg(feature = "object")]
+    #[inline]
+    pub(crate) unsafe fn write_object_value<Arch, T>(
+        &self,
+        addr: VmAddr,
+        val: RelocValue<T>,
+    ) -> Result<()>
+    where
+        Arch: crate::relocation::RelocationArch,
+        T: ByteRepr,
+    {
+        let value = val.into_inner();
+        if Arch::OBJECT_RELOCATION_ALLOWS_UNALIGNED_ACCESS {
+            unsafe { self.write_unaligned_value(addr, value) }
+        } else {
+            unsafe { self.region.write_value(self.region_offset(addr), value) }
+        }
+    }
+
+    #[cfg(feature = "object")]
+    #[inline]
+    pub(crate) unsafe fn update_object_value<Arch, T>(
+        &self,
+        addr: VmAddr,
+        update: impl FnOnce(T) -> T,
+    ) -> Result<()>
+    where
+        Arch: crate::relocation::RelocationArch,
+        T: ByteRepr + Copy,
+    {
+        if Arch::OBJECT_RELOCATION_ALLOWS_UNALIGNED_ACCESS {
+            let value = unsafe { self.read_unaligned_value(addr)? };
+            let value = update(value);
+            unsafe { self.write_unaligned_value(addr, value) }
+        } else {
+            unsafe { self.update_value(addr, update) }
+        }
     }
 
     /// Returns the base address of the mapped memory as a raw integer.
