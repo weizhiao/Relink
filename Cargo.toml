@@ -94,7 +94,7 @@ bitflags = "2.9.0"
 criterion = "0.8.2"
 libloading = "0.9.0"
 env_logger = "0.11.6"
-gen-elf = "0.1.0"
+gen-elf = { path = "tools/gen-elf" }
 object = "0.38.1"
 
 [[bench]]

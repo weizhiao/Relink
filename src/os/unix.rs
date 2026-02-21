@@ -142,7 +142,7 @@ impl Mmap for DefaultMmap {
         let prot = if use_file {
             ProtFlags::PROT_NONE
         } else {
-            ProtFlags::PROT_WRITE
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE
         };
         let ptr = unsafe {
             mmap(

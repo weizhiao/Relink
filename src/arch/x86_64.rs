@@ -269,6 +269,23 @@ pub(crate) extern "C" fn tlsdesc_resolver_dynamic() {
 }
 
 impl StaticReloc for X86_64Relocator {
+    fn new(_relocs: &[&'static [ElfRelType]]) -> Self {
+        Self
+    }
+
+    fn prepare<D, PreS, PostS, PreH, PostH>(
+        &mut self,
+        _relocs: &[&'static [ElfRelType]],
+        _helper: &RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
+    ) where
+        PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
+        PreH: RelocationHandler + ?Sized,
+        PostH: RelocationHandler + ?Sized,
+    {
+        // No preparation needed for x86_64
+    }
+
     /// Perform x86-64 specific ELF relocation.
     ///
     /// This method handles various x86-64 relocation types including:
@@ -289,6 +306,7 @@ impl StaticReloc for X86_64Relocator {
     /// # Returns
     /// `Ok(())` on success, or an error if relocation fails
     fn relocate<D, PreS, PostS, PreH, PostH>(
+        &mut self,
         helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
         rel: &ElfRelType,
         pltgot: &mut PltGotSection,
