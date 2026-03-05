@@ -70,7 +70,7 @@ jobs:
       with:
         toolchain: ${{ matrix.channel }}
     - name: Set up QEMU and binfmt_misc
-      uses: docker/setup-qemu-action@v3
+      uses: docker/setup-qemu-action@v4
       with:
         platforms: all
     - env:
