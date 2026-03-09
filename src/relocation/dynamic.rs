@@ -264,12 +264,13 @@ impl<D> DynamicImage<D> {
                         let new_val = origin_val + base;
                         ptr.write(new_val);
                     }
+                    continue;
                 } else {
                     if let Some(symbol) = helper.find_symbol(r_sym) {
                         segments.write(rel.r_offset(), symbol);
+                        continue;
                     }
                 }
-                continue;
             } else if unlikely(r_type == REL_IRELATIVE) {
                 // Handle indirect function relocations
                 let addr = RelocValue::new(base) + r_addend;
