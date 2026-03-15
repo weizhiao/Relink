@@ -48,12 +48,18 @@ impl<D: 'static> RawObject<D> {
             post_handler,
             self.tls_get_addr,
         );
+
+        let mut relocator = StaticRelocator::new(&self.relocation.relocation);
+        
+        // Prepare relocator (build caches, etc.)
+        relocator.prepare(&self.relocation.relocation, &helper);
+        
         for reloc in self.relocation.relocation.iter() {
             for rel in *reloc {
                 if !helper.handle_pre(rel)? {
                     continue;
                 }
-                StaticRelocator::relocate(&mut helper, rel, &mut self.pltgot)?;
+                relocator.relocate(&mut helper, rel, &mut self.pltgot)?;
                 if !helper.handle_post(rel)? {
                     continue;
                 }
@@ -79,8 +85,24 @@ impl<D: 'static> RawObject<D> {
     }
 }
 
-pub(crate) trait StaticReloc {
+pub(crate) trait StaticReloc: Sized {
+    /// Create a new relocator instance
+    fn new(relocs: &[&'static [ElfRelType]]) -> Self;
+
+    /// Prepare for relocation (build caches, etc.)
+    fn prepare<D, PreS, PostS, PreH, PostH>(
+        &mut self,
+        relocs: &[&'static [ElfRelType]],
+        helper: &RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
+    ) where
+        PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
+        PreH: RelocationHandler + ?Sized,
+        PostH: RelocationHandler + ?Sized;
+
+    /// Relocate a single relocation entry
     fn relocate<D, PreS, PostS, PreH, PostH>(
+        &mut self,
         helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
         rel: &ElfRelType,
         pltgot: &mut PltGotSection,
