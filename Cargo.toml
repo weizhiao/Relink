@@ -102,12 +102,14 @@ name = "benchmark"
 harness = false
 
 [features]
-default = []
+default = ["lazy-binding"]
 
 # Use linux syscalls
 use-syscall = ["dep:syscalls"]
 # Use the version information of symbols when resolving them.
 version = []
+# Enable lazy binding support.
+lazy-binding = []
 # Enable logging.
 log = ["dep:log"]
 # support target without native pointer size atomic operation

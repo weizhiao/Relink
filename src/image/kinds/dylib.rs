@@ -12,7 +12,9 @@ use crate::{
     loader::LoadHook,
     os::Mmap,
     parse_ehdr_error,
-    relocation::{Relocatable, RelocationHandler, Relocator, SupportLazy, SymbolLookup},
+    relocation::{
+        BindingOptions, Relocatable, RelocationHandler, Relocator, SupportLazy, SymbolLookup,
+    },
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
@@ -53,8 +55,7 @@ impl<D> Relocatable<D> for RawDylib<D> {
         post_find: &PostS,
         pre_handler: &PreH,
         post_handler: &PostH,
-        lazy: Option<bool>,
-        lazy_scope: Option<LazyS>,
+        binding: BindingOptions<LazyS>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
@@ -69,8 +70,7 @@ impl<D> Relocatable<D> for RawDylib<D> {
             post_find,
             pre_handler,
             post_handler,
-            lazy,
-            lazy_scope,
+            binding,
         )?;
         Ok(LoadedDylib { inner })
     }

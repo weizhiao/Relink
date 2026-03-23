@@ -42,9 +42,12 @@ pub(crate) unsafe fn get_thread_pointer() -> *mut u8 {
     tp
 }
 
+#[cfg(feature = "lazy-binding")]
 pub(crate) const DYLIB_OFFSET: usize = 1;
+#[cfg(feature = "lazy-binding")]
 pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 0;
 
+#[cfg(feature = "lazy-binding")]
 #[unsafe(naked)]
 pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(

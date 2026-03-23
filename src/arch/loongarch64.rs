@@ -55,9 +55,12 @@ pub(crate) unsafe fn get_thread_pointer() -> *mut u8 {
 /// GOT entry relocation type - set GOT entry to symbol address.
 pub const REL_GOT: u32 = R_LARCH_64;
 
+#[cfg(feature = "lazy-binding")]
 pub(crate) const DYLIB_OFFSET: usize = 1;
+#[cfg(feature = "lazy-binding")]
 pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 0;
 
+#[cfg(feature = "lazy-binding")]
 #[unsafe(naked)]
 pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(

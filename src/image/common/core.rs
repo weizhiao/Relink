@@ -4,6 +4,8 @@
 //! with ELF files in various stages of processing: from raw ELF files to
 //! relocated and loaded libraries or executables.
 
+#[cfg(feature = "lazy-binding")]
+use crate::image::common::LazyBindingInfo;
 use crate::{
     Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolInfo, SymbolTable},
@@ -665,11 +667,9 @@ impl<D> ElfCore<D> {
                 dynamic_info: Some(Arc::new(DynamicInfo {
                     eh_frame_hdr,
                     dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
-                    pltrel: dynamic
-                        .pltrel
-                        .and_then(|plt| NonNull::new(plt.as_ptr() as *mut _)),
                     phdrs: ElfPhdrs::Vec(phdrs),
-                    lazy_scope: None,
+                    #[cfg(feature = "lazy-binding")]
+                    lazy: LazyBindingInfo::new(dynamic.pltrel),
                 })),
                 tls_mod_id,
                 tls_tp_offset,

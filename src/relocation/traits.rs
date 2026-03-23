@@ -6,6 +6,8 @@ use crate::{
     sync::Arc,
 };
 use alloc::{boxed::Box, vec::Vec};
+#[cfg(not(feature = "lazy-binding"))]
+use core::marker::PhantomData;
 
 /// A trait for looking up symbols during relocation.
 ///
@@ -197,6 +199,53 @@ impl<H: RelocationHandler + ?Sized> RelocationHandler for Arc<H> {
 /// A marker trait for objects that support lazy binding.
 pub trait SupportLazy {}
 
+/// Binding strategy configuration for relocation.
+pub enum BindingOptions<S = ()> {
+    /// Follow the ELF object's default binding behavior.
+    Default,
+    /// Force eager binding.
+    Eager,
+    /// Force lazy binding with an optional custom symbol lookup scope.
+    #[cfg(feature = "lazy-binding")]
+    Lazy { scope: Option<S> },
+    #[cfg(not(feature = "lazy-binding"))]
+    #[doc(hidden)]
+    __Marker(PhantomData<fn() -> S>),
+}
+
+impl<S> Default for BindingOptions<S> {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
+impl BindingOptions<()> {
+    /// Creates the default binding mode.
+    ///
+    /// This is mainly useful in generic builder chains where
+    /// `BindingOptions::Default` would require explicit type annotations.
+    pub const fn default_mode() -> Self {
+        Self::Default
+    }
+
+    /// Creates an eager binding configuration.
+    pub const fn eager() -> Self {
+        Self::Eager
+    }
+
+    /// Creates a lazy binding configuration without a custom scope.
+    #[cfg(feature = "lazy-binding")]
+    pub const fn lazy() -> Self {
+        Self::Lazy { scope: None }
+    }
+
+    /// Creates a lazy binding configuration with a custom scope.
+    #[cfg(feature = "lazy-binding")]
+    pub fn lazy_with_scope<S>(scope: S) -> BindingOptions<S> {
+        BindingOptions::Lazy { scope: Some(scope) }
+    }
+}
+
 /// A trait for objects that can be relocated.
 ///
 /// Types implementing this trait can undergo symbol resolution and address fixup.
@@ -214,8 +263,7 @@ pub trait Relocatable<D = ()>: Sized {
     /// * `post_find` - Fallback symbol lookup strategy.
     /// * `pre_handler` - Handler called before default relocation logic.
     /// * `post_handler` - Handler called after default logic if not handled.
-    /// * `lazy` - Whether to enable lazy binding.
-    /// * `lazy_scope` - Symbol lookup for lazy binding.
+    /// * `binding` - Binding strategy configuration.
     ///
     /// # Returns
     /// The relocated object on success.
@@ -226,8 +274,7 @@ pub trait Relocatable<D = ()>: Sized {
         post_find: &PostS,
         pre_handler: &PreH,
         post_handler: &PostH,
-        lazy: Option<bool>,
-        lazy_scope: Option<LazyS>,
+        binding: BindingOptions<LazyS>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,

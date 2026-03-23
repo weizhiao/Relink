@@ -10,7 +10,9 @@ use crate::{
     input::{ElfReader, IntoElfReader},
     loader::{DynLifecycleHandler, LoadHook},
     os::Mmap,
-    relocation::{Relocatable, RelocationHandler, Relocator, StaticRelocation, SymbolLookup},
+    relocation::{
+        BindingOptions, Relocatable, RelocationHandler, Relocator, StaticRelocation, SymbolLookup,
+    },
     segment::section::PltGotSection,
     sync::{Arc, AtomicBool},
     tls::TlsResolver,
@@ -170,8 +172,7 @@ impl<D: 'static> Relocatable<D> for RawObject<D> {
         post_find: &PostS,
         pre_handler: &PreH,
         post_handler: &PostH,
-        _lazy: Option<bool>,
-        _lazy_scope: Option<LazyS>,
+        _binding: BindingOptions<LazyS>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,

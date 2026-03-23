@@ -13,7 +13,7 @@ use crate::{
     input::IntoElfReader,
     loader::LoadHook,
     os::Mmap,
-    relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
+    relocation::{BindingOptions, Relocatable, RelocationHandler, Relocator, SymbolLookup},
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
@@ -25,7 +25,11 @@ mod common;
 mod kinds;
 
 pub(crate) use builder::{ImageBuilder, ObjectBuilder};
-pub(crate) use common::{CoreInner, DynamicImage};
+#[cfg(feature = "lazy-binding")]
+pub(crate) use common::CoreInner;
+pub(crate) use common::DynamicImage;
+#[cfg(feature = "lazy-binding")]
+pub(crate) use common::DynamicInfo;
 
 pub use common::{ElfCore, ElfCoreRef, LoadedCore, Symbol};
 pub use kinds::{LoadedDylib, LoadedExec, LoadedObject, RawDylib, RawExec, RawObject};
@@ -80,10 +84,7 @@ impl<D: 'static> RawElf<D> {
     /// let bytes = &[]; // ELF file bytes
     /// let lib = loader.load_dylib(ElfBinary::new("liba.so", bytes)).unwrap();
     ///
-    /// let relocated = lib.relocator()
-    ///     .lazy(true)
-    ///     .relocate()
-    ///     .unwrap();
+    /// let relocated = lib.relocator().relocate().unwrap();
     /// ```
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
@@ -250,8 +251,7 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
         post_find: &PostS,
         pre_handler: &PreH,
         post_handler: &PostH,
-        lazy: Option<bool>,
-        lazy_scope: Option<LazyS>,
+        binding: BindingOptions<LazyS>,
     ) -> Result<Self::Output>
     where
         D: 'static,
@@ -270,8 +270,7 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
                     post_find,
                     pre_handler,
                     post_handler,
-                    lazy,
-                    lazy_scope,
+                    binding,
                 )?;
                 Ok(LoadedElf::Dylib(relocated))
             }
@@ -283,8 +282,7 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
                     post_find,
                     pre_handler,
                     post_handler,
-                    lazy,
-                    lazy_scope,
+                    binding,
                 )?;
                 Ok(LoadedElf::Exec(relocated))
             }
@@ -296,8 +294,7 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
                     post_find,
                     pre_handler,
                     post_handler,
-                    lazy,
-                    None::<LazyS>, // ElfRelocatable always uses LazyScope<(), ()>, so pass None
+                    binding,
                 )?;
                 Ok(LoadedElf::Object(relocated))
             }

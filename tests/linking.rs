@@ -1,3 +1,5 @@
+#[cfg(feature = "lazy-binding")]
+use elf_loader::relocation::BindingOptions;
 use elf_loader::{
     Loader,
     arch::{
@@ -120,6 +122,7 @@ fn dynamic_linking() {
     run_dynamic_linking(false);
 }
 
+#[cfg(feature = "lazy-binding")]
 #[test]
 fn dynamic_linking_with_lazy() {
     run_dynamic_linking(true);
@@ -181,15 +184,26 @@ fn run_dynamic_linking(is_lazy: bool) {
     let relocator = dylib
         .relocator()
         .pre_find(symbol_lookup.clone())
-        .scope(&[helper_relocated.clone()])
-        .lazy(is_lazy);
+        .scope(&[helper_relocated.clone()]);
 
+    #[cfg(feature = "lazy-binding")]
     let relocated = if is_lazy {
-        relocator.lazy_scope(symbol_lookup.clone()).relocate()
+        relocator
+            .binding(BindingOptions::lazy_with_scope(symbol_lookup.clone()))
+            .relocate()
     } else {
-        relocator.relocate()
+        relocator.eager().relocate()
     }
     .expect("Failed to relocate");
+
+    #[cfg(not(feature = "lazy-binding"))]
+    let relocated = {
+        assert!(
+            !is_lazy,
+            "lazy binding test requires the `lazy-binding` feature"
+        );
+        relocator.eager().relocate().expect("Failed to relocate")
+    };
 
     let v_val = F64x2([9.9, 10.10]);
     let expected = (1..9).sum::<i64>() as f64

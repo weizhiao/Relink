@@ -45,8 +45,10 @@ pub(crate) unsafe fn get_thread_pointer() -> *mut u8 {
 }
 
 /// Offset in GOT for dynamic library handle.
+#[cfg(feature = "lazy-binding")]
 pub(crate) const DYLIB_OFFSET: usize = 1;
 /// Offset in GOT for resolver function pointer.
+#[cfg(feature = "lazy-binding")]
 pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
 
 /// Dynamic linker runtime resolver for ARM PLT entries.
@@ -62,6 +64,7 @@ pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
 /// # Safety
 /// This function uses naked assembly and must be called with the correct
 /// stack layout set up by the PLT stub code.
+#[cfg(feature = "lazy-binding")]
 #[unsafe(naked)]
 pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(

@@ -62,6 +62,7 @@ cfg_if::cfg_if! {
 
 pub const REL_NONE: u32 = 0;
 
+#[cfg(feature = "lazy-binding")]
 #[inline]
 pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
     // 这是安全的，延迟绑定时库是存在的

@@ -1,26 +1,44 @@
+#[cfg(feature = "lazy-binding")]
+use crate::elf::ElfRelType;
+#[cfg(feature = "lazy-binding")]
+use crate::relocation::SymbolLookup;
 use crate::sync::{Arc, AtomicBool};
 use crate::{
     Result,
-    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfRelType, SymbolTable},
+    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
     image::{ElfCore, ImageBuilder, common::CoreInner},
     loader::{LifecycleContext, LoadHook},
     os::Mmap,
-    relocation::{DynamicRelocation, SymbolLookup},
+    relocation::DynamicRelocation,
     segment::ELFRelro,
     tls::{TlsIndex, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{
-    ffi::CStr,
-    ptr::{NonNull, null},
-};
+use core::{ffi::CStr, ptr::NonNull};
+
+#[cfg(feature = "lazy-binding")]
+pub(crate) struct LazyBindingInfo {
+    pub(crate) pltrel: Option<NonNull<ElfRelType>>,
+    pub(crate) scope: Option<Box<dyn SymbolLookup + Send + Sync>>,
+}
+
+#[cfg(feature = "lazy-binding")]
+impl LazyBindingInfo {
+    #[inline]
+    pub(crate) fn new(pltrel: Option<&'static [ElfRelType]>) -> Self {
+        Self {
+            pltrel: pltrel.and_then(|plt| NonNull::new(plt.as_ptr() as *mut _)),
+            scope: None,
+        }
+    }
+}
 
 pub(crate) struct DynamicInfo {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) dynamic_ptr: NonNull<ElfDyn>,
-    pub(crate) pltrel: Option<NonNull<ElfRelType>>,
     pub(crate) phdrs: ElfPhdrs,
-    pub(crate) lazy_scope: Option<Box<dyn SymbolLookup>>,
+    #[cfg(feature = "lazy-binding")]
+    pub(crate) lazy: LazyBindingInfo,
 }
 
 /// Extra data associated with ELF objects during relocation
@@ -32,6 +50,7 @@ struct ElfExtraData {
     lazy: bool,
 
     /// Pointer to the Global Offset Table (.got.plt section)
+    #[cfg(feature = "lazy-binding")]
     got_plt: Option<NonNull<usize>>,
 
     /// Dynamic relocation information (rela.dyn and rela.plt)
@@ -188,6 +207,7 @@ impl<D> DynamicImage<D> {
     /// # Returns
     /// An optional NonNull pointer to the GOT
     #[inline]
+    #[cfg(feature = "lazy-binding")]
     pub(crate) fn got(&self) -> Option<NonNull<usize>> {
         self.extra.got_plt
     }
@@ -255,23 +275,6 @@ impl<D> DynamicImage<D> {
     /// Gets a reference to the user data
     pub(crate) fn user_data(&self) -> &D {
         self.module.user_data()
-    }
-
-    /// Sets the lazy scope for this component
-    ///
-    /// # Arguments
-    /// * `lazy_scope` - The lazy scope to set
-    #[inline]
-    pub(crate) fn set_lazy_scope<LazyS>(&self, lazy_scope: LazyS)
-    where
-        D: 'static,
-        LazyS: SymbolLookup + Send + Sync + 'static,
-    {
-        let info = unsafe {
-            &mut *(Arc::as_ptr(&self.module.inner.dynamic_info.as_ref().unwrap())
-                as *mut DynamicInfo)
-        };
-        info.lazy_scope = Some(Box::new(lazy_scope));
     }
 }
 
@@ -358,7 +361,7 @@ where
             phdrs: phdrs_repr.clone(),
             extra: ElfExtraData {
                 // Determine if lazy binding should be enabled
-                lazy: !dynamic.bind_now,
+                lazy: cfg!(feature = "lazy-binding") && !dynamic.bind_now,
 
                 // Store GNU_RELRO segment information
                 relro: self.relro,
@@ -375,6 +378,7 @@ where
                 }),
 
                 // Store GOT pointer
+                #[cfg(feature = "lazy-binding")]
                 got_plt: dynamic.got_plt,
 
                 // Store RPATH value
@@ -405,9 +409,9 @@ where
                     dynamic_info: Some(Arc::new(DynamicInfo {
                         eh_frame_hdr: self.eh_frame_hdr,
                         dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
-                        pltrel: NonNull::new(dynamic.pltrel.map_or(null(), |plt| plt.as_ptr()) as _),
                         phdrs: phdrs_repr,
-                        lazy_scope: None,
+                        #[cfg(feature = "lazy-binding")]
+                        lazy: LazyBindingInfo::new(dynamic.pltrel),
                     })),
                     tls_mod_id,
                     tls_tp_offset,

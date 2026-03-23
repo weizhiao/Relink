@@ -3,7 +3,10 @@ use crate::{
     elf::{ElfRelType, ElfSymbol, SymbolInfo, SymbolTable},
     image::{ElfCore, LoadedCore},
     relocate_error,
-    relocation::{Relocatable, RelocationContext, RelocationHandler, SupportLazy, SymbolLookup},
+    relocation::{
+        BindingOptions, Relocatable, RelocationContext, RelocationHandler, SupportLazy,
+        SymbolLookup,
+    },
     sync::Arc,
     tls::TlsDescDynamicArg,
 };
@@ -141,7 +144,6 @@ where
 ///             _ => None,
 ///         }
 ///     })
-///     .lazy(true)
 ///     .relocate()
 ///     .unwrap();
 /// ```
@@ -152,8 +154,7 @@ pub struct Relocator<T, PreS, PostS, LazyS, PreH, PostH, D = ()> {
     post_find: PostS,
     pre_handler: PreH,
     post_handler: PostH,
-    lazy: Option<bool>,
-    lazy_scope: Option<LazyS>,
+    binding: BindingOptions<LazyS>,
 }
 
 impl<T: Relocatable<D>, D> Relocator<T, (), (), (), (), (), D> {
@@ -166,8 +167,7 @@ impl<T: Relocatable<D>, D> Relocator<T, (), (), (), (), (), D> {
             post_find: (),
             pre_handler: (),
             post_handler: (),
-            lazy: None,
-            lazy_scope: None,
+            binding: BindingOptions::Default,
         }
     }
 }
@@ -196,8 +196,7 @@ where
             post_find: self.post_find,
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
-            lazy: self.lazy,
-            lazy_scope: self.lazy_scope,
+            binding: self.binding,
         }
     }
 
@@ -213,8 +212,7 @@ where
             post_find: self.post_find,
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
-            lazy: self.lazy,
-            lazy_scope: self.lazy_scope,
+            binding: self.binding,
         }
     }
 
@@ -233,8 +231,7 @@ where
             post_find,
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
-            lazy: self.lazy,
-            lazy_scope: self.lazy_scope,
+            binding: self.binding,
         }
     }
 
@@ -253,8 +250,7 @@ where
             post_find,
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
-            lazy: self.lazy,
-            lazy_scope: self.lazy_scope,
+            binding: self.binding,
         }
     }
 
@@ -302,8 +298,7 @@ where
             post_find: self.post_find,
             pre_handler: handler,
             post_handler: self.post_handler,
-            lazy: self.lazy,
-            lazy_scope: self.lazy_scope,
+            binding: self.binding,
         }
     }
 
@@ -325,8 +320,7 @@ where
             post_find: self.post_find,
             pre_handler: self.pre_handler,
             post_handler: handler,
-            lazy: self.lazy,
-            lazy_scope: self.lazy_scope,
+            binding: self.binding,
         }
     }
 
@@ -348,8 +342,7 @@ where
             &self.post_find,
             &self.pre_handler,
             &self.post_handler,
-            self.lazy,
-            self.lazy_scope,
+            self.binding,
         )
     }
 }
@@ -363,20 +356,10 @@ where
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
-    /// Enables or disables lazy binding.
-    ///
-    /// When enabled, some relocations (typically PLT entries) will be resolved
-    /// on-demand when the function is first called, improving startup time.
-    /// When disabled, all relocations are resolved immediately.
-    pub fn lazy(mut self, lazy: bool) -> Self {
-        self.lazy = Some(lazy);
-        self
-    }
-
-    /// Sets the lazy scope for symbol resolution during lazy binding.
-    pub fn lazy_scope<NewLazyS>(
+    /// Sets the binding strategy for relocation.
+    pub fn binding<NewLazyS>(
         self,
-        scope: NewLazyS,
+        binding: BindingOptions<NewLazyS>,
     ) -> Relocator<T, PreS, PostS, NewLazyS, PreH, PostH, D>
     where
         NewLazyS: SymbolLookup + Send + Sync + 'static,
@@ -388,9 +371,31 @@ where
             post_find: self.post_find,
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
-            lazy: self.lazy,
-            lazy_scope: Some(scope),
+            binding,
         }
+    }
+
+    /// Forces eager binding and clears any previously configured lazy scope.
+    pub fn eager(self) -> Relocator<T, PreS, PostS, (), PreH, PostH, D> {
+        self.binding(BindingOptions::eager())
+    }
+
+    #[cfg(feature = "lazy-binding")]
+    /// Forces lazy binding without a custom scope.
+    pub fn lazy(self) -> Relocator<T, PreS, PostS, (), PreH, PostH, D> {
+        self.binding(BindingOptions::lazy())
+    }
+
+    #[cfg(feature = "lazy-binding")]
+    /// Sets the lazy scope for symbol resolution during lazy binding.
+    pub fn lazy_scope<NewLazyS>(
+        self,
+        scope: NewLazyS,
+    ) -> Relocator<T, PreS, PostS, NewLazyS, PreH, PostH, D>
+    where
+        NewLazyS: SymbolLookup + Send + Sync + 'static,
+    {
+        self.binding(BindingOptions::lazy_with_scope(scope))
     }
 }
 
@@ -417,6 +422,7 @@ impl RelocValue<usize> {
     }
 
     #[inline]
+    #[cfg(feature = "lazy-binding")]
     pub const fn as_mut_ptr<T>(self) -> *mut T {
         self.0 as *mut T
     }

@@ -1,4 +1,3 @@
-use crate::relocation::SupportLazy;
 use crate::sync::Arc;
 /// Executable file handling
 ///
@@ -13,7 +12,9 @@ use crate::{
     loader::LoadHook,
     os::Mmap,
     parse_ehdr_error,
-    relocation::{Relocatable, RelocationHandler, Relocator, SymbolLookup},
+    relocation::{
+        BindingOptions, Relocatable, RelocationHandler, Relocator, SupportLazy, SymbolLookup,
+    },
     segment::ElfSegments,
     tls::TlsResolver,
 };
@@ -89,8 +90,7 @@ impl<D: 'static> Relocatable<D> for RawExec<D> {
         post_find: &PostS,
         pre_handler: &PreH,
         post_handler: &PostH,
-        lazy: Option<bool>,
-        lazy_scope: Option<LazyS>,
+        binding: BindingOptions<LazyS>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
@@ -108,8 +108,7 @@ impl<D: 'static> Relocatable<D> for RawExec<D> {
                     post_find,
                     pre_handler,
                     post_handler,
-                    lazy,
-                    lazy_scope,
+                    binding,
                 )?;
                 Ok(LoadedExec {
                     entry,
