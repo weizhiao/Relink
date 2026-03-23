@@ -27,11 +27,14 @@ jobs:
       matrix:
         target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu, loongarch64-unknown-linux-gnu]
         channel: [ stable ]
-        features: [ "use-syscall" ]
+        features: [ "use-syscall", "use-syscall,lazy-binding" ]
         include:
           - target: x86_64-unknown-linux-gnu
             channel: 1.93.0
             features: "use-syscall"
+          - target: x86_64-unknown-linux-gnu
+            channel: 1.93.0
+            features: "use-syscall,lazy-binding"
           - target: x86_64-unknown-linux-gnu
             channel: stable
             features: "version"
@@ -56,11 +59,14 @@ jobs:
       matrix:
         target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu, loongarch64-unknown-linux-gnu, i586-unknown-linux-gnu, arm-unknown-linux-gnueabihf]
         channel: [ stable ]
-        features: [ "use-syscall" ]
+        features: [ "use-syscall", "use-syscall,lazy-binding" ]
         include:
           - target: x86_64-unknown-linux-gnu
             channel: 1.93.0
             features: "use-syscall"
+          - target: x86_64-unknown-linux-gnu
+            channel: 1.93.0
+            features: "use-syscall,lazy-binding"
 
   test-mini-loader:
     runs-on: ubuntu-latest
