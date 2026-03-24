@@ -4,6 +4,7 @@ use crate::{
     elf::{EHDR_SIZE, ElfHeader, ElfPhdr, ElfShdr},
     image::{RawDylib, RawExec, RawObject},
     input::{ElfReader, IntoElfReader},
+    logging,
     os::Mmap,
     parse_ehdr_error,
     tls::TlsResolver,
@@ -124,13 +125,11 @@ where
     }
 
     pub(crate) fn load_dylib_impl(&mut self, mut object: impl ElfReader) -> Result<RawDylib<D>> {
-        #[cfg(feature = "log")]
-        log::debug!("Loading dylib: {}", object.file_name());
+        logging::debug!("Loading dylib: {}", object.file_name());
 
         let ehdr = self.read_ehdr(&mut object)?;
         if !ehdr.is_dylib() {
-            #[cfg(feature = "log")]
-            log::error!(
+            logging::error!(
                 "[{}] Type mismatch: expected dylib, found {:?}",
                 object.file_name(),
                 ehdr.e_type
@@ -145,8 +144,7 @@ where
         let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
         let dylib = RawDylib::from_builder(builder, phdrs)?;
 
-        #[cfg(feature = "log")]
-        log::info!(
+        logging::info!(
             "Loaded dylib: {} at [0x{:x}-0x{:x}]",
             dylib.name(),
             dylib.base(),
@@ -182,13 +180,11 @@ where
     }
 
     pub(crate) fn load_exec_impl(&mut self, mut object: impl ElfReader) -> Result<RawExec<D>> {
-        #[cfg(feature = "log")]
-        log::info!("Loading executable: {}", object.file_name());
+        logging::info!("Loading executable: {}", object.file_name());
 
         let ehdr = self.read_ehdr(&mut object)?;
         if !ehdr.is_executable() {
-            #[cfg(feature = "log")]
-            log::error!(
+            logging::error!(
                 "File type mismatch for {}: expected executable, found {:?}",
                 object.file_name(),
                 ehdr.e_type
@@ -205,9 +201,8 @@ where
         let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
         let res = RawExec::from_builder(builder, phdrs, has_dynamic);
 
-        #[cfg(feature = "log")]
         if let Ok(ref exec) = res {
-            log::debug!(
+            logging::debug!(
                 "Load executable: {} at [0x{:x}-0x{:x}] ({})",
                 exec.name(),
                 exec.base(),
@@ -245,8 +240,7 @@ where
     }
 
     pub(crate) fn load_object_impl(&mut self, mut object: impl ElfReader) -> Result<RawObject<D>> {
-        #[cfg(feature = "log")]
-        log::debug!("Loading object: {}", object.file_name());
+        logging::debug!("Loading object: {}", object.file_name());
 
         let ehdr = self.read_ehdr(&mut object)?;
         let shdrs = self
@@ -258,8 +252,7 @@ where
             .create_object_builder::<M, Tls>(ehdr, shdrs, object)?;
         let raw = RawObject::from_builder(builder);
 
-        #[cfg(feature = "log")]
-        log::info!(
+        logging::info!(
             "Loaded object: {} at [0x{:x}-0x{:x}]",
             raw.name(),
             raw.base(),

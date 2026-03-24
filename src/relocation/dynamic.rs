@@ -5,9 +5,10 @@ use crate::{
     arch::*,
     elf::{ElfRelType, ElfRelr},
     image::{DynamicImage, LoadedCore},
+    logging,
     relocation::{
-        BindingOptions, RelocHelper, RelocValue, RelocationHandler, ResolvedBinding, SymbolLookup,
-        likely, reloc_error, unlikely,
+        BindingOptions, RelocArtifacts, RelocHelper, RelocValue, RelocationHandler,
+        ResolvedBinding, SymbolLookup, likely, reloc_error, unlikely,
     },
     tls::{handle_tls_reloc, lookup_tls_get_addr},
 };
@@ -51,13 +52,11 @@ impl<D> DynamicImage<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        #[cfg(feature = "log")]
-        log::info!("Relocating dynamic library: {}", self.name());
+        logging::info!("Relocating dynamic library: {}", self.name());
 
         // Optimization: check if relocation is empty
         if self.relocation().is_empty() {
-            #[cfg(feature = "log")]
-            log::debug!("No relocations needed for {}", self.name());
+            logging::debug!("No relocations needed for {}", self.name());
             let core = self.into_core();
             let relocated = unsafe { LoadedCore::from_core(core) };
             return Ok(relocated);
@@ -66,13 +65,12 @@ impl<D> DynamicImage<D> {
         let binding = self.resolve_binding(binding);
         let tls_get_addr = self.tls_get_addr();
 
-        #[cfg(feature = "log")]
         if binding.is_lazy() {
-            log::debug!("Using lazy binding for {}", self.name());
+            logging::debug!("Using lazy binding for {}", self.name());
         }
 
         let hooked_pre_find = |name: &str| -> Option<*const ()> {
-            if let Some(symbol) = lookup_tls_get_addr(name, tls_get_addr as usize) {
+            if let Some(symbol) = lookup_tls_get_addr(name, tls_get_addr) {
                 return Some(symbol);
             }
             pre_find.lookup(name)
@@ -85,25 +83,27 @@ impl<D> DynamicImage<D> {
             post_find,
             pre_handler,
             post_handler,
-            tls_get_addr as *const () as usize,
+            tls_get_addr,
         );
 
         self.relocate_relative()
             .relocate_dynrel(&mut helper)?
             .relocate_pltrel(&binding, &mut helper)?;
 
-        // Set TLS descriptor arguments collected during relocation
-        let tls_desc_args = core::mem::take(&mut helper.tls_desc_args);
+        let RelocArtifacts {
+            deps,
+            tls_desc_args,
+        } = helper.finish(self.needed_libs());
+
+        // Persist TLSDESC backing storage collected during relocation.
         unsafe {
             self.core_ref().set_tls_desc_args(tls_desc_args);
         }
 
-        let needed_libs = self.needed_libs();
-        let deps: Arc<[LoadedCore<D>]> = Arc::from(helper.finish(needed_libs));
+        let deps: Arc<[LoadedCore<D>]> = Arc::from(deps);
 
-        #[cfg(feature = "log")]
         if !deps.is_empty() {
-            log::debug!(
+            logging::debug!(
                 "[{}] Bound dependencies: {:?}",
                 self.name(),
                 deps.iter()
@@ -113,14 +113,12 @@ impl<D> DynamicImage<D> {
         }
 
         self.apply_relro(&binding)?;
-        self.install_lazy_scope(binding, deps.clone(), tls_get_addr as *const () as usize);
+        self.install_lazy_scope(binding, deps.clone());
 
-        #[cfg(feature = "log")]
-        log::debug!("Executing initialization functions for {}", self.name());
+        logging::debug!("Executing initialization functions for {}", self.name());
         self.call_init();
 
-        #[cfg(feature = "log")]
-        log::info!("Relocation completed for {}", self.name());
+        logging::info!("Relocation completed for {}", self.name());
 
         Ok(unsafe { LoadedCore::from_core_deps(self.into_core(), deps) })
     }

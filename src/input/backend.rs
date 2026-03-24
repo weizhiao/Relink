@@ -1,5 +1,5 @@
 use super::{ElfReader, IntoElfReader};
-use crate::{Result, os::RawFile};
+use crate::{Result, logging, os::RawFile};
 use alloc::{
     string::{String, ToString},
     vec::Vec,
@@ -76,8 +76,7 @@ impl ElfFile {
     /// Creates a new file-based ELF object by opening a file at the given path.
     pub fn from_path(path: impl AsRef<str>) -> Result<Self> {
         let path = path.as_ref();
-        #[cfg(feature = "log")]
-        log::debug!("Opening ELF file: {}", path);
+        logging::debug!("Opening ELF file: {}", path);
 
         let inner = RawFile::from_path(path)?;
         Ok(ElfFile { inner })

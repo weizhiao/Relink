@@ -1,6 +1,6 @@
 use crate::input::ElfReader;
 use crate::os::{MapFlags, Mmap, ProtFlags};
-use crate::{Result, segment::ElfSegments};
+use crate::{Result, logging, segment::ElfSegments};
 use alloc::vec::Vec;
 
 use super::{PAGE_SIZE, roundup};
@@ -144,8 +144,7 @@ impl ElfSegment {
             unsafe { M::mmap(Some(addr), len, prot, self.flags, 0, None, &mut need_copy) }?
         };
 
-        #[cfg(feature = "log")]
-        log::trace!(
+        logging::trace!(
             "[Mmap] address: 0x{:x}, length: {}, flags: {:?}, zero_size: {}, map_info: {:?}",
             addr,
             len,
@@ -198,8 +197,7 @@ impl ElfSegment {
             let addr = self.addr.absolute_addr();
             unsafe { M::mprotect(addr as _, len, self.prot) }?;
 
-            #[cfg(feature = "log")]
-            log::trace!(
+            logging::trace!(
                 "[Mprotect] address: 0x{:x}, length: {}, prot: {:?}",
                 addr,
                 len,

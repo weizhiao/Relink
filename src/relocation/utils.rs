@@ -2,7 +2,7 @@ use crate::{
     Error, Result,
     elf::{ElfRelType, ElfSymbol, SymbolInfo, SymbolTable},
     image::{ElfCore, LoadedCore},
-    relocate_error,
+    logging, relocate_error,
     relocation::{
         BindingOptions, Relocatable, RelocationContext, RelocationHandler, SupportLazy,
         SymbolLookup,
@@ -28,6 +28,11 @@ pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Size
     pub(crate) dependency_flags: Vec<bool>,
     #[allow(dead_code)]
     pub(crate) tls_get_addr: usize,
+    pub(crate) tls_desc_args: TlsDescArgs,
+}
+
+pub(crate) struct RelocArtifacts<D> {
+    pub(crate) deps: Vec<LoadedCore<D>>,
     pub(crate) tls_desc_args: TlsDescArgs,
 }
 
@@ -113,14 +118,26 @@ where
         Some(symdef)
     }
 
-    pub(crate) fn finish(self, needed_libs: &[&str]) -> Vec<LoadedCore<D>> {
-        self.scope
+    pub(crate) fn finish(self, needed_libs: &[&str]) -> RelocArtifacts<D> {
+        let Self {
+            scope,
+            dependency_flags,
+            tls_desc_args,
+            ..
+        } = self;
+
+        let deps = scope
             .into_iter()
-            .zip(self.dependency_flags)
+            .zip(dependency_flags)
             .filter_map(|(module, flag)| {
                 (flag || needed_libs.contains(&module.short_name())).then(|| module)
             })
-            .collect()
+            .collect();
+
+        RelocArtifacts {
+            deps,
+            tls_desc_args,
+        }
     }
 }
 
@@ -589,8 +606,7 @@ where
 {
     let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
     if let Some(addr) = pre_find.lookup(syminfo.name()) {
-        #[cfg(feature = "log")]
-        log::trace!(
+        logging::trace!(
             "binding file [{}] to [pre_find]: symbol [{}]",
             core.name(),
             syminfo.name()
@@ -601,8 +617,7 @@ where
         return Some((RelocValue::new(res.0.convert() as usize), res.1));
     }
     if let Some(addr) = post_find.lookup(syminfo.name()) {
-        #[cfg(feature = "log")]
-        log::trace!(
+        logging::trace!(
             "binding file [{}] to [post_find]: symbol [{}]",
             core.name(),
             syminfo.name()
@@ -635,8 +650,7 @@ pub(crate) fn find_symdef_impl<'lib, D>(
                 lib.symtab()
                     .lookup_filter(syminfo, &mut precompute)
                     .map(|sym| {
-                        #[cfg(feature = "log")]
-                        log::trace!(
+                        logging::trace!(
                             "binding file [{}] to [{}]: symbol [{}]",
                             core.name(),
                             lib.name(),

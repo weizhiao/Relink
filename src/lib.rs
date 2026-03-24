@@ -77,6 +77,7 @@ mod error;
 pub mod image;
 pub mod input;
 pub mod loader;
+mod logging;
 pub mod os;
 pub mod relocation;
 mod segment;

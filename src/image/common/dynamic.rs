@@ -8,10 +8,11 @@ use crate::{
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
     image::{ElfCore, common::CoreInner},
     loader::{ImageBuilder, LifecycleContext, LoadHook},
+    logging,
     os::Mmap,
     relocation::DynamicRelocation,
     segment::ELFRelro,
-    tls::{CoreTlsState, TlsIndex, TlsResolver},
+    tls::{CoreTlsState, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, ptr::NonNull};
@@ -70,9 +71,6 @@ struct ElfExtraData {
 
     /// List of needed library names from the dynamic section
     needed_libs: Box<[&'static str]>,
-
-    /// Function to get TLS address
-    tls_get_addr: extern "C" fn(*const crate::tls::TlsIndex) -> *mut u8,
 }
 
 impl core::fmt::Debug for ElfExtraData {
@@ -133,8 +131,8 @@ impl<D> DynamicImage<D> {
         self.module.tls_tp_offset()
     }
 
-    pub(crate) fn tls_get_addr(&self) -> extern "C" fn(*const TlsIndex) -> *mut u8 {
-        self.extra.tls_get_addr
+    pub(crate) fn tls_get_addr(&self) -> usize {
+        self.module.tls_get_addr()
     }
 
     /// Gets the core component reference of the ELF object.
@@ -302,8 +300,7 @@ impl<D: 'static> DynamicImage<D> {
 
         let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &builder.segments).unwrap();
 
-        #[cfg(feature = "log")]
-        log::trace!("[{}] Dynamic info: {:?}", builder.name, dynamic);
+        logging::trace!("[{}] Dynamic info: {:?}", builder.name, dynamic);
 
         let relocation = DynamicRelocation::new(
             dynamic.pltrel,
@@ -324,9 +321,8 @@ impl<D: 'static> DynamicImage<D> {
             .map(|needed_lib| symtab.strtab().get_str(needed_lib.get()))
             .collect();
 
-        #[cfg(feature = "log")]
         if !needed_libs.is_empty() {
-            log::debug!("[{}] Dependencies: {:?}", builder.name, needed_libs);
+            logging::debug!("[{}] Dependencies: {:?}", builder.name, needed_libs);
         }
 
         let init_handler = builder.init_fn;
@@ -385,9 +381,6 @@ impl<D: 'static> DynamicImage<D> {
                 runpath: dynamic
                     .runpath_off
                     .map(|runpath_off| symtab.strtab().get_str(runpath_off.get())),
-
-                // Store TLS get addr function
-                tls_get_addr: Tls::tls_get_addr,
             },
             module: ElfCore {
                 inner: Arc::new(CoreInner {
@@ -405,7 +398,12 @@ impl<D: 'static> DynamicImage<D> {
                         #[cfg(feature = "lazy-binding")]
                         lazy: LazyBindingInfo::new(dynamic.pltrel),
                     })),
-                    tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, Tls::unregister),
+                    tls: CoreTlsState::new(
+                        tls_mod_id,
+                        tls_tp_offset,
+                        Tls::tls_get_addr as *const () as usize,
+                        Tls::unregister,
+                    ),
                     segments: builder.segments,
                 }),
             },

@@ -108,7 +108,6 @@ mod enabled {
             &self,
             binding: ResolvedBinding,
             deps: Arc<[LoadedCore<D>]>,
-            tls_get_addr: usize,
         ) where
             D: 'static,
         {
@@ -118,7 +117,7 @@ mod enabled {
                 info.lazy.scope = Some(Box::new(LazyScope {
                     libs: deps,
                     custom_scope: scope,
-                    tls_get_addr,
+                    tls_get_addr: self.core_ref().tls_get_addr(),
                 }));
             }
         }
@@ -200,7 +199,6 @@ mod disabled {
             &self,
             _binding: ResolvedBinding,
             _deps: Arc<[LoadedCore<D>]>,
-            _tls_get_addr: usize,
         ) where
             D: 'static,
         {

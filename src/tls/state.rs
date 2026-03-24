@@ -1,6 +1,6 @@
 #[cfg(feature = "tls")]
 mod enabled {
-    use crate::tls::TlsDescDynamicArg;
+    use super::super::defs::TlsDescDynamicArg;
     use alloc::{boxed::Box, vec::Vec};
 
     #[derive(Default)]
@@ -19,6 +19,7 @@ mod enabled {
     pub(crate) struct CoreTlsState {
         mod_id: Option<usize>,
         tp_offset: Option<isize>,
+        tls_get_addr: usize,
         unregister: fn(usize),
         desc_args: Box<[Box<TlsDescDynamicArg>]>,
     }
@@ -27,11 +28,13 @@ mod enabled {
         pub(crate) fn new(
             mod_id: Option<usize>,
             tp_offset: Option<isize>,
+            tls_get_addr: usize,
             unregister: fn(usize),
         ) -> Self {
             Self {
                 mod_id,
                 tp_offset,
+                tls_get_addr,
                 unregister,
                 desc_args: Box::new([]),
             }
@@ -48,6 +51,11 @@ mod enabled {
         }
 
         #[inline]
+        pub(crate) fn tls_get_addr(&self) -> usize {
+            self.tls_get_addr
+        }
+
+        #[inline]
         pub(crate) fn cleanup(&self) {
             if let Some(mod_id) = self.mod_id {
                 (self.unregister)(mod_id);
@@ -58,9 +66,6 @@ mod enabled {
             self.desc_args = args.0.into_boxed_slice();
         }
     }
-
-    pub(crate) use CoreTlsState as State;
-    pub(crate) use TlsDescArgs as DescArgs;
 }
 
 #[cfg(not(feature = "tls"))]
@@ -78,6 +83,7 @@ mod disabled {
         pub(crate) fn new(
             _mod_id: Option<usize>,
             _tp_offset: Option<isize>,
+            _tls_get_addr: usize,
             _unregister: fn(usize),
         ) -> Self {
             Self
@@ -94,17 +100,19 @@ mod disabled {
         }
 
         #[inline]
+        pub(crate) fn tls_get_addr(&self) -> usize {
+            0
+        }
+
+        #[inline]
         pub(crate) fn cleanup(&self) {}
 
         pub(crate) fn set_desc_args(&mut self, _args: TlsDescArgs) {}
     }
-
-    pub(crate) use CoreTlsState as State;
-    pub(crate) use TlsDescArgs as DescArgs;
 }
 
 #[cfg(feature = "tls")]
-pub(crate) use enabled::{DescArgs as TlsDescArgs, State as CoreTlsState};
+pub(crate) use enabled::{CoreTlsState, TlsDescArgs};
 
 #[cfg(not(feature = "tls"))]
-pub(crate) use disabled::{DescArgs as TlsDescArgs, State as CoreTlsState};
+pub(crate) use disabled::{CoreTlsState, TlsDescArgs};

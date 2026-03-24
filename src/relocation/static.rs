@@ -4,7 +4,8 @@ use crate::{
     elf::ElfRelType,
     image::{LoadedCore, RawObject},
     loader::LifecycleContext,
-    relocation::{RelocHelper, RelocationHandler, SymbolLookup},
+    logging,
+    relocation::{RelocArtifacts, RelocHelper, RelocationHandler, SymbolLookup},
     segment::section::PltGotSection,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -36,8 +37,7 @@ impl<D: 'static> RawObject<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        #[cfg(feature = "log")]
-        log::debug!("Relocating object: {}", self.core.name());
+        logging::debug!("Relocating object: {}", self.core.name());
 
         let mut helper = RelocHelper::new(
             &self.core,
@@ -46,7 +46,7 @@ impl<D: 'static> RawObject<D> {
             post_find,
             pre_handler,
             post_handler,
-            self.tls_get_addr,
+            self.core.tls_get_addr(),
         );
         for reloc in self.relocation.relocation.iter() {
             for rel in *reloc {
@@ -60,20 +60,20 @@ impl<D: 'static> RawObject<D> {
             }
         }
 
-        // Set TLS descriptor arguments collected during relocation
+        let RelocArtifacts { tls_desc_args, .. } = helper.finish(&[]);
+
+        // Persist TLSDESC backing storage collected during relocation.
         unsafe {
-            self.core.set_tls_desc_args(helper.tls_desc_args);
+            self.core.set_tls_desc_args(tls_desc_args);
         }
 
         (self.mprotect)()?;
 
-        #[cfg(feature = "log")]
-        log::trace!("[{}] Executing init functions", self.core.name());
+        logging::trace!("[{}] Executing init functions", self.core.name());
         self.init
             .call(&LifecycleContext::new(None, self.init_array));
 
-        #[cfg(feature = "log")]
-        log::info!("Relocation completed for {}", self.core.name());
+        logging::info!("Relocation completed for {}", self.core.name());
 
         Ok(unsafe { LoadedCore::from_core(self.core) })
     }

@@ -1,5 +1,5 @@
 use crate::{
-    Result,
+    Result, logging,
     sync::{AtomicUsize, Ordering},
     tls::{TlsIndex, TlsInfo, TlsResolver},
     tls_error,
@@ -75,8 +75,7 @@ fn register_module(tls_info: &TlsInfo, tp_offset: Option<isize>) -> usize {
         template: Some(template),
     };
 
-    #[cfg(feature = "log")]
-    log::debug!(
+    logging::debug!(
         "Registered TLS module: ID {}, memsz {}, align {}, tp_offset {:?}",
         mod_id,
         tls_info.memsz,
@@ -101,8 +100,7 @@ fn unregister_module(mod_id: usize) {
         template: None, // This signals threads to free their local copy
     };
 
-    #[cfg(feature = "log")]
-    log::debug!("Unregistered TLS module: ID {}", mod_id);
+    logging::debug!("Unregistered TLS module: ID {}", mod_id);
 }
 
 fn get_module_template(mod_id: usize) -> Option<ModuleTlsTemplate> {

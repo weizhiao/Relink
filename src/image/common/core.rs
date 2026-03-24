@@ -294,6 +294,7 @@ impl<D> LoadedCore<D> {
                     segments,
                     tls_mod_id,
                     actual_tls_tp_offset,
+                    Tls::tls_get_addr as *const () as usize,
                     Tls::unregister,
                     user_data,
                 )
@@ -623,6 +624,11 @@ impl<D> ElfCore<D> {
         self.inner.tls.tp_offset()
     }
 
+    #[inline]
+    pub(crate) fn tls_get_addr(&self) -> usize {
+        self.inner.tls.tls_get_addr()
+    }
+
     /// Set the TLS descriptor arguments (used for dynamic relocation)
     /// # Safety
     /// This should only be called during the relocation process
@@ -643,6 +649,7 @@ impl<D> ElfCore<D> {
         mut segments: ElfSegments,
         tls_mod_id: Option<usize>,
         tls_tp_offset: Option<isize>,
+        tls_get_addr: usize,
         tls_unregister: fn(usize),
         user_data: D,
     ) -> Self {
@@ -660,7 +667,7 @@ impl<D> ElfCore<D> {
                     #[cfg(feature = "lazy-binding")]
                     lazy: LazyBindingInfo::new(dynamic.pltrel),
                 })),
-                tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_unregister),
+                tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_get_addr, tls_unregister),
                 segments,
                 fini: None,
                 fini_array: None,

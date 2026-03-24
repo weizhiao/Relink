@@ -13,4 +13,4 @@ categories = ["os", "embedded"]
 [dependencies.elf_loader]
 workspace = true
 default-features = false
-features = ["log"]
+features = ["log", "tls"]

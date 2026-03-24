@@ -2,11 +2,13 @@ use elf_loader::{
     Error, Loader,
     image::RawDylib as ElfDylib,
     input::{ElfBinary, ElfFile},
+    os::DefaultMmap,
+    tls::DefaultTlsResolver,
 };
 
 /// elf loader
 pub struct WinElfLoader {
-    loader: Loader,
+    loader: Loader<DefaultMmap, (), (), DefaultTlsResolver>,
 }
 
 impl WinElfLoader {

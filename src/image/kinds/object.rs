@@ -41,9 +41,6 @@ pub struct RawObject<D = ()> {
 
     /// Initialization function array.
     pub(crate) init_array: Option<&'static [fn()]>,
-
-    /// TLS function address for __tls_get_addr.
-    pub(crate) tls_get_addr: usize,
 }
 
 impl<D> Deref for RawObject<D> {
@@ -66,7 +63,12 @@ impl<D: 'static> RawObject<D> {
             fini_handler: builder.fini_fn,
             user_data: builder.user_data,
             dynamic_info: None,
-            tls: CoreTlsState::new(builder.tls_mod_id, builder.tls_tp_offset, T::unregister),
+            tls: CoreTlsState::new(
+                builder.tls_mod_id,
+                builder.tls_tp_offset,
+                T::tls_get_addr as *const () as usize,
+                T::unregister,
+            ),
             segments: builder.segments,
         };
 
@@ -79,7 +81,6 @@ impl<D: 'static> RawObject<D> {
             mprotect: builder.mprotect,
             init_array: builder.init_array,
             init: builder.init_fn,
-            tls_get_addr: T::tls_get_addr as *const () as usize,
         }
     }
 
