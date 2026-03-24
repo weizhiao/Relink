@@ -2,14 +2,14 @@ use super::{ElfBuf, LoadHook, Loader};
 use crate::{
     Result,
     elf::{EHDR_SIZE, ElfHeader, ElfPhdr, ElfShdr},
-    image::{RawDylib, RawExec, RawObject},
+    image::{RawDylib, RawElf, RawExec, RawObject},
     input::{ElfReader, IntoElfReader},
     logging,
     os::Mmap,
     parse_ehdr_error,
     tls::TlsResolver,
 };
-use elf::abi::PT_DYNAMIC;
+use elf::abi::{PT_DYNAMIC, PT_INTERP};
 
 impl ElfBuf {
     pub(crate) fn new() -> Self {
@@ -80,9 +80,8 @@ impl ElfBuf {
 
 impl<M, H, D, Tls> Loader<M, H, D, Tls>
 where
-    H: LoadHook,
     M: Mmap,
-    D: 'static,
+    H: LoadHook,
     Tls: TlsResolver,
 {
     /// Reads the ELF header.
@@ -107,6 +106,39 @@ where
     D: Default,
     Tls: TlsResolver,
 {
+    /// Load an ELF file into memory.
+    ///
+    /// # Arguments
+    /// * `input` - The ELF object to load
+    ///
+    /// # Returns
+    /// * `Ok(elf)` - The loaded ELF file
+    /// * `Err(Error)` - If loading fails
+    pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D>>
+    where
+        D: 'static,
+        I: IntoElfReader<'a>,
+    {
+        let mut object = input.into_reader()?;
+        let ehdr = self.read_ehdr(&mut object)?;
+
+        match ehdr.e_type {
+            elf::abi::ET_REL => Ok(RawElf::Object(self.load_object_impl(object)?)),
+            elf::abi::ET_EXEC => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
+            elf::abi::ET_DYN => {
+                let phdrs = self.read_phdr(&mut object, &ehdr)?.unwrap_or_default();
+                let has_dynamic = phdrs.iter().any(|p| p.p_type == PT_DYNAMIC);
+                let is_pie = phdrs.iter().any(|p| p.p_type == PT_INTERP) || !has_dynamic;
+                if is_pie {
+                    Ok(RawElf::Exec(self.load_exec_impl(object)?))
+                } else {
+                    Ok(RawElf::Dylib(self.load_dylib_impl(object)?))
+                }
+            }
+            _ => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
+        }
+    }
+
     /// Loads a dynamic library into memory and prepares it for relocation.
     ///
     /// # Examples
@@ -153,15 +185,6 @@ where
 
         Ok(dylib)
     }
-}
-
-impl<M, H, D, Tls> Loader<M, H, D, Tls>
-where
-    M: Mmap,
-    H: LoadHook,
-    D: Default,
-    Tls: TlsResolver,
-{
     /// Loads an executable file into memory and prepares it for relocation.
     ///
     /// # Examples
@@ -213,15 +236,6 @@ where
 
         res
     }
-}
-
-impl<M, H, D, Tls> Loader<M, H, D, Tls>
-where
-    M: Mmap,
-    H: LoadHook,
-    D: Default + 'static,
-    Tls: TlsResolver,
-{
     /// Loads a relocatable object file into memory and prepares it for relocation.
     ///
     /// # Examples
@@ -234,12 +248,16 @@ where
     /// ```
     pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject<D>>
     where
+        D: 'static,
         I: IntoElfReader<'a>,
     {
         self.load_object_impl(input.into_reader()?)
     }
 
-    pub(crate) fn load_object_impl(&mut self, mut object: impl ElfReader) -> Result<RawObject<D>> {
+    pub(crate) fn load_object_impl(&mut self, mut object: impl ElfReader) -> Result<RawObject<D>>
+    where
+        D: 'static,
+    {
         logging::debug!("Loading object: {}", object.file_name());
 
         let ehdr = self.read_ehdr(&mut object)?;

@@ -8,17 +8,12 @@
 //! and the lifetime of loaded libraries.
 
 use crate::{
-    Loader, Result,
+    Result,
     elf::ElfPhdr,
-    input::IntoElfReader,
-    loader::LoadHook,
-    os::Mmap,
     relocation::{BindingOptions, Relocatable, RelocationHandler, Relocator, SymbolLookup},
-    tls::TlsResolver,
 };
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use elf::abi::{PT_DYNAMIC, PT_INTERP};
 
 mod common;
 mod kinds;
@@ -297,46 +292,6 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
                 )?;
                 Ok(LoadedElf::Object(relocated))
             }
-        }
-    }
-}
-
-impl<M, H, D, Tls> Loader<M, H, D, Tls>
-where
-    M: Mmap,
-    H: LoadHook,
-    D: Default + 'static,
-    Tls: TlsResolver,
-{
-    /// Load an ELF file into memory
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to load
-    ///
-    /// # Returns
-    /// * `Ok(Elf)` - The loaded ELF file
-    /// * `Err(Error)` - If loading fails
-    pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D>>
-    where
-        I: IntoElfReader<'a>,
-    {
-        let mut object = input.into_reader()?;
-        let ehdr = self.read_ehdr(&mut object)?;
-
-        match ehdr.e_type {
-            elf::abi::ET_REL => Ok(RawElf::Object(self.load_object_impl(object)?)),
-            elf::abi::ET_EXEC => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
-            elf::abi::ET_DYN => {
-                let phdrs = self.read_phdr(&mut object, &ehdr)?.unwrap_or_default();
-                let has_dynamic = phdrs.iter().any(|p| p.p_type == PT_DYNAMIC);
-                let is_pie = phdrs.iter().any(|p| p.p_type == PT_INTERP) || !has_dynamic;
-                if is_pie {
-                    Ok(RawElf::Exec(self.load_exec_impl(object)?))
-                } else {
-                    Ok(RawElf::Dylib(self.load_dylib_impl(object)?))
-                }
-            }
-            _ => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
         }
     }
 }
