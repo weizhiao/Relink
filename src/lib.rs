@@ -86,7 +86,10 @@ pub mod tls;
 
 pub(crate) use error::*;
 
-pub use error::Error;
+pub use error::{
+    CustomError, Error, IoError, MmapError, ParseDynamicError, ParseEhdrError, ParsePhdrError,
+    RelocationContextError, RelocationError, TlsError,
+};
 pub use loader::Loader;
 
 /// A type alias for `Result`s returned by `elf_loader` functions.

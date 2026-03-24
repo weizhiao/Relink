@@ -113,9 +113,7 @@ impl<'a> ElfReader for &'a [u8] {
     /// Reads data from the byte slice at the specified offset.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         if offset + buf.len() > self.len() {
-            return Err(crate::Error::Io {
-                msg: "read offset out of bounds".into(),
-            });
+            return Err(crate::io_error("read offset out of bounds"));
         }
         buf.copy_from_slice(&self[offset..offset + buf.len()]);
         Ok(())

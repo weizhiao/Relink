@@ -1,10 +1,12 @@
 use crate::{
-    Error, Result,
+    Result,
     input::ElfReader,
-    io_error,
+    io_create_file_w_error, io_error, io_read_file_error, io_set_file_pointer_error,
+    mmap_create_file_mapping_error, mmap_map_view_of_file3_error, mmap_mprotect_error,
+    mmap_virtual_alloc_error, mmap_virtual_free_error,
     os::{MapFlags, Mmap, ProtFlags},
 };
-use alloc::{ffi::CString, format, vec::Vec};
+use alloc::{ffi::CString, vec::Vec};
 use core::{
     ffi::c_void,
     mem::MaybeUninit,
@@ -116,9 +118,7 @@ impl Mmap for DefaultMmap {
             };
             if ptr.Value.is_null() {
                 let err_code = unsafe { GetLastError() };
-                return Err(Error::Mmap {
-                    msg: format!("MapViewOfFile3 failed with error: {}", err_code).into(),
-                });
+                return Err(mmap_map_view_of_file3_error(err_code));
             }
             ptr.Value
         } else {
@@ -179,9 +179,7 @@ impl Mmap for DefaultMmap {
             unsafe { Memory::VirtualAlloc(addr as _, len, MEM_COMMIT, prot_win(prot, false)) };
         if ptr.is_null() {
             let err_code = unsafe { GetLastError() };
-            return Err(Error::Mmap {
-                msg: format!("VirtualAlloc failed with error: {}", err_code).into(),
-            });
+            return Err(mmap_virtual_alloc_error(err_code));
         }
         Ok(ptr)
     }
@@ -201,9 +199,7 @@ impl Mmap for DefaultMmap {
             == 0
         {
             let err_code = unsafe { GetLastError() };
-            return Err(Error::Mmap {
-                msg: format!("mprotect error! error code: {}", err_code).into(),
-            });
+            return Err(mmap_mprotect_error(err_code));
         }
         Ok(())
     }
@@ -247,9 +243,7 @@ impl Mmap for DefaultMmap {
             }
         };
         if ptr.is_null() {
-            return Err(Error::Mmap {
-                msg: "VirtualAlloc failed".into(),
-            });
+            return Err(crate::mmap_error("VirtualAlloc failed"));
         }
         Ok(ptr)
     }
@@ -311,10 +305,7 @@ impl RawFile {
 
         if handle == INVALID_HANDLE_VALUE {
             let err_code = unsafe { GetLastError() };
-            return Err(io_error(format!(
-                "CreateFileW failed for {}: error {}",
-                path, err_code
-            )));
+            return Err(io_create_file_w_error(path, err_code));
         }
 
         let mapping_handle = unsafe {
@@ -329,9 +320,7 @@ impl RawFile {
         };
         if mapping_handle.is_null() {
             let err_code = unsafe { GetLastError() };
-            return Err(Error::Mmap {
-                msg: format!("CreateFileMappingW failed with error: {}", err_code).into(),
-            });
+            return Err(mmap_create_file_mapping_error(err_code));
         }
 
         Ok(Self {
@@ -350,10 +339,7 @@ fn win_seek(handle: HANDLE, offset: usize) -> Result<()> {
 
     if res == 0 || new_pos as usize != offset {
         let err_code = unsafe { GetLastError() };
-        return Err(io_error(format!(
-            "SetFilePointerEx failed with error: {}",
-            err_code
-        )));
+        return Err(io_set_file_pointer_error(err_code));
     }
     Ok(())
 }
@@ -380,10 +366,7 @@ fn win_read_exact(handle: HANDLE, mut bytes: &mut [u8]) -> Result<()> {
 
         if result == 0 {
             let err_code = unsafe { GetLastError() };
-            return Err(io_error(format!(
-                "ReadFile failed with error: {}",
-                err_code
-            )));
+            return Err(io_read_file_error(err_code));
         } else if read_count == 0 {
             return Err(io_error("failed to fill buffer"));
         }
@@ -396,9 +379,7 @@ fn win_read_exact(handle: HANDLE, mut bytes: &mut [u8]) -> Result<()> {
 pub(crate) fn virtual_free(addr: usize, len: usize) -> Result<()> {
     if unsafe { VirtualFree(addr as _, len, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) } == 0 {
         let err_code = unsafe { windows_sys::Win32::Foundation::GetLastError() };
-        return Err(crate::Error::Mmap {
-            msg: alloc::format!("VirtualFree failed with error: {}", err_code).into(),
-        });
+        return Err(mmap_virtual_free_error(err_code));
     }
     Ok(())
 }

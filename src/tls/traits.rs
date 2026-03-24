@@ -1,17 +1,5 @@
 use super::{TlsIndex, TlsInfo};
-use crate::{Result, tls_error};
-
-const TLS_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
-    "TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support."
-} else {
-    "TLS support is not compiled into this build. Enable the `tls` cargo feature."
-};
-
-const STATIC_TLS_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
-    "Static TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support."
-} else {
-    "TLS support is not compiled into this build. Enable the `tls` cargo feature."
-};
+use crate::{Result, tls_resolver_unsupported_error, tls_static_resolver_unsupported_error};
 
 const TLS_GET_ADDR_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
     "tls_get_addr called on unit TlsResolver which does not support TLS. Use `with_default_tls_resolver()` to enable TLS support."
@@ -56,15 +44,15 @@ pub trait TlsResolver {
 
 impl TlsResolver for () {
     fn register(_tls_info: &TlsInfo) -> Result<usize> {
-        Err(tls_error(TLS_DISABLED_MESSAGE))
+        Err(tls_resolver_unsupported_error())
     }
 
     fn register_static(_tls_info: &TlsInfo) -> Result<(usize, isize)> {
-        Err(tls_error(STATIC_TLS_DISABLED_MESSAGE))
+        Err(tls_static_resolver_unsupported_error())
     }
 
     fn add_static_tls(_tls_info: &TlsInfo, _offset: isize) -> Result<usize> {
-        Err(tls_error(STATIC_TLS_DISABLED_MESSAGE))
+        Err(tls_static_resolver_unsupported_error())
     }
 
     fn unregister(_mod_id: usize) {

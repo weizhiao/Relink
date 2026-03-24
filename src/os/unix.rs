@@ -1,12 +1,11 @@
 use crate::{
     Error, Result,
     input::ElfReader,
-    io_error,
+    io_error, io_open_error, mmap_error,
     os::{MapFlags, Mmap, ProtFlags},
 };
 use alloc::{
     ffi::CString,
-    format,
     string::{String, ToString},
 };
 use core::{
@@ -169,7 +168,7 @@ impl RawFile {
         let name = CString::from_str(path).unwrap();
         let fd = unsafe { libc::open(name.as_ptr(), O_RDONLY) };
         if fd == -1 {
-            return Err(io_error(format!("open failed: {}", path)));
+            return Err(io_open_error(path));
         }
         Ok(Self {
             name: path.to_string(),
@@ -235,8 +234,6 @@ impl ElfReader for RawFile {
 
 #[cold]
 #[inline(never)]
-fn map_error(msg: &str) -> Error {
-    Error::Mmap {
-        msg: msg.to_string().into(),
-    }
+fn map_error(msg: &'static str) -> Error {
+    mmap_error(msg)
 }

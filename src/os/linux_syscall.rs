@@ -1,10 +1,10 @@
 use crate::input::ElfReader;
-use crate::{Error, io_error};
+use crate::{Error, io_error, io_open_error, mmap_error};
 use crate::{
     Result,
     os::{MapFlags, Mmap, ProtFlags},
 };
-use alloc::{ffi::CString, format};
+use alloc::ffi::CString;
 use core::ffi::{c_int, c_void};
 use syscalls::Sysno;
 /// An implementation of Mmap trait
@@ -182,7 +182,7 @@ fn from_ret(value: usize, msg: &'static str) -> Result<usize> {
 #[cold]
 #[inline(never)]
 fn map_error(msg: &'static str) -> Error {
-    Error::Mmap { msg: msg.into() }
+    mmap_error(msg)
 }
 
 impl RawFile {
@@ -195,9 +195,7 @@ impl RawFile {
 
     pub(crate) fn from_path(path: &str) -> Result<Self> {
         const RDONLY: u32 = 0;
-        let name = CString::new(path).map_err(|_| Error::Io {
-            msg: "null byte in path".into(),
-        })?;
+        let name = CString::new(path).map_err(|_| io_error("null byte in path"))?;
         #[cfg(not(any(
             target_arch = "aarch64",
             target_arch = "riscv64",
@@ -206,7 +204,7 @@ impl RawFile {
         let fd = unsafe {
             let res = syscalls::raw_syscall!(Sysno::open, name.as_ptr(), RDONLY, 0);
             if res > -4096isize as usize {
-                return Err(io_error(format!("open failed: {}", path)));
+                return Err(io_open_error(path));
             }
             res
         };
@@ -219,7 +217,7 @@ impl RawFile {
             const AT_FDCWD: core::ffi::c_int = -100;
             let res = syscalls::raw_syscall!(Sysno::openat, AT_FDCWD, name.as_ptr(), RDONLY, 0);
             if res > -4096isize as usize {
-                return Err(io_error(format!("openat failed: {}", path)));
+                return Err(crate::io_openat_error(path));
             }
             res
         };

@@ -17,6 +17,7 @@ mod version;
 // Internal module re-exports for use within the crate
 pub(crate) use defs::*;
 pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab};
+pub(crate) use ehdr::machine_to_str;
 pub(crate) use hash::{HashTable, PreCompute};
 pub(crate) use phdrs::ElfPhdrs;
 pub(crate) use symbol::{ElfStringTable, SymbolInfo, SymbolTable};

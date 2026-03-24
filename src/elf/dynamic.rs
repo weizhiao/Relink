@@ -2,7 +2,7 @@
 use crate::{
     Result,
     elf::{DT_RELR, DT_RELRSZ, ElfDyn, ElfRel, ElfRelType, ElfRela, ElfRelr},
-    parse_dynamic_error,
+    parse_dynamic_missing_hash_table_error,
     segment::ElfSegments,
 };
 use alloc::vec::Vec;
@@ -145,9 +145,7 @@ impl ElfDynamic {
             // In the loop: DT_HASH => elf_hash_off = Some(dynamic.d_un as usize),
             // So 0 is Some(0).
 
-            return Err(parse_dynamic_error(
-                "dynamic section does not have DT_GNU_HASH nor DT_HASH",
-            ));
+            return Err(parse_dynamic_missing_hash_table_error());
         };
 
         // Extract relocation tables

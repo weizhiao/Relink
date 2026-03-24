@@ -2,7 +2,7 @@ use crate::{
     Error, Result,
     elf::{ElfRelType, ElfSymbol, SymbolInfo, SymbolTable},
     image::{ElfCore, LoadedCore},
-    logging, relocate_error,
+    logging, relocate_context_error, relocate_error,
     relocation::{
         BindingOptions, Relocatable, RelocationContext, RelocationHandler, SupportLazy,
         SymbolLookup,
@@ -10,7 +10,7 @@ use crate::{
     sync::Arc,
     tls::TlsDescArgs,
 };
-use alloc::{format, string::ToString, vec, vec::Vec};
+use alloc::{vec, vec::Vec};
 use core::{
     ops::{Add, Sub},
     ptr::null,
@@ -494,7 +494,7 @@ impl TryFrom<RelocValue<usize>> for RelocValue<i32> {
     fn try_from(value: RelocValue<usize>) -> Result<Self> {
         i32::try_from(value.0 as isize)
             .map(RelocValue)
-            .map_err(|err| relocate_error(err.to_string()))
+            .map_err(|_| relocate_error("out of range integral type conversion attempted"))
     }
 }
 
@@ -505,7 +505,7 @@ impl TryFrom<RelocValue<usize>> for RelocValue<u32> {
     fn try_from(value: RelocValue<usize>) -> Result<Self> {
         u32::try_from(value.0)
             .map(RelocValue)
-            .map_err(|err| relocate_error(err.to_string()))
+            .map_err(|_| relocate_error("out of range integral type conversion attempted"))
     }
 }
 
@@ -543,32 +543,22 @@ impl<'temp, D> SymDef<'temp, D> {
     }
 }
 
-/// Creates a detailed relocation error message.
+/// Creates a detailed relocation error.
 ///
-/// Formats an error with relocation type, symbol name (if any), and module information.
+/// The dynamic parts are stored structurally and formatted only in `Display`.
 #[cold]
-pub(crate) fn reloc_error<D, E: core::fmt::Display>(
-    rel: &ElfRelType,
-    err: E,
-    lib: &ElfCore<D>,
-) -> Error {
+pub(crate) fn reloc_error<D>(rel: &ElfRelType, err: &'static str, lib: &ElfCore<D>) -> Error {
     let r_type_str = rel.r_type_str();
     let r_sym = rel.r_symbol();
     if r_sym == 0 {
-        relocate_error(format!(
-            "file: {}, relocation type: {}, no symbol, error: {}",
-            lib.name(),
-            r_type_str,
-            err
-        ))
+        relocate_context_error(lib.name(), r_type_str, None, err)
     } else {
-        relocate_error(format!(
-            "file: {}, relocation type: {}, symbol name: {}, error: {}",
+        relocate_context_error(
             lib.name(),
             r_type_str,
-            lib.symtab().symbol_idx(r_sym).1.name(),
-            err
-        ))
+            Some(lib.symtab().symbol_idx(r_sym).1.name()),
+            err,
+        )
     }
 }
 
