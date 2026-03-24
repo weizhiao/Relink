@@ -14,7 +14,7 @@ use crate::{
     relocation::SymDef,
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
-    tls::{TlsDescDynamicArg, TlsInfo, TlsResolver},
+    tls::{CoreTlsState, TlsDescArgs, TlsInfo, TlsResolver},
 };
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -433,17 +433,8 @@ pub(crate) struct CoreInner<D = ()> {
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo>>,
 
-    /// TLS module ID
-    pub(crate) tls_mod_id: Option<usize>,
-
-    /// TLS thread pointer offset (for static TLS)
-    pub(crate) tls_tp_offset: Option<isize>,
-
-    /// TLS resolver unregister function
-    pub(crate) tls_unregister: fn(usize),
-
-    /// TLS descriptor arguments (for TLSDESC)
-    pub(crate) tls_desc_args: Box<[Box<TlsDescDynamicArg>]>,
+    /// TLS runtime state for the loaded object.
+    pub(crate) tls: CoreTlsState,
 
     /// Memory segments
     pub(crate) segments: ElfSegments,
@@ -459,9 +450,7 @@ impl<D> Drop for CoreInner<D> {
             self.fini_handler
                 .call(&LifecycleContext::new(self.fini, self.fini_array));
         }
-        if let Some(mod_id) = self.tls_mod_id {
-            (self.tls_unregister)(mod_id);
-        }
+        self.tls.cleanup();
     }
 }
 
@@ -625,22 +614,22 @@ impl<D> ElfCore<D> {
     /// Gets the TLS module ID of the ELF object
     #[inline]
     pub fn tls_mod_id(&self) -> Option<usize> {
-        self.inner.tls_mod_id
+        self.inner.tls.mod_id()
     }
 
     /// Gets the TLS thread pointer offset of the ELF object
     #[inline]
     pub fn tls_tp_offset(&self) -> Option<isize> {
-        self.inner.tls_tp_offset
+        self.inner.tls.tp_offset()
     }
 
     /// Set the TLS descriptor arguments (used for dynamic relocation)
     /// # Safety
     /// This should only be called during the relocation process
-    pub(crate) unsafe fn set_tls_desc_args(&self, args: Vec<Box<TlsDescDynamicArg>>) {
+    pub(crate) unsafe fn set_tls_desc_args(&self, args: TlsDescArgs) {
         let inner = Arc::as_ptr(&self.inner) as *mut CoreInner<D>;
         unsafe {
-            (*inner).tls_desc_args = args.into_boxed_slice();
+            (*inner).tls.set_desc_args(args);
         }
     }
 
@@ -671,10 +660,7 @@ impl<D> ElfCore<D> {
                     #[cfg(feature = "lazy-binding")]
                     lazy: LazyBindingInfo::new(dynamic.pltrel),
                 })),
-                tls_mod_id,
-                tls_tp_offset,
-                tls_unregister,
-                tls_desc_args: Box::new([]),
+                tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_unregister),
                 segments,
                 fini: None,
                 fini_array: None,

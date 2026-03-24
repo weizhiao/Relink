@@ -8,9 +8,9 @@ use crate::{
         SymbolLookup,
     },
     sync::Arc,
-    tls::TlsDescDynamicArg,
+    tls::TlsDescArgs,
 };
-use alloc::{boxed::Box, format, string::ToString, vec, vec::Vec};
+use alloc::{format, string::ToString, vec, vec::Vec};
 use core::{
     ops::{Add, Sub},
     ptr::null,
@@ -26,8 +26,9 @@ pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Size
     pub(crate) pre_handler: &'find PreH,
     pub(crate) post_handler: &'find PostH,
     pub(crate) dependency_flags: Vec<bool>,
+    #[allow(dead_code)]
     pub(crate) tls_get_addr: usize,
-    pub(crate) tls_desc_args: Vec<Box<TlsDescDynamicArg>>,
+    pub(crate) tls_desc_args: TlsDescArgs,
 }
 
 impl<'find, D, PreS, PostS, PreH, PostH> RelocHelper<'find, D, PreS, PostS, PreH, PostH>
@@ -56,7 +57,7 @@ where
             post_handler,
             dependency_flags,
             tls_get_addr,
-            tls_desc_args: Vec::new(),
+            tls_desc_args: TlsDescArgs::default(),
         }
     }
 

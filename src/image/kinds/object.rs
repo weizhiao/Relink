@@ -13,7 +13,7 @@ use crate::{
     },
     segment::section::PltGotSection,
     sync::{Arc, AtomicBool},
-    tls::TlsResolver,
+    tls::{CoreTlsState, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{borrow::Borrow, fmt::Debug, ops::Deref};
@@ -66,10 +66,7 @@ impl<D: 'static> RawObject<D> {
             fini_handler: builder.fini_fn,
             user_data: builder.user_data,
             dynamic_info: None,
-            tls_mod_id: builder.tls_mod_id,
-            tls_tp_offset: builder.tls_tp_offset,
-            tls_unregister: T::unregister,
-            tls_desc_args: Box::new([]),
+            tls: CoreTlsState::new(builder.tls_mod_id, builder.tls_tp_offset, T::unregister),
             segments: builder.segments,
         };
 

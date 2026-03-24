@@ -7,6 +7,7 @@ mod enabled {
         elf::ElfRelType,
         relocation::{BindingOptions, RelocValue, SymbolLookup},
         sync::Arc,
+        tls::lookup_tls_get_addr,
     };
     use alloc::boxed::Box;
 
@@ -18,8 +19,8 @@ mod enabled {
 
     impl<D> SymbolLookup for LazyScope<D> {
         fn lookup(&self, name: &str) -> Option<*const ()> {
-            if name == "__tls_get_addr" {
-                return Some(self.tls_get_addr as *const ());
+            if let Some(symbol) = lookup_tls_get_addr(name, self.tls_get_addr) {
+                return Some(symbol);
             }
 
             if let Some(parent) = &self.custom_scope {

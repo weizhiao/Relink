@@ -99,12 +99,14 @@ name = "benchmark"
 harness = false
 
 [features]
-default = ["lazy-binding"]
+default = ["lazy-binding", "tls"]
 
 # Use linux syscalls
 use-syscall = ["dep:syscalls"]
 # Use the version information of symbols when resolving them.
 version = []
+# Enable TLS relocation handling and the built-in TLS resolver.
+tls = []
 # Enable lazy binding support.
 lazy-binding = []
 # Enable logging.

@@ -13,10 +13,13 @@ use crate::{
     os::{DefaultMmap, Mmap},
     segment::ElfSegments,
     sync::Arc,
-    tls::{DefaultTlsResolver, TlsResolver},
+    tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::marker::PhantomData;
+
+#[cfg(feature = "tls")]
+use crate::tls::DefaultTlsResolver;
 
 pub(crate) use builder::{ImageBuilder, ObjectBuilder};
 
@@ -202,7 +205,7 @@ impl<'a> UserDataLoaderContext<'a> {
 /// let bytes = std::fs::read("liba.so").unwrap();
 /// let lib = loader.load_dylib(ElfBinary::new("liba.so", &bytes)).unwrap();
 /// ```
-pub struct Loader<M = DefaultMmap, H = (), D = (), Tls = DefaultTlsResolver>
+pub struct Loader<M = DefaultMmap, H = (), D = (), Tls = ()>
 where
     M: Mmap,
     H: LoadHook,
@@ -354,6 +357,7 @@ where
     }
 
     /// Consumes the current loader and returns a new one with the specified TLS resolver.
+    #[cfg(feature = "tls")]
     pub fn with_tls_resolver<NewTls>(self) -> Loader<M, H, D, NewTls>
     where
         NewTls: TlsResolver,
@@ -366,6 +370,7 @@ where
     }
 
     /// Consumes the current loader and returns a new one with the default TLS resolver.
+    #[cfg(feature = "tls")]
     pub fn with_default_tls_resolver(self) -> Loader<M, H, D, DefaultTlsResolver> {
         Loader {
             buf: self.buf,
@@ -375,6 +380,7 @@ where
     }
 
     /// Sets whether to force static TLS for all loaded modules.
+    #[cfg(feature = "tls")]
     pub fn with_static_tls(mut self, enabled: bool) -> Self {
         self.inner.force_static_tls = enabled;
         self

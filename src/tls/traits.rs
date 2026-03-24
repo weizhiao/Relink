@@ -1,6 +1,24 @@
 use super::{TlsIndex, TlsInfo};
 use crate::{Result, tls_error};
 
+const TLS_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
+    "TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support."
+} else {
+    "TLS support is not compiled into this build. Enable the `tls` cargo feature."
+};
+
+const STATIC_TLS_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
+    "Static TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support."
+} else {
+    "TLS support is not compiled into this build. Enable the `tls` cargo feature."
+};
+
+const TLS_GET_ADDR_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
+    "tls_get_addr called on unit TlsResolver which does not support TLS. Use `with_default_tls_resolver()` to enable TLS support."
+} else {
+    "tls_get_addr called without compiled-in TLS support. Enable the `tls` cargo feature."
+};
+
 /// A trait for resolving TLS (Thread Local Storage) information.
 ///
 /// Implement this trait to provide custom TLS module IDs and thread pointer offsets.
@@ -38,21 +56,15 @@ pub trait TlsResolver {
 
 impl TlsResolver for () {
     fn register(_tls_info: &TlsInfo) -> Result<usize> {
-        Err(tls_error(
-            "TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support.",
-        ))
+        Err(tls_error(TLS_DISABLED_MESSAGE))
     }
 
     fn register_static(_tls_info: &TlsInfo) -> Result<(usize, isize)> {
-        Err(tls_error(
-            "Static TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support.",
-        ))
+        Err(tls_error(STATIC_TLS_DISABLED_MESSAGE))
     }
 
     fn add_static_tls(_tls_info: &TlsInfo, _offset: isize) -> Result<usize> {
-        Err(tls_error(
-            "Static TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support.",
-        ))
+        Err(tls_error(STATIC_TLS_DISABLED_MESSAGE))
     }
 
     fn unregister(_mod_id: usize) {
@@ -60,8 +72,6 @@ impl TlsResolver for () {
     }
 
     extern "C" fn tls_get_addr(_ti: *const TlsIndex) -> *mut u8 {
-        panic!(
-            "tls_get_addr called on unit TlsResolver which does not support TLS. Use `with_default_tls_resolver()` to enable TLS support."
-        );
+        panic!("{TLS_GET_ADDR_DISABLED_MESSAGE}");
     }
 }

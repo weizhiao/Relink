@@ -1,26 +1,32 @@
+#[cfg(feature = "tls")]
+use elf_loader::arch::{
+    REL_COPY, REL_DTPMOD, REL_DTPOFF, REL_GOT, REL_IRELATIVE, REL_JUMP_SLOT, REL_RELATIVE,
+    REL_SYMBOLIC,
+};
 #[cfg(feature = "lazy-binding")]
 use elf_loader::relocation::BindingOptions;
-use elf_loader::{
-    Loader,
-    arch::{
-        REL_COPY, REL_DTPMOD, REL_DTPOFF, REL_GOT, REL_IRELATIVE, REL_JUMP_SLOT, REL_RELATIVE,
-        REL_SYMBOLIC,
-    },
-    input::ElfBinary,
-};
-use gen_elf::{Arch, DylibWriter, ElfWriterConfig, ObjectWriter, RelocEntry, SymbolDesc};
+use elf_loader::{Loader, input::ElfBinary};
+use gen_elf::{Arch, ObjectWriter, RelocEntry, SymbolDesc};
+#[cfg(feature = "tls")]
+use gen_elf::{DylibWriter, ElfWriterConfig};
 use std::collections::HashMap;
-use std::sync::{Arc, Barrier};
+use std::sync::Arc;
+#[cfg(feature = "tls")]
+use std::sync::Barrier;
+#[cfg(feature = "tls")]
 use std::thread;
 
 const EXTERNAL_FUNC_NAME: &str = "external_func";
 const EXTERNAL_FUNC_NAME2: &str = "external_func2";
 const EXTERNAL_VAR_NAME: &str = "external_var";
 const EXTERNAL_TLS_NAME: &str = "external_tls";
+#[cfg(feature = "tls")]
 const EXTERNAL_TLS_NAME2: &str = "external_tls2";
+#[cfg(feature = "tls")]
 const COPY_VAR_NAME: &str = "copy_var";
 const LOCAL_VAR_NAME: &str = "local_var";
 
+#[cfg(feature = "tls")]
 const IFUNC_RESOLVER_VALUE: u64 = 100;
 
 #[repr(C)]
@@ -53,6 +59,7 @@ extern "C" fn external_func(
         + v1.0[1]
 }
 
+#[cfg(feature = "tls")]
 type ExternalFunc = extern "C" fn(
     i64,
     i64,
@@ -72,6 +79,7 @@ type ExternalFunc = extern "C" fn(
     f64,
 ) -> f64;
 
+#[cfg(feature = "tls")]
 type TlsHelperFunc = extern "C" fn() -> *mut u32;
 
 static mut EXTERNAL_VAR: i32 = 100;
@@ -101,6 +109,7 @@ pub fn get_symbol_lookup() -> (
     (symbol_map, symbol_lookup)
 }
 
+#[cfg(feature = "tls")]
 fn get_relocs_dynamic() -> Vec<RelocEntry> {
     vec![
         RelocEntry::with_name(EXTERNAL_FUNC_NAME, REL_JUMP_SLOT),
@@ -117,17 +126,19 @@ fn get_relocs_dynamic() -> Vec<RelocEntry> {
     ]
 }
 
+#[cfg(feature = "tls")]
 #[test]
 fn dynamic_linking() {
     run_dynamic_linking(false);
 }
 
-#[cfg(feature = "lazy-binding")]
+#[cfg(all(feature = "lazy-binding", feature = "tls"))]
 #[test]
 fn dynamic_linking_with_lazy() {
     run_dynamic_linking(true);
 }
 
+#[cfg(feature = "tls")]
 fn run_dynamic_linking(is_lazy: bool) {
     let arch = Arch::current();
     let config = ElfWriterConfig::default().with_ifunc_resolver_val(IFUNC_RESOLVER_VALUE);

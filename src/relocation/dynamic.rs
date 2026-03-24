@@ -9,6 +9,7 @@ use crate::{
         BindingOptions, RelocHelper, RelocValue, RelocationHandler, ResolvedBinding, SymbolLookup,
         likely, reloc_error, unlikely,
     },
+    tls::{handle_tls_reloc, lookup_tls_get_addr},
 };
 use alloc::vec::Vec;
 use core::{num::NonZeroUsize, ptr::null_mut};
@@ -71,8 +72,8 @@ impl<D> DynamicImage<D> {
         }
 
         let hooked_pre_find = |name: &str| -> Option<*const ()> {
-            if name == "__tls_get_addr" {
-                return Some(tls_get_addr as *const ());
+            if let Some(symbol) = lookup_tls_get_addr(name, tls_get_addr as usize) {
+                return Some(symbol);
             }
             pre_find.lookup(name)
         };
@@ -198,7 +199,7 @@ impl<D> DynamicImage<D> {
                 continue;
             } else if unlikely(r_type == REL_TLSDESC) {
                 // Handle TLSDESC relocations
-                if super::tls::handle_tls_reloc(helper, rel) {
+                if handle_tls_reloc(helper, rel) {
                     continue;
                 }
             }
@@ -327,7 +328,7 @@ impl<D> DynamicImage<D> {
                 || r_type == REL_TLSDESC
             {
                 // Handle TLS (Thread Local Storage) relocations
-                if super::tls::handle_tls_reloc(helper, rel) {
+                if handle_tls_reloc(helper, rel) {
                     continue;
                 }
             }

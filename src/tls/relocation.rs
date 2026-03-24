@@ -6,6 +6,11 @@ use crate::{
 };
 use alloc::boxed::Box;
 
+#[inline]
+pub(crate) fn lookup_tls_get_addr(name: &str, tls_get_addr: usize) -> Option<*const ()> {
+    (name == "__tls_get_addr").then_some(tls_get_addr as *const ())
+}
+
 pub(crate) fn handle_tls_reloc<D, PreS, PostS, PreH, PostH>(
     helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
     rel: &ElfRelType,
@@ -25,7 +30,6 @@ where
     match r_type {
         REL_DTPOFF => {
             if let Some(symdef) = helper.find_symdef(r_sym) {
-                // Calculate offset within TLS block
                 let tls_val = RelocValue::new(symdef.sym.unwrap().st_value() as usize) + r_addend
                     - TLS_DTV_OFFSET;
                 segments.write(rel.r_offset(), tls_val);
@@ -63,37 +67,33 @@ where
                 if let Some(tp_offset) = symdef.lib.tls_tp_offset() {
                     let tpoff =
                         RelocValue::new((tp_offset + sym.st_value() as isize) as usize) + r_addend;
-                    // Write resolver function address and TPOFF
                     segments.write(
                         rel.r_offset(),
                         RelocValue::new(tlsdesc_resolver_static as *const () as usize),
                     );
                     segments.write(rel.r_offset() + 8, tpoff);
                     return true;
-                } else {
-                    // Dynamic case
-                    if let Some(mod_id) = symdef.lib.tls_mod_id() {
-                        let offset = RelocValue::new(sym.st_value() as usize) + r_addend;
-                        let ti = TlsIndex {
+                }
+
+                if let Some(mod_id) = symdef.lib.tls_mod_id() {
+                    let offset = RelocValue::new(sym.st_value() as usize) + r_addend;
+                    let dynamic_arg = Box::new(TlsDescDynamicArg {
+                        tls_get_addr: helper.tls_get_addr,
+                        ti: TlsIndex {
                             ti_module: mod_id,
                             ti_offset: offset.0,
-                        };
+                        },
+                    });
 
-                        let dynamic_arg = Box::new(TlsDescDynamicArg {
-                            tls_get_addr: helper.tls_get_addr,
-                            ti,
-                        });
+                    let arg_ptr = dynamic_arg.as_ref() as *const TlsDescDynamicArg as usize;
+                    helper.tls_desc_args.push(dynamic_arg);
 
-                        let arg_ptr = dynamic_arg.as_ref() as *const TlsDescDynamicArg as usize;
-                        helper.tls_desc_args.push(dynamic_arg);
-
-                        segments.write(
-                            rel.r_offset(),
-                            RelocValue::new(tlsdesc_resolver_dynamic as *const () as usize),
-                        );
-                        segments.write(rel.r_offset() + 8, RelocValue::new(arg_ptr));
-                        return true;
-                    }
+                    segments.write(
+                        rel.r_offset(),
+                        RelocValue::new(tlsdesc_resolver_dynamic as *const () as usize),
+                    );
+                    segments.write(rel.r_offset() + 8, RelocValue::new(arg_ptr));
+                    return true;
                 }
             }
         }

@@ -58,6 +58,7 @@ pub struct TlsIndex {
 /// `tls_get_addr` function and the actual `TlsIndex` data.
 #[repr(C)]
 #[derive(Debug)]
+#[cfg_attr(not(feature = "tls"), allow(dead_code))]
 pub(crate) struct TlsDescDynamicArg {
     pub tls_get_addr: usize,
     pub ti: TlsIndex,

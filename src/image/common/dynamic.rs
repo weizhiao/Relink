@@ -11,7 +11,7 @@ use crate::{
     os::Mmap,
     relocation::DynamicRelocation,
     segment::ELFRelro,
-    tls::{TlsIndex, TlsResolver},
+    tls::{CoreTlsState, TlsIndex, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, ptr::NonNull};
@@ -405,10 +405,7 @@ impl<D: 'static> DynamicImage<D> {
                         #[cfg(feature = "lazy-binding")]
                         lazy: LazyBindingInfo::new(dynamic.pltrel),
                     })),
-                    tls_mod_id,
-                    tls_tp_offset,
-                    tls_unregister: Tls::unregister,
-                    tls_desc_args: Box::new([]),
+                    tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, Tls::unregister),
                     segments: builder.segments,
                 }),
             },

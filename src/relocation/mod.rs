@@ -7,7 +7,6 @@
 mod dynamic;
 mod lazy;
 mod r#static;
-mod tls;
 mod traits;
 mod utils;
 
