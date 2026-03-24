@@ -4,78 +4,24 @@
 //! for the library. It orchestrates the process of reading ELF headers,
 //! mapping segments into memory, and preparing them for relocation.
 
+mod builder;
+mod load;
+
 use crate::{
     Result,
-    elf::{EHDR_SIZE, ElfHeader, ElfPhdr, ElfShdr},
-    image::{ImageBuilder, ObjectBuilder},
-    input::ElfReader,
+    elf::{ElfHeader, ElfPhdr, ElfShdr},
     os::{DefaultMmap, Mmap},
-    segment::{ElfSegments, SegmentBuilder, program::ProgramSegments, section::SectionSegments},
+    segment::ElfSegments,
     sync::Arc,
     tls::{DefaultTlsResolver, TlsResolver},
 };
-use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use core::marker::PhantomData;
+
+pub(crate) use builder::{ImageBuilder, ObjectBuilder};
 
 pub(crate) struct ElfBuf {
     buf: Vec<u8>,
-}
-
-impl ElfBuf {
-    pub(crate) fn new() -> Self {
-        let mut buf = Vec::new();
-        buf.resize(EHDR_SIZE, 0);
-        ElfBuf { buf }
-    }
-
-    pub(crate) fn prepare_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader> {
-        object.read(&mut self.buf[..EHDR_SIZE], 0)?;
-        ElfHeader::new(&self.buf).cloned()
-    }
-
-    pub(crate) fn prepare_phdrs(
-        &mut self,
-        ehdr: &ElfHeader,
-        object: &mut impl ElfReader,
-    ) -> Result<Option<&[ElfPhdr]>> {
-        let (phdr_start, phdr_end) = ehdr.phdr_range();
-        let size = phdr_end - phdr_start;
-        if size == 0 {
-            return Ok(None);
-        }
-        if size > self.buf.len() {
-            self.buf.resize(size, 0);
-        }
-        object.read(&mut self.buf[..size], phdr_start)?;
-        unsafe {
-            Ok(Some(core::slice::from_raw_parts(
-                self.buf.as_ptr().cast::<ElfPhdr>(),
-                (phdr_end - phdr_start) / size_of::<ElfPhdr>(),
-            )))
-        }
-    }
-
-    pub(crate) fn prepare_shdrs_mut(
-        &mut self,
-        ehdr: &ElfHeader,
-        object: &mut impl ElfReader,
-    ) -> Result<Option<&mut [ElfShdr]>> {
-        let (shdr_start, shdr_end) = ehdr.shdr_range();
-        let size = shdr_end - shdr_start;
-        if size == 0 {
-            return Ok(None);
-        }
-        if size > self.buf.len() {
-            self.buf.resize(size, 0);
-        }
-        object.read(&mut self.buf[..size], shdr_start)?;
-        unsafe {
-            Ok(Some(core::slice::from_raw_parts_mut(
-                self.buf.as_mut_ptr().cast::<ElfShdr>(),
-                (shdr_end - shdr_start) / size_of::<ElfShdr>(),
-            )))
-        }
-    }
 }
 
 /// Context provided to hook functions during ELF loading.
@@ -432,103 +378,5 @@ where
     pub fn with_static_tls(mut self, enabled: bool) -> Self {
         self.inner.force_static_tls = enabled;
         self
-    }
-
-    /// Reads the ELF header.
-    pub fn read_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader> {
-        self.buf.prepare_ehdr(object)
-    }
-
-    /// Reads the program header table.
-    pub fn read_phdr(
-        &mut self,
-        object: &mut impl ElfReader,
-        ehdr: &ElfHeader,
-    ) -> Result<Option<&[ElfPhdr]>> {
-        self.buf.prepare_phdrs(ehdr, object)
-    }
-}
-
-impl<H, D> LoaderInner<H, D>
-where
-    H: LoadHook,
-    D: 'static,
-{
-    pub(crate) fn create_builder<M, Tls>(
-        &mut self,
-        ehdr: ElfHeader,
-        phdrs: &[ElfPhdr],
-        mut object: impl ElfReader,
-    ) -> Result<ImageBuilder<'_, H, M, Tls, D>>
-    where
-        M: Mmap,
-        Tls: TlsResolver,
-    {
-        let init_fn = self.init_fn.clone();
-        let fini_fn = self.fini_fn.clone();
-        let force_static_tls = self.force_static_tls;
-        let mut phdr_segments =
-            ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
-        let segments = phdr_segments.load_segments::<M>(&mut object)?;
-        phdr_segments.mprotect::<M>()?;
-
-        let user_data = (self.user_data_loader)(&UserDataLoaderContext::new(
-            object.file_name(),
-            &ehdr,
-            Some(phdrs),
-            None,
-        ));
-
-        let builder = ImageBuilder::new(
-            &mut self.hook,
-            segments,
-            object.file_name().to_owned(),
-            ehdr,
-            init_fn,
-            fini_fn,
-            force_static_tls,
-            user_data,
-        );
-        Ok(builder)
-    }
-
-    pub(crate) fn create_object_builder<M, Tls>(
-        &mut self,
-        ehdr: ElfHeader,
-        shdrs: &mut [ElfShdr],
-        mut object: impl ElfReader,
-    ) -> Result<ObjectBuilder<Tls, D>>
-    where
-        M: Mmap,
-        Tls: TlsResolver,
-    {
-        let init_fn = self.init_fn.clone();
-        let fini_fn = self.fini_fn.clone();
-        let mut shdr_segments = SectionSegments::new(shdrs, &mut object);
-        let segments = shdr_segments.load_segments::<M>(&mut object)?;
-        let pltgot = shdr_segments.take_pltgot();
-        let mprotect = Box::new(move || {
-            shdr_segments.mprotect::<M>()?;
-            Ok(())
-        });
-        let user_data = (self.user_data_loader)(&UserDataLoaderContext::new(
-            object.file_name(),
-            &ehdr,
-            None,
-            Some(shdrs),
-        ));
-
-        let builder: ObjectBuilder<Tls, D> = ObjectBuilder::new(
-            object.file_name().to_owned(),
-            shdrs,
-            init_fn,
-            fini_fn,
-            segments,
-            mprotect,
-            pltgot,
-            user_data,
-        );
-
-        Ok(builder)
     }
 }

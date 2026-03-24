@@ -79,20 +79,15 @@ impl SegmentBuilder for ProgramSegments<'_> {
     fn create_space<M: Mmap>(&mut self) -> Result<ElfSegments> {
         let (addr, len, min_vaddr) = parse_segments(self.phdrs, self.is_dylib);
         let ptr = unsafe { M::mmap_reserve(addr, len, self.use_file) }?;
-        Ok(ElfSegments {
-            memory: ptr,
-            offset: min_vaddr,
-            len,
-            munmap: M::munmap,
-        })
+        let mut segments = ElfSegments::new(ptr, len, M::munmap);
+        segments.offset = min_vaddr;
+        Ok(segments)
     }
 
     /// Create individual segments from program headers
     fn create_segments(&mut self) -> Result<()> {
-        for phdr in self.phdrs {
-            if phdr.p_type == PT_LOAD {
-                self.segments.push(phdr.create_segment());
-            }
+        for phdr in self.phdrs.iter().filter(|phdr| phdr.p_type == PT_LOAD) {
+            self.segments.push(phdr.create_segment());
         }
         Ok(())
     }

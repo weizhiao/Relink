@@ -5,13 +5,11 @@ use crate::sync::Arc;
 /// that have been loaded but not yet relocated. It includes support for
 /// synchronous loading of executable files.
 use crate::{
-    Loader, Result,
+    Result,
     elf::ElfPhdr,
-    image::{DynamicImage, ImageBuilder, LoadedCore},
-    input::{ElfReader, IntoElfReader},
-    loader::LoadHook,
+    image::{DynamicImage, LoadedCore},
+    loader::{ImageBuilder, LoadHook},
     os::Mmap,
-    parse_ehdr_error,
     relocation::{
         BindingOptions, Relocatable, RelocationHandler, Relocator, SupportLazy, SymbolLookup,
     },
@@ -20,7 +18,6 @@ use crate::{
 };
 use alloc::{string::String, vec::Vec};
 use core::fmt::Debug;
-use elf::abi::PT_DYNAMIC;
 
 #[derive(Clone)]
 pub(crate) struct StaticImage<D> {
@@ -223,87 +220,6 @@ impl<D: 'static> RawExec<D> {
     }
 }
 
-impl<M, H, D, Tls> Loader<M, H, D, Tls>
-where
-    M: Mmap,
-    H: LoadHook,
-    D: Default,
-    Tls: TlsResolver,
-{
-    /// Loads an executable file into memory and prepares it for relocation.
-    ///
-    /// # Examples
-    /// ```no_run
-    /// use elf_loader::{Loader, input::ElfBinary};
-    ///
-    /// let mut loader = Loader::new();
-    /// let bytes = &[]; // ELF executable bytes
-    /// let exec = loader.load_exec(ElfBinary::new("my_exec", bytes)).unwrap();
-    /// ```
-    pub fn load_exec<'a, I>(&mut self, input: I) -> Result<RawExec<D>>
-    where
-        I: IntoElfReader<'a>,
-    {
-        let object = input.into_reader()?;
-        self.load_exec_impl(object)
-    }
-
-    pub(crate) fn load_exec_impl(&mut self, mut object: impl ElfReader) -> Result<RawExec<D>> {
-        #[cfg(feature = "log")]
-        log::info!("Loading executable: {}", object.file_name());
-
-        // Prepare and validate the ELF header
-        let ehdr = self.buf.prepare_ehdr(&mut object)?;
-
-        // Ensure the file is actually an executable
-        if !ehdr.is_executable() {
-            #[cfg(feature = "log")]
-            log::error!(
-                "File type mismatch for {}: expected executable, found {:?}",
-                object.file_name(),
-                ehdr.e_type
-            );
-            return Err(parse_ehdr_error("file type mismatch"));
-        }
-
-        let phdrs = self
-            .buf
-            .prepare_phdrs(&ehdr, &mut object)?
-            .unwrap_or_default();
-        let has_dynamic = phdrs.iter().any(|phdr| phdr.p_type == PT_DYNAMIC);
-
-        let res = if has_dynamic {
-            // Load the relocated common part
-            let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
-            let inner = builder.build_dynamic(phdrs)?;
-            // Wrap in RawExec and return
-            Ok(RawExec {
-                inner: ExecImageInner::Dynamic(inner),
-            })
-        } else {
-            // Load as a static module without dynamic section
-            let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
-            let inner = builder.build_static(phdrs)?;
-            Ok(RawExec {
-                inner: ExecImageInner::Static(inner),
-            })
-        };
-
-        #[cfg(feature = "log")]
-        if let Ok(ref exec) = res {
-            log::debug!(
-                "Load executable: {} at [0x{:x}-0x{:x}] ({})",
-                exec.name(),
-                exec.base(),
-                exec.base() + exec.mapped_len(),
-                if has_dynamic { "dynamic" } else { "static" }
-            );
-        }
-
-        res
-    }
-}
-
 /// An executable file that has been relocated.
 ///
 /// This structure represents an executable ELF file that has been loaded
@@ -386,20 +302,21 @@ impl<D> LoadedExec<D> {
     }
 }
 
-impl<'hook, H, M, Tls, D> ImageBuilder<'hook, H, M, Tls, D>
-where
-    M: Mmap,
-    H: LoadHook,
-    Tls: TlsResolver,
-{
-    pub(crate) fn build_static(mut self, phdrs: &[ElfPhdr]) -> Result<StaticImage<D>> {
+impl<D> StaticImage<D> {
+    pub(crate) fn from_builder<'hook, H, M, Tls>(
+        mut builder: ImageBuilder<'hook, H, M, Tls, D>,
+        phdrs: &[ElfPhdr],
+    ) -> Result<Self>
+    where
+        M: Mmap,
+        H: LoadHook,
+        Tls: TlsResolver,
+    {
         // Parse all program headers
-        for phdr in phdrs {
-            self.parse_phdr(phdr)?;
-        }
+        builder.parse_phdrs(phdrs)?;
 
-        let entry = self.ehdr.e_entry as usize;
-        let (tls_mod_id, tls_tp_offset) = if let Some(info) = &self.tls_info {
+        let entry = builder.ehdr.e_entry as usize;
+        let (tls_mod_id, tls_tp_offset) = if let Some(info) = &builder.tls_info {
             // Static executables always use static TLS if PT_TLS is present.
             let (mod_id, offset) = Tls::register_static(info)?;
             (Some(mod_id), Some(offset))
@@ -409,9 +326,9 @@ where
 
         let static_inner = StaticImageInner {
             entry,
-            name: self.name,
-            user_data: self.user_data,
-            segments: self.segments,
+            name: builder.name,
+            user_data: builder.user_data,
+            segments: builder.segments,
             phdrs: if phdrs.is_empty() {
                 None
             } else {
@@ -422,6 +339,27 @@ where
         };
         Ok(StaticImage {
             inner: Arc::new(static_inner),
+        })
+    }
+}
+
+impl<D: 'static> RawExec<D> {
+    pub(crate) fn from_builder<'hook, H, M, Tls>(
+        builder: ImageBuilder<'hook, H, M, Tls, D>,
+        phdrs: &[ElfPhdr],
+        has_dynamic: bool,
+    ) -> Result<Self>
+    where
+        M: Mmap,
+        H: LoadHook,
+        Tls: TlsResolver,
+    {
+        Ok(Self {
+            inner: if has_dynamic {
+                ExecImageInner::Dynamic(DynamicImage::from_builder(builder, phdrs)?)
+            } else {
+                ExecImageInner::Static(StaticImage::from_builder(builder, phdrs)?)
+            },
         })
     }
 }

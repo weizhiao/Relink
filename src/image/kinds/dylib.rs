@@ -5,13 +5,11 @@
 //! support for synchronous loading of dynamic libraries.
 
 use crate::{
-    Loader, Result,
+    Result,
     elf::{ElfDyn, ElfPhdr},
     image::{ElfCore, LoadedCore, common::DynamicImage},
-    input::{ElfReader, IntoElfReader},
-    loader::LoadHook,
+    loader::{ImageBuilder, LoadHook},
     os::Mmap,
-    parse_ehdr_error,
     relocation::{
         BindingOptions, Relocatable, RelocationHandler, Relocator, SupportLazy, SymbolLookup,
     },
@@ -77,6 +75,20 @@ impl<D> Relocatable<D> for RawDylib<D> {
 }
 
 impl<D> RawDylib<D> {
+    pub(crate) fn from_builder<'hook, H, M, Tls>(
+        builder: ImageBuilder<'hook, H, M, Tls, D>,
+        phdrs: &[ElfPhdr],
+    ) -> Result<Self>
+    where
+        H: LoadHook,
+        M: Mmap,
+        Tls: TlsResolver,
+    {
+        Ok(Self {
+            inner: DynamicImage::from_builder(builder, phdrs)?,
+        })
+    }
+
     /// Gets the entry point of the ELF object.
     #[inline]
     pub fn entry(&self) -> usize {
@@ -176,71 +188,6 @@ impl<D> RawDylib<D> {
     /// Creates a builder for relocating the dynamic library.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
-    }
-}
-
-impl<M, H, D, Tls> Loader<M, H, D, Tls>
-where
-    M: Mmap,
-    H: LoadHook,
-    D: Default,
-    Tls: TlsResolver,
-{
-    /// Loads a dynamic library into memory and prepares it for relocation.
-    ///
-    /// # Examples
-    /// ```no_run
-    /// use elf_loader::{Loader, input::ElfBinary};
-    ///
-    /// let mut loader = Loader::new();
-    /// let bytes = &[]; // ELF file bytes
-    /// let lib = loader.load_dylib(ElfBinary::new("liba.so", bytes)).unwrap();
-    /// ```
-    pub fn load_dylib<'a, I>(&mut self, input: I) -> Result<RawDylib<D>>
-    where
-        I: IntoElfReader<'a>,
-    {
-        let object = input.into_reader()?;
-        self.load_dylib_impl(object)
-    }
-
-    pub(crate) fn load_dylib_impl(&mut self, mut object: impl ElfReader) -> Result<RawDylib<D>> {
-        #[cfg(feature = "log")]
-        log::debug!("Loading dylib: {}", object.file_name());
-
-        // Prepare and validate the ELF header
-        let ehdr = self.read_ehdr(&mut object)?;
-
-        // Ensure the file is actually a dynamic library
-        if !ehdr.is_dylib() {
-            #[cfg(feature = "log")]
-            log::error!(
-                "[{}] Type mismatch: expected dylib, found {:?}",
-                object.file_name(),
-                ehdr.e_type
-            );
-            return Err(parse_ehdr_error("file type mismatch"));
-        }
-
-        let phdrs = self
-            .buf
-            .prepare_phdrs(&ehdr, &mut object)?
-            .unwrap_or_default();
-
-        // Load the relocated common part
-        let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
-        let inner = builder.build_dynamic(phdrs)?;
-
-        #[cfg(feature = "log")]
-        log::info!(
-            "Loaded dylib: {} at [0x{:x}-0x{:x}]",
-            inner.name(),
-            inner.base(),
-            inner.base() + inner.mapped_len()
-        );
-
-        // Wrap in RawDylib and return
-        Ok(RawDylib { inner })
     }
 }
 

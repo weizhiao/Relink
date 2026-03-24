@@ -20,19 +20,18 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 use elf::abi::{PT_DYNAMIC, PT_INTERP};
 
-mod builder;
 mod common;
 mod kinds;
+mod symbol;
 
-pub(crate) use builder::{ImageBuilder, ObjectBuilder};
-#[cfg(feature = "lazy-binding")]
 pub(crate) use common::CoreInner;
 pub(crate) use common::DynamicImage;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use common::DynamicInfo;
 
-pub use common::{ElfCore, ElfCoreRef, LoadedCore, Symbol};
+pub use common::{ElfCore, ElfCoreRef, LoadedCore};
 pub use kinds::{LoadedDylib, LoadedExec, LoadedObject, RawDylib, RawExec, RawObject};
+pub use symbol::Symbol;
 
 /// A mapped but unrelocated ELF image.
 ///

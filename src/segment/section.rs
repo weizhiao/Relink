@@ -35,8 +35,8 @@ pub(crate) struct SectionSegments {
 
 /// Convert protection flags to an index (0-3: R, RW, RX, RWX)
 fn prot_to_idx(prot: ProtFlags) -> usize {
-    (prot.contains(ProtFlags::PROT_WRITE) as usize)
-        | ((prot.contains(ProtFlags::PROT_EXEC) as usize) << 1)
+    usize::from(prot.contains(ProtFlags::PROT_WRITE))
+        | (usize::from(prot.contains(ProtFlags::PROT_EXEC)) << 1)
 }
 
 /// Convert section flags to an index for section unit management
@@ -49,12 +49,7 @@ impl SegmentBuilder for SectionSegments {
     fn create_space<M: Mmap>(&mut self) -> Result<ElfSegments> {
         let len = self.total_size;
         let memory = unsafe { M::mmap_reserve(None, len, false) }?;
-        Ok(ElfSegments {
-            memory,
-            offset: 0,
-            len,
-            munmap: M::munmap,
-        })
+        Ok(ElfSegments::new(memory, len, M::munmap))
     }
 
     /// Create individual segments from section headers
@@ -88,13 +83,13 @@ impl SectionSegments {
 
         // Group sections by their protection flags
         for shdr in shdrs.iter_mut().chain([&mut got_shdr, &mut plt_shdr]) {
-            units[flags_to_idx(shdr.sh_flags.into())].add_section(shdr);
+            units[flags_to_idx(shdr.sh_flags)].add_section(shdr);
         }
 
         // Create segments from section units
         let mut segments = Vec::new();
         let mut offset = 0;
-        for unit in units.iter_mut() {
+        for unit in &mut units {
             if let Some(segment) = unit.create_segment(&mut offset) {
                 offset = roundup(offset, PAGE_SIZE);
                 segments.push(segment);
@@ -246,8 +241,8 @@ impl PltGotSection {
 
     /// Adjust base addresses by adding an offset (used during relocation)
     pub(crate) fn rebase(&mut self, base: usize) {
-        self.got_base = self.got_base + base;
-        self.plt_base = self.plt_base + base;
+        self.got_base += base;
+        self.plt_base += base;
     }
 
     /// Add or retrieve a GOT entry for a symbol
@@ -344,7 +339,7 @@ impl<'shdr> SectionUnit<'shdr> {
             .first()
             .or(self.zero_sections.first())?;
 
-        let prot = section_prot(first_shdr.sh_flags.into());
+        let prot = section_prot(first_shdr.sh_flags);
         let segment_start = *base_offset;
         let addr = Address::Relative(segment_start);
 

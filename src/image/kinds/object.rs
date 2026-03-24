@@ -5,11 +5,9 @@
 //! contain code and data that need to be relocated before they can be executed.
 
 use crate::{
-    Loader, Result,
-    image::{ElfCore, LoadedCore, builder::ObjectBuilder, common::CoreInner},
-    input::{ElfReader, IntoElfReader},
-    loader::{DynLifecycleHandler, LoadHook},
-    os::Mmap,
+    Result,
+    image::{CoreInner, ElfCore, LoadedCore},
+    loader::{DynLifecycleHandler, ObjectBuilder},
     relocation::{
         BindingOptions, Relocatable, RelocationHandler, Relocator, StaticRelocation, SymbolLookup,
     },
@@ -19,92 +17,6 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{borrow::Borrow, fmt::Debug, ops::Deref};
-
-impl<M, H, D, Tls> Loader<M, H, D, Tls>
-where
-    M: Mmap,
-    H: LoadHook,
-    D: Default + 'static,
-    Tls: TlsResolver,
-{
-    /// Loads a relocatable object file into memory and prepares it for relocation.
-    ///
-    /// # Examples
-    /// ```no_run
-    /// use elf_loader::{Loader, input::ElfBinary};
-    ///
-    /// let mut loader = Loader::new();
-    /// let bytes = &[]; // Relocatable ELF bytes
-    /// let rel = loader.load_object(ElfBinary::new("liba.o", bytes)).unwrap();
-    /// ```
-    pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject<D>>
-    where
-        I: IntoElfReader<'a>,
-    {
-        let object = input.into_reader()?;
-        self.load_object_impl(object)
-    }
-
-    pub(crate) fn load_object_impl(&mut self, mut object: impl ElfReader) -> Result<RawObject<D>> {
-        #[cfg(feature = "log")]
-        log::debug!("Loading object: {}", object.file_name());
-
-        let ehdr = self.buf.prepare_ehdr(&mut object)?;
-        let shdrs = self
-            .buf
-            .prepare_shdrs_mut(&ehdr, &mut object)?
-            .ok_or_else(|| crate::parse_ehdr_error("object file must have section headers"))?;
-        let builder = self
-            .inner
-            .create_object_builder::<M, Tls>(ehdr, shdrs, object)?;
-        let raw = builder.build();
-
-        #[cfg(feature = "log")]
-        log::info!(
-            "Loaded object: {} at [0x{:x}-0x{:x}]",
-            raw.name(),
-            raw.base(),
-            raw.base() + raw.core.inner.segments.len()
-        );
-
-        Ok(raw)
-    }
-}
-
-impl<Tls: TlsResolver, D> ObjectBuilder<Tls, D> {
-    /// Builds the final [`RawObject`] from the components collected during the building process.
-    pub(crate) fn build(self) -> RawObject<D> {
-        // Create the inner component structure
-        let inner = CoreInner {
-            is_init: AtomicBool::new(false),
-            name: self.name,
-            symtab: self.symtab,
-            fini: None,
-            fini_array: None,
-            fini_handler: self.fini_fn,
-            user_data: self.user_data,
-            dynamic_info: None,
-            tls_mod_id: self.tls_mod_id,
-            tls_tp_offset: self.tls_tp_offset,
-            tls_unregister: Tls::unregister,
-            tls_desc_args: Box::new([]),
-            segments: self.segments,
-        };
-
-        // Construct and return the ElfRelocatable object
-        RawObject {
-            core: ElfCore {
-                inner: Arc::new(inner),
-            },
-            pltgot: self.pltgot,
-            relocation: self.relocation,
-            mprotect: self.mprotect,
-            init_array: self.init_array,
-            init: self.init_fn,
-            tls_get_addr: Tls::tls_get_addr as *const () as usize,
-        }
-    }
-}
 
 /// A relocatable ELF object.
 ///
@@ -144,6 +56,36 @@ impl<D> Deref for RawObject<D> {
 }
 
 impl<D: 'static> RawObject<D> {
+    pub(crate) fn from_builder<T: TlsResolver>(builder: ObjectBuilder<T, D>) -> Self {
+        let inner = CoreInner {
+            is_init: AtomicBool::new(false),
+            name: builder.name,
+            symtab: builder.symtab,
+            fini: None,
+            fini_array: None,
+            fini_handler: builder.fini_fn,
+            user_data: builder.user_data,
+            dynamic_info: None,
+            tls_mod_id: builder.tls_mod_id,
+            tls_tp_offset: builder.tls_tp_offset,
+            tls_unregister: T::unregister,
+            tls_desc_args: Box::new([]),
+            segments: builder.segments,
+        };
+
+        Self {
+            core: ElfCore {
+                inner: Arc::new(inner),
+            },
+            pltgot: builder.pltgot,
+            relocation: builder.relocation,
+            mprotect: builder.mprotect,
+            init_array: builder.init_array,
+            init: builder.init_fn,
+            tls_get_addr: T::tls_get_addr as *const () as usize,
+        }
+    }
+
     /// Creates a builder for relocating the relocatable file.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
