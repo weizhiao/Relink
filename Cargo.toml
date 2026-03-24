@@ -43,9 +43,6 @@ windows-sys = { version = "0.61", features = [
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2.180", default-features = false }
 
-[build-dependencies]
-cc = "1.2"
-
 [dependencies.syscalls]
 workspace = true
 optional = true

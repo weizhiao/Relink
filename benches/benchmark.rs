@@ -1,10 +1,17 @@
+#[path = "../examples/common/mod.rs"]
+mod fixture_support;
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use elf_loader::{Loader, input::ElfFile};
 use libloading::Library;
 use std::path::PathBuf;
 
+fn benchmark_fixture_path() -> PathBuf {
+    fixture_support::ensure_all().liba
+}
+
 fn load_benchmark(c: &mut Criterion) {
-    let path = PathBuf::from(env!("TEST_ARTIFACTS")).join("liba.so");
+    let path = benchmark_fixture_path();
     c.bench_function("elf_loader:new", |b| {
         b.iter(|| {
             let mut loader = Loader::new();
@@ -22,7 +29,7 @@ fn load_benchmark(c: &mut Criterion) {
 }
 
 fn get_symbol_benchmark(c: &mut Criterion) {
-    let path = PathBuf::from(env!("TEST_ARTIFACTS")).join("liba.so");
+    let path = benchmark_fixture_path();
     let mut loader = Loader::new();
     let liba = loader
         .load_dylib(ElfFile::from_path(path.to_str().unwrap()).unwrap())

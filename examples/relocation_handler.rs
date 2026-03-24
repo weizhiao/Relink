@@ -1,3 +1,6 @@
+#[path = "common/mod.rs"]
+mod fixture_support;
+
 use elf_loader::{
     Loader, Result,
     relocation::{RelocationContext, RelocationHandler},
@@ -35,19 +38,20 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let mut loader = Loader::new();
+    let fixtures = fixture_support::ensure_all();
 
     let _liba = loader
-        .load_dylib("target/liba.so")?
+        .load_dylib(fixtures.liba_str())?
         .relocator()
         .pre_handler(MyRelocHandler)
         .relocate()?;
     let libb = loader
-        .load_dylib("target/libb.so")?
+        .load_dylib(fixtures.libb_str())?
         .relocator()
         .pre_handler(MyRelocHandler)
         .scope([&_liba])
         .relocate()?;
-	
+
     unsafe {
         let b = libb.get::<fn() -> i32>("b").expect("symbol 'b' not found");
         let result = b();

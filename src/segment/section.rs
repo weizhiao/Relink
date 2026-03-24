@@ -15,7 +15,8 @@ use elf::abi::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHT_NOBITS, SHT_REL, SHT_REL
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
 
 /// Convert section flags to memory protection flags
-pub(crate) fn section_prot(sh_flags: u64) -> ProtFlags {
+pub(crate) fn section_prot(sh_flags: impl Into<u64>) -> ProtFlags {
+    let sh_flags = sh_flags.into();
     let mut prot = ProtFlags::PROT_READ;
     if sh_flags & SHF_WRITE as u64 != 0 {
         prot |= ProtFlags::PROT_WRITE;
@@ -40,7 +41,7 @@ fn prot_to_idx(prot: ProtFlags) -> usize {
 }
 
 /// Convert section flags to an index for section unit management
-fn flags_to_idx(flags: u64) -> usize {
+fn flags_to_idx(flags: impl Into<u64>) -> usize {
     prot_to_idx(section_prot(flags))
 }
 

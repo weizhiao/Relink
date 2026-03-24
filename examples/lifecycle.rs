@@ -1,3 +1,6 @@
+#[path = "common/mod.rs"]
+mod fixture_support;
+
 use elf_loader::{Loader, Result};
 
 fn main() -> Result<()> {
@@ -24,9 +27,9 @@ fn main() -> Result<()> {
             }
         });
 
-    // Load the library. (Make sure liba.so exists in target/ folder)
+    let fixtures = fixture_support::ensure_all();
     let _lib = loader
-        .load_dylib("target/liba.so")?
+        .load_dylib(fixtures.liba_str())?
         .relocator()
         .relocate()?;
     println!("Library loaded and relocated.");

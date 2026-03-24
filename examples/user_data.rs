@@ -1,3 +1,6 @@
+#[path = "common/mod.rs"]
+mod fixture_support;
+
 use elf_loader::{Loader, Result};
 
 #[allow(dead_code)]
@@ -28,8 +31,9 @@ fn main() -> Result<()> {
         }
     });
 
+    let fixtures = fixture_support::ensure_all();
     let lib = loader
-        .load_dylib("target/liba.so")?
+        .load_dylib(fixtures.liba_str())?
         .relocator()
         .relocate()?;
 

@@ -284,7 +284,6 @@ name = "elf_loader"
 version = "0.14.1"
 dependencies = [
  "bitflags",
- "cc",
  "cfg-if",
  "criterion",
  "elf",

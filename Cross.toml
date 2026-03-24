@@ -6,6 +6,3 @@ image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main"
 
 [target.x86_64-unknown-none]
 image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main"
-
-[build.env]
-passthrough = ["ELF_LOADER_CI=1"]

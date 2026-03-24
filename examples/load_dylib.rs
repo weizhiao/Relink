@@ -1,3 +1,6 @@
+#[path = "common/mod.rs"]
+mod fixture_support;
+
 use elf_loader::{Loader, Result};
 use std::collections::HashMap;
 
@@ -12,20 +15,21 @@ fn main() -> Result<()> {
     let mut map = HashMap::new();
     map.insert("print", print as _);
     let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+    let fixtures = fixture_support::ensure_all();
     let mut loader = Loader::new();
     let liba = loader
-        .load_dylib("target/liba.so")?
+        .load_dylib(fixtures.liba_str())?
         .relocator()
         .pre_find(&pre_find)
         .relocate()?;
     let libb = loader
-        .load_dylib("target/libb.so")?
+        .load_dylib(fixtures.libb_str())?
         .relocator()
         .pre_find(&pre_find)
         .scope([&liba])
         .relocate()?;
     let libc = loader
-        .load_dylib("target/libc.so")?
+        .load_dylib(fixtures.libc_str())?
         .relocator()
         .pre_find(&pre_find)
         .scope([&liba, &libb])

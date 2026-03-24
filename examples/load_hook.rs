@@ -1,3 +1,6 @@
+#[path = "common/mod.rs"]
+mod fixture_support;
+
 use elf_loader::{Loader, Result, loader::LoadHookContext};
 
 fn main() -> Result<()> {
@@ -15,8 +18,9 @@ fn main() -> Result<()> {
         Ok(())
     });
 
+    let fixtures = fixture_support::ensure_all();
     let _lib = loader
-        .load_dylib("target/liba.so")?
+        .load_dylib(fixtures.liba_str())?
         .relocator()
         .relocate()?;
     println!("Loaded with segment hook.");

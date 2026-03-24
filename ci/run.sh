@@ -19,8 +19,9 @@ fi
 cargo clean
 
 if [ "${MINI_LOADER}" = "1" ]; then
+	cargo run --example build_fixtures -- exec-a
 	"${CARGO}" build --target="${TARGET}"
 	"${CARGO}" ${OP} --target="${TARGET}" ${ARGS}
 else
-	"${CARGO}" -vv ${OP} --target="${TARGET}" --no-default-features --features "${FEATURES}"
+	"${CARGO}" ${OP} --target="${TARGET}" --no-default-features --features "${FEATURES}"
 fi
