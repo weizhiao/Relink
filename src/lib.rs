@@ -87,8 +87,8 @@ pub mod tls;
 pub(crate) use error::*;
 
 pub use error::{
-    CustomError, Error, IoError, MmapError, ParseDynamicError, ParseEhdrError, ParsePhdrError,
-    RelocationContextError, RelocationError, TlsError,
+    CustomError, Error, IoError, LazyBindingError, MmapError, ParseDynamicError, ParseEhdrError,
+    ParsePhdrError, RelocationContextError, RelocationError, TlsError,
 };
 pub use loader::Loader;
 

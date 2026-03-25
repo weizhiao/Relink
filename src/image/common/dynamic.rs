@@ -19,7 +19,7 @@ use core::{ffi::CStr, ptr::NonNull};
 
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo {
-    pub(crate) pltrel: Option<NonNull<ElfRelType>>,
+    pub(crate) pltrel: &'static [ElfRelType],
     pub(crate) scope: Option<Box<dyn SymbolLookup + Send + Sync>>,
 }
 
@@ -28,7 +28,7 @@ impl LazyBindingInfo {
     #[inline]
     pub(crate) fn new(pltrel: Option<&'static [ElfRelType]>) -> Self {
         Self {
-            pltrel: pltrel.and_then(|plt| NonNull::new(plt.as_ptr() as *mut _)),
+            pltrel: pltrel.unwrap_or(&[]),
             scope: None,
         }
     }

@@ -113,7 +113,7 @@ impl<D> DynamicImage<D> {
         }
 
         self.apply_relro(&binding)?;
-        self.install_lazy_scope(binding, deps.clone());
+        self.install_lazy_scope(binding, deps.clone())?;
 
         logging::debug!("Executing initialization functions for {}", self.name());
         self.call_init();
@@ -147,7 +147,7 @@ pub(crate) struct DynamicRelocation {
     /// Relative relocations (REL_RELATIVE)
     relative: RelativeRel,
     /// PLT relocations
-    pltrel: &'static [ElfRelType],
+    pub(in crate::relocation) pltrel: &'static [ElfRelType],
     /// Other dynamic relocations
     dynrel: &'static [ElfRelType],
 }
@@ -169,7 +169,7 @@ impl<D> DynamicImage<D> {
         let base = core.base();
         let segments = core.segments();
         let reloc = self.relocation();
-        binding.prepare_plt(self);
+        binding.prepare_plt(self)?;
 
         // Process PLT relocations
         for rel in reloc.pltrel {
@@ -349,12 +349,6 @@ impl<D> DynamicImage<D> {
 }
 
 impl DynamicRelocation {
-    #[cfg(feature = "lazy-binding")]
-    #[inline]
-    pub(crate) fn has_pltrel(&self) -> bool {
-        !self.pltrel.is_empty()
-    }
-
     /// Create a new DynamicRelocation instance from parsed relocation data
     #[inline]
     pub(crate) fn new(

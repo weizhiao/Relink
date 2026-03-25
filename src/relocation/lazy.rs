@@ -2,14 +2,17 @@
 mod enabled {
     use crate::image::{CoreInner, DynamicImage, DynamicInfo, LoadedCore};
     use crate::{
+        Result,
         arch::REL_JUMP_SLOT,
         arch::prepare_lazy_bind,
         elf::ElfRelType,
+        relocate_lazy_binding_missing_got_error,
         relocation::{BindingOptions, RelocValue, SymbolLookup},
         sync::Arc,
         tls::lookup_tls_get_addr,
     };
     use alloc::boxed::Box;
+    use core::ptr::NonNull;
 
     struct LazyScope<D = ()> {
         libs: Arc<[LoadedCore<D>]>,
@@ -48,20 +51,21 @@ mod enabled {
             matches!(self, Self::Lazy { .. })
         }
 
-        pub(crate) fn prepare_plt<D>(&self, image: &DynamicImage<D>)
+        pub(crate) fn prepare_plt<D>(&self, image: &DynamicImage<D>) -> Result<()>
         where
             D: 'static,
         {
-            if self.is_lazy() && image.relocation().has_pltrel() {
+            if self.is_lazy() {
+                let pltrel = image.relocation().pltrel;
+                if pltrel.is_empty() {
+                    return Ok(());
+                }
+
+                let got = lazy_binding_got(image)?;
                 let core = image.core_ref();
-                prepare_lazy_bind(
-                    image
-                        .got()
-                        .expect("GOT not found for lazy binding")
-                        .as_ptr(),
-                    Arc::as_ptr(&core.inner) as usize,
-                );
+                prepare_lazy_bind(got.as_ptr(), Arc::as_ptr(&core.inner) as usize);
             }
+            Ok(())
         }
 
         pub(crate) fn relocate_jump_slot(&self, base: usize, rel: &ElfRelType) -> bool {
@@ -108,11 +112,21 @@ mod enabled {
             &self,
             binding: ResolvedBinding,
             deps: Arc<[LoadedCore<D>]>,
-        ) where
+        ) -> Result<()>
+        where
             D: 'static,
         {
             if let ResolvedBinding::Lazy { scope } = binding {
-                let dynamic_info = self.core_ref().inner.dynamic_info.as_ref().unwrap();
+                if self.relocation().pltrel.is_empty() {
+                    return Ok(());
+                }
+
+                let dynamic_info = self
+                    .core_ref()
+                    .inner
+                    .dynamic_info
+                    .as_ref()
+                    .expect("DynamicImage must carry dynamic_info during lazy binding setup");
                 let info = unsafe { &mut *(Arc::as_ptr(dynamic_info) as *mut DynamicInfo) };
                 info.lazy.scope = Some(Box::new(LazyScope {
                     libs: deps,
@@ -120,30 +134,47 @@ mod enabled {
                     tls_get_addr: self.core_ref().tls_get_addr(),
                 }));
             }
+            Ok(())
         }
+    }
+
+    fn lazy_binding_got<D>(image: &DynamicImage<D>) -> Result<NonNull<usize>>
+    where
+        D: 'static,
+    {
+        image
+            .got()
+            .ok_or_else(relocate_lazy_binding_missing_got_error)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn lazy_bind_unresolved_symbol(name: &str, symbol: &str) -> ! {
+        panic!("lazy binding failed for {name}: unresolved symbol {symbol}");
     }
 
     #[allow(improper_ctypes_definitions)]
     pub(crate) unsafe extern "C" fn dl_fixup(dylib: &CoreInner, rela_idx: usize) -> usize {
-        let dynamic_info = dylib.dynamic_info.as_ref().expect("dynamic_info missing");
-        let pltrel = dynamic_info.lazy.pltrel.expect("pltrel missing");
+        let dynamic_info = unsafe { dylib.dynamic_info.as_ref().unwrap_unchecked() };
+        let pltrel = dynamic_info.lazy.pltrel;
 
-        let rela = unsafe { &*pltrel.as_ptr().add(rela_idx) };
+        debug_assert!(rela_idx < pltrel.len());
+
+        // All structural lazy-binding checks were front-loaded during installation.
+        let rela = unsafe { pltrel.get_unchecked(rela_idx) };
         let r_type = rela.r_type();
         let r_sym = rela.r_symbol();
         let segments = &dylib.segments;
 
-        assert!(r_type == REL_JUMP_SLOT as usize && r_sym != 0);
+        debug_assert!(r_type == REL_JUMP_SLOT as usize && r_sym != 0);
 
         let (_, syminfo) = dylib.symtab.symbol_idx(r_sym);
 
-        let symbol = dynamic_info
-            .lazy
-            .scope
-            .as_ref()
-            .expect("lazy scope missing")
-            .lookup(syminfo.name())
-            .expect("lazy bind fail") as usize;
+        let scope = unsafe { dynamic_info.lazy.scope.as_ref().unwrap_unchecked() };
+        let symbol = match scope.lookup(syminfo.name()) {
+            Some(symbol) => symbol as usize,
+            None => lazy_bind_unresolved_symbol(dylib.name.as_str(), syminfo.name()),
+        };
 
         segments.write(rela.r_offset(), RelocValue::new(symbol));
         symbol
@@ -169,10 +200,11 @@ mod disabled {
             false
         }
 
-        pub(crate) fn prepare_plt<D>(&self, _image: &DynamicImage<D>)
+        pub(crate) fn prepare_plt<D>(&self, _image: &DynamicImage<D>) -> crate::Result<()>
         where
             D: 'static,
         {
+            Ok(())
         }
 
         pub(crate) const fn relocate_jump_slot(&self, _base: usize, _rel: &ElfRelType) -> bool {
@@ -199,9 +231,11 @@ mod disabled {
             &self,
             _binding: ResolvedBinding,
             _deps: Arc<[LoadedCore<D>]>,
-        ) where
+        ) -> crate::Result<()>
+        where
             D: 'static,
         {
+            Ok(())
         }
     }
 }

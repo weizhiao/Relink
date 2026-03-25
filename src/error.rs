@@ -260,6 +260,21 @@ impl Display for RelocationContextError {
     }
 }
 
+/// Structured lazy-binding setup error details.
+#[derive(Debug)]
+pub enum LazyBindingError {
+    /// `lazy binding requires a GOT/PLTGOT entry`
+    MissingGot,
+}
+
+impl Display for LazyBindingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingGot => f.write_str("lazy binding requires a GOT/PLTGOT entry"),
+        }
+    }
+}
+
 /// Structured relocation error details.
 #[derive(Debug)]
 pub enum RelocationError {
@@ -267,6 +282,8 @@ pub enum RelocationError {
     IntegralConversionOutOfRange,
     /// Detailed relocation context, formatted lazily in `Display`.
     Context(Box<RelocationContextError>),
+    /// Lazy-binding setup failed before the hot path was installed.
+    LazyBinding(LazyBindingError),
 }
 
 impl Display for RelocationError {
@@ -276,6 +293,7 @@ impl Display for RelocationError {
                 f.write_str("out of range integral type conversion attempted")
             }
             Self::Context(ctx) => Display::fmt(ctx, f),
+            Self::LazyBinding(err) => Display::fmt(err, f),
         }
     }
 }
@@ -522,6 +540,13 @@ pub(crate) fn relocate_context_error(
     Error::Relocation(RelocationError::Context(Box::new(
         RelocationContextError::new(file, r_type, symbol, reason),
     )))
+}
+
+#[cold]
+#[inline(never)]
+#[cfg(feature = "lazy-binding")]
+pub(crate) fn relocate_lazy_binding_missing_got_error() -> Error {
+    Error::Relocation(RelocationError::LazyBinding(LazyBindingError::MissingGot))
 }
 
 #[cold]
