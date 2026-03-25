@@ -1,9 +1,9 @@
 use crate::{
     Result,
     input::ElfReader,
-    io_create_file_w_error, io_error, io_read_file_error, io_set_file_pointer_error,
-    mmap_create_file_mapping_error, mmap_map_view_of_file3_error, mmap_mprotect_error,
-    mmap_virtual_alloc_error, mmap_virtual_free_error,
+    io_create_file_w_error, io_failed_to_fill_buffer_error, io_read_file_error,
+    io_set_file_pointer_error, mmap_create_file_mapping_error, mmap_map_view_of_file3_error,
+    mmap_mprotect_error, mmap_virtual_alloc_error, mmap_virtual_free_error,
     os::{MapFlags, Mmap, ProtFlags},
 };
 use alloc::{ffi::CString, vec::Vec};
@@ -243,7 +243,8 @@ impl Mmap for DefaultMmap {
             }
         };
         if ptr.is_null() {
-            return Err(crate::mmap_error("VirtualAlloc failed"));
+            let err_code = unsafe { GetLastError() };
+            return Err(mmap_virtual_alloc_error(err_code));
         }
         Ok(ptr)
     }
@@ -368,7 +369,7 @@ fn win_read_exact(handle: HANDLE, mut bytes: &mut [u8]) -> Result<()> {
             let err_code = unsafe { GetLastError() };
             return Err(io_read_file_error(err_code));
         } else if read_count == 0 {
-            return Err(io_error("failed to fill buffer"));
+            return Err(io_failed_to_fill_buffer_error());
         }
 
         let n = read_count as usize;

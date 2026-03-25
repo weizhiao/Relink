@@ -17,12 +17,13 @@ mod version;
 // Internal module re-exports for use within the crate
 pub(crate) use defs::*;
 pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab};
-pub(crate) use ehdr::machine_to_str;
 pub(crate) use hash::{HashTable, PreCompute};
 pub(crate) use phdrs::ElfPhdrs;
 pub(crate) use symbol::{ElfStringTable, SymbolInfo, SymbolTable};
 
 // Public API exports
-pub use defs::{ElfDyn, ElfPhdr, ElfRel, ElfRelType, ElfRela, ElfSymbol};
+pub use defs::{
+    ElfClass, ElfDyn, ElfFileType, ElfMachine, ElfPhdr, ElfRel, ElfRelType, ElfRela, ElfSymbol,
+};
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::ElfHeader;

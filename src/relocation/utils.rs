@@ -1,8 +1,8 @@
 use crate::{
-    Error, Result,
+    Error, RelocationFailureReason, Result,
     elf::{ElfRelType, ElfSymbol, SymbolInfo, SymbolTable},
     image::{ElfCore, LoadedCore},
-    logging, relocate_context_error, relocate_error,
+    logging, relocate_context_error, relocate_integral_conversion_out_of_range_error,
     relocation::{
         BindingOptions, Relocatable, RelocationContext, RelocationHandler, SupportLazy,
         SymbolLookup,
@@ -494,7 +494,7 @@ impl TryFrom<RelocValue<usize>> for RelocValue<i32> {
     fn try_from(value: RelocValue<usize>) -> Result<Self> {
         i32::try_from(value.0 as isize)
             .map(RelocValue)
-            .map_err(|_| relocate_error("out of range integral type conversion attempted"))
+            .map_err(|_| relocate_integral_conversion_out_of_range_error())
     }
 }
 
@@ -505,7 +505,7 @@ impl TryFrom<RelocValue<usize>> for RelocValue<u32> {
     fn try_from(value: RelocValue<usize>) -> Result<Self> {
         u32::try_from(value.0)
             .map(RelocValue)
-            .map_err(|_| relocate_error("out of range integral type conversion attempted"))
+            .map_err(|_| relocate_integral_conversion_out_of_range_error())
     }
 }
 
@@ -547,17 +547,21 @@ impl<'temp, D> SymDef<'temp, D> {
 ///
 /// The dynamic parts are stored structurally and formatted only in `Display`.
 #[cold]
-pub(crate) fn reloc_error<D>(rel: &ElfRelType, err: &'static str, lib: &ElfCore<D>) -> Error {
+pub(crate) fn reloc_error<D>(
+    rel: &ElfRelType,
+    reason: RelocationFailureReason,
+    lib: &ElfCore<D>,
+) -> Error {
     let r_type_str = rel.r_type_str();
     let r_sym = rel.r_symbol();
     if r_sym == 0 {
-        relocate_context_error(lib.name(), r_type_str, None, err)
+        relocate_context_error(lib.name(), r_type_str, None, reason)
     } else {
         relocate_context_error(
             lib.name(),
             r_type_str,
             Some(lib.symtab().symbol_idx(r_sym).1.name()),
-            err,
+            reason,
         )
     }
 }

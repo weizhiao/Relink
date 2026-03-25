@@ -203,7 +203,11 @@ impl<D> DynamicImage<D> {
             }
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)? {
-                return Err(reloc_error(rel, "Unhandled relocation", core));
+                return Err(reloc_error(
+                    rel,
+                    crate::RelocationFailureReason::Unhandled,
+                    core,
+                ));
             }
         }
         Ok(self)
@@ -333,7 +337,11 @@ impl<D> DynamicImage<D> {
 
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)? {
-                return Err(reloc_error(rel, "Unhandled relocation", core));
+                return Err(reloc_error(
+                    rel,
+                    crate::RelocationFailureReason::Unhandled,
+                    core,
+                ));
             }
         }
         Ok(self)

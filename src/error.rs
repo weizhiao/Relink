@@ -1,8 +1,6 @@
+use crate::elf::{ElfClass, ElfFileType, ElfMachine};
 use alloc::{borrow::Cow, boxed::Box};
 use core::fmt::{self, Display};
-
-const PARSE_DYNAMIC_MISSING_HASH_TABLE_MESSAGE: &str =
-    "dynamic section does not have DT_GNU_HASH nor DT_HASH";
 
 const TLS_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
     "TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support."
@@ -21,8 +19,8 @@ const UNSUPPORTED_STATIC_TLS_MESSAGE: &str = "unsupport static tls";
 /// Structured I/O error details.
 #[derive(Debug)]
 pub enum IoError {
-    /// A plain message, used when no deferred formatting is needed.
-    Message(Cow<'static, str>),
+    /// The provided path contains an interior NUL byte.
+    NullByteInPath,
     /// `open failed: {path}`
     Open { path: Box<str> },
     /// `openat failed: {path}`
@@ -33,12 +31,26 @@ pub enum IoError {
     SetFilePointerEx { code: u32 },
     /// `ReadFile failed with error: {code}`
     ReadFile { code: u32 },
+    /// `lseek failed`
+    SeekFailed,
+    /// `read failed`
+    ReadFailed,
+    /// `failed to fill buffer`
+    FailedToFillBuffer,
+    /// `read offset out of bounds: offset {offset}, len {len}, available {available}`
+    ReadOffsetOutOfBounds {
+        offset: usize,
+        len: usize,
+        available: usize,
+    },
+    /// `close failed`
+    CloseFailed,
 }
 
 impl Display for IoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Message(msg) => f.write_str(msg),
+            Self::NullByteInPath => f.write_str("path contains an interior NUL byte"),
             Self::Open { path } => write!(f, "open failed: {path}"),
             Self::OpenAt { path } => write!(f, "openat failed: {path}"),
             Self::CreateFileW { path, code } => {
@@ -48,6 +60,18 @@ impl Display for IoError {
                 write!(f, "SetFilePointerEx failed with error: {code}")
             }
             Self::ReadFile { code } => write!(f, "ReadFile failed with error: {code}"),
+            Self::SeekFailed => f.write_str("lseek failed"),
+            Self::ReadFailed => f.write_str("read failed"),
+            Self::FailedToFillBuffer => f.write_str("failed to fill buffer"),
+            Self::ReadOffsetOutOfBounds {
+                offset,
+                len,
+                available,
+            } => write!(
+                f,
+                "read offset out of bounds: offset {offset}, len {len}, available {available}"
+            ),
+            Self::CloseFailed => f.write_str("close failed"),
         }
     }
 }
@@ -55,12 +79,18 @@ impl Display for IoError {
 /// Structured memory-mapping error details.
 #[derive(Debug)]
 pub enum MmapError {
-    /// A plain message, used when no deferred formatting is needed.
-    Message(Cow<'static, str>),
+    /// `mmap failed`
+    MmapFailed,
+    /// `mmap anonymous failed`
+    MmapAnonymousFailed,
+    /// `munmap failed`
+    MunmapFailed,
     /// `MapViewOfFile3 failed with error: {code}`
     MapViewOfFile3 { code: u32 },
     /// `VirtualAlloc failed with error: {code}`
     VirtualAlloc { code: u32 },
+    /// `mprotect failed`
+    MprotectFailed,
     /// `mprotect error! error code: {code}`
     Mprotect { code: u32 },
     /// `CreateFileMappingW failed with error: {code}`
@@ -72,13 +102,16 @@ pub enum MmapError {
 impl Display for MmapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Message(msg) => f.write_str(msg),
+            Self::MmapFailed => f.write_str("mmap failed"),
+            Self::MmapAnonymousFailed => f.write_str("mmap anonymous failed"),
+            Self::MunmapFailed => f.write_str("munmap failed"),
             Self::MapViewOfFile3 { code } => {
                 write!(f, "MapViewOfFile3 failed with error: {code}")
             }
             Self::VirtualAlloc { code } => {
                 write!(f, "VirtualAlloc failed with error: {code}")
             }
+            Self::MprotectFailed => f.write_str("mprotect failed"),
             Self::Mprotect { code } => write!(f, "mprotect error! error code: {code}"),
             Self::CreateFileMappingW { code } => {
                 write!(f, "CreateFileMappingW failed with error: {code}")
@@ -93,8 +126,6 @@ impl Display for MmapError {
 /// Structured dynamic-section parsing error details.
 #[derive(Debug)]
 pub enum ParseDynamicError {
-    /// A plain message, used when no deferred formatting is needed.
-    Message(Cow<'static, str>),
     /// The dynamic section omitted both `DT_GNU_HASH` and `DT_HASH`.
     MissingHashTable,
 }
@@ -102,8 +133,9 @@ pub enum ParseDynamicError {
 impl Display for ParseDynamicError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Message(msg) => f.write_str(msg),
-            Self::MissingHashTable => f.write_str(PARSE_DYNAMIC_MISSING_HASH_TABLE_MESSAGE),
+            Self::MissingHashTable => {
+                f.write_str("dynamic section does not have DT_GNU_HASH nor DT_HASH")
+            }
         }
     }
 }
@@ -111,27 +143,47 @@ impl Display for ParseDynamicError {
 /// Structured ELF header parsing error details.
 #[derive(Debug)]
 pub enum ParseEhdrError {
-    /// A plain message, used when no deferred formatting is needed.
-    Message(Cow<'static, str>),
+    /// The ELF magic bytes do not match `0x7fELF`.
+    InvalidMagic,
     /// `file class mismatch: expected {expected}, found {found}`
-    FileClassMismatch { expected: u8, found: u8 },
+    FileClassMismatch { expected: ElfClass, found: ElfClass },
+    /// The ELF version is not `EV_CURRENT`.
+    InvalidVersion,
     /// `file arch mismatch: expected {expected}, found {found}`
-    FileArchMismatch { expected: u16, found: u16 },
+    FileArchMismatch {
+        expected: ElfMachine,
+        found: ElfMachine,
+    },
+    /// A shared object was required but the file type was different.
+    ExpectedDylib { found: ElfFileType },
+    /// An executable or PIE-compatible file was required but the file type was different.
+    ExpectedExecutable { found: ElfFileType },
+    /// A relocatable object was expected to carry section headers.
+    MissingSectionHeaders,
 }
 
 impl Display for ParseEhdrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Message(msg) => f.write_str(msg),
+            Self::InvalidMagic => f.write_str("invalid ELF magic"),
             Self::FileClassMismatch { expected, found } => {
                 write!(f, "file class mismatch: expected {expected}, found {found}")
             }
+            Self::InvalidVersion => f.write_str("invalid ELF version"),
             Self::FileArchMismatch { expected, found } => write!(
                 f,
                 "file arch mismatch: expected {}, found {}",
-                crate::elf::machine_to_str(*expected),
-                crate::elf::machine_to_str(*found),
+                expected, found,
             ),
+            Self::ExpectedDylib { found } => {
+                write!(f, "file type mismatch: expected ET_DYN, found {found}")
+            }
+            Self::ExpectedExecutable { found } => write!(
+                f,
+                "file type mismatch: expected ET_EXEC or ET_DYN, found {}",
+                found,
+            ),
+            Self::MissingSectionHeaders => f.write_str("object file must have section headers"),
         }
     }
 }
@@ -139,14 +191,33 @@ impl Display for ParseEhdrError {
 /// Structured program-header parsing error details.
 #[derive(Debug)]
 pub enum ParsePhdrError {
-    /// A plain message, used when no deferred formatting is needed.
-    Message(Cow<'static, str>),
+    /// The program header table is malformed.
+    MalformedProgramHeaders,
 }
 
 impl Display for ParsePhdrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Message(msg) => f.write_str(msg),
+            Self::MalformedProgramHeaders => f.write_str("program headers are malformed"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RelocationFailureReason {
+    UnknownSymbol,
+    Unhandled,
+    IntegralConversionOutOfRange,
+}
+
+impl Display for RelocationFailureReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownSymbol => f.write_str("unknown symbol"),
+            Self::Unhandled => f.write_str("Unhandled relocation"),
+            Self::IntegralConversionOutOfRange => {
+                f.write_str("out of range integral type conversion attempted")
+            }
         }
     }
 }
@@ -157,7 +228,7 @@ pub struct RelocationContextError {
     file: Box<str>,
     r_type: &'static str,
     symbol: Option<Box<str>>,
-    err: &'static str,
+    reason: RelocationFailureReason,
 }
 
 impl RelocationContextError {
@@ -166,13 +237,13 @@ impl RelocationContextError {
         file: &str,
         r_type: &'static str,
         symbol: Option<&str>,
-        err: &'static str,
+        reason: RelocationFailureReason,
     ) -> Self {
         Self {
             file: file.into(),
             r_type,
             symbol: symbol.map(Into::into),
-            err,
+            reason,
         }
     }
 }
@@ -185,15 +256,15 @@ impl Display for RelocationContextError {
         } else {
             f.write_str("no symbol, ")?;
         }
-        write!(f, "error: {}", self.err)
+        write!(f, "error: {}", self.reason)
     }
 }
 
 /// Structured relocation error details.
 #[derive(Debug)]
 pub enum RelocationError {
-    /// A plain message, used when no deferred formatting is needed.
-    Message(Cow<'static, str>),
+    /// `out of range integral type conversion attempted`
+    IntegralConversionOutOfRange,
     /// Detailed relocation context, formatted lazily in `Display`.
     Context(Box<RelocationContextError>),
 }
@@ -201,7 +272,9 @@ pub enum RelocationError {
 impl Display for RelocationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Message(msg) => f.write_str(msg),
+            Self::IntegralConversionOutOfRange => {
+                f.write_str("out of range integral type conversion attempted")
+            }
             Self::Context(ctx) => Display::fmt(ctx, f),
         }
     }
@@ -225,8 +298,6 @@ impl Display for CustomError {
 /// Structured TLS error details.
 #[derive(Debug)]
 pub enum TlsError {
-    /// A plain message, used for uncommon or fully custom cases.
-    Message(Cow<'static, str>),
     /// The current resolver does not support dynamic TLS.
     ResolverUnsupported,
     /// The current resolver does not support static TLS registration.
@@ -238,7 +309,6 @@ pub enum TlsError {
 impl Display for TlsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Message(msg) => f.write_str(msg),
             Self::ResolverUnsupported => f.write_str(TLS_DISABLED_MESSAGE),
             Self::StaticResolverUnsupported => f.write_str(STATIC_TLS_DISABLED_MESSAGE),
             Self::UnsupportedStaticTls => f.write_str(UNSUPPORTED_STATIC_TLS_MESSAGE),
@@ -295,9 +365,8 @@ impl core::error::Error for Error {}
 
 #[cold]
 #[inline(never)]
-#[allow(unused)]
-pub(crate) fn io_error(msg: impl Into<Cow<'static, str>>) -> Error {
-    Error::Io(IoError::Message(msg.into()))
+pub(crate) fn io_null_byte_in_path_error() -> Error {
+    Error::Io(IoError::NullByteInPath)
 }
 
 #[cold]
@@ -340,8 +409,65 @@ pub(crate) fn io_read_file_error(code: u32) -> Error {
 
 #[cold]
 #[inline(never)]
-pub(crate) fn mmap_error(msg: impl Into<Cow<'static, str>>) -> Error {
-    Error::Mmap(MmapError::Message(msg.into()))
+pub(crate) fn io_seek_error() -> Error {
+    Error::Io(IoError::SeekFailed)
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn io_read_error() -> Error {
+    Error::Io(IoError::ReadFailed)
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn io_failed_to_fill_buffer_error() -> Error {
+    Error::Io(IoError::FailedToFillBuffer)
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn io_read_offset_out_of_bounds_error(
+    offset: usize,
+    len: usize,
+    available: usize,
+) -> Error {
+    Error::Io(IoError::ReadOffsetOutOfBounds {
+        offset,
+        len,
+        available,
+    })
+}
+
+#[cold]
+#[inline(never)]
+#[allow(dead_code)]
+pub(crate) fn io_close_error() -> Error {
+    Error::Io(IoError::CloseFailed)
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn mmap_failed_error() -> Error {
+    Error::Mmap(MmapError::MmapFailed)
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn mmap_anonymous_failed_error() -> Error {
+    Error::Mmap(MmapError::MmapAnonymousFailed)
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn mmap_munmap_failed_error() -> Error {
+    Error::Mmap(MmapError::MunmapFailed)
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn mmap_mprotect_failed_error() -> Error {
+    Error::Mmap(MmapError::MprotectFailed)
 }
 
 #[cold]
@@ -381,8 +507,8 @@ pub(crate) fn mmap_virtual_free_error(code: u32) -> Error {
 
 #[cold]
 #[inline(never)]
-pub(crate) fn relocate_error(msg: impl Into<Cow<'static, str>>) -> Error {
-    Error::Relocation(RelocationError::Message(msg.into()))
+pub(crate) fn relocate_integral_conversion_out_of_range_error() -> Error {
+    Error::Relocation(RelocationError::IntegralConversionOutOfRange)
 }
 
 #[cold]
@@ -391,18 +517,11 @@ pub(crate) fn relocate_context_error(
     file: &str,
     r_type: &'static str,
     symbol: Option<&str>,
-    err: &'static str,
+    reason: RelocationFailureReason,
 ) -> Error {
     Error::Relocation(RelocationError::Context(Box::new(
-        RelocationContextError::new(file, r_type, symbol, err),
+        RelocationContextError::new(file, r_type, symbol, reason),
     )))
-}
-
-#[cold]
-#[inline(never)]
-#[allow(dead_code)]
-pub(crate) fn parse_dynamic_error(msg: impl Into<Cow<'static, str>>) -> Error {
-    Error::ParseDynamic(ParseDynamicError::Message(msg.into()))
 }
 
 #[cold]
@@ -413,41 +532,51 @@ pub(crate) fn parse_dynamic_missing_hash_table_error() -> Error {
 
 #[cold]
 #[inline(never)]
-pub(crate) fn parse_ehdr_error(msg: impl Into<Cow<'static, str>>) -> Error {
-    Error::ParseEhdr(ParseEhdrError::Message(msg.into()))
+pub(crate) fn parse_ehdr_invalid_magic_error() -> Error {
+    Error::ParseEhdr(ParseEhdrError::InvalidMagic)
 }
 
 #[cold]
 #[inline(never)]
-pub(crate) fn parse_ehdr_class_mismatch_error(expected: u8, found: u8) -> Error {
+pub(crate) fn parse_ehdr_invalid_version_error() -> Error {
+    Error::ParseEhdr(ParseEhdrError::InvalidVersion)
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn parse_ehdr_class_mismatch_error(expected: ElfClass, found: ElfClass) -> Error {
     Error::ParseEhdr(ParseEhdrError::FileClassMismatch { expected, found })
 }
 
 #[cold]
 #[inline(never)]
-pub(crate) fn parse_ehdr_arch_mismatch_error(expected: u16, found: u16) -> Error {
+pub(crate) fn parse_ehdr_arch_mismatch_error(expected: ElfMachine, found: ElfMachine) -> Error {
     Error::ParseEhdr(ParseEhdrError::FileArchMismatch { expected, found })
 }
 
 #[cold]
 #[inline(never)]
-#[allow(dead_code)]
-pub(crate) fn parse_phdr_error(msg: impl Into<Cow<'static, str>>) -> Error {
-    Error::ParsePhdr(ParsePhdrError::Message(msg.into()))
+pub(crate) fn parse_ehdr_expected_dylib_error(found: ElfFileType) -> Error {
+    Error::ParseEhdr(ParseEhdrError::ExpectedDylib { found })
 }
 
 #[cold]
 #[inline(never)]
-#[allow(unused)]
+pub(crate) fn parse_ehdr_expected_executable_error(found: ElfFileType) -> Error {
+    Error::ParseEhdr(ParseEhdrError::ExpectedExecutable { found })
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn parse_ehdr_missing_section_headers_error() -> Error {
+    Error::ParseEhdr(ParseEhdrError::MissingSectionHeaders)
+}
+
+#[cold]
+#[inline(never)]
+#[allow(dead_code)]
 pub fn custom_error(msg: impl Into<Cow<'static, str>>) -> Error {
     Error::Custom(CustomError::Message(msg.into()))
-}
-
-#[cold]
-#[inline(never)]
-#[allow(dead_code)]
-pub(crate) fn tls_error(msg: impl Into<Cow<'static, str>>) -> Error {
-    Error::Tls(TlsError::Message(msg.into()))
 }
 
 #[cold]

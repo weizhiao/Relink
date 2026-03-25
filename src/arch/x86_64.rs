@@ -309,7 +309,13 @@ impl StaticReloc for X86_64Relocator {
         let append = rel.r_addend(base);
         let offset = rel.r_offset();
         let p = base + rel.r_offset();
-        let boxed_error = || reloc_error(rel, "unknown symbol", helper.core);
+        let boxed_error = || {
+            reloc_error(
+                rel,
+                crate::RelocationFailureReason::UnknownSymbol,
+                helper.core,
+            )
+        };
         match r_type as _ {
             R_X86_64_64 => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
@@ -324,7 +330,7 @@ impl StaticReloc for X86_64Relocator {
                 let val: RelocValue<i32> = (sym + append - p).try_into().map_err(|_| {
                     reloc_error(
                         rel,
-                        "out of range integral type conversion attempted",
+                        crate::RelocationFailureReason::IntegralConversionOutOfRange,
                         helper.core,
                     )
                 })?;
@@ -375,7 +381,7 @@ impl StaticReloc for X86_64Relocator {
                 let val: RelocValue<u32> = (sym + append).try_into().map_err(|_| {
                     reloc_error(
                         rel,
-                        "out of range integral type conversion attempted",
+                        crate::RelocationFailureReason::IntegralConversionOutOfRange,
                         helper.core,
                     )
                 })?;
@@ -388,7 +394,7 @@ impl StaticReloc for X86_64Relocator {
                 let val: RelocValue<i32> = (sym + append).try_into().map_err(|_| {
                     reloc_error(
                         rel,
-                        "out of range integral type conversion attempted",
+                        crate::RelocationFailureReason::IntegralConversionOutOfRange,
                         helper.core,
                     )
                 })?;

@@ -5,10 +5,14 @@
 //! definitions for relocation entries, symbols, program headers, and section headers,
 //! with support for both 32-bit and 64-bit ELF formats.
 
-use core::ops::{Deref, DerefMut};
+use core::{
+    fmt::{self, Display},
+    ops::{Deref, DerefMut},
+};
 use elf::abi::{
-    SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK, STT_COMMON, STT_FUNC,
-    STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
+    ELFCLASS32, ELFCLASS64, ELFCLASSNONE, EM_386, EM_AARCH64, EM_ARM, EM_RISCV, EM_X86_64, ET_CORE,
+    ET_DYN, ET_EXEC, ET_NONE, ET_REL, SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK,
+    STT_COMMON, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
 };
 
 use crate::arch::rel_type_to_str;
@@ -55,6 +59,137 @@ cfg_if::cfg_if! {
         pub(crate) const REL_MASK: usize = 0xFF;
         pub(crate) const REL_BIT: usize = 8;
         pub(crate) const EHDR_SIZE: usize = core::mem::size_of::<elf::file::Elf32_Ehdr>();
+    }
+}
+
+/// Semantic wrapper for the ELF `EI_CLASS` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfClass(u8);
+
+impl ElfClass {
+    #[inline]
+    pub const fn new(raw: u8) -> Self {
+        Self(raw)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for ElfClass {
+    #[inline]
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfClass> for u8 {
+    #[inline]
+    fn from(value: ElfClass) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            ELFCLASSNONE => f.write_str("ELFCLASSNONE"),
+            ELFCLASS32 => f.write_str("ELF32"),
+            ELFCLASS64 => f.write_str("ELF64"),
+            raw => write!(f, "unknown ELF class {raw}"),
+        }
+    }
+}
+
+/// Semantic wrapper for the ELF `e_machine` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfMachine(u16);
+
+impl ElfMachine {
+    #[inline]
+    pub const fn new(raw: u16) -> Self {
+        Self(raw)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+}
+
+impl From<u16> for ElfMachine {
+    #[inline]
+    fn from(value: u16) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfMachine> for u16 {
+    #[inline]
+    fn from(value: ElfMachine) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfMachine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            EM_X86_64 => f.write_str("x86_64"),
+            EM_AARCH64 => f.write_str("AArch64"),
+            EM_RISCV => f.write_str("RISC-V"),
+            EM_386 => f.write_str("x86"),
+            EM_ARM => f.write_str("ARM"),
+            258 => f.write_str("LoongArch"),
+            raw => write!(f, "unknown ELF machine {raw}"),
+        }
+    }
+}
+
+/// Semantic wrapper for the ELF `e_type` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfFileType(u16);
+
+impl ElfFileType {
+    #[inline]
+    pub const fn new(raw: u16) -> Self {
+        Self(raw)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+}
+
+impl From<u16> for ElfFileType {
+    #[inline]
+    fn from(value: u16) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfFileType> for u16 {
+    #[inline]
+    fn from(value: ElfFileType) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfFileType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            ET_NONE => f.write_str("ET_NONE"),
+            ET_REL => f.write_str("ET_REL"),
+            ET_EXEC => f.write_str("ET_EXEC"),
+            ET_DYN => f.write_str("ET_DYN"),
+            ET_CORE => f.write_str("ET_CORE"),
+            raw => write!(f, "unknown ELF file type {raw}"),
+        }
     }
 }
 

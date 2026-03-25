@@ -6,7 +6,8 @@ use crate::{
     input::{ElfReader, IntoElfReader},
     logging,
     os::Mmap,
-    parse_ehdr_error,
+    parse_ehdr_expected_dylib_error, parse_ehdr_expected_executable_error,
+    parse_ehdr_missing_section_headers_error,
     tls::TlsResolver,
 };
 use elf::abi::{PT_DYNAMIC, PT_INTERP};
@@ -166,7 +167,7 @@ where
                 object.file_name(),
                 ehdr.e_type
             );
-            return Err(parse_ehdr_error("file type mismatch"));
+            return Err(parse_ehdr_expected_dylib_error(ehdr.file_type()));
         }
 
         let phdrs = self
@@ -212,7 +213,7 @@ where
                 object.file_name(),
                 ehdr.e_type
             );
-            return Err(parse_ehdr_error("file type mismatch"));
+            return Err(parse_ehdr_expected_executable_error(ehdr.file_type()));
         }
 
         let phdrs = self
@@ -264,7 +265,7 @@ where
         let shdrs = self
             .buf
             .prepare_shdrs_mut(&ehdr, &mut object)?
-            .ok_or_else(|| crate::parse_ehdr_error("object file must have section headers"))?;
+            .ok_or_else(parse_ehdr_missing_section_headers_error)?;
         let builder = self
             .inner
             .create_object_builder::<M, Tls>(ehdr, shdrs, object)?;

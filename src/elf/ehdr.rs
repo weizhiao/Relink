@@ -7,8 +7,9 @@
 use crate::{
     Result,
     arch::EM_ARCH,
-    elf::{E_CLASS, EHDR_SIZE, ElfEhdr},
-    parse_ehdr_error,
+    elf::{E_CLASS, EHDR_SIZE, ElfClass, ElfEhdr, ElfFileType, ElfMachine},
+    parse_ehdr_arch_mismatch_error, parse_ehdr_class_mismatch_error,
+    parse_ehdr_invalid_magic_error, parse_ehdr_invalid_version_error,
 };
 use core::ops::Deref;
 use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, ET_EXEC, EV_CURRENT};
@@ -92,31 +93,51 @@ impl ElfHeader {
         self.ehdr.e_type == ET_EXEC || self.ehdr.e_type == ET_DYN
     }
 
+    /// Returns the parsed ELF class of this header.
+    #[inline]
+    pub const fn class(&self) -> ElfClass {
+        ElfClass::new(self.ehdr.e_ident[EI_CLASS])
+    }
+
+    /// Returns the parsed ELF machine type of this header.
+    #[inline]
+    pub const fn machine(&self) -> ElfMachine {
+        ElfMachine::new(self.ehdr.e_machine)
+    }
+
+    /// Returns the parsed ELF file type of this header.
+    #[inline]
+    pub const fn file_type(&self) -> ElfFileType {
+        ElfFileType::new(self.ehdr.e_type)
+    }
+
     /// Validates the ELF header magic, class, version, and architecture.
     pub fn validate(&self) -> Result<()> {
         // Check ELF magic bytes
         if self.e_ident[0..4] != ELFMAGIC {
-            return Err(parse_ehdr_error("invalid ELF magic"));
+            return Err(parse_ehdr_invalid_magic_error());
         }
 
         // Check file class (32-bit vs 64-bit)
-        if self.e_ident[EI_CLASS] != E_CLASS {
-            return Err(crate::parse_ehdr_class_mismatch_error(
-                E_CLASS,
-                self.e_ident[EI_CLASS],
+        let class = self.class();
+        if class.raw() != E_CLASS {
+            return Err(parse_ehdr_class_mismatch_error(
+                ElfClass::new(E_CLASS),
+                class,
             ));
         }
 
         // Check ELF version
         if self.e_ident[EI_VERSION] != EV_CURRENT {
-            return Err(parse_ehdr_error("invalid ELF version"));
+            return Err(parse_ehdr_invalid_version_error());
         }
 
         // Check machine architecture
-        if self.e_machine != EM_ARCH {
-            return Err(crate::parse_ehdr_arch_mismatch_error(
-                EM_ARCH,
-                self.e_machine,
+        let machine = self.machine();
+        if machine.raw() != EM_ARCH {
+            return Err(parse_ehdr_arch_mismatch_error(
+                ElfMachine::new(EM_ARCH),
+                machine,
             ));
         }
 
@@ -175,17 +196,5 @@ impl ElfHeader {
         let shdr_start = self.e_shoff();
         let shdr_end = shdr_start + shdrs_size;
         (shdr_start, shdr_end)
-    }
-}
-
-pub(crate) const fn machine_to_str(machine: u16) -> &'static str {
-    match machine {
-        elf::abi::EM_X86_64 => "x86_64",
-        elf::abi::EM_AARCH64 => "AArch64",
-        elf::abi::EM_RISCV => "RISC-V",
-        elf::abi::EM_386 => "x86",
-        elf::abi::EM_ARM => "ARM",
-        258 => "LoongArch",
-        _ => "unknown",
     }
 }
