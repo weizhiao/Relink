@@ -11,9 +11,11 @@ use core::{
 };
 use elf::abi::{
     ELFCLASS32, ELFCLASS64, ELFCLASSNONE, EM_386, EM_AARCH64, EM_ARM, EM_RISCV, EM_X86_64, ET_CORE,
-    ET_DYN, ET_EXEC, ET_NONE, ET_REL, SHN_UNDEF, SHT_REL, SHT_RELA, STB_GLOBAL, STB_GNU_UNIQUE,
-    STB_LOCAL, STB_WEAK, STT_COMMON, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
+    ET_DYN, ET_EXEC, ET_NONE, ET_REL, SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK,
+    STT_COMMON, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
 };
+#[cfg(feature = "object")]
+use elf::abi::{SHT_REL, SHT_RELA};
 
 use crate::arch::rel_type_to_str;
 
@@ -263,6 +265,7 @@ impl ElfRela {
     /// Sets the relocation offset.
     /// This is used internally when adjusting relocation entries during loading.
     #[inline]
+    #[cfg(feature = "object")]
     pub(crate) fn set_offset(&mut self, offset: usize) {
         self.rela.r_offset = offset as _;
     }
@@ -308,6 +311,7 @@ impl ElfRel {
     /// Sets the relocation offset.
     /// This is used internally when adjusting relocation entries during loading.
     #[inline]
+    #[cfg(feature = "object")]
     #[cfg_attr(
         all(not(target_arch = "x86"), not(target_arch = "arm")),
         allow(dead_code)
@@ -407,6 +411,7 @@ impl ElfSymbol {
     /// Sets the symbol value.
     /// This is used internally when resolving symbol addresses during loading.
     #[inline]
+    #[cfg(feature = "object")]
     pub(crate) fn set_value(&mut self, value: usize) {
         self.sym.st_value = value as _;
     }
@@ -440,6 +445,7 @@ impl ElfShdr {
     /// * `sh_info` - Extra information (interpretation depends on section type)
     /// * `sh_addralign` - Address alignment constraint
     /// * `sh_entsize` - Size of each entry if section contains a table
+    #[cfg(feature = "object")]
     pub(crate) fn new(
         sh_name: u32,
         sh_type: u32,
@@ -498,6 +504,7 @@ impl ElfShdr {
     /// Panics in debug builds if the element size doesn't match the section's entry size,
     /// if the section size is not divisible by the entry size, or if the address is not
     /// properly aligned.
+    #[cfg(feature = "object")]
     pub(crate) fn content<T>(&self) -> &'static [T] {
         self.content_mut()
     }
@@ -516,6 +523,7 @@ impl ElfShdr {
     /// Panics in debug builds if the element size doesn't match the section's entry size,
     /// if the section size is not divisible by the entry size, or if the address is not
     /// properly aligned.
+    #[cfg(feature = "object")]
     pub(crate) fn content_mut<T>(&self) -> &'static mut [T] {
         let start = self.sh_addr as usize;
         let len = (self.sh_size / self.sh_entsize) as usize;
@@ -572,16 +580,21 @@ pub type ElfRelType = ElfRela;
 pub type ElfRelType = ElfRel;
 
 #[cfg(all(not(target_arch = "x86"), not(target_arch = "arm")))]
+#[cfg(feature = "object")]
 pub(crate) const ELF_REL_SECTION_TYPE: u32 = SHT_RELA;
 #[cfg(any(target_arch = "x86", target_arch = "arm"))]
+#[cfg(feature = "object")]
 pub(crate) const ELF_REL_SECTION_TYPE: u32 = SHT_REL;
 
 #[cfg(all(not(target_arch = "x86"), not(target_arch = "arm")))]
+#[cfg(feature = "object")]
 pub(crate) const ELF_REL_SECTION_NAME: &str = "SHT_RELA";
 #[cfg(any(target_arch = "x86", target_arch = "arm"))]
+#[cfg(feature = "object")]
 pub(crate) const ELF_REL_SECTION_NAME: &str = "SHT_REL";
 
 #[inline]
+#[cfg(feature = "object")]
 pub(crate) const fn relocation_section_name(sh_type: u32) -> &'static str {
     match sh_type {
         SHT_REL => "SHT_REL",

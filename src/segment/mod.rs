@@ -10,7 +10,6 @@ mod relro;
 mod space;
 
 pub(crate) mod program;
-pub(crate) mod section;
 
 pub use layout::PAGE_SIZE;
 pub use space::ElfSegments;

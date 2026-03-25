@@ -1,36 +1,37 @@
 use crate::{
     Result,
-    arch::StaticRelocator,
+    arch::object::ObjectRelocator,
     elf::ElfRelType,
-    image::{LoadedCore, RawObject},
+    image::RawObject,
     loader::LifecycleContext,
     logging,
     relocation::{RelocArtifacts, RelocHelper, RelocationHandler, SymbolLookup},
-    segment::section::PltGotSection,
 };
+
+use super::layout::PltGotSection;
 use alloc::{boxed::Box, vec::Vec};
 
-pub(crate) struct StaticRelocation {
-    relocation: Box<[&'static [ElfRelType]]>,
+pub(crate) struct ObjectRelocation {
+    sections: Box<[&'static [ElfRelType]]>,
 }
 
-impl StaticRelocation {
-    pub(crate) fn new(relocation: Vec<&'static [ElfRelType]>) -> Self {
+impl ObjectRelocation {
+    pub(crate) fn new(sections: Vec<&'static [ElfRelType]>) -> Self {
         Self {
-            relocation: relocation.into_boxed_slice(),
+            sections: sections.into_boxed_slice(),
         }
     }
 }
 
 impl<D: 'static> RawObject<D> {
-    pub(crate) fn relocate_impl<PreS, PostS, PreH, PostH>(
+    pub(crate) fn link_impl<PreS, PostS, PreH, PostH>(
         mut self,
-        scope: &[LoadedCore<D>],
+        scope: &[crate::image::LoadedCore<D>],
         pre_find: &PreS,
         post_find: &PostS,
         pre_handler: &PreH,
         post_handler: &PostH,
-    ) -> Result<LoadedCore<D>>
+    ) -> Result<crate::image::LoadedCore<D>>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
@@ -48,12 +49,12 @@ impl<D: 'static> RawObject<D> {
             post_handler,
             self.core.tls_get_addr(),
         );
-        for reloc in self.relocation.relocation.iter() {
+        for reloc in self.relocation.sections.iter() {
             for rel in *reloc {
                 if !helper.handle_pre(rel)? {
                     continue;
                 }
-                StaticRelocator::relocate(&mut helper, rel, &mut self.pltgot)?;
+                ObjectRelocator::relocate(&mut helper, rel, &mut self.pltgot)?;
                 if !helper.handle_post(rel)? {
                     continue;
                 }
@@ -62,7 +63,6 @@ impl<D: 'static> RawObject<D> {
 
         let RelocArtifacts { tls_desc_args, .. } = helper.finish(&[]);
 
-        // Persist TLSDESC backing storage collected during relocation.
         unsafe {
             self.core.set_tls_desc_args(tls_desc_args);
         }
@@ -75,11 +75,11 @@ impl<D: 'static> RawObject<D> {
 
         logging::info!("Relocation completed for {}", self.core.name());
 
-        Ok(unsafe { LoadedCore::from_core(self.core) })
+        Ok(unsafe { crate::image::LoadedCore::from_core(self.core) })
     }
 }
 
-pub(crate) trait StaticReloc {
+pub(crate) trait ObjectReloc {
     fn relocate<D, PreS, PostS, PreH, PostH>(
         helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
         rel: &ElfRelType,

@@ -54,19 +54,27 @@ bitflags! {
 cfg_if::cfg_if! {
     if #[cfg(windows)]{
         mod windows;
-        pub(crate) use windows::{current_thread_id, register_thread_destructor, get_thread_local_ptr, RawFile, virtual_free};
+        #[cfg(feature = "tls")]
+        pub(crate) use windows::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
+        pub(crate) use windows::{RawFile, virtual_free};
         pub use windows::DefaultMmap;
     }else if #[cfg(feature = "use-syscall")]{
         mod linux_syscall;
-        pub(crate) use linux_syscall::{current_thread_id, register_thread_destructor, get_thread_local_ptr, RawFile};
+        #[cfg(feature = "tls")]
+        pub(crate) use linux_syscall::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
+        pub(crate) use linux_syscall::RawFile;
         pub use linux_syscall::*;
     }else if #[cfg(unix)]{
         mod unix;
-        pub(crate) use unix::{current_thread_id, register_thread_destructor, get_thread_local_ptr, RawFile};
+        #[cfg(feature = "tls")]
+        pub(crate) use unix::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
+        pub(crate) use unix::RawFile;
         pub use unix::DefaultMmap;
     }else {
         mod baremetal;
-        pub(crate) use baremetal::{current_thread_id, register_thread_destructor, get_thread_local_ptr, RawFile};
+        #[cfg(feature = "tls")]
+        pub(crate) use baremetal::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
+        pub(crate) use baremetal::RawFile;
         pub use baremetal::*;
     }
 }

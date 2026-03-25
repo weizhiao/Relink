@@ -1,8 +1,15 @@
-//! The core ELF loading orchestration.
+//! Loading entry points and customization hooks.
 //!
-//! This module provides the `Loader` struct, which is the primary entry point
-//! for the library. It orchestrates the process of reading ELF headers,
-//! mapping segments into memory, and preparing them for relocation.
+//! This module centers on [`Loader`], the main entry point for mapping ELF inputs
+//! into memory. A loader reads ELF metadata, maps segments, builds raw image types,
+//! and prepares them for relocation.
+//!
+//! It also exposes the main customization points used during loading:
+//!
+//! - [`LoadHook`] for observing program headers as they are mapped
+//! - [`LifecycleHandler`] for customizing `.init` / `.fini` invocation
+//! - [`UserDataLoaderContext`] for attaching user-defined metadata to loaded images
+//! - `with_*` builder methods for swapping the memory-mapping backend or TLS resolver
 
 mod builder;
 mod load;
@@ -21,13 +28,13 @@ use core::marker::PhantomData;
 #[cfg(feature = "tls")]
 use crate::tls::DefaultTlsResolver;
 
-pub(crate) use builder::{ImageBuilder, ObjectBuilder};
+pub(crate) use builder::ImageBuilder;
 
 pub(crate) struct ElfBuf {
-    buf: Vec<u8>,
+    pub(crate) buf: Vec<u8>,
 }
 
-/// Context provided to hook functions during ELF loading.
+/// Context passed to [`LoadHook`] while a program header is being processed.
 pub struct LoadHookContext<'a> {
     name: &'a str,
     phdr: &'a ElfPhdr,
@@ -59,10 +66,10 @@ impl<'a> LoadHookContext<'a> {
     }
 }
 
-/// Hook trait for processing program headers during loading.
+/// Hook trait for observing or vetoing segment loading.
 ///
-/// This trait allows users to inspect or modify the loading process when a program segment
-/// is encountered.
+/// Implement this trait to inspect program headers as the loader maps them into memory.
+/// Returning an error aborts the load.
 ///
 /// # Examples
 ///
@@ -122,10 +129,10 @@ impl<'a> LifecycleContext<'a> {
     }
 }
 
-/// Handler trait for initialization and finalization functions.
+/// Handler trait for ELF lifecycle callbacks.
 ///
-/// Implementations of this trait define how ELF initialization functions (like `.init` and `.init_array`)
-/// and finalization functions (like `.fini` and `.fini_array`) are invoked.
+/// Implementations control how initialization functions such as `.init` / `.init_array`
+/// and finalization functions such as `.fini` / `.fini_array` are invoked.
 pub trait LifecycleHandler: Send + Sync {
     /// Executes the handler with the provided context.
     fn call(&self, ctx: &LifecycleContext);
@@ -142,7 +149,7 @@ where
 
 pub(crate) type DynLifecycleHandler = Arc<Box<dyn LifecycleHandler>>;
 
-/// Context provided to the user data generator.
+/// Context passed to [`Loader::with_context_loader`].
 pub struct UserDataLoaderContext<'a> {
     /// The name of the ELF object being loaded.
     name: &'a str,
@@ -190,20 +197,23 @@ impl<'a> UserDataLoaderContext<'a> {
     }
 }
 
-/// The ELF object loader.
+/// Configurable ELF loader.
 ///
-/// `Loader` is responsible for orchestrating the loading of ELF objects into memory.
-/// It supports customization through various `with_*` methods for memory mapping,
-/// hooks, user data, and TLS resolution.
+/// `Loader` maps ELF objects from files or memory and produces raw image types such as
+/// [`crate::image::RawElf`], [`crate::image::RawDylib`], and [`crate::image::RawExec`].
+/// Those raw images can then be relocated by calling `.relocator().relocate()`.
+///
+/// Use the `with_*` builder methods to customize hooks, lifecycle handling,
+/// attached user data, memory mapping, and TLS behavior.
 ///
 /// # Examples
 ///
 /// ```no_run
-/// use elf_loader::{Loader, input::ElfBinary};
+/// use elf_loader::Loader;
 ///
 /// let mut loader = Loader::new();
-/// let bytes = std::fs::read("liba.so").unwrap();
-/// let lib = loader.load_dylib(ElfBinary::new("liba.so", &bytes)).unwrap();
+/// let raw = loader.load_dylib("path/to/liba.so").unwrap();
+/// let lib = raw.relocator().relocate().unwrap();
 /// ```
 pub struct Loader<M = DefaultMmap, H = (), D = (), Tls = ()>
 where
@@ -225,7 +235,8 @@ pub(crate) struct LoaderInner<H, D> {
 }
 
 impl Loader<DefaultMmap, (), (), ()> {
-    /// Creates a new `Loader` with default settings.
+    /// Creates a new [`Loader`] with the default mmap backend, no hook, no custom
+    /// user data, and no TLS resolver.
     pub fn new() -> Self {
         let c_abi: DynLifecycleHandler = Arc::new(Box::new(|ctx: &LifecycleContext| {
             ctx.func()

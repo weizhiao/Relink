@@ -6,7 +6,6 @@ use crate::sync::{Arc, AtomicBool};
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
-    image::{ElfCore, common::CoreInner},
     loader::{ImageBuilder, LifecycleContext, LoadHook},
     logging,
     os::Mmap,
@@ -16,6 +15,8 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, ptr::NonNull};
+
+use super::{ElfCore, core::CoreInner};
 
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo {

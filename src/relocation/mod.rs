@@ -1,24 +1,29 @@
-//! Symbol relocation and binding logic.
+//! Relocation configuration, symbol lookup hooks, and binding policy.
 //!
-//! This module implements the core relocation engine of the linker. It handles
-//! fixing up addresses in the mapped ELF image based on symbol resolution,
-//! supporting both static (initial) and dynamic (lazy) relocation types.
+//! Raw images returned by [`crate::Loader`] become executable through the relocation
+//! pipeline. In practice, most users configure that pipeline through the builder
+//! returned by `.relocator()`, then call `relocate()`.
+//!
+//! This module exposes the main customization points used during relocation:
+//!
+//! - [`SymbolLookup`] for providing external symbol addresses
+//! - [`RelocationHandler`] for intercepting or overriding relocations
+//! - [`RelocationContext`] for inspecting the current relocation and search scope
+//! - [`BindingOptions`] for choosing eager or lazy binding policy
 
+mod core;
 mod dynamic;
 mod lazy;
-mod r#static;
 mod traits;
-mod utils;
 
+pub(crate) use core::{
+    RelocAddr, RelocArtifacts, RelocHelper, RelocValue, Relocator, SymDef, find_symdef_impl,
+    likely, reloc_error, unlikely,
+};
 pub(crate) use dynamic::DynamicRelocation;
 pub(crate) use lazy::ResolvedBinding;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use lazy::dl_fixup;
-pub(crate) use r#static::{StaticReloc, StaticRelocation};
 pub(crate) use traits::{Relocatable, SupportLazy};
-pub(crate) use utils::{
-    RelocAddr, RelocArtifacts, RelocHelper, RelocSWord32, RelocValue, RelocWord32, Relocator,
-    SymDef, find_symdef_impl, likely, reloc_error, unlikely,
-};
 
 pub use traits::{BindingOptions, RelocationContext, RelocationHandler, SymbolLookup};

@@ -1,10 +1,10 @@
 use crate::{
     Result,
-    arch::{PLT_ENTRY, PLT_ENTRY_SIZE, StaticRelocator},
+    arch::object::{ObjectRelocator, PLT_ENTRY, PLT_ENTRY_SIZE},
     elf::{ElfRelType, ElfShdr, Shdr},
     input::ElfReader,
     os::{MapFlags, Mmap, ProtFlags},
-    relocation::{RelocAddr, StaticReloc},
+    relocation::RelocAddr,
     segment::{
         Address, ElfSegment, ElfSegments, FileMapInfo, PAGE_SIZE, SegmentBuilder, rounddown,
         roundup,
@@ -13,6 +13,8 @@ use crate::{
 use alloc::vec::Vec;
 use elf::abi::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHT_NOBITS, SHT_REL, SHT_RELA};
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
+
+use super::ObjectReloc;
 
 /// Convert section flags to memory protection flags
 pub(crate) fn section_prot(sh_flags: impl Into<u64>) -> ProtFlags {
@@ -34,60 +36,48 @@ pub(crate) struct SectionSegments {
     pltgot: Option<PltGotSection>,
 }
 
-/// Convert protection flags to an index (0-3: R, RW, RX, RWX)
 fn prot_to_idx(prot: ProtFlags) -> usize {
     usize::from(prot.contains(ProtFlags::PROT_WRITE))
         | (usize::from(prot.contains(ProtFlags::PROT_EXEC)) << 1)
 }
 
-/// Convert section flags to an index for section unit management
 fn flags_to_idx(flags: impl Into<u64>) -> usize {
     prot_to_idx(section_prot(flags))
 }
 
 impl SegmentBuilder for SectionSegments {
-    /// Reserve memory space for all segments
     fn create_space<M: Mmap>(&mut self) -> Result<ElfSegments> {
         let len = self.total_size;
         let memory = unsafe { M::mmap_reserve(None, len, false) }?;
         Ok(ElfSegments::new(memory, len, M::munmap))
     }
 
-    /// Create individual segments from section headers
-    /// In this implementation, segments are pre-created in `new`, so this is a no-op
     fn create_segments(&mut self) -> Result<()> {
         Ok(())
     }
 
-    /// Get mutable reference to segments
     fn segments_mut(&mut self) -> &mut [ElfSegment] {
         &mut self.segments
     }
 
-    /// Get reference to segments
     fn segments(&self) -> &[ElfSegment] {
         &self.segments
     }
 }
 
 impl SectionSegments {
-    /// Create a new ShdrSegments instance from section headers
     pub(crate) fn new(shdrs: &mut [ElfShdr], object: &mut impl ElfReader) -> Result<Self> {
-        // Create section units for different memory protection types
         let mut units: [SectionUnit; 4] = core::array::from_fn(|_| SectionUnit::new());
 
         let (got_cnt, plt_cnt) = PltGotSection::count_needed_entries(shdrs, object)?;
 
-        // Create special sections for GOT and PLT
         let mut got_shdr = PltGotSection::create_got_shdr(got_cnt);
         let mut plt_shdr = PltGotSection::create_plt_shdr(plt_cnt);
 
-        // Group sections by their protection flags
         for shdr in shdrs.iter_mut().chain([&mut got_shdr, &mut plt_shdr]) {
             units[flags_to_idx(shdr.sh_flags)].add_section(shdr);
         }
 
-        // Create segments from section units
         let mut segments = Vec::new();
         let mut offset = 0;
         for unit in &mut units {
@@ -104,7 +94,6 @@ impl SectionSegments {
         })
     }
 
-    /// Take ownership of the PLTGOT section
     pub(crate) fn take_pltgot(&mut self) -> PltGotSection {
         self.pltgot.take().expect("PLTGOT already taken")
     }
@@ -112,45 +101,36 @@ impl SectionSegments {
 
 /// Manages PLT (Procedure Linkage Table) and GOT (Global Offset Table) sections
 pub(crate) struct PltGotSection {
-    got_base: RelocAddr,            // Base address of GOT
-    plt_base: RelocAddr,            // Base address of PLT
-    got_idx: usize,                 // Current index in GOT
-    plt_idx: usize,                 // Current index in PLT
-    got_map: HashMap<usize, usize>, // Map from symbol index to GOT entry index
-    plt_map: HashMap<usize, usize>, // Map from symbol index to PLT entry index
+    got_base: RelocAddr,
+    plt_base: RelocAddr,
+    got_idx: usize,
+    plt_idx: usize,
+    got_map: HashMap<usize, usize>,
+    plt_map: HashMap<usize, usize>,
 }
 
-/// Wrapper for a mutable usize value
 pub(crate) struct UsizeEntry<'entry>(&'entry mut usize);
 
 impl UsizeEntry<'_> {
-    /// Update the value pointed to by this entry
     pub(crate) fn update(&mut self, value: RelocAddr) {
         *self.0 = value.into_inner();
     }
 
-    /// Get the address of the value pointed to by this entry
     pub(crate) fn get_addr(&self) -> RelocAddr {
         RelocAddr::from_ptr(self.0 as *const _)
     }
 }
 
-/// Represents a GOT entry that may or may not be occupied
 pub(crate) enum GotEntry<'got> {
-    /// Entry is already occupied with a value
     Occupied(RelocAddr),
-    /// Entry is vacant and can be filled
     Vacant(UsizeEntry<'got>),
 }
 
-/// Represents a PLT entry that may or may not be occupied
 pub(crate) enum PltEntry<'plt> {
-    /// Entry is already occupied with a value
     Occupied(RelocAddr),
-    /// Entry is vacant and can be filled
     Vacant {
-        plt: &'plt mut [u8],   // PLT entry data
-        got: UsizeEntry<'plt>, // Corresponding PLTGOT entry
+        plt: &'plt mut [u8],
+        got: UsizeEntry<'plt>,
     },
 }
 
@@ -176,28 +156,24 @@ impl PltGotSection {
             object.read(&mut buf, shdr.sh_offset as usize)?;
 
             for chunk in buf.chunks_exact(entsize) {
-                // Safety: we read bytes from file, and we are casting to a POD type (ElfRelType)
-                // We use read_unaligned to handle potential misalignment.
                 let rel_entry =
                     unsafe { core::ptr::read_unaligned(chunk.as_ptr() as *const ElfRelType) };
                 let r_type = rel_entry.r_type() as u32;
                 let r_sym = rel_entry.r_symbol();
 
-                if StaticRelocator::needs_got(r_type) {
+                if ObjectRelocator::needs_got(r_type) {
                     got_set.insert(r_sym);
                 }
-                if StaticRelocator::needs_plt(r_type) {
+                if ObjectRelocator::needs_plt(r_type) {
                     plt_set.insert(r_sym);
                 }
             }
         }
-        // GOT should contain entries for both GOT relocations and PLT stubs
+
         Ok((got_set.len() + plt_set.len(), plt_set.len()))
     }
 
-    /// Create a GOT section header based on relocation entries
     fn create_got_shdr(elem_cnt: usize) -> ElfShdr {
-        // Create a NOBITS section for the GOT
         ElfShdr::new(
             0,
             SHT_NOBITS,
@@ -212,9 +188,7 @@ impl PltGotSection {
         )
     }
 
-    /// Create PLT and PLTGOT section headers based on relocation entries
     fn create_plt_shdr(elem_cnt: usize) -> ElfShdr {
-        // Create PLT section (executable code stubs)
         ElfShdr::new(
             0,
             SHT_NOBITS,
@@ -229,7 +203,6 @@ impl PltGotSection {
         )
     }
 
-    /// Create a new PltGotSection instance
     fn new(got: &Shdr, plt: &Shdr) -> Self {
         Self {
             got_idx: 0,
@@ -241,23 +214,19 @@ impl PltGotSection {
         }
     }
 
-    /// Adjust base addresses by adding an offset (used during relocation)
     pub(crate) fn rebase(&mut self, base: RelocAddr) {
         self.got_base = self.got_base.offset(base.into_inner());
         self.plt_base = self.plt_base.offset(base.into_inner());
     }
 
-    /// Add or retrieve a GOT entry for a symbol
     pub(crate) fn add_got_entry(&mut self, r_sym: usize) -> GotEntry<'_> {
         let base = self.got_base;
         let ent_size = size_of::<usize>();
         match self.got_map.entry(r_sym) {
             Entry::Occupied(mut entry) => {
-                // Return existing GOT entry
                 GotEntry::Occupied(base.offset(*entry.get_mut() * ent_size))
             }
             Entry::Vacant(entry) => {
-                // Create new GOT entry
                 let idx = *entry.insert(self.got_idx);
                 self.got_idx += 1;
                 GotEntry::Vacant(unsafe {
@@ -267,7 +236,6 @@ impl PltGotSection {
         }
     }
 
-    /// Add or retrieve a PLT entry for a symbol
     pub(crate) fn add_plt_entry(&mut self, r_sym: usize) -> PltEntry<'_> {
         let plt_base = self.plt_base;
         let got_base = self.got_base;
@@ -275,15 +243,12 @@ impl PltGotSection {
         let got_ent_size = size_of::<usize>();
         match self.plt_map.entry(r_sym) {
             Entry::Occupied(mut entry) => {
-                // Return existing PLT entry
                 PltEntry::Occupied(plt_base.offset(*entry.get_mut() * plt_ent_size))
             }
             Entry::Vacant(entry) => {
-                // Create new PLT entry
                 let plt_idx = *entry.insert(self.plt_idx);
                 self.plt_idx += 1;
 
-                // Each PLT entry needs a corresponding GOT entry
                 let got_idx = self.got_idx;
                 self.got_idx += 1;
 
@@ -294,7 +259,6 @@ impl PltGotSection {
                     )
                 };
 
-                // Copy the appropriate PLT entry template
                 plt.copy_from_slice(&PLT_ENTRY);
 
                 PltEntry::Vacant {
@@ -308,14 +272,12 @@ impl PltGotSection {
     }
 }
 
-/// Groups sections with the same memory protection requirements
 struct SectionUnit<'shdr> {
-    content_sections: Vec<&'shdr mut ElfShdr>, // Sections with file content
-    zero_sections: Vec<&'shdr mut ElfShdr>,    // Sections initialized to zero (NOBITS)
+    content_sections: Vec<&'shdr mut ElfShdr>,
+    zero_sections: Vec<&'shdr mut ElfShdr>,
 }
 
 impl<'shdr> SectionUnit<'shdr> {
-    /// Create a new SectionUnit
     fn new() -> Self {
         Self {
             content_sections: Vec::new(),
@@ -323,9 +285,7 @@ impl<'shdr> SectionUnit<'shdr> {
         }
     }
 
-    /// Add a section to this unit based on its type
     fn add_section(&mut self, shdr: &'shdr mut ElfShdr) {
-        // NOBITS sections are zero-initialized
         if shdr.sh_type == SHT_NOBITS {
             self.zero_sections.push(shdr);
         } else {
@@ -333,9 +293,7 @@ impl<'shdr> SectionUnit<'shdr> {
         }
     }
 
-    /// Create a segment from the sections in this unit
     fn create_segment(&mut self, base_offset: &mut usize) -> Option<ElfSegment> {
-        // Get section flags from the first section (all sections in a unit have the same flags)
         let first_shdr = self
             .content_sections
             .first()
@@ -345,7 +303,6 @@ impl<'shdr> SectionUnit<'shdr> {
         let segment_start = *base_offset;
         let addr = Address::Relative(segment_start);
 
-        // Process content sections (those with file data)
         let mut current_offset = segment_start;
         let mut map_info = Vec::new();
         for shdr in &mut self.content_sections {
@@ -362,14 +319,11 @@ impl<'shdr> SectionUnit<'shdr> {
             current_offset += shdr.sh_size as usize;
         }
 
-        // Special handling for a single content section to ensure page alignment
-        // This is necessary because mmap requires the file offset to be page-aligned.
         if map_info.len() == 1 {
             let info = &mut map_info[0];
             let file_offset = rounddown(info.offset, PAGE_SIZE);
             let align_len = info.offset - file_offset;
 
-            // Adjust shdr and map info to stay page-aligned
             let shdr = self
                 .content_sections
                 .iter_mut()
@@ -384,7 +338,6 @@ impl<'shdr> SectionUnit<'shdr> {
 
         let content_size = current_offset - segment_start;
 
-        // Process zero-initialized sections
         for shdr in &mut self.zero_sections {
             current_offset = roundup(current_offset, shdr.sh_addralign as usize);
             shdr.sh_addr = current_offset as _;

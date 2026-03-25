@@ -9,11 +9,13 @@ use alloc::{boxed::Box, vec::Vec};
 #[cfg(not(feature = "lazy-binding"))]
 use core::marker::PhantomData;
 
-/// A trait for looking up symbols during relocation.
+/// A trait for looking up external symbols during relocation.
 ///
-/// Implement this trait to provide custom symbol resolution strategies.
-/// The relocator will use this to find addresses of external symbols that
-/// the ELF object depends on.
+/// Implement this trait when the default relocation scope is not enough and you need
+/// to supply addresses from the host process, an embedding runtime, or another
+/// custom symbol source.
+///
+/// Closures of type `Fn(&str) -> Option<*const ()>` implement this trait automatically.
 ///
 /// # Examples
 ///
@@ -77,10 +79,10 @@ impl SymbolLookup for () {
     }
 }
 
-/// A trait for handling unknown or custom relocations.
+/// A trait for intercepting relocations during relocation.
 ///
-/// Implement this to provide custom logic for relocations not handled by default,
-/// or to intercept and modify standard relocations.
+/// Implement this to override specific relocations, record relocation activity,
+/// or provide custom handling before or after the default relocation logic runs.
 ///
 /// # Examples
 ///
@@ -118,7 +120,7 @@ pub trait RelocationHandler {
     fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>>;
 }
 
-/// Context passed to `RelocationHandler::handle` containing relocation details.
+/// Context passed to [`RelocationHandler::handle`].
 ///
 /// This struct provides access to the relocation entry, the module being relocated,
 /// and the current symbol resolution scope.
@@ -200,6 +202,9 @@ impl<H: RelocationHandler + ?Sized> RelocationHandler for Arc<H> {
 pub trait SupportLazy {}
 
 /// Binding strategy configuration for relocation.
+///
+/// This controls whether the loader follows the ELF object's default binding mode,
+/// forces eager binding, or forces lazy binding when that feature is enabled.
 pub enum BindingOptions<S = ()> {
     /// Follow the ELF object's default binding behavior.
     Default,
@@ -246,11 +251,10 @@ impl BindingOptions<()> {
     }
 }
 
-/// A trait for objects that can be relocated.
+/// A trait for raw image types that can undergo relocation.
 ///
-/// Types implementing this trait can undergo symbol resolution and address fixup.
-/// The relocation process resolves external symbol references and applies necessary
-/// address adjustments to make the object executable.
+/// In normal use, callers do not invoke this trait directly. Instead, they load a raw
+/// image with [`crate::Loader`] and then call `.relocator().relocate()`.
 pub trait Relocatable<D = ()>: Sized {
     /// The type of the relocated object.
     type Output;

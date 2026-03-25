@@ -1,13 +1,12 @@
-//! Dynamic library (shared object) handling
+//! Shared-object image types.
 //!
-//! This module provides functionality for working with dynamic libraries
-//! (shared objects) that have been loaded but not yet relocated. It includes
-//! support for synchronous loading of dynamic libraries.
+//! Use [`RawDylib`] for a mapped-but-unrelocated shared object and [`LoadedDylib`]
+//! for the relocated form returned by `.relocator().relocate()`.
 
 use crate::{
     Result,
     elf::{ElfDyn, ElfPhdr},
-    image::{ElfCore, LoadedCore, common::DynamicImage},
+    image::{DynamicImage, ElfCore, LoadedCore},
     loader::{ImageBuilder, LoadHook},
     os::Mmap,
     relocation::{
@@ -18,12 +17,11 @@ use crate::{
 use alloc::vec::Vec;
 use core::{borrow::Borrow, fmt::Debug, ops::Deref, ptr::NonNull};
 
-/// An unrelocated dynamic library.
+/// A mapped but unrelocated shared object.
 ///
-/// This structure represents a dynamic library (shared object, `.so`) that has been
-/// loaded into memory but has not yet undergone relocation. It contains all
-/// the necessary information to perform relocation and prepare the library
-/// for execution.
+/// Values of this type are returned by [`crate::Loader::load_dylib`]. They expose
+/// ELF metadata immediately and can later be turned into a [`LoadedDylib`] by
+/// running relocation.
 pub struct RawDylib<D>
 where
     D: 'static,
@@ -185,14 +183,17 @@ impl<D> RawDylib<D> {
         self.inner.user_data_mut()
     }
 
-    /// Creates a builder for relocating the dynamic library.
+    /// Creates a relocation builder for this shared object.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
     }
 }
 
-#[derive(Debug, Clone)]
 /// A relocated dynamic library.
+///
+/// This is a thin wrapper around [`LoadedCore`] and dereferences to it for
+/// convenient access to common loaded-image operations.
+#[derive(Debug, Clone)]
 pub struct LoadedDylib<D> {
     inner: LoadedCore<D>,
 }

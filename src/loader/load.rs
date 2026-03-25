@@ -1,8 +1,8 @@
-use super::{ElfBuf, LoadHook, Loader, ObjectBuilder};
+use super::{ElfBuf, LoadHook, Loader};
 use crate::{
     ParseEhdrError, Result,
-    elf::{EHDR_SIZE, ElfHeader, ElfPhdr, ElfShdr},
-    image::{RawDylib, RawElf, RawExec, RawObject},
+    elf::{EHDR_SIZE, ElfHeader, ElfPhdr},
+    image::{RawDylib, RawElf, RawExec},
     input::{ElfReader, IntoElfReader},
     logging,
     os::Mmap,
@@ -23,7 +23,7 @@ impl ElfBuf {
         }
     }
 
-    fn read_table(
+    pub(crate) fn read_table(
         &mut self,
         object: &mut impl ElfReader,
         range: (usize, usize),
@@ -59,22 +59,6 @@ impl ElfBuf {
             )))
         }
     }
-
-    pub(crate) fn prepare_shdrs_mut(
-        &mut self,
-        ehdr: &ElfHeader,
-        object: &mut impl ElfReader,
-    ) -> Result<Option<&mut [ElfShdr]>> {
-        let Some(size) = self.read_table(object, ehdr.shdr_range())? else {
-            return Ok(None);
-        };
-        unsafe {
-            Ok(Some(core::slice::from_raw_parts_mut(
-                self.buf.as_mut_ptr().cast::<ElfShdr>(),
-                size / size_of::<ElfShdr>(),
-            )))
-        }
-    }
 }
 
 impl<M, H, D, Tls> Loader<M, H, D, Tls>
@@ -105,14 +89,11 @@ where
     D: Default,
     Tls: TlsResolver,
 {
-    /// Load an ELF file into memory.
+    /// Loads an ELF input and chooses the appropriate raw image type automatically.
     ///
-    /// # Arguments
-    /// * `input` - The ELF object to load
-    ///
-    /// # Returns
-    /// * `Ok(elf)` - The loaded ELF file
-    /// * `Err(Error)` - If loading fails
+    /// This is the most flexible entry point when the caller does not already know
+    /// whether the input is a shared object, executable, or relocatable object.
+    /// `ET_DYN` inputs are classified by inspecting the program headers.
     pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D>>
     where
         D: 'static,
@@ -122,7 +103,7 @@ where
         let ehdr = self.read_ehdr(&mut object)?;
 
         match ehdr.e_type {
-            elf::abi::ET_REL => Ok(RawElf::Object(self.load_object_impl(object)?)),
+            elf::abi::ET_REL => self.load_rel(object),
             elf::abi::ET_EXEC => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
             elf::abi::ET_DYN => {
                 let phdrs = self.read_phdr(&mut object, &ehdr)?.unwrap_or_default();
@@ -138,15 +119,29 @@ where
         }
     }
 
-    /// Loads a dynamic library into memory and prepares it for relocation.
+    #[cfg(not(feature = "object"))]
+    pub(crate) fn load_rel(&mut self, _object: impl ElfReader) -> Result<RawElf<D>>
+    where
+        D: 'static,
+    {
+        Err(ParseEhdrError::RelocatableObjectsDisabled.into())
+    }
+
+    /// Loads a shared object (`ET_DYN`) into memory and returns a raw dylib image.
+    ///
+    /// The returned value is mapped but not yet relocated. Call `.relocator().relocate()`
+    /// to resolve symbols and produce a ready-to-use loaded image.
+    ///
+    /// Any [`IntoElfReader`] input is accepted, including paths, byte slices,
+    /// [`crate::input::ElfFile`], and [`crate::input::ElfBinary`].
     ///
     /// # Examples
     /// ```no_run
-    /// use elf_loader::{Loader, input::ElfBinary};
+    /// use elf_loader::Loader;
     ///
     /// let mut loader = Loader::new();
-    /// let bytes = &[]; // ELF file bytes
-    /// let lib = loader.load_dylib(ElfBinary::new("liba.so", bytes)).unwrap();
+    /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
+    /// let lib = raw.relocator().relocate().unwrap();
     /// ```
     pub fn load_dylib<'a, I>(&mut self, input: I) -> Result<RawDylib<D>>
     where
@@ -187,15 +182,18 @@ where
 
         Ok(dylib)
     }
-    /// Loads an executable file into memory and prepares it for relocation.
+    /// Loads an executable image into memory and returns a raw executable.
+    ///
+    /// Both static executables and dynamically-linked / PIE-style executables are supported.
+    /// Dynamic executables can later be relocated with `.relocator().relocate()`.
     ///
     /// # Examples
     /// ```no_run
-    /// use elf_loader::{Loader, input::ElfBinary};
+    /// use elf_loader::Loader;
     ///
     /// let mut loader = Loader::new();
-    /// let bytes = &[]; // ELF executable bytes
-    /// let exec = loader.load_exec(ElfBinary::new("my_exec", bytes)).unwrap();
+    /// let exec = loader.load_exec("path/to/program").unwrap();
+    /// println!("entry = 0x{:x}", exec.entry());
     /// ```
     pub fn load_exec<'a, I>(&mut self, input: I) -> Result<RawExec<D>>
     where
@@ -240,48 +238,5 @@ where
         }
 
         res
-    }
-    /// Loads a relocatable object file into memory and prepares it for relocation.
-    ///
-    /// # Examples
-    /// ```no_run
-    /// use elf_loader::{Loader, input::ElfBinary};
-    ///
-    /// let mut loader = Loader::new();
-    /// let bytes = &[]; // Relocatable ELF bytes
-    /// let rel = loader.load_object(ElfBinary::new("liba.o", bytes)).unwrap();
-    /// ```
-    pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject<D>>
-    where
-        D: 'static,
-        I: IntoElfReader<'a>,
-    {
-        self.load_object_impl(input.into_reader()?)
-    }
-
-    pub(crate) fn load_object_impl(&mut self, mut object: impl ElfReader) -> Result<RawObject<D>>
-    where
-        D: 'static,
-    {
-        logging::debug!("Loading object: {}", object.file_name());
-
-        let ehdr = self.read_ehdr(&mut object)?;
-        let shdrs = self
-            .buf
-            .prepare_shdrs_mut(&ehdr, &mut object)?
-            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
-        let builder = self
-            .inner
-            .create_object_builder::<M, Tls>(ehdr, shdrs, object)?;
-        let raw = RawObject::from_builder(builder);
-
-        logging::info!(
-            "Loaded object: {} at [0x{:x}-0x{:x}]",
-            raw.name(),
-            raw.base(),
-            raw.base() + raw.core.inner.segments.len()
-        );
-
-        Ok(raw)
     }
 }

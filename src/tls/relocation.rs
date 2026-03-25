@@ -13,6 +13,19 @@ mod enabled {
         (name == "__tls_get_addr").then_some(tls_get_addr.as_ptr())
     }
 
+    #[inline]
+    pub(crate) fn is_tlsdesc_relocation(r_type: u32) -> bool {
+        REL_TLSDESC != 0 && r_type == REL_TLSDESC
+    }
+
+    #[inline]
+    pub(crate) fn is_tls_relocation(r_type: u32) -> bool {
+        r_type == REL_DTPOFF
+            || r_type == REL_DTPMOD
+            || r_type == REL_TPOFF
+            || is_tlsdesc_relocation(r_type)
+    }
+
     pub(crate) fn handle_tls_reloc<D, PreS, PostS, PreH, PostH>(
         helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
         rel: &ElfRelType,
@@ -120,6 +133,16 @@ mod disabled {
     }
 
     #[inline]
+    pub(crate) fn is_tlsdesc_relocation(_r_type: u32) -> bool {
+        false
+    }
+
+    #[inline]
+    pub(crate) fn is_tls_relocation(_r_type: u32) -> bool {
+        false
+    }
+
+    #[inline]
     pub(crate) fn handle_tls_reloc<D, PreS, PostS, PreH, PostH>(
         _helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
         _rel: &ElfRelType,
@@ -136,6 +159,10 @@ mod disabled {
 }
 
 #[cfg(not(feature = "tls"))]
-pub(crate) use disabled::{handle_tls_reloc, lookup_tls_get_addr};
+pub(crate) use disabled::{
+    handle_tls_reloc, is_tls_relocation, is_tlsdesc_relocation, lookup_tls_get_addr,
+};
 #[cfg(feature = "tls")]
-pub(crate) use enabled::{handle_tls_reloc, lookup_tls_get_addr};
+pub(crate) use enabled::{
+    handle_tls_reloc, is_tls_relocation, is_tlsdesc_relocation, lookup_tls_get_addr,
+};

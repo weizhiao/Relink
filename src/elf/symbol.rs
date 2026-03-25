@@ -6,8 +6,8 @@
 //! symbol resolution APIs.
 
 use crate::{
+    elf::ElfSymbol,
     elf::{ElfDynamic, HashTable, PreCompute},
-    elf::{ElfShdr, ElfSymbol},
 };
 use core::ffi::CStr;
 use core::fmt::Debug;
@@ -29,7 +29,7 @@ impl ElfStringTable {
     ///
     /// # Returns
     /// A new ElfStringTable instance
-    const fn new(data: *const u8) -> Self {
+    pub(crate) const fn new(data: *const u8) -> Self {
         ElfStringTable { data }
     }
 
@@ -188,27 +188,6 @@ impl SymbolTable {
             version,
         }
     }
-
-    /// Creates a symbol table from section headers, typically used for relocatable objects.
-    pub(crate) fn from_shdrs(symtab: &ElfShdr, shdrs: &[ElfShdr]) -> Self {
-        // Get the string table section header (linked via sh_link)
-        let strtab_shdr = &shdrs[symtab.sh_link as usize];
-
-        // Create string table wrapper
-        let strtab = ElfStringTable::new(strtab_shdr.sh_addr as *const u8);
-
-        // Create hash table from section headers
-        let hashtab = HashTable::from_shdr(symtab, &strtab);
-
-        Self {
-            hashtab,
-            symtab: symtab.sh_addr as *const ElfSymbol,
-            strtab,
-            #[cfg(feature = "version")]
-            version: None,
-        }
-    }
-
     /// Returns a reference to the string table.
     pub(crate) fn strtab(&self) -> &ElfStringTable {
         &self.strtab

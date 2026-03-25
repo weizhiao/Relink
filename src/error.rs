@@ -166,6 +166,8 @@ pub enum ParseEhdrError {
     ExpectedDylib { found: ElfFileType },
     /// An executable or PIE-compatible file was required but the file type was different.
     ExpectedExecutable { found: ElfFileType },
+    /// Relocatable object support is disabled for this build.
+    RelocatableObjectsDisabled,
     /// A relocatable object was expected to carry section headers.
     MissingSectionHeaders,
 }
@@ -191,6 +193,9 @@ impl Display for ParseEhdrError {
                 "file type mismatch: expected ET_EXEC or ET_DYN, found {}",
                 found,
             ),
+            Self::RelocatableObjectsDisabled => {
+                f.write_str("file type ET_REL requires enabling the `object` feature")
+            }
             Self::MissingSectionHeaders => f.write_str("object file must have section headers"),
         }
     }
@@ -219,16 +224,20 @@ impl Display for ParsePhdrError {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum RelocationFailureReason {
+    #[cfg(feature = "object")]
     UnknownSymbol,
     Unhandled,
+    #[cfg(feature = "object")]
     IntegralConversionOutOfRange,
 }
 
 impl Display for RelocationFailureReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(feature = "object")]
             Self::UnknownSymbol => f.write_str("unknown symbol"),
             Self::Unhandled => f.write_str("Unhandled relocation"),
+            #[cfg(feature = "object")]
             Self::IntegralConversionOutOfRange => {
                 f.write_str("out of range integral type conversion attempted")
             }

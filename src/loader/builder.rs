@@ -1,25 +1,14 @@
 use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner, UserDataLoaderContext};
 use crate::{
-    ParsePhdrError, RelocationError, Result,
-    elf::{
-        ELF_REL_SECTION_NAME, ELF_REL_SECTION_TYPE, ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs,
-        ElfRelType, ElfShdr, ElfSymbol, SymbolTable, relocation_section_name,
-    },
+    ParsePhdrError, Result,
+    elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfShdr},
     os::Mmap,
-    relocation::{RelocAddr, StaticRelocation},
-    segment::{
-        ELFRelro, ElfSegments, SegmentBuilder,
-        program::ProgramSegments,
-        section::{PltGotSection, SectionSegments},
-    },
+    segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
     tls::{TlsInfo, TlsResolver},
 };
-use alloc::{borrow::ToOwned, boxed::Box, string::String, vec::Vec};
+use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use core::{ffi::c_char, marker::PhantomData, ptr::NonNull};
-use elf::abi::{
-    PT_DYNAMIC, PT_GNU_EH_FRAME, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_PHDR, PT_TLS, SHN_UNDEF,
-    SHT_INIT_ARRAY, SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE,
-};
+use elf::abi::{PT_DYNAMIC, PT_GNU_EH_FRAME, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_PHDR, PT_TLS};
 
 /// Builder for creating relocated ELF objects
 ///
@@ -236,240 +225,16 @@ where
     }
 }
 
-/// Builder for creating relocatable ELF objects
-///
-/// This structure is used internally during the loading process to collect
-/// and organize the various components of a relocatable ELF file before
-/// building the final ElfRelocatable object.
-pub(crate) struct ObjectBuilder<Tls, D = ()> {
-    /// Name of the ELF file
-    pub(crate) name: String,
-
-    /// Symbol table for the ELF file
-    pub(crate) symtab: SymbolTable,
-
-    /// Initialization function array
-    pub(crate) init_array: Option<&'static [fn()]>,
-
-    /// Initialization function handler
-    pub(crate) init_fn: DynLifecycleHandler,
-
-    /// Finalization function handler
-    pub(crate) fini_fn: DynLifecycleHandler,
-
-    /// Memory segments of the ELF file
-    pub(crate) segments: ElfSegments,
-
-    /// Static relocation information
-    pub(crate) relocation: StaticRelocation,
-
-    /// Memory protection function
-    pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
-
-    /// PLT/GOT section information
-    pub(crate) pltgot: PltGotSection,
-
-    /// TLS module ID
-    pub(crate) tls_mod_id: Option<usize>,
-
-    /// TLS thread pointer offset
-    pub(crate) tls_tp_offset: Option<isize>,
-
-    /// User-defined data
-    pub(crate) user_data: D,
-
-    /// TLS resolver
-    _marker_tls: PhantomData<Tls>,
-}
-
-struct ObjectSectionData {
-    symtab: SymbolTable,
-    relocation: StaticRelocation,
-    init_array: Option<&'static [fn()]>,
-}
-
-impl<T: TlsResolver, D> ObjectBuilder<T, D> {
-    #[inline]
-    pub(crate) fn validate_shdrs(shdrs: &[ElfShdr]) -> Result<()> {
-        let mut has_symtab = false;
-
-        for shdr in shdrs {
-            match shdr.sh_type {
-                SHT_SYMTAB => has_symtab = true,
-                SHT_REL | SHT_RELA => Self::validate_relocation_shdr(shdr)?,
-                _ => {}
-            }
-        }
-
-        if !has_symtab {
-            return Err(RelocationError::MissingObjectSymbolTable.into());
-        }
-
-        Ok(())
-    }
-
-    #[inline]
-    fn validate_relocation_shdr(shdr: &ElfShdr) -> Result<()> {
-        debug_assert!(matches!(shdr.sh_type, SHT_REL | SHT_RELA));
-
-        if shdr.sh_type != ELF_REL_SECTION_TYPE {
-            return Err(RelocationError::UnsupportedObjectSection {
-                expected: ELF_REL_SECTION_NAME,
-                found: relocation_section_name(shdr.sh_type),
-            }
-            .into());
-        }
-
-        let expected = core::mem::size_of::<ElfRelType>();
-        let found = shdr.sh_entsize as usize;
-        if found != expected {
-            return Err(RelocationError::InvalidObjectEntrySize {
-                section: ELF_REL_SECTION_NAME,
-                expected,
-                found,
-            }
-            .into());
-        }
-
-        Ok(())
-    }
-
-    fn rebase_loaded_sections(shdrs: &mut [ElfShdr], pltgot: &mut PltGotSection, base: RelocAddr) {
-        shdrs.iter_mut().for_each(|shdr| {
-            shdr.sh_addr = base.offset(shdr.sh_addr as usize).into_inner() as _;
-        });
-        pltgot.rebase(base);
-    }
-
-    fn prepare_symbol_table(
-        symtab_shdr: &ElfShdr,
-        shdrs: &[ElfShdr],
-        base: RelocAddr,
-    ) -> SymbolTable {
-        let symbols: &mut [ElfSymbol] = symtab_shdr.content_mut();
-        for symbol in symbols {
-            if symbol.st_type() == STT_FILE || symbol.st_shndx() == SHN_UNDEF as usize {
-                continue;
-            }
-            let section_base = RelocAddr::new(shdrs[symbol.st_shndx()].sh_addr as usize)
-                .relative_to(base.into_inner());
-            symbol.set_value(section_base.offset(symbol.st_value()).into_inner());
-        }
-
-        SymbolTable::from_shdrs(symtab_shdr, shdrs)
-    }
-
-    fn prepare_relocation_section(
-        relocation_shdr: &ElfShdr,
-        shdrs: &[ElfShdr],
-        base: RelocAddr,
-    ) -> &'static [ElfRelType] {
-        let rels: &mut [ElfRelType] = relocation_shdr.content_mut();
-        let section_base = RelocAddr::new(shdrs[relocation_shdr.sh_info as usize].sh_addr as usize);
-        for rel in rels {
-            rel.set_offset(
-                section_base
-                    .offset(rel.r_offset())
-                    .relative_to(base.into_inner())
-                    .into_inner(),
-            );
-        }
-
-        relocation_shdr.content()
-    }
-
-    fn prepare_init_array(init_array_shdr: &ElfShdr) -> &'static [fn()] {
-        let array: &[usize] = init_array_shdr.content_mut();
-        unsafe { core::mem::transmute(array) }
-    }
-
-    fn prepare_section_data(shdrs: &[ElfShdr], base: RelocAddr) -> Result<ObjectSectionData> {
-        let mut symtab = None;
-        let mut relocation = Vec::with_capacity(shdrs.len());
-        let mut init_array = None;
-
-        for shdr in shdrs {
-            match shdr.sh_type {
-                SHT_SYMTAB => symtab = Some(Self::prepare_symbol_table(shdr, shdrs, base)),
-                SHT_RELA | SHT_REL => {
-                    relocation.push(Self::prepare_relocation_section(shdr, shdrs, base))
-                }
-                SHT_INIT_ARRAY => init_array = Some(Self::prepare_init_array(shdr)),
-                _ => {}
-            }
-        }
-
-        Ok(ObjectSectionData {
-            symtab: symtab.ok_or(RelocationError::MissingObjectSymbolTable)?,
-            relocation: StaticRelocation::new(relocation),
-            init_array,
-        })
-    }
-
-    /// Create a new RelocatableBuilder
-    ///
-    /// This method initializes a new RelocatableBuilder with the provided
-    /// components and processes the section headers to prepare for relocation.
-    ///
-    /// # Arguments
-    /// * `name` - The name of the ELF file
-    /// * `shdrs` - Mutable reference to the section headers
-    /// * `init_fn` - Initialization function handler
-    /// * `fini_fn` - Finalization function handler
-    /// * `segments` - Memory segments of the ELF file
-    /// * `mprotect` - Memory protection function
-    /// * `pltgot` - PLT/GOT section information
-    /// * `user_data` - User-defined data
-    ///
-    /// # Returns
-    /// A new RelocatableBuilder instance
-    pub(crate) fn new(
-        name: String,
-        shdrs: &mut [ElfShdr],
-        init_fn: DynLifecycleHandler,
-        fini_fn: DynLifecycleHandler,
-        segments: ElfSegments,
-        mprotect: Box<dyn Fn() -> Result<()>>,
-        mut pltgot: PltGotSection,
-        user_data: D,
-    ) -> Result<Self> {
-        Self::validate_shdrs(shdrs)?;
-        let base = segments.base_addr();
-        Self::rebase_loaded_sections(shdrs, &mut pltgot, base);
-        let ObjectSectionData {
-            symtab,
-            relocation,
-            init_array,
-        } = Self::prepare_section_data(shdrs, base)?;
-
-        Ok(Self {
-            name,
-            symtab,
-            init_fn,
-            fini_fn,
-            segments,
-            mprotect,
-            relocation,
-            pltgot,
-            init_array,
-            tls_mod_id: None,
-            tls_tp_offset: None,
-            user_data,
-            _marker_tls: PhantomData,
-        })
-    }
-}
-
 impl<H, D> LoaderInner<H, D>
 where
     H: LoadHook,
     D: 'static,
 {
-    fn lifecycle_handlers(&self) -> (DynLifecycleHandler, DynLifecycleHandler) {
+    pub(crate) fn lifecycle_handlers(&self) -> (DynLifecycleHandler, DynLifecycleHandler) {
         (self.init_fn.clone(), self.fini_fn.clone())
     }
 
-    fn load_user_data(
+    pub(crate) fn load_user_data(
         &self,
         name: &str,
         ehdr: &ElfHeader,
@@ -508,31 +273,5 @@ where
             self.force_static_tls,
             user_data,
         ))
-    }
-
-    pub(crate) fn create_object_builder<M, Tls>(
-        &mut self,
-        ehdr: ElfHeader,
-        shdrs: &mut [ElfShdr],
-        mut object: impl crate::input::ElfReader,
-    ) -> Result<ObjectBuilder<Tls, D>>
-    where
-        M: Mmap,
-        Tls: TlsResolver,
-    {
-        let name = object.file_name().to_owned();
-        let (init_fn, fini_fn) = self.lifecycle_handlers();
-        let mut shdr_segments = SectionSegments::new(shdrs, &mut object)?;
-        let segments = shdr_segments.load_segments::<M>(&mut object)?;
-        let pltgot = shdr_segments.take_pltgot();
-        let mprotect = Box::new(move || {
-            shdr_segments.mprotect::<M>()?;
-            Ok(())
-        });
-        let user_data = self.load_user_data(&name, &ehdr, None, Some(shdrs));
-
-        ObjectBuilder::new(
-            name, shdrs, init_fn, fini_fn, segments, mprotect, pltgot, user_data,
-        )
     }
 }

@@ -1,9 +1,9 @@
+//! Executable image types.
+//!
+//! Use [`RawExec`] for an executable that has been mapped but not yet relocated,
+//! and [`LoadedExec`] for the final executable form produced by relocation.
+
 use crate::sync::Arc;
-/// Executable file handling
-///
-/// This module provides functionality for working with executable ELF files
-/// that have been loaded but not yet relocated. It includes support for
-/// synchronous loading of executable files.
 use crate::{
     Result,
     elf::ElfPhdr,
@@ -125,12 +125,11 @@ impl<D: 'static> Relocatable<D> for RawExec<D> {
     }
 }
 
-/// An unrelocated executable file.
+/// A mapped but unrelocated executable image.
 ///
-/// This structure represents an executable ELF file that has been loaded
-/// into memory but has not yet undergone relocation. It contains all the
-/// necessary information to perform relocation and prepare the executable
-/// for execution.
+/// Values of this type are returned by [`crate::Loader::load_exec`]. They may
+/// represent either a dynamic executable that still needs relocation or a
+/// static executable that is already ready to run.
 pub struct RawExec<D>
 where
     D: 'static,
@@ -158,7 +157,7 @@ impl<D> Debug for RawExec<D> {
 }
 
 impl<D: 'static> RawExec<D> {
-    /// Creates a builder for relocating the executable.
+    /// Creates a relocation builder for this executable image.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
     }
@@ -225,11 +224,10 @@ impl<D: 'static> RawExec<D> {
     }
 }
 
-/// An executable file that has been relocated.
+/// A relocated executable image.
 ///
-/// This structure represents an executable ELF file that has been loaded
-/// and relocated in memory, making it ready for execution. It contains
-/// the entry point and other information needed to run the executable.
+/// Dynamic executables retain access to their underlying [`LoadedCore`], while
+/// static executables expose a smaller set of metadata directly on this wrapper.
 #[derive(Clone, Debug)]
 pub struct LoadedExec<D> {
     /// Entry point of the executable.

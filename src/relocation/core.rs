@@ -1,5 +1,7 @@
+#[cfg(feature = "object")]
+use crate::RelocationError;
 use crate::{
-    Error, RelocationError, RelocationFailureReason, Result,
+    Error, RelocationFailureReason, Result,
     elf::{ElfRelType, ElfSymbol, SymbolInfo, SymbolTable},
     image::{ElfCore, LoadedCore},
     logging, relocate_context_error,
@@ -138,29 +140,32 @@ where
     }
 }
 
-/// A builder for configuring and executing the relocation process.
+/// A builder for configuring and executing relocation.
 ///
-/// `Relocator` provides a fluent interface for setting up symbol resolution,
-/// relocation handlers, and binding behaviors before relocating an ELF object.
+/// A relocator is obtained by calling `.relocator()` on a raw image returned by
+/// [`crate::Loader`]. It lets you provide symbol lookup callbacks, dependency scope,
+/// relocation handlers, and binding policy before finally calling `relocate()`.
 ///
 /// # Examples
 /// ```no_run
-/// use elf_loader::{Loader, input::ElfBinary};
+/// use elf_loader::{Loader, Result};
 ///
-/// let mut loader = Loader::new();
-/// let bytes = &[]; // ELF file bytes
-/// let lib = loader.load_dylib(ElfBinary::new("liba.so", bytes)).unwrap();
+/// fn main() -> Result<()> {
+///     let mut loader = Loader::new();
+///     let lib = loader.load_dylib("path/to/liba.so")?;
 ///
-/// let relocated = lib.relocator()
-///     .pre_find_fn(|name| {
-///         match name {
+///     let relocated = lib
+///         .relocator()
+///         .pre_find_fn(|name| match name {
 ///             "malloc" => Some(0x1234 as *const ()),
 ///             "free" => Some(0x5678 as *const ()),
 ///             _ => None,
-///         }
-///     })
-///     .relocate()
-///     .unwrap();
+///         })
+///         .relocate()?;
+///
+///     let _ = relocated;
+///     Ok(())
+/// }
 /// ```
 pub struct Relocator<T, PreS, PostS, LazyS, PreH, PostH, D = ()> {
     object: T,
@@ -198,8 +203,8 @@ where
 {
     /// Sets the preferred symbol lookup strategy.
     ///
-    /// Symbols will be searched using this strategy first, before checking
-    /// the default scope or fallback strategies.
+    /// Symbols are searched here first, before checking the relocation scope
+    /// or any fallback lookup strategy.
     pub fn pre_find<S2>(self, pre_find: S2) -> Relocator<T, S2, PostS, LazyS, PreH, PostH, D>
     where
         S2: SymbolLookup,
@@ -233,8 +238,8 @@ where
 
     /// Sets the fallback symbol lookup strategy using a closure.
     ///
-    /// This strategy will be used if a symbol is not found in the preferred
-    /// strategy or the default scope.
+    /// This strategy is consulted only after the preferred lookup and the
+    /// current relocation scope have been exhausted.
     pub fn post_find_fn<F>(self, post_find: F) -> Relocator<T, PreS, F, LazyS, PreH, PostH, D>
     where
         F: Fn(&str) -> Option<*const ()>,
@@ -252,8 +257,8 @@ where
 
     /// Sets the fallback symbol lookup strategy.
     ///
-    /// This strategy will be used if a symbol is not found in the preferred
-    /// strategy or the default scope.
+    /// This strategy is consulted only after the preferred lookup and the
+    /// current relocation scope have been exhausted.
     pub fn post_find<S2>(self, post_find: S2) -> Relocator<T, PreS, S2, LazyS, PreH, PostH, D>
     where
         S2: SymbolLookup,
@@ -269,10 +274,11 @@ where
         }
     }
 
-    /// Sets the scope of relocated libraries for symbol resolution.
+    /// Replaces the current symbol-resolution scope.
     ///
-    /// The relocator will search for symbols in these libraries in the order
-    /// they are provided. This defines the dependency resolution scope.
+    /// Symbols from these modules are searched in the provided order.
+    /// Any module used during relocation is retained as a dependency of the
+    /// relocated output.
     pub fn scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
@@ -282,10 +288,9 @@ where
         self
     }
 
-    /// Adds more libraries to the search scope.
+    /// Appends more modules to the symbol-resolution scope.
     ///
-    /// This appends libraries to the existing scope. Symbols will be searched
-    /// in the order they were added.
+    /// Additional modules are searched after the existing scope entries.
     pub fn add_scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
@@ -296,9 +301,10 @@ where
         self
     }
 
-    /// Sets the pre-processing relocation handler.
+    /// Sets the relocation handler that runs before the built-in logic.
     ///
-    /// This handler is called before the default relocation logic.
+    /// This is useful for intercepting selected relocations or providing
+    /// custom behavior before the default implementation runs.
     pub fn pre_handler<NewPreH>(
         self,
         handler: NewPreH,
@@ -317,10 +323,10 @@ where
         }
     }
 
-    /// Sets the post-processing relocation handler.
+    /// Sets the relocation handler that runs after the built-in logic.
     ///
-    /// This handler is called after the default relocation logic if the
-    /// relocation was not already handled.
+    /// This handler is called only if the relocation was not already handled
+    /// by the pre-handler or the default relocation logic.
     pub fn post_handler<NewPostH>(
         self,
         handler: NewPostH,
@@ -339,14 +345,10 @@ where
         }
     }
 
-    /// Executes the relocation process.
+    /// Executes relocation with the current configuration.
     ///
-    /// This method consumes the relocator and returns the relocated ELF object.
-    /// All configured symbol lookups, handlers, and options are applied.
-    ///
-    /// # Returns
-    /// * `Ok(T::Output)` - The successfully relocated ELF object.
-    /// * `Err(Error)` - If relocation fails for any reason.
+    /// This consumes the builder, resolves relocations, records used dependencies,
+    /// and returns the final loaded image.
     pub fn relocate(self) -> Result<T::Output>
     where
         D: 'static,
@@ -371,7 +373,7 @@ where
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
-    /// Sets the binding strategy for relocation.
+    /// Sets the binding strategy used during relocation.
     pub fn binding<NewLazyS>(
         self,
         binding: BindingOptions<NewLazyS>,
@@ -396,13 +398,13 @@ where
     }
 
     #[cfg(feature = "lazy-binding")]
-    /// Forces lazy binding without a custom scope.
+    /// Forces lazy binding without a custom lazy scope.
     pub fn lazy(self) -> Relocator<T, PreS, PostS, (), PreH, PostH, D> {
         self.binding(BindingOptions::lazy())
     }
 
     #[cfg(feature = "lazy-binding")]
-    /// Sets the lazy scope for symbol resolution during lazy binding.
+    /// Sets the symbol lookup scope used only during lazy binding fixups.
     pub fn lazy_scope<NewLazyS>(
         self,
         scope: NewLazyS,
@@ -424,7 +426,9 @@ where
 pub(crate) struct RelocValue<T>(T);
 
 pub(crate) type RelocAddr = RelocValue<usize>;
+#[cfg(feature = "object")]
 pub(crate) type RelocSWord32 = RelocValue<i32>;
+#[cfg(feature = "object")]
 pub(crate) type RelocWord32 = RelocValue<u32>;
 
 impl<T> RelocValue<T> {
@@ -476,6 +480,7 @@ impl RelocAddr {
     }
 
     #[inline]
+    #[cfg(feature = "object")]
     pub fn try_into_sword32(self) -> Result<RelocSWord32> {
         i32::try_from(self.0 as isize)
             .map(RelocValue::new)
@@ -483,6 +488,7 @@ impl RelocAddr {
     }
 
     #[inline]
+    #[cfg(feature = "object")]
     pub fn try_into_word32(self) -> Result<RelocWord32> {
         u32::try_from(self.0)
             .map(RelocValue::new)
@@ -490,6 +496,7 @@ impl RelocAddr {
     }
 }
 
+#[cfg(feature = "object")]
 impl RelocSWord32 {
     #[inline]
     pub const fn to_ne_bytes(self) -> [u8; 4] {

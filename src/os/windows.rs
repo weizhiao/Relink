@@ -29,17 +29,20 @@ use windows_sys::Win32::{
 
 pub struct DefaultMmap;
 
+#[cfg(feature = "tls")]
 pub(crate) fn current_thread_id() -> usize {
     unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() as usize }
 }
 
 /// Registers a destructor (Stub for Windows)
+#[cfg(feature = "tls")]
 pub(crate) unsafe fn register_thread_destructor(
     _destructor: unsafe extern "C" fn(*mut c_void),
     _value: *mut c_void,
 ) {
 }
 
+#[cfg(feature = "tls")]
 pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
     null_mut()
 }

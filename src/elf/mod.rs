@@ -17,9 +17,13 @@ mod version;
 // Internal module re-exports for use within the crate
 pub(crate) use defs::*;
 pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab};
+#[cfg(feature = "object")]
+pub(crate) use hash::ElfHashTable;
 pub(crate) use hash::{HashTable, PreCompute};
 pub(crate) use phdrs::ElfPhdrs;
-pub(crate) use symbol::{ElfStringTable, SymbolInfo, SymbolTable};
+#[cfg(any(feature = "object", feature = "version"))]
+pub(crate) use symbol::ElfStringTable;
+pub(crate) use symbol::{SymbolInfo, SymbolTable};
 
 // Public API exports
 pub use defs::{

@@ -10,7 +10,7 @@ use crate::{
         BindingOptions, RelocAddr, RelocArtifacts, RelocHelper, RelocValue, RelocationHandler,
         ResolvedBinding, SymbolLookup, likely, reloc_error, unlikely,
     },
-    tls::{handle_tls_reloc, lookup_tls_get_addr},
+    tls::{handle_tls_reloc, is_tls_relocation, is_tlsdesc_relocation, lookup_tls_get_addr},
 };
 use alloc::vec::Vec;
 use core::{num::NonZeroUsize, ptr::null_mut};
@@ -195,7 +195,7 @@ impl<D> DynamicImage<D> {
                 let addr = base.addend(r_addend);
                 segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 continue;
-            } else if unlikely(r_type == REL_TLSDESC) {
+            } else if unlikely(is_tlsdesc_relocation(r_type)) {
                 // Handle TLSDESC relocations
                 if handle_tls_reloc(helper, rel) {
                     continue;
@@ -324,11 +324,7 @@ impl<D> DynamicImage<D> {
                 let addr = base.addend(r_addend);
                 segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 continue;
-            } else if r_type == REL_DTPOFF
-                || r_type == REL_DTPMOD
-                || r_type == REL_TPOFF
-                || r_type == REL_TLSDESC
-            {
+            } else if is_tls_relocation(r_type) {
                 // Handle TLS (Thread Local Storage) relocations
                 if handle_tls_reloc(helper, rel) {
                     continue;

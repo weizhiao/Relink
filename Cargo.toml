@@ -12,6 +12,10 @@ categories = ["no-std", "embedded", "os", "parsing", "development-tools"]
 description = "A high-performance, no_std compliant ELF loader and JIT linker for Rust."
 exclude = [".gitignore", "ci", "docs"]
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [workspace.package]
 authors = ["wzhao <1207410841@qq.com>"]
 edition = "2024"
@@ -74,15 +78,18 @@ features = ["alloc"]
 version = "0.10"
 default-features = false
 features = ["mutex", "rwlock", "spin_mutex"]
+optional = true
 
 [dependencies.hashbrown]
 version = "0.16.0"
 default-features = false
 features = ["default-hasher"]
+optional = true
 
 [dependencies.foldhash]
 version = "0.2.0"
 default-features = false
+optional = true
 
 [dependencies]
 bitflags = "2.9.0"
@@ -99,16 +106,20 @@ name = "benchmark"
 harness = false
 
 [features]
-default = ["lazy-binding", "tls"]
+default = ["tls"]
 
+# A feature that enables all features.
+full = ["tls", "lazy-binding", "object"]
 # Use linux syscalls
 use-syscall = ["dep:syscalls"]
 # Use the version information of symbols when resolving them.
 version = []
 # Enable TLS relocation handling and the built-in TLS resolver.
-tls = []
+tls = ["dep:spin"]
 # Enable lazy binding support.
 lazy-binding = []
+# Enable relocatable object (`.o`) loading and lookup support.
+object = ["dep:foldhash", "dep:hashbrown"]
 # Enable logging.
 log = ["dep:log"]
 # support target without native pointer size atomic operation

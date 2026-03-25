@@ -1,38 +1,47 @@
-//! ELF image management and representation.
+//! Public image types returned by the loader and relocation pipeline.
 //!
-//! This module handles the abstraction of ELF objects in their various states:
-//! * **RawElf**: An ELF file that has been mapped into memory but not yet relocated.
-//! * **LoadedElf**: A fully relocated ELF module ready for execution.
+//! `Loader` produces raw image types such as [`RawElf`], [`RawDylib`], and [`RawExec`].
+//! Those raw values are mapped into memory but not yet relocated.
 //!
-//! It provides the core structures for managing memory segments, symbol lookups,
-//! and the lifetime of loaded libraries.
+//! After calling `.relocator().relocate()`, you get loaded image types such as
+//! [`LoadedElf`], [`LoadedDylib`], [`LoadedExec`], and [`LoadedCore`], which expose
+//! symbol lookup, metadata, and dependency retention.
 
 use crate::{
     Result,
     elf::ElfPhdr,
     relocation::{BindingOptions, Relocatable, RelocationHandler, Relocator, SymbolLookup},
 };
+use ::core::fmt::Debug;
 use alloc::vec::Vec;
-use core::fmt::Debug;
 
-mod common;
-mod kinds;
+mod core;
+mod dylib;
+mod dynamic;
+mod exec;
+#[cfg(feature = "object")]
+mod object;
 mod symbol;
 
-pub(crate) use common::CoreInner;
-pub(crate) use common::DynamicImage;
+#[cfg(any(feature = "lazy-binding", feature = "object"))]
+pub(crate) use core::CoreInner;
+pub(crate) use dynamic::DynamicImage;
+#[cfg(not(feature = "lazy-binding"))]
+pub(crate) use dynamic::DynamicInfo;
 #[cfg(feature = "lazy-binding")]
-pub(crate) use common::DynamicInfo;
+pub(crate) use dynamic::{DynamicInfo, LazyBindingInfo};
 
-pub use common::{ElfCore, ElfCoreRef, LoadedCore};
-pub use kinds::{LoadedDylib, LoadedExec, LoadedObject, RawDylib, RawExec, RawObject};
+pub use core::{ElfCore, ElfCoreRef, LoadedCore};
+pub use dylib::{LoadedDylib, RawDylib};
+pub use exec::{LoadedExec, RawExec};
+#[cfg(feature = "object")]
+pub use object::{LoadedObject, RawObject};
 pub use symbol::Symbol;
 
 /// A mapped but unrelocated ELF image.
 ///
-/// This enum represents an ELF file that has been loaded into memory (mapped)
-/// but has not yet undergone the relocation process. It can be a dynamic library,
-/// an executable, or a relocatable object file.
+/// This is the type returned by [`crate::Loader::load`]. It can hold a raw shared
+/// object, executable, or relocatable object depending on the ELF input.
 #[derive(Debug)]
 pub enum RawElf<D>
 where
@@ -45,16 +54,14 @@ where
     Exec(RawExec<D>),
 
     /// A relocatable object file (typically `.o`).
+    #[cfg(feature = "object")]
     Object(RawObject<D>),
 }
 
 /// A fully relocated and ready-to-use ELF module.
 ///
-/// This enum represents an ELF file that has been loaded, mapped, and had all
-/// its relocations resolved. It is now ready for symbol lookup or execution.
-///
-/// It maintains internal reference counts to its dependencies to ensure
-/// memory safety during its lifetime.
+/// This is the result of calling `.relocator().relocate()` on a [`RawElf`].
+/// Loaded images retain the dependencies that were actually used during relocation.
 #[derive(Debug, Clone)]
 pub enum LoadedElf<D> {
     /// A relocated dynamic library.
@@ -64,21 +71,20 @@ pub enum LoadedElf<D> {
     Exec(LoadedExec<D>),
 
     /// A relocated object file.
+    #[cfg(feature = "object")]
     Object(LoadedObject<D>),
 }
 
 impl<D: 'static> RawElf<D> {
-    /// Creates a builder for relocating the ELF file.
+    /// Creates a relocation builder for this raw image.
     ///
     /// # Examples
     /// ```no_run
-    /// use elf_loader::{Loader, input::ElfBinary};
+    /// use elf_loader::Loader;
     ///
     /// let mut loader = Loader::new();
-    /// let bytes = &[]; // ELF file bytes
-    /// let lib = loader.load_dylib(ElfBinary::new("liba.so", bytes)).unwrap();
-    ///
-    /// let relocated = lib.relocator().relocate().unwrap();
+    /// let raw = loader.load("path/to/input.elf").unwrap();
+    /// let relocated = raw.relocator().relocate().unwrap();
     /// ```
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
         Relocator::new(self)
@@ -90,6 +96,7 @@ impl<D: 'static> RawElf<D> {
         match self {
             RawElf::Dylib(dylib) => dylib.name(),
             RawElf::Exec(exec) => exec.name(),
+            #[cfg(feature = "object")]
             RawElf::Object(object) => object.name(),
         }
     }
@@ -100,6 +107,7 @@ impl<D: 'static> RawElf<D> {
         match self {
             RawElf::Dylib(dylib) => dylib.mapped_len(),
             RawElf::Exec(exec) => exec.mapped_len(),
+            #[cfg(feature = "object")]
             RawElf::Object(object) => object.mapped_len(),
         }
     }
@@ -110,6 +118,7 @@ impl<D: 'static> RawElf<D> {
         match self {
             RawElf::Dylib(dylib) => dylib.entry(),
             RawElf::Exec(exec) => exec.entry(),
+            #[cfg(feature = "object")]
             RawElf::Object(_) => 0,
         }
     }
@@ -120,6 +129,7 @@ impl<D: 'static> RawElf<D> {
         match self {
             RawElf::Dylib(dylib) => dylib.interp(),
             RawElf::Exec(exec) => exec.interp(),
+            #[cfg(feature = "object")]
             RawElf::Object(_) => None,
         }
     }
@@ -130,6 +140,7 @@ impl<D: 'static> RawElf<D> {
         match self {
             RawElf::Dylib(dylib) => Some(dylib.phdrs()),
             RawElf::Exec(exec) => exec.phdrs(),
+            #[cfg(feature = "object")]
             RawElf::Object(_) => None,
         }
     }
@@ -140,6 +151,7 @@ impl<D: 'static> RawElf<D> {
         match self {
             RawElf::Dylib(dylib) => dylib.base(),
             RawElf::Exec(exec) => exec.base(),
+            #[cfg(feature = "object")]
             RawElf::Object(object) => object.base(),
         }
     }
@@ -177,6 +189,7 @@ impl<D> LoadedElf<D> {
     /// # Returns
     /// * `Some(object)` - If this is an Object variant
     /// * `None` - If this is a Dylib or Exec variant
+    #[cfg(feature = "object")]
     #[inline]
     pub fn into_object(self) -> Option<LoadedObject<D>> {
         match self {
@@ -216,6 +229,7 @@ impl<D> LoadedElf<D> {
     /// # Returns
     /// * `Some(object)` - If this is an Object variant
     /// * `None` - If this is a Dylib or Exec variant
+    #[cfg(feature = "object")]
     #[inline]
     pub fn as_object(&self) -> Option<&LoadedObject<D>> {
         match self {
@@ -230,6 +244,7 @@ impl<D> LoadedElf<D> {
         match self {
             LoadedElf::Dylib(dylib) => dylib.name(),
             LoadedElf::Exec(exec) => exec.name(),
+            #[cfg(feature = "object")]
             LoadedElf::Object(object) => object.name(),
         }
     }
@@ -280,6 +295,7 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
                 )?;
                 Ok(LoadedElf::Exec(relocated))
             }
+            #[cfg(feature = "object")]
             RawElf::Object(relocatable) => {
                 let relocated = Relocatable::relocate(
                     relocatable,

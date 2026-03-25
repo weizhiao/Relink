@@ -8,20 +8,17 @@
 //! The GNU hash table (.gnu.hash) is generally preferred over the traditional
 //! SYSV hash table (.hash) as it provides better performance and memory usage.
 
-use crate::elf::{
-    ElfDynamic, ElfDynamicHashTab, ElfShdr, ElfStringTable, ElfSymbol, SymbolTable,
-    symbol::SymbolInfo,
-};
+use crate::elf::{ElfDynamic, ElfDynamicHashTab, ElfSymbol, SymbolTable, symbol::SymbolInfo};
+#[cfg(feature = "object")]
+use crate::object::CustomHash;
 use core::fmt::Debug;
-use custom::CustomHash;
 use gnu::ElfGnuHash;
 use sysv::ElfHash;
-use traits::ElfHashTable;
 
-mod custom;
 mod gnu;
 mod sysv;
 mod traits;
+pub(crate) use traits::ElfHashTable;
 
 /// An enumeration of supported ELF hash table types.
 ///
@@ -46,6 +43,7 @@ pub(crate) enum HashTable {
     ///
     /// This is a fallback implementation that can be used when no standard
     /// hash sections are available.
+    #[cfg(feature = "object")]
     Custom(CustomHash),
 }
 
@@ -54,6 +52,7 @@ impl Debug for HashTable {
         match self {
             HashTable::Gnu(_) => write!(f, "GnuHash"),
             HashTable::Elf(_) => write!(f, "ElfHash"),
+            #[cfg(feature = "object")]
             HashTable::Custom(_) => write!(f, "CustomHash"),
         }
     }
@@ -78,7 +77,8 @@ pub struct PreCompute {
     hash: Option<u32>,
 
     /// Custom hash value (reserved for future use)
-    custom: Option<u64>,
+    #[cfg(feature = "object")]
+    pub(crate) custom: Option<u64>,
 }
 
 impl HashTable {
@@ -92,6 +92,7 @@ impl HashTable {
         match &self {
             HashTable::Gnu(hashtab) => hashtab.count_syms(),
             HashTable::Elf(hashtab) => hashtab.count_syms(),
+            #[cfg(feature = "object")]
             HashTable::Custom(hashtab) => hashtab.count_syms(),
         }
     }
@@ -119,24 +120,9 @@ impl HashTable {
         match self {
             HashTable::Gnu(_) => ElfGnuHash::lookup(table, symbol, precompute),
             HashTable::Elf(_) => ElfHash::lookup(table, symbol, precompute),
+            #[cfg(feature = "object")]
             HashTable::Custom(_) => CustomHash::lookup(table, symbol, precompute),
         }
-    }
-
-    /// Create a hash table from section header information.
-    ///
-    /// This method creates a custom hash table based on the symbol table
-    /// and string table section headers. This is typically used when no
-    /// standard hash sections are present in the ELF file.
-    ///
-    /// # Arguments
-    /// * `symtab` - The symbol table section header.
-    /// * `strtab` - The string table.
-    ///
-    /// # Returns
-    /// A HashTable instance containing a custom hash implementation.
-    pub(crate) fn from_shdr(symtab: &ElfShdr, strtab: &ElfStringTable) -> Self {
-        HashTable::Custom(CustomHash::from_shdr(symtab, strtab))
     }
 
     /// Create a hash table from dynamic section information.
@@ -180,18 +166,6 @@ impl HashTable {
             _ => None,
         }
     }
-
-    /// Get a reference to the custom hash table, if this is one.
-    ///
-    /// # Returns
-    /// * `Some(custom_hash)` - A reference to the custom hash table.
-    /// * `None` - If this is not a custom hash table.
-    fn into_customhash(&self) -> Option<&CustomHash> {
-        match self {
-            HashTable::Custom(hashtab) => Some(hashtab),
-            _ => None,
-        }
-    }
 }
 
 impl SymbolInfo<'_> {
@@ -212,6 +186,7 @@ impl SymbolInfo<'_> {
             fofs: gnuhash as usize / usize::BITS as usize,
             fmask: 1 << (gnuhash % (8 * size_of::<usize>() as u32)),
             hash: None,
+            #[cfg(feature = "object")]
             custom: None,
         }
     }

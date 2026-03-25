@@ -1,15 +1,15 @@
-//! ELF file format handling
+//! Shared core state for loaded ELF images.
 //!
-//! This module provides the core data structures and functionality for working
-//! with ELF files in various stages of processing: from raw ELF files to
-//! relocated and loaded libraries or executables.
+//! The types in this module back the public image wrappers exposed from
+//! [`crate::image`]. They store metadata, symbol tables, mapped segments,
+//! lifecycle handlers, TLS state, and dependency ownership.
 
 #[cfg(feature = "lazy-binding")]
-use crate::image::common::LazyBindingInfo;
+use crate::image::LazyBindingInfo;
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolInfo, SymbolTable},
-    image::{Symbol, common::DynamicInfo},
+    image::{DynamicInfo, Symbol},
     loader::{DynLifecycleHandler, LifecycleContext},
     relocation::{RelocAddr, SymDef},
     segment::ElfSegments,
@@ -22,13 +22,10 @@ use alloc::vec::Vec;
 use core::{ffi::c_void, fmt::Debug, marker::PhantomData, ptr::NonNull};
 use elf::abi::{DF_STATIC_TLS, DT_FLAGS, PT_DYNAMIC, PT_GNU_EH_FRAME, PT_TLS};
 
-/// A fully loaded and relocated ELF module.
+/// A fully loaded and relocated ELF module with retained dependencies.
 ///
-/// This structure represents an ELF object (executable, shared library, or relocatable object)
-/// that has been mapped into memory and had its relocations performed.
-///
-/// It maintains an `Arc` reference to its dependencies to ensure that required
-/// libraries remain in memory as long as this module is alive.
+/// This is the common loaded representation used by [`crate::image::LoadedDylib`],
+/// dynamic [`crate::image::LoadedExec`], and loaded object-file images.
 pub struct LoadedCore<D = ()> {
     pub(crate) core: ElfCore<D>,
     pub(crate) deps: Arc<[LoadedCore<D>]>,
@@ -183,24 +180,21 @@ impl<D> LoadedCore<D> {
         LoadedCore { core, deps }
     }
 
-    /// Gets the core component reference of the ELF object
+    /// Returns a reference to the underlying [`ElfCore`].
     ///
     /// # Safety
-    /// Lifecycle information is lost, and the dependencies of the current
-    /// ELF object can be prematurely deallocated, which can cause serious problems.
-    ///
-    /// # Returns
-    /// A reference to the ElfCore
+    /// Lifecycle information is lost, so the dependencies of the current
+    /// loaded object can be dropped too early if this reference is used carelessly.
     #[inline]
     pub unsafe fn core_ref(&self) -> &ElfCore<D> {
         &self.core
     }
 
-    /// Creates a new LoadedModule instance without validation
+    /// Creates a new [`LoadedCore`] from raw parts without validation.
     ///
     /// # Safety
-    /// The caller needs to ensure that the parameters passed in come
-    /// from a valid dynamic library.
+    /// The caller must ensure that the provided metadata, segments, and TLS values
+    /// describe a valid loaded ELF image.
     ///
     /// # Arguments
     /// * `name` - The name of the ELF file
@@ -211,7 +205,7 @@ impl<D> LoadedCore<D> {
     /// * `user_data` - User-defined data to associate with the ELF
     ///
     /// # Returns
-    /// A new LoadedCore instance
+    /// A new [`LoadedCore`] instance
     #[inline]
     pub unsafe fn new_unchecked<Tls: TlsResolver>(
         name: String,
@@ -457,14 +451,14 @@ impl<D> Drop for CoreInner<D> {
     }
 }
 
-/// A non-owning reference to a [`ElfCore`].
+/// A non-owning reference to an [`ElfCore`].
 ///
-/// `ElfCoreRef` holds a weak reference to the managed allocation of a
-/// [`ElfCore`]. It can be used to avoid circular dependencies or to
-/// check if the component is still alive.
+/// `ElfCoreRef` holds a weak reference to the shared core allocation. It is useful
+/// when you want to avoid extending the lifetime of a loaded image unnecessarily
+/// or need to detect when the image has been dropped.
 #[derive(Clone)]
 pub struct ElfCoreRef<D = ()> {
-    /// Weak reference to the [`ModuleInner`].
+    /// Weak reference to the shared core allocation.
     inner: Weak<CoreInner<D>>,
 }
 
@@ -479,12 +473,11 @@ impl<D> ElfCoreRef<D> {
     }
 }
 
-/// The core part of an ELF object.
+/// Shared core state for a loaded ELF image.
 ///
-/// This structure represents the core data of an ELF object, including
-/// its metadata, symbols, segments, and other essential information.
-/// It uses an [`Arc`] internally to manage the lifetime of the underlying data
-/// and enable shared ownership.
+/// `ElfCore` stores metadata, symbol tables, segments, TLS state, and lifecycle
+/// handlers behind an [`Arc`]. Higher-level image wrappers delegate most common
+/// operations to this type.
 pub struct ElfCore<D = ()> {
     /// Shared reference to the inner component data.
     pub(crate) inner: Arc<CoreInner<D>>,

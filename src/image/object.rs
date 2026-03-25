@@ -1,23 +1,23 @@
 //! Relocatable ELF file handling
 //!
 //! This module provides functionality for loading and relocating relocatable
-//! ELF files (also known as object files). These are typically .o files that
+//! ELF files (also known as object files). These are typically `.o` files that
 //! contain code and data that need to be relocated before they can be executed.
 
+use crate::object::{ObjectBuilder, ObjectRelocation, PltGotSection};
 use crate::{
     Result,
-    image::{CoreInner, ElfCore, LoadedCore},
-    loader::{DynLifecycleHandler, ObjectBuilder},
+    loader::DynLifecycleHandler,
     relocation::{
-        BindingOptions, RelocAddr, Relocatable, RelocationHandler, Relocator, StaticRelocation,
-        SymbolLookup,
+        BindingOptions, RelocAddr, Relocatable, RelocationHandler, Relocator, SymbolLookup,
     },
-    segment::section::PltGotSection,
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{borrow::Borrow, fmt::Debug, ops::Deref};
+
+use super::{CoreInner, ElfCore, LoadedCore};
 
 /// A relocatable ELF object.
 ///
@@ -28,8 +28,8 @@ pub struct RawObject<D = ()> {
     /// Core component containing basic ELF information.
     pub(crate) core: ElfCore<D>,
 
-    /// Static relocation information.
-    pub(crate) relocation: StaticRelocation,
+    /// Object relocation information.
+    pub(crate) relocation: ObjectRelocation,
 
     /// PLT/GOT section information.
     pub(crate) pltgot: PltGotSection,
@@ -47,7 +47,6 @@ pub struct RawObject<D = ()> {
 impl<D> Deref for RawObject<D> {
     type Target = ElfCore<D>;
 
-    /// Dereferences to the underlying [`ElfCore`].
     fn deref(&self) -> &Self::Target {
         &self.core
     }
@@ -92,10 +91,6 @@ impl<D: 'static> RawObject<D> {
 }
 
 impl<D> Debug for RawObject<D> {
-    /// Formats the [`RawObject`] for debugging purposes.
-    ///
-    /// This implementation provides a debug representation that includes
-    /// the object name.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawObject")
             .field("core", &self.core)
@@ -122,7 +117,7 @@ impl<D: 'static> Relocatable<D> for RawObject<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        let inner = self.relocate_impl(&scope, pre_find, post_find, pre_handler, post_handler)?;
+        let inner = self.link_impl(&scope, pre_find, post_find, pre_handler, post_handler)?;
         Ok(LoadedObject { inner })
     }
 }

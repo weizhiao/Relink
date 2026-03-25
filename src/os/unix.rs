@@ -7,24 +7,25 @@ use alloc::{
     ffi::CString,
     string::{String, ToString},
 };
-use core::{
-    ffi::c_void,
-    str::FromStr,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+#[cfg(feature = "tls")]
+use core::sync::atomic::{AtomicUsize, Ordering};
+use core::{ffi::c_void, str::FromStr};
 use libc::{O_RDONLY, SEEK_SET, mmap, mprotect, munmap};
 
 /// An implementation of Mmap trait
 pub struct DefaultMmap;
 
+#[cfg(feature = "tls")]
 pub(crate) fn current_thread_id() -> usize {
     unsafe { libc::pthread_self() as usize }
 }
 
+#[cfg(feature = "tls")]
 static TLS_CLEANUP_KEY: AtomicUsize = AtomicUsize::new(0);
 
 /// Registers a destructor that will be called when the current thread exits.
 /// This is used to clean up thread-local storage and also sets the initial value.
+#[cfg(feature = "tls")]
 pub(crate) unsafe fn register_thread_destructor(
     destructor: unsafe extern "C" fn(*mut c_void),
     value: *mut c_void,
@@ -53,6 +54,7 @@ pub(crate) unsafe fn register_thread_destructor(
     }
 }
 
+#[cfg(feature = "tls")]
 pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
     let key = TLS_CLEANUP_KEY.load(Ordering::Acquire);
     if key == 0 {

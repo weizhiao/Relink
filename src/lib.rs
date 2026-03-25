@@ -1,40 +1,77 @@
-//! # Relink (elf_loader)
+//! # Relink
 //!
-//! **Relink** is a high-performance runtime linker (JIT Linker) tailor-made for the Rust ecosystem.
-//! It efficiently parses Various ELF formats, supporting loading from both traditional file systems
-//! and direct memory images, and performs flexible dynamic and static hybrid linking.
+//! Relink is a high-performance, `no_std`-friendly ELF loader and runtime linker for Rust.
+//! It maps ELF images from files or memory, performs relocations at runtime, and exposes
+//! typed symbol lookups with Rust lifetimes.
 //!
-//! Whether you are developing **OS kernels**, **embedded systems**, **JIT compilers**, or building
-//! **plugin-based applications**, Relink provides a solid foundation with zero-cost abstractions,
-//! high-speed execution, and powerful extensibility.
+//! ## Start with [`Loader`]
 //!
-//! ## Core Features
+//! - Use [`Loader::load`] to auto-detect whether the input is a dylib, executable, or
+//!   relocatable object.
+//! - Use [`Loader::load_dylib`] or [`Loader::load_exec`] when you want strict type checks.
+//! - Use `Loader::load_object` to load `ET_REL` object files when the `object` feature is enabled.
+//! - Inputs can come from file paths, raw bytes, [`input::ElfFile`], or [`input::ElfBinary`].
 //!
-//! * **🛡️ Memory Safety**: Leverages Rust's ownership and `Arc` to manage library lifetimes and dependencies automatically.
-//! * **🔀 Hybrid Linking**: Seamlessly mix Relocatable Object files (`.o`) and Dynamic Shared Objects (`.so`).
-//! * **🎭 Customization**: Deeply intervene in symbol resolution and relocation through `SymbolLookup` and `RelocationHandler`.
-//! * **⚡ Performance & Versatility**: Optimized for `no_std` environments with support for RELR and Lazy Binding.
+//! ## Highlights
 //!
-//! ## Quick Start
+//! - Safer symbol lifetimes. Typed symbols borrow the loaded image, so they cannot outlive
+//!   the library that produced them.
+//! - Hybrid linking. Compose `.so` and `.o` inputs at runtime with `scope()` and
+//!   `add_scope()`.
+//! - Deep customization. Override symbol lookup with `pre_find_fn()` / `post_find_fn()`,
+//!   intercept relocations with handlers, and inspect segments with [`loader::LoadHook`].
+//! - Optional advanced features. TLS relocation handling, lazy binding, relocatable object
+//!   loading, logging, and versioned symbol lookup are feature-gated.
+//!
+//! ## Example
 //!
 //! ```rust,no_run
-//! use elf_loader::{Loader, input::ElfBinary};
+//! use elf_loader::{Loader, Result};
 //!
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // 1. Load the library and perform instant linking
-//!     let lib = Loader::new().load_dylib(ElfBinary::new("my_lib", &[]))?
+//! extern "C" fn host_double(value: i32) -> i32 {
+//!     value * 2
+//! }
+//!
+//! fn main() -> Result<()> {
+//!     let lib = Loader::new()
+//!         .load_dylib("path/to/plugin.so")?
 //!         .relocator()
-//!         .relocate()?; // Complete all relocations
+//!         .pre_find_fn(|name| {
+//!             if name == "host_double" {
+//!                 Some(host_double as *const ())
+//!             } else {
+//!                 None
+//!             }
+//!         })
+//!         .relocate()?;
 //!
-//!     // 2. Safely retrieve and call the function
-//!     let awesome_func = unsafe {
-//!         lib.get::<fn(i32) -> i32>("awesome_func").ok_or("symbol not found")?
+//!     let run = unsafe {
+//!         lib.get::<extern "C" fn(i32) -> i32>("run")
+//!             .expect("symbol `run` not found")
 //!     };
-//!     let result = awesome_func(42);
-//!     
+//!     assert_eq!(run(21), 42);
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## Feature Flags
+//!
+//! - `tls` (default): enables TLS relocation handling. For TLS-using modules, start from
+//!   [`Loader::with_default_tls_resolver`] or provide a custom TLS resolver.
+//! - `lazy-binding`: enables `Relocator::lazy` and PLT/GOT lazy binding.
+//! - `object`: enables `Loader::load_object` and relocatable object (`ET_REL`) loading.
+//! - `version`: enables version-aware symbol lookup via `ElfCore::get_version`.
+//! - `log`, `portable-atomic`, and `use-syscall`: optional integrations for diagnostics and
+//!   specialized targets.
+//!
+//! ## More
+//!
+//! - The [`examples`](https://github.com/weizhiao/elf_loader/tree/main/examples) directory
+//!   covers loading from memory, lifecycle hooks, relocation handlers, and object loading.
+//! - The crate currently targets `x86_64`, `x86`, `aarch64`, `arm`, `riscv64`, `riscv32`,
+//!   and `loongarch64`.
+//! - Relocatable object support is currently centered on `x86_64`.
+#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 #![no_std]
 #![warn(
     clippy::unnecessary_wraps,
@@ -78,6 +115,8 @@ pub mod image;
 pub mod input;
 pub mod loader;
 mod logging;
+#[cfg(feature = "object")]
+mod object;
 pub mod os;
 pub mod relocation;
 mod segment;
