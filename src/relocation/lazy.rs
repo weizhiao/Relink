@@ -7,7 +7,7 @@ mod enabled {
         arch::prepare_lazy_bind,
         elf::ElfRelType,
         relocate_lazy_binding_missing_got_error,
-        relocation::{BindingOptions, RelocValue, SymbolLookup},
+        relocation::{BindingOptions, RelocAddr, SymbolLookup},
         sync::Arc,
         tls::lookup_tls_get_addr,
     };
@@ -17,7 +17,7 @@ mod enabled {
     struct LazyScope<D = ()> {
         libs: Arc<[LoadedCore<D>]>,
         custom_scope: Option<Box<dyn SymbolLookup + Send + Sync>>,
-        tls_get_addr: usize,
+        tls_get_addr: RelocAddr,
     }
 
     impl<D> SymbolLookup for LazyScope<D> {
@@ -63,21 +63,21 @@ mod enabled {
 
                 let got = lazy_binding_got(image)?;
                 let core = image.core_ref();
-                prepare_lazy_bind(got.as_ptr(), Arc::as_ptr(&core.inner) as usize);
+                prepare_lazy_bind(got.as_ptr(), RelocAddr::from_ptr(Arc::as_ptr(&core.inner)));
             }
             Ok(())
         }
 
-        pub(crate) fn relocate_jump_slot(&self, base: usize, rel: &ElfRelType) -> bool {
+        pub(crate) fn relocate_jump_slot(&self, base: RelocAddr, rel: &ElfRelType) -> bool {
             if !self.is_lazy() {
                 return false;
             }
 
-            let addr = RelocValue::new(base) + rel.r_offset();
+            let addr = base.offset(rel.r_offset());
             let ptr = addr.as_mut_ptr::<usize>();
             unsafe {
                 let origin_val = ptr.read();
-                let new_val = origin_val + base;
+                let new_val = base.offset(origin_val).into_inner();
                 ptr.write(new_val);
             }
             true
@@ -172,12 +172,12 @@ mod enabled {
 
         let scope = unsafe { dynamic_info.lazy.scope.as_ref().unwrap_unchecked() };
         let symbol = match scope.lookup(syminfo.name()) {
-            Some(symbol) => symbol as usize,
+            Some(symbol) => RelocAddr::from_ptr(symbol),
             None => lazy_bind_unresolved_symbol(dylib.name.as_str(), syminfo.name()),
         };
 
-        segments.write(rela.r_offset(), RelocValue::new(symbol));
-        symbol
+        segments.write(rela.r_offset(), symbol);
+        symbol.into_inner()
     }
 }
 
@@ -207,7 +207,11 @@ mod disabled {
             Ok(())
         }
 
-        pub(crate) const fn relocate_jump_slot(&self, _base: usize, _rel: &ElfRelType) -> bool {
+        pub(crate) const fn relocate_jump_slot(
+            &self,
+            _base: crate::relocation::RelocAddr,
+            _rel: &ElfRelType,
+        ) -> bool {
             false
         }
     }

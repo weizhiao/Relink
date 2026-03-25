@@ -11,7 +11,8 @@ use crate::{
     loader::{ImageBuilder, LoadHook},
     os::Mmap,
     relocation::{
-        BindingOptions, Relocatable, RelocationHandler, Relocator, SupportLazy, SymbolLookup,
+        BindingOptions, RelocAddr, Relocatable, RelocationHandler, Relocator, SupportLazy,
+        SymbolLookup,
     },
     segment::ElfSegments,
     tls::TlsResolver,
@@ -38,6 +39,10 @@ impl<D> StaticImage<D> {
     }
 
     pub fn entry(&self) -> usize {
+        self.entry_addr().into_inner()
+    }
+
+    pub(crate) fn entry_addr(&self) -> RelocAddr {
         self.inner.entry
     }
 
@@ -59,7 +64,7 @@ struct StaticImageInner<D> {
     name: String,
 
     /// Entry point of the executable
-    entry: usize,
+    entry: RelocAddr,
 
     /// User-defined data
     user_data: D,
@@ -98,7 +103,7 @@ impl<D: 'static> Relocatable<D> for RawExec<D> {
     {
         match self.inner {
             ExecImageInner::Dynamic(image) => {
-                let entry = image.entry();
+                let entry = image.entry_addr();
                 let inner = image.relocate_impl(
                     scope,
                     pre_find,
@@ -113,7 +118,7 @@ impl<D: 'static> Relocatable<D> for RawExec<D> {
                 })
             }
             ExecImageInner::Static(image) => Ok(LoadedExec {
-                entry: image.entry(),
+                entry: image.entry_addr(),
                 inner: LoadedExecInner::Static(image),
             }),
         }
@@ -228,7 +233,7 @@ impl<D: 'static> RawExec<D> {
 #[derive(Clone, Debug)]
 pub struct LoadedExec<D> {
     /// Entry point of the executable.
-    entry: usize,
+    entry: RelocAddr,
     /// The relocated ELF object.
     inner: LoadedExecInner<D>,
 }
@@ -243,7 +248,7 @@ impl<D> LoadedExec<D> {
     /// Returns the entry point of the executable.
     #[inline]
     pub fn entry(&self) -> usize {
-        self.entry
+        self.entry.into_inner()
     }
 
     /// Returns the name of the executable.
@@ -315,7 +320,7 @@ impl<D> StaticImage<D> {
         // Parse all program headers
         builder.parse_phdrs(phdrs)?;
 
-        let entry = builder.ehdr.e_entry as usize;
+        let entry = RelocAddr::new(builder.ehdr.e_entry as usize);
         let (tls_mod_id, tls_tp_offset) = if let Some(info) = &builder.tls_info {
             // Static executables always use static TLS if PT_TLS is present.
             let (mod_id, offset) = Tls::register_static(info)?;

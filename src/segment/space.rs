@@ -1,4 +1,7 @@
-use crate::{Result, relocation::RelocValue};
+use crate::{
+    Result,
+    relocation::{RelocAddr, RelocValue},
+};
 use core::{ffi::c_void, fmt::Debug};
 
 /// The Memory mapping of elf object
@@ -138,7 +141,7 @@ impl ElfSegments {
     #[inline]
     pub(crate) fn get_ptr<T>(&self, offset: usize) -> *const T {
         debug_assert!(self.contains_offset(offset));
-        (self.base() + offset) as *const T
+        self.base_addr().offset(offset).as_ptr()
     }
 
     /// Get a mutable pointer from the mapped memory
@@ -160,7 +163,7 @@ impl ElfSegments {
     /// Write a value into the mapped memory
     #[inline]
     pub(crate) fn write<T>(&self, r_offset: usize, val: RelocValue<T>) {
-        unsafe { self.get_mut_ptr::<T>(r_offset).write(val.0) };
+        unsafe { self.get_mut_ptr::<T>(r_offset).write(val.into_inner()) };
     }
 
     /// Get the base address of the mapped memory
@@ -171,6 +174,11 @@ impl ElfSegments {
     /// The base address
     #[inline]
     pub fn base(&self) -> usize {
-        self.memory as usize - self.offset
+        self.base_addr().into_inner()
+    }
+
+    #[inline]
+    pub(crate) fn base_addr(&self) -> RelocAddr {
+        RelocAddr::from_ptr(self.memory).relative_to(self.offset)
     }
 }

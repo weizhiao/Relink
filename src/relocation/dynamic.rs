@@ -7,7 +7,7 @@ use crate::{
     image::{DynamicImage, LoadedCore},
     logging,
     relocation::{
-        BindingOptions, RelocArtifacts, RelocHelper, RelocValue, RelocationHandler,
+        BindingOptions, RelocAddr, RelocArtifacts, RelocHelper, RelocValue, RelocationHandler,
         ResolvedBinding, SymbolLookup, likely, reloc_error, unlikely,
     },
     tls::{handle_tls_reloc, lookup_tls_get_addr},
@@ -20,8 +20,8 @@ use core::{num::NonZeroUsize, ptr::null_mut};
 /// # Safety
 /// The address must point to a valid IFUNC function.
 #[inline(always)]
-unsafe fn resolve_ifunc(addr: RelocValue<usize>) -> RelocValue<usize> {
-    let ifunc: fn() -> usize = unsafe { core::mem::transmute(addr.0) };
+unsafe fn resolve_ifunc(addr: RelocAddr) -> RelocAddr {
+    let ifunc: fn() -> usize = unsafe { core::mem::transmute(addr.into_inner()) };
     RelocValue::new(ifunc())
 }
 
@@ -166,7 +166,7 @@ impl<D> DynamicImage<D> {
         PostH: RelocationHandler + ?Sized,
     {
         let core = self.core_ref();
-        let base = core.base();
+        let base = core.base_addr();
         let segments = core.segments();
         let reloc = self.relocation();
         binding.prepare_plt(self)?;
@@ -178,7 +178,7 @@ impl<D> DynamicImage<D> {
             }
             let r_type = rel.r_type() as u32;
             let r_sym = rel.r_symbol();
-            let r_addend = rel.r_addend(base);
+            let r_addend = rel.r_addend(base.into_inner());
 
             // Handle jump slot relocations
             if likely(r_type == REL_JUMP_SLOT) {
@@ -192,7 +192,7 @@ impl<D> DynamicImage<D> {
                 }
             } else if unlikely(r_type == REL_IRELATIVE) {
                 // Handle indirect function relocations
-                let addr = RelocValue::new(base) + r_addend;
+                let addr = base.addend(r_addend);
                 segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 continue;
             } else if unlikely(r_type == REL_TLSDESC) {
@@ -218,7 +218,7 @@ impl<D> DynamicImage<D> {
         let core = self.core_ref();
         let reloc = self.relocation();
         let segments = core.segments();
-        let base = core.base();
+        let base = core.base_addr();
 
         match reloc.relative {
             RelativeRel::Rel(rel) => {
@@ -226,8 +226,8 @@ impl<D> DynamicImage<D> {
                 // Apply all relative relocations: new_value = base_address + addend
                 rel.iter().for_each(|rel| {
                     debug_assert!(rel.r_type() == REL_RELATIVE as usize);
-                    let r_addend = rel.r_addend(base);
-                    let val = RelocValue::new(base) + r_addend;
+                    let r_addend = rel.r_addend(base.into_inner());
+                    let val = base.addend(r_addend);
                     segments.write(rel.r_offset(), val);
                 })
             }
@@ -240,7 +240,7 @@ impl<D> DynamicImage<D> {
                         if (value & 1) == 0 {
                             // Single relocation entry
                             reloc_addr = core.segments().get_mut_ptr(value);
-                            reloc_addr.write(base + reloc_addr.read());
+                            reloc_addr.write(base.offset(reloc_addr.read()).into_inner());
                             reloc_addr = reloc_addr.add(1);
                         } else {
                             // Bitmap of relocations
@@ -250,7 +250,7 @@ impl<D> DynamicImage<D> {
                                 bitmap >>= 1;
                                 if (bitmap & 1) != 0 {
                                     let ptr = reloc_addr.add(idx);
-                                    ptr.write(base + ptr.read());
+                                    ptr.write(base.offset(ptr.read()).into_inner());
                                 }
                                 idx += 1;
                             }
@@ -284,7 +284,7 @@ impl<D> DynamicImage<D> {
         let core = self.core_ref();
         let reloc = self.relocation();
         let segments = core.segments();
-        let base = core.base();
+        let base = core.base_addr();
 
         // Process each dynamic relocation entry
         for rel in reloc.dynrel {
@@ -293,7 +293,7 @@ impl<D> DynamicImage<D> {
             }
             let r_type = rel.r_type() as u32;
             let r_sym = rel.r_symbol();
-            let r_addend = rel.r_addend(base);
+            let r_addend = rel.r_addend(base.into_inner());
 
             // Handle `REL_NONE` first because some architectures use `0` as a
             // sentinel for unsupported relocation classes such as TLSDESC.
@@ -304,7 +304,7 @@ impl<D> DynamicImage<D> {
             if r_type == REL_GOT || r_type == REL_SYMBOLIC {
                 // Handle GOT and symbolic relocations
                 if let Some(symbol) = helper.find_symbol(r_sym) {
-                    segments.write(rel.r_offset(), symbol + r_addend);
+                    segments.write(rel.r_offset(), symbol.addend(r_addend));
                     continue;
                 }
             } else if r_type == REL_COPY {
@@ -321,7 +321,7 @@ impl<D> DynamicImage<D> {
                 }
             } else if r_type == REL_IRELATIVE {
                 // Handle indirect function relocations
-                let addr = RelocValue::new(base) + r_addend;
+                let addr = base.addend(r_addend);
                 segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 continue;
             } else if r_type == REL_DTPOFF

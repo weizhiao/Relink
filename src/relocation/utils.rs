@@ -11,10 +11,7 @@ use crate::{
     tls::TlsDescArgs,
 };
 use alloc::{vec, vec::Vec};
-use core::{
-    ops::{Add, Sub},
-    ptr::null,
-};
+use core::ptr::null;
 use elf::abi::STT_GNU_IFUNC;
 
 /// Internal context for managing relocation state and handlers.
@@ -27,7 +24,7 @@ pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Size
     pub(crate) post_handler: &'find PostH,
     pub(crate) dependency_flags: Vec<bool>,
     #[allow(dead_code)]
-    pub(crate) tls_get_addr: usize,
+    pub(crate) tls_get_addr: RelocAddr,
     pub(crate) tls_desc_args: TlsDescArgs,
 }
 
@@ -50,7 +47,7 @@ where
         post_find: &'find PostS,
         pre_handler: &'find PreH,
         post_handler: &'find PostH,
-        tls_get_addr: usize,
+        tls_get_addr: RelocAddr,
     ) -> Self {
         let dependency_flags = vec![false; scope.len()];
         Self {
@@ -93,7 +90,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn find_symbol(&mut self, r_sym: usize) -> Option<RelocValue<usize>> {
+    pub(crate) fn find_symbol(&mut self, r_sym: usize) -> Option<RelocAddr> {
         let (symbol, idx) = find_symbol_addr(
             self.pre_find,
             self.post_find,
@@ -421,91 +418,82 @@ where
 ///
 /// This type represents computed addresses or offsets used in relocations.
 /// It supports addition and subtraction for address calculations.
+#[must_use = "relocation arithmetic returns a new value"]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub(crate) struct RelocValue<T>(pub T);
+pub(crate) struct RelocValue<T>(T);
+
+pub(crate) type RelocAddr = RelocValue<usize>;
+pub(crate) type RelocSWord32 = RelocValue<i32>;
+pub(crate) type RelocWord32 = RelocValue<u32>;
 
 impl<T> RelocValue<T> {
     #[inline]
     pub const fn new(val: T) -> Self {
         Self(val)
     }
+
+    #[inline]
+    pub fn into_inner(self) -> T {
+        self.0
+    }
 }
 
-impl RelocValue<usize> {
+impl RelocAddr {
     #[inline]
-    #[allow(dead_code)]
+    pub fn from_ptr<T>(ptr: *const T) -> Self {
+        Self(ptr as usize)
+    }
+
+    #[inline]
+    pub fn null() -> Self {
+        Self::from_ptr(null::<()>())
+    }
+
+    #[inline]
     pub const fn as_ptr<T>(self) -> *const T {
         self.0 as *const T
     }
 
     #[inline]
-    #[cfg(feature = "lazy-binding")]
     pub const fn as_mut_ptr<T>(self) -> *mut T {
         self.0 as *mut T
     }
-}
-
-impl Add<usize> for RelocValue<usize> {
-    type Output = Self;
 
     #[inline]
-    fn add(self, rhs: usize) -> Self::Output {
-        RelocValue(self.0.wrapping_add(rhs))
+    pub const fn offset(self, rhs: usize) -> Self {
+        Self(self.0.wrapping_add(rhs))
     }
-}
-
-impl Add<isize> for RelocValue<usize> {
-    type Output = Self;
 
     #[inline]
-    fn add(self, rhs: isize) -> Self::Output {
-        RelocValue(self.0.wrapping_add_signed(rhs))
+    pub const fn addend(self, rhs: isize) -> Self {
+        Self(self.0.wrapping_add_signed(rhs))
     }
-}
-
-impl Sub<usize> for RelocValue<usize> {
-    type Output = Self;
 
     #[inline]
-    fn sub(self, rhs: usize) -> Self::Output {
-        RelocValue(self.0.wrapping_sub(rhs))
+    pub const fn relative_to(self, place: usize) -> Self {
+        Self(self.0.wrapping_sub(place))
     }
-}
 
-impl From<usize> for RelocValue<usize> {
     #[inline]
-    fn from(val: usize) -> Self {
-        Self(val)
+    pub fn try_into_sword32(self) -> Result<RelocSWord32> {
+        i32::try_from(self.0 as isize)
+            .map(RelocValue::new)
+            .map_err(|_| relocate_integral_conversion_out_of_range_error())
     }
-}
-
-impl From<RelocValue<usize>> for usize {
-    #[inline]
-    fn from(value: RelocValue<usize>) -> Self {
-        value.0
-    }
-}
-
-impl TryFrom<RelocValue<usize>> for RelocValue<i32> {
-    type Error = crate::Error;
 
     #[inline]
-    fn try_from(value: RelocValue<usize>) -> Result<Self> {
-        i32::try_from(value.0 as isize)
-            .map(RelocValue)
+    pub fn try_into_word32(self) -> Result<RelocWord32> {
+        u32::try_from(self.0)
+            .map(RelocValue::new)
             .map_err(|_| relocate_integral_conversion_out_of_range_error())
     }
 }
 
-impl TryFrom<RelocValue<usize>> for RelocValue<u32> {
-    type Error = crate::Error;
-
+impl RelocSWord32 {
     #[inline]
-    fn try_from(value: RelocValue<usize>) -> Result<Self> {
-        u32::try_from(value.0)
-            .map(RelocValue)
-            .map_err(|_| relocate_integral_conversion_out_of_range_error())
+    pub const fn to_ne_bytes(self) -> [u8; 4] {
+        self.0.to_ne_bytes()
     }
 }
 
@@ -524,21 +512,21 @@ impl<'temp, D> SymDef<'temp, D> {
     /// For regular symbols, returns base + st_value.
     /// For IFUNC symbols, calls the resolver function and returns its result.
     /// For undefined weak symbols, returns null.
-    pub fn convert(self) -> *const () {
+    pub(crate) fn convert(self) -> RelocAddr {
         if likely(self.sym.is_some()) {
-            let base = self.lib.base();
+            let base = self.lib.base_addr();
             let sym = unsafe { self.sym.unwrap_unchecked() };
-            let addr = base + sym.st_value();
+            let addr = base.offset(sym.st_value());
             if likely(sym.st_type() != STT_GNU_IFUNC) {
-                addr as _
+                addr
             } else {
                 // IFUNC会在运行时确定地址，这里使用的是ifunc的返回值
-                let ifunc: fn() -> usize = unsafe { core::mem::transmute(addr) };
-                ifunc() as _
+                let ifunc: fn() -> usize = unsafe { core::mem::transmute(addr.into_inner()) };
+                RelocAddr::new(ifunc())
             }
         } else {
             // 未定义的弱符号返回null
-            null()
+            RelocAddr::null()
         }
     }
 }
@@ -593,7 +581,7 @@ pub(crate) fn find_symbol_addr<PreS, PostS, D>(
     symtab: &SymbolTable,
     scope: &[LoadedCore<D>],
     r_sym: usize,
-) -> Option<(RelocValue<usize>, Option<usize>)>
+) -> Option<(RelocAddr, Option<usize>)>
 where
     PreS: SymbolLookup + ?Sized,
     PostS: SymbolLookup + ?Sized,
@@ -605,10 +593,10 @@ where
             core.name(),
             syminfo.name()
         );
-        return Some((RelocValue::new(addr as usize), None));
+        return Some((RelocAddr::from_ptr(addr), None));
     }
     if let Some(res) = find_symdef_impl(core, scope, dynsym, &syminfo) {
-        return Some((RelocValue::new(res.0.convert() as usize), res.1));
+        return Some((res.0.convert(), res.1));
     }
     if let Some(addr) = post_find.lookup(syminfo.name()) {
         logging::trace!(
@@ -616,7 +604,7 @@ where
             core.name(),
             syminfo.name()
         );
-        return Some((RelocValue::new(addr as usize), None));
+        return Some((RelocAddr::from_ptr(addr), None));
     }
     None
 }

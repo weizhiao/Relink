@@ -11,7 +11,7 @@ use crate::{
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolInfo, SymbolTable},
     image::{Symbol, common::DynamicInfo},
     loader::{DynLifecycleHandler, LifecycleContext},
-    relocation::SymDef,
+    relocation::{RelocAddr, SymDef},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{CoreTlsState, TlsDescArgs, TlsInfo, TlsResolver},
@@ -294,7 +294,7 @@ impl<D> LoadedCore<D> {
                     segments,
                     tls_mod_id,
                     actual_tls_tp_offset,
-                    Tls::tls_get_addr as *const () as usize,
+                    RelocAddr::from_ptr(Tls::tls_get_addr as *const ()),
                     Tls::unregister,
                     user_data,
                 )
@@ -360,7 +360,8 @@ impl<D> LoadedCore<D> {
                     sym: Some(sym),
                     lib: unsafe { self.core_ref() },
                 }
-                .convert() as _,
+                .convert()
+                .as_mut_ptr(),
                 pd: PhantomData,
             })
     }
@@ -404,7 +405,8 @@ impl<D> LoadedCore<D> {
                     sym: Some(sym),
                     lib: unsafe { self.core_ref() },
                 }
-                .convert() as _,
+                .convert()
+                .as_mut_ptr(),
                 pd: PhantomData,
             })
     }
@@ -573,7 +575,12 @@ impl<D> ElfCore<D> {
     /// Gets the base address of the ELF object
     #[inline]
     pub fn base(&self) -> usize {
-        self.inner.segments.base()
+        self.base_addr().into_inner()
+    }
+
+    #[inline]
+    pub(crate) fn base_addr(&self) -> RelocAddr {
+        self.inner.segments.base_addr()
     }
 
     /// Gets the memory length of the ELF object map
@@ -625,7 +632,7 @@ impl<D> ElfCore<D> {
     }
 
     #[inline]
-    pub(crate) fn tls_get_addr(&self) -> usize {
+    pub(crate) fn tls_get_addr(&self) -> RelocAddr {
         self.inner.tls.tls_get_addr()
     }
 
@@ -649,7 +656,7 @@ impl<D> ElfCore<D> {
         mut segments: ElfSegments,
         tls_mod_id: Option<usize>,
         tls_tp_offset: Option<isize>,
-        tls_get_addr: usize,
+        tls_get_addr: RelocAddr,
         tls_unregister: fn(usize),
         user_data: D,
     ) -> Self {

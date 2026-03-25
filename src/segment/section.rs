@@ -4,7 +4,7 @@ use crate::{
     elf::{ElfRelType, ElfShdr, Shdr},
     input::ElfReader,
     os::{MapFlags, Mmap, ProtFlags},
-    relocation::{RelocValue, StaticReloc},
+    relocation::{RelocAddr, StaticReloc},
     segment::{
         Address, ElfSegment, ElfSegments, FileMapInfo, PAGE_SIZE, SegmentBuilder, rounddown,
         roundup,
@@ -112,8 +112,8 @@ impl SectionSegments {
 
 /// Manages PLT (Procedure Linkage Table) and GOT (Global Offset Table) sections
 pub(crate) struct PltGotSection {
-    got_base: usize,                // Base address of GOT
-    plt_base: usize,                // Base address of PLT
+    got_base: RelocAddr,            // Base address of GOT
+    plt_base: RelocAddr,            // Base address of PLT
     got_idx: usize,                 // Current index in GOT
     plt_idx: usize,                 // Current index in PLT
     got_map: HashMap<usize, usize>, // Map from symbol index to GOT entry index
@@ -125,20 +125,20 @@ pub(crate) struct UsizeEntry<'entry>(&'entry mut usize);
 
 impl UsizeEntry<'_> {
     /// Update the value pointed to by this entry
-    pub(crate) fn update(&mut self, value: RelocValue<usize>) {
-        *self.0 = value.into();
+    pub(crate) fn update(&mut self, value: RelocAddr) {
+        *self.0 = value.into_inner();
     }
 
     /// Get the address of the value pointed to by this entry
-    pub(crate) fn get_addr(&self) -> RelocValue<usize> {
-        RelocValue(self.0 as *const _ as usize)
+    pub(crate) fn get_addr(&self) -> RelocAddr {
+        RelocAddr::from_ptr(self.0 as *const _)
     }
 }
 
 /// Represents a GOT entry that may or may not be occupied
 pub(crate) enum GotEntry<'got> {
     /// Entry is already occupied with a value
-    Occupied(RelocValue<usize>),
+    Occupied(RelocAddr),
     /// Entry is vacant and can be filled
     Vacant(UsizeEntry<'got>),
 }
@@ -146,7 +146,7 @@ pub(crate) enum GotEntry<'got> {
 /// Represents a PLT entry that may or may not be occupied
 pub(crate) enum PltEntry<'plt> {
     /// Entry is already occupied with a value
-    Occupied(RelocValue<usize>),
+    Occupied(RelocAddr),
     /// Entry is vacant and can be filled
     Vacant {
         plt: &'plt mut [u8],   // PLT entry data
@@ -235,15 +235,15 @@ impl PltGotSection {
             plt_idx: 0,
             got_map: HashMap::new(),
             plt_map: HashMap::new(),
-            got_base: got.sh_addr as usize,
-            plt_base: plt.sh_addr as usize,
+            got_base: RelocAddr::new(got.sh_addr as usize),
+            plt_base: RelocAddr::new(plt.sh_addr as usize),
         }
     }
 
     /// Adjust base addresses by adding an offset (used during relocation)
-    pub(crate) fn rebase(&mut self, base: usize) {
-        self.got_base += base;
-        self.plt_base += base;
+    pub(crate) fn rebase(&mut self, base: RelocAddr) {
+        self.got_base = self.got_base.offset(base.into_inner());
+        self.plt_base = self.plt_base.offset(base.into_inner());
     }
 
     /// Add or retrieve a GOT entry for a symbol
@@ -253,14 +253,14 @@ impl PltGotSection {
         match self.got_map.entry(r_sym) {
             Entry::Occupied(mut entry) => {
                 // Return existing GOT entry
-                GotEntry::Occupied(RelocValue(*entry.get_mut() * ent_size + base))
+                GotEntry::Occupied(base.offset(*entry.get_mut() * ent_size))
             }
             Entry::Vacant(entry) => {
                 // Create new GOT entry
                 let idx = *entry.insert(self.got_idx);
                 self.got_idx += 1;
                 GotEntry::Vacant(unsafe {
-                    UsizeEntry(&mut *((idx * ent_size + base) as *mut usize))
+                    UsizeEntry(&mut *base.offset(idx * ent_size).as_mut_ptr())
                 })
             }
         }
@@ -275,7 +275,7 @@ impl PltGotSection {
         match self.plt_map.entry(r_sym) {
             Entry::Occupied(mut entry) => {
                 // Return existing PLT entry
-                PltEntry::Occupied(RelocValue(*entry.get_mut() * plt_ent_size + plt_base))
+                PltEntry::Occupied(plt_base.offset(*entry.get_mut() * plt_ent_size))
             }
             Entry::Vacant(entry) => {
                 // Create new PLT entry
@@ -288,7 +288,7 @@ impl PltGotSection {
 
                 let plt = unsafe {
                     core::slice::from_raw_parts_mut(
-                        (plt_idx * plt_ent_size + plt_base) as *mut u8,
+                        plt_base.offset(plt_idx * plt_ent_size).as_mut_ptr(),
                         plt_ent_size,
                     )
                 };
@@ -299,7 +299,7 @@ impl PltGotSection {
                 PltEntry::Vacant {
                     plt,
                     got: unsafe {
-                        UsizeEntry(&mut *((got_idx * got_ent_size + got_base) as *mut usize))
+                        UsizeEntry(&mut *got_base.offset(got_idx * got_ent_size).as_mut_ptr())
                     },
                 }
             }

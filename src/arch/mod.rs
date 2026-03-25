@@ -64,10 +64,10 @@ pub const REL_NONE: u32 = 0;
 
 #[cfg(feature = "lazy-binding")]
 #[inline]
-pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: usize) {
+pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: crate::relocation::RelocAddr) {
     // 这是安全的，延迟绑定时库是存在的
     unsafe {
-        got.add(DYLIB_OFFSET).write(dylib);
+        got.add(DYLIB_OFFSET).write(dylib.into_inner());
         got.add(RESOLVE_FUNCTION_OFFSET)
             .write(dl_runtime_resolve as *const () as usize);
     }

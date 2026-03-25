@@ -10,7 +10,7 @@ use crate::{
     loader::{ImageBuilder, LifecycleContext, LoadHook},
     logging,
     os::Mmap,
-    relocation::DynamicRelocation,
+    relocation::{DynamicRelocation, RelocAddr},
     segment::ELFRelro,
     tls::{CoreTlsState, TlsResolver},
 };
@@ -94,7 +94,7 @@ where
     D: 'static,
 {
     /// Entry point of the ELF object.
-    entry: usize,
+    entry: RelocAddr,
     /// PT_INTERP segment value (interpreter path).
     interp: Option<&'static str>,
     /// Program headers.
@@ -108,7 +108,7 @@ where
 impl<D> core::fmt::Debug for DynamicImage<D> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("DynamicImage")
-            .field("entry", &format_args!("0x{:x}", self.entry))
+            .field("entry", &format_args!("0x{:x}", self.entry.into_inner()))
             .field("module", &self.module)
             .field("extra", &self.extra)
             .finish()
@@ -119,6 +119,11 @@ impl<D> DynamicImage<D> {
     /// Gets the entry point of the ELF object.
     #[inline]
     pub(crate) fn entry(&self) -> usize {
+        self.entry_addr().into_inner()
+    }
+
+    #[inline]
+    pub(crate) fn entry_addr(&self) -> RelocAddr {
         self.entry
     }
 
@@ -131,7 +136,7 @@ impl<D> DynamicImage<D> {
         self.module.tls_tp_offset()
     }
 
-    pub(crate) fn tls_get_addr(&self) -> usize {
+    pub(crate) fn tls_get_addr(&self) -> RelocAddr {
         self.module.tls_get_addr()
     }
 
@@ -341,8 +346,14 @@ impl<D: 'static> DynamicImage<D> {
 
         // Build and return the relocated common part
         Ok(DynamicImage {
-            entry: builder.ehdr.e_entry as usize
-                + if is_dylib { builder.segments.base() } else { 0 },
+            entry: if is_dylib {
+                builder
+                    .segments
+                    .base_addr()
+                    .offset(builder.ehdr.e_entry as usize)
+            } else {
+                RelocAddr::new(builder.ehdr.e_entry as usize)
+            },
             interp: builder
                 .interp
                 .map(|s| unsafe { CStr::from_ptr(s.as_ptr()).to_str().unwrap() }),
@@ -401,7 +412,7 @@ impl<D: 'static> DynamicImage<D> {
                     tls: CoreTlsState::new(
                         tls_mod_id,
                         tls_tp_offset,
-                        Tls::tls_get_addr as *const () as usize,
+                        RelocAddr::from_ptr(Tls::tls_get_addr as *const ()),
                         Tls::unregister,
                     ),
                     segments: builder.segments,

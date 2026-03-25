@@ -9,7 +9,8 @@ use crate::{
     image::{CoreInner, ElfCore, LoadedCore},
     loader::{DynLifecycleHandler, ObjectBuilder},
     relocation::{
-        BindingOptions, Relocatable, RelocationHandler, Relocator, StaticRelocation, SymbolLookup,
+        BindingOptions, RelocAddr, Relocatable, RelocationHandler, Relocator, StaticRelocation,
+        SymbolLookup,
     },
     segment::section::PltGotSection,
     sync::{Arc, AtomicBool},
@@ -66,7 +67,7 @@ impl<D: 'static> RawObject<D> {
             tls: CoreTlsState::new(
                 builder.tls_mod_id,
                 builder.tls_tp_offset,
-                T::tls_get_addr as *const () as usize,
+                RelocAddr::from_ptr(T::tls_get_addr as *const ()),
                 T::unregister,
             ),
             segments: builder.segments,

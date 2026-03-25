@@ -1,6 +1,7 @@
 #[cfg(feature = "tls")]
 mod enabled {
     use super::super::defs::TlsDescDynamicArg;
+    use crate::relocation::RelocAddr;
     use alloc::{boxed::Box, vec::Vec};
 
     #[derive(Default)]
@@ -19,7 +20,7 @@ mod enabled {
     pub(crate) struct CoreTlsState {
         mod_id: Option<usize>,
         tp_offset: Option<isize>,
-        tls_get_addr: usize,
+        tls_get_addr: RelocAddr,
         unregister: fn(usize),
         desc_args: Box<[Box<TlsDescDynamicArg>]>,
     }
@@ -28,7 +29,7 @@ mod enabled {
         pub(crate) fn new(
             mod_id: Option<usize>,
             tp_offset: Option<isize>,
-            tls_get_addr: usize,
+            tls_get_addr: RelocAddr,
             unregister: fn(usize),
         ) -> Self {
             Self {
@@ -51,7 +52,7 @@ mod enabled {
         }
 
         #[inline]
-        pub(crate) fn tls_get_addr(&self) -> usize {
+        pub(crate) fn tls_get_addr(&self) -> RelocAddr {
             self.tls_get_addr
         }
 
@@ -70,6 +71,8 @@ mod enabled {
 
 #[cfg(not(feature = "tls"))]
 mod disabled {
+    use crate::relocation::RelocAddr;
+
     #[derive(Default)]
     pub(crate) struct TlsDescArgs;
 
@@ -83,7 +86,7 @@ mod disabled {
         pub(crate) fn new(
             _mod_id: Option<usize>,
             _tp_offset: Option<isize>,
-            _tls_get_addr: usize,
+            _tls_get_addr: RelocAddr,
             _unregister: fn(usize),
         ) -> Self {
             Self
@@ -100,8 +103,8 @@ mod disabled {
         }
 
         #[inline]
-        pub(crate) fn tls_get_addr(&self) -> usize {
-            0
+        pub(crate) fn tls_get_addr(&self) -> RelocAddr {
+            RelocAddr::null()
         }
 
         #[inline]

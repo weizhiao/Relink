@@ -2,6 +2,7 @@ use crate::{
     Result,
     elf::Phdr,
     os::{Mmap, ProtFlags},
+    relocation::RelocAddr,
 };
 use core::ffi::c_void;
 
@@ -15,7 +16,7 @@ use super::{MASK, PAGE_SIZE, roundup};
 #[allow(unused)]
 pub(crate) struct ELFRelro {
     /// Virtual address of the RELRO segment
-    addr: usize,
+    addr: RelocAddr,
     /// Size of the RELRO segment
     len: usize,
     /// Function pointer to the mprotect function
@@ -31,9 +32,9 @@ impl ELFRelro {
     ///
     /// # Returns
     /// A new ELFRelro instance
-    pub(crate) fn new<M: Mmap>(phdr: &Phdr, base: usize) -> ELFRelro {
+    pub(crate) fn new<M: Mmap>(phdr: &Phdr, base: RelocAddr) -> ELFRelro {
         ELFRelro {
-            addr: base + phdr.p_vaddr as usize,
+            addr: base.offset(phdr.p_vaddr as usize),
             len: phdr.p_memsz as usize,
             mprotect: M::mprotect,
         }
@@ -48,8 +49,9 @@ impl ELFRelro {
     /// * `Err(Error)` - If RELRO protection fails
     #[inline]
     pub(crate) fn relro(&self) -> Result<()> {
-        let end = roundup(self.addr + self.len, PAGE_SIZE);
-        let start = self.addr & MASK;
+        let addr = self.addr.into_inner();
+        let end = roundup(addr + self.len, PAGE_SIZE);
+        let start = addr & MASK;
         let start_addr = start as *mut c_void;
         unsafe {
             (self.mprotect)(start_addr, end - start, ProtFlags::PROT_READ)?;

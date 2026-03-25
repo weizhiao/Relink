@@ -17,8 +17,8 @@ pub(crate) use lazy::dl_fixup;
 pub(crate) use r#static::{StaticReloc, StaticRelocation};
 pub(crate) use traits::{Relocatable, SupportLazy};
 pub(crate) use utils::{
-    RelocArtifacts, RelocHelper, RelocValue, Relocator, SymDef, find_symdef_impl, likely,
-    reloc_error, unlikely,
+    RelocAddr, RelocArtifacts, RelocHelper, RelocSWord32, RelocValue, RelocWord32, Relocator,
+    SymDef, find_symdef_impl, likely, reloc_error, unlikely,
 };
 
 pub use traits::{BindingOptions, RelocationContext, RelocationHandler, SymbolLookup};

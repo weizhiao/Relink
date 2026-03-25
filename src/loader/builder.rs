@@ -3,7 +3,7 @@ use crate::{
     Result,
     elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfRelType, ElfShdr, ElfSymbol, SymbolTable},
     os::Mmap,
-    relocation::StaticRelocation,
+    relocation::{RelocAddr, StaticRelocation},
     segment::{
         ELFRelro, ElfSegments, SegmentBuilder,
         program::ProgramSegments,
@@ -147,7 +147,7 @@ where
             }
 
             // Store GNU_RELRO segment information
-            PT_GNU_RELRO => self.relro = Some(ELFRelro::new::<M>(phdr, self.segments.base())),
+            PT_GNU_RELRO => self.relro = Some(ELFRelro::new::<M>(phdr, self.segments.base_addr())),
 
             // Store program header table mapping
             PT_PHDR => {
@@ -280,21 +280,26 @@ struct ObjectSectionData {
 }
 
 impl<T: TlsResolver, D> ObjectBuilder<T, D> {
-    fn rebase_loaded_sections(shdrs: &mut [ElfShdr], pltgot: &mut PltGotSection, base: usize) {
-        shdrs
-            .iter_mut()
-            .for_each(|shdr| shdr.sh_addr = (shdr.sh_addr as usize + base) as _);
+    fn rebase_loaded_sections(shdrs: &mut [ElfShdr], pltgot: &mut PltGotSection, base: RelocAddr) {
+        shdrs.iter_mut().for_each(|shdr| {
+            shdr.sh_addr = base.offset(shdr.sh_addr as usize).into_inner() as _;
+        });
         pltgot.rebase(base);
     }
 
-    fn prepare_symbol_table(symtab_shdr: &ElfShdr, shdrs: &[ElfShdr], base: usize) -> SymbolTable {
+    fn prepare_symbol_table(
+        symtab_shdr: &ElfShdr,
+        shdrs: &[ElfShdr],
+        base: RelocAddr,
+    ) -> SymbolTable {
         let symbols: &mut [ElfSymbol] = symtab_shdr.content_mut();
         for symbol in symbols {
             if symbol.st_type() == STT_FILE || symbol.st_shndx() == SHN_UNDEF as usize {
                 continue;
             }
-            let section_base = shdrs[symbol.st_shndx()].sh_addr as usize - base;
-            symbol.set_value(section_base + symbol.st_value());
+            let section_base = RelocAddr::new(shdrs[symbol.st_shndx()].sh_addr as usize)
+                .relative_to(base.into_inner());
+            symbol.set_value(section_base.offset(symbol.st_value()).into_inner());
         }
 
         SymbolTable::from_shdrs(symtab_shdr, shdrs)
@@ -303,12 +308,17 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
     fn prepare_relocation_section(
         relocation_shdr: &ElfShdr,
         shdrs: &[ElfShdr],
-        base: usize,
+        base: RelocAddr,
     ) -> &'static [ElfRelType] {
         let rels: &mut [ElfRelType] = relocation_shdr.content_mut();
-        let section_base = shdrs[relocation_shdr.sh_info as usize].sh_addr as usize;
+        let section_base = RelocAddr::new(shdrs[relocation_shdr.sh_info as usize].sh_addr as usize);
         for rel in rels {
-            rel.set_offset(section_base + rel.r_offset() - base);
+            rel.set_offset(
+                section_base
+                    .offset(rel.r_offset())
+                    .relative_to(base.into_inner())
+                    .into_inner(),
+            );
         }
 
         relocation_shdr.content()
@@ -319,7 +329,7 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
         unsafe { core::mem::transmute(array) }
     }
 
-    fn prepare_section_data(shdrs: &[ElfShdr], base: usize) -> ObjectSectionData {
+    fn prepare_section_data(shdrs: &[ElfShdr], base: RelocAddr) -> ObjectSectionData {
         let mut symtab = None;
         let mut relocation = Vec::with_capacity(shdrs.len());
         let mut init_array = None;
@@ -369,7 +379,7 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
         mut pltgot: PltGotSection,
         user_data: D,
     ) -> Self {
-        let base = segments.base();
+        let base = segments.base_addr();
         Self::rebase_loaded_sections(shdrs, &mut pltgot, base);
         let ObjectSectionData {
             symtab,
