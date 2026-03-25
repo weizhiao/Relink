@@ -1,7 +1,10 @@
 use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner, UserDataLoaderContext};
 use crate::{
-    Result,
-    elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfRelType, ElfShdr, ElfSymbol, SymbolTable},
+    ParsePhdrError, RelocationError, Result,
+    elf::{
+        ELF_REL_SECTION_NAME, ELF_REL_SECTION_TYPE, ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs,
+        ElfRelType, ElfShdr, ElfSymbol, SymbolTable, relocation_section_name,
+    },
     os::Mmap,
     relocation::{RelocAddr, StaticRelocation},
     segment::{
@@ -142,8 +145,10 @@ where
         match phdr.p_type {
             // Parse the .dynamic section
             PT_DYNAMIC => {
-                self.dynamic_ptr =
-                    Some(NonNull::new(self.segments.get_mut_ptr(phdr.p_paddr as usize)).unwrap())
+                self.dynamic_ptr = Some(
+                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize))
+                        .ok_or(ParsePhdrError::MalformedProgramHeaders)?,
+                )
             }
 
             // Store GNU_RELRO segment information
@@ -159,13 +164,17 @@ where
 
             // Store interpreter path
             PT_INTERP => {
-                self.interp =
-                    Some(NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize)).unwrap());
+                self.interp = Some(
+                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize))
+                        .ok_or(ParsePhdrError::MalformedProgramHeaders)?,
+                );
             }
 
             PT_GNU_EH_FRAME => {
-                self.eh_frame_hdr =
-                    Some(NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize)).unwrap());
+                self.eh_frame_hdr = Some(
+                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize))
+                        .ok_or(ParsePhdrError::MalformedProgramHeaders)?,
+                );
             }
 
             // Store TLS segment information
@@ -280,6 +289,51 @@ struct ObjectSectionData {
 }
 
 impl<T: TlsResolver, D> ObjectBuilder<T, D> {
+    #[inline]
+    pub(crate) fn validate_shdrs(shdrs: &[ElfShdr]) -> Result<()> {
+        let mut has_symtab = false;
+
+        for shdr in shdrs {
+            match shdr.sh_type {
+                SHT_SYMTAB => has_symtab = true,
+                SHT_REL | SHT_RELA => Self::validate_relocation_shdr(shdr)?,
+                _ => {}
+            }
+        }
+
+        if !has_symtab {
+            return Err(RelocationError::MissingObjectSymbolTable.into());
+        }
+
+        Ok(())
+    }
+
+    #[inline]
+    fn validate_relocation_shdr(shdr: &ElfShdr) -> Result<()> {
+        debug_assert!(matches!(shdr.sh_type, SHT_REL | SHT_RELA));
+
+        if shdr.sh_type != ELF_REL_SECTION_TYPE {
+            return Err(RelocationError::UnsupportedObjectSection {
+                expected: ELF_REL_SECTION_NAME,
+                found: relocation_section_name(shdr.sh_type),
+            }
+            .into());
+        }
+
+        let expected = core::mem::size_of::<ElfRelType>();
+        let found = shdr.sh_entsize as usize;
+        if found != expected {
+            return Err(RelocationError::InvalidObjectEntrySize {
+                section: ELF_REL_SECTION_NAME,
+                expected,
+                found,
+            }
+            .into());
+        }
+
+        Ok(())
+    }
+
     fn rebase_loaded_sections(shdrs: &mut [ElfShdr], pltgot: &mut PltGotSection, base: RelocAddr) {
         shdrs.iter_mut().for_each(|shdr| {
             shdr.sh_addr = base.offset(shdr.sh_addr as usize).into_inner() as _;
@@ -329,7 +383,7 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
         unsafe { core::mem::transmute(array) }
     }
 
-    fn prepare_section_data(shdrs: &[ElfShdr], base: RelocAddr) -> ObjectSectionData {
+    fn prepare_section_data(shdrs: &[ElfShdr], base: RelocAddr) -> Result<ObjectSectionData> {
         let mut symtab = None;
         let mut relocation = Vec::with_capacity(shdrs.len());
         let mut init_array = None;
@@ -345,11 +399,11 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
             }
         }
 
-        ObjectSectionData {
-            symtab: symtab.expect("object file missing symbol table"),
+        Ok(ObjectSectionData {
+            symtab: symtab.ok_or(RelocationError::MissingObjectSymbolTable)?,
             relocation: StaticRelocation::new(relocation),
             init_array,
-        }
+        })
     }
 
     /// Create a new RelocatableBuilder
@@ -378,16 +432,17 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
         mprotect: Box<dyn Fn() -> Result<()>>,
         mut pltgot: PltGotSection,
         user_data: D,
-    ) -> Self {
+    ) -> Result<Self> {
+        Self::validate_shdrs(shdrs)?;
         let base = segments.base_addr();
         Self::rebase_loaded_sections(shdrs, &mut pltgot, base);
         let ObjectSectionData {
             symtab,
             relocation,
             init_array,
-        } = Self::prepare_section_data(shdrs, base);
+        } = Self::prepare_section_data(shdrs, base)?;
 
-        Self {
+        Ok(Self {
             name,
             symtab,
             init_fn,
@@ -401,7 +456,7 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
             tls_tp_offset: None,
             user_data,
             _marker_tls: PhantomData,
-        }
+        })
     }
 }
 
@@ -467,7 +522,7 @@ where
     {
         let name = object.file_name().to_owned();
         let (init_fn, fini_fn) = self.lifecycle_handlers();
-        let mut shdr_segments = SectionSegments::new(shdrs, &mut object);
+        let mut shdr_segments = SectionSegments::new(shdrs, &mut object)?;
         let segments = shdr_segments.load_segments::<M>(&mut object)?;
         let pltgot = shdr_segments.take_pltgot();
         let mprotect = Box::new(move || {
@@ -476,8 +531,8 @@ where
         });
         let user_data = self.load_user_data(&name, &ehdr, None, Some(shdrs));
 
-        Ok(ObjectBuilder::new(
+        ObjectBuilder::new(
             name, shdrs, init_fn, fini_fn, segments, mprotect, pltgot, user_data,
-        ))
+        )
     }
 }

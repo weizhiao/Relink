@@ -128,6 +128,10 @@ impl Display for MmapError {
 pub enum ParseDynamicError {
     /// The dynamic section omitted both `DT_GNU_HASH` and `DT_HASH`.
     MissingHashTable,
+    /// A dynamic-section address calculation overflowed.
+    AddressOverflow,
+    /// `{tag} was present without its required count tag`
+    MissingVersionCount { tag: &'static str },
 }
 
 impl Display for ParseDynamicError {
@@ -135,6 +139,10 @@ impl Display for ParseDynamicError {
         match self {
             Self::MissingHashTable => {
                 f.write_str("dynamic section does not have DT_GNU_HASH nor DT_HASH")
+            }
+            Self::AddressOverflow => f.write_str("dynamic section address calculation overflowed"),
+            Self::MissingVersionCount { tag } => {
+                write!(f, "{tag} is missing its required version-count tag")
             }
         }
     }
@@ -193,12 +201,18 @@ impl Display for ParseEhdrError {
 pub enum ParsePhdrError {
     /// The program header table is malformed.
     MalformedProgramHeaders,
+    /// A dynamic image was expected to carry `PT_DYNAMIC`.
+    MissingDynamicSection,
+    /// `{field} contains invalid UTF-8`
+    InvalidUtf8 { field: &'static str },
 }
 
 impl Display for ParsePhdrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MalformedProgramHeaders => f.write_str("program headers are malformed"),
+            Self::MissingDynamicSection => f.write_str("program headers do not contain PT_DYNAMIC"),
+            Self::InvalidUtf8 { field } => write!(f, "{field} contains invalid UTF-8"),
         }
     }
 }
@@ -265,12 +279,15 @@ impl Display for RelocationContextError {
 pub enum LazyBindingError {
     /// `lazy binding requires a GOT/PLTGOT entry`
     MissingGot,
+    /// `lazy binding requires dynamic metadata`
+    MissingDynamicInfo,
 }
 
 impl Display for LazyBindingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingGot => f.write_str("lazy binding requires a GOT/PLTGOT entry"),
+            Self::MissingDynamicInfo => f.write_str("lazy binding requires dynamic metadata"),
         }
     }
 }
@@ -284,6 +301,19 @@ pub enum RelocationError {
     Context(Box<RelocationContextError>),
     /// Lazy-binding setup failed before the hot path was installed.
     LazyBinding(LazyBindingError),
+    /// `object relocation sections use {found}, but this target expects {expected}`
+    UnsupportedObjectSection {
+        expected: &'static str,
+        found: &'static str,
+    },
+    /// `{section} entries have size {found}, expected {expected}`
+    InvalidObjectEntrySize {
+        section: &'static str,
+        expected: usize,
+        found: usize,
+    },
+    /// `object file missing symbol table`
+    MissingObjectSymbolTable,
 }
 
 impl Display for RelocationError {
@@ -294,6 +324,19 @@ impl Display for RelocationError {
             }
             Self::Context(ctx) => Display::fmt(ctx, f),
             Self::LazyBinding(err) => Display::fmt(err, f),
+            Self::UnsupportedObjectSection { expected, found } => write!(
+                f,
+                "object relocation sections use {found}, but this target expects {expected}"
+            ),
+            Self::InvalidObjectEntrySize {
+                section,
+                expected,
+                found,
+            } => write!(
+                f,
+                "{section} entries have size {found}, expected {expected}"
+            ),
+            Self::MissingObjectSymbolTable => f.write_str("object file missing symbol table"),
         }
     }
 }
@@ -364,6 +407,78 @@ pub enum Error {
     Tls(TlsError),
 }
 
+impl From<IoError> for Error {
+    fn from(err: IoError) -> Self {
+        Self::Io(err)
+    }
+}
+
+impl From<MmapError> for Error {
+    fn from(err: MmapError) -> Self {
+        Self::Mmap(err)
+    }
+}
+
+impl From<RelocationContextError> for RelocationError {
+    fn from(err: RelocationContextError) -> Self {
+        Self::Context(Box::new(err))
+    }
+}
+
+impl From<LazyBindingError> for RelocationError {
+    fn from(err: LazyBindingError) -> Self {
+        Self::LazyBinding(err)
+    }
+}
+
+impl From<RelocationError> for Error {
+    fn from(err: RelocationError) -> Self {
+        Self::Relocation(err)
+    }
+}
+
+impl From<RelocationContextError> for Error {
+    fn from(err: RelocationContextError) -> Self {
+        RelocationError::from(err).into()
+    }
+}
+
+impl From<LazyBindingError> for Error {
+    fn from(err: LazyBindingError) -> Self {
+        RelocationError::from(err).into()
+    }
+}
+
+impl From<ParseDynamicError> for Error {
+    fn from(err: ParseDynamicError) -> Self {
+        Self::ParseDynamic(err)
+    }
+}
+
+impl From<ParseEhdrError> for Error {
+    fn from(err: ParseEhdrError) -> Self {
+        Self::ParseEhdr(err)
+    }
+}
+
+impl From<ParsePhdrError> for Error {
+    fn from(err: ParsePhdrError) -> Self {
+        Self::ParsePhdr(err)
+    }
+}
+
+impl From<CustomError> for Error {
+    fn from(err: CustomError) -> Self {
+        Self::Custom(err)
+    }
+}
+
+impl From<TlsError> for Error {
+    fn from(err: TlsError) -> Self {
+        Self::Tls(err)
+    }
+}
+
 impl Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -383,154 +498,6 @@ impl core::error::Error for Error {}
 
 #[cold]
 #[inline(never)]
-pub(crate) fn io_null_byte_in_path_error() -> Error {
-    Error::Io(IoError::NullByteInPath)
-}
-
-#[cold]
-#[inline(never)]
-#[allow(dead_code)]
-pub(crate) fn io_open_error(path: &str) -> Error {
-    Error::Io(IoError::Open { path: path.into() })
-}
-
-#[cold]
-#[inline(never)]
-#[allow(dead_code)]
-pub(crate) fn io_openat_error(path: &str) -> Error {
-    Error::Io(IoError::OpenAt { path: path.into() })
-}
-
-#[cold]
-#[inline(never)]
-#[cfg(windows)]
-pub(crate) fn io_create_file_w_error(path: &str, code: u32) -> Error {
-    Error::Io(IoError::CreateFileW {
-        path: path.into(),
-        code,
-    })
-}
-
-#[cold]
-#[inline(never)]
-#[cfg(windows)]
-pub(crate) fn io_set_file_pointer_error(code: u32) -> Error {
-    Error::Io(IoError::SetFilePointerEx { code })
-}
-
-#[cold]
-#[inline(never)]
-#[cfg(windows)]
-pub(crate) fn io_read_file_error(code: u32) -> Error {
-    Error::Io(IoError::ReadFile { code })
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn io_seek_error() -> Error {
-    Error::Io(IoError::SeekFailed)
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn io_read_error() -> Error {
-    Error::Io(IoError::ReadFailed)
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn io_failed_to_fill_buffer_error() -> Error {
-    Error::Io(IoError::FailedToFillBuffer)
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn io_read_offset_out_of_bounds_error(
-    offset: usize,
-    len: usize,
-    available: usize,
-) -> Error {
-    Error::Io(IoError::ReadOffsetOutOfBounds {
-        offset,
-        len,
-        available,
-    })
-}
-
-#[cold]
-#[inline(never)]
-#[allow(dead_code)]
-pub(crate) fn io_close_error() -> Error {
-    Error::Io(IoError::CloseFailed)
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn mmap_failed_error() -> Error {
-    Error::Mmap(MmapError::MmapFailed)
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn mmap_anonymous_failed_error() -> Error {
-    Error::Mmap(MmapError::MmapAnonymousFailed)
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn mmap_munmap_failed_error() -> Error {
-    Error::Mmap(MmapError::MunmapFailed)
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn mmap_mprotect_failed_error() -> Error {
-    Error::Mmap(MmapError::MprotectFailed)
-}
-
-#[cold]
-#[inline(never)]
-#[cfg(windows)]
-pub(crate) fn mmap_map_view_of_file3_error(code: u32) -> Error {
-    Error::Mmap(MmapError::MapViewOfFile3 { code })
-}
-
-#[cold]
-#[inline(never)]
-#[cfg(windows)]
-pub(crate) fn mmap_virtual_alloc_error(code: u32) -> Error {
-    Error::Mmap(MmapError::VirtualAlloc { code })
-}
-
-#[cold]
-#[inline(never)]
-#[cfg(windows)]
-pub(crate) fn mmap_mprotect_error(code: u32) -> Error {
-    Error::Mmap(MmapError::Mprotect { code })
-}
-
-#[cold]
-#[inline(never)]
-#[cfg(windows)]
-pub(crate) fn mmap_create_file_mapping_error(code: u32) -> Error {
-    Error::Mmap(MmapError::CreateFileMappingW { code })
-}
-
-#[cold]
-#[inline(never)]
-#[cfg(windows)]
-pub(crate) fn mmap_virtual_free_error(code: u32) -> Error {
-    Error::Mmap(MmapError::VirtualFree { code })
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn relocate_integral_conversion_out_of_range_error() -> Error {
-    Error::Relocation(RelocationError::IntegralConversionOutOfRange)
-}
-
-#[cold]
-#[inline(never)]
 pub(crate) fn relocate_context_error(
     file: &str,
     r_type: &'static str,
@@ -544,82 +511,9 @@ pub(crate) fn relocate_context_error(
 
 #[cold]
 #[inline(never)]
-#[cfg(feature = "lazy-binding")]
-pub(crate) fn relocate_lazy_binding_missing_got_error() -> Error {
-    Error::Relocation(RelocationError::LazyBinding(LazyBindingError::MissingGot))
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn parse_dynamic_missing_hash_table_error() -> Error {
-    Error::ParseDynamic(ParseDynamicError::MissingHashTable)
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn parse_ehdr_invalid_magic_error() -> Error {
-    Error::ParseEhdr(ParseEhdrError::InvalidMagic)
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn parse_ehdr_invalid_version_error() -> Error {
-    Error::ParseEhdr(ParseEhdrError::InvalidVersion)
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn parse_ehdr_class_mismatch_error(expected: ElfClass, found: ElfClass) -> Error {
-    Error::ParseEhdr(ParseEhdrError::FileClassMismatch { expected, found })
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn parse_ehdr_arch_mismatch_error(expected: ElfMachine, found: ElfMachine) -> Error {
-    Error::ParseEhdr(ParseEhdrError::FileArchMismatch { expected, found })
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn parse_ehdr_expected_dylib_error(found: ElfFileType) -> Error {
-    Error::ParseEhdr(ParseEhdrError::ExpectedDylib { found })
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn parse_ehdr_expected_executable_error(found: ElfFileType) -> Error {
-    Error::ParseEhdr(ParseEhdrError::ExpectedExecutable { found })
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn parse_ehdr_missing_section_headers_error() -> Error {
-    Error::ParseEhdr(ParseEhdrError::MissingSectionHeaders)
-}
-
-#[cold]
-#[inline(never)]
 #[allow(dead_code)]
 pub fn custom_error(msg: impl Into<Cow<'static, str>>) -> Error {
     Error::Custom(CustomError::Message(msg.into()))
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn tls_resolver_unsupported_error() -> Error {
-    Error::Tls(TlsError::ResolverUnsupported)
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn tls_static_resolver_unsupported_error() -> Error {
-    Error::Tls(TlsError::StaticResolverUnsupported)
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn tls_unsupported_static_tls_error() -> Error {
-    Error::Tls(TlsError::UnsupportedStaticTls)
 }
 
 #[cfg(test)]

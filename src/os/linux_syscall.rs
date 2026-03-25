@@ -1,8 +1,6 @@
 use crate::input::ElfReader;
 use crate::{
-    Error, Result, io_close_error, io_failed_to_fill_buffer_error, io_null_byte_in_path_error,
-    io_open_error, io_openat_error, io_read_error, io_seek_error, mmap_anonymous_failed_error,
-    mmap_failed_error, mmap_mprotect_failed_error, mmap_munmap_failed_error,
+    Error, IoError, MmapError, Result,
     os::{MapFlags, Mmap, ProtFlags},
 };
 use alloc::ffi::CString;
@@ -46,7 +44,7 @@ fn mmap(
         let syscall = Sysno::mmap;
         from_ret(
             syscalls::raw_syscall!(syscall, addr, len, prot.bits(), flags.bits(), fd, offset),
-            mmap_failed_error,
+            || MmapError::MmapFailed.into(),
         )?
     };
     Ok(ptr as *mut c_void)
@@ -74,7 +72,7 @@ fn mmap_anonymous(
                 usize::MAX,
                 0
             ),
-            mmap_anonymous_failed_error,
+            || MmapError::MmapAnonymousFailed.into(),
         )?
     };
     Ok(ptr as *mut c_void)
@@ -83,10 +81,9 @@ fn mmap_anonymous(
 #[inline]
 fn munmap(addr: *mut c_void, len: usize) -> Result<()> {
     unsafe {
-        from_ret(
-            syscalls::raw_syscall!(Sysno::munmap, addr, len),
-            mmap_munmap_failed_error,
-        )?;
+        from_ret(syscalls::raw_syscall!(Sysno::munmap, addr, len), || {
+            MmapError::MunmapFailed.into()
+        })?;
     }
     Ok(())
 }
@@ -96,7 +93,7 @@ fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
     unsafe {
         from_ret(
             syscalls::raw_syscall!(Sysno::mprotect, addr, len, prot.bits()),
-            mmap_mprotect_failed_error,
+            || MmapError::MprotectFailed.into(),
         )?;
     }
     Ok(())
@@ -170,7 +167,10 @@ impl Mmap for DefaultMmap {
 
 /// Converts a raw syscall return value to a result.
 #[inline(always)]
-fn from_ret(value: usize, make_error: fn() -> Error) -> Result<usize> {
+fn from_ret<F>(value: usize, make_error: F) -> Result<usize>
+where
+    F: FnOnce() -> Error,
+{
     if value > -4096isize as usize {
         // Truncation of the error value is guaranteed to never occur due to
         // the above check. This is the same check that musl uses:
@@ -190,7 +190,7 @@ impl RawFile {
 
     pub(crate) fn from_path(path: &str) -> Result<Self> {
         const RDONLY: u32 = 0;
-        let name = CString::new(path).map_err(|_| io_null_byte_in_path_error())?;
+        let name = CString::new(path).map_err(|_| IoError::NullByteInPath)?;
         #[cfg(not(any(
             target_arch = "aarch64",
             target_arch = "riscv64",
@@ -199,7 +199,7 @@ impl RawFile {
         let fd = unsafe {
             let res = syscalls::raw_syscall!(Sysno::open, name.as_ptr(), RDONLY, 0);
             if res > -4096isize as usize {
-                return Err(io_open_error(path));
+                return Err(IoError::Open { path: path.into() }.into());
             }
             res
         };
@@ -212,7 +212,7 @@ impl RawFile {
             const AT_FDCWD: core::ffi::c_int = -100;
             let res = syscalls::raw_syscall!(Sysno::openat, AT_FDCWD, name.as_ptr(), RDONLY, 0);
             if res > -4096isize as usize {
-                return Err(io_openat_error(path));
+                return Err(IoError::OpenAt { path: path.into() }.into());
             }
             res
         };
@@ -223,10 +223,9 @@ impl RawFile {
 impl Drop for RawFile {
     fn drop(&mut self) {
         unsafe {
-            from_io_ret(
-                syscalls::raw_syscall!(Sysno::close, self.fd),
-                io_close_error,
-            )
+            from_io_ret(syscalls::raw_syscall!(Sysno::close, self.fd), || {
+                IoError::CloseFailed.into()
+            })
             .unwrap()
         };
     }
@@ -238,14 +237,14 @@ impl ElfReader for RawFile {
         unsafe {
             from_io_ret(
                 syscalls::raw_syscall!(Sysno::lseek, self.fd, offset, SEEK_START),
-                io_seek_error,
+                || IoError::SeekFailed.into(),
             )?;
             let size = from_io_ret(
                 syscalls::raw_syscall!(Sysno::read, self.fd, buf.as_mut_ptr(), buf.len()),
-                io_read_error,
+                || IoError::ReadFailed.into(),
             )?;
             if size != buf.len() {
-                return Err(io_failed_to_fill_buffer_error());
+                return Err(IoError::FailedToFillBuffer.into());
             }
         }
         Ok(())
@@ -261,7 +260,10 @@ impl ElfReader for RawFile {
 }
 /// Converts a raw syscall return value to a result.
 #[inline(always)]
-fn from_io_ret(value: usize, make_error: fn() -> Error) -> Result<usize> {
+fn from_io_ret<F>(value: usize, make_error: F) -> Result<usize>
+where
+    F: FnOnce() -> Error,
+{
     if value > -4096isize as usize {
         // Truncation of the error value is guaranteed to never occur due to
         // the above check. This is the same check that musl uses:

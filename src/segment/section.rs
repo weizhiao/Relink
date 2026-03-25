@@ -72,11 +72,11 @@ impl SegmentBuilder for SectionSegments {
 
 impl SectionSegments {
     /// Create a new ShdrSegments instance from section headers
-    pub(crate) fn new(shdrs: &mut [ElfShdr], object: &mut impl ElfReader) -> Self {
+    pub(crate) fn new(shdrs: &mut [ElfShdr], object: &mut impl ElfReader) -> Result<Self> {
         // Create section units for different memory protection types
         let mut units: [SectionUnit; 4] = core::array::from_fn(|_| SectionUnit::new());
 
-        let (got_cnt, plt_cnt) = PltGotSection::count_needed_entries(shdrs, object);
+        let (got_cnt, plt_cnt) = PltGotSection::count_needed_entries(shdrs, object)?;
 
         // Create special sections for GOT and PLT
         let mut got_shdr = PltGotSection::create_got_shdr(got_cnt);
@@ -97,11 +97,11 @@ impl SectionSegments {
             }
         }
 
-        Self {
+        Ok(Self {
             segments,
             total_size: offset,
             pltgot: Some(PltGotSection::new(&got_shdr, &plt_shdr)),
-        }
+        })
     }
 
     /// Take ownership of the PLTGOT section
@@ -155,7 +155,10 @@ pub(crate) enum PltEntry<'plt> {
 }
 
 impl PltGotSection {
-    fn count_needed_entries(shdrs: &[ElfShdr], object: &mut impl ElfReader) -> (usize, usize) {
+    fn count_needed_entries(
+        shdrs: &[ElfShdr],
+        object: &mut impl ElfReader,
+    ) -> Result<(usize, usize)> {
         let mut got_set = HashSet::new();
         let mut plt_set = HashSet::new();
 
@@ -170,9 +173,7 @@ impl PltGotSection {
             }
 
             let mut buf = alloc::vec![0u8; size];
-            if object.read(&mut buf, shdr.sh_offset as usize).is_err() {
-                continue;
-            }
+            object.read(&mut buf, shdr.sh_offset as usize)?;
 
             for chunk in buf.chunks_exact(entsize) {
                 // Safety: we read bytes from file, and we are casting to a POD type (ElfRelType)
@@ -191,7 +192,7 @@ impl PltGotSection {
             }
         }
         // GOT should contain entries for both GOT relocations and PLT stubs
-        (got_set.len() + plt_set.len(), plt_set.len())
+        Ok((got_set.len() + plt_set.len(), plt_set.len()))
     }
 
     /// Create a GOT section header based on relocation entries

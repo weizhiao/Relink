@@ -1,17 +1,12 @@
 //! Parsing `.dynamic` section
 use crate::{
-    Result,
+    ParseDynamicError, Result,
     elf::{DT_RELR, DT_RELRSZ, ElfDyn, ElfRel, ElfRelType, ElfRela, ElfRelr},
-    parse_dynamic_missing_hash_table_error,
     segment::ElfSegments,
 };
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use core::{
-    num::NonZeroUsize,
-    ops::{Add, AddAssign, Sub, SubAssign},
-    ptr::{NonNull, null_mut},
-};
+use core::{num::NonZeroUsize, ptr::NonNull};
 use elf::abi::*;
 
 impl ElfDynamic {
@@ -89,27 +84,13 @@ impl ElfDynamic {
                     DT_INIT_ARRAYSZ => init_array_size = NonZeroUsize::new(dynamic.d_un as usize),
                     DT_FINI_ARRAY => fini_array_off = NonZeroUsize::new(dynamic.d_un as usize),
                     DT_FINI_ARRAYSZ => fini_array_size = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_VERSYM => {
-                        version_ids_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
-                    }
-                    DT_VERNEED => {
-                        verneed_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
-                    }
-                    DT_VERNEEDNUM => {
-                        verneed_num = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
-                    }
-                    DT_VERDEF => {
-                        verdef_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
-                    }
-                    DT_VERDEFNUM => {
-                        verdef_num = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
-                    }
-                    DT_RPATH => {
-                        rpath_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
-                    }
-                    DT_RUNPATH => {
-                        runpath_off = Some(NonZeroUsize::new_unchecked(dynamic.d_un as usize))
-                    }
+                    DT_VERSYM => version_ids_off = NonZeroUsize::new(dynamic.d_un as usize),
+                    DT_VERNEED => verneed_off = NonZeroUsize::new(dynamic.d_un as usize),
+                    DT_VERNEEDNUM => verneed_num = NonZeroUsize::new(dynamic.d_un as usize),
+                    DT_VERDEF => verdef_off = NonZeroUsize::new(dynamic.d_un as usize),
+                    DT_VERDEFNUM => verdef_num = NonZeroUsize::new(dynamic.d_un as usize),
+                    DT_RPATH => rpath_off = NonZeroUsize::new(dynamic.d_un as usize),
+                    DT_RUNPATH => runpath_off = NonZeroUsize::new(dynamic.d_un as usize),
                     DT_NULL => break,
                     _ => {}
                 }
@@ -126,11 +107,20 @@ impl ElfDynamic {
             );
         }
 
+        let add_base = |offset: usize| -> Result<usize> {
+            base.checked_add(offset)
+                .ok_or(ParseDynamicError::AddressOverflow.into())
+        };
+        let add_base_nonzero = |offset: NonZeroUsize| -> Result<NonZeroUsize> {
+            NonZeroUsize::new(add_base(offset.get())?)
+                .ok_or_else(|| ParseDynamicError::AddressOverflow.into())
+        };
+
         // Determine which hash table to use (prefer GNU hash)
         let hash_off = if let Some(off) = gnu_hash_off {
-            ElfDynamicHashTab::Gnu(off)
+            ElfDynamicHashTab::Gnu(add_base(off)?)
         } else if let Some(off) = elf_hash_off {
-            ElfDynamicHashTab::Elf(off)
+            ElfDynamicHashTab::Elf(add_base(off)?)
         } else {
             // If no hash table is present, we can't perform symbol lookup.
             // However, for some simple cases (like our test generator), we might not strictly need it
@@ -145,7 +135,7 @@ impl ElfDynamic {
             // In the loop: DT_HASH => elf_hash_off = Some(dynamic.d_un as usize),
             // So 0 is Some(0).
 
-            return Err(parse_dynamic_missing_hash_table_error());
+            return Err(ParseDynamicError::MissingHashTable.into());
         };
 
         // Extract relocation tables
@@ -180,24 +170,37 @@ impl ElfDynamic {
 
         // Extract versioning information
         let verneed = verneed_off
-            .map(|verneed_off| (verneed_off.checked_add(base).unwrap(), verneed_num.unwrap()));
+            .map(|verneed_off| -> Result<_> {
+                Ok((
+                    add_base_nonzero(verneed_off)?,
+                    verneed_num
+                        .ok_or(ParseDynamicError::MissingVersionCount { tag: "DT_VERNEED" })?,
+                ))
+            })
+            .transpose()?;
         let verdef = verdef_off
-            .map(|verdef_off| (verdef_off.checked_add(base).unwrap(), verdef_num.unwrap()));
-        let version_idx = version_ids_off.map(|off| off.checked_add(base).unwrap());
+            .map(|verdef_off| -> Result<_> {
+                Ok((
+                    add_base_nonzero(verdef_off)?,
+                    verdef_num
+                        .ok_or(ParseDynamicError::MissingVersionCount { tag: "DT_VERDEF" })?,
+                ))
+            })
+            .transpose()?;
+        let version_idx = version_ids_off.map(add_base_nonzero).transpose()?;
 
         Ok(ElfDynamic {
             dyn_ptr: dynamic_ptr,
-            hashtab: hash_off + base,
-            symtab: symtab_off + base,
-            strtab: strtab_off + base,
+            hashtab: hash_off,
+            symtab: add_base(symtab_off)?,
+            strtab: add_base(strtab_off)?,
             // Check if binding should be done immediately
             bind_now: flags & DF_BIND_NOW as usize != 0 || flags_1 & DF_1_NOW as usize != 0,
             static_tls: flags & DF_STATIC_TLS as usize != 0,
-            got_plt: NonNull::new(
-                got_off
-                    .map(|off| (base + off.get()) as *mut usize)
-                    .unwrap_or(null_mut()),
-            ),
+            got_plt: got_off
+                .map(|off| add_base(off.get()))
+                .transpose()?
+                .map(|addr| unsafe { NonNull::new_unchecked(addr as *mut usize) }),
             needed_libs,
             pltrel,
             dynrel,
@@ -222,55 +225,6 @@ pub enum ElfDynamicHashTab {
     Gnu(usize),
     /// Traditional ELF hash table (DT_HASH)
     Elf(usize),
-}
-
-impl Into<usize> for ElfDynamicHashTab {
-    fn into(self) -> usize {
-        match self {
-            ElfDynamicHashTab::Gnu(off) => off,
-            ElfDynamicHashTab::Elf(off) => off,
-        }
-    }
-}
-
-impl Add<usize> for ElfDynamicHashTab {
-    type Output = ElfDynamicHashTab;
-
-    fn add(self, rhs: usize) -> Self::Output {
-        match self {
-            ElfDynamicHashTab::Gnu(off) => ElfDynamicHashTab::Gnu(off + rhs),
-            ElfDynamicHashTab::Elf(off) => ElfDynamicHashTab::Elf(off + rhs),
-        }
-    }
-}
-
-impl Sub<usize> for ElfDynamicHashTab {
-    type Output = ElfDynamicHashTab;
-
-    fn sub(self, rhs: usize) -> Self::Output {
-        match self {
-            ElfDynamicHashTab::Gnu(off) => ElfDynamicHashTab::Gnu(off - rhs),
-            ElfDynamicHashTab::Elf(off) => ElfDynamicHashTab::Elf(off - rhs),
-        }
-    }
-}
-
-impl AddAssign<usize> for ElfDynamicHashTab {
-    fn add_assign(&mut self, rhs: usize) {
-        match self {
-            ElfDynamicHashTab::Gnu(off) => *off += rhs,
-            ElfDynamicHashTab::Elf(off) => *off += rhs,
-        }
-    }
-}
-
-impl SubAssign<usize> for ElfDynamicHashTab {
-    fn sub_assign(&mut self, rhs: usize) {
-        match self {
-            ElfDynamicHashTab::Gnu(off) => *off -= rhs,
-            ElfDynamicHashTab::Elf(off) => *off -= rhs,
-        }
-    }
 }
 
 #[allow(unused)]

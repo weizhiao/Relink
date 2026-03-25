@@ -317,6 +317,13 @@ impl StaticReloc for X86_64Relocator {
                 helper.core,
             )
         };
+        let conversion_error = || {
+            reloc_error(
+                rel,
+                crate::RelocationFailureReason::IntegralConversionOutOfRange,
+                helper.core,
+            )
+        };
         match r_type as _ {
             R_X86_64_64 => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
@@ -332,13 +339,7 @@ impl StaticReloc for X86_64Relocator {
                     .addend(append)
                     .relative_to(p.into_inner())
                     .try_into_sword32()
-                    .map_err(|_| {
-                        reloc_error(
-                            rel,
-                            crate::RelocationFailureReason::IntegralConversionOutOfRange,
-                            helper.core,
-                        )
-                    })?;
+                    .map_err(|_| conversion_error())?;
                 segments.write(offset, val);
             }
             R_X86_64_PLT32 => {
@@ -362,8 +363,9 @@ impl StaticReloc for X86_64Relocator {
                                 .get_addr()
                                 .relative_to(plt_entry_addr.into_inner())
                                 .relative_to(10);
-                            let call_offset_val: RelocSWord32 =
-                                call_offset.try_into_sword32().unwrap();
+                            let call_offset_val: RelocSWord32 = call_offset
+                                .try_into_sword32()
+                                .map_err(|_| conversion_error())?;
                             plt[6..10].copy_from_slice(&call_offset_val.to_ne_bytes());
                             plt_entry_addr
                         }
@@ -372,7 +374,7 @@ impl StaticReloc for X86_64Relocator {
                         .addend(append)
                         .relative_to(p.into_inner())
                         .try_into_sword32()
-                        .unwrap()
+                        .map_err(|_| conversion_error())?
                 };
                 segments.write(offset, val);
             }
@@ -392,33 +394,27 @@ impl StaticReloc for X86_64Relocator {
                     .addend(append)
                     .relative_to(p.into_inner())
                     .try_into_sword32()
-                    .unwrap();
+                    .map_err(|_| conversion_error())?;
                 segments.write(offset, val);
             }
             R_X86_64_32 => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
-                let val: RelocWord32 = sym.addend(append).try_into_word32().map_err(|_| {
-                    reloc_error(
-                        rel,
-                        crate::RelocationFailureReason::IntegralConversionOutOfRange,
-                        helper.core,
-                    )
-                })?;
+                let val: RelocWord32 = sym
+                    .addend(append)
+                    .try_into_word32()
+                    .map_err(|_| conversion_error())?;
                 segments.write(offset, val);
             }
             R_X86_64_32S => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(boxed_error());
                 };
-                let val: RelocSWord32 = sym.addend(append).try_into_sword32().map_err(|_| {
-                    reloc_error(
-                        rel,
-                        crate::RelocationFailureReason::IntegralConversionOutOfRange,
-                        helper.core,
-                    )
-                })?;
+                let val: RelocSWord32 = sym
+                    .addend(append)
+                    .try_into_sword32()
+                    .map_err(|_| conversion_error())?;
                 segments.write(offset, val);
             }
             _ => {

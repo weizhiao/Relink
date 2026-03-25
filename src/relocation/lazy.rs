@@ -2,12 +2,11 @@
 mod enabled {
     use crate::image::{CoreInner, DynamicImage, DynamicInfo, LoadedCore};
     use crate::{
-        Result,
+        LazyBindingError, Result,
         arch::REL_JUMP_SLOT,
         arch::prepare_lazy_bind,
         elf::ElfRelType,
-        relocate_lazy_binding_missing_got_error,
-        relocation::{BindingOptions, RelocAddr, SymbolLookup},
+        relocation::{BindingOptions, RelocAddr, SymbolLookup, unlikely},
         sync::Arc,
         tls::lookup_tls_get_addr,
     };
@@ -126,7 +125,7 @@ mod enabled {
                     .inner
                     .dynamic_info
                     .as_ref()
-                    .expect("DynamicImage must carry dynamic_info during lazy binding setup");
+                    .ok_or(LazyBindingError::MissingDynamicInfo)?;
                 let info = unsafe { &mut *(Arc::as_ptr(dynamic_info) as *mut DynamicInfo) };
                 info.lazy.scope = Some(Box::new(LazyScope {
                     libs: deps,
@@ -142,9 +141,7 @@ mod enabled {
     where
         D: 'static,
     {
-        image
-            .got()
-            .ok_or_else(relocate_lazy_binding_missing_got_error)
+        image.got().ok_or(LazyBindingError::MissingGot.into())
     }
 
     #[cold]
@@ -153,24 +150,67 @@ mod enabled {
         panic!("lazy binding failed for {name}: unresolved symbol {symbol}");
     }
 
+    #[cold]
+    #[inline(never)]
+    fn lazy_bind_invalid_state(name: &str, reason: &str) -> ! {
+        panic!("lazy binding failed for {name}: {reason}");
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn lazy_bind_invalid_relocation(name: &str, rela_idx: usize, rel: &ElfRelType) -> ! {
+        panic!(
+            "lazy binding failed for {name}: invalid PLT relocation {rela_idx} (type {}, sym {})",
+            rel.r_type(),
+            rel.r_symbol()
+        );
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn lazy_bind_invalid_relocation_index(name: &str, rela_idx: usize, len: usize) -> ! {
+        panic!(
+            "lazy binding failed for {name}: relocation index {rela_idx} out of range (len {len})"
+        );
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn lazy_bind_invalid_symbol_index(name: &str, r_sym: usize, sym_count: usize) -> ! {
+        panic!(
+            "lazy binding failed for {name}: symbol index {r_sym} out of range (len {})",
+            sym_count
+        );
+    }
+
     #[allow(improper_ctypes_definitions)]
     pub(crate) unsafe extern "C" fn dl_fixup(dylib: &CoreInner, rela_idx: usize) -> usize {
-        let dynamic_info = unsafe { dylib.dynamic_info.as_ref().unwrap_unchecked() };
+        let Some(dynamic_info) = dylib.dynamic_info.as_ref() else {
+            lazy_bind_invalid_state(dylib.name.as_str(), "missing dynamic metadata")
+        };
         let pltrel = dynamic_info.lazy.pltrel;
 
-        debug_assert!(rela_idx < pltrel.len());
-
-        // All structural lazy-binding checks were front-loaded during installation.
-        let rela = unsafe { pltrel.get_unchecked(rela_idx) };
+        let Some(rela) = pltrel.get(rela_idx) else {
+            lazy_bind_invalid_relocation_index(dylib.name.as_str(), rela_idx, pltrel.len())
+        };
         let r_type = rela.r_type();
         let r_sym = rela.r_symbol();
         let segments = &dylib.segments;
 
-        debug_assert!(r_type == REL_JUMP_SLOT as usize && r_sym != 0);
+        if unlikely(r_type != REL_JUMP_SLOT as usize || r_sym == 0) {
+            lazy_bind_invalid_relocation(dylib.name.as_str(), rela_idx, rela);
+        }
+
+        let sym_count = dylib.symtab.count_syms();
+        if unlikely(r_sym >= sym_count) {
+            lazy_bind_invalid_symbol_index(dylib.name.as_str(), r_sym, sym_count);
+        }
 
         let (_, syminfo) = dylib.symtab.symbol_idx(r_sym);
 
-        let scope = unsafe { dynamic_info.lazy.scope.as_ref().unwrap_unchecked() };
+        let Some(scope) = dynamic_info.lazy.scope.as_ref() else {
+            lazy_bind_invalid_state(dylib.name.as_str(), "missing lazy scope")
+        };
         let symbol = match scope.lookup(syminfo.name()) {
             Some(symbol) => RelocAddr::from_ptr(symbol),
             None => lazy_bind_unresolved_symbol(dylib.name.as_str(), syminfo.name()),

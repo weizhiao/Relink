@@ -5,11 +5,9 @@
 //! file type, and section/program header information.
 
 use crate::{
-    Result,
+    ParseEhdrError, Result,
     arch::EM_ARCH,
     elf::{E_CLASS, EHDR_SIZE, ElfClass, ElfEhdr, ElfFileType, ElfMachine},
-    parse_ehdr_arch_mismatch_error, parse_ehdr_class_mismatch_error,
-    parse_ehdr_invalid_magic_error, parse_ehdr_invalid_version_error,
 };
 use core::ops::Deref;
 use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, ET_EXEC, EV_CURRENT};
@@ -115,30 +113,32 @@ impl ElfHeader {
     pub fn validate(&self) -> Result<()> {
         // Check ELF magic bytes
         if self.e_ident[0..4] != ELFMAGIC {
-            return Err(parse_ehdr_invalid_magic_error());
+            return Err(ParseEhdrError::InvalidMagic.into());
         }
 
         // Check file class (32-bit vs 64-bit)
         let class = self.class();
         if class.raw() != E_CLASS {
-            return Err(parse_ehdr_class_mismatch_error(
-                ElfClass::new(E_CLASS),
-                class,
-            ));
+            return Err(ParseEhdrError::FileClassMismatch {
+                expected: ElfClass::new(E_CLASS),
+                found: class,
+            }
+            .into());
         }
 
         // Check ELF version
         if self.e_ident[EI_VERSION] != EV_CURRENT {
-            return Err(parse_ehdr_invalid_version_error());
+            return Err(ParseEhdrError::InvalidVersion.into());
         }
 
         // Check machine architecture
         let machine = self.machine();
         if machine.raw() != EM_ARCH {
-            return Err(parse_ehdr_arch_mismatch_error(
-                ElfMachine::new(EM_ARCH),
-                machine,
-            ));
+            return Err(ParseEhdrError::FileArchMismatch {
+                expected: ElfMachine::new(EM_ARCH),
+                found: machine,
+            }
+            .into());
         }
 
         Ok(())

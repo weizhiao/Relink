@@ -1,8 +1,7 @@
 use crate::{
-    Result, logging,
+    Result, TlsError, logging,
     sync::{AtomicUsize, Ordering},
     tls::{TlsIndex, TlsInfo, TlsResolver},
-    tls_unsupported_static_tls_error,
 };
 use alloc::{
     alloc::{alloc, dealloc, handle_alloc_error},
@@ -367,7 +366,7 @@ impl TlsResolver for DefaultTlsResolver {
     }
 
     fn register_static(_tls_info: &TlsInfo) -> Result<(usize, isize)> {
-        Err(tls_unsupported_static_tls_error())
+        Err(TlsError::UnsupportedStaticTls.into())
     }
 
     fn add_static_tls(tls_info: &TlsInfo, offset: isize) -> Result<usize> {

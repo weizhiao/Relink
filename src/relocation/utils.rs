@@ -1,8 +1,8 @@
 use crate::{
-    Error, RelocationFailureReason, Result,
+    Error, RelocationError, RelocationFailureReason, Result,
     elf::{ElfRelType, ElfSymbol, SymbolInfo, SymbolTable},
     image::{ElfCore, LoadedCore},
-    logging, relocate_context_error, relocate_integral_conversion_out_of_range_error,
+    logging, relocate_context_error,
     relocation::{
         BindingOptions, Relocatable, RelocationContext, RelocationHandler, SupportLazy,
         SymbolLookup,
@@ -479,14 +479,14 @@ impl RelocAddr {
     pub fn try_into_sword32(self) -> Result<RelocSWord32> {
         i32::try_from(self.0 as isize)
             .map(RelocValue::new)
-            .map_err(|_| relocate_integral_conversion_out_of_range_error())
+            .map_err(|_| RelocationError::IntegralConversionOutOfRange.into())
     }
 
     #[inline]
     pub fn try_into_word32(self) -> Result<RelocWord32> {
         u32::try_from(self.0)
             .map(RelocValue::new)
-            .map_err(|_| relocate_integral_conversion_out_of_range_error())
+            .map_err(|_| RelocationError::IntegralConversionOutOfRange.into())
     }
 }
 

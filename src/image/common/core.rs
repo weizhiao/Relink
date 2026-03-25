@@ -7,7 +7,7 @@
 #[cfg(feature = "lazy-binding")]
 use crate::image::common::LazyBindingInfo;
 use crate::{
-    Result,
+    ParsePhdrError, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolInfo, SymbolTable},
     image::{Symbol, common::DynamicInfo},
     loader::{DynLifecycleHandler, LifecycleContext},
@@ -298,7 +298,7 @@ impl<D> LoadedCore<D> {
                     Tls::unregister,
                     user_data,
                 )
-            },
+            }?,
             deps: Arc::from([]),
         })
     }
@@ -659,17 +659,21 @@ impl<D> ElfCore<D> {
         tls_get_addr: RelocAddr,
         tls_unregister: fn(usize),
         user_data: D,
-    ) -> Self {
+    ) -> Result<Self> {
+        if dynamic_ptr.is_null() {
+            return Err(ParsePhdrError::MissingDynamicSection.into());
+        }
+
         segments.offset = (segments.memory as usize).wrapping_sub(base);
-        let dynamic = ElfDynamic::new(dynamic_ptr, &segments).unwrap();
-        Self {
+        let dynamic = ElfDynamic::new(dynamic_ptr, &segments)?;
+        Ok(Self {
             inner: Arc::new(CoreInner {
                 name,
                 is_init: AtomicBool::new(true),
                 symtab: SymbolTable::from_dynamic(&dynamic),
                 dynamic_info: Some(Arc::new(DynamicInfo {
                     eh_frame_hdr,
-                    dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
+                    dynamic_ptr: unsafe { NonNull::new_unchecked(dynamic_ptr.cast_mut()) },
                     phdrs: ElfPhdrs::Vec(phdrs),
                     #[cfg(feature = "lazy-binding")]
                     lazy: LazyBindingInfo::new(dynamic.pltrel),
@@ -681,7 +685,7 @@ impl<D> ElfCore<D> {
                 fini_handler: Arc::new(Box::new(|_: &LifecycleContext| {})),
                 user_data,
             }),
-        }
+        })
     }
 }
 

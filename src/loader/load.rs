@@ -1,13 +1,11 @@
-use super::{ElfBuf, LoadHook, Loader};
+use super::{ElfBuf, LoadHook, Loader, ObjectBuilder};
 use crate::{
-    Result,
+    ParseEhdrError, Result,
     elf::{EHDR_SIZE, ElfHeader, ElfPhdr, ElfShdr},
     image::{RawDylib, RawElf, RawExec, RawObject},
     input::{ElfReader, IntoElfReader},
     logging,
     os::Mmap,
-    parse_ehdr_expected_dylib_error, parse_ehdr_expected_executable_error,
-    parse_ehdr_missing_section_headers_error,
     tls::TlsResolver,
 };
 use elf::abi::{PT_DYNAMIC, PT_INTERP};
@@ -167,7 +165,10 @@ where
                 object.file_name(),
                 ehdr.e_type
             );
-            return Err(parse_ehdr_expected_dylib_error(ehdr.file_type()));
+            return Err(ParseEhdrError::ExpectedDylib {
+                found: ehdr.file_type(),
+            }
+            .into());
         }
 
         let phdrs = self
@@ -213,7 +214,10 @@ where
                 object.file_name(),
                 ehdr.e_type
             );
-            return Err(parse_ehdr_expected_executable_error(ehdr.file_type()));
+            return Err(ParseEhdrError::ExpectedExecutable {
+                found: ehdr.file_type(),
+            }
+            .into());
         }
 
         let phdrs = self
@@ -265,7 +269,7 @@ where
         let shdrs = self
             .buf
             .prepare_shdrs_mut(&ehdr, &mut object)?
-            .ok_or_else(parse_ehdr_missing_section_headers_error)?;
+            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
         let builder = self
             .inner
             .create_object_builder::<M, Tls>(ehdr, shdrs, object)?;

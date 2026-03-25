@@ -1,9 +1,6 @@
 use crate::{
-    Result,
+    IoError, MmapError, Result,
     input::ElfReader,
-    io_failed_to_fill_buffer_error, io_null_byte_in_path_error, io_open_error, io_read_error,
-    io_seek_error, mmap_anonymous_failed_error, mmap_failed_error, mmap_mprotect_failed_error,
-    mmap_munmap_failed_error,
     os::{MapFlags, Mmap, ProtFlags},
 };
 use alloc::{
@@ -95,7 +92,7 @@ impl Mmap for DefaultMmap {
             addr.unwrap() as _
         };
         if core::ptr::eq(ptr, libc::MAP_FAILED) {
-            return Err(mmap_failed_error());
+            return Err(MmapError::MmapFailed.into());
         }
         Ok(ptr)
     }
@@ -117,7 +114,7 @@ impl Mmap for DefaultMmap {
             )
         };
         if core::ptr::eq(ptr, libc::MAP_FAILED) {
-            return Err(mmap_anonymous_failed_error());
+            return Err(MmapError::MmapAnonymousFailed.into());
         }
         Ok(ptr)
     }
@@ -125,7 +122,7 @@ impl Mmap for DefaultMmap {
     unsafe fn munmap(addr: *mut c_void, len: usize) -> crate::Result<()> {
         let res = unsafe { munmap(addr, len) };
         if res != 0 {
-            return Err(mmap_munmap_failed_error());
+            return Err(MmapError::MunmapFailed.into());
         }
         Ok(())
     }
@@ -133,7 +130,7 @@ impl Mmap for DefaultMmap {
     unsafe fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> crate::Result<()> {
         let res = unsafe { mprotect(addr, len, prot.bits()) };
         if res != 0 {
-            return Err(mmap_mprotect_failed_error());
+            return Err(MmapError::MprotectFailed.into());
         }
         Ok(())
     }
@@ -167,10 +164,10 @@ impl Drop for RawFile {
 
 impl RawFile {
     pub(crate) fn from_path(path: &str) -> Result<Self> {
-        let name = CString::from_str(path).map_err(|_| io_null_byte_in_path_error())?;
+        let name = CString::from_str(path).map_err(|_| IoError::NullByteInPath)?;
         let fd = unsafe { libc::open(name.as_ptr(), O_RDONLY) };
         if fd == -1 {
-            return Err(io_open_error(path));
+            return Err(IoError::Open { path: path.into() }.into());
         }
         Ok(Self {
             name: path.to_string(),
@@ -189,7 +186,7 @@ impl RawFile {
 fn lseek(fd: i32, offset: usize) -> Result<()> {
     let off = unsafe { libc::lseek(fd, offset as _, SEEK_SET) };
     if off == -1 || off as usize != offset {
-        return Err(io_seek_error());
+        return Err(IoError::SeekFailed.into());
     }
     Ok(())
 }
@@ -206,10 +203,10 @@ fn read_exact(fd: i32, mut bytes: &mut [u8]) -> Result<()> {
 
         if result < 0 {
             // 出现错误
-            return Err(io_read_error());
+            return Err(IoError::ReadFailed.into());
         } else if result == 0 {
             // 意外到达文件末尾
-            return Err(io_failed_to_fill_buffer_error());
+            return Err(IoError::FailedToFillBuffer.into());
         }
         // 成功读取了部分字节
         let n = result as usize;

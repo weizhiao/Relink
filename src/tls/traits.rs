@@ -1,5 +1,5 @@
 use super::{TlsIndex, TlsInfo};
-use crate::{Result, tls_resolver_unsupported_error, tls_static_resolver_unsupported_error};
+use crate::{Result, TlsError};
 
 const TLS_GET_ADDR_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
     "tls_get_addr called on unit TlsResolver which does not support TLS. Use `with_default_tls_resolver()` to enable TLS support."
@@ -44,15 +44,15 @@ pub trait TlsResolver {
 
 impl TlsResolver for () {
     fn register(_tls_info: &TlsInfo) -> Result<usize> {
-        Err(tls_resolver_unsupported_error())
+        Err(TlsError::ResolverUnsupported.into())
     }
 
     fn register_static(_tls_info: &TlsInfo) -> Result<(usize, isize)> {
-        Err(tls_static_resolver_unsupported_error())
+        Err(TlsError::StaticResolverUnsupported.into())
     }
 
     fn add_static_tls(_tls_info: &TlsInfo, _offset: isize) -> Result<usize> {
-        Err(tls_static_resolver_unsupported_error())
+        Err(TlsError::StaticResolverUnsupported.into())
     }
 
     fn unregister(_mod_id: usize) {

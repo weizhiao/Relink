@@ -4,7 +4,7 @@ use crate::elf::ElfRelType;
 use crate::relocation::SymbolLookup;
 use crate::sync::{Arc, AtomicBool};
 use crate::{
-    Result,
+    ParsePhdrError, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
     image::{ElfCore, common::CoreInner},
     loader::{ImageBuilder, LifecycleContext, LoadHook},
@@ -298,12 +298,14 @@ impl<D: 'static> DynamicImage<D> {
         // Parse all program headers
         builder.parse_phdrs(phdrs)?;
 
-        let dynamic_ptr = builder.dynamic_ptr.expect("dynamic section not found");
+        let dynamic_ptr = builder
+            .dynamic_ptr
+            .ok_or(ParsePhdrError::MissingDynamicSection)?;
 
         // Create program headers representation
         let phdrs_repr = builder.create_phdrs(phdrs);
 
-        let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &builder.segments).unwrap();
+        let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &builder.segments)?;
 
         logging::trace!("[{}] Dynamic info: {:?}", builder.name, dynamic);
 
@@ -356,7 +358,9 @@ impl<D: 'static> DynamicImage<D> {
             },
             interp: builder
                 .interp
-                .map(|s| unsafe { CStr::from_ptr(s.as_ptr()).to_str().unwrap() }),
+                .map(|s| unsafe { CStr::from_ptr(s.as_ptr()) }.to_str())
+                .transpose()
+                .map_err(|_| ParsePhdrError::InvalidUtf8 { field: "PT_INTERP" })?,
             phdrs: phdrs_repr.clone(),
             extra: ElfExtraData {
                 // Determine if lazy binding should be enabled
@@ -404,7 +408,7 @@ impl<D: 'static> DynamicImage<D> {
                     user_data: builder.user_data,
                     dynamic_info: Some(Arc::new(DynamicInfo {
                         eh_frame_hdr: builder.eh_frame_hdr,
-                        dynamic_ptr: NonNull::new(dynamic.dyn_ptr as _).unwrap(),
+                        dynamic_ptr,
                         phdrs: phdrs_repr,
                         #[cfg(feature = "lazy-binding")]
                         lazy: LazyBindingInfo::new(dynamic.pltrel),

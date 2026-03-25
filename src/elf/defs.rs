@@ -11,8 +11,8 @@ use core::{
 };
 use elf::abi::{
     ELFCLASS32, ELFCLASS64, ELFCLASSNONE, EM_386, EM_AARCH64, EM_ARM, EM_RISCV, EM_X86_64, ET_CORE,
-    ET_DYN, ET_EXEC, ET_NONE, ET_REL, SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK,
-    STT_COMMON, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
+    ET_DYN, ET_EXEC, ET_NONE, ET_REL, SHN_UNDEF, SHT_REL, SHT_RELA, STB_GLOBAL, STB_GNU_UNIQUE,
+    STB_LOCAL, STB_WEAK, STT_COMMON, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
 };
 
 use crate::arch::rel_type_to_str;
@@ -307,11 +307,13 @@ impl ElfRel {
 
     /// Sets the relocation offset.
     /// This is used internally when adjusting relocation entries during loading.
-    /// Currently unimplemented for REL entries.
     #[inline]
-    #[allow(unused)]
-    pub(crate) fn set_offset(&mut self, _offset: usize) {
-        todo!()
+    #[cfg_attr(
+        all(not(target_arch = "x86"), not(target_arch = "arm")),
+        allow(dead_code)
+    )]
+    pub(crate) fn set_offset(&mut self, offset: usize) {
+        self.rel.r_offset = offset as _;
     }
 }
 
@@ -568,6 +570,25 @@ impl Clone for ElfPhdr {
 pub type ElfRelType = ElfRela;
 #[cfg(any(target_arch = "x86", target_arch = "arm"))]
 pub type ElfRelType = ElfRel;
+
+#[cfg(all(not(target_arch = "x86"), not(target_arch = "arm")))]
+pub(crate) const ELF_REL_SECTION_TYPE: u32 = SHT_RELA;
+#[cfg(any(target_arch = "x86", target_arch = "arm"))]
+pub(crate) const ELF_REL_SECTION_TYPE: u32 = SHT_REL;
+
+#[cfg(all(not(target_arch = "x86"), not(target_arch = "arm")))]
+pub(crate) const ELF_REL_SECTION_NAME: &str = "SHT_RELA";
+#[cfg(any(target_arch = "x86", target_arch = "arm"))]
+pub(crate) const ELF_REL_SECTION_NAME: &str = "SHT_REL";
+
+#[inline]
+pub(crate) const fn relocation_section_name(sh_type: u32) -> &'static str {
+    match sh_type {
+        SHT_REL => "SHT_REL",
+        SHT_RELA => "SHT_RELA",
+        _ => "UNKNOWN",
+    }
+}
 
 impl ElfRelType {
     /// Return a human readable relocation type name for the current arch
