@@ -87,25 +87,42 @@ impl SymbolLookup for () {
 /// # Examples
 ///
 /// ```rust
-/// use elf_loader::relocation::{RelocationHandler, RelocationContext};
+/// use elf_loader::relocation::{HandleResult, RelocationContext, RelocationHandler};
 /// use elf_loader::Result;
 ///
 /// struct CustomHandler;
 ///
 /// impl RelocationHandler for CustomHandler {
-///     fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
+///     fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
 ///         let rel = ctx.rel();
 ///         // Handle specific relocation types
 ///         match rel.r_type() {
 ///             0x1234 => {
 ///                 // Custom relocation logic
-///                 Some(Ok(None)) // Handled successfully
+///                 Ok(HandleResult::Handled)
 ///             }
-///             _ => None, // Fall through to default
+///             _ => Ok(HandleResult::Unhandled), // Fall through to default
 ///         }
 ///     }
 /// }
 /// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandleResult {
+    /// The handler did not process this relocation.
+    Unhandled,
+    /// The handler processed this relocation without introducing a dependency.
+    Handled,
+    /// The handler processed this relocation and used `scope[idx]`.
+    HandledWithDependency(usize),
+}
+
+impl HandleResult {
+    #[inline]
+    pub const fn is_unhandled(self) -> bool {
+        matches!(self, Self::Unhandled)
+    }
+}
+
 pub trait RelocationHandler {
     /// Handles a relocation.
     ///
@@ -113,11 +130,12 @@ pub trait RelocationHandler {
     /// * `ctx` - Context containing relocation details and scope.
     ///
     /// # Returns
-    /// * `Some(Ok(None))` - Handled successfully, no library dependency.
-    /// * `Some(Ok(Some(idx)))` - Handled successfully, used library at `scope[idx]`.
-    /// * `Some(Err(e))` - Handled but failed with error.
-    /// * `None` - Not handled, fall through to default behavior.
-    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>>;
+    /// * `Ok(HandleResult::Unhandled)` - Not handled, fall through to default behavior.
+    /// * `Ok(HandleResult::Handled)` - Handled successfully, no library dependency.
+    /// * `Ok(HandleResult::HandledWithDependency(idx))` - Handled successfully and used
+    ///   `scope[idx]`.
+    /// * `Err(e)` - The handler failed.
+    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult>;
 }
 
 /// Context passed to [`RelocationHandler::handle`].
@@ -169,31 +187,31 @@ impl<'a, D> RelocationContext<'a, D> {
 }
 
 impl RelocationHandler for () {
-    fn handle<D>(&self, _ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
-        None
+    fn handle<D>(&self, _ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
+        Ok(HandleResult::Unhandled)
     }
 }
 
 impl<H: RelocationHandler + ?Sized> RelocationHandler for &H {
-    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
+    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
 impl<H: RelocationHandler + ?Sized> RelocationHandler for &mut H {
-    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
+    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
 impl<H: RelocationHandler + ?Sized> RelocationHandler for Box<H> {
-    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
+    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
 impl<H: RelocationHandler + ?Sized> RelocationHandler for Arc<H> {
-    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
+    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }

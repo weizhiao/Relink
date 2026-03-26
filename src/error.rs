@@ -130,6 +130,8 @@ pub enum ParseDynamicError {
     MissingHashTable,
     /// A dynamic-section address calculation overflowed.
     AddressOverflow,
+    /// A relocation table described by the dynamic section is malformed.
+    MalformedRelocationTable { detail: &'static str },
     /// `{tag} was present without its required count tag`
     MissingVersionCount { tag: &'static str },
 }
@@ -141,6 +143,7 @@ impl Display for ParseDynamicError {
                 f.write_str("dynamic section does not have DT_GNU_HASH nor DT_HASH")
             }
             Self::AddressOverflow => f.write_str("dynamic section address calculation overflowed"),
+            Self::MalformedRelocationTable { detail } => f.write_str(detail),
             Self::MissingVersionCount { tag } => {
                 write!(f, "{tag} is missing its required version-count tag")
             }

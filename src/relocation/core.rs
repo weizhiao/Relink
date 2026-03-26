@@ -6,8 +6,8 @@ use crate::{
     image::{ElfCore, LoadedCore},
     logging, relocate_context_error,
     relocation::{
-        BindingOptions, Relocatable, RelocationContext, RelocationHandler, SupportLazy,
-        SymbolLookup,
+        BindingOptions, HandleResult, Relocatable, RelocationContext, RelocationHandler,
+        SupportLazy, SymbolLookup,
     },
     sync::Arc,
     tls::TlsDescArgs,
@@ -66,29 +66,27 @@ where
     }
 
     #[inline]
-    pub(crate) fn handle_pre(&mut self, rel: &ElfRelType) -> Result<bool> {
-        let hctx = RelocationContext::new(rel, self.core, &self.scope);
-        let opt = self.pre_handler.handle(&hctx);
-        if let Some(r) = opt {
-            if let Some(idx) = r? {
+    fn finish_handler_result(&mut self, result: HandleResult) -> HandleResult {
+        match result {
+            HandleResult::Unhandled => HandleResult::Unhandled,
+            HandleResult::Handled => HandleResult::Handled,
+            HandleResult::HandledWithDependency(idx) => {
                 self.dependency_flags[idx] = true;
+                HandleResult::Handled
             }
-            return Ok(false);
         }
-        Ok(true)
     }
 
     #[inline]
-    pub(crate) fn handle_post(&mut self, rel: &ElfRelType) -> Result<bool> {
+    pub(crate) fn handle_pre(&mut self, rel: &ElfRelType) -> Result<HandleResult> {
         let hctx = RelocationContext::new(rel, self.core, &self.scope);
-        let opt = self.post_handler.handle(&hctx);
-        if let Some(r) = opt {
-            if let Some(idx) = r? {
-                self.dependency_flags[idx] = true;
-            }
-            return Ok(false);
-        }
-        Ok(true)
+        Ok(self.finish_handler_result(self.pre_handler.handle(&hctx)?))
+    }
+
+    #[inline]
+    pub(crate) fn handle_post(&mut self, rel: &ElfRelType) -> Result<HandleResult> {
+        let hctx = RelocationContext::new(rel, self.core, &self.scope);
+        Ok(self.finish_handler_result(self.post_handler.handle(&hctx)?))
     }
 
     #[inline]
@@ -496,6 +494,16 @@ impl RelocAddr {
     }
 }
 
+/// Resolve the final address for an IFUNC resolver entry.
+///
+/// # Safety
+/// The address must point to a valid IFUNC resolver function.
+#[inline(always)]
+pub(crate) unsafe fn resolve_ifunc(addr: RelocAddr) -> RelocAddr {
+    let ifunc: fn() -> usize = unsafe { core::mem::transmute(addr.into_inner()) };
+    RelocAddr::new(ifunc())
+}
+
 #[cfg(feature = "object")]
 impl RelocSWord32 {
     #[inline]
@@ -527,9 +535,7 @@ impl<'temp, D> SymDef<'temp, D> {
             if likely(sym.st_type() != STT_GNU_IFUNC) {
                 addr
             } else {
-                // IFUNC会在运行时确定地址，这里使用的是ifunc的返回值
-                let ifunc: fn() -> usize = unsafe { core::mem::transmute(addr.into_inner()) };
-                RelocAddr::new(ifunc())
+                unsafe { resolve_ifunc(addr) }
             }
         } else {
             // 未定义的弱符号返回null

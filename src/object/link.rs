@@ -51,13 +51,11 @@ impl<D: 'static> RawObject<D> {
         );
         for reloc in self.relocation.sections.iter() {
             for rel in *reloc {
-                if !helper.handle_pre(rel)? {
+                if !helper.handle_pre(rel)?.is_unhandled() {
                     continue;
                 }
                 ObjectRelocator::relocate(&mut helper, rel, &mut self.pltgot)?;
-                if !helper.handle_post(rel)? {
-                    continue;
-                }
+                helper.handle_post(rel)?;
             }
         }
 

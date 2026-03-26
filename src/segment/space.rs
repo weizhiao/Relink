@@ -52,13 +52,6 @@ impl ElfSegments {
             .is_some_and(|end| end <= self.len)
     }
 
-    #[inline]
-    fn contains_offset(&self, offset: usize) -> bool {
-        offset
-            .checked_sub(self.offset)
-            .is_some_and(|offset| offset < self.len)
-    }
-
     /// Create a new ElfSegments instance
     ///
     /// # Arguments
@@ -142,7 +135,7 @@ impl ElfSegments {
     /// the type T is appropriate for the data at that location.
     #[inline]
     pub(crate) fn get_ptr<T>(&self, offset: usize) -> *const T {
-        debug_assert!(self.contains_offset(offset));
+        debug_assert!(self.contains_range(offset, size_of::<T>()));
         self.base_addr().offset(offset).as_ptr()
     }
 

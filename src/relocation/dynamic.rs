@@ -1,36 +1,28 @@
 //! Relocation of elf objects
 use crate::sync::Arc;
 use crate::{
-    Result,
+    ParseDynamicError, Result,
     arch::*,
     elf::{ElfRelType, ElfRelr},
     image::{DynamicImage, LoadedCore},
     logging,
     relocation::{
-        BindingOptions, RelocAddr, RelocArtifacts, RelocHelper, RelocValue, RelocationHandler,
-        ResolvedBinding, SymbolLookup, likely, reloc_error, unlikely,
+        BindingOptions, RelocArtifacts, RelocHelper, RelocationHandler, ResolvedBinding,
+        SymbolLookup, likely, reloc_error, resolve_ifunc, unlikely,
     },
     tls::{handle_tls_reloc, is_tls_relocation, is_tlsdesc_relocation, lookup_tls_get_addr},
 };
 use alloc::vec::Vec;
-use core::{num::NonZeroUsize, ptr::null_mut};
-
-/// Resolve indirect function address
-///
-/// # Safety
-/// The address must point to a valid IFUNC function.
-#[inline(always)]
-unsafe fn resolve_ifunc(addr: RelocAddr) -> RelocAddr {
-    let ifunc: fn() -> usize = unsafe { core::mem::transmute(addr.into_inner()) };
-    RelocValue::new(ifunc())
-}
+use core::num::NonZeroUsize;
 
 impl<D> DynamicImage<D> {
     fn apply_relro(&self, binding: &ResolvedBinding) -> Result<()> {
+        if binding.is_lazy() {
+            return Ok(());
+        }
+
         if let Some(relro) = self.relro() {
-            if !binding.is_lazy() {
-                relro.relro()?;
-            }
+            relro.relro()?;
         }
         Ok(())
     }
@@ -54,12 +46,9 @@ impl<D> DynamicImage<D> {
     {
         logging::info!("Relocating dynamic library: {}", self.name());
 
-        // Optimization: check if relocation is empty
-        if self.relocation().is_empty() {
+        let relocation = self.relocation();
+        if relocation.is_empty() {
             logging::debug!("No relocations needed for {}", self.name());
-            let core = self.into_core();
-            let relocated = unsafe { LoadedCore::from_core(core) };
-            return Ok(relocated);
         }
 
         let binding = self.resolve_binding(binding);
@@ -86,9 +75,11 @@ impl<D> DynamicImage<D> {
             tls_get_addr,
         );
 
-        self.relocate_relative()
-            .relocate_dynrel(&mut helper)?
-            .relocate_pltrel(&binding, &mut helper)?;
+        if !relocation.is_empty() {
+            self.relocate_relative()
+                .relocate_dynrel(&mut helper)?
+                .relocate_pltrel(&binding, &mut helper)?;
+        }
 
         let RelocArtifacts {
             deps,
@@ -173,12 +164,11 @@ impl<D> DynamicImage<D> {
 
         // Process PLT relocations
         for rel in reloc.pltrel {
-            if !helper.handle_pre(rel)? {
+            if !helper.handle_pre(rel)?.is_unhandled() {
                 continue;
             }
             let r_type = rel.r_type() as u32;
             let r_sym = rel.r_symbol();
-            let r_addend = rel.r_addend(base.into_inner());
 
             // Handle jump slot relocations
             if likely(r_type == REL_JUMP_SLOT) {
@@ -192,6 +182,7 @@ impl<D> DynamicImage<D> {
                 }
             } else if unlikely(r_type == REL_IRELATIVE) {
                 // Handle indirect function relocations
+                let r_addend = rel.r_addend(base.into_inner());
                 let addr = base.addend(r_addend);
                 segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 continue;
@@ -202,7 +193,7 @@ impl<D> DynamicImage<D> {
                 }
             }
             // Handle unknown relocations with the provided handler
-            if helper.handle_post(rel)? {
+            if helper.handle_post(rel)?.is_unhandled() {
                 return Err(reloc_error(
                     rel,
                     crate::RelocationFailureReason::Unhandled,
@@ -224,40 +215,39 @@ impl<D> DynamicImage<D> {
             RelativeRel::Rel(rel) => {
                 assert!(rel.is_empty() || rel[0].r_type() == REL_RELATIVE as usize);
                 // Apply all relative relocations: new_value = base_address + addend
-                rel.iter().for_each(|rel| {
+                for rel in rel {
                     debug_assert!(rel.r_type() == REL_RELATIVE as usize);
                     let r_addend = rel.r_addend(base.into_inner());
-                    let val = base.addend(r_addend);
-                    segments.write(rel.r_offset(), val);
-                })
+                    segments.write(rel.r_offset(), base.addend(r_addend));
+                }
             }
             RelativeRel::Relr(relr) => {
                 // Apply compact relative relocations (RELR format)
-                let mut reloc_addr: *mut usize = null_mut();
-                relr.iter().for_each(|relr| {
+                let mut reloc_addr = core::ptr::null_mut::<usize>();
+
+                for relr in relr {
                     let value = relr.value();
+
                     unsafe {
                         if (value & 1) == 0 {
-                            // Single relocation entry
-                            reloc_addr = core.segments().get_mut_ptr(value);
+                            reloc_addr = segments.get_mut_ptr(value);
                             reloc_addr.write(base.offset(reloc_addr.read()).into_inner());
                             reloc_addr = reloc_addr.add(1);
-                        } else {
-                            // Bitmap of relocations
-                            let mut bitmap = value;
-                            let mut idx = 0;
-                            while bitmap != 0 {
-                                bitmap >>= 1;
-                                if (bitmap & 1) != 0 {
-                                    let ptr = reloc_addr.add(idx);
-                                    ptr.write(base.offset(ptr.read()).into_inner());
-                                }
-                                idx += 1;
-                            }
-                            reloc_addr = reloc_addr.add(usize::BITS as usize - 1);
+                            continue;
                         }
+
+                        let mut bitmap = value >> 1;
+                        let mut ptr = reloc_addr;
+                        while bitmap != 0 {
+                            if (bitmap & 1) != 0 {
+                                ptr.write(base.offset(ptr.read()).into_inner());
+                            }
+                            bitmap >>= 1;
+                            ptr = ptr.add(1);
+                        }
+                        reloc_addr = reloc_addr.add(usize::BITS as usize - 1);
                     }
-                });
+                }
             }
         }
         self
@@ -288,12 +278,11 @@ impl<D> DynamicImage<D> {
 
         // Process each dynamic relocation entry
         for rel in reloc.dynrel {
-            if !helper.handle_pre(rel)? {
+            if !helper.handle_pre(rel)?.is_unhandled() {
                 continue;
             }
             let r_type = rel.r_type() as u32;
             let r_sym = rel.r_symbol();
-            let r_addend = rel.r_addend(base.into_inner());
 
             // Handle `REL_NONE` first because some architectures use `0` as a
             // sentinel for unsupported relocation classes such as TLSDESC.
@@ -304,6 +293,7 @@ impl<D> DynamicImage<D> {
             if r_type == REL_GOT || r_type == REL_SYMBOLIC {
                 // Handle GOT and symbolic relocations
                 if let Some(symbol) = helper.find_symbol(r_sym) {
+                    let r_addend = rel.r_addend(base.into_inner());
                     segments.write(rel.r_offset(), symbol.addend(r_addend));
                     continue;
                 }
@@ -321,6 +311,7 @@ impl<D> DynamicImage<D> {
                 }
             } else if r_type == REL_IRELATIVE {
                 // Handle indirect function relocations
+                let r_addend = rel.r_addend(base.into_inner());
                 let addr = base.addend(r_addend);
                 segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 continue;
@@ -332,7 +323,7 @@ impl<D> DynamicImage<D> {
             }
 
             // Handle unknown relocations with the provided handler
-            if helper.handle_post(rel)? {
+            if helper.handle_post(rel)?.is_unhandled() {
                 return Err(reloc_error(
                     rel,
                     crate::RelocationFailureReason::Unhandled,
@@ -352,19 +343,27 @@ impl DynamicRelocation {
         dynrel: Option<&'static [ElfRelType]>,
         relr: Option<&'static [ElfRelr]>,
         rela_count: Option<NonZeroUsize>,
-    ) -> Self {
+    ) -> Result<Self> {
         if let Some(relr) = relr {
             // Use RELR relocations if available (more compact format)
-            Self {
+            Ok(Self {
                 relative: RelativeRel::Relr(relr),
                 pltrel: pltrel.unwrap_or(&[]),
                 dynrel: dynrel.unwrap_or(&[]),
-            }
+            })
         } else {
             // Use traditional REL/RELA relocations
             // nrelative indicates the count of REL_RELATIVE relocation types
             let nrelative = rela_count.map(|v| v.get()).unwrap_or(0);
             let old_dynrel = dynrel.unwrap_or(&[]);
+
+            if nrelative > old_dynrel.len() {
+                return Err(ParseDynamicError::MalformedRelocationTable {
+                    detail:
+                        "DT_RELCOUNT/DT_RELACOUNT relocation table is malformed: relative relocation count exceeds the relocation table length",
+                }
+                .into());
+            }
 
             // Split relocations into relative and non-relative parts
             let relative = RelativeRel::Rel(&old_dynrel[..nrelative]);
@@ -379,17 +378,23 @@ impl DynamicRelocation {
                 )
             } {
                 // If contiguous, exclude pltrel entries from dynrel
-                &temp_dynrel[..temp_dynrel.len() - pltrel.len()]
+                let dynrel_len = temp_dynrel.len().checked_sub(pltrel.len()).ok_or(
+                    ParseDynamicError::MalformedRelocationTable {
+                        detail:
+                            "DT_JMPREL relocation table is malformed: PLT relocations exceed the tail of DT_REL/DT_RELA",
+                    },
+                )?;
+                &temp_dynrel[..dynrel_len]
             } else {
                 // Otherwise, use all remaining entries
                 temp_dynrel
             };
 
-            Self {
+            Ok(Self {
                 relative,
                 pltrel,
                 dynrel,
-            }
+            })
         }
     }
 
@@ -397,5 +402,51 @@ impl DynamicRelocation {
     #[inline]
     fn is_empty(&self) -> bool {
         self.relative.is_empty() && self.dynrel.is_empty() && self.pltrel.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DynamicRelocation;
+    use crate::{Error, ParseDynamicError, elf::ElfRelType};
+    use alloc::boxed::Box;
+    use core::num::NonZeroUsize;
+
+    fn zeroed_rel() -> ElfRelType {
+        unsafe { core::mem::zeroed() }
+    }
+
+    #[test]
+    fn rejects_relative_count_past_dynrel_len() {
+        let dynrel = Box::leak(Box::new([zeroed_rel()]));
+        let err = match DynamicRelocation::new(None, Some(&dynrel[..]), None, NonZeroUsize::new(2))
+        {
+            Ok(_) => panic!("relative count should be validated"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            Error::ParseDynamic(ParseDynamicError::MalformedRelocationTable { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_pltrel_suffix_longer_than_remaining_dynrel() {
+        let dynrel = Box::leak(Box::new([zeroed_rel(), zeroed_rel(), zeroed_rel()]));
+        let err = match DynamicRelocation::new(
+            Some(&dynrel[..]),
+            Some(&dynrel[..]),
+            None,
+            NonZeroUsize::new(1),
+        ) {
+            Ok(_) => panic!("contiguous PLT suffix should fit in the non-relative tail"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            Error::ParseDynamic(ParseDynamicError::MalformedRelocationTable { .. })
+        ));
     }
 }

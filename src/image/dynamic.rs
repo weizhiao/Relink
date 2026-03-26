@@ -315,7 +315,7 @@ impl<D: 'static> DynamicImage<D> {
             dynamic.dynrel,
             dynamic.relr,
             dynamic.rel_count,
-        );
+        )?;
 
         let static_tls = builder.static_tls | dynamic.static_tls;
 
