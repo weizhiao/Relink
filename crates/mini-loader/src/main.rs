@@ -18,7 +18,23 @@ use elf_loader::{
 };
 use itoa::Buffer;
 use linked_list_allocator::LockedHeap;
-use mini_loader::{exit, print_str, println};
+use mini_loader::{exit, fatal, print_str};
+
+#[inline(always)]
+fn expect_some<T>(value: Option<T>, message: &'static str) -> T {
+    match value {
+        Some(value) => value,
+        None => fatal(message),
+    }
+}
+
+#[inline(always)]
+fn expect_ok<T, E>(value: core::result::Result<T, E>, message: &'static str) -> T {
+    match value {
+        Ok(value) => value,
+        Err(_) => fatal(message),
+    }
+}
 
 #[inline(always)]
 fn load_elf(name: &str) -> Result<RawElf<()>> {
@@ -40,25 +56,19 @@ static mut ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 const HEAP_SIZE: usize = 1024 * 1024; // 1MB heap
 static mut HEAP_BUF: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
-static mut HEAP_INIT: bool = false;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    let location = info.location().unwrap();
-    let mut buf = Buffer::new();
-    print_str(location.file());
-    print_str(":");
-    print_str(buf.format(location.line()));
-    print_str(":");
-    print_str(buf.format(location.column()));
-    print_str(" ");
-    if let Some(msg) = info.message().as_str() {
-        print_str(msg);
-        print_str("\n");
+    if let Some(location) = info.location() {
+        let mut buf = Buffer::new();
+        print_str(location.file());
+        print_str(":");
+        print_str(buf.format(location.line()));
+        print_str(":");
+        print_str(buf.format(location.column()));
+        print_str(" panic\n");
     } else {
-        if unsafe { HEAP_INIT } {
-            println!("{}", info.message())
-        }
+        print_str("panic\n");
     }
     exit(-1);
 }
@@ -91,8 +101,8 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
         cur_dyn_ptr = unsafe { cur_dyn_ptr.add(1) };
         cur_dyn = unsafe { &mut *cur_dyn_ptr };
     }
-    let rela = rela.unwrap();
-    let rela_count = rela_count.unwrap();
+    let rela = expect_some(rela, "missing DT_RELA\n");
+    let rela_count = expect_some(rela_count, "missing DT_RELACOUNT\n");
 
     let mut base = 0;
     let mut phnum = 0;
@@ -125,14 +135,11 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     // 通常是0，需要自行计算
     if base == 0 {
         let phdrs = unsafe { &*core::ptr::slice_from_raw_parts(ph, phnum as usize) };
-        let mut idx = 0;
-        loop {
-            let phdr = &phdrs[idx];
+        for phdr in phdrs {
             if phdr.p_type == PT_DYNAMIC {
                 base = dynv as usize - phdr.p_vaddr as usize;
                 break;
             }
-            idx += 1;
         }
     }
     // 自举，mini-loader自己对自己重定位
@@ -148,24 +155,27 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
     // 至此就完成自举，可以进行函数调用了
     unsafe {
         ALLOCATOR = LockedHeap::new(addr_of_mut!(HEAP_BUF).cast(), HEAP_SIZE);
-        HEAP_INIT = true;
     }
 
     if argc == 1 {
-        panic!("no input file");
+        fatal("no input file\n");
     }
     // 加载输入的elf文件
     let argv = unsafe { sp.add(1) };
     let elf_name_raw = unsafe { argv.add(1).read() as *const i8 };
     let elf_name = unsafe { CStr::from_ptr(elf_name_raw as _) };
 
-    let elf = load_elf(elf_name.to_str().unwrap()).unwrap();
+    let elf_name = expect_ok(elf_name.to_str(), "input path is not valid UTF-8\n");
+    let elf = expect_ok(load_elf(elf_name), "failed to load input ELF\n");
     let mut interp_dylib = None;
     // 加载动态加载器ld.so，如果有的话
     if let Some(interp_name) = elf.interp() {
-        interp_dylib = Some(load_elf(interp_name).expect("Failed to load interpreter"));
+        interp_dylib = Some(expect_ok(
+            load_elf(interp_name),
+            "failed to load interpreter\n",
+        ));
     }
-    let phdrs = elf.phdrs().unwrap_or_default();
+    let phdrs = elf.phdrs().unwrap_or(&[]);
     // 重新设置aux
     let mut cur_aux_ptr = auxv;
     let mut cur_aux = unsafe { &mut *cur_aux_ptr };

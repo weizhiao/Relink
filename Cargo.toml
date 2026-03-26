@@ -105,6 +105,10 @@ object = "0.38.1"
 name = "benchmark"
 harness = false
 
+[[example]]
+name = "load_object"
+required-features = ["object"]
+
 [features]
 default = ["tls"]
 

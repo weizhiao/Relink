@@ -1,5 +1,5 @@
 use crate::{
-    Result,
+    Result, logging,
     relocation::{RelocAddr, RelocValue},
 };
 use core::{ffi::c_void, fmt::Debug};
@@ -35,8 +35,10 @@ impl Debug for ElfSegments {
 impl Drop for ElfSegments {
     /// Unmap the memory when the ElfSegments is dropped
     fn drop(&mut self) {
-        unsafe {
-            (self.munmap)(self.memory, self.len).unwrap();
+        let res = unsafe { (self.munmap)(self.memory, self.len) };
+        debug_assert!(res.is_ok(), "failed to unmap ELF segments");
+        if let Err(err) = res {
+            logging::error!("failed to unmap ELF segments: {err}");
         }
     }
 }

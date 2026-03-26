@@ -5,25 +5,36 @@ use elf_loader::arch::{
 };
 #[cfg(feature = "lazy-binding")]
 use elf_loader::relocation::BindingOptions;
+#[cfg(any(feature = "tls", feature = "object"))]
 use elf_loader::{Loader, input::ElfBinary};
-use gen_elf::{Arch, ObjectWriter, RelocEntry, SymbolDesc};
+#[cfg(feature = "object")]
+use gen_elf::ObjectWriter;
+#[cfg(any(feature = "tls", feature = "object"))]
+use gen_elf::{Arch, RelocEntry, SymbolDesc};
 #[cfg(feature = "tls")]
 use gen_elf::{DylibWriter, ElfWriterConfig};
+#[cfg(any(feature = "tls", feature = "object"))]
 use std::collections::HashMap;
+#[cfg(any(feature = "tls", feature = "object"))]
 use std::sync::Arc;
 #[cfg(feature = "tls")]
 use std::sync::Barrier;
 #[cfg(feature = "tls")]
 use std::thread;
 
+#[cfg(any(feature = "tls", feature = "object"))]
 const EXTERNAL_FUNC_NAME: &str = "external_func";
+#[cfg(any(feature = "tls", feature = "object"))]
 const EXTERNAL_FUNC_NAME2: &str = "external_func2";
+#[cfg(any(feature = "tls", feature = "object"))]
 const EXTERNAL_VAR_NAME: &str = "external_var";
+#[cfg(any(feature = "tls", feature = "object"))]
 const EXTERNAL_TLS_NAME: &str = "external_tls";
 #[cfg(feature = "tls")]
 const EXTERNAL_TLS_NAME2: &str = "external_tls2";
 #[cfg(feature = "tls")]
 const COPY_VAR_NAME: &str = "copy_var";
+#[cfg(any(feature = "tls", feature = "object"))]
 const LOCAL_VAR_NAME: &str = "local_var";
 
 #[cfg(feature = "tls")]
@@ -82,16 +93,20 @@ type ExternalFunc = extern "C" fn(
 #[cfg(feature = "tls")]
 type TlsHelperFunc = extern "C" fn() -> *mut u32;
 
+#[cfg(any(feature = "tls", feature = "object"))]
 static mut EXTERNAL_VAR: i32 = 100;
 
+#[cfg(all(feature = "object", target_arch = "x86_64"))]
 pub unsafe fn read_u64(p: *const u8) -> u64 {
     unsafe { (p as *const u64).read_unaligned() }
 }
 
+#[cfg(all(feature = "object", target_arch = "x86_64"))]
 pub unsafe fn read_i32(p: *const u8) -> i32 {
     unsafe { (p as *const i32).read_unaligned() }
 }
 
+#[cfg(any(feature = "tls", feature = "object"))]
 pub fn get_symbol_lookup() -> (
     HashMap<&'static str, usize>,
     Arc<dyn Fn(&str) -> Option<*const ()> + Send + Sync>,
@@ -369,13 +384,11 @@ fn run_dynamic_linking(is_lazy: bool) {
     println!("✓ {} linking test passed", test_name);
 }
 
+#[cfg(all(feature = "object", target_arch = "x86_64"))]
 #[test]
 fn static_linking() {
     let arch = Arch::current();
-    if arch != Arch::X86_64 {
-        println!("Skipping static linking test for {:?}", arch);
-        return;
-    }
+    debug_assert_eq!(arch, Arch::X86_64);
 
     let symbols = vec![
         SymbolDesc::global_object(LOCAL_VAR_NAME, &[0u8; 0x100]),

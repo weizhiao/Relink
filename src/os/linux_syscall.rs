@@ -1,6 +1,6 @@
 use crate::input::ElfReader;
 use crate::{
-    Error, IoError, MmapError, Result,
+    Error, IoError, MmapError, Result, logging,
     os::{MapFlags, Mmap, ProtFlags},
 };
 use alloc::ffi::CString;
@@ -225,12 +225,15 @@ impl RawFile {
 
 impl Drop for RawFile {
     fn drop(&mut self) {
-        unsafe {
+        let res = unsafe {
             from_io_ret(syscalls::raw_syscall!(Sysno::close, self.fd), || {
                 IoError::CloseFailed.into()
             })
-            .unwrap()
         };
+        debug_assert!(res.is_ok(), "failed to close ELF file");
+        if let Err(err) = res {
+            logging::error!("failed to close ELF file: {err}");
+        }
     }
 }
 
@@ -254,7 +257,7 @@ impl ElfReader for RawFile {
     }
 
     fn file_name(&self) -> &str {
-        self.name.to_str().unwrap()
+        unsafe { core::str::from_utf8_unchecked(self.name.as_bytes()) }
     }
 
     fn as_fd(&self) -> Option<isize> {
