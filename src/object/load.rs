@@ -15,15 +15,25 @@ impl ElfBuf {
         ehdr: &ElfHeader,
         object: &mut impl ElfReader,
     ) -> Result<Option<&mut [ElfShdr]>> {
-        let Some(size) = self.read_table(object, ehdr.shdr_range())? else {
+        let Some((start, size)) = ehdr.checked_shdr_layout()? else {
             return Ok(None);
         };
-        unsafe {
-            Ok(Some(core::slice::from_raw_parts_mut(
-                self.buf.as_mut_ptr().cast::<ElfShdr>(),
-                size / size_of::<ElfShdr>(),
-            )))
+        let count = ehdr.e_shnum();
+
+        self.buf
+            .set_len(size)
+            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
+        object.read(self.buf.as_bytes_mut(), start)?;
+
+        let shdrs = self
+            .buf
+            .as_slice_mut::<ElfShdr>()
+            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
+        if shdrs.len() != count {
+            return Err(ParseEhdrError::MissingSectionHeaders.into());
         }
+
+        Ok(Some(shdrs))
     }
 }
 
@@ -76,5 +86,77 @@ where
         );
 
         Ok(raw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ElfBuf, ElfHeader, ElfShdr};
+    use crate::{
+        Result,
+        arch::EM_ARCH,
+        elf::{E_CLASS, EHDR_SIZE, ElfEhdr},
+        input::ElfReader,
+    };
+    use alloc::vec::Vec;
+    use core::mem::size_of;
+    use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, ET_REL, EV_CURRENT};
+
+    struct TestReader {
+        bytes: Vec<u8>,
+    }
+
+    impl TestReader {
+        fn zeroed(size: usize) -> Self {
+            Self {
+                bytes: alloc::vec![0; size],
+            }
+        }
+    }
+
+    impl ElfReader for TestReader {
+        fn file_name(&self) -> &str {
+            "<test>"
+        }
+
+        fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
+            buf.copy_from_slice(&self.bytes[offset..offset + buf.len()]);
+            Ok(())
+        }
+
+        fn as_fd(&self) -> Option<isize> {
+            None
+        }
+    }
+
+    fn make_object_header(shentsize: usize, shnum: usize) -> ElfHeader {
+        let mut ehdr = unsafe { core::mem::zeroed::<ElfEhdr>() };
+        ehdr.e_ident[0..4].copy_from_slice(&ELFMAGIC);
+        ehdr.e_ident[EI_CLASS] = E_CLASS;
+        ehdr.e_ident[EI_VERSION] = EV_CURRENT;
+        ehdr.e_type = ET_REL as _;
+        ehdr.e_machine = EM_ARCH;
+        ehdr.e_version = EV_CURRENT as _;
+        ehdr.e_ehsize = EHDR_SIZE as _;
+        ehdr.e_shoff = EHDR_SIZE as _;
+        ehdr.e_shentsize = shentsize as _;
+        ehdr.e_shnum = shnum as _;
+
+        ElfHeader::from_raw(ehdr).expect("failed to parse crafted object header")
+    }
+
+    #[test]
+    fn prepare_shdrs_rejects_entry_size_mismatch() {
+        let mut elf_buf = ElfBuf::new();
+        let header = make_object_header(size_of::<ElfShdr>() + 8, 1);
+        let mut reader = TestReader::zeroed(512);
+
+        let err = elf_buf
+            .prepare_shdrs_mut(&header, &mut reader)
+            .expect_err("shdr entry size mismatch should fail");
+        assert!(matches!(
+            err,
+            crate::Error::ParseEhdr(crate::ParseEhdrError::MissingSectionHeaders)
+        ));
     }
 }

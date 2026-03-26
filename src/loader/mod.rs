@@ -11,6 +11,7 @@
 //! - [`UserDataLoaderContext`] for attaching user-defined metadata to loaded images
 //! - `with_*` builder methods for swapping the memory-mapping backend or TLS resolver
 
+mod buffer;
 mod builder;
 mod load;
 
@@ -22,17 +23,14 @@ use crate::{
     sync::Arc,
     tls::TlsResolver,
 };
-use alloc::{boxed::Box, vec::Vec};
+use alloc::boxed::Box;
 use core::marker::PhantomData;
 
 #[cfg(feature = "tls")]
 use crate::tls::DefaultTlsResolver;
 
+pub(crate) use buffer::ElfBuf;
 pub(crate) use builder::ImageBuilder;
-
-pub(crate) struct ElfBuf {
-    pub(crate) buf: Vec<u8>,
-}
 
 /// Context passed to [`LoadHook`] while a program header is being processed.
 pub struct LoadHookContext<'a> {

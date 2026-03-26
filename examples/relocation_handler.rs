@@ -3,7 +3,7 @@ mod fixture_support;
 
 use elf_loader::{
     Loader, Result,
-    relocation::{RelocationContext, RelocationHandler},
+    relocation::{HandleResult, RelocationContext, RelocationHandler},
 };
 
 struct MyRelocHandler;
@@ -13,7 +13,7 @@ fn my_print(s: &str) {
 }
 
 impl RelocationHandler for MyRelocHandler {
-    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Option<Result<Option<usize>>> {
+    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
         let r_sym = ctx.rel().r_symbol();
         let symtab = ctx.lib().symtab();
         let (_, sym_info) = symtab.symbol_idx(r_sym);
@@ -26,10 +26,10 @@ impl RelocationHandler for MyRelocHandler {
                 target_addr
             );
             unsafe { *target_addr = my_print as *const () as usize };
-            return Some(Ok(None));
+            return Ok(HandleResult::Handled);
         }
 
-        None
+        Ok(HandleResult::Unhandled)
     }
 }
 

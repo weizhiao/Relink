@@ -5,11 +5,11 @@
 //! file type, and section/program header information.
 
 use crate::{
-    ParseEhdrError, Result,
+    ParseEhdrError, ParsePhdrError, Result,
     arch::EM_ARCH,
-    elf::{E_CLASS, EHDR_SIZE, ElfClass, ElfEhdr, ElfFileType, ElfMachine},
+    elf::{E_CLASS, ElfClass, ElfEhdr, ElfFileType, ElfMachine, ElfPhdr, ElfShdr},
 };
-use core::ops::Deref;
+use core::{mem::size_of, ops::Deref};
 use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, ET_EXEC, EV_CURRENT};
 
 /// A wrapper around the ELF header structure
@@ -21,33 +21,6 @@ use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, ET_EXEC, EV_CURRENT};
 pub struct ElfHeader {
     /// The underlying ELF header structure
     ehdr: ElfEhdr,
-}
-
-impl Clone for ElfHeader {
-    /// Creates a copy of the ELF header
-    ///
-    /// This implementation manually clones each field of the ELF header
-    /// to avoid potential issues with automatic derivation.
-    fn clone(&self) -> Self {
-        Self {
-            ehdr: ElfEhdr {
-                e_ident: self.e_ident,
-                e_type: self.e_type,
-                e_machine: self.e_machine,
-                e_version: self.e_version,
-                e_entry: self.e_entry,
-                e_phoff: self.e_phoff,
-                e_shoff: self.e_shoff,
-                e_flags: self.e_flags,
-                e_ehsize: self.e_ehsize,
-                e_phentsize: self.e_phentsize,
-                e_phnum: self.e_phnum,
-                e_shentsize: self.e_shentsize,
-                e_shnum: self.e_shnum,
-                e_shstrndx: self.e_shstrndx,
-            },
-        }
-    }
 }
 
 impl Deref for ElfHeader {
@@ -63,18 +36,9 @@ impl Deref for ElfHeader {
 }
 
 impl ElfHeader {
-    /// Creates a new `ElfHeader` from raw data, validating it for the target architecture.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the data is too short or doesn't represent a valid ELF header.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `data` contains at least `EHDR_SIZE` bytes.
-    pub(crate) fn new(data: &[u8]) -> Result<&Self> {
-        debug_assert!(data.len() >= EHDR_SIZE);
-        let ehdr: &ElfHeader = unsafe { &*(data.as_ptr().cast()) };
+    #[inline]
+    pub(crate) fn from_raw(ehdr: ElfEhdr) -> Result<Self> {
+        let ehdr = Self { ehdr };
         ehdr.validate()?;
         Ok(ehdr)
     }
@@ -189,6 +153,31 @@ impl ElfHeader {
         (phdr_start, phdr_end)
     }
 
+    /// Returns the checked `(start, size)` layout for the program header table.
+    ///
+    /// This validates entry-size compatibility and overflow-prone arithmetic.
+    #[inline]
+    pub(crate) fn checked_phdr_layout(&self) -> Result<Option<(usize, usize)>> {
+        let entsize = self.e_phentsize();
+        if entsize != size_of::<ElfPhdr>() {
+            return Err(ParsePhdrError::MalformedProgramHeaders.into());
+        }
+
+        let count = self.e_phnum();
+        let size = entsize
+            .checked_mul(count)
+            .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
+        if size == 0 {
+            return Ok(None);
+        }
+
+        let start = self.e_phoff();
+        let _end = start
+            .checked_add(size)
+            .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
+        Ok(Some((start, size)))
+    }
+
     /// Returns the `(start, end)` file offsets of the section header table.
     #[inline]
     pub fn shdr_range(&self) -> (usize, usize) {
@@ -196,5 +185,31 @@ impl ElfHeader {
         let shdr_start = self.e_shoff();
         let shdr_end = shdr_start + shdrs_size;
         (shdr_start, shdr_end)
+    }
+
+    /// Returns the checked `(start, size)` layout for the section header table.
+    ///
+    /// This validates entry-size compatibility and overflow-prone arithmetic.
+    #[inline]
+    #[cfg_attr(not(feature = "object"), allow(dead_code))]
+    pub(crate) fn checked_shdr_layout(&self) -> Result<Option<(usize, usize)>> {
+        let entsize = self.e_shentsize();
+        if entsize != size_of::<ElfShdr>() {
+            return Err(ParseEhdrError::MissingSectionHeaders.into());
+        }
+
+        let count = self.e_shnum();
+        let size = entsize
+            .checked_mul(count)
+            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
+        if size == 0 {
+            return Ok(None);
+        }
+
+        let start = self.e_shoff();
+        let _end = start
+            .checked_add(size)
+            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
+        Ok(Some((start, size)))
     }
 }
