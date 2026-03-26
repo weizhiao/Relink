@@ -83,25 +83,27 @@ impl RelocMetaData {
         // Process relative relocations (relative to GOT)
         for r in relative_relocs.into_iter() {
             debug_assert!(r.symbol_name.is_empty());
-            relocs.push(Reloc {
-                sym_idx: 0,
-                offset: got_slot_idx * word_size,
-                addend: r.addend,
-                r_type: r.r_type,
-                sym_size: 0,
-            });
+            relocs.push(Reloc::at_got(
+                got_slot_idx * word_size,
+                None,
+                0,
+                r.addend,
+                r.r_type,
+                0,
+            ));
             got_slot_idx += 1;
         }
         // Process GOT relocations (relative to GOT)
         for r in got_relocs.into_iter() {
             let sym_idx = symbols.get_sym_idx(&r.symbol_name).unwrap() as u64;
-            relocs.push(Reloc {
+            relocs.push(Reloc::at_got(
+                got_slot_idx * word_size,
+                Some(r.symbol_name.clone()),
                 sym_idx,
-                offset: got_slot_idx * word_size,
-                addend: r.addend,
-                r_type: r.r_type,
-                sym_size: 0,
-            });
+                r.addend,
+                r.r_type,
+                0,
+            ));
             got_slot_idx += 1;
         }
         // Process COPY relocations (relative to DATA)
@@ -111,25 +113,26 @@ impl RelocMetaData {
             let sym_idx = symbols.get_sym_idx(&r.symbol_name).unwrap();
             let sym_size = symbols.get_sym_size(sym_idx);
 
-            relocs.push(Reloc {
-                sym_idx: sym_idx as u64,
-                offset: current_copy_offset,
-                addend: 0,
-                r_type: r.r_type,
+            relocs.push(Reloc::at_data(
+                current_copy_offset,
+                Some(r.symbol_name.clone()),
+                sym_idx as u64,
+                r.r_type,
                 sym_size,
-            });
+            ));
             current_copy_offset += sym_size;
             total_copy_size += sym_size;
         }
         // Process IRELATIVE relocations (relative to GOTPLT)
         for r in irelative_relocs.into_iter() {
-            relocs.push(Reloc {
-                sym_idx: 0,
-                offset: got_slot_idx * word_size,
-                addend: 0,
-                r_type: r.r_type,
-                sym_size: 0,
-            });
+            relocs.push(Reloc::at_got(
+                got_slot_idx * word_size,
+                None,
+                0,
+                0,
+                r.r_type,
+                0,
+            ));
             got_slot_idx += 1;
         }
 
@@ -137,13 +140,12 @@ impl RelocMetaData {
         // Process PLT relocations (relative to GOTPLT)
         for r in plt_relocs.into_iter() {
             let sym_idx = symbols.get_sym_idx(&r.symbol_name).unwrap() as u64;
-            relocs.push(Reloc {
+            relocs.push(Reloc::at_got_plt(
+                plt_slot_idx * word_size,
+                Some(r.symbol_name.clone()),
                 sym_idx,
-                offset: plt_slot_idx * word_size,
-                addend: 0,
-                r_type: r.r_type,
-                sym_size: 0,
-            });
+                r.r_type,
+            ));
             plt_slot_idx += 1;
         }
 
@@ -219,7 +221,7 @@ impl RelocMetaData {
         let got_vaddr = shdr.get_vaddr(SectionKind::Got);
         for r in &self.relocs {
             if r.sym_idx == sym_idx && r.r_type.is_tls_reloc(self.arch) {
-                return Some(got_vaddr + r.offset);
+                return Some(got_vaddr + r.slot_offset);
             }
         }
         None
@@ -229,9 +231,11 @@ impl RelocMetaData {
         self.relocs
             .iter()
             .map(|r| RelocationInfo {
-                vaddr: r.offset,
+                section: r.slot_section,
+                offset: r.slot_offset,
+                vaddr: Some(r.slot_vaddr),
                 r_type: r.r_type.0,
-                sym_idx: r.sym_idx,
+                symbol_name: r.symbol_name.clone(),
                 addend: r.addend,
                 sym_size: r.sym_size,
             })
@@ -311,7 +315,7 @@ impl RelocMetaData {
                 reloc.addend = crate::arch::calculate_addend(
                     self.arch,
                     reloc.r_type,
-                    reloc.offset,
+                    reloc.slot_offset,
                     data_vaddr,
                     sym_value,
                 );
@@ -326,7 +330,7 @@ impl RelocMetaData {
                 let plt_entry_off = plt0_size + plt_idx as u64 * plt_entry_size;
                 let initial_val =
                     crate::arch::get_got_plt_init_value(self.arch, plt_vaddr, plt_entry_off);
-                let offset = reloc.offset as usize;
+                let offset = reloc.slot_offset as usize;
                 let got = allocator.get_mut(&self.got_plt_id);
                 let mut cursor = &mut got[offset..offset + (if is_64 { 8 } else { 4 })];
                 if is_64 {
@@ -347,7 +351,7 @@ impl RelocMetaData {
 
             // For REL (non-RELA) relocations, the addend must be stored in the target location
             if !is_rela && !is_plt && !is_copy {
-                let offset = reloc.offset as usize;
+                let offset = reloc.slot_offset as usize;
                 // If i < copy_start, it's in GOT
                 // If i >= copy_end && i < plt_start, it's IRELATIVE in GOT
                 if i < copy_start || (i >= copy_end && i < plt_start) {
@@ -363,7 +367,7 @@ impl RelocMetaData {
                 }
             }
 
-            reloc.offset += base;
+            reloc.slot_vaddr = reloc.slot_offset + base;
             reloc.write(allocator.get_mut(section_id), is_64, is_rela)?;
         }
         Ok(())
@@ -488,10 +492,16 @@ impl RelocMetaData {
 /// Pending relocation entry before virtual addresses are determined
 #[derive(Debug)]
 pub(crate) struct Reloc {
+    /// Section that stores the relocated value
+    slot_section: SectionKind,
+    /// Offset within the target section before virtual addresses are assigned
+    slot_offset: u64,
+    /// Final virtual address of the relocated slot
+    slot_vaddr: u64,
     /// Symbol index in symbol table
     sym_idx: u64,
-    /// Offset within data segment
-    offset: u64,
+    /// Referenced symbol name
+    symbol_name: Option<String>,
     /// Addend value
     addend: i64,
     /// Relocation type
@@ -501,17 +511,92 @@ pub(crate) struct Reloc {
 }
 
 impl Reloc {
+    fn new(
+        slot_section: SectionKind,
+        slot_offset: u64,
+        symbol_name: Option<String>,
+        sym_idx: u64,
+        addend: i64,
+        r_type: RelocType,
+        sym_size: u64,
+    ) -> Self {
+        Self {
+            slot_section,
+            slot_offset,
+            slot_vaddr: 0,
+            sym_idx,
+            symbol_name,
+            addend,
+            r_type,
+            sym_size,
+        }
+    }
+
+    fn at_got(
+        slot_offset: u64,
+        symbol_name: Option<String>,
+        sym_idx: u64,
+        addend: i64,
+        r_type: RelocType,
+        sym_size: u64,
+    ) -> Self {
+        Self::new(
+            SectionKind::Got,
+            slot_offset,
+            symbol_name,
+            sym_idx,
+            addend,
+            r_type,
+            sym_size,
+        )
+    }
+
+    fn at_data(
+        slot_offset: u64,
+        symbol_name: Option<String>,
+        sym_idx: u64,
+        r_type: RelocType,
+        sym_size: u64,
+    ) -> Self {
+        Self::new(
+            SectionKind::Data,
+            slot_offset,
+            symbol_name,
+            sym_idx,
+            0,
+            r_type,
+            sym_size,
+        )
+    }
+
+    fn at_got_plt(
+        slot_offset: u64,
+        symbol_name: Option<String>,
+        sym_idx: u64,
+        r_type: RelocType,
+    ) -> Self {
+        Self::new(
+            SectionKind::GotPlt,
+            slot_offset,
+            symbol_name,
+            sym_idx,
+            0,
+            r_type,
+            0,
+        )
+    }
+
     fn write(&self, buf: &mut Vec<u8>, is_64: bool, is_rela: bool) -> Result<()> {
         let sym_idx = self.sym_idx;
         if is_64 {
-            buf.write_u64::<LittleEndian>(self.offset)?;
+            buf.write_u64::<LittleEndian>(self.slot_vaddr)?;
             let r_info = (sym_idx << 32) | (self.r_type.as_u64() & 0xffffffff);
             buf.write_u64::<LittleEndian>(r_info)?;
             if is_rela {
                 buf.write_i64::<LittleEndian>(self.addend)?;
             }
         } else {
-            buf.write_u32::<LittleEndian>(self.offset as u32)?;
+            buf.write_u32::<LittleEndian>(self.slot_vaddr as u32)?;
             let r_info = ((sym_idx as u32) << 8) | (self.r_type.as_u32() & 0xff);
             buf.write_u32::<LittleEndian>(r_info)?;
             if is_rela {

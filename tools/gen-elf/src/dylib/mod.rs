@@ -59,6 +59,8 @@ pub struct ElfWriterConfig {
     pub page_size: u64,
     /// Custom value for IFUNC resolver to return (default: None, returns PLT0 address)
     pub ifunc_resolver_val: Option<u64>,
+    /// Whether the generated ELF should request eager binding by default.
+    pub bind_now: bool,
 }
 
 impl Default for ElfWriterConfig {
@@ -67,6 +69,7 @@ impl Default for ElfWriterConfig {
             base_addr: 0,
             page_size: 0x1000,
             ifunc_resolver_val: None,
+            bind_now: false,
         }
     }
 }
@@ -89,22 +92,38 @@ impl ElfWriterConfig {
         self.ifunc_resolver_val = Some(val);
         self
     }
+
+    /// Set whether the generated ELF should request eager binding by default.
+    pub fn with_bind_now(mut self, bind_now: bool) -> Self {
+        self.bind_now = bind_now;
+        self
+    }
 }
 
-/// Relocation metadata for testing and verification
 /// Relocation metadata for testing and verification.
 #[derive(Clone, Debug)]
 pub struct RelocationInfo {
-    /// Virtual address where the relocation is applied.
-    pub vaddr: u64,
+    /// Section that stores the relocated value.
+    pub section: SectionKind,
+    /// Offset within `section` where the relocated value is stored.
+    pub offset: u64,
+    /// Virtual address where the relocated value is stored, when known.
+    pub vaddr: Option<u64>,
     /// Architecture-specific relocation type.
     pub r_type: u32,
-    /// Index of the symbol in the dynamic symbol table.
-    pub sym_idx: u64,
+    /// Referenced symbol name, when the relocation is symbol-based.
+    pub symbol_name: Option<String>,
     /// Addend for the relocation.
     pub addend: i64,
     /// Size of the referenced symbol (useful for COPY relocations).
     pub sym_size: u64,
+}
+
+impl RelocationInfo {
+    /// Returns whether this relocation targets the named symbol.
+    pub fn is_for_symbol(&self, name: &str) -> bool {
+        self.symbol_name.as_deref() == Some(name)
+    }
 }
 
 /// Result of an ELF generation process.
@@ -122,6 +141,15 @@ pub struct ElfWriteOutput {
     pub relocations: Vec<RelocationInfo>,
     /// The value returned by the IFUNC resolver.
     pub ifunc_resolver_val: u64,
+}
+
+impl ElfWriteOutput {
+    /// Finds the first relocation of `r_type` associated with `symbol_name`.
+    pub fn find_relocation(&self, r_type: u32, symbol_name: &str) -> Option<&RelocationInfo> {
+        self.relocations
+            .iter()
+            .find(|reloc| reloc.r_type == r_type && reloc.is_for_symbol(symbol_name))
+    }
 }
 
 // Constants to replace magic numbers
@@ -199,7 +227,8 @@ impl DylibWriter {
         reloc.create_sections(&mut sections)?;
 
         // 2. Create .dynamic section (placeholder)
-        let mut dyn_meta = DynamicMetadata::new(self.arch, &sections, &mut allocator);
+        let mut dyn_meta =
+            DynamicMetadata::new(self.arch, &sections, &mut allocator, self.config.bind_now);
         dyn_meta.create_section(&mut sections);
 
         // 3. Initialize ShdrManager and Layout

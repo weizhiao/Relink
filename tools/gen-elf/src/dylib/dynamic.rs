@@ -23,7 +23,12 @@ pub(crate) struct DynamicMetadata {
 }
 
 impl DynamicMetadata {
-    pub(crate) fn new(arch: Arch, sections: &[Section], allocator: &mut SectionAllocator) -> Self {
+    pub(crate) fn new(
+        arch: Arch,
+        sections: &[Section],
+        allocator: &mut SectionAllocator,
+        bind_now: bool,
+    ) -> Self {
         let dynamic_id = allocator.allocate(0);
         let mut instance = Self {
             arch,
@@ -31,6 +36,9 @@ impl DynamicMetadata {
             dynamic_id,
         };
         instance.init_from_sections(sections);
+        if bind_now {
+            instance.update_entry(DT_FLAGS as i64, DF_BIND_NOW as u64);
+        }
         instance
     }
 

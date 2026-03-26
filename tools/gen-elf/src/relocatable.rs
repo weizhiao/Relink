@@ -1,7 +1,7 @@
-use crate::Arch;
 use crate::common::{
     RelocEntry, SectionKind, SymbolDesc, SymbolScope as CommonSymbolScope, SymbolType,
 };
+use crate::{Arch, RelocationInfo};
 use anyhow::Result;
 use object::{
     Architecture, BinaryFormat, Endianness, SectionKind as ObjectSectionKind, SymbolKind,
@@ -11,11 +11,21 @@ use object::{
 use std::collections::HashMap;
 
 /// Result of a relocatable object file generation.
+#[derive(Clone, Debug)]
 pub struct ObjectElfOutput {
     /// Raw bytes of the generated ELF file.
     pub data: Vec<u8>,
-    /// Offsets where relocations were applied.
-    pub reloc_offsets: Vec<u64>,
+    /// Relocations that were written into the object file.
+    pub relocations: Vec<RelocationInfo>,
+}
+
+impl ObjectElfOutput {
+    /// Finds the first relocation of `r_type` associated with `symbol_name`.
+    pub fn find_relocation(&self, r_type: u32, symbol_name: &str) -> Option<&RelocationInfo> {
+        self.relocations
+            .iter()
+            .find(|reloc| reloc.r_type == r_type && reloc.is_for_symbol(symbol_name))
+    }
 }
 
 /// A writer for generating relocatable object (.o) ELF files.
@@ -57,7 +67,7 @@ fn gen_static_elf(
 
     let mut section_map = HashMap::new();
     let mut symbol_map = HashMap::new();
-    let mut reloc_offsets = Vec::new();
+    let mut relocations = Vec::new();
 
     // First pass: create sections and add defined symbols
     for sym_desc in symbols {
@@ -144,7 +154,22 @@ fn gen_static_elf(
             // Auto-calculate offset based on relocation sequence
             // Each relocation is word_size bytes apart starting from offset 0x10
             let offset = 0x10 + (idx as u64 * word_size);
-            reloc_offsets.push(offset);
+            relocations.push(RelocationInfo {
+                section: match section_map.get(&SectionKind::Text) {
+                    Some(id) if *id == section_id => SectionKind::Text,
+                    _ => SectionKind::Data,
+                },
+                offset,
+                vaddr: None,
+                r_type: reloc.r_type.0,
+                symbol_name: if reloc.symbol_name.is_empty() {
+                    None
+                } else {
+                    Some(reloc.symbol_name.clone())
+                },
+                addend: reloc.addend,
+                sym_size: 0,
+            });
 
             let flags = object::write::RelocationFlags::Elf {
                 r_type: reloc.r_type.0,
@@ -155,7 +180,7 @@ fn gen_static_elf(
                 Relocation {
                     offset,
                     symbol: symbol_id,
-                    addend: 0, // Should we allow specifying addend in RelocEntry?
+                    addend: reloc.addend,
                     flags,
                 },
             )?;
@@ -167,6 +192,6 @@ fn gen_static_elf(
 
     Ok(ObjectElfOutput {
         data: elf_data,
-        reloc_offsets,
+        relocations,
     })
 }
