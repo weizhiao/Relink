@@ -9,12 +9,12 @@ use crate::{
     Result,
     loader::DynLifecycleHandler,
     relocation::{
-        BindingOptions, RelocAddr, Relocatable, RelocationHandler, Relocator, SymbolLookup,
+        RelocAddr, Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup,
     },
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
 };
-use alloc::{boxed::Box, vec::Vec};
+use alloc::boxed::Box;
 use core::{borrow::Borrow, fmt::Debug, ops::Deref};
 
 use super::{CoreInner, ElfCore, LoadedCore};
@@ -85,7 +85,7 @@ impl<D: 'static> RawObject<D> {
     }
 
     /// Creates a builder for relocating the relocatable file.
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
         Relocator::new(self)
     }
 }
@@ -101,23 +101,31 @@ impl<D> Debug for RawObject<D> {
 impl<D: 'static> Relocatable<D> for RawObject<D> {
     type Output = LoadedObject<D>;
 
-    fn relocate<PreS, PostS, LazyS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        scope: Vec<LoadedCore<D>>,
-        pre_find: &PreS,
-        post_find: &PostS,
-        pre_handler: &PreH,
-        post_handler: &PostH,
-        _binding: BindingOptions<LazyS>,
+        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        LazyS: SymbolLookup + Send + Sync + 'static,
+        LazyPreS: SymbolLookup + Send + Sync + 'static,
+        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        let inner = self.link_impl(&scope, pre_find, post_find, pre_handler, post_handler)?;
+        let RelocateArgs {
+            scope,
+            lookup,
+            handlers,
+            ..
+        } = args;
+        let inner = self.link_impl(
+            &scope,
+            lookup.pre_find,
+            lookup.post_find,
+            handlers.pre,
+            handlers.post,
+        )?;
         Ok(LoadedObject { inner })
     }
 }

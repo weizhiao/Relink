@@ -21,7 +21,7 @@ use super::{ElfCore, core::CoreInner};
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo {
     pub(crate) pltrel: &'static [ElfRelType],
-    pub(crate) scope: Option<Box<dyn SymbolLookup + Send + Sync>>,
+    pub(crate) lookup: Option<Box<dyn SymbolLookup + Send + Sync>>,
 }
 
 #[cfg(feature = "lazy-binding")]
@@ -30,7 +30,7 @@ impl LazyBindingInfo {
     pub(crate) fn new(pltrel: Option<&'static [ElfRelType]>) -> Self {
         Self {
             pltrel: pltrel.unwrap_or(&[]),
-            scope: None,
+            lookup: None,
         }
     }
 }

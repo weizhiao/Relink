@@ -49,7 +49,6 @@ fn pre_find_beats_scope() {
         .relocator()
         .pre_find(host_symbols.resolver.clone())
         .scope(&[helper.clone()])
-        .eager()
         .relocate()
         .expect("failed to relocate consumer");
 
@@ -77,7 +76,6 @@ fn scope_beats_post_find() {
         .relocator()
         .scope(&[helper.clone()])
         .post_find(host_symbols.resolver.clone())
-        .eager()
         .relocate()
         .expect("failed to relocate consumer");
 
@@ -103,7 +101,6 @@ fn post_find_resolves_scope_miss() {
         .expect("failed to load consumer")
         .relocator()
         .post_find(host_symbols.resolver.clone())
-        .eager()
         .relocate()
         .expect("failed to relocate consumer");
 
@@ -132,7 +129,6 @@ fn add_scope_keeps_existing_precedence() {
         .relocator()
         .scope(&[first.clone()])
         .add_scope(&[second.clone()])
-        .eager()
         .relocate()
         .expect("failed to relocate consumer");
 

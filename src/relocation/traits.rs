@@ -6,8 +6,6 @@ use crate::{
     sync::Arc,
 };
 use alloc::{boxed::Box, vec::Vec};
-#[cfg(not(feature = "lazy-binding"))]
-use core::marker::PhantomData;
 
 /// A trait for looking up external symbols during relocation.
 ///
@@ -216,56 +214,102 @@ impl<H: RelocationHandler + ?Sized> RelocationHandler for Arc<H> {
     }
 }
 
-/// A marker trait for objects that support lazy binding.
-pub trait SupportLazy {}
-
-/// Binding strategy configuration for relocation.
+/// Binding mode configuration for relocation.
 ///
-/// This controls whether the loader follows the ELF object's default binding mode,
-/// forces eager binding, or forces lazy binding when that feature is enabled.
-pub enum BindingOptions<S = ()> {
+/// This controls whether the loader follows the ELF object's default binding mode
+/// or overrides it when lazy binding support is enabled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum BindingMode {
     /// Follow the ELF object's default binding behavior.
+    #[default]
     Default,
     /// Force eager binding.
     Eager,
-    /// Force lazy binding with an optional custom symbol lookup scope.
-    #[cfg(feature = "lazy-binding")]
-    Lazy { scope: Option<S> },
-    #[cfg(not(feature = "lazy-binding"))]
-    #[doc(hidden)]
-    __Marker(PhantomData<fn() -> S>),
+    /// Force lazy binding.
+    Lazy,
 }
 
-impl<S> Default for BindingOptions<S> {
-    fn default() -> Self {
-        Self::Default
+/// Relocation-time symbol lookup hooks.
+pub(crate) struct LookupHooks<'a, PreS: ?Sized, PostS: ?Sized> {
+    pub(crate) pre_find: &'a PreS,
+    pub(crate) post_find: &'a PostS,
+}
+
+impl<'a, PreS: ?Sized, PostS: ?Sized> LookupHooks<'a, PreS, PostS> {
+    #[inline]
+    pub(crate) const fn new(pre_find: &'a PreS, post_find: &'a PostS) -> Self {
+        Self {
+            pre_find,
+            post_find,
+        }
     }
 }
 
-impl BindingOptions<()> {
-    /// Creates the default binding mode.
-    ///
-    /// This is mainly useful in generic builder chains where
-    /// `BindingOptions::Default` would require explicit type annotations.
-    pub const fn default_mode() -> Self {
-        Self::Default
-    }
+/// Lazy-fixup symbol lookup hooks.
+pub(crate) struct LazyLookupHooks<LazyPreS, LazyPostS> {
+    pub(crate) pre_find: LazyPreS,
+    pub(crate) post_find: LazyPostS,
+}
 
-    /// Creates an eager binding configuration.
-    pub const fn eager() -> Self {
-        Self::Eager
+impl<LazyPreS, LazyPostS> LazyLookupHooks<LazyPreS, LazyPostS> {
+    #[inline]
+    pub(crate) const fn new(pre_find: LazyPreS, post_find: LazyPostS) -> Self {
+        Self {
+            pre_find,
+            post_find,
+        }
     }
+}
 
-    /// Creates a lazy binding configuration without a custom scope.
-    #[cfg(feature = "lazy-binding")]
-    pub const fn lazy() -> Self {
-        Self::Lazy { scope: None }
+/// Relocation handlers that run before and after the built-in relocation logic.
+pub(crate) struct HandlerHooks<'a, PreH: ?Sized, PostH: ?Sized> {
+    pub(crate) pre: &'a PreH,
+    pub(crate) post: &'a PostH,
+}
+
+impl<'a, PreH: ?Sized, PostH: ?Sized> HandlerHooks<'a, PreH, PostH> {
+    #[inline]
+    pub(crate) const fn new(pre: &'a PreH, post: &'a PostH) -> Self {
+        Self { pre, post }
     }
+}
 
-    /// Creates a lazy binding configuration with a custom scope.
-    #[cfg(feature = "lazy-binding")]
-    pub fn lazy_with_scope<S>(scope: S) -> BindingOptions<S> {
-        BindingOptions::Lazy { scope: Some(scope) }
+/// Internal relocation configuration shared across raw image types.
+pub struct RelocateArgs<
+    'a,
+    D,
+    PreS: ?Sized,
+    PostS: ?Sized,
+    LazyPreS,
+    LazyPostS,
+    PreH: ?Sized,
+    PostH: ?Sized,
+> {
+    pub(crate) scope: Vec<LoadedCore<D>>,
+    pub(crate) binding: BindingMode,
+    pub(crate) lookup: LookupHooks<'a, PreS, PostS>,
+    pub(crate) lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
+    pub(crate) handlers: HandlerHooks<'a, PreH, PostH>,
+}
+
+impl<'a, D, PreS: ?Sized, PostS: ?Sized, LazyPreS, LazyPostS, PreH: ?Sized, PostH: ?Sized>
+    RelocateArgs<'a, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>
+{
+    #[inline]
+    pub(crate) fn new(
+        scope: Vec<LoadedCore<D>>,
+        binding: BindingMode,
+        lookup: LookupHooks<'a, PreS, PostS>,
+        lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
+        handlers: HandlerHooks<'a, PreH, PostH>,
+    ) -> Self {
+        Self {
+            scope,
+            binding,
+            lookup,
+            lazy_lookup,
+            handlers,
+        }
     }
 }
 
@@ -280,28 +324,22 @@ pub trait Relocatable<D = ()>: Sized {
     /// Execute the relocation process with the given configuration.
     ///
     /// # Arguments
-    /// * `scope` - Loaded modules available for symbol resolution.
-    /// * `pre_find` - Primary symbol lookup strategy.
-    /// * `post_find` - Fallback symbol lookup strategy.
-    /// * `pre_handler` - Handler called before default relocation logic.
-    /// * `post_handler` - Handler called after default logic if not handled.
-    /// * `binding` - Binding strategy configuration.
+    /// * `args` - Scope, lookup hooks, handlers, and binding mode configuration.
     ///
     /// # Returns
     /// The relocated object on success.
-    fn relocate<PreS, PostS, LazyS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        scope: Vec<LoadedCore<D>>,
-        pre_find: &PreS,
-        post_find: &PostS,
-        pre_handler: &PreH,
-        post_handler: &PostH,
-        binding: BindingOptions<LazyS>,
+        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        LazyS: SymbolLookup + Send + Sync + 'static,
+        LazyPreS: SymbolLookup + Send + Sync + 'static,
+        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized;
 }
+
+/// Marker trait for raw image types that support lazy-binding fixup hooks.
+pub trait SupportLazy {}

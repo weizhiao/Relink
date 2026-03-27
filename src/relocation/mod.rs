@@ -9,7 +9,7 @@
 //! - [`SymbolLookup`] for providing external symbol addresses
 //! - [`RelocationHandler`] for intercepting or overriding relocations
 //! - [`RelocationContext`] for inspecting the current relocation and search scope
-//! - [`BindingOptions`] for choosing eager or lazy binding policy
+//! - binding policy and lazy-fixup support configured through `Relocator`
 
 mod core;
 mod dynamic;
@@ -24,8 +24,8 @@ pub(crate) use dynamic::DynamicRelocation;
 pub(crate) use lazy::ResolvedBinding;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use lazy::dl_fixup;
-pub(crate) use traits::{Relocatable, SupportLazy};
-
-pub use traits::{
-    BindingOptions, HandleResult, RelocationContext, RelocationHandler, SymbolLookup,
+pub(crate) use traits::{
+    BindingMode, HandlerHooks, LazyLookupHooks, LookupHooks, Relocatable, RelocateArgs, SupportLazy,
 };
+
+pub use traits::{HandleResult, RelocationContext, RelocationHandler, SymbolLookup};

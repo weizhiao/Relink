@@ -12,7 +12,7 @@ use gen_elf::ElfWriterConfig;
 #[cfg(feature = "lazy-binding")]
 use gen_elf::{Arch, ElfWriteOutput, RelocEntry, SymbolDesc};
 #[cfg(feature = "lazy-binding")]
-use support::binding::{BindingFixture, BindingMode};
+use support::binding::{BindingFixture, BindingKind};
 #[cfg(feature = "lazy-binding")]
 use support::{
     dylib_relocation_checks::{relocation_for_symbol, slot_word},
@@ -99,7 +99,7 @@ fn call_scope_helper(image: &LoadedDylib<()>) -> i32 {
 #[cfg(feature = "lazy-binding")]
 #[test]
 fn lazy_jump_slots_resolve() {
-    let scenario = BindingFixture::new().load(BindingMode::Lazy);
+    let scenario = BindingFixture::new().load(BindingKind::Lazy);
 
     scenario.assert_single_dependency();
     scenario.assert_non_plt_relocations();

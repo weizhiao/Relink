@@ -7,12 +7,11 @@ use crate::{
     image::{DynamicImage, LoadedCore},
     logging,
     relocation::{
-        BindingOptions, RelocArtifacts, RelocHelper, RelocationHandler, ResolvedBinding,
+        RelocArtifacts, RelocHelper, RelocateArgs, RelocationHandler, ResolvedBinding,
         SymbolLookup, likely, reloc_error, resolve_ifunc, unlikely,
     },
     tls::{handle_tls_reloc, is_tls_relocation, is_tlsdesc_relocation, lookup_tls_get_addr},
 };
-use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 
 impl<D> DynamicImage<D> {
@@ -27,24 +26,28 @@ impl<D> DynamicImage<D> {
         Ok(())
     }
 
-    pub(crate) fn relocate_impl<PreS, PostS, LazyS, PreH, PostH>(
+    pub(crate) fn relocate_impl<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        scope: Vec<LoadedCore<D>>,
-        pre_find: &PreS,
-        post_find: &PostS,
-        pre_handler: &PreH,
-        post_handler: &PostH,
-        binding: BindingOptions<LazyS>,
+        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<LoadedCore<D>>
     where
         D: 'static,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        LazyS: SymbolLookup + Send + Sync + 'static,
+        LazyPreS: SymbolLookup + Send + Sync + 'static,
+        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
         logging::info!("Relocating dynamic library: {}", self.name());
+
+        let RelocateArgs {
+            scope,
+            binding,
+            lookup,
+            lazy_lookup,
+            handlers,
+        } = args;
 
         let relocation = self.relocation();
         if relocation.is_empty() {
@@ -62,16 +65,16 @@ impl<D> DynamicImage<D> {
             if let Some(symbol) = lookup_tls_get_addr(name, tls_get_addr) {
                 return Some(symbol);
             }
-            pre_find.lookup(name)
+            lookup.pre_find.lookup(name)
         };
 
         let mut helper = RelocHelper::new(
             self.core_ref(),
             scope,
             &hooked_pre_find,
-            post_find,
-            pre_handler,
-            post_handler,
+            lookup.post_find,
+            handlers.pre,
+            handlers.post,
             tls_get_addr,
         );
 
@@ -104,7 +107,7 @@ impl<D> DynamicImage<D> {
         }
 
         self.apply_relro(&binding)?;
-        self.install_lazy_scope(binding, deps.clone())?;
+        self.install_lazy_lookup(binding, lazy_lookup, deps.clone())?;
 
         logging::debug!("Executing initialization functions for {}", self.name());
         self.call_init();

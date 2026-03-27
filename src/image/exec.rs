@@ -11,8 +11,7 @@ use crate::{
     loader::{ImageBuilder, LoadHook},
     os::Mmap,
     relocation::{
-        BindingOptions, RelocAddr, Relocatable, RelocationHandler, Relocator, SupportLazy,
-        SymbolLookup,
+        RelocAddr, Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup,
     },
     segment::ElfSegments,
     tls::TlsResolver,
@@ -85,33 +84,22 @@ struct StaticImageInner<D> {
 impl<D: 'static> Relocatable<D> for RawExec<D> {
     type Output = LoadedExec<D>;
 
-    fn relocate<PreS, PostS, LazyS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        scope: Vec<LoadedCore<D>>,
-        pre_find: &PreS,
-        post_find: &PostS,
-        pre_handler: &PreH,
-        post_handler: &PostH,
-        binding: BindingOptions<LazyS>,
+        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        LazyS: SymbolLookup + Send + Sync + 'static,
+        LazyPreS: SymbolLookup + Send + Sync + 'static,
+        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
         match self.inner {
             ExecImageInner::Dynamic(image) => {
                 let entry = image.entry_addr();
-                let inner = image.relocate_impl(
-                    scope,
-                    pre_find,
-                    post_find,
-                    pre_handler,
-                    post_handler,
-                    binding,
-                )?;
+                let inner = image.relocate_impl(args)?;
                 Ok(LoadedExec {
                     entry,
                     inner: LoadedExecInner::Dynamic(inner),
@@ -125,6 +113,9 @@ impl<D: 'static> Relocatable<D> for RawExec<D> {
     }
 }
 
+#[cfg(feature = "lazy-binding")]
+impl<D: 'static> crate::relocation::SupportLazy for RawExec<D> {}
+
 /// A mapped but unrelocated executable image.
 ///
 /// Values of this type are returned by [`crate::Loader::load_exec`]. They may
@@ -136,8 +127,6 @@ where
 {
     pub(crate) inner: ExecImageInner<D>,
 }
-
-impl<D: 'static> SupportLazy for RawExec<D> {}
 
 pub(crate) enum ExecImageInner<D>
 where
@@ -158,7 +147,7 @@ impl<D> Debug for RawExec<D> {
 
 impl<D: 'static> RawExec<D> {
     /// Creates a relocation builder for this executable image.
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
         Relocator::new(self)
     }
 

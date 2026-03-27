@@ -13,7 +13,7 @@ fn missing_path_fails() {
 }
 
 #[test]
-fn unresolved_symbol_fails_eager_relocation() {
+fn unresolved_symbol_fails_bind_now_relocation() {
     let arch = Arch::current();
     let output = write_test_dylib(
         &[RelocEntry::jump_slot("missing_func", arch)],
@@ -24,9 +24,8 @@ fn unresolved_symbol_fails_eager_relocation() {
         .load_dylib(ElfBinary::new("missing.so", &output.data))
         .expect("failed to load unresolved ELF")
         .relocator()
-        .eager()
         .relocate()
-        .expect_err("eager relocation should fail for an unresolved symbol");
+        .expect_err("bind-now relocation should fail for an unresolved symbol");
 
     let message = error.to_string();
     assert!(

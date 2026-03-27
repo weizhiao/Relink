@@ -6,8 +6,8 @@ use crate::{
     image::{ElfCore, LoadedCore},
     logging, relocate_context_error,
     relocation::{
-        BindingOptions, HandleResult, Relocatable, RelocationContext, RelocationHandler,
-        SupportLazy, SymbolLookup,
+        BindingMode, HandleResult, HandlerHooks, LazyLookupHooks, LookupHooks, Relocatable,
+        RelocateArgs, RelocationContext, RelocationHandler, SupportLazy, SymbolLookup,
     },
     sync::Arc,
     tls::TlsDescArgs,
@@ -165,107 +165,112 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub struct Relocator<T, PreS, PostS, LazyS, PreH, PostH, D = ()> {
+pub struct Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D = ()> {
     object: T,
     scope: Vec<LoadedCore<D>>,
     pre_find: PreS,
     post_find: PostS,
+    lazy_pre_find: LazyPreS,
+    lazy_post_find: LazyPostS,
     pre_handler: PreH,
     post_handler: PostH,
-    binding: BindingOptions<LazyS>,
+    binding: BindingMode,
 }
 
-impl<T: Relocatable<D>, D> Relocator<T, (), (), (), (), (), D> {
+impl<T, D> Relocator<T, (), (), (), (), (), (), D> {
     /// Creates a new `Relocator` builder for the given object.
-    pub fn new(object: T) -> Self {
+    pub(crate) fn new(object: T) -> Self {
         Self {
             object,
             scope: Vec::new(),
             pre_find: (),
             post_find: (),
+            lazy_pre_find: (),
+            lazy_post_find: (),
             pre_handler: (),
             post_handler: (),
-            binding: BindingOptions::Default,
+            binding: BindingMode::Default,
         }
     }
 }
 
-impl<T, PreS, PostS, LazyS, PreH, PostH, D> Relocator<T, PreS, PostS, LazyS, PreH, PostH, D>
+impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
+    Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
 where
-    T: Relocatable<D>,
     PreS: SymbolLookup,
     PostS: SymbolLookup,
-    LazyS: SymbolLookup + Send + Sync + 'static,
+    LazyPreS: SymbolLookup + Send + Sync + 'static,
+    LazyPostS: SymbolLookup + Send + Sync + 'static,
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
     /// Sets the preferred symbol lookup strategy.
     ///
-    /// Symbols are searched here first, before checking the relocation scope
-    /// or any fallback lookup strategy.
-    pub fn pre_find<S2>(self, pre_find: S2) -> Relocator<T, S2, PostS, LazyS, PreH, PostH, D>
+    /// During relocation, symbols are searched here first before checking the
+    /// relocation scope or any fallback lookup strategy.
+    pub fn pre_find<NewPreS>(
+        self,
+        pre_find: NewPreS,
+    ) -> Relocator<T, NewPreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
     where
-        S2: SymbolLookup,
+        NewPreS: SymbolLookup,
     {
         Relocator {
             object: self.object,
             scope: self.scope,
             pre_find,
             post_find: self.post_find,
+            lazy_pre_find: self.lazy_pre_find,
+            lazy_post_find: self.lazy_post_find,
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
         }
     }
 
-    /// Sets the preferred symbol lookup strategy using a closure.
-    pub fn pre_find_fn<F>(self, pre_find: F) -> Relocator<T, F, PostS, LazyS, PreH, PostH, D>
+    /// Sets the preferred relocation-time symbol lookup using a closure.
+    pub fn pre_find_fn<F>(
+        self,
+        pre_find: F,
+    ) -> Relocator<T, F, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
     where
         F: Fn(&str) -> Option<*const ()>,
     {
-        Relocator {
-            object: self.object,
-            scope: self.scope,
-            pre_find,
-            post_find: self.post_find,
-            pre_handler: self.pre_handler,
-            post_handler: self.post_handler,
-            binding: self.binding,
-        }
+        self.pre_find(pre_find)
     }
 
     /// Sets the fallback symbol lookup strategy using a closure.
     ///
-    /// This strategy is consulted only after the preferred lookup and the
-    /// current relocation scope have been exhausted.
-    pub fn post_find_fn<F>(self, post_find: F) -> Relocator<T, PreS, F, LazyS, PreH, PostH, D>
+    /// During relocation, this strategy is consulted only after the preferred
+    /// lookup and the current relocation scope have been exhausted.
+    pub fn post_find_fn<F>(
+        self,
+        post_find: F,
+    ) -> Relocator<T, PreS, F, LazyPreS, LazyPostS, PreH, PostH, D>
     where
         F: Fn(&str) -> Option<*const ()>,
     {
-        Relocator {
-            object: self.object,
-            scope: self.scope,
-            pre_find: self.pre_find,
-            post_find,
-            pre_handler: self.pre_handler,
-            post_handler: self.post_handler,
-            binding: self.binding,
-        }
+        self.post_find(post_find)
     }
 
     /// Sets the fallback symbol lookup strategy.
     ///
-    /// This strategy is consulted only after the preferred lookup and the
-    /// current relocation scope have been exhausted.
-    pub fn post_find<S2>(self, post_find: S2) -> Relocator<T, PreS, S2, LazyS, PreH, PostH, D>
+    /// During relocation, this strategy is consulted only after the preferred
+    /// lookup and the current relocation scope have been exhausted.
+    pub fn post_find<NewPostS>(
+        self,
+        post_find: NewPostS,
+    ) -> Relocator<T, PreS, NewPostS, LazyPreS, LazyPostS, PreH, PostH, D>
     where
-        S2: SymbolLookup,
+        NewPostS: SymbolLookup,
     {
         Relocator {
             object: self.object,
             scope: self.scope,
             pre_find: self.pre_find,
             post_find,
+            lazy_pre_find: self.lazy_pre_find,
+            lazy_post_find: self.lazy_post_find,
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
@@ -274,7 +279,7 @@ where
 
     /// Replaces the current symbol-resolution scope.
     ///
-    /// Symbols from these modules are searched in the provided order.
+    /// During relocation, symbols from these modules are searched in the provided order.
     /// Any module used during relocation is retained as a dependency of the
     /// relocated output.
     pub fn scope<I, R>(mut self, scope: I) -> Self
@@ -288,7 +293,8 @@ where
 
     /// Appends more modules to the symbol-resolution scope.
     ///
-    /// Additional modules are searched after the existing scope entries.
+    /// During relocation, additional modules are searched after the existing
+    /// scope entries.
     pub fn add_scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
@@ -306,7 +312,7 @@ where
     pub fn pre_handler<NewPreH>(
         self,
         handler: NewPreH,
-    ) -> Relocator<T, PreS, PostS, LazyS, NewPreH, PostH, D>
+    ) -> Relocator<T, PreS, PostS, LazyPreS, LazyPostS, NewPreH, PostH, D>
     where
         NewPreH: RelocationHandler,
     {
@@ -315,6 +321,8 @@ where
             scope: self.scope,
             pre_find: self.pre_find,
             post_find: self.post_find,
+            lazy_pre_find: self.lazy_pre_find,
+            lazy_post_find: self.lazy_post_find,
             pre_handler: handler,
             post_handler: self.post_handler,
             binding: self.binding,
@@ -328,7 +336,7 @@ where
     pub fn post_handler<NewPostH>(
         self,
         handler: NewPostH,
-    ) -> Relocator<T, PreS, PostS, LazyS, PreH, NewPostH, D>
+    ) -> Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, NewPostH, D>
     where
         NewPostH: RelocationHandler,
     {
@@ -337,80 +345,157 @@ where
             scope: self.scope,
             pre_find: self.pre_find,
             post_find: self.post_find,
+            lazy_pre_find: self.lazy_pre_find,
+            lazy_post_find: self.lazy_post_find,
             pre_handler: self.pre_handler,
             post_handler: handler,
             binding: self.binding,
         }
     }
-
-    /// Executes relocation with the current configuration.
-    ///
-    /// This consumes the builder, resolves relocations, records used dependencies,
-    /// and returns the final loaded image.
-    pub fn relocate(self) -> Result<T::Output>
-    where
-        D: 'static,
-    {
-        self.object.relocate(
-            self.scope,
-            &self.pre_find,
-            &self.post_find,
-            &self.pre_handler,
-            &self.post_handler,
-            self.binding,
-        )
-    }
 }
 
-impl<T, PreS, PostS, LazyS, PreH, PostH, D> Relocator<T, PreS, PostS, LazyS, PreH, PostH, D>
+impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
+    Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
 where
-    T: Relocatable<D> + SupportLazy,
+    T: Relocatable<D>,
     PreS: SymbolLookup,
     PostS: SymbolLookup,
-    LazyS: SymbolLookup + Send + Sync + 'static,
+    LazyPreS: SymbolLookup + Send + Sync + 'static,
+    LazyPostS: SymbolLookup + Send + Sync + 'static,
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
-    /// Sets the binding strategy used during relocation.
-    pub fn binding<NewLazyS>(
+    /// Executes relocation with the current configuration.
+    ///
+    /// This consumes the builder, resolves relocations, records used
+    /// dependencies, and returns the final loaded image.
+    pub fn relocate(self) -> Result<T::Output> {
+        let Self {
+            object,
+            scope,
+            pre_find,
+            post_find,
+            lazy_pre_find,
+            lazy_post_find,
+            pre_handler,
+            post_handler,
+            binding,
+        } = self;
+
+        object.relocate(RelocateArgs::new(
+            scope,
+            binding,
+            LookupHooks::new(&pre_find, &post_find),
+            LazyLookupHooks::new(lazy_pre_find, lazy_post_find),
+            HandlerHooks::new(&pre_handler, &post_handler),
+        ))
+    }
+}
+
+impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
+    Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
+where
+    T: SupportLazy,
+    PreS: SymbolLookup,
+    PostS: SymbolLookup,
+    LazyPreS: SymbolLookup + Send + Sync + 'static,
+    LazyPostS: SymbolLookup + Send + Sync + 'static,
+    PreH: RelocationHandler,
+    PostH: RelocationHandler,
+{
+    /// Forces eager binding.
+    pub fn eager(mut self) -> Self {
+        self.binding = BindingMode::Eager;
+        self
+    }
+
+    /// Forces lazy binding.
+    pub fn lazy(mut self) -> Self {
+        self.binding = BindingMode::Lazy;
+        self
+    }
+
+    /// Sets the preferred symbol lookup used during lazy binding fixups.
+    pub fn lazy_pre_find<NewLazyPreS>(
         self,
-        binding: BindingOptions<NewLazyS>,
-    ) -> Relocator<T, PreS, PostS, NewLazyS, PreH, PostH, D>
+        lazy_pre_find: NewLazyPreS,
+    ) -> Relocator<T, PreS, PostS, NewLazyPreS, LazyPostS, PreH, PostH, D>
     where
-        NewLazyS: SymbolLookup + Send + Sync + 'static,
+        NewLazyPreS: SymbolLookup + Send + Sync + 'static,
     {
         Relocator {
             object: self.object,
             scope: self.scope,
             pre_find: self.pre_find,
             post_find: self.post_find,
+            lazy_pre_find,
+            lazy_post_find: self.lazy_post_find,
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
-            binding,
+            binding: self.binding,
         }
     }
 
-    /// Forces eager binding and clears any previously configured lazy scope.
-    pub fn eager(self) -> Relocator<T, PreS, PostS, (), PreH, PostH, D> {
-        self.binding(BindingOptions::eager())
-    }
-
-    #[cfg(feature = "lazy-binding")]
-    /// Forces lazy binding without a custom lazy scope.
-    pub fn lazy(self) -> Relocator<T, PreS, PostS, (), PreH, PostH, D> {
-        self.binding(BindingOptions::lazy())
-    }
-
-    #[cfg(feature = "lazy-binding")]
-    /// Sets the symbol lookup scope used only during lazy binding fixups.
-    pub fn lazy_scope<NewLazyS>(
+    /// Sets the preferred lazy-binding lookup using a closure.
+    pub fn lazy_pre_find_fn<F>(
         self,
-        scope: NewLazyS,
-    ) -> Relocator<T, PreS, PostS, NewLazyS, PreH, PostH, D>
+        lazy_pre_find: F,
+    ) -> Relocator<T, PreS, PostS, F, LazyPostS, PreH, PostH, D>
     where
-        NewLazyS: SymbolLookup + Send + Sync + 'static,
+        F: Fn(&str) -> Option<*const ()> + Send + Sync + 'static,
     {
-        self.binding(BindingOptions::lazy_with_scope(scope))
+        self.lazy_pre_find(lazy_pre_find)
+    }
+
+    /// Sets the fallback symbol lookup used during lazy binding fixups.
+    pub fn lazy_post_find<NewLazyPostS>(
+        self,
+        lazy_post_find: NewLazyPostS,
+    ) -> Relocator<T, PreS, PostS, LazyPreS, NewLazyPostS, PreH, PostH, D>
+    where
+        NewLazyPostS: SymbolLookup + Send + Sync + 'static,
+    {
+        Relocator {
+            object: self.object,
+            scope: self.scope,
+            pre_find: self.pre_find,
+            post_find: self.post_find,
+            lazy_pre_find: self.lazy_pre_find,
+            lazy_post_find,
+            pre_handler: self.pre_handler,
+            post_handler: self.post_handler,
+            binding: self.binding,
+        }
+    }
+
+    /// Sets the fallback lazy-binding lookup using a closure.
+    pub fn lazy_post_find_fn<F>(
+        self,
+        lazy_post_find: F,
+    ) -> Relocator<T, PreS, PostS, LazyPreS, F, PreH, PostH, D>
+    where
+        F: Fn(&str) -> Option<*const ()> + Send + Sync + 'static,
+    {
+        self.lazy_post_find(lazy_post_find)
+    }
+
+    /// Reuses relocate-time symbol lookups for lazy binding fixups.
+    pub fn share_find_with_lazy(self) -> Relocator<T, PreS, PostS, PreS, PostS, PreH, PostH, D>
+    where
+        PreS: Clone + Send + Sync + 'static,
+        PostS: Clone + Send + Sync + 'static,
+    {
+        Relocator {
+            object: self.object,
+            scope: self.scope,
+            pre_find: self.pre_find.clone(),
+            post_find: self.post_find.clone(),
+            lazy_pre_find: self.pre_find,
+            lazy_post_find: self.post_find,
+            pre_handler: self.pre_handler,
+            post_handler: self.post_handler,
+            binding: self.binding,
+        }
     }
 }
 

@@ -10,7 +10,7 @@ use support::{
     dylib_relocation_checks::{
         anonymous_relocations, relocation_for_symbol, slot_address, slot_word,
     },
-    test_dylib::{load_eager_dylib, write_test_dylib, write_test_dylib_with_config},
+    test_dylib::{load_relocated_dylib, write_test_dylib, write_test_dylib_with_config},
 };
 
 const COPY_SOURCE_NAME: &str = "copy_source";
@@ -26,7 +26,7 @@ fn copy_relocation_copies_bytes() {
             &[0x10, 0x20, 0x30, 0x40, 0x50, 0x60],
         )],
     );
-    let helper = load_eager_dylib(&mut loader, "libcopy_source.so", &helper_output);
+    let helper = load_relocated_dylib(&mut loader, "libcopy_source.so", &helper_output);
 
     let consumer_output = write_test_dylib(
         &[RelocEntry::copy(COPY_SOURCE_NAME, Arch::current())],
@@ -38,7 +38,6 @@ fn copy_relocation_copies_bytes() {
         .expect("failed to load copy consumer")
         .relocator()
         .scope(&[helper.clone()])
-        .eager()
         .relocate()
         .expect("failed to relocate copy consumer");
 
@@ -72,7 +71,6 @@ fn relative_relocation_uses_recorded_addend() {
         .load_dylib(ElfBinary::new("relative.so", &output.data))
         .expect("failed to load relative test dylib")
         .relocator()
-        .eager()
         .relocate()
         .expect("failed to relocate relative test dylib");
 
@@ -101,7 +99,6 @@ fn irelative_relocation_uses_ifunc_resolver() {
         .load_dylib(ElfBinary::new("irelative.so", &output.data))
         .expect("failed to load irelative test dylib")
         .relocator()
-        .eager()
         .relocate()
         .expect("failed to relocate irelative test dylib");
 
@@ -129,7 +126,7 @@ fn copy_relocations_keep_symbols_separate() {
         .map(|(name, bytes)| SymbolDesc::global_object(*name, bytes))
         .collect();
     let helper_output = write_test_dylib(&[], &helper_symbols);
-    let helper = load_eager_dylib(&mut loader, "libcopy_sources.so", &helper_output);
+    let helper = load_relocated_dylib(&mut loader, "libcopy_sources.so", &helper_output);
 
     let consumer_relocations: Vec<_> = copy_sources
         .iter()
@@ -149,7 +146,6 @@ fn copy_relocations_keep_symbols_separate() {
         .expect("failed to load copy consumer")
         .relocator()
         .scope(&[helper.clone()])
-        .eager()
         .relocate()
         .expect("failed to relocate copy consumer");
 
@@ -188,7 +184,6 @@ fn relative_relocations_apply_to_all_slots() {
         .load_dylib(ElfBinary::new("relative_many.so", &output.data))
         .expect("failed to load relative test dylib")
         .relocator()
-        .eager()
         .relocate()
         .expect("failed to relocate relative test dylib");
 
@@ -223,7 +218,6 @@ fn irelative_relocations_apply_to_all_slots() {
         .load_dylib(ElfBinary::new("irelative_many.so", &output.data))
         .expect("failed to load irelative test dylib")
         .relocator()
-        .eager()
         .relocate()
         .expect("failed to relocate irelative test dylib");
 

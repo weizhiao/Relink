@@ -6,48 +6,46 @@ mod enabled {
         arch::REL_JUMP_SLOT,
         arch::prepare_lazy_bind,
         elf::ElfRelType,
-        relocation::{BindingOptions, RelocAddr, SymbolLookup, unlikely},
+        relocation::{BindingMode, LazyLookupHooks, RelocAddr, SymbolLookup, unlikely},
         sync::Arc,
         tls::lookup_tls_get_addr,
     };
     use alloc::boxed::Box;
     use core::ptr::NonNull;
 
-    struct LazyScope<D = ()> {
+    struct LazyLookup<D = ()> {
         libs: Arc<[LoadedCore<D>]>,
-        custom_scope: Option<Box<dyn SymbolLookup + Send + Sync>>,
+        pre_find: Box<dyn SymbolLookup + Send + Sync>,
+        post_find: Box<dyn SymbolLookup + Send + Sync>,
         tls_get_addr: RelocAddr,
     }
 
-    impl<D> SymbolLookup for LazyScope<D> {
+    impl<D> SymbolLookup for LazyLookup<D> {
         fn lookup(&self, name: &str) -> Option<*const ()> {
             if let Some(symbol) = lookup_tls_get_addr(name, self.tls_get_addr) {
                 return Some(symbol);
             }
 
-            if let Some(parent) = &self.custom_scope {
-                if let Some(sym) = parent.lookup(name) {
-                    return Some(sym);
-                }
+            if let Some(symbol) = self.pre_find.lookup(name) {
+                return Some(symbol);
             }
 
             self.libs
                 .iter()
                 .find_map(|lib| unsafe { lib.get::<()>(name).map(|sym| sym.into_raw()) })
+                .or_else(|| self.post_find.lookup(name))
         }
     }
 
     pub(crate) enum ResolvedBinding {
         Eager,
-        Lazy {
-            scope: Option<Box<dyn SymbolLookup + Send + Sync>>,
-        },
+        Lazy,
     }
 
     impl ResolvedBinding {
         #[inline]
         pub(crate) fn is_lazy(&self) -> bool {
-            matches!(self, Self::Lazy { .. })
+            matches!(self, Self::Lazy)
         }
 
         pub(crate) fn prepare_plt<D>(&self, image: &DynamicImage<D>) -> Result<()>
@@ -84,38 +82,32 @@ mod enabled {
     }
 
     impl<D> DynamicImage<D> {
-        pub(crate) fn resolve_binding<LazyS>(
-            &self,
-            binding: BindingOptions<LazyS>,
-        ) -> ResolvedBinding
-        where
-            LazyS: SymbolLookup + Send + Sync + 'static,
-        {
+        pub(crate) fn resolve_binding(&self, binding: BindingMode) -> ResolvedBinding {
             match binding {
-                BindingOptions::Default => {
+                BindingMode::Default => {
                     if self.is_lazy() {
-                        ResolvedBinding::Lazy { scope: None }
+                        ResolvedBinding::Lazy
                     } else {
                         ResolvedBinding::Eager
                     }
                 }
-                BindingOptions::Eager => ResolvedBinding::Eager,
-                BindingOptions::Lazy { scope } => ResolvedBinding::Lazy {
-                    scope: scope
-                        .map(|scope| Box::new(scope) as Box<dyn SymbolLookup + Send + Sync>),
-                },
+                BindingMode::Eager => ResolvedBinding::Eager,
+                BindingMode::Lazy => ResolvedBinding::Lazy,
             }
         }
 
-        pub(crate) fn install_lazy_scope(
+        pub(crate) fn install_lazy_lookup<LazyPreS, LazyPostS>(
             &self,
             binding: ResolvedBinding,
+            lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
             deps: Arc<[LoadedCore<D>]>,
         ) -> Result<()>
         where
+            LazyPreS: SymbolLookup + Send + Sync + 'static,
+            LazyPostS: SymbolLookup + Send + Sync + 'static,
             D: 'static,
         {
-            if let ResolvedBinding::Lazy { scope } = binding {
+            if let ResolvedBinding::Lazy = binding {
                 if self.relocation().pltrel.is_empty() {
                     return Ok(());
                 }
@@ -127,9 +119,14 @@ mod enabled {
                     .as_ref()
                     .ok_or(LazyBindingError::MissingDynamicInfo)?;
                 let info = unsafe { &mut *(Arc::as_ptr(dynamic_info) as *mut DynamicInfo) };
-                info.lazy.scope = Some(Box::new(LazyScope {
+                let LazyLookupHooks {
+                    pre_find,
+                    post_find,
+                } = lazy_lookup;
+                info.lazy.lookup = Some(Box::new(LazyLookup {
                     libs: deps,
-                    custom_scope: scope,
+                    pre_find: Box::new(pre_find),
+                    post_find: Box::new(post_find),
                     tls_get_addr: self.core_ref().tls_get_addr(),
                 }));
             }
@@ -146,19 +143,19 @@ mod enabled {
 
     #[cold]
     #[inline(never)]
-    fn lazy_bind_unresolved_symbol(name: &str, symbol: &str) -> ! {
+    fn unresolved_symbol(name: &str, symbol: &str) -> ! {
         panic!("lazy binding failed for {name}: unresolved symbol {symbol}");
     }
 
     #[cold]
     #[inline(never)]
-    fn lazy_bind_invalid_state(name: &str, reason: &str) -> ! {
+    fn invalid_state(name: &str, reason: &str) -> ! {
         panic!("lazy binding failed for {name}: {reason}");
     }
 
     #[cold]
     #[inline(never)]
-    fn lazy_bind_invalid_relocation(name: &str, rela_idx: usize, rel: &ElfRelType) -> ! {
+    fn invalid_relocation(name: &str, rela_idx: usize, rel: &ElfRelType) -> ! {
         panic!(
             "lazy binding failed for {name}: invalid PLT relocation {rela_idx} (type {}, sym {})",
             rel.r_type(),
@@ -168,7 +165,7 @@ mod enabled {
 
     #[cold]
     #[inline(never)]
-    fn lazy_bind_invalid_relocation_index(name: &str, rela_idx: usize, len: usize) -> ! {
+    fn invalid_relocation_index(name: &str, rela_idx: usize, len: usize) -> ! {
         panic!(
             "lazy binding failed for {name}: relocation index {rela_idx} out of range (len {len})"
         );
@@ -176,44 +173,43 @@ mod enabled {
 
     #[cold]
     #[inline(never)]
-    fn lazy_bind_invalid_symbol_index(name: &str, r_sym: usize, sym_count: usize) -> ! {
+    fn invalid_symbol_index(name: &str, r_sym: usize, sym_count: usize) -> ! {
         panic!(
             "lazy binding failed for {name}: symbol index {r_sym} out of range (len {})",
             sym_count
         );
     }
 
-    #[allow(improper_ctypes_definitions)]
     pub(crate) unsafe extern "C" fn dl_fixup(dylib: &CoreInner, rela_idx: usize) -> usize {
         let Some(dynamic_info) = dylib.dynamic_info.as_ref() else {
-            lazy_bind_invalid_state(dylib.name.as_str(), "missing dynamic metadata")
+            invalid_state(dylib.name.as_str(), "missing dynamic metadata")
         };
         let pltrel = dynamic_info.lazy.pltrel;
 
         let Some(rela) = pltrel.get(rela_idx) else {
-            lazy_bind_invalid_relocation_index(dylib.name.as_str(), rela_idx, pltrel.len())
+            invalid_relocation_index(dylib.name.as_str(), rela_idx, pltrel.len())
         };
         let r_type = rela.r_type();
         let r_sym = rela.r_symbol();
         let segments = &dylib.segments;
 
         if unlikely(r_type != REL_JUMP_SLOT as usize || r_sym == 0) {
-            lazy_bind_invalid_relocation(dylib.name.as_str(), rela_idx, rela);
+            invalid_relocation(dylib.name.as_str(), rela_idx, rela);
         }
 
         let sym_count = dylib.symtab.count_syms();
         if unlikely(r_sym >= sym_count) {
-            lazy_bind_invalid_symbol_index(dylib.name.as_str(), r_sym, sym_count);
+            invalid_symbol_index(dylib.name.as_str(), r_sym, sym_count);
         }
 
         let (_, syminfo) = dylib.symtab.symbol_idx(r_sym);
 
-        let Some(scope) = dynamic_info.lazy.scope.as_ref() else {
-            lazy_bind_invalid_state(dylib.name.as_str(), "missing lazy scope")
+        let Some(lookup) = dynamic_info.lazy.lookup.as_ref() else {
+            invalid_state(dylib.name.as_str(), "missing lazy lookup")
         };
-        let symbol = match scope.lookup(syminfo.name()) {
+        let symbol = match lookup.lookup(syminfo.name()) {
             Some(symbol) => RelocAddr::from_ptr(symbol),
-            None => lazy_bind_unresolved_symbol(dylib.name.as_str(), syminfo.name()),
+            None => unresolved_symbol(dylib.name.as_str(), syminfo.name()),
         };
 
         segments.write(rela.r_offset(), symbol);
@@ -226,7 +222,7 @@ mod disabled {
     use crate::{
         elf::ElfRelType,
         image::{DynamicImage, LoadedCore},
-        relocation::{BindingOptions, SymbolLookup},
+        relocation::{BindingMode, LazyLookupHooks, SymbolLookup},
         sync::Arc,
     };
 
@@ -257,28 +253,23 @@ mod disabled {
     }
 
     impl<D> DynamicImage<D> {
-        pub(crate) fn resolve_binding<LazyS>(
-            &self,
-            binding: BindingOptions<LazyS>,
-        ) -> ResolvedBinding
-        where
-            LazyS: SymbolLookup + Send + Sync + 'static,
-        {
-            match binding {
-                BindingOptions::Default | BindingOptions::Eager | BindingOptions::__Marker(_) => {
-                    ResolvedBinding::Eager
-                }
-            }
+        pub(crate) fn resolve_binding(&self, _binding: BindingMode) -> ResolvedBinding {
+            ResolvedBinding::Eager
         }
 
-        pub(crate) fn install_lazy_scope(
+        pub(crate) fn install_lazy_lookup<LazyPreS, LazyPostS>(
             &self,
             _binding: ResolvedBinding,
+            lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
             _deps: Arc<[LoadedCore<D>]>,
         ) -> crate::Result<()>
         where
+            LazyPreS: SymbolLookup + Send + Sync + 'static,
+            LazyPostS: SymbolLookup + Send + Sync + 'static,
             D: 'static,
         {
+            lazy_lookup.pre_find;
+            lazy_lookup.post_find;
             Ok(())
         }
     }

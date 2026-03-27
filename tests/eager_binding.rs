@@ -1,10 +1,10 @@
 mod support;
 
-use support::binding::{BindingFixture, BindingMode};
+use support::binding::{BindingFixture, BindingKind};
 
 #[test]
 fn eager_binding_matches_fixture() {
-    let scenario = BindingFixture::new().load(BindingMode::Eager);
+    let scenario = BindingFixture::new().load(BindingKind::Eager);
 
     scenario.assert_single_dependency();
     scenario.assert_non_plt_relocations();

@@ -9,12 +9,9 @@ use crate::{
     image::{DynamicImage, ElfCore, LoadedCore},
     loader::{ImageBuilder, LoadHook},
     os::Mmap,
-    relocation::{
-        BindingOptions, Relocatable, RelocationHandler, Relocator, SupportLazy, SymbolLookup,
-    },
+    relocation::{Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup},
     tls::TlsResolver,
 };
-use alloc::vec::Vec;
 use core::{borrow::Borrow, fmt::Debug, ops::Deref, ptr::NonNull};
 
 /// A mapped but unrelocated shared object.
@@ -30,8 +27,6 @@ where
     pub(crate) inner: DynamicImage<D>,
 }
 
-impl<D: 'static> SupportLazy for RawDylib<D> {}
-
 impl<D> Debug for RawDylib<D> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawDylib")
@@ -44,33 +39,25 @@ impl<D> Debug for RawDylib<D> {
 impl<D> Relocatable<D> for RawDylib<D> {
     type Output = LoadedDylib<D>;
 
-    fn relocate<PreS, PostS, LazyS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        scope: Vec<LoadedCore<D>>,
-        pre_find: &PreS,
-        post_find: &PostS,
-        pre_handler: &PreH,
-        post_handler: &PostH,
-        binding: BindingOptions<LazyS>,
+        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        LazyS: SymbolLookup + Send + Sync + 'static,
+        LazyPreS: SymbolLookup + Send + Sync + 'static,
+        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        let inner = self.inner.relocate_impl(
-            scope,
-            pre_find,
-            post_find,
-            pre_handler,
-            post_handler,
-            binding,
-        )?;
+        let inner = self.inner.relocate_impl(args)?;
         Ok(LoadedDylib { inner })
     }
 }
+
+#[cfg(feature = "lazy-binding")]
+impl<D> crate::relocation::SupportLazy for RawDylib<D> {}
 
 impl<D> RawDylib<D> {
     pub(crate) fn from_builder<'hook, H, M, Tls>(
@@ -184,7 +171,7 @@ impl<D> RawDylib<D> {
     }
 
     /// Creates a relocation builder for this shared object.
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
         Relocator::new(self)
     }
 }

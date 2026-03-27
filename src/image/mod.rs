@@ -10,9 +10,10 @@
 use crate::{
     Result,
     elf::ElfPhdr,
-    relocation::{BindingOptions, Relocatable, RelocationHandler, Relocator, SymbolLookup},
+    relocation::{Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup},
 };
 use ::core::fmt::Debug;
+#[cfg(feature = "object")]
 use alloc::vec::Vec;
 
 mod core;
@@ -86,7 +87,7 @@ impl<D: 'static> RawElf<D> {
     /// let raw = loader.load("path/to/input.elf").unwrap();
     /// let relocated = raw.relocator().relocate().unwrap();
     /// ```
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), D> {
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
         Relocator::new(self)
     }
 
@@ -156,6 +157,9 @@ impl<D: 'static> RawElf<D> {
         }
     }
 }
+
+#[cfg(feature = "lazy-binding")]
+impl<D: 'static> crate::relocation::SupportLazy for RawElf<D> {}
 
 impl<D> LoadedElf<D> {
     /// Converts this LoadedElf into a LoadedDylib if it is one
@@ -253,60 +257,35 @@ impl<D> LoadedElf<D> {
 impl<D: 'static> Relocatable<D> for RawElf<D> {
     type Output = LoadedElf<D>;
 
-    fn relocate<PreS, PostS, LazyS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        scope: Vec<LoadedCore<D>>,
-        pre_find: &PreS,
-        post_find: &PostS,
-        pre_handler: &PreH,
-        post_handler: &PostH,
-        binding: BindingOptions<LazyS>,
+        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
         D: 'static,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        LazyS: SymbolLookup + Send + Sync + 'static,
+        LazyPreS: SymbolLookup + Send + Sync + 'static,
+        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
         match self {
-            RawElf::Dylib(dylib) => {
-                let relocated = Relocatable::relocate(
-                    dylib,
-                    scope,
-                    pre_find,
-                    post_find,
-                    pre_handler,
-                    post_handler,
-                    binding,
-                )?;
-                Ok(LoadedElf::Dylib(relocated))
-            }
-            RawElf::Exec(exec) => {
-                let relocated = Relocatable::relocate(
-                    exec,
-                    scope,
-                    pre_find,
-                    post_find,
-                    pre_handler,
-                    post_handler,
-                    binding,
-                )?;
-                Ok(LoadedElf::Exec(relocated))
-            }
+            RawElf::Dylib(dylib) => Ok(LoadedElf::Dylib(Relocatable::relocate(dylib, args)?)),
+            RawElf::Exec(exec) => Ok(LoadedElf::Exec(Relocatable::relocate(exec, args)?)),
             #[cfg(feature = "object")]
             RawElf::Object(relocatable) => {
-                let relocated = Relocatable::relocate(
-                    relocatable,
-                    Vec::new(),
-                    pre_find,
-                    post_find,
-                    pre_handler,
-                    post_handler,
+                let RelocateArgs {
                     binding,
-                )?;
-                Ok(LoadedElf::Object(relocated))
+                    lookup,
+                    lazy_lookup,
+                    handlers,
+                    ..
+                } = args;
+                Ok(LoadedElf::Object(Relocatable::relocate(
+                    relocatable,
+                    RelocateArgs::new(Vec::new(), binding, lookup, lazy_lookup, handlers),
+                )?))
             }
         }
     }

@@ -58,7 +58,7 @@ impl BindingScenario {
     pub(crate) fn assert_eager_jump_slots(&self) {
         let external_addr = self.host_symbol_address(EXTERNAL_FUNC_NAME);
         assert!(
-            !self.binding_mode().is_lazy(),
+            !self.binding_kind().is_lazy(),
             "expected eager binding mode"
         );
         self.assert_jump_slot_value(EXTERNAL_FUNC_NAME, external_addr);
@@ -71,7 +71,7 @@ impl BindingScenario {
         let first_slot = self.relocation_for_symbol(REL_JUMP_SLOT, EXTERNAL_FUNC_NAME);
         let second_slot = self.relocation_for_symbol(REL_JUMP_SLOT, EXTERNAL_FUNC_NAME2);
 
-        assert!(self.binding_mode().is_lazy(), "expected lazy binding mode");
+        assert!(self.binding_kind().is_lazy(), "expected lazy binding mode");
         let first_before = self.slot_word(first_slot);
         let second_before = self.slot_word(second_slot);
         assert_ne!(first_before, external_addr, "slot should start unresolved");

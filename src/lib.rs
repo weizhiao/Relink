@@ -18,8 +18,10 @@
 //!   the library that produced them.
 //! - Hybrid linking. Compose `.so` and `.o` inputs at runtime with `scope()` and
 //!   `add_scope()`.
-//! - Deep customization. Override symbol lookup with `pre_find_fn()` / `post_find_fn()`,
-//!   intercept relocations with handlers, and inspect segments with [`loader::LoadHook`].
+//! - Deep customization. Override relocation-time lookup with `pre_find_fn()` /
+//!   `post_find_fn()`, provide lazy-fixup lookup with `lazy_pre_find_fn()` /
+//!   `lazy_post_find_fn()`, intercept relocations with handlers, and inspect segments
+//!   with [`loader::LoadHook`].
 //! - Optional advanced features. TLS relocation handling, lazy binding, relocatable object
 //!   loading, logging, and versioned symbol lookup are feature-gated.
 //!

@@ -4,8 +4,6 @@ use std::collections::HashMap;
 
 #[cfg(feature = "tls")]
 use elf_loader::arch::{REL_DTPMOD, REL_DTPOFF};
-#[cfg(feature = "lazy-binding")]
-use elf_loader::relocation::BindingOptions;
 use elf_loader::{
     Loader,
     arch::{REL_COPY, REL_GOT, REL_IRELATIVE, REL_JUMP_SLOT, REL_RELATIVE, REL_SYMBOLIC},
@@ -16,6 +14,7 @@ use gen_elf::{
     Arch, DylibWriter, ElfWriteOutput, ElfWriterConfig, RelocEntry, RelocationInfo, SymbolDesc,
 };
 
+use super::BindingKind;
 use crate::support::{
     dylib_relocation_checks,
     host_symbols::{
@@ -50,7 +49,7 @@ type HostExternalFn = extern "C" fn(
 type TlsHelperFn = extern "C" fn() -> *mut u32;
 
 fn dynamic_relocation_entries() -> Vec<RelocEntry> {
-    let mut relocations = vec![
+    let relocations = vec![
         RelocEntry::with_name(EXTERNAL_FUNC_NAME, REL_JUMP_SLOT),
         RelocEntry::with_name(EXTERNAL_FUNC_NAME2, REL_JUMP_SLOT),
         RelocEntry::with_name(EXTERNAL_VAR_NAME, REL_GOT),
@@ -60,34 +59,16 @@ fn dynamic_relocation_entries() -> Vec<RelocEntry> {
         RelocEntry::new(REL_IRELATIVE),
     ];
     #[cfg(feature = "tls")]
-    relocations.extend([
+    let relocations = relocations.into_iter().chain([
         RelocEntry::with_name(EXTERNAL_TLS_NAME, REL_DTPMOD),
         RelocEntry::with_name(EXTERNAL_TLS_NAME, REL_DTPOFF),
         RelocEntry::with_name(EXTERNAL_TLS_NAME2, REL_DTPMOD),
         RelocEntry::with_name(EXTERNAL_TLS_NAME2, REL_DTPOFF),
     ]);
-    relocations
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum BindingMode {
-    Eager,
-    #[cfg(feature = "lazy-binding")]
-    Lazy,
-}
-
-impl BindingMode {
-    pub(crate) fn is_lazy(self) -> bool {
-        match self {
-            Self::Eager => false,
-            #[cfg(feature = "lazy-binding")]
-            Self::Lazy => true,
-        }
-    }
+    relocations.into_iter().collect()
 }
 
 pub(crate) struct BindingFixture {
-    main_output: ElfWriteOutput,
     helper_output: ElfWriteOutput,
     host_symbols: TestHostSymbols,
 }
@@ -97,21 +78,34 @@ impl BindingFixture {
         let arch = Arch::current();
         let config = ElfWriterConfig::default().with_ifunc_resolver_val(IFUNC_RESOLVER_OFFSET);
 
-        let mut helper_symbols = vec![SymbolDesc::global_object(
+        let helper_symbols = vec![SymbolDesc::global_object(
             COPY_VAR_NAME,
             &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
         )];
         #[cfg(feature = "tls")]
-        helper_symbols.extend([
+        let helper_symbols = helper_symbols.into_iter().chain([
             SymbolDesc::global_tls(EXTERNAL_TLS_NAME, &[0xAA, 0xBB, 0xCC, 0xDD]),
             SymbolDesc::global_tls(EXTERNAL_TLS_NAME2, &[0x11, 0x22, 0x33, 0x44]),
         ]);
+        let helper_symbols: Vec<_> = helper_symbols.into_iter().collect();
 
         let helper_output = DylibWriter::with_config(arch, config.clone())
             .write(&[], &helper_symbols)
             .expect("failed to generate helper ELF");
 
-        let mut main_symbols = vec![
+        Self {
+            helper_output,
+            host_symbols: TestHostSymbols::new(),
+        }
+    }
+
+    fn write_main_output(&self, binding: BindingKind) -> ElfWriteOutput {
+        let arch = Arch::current();
+        let config = ElfWriterConfig::default()
+            .with_ifunc_resolver_val(IFUNC_RESOLVER_OFFSET)
+            .with_bind_now(!binding.is_lazy());
+
+        let main_symbols = vec![
             SymbolDesc::global_object(LOCAL_VAR_NAME, &[0u8; 8]),
             SymbolDesc::undefined_func(EXTERNAL_FUNC_NAME),
             SymbolDesc::undefined_func(EXTERNAL_FUNC_NAME2),
@@ -119,23 +113,19 @@ impl BindingFixture {
             SymbolDesc::undefined_object(COPY_VAR_NAME).with_size(8),
         ];
         #[cfg(feature = "tls")]
-        main_symbols.extend([
+        let main_symbols = main_symbols.into_iter().chain([
             SymbolDesc::undefined_tls(EXTERNAL_TLS_NAME),
             SymbolDesc::undefined_tls(EXTERNAL_TLS_NAME2),
         ]);
+        let main_symbols: Vec<_> = main_symbols.into_iter().collect();
 
-        let main_output = DylibWriter::with_config(arch, config)
+        DylibWriter::with_config(arch, config)
             .write(&dynamic_relocation_entries(), &main_symbols)
-            .expect("failed to generate main ELF");
-
-        Self {
-            main_output,
-            helper_output,
-            host_symbols: TestHostSymbols::new(),
-        }
+            .expect("failed to generate main ELF")
     }
 
-    pub(crate) fn load(self, binding: BindingMode) -> BindingScenario {
+    pub(crate) fn load(self, binding: BindingKind) -> BindingScenario {
+        let main_output = self.write_main_output(binding);
         let loader = Loader::new();
         #[cfg(feature = "tls")]
         let mut loader = loader.with_default_tls_resolver();
@@ -150,7 +140,7 @@ impl BindingFixture {
             .expect("failed to relocate helper");
 
         let pending_dylib = loader
-            .load_dylib(ElfBinary::new("test_dynamic.so", &self.main_output.data))
+            .load_dylib(ElfBinary::new("test_dynamic.so", &main_output.data))
             .expect("failed to load dylib");
 
         let prepared_relocator = pending_dylib
@@ -160,31 +150,22 @@ impl BindingFixture {
 
         #[cfg(feature = "lazy-binding")]
         let loaded_dylib = if binding.is_lazy() {
-            prepared_relocator
-                .binding(BindingOptions::lazy_with_scope(
-                    self.host_symbols.resolver.clone(),
-                ))
-                .relocate()
+            prepared_relocator.share_find_with_lazy().lazy().relocate()
         } else {
-            prepared_relocator.eager().relocate()
+            prepared_relocator.relocate()
         }
         .expect("failed to relocate dylib");
 
         #[cfg(not(feature = "lazy-binding"))]
         let loaded_dylib = {
-            assert!(
-                !binding.is_lazy(),
-                "lazy binding test requires the `lazy-binding` feature"
-            );
             prepared_relocator
-                .eager()
                 .relocate()
                 .expect("failed to relocate dylib")
         };
 
         BindingScenario {
             binding,
-            main_output: self.main_output,
+            main_output,
             helper_dylib,
             loaded_dylib,
             host_symbol_addresses: self.host_symbols.addresses,
@@ -193,7 +174,7 @@ impl BindingFixture {
 }
 
 pub(crate) struct BindingScenario {
-    binding: BindingMode,
+    binding: BindingKind,
     main_output: ElfWriteOutput,
     helper_dylib: LoadedDylib<()>,
     loaded_dylib: LoadedDylib<()>,
@@ -201,7 +182,7 @@ pub(crate) struct BindingScenario {
 }
 
 impl BindingScenario {
-    pub(crate) fn binding_mode(&self) -> BindingMode {
+    pub(crate) fn binding_kind(&self) -> BindingKind {
         self.binding
     }
 
