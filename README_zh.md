@@ -43,7 +43,7 @@ Relink 是一个高性能、`no_std` 友好的 Rust ELF 加载器与运行时链
 | --- | --- |
 | 从文件或内存进行运行时加载 | `Loader::load*` 可接受路径、`ElfFile`、`ElfBinary`、`&[u8]` 和 `&Vec<u8]` |
 | 更安全的符号访问 | 与已加载镜像生命周期绑定的类型化 `get::<T>()` |
-| 宿主主导的链接策略 | `pre_find_fn()`、`post_find_fn()`、`pre_handler()`、`post_handler()` |
+| 宿主主导的链接策略 | `pre_find_fn()`、`post_find_fn()`、`lazy_pre_find_fn()`、`lazy_post_find_fn()`、`pre_handler()`、`post_handler()` |
 | 运行时混合链接 | 通过 `scope()` 和 `add_scope()` 组合 `.so` 与 `.o` |
 | 更底层的部署环境 | `no_std` 核心设计和可替换的 `Mmap` 后端 |
 
@@ -130,7 +130,7 @@ path / bytes / ElfFile / ElfBinary
  RawDylib      RawExec     RawObject*
                  |
               Relocator
-   pre_find / scope / handlers / binding
+   pre_find / scope / lazy lookups / handlers / binding
                  |
     +------------+-------------+
     |            |             |
@@ -188,6 +188,34 @@ let plugin = loader
 # }
 ```
 
+### 配置 Lazy Binding 的 Fixup 查找
+
+这部分需要开启 `lazy-binding` feature。
+
+```rust,no_run
+# use elf_loader::{Loader, Result};
+# extern "C" fn host_double(value: i32) -> i32 { value * 2 }
+# fn main() -> Result<()> {
+let lib = Loader::new()
+    .load_dylib("path/to/plugin.so")?
+    .relocator()
+    .pre_find_fn(|name| {
+        if name == "host_double" {
+            Some(host_double as *const ())
+        } else {
+            None
+        }
+    })
+    .share_find_with_lazy()
+    .lazy()
+    .relocate()?;
+# let _ = lib;
+# Ok(())
+# }
+```
+
+如果 PLT fixup 需要复用初始重定位阶段的宿主符号查找策略，可以使用 `share_find_with_lazy()`。如果 lazy fixup 需要单独的规则，则直接配置 `lazy_pre_find_fn()` / `lazy_post_find_fn()`。
+
 ### 检查可执行文件或 PIE
 
 ```rust
@@ -224,7 +252,7 @@ fn main() -> Result<()> {
 | Feature | 默认 | 作用 |
 | --- | --- | --- |
 | `tls` | 是 | 启用 TLS 重定位处理，以及 `Loader::with_default_tls_resolver()` 等 API |
-| `lazy-binding` | 否 | 启用 PLT/GOT lazy binding，以及 `Relocator::lazy()` / `lazy_scope()` |
+| `lazy-binding` | 否 | 启用 PLT/GOT lazy binding，以及 `Relocator::lazy()`、`share_find_with_lazy()`、`lazy_pre_find*()` / `lazy_post_find*()` |
 | `object` | 否 | 启用可重定位目标文件（`ET_REL`）加载和 `Loader::load_object()` |
 | `version` | 否 | 启用带符号版本的查找，例如 `get_version()` |
 | `log` | 否 | 启用基于 `log` 的加载与重定位诊断输出 |

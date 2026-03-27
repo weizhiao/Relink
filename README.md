@@ -43,7 +43,7 @@ If you want automatic detection, use `Loader::load()`. If you want strict type c
 | --- | --- |
 | Runtime loading from files or memory | `Loader::load*` accepts paths, `ElfFile`, `ElfBinary`, `&[u8]`, and `&Vec<u8]` |
 | Safer symbol handling | Typed `get::<T>()` lookups tied to the loaded image lifetime |
-| Host-controlled linking | `pre_find_fn()`, `post_find_fn()`, `pre_handler()`, and `post_handler()` |
+| Host-controlled linking | `pre_find_fn()`, `post_find_fn()`, `lazy_pre_find_fn()`, `lazy_post_find_fn()`, `pre_handler()`, and `post_handler()` |
 | Hybrid linking at runtime | Mix `.so` and `.o` inputs with `scope()` and `add_scope()` |
 | Low-level deployment targets | A `no_std` core plus custom `Mmap` backends |
 
@@ -130,7 +130,7 @@ path / bytes / ElfFile / ElfBinary
  RawDylib      RawExec     RawObject*
                  |
               Relocator
-   pre_find / scope / handlers / binding
+   pre_find / scope / lazy lookups / handlers / binding
                  |
     +------------+-------------+
     |            |             |
@@ -188,6 +188,34 @@ let plugin = loader
 # }
 ```
 
+### Configure Lazy Binding Fixups
+
+This requires the `lazy-binding` feature.
+
+```rust,no_run
+# use elf_loader::{Loader, Result};
+# extern "C" fn host_double(value: i32) -> i32 { value * 2 }
+# fn main() -> Result<()> {
+let lib = Loader::new()
+    .load_dylib("path/to/plugin.so")?
+    .relocator()
+    .pre_find_fn(|name| {
+        if name == "host_double" {
+            Some(host_double as *const ())
+        } else {
+            None
+        }
+    })
+    .share_find_with_lazy()
+    .lazy()
+    .relocate()?;
+# let _ = lib;
+# Ok(())
+# }
+```
+
+Use `share_find_with_lazy()` when PLT fixups should reuse the same host lookup policy as the initial relocation pass. If lazy fixups need different rules, configure `lazy_pre_find_fn()` / `lazy_post_find_fn()` directly.
+
 ### Inspect an Executable or PIE
 
 ```rust
@@ -224,7 +252,7 @@ fn main() -> Result<()> {
 | Feature | Default | Purpose |
 | --- | --- | --- |
 | `tls` | Yes | Enables TLS relocation handling and APIs such as `Loader::with_default_tls_resolver()` |
-| `lazy-binding` | No | Enables PLT/GOT lazy binding and methods like `Relocator::lazy()` / `lazy_scope()` |
+| `lazy-binding` | No | Enables PLT/GOT lazy binding plus `Relocator::lazy()`, `share_find_with_lazy()`, and `lazy_pre_find*()` / `lazy_post_find*()` |
 | `object` | No | Enables relocatable object (`ET_REL`) loading via `Loader::load_object()` |
 | `version` | No | Enables version-aware symbol lookup such as `get_version()` |
 | `log` | No | Enables `log` integration for loader and relocation diagnostics |
