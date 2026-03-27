@@ -8,9 +8,9 @@
 //! symbol lookup, metadata, and dependency retention.
 
 use crate::{
+    Result,
     elf::ElfPhdr,
     relocation::{Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup},
-    Result,
 };
 use ::core::fmt::Debug;
 

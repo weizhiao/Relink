@@ -5,7 +5,8 @@ use super::{
 use crate::{
     RelocationError, Result,
     elf::{
-        ELF_REL_SECTION_TYPE, ElfHeader, ElfRelType, ElfShdr, ElfSymbol, SymbolTable,
+        ELF_REL_SECTION_TYPE, ElfHeader, ElfRelType, ElfSectionType, ElfShdr, ElfSymbol,
+        ElfSymbolType, SymbolTable,
     },
     loader::{DynLifecycleHandler, LoadHook, LoaderInner},
     os::Mmap,
@@ -15,7 +16,7 @@ use crate::{
 };
 use alloc::{borrow::ToOwned, boxed::Box, string::String, vec::Vec};
 use core::marker::PhantomData;
-use elf::abi::{SHN_UNDEF, SHT_INIT_ARRAY, SHT_REL, SHT_RELA, SHT_SYMTAB, STT_FILE};
+use elf::abi::SHN_UNDEF;
 
 /// Builder for creating relocatable ELF objects.
 pub(crate) struct ObjectBuilder<Tls, D = ()> {
@@ -46,9 +47,9 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
         let mut has_symtab = false;
 
         for shdr in shdrs {
-            match shdr.sh_type {
-                SHT_SYMTAB => has_symtab = true,
-                SHT_REL | SHT_RELA => Self::validate_relocation_shdr(shdr)?,
+            match shdr.section_type() {
+                ElfSectionType::SYMTAB => has_symtab = true,
+                ElfSectionType::REL | ElfSectionType::RELA => Self::validate_relocation_shdr(shdr)?,
                 _ => {}
             }
         }
@@ -62,12 +63,15 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
 
     #[inline]
     fn validate_relocation_shdr(shdr: &ElfShdr) -> Result<()> {
-        debug_assert!(matches!(shdr.sh_type, SHT_REL | SHT_RELA));
+        debug_assert!(matches!(
+            shdr.section_type(),
+            ElfSectionType::REL | ElfSectionType::RELA
+        ));
 
-        debug_assert_eq!(shdr.sh_type, ELF_REL_SECTION_TYPE);
+        debug_assert_eq!(shdr.section_type(), ELF_REL_SECTION_TYPE);
 
         let expected = core::mem::size_of::<ElfRelType>();
-        let found = shdr.sh_entsize as usize;
+        let found = shdr.sh_entsize();
         debug_assert_eq!(found, expected);
 
         Ok(())
@@ -75,7 +79,7 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
 
     fn rebase_loaded_sections(shdrs: &mut [ElfShdr], pltgot: &mut PltGotSection, base: RelocAddr) {
         shdrs.iter_mut().for_each(|shdr| {
-            shdr.sh_addr = base.offset(shdr.sh_addr as usize).into_inner() as _;
+            shdr.set_sh_addr(base.offset(shdr.sh_addr()).into_inner());
         });
         pltgot.rebase(base);
     }
@@ -87,11 +91,13 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
     ) -> SymbolTable {
         let symbols: &mut [ElfSymbol] = symtab_shdr.content_mut();
         for symbol in symbols {
-            if symbol.st_type() == STT_FILE || symbol.st_shndx() == SHN_UNDEF as usize {
+            if symbol.symbol_type() == ElfSymbolType::FILE
+                || symbol.st_shndx() == SHN_UNDEF as usize
+            {
                 continue;
             }
-            let section_base = RelocAddr::new(shdrs[symbol.st_shndx()].sh_addr as usize)
-                .relative_to(base.into_inner());
+            let section_base =
+                RelocAddr::new(shdrs[symbol.st_shndx()].sh_addr()).relative_to(base.into_inner());
             symbol.set_value(section_base.offset(symbol.st_value()).into_inner());
         }
 
@@ -104,7 +110,7 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
         base: RelocAddr,
     ) -> &'static [ElfRelType] {
         let rels: &mut [ElfRelType] = relocation_shdr.content_mut();
-        let section_base = RelocAddr::new(shdrs[relocation_shdr.sh_info as usize].sh_addr as usize);
+        let section_base = RelocAddr::new(shdrs[relocation_shdr.sh_info() as usize].sh_addr());
         for rel in rels {
             rel.set_offset(
                 section_base
@@ -128,12 +134,14 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
         let mut init_array = None;
 
         for shdr in shdrs {
-            match shdr.sh_type {
-                SHT_SYMTAB => symtab = Some(Self::prepare_symbol_table(shdr, shdrs, base)),
-                SHT_RELA | SHT_REL => {
+            match shdr.section_type() {
+                ElfSectionType::SYMTAB => {
+                    symtab = Some(Self::prepare_symbol_table(shdr, shdrs, base))
+                }
+                ElfSectionType::RELA | ElfSectionType::REL => {
                     relocation.push(Self::prepare_relocation_section(shdr, shdrs, base))
                 }
-                SHT_INIT_ARRAY => init_array = Some(Self::prepare_init_array(shdr)),
+                ElfSectionType::INIT_ARRAY => init_array = Some(Self::prepare_init_array(shdr)),
                 _ => {}
             }
         }

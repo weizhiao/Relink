@@ -5,20 +5,23 @@
 //! lifecycle handlers, TLS state, and dependency ownership.
 
 use crate::{
-    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolInfo, SymbolTable},
+    ParsePhdrError, Result,
+    elf::{
+        ElfDyn, ElfDynamic, ElfDynamicTag, ElfPhdr, ElfPhdrs, ElfProgramType, SymbolInfo,
+        SymbolTable,
+    },
     image::{DynamicInfo, Symbol},
     loader::{DynLifecycleHandler, LifecycleContext},
     relocation::{RelocAddr, SymDef},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{CoreTlsState, TlsDescArgs, TlsInfo, TlsResolver},
-    ParsePhdrError, Result,
 };
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::{ffi::c_void, fmt::Debug, marker::PhantomData, ptr::NonNull};
-use elf::abi::{DF_STATIC_TLS, DT_FLAGS, PT_DYNAMIC, PT_GNU_EH_FRAME, PT_TLS};
+use elf::abi::DF_STATIC_TLS;
 
 /// A fully loaded and relocated ELF module with retained dependencies.
 ///
@@ -224,15 +227,14 @@ impl<D> LoadedCore<D> {
         let phdrs = phdrs.into();
 
         for phdr in &phdrs {
-            match phdr.p_type {
-                PT_DYNAMIC => {
-                    dynamic_ptr = base.wrapping_add(phdr.p_vaddr as usize) as *const ElfDyn;
+            match phdr.program_type() {
+                ElfProgramType::DYNAMIC => {
+                    dynamic_ptr = base.wrapping_add(phdr.p_vaddr()) as *const ElfDyn;
                 }
-                PT_GNU_EH_FRAME => {
-                    eh_frame_hdr =
-                        NonNull::new(base.wrapping_add(phdr.p_vaddr as usize) as *mut u8);
+                ElfProgramType::GNU_EH_FRAME => {
+                    eh_frame_hdr = NonNull::new(base.wrapping_add(phdr.p_vaddr()) as *mut u8);
                 }
-                PT_TLS => {
+                ElfProgramType::TLS => {
                     tls_phdr = Some(phdr);
                 }
                 _ => {}
@@ -242,20 +244,25 @@ impl<D> LoadedCore<D> {
         if let Some(phdr) = tls_phdr {
             unsafe {
                 let template = core::slice::from_raw_parts(
-                    base.wrapping_add(phdr.p_vaddr as usize) as *const u8,
-                    phdr.p_filesz as usize,
+                    base.wrapping_add(phdr.p_vaddr()) as *const u8,
+                    phdr.p_filesz(),
                 );
                 let info = TlsInfo::new(phdr, core::mem::transmute(template));
 
                 let mut static_tls = actual_tls_tp_offset.is_some();
                 if !static_tls && !dynamic_ptr.is_null() {
                     let mut cur = dynamic_ptr;
-                    while (*cur).d_tag != 0 {
-                        if (*cur).d_tag as u64 == DT_FLAGS as u64 {
-                            if (*cur).d_un as usize & DF_STATIC_TLS as usize != 0 {
-                                static_tls = true;
-                                break;
-                            }
+                    loop {
+                        let dynamic = &*cur;
+                        let tag = dynamic.tag();
+                        if tag == ElfDynamicTag::NULL {
+                            break;
+                        }
+                        if tag == ElfDynamicTag::FLAGS
+                            && dynamic.value() & DF_STATIC_TLS as usize != 0
+                        {
+                            static_tls = true;
+                            break;
                         }
                         cur = cur.add(1);
                     }

@@ -9,10 +9,7 @@ use core::{
 use elf_loader::{
     Loader, Result,
     arch::REL_RELATIVE,
-    elf::{
-        ElfDyn as Dyn, ElfPhdr,
-        abi::{DT_NULL, DT_RELA, DT_RELACOUNT, PT_DYNAMIC},
-    },
+    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, abi::PT_DYNAMIC},
     image::RawElf,
     input::ElfFile,
 };
@@ -86,16 +83,16 @@ struct Aux {
 // argv <---sp + 1
 // argc <---sp
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut Dyn) {
+unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut ElfDyn) {
     let mut cur_dyn_ptr = dynv;
     let mut cur_dyn = unsafe { &*dynv };
     let mut rela = None;
     let mut rela_count = None;
     loop {
-        match cur_dyn.d_tag {
-            DT_NULL => break,
-            DT_RELA => rela = Some(cur_dyn.d_un),
-            DT_RELACOUNT => rela_count = Some(cur_dyn.d_un),
+        match cur_dyn.tag() {
+            ElfDynamicTag::NULL => break,
+            ElfDynamicTag::RELA => rela = Some(cur_dyn.value()),
+            ElfDynamicTag::RELACOUNT => rela_count = Some(cur_dyn.value()),
             _ => {}
         }
         cur_dyn_ptr = unsafe { cur_dyn_ptr.add(1) };

@@ -1,7 +1,7 @@
 //! Parsing `.dynamic` section
 use crate::{
     ParseDynamicError, Result,
-    elf::{DT_RELR, DT_RELRSZ, ElfDyn, ElfRel, ElfRelType, ElfRela, ElfRelr},
+    elf::{ElfDyn, ElfDynamicTag, ElfRel, ElfRelType, ElfRela, ElfRelr},
     segment::ElfSegments,
 };
 use alloc::vec::Vec;
@@ -44,58 +44,62 @@ impl ElfDynamic {
         let mut needed_libs = Vec::new(); // Required libraries (dependencies)
 
         let mut cur_dyn_ptr = dynamic_ptr;
-        let mut dynamic = unsafe { &*cur_dyn_ptr };
         let base = segments.base();
 
         // Parse all dynamic entries
         unsafe {
             loop {
-                match dynamic.d_tag as _ {
-                    DT_FLAGS => flags = dynamic.d_un as usize,
-                    DT_FLAGS_1 => flags_1 = dynamic.d_un as usize,
-                    DT_PLTGOT => got_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_NEEDED => {
-                        if let Some(val) = NonZeroUsize::new(dynamic.d_un as usize) {
+                let dynamic = &*cur_dyn_ptr;
+                let tag = dynamic.tag();
+                let value = dynamic.value();
+
+                match tag {
+                    ElfDynamicTag::FLAGS => flags = value,
+                    ElfDynamicTag::FLAGS_1 => flags_1 = value,
+                    ElfDynamicTag::PLTGOT => got_off = NonZeroUsize::new(value),
+                    ElfDynamicTag::NEEDED => {
+                        if let Some(val) = NonZeroUsize::new(value) {
                             needed_libs.push(val);
                         }
                     }
-                    DT_HASH => elf_hash_off = Some(dynamic.d_un as usize),
-                    DT_GNU_HASH => gnu_hash_off = Some(dynamic.d_un as usize),
-                    DT_SYMTAB => symtab_off = dynamic.d_un as usize,
-                    DT_STRTAB => strtab_off = dynamic.d_un as usize,
-                    DT_PLTRELSZ => pltrel_size = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_PLTREL => {
-                        is_rela = Some(dynamic.d_un as i64 == DT_RELA);
+                    ElfDynamicTag::HASH => elf_hash_off = Some(value),
+                    ElfDynamicTag::GNU_HASH => gnu_hash_off = Some(value),
+                    ElfDynamicTag::SYMTAB => symtab_off = value,
+                    ElfDynamicTag::STRTAB => strtab_off = value,
+                    ElfDynamicTag::PLTRELSZ => pltrel_size = NonZeroUsize::new(value),
+                    ElfDynamicTag::PLTREL => {
+                        is_rela = Some(ElfDynamicTag::new(value as i64) == ElfDynamicTag::RELA);
                     }
-                    DT_JMPREL => pltrel_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_RELR => relr_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_RELA | DT_REL => {
-                        is_rela = Some(dynamic.d_tag as i64 == DT_RELA);
-                        rel_off = NonZeroUsize::new(dynamic.d_un as usize)
+                    ElfDynamicTag::JMPREL => pltrel_off = NonZeroUsize::new(value),
+                    ElfDynamicTag::RELR => relr_off = NonZeroUsize::new(value),
+                    ElfDynamicTag::RELA | ElfDynamicTag::REL => {
+                        is_rela = Some(tag == ElfDynamicTag::RELA);
+                        rel_off = NonZeroUsize::new(value)
                     }
-                    DT_RELASZ | DT_RELSZ => rel_size = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_RELRSZ => relr_size = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_RELACOUNT | DT_RELCOUNT => {
-                        rel_count = NonZeroUsize::new(dynamic.d_un as usize)
+                    ElfDynamicTag::RELASZ | ElfDynamicTag::RELSZ => {
+                        rel_size = NonZeroUsize::new(value)
                     }
-                    DT_INIT => init_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_FINI => fini_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_INIT_ARRAY => init_array_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_INIT_ARRAYSZ => init_array_size = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_FINI_ARRAY => fini_array_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_FINI_ARRAYSZ => fini_array_size = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_VERSYM => version_ids_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_VERNEED => verneed_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_VERNEEDNUM => verneed_num = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_VERDEF => verdef_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_VERDEFNUM => verdef_num = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_RPATH => rpath_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_RUNPATH => runpath_off = NonZeroUsize::new(dynamic.d_un as usize),
-                    DT_NULL => break,
+                    ElfDynamicTag::RELRSZ => relr_size = NonZeroUsize::new(value),
+                    ElfDynamicTag::RELACOUNT | ElfDynamicTag::RELCOUNT => {
+                        rel_count = NonZeroUsize::new(value)
+                    }
+                    ElfDynamicTag::INIT => init_off = NonZeroUsize::new(value),
+                    ElfDynamicTag::FINI => fini_off = NonZeroUsize::new(value),
+                    ElfDynamicTag::INIT_ARRAY => init_array_off = NonZeroUsize::new(value),
+                    ElfDynamicTag::INIT_ARRAYSZ => init_array_size = NonZeroUsize::new(value),
+                    ElfDynamicTag::FINI_ARRAY => fini_array_off = NonZeroUsize::new(value),
+                    ElfDynamicTag::FINI_ARRAYSZ => fini_array_size = NonZeroUsize::new(value),
+                    ElfDynamicTag::VERSYM => version_ids_off = NonZeroUsize::new(value),
+                    ElfDynamicTag::VERNEED => verneed_off = NonZeroUsize::new(value),
+                    ElfDynamicTag::VERNEEDNUM => verneed_num = NonZeroUsize::new(value),
+                    ElfDynamicTag::VERDEF => verdef_off = NonZeroUsize::new(value),
+                    ElfDynamicTag::VERDEFNUM => verdef_num = NonZeroUsize::new(value),
+                    ElfDynamicTag::RPATH => rpath_off = NonZeroUsize::new(value),
+                    ElfDynamicTag::RUNPATH => runpath_off = NonZeroUsize::new(value),
+                    ElfDynamicTag::NULL => break,
                     _ => {}
                 }
                 cur_dyn_ptr = cur_dyn_ptr.add(1);
-                dynamic = &*cur_dyn_ptr;
             }
         }
 
@@ -122,19 +126,6 @@ impl ElfDynamic {
         } else if let Some(off) = elf_hash_off {
             ElfDynamicHashTab::Elf(add_base(off)?)
         } else {
-            // If no hash table is present, we can't perform symbol lookup.
-            // However, for some simple cases (like our test generator), we might not strictly need it
-            // if we don't do symbol lookup via hash.
-            // But the loader architecture seems to rely on it.
-            // Let's return a dummy or error.
-            // The error "dynamic section does not have DT_GNU_HASH nor DT_HASH" comes from here.
-            // We added DT_HASH to the generator, but maybe it's 0 and treated as None?
-            // DT_HASH value is the offset. If we set it to 0, it might be valid if the hash table is at offset 0 (unlikely).
-            // In the generator we set it to 0.
-            // Let's check if 0 is considered valid.
-            // In the loop: DT_HASH => elf_hash_off = Some(dynamic.d_un as usize),
-            // So 0 is Some(0).
-
             return Err(ParseDynamicError::MissingHashTable.into());
         };
 

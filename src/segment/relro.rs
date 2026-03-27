@@ -1,6 +1,6 @@
 use crate::{
     Result,
-    elf::Phdr,
+    elf::ElfPhdr,
     os::{Mmap, ProtFlags},
     relocation::RelocAddr,
 };
@@ -32,10 +32,10 @@ impl ELFRelro {
     ///
     /// # Returns
     /// A new ELFRelro instance
-    pub(crate) fn new<M: Mmap>(phdr: &Phdr, base: RelocAddr) -> ELFRelro {
+    pub(crate) fn new<M: Mmap>(phdr: &ElfPhdr, base: RelocAddr) -> ELFRelro {
         ELFRelro {
-            addr: base.offset(phdr.p_vaddr as usize),
-            len: phdr.p_memsz as usize,
+            addr: base.offset(phdr.p_vaddr()),
+            len: phdr.p_memsz(),
             mprotect: M::mprotect,
         }
     }

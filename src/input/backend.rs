@@ -1,9 +1,9 @@
 use super::{ElfReader, IntoElfReader};
 use crate::{Result, logging, os::RawFile};
 use alloc::{
+    boxed::Box,
     string::{String, ToString},
     vec::Vec,
-    boxed::Box,
 };
 
 /// An ELF object source backed by an in-memory byte slice.

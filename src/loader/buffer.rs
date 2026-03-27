@@ -1,4 +1,4 @@
-use crate::elf::{ElfEhdr, ElfPhdr, ElfShdr, EHDR_SIZE};
+use crate::elf::{EHDR_SIZE, ElfEhdr, ElfPhdr, ElfShdr};
 use alloc::vec::Vec;
 use core::mem::{align_of, size_of};
 

@@ -9,8 +9,8 @@ use crate::{
     arch::EM_ARCH,
     elf::{E_CLASS, ElfClass, ElfEhdr, ElfFileType, ElfMachine, ElfPhdr, ElfShdr},
 };
-use core::{mem::size_of, ops::Deref};
-use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, ET_EXEC, EV_CURRENT};
+use core::mem::size_of;
+use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, EV_CURRENT};
 
 /// A wrapper around the ELF header structure
 ///
@@ -21,18 +21,6 @@ use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, ET_EXEC, EV_CURRENT};
 pub struct ElfHeader {
     /// The underlying ELF header structure
     ehdr: ElfEhdr,
-}
-
-impl Deref for ElfHeader {
-    type Target = ElfEhdr;
-
-    /// Dereferences to the underlying ELF header structure
-    ///
-    /// This implementation allows direct access to the fields of the
-    /// underlying Ehdr structure through the ElfHeader wrapper.
-    fn deref(&self) -> &Self::Target {
-        &self.ehdr
-    }
 }
 
 impl ElfHeader {
@@ -46,13 +34,14 @@ impl ElfHeader {
     /// Returns `true` if the ELF file is a dynamic library (shared object).
     #[inline]
     pub fn is_dylib(&self) -> bool {
-        self.ehdr.e_type == ET_DYN
+        self.file_type() == ElfFileType::DYN
     }
 
     /// Returns `true` if the ELF file is an executable.
     #[inline]
     pub fn is_executable(&self) -> bool {
-        self.ehdr.e_type == ET_EXEC || self.ehdr.e_type == ET_DYN
+        let file_type = self.file_type();
+        file_type == ElfFileType::EXEC || file_type == ElfFileType::DYN
     }
 
     /// Returns the parsed ELF class of this header.
@@ -73,10 +62,16 @@ impl ElfHeader {
         ElfFileType::new(self.ehdr.e_type)
     }
 
+    /// Returns the entry-point virtual address (`e_entry`) as a native-sized value.
+    #[inline]
+    pub fn e_entry(&self) -> usize {
+        self.ehdr.e_entry as usize
+    }
+
     /// Validates the ELF header magic, class, version, and architecture.
     pub fn validate(&self) -> Result<()> {
         // Check ELF magic bytes
-        if self.e_ident[0..4] != ELFMAGIC {
+        if self.ehdr.e_ident[0..4] != ELFMAGIC {
             return Err(ParseEhdrError::InvalidMagic.into());
         }
 
@@ -91,7 +86,7 @@ impl ElfHeader {
         }
 
         // Check ELF version
-        if self.e_ident[EI_VERSION] != EV_CURRENT {
+        if self.ehdr.e_ident[EI_VERSION] != EV_CURRENT {
             return Err(ParseEhdrError::InvalidVersion.into());
         }
 
@@ -147,10 +142,7 @@ impl ElfHeader {
     /// Returns the `(start, end)` file offsets of the program header table.
     #[inline]
     pub fn phdr_range(&self) -> (usize, usize) {
-        let phdrs_size = self.e_phentsize() * self.e_phnum();
-        let phdr_start = self.e_phoff();
-        let phdr_end = phdr_start + phdrs_size;
-        (phdr_start, phdr_end)
+        table_range(self.e_phoff(), self.e_phentsize(), self.e_phnum())
     }
 
     /// Returns the checked `(start, size)` layout for the program header table.
@@ -158,33 +150,19 @@ impl ElfHeader {
     /// This validates entry-size compatibility and overflow-prone arithmetic.
     #[inline]
     pub(crate) fn checked_phdr_layout(&self) -> Result<Option<(usize, usize)>> {
-        let entsize = self.e_phentsize();
-        if entsize != size_of::<ElfPhdr>() {
-            return Err(ParsePhdrError::MalformedProgramHeaders.into());
-        }
-
-        let count = self.e_phnum();
-        let size = entsize
-            .checked_mul(count)
-            .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
-        if size == 0 {
-            return Ok(None);
-        }
-
-        let start = self.e_phoff();
-        let _end = start
-            .checked_add(size)
-            .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
-        Ok(Some((start, size)))
+        checked_table_layout(
+            self.e_phentsize(),
+            size_of::<ElfPhdr>(),
+            self.e_phnum(),
+            self.e_phoff(),
+            || ParsePhdrError::MalformedProgramHeaders.into(),
+        )
     }
 
     /// Returns the `(start, end)` file offsets of the section header table.
     #[inline]
     pub fn shdr_range(&self) -> (usize, usize) {
-        let shdrs_size = self.e_shentsize() * self.e_shnum();
-        let shdr_start = self.e_shoff();
-        let shdr_end = shdr_start + shdrs_size;
-        (shdr_start, shdr_end)
+        table_range(self.e_shoff(), self.e_shentsize(), self.e_shnum())
     }
 
     /// Returns the checked `(start, size)` layout for the section header table.
@@ -193,23 +171,39 @@ impl ElfHeader {
     #[inline]
     #[cfg_attr(not(feature = "object"), allow(dead_code))]
     pub(crate) fn checked_shdr_layout(&self) -> Result<Option<(usize, usize)>> {
-        let entsize = self.e_shentsize();
-        if entsize != size_of::<ElfShdr>() {
-            return Err(ParseEhdrError::MissingSectionHeaders.into());
-        }
-
-        let count = self.e_shnum();
-        let size = entsize
-            .checked_mul(count)
-            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
-        if size == 0 {
-            return Ok(None);
-        }
-
-        let start = self.e_shoff();
-        let _end = start
-            .checked_add(size)
-            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
-        Ok(Some((start, size)))
+        checked_table_layout(
+            self.e_shentsize(),
+            size_of::<ElfShdr>(),
+            self.e_shnum(),
+            self.e_shoff(),
+            || ParseEhdrError::MissingSectionHeaders.into(),
+        )
     }
+}
+
+#[inline]
+const fn table_range(offset: usize, entsize: usize, count: usize) -> (usize, usize) {
+    let size = entsize * count;
+    (offset, offset + size)
+}
+
+#[inline]
+fn checked_table_layout(
+    entsize: usize,
+    expected_entsize: usize,
+    count: usize,
+    offset: usize,
+    err: impl Fn() -> crate::Error,
+) -> Result<Option<(usize, usize)>> {
+    if entsize != expected_entsize {
+        return Err(err());
+    }
+
+    let size = entsize.checked_mul(count).ok_or_else(&err)?;
+    if size == 0 {
+        return Ok(None);
+    }
+
+    offset.checked_add(size).ok_or_else(err)?;
+    Ok(Some((offset, size)))
 }

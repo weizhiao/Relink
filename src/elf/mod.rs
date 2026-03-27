@@ -1,7 +1,7 @@
 //! ELF (Executable and Linkable Format) parsing and data structures.
 //!
 //! This module provides a collection of types and utilities for working with
-//! the ELF format as defined in the System V ABI. It includes support for heades,
+//! the ELF format as defined in the System V ABI. It includes support for headers,
 //! program headers, section headers, dynamic sections, and symbol tables.
 
 pub mod abi;
@@ -27,7 +27,9 @@ pub(crate) use symbol::{SymbolInfo, SymbolTable};
 
 // Public API exports
 pub use defs::{
-    ElfClass, ElfDyn, ElfFileType, ElfMachine, ElfPhdr, ElfRel, ElfRelType, ElfRela, ElfSymbol,
+    ElfClass, ElfDyn, ElfDynamicTag, ElfFileType, ElfMachine, ElfPhdr, ElfProgramFlags,
+    ElfProgramType, ElfRel, ElfRelType, ElfRela, ElfSectionFlags, ElfSectionType, ElfSymbol,
+    ElfSymbolBind, ElfSymbolType,
 };
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::ElfHeader;

@@ -2,7 +2,7 @@
 use crate::RelocationError;
 use crate::{
     Error, RelocationFailureReason, Result,
-    elf::{ElfRelType, ElfSymbol, SymbolInfo, SymbolTable},
+    elf::{ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
     image::{ElfCore, LoadedCore},
     logging, relocate_context_error,
     relocation::{
@@ -14,7 +14,6 @@ use crate::{
 };
 use alloc::{vec, vec::Vec};
 use core::ptr::null;
-use elf::abi::STT_GNU_IFUNC;
 
 /// Internal context for managing relocation state and handlers.
 pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized> {
@@ -617,7 +616,7 @@ impl<'temp, D> SymDef<'temp, D> {
             let base = self.lib.base_addr();
             let sym = unsafe { self.sym.unwrap_unchecked() };
             let addr = base.offset(sym.st_value());
-            if likely(sym.st_type() != STT_GNU_IFUNC) {
+            if likely(sym.symbol_type() != ElfSymbolType::GNU_IFUNC) {
                 addr
             } else {
                 unsafe { resolve_ifunc(addr) }

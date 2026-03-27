@@ -1,11 +1,10 @@
 //! Custom ELF hash table implementation for relocatable objects.
 
 use crate::elf::{
-    ElfHashTable, ElfShdr, ElfStringTable, ElfSymbol, HashTable, PreCompute, SymbolInfo,
-    SymbolTable,
+    ElfHashTable, ElfShdr, ElfStringTable, ElfSymbol, ElfSymbolType, HashTable, PreCompute,
+    SymbolInfo, SymbolTable,
 };
 use core::hash::{Hash, Hasher};
-use elf::abi::STT_FILE;
 use foldhash::{SharedSeed, fast::FoldHasher};
 use hashbrown::HashTable as RawHashTable;
 
@@ -32,7 +31,7 @@ impl CustomHash {
         let mut map = RawHashTable::with_capacity(symbols.len());
 
         for (idx, symbol) in symbols.iter_mut().enumerate() {
-            if symbol.st_type() == STT_FILE {
+            if symbol.symbol_type() == ElfSymbolType::FILE {
                 continue;
             }
 

@@ -1,6 +1,6 @@
 use crate::{
     Result,
-    elf::ElfPhdr,
+    elf::{ElfPhdr, ElfProgramFlags, ElfProgramType},
     os::{MapFlags, Mmap, ProtFlags},
     segment::{
         Address, ElfSegment, ElfSegments, FileMapInfo, PAGE_SIZE, SegmentBuilder, rounddown,
@@ -8,16 +8,21 @@ use crate::{
     },
 };
 use alloc::vec::Vec;
-use elf::abi::{PF_R, PF_W, PF_X, PT_LOAD};
 
 /// Convert ELF program header flags to memory protection flags
 #[inline]
-fn segment_prot(p_flag: u32) -> ProtFlags {
-    // Map ELF flags (PF_X, PF_W, PF_R) to memory protection flags
-    // PF_X (execute) -> PROT_EXEC (bit 2)
-    // PF_W (write)   -> PROT_WRITE (bit 1)
-    // PF_R (read)    -> PROT_READ (bit 0)
-    ProtFlags::from_bits_retain(((p_flag & PF_X) << 2 | p_flag & PF_W | (p_flag & PF_R) >> 2) as _)
+fn segment_prot(flags: ElfProgramFlags) -> ProtFlags {
+    let mut prot = ProtFlags::PROT_NONE;
+    if flags.contains(ElfProgramFlags::READ) {
+        prot |= ProtFlags::PROT_READ;
+    }
+    if flags.contains(ElfProgramFlags::WRITE) {
+        prot |= ProtFlags::PROT_WRITE;
+    }
+    if flags.contains(ElfProgramFlags::EXEC) {
+        prot |= ProtFlags::PROT_EXEC;
+    }
+    prot
 }
 
 /// Manages segments parsed from ELF program headers
@@ -29,7 +34,7 @@ pub(crate) struct ProgramSegments<'phdr> {
 }
 
 impl<'phdr> ProgramSegments<'phdr> {
-    /// Create a new PhdrSegments instance
+    /// Create a new [`ProgramSegments`] instance.
     pub(crate) fn new(phdrs: &'phdr [ElfPhdr], is_dylib: bool, use_file: bool) -> Self {
         Self {
             phdrs,
@@ -48,9 +53,9 @@ fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (Option<usize>, usize, u
 
     // Find the minimum and maximum virtual addresses of LOAD segments
     for phdr in phdrs {
-        if phdr.p_type == PT_LOAD {
-            let vaddr_start = phdr.p_vaddr as usize;
-            let vaddr_end = (phdr.p_vaddr + phdr.p_memsz) as usize;
+        if phdr.program_type() == ElfProgramType::LOAD {
+            let vaddr_start = phdr.p_vaddr();
+            let vaddr_end = phdr.p_vaddr() + phdr.p_memsz();
             if vaddr_start < min_vaddr {
                 min_vaddr = vaddr_start;
             }
@@ -86,7 +91,11 @@ impl SegmentBuilder for ProgramSegments<'_> {
 
     /// Create individual segments from program headers
     fn create_segments(&mut self) -> Result<()> {
-        for phdr in self.phdrs.iter().filter(|phdr| phdr.p_type == PT_LOAD) {
+        for phdr in self
+            .phdrs
+            .iter()
+            .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
+        {
             self.segments.push(phdr.create_segment());
         }
         Ok(())
@@ -108,16 +117,16 @@ impl ElfPhdr {
     #[inline]
     fn create_segment(&self) -> ElfSegment {
         // Align segment boundaries to page size
-        let min_vaddr = rounddown(self.p_vaddr as usize, PAGE_SIZE);
-        let max_vaddr = roundup((self.p_vaddr + self.p_memsz) as usize, PAGE_SIZE);
+        let min_vaddr = rounddown(self.p_vaddr(), PAGE_SIZE);
+        let max_vaddr = roundup(self.p_vaddr() + self.p_memsz(), PAGE_SIZE);
         let memsz = max_vaddr - min_vaddr;
-        let prot = segment_prot(self.p_flags);
+        let prot = segment_prot(self.flags());
 
         // Align file offset to page boundary
-        let offset = rounddown(self.p_offset as usize, PAGE_SIZE);
+        let offset = rounddown(self.p_offset(), PAGE_SIZE);
         // Account for alignment adjustment in file size
-        let align_len = self.p_offset as usize - offset;
-        let filesz = self.p_filesz as usize + align_len;
+        let align_len = self.p_offset() - offset;
+        let filesz = self.p_filesz() + align_len;
 
         ElfSegment {
             addr: Address::Relative(min_vaddr),
@@ -125,7 +134,7 @@ impl ElfPhdr {
             flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
             len: memsz,
             content_size: filesz,
-            zero_size: (self.p_memsz - self.p_filesz) as usize,
+            zero_size: self.p_memsz() - self.p_filesz(),
             map_info: alloc::vec![FileMapInfo {
                 start: 0,
                 filesz,

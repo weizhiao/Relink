@@ -1,20 +1,19 @@
 use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner, UserDataLoaderContext};
 use crate::{
-    elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfShdr},
-    os::Mmap,
-    segment::{program::ProgramSegments, ELFRelro, ElfSegments, SegmentBuilder},
-    tls::{TlsInfo, TlsResolver},
     ParsePhdrError, Result,
+    elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType, ElfShdr},
+    os::Mmap,
+    segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
+    tls::{TlsInfo, TlsResolver},
 };
 use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use core::{ffi::c_char, marker::PhantomData, ptr::NonNull};
-use elf::abi::{PT_DYNAMIC, PT_GNU_EH_FRAME, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_PHDR, PT_TLS};
 
 /// Builder for creating relocated ELF objects
 ///
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocated ELF file before
-/// building the final RelocatedCommonPart object.
+/// building the final loaded image.
 pub(crate) struct ImageBuilder<'hook, H, M, Tls, D = ()>
 where
     H: LoadHook,
@@ -73,7 +72,7 @@ where
     Tls: TlsResolver,
     M: Mmap,
 {
-    /// Create a new ImageBuilder
+    /// Create a new [`ImageBuilder`].
     ///
     /// # Arguments
     /// * `hook` - Hook function for processing program headers
@@ -83,8 +82,6 @@ where
     /// * `init_fn` - Initialization function handler
     /// * `fini_fn` - Finalization function handler
     ///
-    /// # Returns
-    /// A new DynamicBuilder instance
     pub(crate) fn new(
         hook: &'hook mut H,
         segments: ElfSegments,
@@ -131,46 +128,48 @@ where
         self.hook.call(&ctx)?;
 
         // Process different program header types
-        match phdr.p_type {
+        match phdr.program_type() {
             // Parse the .dynamic section
-            PT_DYNAMIC => {
+            ElfProgramType::DYNAMIC => {
                 self.dynamic_ptr = Some(
-                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize))
+                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr()))
                         .ok_or(ParsePhdrError::MalformedProgramHeaders)?,
                 )
             }
 
             // Store GNU_RELRO segment information
-            PT_GNU_RELRO => self.relro = Some(ELFRelro::new::<M>(phdr, self.segments.base_addr())),
+            ElfProgramType::GNU_RELRO => {
+                self.relro = Some(ELFRelro::new::<M>(phdr, self.segments.base_addr()))
+            }
 
             // Store program header table mapping
-            PT_PHDR => {
+            ElfProgramType::PHDR => {
                 self.phdr_mmap = Some(
                     self.segments
-                        .get_slice::<ElfPhdr>(phdr.p_vaddr as usize, phdr.p_memsz as usize),
+                        .get_slice::<ElfPhdr>(phdr.p_vaddr(), phdr.p_memsz()),
                 );
             }
 
             // Store interpreter path
-            PT_INTERP => {
+            ElfProgramType::INTERP => {
                 self.interp = Some(
-                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize))
+                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr()))
                         .ok_or(ParsePhdrError::MalformedProgramHeaders)?,
                 );
             }
 
-            PT_GNU_EH_FRAME => {
+            ElfProgramType::GNU_EH_FRAME => {
                 self.eh_frame_hdr = Some(
-                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr as usize))
+                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr()))
                         .ok_or(ParsePhdrError::MalformedProgramHeaders)?,
                 );
             }
 
             // Store TLS segment information
-            PT_TLS => {
+            ElfProgramType::TLS => {
                 let tls_image = self
                     .segments
-                    .get_slice::<u8>(phdr.p_vaddr as usize, phdr.p_filesz as usize);
+                    .get_slice::<u8>(phdr.p_vaddr(), phdr.p_filesz());
                 self.tls_info = Some(TlsInfo::new(phdr, tls_image));
             }
 
@@ -201,20 +200,21 @@ where
     /// An ElfPhdrs enum containing either mapped or vector-based headers
     pub(crate) fn create_phdrs(&self, phdrs: &[ElfPhdr]) -> ElfPhdrs {
         let (phdr_start, phdr_end) = self.ehdr.phdr_range();
+        let phdr_size = phdr_end - phdr_start;
 
         // Get mapped program headers or create them from loaded segments
         self.phdr_mmap
             .or_else(|| {
                 phdrs
                     .iter()
-                    .filter(|phdr| phdr.p_type == PT_LOAD)
+                    .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
                     .find_map(|phdr| {
-                        let cur_range =
-                            phdr.p_offset as usize..(phdr.p_offset + phdr.p_filesz) as usize;
-                        if cur_range.contains(&phdr_start) && cur_range.contains(&phdr_end) {
+                        let seg_start = phdr.p_offset();
+                        let seg_end = seg_start + phdr.p_filesz();
+                        if seg_start <= phdr_start && phdr_end <= seg_end {
                             return Some(self.segments.get_slice::<ElfPhdr>(
-                                phdr.p_vaddr as usize + phdr_start - cur_range.start,
-                                self.ehdr.e_phnum() * size_of::<ElfPhdr>(),
+                                phdr.p_vaddr() + (phdr_start - seg_start),
+                                phdr_size,
                             ));
                         }
                         None

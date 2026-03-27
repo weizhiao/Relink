@@ -5,6 +5,7 @@
 
 use crate::sync::Arc;
 use crate::{
+    Result,
     elf::ElfPhdr,
     image::{DynamicImage, LoadedCore},
     loader::{ImageBuilder, LoadHook},
@@ -14,7 +15,6 @@ use crate::{
     },
     segment::ElfSegments,
     tls::TlsResolver,
-    Result,
 };
 use alloc::{string::String, vec::Vec};
 use core::fmt::Debug;
@@ -307,7 +307,7 @@ impl<D> StaticImage<D> {
         // Parse all program headers
         builder.parse_phdrs(phdrs)?;
 
-        let entry = RelocAddr::new(builder.ehdr.e_entry as usize);
+        let entry = RelocAddr::new(builder.ehdr.e_entry());
         let (tls_mod_id, tls_tp_offset) = if let Some(info) = &builder.tls_info {
             // Static executables always use static TLS if PT_TLS is present.
             let (mod_id, offset) = Tls::register_static(info)?;

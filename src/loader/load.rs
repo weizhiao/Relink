@@ -1,15 +1,14 @@
 use super::{ElfBuf, LoadHook, Loader};
 use crate::{
-    elf::{ElfEhdr, ElfHeader, ElfPhdr, EHDR_SIZE},
+    ParseEhdrError, ParsePhdrError, Result,
+    elf::{EHDR_SIZE, ElfEhdr, ElfFileType, ElfHeader, ElfPhdr, ElfProgramType},
     image::{RawDylib, RawElf, RawExec},
     input::{ElfReader, IntoElfReader},
     logging,
     os::Mmap,
     tls::TlsResolver,
-    ParseEhdrError, ParsePhdrError, Result,
 };
 use core::mem::MaybeUninit;
-use elf::abi::{PT_DYNAMIC, PT_INTERP};
 
 impl ElfBuf {
     pub(crate) fn prepare_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader> {
@@ -87,13 +86,18 @@ where
         let mut object = input.into_reader()?;
         let ehdr = self.read_ehdr(&mut object)?;
 
-        match ehdr.e_type {
-            elf::abi::ET_REL => self.load_rel(object),
-            elf::abi::ET_EXEC => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
-            elf::abi::ET_DYN => {
+        match ehdr.file_type() {
+            ElfFileType::REL => self.load_rel(object),
+            ElfFileType::EXEC => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
+            ElfFileType::DYN => {
                 let phdrs = self.read_phdr(&mut object, &ehdr)?.unwrap_or_default();
-                let has_dynamic = phdrs.iter().any(|p| p.p_type == PT_DYNAMIC);
-                let is_pie = phdrs.iter().any(|p| p.p_type == PT_INTERP) || !has_dynamic;
+                let has_dynamic = phdrs
+                    .iter()
+                    .any(|p| p.program_type() == ElfProgramType::DYNAMIC);
+                let is_pie = phdrs
+                    .iter()
+                    .any(|p| p.program_type() == ElfProgramType::INTERP)
+                    || !has_dynamic;
                 if is_pie {
                     Ok(RawElf::Exec(self.load_exec_impl(object)?))
                 } else {
@@ -140,15 +144,13 @@ where
 
         let ehdr = self.read_ehdr(&mut object)?;
         if !ehdr.is_dylib() {
+            let file_type = ehdr.file_type();
             logging::error!(
                 "[{}] Type mismatch: expected dylib, found {:?}",
                 object.file_name(),
-                ehdr.e_type
+                file_type
             );
-            return Err(ParseEhdrError::ExpectedDylib {
-                found: ehdr.file_type(),
-            }
-            .into());
+            return Err(ParseEhdrError::ExpectedDylib { found: file_type }.into());
         }
 
         let phdrs = self
@@ -192,22 +194,22 @@ where
 
         let ehdr = self.read_ehdr(&mut object)?;
         if !ehdr.is_executable() {
+            let file_type = ehdr.file_type();
             logging::error!(
                 "File type mismatch for {}: expected executable, found {:?}",
                 object.file_name(),
-                ehdr.e_type
+                file_type
             );
-            return Err(ParseEhdrError::ExpectedExecutable {
-                found: ehdr.file_type(),
-            }
-            .into());
+            return Err(ParseEhdrError::ExpectedExecutable { found: file_type }.into());
         }
 
         let phdrs = self
             .buf
             .prepare_phdrs(&ehdr, &mut object)?
             .unwrap_or_default();
-        let has_dynamic = phdrs.iter().any(|phdr| phdr.p_type == PT_DYNAMIC);
+        let has_dynamic = phdrs
+            .iter()
+            .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC);
 
         let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
         let res = RawExec::from_builder(builder, phdrs, has_dynamic);
@@ -230,10 +232,10 @@ where
 mod tests {
     use super::{ElfBuf, ElfHeader, ElfPhdr};
     use crate::{
-        arch::EM_ARCH,
-        elf::{ElfEhdr, EHDR_SIZE, E_CLASS},
-        input::ElfReader,
         Result,
+        arch::EM_ARCH,
+        elf::{E_CLASS, EHDR_SIZE, ElfEhdr},
+        input::ElfReader,
     };
     use alloc::vec::Vec;
     use core::mem::size_of;

@@ -6,13 +6,13 @@
 
 use crate::object::{ObjectBuilder, ObjectRelocation, PltGotSection};
 use crate::{
+    Result,
     loader::DynLifecycleHandler,
     relocation::{
         RelocAddr, Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup,
     },
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
-    Result,
 };
 use alloc::boxed::Box;
 use core::{borrow::Borrow, fmt::Debug, ops::Deref};

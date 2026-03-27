@@ -2,6 +2,7 @@
 use crate::elf::ElfRelType;
 use crate::sync::{Arc, AtomicBool};
 use crate::{
+    ParsePhdrError, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
     loader::{ImageBuilder, LifecycleContext, LoadHook},
     logging,
@@ -9,12 +10,11 @@ use crate::{
     relocation::{DynamicRelocation, RelocAddr},
     segment::ELFRelro,
     tls::{CoreTlsState, TlsResolver},
-    ParsePhdrError, Result,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, ptr::NonNull};
 
-use super::{core::CoreInner, ElfCore};
+use super::{ElfCore, core::CoreInner};
 
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo {
@@ -198,10 +198,7 @@ impl<D> DynamicImage<D> {
 
     /// Gets the program headers of the ELF object
     pub(crate) fn phdrs(&self) -> &[ElfPhdr] {
-        match &self.phdrs {
-            ElfPhdrs::Mmap(phdrs) => &phdrs,
-            ElfPhdrs::Vec(phdrs) => &phdrs,
-        }
+        self.phdrs.as_slice()
     }
 
     /// Gets the Global Offset Table pointer
@@ -348,12 +345,9 @@ impl<D: 'static> DynamicImage<D> {
         // Build and return the relocated common part
         Ok(DynamicImage {
             entry: if is_dylib {
-                builder
-                    .segments
-                    .base_addr()
-                    .offset(builder.ehdr.e_entry as usize)
+                builder.segments.base_addr().offset(builder.ehdr.e_entry())
             } else {
-                RelocAddr::new(builder.ehdr.e_entry as usize)
+                RelocAddr::new(builder.ehdr.e_entry())
             },
             interp: builder
                 .interp

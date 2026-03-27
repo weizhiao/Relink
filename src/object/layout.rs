@@ -1,7 +1,7 @@
 use crate::{
     Result,
     arch::object::{ObjectRelocator, PLT_ENTRY, PLT_ENTRY_SIZE},
-    elf::{ElfRelType, ElfShdr, Shdr},
+    elf::{ElfRelType, ElfSectionFlags, ElfSectionType, ElfShdr},
     input::ElfReader,
     os::{MapFlags, Mmap, ProtFlags},
     relocation::RelocAddr,
@@ -11,19 +11,17 @@ use crate::{
     },
 };
 use alloc::vec::Vec;
-use elf::abi::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHT_NOBITS, SHT_REL, SHT_RELA};
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
 
 use super::ObjectReloc;
 
 /// Convert section flags to memory protection flags
-pub(crate) fn section_prot(sh_flags: impl Into<u64>) -> ProtFlags {
-    let sh_flags = sh_flags.into();
+pub(crate) fn section_prot(sh_flags: ElfSectionFlags) -> ProtFlags {
     let mut prot = ProtFlags::PROT_READ;
-    if sh_flags & SHF_WRITE as u64 != 0 {
+    if sh_flags.contains(ElfSectionFlags::WRITE) {
         prot |= ProtFlags::PROT_WRITE;
     }
-    if sh_flags & SHF_EXECINSTR as u64 != 0 {
+    if sh_flags.contains(ElfSectionFlags::EXECINSTR) {
         prot |= ProtFlags::PROT_EXEC;
     }
     prot
@@ -41,7 +39,7 @@ fn prot_to_idx(prot: ProtFlags) -> usize {
         | (usize::from(prot.contains(ProtFlags::PROT_EXEC)) << 1)
 }
 
-fn flags_to_idx(flags: impl Into<u64>) -> usize {
+fn flags_to_idx(flags: ElfSectionFlags) -> usize {
     prot_to_idx(section_prot(flags))
 }
 
@@ -75,7 +73,7 @@ impl SectionSegments {
         let mut plt_shdr = PltGotSection::create_plt_shdr(plt_cnt);
 
         for shdr in shdrs.iter_mut().chain([&mut got_shdr, &mut plt_shdr]) {
-            units[flags_to_idx(shdr.sh_flags)].add_section(shdr);
+            units[flags_to_idx(shdr.flags())].add_section(shdr);
         }
 
         let mut segments = Vec::new();
@@ -144,16 +142,16 @@ impl PltGotSection {
 
         for shdr in shdrs
             .iter()
-            .filter(|s| matches!(s.sh_type, SHT_REL | SHT_RELA))
+            .filter(|s| matches!(s.section_type(), ElfSectionType::REL | ElfSectionType::RELA))
         {
-            let size = shdr.sh_size as usize;
-            let entsize = shdr.sh_entsize as usize;
+            let size = shdr.sh_size();
+            let entsize = shdr.sh_entsize();
             if size == 0 || entsize == 0 {
                 continue;
             }
 
             let mut buf = alloc::vec![0u8; size];
-            object.read(&mut buf, shdr.sh_offset as usize)?;
+            object.read(&mut buf, shdr.sh_offset())?;
 
             for chunk in buf.chunks_exact(entsize) {
                 let rel_entry =
@@ -176,8 +174,8 @@ impl PltGotSection {
     fn create_got_shdr(elem_cnt: usize) -> ElfShdr {
         ElfShdr::new(
             0,
-            SHT_NOBITS,
-            (SHF_ALLOC | SHF_WRITE) as _,
+            ElfSectionType::NOBITS,
+            ElfSectionFlags::ALLOC | ElfSectionFlags::WRITE,
             0,
             0,
             elem_cnt * size_of::<usize>(),
@@ -191,8 +189,8 @@ impl PltGotSection {
     fn create_plt_shdr(elem_cnt: usize) -> ElfShdr {
         ElfShdr::new(
             0,
-            SHT_NOBITS,
-            (SHF_ALLOC | SHF_EXECINSTR) as _,
+            ElfSectionType::NOBITS,
+            ElfSectionFlags::ALLOC | ElfSectionFlags::EXECINSTR,
             0,
             0,
             elem_cnt * PLT_ENTRY_SIZE,
@@ -203,14 +201,14 @@ impl PltGotSection {
         )
     }
 
-    fn new(got: &Shdr, plt: &Shdr) -> Self {
+    fn new(got: &ElfShdr, plt: &ElfShdr) -> Self {
         Self {
             got_idx: 0,
             plt_idx: 0,
             got_map: HashMap::new(),
             plt_map: HashMap::new(),
-            got_base: RelocAddr::new(got.sh_addr as usize),
-            plt_base: RelocAddr::new(plt.sh_addr as usize),
+            got_base: RelocAddr::new(got.sh_addr()),
+            plt_base: RelocAddr::new(plt.sh_addr()),
         }
     }
 
@@ -286,7 +284,7 @@ impl<'shdr> SectionUnit<'shdr> {
     }
 
     fn add_section(&mut self, shdr: &'shdr mut ElfShdr) {
-        if shdr.sh_type == SHT_NOBITS {
+        if shdr.section_type() == ElfSectionType::NOBITS {
             self.zero_sections.push(shdr);
         } else {
             self.content_sections.push(shdr);
@@ -299,24 +297,24 @@ impl<'shdr> SectionUnit<'shdr> {
             .first()
             .or(self.zero_sections.first())?;
 
-        let prot = section_prot(first_shdr.sh_flags);
+        let prot = section_prot(first_shdr.flags());
         let segment_start = *base_offset;
         let addr = Address::Relative(segment_start);
 
         let mut current_offset = segment_start;
         let mut map_info = Vec::new();
         for shdr in &mut self.content_sections {
-            if shdr.sh_size == 0 {
+            if shdr.sh_size() == 0 {
                 continue;
             }
-            current_offset = roundup(current_offset, shdr.sh_addralign as usize);
-            shdr.sh_addr = current_offset as _;
+            current_offset = roundup(current_offset, shdr.sh_addralign());
+            shdr.set_sh_addr(current_offset);
             map_info.push(FileMapInfo {
-                filesz: shdr.sh_size as usize,
-                offset: shdr.sh_offset as usize,
+                filesz: shdr.sh_size(),
+                offset: shdr.sh_offset(),
                 start: current_offset - segment_start,
             });
-            current_offset += shdr.sh_size as usize;
+            current_offset += shdr.sh_size();
         }
 
         if map_info.len() == 1 {
@@ -327,10 +325,10 @@ impl<'shdr> SectionUnit<'shdr> {
             let shdr = self
                 .content_sections
                 .iter_mut()
-                .find(|shdr| shdr.sh_offset as usize == info.offset)
+                .find(|shdr| shdr.sh_offset() == info.offset)
                 .unwrap();
 
-            shdr.sh_addr = shdr.sh_addr.wrapping_add(align_len as _);
+            shdr.add_sh_addr(align_len);
             info.filesz += align_len;
             info.offset = file_offset;
             current_offset += align_len;
@@ -339,9 +337,9 @@ impl<'shdr> SectionUnit<'shdr> {
         let content_size = current_offset - segment_start;
 
         for shdr in &mut self.zero_sections {
-            current_offset = roundup(current_offset, shdr.sh_addralign as usize);
-            shdr.sh_addr = current_offset as _;
-            current_offset += shdr.sh_size as usize;
+            current_offset = roundup(current_offset, shdr.sh_addralign());
+            shdr.set_sh_addr(current_offset);
+            current_offset += shdr.sh_size();
         }
 
         let unaligned_total_size = current_offset - segment_start;

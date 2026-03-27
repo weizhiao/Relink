@@ -5,14 +5,21 @@
 //! definitions for relocation entries, symbols, program headers, and section headers,
 //! with support for both 32-bit and 64-bit ELF formats.
 
-use core::{
-    fmt::{self, Display},
-    ops::{Deref, DerefMut},
-};
+use bitflags::bitflags;
+use core::fmt::{self, Display};
 use elf::abi::{
-    ELFCLASS32, ELFCLASS64, ELFCLASSNONE, EM_386, EM_AARCH64, EM_ARM, EM_RISCV, EM_X86_64, ET_CORE,
-    ET_DYN, ET_EXEC, ET_NONE, ET_REL, SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK,
-    STT_COMMON, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
+    DT_FINI, DT_FINI_ARRAY, DT_FINI_ARRAYSZ, DT_FLAGS, DT_FLAGS_1, DT_GNU_HASH, DT_HASH, DT_INIT,
+    DT_INIT_ARRAY, DT_INIT_ARRAYSZ, DT_JMPREL, DT_NEEDED, DT_NULL, DT_PLTGOT, DT_PLTREL,
+    DT_PLTRELSZ, DT_REL, DT_RELA, DT_RELACOUNT, DT_RELASZ, DT_RELCOUNT, DT_RELSZ, DT_RPATH,
+    DT_RUNPATH, DT_STRTAB, DT_SYMTAB, DT_VERDEF, DT_VERDEFNUM, DT_VERNEED, DT_VERNEEDNUM,
+    DT_VERSYM, ELFCLASS32, ELFCLASS64, ELFCLASSNONE, EM_386, EM_AARCH64, EM_ARM, EM_RISCV,
+    EM_X86_64, ET_CORE, ET_DYN, ET_EXEC, ET_NONE, ET_REL, PF_R, PF_W, PF_X, PT_DYNAMIC,
+    PT_GNU_EH_FRAME, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_NOTE, PT_NULL, PT_PHDR, PT_SHLIB, PT_TLS,
+    SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHN_UNDEF, SHT_DYNAMIC, SHT_DYNSYM, SHT_FINI_ARRAY,
+    SHT_GROUP, SHT_HASH, SHT_INIT_ARRAY, SHT_NOBITS, SHT_NOTE, SHT_NULL, SHT_PREINIT_ARRAY,
+    SHT_PROGBITS, SHT_REL, SHT_RELA, SHT_SHLIB, SHT_STRTAB, SHT_SYMTAB, SHT_SYMTAB_SHNDX,
+    STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK, STT_COMMON, STT_FILE, STT_FUNC, STT_GNU_IFUNC,
+    STT_NOTYPE, STT_OBJECT, STT_SECTION, STT_TLS,
 };
 
 use crate::arch::rel_type_to_str;
@@ -35,7 +42,7 @@ const OK_TYPES: usize = 1 << STT_NOTYPE
 /// Keeping this behind a single trait lets us centralize the pointer-width
 /// mapping without forcing the rest of the module to become generic.
 #[doc(hidden)]
-pub trait ElfLayout {
+pub(crate) trait ElfLayout {
     const E_CLASS: u8;
     const REL_MASK: usize;
     const REL_BIT: usize;
@@ -89,15 +96,7 @@ pub(crate) const E_CLASS: u8 = <NativeElfLayout as ElfLayout>::E_CLASS;
 pub(crate) const REL_MASK: usize = <NativeElfLayout as ElfLayout>::REL_MASK;
 pub(crate) const REL_BIT: usize = <NativeElfLayout as ElfLayout>::REL_BIT;
 
-pub(crate) type Phdr = <NativeElfLayout as ElfLayout>::Phdr;
-pub(crate) type Shdr = <NativeElfLayout as ElfLayout>::Shdr;
-/// ELF dynamic section entry.
-pub type ElfDyn = <NativeElfLayout as ElfLayout>::Dyn;
 pub(crate) type ElfEhdr = <NativeElfLayout as ElfLayout>::Ehdr;
-pub(crate) type Rela = <NativeElfLayout as ElfLayout>::Rela;
-pub(crate) type Rel = <NativeElfLayout as ElfLayout>::Rel;
-pub(crate) type Relr = <NativeElfLayout as ElfLayout>::Relr;
-pub(crate) type Sym = <NativeElfLayout as ElfLayout>::Sym;
 pub(crate) const EHDR_SIZE: usize = core::mem::size_of::<ElfEhdr>();
 
 /// Semantic wrapper for the ELF `EI_CLASS` field.
@@ -193,6 +192,12 @@ impl Display for ElfMachine {
 pub struct ElfFileType(u16);
 
 impl ElfFileType {
+    pub const NONE: Self = Self(ET_NONE);
+    pub const REL: Self = Self(ET_REL);
+    pub const EXEC: Self = Self(ET_EXEC);
+    pub const DYN: Self = Self(ET_DYN);
+    pub const CORE: Self = Self(ET_CORE);
+
     #[inline]
     pub const fn new(raw: u16) -> Self {
         Self(raw)
@@ -231,12 +236,270 @@ impl Display for ElfFileType {
     }
 }
 
+/// Semantic wrapper for the ELF `p_type` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfProgramType(u32);
+
+impl ElfProgramType {
+    pub const NULL: Self = Self(PT_NULL);
+    pub const LOAD: Self = Self(PT_LOAD);
+    pub const DYNAMIC: Self = Self(PT_DYNAMIC);
+    pub const INTERP: Self = Self(PT_INTERP);
+    pub const NOTE: Self = Self(PT_NOTE);
+    pub const SHLIB: Self = Self(PT_SHLIB);
+    pub const PHDR: Self = Self(PT_PHDR);
+    pub const TLS: Self = Self(PT_TLS);
+    pub const GNU_EH_FRAME: Self = Self(PT_GNU_EH_FRAME);
+    pub const GNU_RELRO: Self = Self(PT_GNU_RELRO);
+
+    #[inline]
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for ElfProgramType {
+    #[inline]
+    fn from(value: u32) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfProgramType> for u32 {
+    #[inline]
+    fn from(value: ElfProgramType) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfProgramType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            PT_NULL => f.write_str("PT_NULL"),
+            PT_LOAD => f.write_str("PT_LOAD"),
+            PT_DYNAMIC => f.write_str("PT_DYNAMIC"),
+            PT_INTERP => f.write_str("PT_INTERP"),
+            PT_NOTE => f.write_str("PT_NOTE"),
+            PT_SHLIB => f.write_str("PT_SHLIB"),
+            PT_PHDR => f.write_str("PT_PHDR"),
+            PT_TLS => f.write_str("PT_TLS"),
+            PT_GNU_EH_FRAME => f.write_str("PT_GNU_EH_FRAME"),
+            PT_GNU_RELRO => f.write_str("PT_GNU_RELRO"),
+            raw => write!(f, "unknown ELF program type {raw}"),
+        }
+    }
+}
+
+bitflags! {
+    /// Bitflags wrapper for the ELF `p_flags` field.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub struct ElfProgramFlags: u32 {
+        const EXEC = PF_X;
+        const WRITE = PF_W;
+        const READ = PF_R;
+    }
+}
+
+/// Semantic wrapper for the ELF `sh_type` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfSectionType(u32);
+
+impl ElfSectionType {
+    pub const NULL: Self = Self(SHT_NULL);
+    pub const PROGBITS: Self = Self(SHT_PROGBITS);
+    pub const SYMTAB: Self = Self(SHT_SYMTAB);
+    pub const STRTAB: Self = Self(SHT_STRTAB);
+    pub const RELA: Self = Self(SHT_RELA);
+    pub const HASH: Self = Self(SHT_HASH);
+    pub const DYNAMIC: Self = Self(SHT_DYNAMIC);
+    pub const NOTE: Self = Self(SHT_NOTE);
+    pub const NOBITS: Self = Self(SHT_NOBITS);
+    pub const REL: Self = Self(SHT_REL);
+    pub const SHLIB: Self = Self(SHT_SHLIB);
+    pub const DYNSYM: Self = Self(SHT_DYNSYM);
+    pub const INIT_ARRAY: Self = Self(SHT_INIT_ARRAY);
+    pub const FINI_ARRAY: Self = Self(SHT_FINI_ARRAY);
+    pub const PREINIT_ARRAY: Self = Self(SHT_PREINIT_ARRAY);
+    pub const GROUP: Self = Self(SHT_GROUP);
+    pub const SYMTAB_SHNDX: Self = Self(SHT_SYMTAB_SHNDX);
+
+    #[inline]
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for ElfSectionType {
+    #[inline]
+    fn from(value: u32) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfSectionType> for u32 {
+    #[inline]
+    fn from(value: ElfSectionType) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfSectionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            SHT_NULL => f.write_str("SHT_NULL"),
+            SHT_PROGBITS => f.write_str("SHT_PROGBITS"),
+            SHT_SYMTAB => f.write_str("SHT_SYMTAB"),
+            SHT_STRTAB => f.write_str("SHT_STRTAB"),
+            SHT_RELA => f.write_str("SHT_RELA"),
+            SHT_HASH => f.write_str("SHT_HASH"),
+            SHT_DYNAMIC => f.write_str("SHT_DYNAMIC"),
+            SHT_NOTE => f.write_str("SHT_NOTE"),
+            SHT_NOBITS => f.write_str("SHT_NOBITS"),
+            SHT_REL => f.write_str("SHT_REL"),
+            SHT_SHLIB => f.write_str("SHT_SHLIB"),
+            SHT_DYNSYM => f.write_str("SHT_DYNSYM"),
+            SHT_INIT_ARRAY => f.write_str("SHT_INIT_ARRAY"),
+            SHT_FINI_ARRAY => f.write_str("SHT_FINI_ARRAY"),
+            SHT_PREINIT_ARRAY => f.write_str("SHT_PREINIT_ARRAY"),
+            SHT_GROUP => f.write_str("SHT_GROUP"),
+            SHT_SYMTAB_SHNDX => f.write_str("SHT_SYMTAB_SHNDX"),
+            raw => write!(f, "unknown ELF section type {raw}"),
+        }
+    }
+}
+
+bitflags! {
+    /// Bitflags wrapper for the ELF `sh_flags` field.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub struct ElfSectionFlags: u64 {
+        const WRITE = SHF_WRITE as u64;
+        const ALLOC = SHF_ALLOC as u64;
+        const EXECINSTR = SHF_EXECINSTR as u64;
+    }
+}
+
+/// Semantic wrapper for the ELF symbol binding field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfSymbolBind(u8);
+
+impl ElfSymbolBind {
+    pub const LOCAL: Self = Self(STB_LOCAL);
+    pub const GLOBAL: Self = Self(STB_GLOBAL);
+    pub const WEAK: Self = Self(STB_WEAK);
+    pub const GNU_UNIQUE: Self = Self(STB_GNU_UNIQUE);
+
+    #[inline]
+    pub const fn new(raw: u8) -> Self {
+        Self(raw)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for ElfSymbolBind {
+    #[inline]
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfSymbolBind> for u8 {
+    #[inline]
+    fn from(value: ElfSymbolBind) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfSymbolBind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            STB_LOCAL => f.write_str("STB_LOCAL"),
+            STB_GLOBAL => f.write_str("STB_GLOBAL"),
+            STB_WEAK => f.write_str("STB_WEAK"),
+            STB_GNU_UNIQUE => f.write_str("STB_GNU_UNIQUE"),
+            raw => write!(f, "unknown ELF symbol bind {raw}"),
+        }
+    }
+}
+
+/// Semantic wrapper for the ELF symbol type field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfSymbolType(u8);
+
+impl ElfSymbolType {
+    pub const NOTYPE: Self = Self(STT_NOTYPE);
+    pub const OBJECT: Self = Self(STT_OBJECT);
+    pub const FUNC: Self = Self(STT_FUNC);
+    pub const SECTION: Self = Self(STT_SECTION);
+    pub const FILE: Self = Self(STT_FILE);
+    pub const COMMON: Self = Self(STT_COMMON);
+    pub const TLS: Self = Self(STT_TLS);
+    pub const GNU_IFUNC: Self = Self(STT_GNU_IFUNC);
+
+    #[inline]
+    pub const fn new(raw: u8) -> Self {
+        Self(raw)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for ElfSymbolType {
+    #[inline]
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfSymbolType> for u8 {
+    #[inline]
+    fn from(value: ElfSymbolType) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfSymbolType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            STT_NOTYPE => f.write_str("STT_NOTYPE"),
+            STT_OBJECT => f.write_str("STT_OBJECT"),
+            STT_FUNC => f.write_str("STT_FUNC"),
+            STT_SECTION => f.write_str("STT_SECTION"),
+            STT_FILE => f.write_str("STT_FILE"),
+            STT_COMMON => f.write_str("STT_COMMON"),
+            STT_TLS => f.write_str("STT_TLS"),
+            STT_GNU_IFUNC => f.write_str("STT_GNU_IFUNC"),
+            raw => write!(f, "unknown ELF symbol type {raw}"),
+        }
+    }
+}
+
 #[allow(unused)]
 #[repr(C)]
 /// 32-bit ELF symbol table entry.
 /// This struct represents the native 32-bit symbol format used in ELF32 files.
-/// For 64-bit targets, the `Sym` type alias points to `elf::symbol::Elf64_Sym` instead.
-struct Elf32Sym {
+/// For 64-bit targets, the active native symbol layout resolves to `elf::symbol::Elf64_Sym`.
+pub(crate) struct Elf32Sym {
     pub st_name: u32,
     pub st_value: u32,
     pub st_size: u32,
@@ -253,10 +516,139 @@ pub const DT_RELRSZ: i64 = 35;
 /// the dynamic structure must also have DT_RELRSZ and DT_RELRENT elements.
 pub const DT_RELR: i64 = 36;
 
+/// Semantic wrapper for the ELF `d_tag` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfDynamicTag(i64);
+
+impl ElfDynamicTag {
+    pub const NULL: Self = Self(DT_NULL);
+    pub const NEEDED: Self = Self(DT_NEEDED);
+    pub const PLTRELSZ: Self = Self(DT_PLTRELSZ);
+    pub const PLTGOT: Self = Self(DT_PLTGOT);
+    pub const HASH: Self = Self(DT_HASH);
+    pub const STRTAB: Self = Self(DT_STRTAB);
+    pub const SYMTAB: Self = Self(DT_SYMTAB);
+    pub const RELA: Self = Self(DT_RELA);
+    pub const RELASZ: Self = Self(DT_RELASZ);
+    pub const REL: Self = Self(DT_REL);
+    pub const RELSZ: Self = Self(DT_RELSZ);
+    pub const PLTREL: Self = Self(DT_PLTREL);
+    pub const DEBUG: Self = Self(elf::abi::DT_DEBUG);
+    pub const JMPREL: Self = Self(DT_JMPREL);
+    pub const INIT: Self = Self(DT_INIT);
+    pub const FINI: Self = Self(DT_FINI);
+    pub const INIT_ARRAY: Self = Self(DT_INIT_ARRAY);
+    pub const INIT_ARRAYSZ: Self = Self(DT_INIT_ARRAYSZ);
+    pub const FINI_ARRAY: Self = Self(DT_FINI_ARRAY);
+    pub const FINI_ARRAYSZ: Self = Self(DT_FINI_ARRAYSZ);
+    pub const RPATH: Self = Self(DT_RPATH);
+    pub const RUNPATH: Self = Self(DT_RUNPATH);
+    pub const FLAGS: Self = Self(DT_FLAGS);
+    pub const FLAGS_1: Self = Self(DT_FLAGS_1);
+    pub const GNU_HASH: Self = Self(DT_GNU_HASH);
+    pub const VERSYM: Self = Self(DT_VERSYM);
+    pub const VERDEF: Self = Self(DT_VERDEF);
+    pub const VERDEFNUM: Self = Self(DT_VERDEFNUM);
+    pub const VERNEED: Self = Self(DT_VERNEED);
+    pub const VERNEEDNUM: Self = Self(DT_VERNEEDNUM);
+    pub const RELACOUNT: Self = Self(DT_RELACOUNT);
+    pub const RELCOUNT: Self = Self(DT_RELCOUNT);
+    pub const RELR: Self = Self(DT_RELR);
+    pub const RELRSZ: Self = Self(DT_RELRSZ);
+
+    #[inline]
+    pub const fn new(raw: i64) -> Self {
+        Self(raw)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> i64 {
+        self.0
+    }
+}
+
+impl From<i64> for ElfDynamicTag {
+    #[inline]
+    fn from(value: i64) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfDynamicTag> for i64 {
+    #[inline]
+    fn from(value: ElfDynamicTag) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfDynamicTag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            DT_NULL => f.write_str("DT_NULL"),
+            DT_NEEDED => f.write_str("DT_NEEDED"),
+            DT_PLTRELSZ => f.write_str("DT_PLTRELSZ"),
+            DT_PLTGOT => f.write_str("DT_PLTGOT"),
+            DT_HASH => f.write_str("DT_HASH"),
+            DT_STRTAB => f.write_str("DT_STRTAB"),
+            DT_SYMTAB => f.write_str("DT_SYMTAB"),
+            DT_RELA => f.write_str("DT_RELA"),
+            DT_RELASZ => f.write_str("DT_RELASZ"),
+            DT_REL => f.write_str("DT_REL"),
+            DT_RELSZ => f.write_str("DT_RELSZ"),
+            DT_PLTREL => f.write_str("DT_PLTREL"),
+            elf::abi::DT_DEBUG => f.write_str("DT_DEBUG"),
+            DT_JMPREL => f.write_str("DT_JMPREL"),
+            DT_INIT => f.write_str("DT_INIT"),
+            DT_FINI => f.write_str("DT_FINI"),
+            DT_INIT_ARRAY => f.write_str("DT_INIT_ARRAY"),
+            DT_INIT_ARRAYSZ => f.write_str("DT_INIT_ARRAYSZ"),
+            DT_FINI_ARRAY => f.write_str("DT_FINI_ARRAY"),
+            DT_FINI_ARRAYSZ => f.write_str("DT_FINI_ARRAYSZ"),
+            DT_RPATH => f.write_str("DT_RPATH"),
+            DT_RUNPATH => f.write_str("DT_RUNPATH"),
+            DT_FLAGS => f.write_str("DT_FLAGS"),
+            DT_FLAGS_1 => f.write_str("DT_FLAGS_1"),
+            DT_GNU_HASH => f.write_str("DT_GNU_HASH"),
+            DT_VERSYM => f.write_str("DT_VERSYM"),
+            DT_VERDEF => f.write_str("DT_VERDEF"),
+            DT_VERDEFNUM => f.write_str("DT_VERDEFNUM"),
+            DT_VERNEED => f.write_str("DT_VERNEED"),
+            DT_VERNEEDNUM => f.write_str("DT_VERNEEDNUM"),
+            DT_RELACOUNT => f.write_str("DT_RELACOUNT"),
+            DT_RELCOUNT => f.write_str("DT_RELCOUNT"),
+            DT_RELR => f.write_str("DT_RELR"),
+            DT_RELRSZ => f.write_str("DT_RELRSZ"),
+            raw => write!(f, "unknown ELF dynamic tag {raw}"),
+        }
+    }
+}
+
+/// ELF dynamic section entry.
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct ElfDyn {
+    dyn_: <NativeElfLayout as ElfLayout>::Dyn,
+}
+
+impl ElfDyn {
+    /// Returns the parsed ELF dynamic tag of this entry.
+    #[inline]
+    pub fn tag(&self) -> ElfDynamicTag {
+        ElfDynamicTag::new(self.dyn_.d_tag as i64)
+    }
+
+    /// Returns the dynamic value or pointer payload.
+    #[inline]
+    pub fn value(&self) -> usize {
+        self.dyn_.d_un as usize
+    }
+}
+
 /// ELF RELR relocation entry.
 #[repr(transparent)]
 pub struct ElfRelr {
-    relr: Relr,
+    relr: <NativeElfLayout as ElfLayout>::Relr,
 }
 
 impl ElfRelr {
@@ -270,7 +662,7 @@ impl ElfRelr {
 /// ELF RELA relocation entry.
 #[repr(transparent)]
 pub struct ElfRela {
-    rela: Rela,
+    rela: <NativeElfLayout as ElfLayout>::Rela,
 }
 
 impl ElfRela {
@@ -310,7 +702,7 @@ impl ElfRela {
 /// ELF REL relocation entry.
 #[repr(transparent)]
 pub struct ElfRel {
-    rel: Rel,
+    rel: <NativeElfLayout as ElfLayout>::Rel,
 }
 
 impl ElfRel {
@@ -363,7 +755,7 @@ impl ElfRel {
 /// This struct provides a unified interface for accessing ELF symbol information
 /// regardless of whether the ELF file is 32-bit or 64-bit.
 pub struct ElfSymbol {
-    sym: Sym,
+    sym: <NativeElfLayout as ElfLayout>::Sym,
 }
 
 impl ElfSymbol {
@@ -373,16 +765,16 @@ impl ElfSymbol {
         self.sym.st_value as usize
     }
 
-    /// Returns the symbol binding.
+    /// Returns the parsed ELF symbol binding.
     #[inline]
-    pub fn st_bind(&self) -> u8 {
-        self.sym.st_info >> 4
+    pub fn bind(&self) -> ElfSymbolBind {
+        ElfSymbolBind::new(self.sym.st_info >> 4)
     }
 
-    /// Returns the symbol type.
+    /// Returns the parsed ELF symbol type.
     #[inline]
-    pub fn st_type(&self) -> u8 {
-        self.sym.st_info & 0xf
+    pub fn symbol_type(&self) -> ElfSymbolType {
+        ElfSymbolType::new(self.sym.st_info & 0xf)
     }
 
     /// Returns the section index.
@@ -420,28 +812,28 @@ impl ElfSymbol {
     /// Valid bindings include global, weak, and GNU unique symbols.
     #[inline]
     pub fn is_ok_bind(&self) -> bool {
-        (1 << self.st_bind()) & OK_BINDS != 0
+        (1 << self.bind().raw()) & OK_BINDS != 0
     }
 
     /// Returns true if the symbol has a valid type for relocation.
     /// Valid types include object, function, common, TLS, and GNU IFUNC symbols.
     #[inline]
     pub fn is_ok_type(&self) -> bool {
-        (1 << self.st_type()) & OK_TYPES != 0
+        (1 << self.symbol_type().raw()) & OK_TYPES != 0
     }
 
     /// Returns true if the symbol has local binding.
     /// Local symbols are only visible within the object file that defines them.
     #[inline]
     pub fn is_local(&self) -> bool {
-        self.st_bind() == STB_LOCAL
+        self.bind() == ElfSymbolBind::LOCAL
     }
 
     /// Returns true if the symbol has weak binding.
     /// Weak symbols can be overridden by global symbols with the same name.
     #[inline]
     pub fn is_weak(&self) -> bool {
-        self.st_bind() == STB_WEAK
+        self.bind() == ElfSymbolBind::WEAK
     }
 
     /// Sets the symbol value.
@@ -457,17 +849,141 @@ impl ElfSymbol {
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct ElfPhdr {
-    phdr: Phdr,
+    phdr: <NativeElfLayout as ElfLayout>::Phdr,
+}
+
+impl ElfPhdr {
+    /// Returns the parsed ELF program type of this header.
+    #[inline]
+    pub const fn program_type(&self) -> ElfProgramType {
+        ElfProgramType::new(self.phdr.p_type)
+    }
+
+    /// Returns the parsed ELF program flags of this header.
+    #[inline]
+    pub fn flags(&self) -> ElfProgramFlags {
+        ElfProgramFlags::from_bits_retain(self.phdr.p_flags)
+    }
+
+    /// Returns the segment file offset (`p_offset`) as a native-sized value.
+    #[inline]
+    pub fn p_offset(&self) -> usize {
+        self.phdr.p_offset as usize
+    }
+
+    /// Returns the segment virtual address (`p_vaddr`) as a native-sized value.
+    #[inline]
+    pub fn p_vaddr(&self) -> usize {
+        self.phdr.p_vaddr as usize
+    }
+
+    /// Returns the segment physical address (`p_paddr`) as a native-sized value.
+    #[inline]
+    pub fn p_paddr(&self) -> usize {
+        self.phdr.p_paddr as usize
+    }
+
+    /// Returns the segment size in the file (`p_filesz`) as a native-sized value.
+    #[inline]
+    pub fn p_filesz(&self) -> usize {
+        self.phdr.p_filesz as usize
+    }
+
+    /// Returns the segment size in memory (`p_memsz`) as a native-sized value.
+    #[inline]
+    pub fn p_memsz(&self) -> usize {
+        self.phdr.p_memsz as usize
+    }
+
+    /// Returns the segment alignment (`p_align`) as a native-sized value.
+    #[inline]
+    pub fn p_align(&self) -> usize {
+        self.phdr.p_align as usize
+    }
 }
 
 /// ELF section header describing sections of the ELF file.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct ElfShdr {
-    shdr: Shdr,
+    shdr: <NativeElfLayout as ElfLayout>::Shdr,
 }
 
 impl ElfShdr {
+    /// Returns the parsed ELF section type of this header.
+    #[inline]
+    pub const fn section_type(&self) -> ElfSectionType {
+        ElfSectionType::new(self.shdr.sh_type)
+    }
+
+    /// Returns the section name index (`sh_name`) field.
+    #[inline]
+    pub const fn sh_name(&self) -> u32 {
+        self.shdr.sh_name
+    }
+
+    /// Returns the parsed ELF section flags of this header.
+    #[inline]
+    pub fn flags(&self) -> ElfSectionFlags {
+        ElfSectionFlags::from_bits_retain(self.shdr.sh_flags as u64)
+    }
+
+    /// Returns the section address (`sh_addr`) as a native-sized value.
+    #[inline]
+    pub fn sh_addr(&self) -> usize {
+        self.shdr.sh_addr as usize
+    }
+
+    /// Returns the section file offset (`sh_offset`) as a native-sized value.
+    #[inline]
+    pub fn sh_offset(&self) -> usize {
+        self.shdr.sh_offset as usize
+    }
+
+    /// Returns the section size (`sh_size`) as a native-sized value.
+    #[inline]
+    pub fn sh_size(&self) -> usize {
+        self.shdr.sh_size as usize
+    }
+
+    /// Returns the section link (`sh_link`) field.
+    #[inline]
+    pub const fn sh_link(&self) -> u32 {
+        self.shdr.sh_link
+    }
+
+    /// Returns the section info (`sh_info`) field.
+    #[inline]
+    pub const fn sh_info(&self) -> u32 {
+        self.shdr.sh_info
+    }
+
+    /// Returns the section alignment (`sh_addralign`) as a native-sized value.
+    #[inline]
+    pub fn sh_addralign(&self) -> usize {
+        self.shdr.sh_addralign as usize
+    }
+
+    /// Returns the section entry size (`sh_entsize`) as a native-sized value.
+    #[inline]
+    pub fn sh_entsize(&self) -> usize {
+        self.shdr.sh_entsize as usize
+    }
+
+    /// Updates the section address (`sh_addr`) field.
+    #[inline]
+    #[cfg(feature = "object")]
+    pub(crate) fn set_sh_addr(&mut self, addr: usize) {
+        self.shdr.sh_addr = addr as _;
+    }
+
+    /// Adds an offset to the section address (`sh_addr`) field.
+    #[inline]
+    #[cfg(feature = "object")]
+    pub(crate) fn add_sh_addr(&mut self, delta: usize) {
+        self.shdr.sh_addr = self.shdr.sh_addr.wrapping_add(delta as _);
+    }
+
     /// Creates a new ELF section header with the specified parameters.
     ///
     /// # Arguments
@@ -484,8 +1000,8 @@ impl ElfShdr {
     #[cfg(feature = "object")]
     pub(crate) fn new(
         sh_name: u32,
-        sh_type: u32,
-        sh_flags: usize,
+        sh_type: ElfSectionType,
+        sh_flags: ElfSectionFlags,
         sh_addr: usize,
         sh_offset: usize,
         sh_size: usize,
@@ -494,34 +1010,18 @@ impl ElfShdr {
         sh_addralign: usize,
         sh_entsize: usize,
     ) -> Self {
-        Self {
-            shdr: Shdr {
-                sh_name,
-                sh_type,
-                sh_flags: sh_flags as _,
-                sh_addr: sh_addr as _,
-                sh_offset: sh_offset as _,
-                sh_size: sh_size as _,
-                sh_link,
-                sh_info,
-                sh_addralign: sh_addralign as _,
-                sh_entsize: sh_entsize as _,
-            },
-        }
-    }
-}
-
-impl Deref for ElfShdr {
-    type Target = Shdr;
-
-    fn deref(&self) -> &Self::Target {
-        &self.shdr
-    }
-}
-
-impl DerefMut for ElfShdr {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.shdr
+        let mut shdr: <NativeElfLayout as ElfLayout>::Shdr = unsafe { core::mem::zeroed() };
+        shdr.sh_name = sh_name;
+        shdr.sh_type = sh_type.raw();
+        shdr.sh_flags = sh_flags.bits() as _;
+        shdr.sh_addr = sh_addr as _;
+        shdr.sh_offset = sh_offset as _;
+        shdr.sh_size = sh_size as _;
+        shdr.sh_link = sh_link;
+        shdr.sh_info = sh_info;
+        shdr.sh_addralign = sh_addralign as _;
+        shdr.sh_entsize = sh_entsize as _;
+        Self { shdr }
     }
 }
 
@@ -561,43 +1061,27 @@ impl ElfShdr {
     /// properly aligned.
     #[cfg(feature = "object")]
     pub(crate) fn content_mut<T>(&self) -> &'static mut [T] {
-        let start = self.sh_addr as usize;
-        let len = (self.sh_size / self.sh_entsize) as usize;
-        debug_assert!(core::mem::size_of::<T>() == self.sh_entsize as usize);
-        debug_assert!(self.sh_size % self.sh_entsize == 0);
-        debug_assert!(self.sh_addr % self.sh_addralign == 0);
+        let start = self.sh_addr();
+        let len = self.sh_size() / self.sh_entsize();
+        debug_assert!(core::mem::size_of::<T>() == self.sh_entsize());
+        debug_assert!(self.sh_size().is_multiple_of(self.sh_entsize()));
+        debug_assert!(self.sh_addr().is_multiple_of(self.sh_addralign()));
         unsafe { core::slice::from_raw_parts_mut(start as *mut T, len) }
-    }
-}
-
-impl Deref for ElfPhdr {
-    type Target = Phdr;
-
-    fn deref(&self) -> &Self::Target {
-        &self.phdr
-    }
-}
-
-impl DerefMut for ElfPhdr {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.phdr
     }
 }
 
 impl Clone for ElfPhdr {
     fn clone(&self) -> Self {
-        Self {
-            phdr: Phdr {
-                p_type: self.phdr.p_type,
-                p_flags: self.phdr.p_flags,
-                p_align: self.phdr.p_align,
-                p_offset: self.phdr.p_offset,
-                p_vaddr: self.phdr.p_vaddr,
-                p_paddr: self.phdr.p_paddr,
-                p_filesz: self.phdr.p_filesz,
-                p_memsz: self.phdr.p_memsz,
-            },
-        }
+        let mut phdr: <NativeElfLayout as ElfLayout>::Phdr = unsafe { core::mem::zeroed() };
+        phdr.p_type = self.phdr.p_type;
+        phdr.p_flags = self.phdr.p_flags;
+        phdr.p_align = self.phdr.p_align;
+        phdr.p_offset = self.phdr.p_offset;
+        phdr.p_vaddr = self.phdr.p_vaddr;
+        phdr.p_paddr = self.phdr.p_paddr;
+        phdr.p_filesz = self.phdr.p_filesz;
+        phdr.p_memsz = self.phdr.p_memsz;
+        Self { phdr }
     }
 }
 
@@ -616,12 +1100,12 @@ pub type ElfRelType = ElfRel;
 pub type ElfRelType = ElfRela;
 
 #[cfg(feature = "object")]
-pub(crate) const ELF_REL_SECTION_TYPE: u32 = if cfg!(any(target_arch = "x86", target_arch = "arm"))
-{
-    elf::abi::SHT_REL
-} else {
-    elf::abi::SHT_RELA
-};
+pub(crate) const ELF_REL_SECTION_TYPE: ElfSectionType =
+    if cfg!(any(target_arch = "x86", target_arch = "arm")) {
+        ElfSectionType::REL
+    } else {
+        ElfSectionType::RELA
+    };
 
 impl ElfRelType {
     /// Return a human readable relocation type name for the current arch

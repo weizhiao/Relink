@@ -16,12 +16,12 @@ mod builder;
 mod load;
 
 use crate::{
+    Result,
     elf::{ElfHeader, ElfPhdr, ElfShdr},
     os::{DefaultMmap, Mmap},
     segment::ElfSegments,
     sync::Arc,
     tls::TlsResolver,
-    Result,
 };
 use alloc::boxed::Box;
 use core::marker::PhantomData;
