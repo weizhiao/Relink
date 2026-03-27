@@ -1,6 +1,3 @@
-#[cfg(not(target_arch = "x86_64"))]
-use crate::object::{ObjectReloc, layout::PltGotSection};
-
 #[cfg(target_arch = "x86_64")]
 pub(crate) use super::x86_64::object::{ObjectRelocator, PLT_ENTRY, PLT_ENTRY_SIZE};
 
@@ -19,11 +16,11 @@ pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
 ];
 
 #[cfg(not(target_arch = "x86_64"))]
-impl ObjectReloc for DummyObjectRelocator {
+impl crate::object::ObjectReloc for DummyObjectRelocator {
     fn relocate<D, PreS, PostS, PreH, PostH>(
         _helper: &mut crate::relocation::RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
         _rel: &crate::elf::ElfRelType,
-        _pltgot: &mut PltGotSection,
+        _pltgot: &mut crate::object::layout::PltGotSection,
     ) -> crate::Result<()>
     where
         PreS: crate::relocation::SymbolLookup + ?Sized,

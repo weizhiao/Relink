@@ -14,10 +14,6 @@ use elf::abi::{
     ET_DYN, ET_EXEC, ET_NONE, ET_REL, SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK,
     STT_COMMON, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
 };
-#[cfg(all(feature = "object", any(target_arch = "x86", target_arch = "arm")))]
-use elf::abi::SHT_REL;
-#[cfg(all(feature = "object", not(any(target_arch = "x86", target_arch = "arm"))))]
-use elf::abi::SHT_RELA;
 
 use crate::arch::rel_type_to_str;
 
@@ -34,37 +30,75 @@ const OK_TYPES: usize = 1 << STT_NOTYPE
     | 1 << STT_TLS
     | 1 << STT_GNU_IFUNC;
 
-cfg_if::cfg_if! {
-    if #[cfg(target_pointer_width = "64")]{
-        pub(crate) const E_CLASS: u8 = elf::abi::ELFCLASS64;
-        pub(crate) type Phdr = elf::segment::Elf64_Phdr;
-        pub(crate) type Shdr = elf::section::Elf64_Shdr;
-        /// ELF dynamic section entry.
-        pub type ElfDyn = elf::dynamic::Elf64_Dyn;
-        pub(crate) type ElfEhdr = elf::file::Elf64_Ehdr;
-        pub(crate) type Rela = elf::relocation::Elf64_Rela;
-        pub(crate) type Rel = elf::relocation::Elf64_Rel;
-        pub(crate) type Relr = u64;
-        pub(crate) type Sym = elf::symbol::Elf64_Sym;
-        pub(crate) const REL_MASK: usize = 0xFFFFFFFF;
-        pub(crate) const REL_BIT: usize = 32;
-        pub(crate) const EHDR_SIZE: usize = core::mem::size_of::<elf::file::Elf64_Ehdr>();
-    }else{
-        pub(crate) const E_CLASS: u8 = elf::abi::ELFCLASS32;
-        pub(crate) type Phdr = elf::segment::Elf32_Phdr;
-        pub(crate) type Shdr = elf::section::Elf32_Shdr;
-        /// ELF dynamic section entry.
-        pub type ElfDyn = elf::dynamic::Elf32_Dyn;
-        pub(crate) type ElfEhdr = elf::file::Elf32_Ehdr;
-        pub(crate) type Rela = elf::relocation::Elf32_Rela;
-        pub(crate) type Rel = elf::relocation::Elf32_Rel;
-        pub(crate) type Relr = u32;
-        pub(crate) type Sym = Elf32Sym;
-        pub(crate) const REL_MASK: usize = 0xFF;
-        pub(crate) const REL_BIT: usize = 8;
-        pub(crate) const EHDR_SIZE: usize = core::mem::size_of::<elf::file::Elf32_Ehdr>();
-    }
+/// Groups the raw ELF types/constants selected for the current target.
+///
+/// Keeping this behind a single trait lets us centralize the pointer-width
+/// mapping without forcing the rest of the module to become generic.
+#[doc(hidden)]
+pub trait ElfLayout {
+    const E_CLASS: u8;
+    const REL_MASK: usize;
+    const REL_BIT: usize;
+
+    type Phdr;
+    type Shdr;
+    type Dyn;
+    type Ehdr;
+    type Rela;
+    type Rel;
+    type Relr;
+    type Sym;
 }
+
+#[doc(hidden)]
+pub struct NativeElfLayout;
+
+#[cfg(target_pointer_width = "64")]
+impl ElfLayout for NativeElfLayout {
+    const E_CLASS: u8 = elf::abi::ELFCLASS64;
+    const REL_MASK: usize = 0xFFFFFFFF;
+    const REL_BIT: usize = 32;
+
+    type Phdr = elf::segment::Elf64_Phdr;
+    type Shdr = elf::section::Elf64_Shdr;
+    type Dyn = elf::dynamic::Elf64_Dyn;
+    type Ehdr = elf::file::Elf64_Ehdr;
+    type Rela = elf::relocation::Elf64_Rela;
+    type Rel = elf::relocation::Elf64_Rel;
+    type Relr = u64;
+    type Sym = elf::symbol::Elf64_Sym;
+}
+
+#[cfg(not(target_pointer_width = "64"))]
+impl ElfLayout for NativeElfLayout {
+    const E_CLASS: u8 = elf::abi::ELFCLASS32;
+    const REL_MASK: usize = 0xFF;
+    const REL_BIT: usize = 8;
+
+    type Phdr = elf::segment::Elf32_Phdr;
+    type Shdr = elf::section::Elf32_Shdr;
+    type Dyn = elf::dynamic::Elf32_Dyn;
+    type Ehdr = elf::file::Elf32_Ehdr;
+    type Rela = elf::relocation::Elf32_Rela;
+    type Rel = elf::relocation::Elf32_Rel;
+    type Relr = u32;
+    type Sym = Elf32Sym;
+}
+
+pub(crate) const E_CLASS: u8 = <NativeElfLayout as ElfLayout>::E_CLASS;
+pub(crate) const REL_MASK: usize = <NativeElfLayout as ElfLayout>::REL_MASK;
+pub(crate) const REL_BIT: usize = <NativeElfLayout as ElfLayout>::REL_BIT;
+
+pub(crate) type Phdr = <NativeElfLayout as ElfLayout>::Phdr;
+pub(crate) type Shdr = <NativeElfLayout as ElfLayout>::Shdr;
+/// ELF dynamic section entry.
+pub type ElfDyn = <NativeElfLayout as ElfLayout>::Dyn;
+pub(crate) type ElfEhdr = <NativeElfLayout as ElfLayout>::Ehdr;
+pub(crate) type Rela = <NativeElfLayout as ElfLayout>::Rela;
+pub(crate) type Rel = <NativeElfLayout as ElfLayout>::Rel;
+pub(crate) type Relr = <NativeElfLayout as ElfLayout>::Relr;
+pub(crate) type Sym = <NativeElfLayout as ElfLayout>::Sym;
+pub(crate) const EHDR_SIZE: usize = core::mem::size_of::<ElfEhdr>();
 
 /// Semantic wrapper for the ELF `EI_CLASS` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -567,26 +601,27 @@ impl Clone for ElfPhdr {
     }
 }
 
-/// Architecture-specific relocation entry type.
-///
-/// This type alias selects the appropriate relocation entry type based on the target
-/// architecture:
-/// - For x86 and ARM architectures: `ElfRel` (implicit addends)
-/// - For other architectures: `ElfRela` (explicit addends)
-///
-/// This allows code to work with relocations in a generic way without needing to
-/// know the specific architecture details.
-#[cfg(all(not(target_arch = "x86"), not(target_arch = "arm")))]
-pub type ElfRelType = ElfRela;
+// Architecture-specific relocation entry type.
+//
+// This selects the appropriate relocation entry type based on the target
+// architecture:
+// - For x86 and ARM architectures: ElfRel (implicit addends)
+// - For other architectures: ElfRela (explicit addends)
+//
+// This allows code to work with relocations in a generic way without needing to
+// know the specific architecture details.
 #[cfg(any(target_arch = "x86", target_arch = "arm"))]
 pub type ElfRelType = ElfRel;
-
 #[cfg(all(not(target_arch = "x86"), not(target_arch = "arm")))]
+pub type ElfRelType = ElfRela;
+
 #[cfg(feature = "object")]
-pub(crate) const ELF_REL_SECTION_TYPE: u32 = SHT_RELA;
-#[cfg(any(target_arch = "x86", target_arch = "arm"))]
-#[cfg(feature = "object")]
-pub(crate) const ELF_REL_SECTION_TYPE: u32 = SHT_REL;
+pub(crate) const ELF_REL_SECTION_TYPE: u32 = if cfg!(any(target_arch = "x86", target_arch = "arm"))
+{
+    elf::abi::SHT_REL
+} else {
+    elf::abi::SHT_RELA
+};
 
 impl ElfRelType {
     /// Return a human readable relocation type name for the current arch

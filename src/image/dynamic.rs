@@ -1,10 +1,7 @@
 #[cfg(feature = "lazy-binding")]
 use crate::elf::ElfRelType;
-#[cfg(feature = "lazy-binding")]
-use crate::relocation::SymbolLookup;
 use crate::sync::{Arc, AtomicBool};
 use crate::{
-    ParsePhdrError, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
     loader::{ImageBuilder, LifecycleContext, LoadHook},
     logging,
@@ -12,16 +9,17 @@ use crate::{
     relocation::{DynamicRelocation, RelocAddr},
     segment::ELFRelro,
     tls::{CoreTlsState, TlsResolver},
+    ParsePhdrError, Result,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, ptr::NonNull};
 
-use super::{ElfCore, core::CoreInner};
+use super::{core::CoreInner, ElfCore};
 
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo {
     pub(crate) pltrel: &'static [ElfRelType],
-    pub(crate) lookup: Option<Box<dyn SymbolLookup + Send + Sync>>,
+    pub(crate) lookup: Option<Box<dyn crate::relocation::SymbolLookup + Send + Sync>>,
 }
 
 #[cfg(feature = "lazy-binding")]

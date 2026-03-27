@@ -4,13 +4,13 @@
 //! for the relocated form returned by `.relocator().relocate()`.
 
 use crate::{
-    Result,
     elf::{ElfDyn, ElfPhdr},
     image::{DynamicImage, ElfCore, LoadedCore},
     loader::{ImageBuilder, LoadHook},
     os::Mmap,
     relocation::{Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup},
     tls::TlsResolver,
+    Result,
 };
 use core::{borrow::Borrow, fmt::Debug, ops::Deref, ptr::NonNull};
 

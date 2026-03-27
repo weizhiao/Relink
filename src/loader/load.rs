@@ -1,12 +1,12 @@
 use super::{ElfBuf, LoadHook, Loader};
 use crate::{
-    ParseEhdrError, ParsePhdrError, Result,
-    elf::{EHDR_SIZE, ElfEhdr, ElfHeader, ElfPhdr},
+    elf::{ElfEhdr, ElfHeader, ElfPhdr, EHDR_SIZE},
     image::{RawDylib, RawElf, RawExec},
     input::{ElfReader, IntoElfReader},
     logging,
     os::Mmap,
     tls::TlsResolver,
+    ParseEhdrError, ParsePhdrError, Result,
 };
 use core::mem::MaybeUninit;
 use elf::abi::{PT_DYNAMIC, PT_INTERP};
@@ -230,10 +230,10 @@ where
 mod tests {
     use super::{ElfBuf, ElfHeader, ElfPhdr};
     use crate::{
-        Result,
         arch::EM_ARCH,
-        elf::{E_CLASS, EHDR_SIZE, ElfEhdr},
+        elf::{ElfEhdr, EHDR_SIZE, E_CLASS},
         input::ElfReader,
+        Result,
     };
     use alloc::vec::Vec;
     use core::mem::size_of;

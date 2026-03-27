@@ -4,10 +4,7 @@
 //! [`crate::image`]. They store metadata, symbol tables, mapped segments,
 //! lifecycle handlers, TLS state, and dependency ownership.
 
-#[cfg(feature = "lazy-binding")]
-use crate::image::LazyBindingInfo;
 use crate::{
-    ParsePhdrError, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolInfo, SymbolTable},
     image::{DynamicInfo, Symbol},
     loader::{DynLifecycleHandler, LifecycleContext},
@@ -15,6 +12,7 @@ use crate::{
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{CoreTlsState, TlsDescArgs, TlsInfo, TlsResolver},
+    ParsePhdrError, Result,
 };
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -669,7 +667,7 @@ impl<D> ElfCore<D> {
                     dynamic_ptr: unsafe { NonNull::new_unchecked(dynamic_ptr.cast_mut()) },
                     phdrs: ElfPhdrs::Vec(phdrs),
                     #[cfg(feature = "lazy-binding")]
-                    lazy: LazyBindingInfo::new(dynamic.pltrel),
+                    lazy: super::LazyBindingInfo::new(dynamic.pltrel),
                 })),
                 tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_get_addr, tls_unregister),
                 segments,

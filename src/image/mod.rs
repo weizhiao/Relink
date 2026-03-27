@@ -8,13 +8,11 @@
 //! symbol lookup, metadata, and dependency retention.
 
 use crate::{
-    Result,
     elf::ElfPhdr,
     relocation::{Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup},
+    Result,
 };
 use ::core::fmt::Debug;
-#[cfg(feature = "object")]
-use alloc::vec::Vec;
 
 mod core;
 mod dylib;
@@ -27,10 +25,9 @@ mod symbol;
 #[cfg(any(feature = "lazy-binding", feature = "object"))]
 pub(crate) use core::CoreInner;
 pub(crate) use dynamic::DynamicImage;
-#[cfg(not(feature = "lazy-binding"))]
 pub(crate) use dynamic::DynamicInfo;
 #[cfg(feature = "lazy-binding")]
-pub(crate) use dynamic::{DynamicInfo, LazyBindingInfo};
+pub(crate) use dynamic::LazyBindingInfo;
 
 pub use core::{ElfCore, ElfCoreRef, LoadedCore};
 pub use dylib::{LoadedDylib, RawDylib};
@@ -284,7 +281,13 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
                 } = args;
                 Ok(LoadedElf::Object(Relocatable::relocate(
                     relocatable,
-                    RelocateArgs::new(Vec::new(), binding, lookup, lazy_lookup, handlers),
+                    RelocateArgs::new(
+                        alloc::vec::Vec::new(),
+                        binding,
+                        lookup,
+                        lazy_lookup,
+                        handlers,
+                    ),
                 )?))
             }
         }

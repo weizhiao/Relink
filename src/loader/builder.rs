@@ -1,10 +1,10 @@
 use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner, UserDataLoaderContext};
 use crate::{
-    ParsePhdrError, Result,
     elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfShdr},
     os::Mmap,
-    segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
+    segment::{program::ProgramSegments, ELFRelro, ElfSegments, SegmentBuilder},
     tls::{TlsInfo, TlsResolver},
+    ParsePhdrError, Result,
 };
 use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use core::{ffi::c_char, marker::PhantomData, ptr::NonNull};

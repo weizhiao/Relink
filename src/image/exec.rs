@@ -5,7 +5,6 @@
 
 use crate::sync::Arc;
 use crate::{
-    Result,
     elf::ElfPhdr,
     image::{DynamicImage, LoadedCore},
     loader::{ImageBuilder, LoadHook},
@@ -15,6 +14,7 @@ use crate::{
     },
     segment::ElfSegments,
     tls::TlsResolver,
+    Result,
 };
 use alloc::{string::String, vec::Vec};
 use core::fmt::Debug;

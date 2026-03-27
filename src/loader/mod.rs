@@ -16,18 +16,15 @@ mod builder;
 mod load;
 
 use crate::{
-    Result,
     elf::{ElfHeader, ElfPhdr, ElfShdr},
     os::{DefaultMmap, Mmap},
     segment::ElfSegments,
     sync::Arc,
     tls::TlsResolver,
+    Result,
 };
 use alloc::boxed::Box;
 use core::marker::PhantomData;
-
-#[cfg(feature = "tls")]
-use crate::tls::DefaultTlsResolver;
 
 pub(crate) use buffer::ElfBuf;
 pub(crate) use builder::ImageBuilder;
@@ -380,7 +377,7 @@ where
 
     /// Consumes the current loader and returns a new one with the default TLS resolver.
     #[cfg(feature = "tls")]
-    pub fn with_default_tls_resolver(self) -> Loader<M, H, D, DefaultTlsResolver> {
+    pub fn with_default_tls_resolver(self) -> Loader<M, H, D, crate::tls::DefaultTlsResolver> {
         Loader {
             buf: self.buf,
             inner: self.inner,
