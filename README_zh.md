@@ -18,6 +18,10 @@
 </p>
 
 <p align="center">
+  <a href="CONTRIBUTING.md">Contributing</a> | <a href="CONTRIBUTING_zh.md">贡献指南</a>
+</p>
+
+<p align="center">
   <strong>在运行时完成 ELF 的映射、重定位与链接。</strong><br>
   从文件路径和内存字节流，到共享对象、可执行文件和可重定位目标文件。
 </p>

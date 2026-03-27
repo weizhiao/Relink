@@ -18,6 +18,10 @@
 </p>
 
 <p align="center">
+  <a href="CONTRIBUTING.md">Contributing</a> | <a href="CONTRIBUTING_zh.md">贡献指南</a>
+</p>
+
+<p align="center">
   <strong>Map, relocate, and link ELF images at runtime.</strong><br>
   From file paths and in-memory buffers to shared objects, executables, and relocatable objects.
 </p>
