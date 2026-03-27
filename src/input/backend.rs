@@ -3,6 +3,7 @@ use crate::{Result, logging, os::RawFile};
 use alloc::{
     string::{String, ToString},
     vec::Vec,
+    boxed::Box,
 };
 
 /// An ELF object source backed by an in-memory byte slice.
@@ -113,11 +114,9 @@ impl<'a> ElfReader for &'a [u8] {
     /// Reads data from the byte slice at the specified offset.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         if offset + buf.len() > self.len() {
-            return Err(crate::IoError::ReadOffsetOutOfBounds {
-                offset,
-                len: buf.len(),
-                available: self.len(),
-            }
+            return Err(crate::IoError::ReadOffsetOutOfBounds(Box::new(
+                crate::ReadOffsetOutOfBoundsError::new(offset, buf.len(), self.len()),
+            ))
             .into());
         }
         buf.copy_from_slice(&self[offset..offset + buf.len()]);

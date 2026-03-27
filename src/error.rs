@@ -21,55 +21,53 @@ const UNSUPPORTED_STATIC_TLS_MESSAGE: &str = "unsupport static tls";
 pub enum IoError {
     /// The provided path contains an interior NUL byte.
     NullByteInPath,
-    /// `open failed: {path}`
-    Open { path: Box<str> },
-    /// `openat failed: {path}`
-    OpenAt { path: Box<str> },
-    /// `CreateFileW failed for {path}: error {code}`
-    CreateFileW { path: Box<str>, code: u32 },
-    /// `SetFilePointerEx failed with error: {code}`
-    SetFilePointerEx { code: u32 },
-    /// `ReadFile failed with error: {code}`
-    ReadFile { code: u32 },
-    /// `lseek failed`
-    SeekFailed,
-    /// `read failed`
-    ReadFailed,
+    /// `open failed for {path} with error: {code}`
+    OpenFailed { path: Box<str>, code: u32 },
+    /// `seek failed with error: {code}`
+    SeekFailed { code: u32 },
+    /// `read failed with error: {code}`
+    ReadFailed { code: u32 },
     /// `failed to fill buffer`
     FailedToFillBuffer,
     /// `read offset out of bounds: offset {offset}, len {len}, available {available}`
-    ReadOffsetOutOfBounds {
-        offset: usize,
-        len: usize,
-        available: usize,
-    },
+    ReadOffsetOutOfBounds(Box<ReadOffsetOutOfBoundsError>),
     /// `close failed`
     CloseFailed,
+}
+
+/// Structured details for an out-of-bounds read.
+#[derive(Debug)]
+pub struct ReadOffsetOutOfBoundsError {
+    offset: usize,
+    len: usize,
+    available: usize,
+}
+
+impl ReadOffsetOutOfBoundsError {
+    #[inline]
+    pub(crate) fn new(offset: usize, len: usize, available: usize) -> Self {
+        Self {
+            offset,
+            len,
+            available,
+        }
+    }
 }
 
 impl Display for IoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NullByteInPath => f.write_str("path contains an interior NUL byte"),
-            Self::Open { path } => write!(f, "open failed: {path}"),
-            Self::OpenAt { path } => write!(f, "openat failed: {path}"),
-            Self::CreateFileW { path, code } => {
-                write!(f, "CreateFileW failed for {path}: error {code}")
+            Self::OpenFailed { path, code } => {
+                write!(f, "open failed for {path} with error: {code}")
             }
-            Self::SetFilePointerEx { code } => {
-                write!(f, "SetFilePointerEx failed with error: {code}")
-            }
-            Self::ReadFile { code } => write!(f, "ReadFile failed with error: {code}"),
-            Self::SeekFailed => f.write_str("lseek failed"),
-            Self::ReadFailed => f.write_str("read failed"),
+            Self::SeekFailed { code } => write!(f, "seek failed with error: {code}"),
+            Self::ReadFailed { code } => write!(f, "read failed with error: {code}"),
             Self::FailedToFillBuffer => f.write_str("failed to fill buffer"),
-            Self::ReadOffsetOutOfBounds {
-                offset,
-                len,
-                available,
-            } => write!(
+            Self::ReadOffsetOutOfBounds(err) => write!(
                 f,
-                "read offset out of bounds: offset {offset}, len {len}, available {available}"
+                "read offset out of bounds: offset {}, len {}, available {}",
+                err.offset, err.len, err.available
             ),
             Self::CloseFailed => f.write_str("close failed"),
         }
@@ -79,22 +77,27 @@ impl Display for IoError {
 /// Structured memory-mapping error details.
 #[derive(Debug)]
 pub enum MmapError {
-    /// `mmap failed`
-    MmapFailed,
-    /// `mmap anonymous failed`
-    MmapAnonymousFailed,
-    /// `munmap failed`
-    MunmapFailed,
+    #[cfg(not(windows))]
+    /// `mmap failed with error: {code}`
+    MmapFailed { code: u32 },
+    #[cfg(not(windows))]
+    /// `mmap anonymous failed with error: {code}`
+    MmapAnonymousFailed { code: u32 },
+    #[cfg(not(windows))]
+    /// `munmap failed with error: {code}`
+    MunmapFailed { code: u32 },
+    #[cfg(windows)]
     /// `MapViewOfFile3 failed with error: {code}`
     MapViewOfFile3 { code: u32 },
+    #[cfg(windows)]
     /// `VirtualAlloc failed with error: {code}`
     VirtualAlloc { code: u32 },
-    /// `mprotect failed`
-    MprotectFailed,
-    /// `mprotect error! error code: {code}`
+    /// `mprotect failed with error: {code}`
     Mprotect { code: u32 },
+    #[cfg(windows)]
     /// `CreateFileMappingW failed with error: {code}`
     CreateFileMappingW { code: u32 },
+    #[cfg(windows)]
     /// `VirtualFree failed with error: {code}`
     VirtualFree { code: u32 },
 }
@@ -102,20 +105,28 @@ pub enum MmapError {
 impl Display for MmapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MmapFailed => f.write_str("mmap failed"),
-            Self::MmapAnonymousFailed => f.write_str("mmap anonymous failed"),
-            Self::MunmapFailed => f.write_str("munmap failed"),
+            #[cfg(not(windows))]
+            Self::MmapFailed { code } => write!(f, "mmap failed with error: {code}"),
+            #[cfg(not(windows))]
+            Self::MmapAnonymousFailed { code } => {
+                write!(f, "mmap anonymous failed with error: {code}")
+            }
+            #[cfg(not(windows))]
+            Self::MunmapFailed { code } => write!(f, "munmap failed with error: {code}"),
+            #[cfg(windows)]
             Self::MapViewOfFile3 { code } => {
                 write!(f, "MapViewOfFile3 failed with error: {code}")
             }
+            #[cfg(windows)]
             Self::VirtualAlloc { code } => {
                 write!(f, "VirtualAlloc failed with error: {code}")
             }
-            Self::MprotectFailed => f.write_str("mprotect failed"),
-            Self::Mprotect { code } => write!(f, "mprotect error! error code: {code}"),
+            Self::Mprotect { code } => write!(f, "mprotect failed with error: {code}"),
+            #[cfg(windows)]
             Self::CreateFileMappingW { code } => {
                 write!(f, "CreateFileMappingW failed with error: {code}")
             }
+            #[cfg(windows)]
             Self::VirtualFree { code } => {
                 write!(f, "VirtualFree failed with error: {code}")
             }
@@ -286,44 +297,16 @@ impl Display for RelocationContextError {
     }
 }
 
-/// Structured lazy-binding setup error details.
-#[derive(Debug)]
-pub enum LazyBindingError {
-    /// `lazy binding requires a GOT/PLTGOT entry`
-    MissingGot,
-    /// `lazy binding requires dynamic metadata`
-    MissingDynamicInfo,
-}
-
-impl Display for LazyBindingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingGot => f.write_str("lazy binding requires a GOT/PLTGOT entry"),
-            Self::MissingDynamicInfo => f.write_str("lazy binding requires dynamic metadata"),
-        }
-    }
-}
-
 /// Structured relocation error details.
 #[derive(Debug)]
 pub enum RelocationError {
     /// `out of range integral type conversion attempted`
-    IntegralConversionOutOfRange,
+    IntegerConversionOverflow,
     /// Detailed relocation context, formatted lazily in `Display`.
-    Context(Box<RelocationContextError>),
-    /// Lazy-binding setup failed before the hot path was installed.
-    LazyBinding(LazyBindingError),
-    /// `object relocation sections use {found}, but this target expects {expected}`
-    UnsupportedObjectSection {
-        expected: &'static str,
-        found: &'static str,
-    },
-    /// `{section} entries have size {found}, expected {expected}`
-    InvalidObjectEntrySize {
-        section: &'static str,
-        expected: usize,
-        found: usize,
-    },
+    RelocationContext(Box<RelocationContextError>),
+    #[cfg(feature = "lazy-binding")]
+    /// `lazy binding setup failed: {detail}`
+    LazyBindingSetup { detail: &'static str },
     /// `object file missing symbol table`
     MissingObjectSymbolTable,
 }
@@ -331,23 +314,14 @@ pub enum RelocationError {
 impl Display for RelocationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::IntegralConversionOutOfRange => {
+            Self::IntegerConversionOverflow => {
                 f.write_str("out of range integral type conversion attempted")
             }
-            Self::Context(ctx) => Display::fmt(ctx, f),
-            Self::LazyBinding(err) => Display::fmt(err, f),
-            Self::UnsupportedObjectSection { expected, found } => write!(
-                f,
-                "object relocation sections use {found}, but this target expects {expected}"
-            ),
-            Self::InvalidObjectEntrySize {
-                section,
-                expected,
-                found,
-            } => write!(
-                f,
-                "{section} entries have size {found}, expected {expected}"
-            ),
+            Self::RelocationContext(ctx) => Display::fmt(ctx, f),
+            #[cfg(feature = "lazy-binding")]
+            Self::LazyBindingSetup { detail } => {
+                write!(f, "lazy binding setup failed: {detail}")
+            }
             Self::MissingObjectSymbolTable => f.write_str("object file missing symbol table"),
         }
     }
@@ -433,13 +407,7 @@ impl From<MmapError> for Error {
 
 impl From<RelocationContextError> for RelocationError {
     fn from(err: RelocationContextError) -> Self {
-        Self::Context(Box::new(err))
-    }
-}
-
-impl From<LazyBindingError> for RelocationError {
-    fn from(err: LazyBindingError) -> Self {
-        Self::LazyBinding(err)
+        Self::RelocationContext(Box::new(err))
     }
 }
 
@@ -451,12 +419,6 @@ impl From<RelocationError> for Error {
 
 impl From<RelocationContextError> for Error {
     fn from(err: RelocationContextError) -> Self {
-        RelocationError::from(err).into()
-    }
-}
-
-impl From<LazyBindingError> for Error {
-    fn from(err: LazyBindingError) -> Self {
         RelocationError::from(err).into()
     }
 }
@@ -516,7 +478,7 @@ pub(crate) fn relocate_context_error(
     symbol: Option<&str>,
     reason: RelocationFailureReason,
 ) -> Error {
-    Error::Relocation(RelocationError::Context(Box::new(
+    Error::Relocation(RelocationError::RelocationContext(Box::new(
         RelocationContextError::new(file, r_type, symbol, reason),
     )))
 }
@@ -536,7 +498,7 @@ mod tests {
     #[test]
     fn error_stays_compact() {
         assert!(
-            size_of::<Error>() <= 40,
+            size_of::<Error>() <= 32,
             "Error grew to {} bytes",
             size_of::<Error>()
         );

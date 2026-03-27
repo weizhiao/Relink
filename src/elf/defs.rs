@@ -14,8 +14,10 @@ use elf::abi::{
     ET_DYN, ET_EXEC, ET_NONE, ET_REL, SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK,
     STT_COMMON, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_TLS,
 };
-#[cfg(feature = "object")]
-use elf::abi::{SHT_REL, SHT_RELA};
+#[cfg(all(feature = "object", any(target_arch = "x86", target_arch = "arm")))]
+use elf::abi::SHT_REL;
+#[cfg(all(feature = "object", not(any(target_arch = "x86", target_arch = "arm"))))]
+use elf::abi::SHT_RELA;
 
 use crate::arch::rel_type_to_str;
 
@@ -585,23 +587,6 @@ pub(crate) const ELF_REL_SECTION_TYPE: u32 = SHT_RELA;
 #[cfg(any(target_arch = "x86", target_arch = "arm"))]
 #[cfg(feature = "object")]
 pub(crate) const ELF_REL_SECTION_TYPE: u32 = SHT_REL;
-
-#[cfg(all(not(target_arch = "x86"), not(target_arch = "arm")))]
-#[cfg(feature = "object")]
-pub(crate) const ELF_REL_SECTION_NAME: &str = "SHT_RELA";
-#[cfg(any(target_arch = "x86", target_arch = "arm"))]
-#[cfg(feature = "object")]
-pub(crate) const ELF_REL_SECTION_NAME: &str = "SHT_REL";
-
-#[inline]
-#[cfg(feature = "object")]
-pub(crate) const fn relocation_section_name(sh_type: u32) -> &'static str {
-    match sh_type {
-        SHT_REL => "SHT_REL",
-        SHT_RELA => "SHT_RELA",
-        _ => "UNKNOWN",
-    }
-}
 
 impl ElfRelType {
     /// Return a human readable relocation type name for the current arch

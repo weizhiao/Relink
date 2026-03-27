@@ -567,7 +567,7 @@ impl RelocAddr {
     pub fn try_into_sword32(self) -> Result<RelocSWord32> {
         i32::try_from(self.0 as isize)
             .map(RelocValue::new)
-            .map_err(|_| RelocationError::IntegralConversionOutOfRange.into())
+            .map_err(|_| RelocationError::IntegerConversionOverflow.into())
     }
 
     #[inline]
@@ -575,7 +575,7 @@ impl RelocAddr {
     pub fn try_into_word32(self) -> Result<RelocWord32> {
         u32::try_from(self.0)
             .map(RelocValue::new)
-            .map_err(|_| RelocationError::IntegralConversionOutOfRange.into())
+            .map_err(|_| RelocationError::IntegerConversionOverflow.into())
     }
 }
 

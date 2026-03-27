@@ -5,8 +5,7 @@ use super::{
 use crate::{
     RelocationError, Result,
     elf::{
-        ELF_REL_SECTION_NAME, ELF_REL_SECTION_TYPE, ElfHeader, ElfRelType, ElfShdr, ElfSymbol,
-        SymbolTable, relocation_section_name,
+        ELF_REL_SECTION_TYPE, ElfHeader, ElfRelType, ElfShdr, ElfSymbol, SymbolTable,
     },
     loader::{DynLifecycleHandler, LoadHook, LoaderInner},
     os::Mmap,
@@ -65,24 +64,11 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
     fn validate_relocation_shdr(shdr: &ElfShdr) -> Result<()> {
         debug_assert!(matches!(shdr.sh_type, SHT_REL | SHT_RELA));
 
-        if shdr.sh_type != ELF_REL_SECTION_TYPE {
-            return Err(RelocationError::UnsupportedObjectSection {
-                expected: ELF_REL_SECTION_NAME,
-                found: relocation_section_name(shdr.sh_type),
-            }
-            .into());
-        }
+        debug_assert_eq!(shdr.sh_type, ELF_REL_SECTION_TYPE);
 
         let expected = core::mem::size_of::<ElfRelType>();
         let found = shdr.sh_entsize as usize;
-        if found != expected {
-            return Err(RelocationError::InvalidObjectEntrySize {
-                section: ELF_REL_SECTION_NAME,
-                expected,
-                found,
-            }
-            .into());
-        }
+        debug_assert_eq!(found, expected);
 
         Ok(())
     }

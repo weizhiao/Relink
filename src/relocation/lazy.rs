@@ -2,13 +2,14 @@
 mod enabled {
     use crate::image::{CoreInner, DynamicImage, DynamicInfo, LoadedCore};
     use crate::{
-        LazyBindingError, Result,
+        RelocationError,
         arch::REL_JUMP_SLOT,
         arch::prepare_lazy_bind,
         elf::ElfRelType,
         relocation::{BindingMode, LazyLookupHooks, RelocAddr, SymbolLookup, unlikely},
         sync::Arc,
         tls::lookup_tls_get_addr,
+        Result,
     };
     use alloc::boxed::Box;
     use core::ptr::NonNull;
@@ -117,7 +118,9 @@ mod enabled {
                     .inner
                     .dynamic_info
                     .as_ref()
-                    .ok_or(LazyBindingError::MissingDynamicInfo)?;
+                    .ok_or(RelocationError::LazyBindingSetup {
+                        detail: "lazy binding requires dynamic metadata",
+                    })?;
                 let info = unsafe { &mut *(Arc::as_ptr(dynamic_info) as *mut DynamicInfo) };
                 let LazyLookupHooks {
                     pre_find,
@@ -138,7 +141,10 @@ mod enabled {
     where
         D: 'static,
     {
-        image.got().ok_or(LazyBindingError::MissingGot.into())
+        image.got().ok_or(RelocationError::LazyBindingSetup {
+            detail: "lazy binding requires a GOT/PLTGOT entry",
+        }
+        .into())
     }
 
     #[cold]

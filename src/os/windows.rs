@@ -306,7 +306,7 @@ impl RawFile {
 
         if handle == INVALID_HANDLE_VALUE {
             let err_code = unsafe { GetLastError() };
-            return Err(IoError::CreateFileW {
+            return Err(IoError::OpenFailed {
                 path: path.into(),
                 code: err_code,
             }
@@ -344,7 +344,7 @@ fn win_seek(handle: HANDLE, offset: usize) -> Result<()> {
 
     if res == 0 || new_pos as usize != offset {
         let err_code = unsafe { GetLastError() };
-        return Err(IoError::SetFilePointerEx { code: err_code }.into());
+        return Err(IoError::SeekFailed { code: err_code }.into());
     }
     Ok(())
 }
@@ -371,7 +371,7 @@ fn win_read_exact(handle: HANDLE, mut bytes: &mut [u8]) -> Result<()> {
 
         if result == 0 {
             let err_code = unsafe { GetLastError() };
-            return Err(IoError::ReadFile { code: err_code }.into());
+            return Err(IoError::ReadFailed { code: err_code }.into());
         } else if read_count == 0 {
             return Err(IoError::FailedToFillBuffer.into());
         }

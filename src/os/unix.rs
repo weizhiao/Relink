@@ -12,6 +12,27 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{ffi::c_void, str::FromStr};
 use libc::{O_RDONLY, SEEK_SET, mmap, mprotect, munmap};
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[inline]
+fn last_os_error_code() -> u32 {
+    unsafe { *libc::__errno_location() as u32 }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "tvos",
+    target_os = "watchos",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+#[inline]
+fn last_os_error_code() -> u32 {
+    unsafe { *libc::__error() as u32 }
+}
+
 /// An implementation of Mmap trait
 pub struct DefaultMmap;
 
@@ -94,7 +115,10 @@ impl Mmap for DefaultMmap {
             addr.unwrap() as _
         };
         if core::ptr::eq(ptr, libc::MAP_FAILED) {
-            return Err(MmapError::MmapFailed.into());
+            return Err(MmapError::MmapFailed {
+                code: last_os_error_code(),
+            }
+            .into());
         }
         Ok(ptr)
     }
@@ -116,7 +140,10 @@ impl Mmap for DefaultMmap {
             )
         };
         if core::ptr::eq(ptr, libc::MAP_FAILED) {
-            return Err(MmapError::MmapAnonymousFailed.into());
+            return Err(MmapError::MmapAnonymousFailed {
+                code: last_os_error_code(),
+            }
+            .into());
         }
         Ok(ptr)
     }
@@ -124,7 +151,10 @@ impl Mmap for DefaultMmap {
     unsafe fn munmap(addr: *mut c_void, len: usize) -> crate::Result<()> {
         let res = unsafe { munmap(addr, len) };
         if res != 0 {
-            return Err(MmapError::MunmapFailed.into());
+            return Err(MmapError::MunmapFailed {
+                code: last_os_error_code(),
+            }
+            .into());
         }
         Ok(())
     }
@@ -132,7 +162,10 @@ impl Mmap for DefaultMmap {
     unsafe fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> crate::Result<()> {
         let res = unsafe { mprotect(addr, len, prot.bits()) };
         if res != 0 {
-            return Err(MmapError::MprotectFailed.into());
+            return Err(MmapError::Mprotect {
+                code: last_os_error_code(),
+            }
+            .into());
         }
         Ok(())
     }
@@ -169,7 +202,11 @@ impl RawFile {
         let name = CString::from_str(path).map_err(|_| IoError::NullByteInPath)?;
         let fd = unsafe { libc::open(name.as_ptr(), O_RDONLY) };
         if fd == -1 {
-            return Err(IoError::Open { path: path.into() }.into());
+            return Err(IoError::OpenFailed {
+                path: path.into(),
+                code: last_os_error_code(),
+            }
+            .into());
         }
         Ok(Self {
             name: path.to_string(),
@@ -188,7 +225,10 @@ impl RawFile {
 fn lseek(fd: i32, offset: usize) -> Result<()> {
     let off = unsafe { libc::lseek(fd, offset as _, SEEK_SET) };
     if off == -1 || off as usize != offset {
-        return Err(IoError::SeekFailed.into());
+        return Err(IoError::SeekFailed {
+            code: last_os_error_code(),
+        }
+        .into());
     }
     Ok(())
 }
@@ -205,7 +245,10 @@ fn read_exact(fd: i32, mut bytes: &mut [u8]) -> Result<()> {
 
         if result < 0 {
             // 出现错误
-            return Err(IoError::ReadFailed.into());
+            return Err(IoError::ReadFailed {
+                code: last_os_error_code(),
+            }
+            .into());
         } else if result == 0 {
             // 意外到达文件末尾
             return Err(IoError::FailedToFillBuffer.into());
