@@ -27,9 +27,10 @@ pub(crate) use symbol::{SymbolInfo, SymbolTable};
 
 // Public API exports
 pub use defs::{
-    ElfClass, ElfDyn, ElfDynamicTag, ElfFileType, ElfMachine, ElfPhdr, ElfProgramFlags,
-    ElfProgramType, ElfRel, ElfRelType, ElfRela, ElfSectionFlags, ElfSectionType,
+    ElfClass, ElfFileType, ElfMachine, ElfPhdr, ElfProgramFlags, ElfProgramType,
+    ElfRel, ElfRelType, ElfRela, ElfSectionFlags, ElfSectionType,
 };
+pub use dynamic::{ElfDyn, ElfDynamicTag};
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::ElfHeader;
 pub use symbol::{ElfSymbol, ElfSymbolBind, ElfSymbolType};
