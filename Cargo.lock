@@ -498,9 +498,7 @@ name = "mini-loader"
 version = "1.2.1"
 dependencies = [
  "cfg-if",
- "elf",
  "elf_loader",
- "itoa",
  "linked_list_allocator",
  "syscalls",
 ]

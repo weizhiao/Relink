@@ -3,18 +3,24 @@ use crate::{
     Result,
     image::{LoadedCore, RawDylib},
 };
+use alloc::boxed::Box;
 
 /// A module chosen by a loader or dependency resolver.
 pub enum ResolvedModule<K, D: 'static> {
     /// Reuses a module that is already present in the current context.
     ///
     /// Resolvers can return this after consulting [`DependencyRequest::context`]
-    /// when they want cache-first behavior.
+    /// or their own session-local bookkeeping when they want cache-first
+    /// behavior.
     Existing(K),
     /// Introduces a newly mapped but not yet relocated shared object.
     Raw(K, RawDylib<D>),
     /// Introduces a dependency that is already relocated and ready to use.
-    Loaded(K, LoadedCore<D>),
+    ///
+    /// Resolvers may also attach the dependency's canonical direct-dependency
+    /// keys so the current load can preserve breadth-first group order without
+    /// re-deriving it later.
+    Loaded(K, LoadedCore<D>, Box<[K]>),
 }
 
 impl<K, D> ResolvedModule<K, D> {
@@ -24,10 +30,11 @@ impl<K, D> ResolvedModule<K, D> {
         Self::Raw(key, dylib)
     }
 
-    /// Creates an already-loaded module result.
+    /// Creates an already-loaded module result with its canonical direct
+    /// dependencies.
     #[inline]
-    pub fn new_loaded(key: K, dylib: LoadedCore<D>) -> Self {
-        Self::Loaded(key, dylib)
+    pub fn new_loaded(key: K, dylib: LoadedCore<D>, direct_deps: Box<[K]>) -> Self {
+        Self::Loaded(key, dylib, direct_deps)
     }
 
     /// Reuses an existing key from the current context.
@@ -40,7 +47,7 @@ impl<K, D> ResolvedModule<K, D> {
     #[inline]
     pub fn key(&self) -> &K {
         match self {
-            Self::Existing(key) | Self::Raw(key, _) | Self::Loaded(key, _) => key,
+            Self::Existing(key) | Self::Raw(key, _) | Self::Loaded(key, _, _) => key,
         }
     }
 }

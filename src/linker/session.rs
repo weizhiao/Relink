@@ -1,11 +1,10 @@
 use super::storage::{StagedEntry, StagedStorage};
-use crate::image::RawDylib;
+use crate::image::{LoadedCore, RawDylib};
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum PendingState {
     Unresolved,
-    Visiting,
     Resolved,
 }
 
@@ -29,6 +28,7 @@ impl<K, D: 'static> PendingEntry<K, D> {
 pub(crate) struct LoadSession<K, D: 'static> {
     pub(crate) pending: BTreeMap<K, PendingEntry<K, D>>,
     pub(crate) staged: StagedStorage<K, D>,
+    pub(crate) group_order: Vec<K>,
 }
 
 impl<K, D: 'static> LoadSession<K, D> {
@@ -37,6 +37,7 @@ impl<K, D: 'static> LoadSession<K, D> {
         Self {
             pending: BTreeMap::new(),
             staged: StagedStorage::new(),
+            group_order: Vec::new(),
         }
     }
 }
@@ -85,24 +86,23 @@ where
     }
 
     #[inline]
-    pub(crate) fn insert_staged(&mut self, entry: StagedEntry<K, D>) {
-        self.staged.push_new(entry);
+    pub(crate) fn insert_staged(&mut self, key: K, module: LoadedCore<D>, direct_deps: Box<[K]>) {
+        self.staged
+            .insert(StagedEntry::new(key, module, direct_deps));
     }
 }
 
-pub(crate) fn walk_breadth_first<K, E, F>(root: K, mut visit: F) -> core::result::Result<(), E>
+pub(crate) fn walk_breadth_first<K, E, F>(queue: &mut Vec<K>, mut visit: F) -> core::result::Result<(), E>
 where
     K: Clone,
     F: FnMut(&K, &mut Vec<K>) -> core::result::Result<(), E>,
 {
-    let mut queue = Vec::new();
-    queue.push(root);
     let mut cursor = 0;
 
     while cursor < queue.len() {
         let key = queue[cursor].clone();
         cursor += 1;
-        visit(&key, &mut queue)?;
+        visit(&key, queue)?;
     }
 
     Ok(())
@@ -121,9 +121,10 @@ mod tests {
             ("C", Vec::new()),
             ("D", Vec::new()),
         ]);
+        let mut queue = vec!["A"];
         let mut visited = Vec::new();
 
-        walk_breadth_first("A", |key, queue| {
+        walk_breadth_first(&mut queue, |key, queue| {
             visited.push(*key);
             queue.extend(graph.get(key).into_iter().flatten().copied());
             Ok::<_, ()>(())

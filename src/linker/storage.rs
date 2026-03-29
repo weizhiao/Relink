@@ -1,17 +1,15 @@
 use crate::image::LoadedCore;
-use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap};
 
 pub(crate) struct CommittedStorage<K, D: 'static> {
-    pub(crate) index: BTreeMap<K, usize>,
-    pub(crate) entries: Vec<CommittedEntry<K, D>>,
+    pub(crate) entries: BTreeMap<K, CommittedEntry<K, D>>,
 }
 
 impl<K, D: 'static> CommittedStorage<K, D> {
     #[inline]
     pub(crate) const fn new() -> Self {
         Self {
-            index: BTreeMap::new(),
-            entries: Vec::new(),
+            entries: BTreeMap::new(),
         }
     }
 }
@@ -22,19 +20,17 @@ where
 {
     #[inline]
     pub(crate) fn contains_key(&self, key: &K) -> bool {
-        self.index.contains_key(key)
+        self.entries.contains_key(key)
     }
 
     #[inline]
     pub(crate) fn entry(&self, key: &K) -> Option<&CommittedEntry<K, D>> {
-        self.index
-            .get(key)
-            .and_then(|&index| self.entries.get(index))
+        self.entries.get(key)
     }
 
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
-        self.index.is_empty()
+        self.entries.is_empty()
     }
 
     #[inline]
@@ -45,7 +41,6 @@ where
     #[inline]
     pub(crate) fn view(&self) -> CommittedStorageView<'_, K, D> {
         CommittedStorageView {
-            index: &self.index,
             entries: &self.entries,
         }
     }
@@ -53,23 +48,20 @@ where
 
 impl<K, D: 'static> CommittedStorage<K, D>
 where
-    K: Clone + Ord,
+    K: Ord,
 {
     #[inline]
-    pub(crate) fn push_new(&mut self, key: K, entry: CommittedEntry<K, D>) {
-        let index = self.entries.len();
-        let previous = self.index.insert(key, index);
+    pub(crate) fn insert_new(&mut self, key: K, entry: CommittedEntry<K, D>) {
+        let previous = self.entries.insert(key, entry);
         debug_assert!(
             previous.is_none(),
             "linked storage inserted a duplicate key"
         );
-        self.entries.push(entry);
     }
 }
 
 pub(crate) struct CommittedStorageView<'a, K, D: 'static> {
-    index: &'a BTreeMap<K, usize>,
-    entries: &'a [CommittedEntry<K, D>],
+    entries: &'a BTreeMap<K, CommittedEntry<K, D>>,
 }
 
 impl<'a, K, D: 'static> Copy for CommittedStorageView<'a, K, D> {}
@@ -87,14 +79,12 @@ where
 {
     #[inline]
     pub(crate) fn contains_key(&self, key: &K) -> bool {
-        self.index.contains_key(key)
+        self.entries.contains_key(key)
     }
 
     #[inline]
     pub(crate) fn entry(&self, key: &K) -> Option<&'a CommittedEntry<K, D>> {
-        self.index
-            .get(key)
-            .and_then(|&index| self.entries.get(index))
+        self.entries.get(key)
     }
 
     #[inline]
@@ -106,24 +96,17 @@ where
     pub(crate) fn get(&self, key: &K) -> Option<&'a LoadedCore<D>> {
         self.entry(key).map(|entry| &entry.module)
     }
-
-    #[inline]
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &'a LoadedCore<D>> {
-        self.entries.iter().map(|entry| &entry.module)
-    }
 }
 
 pub(crate) struct StagedStorage<K, D: 'static> {
-    pub(crate) index: BTreeMap<K, usize>,
-    pub(crate) entries: Vec<StagedEntry<K, D>>,
+    pub(crate) entries: BTreeMap<K, StagedEntry<K, D>>,
 }
 
 impl<K, D: 'static> StagedStorage<K, D> {
     #[inline]
     pub(crate) const fn new() -> Self {
         Self {
-            index: BTreeMap::new(),
-            entries: Vec::new(),
+            entries: BTreeMap::new(),
         }
     }
 }
@@ -134,13 +117,12 @@ where
 {
     #[inline]
     pub(crate) fn contains_key(&self, key: &K) -> bool {
-        self.index.contains_key(key)
+        self.entries.contains_key(key)
     }
 
     #[inline]
     pub(crate) fn view(&self) -> StagedStorageView<'_, K, D> {
         StagedStorageView {
-            index: &self.index,
             entries: &self.entries,
         }
     }
@@ -151,20 +133,17 @@ where
     K: Clone + Ord,
 {
     #[inline]
-    pub(crate) fn push_new(&mut self, entry: StagedEntry<K, D>) {
-        let index = self.entries.len();
-        let previous = self.index.insert(entry.key.clone(), index);
+    pub(crate) fn insert(&mut self, entry: StagedEntry<K, D>) {
+        let previous = self.entries.insert(entry.key.clone(), entry);
         debug_assert!(
             previous.is_none(),
             "linked storage inserted a duplicate key"
         );
-        self.entries.push(entry);
     }
 }
 
 pub(crate) struct StagedStorageView<'a, K, D: 'static> {
-    index: &'a BTreeMap<K, usize>,
-    entries: &'a [StagedEntry<K, D>],
+    entries: &'a BTreeMap<K, StagedEntry<K, D>>,
 }
 
 impl<'a, K, D: 'static> Copy for StagedStorageView<'a, K, D> {}
@@ -182,14 +161,12 @@ where
 {
     #[inline]
     pub(crate) fn contains_key(&self, key: &K) -> bool {
-        self.index.contains_key(key)
+        self.entries.contains_key(key)
     }
 
     #[inline]
     pub(crate) fn entry(&self, key: &K) -> Option<&'a StagedEntry<K, D>> {
-        self.index
-            .get(key)
-            .and_then(|&index| self.entries.get(index))
+        self.entries.get(key)
     }
 
     #[inline]
@@ -200,11 +177,6 @@ where
     #[inline]
     pub(crate) fn get(&self, key: &K) -> Option<&'a LoadedCore<D>> {
         self.entry(key).map(|entry| &entry.module)
-    }
-
-    #[inline]
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &'a LoadedCore<D>> {
-        self.entries.iter().map(|entry| &entry.module)
     }
 }
 
@@ -256,16 +228,7 @@ where
 
 impl<K, D: 'static> StagedEntry<K, D> {
     #[inline]
-    pub(crate) fn new(key: K, module: LoadedCore<D>) -> Self {
-        Self {
-            key,
-            module,
-            direct_deps: Vec::new().into_boxed_slice(),
-        }
-    }
-
-    #[inline]
-    pub(crate) fn with_direct_deps(key: K, module: LoadedCore<D>, direct_deps: Box<[K]>) -> Self {
+    pub(crate) fn new(key: K, module: LoadedCore<D>, direct_deps: Box<[K]>) -> Self {
         Self {
             key,
             module,

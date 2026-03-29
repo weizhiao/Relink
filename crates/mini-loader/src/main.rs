@@ -9,11 +9,10 @@ use core::{
 use elf_loader::{
     Loader, Result,
     arch::REL_RELATIVE,
-    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, abi::PT_DYNAMIC},
+    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfRela},
     image::RawElf,
     input::ElfFile,
 };
-use itoa::Buffer;
 use linked_list_allocator::LockedHeap;
 use mini_loader::{exit, fatal, print_str};
 
@@ -31,6 +30,26 @@ fn expect_ok<T, E>(value: core::result::Result<T, E>, message: &'static str) -> 
         Ok(value) => value,
         Err(_) => fatal(message),
     }
+}
+
+#[inline(always)]
+fn print_decimal(mut value: usize) {
+    let mut buffer = [0u8; 20];
+    let mut index = buffer.len();
+
+    if value == 0 {
+        index -= 1;
+        buffer[index] = b'0';
+    } else {
+        while value != 0 {
+            index -= 1;
+            buffer[index] = b'0' + (value % 10) as u8;
+            value /= 10;
+        }
+    }
+
+    let digits = unsafe { core::str::from_utf8_unchecked(&buffer[index..]) };
+    print_str(digits);
 }
 
 #[inline(always)]
@@ -57,12 +76,11 @@ static mut HEAP_BUF: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     if let Some(location) = info.location() {
-        let mut buf = Buffer::new();
         print_str(location.file());
         print_str(":");
-        print_str(buf.format(location.line()));
+        print_decimal(location.line() as usize);
         print_str(":");
-        print_str(buf.format(location.column()));
+        print_decimal(location.column() as usize);
         print_str(" panic\n");
     } else {
         print_str("panic\n");
@@ -121,7 +139,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut ElfDyn) {
     loop {
         match cur_aux.tag {
             AT_NULL => break,
-            AT_PHDR => ph = cur_aux.val as *const elf::segment::Elf64_Phdr,
+            AT_PHDR => ph = cur_aux.val as *const ElfPhdr,
             AT_PHNUM => phnum = cur_aux.val,
             AT_BASE => base = cur_aux.val as usize,
             _ => {}
@@ -133,21 +151,21 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut ElfDyn) {
     if base == 0 {
         let phdrs = unsafe { &*core::ptr::slice_from_raw_parts(ph, phnum as usize) };
         for phdr in phdrs {
-            if phdr.p_type == PT_DYNAMIC {
-                base = dynv as usize - phdr.p_vaddr as usize;
+            if phdr.program_type() == ElfProgramType::DYNAMIC {
+                base = dynv as usize - phdr.p_vaddr();
                 break;
             }
         }
     }
     // 自举，mini-loader自己对自己重定位
-    let rela_ptr = (rela as usize + base) as *const elf::relocation::Elf64_Rela;
+    let rela_ptr = (rela as usize + base) as *const ElfRela;
     let relas = unsafe { &*core::ptr::slice_from_raw_parts(rela_ptr, rela_count as usize) };
     for rela in relas {
-        if rela.r_info as usize & 0xFFFFFFFF != REL_RELATIVE as usize {
+        if rela.r_type() != REL_RELATIVE as usize {
             print_str("unknown rela type");
         }
-        let ptr = (rela.r_offset as usize + base) as *mut usize;
-        unsafe { ptr.write(base + rela.r_addend as usize) };
+        let ptr = (rela.r_offset() + base) as *mut usize;
+        unsafe { ptr.write(base.wrapping_add_signed(rela.r_addend(base))) };
     }
     // 至此就完成自举，可以进行函数调用了
     unsafe {

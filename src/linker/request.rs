@@ -79,12 +79,23 @@ pub struct RelocationRequest<'a, K, D: 'static> {
     key: &'a K,
     raw: RawDylib<D>,
     context: LinkContextView<'a, K, D>,
+    group_order: &'a [K],
 }
 
 impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
     #[inline]
-    pub(crate) fn new(key: &'a K, raw: RawDylib<D>, context: LinkContextView<'a, K, D>) -> Self {
-        Self { key, raw, context }
+    pub(crate) fn new(
+        key: &'a K,
+        raw: RawDylib<D>,
+        context: LinkContextView<'a, K, D>,
+        group_order: &'a [K],
+    ) -> Self {
+        Self {
+            key,
+            raw,
+            context,
+            group_order,
+        }
     }
 
     /// Returns the key selected for the module being relocated.
@@ -105,9 +116,15 @@ impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
         self.context
     }
 
+    /// Returns the breadth-first group order for the current load.
+    #[inline]
+    pub fn group_order(&self) -> &'a [K] {
+        self.group_order
+    }
+
     /// Consumes the request and returns all relocation inputs.
     #[inline]
-    pub fn into_parts(self) -> (&'a K, RawDylib<D>, LinkContextView<'a, K, D>) {
-        (self.key, self.raw, self.context)
+    pub fn into_parts(self) -> (&'a K, RawDylib<D>, LinkContextView<'a, K, D>, &'a [K]) {
+        (self.key, self.raw, self.context, self.group_order)
     }
 }

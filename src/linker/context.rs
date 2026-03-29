@@ -1,11 +1,11 @@
 use super::{
     api::{ModuleRelocator, ModuleResolver, ResolvedModule},
     request::{DependencyRequest, RelocationRequest},
-    session::{walk_breadth_first, LoadSession, PendingEntry, PendingState},
-    storage::{CommittedEntry, CommittedStorage, StagedEntry, StagedStorage},
+    session::{LoadSession, PendingEntry, PendingState, walk_breadth_first},
+    storage::{CommittedEntry, CommittedStorage, StagedStorage},
     view::LinkContextView,
 };
-use crate::{image::LoadedCore, LinkerError, Result, UnresolvedDependencyError};
+use crate::{LinkerError, Result, UnresolvedDependencyError, image::LoadedCore};
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
@@ -107,48 +107,68 @@ where
     where
         R: ModuleResolver<K, D>,
     {
-        if self.is_visible_loaded(root, session) {
-            return Ok(());
-        }
-        match session.pending_state(root) {
-            PendingState::Resolved | PendingState::Visiting => return Ok(()),
-            PendingState::Unresolved => {}
-        }
+        let mut group_order = mem::take(&mut session.group_order);
+        let mut visited = BTreeSet::new();
+        let root = root.clone();
+        visited.insert(root.clone());
+        group_order.push(root);
 
-        session.pending_entry_mut(root).state = PendingState::Visiting;
+        let result = walk_breadth_first(&mut group_order, |key, queue| {
+            let needs_store = session.contains_pending(key)
+                && matches!(session.pending_state(key), PendingState::Unresolved);
+            let direct_deps = self.resolve_node_direct_deps(key, session, resolver)?;
 
-        walk_breadth_first(root.clone(), |key, queue| {
-            let needed_len = session.pending_entry(&key).raw.needed_libs().len();
-            let mut direct_deps = Vec::with_capacity(needed_len);
-
-            for idx in 0..needed_len {
-                let dependency = self.resolve_dependency(&key, idx, session, resolver)?;
-                let dep_key = self.stage_resolved_module(dependency, session);
-                let should_queue = if let Some(entry) = session.pending.get_mut(&dep_key) {
-                    if entry.state == PendingState::Unresolved {
-                        entry.state = PendingState::Visiting;
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-
-                let is_new = !direct_deps.iter().any(|existing| existing == &dep_key);
-                if should_queue && is_new {
-                    queue.push(dep_key.clone());
-                }
-                if is_new {
-                    direct_deps.push(dep_key);
+            for dep_key in direct_deps.iter().cloned() {
+                if visited.insert(dep_key.clone()) {
+                    queue.push(dep_key);
                 }
             }
 
-            let entry = session.pending_entry_mut(&key);
-            entry.direct_deps = direct_deps.into_boxed_slice();
-            entry.state = PendingState::Resolved;
+            if needs_store {
+                let entry = session.pending_entry_mut(key);
+                entry.direct_deps = direct_deps.into_boxed_slice();
+                entry.state = PendingState::Resolved;
+            }
+
             Ok(())
-        })
+        });
+
+        session.group_order = group_order;
+        result
+    }
+
+    fn resolve_node_direct_deps<R>(
+        &self,
+        key: &K,
+        session: &mut LoadSession<K, D>,
+        resolver: &mut R,
+    ) -> Result<Vec<K>>
+    where
+        R: ModuleResolver<K, D>,
+    {
+        if !session.contains_pending(key) {
+            return Ok(self
+                .load_view(session)
+                .direct_deps(key)
+                .map_or_else(Vec::new, |deps| deps.to_vec()));
+        }
+
+        if matches!(session.pending_state(key), PendingState::Resolved) {
+            return Ok(session.pending_entry(key).direct_deps.to_vec());
+        }
+
+        let needed_len = session.pending_entry(key).raw.needed_libs().len();
+        let mut direct_deps = Vec::with_capacity(needed_len);
+
+        for idx in 0..needed_len {
+            let dependency = self.resolve_dependency(key, idx, session, resolver)?;
+            let dep_key = self.stage_resolved_module(dependency, session);
+            if !direct_deps.iter().any(|existing| existing == &dep_key) {
+                direct_deps.push(dep_key);
+            }
+        }
+
+        Ok(direct_deps)
     }
 
     /// Relocates every pending raw module reachable from `root`.
@@ -175,13 +195,14 @@ where
                     .pending
                     .remove(&key)
                     .expect("missing pending module while relocating");
-                let req = RelocationRequest::new(&key, entry.raw, self.load_view(session));
+                let req = RelocationRequest::new(
+                    &key,
+                    entry.raw,
+                    self.load_view(session),
+                    session.group_order.as_slice(),
+                );
                 let loaded = relocator.relocate(req)?;
-                session.insert_staged(StagedEntry::with_direct_deps(
-                    key,
-                    loaded,
-                    entry.direct_deps,
-                ));
+                session.insert_staged(key, loaded, entry.direct_deps);
             }
             Ok(())
         })();
@@ -269,7 +290,7 @@ where
         match module {
             ResolvedModule::Existing(key) => {
                 assert!(
-                    self.is_visible_loaded(&key, session),
+                    self.is_known_key(&key, session),
                     "resolved module referenced an unknown key without attaching a module"
                 );
                 key
@@ -282,12 +303,12 @@ where
                 session.insert_pending(key.clone(), raw);
                 key
             }
-            ResolvedModule::Loaded(key, loaded) => {
+            ResolvedModule::Loaded(key, loaded, direct_deps) => {
                 assert!(
                     !self.is_known_key(&key, session),
                     "resolved loaded module attached an already-known key; use ResolvedModule::Existing to reuse a visible module"
                 );
-                session.insert_staged(StagedEntry::new(key.clone(), loaded));
+                session.insert_staged(key.clone(), loaded, direct_deps);
                 key
             }
         }
@@ -295,10 +316,8 @@ where
 
     fn commit_session(&mut self, session: &mut LoadSession<K, D>) {
         let staged = mem::replace(&mut session.staged, StagedStorage::new());
-        debug_assert_eq!(staged.index.len(), staged.entries.len());
-
-        for entry in staged.entries {
-            self.committed.push_new(
+        for entry in staged.entries.into_values() {
+            self.committed.insert_new(
                 entry.key,
                 CommittedEntry::new(entry.module, entry.direct_deps),
             );

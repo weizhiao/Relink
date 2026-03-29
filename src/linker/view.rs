@@ -1,5 +1,4 @@
 use super::storage::{CommittedStorageView, StagedStorageView};
-use crate::image::LoadedCore;
 
 /// Read-only view of the loaded modules currently visible to a load session.
 ///
@@ -50,17 +49,9 @@ where
             .or_else(|| self.committed.direct_deps(key))
     }
 
-    /// Iterates over the currently visible modules in their discovery order.
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = &'a LoadedCore<D>> {
-        self.committed
-            .iter()
-            .chain(self.staged.iter().flat_map(|staged| staged.iter()))
-    }
-
     /// Returns the visible module for a key.
     #[inline]
-    pub fn get(&self, key: &K) -> Option<&'a LoadedCore<D>> {
+    pub fn get(&self, key: &K) -> Option<&'a crate::image::LoadedCore<D>> {
         self.staged
             .as_ref()
             .and_then(|staged| staged.get(key))
