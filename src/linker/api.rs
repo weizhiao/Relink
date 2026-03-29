@@ -1,9 +1,8 @@
+use super::request::{DependencyRequest, RelocationRequest};
 use crate::{
     Result,
     image::{LoadedCore, RawDylib},
 };
-
-use super::request::{DependencyRequest, RelocationRequest};
 
 /// A module chosen by a loader or dependency resolver.
 pub enum ResolvedModule<K, D: 'static> {
@@ -61,6 +60,11 @@ impl<K, D> ResolvedModule<K, D> {
 pub trait ModuleResolver<K, D: 'static> {
     /// Loads one module entry point identified by `key`.
     fn load(&mut self, key: &K) -> Result<ResolvedModule<K, D>>;
+
+    /// Resolves one dependency request.
+    ///
+    /// Returning `Ok(None)` means the resolver deliberately did not resolve the
+    /// dependency. Returning `Err` means the resolver itself failed.
     fn resolve(
         &mut self,
         req: &DependencyRequest<'_, K, D>,

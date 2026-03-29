@@ -1,7 +1,6 @@
-use crate::{Result, custom_error, image::RawDylib};
-use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
-
 use super::storage::{StagedEntry, StagedStorage};
+use crate::image::RawDylib;
+use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum PendingState {
@@ -57,27 +56,22 @@ where
     }
 
     #[inline]
-    pub(crate) fn pending_entry(&self, key: &K) -> Result<&PendingEntry<K, D>> {
+    pub(crate) fn pending_entry(&self, key: &K) -> &PendingEntry<K, D> {
         self.pending
             .get(key)
-            .ok_or_else(|| custom_error("missing module while resolving dependencies"))
+            .expect("missing module while resolving dependencies")
     }
 
     #[inline]
-    pub(crate) fn pending_entry_mut(&mut self, key: &K) -> Result<&mut PendingEntry<K, D>> {
+    pub(crate) fn pending_entry_mut(&mut self, key: &K) -> &mut PendingEntry<K, D> {
         self.pending
             .get_mut(key)
-            .ok_or_else(|| custom_error("missing module while resolving dependencies"))
+            .expect("missing module while resolving dependencies")
     }
 
     #[inline]
-    pub(crate) fn pending_state(&self, key: &K) -> Result<PendingState> {
-        Ok(self.pending_entry(key)?.state)
-    }
-
-    #[inline]
-    pub(crate) fn staged_entry(&self, key: &K) -> Option<&StagedEntry<K, D>> {
-        self.staged.entry(key)
+    pub(crate) fn pending_state(&self, key: &K) -> PendingState {
+        self.pending_entry(key).state
     }
 }
 

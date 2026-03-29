@@ -1,6 +1,5 @@
-use crate::image::LoadedCore;
-
 use super::storage::{CommittedStorageView, StagedStorageView};
+use crate::image::LoadedCore;
 
 /// Read-only view of the loaded modules currently visible to a load session.
 ///

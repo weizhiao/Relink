@@ -1,6 +1,5 @@
-use crate::image::RawDylib;
-
 use super::view::LinkContextView;
+use crate::image::RawDylib;
 
 /// A single dependency-resolution request.
 pub struct DependencyRequest<'a, K, D: 'static> {

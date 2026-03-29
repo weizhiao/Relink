@@ -17,3 +17,4 @@ pub use api::{ModuleRelocator, ModuleResolver, ResolvedModule};
 pub use context::LinkContext;
 pub use request::{DependencyRequest, RelocationRequest};
 pub use view::LinkContextView;
+pub use crate::LinkerError;

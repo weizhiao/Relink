@@ -342,6 +342,48 @@ impl Display for CustomError {
     }
 }
 
+/// Linker dependency context carried separately so the top-level [`Error`] stays compact.
+#[derive(Debug)]
+pub struct UnresolvedDependencyError {
+    owner: Box<str>,
+    dependency: Box<str>,
+}
+
+impl UnresolvedDependencyError {
+    #[inline]
+    pub(crate) fn new(owner: &str, dependency: &str) -> Self {
+        Self {
+            owner: owner.into(),
+            dependency: dependency.into(),
+        }
+    }
+}
+
+impl Display for UnresolvedDependencyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "unresolved dependency [{}] needed by [{}]",
+            self.dependency, self.owner
+        )
+    }
+}
+
+/// Structured linker error details.
+#[derive(Debug)]
+pub enum LinkerError {
+    /// A dependency could not be resolved by the resolver callback.
+    UnresolvedDependency(Box<UnresolvedDependencyError>),
+}
+
+impl Display for LinkerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnresolvedDependency(err) => Display::fmt(err, f),
+        }
+    }
+}
+
 /// Structured TLS error details.
 #[derive(Debug)]
 pub enum TlsError {
@@ -385,6 +427,9 @@ pub enum Error {
 
     /// An error occurred while parsing program headers.
     ParsePhdr(ParsePhdrError),
+
+    /// An error occurred in linker dependency resolution.
+    Linker(LinkerError),
 
     /// An error occurred in a user-defined callback or handler.
     Custom(CustomError),
@@ -441,6 +486,12 @@ impl From<ParsePhdrError> for Error {
     }
 }
 
+impl From<LinkerError> for Error {
+    fn from(err: LinkerError) -> Self {
+        Self::Linker(err)
+    }
+}
+
 impl From<CustomError> for Error {
     fn from(err: CustomError) -> Self {
         Self::Custom(err)
@@ -462,6 +513,7 @@ impl Display for Error {
             Self::ParseDynamic(err) => write!(f, "Dynamic section parsing error: {err}"),
             Self::ParseEhdr(err) => write!(f, "ELF header parsing error: {err}"),
             Self::ParsePhdr(err) => write!(f, "Program header parsing error: {err}"),
+            Self::Linker(err) => write!(f, "Linker error: {err}"),
             Self::Custom(err) => write!(f, "Custom error: {err}"),
             Self::Tls(err) => write!(f, "TLS error: {err}"),
         }

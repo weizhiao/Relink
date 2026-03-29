@@ -138,13 +138,6 @@ where
     }
 
     #[inline]
-    pub(crate) fn entry(&self, key: &K) -> Option<&StagedEntry<K, D>> {
-        self.index
-            .get(key)
-            .and_then(|&index| self.entries.get(index))
-    }
-
-    #[inline]
     pub(crate) fn view(&self) -> StagedStorageView<'_, K, D> {
         StagedStorageView {
             index: &self.index,
