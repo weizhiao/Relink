@@ -133,6 +133,15 @@ pub struct ElfDyn {
 }
 
 impl ElfDyn {
+    /// Creates an owned ELF dynamic entry from a tag and payload value.
+    #[inline]
+    pub fn new(tag: ElfDynamicTag, value: usize) -> Self {
+        let mut dyn_: <NativeElfLayout as ElfLayout>::Dyn = unsafe { core::mem::zeroed() };
+        dyn_.d_tag = tag.raw() as _;
+        dyn_.d_un = value as _;
+        Self { dyn_ }
+    }
+
     /// Returns the parsed ELF dynamic tag of this entry.
     #[inline]
     pub fn tag(&self) -> ElfDynamicTag {
@@ -143,6 +152,18 @@ impl ElfDyn {
     #[inline]
     pub fn value(&self) -> usize {
         self.dyn_.d_un as usize
+    }
+
+    /// Sets the dynamic tag (`d_tag`).
+    #[inline]
+    pub fn set_tag(&mut self, tag: ElfDynamicTag) {
+        self.dyn_.d_tag = tag.raw() as _;
+    }
+
+    /// Sets the dynamic payload value (`d_un`).
+    #[inline]
+    pub fn set_value(&mut self, value: usize) {
+        self.dyn_.d_un = value as _;
     }
 }
 
@@ -416,5 +437,22 @@ impl Debug for ElfDynamic {
             .field("dynrel_count", &self.dynrel.map(|r| r.len()).unwrap_or(0))
             .field("relr_count", &self.relr.map(|r| r.len()).unwrap_or(0))
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ElfDyn, ElfDynamicTag};
+
+    #[test]
+    fn owned_dyn_round_trips_and_mutates() {
+        let mut dyn_ = ElfDyn::new(ElfDynamicTag::STRTAB, 0x1234);
+        assert_eq!(dyn_.tag(), ElfDynamicTag::STRTAB);
+        assert_eq!(dyn_.value(), 0x1234);
+
+        dyn_.set_tag(ElfDynamicTag::NULL);
+        dyn_.set_value(0x5678);
+        assert_eq!(dyn_.tag(), ElfDynamicTag::NULL);
+        assert_eq!(dyn_.value(), 0x5678);
     }
 }

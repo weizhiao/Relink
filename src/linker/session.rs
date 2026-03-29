@@ -92,7 +92,10 @@ where
     }
 }
 
-pub(crate) fn walk_breadth_first<K, E, F>(queue: &mut Vec<K>, mut visit: F) -> core::result::Result<(), E>
+pub(crate) fn walk_breadth_first<K, E, F>(
+    queue: &mut Vec<K>,
+    mut visit: F,
+) -> core::result::Result<(), E>
 where
     K: Clone,
     F: FnMut(&K, &mut Vec<K>) -> core::result::Result<(), E>,

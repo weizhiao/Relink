@@ -91,6 +91,30 @@ pub struct ElfPhdr {
 }
 
 impl ElfPhdr {
+    /// Creates an owned ELF program header from native-sized field values.
+    #[inline]
+    pub fn new(
+        program_type: ElfProgramType,
+        flags: ElfProgramFlags,
+        p_offset: usize,
+        p_vaddr: usize,
+        p_paddr: usize,
+        p_filesz: usize,
+        p_memsz: usize,
+        p_align: usize,
+    ) -> Self {
+        let mut phdr: <NativeElfLayout as ElfLayout>::Phdr = unsafe { core::mem::zeroed() };
+        phdr.p_type = program_type.raw();
+        phdr.p_flags = flags.bits();
+        phdr.p_offset = p_offset as _;
+        phdr.p_vaddr = p_vaddr as _;
+        phdr.p_paddr = p_paddr as _;
+        phdr.p_filesz = p_filesz as _;
+        phdr.p_memsz = p_memsz as _;
+        phdr.p_align = p_align as _;
+        Self { phdr }
+    }
+
     /// Returns the parsed ELF program type of this header.
     #[inline]
     pub const fn program_type(&self) -> ElfProgramType {
@@ -138,20 +162,69 @@ impl ElfPhdr {
     pub fn p_align(&self) -> usize {
         self.phdr.p_align as usize
     }
+
+    /// Sets the program type (`p_type`).
+    #[inline]
+    pub fn set_program_type(&mut self, program_type: ElfProgramType) {
+        self.phdr.p_type = program_type.raw();
+    }
+
+    /// Sets the program flags (`p_flags`).
+    #[inline]
+    pub fn set_flags(&mut self, flags: ElfProgramFlags) {
+        self.phdr.p_flags = flags.bits();
+    }
+
+    /// Sets the segment file offset (`p_offset`).
+    #[inline]
+    pub fn set_p_offset(&mut self, p_offset: usize) {
+        self.phdr.p_offset = p_offset as _;
+    }
+
+    /// Sets the segment virtual address (`p_vaddr`).
+    #[inline]
+    pub fn set_p_vaddr(&mut self, p_vaddr: usize) {
+        self.phdr.p_vaddr = p_vaddr as _;
+    }
+
+    /// Sets the segment physical address (`p_paddr`).
+    #[inline]
+    pub fn set_p_paddr(&mut self, p_paddr: usize) {
+        self.phdr.p_paddr = p_paddr as _;
+    }
+
+    /// Sets the segment size in the file (`p_filesz`).
+    #[inline]
+    pub fn set_p_filesz(&mut self, p_filesz: usize) {
+        self.phdr.p_filesz = p_filesz as _;
+    }
+
+    /// Sets the segment size in memory (`p_memsz`).
+    #[inline]
+    pub fn set_p_memsz(&mut self, p_memsz: usize) {
+        self.phdr.p_memsz = p_memsz as _;
+    }
+
+    /// Sets the segment alignment (`p_align`).
+    #[inline]
+    pub fn set_p_align(&mut self, p_align: usize) {
+        self.phdr.p_align = p_align as _;
+    }
 }
 
 impl Clone for ElfPhdr {
+    #[inline]
     fn clone(&self) -> Self {
-        let mut phdr: <NativeElfLayout as ElfLayout>::Phdr = unsafe { core::mem::zeroed() };
-        phdr.p_type = self.phdr.p_type;
-        phdr.p_flags = self.phdr.p_flags;
-        phdr.p_align = self.phdr.p_align;
-        phdr.p_offset = self.phdr.p_offset;
-        phdr.p_vaddr = self.phdr.p_vaddr;
-        phdr.p_paddr = self.phdr.p_paddr;
-        phdr.p_filesz = self.phdr.p_filesz;
-        phdr.p_memsz = self.phdr.p_memsz;
-        Self { phdr }
+        Self::new(
+            self.program_type(),
+            self.flags(),
+            self.p_offset(),
+            self.p_vaddr(),
+            self.p_paddr(),
+            self.p_filesz(),
+            self.p_memsz(),
+            self.p_align(),
+        )
     }
 }
 
@@ -171,5 +244,51 @@ impl ElfPhdrs {
             ElfPhdrs::Mmap(phdrs) => phdrs,
             ElfPhdrs::Vec(phdrs) => phdrs,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ElfPhdr, ElfProgramFlags, ElfProgramType};
+
+    #[test]
+    fn owned_phdr_round_trips_and_mutates() {
+        let mut phdr = ElfPhdr::new(
+            ElfProgramType::LOAD,
+            ElfProgramFlags::READ | ElfProgramFlags::WRITE,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+        );
+
+        assert_eq!(phdr.program_type(), ElfProgramType::LOAD);
+        assert_eq!(phdr.flags(), ElfProgramFlags::READ | ElfProgramFlags::WRITE);
+        assert_eq!(phdr.p_offset(), 1);
+        assert_eq!(phdr.p_vaddr(), 2);
+        assert_eq!(phdr.p_paddr(), 3);
+        assert_eq!(phdr.p_filesz(), 4);
+        assert_eq!(phdr.p_memsz(), 5);
+        assert_eq!(phdr.p_align(), 6);
+
+        phdr.set_program_type(ElfProgramType::DYNAMIC);
+        phdr.set_flags(ElfProgramFlags::READ);
+        phdr.set_p_offset(7);
+        phdr.set_p_vaddr(8);
+        phdr.set_p_paddr(9);
+        phdr.set_p_filesz(10);
+        phdr.set_p_memsz(11);
+        phdr.set_p_align(12);
+
+        assert_eq!(phdr.program_type(), ElfProgramType::DYNAMIC);
+        assert_eq!(phdr.flags(), ElfProgramFlags::READ);
+        assert_eq!(phdr.p_offset(), 7);
+        assert_eq!(phdr.p_vaddr(), 8);
+        assert_eq!(phdr.p_paddr(), 9);
+        assert_eq!(phdr.p_filesz(), 10);
+        assert_eq!(phdr.p_memsz(), 11);
+        assert_eq!(phdr.p_align(), 12);
     }
 }
