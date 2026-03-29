@@ -10,6 +10,7 @@ mod dynamic;
 mod ehdr;
 mod hash;
 mod phdrs;
+mod shdr;
 mod symbol;
 #[cfg(feature = "version")]
 mod version;
@@ -21,16 +22,18 @@ pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab};
 pub(crate) use hash::ElfHashTable;
 pub(crate) use hash::{HashTable, PreCompute};
 pub(crate) use phdrs::ElfPhdrs;
+pub(crate) use shdr::ElfShdr;
 #[cfg(any(feature = "object", feature = "version"))]
 pub(crate) use symbol::ElfStringTable;
 pub(crate) use symbol::{SymbolInfo, SymbolTable};
 
 // Public API exports
 pub use defs::{
-    ElfClass, ElfFileType, ElfMachine, ElfPhdr, ElfProgramFlags, ElfProgramType,
-    ElfRel, ElfRelType, ElfRela, ElfSectionFlags, ElfSectionType,
+    ElfClass, ElfFileType, ElfMachine, ElfPhdr, ElfProgramFlags, ElfProgramType, ElfRel,
+    ElfRelType, ElfRela,
 };
 pub use dynamic::{ElfDyn, ElfDynamicTag};
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::ElfHeader;
+pub use shdr::{ElfSectionFlags, ElfSectionType};
 pub use symbol::{ElfSymbol, ElfSymbolBind, ElfSymbolType};

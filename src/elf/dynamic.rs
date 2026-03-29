@@ -1,7 +1,7 @@
 //! Parsing `.dynamic` section
 use crate::{
     ParseDynamicError, Result,
-    elf::{ElfRel, ElfRelType, ElfRela, ElfRelr, NativeElfLayout, ElfLayout},
+    elf::{ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, NativeElfLayout},
     segment::ElfSegments,
 };
 use alloc::vec::Vec;
