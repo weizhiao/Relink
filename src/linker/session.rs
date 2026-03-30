@@ -29,6 +29,7 @@ pub(crate) struct LoadSession<K, D: 'static> {
     pub(crate) pending: BTreeMap<K, PendingEntry<K, D>>,
     pub(crate) staged: StagedStorage<K, D>,
     pub(crate) group_order: Vec<K>,
+    pub(crate) scope_overrides: BTreeMap<K, Box<[K]>>,
 }
 
 impl<K, D: 'static> LoadSession<K, D> {
@@ -38,6 +39,7 @@ impl<K, D: 'static> LoadSession<K, D> {
             pending: BTreeMap::new(),
             staged: StagedStorage::new(),
             group_order: Vec::new(),
+            scope_overrides: BTreeMap::new(),
         }
     }
 }
@@ -74,6 +76,14 @@ where
     pub(crate) fn pending_state(&self, key: &K) -> PendingState {
         self.pending_entry(key).state
     }
+
+    #[inline]
+    pub(crate) fn scope_keys(&self, key: &K) -> &[K] {
+        self.scope_overrides
+            .get(key)
+            .map(Box::as_ref)
+            .unwrap_or(self.group_order.as_slice())
+    }
 }
 
 impl<K, D: 'static> LoadSession<K, D>
@@ -86,9 +96,36 @@ where
     }
 
     #[inline]
+    pub(crate) fn insert_pending_resolved(
+        &mut self,
+        key: K,
+        raw: RawDylib<D>,
+        direct_deps: Box<[K]>,
+    ) {
+        self.pending.insert(
+            key,
+            PendingEntry {
+                raw,
+                direct_deps,
+                state: PendingState::Resolved,
+            },
+        );
+    }
+
+    #[inline]
     pub(crate) fn insert_staged(&mut self, key: K, module: LoadedCore<D>, direct_deps: Box<[K]>) {
         self.staged
             .insert(StagedEntry::new(key, module, direct_deps));
+    }
+
+    #[inline]
+    pub(crate) fn set_scope_override(&mut self, key: K, scope: Box<[K]>) {
+        self.scope_overrides.insert(key, scope);
+    }
+
+    #[inline]
+    pub(crate) fn clear_scope_override(&mut self, key: &K) -> Option<Box<[K]>> {
+        self.scope_overrides.remove(key)
     }
 }
 
@@ -113,7 +150,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::walk_breadth_first;
+    use super::{LoadSession, walk_breadth_first};
     use alloc::{collections::BTreeMap, vec, vec::Vec};
 
     #[test]
@@ -135,5 +172,22 @@ mod tests {
         .unwrap();
 
         assert_eq!(visited, vec!["A", "B", "C", "D"]);
+    }
+
+    #[test]
+    fn scope_override_defaults_to_group_order() {
+        let mut session = LoadSession::<&'static str, ()>::new();
+        session.group_order = vec!["root", "dep"];
+
+        assert_eq!(session.scope_keys(&"root"), ["root", "dep"]);
+
+        session.set_scope_override("root", vec!["dep"].into_boxed_slice());
+        assert_eq!(session.scope_keys(&"root"), ["dep"]);
+
+        assert_eq!(
+            session.clear_scope_override(&"root"),
+            Some(vec!["dep"].into_boxed_slice())
+        );
+        assert_eq!(session.scope_keys(&"root"), ["root", "dep"]);
     }
 }

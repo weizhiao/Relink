@@ -20,6 +20,7 @@ mod dynamic;
 mod exec;
 #[cfg(feature = "object")]
 mod object;
+mod scanned;
 mod symbol;
 
 #[cfg(any(feature = "lazy-binding", feature = "object"))]
@@ -34,6 +35,7 @@ pub use dylib::{LoadedDylib, RawDylib};
 pub use exec::{LoadedExec, RawExec};
 #[cfg(feature = "object")]
 pub use object::{LoadedObject, RawObject};
+pub use scanned::{ScannedDylib, ScannedDynamicInfo};
 pub use symbol::Symbol;
 
 /// A mapped but unrelocated ELF image.

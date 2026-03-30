@@ -1,7 +1,11 @@
-use super::request::{DependencyRequest, RelocationRequest};
+use super::{
+    plan::LinkPlan,
+    request::{DependencyRequest, RelocationRequest},
+    view::LinkContextView,
+};
 use crate::{
     Result,
-    image::{LoadedCore, RawDylib},
+    image::{LoadedCore, RawDylib, ScannedDylib},
 };
 use alloc::boxed::Box;
 
@@ -96,6 +100,92 @@ where
 {
     #[inline]
     fn relocate(&mut self, req: RelocationRequest<'_, K, D>) -> Result<LoadedCore<D>> {
+        (self)(req)
+    }
+}
+
+/// A single materialization request emitted after scan-time planning.
+pub struct MaterializationRequest<'a, K, D: 'static> {
+    key: &'a K,
+    module: &'a ScannedDylib<D>,
+    direct_deps: &'a [K],
+    plan: &'a LinkPlan<K, D>,
+    context: LinkContextView<'a, K, D>,
+}
+
+impl<'a, K, D: 'static> MaterializationRequest<'a, K, D> {
+    #[inline]
+    pub(crate) fn new(
+        key: &'a K,
+        module: &'a ScannedDylib<D>,
+        direct_deps: &'a [K],
+        plan: &'a LinkPlan<K, D>,
+        context: LinkContextView<'a, K, D>,
+    ) -> Self {
+        Self {
+            key,
+            module,
+            direct_deps,
+            plan,
+            context,
+        }
+    }
+
+    /// Returns the selected key for the module being materialized.
+    #[inline]
+    pub fn key(&self) -> &'a K {
+        self.key
+    }
+
+    /// Returns the scanned metadata for the module being materialized.
+    #[inline]
+    pub fn module(&self) -> &'a ScannedDylib<D> {
+        self.module
+    }
+
+    /// Returns the canonical direct dependencies of this module.
+    #[inline]
+    pub fn direct_deps(&self) -> &'a [K] {
+        self.direct_deps
+    }
+
+    /// Returns the full pre-map link plan.
+    #[inline]
+    pub fn plan(&self) -> &'a LinkPlan<K, D> {
+        self.plan
+    }
+
+    /// Returns the already visible loaded modules in the current context.
+    #[inline]
+    pub fn context(&self) -> LinkContextView<'a, K, D> {
+        self.context
+    }
+}
+
+/// Materialization callbacks for turning a scanned module into a raw or loaded one.
+///
+/// The scan-first path keeps the dependency graph in [`LinkPlan`], so
+/// materializers must preserve the planned key and should treat
+/// [`MaterializationRequest::direct_deps`] as authoritative. Any direct
+/// dependency list attached to [`ResolvedModule::Loaded`] is ignored when
+/// staging scan-planned modules.
+pub trait ModuleMaterializer<K, D: 'static> {
+    /// Produces the concrete module representation selected for this plan node.
+    fn materialize(
+        &mut self,
+        req: MaterializationRequest<'_, K, D>,
+    ) -> Result<ResolvedModule<K, D>>;
+}
+
+impl<K, D: 'static, F> ModuleMaterializer<K, D> for F
+where
+    F: for<'a> FnMut(MaterializationRequest<'a, K, D>) -> Result<ResolvedModule<K, D>>,
+{
+    #[inline]
+    fn materialize(
+        &mut self,
+        req: MaterializationRequest<'_, K, D>,
+    ) -> Result<ResolvedModule<K, D>> {
         (self)(req)
     }
 }

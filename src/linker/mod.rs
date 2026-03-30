@@ -8,13 +8,18 @@
 
 mod api;
 mod context;
+mod plan;
 mod request;
+mod scan;
 mod session;
 mod storage;
 mod view;
 
-pub use crate::LinkerError;
-pub use api::{ModuleRelocator, ModuleResolver, ResolvedModule};
+pub use api::{
+    MaterializationRequest, ModuleMaterializer, ModuleRelocator, ModuleResolver, ResolvedModule,
+};
 pub use context::LinkContext;
+pub use plan::{LinkPass, LinkPipeline, LinkPlan};
 pub use request::{DependencyRequest, RelocationRequest};
+pub use scan::{ModuleScanner, ResolvedScan, ScanContext, ScanContextView, ScanRequest};
 pub use view::LinkContextView;

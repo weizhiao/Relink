@@ -214,7 +214,7 @@ where
             shdr_segments.mprotect::<M>()?;
             Ok(())
         });
-        let user_data = self.load_user_data(&name, &ehdr, None, Some(shdrs));
+        let user_data = self.load_user_data(&name, &ehdr, None, Some(shdrs), None);
 
         ObjectBuilder::new(
             name, shdrs, init_fn, fini_fn, segments, mprotect, pltgot, user_data,

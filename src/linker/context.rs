@@ -1,6 +1,10 @@
 use super::{
-    api::{ModuleRelocator, ModuleResolver, ResolvedModule},
+    api::{
+        MaterializationRequest, ModuleMaterializer, ModuleRelocator, ModuleResolver, ResolvedModule,
+    },
+    plan::{LinkPipeline, LinkPlan},
     request::{DependencyRequest, RelocationRequest},
+    scan::{ModuleScanner, ScanContext},
     session::{LoadSession, PendingEntry, PendingState, walk_breadth_first},
     storage::{CommittedEntry, CommittedStorage, StagedStorage},
     view::LinkContextView,
@@ -21,6 +25,7 @@ use core::mem;
 /// are committed into the context once the whole load succeeds.
 pub struct LinkContext<K, D: 'static> {
     committed: CommittedStorage<K, D>,
+    scan: ScanContext<K, D>,
     scratch_relocation_order: Vec<K>,
 }
 
@@ -36,6 +41,7 @@ impl<K, D: 'static> LinkContext<K, D> {
     pub const fn new() -> Self {
         Self {
             committed: CommittedStorage::new(),
+            scan: ScanContext::new(),
             scratch_relocation_order: Vec::new(),
         }
     }
@@ -75,6 +81,58 @@ where
         R: ModuleResolver<K, D>,
         L: ModuleRelocator<K, D>,
     {
+        self.load_impl(key, resolver, relocator)
+    }
+
+    /// Loads one module through the scan-first path:
+    /// `scan -> plan -> materialize -> relocate -> commit`.
+    ///
+    /// This path keeps metadata discovery separate from the original
+    /// map-first resolver flow and is the intended entry point for whole-graph
+    /// planning such as cross-dylib layout or hugepage optimization.
+    pub fn load_with_scan<S, M, L>(
+        &mut self,
+        key: K,
+        scanner: &mut S,
+        materializer: &mut M,
+        relocator: &mut L,
+    ) -> Result<LoadedCore<D>>
+    where
+        S: ModuleScanner<K, D>,
+        M: ModuleMaterializer<K, D>,
+        L: ModuleRelocator<K, D>,
+    {
+        self.load_with_scan_impl(key, scanner, None, materializer, relocator)
+    }
+
+    /// Loads one module through the scan-first path while running pre-map link
+    /// passes over the discovered [`LinkPlan`] before materialization begins.
+    pub fn load_with_scan_pipeline<'a, S, M, L>(
+        &mut self,
+        key: K,
+        scanner: &mut S,
+        pipeline: &mut LinkPipeline<'a, K, D>,
+        materializer: &mut M,
+        relocator: &mut L,
+    ) -> Result<LoadedCore<D>>
+    where
+        S: ModuleScanner<K, D>,
+        M: ModuleMaterializer<K, D>,
+        L: ModuleRelocator<K, D>,
+    {
+        self.load_with_scan_impl(key, scanner, Some(pipeline), materializer, relocator)
+    }
+
+    fn load_impl<R, L>(
+        &mut self,
+        key: K,
+        resolver: &mut R,
+        relocator: &mut L,
+    ) -> Result<LoadedCore<D>>
+    where
+        R: ModuleResolver<K, D>,
+        L: ModuleRelocator<K, D>,
+    {
         if let Some(loaded) = self.committed.get(&key) {
             return Ok(loaded.clone());
         }
@@ -93,6 +151,43 @@ where
             .committed
             .get(&root)
             .expect("loaded module missing from link context after load")
+            .clone();
+
+        Ok(loaded)
+    }
+
+    fn load_with_scan_impl<'a, S, M, L>(
+        &mut self,
+        key: K,
+        scanner: &mut S,
+        mut pipeline: Option<&mut LinkPipeline<'a, K, D>>,
+        materializer: &mut M,
+        relocator: &mut L,
+    ) -> Result<LoadedCore<D>>
+    where
+        S: ModuleScanner<K, D>,
+        M: ModuleMaterializer<K, D>,
+        L: ModuleRelocator<K, D>,
+    {
+        let mut plan = self.scan.discover(key, scanner)?;
+        if let Some(pipeline) = pipeline.as_deref_mut() {
+            pipeline.run(&mut plan)?;
+        }
+
+        if let Some(loaded) = self.committed.get(plan.root_key()) {
+            return Ok(loaded.clone());
+        }
+
+        let root = plan.root_key().clone();
+        let mut session = LoadSession::new();
+        self.materialize_plan(&plan, &mut session, materializer)?;
+        self.relocate_pending_modules(&root, &mut session, relocator)?;
+        self.commit_session(&mut session);
+
+        let loaded = self
+            .committed
+            .get(&root)
+            .expect("loaded module missing from link context after scan load")
             .clone();
 
         Ok(loaded)
@@ -200,6 +295,7 @@ where
                     entry.raw,
                     self.load_view(session),
                     session.group_order.as_slice(),
+                    session.scope_keys(&key),
                 );
                 let loaded = relocator.relocate(req)?;
                 session.insert_staged(key, loaded, entry.direct_deps);
@@ -209,6 +305,47 @@ where
 
         self.scratch_relocation_order = order;
         result
+    }
+
+    fn materialize_plan<M>(
+        &self,
+        plan: &LinkPlan<K, D>,
+        session: &mut LoadSession<K, D>,
+        materializer: &mut M,
+    ) -> Result<()>
+    where
+        M: ModuleMaterializer<K, D>,
+    {
+        session
+            .group_order
+            .extend(plan.group_order().iter().cloned());
+
+        for key in plan.group_order() {
+            let scope = plan.scope_keys(key);
+            if scope != plan.group_order() {
+                session.set_scope_override(key.clone(), scope.to_vec().into_boxed_slice());
+            }
+
+            if self.is_visible_loaded(key, session) {
+                continue;
+            }
+
+            let module = plan
+                .get(key)
+                .expect("link plan referenced a missing scanned module");
+            let direct_deps = plan.direct_deps(key).unwrap_or(&[]);
+            let request = MaterializationRequest::new(
+                key,
+                module,
+                direct_deps,
+                plan,
+                self.load_view(session),
+            );
+            let resolved = materializer.materialize(request)?;
+            self.stage_materialized_module(key, direct_deps, resolved, session);
+        }
+
+        Ok(())
     }
 
     fn build_relocation_order(
@@ -310,6 +447,49 @@ where
                 );
                 session.insert_staged(key.clone(), loaded, direct_deps);
                 key
+            }
+        }
+    }
+
+    fn stage_materialized_module(
+        &self,
+        expected_key: &K,
+        direct_deps: &[K],
+        module: ResolvedModule<K, D>,
+        session: &mut LoadSession<K, D>,
+    ) {
+        match module {
+            ResolvedModule::Existing(key) => {
+                assert!(
+                    &key == expected_key,
+                    "materializer changed the planned key; link plans must preserve canonical scan keys"
+                );
+                assert!(
+                    self.is_visible_loaded(&key, session),
+                    "materializer referenced an unknown visible key"
+                );
+            }
+            ResolvedModule::Raw(key, raw) => {
+                assert!(
+                    &key == expected_key,
+                    "materializer changed the planned key; link plans must preserve canonical scan keys"
+                );
+                assert!(
+                    !self.is_known_key(&key, session),
+                    "materializer attached a raw module to an already-known key"
+                );
+                session.insert_pending_resolved(key, raw, direct_deps.to_vec().into_boxed_slice());
+            }
+            ResolvedModule::Loaded(key, loaded, _) => {
+                assert!(
+                    &key == expected_key,
+                    "materializer changed the planned key; link plans must preserve canonical scan keys"
+                );
+                assert!(
+                    !self.is_known_key(&key, session),
+                    "materializer attached a loaded module to an already-known key"
+                );
+                session.insert_staged(key, loaded, direct_deps.to_vec().into_boxed_slice());
             }
         }
     }

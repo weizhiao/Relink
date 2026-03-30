@@ -1,5 +1,6 @@
 use super::view::LinkContextView;
 use crate::image::RawDylib;
+use alloc::vec::Vec;
 
 /// A single dependency-resolution request.
 pub struct DependencyRequest<'a, K, D: 'static> {
@@ -80,6 +81,7 @@ pub struct RelocationRequest<'a, K, D: 'static> {
     raw: RawDylib<D>,
     context: LinkContextView<'a, K, D>,
     group_order: &'a [K],
+    scope_order: &'a [K],
 }
 
 impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
@@ -89,12 +91,14 @@ impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
         raw: RawDylib<D>,
         context: LinkContextView<'a, K, D>,
         group_order: &'a [K],
+        scope_order: &'a [K],
     ) -> Self {
         Self {
             key,
             raw,
             context,
             group_order,
+            scope_order,
         }
     }
 
@@ -120,6 +124,23 @@ impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
     #[inline]
     pub fn group_order(&self) -> &'a [K] {
         self.group_order
+    }
+
+    /// Returns the planned relocation-scope order for the current module.
+    #[inline]
+    pub fn scope_order(&self) -> &'a [K] {
+        self.scope_order
+    }
+
+    /// Builds the currently visible relocation scope in planned order.
+    pub fn build_scope(&self) -> Vec<crate::image::LoadedCore<D>>
+    where
+        K: Ord,
+    {
+        self.scope_order
+            .iter()
+            .filter_map(|key| self.context.get(key).cloned())
+            .collect()
     }
 
     /// Consumes the request and returns all relocation inputs.

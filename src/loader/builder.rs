@@ -234,14 +234,21 @@ where
         (self.init_fn.clone(), self.fini_fn.clone())
     }
 
-    pub(crate) fn load_user_data(
+    pub(crate) fn load_user_data<'a>(
         &self,
-        name: &str,
-        ehdr: &ElfHeader,
-        phdrs: Option<&[ElfPhdr]>,
-        shdrs: Option<&[ElfShdr]>,
+        name: &'a str,
+        ehdr: &'a ElfHeader,
+        phdrs: Option<&'a [ElfPhdr]>,
+        shdrs: Option<&'a [ElfShdr]>,
+        shdr_reader: Option<&'a mut dyn crate::input::ElfReader>,
     ) -> D {
-        (self.user_data_loader)(&UserDataLoaderContext::new(name, ehdr, phdrs, shdrs))
+        (self.user_data_loader)(&UserDataLoaderContext::new(
+            name,
+            ehdr,
+            phdrs,
+            shdrs,
+            shdr_reader,
+        ))
     }
 
     pub(crate) fn create_builder<M, Tls>(
@@ -261,7 +268,7 @@ where
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
 
-        let user_data = self.load_user_data(&name, &ehdr, Some(phdrs), None);
+        let user_data = self.load_user_data(&name, &ehdr, Some(phdrs), None, Some(&mut object));
 
         Ok(ImageBuilder::new(
             &mut self.hook,

@@ -14,17 +14,23 @@
 mod buffer;
 mod builder;
 mod load;
+mod scan;
 
 use crate::{
     Result,
     elf::{ElfHeader, ElfPhdr, ElfShdr},
+    input::ElfReader,
+    logging,
     os::{DefaultMmap, Mmap},
     segment::ElfSegments,
     sync::Arc,
     tls::TlsResolver,
 };
-use alloc::boxed::Box;
-use core::marker::PhantomData;
+use alloc::{boxed::Box, vec::Vec};
+use core::{
+    cell::{Cell, UnsafeCell},
+    marker::PhantomData,
+};
 
 pub(crate) use buffer::ElfBuf;
 pub(crate) use builder::ImageBuilder;
@@ -144,6 +150,80 @@ where
 
 pub(crate) type DynLifecycleHandler = Arc<Box<dyn LifecycleHandler>>;
 
+struct LazyShdrs<'a> {
+    name: &'a str,
+    ehdr: &'a ElfHeader,
+    reader: Option<*mut (dyn ElfReader + 'a)>,
+    cached: UnsafeCell<Option<Box<[ElfShdr]>>>,
+    attempted: Cell<bool>,
+    _marker: PhantomData<&'a mut dyn ElfReader>,
+}
+
+impl<'a> LazyShdrs<'a> {
+    #[inline]
+    fn unavailable(name: &'a str, ehdr: &'a ElfHeader) -> Self {
+        Self {
+            name,
+            ehdr,
+            reader: None,
+            cached: UnsafeCell::new(None),
+            attempted: Cell::new(false),
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline]
+    fn from_reader(name: &'a str, ehdr: &'a ElfHeader, reader: &'a mut dyn ElfReader) -> Self {
+        Self {
+            name,
+            ehdr,
+            reader: Some(reader as *mut dyn ElfReader),
+            cached: UnsafeCell::new(None),
+            attempted: Cell::new(false),
+            _marker: PhantomData,
+        }
+    }
+
+    fn load(&self) -> Option<&[ElfShdr]> {
+        let cached = unsafe { &*self.cached.get() };
+        if let Some(shdrs) = cached.as_deref() {
+            return Some(shdrs);
+        }
+
+        if self.attempted.replace(true) {
+            return None;
+        }
+
+        let Some((start, size)) = self.ehdr.checked_shdr_layout().ok().flatten() else {
+            return None;
+        };
+        let count = self.ehdr.e_shnum();
+        let Some(reader) = self.reader else {
+            return None;
+        };
+
+        let mut shdrs = Vec::<ElfShdr>::with_capacity(count);
+        unsafe {
+            shdrs.set_len(count);
+        }
+        let bytes =
+            unsafe { core::slice::from_raw_parts_mut(shdrs.as_mut_ptr().cast::<u8>(), size) };
+
+        if let Err(err) = unsafe { (&mut *reader).read(bytes, start) } {
+            logging::debug!(
+                "failed to lazily read section headers for {}: {err}",
+                self.name
+            );
+            return None;
+        }
+
+        unsafe {
+            *self.cached.get() = Some(shdrs.into_boxed_slice());
+            (&*self.cached.get()).as_deref()
+        }
+    }
+}
+
 /// Context passed to [`Loader::with_context_loader`].
 pub struct UserDataLoaderContext<'a> {
     /// The name of the ELF object being loaded.
@@ -154,6 +234,8 @@ pub struct UserDataLoaderContext<'a> {
     phdrs: Option<&'a [ElfPhdr]>,
     /// The section headers of the object.
     shdrs: Option<&'a [ElfShdr]>,
+    /// Lazily loads section headers when the hot path does not need them.
+    lazy_shdrs: LazyShdrs<'a>,
 }
 
 impl<'a> UserDataLoaderContext<'a> {
@@ -162,12 +244,16 @@ impl<'a> UserDataLoaderContext<'a> {
         ehdr: &'a ElfHeader,
         phdrs: Option<&'a [ElfPhdr]>,
         shdrs: Option<&'a [ElfShdr]>,
+        shdr_reader: Option<&'a mut dyn ElfReader>,
     ) -> Self {
         Self {
             name,
             ehdr,
             phdrs,
             shdrs,
+            lazy_shdrs: shdr_reader
+                .map(|reader| LazyShdrs::from_reader(name, ehdr, reader))
+                .unwrap_or_else(|| LazyShdrs::unavailable(name, ehdr)),
         }
     }
 
@@ -187,8 +273,12 @@ impl<'a> UserDataLoaderContext<'a> {
     }
 
     /// Returns the section headers of the object.
+    ///
+    /// For relocatable objects these are already available. For executables and
+    /// shared objects they are loaded on first access so the default load path
+    /// does not pay the cost unless a context loader actually asks for them.
     pub fn shdrs(&self) -> Option<&[ElfShdr]> {
-        self.shdrs
+        self.shdrs.or_else(|| self.lazy_shdrs.load())
     }
 }
 
