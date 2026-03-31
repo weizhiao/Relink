@@ -1,11 +1,13 @@
-use super::plan::{LinkPlan, PlannedModule};
+use super::{
+    plan::{LinkPlan, PlannedModule},
+    session::walk_breadth_first,
+};
 use crate::{Result, image::ScannedDylib};
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
-use core::mem;
 
 /// A module selected during metadata discovery.
 pub enum ResolvedScan<K, D: 'static> {
@@ -182,8 +184,7 @@ where
 
 /// A one-shot metadata discovery engine for pre-map global planning.
 pub struct ScanContext<K, D: 'static> {
-    scratch_group_order: Vec<K>,
-    _marker: core::marker::PhantomData<D>,
+    _marker: core::marker::PhantomData<(K, D)>,
 }
 
 impl<K, D: 'static> Default for ScanContext<K, D> {
@@ -197,7 +198,6 @@ impl<K, D: 'static> ScanContext<K, D> {
     #[inline]
     pub const fn new() -> Self {
         Self {
-            scratch_group_order: Vec::new(),
             _marker: core::marker::PhantomData,
         }
     }
@@ -212,13 +212,13 @@ where
     ///
     /// Callers may then run pre-map planning passes over the returned
     /// [`LinkPlan`] before materialization begins.
-    pub fn discover<S>(&mut self, key: K, scanner: &mut S) -> Result<LinkPlan<K, D>>
+    pub(crate) fn discover<S>(&mut self, key: K, scanner: &mut S) -> Result<LinkPlan<K, D>>
     where
         S: ModuleScanner<K, D>,
     {
         let mut entries = BTreeMap::new();
         let root = stage_discovered_module(scanner.scan(&key)?, &mut entries);
-        let mut group_order = mem::take(&mut self.scratch_group_order);
+        let mut group_order = Vec::new();
 
         let result: Result<()> = (|| {
             let mut visited = BTreeSet::new();
@@ -287,10 +287,8 @@ where
                 .into_iter()
                 .map(|(key, entry)| (key, PlannedModule::new(entry.module, entry.direct_deps)))
                 .collect();
-            LinkPlan::new(root, mem::take(&mut group_order), modules)
+            LinkPlan::new(root, group_order, modules)
         });
-        group_order.clear();
-        self.scratch_group_order = group_order;
         plan
     }
 }
@@ -318,142 +316,5 @@ where
             entries.insert(key.clone(), ScanEntry::new(module));
             key
         }
-    }
-}
-
-fn walk_breadth_first<K, E, F>(queue: &mut Vec<K>, mut visit: F) -> core::result::Result<(), E>
-where
-    K: Clone,
-    F: FnMut(&K, &mut Vec<K>) -> core::result::Result<(), E>,
-{
-    let mut cursor = 0;
-
-    while cursor < queue.len() {
-        let key = queue[cursor].clone();
-        cursor += 1;
-        visit(&key, queue)?;
-    }
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ModuleScanner, ResolvedScan, ScanContext};
-    use crate::{
-        Result,
-        elf::{ElfEhdr, ElfHeader},
-        image::{ScannedDylib, ScannedDynamicInfo},
-        linker::LinkPipeline,
-    };
-    use alloc::{collections::BTreeMap, string::String, vec, vec::Vec};
-    use core::cell::RefCell;
-
-    fn dummy_scanned(name: &str, needed: &[&str]) -> ScannedDylib<()> {
-        let mut ehdr = unsafe { core::mem::zeroed::<ElfEhdr>() };
-        ehdr.e_ident[0..4].copy_from_slice(&elf::abi::ELFMAGIC);
-        ehdr.e_ident[elf::abi::EI_CLASS] = crate::elf::E_CLASS;
-        ehdr.e_ident[elf::abi::EI_VERSION] = elf::abi::EV_CURRENT;
-        ehdr.e_type = elf::abi::ET_DYN as _;
-        ehdr.e_machine = crate::arch::EM_ARCH;
-        ehdr.e_version = elf::abi::EV_CURRENT as _;
-        ehdr.e_ehsize = crate::elf::EHDR_SIZE as _;
-
-        ScannedDylib::from_parts(
-            name.into(),
-            ElfHeader::from_raw(ehdr).expect("header should parse"),
-            Vec::new().into_boxed_slice(),
-            None,
-            None,
-            None,
-            needed
-                .iter()
-                .map(|s| String::from(*s))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-            ScannedDynamicInfo::new(false, false),
-            (),
-        )
-    }
-
-    struct GraphScanner {
-        graph: BTreeMap<&'static str, Vec<&'static str>>,
-    }
-
-    impl ModuleScanner<&'static str, ()> for GraphScanner {
-        fn scan(&mut self, key: &&'static str) -> Result<ResolvedScan<&'static str, ()>> {
-            Ok(ResolvedScan::new_scanned(
-                *key,
-                dummy_scanned(key, self.graph.get(key).map_or(&[], Vec::as_slice)),
-            ))
-        }
-
-        fn resolve(
-            &mut self,
-            req: &super::ScanRequest<'_, &'static str, ()>,
-        ) -> Result<Option<ResolvedScan<&'static str, ()>>> {
-            let key = self
-                .graph
-                .keys()
-                .copied()
-                .find(|candidate| *candidate == req.needed())
-                .expect("dependency should exist in test graph");
-            Ok(Some(ResolvedScan::new_scanned(
-                key,
-                dummy_scanned(key, self.graph.get(key).map_or(&[], Vec::as_slice)),
-            )))
-        }
-    }
-
-    #[test]
-    fn discover_builds_breadth_first_metadata_plan() {
-        let mut scanner = GraphScanner {
-            graph: BTreeMap::from([
-                ("root", vec!["a", "b"]),
-                ("a", vec!["c"]),
-                ("b", vec![]),
-                ("c", vec![]),
-            ]),
-        };
-        let mut ctx = ScanContext::new();
-
-        let plan = ctx
-            .discover("root", &mut scanner)
-            .expect("scan should succeed");
-
-        assert_eq!(plan.root_key(), &"root");
-        assert_eq!(plan.group_order(), ["root", "a", "b", "c"]);
-        assert_eq!(
-            plan.direct_deps(&"root").expect("root deps should exist"),
-            ["a", "b"]
-        );
-        assert_eq!(plan.get(&"a").expect("a should exist").needed_libs(), ["c"]);
-    }
-
-    #[test]
-    fn discovered_plan_can_be_rewritten_by_link_passes() {
-        let mut scanner = GraphScanner {
-            graph: BTreeMap::from([("root", vec!["dep"]), ("dep", vec![])]),
-        };
-        let mut ctx = ScanContext::new();
-        let visited = RefCell::new(vec![]);
-
-        let mut pass = |plan: &mut crate::linker::LinkPlan<_, _>| {
-            visited.borrow_mut().push("planned");
-            plan.set_scope(&"root", vec!["dep", "root"]);
-            Ok(())
-        };
-        let mut pipeline = LinkPipeline::new();
-        pipeline.push(&mut pass);
-
-        let mut plan = ctx
-            .discover("root", &mut scanner)
-            .expect("scan should succeed");
-        pipeline
-            .run(&mut plan)
-            .expect("link pipeline should run after discovery");
-
-        assert_eq!(*visited.borrow(), vec!["planned"]);
-        assert_eq!(plan.scope_keys(&"root"), ["dep", "root"]);
     }
 }

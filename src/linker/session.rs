@@ -122,11 +122,6 @@ where
     pub(crate) fn set_scope_override(&mut self, key: K, scope: Box<[K]>) {
         self.scope_overrides.insert(key, scope);
     }
-
-    #[inline]
-    pub(crate) fn clear_scope_override(&mut self, key: &K) -> Option<Box<[K]>> {
-        self.scope_overrides.remove(key)
-    }
 }
 
 pub(crate) fn walk_breadth_first<K, E, F>(
@@ -185,7 +180,7 @@ mod tests {
         assert_eq!(session.scope_keys(&"root"), ["dep"]);
 
         assert_eq!(
-            session.clear_scope_override(&"root"),
+            session.scope_overrides.remove(&"root"),
             Some(vec!["dep"].into_boxed_slice())
         );
         assert_eq!(session.scope_keys(&"root"), ["root", "dep"]);

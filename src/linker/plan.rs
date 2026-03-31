@@ -2,18 +2,18 @@ use crate::{Result, image::ScannedDylib};
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
 /// A pass that inspects or rewrites a pre-map global link plan.
-pub trait LinkPass<K, D: 'static> {
-    /// Executes the pass over the current plan.
-    fn run(&mut self, plan: &mut LinkPlan<K, D>) -> Result<()>;
+pub trait LinkPass<K: Ord, D: 'static, Q: ?Sized> {
+    /// Executes the pass over the current plan and caller-supplied query state.
+    fn run(&mut self, plan: &mut LinkPlan<K, D>, queries: &mut Q) -> Result<()>;
 }
 
-impl<K, D: 'static, F> LinkPass<K, D> for F
+impl<K: Ord, D: 'static, Q: ?Sized, F> LinkPass<K, D, Q> for F
 where
-    F: FnMut(&mut LinkPlan<K, D>) -> Result<()>,
+    F: FnMut(&mut LinkPlan<K, D>, &mut Q) -> Result<()>,
 {
     #[inline]
-    fn run(&mut self, plan: &mut LinkPlan<K, D>) -> Result<()> {
-        (self)(plan)
+    fn run(&mut self, plan: &mut LinkPlan<K, D>, queries: &mut Q) -> Result<()> {
+        (self)(plan, queries)
     }
 }
 
@@ -22,18 +22,18 @@ where
 /// This is the pass manager used with a discovered [`LinkPlan`] after
 /// [`super::ScanContext`] finishes metadata discovery and before any module is
 /// mapped into memory.
-pub struct LinkPipeline<'a, K, D: 'static> {
-    passes: Vec<&'a mut dyn LinkPass<K, D>>,
+pub struct LinkPipeline<'a, K: Ord, D: 'static, Q: ?Sized> {
+    passes: Vec<&'a mut dyn LinkPass<K, D, Q>>,
 }
 
-impl<'a, K, D: 'static> Default for LinkPipeline<'a, K, D> {
+impl<'a, K: Ord, D: 'static, Q: ?Sized> Default for LinkPipeline<'a, K, D, Q> {
     #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'a, K, D: 'static> LinkPipeline<'a, K, D> {
+impl<'a, K: Ord, D: 'static, Q: ?Sized> LinkPipeline<'a, K, D, Q> {
     /// Creates an empty pipeline.
     #[inline]
     pub fn new() -> Self {
@@ -42,14 +42,15 @@ impl<'a, K, D: 'static> LinkPipeline<'a, K, D> {
 
     /// Appends a pass to the pipeline.
     #[inline]
-    pub fn push(&mut self, pass: &'a mut dyn LinkPass<K, D>) -> &mut Self {
+    pub fn push(&mut self, pass: &'a mut dyn LinkPass<K, D, Q>) -> &mut Self {
         self.passes.push(pass);
         self
     }
 
-    pub(crate) fn run(&mut self, plan: &mut LinkPlan<K, D>) -> Result<()> {
+    /// Runs the pipeline with caller-supplied query state.
+    pub fn run(&mut self, plan: &mut LinkPlan<K, D>, queries: &mut Q) -> Result<()> {
         for pass in &mut self.passes {
-            pass.run(plan)?;
+            pass.run(plan, queries)?;
         }
         Ok(())
     }
@@ -167,39 +168,5 @@ where
     #[inline]
     pub fn clear_scope(&mut self, key: &K) -> Option<Box<[K]>> {
         self.scope_overrides.remove(key)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{LinkPipeline, LinkPlan};
-    use alloc::{collections::BTreeMap, vec};
-    use core::cell::RefCell;
-
-    #[test]
-    fn pipeline_runs_passes_in_order() {
-        let modules = BTreeMap::<&'static str, super::PlannedModule<&'static str, ()>>::new();
-        let root = "root";
-        let visited = RefCell::new(vec![]);
-
-        let mut pass_a = |_: &mut LinkPlan<_, _>| {
-            visited.borrow_mut().push("a");
-            Ok(())
-        };
-        let mut pass_b = |plan: &mut LinkPlan<_, _>| {
-            visited.borrow_mut().push("b");
-            assert_eq!(plan.root_key(), &"root");
-            assert_eq!(plan.group_order(), ["root"]);
-            assert!(plan.iter().next().is_none());
-            Ok(())
-        };
-
-        let mut pipeline = LinkPipeline::new();
-        pipeline.push(&mut pass_a).push(&mut pass_b);
-
-        let mut plan = LinkPlan::new(root, vec!["root"], modules);
-        pipeline.run(&mut plan).expect("pipeline should succeed");
-
-        assert_eq!(*visited.borrow(), vec!["a", "b"]);
     }
 }

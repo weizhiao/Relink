@@ -21,5 +21,5 @@ pub use api::{
 pub use context::LinkContext;
 pub use plan::{LinkPass, LinkPipeline, LinkPlan};
 pub use request::{DependencyRequest, RelocationRequest};
-pub use scan::{ModuleScanner, ResolvedScan, ScanContext, ScanContextView, ScanRequest};
+pub use scan::{ModuleScanner, ResolvedScan, ScanContextView, ScanRequest};
 pub use view::LinkContextView;

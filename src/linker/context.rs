@@ -81,58 +81,6 @@ where
         R: ModuleResolver<K, D>,
         L: ModuleRelocator<K, D>,
     {
-        self.load_impl(key, resolver, relocator)
-    }
-
-    /// Loads one module through the scan-first path:
-    /// `scan -> plan -> materialize -> relocate -> commit`.
-    ///
-    /// This path keeps metadata discovery separate from the original
-    /// map-first resolver flow and is the intended entry point for whole-graph
-    /// planning such as cross-dylib layout or hugepage optimization.
-    pub fn load_with_scan<S, M, L>(
-        &mut self,
-        key: K,
-        scanner: &mut S,
-        materializer: &mut M,
-        relocator: &mut L,
-    ) -> Result<LoadedCore<D>>
-    where
-        S: ModuleScanner<K, D>,
-        M: ModuleMaterializer<K, D>,
-        L: ModuleRelocator<K, D>,
-    {
-        self.load_with_scan_impl(key, scanner, None, materializer, relocator)
-    }
-
-    /// Loads one module through the scan-first path while running pre-map link
-    /// passes over the discovered [`LinkPlan`] before materialization begins.
-    pub fn load_with_scan_pipeline<'a, S, M, L>(
-        &mut self,
-        key: K,
-        scanner: &mut S,
-        pipeline: &mut LinkPipeline<'a, K, D>,
-        materializer: &mut M,
-        relocator: &mut L,
-    ) -> Result<LoadedCore<D>>
-    where
-        S: ModuleScanner<K, D>,
-        M: ModuleMaterializer<K, D>,
-        L: ModuleRelocator<K, D>,
-    {
-        self.load_with_scan_impl(key, scanner, Some(pipeline), materializer, relocator)
-    }
-
-    fn load_impl<R, L>(
-        &mut self,
-        key: K,
-        resolver: &mut R,
-        relocator: &mut L,
-    ) -> Result<LoadedCore<D>>
-    where
-        R: ModuleResolver<K, D>,
-        L: ModuleRelocator<K, D>,
-    {
         if let Some(loaded) = self.committed.get(&key) {
             return Ok(loaded.clone());
         }
@@ -156,11 +104,18 @@ where
         Ok(loaded)
     }
 
-    fn load_with_scan_impl<'a, S, M, L>(
+    /// Loads one module through the scan-first path:
+    /// `scan -> plan -> materialize -> relocate -> commit`.
+    ///
+    /// This path keeps metadata discovery separate from the original
+    /// map-first resolver flow and is the intended entry point for whole-graph
+    /// planning such as cross-dylib layout or hugepage optimization.
+    pub fn load_with_scan<'a, S, M, L, Q: ?Sized>(
         &mut self,
         key: K,
         scanner: &mut S,
-        mut pipeline: Option<&mut LinkPipeline<'a, K, D>>,
+        pipeline: &mut LinkPipeline<'a, K, D, Q>,
+        queries: &mut Q,
         materializer: &mut M,
         relocator: &mut L,
     ) -> Result<LoadedCore<D>>
@@ -170,9 +125,7 @@ where
         L: ModuleRelocator<K, D>,
     {
         let mut plan = self.scan.discover(key, scanner)?;
-        if let Some(pipeline) = pipeline.as_deref_mut() {
-            pipeline.run(&mut plan)?;
-        }
+        pipeline.run(&mut plan, queries)?;
 
         if let Some(loaded) = self.committed.get(plan.root_key()) {
             return Ok(loaded.clone());
@@ -294,7 +247,6 @@ where
                     &key,
                     entry.raw,
                     self.load_view(session),
-                    session.group_order.as_slice(),
                     session.scope_keys(&key),
                 );
                 let loaded = relocator.relocate(req)?;
