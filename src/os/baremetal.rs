@@ -1,7 +1,7 @@
 use crate::{
     Result,
     input::ElfReader,
-    os::{MapFlags, Mmap, ProtFlags},
+    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
     segment::PAGE_SIZE,
 };
 use alloc::alloc::{dealloc, handle_alloc_error};
@@ -69,6 +69,14 @@ impl Mmap for DefaultMmap {
 
     unsafe fn munmap(addr: *mut c_void, len: usize) -> crate::Result<()> {
         unsafe { dealloc(addr as _, Layout::from_size_align_unchecked(len, PAGE_SIZE)) };
+        Ok(())
+    }
+
+    unsafe fn madvise(
+        _addr: *mut c_void,
+        _len: usize,
+        _behavior: MadviseAdvice,
+    ) -> crate::Result<()> {
         Ok(())
     }
 

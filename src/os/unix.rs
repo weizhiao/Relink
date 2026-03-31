@@ -1,7 +1,7 @@
 use crate::{
     IoError, MmapError, Result,
     input::ElfReader,
-    os::{MapFlags, Mmap, ProtFlags},
+    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
 };
 use alloc::{
     ffi::CString,
@@ -10,7 +10,7 @@ use alloc::{
 #[cfg(feature = "tls")]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{ffi::c_void, str::FromStr};
-use libc::{O_RDONLY, SEEK_SET, mmap, mprotect, munmap};
+use libc::{O_RDONLY, SEEK_SET, madvise, mmap, mprotect, munmap};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[inline]
@@ -152,6 +152,17 @@ impl Mmap for DefaultMmap {
         let res = unsafe { munmap(addr, len) };
         if res != 0 {
             return Err(MmapError::MunmapFailed {
+                code: last_os_error_code(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    unsafe fn madvise(addr: *mut c_void, len: usize, behavior: MadviseAdvice) -> crate::Result<()> {
+        let res = unsafe { madvise(addr, len, behavior as _) };
+        if res != 0 {
+            return Err(MmapError::Madvise {
                 code: last_os_error_code(),
             }
             .into());

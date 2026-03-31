@@ -1,6 +1,6 @@
 use core::ffi::c_void;
 
-use super::{MapFlags, ProtFlags};
+use super::{MadviseAdvice, MapFlags, ProtFlags};
 use crate::Result;
 
 /// A trait for low-level memory mapping operations.
@@ -103,6 +103,30 @@ pub trait Mmap {
     /// # Safety
     /// Ensure `addr` and `len` match the original mapping. Do not access the region after unmapping.
     unsafe fn munmap(addr: *mut c_void, len: usize) -> Result<()>;
+
+    /// Give advice about the use of memory.
+    ///
+    /// The activity performed is highly dependent on the "advice" being applied.
+    /// See the madvise(2) man page (https://man7.org/linux/man-pages/man2/madvise.2.html)
+    /// for more details.
+    ///
+    /// # Arguments
+    /// * `addr` - Pointer to the start of a memory region to operate on (must be page-aligned).
+    /// * `len` - Size of span of memory we're influencing (doesn't have to be the full segment).
+    /// * `behavior` - The specific "advice" being applied.
+    ///
+    /// # Returns
+    /// `Ok(())` on success, or an error if the operation fails.
+    ///
+    /// Older kernel versions may not support newer behavior/advice values.
+    /// Unknown behavior values will return EINVAL.
+    ///
+    /// # Safety
+    /// Highly dependent on the advice being applied. Some advice values do
+    /// nothing except for updating bookkeeping inside the kernel. Others (like
+    /// MADV_REMOVE) effectively free the memory. Caller is responsible for
+    /// taking appropriate action given the advice applied.
+    unsafe fn madvise(addr: *mut c_void, len: usize, behavior: MadviseAdvice) -> Result<()>;
 
     /// Changes the protection of a memory region.
     ///

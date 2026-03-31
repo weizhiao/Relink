@@ -94,6 +94,8 @@ pub enum MmapError {
     VirtualAlloc { code: u32 },
     /// `mprotect failed with error: {code}`
     Mprotect { code: u32 },
+    /// `madvise failed with error: {code}`
+    Madvise { code: u32 },
     #[cfg(windows)]
     /// `CreateFileMappingW failed with error: {code}`
     CreateFileMappingW { code: u32 },
@@ -122,6 +124,7 @@ impl Display for MmapError {
                 write!(f, "VirtualAlloc failed with error: {code}")
             }
             Self::Mprotect { code } => write!(f, "mprotect failed with error: {code}"),
+            Self::Madvise { code } => write!(f, "madvise failed with error: {code}"),
             #[cfg(windows)]
             Self::CreateFileMappingW { code } => {
                 write!(f, "CreateFileMappingW failed with error: {code}")

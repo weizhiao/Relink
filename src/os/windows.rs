@@ -1,7 +1,7 @@
 use crate::{
     IoError, MmapError, Result,
     input::ElfReader,
-    os::{MapFlags, Mmap, ProtFlags},
+    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
 };
 use alloc::{ffi::CString, vec::Vec};
 use core::{
@@ -190,6 +190,10 @@ impl Mmap for DefaultMmap {
                 windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS { Value: addr },
             )
         };
+        Ok(())
+    }
+
+    unsafe fn madvise(_addr: *mut c_void, _len: usize, behavior: MadviseAdvice) -> Result<()> {
         Ok(())
     }
 
