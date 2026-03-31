@@ -10,6 +10,7 @@
 //! - blanket [`IntoElfReader`] implementations for `&str`, `String`, `&[u8]`, and `&Vec<u8>`
 
 pub use backend::{ElfBinary, ElfFile};
+pub(crate) use traits::ElfReaderExt;
 pub use traits::{ElfReader, IntoElfReader};
 
 mod backend;

@@ -1,3 +1,6 @@
+use alloc::vec::Vec;
+use core::mem::size_of;
+
 use crate::Result;
 
 /// A trait for reading ELF data from various sources.
@@ -23,6 +26,34 @@ pub trait ElfReader {
         name.rsplit('/').next().unwrap_or(name)
     }
 }
+
+/// Convenience helpers for reading ELF payloads through an [`ElfReader`].
+pub(crate) trait ElfReaderExt: ElfReader {
+    /// Reads values from the underlying object into a new vector.
+    #[inline]
+    fn read_to_vec<T>(&mut self, offset: usize, count: usize) -> Result<Vec<T>> {
+        let mut values = Vec::<T>::with_capacity(count);
+        unsafe {
+            values.set_len(count);
+        }
+        self.read_slice(&mut values, offset)?;
+        Ok(values)
+    }
+
+    /// Reads raw bytes into an existing typed slice.
+    #[inline]
+    fn read_slice<T>(&mut self, buf: &mut [T], offset: usize) -> Result<()> {
+        let byte_len = buf
+            .len()
+            .checked_mul(size_of::<T>())
+            .expect("ElfReaderExt::read_slice length overflow");
+        let bytes =
+            unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<u8>(), byte_len) };
+        self.read(bytes, offset)
+    }
+}
+
+impl<T: ElfReader + ?Sized> ElfReaderExt for T {}
 
 /// A trait for converting various input sources into an `ElfReader`.
 ///

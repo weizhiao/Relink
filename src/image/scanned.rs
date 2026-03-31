@@ -6,11 +6,11 @@ use crate::{
         ElfDyn, ElfHeader, ElfPhdr, ElfProgramType, ElfSectionType, ElfShdr, ElfStringTable,
         parse_dynamic_entries,
     },
-    input::ElfReader,
+    input::{ElfReader, ElfReaderExt},
     loader::ScanBuilder,
 };
-use alloc::{boxed::Box, string::String, vec, vec::Vec};
-use core::{fmt, mem::size_of, num::NonZeroUsize, ops::Index};
+use alloc::{boxed::Box, string::String, vec::Vec};
+use core::{fmt, num::NonZeroUsize, ops::Index};
 use elf::abi::{DF_1_NOW, DF_BIND_NOW, DF_STATIC_TLS};
 
 struct DynamicScanParts {
@@ -19,6 +19,12 @@ struct DynamicScanParts {
     needed_libs: Box<[usize]>,
     rpath: Option<usize>,
     runpath: Option<usize>,
+}
+
+struct SegmentBounds {
+    offset: usize,
+    start: usize,
+    end: usize,
 }
 
 /// Dynamic-library metadata collected before the object is mapped.
@@ -259,7 +265,9 @@ impl<D> ScannedDylib<D> {
     /// Reads raw bytes from the underlying ELF reader at the given file offset.
     #[inline]
     pub fn read_bytes(&mut self, offset: usize, len: usize) -> Result<Box<[u8]>> {
-        read_bytes_vec(&mut *self.reader, offset, len).map(Vec::into_boxed_slice)
+        self.reader
+            .read_to_vec(offset, len)
+            .map(Vec::into_boxed_slice)
     }
 
     /// Returns the underlying reader used to access the scanned ELF image.
@@ -308,11 +316,11 @@ fn scan_sections(
         return Ok((Vec::new().into_boxed_slice(), Vec::new().into_boxed_slice()));
     };
 
-    let shdrs = read_typed::<ElfShdr>(object, start, ehdr.e_shnum())?;
+    let shdrs = object.read_to_vec::<ElfShdr>(start, ehdr.e_shnum())?;
     let shstrndx = ehdr.e_shstrndx();
     let shstrtab = match shdrs.get(shstrndx) {
         Some(shdr) if shdr.section_type() != ElfSectionType::NOBITS => {
-            read_bytes_vec(object, shdr.sh_offset(), shdr.sh_size())?
+            object.read_to_vec(shdr.sh_offset(), shdr.sh_size())?
         }
         _ => return Err(ParseEhdrError::MissingSectionHeaders.into()),
     };
@@ -326,26 +334,6 @@ fn scan_sections(
     Ok((sections, shstrtab.into_boxed_slice()))
 }
 
-fn read_bytes_vec(object: &mut dyn ElfReader, offset: usize, len: usize) -> Result<Vec<u8>> {
-    let mut bytes = vec![0; len];
-    object.read(&mut bytes, offset)?;
-    Ok(bytes)
-}
-
-fn read_typed<T>(object: &mut dyn ElfReader, offset: usize, count: usize) -> Result<Vec<T>> {
-    let byte_len = count
-        .checked_mul(size_of::<T>())
-        .ok_or(ParseDynamicError::AddressOverflow)?;
-    let mut values = Vec::<T>::with_capacity(count);
-    unsafe {
-        values.set_len(count);
-    }
-    let bytes =
-        unsafe { core::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<u8>(), byte_len) };
-    object.read(bytes, offset)?;
-    Ok(values)
-}
-
 fn read_interp(object: &mut dyn ElfReader, phdrs: &[ElfPhdr]) -> Result<Option<Box<[u8]>>> {
     let Some(interp) = phdrs
         .iter()
@@ -354,23 +342,24 @@ fn read_interp(object: &mut dyn ElfReader, phdrs: &[ElfPhdr]) -> Result<Option<B
         return Ok(None);
     };
 
-    let bytes = read_bytes_vec(object, interp.p_offset(), interp.p_filesz())?;
+    let bytes = object.read_to_vec(interp.p_offset(), interp.p_filesz())?;
     Ok(Some(bytes.into_boxed_slice()))
 }
 
 fn vaddr_to_file_offset(vaddr: usize, phdrs: &[ElfPhdr]) -> Result<usize> {
-    let (seg_offset, seg_start, _) = load_segment_bounds(vaddr, phdrs)?;
-    seg_offset
-        .checked_add(vaddr - seg_start)
+    let bounds = load_segment_bounds(vaddr, phdrs)?;
+    bounds
+        .offset
+        .checked_add(vaddr - bounds.start)
         .ok_or(ParseDynamicError::AddressOverflow.into())
 }
 
 fn strtab_limit(vaddr: usize, phdrs: &[ElfPhdr]) -> Result<usize> {
-    let (_, _, seg_end) = load_segment_bounds(vaddr, phdrs)?;
-    Ok(seg_end - vaddr)
+    let bounds = load_segment_bounds(vaddr, phdrs)?;
+    Ok(bounds.end - vaddr)
 }
 
-fn load_segment_bounds(vaddr: usize, phdrs: &[ElfPhdr]) -> Result<(usize, usize, usize)> {
+fn load_segment_bounds(vaddr: usize, phdrs: &[ElfPhdr]) -> Result<SegmentBounds> {
     for phdr in phdrs
         .iter()
         .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
@@ -380,7 +369,11 @@ fn load_segment_bounds(vaddr: usize, phdrs: &[ElfPhdr]) -> Result<(usize, usize,
             .checked_add(phdr.p_filesz())
             .ok_or(ParseDynamicError::AddressOverflow)?;
         if seg_start <= vaddr && vaddr < seg_end {
-            return Ok((phdr.p_offset(), seg_start, seg_end));
+            return Ok(SegmentBounds {
+                offset: phdr.p_offset(),
+                start: seg_start,
+                end: seg_end,
+            });
         }
     }
 
@@ -396,10 +389,9 @@ fn scan_dynamic(object: &mut dyn ElfReader, phdrs: &[ElfPhdr]) -> Result<Dynamic
         return Err(ParsePhdrError::MalformedProgramHeaders.into());
     }
 
-    let dyns = read_typed::<ElfDyn>(
-        object,
+    let dyns = object.read_to_vec::<ElfDyn>(
         dynamic_phdr.p_offset(),
-        dynamic_phdr.p_filesz() / size_of::<ElfDyn>(),
+        dynamic_phdr.p_filesz() / core::mem::size_of::<ElfDyn>(),
     )?;
     let parsed = parse_dynamic_entries(
         dyns.into_iter()
@@ -413,7 +405,7 @@ fn scan_dynamic(object: &mut dyn ElfReader, phdrs: &[ElfPhdr]) -> Result<Dynamic
         Some(size) => size.get(),
         None => strtab_limit(strtab_vaddr.get(), phdrs)?,
     };
-    let strtab = read_bytes_vec(object, strtab_file_off, strtab_size)?;
+    let strtab = object.read_to_vec(strtab_file_off, strtab_size)?;
 
     let needed_libs = parsed
         .needed_libs

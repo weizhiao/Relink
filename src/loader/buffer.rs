@@ -1,20 +1,20 @@
 use crate::{
     ParseEhdrError, ParsePhdrError, Result,
     elf::{EHDR_SIZE, ElfEhdr, ElfHeader, ElfPhdr, ElfShdr},
-    input::ElfReader,
+    input::{ElfReader, ElfReaderExt},
 };
 use alloc::vec::Vec;
 use core::mem::{MaybeUninit, align_of, size_of};
 
 pub(crate) struct AlignedBytes {
-    words: Vec<usize>,
+    words: Vec<u64>,
     valid_len: usize,
 }
 
 impl AlignedBytes {
     #[inline]
     fn required_words(byte_len: usize) -> Option<usize> {
-        let word_size = size_of::<usize>();
+        let word_size = size_of::<u64>();
         byte_len.checked_add(word_size - 1).map(|v| v / word_size)
     }
 
@@ -38,48 +38,26 @@ impl AlignedBytes {
     }
 
     #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        unsafe { core::slice::from_raw_parts(self.words.as_ptr().cast::<u8>(), self.valid_len) }
-    }
-
-    #[inline]
-    pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8] {
+    pub(crate) fn as_slice<T>(&self) -> &[T] {
+        let elem_size = size_of::<T>();
+        debug_assert!(self.valid_len % elem_size == 0);
+        debug_assert!(align_of::<u64>() >= align_of::<T>());
         unsafe {
-            core::slice::from_raw_parts_mut(self.words.as_mut_ptr().cast::<u8>(), self.valid_len)
-        }
-    }
-
-    #[inline]
-    pub(crate) fn as_slice<T>(&self) -> Option<&[T]> {
-        let elem_size = size_of::<T>();
-        if elem_size == 0 || self.valid_len % elem_size != 0 {
-            return None;
-        }
-        if align_of::<T>() > align_of::<usize>() {
-            return None;
-        }
-        Some(unsafe {
             core::slice::from_raw_parts(self.words.as_ptr().cast::<T>(), self.valid_len / elem_size)
-        })
+        }
     }
 
     #[inline]
-    #[cfg_attr(not(feature = "object"), allow(dead_code))]
-    pub(crate) fn as_slice_mut<T>(&mut self) -> Option<&mut [T]> {
+    pub(crate) fn as_slice_mut<T>(&mut self) -> &mut [T] {
         let elem_size = size_of::<T>();
-        if elem_size == 0 || self.valid_len % elem_size != 0 {
-            return None;
-        }
-        if align_of::<T>() > align_of::<usize>() {
-            return None;
-        }
-        Some(unsafe {
+        debug_assert!(self.valid_len % elem_size == 0);
+        debug_assert!(align_of::<u64>() >= align_of::<T>());
+        unsafe {
             core::slice::from_raw_parts_mut(
                 self.words.as_mut_ptr().cast::<T>(),
                 self.valid_len / elem_size,
             )
-        })
+        }
     }
 }
 
@@ -115,11 +93,8 @@ impl ElfBuf {
         self.buf
             .set_len(size)
             .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
-        object.read(self.buf.as_bytes_mut(), start)?;
-        let phdrs = self
-            .buf
-            .as_slice::<ElfPhdr>()
-            .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
+        object.read_slice(self.buf.as_slice_mut::<ElfPhdr>(), start)?;
+        let phdrs = self.buf.as_slice::<ElfPhdr>();
         if phdrs.len() != count {
             return Err(ParsePhdrError::MalformedProgramHeaders.into());
         }
@@ -141,12 +116,9 @@ impl ElfBuf {
         self.buf
             .set_len(size)
             .ok_or(ParseEhdrError::MissingSectionHeaders)?;
-        object.read(self.buf.as_bytes_mut(), start)?;
+        object.read_slice(self.buf.as_slice_mut::<ElfShdr>(), start)?;
 
-        let shdrs = self
-            .buf
-            .as_slice_mut::<ElfShdr>()
-            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
+        let shdrs = self.buf.as_slice_mut::<ElfShdr>();
         if shdrs.len() != count {
             return Err(ParseEhdrError::MissingSectionHeaders.into());
         }
@@ -156,41 +128,9 @@ impl ElfBuf {
 }
 
 const fn word_align_supports<T>() -> bool {
-    align_of::<usize>() >= align_of::<T>()
+    align_of::<u64>() >= align_of::<T>()
 }
 
 const _: [(); 1] = [(); word_align_supports::<ElfEhdr>() as usize];
 const _: [(); 1] = [(); word_align_supports::<ElfPhdr>() as usize];
 const _: [(); 1] = [(); word_align_supports::<ElfShdr>() as usize];
-
-#[cfg(test)]
-mod tests {
-    use super::AlignedBytes;
-
-    #[test]
-    fn aligned_bytes_grow_and_keep_byte_window() {
-        let mut storage = AlignedBytes::with_len(4).expect("failed to initialize aligned bytes");
-        storage.as_bytes_mut().copy_from_slice(&[1, 2, 3, 4]);
-
-        storage.set_len(11).expect("failed to grow byte window");
-        assert_eq!(storage.as_bytes().len(), 11);
-        assert_eq!(&storage.as_bytes()[..4], &[1, 2, 3, 4]);
-        storage.as_bytes_mut()[10] = 7;
-        assert_eq!(storage.as_bytes()[10], 7);
-    }
-
-    #[test]
-    fn aligned_bytes_rejects_non_divisible_typed_views() {
-        let mut storage = AlignedBytes::with_len(3).expect("failed to initialize aligned bytes");
-        assert!(storage.as_slice::<u16>().is_none());
-        assert!(storage.as_slice_mut::<u16>().is_none());
-
-        storage
-            .set_len(4)
-            .expect("failed to resize aligned bytes to divisible length");
-        assert_eq!(
-            storage.as_slice::<u16>().expect("missing typed view").len(),
-            2
-        );
-    }
-}
