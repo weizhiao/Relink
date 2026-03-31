@@ -1,11 +1,12 @@
 use crate::input::ElfReader;
 use crate::{
     Error, IoError, MmapError, Result, logging,
-    os::{MapFlags, Mmap, ProtFlags},
+    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
 };
 use alloc::ffi::CString;
 use core::ffi::{c_int, c_void};
 use syscalls::Sysno;
+
 /// An implementation of Mmap trait
 pub struct DefaultMmap;
 
@@ -140,6 +141,15 @@ impl Mmap for DefaultMmap {
 
     unsafe fn munmap(addr: *mut core::ffi::c_void, len: usize) -> crate::Result<()> {
         munmap(addr, len)?;
+        Ok(())
+    }
+
+    #[inline]
+    unsafe fn madvise(addr: *mut c_void, len: usize, behavior: MadviseAdvice) -> Result<()> {
+        from_ret(
+            syscalls::raw_syscall!(Sysno::madvise, addr, len, behavior as c_int),
+            |code| MmapError::Madvise { code }.into(),
+        )?;
         Ok(())
     }
 

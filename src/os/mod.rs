@@ -51,6 +51,56 @@ bitflags! {
     }
 }
 
+/// Behaviors for the madvise() Linux system call.
+///
+/// See https://man7.org/linux/man-pages/man2/madvise.2.html for documentation
+///
+/// Defined in Linux at https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/mman-common.h.
+///
+/// TODO some of these values are incorrect for alpha, mips, parisc, and xtensa arches.
+#[repr(C)]
+pub enum MadviseAdvice {
+    Normal = 0,
+    Random = 1,
+    Sequential = 2,
+    WillNeed = 3,
+    DontNeed = 4,
+    Free = 8,
+    Remove = 9,
+    DontFork = 10,
+    DoFork = 11,
+    HWPoison = 100,
+    SoftOffline = 101,
+    Mergeable = 12,
+    Unmergeable = 13,
+    HugePage = 14,
+    NoHugePage = 15,
+    // Introduced in Linux 3.4.
+    DontDump = 16,
+    // Introduced in Linux 3.4.
+    DoDump = 17,
+    // Introduced in Linux 4.14.
+    WipeOnFork = 18,
+    // Introduced in Linux 4.14.
+    KeepOnFork = 19,
+    // Introduced in Linux 5.4.
+    Cold = 20,
+    // Introduced in Linux 5.4.
+    PageOut = 21,
+    // Introduced in Linux 5.14.
+    PopulateRead = 22,
+    // Introduced in Linux 5.14.
+    PopulateWrite = 23,
+    // Introduced in Linux 5.18.
+    DontNeedLocked = 24,
+    // Introduced in Linux 6.1.
+    Collapse = 25,
+    // Introduced in Linux 6.13.
+    GuardInstall = 102,
+    // Introduced in Linux 6.13.
+    GuardRemove = 103,
+}
+
 cfg_if::cfg_if! {
     if #[cfg(windows)]{
         mod windows;
