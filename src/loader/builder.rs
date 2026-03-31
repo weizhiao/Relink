@@ -2,11 +2,12 @@ use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner, UserDat
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType, ElfShdr},
+    input::ElfReader,
     os::Mmap,
     segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
     tls::{TlsInfo, TlsResolver},
 };
-use alloc::{borrow::ToOwned, string::String, vec::Vec};
+use alloc::{borrow::ToOwned, boxed::Box, string::String, vec::Vec};
 use core::{ffi::c_char, marker::PhantomData, ptr::NonNull};
 
 /// Builder for creating relocated ELF objects
@@ -64,6 +65,39 @@ where
 
     /// Phantom data to maintain Mmap type information
     _marker: PhantomData<(M, Tls)>,
+}
+
+pub(crate) struct ScanBuilder<D = ()>
+where
+    D: 'static,
+{
+    pub(crate) name: String,
+    pub(crate) ehdr: ElfHeader,
+    pub(crate) phdrs: Box<[ElfPhdr]>,
+    pub(crate) reader: Box<dyn ElfReader + 'static>,
+    pub(crate) user_data: D,
+}
+
+impl<D> ScanBuilder<D>
+where
+    D: 'static,
+{
+    #[inline]
+    pub(crate) fn new(
+        name: String,
+        ehdr: ElfHeader,
+        phdrs: Box<[ElfPhdr]>,
+        reader: Box<dyn ElfReader + 'static>,
+        user_data: D,
+    ) -> Self {
+        Self {
+            name,
+            ehdr,
+            phdrs,
+            reader,
+            user_data,
+        }
+    }
 }
 
 impl<'hook, H, M, Tls, D> ImageBuilder<'hook, H, M, Tls, D>
@@ -280,5 +314,17 @@ where
             self.force_static_tls,
             user_data,
         ))
+    }
+
+    pub(crate) fn create_scan_builder(
+        &self,
+        ehdr: ElfHeader,
+        phdrs: &[ElfPhdr],
+        mut object: impl ElfReader + 'static,
+    ) -> ScanBuilder<D> {
+        let name = object.file_name().to_owned();
+        let user_data = self.load_user_data(&name, &ehdr, Some(phdrs), None, Some(&mut object));
+
+        ScanBuilder::new(name, ehdr, phdrs.into(), Box::new(object), user_data)
     }
 }

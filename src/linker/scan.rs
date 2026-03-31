@@ -78,7 +78,10 @@ impl<'a, K, D: 'static> ScanRequest<'a, K, D> {
     /// Returns the current `DT_NEEDED` string.
     #[inline]
     pub fn needed(&self) -> &'a str {
-        self.owner.needed_libs()[self.needed_index].as_str()
+        self.owner
+            .needed_libs()
+            .get(self.needed_index)
+            .expect("DT_NEEDED index out of bounds")
     }
 
     /// Returns the index of the current `DT_NEEDED` entry.
@@ -259,8 +262,9 @@ where
                                     .get(key)
                                     .expect("missing scan entry while building error")
                                     .module
-                                    .needed_libs()[idx]
-                                    .as_str(),
+                                    .needed_libs()
+                                    .get(idx)
+                                    .expect("DT_NEEDED index out of bounds"),
                             ),
                         ))
                     })?;

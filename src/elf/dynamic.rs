@@ -6,6 +6,7 @@ use crate::{
 };
 use alloc::vec::Vec;
 use core::fmt::{self, Debug, Display};
+use core::marker::PhantomData;
 use core::{num::NonZeroUsize, ptr::NonNull};
 use elf::abi::*;
 
@@ -47,6 +48,7 @@ impl ElfDynamicTag {
     pub const RUNPATH: Self = Self(DT_RUNPATH);
     pub const FLAGS: Self = Self(DT_FLAGS);
     pub const FLAGS_1: Self = Self(DT_FLAGS_1);
+    pub const STRSZ: Self = Self(DT_STRSZ);
     pub const GNU_HASH: Self = Self(DT_GNU_HASH);
     pub const VERSYM: Self = Self(DT_VERSYM);
     pub const VERDEF: Self = Self(DT_VERDEF);
@@ -167,102 +169,157 @@ impl ElfDyn {
     }
 }
 
+/// Raw dynamic-section fields decoded from the DT entries.
+#[derive(Debug, Default)]
+pub(crate) struct ParsedDynamic {
+    pub(crate) symtab_off: usize,
+    pub(crate) strtab_off: usize,
+    pub(crate) strtab_size: Option<NonZeroUsize>,
+    pub(crate) elf_hash_off: Option<usize>,
+    pub(crate) gnu_hash_off: Option<usize>,
+    pub(crate) got_off: Option<NonZeroUsize>,
+    pub(crate) pltrel_size: Option<NonZeroUsize>,
+    pub(crate) pltrel_off: Option<NonZeroUsize>,
+    pub(crate) rel_off: Option<NonZeroUsize>,
+    pub(crate) rel_size: Option<NonZeroUsize>,
+    pub(crate) rel_count: Option<NonZeroUsize>,
+    pub(crate) relr_off: Option<NonZeroUsize>,
+    pub(crate) relr_size: Option<NonZeroUsize>,
+    pub(crate) init_off: Option<NonZeroUsize>,
+    pub(crate) fini_off: Option<NonZeroUsize>,
+    pub(crate) init_array_off: Option<NonZeroUsize>,
+    pub(crate) init_array_size: Option<NonZeroUsize>,
+    pub(crate) fini_array_off: Option<NonZeroUsize>,
+    pub(crate) fini_array_size: Option<NonZeroUsize>,
+    pub(crate) version_ids_off: Option<NonZeroUsize>,
+    pub(crate) verneed_off: Option<NonZeroUsize>,
+    pub(crate) verneed_num: Option<NonZeroUsize>,
+    pub(crate) verdef_off: Option<NonZeroUsize>,
+    pub(crate) verdef_num: Option<NonZeroUsize>,
+    pub(crate) rpath_off: Option<NonZeroUsize>,
+    pub(crate) runpath_off: Option<NonZeroUsize>,
+    pub(crate) flags: usize,
+    pub(crate) flags_1: usize,
+    pub(crate) is_rela: Option<bool>,
+    pub(crate) needed_libs: Vec<NonZeroUsize>,
+}
+
+impl ParsedDynamic {
+    #[inline]
+    fn apply(&mut self, tag: ElfDynamicTag, value: usize) -> bool {
+        match tag {
+            ElfDynamicTag::FLAGS => self.flags = value,
+            ElfDynamicTag::FLAGS_1 => self.flags_1 = value,
+            ElfDynamicTag::PLTGOT => self.got_off = NonZeroUsize::new(value),
+            ElfDynamicTag::NEEDED => {
+                if let Some(val) = NonZeroUsize::new(value) {
+                    self.needed_libs.push(val);
+                }
+            }
+            ElfDynamicTag::HASH => self.elf_hash_off = Some(value),
+            ElfDynamicTag::GNU_HASH => self.gnu_hash_off = Some(value),
+            ElfDynamicTag::SYMTAB => self.symtab_off = value,
+            ElfDynamicTag::STRTAB => self.strtab_off = value,
+            ElfDynamicTag::PLTRELSZ => self.pltrel_size = NonZeroUsize::new(value),
+            ElfDynamicTag::PLTREL => {
+                self.is_rela = Some(ElfDynamicTag::new(value as i64) == ElfDynamicTag::RELA);
+            }
+            ElfDynamicTag::JMPREL => self.pltrel_off = NonZeroUsize::new(value),
+            ElfDynamicTag::RELR => self.relr_off = NonZeroUsize::new(value),
+            ElfDynamicTag::RELA | ElfDynamicTag::REL => {
+                self.is_rela = Some(tag == ElfDynamicTag::RELA);
+                self.rel_off = NonZeroUsize::new(value)
+            }
+            ElfDynamicTag::RELASZ | ElfDynamicTag::RELSZ => {
+                self.rel_size = NonZeroUsize::new(value)
+            }
+            ElfDynamicTag::RELRSZ => self.relr_size = NonZeroUsize::new(value),
+            ElfDynamicTag::RELACOUNT | ElfDynamicTag::RELCOUNT => {
+                self.rel_count = NonZeroUsize::new(value)
+            }
+            ElfDynamicTag::INIT => self.init_off = NonZeroUsize::new(value),
+            ElfDynamicTag::FINI => self.fini_off = NonZeroUsize::new(value),
+            ElfDynamicTag::INIT_ARRAY => self.init_array_off = NonZeroUsize::new(value),
+            ElfDynamicTag::INIT_ARRAYSZ => self.init_array_size = NonZeroUsize::new(value),
+            ElfDynamicTag::FINI_ARRAY => self.fini_array_off = NonZeroUsize::new(value),
+            ElfDynamicTag::FINI_ARRAYSZ => self.fini_array_size = NonZeroUsize::new(value),
+            ElfDynamicTag::VERSYM => self.version_ids_off = NonZeroUsize::new(value),
+            ElfDynamicTag::VERNEED => self.verneed_off = NonZeroUsize::new(value),
+            ElfDynamicTag::VERNEEDNUM => self.verneed_num = NonZeroUsize::new(value),
+            ElfDynamicTag::VERDEF => self.verdef_off = NonZeroUsize::new(value),
+            ElfDynamicTag::VERDEFNUM => self.verdef_num = NonZeroUsize::new(value),
+            ElfDynamicTag::RPATH => self.rpath_off = NonZeroUsize::new(value),
+            ElfDynamicTag::RUNPATH => self.runpath_off = NonZeroUsize::new(value),
+            ElfDynamicTag::STRSZ => self.strtab_size = NonZeroUsize::new(value),
+            ElfDynamicTag::NULL => return true,
+            _ => {}
+        }
+
+        false
+    }
+}
+
+/// Parses a stream of dynamic-section entries into raw offsets and flags.
+#[inline]
+pub(crate) fn parse_dynamic_entries<I>(entries: I) -> ParsedDynamic
+where
+    I: IntoIterator<Item = (ElfDynamicTag, usize)>,
+{
+    let mut parsed = ParsedDynamic::default();
+    for (tag, value) in entries {
+        if parsed.apply(tag, value) {
+            break;
+        }
+    }
+    parsed
+}
+
+struct DynamicPtrIter {
+    cur: *const ElfDyn,
+    done: bool,
+    _marker: PhantomData<ElfDyn>,
+}
+
+impl DynamicPtrIter {
+    #[inline]
+    fn new(cur: *const ElfDyn) -> Self {
+        Self {
+            cur,
+            done: false,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl Iterator for DynamicPtrIter {
+    type Item = (ElfDynamicTag, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        unsafe {
+            let dynamic = &*self.cur;
+            let tag = dynamic.tag();
+            let value = dynamic.value();
+            self.cur = self.cur.add(1);
+            if tag == ElfDynamicTag::NULL {
+                self.done = true;
+            }
+            Some((tag, value))
+        }
+    }
+}
+
 impl ElfDynamic {
     /// Parse the dynamic section of an ELF file
     pub fn new(dynamic_ptr: *const ElfDyn, segments: &ElfSegments) -> Result<Self> {
-        // These are required fields in a valid ELF dynamic library
-        let mut symtab_off = 0; // Symbol table offset
-        let mut strtab_off = 0; // String table offset
-        let mut elf_hash_off = None; // ELF hash table offset
-        let mut gnu_hash_off = None; // GNU hash table offset
-        let mut got_off = None; // Global Offset Table offset
-        let mut pltrel_size = None; // PLT relocation table size
-        let mut pltrel_off = None; // PLT relocation table offset
-        let mut rel_off = None; // Relocation table offset
-        let mut rel_size = None; // Relocation table size
-        let mut rel_count = None; // Relocation count
-        let mut relr_off = None; // RELR relocation table offset
-        let mut relr_size = None; // RELR relocation table size
-        let mut init_off = None; // Initialization function offset
-        let mut fini_off = None; // Finalization function offset
-        let mut init_array_off = None; // Initialization function array offset
-        let mut init_array_size = None; // Initialization function array size
-        let mut fini_array_off = None; // Finalization function array offset
-        let mut fini_array_size = None; // Finalization function array size
-        let mut version_ids_off = None; // Symbol versioning information offset
-        let mut verneed_off = None; // Version needed section offset
-        let mut verneed_num = None; // Number of version needed entries
-        let mut verdef_off = None; // Version definition section offset
-        let mut verdef_num = None; // Number of version definition entries
-        let mut rpath_off = None; // Runtime library search path offset
-        let mut runpath_off = None; // Runtime library search path offset (overrides RPATH)
-        let mut flags = 0; // Dynamic section flags
-        let mut flags_1 = 0; // Additional dynamic section flags
-        let mut is_rela = None; // Indicates if RELA or REL relocations are used
-        let mut needed_libs = Vec::new(); // Required libraries (dependencies)
-
-        let mut cur_dyn_ptr = dynamic_ptr;
+        let parsed = parse_dynamic_entries(DynamicPtrIter::new(dynamic_ptr));
         let base = segments.base();
 
-        // Parse all dynamic entries
-        unsafe {
-            loop {
-                let dynamic = &*cur_dyn_ptr;
-                let tag = dynamic.tag();
-                let value = dynamic.value();
-
-                match tag {
-                    ElfDynamicTag::FLAGS => flags = value,
-                    ElfDynamicTag::FLAGS_1 => flags_1 = value,
-                    ElfDynamicTag::PLTGOT => got_off = NonZeroUsize::new(value),
-                    ElfDynamicTag::NEEDED => {
-                        if let Some(val) = NonZeroUsize::new(value) {
-                            needed_libs.push(val);
-                        }
-                    }
-                    ElfDynamicTag::HASH => elf_hash_off = Some(value),
-                    ElfDynamicTag::GNU_HASH => gnu_hash_off = Some(value),
-                    ElfDynamicTag::SYMTAB => symtab_off = value,
-                    ElfDynamicTag::STRTAB => strtab_off = value,
-                    ElfDynamicTag::PLTRELSZ => pltrel_size = NonZeroUsize::new(value),
-                    ElfDynamicTag::PLTREL => {
-                        is_rela = Some(ElfDynamicTag::new(value as i64) == ElfDynamicTag::RELA);
-                    }
-                    ElfDynamicTag::JMPREL => pltrel_off = NonZeroUsize::new(value),
-                    ElfDynamicTag::RELR => relr_off = NonZeroUsize::new(value),
-                    ElfDynamicTag::RELA | ElfDynamicTag::REL => {
-                        is_rela = Some(tag == ElfDynamicTag::RELA);
-                        rel_off = NonZeroUsize::new(value)
-                    }
-                    ElfDynamicTag::RELASZ | ElfDynamicTag::RELSZ => {
-                        rel_size = NonZeroUsize::new(value)
-                    }
-                    ElfDynamicTag::RELRSZ => relr_size = NonZeroUsize::new(value),
-                    ElfDynamicTag::RELACOUNT | ElfDynamicTag::RELCOUNT => {
-                        rel_count = NonZeroUsize::new(value)
-                    }
-                    ElfDynamicTag::INIT => init_off = NonZeroUsize::new(value),
-                    ElfDynamicTag::FINI => fini_off = NonZeroUsize::new(value),
-                    ElfDynamicTag::INIT_ARRAY => init_array_off = NonZeroUsize::new(value),
-                    ElfDynamicTag::INIT_ARRAYSZ => init_array_size = NonZeroUsize::new(value),
-                    ElfDynamicTag::FINI_ARRAY => fini_array_off = NonZeroUsize::new(value),
-                    ElfDynamicTag::FINI_ARRAYSZ => fini_array_size = NonZeroUsize::new(value),
-                    ElfDynamicTag::VERSYM => version_ids_off = NonZeroUsize::new(value),
-                    ElfDynamicTag::VERNEED => verneed_off = NonZeroUsize::new(value),
-                    ElfDynamicTag::VERNEEDNUM => verneed_num = NonZeroUsize::new(value),
-                    ElfDynamicTag::VERDEF => verdef_off = NonZeroUsize::new(value),
-                    ElfDynamicTag::VERDEFNUM => verdef_num = NonZeroUsize::new(value),
-                    ElfDynamicTag::RPATH => rpath_off = NonZeroUsize::new(value),
-                    ElfDynamicTag::RUNPATH => runpath_off = NonZeroUsize::new(value),
-                    ElfDynamicTag::NULL => break,
-                    _ => {}
-                }
-                cur_dyn_ptr = cur_dyn_ptr.add(1);
-            }
-        }
-
         // Verify relocation type consistency
-        if let Some(is_rela) = is_rela {
+        if let Some(is_rela) = parsed.is_rela {
             assert!(
                 is_rela && size_of::<ElfRelType>() == size_of::<ElfRela>()
                     || !is_rela && size_of::<ElfRelType>() == size_of::<ElfRel>()
@@ -279,78 +336,91 @@ impl ElfDynamic {
         };
 
         // Determine which hash table to use (prefer GNU hash)
-        let hash_off = if let Some(off) = gnu_hash_off {
+        let hash_off = if let Some(off) = parsed.gnu_hash_off {
             ElfDynamicHashTab::Gnu(add_base(off)?)
-        } else if let Some(off) = elf_hash_off {
+        } else if let Some(off) = parsed.elf_hash_off {
             ElfDynamicHashTab::Elf(add_base(off)?)
         } else {
             return Err(ParseDynamicError::MissingHashTable.into());
         };
 
         // Extract relocation tables
-        let pltrel = pltrel_off.map(|pltrel_off| {
-            segments.get_slice(pltrel_off.get(), pltrel_size.map(|s| s.get()).unwrap_or(0))
+        let pltrel = parsed.pltrel_off.map(|pltrel_off| {
+            segments.get_slice(
+                pltrel_off.get(),
+                parsed.pltrel_size.map(|s| s.get()).unwrap_or(0),
+            )
         });
-        let dynrel = rel_off.map(|rel_off| {
-            segments.get_slice(rel_off.get(), rel_size.map(|s| s.get()).unwrap_or(0))
+        let dynrel = parsed.rel_off.map(|rel_off| {
+            segments.get_slice(rel_off.get(), parsed.rel_size.map(|s| s.get()).unwrap_or(0))
         });
-        let relr = relr_off.map(|relr_off| {
-            segments.get_slice(relr_off.get(), relr_size.map(|s| s.get()).unwrap_or(0))
+        let relr = parsed.relr_off.map(|relr_off| {
+            segments.get_slice(
+                relr_off.get(),
+                parsed.relr_size.map(|s| s.get()).unwrap_or(0),
+            )
         });
 
         // Extract initialization and finalization functions
-        let init_fn = init_off
+        let init_fn = parsed
+            .init_off
             .map(|val| unsafe { core::mem::transmute(segments.get_ptr::<fn()>(val.get())) });
-        let init_array_fn = init_array_off.map(|init_array_off| {
+        let init_array_fn = parsed.init_array_off.map(|init_array_off| {
             segments.get_slice(
                 init_array_off.get(),
-                init_array_size.map(|s| s.get()).unwrap_or(0),
+                parsed.init_array_size.map(|s| s.get()).unwrap_or(0),
             )
         });
-        let fini_fn = fini_off.map(|fini_off| unsafe {
+        let fini_fn = parsed.fini_off.map(|fini_off| unsafe {
             core::mem::transmute(segments.get_ptr::<fn()>(fini_off.get()))
         });
-        let fini_array_fn = fini_array_off.map(|fini_array_off| {
+        let fini_array_fn = parsed.fini_array_off.map(|fini_array_off| {
             segments.get_slice(
                 fini_array_off.get(),
-                fini_array_size.map(|s| s.get()).unwrap_or(0),
+                parsed.fini_array_size.map(|s| s.get()).unwrap_or(0),
             )
         });
 
         // Extract versioning information
-        let verneed = verneed_off
+        let verneed = parsed
+            .verneed_off
             .map(|verneed_off| -> Result<_> {
                 Ok((
                     add_base_nonzero(verneed_off)?,
-                    verneed_num
+                    parsed
+                        .verneed_num
                         .ok_or(ParseDynamicError::MissingVersionCount { tag: "DT_VERNEED" })?,
                 ))
             })
             .transpose()?;
-        let verdef = verdef_off
+        let verdef = parsed
+            .verdef_off
             .map(|verdef_off| -> Result<_> {
                 Ok((
                     add_base_nonzero(verdef_off)?,
-                    verdef_num
+                    parsed
+                        .verdef_num
                         .ok_or(ParseDynamicError::MissingVersionCount { tag: "DT_VERDEF" })?,
                 ))
             })
             .transpose()?;
-        let version_idx = version_ids_off.map(add_base_nonzero).transpose()?;
+        let version_idx = parsed.version_ids_off.map(add_base_nonzero).transpose()?;
 
         Ok(ElfDynamic {
             dyn_ptr: dynamic_ptr,
             hashtab: hash_off,
-            symtab: add_base(symtab_off)?,
-            strtab: add_base(strtab_off)?,
+            symtab: add_base(parsed.symtab_off)?,
+            strtab: add_base(parsed.strtab_off)?,
             // Check if binding should be done immediately
-            bind_now: flags & DF_BIND_NOW as usize != 0 || flags_1 & DF_1_NOW as usize != 0,
-            static_tls: flags & DF_STATIC_TLS as usize != 0,
-            got_plt: got_off
+            bind_now: parsed.flags & DF_BIND_NOW as usize != 0
+                || parsed.flags_1 & DF_1_NOW as usize != 0,
+            static_tls: parsed.flags & DF_STATIC_TLS as usize != 0,
+            got_plt: parsed
+                .got_off
                 .map(|off| add_base(off.get()))
                 .transpose()?
                 .map(|addr| unsafe { NonNull::new_unchecked(addr as *mut usize) }),
-            needed_libs,
+            needed_libs: parsed.needed_libs,
             pltrel,
             dynrel,
             relr,
@@ -358,9 +428,9 @@ impl ElfDynamic {
             init_array_fn,
             fini_fn,
             fini_array_fn,
-            rel_count,
-            rpath_off,
-            runpath_off,
+            rel_count: parsed.rel_count,
+            rpath_off: parsed.rpath_off,
+            runpath_off: parsed.runpath_off,
             version_idx,
             verneed,
             verdef,

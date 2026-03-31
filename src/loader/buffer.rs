@@ -1,6 +1,10 @@
-use crate::elf::{EHDR_SIZE, ElfEhdr, ElfPhdr, ElfShdr};
+use crate::{
+    ParseEhdrError, ParsePhdrError, Result,
+    elf::{EHDR_SIZE, ElfEhdr, ElfHeader, ElfPhdr, ElfShdr},
+    input::ElfReader,
+};
 use alloc::vec::Vec;
-use core::mem::{align_of, size_of};
+use core::mem::{MaybeUninit, align_of, size_of};
 
 pub(crate) struct AlignedBytes {
     words: Vec<usize>,
@@ -88,6 +92,66 @@ impl ElfBuf {
         Self {
             buf: AlignedBytes::with_len(EHDR_SIZE).expect("failed to initialize ElfBuf"),
         }
+    }
+
+    pub(crate) fn prepare_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader> {
+        let mut raw = MaybeUninit::<ElfEhdr>::uninit();
+        let bytes =
+            unsafe { core::slice::from_raw_parts_mut(raw.as_mut_ptr().cast::<u8>(), EHDR_SIZE) };
+        object.read(bytes, 0)?;
+        ElfHeader::from_raw(unsafe { raw.assume_init() })
+    }
+
+    pub(crate) fn prepare_phdrs(
+        &mut self,
+        ehdr: &ElfHeader,
+        object: &mut impl ElfReader,
+    ) -> Result<Option<&[ElfPhdr]>> {
+        let Some((start, size)) = ehdr.checked_phdr_layout()? else {
+            return Ok(None);
+        };
+        let count = ehdr.e_phnum();
+
+        self.buf
+            .set_len(size)
+            .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
+        object.read(self.buf.as_bytes_mut(), start)?;
+        let phdrs = self
+            .buf
+            .as_slice::<ElfPhdr>()
+            .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
+        if phdrs.len() != count {
+            return Err(ParsePhdrError::MalformedProgramHeaders.into());
+        }
+
+        Ok(Some(phdrs))
+    }
+
+    #[cfg_attr(not(feature = "object"), allow(dead_code))]
+    pub(crate) fn prepare_shdrs_mut(
+        &mut self,
+        ehdr: &ElfHeader,
+        object: &mut impl ElfReader,
+    ) -> Result<Option<&mut [ElfShdr]>> {
+        let Some((start, size)) = ehdr.checked_shdr_layout()? else {
+            return Ok(None);
+        };
+        let count = ehdr.e_shnum();
+
+        self.buf
+            .set_len(size)
+            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
+        object.read(self.buf.as_bytes_mut(), start)?;
+
+        let shdrs = self
+            .buf
+            .as_slice_mut::<ElfShdr>()
+            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
+        if shdrs.len() != count {
+            return Err(ParseEhdrError::MissingSectionHeaders.into());
+        }
+
+        Ok(Some(shdrs))
     }
 }
 

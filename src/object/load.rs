@@ -1,41 +1,12 @@
 use crate::{
     ParseEhdrError, Result,
-    elf::{ElfHeader, ElfShdr},
     image::{RawElf, RawObject},
     input::{ElfReader, IntoElfReader},
-    loader::{ElfBuf, LoadHook, Loader},
+    loader::{LoadHook, Loader},
     logging,
     os::Mmap,
     tls::TlsResolver,
 };
-
-impl ElfBuf {
-    pub(crate) fn prepare_shdrs_mut(
-        &mut self,
-        ehdr: &ElfHeader,
-        object: &mut impl ElfReader,
-    ) -> Result<Option<&mut [ElfShdr]>> {
-        let Some((start, size)) = ehdr.checked_shdr_layout()? else {
-            return Ok(None);
-        };
-        let count = ehdr.e_shnum();
-
-        self.buf
-            .set_len(size)
-            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
-        object.read(self.buf.as_bytes_mut(), start)?;
-
-        let shdrs = self
-            .buf
-            .as_slice_mut::<ElfShdr>()
-            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
-        if shdrs.len() != count {
-            return Err(ParseEhdrError::MissingSectionHeaders.into());
-        }
-
-        Ok(Some(shdrs))
-    }
-}
 
 impl<M, H, D, Tls> Loader<M, H, D, Tls>
 where
@@ -91,12 +62,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{ElfBuf, ElfHeader, ElfShdr};
     use crate::{
         Result,
         arch::EM_ARCH,
         elf::{E_CLASS, EHDR_SIZE, ElfEhdr},
         input::ElfReader,
+    };
+    use crate::{
+        elf::{ElfHeader, ElfShdr},
+        loader::ElfBuf,
     };
     use alloc::vec::Vec;
     use core::mem::size_of;

@@ -139,6 +139,12 @@ impl ElfHeader {
         self.ehdr.e_shnum as usize
     }
 
+    /// Returns the section-name string-table index.
+    #[inline]
+    pub fn e_shstrndx(&self) -> usize {
+        self.ehdr.e_shstrndx as usize
+    }
+
     /// Returns the `(start, end)` file offsets of the program header table.
     #[inline]
     pub fn phdr_range(&self) -> (usize, usize) {

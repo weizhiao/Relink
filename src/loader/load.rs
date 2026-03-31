@@ -1,49 +1,13 @@
-use super::{ElfBuf, LoadHook, Loader};
+use super::{LoadHook, Loader};
 use crate::{
-    ParseEhdrError, ParsePhdrError, Result,
-    elf::{EHDR_SIZE, ElfEhdr, ElfFileType, ElfHeader, ElfPhdr, ElfProgramType},
-    image::{RawDylib, RawElf, RawExec},
+    ParseEhdrError, Result,
+    elf::{ElfFileType, ElfHeader, ElfPhdr, ElfProgramType},
+    image::{RawDylib, RawElf, RawExec, ScannedDylib},
     input::{ElfReader, IntoElfReader},
     logging,
     os::Mmap,
     tls::TlsResolver,
 };
-use core::mem::MaybeUninit;
-
-impl ElfBuf {
-    pub(crate) fn prepare_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader> {
-        let mut raw = MaybeUninit::<ElfEhdr>::uninit();
-        let bytes =
-            unsafe { core::slice::from_raw_parts_mut(raw.as_mut_ptr().cast::<u8>(), EHDR_SIZE) };
-        object.read(bytes, 0)?;
-        ElfHeader::from_raw(unsafe { raw.assume_init() })
-    }
-
-    pub(crate) fn prepare_phdrs(
-        &mut self,
-        ehdr: &ElfHeader,
-        object: &mut impl ElfReader,
-    ) -> Result<Option<&[ElfPhdr]>> {
-        let Some((start, size)) = ehdr.checked_phdr_layout()? else {
-            return Ok(None);
-        };
-        let count = ehdr.e_phnum();
-
-        self.buf
-            .set_len(size)
-            .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
-        object.read(self.buf.as_bytes_mut(), start)?;
-        let phdrs = self
-            .buf
-            .as_slice::<ElfPhdr>()
-            .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
-        if phdrs.len() != count {
-            return Err(ParsePhdrError::MalformedProgramHeaders.into());
-        }
-
-        Ok(Some(phdrs))
-    }
-}
 
 impl<M, H, D, Tls> Loader<M, H, D, Tls>
 where
@@ -63,6 +27,42 @@ where
         ehdr: &ElfHeader,
     ) -> Result<Option<&[ElfPhdr]>> {
         self.buf.prepare_phdrs(ehdr, object)
+    }
+}
+
+impl<M, H, D, Tls> Loader<M, H, D, Tls>
+where
+    M: Mmap,
+    H: LoadHook,
+    D: 'static,
+    Tls: TlsResolver,
+{
+    /// Scans a shared object and returns metadata without mapping its segments.
+    pub fn scan_dylib<I>(&mut self, input: I) -> Result<ScannedDylib<D>>
+    where
+        I: IntoElfReader<'static>,
+    {
+        self.scan_dylib_impl(input.into_reader()?)
+    }
+
+    pub(crate) fn scan_dylib_impl(
+        &mut self,
+        mut object: impl ElfReader + 'static,
+    ) -> Result<ScannedDylib<D>> {
+        logging::debug!("Scanning dylib metadata: {}", object.file_name());
+
+        let ehdr = self.read_ehdr(&mut object)?;
+        if !ehdr.is_dylib() {
+            let file_type = ehdr.file_type();
+            return Err(ParseEhdrError::ExpectedDylib { found: file_type }.into());
+        }
+
+        let phdrs = self
+            .buf
+            .prepare_phdrs(&ehdr, &mut object)?
+            .unwrap_or_default();
+        let builder = self.inner.create_scan_builder(ehdr, phdrs, object);
+        ScannedDylib::from_builder(builder)
     }
 }
 
@@ -230,12 +230,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{ElfBuf, ElfHeader, ElfPhdr};
+    use super::{ElfHeader, ElfPhdr};
     use crate::{
         Result,
         arch::EM_ARCH,
         elf::{E_CLASS, EHDR_SIZE, ElfEhdr},
         input::ElfReader,
+        loader::ElfBuf,
     };
     use alloc::vec::Vec;
     use core::mem::size_of;

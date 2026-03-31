@@ -14,7 +14,6 @@
 mod buffer;
 mod builder;
 mod load;
-mod scan;
 
 use crate::{
     Result,
@@ -33,7 +32,7 @@ use core::{
 };
 
 pub(crate) use buffer::ElfBuf;
-pub(crate) use builder::ImageBuilder;
+pub(crate) use builder::{ImageBuilder, ScanBuilder};
 
 /// Context passed to [`LoadHook`] while a program header is being processed.
 pub struct LoadHookContext<'a> {
