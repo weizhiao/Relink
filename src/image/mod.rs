@@ -35,7 +35,11 @@ pub use dylib::{LoadedDylib, RawDylib};
 pub use exec::{LoadedExec, RawExec};
 #[cfg(feature = "object")]
 pub use object::{LoadedObject, RawObject};
-pub use scanned::{ScannedDylib, ScannedDynamicInfo};
+pub use scanned::{
+    ScannedDylib, ScannedDynamicInfo, ScannedMemoryData, ScannedMemoryKind, ScannedMemorySection,
+    ScannedRelocation, ScannedRelocationAddend, ScannedRelocationFormat, ScannedRelocationSection,
+    ScannedSection, ScannedSectionId,
+};
 pub use symbol::Symbol;
 
 /// A mapped but unrelocated ELF image.

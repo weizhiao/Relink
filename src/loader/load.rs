@@ -158,7 +158,8 @@ where
             .prepare_phdrs(&ehdr, &mut object)?
             .unwrap_or_default();
         let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
-        let dylib = RawDylib::from_builder(builder, phdrs)?;
+        let mut dylib = RawDylib::from_builder(builder, phdrs)?;
+        (self.inner.post_load_dylib)(&mut dylib)?;
 
         logging::info!(
             "Loaded dylib: {} at [0x{:x}-0x{:x}]",
@@ -169,6 +170,7 @@ where
 
         Ok(dylib)
     }
+
     /// Loads an executable image into memory and returns a raw executable.
     ///
     /// Both static executables and dynamically-linked / PIE-style executables are supported.

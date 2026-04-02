@@ -299,7 +299,7 @@ impl<'a> UserDataLoaderContext<'a> {
 /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
 /// let lib = raw.relocator().relocate().unwrap();
 /// ```
-pub struct Loader<M = DefaultMmap, H = (), D = (), Tls = ()>
+pub struct Loader<M = DefaultMmap, H = (), D: 'static = (), Tls = ()>
 where
     M: Mmap,
     H: LoadHook,
@@ -310,12 +310,13 @@ where
     _marker: PhantomData<(M, Tls)>,
 }
 
-pub(crate) struct LoaderInner<H, D> {
+pub(crate) struct LoaderInner<H, D: 'static> {
     init_fn: DynLifecycleHandler,
     fini_fn: DynLifecycleHandler,
     hook: H,
     force_static_tls: bool,
     user_data_loader: Box<dyn Fn(&UserDataLoaderContext) -> D>,
+    post_load_dylib: Box<dyn FnMut(&mut crate::image::RawDylib<D>) -> Result<()>>,
 }
 
 impl Loader<DefaultMmap, (), (), ()> {
@@ -345,6 +346,7 @@ impl Loader<DefaultMmap, (), (), ()> {
                 fini_fn: c_abi,
                 force_static_tls: false,
                 user_data_loader: Box::new(|_| ()),
+                post_load_dylib: Box::new(|_| Ok(())),
             },
             _marker: PhantomData,
         }
@@ -398,6 +400,7 @@ where
                 hook: self.inner.hook,
                 force_static_tls: self.inner.force_static_tls,
                 user_data_loader: Box::new(|_| NewD::default()),
+                post_load_dylib: Box::new(|_| Ok(())),
             },
             _marker: PhantomData,
         }
@@ -419,9 +422,20 @@ where
                 hook: self.inner.hook,
                 force_static_tls: self.inner.force_static_tls,
                 user_data_loader: Box::new(loader),
+                post_load_dylib: Box::new(|_| Ok(())),
             },
             _marker: PhantomData,
         }
+    }
+
+    /// Sets a hook that runs after a shared object has been mapped and its raw
+    /// image has been created, but before it is returned to the caller.
+    pub fn with_dylib_post_load(
+        mut self,
+        hook: impl FnMut(&mut crate::image::RawDylib<D>) -> Result<()> + 'static,
+    ) -> Self {
+        self.inner.post_load_dylib = Box::new(hook);
+        self
     }
 
     /// Consumes the current loader and returns a new one with the specified hook.
@@ -437,6 +451,7 @@ where
                 hook,
                 force_static_tls: self.inner.force_static_tls,
                 user_data_loader: self.inner.user_data_loader,
+                post_load_dylib: self.inner.post_load_dylib,
             },
             _marker: PhantomData,
         }

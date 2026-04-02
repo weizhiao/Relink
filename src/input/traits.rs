@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 use core::mem::size_of;
 
 use crate::Result;
+use alloc::boxed::Box;
 
 /// A trait for reading ELF data from various sources.
 ///
@@ -70,4 +71,33 @@ pub trait IntoElfReader<'a> {
     /// * `Ok(reader)` - The converted reader.
     /// * `Err(error)` - If the conversion fails (e.g., file not found).
     fn into_reader(self) -> Result<Self::Reader>;
+}
+
+impl<R: ElfReader + ?Sized> ElfReader for Box<R> {
+    #[inline]
+    fn file_name(&self) -> &str {
+        (**self).file_name()
+    }
+
+    #[inline]
+    fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
+        (**self).read(buf, offset)
+    }
+
+    #[inline]
+    fn as_fd(&self) -> Option<isize> {
+        (**self).as_fd()
+    }
+}
+
+impl<'a, R> IntoElfReader<'a> for Box<R>
+where
+    R: ElfReader + 'a + ?Sized,
+{
+    type Reader = Box<R>;
+
+    #[inline]
+    fn into_reader(self) -> Result<Self::Reader> {
+        Ok(self)
+    }
 }

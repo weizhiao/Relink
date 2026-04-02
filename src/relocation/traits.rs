@@ -219,7 +219,7 @@ impl<H: RelocationHandler + ?Sized> RelocationHandler for Arc<H> {
 /// This controls whether the loader follows the ELF object's default binding mode
 /// or overrides it when lazy binding support is enabled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum BindingMode {
+pub enum BindingMode {
     /// Follow the ELF object's default binding behavior.
     #[default]
     Default,
@@ -343,3 +343,5 @@ pub trait Relocatable<D = ()>: Sized {
 
 /// Marker trait for raw image types that support lazy-binding fixup hooks.
 pub trait SupportLazy {}
+
+impl SupportLazy for () {}

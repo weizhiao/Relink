@@ -176,11 +176,61 @@ pub struct Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D = ()> {
     binding: BindingMode,
 }
 
+impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D> Clone
+    for Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
+where
+    T: Clone,
+    PreS: Clone,
+    PostS: Clone,
+    LazyPreS: Clone,
+    LazyPostS: Clone,
+    PreH: Clone,
+    PostH: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            object: self.object.clone(),
+            scope: self.scope.clone(),
+            pre_find: self.pre_find.clone(),
+            post_find: self.post_find.clone(),
+            lazy_pre_find: self.lazy_pre_find.clone(),
+            lazy_post_find: self.lazy_post_find.clone(),
+            pre_handler: self.pre_handler.clone(),
+            post_handler: self.post_handler.clone(),
+            binding: self.binding,
+        }
+    }
+}
+
 impl<T, D> Relocator<T, (), (), (), (), (), (), D> {
     /// Creates a new `Relocator` builder for the given object.
     pub(crate) fn new(object: T) -> Self {
         Self {
             object,
+            scope: Vec::new(),
+            pre_find: (),
+            post_find: (),
+            lazy_pre_find: (),
+            lazy_post_find: (),
+            pre_handler: (),
+            post_handler: (),
+            binding: BindingMode::Default,
+        }
+    }
+}
+
+impl<D> Default for Relocator<(), (), (), (), (), (), (), D> {
+    #[inline]
+    fn default() -> Self {
+        Self::config()
+    }
+}
+
+impl<D> Relocator<(), (), (), (), (), (), (), D> {
+    #[inline]
+    pub fn config() -> Self {
+        Self {
+            object: (),
             scope: Vec::new(),
             pre_find: (),
             post_find: (),
@@ -304,6 +354,35 @@ where
         self
     }
 
+    #[inline]
+    pub fn replace_scope<I, R>(&mut self, scope: I)
+    where
+        I: IntoIterator<Item = R>,
+        R: core::borrow::Borrow<LoadedCore<D>>,
+    {
+        self.scope.clear();
+        self.scope
+            .extend(scope.into_iter().map(|r| r.borrow().clone()));
+    }
+
+    /// Replaces the current object while preserving the relocation configuration.
+    pub(crate) fn replace_object<U>(
+        self,
+        object: U,
+    ) -> Relocator<U, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D> {
+        Relocator {
+            object,
+            scope: self.scope,
+            pre_find: self.pre_find,
+            post_find: self.post_find,
+            lazy_pre_find: self.lazy_pre_find,
+            lazy_post_find: self.lazy_post_find,
+            pre_handler: self.pre_handler,
+            post_handler: self.post_handler,
+            binding: self.binding,
+        }
+    }
+
     /// Sets the relocation handler that runs before the built-in logic.
     ///
     /// This is useful for intercepting selected relocations or providing
@@ -350,6 +429,17 @@ where
             post_handler: handler,
             binding: self.binding,
         }
+    }
+
+    /// Overrides the relocation binding mode.
+    pub fn binding(mut self, binding: BindingMode) -> Self {
+        self.binding = binding;
+        self
+    }
+
+    #[inline]
+    pub fn set_binding(&mut self, binding: BindingMode) {
+        self.binding = binding;
     }
 }
 

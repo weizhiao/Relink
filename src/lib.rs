@@ -18,8 +18,9 @@
 //!   the library that produced them.
 //! - Hybrid linking. Compose `.so` and `.o` inputs at runtime with `scope()` and
 //!   `add_scope()`.
-//! - Explicit dependency loading. Build your own dependency policy with
-//!   [`linker::ModuleResolver`] and [`linker::LinkContext`].
+//! - Explicit dependency loading. Build your own dependency policy with an
+//!   actual [`Loader`], [`linker::KeyResolver`], [`Relocator`], and
+//!   [`linker::LinkContext`].
 //! - Deep customization. Override relocation-time lookup with `pre_find_fn()` /
 //!   `post_find_fn()`, provide lazy-fixup lookup with `lazy_pre_find_fn()` /
 //!   `lazy_post_find_fn()`, intercept relocations with handlers, and inspect segments
@@ -114,6 +115,7 @@ compile_error!(
 
 pub mod arch;
 pub mod elf;
+mod entity;
 mod error;
 pub mod image;
 pub mod input;

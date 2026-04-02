@@ -3,14 +3,14 @@
 use crate::{
     ParseDynamicError, ParseEhdrError, ParsePhdrError, Result,
     elf::{
-        ElfDyn, ElfHeader, ElfPhdr, ElfProgramType, ElfSectionType, ElfShdr, ElfStringTable,
-        parse_dynamic_entries,
+        ElfDyn, ElfHeader, ElfPhdr, ElfProgramType, ElfRel, ElfRela, ElfSectionFlags,
+        ElfSectionType, ElfShdr, ElfStringTable, parse_dynamic_entries,
     },
     input::{ElfReader, ElfReaderExt},
     loader::ScanBuilder,
 };
-use alloc::{boxed::Box, string::String, vec::Vec};
-use core::{fmt, num::NonZeroUsize, ops::Index};
+use alloc::{boxed::Box, string::String, vec, vec::Vec};
+use core::{fmt, mem::size_of, num::NonZeroUsize};
 use elf::abi::{DF_1_NOW, DF_BIND_NOW, DF_STATIC_TLS};
 
 struct DynamicScanParts {
@@ -78,42 +78,477 @@ where
     user_data: D,
 }
 
-/// Read-only view over `DT_NEEDED` strings stored in a scanned dylib.
-pub struct ScannedNeededLibs<'a> {
-    strtab: &'a ElfStringTable,
-    offsets: &'a [usize],
+/// The raw encoding used by one retained relocation section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ScannedRelocationFormat {
+    /// ELF `SHT_REL` entries with implicit addends.
+    Rel,
+    /// ELF `SHT_RELA` entries with explicit addends.
+    Rela,
 }
 
-impl<'a> ScannedNeededLibs<'a> {
+/// The addend representation carried by a retained relocation entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ScannedRelocationAddend {
+    /// The addend is stored directly in the relocation entry.
+    Explicit(isize),
+    /// The addend must be read from the relocation target contents.
+    Implicit,
+}
+
+/// A normalized retained relocation entry discovered from a section header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ScannedRelocation {
+    offset: usize,
+    relocation_type: usize,
+    symbol_index: usize,
+    addend: ScannedRelocationAddend,
+}
+
+impl ScannedRelocation {
     #[inline]
-    pub(crate) fn new(strtab: &'a ElfStringTable, offsets: &'a [usize]) -> Self {
-        Self { strtab, offsets }
+    pub(crate) fn new(
+        offset: usize,
+        relocation_type: usize,
+        symbol_index: usize,
+        addend: ScannedRelocationAddend,
+    ) -> Self {
+        Self {
+            offset,
+            relocation_type,
+            symbol_index,
+            addend,
+        }
     }
 
+    /// Returns the relocation offset within the target section.
+    #[inline]
+    pub const fn offset(&self) -> usize {
+        self.offset
+    }
+
+    /// Returns the architecture-specific relocation kind.
+    #[inline]
+    pub const fn relocation_type(&self) -> usize {
+        self.relocation_type
+    }
+
+    /// Returns the symbol-table index referenced by the relocation.
+    #[inline]
+    pub const fn symbol_index(&self) -> usize {
+        self.symbol_index
+    }
+
+    /// Returns the relocation addend representation.
+    #[inline]
+    pub const fn addend(&self) -> ScannedRelocationAddend {
+        self.addend
+    }
+}
+
+/// An owned snapshot of one retained relocation section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScannedRelocationSection {
+    id: ScannedSectionId,
+    name: Box<str>,
+    format: ScannedRelocationFormat,
+    file_offset: usize,
+    size: usize,
+    alignment: usize,
+    target_section: Option<ScannedSectionId>,
+    symbol_table_section: Option<ScannedSectionId>,
+    entries: Box<[ScannedRelocation]>,
+}
+
+impl ScannedRelocationSection {
+    #[inline]
+    pub(crate) fn new(
+        id: ScannedSectionId,
+        name: Box<str>,
+        format: ScannedRelocationFormat,
+        file_offset: usize,
+        size: usize,
+        alignment: usize,
+        target_section: Option<ScannedSectionId>,
+        symbol_table_section: Option<ScannedSectionId>,
+        entries: Box<[ScannedRelocation]>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            format,
+            file_offset,
+            size,
+            alignment: alignment.max(1),
+            target_section,
+            symbol_table_section,
+            entries,
+        }
+    }
+
+    /// Returns the stable section id of the relocation section.
+    #[inline]
+    pub const fn id(&self) -> ScannedSectionId {
+        self.id
+    }
+
+    /// Returns the original section name.
+    #[inline]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns whether the relocation section uses `REL` or `RELA`.
+    #[inline]
+    pub const fn format(&self) -> ScannedRelocationFormat {
+        self.format
+    }
+
+    /// Returns the original file offset from the input image.
+    #[inline]
+    pub const fn file_offset(&self) -> usize {
+        self.file_offset
+    }
+
+    /// Returns the original section size in bytes.
+    #[inline]
+    pub const fn size(&self) -> usize {
+        self.size
+    }
+
+    /// Returns the section alignment in bytes.
+    #[inline]
+    pub const fn alignment(&self) -> usize {
+        self.alignment
+    }
+
+    /// Returns the target section referenced by `sh_info`, when present.
+    #[inline]
+    pub const fn target_section(&self) -> Option<ScannedSectionId> {
+        self.target_section
+    }
+
+    /// Returns the symbol table referenced by `sh_link`, when present.
+    #[inline]
+    pub const fn symbol_table_section(&self) -> Option<ScannedSectionId> {
+        self.symbol_table_section
+    }
+
+    /// Returns the normalized relocation entries.
+    #[inline]
+    pub fn entries(&self) -> &[ScannedRelocation] {
+        &self.entries
+    }
+
+    /// Returns the number of relocation entries.
     #[inline]
     pub fn len(&self) -> usize {
-        self.offsets.len()
+        self.entries.len()
     }
 
+    /// Returns whether the relocation section is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.offsets.is_empty()
-    }
-
-    #[inline]
-    pub fn get(&self, index: usize) -> Option<&'a str> {
-        self.offsets
-            .get(index)
-            .map(|offset| self.strtab.get_str(*offset))
+        self.entries.is_empty()
     }
 }
 
-impl<'a> Index<usize> for ScannedNeededLibs<'a> {
-    type Output = str;
+/// The high-level memory role of one scanned allocatable section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ScannedMemoryKind {
+    /// Executable code.
+    Code,
+    /// Read-only data.
+    ReadOnlyData,
+    /// Writable process-global data.
+    WritableData,
+    /// Thread-local data or zero-fill TLS storage.
+    ThreadLocalData,
+}
 
+/// The owned backing captured for one scanned memory section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScannedMemoryData {
+    /// File-backed bytes captured from the input image.
+    Bytes(Box<[u8]>),
+    /// Zero-fill storage such as `.bss` or `.tbss`.
+    ZeroFill { size: usize },
+}
+
+impl ScannedMemoryData {
+    /// Returns the logical section size in bytes.
     #[inline]
-    fn index(&self, index: usize) -> &Self::Output {
-        self.get(index).expect("DT_NEEDED index out of bounds")
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Bytes(bytes) => bytes.len(),
+            Self::ZeroFill { size } => *size,
+        }
+    }
+
+    /// Returns whether the section contains no bytes.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// An owned snapshot of one allocatable section and its initial contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScannedMemorySection {
+    id: ScannedSectionId,
+    name: Box<str>,
+    kind: ScannedMemoryKind,
+    address: usize,
+    file_offset: usize,
+    size: usize,
+    alignment: usize,
+    data: ScannedMemoryData,
+}
+
+impl ScannedMemorySection {
+    #[inline]
+    pub(crate) fn new(
+        id: ScannedSectionId,
+        name: Box<str>,
+        kind: ScannedMemoryKind,
+        address: usize,
+        file_offset: usize,
+        size: usize,
+        alignment: usize,
+        data: ScannedMemoryData,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            kind,
+            address,
+            file_offset,
+            size,
+            alignment,
+            data,
+        }
+    }
+
+    /// Returns the stable section id.
+    #[inline]
+    pub const fn id(&self) -> ScannedSectionId {
+        self.id
+    }
+
+    /// Returns the original section name.
+    #[inline]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the high-level memory role of the section.
+    #[inline]
+    pub const fn kind(&self) -> ScannedMemoryKind {
+        self.kind
+    }
+
+    /// Returns the original virtual address from the input image.
+    #[inline]
+    pub const fn address(&self) -> usize {
+        self.address
+    }
+
+    /// Returns the original file offset from the input image.
+    #[inline]
+    pub const fn file_offset(&self) -> usize {
+        self.file_offset
+    }
+
+    /// Returns the logical size of the section in bytes.
+    #[inline]
+    pub const fn size(&self) -> usize {
+        self.size
+    }
+
+    /// Returns the required alignment in bytes.
+    #[inline]
+    pub const fn alignment(&self) -> usize {
+        self.alignment
+    }
+
+    /// Returns the captured backing data.
+    #[inline]
+    pub fn data(&self) -> &ScannedMemoryData {
+        &self.data
+    }
+
+    pub(crate) fn into_data(self) -> ScannedMemoryData {
+        self.data
+    }
+}
+
+/// A stable identifier for one scanned section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ScannedSectionId(usize);
+
+impl ScannedSectionId {
+    /// Creates a new section id from a zero-based section-table index.
+    #[inline]
+    pub const fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    /// Returns the zero-based section-table index.
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0
+    }
+}
+
+/// A readable view over one scanned section and its metadata.
+#[derive(Clone, Copy)]
+pub struct ScannedSection<'a> {
+    id: ScannedSectionId,
+    name: &'a str,
+    header: &'a ElfShdr,
+}
+
+impl<'a> ScannedSection<'a> {
+    #[inline]
+    fn new(id: ScannedSectionId, name: &'a str, header: &'a ElfShdr) -> Self {
+        Self { id, name, header }
+    }
+
+    /// Returns the stable section id.
+    #[inline]
+    pub const fn id(&self) -> ScannedSectionId {
+        self.id
+    }
+
+    /// Returns the section name.
+    #[inline]
+    pub fn name(&self) -> &'a str {
+        self.name
+    }
+
+    /// Returns the underlying ELF section header.
+    #[inline]
+    pub fn header(&self) -> &'a ElfShdr {
+        self.header
+    }
+
+    /// Returns the parsed section type.
+    #[inline]
+    pub fn section_type(&self) -> ElfSectionType {
+        self.header.section_type()
+    }
+
+    /// Returns the parsed section flags.
+    #[inline]
+    pub fn flags(&self) -> ElfSectionFlags {
+        self.header.flags()
+    }
+
+    /// Returns the section address.
+    #[inline]
+    pub fn address(&self) -> usize {
+        self.header.sh_addr()
+    }
+
+    /// Returns the section file offset.
+    #[inline]
+    pub fn file_offset(&self) -> usize {
+        self.header.sh_offset()
+    }
+
+    /// Returns the section size in bytes.
+    #[inline]
+    pub fn size(&self) -> usize {
+        self.header.sh_size()
+    }
+
+    /// Returns the section alignment in bytes.
+    #[inline]
+    pub fn alignment(&self) -> usize {
+        self.header.sh_addralign()
+    }
+
+    /// Returns whether the section contributes to the loaded memory image.
+    #[inline]
+    pub fn is_allocated(&self) -> bool {
+        self.flags().contains(ElfSectionFlags::ALLOC)
+    }
+
+    /// Returns whether the section is writable after mapping.
+    #[inline]
+    pub fn is_writable(&self) -> bool {
+        self.flags().contains(ElfSectionFlags::WRITE)
+    }
+
+    /// Returns whether the section is executable.
+    #[inline]
+    pub fn is_executable(&self) -> bool {
+        self.flags().contains(ElfSectionFlags::EXECINSTR)
+    }
+
+    /// Returns whether the section belongs to TLS storage.
+    #[inline]
+    pub fn is_tls(&self) -> bool {
+        self.flags().contains(ElfSectionFlags::TLS)
+    }
+
+    /// Returns whether the section is zero-fill only (`SHT_NOBITS`).
+    #[inline]
+    pub fn is_nobits(&self) -> bool {
+        self.section_type() == ElfSectionType::NOBITS
+    }
+
+    /// Returns whether the section stores retained relocations.
+    #[inline]
+    pub fn is_relocation_section(&self) -> bool {
+        matches!(
+            self.section_type(),
+            ElfSectionType::REL | ElfSectionType::RELA
+        )
+    }
+
+    /// Returns the linked section id referenced by `sh_link`, when non-zero.
+    #[inline]
+    pub fn linked_section_id(&self) -> Option<ScannedSectionId> {
+        (self.header.sh_link() != 0)
+            .then_some(ScannedSectionId::new(self.header.sh_link() as usize))
+    }
+
+    /// Returns the info section id referenced by `sh_info`, when non-zero.
+    #[inline]
+    pub fn info_section_id(&self) -> Option<ScannedSectionId> {
+        (self.header.sh_info() != 0)
+            .then_some(ScannedSectionId::new(self.header.sh_info() as usize))
+    }
+
+    /// Returns the high-level memory role of the section when it is allocatable.
+    #[inline]
+    pub fn memory_kind(&self) -> Option<ScannedMemoryKind> {
+        if !self.is_allocated() {
+            return None;
+        }
+
+        Some(if self.is_tls() {
+            ScannedMemoryKind::ThreadLocalData
+        } else if self.is_executable() {
+            ScannedMemoryKind::Code
+        } else if self.is_writable() {
+            ScannedMemoryKind::WritableData
+        } else {
+            ScannedMemoryKind::ReadOnlyData
+        })
+    }
+}
+
+impl<'a> fmt::Debug for ScannedSection<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScannedSection")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("type", &self.section_type())
+            .field("size", &self.size())
+            .field("align", &self.alignment())
+            .finish()
     }
 }
 
@@ -121,7 +556,7 @@ impl<D> fmt::Debug for ScannedDylib<D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScannedDylib")
             .field("name", &self.name)
-            .field("needed_libs", &self.needed_libs)
+            .field("needed_libs", &self.needed_libs().collect::<Vec<_>>())
             .field("sections", &self.sections.len())
             .field("bind_now", &self.dynamic.bind_now)
             .field("static_tls", &self.dynamic.static_tls)
@@ -214,66 +649,198 @@ impl<D> ScannedDylib<D> {
         self.runpath.map(|offset| self.strtab.get_str(offset))
     }
 
-    /// Returns the DT_NEEDED entries.
+    /// Returns one `DT_NEEDED` entry by index.
     #[inline]
-    pub fn needed_libs(&self) -> ScannedNeededLibs<'_> {
-        ScannedNeededLibs::new(&self.strtab, &self.needed_libs)
+    pub fn needed_lib(&self, index: usize) -> Option<&str> {
+        self.needed_libs
+            .get(index)
+            .map(|offset| self.strtab.get_str(*offset))
     }
 
-    /// Returns the scanned section table.
+    /// Iterates over the `DT_NEEDED` entries.
     #[inline]
-    pub fn sections(&self) -> &[ElfShdr] {
+    pub fn needed_libs(&self) -> impl ExactSizeIterator<Item = &str> + '_ {
+        self.needed_libs
+            .iter()
+            .map(|offset| self.strtab.get_str(*offset))
+    }
+
+    /// Returns the raw ELF section headers.
+    #[inline]
+    pub fn section_headers(&self) -> &[ElfShdr] {
         &self.sections
     }
 
-    /// Returns the name of a scanned section using the stored `.shstrtab`.
     #[inline]
-    pub fn section_name(&self, section: &ElfShdr) -> &str {
+    fn section_name(&self, section: &ElfShdr) -> &str {
         self.shstrtab.get_str(section.sh_name() as usize)
     }
 
-    /// Returns a section by name.
+    /// Returns one scanned section by id.
     #[inline]
-    pub fn section(&self, name: &str) -> Option<&ElfShdr> {
-        self.sections
-            .iter()
-            .find(|section| self.section_name(section) == name)
+    pub fn section(&self, id: ScannedSectionId) -> Option<ScannedSection<'_>> {
+        let header = self.sections.get(id.index())?;
+        Some(ScannedSection::new(id, self.section_name(header), header))
     }
 
-    /// Reads the bytes for a file-backed section with the given name on demand.
-    ///
-    /// To distinguish between a missing section and a non-file-backed one such as
-    /// `.bss`, use [`Self::section`] and inspect [`ElfShdr::section_type`].
+    /// Iterates over all scanned sections together with stable ids.
     #[inline]
-    pub fn section_content(&mut self, name: &str) -> Result<Option<Box<[u8]>>> {
-        let Some((offset, size, is_file_backed)) = self.section(name).map(|section| {
-            (
-                section.sh_offset(),
-                section.sh_size(),
-                section.section_type() != ElfSectionType::NOBITS,
+    pub fn sections(&self) -> impl ExactSizeIterator<Item = ScannedSection<'_>> + '_ {
+        self.sections.iter().enumerate().map(|(index, header)| {
+            ScannedSection::new(
+                ScannedSectionId::new(index),
+                self.section_name(header),
+                header,
             )
-        }) else {
+        })
+    }
+
+    /// Iterates over sections that contribute to the loaded memory image.
+    #[inline]
+    pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_>> {
+        self.sections().filter(|section| section.is_allocated())
+    }
+
+    /// Iterates over retained relocation sections emitted into the section table.
+    #[inline]
+    pub fn relocation_sections(&self) -> impl Iterator<Item = ScannedSection<'_>> {
+        self.sections()
+            .filter(|section| section.is_relocation_section())
+    }
+
+    /// Captures one allocatable section together with its initial contents.
+    pub fn snapshot_memory_section(
+        &mut self,
+        id: ScannedSectionId,
+    ) -> Result<Option<ScannedMemorySection>> {
+        let Some((name, kind, address, file_offset, size, alignment, is_nobits)) =
+            self.section(id).and_then(|section| {
+                Some((
+                    section.name().into(),
+                    section.memory_kind()?,
+                    section.address(),
+                    section.file_offset(),
+                    section.size(),
+                    section.alignment(),
+                    section.is_nobits(),
+                ))
+            })
+        else {
             return Ok(None);
         };
-        if !is_file_backed {
-            return Ok(None);
+
+        let data = if is_nobits {
+            ScannedMemoryData::ZeroFill { size }
+        } else {
+            ScannedMemoryData::Bytes(self.read_bytes(file_offset, size)?)
+        };
+
+        Ok(Some(ScannedMemorySection::new(
+            id,
+            name,
+            kind,
+            address,
+            file_offset,
+            size,
+            alignment,
+            data,
+        )))
+    }
+
+    /// Captures every allocatable section together with its initial contents.
+    pub fn snapshot_memory_sections(&mut self) -> Result<Box<[ScannedMemorySection]>> {
+        let ids = self
+            .alloc_sections()
+            .map(|section| section.id())
+            .collect::<Vec<_>>();
+        let mut sections = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            if let Some(section) = self.snapshot_memory_section(id)? {
+                sections.push(section);
+            }
         }
 
-        self.read_bytes(offset, size).map(Some)
+        Ok(sections.into_boxed_slice())
     }
 
-    /// Reads raw bytes from the underlying ELF reader at the given file offset.
-    #[inline]
-    pub fn read_bytes(&mut self, offset: usize, len: usize) -> Result<Box<[u8]>> {
-        self.reader
-            .read_to_vec(offset, len)
-            .map(Vec::into_boxed_slice)
+    /// Captures one retained relocation section and normalizes its entries.
+    pub fn snapshot_relocation_section(
+        &mut self,
+        id: ScannedSectionId,
+    ) -> Result<Option<ScannedRelocationSection>> {
+        let Some((
+            name,
+            format,
+            file_offset,
+            size,
+            alignment,
+            target_section,
+            symbol_table_section,
+            entsize,
+        )) = self.section(id).and_then(|section| {
+            let format = match section.section_type() {
+                ElfSectionType::REL => ScannedRelocationFormat::Rel,
+                ElfSectionType::RELA => ScannedRelocationFormat::Rela,
+                _ => return None,
+            };
+            Some((
+                section.name().into(),
+                format,
+                section.file_offset(),
+                section.size(),
+                section.alignment(),
+                section.info_section_id(),
+                section.linked_section_id(),
+                section.header().sh_entsize(),
+            ))
+        })
+        else {
+            return Ok(None);
+        };
+
+        let entries = match format {
+            ScannedRelocationFormat::Rel => {
+                snapshot_rel_entries(&mut *self.reader, file_offset, size, entsize)?
+            }
+            ScannedRelocationFormat::Rela => {
+                snapshot_rela_entries(&mut *self.reader, file_offset, size, entsize)?
+            }
+        };
+
+        Ok(Some(ScannedRelocationSection::new(
+            id,
+            name,
+            format,
+            file_offset,
+            size,
+            alignment,
+            target_section,
+            symbol_table_section,
+            entries,
+        )))
     }
 
-    /// Returns the underlying reader used to access the scanned ELF image.
+    /// Captures every retained relocation section and normalizes its entries.
+    pub fn snapshot_relocation_sections(&mut self) -> Result<Box<[ScannedRelocationSection]>> {
+        let ids = self
+            .relocation_sections()
+            .map(|section| section.id())
+            .collect::<Vec<_>>();
+        let mut sections = Vec::with_capacity(ids.len());
+
+        for id in ids {
+            if let Some(section) = self.snapshot_relocation_section(id)? {
+                sections.push(section);
+            }
+        }
+
+        Ok(sections.into_boxed_slice())
+    }
+
     #[inline]
-    pub fn reader(&mut self) -> &mut dyn ElfReader {
-        &mut *self.reader
+    fn read_bytes(&mut self, offset: usize, len: usize) -> Result<Box<[u8]>> {
+        read_bytes_vec(&mut *self.reader, offset, len).map(Vec::into_boxed_slice)
     }
 
     /// Returns the dynamic binding and TLS policy flags discovered during scan.
@@ -325,13 +892,126 @@ fn scan_sections(
         _ => return Err(ParseEhdrError::MissingSectionHeaders.into()),
     };
 
-    let sections = shdrs
-        .into_iter()
-        .filter(|shdr| shdr.section_type() != ElfSectionType::NULL)
-        .collect::<Vec<_>>()
-        .into_boxed_slice();
+    Ok((shdrs.into_boxed_slice(), shstrtab.into_boxed_slice()))
+}
 
-    Ok((sections, shstrtab.into_boxed_slice()))
+fn read_bytes_vec(object: &mut dyn ElfReader, offset: usize, len: usize) -> Result<Vec<u8>> {
+    let mut bytes = vec![0; len];
+    object.read(&mut bytes, offset)?;
+    Ok(bytes)
+}
+
+fn read_typed<T>(object: &mut dyn ElfReader, offset: usize, count: usize) -> Result<Vec<T>> {
+    let byte_len = count
+        .checked_mul(size_of::<T>())
+        .ok_or(ParseDynamicError::AddressOverflow)?;
+    let mut values = Vec::<T>::with_capacity(count);
+    unsafe {
+        values.set_len(count);
+    }
+    let bytes =
+        unsafe { core::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<u8>(), byte_len) };
+    object.read(bytes, offset)?;
+    Ok(values)
+}
+
+fn snapshot_rel_entries(
+    object: &mut dyn ElfReader,
+    offset: usize,
+    size: usize,
+    entsize: usize,
+) -> Result<Box<[ScannedRelocation]>> {
+    let count = relocation_entry_count(size, entsize, size_of::<ElfRel>())?;
+    let rels = read_typed::<ElfRel>(object, offset, count)?;
+    Ok(rels
+        .into_iter()
+        .map(|rel| {
+            ScannedRelocation::new(
+                rel.r_offset(),
+                rel.r_type(),
+                rel.r_symbol(),
+                ScannedRelocationAddend::Implicit,
+            )
+        })
+        .collect::<Vec<_>>()
+        .into_boxed_slice())
+}
+
+fn snapshot_rela_entries(
+    object: &mut dyn ElfReader,
+    offset: usize,
+    size: usize,
+    entsize: usize,
+) -> Result<Box<[ScannedRelocation]>> {
+    let count = relocation_entry_count(size, entsize, size_of::<ElfRela>())?;
+    let relas = read_typed::<ElfRela>(object, offset, count)?;
+    Ok(relas
+        .into_iter()
+        .map(|rela| {
+            ScannedRelocation::new(
+                rela.r_offset(),
+                rela.r_type(),
+                rela.r_symbol(),
+                ScannedRelocationAddend::Explicit(rela.r_addend(0)),
+            )
+        })
+        .collect::<Vec<_>>()
+        .into_boxed_slice())
+}
+
+fn relocation_entry_count(size: usize, entsize: usize, expected_entsize: usize) -> Result<usize> {
+    if size == 0 {
+        return Ok(0);
+    }
+    if entsize == 0 {
+        return Err(ParseDynamicError::MalformedRelocationTable {
+            detail: "relocation section entry size is zero",
+        }
+        .into());
+    }
+    if entsize != expected_entsize {
+        return Err(ParseDynamicError::MalformedRelocationTable {
+            detail: "relocation section entry size does not match the expected ELF relocation layout",
+        }
+        .into());
+    }
+    if !size.is_multiple_of(entsize) {
+        return Err(ParseDynamicError::MalformedRelocationTable {
+            detail: "relocation section size is not divisible by its entry size",
+        }
+        .into());
+    }
+
+    Ok(size / entsize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relocation_entry_count;
+    use crate::{Error, ParseDynamicError};
+
+    #[test]
+    fn relocation_entry_count_accepts_empty_sections() {
+        assert_eq!(relocation_entry_count(0, 0, 24).unwrap(), 0);
+    }
+
+    #[test]
+    fn relocation_entry_count_rejects_zero_entry_size_for_non_empty_sections() {
+        let err = relocation_entry_count(24, 0, 24).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ParseDynamic(ParseDynamicError::MalformedRelocationTable { .. })
+        ));
+    }
+
+    #[test]
+    fn relocation_entry_count_rejects_mismatched_entry_sizes() {
+        let err = relocation_entry_count(48, 16, 24).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ParseDynamic(ParseDynamicError::MalformedRelocationTable { .. })
+        ));
+    }
 }
 
 fn read_interp(object: &mut dyn ElfReader, phdrs: &[ElfPhdr]) -> Result<Option<Box<[u8]>>> {

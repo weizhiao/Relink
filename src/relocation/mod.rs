@@ -17,15 +17,16 @@ mod lazy;
 mod traits;
 
 pub(crate) use core::{
-    RelocAddr, RelocArtifacts, RelocHelper, RelocValue, Relocator, SymDef, find_symdef_impl,
-    likely, reloc_error, resolve_ifunc, unlikely,
+    RelocAddr, RelocArtifacts, RelocHelper, RelocValue, SymDef, find_symdef_impl, likely,
+    reloc_error, resolve_ifunc, unlikely,
 };
 pub(crate) use dynamic::DynamicRelocation;
 pub(crate) use lazy::ResolvedBinding;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use lazy::dl_fixup;
 pub(crate) use traits::{
-    BindingMode, HandlerHooks, LazyLookupHooks, LookupHooks, Relocatable, RelocateArgs, SupportLazy,
+    HandlerHooks, LazyLookupHooks, LookupHooks, Relocatable, RelocateArgs, SupportLazy,
 };
 
-pub use traits::{HandleResult, RelocationContext, RelocationHandler, SymbolLookup};
+pub use core::Relocator;
+pub use traits::{BindingMode, HandleResult, RelocationContext, RelocationHandler, SymbolLookup};

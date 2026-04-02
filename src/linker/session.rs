@@ -1,6 +1,10 @@
 use super::storage::{StagedEntry, StagedStorage};
 use crate::image::{LoadedCore, RawDylib};
-use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum PendingState {
@@ -96,31 +100,9 @@ where
     }
 
     #[inline]
-    pub(crate) fn insert_pending_resolved(
-        &mut self,
-        key: K,
-        raw: RawDylib<D>,
-        direct_deps: Box<[K]>,
-    ) {
-        self.pending.insert(
-            key,
-            PendingEntry {
-                raw,
-                direct_deps,
-                state: PendingState::Resolved,
-            },
-        );
-    }
-
-    #[inline]
     pub(crate) fn insert_staged(&mut self, key: K, module: LoadedCore<D>, direct_deps: Box<[K]>) {
         self.staged
             .insert(StagedEntry::new(key, module, direct_deps));
-    }
-
-    #[inline]
-    pub(crate) fn set_scope_override(&mut self, key: K, scope: Box<[K]>) {
-        self.scope_overrides.insert(key, scope);
     }
 }
 
@@ -141,6 +123,49 @@ where
     }
 
     Ok(())
+}
+
+pub(crate) fn extend_breadth_first<K, E, F>(
+    group_order: &mut Vec<K>,
+    root: K,
+    mut direct_deps: F,
+) -> core::result::Result<(), E>
+where
+    K: Clone + Ord,
+    F: FnMut(&K) -> core::result::Result<Vec<K>, E>,
+{
+    let mut visited = BTreeSet::new();
+    visited.insert(root.clone());
+    group_order.push(root);
+
+    walk_breadth_first(group_order, |key, queue| {
+        for dep_key in direct_deps(key)?.into_iter() {
+            if visited.insert(dep_key.clone()) {
+                queue.push(dep_key);
+            }
+        }
+        Ok(())
+    })
+}
+
+pub(crate) fn collect_unique_deps<K, E, F>(
+    needed_len: usize,
+    mut resolve: F,
+) -> core::result::Result<Vec<K>, E>
+where
+    K: PartialEq,
+    F: FnMut(usize) -> core::result::Result<K, E>,
+{
+    let mut direct_deps = Vec::with_capacity(needed_len);
+
+    for idx in 0..needed_len {
+        let dep_key = resolve(idx)?;
+        if !direct_deps.iter().any(|existing| existing == &dep_key) {
+            direct_deps.push(dep_key);
+        }
+    }
+
+    Ok(direct_deps)
 }
 
 #[cfg(test)]
@@ -176,7 +201,9 @@ mod tests {
 
         assert_eq!(session.scope_keys(&"root"), ["root", "dep"]);
 
-        session.set_scope_override("root", vec!["dep"].into_boxed_slice());
+        session
+            .scope_overrides
+            .insert("root", vec!["dep"].into_boxed_slice());
         assert_eq!(session.scope_keys(&"root"), ["dep"]);
 
         assert_eq!(

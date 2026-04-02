@@ -1,8 +1,9 @@
 use crate::image::LoadedCore;
-use alloc::{boxed::Box, collections::BTreeMap};
+use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
 pub(crate) struct CommittedStorage<K, D: 'static> {
     pub(crate) entries: BTreeMap<K, CommittedEntry<K, D>>,
+    pub(crate) load_order: Vec<K>,
 }
 
 impl<K, D: 'static> CommittedStorage<K, D> {
@@ -10,6 +11,7 @@ impl<K, D: 'static> CommittedStorage<K, D> {
     pub(crate) const fn new() -> Self {
         Self {
             entries: BTreeMap::new(),
+            load_order: Vec::new(),
         }
     }
 }
@@ -44,19 +46,34 @@ where
             entries: &self.entries,
         }
     }
+
+    #[inline]
+    pub(crate) fn load_order(&self) -> &[K] {
+        &self.load_order
+    }
 }
 
 impl<K, D: 'static> CommittedStorage<K, D>
 where
-    K: Ord,
+    K: Clone + Ord,
 {
     #[inline]
     pub(crate) fn insert_new(&mut self, key: K, entry: CommittedEntry<K, D>) {
+        self.load_order.push(key.clone());
         let previous = self.entries.insert(key, entry);
         debug_assert!(
             previous.is_none(),
             "linked storage inserted a duplicate key"
         );
+    }
+
+    #[inline]
+    pub(crate) fn remove(&mut self, key: &K) -> Option<CommittedEntry<K, D>> {
+        let removed = self.entries.remove(key)?;
+        if let Some(idx) = self.load_order.iter().position(|existing| existing == key) {
+            self.load_order.remove(idx);
+        }
+        Some(removed)
     }
 }
 
