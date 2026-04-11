@@ -18,14 +18,14 @@ mod load;
 use crate::{
     Result,
     elf::{ElfHeader, ElfPhdr, ElfShdr},
-    input::ElfReader,
+    input::{ElfReader, ElfReaderExt},
     logging,
     os::{DefaultMmap, Mmap},
     segment::ElfSegments,
     sync::Arc,
     tls::TlsResolver,
 };
-use alloc::{boxed::Box, vec::Vec};
+use alloc::boxed::Box;
 use core::{
     cell::{Cell, UnsafeCell},
     marker::PhantomData,
@@ -201,17 +201,20 @@ impl<'a> LazyShdrs<'a> {
             return None;
         };
 
-        let mut shdrs = Vec::<ElfShdr>::with_capacity(count);
-        unsafe {
-            shdrs.set_len(count);
-        }
-        let bytes =
-            unsafe { core::slice::from_raw_parts_mut(shdrs.as_mut_ptr().cast::<u8>(), size) };
-
-        if let Err(err) = unsafe { (&mut *reader).read(bytes, start) } {
+        let shdrs = match unsafe { (&mut *reader).read_to_vec::<ElfShdr>(start, count) } {
+            Ok(shdrs) => shdrs,
+            Err(err) => {
+                logging::debug!(
+                    "failed to lazily read section headers for {}: {err}",
+                    self.name
+                );
+                return None;
+            }
+        };
+        if shdrs.len() * core::mem::size_of::<ElfShdr>() != size {
             logging::debug!(
-                "failed to lazily read section headers for {}: {err}",
-                self.name
+                "failed to lazily read section headers for {}: section header size mismatch",
+                self.name,
             );
             return None;
         }

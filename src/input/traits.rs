@@ -1,7 +1,10 @@
 use alloc::vec::Vec;
-use core::mem::size_of;
+use core::{
+    mem,
+    mem::{MaybeUninit, size_of},
+};
 
-use crate::Result;
+use crate::{ByteRepr, Result};
 use alloc::boxed::Box;
 
 /// A trait for reading ELF data from various sources.
@@ -32,18 +35,23 @@ pub trait ElfReader {
 pub(crate) trait ElfReaderExt: ElfReader {
     /// Reads values from the underlying object into a new vector.
     #[inline]
-    fn read_to_vec<T>(&mut self, offset: usize, count: usize) -> Result<Vec<T>> {
-        let mut values = Vec::<T>::with_capacity(count);
+    fn read_to_vec<T: ByteRepr>(&mut self, offset: usize, count: usize) -> Result<Vec<T>> {
+        let byte_len = count
+            .checked_mul(size_of::<T>())
+            .expect("ElfReaderExt::read_to_vec length overflow");
+        let mut values = Vec::<MaybeUninit<T>>::with_capacity(count);
         unsafe {
             values.set_len(count);
         }
-        self.read_slice(&mut values, offset)?;
-        Ok(values)
+        let bytes =
+            unsafe { core::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<u8>(), byte_len) };
+        self.read(bytes, offset)?;
+        Ok(unsafe { assume_init_vec(values) })
     }
 
     /// Reads raw bytes into an existing typed slice.
     #[inline]
-    fn read_slice<T>(&mut self, buf: &mut [T], offset: usize) -> Result<()> {
+    fn read_slice<T: ByteRepr>(&mut self, buf: &mut [T], offset: usize) -> Result<()> {
         let byte_len = buf
             .len()
             .checked_mul(size_of::<T>())
@@ -55,6 +63,15 @@ pub(crate) trait ElfReaderExt: ElfReader {
 }
 
 impl<T: ElfReader + ?Sized> ElfReaderExt for T {}
+
+#[inline]
+unsafe fn assume_init_vec<T>(mut values: Vec<MaybeUninit<T>>) -> Vec<T> {
+    let len = values.len();
+    let cap = values.capacity();
+    let ptr = values.as_mut_ptr().cast::<T>();
+    mem::forget(values);
+    unsafe { Vec::from_raw_parts(ptr, len, cap) }
+}
 
 /// A trait for converting various input sources into an `ElfReader`.
 ///

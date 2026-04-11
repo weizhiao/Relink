@@ -26,19 +26,19 @@ mod symbol;
 #[cfg(any(feature = "lazy-binding", feature = "object"))]
 pub(crate) use core::CoreInner;
 pub(crate) use dynamic::DynamicImage;
+pub(crate) use dynamic::DynamicImageParts;
 pub(crate) use dynamic::DynamicInfo;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use dynamic::LazyBindingInfo;
 
-pub use core::{ElfCore, ElfCoreRef, LoadedCore};
+pub use core::{ElfCore, ElfCoreRef, LoadedCore, LoadedMemorySlice};
 pub use dylib::{LoadedDylib, RawDylib};
 pub use exec::{LoadedExec, RawExec};
 #[cfg(feature = "object")]
 pub use object::{LoadedObject, RawObject};
 pub use scanned::{
-    ScannedDylib, ScannedDynamicInfo, ScannedMemoryData, ScannedMemoryKind, ScannedMemorySection,
-    ScannedRelocation, ScannedRelocationAddend, ScannedRelocationFormat, ScannedRelocationSection,
-    ScannedSection, ScannedSectionId,
+    ModuleCapability, ScannedDylib, ScannedDynamicInfo, ScannedRelocationAddend, ScannedSection,
+    ScannedSectionId,
 };
 pub use symbol::Symbol;
 

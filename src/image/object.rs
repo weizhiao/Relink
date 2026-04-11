@@ -17,7 +17,7 @@ use crate::{
 use alloc::boxed::Box;
 use core::{borrow::Borrow, fmt::Debug, ops::Deref};
 
-use super::{CoreInner, ElfCore, LoadedCore};
+use super::{CoreInner, ElfCore, LoadedCore, core::single_memory_slice};
 
 /// A relocatable ELF object.
 ///
@@ -54,6 +54,7 @@ impl<D> Deref for RawObject<D> {
 
 impl<D: 'static> RawObject<D> {
     pub(crate) fn from_builder<T: TlsResolver>(builder: ObjectBuilder<T, D>) -> Self {
+        let memory_slices = single_memory_slice(&builder.segments);
         let inner = CoreInner {
             is_init: AtomicBool::new(false),
             name: builder.name,
@@ -70,6 +71,7 @@ impl<D: 'static> RawObject<D> {
                 T::unregister,
             ),
             segments: builder.segments,
+            memory_slices,
         };
 
         Self {

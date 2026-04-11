@@ -23,6 +23,45 @@ use alloc::vec::Vec;
 use core::{ffi::c_void, fmt::Debug, marker::PhantomData, ptr::NonNull};
 use elf::abi::DF_STATIC_TLS;
 
+/// One mapped memory slice that backs a loaded ELF image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoadedMemorySlice {
+    base: usize,
+    len: usize,
+}
+
+impl LoadedMemorySlice {
+    /// Creates a new mapped-memory slice descriptor.
+    #[inline]
+    pub const fn new(base: usize, len: usize) -> Self {
+        Self { base, len }
+    }
+
+    /// Returns the start address of the slice.
+    #[inline]
+    pub const fn base(self) -> usize {
+        self.base
+    }
+
+    /// Returns the slice length in bytes.
+    #[inline]
+    pub const fn len(self) -> usize {
+        self.len
+    }
+
+    /// Returns whether the slice is empty.
+    #[inline]
+    pub const fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// Returns the exclusive end address of the slice.
+    #[inline]
+    pub const fn end(self) -> usize {
+        self.base.saturating_add(self.len)
+    }
+}
+
 /// A fully loaded and relocated ELF module with retained dependencies.
 ///
 /// This is the common loaded representation used by [`crate::image::LoadedDylib`],
@@ -96,10 +135,22 @@ impl<D> LoadedCore<D> {
         self.core.base()
     }
 
-    /// Gets the memory length of the ELF object map
+    /// Gets the length of the bounding mapped span.
     #[inline]
     pub fn mapped_len(&self) -> usize {
         self.core.mapped_len()
+    }
+
+    /// Returns the mapped memory slices that back this module.
+    #[inline]
+    pub fn memory_slices(&self) -> &[LoadedMemorySlice] {
+        self.core.memory_slices()
+    }
+
+    /// Returns whether the backing memory is one contiguous span with no gaps.
+    #[inline]
+    pub fn is_contiguous_mapping(&self) -> bool {
+        self.core.is_contiguous_mapping()
     }
 
     /// Gets the user-defined data associated with the ELF object
@@ -441,6 +492,9 @@ pub(crate) struct CoreInner<D = ()> {
     /// Memory segments
     pub(crate) segments: ElfSegments,
 
+    /// Public memory-slice view of the mapped image.
+    pub(crate) memory_slices: Box<[LoadedMemorySlice]>,
+
     /// User-defined data
     pub(crate) user_data: D,
 }
@@ -573,7 +627,7 @@ impl<D> ElfCore<D> {
     /// Gets the base address of the ELF object
     #[inline]
     pub fn base(&self) -> usize {
-        self.base_addr().into_inner()
+        mapping_base(&self.inner.memory_slices)
     }
 
     #[inline]
@@ -581,10 +635,33 @@ impl<D> ElfCore<D> {
         self.inner.segments.base_addr()
     }
 
-    /// Gets the memory length of the ELF object map
+    /// Gets the length of the bounding mapped span.
     #[inline]
     pub fn mapped_len(&self) -> usize {
-        self.inner.segments.len()
+        mapping_len(&self.inner.memory_slices)
+    }
+
+    /// Returns the mapped memory slices that back this module.
+    #[inline]
+    pub fn memory_slices(&self) -> &[LoadedMemorySlice] {
+        &self.inner.memory_slices
+    }
+
+    /// Returns whether the backing memory is one contiguous span with no gaps.
+    pub fn is_contiguous_mapping(&self) -> bool {
+        let mut slices = self.memory_slices().iter().copied();
+        let Some(mut current_end) = slices.next().map(LoadedMemorySlice::end) else {
+            return true;
+        };
+
+        for slice in slices {
+            if slice.base() != current_end {
+                return false;
+            }
+            current_end = slice.end();
+        }
+
+        true
     }
 
     /// Gets the symbol table
@@ -662,8 +739,9 @@ impl<D> ElfCore<D> {
             return Err(ParsePhdrError::MissingDynamicSection.into());
         }
 
-        segments.offset = (segments.memory as usize).wrapping_sub(base);
+        segments.set_base(base);
         let dynamic = ElfDynamic::new(dynamic_ptr, &segments)?;
+        let memory_slices = single_memory_slice(&segments);
         Ok(Self {
             inner: Arc::new(CoreInner {
                 name,
@@ -678,6 +756,7 @@ impl<D> ElfCore<D> {
                 })),
                 tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_get_addr, tls_unregister),
                 segments,
+                memory_slices,
                 fini: None,
                 fini_array: None,
                 fini_handler: Arc::new(Box::new(|_: &LifecycleContext| {})),
@@ -697,4 +776,25 @@ impl<D> Debug for ElfCore<D> {
             .field("tls_mod_id", &self.tls_mod_id())
             .finish()
     }
+}
+
+#[inline]
+pub(crate) fn single_memory_slice(segments: &ElfSegments) -> Box<[LoadedMemorySlice]> {
+    alloc::vec![LoadedMemorySlice::new(segments.base(), segments.len())].into_boxed_slice()
+}
+
+#[inline]
+fn mapping_base(slices: &[LoadedMemorySlice]) -> usize {
+    slices.iter().map(|slice| slice.base()).min().unwrap_or(0)
+}
+
+#[inline]
+fn mapping_len(slices: &[LoadedMemorySlice]) -> usize {
+    let Some(base) = slices.iter().map(|slice| slice.base()).min() else {
+        return 0;
+    };
+    let Some(end) = slices.iter().map(|slice| slice.end()).max() else {
+        return 0;
+    };
+    end.saturating_sub(base)
 }

@@ -47,17 +47,17 @@ macro_rules! entity_ref {
 
 pub(crate) use entity_ref;
 
-/// A dense, append-only arena keyed by typed entity references.
+/// A dense, append-only primary map keyed by typed entity references.
 ///
 /// This is a small self-contained equivalent of the arena style used in
 /// Cranelift: ids are dense indices and storage is backed by a single `Vec<T>`.
 #[derive(Debug, Clone)]
-pub struct EntityArena<K, V> {
+pub struct PrimaryMap<K, V> {
     values: Vec<V>,
     marker: PhantomData<fn() -> K>,
 }
 
-impl<K, V> Default for EntityArena<K, V> {
+impl<K, V> Default for PrimaryMap<K, V> {
     #[inline]
     fn default() -> Self {
         Self {
@@ -67,11 +67,11 @@ impl<K, V> Default for EntityArena<K, V> {
     }
 }
 
-impl<K, V> EntityArena<K, V>
+impl<K, V> PrimaryMap<K, V>
 where
     K: EntityRef,
 {
-    /// Creates an empty arena.
+    /// Creates an empty primary map.
     #[inline]
     #[allow(dead_code)]
     pub fn new() -> Self {
@@ -85,7 +85,7 @@ where
         self.values.len()
     }
 
-    /// Returns whether the arena is empty.
+    /// Returns whether the primary map is empty.
     #[inline]
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
@@ -136,9 +136,15 @@ where
     pub fn as_slice(&self) -> &[V] {
         &self.values
     }
+
+    /// Consumes the primary map and returns its dense values.
+    #[inline]
+    pub fn into_values(self) -> Vec<V> {
+        self.values
+    }
 }
 
-impl<K, V> Index<K> for EntityArena<K, V>
+impl<K, V> Index<K> for PrimaryMap<K, V>
 where
     K: EntityRef,
 {
@@ -147,24 +153,151 @@ where
     #[inline]
     fn index(&self, index: K) -> &Self::Output {
         self.get(index)
-            .expect("entity arena indexed with an out-of-bounds entity id")
+            .expect("primary map indexed with an out-of-bounds entity id")
     }
 }
 
-impl<K, V> IndexMut<K> for EntityArena<K, V>
+impl<K, V> IndexMut<K> for PrimaryMap<K, V>
 where
     K: EntityRef,
 {
     #[inline]
     fn index_mut(&mut self, index: K) -> &mut Self::Output {
         self.get_mut(index)
-            .expect("entity arena indexed with an out-of-bounds entity id")
+            .expect("primary map indexed with an out-of-bounds entity id")
+    }
+}
+
+/// A secondary map keyed by typed entity references produced by a primary map.
+///
+/// This stores side data for an entity id without duplicating the entity's
+/// owning storage or external lookup key. Missing ids are represented by empty
+/// slots, so sparse side data does not need placeholder values.
+#[derive(Debug, Clone)]
+pub struct SecondaryMap<K, V> {
+    values: Vec<Option<V>>,
+    marker: PhantomData<fn() -> K>,
+}
+
+impl<K, V> Default for SecondaryMap<K, V> {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            values: Vec::new(),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<K, V> SecondaryMap<K, V>
+where
+    K: EntityRef,
+{
+    /// Creates an empty secondary map.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the current number of addressable slots.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// Returns whether this secondary map has no allocated slots.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// Returns whether `key` has side data.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn contains_key(&self, key: K) -> bool {
+        self.get(key).is_some()
+    }
+
+    /// Inserts side data for `key`, returning the previous value if present.
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        let index = key.index();
+        if self.values.len() <= index {
+            self.values.resize_with(index + 1, || None);
+        }
+        self.values[index].replace(value)
+    }
+
+    /// Removes side data for `key`, returning it if present.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn remove(&mut self, key: K) -> Option<V> {
+        self.values.get_mut(key.index()).and_then(Option::take)
+    }
+
+    /// Returns side data for `key`.
+    #[inline]
+    pub fn get(&self, key: K) -> Option<&V> {
+        self.values.get(key.index()).and_then(Option::as_ref)
+    }
+
+    /// Returns side data for `key` mutably.
+    #[inline]
+    pub fn get_mut(&mut self, key: K) -> Option<&mut V> {
+        self.values.get_mut(key.index()).and_then(Option::as_mut)
+    }
+
+    /// Iterates over ids and present side-data values together.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn iter(&self) -> impl Iterator<Item = (K, &V)> {
+        self.values
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| value.as_ref().map(|value| (K::new(index), value)))
+    }
+
+    /// Iterates over ids and present side-data values together mutably.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (K, &mut V)> {
+        self.values
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(index, value)| value.as_mut().map(|value| (K::new(index), value)))
+    }
+}
+
+impl<K, V> Index<K> for SecondaryMap<K, V>
+where
+    K: EntityRef,
+{
+    type Output = V;
+
+    #[inline]
+    fn index(&self, index: K) -> &Self::Output {
+        self.get(index)
+            .expect("secondary map indexed with a missing entity id")
+    }
+}
+
+impl<K, V> IndexMut<K> for SecondaryMap<K, V>
+where
+    K: EntityRef,
+{
+    #[inline]
+    fn index_mut(&mut self, index: K) -> &mut Self::Output {
+        self.get_mut(index)
+            .expect("secondary map indexed with a missing entity id")
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::EntityArena;
+    use super::{PrimaryMap, SecondaryMap};
+    use alloc::vec::Vec;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct TestId(usize);
@@ -172,8 +305,8 @@ mod tests {
     super::entity_ref!(TestId);
 
     #[test]
-    fn entity_arena_returns_dense_index_ids() {
-        let mut arena = EntityArena::<TestId, u32>::new();
+    fn primary_map_returns_dense_index_ids() {
+        let mut arena = PrimaryMap::<TestId, u32>::new();
 
         let first = arena.push(7);
         let second = arena.push(11);
@@ -184,12 +317,26 @@ mod tests {
     }
 
     #[test]
-    fn entity_arena_supports_index_syntax() {
-        let mut arena = EntityArena::<TestId, u32>::new();
+    fn primary_map_supports_index_syntax() {
+        let mut arena = PrimaryMap::<TestId, u32>::new();
         let first = arena.push(7);
 
         assert_eq!(arena[first], 7);
         arena[first] = 13;
         assert_eq!(arena[first], 13);
+    }
+
+    #[test]
+    fn secondary_map_tracks_sparse_side_data() {
+        let mut map = SecondaryMap::<TestId, &'static str>::new();
+        let first = TestId::new(0);
+        let third = TestId::new(2);
+
+        assert_eq!(map.insert(third, "three"), None);
+        assert_eq!(map.insert(third, "trois"), Some("three"));
+
+        assert_eq!(map.get(first), None);
+        assert_eq!(map[third], "trois");
+        assert_eq!(map.iter().collect::<Vec<_>>(), [(third, &"trois")]);
     }
 }

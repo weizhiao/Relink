@@ -31,11 +31,12 @@ impl LayoutClassPolicy {
 }
 
 /// The arena-packing policy used by section-placement passes.
+///
+/// The policy is primarily organized by final page-table permissions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LayoutPackingPolicy {
     code: LayoutClassPolicy,
     read_only_data: LayoutClassPolicy,
-    relocation_read_only_data: LayoutClassPolicy,
     writable_data: LayoutClassPolicy,
     thread_local_data: LayoutClassPolicy,
 }
@@ -56,14 +57,12 @@ impl LayoutPackingPolicy {
     pub const fn new(
         code: LayoutClassPolicy,
         read_only_data: LayoutClassPolicy,
-        relocation_read_only_data: LayoutClassPolicy,
         writable_data: LayoutClassPolicy,
         thread_local_data: LayoutClassPolicy,
     ) -> Self {
         Self {
             code,
             read_only_data,
-            relocation_read_only_data,
             writable_data,
             thread_local_data,
         }
@@ -73,16 +72,15 @@ impl LayoutPackingPolicy {
     #[inline]
     pub const fn private_base_pages() -> Self {
         let base = LayoutClassPolicy::new(Self::BASE_PAGE_SIZE, LayoutArenaSharing::Private);
-        Self::new(base, base, base, base, base)
+        Self::new(base, base, base, base)
     }
 
-    /// Returns a hugepage-oriented policy for cross-module code and rodata packing.
+    /// Returns a hugepage-oriented policy for executable and read-only pages.
     #[inline]
     pub const fn shared_huge_pages() -> Self {
         Self::new(
             LayoutClassPolicy::new(Self::HUGE_PAGE_SIZE, LayoutArenaSharing::Shared),
             LayoutClassPolicy::new(Self::HUGE_PAGE_SIZE, LayoutArenaSharing::Shared),
-            LayoutClassPolicy::new(Self::BASE_PAGE_SIZE, LayoutArenaSharing::Private),
             LayoutClassPolicy::new(Self::BASE_PAGE_SIZE, LayoutArenaSharing::Private),
             LayoutClassPolicy::new(Self::BASE_PAGE_SIZE, LayoutArenaSharing::Private),
         )
@@ -94,7 +92,6 @@ impl LayoutPackingPolicy {
         match class {
             LayoutMemoryClass::Code => self.code,
             LayoutMemoryClass::ReadOnlyData => self.read_only_data,
-            LayoutMemoryClass::RelocationReadOnlyData => self.relocation_read_only_data,
             LayoutMemoryClass::WritableData => self.writable_data,
             LayoutMemoryClass::ThreadLocalData => self.thread_local_data,
         }
@@ -195,16 +192,17 @@ pub enum LayoutArenaSharing {
 }
 
 /// The high-level memory class of one layout section or arena.
+///
+/// These classes are grouped by their final page-table permissions; TLS is
+/// kept separate because it follows a different mapping model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LayoutMemoryClass {
-    /// Executable code.
+    /// Executable pages.
     Code,
-    /// Read-only data that can stay read-only after materialization.
+    /// Read-only pages.
     ReadOnlyData,
-    /// Data that starts writable and may later become read-only.
-    RelocationReadOnlyData,
-    /// Writable process-global data.
+    /// Writable pages.
     WritableData,
-    /// Thread-local data or zero-fill TLS storage.
+    /// Thread-local storage pages.
     ThreadLocalData,
 }

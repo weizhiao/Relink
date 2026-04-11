@@ -26,8 +26,10 @@ impl SectionKind {
             SectionKind::DynSym => ".dynsym",
             SectionKind::RelaDyn => ".rela.dyn",
             SectionKind::RelaPlt => ".rela.plt",
+            SectionKind::RetainedRelaData => ".rela.data.retain",
             SectionKind::RelDyn => ".rel.dyn",
             SectionKind::RelPlt => ".rel.plt",
+            SectionKind::RetainedRelData => ".rel.data.retain",
             SectionKind::Dynamic => ".dynamic",
             SectionKind::Hash => ".hash",
             SectionKind::ShStrTab => ".shstrtab",
@@ -45,8 +47,8 @@ impl SectionKind {
             SectionKind::Null => SHT_NULL,
             SectionKind::DynStr | SectionKind::ShStrTab => SHT_STRTAB,
             SectionKind::DynSym => SHT_DYNSYM,
-            SectionKind::RelaDyn | SectionKind::RelaPlt => SHT_RELA,
-            SectionKind::RelDyn | SectionKind::RelPlt => SHT_REL,
+            SectionKind::RelaDyn | SectionKind::RelaPlt | SectionKind::RetainedRelaData => SHT_RELA,
+            SectionKind::RelDyn | SectionKind::RelPlt | SectionKind::RetainedRelData => SHT_REL,
             SectionKind::Dynamic => SHT_DYNAMIC,
             SectionKind::Hash => SHT_HASH,
             SectionKind::Plt | SectionKind::Text | SectionKind::Data => SHT_PROGBITS,
@@ -83,14 +85,10 @@ impl SectionKind {
                     SYM_SIZE_32
                 }
             }
-            SectionKind::RelaDyn | SectionKind::RelaPlt => {
-                if is_64 {
-                    RELA_SIZE_64
-                } else {
-                    RELA_SIZE_32
-                }
+            SectionKind::RelaDyn | SectionKind::RelaPlt | SectionKind::RetainedRelaData => {
+                if is_64 { RELA_SIZE_64 } else { RELA_SIZE_32 }
             }
-            SectionKind::RelDyn | SectionKind::RelPlt => {
+            SectionKind::RelDyn | SectionKind::RelPlt | SectionKind::RetainedRelData => {
                 if is_64 {
                     REL_SIZE_64
                 } else {
@@ -123,6 +121,9 @@ impl SectionKind {
             SectionKind::RelaPlt | SectionKind::RelPlt => {
                 *map.get(&SectionKind::Plt).unwrap_or(&0) as u32
             }
+            SectionKind::RetainedRelaData | SectionKind::RetainedRelData => {
+                *map.get(&SectionKind::Data).unwrap_or(&0) as u32
+            }
             SectionKind::Null => 0,
             _ => 0,
         }
@@ -131,9 +132,10 @@ impl SectionKind {
     fn link(&self, map: &HashMap<SectionKind, usize>) -> u32 {
         match self {
             SectionKind::DynSym => *map.get(&SectionKind::DynStr).unwrap() as u32,
-            SectionKind::RelaDyn | SectionKind::RelDyn => {
-                *map.get(&SectionKind::DynSym).unwrap() as u32
-            }
+            SectionKind::RelaDyn
+            | SectionKind::RelDyn
+            | SectionKind::RetainedRelaData
+            | SectionKind::RetainedRelData => *map.get(&SectionKind::DynSym).unwrap() as u32,
             SectionKind::RelaPlt | SectionKind::RelPlt => {
                 *map.get(&SectionKind::DynSym).unwrap() as u32
             }

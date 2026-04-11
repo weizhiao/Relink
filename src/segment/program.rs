@@ -84,9 +84,13 @@ impl SegmentBuilder for ProgramSegments<'_> {
     fn create_space<M: Mmap>(&mut self) -> Result<ElfSegments> {
         let (addr, len, min_vaddr) = parse_segments(self.phdrs, self.is_dylib);
         let ptr = unsafe { M::mmap_reserve(addr, len, self.use_file) }?;
-        let mut segments = ElfSegments::new(ptr, len, M::munmap);
-        segments.offset = min_vaddr;
-        Ok(segments)
+        Ok(ElfSegments::with_base(
+            ptr,
+            len,
+            M::munmap,
+            (ptr as usize).wrapping_sub(min_vaddr),
+            min_vaddr,
+        ))
     }
 
     /// Create individual segments from program headers

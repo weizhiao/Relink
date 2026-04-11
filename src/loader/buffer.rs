@@ -1,65 +1,9 @@
 use crate::{
-    ParseEhdrError, ParsePhdrError, Result,
+    AlignedBytes, ParseEhdrError, ParsePhdrError, Result,
     elf::{EHDR_SIZE, ElfEhdr, ElfHeader, ElfPhdr, ElfShdr},
-    input::{ElfReader, ElfReaderExt},
+    input::ElfReader,
 };
-use alloc::vec::Vec;
-use core::mem::{MaybeUninit, align_of, size_of};
-
-pub(crate) struct AlignedBytes {
-    words: Vec<u64>,
-    valid_len: usize,
-}
-
-impl AlignedBytes {
-    #[inline]
-    fn required_words(byte_len: usize) -> Option<usize> {
-        let word_size = size_of::<u64>();
-        byte_len.checked_add(word_size - 1).map(|v| v / word_size)
-    }
-
-    pub(crate) fn with_len(byte_len: usize) -> Option<Self> {
-        let words = Self::required_words(byte_len)?;
-        let mut storage = Vec::new();
-        storage.resize(words, 0);
-        Some(Self {
-            words: storage,
-            valid_len: byte_len,
-        })
-    }
-
-    pub(crate) fn set_len(&mut self, byte_len: usize) -> Option<()> {
-        let words = Self::required_words(byte_len)?;
-        if words > self.words.len() {
-            self.words.resize(words, 0);
-        }
-        self.valid_len = byte_len;
-        Some(())
-    }
-
-    #[inline]
-    pub(crate) fn as_slice<T>(&self) -> &[T] {
-        let elem_size = size_of::<T>();
-        debug_assert!(self.valid_len % elem_size == 0);
-        debug_assert!(align_of::<u64>() >= align_of::<T>());
-        unsafe {
-            core::slice::from_raw_parts(self.words.as_ptr().cast::<T>(), self.valid_len / elem_size)
-        }
-    }
-
-    #[inline]
-    pub(crate) fn as_slice_mut<T>(&mut self) -> &mut [T] {
-        let elem_size = size_of::<T>();
-        debug_assert!(self.valid_len % elem_size == 0);
-        debug_assert!(align_of::<u64>() >= align_of::<T>());
-        unsafe {
-            core::slice::from_raw_parts_mut(
-                self.words.as_mut_ptr().cast::<T>(),
-                self.valid_len / elem_size,
-            )
-        }
-    }
-}
+use core::mem::{MaybeUninit, align_of};
 
 pub(crate) struct ElfBuf {
     pub(crate) buf: AlignedBytes,
@@ -93,8 +37,11 @@ impl ElfBuf {
         self.buf
             .set_len(size)
             .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
-        object.read_slice(self.buf.as_slice_mut::<ElfPhdr>(), start)?;
-        let phdrs = self.buf.as_slice::<ElfPhdr>();
+        object.read(self.buf.as_bytes_mut(), start)?;
+        let phdrs = self
+            .buf
+            .try_cast_slice::<ElfPhdr>()
+            .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
         if phdrs.len() != count {
             return Err(ParsePhdrError::MalformedProgramHeaders.into());
         }
@@ -116,9 +63,12 @@ impl ElfBuf {
         self.buf
             .set_len(size)
             .ok_or(ParseEhdrError::MissingSectionHeaders)?;
-        object.read_slice(self.buf.as_slice_mut::<ElfShdr>(), start)?;
+        object.read(self.buf.as_bytes_mut(), start)?;
 
-        let shdrs = self.buf.as_slice_mut::<ElfShdr>();
+        let shdrs = self
+            .buf
+            .try_cast_slice_mut::<ElfShdr>()
+            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
         if shdrs.len() != count {
             return Err(ParseEhdrError::MissingSectionHeaders.into());
         }

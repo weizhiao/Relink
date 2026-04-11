@@ -6,7 +6,7 @@
 use crate::{
     Result,
     elf::{ElfDyn, ElfPhdr},
-    image::{DynamicImage, ElfCore, LoadedCore},
+    image::{DynamicImage, ElfCore, LoadedCore, dynamic::DynamicImageParts},
     loader::{ImageBuilder, LoadHook},
     os::Mmap,
     relocation::{Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup},
@@ -71,6 +71,16 @@ impl<D> RawDylib<D> {
     {
         Ok(Self {
             inner: DynamicImage::from_builder(builder, phdrs)?,
+        })
+    }
+
+    pub(crate) fn from_parts<Tls>(parts: DynamicImageParts<D>) -> Result<Self>
+    where
+        D: 'static,
+        Tls: TlsResolver,
+    {
+        Ok(Self {
+            inner: DynamicImage::from_parts::<Tls>(parts)?,
         })
     }
 

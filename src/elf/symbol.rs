@@ -235,7 +235,6 @@ impl ElfSymbol {
     /// Sets the symbol value.
     /// This is used internally when resolving symbol addresses during loading.
     #[inline]
-    #[cfg(feature = "object")]
     pub(crate) fn set_value(&mut self, value: usize) {
         self.sym.st_value = value as _;
     }

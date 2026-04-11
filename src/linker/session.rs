@@ -1,4 +1,3 @@
-use super::storage::{StagedEntry, StagedStorage};
 use crate::image::{LoadedCore, RawDylib};
 use alloc::{
     boxed::Box,
@@ -6,44 +5,113 @@ use alloc::{
     vec::Vec,
 };
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) enum PendingState {
-    Unresolved,
-    Resolved,
+pub(crate) struct GraphEntry<K, P> {
+    pub(crate) payload: P,
+    pub(crate) direct_deps: Option<Box<[K]>>,
 }
 
-pub(crate) struct PendingEntry<K, D: 'static> {
-    pub(crate) raw: RawDylib<D>,
-    pub(crate) direct_deps: Box<[K]>,
-    pub(crate) state: PendingState,
-}
-
-impl<K, D: 'static> PendingEntry<K, D> {
+impl<K, P> GraphEntry<K, P> {
     #[inline]
-    fn new(raw: RawDylib<D>) -> Self {
+    pub(crate) fn new(payload: P) -> Self {
         Self {
-            raw,
-            direct_deps: Vec::new().into_boxed_slice(),
-            state: PendingState::Unresolved,
+            payload,
+            direct_deps: None,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn direct_deps(&self) -> Option<&[K]> {
+        self.direct_deps.as_deref()
+    }
+
+    #[inline]
+    pub(crate) fn set_direct_deps(&mut self, direct_deps: Vec<K>) {
+        self.direct_deps = Some(direct_deps.into_boxed_slice());
+    }
+}
+
+pub(crate) struct ReadyCommit<K, D: 'static> {
+    pub(crate) key: K,
+    pub(crate) module: LoadedCore<D>,
+    pub(crate) direct_deps: Box<[K]>,
+}
+
+impl<K, D: 'static> Clone for ReadyCommit<K, D>
+where
+    K: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            module: self.module.clone(),
+            direct_deps: self.direct_deps.clone(),
         }
     }
 }
 
-pub(crate) struct LoadSession<K, D: 'static> {
-    pub(crate) pending: BTreeMap<K, PendingEntry<K, D>>,
-    pub(crate) staged: StagedStorage<K, D>,
+impl<K, D: 'static> ReadyCommit<K, D> {
+    #[inline]
+    fn new(key: K, module: LoadedCore<D>, direct_deps: Box<[K]>) -> Self {
+        Self {
+            key,
+            module,
+            direct_deps,
+        }
+    }
+}
+
+pub(crate) struct ResolveSession<K, P> {
+    pub(crate) entries: BTreeMap<K, GraphEntry<K, P>>,
     pub(crate) group_order: Vec<K>,
-    pub(crate) scope_overrides: BTreeMap<K, Box<[K]>>,
+}
+
+impl<K, P> ResolveSession<K, P> {
+    #[inline]
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            group_order: Vec::new(),
+        }
+    }
+}
+
+impl<K, P> ResolveSession<K, P>
+where
+    K: Ord,
+{
+    #[inline]
+    pub(crate) fn contains_key(&self, key: &K) -> bool {
+        self.entries.contains_key(key)
+    }
+
+    #[inline]
+    pub(crate) fn insert_entry(&mut self, key: K, payload: P) {
+        self.entries.insert(key, GraphEntry::new(payload));
+    }
+
+    #[inline]
+    pub(crate) fn insert_resolved_entry(&mut self, key: K, payload: P, direct_deps: Box<[K]>) {
+        self.entries.insert(
+            key,
+            GraphEntry {
+                payload,
+                direct_deps: Some(direct_deps),
+            },
+        );
+    }
+}
+
+pub(crate) struct LoadSession<K, D: 'static> {
+    pub(crate) resolve: ResolveSession<K, RawDylib<D>>,
+    pub(crate) ready_to_commit: Vec<ReadyCommit<K, D>>,
 }
 
 impl<K, D: 'static> LoadSession<K, D> {
     #[inline]
     pub(crate) fn new() -> Self {
         Self {
-            pending: BTreeMap::new(),
-            staged: StagedStorage::new(),
-            group_order: Vec::new(),
-            scope_overrides: BTreeMap::new(),
+            resolve: ResolveSession::new(),
+            ready_to_commit: Vec::new(),
         }
     }
 }
@@ -53,56 +121,19 @@ where
     K: Ord,
 {
     #[inline]
-    pub(crate) fn contains_pending(&self, key: &K) -> bool {
-        self.pending.contains_key(key)
+    pub(crate) fn insert_resolved_pending(
+        &mut self,
+        key: K,
+        raw: RawDylib<D>,
+        direct_deps: Box<[K]>,
+    ) {
+        self.resolve.insert_resolved_entry(key, raw, direct_deps);
     }
 
     #[inline]
-    pub(crate) fn contains_staged(&self, key: &K) -> bool {
-        self.staged.contains_key(key)
-    }
-
-    #[inline]
-    pub(crate) fn pending_entry(&self, key: &K) -> &PendingEntry<K, D> {
-        self.pending
-            .get(key)
-            .expect("missing module while resolving dependencies")
-    }
-
-    #[inline]
-    pub(crate) fn pending_entry_mut(&mut self, key: &K) -> &mut PendingEntry<K, D> {
-        self.pending
-            .get_mut(key)
-            .expect("missing module while resolving dependencies")
-    }
-
-    #[inline]
-    pub(crate) fn pending_state(&self, key: &K) -> PendingState {
-        self.pending_entry(key).state
-    }
-
-    #[inline]
-    pub(crate) fn scope_keys(&self, key: &K) -> &[K] {
-        self.scope_overrides
-            .get(key)
-            .map(Box::as_ref)
-            .unwrap_or(self.group_order.as_slice())
-    }
-}
-
-impl<K, D: 'static> LoadSession<K, D>
-where
-    K: Clone + Ord,
-{
-    #[inline]
-    pub(crate) fn insert_pending(&mut self, key: K, raw: RawDylib<D>) {
-        self.pending.insert(key, PendingEntry::new(raw));
-    }
-
-    #[inline]
-    pub(crate) fn insert_staged(&mut self, key: K, module: LoadedCore<D>, direct_deps: Box<[K]>) {
-        self.staged
-            .insert(StagedEntry::new(key, module, direct_deps));
+    pub(crate) fn push_ready(&mut self, key: K, module: LoadedCore<D>, direct_deps: Box<[K]>) {
+        self.ready_to_commit
+            .push(ReadyCommit::new(key, module, direct_deps));
     }
 }
 
@@ -170,7 +201,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{LoadSession, walk_breadth_first};
+    use super::walk_breadth_first;
     use alloc::{collections::BTreeMap, vec, vec::Vec};
 
     #[test]
@@ -192,24 +223,5 @@ mod tests {
         .unwrap();
 
         assert_eq!(visited, vec!["A", "B", "C", "D"]);
-    }
-
-    #[test]
-    fn scope_override_defaults_to_group_order() {
-        let mut session = LoadSession::<&'static str, ()>::new();
-        session.group_order = vec!["root", "dep"];
-
-        assert_eq!(session.scope_keys(&"root"), ["root", "dep"]);
-
-        session
-            .scope_overrides
-            .insert("root", vec!["dep"].into_boxed_slice());
-        assert_eq!(session.scope_keys(&"root"), ["dep"]);
-
-        assert_eq!(
-            session.scope_overrides.remove(&"root"),
-            Some(vec!["dep"].into_boxed_slice())
-        );
-        assert_eq!(session.scope_keys(&"root"), ["root", "dep"]);
     }
 }

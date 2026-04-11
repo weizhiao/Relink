@@ -11,7 +11,8 @@ mod context;
 mod layout;
 mod plan;
 mod request;
-mod scan;
+mod resolve;
+mod runtime;
 mod session;
 mod storage;
 mod view;
@@ -19,18 +20,13 @@ mod view;
 pub use api::{KeyResolver, RelocationInputs, RelocationPlanner, ResolvedKey};
 pub use context::LinkContext;
 pub use layout::{
-    LayoutAddress, LayoutAddressMap, LayoutArena, LayoutArenaId, LayoutArenaImage,
-    LayoutArenaSharing, LayoutArenaUsage, LayoutClassPolicy, LayoutMemoryClass,
-    LayoutPackingPolicy, LayoutPhysicalImage, LayoutPhysicalPlan, LayoutRegion, LayoutRegionArena,
-    LayoutRegionId, LayoutRegionPlacement, LayoutRelocationSiteRepair, LayoutRepairPlan,
-    LayoutRepairStatus, LayoutRetainedRelocationRepair, LayoutRetainedRelocationSection,
-    LayoutSectionData, LayoutSectionDataArena, LayoutSectionDataId, LayoutSectionId,
-    LayoutSectionMetadata, LayoutSectionMetadataArena, LayoutSectionRepair, LayoutSectionSource,
-    MemoryLayoutPlan, ModuleAddressMap, ModuleLayout, ModuleLayoutRepair, ModulePhysicalLayout,
-    ModulePhysicalSlice, PackSectionsPass, RelocationSiteAddress, SectionPlacement,
-    SectionRegionPlacement,
+    LayoutAddress, LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutArenaUsage,
+    LayoutClassPolicy, LayoutMemoryClass, LayoutModuleMaterialization, LayoutPackingPolicy,
+    LayoutRelocationSiteRepair, LayoutRetainedRelocationRepair, LayoutSectionArena,
+    LayoutSectionId, LayoutSectionKind, LayoutSectionMetadata, LayoutSectionRecord,
+    LayoutSectionRepair, MemoryLayoutPlan, ModuleLayout, ModulePhysicalLayout, ModulePhysicalSlice,
+    SectionPlacement,
 };
-pub use plan::{LinkPass, LinkPipeline, LinkPlan};
-pub use request::{DependencyContext, DependencyOwner, DependencyRequest, RelocationRequest};
-pub use scan::ScanContextView;
-pub use view::LinkContextView;
+pub use plan::{LinkModuleId, LinkPass, LinkPassPlan, LinkPassScope, LinkPipeline};
+pub use request::{DependencyOwner, DependencyRequest, RelocationRequest};
+pub use view::DependencyGraphView;
