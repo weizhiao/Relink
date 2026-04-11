@@ -61,6 +61,8 @@ pub struct ElfWriterConfig {
     pub ifunc_resolver_val: Option<u64>,
     /// Whether the generated ELF should request eager binding by default.
     pub bind_now: bool,
+    /// Whether to emit one retained relocation section for the data section.
+    pub emit_retained_relocations: bool,
 }
 
 impl Default for ElfWriterConfig {
@@ -70,6 +72,7 @@ impl Default for ElfWriterConfig {
             page_size: 0x1000,
             ifunc_resolver_val: None,
             bind_now: false,
+            emit_retained_relocations: false,
         }
     }
 }
@@ -96,6 +99,12 @@ impl ElfWriterConfig {
     /// Set whether the generated ELF should request eager binding by default.
     pub fn with_bind_now(mut self, bind_now: bool) -> Self {
         self.bind_now = bind_now;
+        self
+    }
+
+    /// Emit a minimal retained relocation section for the data section.
+    pub fn with_emit_retained_relocations(mut self, emit: bool) -> Self {
+        self.emit_retained_relocations = emit;
         self
     }
 }
@@ -217,6 +226,30 @@ impl DylibWriter {
         let data = DataMetaData::new(&reloc, &symtab, &mut allocator);
         let mut text = CodeMetaData::new(&symtab, &mut allocator);
         let tls = TlsMetaData::new(&symtab, &mut allocator);
+        let retained_relocation = if self.config.emit_retained_relocations {
+            let size = if data.size() == 0 {
+                0
+            } else if is_64 {
+                if self.arch.is_rela() {
+                    RELA_SIZE_64 as usize
+                } else {
+                    REL_SIZE_64 as usize
+                }
+            } else if self.arch.is_rela() {
+                RELA_SIZE_32 as usize
+            } else {
+                REL_SIZE_32 as usize
+            };
+            let section_id = allocator.allocate(size);
+            let section_kind = if self.arch.is_rela() {
+                SectionKind::RetainedRelaData
+            } else {
+                SectionKind::RetainedRelData
+            };
+            Some((section_id, section_kind, size as u64))
+        } else {
+            None
+        };
 
         // 1. Create initial sections
         let mut sections = vec![];
@@ -225,6 +258,19 @@ impl DylibWriter {
         tls.create_section(&mut sections);
         symtab.create_sections(&mut sections);
         reloc.create_sections(&mut sections)?;
+        if let Some((section_id, section_kind, size)) = retained_relocation {
+            sections.push(crate::dylib::shdr::Section {
+                header: crate::dylib::shdr::SectionHeader {
+                    name_off: 0,
+                    shtype: section_kind,
+                    addr: 0,
+                    offset: 0,
+                    size,
+                    addralign: if is_64 { 8 } else { 4 },
+                },
+                data: section_id,
+            });
+        }
 
         // 2. Create .dynamic section (placeholder)
         let mut dyn_meta =
@@ -273,6 +319,16 @@ impl DylibWriter {
 
         // Update GOT and Relocations
         reloc.patch_all(&shdr_manager, &symtab, &mut allocator)?;
+        if let Some((section_id, _, size)) = retained_relocation {
+            if size != 0 {
+                let data_vaddr = shdr_manager.get_vaddr(SectionKind::Data);
+                Self::write_retained_relocation(
+                    self.arch,
+                    allocator.get_mut(&section_id),
+                    data_vaddr,
+                )?;
+            }
+        }
 
         // Update Dynamic
         dyn_meta.patch_dynamic(&shdr_manager, &reloc, &mut allocator, got_plt_vaddr)?;
@@ -366,6 +422,24 @@ impl DylibWriter {
             Arch::Arm => EM_ARM,
             Arch::Loongarch64 => EM_LOONGARCH,
         }
+    }
+
+    fn write_retained_relocation(arch: Arch, bytes: &mut Vec<u8>, offset: u64) -> Result<()> {
+        bytes.clear();
+        if arch.is_64() {
+            bytes.write_u64::<LittleEndian>(offset)?;
+            bytes.write_u64::<LittleEndian>(0)?;
+            if arch.is_rela() {
+                bytes.write_i64::<LittleEndian>(0)?;
+            }
+        } else {
+            bytes.write_u32::<LittleEndian>(offset as u32)?;
+            bytes.write_u32::<LittleEndian>(0)?;
+            if arch.is_rela() {
+                bytes.write_i32::<LittleEndian>(0)?;
+            }
+        }
+        Ok(())
     }
 }
 

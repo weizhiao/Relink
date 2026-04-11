@@ -4,17 +4,20 @@ use crate::sync::{Arc, AtomicBool};
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
-    loader::{ImageBuilder, LifecycleContext, LoadHook},
+    loader::{DynLifecycleHandler, ImageBuilder, LifecycleContext, LoadHook},
     logging,
     os::Mmap,
     relocation::{DynamicRelocation, RelocAddr},
     segment::ELFRelro,
-    tls::{CoreTlsState, TlsResolver},
+    tls::{CoreTlsState, TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, ptr::NonNull};
 
-use super::{ElfCore, core::CoreInner};
+use super::{
+    ElfCore, LoadedMemorySlice,
+    core::{CoreInner, single_memory_slice},
+};
 
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo {
@@ -39,6 +42,23 @@ pub(crate) struct DynamicInfo {
     pub(crate) phdrs: ElfPhdrs,
     #[cfg(feature = "lazy-binding")]
     pub(crate) lazy: LazyBindingInfo,
+}
+
+pub(crate) struct DynamicImageParts<D> {
+    pub(crate) name: alloc::string::String,
+    pub(crate) entry: RelocAddr,
+    pub(crate) interp: Option<&'static str>,
+    pub(crate) phdrs: ElfPhdrs,
+    pub(crate) dynamic_ptr: NonNull<ElfDyn>,
+    pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
+    pub(crate) tls_info: Option<TlsInfo>,
+    pub(crate) force_static_tls: bool,
+    pub(crate) relro: Option<ELFRelro>,
+    pub(crate) segments: crate::segment::ElfSegments,
+    pub(crate) memory_slices: Box<[LoadedMemorySlice]>,
+    pub(crate) init_fn: DynLifecycleHandler,
+    pub(crate) fini_fn: DynLifecycleHandler,
+    pub(crate) user_data: D,
 }
 
 /// Extra data associated with ELF objects during relocation
@@ -278,32 +298,31 @@ impl<D> DynamicImage<D> {
 }
 
 impl<D: 'static> DynamicImage<D> {
-    /// Build a dynamic image from the intermediate loader state.
-    pub(crate) fn from_builder<'hook, H, M, Tls>(
-        mut builder: ImageBuilder<'hook, H, M, Tls, D>,
-        phdrs: &[ElfPhdr],
-    ) -> Result<Self>
+    pub(crate) fn from_parts<Tls>(parts: DynamicImageParts<D>) -> Result<Self>
     where
-        H: LoadHook,
         Tls: TlsResolver,
-        M: Mmap,
     {
-        // Determine if this is a dynamic library
-        let is_dylib = builder.ehdr.is_dylib();
+        let DynamicImageParts {
+            name,
+            entry,
+            interp,
+            phdrs,
+            dynamic_ptr,
+            eh_frame_hdr,
+            tls_info,
+            force_static_tls,
+            relro,
+            segments,
+            memory_slices,
+            init_fn,
+            fini_fn,
+            user_data,
+        } = parts;
 
-        // Parse all program headers
-        builder.parse_phdrs(phdrs)?;
+        let dynamic_info_phdrs = phdrs.clone();
+        let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &segments)?;
 
-        let dynamic_ptr = builder
-            .dynamic_ptr
-            .ok_or(ParsePhdrError::MissingDynamicSection)?;
-
-        // Create program headers representation
-        let phdrs_repr = builder.create_phdrs(phdrs);
-
-        let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &builder.segments)?;
-
-        logging::trace!("[{}] Dynamic info: {:?}", builder.name, dynamic);
+        logging::trace!("[{}] Dynamic info: {:?}", name, dynamic);
 
         let relocation = DynamicRelocation::new(
             dynamic.pltrel,
@@ -312,12 +331,8 @@ impl<D: 'static> DynamicImage<D> {
             dynamic.rel_count,
         )?;
 
-        let static_tls = builder.static_tls | dynamic.static_tls;
-
-        // Create symbol table from dynamic section
+        let static_tls = force_static_tls | dynamic.static_tls;
         let symtab = SymbolTable::from_dynamic(&dynamic);
-
-        // Collect needed library names
         let needed_libs: Vec<&'static str> = dynamic
             .needed_libs
             .iter()
@@ -325,13 +340,10 @@ impl<D: 'static> DynamicImage<D> {
             .collect();
 
         if !needed_libs.is_empty() {
-            logging::debug!("[{}] Dependencies: {:?}", builder.name, needed_libs);
+            logging::debug!("[{}] Dependencies: {:?}", name, needed_libs);
         }
 
-        let init_handler = builder.init_fn;
-
-        let (tls_mod_id, tls_tp_offset) = if let Some(info) = &builder.tls_info {
-            // The Tls::register will register the TLS module and return the ID.
+        let (tls_mod_id, tls_tp_offset) = if let Some(info) = &tls_info {
             if static_tls {
                 let (mod_id, offset) = Tls::register_static(info)?;
                 (Some(mod_id), Some(offset))
@@ -342,50 +354,28 @@ impl<D: 'static> DynamicImage<D> {
             (None, None)
         };
 
-        // Build and return the relocated common part
+        let init_handler = init_fn;
+
         Ok(DynamicImage {
-            entry: if is_dylib {
-                builder.segments.base_addr().offset(builder.ehdr.e_entry())
-            } else {
-                RelocAddr::new(builder.ehdr.e_entry())
-            },
-            interp: builder
-                .interp
-                .map(|s| unsafe { CStr::from_ptr(s.as_ptr()) }.to_str())
-                .transpose()
-                .map_err(|_| ParsePhdrError::InvalidUtf8 { field: "PT_INTERP" })?,
-            phdrs: phdrs_repr.clone(),
+            entry,
+            interp,
+            phdrs,
             extra: ElfExtraData {
-                // Determine if lazy binding should be enabled
                 lazy: cfg!(feature = "lazy-binding") && !dynamic.bind_now,
-
-                // Store GNU_RELRO segment information
-                relro: builder.relro,
-
-                // Store relocation information
+                relro,
                 relocation,
-
-                // Create initialization function
                 init: Box::new(move || {
                     init_handler.call(&LifecycleContext::new(
                         dynamic.init_fn,
                         dynamic.init_array_fn,
                     ))
                 }),
-
-                // Store GOT pointer
                 #[cfg(feature = "lazy-binding")]
                 got_plt: dynamic.got_plt,
-
-                // Store RPATH value
                 rpath: dynamic
                     .rpath_off
                     .map(|rpath_off| symtab.strtab().get_str(rpath_off.get())),
-
-                // Store needed library names
                 needed_libs: needed_libs.into_boxed_slice(),
-
-                // Store RUNPATH value
                 runpath: dynamic
                     .runpath_off
                     .map(|runpath_off| symtab.strtab().get_str(runpath_off.get())),
@@ -393,16 +383,16 @@ impl<D: 'static> DynamicImage<D> {
             module: ElfCore {
                 inner: Arc::new(CoreInner {
                     is_init: AtomicBool::new(false),
-                    name: builder.name,
+                    name,
                     symtab,
                     fini: dynamic.fini_fn,
                     fini_array: dynamic.fini_array_fn,
-                    fini_handler: builder.fini_fn,
-                    user_data: builder.user_data,
+                    fini_handler: fini_fn,
+                    user_data,
                     dynamic_info: Some(Arc::new(DynamicInfo {
-                        eh_frame_hdr: builder.eh_frame_hdr,
+                        eh_frame_hdr,
                         dynamic_ptr,
-                        phdrs: phdrs_repr,
+                        phdrs: dynamic_info_phdrs,
                         #[cfg(feature = "lazy-binding")]
                         lazy: LazyBindingInfo::new(dynamic.pltrel),
                     })),
@@ -412,9 +402,54 @@ impl<D: 'static> DynamicImage<D> {
                         RelocAddr::from_ptr(Tls::tls_get_addr as *const ()),
                         Tls::unregister,
                     ),
-                    segments: builder.segments,
+                    segments,
+                    memory_slices,
                 }),
             },
+        })
+    }
+
+    /// Build a dynamic image from the intermediate loader state.
+    pub(crate) fn from_builder<'hook, H, M, Tls>(
+        mut builder: ImageBuilder<'hook, H, M, Tls, D>,
+        phdrs: &[ElfPhdr],
+    ) -> Result<Self>
+    where
+        H: LoadHook,
+        Tls: TlsResolver,
+        M: Mmap,
+    {
+        // Parse all program headers
+        builder.parse_phdrs(phdrs)?;
+
+        let dynamic_ptr = builder
+            .dynamic_ptr
+            .ok_or(ParsePhdrError::MissingDynamicSection)?;
+        let memory_slices = single_memory_slice(&builder.segments);
+        let phdrs = builder.create_phdrs(phdrs);
+        Self::from_parts::<Tls>(DynamicImageParts {
+            name: builder.name,
+            entry: if builder.ehdr.is_dylib() {
+                builder.segments.base_addr().offset(builder.ehdr.e_entry())
+            } else {
+                RelocAddr::new(builder.ehdr.e_entry())
+            },
+            interp: builder
+                .interp
+                .map(|s| unsafe { CStr::from_ptr(s.as_ptr()) }.to_str())
+                .transpose()
+                .map_err(|_| ParsePhdrError::InvalidUtf8 { field: "PT_INTERP" })?,
+            phdrs,
+            dynamic_ptr,
+            eh_frame_hdr: builder.eh_frame_hdr,
+            tls_info: builder.tls_info,
+            force_static_tls: builder.static_tls,
+            relro: builder.relro,
+            segments: builder.segments,
+            memory_slices,
+            init_fn: builder.init_fn,
+            fini_fn: builder.fini_fn,
+            user_data: builder.user_data,
         })
     }
 }

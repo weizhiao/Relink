@@ -41,4 +41,8 @@ impl DataMetaData {
             data: self.data_id,
         });
     }
+
+    pub(crate) fn size(&self) -> u64 {
+        self.data_size
+    }
 }

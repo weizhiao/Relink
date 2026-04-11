@@ -295,7 +295,10 @@ pub(crate) trait SegmentBuilder {
         let base = space.base();
 
         #[cfg(windows)]
-        let mut last_addr = space.memory as usize;
+        let mut last_addr = space
+            .primary_backing()
+            .map(|(memory, _)| memory as usize)
+            .unwrap_or(base);
 
         for segment in segments.iter_mut() {
             segment.rebase(base);
@@ -306,7 +309,10 @@ pub(crate) trait SegmentBuilder {
                 if addr > last_addr {
                     crate::os::virtual_free(last_addr, addr - last_addr)?;
                 }
-                let space_end = space.memory as usize + space.len();
+                let space_end = space
+                    .primary_backing()
+                    .map(|(memory, len)| memory as usize + len)
+                    .unwrap_or(base + space.len());
                 if addr + len < space_end {
                     crate::os::virtual_free(addr + len, space_end - (addr + len))?;
                 }

@@ -268,6 +268,16 @@ where
         (self.init_fn.clone(), self.fini_fn.clone())
     }
 
+    #[inline]
+    pub(crate) fn force_static_tls(&self) -> bool {
+        self.force_static_tls
+    }
+
+    #[inline]
+    pub(crate) fn post_load_dylib(&mut self, dylib: &mut crate::image::RawDylib<D>) -> Result<()> {
+        (self.post_load_dylib)(dylib)
+    }
+
     pub(crate) fn load_user_data<'a>(
         &self,
         name: &'a str,

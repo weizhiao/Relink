@@ -1,168 +1,260 @@
 use super::{
     LayoutAddress, LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutArenaUsage,
-    LayoutClassPolicy, LayoutMemoryClass, LayoutPackingPolicy, LayoutRegion, LayoutRegionPlacement,
-    LayoutRepairStatus, LayoutSectionData, LayoutSectionMetadata, LayoutSectionSource,
-    MemoryLayoutPlan, ModuleLayout, PackSectionsPass, SectionRegionPlacement,
+    LayoutClassPolicy, LayoutMemoryClass, LayoutModuleMaterialization, LayoutPackingPolicy,
+    LayoutSectionArena, LayoutSectionData, LayoutSectionKind, LayoutSectionMetadata,
+    MemoryLayoutPlan, ModuleLayout, SectionPlacement,
 };
-use crate::image::{
-    ScannedMemoryData, ScannedMemoryKind, ScannedMemorySection, ScannedRelocation,
-    ScannedRelocationAddend, ScannedRelocationFormat, ScannedRelocationSection, ScannedSectionId,
-};
-use crate::linker::plan::{LinkPass, LinkPlan};
-use alloc::{collections::BTreeMap, vec, vec::Vec};
+use crate::elf::{ElfRela, REL_BIT};
+use crate::image::ModuleCapability;
+use crate::linker::plan::LinkModuleId;
+use alloc::{boxed::Box, vec::Vec};
+use core::mem::size_of;
 
-#[test]
-fn module_layout_tracks_scanned_section_ids() {
-    let layout = ModuleLayout::from_sections([
-        (ScannedSectionId::new(3), super::LayoutSectionId::new(7)),
-        (ScannedSectionId::new(4), super::LayoutSectionId::new(8)),
-    ]);
+const ROOT_MODULE: LinkModuleId = LinkModuleId::new(0);
 
-    assert_eq!(layout.alloc_sections().len(), 2);
-    assert_eq!(
-        layout.section_id(ScannedSectionId::new(3)),
-        Some(super::LayoutSectionId::new(7))
-    );
-    assert_eq!(
-        layout.section_id(ScannedSectionId::new(4)),
-        Some(super::LayoutSectionId::new(8))
-    );
+fn alloc_section(
+    sections: &mut LayoutSectionArena,
+    section: usize,
+    name: &str,
+    class: LayoutMemoryClass,
+    size: usize,
+    alignment: usize,
+    zero_fill: bool,
+) -> super::LayoutSectionId {
+    sections.insert(
+        ROOT_MODULE,
+        LayoutSectionMetadata::new(
+            section,
+            name,
+            LayoutSectionKind::Allocated(class),
+            None::<super::LayoutSectionId>,
+            None::<super::LayoutSectionId>,
+            0,
+            0,
+            size,
+            alignment,
+            zero_fill,
+        ),
+    )
+}
+
+fn relocation_metadata(
+    sections: &mut LayoutSectionArena,
+    section: usize,
+    name: &str,
+    target: Option<super::LayoutSectionId>,
+    symtab: Option<super::LayoutSectionId>,
+) -> super::LayoutSectionId {
+    sections.insert(
+        ROOT_MODULE,
+        LayoutSectionMetadata::new(
+            section,
+            name,
+            LayoutSectionKind::RetainedRelocation,
+            symtab,
+            target,
+            0,
+            0,
+            size_of::<ElfRela>(),
+            8,
+            false,
+        ),
+    )
+}
+
+fn rela_bytes(
+    offset: usize,
+    relocation_type: usize,
+    symbol_index: usize,
+    addend: isize,
+) -> Box<[u8]> {
+    let r_info = (symbol_index << REL_BIT) | relocation_type;
+    let mut bytes = Vec::with_capacity(size_of::<ElfRela>());
+
+    #[cfg(target_pointer_width = "64")]
+    {
+        bytes.extend_from_slice(&(offset as u64).to_ne_bytes());
+        bytes.extend_from_slice(&(r_info as u64).to_ne_bytes());
+        bytes.extend_from_slice(&(addend as i64).to_ne_bytes());
+    }
+
+    #[cfg(not(target_pointer_width = "64"))]
+    {
+        bytes.extend_from_slice(&(offset as u32).to_ne_bytes());
+        bytes.extend_from_slice(&(r_info as u32).to_ne_bytes());
+        bytes.extend_from_slice(&(addend as i32).to_ne_bytes());
+    }
+
+    bytes.into_boxed_slice()
 }
 
 #[test]
-fn memory_layout_plan_can_assign_and_clear_section_regions() {
-    let mut layout = MemoryLayoutPlan::<&'static str>::new();
-    let section_id = layout
-        .section_metadata_arena_mut()
-        .insert(LayoutSectionMetadata::new(
-            LayoutSectionSource::Scanned(ScannedSectionId::new(3)),
-            ".text",
-            LayoutMemoryClass::Code,
+fn module_layout_tracks_scanned_section_ids_and_kinds() {
+    let mut sections = LayoutSectionArena::new();
+    let text = alloc_section(
+        &mut sections,
+        3,
+        ".text",
+        LayoutMemoryClass::Code,
+        64,
+        16,
+        false,
+    );
+    let reloc = relocation_metadata(&mut sections, 4, ".rela.text", Some(text), Some(text));
+    let debug = sections.insert(
+        ROOT_MODULE,
+        LayoutSectionMetadata::new(
+            5,
+            ".debug_info",
+            LayoutSectionKind::NonAllocated,
+            None::<super::LayoutSectionId>,
+            None::<super::LayoutSectionId>,
             0,
             0,
-            64,
-            16,
+            24,
+            1,
             false,
-        ));
-    layout.insert_module(
-        "root",
-        ModuleLayout::from_sections([(ScannedSectionId::new(3), section_id)]),
+        ),
     );
-    let region_id = layout
-        .push_region(&"root", LayoutRegion::new(LayoutMemoryClass::Code))
-        .unwrap();
 
-    assert!(layout.assign_section_to_region(section_id, region_id, 0x2000));
-    assert_eq!(
-        layout
-            .section_metadata(section_id)
-            .and_then(|section| section.region()),
-        Some(SectionRegionPlacement::new(region_id, 0x2000, 64))
-    );
-    assert_eq!(
-        layout.clear_section_region(section_id),
-        Some(SectionRegionPlacement::new(region_id, 0x2000, 64))
-    );
-    assert!(
-        layout
-            .section_metadata(section_id)
-            .and_then(|section| section.region())
-            .is_none()
-    );
+    let layout = ModuleLayout::from_sections([(3, text), (4, reloc), (5, debug)], &sections);
+
+    assert_eq!(layout.sections().len(), 3);
+    assert_eq!(layout.alloc_sections(), [text].as_slice());
+    assert_eq!(layout.relocation_sections(), [reloc].as_slice());
+    assert_eq!(layout.section_id(3), Some(text));
+    assert_eq!(layout.section_id(4), Some(reloc));
+    assert_eq!(layout.section_id(5), Some(debug));
 }
 
 #[test]
-fn memory_layout_plan_rejects_cross_dso_region_assignment() {
-    let mut layout = MemoryLayoutPlan::<&'static str>::new();
-    let root_section = layout
-        .section_metadata_arena_mut()
-        .insert(LayoutSectionMetadata::new(
-            LayoutSectionSource::Scanned(ScannedSectionId::new(1)),
-            ".text",
-            LayoutMemoryClass::Code,
-            0,
-            0,
-            64,
-            16,
-            false,
-        ));
-    let dep_section = layout
-        .section_metadata_arena_mut()
-        .insert(LayoutSectionMetadata::new(
-            LayoutSectionSource::Scanned(ScannedSectionId::new(2)),
-            ".text",
-            LayoutMemoryClass::Code,
-            0,
-            0,
-            64,
-            16,
-            false,
-        ));
-    layout.insert_module(
-        "root",
-        ModuleLayout::from_sections([(ScannedSectionId::new(1), root_section)]),
+fn memory_layout_plan_can_assign_and_clear_section_arenas() {
+    let mut layout = MemoryLayoutPlan::new();
+    let section = alloc_section(
+        layout.sections_mut(),
+        3,
+        ".text",
+        LayoutMemoryClass::Code,
+        64,
+        16,
+        false,
     );
-    layout.insert_module(
-        "dep",
-        ModuleLayout::from_sections([(ScannedSectionId::new(2), dep_section)]),
+    let module = ModuleLayout::from_sections([(3, section)], layout.sections());
+    layout.insert_module(ROOT_MODULE, module);
+    let arena = layout.create_arena(LayoutArena::new(
+        2 * 1024 * 1024,
+        LayoutMemoryClass::Code,
+        LayoutArenaSharing::Shared,
+    ));
+
+    assert!(layout.assign_section_to_arena(section, arena, 0x2000));
+    assert_eq!(
+        layout.section_placement(section),
+        Some(SectionPlacement::new(arena, 0x2000, 64))
     );
+    assert_eq!(
+        layout.clear_section_arena(section),
+        Some(SectionPlacement::new(arena, 0x2000, 64))
+    );
+    assert!(layout.section_placement(section).is_none());
+}
 
-    let dep_region = layout
-        .push_region(&"dep", LayoutRegion::new(LayoutMemoryClass::Code))
-        .unwrap();
+#[test]
+fn memory_layout_plan_rejects_incompatible_arena_assignment() {
+    let mut layout = MemoryLayoutPlan::new();
+    let section = alloc_section(
+        layout.sections_mut(),
+        1,
+        ".text",
+        LayoutMemoryClass::Code,
+        64,
+        16,
+        false,
+    );
+    let readonly_arena = layout.create_arena(LayoutArena::new(
+        4096,
+        LayoutMemoryClass::ReadOnlyData,
+        LayoutArenaSharing::Private,
+    ));
 
-    assert!(!layout.assign_section_to_region(root_section, dep_region, 0));
-    assert!(layout.section_region(root_section).is_none());
+    assert!(!layout.assign_section_to_arena(section, readonly_arena, 0));
+    assert!(layout.section_placement(section).is_none());
 }
 
 #[test]
 fn memory_layout_plan_materializes_section_data_on_demand() {
-    let mut layout = MemoryLayoutPlan::<&'static str>::new();
-    let scanned_section = ScannedSectionId::new(5);
-    let section_id = layout
-        .section_metadata_arena_mut()
-        .insert(LayoutSectionMetadata::new(
-            LayoutSectionSource::Scanned(scanned_section),
-            ".rodata",
-            LayoutMemoryClass::ReadOnlyData,
-            0,
-            0,
-            4,
-            4,
-            false,
-        ));
+    let mut layout = MemoryLayoutPlan::new();
+    let section = alloc_section(
+        layout.sections_mut(),
+        5,
+        ".rodata",
+        LayoutMemoryClass::ReadOnlyData,
+        4,
+        4,
+        false,
+    );
 
     let data_id = layout
-        .install_section_data(
-            section_id,
-            ScannedMemorySection::new(
-                scanned_section,
-                ".rodata".into(),
-                ScannedMemoryKind::ReadOnlyData,
-                0,
-                0,
-                4,
-                4,
-                ScannedMemoryData::Bytes(alloc::vec![1, 2, 3, 4].into_boxed_slice()),
-            ),
-        )
+        .install_section_data(section, alloc::vec![1, 2, 3, 4].into_boxed_slice())
         .unwrap();
 
+    assert_eq!(data_id, section);
     assert_eq!(
-        layout.section_metadata(section_id).unwrap().data(),
-        Some(data_id)
+        layout
+            .cached_section_data(section)
+            .and_then(LayoutSectionData::bytes),
+        Some([1_u8, 2, 3, 4].as_slice())
     );
     assert_eq!(
         layout
-            .section_data(data_id)
+            .cached_section_data(section)
             .and_then(LayoutSectionData::bytes),
         Some([1_u8, 2, 3, 4].as_slice())
     );
 }
 
 #[test]
+fn memory_layout_plan_keeps_materialization_when_replacing_module_layout() {
+    let mut layout = MemoryLayoutPlan::new();
+    let first = alloc_section(
+        layout.sections_mut(),
+        5,
+        ".text",
+        LayoutMemoryClass::Code,
+        4,
+        4,
+        false,
+    );
+    let first_module = ModuleLayout::from_sections([(5, first)], layout.sections());
+    assert!(layout.insert_module(ROOT_MODULE, first_module).is_none());
+
+    assert_eq!(
+        layout.set_module_materialization(ROOT_MODULE, LayoutModuleMaterialization::SectionRegions),
+        Some(LayoutModuleMaterialization::WholeDsoRegion)
+    );
+
+    let second = alloc_section(
+        layout.sections_mut(),
+        6,
+        ".rodata",
+        LayoutMemoryClass::ReadOnlyData,
+        4,
+        4,
+        false,
+    );
+    let second_module = ModuleLayout::from_sections([(6, second)], layout.sections());
+
+    assert!(layout.insert_module(ROOT_MODULE, second_module).is_some());
+    assert_eq!(
+        layout.module_materialization(ROOT_MODULE),
+        Some(LayoutModuleMaterialization::SectionRegions)
+    );
+    assert_eq!(layout.module_section_id(ROOT_MODULE, 6), Some(second));
+}
+
+#[test]
 fn memory_layout_plan_assigns_index_based_arena_ids() {
-    let mut plan = MemoryLayoutPlan::<&'static str>::new();
+    let mut plan = MemoryLayoutPlan::new();
     let arena_id = plan.push_arena(LayoutArena::new(
         2 * 1024 * 1024,
         LayoutMemoryClass::ReadOnlyData,
@@ -171,15 +263,12 @@ fn memory_layout_plan_assigns_index_based_arena_ids() {
 
     assert_eq!(arena_id, LayoutArenaId::new(0));
     assert_eq!(plan.arenas().len(), 1);
-    assert_eq!(plan.arena(arena_id).unwrap().page_size(), 2 * 1024 * 1024);
+    assert_eq!(plan.arena(arena_id).page_size(), 2 * 1024 * 1024);
     assert_eq!(
-        plan.arena(arena_id).unwrap().memory_class(),
+        plan.arena(arena_id).memory_class(),
         LayoutMemoryClass::ReadOnlyData
     );
-    assert_eq!(
-        plan.arena(arena_id).unwrap().sharing(),
-        LayoutArenaSharing::Shared
-    );
+    assert_eq!(plan.arena(arena_id).sharing(), LayoutArenaSharing::Shared);
 }
 
 #[test]
@@ -201,447 +290,121 @@ fn layout_packing_policy_defaults_to_shared_huge_pages() {
 }
 
 #[test]
-fn clear_regions_removes_regions_mappings_and_addresses() {
-    let mut layout = MemoryLayoutPlan::<&'static str>::new();
-    let section_id = layout
-        .section_metadata_arena_mut()
-        .insert(LayoutSectionMetadata::new(
-            LayoutSectionSource::Scanned(ScannedSectionId::new(1)),
-            ".text",
-            LayoutMemoryClass::Code,
-            0,
-            0,
-            16,
-            16,
-            false,
-        ));
-    layout.insert_module(
-        "root",
-        ModuleLayout::from_sections([(ScannedSectionId::new(1), section_id)]),
+fn clear_arena_mappings_removes_placements_and_derived_state() {
+    let mut layout = MemoryLayoutPlan::new();
+    let section = alloc_section(
+        layout.sections_mut(),
+        1,
+        ".text",
+        LayoutMemoryClass::Code,
+        16,
+        16,
+        false,
     );
+    let module = ModuleLayout::from_sections([(1, section)], layout.sections());
+    layout.insert_module(ROOT_MODULE, module);
 
-    let region_id = layout
-        .push_region(&"root", LayoutRegion::new(LayoutMemoryClass::Code))
-        .unwrap();
-    let arena_id = layout.push_arena(LayoutArena::new(
+    let arena = layout.push_arena(LayoutArena::new(
         2 * 1024 * 1024,
         LayoutMemoryClass::Code,
         LayoutArenaSharing::Shared,
     ));
-    layout.assign_section_to_region(section_id, region_id, 0x40);
-    layout.place_region(
-        region_id,
-        LayoutRegionPlacement::new(arena_id, 0x2000, 0x80),
-    );
-    layout.rebuild_addresses();
+    layout.assign_section_to_arena(section, arena, 0x40);
+    layout
+        .rebuild_derived_state(|_| Some(ModuleCapability::SectionData))
+        .unwrap();
 
-    layout.clear_regions();
+    layout.clear_arena_mappings();
 
     assert!(layout.arenas().is_empty());
-    assert_eq!(layout.region_entries().count(), 0);
-    assert!(
-        layout
-            .section_metadata(section_id)
-            .and_then(|section| section.region())
-            .is_none()
-    );
-    assert!(layout.addresses().module(&"root").is_none());
+    assert!(layout.section_placement(section).is_none());
+    assert!(layout.module_physical_layout(ROOT_MODULE).is_none());
 }
 
 #[test]
 fn arena_usage_rounds_up_to_page_size() {
-    let mut layout = MemoryLayoutPlan::<&'static str>::new();
-    let section_id = layout
-        .section_metadata_arena_mut()
-        .insert(LayoutSectionMetadata::new(
-            LayoutSectionSource::Scanned(ScannedSectionId::new(3)),
-            ".text",
-            LayoutMemoryClass::Code,
-            0,
-            0,
-            64,
-            16,
-            false,
-        ));
-    layout.insert_module(
-        "root",
-        ModuleLayout::from_sections([(ScannedSectionId::new(3), section_id)]),
+    let mut layout = MemoryLayoutPlan::new();
+    let section = alloc_section(
+        layout.sections_mut(),
+        3,
+        ".text",
+        LayoutMemoryClass::Code,
+        64,
+        16,
+        false,
     );
-    let region_id = layout
-        .push_region(&"root", LayoutRegion::new(LayoutMemoryClass::Code))
-        .unwrap();
-    let arena_id = layout.push_arena(LayoutArena::new(
+    let module = ModuleLayout::from_sections([(3, section)], layout.sections());
+    layout.insert_module(ROOT_MODULE, module);
+    let arena = layout.push_arena(LayoutArena::new(
         2 * 1024 * 1024,
         LayoutMemoryClass::Code,
         LayoutArenaSharing::Shared,
     ));
-    layout.assign_section_to_region(section_id, region_id, 0x1ff0);
-    layout.place_region(region_id, LayoutRegionPlacement::new(arena_id, 0, 0x2070));
+    layout.assign_section_to_arena(section, arena, 0x1ff0);
 
     assert_eq!(
-        layout.arena_usage(arena_id),
-        Some(LayoutArenaUsage::new(1, 0x2070, 2 * 1024 * 1024))
-    );
-}
-
-#[test]
-fn prepare_layout_installs_an_empty_layout_when_needed() {
-    let mut plan = LinkPlan::<&'static str, ()>::new("root", Vec::new(), BTreeMap::new());
-
-    plan.prepare_layout().unwrap();
-
-    assert!(plan.memory_layout().is_some());
-    assert_eq!(plan.memory_layout().unwrap().modules().count(), 0);
-}
-
-#[test]
-fn push_relocation_section_registers_metadata_in_the_target_module() {
-    let mut layout = MemoryLayoutPlan::<&'static str>::new();
-    layout.insert_module("root", ModuleLayout::new());
-
-    let entry = ScannedRelocation::new(0x18, 1, 0, ScannedRelocationAddend::Explicit(0));
-    let section = ScannedRelocationSection::new(
-        ScannedSectionId::new(9),
-        ".rela.text".into(),
-        ScannedRelocationFormat::Rela,
-        0x200,
-        24,
-        8,
-        Some(ScannedSectionId::new(5)),
-        Some(ScannedSectionId::new(7)),
-        alloc::vec![entry].into_boxed_slice(),
-    );
-
-    let section_id = layout.push_relocation_section(&"root", section).unwrap();
-    let duplicate_id = layout
-        .push_relocation_section(
-            &"root",
-            ScannedRelocationSection::new(
-                ScannedSectionId::new(9),
-                ".rela.text".into(),
-                ScannedRelocationFormat::Rela,
-                0x200,
-                24,
-                8,
-                Some(ScannedSectionId::new(5)),
-                Some(ScannedSectionId::new(7)),
-                alloc::vec![entry].into_boxed_slice(),
-            ),
-        )
-        .unwrap();
-    let metadata = layout.section_metadata(section_id).unwrap();
-    let relocations = metadata.retained_relocations().unwrap();
-
-    assert_eq!(duplicate_id, section_id);
-    assert!(metadata.is_relocation());
-    assert_eq!(relocations.format(), ScannedRelocationFormat::Rela);
-    assert_eq!(relocations.target_section(), Some(ScannedSectionId::new(5)));
-    assert_eq!(
-        relocations.symbol_table_section(),
-        Some(ScannedSectionId::new(7))
-    );
-    assert_eq!(relocations.entries(), [entry].as_slice());
-    assert!(layout.supports_reorder_repair(&"root"));
-    assert_eq!(
-        layout.module_section_id(&"root", ScannedSectionId::new(9)),
-        Some(section_id)
+        layout.arena_usage(arena),
+        Some(LayoutArenaUsage::new(1, 0x2030, 2 * 1024 * 1024))
     );
 }
 
 #[test]
 fn finalize_layout_derives_section_and_relocation_site_addresses() {
-    let scanned_section = ScannedSectionId::new(5);
-    let relocation_section_id = ScannedSectionId::new(9);
-
-    let mut layout = MemoryLayoutPlan::<&'static str>::new();
-    let section_id = layout
-        .section_metadata_arena_mut()
-        .insert(LayoutSectionMetadata::new(
-            LayoutSectionSource::Scanned(scanned_section),
-            ".text",
-            LayoutMemoryClass::Code,
-            0,
-            0,
-            64,
-            16,
-            false,
-        ));
-    layout.insert_module(
-        "root",
-        ModuleLayout::from_sections([(scanned_section, section_id)]),
+    let mut layout = MemoryLayoutPlan::new();
+    let text = alloc_section(
+        layout.sections_mut(),
+        5,
+        ".text",
+        LayoutMemoryClass::Code,
+        64,
+        16,
+        false,
+    );
+    let reloc = relocation_metadata(layout.sections_mut(), 9, ".rela.text", Some(text), None);
+    let module = ModuleLayout::from_sections([(5, text), (9, reloc)], layout.sections());
+    layout.insert_module(ROOT_MODULE, module);
+    layout.install_section_data(reloc, rela_bytes(0x18, 1, 0, 0));
+    layout.create_arena(LayoutArena::new(
+        4096,
+        LayoutMemoryClass::Code,
+        LayoutArenaSharing::Shared,
+    ));
+    layout.place_section_in_arena(
+        text,
+        SectionPlacement::new(LayoutArenaId::new(0), 0x1000, 64),
     );
 
-    let region_id = layout
-        .push_region(&"root", LayoutRegion::new(LayoutMemoryClass::Code))
+    layout
+        .rebuild_derived_state(|_| Some(ModuleCapability::SectionReorderable))
         .unwrap();
-    layout.assign_section_to_region(section_id, region_id, 0);
-    layout.place_region(
-        region_id,
-        LayoutRegionPlacement::new(LayoutArenaId::new(1), 0x1000, 64),
-    );
-    layout.push_relocation_section(
-        &"root",
-        ScannedRelocationSection::new(
-            relocation_section_id,
-            ".rela.text".into(),
-            ScannedRelocationFormat::Rela,
-            0,
-            24,
-            8,
-            Some(scanned_section),
-            None,
-            alloc::vec![ScannedRelocation::new(
-                0x18,
-                1,
-                0,
-                ScannedRelocationAddend::Explicit(0),
-            )]
-            .into_boxed_slice(),
-        ),
-    );
 
-    let mut plan = LinkPlan::<&'static str, ()>::new("root", vec!["root"], BTreeMap::new());
-    plan.replace_memory_layout(layout);
-    plan.finalize_layout();
-
-    let layout = plan.memory_layout().unwrap();
-    assert_eq!(layout.repair_status(&"root"), LayoutRepairStatus::Ready);
     assert_eq!(
-        layout.section_address(&"root", scanned_section),
-        Some(LayoutAddress::new(LayoutArenaId::new(1), 0x1000))
+        layout
+            .section_placement(text)
+            .map(SectionPlacement::address),
+        Some(LayoutAddress::new(LayoutArenaId::new(0), 0x1000))
     );
     assert_eq!(
-        layout.relocation_site_address(&"root", relocation_section_id, 0),
-        Some(LayoutAddress::new(LayoutArenaId::new(1), 0x1018))
+        layout.relocation_site_address(ROOT_MODULE, reloc, 0),
+        Some(LayoutAddress::new(LayoutArenaId::new(0), 0x1018))
     );
     assert_eq!(
         layout
-            .section_repair(&"root", scanned_section)
+            .section_repair(ROOT_MODULE, text)
             .map(|repair| repair.original_address()),
         Some(0)
     );
     assert_eq!(
         layout
-            .section_repair(&"root", scanned_section)
+            .section_repair(ROOT_MODULE, text)
             .map(|repair| repair.address()),
-        Some(LayoutAddress::new(LayoutArenaId::new(1), 0x1000))
+        Some(LayoutAddress::new(LayoutArenaId::new(0), 0x1000))
     );
-    let relocation_repair = layout
-        .relocation_repair(&"root", relocation_section_id)
-        .unwrap();
+
+    let relocation_repair = layout.relocation_repair(ROOT_MODULE, reloc).unwrap();
     assert_eq!(relocation_repair.sites().len(), 1);
     assert_eq!(
         relocation_repair.sites()[0].address(),
-        LayoutAddress::new(LayoutArenaId::new(1), 0x1018)
+        LayoutAddress::new(LayoutArenaId::new(0), 0x1018)
     );
-}
-
-#[test]
-fn pack_sections_pass_keeps_dso_regions_separate_but_shares_code_arena() {
-    let mut plan = LinkPlan::<&'static str, ()>::new("root", vec!["root", "dep"], BTreeMap::new());
-    let mut layout = MemoryLayoutPlan::<&'static str>::new();
-
-    let root_text = layout
-        .section_metadata_arena_mut()
-        .insert(LayoutSectionMetadata::new(
-            LayoutSectionSource::Scanned(ScannedSectionId::new(1)),
-            ".text",
-            LayoutMemoryClass::Code,
-            0,
-            0,
-            96,
-            32,
-            false,
-        ));
-    let root_data = layout
-        .section_metadata_arena_mut()
-        .insert(LayoutSectionMetadata::new(
-            LayoutSectionSource::Scanned(ScannedSectionId::new(2)),
-            ".data",
-            LayoutMemoryClass::WritableData,
-            0,
-            0,
-            32,
-            16,
-            false,
-        ));
-    let dep_text = layout
-        .section_metadata_arena_mut()
-        .insert(LayoutSectionMetadata::new(
-            LayoutSectionSource::Scanned(ScannedSectionId::new(3)),
-            ".text",
-            LayoutMemoryClass::Code,
-            0,
-            0,
-            64,
-            64,
-            false,
-        ));
-
-    layout.insert_module(
-        "root",
-        ModuleLayout::from_sections([
-            (ScannedSectionId::new(1), root_text),
-            (ScannedSectionId::new(2), root_data),
-        ]),
-    );
-    layout.insert_module(
-        "dep",
-        ModuleLayout::from_sections([(ScannedSectionId::new(3), dep_text)]),
-    );
-    plan.replace_memory_layout(layout);
-
-    let mut pass = PackSectionsPass::shared_huge_pages();
-    pass.run(&mut plan, &mut ()).unwrap();
-    plan.finalize_layout();
-
-    let layout = plan.memory_layout().unwrap();
-    let root_text_region = layout
-        .module_section_region(&"root", ScannedSectionId::new(1))
-        .unwrap();
-    let dep_text_region = layout
-        .module_section_region(&"dep", ScannedSectionId::new(3))
-        .unwrap();
-    let root_text_placement = layout
-        .section_placement(&"root", ScannedSectionId::new(1))
-        .unwrap();
-    let dep_text_placement = layout
-        .section_placement(&"dep", ScannedSectionId::new(3))
-        .unwrap();
-    let root_data_placement = layout
-        .section_placement(&"root", ScannedSectionId::new(2))
-        .unwrap();
-
-    assert_ne!(root_text_region.region(), dep_text_region.region());
-    assert_eq!(root_text_placement.arena(), dep_text_placement.arena());
-    assert_ne!(root_text_placement.arena(), root_data_placement.arena());
-    assert_eq!(
-        layout.arena(root_text_placement.arena()).unwrap(),
-        &LayoutArena::new(
-            2 * 1024 * 1024,
-            LayoutMemoryClass::Code,
-            LayoutArenaSharing::Shared,
-        )
-    );
-    assert_eq!(
-        layout.arena(root_data_placement.arena()).unwrap(),
-        &LayoutArena::new(
-            4 * 1024,
-            LayoutMemoryClass::WritableData,
-            LayoutArenaSharing::Private,
-        )
-    );
-    assert_eq!(dep_text_placement.offset(), 128);
-    assert_eq!(
-        layout.repair_status(&"root"),
-        LayoutRepairStatus::MissingRetainedRelocations
-    );
-    assert_eq!(
-        layout.repair_status(&"dep"),
-        LayoutRepairStatus::MissingRetainedRelocations
-    );
-    let root_physical = layout.module_physical_layout(&"root").unwrap();
-    let dep_physical = layout.module_physical_layout(&"dep").unwrap();
-    assert!(root_physical.touches_arena(root_text_placement.arena()));
-    assert!(dep_physical.touches_arena(dep_text_placement.arena()));
-    assert_eq!(
-        layout
-            .physical()
-            .modules_in_arena(root_text_placement.arena())
-            .count(),
-        2
-    );
-}
-
-#[test]
-fn build_physical_image_merges_multiple_dsos_into_shared_arena_bytes() {
-    let mut layout = MemoryLayoutPlan::<&'static str>::new();
-
-    let root_text = layout
-        .section_metadata_arena_mut()
-        .insert(LayoutSectionMetadata::new(
-            LayoutSectionSource::Scanned(ScannedSectionId::new(1)),
-            ".text",
-            LayoutMemoryClass::Code,
-            0,
-            0,
-            4,
-            4,
-            false,
-        ));
-    let dep_text = layout
-        .section_metadata_arena_mut()
-        .insert(LayoutSectionMetadata::new(
-            LayoutSectionSource::Scanned(ScannedSectionId::new(2)),
-            ".text",
-            LayoutMemoryClass::Code,
-            0,
-            0,
-            4,
-            4,
-            false,
-        ));
-
-    layout.insert_module(
-        "root",
-        ModuleLayout::from_sections([(ScannedSectionId::new(1), root_text)]),
-    );
-    layout.insert_module(
-        "dep",
-        ModuleLayout::from_sections([(ScannedSectionId::new(2), dep_text)]),
-    );
-
-    let root_region = layout
-        .push_region(&"root", LayoutRegion::new(LayoutMemoryClass::Code))
-        .unwrap();
-    let dep_region = layout
-        .push_region(&"dep", LayoutRegion::new(LayoutMemoryClass::Code))
-        .unwrap();
-    let arena_id = layout.push_arena(LayoutArena::new(
-        4096,
-        LayoutMemoryClass::Code,
-        LayoutArenaSharing::Shared,
-    ));
-
-    assert!(layout.assign_section_to_region(root_text, root_region, 0));
-    assert!(layout.assign_section_to_region(dep_text, dep_region, 0));
-    assert!(layout.place_region(root_region, LayoutRegionPlacement::new(arena_id, 0, 4)));
-    assert!(layout.place_region(dep_region, LayoutRegionPlacement::new(arena_id, 8, 4)));
-
-    layout.install_section_data(
-        root_text,
-        ScannedMemorySection::new(
-            ScannedSectionId::new(1),
-            ".text".into(),
-            ScannedMemoryKind::Code,
-            0,
-            0,
-            4,
-            4,
-            ScannedMemoryData::Bytes([1_u8, 2, 3, 4].into()),
-        ),
-    );
-    layout.install_section_data(
-        dep_text,
-        ScannedMemorySection::new(
-            ScannedSectionId::new(2),
-            ".text".into(),
-            ScannedMemoryKind::Code,
-            0,
-            0,
-            4,
-            4,
-            ScannedMemoryData::Bytes([9_u8, 8, 7, 6].into()),
-        ),
-    );
-    layout.rebuild_addresses();
-
-    let image = layout.build_physical_image().unwrap().unwrap();
-    let arena = image.arena_bytes(arena_id).unwrap();
-
-    assert_eq!(&arena[0..4], [1_u8, 2, 3, 4].as_slice());
-    assert_eq!(&arena[4..8], [0_u8, 0, 0, 0].as_slice());
-    assert_eq!(&arena[8..12], [9_u8, 8, 7, 6].as_slice());
-    assert!(image.module(&"root").unwrap().touches_arena(arena_id));
-    assert!(image.module(&"dep").unwrap().touches_arena(arena_id));
 }

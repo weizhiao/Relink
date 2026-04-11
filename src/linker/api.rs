@@ -85,7 +85,7 @@ impl<D> RelocationInputs<D> {
 
 /// Runtime policy for assembling relocation inputs.
 pub trait RelocationPlanner<K, D: 'static> {
-    /// Plans the current relocation scope and binding mode for one module.
+    /// Plans the relocation scope and binding mode for one module.
     fn plan(&mut self, req: &RelocationRequest<'_, K, D>) -> Result<RelocationInputs<D>>;
 }
 

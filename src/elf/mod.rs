@@ -4,6 +4,8 @@
 //! the ELF format as defined in the System V ABI. It includes support for headers,
 //! program headers, section headers, dynamic sections, and symbol tables.
 
+use crate::ByteRepr;
+
 pub mod abi;
 mod defs;
 mod dynamic;
@@ -33,3 +35,12 @@ pub use ehdr::ElfHeader;
 pub use phdr::{ElfPhdr, ElfProgramFlags, ElfProgramType};
 pub use shdr::{ElfSectionFlags, ElfSectionType};
 pub use symbol::{ElfSymbol, ElfSymbolBind, ElfSymbolType};
+
+unsafe impl ByteRepr for defs::ElfEhdr {}
+unsafe impl ByteRepr for dynamic::ElfDyn {}
+unsafe impl ByteRepr for phdr::ElfPhdr {}
+unsafe impl ByteRepr for shdr::ElfShdr {}
+unsafe impl ByteRepr for symbol::ElfSymbol {}
+unsafe impl ByteRepr for defs::ElfRelr {}
+unsafe impl ByteRepr for defs::ElfRela {}
+unsafe impl ByteRepr for defs::ElfRel {}
