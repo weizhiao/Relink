@@ -12,7 +12,7 @@ keywords = ["elf", "testing", "loader", "generation"]
 categories = ["development-tools", "os"]
 
 [dependencies]
-object = { version = "0.38", features = ["write_core"] }
+object = { version = "0.39", features = ["write_core"] }
 anyhow = "1.0"
 byteorder = "1.4"
 
