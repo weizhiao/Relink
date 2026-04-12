@@ -3,7 +3,6 @@ use super::{
     derived::{
         LayoutAddress, LayoutRetainedRelocationRepair, LayoutSectionRepair, ModuleLayoutDerived,
     },
-    physical::ModulePhysicalLayout,
     section::{
         LayoutSectionArena, LayoutSectionData, LayoutSectionId, LayoutSectionKind,
         LayoutSectionMetadata, ModuleLayout, SectionPlacement,
@@ -144,21 +143,6 @@ impl MemoryLayoutPlan {
             .expect("layout plan referenced missing section metadata")
     }
 
-    /// Returns one cached section-data view by section id.
-    #[inline]
-    pub(crate) fn cached_section_data(&self, id: LayoutSectionId) -> Option<&LayoutSectionData> {
-        self.sections.data(id)
-    }
-
-    /// Returns one cached section-data view by section id mutably.
-    #[inline]
-    pub(crate) fn cached_section_data_mut(
-        &mut self,
-        id: LayoutSectionId,
-    ) -> Option<&mut LayoutSectionData> {
-        self.sections.data_mut(id)
-    }
-
     #[inline]
     pub(crate) fn section_overrides_original_data(&self, section: LayoutSectionId) -> bool {
         self.sections.overrides_original_data(section)
@@ -168,16 +152,6 @@ impl MemoryLayoutPlan {
     #[inline]
     pub fn section_owner(&self, section: LayoutSectionId) -> Option<LinkModuleId> {
         self.sections.owner(section)
-    }
-
-    /// Returns mutable cached section bytes, materializing zero-fill storage when needed.
-    pub(crate) fn cached_section_bytes_mut(
-        &mut self,
-        section: LayoutSectionId,
-    ) -> Option<&mut [u8]> {
-        let _ = self.sections.mark_data_override(section);
-        self.cached_section_data_mut(section)
-            .map(LayoutSectionData::ensure_bytes_mut)
     }
 
     /// Returns the direct arena placement of one section.
@@ -223,26 +197,6 @@ impl MemoryLayoutPlan {
     ) -> Option<&LayoutSectionMetadata> {
         self.module_section_id(module_id, id)
             .map(|section| self.section_metadata(section))
-    }
-
-    /// Returns one materialized section-data view by module key and scanned section id.
-    #[inline]
-    pub fn module_section_data(
-        &self,
-        module_id: LinkModuleId,
-        id: ScannedSectionId,
-    ) -> Option<&LayoutSectionData> {
-        self.module_section_id(module_id, id)
-            .and_then(|section| self.cached_section_data(section))
-    }
-
-    /// Returns the derived physical layout for one module.
-    #[inline]
-    pub fn module_physical_layout(&self, module_id: LinkModuleId) -> Option<ModulePhysicalLayout> {
-        self.module(module_id).and_then(|module| {
-            let layout = ModulePhysicalLayout::from_layout(module, &self.sections);
-            (!layout.slices().is_empty()).then_some(layout)
-        })
     }
 
     /// Iterates over the placed sections inside one arena.

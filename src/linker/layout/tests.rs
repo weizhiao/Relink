@@ -201,13 +201,15 @@ fn memory_layout_plan_materializes_section_data_on_demand() {
     assert_eq!(data_id, section);
     assert_eq!(
         layout
-            .cached_section_data(section)
+            .sections()
+            .data(section)
             .and_then(LayoutSectionData::bytes),
         Some([1_u8, 2, 3, 4].as_slice())
     );
     assert_eq!(
         layout
-            .cached_section_data(section)
+            .sections()
+            .data(section)
             .and_then(LayoutSectionData::bytes),
         Some([1_u8, 2, 3, 4].as_slice())
     );
@@ -318,7 +320,6 @@ fn clear_arena_mappings_removes_placements_and_derived_state() {
 
     assert!(layout.arenas().is_empty());
     assert!(layout.section_placement(section).is_none());
-    assert!(layout.module_physical_layout(ROOT_MODULE).is_none());
 }
 
 #[test]

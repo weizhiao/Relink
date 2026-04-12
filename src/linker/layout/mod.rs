@@ -6,7 +6,6 @@
 
 mod arena;
 mod derived;
-mod physical;
 mod plan;
 mod section;
 
@@ -20,7 +19,6 @@ pub use arena::{
 pub use derived::{
     LayoutAddress, LayoutRelocationSiteRepair, LayoutRetainedRelocationRepair, LayoutSectionRepair,
 };
-pub use physical::{ModulePhysicalLayout, ModulePhysicalSlice};
 pub use plan::{LayoutModuleMaterialization, MemoryLayoutPlan};
 pub use section::{
     LayoutSectionArena, LayoutSectionData, LayoutSectionId, LayoutSectionKind,
