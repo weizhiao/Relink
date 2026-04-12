@@ -179,10 +179,7 @@ where
 
     /// Returns one section's data, materializing it on demand when needed.
     #[inline]
-    pub fn section_data(
-        &mut self,
-        section: LayoutSectionId,
-    ) -> Result<Option<&LayoutSectionData>> {
+    pub fn section_data(&mut self, section: LayoutSectionId) -> Result<Option<&LayoutSectionData>> {
         let Some(module_id) = self.plan.memory_layout().section_owner(section) else {
             return Ok(None);
         };
@@ -198,10 +195,7 @@ where
 
     /// Returns mutable section bytes, materializing backing storage on demand.
     #[inline]
-    pub fn section_bytes_mut(
-        &mut self,
-        section: LayoutSectionId,
-    ) -> Result<Option<&mut [u8]>> {
+    pub fn section_bytes_mut(&mut self, section: LayoutSectionId) -> Result<Option<&mut [u8]>> {
         let Some(module_id) = self.plan.memory_layout().section_owner(section) else {
             return Ok(None);
         };
@@ -538,6 +532,11 @@ where
     }
 
     #[inline]
+    pub(crate) fn scanned_module(&self, module_id: LinkModuleId) -> Option<&ScannedDylib<D>> {
+        self.entry(module_id).map(PlannedModule::module)
+    }
+
+    #[inline]
     pub(crate) fn module_materialization(
         &self,
         module_id: LinkModuleId,
@@ -562,11 +561,8 @@ where
     }
 
     /// Returns one section's data, materializing it on demand when needed.
-    pub fn section_data(
-        &mut self,
-        section: LayoutSectionId,
-    ) -> Result<Option<&LayoutSectionData>> {
-        if self.memory_layout.cached_section_data(section).is_none() {
+    pub fn section_data(&mut self, section: LayoutSectionId) -> Result<Option<&LayoutSectionData>> {
+        if self.memory_layout.sections().data(section).is_none() {
             let Some(module_id) = self.memory_layout.section_owner(section) else {
                 return Ok(None);
             };
@@ -576,7 +572,10 @@ where
             {
                 return Ok(None);
             }
-            let scanned_section = self.memory_layout.section_metadata(section).scanned_section();
+            let scanned_section = self
+                .memory_layout
+                .section_metadata(section)
+                .scanned_section();
             let Some(snapshot) = ({
                 let Some(module) = self.entry_mut(module_id) else {
                     return Ok(None);
@@ -589,18 +588,19 @@ where
             let _ = self.memory_layout.install_section_data(section, snapshot);
         }
 
-        Ok(self.memory_layout.cached_section_data(section))
+        Ok(self.memory_layout.sections().data(section))
     }
 
     /// Returns mutable section bytes, materializing backing storage on demand.
-    pub fn section_bytes_mut(
-        &mut self,
-        section: LayoutSectionId,
-    ) -> Result<Option<&mut [u8]>> {
+    pub fn section_bytes_mut(&mut self, section: LayoutSectionId) -> Result<Option<&mut [u8]>> {
         if self.section_data(section)?.is_none() {
             return Ok(None);
         }
-        Ok(self.memory_layout.cached_section_bytes_mut(section))
+        let sections = self.memory_layout.sections_mut();
+        let _ = sections.mark_data_override(section);
+        Ok(sections
+            .data_mut(section)
+            .map(LayoutSectionData::ensure_bytes_mut))
     }
 
     #[inline]
@@ -610,7 +610,10 @@ where
             .modules()
             .flat_map(|(_, module)| module.relocation_sections().iter().copied())
             .flat_map(|section_id| {
-                let linked = self.memory_layout.section_metadata(section_id).linked_section();
+                let linked = self
+                    .memory_layout
+                    .section_metadata(section_id)
+                    .linked_section();
                 core::iter::once(section_id).chain(linked)
             })
             .collect::<Vec<_>>();

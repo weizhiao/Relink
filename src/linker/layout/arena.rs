@@ -136,7 +136,7 @@ impl LayoutArenaUsage {
 }
 
 /// One physical arena that can host sections from one or more modules.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LayoutArena {
     page_size: usize,
     memory_class: LayoutMemoryClass,

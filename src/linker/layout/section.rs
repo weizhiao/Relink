@@ -326,7 +326,7 @@ impl LayoutSectionRecord {
         }
     }
 
-    /// Returns whether cached data should override the original bytes during
+    /// Returns whether installed data should override the original bytes during
     /// whole-DSO materialization.
     #[inline]
     pub const fn overrides_original_data(&self) -> bool {

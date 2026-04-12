@@ -338,7 +338,24 @@ where
         // any derived addresses that those choices affect.
         normalize_materialization_plan(&mut plan)?;
         plan.finalize_layout()?;
-        let mapped_section_arenas = map_planned_section_arenas::<M, _, _>(&mut plan)?;
+        let mut mapped_section_arenas = map_planned_section_arenas::<M, _, _>(&mut plan)?;
+
+        if let Some(mapped_section_arenas) = mapped_section_arenas.as_mut() {
+            let section_region_modules = plan
+                .group_order_ids()
+                .iter()
+                .copied()
+                .filter(|module_id| {
+                    plan.module_materialization(*module_id)
+                        .unwrap_or(LayoutModuleMaterialization::WholeDsoRegion)
+                        == LayoutModuleMaterialization::SectionRegions
+                })
+                .collect::<Vec<_>>();
+            for module_id in section_region_modules {
+                runtime::repair_arena_layout_module(module_id, &mut plan, mapped_section_arenas)?;
+            }
+            runtime::populate_mapped_arenas(plan.memory_layout(), mapped_section_arenas)?;
+        }
 
         let (root, group_order, entries, memory_layout) = plan.into_parts();
         let (init_fn, fini_fn) = loader.inner.lifecycle_handlers();
@@ -353,6 +370,7 @@ where
             .iter()
             .map(|module_id| module_keys[module_id.index()].clone())
             .collect();
+
         let mut materialize_raw = |module_id: LinkModuleId,
                                    scanned: crate::image::ScannedDylib<D>|
          -> Result<RawDylib<D>> {
@@ -572,7 +590,7 @@ where
 struct PreparedLoad<K, D: 'static> {
     root: K,
     session: LoadSession<K, D>,
-    mapped_section_arenas: Option<BTreeMap<LayoutArenaId, runtime::MappedArena>>,
+    mapped_section_arenas: Option<runtime::MappedArenaMap>,
 }
 
 impl<K, D: 'static> PreparedLoad<K, D> {
@@ -587,7 +605,7 @@ impl<K, D: 'static> PreparedLoad<K, D> {
     fn planned(
         root: K,
         session: LoadSession<K, D>,
-        mapped_section_arenas: Option<BTreeMap<LayoutArenaId, runtime::MappedArena>>,
+        mapped_section_arenas: Option<runtime::MappedArenaMap>,
     ) -> Self {
         Self {
             root,
@@ -599,7 +617,7 @@ impl<K, D: 'static> PreparedLoad<K, D> {
 
 fn map_planned_section_arenas<M, K, D>(
     plan: &mut LinkPlan<K, D>,
-) -> Result<Option<BTreeMap<LayoutArenaId, runtime::MappedArena>>>
+) -> Result<Option<runtime::MappedArenaMap>>
 where
     K: Clone + Ord,
     D: 'static,
@@ -616,7 +634,7 @@ where
         return Ok(None);
     }
 
-    let sections_to_cache = plan
+    let sections_to_materialize = plan
         .memory_layout()
         .sections()
         .iter_records()
@@ -627,18 +645,11 @@ where
             .then_some(section_id)
         })
         .collect::<Vec<_>>();
-    for section_id in sections_to_cache {
+    for section_id in sections_to_materialize {
         let _ = plan.section_data(section_id)?;
     }
 
-    let layout = plan.memory_layout();
-    runtime::map_layout_arenas::<M>(layout, |section_id| {
-        Ok(layout.cached_section_data(section_id).and_then(|data| match data {
-            LayoutSectionData::Bytes(bytes) => Some(bytes.clone()),
-            LayoutSectionData::ZeroFill { .. } => None,
-        }))
-    })
-    .map(Some)
+    runtime::map_layout_arenas::<M>(plan.memory_layout()).map(Some)
 }
 
 fn apply_planned_section_overrides<D>(
@@ -656,7 +667,7 @@ fn apply_planned_section_overrides<D>(
             continue;
         }
         let metadata = layout.section_metadata(section_id);
-        let Some(data) = layout.cached_section_data(section_id) else {
+        let Some(data) = layout.sections().data(section_id) else {
             continue;
         };
         let dst = segments.get_slice_mut::<u8>(metadata.original_address(), metadata.size());
@@ -944,15 +955,16 @@ impl FallbackArenaState {
                 self.shared_arenas.insert(arena_key, arena_id);
                 arena_id
             }
-            LayoutArenaSharing::Private => *self.private_arenas.entry((module_id, memory_class)).or_insert_with(
-                || {
+            LayoutArenaSharing::Private => *self
+                .private_arenas
+                .entry((module_id, memory_class))
+                .or_insert_with(|| {
                     layout.create_arena(LayoutArena::new(
                         class_policy.page_size(),
                         memory_class,
                         LayoutArenaSharing::Private,
                     ))
-                },
-            ),
+                }),
         }
     }
 
