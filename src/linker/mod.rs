@@ -6,18 +6,17 @@
 //! callers decide how dependencies are discovered and how search scopes are
 //! assembled.
 
-mod api;
 mod context;
 mod layout;
+mod mapped;
+mod materialization;
 mod plan;
 mod request;
 mod resolve;
-mod runtime;
 mod session;
 mod storage;
 mod view;
 
-pub use api::{KeyResolver, RelocationInputs, RelocationPlanner, ResolvedKey};
 pub use context::LinkContext;
 pub use layout::{
     LayoutAddress, LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutArenaUsage,
@@ -27,5 +26,8 @@ pub use layout::{
     LayoutSectionRepair, MemoryLayoutPlan, ModuleLayout, SectionPlacement,
 };
 pub use plan::{LinkModuleId, LinkPass, LinkPassPlan, LinkPassScope, LinkPipeline};
-pub use request::{DependencyOwner, DependencyRequest, RelocationRequest};
+pub use request::{
+    DependencyOwner, DependencyRequest, RelocationInputs, RelocationPlanner, RelocationRequest,
+};
+pub use resolve::{KeyResolver, ResolvedKey};
 pub use view::DependencyGraphView;

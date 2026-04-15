@@ -1,5 +1,4 @@
 use super::{
-    api::{KeyResolver, ResolvedKey},
     request::{DependencyOwner, DependencyRequest},
     session::{ResolveSession, collect_unique_deps, extend_breadth_first},
     storage::CommittedStorageView,
@@ -8,6 +7,7 @@ use super::{
 use crate::{
     CustomError, LinkerError, Loader, Result, UnresolvedDependencyError,
     image::{RawDylib, ScannedDylib},
+    input::ElfReader,
     loader::LoadHook,
     os::Mmap,
     tls::TlsResolver,
@@ -15,6 +15,43 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 use core::marker::PhantomData;
 use core::mem;
+
+/// A key-resolution result chosen by caller policy.
+pub enum ResolvedKey<'cfg, K> {
+    /// Reuses a module that is already visible in the current link context.
+    Existing(K),
+    /// Loads a new module for the provided canonical key using the context's loader.
+    Load(K, Box<dyn ElfReader + 'cfg>),
+}
+
+impl<'cfg, K> ResolvedKey<'cfg, K> {
+    #[inline]
+    pub fn existing(key: K) -> Self {
+        Self::Existing(key)
+    }
+
+    #[inline]
+    pub fn load(key: K, reader: impl ElfReader + 'cfg) -> Self {
+        Self::Load(key, Box::new(reader))
+    }
+}
+
+/// Runtime key-resolution policy used by [`super::LinkContext`].
+///
+/// The caller owns key semantics. A request may start with an application key
+/// and resolve either to an already visible key or to a concrete reader that
+/// [`crate::Loader`] should load next.
+pub trait KeyResolver<'cfg, K, D: 'static> {
+    /// Resolves one root key to either an already-visible key or a loadable reader.
+    fn load_root(&mut self, key: &K) -> Result<ResolvedKey<'cfg, K>>;
+
+    /// Resolves one `DT_NEEDED` edge during recursive dependency loading or
+    /// scan-first discovery.
+    fn resolve_dependency(
+        &mut self,
+        req: &DependencyRequest<'_, K, D>,
+    ) -> Result<Option<ResolvedKey<'cfg, K>>>;
+}
 
 pub(crate) trait ResolveStage<'cfg, K, D: 'static, P, M, H, Tls>
 where

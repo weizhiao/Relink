@@ -1,7 +1,4 @@
-use super::layout::{
-    LayoutAddress, LayoutArenaId, LayoutMemoryClass, LayoutSectionData, LayoutSectionId,
-    MemoryLayoutPlan,
-};
+use super::layout::{LayoutAddress, LayoutArenaId, LayoutSectionId, MemoryLayoutPlan};
 use crate::linker::plan::{LinkModuleId, LinkPlan};
 use crate::{
     ByteRepr, Result,
@@ -11,75 +8,19 @@ use crate::{
     },
     image::{LoadedMemorySlice, RawDylib, ScannedDylib, ScannedSectionId},
     loader::DynLifecycleHandler,
-    os::{MapFlags, Mmap, ProtFlags},
-    segment::{ElfMemoryBacking, ElfSegments},
+    segment::ElfSegments,
     tls::{TlsInfo, TlsResolver},
     try_cast_slice, try_cast_slice_mut,
 };
-use alloc::{boxed::Box, collections::BTreeMap, string::ToString, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, string::ToString, vec::Vec};
 use core::ptr::NonNull;
 use elf::abi::{SHN_ABS, SHN_UNDEF};
 
-#[derive(Clone)]
-pub(crate) struct MappedArena {
-    memory_class: LayoutMemoryClass,
-    base: usize,
-    len: usize,
-    backing: Arc<ElfMemoryBacking>,
-}
+mod arena;
 
-pub(crate) type MappedArenaMap = BTreeMap<LayoutArenaId, MappedArena>;
-
-impl MappedArena {
-    #[inline]
-    fn new(
-        memory_class: LayoutMemoryClass,
-        base: usize,
-        len: usize,
-        backing: Arc<ElfMemoryBacking>,
-    ) -> Self {
-        Self {
-            memory_class,
-            base,
-            len,
-            backing,
-        }
-    }
-
-    #[inline]
-    fn address(&self, offset: usize) -> Option<usize> {
-        self.base.checked_add(offset)
-    }
-
-    #[inline]
-    fn backing(&self) -> Arc<ElfMemoryBacking> {
-        Arc::clone(&self.backing)
-    }
-
-    #[inline]
-    fn bytes_mut(&mut self) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.base as *mut u8, self.len) }
-    }
-
-    #[inline]
-    fn slice_mut(&mut self, offset: usize, len: usize) -> Option<&mut [u8]> {
-        let end = offset.checked_add(len)?;
-        self.bytes_mut().get_mut(offset..end)
-    }
-
-    fn protect<M: Mmap>(&self) -> Result<()> {
-        if self.len == 0 {
-            return Ok(());
-        }
-        unsafe {
-            M::mprotect(
-                self.base as *mut _,
-                self.len,
-                final_protection(self.memory_class),
-            )
-        }
-    }
-}
+pub(crate) use arena::{
+    MappedArenaMap, map_planned_section_arenas, populate_mapped_arenas, protect_mapped_arenas,
+};
 
 #[derive(Clone, Copy)]
 struct RuntimeSection {
@@ -350,123 +291,6 @@ where
         }
         Ok(())
     }
-}
-
-pub(crate) fn map_layout_arenas<M>(layout: &MemoryLayoutPlan) -> Result<MappedArenaMap>
-where
-    M: Mmap,
-{
-    allocate_mapped_arenas::<M>(layout)
-}
-
-fn allocate_mapped_arenas<M>(layout: &MemoryLayoutPlan) -> Result<MappedArenaMap>
-where
-    M: Mmap,
-{
-    let mut arenas = BTreeMap::new();
-
-    for (id, arena) in layout.arena_entries() {
-        let len = layout
-            .arena_usage(id)
-            .map(|usage| usage.mapped_len())
-            .unwrap_or(0);
-        if len == 0 {
-            continue;
-        }
-
-        let ptr = unsafe {
-            M::mmap_anonymous(
-                0,
-                len,
-                initial_protection(arena.memory_class()),
-                MapFlags::MAP_PRIVATE,
-            )
-        }?;
-
-        let backing = ElfSegments::create_backing(ptr, len, M::munmap);
-        arenas.insert(
-            id,
-            MappedArena::new(arena.memory_class(), ptr as usize, len, backing),
-        );
-    }
-
-    Ok(arenas)
-}
-
-pub(crate) fn populate_mapped_arenas(
-    layout: &MemoryLayoutPlan,
-    arenas: &mut MappedArenaMap,
-) -> Result<()> {
-    for (_, record) in layout.sections().iter_records() {
-        let Some(placement) = record.placement() else {
-            continue;
-        };
-        let metadata = record.metadata();
-        if !metadata.is_allocated() {
-            continue;
-        }
-
-        let arena = arenas.get_mut(&placement.arena()).ok_or_else(|| {
-            crate::custom_error("mapped section arenas referenced a missing arena")
-        })?;
-        let dst = arena
-            .slice_mut(placement.offset(), placement.size())
-            .ok_or_else(|| {
-                crate::custom_error(
-                    "mapped section arena placement exceeds the allocated arena bounds",
-                )
-            })?;
-
-        if let Some(data) = record.data() {
-            copy_section_data(data, dst)?;
-            continue;
-        }
-
-        if metadata.zero_fill() {
-            continue;
-        }
-
-        return Err(crate::custom_error(
-            "mapped section arenas are missing materialized section data",
-        ));
-    }
-
-    Ok(())
-}
-
-fn copy_section_data(data: &LayoutSectionData, dst: &mut [u8]) -> Result<()> {
-    match data {
-        LayoutSectionData::Bytes(bytes) => copy_section_bytes(bytes.as_ref(), dst),
-        LayoutSectionData::ZeroFill { size } => {
-            if *size != dst.len() {
-                return Err(crate::custom_error(
-                    "mapped section arena zero-fill size does not match its placement",
-                ));
-            }
-            Ok(())
-        }
-    }
-}
-
-fn copy_section_bytes(bytes: &[u8], dst: &mut [u8]) -> Result<()> {
-    if bytes.len() != dst.len() {
-        return Err(crate::custom_error(
-            "mapped section arena size does not match its materialized section bytes",
-        ));
-    }
-
-    dst.copy_from_slice(bytes);
-    Ok(())
-}
-
-pub(crate) fn protect_mapped_arenas<M>(arenas: &MappedArenaMap) -> Result<()>
-where
-    M: Mmap,
-{
-    for arena in arenas.values() {
-        arena.protect::<M>()?;
-    }
-    Ok(())
 }
 
 pub(crate) fn repair_arena_layout_module<K, D>(
@@ -859,27 +683,6 @@ fn rewrite_relocation_value(
     }
 }
 
-fn initial_protection(class: LayoutMemoryClass) -> ProtFlags {
-    match class {
-        LayoutMemoryClass::Code => {
-            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC
-        }
-        LayoutMemoryClass::ReadOnlyData
-        | LayoutMemoryClass::WritableData
-        | LayoutMemoryClass::ThreadLocalData => ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-    }
-}
-
-fn final_protection(class: LayoutMemoryClass) -> ProtFlags {
-    match class {
-        LayoutMemoryClass::Code => ProtFlags::PROT_READ | ProtFlags::PROT_EXEC,
-        LayoutMemoryClass::ReadOnlyData => ProtFlags::PROT_READ,
-        LayoutMemoryClass::WritableData | LayoutMemoryClass::ThreadLocalData => {
-            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE
-        }
-    }
-}
-
 enum RewrittenRelocationValue {
     Skip,
     U64(usize),
@@ -916,49 +719,4 @@ fn write_relocation_bytes(section_bytes: &mut [u8], offset: usize, src: &[u8]) -
         .ok_or_else(|| crate::custom_error("retained relocation write range exceeds section"))?;
     dst.copy_from_slice(src);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::layout::{
-        LayoutArena, LayoutArenaSharing, LayoutSectionKind, LayoutSectionMetadata,
-    };
-    use super::*;
-    use crate::linker::plan::LinkModuleId;
-    use crate::os::DefaultMmap;
-
-    #[test]
-    fn populate_mapped_arenas_copies_installed_section_data() {
-        let mut layout = MemoryLayoutPlan::new();
-        let section = layout.sections_mut().insert(
-            LinkModuleId::new(0),
-            LayoutSectionMetadata::new(
-                1,
-                ".rodata",
-                LayoutSectionKind::Allocated(LayoutMemoryClass::ReadOnlyData),
-                None::<LayoutSectionId>,
-                None::<LayoutSectionId>,
-                0,
-                0,
-                4,
-                4,
-                false,
-            ),
-        );
-        let arena = layout.create_arena(LayoutArena::new(
-            4096,
-            LayoutMemoryClass::ReadOnlyData,
-            LayoutArenaSharing::Shared,
-        ));
-        assert!(layout.assign_section_to_arena(section, arena, 0));
-        layout
-            .install_section_data(section, [1_u8, 2, 3, 4])
-            .unwrap();
-
-        let mut mapped = map_layout_arenas::<DefaultMmap>(&layout).unwrap();
-        populate_mapped_arenas(&layout, &mut mapped).unwrap();
-
-        let mapped_arena = mapped.get_mut(&arena).unwrap();
-        assert_eq!(&mapped_arena.bytes_mut()[0..4], [1_u8, 2, 3, 4].as_slice());
-    }
 }
