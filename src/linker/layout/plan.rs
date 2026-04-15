@@ -203,6 +203,14 @@ impl MemoryLayoutPlan {
     pub fn arena_sections(
         &self,
         arena: LayoutArenaId,
+    ) -> impl Iterator<Item = LayoutSectionId> + '_ {
+        self.arena_section_placements(arena)
+            .map(|(section, _)| section)
+    }
+
+    fn arena_section_placements(
+        &self,
+        arena: LayoutArenaId,
     ) -> impl Iterator<Item = (LayoutSectionId, SectionPlacement)> + '_ {
         self.sections
             .iter_records()
@@ -254,26 +262,29 @@ impl MemoryLayoutPlan {
     }
 
     /// Returns the derived usage summary for one arena.
-    pub fn arena_usage(&self, id: LayoutArenaId) -> Option<LayoutArenaUsage> {
+    pub fn arena_usage(&self, id: LayoutArenaId) -> LayoutArenaUsage {
         let arena = self.arena(id);
         let mut section_count = 0usize;
         let mut used_len = 0usize;
 
-        for (_, placement) in self.arena_sections(id) {
+        for (_, placement) in self.arena_section_placements(id) {
             section_count += 1;
-            let section_end = placement.offset().checked_add(placement.size())?;
+            let section_end = placement
+                .offset()
+                .checked_add(placement.size())
+                .expect("arena usage overflowed while computing section end");
             used_len = used_len.max(section_end);
         }
 
-        let mapped_len = align_up_len(used_len, arena.page_size())?;
-        Some(LayoutArenaUsage::new(section_count, used_len, mapped_len))
+        let mapped_len = align_up_len(used_len, arena.page_size());
+        LayoutArenaUsage::new(section_count, used_len, mapped_len)
     }
 
     /// Iterates over arena ids together with their derived usage summaries.
     #[inline]
     pub fn arena_usages(&self) -> impl Iterator<Item = (LayoutArenaId, LayoutArenaUsage)> + '_ {
         self.arena_entries()
-            .filter_map(|(id, _)| self.arena_usage(id).map(|usage| (id, usage)))
+            .map(|(id, _)| (id, self.arena_usage(id)))
     }
 }
 
@@ -420,11 +431,13 @@ impl MemoryLayoutPlan {
     }
 }
 
-fn align_up_len(value: usize, page_size: usize) -> Option<usize> {
+fn align_up_len(value: usize, page_size: usize) -> usize {
     let page_size = page_size.max(1);
     let remainder = value % page_size;
     if remainder == 0 {
-        return Some(value);
+        return value;
     }
-    value.checked_add(page_size - remainder)
+    value
+        .checked_add(page_size - remainder)
+        .expect("arena usage overflowed while rounding mapped length")
 }

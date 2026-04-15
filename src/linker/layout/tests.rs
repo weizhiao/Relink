@@ -345,7 +345,7 @@ fn arena_usage_rounds_up_to_page_size() {
 
     assert_eq!(
         layout.arena_usage(arena),
-        Some(LayoutArenaUsage::new(1, 0x2030, 2 * 1024 * 1024))
+        LayoutArenaUsage::new(1, 0x2030, 2 * 1024 * 1024)
     );
 }
 

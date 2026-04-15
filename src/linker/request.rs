@@ -1,5 +1,10 @@
 use super::view::DependencyGraphView;
-use crate::image::{LoadedCore, RawDylib, ScannedDylib};
+use crate::{
+    Result,
+    image::{LoadedCore, RawDylib, ScannedDylib},
+    relocation::BindingMode,
+};
+use alloc::boxed::Box;
 
 /// Common metadata needed while resolving one dependency edge.
 pub trait DependencyOwner {
@@ -197,5 +202,65 @@ impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
     #[inline]
     pub fn into_raw(self) -> RawDylib<D> {
         self.raw
+    }
+}
+
+/// Per-module relocation inputs produced by the caller's runtime policy.
+pub struct RelocationInputs<D> {
+    scope: Box<[LoadedCore<D>]>,
+    binding: BindingMode,
+}
+
+impl<D> RelocationInputs<D> {
+    #[inline]
+    pub fn new(scope: impl IntoIterator<Item = LoadedCore<D>>) -> Self {
+        Self {
+            scope: scope.into_iter().collect(),
+            binding: BindingMode::Default,
+        }
+    }
+
+    #[inline]
+    pub fn scope(&self) -> &[LoadedCore<D>] {
+        &self.scope
+    }
+
+    #[inline]
+    pub fn binding(&self) -> BindingMode {
+        self.binding
+    }
+
+    #[inline]
+    pub fn eager(mut self) -> Self {
+        self.binding = BindingMode::Eager;
+        self
+    }
+
+    #[inline]
+    pub fn lazy(mut self) -> Self {
+        self.binding = BindingMode::Lazy;
+        self
+    }
+
+    #[inline]
+    pub fn with_binding(mut self, binding: BindingMode) -> Self {
+        self.binding = binding;
+        self
+    }
+}
+
+/// Runtime policy for assembling relocation inputs.
+pub trait RelocationPlanner<K, D: 'static> {
+    /// Plans the relocation scope and binding mode for one module.
+    fn plan(&mut self, req: &RelocationRequest<'_, K, D>) -> Result<RelocationInputs<D>>;
+}
+
+impl<K, D: 'static, F> RelocationPlanner<K, D> for F
+where
+    F: for<'a> FnMut(&RelocationRequest<'a, K, D>) -> Result<RelocationInputs<D>>,
+{
+    #[inline]
+    fn plan(&mut self, req: &RelocationRequest<'_, K, D>) -> Result<RelocationInputs<D>> {
+        self(req)
     }
 }
