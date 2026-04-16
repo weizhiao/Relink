@@ -23,7 +23,7 @@ pub use layout::{
     LayoutClassPolicy, LayoutMemoryClass, LayoutModuleMaterialization, LayoutPackingPolicy,
     LayoutRelocationSiteRepair, LayoutRetainedRelocationRepair, LayoutSectionArena,
     LayoutSectionId, LayoutSectionKind, LayoutSectionMetadata, LayoutSectionRecord,
-    LayoutSectionRepair, MemoryLayoutPlan, ModuleLayout, SectionPlacement,
+    MemoryLayoutPlan, ModuleLayout, SectionPlacement,
 };
 pub use plan::{LinkModuleId, LinkPass, LinkPassPlan, LinkPassScope, LinkPipeline};
 pub use request::{

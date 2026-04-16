@@ -1,8 +1,6 @@
 use super::{
     arena::LayoutArenaId,
-    section::{
-        LayoutSectionArena, LayoutSectionData, LayoutSectionId, ModuleLayout, SectionPlacement,
-    },
+    section::{LayoutSectionArena, LayoutSectionData, LayoutSectionId, ModuleLayout},
 };
 use crate::{
     Result,
@@ -44,35 +42,6 @@ impl LayoutAddress {
             arena: self.arena,
             offset,
         })
-    }
-}
-
-/// One section-base repair entry derived from a physical layout.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LayoutSectionRepair {
-    original_address: usize,
-    address: LayoutAddress,
-}
-
-impl LayoutSectionRepair {
-    #[inline]
-    const fn new(original_address: usize, address: LayoutAddress) -> Self {
-        Self {
-            original_address,
-            address,
-        }
-    }
-
-    /// Returns the original ELF section address.
-    #[inline]
-    pub const fn original_address(self) -> usize {
-        self.original_address
-    }
-
-    /// Returns the new derived section address inside the layout plan.
-    #[inline]
-    pub const fn address(self) -> LayoutAddress {
-        self.address
     }
 }
 
@@ -186,7 +155,6 @@ impl LayoutRetainedRelocationRepair {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModuleLayoutDerived {
-    section_repairs: BTreeMap<LayoutSectionId, LayoutSectionRepair>,
     relocation_repairs: BTreeMap<LayoutSectionId, LayoutRetainedRelocationRepair>,
 }
 
@@ -194,7 +162,6 @@ impl Default for ModuleLayoutDerived {
     #[inline]
     fn default() -> Self {
         Self {
-            section_repairs: BTreeMap::new(),
             relocation_repairs: BTreeMap::new(),
         }
     }
@@ -216,26 +183,10 @@ impl ModuleLayoutDerived {
             return Ok(derived);
         }
 
-        for section_id in layout.alloc_sections().iter().copied() {
-            let Some(section) = sections.get(section_id) else {
-                continue;
-            };
-            let Some(address) = sections
-                .placement(section_id)
-                .map(SectionPlacement::address)
-            else {
-                continue;
-            };
-            derived.section_repairs.insert(
-                section_id,
-                LayoutSectionRepair::new(section.original_address(), address),
-            );
-        }
-
         for section_id in layout.relocation_sections().iter().copied() {
-            let Some(section) = sections.get(section_id) else {
-                continue;
-            };
+            let section = sections
+                .get(section_id)
+                .expect("module layout referenced missing relocation section metadata");
             let Some(LayoutSectionData::Bytes(bytes)) = sections.data(section_id) else {
                 return Err(crate::custom_error(
                     "retained relocation section must be backed by materialized bytes",
@@ -284,56 +235,40 @@ impl ModuleLayoutDerived {
     }
 
     #[inline]
-    pub(crate) fn section_repair(&self, section: LayoutSectionId) -> Option<LayoutSectionRepair> {
-        self.section_repairs.get(&section).copied()
-    }
-
-    #[inline]
-    pub(crate) fn relocation_repair(
-        &self,
-        relocation_section: LayoutSectionId,
-    ) -> Option<&LayoutRetainedRelocationRepair> {
-        self.relocation_repairs.get(&relocation_section)
-    }
-
-    #[inline]
     pub(crate) fn relocation_repairs(
         &self,
     ) -> impl Iterator<Item = (&LayoutSectionId, &LayoutRetainedRelocationRepair)> {
         self.relocation_repairs.iter()
-    }
-
-    #[inline]
-    pub(crate) fn relocation_site_address(
-        &self,
-        relocation_section: LayoutSectionId,
-        entry_index: usize,
-    ) -> Option<LayoutAddress> {
-        self.relocation_repair(relocation_section)
-            .and_then(|repair| {
-                repair
-                    .sites()
-                    .iter()
-                    .find(|site| site.entry_index() == entry_index)
-                    .map(|site| site.address())
-            })
     }
 }
 
 fn resolve_original_address(
     layout: &ModuleLayout,
     sections: &LayoutSectionArena,
-    preferred_section: Option<LayoutSectionId>,
+    target_section: Option<LayoutSectionId>,
     original_address: usize,
 ) -> Option<LayoutAddress> {
-    preferred_section
-        .into_iter()
-        .chain(layout.alloc_sections().iter().copied())
+    if let Some(section_id) = target_section {
+        return resolve_original_address_in_section(sections, section_id, original_address);
+    }
+
+    layout
+        .alloc_sections()
+        .iter()
+        .copied()
         .find_map(|section_id| {
-            let placement = sections.placement(section_id)?;
-            let metadata = sections.get(section_id)?;
-            let delta = original_address.checked_sub(metadata.original_address())?;
-            (delta < metadata.size())
-                .then(|| LayoutAddress::new(placement.arena(), placement.offset() + delta))
+            resolve_original_address_in_section(sections, section_id, original_address)
         })
+}
+
+fn resolve_original_address_in_section(
+    sections: &LayoutSectionArena,
+    section_id: LayoutSectionId,
+    original_address: usize,
+) -> Option<LayoutAddress> {
+    let placement = sections.placement(section_id)?;
+    let metadata = sections.get(section_id)?;
+    let delta = original_address.checked_sub(metadata.original_address())?;
+    (delta < metadata.size())
+        .then(|| LayoutAddress::new(placement.arena(), placement.offset() + delta))
 }

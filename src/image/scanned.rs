@@ -6,6 +6,7 @@ use crate::{
         ElfDyn, ElfHeader, ElfPhdr, ElfProgramType, ElfRelType, ElfSectionFlags, ElfSectionType,
         ElfShdr, ElfStringTable, parse_dynamic_entries,
     },
+    entity::entity_ref,
     input::{ElfReader, ElfReaderExt},
     loader::ScanBuilder,
 };
@@ -111,7 +112,24 @@ where
 }
 
 /// A stable identifier for one scanned section.
-pub type ScannedSectionId = usize;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct ScannedSectionId(usize);
+entity_ref!(ScannedSectionId);
+
+impl From<usize> for ScannedSectionId {
+    #[inline]
+    fn from(index: usize) -> Self {
+        Self::new(index)
+    }
+}
+
+impl From<ScannedSectionId> for usize {
+    #[inline]
+    fn from(id: ScannedSectionId) -> Self {
+        id.index()
+    }
+}
 
 /// A readable view over one scanned section and its metadata.
 #[derive(Clone, Copy)]
@@ -150,7 +168,7 @@ impl<'a> Iterator for ScannedSections<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let header = self.sections.get(self.index)?;
-        let id = self.index;
+        let id = ScannedSectionId::new(self.index);
         self.index += 1;
         Some(ScannedSection::new(id, self.section_name(header), header))
     }
@@ -265,13 +283,15 @@ impl<'a> ScannedSection<'a> {
     /// Returns the linked section id referenced by `sh_link`, when non-zero.
     #[inline]
     pub fn linked_section_id(&self) -> Option<ScannedSectionId> {
-        (self.header.sh_link() != 0).then_some(self.header.sh_link() as usize)
+        (self.header.sh_link() != 0)
+            .then_some(ScannedSectionId::new(self.header.sh_link() as usize))
     }
 
     /// Returns the info section id referenced by `sh_info`, when non-zero.
     #[inline]
     pub fn info_section_id(&self) -> Option<ScannedSectionId> {
-        (self.header.sh_info() != 0).then_some(self.header.sh_info() as usize)
+        (self.header.sh_info() != 0)
+            .then_some(ScannedSectionId::new(self.header.sh_info() as usize))
     }
 }
 
@@ -444,10 +464,11 @@ impl<D> ScannedDylib<D> {
 
     /// Returns one scanned section by id.
     #[inline]
-    pub fn section(&self, id: ScannedSectionId) -> Option<ScannedSection<'_>> {
+    pub fn section(&self, id: impl Into<ScannedSectionId>) -> Option<ScannedSection<'_>> {
+        let id = id.into();
         let sections = self.sections.as_deref()?;
         let shstrtab = self.shstrtab()?;
-        let header = sections.get(id)?;
+        let header = sections.get(id.index())?;
         Some(ScannedSection::new(
             id,
             shstrtab.get_str(header.sh_name() as usize),
@@ -480,7 +501,10 @@ impl<D> ScannedDylib<D> {
     }
 
     /// Captures one section's backing bytes.
-    pub fn section_data(&mut self, id: ScannedSectionId) -> Result<Option<AlignedBytes>> {
+    pub fn section_data(
+        &mut self,
+        id: impl Into<ScannedSectionId>,
+    ) -> Result<Option<AlignedBytes>> {
         let Some(section) = self.section(id) else {
             return Ok(None);
         };

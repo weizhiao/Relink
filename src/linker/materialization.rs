@@ -19,9 +19,7 @@ where
     plan.try_for_each_module(|plan, module_id| {
         let mode = {
             let layout = plan.memory_layout();
-            let module = layout
-                .module(module_id)
-                .expect("ordered layout referenced a missing module layout");
+            let module = layout.module(module_id);
             resolve_materialization_mode(&*plan, module_id, module)?
         };
         has_section_regions |= mode == LayoutModuleMaterialization::SectionRegions;
@@ -44,13 +42,7 @@ where
             return Ok(());
         }
 
-        for section_id in layout
-            .module(module_id)
-            .expect("planned layout missing module for touched id")
-            .alloc_sections()
-            .iter()
-            .copied()
-        {
+        for section_id in layout.module(module_id).alloc_sections().iter().copied() {
             if let Some(placement) = layout.section_placement(section_id) {
                 arena_state.absorb_existing_section(layout, module_id, section_id, placement);
             }
@@ -65,11 +57,7 @@ where
         {
             return Ok(());
         }
-        let alloc_sections = layout
-            .module(module_id)
-            .expect("planned layout missing module for touched id")
-            .alloc_sections()
-            .to_vec();
+        let alloc_sections = layout.module(module_id).alloc_sections().to_vec();
         for section_id in alloc_sections {
             if plan.memory_layout().section_placement(section_id).is_some() {
                 continue;
@@ -315,7 +303,7 @@ mod tests {
 
     #[test]
     fn fallback_shared_arena_reuses_existing_compatible_arena() {
-        let mut layout = MemoryLayoutPlan::new();
+        let mut layout = MemoryLayoutPlan::default();
         let arena_id = layout.create_arena(LayoutArena::new(
             2 * 1024 * 1024,
             LayoutMemoryClass::Code,

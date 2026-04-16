@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     AlignedBytes,
-    entity::{PrimaryMap, entity_ref},
+    entity::{PrimaryMap, SecondaryMap, entity_ref},
     image::{ScannedDylib, ScannedSection, ScannedSectionId},
     linker::plan::LinkModuleId,
 };
@@ -89,7 +89,7 @@ impl LayoutSectionMetadata {
     /// Creates a new section metadata record.
     #[inline]
     pub fn new<T, U>(
-        scanned_section: ScannedSectionId,
+        scanned_section: impl Into<ScannedSectionId>,
         name: impl Into<Box<str>>,
         kind: LayoutSectionKind,
         linked_section: Option<T>,
@@ -105,7 +105,7 @@ impl LayoutSectionMetadata {
         U: Into<LayoutSectionId>,
     {
         Self {
-            scanned_section,
+            scanned_section: scanned_section.into(),
             name: name.into(),
             kind,
             linked_section: linked_section.map(Into::into),
@@ -476,6 +476,25 @@ impl LayoutSectionArena {
         Some(section)
     }
 
+    pub(crate) fn install_scanned_data(
+        &mut self,
+        section: LayoutSectionId,
+        bytes: impl Into<AlignedBytes>,
+    ) {
+        let metadata = self
+            .get(section)
+            .expect("layout section arena tried to install data for a missing section");
+        let zero_fill = metadata.zero_fill();
+        let size = metadata.size();
+        if zero_fill {
+            self.install_data(section, LayoutSectionData::ZeroFill { size })
+                .expect("layout section arena failed to install zero-fill section data");
+        } else {
+            self.push_scanned(section, bytes.into())
+                .expect("layout section arena failed to install scanned section data");
+        }
+    }
+
     #[inline]
     pub(crate) fn mark_data_override(&mut self, section: LayoutSectionId) -> Option<()> {
         let record = self.record_mut(section)?;
@@ -525,8 +544,7 @@ impl LayoutSectionArena {
 /// One module's logical section view inside the layout plan.
 #[derive(Debug, Clone, Default)]
 pub struct ModuleLayout {
-    sections: Box<[LayoutSectionId]>,
-    scanned_sources: Box<[Option<ScannedSectionId>]>,
+    scanned_sections: SecondaryMap<ScannedSectionId, LayoutSectionId>,
     alloc_sections: Box<[LayoutSectionId]>,
     relocation_sections: Box<[LayoutSectionId]>,
 }
@@ -539,32 +557,36 @@ impl ModuleLayout {
     }
 
     /// Creates one module layout from explicit scanned-section mappings.
-    pub fn from_sections<I>(sections: I, arena: &LayoutSectionArena) -> Self
+    pub fn from_sections<I, S>(sections: I, arena: &LayoutSectionArena) -> Self
     where
-        I: IntoIterator<Item = (ScannedSectionId, LayoutSectionId)>,
+        I: IntoIterator<Item = (S, LayoutSectionId)>,
+        S: Into<ScannedSectionId>,
     {
-        let mut ordered = Vec::new();
-        let mut scanned_sources = Vec::new();
+        let mut scanned_sections = SecondaryMap::default();
         let mut alloc_sections = Vec::new();
         let mut relocation_sections = Vec::new();
 
         for (scanned_section, section_id) in sections {
-            ordered.push(section_id);
-            scanned_sources.push(Some(scanned_section));
+            let scanned_section = scanned_section.into();
+            let previous = scanned_sections.insert(scanned_section, section_id);
+            assert!(
+                previous.is_none(),
+                "module layout referenced duplicate scanned section id"
+            );
 
-            if let Some(section) = arena.get(section_id) {
-                if section.is_allocated() {
-                    alloc_sections.push(section_id);
-                }
-                if section.is_relocation() {
-                    relocation_sections.push(section_id);
-                }
+            let section = arena
+                .get(section_id)
+                .expect("module layout referenced missing section metadata");
+            if section.is_allocated() {
+                alloc_sections.push(section_id);
+            }
+            if section.is_relocation() {
+                relocation_sections.push(section_id);
             }
         }
 
         Self {
-            sections: ordered.into_boxed_slice(),
-            scanned_sources: scanned_sources.into_boxed_slice(),
+            scanned_sections,
             alloc_sections: alloc_sections.into_boxed_slice(),
             relocation_sections: relocation_sections.into_boxed_slice(),
         }
@@ -603,16 +625,12 @@ impl ModuleLayout {
         layout
     }
 
-    /// Returns every section id owned by the module.
-    #[inline]
-    pub fn sections(&self) -> &[LayoutSectionId] {
-        &self.sections
-    }
-
     /// Returns whether this module owns `section`.
     #[inline]
     pub fn contains_section(&self, section: LayoutSectionId) -> bool {
-        self.sections.contains(&section)
+        self.scanned_sections
+            .iter()
+            .any(|(_, section_id)| *section_id == section)
     }
 
     /// Returns the allocatable section ids that participate in default packing.
@@ -629,19 +647,15 @@ impl ModuleLayout {
 
     /// Returns one section id by its original scanned section id.
     #[inline]
-    pub fn section_id(&self, section: ScannedSectionId) -> Option<LayoutSectionId> {
-        self.sections
-            .iter()
-            .zip(self.scanned_sources.iter())
-            .find_map(|(section_id, source)| (*source == Some(section)).then_some(*section_id))
+    pub fn section_id(&self, section: impl Into<ScannedSectionId>) -> Option<LayoutSectionId> {
+        self.scanned_sections.get(section.into()).copied()
     }
 
     /// Iterates over every known section mapping for this module.
     #[inline]
-    pub fn section_entries(&self) -> impl Iterator<Item = (&ScannedSectionId, &LayoutSectionId)> {
-        self.sections
+    pub fn section_entries(&self) -> impl Iterator<Item = (ScannedSectionId, &LayoutSectionId)> {
+        self.scanned_sections
             .iter()
-            .zip(self.scanned_sources.iter())
-            .filter_map(|(section_id, source)| source.as_ref().map(|scanned| (scanned, section_id)))
+            .map(|(scanned, section)| (scanned, section))
     }
 }
