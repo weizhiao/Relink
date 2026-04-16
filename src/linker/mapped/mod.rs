@@ -109,7 +109,7 @@ impl RuntimeModuleMemory {
             return Some(symbol.st_value());
         }
 
-        let section = self.section_by_scanned(section_index)?;
+        let section = self.section_by_scanned(ScannedSectionId::new(section_index))?;
         section
             .remap_original_address(symbol.st_value())
             .or_else(|| {
@@ -150,23 +150,6 @@ impl RuntimeModuleMemory {
                 .map(|offset| (section.section, offset))
         })
     }
-}
-
-fn actual_address_for_layout(arenas: &MappedArenaMap, address: LayoutAddress) -> Option<usize> {
-    arenas
-        .get(&address.arena())
-        .and_then(|arena| arena.address(address.offset()))
-}
-
-fn layout_section_bytes_mut<K, D>(
-    plan: &mut LinkPlan<K, D>,
-    section: LayoutSectionId,
-) -> Result<Option<&mut [u8]>>
-where
-    K: Clone + Ord,
-    D: 'static,
-{
-    plan.section_bytes_mut(section)
 }
 
 #[derive(Clone, Copy)]
@@ -214,7 +197,7 @@ where
             if !section.symbol_table {
                 continue;
             }
-            let Some(bytes) = layout_section_bytes_mut(self.plan, section.layout)? else {
+            let Some(bytes) = self.plan.section_bytes_mut(section.layout)? else {
                 continue;
             };
             let symbols = typed_slice_mut::<ElfSymbol>(bytes)?;
@@ -246,7 +229,7 @@ where
                     "retained relocation section is missing relocation metadata",
                 ));
             };
-            let Some(bytes) = layout_section_bytes_mut(self.plan, section.layout)? else {
+            let Some(bytes) = self.plan.section_bytes_mut(section.layout)? else {
                 continue;
             };
             let rels = typed_slice_mut::<ElfRelType>(bytes)?;
@@ -271,7 +254,7 @@ where
             .ok_or_else(|| {
                 crate::custom_error("failed to remap PT_DYNAMIC into arena-backed memory")
             })?;
-        let bytes = layout_section_bytes_mut(self.plan, section_id)?.ok_or_else(|| {
+        let bytes = self.plan.section_bytes_mut(section_id)?.ok_or_else(|| {
             crate::custom_error("arena-backed PT_DYNAMIC section data is missing")
         })?;
         let end = section_offset
@@ -390,9 +373,7 @@ fn build_runtime_memory(
     layout: &MemoryLayoutPlan,
     mapped_section_arenas: &MappedArenaMap,
 ) -> Result<RuntimeModuleMemory> {
-    let module = layout
-        .module(module_id)
-        .ok_or_else(|| crate::custom_error("arena-backed module is missing from the layout"))?;
+    let module = layout.module(module_id);
 
     let mut sections = Vec::with_capacity(module.alloc_sections().len());
     for section_id in module.alloc_sections().iter().copied() {
@@ -402,7 +383,7 @@ fn build_runtime_memory(
         let metadata = layout.section_metadata(section_id);
         let scanned_id = metadata.scanned_section();
         let arena = mapped_section_arenas
-            .get(&placement.arena())
+            .get(placement.arena())
             .ok_or_else(|| {
                 crate::custom_error("arena-backed module referenced an unmapped arena")
             })?;
@@ -438,7 +419,7 @@ fn build_runtime_memory(
     memory_slices.sort_unstable_by_key(|slice| slice.base());
 
     for section in &sections {
-        let arena = mapped_section_arenas.get(&section.arena).ok_or_else(|| {
+        let arena = mapped_section_arenas.get(section.arena).ok_or_else(|| {
             crate::custom_error("arena-backed module referenced an unmapped arena")
         })?;
         segment_slices.push(ElfSegments::slice(
@@ -485,9 +466,7 @@ where
         };
 
         for site in relocation.sites() {
-            let Some(actual_site) =
-                actual_address_for_layout(mapped_section_arenas, site.address())
-            else {
+            let Some(actual_site) = mapped_section_arenas.address(site.address()) else {
                 continue;
             };
             let Some((section_id, section_offset)) =
@@ -511,7 +490,7 @@ where
                 site.addend(),
                 actual_site - runtime.base,
             )?;
-            let Some(bytes) = layout_section_bytes_mut(plan, section_id)? else {
+            let Some(bytes) = plan.section_bytes_mut(section_id)? else {
                 continue;
             };
             write_relocation_value(bytes, section_offset, value)?;
@@ -569,10 +548,6 @@ where
     let bytes = data.bytes().ok_or_else(|| {
         crate::custom_error("retained relocation symbol table cannot be zero-fill")
     })?;
-    symbol_from_bytes(bytes, symbol_index)
-}
-
-fn symbol_from_bytes(bytes: &[u8], symbol_index: usize) -> Result<Option<&ElfSymbol>> {
     let symbols = typed_slice::<ElfSymbol>(bytes)?;
     Ok(symbols.get(symbol_index))
 }

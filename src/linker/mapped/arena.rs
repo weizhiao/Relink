@@ -1,13 +1,14 @@
 use super::super::layout::{
-    LayoutArenaId, LayoutMemoryClass, LayoutModuleMaterialization, LayoutSectionData,
+    LayoutAddress, LayoutArenaId, LayoutMemoryClass, LayoutModuleMaterialization, LayoutSectionData,
 };
 use crate::linker::plan::LinkPlan;
 use crate::{
     Result,
+    entity::SecondaryMap,
     os::{MapFlags, Mmap, ProtFlags},
     segment::{ElfMemoryBacking, ElfSegments},
 };
-use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
 
 #[derive(Clone)]
 pub(crate) struct MappedArena {
@@ -17,7 +18,38 @@ pub(crate) struct MappedArena {
     backing: Arc<ElfMemoryBacking>,
 }
 
-pub(crate) type MappedArenaMap = BTreeMap<LayoutArenaId, MappedArena>;
+#[derive(Clone, Default)]
+pub(crate) struct MappedArenaMap {
+    arenas: SecondaryMap<LayoutArenaId, MappedArena>,
+}
+
+impl MappedArenaMap {
+    #[inline]
+    fn insert(&mut self, id: LayoutArenaId, arena: MappedArena) -> Option<MappedArena> {
+        self.arenas.insert(id, arena)
+    }
+
+    #[inline]
+    pub(super) fn get(&self, id: LayoutArenaId) -> Option<&MappedArena> {
+        self.arenas.get(id)
+    }
+
+    #[inline]
+    pub(super) fn get_mut(&mut self, id: LayoutArenaId) -> Option<&mut MappedArena> {
+        self.arenas.get_mut(id)
+    }
+
+    #[inline]
+    pub(super) fn address(&self, address: LayoutAddress) -> Option<usize> {
+        self.get(address.arena())
+            .and_then(|arena| arena.address(address.offset()))
+    }
+
+    #[inline]
+    fn iter(&self) -> impl Iterator<Item = (LayoutArenaId, &MappedArena)> {
+        self.arenas.iter()
+    }
+}
 
 impl MappedArena {
     #[inline]
@@ -90,7 +122,7 @@ where
         return Ok(None);
     }
 
-    let mut arenas = BTreeMap::new();
+    let mut arenas = MappedArenaMap::default();
 
     for (id, arena) in layout.arena_entries() {
         let len = layout.arena_usage(id).mapped_len();
@@ -137,7 +169,7 @@ where
 
     for (section_id, placement, zero_fill) in placed_sections {
         let data = plan.section_data(section_id)?;
-        let arena = arenas.get_mut(&placement.arena()).ok_or_else(|| {
+        let arena = arenas.get_mut(placement.arena()).ok_or_else(|| {
             crate::custom_error("mapped section arenas referenced a missing arena")
         })?;
         let dst = arena
@@ -194,7 +226,7 @@ pub(crate) fn protect_mapped_arenas<M>(arenas: &MappedArenaMap) -> Result<()>
 where
     M: Mmap,
 {
-    for arena in arenas.values() {
+    for (_, arena) in arenas.iter() {
         arena.protect::<M>()?;
     }
     Ok(())
@@ -251,7 +283,6 @@ mod tests {
         let section = plan
             .memory_layout()
             .module(root)
-            .unwrap()
             .alloc_sections()
             .iter()
             .copied()
@@ -274,7 +305,7 @@ mod tests {
             .unwrap();
         populate_mapped_arenas(&mut plan, &mut mapped).unwrap();
 
-        let mapped_arena = mapped.get_mut(&arena).unwrap();
+        let mapped_arena = mapped.get_mut(arena).unwrap();
         assert_eq!(&mapped_arena.bytes_mut()[0..4], [1_u8, 2, 3, 4].as_slice());
     }
 }

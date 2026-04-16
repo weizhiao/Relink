@@ -615,9 +615,7 @@ fn apply_planned_section_overrides<D>(
     module_id: LinkModuleId,
     layout: &MemoryLayoutPlan,
 ) -> Result<()> {
-    let module = layout
-        .module(module_id)
-        .expect("planned layout missing module for committed module id");
+    let module = layout.module(module_id);
     let segments = raw.core_ref().segments();
 
     for section_id in module.alloc_sections().iter().copied() {

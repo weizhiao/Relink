@@ -16,9 +16,7 @@ pub use arena::{
     LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutArenaUsage, LayoutClassPolicy,
     LayoutMemoryClass, LayoutPackingPolicy,
 };
-pub use derived::{
-    LayoutAddress, LayoutRelocationSiteRepair, LayoutRetainedRelocationRepair, LayoutSectionRepair,
-};
+pub use derived::{LayoutAddress, LayoutRelocationSiteRepair, LayoutRetainedRelocationRepair};
 pub use plan::{LayoutModuleMaterialization, MemoryLayoutPlan};
 pub use section::{
     LayoutSectionArena, LayoutSectionData, LayoutSectionId, LayoutSectionKind,

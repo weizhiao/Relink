@@ -1,15 +1,13 @@
 use super::{
     arena::{LayoutArena, LayoutArenaId, LayoutArenaUsage},
-    derived::{
-        LayoutAddress, LayoutRetainedRelocationRepair, LayoutSectionRepair, ModuleLayoutDerived,
-    },
+    derived::ModuleLayoutDerived,
     section::{
-        LayoutSectionArena, LayoutSectionData, LayoutSectionId, LayoutSectionKind,
-        LayoutSectionMetadata, ModuleLayout, SectionPlacement,
+        LayoutSectionArena, LayoutSectionId, LayoutSectionKind, LayoutSectionMetadata,
+        ModuleLayout, SectionPlacement,
     },
 };
 use crate::{
-    AlignedBytes, Result,
+    Result,
     entity::{PrimaryMap, SecondaryMap},
     image::{ModuleCapability, ScannedDylib, ScannedSectionId},
     linker::plan::LinkModuleId,
@@ -31,7 +29,7 @@ pub enum LayoutModuleMaterialization {
 /// The logical module graph remains authoritative for dependency resolution and
 /// symbol-lookup scope. This type owns section metadata/data together with the
 /// physical arena placements selected by planning passes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MemoryLayoutPlan {
     arenas: PrimaryMap<LayoutArenaId, LayoutArena>,
     modules: PrimaryMap<LinkModuleId, ModuleLayout>,
@@ -40,24 +38,7 @@ pub struct MemoryLayoutPlan {
     derived: SecondaryMap<LinkModuleId, ModuleLayoutDerived>,
 }
 
-impl Default for MemoryLayoutPlan {
-    fn default() -> Self {
-        Self {
-            arenas: PrimaryMap::default(),
-            modules: PrimaryMap::default(),
-            materialization: SecondaryMap::default(),
-            sections: LayoutSectionArena::default(),
-            derived: SecondaryMap::default(),
-        }
-    }
-}
 impl MemoryLayoutPlan {
-    /// Creates an empty memory-layout plan.
-    #[inline]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Returns the planned physical arenas for the current load session.
     #[inline]
     pub fn arenas(&self) -> &[LayoutArena] {
@@ -88,14 +69,10 @@ impl MemoryLayoutPlan {
 
     /// Returns the planned layout for one module.
     #[inline]
-    pub fn module(&self, module_id: LinkModuleId) -> Option<&ModuleLayout> {
-        self.modules.get(module_id)
-    }
-
-    /// Returns the planned layout for one module mutably.
-    #[inline]
-    pub fn module_mut(&mut self, module_id: LinkModuleId) -> Option<&mut ModuleLayout> {
-        self.modules.get_mut(module_id)
+    pub fn module(&self, module_id: LinkModuleId) -> &ModuleLayout {
+        self.modules
+            .get(module_id)
+            .expect("layout plan referenced missing module layout")
     }
 
     /// Iterates over all planned module layouts.
@@ -166,26 +143,14 @@ impl MemoryLayoutPlan {
         self.sections.has_any_placements()
     }
 
-    /// Returns the relocation-section metadata for one module.
-    #[inline]
-    pub fn relocation_section(
-        &self,
-        module_id: LinkModuleId,
-        id: ScannedSectionId,
-    ) -> Option<&LayoutSectionMetadata> {
-        self.module_section(module_id, id)
-            .filter(|section| section.is_relocation())
-    }
-
     /// Returns the section id for one scanned section inside one module.
     #[inline]
     pub fn module_section_id(
         &self,
         module_id: LinkModuleId,
-        id: ScannedSectionId,
+        id: impl Into<ScannedSectionId>,
     ) -> Option<LayoutSectionId> {
-        self.module(module_id)
-            .and_then(|module| module.section_id(id))
+        self.module(module_id).section_id(id)
     }
 
     /// Returns one section metadata record by module key and scanned section id.
@@ -193,7 +158,7 @@ impl MemoryLayoutPlan {
     pub fn module_section(
         &self,
         module_id: LinkModuleId,
-        id: ScannedSectionId,
+        id: impl Into<ScannedSectionId>,
     ) -> Option<&LayoutSectionMetadata> {
         self.module_section_id(module_id, id)
             .map(|section| self.section_metadata(section))
@@ -227,40 +192,6 @@ impl MemoryLayoutPlan {
         self.derived.get(module_id)
     }
 
-    /// Returns one section-base repair entry for a module.
-    #[inline]
-    pub fn section_repair(
-        &self,
-        module_id: LinkModuleId,
-        id: LayoutSectionId,
-    ) -> Option<LayoutSectionRepair> {
-        self.module_derived(module_id)
-            .and_then(|derived| derived.section_repair(id))
-    }
-
-    /// Returns one retained-relocation repair entry for a module.
-    #[inline]
-    pub fn relocation_repair(
-        &self,
-        module_id: LinkModuleId,
-        id: LayoutSectionId,
-    ) -> Option<&LayoutRetainedRelocationRepair> {
-        self.module_derived(module_id)
-            .and_then(|derived| derived.relocation_repair(id))
-    }
-
-    /// Returns one derived relocation-site address for a module.
-    #[inline]
-    pub fn relocation_site_address(
-        &self,
-        module_id: LinkModuleId,
-        relocation_section: LayoutSectionId,
-        entry_index: usize,
-    ) -> Option<LayoutAddress> {
-        self.module_derived(module_id)
-            .and_then(|derived| derived.relocation_site_address(relocation_section, entry_index))
-    }
-
     /// Returns the derived usage summary for one arena.
     pub fn arena_usage(&self, id: LayoutArenaId) -> LayoutArenaUsage {
         let arena = self.arena(id);
@@ -289,26 +220,6 @@ impl MemoryLayoutPlan {
 }
 
 impl MemoryLayoutPlan {
-    /// Materializes section data for `section`.
-    pub(crate) fn install_section_data(
-        &mut self,
-        section: LayoutSectionId,
-        bytes: impl Into<AlignedBytes>,
-    ) -> Option<LayoutSectionId> {
-        let metadata = self.sections.get(section)?;
-        if metadata.zero_fill() {
-            self.sections.install_data(
-                section,
-                LayoutSectionData::ZeroFill {
-                    size: metadata.size(),
-                },
-            )?;
-        } else {
-            self.sections.push_scanned(section, bytes.into())?;
-        }
-        Some(section)
-    }
-
     /// Assigns one section to a physical arena at `offset`.
     pub fn assign_section_to_arena(
         &mut self,
@@ -374,7 +285,7 @@ impl MemoryLayoutPlan {
     ) -> Option<ModuleLayout> {
         if let Some(module) = self.modules.get_mut(module_id) {
             let previous = core::mem::replace(module, layout);
-            for section_id in previous.sections() {
+            for (_, section_id) in previous.section_entries() {
                 self.sections.clear_placement(*section_id);
             }
             self.derived.remove(module_id);
@@ -400,19 +311,39 @@ impl MemoryLayoutPlan {
         None
     }
 
-    /// Rebuilds the core relocation/repair state derived from section placements.
-    pub fn rebuild_derived_state(
+    /// Rebuilds the core relocation/repair state, materializing retained
+    /// relocation inputs on demand before deriving repair entries.
+    pub(crate) fn rebuild_derived_state(
         &mut self,
         mut module_capability: impl FnMut(LinkModuleId) -> Option<ModuleCapability>,
+        mut ensure_section_data: impl FnMut(&mut LayoutSectionArena, LayoutSectionId) -> Result<()>,
     ) -> Result<()> {
-        let mut derived = SecondaryMap::default();
-        for (module_id, module) in self.modules.iter() {
+        let Self {
+            modules,
+            sections,
+            derived: derived_state,
+            ..
+        } = self;
+        let mut rebuilt = SecondaryMap::default();
+        for (module_id, module) in modules.iter() {
             let capability = module_capability(module_id).unwrap_or(ModuleCapability::SectionData);
-            let module_derived =
-                ModuleLayoutDerived::from_layout(module, capability, &self.sections)?;
-            derived.insert(module_id, module_derived);
+            if capability.supports_reorder_repair() {
+                for section_id in module.relocation_sections().iter().copied() {
+                    ensure_section_data(sections, section_id)?;
+                    let linked_section = sections
+                        .get(section_id)
+                        .expect("module layout referenced missing relocation section metadata")
+                        .linked_section();
+                    if let Some(linked_section) = linked_section {
+                        ensure_section_data(sections, linked_section)?;
+                    }
+                }
+            }
+
+            let module_derived = ModuleLayoutDerived::from_layout(module, capability, sections)?;
+            rebuilt.insert(module_id, module_derived);
         }
-        self.derived = derived;
+        *derived_state = rebuilt;
         Ok(())
     }
 
@@ -422,7 +353,7 @@ impl MemoryLayoutPlan {
         D: 'static,
         I: IntoIterator<Item = (LinkModuleId, &'a ScannedDylib<D>)>,
     {
-        let mut plan = Self::new();
+        let mut plan = Self::default();
         for (module_id, module) in modules {
             let layout = ModuleLayout::from_scanned(module_id, module, &mut plan.sections);
             plan.insert_module(module_id, layout);
