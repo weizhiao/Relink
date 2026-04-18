@@ -45,6 +45,10 @@ pub const REL_IRELATIVE: u32 = R_LARCH_IRELATIVE;
 /// GOT entry relocation type - set GOT entry to symbol address.
 pub const REL_GOT: u32 = R_LARCH_64;
 
+pub(crate) struct Architecture;
+
+impl crate::relocation::RelocationValueProvider for Architecture {}
+
 /// Map loongarch64 relocation types to human readable names
 pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {

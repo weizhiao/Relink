@@ -17,8 +17,9 @@ mod lazy;
 mod traits;
 
 pub(crate) use core::{
-    RelocAddr, RelocArtifacts, RelocHelper, RelocValue, SymDef, find_symdef_impl, likely,
-    reloc_error, resolve_ifunc, unlikely,
+    RelocAddr, RelocArtifacts, RelocHelper, RelocValue, RelocationValueFormula,
+    RelocationValueKind, RelocationValueProvider, SymDef, find_symdef_impl, likely, reloc_error,
+    resolve_ifunc, unlikely,
 };
 pub(crate) use dynamic::DynamicRelocation;
 pub(crate) use lazy::ResolvedBinding;

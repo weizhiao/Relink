@@ -37,8 +37,7 @@ pub use exec::{LoadedExec, RawExec};
 #[cfg(feature = "object")]
 pub use object::{LoadedObject, RawObject};
 pub use scanned::{
-    ModuleCapability, ScannedDylib, ScannedDynamicInfo, ScannedRelocationAddend, ScannedSection,
-    ScannedSectionId,
+    ModuleCapability, ScannedDylib, ScannedDynamicInfo, ScannedSection, ScannedSectionId,
 };
 pub use symbol::Symbol;
 

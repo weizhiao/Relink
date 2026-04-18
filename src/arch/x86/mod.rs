@@ -39,6 +39,10 @@ pub const REL_JUMP_SLOT: u32 = R_386_JMP_SLOT;
 pub const REL_IRELATIVE: u32 = R_386_IRELATIVE;
 pub const REL_COPY: u32 = R_386_COPY;
 
+pub(crate) struct Architecture;
+
+impl crate::relocation::RelocationValueProvider for Architecture {}
+
 /// Map x86 relocation type to human readable name
 pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {

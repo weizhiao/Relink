@@ -295,15 +295,6 @@ impl<'a> ScannedSection<'a> {
     }
 }
 
-/// The addend representation carried by a retained relocation entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ScannedRelocationAddend {
-    /// The addend is stored directly in the relocation entry.
-    Explicit(isize),
-    /// The addend must be read from the relocation target contents.
-    Implicit,
-}
-
 impl<'a> fmt::Debug for ScannedSection<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScannedSection")

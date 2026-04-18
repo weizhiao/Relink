@@ -1,7 +1,5 @@
-#[cfg(feature = "object")]
-use crate::RelocationError;
 use crate::{
-    Error, RelocationFailureReason, Result,
+    Error, RelocationError, RelocationFailureReason, Result,
     elf::{ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
     image::{ElfCore, LoadedCore},
     logging, relocate_context_error,
@@ -600,8 +598,20 @@ pub(crate) struct RelocValue<T>(T);
 pub(crate) type RelocAddr = RelocValue<usize>;
 #[cfg(feature = "object")]
 pub(crate) type RelocSWord32 = RelocValue<i32>;
-#[cfg(feature = "object")]
-pub(crate) type RelocWord32 = RelocValue<u32>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RelocationValueFormula {
+    Absolute,
+    RelativeToPlace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RelocationValueKind {
+    None,
+    Address(RelocationValueFormula),
+    Word32(RelocationValueFormula),
+    SWord32(RelocationValueFormula),
+}
 
 impl<T> RelocValue<T> {
     #[inline]
@@ -658,13 +668,58 @@ impl RelocAddr {
             .map(RelocValue::new)
             .map_err(|_| RelocationError::IntegerConversionOverflow.into())
     }
+}
 
+impl RelocationValueFormula {
     #[inline]
-    #[cfg(feature = "object")]
-    pub fn try_into_word32(self) -> Result<RelocWord32> {
-        u32::try_from(self.0)
-            .map(RelocValue::new)
-            .map_err(|_| RelocationError::IntegerConversionOverflow.into())
+    fn compute(self, target: usize, addend: isize, place: usize) -> i128 {
+        let target = target as i128;
+        let addend = addend as i128;
+        let place = place as i128;
+
+        match self {
+            RelocationValueFormula::Absolute => target + addend,
+            RelocationValueFormula::RelativeToPlace => target + addend - place,
+        }
+    }
+}
+
+pub(crate) trait RelocationValueProvider {
+    fn relocation_value_kind(
+        _relocation_type: usize,
+    ) -> core::result::Result<RelocationValueKind, RelocationError> {
+        Err(RelocationError::UnsupportedRelocationType)
+    }
+
+    fn relocation_value<T>(
+        relocation_type: usize,
+        target: usize,
+        addend: isize,
+        place: usize,
+        skip: impl FnOnce(RelocValue<()>) -> T,
+        write_addr: impl FnOnce(RelocAddr) -> T,
+        write_word32: impl FnOnce(RelocValue<u32>) -> T,
+        write_sword32: impl FnOnce(RelocValue<i32>) -> T,
+    ) -> core::result::Result<T, RelocationError> {
+        let kind = Self::relocation_value_kind(relocation_type)?;
+        match kind {
+            RelocationValueKind::None => Ok(skip(RelocValue::new(()))),
+            RelocationValueKind::Address(formula) => Ok(write_addr(RelocAddr::new(
+                formula.compute(target, addend, place) as usize,
+            ))),
+            RelocationValueKind::Word32(formula) => {
+                u32::try_from(formula.compute(target, addend, place))
+                    .map(RelocValue::new)
+                    .map(write_word32)
+                    .map_err(|_| RelocationError::IntegerConversionOverflow)
+            }
+            RelocationValueKind::SWord32(formula) => {
+                i32::try_from(formula.compute(target, addend, place))
+                    .map(RelocValue::new)
+                    .map(write_sword32)
+                    .map_err(|_| RelocationError::IntegerConversionOverflow)
+            }
+        }
     }
 }
 

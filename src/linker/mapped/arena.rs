@@ -1,14 +1,13 @@
-use super::super::layout::{
-    LayoutAddress, LayoutArenaId, LayoutMemoryClass, LayoutModuleMaterialization,
-};
+use super::super::layout::{LayoutArenaId, LayoutMemoryClass, LayoutModuleMaterialization};
 use crate::linker::plan::LinkPlan;
 use crate::{
     Result,
     entity::SecondaryMap,
     os::{MapFlags, Mmap, ProtFlags},
     segment::{ElfMemoryBacking, ElfSegments},
+    sync::Arc,
 };
-use alloc::{sync::Arc, vec::Vec};
+use alloc::vec::Vec;
 
 #[derive(Clone)]
 pub(crate) struct MappedArena {
@@ -37,12 +36,6 @@ impl MappedArenaMap {
     #[inline]
     pub(super) fn get_mut(&mut self, id: LayoutArenaId) -> Option<&mut MappedArena> {
         self.arenas.get_mut(id)
-    }
-
-    #[inline]
-    pub(super) fn address(&self, address: LayoutAddress) -> Option<usize> {
-        self.get(address.arena())
-            .and_then(|arena| arena.address(address.offset()))
     }
 
     #[inline]

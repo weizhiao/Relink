@@ -31,6 +31,11 @@ pub const REL_JUMP_SLOT: u32 = R_RISCV_JUMP_SLOT;
 pub const REL_IRELATIVE: u32 = R_RISCV_IRELATIVE;
 /// COPY relocation type - copy data from shared object.
 pub const REL_COPY: u32 = R_RISCV_COPY;
+
+pub(crate) struct Architecture;
+
+impl crate::relocation::RelocationValueProvider for Architecture {}
+
 /// Map riscv32 relocation types to human readable names
 pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {

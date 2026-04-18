@@ -305,6 +305,8 @@ impl Display for RelocationContextError {
 pub enum RelocationError {
     /// `out of range integral type conversion attempted`
     IntegerConversionOverflow,
+    /// `unsupported relocation type`
+    UnsupportedRelocationType,
     /// Detailed relocation context, formatted lazily in `Display`.
     RelocationContext(Box<RelocationContextError>),
     #[cfg(feature = "lazy-binding")]
@@ -320,6 +322,7 @@ impl Display for RelocationError {
             Self::IntegerConversionOverflow => {
                 f.write_str("out of range integral type conversion attempted")
             }
+            Self::UnsupportedRelocationType => f.write_str("unsupported relocation type"),
             Self::RelocationContext(ctx) => Display::fmt(ctx, f),
             #[cfg(feature = "lazy-binding")]
             Self::LazyBindingSetup { detail } => {
