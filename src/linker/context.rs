@@ -1,5 +1,5 @@
 use super::{
-    layout::{LayoutModuleMaterialization, LayoutSectionData, MemoryLayoutPlan},
+    layout::{LayoutModuleMaterialization, MemoryLayoutPlan},
     mapped, materialization,
     plan::{LinkModuleId, LinkPipeline, LinkPlan},
     request::{RelocationPlanner, RelocationRequest},
@@ -9,7 +9,7 @@ use super::{
     view::DependencyGraphView,
 };
 use crate::{
-    CustomError, Loader, Result,
+    AlignedBytes, CustomError, Loader, Result,
     image::{LoadedCore, RawDylib},
     loader::LoadHook,
     os::Mmap,
@@ -626,25 +626,20 @@ fn apply_planned_section_overrides<D>(
         let Some(data) = layout.sections().data(section_id) else {
             continue;
         };
-        let dst = segments.get_slice_mut::<u8>(metadata.original_address(), metadata.size());
+        let dst = segments.get_slice_mut::<u8>(metadata.source_address(), metadata.size());
         write_planned_section_override(dst, data)?;
     }
 
     Ok(())
 }
 
-fn write_planned_section_override(dst: &mut [u8], data: &LayoutSectionData) -> Result<()> {
-    match data {
-        LayoutSectionData::Bytes(bytes) => {
-            assert_eq!(
-                bytes.len(),
-                dst.len(),
-                "planned section override size does not match the loaded section"
-            );
-            dst.copy_from_slice(bytes.as_ref());
-        }
-        LayoutSectionData::ZeroFill { .. } => dst.fill(0),
-    }
+fn write_planned_section_override(dst: &mut [u8], data: &AlignedBytes) -> Result<()> {
+    assert_eq!(
+        data.len(),
+        dst.len(),
+        "planned section override size does not match the loaded section"
+    );
+    dst.copy_from_slice(data.as_ref());
 
     Ok(())
 }
