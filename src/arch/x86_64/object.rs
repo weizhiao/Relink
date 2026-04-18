@@ -1,4 +1,6 @@
 use crate::{
+    RelocationError,
+    arch::Architecture,
     elf::ElfRelType,
     object::{
         ObjectReloc,
@@ -49,60 +51,68 @@ impl ObjectReloc for ObjectRelocator {
                 helper.core,
             )
         };
+        let value_error = |err| match err {
+            RelocationError::UnsupportedRelocationType => unknown_symbol(),
+            RelocationError::IntegerConversionOverflow => conversion_error(),
+            _ => unreachable!("unexpected relocation error from value computation"),
+        };
+        let write_relocation_target = |target| {
+            <Architecture as crate::relocation::RelocationValueProvider>::relocation_value(
+                r_type,
+                target,
+                append,
+                p.into_inner(),
+                |_| {},
+                |value| segments.write(offset, value),
+                |value| segments.write(offset, value),
+                |value| segments.write(offset, value),
+            )
+        };
 
         match r_type as _ {
+            R_X86_64_NONE => {}
             R_X86_64_64 => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(unknown_symbol());
                 };
-                segments.write(offset, sym.addend(append));
+                write_relocation_target(sym.into_inner()).map_err(value_error)?;
             }
             R_X86_64_PC32 => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(unknown_symbol());
                 };
-                let val = sym
-                    .addend(append)
-                    .relative_to(p.into_inner())
-                    .try_into_sword32()
-                    .map_err(|_| conversion_error())?;
-                segments.write(offset, val);
+                write_relocation_target(sym.into_inner()).map_err(value_error)?;
             }
             R_X86_64_PLT32 => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(unknown_symbol());
                 };
-                let val = if let Ok(val) = sym
-                    .addend(append)
-                    .relative_to(p.into_inner())
-                    .try_into_sword32()
-                {
-                    val
-                } else {
-                    let plt_entry = pltgot.add_plt_entry(r_sym);
-                    let plt_entry_addr = match plt_entry {
-                        PltEntry::Occupied(plt_entry_addr) => plt_entry_addr,
-                        PltEntry::Vacant { plt, mut got } => {
-                            let plt_entry_addr = RelocAddr::from_ptr(plt.as_ptr());
-                            got.update(sym);
-                            let call_offset = got
-                                .get_addr()
-                                .relative_to(plt_entry_addr.into_inner())
-                                .relative_to(10);
-                            let call_offset_val = call_offset
-                                .try_into_sword32()
-                                .map_err(|_| conversion_error())?;
-                            plt[6..10].copy_from_slice(&call_offset_val.to_ne_bytes());
-                            plt_entry_addr
-                        }
-                    };
-                    plt_entry_addr
-                        .addend(append)
-                        .relative_to(p.into_inner())
-                        .try_into_sword32()
-                        .map_err(|_| conversion_error())?
-                };
-                segments.write(offset, val);
+                match write_relocation_target(sym.into_inner()) {
+                    Ok(()) => {}
+                    Err(RelocationError::UnsupportedRelocationType) => return Err(unknown_symbol()),
+                    Err(RelocationError::IntegerConversionOverflow) => {
+                        let plt_entry = pltgot.add_plt_entry(r_sym);
+                        let plt_entry_addr = match plt_entry {
+                            PltEntry::Occupied(plt_entry_addr) => plt_entry_addr,
+                            PltEntry::Vacant { plt, mut got } => {
+                                let plt_entry_addr = RelocAddr::from_ptr(plt.as_ptr());
+                                got.update(sym);
+                                let call_offset = got
+                                    .get_addr()
+                                    .relative_to(plt_entry_addr.into_inner())
+                                    .relative_to(10);
+                                let call_offset_val = call_offset
+                                    .try_into_sword32()
+                                    .map_err(|_| conversion_error())?;
+                                plt[6..10].copy_from_slice(&call_offset_val.to_ne_bytes());
+                                plt_entry_addr
+                            }
+                        };
+                        write_relocation_target(plt_entry_addr.into_inner())
+                            .map_err(value_error)?;
+                    }
+                    Err(_) => unreachable!("unexpected relocation error from value computation"),
+                }
             }
             R_X86_64_GOTPCREL => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
@@ -116,32 +126,19 @@ impl ObjectReloc for ObjectRelocator {
                         got.get_addr()
                     }
                 };
-                let val = got_entry_addr
-                    .addend(append)
-                    .relative_to(p.into_inner())
-                    .try_into_sword32()
-                    .map_err(|_| conversion_error())?;
-                segments.write(offset, val);
+                write_relocation_target(got_entry_addr.into_inner()).map_err(value_error)?;
             }
             R_X86_64_32 => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(unknown_symbol());
                 };
-                let val = sym
-                    .addend(append)
-                    .try_into_word32()
-                    .map_err(|_| conversion_error())?;
-                segments.write(offset, val);
+                write_relocation_target(sym.into_inner()).map_err(value_error)?;
             }
             R_X86_64_32S => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(unknown_symbol());
                 };
-                let val = sym
-                    .addend(append)
-                    .try_into_sword32()
-                    .map_err(|_| conversion_error())?;
-                segments.write(offset, val);
+                write_relocation_target(sym.into_inner()).map_err(value_error)?;
             }
             _ => return Err(unknown_symbol()),
         }

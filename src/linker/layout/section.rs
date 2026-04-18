@@ -169,10 +169,10 @@ impl LayoutSectionMetadata {
         self.info_section = info_section;
     }
 
-    /// Returns whether this metadata record describes a loadable non-relocation section.
+    /// Returns whether this metadata record describes a loadable section.
     #[inline]
     pub fn is_allocated(&self) -> bool {
-        self.section_flags.contains(ElfSectionFlags::ALLOC) && !self.is_relocation()
+        self.section_flags.contains(ElfSectionFlags::ALLOC)
     }
 
     /// Returns whether this metadata record describes a retained relocation section.
@@ -184,7 +184,7 @@ impl LayoutSectionMetadata {
         )
     }
 
-    /// Returns the mapped memory class for loadable non-relocation sections.
+    /// Returns the mapped memory class for loadable sections.
     #[inline]
     pub fn memory_class(&self) -> Option<LayoutMemoryClass> {
         if !self.is_allocated() {

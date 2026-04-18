@@ -10,6 +10,8 @@ pub(crate) mod object;
 #[cfg(feature = "tls")]
 mod tls;
 
+use crate::RelocationError;
+use crate::relocation::{RelocationValueFormula, RelocationValueKind, RelocationValueProvider};
 use elf::abi::*;
 
 #[cfg(feature = "lazy-binding")]
@@ -34,6 +36,26 @@ pub const REL_JUMP_SLOT: u32 = R_X86_64_JUMP_SLOT;
 pub const REL_IRELATIVE: u32 = R_X86_64_IRELATIVE;
 /// COPY relocation type - copy data from shared object.
 pub const REL_COPY: u32 = R_X86_64_COPY;
+
+pub(crate) struct Architecture;
+
+impl RelocationValueProvider for Architecture {
+    fn relocation_value_kind(
+        relocation_type: usize,
+    ) -> core::result::Result<RelocationValueKind, RelocationError> {
+        use RelocationValueFormula::{Absolute, RelativeToPlace};
+        match relocation_type as u32 {
+            R_X86_64_NONE => Ok(RelocationValueKind::None),
+            R_X86_64_64 => Ok(RelocationValueKind::Address(Absolute)),
+            R_X86_64_32 => Ok(RelocationValueKind::Word32(Absolute)),
+            R_X86_64_32S => Ok(RelocationValueKind::SWord32(Absolute)),
+            R_X86_64_PC32 | R_X86_64_PLT32 | R_X86_64_GOTPCREL => {
+                Ok(RelocationValueKind::SWord32(RelativeToPlace))
+            }
+            _ => Err(RelocationError::UnsupportedRelocationType),
+        }
+    }
+}
 
 /// Map x86_64 relocation type value to human readable name.
 ///

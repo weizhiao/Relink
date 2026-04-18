@@ -32,6 +32,10 @@ pub const REL_IRELATIVE: u32 = R_AARCH64_IRELATIVE;
 /// COPY relocation type - copy data from shared object.
 pub const REL_COPY: u32 = R_AARCH64_COPY;
 
+pub(crate) struct Architecture;
+
+impl crate::relocation::RelocationValueProvider for Architecture {}
+
 /// Map aarch64 relocation type to human readable name
 pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
     match r_type as u32 {
