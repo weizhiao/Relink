@@ -1,9 +1,8 @@
 use super::{LayoutModuleMaterialization, LayoutSectionArena, LayoutSectionId, MemoryLayoutPlan};
 use crate::{
-    Result,
+    AlignedBytes, Result,
     entity::{PrimaryMap, entity_ref},
     image::{ModuleCapability, ScannedDylib},
-    linker::layout::LayoutSectionData,
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
@@ -179,7 +178,7 @@ where
 
     /// Returns one section's data, materializing it on demand when needed.
     #[inline]
-    pub fn section_data(&mut self, section: LayoutSectionId) -> Result<Option<&LayoutSectionData>> {
+    pub fn section_data(&mut self, section: LayoutSectionId) -> Result<Option<&AlignedBytes>> {
         let Some(module_id) = self.plan.memory_layout().section_owner(section) else {
             return Ok(None);
         };
@@ -190,12 +189,15 @@ where
         {
             return Ok(None);
         }
-        self.plan.section_data(section)
+        Ok(Some(self.plan.section_data(section)?))
     }
 
-    /// Returns mutable section bytes, materializing backing storage on demand.
+    /// Returns mutable section data, materializing it on demand when needed.
     #[inline]
-    pub fn section_bytes_mut(&mut self, section: LayoutSectionId) -> Result<Option<&mut [u8]>> {
+    pub fn section_data_mut(
+        &mut self,
+        section: LayoutSectionId,
+    ) -> Result<Option<&mut AlignedBytes>> {
         let Some(module_id) = self.plan.memory_layout().section_owner(section) else {
             return Ok(None);
         };
@@ -206,7 +208,7 @@ where
         {
             return Ok(None);
         }
-        self.plan.section_bytes_mut(section)
+        Ok(Some(self.plan.section_data_mut(section)?))
     }
 
     /// Returns the filtered plan's memory-layout core.
@@ -564,79 +566,78 @@ where
         entries: &mut PrimaryMap<LinkModuleId, PlannedModule<K, D>>,
         sections: &mut LayoutSectionArena,
         section: LayoutSectionId,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         if sections.data(section).is_some() {
-            return Ok(true);
+            return Ok(());
         }
 
-        let Some(module_id) = sections.owner(section) else {
-            return Ok(false);
-        };
-        let Some(entry) = entries.get_mut(module_id) else {
-            return Ok(false);
-        };
+        let module_id = sections
+            .owner(section)
+            .ok_or_else(|| crate::custom_error("section data requested for an unowned section"))?;
+        let entry = entries.get_mut(module_id).ok_or_else(|| {
+            crate::custom_error("section data requested for a missing planned module")
+        })?;
         if !entry.module().capability().has_section_data() {
-            return Ok(false);
+            return Err(crate::custom_error(
+                "section data requested for a module without section data",
+            ));
         }
 
         let scanned_section = sections
             .get(section)
             .expect("link plan tried to materialize data for a missing section")
             .scanned_section();
-        let Some(snapshot) = entry.module_mut().section_data(scanned_section)? else {
-            return Ok(false);
-        };
+        let snapshot = entry
+            .module_mut()
+            .section_data(scanned_section)?
+            .ok_or_else(|| {
+                crate::custom_error("section data requested for a missing scanned section")
+            })?;
 
         sections.install_scanned_data(section, snapshot);
-        Ok(true)
+        Ok(())
     }
 
     /// Returns one section's data, materializing it on demand when needed.
-    pub fn section_data(&mut self, section: LayoutSectionId) -> Result<Option<&LayoutSectionData>> {
+    pub fn section_data(&mut self, section: LayoutSectionId) -> Result<&AlignedBytes> {
+        let (data, _) = self.section_data_with_layout(section)?;
+        Ok(data)
+    }
+
+    /// Returns one section's data together with the layout that owns it.
+    pub(crate) fn section_data_with_layout(
+        &mut self,
+        section: LayoutSectionId,
+    ) -> Result<(&AlignedBytes, &MemoryLayoutPlan)> {
         let Self {
             entries,
             memory_layout,
             ..
         } = self;
         if memory_layout.sections().data(section).is_none() {
-            if !Self::materialize_section_data(entries, memory_layout.sections_mut(), section)? {
-                return Ok(None);
-            }
+            Self::materialize_section_data(entries, memory_layout.sections_mut(), section)?;
         }
 
-        Ok(memory_layout.sections().data(section))
+        let layout = &*memory_layout;
+        let data = layout
+            .sections()
+            .data(section)
+            .ok_or_else(|| crate::custom_error("section data was not materialized"))?;
+        Ok((data, layout))
     }
 
-    /// Returns mutable section bytes, materializing backing storage on demand.
-    pub fn section_bytes_mut(&mut self, section: LayoutSectionId) -> Result<Option<&mut [u8]>> {
-        if self.section_data(section)?.is_none() {
-            return Ok(None);
-        }
+    /// Returns mutable section data, materializing it on demand when needed.
+    pub fn section_data_mut(&mut self, section: LayoutSectionId) -> Result<&mut AlignedBytes> {
+        let _ = self.section_data(section)?;
         let sections = self.memory_layout.sections_mut();
         let _ = sections.mark_data_override(section);
-        Ok(sections
+        sections
             .data_mut(section)
-            .map(LayoutSectionData::ensure_bytes_mut))
+            .ok_or_else(|| crate::custom_error("section data was not materialized"))
     }
 
     #[inline]
     pub(crate) fn finalize_layout(&mut self) -> Result<()> {
-        let Self {
-            entries,
-            memory_layout,
-            ..
-        } = self;
-        let capabilities = entries
-            .iter()
-            .map(|(_, entry)| entry.module().capability())
-            .collect::<Vec<_>>();
-        memory_layout.rebuild_derived_state(
-            |module_id| capabilities.get(module_id.index()).copied(),
-            |sections, section_id| {
-                let _ = Self::materialize_section_data(entries, sections, section_id)?;
-                Ok(())
-            },
-        )?;
         Ok(())
     }
 

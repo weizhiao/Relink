@@ -4,6 +4,7 @@ use super::{
 };
 use crate::{
     AlignedBytes,
+    elf::{ElfSectionFlags, ElfSectionType},
     entity::{PrimaryMap, SecondaryMap, entity_ref},
     image::{ScannedDylib, ScannedSection, ScannedSectionId},
     linker::plan::LinkModuleId,
@@ -59,30 +60,19 @@ impl SectionPlacement {
     }
 }
 
-/// The logical kind of one section carried by the layout plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LayoutSectionKind {
-    /// One allocatable section with its final memory class.
-    Allocated(LayoutMemoryClass),
-    /// One retained relocation section kept for reorder repair.
-    RetainedRelocation,
-    /// One non-alloc, non-relocation section kept only as metadata.
-    NonAllocated,
-}
-
 /// The immutable metadata tracked for one planned section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutSectionMetadata {
     scanned_section: ScannedSectionId,
     name: Box<str>,
-    kind: LayoutSectionKind,
+    section_type: ElfSectionType,
+    section_flags: ElfSectionFlags,
     linked_section: Option<LayoutSectionId>,
     info_section: Option<LayoutSectionId>,
-    original_address: usize,
-    original_file_offset: usize,
+    source_address: usize,
+    source_file_offset: usize,
     size: usize,
     alignment: usize,
-    zero_fill: bool,
 }
 
 impl LayoutSectionMetadata {
@@ -91,14 +81,14 @@ impl LayoutSectionMetadata {
     pub fn new<T, U>(
         scanned_section: impl Into<ScannedSectionId>,
         name: impl Into<Box<str>>,
-        kind: LayoutSectionKind,
+        section_type: ElfSectionType,
+        section_flags: ElfSectionFlags,
         linked_section: Option<T>,
         info_section: Option<U>,
-        original_address: usize,
-        original_file_offset: usize,
+        source_address: usize,
+        source_file_offset: usize,
         size: usize,
         alignment: usize,
-        zero_fill: bool,
     ) -> Self
     where
         T: Into<LayoutSectionId>,
@@ -107,48 +97,29 @@ impl LayoutSectionMetadata {
         Self {
             scanned_section: scanned_section.into(),
             name: name.into(),
-            kind,
+            section_type,
+            section_flags,
             linked_section: linked_section.map(Into::into),
             info_section: info_section.map(Into::into),
-            original_address,
-            original_file_offset,
+            source_address,
+            source_file_offset,
             size,
             alignment: alignment.max(1),
-            zero_fill,
         }
     }
 
     pub(super) fn from_scanned(section: ScannedSection<'_>) -> Self {
-        let kind = match section.section_type() {
-            crate::elf::ElfSectionType::REL | crate::elf::ElfSectionType::RELA => {
-                LayoutSectionKind::RetainedRelocation
-            }
-            _ if !section.is_allocated() => LayoutSectionKind::NonAllocated,
-            _ => {
-                let class = if section.is_tls() {
-                    LayoutMemoryClass::ThreadLocalData
-                } else if section.is_executable() {
-                    LayoutMemoryClass::Code
-                } else if section.is_writable() {
-                    LayoutMemoryClass::WritableData
-                } else {
-                    LayoutMemoryClass::ReadOnlyData
-                };
-                LayoutSectionKind::Allocated(class)
-            }
-        };
-
         Self::new(
             section.id(),
             section.name(),
-            kind,
+            section.section_type(),
+            section.flags(),
             None::<LayoutSectionId>,
             None::<LayoutSectionId>,
             section.address(),
             section.file_offset(),
             section.size(),
             section.alignment(),
-            section.is_nobits(),
         )
     }
 
@@ -176,10 +147,16 @@ impl LayoutSectionMetadata {
         self.info_section
     }
 
-    /// Returns the logical kind of this section.
+    /// Returns the original ELF section type.
     #[inline]
-    pub const fn kind(&self) -> LayoutSectionKind {
-        self.kind
+    pub const fn section_type(&self) -> ElfSectionType {
+        self.section_type
+    }
+
+    /// Returns the original ELF section flags.
+    #[inline]
+    pub const fn section_flags(&self) -> ElfSectionFlags {
+        self.section_flags
     }
 
     #[inline]
@@ -192,28 +169,63 @@ impl LayoutSectionMetadata {
         self.info_section = info_section;
     }
 
-    /// Returns whether this metadata record describes a loadable section.
+    /// Returns whether this metadata record describes a loadable non-relocation section.
     #[inline]
-    pub const fn is_allocated(&self) -> bool {
-        matches!(self.kind, LayoutSectionKind::Allocated(_))
+    pub fn is_allocated(&self) -> bool {
+        self.section_flags.contains(ElfSectionFlags::ALLOC) && !self.is_relocation()
     }
 
     /// Returns whether this metadata record describes a retained relocation section.
     #[inline]
     pub const fn is_relocation(&self) -> bool {
-        matches!(self.kind, LayoutSectionKind::RetainedRelocation)
+        matches!(
+            self.section_type,
+            ElfSectionType::REL | ElfSectionType::RELA
+        )
     }
 
-    /// Returns the original ELF virtual address.
+    /// Returns the mapped memory class for loadable non-relocation sections.
     #[inline]
-    pub const fn original_address(&self) -> usize {
-        self.original_address
+    pub fn memory_class(&self) -> Option<LayoutMemoryClass> {
+        if !self.is_allocated() {
+            return None;
+        }
+        Some(if self.section_flags.contains(ElfSectionFlags::TLS) {
+            LayoutMemoryClass::ThreadLocalData
+        } else if self.section_flags.contains(ElfSectionFlags::EXECINSTR) {
+            LayoutMemoryClass::Code
+        } else if self.section_flags.contains(ElfSectionFlags::WRITE) {
+            LayoutMemoryClass::WritableData
+        } else {
+            LayoutMemoryClass::ReadOnlyData
+        })
     }
 
-    /// Returns the original ELF file offset.
+    /// Returns whether this metadata record describes a symbol-table section.
     #[inline]
-    pub const fn original_file_offset(&self) -> usize {
-        self.original_file_offset
+    pub const fn is_symbol_table(&self) -> bool {
+        matches!(
+            self.section_type,
+            ElfSectionType::SYMTAB | ElfSectionType::DYNSYM
+        )
+    }
+
+    /// Returns whether this metadata record describes an allocated retained relocation section.
+    #[inline]
+    pub fn is_allocated_relocation(&self) -> bool {
+        self.section_flags.contains(ElfSectionFlags::ALLOC) && self.is_relocation()
+    }
+
+    /// Returns the source ELF virtual address.
+    #[inline]
+    pub const fn source_address(&self) -> usize {
+        self.source_address
+    }
+
+    /// Returns the source ELF file offset.
+    #[inline]
+    pub const fn source_file_offset(&self) -> usize {
+        self.source_file_offset
     }
 
     /// Returns the logical size in bytes.
@@ -231,39 +243,7 @@ impl LayoutSectionMetadata {
     /// Returns whether the section is zero-fill.
     #[inline]
     pub const fn zero_fill(&self) -> bool {
-        self.zero_fill
-    }
-}
-
-/// The materialized data owned by one section.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LayoutSectionData {
-    /// Materialized file-backed bytes.
-    Bytes(AlignedBytes),
-    /// Logical zero-fill storage.
-    ZeroFill { size: usize },
-}
-
-impl LayoutSectionData {
-    /// Returns the materialized bytes when the section is file-backed.
-    #[inline]
-    pub fn bytes(&self) -> Option<&[u8]> {
-        match self {
-            Self::Bytes(bytes) => Some(bytes.as_ref()),
-            Self::ZeroFill { .. } => None,
-        }
-    }
-
-    /// Returns mutable bytes, materializing zero-fill storage when needed.
-    pub fn ensure_bytes_mut(&mut self) -> &mut [u8] {
-        if let Self::ZeroFill { size } = *self {
-            *self = Self::Bytes(AlignedBytes::with_len(size).expect("failed to allocate bytes"));
-        }
-
-        match self {
-            Self::Bytes(bytes) => bytes.as_mut(),
-            Self::ZeroFill { .. } => unreachable!(),
-        }
+        matches!(self.section_type, ElfSectionType::NOBITS)
     }
 }
 
@@ -272,7 +252,7 @@ impl LayoutSectionData {
 pub struct LayoutSectionRecord {
     owner: LinkModuleId,
     metadata: LayoutSectionMetadata,
-    data: Option<LayoutSectionData>,
+    data: Option<AlignedBytes>,
     override_data: bool,
     placement: Option<SectionPlacement>,
 }
@@ -309,18 +289,18 @@ impl LayoutSectionRecord {
 
     /// Returns the materialized data of this section, when present.
     #[inline]
-    pub fn data(&self) -> Option<&LayoutSectionData> {
+    pub fn data(&self) -> Option<&AlignedBytes> {
         self.data.as_ref()
     }
 
     /// Returns the materialized data of this section mutably, when present.
     #[inline]
-    pub fn data_mut(&mut self) -> Option<&mut LayoutSectionData> {
+    pub fn data_mut(&mut self) -> Option<&mut AlignedBytes> {
         self.data.as_mut()
     }
 
     #[inline]
-    fn install_data(&mut self, data: LayoutSectionData) {
+    fn install_data(&mut self, data: AlignedBytes) {
         if self.data.is_none() {
             self.data = Some(data);
         }
@@ -440,13 +420,13 @@ impl LayoutSectionArena {
 
     /// Returns one materialized section-data record by id.
     #[inline]
-    pub fn data(&self, id: LayoutSectionId) -> Option<&LayoutSectionData> {
+    pub fn data(&self, id: LayoutSectionId) -> Option<&AlignedBytes> {
         self.record(id).and_then(LayoutSectionRecord::data)
     }
 
     /// Returns one materialized section-data record by id mutably.
     #[inline]
-    pub fn data_mut(&mut self, id: LayoutSectionId) -> Option<&mut LayoutSectionData> {
+    pub fn data_mut(&mut self, id: LayoutSectionId) -> Option<&mut AlignedBytes> {
         self.record_mut(id).and_then(LayoutSectionRecord::data_mut)
     }
 
@@ -462,14 +442,14 @@ impl LayoutSectionArena {
         section: LayoutSectionId,
         bytes: AlignedBytes,
     ) -> Option<LayoutSectionId> {
-        self.install_data(section, LayoutSectionData::Bytes(bytes))
+        self.install_data(section, bytes)
     }
 
     #[inline]
     pub(crate) fn install_data(
         &mut self,
         section: LayoutSectionId,
-        data: LayoutSectionData,
+        data: AlignedBytes,
     ) -> Option<LayoutSectionId> {
         let record = self.record_mut(section)?;
         record.install_data(data);
@@ -481,18 +461,8 @@ impl LayoutSectionArena {
         section: LayoutSectionId,
         bytes: impl Into<AlignedBytes>,
     ) {
-        let metadata = self
-            .get(section)
-            .expect("layout section arena tried to install data for a missing section");
-        let zero_fill = metadata.zero_fill();
-        let size = metadata.size();
-        if zero_fill {
-            self.install_data(section, LayoutSectionData::ZeroFill { size })
-                .expect("layout section arena failed to install zero-fill section data");
-        } else {
-            self.push_scanned(section, bytes.into())
-                .expect("layout section arena failed to install scanned section data");
-        }
+        self.push_scanned(section, bytes.into())
+            .expect("layout section arena failed to install scanned section data");
     }
 
     #[inline]
@@ -547,6 +517,8 @@ pub struct ModuleLayout {
     scanned_sections: SecondaryMap<ScannedSectionId, LayoutSectionId>,
     alloc_sections: Box<[LayoutSectionId]>,
     relocation_sections: Box<[LayoutSectionId]>,
+    symbol_table_sections: Box<[LayoutSectionId]>,
+    allocated_relocation_sections: Box<[LayoutSectionId]>,
 }
 
 impl ModuleLayout {
@@ -565,6 +537,8 @@ impl ModuleLayout {
         let mut scanned_sections = SecondaryMap::default();
         let mut alloc_sections = Vec::new();
         let mut relocation_sections = Vec::new();
+        let mut symbol_table_sections = Vec::new();
+        let mut allocated_relocation_sections = Vec::new();
 
         for (scanned_section, section_id) in sections {
             let scanned_section = scanned_section.into();
@@ -583,12 +557,20 @@ impl ModuleLayout {
             if section.is_relocation() {
                 relocation_sections.push(section_id);
             }
+            if section.is_symbol_table() {
+                symbol_table_sections.push(section_id);
+            }
+            if section.is_allocated_relocation() {
+                allocated_relocation_sections.push(section_id);
+            }
         }
 
         Self {
             scanned_sections,
             alloc_sections: alloc_sections.into_boxed_slice(),
             relocation_sections: relocation_sections.into_boxed_slice(),
+            symbol_table_sections: symbol_table_sections.into_boxed_slice(),
+            allocated_relocation_sections: allocated_relocation_sections.into_boxed_slice(),
         }
     }
 
@@ -643,6 +625,18 @@ impl ModuleLayout {
     #[inline]
     pub fn relocation_sections(&self) -> &[LayoutSectionId] {
         &self.relocation_sections
+    }
+
+    /// Returns the symbol-table section ids owned by the module.
+    #[inline]
+    pub fn symbol_table_sections(&self) -> &[LayoutSectionId] {
+        &self.symbol_table_sections
+    }
+
+    /// Returns allocated retained relocation section ids owned by the module.
+    #[inline]
+    pub fn allocated_relocation_sections(&self) -> &[LayoutSectionId] {
+        &self.allocated_relocation_sections
     }
 
     /// Returns one section id by its original scanned section id.

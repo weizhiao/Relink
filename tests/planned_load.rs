@@ -113,8 +113,9 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_memory_slice
             .memory_layout()
             .module_section_id(root, data_section)
             .expect("missing planned .data section");
-        plan.section_bytes_mut(layout_section)?
+        plan.section_data_mut(layout_section)?
             .expect("missing materialized .data bytes")
+            .as_bytes_mut()
             .copy_from_slice(&[9, 8, 7, 6]);
         Ok(())
     };
@@ -230,8 +231,9 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
             .module_section_id(root, data_section)
             .expect("missing planned .data section");
         {
-            plan.section_bytes_mut(layout_section)?
+            plan.section_data_mut(layout_section)?
                 .expect("missing materialized .data bytes")
+                .as_bytes_mut()
                 .copy_from_slice(&[9, 8, 7, 6]);
             let layout = plan.memory_layout_mut();
             let arena = layout.create_arena(LayoutArena::new(
@@ -409,8 +411,9 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
             .memory_layout()
             .module_section_id(root, data_section)
             .expect("missing planned .data section");
-        plan.section_bytes_mut(layout_section)?
+        plan.section_data_mut(layout_section)?
             .expect("missing materialized .data bytes")
+            .as_bytes_mut()
             .copy_from_slice(&[9, 8, 7, 6]);
         plan.set_module_materialization(root, LayoutModuleMaterialization::WholeDsoRegion);
         Ok(())

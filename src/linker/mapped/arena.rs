@@ -1,5 +1,5 @@
 use super::super::layout::{
-    LayoutAddress, LayoutArenaId, LayoutMemoryClass, LayoutModuleMaterialization, LayoutSectionData,
+    LayoutAddress, LayoutArenaId, LayoutMemoryClass, LayoutModuleMaterialization,
 };
 use crate::linker::plan::LinkPlan;
 use crate::{
@@ -163,11 +163,11 @@ where
         .iter_records()
         .filter_map(|(section_id, record)| {
             let placement = record.placement()?;
-            Some((section_id, placement, record.metadata().zero_fill()))
+            Some((section_id, placement))
         })
         .collect::<Vec<_>>();
 
-    for (section_id, placement, zero_fill) in placed_sections {
+    for (section_id, placement) in placed_sections {
         let data = plan.section_data(section_id)?;
         let arena = arenas.get_mut(placement.arena()).ok_or_else(|| {
             crate::custom_error("mapped section arenas referenced a missing arena")
@@ -180,45 +180,16 @@ where
                 )
             })?;
 
-        if let Some(data) = data {
-            copy_section_data(data, dst)?;
-            continue;
+        let bytes = data.as_ref();
+        if bytes.len() != dst.len() {
+            return Err(crate::custom_error(
+                "mapped section arena size does not match its materialized section bytes",
+            ));
         }
 
-        if zero_fill {
-            continue;
-        }
-
-        return Err(crate::custom_error(
-            "mapped section arenas are missing materialized section data",
-        ));
+        dst.copy_from_slice(bytes);
     }
 
-    Ok(())
-}
-
-fn copy_section_data(data: &LayoutSectionData, dst: &mut [u8]) -> Result<()> {
-    match data {
-        LayoutSectionData::Bytes(bytes) => copy_section_bytes(bytes.as_ref(), dst),
-        LayoutSectionData::ZeroFill { size } => {
-            if *size != dst.len() {
-                return Err(crate::custom_error(
-                    "mapped section arena zero-fill size does not match its placement",
-                ));
-            }
-            Ok(())
-        }
-    }
-}
-
-fn copy_section_bytes(bytes: &[u8], dst: &mut [u8]) -> Result<()> {
-    if bytes.len() != dst.len() {
-        return Err(crate::custom_error(
-            "mapped section arena size does not match its materialized section bytes",
-        ));
-    }
-
-    dst.copy_from_slice(bytes);
     Ok(())
 }
 

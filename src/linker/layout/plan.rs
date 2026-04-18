@@ -1,15 +1,12 @@
 use super::{
     arena::{LayoutArena, LayoutArenaId, LayoutArenaUsage},
-    derived::ModuleLayoutDerived,
     section::{
-        LayoutSectionArena, LayoutSectionId, LayoutSectionKind, LayoutSectionMetadata,
-        ModuleLayout, SectionPlacement,
+        LayoutSectionArena, LayoutSectionId, LayoutSectionMetadata, ModuleLayout, SectionPlacement,
     },
 };
 use crate::{
-    Result,
     entity::{PrimaryMap, SecondaryMap},
-    image::{ModuleCapability, ScannedDylib, ScannedSectionId},
+    image::{ScannedDylib, ScannedSectionId},
     linker::plan::LinkModuleId,
 };
 
@@ -35,7 +32,6 @@ pub struct MemoryLayoutPlan {
     modules: PrimaryMap<LinkModuleId, ModuleLayout>,
     materialization: SecondaryMap<LinkModuleId, LayoutModuleMaterialization>,
     sections: LayoutSectionArena,
-    derived: SecondaryMap<LinkModuleId, ModuleLayoutDerived>,
 }
 
 impl MemoryLayoutPlan {
@@ -187,11 +183,6 @@ impl MemoryLayoutPlan {
             })
     }
 
-    #[inline]
-    pub(crate) fn module_derived(&self, module_id: LinkModuleId) -> Option<&ModuleLayoutDerived> {
-        self.derived.get(module_id)
-    }
-
     /// Returns the derived usage summary for one arena.
     pub fn arena_usage(&self, id: LayoutArenaId) -> LayoutArenaUsage {
         let arena = self.arena(id);
@@ -241,11 +232,11 @@ impl MemoryLayoutPlan {
         if !metadata.is_allocated() || metadata.size() != placement.size() {
             return false;
         }
+        let Some(memory_class) = metadata.memory_class() else {
+            return false;
+        };
         let arena = self.arena(placement.arena());
-        if !matches!(
-            metadata.kind(),
-            LayoutSectionKind::Allocated(class) if class == arena.memory_class()
-        ) {
+        if memory_class != arena.memory_class() {
             return false;
         }
 
@@ -259,7 +250,6 @@ impl MemoryLayoutPlan {
     pub fn clear_arena_mappings(&mut self) {
         self.arenas = PrimaryMap::default();
         self.sections.clear_placements();
-        self.derived = SecondaryMap::default();
     }
 }
 
@@ -288,7 +278,6 @@ impl MemoryLayoutPlan {
             for (_, section_id) in previous.section_entries() {
                 self.sections.clear_placement(*section_id);
             }
-            self.derived.remove(module_id);
             if !self.materialization.contains_key(module_id) {
                 self.materialization
                     .insert(module_id, LayoutModuleMaterialization::WholeDsoRegion);
@@ -309,42 +298,6 @@ impl MemoryLayoutPlan {
         self.materialization
             .insert(module_id, LayoutModuleMaterialization::WholeDsoRegion);
         None
-    }
-
-    /// Rebuilds the core relocation/repair state, materializing retained
-    /// relocation inputs on demand before deriving repair entries.
-    pub(crate) fn rebuild_derived_state(
-        &mut self,
-        mut module_capability: impl FnMut(LinkModuleId) -> Option<ModuleCapability>,
-        mut ensure_section_data: impl FnMut(&mut LayoutSectionArena, LayoutSectionId) -> Result<()>,
-    ) -> Result<()> {
-        let Self {
-            modules,
-            sections,
-            derived: derived_state,
-            ..
-        } = self;
-        let mut rebuilt = SecondaryMap::default();
-        for (module_id, module) in modules.iter() {
-            let capability = module_capability(module_id).unwrap_or(ModuleCapability::SectionData);
-            if capability.supports_reorder_repair() {
-                for section_id in module.relocation_sections().iter().copied() {
-                    ensure_section_data(sections, section_id)?;
-                    let linked_section = sections
-                        .get(section_id)
-                        .expect("module layout referenced missing relocation section metadata")
-                        .linked_section();
-                    if let Some(linked_section) = linked_section {
-                        ensure_section_data(sections, linked_section)?;
-                    }
-                }
-            }
-
-            let module_derived = ModuleLayoutDerived::from_layout(module, capability, sections)?;
-            rebuilt.insert(module_id, module_derived);
-        }
-        *derived_state = rebuilt;
-        Ok(())
     }
 
     /// Builds a section-granularity layout seed from scanned metadata.

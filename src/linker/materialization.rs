@@ -1,8 +1,8 @@
 use super::{
     layout::{
         LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutClassPolicy, LayoutMemoryClass,
-        LayoutModuleMaterialization, LayoutPackingPolicy, LayoutSectionId, LayoutSectionKind,
-        MemoryLayoutPlan, ModuleLayout, SectionPlacement,
+        LayoutModuleMaterialization, LayoutPackingPolicy, LayoutSectionId, MemoryLayoutPlan,
+        ModuleLayout, SectionPlacement,
     },
     plan::{LinkModuleId, LinkPlan},
 };
@@ -133,10 +133,9 @@ fn assign_fallback_section(
     let (memory_class, alignment, size) = {
         let section = layout.section_metadata(section_id);
         (
-            match section.kind() {
-                LayoutSectionKind::Allocated(class) => class,
-                _ => panic!("fallback arena assignment encountered a non-alloc section"),
-            },
+            section
+                .memory_class()
+                .expect("fallback arena assignment encountered a non-alloc section"),
             section.alignment(),
             section.size(),
         )
@@ -184,10 +183,9 @@ impl FallbackArenaState {
         placement: SectionPlacement,
     ) {
         let metadata = layout.section_metadata(section_id);
-        let memory_class = match metadata.kind() {
-            LayoutSectionKind::Allocated(class) => class,
-            _ => panic!("fallback arena state found a non-alloc placed section"),
-        };
+        let memory_class = metadata
+            .memory_class()
+            .expect("fallback arena state found a non-alloc placed section");
         let arena = layout.arena(placement.arena());
 
         self.update_arena_end(
