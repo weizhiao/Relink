@@ -380,12 +380,70 @@ impl Display for UnresolvedDependencyError {
 pub enum LinkerError {
     /// A dependency could not be resolved by the resolver callback.
     UnresolvedDependency(Box<UnresolvedDependencyError>),
+    /// Committed linker context state rejected an operation.
+    Context { detail: &'static str },
+    /// Resolver state was inconsistent with the current link context.
+    Resolver { detail: &'static str },
+    /// A requested materialization mode is invalid for the module/layout.
+    Materialization { detail: &'static str },
+    /// Section data could not be materialized or borrowed as requested.
+    SectionData { detail: &'static str },
+    /// Mapped section-arena memory is inconsistent with the layout plan.
+    MappedArena { detail: &'static str },
+    /// Runtime memory built for section-region materialization is invalid.
+    RuntimeMemory { detail: &'static str },
+    /// Runtime metadata repair failed after section-region mapping.
+    MetadataRewrite { detail: &'static str },
+}
+
+impl LinkerError {
+    #[inline]
+    pub(crate) const fn context(detail: &'static str) -> Self {
+        Self::Context { detail }
+    }
+
+    #[inline]
+    pub(crate) const fn resolver(detail: &'static str) -> Self {
+        Self::Resolver { detail }
+    }
+
+    #[inline]
+    pub(crate) const fn materialization(detail: &'static str) -> Self {
+        Self::Materialization { detail }
+    }
+
+    #[inline]
+    pub(crate) const fn section_data(detail: &'static str) -> Self {
+        Self::SectionData { detail }
+    }
+
+    #[inline]
+    pub(crate) const fn mapped_arena(detail: &'static str) -> Self {
+        Self::MappedArena { detail }
+    }
+
+    #[inline]
+    pub(crate) const fn runtime_memory(detail: &'static str) -> Self {
+        Self::RuntimeMemory { detail }
+    }
+
+    #[inline]
+    pub(crate) const fn metadata_rewrite(detail: &'static str) -> Self {
+        Self::MetadataRewrite { detail }
+    }
 }
 
 impl Display for LinkerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnresolvedDependency(err) => Display::fmt(err, f),
+            Self::Context { detail }
+            | Self::Resolver { detail }
+            | Self::Materialization { detail }
+            | Self::SectionData { detail }
+            | Self::MappedArena { detail }
+            | Self::RuntimeMemory { detail }
+            | Self::MetadataRewrite { detail } => f.write_str(detail),
         }
     }
 }
@@ -434,7 +492,7 @@ pub enum Error {
     /// An error occurred while parsing program headers.
     ParsePhdr(ParsePhdrError),
 
-    /// An error occurred in linker dependency resolution.
+    /// An error occurred during linker resolution, planning, or materialization.
     Linker(LinkerError),
 
     /// An error occurred in a user-defined callback or handler.

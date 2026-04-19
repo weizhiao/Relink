@@ -2,7 +2,7 @@ use super::layout::{LayoutSectionId, MemoryLayoutPlan};
 use crate::linker::mapped::rewrite::RuntimeMetadataRewriter;
 use crate::linker::plan::{LinkModuleId, LinkPlan};
 use crate::{
-    Result,
+    LinkerError, Result,
     elf::{ElfDyn, ElfPhdrs, ElfProgramType},
     entity::SecondaryMap,
     image::{RawDylib, ScannedDylib},
@@ -65,10 +65,10 @@ impl RuntimeModuleMemory {
             let arena = mapped_section_arenas
                 .get(placement.arena())
                 .ok_or_else(|| {
-                    crate::custom_error("arena-backed module referenced an unmapped arena")
+                    LinkerError::runtime_memory("arena-backed module referenced an unmapped arena")
                 })?;
             let actual_address = arena.address(placement.offset()).ok_or_else(|| {
-                crate::custom_error("arena-backed module section address overflowed")
+                LinkerError::runtime_memory("arena-backed module section address overflowed")
             })?;
             placed_sections.push((
                 section_id,
@@ -84,9 +84,10 @@ impl RuntimeModuleMemory {
             .map(|(_, _, _, actual_address, _)| *actual_address)
             .min()
         else {
-            return Err(crate::custom_error(
+            return Err(LinkerError::runtime_memory(
                 "arena-backed module does not own any alloc sections",
-            ));
+            )
+            .into());
         };
 
         let mut segment_slices = Vec::with_capacity(placed_sections.len());
@@ -96,10 +97,10 @@ impl RuntimeModuleMemory {
             let arena = mapped_section_arenas
                 .get(layout_address.arena())
                 .ok_or_else(|| {
-                    crate::custom_error("arena-backed module referenced an unmapped arena")
+                    LinkerError::runtime_memory("arena-backed module referenced an unmapped arena")
                 })?;
             let runtime_offset = actual_address.checked_sub(base).ok_or_else(|| {
-                crate::custom_error("arena-backed module address precedes runtime base")
+                LinkerError::runtime_memory("arena-backed module address precedes runtime base")
             })?;
             segment_slices.push(ElfSegments::slice(runtime_offset, *size, arena.backing()));
             runtime_sections.push(RuntimeSectionMemory {
@@ -116,12 +117,12 @@ impl RuntimeModuleMemory {
         })
     }
 
-    fn remap_source_address(&self, source_address: usize) -> Result<Option<usize>> {
-        Ok(self.sections.iter().copied().find_map(|section| {
+    fn remap_source_address(&self, source_address: usize) -> Option<usize> {
+        self.sections.iter().copied().find_map(|section| {
             section
                 .source_offset(source_address)
                 .map(|offset| section.runtime_offset + offset)
-        }))
+        })
     }
 }
 
@@ -147,15 +148,19 @@ impl MappedRuntimeMemory {
         layout: &MemoryLayoutPlan,
     ) -> Result<&RuntimeModuleMemory> {
         if self.modules.contains_key(module_id) {
-            return Err(crate::custom_error(
+            return Err(LinkerError::runtime_memory(
                 "section-region module runtime memory was built more than once",
-            ));
+            )
+            .into());
         }
         let runtime = RuntimeModuleMemory::build(module_id, layout, &self.arenas)?;
         let _ = self.modules.insert(module_id, runtime);
-        self.modules.get(module_id).ok_or_else(|| {
-            crate::custom_error("section-region module runtime memory was not cached")
-        })
+        self.modules
+            .get(module_id)
+            .ok_or_else(|| {
+                LinkerError::runtime_memory("section-region module runtime memory was not cached")
+            })
+            .map_err(Into::into)
     }
 
     pub(crate) fn repair_module<K, D>(
@@ -188,9 +193,12 @@ impl MappedRuntimeMemory {
     }
 
     pub(crate) fn take_module(&mut self, module_id: LinkModuleId) -> Result<RuntimeModuleMemory> {
-        self.modules.remove(module_id).ok_or_else(|| {
-            crate::custom_error("section-region planned load is missing runtime memory")
-        })
+        self.modules
+            .remove(module_id)
+            .ok_or_else(|| {
+                LinkerError::runtime_memory("section-region planned load is missing runtime memory")
+            })
+            .map_err(Into::into)
     }
 }
 
@@ -214,28 +222,30 @@ where
         match phdr.program_type() {
             ElfProgramType::DYNAMIC => {
                 let offset = runtime
-                    .remap_source_address(phdr.p_vaddr())?
-                    .ok_or_else(|| crate::custom_error("failed to remap PT_DYNAMIC"))?;
+                    .remap_source_address(phdr.p_vaddr())
+                    .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_DYNAMIC"))?;
                 dynamic_ptr = Some(
                     NonNull::new(runtime.segments.get_mut_ptr(offset)).ok_or_else(|| {
-                        crate::custom_error("PT_DYNAMIC remapped to a null pointer")
+                        LinkerError::runtime_memory("PT_DYNAMIC remapped to a null pointer")
                     })?,
                 );
             }
             ElfProgramType::GNU_EH_FRAME => {
                 let offset = runtime
-                    .remap_source_address(phdr.p_vaddr())?
-                    .ok_or_else(|| crate::custom_error("failed to remap PT_GNU_EH_FRAME"))?;
+                    .remap_source_address(phdr.p_vaddr())
+                    .ok_or_else(|| {
+                        LinkerError::runtime_memory("failed to remap PT_GNU_EH_FRAME")
+                    })?;
                 eh_frame_hdr = Some(
                     NonNull::new(runtime.segments.get_mut_ptr(offset)).ok_or_else(|| {
-                        crate::custom_error("PT_GNU_EH_FRAME remapped to a null pointer")
+                        LinkerError::runtime_memory("PT_GNU_EH_FRAME remapped to a null pointer")
                     })?,
                 );
             }
             ElfProgramType::TLS => {
                 let offset = runtime
-                    .remap_source_address(phdr.p_vaddr())?
-                    .ok_or_else(|| crate::custom_error("failed to remap PT_TLS"))?;
+                    .remap_source_address(phdr.p_vaddr())
+                    .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_TLS"))?;
                 let image = runtime.segments.get_slice::<u8>(offset, phdr.p_filesz());
                 tls_info = Some(TlsInfo::new(phdr, image));
             }
@@ -244,10 +254,10 @@ where
     }
 
     let dynamic_ptr = dynamic_ptr
-        .ok_or_else(|| crate::custom_error("arena-backed module is missing PT_DYNAMIC"))?;
+        .ok_or_else(|| LinkerError::runtime_memory("arena-backed module is missing PT_DYNAMIC"))?;
     let original_entry = scanned.ehdr().e_entry();
     let entry = runtime
-        .remap_source_address(original_entry)?
+        .remap_source_address(original_entry)
         .map(|offset| runtime.segments.base_addr().offset(offset))
         .unwrap_or_else(|| runtime.segments.base_addr().offset(original_entry));
     let name = scanned.name().to_string();

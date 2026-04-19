@@ -1,7 +1,7 @@
 use super::{
     LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutArenaUsage, LayoutClassPolicy,
-    LayoutMemoryClass, LayoutPackingPolicy, LayoutSectionArena, LayoutSectionMetadata,
-    Materialization, MemoryLayoutPlan, ModuleLayout, SectionPlacement,
+    LayoutMemoryClass, LayoutPackingPolicy, LayoutSectionMetadata, Materialization,
+    MemoryLayoutPlan, SectionPlacement,
 };
 use crate::elf::{ElfRela, ElfSectionFlags, ElfSectionType};
 use crate::linker::plan::LinkModuleId;
@@ -25,7 +25,7 @@ fn section_flags(class: LayoutMemoryClass) -> ElfSectionFlags {
 }
 
 fn alloc_section(
-    sections: &mut LayoutSectionArena,
+    layout: &mut MemoryLayoutPlan,
     section: usize,
     name: &str,
     class: LayoutMemoryClass,
@@ -33,13 +33,11 @@ fn alloc_section(
     alignment: usize,
     zero_fill: bool,
 ) -> super::LayoutSectionId {
-    alloc_section_with_address(
-        sections, section, name, class, 0, size, alignment, zero_fill,
-    )
+    alloc_section_with_address(layout, section, name, class, 0, size, alignment, zero_fill)
 }
 
 fn alloc_section_with_address(
-    sections: &mut LayoutSectionArena,
+    layout: &mut MemoryLayoutPlan,
     section: usize,
     name: &str,
     class: LayoutMemoryClass,
@@ -48,7 +46,7 @@ fn alloc_section_with_address(
     alignment: usize,
     zero_fill: bool,
 ) -> super::LayoutSectionId {
-    sections.insert(
+    layout.insert_section(
         ROOT_MODULE,
         LayoutSectionMetadata::new(
             section,
@@ -72,16 +70,16 @@ fn alloc_section_with_address(
 #[test]
 #[should_panic(expected = "module layout referenced missing section metadata")]
 fn module_layout_rejects_missing_section_metadata() {
-    let sections = LayoutSectionArena::new();
+    let layout = MemoryLayoutPlan::default();
 
-    let _ = ModuleLayout::from_sections([(1, super::LayoutSectionId::new(0))], &sections);
+    let _ = layout.module_layout_from_sections([(1, super::LayoutSectionId::new(0))]);
 }
 
 #[test]
 fn memory_layout_plan_can_assign_and_clear_section_arenas() {
     let mut layout = MemoryLayoutPlan::default();
     let section = alloc_section(
-        layout.sections_mut(),
+        &mut layout,
         3,
         ".text",
         LayoutMemoryClass::Code,
@@ -89,7 +87,7 @@ fn memory_layout_plan_can_assign_and_clear_section_arenas() {
         16,
         false,
     );
-    let module = ModuleLayout::from_sections([(3, section)], layout.sections());
+    let module = layout.module_layout_from_sections([(3, section)]);
     layout.insert_module(ROOT_MODULE, module);
     let arena = layout.create_arena(LayoutArena::new(
         2 * 1024 * 1024,
@@ -111,9 +109,9 @@ fn memory_layout_plan_can_assign_and_clear_section_arenas() {
 
 #[test]
 fn module_layout_separates_non_allocated_and_allocated_relocations() {
-    let mut sections = LayoutSectionArena::new();
+    let mut plan = MemoryLayoutPlan::default();
     let text = alloc_section(
-        &mut sections,
+        &mut plan,
         3,
         ".text",
         LayoutMemoryClass::Code,
@@ -121,7 +119,7 @@ fn module_layout_separates_non_allocated_and_allocated_relocations() {
         16,
         false,
     );
-    let retained_reloc = sections.insert(
+    let retained_reloc = plan.insert_section(
         ROOT_MODULE,
         LayoutSectionMetadata::new(
             4,
@@ -136,7 +134,7 @@ fn module_layout_separates_non_allocated_and_allocated_relocations() {
             8,
         ),
     );
-    let allocated_reloc = sections.insert(
+    let allocated_reloc = plan.insert_section(
         ROOT_MODULE,
         LayoutSectionMetadata::new(
             5,
@@ -152,10 +150,8 @@ fn module_layout_separates_non_allocated_and_allocated_relocations() {
         ),
     );
 
-    let layout = ModuleLayout::from_sections(
-        [(3, text), (4, retained_reloc), (5, allocated_reloc)],
-        &sections,
-    );
+    let layout =
+        plan.module_layout_from_sections([(3, text), (4, retained_reloc), (5, allocated_reloc)]);
 
     assert_eq!(layout.relocation_sections(), [retained_reloc].as_slice());
     assert_eq!(
@@ -168,7 +164,7 @@ fn module_layout_separates_non_allocated_and_allocated_relocations() {
 fn memory_layout_plan_rejects_incompatible_arena_assignment() {
     let mut layout = MemoryLayoutPlan::default();
     let section = alloc_section(
-        layout.sections_mut(),
+        &mut layout,
         1,
         ".text",
         LayoutMemoryClass::Code,
@@ -190,7 +186,7 @@ fn memory_layout_plan_rejects_incompatible_arena_assignment() {
 fn memory_layout_plan_materializes_section_data_on_demand() {
     let mut layout = MemoryLayoutPlan::default();
     let section = alloc_section(
-        layout.sections_mut(),
+        &mut layout,
         5,
         ".rodata",
         LayoutMemoryClass::ReadOnlyData,
@@ -199,16 +195,14 @@ fn memory_layout_plan_materializes_section_data_on_demand() {
         false,
     );
 
-    layout
-        .sections_mut()
-        .install_scanned_data(section, alloc::vec![1, 2, 3, 4].into_boxed_slice());
+    layout.install_section_data(section, alloc::vec![1, 2, 3, 4].into_boxed_slice());
 
     assert_eq!(
-        layout.sections().data(section).map(|data| data.as_ref()),
+        layout.section_data(section).map(|data| data.as_ref()),
         Some([1_u8, 2, 3, 4].as_slice())
     );
     assert_eq!(
-        layout.sections().data(section).map(|data| data.as_ref()),
+        layout.section_data(section).map(|data| data.as_ref()),
         Some([1_u8, 2, 3, 4].as_slice())
     );
 }
@@ -217,7 +211,7 @@ fn memory_layout_plan_materializes_section_data_on_demand() {
 fn memory_layout_plan_keeps_materialization_when_replacing_module_layout() {
     let mut layout = MemoryLayoutPlan::default();
     let first = alloc_section(
-        layout.sections_mut(),
+        &mut layout,
         5,
         ".text",
         LayoutMemoryClass::Code,
@@ -225,16 +219,16 @@ fn memory_layout_plan_keeps_materialization_when_replacing_module_layout() {
         4,
         false,
     );
-    let first_module = ModuleLayout::from_sections([(5, first)], layout.sections());
+    let first_module = layout.module_layout_from_sections([(5, first)]);
     assert!(layout.insert_module(ROOT_MODULE, first_module).is_none());
 
     assert_eq!(
-        layout.set_module_materialization(ROOT_MODULE, Materialization::SectionRegions),
+        layout.set_materialization(ROOT_MODULE, Materialization::SectionRegions),
         Some(Materialization::WholeDsoRegion)
     );
 
     let second = alloc_section(
-        layout.sections_mut(),
+        &mut layout,
         6,
         ".rodata",
         LayoutMemoryClass::ReadOnlyData,
@@ -242,11 +236,11 @@ fn memory_layout_plan_keeps_materialization_when_replacing_module_layout() {
         4,
         false,
     );
-    let second_module = ModuleLayout::from_sections([(6, second)], layout.sections());
+    let second_module = layout.module_layout_from_sections([(6, second)]);
 
     assert!(layout.insert_module(ROOT_MODULE, second_module).is_some());
     assert_eq!(
-        layout.module_materialization(ROOT_MODULE),
+        layout.materialization(ROOT_MODULE),
         Some(Materialization::SectionRegions)
     );
     assert_eq!(layout.module_section_id(ROOT_MODULE, 6), Some(second));
@@ -293,7 +287,7 @@ fn layout_packing_policy_defaults_to_shared_huge_pages() {
 fn clear_arena_mappings_removes_placements() {
     let mut layout = MemoryLayoutPlan::default();
     let section = alloc_section(
-        layout.sections_mut(),
+        &mut layout,
         1,
         ".text",
         LayoutMemoryClass::Code,
@@ -301,7 +295,7 @@ fn clear_arena_mappings_removes_placements() {
         16,
         false,
     );
-    let module = ModuleLayout::from_sections([(1, section)], layout.sections());
+    let module = layout.module_layout_from_sections([(1, section)]);
     layout.insert_module(ROOT_MODULE, module);
 
     let arena = layout.push_arena(LayoutArena::new(
@@ -321,7 +315,7 @@ fn clear_arena_mappings_removes_placements() {
 fn arena_usage_rounds_up_to_page_size() {
     let mut layout = MemoryLayoutPlan::default();
     let section = alloc_section(
-        layout.sections_mut(),
+        &mut layout,
         3,
         ".text",
         LayoutMemoryClass::Code,
@@ -329,7 +323,7 @@ fn arena_usage_rounds_up_to_page_size() {
         16,
         false,
     );
-    let module = ModuleLayout::from_sections([(3, section)], layout.sections());
+    let module = layout.module_layout_from_sections([(3, section)]);
     layout.insert_module(ROOT_MODULE, module);
     let arena = layout.push_arena(LayoutArena::new(
         2 * 1024 * 1024,

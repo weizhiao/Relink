@@ -21,6 +21,11 @@ struct SingleBinaryResolver {
     data: &'static [u8],
 }
 
+struct ExistingRootResolver {
+    requested: &'static str,
+    existing: &'static str,
+}
+
 impl KeyResolver<'static, &'static str, ()> for SingleBinaryResolver {
     fn load_root(
         &mut self,
@@ -38,6 +43,23 @@ impl KeyResolver<'static, &'static str, ()> for SingleBinaryResolver {
         _req: &elf_loader::linker::DependencyRequest<'_, &'static str, ()>,
     ) -> elf_loader::Result<Option<ResolvedKey<'static, &'static str>>> {
         Ok(None)
+    }
+}
+
+impl KeyResolver<'static, &'static str, ()> for ExistingRootResolver {
+    fn load_root(
+        &mut self,
+        key: &&'static str,
+    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+        assert_eq!(*key, self.requested);
+        Ok(ResolvedKey::existing(self.existing))
+    }
+
+    fn resolve_dependency(
+        &mut self,
+        _req: &elf_loader::linker::DependencyRequest<'_, &'static str, ()>,
+    ) -> elf_loader::Result<Option<ResolvedKey<'static, &'static str>>> {
+        panic!("existing scan root should not resolve dependencies")
     }
 }
 
@@ -103,7 +125,7 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
     let mut configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
         let root = plan.root_module();
         let data_section = plan
-            .get(&"root")
+            .entry(root)
             .expect("missing scanned root module")
             .alloc_sections()
             .find(|section| section.name() == ".data")
@@ -192,6 +214,55 @@ fn load_with_scan_legacy_path_loads_without_an_intermediate_plan() {
 }
 
 #[test]
+fn load_with_scan_reuses_existing_root_alias_without_planning() {
+    let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[5, 6, 7, 8])]);
+    let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
+
+    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut loader = Loader::new();
+    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let mut planner = empty_relocation_plan;
+
+    let mut load_resolver = SingleBinaryResolver {
+        key: "canonical",
+        name: "canonical.so",
+        data: bytes,
+    };
+    let mut load_pipeline = LinkPipeline::new();
+    let loaded = context
+        .load_with_scan(
+            "canonical",
+            &mut loader,
+            &mut load_resolver,
+            &mut load_pipeline,
+            &relocator,
+            &mut planner,
+        )
+        .expect("failed to load canonical scan root");
+
+    let mut alias_resolver = ExistingRootResolver {
+        requested: "alias",
+        existing: "canonical",
+    };
+    let mut alias_pipeline = LinkPipeline::new();
+    let alias_loaded = context
+        .load_with_scan(
+            "alias",
+            &mut loader,
+            &mut alias_resolver,
+            &mut alias_pipeline,
+            &relocator,
+            &mut planner,
+        )
+        .expect("failed to reuse existing scan root");
+
+    assert_eq!(alias_loaded.base(), loaded.base());
+    assert_eq!(alias_loaded.mapped_len(), loaded.mapped_len());
+    assert!(context.contains_key(&"canonical"));
+    assert!(!context.contains_key(&"alias"));
+}
+
+#[test]
 fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memory() {
     let output = write_test_dylib_with_config(
         ElfWriterConfig::default()
@@ -218,7 +289,7 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
         let root = plan.root_module();
 
         let data_section = plan
-            .get(&"root")
+            .entry(root)
             .expect("missing scanned root module")
             .alloc_sections()
             .find(|section| section.name() == ".data")
@@ -362,7 +433,7 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
         observed_capability = plan.module_capability(&"root");
         let root = plan.root_module();
         saw_missing_section_headers = plan
-            .get(&"root")
+            .entry(root)
             .and_then(|module| module.section_headers())
             .is_none();
         plan.set_module_materialization(root, Materialization::WholeDsoRegion);
@@ -462,7 +533,7 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
         let root = plan.root_module();
 
         let data_section = plan
-            .get(&"root")
+            .entry(root)
             .expect("missing scanned root module")
             .alloc_sections()
             .find(|section| section.name() == ".data")
@@ -539,7 +610,7 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
         let root = plan.root_module();
 
         let data_section = plan
-            .get(&"root")
+            .entry(root)
             .expect("missing scanned root module")
             .alloc_sections()
             .find(|section| section.name() == ".data")

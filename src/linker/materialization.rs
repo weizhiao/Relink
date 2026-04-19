@@ -6,7 +6,7 @@ use super::{
     },
     plan::{LinkModuleId, LinkPlan},
 };
-use crate::{Result, image::ModuleCapability};
+use crate::{LinkerError, Result, image::ModuleCapability};
 use alloc::collections::BTreeMap;
 
 pub(crate) fn normalize_plan<K, D>(plan: &mut LinkPlan<K, D>) -> Result<()>
@@ -21,7 +21,7 @@ where
         let module = layout.module(module_id);
         let mode = resolve_materialization_mode(&*plan, module_id, module)?;
         has_section_regions |= mode == Materialization::SectionRegions;
-        let _ = plan.set_module_materialization(module_id, mode);
+        let _ = plan.set_materialization(module_id, mode);
         Ok(())
     })?;
 
@@ -34,7 +34,7 @@ where
 
     plan.try_for_each_module(|plan, module_id| {
         let layout = plan.memory_layout();
-        if layout.module_materialization(module_id) != Some(Materialization::SectionRegions) {
+        if layout.materialization(module_id) != Some(Materialization::SectionRegions) {
             return Ok(());
         }
 
@@ -48,7 +48,7 @@ where
 
     plan.try_for_each_module(|plan, module_id| {
         let layout = plan.memory_layout();
-        if layout.module_materialization(module_id) != Some(Materialization::SectionRegions) {
+        if layout.materialization(module_id) != Some(Materialization::SectionRegions) {
             return Ok(());
         }
         let alloc_sections = layout.module(module_id).alloc_sections().to_vec();
@@ -83,7 +83,7 @@ where
         .module_capability(module_id)
         .expect("ordered layout referenced a module without capability metadata");
     let requested = layout
-        .module_materialization(module_id)
+        .materialization(module_id)
         .unwrap_or_else(|| Materialization::default_for_capability(capability));
     let has_section_placement = module
         .alloc_sections()
@@ -93,15 +93,17 @@ where
     match capability {
         ModuleCapability::Opaque | ModuleCapability::SectionData => {
             if has_section_placement {
-                return Err(crate::custom_error(
+                return Err(LinkerError::materialization(
                     "modules without section-reorder repair support cannot assign sections to arenas",
-                ));
+                )
+                .into());
             }
             match requested {
                 Materialization::WholeDsoRegion => Ok(Materialization::WholeDsoRegion),
-                Materialization::SectionRegions => Err(crate::custom_error(
+                Materialization::SectionRegions => Err(LinkerError::materialization(
                     "modules without section-reorder repair support cannot use section regions",
-                )),
+                )
+                .into()),
             }
         }
         ModuleCapability::SectionReorderable => {
@@ -283,7 +285,10 @@ fn align_up(value: usize, alignment: usize) -> Result<usize> {
 
     value
         .checked_add(alignment - remainder)
-        .ok_or_else(|| crate::custom_error("arena assignment overflowed while aligning offsets"))
+        .ok_or_else(|| {
+            LinkerError::materialization("arena assignment overflowed while aligning offsets")
+        })
+        .map_err(Into::into)
 }
 
 #[cfg(test)]

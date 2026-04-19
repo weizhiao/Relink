@@ -106,6 +106,20 @@ where
         key
     }
 
+    /// Transforms every value while preserving the same dense key space.
+    #[inline]
+    pub(crate) fn map_values<U>(self, mut f: impl FnMut(K, V) -> U) -> PrimaryMap<K, U> {
+        PrimaryMap {
+            values: self
+                .values
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| f(K::new(index), value))
+                .collect(),
+            marker: PhantomData,
+        }
+    }
+
     /// Returns one stored value by id.
     #[inline]
     pub fn get(&self, key: K) -> Option<&V> {

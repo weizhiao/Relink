@@ -1,7 +1,7 @@
 use super::super::layout::{LayoutArenaId, LayoutMemoryClass, Materialization};
 use crate::linker::plan::LinkPlan;
 use crate::{
-    Result,
+    LinkerError, Result,
     entity::SecondaryMap,
     os::{MapFlags, Mmap, ProtFlags},
     segment::{ElfMemoryBacking, ElfSegments},
@@ -29,8 +29,8 @@ impl MappedArenaMap {
         D: 'static,
         M: Mmap,
     {
-        let needs_section_regions = plan.group_order_ids().iter().copied().any(|module_id| {
-            plan.module_materialization(module_id) == Some(Materialization::SectionRegions)
+        let needs_section_regions = plan.group_order().iter().copied().any(|module_id| {
+            plan.materialization(module_id) == Some(Materialization::SectionRegions)
         });
         if !needs_section_regions {
             return Ok(None);
@@ -71,32 +71,28 @@ impl MappedArenaMap {
     {
         let placed_sections = plan
             .memory_layout()
-            .sections()
-            .iter_records()
-            .filter_map(|(section_id, record)| {
-                let placement = record.placement()?;
-                Some((section_id, placement))
-            })
+            .section_placements()
             .collect::<Vec<_>>();
 
         for (section_id, placement) in placed_sections {
             let data = plan.section_data(section_id)?;
             let arena = self.get_mut(placement.arena()).ok_or_else(|| {
-                crate::custom_error("mapped section arenas referenced a missing arena")
+                LinkerError::mapped_arena("mapped section arenas referenced a missing arena")
             })?;
             let dst = arena
                 .slice_mut(placement.offset(), placement.size())
                 .ok_or_else(|| {
-                    crate::custom_error(
+                    LinkerError::mapped_arena(
                         "mapped section arena placement exceeds the allocated arena bounds",
                     )
                 })?;
 
             let bytes = data.as_ref();
             if bytes.len() != dst.len() {
-                return Err(crate::custom_error(
+                return Err(LinkerError::mapped_arena(
                     "mapped section arena size does not match its materialized section bytes",
-                ));
+                )
+                .into());
             }
 
             dst.copy_from_slice(bytes);
@@ -253,7 +249,7 @@ mod tests {
             plan.memory_layout_mut()
                 .assign_section_to_arena(section, arena, 0)
         );
-        plan.set_module_materialization(root, Materialization::SectionRegions);
+        plan.set_materialization(root, Materialization::SectionRegions);
 
         let mut mapped = MappedArenaMap::map_plan::<DefaultMmap, _, _>(&plan)
             .unwrap()

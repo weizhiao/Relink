@@ -5,7 +5,7 @@ use super::{
     view::DependencyGraphView,
 };
 use crate::{
-    CustomError, LinkerError, Loader, Result, UnresolvedDependencyError,
+    LinkerError, Loader, Result, UnresolvedDependencyError,
     image::{RawDylib, ScannedDylib},
     input::ElfReader,
     loader::LoadHook,
@@ -89,8 +89,8 @@ where
                 if session.contains_key(&key) || visible.contains_key(&key) {
                     return Ok(key);
                 }
-                Err(CustomError::Message(
-                    "resolved existing module is not visible in the current link context".into(),
+                Err(LinkerError::resolver(
+                    "resolved existing module is not visible in the current link context",
                 )
                 .into())
             }
@@ -127,15 +127,14 @@ where
                 if session.contains_key(&key) || visible.contains_key(&key) {
                     return Ok(key);
                 }
-                Err(crate::custom_error(
-                    "scan resolver referenced an unknown visible key",
-                ))
+                Err(LinkerError::resolver("scan resolver referenced an unknown visible key").into())
             }
             ResolvedKey::Load(key, reader) => {
                 if session.contains_key(&key) || visible.contains_key(&key) {
-                    return Err(crate::custom_error(
+                    return Err(LinkerError::resolver(
                         "scan resolver attached metadata to an already-known key; use Existing to reuse it",
-                    ));
+                    )
+                    .into());
                 }
                 let module = loader.scan_dylib_impl(reader)?;
                 session.insert_entry(key.clone(), module);

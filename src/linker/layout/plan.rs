@@ -89,13 +89,13 @@ impl MemoryLayoutPlan {
 
     /// Returns the currently configured materialization mode for one module.
     #[inline]
-    pub fn module_materialization(&self, module_id: LinkModuleId) -> Option<Materialization> {
+    pub fn materialization(&self, module_id: LinkModuleId) -> Option<Materialization> {
         self.materialization.get(module_id).copied()
     }
 
     /// Updates the planned materialization mode for one module.
     #[inline]
-    pub fn set_module_materialization(
+    pub fn set_materialization(
         &mut self,
         module_id: LinkModuleId,
         mode: Materialization,
@@ -105,14 +105,8 @@ impl MemoryLayoutPlan {
 
     /// Returns the arena that owns all section records.
     #[inline]
-    pub fn sections(&self) -> &LayoutSectionArena {
-        &self.sections
-    }
-
-    /// Returns the arena that owns all section records mutably.
-    #[inline]
-    pub fn sections_mut(&mut self) -> &mut LayoutSectionArena {
-        &mut self.sections
+    pub fn sections(&self) -> impl Iterator<Item = (LayoutSectionId, &LayoutSectionMetadata)> {
+        self.sections.iter()
     }
 
     /// Returns one section metadata record by internal section id.
@@ -121,6 +115,66 @@ impl MemoryLayoutPlan {
         self.sections
             .get(id)
             .expect("layout plan referenced missing section metadata")
+    }
+
+    #[inline]
+    #[cfg(test)]
+    pub(crate) fn insert_section(
+        &mut self,
+        owner: LinkModuleId,
+        metadata: LayoutSectionMetadata,
+    ) -> LayoutSectionId {
+        self.sections.insert(owner, metadata)
+    }
+
+    #[inline]
+    #[cfg(test)]
+    pub(crate) fn module_layout_from_sections<I, S>(&self, sections: I) -> ModuleLayout
+    where
+        I: IntoIterator<Item = (S, LayoutSectionId)>,
+        S: Into<ScannedSectionId>,
+    {
+        ModuleLayout::from_sections(sections, &self.sections)
+    }
+
+    /// Returns one section's materialized data, when present.
+    #[inline]
+    pub fn section_data(&self, section: LayoutSectionId) -> Option<&crate::AlignedBytes> {
+        self.sections.data(section)
+    }
+
+    #[inline]
+    pub(crate) fn section_data_mut(
+        &mut self,
+        section: LayoutSectionId,
+    ) -> Option<&mut crate::AlignedBytes> {
+        self.sections.data_mut(section)
+    }
+
+    #[inline]
+    pub(crate) fn install_section_data(
+        &mut self,
+        section: LayoutSectionId,
+        bytes: impl Into<crate::AlignedBytes>,
+    ) {
+        self.sections.install_scanned_data(section, bytes);
+    }
+
+    #[inline]
+    pub(crate) fn mark_section_data_override(&mut self, section: LayoutSectionId) -> Option<()> {
+        self.sections.mark_data_override(section)
+    }
+
+    #[inline]
+    pub(crate) fn with_disjoint_section_data_mut<R>(
+        &mut self,
+        read_a: LayoutSectionId,
+        read_b: LayoutSectionId,
+        write: LayoutSectionId,
+        f: impl FnOnce(&crate::AlignedBytes, &crate::AlignedBytes, &mut crate::AlignedBytes) -> R,
+    ) -> Option<R> {
+        self.sections
+            .with_disjoint_data_mut(read_a, read_b, write, f)
     }
 
     #[inline]
@@ -138,6 +192,17 @@ impl MemoryLayoutPlan {
     #[inline]
     pub fn section_placement(&self, section: LayoutSectionId) -> Option<SectionPlacement> {
         self.sections.placement(section)
+    }
+
+    /// Iterates over sections that currently have a physical arena placement.
+    pub fn section_placements(
+        &self,
+    ) -> impl Iterator<Item = (LayoutSectionId, SectionPlacement)> + '_ {
+        self.sections
+            .iter_records()
+            .filter_map(|(section, record)| {
+                record.placement().map(|placement| (section, placement))
+            })
     }
 
     /// Returns whether any section currently has a physical arena placement.
@@ -215,9 +280,7 @@ impl MemoryLayoutPlan {
         self.arena_entries()
             .map(|(id, _)| (id, self.arena_usage(id)))
     }
-}
 
-impl MemoryLayoutPlan {
     /// Assigns one section to a physical arena at `offset`.
     pub fn assign_section_to_arena(
         &mut self,
@@ -258,9 +321,7 @@ impl MemoryLayoutPlan {
         self.arenas = PrimaryMap::default();
         self.sections.clear_placements();
     }
-}
 
-impl MemoryLayoutPlan {
     /// Appends one physical arena and returns its stable arena id.
     #[inline]
     pub fn push_arena(&mut self, arena: LayoutArena) -> LayoutArenaId {
@@ -318,7 +379,7 @@ impl MemoryLayoutPlan {
             let materialization = Materialization::default_for_capability(module.capability());
             let layout = ModuleLayout::from_scanned(module_id, module, &mut plan.sections);
             plan.insert_module(module_id, layout);
-            let _ = plan.set_module_materialization(module_id, materialization);
+            let _ = plan.set_materialization(module_id, materialization);
         }
         plan
     }

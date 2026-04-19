@@ -17,6 +17,5 @@ pub use arena::{
 };
 pub use plan::{Materialization, MemoryLayoutPlan};
 pub use section::{
-    LayoutAddress, LayoutSectionArena, LayoutSectionId, LayoutSectionMetadata, LayoutSectionRecord,
-    ModuleLayout, SectionPlacement,
+    LayoutAddress, LayoutSectionId, LayoutSectionMetadata, ModuleLayout, SectionPlacement,
 };

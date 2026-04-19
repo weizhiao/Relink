@@ -9,7 +9,7 @@ use super::{
     view::DependencyGraphView,
 };
 use crate::{
-    AlignedBytes, CustomError, Loader, Result,
+    AlignedBytes, LinkerError, Loader, Result,
     entity::SecondaryMap,
     image::{LoadedCore, RawDylib},
     loader::LoadHook,
@@ -96,7 +96,7 @@ where
         direct_deps: Box<[K]>,
     ) -> Result<()> {
         if self.committed.contains_key(&key) {
-            return Err(CustomError::Message("duplicate linked module key".into()).into());
+            return Err(LinkerError::context("duplicate linked module key").into());
         }
 
         self.committed
@@ -249,8 +249,10 @@ where
             return Ok(loaded.clone());
         }
 
-        let plan = self.discover_scan_plan(key, loader, resolver, pipeline)?;
-        let prepared = self.prepare_planned_load::<M, _, _>(plan, loader)?;
+        let prepared = match self.prepare_scan_load(key, loader, resolver, pipeline)? {
+            ScanDiscovery::Existing(root) => PreparedLoad::runtime(root, LoadSession::new()),
+            ScanDiscovery::Plan(plan) => self.prepare_planned_load::<M, _, _>(plan, loader)?,
+        };
         self.execute_prepared_load::<M, _, _, _, _, _, _>(prepared, relocator, planner)
     }
 
@@ -277,13 +279,13 @@ where
         Ok(PreparedLoad::runtime(root, session))
     }
 
-    fn discover_scan_plan<'a, M, H, Tls>(
+    fn prepare_scan_load<'a, M, H, Tls>(
         &self,
         key: K,
         loader: &mut Loader<M, H, D, Tls>,
         resolver: &mut impl KeyResolver<'static, K, D>,
         pipeline: &mut LinkPipeline<'a, K, D>,
-    ) -> Result<LinkPlan<K, D>>
+    ) -> Result<ScanDiscovery<K, D>>
     where
         K: 'static,
         M: Mmap,
@@ -293,9 +295,10 @@ where
         let mut session = ResolveSession::new();
         let mut context = ScanResolveContext::new(self.committed.view(), &mut session);
         let root = context.stage_resolved(resolver.load_root(&key)?, loader)?;
-        {
-            context.resolve_dependency_graph(root.clone(), loader, resolver)?;
+        if !context.contains_pending(&root) {
+            return Ok(ScanDiscovery::Existing(root));
         }
+        context.resolve_dependency_graph(root.clone(), loader, resolver)?;
 
         let ResolveSession {
             entries,
@@ -315,7 +318,7 @@ where
                 .collect(),
         );
         pipeline.run(&mut plan)?;
-        Ok(plan)
+        Ok(ScanDiscovery::Plan(plan))
     }
 
     fn prepare_planned_load<M, H, Tls>(
@@ -337,11 +340,11 @@ where
 
         if let Some(mapped_runtime) = mapped_runtime.as_mut() {
             let section_region_modules = plan
-                .group_order_ids()
+                .group_order()
                 .iter()
                 .copied()
                 .filter(|module_id| {
-                    plan.module_materialization(*module_id)
+                    plan.materialization(*module_id)
                         .unwrap_or(Materialization::WholeDsoRegion)
                         == Materialization::SectionRegions
                 })
@@ -369,14 +372,14 @@ where
                                    scanned: crate::image::ScannedDylib<D>|
          -> Result<RawDylib<D>> {
             match memory_layout
-                .module_materialization(module_id)
+                .materialization(module_id)
                 .unwrap_or(Materialization::WholeDsoRegion)
             {
                 Materialization::SectionRegions => {
                     let runtime = mapped_runtime
                         .as_mut()
                         .ok_or_else(|| {
-                            crate::custom_error(
+                            LinkerError::runtime_memory(
                                 "section-region planned load is missing mapped runtime memory",
                             )
                         })?
@@ -452,7 +455,8 @@ where
         self.committed
             .get(&root)
             .cloned()
-            .ok_or_else(|| crate::custom_error("load root missing after commit"))
+            .ok_or_else(|| LinkerError::context("load root missing after commit"))
+            .map_err(Into::into)
     }
 
     /// Relocates every pending raw module reachable from `root`.
@@ -586,6 +590,11 @@ struct PreparedLoad<K, D: 'static> {
     mapped_runtime: Option<mapped::MappedRuntimeMemory>,
 }
 
+enum ScanDiscovery<K, D: 'static> {
+    Existing(K),
+    Plan(LinkPlan<K, D>),
+}
+
 impl<K, D: 'static> PreparedLoad<K, D> {
     fn runtime(root: K, session: LoadSession<K, D>) -> Self {
         Self {
@@ -621,7 +630,7 @@ fn apply_planned_section_overrides<D>(
             continue;
         }
         let metadata = layout.section_metadata(section_id);
-        let Some(data) = layout.sections().data(section_id) else {
+        let Some(data) = layout.section_data(section_id) else {
             continue;
         };
         let dst = segments.get_slice_mut::<u8>(metadata.source_address(), metadata.size());

@@ -288,7 +288,7 @@ impl LayoutSectionMetadata {
 
 /// One complete section record tracked by the layout plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LayoutSectionRecord {
+pub(crate) struct LayoutSectionRecord {
     owner: LinkModuleId,
     metadata: LayoutSectionMetadata,
     data: Option<AlignedBytes>,
@@ -376,19 +376,13 @@ impl LayoutSectionRecord {
 
 /// A dense arena of section records.
 #[derive(Debug, Clone, Default)]
-pub struct LayoutSectionArena {
+pub(crate) struct LayoutSectionArena {
     sections: PrimaryMap<LayoutSectionId, LayoutSectionRecord>,
 }
 
 impl LayoutSectionArena {
-    /// Creates an empty section arena.
     #[inline]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[inline]
-    pub fn insert(
+    pub(crate) fn insert(
         &mut self,
         owner: LinkModuleId,
         metadata: LayoutSectionMetadata,
@@ -399,43 +393,45 @@ impl LayoutSectionArena {
 
     /// Returns one section record by id.
     #[inline]
-    pub fn record(&self, id: LayoutSectionId) -> Option<&LayoutSectionRecord> {
+    pub(crate) fn record(&self, id: LayoutSectionId) -> Option<&LayoutSectionRecord> {
         self.sections.get(id)
     }
 
     /// Returns one section record by id mutably.
     #[inline]
-    pub fn record_mut(&mut self, id: LayoutSectionId) -> Option<&mut LayoutSectionRecord> {
+    pub(crate) fn record_mut(&mut self, id: LayoutSectionId) -> Option<&mut LayoutSectionRecord> {
         self.sections.get_mut(id)
     }
 
     /// Returns one section metadata record by id.
     #[inline]
-    pub fn get(&self, id: LayoutSectionId) -> Option<&LayoutSectionMetadata> {
+    pub(crate) fn get(&self, id: LayoutSectionId) -> Option<&LayoutSectionMetadata> {
         self.record(id).map(LayoutSectionRecord::metadata)
     }
 
     /// Returns the owner module of one section.
     #[inline]
-    pub fn owner(&self, id: LayoutSectionId) -> Option<LinkModuleId> {
+    pub(crate) fn owner(&self, id: LayoutSectionId) -> Option<LinkModuleId> {
         self.record(id).map(LayoutSectionRecord::owner)
     }
 
     /// Returns one section metadata record by id mutably.
     #[inline]
-    pub fn get_mut(&mut self, id: LayoutSectionId) -> Option<&mut LayoutSectionMetadata> {
+    pub(crate) fn get_mut(&mut self, id: LayoutSectionId) -> Option<&mut LayoutSectionMetadata> {
         self.record_mut(id).map(LayoutSectionRecord::metadata_mut)
     }
 
     /// Iterates over section ids and section records together.
     #[inline]
-    pub fn iter_records(&self) -> impl Iterator<Item = (LayoutSectionId, &LayoutSectionRecord)> {
+    pub(crate) fn iter_records(
+        &self,
+    ) -> impl Iterator<Item = (LayoutSectionId, &LayoutSectionRecord)> {
         self.sections.iter()
     }
 
     /// Iterates over section ids and section records together mutably.
     #[inline]
-    pub fn iter_records_mut(
+    pub(crate) fn iter_records_mut(
         &mut self,
     ) -> impl Iterator<Item = (LayoutSectionId, &mut LayoutSectionRecord)> {
         self.sections.iter_mut()
@@ -443,29 +439,20 @@ impl LayoutSectionArena {
 
     /// Iterates over section ids and metadata records together.
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (LayoutSectionId, &LayoutSectionMetadata)> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (LayoutSectionId, &LayoutSectionMetadata)> {
         self.iter_records()
             .map(|(id, record)| (id, record.metadata()))
     }
 
-    /// Iterates over section ids and metadata records together mutably.
-    #[inline]
-    pub fn iter_mut(
-        &mut self,
-    ) -> impl Iterator<Item = (LayoutSectionId, &mut LayoutSectionMetadata)> {
-        self.iter_records_mut()
-            .map(|(id, record)| (id, record.metadata_mut()))
-    }
-
     /// Returns one materialized section-data record by id.
     #[inline]
-    pub fn data(&self, id: LayoutSectionId) -> Option<&AlignedBytes> {
+    pub(crate) fn data(&self, id: LayoutSectionId) -> Option<&AlignedBytes> {
         self.record(id).and_then(LayoutSectionRecord::data)
     }
 
     /// Returns one materialized section-data record by id mutably.
     #[inline]
-    pub fn data_mut(&mut self, id: LayoutSectionId) -> Option<&mut AlignedBytes> {
+    pub(crate) fn data_mut(&mut self, id: LayoutSectionId) -> Option<&mut AlignedBytes> {
         self.record_mut(id).and_then(LayoutSectionRecord::data_mut)
     }
 
@@ -543,7 +530,7 @@ impl LayoutSectionArena {
 
     /// Returns the concrete arena placement of one section, when present.
     #[inline]
-    pub fn placement(&self, id: LayoutSectionId) -> Option<SectionPlacement> {
+    pub(crate) fn placement(&self, id: LayoutSectionId) -> Option<SectionPlacement> {
         self.record(id).and_then(LayoutSectionRecord::placement)
     }
 
@@ -599,7 +586,7 @@ impl ModuleLayout {
     }
 
     /// Creates one module layout from explicit scanned-section mappings.
-    pub fn from_sections<I, S>(sections: I, arena: &LayoutSectionArena) -> Self
+    pub(crate) fn from_sections<I, S>(sections: I, arena: &LayoutSectionArena) -> Self
     where
         I: IntoIterator<Item = (S, LayoutSectionId)>,
         S: Into<ScannedSectionId>,
@@ -653,7 +640,7 @@ impl ModuleLayout {
     }
 
     /// Builds a section-granularity layout seed from a scanned module.
-    pub fn from_scanned<D>(
+    pub(crate) fn from_scanned<D>(
         owner: LinkModuleId,
         module: &ScannedDylib<D>,
         arena: &mut LayoutSectionArena,

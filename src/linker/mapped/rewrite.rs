@@ -1,7 +1,7 @@
 use super::{LayoutSectionId, MemoryLayoutPlan, RuntimeModuleMemory, RuntimeSectionMemory};
 use crate::linker::plan::{LinkModuleId, LinkPlan};
 use crate::{
-    Result,
+    LinkerError, Result,
     arch::{Architecture, REL_NONE},
     elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol},
     image::ScannedSectionId,
@@ -27,16 +27,18 @@ impl RuntimeModuleMemory {
             return Ok(value);
         };
         let Some(section) = self.section(section_id) else {
-            return Err(crate::custom_error(
+            return Err(LinkerError::metadata_rewrite(
                 "arena-backed symbol value referenced an unplaced section",
-            ));
+            )
+            .into());
         };
         if let Some(offset) = section.source_offset(value) {
             return Ok(section.runtime_offset + offset);
         }
-        Err(crate::custom_error(
+        Err(LinkerError::metadata_rewrite(
             "arena-backed symbol value does not map into its target section",
-        ))
+        )
+        .into())
     }
 
     fn remap_relocation_offset(
@@ -46,24 +48,28 @@ impl RuntimeModuleMemory {
     ) -> Result<usize> {
         if let Some(section) = target {
             let Some(section) = self.section(section) else {
-                return Err(crate::custom_error(
+                return Err(LinkerError::metadata_rewrite(
                     "allocated relocation entry target section is not arena-backed",
-                ));
+                )
+                .into());
             };
             if let Some(offset) = section.source_offset(original_offset) {
                 return Ok(section.runtime_offset + offset);
             }
 
-            return Err(crate::custom_error(
+            return Err(LinkerError::metadata_rewrite(
                 "allocated relocation entry offset does not map into its target section",
-            ));
+            )
+            .into());
         }
 
-        self.remap_source_address(original_offset)?.ok_or_else(|| {
-            crate::custom_error(
-                "allocated relocation entry offset does not map into arena-backed memory",
-            )
-        })
+        self.remap_source_address(original_offset)
+            .ok_or_else(|| {
+                LinkerError::metadata_rewrite(
+                    "allocated relocation entry offset does not map into arena-backed memory",
+                )
+            })
+            .map_err(Into::into)
     }
 
     fn remap_dynamic_value(&self, tag: ElfDynamicTag, value: usize) -> Result<Option<usize>> {
@@ -83,7 +89,15 @@ impl RuntimeModuleMemory {
             | ElfDynamicTag::FINI_ARRAY
             | ElfDynamicTag::VERSYM
             | ElfDynamicTag::VERNEED
-            | ElfDynamicTag::VERDEF => self.remap_source_address(value),
+            | ElfDynamicTag::VERDEF => self
+                .remap_source_address(value)
+                .map(Some)
+                .ok_or_else(|| {
+                    LinkerError::metadata_rewrite(
+                        "dynamic tag does not map into arena-backed memory",
+                    )
+                })
+                .map_err(Into::into),
             _ => Ok(None),
         }
     }
@@ -94,15 +108,19 @@ impl RuntimeModuleMemory {
         source_address: usize,
     ) -> Result<RuntimeRelocationSite> {
         let section = self.section(target_section).ok_or_else(|| {
-            crate::custom_error("retained relocation target section is not arena-backed")
+            LinkerError::metadata_rewrite("retained relocation target section is not arena-backed")
         })?;
         let section_offset = section.source_offset(source_address).ok_or_else(|| {
-            crate::custom_error("retained relocation offset does not map into its target section")
+            LinkerError::metadata_rewrite(
+                "retained relocation offset does not map into its target section",
+            )
         })?;
         let place = section
             .runtime_offset
             .checked_add(section_offset)
-            .ok_or_else(|| crate::custom_error("arena-backed runtime offset overflowed"))?;
+            .ok_or_else(|| {
+                LinkerError::metadata_rewrite("arena-backed runtime offset overflowed")
+            })?;
 
         Ok(RuntimeRelocationSite {
             place,
@@ -162,11 +180,15 @@ where
     ) -> Result<()> {
         let metadata = self.plan.section_metadata(relocation_section);
         let symbol_table_section = metadata.linked_section().ok_or_else(|| {
-            crate::custom_error("retained relocation section is missing its linked symbol table")
+            LinkerError::metadata_rewrite(
+                "retained relocation section is missing its linked symbol table",
+            )
         })?;
 
         let target_section = metadata.info_section().ok_or_else(|| {
-            crate::custom_error("retained relocation section is missing its target section")
+            LinkerError::metadata_rewrite(
+                "retained relocation section is missing its target section",
+            )
         })?;
         let runtime = self.runtime;
 
@@ -178,12 +200,12 @@ where
                 let entries = relocation_data
                     .try_cast_slice::<ElfRelType>()
                     .ok_or_else(|| {
-                        crate::custom_error(
+                        LinkerError::metadata_rewrite(
                             "retained relocation section bytes do not match relocation entries",
                         )
                     })?;
                 let symbols = symbol_data.try_cast_slice::<ElfSymbol>().ok_or_else(|| {
-                    crate::custom_error(
+                    LinkerError::metadata_rewrite(
                         "retained relocation symbol table bytes do not match symbol entries",
                     )
                 })?;
@@ -224,7 +246,9 @@ where
                     Ok(())
                 })
                 .ok_or_else(|| {
-                    crate::custom_error("section bytes do not match the requested type layout")
+                    LinkerError::metadata_rewrite(
+                        "section bytes do not match the requested type layout",
+                    )
                 })??;
                 symbol_sections
             };
@@ -239,7 +263,9 @@ where
                 Ok(())
             })
             .ok_or_else(|| {
-                crate::custom_error("section bytes do not match the requested type layout")
+                LinkerError::metadata_rewrite(
+                    "section bytes do not match the requested type layout",
+                )
             })??;
         }
 
@@ -266,7 +292,9 @@ where
                 Ok(())
             })
             .ok_or_else(|| {
-                crate::custom_error("section bytes do not match the requested type layout")
+                LinkerError::metadata_rewrite(
+                    "section bytes do not match the requested type layout",
+                )
             })??;
         }
 
@@ -281,7 +309,7 @@ where
 
         let data = self.plan.section_data_mut(dynamic_section)?;
         let dyns = data.try_cast_slice_mut::<ElfDyn>().ok_or_else(|| {
-            crate::custom_error("section bytes do not match the requested type layout")
+            LinkerError::metadata_rewrite("section bytes do not match the requested type layout")
         })?;
 
         for dyn_ in dyns.iter_mut() {
@@ -312,8 +340,11 @@ fn symbol_section_id(
         .module_section_id(module_id, ScannedSectionId::new(section_index))
         .map(Some)
         .ok_or_else(|| {
-            crate::custom_error("arena-backed symbol value referenced an unmapped section")
+            LinkerError::metadata_rewrite(
+                "arena-backed symbol value referenced an unmapped section",
+            )
         })
+        .map_err(Into::into)
 }
 
 fn write_retained_relocation(
@@ -329,7 +360,7 @@ fn write_retained_relocation(
 
     let site = runtime.retained_relocation_site(target_section, entry.r_offset())?;
     let symbol = symbols.get(entry.r_symbol()).ok_or_else(|| {
-        crate::custom_error("retained relocation references a missing symbol table entry")
+        LinkerError::metadata_rewrite("retained relocation references a missing symbol table entry")
     })?;
     // Symbol tables are rewritten first, so st_value is already in
     // arena-backed runtime coordinates here.
@@ -340,14 +371,13 @@ fn write_retained_relocation(
         let section_bytes = section_bytes
             .take()
             .expect("relocation value provider called more than one write handler");
-        let end = site
-            .section_offset
-            .checked_add(src.len())
-            .ok_or_else(|| crate::custom_error("retained relocation write range overflowed"))?;
+        let end = site.section_offset.checked_add(src.len()).ok_or_else(|| {
+            LinkerError::metadata_rewrite("retained relocation write range overflowed")
+        })?;
         let dst = section_bytes
             .get_mut(site.section_offset..end)
             .ok_or_else(|| {
-                crate::custom_error("retained relocation write range exceeds section")
+                LinkerError::metadata_rewrite("retained relocation write range exceeds section")
             })?;
         dst.copy_from_slice(src);
         Ok(())
@@ -369,9 +399,10 @@ fn retained_relocation_addend(entry: &ElfRelType) -> Result<isize> {
     #[cfg(any(target_arch = "x86", target_arch = "arm"))]
     {
         let _ = entry;
-        Err(crate::custom_error(
+        Err(LinkerError::metadata_rewrite(
             "arena-backed retained relocation repair requires explicit relocation addends",
-        ))
+        )
+        .into())
     }
     #[cfg(not(any(target_arch = "x86", target_arch = "arm")))]
     {

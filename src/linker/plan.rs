@@ -1,9 +1,8 @@
 use super::{
-    LayoutSectionArena, LayoutSectionId, LayoutSectionMetadata, Materialization, MemoryLayoutPlan,
-    ModuleLayout,
+    LayoutSectionId, LayoutSectionMetadata, Materialization, MemoryLayoutPlan, ModuleLayout,
 };
 use crate::{
-    AlignedBytes, Result,
+    AlignedBytes, LinkerError, Result,
     entity::{PrimaryMap, entity_ref},
     image::{ModuleCapability, ScannedDylib},
 };
@@ -82,24 +81,25 @@ where
     pub fn group_order(&self) -> impl Iterator<Item = &K> {
         let scope = self.scope;
         let plan = &*self.plan;
-        plan.group_order().filter(move |key| {
-            plan.module_id(key)
-                .and_then(|module_id| plan.module_capability(module_id))
-                .is_some_and(|capability| scope.matches(capability))
-        })
+        plan.group_order()
+            .iter()
+            .copied()
+            .filter_map(move |module_id| {
+                plan.module_capability(module_id)
+                    .is_some_and(|capability| scope.matches(capability))
+                    .then(|| plan.module_key(module_id))
+                    .flatten()
+            })
     }
 
     /// Iterates over filtered module ids in discovery order.
     pub fn group_order_ids(&self) -> impl Iterator<Item = LinkModuleId> + '_ {
         let scope = self.scope;
         let plan = &*self.plan;
-        plan.group_order_ids()
-            .iter()
-            .copied()
-            .filter(move |module_id| {
-                plan.module_capability(*module_id)
-                    .is_some_and(|capability| scope.matches(capability))
-            })
+        plan.group_order().iter().copied().filter(move |module_id| {
+            plan.module_capability(*module_id)
+                .is_some_and(|capability| scope.matches(capability))
+        })
     }
 
     /// Returns whether the filtered view contains `key`.
@@ -116,19 +116,24 @@ where
             .flatten()
     }
 
-    /// Returns the scanned metadata for `key` when it is visible through this scope.
+    /// Returns the scanned metadata for `module_id` when it is visible through this scope.
     #[inline]
-    pub fn get(&self, key: &K) -> Option<&ScannedDylib<D>> {
-        self.accepts_key(key).then(|| self.plan.get(key)).flatten()
-    }
-
-    /// Returns the scanned metadata for `key` mutably when it is visible through this scope.
-    #[inline]
-    pub fn get_mut(&mut self, key: &K) -> Option<&mut ScannedDylib<D>> {
-        if !self.accepts_key(key) {
+    pub fn entry(&self, module_id: LinkModuleId) -> Option<&ScannedDylib<D>> {
+        let capability = self.plan.module_capability(module_id)?;
+        if !self.scope.matches(capability) {
             return None;
         }
-        self.plan.get_mut(key)
+        self.plan.get(module_id).map(PlannedModule::module)
+    }
+
+    /// Returns the scanned metadata for `module_id` mutably when it is visible through this scope.
+    #[inline]
+    pub fn entry_mut(&mut self, module_id: LinkModuleId) -> Option<&mut ScannedDylib<D>> {
+        let capability = self.plan.module_capability(module_id)?;
+        if !self.scope.matches(capability) {
+            return None;
+        }
+        self.plan.get_mut(module_id).map(PlannedModule::module_mut)
     }
 
     /// Iterates over every scanned module visible through this scope.
@@ -148,7 +153,12 @@ where
         if !self.accepts_key(key) {
             return None;
         }
-        self.plan.direct_deps(key)
+        Some(
+            self.plan
+                .direct_deps(key)?
+                .iter()
+                .filter_map(|dep_id| self.plan.module_key(*dep_id)),
+        )
     }
 
     /// Returns the planning capability of `key`, when visible.
@@ -162,7 +172,7 @@ where
     #[inline]
     pub fn module_materialization(&self, key: &K) -> Option<Materialization> {
         let module_id = self.module_id(key)?;
-        self.plan.module_materialization(module_id)
+        self.plan.materialization(module_id)
     }
 
     /// Selects the materialization mode for `module_id`, when visible.
@@ -175,7 +185,7 @@ where
         self.plan
             .module_capability(module_id)
             .is_some_and(|capability| self.scope.matches(capability))
-            .then(|| self.plan.set_module_materialization(module_id, mode))
+            .then(|| self.plan.set_materialization(module_id, mode))
             .flatten()
     }
 
@@ -297,6 +307,36 @@ pub(crate) struct PlannedModule<K, D: 'static> {
     direct_deps: Box<[LinkModuleId]>,
 }
 
+struct PendingPlannedModule<K, D: 'static> {
+    key: K,
+    module: ScannedDylib<D>,
+    direct_deps: Box<[K]>,
+}
+
+impl<K, D: 'static> PendingPlannedModule<K, D>
+where
+    K: Ord,
+{
+    fn resolve(self, module_ids: &BTreeMap<K, LinkModuleId>) -> PlannedModule<K, D> {
+        let Self {
+            key,
+            module,
+            direct_deps,
+        } = self;
+        let direct_deps = direct_deps
+            .iter()
+            .map(|dep_key| {
+                *module_ids.get(dep_key).unwrap_or_else(|| {
+                    panic!("planned module dependency referenced an unknown module key")
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        PlannedModule::new(key, module, direct_deps)
+    }
+}
+
 impl<K, D: 'static> PlannedModule<K, D> {
     #[inline]
     pub(crate) fn new(key: K, module: ScannedDylib<D>, direct_deps: Box<[LinkModuleId]>) -> Self {
@@ -338,7 +378,7 @@ impl<K, D: 'static> PlannedModule<K, D> {
 /// This plan owns the discovered logical module graph and accumulates later
 /// planning decisions such as physical memory-layout plans or future
 /// materialization policies.
-pub struct LinkPlan<K, D: 'static> {
+pub(crate) struct LinkPlan<K, D: 'static> {
     root: LinkModuleId,
     group_order: Vec<LinkModuleId>,
     module_ids: BTreeMap<K, LinkModuleId>,
@@ -359,44 +399,29 @@ where
         let group_keys = group_order;
         let mut module_ids = BTreeMap::new();
         let mut group_order = Vec::with_capacity(group_keys.len());
-        for key in &group_keys {
-            let next_id = LinkModuleId::new(module_ids.len());
-            let previous = module_ids.insert(key.clone(), next_id);
+        let mut pending_entries = PrimaryMap::default();
+        for key in group_keys {
+            let (module, direct_deps) = entries
+                .remove(&key)
+                .expect("scan plan group order referenced a missing discovered module");
+            let module_id = pending_entries.push(PendingPlannedModule {
+                key: key.clone(),
+                module,
+                direct_deps,
+            });
+            let previous = module_ids.insert(key, module_id);
             assert!(
                 previous.is_none(),
                 "scan plan discovered duplicate module key"
             );
-            group_order.push(next_id);
+            group_order.push(module_id);
         }
 
         let root = *module_ids
             .get(&root)
             .expect("scan plan root must exist in discovery order");
 
-        let mut planned_entries = PrimaryMap::default();
-        for key in &group_keys {
-            let module_id = *module_ids
-                .get(key)
-                .expect("planned module key must have an assigned id");
-            let (module, direct_deps) = entries
-                .remove(key)
-                .expect("scan plan group order referenced a missing discovered module");
-            let direct_deps = direct_deps
-                .iter()
-                .map(|dep_key| {
-                    *module_ids.get(dep_key).unwrap_or_else(|| {
-                        panic!("planned module dependency referenced an unknown module key")
-                    })
-                })
-                .collect::<Vec<_>>()
-                .into_boxed_slice();
-            let inserted_id =
-                planned_entries.push(PlannedModule::new(key.clone(), module, direct_deps));
-            assert_eq!(
-                inserted_id, module_id,
-                "planned module ids must be assigned in discovery order"
-            );
-        }
+        let planned_entries = pending_entries.map_values(|_, pending| pending.resolve(&module_ids));
         assert!(
             entries.is_empty(),
             "scan plan contained modules that were not present in discovery order"
@@ -418,28 +443,20 @@ where
 
     /// Returns the canonical root key of the plan.
     #[inline]
-    pub fn root_key(&self) -> &K {
+    fn root_key(&self) -> &K {
         self.module_key(self.root)
             .expect("planned root module must resolve to a key")
     }
 
     /// Returns the canonical root module id of the plan.
     #[inline]
-    pub const fn root_module(&self) -> LinkModuleId {
+    pub(crate) const fn root_module(&self) -> LinkModuleId {
         self.root
-    }
-
-    /// Returns the breadth-first module order discovered from the root.
-    #[inline]
-    pub fn group_order(&self) -> impl Iterator<Item = &K> {
-        self.group_order
-            .iter()
-            .filter_map(|module_id| self.module_key(*module_id))
     }
 
     /// Returns the breadth-first module ids discovered from the root.
     #[inline]
-    pub(crate) fn group_order_ids(&self) -> &[LinkModuleId] {
+    pub(crate) fn group_order(&self) -> &[LinkModuleId] {
         &self.group_order
     }
 
@@ -457,62 +474,42 @@ where
 
     /// Returns whether the plan contains `key`.
     #[inline]
-    pub fn contains_key(&self, key: &K) -> bool {
+    fn contains_key(&self, key: &K) -> bool {
         self.module_ids.contains_key(key)
     }
 
     /// Returns the stable module id for `key`.
     #[inline]
-    pub fn module_id(&self, key: &K) -> Option<LinkModuleId> {
+    fn module_id(&self, key: &K) -> Option<LinkModuleId> {
         self.module_ids.get(key).copied()
     }
 
     #[inline]
-    pub(crate) fn module_key(&self, module_id: LinkModuleId) -> Option<&K> {
+    fn module_key(&self, module_id: LinkModuleId) -> Option<&K> {
         self.entries.get(module_id).map(PlannedModule::key)
     }
 
     #[inline]
-    fn entry(&self, module_id: LinkModuleId) -> Option<&PlannedModule<K, D>> {
+    fn get(&self, module_id: LinkModuleId) -> Option<&PlannedModule<K, D>> {
         self.entries.get(module_id)
     }
 
     #[inline]
-    fn entry_mut(&mut self, module_id: LinkModuleId) -> Option<&mut PlannedModule<K, D>> {
+    fn get_mut(&mut self, module_id: LinkModuleId) -> Option<&mut PlannedModule<K, D>> {
         self.entries.get_mut(module_id)
     }
 
-    /// Returns the scanned metadata for `key`.
+    /// Returns the canonical direct dependency ids of `key`.
     #[inline]
-    pub fn get(&self, key: &K) -> Option<&ScannedDylib<D>> {
-        self.module_id(key)
-            .and_then(|module_id| self.entry(module_id))
-            .map(PlannedModule::module)
-    }
-
-    /// Returns the scanned metadata for `key` mutably.
-    #[inline]
-    pub fn get_mut(&mut self, key: &K) -> Option<&mut ScannedDylib<D>> {
+    fn direct_deps(&self, key: &K) -> Option<&[LinkModuleId]> {
         let module_id = self.module_id(key)?;
-        self.entry_mut(module_id).map(PlannedModule::module_mut)
-    }
-
-    /// Returns the canonical direct dependency keys of `key`.
-    #[inline]
-    pub fn direct_deps(&self, key: &K) -> Option<impl Iterator<Item = &K> + '_> {
-        let module_id = self.module_id(key)?;
-        let entry = self.entry(module_id)?;
-        Some(
-            entry
-                .direct_deps()
-                .iter()
-                .filter_map(|dep_id| self.module_key(*dep_id)),
-        )
+        let entry = self.get(module_id)?;
+        Some(entry.direct_deps())
     }
 
     /// Iterates over all modules in the plan.
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (&K, &ScannedDylib<D>)> {
+    fn iter(&self) -> impl Iterator<Item = (&K, &ScannedDylib<D>)> {
         self.entries
             .iter()
             .map(|(_, entry)| (entry.key(), entry.module()))
@@ -544,67 +541,55 @@ where
 
     #[inline]
     pub(crate) fn module_capability(&self, module_id: LinkModuleId) -> Option<ModuleCapability> {
-        self.entry(module_id)
-            .map(|entry| entry.module().capability())
+        self.get(module_id).map(|entry| entry.module().capability())
     }
 
     #[inline]
-    pub(crate) fn module_materialization(
-        &self,
-        module_id: LinkModuleId,
-    ) -> Option<Materialization> {
-        self.memory_layout.module_materialization(module_id)
+    pub(crate) fn materialization(&self, module_id: LinkModuleId) -> Option<Materialization> {
+        self.memory_layout.materialization(module_id)
     }
-}
 
-impl<K, D: 'static> LinkPlan<K, D>
-where
-    K: Clone + Ord,
-{
     /// Selects the materialization mode for one module.
     #[inline]
-    pub fn set_module_materialization(
+    pub fn set_materialization(
         &mut self,
         module_id: LinkModuleId,
         mode: Materialization,
     ) -> Option<Materialization> {
-        self.memory_layout
-            .set_module_materialization(module_id, mode)
+        self.memory_layout.set_materialization(module_id, mode)
     }
 
     fn materialize_section_data(
         entries: &mut PrimaryMap<LinkModuleId, PlannedModule<K, D>>,
-        sections: &mut LayoutSectionArena,
+        memory_layout: &mut MemoryLayoutPlan,
         section: LayoutSectionId,
     ) -> Result<()> {
-        if sections.data(section).is_some() {
+        if memory_layout.section_data(section).is_some() {
             return Ok(());
         }
 
-        let module_id = sections
-            .owner(section)
-            .ok_or_else(|| crate::custom_error("section data requested for an unowned section"))?;
+        let module_id = memory_layout.section_owner(section).ok_or_else(|| {
+            LinkerError::section_data("section data requested for an unowned section")
+        })?;
         let entry = entries.get_mut(module_id).ok_or_else(|| {
-            crate::custom_error("section data requested for a missing planned module")
+            LinkerError::section_data("section data requested for a missing planned module")
         })?;
         if !entry.module().capability().has_section_data() {
-            return Err(crate::custom_error(
+            return Err(LinkerError::section_data(
                 "section data requested for a module without section data",
-            ));
+            )
+            .into());
         }
 
-        let scanned_section = sections
-            .get(section)
-            .expect("link plan tried to materialize data for a missing section")
-            .scanned_section();
+        let scanned_section = memory_layout.section_metadata(section).scanned_section();
         let snapshot = entry
             .module_mut()
             .section_data(scanned_section)?
             .ok_or_else(|| {
-                crate::custom_error("section data requested for a missing scanned section")
+                LinkerError::section_data("section data requested for a missing scanned section")
             })?;
 
-        sections.install_scanned_data(section, snapshot);
+        memory_layout.install_section_data(section, snapshot);
         Ok(())
     }
 
@@ -624,26 +609,25 @@ where
             memory_layout,
             ..
         } = self;
-        if memory_layout.sections().data(section).is_none() {
-            Self::materialize_section_data(entries, memory_layout.sections_mut(), section)?;
+        if memory_layout.section_data(section).is_none() {
+            Self::materialize_section_data(entries, memory_layout, section)?;
         }
 
         let layout = &*memory_layout;
         let data = layout
-            .sections()
-            .data(section)
-            .ok_or_else(|| crate::custom_error("section data was not materialized"))?;
+            .section_data(section)
+            .ok_or_else(|| LinkerError::section_data("section data was not materialized"))?;
         Ok((data, layout))
     }
 
     /// Returns mutable section data, materializing it on demand when needed.
     pub fn section_data_mut(&mut self, section: LayoutSectionId) -> Result<&mut AlignedBytes> {
         let _ = self.section_data(section)?;
-        let sections = self.memory_layout.sections_mut();
-        let _ = sections.mark_data_override(section);
-        sections
-            .data_mut(section)
-            .ok_or_else(|| crate::custom_error("section data was not materialized"))
+        let _ = self.memory_layout.mark_section_data_override(section);
+        self.memory_layout
+            .section_data_mut(section)
+            .ok_or_else(|| LinkerError::section_data("section data was not materialized"))
+            .map_err(Into::into)
     }
 
     pub(crate) fn with_disjoint_section_data_mut<R>(
@@ -654,9 +638,10 @@ where
         f: impl FnOnce(&AlignedBytes, &AlignedBytes, &mut AlignedBytes) -> Result<R>,
     ) -> Result<R> {
         if read_a == read_b || read_a == write || read_b == write {
-            return Err(crate::custom_error(
+            return Err(LinkerError::section_data(
                 "disjoint section data request referenced the same section more than once",
-            ));
+            )
+            .into());
         }
 
         let Self {
@@ -665,16 +650,17 @@ where
             ..
         } = self;
         for section in [read_a, read_b, write] {
-            if memory_layout.sections().data(section).is_none() {
-                Self::materialize_section_data(entries, memory_layout.sections_mut(), section)?;
+            if memory_layout.section_data(section).is_none() {
+                Self::materialize_section_data(entries, memory_layout, section)?;
             }
         }
 
-        let sections = memory_layout.sections_mut();
-        let _ = sections.mark_data_override(write);
-        sections
-            .with_disjoint_data_mut(read_a, read_b, write, f)
-            .ok_or_else(|| crate::custom_error("disjoint section data was not materialized"))?
+        let _ = memory_layout.mark_section_data_override(write);
+        memory_layout
+            .with_disjoint_section_data_mut(read_a, read_b, write, f)
+            .ok_or_else(|| {
+                LinkerError::section_data("disjoint section data was not materialized")
+            })?
     }
 
     #[inline]
