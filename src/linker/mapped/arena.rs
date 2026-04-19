@@ -1,4 +1,4 @@
-use super::super::layout::{LayoutArenaId, LayoutMemoryClass, LayoutModuleMaterialization};
+use super::super::layout::{LayoutArenaId, LayoutMemoryClass, ModuleMaterialization};
 use crate::linker::plan::LinkPlan;
 use crate::{
     Result,
@@ -23,6 +23,102 @@ pub(crate) struct MappedArenaMap {
 }
 
 impl MappedArenaMap {
+    pub(super) fn map_plan<M, K, D>(plan: &LinkPlan<K, D>) -> Result<Option<Self>>
+    where
+        K: Clone + Ord,
+        D: 'static,
+        M: Mmap,
+    {
+        let needs_section_regions = plan.group_order_ids().iter().copied().any(|module_id| {
+            plan.module_materialization(module_id) == Some(ModuleMaterialization::SectionRegions)
+        });
+        if !needs_section_regions {
+            return Ok(None);
+        }
+
+        let layout = plan.memory_layout();
+        if !layout.has_section_placements() {
+            return Ok(None);
+        }
+
+        let mut arenas = Self::default();
+
+        for (id, arena) in layout.arena_entries() {
+            let len = layout.arena_usage(id).mapped_len();
+            if len == 0 {
+                continue;
+            }
+
+            let ptr = unsafe {
+                M::mmap_anonymous(
+                    0,
+                    len,
+                    initial_protection(arena.memory_class()),
+                    MapFlags::MAP_PRIVATE,
+                )
+            }?;
+
+            let backing = ElfSegments::create_backing(ptr, len, M::munmap);
+            arenas.insert(
+                id,
+                MappedArena::new(arena.memory_class(), ptr as usize, len, backing),
+            );
+        }
+
+        Ok(Some(arenas))
+    }
+
+    pub(super) fn populate<K, D>(&mut self, plan: &mut LinkPlan<K, D>) -> Result<()>
+    where
+        K: Clone + Ord,
+        D: 'static,
+    {
+        let placed_sections = plan
+            .memory_layout()
+            .sections()
+            .iter_records()
+            .filter_map(|(section_id, record)| {
+                let placement = record.placement()?;
+                Some((section_id, placement))
+            })
+            .collect::<Vec<_>>();
+
+        for (section_id, placement) in placed_sections {
+            let data = plan.section_data(section_id)?;
+            let arena = self.get_mut(placement.arena()).ok_or_else(|| {
+                crate::custom_error("mapped section arenas referenced a missing arena")
+            })?;
+            let dst = arena
+                .slice_mut(placement.offset(), placement.size())
+                .ok_or_else(|| {
+                    crate::custom_error(
+                        "mapped section arena placement exceeds the allocated arena bounds",
+                    )
+                })?;
+
+            let bytes = data.as_ref();
+            if bytes.len() != dst.len() {
+                return Err(crate::custom_error(
+                    "mapped section arena size does not match its materialized section bytes",
+                ));
+            }
+
+            dst.copy_from_slice(bytes);
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn protect<M>(&self) -> Result<()>
+    where
+        M: Mmap,
+    {
+        for (_, arena) in self.iter() {
+            arena.protect::<M>()?;
+        }
+        Ok(())
+    }
+
     #[inline]
     fn insert(&mut self, id: LayoutArenaId, arena: MappedArena) -> Option<MappedArena> {
         self.arenas.insert(id, arena)
@@ -95,107 +191,6 @@ impl MappedArena {
     }
 }
 
-pub(crate) fn map_planned_section_arenas<M, K, D>(
-    plan: &LinkPlan<K, D>,
-) -> Result<Option<MappedArenaMap>>
-where
-    K: Clone + Ord,
-    D: 'static,
-    M: Mmap,
-{
-    let needs_section_regions = plan.group_order_ids().iter().copied().any(|module_id| {
-        plan.module_materialization(module_id) == Some(LayoutModuleMaterialization::SectionRegions)
-    });
-    if !needs_section_regions {
-        return Ok(None);
-    }
-
-    let layout = plan.memory_layout();
-    if !layout.has_section_placements() {
-        return Ok(None);
-    }
-
-    let mut arenas = MappedArenaMap::default();
-
-    for (id, arena) in layout.arena_entries() {
-        let len = layout.arena_usage(id).mapped_len();
-        if len == 0 {
-            continue;
-        }
-
-        let ptr = unsafe {
-            M::mmap_anonymous(
-                0,
-                len,
-                initial_protection(arena.memory_class()),
-                MapFlags::MAP_PRIVATE,
-            )
-        }?;
-
-        let backing = ElfSegments::create_backing(ptr, len, M::munmap);
-        arenas.insert(
-            id,
-            MappedArena::new(arena.memory_class(), ptr as usize, len, backing),
-        );
-    }
-
-    Ok(Some(arenas))
-}
-
-pub(crate) fn populate_mapped_arenas<K, D>(
-    plan: &mut LinkPlan<K, D>,
-    arenas: &mut MappedArenaMap,
-) -> Result<()>
-where
-    K: Clone + Ord,
-    D: 'static,
-{
-    let placed_sections = plan
-        .memory_layout()
-        .sections()
-        .iter_records()
-        .filter_map(|(section_id, record)| {
-            let placement = record.placement()?;
-            Some((section_id, placement))
-        })
-        .collect::<Vec<_>>();
-
-    for (section_id, placement) in placed_sections {
-        let data = plan.section_data(section_id)?;
-        let arena = arenas.get_mut(placement.arena()).ok_or_else(|| {
-            crate::custom_error("mapped section arenas referenced a missing arena")
-        })?;
-        let dst = arena
-            .slice_mut(placement.offset(), placement.size())
-            .ok_or_else(|| {
-                crate::custom_error(
-                    "mapped section arena placement exceeds the allocated arena bounds",
-                )
-            })?;
-
-        let bytes = data.as_ref();
-        if bytes.len() != dst.len() {
-            return Err(crate::custom_error(
-                "mapped section arena size does not match its materialized section bytes",
-            ));
-        }
-
-        dst.copy_from_slice(bytes);
-    }
-
-    Ok(())
-}
-
-pub(crate) fn protect_mapped_arenas<M>(arenas: &MappedArenaMap) -> Result<()>
-where
-    M: Mmap,
-{
-    for (_, arena) in arenas.iter() {
-        arena.protect::<M>()?;
-    }
-    Ok(())
-}
-
 fn initial_protection(class: LayoutMemoryClass) -> ProtFlags {
     match class {
         LayoutMemoryClass::Code => {
@@ -262,12 +257,12 @@ mod tests {
             plan.memory_layout_mut()
                 .assign_section_to_arena(section, arena, 0)
         );
-        plan.set_module_materialization(root, LayoutModuleMaterialization::SectionRegions);
+        plan.set_module_materialization(root, ModuleMaterialization::SectionRegions);
 
-        let mut mapped = map_planned_section_arenas::<DefaultMmap, _, _>(&plan)
+        let mut mapped = MappedArenaMap::map_plan::<DefaultMmap, _, _>(&plan)
             .unwrap()
             .unwrap();
-        populate_mapped_arenas(&mut plan, &mut mapped).unwrap();
+        mapped.populate(&mut plan).unwrap();
 
         let mapped_arena = mapped.get_mut(arena).unwrap();
         assert_eq!(&mapped_arena.bytes_mut()[0..4], [1_u8, 2, 3, 4].as_slice());

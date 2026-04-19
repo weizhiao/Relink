@@ -20,9 +20,9 @@ mod view;
 pub use context::LinkContext;
 pub use layout::{
     LayoutAddress, LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutArenaUsage,
-    LayoutClassPolicy, LayoutMemoryClass, LayoutModuleMaterialization, LayoutPackingPolicy,
-    LayoutSectionArena, LayoutSectionId, LayoutSectionMetadata, LayoutSectionRecord,
-    MemoryLayoutPlan, ModuleLayout, SectionPlacement,
+    LayoutClassPolicy, LayoutMemoryClass, LayoutPackingPolicy, LayoutSectionArena, LayoutSectionId,
+    LayoutSectionMetadata, LayoutSectionRecord, MemoryLayoutPlan, ModuleLayout,
+    ModuleMaterialization, SectionPlacement,
 };
 pub use plan::{LinkModuleId, LinkPass, LinkPassPlan, LinkPassScope, LinkPipeline};
 pub use request::{

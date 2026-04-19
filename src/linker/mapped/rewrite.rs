@@ -1,7 +1,4 @@
-use super::{
-    LayoutSectionId, MappedArenaMap, MemoryLayoutPlan, RuntimeModuleMemory, RuntimeSectionMemory,
-    build_runtime_memory,
-};
+use super::{LayoutSectionId, MemoryLayoutPlan, RuntimeModuleMemory, RuntimeSectionMemory};
 use crate::linker::plan::{LinkModuleId, LinkPlan};
 use crate::{
     Result,
@@ -114,7 +111,7 @@ impl RuntimeModuleMemory {
     }
 }
 
-struct RuntimeMetadataRewriter<'a, K, D: 'static> {
+pub(crate) struct RuntimeMetadataRewriter<'a, K, D: 'static> {
     module_id: LinkModuleId,
     plan: &'a mut LinkPlan<K, D>,
     runtime: &'a RuntimeModuleMemory,
@@ -125,7 +122,7 @@ where
     K: Clone + Ord,
     D: 'static,
 {
-    fn new(
+    pub(crate) fn new(
         module_id: LinkModuleId,
         plan: &'a mut LinkPlan<K, D>,
         runtime: &'a RuntimeModuleMemory,
@@ -137,7 +134,7 @@ where
         }
     }
 
-    fn rewrite(&mut self) -> Result<()> {
+    pub(crate) fn rewrite(&mut self) -> Result<()> {
         self.rewrite_symbol_tables()?;
         self.rewrite_retained_relocations()?;
         self.rewrite_allocated_relocation_sections()?;
@@ -299,20 +296,6 @@ where
 
         Ok(())
     }
-}
-
-pub(crate) fn repair_arena_layout_module<K, D>(
-    module_id: LinkModuleId,
-    plan: &mut LinkPlan<K, D>,
-    mapped_section_arenas: &MappedArenaMap,
-) -> Result<()>
-where
-    K: Clone + Ord,
-    D: 'static,
-{
-    let runtime = build_runtime_memory(module_id, plan.memory_layout(), mapped_section_arenas)?;
-    let mut rewriter = RuntimeMetadataRewriter::new(module_id, plan, &runtime);
-    rewriter.rewrite()
 }
 
 fn symbol_section_id(

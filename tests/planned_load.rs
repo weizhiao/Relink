@@ -5,7 +5,7 @@ use elf_loader::{
     image::{LoadedCore, ModuleCapability},
     input::ElfBinary,
     linker::{
-        KeyResolver, LayoutModuleMaterialization, LinkContext, LinkPassPlan, LinkPipeline,
+        KeyResolver, LinkContext, LinkPassPlan, LinkPipeline, ModuleMaterialization,
         RelocationInputs, RelocationRequest, ResolvedKey,
     },
     linker::{LayoutArena, LayoutArenaSharing, LayoutMemoryClass},
@@ -284,6 +284,70 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
 }
 
 #[test]
+fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
+    let output = write_test_dylib_with_config(
+        ElfWriterConfig::default()
+            .with_bind_now(true)
+            .with_emit_retained_relocations(true),
+        &[],
+        &[SymbolDesc::global_object("value", &[1, 2, 3, 4])],
+    );
+    let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
+
+    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut loader = Loader::new();
+    let mut resolver = SingleBinaryResolver {
+        key: "root",
+        name: "default_section_regions_root.so",
+        data: bytes,
+    };
+    let mut pipeline = LinkPipeline::new();
+    let mut observed_capability = None;
+    let mut observed_materialization = None;
+    let mut configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
+        observed_capability = plan.module_capability(&"root");
+        observed_materialization = plan.module_materialization(&"root");
+        Ok(())
+    };
+    pipeline.push(&mut configure);
+
+    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let mut planner = empty_relocation_plan;
+
+    let loaded = context
+        .load_with_scan(
+            "root",
+            &mut loader,
+            &mut resolver,
+            &mut pipeline,
+            &relocator,
+            &mut planner,
+        )
+        .expect("failed to load section-reorderable dylib through the default section-region path");
+
+    assert_eq!(
+        observed_capability,
+        Some(ModuleCapability::SectionReorderable),
+    );
+    assert_eq!(
+        observed_materialization,
+        Some(ModuleMaterialization::SectionRegions),
+    );
+    assert!(
+        loaded.memory_slices().len() > 1,
+        "section-region default should materialize alloc sections into mapped arenas",
+    );
+
+    unsafe {
+        let ptr = loaded
+            .get::<u8>("value")
+            .expect("missing exported object symbol")
+            .into_raw() as *const u8;
+        assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
+    }
+}
+
+#[test]
 fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
     let bytes: &'static [u8] = Box::leak(strip_section_headers(output.data).into_boxed_slice());
@@ -305,7 +369,7 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
             .get(&"root")
             .and_then(|module| module.section_headers())
             .is_none();
-        plan.set_module_materialization(root, LayoutModuleMaterialization::WholeDsoRegion);
+        plan.set_module_materialization(root, ModuleMaterialization::WholeDsoRegion);
         Ok(())
     };
     pipeline.push(&mut configure);
@@ -415,7 +479,7 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
             .expect("missing materialized .data bytes")
             .as_bytes_mut()
             .copy_from_slice(&[9, 8, 7, 6]);
-        plan.set_module_materialization(root, LayoutModuleMaterialization::WholeDsoRegion);
+        plan.set_module_materialization(root, ModuleMaterialization::WholeDsoRegion);
         Ok(())
     };
     pipeline.push(&mut configure);
@@ -441,7 +505,7 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
     );
     assert_eq!(
         observed_materialization,
-        Some(LayoutModuleMaterialization::WholeDsoRegion),
+        Some(ModuleMaterialization::WholeDsoRegion),
     );
 
     assert!(

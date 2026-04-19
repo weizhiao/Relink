@@ -1,6 +1,6 @@
 use super::{
-    LayoutModuleMaterialization, LayoutSectionArena, LayoutSectionId, LayoutSectionMetadata,
-    MemoryLayoutPlan, ModuleLayout,
+    LayoutSectionArena, LayoutSectionId, LayoutSectionMetadata, MemoryLayoutPlan, ModuleLayout,
+    ModuleMaterialization,
 };
 use crate::{
     AlignedBytes, Result,
@@ -160,7 +160,7 @@ where
 
     /// Returns the configured materialization mode of `key`, when visible.
     #[inline]
-    pub fn module_materialization(&self, key: &K) -> Option<LayoutModuleMaterialization> {
+    pub fn module_materialization(&self, key: &K) -> Option<ModuleMaterialization> {
         let module_id = self.module_id(key)?;
         self.plan.module_materialization(module_id)
     }
@@ -170,8 +170,8 @@ where
     pub fn set_module_materialization(
         &mut self,
         module_id: LinkModuleId,
-        mode: LayoutModuleMaterialization,
-    ) -> Option<LayoutModuleMaterialization> {
+        mode: ModuleMaterialization,
+    ) -> Option<ModuleMaterialization> {
         self.plan
             .module_capability(module_id)
             .is_some_and(|capability| self.scope.matches(capability))
@@ -552,7 +552,7 @@ where
     pub(crate) fn module_materialization(
         &self,
         module_id: LinkModuleId,
-    ) -> Option<LayoutModuleMaterialization> {
+    ) -> Option<ModuleMaterialization> {
         self.memory_layout.module_materialization(module_id)
     }
 }
@@ -566,8 +566,8 @@ where
     pub fn set_module_materialization(
         &mut self,
         module_id: LinkModuleId,
-        mode: LayoutModuleMaterialization,
-    ) -> Option<LayoutModuleMaterialization> {
+        mode: ModuleMaterialization,
+    ) -> Option<ModuleMaterialization> {
         self.memory_layout
             .set_module_materialization(module_id, mode)
     }
@@ -675,11 +675,6 @@ where
         sections
             .with_disjoint_data_mut(read_a, read_b, write, f)
             .ok_or_else(|| crate::custom_error("disjoint section data was not materialized"))?
-    }
-
-    #[inline]
-    pub(crate) fn finalize_layout(&mut self) -> Result<()> {
-        Ok(())
     }
 
     #[inline]

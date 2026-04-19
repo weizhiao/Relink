@@ -1,8 +1,8 @@
 use super::{
     layout::{
         LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutClassPolicy, LayoutMemoryClass,
-        LayoutModuleMaterialization, LayoutPackingPolicy, LayoutSectionId, MemoryLayoutPlan,
-        ModuleLayout, SectionPlacement,
+        LayoutPackingPolicy, LayoutSectionId, MemoryLayoutPlan, ModuleLayout,
+        ModuleMaterialization, SectionPlacement,
     },
     plan::{LinkModuleId, LinkPlan},
 };
@@ -17,12 +17,10 @@ where
     let mut has_section_regions = false;
 
     plan.try_for_each_module(|plan, module_id| {
-        let mode = {
-            let layout = plan.memory_layout();
-            let module = layout.module(module_id);
-            resolve_materialization_mode(&*plan, module_id, module)?
-        };
-        has_section_regions |= mode == LayoutModuleMaterialization::SectionRegions;
+        let layout = plan.memory_layout();
+        let module = layout.module(module_id);
+        let mode = resolve_materialization_mode(&*plan, module_id, module)?;
+        has_section_regions |= mode == ModuleMaterialization::SectionRegions;
         let _ = plan.set_module_materialization(module_id, mode);
         Ok(())
     })?;
@@ -32,13 +30,11 @@ where
     }
 
     let policy = LayoutPackingPolicy::shared_huge_pages();
-    let mut arena_state = FallbackArenaState::new();
+    let mut arena_state = ArenaState::new();
 
     plan.try_for_each_module(|plan, module_id| {
         let layout = plan.memory_layout();
-        if layout.module_materialization(module_id)
-            != Some(LayoutModuleMaterialization::SectionRegions)
-        {
+        if layout.module_materialization(module_id) != Some(ModuleMaterialization::SectionRegions) {
             return Ok(());
         }
 
@@ -52,9 +48,7 @@ where
 
     plan.try_for_each_module(|plan, module_id| {
         let layout = plan.memory_layout();
-        if layout.module_materialization(module_id)
-            != Some(LayoutModuleMaterialization::SectionRegions)
-        {
+        if layout.module_materialization(module_id) != Some(ModuleMaterialization::SectionRegions) {
             return Ok(());
         }
         let alloc_sections = layout.module(module_id).alloc_sections().to_vec();
@@ -62,12 +56,11 @@ where
             if plan.memory_layout().section_placement(section_id).is_some() {
                 continue;
             }
-            assign_fallback_section(
+            arena_state.assign_fallback_section(
                 plan.memory_layout_mut(),
                 module_id,
                 section_id,
                 policy,
-                &mut arena_state,
             )?;
         }
         Ok(())
@@ -80,7 +73,7 @@ fn resolve_materialization_mode<K, D>(
     plan: &LinkPlan<K, D>,
     module_id: LinkModuleId,
     module: &ModuleLayout,
-) -> Result<LayoutModuleMaterialization>
+) -> Result<ModuleMaterialization>
 where
     K: Clone + Ord,
     D: 'static,
@@ -91,7 +84,7 @@ where
         .expect("ordered layout referenced a module without capability metadata");
     let requested = layout
         .module_materialization(module_id)
-        .expect("ordered layout referenced a module without materialization mode");
+        .unwrap_or_else(|| ModuleMaterialization::default_for_capability(capability));
     let has_section_placement = module
         .alloc_sections()
         .iter()
@@ -105,68 +98,29 @@ where
                 ));
             }
             match requested {
-                LayoutModuleMaterialization::WholeDsoRegion => {
-                    Ok(LayoutModuleMaterialization::WholeDsoRegion)
-                }
-                LayoutModuleMaterialization::SectionRegions => Err(crate::custom_error(
+                ModuleMaterialization::WholeDsoRegion => Ok(ModuleMaterialization::WholeDsoRegion),
+                ModuleMaterialization::SectionRegions => Err(crate::custom_error(
                     "modules without section-reorder repair support cannot use section regions",
                 )),
             }
         }
         ModuleCapability::SectionReorderable => {
-            if has_section_placement || requested == LayoutModuleMaterialization::SectionRegions {
-                Ok(LayoutModuleMaterialization::SectionRegions)
+            if has_section_placement {
+                Ok(ModuleMaterialization::SectionRegions)
             } else {
-                Ok(LayoutModuleMaterialization::WholeDsoRegion)
+                Ok(requested)
             }
         }
     }
 }
 
-fn assign_fallback_section(
-    layout: &mut MemoryLayoutPlan,
-    module_id: LinkModuleId,
-    section_id: LayoutSectionId,
-    policy: LayoutPackingPolicy,
-    arena_state: &mut FallbackArenaState,
-) -> Result<()> {
-    let (memory_class, alignment, size) = {
-        let section = layout.section_metadata(section_id);
-        (
-            section
-                .memory_class()
-                .expect("fallback arena assignment encountered a non-alloc section"),
-            section.alignment(),
-            section.size(),
-        )
-    };
-    let arena_id = arena_state.ensure_arena(
-        layout,
-        module_id,
-        policy.class_policy(memory_class),
-        memory_class,
-    );
-    let offset = arena_state.next_offset(arena_id, alignment)?;
-    let next_offset = offset
-        .checked_add(size)
-        .expect("fallback arena assignment overflowed while placing a section");
-
-    assert!(
-        layout.assign_section_to_arena(section_id, arena_id, offset),
-        "fallback arena assignment failed while placing a section"
-    );
-
-    arena_state.update_arena_end(arena_id, next_offset);
-    Ok(())
-}
-
-struct FallbackArenaState {
+struct ArenaState {
     shared_arenas: BTreeMap<LayoutMemoryClass, LayoutArenaId>,
     private_arenas: BTreeMap<(LinkModuleId, LayoutMemoryClass), LayoutArenaId>,
     arena_offsets: BTreeMap<LayoutArenaId, usize>,
 }
 
-impl FallbackArenaState {
+impl ArenaState {
     fn new() -> Self {
         Self {
             shared_arenas: BTreeMap::new(),
@@ -193,6 +147,43 @@ impl FallbackArenaState {
             placement.offset().saturating_add(placement.size()),
         );
         self.remember_arena(module_id, memory_class, placement.arena(), arena);
+    }
+
+    fn assign_fallback_section(
+        &mut self,
+        layout: &mut MemoryLayoutPlan,
+        module_id: LinkModuleId,
+        section_id: LayoutSectionId,
+        policy: LayoutPackingPolicy,
+    ) -> Result<()> {
+        let (memory_class, alignment, size) = {
+            let section = layout.section_metadata(section_id);
+            (
+                section
+                    .memory_class()
+                    .expect("fallback arena assignment encountered a non-alloc section"),
+                section.alignment(),
+                section.size(),
+            )
+        };
+        let arena_id = self.ensure_arena(
+            layout,
+            module_id,
+            policy.class_policy(memory_class),
+            memory_class,
+        );
+        let offset = self.next_offset(arena_id, alignment)?;
+        let next_offset = offset
+            .checked_add(size)
+            .expect("fallback arena assignment overflowed while placing a section");
+
+        assert!(
+            layout.assign_section_to_arena(section_id, arena_id, offset),
+            "fallback arena assignment failed while placing a section"
+        );
+
+        self.update_arena_end(arena_id, next_offset);
+        Ok(())
     }
 
     fn remember_arena(
@@ -307,7 +298,7 @@ mod tests {
             LayoutMemoryClass::Code,
             LayoutArenaSharing::Shared,
         ));
-        let mut state = FallbackArenaState::new();
+        let mut state = ArenaState::new();
 
         let selected = state.ensure_arena(
             &mut layout,

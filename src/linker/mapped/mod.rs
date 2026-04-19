@@ -1,10 +1,13 @@
 use super::layout::{LayoutSectionId, MemoryLayoutPlan};
-use crate::linker::plan::LinkModuleId;
+use crate::linker::mapped::rewrite::RuntimeMetadataRewriter;
+use crate::linker::plan::{LinkModuleId, LinkPlan};
 use crate::{
     Result,
     elf::{ElfDyn, ElfPhdr, ElfPhdrs, ElfProgramType},
+    entity::SecondaryMap,
     image::{LoadedMemorySlice, RawDylib, ScannedDylib},
     loader::DynLifecycleHandler,
+    os::Mmap,
     segment::ElfSegments,
     tls::{TlsInfo, TlsResolver},
 };
@@ -14,15 +17,18 @@ use core::ptr::NonNull;
 mod arena;
 mod rewrite;
 
-pub(crate) use arena::{
-    MappedArenaMap, map_planned_section_arenas, populate_mapped_arenas, protect_mapped_arenas,
-};
-pub(crate) use rewrite::repair_arena_layout_module;
+use arena::MappedArenaMap;
 
-struct RuntimeModuleMemory {
+pub(crate) struct RuntimeModuleMemory {
     sections: Box<[RuntimeSectionMemory]>,
     segments: ElfSegments,
     memory_slices: Box<[LoadedMemorySlice]>,
+}
+
+#[derive(Default)]
+pub(crate) struct MappedRuntimeMemory {
+    arenas: MappedArenaMap,
+    modules: SecondaryMap<LinkModuleId, RuntimeModuleMemory>,
 }
 
 #[derive(Clone, Copy)]
@@ -44,6 +50,79 @@ impl RuntimeSectionMemory {
 }
 
 impl RuntimeModuleMemory {
+    fn build(
+        module_id: LinkModuleId,
+        layout: &MemoryLayoutPlan,
+        mapped_section_arenas: &MappedArenaMap,
+    ) -> Result<Self> {
+        let module = layout.module(module_id);
+
+        let mut placed_sections = Vec::with_capacity(module.alloc_sections().len());
+        for section_id in module.alloc_sections().iter().copied() {
+            let Some(placement) = layout.section_placement(section_id) else {
+                continue;
+            };
+            let metadata = layout.section_metadata(section_id);
+            let arena = mapped_section_arenas
+                .get(placement.arena())
+                .ok_or_else(|| {
+                    crate::custom_error("arena-backed module referenced an unmapped arena")
+                })?;
+            let actual_address = arena.address(placement.offset()).ok_or_else(|| {
+                crate::custom_error("arena-backed module section address overflowed")
+            })?;
+            placed_sections.push((
+                section_id,
+                placement.address(),
+                metadata.source_address(),
+                actual_address,
+                metadata.size(),
+            ));
+        }
+
+        let Some(base) = placed_sections
+            .iter()
+            .map(|(_, _, _, actual_address, _)| *actual_address)
+            .min()
+        else {
+            return Err(crate::custom_error(
+                "arena-backed module does not own any alloc sections",
+            ));
+        };
+
+        let mut segment_slices = Vec::with_capacity(placed_sections.len());
+        let mut memory_slices = placed_sections
+            .iter()
+            .map(|(_, _, _, actual_address, size)| LoadedMemorySlice::new(*actual_address, *size))
+            .collect::<Vec<_>>();
+        memory_slices.sort_unstable_by_key(|slice| slice.base());
+        let mut runtime_sections = Vec::with_capacity(placed_sections.len());
+
+        for (section, layout_address, source_address, actual_address, size) in &placed_sections {
+            let arena = mapped_section_arenas
+                .get(layout_address.arena())
+                .ok_or_else(|| {
+                    crate::custom_error("arena-backed module referenced an unmapped arena")
+                })?;
+            let runtime_offset = actual_address.checked_sub(base).ok_or_else(|| {
+                crate::custom_error("arena-backed module address precedes runtime base")
+            })?;
+            segment_slices.push(ElfSegments::slice(runtime_offset, *size, arena.backing()));
+            runtime_sections.push(RuntimeSectionMemory {
+                section: *section,
+                source_address: *source_address,
+                runtime_offset,
+                size: *size,
+            });
+        }
+
+        Ok(RuntimeModuleMemory {
+            sections: runtime_sections.into_boxed_slice(),
+            segments: ElfSegments::from_slices(base, segment_slices),
+            memory_slices: memory_slices.into_boxed_slice(),
+        })
+    }
+
     fn remap_source_address(&self, source_address: usize) -> Result<Option<usize>> {
         Ok(self.sections.iter().copied().find_map(|section| {
             section
@@ -53,11 +132,78 @@ impl RuntimeModuleMemory {
     }
 }
 
+impl MappedRuntimeMemory {
+    pub(crate) fn map<M, K, D>(plan: &LinkPlan<K, D>) -> Result<Option<Self>>
+    where
+        K: Clone + Ord,
+        D: 'static,
+        M: Mmap,
+    {
+        let Some(arenas) = MappedArenaMap::map_plan::<M, _, _>(plan)? else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            arenas,
+            modules: SecondaryMap::default(),
+        }))
+    }
+
+    fn build_module(
+        &mut self,
+        module_id: LinkModuleId,
+        layout: &MemoryLayoutPlan,
+    ) -> Result<&RuntimeModuleMemory> {
+        if self.modules.contains_key(module_id) {
+            return Err(crate::custom_error(
+                "section-region module runtime memory was built more than once",
+            ));
+        }
+        let runtime = RuntimeModuleMemory::build(module_id, layout, &self.arenas)?;
+        let _ = self.modules.insert(module_id, runtime);
+        self.modules.get(module_id).ok_or_else(|| {
+            crate::custom_error("section-region module runtime memory was not cached")
+        })
+    }
+
+    pub(crate) fn repair_module<K, D>(
+        &mut self,
+        module_id: LinkModuleId,
+        plan: &mut LinkPlan<K, D>,
+    ) -> Result<()>
+    where
+        K: Clone + Ord,
+        D: 'static,
+    {
+        let runtime = self.build_module(module_id, plan.memory_layout())?;
+        let mut rewriter = RuntimeMetadataRewriter::new(module_id, plan, runtime);
+        rewriter.rewrite()
+    }
+
+    pub(crate) fn populate<K, D>(&mut self, plan: &mut LinkPlan<K, D>) -> Result<()>
+    where
+        K: Clone + Ord,
+        D: 'static,
+    {
+        self.arenas.populate(plan)
+    }
+
+    pub(crate) fn protect<M>(&self) -> Result<()>
+    where
+        M: Mmap,
+    {
+        self.arenas.protect::<M>()
+    }
+
+    pub(crate) fn take_module(&mut self, module_id: LinkModuleId) -> Result<RuntimeModuleMemory> {
+        self.modules.remove(module_id).ok_or_else(|| {
+            crate::custom_error("section-region planned load is missing runtime memory")
+        })
+    }
+}
+
 pub(crate) fn build_arena_raw_dylib<D, Tls>(
-    module_id: LinkModuleId,
     mut scanned: ScannedDylib<D>,
-    layout: &MemoryLayoutPlan,
-    mapped_section_arenas: &MappedArenaMap,
+    runtime: RuntimeModuleMemory,
     init_fn: DynLifecycleHandler,
     fini_fn: DynLifecycleHandler,
     force_static_tls: bool,
@@ -66,8 +212,6 @@ where
     D: Default + 'static,
     Tls: TlsResolver,
 {
-    let runtime = build_runtime_memory(module_id, layout, mapped_section_arenas)?;
-
     let original_phdrs = scanned.phdrs().to_vec();
     let dynamic_ptr = dynamic_ptr(&original_phdrs, &runtime)?;
     let eh_frame_hdr = eh_frame_hdr(&original_phdrs, &runtime)?;
@@ -91,79 +235,6 @@ where
         init_fn,
         fini_fn,
         user_data,
-    })
-}
-
-fn build_runtime_memory(
-    module_id: LinkModuleId,
-    layout: &MemoryLayoutPlan,
-    mapped_section_arenas: &MappedArenaMap,
-) -> Result<RuntimeModuleMemory> {
-    let module = layout.module(module_id);
-
-    let mut placed_sections = Vec::with_capacity(module.alloc_sections().len());
-    for section_id in module.alloc_sections().iter().copied() {
-        let Some(placement) = layout.section_placement(section_id) else {
-            continue;
-        };
-        let metadata = layout.section_metadata(section_id);
-        let arena = mapped_section_arenas
-            .get(placement.arena())
-            .ok_or_else(|| {
-                crate::custom_error("arena-backed module referenced an unmapped arena")
-            })?;
-        let actual_address = arena
-            .address(placement.offset())
-            .ok_or_else(|| crate::custom_error("arena-backed module section address overflowed"))?;
-        placed_sections.push((
-            section_id,
-            placement.address(),
-            metadata.source_address(),
-            actual_address,
-            metadata.size(),
-        ));
-    }
-
-    let Some(base) = placed_sections
-        .iter()
-        .map(|(_, _, _, actual_address, _)| *actual_address)
-        .min()
-    else {
-        return Err(crate::custom_error(
-            "arena-backed module does not own any alloc sections",
-        ));
-    };
-
-    let mut segment_slices = Vec::with_capacity(placed_sections.len());
-    let mut memory_slices = placed_sections
-        .iter()
-        .map(|(_, _, _, actual_address, size)| LoadedMemorySlice::new(*actual_address, *size))
-        .collect::<Vec<_>>();
-    memory_slices.sort_unstable_by_key(|slice| slice.base());
-    let mut runtime_sections = Vec::with_capacity(placed_sections.len());
-
-    for (section, layout_address, source_address, actual_address, size) in &placed_sections {
-        let arena = mapped_section_arenas
-            .get(layout_address.arena())
-            .ok_or_else(|| {
-                crate::custom_error("arena-backed module referenced an unmapped arena")
-            })?;
-        let runtime_offset = actual_address.checked_sub(base).ok_or_else(|| {
-            crate::custom_error("arena-backed module address precedes runtime base")
-        })?;
-        segment_slices.push(ElfSegments::slice(runtime_offset, *size, arena.backing()));
-        runtime_sections.push(RuntimeSectionMemory {
-            section: *section,
-            source_address: *source_address,
-            runtime_offset,
-            size: *size,
-        });
-    }
-
-    Ok(RuntimeModuleMemory {
-        sections: runtime_sections.into_boxed_slice(),
-        segments: ElfSegments::from_slices(base, segment_slices),
-        memory_slices: memory_slices.into_boxed_slice(),
     })
 }
 

@@ -17,7 +17,7 @@ pub use arena::{
     LayoutMemoryClass, LayoutPackingPolicy,
 };
 pub use derived::LayoutAddress;
-pub use plan::{LayoutModuleMaterialization, MemoryLayoutPlan};
+pub use plan::{MemoryLayoutPlan, ModuleMaterialization};
 pub use section::{
     LayoutSectionArena, LayoutSectionId, LayoutSectionMetadata, LayoutSectionRecord, ModuleLayout,
     SectionPlacement,

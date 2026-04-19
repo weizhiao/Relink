@@ -1,7 +1,7 @@
 use super::{
     LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutArenaUsage, LayoutClassPolicy,
-    LayoutMemoryClass, LayoutModuleMaterialization, LayoutPackingPolicy, LayoutSectionArena,
-    LayoutSectionMetadata, MemoryLayoutPlan, ModuleLayout, SectionPlacement,
+    LayoutMemoryClass, LayoutPackingPolicy, LayoutSectionArena, LayoutSectionMetadata,
+    MemoryLayoutPlan, ModuleLayout, ModuleMaterialization, SectionPlacement,
 };
 use crate::elf::{ElfRela, ElfSectionFlags, ElfSectionType};
 use crate::linker::plan::LinkModuleId;
@@ -229,8 +229,8 @@ fn memory_layout_plan_keeps_materialization_when_replacing_module_layout() {
     assert!(layout.insert_module(ROOT_MODULE, first_module).is_none());
 
     assert_eq!(
-        layout.set_module_materialization(ROOT_MODULE, LayoutModuleMaterialization::SectionRegions),
-        Some(LayoutModuleMaterialization::WholeDsoRegion)
+        layout.set_module_materialization(ROOT_MODULE, ModuleMaterialization::SectionRegions),
+        Some(ModuleMaterialization::WholeDsoRegion)
     );
 
     let second = alloc_section(
@@ -247,7 +247,7 @@ fn memory_layout_plan_keeps_materialization_when_replacing_module_layout() {
     assert!(layout.insert_module(ROOT_MODULE, second_module).is_some());
     assert_eq!(
         layout.module_materialization(ROOT_MODULE),
-        Some(LayoutModuleMaterialization::SectionRegions)
+        Some(ModuleMaterialization::SectionRegions)
     );
     assert_eq!(layout.module_section_id(ROOT_MODULE, 6), Some(second));
 }

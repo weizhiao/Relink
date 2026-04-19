@@ -1,5 +1,5 @@
 use super::{
-    layout::{LayoutModuleMaterialization, MemoryLayoutPlan},
+    layout::{MemoryLayoutPlan, ModuleMaterialization},
     mapped, materialization,
     plan::{LinkModuleId, LinkPipeline, LinkPlan},
     request::{RelocationPlanner, RelocationRequest},
@@ -332,24 +332,23 @@ where
         // The planned-load phase only needs to normalize materialization choices and rebuild
         // any derived addresses that those choices affect.
         materialization::normalize_plan(&mut plan)?;
-        plan.finalize_layout()?;
-        let mut mapped_section_arenas = mapped::map_planned_section_arenas::<M, _, _>(&plan)?;
+        let mut mapped_runtime = mapped::MappedRuntimeMemory::map::<M, _, _>(&plan)?;
 
-        if let Some(mapped_section_arenas) = mapped_section_arenas.as_mut() {
+        if let Some(mapped_runtime) = mapped_runtime.as_mut() {
             let section_region_modules = plan
                 .group_order_ids()
                 .iter()
                 .copied()
                 .filter(|module_id| {
                     plan.module_materialization(*module_id)
-                        .unwrap_or(LayoutModuleMaterialization::WholeDsoRegion)
-                        == LayoutModuleMaterialization::SectionRegions
+                        .unwrap_or(ModuleMaterialization::WholeDsoRegion)
+                        == ModuleMaterialization::SectionRegions
                 })
                 .collect::<Vec<_>>();
             for module_id in section_region_modules {
-                mapped::repair_arena_layout_module(module_id, &mut plan, mapped_section_arenas)?;
+                mapped_runtime.repair_module(module_id, &mut plan)?;
             }
-            mapped::populate_mapped_arenas(&mut plan, mapped_section_arenas)?;
+            mapped_runtime.populate(&mut plan)?;
         }
 
         let (root, group_order, entries, memory_layout) = plan.into_parts();
@@ -371,18 +370,20 @@ where
          -> Result<RawDylib<D>> {
             match memory_layout
                 .module_materialization(module_id)
-                .unwrap_or(LayoutModuleMaterialization::WholeDsoRegion)
+                .unwrap_or(ModuleMaterialization::WholeDsoRegion)
             {
-                LayoutModuleMaterialization::SectionRegions => {
-                    let mut raw = mapped::build_arena_raw_dylib::<D, Tls>(
-                        module_id,
-                        scanned,
-                        &memory_layout,
-                        mapped_section_arenas.as_ref().ok_or_else(|| {
+                ModuleMaterialization::SectionRegions => {
+                    let runtime = mapped_runtime
+                        .as_mut()
+                        .ok_or_else(|| {
                             crate::custom_error(
-                                "section-region planned load is missing its mapped arenas",
+                                "section-region planned load is missing mapped runtime memory",
                             )
-                        })?,
+                        })?
+                        .take_module(module_id)?;
+                    let mut raw = mapped::build_arena_raw_dylib::<D, Tls>(
+                        scanned,
+                        runtime,
                         init_fn.clone(),
                         fini_fn.clone(),
                         force_static_tls,
@@ -390,7 +391,7 @@ where
                     loader.inner.post_load_dylib(&mut raw)?;
                     Ok(raw)
                 }
-                LayoutModuleMaterialization::WholeDsoRegion => {
+                ModuleMaterialization::WholeDsoRegion => {
                     let mut raw = loader.load_dylib_impl(scanned.into_reader())?;
                     apply_planned_section_overrides(&mut raw, module_id, &memory_layout)?;
                     Ok(raw)
@@ -415,7 +416,7 @@ where
         Ok(PreparedLoad::planned(
             module_keys[root.index()].clone(),
             session,
-            mapped_section_arenas,
+            mapped_runtime,
         ))
     }
 
@@ -438,15 +439,15 @@ where
         let PreparedLoad {
             root,
             mut session,
-            mapped_section_arenas,
+            mapped_runtime,
         } = prepared;
 
         if !session.resolve.entries.is_empty() {
             self.relocate_pending_modules(&root, &mut session, relocator, planner)?;
         }
 
-        if let Some(mapped_section_arenas) = mapped_section_arenas.as_ref() {
-            mapped::protect_mapped_arenas::<M>(mapped_section_arenas)?;
+        if let Some(mapped_runtime) = mapped_runtime.as_ref() {
+            mapped_runtime.protect::<M>()?;
         }
 
         self.commit_session(&mut session);
@@ -585,7 +586,7 @@ where
 struct PreparedLoad<K, D: 'static> {
     root: K,
     session: LoadSession<K, D>,
-    mapped_section_arenas: Option<mapped::MappedArenaMap>,
+    mapped_runtime: Option<mapped::MappedRuntimeMemory>,
 }
 
 impl<K, D: 'static> PreparedLoad<K, D> {
@@ -593,19 +594,19 @@ impl<K, D: 'static> PreparedLoad<K, D> {
         Self {
             root,
             session,
-            mapped_section_arenas: None,
+            mapped_runtime: None,
         }
     }
 
     fn planned(
         root: K,
         session: LoadSession<K, D>,
-        mapped_section_arenas: Option<mapped::MappedArenaMap>,
+        mapped_runtime: Option<mapped::MappedRuntimeMemory>,
     ) -> Self {
         Self {
             root,
             session,
-            mapped_section_arenas,
+            mapped_runtime,
         }
     }
 }
