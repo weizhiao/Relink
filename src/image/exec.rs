@@ -56,6 +56,18 @@ impl<D> StaticImage<D> {
     pub fn base(&self) -> usize {
         self.inner.segments.base()
     }
+
+    pub(crate) fn mapped_base(&self) -> usize {
+        self.inner.segments.mapped_base()
+    }
+
+    pub fn mapped_len(&self) -> usize {
+        self.inner.segments.mapped_len()
+    }
+
+    pub fn contains_addr(&self, addr: usize) -> bool {
+        self.inner.segments.contains_addr(addr)
+    }
 }
 
 struct StaticImageInner<D> {
@@ -197,11 +209,27 @@ impl<D: 'static> RawExec<D> {
         }
     }
 
-    /// Returns the total length of memory that will be occupied by the executable after relocation.
+    /// Returns the length of the bounding runtime span covered by mapped slices.
     pub fn mapped_len(&self) -> usize {
         match &self.inner {
             ExecImageInner::Dynamic(image) => image.mapped_len(),
-            ExecImageInner::Static(image) => image.inner.segments.len(),
+            ExecImageInner::Static(image) => image.mapped_len(),
+        }
+    }
+
+    /// Returns the lowest runtime address covered by this executable's mapped slices.
+    pub(crate) fn mapped_base(&self) -> usize {
+        match &self.inner {
+            ExecImageInner::Dynamic(image) => image.mapped_base(),
+            ExecImageInner::Static(image) => image.mapped_base(),
+        }
+    }
+
+    /// Returns whether `addr` is inside one of this executable's mapped slices.
+    pub fn contains_addr(&self, addr: usize) -> bool {
+        match &self.inner {
+            ExecImageInner::Dynamic(image) => image.contains_addr(addr),
+            ExecImageInner::Static(image) => image.contains_addr(addr),
         }
     }
 
@@ -247,11 +275,19 @@ impl<D> LoadedExec<D> {
         }
     }
 
-    /// Returns the total length of memory occupied by the executable.
+    /// Returns the length of the bounding runtime span covered by mapped slices.
     pub fn mapped_len(&self) -> usize {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => unsafe { module.core_ref().mapped_len() },
-            LoadedExecInner::Static(static_image) => static_image.inner.segments.len(),
+            LoadedExecInner::Static(static_image) => static_image.mapped_len(),
+        }
+    }
+
+    /// Returns whether `addr` is inside one of this executable's mapped slices.
+    pub fn contains_addr(&self, addr: usize) -> bool {
+        match &self.inner {
+            LoadedExecInner::Dynamic(module) => module.contains_addr(addr),
+            LoadedExecInner::Static(static_image) => static_image.contains_addr(addr),
         }
     }
 

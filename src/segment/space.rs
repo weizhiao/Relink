@@ -85,6 +85,7 @@ impl ElfSegmentSlice {
 ///
 /// This type now supports both a single contiguous legacy mapping and a sparse
 /// collection of mapped slices backed by one or more shared arena mappings.
+/// The slices are kept sorted by offset and must not overlap.
 pub struct ElfSegments {
     base: usize,
     len: usize,
@@ -116,11 +117,22 @@ impl ElfSegments {
 
     #[inline]
     fn bounding_len(slices: &[ElfSegmentSlice]) -> usize {
-        slices
-            .iter()
-            .filter_map(|slice| slice.offset.checked_add(slice.len))
-            .max()
-            .unwrap_or(0)
+        let Some(last) = slices.last() else {
+            return 0;
+        };
+        last.offset
+            .checked_add(last.len)
+            .expect("ELF segment slice range overflowed")
+    }
+
+    #[inline]
+    fn slice_base(&self, slice: &ElfSegmentSlice) -> usize {
+        self.base.saturating_add(slice.offset)
+    }
+
+    #[inline]
+    fn slice_end(&self, slice: &ElfSegmentSlice) -> usize {
+        self.slice_base(slice).saturating_add(slice.len)
     }
 
     /// Create a new contiguous [`ElfSegments`] instance with `base == memory`.
@@ -152,7 +164,19 @@ impl ElfSegments {
 
     /// Creates an [`ElfSegments`] instance from explicit mapped slices.
     pub(crate) fn from_slices(base: usize, mut slices: Vec<ElfSegmentSlice>) -> Self {
-        slices.sort_by_key(ElfSegmentSlice::offset);
+        slices.sort_by_key(|slice| (slice.offset(), slice.len()));
+        for pair in slices.windows(2) {
+            let previous = &pair[0];
+            let next = &pair[1];
+            let previous_end = previous
+                .offset
+                .checked_add(previous.len)
+                .expect("ELF segment slice range overflowed");
+            assert!(
+                previous_end <= next.offset,
+                "ELF segment slices must not overlap",
+            );
+        }
         let slices = slices.into_boxed_slice();
         let len = Self::bounding_len(&slices);
         Self { base, len, slices }
@@ -202,6 +226,42 @@ impl ElfSegments {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.slices.is_empty()
+    }
+
+    /// Returns the lowest runtime address covered by this image's mapped slices.
+    #[inline]
+    pub fn mapped_base(&self) -> usize {
+        self.slices
+            .first()
+            .map(|slice| self.slice_base(slice))
+            .unwrap_or(0)
+    }
+
+    /// Returns the length of the bounding runtime span covered by mapped slices.
+    #[inline]
+    pub fn mapped_len(&self) -> usize {
+        let Some((first, last)) = self.slices.first().zip(self.slices.last()) else {
+            return 0;
+        };
+        let base = self.slice_base(first);
+        let end = self.slice_end(last);
+        end.saturating_sub(base)
+    }
+
+    /// Returns whether `addr` is inside one of this image's mapped slices.
+    #[inline]
+    pub fn contains_addr(&self, addr: usize) -> bool {
+        self.slices.iter().any(|slice| {
+            addr.checked_sub(self.slice_base(slice))
+                .is_some_and(|offset| offset < slice.len)
+        })
+    }
+
+    /// Returns whether the backing memory is one contiguous span with no gaps.
+    pub fn is_contiguous_mapping(&self) -> bool {
+        self.slices
+            .windows(2)
+            .all(|pair| self.slice_end(&pair[0]) == self.slice_base(&pair[1]))
     }
 
     /// Gets a slice from the mapped memory.

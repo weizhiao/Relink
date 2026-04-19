@@ -3,9 +3,9 @@ use crate::linker::mapped::rewrite::RuntimeMetadataRewriter;
 use crate::linker::plan::{LinkModuleId, LinkPlan};
 use crate::{
     Result,
-    elf::{ElfDyn, ElfPhdr, ElfPhdrs, ElfProgramType},
+    elf::{ElfDyn, ElfPhdrs, ElfProgramType},
     entity::SecondaryMap,
-    image::{LoadedMemorySlice, RawDylib, ScannedDylib},
+    image::{RawDylib, ScannedDylib},
     loader::DynLifecycleHandler,
     os::Mmap,
     segment::ElfSegments,
@@ -22,7 +22,6 @@ use arena::MappedArenaMap;
 pub(crate) struct RuntimeModuleMemory {
     sections: Box<[RuntimeSectionMemory]>,
     segments: ElfSegments,
-    memory_slices: Box<[LoadedMemorySlice]>,
 }
 
 #[derive(Default)]
@@ -91,11 +90,6 @@ impl RuntimeModuleMemory {
         };
 
         let mut segment_slices = Vec::with_capacity(placed_sections.len());
-        let mut memory_slices = placed_sections
-            .iter()
-            .map(|(_, _, _, actual_address, size)| LoadedMemorySlice::new(*actual_address, *size))
-            .collect::<Vec<_>>();
-        memory_slices.sort_unstable_by_key(|slice| slice.base());
         let mut runtime_sections = Vec::with_capacity(placed_sections.len());
 
         for (section, layout_address, source_address, actual_address, size) in &placed_sections {
@@ -119,7 +113,6 @@ impl RuntimeModuleMemory {
         Ok(RuntimeModuleMemory {
             sections: runtime_sections.into_boxed_slice(),
             segments: ElfSegments::from_slices(base, segment_slices),
-            memory_slices: memory_slices.into_boxed_slice(),
         })
     }
 
@@ -213,10 +206,50 @@ where
     Tls: TlsResolver,
 {
     let original_phdrs = scanned.phdrs().to_vec();
-    let dynamic_ptr = dynamic_ptr(&original_phdrs, &runtime)?;
-    let eh_frame_hdr = eh_frame_hdr(&original_phdrs, &runtime)?;
-    let tls_info = tls_info(&original_phdrs, &runtime)?;
-    let entry = remap_entry(scanned.ehdr().e_entry(), &runtime)?;
+    let mut dynamic_ptr: Option<NonNull<ElfDyn>> = None;
+    let mut eh_frame_hdr: Option<NonNull<u8>> = None;
+    let mut tls_info: Option<TlsInfo> = None;
+
+    for phdr in &original_phdrs {
+        match phdr.program_type() {
+            ElfProgramType::DYNAMIC => {
+                let offset = runtime
+                    .remap_source_address(phdr.p_vaddr())?
+                    .ok_or_else(|| crate::custom_error("failed to remap PT_DYNAMIC"))?;
+                dynamic_ptr = Some(
+                    NonNull::new(runtime.segments.get_mut_ptr(offset)).ok_or_else(|| {
+                        crate::custom_error("PT_DYNAMIC remapped to a null pointer")
+                    })?,
+                );
+            }
+            ElfProgramType::GNU_EH_FRAME => {
+                let offset = runtime
+                    .remap_source_address(phdr.p_vaddr())?
+                    .ok_or_else(|| crate::custom_error("failed to remap PT_GNU_EH_FRAME"))?;
+                eh_frame_hdr = Some(
+                    NonNull::new(runtime.segments.get_mut_ptr(offset)).ok_or_else(|| {
+                        crate::custom_error("PT_GNU_EH_FRAME remapped to a null pointer")
+                    })?,
+                );
+            }
+            ElfProgramType::TLS => {
+                let offset = runtime
+                    .remap_source_address(phdr.p_vaddr())?
+                    .ok_or_else(|| crate::custom_error("failed to remap PT_TLS"))?;
+                let image = runtime.segments.get_slice::<u8>(offset, phdr.p_filesz());
+                tls_info = Some(TlsInfo::new(phdr, image));
+            }
+            _ => {}
+        }
+    }
+
+    let dynamic_ptr = dynamic_ptr
+        .ok_or_else(|| crate::custom_error("arena-backed module is missing PT_DYNAMIC"))?;
+    let original_entry = scanned.ehdr().e_entry();
+    let entry = runtime
+        .remap_source_address(original_entry)?
+        .map(|offset| runtime.segments.base_addr().offset(offset))
+        .unwrap_or_else(|| runtime.segments.base_addr().offset(original_entry));
     let name = scanned.name().to_string();
     let user_data = core::mem::take(scanned.user_data_mut());
 
@@ -231,54 +264,8 @@ where
         force_static_tls,
         relro: None,
         segments: runtime.segments,
-        memory_slices: runtime.memory_slices,
         init_fn,
         fini_fn,
         user_data,
     })
-}
-
-fn dynamic_ptr(phdrs: &[ElfPhdr], runtime: &RuntimeModuleMemory) -> Result<NonNull<ElfDyn>> {
-    let phdr = program_header(phdrs, ElfProgramType::DYNAMIC)
-        .ok_or_else(|| crate::custom_error("arena-backed module is missing PT_DYNAMIC"))?;
-    let offset = runtime
-        .remap_source_address(phdr.p_vaddr())?
-        .ok_or_else(|| crate::custom_error("failed to remap PT_DYNAMIC"))?;
-    NonNull::new(runtime.segments.get_mut_ptr(offset))
-        .ok_or_else(|| crate::custom_error("PT_DYNAMIC remapped to a null pointer"))
-}
-
-fn eh_frame_hdr(phdrs: &[ElfPhdr], runtime: &RuntimeModuleMemory) -> Result<Option<NonNull<u8>>> {
-    let Some(phdr) = program_header(phdrs, ElfProgramType::GNU_EH_FRAME) else {
-        return Ok(None);
-    };
-    let Some(offset) = runtime.remap_source_address(phdr.p_vaddr())? else {
-        return Ok(None);
-    };
-    Ok(NonNull::new(runtime.segments.get_mut_ptr(offset)))
-}
-
-fn tls_info(phdrs: &[ElfPhdr], runtime: &RuntimeModuleMemory) -> Result<Option<TlsInfo>> {
-    let Some(phdr) = program_header(phdrs, ElfProgramType::TLS) else {
-        return Ok(None);
-    };
-    let Some(offset) = runtime.remap_source_address(phdr.p_vaddr())? else {
-        return Ok(None);
-    };
-    let image = runtime.segments.get_slice::<u8>(offset, phdr.p_filesz());
-    Ok(Some(TlsInfo::new(phdr, image)))
-}
-
-fn remap_entry(
-    original_entry: usize,
-    runtime: &RuntimeModuleMemory,
-) -> Result<crate::relocation::RelocAddr> {
-    Ok(runtime
-        .remap_source_address(original_entry)?
-        .map(|offset| runtime.segments.base_addr().offset(offset))
-        .unwrap_or_else(|| runtime.segments.base_addr().offset(original_entry)))
-}
-
-fn program_header(phdrs: &[ElfPhdr], kind: ElfProgramType) -> Option<&ElfPhdr> {
-    phdrs.iter().find(|phdr| phdr.program_type() == kind)
 }

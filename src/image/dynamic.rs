@@ -14,10 +14,7 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, ptr::NonNull};
 
-use super::{
-    ElfCore, LoadedMemorySlice,
-    core::{CoreInner, single_memory_slice},
-};
+use super::{ElfCore, core::CoreInner};
 
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo {
@@ -55,7 +52,6 @@ pub(crate) struct DynamicImageParts<D> {
     pub(crate) force_static_tls: bool,
     pub(crate) relro: Option<ELFRelro>,
     pub(crate) segments: crate::segment::ElfSegments,
-    pub(crate) memory_slices: Box<[LoadedMemorySlice]>,
     pub(crate) init_fn: DynLifecycleHandler,
     pub(crate) fini_fn: DynLifecycleHandler,
     pub(crate) user_data: D,
@@ -273,9 +269,19 @@ impl<D> DynamicImage<D> {
         self.module.base()
     }
 
-    /// Gets the total length of mapped memory for the ELF object
+    /// Gets the length of the bounding runtime span covered by mapped memory.
     pub(crate) fn mapped_len(&self) -> usize {
-        self.module.segments().len()
+        self.module.mapped_len()
+    }
+
+    /// Gets the lowest runtime address covered by mapped memory.
+    pub(crate) fn mapped_base(&self) -> usize {
+        self.module.mapped_base()
+    }
+
+    /// Returns whether `addr` is inside one of this image's mapped slices.
+    pub(crate) fn contains_addr(&self, addr: usize) -> bool {
+        self.module.contains_addr(addr)
     }
 
     /// Gets the list of needed library names from the dynamic section
@@ -313,7 +319,6 @@ impl<D: 'static> DynamicImage<D> {
             force_static_tls,
             relro,
             segments,
-            memory_slices,
             init_fn,
             fini_fn,
             user_data,
@@ -403,7 +408,6 @@ impl<D: 'static> DynamicImage<D> {
                         Tls::unregister,
                     ),
                     segments,
-                    memory_slices,
                 }),
             },
         })
@@ -425,7 +429,6 @@ impl<D: 'static> DynamicImage<D> {
         let dynamic_ptr = builder
             .dynamic_ptr
             .ok_or(ParsePhdrError::MissingDynamicSection)?;
-        let memory_slices = single_memory_slice(&builder.segments);
         let phdrs = builder.create_phdrs(phdrs);
         Self::from_parts::<Tls>(DynamicImageParts {
             name: builder.name,
@@ -446,7 +449,6 @@ impl<D: 'static> DynamicImage<D> {
             force_static_tls: builder.static_tls,
             relro: builder.relro,
             segments: builder.segments,
-            memory_slices,
             init_fn: builder.init_fn,
             fini_fn: builder.fini_fn,
             user_data: builder.user_data,

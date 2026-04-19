@@ -154,9 +154,19 @@ impl<D> RawDylib<D> {
         self.inner.base()
     }
 
-    /// Returns the total length of mapped memory for the ELF object.
+    /// Returns the length of the bounding runtime span covered by mapped slices.
     pub fn mapped_len(&self) -> usize {
         self.inner.mapped_len()
+    }
+
+    /// Returns the lowest runtime address covered by this object's mapped slices.
+    pub(crate) fn mapped_base(&self) -> usize {
+        self.inner.core_ref().mapped_base()
+    }
+
+    /// Returns whether `addr` is inside one of this object's mapped slices.
+    pub fn contains_addr(&self, addr: usize) -> bool {
+        self.inner.contains_addr(addr)
     }
 
     /// Returns the list of needed library names from the dynamic section.

@@ -12,7 +12,7 @@ use crate::{
 
 /// The requested materialization mode for one module during planned load.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum ModuleMaterialization {
+pub enum Materialization {
     /// Materialize the full DSO into a private region with multiple
     /// permission-specific mapped areas derived from `PT_LOAD`.
     #[default]
@@ -21,7 +21,7 @@ pub enum ModuleMaterialization {
     SectionRegions,
 }
 
-impl ModuleMaterialization {
+impl Materialization {
     pub(crate) const fn default_for_capability(capability: ModuleCapability) -> Self {
         if capability.supports_reorder_repair() {
             Self::SectionRegions
@@ -40,7 +40,7 @@ impl ModuleMaterialization {
 pub struct MemoryLayoutPlan {
     arenas: PrimaryMap<LayoutArenaId, LayoutArena>,
     modules: PrimaryMap<LinkModuleId, ModuleLayout>,
-    materialization: SecondaryMap<LinkModuleId, ModuleMaterialization>,
+    materialization: SecondaryMap<LinkModuleId, Materialization>,
     sections: LayoutSectionArena,
 }
 
@@ -89,7 +89,7 @@ impl MemoryLayoutPlan {
 
     /// Returns the currently configured materialization mode for one module.
     #[inline]
-    pub fn module_materialization(&self, module_id: LinkModuleId) -> Option<ModuleMaterialization> {
+    pub fn module_materialization(&self, module_id: LinkModuleId) -> Option<Materialization> {
         self.materialization.get(module_id).copied()
     }
 
@@ -98,8 +98,8 @@ impl MemoryLayoutPlan {
     pub fn set_module_materialization(
         &mut self,
         module_id: LinkModuleId,
-        mode: ModuleMaterialization,
-    ) -> Option<ModuleMaterialization> {
+        mode: Materialization,
+    ) -> Option<Materialization> {
         self.materialization.insert(module_id, mode)
     }
 
@@ -287,7 +287,7 @@ impl MemoryLayoutPlan {
             }
             if !self.materialization.contains_key(module_id) {
                 self.materialization
-                    .insert(module_id, ModuleMaterialization::WholeDsoRegion);
+                    .insert(module_id, Materialization::WholeDsoRegion);
             }
             return Some(previous);
         }
@@ -303,7 +303,7 @@ impl MemoryLayoutPlan {
             "layout module id assignment drifted"
         );
         self.materialization
-            .insert(module_id, ModuleMaterialization::WholeDsoRegion);
+            .insert(module_id, Materialization::WholeDsoRegion);
         None
     }
 
@@ -315,8 +315,7 @@ impl MemoryLayoutPlan {
     {
         let mut plan = Self::default();
         for (module_id, module) in modules {
-            let materialization =
-                ModuleMaterialization::default_for_capability(module.capability());
+            let materialization = Materialization::default_for_capability(module.capability());
             let layout = ModuleLayout::from_scanned(module_id, module, &mut plan.sections);
             plan.insert_module(module_id, layout);
             let _ = plan.set_module_materialization(module_id, materialization);

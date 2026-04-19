@@ -21,8 +21,8 @@ pub use context::LinkContext;
 pub use layout::{
     LayoutAddress, LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutArenaUsage,
     LayoutClassPolicy, LayoutMemoryClass, LayoutPackingPolicy, LayoutSectionArena, LayoutSectionId,
-    LayoutSectionMetadata, LayoutSectionRecord, MemoryLayoutPlan, ModuleLayout,
-    ModuleMaterialization, SectionPlacement,
+    LayoutSectionMetadata, LayoutSectionRecord, Materialization, MemoryLayoutPlan, ModuleLayout,
+    SectionPlacement,
 };
 pub use plan::{LinkModuleId, LinkPass, LinkPassPlan, LinkPassScope, LinkPipeline};
 pub use request::{

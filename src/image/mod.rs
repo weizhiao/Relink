@@ -31,7 +31,7 @@ pub(crate) use dynamic::DynamicInfo;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use dynamic::LazyBindingInfo;
 
-pub use core::{ElfCore, ElfCoreRef, LoadedCore, LoadedMemorySlice};
+pub use core::{ElfCore, ElfCoreRef, LoadedCore};
 pub use dylib::{LoadedDylib, RawDylib};
 pub use exec::{LoadedExec, RawExec};
 #[cfg(feature = "object")]
@@ -104,7 +104,7 @@ impl<D: 'static> RawElf<D> {
         }
     }
 
-    /// Gets the total length of mapped memory for the ELF file
+    /// Gets the length of the bounding runtime span covered by mapped memory.
     #[inline]
     pub fn mapped_len(&self) -> usize {
         match self {
@@ -112,6 +112,17 @@ impl<D: 'static> RawElf<D> {
             RawElf::Exec(exec) => exec.mapped_len(),
             #[cfg(feature = "object")]
             RawElf::Object(object) => object.mapped_len(),
+        }
+    }
+
+    /// Returns whether `addr` is inside this image's mapped memory.
+    #[inline]
+    pub fn contains_addr(&self, addr: usize) -> bool {
+        match self {
+            RawElf::Dylib(dylib) => dylib.contains_addr(addr),
+            RawElf::Exec(exec) => exec.contains_addr(addr),
+            #[cfg(feature = "object")]
+            RawElf::Object(object) => object.contains_addr(addr),
         }
     }
 
@@ -252,6 +263,28 @@ impl<D> LoadedElf<D> {
             LoadedElf::Exec(exec) => exec.name(),
             #[cfg(feature = "object")]
             LoadedElf::Object(object) => object.name(),
+        }
+    }
+
+    /// Gets the length of the bounding runtime span covered by mapped memory.
+    #[inline]
+    pub fn mapped_len(&self) -> usize {
+        match self {
+            LoadedElf::Dylib(dylib) => dylib.mapped_len(),
+            LoadedElf::Exec(exec) => exec.mapped_len(),
+            #[cfg(feature = "object")]
+            LoadedElf::Object(object) => object.mapped_len(),
+        }
+    }
+
+    /// Returns whether `addr` is inside this image's mapped memory.
+    #[inline]
+    pub fn contains_addr(&self, addr: usize) -> bool {
+        match self {
+            LoadedElf::Dylib(dylib) => dylib.contains_addr(addr),
+            LoadedElf::Exec(exec) => exec.contains_addr(addr),
+            #[cfg(feature = "object")]
+            LoadedElf::Object(object) => object.contains_addr(addr),
         }
     }
 }

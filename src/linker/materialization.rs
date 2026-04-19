@@ -1,8 +1,8 @@
 use super::{
     layout::{
         LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutClassPolicy, LayoutMemoryClass,
-        LayoutPackingPolicy, LayoutSectionId, MemoryLayoutPlan, ModuleLayout,
-        ModuleMaterialization, SectionPlacement,
+        LayoutPackingPolicy, LayoutSectionId, Materialization, MemoryLayoutPlan, ModuleLayout,
+        SectionPlacement,
     },
     plan::{LinkModuleId, LinkPlan},
 };
@@ -20,7 +20,7 @@ where
         let layout = plan.memory_layout();
         let module = layout.module(module_id);
         let mode = resolve_materialization_mode(&*plan, module_id, module)?;
-        has_section_regions |= mode == ModuleMaterialization::SectionRegions;
+        has_section_regions |= mode == Materialization::SectionRegions;
         let _ = plan.set_module_materialization(module_id, mode);
         Ok(())
     })?;
@@ -34,7 +34,7 @@ where
 
     plan.try_for_each_module(|plan, module_id| {
         let layout = plan.memory_layout();
-        if layout.module_materialization(module_id) != Some(ModuleMaterialization::SectionRegions) {
+        if layout.module_materialization(module_id) != Some(Materialization::SectionRegions) {
             return Ok(());
         }
 
@@ -48,7 +48,7 @@ where
 
     plan.try_for_each_module(|plan, module_id| {
         let layout = plan.memory_layout();
-        if layout.module_materialization(module_id) != Some(ModuleMaterialization::SectionRegions) {
+        if layout.module_materialization(module_id) != Some(Materialization::SectionRegions) {
             return Ok(());
         }
         let alloc_sections = layout.module(module_id).alloc_sections().to_vec();
@@ -73,7 +73,7 @@ fn resolve_materialization_mode<K, D>(
     plan: &LinkPlan<K, D>,
     module_id: LinkModuleId,
     module: &ModuleLayout,
-) -> Result<ModuleMaterialization>
+) -> Result<Materialization>
 where
     K: Clone + Ord,
     D: 'static,
@@ -84,7 +84,7 @@ where
         .expect("ordered layout referenced a module without capability metadata");
     let requested = layout
         .module_materialization(module_id)
-        .unwrap_or_else(|| ModuleMaterialization::default_for_capability(capability));
+        .unwrap_or_else(|| Materialization::default_for_capability(capability));
     let has_section_placement = module
         .alloc_sections()
         .iter()
@@ -98,15 +98,15 @@ where
                 ));
             }
             match requested {
-                ModuleMaterialization::WholeDsoRegion => Ok(ModuleMaterialization::WholeDsoRegion),
-                ModuleMaterialization::SectionRegions => Err(crate::custom_error(
+                Materialization::WholeDsoRegion => Ok(Materialization::WholeDsoRegion),
+                Materialization::SectionRegions => Err(crate::custom_error(
                     "modules without section-reorder repair support cannot use section regions",
                 )),
             }
         }
         ModuleCapability::SectionReorderable => {
             if has_section_placement {
-                Ok(ModuleMaterialization::SectionRegions)
+                Ok(Materialization::SectionRegions)
             } else {
                 Ok(requested)
             }

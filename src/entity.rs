@@ -1,5 +1,6 @@
-use alloc::vec::Vec;
+use alloc::vec::{IntoIter, Vec};
 use core::{
+    iter::Enumerate,
     marker::PhantomData,
     ops::{Index, IndexMut},
 };
@@ -54,6 +55,11 @@ pub(crate) use entity_ref;
 #[derive(Debug, Clone)]
 pub struct PrimaryMap<K, V> {
     values: Vec<V>,
+    marker: PhantomData<fn() -> K>,
+}
+
+pub struct PrimaryMapIntoIter<K, V> {
+    values: Enumerate<IntoIter<V>>,
     marker: PhantomData<fn() -> K>,
 }
 
@@ -151,11 +157,42 @@ where
         let (current, after) = current_and_after.split_first_mut()?;
         Some((before, current, after))
     }
+}
 
-    /// Consumes the primary map and returns its dense values.
+impl<K, V> Iterator for PrimaryMapIntoIter<K, V>
+where
+    K: EntityRef,
+{
+    type Item = (K, V);
+
     #[inline]
-    pub fn into_values(self) -> Vec<V> {
+    fn next(&mut self) -> Option<Self::Item> {
         self.values
+            .next()
+            .map(|(index, value)| (K::new(index), value))
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.values.size_hint()
+    }
+}
+
+impl<K, V> ExactSizeIterator for PrimaryMapIntoIter<K, V> where K: EntityRef {}
+
+impl<K, V> IntoIterator for PrimaryMap<K, V>
+where
+    K: EntityRef,
+{
+    type Item = (K, V);
+    type IntoIter = PrimaryMapIntoIter<K, V>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        PrimaryMapIntoIter {
+            values: self.values.into_iter().enumerate(),
+            marker: PhantomData,
+        }
     }
 }
 
@@ -363,6 +400,18 @@ mod tests {
         assert_eq!(arena[second], 19);
         assert_eq!(arena[third], 23);
         assert!(arena.split_at_mut(TestId::new(3)).is_none());
+    }
+
+    #[test]
+    fn primary_map_consuming_iterator_yields_keys_and_values() {
+        let mut arena = PrimaryMap::<TestId, u32>::new();
+        let first = arena.push(7);
+        let second = arena.push(11);
+
+        assert_eq!(
+            arena.into_iter().collect::<Vec<_>>(),
+            [(first, 7), (second, 11)]
+        );
     }
 
     #[test]

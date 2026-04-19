@@ -1,4 +1,4 @@
-use super::super::layout::{LayoutArenaId, LayoutMemoryClass, ModuleMaterialization};
+use super::super::layout::{LayoutArenaId, LayoutMemoryClass, Materialization};
 use crate::linker::plan::LinkPlan;
 use crate::{
     Result,
@@ -30,17 +30,13 @@ impl MappedArenaMap {
         M: Mmap,
     {
         let needs_section_regions = plan.group_order_ids().iter().copied().any(|module_id| {
-            plan.module_materialization(module_id) == Some(ModuleMaterialization::SectionRegions)
+            plan.module_materialization(module_id) == Some(Materialization::SectionRegions)
         });
         if !needs_section_regions {
             return Ok(None);
         }
 
         let layout = plan.memory_layout();
-        if !layout.has_section_placements() {
-            return Ok(None);
-        }
-
         let mut arenas = Self::default();
 
         for (id, arena) in layout.arena_entries() {
@@ -49,7 +45,7 @@ impl MappedArenaMap {
                 continue;
             }
 
-            let ptr = unsafe {
+            let ptr: *mut core::ffi::c_void = unsafe {
                 M::mmap_anonymous(
                     0,
                     len,
@@ -257,7 +253,7 @@ mod tests {
             plan.memory_layout_mut()
                 .assign_section_to_arena(section, arena, 0)
         );
-        plan.set_module_materialization(root, ModuleMaterialization::SectionRegions);
+        plan.set_module_materialization(root, Materialization::SectionRegions);
 
         let mut mapped = MappedArenaMap::map_plan::<DefaultMmap, _, _>(&plan)
             .unwrap()

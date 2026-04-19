@@ -1,5 +1,5 @@
 use super::{
-    layout::{MemoryLayoutPlan, ModuleMaterialization},
+    layout::{Materialization, MemoryLayoutPlan},
     mapped, materialization,
     plan::{LinkModuleId, LinkPipeline, LinkPlan},
     request::{RelocationPlanner, RelocationRequest},
@@ -10,6 +10,7 @@ use super::{
 };
 use crate::{
     AlignedBytes, CustomError, Loader, Result,
+    entity::SecondaryMap,
     image::{LoadedCore, RawDylib},
     loader::LoadHook,
     os::Mmap,
@@ -341,8 +342,8 @@ where
                 .copied()
                 .filter(|module_id| {
                     plan.module_materialization(*module_id)
-                        .unwrap_or(ModuleMaterialization::WholeDsoRegion)
-                        == ModuleMaterialization::SectionRegions
+                        .unwrap_or(Materialization::WholeDsoRegion)
+                        == Materialization::SectionRegions
                 })
                 .collect::<Vec<_>>();
             for module_id in section_region_modules {
@@ -355,14 +356,13 @@ where
         let (init_fn, fini_fn) = loader.inner.lifecycle_handlers();
         let force_static_tls = loader.inner.force_static_tls();
         let mut session = LoadSession::new();
-        let module_keys = entries
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect::<Vec<_>>();
-        let mut entries = entries.into_iter().map(Some).collect::<Vec<_>>();
+        let mut module_keys = SecondaryMap::default();
+        for (module_id, entry) in entries.iter() {
+            let _ = module_keys.insert(module_id, entry.key().clone());
+        }
         session.resolve.group_order = group_order
             .iter()
-            .map(|module_id| module_keys[module_id.index()].clone())
+            .map(|module_id| module_keys[*module_id].clone())
             .collect();
 
         let mut materialize_raw = |module_id: LinkModuleId,
@@ -370,9 +370,9 @@ where
          -> Result<RawDylib<D>> {
             match memory_layout
                 .module_materialization(module_id)
-                .unwrap_or(ModuleMaterialization::WholeDsoRegion)
+                .unwrap_or(Materialization::WholeDsoRegion)
             {
-                ModuleMaterialization::SectionRegions => {
+                Materialization::SectionRegions => {
                     let runtime = mapped_runtime
                         .as_mut()
                         .ok_or_else(|| {
@@ -391,7 +391,7 @@ where
                     loader.inner.post_load_dylib(&mut raw)?;
                     Ok(raw)
                 }
-                ModuleMaterialization::WholeDsoRegion => {
+                Materialization::WholeDsoRegion => {
                     let mut raw = loader.load_dylib_impl(scanned.into_reader())?;
                     apply_planned_section_overrides(&mut raw, module_id, &memory_layout)?;
                     Ok(raw)
@@ -399,22 +399,19 @@ where
             }
         };
 
-        for module_id in &group_order {
-            let entry = entries[module_id.index()]
-                .take()
-                .expect("planned load group order referenced a missing module entry");
+        for (module_id, entry) in entries {
             let (key, module, direct_dep_ids) = entry.into_parts();
             let direct_deps = direct_dep_ids
                 .iter()
-                .map(|dep_id| module_keys[dep_id.index()].clone())
+                .map(|dep_id| module_keys[*dep_id].clone())
                 .collect::<Vec<_>>()
                 .into_boxed_slice();
-            let raw = materialize_raw(*module_id, module)?;
+            let raw = materialize_raw(module_id, module)?;
             session.insert_resolved_pending(key, raw, direct_deps);
         }
 
         Ok(PreparedLoad::planned(
-            module_keys[root.index()].clone(),
+            module_keys[root].clone(),
             session,
             mapped_runtime,
         ))

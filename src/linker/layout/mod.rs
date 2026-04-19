@@ -5,7 +5,6 @@
 //! arena policy, section metadata/data, and derived placement/repair state.
 
 mod arena;
-mod derived;
 mod plan;
 mod section;
 
@@ -16,9 +15,8 @@ pub use arena::{
     LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutArenaUsage, LayoutClassPolicy,
     LayoutMemoryClass, LayoutPackingPolicy,
 };
-pub use derived::LayoutAddress;
-pub use plan::{MemoryLayoutPlan, ModuleMaterialization};
+pub use plan::{Materialization, MemoryLayoutPlan};
 pub use section::{
-    LayoutSectionArena, LayoutSectionId, LayoutSectionMetadata, LayoutSectionRecord, ModuleLayout,
-    SectionPlacement,
+    LayoutAddress, LayoutSectionArena, LayoutSectionId, LayoutSectionMetadata, LayoutSectionRecord,
+    ModuleLayout, SectionPlacement,
 };

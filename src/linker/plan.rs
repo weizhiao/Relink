@@ -1,6 +1,6 @@
 use super::{
-    LayoutSectionArena, LayoutSectionId, LayoutSectionMetadata, MemoryLayoutPlan, ModuleLayout,
-    ModuleMaterialization,
+    LayoutSectionArena, LayoutSectionId, LayoutSectionMetadata, Materialization, MemoryLayoutPlan,
+    ModuleLayout,
 };
 use crate::{
     AlignedBytes, Result,
@@ -160,7 +160,7 @@ where
 
     /// Returns the configured materialization mode of `key`, when visible.
     #[inline]
-    pub fn module_materialization(&self, key: &K) -> Option<ModuleMaterialization> {
+    pub fn module_materialization(&self, key: &K) -> Option<Materialization> {
         let module_id = self.module_id(key)?;
         self.plan.module_materialization(module_id)
     }
@@ -170,8 +170,8 @@ where
     pub fn set_module_materialization(
         &mut self,
         module_id: LinkModuleId,
-        mode: ModuleMaterialization,
-    ) -> Option<ModuleMaterialization> {
+        mode: Materialization,
+    ) -> Option<Materialization> {
         self.plan
             .module_capability(module_id)
             .is_some_and(|capability| self.scope.matches(capability))
@@ -552,7 +552,7 @@ where
     pub(crate) fn module_materialization(
         &self,
         module_id: LinkModuleId,
-    ) -> Option<ModuleMaterialization> {
+    ) -> Option<Materialization> {
         self.memory_layout.module_materialization(module_id)
     }
 }
@@ -566,8 +566,8 @@ where
     pub fn set_module_materialization(
         &mut self,
         module_id: LinkModuleId,
-        mode: ModuleMaterialization,
-    ) -> Option<ModuleMaterialization> {
+        mode: Materialization,
+    ) -> Option<Materialization> {
         self.memory_layout
             .set_module_materialization(module_id, mode)
     }
@@ -683,13 +683,13 @@ where
     ) -> (
         LinkModuleId,
         Vec<LinkModuleId>,
-        Vec<PlannedModule<K, D>>,
+        PrimaryMap<LinkModuleId, PlannedModule<K, D>>,
         MemoryLayoutPlan,
     ) {
         (
             self.root,
             self.group_order,
-            self.entries.into_values(),
+            self.entries,
             self.memory_layout,
         )
     }

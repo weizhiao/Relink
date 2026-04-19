@@ -5,8 +5,8 @@ use elf_loader::{
     image::{LoadedCore, ModuleCapability},
     input::ElfBinary,
     linker::{
-        KeyResolver, LinkContext, LinkPassPlan, LinkPipeline, ModuleMaterialization,
-        RelocationInputs, RelocationRequest, ResolvedKey,
+        KeyResolver, LinkContext, LinkPassPlan, LinkPipeline, Materialization, RelocationInputs,
+        RelocationRequest, ResolvedKey,
     },
     linker::{LayoutArena, LayoutArenaSharing, LayoutMemoryClass},
     relocation::Relocator,
@@ -88,7 +88,7 @@ fn empty_relocation_plan(
 }
 
 #[test]
-fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_memory_slices() {
+fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
@@ -136,9 +136,7 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_memory_slice
         .expect("failed to execute scan-first load");
 
     assert!(loaded.is_contiguous_mapping());
-    assert_eq!(loaded.memory_slices().len(), 1);
-    assert_eq!(loaded.base(), loaded.memory_slices()[0].base());
-    assert_eq!(loaded.mapped_len(), loaded.memory_slices()[0].len());
+    assert!(loaded.mapped_len() > 0);
     assert!(context.contains_key(&"root"));
 
     unsafe {
@@ -146,6 +144,7 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_memory_slice
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
+        assert!(loaded.contains_addr(ptr as usize));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
     }
 }
@@ -179,9 +178,7 @@ fn load_with_scan_legacy_path_loads_without_an_intermediate_plan() {
         .expect("failed to execute merged scan-and-load path");
 
     assert!(loaded.is_contiguous_mapping());
-    assert_eq!(loaded.memory_slices().len(), 1);
-    assert_eq!(loaded.base(), loaded.memory_slices()[0].base());
-    assert_eq!(loaded.mapped_len(), loaded.memory_slices()[0].len());
+    assert!(loaded.mapped_len() > 0);
     assert!(context.contains_key(&"root"));
 
     unsafe {
@@ -189,6 +186,7 @@ fn load_with_scan_legacy_path_loads_without_an_intermediate_plan() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
+        assert!(loaded.contains_addr(ptr as usize));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
     }
 }
@@ -264,13 +262,9 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
         )
         .expect("failed to execute arena-backed scan-first load");
 
-    assert!(loaded.memory_slices().len() > 1);
     assert!(
-        loaded
-            .memory_slices()
-            .iter()
-            .any(|slice| slice.base() != loaded.base()),
-        "arena-backed load should expose multiple mapped slices",
+        !loaded.is_contiguous_mapping(),
+        "arena-backed load should expose a sparse mapped span",
     );
     assert!(context.contains_key(&"root"));
 
@@ -279,6 +273,7 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
+        assert!(loaded.contains_addr(ptr as usize));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
     }
 }
@@ -331,10 +326,10 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
     );
     assert_eq!(
         observed_materialization,
-        Some(ModuleMaterialization::SectionRegions),
+        Some(Materialization::SectionRegions),
     );
     assert!(
-        loaded.memory_slices().len() > 1,
+        !loaded.is_contiguous_mapping(),
         "section-region default should materialize alloc sections into mapped arenas",
     );
 
@@ -343,6 +338,7 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
+        assert!(loaded.contains_addr(ptr as usize));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
     }
 }
@@ -369,7 +365,7 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
             .get(&"root")
             .and_then(|module| module.section_headers())
             .is_none();
-        plan.set_module_materialization(root, ModuleMaterialization::WholeDsoRegion);
+        plan.set_module_materialization(root, Materialization::WholeDsoRegion);
         Ok(())
     };
     pipeline.push(&mut configure);
@@ -394,7 +390,7 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
         "opaque modules should not expose a usable section table",
     );
 
-    assert!(loaded.memory_slices().len() >= 1);
+    assert!(loaded.mapped_len() > 0);
     assert!(context.contains_key(&"root"));
 
     unsafe {
@@ -402,6 +398,7 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
+        assert!(loaded.contains_addr(ptr as usize));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
     }
 }
@@ -440,7 +437,7 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
         )
         .expect("scan-first load should downgrade unusable section tables");
 
-    assert!(loaded.memory_slices().len() >= 1);
+    assert!(loaded.mapped_len() > 0);
     assert_eq!(observed_capability, Some(ModuleCapability::Opaque));
 }
 
@@ -479,7 +476,7 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
             .expect("missing materialized .data bytes")
             .as_bytes_mut()
             .copy_from_slice(&[9, 8, 7, 6]);
-        plan.set_module_materialization(root, ModuleMaterialization::WholeDsoRegion);
+        plan.set_module_materialization(root, Materialization::WholeDsoRegion);
         Ok(())
     };
     pipeline.push(&mut configure);
@@ -505,11 +502,11 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
     );
     assert_eq!(
         observed_materialization,
-        Some(ModuleMaterialization::WholeDsoRegion),
+        Some(Materialization::WholeDsoRegion),
     );
 
     assert!(
-        !loaded.memory_slices().is_empty(),
+        loaded.mapped_len() > 0,
         "whole-DSO materialization should expose at least one mapped area",
     );
 
@@ -518,6 +515,7 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
+        assert!(loaded.contains_addr(ptr as usize));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
     }
 }
