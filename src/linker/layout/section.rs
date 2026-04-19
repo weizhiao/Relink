@@ -184,6 +184,12 @@ impl LayoutSectionMetadata {
         )
     }
 
+    /// Returns whether this metadata record describes the dynamic section.
+    #[inline]
+    pub const fn is_dynamic(&self) -> bool {
+        self.section_type.raw() == ElfSectionType::DYNAMIC.raw()
+    }
+
     /// Returns the mapped memory class for loadable sections.
     #[inline]
     pub fn memory_class(&self) -> Option<LayoutMemoryClass> {
@@ -430,6 +436,36 @@ impl LayoutSectionArena {
         self.record_mut(id).and_then(LayoutSectionRecord::data_mut)
     }
 
+    pub(crate) fn with_disjoint_data_mut<R>(
+        &mut self,
+        read_a: LayoutSectionId,
+        read_b: LayoutSectionId,
+        write: LayoutSectionId,
+        f: impl FnOnce(&AlignedBytes, &AlignedBytes, &mut AlignedBytes) -> R,
+    ) -> Option<R> {
+        debug_assert!(
+            read_a != read_b && read_a != write && read_b != write,
+            "disjoint section data request referenced the same section more than once",
+        );
+
+        let (before_write, write_record, after_write) = self.sections.split_at_mut(write)?;
+        let write_index = before_write.len();
+        let write_data = write_record.data_mut()?;
+
+        let read_record = |section: LayoutSectionId| {
+            let index = section.index();
+            if index < write_index {
+                before_write.get(index)
+            } else {
+                after_write.get(index - write_index - 1)
+            }
+        };
+
+        let read_a_data = read_record(read_a)?.data()?;
+        let read_b_data = read_record(read_b)?.data()?;
+        Some(f(read_a_data, read_b_data, write_data))
+    }
+
     #[inline]
     pub(crate) fn overrides_original_data(&self, section: LayoutSectionId) -> bool {
         self.record(section)
@@ -519,6 +555,7 @@ pub struct ModuleLayout {
     relocation_sections: Box<[LayoutSectionId]>,
     symbol_table_sections: Box<[LayoutSectionId]>,
     allocated_relocation_sections: Box<[LayoutSectionId]>,
+    dynamic_section: Option<LayoutSectionId>,
 }
 
 impl ModuleLayout {
@@ -539,6 +576,7 @@ impl ModuleLayout {
         let mut relocation_sections = Vec::new();
         let mut symbol_table_sections = Vec::new();
         let mut allocated_relocation_sections = Vec::new();
+        let mut dynamic_section = None;
 
         for (scanned_section, section_id) in sections {
             let scanned_section = scanned_section.into();
@@ -554,14 +592,20 @@ impl ModuleLayout {
             if section.is_allocated() {
                 alloc_sections.push(section_id);
             }
-            if section.is_relocation() {
-                relocation_sections.push(section_id);
-            }
             if section.is_symbol_table() {
                 symbol_table_sections.push(section_id);
             }
             if section.is_allocated_relocation() {
                 allocated_relocation_sections.push(section_id);
+            } else if section.is_relocation() {
+                relocation_sections.push(section_id);
+            }
+            if section.is_dynamic() {
+                let previous = dynamic_section.replace(section_id);
+                assert!(
+                    previous.is_none(),
+                    "module layout referenced duplicate dynamic section"
+                );
             }
         }
 
@@ -571,6 +615,7 @@ impl ModuleLayout {
             relocation_sections: relocation_sections.into_boxed_slice(),
             symbol_table_sections: symbol_table_sections.into_boxed_slice(),
             allocated_relocation_sections: allocated_relocation_sections.into_boxed_slice(),
+            dynamic_section,
         }
     }
 
@@ -621,7 +666,7 @@ impl ModuleLayout {
         &self.alloc_sections
     }
 
-    /// Returns the relocation section ids owned by the module.
+    /// Returns the non-allocated relocation section ids owned by the module.
     #[inline]
     pub fn relocation_sections(&self) -> &[LayoutSectionId] {
         &self.relocation_sections
@@ -637,6 +682,12 @@ impl ModuleLayout {
     #[inline]
     pub fn allocated_relocation_sections(&self) -> &[LayoutSectionId] {
         &self.allocated_relocation_sections
+    }
+
+    /// Returns the dynamic section owned by the module, when present.
+    #[inline]
+    pub fn dynamic_section(&self) -> Option<LayoutSectionId> {
+        self.dynamic_section
     }
 
     /// Returns one section id by its original scanned section id.

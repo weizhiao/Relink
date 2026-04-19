@@ -137,6 +137,21 @@ where
         &self.values
     }
 
+    /// Splits the dense storage around `key`.
+    ///
+    /// Returns the values before `key`, the value stored at `key`, and the
+    /// values after `key`.
+    #[inline]
+    pub(crate) fn split_at_mut(&mut self, key: K) -> Option<(&mut [V], &mut V, &mut [V])> {
+        let index = key.index();
+        if index >= self.values.len() {
+            return None;
+        }
+        let (before, current_and_after) = self.values.split_at_mut(index);
+        let (current, after) = current_and_after.split_first_mut()?;
+        Some((before, current, after))
+    }
+
     /// Consumes the primary map and returns its dense values.
     #[inline]
     pub fn into_values(self) -> Vec<V> {
@@ -324,6 +339,30 @@ mod tests {
         assert_eq!(arena[first], 7);
         arena[first] = 13;
         assert_eq!(arena[first], 13);
+    }
+
+    #[test]
+    fn primary_map_splits_around_key_mutably() {
+        let mut arena = PrimaryMap::<TestId, u32>::new();
+        let first = arena.push(7);
+        let second = arena.push(11);
+        let third = arena.push(13);
+
+        let (before, current, after) = arena
+            .split_at_mut(second)
+            .expect("second key should split the map");
+        assert_eq!(before, [7]);
+        assert_eq!(*current, 11);
+        assert_eq!(after, [13]);
+
+        before[0] = 17;
+        *current = 19;
+        after[0] = 23;
+
+        assert_eq!(arena[first], 17);
+        assert_eq!(arena[second], 19);
+        assert_eq!(arena[third], 23);
+        assert!(arena.split_at_mut(TestId::new(3)).is_none());
     }
 
     #[test]

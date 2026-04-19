@@ -69,69 +69,6 @@ fn alloc_section_with_address(
     )
 }
 
-fn relocation_metadata(
-    sections: &mut LayoutSectionArena,
-    section: usize,
-    name: &str,
-    target: Option<super::LayoutSectionId>,
-    symtab: Option<super::LayoutSectionId>,
-) -> super::LayoutSectionId {
-    sections.insert(
-        ROOT_MODULE,
-        LayoutSectionMetadata::new(
-            section,
-            name,
-            ElfSectionType::RELA,
-            ElfSectionFlags::empty(),
-            symtab,
-            target,
-            0,
-            0,
-            size_of::<ElfRela>(),
-            8,
-        ),
-    )
-}
-
-#[test]
-fn module_layout_tracks_scanned_section_ids_and_kinds() {
-    let mut sections = LayoutSectionArena::new();
-    let text = alloc_section(
-        &mut sections,
-        3,
-        ".text",
-        LayoutMemoryClass::Code,
-        64,
-        16,
-        false,
-    );
-    let reloc = relocation_metadata(&mut sections, 4, ".rela.text", Some(text), Some(text));
-    let debug = sections.insert(
-        ROOT_MODULE,
-        LayoutSectionMetadata::new(
-            5,
-            ".debug_info",
-            ElfSectionType::PROGBITS,
-            ElfSectionFlags::empty(),
-            None::<super::LayoutSectionId>,
-            None::<super::LayoutSectionId>,
-            0,
-            0,
-            24,
-            1,
-        ),
-    );
-
-    let layout = ModuleLayout::from_sections([(3, text), (4, reloc), (5, debug)], &sections);
-
-    assert_eq!(layout.section_entries().count(), 3);
-    assert_eq!(layout.alloc_sections(), [text].as_slice());
-    assert_eq!(layout.relocation_sections(), [reloc].as_slice());
-    assert_eq!(layout.section_id(3), Some(text));
-    assert_eq!(layout.section_id(4), Some(reloc));
-    assert_eq!(layout.section_id(5), Some(debug));
-}
-
 #[test]
 #[should_panic(expected = "module layout referenced missing section metadata")]
 fn module_layout_rejects_missing_section_metadata() {
@@ -170,6 +107,61 @@ fn memory_layout_plan_can_assign_and_clear_section_arenas() {
         Some(SectionPlacement::new(arena, 0x2000, 64))
     );
     assert!(layout.section_placement(section).is_none());
+}
+
+#[test]
+fn module_layout_separates_non_allocated_and_allocated_relocations() {
+    let mut sections = LayoutSectionArena::new();
+    let text = alloc_section(
+        &mut sections,
+        3,
+        ".text",
+        LayoutMemoryClass::Code,
+        64,
+        16,
+        false,
+    );
+    let retained_reloc = sections.insert(
+        ROOT_MODULE,
+        LayoutSectionMetadata::new(
+            4,
+            ".rela.text",
+            ElfSectionType::RELA,
+            ElfSectionFlags::empty(),
+            Some(text),
+            Some(text),
+            0,
+            0,
+            size_of::<ElfRela>(),
+            8,
+        ),
+    );
+    let allocated_reloc = sections.insert(
+        ROOT_MODULE,
+        LayoutSectionMetadata::new(
+            5,
+            ".rela.dyn",
+            ElfSectionType::RELA,
+            ElfSectionFlags::ALLOC,
+            Some(text),
+            Some(text),
+            0,
+            0,
+            size_of::<ElfRela>(),
+            8,
+        ),
+    );
+
+    let layout = ModuleLayout::from_sections(
+        [(3, text), (4, retained_reloc), (5, allocated_reloc)],
+        &sections,
+    );
+
+    assert_eq!(layout.relocation_sections(), [retained_reloc].as_slice());
+    assert_eq!(
+        layout.allocated_relocation_sections(),
+        [allocated_reloc].as_slice()
+    );
 }
 
 #[test]

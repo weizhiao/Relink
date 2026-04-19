@@ -67,12 +67,48 @@ impl AlignedBytes {
 
     #[inline]
     pub(crate) fn try_cast_slice<T: ByteRepr>(&self) -> Option<&[T]> {
-        try_cast_slice(self.as_ref())
+        let bytes = self.as_ref();
+        let elem_size = size_of::<T>();
+        if elem_size == 0 {
+            return None;
+        }
+        if bytes.is_empty() {
+            return Some(unsafe {
+                core::slice::from_raw_parts(NonNull::<T>::dangling().as_ptr(), 0)
+            });
+        }
+        if !bytes.len().is_multiple_of(elem_size) {
+            return None;
+        }
+        if !(bytes.as_ptr() as usize).is_multiple_of(align_of::<T>()) {
+            return None;
+        }
+        Some(unsafe {
+            core::slice::from_raw_parts(bytes.as_ptr().cast::<T>(), bytes.len() / elem_size)
+        })
     }
 
     #[inline]
     pub(crate) fn try_cast_slice_mut<T: ByteRepr>(&mut self) -> Option<&mut [T]> {
-        try_cast_slice_mut(self.as_mut())
+        let bytes = self.as_mut();
+        let elem_size = size_of::<T>();
+        if elem_size == 0 {
+            return None;
+        }
+        if bytes.is_empty() {
+            return Some(unsafe {
+                core::slice::from_raw_parts_mut(NonNull::<T>::dangling().as_ptr(), 0)
+            });
+        }
+        if !bytes.len().is_multiple_of(elem_size) {
+            return None;
+        }
+        if !(bytes.as_ptr() as usize).is_multiple_of(align_of::<T>()) {
+            return None;
+        }
+        Some(unsafe {
+            core::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast::<T>(), bytes.len() / elem_size)
+        })
     }
 
     #[inline]
@@ -149,45 +185,3 @@ impl<const N: usize> From<[u8; N]> for AlignedBytes {
 pub(crate) unsafe trait ByteRepr: Sized {}
 
 unsafe impl ByteRepr for u8 {}
-
-#[inline]
-pub(crate) fn try_cast_slice<T: ByteRepr>(bytes: &[u8]) -> Option<&[T]> {
-    let elem_size = size_of::<T>();
-    if elem_size == 0 {
-        return None;
-    }
-    if bytes.is_empty() {
-        return Some(unsafe { core::slice::from_raw_parts(NonNull::<T>::dangling().as_ptr(), 0) });
-    }
-    if !bytes.len().is_multiple_of(elem_size) {
-        return None;
-    }
-    if !(bytes.as_ptr() as usize).is_multiple_of(align_of::<T>()) {
-        return None;
-    }
-    Some(unsafe {
-        core::slice::from_raw_parts(bytes.as_ptr().cast::<T>(), bytes.len() / elem_size)
-    })
-}
-
-#[inline]
-pub(crate) fn try_cast_slice_mut<T: ByteRepr>(bytes: &mut [u8]) -> Option<&mut [T]> {
-    let elem_size = size_of::<T>();
-    if elem_size == 0 {
-        return None;
-    }
-    if bytes.is_empty() {
-        return Some(unsafe {
-            core::slice::from_raw_parts_mut(NonNull::<T>::dangling().as_ptr(), 0)
-        });
-    }
-    if !bytes.len().is_multiple_of(elem_size) {
-        return None;
-    }
-    if !(bytes.as_ptr() as usize).is_multiple_of(align_of::<T>()) {
-        return None;
-    }
-    Some(unsafe {
-        core::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast::<T>(), bytes.len() / elem_size)
-    })
-}

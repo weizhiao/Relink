@@ -131,7 +131,7 @@ mod segment;
 mod sync;
 pub mod tls;
 
-pub(crate) use aligned_bytes::{ByteRepr, try_cast_slice, try_cast_slice_mut};
+pub(crate) use aligned_bytes::ByteRepr;
 pub(crate) use error::*;
 
 pub use aligned_bytes::AlignedBytes;

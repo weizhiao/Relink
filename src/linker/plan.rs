@@ -1,4 +1,7 @@
-use super::{LayoutModuleMaterialization, LayoutSectionArena, LayoutSectionId, MemoryLayoutPlan};
+use super::{
+    LayoutModuleMaterialization, LayoutSectionArena, LayoutSectionId, LayoutSectionMetadata,
+    MemoryLayoutPlan, ModuleLayout,
+};
 use crate::{
     AlignedBytes, Result,
     entity::{PrimaryMap, entity_ref},
@@ -527,15 +530,22 @@ where
         &mut self.memory_layout
     }
 
+    /// Returns one module's layout view by stable module id.
+    #[inline]
+    pub(crate) fn module_layout(&self, module_id: LinkModuleId) -> &ModuleLayout {
+        self.memory_layout.module(module_id)
+    }
+
+    /// Returns one section metadata record by stable section id.
+    #[inline]
+    pub(crate) fn section_metadata(&self, section: LayoutSectionId) -> &LayoutSectionMetadata {
+        self.memory_layout.section_metadata(section)
+    }
+
     #[inline]
     pub(crate) fn module_capability(&self, module_id: LinkModuleId) -> Option<ModuleCapability> {
         self.entry(module_id)
             .map(|entry| entry.module().capability())
-    }
-
-    #[inline]
-    pub(crate) fn scanned_module(&self, module_id: LinkModuleId) -> Option<&ScannedDylib<D>> {
-        self.entry(module_id).map(PlannedModule::module)
     }
 
     #[inline]
@@ -634,6 +644,37 @@ where
         sections
             .data_mut(section)
             .ok_or_else(|| crate::custom_error("section data was not materialized"))
+    }
+
+    pub(crate) fn with_disjoint_section_data_mut<R>(
+        &mut self,
+        read_a: LayoutSectionId,
+        read_b: LayoutSectionId,
+        write: LayoutSectionId,
+        f: impl FnOnce(&AlignedBytes, &AlignedBytes, &mut AlignedBytes) -> Result<R>,
+    ) -> Result<R> {
+        if read_a == read_b || read_a == write || read_b == write {
+            return Err(crate::custom_error(
+                "disjoint section data request referenced the same section more than once",
+            ));
+        }
+
+        let Self {
+            entries,
+            memory_layout,
+            ..
+        } = self;
+        for section in [read_a, read_b, write] {
+            if memory_layout.sections().data(section).is_none() {
+                Self::materialize_section_data(entries, memory_layout.sections_mut(), section)?;
+            }
+        }
+
+        let sections = memory_layout.sections_mut();
+        let _ = sections.mark_data_override(write);
+        sections
+            .with_disjoint_data_mut(read_a, read_b, write, f)
+            .ok_or_else(|| crate::custom_error("disjoint section data was not materialized"))?
     }
 
     #[inline]
