@@ -6,31 +6,28 @@
 //! callers decide how dependencies are discovered and how search scopes are
 //! assembled.
 
-mod api;
 mod context;
 mod layout;
+mod mapped;
+mod materialization;
 mod plan;
 mod request;
-mod scan;
+mod resolve;
 mod session;
 mod storage;
 mod view;
 
-pub use api::{KeyResolver, RelocationInputs, RelocationPlanner, ResolvedKey};
 pub use context::LinkContext;
 pub use layout::{
-    LayoutAddress, LayoutAddressMap, LayoutArena, LayoutArenaId, LayoutArenaImage,
-    LayoutArenaSharing, LayoutArenaUsage, LayoutClassPolicy, LayoutMemoryClass,
-    LayoutPackingPolicy, LayoutPhysicalImage, LayoutPhysicalPlan, LayoutRegion, LayoutRegionArena,
-    LayoutRegionId, LayoutRegionPlacement, LayoutRelocationSiteRepair, LayoutRepairPlan,
-    LayoutRepairStatus, LayoutRetainedRelocationRepair, LayoutRetainedRelocationSection,
-    LayoutSectionData, LayoutSectionDataArena, LayoutSectionDataId, LayoutSectionId,
-    LayoutSectionMetadata, LayoutSectionMetadataArena, LayoutSectionRepair, LayoutSectionSource,
-    MemoryLayoutPlan, ModuleAddressMap, ModuleLayout, ModuleLayoutRepair, ModulePhysicalLayout,
-    ModulePhysicalSlice, PackSectionsPass, RelocationSiteAddress, SectionPlacement,
-    SectionRegionPlacement,
+    Arena, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, Materialization, MemoryClass,
+    ModuleLayout, PackingPolicy, SectionAddress, SectionId, SectionMetadata, SectionPlacement,
 };
-pub use plan::{LinkPass, LinkPipeline, LinkPlan};
-pub use request::{DependencyContext, DependencyOwner, DependencyRequest, RelocationRequest};
-pub use scan::ScanContextView;
-pub use view::LinkContextView;
+pub use plan::{
+    AnyPass, DataAccess, DataPass, LinkPass, LinkPassPlan, LinkPipeline, ModuleId, PassScope,
+    PassScopeMode, ReorderAccess, ReorderPass,
+};
+pub use request::{
+    DependencyOwner, DependencyRequest, RelocationInputs, RelocationPlanner, RelocationRequest,
+};
+pub use resolve::{KeyResolver, ResolvedKey};
+pub use view::DependencyGraphView;

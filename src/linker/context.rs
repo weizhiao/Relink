@@ -1,15 +1,16 @@
 use super::{
-    api::{KeyResolver, RelocationPlanner, ResolvedKey},
-    layout::{LayoutPackingPolicy, MemoryLayoutPlan, PackSectionsPass},
-    plan::{LinkPipeline, LinkPlan},
-    request::{DependencyRequest, RelocationRequest},
-    scan::ScanContext,
-    session::{LoadSession, PendingEntry, PendingState, collect_unique_deps, extend_breadth_first},
-    storage::{CommittedEntry, CommittedStorage, StagedStorage},
-    view::LinkContextView,
+    layout::{Materialization, MemoryLayoutPlan},
+    mapped, materialization,
+    plan::{LinkPipeline, LinkPlan, ModuleId},
+    request::{RelocationPlanner, RelocationRequest},
+    resolve::{KeyResolver, LoadResolveContext, ScanResolveContext},
+    session::{GraphEntry, LoadSession, ResolveSession},
+    storage::{CommittedEntry, CommittedStorage},
+    view::DependencyGraphView,
 };
 use crate::{
-    CustomError, LinkerError, Loader, Result, UnresolvedDependencyError,
+    LinkerError, Loader, Result,
+    entity::SecondaryMap,
     image::{LoadedCore, RawDylib},
     loader::LoadHook,
     os::Mmap,
@@ -26,7 +27,7 @@ use core::mem;
 
 /// A reusable local module repository and committed dependency graph.
 ///
-/// This context stores only fully linked modules. Any raw objects discovered
+/// This context stores only committed modules. Any raw objects discovered
 /// while loading a new root live only inside that specific load session and are
 /// committed into the context once the whole load succeeds.
 pub struct LinkContext<K, D: 'static> {
@@ -78,10 +79,10 @@ where
         self.committed.load_order()
     }
 
-    /// Returns a read-only view over the current linked modules.
+    /// Returns a read-only view over the current committed dependency graph.
     #[inline]
-    pub fn view(&self) -> LinkContextView<'_, K, D> {
-        LinkContextView::new(self.committed.view(), None)
+    pub fn view(&self) -> DependencyGraphView<'_, K, D> {
+        DependencyGraphView::new_committed(self.committed.view())
     }
 
     /// Inserts an already-loaded module into the committed context.
@@ -95,7 +96,7 @@ where
         direct_deps: Box<[K]>,
     ) -> Result<()> {
         if self.committed.contains_key(&key) {
-            return Err(CustomError::Message("duplicate linked module key".into()).into());
+            return Err(LinkerError::context("duplicate linked module key").into());
         }
 
         self.committed
@@ -198,6 +199,7 @@ where
     ) -> Result<LoadedCore<D>>
     where
         D: Default,
+        K: 'cfg,
         M: Mmap,
         H: LoadHook,
         Tls: TlsResolver,
@@ -212,167 +214,260 @@ where
             return Ok(loaded.clone());
         }
 
-        let mut session = LoadSession::new();
-        let root = self.stage_resolved_key(resolver.load_root(&key)?, &mut session, loader)?;
+        let prepared = self.prepare_runtime_load(key, loader, resolver)?;
+        self.execute_prepared_load::<M, _, _, _, _, _, _>(prepared, relocator, planner)
+    }
 
-        if session.contains_pending(&root) {
-            self.resolve_pending_dependencies(&root, &mut session, loader, resolver)?;
-            self.relocate_pending_modules(&root, &mut session, None, relocator, planner)?;
+    /// Discovers, plans, and loads one module through the scan-first path.
+    ///
+    /// Caller-driven layout and materialization changes should be expressed as
+    /// [`LinkPass`]es in `pipeline`, which run after scan discovery and before
+    /// runtime materialization.
+    pub fn load_with_scan<'a, M, H, Tls, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+        &mut self,
+        key: K,
+        loader: &mut Loader<M, H, D, Tls>,
+        resolver: &mut impl KeyResolver<'static, K, D>,
+        pipeline: &mut LinkPipeline<'a, K, D>,
+        relocator: &Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>,
+        planner: &mut impl RelocationPlanner<K, D>,
+    ) -> Result<LoadedCore<D>>
+    where
+        D: Default,
+        K: 'static,
+        M: Mmap,
+        H: LoadHook,
+        Tls: TlsResolver,
+        PreS: SymbolLookup + Clone,
+        PostS: SymbolLookup + Clone,
+        LazyPreS: SymbolLookup + Send + Sync + 'static + Clone,
+        LazyPostS: SymbolLookup + Send + Sync + 'static + Clone,
+        PreH: RelocationHandler + Clone,
+        PostH: RelocationHandler + Clone,
+    {
+        if let Some(loaded) = self.committed.get(&key) {
+            return Ok(loaded.clone());
+        }
+
+        let prepared = match self.prepare_scan_load(key, loader, resolver, pipeline)? {
+            ScanDiscovery::Existing(root) => PreparedLoad::runtime(root, LoadSession::new()),
+            ScanDiscovery::Plan(plan) => self.prepare_planned_load::<M, _, _>(plan, loader)?,
+        };
+        self.execute_prepared_load::<M, _, _, _, _, _, _>(prepared, relocator, planner)
+    }
+
+    fn prepare_runtime_load<'cfg, M, H, Tls>(
+        &self,
+        key: K,
+        loader: &mut Loader<M, H, D, Tls>,
+        resolver: &mut impl KeyResolver<'cfg, K, D>,
+    ) -> Result<PreparedLoad<K, D>>
+    where
+        D: Default,
+        K: 'cfg,
+        M: Mmap,
+        H: LoadHook,
+        Tls: TlsResolver,
+    {
+        let mut session = LoadSession::new();
+        let mut context = LoadResolveContext::new(self.committed.view(), &mut session.resolve);
+        let root = context.stage_resolved(resolver.load_root(&key)?, loader)?;
+        if context.contains_pending(&root) {
+            context.resolve_dependency_graph(root.clone(), loader, resolver)?;
+        }
+
+        Ok(PreparedLoad::runtime(root, session))
+    }
+
+    fn prepare_scan_load<'a, M, H, Tls>(
+        &self,
+        key: K,
+        loader: &mut Loader<M, H, D, Tls>,
+        resolver: &mut impl KeyResolver<'static, K, D>,
+        pipeline: &mut LinkPipeline<'a, K, D>,
+    ) -> Result<ScanDiscovery<K, D>>
+    where
+        K: 'static,
+        M: Mmap,
+        H: LoadHook,
+        Tls: TlsResolver,
+    {
+        let mut session = ResolveSession::new();
+        let mut context = ScanResolveContext::new(self.committed.view(), &mut session);
+        let root = context.stage_resolved(resolver.load_root(&key)?, loader)?;
+        if !context.contains_pending(&root) {
+            return Ok(ScanDiscovery::Existing(root));
+        }
+        context.resolve_dependency_graph(root.clone(), loader, resolver)?;
+
+        let ResolveSession {
+            entries,
+            group_order,
+        } = session;
+        let mut plan = LinkPlan::new(
+            root,
+            group_order,
+            entries
+                .into_iter()
+                .map(|(key, entry)| {
+                    let direct_deps = entry
+                        .direct_deps
+                        .expect("missing resolved dependencies while building scan plan");
+                    (key, (entry.payload, direct_deps))
+                })
+                .collect(),
+        );
+        pipeline.run(&mut plan)?;
+        Ok(ScanDiscovery::Plan(plan))
+    }
+
+    fn prepare_planned_load<M, H, Tls>(
+        &self,
+        mut plan: LinkPlan<K, D>,
+        loader: &mut Loader<M, H, D, Tls>,
+    ) -> Result<PreparedLoad<K, D>>
+    where
+        D: Default,
+        M: Mmap,
+        H: LoadHook,
+        Tls: TlsResolver,
+    {
+        // Scan discovery already seeded layout-side metadata before the pass pipeline ran.
+        // The planned-load phase only needs to normalize materialization choices and rebuild
+        // any derived addresses that those choices affect.
+        materialization::normalize_plan(&mut plan)?;
+        let mut mapped_runtime = mapped::MappedRuntimeMemory::map::<M, _, _>(&plan)?;
+
+        if let Some(mapped_runtime) = mapped_runtime.as_mut() {
+            let section_region_modules = plan
+                .group_order()
+                .iter()
+                .copied()
+                .filter(|module_id| {
+                    plan.materialization(*module_id)
+                        .unwrap_or(Materialization::WholeDsoRegion)
+                        == Materialization::SectionRegions
+                })
+                .collect::<Vec<_>>();
+            for module_id in section_region_modules {
+                mapped_runtime.repair_module(module_id, &mut plan)?;
+            }
+            mapped_runtime.populate(&mut plan)?;
+        }
+
+        let (root, group_order, entries, memory_layout) = plan.into_parts();
+        let (init_fn, fini_fn) = loader.inner.lifecycle_handlers();
+        let force_static_tls = loader.inner.force_static_tls();
+        let mut session = LoadSession::new();
+        let mut module_keys = SecondaryMap::default();
+        for (module_id, entry) in entries.iter() {
+            let _ = module_keys.insert(module_id, entry.key().clone());
+        }
+        session.resolve.group_order = group_order
+            .iter()
+            .map(|module_id| module_keys[*module_id].clone())
+            .collect();
+
+        let mut materialize_raw =
+            |module_id: ModuleId, scanned: crate::image::ScannedDylib<D>| -> Result<RawDylib<D>> {
+                match memory_layout
+                    .materialization(module_id)
+                    .unwrap_or(Materialization::WholeDsoRegion)
+                {
+                    Materialization::SectionRegions => {
+                        let runtime = mapped_runtime
+                            .as_mut()
+                            .ok_or_else(|| {
+                                LinkerError::runtime_memory(
+                                    "section-region planned load is missing mapped runtime memory",
+                                )
+                            })?
+                            .take_module(module_id)?;
+                        let mut raw = mapped::build_arena_raw_dylib::<D, Tls>(
+                            scanned,
+                            runtime,
+                            init_fn.clone(),
+                            fini_fn.clone(),
+                            force_static_tls,
+                        )?;
+                        loader.inner.post_load_dylib(&mut raw)?;
+                        Ok(raw)
+                    }
+                    Materialization::WholeDsoRegion => {
+                        let mut raw = loader.load_dylib_impl(scanned.into_reader())?;
+                        apply_section_overrides(&mut raw, module_id, &memory_layout)?;
+                        Ok(raw)
+                    }
+                }
+            };
+
+        for (module_id, entry) in entries {
+            let (key, module, direct_dep_ids) = entry.into_parts();
+            let direct_deps = direct_dep_ids
+                .iter()
+                .map(|dep_id| module_keys[*dep_id].clone())
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            let raw = materialize_raw(module_id, module)?;
+            session.insert_resolved_pending(key, raw, direct_deps);
+        }
+
+        Ok(PreparedLoad::planned(
+            module_keys[root].clone(),
+            session,
+            mapped_runtime,
+        ))
+    }
+
+    fn execute_prepared_load<M, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+        &mut self,
+        prepared: PreparedLoad<K, D>,
+        relocator: &Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>,
+        planner: &mut impl RelocationPlanner<K, D>,
+    ) -> Result<LoadedCore<D>>
+    where
+        D: Default,
+        M: Mmap,
+        PreS: SymbolLookup + Clone,
+        PostS: SymbolLookup + Clone,
+        LazyPreS: SymbolLookup + Send + Sync + 'static + Clone,
+        LazyPostS: SymbolLookup + Send + Sync + 'static + Clone,
+        PreH: RelocationHandler + Clone,
+        PostH: RelocationHandler + Clone,
+    {
+        let PreparedLoad {
+            root,
+            mut session,
+            mapped_runtime,
+        } = prepared;
+
+        if !session.resolve.entries.is_empty() {
+            self.relocate_pending_modules(&root, &mut session, relocator, planner)?;
+        }
+
+        if let Some(mapped_runtime) = mapped_runtime.as_ref() {
+            mapped_runtime.protect::<M>()?;
         }
 
         self.commit_session(&mut session);
 
-        let loaded = self
-            .committed
+        self.committed
             .get(&root)
-            .expect("loaded module missing from link context after load")
-            .clone();
-
-        Ok(loaded)
-    }
-
-    /// Discovers and plans one module through the scan-first path.
-    ///
-    /// This returns a logical [`LinkPlan`] that keeps per-DSO identity intact
-    /// even when later layout passes choose shared arenas or cross-DSO packing.
-    /// The caller supplies strategy passes only; the core section-layout seed,
-    /// retained-relocation capture, and derived-address rebuild are integrated
-    /// internally.
-    pub fn plan_with_scan<'a, M, H, Tls, Q: ?Sized>(
-        &self,
-        key: K,
-        loader: &mut Loader<M, H, D, Tls>,
-        resolver: &mut impl KeyResolver<'static, K, D>,
-        pipeline: &mut LinkPipeline<'a, K, D, Q>,
-        queries: &mut Q,
-    ) -> Result<LinkPlan<K, D>>
-    where
-        M: Mmap,
-        H: LoadHook,
-        Tls: TlsResolver,
-    {
-        let mut scan = ScanContext::new();
-        let mut plan = scan.discover(key, self.view(), loader, resolver)?;
-        plan.prepare_layout()?;
-        pipeline.run(&mut plan, queries)?;
-        plan.finalize_layout();
-        Ok(plan)
-    }
-
-    /// Discovers one module and runs the default shared-hugepage packing pass.
-    pub fn plan_with_layout<M, H, Tls>(
-        &self,
-        key: K,
-        loader: &mut Loader<M, H, D, Tls>,
-        resolver: &mut impl KeyResolver<'static, K, D>,
-    ) -> Result<LinkPlan<K, D>>
-    where
-        M: Mmap,
-        H: LoadHook,
-        Tls: TlsResolver,
-    {
-        self.plan_with_layout_policy(
-            key,
-            loader,
-            resolver,
-            LayoutPackingPolicy::shared_huge_pages(),
-        )
-    }
-
-    /// Discovers one module and runs the default packing pass with an explicit
-    /// arena policy.
-    pub fn plan_with_layout_policy<M, H, Tls>(
-        &self,
-        key: K,
-        loader: &mut Loader<M, H, D, Tls>,
-        resolver: &mut impl KeyResolver<'static, K, D>,
-        policy: LayoutPackingPolicy,
-    ) -> Result<LinkPlan<K, D>>
-    where
-        M: Mmap,
-        H: LoadHook,
-        Tls: TlsResolver,
-    {
-        let mut pack = PackSectionsPass::new(policy);
-        let mut pipeline = LinkPipeline::new();
-        pipeline.push(&mut pack);
-        self.plan_with_scan(key, loader, resolver, &mut pipeline, &mut ())
-    }
-
-    fn resolve_pending_dependencies<'cfg, M, H, Tls>(
-        &self,
-        root: &K,
-        session: &mut LoadSession<K, D>,
-        loader: &mut Loader<M, H, D, Tls>,
-        resolver: &mut impl KeyResolver<'cfg, K, D>,
-    ) -> Result<()>
-    where
-        D: Default,
-        M: Mmap,
-        H: LoadHook,
-        Tls: TlsResolver,
-    {
-        let mut group_order = mem::take(&mut session.group_order);
-        let result = extend_breadth_first(&mut group_order, root.clone(), |key| {
-            let needs_store = session.contains_pending(key)
-                && matches!(session.pending_state(key), PendingState::Unresolved);
-            let direct_deps = self.resolve_node_direct_deps(key, session, loader, resolver)?;
-
-            if needs_store {
-                let entry = session.pending_entry_mut(key);
-                entry.direct_deps = direct_deps.clone().into_boxed_slice();
-                entry.state = PendingState::Resolved;
-            }
-
-            Ok(direct_deps)
-        });
-
-        session.group_order = group_order;
-        result
-    }
-
-    fn resolve_node_direct_deps<'cfg, M, H, Tls>(
-        &self,
-        key: &K,
-        session: &mut LoadSession<K, D>,
-        loader: &mut Loader<M, H, D, Tls>,
-        resolver: &mut impl KeyResolver<'cfg, K, D>,
-    ) -> Result<Vec<K>>
-    where
-        D: Default,
-        M: Mmap,
-        H: LoadHook,
-        Tls: TlsResolver,
-    {
-        if !session.contains_pending(key) {
-            return Ok(self
-                .load_view(session)
-                .direct_deps(key)
-                .map_or_else(Vec::new, |deps| deps.to_vec()));
-        }
-
-        if matches!(session.pending_state(key), PendingState::Resolved) {
-            return Ok(session.pending_entry(key).direct_deps.to_vec());
-        }
-
-        let needed_len = session.pending_entry(key).raw.needed_libs().len();
-        collect_unique_deps(needed_len, |idx| {
-            let dependency = self.resolve_dependency(key, idx, session, resolver)?;
-            self.stage_resolved_key(dependency, session, loader)
-        })
+            .cloned()
+            .ok_or_else(|| LinkerError::context("load root missing after commit"))
+            .map_err(Into::into)
     }
 
     /// Relocates every pending raw module reachable from `root`.
     ///
     /// Modules are relocated in post-order so dependencies are finalized before
-    /// dependents. The caller supplies the relocation policy via `relocate`,
+    /// dependents. The caller supplies the relocation policy via `planner`,
     /// which receives a [`RelocationRequest`] describing the current key, raw
-    /// module, and visible linked modules for this session.
+    /// module, and the batch-start relocation scope snapshot for this session.
     fn relocate_pending_modules<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         &mut self,
         root: &K,
         session: &mut LoadSession<K, D>,
-        memory_layout: Option<&MemoryLayoutPlan<K>>,
         relocator: &Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>,
         planner: &mut impl RelocationPlanner<K, D>,
     ) -> Result<()>
@@ -385,30 +480,27 @@ where
         PostH: RelocationHandler + Clone,
     {
         let mut order = mem::take(&mut self.scratch_relocation_order);
-        self.build_relocation_order(root, &session.pending, &mut order);
+        self.build_relocation_order(root, &session.resolve.entries, &mut order);
+        let scope = self.build_group_scope(session);
 
         let result = (|| {
             for key in order.drain(..) {
                 let entry = session
-                    .pending
+                    .resolve
+                    .entries
                     .remove(&key)
                     .expect("missing pending module while relocating");
-                let scope = self.build_scope_snapshot(&key, &entry.raw, session);
-                let req = RelocationRequest::new(
-                    &key,
-                    entry.raw,
-                    self.load_view(session),
-                    session.scope_keys(&key),
-                    scope,
-                    memory_layout,
-                );
+                let direct_deps = entry
+                    .direct_deps
+                    .expect("missing resolved dependencies while relocating");
+                let req = RelocationRequest::new(&key, entry.payload, &scope);
                 let inputs = planner.plan(&req)?;
                 let raw = req.into_raw();
                 let mut active = relocator.clone();
                 active.replace_scope(inputs.scope().iter());
                 active.set_binding(inputs.binding());
                 let loaded = active.replace_object(raw).relocate()?;
-                session.insert_staged(key, (*loaded).clone(), entry.direct_deps);
+                session.push_ready(key, (*loaded).clone(), direct_deps);
             }
             Ok(())
         })();
@@ -420,7 +512,7 @@ where
     fn build_relocation_order(
         &self,
         root: &K,
-        pending: &BTreeMap<K, PendingEntry<K, D>>,
+        pending: &BTreeMap<K, GraphEntry<K, RawDylib<D>>>,
         order: &mut Vec<K>,
     ) {
         order.clear();
@@ -446,32 +538,30 @@ where
             };
 
             stack.push((key, true));
-            for dep in slot.direct_deps.iter().rev() {
+            let direct_deps = slot
+                .direct_deps
+                .as_deref()
+                .expect("missing resolved dependencies while building relocation order");
+            for dep in direct_deps.iter().rev() {
                 stack.push((dep, false));
             }
         }
     }
 
-    fn build_scope_snapshot(
-        &self,
-        key: &K,
-        raw: &RawDylib<D>,
-        session: &LoadSession<K, D>,
-    ) -> Box<[LoadedCore<D>]>
+    fn build_group_scope(&self, session: &LoadSession<K, D>) -> Vec<LoadedCore<D>>
     where
-        K: Clone + Ord,
+        K: Ord,
     {
-        let staged = session.staged.view();
+        // This snapshot is intentionally built once for the whole pending group.
+        // Pending modules contribute placeholder LoadedCore values until the
+        // session is committed into the stable context.
         session
-            .scope_keys(key)
+            .resolve
+            .group_order
             .iter()
             .map(|scope_key| {
-                if scope_key == key {
-                    unsafe { LoadedCore::from_core(raw.core()) }
-                } else if let Some(module) = staged.get(scope_key) {
-                    module.clone()
-                } else if let Some(entry) = session.pending.get(scope_key) {
-                    unsafe { LoadedCore::from_core(entry.raw.core()) }
+                if let Some(entry) = session.resolve.entries.get(scope_key) {
+                    unsafe { LoadedCore::from_core(entry.payload.core()) }
                 } else {
                     self.committed
                         .get(scope_key)
@@ -479,85 +569,77 @@ where
                         .expect("scope key must resolve to a visible or pending module")
                 }
             })
-            .collect::<Vec<_>>()
-            .into_boxed_slice()
-    }
-
-    #[inline]
-    fn load_view<'a>(&'a self, session: &'a LoadSession<K, D>) -> LinkContextView<'a, K, D> {
-        LinkContextView::new(self.committed.view(), Some(session.staged.view()))
-    }
-
-    #[inline]
-    fn is_visible_loaded(&self, key: &K, session: &LoadSession<K, D>) -> bool {
-        session.contains_staged(key) || self.committed.contains_key(key)
-    }
-
-    #[inline]
-    fn is_known_key(&self, key: &K, session: &LoadSession<K, D>) -> bool {
-        session.contains_pending(key) || self.is_visible_loaded(key, session)
-    }
-
-    fn resolve_dependency<'cfg>(
-        &self,
-        owner_key: &K,
-        needed_index: usize,
-        session: &LoadSession<K, D>,
-        resolver: &mut impl KeyResolver<'cfg, K, D>,
-    ) -> Result<ResolvedKey<'cfg, K>> {
-        let raw = &session.pending_entry(owner_key).raw;
-        let req = DependencyRequest::new(owner_key, raw, needed_index, self.load_view(session));
-        resolver.resolve_dependency(&req)?.ok_or_else(|| {
-            LinkerError::UnresolvedDependency(Box::new(UnresolvedDependencyError::new(
-                req.owner_name(),
-                req.needed(),
-            )))
-            .into()
-        })
-    }
-
-    fn stage_resolved_key<'cfg, M, H, Tls>(
-        &self,
-        resolved: ResolvedKey<'cfg, K>,
-        session: &mut LoadSession<K, D>,
-        loader: &mut Loader<M, H, D, Tls>,
-    ) -> Result<K>
-    where
-        D: Default,
-        M: Mmap,
-        H: LoadHook,
-        Tls: TlsResolver,
-    {
-        match resolved {
-            ResolvedKey::Existing(key) => {
-                if !self.is_known_key(&key, session) {
-                    return Err(CustomError::Message(
-                        "resolved existing module is not visible in the current link context"
-                            .into(),
-                    )
-                    .into());
-                }
-                Ok(key)
-            }
-            ResolvedKey::Load(key, reader) => {
-                let raw = loader.load_dylib_impl(reader)?;
-                assert!(
-                    !self.is_known_key(&key, session),
-                    "resolved reader produced an already-known key; use ResolvedKey::Existing to reuse a visible module"
-                );
-                session.insert_pending(key.clone(), raw);
-                Ok(key)
-            }
-        }
+            .collect()
     }
 
     fn commit_session(&mut self, session: &mut LoadSession<K, D>) {
-        let staged = mem::replace(&mut session.staged, StagedStorage::new());
-        for entry in staged.entries.into_values() {
+        let ready = mem::take(&mut session.ready_to_commit);
+        for entry in ready {
             self.committed.insert_new(
                 entry.key,
                 CommittedEntry::new(entry.module, entry.direct_deps),
             );
         }
     }
+}
+
+struct PreparedLoad<K, D: 'static> {
+    root: K,
+    session: LoadSession<K, D>,
+    mapped_runtime: Option<mapped::MappedRuntimeMemory>,
+}
+
+enum ScanDiscovery<K, D: 'static> {
+    Existing(K),
+    Plan(LinkPlan<K, D>),
+}
+
+impl<K, D: 'static> PreparedLoad<K, D> {
+    fn runtime(root: K, session: LoadSession<K, D>) -> Self {
+        Self {
+            root,
+            session,
+            mapped_runtime: None,
+        }
+    }
+
+    fn planned(
+        root: K,
+        session: LoadSession<K, D>,
+        mapped_runtime: Option<mapped::MappedRuntimeMemory>,
+    ) -> Self {
+        Self {
+            root,
+            session,
+            mapped_runtime,
+        }
+    }
+}
+
+fn apply_section_overrides<D>(
+    raw: &mut RawDylib<D>,
+    module_id: ModuleId,
+    layout: &MemoryLayoutPlan,
+) -> Result<()> {
+    let module = layout.module(module_id);
+    let segments = raw.core_ref().segments();
+
+    for section_id in module.alloc_sections().iter().copied() {
+        if !layout.section_is_override(section_id) {
+            continue;
+        }
+        let metadata = layout.section(section_id);
+        let data = layout
+            .data(section_id)
+            .expect("missing section data for planned override");
+        let dst = segments.get_slice_mut::<u8>(metadata.source_address(), metadata.size());
+        assert_eq!(
+            data.len(),
+            dst.len(),
+            "planned section override size does not match the loaded section"
+        );
+        dst.copy_from_slice(data.as_ref());
+    }
+
+    Ok(())
 }

@@ -17,3 +17,4 @@ pub use space::ElfSegments;
 pub(crate) use layout::{MASK, rounddown, roundup};
 pub(crate) use mapping::{Address, ElfSegment, FileMapInfo, SegmentBuilder};
 pub(crate) use relro::ELFRelro;
+pub(crate) use space::ElfMemoryBacking;

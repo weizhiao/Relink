@@ -164,8 +164,8 @@ where
         logging::info!(
             "Loaded dylib: {} at [0x{:x}-0x{:x}]",
             dylib.name(),
-            dylib.base(),
-            dylib.base() + dylib.mapped_len()
+            dylib.mapped_base(),
+            dylib.mapped_base() + dylib.mapped_len()
         );
 
         Ok(dylib)
@@ -220,8 +220,8 @@ where
             logging::debug!(
                 "Load executable: {} at [0x{:x}-0x{:x}] ({})",
                 exec.name(),
-                exec.base(),
-                exec.base() + exec.mapped_len(),
+                exec.mapped_base(),
+                exec.mapped_base() + exec.mapped_len(),
                 if has_dynamic { "dynamic" } else { "static" }
             );
         }

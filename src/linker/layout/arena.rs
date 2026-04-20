@@ -2,15 +2,15 @@ use crate::entity::entity_ref;
 
 /// The packing policy used to place one memory class into physical arenas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LayoutClassPolicy {
+pub struct ClassPolicy {
     page_size: usize,
-    sharing: LayoutArenaSharing,
+    sharing: ArenaSharing,
 }
 
-impl LayoutClassPolicy {
+impl ClassPolicy {
     /// Creates one class policy.
     #[inline]
-    pub const fn new(page_size: usize, sharing: LayoutArenaSharing) -> Self {
+    pub const fn new(page_size: usize, sharing: ArenaSharing) -> Self {
         Self {
             page_size: if page_size == 0 { 1 } else { page_size },
             sharing,
@@ -25,45 +25,44 @@ impl LayoutClassPolicy {
 
     /// Returns whether arenas in this class may be shared across modules.
     #[inline]
-    pub const fn sharing(self) -> LayoutArenaSharing {
+    pub const fn sharing(self) -> ArenaSharing {
         self.sharing
     }
 }
 
 /// The arena-packing policy used by section-placement passes.
+///
+/// The policy is primarily organized by final page-table permissions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LayoutPackingPolicy {
-    code: LayoutClassPolicy,
-    read_only_data: LayoutClassPolicy,
-    relocation_read_only_data: LayoutClassPolicy,
-    writable_data: LayoutClassPolicy,
-    thread_local_data: LayoutClassPolicy,
+pub struct PackingPolicy {
+    code: ClassPolicy,
+    read_only_data: ClassPolicy,
+    writable_data: ClassPolicy,
+    thread_local_data: ClassPolicy,
 }
 
-impl Default for LayoutPackingPolicy {
+impl Default for PackingPolicy {
     #[inline]
     fn default() -> Self {
         Self::shared_huge_pages()
     }
 }
 
-impl LayoutPackingPolicy {
+impl PackingPolicy {
     const BASE_PAGE_SIZE: usize = 4 * 1024;
     const HUGE_PAGE_SIZE: usize = 2 * 1024 * 1024;
 
     /// Creates a packing policy from explicit per-class rules.
     #[inline]
     pub const fn new(
-        code: LayoutClassPolicy,
-        read_only_data: LayoutClassPolicy,
-        relocation_read_only_data: LayoutClassPolicy,
-        writable_data: LayoutClassPolicy,
-        thread_local_data: LayoutClassPolicy,
+        code: ClassPolicy,
+        read_only_data: ClassPolicy,
+        writable_data: ClassPolicy,
+        thread_local_data: ClassPolicy,
     ) -> Self {
         Self {
             code,
             read_only_data,
-            relocation_read_only_data,
             writable_data,
             thread_local_data,
         }
@@ -72,44 +71,42 @@ impl LayoutPackingPolicy {
     /// Returns a conservative base-page policy with private arenas.
     #[inline]
     pub const fn private_base_pages() -> Self {
-        let base = LayoutClassPolicy::new(Self::BASE_PAGE_SIZE, LayoutArenaSharing::Private);
-        Self::new(base, base, base, base, base)
+        let base = ClassPolicy::new(Self::BASE_PAGE_SIZE, ArenaSharing::Private);
+        Self::new(base, base, base, base)
     }
 
-    /// Returns a hugepage-oriented policy for cross-module code and rodata packing.
+    /// Returns a hugepage-oriented policy for executable and read-only pages.
     #[inline]
     pub const fn shared_huge_pages() -> Self {
         Self::new(
-            LayoutClassPolicy::new(Self::HUGE_PAGE_SIZE, LayoutArenaSharing::Shared),
-            LayoutClassPolicy::new(Self::HUGE_PAGE_SIZE, LayoutArenaSharing::Shared),
-            LayoutClassPolicy::new(Self::BASE_PAGE_SIZE, LayoutArenaSharing::Private),
-            LayoutClassPolicy::new(Self::BASE_PAGE_SIZE, LayoutArenaSharing::Private),
-            LayoutClassPolicy::new(Self::BASE_PAGE_SIZE, LayoutArenaSharing::Private),
+            ClassPolicy::new(Self::HUGE_PAGE_SIZE, ArenaSharing::Shared),
+            ClassPolicy::new(Self::HUGE_PAGE_SIZE, ArenaSharing::Shared),
+            ClassPolicy::new(Self::BASE_PAGE_SIZE, ArenaSharing::Private),
+            ClassPolicy::new(Self::BASE_PAGE_SIZE, ArenaSharing::Private),
         )
     }
 
     /// Returns the packing rule for one memory class.
     #[inline]
-    pub const fn class_policy(self, class: LayoutMemoryClass) -> LayoutClassPolicy {
+    pub const fn class_policy(self, class: MemoryClass) -> ClassPolicy {
         match class {
-            LayoutMemoryClass::Code => self.code,
-            LayoutMemoryClass::ReadOnlyData => self.read_only_data,
-            LayoutMemoryClass::RelocationReadOnlyData => self.relocation_read_only_data,
-            LayoutMemoryClass::WritableData => self.writable_data,
-            LayoutMemoryClass::ThreadLocalData => self.thread_local_data,
+            MemoryClass::Code => self.code,
+            MemoryClass::ReadOnlyData => self.read_only_data,
+            MemoryClass::WritableData => self.writable_data,
+            MemoryClass::ThreadLocalData => self.thread_local_data,
         }
     }
 }
 
 /// One computed arena usage summary derived from section placements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LayoutArenaUsage {
+pub struct ArenaUsage {
     section_count: usize,
     used_len: usize,
     mapped_len: usize,
 }
 
-impl LayoutArenaUsage {
+impl ArenaUsage {
     #[inline]
     pub(crate) const fn new(section_count: usize, used_len: usize, mapped_len: usize) -> Self {
         Self {
@@ -139,21 +136,17 @@ impl LayoutArenaUsage {
 }
 
 /// One physical arena that can host sections from one or more modules.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LayoutArena {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Arena {
     page_size: usize,
-    memory_class: LayoutMemoryClass,
-    sharing: LayoutArenaSharing,
+    memory_class: MemoryClass,
+    sharing: ArenaSharing,
 }
 
-impl LayoutArena {
+impl Arena {
     /// Creates a new arena descriptor.
     #[inline]
-    pub const fn new(
-        page_size: usize,
-        memory_class: LayoutMemoryClass,
-        sharing: LayoutArenaSharing,
-    ) -> Self {
+    pub const fn new(page_size: usize, memory_class: MemoryClass, sharing: ArenaSharing) -> Self {
         Self {
             page_size,
             memory_class,
@@ -169,25 +162,25 @@ impl LayoutArena {
 
     /// Returns the memory class hosted by the arena.
     #[inline]
-    pub const fn memory_class(&self) -> LayoutMemoryClass {
+    pub const fn memory_class(&self) -> MemoryClass {
         self.memory_class
     }
 
     /// Returns whether the arena is module-private or shared.
     #[inline]
-    pub const fn sharing(&self) -> LayoutArenaSharing {
+    pub const fn sharing(&self) -> ArenaSharing {
         self.sharing
     }
 }
 
 /// A planner-assigned arena identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LayoutArenaId(usize);
-entity_ref!(LayoutArenaId);
+pub struct ArenaId(usize);
+entity_ref!(ArenaId);
 
 /// Whether an arena is reserved for one module or shared across modules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum LayoutArenaSharing {
+pub enum ArenaSharing {
     /// The arena belongs to one module only.
     Private,
     /// The arena may host sections from multiple modules.
@@ -195,16 +188,17 @@ pub enum LayoutArenaSharing {
 }
 
 /// The high-level memory class of one layout section or arena.
+///
+/// These classes are grouped by their final page-table permissions; TLS is
+/// kept separate because it follows a different mapping model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum LayoutMemoryClass {
-    /// Executable code.
+pub enum MemoryClass {
+    /// Executable pages.
     Code,
-    /// Read-only data that can stay read-only after materialization.
+    /// Read-only pages.
     ReadOnlyData,
-    /// Data that starts writable and may later become read-only.
-    RelocationReadOnlyData,
-    /// Writable process-global data.
+    /// Writable pages.
     WritableData,
-    /// Thread-local data or zero-fill TLS storage.
+    /// Thread-local storage pages.
     ThreadLocalData,
 }

@@ -1,31 +1,58 @@
-use super::{
-    address::LayoutAddress,
-    arena::{LayoutArenaId, LayoutMemoryClass},
-    region::{LayoutRegionPlacement, SectionRegionPlacement},
-};
+use super::arena::{ArenaId, MemoryClass};
 use crate::{
-    entity::{EntityArena, entity_ref},
-    image::{
-        ScannedDylib, ScannedMemoryData, ScannedMemoryKind, ScannedRelocation,
-        ScannedRelocationFormat, ScannedRelocationSection, ScannedSection, ScannedSectionId,
-    },
+    AlignedBytes,
+    elf::{ElfSectionFlags, ElfSectionType},
+    entity::{PrimaryMap, SecondaryMap, entity_ref},
+    image::{ScannedDylib, ScannedSection, ScannedSectionId},
+    linker::plan::ModuleId,
 };
-use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 
 /// A stable id for one section metadata record stored in [`super::MemoryLayoutPlan`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LayoutSectionId(usize);
-entity_ref!(LayoutSectionId);
+pub struct SectionId(usize);
+entity_ref!(SectionId);
 
-/// A stable id for one materialized section-data record.
+/// A derived address inside one placed section arena.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LayoutSectionDataId(usize);
-entity_ref!(LayoutSectionDataId);
+pub struct SectionAddress {
+    arena: ArenaId,
+    offset: usize,
+}
+
+impl SectionAddress {
+    /// Creates a new address inside one arena.
+    #[inline]
+    pub const fn new(arena: ArenaId, offset: usize) -> Self {
+        Self { arena, offset }
+    }
+
+    /// Returns the destination arena.
+    #[inline]
+    pub const fn arena(self) -> ArenaId {
+        self.arena
+    }
+
+    /// Returns the arena-relative byte offset.
+    #[inline]
+    pub const fn offset(self) -> usize {
+        self.offset
+    }
+
+    /// Adds `delta` bytes to the current address.
+    #[inline]
+    pub fn checked_add(self, delta: usize) -> Option<Self> {
+        self.offset.checked_add(delta).map(|offset| Self {
+            arena: self.arena,
+            offset,
+        })
+    }
+}
 
 /// The derived physical placement of one section inside a physical arena.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SectionPlacement {
-    arena: LayoutArenaId,
+    arena: ArenaId,
     offset: usize,
     size: usize,
 }
@@ -33,7 +60,7 @@ pub struct SectionPlacement {
 impl SectionPlacement {
     /// Creates a new section placement inside a physical arena.
     #[inline]
-    pub const fn new(arena: LayoutArenaId, offset: usize, size: usize) -> Self {
+    pub const fn new(arena: ArenaId, offset: usize, size: usize) -> Self {
         Self {
             arena,
             offset,
@@ -41,21 +68,9 @@ impl SectionPlacement {
         }
     }
 
-    /// Creates a physical section placement from region mappings.
-    #[inline]
-    pub fn from_region(
-        region: LayoutRegionPlacement,
-        section: SectionRegionPlacement,
-    ) -> Option<Self> {
-        region
-            .offset()
-            .checked_add(section.offset())
-            .map(|offset| Self::new(region.arena(), offset, section.size()))
-    }
-
     /// Returns the arena that owns the placed section.
     #[inline]
-    pub const fn arena(self) -> LayoutArenaId {
+    pub const fn arena(self) -> ArenaId {
         self.arena
     }
 
@@ -73,162 +88,46 @@ impl SectionPlacement {
 
     /// Returns the start address of the placed section.
     #[inline]
-    pub const fn address(self) -> LayoutAddress {
-        LayoutAddress::new(self.arena, self.offset)
-    }
-}
-
-/// The original source that produced one planned section.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LayoutSectionSource {
-    /// The section maps directly to one scanned section.
-    Scanned(ScannedSectionId),
-    /// The section was synthesized by a later planning pass.
-    Synthetic(Box<str>),
-}
-
-/// The retained relocation metadata tracked for one relocation section.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LayoutRetainedRelocationSection {
-    format: ScannedRelocationFormat,
-    target_section: Option<ScannedSectionId>,
-    symbol_table_section: Option<ScannedSectionId>,
-    entries: Box<[ScannedRelocation]>,
-}
-
-impl LayoutRetainedRelocationSection {
-    fn from_scanned(section: ScannedRelocationSection) -> Self {
-        Self {
-            format: section.format(),
-            target_section: section.target_section(),
-            symbol_table_section: section.symbol_table_section(),
-            entries: section.entries().to_vec().into_boxed_slice(),
-        }
-    }
-
-    /// Returns whether the relocation section uses `REL` or `RELA`.
-    #[inline]
-    pub const fn format(&self) -> ScannedRelocationFormat {
-        self.format
-    }
-
-    /// Returns the target section referenced by `sh_info`, when present.
-    #[inline]
-    pub const fn target_section(&self) -> Option<ScannedSectionId> {
-        self.target_section
-    }
-
-    /// Returns the symbol table referenced by `sh_link`, when present.
-    #[inline]
-    pub const fn symbol_table_section(&self) -> Option<ScannedSectionId> {
-        self.symbol_table_section
-    }
-
-    /// Returns the normalized relocation entries.
-    #[inline]
-    pub fn entries(&self) -> &[ScannedRelocation] {
-        &self.entries
-    }
-
-    /// Returns the number of relocation entries.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Returns whether the relocation section is empty.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+    pub const fn address(self) -> SectionAddress {
+        SectionAddress::new(self.arena, self.offset)
     }
 }
 
 /// The immutable metadata tracked for one planned section.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LayoutSectionMetadata {
-    source: LayoutSectionSource,
+pub struct SectionMetadata {
+    scanned_section: ScannedSectionId,
     name: Box<str>,
-    memory_class: LayoutMemoryClass,
-    original_address: usize,
-    original_file_offset: usize,
+    section_type: ElfSectionType,
+    section_flags: ElfSectionFlags,
+    linked_section: Option<SectionId>,
+    info_section: Option<SectionId>,
+    source_address: usize,
+    source_file_offset: usize,
     size: usize,
     alignment: usize,
-    zero_fill: bool,
-    data: Option<LayoutSectionDataId>,
-    region: Option<SectionRegionPlacement>,
-    retained_relocations: Option<LayoutRetainedRelocationSection>,
 }
 
-impl LayoutSectionMetadata {
-    /// Creates a new section metadata record.
-    #[inline]
-    pub fn new(
-        source: LayoutSectionSource,
-        name: impl Into<Box<str>>,
-        memory_class: LayoutMemoryClass,
-        original_address: usize,
-        original_file_offset: usize,
-        size: usize,
-        alignment: usize,
-        zero_fill: bool,
-    ) -> Self {
-        Self {
-            source,
-            name: name.into(),
-            memory_class,
-            original_address,
-            original_file_offset,
-            size,
-            alignment: alignment.max(1),
-            zero_fill,
-            data: None,
-            region: None,
-            retained_relocations: None,
-        }
-    }
-
+impl SectionMetadata {
     pub(super) fn from_scanned(section: ScannedSection<'_>) -> Self {
-        Self::new(
-            LayoutSectionSource::Scanned(section.id()),
-            section.name(),
-            classify_section(section),
-            section.address(),
-            section.file_offset(),
-            section.size(),
-            section.alignment(),
-            section.is_nobits(),
-        )
-    }
-
-    pub(super) fn from_relocation(section: ScannedRelocationSection) -> Self {
         Self {
-            source: LayoutSectionSource::Scanned(section.id()),
+            scanned_section: section.id(),
             name: section.name().into(),
-            memory_class: LayoutMemoryClass::RelocationReadOnlyData,
-            original_address: 0,
-            original_file_offset: section.file_offset(),
+            section_type: section.section_type(),
+            section_flags: section.flags(),
+            linked_section: None,
+            info_section: None,
+            source_address: section.address(),
+            source_file_offset: section.file_offset(),
             size: section.size(),
-            alignment: section.alignment(),
-            zero_fill: false,
-            data: None,
-            region: None,
-            retained_relocations: Some(LayoutRetainedRelocationSection::from_scanned(section)),
+            alignment: section.alignment().max(1),
         }
     }
 
-    /// Returns the original source that produced the section.
+    /// Returns the original scanned section id.
     #[inline]
-    pub fn source(&self) -> &LayoutSectionSource {
-        &self.source
-    }
-
-    /// Returns the original scanned section id, when this section came from scan.
-    #[inline]
-    pub fn scanned_section(&self) -> Option<ScannedSectionId> {
-        match self.source {
-            LayoutSectionSource::Scanned(id) => Some(id),
-            LayoutSectionSource::Synthetic(_) => None,
-        }
+    pub const fn scanned_section(&self) -> ScannedSectionId {
+        self.scanned_section
     }
 
     /// Returns the section name.
@@ -237,34 +136,103 @@ impl LayoutSectionMetadata {
         &self.name
     }
 
-    /// Returns the section memory class.
+    /// Returns the normalized `sh_link` section reference, when present.
     #[inline]
-    pub const fn memory_class(&self) -> LayoutMemoryClass {
-        self.memory_class
+    pub const fn linked_section(&self) -> Option<SectionId> {
+        self.linked_section
+    }
+
+    /// Returns the normalized `sh_info` section reference, when present.
+    #[inline]
+    pub const fn info_section(&self) -> Option<SectionId> {
+        self.info_section
+    }
+
+    /// Returns the original ELF section type.
+    #[inline]
+    pub const fn section_type(&self) -> ElfSectionType {
+        self.section_type
+    }
+
+    /// Returns the original ELF section flags.
+    #[inline]
+    pub const fn section_flags(&self) -> ElfSectionFlags {
+        self.section_flags
+    }
+
+    #[inline]
+    pub(super) fn set_links(
+        &mut self,
+        linked_section: Option<SectionId>,
+        info_section: Option<SectionId>,
+    ) {
+        self.linked_section = linked_section;
+        self.info_section = info_section;
     }
 
     /// Returns whether this metadata record describes a loadable section.
     #[inline]
-    pub const fn is_allocated(&self) -> bool {
-        self.retained_relocations.is_none()
+    pub fn is_allocated(&self) -> bool {
+        self.section_flags.contains(ElfSectionFlags::ALLOC)
     }
 
     /// Returns whether this metadata record describes a retained relocation section.
     #[inline]
     pub const fn is_relocation(&self) -> bool {
-        self.retained_relocations.is_some()
+        matches!(
+            self.section_type,
+            ElfSectionType::REL | ElfSectionType::RELA
+        )
     }
 
-    /// Returns the original ELF virtual address.
+    /// Returns whether this metadata record describes the dynamic section.
     #[inline]
-    pub const fn original_address(&self) -> usize {
-        self.original_address
+    pub const fn is_dynamic(&self) -> bool {
+        self.section_type.raw() == ElfSectionType::DYNAMIC.raw()
     }
 
-    /// Returns the original ELF file offset.
+    /// Returns the mapped memory class for loadable sections.
     #[inline]
-    pub const fn original_file_offset(&self) -> usize {
-        self.original_file_offset
+    pub fn memory_class(&self) -> Option<MemoryClass> {
+        if !self.is_allocated() {
+            return None;
+        }
+        Some(if self.section_flags.contains(ElfSectionFlags::TLS) {
+            MemoryClass::ThreadLocalData
+        } else if self.section_flags.contains(ElfSectionFlags::EXECINSTR) {
+            MemoryClass::Code
+        } else if self.section_flags.contains(ElfSectionFlags::WRITE) {
+            MemoryClass::WritableData
+        } else {
+            MemoryClass::ReadOnlyData
+        })
+    }
+
+    /// Returns whether this metadata record describes a symbol-table section.
+    #[inline]
+    pub const fn is_symbol_table(&self) -> bool {
+        matches!(
+            self.section_type,
+            ElfSectionType::SYMTAB | ElfSectionType::DYNSYM
+        )
+    }
+
+    /// Returns whether this metadata record describes an allocated retained relocation section.
+    #[inline]
+    pub fn is_allocated_relocation(&self) -> bool {
+        self.section_flags.contains(ElfSectionFlags::ALLOC) && self.is_relocation()
+    }
+
+    /// Returns the source ELF virtual address.
+    #[inline]
+    pub const fn source_address(&self) -> usize {
+        self.source_address
+    }
+
+    /// Returns the source ELF file offset.
+    #[inline]
+    pub const fn source_file_offset(&self) -> usize {
+        self.source_file_offset
     }
 
     /// Returns the logical size in bytes.
@@ -282,156 +250,273 @@ impl LayoutSectionMetadata {
     /// Returns whether the section is zero-fill.
     #[inline]
     pub const fn zero_fill(&self) -> bool {
-        self.zero_fill
-    }
-
-    /// Returns the materialized data id, when section bytes have been loaded.
-    #[inline]
-    pub const fn data(&self) -> Option<LayoutSectionDataId> {
-        self.data
-    }
-
-    /// Returns the logical region assignment of the section, when present.
-    #[inline]
-    pub const fn region(&self) -> Option<SectionRegionPlacement> {
-        self.region
-    }
-
-    /// Returns the retained relocation metadata for this section, when present.
-    #[inline]
-    pub fn retained_relocations(&self) -> Option<&LayoutRetainedRelocationSection> {
-        self.retained_relocations.as_ref()
-    }
-
-    #[inline]
-    pub(super) fn set_data(&mut self, data: LayoutSectionDataId) {
-        self.data = Some(data);
-    }
-
-    #[inline]
-    pub(super) fn set_region(&mut self, region: SectionRegionPlacement) {
-        self.region = Some(region);
-    }
-
-    #[inline]
-    pub(super) fn clear_region(&mut self) -> Option<SectionRegionPlacement> {
-        self.region.take()
+        matches!(self.section_type, ElfSectionType::NOBITS)
     }
 }
 
-/// A dense arena of section metadata records.
+/// One complete section record tracked by the layout plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LayoutSectionRecord {
+    owner: ModuleId,
+    metadata: SectionMetadata,
+    data: Option<AlignedBytes>,
+    override_data: bool,
+    placement: Option<SectionPlacement>,
+}
+
+impl LayoutSectionRecord {
+    #[inline]
+    pub fn new(owner: ModuleId, metadata: SectionMetadata) -> Self {
+        Self {
+            owner,
+            metadata,
+            data: None,
+            override_data: false,
+            placement: None,
+        }
+    }
+
+    /// Returns the owner module of this section.
+    #[inline]
+    pub const fn owner(&self) -> ModuleId {
+        self.owner
+    }
+
+    /// Returns the immutable metadata of this section.
+    #[inline]
+    pub fn metadata(&self) -> &SectionMetadata {
+        &self.metadata
+    }
+
+    /// Returns the immutable metadata of this section mutably.
+    #[inline]
+    pub fn metadata_mut(&mut self) -> &mut SectionMetadata {
+        &mut self.metadata
+    }
+
+    /// Returns the materialized data of this section, when present.
+    #[inline]
+    pub fn data(&self) -> Option<&AlignedBytes> {
+        self.data.as_ref()
+    }
+
+    /// Returns the materialized data of this section mutably, when present.
+    #[inline]
+    pub fn data_mut(&mut self) -> Option<&mut AlignedBytes> {
+        self.data.as_mut()
+    }
+
+    #[inline]
+    fn install_data(&mut self, data: AlignedBytes) {
+        if self.data.is_none() {
+            self.data = Some(data);
+        }
+    }
+
+    /// Returns whether installed data should override the original bytes during
+    /// whole-DSO materialization.
+    #[inline]
+    pub const fn is_override(&self) -> bool {
+        self.override_data
+    }
+
+    #[inline]
+    fn mark_data_override(&mut self) {
+        self.override_data = true;
+    }
+
+    /// Returns the concrete arena placement of this section, when present.
+    #[inline]
+    pub(crate) fn placement(&self) -> Option<SectionPlacement> {
+        self.placement
+    }
+
+    #[inline]
+    fn set_placement(&mut self, placement: SectionPlacement) {
+        self.placement = Some(placement);
+    }
+
+    #[inline]
+    fn clear_placement(&mut self) -> Option<SectionPlacement> {
+        self.placement.take()
+    }
+}
+
+/// A dense arena of section records.
 #[derive(Debug, Clone, Default)]
-pub struct LayoutSectionMetadataArena {
-    sections: EntityArena<LayoutSectionId, LayoutSectionMetadata>,
+pub(crate) struct LayoutSectionArena {
+    sections: PrimaryMap<SectionId, LayoutSectionRecord>,
 }
 
-impl LayoutSectionMetadataArena {
-    /// Creates an empty metadata arena.
+impl LayoutSectionArena {
     #[inline]
-    pub fn new() -> Self {
-        Self::default()
+    pub(crate) fn insert(&mut self, owner: ModuleId, metadata: SectionMetadata) -> SectionId {
+        self.sections
+            .push(LayoutSectionRecord::new(owner, metadata))
     }
 
+    /// Returns one section record by id.
     #[inline]
-    pub fn insert(&mut self, section: LayoutSectionMetadata) -> LayoutSectionId {
-        self.sections.push(section)
+    pub(crate) fn record(&self, id: SectionId) -> Option<&LayoutSectionRecord> {
+        self.sections.get(id)
+    }
+
+    /// Returns one section record by id mutably.
+    #[inline]
+    pub(crate) fn record_mut(&mut self, id: SectionId) -> Option<&mut LayoutSectionRecord> {
+        self.sections.get_mut(id)
     }
 
     /// Returns one section metadata record by id.
     #[inline]
-    pub fn get(&self, id: LayoutSectionId) -> Option<&LayoutSectionMetadata> {
-        self.sections.get(id)
+    pub(crate) fn get(&self, id: SectionId) -> Option<&SectionMetadata> {
+        self.record(id).map(LayoutSectionRecord::metadata)
+    }
+
+    /// Returns the owner module of one section.
+    #[inline]
+    pub(crate) fn owner(&self, id: SectionId) -> Option<ModuleId> {
+        self.record(id).map(LayoutSectionRecord::owner)
     }
 
     /// Returns one section metadata record by id mutably.
     #[inline]
-    pub fn get_mut(&mut self, id: LayoutSectionId) -> Option<&mut LayoutSectionMetadata> {
-        self.sections.get_mut(id)
+    pub(crate) fn get_mut(&mut self, id: SectionId) -> Option<&mut SectionMetadata> {
+        self.record_mut(id).map(LayoutSectionRecord::metadata_mut)
+    }
+
+    /// Iterates over section ids and section records together.
+    #[inline]
+    pub(crate) fn iter_records(&self) -> impl Iterator<Item = (SectionId, &LayoutSectionRecord)> {
+        self.sections.iter()
     }
 
     /// Iterates over section ids and metadata records together.
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (LayoutSectionId, &LayoutSectionMetadata)> {
-        self.sections.iter()
-    }
-
-    /// Iterates over section ids and metadata records together mutably.
-    #[inline]
-    pub fn iter_mut(
-        &mut self,
-    ) -> impl Iterator<Item = (LayoutSectionId, &mut LayoutSectionMetadata)> {
-        self.sections.iter_mut()
-    }
-}
-
-/// The materialized data owned by one section.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LayoutSectionData {
-    /// Materialized file-backed bytes.
-    Bytes(Box<[u8]>),
-    /// Logical zero-fill storage.
-    ZeroFill { size: usize },
-}
-
-impl LayoutSectionData {
-    /// Returns the logical size in bytes.
-    #[inline]
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Bytes(bytes) => bytes.len(),
-            Self::ZeroFill { size } => *size,
-        }
-    }
-
-    /// Returns whether the data length is zero.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns the materialized bytes when the section is file-backed.
-    #[inline]
-    pub fn bytes(&self) -> Option<&[u8]> {
-        match self {
-            Self::Bytes(bytes) => Some(bytes),
-            Self::ZeroFill { .. } => None,
-        }
-    }
-}
-
-/// A dense arena of materialized section-data records.
-#[derive(Debug, Clone, Default)]
-pub struct LayoutSectionDataArena {
-    data: EntityArena<LayoutSectionDataId, LayoutSectionData>,
-}
-
-impl LayoutSectionDataArena {
-    /// Creates an empty section-data arena.
-    #[inline]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub(super) fn push(&mut self, data: ScannedMemoryData) -> LayoutSectionDataId {
-        let record = match data {
-            ScannedMemoryData::Bytes(bytes) => LayoutSectionData::Bytes(bytes),
-            ScannedMemoryData::ZeroFill { size } => LayoutSectionData::ZeroFill { size },
-        };
-        self.data.push(record)
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (SectionId, &SectionMetadata)> {
+        self.iter_records()
+            .map(|(id, record)| (id, record.metadata()))
     }
 
     /// Returns one materialized section-data record by id.
     #[inline]
-    pub fn get(&self, id: LayoutSectionDataId) -> Option<&LayoutSectionData> {
-        self.data.get(id)
+    pub(crate) fn data(&self, id: SectionId) -> Option<&AlignedBytes> {
+        self.record(id).and_then(LayoutSectionRecord::data)
+    }
+
+    /// Returns one materialized section-data record by id mutably.
+    #[inline]
+    pub(crate) fn data_mut(&mut self, id: SectionId) -> Option<&mut AlignedBytes> {
+        self.record_mut(id).and_then(LayoutSectionRecord::data_mut)
+    }
+
+    pub(crate) fn with_disjoint_data_mut<R>(
+        &mut self,
+        read_a: SectionId,
+        read_b: SectionId,
+        write: SectionId,
+        f: impl FnOnce(&AlignedBytes, &AlignedBytes, &mut AlignedBytes) -> R,
+    ) -> Option<R> {
+        debug_assert!(
+            read_a != read_b && read_a != write && read_b != write,
+            "disjoint section data request referenced the same section more than once",
+        );
+
+        let (before_write, write_record, after_write) = self.sections.split_at_mut(write)?;
+        let write_index = before_write.len();
+        let write_data = write_record.data_mut()?;
+
+        let read_record = |section: SectionId| {
+            let index = section.index();
+            if index < write_index {
+                before_write.get(index)
+            } else {
+                after_write.get(index - write_index - 1)
+            }
+        };
+
+        let read_a_data = read_record(read_a)?.data()?;
+        let read_b_data = read_record(read_b)?.data()?;
+        Some(f(read_a_data, read_b_data, write_data))
+    }
+
+    #[inline]
+    pub(crate) fn is_override(&self, section: SectionId) -> bool {
+        self.record(section)
+            .is_some_and(LayoutSectionRecord::is_override)
+    }
+
+    #[inline]
+    pub(crate) fn push_scanned(
+        &mut self,
+        section: SectionId,
+        bytes: AlignedBytes,
+    ) -> Option<SectionId> {
+        self.install_data(section, bytes)
+    }
+
+    #[inline]
+    pub(crate) fn install_data(
+        &mut self,
+        section: SectionId,
+        data: AlignedBytes,
+    ) -> Option<SectionId> {
+        let record = self.record_mut(section)?;
+        record.install_data(data);
+        Some(section)
+    }
+
+    pub(crate) fn install_scanned_data(
+        &mut self,
+        section: SectionId,
+        bytes: impl Into<AlignedBytes>,
+    ) {
+        self.push_scanned(section, bytes.into())
+            .expect("layout section arena failed to install scanned section data");
+    }
+
+    #[inline]
+    pub(crate) fn mark_data_override(&mut self, section: SectionId) -> Option<()> {
+        let record = self.record_mut(section)?;
+        record.mark_data_override();
+        Some(())
+    }
+
+    /// Returns the concrete arena placement of one section, when present.
+    #[inline]
+    pub(crate) fn placement(&self, id: SectionId) -> Option<SectionPlacement> {
+        self.record(id).and_then(LayoutSectionRecord::placement)
+    }
+
+    #[inline]
+    pub(crate) fn set_placement(
+        &mut self,
+        section: SectionId,
+        placement: SectionPlacement,
+    ) -> bool {
+        let Some(record) = self.record_mut(section) else {
+            return false;
+        };
+        record.set_placement(placement);
+        true
+    }
+
+    #[inline]
+    pub(crate) fn clear_placement(&mut self, section: SectionId) -> Option<SectionPlacement> {
+        self.record_mut(section)
+            .and_then(LayoutSectionRecord::clear_placement)
     }
 }
 
 /// One module's logical section view inside the layout plan.
 #[derive(Debug, Clone, Default)]
 pub struct ModuleLayout {
-    alloc_sections: Box<[LayoutSectionId]>,
-    scanned_sections: BTreeMap<ScannedSectionId, LayoutSectionId>,
+    scanned_sections: SecondaryMap<ScannedSectionId, SectionId>,
+    alloc_sections: Box<[SectionId]>,
+    relocation_sections: Box<[SectionId]>,
+    symbol_table_sections: Box<[SectionId]>,
+    allocated_relocation_sections: Box<[SectionId]>,
+    dynamic_section: Option<SectionId>,
 }
 
 impl ModuleLayout {
@@ -442,75 +527,141 @@ impl ModuleLayout {
     }
 
     /// Creates one module layout from explicit scanned-section mappings.
-    pub fn from_sections<I>(sections: I) -> Self
+    pub(crate) fn from_sections<I, S>(sections: I, arena: &LayoutSectionArena) -> Self
     where
-        I: IntoIterator<Item = (ScannedSectionId, LayoutSectionId)>,
+        I: IntoIterator<Item = (S, SectionId)>,
+        S: Into<ScannedSectionId>,
     {
-        let mut ordered = Vec::new();
-        let mut scanned_sections = BTreeMap::new();
+        let mut scanned_sections = SecondaryMap::default();
+        let mut alloc_sections = Vec::new();
+        let mut relocation_sections = Vec::new();
+        let mut symbol_table_sections = Vec::new();
+        let mut allocated_relocation_sections = Vec::new();
+        let mut dynamic_section = None;
 
         for (scanned_section, section_id) in sections {
-            ordered.push(section_id);
-            scanned_sections.insert(scanned_section, section_id);
+            let scanned_section = scanned_section.into();
+            let previous = scanned_sections.insert(scanned_section, section_id);
+            assert!(
+                previous.is_none(),
+                "module layout referenced duplicate scanned section id"
+            );
+
+            let section = arena
+                .get(section_id)
+                .expect("module layout referenced missing section metadata");
+            if section.is_allocated() {
+                alloc_sections.push(section_id);
+            }
+            if section.is_symbol_table() {
+                symbol_table_sections.push(section_id);
+            }
+            if section.is_allocated_relocation() {
+                allocated_relocation_sections.push(section_id);
+            } else if section.is_relocation() {
+                relocation_sections.push(section_id);
+            }
+            if section.is_dynamic() {
+                let previous = dynamic_section.replace(section_id);
+                assert!(
+                    previous.is_none(),
+                    "module layout referenced duplicate dynamic section"
+                );
+            }
         }
 
         Self {
-            alloc_sections: ordered.into_boxed_slice(),
             scanned_sections,
+            alloc_sections: alloc_sections.into_boxed_slice(),
+            relocation_sections: relocation_sections.into_boxed_slice(),
+            symbol_table_sections: symbol_table_sections.into_boxed_slice(),
+            allocated_relocation_sections: allocated_relocation_sections.into_boxed_slice(),
+            dynamic_section,
         }
     }
 
     /// Builds a section-granularity layout seed from a scanned module.
-    pub fn from_scanned<D>(
+    pub(crate) fn from_scanned<D>(
+        owner: ModuleId,
         module: &ScannedDylib<D>,
-        section_metadata: &mut LayoutSectionMetadataArena,
+        arena: &mut LayoutSectionArena,
     ) -> Self
     where
         D: 'static,
     {
-        Self::from_sections(module.alloc_sections().map(|section| {
-            let section_id = section_metadata.insert(LayoutSectionMetadata::from_scanned(section));
-            (section.id(), section_id)
-        }))
+        let mut section_links = Vec::new();
+        let mut mappings = Vec::new();
+        for section in module.sections() {
+            let section_id = arena.insert(owner, SectionMetadata::from_scanned(section));
+            section_links.push((
+                section_id,
+                section.linked_section_id(),
+                section.info_section_id(),
+            ));
+            mappings.push((section.id(), section_id));
+        }
+
+        let layout = Self::from_sections(mappings, arena);
+        for (section_id, linked_scanned, info_scanned) in section_links {
+            let linked_section = linked_scanned.and_then(|id| layout.section_id(id));
+            let info_section = info_scanned.and_then(|id| layout.section_id(id));
+            if let Some(metadata) = arena.get_mut(section_id) {
+                metadata.set_links(linked_section, info_section);
+            }
+        }
+
+        layout
+    }
+
+    /// Returns whether this module owns `section`.
+    #[inline]
+    pub fn contains_section(&self, section: SectionId) -> bool {
+        self.scanned_sections
+            .iter()
+            .any(|(_, section_id)| *section_id == section)
     }
 
     /// Returns the allocatable section ids that participate in default packing.
     #[inline]
-    pub fn alloc_sections(&self) -> &[LayoutSectionId] {
+    pub fn alloc_sections(&self) -> &[SectionId] {
         &self.alloc_sections
+    }
+
+    /// Returns the non-allocated relocation section ids owned by the module.
+    #[inline]
+    pub fn relocation_sections(&self) -> &[SectionId] {
+        &self.relocation_sections
+    }
+
+    /// Returns the symbol-table section ids owned by the module.
+    #[inline]
+    pub fn symbol_table_sections(&self) -> &[SectionId] {
+        &self.symbol_table_sections
+    }
+
+    /// Returns allocated retained relocation section ids owned by the module.
+    #[inline]
+    pub fn allocated_relocation_sections(&self) -> &[SectionId] {
+        &self.allocated_relocation_sections
+    }
+
+    /// Returns the dynamic section owned by the module, when present.
+    #[inline]
+    pub fn dynamic_section(&self) -> Option<SectionId> {
+        self.dynamic_section
     }
 
     /// Returns one section id by its original scanned section id.
     #[inline]
-    pub fn section_id(&self, section: ScannedSectionId) -> Option<LayoutSectionId> {
-        self.scanned_sections.get(&section).copied()
-    }
-
-    #[inline]
-    pub(super) fn insert_section(
-        &mut self,
-        scanned_section: ScannedSectionId,
-        section_id: LayoutSectionId,
-    ) {
-        self.scanned_sections.insert(scanned_section, section_id);
+    pub fn section_id(&self, section: impl Into<ScannedSectionId>) -> Option<SectionId> {
+        self.scanned_sections.get(section.into()).copied()
     }
 
     /// Iterates over every known section mapping for this module.
     #[inline]
-    pub fn section_entries(&self) -> impl Iterator<Item = (&ScannedSectionId, &LayoutSectionId)> {
-        self.scanned_sections.iter()
-    }
-}
-
-#[inline]
-fn classify_section(section: ScannedSection<'_>) -> LayoutMemoryClass {
-    match section
-        .memory_kind()
-        .expect("section-granularity layout seeding requires alloc sections")
-    {
-        ScannedMemoryKind::Code => LayoutMemoryClass::Code,
-        ScannedMemoryKind::ReadOnlyData => LayoutMemoryClass::ReadOnlyData,
-        ScannedMemoryKind::WritableData => LayoutMemoryClass::WritableData,
-        ScannedMemoryKind::ThreadLocalData => LayoutMemoryClass::ThreadLocalData,
+    pub fn section_entries(&self) -> impl Iterator<Item = (ScannedSectionId, &SectionId)> {
+        self.scanned_sections
+            .iter()
+            .map(|(scanned, section)| (scanned, section))
     }
 }

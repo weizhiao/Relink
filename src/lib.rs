@@ -113,6 +113,7 @@ compile_error!(
     "Unsupported target architecture. Supported architectures: x86_64, aarch64, riscv64, riscv32, loongarch64, x86, arm"
 );
 
+mod aligned_bytes;
 pub mod arch;
 pub mod elf;
 mod entity;
@@ -130,8 +131,10 @@ mod segment;
 mod sync;
 pub mod tls;
 
+pub(crate) use aligned_bytes::ByteRepr;
 pub(crate) use error::*;
 
+pub use aligned_bytes::AlignedBytes;
 pub use error::{
     CustomError, Error, IoError, LinkerError, MmapError, ParseDynamicError, ParseEhdrError,
     ParsePhdrError, RelocationContextError, RelocationError, TlsError,

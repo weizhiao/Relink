@@ -96,10 +96,22 @@ impl<D> LoadedCore<D> {
         self.core.base()
     }
 
-    /// Gets the memory length of the ELF object map
+    /// Gets the length of the bounding runtime span covered by mapped memory.
     #[inline]
     pub fn mapped_len(&self) -> usize {
         self.core.mapped_len()
+    }
+
+    /// Returns whether `addr` is inside one of this module's mapped slices.
+    #[inline]
+    pub fn contains_addr(&self, addr: usize) -> bool {
+        self.core.contains_addr(addr)
+    }
+
+    /// Returns whether the backing memory is one contiguous span with no gaps.
+    #[inline]
+    pub fn is_contiguous_mapping(&self) -> bool {
+        self.core.is_contiguous_mapping()
     }
 
     /// Gets the user-defined data associated with the ELF object
@@ -573,7 +585,7 @@ impl<D> ElfCore<D> {
     /// Gets the base address of the ELF object
     #[inline]
     pub fn base(&self) -> usize {
-        self.base_addr().into_inner()
+        self.inner.segments.base()
     }
 
     #[inline]
@@ -581,10 +593,28 @@ impl<D> ElfCore<D> {
         self.inner.segments.base_addr()
     }
 
-    /// Gets the memory length of the ELF object map
+    /// Gets the length of the bounding runtime span covered by mapped memory.
     #[inline]
     pub fn mapped_len(&self) -> usize {
-        self.inner.segments.len()
+        self.inner.segments.mapped_len()
+    }
+
+    /// Returns the lowest runtime address covered by this image's mapped slices.
+    #[inline]
+    pub(crate) fn mapped_base(&self) -> usize {
+        self.inner.segments.mapped_base()
+    }
+
+    /// Returns whether `addr` is inside one of this image's mapped slices.
+    #[inline]
+    pub fn contains_addr(&self, addr: usize) -> bool {
+        self.inner.segments.contains_addr(addr)
+    }
+
+    /// Returns whether the backing memory is one contiguous span with no gaps.
+    #[inline]
+    pub fn is_contiguous_mapping(&self) -> bool {
+        self.inner.segments.is_contiguous_mapping()
     }
 
     /// Gets the symbol table
@@ -662,7 +692,7 @@ impl<D> ElfCore<D> {
             return Err(ParsePhdrError::MissingDynamicSection.into());
         }
 
-        segments.offset = (segments.memory as usize).wrapping_sub(base);
+        segments.set_base(base);
         let dynamic = ElfDynamic::new(dynamic_ptr, &segments)?;
         Ok(Self {
             inner: Arc::new(CoreInner {

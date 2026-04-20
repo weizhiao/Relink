@@ -265,7 +265,7 @@ impl ElfRela {
     /// Sets the relocation offset.
     /// This is used internally when adjusting relocation entries during loading.
     #[inline]
-    #[cfg(feature = "object")]
+    #[cfg(not(any(target_arch = "x86", target_arch = "arm")))]
     pub(crate) fn set_offset(&mut self, offset: usize) {
         self.rela.r_offset = offset as _;
     }
@@ -311,11 +311,7 @@ impl ElfRel {
     /// Sets the relocation offset.
     /// This is used internally when adjusting relocation entries during loading.
     #[inline]
-    #[cfg(feature = "object")]
-    #[cfg_attr(
-        all(not(target_arch = "x86"), not(target_arch = "arm")),
-        allow(dead_code)
-    )]
+    #[cfg(any(target_arch = "x86", target_arch = "arm"))]
     pub(crate) fn set_offset(&mut self, offset: usize) {
         self.rel.r_offset = offset as _;
     }

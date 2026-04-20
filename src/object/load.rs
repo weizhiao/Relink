@@ -52,8 +52,8 @@ where
         logging::info!(
             "Loaded object: {} at [0x{:x}-0x{:x}]",
             raw.name(),
-            raw.base(),
-            raw.base() + raw.core.inner.segments.len()
+            raw.mapped_base(),
+            raw.mapped_base() + raw.mapped_len()
         );
 
         Ok(raw)

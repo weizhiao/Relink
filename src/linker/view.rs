@@ -1,60 +1,97 @@
-use super::storage::{CommittedStorageView, StagedStorageView};
+use super::{session::ResolveSession, storage::CommittedStorageView};
 
-/// Read-only view of the loaded modules currently visible to a load session.
-///
-/// The view can represent the stable contents of a [`LinkContext`] plus any
-/// newly linked modules that were produced earlier in the current `load()`
-/// call.
-pub struct LinkContextView<'a, K, D: 'static> {
-    committed: CommittedStorageView<'a, K, D>,
-    staged: Option<StagedStorageView<'a, K, D>>,
+pub(crate) trait DependencyGraphEntries<K> {
+    fn contains_key(&self, key: &K) -> bool;
+
+    fn direct_deps(&self, key: &K) -> Option<&[K]>;
 }
 
-impl<'a, K, D: 'static> Copy for LinkContextView<'a, K, D> {}
+impl<K, P> DependencyGraphEntries<K> for ResolveSession<K, P>
+where
+    K: Ord,
+{
+    #[inline]
+    fn contains_key(&self, key: &K) -> bool {
+        self.entries.contains_key(key)
+    }
 
-impl<'a, K, D: 'static> Clone for LinkContextView<'a, K, D> {
+    #[inline]
+    fn direct_deps(&self, key: &K) -> Option<&[K]> {
+        self.entries.get(key).and_then(|entry| entry.direct_deps())
+    }
+}
+
+enum DependencyGraphSource<'a, K, D: 'static> {
+    Committed(CommittedStorageView<'a, K, D>),
+    Overlay {
+        committed: CommittedStorageView<'a, K, D>,
+        local: &'a dyn DependencyGraphEntries<K>,
+    },
+}
+
+impl<'a, K, D: 'static> Copy for DependencyGraphSource<'a, K, D> {}
+
+impl<'a, K, D: 'static> Clone for DependencyGraphSource<'a, K, D> {
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, K, D: 'static> LinkContextView<'a, K, D>
+/// Read-only dependency-graph view visible to one resolution pass.
+pub struct DependencyGraphView<'a, K, D: 'static> {
+    source: DependencyGraphSource<'a, K, D>,
+}
+
+impl<'a, K, D: 'static> Copy for DependencyGraphView<'a, K, D> {}
+
+impl<'a, K, D: 'static> Clone for DependencyGraphView<'a, K, D> {
+    #[inline]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, K, D: 'static> DependencyGraphView<'a, K, D>
 where
     K: Ord,
 {
     #[inline]
-    pub(crate) fn new(
-        committed: CommittedStorageView<'a, K, D>,
-        staged: Option<StagedStorageView<'a, K, D>>,
-    ) -> Self {
-        Self { committed, staged }
+    pub(crate) fn new_committed(committed: CommittedStorageView<'a, K, D>) -> Self {
+        Self {
+            source: DependencyGraphSource::Committed(committed),
+        }
     }
 
-    /// Returns whether the key is already present in the visible linked modules.
+    #[inline]
+    pub(crate) fn new_overlay(
+        committed: CommittedStorageView<'a, K, D>,
+        local: &'a dyn DependencyGraphEntries<K>,
+    ) -> Self {
+        Self {
+            source: DependencyGraphSource::Overlay { committed, local },
+        }
+    }
+
+    /// Returns whether the key is already present in the visible dependency graph.
     #[inline]
     pub fn contains_key(&self, key: &K) -> bool {
-        self.staged
-            .as_ref()
-            .is_some_and(|staged| staged.contains_key(key))
-            || self.committed.contains_key(key)
+        match self.source {
+            DependencyGraphSource::Committed(committed) => committed.contains_key(key),
+            DependencyGraphSource::Overlay { committed, local } => {
+                local.contains_key(key) || committed.contains_key(key)
+            }
+        }
     }
 
     /// Returns the direct dependency keys recorded for a module.
     #[inline]
     pub fn direct_deps(&self, key: &K) -> Option<&'a [K]> {
-        self.staged
-            .as_ref()
-            .and_then(|staged| staged.direct_deps(key))
-            .or_else(|| self.committed.direct_deps(key))
-    }
-
-    /// Returns the visible module for a key.
-    #[inline]
-    pub fn get(&self, key: &K) -> Option<&'a crate::image::LoadedCore<D>> {
-        self.staged
-            .as_ref()
-            .and_then(|staged| staged.get(key))
-            .or_else(|| self.committed.get(key))
+        match self.source {
+            DependencyGraphSource::Committed(committed) => committed.direct_deps(key),
+            DependencyGraphSource::Overlay { committed, local } => local
+                .direct_deps(key)
+                .or_else(|| committed.direct_deps(key)),
+        }
     }
 }
