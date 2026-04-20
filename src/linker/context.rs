@@ -1,7 +1,7 @@
 use super::{
     layout::{Materialization, MemoryLayoutPlan},
     mapped, materialization,
-    plan::{LinkModuleId, LinkPipeline, LinkPlan},
+    plan::{LinkPipeline, LinkPlan, ModuleId},
     request::{RelocationPlanner, RelocationRequest},
     resolve::{KeyResolver, LoadResolveContext, ScanResolveContext},
     session::{GraphEntry, LoadSession, ResolveSession},
@@ -9,7 +9,7 @@ use super::{
     view::DependencyGraphView,
 };
 use crate::{
-    AlignedBytes, LinkerError, Loader, Result,
+    LinkerError, Loader, Result,
     entity::SecondaryMap,
     image::{LoadedCore, RawDylib},
     loader::LoadHook,
@@ -368,39 +368,38 @@ where
             .map(|module_id| module_keys[*module_id].clone())
             .collect();
 
-        let mut materialize_raw = |module_id: LinkModuleId,
-                                   scanned: crate::image::ScannedDylib<D>|
-         -> Result<RawDylib<D>> {
-            match memory_layout
-                .materialization(module_id)
-                .unwrap_or(Materialization::WholeDsoRegion)
-            {
-                Materialization::SectionRegions => {
-                    let runtime = mapped_runtime
-                        .as_mut()
-                        .ok_or_else(|| {
-                            LinkerError::runtime_memory(
-                                "section-region planned load is missing mapped runtime memory",
-                            )
-                        })?
-                        .take_module(module_id)?;
-                    let mut raw = mapped::build_arena_raw_dylib::<D, Tls>(
-                        scanned,
-                        runtime,
-                        init_fn.clone(),
-                        fini_fn.clone(),
-                        force_static_tls,
-                    )?;
-                    loader.inner.post_load_dylib(&mut raw)?;
-                    Ok(raw)
+        let mut materialize_raw =
+            |module_id: ModuleId, scanned: crate::image::ScannedDylib<D>| -> Result<RawDylib<D>> {
+                match memory_layout
+                    .materialization(module_id)
+                    .unwrap_or(Materialization::WholeDsoRegion)
+                {
+                    Materialization::SectionRegions => {
+                        let runtime = mapped_runtime
+                            .as_mut()
+                            .ok_or_else(|| {
+                                LinkerError::runtime_memory(
+                                    "section-region planned load is missing mapped runtime memory",
+                                )
+                            })?
+                            .take_module(module_id)?;
+                        let mut raw = mapped::build_arena_raw_dylib::<D, Tls>(
+                            scanned,
+                            runtime,
+                            init_fn.clone(),
+                            fini_fn.clone(),
+                            force_static_tls,
+                        )?;
+                        loader.inner.post_load_dylib(&mut raw)?;
+                        Ok(raw)
+                    }
+                    Materialization::WholeDsoRegion => {
+                        let mut raw = loader.load_dylib_impl(scanned.into_reader())?;
+                        apply_section_overrides(&mut raw, module_id, &memory_layout)?;
+                        Ok(raw)
+                    }
                 }
-                Materialization::WholeDsoRegion => {
-                    let mut raw = loader.load_dylib_impl(scanned.into_reader())?;
-                    apply_planned_section_overrides(&mut raw, module_id, &memory_layout)?;
-                    Ok(raw)
-                }
-            }
-        };
+            };
 
         for (module_id, entry) in entries {
             let (key, module, direct_dep_ids) = entry.into_parts();
@@ -617,36 +616,30 @@ impl<K, D: 'static> PreparedLoad<K, D> {
     }
 }
 
-fn apply_planned_section_overrides<D>(
+fn apply_section_overrides<D>(
     raw: &mut RawDylib<D>,
-    module_id: LinkModuleId,
+    module_id: ModuleId,
     layout: &MemoryLayoutPlan,
 ) -> Result<()> {
     let module = layout.module(module_id);
     let segments = raw.core_ref().segments();
 
     for section_id in module.alloc_sections().iter().copied() {
-        if !layout.section_overrides_original_data(section_id) {
+        if !layout.section_is_override(section_id) {
             continue;
         }
-        let metadata = layout.section_metadata(section_id);
-        let Some(data) = layout.section_data(section_id) else {
-            continue;
-        };
+        let metadata = layout.section(section_id);
+        let data = layout
+            .data(section_id)
+            .expect("missing section data for planned override");
         let dst = segments.get_slice_mut::<u8>(metadata.source_address(), metadata.size());
-        write_planned_section_override(dst, data)?;
+        assert_eq!(
+            data.len(),
+            dst.len(),
+            "planned section override size does not match the loaded section"
+        );
+        dst.copy_from_slice(data.as_ref());
     }
-
-    Ok(())
-}
-
-fn write_planned_section_override(dst: &mut [u8], data: &AlignedBytes) -> Result<()> {
-    assert_eq!(
-        data.len(),
-        dst.len(),
-        "planned section override size does not match the loaded section"
-    );
-    dst.copy_from_slice(data.as_ref());
 
     Ok(())
 }

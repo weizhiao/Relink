@@ -4,11 +4,11 @@ use elf_loader::{
     Loader,
     image::{LoadedCore, ModuleCapability},
     input::ElfBinary,
+    linker::{Arena, ArenaSharing, MemoryClass},
     linker::{
-        KeyResolver, LinkContext, LinkPassPlan, LinkPipeline, Materialization, RelocationInputs,
-        RelocationRequest, ResolvedKey,
+        DataPass, KeyResolver, LinkContext, LinkPassPlan, LinkPipeline, Materialization,
+        RelocationInputs, RelocationRequest, ReorderPass, ResolvedKey,
     },
-    linker::{LayoutArena, LayoutArenaSharing, LayoutMemoryClass},
     relocation::Relocator,
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
@@ -122,26 +122,27 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
         data: bytes,
     };
     let mut pipeline = LinkPipeline::new();
-    let mut configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
-        let root = plan.root_module();
-        let data_section = plan
-            .entry(root)
-            .expect("missing scanned root module")
-            .alloc_sections()
-            .find(|section| section.name() == ".data")
-            .expect("generated test dylib should contain a .data section")
-            .id();
-        let layout_section = plan
-            .memory_layout()
-            .module_section_id(root, data_section)
-            .expect("missing planned .data section");
-        plan.section_data_mut(layout_section)?
-            .expect("missing materialized .data bytes")
-            .as_bytes_mut()
-            .copy_from_slice(&[9, 8, 7, 6]);
-        Ok(())
-    };
-    pipeline.push(&mut configure);
+    let configure =
+        |plan: &mut LinkPassPlan<'_, &'static str, (), DataPass>| -> elf_loader::Result<()> {
+            let root = plan.root();
+            let data_section = plan
+                .get(root)
+                .expect("missing scanned root module")
+                .module()
+                .alloc_sections()
+                .find(|section| section.name() == ".data")
+                .expect("generated test dylib should contain a .data section")
+                .id();
+            let layout_section = plan
+                .section(root, data_section)
+                .expect("missing planned .data section");
+            plan.data_mut(layout_section)?
+                .expect("missing materialized .data bytes")
+                .as_bytes_mut()
+                .copy_from_slice(&[9, 8, 7, 6]);
+            Ok(())
+        };
+    pipeline.push_scoped::<DataPass, _>(configure);
 
     let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
     let mut planner = empty_relocation_plan;
@@ -281,43 +282,43 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
         data: bytes,
     };
     let mut pipeline = LinkPipeline::new();
-    let mut configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
-        assert!(
-            plan.module_capability(&"root") == Some(ModuleCapability::SectionReorderable),
-            "generated test dylib should expose retained relocation repair inputs",
-        );
-        let root = plan.root_module();
-
-        let data_section = plan
-            .entry(root)
-            .expect("missing scanned root module")
-            .alloc_sections()
-            .find(|section| section.name() == ".data")
-            .expect("generated test dylib should contain a .data section")
-            .id();
-        let layout_section = plan
-            .memory_layout()
-            .module_section_id(root, data_section)
-            .expect("missing planned .data section");
-        {
-            plan.section_data_mut(layout_section)?
-                .expect("missing materialized .data bytes")
-                .as_bytes_mut()
-                .copy_from_slice(&[9, 8, 7, 6]);
-            let layout = plan.memory_layout_mut();
-            let arena = layout.create_arena(LayoutArena::new(
-                4096,
-                LayoutMemoryClass::WritableData,
-                LayoutArenaSharing::Private,
-            ));
+    let configure =
+        |plan: &mut LinkPassPlan<'_, &'static str, (), ReorderPass>| -> elf_loader::Result<()> {
+            let root = plan.root();
             assert!(
-                layout.assign_section_to_arena(layout_section, arena, 0),
-                "failed to assign .data into arena",
+                plan.capability(root) == Some(ModuleCapability::SectionReorderable),
+                "generated test dylib should expose retained relocation repair inputs",
             );
-        }
-        Ok(())
-    };
-    pipeline.push(&mut configure);
+
+            let data_section = plan
+                .get(root)
+                .expect("missing scanned root module")
+                .module()
+                .alloc_sections()
+                .find(|section| section.name() == ".data")
+                .expect("generated test dylib should contain a .data section")
+                .id();
+            let layout_section = plan
+                .section(root, data_section)
+                .expect("missing planned .data section");
+            {
+                plan.data_mut(layout_section)?
+                    .expect("missing materialized .data bytes")
+                    .as_bytes_mut()
+                    .copy_from_slice(&[9, 8, 7, 6]);
+                let arena = plan.create_arena(Arena::new(
+                    4096,
+                    MemoryClass::WritableData,
+                    ArenaSharing::Private,
+                ));
+                assert!(
+                    plan.assign(layout_section, arena, 0),
+                    "failed to assign .data into arena",
+                );
+            }
+            Ok(())
+        };
+    pipeline.push_scoped::<ReorderPass, _>(configure);
 
     let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
     let mut planner = empty_relocation_plan;
@@ -370,12 +371,13 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
     let mut pipeline = LinkPipeline::new();
     let mut observed_capability = None;
     let mut observed_materialization = None;
-    let mut configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
-        observed_capability = plan.module_capability(&"root");
-        observed_materialization = plan.module_materialization(&"root");
+    let configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
+        let root = plan.root();
+        observed_capability = plan.capability(root);
+        observed_materialization = plan.materialization(root);
         Ok(())
     };
-    pipeline.push(&mut configure);
+    pipeline.push(configure);
 
     let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
     let mut planner = empty_relocation_plan;
@@ -390,6 +392,7 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
             &mut planner,
         )
         .expect("failed to load section-reorderable dylib through the default section-region path");
+    drop(pipeline);
 
     assert_eq!(
         observed_capability,
@@ -429,17 +432,17 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
     let mut pipeline = LinkPipeline::new();
     let mut observed_capability = None;
     let mut saw_missing_section_headers = false;
-    let mut configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
-        observed_capability = plan.module_capability(&"root");
-        let root = plan.root_module();
+    let configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
+        let root = plan.root();
+        observed_capability = plan.capability(root);
         saw_missing_section_headers = plan
-            .entry(root)
-            .and_then(|module| module.section_headers())
+            .get(root)
+            .and_then(|module| module.module().section_headers())
             .is_none();
-        plan.set_module_materialization(root, Materialization::WholeDsoRegion);
+        plan.set_materialization(root, Materialization::WholeDsoRegion);
         Ok(())
     };
-    pipeline.push(&mut configure);
+    pipeline.push(configure);
 
     let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
     let mut planner = empty_relocation_plan;
@@ -454,6 +457,7 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
             &mut planner,
         )
         .expect("failed to load opaque dylib through scan-first path");
+    drop(pipeline);
 
     assert_eq!(observed_capability, Some(ModuleCapability::Opaque));
     assert!(
@@ -488,11 +492,12 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
     };
     let mut pipeline = LinkPipeline::new();
     let mut observed_capability = None;
-    let mut configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
-        observed_capability = plan.module_capability(&"root");
+    let configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
+        let root = plan.root();
+        observed_capability = plan.capability(root);
         Ok(())
     };
-    pipeline.push(&mut configure);
+    pipeline.push(configure);
 
     let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
     let mut planner = empty_relocation_plan;
@@ -507,6 +512,7 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
             &mut planner,
         )
         .expect("scan-first load should downgrade unusable section tables");
+    drop(pipeline);
 
     assert!(loaded.mapped_len() > 0);
     assert_eq!(observed_capability, Some(ModuleCapability::Opaque));
@@ -527,30 +533,31 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
     let mut pipeline = LinkPipeline::new();
     let mut observed_capability = None;
     let mut observed_materialization = None;
-    let mut configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
-        observed_capability = plan.module_capability(&"root");
-        observed_materialization = plan.module_materialization(&"root");
-        let root = plan.root_module();
+    let configure =
+        |plan: &mut LinkPassPlan<'_, &'static str, (), DataPass>| -> elf_loader::Result<()> {
+            let root = plan.root();
+            observed_capability = plan.capability(root);
+            observed_materialization = plan.materialization(root);
 
-        let data_section = plan
-            .entry(root)
-            .expect("missing scanned root module")
-            .alloc_sections()
-            .find(|section| section.name() == ".data")
-            .expect("generated test dylib should contain a .data section")
-            .id();
-        let layout_section = plan
-            .memory_layout()
-            .module_section_id(root, data_section)
-            .expect("missing planned .data section");
-        plan.section_data_mut(layout_section)?
-            .expect("missing materialized .data bytes")
-            .as_bytes_mut()
-            .copy_from_slice(&[9, 8, 7, 6]);
-        plan.set_module_materialization(root, Materialization::WholeDsoRegion);
-        Ok(())
-    };
-    pipeline.push(&mut configure);
+            let data_section = plan
+                .get(root)
+                .expect("missing scanned root module")
+                .module()
+                .alloc_sections()
+                .find(|section| section.name() == ".data")
+                .expect("generated test dylib should contain a .data section")
+                .id();
+            let layout_section = plan
+                .section(root, data_section)
+                .expect("missing planned .data section");
+            plan.data_mut(layout_section)?
+                .expect("missing materialized .data bytes")
+                .as_bytes_mut()
+                .copy_from_slice(&[9, 8, 7, 6]);
+            plan.set_materialization(root, Materialization::WholeDsoRegion);
+            Ok(())
+        };
+    pipeline.push_scoped::<DataPass, _>(configure);
 
     let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
     let mut planner = empty_relocation_plan;
@@ -565,6 +572,7 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
             &mut planner,
         )
         .expect("failed to execute whole-DSO scan-first load");
+    drop(pipeline);
 
     assert_eq!(
         observed_capability,
@@ -605,34 +613,18 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
     };
     let mut pipeline = LinkPipeline::new();
     let mut observed_capability = None;
-    let mut configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
-        observed_capability = plan.module_capability(&"root");
-        let root = plan.root_module();
+    let configure =
+        |plan: &mut LinkPassPlan<'_, &'static str, (), DataPass>| -> elf_loader::Result<()> {
+            let root = plan.root();
+            observed_capability = plan.capability(root);
 
-        let data_section = plan
-            .entry(root)
-            .expect("missing scanned root module")
-            .alloc_sections()
-            .find(|section| section.name() == ".data")
-            .expect("generated test dylib should contain a .data section")
-            .id();
-        let layout_section = plan
-            .memory_layout()
-            .module_section_id(root, data_section)
-            .expect("missing planned .data section");
-        let arena = plan.memory_layout_mut().create_arena(LayoutArena::new(
-            4096,
-            LayoutMemoryClass::WritableData,
-            LayoutArenaSharing::Private,
-        ));
-        assert!(
-            plan.memory_layout_mut()
-                .assign_section_to_arena(layout_section, arena, 0),
-            "failed to assign section into an arena for the negative test",
-        );
-        Ok(())
-    };
-    pipeline.push(&mut configure);
+            assert_eq!(
+                plan.set_materialization(root, Materialization::SectionRegions),
+                Some(Materialization::WholeDsoRegion)
+            );
+            Ok(())
+        };
+    pipeline.push_scoped::<DataPass, _>(configure);
 
     let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
     let mut planner = empty_relocation_plan;
@@ -647,9 +639,10 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
             &mut planner,
         )
         .expect_err("section-data modules must reject section-region placement");
+    drop(pipeline);
     assert_eq!(observed_capability, Some(ModuleCapability::SectionData));
     assert!(
-        err.to_string().contains("cannot assign sections to arenas"),
+        err.to_string().contains("cannot use section regions"),
         "unexpected error: {err}",
     );
 }

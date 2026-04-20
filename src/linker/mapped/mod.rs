@@ -1,6 +1,6 @@
-use super::layout::{LayoutSectionId, MemoryLayoutPlan};
+use super::layout::{MemoryLayoutPlan, SectionId};
 use crate::linker::mapped::rewrite::RuntimeMetadataRewriter;
-use crate::linker::plan::{LinkModuleId, LinkPlan};
+use crate::linker::plan::{LinkPlan, ModuleId};
 use crate::{
     LinkerError, Result,
     elf::{ElfDyn, ElfPhdrs, ElfProgramType},
@@ -27,12 +27,12 @@ pub(crate) struct RuntimeModuleMemory {
 #[derive(Default)]
 pub(crate) struct MappedRuntimeMemory {
     arenas: MappedArenaMap,
-    modules: SecondaryMap<LinkModuleId, RuntimeModuleMemory>,
+    modules: SecondaryMap<ModuleId, RuntimeModuleMemory>,
 }
 
 #[derive(Clone, Copy)]
 struct RuntimeSectionMemory {
-    section: LayoutSectionId,
+    section: SectionId,
     source_address: usize,
     runtime_offset: usize,
     size: usize,
@@ -50,7 +50,7 @@ impl RuntimeSectionMemory {
 
 impl RuntimeModuleMemory {
     fn build(
-        module_id: LinkModuleId,
+        module_id: ModuleId,
         layout: &MemoryLayoutPlan,
         mapped_section_arenas: &MappedArenaMap,
     ) -> Result<Self> {
@@ -58,10 +58,10 @@ impl RuntimeModuleMemory {
 
         let mut placed_sections = Vec::with_capacity(module.alloc_sections().len());
         for section_id in module.alloc_sections().iter().copied() {
-            let Some(placement) = layout.section_placement(section_id) else {
+            let Some(placement) = layout.placement(section_id) else {
                 continue;
             };
-            let metadata = layout.section_metadata(section_id);
+            let metadata = layout.section(section_id);
             let arena = mapped_section_arenas
                 .get(placement.arena())
                 .ok_or_else(|| {
@@ -144,7 +144,7 @@ impl MappedRuntimeMemory {
 
     fn build_module(
         &mut self,
-        module_id: LinkModuleId,
+        module_id: ModuleId,
         layout: &MemoryLayoutPlan,
     ) -> Result<&RuntimeModuleMemory> {
         if self.modules.contains_key(module_id) {
@@ -165,7 +165,7 @@ impl MappedRuntimeMemory {
 
     pub(crate) fn repair_module<K, D>(
         &mut self,
-        module_id: LinkModuleId,
+        module_id: ModuleId,
         plan: &mut LinkPlan<K, D>,
     ) -> Result<()>
     where
@@ -192,7 +192,7 @@ impl MappedRuntimeMemory {
         self.arenas.protect::<M>()
     }
 
-    pub(crate) fn take_module(&mut self, module_id: LinkModuleId) -> Result<RuntimeModuleMemory> {
+    pub(crate) fn take_module(&mut self, module_id: ModuleId) -> Result<RuntimeModuleMemory> {
         self.modules
             .remove(module_id)
             .ok_or_else(|| {

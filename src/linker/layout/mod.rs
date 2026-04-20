@@ -8,14 +8,9 @@ mod arena;
 mod plan;
 mod section;
 
-#[cfg(test)]
-mod tests;
-
 pub use arena::{
-    LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutArenaUsage, LayoutClassPolicy,
-    LayoutMemoryClass, LayoutPackingPolicy,
+    Arena, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, MemoryClass, PackingPolicy,
 };
-pub use plan::{Materialization, MemoryLayoutPlan};
-pub use section::{
-    LayoutAddress, LayoutSectionId, LayoutSectionMetadata, ModuleLayout, SectionPlacement,
-};
+pub use plan::Materialization;
+pub(crate) use plan::MemoryLayoutPlan;
+pub use section::{ModuleLayout, SectionAddress, SectionId, SectionMetadata, SectionPlacement};

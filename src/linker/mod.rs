@@ -19,11 +19,13 @@ mod view;
 
 pub use context::LinkContext;
 pub use layout::{
-    LayoutAddress, LayoutArena, LayoutArenaId, LayoutArenaSharing, LayoutArenaUsage,
-    LayoutClassPolicy, LayoutMemoryClass, LayoutPackingPolicy, LayoutSectionId,
-    LayoutSectionMetadata, Materialization, MemoryLayoutPlan, ModuleLayout, SectionPlacement,
+    Arena, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, Materialization, MemoryClass,
+    ModuleLayout, PackingPolicy, SectionAddress, SectionId, SectionMetadata, SectionPlacement,
 };
-pub use plan::{LinkModuleId, LinkPass, LinkPassPlan, LinkPassScope, LinkPipeline};
+pub use plan::{
+    AnyPass, DataAccess, DataPass, LinkPass, LinkPassPlan, LinkPipeline, ModuleId, PassScope,
+    PassScopeMode, ReorderAccess, ReorderPass,
+};
 pub use request::{
     DependencyOwner, DependencyRequest, RelocationInputs, RelocationPlanner, RelocationRequest,
 };

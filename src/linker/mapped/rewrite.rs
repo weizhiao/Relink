@@ -1,5 +1,5 @@
-use super::{LayoutSectionId, MemoryLayoutPlan, RuntimeModuleMemory, RuntimeSectionMemory};
-use crate::linker::plan::{LinkModuleId, LinkPlan};
+use super::{MemoryLayoutPlan, RuntimeModuleMemory, RuntimeSectionMemory, SectionId};
+use crate::linker::plan::{LinkPlan, ModuleId};
 use crate::{
     LinkerError, Result,
     arch::{Architecture, REL_NONE},
@@ -15,14 +15,14 @@ struct RuntimeRelocationSite {
 }
 
 impl RuntimeModuleMemory {
-    fn section(&self, section: LayoutSectionId) -> Option<RuntimeSectionMemory> {
+    fn section(&self, section: SectionId) -> Option<RuntimeSectionMemory> {
         self.sections
             .iter()
             .copied()
             .find(|runtime_section| runtime_section.section == section)
     }
 
-    fn remap_symbol_value(&self, section: Option<LayoutSectionId>, value: usize) -> Result<usize> {
+    fn remap_symbol_value(&self, section: Option<SectionId>, value: usize) -> Result<usize> {
         let Some(section_id) = section else {
             return Ok(value);
         };
@@ -43,7 +43,7 @@ impl RuntimeModuleMemory {
 
     fn remap_relocation_offset(
         &self,
-        target: Option<LayoutSectionId>,
+        target: Option<SectionId>,
         original_offset: usize,
     ) -> Result<usize> {
         if let Some(section) = target {
@@ -104,7 +104,7 @@ impl RuntimeModuleMemory {
 
     fn retained_relocation_site(
         &self,
-        target_section: LayoutSectionId,
+        target_section: SectionId,
         source_address: usize,
     ) -> Result<RuntimeRelocationSite> {
         let section = self.section(target_section).ok_or_else(|| {
@@ -130,7 +130,7 @@ impl RuntimeModuleMemory {
 }
 
 pub(crate) struct RuntimeMetadataRewriter<'a, K, D: 'static> {
-    module_id: LinkModuleId,
+    module_id: ModuleId,
     plan: &'a mut LinkPlan<K, D>,
     runtime: &'a RuntimeModuleMemory,
 }
@@ -141,7 +141,7 @@ where
     D: 'static,
 {
     pub(crate) fn new(
-        module_id: LinkModuleId,
+        module_id: ModuleId,
         plan: &'a mut LinkPlan<K, D>,
         runtime: &'a RuntimeModuleMemory,
     ) -> Self {
@@ -174,10 +174,7 @@ where
         Ok(())
     }
 
-    fn rewrite_retained_relocation_section(
-        &mut self,
-        relocation_section: LayoutSectionId,
-    ) -> Result<()> {
+    fn rewrite_retained_relocation_section(&mut self, relocation_section: SectionId) -> Result<()> {
         let metadata = self.plan.section_metadata(relocation_section);
         let symbol_table_section = metadata.linked_section().ok_or_else(|| {
             LinkerError::metadata_rewrite(
@@ -327,17 +324,17 @@ where
 }
 
 fn symbol_section_id(
-    module_id: LinkModuleId,
+    module_id: ModuleId,
     layout: &MemoryLayoutPlan,
     section_index: usize,
-) -> Result<Option<LayoutSectionId>> {
+) -> Result<Option<SectionId>> {
     if section_index == elf::abi::SHN_UNDEF as usize || section_index == elf::abi::SHN_ABS as usize
     {
         return Ok(None);
     }
 
     layout
-        .module_section_id(module_id, ScannedSectionId::new(section_index))
+        .section_id(module_id, ScannedSectionId::new(section_index))
         .map(Some)
         .ok_or_else(|| {
             LinkerError::metadata_rewrite(
@@ -349,7 +346,7 @@ fn symbol_section_id(
 
 fn write_retained_relocation(
     runtime: &RuntimeModuleMemory,
-    target_section: LayoutSectionId,
+    target_section: SectionId,
     target_bytes: &mut [u8],
     entry: &ElfRelType,
     symbols: &[ElfSymbol],

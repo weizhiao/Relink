@@ -1,4 +1,4 @@
-use super::super::layout::{LayoutArenaId, LayoutMemoryClass, Materialization};
+use super::super::layout::{ArenaId, Materialization, MemoryClass};
 use crate::linker::plan::LinkPlan;
 use crate::{
     LinkerError, Result,
@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 #[derive(Clone)]
 pub(crate) struct MappedArena {
-    memory_class: LayoutMemoryClass,
+    memory_class: MemoryClass,
     base: usize,
     len: usize,
     backing: Arc<ElfMemoryBacking>,
@@ -19,7 +19,7 @@ pub(crate) struct MappedArena {
 
 #[derive(Clone, Default)]
 pub(crate) struct MappedArenaMap {
-    arenas: SecondaryMap<LayoutArenaId, MappedArena>,
+    arenas: SecondaryMap<ArenaId, MappedArena>,
 }
 
 impl MappedArenaMap {
@@ -39,8 +39,8 @@ impl MappedArenaMap {
         let layout = plan.memory_layout();
         let mut arenas = Self::default();
 
-        for (id, arena) in layout.arena_entries() {
-            let len = layout.arena_usage(id).mapped_len();
+        for (id, arena) in layout.arena_pairs() {
+            let len = layout.usage(id).mapped_len();
             if len == 0 {
                 continue;
             }
@@ -112,22 +112,22 @@ impl MappedArenaMap {
     }
 
     #[inline]
-    fn insert(&mut self, id: LayoutArenaId, arena: MappedArena) -> Option<MappedArena> {
+    fn insert(&mut self, id: ArenaId, arena: MappedArena) -> Option<MappedArena> {
         self.arenas.insert(id, arena)
     }
 
     #[inline]
-    pub(super) fn get(&self, id: LayoutArenaId) -> Option<&MappedArena> {
+    pub(super) fn get(&self, id: ArenaId) -> Option<&MappedArena> {
         self.arenas.get(id)
     }
 
     #[inline]
-    pub(super) fn get_mut(&mut self, id: LayoutArenaId) -> Option<&mut MappedArena> {
+    pub(super) fn get_mut(&mut self, id: ArenaId) -> Option<&mut MappedArena> {
         self.arenas.get_mut(id)
     }
 
     #[inline]
-    fn iter(&self) -> impl Iterator<Item = (LayoutArenaId, &MappedArena)> {
+    fn iter(&self) -> impl Iterator<Item = (ArenaId, &MappedArena)> {
         self.arenas.iter()
     }
 }
@@ -135,7 +135,7 @@ impl MappedArenaMap {
 impl MappedArena {
     #[inline]
     fn new(
-        memory_class: LayoutMemoryClass,
+        memory_class: MemoryClass,
         base: usize,
         len: usize,
         backing: Arc<ElfMemoryBacking>,
@@ -183,22 +183,20 @@ impl MappedArena {
     }
 }
 
-fn initial_protection(class: LayoutMemoryClass) -> ProtFlags {
+fn initial_protection(class: MemoryClass) -> ProtFlags {
     match class {
-        LayoutMemoryClass::Code => {
-            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC
+        MemoryClass::Code => ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
+        MemoryClass::ReadOnlyData | MemoryClass::WritableData | MemoryClass::ThreadLocalData => {
+            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE
         }
-        LayoutMemoryClass::ReadOnlyData
-        | LayoutMemoryClass::WritableData
-        | LayoutMemoryClass::ThreadLocalData => ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
     }
 }
 
-fn final_protection(class: LayoutMemoryClass) -> ProtFlags {
+fn final_protection(class: MemoryClass) -> ProtFlags {
     match class {
-        LayoutMemoryClass::Code => ProtFlags::PROT_READ | ProtFlags::PROT_EXEC,
-        LayoutMemoryClass::ReadOnlyData => ProtFlags::PROT_READ,
-        LayoutMemoryClass::WritableData | LayoutMemoryClass::ThreadLocalData => {
+        MemoryClass::Code => ProtFlags::PROT_READ | ProtFlags::PROT_EXEC,
+        MemoryClass::ReadOnlyData => ProtFlags::PROT_READ,
+        MemoryClass::WritableData | MemoryClass::ThreadLocalData => {
             ProtFlags::PROT_READ | ProtFlags::PROT_WRITE
         }
     }
@@ -206,7 +204,7 @@ fn final_protection(class: LayoutMemoryClass) -> ProtFlags {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::layout::{LayoutArena, LayoutArenaSharing};
+    use super::super::super::layout::{Arena, ArenaSharing};
     use super::super::super::plan::LinkPlan;
     use super::*;
     use crate::os::DefaultMmap;
@@ -237,17 +235,17 @@ mod tests {
             .alloc_sections()
             .iter()
             .copied()
-            .find(|section| plan.memory_layout().section_metadata(*section).name() == ".data")
+            .find(|section| plan.memory_layout().section(*section).name() == ".data")
             .unwrap();
 
-        let arena = plan.memory_layout_mut().create_arena(LayoutArena::new(
+        let arena = plan.memory_layout_mut().create_arena(Arena::new(
             4096,
-            LayoutMemoryClass::WritableData,
-            LayoutArenaSharing::Shared,
+            MemoryClass::WritableData,
+            ArenaSharing::Shared,
         ));
         assert!(
             plan.memory_layout_mut()
-                .assign_section_to_arena(section, arena, 0)
+                .assign(section, arena, 0)
         );
         plan.set_materialization(root, Materialization::SectionRegions);
 

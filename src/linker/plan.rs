@@ -1,21 +1,23 @@
 use super::{
-    LayoutSectionId, LayoutSectionMetadata, Materialization, MemoryLayoutPlan, ModuleLayout,
+    Arena, ArenaId, ArenaUsage, Materialization, ModuleLayout, SectionId, SectionMetadata,
+    SectionPlacement, layout::MemoryLayoutPlan,
 };
 use crate::{
     AlignedBytes, LinkerError, Result,
     entity::{PrimaryMap, entity_ref},
-    image::{ModuleCapability, ScannedDylib},
+    image::{ModuleCapability, ScannedDylib, ScannedSectionId},
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use core::marker::PhantomData;
 
 /// A stable id for one planned module stored inside a [`LinkPlan`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LinkModuleId(usize);
-entity_ref!(LinkModuleId);
+pub struct ModuleId(usize);
+entity_ref!(ModuleId);
 
 /// The minimum module capability required by one planning pass.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum LinkPassScope {
+pub enum PassScope {
     /// Run over every scanned module, including opaque modules.
     #[default]
     Any,
@@ -25,7 +27,7 @@ pub enum LinkPassScope {
     SectionReorderable,
 }
 
-impl LinkPassScope {
+impl PassScope {
     #[inline]
     pub(crate) const fn matches(self, capability: ModuleCapability) -> bool {
         match self {
@@ -36,33 +38,96 @@ impl LinkPassScope {
     }
 }
 
-/// A capability-filtered mutable view over one link plan during pass execution.
-pub struct LinkPassPlan<'a, K, D: 'static> {
-    plan: &'a mut LinkPlan<K, D>,
-    scope: LinkPassScope,
+mod sealed {
+    pub trait Sealed {}
 }
 
-impl<'a, K, D: 'static> LinkPassPlan<'a, K, D>
+/// Type-level scope marker for [`LinkPassPlan`].
+pub trait PassScopeMode: sealed::Sealed {
+    /// Runtime counterpart of this type-level scope.
+    const SCOPE: PassScope;
+}
+
+/// Scope marker for passes that may inspect every scanned module.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AnyPass;
+
+/// Scope marker for passes that require section metadata/data.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DataPass;
+
+/// Scope marker for passes that require section-reorder repair inputs.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ReorderPass;
+
+impl sealed::Sealed for AnyPass {}
+impl sealed::Sealed for DataPass {}
+impl sealed::Sealed for ReorderPass {}
+
+impl PassScopeMode for AnyPass {
+    const SCOPE: PassScope = PassScope::Any;
+}
+
+impl PassScopeMode for DataPass {
+    const SCOPE: PassScope = PassScope::SectionData;
+}
+
+impl PassScopeMode for ReorderPass {
+    const SCOPE: PassScope = PassScope::SectionReorderable;
+}
+
+/// Scope markers that guarantee section metadata/data access.
+pub trait DataAccess: PassScopeMode {}
+
+impl DataAccess for DataPass {}
+impl DataAccess for ReorderPass {}
+
+/// Scope markers that guarantee section-reorder repair inputs.
+pub trait ReorderAccess: DataAccess {}
+
+impl ReorderAccess for ReorderPass {}
+
+/// A mutable planning handle passed to one link pass.
+///
+/// Graph queries expose the canonical plan. Scope-sensitive APIs such as
+/// materialization updates and section-data access enforce `S`.
+pub struct LinkPassPlan<'a, K, D: 'static, S = AnyPass>
+where
+    S: PassScopeMode,
+{
+    plan: &'a mut LinkPlan<K, D>,
+    scope: PhantomData<fn() -> S>,
+}
+
+impl<'a, K, D: 'static, S> LinkPassPlan<'a, K, D, S>
 where
     K: Clone + Ord,
+    S: PassScopeMode,
 {
     #[inline]
-    pub(crate) fn new(plan: &'a mut LinkPlan<K, D>, scope: LinkPassScope) -> Self {
-        Self { plan, scope }
+    fn new(plan: &'a mut LinkPlan<K, D>) -> Self {
+        Self {
+            plan,
+            scope: PhantomData,
+        }
     }
 
     #[inline]
-    fn accepts_key(&self, key: &K) -> bool {
+    fn accepts_module(&self, id: ModuleId) -> bool {
         self.plan
-            .module_id(key)
-            .and_then(|module_id| self.plan.module_capability(module_id))
-            .is_some_and(|capability| self.scope.matches(capability))
+            .module_capability(id)
+            .is_some_and(|capability| S::SCOPE.matches(capability))
+    }
+
+    #[inline]
+    fn accepts_section(&self, section: SectionId) -> Option<bool> {
+        self.plan.section_owner(section).map(|id| self.accepts_module(id))
     }
 
     /// Returns the capability scope selected for the current pass.
     #[inline]
-    pub const fn scope(&self) -> LinkPassScope {
-        self.scope
+    pub const fn scope(&self) -> PassScope {
+        S::SCOPE
     }
 
     /// Returns the canonical root key of the underlying plan.
@@ -73,188 +138,243 @@ where
 
     /// Returns the canonical root module id of the underlying plan.
     #[inline]
-    pub fn root_module(&self) -> LinkModuleId {
+    pub fn root(&self) -> ModuleId {
         self.plan.root_module()
     }
 
-    /// Iterates over filtered module keys in discovery order.
-    pub fn group_order(&self) -> impl Iterator<Item = &K> {
-        let scope = self.scope;
-        let plan = &*self.plan;
-        plan.group_order()
-            .iter()
-            .copied()
-            .filter_map(move |module_id| {
-                plan.module_capability(module_id)
-                    .is_some_and(|capability| scope.matches(capability))
-                    .then(|| plan.module_key(module_id))
-                    .flatten()
-            })
+    /// Iterates over all module ids in discovery order.
+    pub fn group_order(&self) -> impl Iterator<Item = ModuleId> + '_ {
+        self.plan.group_order().iter().copied()
     }
 
-    /// Iterates over filtered module ids in discovery order.
-    pub fn group_order_ids(&self) -> impl Iterator<Item = LinkModuleId> + '_ {
-        let scope = self.scope;
-        let plan = &*self.plan;
-        plan.group_order().iter().copied().filter(move |module_id| {
-            plan.module_capability(*module_id)
-                .is_some_and(|capability| scope.matches(capability))
-        })
-    }
-
-    /// Returns whether the filtered view contains `key`.
+    /// Returns whether the underlying plan contains `key`.
     #[inline]
     pub fn contains_key(&self, key: &K) -> bool {
-        self.accepts_key(key) && self.plan.contains_key(key)
+        self.plan.contains_key(key)
     }
 
-    /// Returns the stable module id for `key`, when visible through this scope.
+    /// Returns the stable module id for `key`.
     #[inline]
-    pub fn module_id(&self, key: &K) -> Option<LinkModuleId> {
-        self.accepts_key(key)
-            .then(|| self.plan.module_id(key))
-            .flatten()
+    pub fn module_id(&self, key: &K) -> Option<ModuleId> {
+        self.plan.module_id(key)
     }
 
-    /// Returns the scanned metadata for `module_id` when it is visible through this scope.
+    /// Returns the canonical key for `id`.
     #[inline]
-    pub fn entry(&self, module_id: LinkModuleId) -> Option<&ScannedDylib<D>> {
-        let capability = self.plan.module_capability(module_id)?;
-        if !self.scope.matches(capability) {
-            return None;
-        }
-        self.plan.get(module_id).map(PlannedModule::module)
+    pub fn module_key(&self, id: ModuleId) -> Option<&K> {
+        self.plan.module_key(id)
     }
 
-    /// Returns the scanned metadata for `module_id` mutably when it is visible through this scope.
+    /// Returns the scanned metadata for `id`.
     #[inline]
-    pub fn entry_mut(&mut self, module_id: LinkModuleId) -> Option<&mut ScannedDylib<D>> {
-        let capability = self.plan.module_capability(module_id)?;
-        if !self.scope.matches(capability) {
-            return None;
-        }
-        self.plan.get_mut(module_id).map(PlannedModule::module_mut)
+    pub fn get(&self, id: ModuleId) -> Option<&PlannedModule<K, D>> {
+        self.plan.get(id)
     }
 
-    /// Iterates over every scanned module visible through this scope.
-    pub fn iter(&self) -> impl Iterator<Item = (&K, &ScannedDylib<D>)> {
-        let scope = self.scope;
-        let plan = &*self.plan;
-        plan.iter().filter(move |(key, _)| {
-            plan.module_id(key)
-                .and_then(|module_id| plan.module_capability(module_id))
-                .is_some_and(|capability| scope.matches(capability))
-        })
-    }
-
-    /// Returns the direct dependencies recorded for `key`, when visible.
+    /// Returns the scanned metadata for `id` mutably.
     #[inline]
-    pub fn direct_deps(&self, key: &K) -> Option<impl Iterator<Item = &K> + '_> {
-        if !self.accepts_key(key) {
-            return None;
-        }
-        Some(
-            self.plan
-                .direct_deps(key)?
-                .iter()
-                .filter_map(|dep_id| self.plan.module_key(*dep_id)),
-        )
+    pub fn get_mut(&mut self, id: ModuleId) -> Option<&mut PlannedModule<K, D>> {
+        self.plan.get_mut(id)
     }
 
-    /// Returns the planning capability of `key`, when visible.
-    #[inline]
-    pub fn module_capability(&self, key: &K) -> Option<ModuleCapability> {
-        let module_id = self.module_id(key)?;
-        self.plan.module_capability(module_id)
+    /// Iterates over every planned module id, key, and scanned module.
+    pub fn entries(&self) -> impl Iterator<Item = (ModuleId, &K, &ScannedDylib<D>)> {
+        self.plan
+            .entries
+            .iter()
+            .map(|(id, entry)| (id, entry.key(), entry.module()))
     }
 
-    /// Returns the configured materialization mode of `key`, when visible.
+    /// Returns direct dependency module ids recorded for `id`.
     #[inline]
-    pub fn module_materialization(&self, key: &K) -> Option<Materialization> {
-        let module_id = self.module_id(key)?;
-        self.plan.materialization(module_id)
+    pub fn direct_deps(&self, id: ModuleId) -> Option<impl Iterator<Item = ModuleId> + '_> {
+        Some(self.plan.get(id)?.direct_deps().iter().copied())
     }
 
-    /// Selects the materialization mode for `module_id`, when visible.
+    /// Returns the planning capability of `id`.
     #[inline]
-    pub fn set_module_materialization(
+    pub fn capability(&self, id: ModuleId) -> Option<ModuleCapability> {
+        self.plan.module_capability(id)
+    }
+
+    /// Returns the configured materialization mode of `id`.
+    #[inline]
+    pub fn materialization(&self, id: ModuleId) -> Option<Materialization> {
+        self.plan.materialization(id)
+    }
+
+    /// Selects the materialization mode for `id`, when the module is
+    /// visible through this pass scope.
+    #[inline]
+    pub fn set_materialization(
         &mut self,
-        module_id: LinkModuleId,
+        id: ModuleId,
         mode: Materialization,
     ) -> Option<Materialization> {
+        self.accepts_module(id)
+            .then(|| self.plan.set_materialization(id, mode))
+            .flatten()
+    }
+}
+
+impl<'a, K, D: 'static, S> LinkPassPlan<'a, K, D, S>
+where
+    K: Clone + Ord,
+    S: DataAccess,
+{
+    /// Returns the planned layout for one visible module.
+    #[inline]
+    pub fn layout(&self, id: ModuleId) -> Option<&ModuleLayout> {
+        self.accepts_module(id).then(|| self.plan.module_layout(id))
+    }
+
+    /// Iterates over module layouts visible through this pass scope.
+    pub fn layouts(&self) -> impl Iterator<Item = (ModuleId, &ModuleLayout)> + '_ {
         self.plan
-            .module_capability(module_id)
-            .is_some_and(|capability| self.scope.matches(capability))
-            .then(|| self.plan.set_materialization(module_id, mode))
+            .memory_layout()
+            .modules()
+            .filter(move |(id, _)| self.accepts_module(*id))
+    }
+
+    /// Returns the section id for one scanned section inside one visible module.
+    #[inline]
+    pub fn section(
+        &self,
+        module_id: ModuleId,
+        id: impl Into<ScannedSectionId>,
+    ) -> Option<SectionId> {
+        self.accepts_module(module_id)
+            .then(|| self.plan.module_section_id(module_id, id))
             .flatten()
     }
 
-    /// Returns one section's data, materializing it on demand when needed.
+    /// Iterates over section metadata records owned by modules visible through this pass scope.
+    pub fn sections(&self) -> impl Iterator<Item = (SectionId, &SectionMetadata)> + '_ {
+        self.plan
+            .memory_layout()
+            .sections()
+            .filter(move |(section, _)| self.accepts_section(*section) == Some(true))
+    }
+
+    /// Returns the visible owner module of `section`.
     #[inline]
-    pub fn section_data(&mut self, section: LayoutSectionId) -> Result<Option<&AlignedBytes>> {
-        let Some(module_id) = self.plan.memory_layout().section_owner(section) else {
-            return Ok(None);
-        };
-        if !self
-            .plan
-            .module_capability(module_id)
-            .is_some_and(|capability| self.scope.matches(capability))
-        {
+    pub fn owner(&self, section: SectionId) -> Option<ModuleId> {
+        let owner = self.plan.section_owner(section)?;
+        self.accepts_module(owner).then_some(owner)
+    }
+
+    /// Returns one metadata record for a section owned by a visible module.
+    #[inline]
+    pub fn metadata(&self, section: SectionId) -> Option<&SectionMetadata> {
+        (self.accepts_section(section) == Some(true)).then(|| self.plan.section_metadata(section))
+    }
+
+    /// Returns one section's data, materializing it on demand when its owner is
+    /// visible through this pass scope.
+    #[inline]
+    pub fn data(&mut self, section: SectionId) -> Result<Option<&AlignedBytes>> {
+        if self.accepts_section(section) != Some(true) {
             return Ok(None);
         }
         Ok(Some(self.plan.section_data(section)?))
     }
 
-    /// Returns mutable section data, materializing it on demand when needed.
+    /// Returns mutable section data, materializing it on demand when its owner
+    /// is visible through this pass scope.
     #[inline]
-    pub fn section_data_mut(
-        &mut self,
-        section: LayoutSectionId,
-    ) -> Result<Option<&mut AlignedBytes>> {
-        let Some(module_id) = self.plan.memory_layout().section_owner(section) else {
-            return Ok(None);
-        };
-        if !self
-            .plan
-            .module_capability(module_id)
-            .is_some_and(|capability| self.scope.matches(capability))
-        {
+    pub fn data_mut(&mut self, section: SectionId) -> Result<Option<&mut AlignedBytes>> {
+        if self.accepts_section(section) != Some(true) {
             return Ok(None);
         }
         Ok(Some(self.plan.section_data_mut(section)?))
     }
+}
 
-    /// Returns the filtered plan's memory-layout core.
+impl<'a, K, D: 'static, S> LinkPassPlan<'a, K, D, S>
+where
+    K: Clone + Ord,
+    S: ReorderAccess,
+{
+    /// Creates one arena for section-region materialization.
     #[inline]
-    pub fn memory_layout(&self) -> &MemoryLayoutPlan {
-        self.plan.memory_layout()
+    pub fn create_arena(&mut self, arena: Arena) -> ArenaId {
+        self.plan.memory_layout_mut().create_arena(arena)
     }
 
-    /// Returns the filtered plan's memory-layout core mutably.
+    /// Returns all planned arenas.
     #[inline]
-    pub fn memory_layout_mut(&mut self) -> &mut MemoryLayoutPlan {
-        self.plan.memory_layout_mut()
+    pub fn arenas(&self) -> &[Arena] {
+        self.plan.memory_layout().arenas()
+    }
+
+    /// Iterates over planned arenas together with their stable arena ids.
+    #[inline]
+    pub fn arena_pairs(&self) -> impl Iterator<Item = (ArenaId, &Arena)> {
+        self.plan.memory_layout().arena_pairs()
+    }
+
+    /// Returns one arena descriptor by arena id.
+    #[inline]
+    pub fn arena(&self, arena: ArenaId) -> &Arena {
+        self.plan.memory_layout().arena(arena)
+    }
+
+    /// Returns one arena's derived usage summary.
+    #[inline]
+    pub fn usage(&self, arena: ArenaId) -> ArenaUsage {
+        self.plan.memory_layout().usage(arena)
+    }
+
+    /// Returns the arena placement for one visible section.
+    #[inline]
+    pub fn placement(&self, section: SectionId) -> Option<SectionPlacement> {
+        if self.accepts_section(section) != Some(true) {
+            return None;
+        }
+        self.plan.memory_layout().placement(section)
+    }
+
+    /// Assigns a visible section to an arena.
+    #[inline]
+    pub fn assign(
+        &mut self,
+        section: SectionId,
+        arena: ArenaId,
+        offset: usize,
+    ) -> bool {
+        if self.accepts_section(section) != Some(true) {
+            return false;
+        }
+        self.plan.memory_layout_mut().assign(section, arena, offset)
+    }
+
+    /// Clears the arena assignment for one visible section.
+    #[inline]
+    pub fn clear_section(&mut self, section: SectionId) -> Option<SectionPlacement> {
+        if self.accepts_section(section) != Some(true) {
+            return None;
+        }
+        self.plan.memory_layout_mut().clear_section(section)
     }
 }
 
 /// A pass that inspects or rewrites a pre-map global link plan.
-pub trait LinkPass<K: Ord, D: 'static> {
-    /// Returns the minimum module capability this pass operates on.
-    #[inline]
-    fn capability_scope(&self) -> LinkPassScope {
-        LinkPassScope::Any
-    }
-
+pub trait LinkPass<K: Clone + Ord, D: 'static, S = AnyPass>
+where
+    S: PassScopeMode,
+{
     /// Executes the pass over the current plan.
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, K, D>) -> Result<()>;
+    fn run(&mut self, plan: &mut LinkPassPlan<'_, K, D, S>) -> Result<()>;
 }
 
-impl<K: Ord, D: 'static, F> LinkPass<K, D> for F
+impl<K, D: 'static, S, F> LinkPass<K, D, S> for F
 where
-    F: for<'a> FnMut(&mut LinkPassPlan<'a, K, D>) -> Result<()>,
+    K: Clone + Ord,
+    S: PassScopeMode,
+    F: for<'a> FnMut(&mut LinkPassPlan<'a, K, D, S>) -> Result<()>,
 {
     #[inline]
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, K, D>) -> Result<()> {
+    fn run(&mut self, plan: &mut LinkPassPlan<'_, K, D, S>) -> Result<()> {
         (self)(plan)
     }
 }
@@ -263,18 +383,11 @@ where
 ///
 /// This is the pass manager used with a discovered [`LinkPlan`] after
 /// metadata discovery finishes and before any module is mapped into memory.
-pub struct LinkPipeline<'a, K: Ord, D: 'static> {
-    passes: Vec<&'a mut dyn LinkPass<K, D>>,
+pub struct LinkPipeline<'a, K: Clone + Ord, D: 'static> {
+    passes: Vec<Box<dyn FnMut(&mut LinkPlan<K, D>) -> Result<()> + 'a>>,
 }
 
-impl<'a, K: Ord, D: 'static> Default for LinkPipeline<'a, K, D> {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<'a, K: Ord, D: 'static> LinkPipeline<'a, K, D> {
+impl<'a, K: Clone + Ord, D: 'static> LinkPipeline<'a, K, D> {
     /// Creates an empty pipeline.
     #[inline]
     pub fn new() -> Self {
@@ -283,8 +396,24 @@ impl<'a, K: Ord, D: 'static> LinkPipeline<'a, K, D> {
 
     /// Appends a pass to the pipeline.
     #[inline]
-    pub fn push(&mut self, pass: &'a mut dyn LinkPass<K, D>) -> &mut Self {
-        self.passes.push(pass);
+    pub fn push<P>(&mut self, pass: P) -> &mut Self
+    where
+        P: LinkPass<K, D, AnyPass> + 'a,
+    {
+        self.push_scoped::<AnyPass, P>(pass)
+    }
+
+    /// Appends a pass that requires a specific type-level capability scope.
+    #[inline]
+    pub fn push_scoped<S, P>(&mut self, mut pass: P) -> &mut Self
+    where
+        S: PassScopeMode + 'a,
+        P: LinkPass<K, D, S> + 'a,
+    {
+        self.passes.push(Box::new(move |plan| {
+            let mut scoped = LinkPassPlan::<_, _, S>::new(plan);
+            pass.run(&mut scoped)
+        }));
         self
     }
 
@@ -294,17 +423,16 @@ impl<'a, K: Ord, D: 'static> LinkPipeline<'a, K, D> {
         K: Clone,
     {
         for pass in &mut self.passes {
-            let mut scoped = LinkPassPlan::new(plan, pass.capability_scope());
-            pass.run(&mut scoped)?;
+            pass(plan)?;
         }
         Ok(())
     }
 }
 
-pub(crate) struct PlannedModule<K, D: 'static> {
+pub struct PlannedModule<K, D: 'static> {
     key: K,
     module: ScannedDylib<D>,
-    direct_deps: Box<[LinkModuleId]>,
+    direct_deps: Box<[ModuleId]>,
 }
 
 struct PendingPlannedModule<K, D: 'static> {
@@ -317,7 +445,7 @@ impl<K, D: 'static> PendingPlannedModule<K, D>
 where
     K: Ord,
 {
-    fn resolve(self, module_ids: &BTreeMap<K, LinkModuleId>) -> PlannedModule<K, D> {
+    fn resolve(self, module_ids: &BTreeMap<K, ModuleId>) -> PlannedModule<K, D> {
         let Self {
             key,
             module,
@@ -339,7 +467,7 @@ where
 
 impl<K, D: 'static> PlannedModule<K, D> {
     #[inline]
-    pub(crate) fn new(key: K, module: ScannedDylib<D>, direct_deps: Box<[LinkModuleId]>) -> Self {
+    pub(crate) fn new(key: K, module: ScannedDylib<D>, direct_deps: Box<[ModuleId]>) -> Self {
         Self {
             key,
             module,
@@ -348,27 +476,27 @@ impl<K, D: 'static> PlannedModule<K, D> {
     }
 
     #[inline]
-    pub(crate) fn key(&self) -> &K {
+    pub fn key(&self) -> &K {
         &self.key
     }
 
     #[inline]
-    pub(crate) fn module(&self) -> &ScannedDylib<D> {
+    pub fn module(&self) -> &ScannedDylib<D> {
         &self.module
     }
 
     #[inline]
-    pub(crate) fn module_mut(&mut self) -> &mut ScannedDylib<D> {
+    pub fn module_mut(&mut self) -> &mut ScannedDylib<D> {
         &mut self.module
     }
 
     #[inline]
-    pub(crate) fn direct_deps(&self) -> &[LinkModuleId] {
+    pub fn direct_deps(&self) -> &[ModuleId] {
         &self.direct_deps
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (K, ScannedDylib<D>, Box<[LinkModuleId]>) {
+    pub(crate) fn into_parts(self) -> (K, ScannedDylib<D>, Box<[ModuleId]>) {
         (self.key, self.module, self.direct_deps)
     }
 }
@@ -379,10 +507,10 @@ impl<K, D: 'static> PlannedModule<K, D> {
 /// planning decisions such as physical memory-layout plans or future
 /// materialization policies.
 pub(crate) struct LinkPlan<K, D: 'static> {
-    root: LinkModuleId,
-    group_order: Vec<LinkModuleId>,
-    module_ids: BTreeMap<K, LinkModuleId>,
-    entries: PrimaryMap<LinkModuleId, PlannedModule<K, D>>,
+    root: ModuleId,
+    group_order: Vec<ModuleId>,
+    module_ids: BTreeMap<K, ModuleId>,
+    entries: PrimaryMap<ModuleId, PlannedModule<K, D>>,
     memory_layout: MemoryLayoutPlan,
 }
 
@@ -404,17 +532,17 @@ where
             let (module, direct_deps) = entries
                 .remove(&key)
                 .expect("scan plan group order referenced a missing discovered module");
-            let module_id = pending_entries.push(PendingPlannedModule {
+            let id = pending_entries.push(PendingPlannedModule {
                 key: key.clone(),
                 module,
                 direct_deps,
             });
-            let previous = module_ids.insert(key, module_id);
+            let previous = module_ids.insert(key, id);
             assert!(
                 previous.is_none(),
                 "scan plan discovered duplicate module key"
             );
-            group_order.push(module_id);
+            group_order.push(id);
         }
 
         let root = *module_ids
@@ -427,10 +555,10 @@ where
             "scan plan contained modules that were not present in discovery order"
         );
 
-        let memory_layout = MemoryLayoutPlan::seed_from_scanned_modules(
+        let memory_layout = MemoryLayoutPlan::from_scanned(
             planned_entries
                 .iter()
-                .map(|(module_id, entry)| (module_id, entry.module())),
+                .map(|(id, entry)| (id, entry.module())),
         );
         Self {
             root,
@@ -450,24 +578,24 @@ where
 
     /// Returns the canonical root module id of the plan.
     #[inline]
-    pub(crate) const fn root_module(&self) -> LinkModuleId {
+    pub(crate) const fn root_module(&self) -> ModuleId {
         self.root
     }
 
     /// Returns the breadth-first module ids discovered from the root.
     #[inline]
-    pub(crate) fn group_order(&self) -> &[LinkModuleId] {
+    pub(crate) fn group_order(&self) -> &[ModuleId] {
         &self.group_order
     }
 
     pub(crate) fn try_for_each_module(
         &mut self,
-        mut f: impl FnMut(&mut Self, LinkModuleId) -> Result<()>,
+        mut f: impl FnMut(&mut Self, ModuleId) -> Result<()>,
     ) -> Result<()> {
         let group_len = self.group_order.len();
         for index in 0..group_len {
-            let module_id = self.group_order[index];
-            f(self, module_id)?;
+            let id = self.group_order[index];
+            f(self, id)?;
         }
         Ok(())
     }
@@ -480,39 +608,23 @@ where
 
     /// Returns the stable module id for `key`.
     #[inline]
-    fn module_id(&self, key: &K) -> Option<LinkModuleId> {
+    fn module_id(&self, key: &K) -> Option<ModuleId> {
         self.module_ids.get(key).copied()
     }
 
     #[inline]
-    fn module_key(&self, module_id: LinkModuleId) -> Option<&K> {
-        self.entries.get(module_id).map(PlannedModule::key)
+    fn module_key(&self, id: ModuleId) -> Option<&K> {
+        self.entries.get(id).map(PlannedModule::key)
     }
 
     #[inline]
-    fn get(&self, module_id: LinkModuleId) -> Option<&PlannedModule<K, D>> {
-        self.entries.get(module_id)
+    fn get(&self, id: ModuleId) -> Option<&PlannedModule<K, D>> {
+        self.entries.get(id)
     }
 
     #[inline]
-    fn get_mut(&mut self, module_id: LinkModuleId) -> Option<&mut PlannedModule<K, D>> {
-        self.entries.get_mut(module_id)
-    }
-
-    /// Returns the canonical direct dependency ids of `key`.
-    #[inline]
-    fn direct_deps(&self, key: &K) -> Option<&[LinkModuleId]> {
-        let module_id = self.module_id(key)?;
-        let entry = self.get(module_id)?;
-        Some(entry.direct_deps())
-    }
-
-    /// Iterates over all modules in the plan.
-    #[inline]
-    fn iter(&self) -> impl Iterator<Item = (&K, &ScannedDylib<D>)> {
-        self.entries
-            .iter()
-            .map(|(_, entry)| (entry.key(), entry.module()))
+    fn get_mut(&mut self, id: ModuleId) -> Option<&mut PlannedModule<K, D>> {
+        self.entries.get_mut(id)
     }
 
     /// Returns the physical memory-layout plan associated with this graph.
@@ -529,49 +641,65 @@ where
 
     /// Returns one module's layout view by stable module id.
     #[inline]
-    pub(crate) fn module_layout(&self, module_id: LinkModuleId) -> &ModuleLayout {
-        self.memory_layout.module(module_id)
+    pub(crate) fn module_layout(&self, id: ModuleId) -> &ModuleLayout {
+        self.memory_layout.module(id)
+    }
+
+    /// Returns the owning module id for one stable section id.
+    #[inline]
+    pub(crate) fn section_owner(&self, section: SectionId) -> Option<ModuleId> {
+        self.memory_layout.owner(section)
+    }
+
+    /// Returns the stable section id for one scanned section inside one module.
+    #[inline]
+    pub(crate) fn module_section_id(
+        &self,
+        module_id: ModuleId,
+        id: impl Into<ScannedSectionId>,
+    ) -> Option<SectionId> {
+        self.memory_layout.section_id(module_id, id)
     }
 
     /// Returns one section metadata record by stable section id.
     #[inline]
-    pub(crate) fn section_metadata(&self, section: LayoutSectionId) -> &LayoutSectionMetadata {
-        self.memory_layout.section_metadata(section)
+    pub(crate) fn section_metadata(&self, section: SectionId) -> &SectionMetadata {
+        self.memory_layout.section(section)
     }
 
     #[inline]
-    pub(crate) fn module_capability(&self, module_id: LinkModuleId) -> Option<ModuleCapability> {
-        self.get(module_id).map(|entry| entry.module().capability())
+    pub(crate) fn module_capability(&self, id: ModuleId) -> Option<ModuleCapability> {
+        self.get(id).map(|entry| entry.module().capability())
     }
 
     #[inline]
-    pub(crate) fn materialization(&self, module_id: LinkModuleId) -> Option<Materialization> {
-        self.memory_layout.materialization(module_id)
+    pub(crate) fn materialization(&self, id: ModuleId) -> Option<Materialization> {
+        self.memory_layout.materialization(id)
     }
 
     /// Selects the materialization mode for one module.
     #[inline]
     pub fn set_materialization(
         &mut self,
-        module_id: LinkModuleId,
+        id: ModuleId,
         mode: Materialization,
     ) -> Option<Materialization> {
-        self.memory_layout.set_materialization(module_id, mode)
+        self.memory_layout.set_materialization(id, mode)
     }
 
     fn materialize_section_data(
-        entries: &mut PrimaryMap<LinkModuleId, PlannedModule<K, D>>,
+        entries: &mut PrimaryMap<ModuleId, PlannedModule<K, D>>,
         memory_layout: &mut MemoryLayoutPlan,
-        section: LayoutSectionId,
+        section: SectionId,
     ) -> Result<()> {
-        if memory_layout.section_data(section).is_some() {
+        if memory_layout.data(section).is_some() {
             return Ok(());
         }
 
-        let module_id = memory_layout.section_owner(section).ok_or_else(|| {
+        let id = memory_layout.owner(section).ok_or_else(|| {
             LinkerError::section_data("section data requested for an unowned section")
         })?;
-        let entry = entries.get_mut(module_id).ok_or_else(|| {
+        let entry = entries.get_mut(id).ok_or_else(|| {
             LinkerError::section_data("section data requested for a missing planned module")
         })?;
         if !entry.module().capability().has_section_data() {
@@ -581,7 +709,7 @@ where
             .into());
         }
 
-        let scanned_section = memory_layout.section_metadata(section).scanned_section();
+        let scanned_section = memory_layout.section(section).scanned_section();
         let snapshot = entry
             .module_mut()
             .section_data(scanned_section)?
@@ -594,7 +722,7 @@ where
     }
 
     /// Returns one section's data, materializing it on demand when needed.
-    pub fn section_data(&mut self, section: LayoutSectionId) -> Result<&AlignedBytes> {
+    pub fn section_data(&mut self, section: SectionId) -> Result<&AlignedBytes> {
         let (data, _) = self.section_data_with_layout(section)?;
         Ok(data)
     }
@@ -602,39 +730,39 @@ where
     /// Returns one section's data together with the layout that owns it.
     pub(crate) fn section_data_with_layout(
         &mut self,
-        section: LayoutSectionId,
+        section: SectionId,
     ) -> Result<(&AlignedBytes, &MemoryLayoutPlan)> {
         let Self {
             entries,
             memory_layout,
             ..
         } = self;
-        if memory_layout.section_data(section).is_none() {
+        if memory_layout.data(section).is_none() {
             Self::materialize_section_data(entries, memory_layout, section)?;
         }
 
         let layout = &*memory_layout;
         let data = layout
-            .section_data(section)
+            .data(section)
             .ok_or_else(|| LinkerError::section_data("section data was not materialized"))?;
         Ok((data, layout))
     }
 
     /// Returns mutable section data, materializing it on demand when needed.
-    pub fn section_data_mut(&mut self, section: LayoutSectionId) -> Result<&mut AlignedBytes> {
+    pub fn section_data_mut(&mut self, section: SectionId) -> Result<&mut AlignedBytes> {
         let _ = self.section_data(section)?;
         let _ = self.memory_layout.mark_section_data_override(section);
         self.memory_layout
-            .section_data_mut(section)
+            .data_mut(section)
             .ok_or_else(|| LinkerError::section_data("section data was not materialized"))
             .map_err(Into::into)
     }
 
     pub(crate) fn with_disjoint_section_data_mut<R>(
         &mut self,
-        read_a: LayoutSectionId,
-        read_b: LayoutSectionId,
-        write: LayoutSectionId,
+        read_a: SectionId,
+        read_b: SectionId,
+        write: SectionId,
         f: impl FnOnce(&AlignedBytes, &AlignedBytes, &mut AlignedBytes) -> Result<R>,
     ) -> Result<R> {
         if read_a == read_b || read_a == write || read_b == write {
@@ -650,7 +778,7 @@ where
             ..
         } = self;
         for section in [read_a, read_b, write] {
-            if memory_layout.section_data(section).is_none() {
+            if memory_layout.data(section).is_none() {
                 Self::materialize_section_data(entries, memory_layout, section)?;
             }
         }
@@ -667,9 +795,9 @@ where
     pub(crate) fn into_parts(
         self,
     ) -> (
-        LinkModuleId,
-        Vec<LinkModuleId>,
-        PrimaryMap<LinkModuleId, PlannedModule<K, D>>,
+        ModuleId,
+        Vec<ModuleId>,
+        PrimaryMap<ModuleId, PlannedModule<K, D>>,
         MemoryLayoutPlan,
     ) {
         (
