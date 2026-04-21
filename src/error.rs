@@ -142,6 +142,8 @@ impl Display for MmapError {
 pub enum ParseDynamicError {
     /// The dynamic section omitted both `DT_GNU_HASH` and `DT_HASH`.
     MissingHashTable,
+    /// `{tag}` is required by the ABI but missing from the dynamic section.
+    MissingRequiredTag { tag: &'static str },
     /// A dynamic-section address calculation overflowed.
     AddressOverflow,
     /// A relocation table described by the dynamic section is malformed.
@@ -155,6 +157,9 @@ impl Display for ParseDynamicError {
         match self {
             Self::MissingHashTable => {
                 f.write_str("dynamic section does not have DT_GNU_HASH nor DT_HASH")
+            }
+            Self::MissingRequiredTag { tag } => {
+                write!(f, "dynamic section is missing required tag {tag}")
             }
             Self::AddressOverflow => f.write_str("dynamic section address calculation overflowed"),
             Self::MalformedRelocationTable { detail } => f.write_str(detail),

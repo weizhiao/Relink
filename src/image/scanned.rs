@@ -3,8 +3,8 @@
 use crate::{
     AlignedBytes, ParseDynamicError, ParsePhdrError, Result,
     elf::{
-        ElfDyn, ElfHeader, ElfPhdr, ElfProgramType, ElfRelType, ElfSectionFlags, ElfSectionType,
-        ElfShdr, ElfStringTable, parse_dynamic_entries,
+        ElfDyn, ElfHeader, ElfPhdr, ElfProgramType, ElfSectionFlags, ElfSectionType, ElfShdr,
+        ElfStringTable, parse_dynamic_entries,
     },
     entity::entity_ref,
     input::{ElfReader, ElfReaderExt},
@@ -22,15 +22,85 @@ struct DynamicScanParts {
     runpath: Option<usize>,
 }
 
-struct SegmentBounds {
-    offset: usize,
-    start: usize,
-    end: usize,
+impl DynamicScanParts {
+    fn new(object: &mut dyn ElfReader, phdrs: &[ElfPhdr]) -> Result<Self> {
+        let dynamic_phdr = phdrs
+            .iter()
+            .find(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
+            .ok_or(ParsePhdrError::MissingDynamicSection)?;
+        if dynamic_phdr.p_filesz() % size_of::<ElfDyn>() != 0 {
+            return Err(ParsePhdrError::MalformedProgramHeaders.into());
+        }
+
+        let dyns = object.read_to_vec::<ElfDyn>(
+            dynamic_phdr.p_offset(),
+            dynamic_phdr.p_filesz() / core::mem::size_of::<ElfDyn>(),
+        )?;
+        let parsed = parse_dynamic_entries(
+            dyns.into_iter()
+                .map(|dynamic| (dynamic.tag(), dynamic.value())),
+        );
+
+        let strtab_vaddr =
+            NonZeroUsize::new(parsed.strtab_off).ok_or(ParseDynamicError::AddressOverflow)?;
+        let strtab_file_off = vaddr_to_file_offset(strtab_vaddr.get(), phdrs)?;
+        let strtab_size = parsed
+            .strtab_size
+            .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_STRSZ" })?
+            .get();
+        let strtab = object.read_to_vec(strtab_file_off, strtab_size)?;
+
+        let needed_libs = parsed
+            .needed_libs
+            .into_iter()
+            .map(|offset| offset.get())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let rpath = parsed.rpath_off.map(|offset| offset.get());
+        let runpath = parsed.runpath_off.map(|offset| offset.get());
+
+        Ok(Self {
+            dynamic: ScannedDynamicInfo::new(
+                parsed.flags & DF_BIND_NOW as usize != 0 || parsed.flags_1 & DF_1_NOW as usize != 0,
+                parsed.flags & DF_STATIC_TLS as usize != 0,
+            ),
+            strtab: strtab.into_boxed_slice(),
+            needed_libs,
+            rpath,
+            runpath,
+        })
+    }
 }
 
-struct SectionTableScan {
+struct SectionTable {
     sections: Box<[ElfShdr]>,
     shstrtab: Box<[u8]>,
+}
+
+impl SectionTable {
+    fn new(object: &mut dyn ElfReader, ehdr: &ElfHeader) -> Result<Option<Self>> {
+        if ehdr.e_shnum() == 0 {
+            return Ok(None);
+        }
+
+        let Some((start, _)) = ehdr.checked_shdr_layout()? else {
+            return Ok(None);
+        };
+
+        let shdrs = object.read_to_vec::<ElfShdr>(start, ehdr.e_shnum())?;
+        let shstrndx = ehdr.e_shstrndx();
+        let shstrtab = match shdrs.get(shstrndx) {
+            Some(shdr) if shdr.section_type() != ElfSectionType::NOBITS => {
+                object.read_to_vec(shdr.sh_offset(), shdr.sh_size())?
+            }
+            _ => return Ok(None),
+        };
+
+        Ok(Some(SectionTable {
+            sections: shdrs.into_boxed_slice(),
+            shstrtab: shstrtab.into_boxed_slice(),
+        }))
+    }
 }
 
 /// The planning capability exposed by one scanned module.
@@ -100,11 +170,10 @@ where
     interp: Option<Box<[u8]>>,
     _strtab_bytes: Box<[u8]>,
     strtab: ElfStringTable,
-    _shstrtab_bytes: Option<Box<[u8]>>,
+    section_table: Option<SectionTable>,
     rpath: Option<usize>,
     runpath: Option<usize>,
     needed_libs: Box<[usize]>,
-    sections: Option<Box<[ElfShdr]>>,
     capability: ModuleCapability,
     reader: Box<dyn ElfReader + 'static>,
     dynamic: ScannedDynamicInfo,
@@ -314,7 +383,10 @@ impl<D> fmt::Debug for ScannedDylib<D> {
             .field("needed_libs", &self.needed_libs().collect::<Vec<_>>())
             .field(
                 "sections",
-                &self.sections.as_ref().map_or(0, |sections| sections.len()),
+                &self
+                    .section_table
+                    .as_ref()
+                    .map_or(0, |table| table.sections.len()),
             )
             .field("capability", &self.capability)
             .field("bind_now", &self.dynamic.bind_now)
@@ -339,13 +411,13 @@ impl<D> ScannedDylib<D> {
             needed_libs,
             rpath,
             runpath,
-        } = scan_dynamic(reader.as_mut(), &phdrs)?;
-        let section_scan = scan_sections(reader.as_mut(), &ehdr)?;
+        } = DynamicScanParts::new(reader.as_mut(), &phdrs)?;
+        let section_table = SectionTable::new(reader.as_mut(), &ehdr)?;
         let strtab_view = ElfStringTable::new(strtab.as_ptr());
-        let capability = section_scan
+        let capability = section_table
             .as_ref()
-            .map_or(ModuleCapability::Opaque, |scan| {
-                classify_module_capability(&scan.sections)
+            .map_or(ModuleCapability::Opaque, |table| {
+                classify_module_capability(&table.sections)
             });
 
         Ok(Self {
@@ -355,11 +427,10 @@ impl<D> ScannedDylib<D> {
             interp,
             _strtab_bytes: strtab,
             strtab: strtab_view,
-            _shstrtab_bytes: section_scan.as_ref().map(|scan| scan.shstrtab.clone()),
+            section_table,
             rpath,
             runpath,
             needed_libs,
-            sections: section_scan.map(|scan| scan.sections),
             capability,
             reader,
             dynamic,
@@ -397,7 +468,13 @@ impl<D> ScannedDylib<D> {
     /// Returns the PT_INTERP string when present.
     #[inline]
     pub fn interp(&self) -> Option<&str> {
-        self.interp.as_deref().and_then(|bytes| interp_str(bytes))
+        self.interp.as_deref().and_then(|bytes| {
+            let end = bytes
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(bytes.len());
+            core::str::from_utf8(&bytes[..end]).ok()
+        })
     }
 
     /// Returns the DT_RPATH string when present.
@@ -436,30 +513,32 @@ impl<D> ScannedDylib<D> {
 
     #[inline]
     fn shstrtab(&self) -> Option<ElfStringTable> {
-        self._shstrtab_bytes
+        self.section_table
             .as_ref()
-            .map(|bytes| ElfStringTable::new(bytes.as_ptr()))
+            .map(|table| ElfStringTable::new(table.shstrtab.as_ptr()))
     }
 
     /// Returns whether the module exposes a usable section-table view.
     #[inline]
     pub fn has_sections(&self) -> bool {
-        self.sections.is_some()
+        self.section_table.is_some()
     }
 
     /// Returns the raw ELF section headers, when the section table is usable.
     #[inline]
     pub fn section_headers(&self) -> Option<&[ElfShdr]> {
-        self.sections.as_deref()
+        self.section_table
+            .as_ref()
+            .map(|table| table.sections.as_ref())
     }
 
     /// Returns one scanned section by id.
     #[inline]
     pub fn section(&self, id: impl Into<ScannedSectionId>) -> Option<ScannedSection<'_>> {
         let id = id.into();
-        let sections = self.sections.as_deref()?;
+        let section_table = self.section_table.as_ref()?;
         let shstrtab = self.shstrtab()?;
-        let header = sections.get(id.index())?;
+        let header = section_table.sections.get(id.index())?;
         Some(ScannedSection::new(
             id,
             shstrtab.get_str(header.sh_name() as usize),
@@ -471,10 +550,12 @@ impl<D> ScannedDylib<D> {
     #[inline]
     pub fn sections(&self) -> ScannedSections<'_> {
         ScannedSections::new(
-            self.sections.as_deref().unwrap_or(&[]),
-            self._shstrtab_bytes
-                .as_deref()
-                .map_or(ptr::null(), <[u8]>::as_ptr),
+            self.section_table
+                .as_ref()
+                .map_or(&[], |table| table.sections.as_ref()),
+            self.section_table
+                .as_ref()
+                .map_or(ptr::null(), |table| table.shstrtab.as_ptr()),
         )
     }
 
@@ -542,43 +623,7 @@ impl<D> ScannedDylib<D> {
     }
 }
 
-#[inline]
-fn interp_str(bytes: &[u8]) -> Option<&str> {
-    let end = bytes
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(bytes.len());
-    core::str::from_utf8(&bytes[..end]).ok()
-}
-
-fn scan_sections(object: &mut dyn ElfReader, ehdr: &ElfHeader) -> Result<Option<SectionTableScan>> {
-    if ehdr.e_shnum() == 0 {
-        return Ok(None);
-    }
-
-    let Some((start, _)) = ehdr.checked_shdr_layout()? else {
-        return Ok(None);
-    };
-
-    let shdrs = object.read_to_vec::<ElfShdr>(start, ehdr.e_shnum())?;
-    let shstrndx = ehdr.e_shstrndx();
-    let shstrtab = match shdrs.get(shstrndx) {
-        Some(shdr) if shdr.section_type() != ElfSectionType::NOBITS => {
-            object.read_to_vec(shdr.sh_offset(), shdr.sh_size())?
-        }
-        _ => return Ok(None),
-    };
-
-    Ok(Some(SectionTableScan {
-        sections: shdrs.into_boxed_slice(),
-        shstrtab: shstrtab.into_boxed_slice(),
-    }))
-}
-
 fn classify_module_capability(sections: &[ElfShdr]) -> ModuleCapability {
-    let mut saw_relocation_section = false;
-    let mut saw_repairable_retained_relocations = false;
-
     for section in sections {
         if !matches!(
             section.section_type(),
@@ -587,34 +632,15 @@ fn classify_module_capability(sections: &[ElfShdr]) -> ModuleCapability {
             continue;
         }
 
-        saw_relocation_section = true;
-        if retained_relocations_are_repairable(sections, section) {
-            saw_repairable_retained_relocations = true;
+        if !section.flags().contains(ElfSectionFlags::ALLOC)
+            && section.sh_info() != 0
+            && section.sh_link() != 0
+        {
+            return ModuleCapability::SectionReorderable;
         }
     }
 
-    if saw_repairable_retained_relocations {
-        ModuleCapability::SectionReorderable
-    } else if saw_relocation_section {
-        ModuleCapability::SectionData
-    } else {
-        ModuleCapability::SectionData
-    }
-}
-
-fn retained_relocations_are_repairable(sections: &[ElfShdr], section: &ElfShdr) -> bool {
-    if section.flags().contains(ElfSectionFlags::ALLOC) {
-        return false;
-    }
-    let target = section.sh_info() as usize;
-    let symbol_table = section.sh_link() as usize;
-    if target == 0 || symbol_table == 0 {
-        return false;
-    }
-    if target >= sections.len() || symbol_table >= sections.len() {
-        return false;
-    }
-    section.sh_entsize() == size_of::<ElfRelType>()
+    ModuleCapability::SectionData
 }
 
 fn read_interp(object: &mut dyn ElfReader, phdrs: &[ElfPhdr]) -> Result<Option<Box<[u8]>>> {
@@ -630,19 +656,6 @@ fn read_interp(object: &mut dyn ElfReader, phdrs: &[ElfPhdr]) -> Result<Option<B
 }
 
 fn vaddr_to_file_offset(vaddr: usize, phdrs: &[ElfPhdr]) -> Result<usize> {
-    let bounds = load_segment_bounds(vaddr, phdrs)?;
-    bounds
-        .offset
-        .checked_add(vaddr - bounds.start)
-        .ok_or(ParseDynamicError::AddressOverflow.into())
-}
-
-fn strtab_limit(vaddr: usize, phdrs: &[ElfPhdr]) -> Result<usize> {
-    let bounds = load_segment_bounds(vaddr, phdrs)?;
-    Ok(bounds.end - vaddr)
-}
-
-fn load_segment_bounds(vaddr: usize, phdrs: &[ElfPhdr]) -> Result<SegmentBounds> {
     for phdr in phdrs
         .iter()
         .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
@@ -652,61 +665,12 @@ fn load_segment_bounds(vaddr: usize, phdrs: &[ElfPhdr]) -> Result<SegmentBounds>
             .checked_add(phdr.p_filesz())
             .ok_or(ParseDynamicError::AddressOverflow)?;
         if seg_start <= vaddr && vaddr < seg_end {
-            return Ok(SegmentBounds {
-                offset: phdr.p_offset(),
-                start: seg_start,
-                end: seg_end,
-            });
+            return phdr
+                .p_offset()
+                .checked_add(vaddr - seg_start)
+                .ok_or(ParseDynamicError::AddressOverflow.into());
         }
     }
 
     Err(ParsePhdrError::MalformedProgramHeaders.into())
-}
-
-fn scan_dynamic(object: &mut dyn ElfReader, phdrs: &[ElfPhdr]) -> Result<DynamicScanParts> {
-    let dynamic_phdr = phdrs
-        .iter()
-        .find(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
-        .ok_or(ParsePhdrError::MissingDynamicSection)?;
-    if dynamic_phdr.p_filesz() % size_of::<ElfDyn>() != 0 {
-        return Err(ParsePhdrError::MalformedProgramHeaders.into());
-    }
-
-    let dyns = object.read_to_vec::<ElfDyn>(
-        dynamic_phdr.p_offset(),
-        dynamic_phdr.p_filesz() / core::mem::size_of::<ElfDyn>(),
-    )?;
-    let parsed = parse_dynamic_entries(
-        dyns.into_iter()
-            .map(|dynamic| (dynamic.tag(), dynamic.value())),
-    );
-
-    let strtab_vaddr =
-        NonZeroUsize::new(parsed.strtab_off).ok_or(ParseDynamicError::AddressOverflow)?;
-    let strtab_file_off = vaddr_to_file_offset(strtab_vaddr.get(), phdrs)?;
-    let strtab_size = match parsed.strtab_size {
-        Some(size) => size.get(),
-        None => strtab_limit(strtab_vaddr.get(), phdrs)?,
-    };
-    let strtab = object.read_to_vec(strtab_file_off, strtab_size)?;
-
-    let needed_libs = parsed
-        .needed_libs
-        .into_iter()
-        .map(|offset| offset.get())
-        .collect::<Vec<_>>()
-        .into_boxed_slice();
-    let rpath = parsed.rpath_off.map(|offset| offset.get());
-    let runpath = parsed.runpath_off.map(|offset| offset.get());
-
-    Ok(DynamicScanParts {
-        dynamic: ScannedDynamicInfo::new(
-            parsed.flags & DF_BIND_NOW as usize != 0 || parsed.flags_1 & DF_1_NOW as usize != 0,
-            parsed.flags & DF_STATIC_TLS as usize != 0,
-        ),
-        strtab: strtab.into_boxed_slice(),
-        needed_libs,
-        rpath,
-        runpath,
-    })
 }
