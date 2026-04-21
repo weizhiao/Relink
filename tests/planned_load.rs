@@ -370,11 +370,9 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
     };
     let mut pipeline = LinkPipeline::new();
     let mut observed_capability = None;
-    let mut observed_materialization = None;
     let configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
         let root = plan.root();
         observed_capability = plan.capability(root);
-        observed_materialization = plan.materialization(root);
         Ok(())
     };
     pipeline.push(configure);
@@ -397,10 +395,6 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
     assert_eq!(
         observed_capability,
         Some(ModuleCapability::SectionReorderable),
-    );
-    assert_eq!(
-        observed_materialization,
-        Some(Materialization::SectionRegions),
     );
     assert!(
         !loaded.is_contiguous_mapping(),
@@ -555,6 +549,7 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
                 .as_bytes_mut()
                 .copy_from_slice(&[9, 8, 7, 6]);
             plan.set_materialization(root, Materialization::WholeDsoRegion);
+            observed_materialization = plan.materialization(root);
             Ok(())
         };
     pipeline.push_scoped::<DataPass, _>(configure);
@@ -613,6 +608,7 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
     };
     let mut pipeline = LinkPipeline::new();
     let mut observed_capability = None;
+    let mut observed_materialization = None;
     let configure =
         |plan: &mut LinkPassPlan<'_, &'static str, (), DataPass>| -> elf_loader::Result<()> {
             let root = plan.root();
@@ -620,8 +616,9 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
 
             assert_eq!(
                 plan.set_materialization(root, Materialization::SectionRegions),
-                Some(Materialization::WholeDsoRegion)
+                None,
             );
+            observed_materialization = plan.materialization(root);
             Ok(())
         };
     pipeline.push_scoped::<DataPass, _>(configure);
@@ -641,6 +638,7 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
         .expect_err("section-data modules must reject section-region placement");
     drop(pipeline);
     assert_eq!(observed_capability, Some(ModuleCapability::SectionData));
+    assert_eq!(observed_materialization, Some(Materialization::SectionRegions));
     assert!(
         err.to_string().contains("cannot use section regions"),
         "unexpected error: {err}",

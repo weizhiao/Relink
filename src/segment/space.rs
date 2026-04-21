@@ -88,7 +88,6 @@ impl ElfSegmentSlice {
 /// The slices are kept sorted by offset and must not overlap.
 pub struct ElfSegments {
     base: usize,
-    len: usize,
     slices: Box<[ElfSegmentSlice]>,
 }
 
@@ -101,7 +100,6 @@ impl Debug for ElfSegments {
             .collect::<Vec<_>>();
         f.debug_struct("ElfSegments")
             .field("base", &format_args!("0x{:x}", self.base()))
-            .field("len", &self.len)
             .field("slices", &slices)
             .finish()
     }
@@ -113,16 +111,6 @@ impl ElfSegments {
         self.slices
             .iter()
             .find(|slice| slice.contains_range(start, len))
-    }
-
-    #[inline]
-    fn bounding_len(slices: &[ElfSegmentSlice]) -> usize {
-        let Some(last) = slices.last() else {
-            return 0;
-        };
-        last.offset
-            .checked_add(last.len)
-            .expect("ELF segment slice range overflowed")
     }
 
     #[inline]
@@ -157,7 +145,6 @@ impl ElfSegments {
         let slice = ElfSegmentSlice::new(offset, len, backing);
         Self {
             base,
-            len: offset.checked_add(len).unwrap_or(usize::MAX),
             slices: alloc::vec![slice].into_boxed_slice(),
         }
     }
@@ -178,8 +165,7 @@ impl ElfSegments {
             );
         }
         let slices = slices.into_boxed_slice();
-        let len = Self::bounding_len(&slices);
-        Self { base, len, slices }
+        Self { base, slices }
     }
 
     /// Creates one shared backing owner for a mapped region.
@@ -214,12 +200,6 @@ impl ElfSegments {
         self.slices
             .first()
             .map(|slice| (slice.backing.memory, slice.backing.len))
-    }
-
-    /// Returns the length of the module-relative bounding span.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.len
     }
 
     /// Returns whether no slices are mapped.

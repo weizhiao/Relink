@@ -243,10 +243,7 @@ mod tests {
             MemoryClass::WritableData,
             ArenaSharing::Shared,
         ));
-        assert!(
-            plan.memory_layout_mut()
-                .assign(section, arena, 0)
-        );
+        assert!(plan.memory_layout_mut().assign(section, arena, 0));
         plan.set_materialization(root, Materialization::SectionRegions);
 
         let mut mapped = MappedArenaMap::map_plan::<DefaultMmap, _, _>(&plan)

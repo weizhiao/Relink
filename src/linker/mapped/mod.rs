@@ -144,19 +144,17 @@ impl MappedRuntimeMemory {
 
     fn build_module(
         &mut self,
-        module_id: ModuleId,
+        id: ModuleId,
         layout: &MemoryLayoutPlan,
     ) -> Result<&RuntimeModuleMemory> {
-        if self.modules.contains_key(module_id) {
-            return Err(LinkerError::runtime_memory(
-                "section-region module runtime memory was built more than once",
-            )
-            .into());
-        }
-        let runtime = RuntimeModuleMemory::build(module_id, layout, &self.arenas)?;
-        let _ = self.modules.insert(module_id, runtime);
+        let runtime = RuntimeModuleMemory::build(id, layout, &self.arenas)?;
+        let res = self.modules.insert(id, runtime);
+        debug_assert!(
+            res.is_none(),
+            "module runtime memory was built more than once"
+        );
         self.modules
-            .get(module_id)
+            .get(id)
             .ok_or_else(|| {
                 LinkerError::runtime_memory("section-region module runtime memory was not cached")
             })
@@ -165,15 +163,15 @@ impl MappedRuntimeMemory {
 
     pub(crate) fn repair_module<K, D>(
         &mut self,
-        module_id: ModuleId,
+        id: ModuleId,
         plan: &mut LinkPlan<K, D>,
     ) -> Result<()>
     where
         K: Clone + Ord,
         D: 'static,
     {
-        let runtime = self.build_module(module_id, plan.memory_layout())?;
-        let mut rewriter = RuntimeMetadataRewriter::new(module_id, plan, runtime);
+        let runtime = self.build_module(id, plan.memory_layout())?;
+        let mut rewriter = RuntimeMetadataRewriter::new(id, plan, runtime);
         rewriter.rewrite()
     }
 

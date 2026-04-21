@@ -312,7 +312,7 @@ pub(crate) trait SegmentBuilder {
                 let space_end = space
                     .primary_backing()
                     .map(|(memory, len)| memory as usize + len)
-                    .unwrap_or(base + space.len());
+                    .unwrap_or(space.mapped_base() + space.mapped_len());
                 if addr + len < space_end {
                     crate::os::virtual_free(addr + len, space_end - (addr + len))?;
                 }

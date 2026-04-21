@@ -19,7 +19,6 @@ macro_rules! entity_ref {
         impl $name {
             /// Creates a new typed entity reference from a zero-based index.
             #[inline]
-            #[allow(dead_code)]
             pub const fn new(index: usize) -> Self {
                 Self(index)
             }
@@ -84,20 +83,6 @@ where
         Self::default()
     }
 
-    /// Returns the number of stored values.
-    #[inline]
-    #[allow(dead_code)]
-    pub fn len(&self) -> usize {
-        self.values.len()
-    }
-
-    /// Returns whether the primary map is empty.
-    #[inline]
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
-    }
-
     /// Appends one value and returns its typed id.
     #[inline]
     pub fn push(&mut self, value: V) -> K {
@@ -137,16 +122,6 @@ where
     pub fn iter(&self) -> impl Iterator<Item = (K, &V)> {
         self.values
             .iter()
-            .enumerate()
-            .map(|(index, value)| (K::new(index), value))
-    }
-
-    /// Iterates over ids and values together mutably.
-    #[inline]
-    #[allow(dead_code)]
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (K, &mut V)> {
-        self.values
-            .iter_mut()
             .enumerate()
             .map(|(index, value)| (K::new(index), value))
     }
@@ -266,20 +241,6 @@ where
         Self::default()
     }
 
-    /// Returns the current number of addressable slots.
-    #[inline]
-    #[allow(dead_code)]
-    pub fn len(&self) -> usize {
-        self.values.len()
-    }
-
-    /// Returns whether this secondary map has no allocated slots.
-    #[inline]
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
-    }
-
     /// Returns whether `key` has side data.
     #[inline]
     #[allow(dead_code)]
@@ -317,7 +278,6 @@ where
 
     /// Iterates over ids and present side-data values together.
     #[inline]
-    #[allow(dead_code)]
     pub fn iter(&self) -> impl Iterator<Item = (K, &V)> {
         self.values
             .iter()

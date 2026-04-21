@@ -447,32 +447,11 @@ impl LayoutSectionArena {
     }
 
     #[inline]
-    pub(crate) fn push_scanned(
-        &mut self,
-        section: SectionId,
-        bytes: AlignedBytes,
-    ) -> Option<SectionId> {
-        self.install_data(section, bytes)
-    }
-
-    #[inline]
-    pub(crate) fn install_data(
-        &mut self,
-        section: SectionId,
-        data: AlignedBytes,
-    ) -> Option<SectionId> {
-        let record = self.record_mut(section)?;
-        record.install_data(data);
-        Some(section)
-    }
-
-    pub(crate) fn install_scanned_data(
-        &mut self,
-        section: SectionId,
-        bytes: impl Into<AlignedBytes>,
-    ) {
-        self.push_scanned(section, bytes.into())
-            .expect("layout section arena failed to install scanned section data");
+    pub(crate) fn install_data(&mut self, section: SectionId, bytes: AlignedBytes) {
+        let record = self
+            .record_mut(section)
+            .expect("layout plan attempted to install scanned data for a missing section");
+        record.install_data(bytes);
     }
 
     #[inline]

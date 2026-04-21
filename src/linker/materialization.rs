@@ -5,7 +5,7 @@ use super::{
     },
     plan::{LinkPlan, ModuleId},
 };
-use crate::{LinkerError, Result, image::ModuleCapability};
+use crate::{LinkerError, Result, image::ModuleCapability, segment::align_up};
 use alloc::collections::BTreeMap;
 
 pub(crate) fn normalize_plan<K, D>(plan: &mut LinkPlan<K, D>) -> Result<()>
@@ -20,7 +20,7 @@ where
         let module = layout.module(module_id);
         let mode = resolve_materialization_mode(&*plan, module_id, module)?;
         has_section_regions |= mode == Materialization::SectionRegions;
-        let _ = plan.set_materialization(module_id, mode);
+        plan.set_materialization(module_id, mode);
         Ok(())
     })?;
 
@@ -39,7 +39,7 @@ where
 
         for section_id in layout.module(module_id).alloc_sections().iter().copied() {
             if let Some(placement) = layout.placement(section_id) {
-                arena_state.absorb_existing_section(layout, module_id, section_id, placement);
+                arena_state.register_existing_section(layout, module_id, section_id, placement);
             }
         }
         Ok(())
@@ -60,7 +60,7 @@ where
                 module_id,
                 section_id,
                 policy,
-            )?;
+            );
         }
         Ok(())
     })?;
@@ -130,7 +130,7 @@ impl ArenaState {
         }
     }
 
-    fn absorb_existing_section(
+    fn register_existing_section(
         &mut self,
         layout: &MemoryLayoutPlan,
         module_id: ModuleId,
@@ -147,7 +147,18 @@ impl ArenaState {
             placement.arena(),
             placement.offset().saturating_add(placement.size()),
         );
-        self.remember_arena(module_id, memory_class, placement.arena(), arena);
+        match arena.sharing() {
+            ArenaSharing::Shared => {
+                self.shared_arenas
+                    .entry(memory_class)
+                    .or_insert(placement.arena());
+            }
+            ArenaSharing::Private => {
+                self.private_arenas
+                    .entry((module_id, memory_class))
+                    .or_insert(placement.arena());
+            }
+        }
     }
 
     fn assign_fallback_section(
@@ -156,7 +167,7 @@ impl ArenaState {
         module_id: ModuleId,
         section_id: SectionId,
         policy: PackingPolicy,
-    ) -> Result<()> {
+    ) {
         let (memory_class, alignment, size) = {
             let section = layout.section(section_id);
             (
@@ -173,36 +184,17 @@ impl ArenaState {
             policy.class_policy(memory_class),
             memory_class,
         );
-        let offset = self.next_offset(arena_id, alignment)?;
+        let offset = self.next_offset(arena_id, alignment);
         let next_offset = offset
             .checked_add(size)
             .expect("fallback arena assignment overflowed while placing a section");
 
-        assert!(layout.assign(section_id, arena_id, offset),
+        assert!(
+            layout.assign(section_id, arena_id, offset),
             "fallback arena assignment failed while placing a section"
         );
 
         self.update_arena_end(arena_id, next_offset);
-        Ok(())
-    }
-
-    fn remember_arena(
-        &mut self,
-        module_id: ModuleId,
-        memory_class: MemoryClass,
-        arena_id: ArenaId,
-        arena: &Arena,
-    ) {
-        match arena.sharing() {
-            ArenaSharing::Shared => {
-                self.shared_arenas.entry(memory_class).or_insert(arena_id);
-            }
-            ArenaSharing::Private => {
-                self.private_arenas
-                    .entry((module_id, memory_class))
-                    .or_insert(arena_id);
-            }
-        }
     }
 
     fn ensure_arena(
@@ -219,7 +211,7 @@ impl ArenaState {
                 }
 
                 if let Some(arena_id) = Self::find_shared_arena(layout, memory_class) {
-                    self.remember_existing_arena_end(layout, arena_id);
+                    self.update_arena_end(arena_id, layout.usage(arena_id).used_len());
                     self.shared_arenas.insert(memory_class, arena_id);
                     return arena_id;
                 }
@@ -252,11 +244,7 @@ impl ArenaState {
         })
     }
 
-    fn remember_existing_arena_end(&mut self, layout: &MemoryLayoutPlan, arena_id: ArenaId) {
-        self.update_arena_end(arena_id, layout.usage(arena_id).used_len());
-    }
-
-    fn next_offset(&self, arena_id: ArenaId, alignment: usize) -> Result<usize> {
+    fn next_offset(&self, arena_id: ArenaId, alignment: usize) -> usize {
         align_up(
             self.arena_offsets.get(&arena_id).copied().unwrap_or(0),
             alignment,
@@ -269,21 +257,6 @@ impl ArenaState {
             .and_modify(|offset| *offset = (*offset).max(end))
             .or_insert(end);
     }
-}
-
-fn align_up(value: usize, alignment: usize) -> Result<usize> {
-    let alignment = alignment.max(1);
-    let remainder = value % alignment;
-    if remainder == 0 {
-        return Ok(value);
-    }
-
-    value
-        .checked_add(alignment - remainder)
-        .ok_or_else(|| {
-            LinkerError::materialization("arena assignment overflowed while aligning offsets")
-        })
-        .map_err(Into::into)
 }
 
 #[cfg(test)]

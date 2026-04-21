@@ -344,13 +344,13 @@ where
                 .iter()
                 .copied()
                 .filter(|module_id| {
-                    plan.materialization(*module_id)
-                        .unwrap_or(Materialization::WholeDsoRegion)
-                        == Materialization::SectionRegions
+                    plan.materialization(*module_id).expect(
+                        "ordered layout referenced a module without materialization metadata",
+                    ) == Materialization::SectionRegions
                 })
                 .collect::<Vec<_>>();
-            for module_id in section_region_modules {
-                mapped_runtime.repair_module(module_id, &mut plan)?;
+            for id in section_region_modules {
+                mapped_runtime.repair_module(id, &mut plan)?;
             }
             mapped_runtime.populate(&mut plan)?;
         }

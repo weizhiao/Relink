@@ -121,7 +121,9 @@ where
 
     #[inline]
     fn accepts_section(&self, section: SectionId) -> Option<bool> {
-        self.plan.section_owner(section).map(|id| self.accepts_module(id))
+        self.plan
+            .section_owner(section)
+            .map(|id| self.accepts_module(id))
     }
 
     /// Returns the capability scope selected for the current pass.
@@ -336,12 +338,7 @@ where
 
     /// Assigns a visible section to an arena.
     #[inline]
-    pub fn assign(
-        &mut self,
-        section: SectionId,
-        arena: ArenaId,
-        offset: usize,
-    ) -> bool {
+    pub fn assign(&mut self, section: SectionId, arena: ArenaId, offset: usize) -> bool {
         if self.accepts_section(section) != Some(true) {
             return false;
         }
@@ -717,7 +714,7 @@ where
                 LinkerError::section_data("section data requested for a missing scanned section")
             })?;
 
-        memory_layout.install_section_data(section, snapshot);
+        memory_layout.install_data(section, snapshot);
         Ok(())
     }
 

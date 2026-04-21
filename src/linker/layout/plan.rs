@@ -3,9 +3,11 @@ use super::{
     section::{LayoutSectionArena, ModuleLayout, SectionId, SectionMetadata, SectionPlacement},
 };
 use crate::{
+    AlignedBytes,
     entity::{PrimaryMap, SecondaryMap},
     image::{ModuleCapability, ScannedDylib, ScannedSectionId},
     linker::plan::ModuleId,
+    segment::align_up,
 };
 
 /// The requested materialization mode for one module during planned load.
@@ -108,25 +110,18 @@ impl MemoryLayoutPlan {
 
     /// Returns one section's materialized data, when present.
     #[inline]
-    pub fn data(&self, section: SectionId) -> Option<&crate::AlignedBytes> {
+    pub fn data(&self, section: SectionId) -> Option<&AlignedBytes> {
         self.sections.data(section)
     }
 
     #[inline]
-    pub(crate) fn data_mut(
-        &mut self,
-        section: SectionId,
-    ) -> Option<&mut crate::AlignedBytes> {
+    pub(crate) fn data_mut(&mut self, section: SectionId) -> Option<&mut AlignedBytes> {
         self.sections.data_mut(section)
     }
 
     #[inline]
-    pub(crate) fn install_section_data(
-        &mut self,
-        section: SectionId,
-        bytes: impl Into<crate::AlignedBytes>,
-    ) {
-        self.sections.install_scanned_data(section, bytes);
+    pub(crate) fn install_data(&mut self, section: SectionId, bytes: AlignedBytes) {
+        self.sections.install_data(section, bytes);
     }
 
     #[inline]
@@ -140,7 +135,7 @@ impl MemoryLayoutPlan {
         read_a: SectionId,
         read_b: SectionId,
         write: SectionId,
-        f: impl FnOnce(&crate::AlignedBytes, &crate::AlignedBytes, &mut crate::AlignedBytes) -> R,
+        f: impl FnOnce(&AlignedBytes, &AlignedBytes, &mut AlignedBytes) -> R,
     ) -> Option<R> {
         self.sections
             .with_disjoint_data_mut(read_a, read_b, write, f)
@@ -212,17 +207,12 @@ impl MemoryLayoutPlan {
             used_len = used_len.max(section_end);
         }
 
-        let mapped_len = align_up_len(used_len, arena.page_size());
+        let mapped_len = align_up(used_len, arena.page_size());
         ArenaUsage::new(section_count, used_len, mapped_len)
     }
 
     /// Assigns one section to a physical arena at `offset`.
-    pub fn assign(
-        &mut self,
-        section: SectionId,
-        arena: ArenaId,
-        offset: usize,
-    ) -> bool {
+    pub fn assign(&mut self, section: SectionId, arena: ArenaId, offset: usize) -> bool {
         let size = self.section(section).size();
         let placement = SectionPlacement::new(arena, offset, size);
         let metadata = self.section(section);
@@ -244,24 +234,10 @@ impl MemoryLayoutPlan {
         self.sections.clear_placement(section)
     }
 
-    /// Appends one physical arena and returns its stable arena id.
-    #[inline]
-    pub fn push_arena(&mut self, arena: Arena) -> ArenaId {
-        self.arenas.push(arena)
-    }
-
     /// Creates one physical arena and returns its stable arena id.
     #[inline]
-    pub fn create_arena(&mut self, arena: Arena) -> ArenaId {
-        self.push_arena(arena)
-    }
-
-    /// Installs the layout for one module.
-    ///
-    /// Existing module slots are only placeholders and must still be empty.
-    #[inline]
-    pub(crate) fn insert_module(&mut self, module_id: ModuleId, layout: ModuleLayout) {
-        let _ = self.modules.insert(module_id, layout);
+    pub(crate) fn create_arena(&mut self, arena: Arena) -> ArenaId {
+        self.arenas.push(arena)
     }
 
     /// Builds a section-granularity layout seed from scanned metadata.
@@ -272,22 +248,9 @@ impl MemoryLayoutPlan {
     {
         let mut plan = Self::default();
         for (module_id, module) in modules {
-            let materialization = Materialization::default(module.capability());
             let layout = ModuleLayout::from_scanned(module_id, module, &mut plan.sections);
-            plan.insert_module(module_id, layout);
-            let _ = plan.set_materialization(module_id, materialization);
+            plan.modules.insert(module_id, layout);
         }
         plan
     }
-}
-
-fn align_up_len(value: usize, page_size: usize) -> usize {
-    let page_size = page_size.max(1);
-    let remainder = value % page_size;
-    if remainder == 0 {
-        return value;
-    }
-    value
-        .checked_add(page_size - remainder)
-        .expect("arena usage overflowed while rounding mapped length")
 }
