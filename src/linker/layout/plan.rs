@@ -130,11 +130,8 @@ impl MemoryLayoutPlan {
     }
 
     #[inline]
-    pub(in crate::linker) fn mark_section_data_override(
-        &mut self,
-        section: SectionId,
-    ) -> Option<()> {
-        self.sections.mark_data_override(section)
+    pub(in crate::linker) fn mark_section_data_override(&mut self, section: SectionId) {
+        self.sections.mark_data_override(section);
     }
 
     #[inline]
@@ -235,9 +232,7 @@ impl MemoryLayoutPlan {
         if !metadata.is_allocated() {
             return None;
         }
-        let Some(memory_class) = metadata.memory_class() else {
-            return None;
-        };
+        let memory_class = metadata.memory_class()?;
         if memory_class != self.arena(arena).memory_class() {
             return None;
         }

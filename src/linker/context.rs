@@ -11,7 +11,7 @@ use super::{
 use crate::{
     LinkerError, Loader, Result,
     entity::SecondaryMap,
-    image::{LoadedCore, RawDylib},
+    image::{LoadedCore, RawDylib, ScannedDylib},
     loader::LoadHook,
     os::Mmap,
     relocation::{RelocationHandler, Relocator, SymbolLookup},
@@ -33,6 +33,13 @@ use core::mem;
 pub struct LinkContext<K, D: 'static> {
     committed: CommittedStorage<K, D>,
     scratch_relocation_order: Vec<K>,
+}
+
+impl<K, D: 'static> Default for LinkContext<K, D> {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<K, D: 'static> LinkContext<K, D> {
@@ -128,7 +135,7 @@ where
             };
             scope.push(key);
 
-            for dep in entry.direct_deps.iter() {
+            for dep in &entry.direct_deps {
                 if visited.insert(dep.clone()) {
                     queue.push_back(dep.clone());
                 }
@@ -214,7 +221,7 @@ where
             return Ok(loaded.clone());
         }
 
-        let prepared = self.prepare_runtime_load(key, loader, resolver)?;
+        let prepared = self.prepare_runtime_load(&key, loader, resolver)?;
         self.execute_prepared_load::<M, _, _, _, _, _, _>(prepared, relocator, planner)
     }
 
@@ -223,12 +230,12 @@ where
     /// Caller-driven layout and materialization changes should be expressed as
     /// [`LinkPass`]es in `pipeline`, which run after scan discovery and before
     /// runtime materialization.
-    pub fn load_with_scan<'a, M, H, Tls, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    pub fn load_with_scan<M, H, Tls, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         &mut self,
         key: K,
         loader: &mut Loader<M, H, D, Tls>,
         resolver: &mut impl KeyResolver<'static, K, D>,
-        pipeline: &mut LinkPipeline<'a, K, D>,
+        pipeline: &mut LinkPipeline<'_, K, D>,
         relocator: &Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>,
         planner: &mut impl RelocationPlanner<K, D>,
     ) -> Result<LoadedCore<D>>
@@ -249,16 +256,16 @@ where
             return Ok(loaded.clone());
         }
 
-        let prepared = match self.prepare_scan_load(key, loader, resolver, pipeline)? {
+        let prepared = match self.prepare_scan_load(&key, loader, resolver, pipeline)? {
             ScanDiscovery::Existing(root) => PreparedLoad::runtime(root, LoadSession::new()),
-            ScanDiscovery::Plan(plan) => self.prepare_planned_load::<M, _, _>(plan, loader)?,
+            ScanDiscovery::Plan(plan) => Self::prepare_planned_load::<M, _, _>(plan, loader)?,
         };
         self.execute_prepared_load::<M, _, _, _, _, _, _>(prepared, relocator, planner)
     }
 
     fn prepare_runtime_load<'cfg, M, H, Tls>(
         &self,
-        key: K,
+        key: &K,
         loader: &mut Loader<M, H, D, Tls>,
         resolver: &mut impl KeyResolver<'cfg, K, D>,
     ) -> Result<PreparedLoad<K, D>>
@@ -279,12 +286,12 @@ where
         Ok(PreparedLoad::runtime(root, session))
     }
 
-    fn prepare_scan_load<'a, M, H, Tls>(
+    fn prepare_scan_load<M, H, Tls>(
         &self,
-        key: K,
+        key: &K,
         loader: &mut Loader<M, H, D, Tls>,
         resolver: &mut impl KeyResolver<'static, K, D>,
-        pipeline: &mut LinkPipeline<'a, K, D>,
+        pipeline: &mut LinkPipeline<'_, K, D>,
     ) -> Result<ScanDiscovery<K, D>>
     where
         K: 'static,
@@ -322,7 +329,6 @@ where
     }
 
     fn prepare_planned_load<M, H, Tls>(
-        &self,
         mut plan: LinkPlan<K, D>,
         loader: &mut Loader<M, H, D, Tls>,
     ) -> Result<PreparedLoad<K, D>>
@@ -335,29 +341,9 @@ where
         // Scan discovery already seeded layout-side metadata before the pass pipeline ran.
         // The planned-load phase only needs to normalize materialization choices and rebuild
         // any derived addresses that those choices affect.
-        materialization::normalize_plan(&mut plan)?;
-        let mut mapped_runtime = mapped::MappedRuntimeMemory::map::<M, _, _>(&plan)?;
-
-        if let Some(mapped_runtime) = mapped_runtime.as_mut() {
-            let section_region_modules = plan
-                .group_order()
-                .iter()
-                .copied()
-                .filter(|module_id| {
-                    plan.materialization(*module_id).expect(
-                        "ordered layout referenced a module without materialization metadata",
-                    ) == Materialization::SectionRegions
-                })
-                .collect::<Vec<_>>();
-            for id in section_region_modules {
-                mapped_runtime.repair_module(id, &mut plan)?;
-            }
-            mapped_runtime.populate(&mut plan)?;
-        }
+        let mut mapped_runtime = Self::prepare_mapped_runtime::<M>(&mut plan)?;
 
         let (root, group_order, entries, memory_layout) = plan.into_parts();
-        let (init_fn, fini_fn) = loader.inner.lifecycle_handlers();
-        let force_static_tls = loader.inner.force_static_tls();
         let mut session = LoadSession::new();
         let mut module_keys = SecondaryMap::default();
         for (module_id, entry) in entries.iter() {
@@ -368,39 +354,6 @@ where
             .map(|module_id| module_keys[*module_id].clone())
             .collect();
 
-        let mut materialize_raw =
-            |module_id: ModuleId, scanned: crate::image::ScannedDylib<D>| -> Result<RawDylib<D>> {
-                match memory_layout
-                    .materialization(module_id)
-                    .unwrap_or(Materialization::WholeDsoRegion)
-                {
-                    Materialization::SectionRegions => {
-                        let runtime = mapped_runtime
-                            .as_mut()
-                            .ok_or_else(|| {
-                                LinkerError::runtime_memory(
-                                    "section-region planned load is missing mapped runtime memory",
-                                )
-                            })?
-                            .take_module(module_id)?;
-                        let mut raw = mapped::build_arena_raw_dylib::<D, Tls>(
-                            scanned,
-                            runtime,
-                            init_fn.clone(),
-                            fini_fn.clone(),
-                            force_static_tls,
-                        )?;
-                        loader.inner.post_load_dylib(&mut raw)?;
-                        Ok(raw)
-                    }
-                    Materialization::WholeDsoRegion => {
-                        let mut raw = loader.load_dylib_impl(scanned.into_reader())?;
-                        apply_section_overrides(&mut raw, module_id, &memory_layout)?;
-                        Ok(raw)
-                    }
-                }
-            };
-
         for (module_id, entry) in entries {
             let (key, module, direct_dep_ids) = entry.into_parts();
             let direct_deps = direct_dep_ids
@@ -408,7 +361,13 @@ where
                 .map(|dep_id| module_keys[*dep_id].clone())
                 .collect::<Vec<_>>()
                 .into_boxed_slice();
-            let raw = materialize_raw(module_id, module)?;
+            let raw = Self::materialize_planned_raw::<M, H, Tls>(
+                loader,
+                &memory_layout,
+                &mut mapped_runtime,
+                module_id,
+                module,
+            )?;
             session.insert_resolved_pending(key, raw, direct_deps);
         }
 
@@ -417,6 +376,73 @@ where
             session,
             mapped_runtime,
         ))
+    }
+
+    fn prepare_mapped_runtime<M>(
+        plan: &mut LinkPlan<K, D>,
+    ) -> Result<Option<mapped::MappedRuntimeMemory>>
+    where
+        M: Mmap,
+    {
+        materialization::normalize_plan(plan)?;
+        let mut mapped_runtime = mapped::MappedRuntimeMemory::map::<M, _, _>(plan)?;
+
+        if let Some(runtime) = mapped_runtime.as_mut() {
+            let section_region_modules = plan
+                .modules_with_materialization(Materialization::SectionRegions)
+                .collect::<Vec<_>>();
+            for module_id in section_region_modules {
+                runtime.repair_module(module_id, plan)?;
+            }
+            runtime.populate(plan)?;
+        }
+
+        Ok(mapped_runtime)
+    }
+
+    fn materialize_planned_raw<M, H, Tls>(
+        loader: &mut Loader<M, H, D, Tls>,
+        plan: &MemoryLayoutPlan,
+        mapped_runtime: &mut Option<mapped::MappedRuntimeMemory>,
+        module_id: ModuleId,
+        scanned: ScannedDylib<D>,
+    ) -> Result<RawDylib<D>>
+    where
+        D: Default,
+        M: Mmap,
+        H: LoadHook,
+        Tls: TlsResolver,
+    {
+        match plan
+            .materialization(module_id)
+            .unwrap_or(Materialization::WholeDsoRegion)
+        {
+            Materialization::SectionRegions => {
+                let runtime = mapped_runtime
+                    .as_mut()
+                    .ok_or_else(|| {
+                        LinkerError::runtime_memory(
+                            "section-region planned load is missing mapped runtime memory",
+                        )
+                    })?
+                    .take_module(module_id)?;
+                let (init_fn, fini_fn) = loader.inner.lifecycle_handlers();
+                let mut raw = mapped::build_arena_raw_dylib::<D, Tls>(
+                    scanned,
+                    runtime,
+                    init_fn.clone(),
+                    fini_fn.clone(),
+                    loader.inner.force_static_tls(),
+                )?;
+                loader.inner.post_load_dylib(&mut raw)?;
+                Ok(raw)
+            }
+            Materialization::WholeDsoRegion => {
+                let mut raw = loader.load_dylib_impl(scanned.into_reader())?;
+                apply_section_overrides(&mut raw, module_id, plan);
+                Ok(raw)
+            }
+        }
     }
 
     fn execute_prepared_load<M, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
@@ -480,7 +506,7 @@ where
         PostH: RelocationHandler + Clone,
     {
         let mut order = mem::take(&mut self.scratch_relocation_order);
-        self.build_relocation_order(root, &session.resolve.entries, &mut order);
+        Self::build_relocation_order(root, &session.resolve.entries, &mut order);
         let scope = self.build_group_scope(session);
 
         let result = (|| {
@@ -510,7 +536,6 @@ where
     }
 
     fn build_relocation_order(
-        &self,
         root: &K,
         pending: &BTreeMap<K, GraphEntry<K, RawDylib<D>>>,
         order: &mut Vec<K>,
@@ -616,20 +641,16 @@ impl<K, D: 'static> PreparedLoad<K, D> {
     }
 }
 
-fn apply_section_overrides<D>(
-    raw: &mut RawDylib<D>,
-    module_id: ModuleId,
-    layout: &MemoryLayoutPlan,
-) -> Result<()> {
-    let module = layout.module(module_id);
+fn apply_section_overrides<D>(raw: &mut RawDylib<D>, module_id: ModuleId, plan: &MemoryLayoutPlan) {
+    let module = plan.module(module_id);
     let segments = raw.core_ref().segments();
 
     for section_id in module.alloc_sections().iter().copied() {
-        if !layout.section_is_override(section_id) {
+        if !plan.section_is_override(section_id) {
             continue;
         }
-        let metadata = layout.section(section_id);
-        let data = layout
+        let metadata = plan.section(section_id);
+        let data = plan
             .data(section_id)
             .expect("missing section data for planned override");
         let dst = segments.get_slice_mut::<u8>(metadata.source_address(), metadata.size());
@@ -640,6 +661,4 @@ fn apply_section_overrides<D>(
         );
         dst.copy_from_slice(data.as_ref());
     }
-
-    Ok(())
 }

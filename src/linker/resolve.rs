@@ -237,6 +237,36 @@ where
     K: Clone + Ord + 'cfg,
     P: DependencyOwner,
 {
+    fn direct_deps_for<M, H, Tls>(
+        &mut self,
+        key: &K,
+        loader: &mut Loader<M, H, D, Tls>,
+        resolver: &mut impl KeyResolver<'cfg, K, D>,
+    ) -> Result<Vec<K>>
+    where
+        S: ResolveStage<'cfg, K, D, P, M, H, Tls>,
+        M: Mmap,
+        H: LoadHook,
+        Tls: TlsResolver,
+    {
+        if let Some(direct_deps) = self.known_direct_deps(key) {
+            let direct_deps = direct_deps.to_vec();
+            self.set_direct_deps(key, direct_deps.clone());
+            return Ok(direct_deps);
+        }
+
+        let needed_len = self
+            .owner(key)
+            .expect("missing dependency owner while resolving direct deps")
+            .needed_len();
+        let direct_deps = collect_unique_deps(needed_len, |idx| {
+            let resolved_key = self.resolve_dependency_edge(key, idx, resolver)?;
+            self.stage_resolved(resolved_key, loader)
+        })?;
+        self.set_direct_deps(key, direct_deps.clone());
+        Ok(direct_deps)
+    }
+
     pub(crate) fn resolve_dependency_graph<M, H, Tls>(
         &mut self,
         root: K,
@@ -251,22 +281,7 @@ where
     {
         let mut group_order = mem::take(&mut self.session.group_order);
         let result = extend_breadth_first(&mut group_order, root, |key| {
-            if let Some(direct_deps) = self.known_direct_deps(key) {
-                let direct_deps = direct_deps.to_vec();
-                self.set_direct_deps(key, direct_deps.clone());
-                return Ok(direct_deps);
-            }
-
-            let needed_len = self
-                .owner(key)
-                .expect("missing dependency owner while resolving direct deps")
-                .needed_len();
-            let direct_deps = collect_unique_deps(needed_len, |idx| {
-                let resolved = self.resolve_dependency_edge(key, idx, resolver)?;
-                self.stage_resolved(resolved, loader)
-            })?;
-            self.set_direct_deps(key, direct_deps.clone());
-            Ok(direct_deps)
+            self.direct_deps_for(key, loader, resolver)
         });
         self.session.group_order = group_order;
         result

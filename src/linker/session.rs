@@ -170,7 +170,7 @@ where
     group_order.push(root);
 
     walk_breadth_first(group_order, |key, queue| {
-        for dep_key in direct_deps(key)?.into_iter() {
+        for dep_key in direct_deps(key)? {
             if visited.insert(dep_key.clone()) {
                 queue.push(dep_key);
             }

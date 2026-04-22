@@ -435,9 +435,9 @@ impl LayoutSectionArena {
             }
         };
 
-        let read_a_data = read_record(read_a)?.data()?;
-        let read_b_data = read_record(read_b)?.data()?;
-        Some(f(read_a_data, read_b_data, write_data))
+        let first_data = read_record(read_a)?.data()?;
+        let second_data = read_record(read_b)?.data()?;
+        Some(f(first_data, second_data, write_data))
     }
 
     #[inline]
@@ -455,10 +455,10 @@ impl LayoutSectionArena {
     }
 
     #[inline]
-    pub(crate) fn mark_data_override(&mut self, section: SectionId) -> Option<()> {
-        let record = self.record_mut(section)?;
-        record.mark_data_override();
-        Some(())
+    pub(crate) fn mark_data_override(&mut self, section: SectionId) {
+        if let Some(record) = self.record_mut(section) {
+            record.mark_data_override();
+        }
     }
 
     /// Returns the concrete arena placement of one section, when present.
@@ -639,8 +639,6 @@ impl ModuleLayout {
     /// Iterates over every known section mapping for this module.
     #[inline]
     pub fn section_entries(&self) -> impl Iterator<Item = (ScannedSectionId, &SectionId)> {
-        self.scanned_sections
-            .iter()
-            .map(|(scanned, section)| (scanned, section))
+        self.scanned_sections.iter()
     }
 }

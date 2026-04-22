@@ -1,7 +1,8 @@
 use super::{MemoryLayoutPlan, RuntimeModuleMemory, RuntimeSectionMemory, SectionId};
 use crate::linker::plan::{LinkPlan, ModuleId};
 use crate::{
-    LinkerError, Result,
+    AlignedBytes, Error, LinkerError, Result,
+    aligned_bytes::ByteRepr,
     arch::{Architecture, REL_NONE},
     elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol},
     image::ScannedSectionId,
@@ -194,18 +195,14 @@ where
             symbol_table_section,
             target_section,
             |relocation_data, symbol_data, target_data| {
-                let entries = relocation_data
-                    .try_cast_slice::<ElfRelType>()
-                    .ok_or_else(|| {
-                        LinkerError::metadata_rewrite(
-                            "retained relocation section bytes do not match relocation entries",
-                        )
-                    })?;
-                let symbols = symbol_data.try_cast_slice::<ElfSymbol>().ok_or_else(|| {
-                    LinkerError::metadata_rewrite(
-                        "retained relocation symbol table bytes do not match symbol entries",
-                    )
-                })?;
+                let entries = cast_section_slice::<ElfRelType>(
+                    relocation_data,
+                    "retained relocation section bytes do not match relocation entries",
+                )?;
+                let symbols = cast_section_slice::<ElfSymbol>(
+                    symbol_data,
+                    "retained relocation symbol table bytes do not match symbol entries",
+                )?;
 
                 let target_bytes = target_data.as_bytes_mut();
 
@@ -234,36 +231,26 @@ where
             .to_vec();
         for section in sections {
             let symbol_sections = {
-                let (data, layout) = self.plan.section_data_with_layout(section)?;
+                let (data, plan) = self.plan.section_data_with_layout(section)?;
                 let mut symbol_sections = Vec::new();
-                data.try_for_each(|_, symbol: &ElfSymbol| -> Result<()> {
+                for_each_section_entry::<ElfSymbol>(data, |_, symbol| {
                     let symbol_section =
-                        symbol_section_id(self.module_id, layout, symbol.st_shndx())?;
+                        symbol_section_id(self.module_id, plan, symbol.st_shndx())?;
                     symbol_sections.push(symbol_section);
                     Ok(())
-                })
-                .ok_or_else(|| {
-                    LinkerError::metadata_rewrite(
-                        "section bytes do not match the requested type layout",
-                    )
-                })??;
+                })?;
                 symbol_sections
             };
 
             let data = self.plan.section_data_mut(section)?;
-            data.try_for_each_mut(|index, symbol: &mut ElfSymbol| -> Result<()> {
+            for_each_section_entry_mut::<ElfSymbol>(data, |index, symbol| {
                 let symbol_section = symbol_sections[index];
                 let value = self
                     .runtime
                     .remap_symbol_value(symbol_section, symbol.st_value())?;
                 symbol.set_value(value);
                 Ok(())
-            })
-            .ok_or_else(|| {
-                LinkerError::metadata_rewrite(
-                    "section bytes do not match the requested type layout",
-                )
-            })??;
+            })?;
         }
 
         Ok(())
@@ -278,7 +265,7 @@ where
         for section in sections {
             let relocation = self.plan.section_metadata(section).info_section();
             let data = self.plan.section_data_mut(section)?;
-            data.try_for_each_mut(|_, rel: &mut ElfRelType| -> Result<()> {
+            for_each_section_entry_mut::<ElfRelType>(data, |_, rel| {
                 if rel.r_type() as u32 == REL_NONE {
                     return Ok(());
                 }
@@ -287,12 +274,7 @@ where
                     .remap_relocation_offset(relocation, rel.r_offset())?;
                 rel.set_offset(offset);
                 Ok(())
-            })
-            .ok_or_else(|| {
-                LinkerError::metadata_rewrite(
-                    "section bytes do not match the requested type layout",
-                )
-            })??;
+            })?;
         }
 
         Ok(())
@@ -305,9 +287,7 @@ where
         };
 
         let data = self.plan.section_data_mut(dynamic_section)?;
-        let dyns = data.try_cast_slice_mut::<ElfDyn>().ok_or_else(|| {
-            LinkerError::metadata_rewrite("section bytes do not match the requested type layout")
-        })?;
+        let dyns = cast_section_slice_mut::<ElfDyn>(data)?;
 
         for dyn_ in dyns.iter_mut() {
             let tag = dyn_.tag();
@@ -323,9 +303,44 @@ where
     }
 }
 
+fn section_type_layout_error() -> Error {
+    LinkerError::metadata_rewrite("section bytes do not match the requested type layout").into()
+}
+
+fn cast_section_slice<'a, T: ByteRepr>(
+    data: &'a AlignedBytes,
+    detail: &'static str,
+) -> Result<&'a [T]> {
+    data.try_cast_slice::<T>()
+        .ok_or_else(|| LinkerError::metadata_rewrite(detail).into())
+}
+
+fn cast_section_slice_mut<T: ByteRepr>(data: &mut AlignedBytes) -> Result<&mut [T]> {
+    data.try_cast_slice_mut::<T>()
+        .ok_or_else(section_type_layout_error)
+}
+
+fn for_each_section_entry<T: ByteRepr>(
+    data: &AlignedBytes,
+    f: impl FnMut(usize, &T) -> Result<()>,
+) -> Result<()> {
+    data.try_for_each::<T, _>(f)
+        .ok_or_else(section_type_layout_error)??;
+    Ok(())
+}
+
+fn for_each_section_entry_mut<T: ByteRepr>(
+    data: &mut AlignedBytes,
+    f: impl FnMut(usize, &mut T) -> Result<()>,
+) -> Result<()> {
+    data.try_for_each_mut::<T, _>(f)
+        .ok_or_else(section_type_layout_error)??;
+    Ok(())
+}
+
 fn symbol_section_id(
     module_id: ModuleId,
-    layout: &MemoryLayoutPlan,
+    plan: &MemoryLayoutPlan,
     section_index: usize,
 ) -> Result<Option<SectionId>> {
     if section_index == elf::abi::SHN_UNDEF as usize || section_index == elf::abi::SHN_ABS as usize
@@ -333,8 +348,7 @@ fn symbol_section_id(
         return Ok(None);
     }
 
-    layout
-        .section_id(module_id, ScannedSectionId::new(section_index))
+    plan.section_id(module_id, ScannedSectionId::new(section_index))
         .map(Some)
         .ok_or_else(|| {
             LinkerError::metadata_rewrite(

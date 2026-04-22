@@ -29,10 +29,11 @@ impl MappedArenaMap {
         D: 'static,
         M: Mmap,
     {
-        let needs_section_regions = plan.group_order().iter().copied().any(|module_id| {
-            plan.materialization(module_id) == Some(Materialization::SectionRegions)
-        });
-        if !needs_section_regions {
+        if plan
+            .modules_with_materialization(Materialization::SectionRegions)
+            .next()
+            .is_none()
+        {
             return Ok(None);
         }
 

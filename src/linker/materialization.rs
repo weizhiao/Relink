@@ -1,69 +1,36 @@
 use super::{
     layout::{
         Arena, ArenaId, ArenaSharing, ClassPolicy, Materialization, MemoryClass, MemoryLayoutPlan,
-        ModuleLayout, PackingPolicy, SectionId, SectionPlacement,
+        PackingPolicy, SectionId, SectionPlacement,
     },
     plan::{LinkPlan, ModuleId},
 };
 use crate::{LinkerError, Result, image::ModuleCapability};
-use alloc::collections::BTreeMap;
+use alloc::{collections::BTreeMap, vec::Vec};
 
 pub(crate) fn normalize_plan<K, D>(plan: &mut LinkPlan<K, D>) -> Result<()>
 where
     K: Clone + Ord,
     D: 'static,
 {
-    let mut has_section_regions = false;
-
     plan.try_for_each_module(|plan, module_id| {
-        let layout = plan.memory_layout();
-        let module = layout.module(module_id);
-        let mode = resolve_materialization_mode(&*plan, module_id, module)?;
-        has_section_regions |= mode == Materialization::SectionRegions;
+        let mode = resolve_materialization_mode(&*plan, module_id)?;
         plan.set_materialization(module_id, mode);
         Ok(())
     })?;
 
-    if !has_section_regions {
+    let section_region_modules = plan
+        .modules_with_materialization(Materialization::SectionRegions)
+        .collect::<Vec<_>>();
+    if section_region_modules.is_empty() {
         return Ok(());
     }
 
     let policy = PackingPolicy::shared_huge_pages();
     let mut arena_state = ArenaState::new();
 
-    plan.try_for_each_module(|plan, module_id| {
-        let layout = plan.memory_layout();
-        if layout.materialization(module_id) != Some(Materialization::SectionRegions) {
-            return Ok(());
-        }
-
-        for section_id in layout.module(module_id).alloc_sections().iter().copied() {
-            if let Some(placement) = layout.placement(section_id) {
-                arena_state.register_existing_section(layout, module_id, section_id, placement);
-            }
-        }
-        Ok(())
-    })?;
-
-    plan.try_for_each_module(|plan, module_id| {
-        let layout = plan.memory_layout();
-        if layout.materialization(module_id) != Some(Materialization::SectionRegions) {
-            return Ok(());
-        }
-        let alloc_sections = layout.module(module_id).alloc_sections().to_vec();
-        for section_id in alloc_sections {
-            if plan.memory_layout().placement(section_id).is_some() {
-                continue;
-            }
-            arena_state.assign_fallback_section(
-                plan.memory_layout_mut(),
-                module_id,
-                section_id,
-                policy,
-            );
-        }
-        Ok(())
-    })?;
+    record_existing_section_placements(plan, &mut arena_state, &section_region_modules);
+    assign_missing_section_placements(plan, &mut arena_state, &section_region_modules, policy);
 
     Ok(())
 }
@@ -71,23 +38,22 @@ where
 fn resolve_materialization_mode<K, D>(
     plan: &LinkPlan<K, D>,
     module_id: ModuleId,
-    module: &ModuleLayout,
 ) -> Result<Materialization>
 where
     K: Clone + Ord,
     D: 'static,
 {
-    let layout = plan.memory_layout();
     let capability = plan
         .module_capability(module_id)
         .expect("ordered layout referenced a module without capability metadata");
-    let requested = layout
+    let requested = plan
         .materialization(module_id)
         .unwrap_or_else(|| Materialization::default(capability));
-    let has_section_placement = module
+    let has_section_placement = plan
+        .module_layout(module_id)
         .alloc_sections()
         .iter()
-        .any(|section_id| layout.placement(*section_id).is_some());
+        .any(|section_id| plan.placement(*section_id).is_some());
 
     match capability {
         ModuleCapability::Opaque | ModuleCapability::SectionData => {
@@ -115,6 +81,43 @@ where
     }
 }
 
+fn record_existing_section_placements<K, D>(
+    plan: &LinkPlan<K, D>,
+    arena_state: &mut ArenaState,
+    modules: &[ModuleId],
+) where
+    K: Clone + Ord,
+    D: 'static,
+{
+    for module_id in modules.iter().copied() {
+        let alloc_sections = plan.module_layout(module_id).alloc_sections().to_vec();
+        for section_id in alloc_sections {
+            if let Some(placement) = plan.placement(section_id) {
+                arena_state.register_existing_section(plan, module_id, section_id, placement);
+            }
+        }
+    }
+}
+
+fn assign_missing_section_placements<K, D>(
+    plan: &mut LinkPlan<K, D>,
+    arena_state: &mut ArenaState,
+    modules: &[ModuleId],
+    policy: PackingPolicy,
+) where
+    K: Clone + Ord,
+    D: 'static,
+{
+    for module_id in modules.iter().copied() {
+        let alloc_sections = plan.module_layout(module_id).alloc_sections().to_vec();
+        for section_id in alloc_sections {
+            if plan.placement(section_id).is_none() {
+                arena_state.assign_fallback_section(plan, module_id, section_id, policy);
+            }
+        }
+    }
+}
+
 struct ArenaState {
     shared_arenas: BTreeMap<MemoryClass, ArenaId>,
     private_arenas: BTreeMap<(ModuleId, MemoryClass), ArenaId>,
@@ -130,18 +133,21 @@ impl ArenaState {
         }
     }
 
-    fn register_existing_section(
+    fn register_existing_section<K, D>(
         &mut self,
-        layout: &MemoryLayoutPlan,
+        plan: &LinkPlan<K, D>,
         module_id: ModuleId,
         section_id: SectionId,
         placement: SectionPlacement,
-    ) {
-        let metadata = layout.section(section_id);
+    ) where
+        K: Clone + Ord,
+        D: 'static,
+    {
+        let metadata = plan.section_metadata(section_id);
         let memory_class = metadata
             .memory_class()
             .expect("fallback arena state found a non-alloc placed section");
-        let arena = layout.arena(placement.arena());
+        let arena = plan.memory_layout().arena(placement.arena());
 
         self.update_arena_end(
             placement.arena(),
@@ -161,15 +167,18 @@ impl ArenaState {
         }
     }
 
-    fn assign_fallback_section(
+    fn assign_fallback_section<K, D>(
         &mut self,
-        layout: &mut MemoryLayoutPlan,
+        plan: &mut LinkPlan<K, D>,
         module_id: ModuleId,
         section_id: SectionId,
         policy: PackingPolicy,
-    ) {
+    ) where
+        K: Clone + Ord,
+        D: 'static,
+    {
         let (memory_class, alignment, size) = {
-            let section = layout.section(section_id);
+            let section = plan.section_metadata(section_id);
             (
                 section
                     .memory_class()
@@ -179,18 +188,19 @@ impl ArenaState {
             )
         };
         let arena_id = self.ensure_arena(
-            layout,
+            plan.memory_layout_mut(),
             module_id,
             policy.class_policy(memory_class),
             memory_class,
         );
-        let offset = layout.next_offset(arena_id, alignment);
+        let offset = plan.memory_layout().next_offset(arena_id, alignment);
         let next_offset = offset
             .checked_add(size)
             .expect("fallback arena assignment overflowed while placing a section");
 
         assert!(
-            layout.assign(section_id, arena_id, offset),
+            plan.memory_layout_mut()
+                .assign(section_id, arena_id, offset),
             "fallback arena assignment failed while placing a section"
         );
 
@@ -258,8 +268,8 @@ mod tests {
 
     #[test]
     fn fallback_shared_arena_reuses_existing_compatible_arena() {
-        let mut layout = MemoryLayoutPlan::default();
-        let arena_id = layout.create_arena(Arena::new(
+        let mut plan = MemoryLayoutPlan::default();
+        let arena_id = plan.create_arena(Arena::new(
             2 * 1024 * 1024,
             MemoryClass::Code,
             ArenaSharing::Shared,
@@ -267,13 +277,13 @@ mod tests {
         let mut state = ArenaState::new();
 
         let selected = state.ensure_arena(
-            &mut layout,
+            &mut plan,
             ModuleId::new(0),
             ClassPolicy::new(2 * 1024 * 1024, ArenaSharing::Shared),
             MemoryClass::Code,
         );
 
         assert_eq!(selected, arena_id);
-        assert_eq!(layout.arenas().len(), 1);
+        assert_eq!(plan.arenas().len(), 1);
     }
 }

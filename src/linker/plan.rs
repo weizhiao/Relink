@@ -126,6 +126,11 @@ where
             .is_some_and(|id| self.accepts_module(id))
     }
 
+    #[inline]
+    fn visible_section(&self, section: SectionId) -> Option<SectionId> {
+        self.accepts_section(section).then_some(section)
+    }
+
     /// Returns the capability scope selected for the current pass.
     #[inline]
     pub const fn scope(&self) -> PassScope {
@@ -268,28 +273,26 @@ where
     /// Returns one metadata record for a section owned by a visible module.
     #[inline]
     pub fn metadata(&self, section: SectionId) -> Option<&SectionMetadata> {
-        self.accepts_section(section)
-            .then(|| self.plan.section_metadata(section))
+        self.visible_section(section)
+            .map(|section| self.plan.section_metadata(section))
     }
 
     /// Returns one section's data, materializing it on demand when its owner is
     /// visible through this pass scope.
     #[inline]
     pub fn data(&mut self, section: SectionId) -> Result<Option<&AlignedBytes>> {
-        if !self.accepts_section(section) {
-            return Ok(None);
-        }
-        Ok(Some(self.plan.section_data(section)?))
+        self.visible_section(section)
+            .map(|section| self.plan.section_data(section))
+            .transpose()
     }
 
     /// Returns mutable section data, materializing it on demand when its owner
     /// is visible through this pass scope.
     #[inline]
     pub fn data_mut(&mut self, section: SectionId) -> Result<Option<&mut AlignedBytes>> {
-        if !self.accepts_section(section) {
-            return Ok(None);
-        }
-        Ok(Some(self.plan.section_data_mut(section)?))
+        self.visible_section(section)
+            .map(|section| self.plan.section_data_mut(section))
+            .transpose()
     }
 }
 
@@ -331,37 +334,29 @@ where
     /// Returns the arena placement for one visible section.
     #[inline]
     pub fn placement(&self, section: SectionId) -> Option<SectionPlacement> {
-        if !self.accepts_section(section) {
-            return None;
-        }
-        self.plan.memory_layout().placement(section)
+        self.visible_section(section)
+            .and_then(|section| self.plan.placement(section))
     }
 
     /// Assigns a visible section to an arena.
     #[inline]
     pub fn assign(&mut self, section: SectionId, arena: ArenaId, offset: usize) -> bool {
-        if !self.accepts_section(section) {
-            return false;
-        }
-        self.plan.memory_layout_mut().assign(section, arena, offset)
+        self.visible_section(section)
+            .is_some_and(|section| self.plan.memory_layout_mut().assign(section, arena, offset))
     }
 
     /// Assigns a visible section to an arena at the next aligned offset.
     #[inline]
     pub fn assign_next(&mut self, section: SectionId, arena: ArenaId) -> bool {
-        if !self.accepts_section(section) {
-            return false;
-        }
-        self.plan.memory_layout_mut().assign_next(section, arena)
+        self.visible_section(section)
+            .is_some_and(|section| self.plan.memory_layout_mut().assign_next(section, arena))
     }
 
     /// Clears the arena assignment for one visible section.
     #[inline]
     pub fn clear_section(&mut self, section: SectionId) -> Option<SectionPlacement> {
-        if !self.accepts_section(section) {
-            return None;
-        }
-        self.plan.memory_layout_mut().clear_section(section)
+        self.visible_section(section)
+            .and_then(|section| self.plan.memory_layout_mut().clear_section(section))
     }
 }
 
@@ -386,12 +381,21 @@ where
     }
 }
 
+type PipelinePass<'a, K, D> = Box<dyn FnMut(&mut LinkPlan<K, D>) -> Result<()> + 'a>;
+
 /// An ordered collection of [`LinkPass`]es.
 ///
 /// This is the pass manager used with a discovered [`LinkPlan`] after
 /// metadata discovery finishes and before any module is mapped into memory.
 pub struct LinkPipeline<'a, K: Clone + Ord, D: 'static> {
-    passes: Vec<Box<dyn FnMut(&mut LinkPlan<K, D>) -> Result<()> + 'a>>,
+    passes: Vec<PipelinePass<'a, K, D>>,
+}
+
+impl<'a, K: Clone + Ord, D: 'static> Default for LinkPipeline<'a, K, D> {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<'a, K: Clone + Ord, D: 'static> LinkPipeline<'a, K, D> {
@@ -425,10 +429,7 @@ impl<'a, K: Clone + Ord, D: 'static> LinkPipeline<'a, K, D> {
     }
 
     /// Runs the pipeline with caller-supplied query state.
-    pub(crate) fn run(&mut self, plan: &mut LinkPlan<K, D>) -> Result<()>
-    where
-        K: Clone,
-    {
+    pub(crate) fn run(&mut self, plan: &mut LinkPlan<K, D>) -> Result<()> {
         for pass in &mut self.passes {
             pass(plan)?;
         }
@@ -507,6 +508,13 @@ impl<K, D: 'static> PlannedModule<K, D> {
         (self.key, self.module, self.direct_deps)
     }
 }
+
+type LinkPlanParts<K, D> = (
+    ModuleId,
+    Vec<ModuleId>,
+    PrimaryMap<ModuleId, PlannedModule<K, D>>,
+    MemoryLayoutPlan,
+);
 
 /// A global, pre-map link plan built from metadata discovery.
 ///
@@ -595,6 +603,16 @@ where
         &self.group_order
     }
 
+    pub(in crate::linker) fn modules_with_materialization(
+        &self,
+        mode: Materialization,
+    ) -> impl Iterator<Item = ModuleId> + '_ {
+        self.group_order
+            .iter()
+            .copied()
+            .filter(move |module_id| self.materialization(*module_id) == Some(mode))
+    }
+
     pub(crate) fn try_for_each_module(
         &mut self,
         mut f: impl FnMut(&mut Self, ModuleId) -> Result<()>,
@@ -632,6 +650,10 @@ where
     #[inline]
     fn get_mut(&mut self, id: ModuleId) -> Option<&mut PlannedModule<K, D>> {
         self.entries.get_mut(id)
+    }
+
+    pub(crate) fn placement(&self, section: SectionId) -> Option<SectionPlacement> {
+        self.memory_layout.placement(section)
     }
 
     /// Returns the physical memory-layout plan associated with this graph.
@@ -686,7 +708,7 @@ where
 
     /// Selects the materialization mode for one module.
     #[inline]
-    pub fn set_materialization(
+    pub(crate) fn set_materialization(
         &mut self,
         id: ModuleId,
         mode: Materialization,
@@ -694,19 +716,16 @@ where
         self.memory_layout.set_materialization(id, mode)
     }
 
-    fn materialize_section_data(
-        entries: &mut PrimaryMap<ModuleId, PlannedModule<K, D>>,
-        memory_layout: &mut MemoryLayoutPlan,
-        section: SectionId,
-    ) -> Result<()> {
-        if memory_layout.data(section).is_some() {
+    fn materialize_section_data(&mut self, section: SectionId) -> Result<()> {
+        if self.memory_layout.data(section).is_some() {
             return Ok(());
         }
 
-        let id = memory_layout.owner(section).ok_or_else(|| {
+        let id = self.memory_layout.owner(section).ok_or_else(|| {
             LinkerError::section_data("section data requested for an unowned section")
         })?;
-        let entry = entries.get_mut(id).ok_or_else(|| {
+        let scanned_section = self.memory_layout.section(section).scanned_section();
+        let entry = self.entries.get_mut(id).ok_or_else(|| {
             LinkerError::section_data("section data requested for a missing planned module")
         })?;
         if !entry.module().capability().has_section_data() {
@@ -716,7 +735,6 @@ where
             .into());
         }
 
-        let scanned_section = memory_layout.section(section).scanned_section();
         let snapshot = entry
             .module_mut()
             .section_data(scanned_section)?
@@ -724,12 +742,12 @@ where
                 LinkerError::section_data("section data requested for a missing scanned section")
             })?;
 
-        memory_layout.install_data(section, snapshot);
+        self.memory_layout.install_data(section, snapshot);
         Ok(())
     }
 
     /// Returns one section's data, materializing it on demand when needed.
-    pub fn section_data(&mut self, section: SectionId) -> Result<&AlignedBytes> {
+    pub(crate) fn section_data(&mut self, section: SectionId) -> Result<&AlignedBytes> {
         let (data, _) = self.section_data_with_layout(section)?;
         Ok(data)
     }
@@ -739,26 +757,18 @@ where
         &mut self,
         section: SectionId,
     ) -> Result<(&AlignedBytes, &MemoryLayoutPlan)> {
-        let Self {
-            entries,
-            memory_layout,
-            ..
-        } = self;
-        if memory_layout.data(section).is_none() {
-            Self::materialize_section_data(entries, memory_layout, section)?;
-        }
-
-        let layout = &*memory_layout;
-        let data = layout
+        self.materialize_section_data(section)?;
+        let plan = &self.memory_layout;
+        let data = plan
             .data(section)
             .ok_or_else(|| LinkerError::section_data("section data was not materialized"))?;
-        Ok((data, layout))
+        Ok((data, plan))
     }
 
     /// Returns mutable section data, materializing it on demand when needed.
-    pub fn section_data_mut(&mut self, section: SectionId) -> Result<&mut AlignedBytes> {
-        let _ = self.section_data(section)?;
-        let _ = self.memory_layout.mark_section_data_override(section);
+    pub(crate) fn section_data_mut(&mut self, section: SectionId) -> Result<&mut AlignedBytes> {
+        self.materialize_section_data(section)?;
+        self.memory_layout.mark_section_data_override(section);
         self.memory_layout
             .data_mut(section)
             .ok_or_else(|| LinkerError::section_data("section data was not materialized"))
@@ -779,19 +789,12 @@ where
             .into());
         }
 
-        let Self {
-            entries,
-            memory_layout,
-            ..
-        } = self;
         for section in [read_a, read_b, write] {
-            if memory_layout.data(section).is_none() {
-                Self::materialize_section_data(entries, memory_layout, section)?;
-            }
+            self.materialize_section_data(section)?;
         }
 
-        let _ = memory_layout.mark_section_data_override(write);
-        memory_layout
+        self.memory_layout.mark_section_data_override(write);
+        self.memory_layout
             .with_disjoint_section_data_mut(read_a, read_b, write, f)
             .ok_or_else(|| {
                 LinkerError::section_data("disjoint section data was not materialized")
@@ -799,14 +802,7 @@ where
     }
 
     #[inline]
-    pub(in crate::linker) fn into_parts(
-        self,
-    ) -> (
-        ModuleId,
-        Vec<ModuleId>,
-        PrimaryMap<ModuleId, PlannedModule<K, D>>,
-        MemoryLayoutPlan,
-    ) {
+    pub(in crate::linker) fn into_parts(self) -> LinkPlanParts<K, D> {
         (
             self.root,
             self.group_order,
