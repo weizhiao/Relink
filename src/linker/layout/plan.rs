@@ -36,7 +36,7 @@ impl Materialization {
 /// symbol-lookup scope. This type owns section metadata/data together with the
 /// physical arena placements selected by planning passes.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct MemoryLayoutPlan {
+pub(in crate::linker) struct MemoryLayoutPlan {
     arenas: PrimaryMap<ArenaId, Arena>,
     modules: SecondaryMap<ModuleId, ModuleLayout>,
     materialization: SecondaryMap<ModuleId, Materialization>,
@@ -46,19 +46,19 @@ pub(crate) struct MemoryLayoutPlan {
 impl MemoryLayoutPlan {
     /// Returns the planned physical arenas for the current load session.
     #[inline]
-    pub fn arenas(&self) -> &[Arena] {
+    pub(in crate::linker) fn arenas(&self) -> &[Arena] {
         self.arenas.as_slice()
     }
 
     /// Iterates over planned arenas together with their stable arena ids.
     #[inline]
-    pub fn arena_pairs(&self) -> impl Iterator<Item = (ArenaId, &Arena)> {
+    pub(in crate::linker) fn arena_pairs(&self) -> impl Iterator<Item = (ArenaId, &Arena)> {
         self.arenas.iter()
     }
 
     /// Returns one arena descriptor by arena id.
     #[inline]
-    pub fn arena(&self, id: ArenaId) -> &Arena {
+    pub(in crate::linker) fn arena(&self, id: ArenaId) -> &Arena {
         self.arenas
             .get(id)
             .expect("layout plan referenced missing arena")
@@ -66,7 +66,7 @@ impl MemoryLayoutPlan {
 
     /// Returns the planned layout for one module.
     #[inline]
-    pub fn module(&self, module_id: ModuleId) -> &ModuleLayout {
+    pub(in crate::linker) fn module(&self, module_id: ModuleId) -> &ModuleLayout {
         self.modules
             .get(module_id)
             .expect("layout plan referenced missing module layout")
@@ -74,19 +74,22 @@ impl MemoryLayoutPlan {
 
     /// Iterates over all planned module layouts.
     #[inline]
-    pub fn modules(&self) -> impl Iterator<Item = (ModuleId, &ModuleLayout)> {
+    pub(in crate::linker) fn modules(&self) -> impl Iterator<Item = (ModuleId, &ModuleLayout)> {
         self.modules.iter()
     }
 
     /// Returns the currently configured materialization mode for one module.
     #[inline]
-    pub fn materialization(&self, module_id: ModuleId) -> Option<Materialization> {
+    pub(in crate::linker) fn materialization(
+        &self,
+        module_id: ModuleId,
+    ) -> Option<Materialization> {
         self.materialization.get(module_id).copied()
     }
 
     /// Updates the planned materialization mode for one module.
     #[inline]
-    pub fn set_materialization(
+    pub(in crate::linker) fn set_materialization(
         &mut self,
         module_id: ModuleId,
         mode: Materialization,
@@ -96,13 +99,15 @@ impl MemoryLayoutPlan {
 
     /// Returns the arena that owns all section records.
     #[inline]
-    pub fn sections(&self) -> impl Iterator<Item = (SectionId, &SectionMetadata)> {
+    pub(in crate::linker) fn sections(
+        &self,
+    ) -> impl Iterator<Item = (SectionId, &SectionMetadata)> {
         self.sections.iter()
     }
 
     /// Returns one section metadata record by internal section id.
     #[inline]
-    pub fn section(&self, id: SectionId) -> &SectionMetadata {
+    pub(in crate::linker) fn section(&self, id: SectionId) -> &SectionMetadata {
         self.sections
             .get(id)
             .expect("layout plan referenced missing section metadata")
@@ -110,27 +115,30 @@ impl MemoryLayoutPlan {
 
     /// Returns one section's materialized data, when present.
     #[inline]
-    pub fn data(&self, section: SectionId) -> Option<&AlignedBytes> {
+    pub(in crate::linker) fn data(&self, section: SectionId) -> Option<&AlignedBytes> {
         self.sections.data(section)
     }
 
     #[inline]
-    pub(crate) fn data_mut(&mut self, section: SectionId) -> Option<&mut AlignedBytes> {
+    pub(in crate::linker) fn data_mut(&mut self, section: SectionId) -> Option<&mut AlignedBytes> {
         self.sections.data_mut(section)
     }
 
     #[inline]
-    pub(crate) fn install_data(&mut self, section: SectionId, bytes: AlignedBytes) {
+    pub(in crate::linker) fn install_data(&mut self, section: SectionId, bytes: AlignedBytes) {
         self.sections.install_data(section, bytes);
     }
 
     #[inline]
-    pub(crate) fn mark_section_data_override(&mut self, section: SectionId) -> Option<()> {
+    pub(in crate::linker) fn mark_section_data_override(
+        &mut self,
+        section: SectionId,
+    ) -> Option<()> {
         self.sections.mark_data_override(section)
     }
 
     #[inline]
-    pub(crate) fn with_disjoint_section_data_mut<R>(
+    pub(in crate::linker) fn with_disjoint_section_data_mut<R>(
         &mut self,
         read_a: SectionId,
         read_b: SectionId,
@@ -142,23 +150,23 @@ impl MemoryLayoutPlan {
     }
 
     #[inline]
-    pub(crate) fn section_is_override(&self, section: SectionId) -> bool {
+    pub(in crate::linker) fn section_is_override(&self, section: SectionId) -> bool {
         self.sections.is_override(section)
     }
 
     /// Returns the owner module of `section`, when present.
     #[inline]
-    pub fn owner(&self, section: SectionId) -> Option<ModuleId> {
+    pub(in crate::linker) fn owner(&self, section: SectionId) -> Option<ModuleId> {
         self.sections.owner(section)
     }
 
     #[inline]
-    pub fn placement(&self, section: SectionId) -> Option<SectionPlacement> {
+    pub(in crate::linker) fn placement(&self, section: SectionId) -> Option<SectionPlacement> {
         self.sections.placement(section)
     }
 
     /// Iterates over sections that currently have a physical arena placement.
-    pub(crate) fn section_placements(
+    pub(in crate::linker) fn section_placements(
         &self,
     ) -> impl Iterator<Item = (SectionId, SectionPlacement)> + '_ {
         self.sections
@@ -170,7 +178,7 @@ impl MemoryLayoutPlan {
 
     /// Returns the section id for one scanned section inside one module.
     #[inline]
-    pub fn section_id(
+    pub(in crate::linker) fn section_id(
         &self,
         module_id: ModuleId,
         id: impl Into<ScannedSectionId>,
@@ -193,7 +201,7 @@ impl MemoryLayoutPlan {
     }
 
     /// Returns the derived usage summary for one arena.
-    pub fn usage(&self, id: ArenaId) -> ArenaUsage {
+    pub(in crate::linker) fn usage(&self, id: ArenaId) -> ArenaUsage {
         let arena = self.arena(id);
         let mut section_count = 0usize;
         let mut used_len = 0usize;
@@ -211,37 +219,67 @@ impl MemoryLayoutPlan {
         ArenaUsage::new(section_count, used_len, mapped_len)
     }
 
-    /// Assigns one section to a physical arena at `offset`.
-    pub fn assign(&mut self, section: SectionId, arena: ArenaId, offset: usize) -> bool {
-        let size = self.section(section).size();
-        let placement = SectionPlacement::new(arena, offset, size);
+    /// Returns the next aligned placement offset inside `arena`.
+    pub(in crate::linker) fn next_offset(&self, arena: ArenaId, alignment: usize) -> usize {
+        align_up(self.usage(arena).used_len(), alignment)
+    }
+
+    #[inline]
+    fn placement_for(
+        &self,
+        section: SectionId,
+        arena: ArenaId,
+        offset: usize,
+    ) -> Option<SectionPlacement> {
         let metadata = self.section(section);
-        if !metadata.is_allocated() || metadata.size() != placement.size() {
-            return false;
+        if !metadata.is_allocated() {
+            return None;
         }
         let Some(memory_class) = metadata.memory_class() else {
+            return None;
+        };
+        if memory_class != self.arena(arena).memory_class() {
+            return None;
+        }
+
+        Some(SectionPlacement::new(arena, offset, metadata.size()))
+    }
+
+    /// Assigns one section to the next aligned offset in a physical arena.
+    pub(in crate::linker) fn assign_next(&mut self, section: SectionId, arena: ArenaId) -> bool {
+        let offset = self.next_offset(arena, self.section(section).alignment());
+        self.assign(section, arena, offset)
+    }
+
+    /// Assigns one section to a physical arena at an explicit `offset`.
+    pub(in crate::linker) fn assign(
+        &mut self,
+        section: SectionId,
+        arena: ArenaId,
+        offset: usize,
+    ) -> bool {
+        let Some(placement) = self.placement_for(section, arena, offset) else {
             return false;
         };
-        let arena = self.arena(placement.arena());
-        if memory_class != arena.memory_class() {
-            return false;
-        }
 
         self.sections.set_placement(section, placement)
     }
 
-    pub fn clear_section(&mut self, section: SectionId) -> Option<SectionPlacement> {
+    pub(in crate::linker) fn clear_section(
+        &mut self,
+        section: SectionId,
+    ) -> Option<SectionPlacement> {
         self.sections.clear_placement(section)
     }
 
     /// Creates one physical arena and returns its stable arena id.
     #[inline]
-    pub(crate) fn create_arena(&mut self, arena: Arena) -> ArenaId {
+    pub(in crate::linker) fn create_arena(&mut self, arena: Arena) -> ArenaId {
         self.arenas.push(arena)
     }
 
     /// Builds a section-granularity layout seed from scanned metadata.
-    pub(crate) fn from_scanned<'a, D, I>(modules: I) -> Self
+    pub(in crate::linker) fn from_scanned<'a, D, I>(modules: I) -> Self
     where
         D: 'static,
         I: IntoIterator<Item = (ModuleId, &'a ScannedDylib<D>)>,

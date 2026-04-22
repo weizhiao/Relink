@@ -351,6 +351,98 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
 }
 
 #[test]
+fn load_with_scan_arena_backed_path_supports_assign_next() {
+    let output = write_test_dylib_with_config(
+        ElfWriterConfig::default()
+            .with_bind_now(true)
+            .with_emit_retained_relocations(true),
+        &[],
+        &[SymbolDesc::global_object("value", &[1, 2, 3, 4])],
+    );
+    let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
+
+    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut loader = Loader::new();
+    let mut resolver = SingleBinaryResolver {
+        key: "root",
+        name: "arena_assign_next_root.so",
+        data: bytes,
+    };
+    let mut pipeline = LinkPipeline::new();
+    let mut observed_offset = None;
+    let configure =
+        |plan: &mut LinkPassPlan<'_, &'static str, (), ReorderPass>| -> elf_loader::Result<()> {
+            let root = plan.root();
+            assert!(
+                plan.capability(root) == Some(ModuleCapability::SectionReorderable),
+                "generated test dylib should expose retained relocation repair inputs",
+            );
+
+            let data_section = plan
+                .get(root)
+                .expect("missing scanned root module")
+                .module()
+                .alloc_sections()
+                .find(|section| section.name() == ".data")
+                .expect("generated test dylib should contain a .data section")
+                .id();
+            let layout_section = plan
+                .section(root, data_section)
+                .expect("missing planned .data section");
+            plan.data_mut(layout_section)?
+                .expect("missing materialized .data bytes")
+                .as_bytes_mut()
+                .copy_from_slice(&[4, 3, 2, 1]);
+
+            let arena = plan.create_arena(Arena::new(
+                4096,
+                MemoryClass::WritableData,
+                ArenaSharing::Private,
+            ));
+            assert!(
+                plan.assign_next(layout_section, arena),
+                "failed to assign .data into arena at the next aligned offset",
+            );
+            observed_offset = plan
+                .placement(layout_section)
+                .map(|placement| placement.offset());
+            Ok(())
+        };
+    pipeline.push_scoped::<ReorderPass, _>(configure);
+
+    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let mut planner = empty_relocation_plan;
+
+    let loaded = context
+        .load_with_scan(
+            "root",
+            &mut loader,
+            &mut resolver,
+            &mut pipeline,
+            &relocator,
+            &mut planner,
+        )
+        .expect("failed to execute arena-backed scan-first load with assign_next");
+    drop(pipeline);
+
+    assert_eq!(observed_offset, Some(0));
+    assert!(
+        !loaded.is_contiguous_mapping(),
+        "arena-backed load should expose a sparse mapped span",
+    );
+    assert!(context.contains_key(&"root"));
+
+    unsafe {
+        let ptr = loaded
+            .get::<u8>("value")
+            .expect("missing exported object symbol")
+            .into_raw() as *const u8;
+        assert!(loaded.contains_addr(ptr as usize));
+        assert_eq!(std::slice::from_raw_parts(ptr, 4), &[4, 3, 2, 1]);
+    }
+}
+
+#[test]
 fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
     let output = write_test_dylib_with_config(
         ElfWriterConfig::default()
@@ -638,7 +730,10 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
         .expect_err("section-data modules must reject section-region placement");
     drop(pipeline);
     assert_eq!(observed_capability, Some(ModuleCapability::SectionData));
-    assert_eq!(observed_materialization, Some(Materialization::SectionRegions));
+    assert_eq!(
+        observed_materialization,
+        Some(Materialization::SectionRegions)
+    );
     assert!(
         err.to_string().contains("cannot use section regions"),
         "unexpected error: {err}",

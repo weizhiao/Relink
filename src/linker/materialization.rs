@@ -5,7 +5,7 @@ use super::{
     },
     plan::{LinkPlan, ModuleId},
 };
-use crate::{LinkerError, Result, image::ModuleCapability, segment::align_up};
+use crate::{LinkerError, Result, image::ModuleCapability};
 use alloc::collections::BTreeMap;
 
 pub(crate) fn normalize_plan<K, D>(plan: &mut LinkPlan<K, D>) -> Result<()>
@@ -184,7 +184,7 @@ impl ArenaState {
             policy.class_policy(memory_class),
             memory_class,
         );
-        let offset = self.next_offset(arena_id, alignment);
+        let offset = layout.next_offset(arena_id, alignment);
         let next_offset = offset
             .checked_add(size)
             .expect("fallback arena assignment overflowed while placing a section");
@@ -242,13 +242,6 @@ impl ArenaState {
             (arena.sharing() == ArenaSharing::Shared && arena.memory_class() == memory_class)
                 .then_some(arena_id)
         })
-    }
-
-    fn next_offset(&self, arena_id: ArenaId, alignment: usize) -> usize {
-        align_up(
-            self.arena_offsets.get(&arena_id).copied().unwrap_or(0),
-            alignment,
-        )
     }
 
     fn update_arena_end(&mut self, arena_id: ArenaId, end: usize) {

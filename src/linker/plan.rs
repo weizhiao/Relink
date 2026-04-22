@@ -120,10 +120,10 @@ where
     }
 
     #[inline]
-    fn accepts_section(&self, section: SectionId) -> Option<bool> {
+    fn accepts_section(&self, section: SectionId) -> bool {
         self.plan
             .section_owner(section)
-            .map(|id| self.accepts_module(id))
+            .is_some_and(|id| self.accepts_module(id))
     }
 
     /// Returns the capability scope selected for the current pass.
@@ -255,7 +255,7 @@ where
         self.plan
             .memory_layout()
             .sections()
-            .filter(move |(section, _)| self.accepts_section(*section) == Some(true))
+            .filter(move |(section, _)| self.accepts_section(*section))
     }
 
     /// Returns the visible owner module of `section`.
@@ -268,14 +268,15 @@ where
     /// Returns one metadata record for a section owned by a visible module.
     #[inline]
     pub fn metadata(&self, section: SectionId) -> Option<&SectionMetadata> {
-        (self.accepts_section(section) == Some(true)).then(|| self.plan.section_metadata(section))
+        self.accepts_section(section)
+            .then(|| self.plan.section_metadata(section))
     }
 
     /// Returns one section's data, materializing it on demand when its owner is
     /// visible through this pass scope.
     #[inline]
     pub fn data(&mut self, section: SectionId) -> Result<Option<&AlignedBytes>> {
-        if self.accepts_section(section) != Some(true) {
+        if !self.accepts_section(section) {
             return Ok(None);
         }
         Ok(Some(self.plan.section_data(section)?))
@@ -285,7 +286,7 @@ where
     /// is visible through this pass scope.
     #[inline]
     pub fn data_mut(&mut self, section: SectionId) -> Result<Option<&mut AlignedBytes>> {
-        if self.accepts_section(section) != Some(true) {
+        if !self.accepts_section(section) {
             return Ok(None);
         }
         Ok(Some(self.plan.section_data_mut(section)?))
@@ -330,7 +331,7 @@ where
     /// Returns the arena placement for one visible section.
     #[inline]
     pub fn placement(&self, section: SectionId) -> Option<SectionPlacement> {
-        if self.accepts_section(section) != Some(true) {
+        if !self.accepts_section(section) {
             return None;
         }
         self.plan.memory_layout().placement(section)
@@ -339,16 +340,25 @@ where
     /// Assigns a visible section to an arena.
     #[inline]
     pub fn assign(&mut self, section: SectionId, arena: ArenaId, offset: usize) -> bool {
-        if self.accepts_section(section) != Some(true) {
+        if !self.accepts_section(section) {
             return false;
         }
         self.plan.memory_layout_mut().assign(section, arena, offset)
     }
 
+    /// Assigns a visible section to an arena at the next aligned offset.
+    #[inline]
+    pub fn assign_next(&mut self, section: SectionId, arena: ArenaId) -> bool {
+        if !self.accepts_section(section) {
+            return false;
+        }
+        self.plan.memory_layout_mut().assign_next(section, arena)
+    }
+
     /// Clears the arena assignment for one visible section.
     #[inline]
     pub fn clear_section(&mut self, section: SectionId) -> Option<SectionPlacement> {
-        if self.accepts_section(section) != Some(true) {
+        if !self.accepts_section(section) {
             return None;
         }
         self.plan.memory_layout_mut().clear_section(section)
@@ -626,13 +636,13 @@ where
 
     /// Returns the physical memory-layout plan associated with this graph.
     #[inline]
-    pub fn memory_layout(&self) -> &MemoryLayoutPlan {
+    pub(in crate::linker) fn memory_layout(&self) -> &MemoryLayoutPlan {
         &self.memory_layout
     }
 
     /// Returns the physical memory-layout plan mutably.
     #[inline]
-    pub fn memory_layout_mut(&mut self) -> &mut MemoryLayoutPlan {
+    pub(in crate::linker) fn memory_layout_mut(&mut self) -> &mut MemoryLayoutPlan {
         &mut self.memory_layout
     }
 
@@ -725,7 +735,7 @@ where
     }
 
     /// Returns one section's data together with the layout that owns it.
-    pub(crate) fn section_data_with_layout(
+    pub(in crate::linker) fn section_data_with_layout(
         &mut self,
         section: SectionId,
     ) -> Result<(&AlignedBytes, &MemoryLayoutPlan)> {
@@ -789,7 +799,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_parts(
+    pub(in crate::linker) fn into_parts(
         self,
     ) -> (
         ModuleId,
