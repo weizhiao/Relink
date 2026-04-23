@@ -144,11 +144,11 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
         };
     pipeline.push_scoped::<DataPass, _>(configure);
 
-    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let relocator = Relocator::new();
     let mut planner = empty_relocation_plan;
 
     let loaded = context
-        .load_with_scan(
+        .load_scan_first(
             "root",
             &mut loader,
             &mut resolver,
@@ -186,11 +186,11 @@ fn load_with_scan_legacy_path_loads_without_an_intermediate_plan() {
     };
     let mut pipeline = LinkPipeline::new();
 
-    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let relocator = Relocator::new();
     let mut planner = empty_relocation_plan;
 
     let loaded = context
-        .load_with_scan(
+        .load_scan_first(
             "root",
             &mut loader,
             &mut resolver,
@@ -221,7 +221,7 @@ fn load_with_scan_reuses_existing_root_alias_without_planning() {
 
     let mut context = LinkContext::<&'static str, ()>::new();
     let mut loader = Loader::new();
-    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let relocator = Relocator::new();
     let mut planner = empty_relocation_plan;
 
     let mut load_resolver = SingleBinaryResolver {
@@ -231,7 +231,7 @@ fn load_with_scan_reuses_existing_root_alias_without_planning() {
     };
     let mut load_pipeline = LinkPipeline::new();
     let loaded = context
-        .load_with_scan(
+        .load_scan_first(
             "canonical",
             &mut loader,
             &mut load_resolver,
@@ -247,7 +247,7 @@ fn load_with_scan_reuses_existing_root_alias_without_planning() {
     };
     let mut alias_pipeline = LinkPipeline::new();
     let alias_loaded = context
-        .load_with_scan(
+        .load_scan_first(
             "alias",
             &mut loader,
             &mut alias_resolver,
@@ -320,11 +320,11 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
         };
     pipeline.push_scoped::<ReorderPass, _>(configure);
 
-    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let relocator = Relocator::new();
     let mut planner = empty_relocation_plan;
 
     let loaded = context
-        .load_with_scan(
+        .load_scan_first(
             "root",
             &mut loader,
             &mut resolver,
@@ -410,11 +410,11 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
         };
     pipeline.push_scoped::<ReorderPass, _>(configure);
 
-    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let relocator = Relocator::new();
     let mut planner = empty_relocation_plan;
 
     let loaded = context
-        .load_with_scan(
+        .load_scan_first(
             "root",
             &mut loader,
             &mut resolver,
@@ -469,11 +469,11 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
     };
     pipeline.push(configure);
 
-    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let relocator = Relocator::new();
     let mut planner = empty_relocation_plan;
 
     let loaded = context
-        .load_with_scan(
+        .load_scan_first(
             "root",
             &mut loader,
             &mut resolver,
@@ -530,11 +530,11 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
     };
     pipeline.push(configure);
 
-    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let relocator = Relocator::new();
     let mut planner = empty_relocation_plan;
 
     let loaded = context
-        .load_with_scan(
+        .load_scan_first(
             "root",
             &mut loader,
             &mut resolver,
@@ -585,11 +585,11 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
     };
     pipeline.push(configure);
 
-    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let relocator = Relocator::new();
     let mut planner = empty_relocation_plan;
 
     let loaded = context
-        .load_with_scan(
+        .load_scan_first(
             "root",
             &mut loader,
             &mut resolver,
@@ -646,11 +646,11 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
         };
     pipeline.push_scoped::<DataPass, _>(configure);
 
-    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let relocator = Relocator::new();
     let mut planner = empty_relocation_plan;
 
     let loaded = context
-        .load_with_scan(
+        .load_scan_first(
             "root",
             &mut loader,
             &mut resolver,
@@ -715,11 +715,11 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
         };
     pipeline.push_scoped::<DataPass, _>(configure);
 
-    let relocator = Relocator::<(), (), (), (), (), (), (), ()>::default();
+    let relocator = Relocator::new();
     let mut planner = empty_relocation_plan;
 
     let err = context
-        .load_with_scan(
+        .load_scan_first(
             "root",
             &mut loader,
             &mut resolver,

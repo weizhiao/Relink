@@ -196,12 +196,12 @@ where
     /// context itself is mutated only after the current load finishes
     /// successfully. The relocation callback receives a [`RelocationRequest`]
     /// describing each newly mapped module in dependency order.
-    pub fn load<'cfg, M, H, Tls, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    pub fn load<'cfg, M, H, Tls, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD>(
         &mut self,
         key: K,
         loader: &mut Loader<M, H, D, Tls>,
         resolver: &mut impl KeyResolver<'cfg, K, D>,
-        relocator: &Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>,
+        relocator: &Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD>,
         planner: &mut impl RelocationPlanner<K, D>,
     ) -> Result<LoadedCore<D>>
     where
@@ -222,7 +222,7 @@ where
         }
 
         let prepared = self.prepare_runtime_load(&key, loader, resolver)?;
-        self.execute_prepared_load::<M, _, _, _, _, _, _>(prepared, relocator, planner)
+        self.execute_prepared_load::<M, _, _, _, _, _, _, _>(prepared, relocator, planner)
     }
 
     /// Discovers, plans, and loads one module through the scan-first path.
@@ -230,13 +230,13 @@ where
     /// Caller-driven layout and materialization changes should be expressed as
     /// [`LinkPass`]es in `pipeline`, which run after scan discovery and before
     /// runtime materialization.
-    pub fn load_with_scan<M, H, Tls, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    pub fn load_scan_first<M, H, Tls, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD>(
         &mut self,
         key: K,
         loader: &mut Loader<M, H, D, Tls>,
         resolver: &mut impl KeyResolver<'static, K, D>,
         pipeline: &mut LinkPipeline<'_, K, D>,
-        relocator: &Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>,
+        relocator: &Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD>,
         planner: &mut impl RelocationPlanner<K, D>,
     ) -> Result<LoadedCore<D>>
     where
@@ -260,7 +260,7 @@ where
             ScanDiscovery::Existing(root) => PreparedLoad::runtime(root, LoadSession::new()),
             ScanDiscovery::Plan(plan) => Self::prepare_planned_load::<M, _, _>(plan, loader)?,
         };
-        self.execute_prepared_load::<M, _, _, _, _, _, _>(prepared, relocator, planner)
+        self.execute_prepared_load::<M, _, _, _, _, _, _, _>(prepared, relocator, planner)
     }
 
     fn prepare_runtime_load<'cfg, M, H, Tls>(
@@ -445,10 +445,10 @@ where
         }
     }
 
-    fn execute_prepared_load<M, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn execute_prepared_load<M, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD>(
         &mut self,
         prepared: PreparedLoad<K, D>,
-        relocator: &Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>,
+        relocator: &Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD>,
         planner: &mut impl RelocationPlanner<K, D>,
     ) -> Result<LoadedCore<D>>
     where
@@ -490,11 +490,11 @@ where
     /// dependents. The caller supplies the relocation policy via `planner`,
     /// which receives a [`RelocationRequest`] describing the current key, raw
     /// module, and the batch-start relocation scope snapshot for this session.
-    fn relocate_pending_modules<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate_pending_modules<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD>(
         &mut self,
         root: &K,
         session: &mut LoadSession<K, D>,
-        relocator: &Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>,
+        relocator: &Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD>,
         planner: &mut impl RelocationPlanner<K, D>,
     ) -> Result<()>
     where
@@ -522,10 +522,12 @@ where
                 let req = RelocationRequest::new(&key, entry.payload, &scope);
                 let inputs = planner.plan(&req)?;
                 let raw = req.into_raw();
-                let mut active = relocator.clone();
-                active.replace_scope(inputs.scope().iter());
-                active.set_binding(inputs.binding());
-                let loaded = active.replace_object(raw).relocate()?;
+                let loaded = relocator
+                    .clone()
+                    .binding(inputs.binding())
+                    .with_object(raw)
+                    .scope(inputs.scope().iter())
+                    .relocate()?;
                 session.push_ready(key, (*loaded).clone(), direct_deps);
             }
             Ok(())

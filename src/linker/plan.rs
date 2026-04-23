@@ -131,12 +131,6 @@ where
         self.accepts_section(section).then_some(section)
     }
 
-    /// Returns the capability scope selected for the current pass.
-    #[inline]
-    pub const fn scope(&self) -> PassScope {
-        S::SCOPE
-    }
-
     /// Returns the canonical root key of the underlying plan.
     #[inline]
     pub fn root_key(&self) -> &K {

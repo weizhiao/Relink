@@ -160,7 +160,7 @@ impl<D> Debug for RawExec<D> {
 impl<D: 'static> RawExec<D> {
     /// Creates a relocation builder for this executable image.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
-        Relocator::new(self)
+        Relocator::new().with_object(self)
     }
 
     /// Returns the name of the executable.

@@ -90,7 +90,7 @@ impl<D: 'static> RawElf<D> {
     /// let relocated = raw.relocator().relocate().unwrap();
     /// ```
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
-        Relocator::new(self)
+        Relocator::new().with_object(self)
     }
 
     /// Gets the name of the ELF file

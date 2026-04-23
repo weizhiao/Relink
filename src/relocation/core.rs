@@ -200,33 +200,9 @@ where
     }
 }
 
-impl<T, D> Relocator<T, (), (), (), (), (), (), D> {
-    /// Creates a new `Relocator` builder for the given object.
-    pub(crate) fn new(object: T) -> Self {
-        Self {
-            object,
-            scope: Vec::new(),
-            pre_find: (),
-            post_find: (),
-            lazy_pre_find: (),
-            lazy_post_find: (),
-            pre_handler: (),
-            post_handler: (),
-            binding: BindingMode::Default,
-        }
-    }
-}
-
-impl<D> Default for Relocator<(), (), (), (), (), (), (), D> {
-    #[inline]
-    fn default() -> Self {
-        Self::config()
-    }
-}
-
-impl<D> Relocator<(), (), (), (), (), (), (), D> {
-    #[inline]
-    pub fn config() -> Self {
+impl Relocator<(), (), (), (), (), (), (), ()> {
+    /// Creates a new empty `Relocator` configuration.
+    pub fn new() -> Self {
         Self {
             object: (),
             scope: Vec::new(),
@@ -363,14 +339,17 @@ where
             .extend(scope.into_iter().map(|r| r.borrow().clone()));
     }
 
-    /// Replaces the current object while preserving the relocation configuration.
-    pub(crate) fn replace_object<U>(
+    /// Attaches an object and selects the user-data type carried by that object.
+    pub fn with_object<U, NewD>(
         self,
         object: U,
-    ) -> Relocator<U, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D> {
+    ) -> Relocator<U, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, NewD>
+    where
+        U: Relocatable<NewD>,
+    {
         Relocator {
             object,
-            scope: self.scope,
+            scope: Vec::new(),
             pre_find: self.pre_find,
             post_find: self.post_find,
             lazy_pre_find: self.lazy_pre_find,

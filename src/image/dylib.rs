@@ -192,7 +192,7 @@ impl<D> RawDylib<D> {
 
     /// Creates a relocation builder for this shared object.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
-        Relocator::new(self)
+        Relocator::new().with_object(self)
     }
 }
 
