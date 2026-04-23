@@ -401,16 +401,7 @@ impl<'a, K: Clone + Ord, D: 'static> LinkPipeline<'a, K, D> {
 
     /// Appends a pass to the pipeline.
     #[inline]
-    pub fn push<P>(&mut self, pass: P) -> &mut Self
-    where
-        P: LinkPass<K, D, AnyPass> + 'a,
-    {
-        self.push_scoped::<AnyPass, P>(pass)
-    }
-
-    /// Appends a pass that requires a specific type-level capability scope.
-    #[inline]
-    pub fn push_scoped<S, P>(&mut self, mut pass: P) -> &mut Self
+    pub fn push<S, P>(&mut self, mut pass: P) -> &mut Self
     where
         S: PassScopeMode + 'a,
         P: LinkPass<K, D, S> + 'a,

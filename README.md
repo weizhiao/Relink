@@ -1,4 +1,4 @@
-# Relink: Runtime ELF Loading for Rust
+# Relink: Runtime ELF Linking and Optimization for Rust
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/weizhiao/elf_loader/main/docs/imgs/logo.png" width="500" alt="Relink logo">
@@ -22,15 +22,17 @@
 </p>
 
 <p align="center">
-  <strong>Map, relocate, and link ELF images at runtime.</strong><br>
-  From file paths and in-memory buffers to shared objects, executables, and relocatable objects.
+  <strong>Plan, optimize, map, relocate, and link ELF images at runtime.</strong><br>
+  From basic loading to caller-controlled dependency graphs and section-level layout rewrites.
 </p>
 
 <p align="center">
-  <code>ET_DYN</code> · <code>ET_EXEC</code> · <code>ET_REL</code> · <code>no_std</code> · <code>Typed symbols</code> · <code>Hybrid linking</code>
+  <code>ET_DYN</code> · <code>ET_EXEC</code> · <code>ET_REL</code> · <code>no_std</code> · <code>Typed symbols</code> · <code>Scan-first linking</code> · <code>Section layout passes</code>
 </p>
 
 Relink is a high-performance, `no_std`-friendly ELF loader and runtime linker for Rust. It is built for plugin systems, JITs, runtimes, kernels, embedded loaders, hot-reload workflows, and other environments where `dlopen`-style loading is too rigid and hand-rolled relocation logic is too painful to maintain.
+
+Beyond mapping a single ELF file, Relink can discover `DT_NEEDED` graphs before runtime materialization, run caller-provided layout passes, relocate modules with policy-driven scopes, and materialize reorderable sections into optimized runtime memory regions.
 
 ## What It Loads
 
@@ -47,6 +49,9 @@ If you want automatic detection, use `Loader::load()`. If you want strict type c
 | --- | --- |
 | Runtime loading from files or memory | `Loader::load*` accepts paths, `ElfFile`, `ElfBinary`, `&[u8]`, and `&Vec<u8]` |
 | Safer symbol handling | Typed `get::<T>()` lookups tied to the loaded image lifetime |
+| Runtime link-time optimization | `Linker::load_scan_first()` discovers first, then runs `LinkPipeline` passes before mapping |
+| Section-level layout control | Reorderable modules can be materialized as section regions instead of whole DSO spans |
+| Explicit dependency policy | `KeyResolver` resolves roots and `DT_NEEDED` edges into canonical runtime keys |
 | Host-controlled linking | `pre_find_fn()`, `post_find_fn()`, `lazy_pre_find_fn()`, `lazy_post_find_fn()`, `pre_handler()`, and `post_handler()` |
 | Hybrid linking at runtime | Mix `.so` and `.o` inputs with `scope()` and `add_scope()` |
 | Low-level deployment targets | A `no_std` core plus custom `Mmap` backends |
@@ -57,6 +62,8 @@ If you want automatic detection, use `Loader::load()`. If you want strict type c
 | --- | --- | --- | --- |
 | Load directly from memory | Yes | Usually awkward or unavailable | Yes, if you build it |
 | Load relocatable objects (`ET_REL`) | Yes, feature-gated | No | Yes, if you build it |
+| Inspect and rewrite layout before mapping | Yes, through scan-first link passes | No | Yes, if you build it |
+| Caller-owned dependency graph | Yes, through `Linker`, `LinkContext`, and `KeyResolver` | Usually no | Yes, if you build it |
 | Typed symbol lifetime safety | Yes | No | Depends on your design |
 | Custom relocation interception | Yes | Usually no | Yes, if you build it |
 | `no_std`-friendly core | Yes | No | Depends on your implementation |
@@ -127,11 +134,14 @@ fn main() -> Result<()> {
 ```text
 path / bytes / ElfFile / ElfBinary
                  |
-               Loader
+            Loader or Linker
                  |
-    +------------+-------------+
-    |            |             |
- RawDylib      RawExec     RawObject*
+    +------------+----------------------+
+    |                                   |
+ direct load                         scan-first link
+    |                                   |
+ RawDylib / RawExec / RawObject*    LinkPlan
+    |                              passes / layout / arenas
                  |
               Relocator
    pre_find / scope / lazy lookups / handlers / binding
@@ -191,6 +201,51 @@ let plugin = loader
 # Ok(())
 # }
 ```
+
+### Optimize a Runtime Dependency Graph Before Mapping
+
+Use `Linker` when loading is more than "map this one file". The scan-first path resolves `DT_NEEDED` edges, builds a plan for the whole pending group, lets you mutate layout/materialization, and only then maps and relocates the modules.
+
+```rust,no_run
+# use elf_loader::{Result, input::ElfFile};
+# use elf_loader::linker::{
+#     DependencyRequest, KeyResolver, LinkContext, LinkPassPlan, Linker, Materialization,
+#     ReorderPass, ResolvedKey,
+# };
+# struct Resolver;
+# impl KeyResolver<'static, &'static str, ()> for Resolver {
+#     fn load_root(&mut self, key: &&'static str) -> Result<ResolvedKey<'static, &'static str>> {
+#         Ok(ResolvedKey::load(*key, ElfFile::from_path("path/to/plugin.so")?))
+#     }
+#     fn resolve_dependency(
+#         &mut self,
+#         _req: &DependencyRequest<'_, &'static str, ()>,
+#     ) -> Result<Option<ResolvedKey<'static, &'static str>>> {
+#         Ok(None)
+#     }
+# }
+# fn main() -> Result<()> {
+let mut context = LinkContext::<&'static str, ()>::new();
+let resolver = Resolver;
+
+let configure = |plan: &mut LinkPassPlan<'_, &'static str, (), ReorderPass>| -> Result<()> {
+    plan.set_materialization(plan.root(), Materialization::SectionRegions);
+    Ok(())
+};
+
+let plugin = Linker::new()
+    .resolver(resolver)
+    .map_pipeline(|mut pipeline| {
+        pipeline.push(configure);
+        pipeline
+    })
+    .load_scan_first(&mut context, "plugin")?;
+# let _ = plugin;
+# Ok(())
+# }
+```
+
+See `cargo run --example load_scan_first` for a complete example that constructs real `DT_NEEDED` edges and loads a dependency chain through the scan-first linker.
 
 ### Configure Lazy Binding Fixups
 
@@ -279,6 +334,7 @@ The [`examples/`](examples/) directory covers the main extension points:
 | `from_memory` | Load ELF data from a byte buffer | `cargo run --example from_memory` |
 | `load_exec` | Inspect executable metadata such as entry/base | `cargo run --example load_exec` |
 | `load_hook` | Observe segment loading with `with_hook()` | `cargo run --example load_hook` |
+| `load_scan_first` | Discover `DT_NEEDED`, run layout passes, and materialize section regions | `cargo run --example load_scan_first` |
 | `lifecycle` | Custom `.init` / `.fini` handling | `cargo run --example lifecycle` |
 | `user_data` | Attach per-image metadata with `with_context_loader()` | `cargo run --example user_data` |
 | `relocation_handler` | Intercept relocations with a custom handler | `cargo run --example relocation_handler` |

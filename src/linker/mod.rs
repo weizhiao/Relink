@@ -8,6 +8,7 @@
 
 mod context;
 mod layout;
+mod linker;
 mod mapped;
 mod materialization;
 mod plan;
@@ -22,12 +23,14 @@ pub use layout::{
     Arena, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, Materialization, MemoryClass,
     ModuleLayout, PackingPolicy, SectionAddress, SectionId, SectionMetadata, SectionPlacement,
 };
+pub use linker::Linker;
 pub use plan::{
     AnyPass, DataAccess, DataPass, LinkPass, LinkPassPlan, LinkPipeline, ModuleId, PassScope,
     PassScopeMode, ReorderAccess, ReorderPass,
 };
 pub use request::{
-    DependencyOwner, DependencyRequest, RelocationInputs, RelocationPlanner, RelocationRequest,
+    DefaultRelocationPlanner, DependencyOwner, DependencyRequest, RelocationInputs,
+    RelocationPlanner, RelocationRequest,
 };
 pub use resolve::{KeyResolver, ResolvedKey};
 pub use view::DependencyGraphView;

@@ -1,4 +1,4 @@
-# Relink：Rust 的运行时 ELF 加载与链接
+# Relink：Rust 的运行时 ELF 链接与优化
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/weizhiao/elf_loader/main/docs/imgs/logo.png" width="500" alt="Relink logo">
@@ -22,15 +22,17 @@
 </p>
 
 <p align="center">
-  <strong>在运行时完成 ELF 的映射、重定位与链接。</strong><br>
-  从文件路径和内存字节流，到共享对象、可执行文件和可重定位目标文件。
+  <strong>在运行时规划、优化、映射、重定位并链接 ELF 镜像。</strong><br>
+  从基础加载，到调用方可控的依赖图和 section 级布局重写。
 </p>
 
 <p align="center">
-  <code>ET_DYN</code> · <code>ET_EXEC</code> · <code>ET_REL</code> · <code>no_std</code> · <code>类型化符号</code> · <code>混合链接</code>
+  <code>ET_DYN</code> · <code>ET_EXEC</code> · <code>ET_REL</code> · <code>no_std</code> · <code>类型化符号</code> · <code>Scan-first 链接</code> · <code>Section 布局 Pass</code>
 </p>
 
 Relink 是一个高性能、`no_std` 友好的 Rust ELF 加载器与运行时链接器。它适合插件系统、JIT、运行时、内核、嵌入式加载器、热更新工作流，以及任何觉得 `dlopen` 过于僵硬、但又不想长期维护手写重定位逻辑的场景。
+
+Relink 不只会映射单个 ELF 文件。它可以在真正物化运行时内存之前发现 `DT_NEEDED` 依赖图，运行调用方提供的布局 pass，按策略控制符号作用域，并把可重排模块物化成优化后的运行时 section 区域。
 
 ## 可以加载什么
 
@@ -47,6 +49,9 @@ Relink 是一个高性能、`no_std` 友好的 Rust ELF 加载器与运行时链
 | --- | --- |
 | 从文件或内存进行运行时加载 | `Loader::load*` 可接受路径、`ElfFile`、`ElfBinary`、`&[u8]` 和 `&Vec<u8]` |
 | 更安全的符号访问 | 与已加载镜像生命周期绑定的类型化 `get::<T>()` |
+| 运行时链接期优化 | `Linker::load_scan_first()` 先发现依赖，再在映射前运行 `LinkPipeline` pass |
+| Section 级布局控制 | 可重排模块可以物化为 section regions，而不是整个 DSO span |
+| 显式依赖策略 | `KeyResolver` 将根模块和 `DT_NEEDED` 边解析为规范化运行时 key |
 | 宿主主导的链接策略 | `pre_find_fn()`、`post_find_fn()`、`lazy_pre_find_fn()`、`lazy_post_find_fn()`、`pre_handler()`、`post_handler()` |
 | 运行时混合链接 | 通过 `scope()` 和 `add_scope()` 组合 `.so` 与 `.o` |
 | 更底层的部署环境 | `no_std` 核心设计和可替换的 `Mmap` 后端 |
@@ -57,6 +62,8 @@ Relink 是一个高性能、`no_std` 友好的 Rust ELF 加载器与运行时链
 | --- | --- | --- | --- |
 | 直接从内存加载 | 支持 | 往往不方便或不可用 | 支持，但要自己实现 |
 | 加载可重定位对象（`ET_REL`） | 支持，feature-gated | 不支持 | 支持，但要自己实现 |
+| 映射前检查并重写布局 | 支持，通过 scan-first link pass | 不支持 | 支持，但要自己实现 |
+| 调用方拥有依赖图策略 | 支持，通过 `Linker`、`LinkContext` 和 `KeyResolver` | 通常不支持 | 支持，但要自己实现 |
 | 类型化符号生命周期安全 | 支持 | 不支持 | 取决于你的设计 |
 | 自定义重定位拦截 | 支持 | 通常不支持 | 支持，但要自己实现 |
 | `no_std` 友好核心 | 支持 | 不支持 | 取决于你的实现 |
@@ -127,11 +134,14 @@ fn main() -> Result<()> {
 ```text
 path / bytes / ElfFile / ElfBinary
                  |
-               Loader
+            Loader or Linker
                  |
-    +------------+-------------+
-    |            |             |
- RawDylib      RawExec     RawObject*
+    +------------+----------------------+
+    |                                   |
+ direct load                         scan-first link
+    |                                   |
+ RawDylib / RawExec / RawObject*    LinkPlan
+    |                              passes / layout / arenas
                  |
               Relocator
    pre_find / scope / lazy lookups / handlers / binding
@@ -191,6 +201,51 @@ let plugin = loader
 # Ok(())
 # }
 ```
+
+### 映射前优化运行时依赖图
+
+当你要做的不只是“映射这个文件”时，可以使用 `Linker`。scan-first 路径会先解析 `DT_NEEDED` 边，为整个待加载 group 构建计划，允许你修改布局和物化策略，然后才真正映射和重定位模块。
+
+```rust,no_run
+# use elf_loader::{Result, input::ElfFile};
+# use elf_loader::linker::{
+#     DependencyRequest, KeyResolver, LinkContext, LinkPassPlan, Linker, Materialization,
+#     ReorderPass, ResolvedKey,
+# };
+# struct Resolver;
+# impl KeyResolver<'static, &'static str, ()> for Resolver {
+#     fn load_root(&mut self, key: &&'static str) -> Result<ResolvedKey<'static, &'static str>> {
+#         Ok(ResolvedKey::load(*key, ElfFile::from_path("path/to/plugin.so")?))
+#     }
+#     fn resolve_dependency(
+#         &mut self,
+#         _req: &DependencyRequest<'_, &'static str, ()>,
+#     ) -> Result<Option<ResolvedKey<'static, &'static str>>> {
+#         Ok(None)
+#     }
+# }
+# fn main() -> Result<()> {
+let mut context = LinkContext::<&'static str, ()>::new();
+let resolver = Resolver;
+
+let configure = |plan: &mut LinkPassPlan<'_, &'static str, (), ReorderPass>| -> Result<()> {
+    plan.set_materialization(plan.root(), Materialization::SectionRegions);
+    Ok(())
+};
+
+let plugin = Linker::new()
+    .resolver(resolver)
+    .map_pipeline(|mut pipeline| {
+        pipeline.push(configure);
+        pipeline
+    })
+    .load_scan_first(&mut context, "plugin")?;
+# let _ = plugin;
+# Ok(())
+# }
+```
+
+完整示例见 `cargo run --example load_scan_first`：它会构造真实的 `DT_NEEDED` 边，并通过 scan-first linker 加载依赖链。
 
 ### 配置 Lazy Binding 的 Fixup 查找
 
@@ -279,6 +334,7 @@ fn main() -> Result<()> {
 | `from_memory` | 从字节缓冲区加载 ELF | `cargo run --example from_memory` |
 | `load_exec` | 查看可执行文件的入口地址和基址 | `cargo run --example load_exec` |
 | `load_hook` | 用 `with_hook()` 观察段加载 | `cargo run --example load_hook` |
+| `load_scan_first` | 发现 `DT_NEEDED`、运行布局 pass 并物化 section regions | `cargo run --example load_scan_first` |
 | `lifecycle` | 自定义 `.init` / `.fini` 调用流程 | `cargo run --example lifecycle` |
 | `user_data` | 用 `with_context_loader()` 绑定模块级上下文 | `cargo run --example user_data` |
 | `relocation_handler` | 用自定义 handler 拦截重定位 | `cargo run --example relocation_handler` |

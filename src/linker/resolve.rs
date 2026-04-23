@@ -36,7 +36,7 @@ impl<'cfg, K> ResolvedKey<'cfg, K> {
     }
 }
 
-/// Runtime key-resolution policy used by [`super::LinkContext`].
+/// Runtime key-resolution policy used by [`super::Linker`].
 ///
 /// The caller owns key semantics. A request may start with an application key
 /// and resolve either to an already visible key or to a concrete reader that

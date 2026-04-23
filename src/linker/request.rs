@@ -255,6 +255,18 @@ pub trait RelocationPlanner<K, D: 'static> {
     fn plan(&mut self, req: &RelocationRequest<'_, K, D>) -> Result<RelocationInputs<D>>;
 }
 
+/// Default relocation planner that uses the request's batch-start scope and
+/// the ELF object's default binding mode.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DefaultRelocationPlanner;
+
+impl<K, D: 'static> RelocationPlanner<K, D> for DefaultRelocationPlanner {
+    #[inline]
+    fn plan(&mut self, req: &RelocationRequest<'_, K, D>) -> Result<RelocationInputs<D>> {
+        Ok(RelocationInputs::new(req.scope().iter().cloned()))
+    }
+}
+
 impl<K, D: 'static, F> RelocationPlanner<K, D> for F
 where
     F: for<'a> FnMut(&RelocationRequest<'a, K, D>) -> Result<RelocationInputs<D>>,

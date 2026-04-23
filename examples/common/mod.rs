@@ -101,7 +101,10 @@ fn build_rust_fixtures(target_dir: &Path) {
     for (filename, crate_name) in RUST_FIXTURES {
         let source = fixture_dir().join(format!("{filename}.rs"));
         let dylib = target_dir.join(format!("lib{crate_name}.so"));
-        if needs_rebuild(&dylib, [&source]) {
+        let dylib_dep = rust_fixture_dylib_dependency(crate_name);
+        let needs_dylib_rebuild = needs_rebuild(&dylib, [&source])
+            || dylib_dep.is_some_and(|dep| !dylib_mentions_needed(&dylib, dep));
+        if needs_dylib_rebuild {
             let mut cmd = Command::new(&rustc);
             cmd.arg(&source)
                 .arg("--crate-type=cdylib")
@@ -113,7 +116,15 @@ fn build_rust_fixtures(target_dir: &Path) {
                 .arg("--out-dir")
                 .arg(target_dir)
                 .arg("-C")
-                .arg("linker=rust-lld");
+                .arg("linker=rust-lld")
+                .arg("-C")
+                .arg("link-arg=--emit-relocs");
+            if let Some(dep) = dylib_dep {
+                cmd.arg("-L")
+                    .arg(format!("native={}", target_dir.display()))
+                    .arg("-l")
+                    .arg(format!("dylib={dep}"));
+            }
             run(&mut cmd, &format!("compile {filename}.so"));
         }
 
@@ -131,6 +142,25 @@ fn build_rust_fixtures(target_dir: &Path) {
             run(&mut cmd, &format!("compile {filename}.o"));
         }
     }
+}
+
+fn rust_fixture_dylib_dependency(crate_name: &str) -> Option<&'static str> {
+    match crate_name {
+        "b" => Some("a"),
+        "c" => Some("b"),
+        _ => None,
+    }
+}
+
+fn dylib_mentions_needed(dylib: &Path, dep: &str) -> bool {
+    let needed = format!("lib{dep}.so");
+    fs::read(dylib)
+        .map(|bytes| {
+            bytes
+                .windows(needed.len())
+                .any(|window| window == needed.as_bytes())
+        })
+        .unwrap_or(false)
 }
 
 fn build_exec_fixture(target_dir: &Path) {

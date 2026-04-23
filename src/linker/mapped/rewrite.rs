@@ -236,7 +236,9 @@ where
                 for_each_section_entry::<ElfSymbol>(data, |_, symbol| {
                     let symbol_section =
                         symbol_section_id(self.module_id, plan, symbol.st_shndx())?;
-                    symbol_sections.push(symbol_section);
+                    symbol_sections.push(
+                        symbol_section.filter(|section| plan.section(*section).is_allocated()),
+                    );
                     Ok(())
                 })?;
                 symbol_sections

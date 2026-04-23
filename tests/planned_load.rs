@@ -1,15 +1,13 @@
 mod support;
 
 use elf_loader::{
-    Loader,
     image::{LoadedCore, ModuleCapability},
     input::ElfBinary,
     linker::{Arena, ArenaSharing, MemoryClass},
     linker::{
-        DataPass, KeyResolver, LinkContext, LinkPassPlan, LinkPipeline, Materialization,
+        DataPass, KeyResolver, LinkContext, LinkPassPlan, Linker, Materialization,
         RelocationInputs, RelocationRequest, ReorderPass, ResolvedKey,
     },
-    relocation::Relocator,
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
 use std::{boxed::Box, vec::Vec};
@@ -115,13 +113,11 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
     let mut context = LinkContext::<&'static str, ()>::new();
-    let mut loader = Loader::new();
-    let mut resolver = SingleBinaryResolver {
+    let resolver = SingleBinaryResolver {
         key: "root",
         name: "planned_root.so",
         data: bytes,
     };
-    let mut pipeline = LinkPipeline::new();
     let configure =
         |plan: &mut LinkPassPlan<'_, &'static str, (), DataPass>| -> elf_loader::Result<()> {
             let root = plan.root();
@@ -142,20 +138,15 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
                 .copy_from_slice(&[9, 8, 7, 6]);
             Ok(())
         };
-    pipeline.push_scoped::<DataPass, _>(configure);
 
-    let relocator = Relocator::new();
-    let mut planner = empty_relocation_plan;
-
-    let loaded = context
-        .load_scan_first(
-            "root",
-            &mut loader,
-            &mut resolver,
-            &mut pipeline,
-            &relocator,
-            &mut planner,
-        )
+    let loaded = Linker::new()
+        .map_pipeline(|mut pipeline| {
+            pipeline.push(configure);
+            pipeline
+        })
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "root")
         .expect("failed to execute scan-first load");
 
     assert!(loaded.is_contiguous_mapping());
@@ -178,26 +169,15 @@ fn load_with_scan_legacy_path_loads_without_an_intermediate_plan() {
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
     let mut context = LinkContext::<&'static str, ()>::new();
-    let mut loader = Loader::new();
-    let mut resolver = SingleBinaryResolver {
+    let resolver = SingleBinaryResolver {
         key: "root",
         name: "merged_root.so",
         data: bytes,
     };
-    let mut pipeline = LinkPipeline::new();
-
-    let relocator = Relocator::new();
-    let mut planner = empty_relocation_plan;
-
-    let loaded = context
-        .load_scan_first(
-            "root",
-            &mut loader,
-            &mut resolver,
-            &mut pipeline,
-            &relocator,
-            &mut planner,
-        )
+    let loaded = Linker::new()
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "root")
         .expect("failed to execute merged scan-and-load path");
 
     assert!(loaded.is_contiguous_mapping());
@@ -220,41 +200,26 @@ fn load_with_scan_reuses_existing_root_alias_without_planning() {
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
     let mut context = LinkContext::<&'static str, ()>::new();
-    let mut loader = Loader::new();
-    let relocator = Relocator::new();
-    let mut planner = empty_relocation_plan;
 
-    let mut load_resolver = SingleBinaryResolver {
+    let load_resolver = SingleBinaryResolver {
         key: "canonical",
         name: "canonical.so",
         data: bytes,
     };
-    let mut load_pipeline = LinkPipeline::new();
-    let loaded = context
-        .load_scan_first(
-            "canonical",
-            &mut loader,
-            &mut load_resolver,
-            &mut load_pipeline,
-            &relocator,
-            &mut planner,
-        )
+    let loaded = Linker::new()
+        .resolver(load_resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "canonical")
         .expect("failed to load canonical scan root");
 
-    let mut alias_resolver = ExistingRootResolver {
+    let alias_resolver = ExistingRootResolver {
         requested: "alias",
         existing: "canonical",
     };
-    let mut alias_pipeline = LinkPipeline::new();
-    let alias_loaded = context
-        .load_scan_first(
-            "alias",
-            &mut loader,
-            &mut alias_resolver,
-            &mut alias_pipeline,
-            &relocator,
-            &mut planner,
-        )
+    let alias_loaded = Linker::new()
+        .resolver(alias_resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "alias")
         .expect("failed to reuse existing scan root");
 
     assert_eq!(alias_loaded.base(), loaded.base());
@@ -275,13 +240,11 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
     let mut context = LinkContext::<&'static str, ()>::new();
-    let mut loader = Loader::new();
-    let mut resolver = SingleBinaryResolver {
+    let resolver = SingleBinaryResolver {
         key: "root",
         name: "arena_root.so",
         data: bytes,
     };
-    let mut pipeline = LinkPipeline::new();
     let configure =
         |plan: &mut LinkPassPlan<'_, &'static str, (), ReorderPass>| -> elf_loader::Result<()> {
             let root = plan.root();
@@ -318,20 +281,15 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
             }
             Ok(())
         };
-    pipeline.push_scoped::<ReorderPass, _>(configure);
 
-    let relocator = Relocator::new();
-    let mut planner = empty_relocation_plan;
-
-    let loaded = context
-        .load_scan_first(
-            "root",
-            &mut loader,
-            &mut resolver,
-            &mut pipeline,
-            &relocator,
-            &mut planner,
-        )
+    let loaded = Linker::new()
+        .map_pipeline(|mut pipeline| {
+            pipeline.push(configure);
+            pipeline
+        })
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "root")
         .expect("failed to execute arena-backed scan-first load");
 
     assert!(
@@ -362,13 +320,11 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
     let mut context = LinkContext::<&'static str, ()>::new();
-    let mut loader = Loader::new();
-    let mut resolver = SingleBinaryResolver {
+    let resolver = SingleBinaryResolver {
         key: "root",
         name: "arena_assign_next_root.so",
         data: bytes,
     };
-    let mut pipeline = LinkPipeline::new();
     let mut observed_offset = None;
     let configure =
         |plan: &mut LinkPassPlan<'_, &'static str, (), ReorderPass>| -> elf_loader::Result<()> {
@@ -408,22 +364,16 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
                 .map(|placement| placement.offset());
             Ok(())
         };
-    pipeline.push_scoped::<ReorderPass, _>(configure);
 
-    let relocator = Relocator::new();
-    let mut planner = empty_relocation_plan;
-
-    let loaded = context
-        .load_scan_first(
-            "root",
-            &mut loader,
-            &mut resolver,
-            &mut pipeline,
-            &relocator,
-            &mut planner,
-        )
+    let loaded = Linker::new()
+        .map_pipeline(|mut pipeline| {
+            pipeline.push(configure);
+            pipeline
+        })
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "root")
         .expect("failed to execute arena-backed scan-first load with assign_next");
-    drop(pipeline);
 
     assert_eq!(observed_offset, Some(0));
     assert!(
@@ -454,35 +404,27 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
     let mut context = LinkContext::<&'static str, ()>::new();
-    let mut loader = Loader::new();
-    let mut resolver = SingleBinaryResolver {
+    let resolver = SingleBinaryResolver {
         key: "root",
         name: "default_section_regions_root.so",
         data: bytes,
     };
-    let mut pipeline = LinkPipeline::new();
     let mut observed_capability = None;
     let configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
         let root = plan.root();
         observed_capability = plan.capability(root);
         Ok(())
     };
-    pipeline.push(configure);
 
-    let relocator = Relocator::new();
-    let mut planner = empty_relocation_plan;
-
-    let loaded = context
-        .load_scan_first(
-            "root",
-            &mut loader,
-            &mut resolver,
-            &mut pipeline,
-            &relocator,
-            &mut planner,
-        )
+    let loaded = Linker::new()
+        .map_pipeline(|mut pipeline| {
+            pipeline.push(configure);
+            pipeline
+        })
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "root")
         .expect("failed to load section-reorderable dylib through the default section-region path");
-    drop(pipeline);
 
     assert_eq!(
         observed_capability,
@@ -509,13 +451,11 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
     let bytes: &'static [u8] = Box::leak(strip_section_headers(output.data).into_boxed_slice());
 
     let mut context = LinkContext::<&'static str, ()>::new();
-    let mut loader = Loader::new();
-    let mut resolver = SingleBinaryResolver {
+    let resolver = SingleBinaryResolver {
         key: "root",
         name: "opaque_root.so",
         data: bytes,
     };
-    let mut pipeline = LinkPipeline::new();
     let mut observed_capability = None;
     let mut saw_missing_section_headers = false;
     let configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
@@ -528,22 +468,16 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
         plan.set_materialization(root, Materialization::WholeDsoRegion);
         Ok(())
     };
-    pipeline.push(configure);
 
-    let relocator = Relocator::new();
-    let mut planner = empty_relocation_plan;
-
-    let loaded = context
-        .load_scan_first(
-            "root",
-            &mut loader,
-            &mut resolver,
-            &mut pipeline,
-            &relocator,
-            &mut planner,
-        )
+    let loaded = Linker::new()
+        .map_pipeline(|mut pipeline| {
+            pipeline.push(configure);
+            pipeline
+        })
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "root")
         .expect("failed to load opaque dylib through scan-first path");
-    drop(pipeline);
 
     assert_eq!(observed_capability, Some(ModuleCapability::Opaque));
     assert!(
@@ -570,35 +504,27 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
     let bytes: &'static [u8] = Box::leak(break_section_name_table(output.data).into_boxed_slice());
 
     let mut context = LinkContext::<&'static str, ()>::new();
-    let mut loader = Loader::new();
-    let mut resolver = SingleBinaryResolver {
+    let resolver = SingleBinaryResolver {
         key: "root",
         name: "broken_shstr_root.so",
         data: bytes,
     };
-    let mut pipeline = LinkPipeline::new();
     let mut observed_capability = None;
     let configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
         let root = plan.root();
         observed_capability = plan.capability(root);
         Ok(())
     };
-    pipeline.push(configure);
 
-    let relocator = Relocator::new();
-    let mut planner = empty_relocation_plan;
-
-    let loaded = context
-        .load_scan_first(
-            "root",
-            &mut loader,
-            &mut resolver,
-            &mut pipeline,
-            &relocator,
-            &mut planner,
-        )
+    let loaded = Linker::new()
+        .map_pipeline(|mut pipeline| {
+            pipeline.push(configure);
+            pipeline
+        })
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "root")
         .expect("scan-first load should downgrade unusable section tables");
-    drop(pipeline);
 
     assert!(loaded.mapped_len() > 0);
     assert_eq!(observed_capability, Some(ModuleCapability::Opaque));
@@ -610,13 +536,11 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
     let mut context = LinkContext::<&'static str, ()>::new();
-    let mut loader = Loader::new();
-    let mut resolver = SingleBinaryResolver {
+    let resolver = SingleBinaryResolver {
         key: "root",
         name: "whole_region_root.so",
         data: bytes,
     };
-    let mut pipeline = LinkPipeline::new();
     let mut observed_capability = None;
     let mut observed_materialization = None;
     let configure =
@@ -644,22 +568,16 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
             observed_materialization = plan.materialization(root);
             Ok(())
         };
-    pipeline.push_scoped::<DataPass, _>(configure);
 
-    let relocator = Relocator::new();
-    let mut planner = empty_relocation_plan;
-
-    let loaded = context
-        .load_scan_first(
-            "root",
-            &mut loader,
-            &mut resolver,
-            &mut pipeline,
-            &relocator,
-            &mut planner,
-        )
+    let loaded = Linker::new()
+        .map_pipeline(|mut pipeline| {
+            pipeline.push(configure);
+            pipeline
+        })
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "root")
         .expect("failed to execute whole-DSO scan-first load");
-    drop(pipeline);
 
     assert_eq!(
         observed_capability,
@@ -692,13 +610,11 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
     let mut context = LinkContext::<&'static str, ()>::new();
-    let mut loader = Loader::new();
-    let mut resolver = SingleBinaryResolver {
+    let resolver = SingleBinaryResolver {
         key: "root",
         name: "illegal_section_region_root.so",
         data: bytes,
     };
-    let mut pipeline = LinkPipeline::new();
     let mut observed_capability = None;
     let mut observed_materialization = None;
     let configure =
@@ -713,22 +629,16 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
             observed_materialization = plan.materialization(root);
             Ok(())
         };
-    pipeline.push_scoped::<DataPass, _>(configure);
 
-    let relocator = Relocator::new();
-    let mut planner = empty_relocation_plan;
-
-    let err = context
-        .load_scan_first(
-            "root",
-            &mut loader,
-            &mut resolver,
-            &mut pipeline,
-            &relocator,
-            &mut planner,
-        )
+    let err = Linker::new()
+        .map_pipeline(|mut pipeline| {
+            pipeline.push(configure);
+            pipeline
+        })
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "root")
         .expect_err("section-data modules must reject section-region placement");
-    drop(pipeline);
     assert_eq!(observed_capability, Some(ModuleCapability::SectionData));
     assert_eq!(
         observed_materialization,
