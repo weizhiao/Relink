@@ -10,8 +10,8 @@ use crate::elf::{ElfDynamic, HashTable, PreCompute};
 use core::ffi::CStr;
 use core::fmt::{self, Debug, Display};
 use elf::abi::{
-    SHN_UNDEF, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK, STT_COMMON, STT_FILE, STT_FUNC,
-    STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_SECTION, STT_TLS,
+    SHN_ABS, SHN_COMMON, SHN_UNDEF, SHN_XINDEX, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK,
+    STT_COMMON, STT_FILE, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_SECTION, STT_TLS,
 };
 
 /// Valid symbol binding types bitmask.
@@ -131,6 +131,55 @@ impl Display for ElfSymbolType {
     }
 }
 
+/// Semantic wrapper for the ELF symbol `st_shndx` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfSectionIndex(u16);
+
+impl ElfSectionIndex {
+    pub const UNDEF: Self = Self(SHN_UNDEF);
+    pub const ABS: Self = Self(SHN_ABS);
+    pub const COMMON: Self = Self(SHN_COMMON);
+    pub const XINDEX: Self = Self(SHN_XINDEX);
+
+    #[inline]
+    pub const fn new(raw: u16) -> Self {
+        Self(raw)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    #[inline]
+    pub const fn is_undef(self) -> bool {
+        self.0 == SHN_UNDEF
+    }
+
+    #[inline]
+    pub const fn is_abs(self) -> bool {
+        self.0 == SHN_ABS
+    }
+}
+
+impl Display for ElfSectionIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            SHN_UNDEF => f.write_str("SHN_UNDEF"),
+            SHN_ABS => f.write_str("SHN_ABS"),
+            SHN_COMMON => f.write_str("SHN_COMMON"),
+            SHN_XINDEX => f.write_str("SHN_XINDEX"),
+            raw => write!(f, "ELF symbol section index {raw}"),
+        }
+    }
+}
+
 #[allow(unused)]
 #[repr(C)]
 /// 32-bit ELF symbol table entry.
@@ -175,8 +224,8 @@ impl ElfSymbol {
 
     /// Returns the section index.
     #[inline]
-    pub fn st_shndx(&self) -> usize {
-        self.sym.st_shndx as usize
+    pub fn st_shndx(&self) -> ElfSectionIndex {
+        ElfSectionIndex::new(self.sym.st_shndx)
     }
 
     /// Returns the symbol name index.
@@ -201,7 +250,7 @@ impl ElfSymbol {
     /// Undefined symbols typically need to be resolved from other object files or libraries.
     #[inline]
     pub fn is_undef(&self) -> bool {
-        self.st_shndx() == SHN_UNDEF as usize
+        self.st_shndx().is_undef()
     }
 
     /// Returns true if the symbol has a valid binding type for relocation.

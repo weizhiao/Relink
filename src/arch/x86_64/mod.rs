@@ -7,6 +7,7 @@
 mod lazy;
 #[cfg(feature = "object")]
 pub(crate) mod object;
+pub(crate) mod rewrite;
 #[cfg(feature = "tls")]
 mod tls;
 

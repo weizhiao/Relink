@@ -1,9 +1,11 @@
 use super::{
     Arena, ArenaId, ArenaUsage, Materialization, ModuleLayout, SectionId, SectionMetadata,
-    SectionPlacement, layout::MemoryLayoutPlan,
+    SectionPlacement,
+    layout::{DataAccess, MemoryLayoutPlan, SectionDataAccessRef},
 };
 use crate::{
     AlignedBytes, LinkerError, Result,
+    aligned_bytes::ByteRepr,
     entity::{PrimaryMap, entity_ref},
     image::{ModuleCapability, ScannedDylib, ScannedSectionId},
 };
@@ -77,13 +79,13 @@ impl PassScopeMode for ReorderPass {
 }
 
 /// Scope markers that guarantee section metadata/data access.
-pub trait DataAccess: PassScopeMode {}
+pub trait SectionDataAccess: PassScopeMode {}
 
-impl DataAccess for DataPass {}
-impl DataAccess for ReorderPass {}
+impl SectionDataAccess for DataPass {}
+impl SectionDataAccess for ReorderPass {}
 
 /// Scope markers that guarantee section-reorder repair inputs.
-pub trait ReorderAccess: DataAccess {}
+pub trait ReorderAccess: SectionDataAccess {}
 
 impl ReorderAccess for ReorderPass {}
 
@@ -221,7 +223,7 @@ where
 impl<'a, K, D: 'static, S> LinkPassPlan<'a, K, D, S>
 where
     K: Clone + Ord,
-    S: DataAccess,
+    S: SectionDataAccess,
 {
     /// Returns the planned layout for one visible module.
     #[inline]
@@ -287,6 +289,73 @@ where
         self.visible_section(section)
             .map(|section| self.plan.section_data_mut(section))
             .transpose()
+    }
+
+    /// Iterates visible entries from one section without exposing the layout
+    /// internals used to materialize the section.
+    #[inline]
+    #[allow(private_bounds)]
+    pub fn for_each_section_data<T, P>(
+        &mut self,
+        section: SectionId,
+        mut prepare: impl FnMut(&T, &Self) -> Result<Option<P>>,
+        mut apply: impl FnMut(&mut Self, usize, P) -> Result<()>,
+    ) -> Result<Option<()>>
+    where
+        T: ByteRepr,
+    {
+        if !self.accepts_section(section) {
+            return Ok(None);
+        }
+
+        self.plan.materialize_section_data(section)?;
+        let entry_count = {
+            let data =
+                self.plan.memory_layout.data(section).ok_or_else(|| {
+                    LinkerError::section_data("section data was not materialized")
+                })?;
+            section_data_entries::<T>(data)?.len()
+        };
+
+        for index in 0..entry_count {
+            let prepared = {
+                let data = self.plan.memory_layout.data(section).ok_or_else(|| {
+                    LinkerError::section_data("section data was not materialized")
+                })?;
+                let entries = data.try_cast_slice::<T>().ok_or_else(|| {
+                    LinkerError::section_data(
+                        "section data bytes do not match requested entry type",
+                    )
+                })?;
+                let entry = entries
+                    .get(index)
+                    .expect("section data entry index should remain valid");
+                prepare(entry, &*self)?
+            };
+            if let Some(prepared) = prepared {
+                apply(self, index, prepared)?;
+            }
+        }
+
+        Ok(Some(()))
+    }
+
+    /// Returns multiple visible sections' data together, materializing them on
+    /// demand when every owner is visible through this pass scope.
+    #[inline]
+    pub fn with_disjoint_section_data<const N: usize, R>(
+        &mut self,
+        accesses: [(SectionId, DataAccess); N],
+        f: impl FnOnce([SectionDataAccessRef<'_>; N]) -> Result<R>,
+    ) -> Result<Option<R>> {
+        if accesses
+            .iter()
+            .any(|(section, _)| !self.accepts_section(*section))
+        {
+            return Ok(None);
+        }
+
+        self.plan.with_disjoint_section_data(accesses, f).map(Some)
     }
 }
 
@@ -361,18 +430,6 @@ where
 {
     /// Executes the pass over the current plan.
     fn run(&mut self, plan: &mut LinkPassPlan<'_, K, D, S>) -> Result<()>;
-}
-
-impl<K, D: 'static, S, F> LinkPass<K, D, S> for F
-where
-    K: Clone + Ord,
-    S: PassScopeMode,
-    F: for<'a> FnMut(&mut LinkPassPlan<'a, K, D, S>) -> Result<()>,
-{
-    #[inline]
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, K, D, S>) -> Result<()> {
-        (self)(plan)
-    }
 }
 
 type PipelinePass<'a, K, D> = Box<dyn FnMut(&mut LinkPlan<K, D>) -> Result<()> + 'a>;
@@ -500,6 +557,12 @@ type LinkPlanParts<K, D> = (
     PrimaryMap<ModuleId, PlannedModule<K, D>>,
     MemoryLayoutPlan,
 );
+
+fn section_data_entries<T: ByteRepr>(data: &AlignedBytes) -> Result<&[T]> {
+    data.try_cast_slice::<T>().ok_or_else(|| {
+        LinkerError::section_data("section data bytes do not match requested entry type").into()
+    })
+}
 
 /// A global, pre-map link plan built from metadata discovery.
 ///
@@ -731,23 +794,79 @@ where
         Ok(())
     }
 
-    /// Returns one section's data, materializing it on demand when needed.
-    pub(crate) fn section_data(&mut self, section: SectionId) -> Result<&AlignedBytes> {
-        let (data, _) = self.section_data_with_layout(section)?;
-        Ok(data)
+    pub(in crate::linker) fn with_disjoint_section_data<const N: usize, R>(
+        &mut self,
+        accesses: [(SectionId, DataAccess); N],
+        f: impl FnOnce([SectionDataAccessRef<'_>; N]) -> Result<R>,
+    ) -> Result<R> {
+        for (index, (section, _)) in accesses.iter().enumerate() {
+            if accesses[index + 1..]
+                .iter()
+                .any(|(other, _)| section == other)
+            {
+                return Err(LinkerError::duplicate_section_data_access().into());
+            }
+        }
+
+        for &(section, access) in &accesses {
+            self.materialize_section_data(section)?;
+            if access == DataAccess::Write {
+                self.memory_layout.mark_section_data_override(section);
+            }
+        }
+
+        self.memory_layout
+            .with_disjoint_section_data(accesses, f)
+            .ok_or_else(LinkerError::missing_section_data_access)?
     }
 
-    /// Returns one section's data together with the layout that owns it.
-    pub(in crate::linker) fn section_data_with_layout(
+    pub(in crate::linker) fn for_each_section_data<T, P>(
         &mut self,
         section: SectionId,
-    ) -> Result<(&AlignedBytes, &MemoryLayoutPlan)> {
+        mut prepare: impl FnMut(&T, &MemoryLayoutPlan) -> Result<Option<P>>,
+        mut apply: impl FnMut(&mut Self, usize, P) -> Result<()>,
+    ) -> Result<()>
+    where
+        T: ByteRepr,
+    {
         self.materialize_section_data(section)?;
-        let plan = &self.memory_layout;
-        let data = plan
+        let entry_count = {
+            let plan = &self.memory_layout;
+            let data = plan
+                .data(section)
+                .ok_or_else(|| LinkerError::section_data("section data was not materialized"))?;
+            section_data_entries::<T>(data)?.len()
+        };
+        for index in 0..entry_count {
+            let prepared = {
+                let plan = &self.memory_layout;
+                let data = plan.data(section).ok_or_else(|| {
+                    LinkerError::section_data("section data was not materialized")
+                })?;
+                let entries = data.try_cast_slice::<T>().ok_or_else(|| {
+                    LinkerError::section_data(
+                        "section data bytes do not match requested entry type",
+                    )
+                })?;
+                let entry = entries
+                    .get(index)
+                    .expect("section data entry index should remain valid");
+                prepare(entry, plan)?
+            };
+            if let Some(prepared) = prepared {
+                apply(self, index, prepared)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns one section's data, materializing it on demand when needed.
+    pub(crate) fn section_data(&mut self, section: SectionId) -> Result<&AlignedBytes> {
+        self.materialize_section_data(section)?;
+        self.memory_layout
             .data(section)
-            .ok_or_else(|| LinkerError::section_data("section data was not materialized"))?;
-        Ok((data, plan))
+            .ok_or_else(|| LinkerError::section_data("section data was not materialized"))
+            .map_err(Into::into)
     }
 
     /// Returns mutable section data, materializing it on demand when needed.
@@ -758,32 +877,6 @@ where
             .data_mut(section)
             .ok_or_else(|| LinkerError::section_data("section data was not materialized"))
             .map_err(Into::into)
-    }
-
-    pub(crate) fn with_disjoint_section_data_mut<R>(
-        &mut self,
-        read_a: SectionId,
-        read_b: SectionId,
-        write: SectionId,
-        f: impl FnOnce(&AlignedBytes, &AlignedBytes, &mut AlignedBytes) -> Result<R>,
-    ) -> Result<R> {
-        if read_a == read_b || read_a == write || read_b == write {
-            return Err(LinkerError::section_data(
-                "disjoint section data request referenced the same section more than once",
-            )
-            .into());
-        }
-
-        for section in [read_a, read_b, write] {
-            self.materialize_section_data(section)?;
-        }
-
-        self.memory_layout.mark_section_data_override(write);
-        self.memory_layout
-            .with_disjoint_section_data_mut(read_a, read_b, write, f)
-            .ok_or_else(|| {
-                LinkerError::section_data("disjoint section data was not materialized")
-            })?
     }
 
     #[inline]

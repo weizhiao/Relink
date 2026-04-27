@@ -5,7 +5,7 @@ use elf_loader::{
     input::ElfBinary,
     linker::{Arena, ArenaSharing, MemoryClass},
     linker::{
-        DataPass, KeyResolver, LinkContext, LinkPassPlan, Linker, Materialization,
+        DataPass, KeyResolver, LinkContext, LinkPass, LinkPassPlan, Linker, Materialization,
         RelocationInputs, RelocationRequest, ReorderPass, ResolvedKey,
     },
 };
@@ -107,6 +107,18 @@ fn empty_relocation_plan(
     Ok(RelocationInputs::new(Vec::<LoadedCore<()>>::new()))
 }
 
+struct TestPass<F>(F);
+
+impl<S, F> LinkPass<&'static str, (), S> for TestPass<F>
+where
+    S: elf_loader::linker::PassScopeMode,
+    F: for<'a> FnMut(&mut LinkPassPlan<'a, &'static str, (), S>) -> elf_loader::Result<()>,
+{
+    fn run(&mut self, plan: &mut LinkPassPlan<'_, &'static str, (), S>) -> elf_loader::Result<()> {
+        (self.0)(plan)
+    }
+}
+
 #[test]
 fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
@@ -141,7 +153,7 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
 
     let loaded = Linker::new()
         .map_pipeline(|mut pipeline| {
-            pipeline.push(configure);
+            pipeline.push(TestPass(configure));
             pipeline
         })
         .resolver(resolver)
@@ -284,7 +296,7 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
 
     let loaded = Linker::new()
         .map_pipeline(|mut pipeline| {
-            pipeline.push(configure);
+            pipeline.push(TestPass(configure));
             pipeline
         })
         .resolver(resolver)
@@ -367,7 +379,7 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
 
     let loaded = Linker::new()
         .map_pipeline(|mut pipeline| {
-            pipeline.push(configure);
+            pipeline.push(TestPass(configure));
             pipeline
         })
         .resolver(resolver)
@@ -418,7 +430,7 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
 
     let loaded = Linker::new()
         .map_pipeline(|mut pipeline| {
-            pipeline.push(configure);
+            pipeline.push(TestPass(configure));
             pipeline
         })
         .resolver(resolver)
@@ -471,7 +483,7 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
 
     let loaded = Linker::new()
         .map_pipeline(|mut pipeline| {
-            pipeline.push(configure);
+            pipeline.push(TestPass(configure));
             pipeline
         })
         .resolver(resolver)
@@ -518,7 +530,7 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
 
     let loaded = Linker::new()
         .map_pipeline(|mut pipeline| {
-            pipeline.push(configure);
+            pipeline.push(TestPass(configure));
             pipeline
         })
         .resolver(resolver)
@@ -571,7 +583,7 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
 
     let loaded = Linker::new()
         .map_pipeline(|mut pipeline| {
-            pipeline.push(configure);
+            pipeline.push(TestPass(configure));
             pipeline
         })
         .resolver(resolver)
@@ -632,7 +644,7 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
 
     let err = Linker::new()
         .map_pipeline(|mut pipeline| {
-            pipeline.push(configure);
+            pipeline.push(TestPass(configure));
             pipeline
         })
         .resolver(resolver)

@@ -423,6 +423,20 @@ impl LinkerError {
     }
 
     #[inline]
+    pub(crate) const fn duplicate_section_data_access() -> Self {
+        Self::SectionData {
+            detail: "disjoint section data access referenced the same section more than once",
+        }
+    }
+
+    #[inline]
+    pub(crate) const fn missing_section_data_access() -> Self {
+        Self::SectionData {
+            detail: "disjoint section data access was not materialized",
+        }
+    }
+
+    #[inline]
     pub(crate) const fn mapped_arena(detail: &'static str) -> Self {
         Self::MappedArena { detail }
     }

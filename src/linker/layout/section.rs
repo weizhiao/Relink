@@ -13,6 +13,33 @@ use alloc::{boxed::Box, vec::Vec};
 pub struct SectionId(usize);
 entity_ref!(SectionId);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataAccess {
+    Read,
+    Write,
+}
+
+pub enum SectionDataAccessRef<'a> {
+    Read(&'a AlignedBytes),
+    Write(&'a mut AlignedBytes),
+}
+
+impl<'a> SectionDataAccessRef<'a> {
+    pub fn into_read(self) -> &'a AlignedBytes {
+        match self {
+            Self::Read(data) => data,
+            Self::Write(_) => panic!("section data access should be read-only"),
+        }
+    }
+
+    pub fn into_write(self) -> &'a mut AlignedBytes {
+        match self {
+            Self::Write(data) => data,
+            Self::Read(_) => panic!("section data access should be writable"),
+        }
+    }
+}
+
 /// A derived address inside one placed section arena.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SectionAddress {
@@ -410,34 +437,52 @@ impl LayoutSectionArena {
         self.record_mut(id).and_then(LayoutSectionRecord::data_mut)
     }
 
-    pub(crate) fn with_disjoint_data_mut<R>(
+    pub(crate) fn with_disjoint_data<const N: usize, R>(
         &mut self,
-        read_a: SectionId,
-        read_b: SectionId,
-        write: SectionId,
-        f: impl FnOnce(&AlignedBytes, &AlignedBytes, &mut AlignedBytes) -> R,
+        accesses: [(SectionId, DataAccess); N],
+        f: impl FnOnce([SectionDataAccessRef<'_>; N]) -> R,
     ) -> Option<R> {
-        debug_assert!(
-            read_a != read_b && read_a != write && read_b != write,
-            "disjoint section data request referenced the same section more than once",
-        );
-
-        let (before_write, write_record, after_write) = self.sections.split_at_mut(write)?;
-        let write_index = before_write.len();
-        let write_data = write_record.data_mut()?;
-
-        let read_record = |section: SectionId| {
-            let index = section.index();
-            if index < write_index {
-                before_write.get(index)
-            } else {
-                after_write.get(index - write_index - 1)
+        for (index, (section, _)) in accesses.iter().enumerate() {
+            if accesses[index + 1..]
+                .iter()
+                .any(|(other, _)| section == other)
+            {
+                return None;
             }
-        };
+        }
 
-        let first_data = read_record(read_a)?.data()?;
-        let second_data = read_record(read_b)?.data()?;
-        Some(f(first_data, second_data, write_data))
+        let mut records = [core::ptr::null_mut::<LayoutSectionRecord>(); N];
+        for (record, (section, _)) in records.iter_mut().zip(accesses.iter().copied()) {
+            *record = self.record_mut(section)?;
+        }
+
+        for &record in &records {
+            // SAFETY: `record` came from `record_mut` above and is only used to
+            // verify materialized data before creating the final borrowed view.
+            if unsafe { (&*record).data().is_none() } {
+                return None;
+            }
+        }
+
+        // SAFETY: duplicate section ids were rejected above, so every raw
+        // record pointer is distinct. Each section's data is borrowed exactly
+        // once according to its requested access, and the references cannot
+        // escape the callback.
+        let data = core::array::from_fn(|index| {
+            let record = records[index];
+            match accesses[index].1 {
+                DataAccess::Read => SectionDataAccessRef::Read(
+                    unsafe { (&*record).data() }
+                        .expect("section data access should be materialized"),
+                ),
+                DataAccess::Write => SectionDataAccessRef::Write(
+                    unsafe { (&mut *record).data_mut() }
+                        .expect("section data access should be materialized"),
+                ),
+            }
+        });
+
+        Some(f(data))
     }
 
     #[inline]

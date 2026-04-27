@@ -3,8 +3,8 @@
 use crate::{
     AlignedBytes, ParseDynamicError, ParsePhdrError, Result,
     elf::{
-        ElfDyn, ElfHeader, ElfPhdr, ElfProgramType, ElfSectionFlags, ElfSectionType, ElfShdr,
-        ElfStringTable, parse_dynamic_entries,
+        ElfDyn, ElfHeader, ElfPhdr, ElfProgramType, ElfSectionFlags, ElfSectionIndex,
+        ElfSectionType, ElfShdr, ElfStringTable, parse_dynamic_entries,
     },
     entity::entity_ref,
     input::{ElfReader, ElfReaderExt},
@@ -197,6 +197,19 @@ impl From<ScannedSectionId> for usize {
     #[inline]
     fn from(id: ScannedSectionId) -> Self {
         id.index()
+    }
+}
+
+impl ScannedSectionId {
+    /// Converts a symbol `st_shndx` value into a scanned section id when it
+    /// names a real section table entry.
+    #[inline]
+    pub const fn from_symbol_shndx(index: ElfSectionIndex) -> Option<Self> {
+        if index.is_undef() || index.is_abs() {
+            None
+        } else {
+            Some(Self::new(index.index()))
+        }
     }
 }
 

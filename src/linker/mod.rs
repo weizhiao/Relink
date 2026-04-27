@@ -20,13 +20,15 @@ mod view;
 
 pub use context::LinkContext;
 pub use layout::{
-    Arena, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, Materialization, MemoryClass,
-    ModuleLayout, PackingPolicy, SectionAddress, SectionId, SectionMetadata, SectionPlacement,
+    Arena, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, DataAccess, Materialization,
+    MemoryClass, ModuleLayout, PackingPolicy, SectionAddress, SectionDataAccessRef, SectionId,
+    SectionMetadata, SectionPlacement,
 };
 pub use linker::Linker;
+pub(crate) use mapped::GotPltTarget;
 pub use plan::{
-    AnyPass, DataAccess, DataPass, LinkPass, LinkPassPlan, LinkPipeline, ModuleId, PassScope,
-    PassScopeMode, ReorderAccess, ReorderPass,
+    AnyPass, DataPass, LinkPass, LinkPassPlan, LinkPipeline, ModuleId, PassScope, PassScopeMode,
+    ReorderAccess, ReorderPass, SectionDataAccess,
 };
 pub use request::{
     DefaultRelocationPlanner, DependencyOwner, DependencyRequest, RelocationInputs,

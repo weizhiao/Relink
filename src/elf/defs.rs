@@ -269,6 +269,13 @@ impl ElfRela {
     pub(crate) fn set_offset(&mut self, offset: usize) {
         self.rela.r_offset = offset as _;
     }
+
+    /// Sets the relocation addend.
+    /// This is used internally when adjusting relocation entries during loading.
+    #[inline]
+    pub(crate) fn set_addend(&mut self, _base: usize, addend: isize) {
+        self.rela.r_addend = addend as _;
+    }
 }
 
 /// ELF REL relocation entry.
@@ -314,6 +321,20 @@ impl ElfRel {
     #[cfg(any(target_arch = "x86", target_arch = "arm"))]
     pub(crate) fn set_offset(&mut self, offset: usize) {
         self.rel.r_offset = offset as _;
+    }
+
+    /// Sets the relocation addend.
+    ///
+    /// For REL entries, the addend is stored at the relocation offset.
+    ///
+    /// # Arguments
+    /// * `base` - The base address to add to the offset.
+    /// * `addend` - The new implicit addend value.
+    #[inline]
+    #[allow(dead_code)]
+    pub(crate) fn set_addend(&mut self, base: usize, addend: isize) {
+        let ptr = (self.r_offset() + base) as *mut usize;
+        unsafe { ptr.write(addend as usize) };
     }
 }
 

@@ -110,34 +110,6 @@ impl AlignedBytes {
             core::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast::<T>(), bytes.len() / elem_size)
         })
     }
-
-    #[inline]
-    pub(crate) fn try_for_each<T: ByteRepr, E>(
-        &self,
-        mut f: impl FnMut(usize, &T) -> core::result::Result<(), E>,
-    ) -> Option<core::result::Result<(), E>> {
-        let values = self.try_cast_slice::<T>()?;
-        for (index, value) in values.iter().enumerate() {
-            if let Err(err) = f(index, value) {
-                return Some(Err(err));
-            }
-        }
-        Some(Ok(()))
-    }
-
-    #[inline]
-    pub(crate) fn try_for_each_mut<T: ByteRepr, E>(
-        &mut self,
-        mut f: impl FnMut(usize, &mut T) -> core::result::Result<(), E>,
-    ) -> Option<core::result::Result<(), E>> {
-        let values = self.try_cast_slice_mut::<T>()?;
-        for (index, value) in values.iter_mut().enumerate() {
-            if let Err(err) = f(index, value) {
-                return Some(Err(err));
-            }
-        }
-        Some(Ok(()))
-    }
 }
 
 impl AsRef<[u8]> for AlignedBytes {

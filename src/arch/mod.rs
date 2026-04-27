@@ -30,6 +30,12 @@ cfg_if::cfg_if! {
 
 pub const REL_NONE: u32 = 0;
 
+cfg_if::cfg_if! {
+    if #[cfg(not(target_arch = "x86_64"))] {
+        impl crate::linker::GotPltTarget for Architecture {}
+    }
+}
+
 #[cfg(feature = "object")]
 pub(crate) mod object;
 

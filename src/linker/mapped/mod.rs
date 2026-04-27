@@ -18,6 +18,7 @@ mod arena;
 mod rewrite;
 
 use arena::MappedArenaMap;
+pub(crate) use rewrite::GotPltTarget;
 
 pub(crate) struct RuntimeModuleMemory {
     sections: Box<[RuntimeSectionMemory]>,

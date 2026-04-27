@@ -1,6 +1,9 @@
 use super::{
     arena::{Arena, ArenaId, ArenaUsage},
-    section::{LayoutSectionArena, ModuleLayout, SectionId, SectionMetadata, SectionPlacement},
+    section::{
+        DataAccess, LayoutSectionArena, ModuleLayout, SectionDataAccessRef, SectionId,
+        SectionMetadata, SectionPlacement,
+    },
 };
 use crate::{
     AlignedBytes,
@@ -135,15 +138,12 @@ impl MemoryLayoutPlan {
     }
 
     #[inline]
-    pub(in crate::linker) fn with_disjoint_section_data_mut<R>(
+    pub(in crate::linker) fn with_disjoint_section_data<const N: usize, R>(
         &mut self,
-        read_a: SectionId,
-        read_b: SectionId,
-        write: SectionId,
-        f: impl FnOnce(&AlignedBytes, &AlignedBytes, &mut AlignedBytes) -> R,
+        accesses: [(SectionId, DataAccess); N],
+        f: impl FnOnce([SectionDataAccessRef<'_>; N]) -> R,
     ) -> Option<R> {
-        self.sections
-            .with_disjoint_data_mut(read_a, read_b, write, f)
+        self.sections.with_disjoint_data(accesses, f)
     }
 
     #[inline]

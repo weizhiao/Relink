@@ -34,7 +34,7 @@ pub use dynamic::{ElfDyn, ElfDynamicTag};
 pub use ehdr::ElfHeader;
 pub use phdr::{ElfPhdr, ElfProgramFlags, ElfProgramType};
 pub use shdr::{ElfSectionFlags, ElfSectionType};
-pub use symbol::{ElfSymbol, ElfSymbolBind, ElfSymbolType};
+pub use symbol::{ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType};
 
 unsafe impl ByteRepr for defs::ElfEhdr {}
 unsafe impl ByteRepr for dynamic::ElfDyn {}

@@ -16,7 +16,6 @@ use crate::{
 };
 use alloc::{borrow::ToOwned, boxed::Box, string::String, vec::Vec};
 use core::marker::PhantomData;
-use elf::abi::SHN_UNDEF;
 
 /// Builder for creating relocatable ELF objects.
 pub(crate) struct ObjectBuilder<Tls, D = ()> {
@@ -91,13 +90,12 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
     ) -> SymbolTable {
         let symbols: &mut [ElfSymbol] = symtab_shdr.content_mut();
         for symbol in symbols {
-            if symbol.symbol_type() == ElfSymbolType::FILE
-                || symbol.st_shndx() == SHN_UNDEF as usize
-            {
+            let section_index = symbol.st_shndx();
+            if symbol.symbol_type() == ElfSymbolType::FILE || section_index.is_undef() {
                 continue;
             }
-            let section_base =
-                RelocAddr::new(shdrs[symbol.st_shndx()].sh_addr()).relative_to(base.into_inner());
+            let section_base = RelocAddr::new(shdrs[section_index.index()].sh_addr())
+                .relative_to(base.into_inner());
             symbol.set_value(section_base.offset(symbol.st_value()).into_inner());
         }
 
