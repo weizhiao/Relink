@@ -3,6 +3,7 @@ use crate::{
     Result,
     image::{LoadedCore, RawDylib, ScannedDylib},
     relocation::BindingMode,
+    sync::Arc,
 };
 use alloc::boxed::Box;
 
@@ -168,12 +169,12 @@ impl<'a, K, D: 'static> DependencyRequest<'a, K, D> {
 pub struct RelocationRequest<'a, K, D: 'static> {
     key: &'a K,
     raw: RawDylib<D>,
-    scope: &'a [LoadedCore<D>],
+    scope: &'a Arc<[LoadedCore<D>]>,
 }
 
 impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
     #[inline]
-    pub(crate) fn new(key: &'a K, raw: RawDylib<D>, scope: &'a [LoadedCore<D>]) -> Self {
+    pub(crate) fn new(key: &'a K, raw: RawDylib<D>, scope: &'a Arc<[LoadedCore<D>]>) -> Self {
         Self { key, raw, scope }
     }
 
@@ -198,6 +199,12 @@ impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
         self.scope
     }
 
+    /// Returns the batch-start relocation scope as a shared owner.
+    #[inline]
+    pub fn shared_scope(&self) -> &Arc<[LoadedCore<D>]> {
+        self.scope
+    }
+
     /// Consumes the request and returns the raw module being relocated.
     #[inline]
     pub fn into_raw(self) -> RawDylib<D> {
@@ -205,9 +212,14 @@ impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
     }
 }
 
+enum RelocationScope<D> {
+    Owned(Box<[LoadedCore<D>]>),
+    Shared(Arc<[LoadedCore<D>]>),
+}
+
 /// Per-module relocation inputs produced by the caller's runtime policy.
 pub struct RelocationInputs<D> {
-    scope: Box<[LoadedCore<D>]>,
+    scope: RelocationScope<D>,
     binding: BindingMode,
 }
 
@@ -215,14 +227,25 @@ impl<D> RelocationInputs<D> {
     #[inline]
     pub fn new(scope: impl IntoIterator<Item = LoadedCore<D>>) -> Self {
         Self {
-            scope: scope.into_iter().collect(),
+            scope: RelocationScope::Owned(scope.into_iter().collect()),
+            binding: BindingMode::Default,
+        }
+    }
+
+    #[inline]
+    pub fn shared(scope: Arc<[LoadedCore<D>]>) -> Self {
+        Self {
+            scope: RelocationScope::Shared(scope),
             binding: BindingMode::Default,
         }
     }
 
     #[inline]
     pub fn scope(&self) -> &[LoadedCore<D>] {
-        &self.scope
+        match &self.scope {
+            RelocationScope::Owned(scope) => scope,
+            RelocationScope::Shared(scope) => scope,
+        }
     }
 
     #[inline]
@@ -263,7 +286,7 @@ pub struct DefaultRelocationPlanner;
 impl<K, D: 'static> RelocationPlanner<K, D> for DefaultRelocationPlanner {
     #[inline]
     fn plan(&mut self, req: &RelocationRequest<'_, K, D>) -> Result<RelocationInputs<D>> {
-        Ok(RelocationInputs::new(req.scope().iter().cloned()))
+        Ok(RelocationInputs::shared(req.shared_scope().clone()))
     }
 }
 

@@ -15,6 +15,7 @@ use crate::{
     loader::LoadHook,
     os::{DefaultMmap, Mmap},
     relocation::{RelocationHandler, Relocator, SymbolLookup},
+    sync::Arc,
     tls::TlsResolver,
 };
 use alloc::{
@@ -587,7 +588,7 @@ where
     fn build_group_scope(
         context: &LinkContext<K, D>,
         session: &LoadSession<K, D>,
-    ) -> Vec<LoadedCore<D>>
+    ) -> Arc<[LoadedCore<D>]>
     where
         K: Ord,
     {
@@ -609,7 +610,8 @@ where
                         .expect("scope key must resolve to a visible or pending module")
                 }
             })
-            .collect()
+            .collect::<Vec<_>>()
+            .into()
     }
 
     fn commit_session(context: &mut LinkContext<K, D>, session: &mut LoadSession<K, D>) {
