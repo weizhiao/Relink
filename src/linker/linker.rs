@@ -3,7 +3,10 @@ use super::{
     layout::{Materialization, MemoryLayoutPlan},
     mapped, materialization,
     plan::{LinkPipeline, LinkPlan, ModuleId},
-    request::{DefaultRelocationPlanner, RelocationPlanner, RelocationRequest},
+    request::{
+        DefaultRelocationPlanner, LoadObserver, RelocationPlanner, RelocationRequest, StagedDylib,
+        VisibleModules,
+    },
     resolve::{KeyResolver, LoadResolveContext, ScanResolveContext},
     session::{GraphEntry, LoadSession, ResolveSession},
     storage::CommittedEntry,
@@ -44,12 +47,16 @@ pub struct Linker<
     PostH = (),
     ScopeD = (),
     P = DefaultRelocationPlanner,
+    O = (),
+    V = (),
 > {
     loader: L,
     resolver: R,
     pipeline: LinkPipeline<'a, K, D>,
     relocator: Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD>,
     planner: P,
+    observer: O,
+    visible_modules: V,
     scratch_relocation_order: Vec<K>,
 }
 
@@ -68,6 +75,8 @@ where
             pipeline: LinkPipeline::new(),
             relocator: Relocator::new(),
             planner: DefaultRelocationPlanner,
+            observer: (),
+            visible_modules: (),
             scratch_relocation_order: Vec::new(),
         }
     }
@@ -84,8 +93,8 @@ where
     }
 }
 
-impl<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P>
-    Linker<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P>
+impl<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
+    Linker<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
 where
     K: Clone + Ord,
     D: 'static,
@@ -94,13 +103,16 @@ where
     pub fn resolver<NewR>(
         self,
         resolver: NewR,
-    ) -> Linker<'a, K, D, L, NewR, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P> {
+    ) -> Linker<'a, K, D, L, NewR, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
+    {
         Linker {
             loader: self.loader,
             resolver,
             pipeline: self.pipeline,
             relocator: self.relocator,
             planner: self.planner,
+            observer: self.observer,
+            visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
         }
     }
@@ -142,6 +154,8 @@ where
         NewPostH,
         NewScopeD,
         P,
+        O,
+        V,
     > {
         Linker {
             loader: self.loader,
@@ -149,6 +163,8 @@ where
             pipeline: self.pipeline,
             relocator: configure(self.relocator),
             planner: self.planner,
+            observer: self.observer,
+            visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
         }
     }
@@ -157,13 +173,52 @@ where
     pub fn planner<NewP>(
         self,
         planner: NewP,
-    ) -> Linker<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, NewP> {
+    ) -> Linker<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, NewP, O, V>
+    {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
             pipeline: self.pipeline,
             relocator: self.relocator,
             planner,
+            observer: self.observer,
+            visible_modules: self.visible_modules,
+            scratch_relocation_order: self.scratch_relocation_order,
+        }
+    }
+
+    /// Replaces the staged-load observer used by link operations.
+    pub fn observer<NewO>(
+        self,
+        observer: NewO,
+    ) -> Linker<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, NewO, V>
+    {
+        Linker {
+            loader: self.loader,
+            resolver: self.resolver,
+            pipeline: self.pipeline,
+            relocator: self.relocator,
+            planner: self.planner,
+            observer,
+            visible_modules: self.visible_modules,
+            scratch_relocation_order: self.scratch_relocation_order,
+        }
+    }
+
+    /// Replaces the external visible-module overlay used by link operations.
+    pub fn visible_modules<NewV>(
+        self,
+        visible_modules: NewV,
+    ) -> Linker<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, NewV>
+    {
+        Linker {
+            loader: self.loader,
+            resolver: self.resolver,
+            pipeline: self.pipeline,
+            relocator: self.relocator,
+            planner: self.planner,
+            observer: self.observer,
+            visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
         }
     }
@@ -178,7 +233,7 @@ where
     }
 }
 
-impl<'a, K, D, M, H, Tls, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P>
+impl<'a, K, D, M, H, Tls, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
     Linker<
         'a,
         K,
@@ -193,6 +248,8 @@ impl<'a, K, D, M, H, Tls, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, Scop
         PostH,
         ScopeD,
         P,
+        O,
+        V,
     >
 where
     K: Clone + Ord,
@@ -219,6 +276,8 @@ where
         PostH,
         ScopeD,
         P,
+        O,
+        V,
     >
     where
         NewM: Mmap,
@@ -231,12 +290,14 @@ where
             pipeline: self.pipeline,
             relocator: self.relocator,
             planner: self.planner,
+            observer: self.observer,
+            visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
         }
     }
 }
 
-impl<'a, K, D, M, H, Tls, Resolver, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P>
+impl<'a, K, D, M, H, Tls, Resolver, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
     Linker<
         'a,
         K,
@@ -251,6 +312,8 @@ impl<'a, K, D, M, H, Tls, Resolver, PreS, PostS, LazyPreS, LazyPostS, PreH, Post
         PostH,
         ScopeD,
         P,
+        O,
+        V,
     >
 where
     K: Clone + Ord,
@@ -265,37 +328,57 @@ where
     PreH: RelocationHandler + Clone,
     PostH: RelocationHandler + Clone,
     P: RelocationPlanner<K, D>,
+    O: LoadObserver<K, D>,
+    V: VisibleModules<K, D>,
 {
     /// Loads one module through the legacy map-then-resolve path.
     ///
     /// Repeated calls reuse already-loaded entries in the same context. The
     /// context is mutated only after the current load succeeds.
-    pub fn load<'cfg>(&mut self, context: &mut LinkContext<K, D>, key: K) -> Result<LoadedCore<D>>
+    pub fn load<'cfg, Meta>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta>,
+        key: K,
+    ) -> Result<LoadedCore<D>>
     where
         K: 'cfg,
-        Resolver: KeyResolver<'cfg, K, D>,
+        Meta: Default,
+        Resolver: KeyResolver<'cfg, K, D, Meta>,
     {
         if let Some(loaded) = context.committed.get(&key) {
             return Ok(loaded.clone());
         }
+        if let Some(loaded) = self.visible_modules.loaded(&key) {
+            return Ok(loaded);
+        }
 
-        let prepared =
-            Self::prepare_runtime_load(context, &key, &mut self.loader, &mut self.resolver)?;
+        let prepared = Self::prepare_runtime_load(
+            context,
+            &key,
+            &mut self.loader,
+            &mut self.resolver,
+            &mut self.observer,
+            &self.visible_modules,
+        )?;
         self.execute_prepared_load(context, prepared)
     }
 
     /// Discovers, plans, and loads one module through the scan-first path.
-    pub fn load_scan_first(
+    pub fn load_scan_first<Meta>(
         &mut self,
-        context: &mut LinkContext<K, D>,
+        context: &mut LinkContext<K, D, Meta>,
         key: K,
     ) -> Result<LoadedCore<D>>
     where
         K: 'static,
-        Resolver: KeyResolver<'static, K, D>,
+        Meta: Default,
+        Resolver: KeyResolver<'static, K, D, Meta>,
     {
         if let Some(loaded) = context.committed.get(&key) {
             return Ok(loaded.clone());
+        }
+        if let Some(loaded) = self.visible_modules.loaded(&key) {
+            return Ok(loaded);
         }
 
         let prepared = match Self::prepare_scan_load(
@@ -304,52 +387,64 @@ where
             &mut self.loader,
             &mut self.resolver,
             &mut self.pipeline,
+            &self.visible_modules,
         )? {
             ScanDiscovery::Existing(root) => PreparedLoad::runtime(root, LoadSession::new()),
-            ScanDiscovery::Plan(plan) => Self::prepare_planned_load(plan, &mut self.loader)?,
+            ScanDiscovery::Plan(plan) => {
+                Self::prepare_planned_load(plan, &mut self.loader, &mut self.observer)?
+            }
         };
         self.execute_prepared_load(context, prepared)
     }
 
-    fn prepare_runtime_load<'cfg>(
-        context: &LinkContext<K, D>,
+    fn prepare_runtime_load<'cfg, Meta>(
+        context: &LinkContext<K, D, Meta>,
         key: &K,
         loader: &mut Loader<M, H, D, Tls>,
         resolver: &mut Resolver,
+        observer: &mut O,
+        visible_modules: &V,
     ) -> Result<PreparedLoad<K, D>>
     where
         K: 'cfg,
-        Resolver: KeyResolver<'cfg, K, D>,
+        Resolver: KeyResolver<'cfg, K, D, Meta>,
     {
         let mut session = LoadSession::new();
-        let mut resolve_context =
-            LoadResolveContext::new(context.committed.view(), &mut session.resolve);
-        let root = resolve_context.stage_resolved(resolver.load_root(key)?, loader)?;
+        let mut resolve_context = LoadResolveContext::new(
+            context.committed.view(),
+            visible_modules,
+            &mut session.resolve,
+        );
+        let root = resolve_context.stage_resolved(resolver.load_root(key)?, loader, observer)?;
         if resolve_context.contains_pending(&root) {
-            resolve_context.resolve_dependency_graph(root.clone(), loader, resolver)?;
+            resolve_context.resolve_dependency_graph(root.clone(), loader, resolver, observer)?;
         }
 
         Ok(PreparedLoad::runtime(root, session))
     }
 
-    fn prepare_scan_load(
-        context: &LinkContext<K, D>,
+    fn prepare_scan_load<Meta>(
+        context: &LinkContext<K, D, Meta>,
         key: &K,
         loader: &mut Loader<M, H, D, Tls>,
         resolver: &mut Resolver,
         pipeline: &mut LinkPipeline<'_, K, D>,
+        visible_modules: &V,
     ) -> Result<ScanDiscovery<K, D>>
     where
         K: 'static,
-        Resolver: KeyResolver<'static, K, D>,
+        Resolver: KeyResolver<'static, K, D, Meta>,
     {
         let mut session = ResolveSession::new();
-        let mut resolve_context = ScanResolveContext::new(context.committed.view(), &mut session);
-        let root = resolve_context.stage_resolved(resolver.load_root(key)?, loader)?;
+        let mut observer = ();
+        let mut resolve_context =
+            ScanResolveContext::new(context.committed.view(), visible_modules, &mut session);
+        let root =
+            resolve_context.stage_resolved(resolver.load_root(key)?, loader, &mut observer)?;
         if !resolve_context.contains_pending(&root) {
             return Ok(ScanDiscovery::Existing(root));
         }
-        resolve_context.resolve_dependency_graph(root.clone(), loader, resolver)?;
+        resolve_context.resolve_dependency_graph(root.clone(), loader, resolver, &mut observer)?;
 
         let ResolveSession {
             entries,
@@ -375,6 +470,7 @@ where
     fn prepare_planned_load(
         mut plan: LinkPlan<K, D>,
         loader: &mut Loader<M, H, D, Tls>,
+        observer: &mut O,
     ) -> Result<PreparedLoad<K, D>> {
         // Scan discovery already seeded layout-side metadata before the pass pipeline ran.
         // The planned-load phase only needs to normalize materialization choices and rebuild
@@ -406,6 +502,7 @@ where
                 module_id,
                 module,
             )?;
+            observer.on_staged_dylib(StagedDylib::new(&key, &raw))?;
             session.insert_resolved_pending(key, raw, direct_deps);
         }
 
@@ -474,11 +571,14 @@ where
         }
     }
 
-    fn execute_prepared_load(
+    fn execute_prepared_load<Meta>(
         &mut self,
-        context: &mut LinkContext<K, D>,
+        context: &mut LinkContext<K, D, Meta>,
         prepared: PreparedLoad<K, D>,
-    ) -> Result<LoadedCore<D>> {
+    ) -> Result<LoadedCore<D>>
+    where
+        Meta: Default,
+    {
         let PreparedLoad {
             root,
             mut session,
@@ -499,6 +599,7 @@ where
             .committed
             .get(&root)
             .cloned()
+            .or_else(|| self.visible_modules.loaded(&root))
             .ok_or_else(|| LinkerError::context("load root missing after commit"))
             .map_err(Into::into)
     }
@@ -508,15 +609,15 @@ where
     /// Modules are relocated in post-order so dependencies are finalized before
     /// dependents. The relocation planner receives a [`RelocationRequest`]
     /// describing each key, raw module, and batch-start relocation scope.
-    fn relocate_pending_modules(
+    fn relocate_pending_modules<Meta>(
         &mut self,
         root: &K,
-        context: &LinkContext<K, D>,
+        context: &LinkContext<K, D, Meta>,
         session: &mut LoadSession<K, D>,
     ) -> Result<()> {
         let mut order = mem::take(&mut self.scratch_relocation_order);
         Self::build_relocation_order(root, &session.resolve.entries, &mut order);
-        let scope = Self::build_group_scope(context, session);
+        let scope = Self::build_group_scope(context, session, &self.visible_modules);
 
         let result = (|| {
             for key in order.drain(..) {
@@ -585,9 +686,10 @@ where
         }
     }
 
-    fn build_group_scope(
-        context: &LinkContext<K, D>,
+    fn build_group_scope<Meta>(
+        context: &LinkContext<K, D, Meta>,
         session: &LoadSession<K, D>,
+        visible_modules: &V,
     ) -> Arc<[LoadedCore<D>]>
     where
         K: Ord,
@@ -607,6 +709,7 @@ where
                         .committed
                         .get(scope_key)
                         .cloned()
+                        .or_else(|| visible_modules.loaded(scope_key))
                         .expect("scope key must resolve to a visible or pending module")
                 }
             })
@@ -614,12 +717,15 @@ where
             .into()
     }
 
-    fn commit_session(context: &mut LinkContext<K, D>, session: &mut LoadSession<K, D>) {
+    fn commit_session<Meta>(context: &mut LinkContext<K, D, Meta>, session: &mut LoadSession<K, D>)
+    where
+        Meta: Default,
+    {
         let ready = mem::take(&mut session.ready_to_commit);
         for entry in ready {
             context.committed.insert_new(
                 entry.key,
-                CommittedEntry::new(entry.module, entry.direct_deps),
+                CommittedEntry::new(entry.module, entry.direct_deps, Meta::default()),
             );
         }
     }

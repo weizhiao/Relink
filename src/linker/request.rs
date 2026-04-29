@@ -82,20 +82,20 @@ impl<D: 'static> DependencyOwner for ScannedDylib<D> {
 }
 
 /// A single dependency-resolution request.
-pub struct DependencyRequest<'a, K, D: 'static> {
+pub struct DependencyRequest<'a, K: Clone, D: 'static, M = ()> {
     owner_key: &'a K,
     owner: &'a dyn DependencyOwner,
     needed_index: usize,
-    visible: DependencyGraphView<'a, K, D>,
+    visible: DependencyGraphView<'a, K, D, M>,
 }
 
-impl<'a, K, D: 'static> DependencyRequest<'a, K, D> {
+impl<'a, K: Clone, D: 'static, M> DependencyRequest<'a, K, D, M> {
     #[inline]
     pub(crate) fn new(
         owner_key: &'a K,
         owner: &'a dyn DependencyOwner,
         needed_index: usize,
-        visible: DependencyGraphView<'a, K, D>,
+        visible: DependencyGraphView<'a, K, D, M>,
     ) -> Self {
         Self {
             owner_key,
@@ -162,6 +162,103 @@ impl<'a, K, D: 'static> DependencyRequest<'a, K, D> {
         K: Ord,
     {
         self.visible.contains_key(key)
+    }
+}
+
+/// Read-only modules that should be visible to a link operation without being
+/// committed into its local [`LinkContext`](super::LinkContext).
+///
+/// This is useful for callers that already have process-global or staged
+/// modules elsewhere and want the linker to resolve against them without first
+/// cloning those modules into the per-load context.
+pub trait VisibleModules<K: Clone, D: 'static> {
+    /// Returns whether `key` is visible to dependency resolution.
+    fn contains_key(&self, _key: &K) -> bool {
+        false
+    }
+
+    /// Returns the canonical direct dependency keys for a visible module.
+    fn direct_deps(&self, _key: &K) -> Option<Box<[K]>> {
+        None
+    }
+
+    /// Returns the loaded module for relocation-scope construction or a root
+    /// that resolves entirely from the visible overlay.
+    fn loaded(&self, _key: &K) -> Option<LoadedCore<D>> {
+        None
+    }
+}
+
+impl<K: Clone, D: 'static> VisibleModules<K, D> for () {}
+
+impl<K: Clone, D: 'static, V> VisibleModules<K, D> for &V
+where
+    V: VisibleModules<K, D> + ?Sized,
+{
+    #[inline]
+    fn contains_key(&self, key: &K) -> bool {
+        (**self).contains_key(key)
+    }
+
+    #[inline]
+    fn direct_deps(&self, key: &K) -> Option<Box<[K]>> {
+        (**self).direct_deps(key)
+    }
+
+    #[inline]
+    fn loaded(&self, key: &K) -> Option<LoadedCore<D>> {
+        (**self).loaded(key)
+    }
+}
+
+/// A mapped but unrelocated dylib observed during a link operation.
+///
+/// This event fires after a [`RawDylib`] has been materialized and before it is
+/// inserted into the linker's pending session. The object is not relocated yet,
+/// so observers must not treat it as a ready-to-run module. Callers that create
+/// placeholder [`LoadedCore`] values from `raw().core()` are responsible for the
+/// safety contract of [`LoadedCore::from_core`].
+pub struct StagedDylib<'a, K, D: 'static> {
+    key: &'a K,
+    raw: &'a RawDylib<D>,
+}
+
+impl<'a, K, D: 'static> StagedDylib<'a, K, D> {
+    #[inline]
+    pub(crate) fn new(key: &'a K, raw: &'a RawDylib<D>) -> Self {
+        Self { key, raw }
+    }
+
+    /// Returns the canonical key selected for the staged module.
+    #[inline]
+    pub fn key(&self) -> &'a K {
+        self.key
+    }
+
+    /// Returns the mapped but unrelocated shared object.
+    #[inline]
+    pub fn raw(&self) -> &'a RawDylib<D> {
+        self.raw
+    }
+}
+
+/// Observer for modules staged by [`super::Linker`].
+pub trait LoadObserver<K, D: 'static> {
+    /// Called when a new [`RawDylib`] is mapped but before relocation starts.
+    fn on_staged_dylib(&mut self, _event: StagedDylib<'_, K, D>) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl<K, D: 'static> LoadObserver<K, D> for () {}
+
+impl<K, D: 'static, F> LoadObserver<K, D> for F
+where
+    F: for<'a> FnMut(StagedDylib<'a, K, D>) -> Result<()>,
+{
+    #[inline]
+    fn on_staged_dylib(&mut self, event: StagedDylib<'_, K, D>) -> Result<()> {
+        self(event)
     }
 }
 

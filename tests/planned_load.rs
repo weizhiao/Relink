@@ -1,17 +1,19 @@
 mod support;
 
 use elf_loader::{
+    CustomError, Loader,
     image::{LoadedCore, ModuleCapability},
     input::ElfBinary,
     linker::{Arena, ArenaSharing, MemoryClass},
     linker::{
-        DataPass, KeyResolver, LinkContext, LinkPass, LinkPassPlan, Linker, Materialization,
-        RelocationInputs, RelocationRequest, ReorderPass, ResolvedKey,
+        DataPass, KeyResolver, LinkContext, LinkPass, LinkPassPlan, Linker, LoadObserver,
+        Materialization, RelocationInputs, RelocationRequest, ReorderPass, ResolvedKey,
+        StagedDylib, VisibleModules,
     },
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
-use std::{boxed::Box, vec::Vec};
-use support::test_dylib::{write_test_dylib, write_test_dylib_with_config};
+use std::{boxed::Box, cell::RefCell, rc::Rc, vec::Vec};
+use support::test_dylib::{load_relocated_dylib, write_test_dylib, write_test_dylib_with_config};
 
 struct SingleBinaryResolver {
     key: &'static str,
@@ -22,6 +24,34 @@ struct SingleBinaryResolver {
 struct ExistingRootResolver {
     requested: &'static str,
     existing: &'static str,
+}
+
+#[derive(Clone, Copy)]
+struct BinaryModule {
+    key: &'static str,
+    name: &'static str,
+    data: &'static [u8],
+}
+
+struct MultiBinaryResolver {
+    root: &'static str,
+    modules: Vec<BinaryModule>,
+}
+
+struct RecordingObserver {
+    events: Rc<RefCell<Vec<String>>>,
+}
+
+struct FailingObserver;
+
+struct VisibleDependencyResolver {
+    root_data: &'static [u8],
+}
+
+struct StaticVisibleModule {
+    key: &'static str,
+    module: LoadedCore<()>,
+    direct_deps: Box<[&'static str]>,
 }
 
 impl KeyResolver<'static, &'static str, ()> for SingleBinaryResolver {
@@ -58,6 +88,96 @@ impl KeyResolver<'static, &'static str, ()> for ExistingRootResolver {
         _req: &elf_loader::linker::DependencyRequest<'_, &'static str, ()>,
     ) -> elf_loader::Result<Option<ResolvedKey<'static, &'static str>>> {
         panic!("existing scan root should not resolve dependencies")
+    }
+}
+
+impl MultiBinaryResolver {
+    fn module(&self, key: &str) -> Option<BinaryModule> {
+        self.modules
+            .iter()
+            .find(|module| module.key == key)
+            .copied()
+    }
+}
+
+impl KeyResolver<'static, &'static str, ()> for MultiBinaryResolver {
+    fn load_root(
+        &mut self,
+        key: &&'static str,
+    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+        assert_eq!(*key, self.root);
+        let module = self.module(key).expect("missing root module");
+        Ok(ResolvedKey::load(
+            module.key,
+            ElfBinary::new(module.name, module.data),
+        ))
+    }
+
+    fn resolve_dependency(
+        &mut self,
+        req: &elf_loader::linker::DependencyRequest<'_, &'static str, ()>,
+    ) -> elf_loader::Result<Option<ResolvedKey<'static, &'static str>>> {
+        Ok(self
+            .module(req.needed())
+            .map(|module| ResolvedKey::load(module.key, ElfBinary::new(module.name, module.data))))
+    }
+}
+
+impl LoadObserver<&'static str, ()> for RecordingObserver {
+    fn on_staged_dylib(
+        &mut self,
+        event: StagedDylib<'_, &'static str, ()>,
+    ) -> elf_loader::Result<()> {
+        assert!(event.raw().mapped_len() > 0);
+        self.events.borrow_mut().push((*event.key()).to_string());
+        Ok(())
+    }
+}
+
+impl LoadObserver<&'static str, ()> for FailingObserver {
+    fn on_staged_dylib(
+        &mut self,
+        _event: StagedDylib<'_, &'static str, ()>,
+    ) -> elf_loader::Result<()> {
+        Err(elf_loader::Error::Custom(CustomError::Message(
+            "observer failed".into(),
+        )))
+    }
+}
+
+impl KeyResolver<'static, &'static str, ()> for VisibleDependencyResolver {
+    fn load_root(
+        &mut self,
+        key: &&'static str,
+    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+        assert_eq!(*key, "root");
+        Ok(ResolvedKey::load(
+            "root",
+            ElfBinary::new("visible_root.so", self.root_data),
+        ))
+    }
+
+    fn resolve_dependency(
+        &mut self,
+        req: &elf_loader::linker::DependencyRequest<'_, &'static str, ()>,
+    ) -> elf_loader::Result<Option<ResolvedKey<'static, &'static str>>> {
+        assert_eq!(req.needed(), "dep");
+        assert!(req.is_visible(&"dep"));
+        Ok(Some(ResolvedKey::existing("dep")))
+    }
+}
+
+impl VisibleModules<&'static str, ()> for StaticVisibleModule {
+    fn contains_key(&self, key: &&'static str) -> bool {
+        *key == self.key
+    }
+
+    fn direct_deps(&self, key: &&'static str) -> Option<Box<[&'static str]>> {
+        (*key == self.key).then(|| self.direct_deps.clone())
+    }
+
+    fn loaded(&self, key: &&'static str) -> Option<LoadedCore<()>> {
+        (*key == self.key).then(|| self.module.clone())
     }
 }
 
@@ -105,6 +225,41 @@ fn empty_relocation_plan(
     _req: &RelocationRequest<'_, &'static str, ()>,
 ) -> Result<RelocationInputs<()>, elf_loader::Error> {
     Ok(RelocationInputs::new(Vec::<LoadedCore<()>>::new()))
+}
+
+#[test]
+fn load_uses_configured_visible_modules_without_committing_them_locally() {
+    let dep_output = write_test_dylib(&[], &[]);
+    let mut loader = Loader::new();
+    let dep = load_relocated_dylib(&mut loader, "visible_dep.so", &dep_output);
+    let visible = StaticVisibleModule {
+        key: "dep",
+        module: (*dep).clone(),
+        direct_deps: Box::new([]),
+    };
+
+    let root_output = write_test_dylib_with_config(
+        ElfWriterConfig::default()
+            .with_bind_now(true)
+            .with_needed_lib("dep"),
+        &[],
+        &[],
+    );
+    let root_data: &'static [u8] = Box::leak(root_output.data.into_boxed_slice());
+    let resolver = VisibleDependencyResolver { root_data };
+    let mut context = LinkContext::<&'static str, ()>::new();
+
+    let root = Linker::new()
+        .visible_modules(visible)
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load(&mut context, "root")
+        .expect("load should resolve dependency through visible overlay");
+
+    assert_eq!(root.short_name(), "visible_root.so");
+    assert!(context.contains_key(&"root"));
+    assert!(!context.contains_key(&"dep"));
+    assert_eq!(context.direct_deps(&"root"), Some(&["dep"][..]));
 }
 
 struct TestPass<F>(F);
@@ -238,6 +393,138 @@ fn load_with_scan_reuses_existing_root_alias_without_planning() {
     assert_eq!(alias_loaded.mapped_len(), loaded.mapped_len());
     assert!(context.contains_key(&"canonical"));
     assert!(!context.contains_key(&"alias"));
+}
+
+#[test]
+fn load_observer_fires_for_runtime_root_and_dependency_before_relocation() {
+    let dep_output = write_test_dylib(&[], &[SymbolDesc::global_object("dep_value", &[1])]);
+    let root_output = write_test_dylib_with_config(
+        ElfWriterConfig::default()
+            .with_bind_now(true)
+            .with_needed_lib("dep"),
+        &[],
+        &[SymbolDesc::global_object("root_value", &[2])],
+    );
+    let dep_bytes: &'static [u8] = Box::leak(dep_output.data.into_boxed_slice());
+    let root_bytes: &'static [u8] = Box::leak(root_output.data.into_boxed_slice());
+
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let planned = Rc::new(RefCell::new(Vec::new()));
+    let resolver = MultiBinaryResolver {
+        root: "root",
+        modules: vec![
+            BinaryModule {
+                key: "root",
+                name: "root.so",
+                data: root_bytes,
+            },
+            BinaryModule {
+                key: "dep",
+                name: "dep.so",
+                data: dep_bytes,
+            },
+        ],
+    };
+    let observer = RecordingObserver {
+        events: Rc::clone(&observed),
+    };
+    let planner = {
+        let observed = Rc::clone(&observed);
+        let planned = Rc::clone(&planned);
+        move |req: &RelocationRequest<'_, &'static str, ()>| {
+            planned.borrow_mut().push((*req.key()).to_string());
+            assert_eq!(
+                *observed.borrow(),
+                vec!["root".to_string(), "dep".to_string()],
+                "all staged modules should be observed before relocation planning"
+            );
+            Ok(RelocationInputs::new(Vec::<LoadedCore<()>>::new()))
+        }
+    };
+
+    let mut context = LinkContext::<&'static str, ()>::new();
+    Linker::new()
+        .resolver(resolver)
+        .observer(observer)
+        .planner(planner)
+        .load(&mut context, "root")
+        .expect("failed to load root with dependency");
+
+    assert_eq!(
+        *observed.borrow(),
+        vec!["root".to_string(), "dep".to_string()]
+    );
+    assert_eq!(
+        *planned.borrow(),
+        vec!["dep".to_string(), "root".to_string()],
+        "relocation should still run in dependency-first order"
+    );
+    assert!(context.contains_key(&"root"));
+    assert!(context.contains_key(&"dep"));
+}
+
+#[test]
+fn load_scan_first_observer_fires_after_scan_materialization() {
+    let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
+    let bytes: &'static [u8] = Box::leak(output.data.into_boxed_slice());
+
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let saw_scan_phase = Rc::new(RefCell::new(false));
+    let configure = {
+        let observed = Rc::clone(&observed);
+        let saw_scan_phase = Rc::clone(&saw_scan_phase);
+        move |_plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
+            assert!(
+                observed.borrow().is_empty(),
+                "scan planning must not notify the staged RawDylib observer"
+            );
+            *saw_scan_phase.borrow_mut() = true;
+            Ok(())
+        }
+    };
+
+    let mut context = LinkContext::<&'static str, ()>::new();
+    Linker::new()
+        .map_pipeline(|mut pipeline| {
+            pipeline.push(TestPass(configure));
+            pipeline
+        })
+        .resolver(SingleBinaryResolver {
+            key: "root",
+            name: "scan_observer_root.so",
+            data: bytes,
+        })
+        .observer(RecordingObserver {
+            events: Rc::clone(&observed),
+        })
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "root")
+        .expect("failed to execute scan-first observer test");
+
+    assert!(*saw_scan_phase.borrow());
+    assert_eq!(*observed.borrow(), vec!["root".to_string()]);
+    assert!(context.contains_key(&"root"));
+}
+
+#[test]
+fn load_observer_error_aborts_without_committing_context() {
+    let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
+    let bytes: &'static [u8] = Box::leak(output.data.into_boxed_slice());
+
+    let mut context = LinkContext::<&'static str, ()>::new();
+    let err = Linker::new()
+        .resolver(SingleBinaryResolver {
+            key: "root",
+            name: "observer_error_root.so",
+            data: bytes,
+        })
+        .observer(FailingObserver)
+        .planner(empty_relocation_plan)
+        .load(&mut context, "root")
+        .expect_err("observer error should abort load");
+
+    assert!(err.to_string().contains("observer failed"));
+    assert!(context.is_empty());
 }
 
 #[test]

@@ -63,6 +63,8 @@ pub struct ElfWriterConfig {
     pub bind_now: bool,
     /// Whether to emit one retained relocation section for the data section.
     pub emit_retained_relocations: bool,
+    /// DT_NEEDED entries to emit into the dynamic section.
+    pub needed: Vec<String>,
 }
 
 impl Default for ElfWriterConfig {
@@ -73,6 +75,7 @@ impl Default for ElfWriterConfig {
             ifunc_resolver_val: None,
             bind_now: false,
             emit_retained_relocations: false,
+            needed: Vec::new(),
         }
     }
 }
@@ -105,6 +108,12 @@ impl ElfWriterConfig {
     /// Emit a minimal retained relocation section for the data section.
     pub fn with_emit_retained_relocations(mut self, emit: bool) -> Self {
         self.emit_retained_relocations = emit;
+        self
+    }
+
+    /// Add a DT_NEEDED entry to the generated ELF.
+    pub fn with_needed_lib(mut self, name: impl Into<String>) -> Self {
+        self.needed.push(name.into());
         self
     }
 }
@@ -220,7 +229,13 @@ impl DylibWriter {
         let final_relocs = RelocMetaData::preprocess(self.arch, raw_relocs);
 
         let mut allocator = SectionAllocator::new();
-        let mut symtab = SymTabMetadata::new(self.arch, symbols, &final_relocs, &mut allocator);
+        let mut symtab = SymTabMetadata::new(
+            self.arch,
+            symbols,
+            &final_relocs,
+            &self.config.needed,
+            &mut allocator,
+        );
         let mut reloc = RelocMetaData::new(self.arch, &final_relocs, &symtab, &mut allocator)?;
 
         let data = DataMetaData::new(&reloc, &symtab, &mut allocator);
@@ -273,8 +288,13 @@ impl DylibWriter {
         }
 
         // 2. Create .dynamic section (placeholder)
-        let mut dyn_meta =
-            DynamicMetadata::new(self.arch, &sections, &mut allocator, self.config.bind_now);
+        let mut dyn_meta = DynamicMetadata::new(
+            self.arch,
+            &sections,
+            &mut allocator,
+            self.config.bind_now,
+            symtab.needed_offsets(),
+        );
         dyn_meta.create_section(&mut sections);
 
         // 3. Initialize ShdrManager and Layout

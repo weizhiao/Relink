@@ -1,4 +1,4 @@
-use super::{session::ResolveSession, storage::CommittedStorageView};
+use super::{request::VisibleModules, session::ResolveSession, storage::CommittedStorageView};
 
 pub(crate) trait DependencyGraphEntries<K> {
     fn contains_key(&self, key: &K) -> bool;
@@ -21,17 +21,18 @@ where
     }
 }
 
-enum DependencyGraphSource<'a, K, D: 'static> {
-    Committed(CommittedStorageView<'a, K, D>),
+enum DependencyGraphSource<'a, K: Clone, D: 'static, M = ()> {
+    Committed(CommittedStorageView<'a, K, D, M>),
     Overlay {
-        committed: CommittedStorageView<'a, K, D>,
+        committed: CommittedStorageView<'a, K, D, M>,
         local: &'a dyn DependencyGraphEntries<K>,
+        visible: &'a dyn VisibleModules<K, D>,
     },
 }
 
-impl<'a, K, D: 'static> Copy for DependencyGraphSource<'a, K, D> {}
+impl<'a, K: Clone, D: 'static, M> Copy for DependencyGraphSource<'a, K, D, M> {}
 
-impl<'a, K, D: 'static> Clone for DependencyGraphSource<'a, K, D> {
+impl<'a, K: Clone, D: 'static, M> Clone for DependencyGraphSource<'a, K, D, M> {
     #[inline]
     fn clone(&self) -> Self {
         *self
@@ -39,25 +40,25 @@ impl<'a, K, D: 'static> Clone for DependencyGraphSource<'a, K, D> {
 }
 
 /// Read-only dependency-graph view visible to one resolution pass.
-pub struct DependencyGraphView<'a, K, D: 'static> {
-    source: DependencyGraphSource<'a, K, D>,
+pub struct DependencyGraphView<'a, K: Clone, D: 'static, M = ()> {
+    source: DependencyGraphSource<'a, K, D, M>,
 }
 
-impl<'a, K, D: 'static> Copy for DependencyGraphView<'a, K, D> {}
+impl<'a, K: Clone, D: 'static, M> Copy for DependencyGraphView<'a, K, D, M> {}
 
-impl<'a, K, D: 'static> Clone for DependencyGraphView<'a, K, D> {
+impl<'a, K: Clone, D: 'static, M> Clone for DependencyGraphView<'a, K, D, M> {
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, K, D: 'static> DependencyGraphView<'a, K, D>
+impl<'a, K, D: 'static, M> DependencyGraphView<'a, K, D, M>
 where
-    K: Ord,
+    K: Clone + Ord,
 {
     #[inline]
-    pub(crate) fn new_committed(committed: CommittedStorageView<'a, K, D>) -> Self {
+    pub(crate) fn new_committed(committed: CommittedStorageView<'a, K, D, M>) -> Self {
         Self {
             source: DependencyGraphSource::Committed(committed),
         }
@@ -65,11 +66,16 @@ where
 
     #[inline]
     pub(crate) fn new_overlay(
-        committed: CommittedStorageView<'a, K, D>,
+        committed: CommittedStorageView<'a, K, D, M>,
         local: &'a dyn DependencyGraphEntries<K>,
+        visible: &'a dyn VisibleModules<K, D>,
     ) -> Self {
         Self {
-            source: DependencyGraphSource::Overlay { committed, local },
+            source: DependencyGraphSource::Overlay {
+                committed,
+                local,
+                visible,
+            },
         }
     }
 
@@ -78,8 +84,12 @@ where
     pub fn contains_key(&self, key: &K) -> bool {
         match self.source {
             DependencyGraphSource::Committed(committed) => committed.contains_key(key),
-            DependencyGraphSource::Overlay { committed, local } => {
-                local.contains_key(key) || committed.contains_key(key)
+            DependencyGraphSource::Overlay {
+                committed,
+                local,
+                visible,
+            } => {
+                local.contains_key(key) || committed.contains_key(key) || visible.contains_key(key)
             }
         }
     }
@@ -89,7 +99,9 @@ where
     pub fn direct_deps(&self, key: &K) -> Option<&'a [K]> {
         match self.source {
             DependencyGraphSource::Committed(committed) => committed.direct_deps(key),
-            DependencyGraphSource::Overlay { committed, local } => local
+            DependencyGraphSource::Overlay {
+                committed, local, ..
+            } => local
                 .direct_deps(key)
                 .or_else(|| committed.direct_deps(key)),
         }

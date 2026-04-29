@@ -31,8 +31,8 @@ pub use plan::{
     ReorderAccess, ReorderPass, SectionDataAccess,
 };
 pub use request::{
-    DefaultRelocationPlanner, DependencyOwner, DependencyRequest, RelocationInputs,
-    RelocationPlanner, RelocationRequest,
+    DefaultRelocationPlanner, DependencyOwner, DependencyRequest, LoadObserver, RelocationInputs,
+    RelocationPlanner, RelocationRequest, StagedDylib, VisibleModules,
 };
 pub use resolve::{KeyResolver, ResolvedKey};
 pub use view::DependencyGraphView;

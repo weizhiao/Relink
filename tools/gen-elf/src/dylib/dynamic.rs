@@ -28,6 +28,7 @@ impl DynamicMetadata {
         sections: &[Section],
         allocator: &mut SectionAllocator,
         bind_now: bool,
+        needed_offsets: &[u32],
     ) -> Self {
         let dynamic_id = allocator.allocate(0);
         let mut instance = Self {
@@ -36,6 +37,9 @@ impl DynamicMetadata {
             dynamic_id,
         };
         instance.init_from_sections(sections);
+        for offset in needed_offsets {
+            instance.insert_entry(DT_NEEDED as i64, *offset as u64);
+        }
         if bind_now {
             instance.update_entry(DT_FLAGS as i64, DF_BIND_NOW as u64);
         }
@@ -119,6 +123,18 @@ impl DynamicMetadata {
 
     pub(crate) fn add_entry(&mut self, tag: i64, value: u64) {
         self.dyn_entries.push(DynamicEntry { tag, value });
+    }
+
+    pub(crate) fn insert_entry(&mut self, tag: i64, value: u64) {
+        if let Some(pos) = self
+            .dyn_entries
+            .iter()
+            .position(|entry| entry.tag == DT_NULL as i64)
+        {
+            self.dyn_entries.insert(pos, DynamicEntry { tag, value });
+        } else {
+            self.add_entry(tag, value);
+        }
     }
 
     pub(crate) fn update_entry(&mut self, tag: i64, value: u64) {
