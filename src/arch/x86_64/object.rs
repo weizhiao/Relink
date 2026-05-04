@@ -58,7 +58,7 @@ impl ObjectReloc for ObjectRelocator {
         };
         let write_relocation_target = |target| {
             <Architecture as crate::relocation::RelocationValueProvider>::relocation_value(
-                r_type,
+                r_type.raw() as usize,
                 target,
                 append,
                 p.into_inner(),
@@ -69,7 +69,7 @@ impl ObjectReloc for ObjectRelocator {
             )
         };
 
-        match r_type as _ {
+        match r_type.raw() {
             R_X86_64_NONE => {}
             R_X86_64_64 => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
@@ -146,11 +146,11 @@ impl ObjectReloc for ObjectRelocator {
         Ok(())
     }
 
-    fn needs_got(rel_type: u32) -> bool {
-        matches!(rel_type, R_X86_64_GOTPCREL | R_X86_64_PLT32)
+    fn needs_got(rel_type: crate::elf::ElfRelocationType) -> bool {
+        matches!(rel_type.raw(), R_X86_64_GOTPCREL | R_X86_64_PLT32)
     }
 
-    fn needs_plt(rel_type: u32) -> bool {
-        rel_type == R_X86_64_PLT32
+    fn needs_plt(rel_type: crate::elf::ElfRelocationType) -> bool {
+        rel_type.raw() == R_X86_64_PLT32
     }
 }

@@ -28,7 +28,7 @@ pub(crate) use shdr::ElfShdr;
 pub(crate) use symbol::{ElfStringTable, SymbolInfo, SymbolTable};
 
 // Public API exports
-pub use defs::{ElfClass, ElfFileType, ElfMachine, ElfRel, ElfRelType, ElfRela};
+pub use defs::{ElfClass, ElfFileType, ElfMachine, ElfRel, ElfRelType, ElfRela, ElfRelocationType};
 pub use dynamic::{ElfDyn, ElfDynamicTag};
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::ElfHeader;

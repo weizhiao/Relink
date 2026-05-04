@@ -13,8 +13,6 @@ use elf::abi::*;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use lazy::{DYLIB_OFFSET, RESOLVE_FUNCTION_OFFSET, dl_runtime_resolve};
 #[cfg(feature = "tls")]
-pub use tls::{REL_DTPMOD, REL_DTPOFF, REL_TLSDESC, REL_TPOFF, TLS_DTV_OFFSET};
-#[cfg(feature = "tls")]
 pub(crate) use tls::{get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static};
 
 /// Custom relocation type constants for x86 (32-bit).
@@ -38,6 +36,11 @@ pub const REL_SYMBOLIC: u32 = R_386_32;
 pub const REL_JUMP_SLOT: u32 = R_386_JMP_SLOT;
 pub const REL_IRELATIVE: u32 = R_386_IRELATIVE;
 pub const REL_COPY: u32 = R_386_COPY;
+pub const TLS_DTV_OFFSET: usize = 0;
+pub const REL_DTPMOD: u32 = R_386_TLS_DTPMOD32;
+pub const REL_DTPOFF: u32 = R_386_TLS_DTPOFF32;
+pub const REL_TPOFF: u32 = R_386_TLS_TPOFF;
+pub const REL_TLSDESC: u32 = 0;
 
 pub(crate) struct Architecture;
 

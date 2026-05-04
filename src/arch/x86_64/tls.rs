@@ -1,11 +1,3 @@
-use elf::abi::*;
-
-pub const TLS_DTV_OFFSET: usize = 0;
-pub const REL_DTPMOD: u32 = R_X86_64_DTPMOD64;
-pub const REL_DTPOFF: u32 = R_X86_64_DTPOFF64;
-pub const REL_TPOFF: u32 = R_X86_64_TPOFF64;
-pub const REL_TLSDESC: u32 = R_X86_64_TLSDESC;
-
 pub(crate) unsafe fn get_thread_pointer() -> *mut u8 {
     let tp: *mut u8;
     unsafe {

@@ -1,18 +1,18 @@
 use super::Architecture;
-use crate::{LinkerError, Result};
+use crate::{LinkerError, Result, elf::ElfRelocationType};
 use core::mem::size_of;
 use elf::abi::{R_X86_64_GOTPCREL, R_X86_64_PLT32};
 
 impl crate::linker::GotPltTarget for Architecture {
     fn got_plt_target(
         target_bytes: &[u8],
-        relocation_type: usize,
+        relocation_type: ElfRelocationType,
         symbol_is_undef: bool,
         section_offset: usize,
         source_place: usize,
         addend: isize,
     ) -> Result<Option<usize>> {
-        match relocation_type as u32 {
+        match relocation_type.raw() {
             // These relocation types target an already-created GOT/PLT slot. For
             // undefined symbols, st_value is zero until the dynamic relocation pass
             // fills that slot, so recover the slot address from the original

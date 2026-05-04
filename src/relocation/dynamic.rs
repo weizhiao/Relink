@@ -2,15 +2,14 @@
 use crate::sync::Arc;
 use crate::{
     ParseDynamicError, Result,
-    arch::*,
-    elf::{ElfRelType, ElfRelr},
+    elf::{ElfRelType, ElfRelocationType, ElfRelr},
     image::{DynamicImage, LoadedCore},
     logging,
     relocation::{
         RelocArtifacts, RelocHelper, RelocateArgs, RelocationHandler, ResolvedBinding,
         SymbolLookup, likely, reloc_error, resolve_ifunc, unlikely,
     },
-    tls::{handle_tls_reloc, is_tls_relocation, is_tlsdesc_relocation, lookup_tls_get_addr},
+    tls::{handle_tls_reloc, lookup_tls_get_addr},
 };
 use core::num::NonZeroUsize;
 
@@ -170,11 +169,11 @@ impl<D> DynamicImage<D> {
             if !helper.handle_pre(rel)?.is_unhandled() {
                 continue;
             }
-            let r_type = rel.r_type() as u32;
+            let r_type = rel.r_type();
             let r_sym = rel.r_symbol();
 
             // Handle jump slot relocations
-            if likely(r_type == REL_JUMP_SLOT) {
+            if likely(r_type == ElfRelocationType::JUMP_SLOT) {
                 if binding.relocate_jump_slot(base, rel) {
                     continue;
                 }
@@ -183,13 +182,13 @@ impl<D> DynamicImage<D> {
                     segments.write(rel.r_offset(), symbol);
                     continue;
                 }
-            } else if unlikely(r_type == REL_IRELATIVE) {
+            } else if unlikely(r_type.is_irelative()) {
                 // Handle indirect function relocations
                 let r_addend = rel.r_addend(base.into_inner());
                 let addr = base.addend(r_addend);
                 segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 continue;
-            } else if unlikely(is_tlsdesc_relocation(r_type)) {
+            } else if unlikely(r_type.is_tlsdesc()) {
                 // Handle TLSDESC relocations
                 if handle_tls_reloc(helper, rel) {
                     continue;
@@ -216,10 +215,10 @@ impl<D> DynamicImage<D> {
 
         match reloc.relative {
             RelativeRel::Rel(rel) => {
-                assert!(rel.is_empty() || rel[0].r_type() == REL_RELATIVE as usize);
+                assert!(rel.is_empty() || rel[0].r_type().is_relative());
                 // Apply all relative relocations: new_value = base_address + addend
                 for rel in rel {
-                    debug_assert!(rel.r_type() == REL_RELATIVE as usize);
+                    debug_assert!(rel.r_type().is_relative());
                     let r_addend = rel.r_addend(base.into_inner());
                     segments.write(rel.r_offset(), base.addend(r_addend));
                 }
@@ -284,23 +283,23 @@ impl<D> DynamicImage<D> {
             if !helper.handle_pre(rel)?.is_unhandled() {
                 continue;
             }
-            let r_type = rel.r_type() as u32;
+            let r_type = rel.r_type();
             let r_sym = rel.r_symbol();
 
             // Handle `REL_NONE` first because some architectures use `0` as a
             // sentinel for unsupported relocation classes such as TLSDESC.
-            if r_type == REL_NONE {
+            if r_type.is_none() {
                 continue;
             }
 
-            if r_type == REL_GOT || r_type == REL_SYMBOLIC {
+            if r_type == ElfRelocationType::GOT || r_type == ElfRelocationType::SYMBOLIC {
                 // Handle GOT and symbolic relocations
                 if let Some(symbol) = helper.find_symbol(r_sym) {
                     let r_addend = rel.r_addend(base.into_inner());
                     segments.write(rel.r_offset(), symbol.addend(r_addend));
                     continue;
                 }
-            } else if r_type == REL_COPY {
+            } else if r_type == ElfRelocationType::COPY {
                 // Handle copy relocations (typically for global data)
                 if let Some(symdef) = helper.find_symdef(r_sym) {
                     let len = core.symtab().symbol_idx(r_sym).0.st_size();
@@ -312,13 +311,13 @@ impl<D> DynamicImage<D> {
                     dest.copy_from_slice(src);
                     continue;
                 }
-            } else if r_type == REL_IRELATIVE {
+            } else if r_type.is_irelative() {
                 // Handle indirect function relocations
                 let r_addend = rel.r_addend(base.into_inner());
                 let addr = base.addend(r_addend);
                 segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 continue;
-            } else if is_tls_relocation(r_type) {
+            } else if r_type.is_tls() {
                 // Handle TLS (Thread Local Storage) relocations
                 if handle_tls_reloc(helper, rel) {
                     continue;

@@ -1,4 +1,4 @@
-use super::{RuntimeModuleMemory, RuntimeSectionMemory, SectionId};
+use super::{RuntimeModuleMemory, RuntimeOffset, RuntimeSectionMemory, SectionId, SourceAddress};
 use crate::linker::{
     layout::DataAccess,
     plan::{LinkPlan, ModuleId},
@@ -6,8 +6,8 @@ use crate::linker::{
 use crate::{
     AlignedBytes, LinkerError, Result,
     aligned_bytes::ByteRepr,
-    arch::{Architecture, REL_NONE},
-    elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol},
+    arch::Architecture,
+    elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfRelocationType, ElfSymbol},
     image::ScannedSectionId,
 };
 use core::{cell::Cell, mem::size_of};
@@ -15,7 +15,7 @@ use core::{cell::Cell, mem::size_of};
 #[derive(Clone, Copy)]
 struct RelocationSite {
     section: SectionId,
-    place: usize,
+    place: RuntimeOffset,
     section_offset: usize,
     addend: Option<isize>,
 }
@@ -28,9 +28,9 @@ struct RelocationSection<'a> {
 }
 
 #[derive(Clone, Copy)]
-struct RelocationSiteRequest {
-    r_type: u32,
-    offset: usize,
+struct RelocationEntryInfo {
+    r_type: ElfRelocationType,
+    offset: SourceAddress,
     addend: RelocationAddend,
 }
 
@@ -46,7 +46,7 @@ enum RelocationAddend {
 pub(crate) trait GotPltTarget {
     fn got_plt_target(
         _target_bytes: &[u8],
-        _relocation_type: usize,
+        _relocation_type: ElfRelocationType,
         _symbol_is_undef: bool,
         _section_offset: usize,
         _source_place: usize,
@@ -56,11 +56,11 @@ pub(crate) trait GotPltTarget {
     }
 }
 
-impl RelocationSiteRequest {
+impl RelocationEntryInfo {
     fn new(entry: &ElfRelType) -> Self {
         Self {
-            r_type: entry.r_type() as u32,
-            offset: entry.r_offset(),
+            r_type: entry.r_type(),
+            offset: SourceAddress::new(entry.r_offset()),
             addend: relocation_addend(entry),
         }
     }
@@ -83,8 +83,8 @@ impl RuntimeModuleMemory {
             )
             .into());
         };
-        if let Some(offset) = section.source_offset(value) {
-            return Ok(section.runtime_offset + offset);
+        if let Some(offset) = section.runtime_offset(SourceAddress::new(value)) {
+            return Ok(offset.get());
         }
         Err(LinkerError::metadata_rewrite(
             "arena-backed symbol value does not map into its target section",
@@ -95,7 +95,7 @@ impl RuntimeModuleMemory {
     fn relocation_site(
         &self,
         section: RelocationSection<'_>,
-        request: RelocationSiteRequest,
+        entry_info: RelocationEntryInfo,
         addend_bytes: Option<&[u8]>,
     ) -> Result<RelocationSite> {
         let place = section
@@ -103,7 +103,7 @@ impl RuntimeModuleMemory {
             .runtime_offset
             .checked_add(section.offset)
             .expect("arena-backed runtime offset should not overflow");
-        let addend = match request.addend {
+        let addend = match entry_info.addend {
             RelocationAddend::Explicit(addend) => Some(addend),
             RelocationAddend::Implicit => addend_bytes
                 .map(|bytes| implicit_relocation_addend(bytes, section.offset))
@@ -121,7 +121,7 @@ impl RuntimeModuleMemory {
     fn relocation_section(
         &self,
         target: Option<SectionId>,
-        source_address: usize,
+        source_address: SourceAddress,
     ) -> Result<RelocationSection<'_>> {
         if let Some(section_id) = target {
             return self.relocation_in_section(section_id, source_address, || {
@@ -146,7 +146,7 @@ impl RuntimeModuleMemory {
     fn relocation_in_section(
         &self,
         section_id: SectionId,
-        source_address: usize,
+        source_address: SourceAddress,
         missing_section: impl FnOnce() -> LinkerError,
     ) -> Result<RelocationSection<'_>> {
         let section = self.section(section_id).ok_or_else(missing_section)?;
@@ -160,7 +160,7 @@ impl RuntimeModuleMemory {
         })
     }
 
-    fn addr_to_section(&self, source_address: usize) -> Option<SectionId> {
+    fn addr_to_section(&self, source_address: SourceAddress) -> Option<SectionId> {
         self.sections.iter().find_map(|section| {
             section
                 .source_offset(source_address)
@@ -168,22 +168,28 @@ impl RuntimeModuleMemory {
         })
     }
 
-    fn remap_relocation_addend(&self, site: RelocationSite) -> Result<(usize, isize)> {
-        let source_address = usize::try_from(
-            site.addend
-                .expect("allocated relocation should carry an addend"),
-        )
-        .expect("allocated relocation addend should be a source address");
+    fn remap_relocation_addend(&self, site: RelocationSite) -> Result<(RuntimeOffset, isize)> {
+        let source_address = SourceAddress::new(
+            usize::try_from(
+                site.addend
+                    .expect("allocated relocation should carry an addend"),
+            )
+            .expect("allocated relocation addend should be a source address"),
+        );
         let runtime_offset = self
-            .remap_source_address(source_address)
+            .remap_source_to_runtime_offset(source_address)
             .expect("allocated relocation addend should map into arena-backed memory");
-        let runtime_addend =
-            isize::try_from(runtime_offset).expect("runtime relocation addend should fit in isize");
+        let runtime_addend = isize::try_from(runtime_offset.get())
+            .expect("runtime relocation addend should fit in isize");
 
         Ok((runtime_offset, runtime_addend))
     }
 
-    fn remap_dynamic_value(&self, tag: ElfDynamicTag, value: usize) -> Result<Option<usize>> {
+    fn remap_dynamic_value(
+        &self,
+        tag: ElfDynamicTag,
+        value: usize,
+    ) -> Result<Option<RuntimeOffset>> {
         match tag {
             ElfDynamicTag::PLTGOT
             | ElfDynamicTag::HASH
@@ -201,7 +207,7 @@ impl RuntimeModuleMemory {
             | ElfDynamicTag::VERSYM
             | ElfDynamicTag::VERNEED
             | ElfDynamicTag::VERDEF => self
-                .remap_source_address(value)
+                .remap_source_to_runtime_offset(SourceAddress::new(value))
                 .map(Some)
                 .ok_or_else(|| {
                     LinkerError::metadata_rewrite(
@@ -369,17 +375,17 @@ where
             self.plan.for_each_section_data::<ElfRelType, _>(
                 section,
                 |entry, _| {
-                    let request = RelocationSiteRequest::new(entry);
-                    if request.r_type == REL_NONE {
+                    let entry_info = RelocationEntryInfo::new(entry);
+                    if entry_info.r_type.is_none() {
                         return Ok(None);
                     }
 
                     let relocation_section =
-                        runtime.relocation_section(target_section, request.offset)?;
-                    let site = runtime.relocation_site(relocation_section, request, None)?;
-                    Ok(Some((request, site)))
+                        runtime.relocation_section(target_section, entry_info.offset)?;
+                    let site = runtime.relocation_site(relocation_section, entry_info, None)?;
+                    Ok(Some((entry_info, site)))
                 },
-                |plan, index, (request, mut site)| {
+                |plan, index, (entry_info, mut site)| {
                     if site.addend.is_none() {
                         return plan.with_disjoint_section_data(
                             [
@@ -393,7 +399,9 @@ where
                                     site_data.as_bytes(),
                                     site.section_offset,
                                 )?);
-                                if is_relative_relocation(request.r_type) {
+                                if entry_info.r_type.is_relative()
+                                    || entry_info.r_type.is_irelative()
+                                {
                                     let (runtime_offset, runtime_addend) =
                                         runtime.remap_relocation_addend(site)?;
                                     write_runtime_relocation_addend(
@@ -407,7 +415,7 @@ where
                             },
                         );
                     }
-                    if is_relative_relocation(request.r_type) {
+                    if entry_info.r_type.is_relative() || entry_info.r_type.is_irelative() {
                         site.addend = Some(runtime.remap_relocation_addend(site)?.1);
                     }
                     let data = plan.section_data_mut(section)?;
@@ -432,7 +440,7 @@ where
         for dyn_ in dyns.iter_mut() {
             let tag = dyn_.tag();
             if let Some(value) = self.runtime.remap_dynamic_value(tag, dyn_.value())? {
-                dyn_.set_value(value);
+                dyn_.set_value(value.get());
             }
             if tag == ElfDynamicTag::NULL {
                 break;
@@ -441,10 +449,6 @@ where
 
         Ok(())
     }
-}
-
-fn is_relative_relocation(r_type: u32) -> bool {
-    r_type == crate::arch::REL_RELATIVE || r_type == crate::arch::REL_IRELATIVE
 }
 
 fn rewrite_allocated_relocation_entry(
@@ -460,14 +464,14 @@ fn rewrite_allocated_relocation_entry(
     if let Some(addend) = site.addend {
         rel.set_addend(0, addend);
     }
-    rel.set_offset(site.place);
+    rel.set_offset(site.place.get());
     Ok(())
 }
 
 fn write_runtime_relocation_addend(
     data: &mut AlignedBytes,
     site: RelocationSite,
-    addend: usize,
+    addend: RuntimeOffset,
 ) -> Result<()> {
     #[cfg(any(target_arch = "x86", target_arch = "arm"))]
     {
@@ -479,7 +483,7 @@ fn write_runtime_relocation_addend(
             .as_bytes_mut()
             .get_mut(site.section_offset..end)
             .expect("allocated relocation addend should fit in its target section");
-        bytes.copy_from_slice(&addend.to_ne_bytes());
+        bytes.copy_from_slice(&addend.get().to_ne_bytes());
     }
 
     #[cfg(not(any(target_arch = "x86", target_arch = "arm")))]
@@ -523,16 +527,13 @@ fn write_retained_relocation(
     entry: &ElfRelType,
     symbols: &[ElfSymbol],
 ) -> Result<()> {
-    if entry.r_type() as u32 == REL_NONE {
+    let entry_info = RelocationEntryInfo::new(entry);
+    if entry_info.r_type.is_none() {
         return Ok(());
     }
 
-    let relocation_section = runtime.relocation_section(Some(target_section), entry.r_offset())?;
-    let site = runtime.relocation_site(
-        relocation_section,
-        RelocationSiteRequest::new(entry),
-        Some(target_bytes),
-    )?;
+    let relocation_section = runtime.relocation_section(Some(target_section), entry_info.offset)?;
+    let site = runtime.relocation_site(relocation_section, entry_info, Some(target_bytes))?;
     let symbol = symbols.get(entry.r_symbol()).ok_or_else(|| {
         LinkerError::metadata_rewrite("retained relocation references a missing symbol table entry")
     })?;
@@ -559,10 +560,10 @@ fn write_retained_relocation(
     };
 
     <Architecture as crate::relocation::RelocationValueProvider>::relocation_value(
-        entry.r_type(),
+        entry.r_type().raw() as usize,
         symbol_value,
         addend,
-        site.place,
+        site.place.get(),
         |_| Ok(()),
         |value| write_bytes(&value.into_inner().to_ne_bytes()),
         |value| write_bytes(&value.into_inner().to_ne_bytes()),
@@ -586,12 +587,14 @@ fn retained_relocation_target(
         entry.r_offset(),
         addend,
     )? {
-        let runtime_target = runtime.remap_source_address(source_target).ok_or_else(|| {
-            LinkerError::metadata_rewrite(
-                "retained relocation indirect target does not map into arena-backed memory",
-            )
-        })?;
-        return Ok(runtime_target);
+        let runtime_target = runtime
+            .remap_source_to_runtime_offset(SourceAddress::new(source_target))
+            .ok_or_else(|| {
+                LinkerError::metadata_rewrite(
+                    "retained relocation indirect target does not map into arena-backed memory",
+                )
+            })?;
+        return Ok(runtime_target.get());
     }
 
     // Symbol tables are rewritten first, so st_value is already in

@@ -11,7 +11,10 @@ use elf::abi::{
     ET_DYN, ET_EXEC, ET_NONE, ET_REL,
 };
 
-use crate::arch::rel_type_to_str;
+use crate::arch::{
+    REL_COPY, REL_DTPMOD, REL_DTPOFF, REL_GOT, REL_IRELATIVE, REL_JUMP_SLOT, REL_NONE,
+    REL_RELATIVE, REL_SYMBOLIC, REL_TLSDESC, REL_TPOFF, rel_type_to_str,
+};
 
 #[cfg(feature = "object")]
 use super::shdr::ElfSectionType;
@@ -229,6 +232,97 @@ impl ElfRelr {
     }
 }
 
+/// Semantic wrapper for the ELF relocation type encoded in `r_info`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfRelocationType(u32);
+
+impl ElfRelocationType {
+    pub const NONE: Self = Self(REL_NONE);
+    pub const RELATIVE: Self = Self(REL_RELATIVE);
+    pub const GOT: Self = Self(REL_GOT);
+    pub const SYMBOLIC: Self = Self(REL_SYMBOLIC);
+    pub const JUMP_SLOT: Self = Self(REL_JUMP_SLOT);
+    pub const IRELATIVE: Self = Self(REL_IRELATIVE);
+    pub const COPY: Self = Self(REL_COPY);
+    pub const DTPMOD: Self = Self(REL_DTPMOD);
+    pub const DTPOFF: Self = Self(REL_DTPOFF);
+    pub const TPOFF: Self = Self(REL_TPOFF);
+    pub const TLSDESC: Self = Self(REL_TLSDESC);
+
+    const HAS_TLSDESC: bool = REL_TLSDESC != REL_NONE && REL_TLSDESC <= REL_MASK as u32;
+
+    #[inline]
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+
+    #[inline]
+    pub const fn is_none(self) -> bool {
+        self.0 == REL_NONE
+    }
+
+    #[inline]
+    pub const fn is_relative(self) -> bool {
+        self.0 == REL_RELATIVE
+    }
+
+    #[inline]
+    pub const fn is_irelative(self) -> bool {
+        self.0 == REL_IRELATIVE
+    }
+
+    #[inline]
+    pub const fn is_dtpmod(self) -> bool {
+        self.0 == REL_DTPMOD
+    }
+
+    #[inline]
+    pub const fn is_dtpoff(self) -> bool {
+        self.0 == REL_DTPOFF
+    }
+
+    #[inline]
+    pub const fn is_tpoff(self) -> bool {
+        self.0 == REL_TPOFF
+    }
+
+    #[inline]
+    pub const fn is_tlsdesc(self) -> bool {
+        Self::HAS_TLSDESC && self.0 == REL_TLSDESC
+    }
+
+    #[inline]
+    pub const fn is_tls(self) -> bool {
+        self.is_dtpmod() || self.is_dtpoff() || self.is_tpoff() || self.is_tlsdesc()
+    }
+}
+
+impl From<u32> for ElfRelocationType {
+    #[inline]
+    fn from(value: u32) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfRelocationType> for u32 {
+    #[inline]
+    fn from(value: ElfRelocationType) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfRelocationType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(rel_type_to_str(self.0 as usize))
+    }
+}
+
 /// ELF RELA relocation entry.
 #[repr(transparent)]
 pub struct ElfRela {
@@ -238,8 +332,8 @@ pub struct ElfRela {
 impl ElfRela {
     /// Returns the relocation type.
     #[inline]
-    pub fn r_type(&self) -> usize {
-        self.rela.r_info as usize & REL_MASK
+    pub fn r_type(&self) -> ElfRelocationType {
+        ElfRelocationType::new((self.rela.r_info as usize & REL_MASK) as u32)
     }
 
     /// Returns the symbol index.
@@ -285,8 +379,8 @@ pub struct ElfRel {
 impl ElfRel {
     /// Returns the relocation type.
     #[inline]
-    pub fn r_type(&self) -> usize {
-        self.rel.r_info as usize & REL_MASK
+    pub fn r_type(&self) -> ElfRelocationType {
+        ElfRelocationType::new((self.rel.r_info as usize & REL_MASK) as u32)
     }
 
     /// Returns the symbol index.
@@ -363,6 +457,6 @@ impl ElfRelType {
     #[inline]
     pub fn r_type_str(&self) -> &'static str {
         let r_type = self.r_type();
-        rel_type_to_str(r_type)
+        rel_type_to_str(r_type.raw() as usize)
     }
 }

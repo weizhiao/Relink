@@ -25,8 +25,6 @@ const R_LARCH_IRELATIVE: u32 = 12;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use lazy::{DYLIB_OFFSET, RESOLVE_FUNCTION_OFFSET, dl_runtime_resolve};
 #[cfg(feature = "tls")]
-pub use tls::{REL_DTPMOD, REL_DTPOFF, REL_TLSDESC, REL_TPOFF, TLS_DTV_OFFSET};
-#[cfg(feature = "tls")]
 pub(crate) use tls::{get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static};
 
 /// The ELF machine type for LoongArch architecture.
@@ -44,6 +42,11 @@ pub const REL_IRELATIVE: u32 = R_LARCH_IRELATIVE;
 
 /// GOT entry relocation type - set GOT entry to symbol address.
 pub const REL_GOT: u32 = R_LARCH_64;
+pub const TLS_DTV_OFFSET: usize = 0;
+pub const REL_DTPMOD: u32 = R_LARCH_TLS_DTPMOD64;
+pub const REL_DTPOFF: u32 = R_LARCH_TLS_DTPREL64;
+pub const REL_TPOFF: u32 = R_LARCH_TLS_TPREL64;
+pub const REL_TLSDESC: u32 = 0;
 
 pub(crate) struct Architecture;
 

@@ -3,7 +3,7 @@ mod enabled {
     use super::super::defs::{TlsDescDynamicArg, TlsIndex};
     use crate::{
         arch::*,
-        elf::ElfRelType,
+        elf::{ElfRelType, ElfRelocationType},
         relocation::{RelocAddr, RelocHelper, RelocValue, RelocationHandler, SymbolLookup},
     };
     use alloc::boxed::Box;
@@ -11,19 +11,6 @@ mod enabled {
     #[inline]
     pub(crate) fn lookup_tls_get_addr(name: &str, tls_get_addr: RelocAddr) -> Option<*const ()> {
         (name == "__tls_get_addr").then_some(tls_get_addr.as_ptr())
-    }
-
-    #[inline]
-    pub(crate) fn is_tlsdesc_relocation(r_type: u32) -> bool {
-        REL_TLSDESC != 0 && r_type == REL_TLSDESC
-    }
-
-    #[inline]
-    pub(crate) fn is_tls_relocation(r_type: u32) -> bool {
-        r_type == REL_DTPOFF
-            || r_type == REL_DTPMOD
-            || r_type == REL_TPOFF
-            || is_tlsdesc_relocation(r_type)
     }
 
     pub(crate) fn handle_tls_reloc<D, PreS, PostS, PreH, PostH>(
@@ -37,13 +24,13 @@ mod enabled {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        let r_type = rel.r_type() as u32;
+        let r_type = rel.r_type();
         let r_sym = rel.r_symbol();
         let r_addend = rel.r_addend(helper.core.segments().base_addr().into_inner());
         let segments = helper.core.segments();
 
         match r_type {
-            REL_DTPOFF => {
+            value if value == ElfRelocationType::DTPOFF => {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
                     let tls_val = RelocValue::new(symdef.sym.unwrap().st_value() as usize)
                         .addend(r_addend)
@@ -52,7 +39,7 @@ mod enabled {
                     return true;
                 }
             }
-            REL_DTPMOD => {
+            value if value == ElfRelocationType::DTPMOD => {
                 let mod_id = if r_sym == 0 {
                     helper.core.tls_mod_id()
                 } else if let Some(symdef) = helper.find_symdef(r_sym) {
@@ -66,7 +53,7 @@ mod enabled {
                     return true;
                 }
             }
-            REL_TPOFF => {
+            value if value == ElfRelocationType::TPOFF => {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
                     let sym = symdef.sym.unwrap();
                     if let Some(tp_offset) = symdef.lib.tls_tp_offset() {
@@ -78,7 +65,7 @@ mod enabled {
                     }
                 }
             }
-            REL_TLSDESC if REL_TLSDESC != 0 => {
+            value if value.is_tlsdesc() => {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
                     let sym = symdef.sym.unwrap();
                     if let Some(tp_offset) = symdef.lib.tls_tp_offset() {
@@ -133,16 +120,6 @@ mod disabled {
     }
 
     #[inline]
-    pub(crate) fn is_tlsdesc_relocation(_r_type: u32) -> bool {
-        false
-    }
-
-    #[inline]
-    pub(crate) fn is_tls_relocation(_r_type: u32) -> bool {
-        false
-    }
-
-    #[inline]
     pub(crate) fn handle_tls_reloc<D, PreS, PostS, PreH, PostH>(
         _helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
         _rel: &ElfRelType,
@@ -159,10 +136,6 @@ mod disabled {
 }
 
 #[cfg(not(feature = "tls"))]
-pub(crate) use disabled::{
-    handle_tls_reloc, is_tls_relocation, is_tlsdesc_relocation, lookup_tls_get_addr,
-};
+pub(crate) use disabled::{handle_tls_reloc, lookup_tls_get_addr};
 #[cfg(feature = "tls")]
-pub(crate) use enabled::{
-    handle_tls_reloc, is_tls_relocation, is_tlsdesc_relocation, lookup_tls_get_addr,
-};
+pub(crate) use enabled::{handle_tls_reloc, lookup_tls_get_addr};

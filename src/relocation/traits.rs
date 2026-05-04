@@ -85,6 +85,7 @@ impl SymbolLookup for () {
 /// # Examples
 ///
 /// ```rust
+/// use elf_loader::elf::ElfRelocationType;
 /// use elf_loader::relocation::{HandleResult, RelocationContext, RelocationHandler};
 /// use elf_loader::Result;
 ///
@@ -95,7 +96,7 @@ impl SymbolLookup for () {
 ///         let rel = ctx.rel();
 ///         // Handle specific relocation types
 ///         match rel.r_type() {
-///             0x1234 => {
+///             value if value == ElfRelocationType::new(0x1234) => {
 ///                 // Custom relocation logic
 ///                 Ok(HandleResult::Handled)
 ///             }

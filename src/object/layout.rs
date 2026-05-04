@@ -156,7 +156,7 @@ impl PltGotSection {
             for chunk in buf.chunks_exact(entsize) {
                 let rel_entry =
                     unsafe { core::ptr::read_unaligned(chunk.as_ptr() as *const ElfRelType) };
-                let r_type = rel_entry.r_type() as u32;
+                let r_type = rel_entry.r_type();
                 let r_sym = rel_entry.r_symbol();
 
                 if ObjectRelocator::needs_got(r_type) {

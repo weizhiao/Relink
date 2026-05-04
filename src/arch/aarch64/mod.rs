@@ -13,8 +13,6 @@ use elf::abi::*;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use lazy::{DYLIB_OFFSET, RESOLVE_FUNCTION_OFFSET, dl_runtime_resolve};
 #[cfg(feature = "tls")]
-pub use tls::{REL_DTPMOD, REL_DTPOFF, REL_TLSDESC, REL_TPOFF, TLS_DTV_OFFSET};
-#[cfg(feature = "tls")]
 pub(crate) use tls::{get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static};
 
 /// The ELF machine type for AArch64 architecture.
@@ -31,6 +29,11 @@ pub const REL_JUMP_SLOT: u32 = R_AARCH64_JUMP_SLOT;
 pub const REL_IRELATIVE: u32 = R_AARCH64_IRELATIVE;
 /// COPY relocation type - copy data from shared object.
 pub const REL_COPY: u32 = R_AARCH64_COPY;
+pub const TLS_DTV_OFFSET: usize = 0;
+pub const REL_DTPMOD: u32 = R_AARCH64_TLS_DTPMOD;
+pub const REL_DTPOFF: u32 = R_AARCH64_TLS_DTPREL;
+pub const REL_TPOFF: u32 = R_AARCH64_TLS_TPREL;
+pub const REL_TLSDESC: u32 = R_AARCH64_TLSDESC;
 
 pub(crate) struct Architecture;
 

@@ -1,7 +1,7 @@
 use crate::{
     Result,
     arch::object::ObjectRelocator,
-    elf::ElfRelType,
+    elf::{ElfRelType, ElfRelocationType},
     image::RawObject,
     loader::LifecycleContext,
     logging,
@@ -89,11 +89,11 @@ pub(crate) trait ObjectReloc {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized;
 
-    fn needs_got(_rel_type: u32) -> bool {
+    fn needs_got(_rel_type: ElfRelocationType) -> bool {
         false
     }
 
-    fn needs_plt(_rel_type: u32) -> bool {
+    fn needs_plt(_rel_type: ElfRelocationType) -> bool {
         false
     }
 }

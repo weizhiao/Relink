@@ -25,6 +25,43 @@ pub(crate) struct RuntimeModuleMemory {
     segments: ElfSegments,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+struct SourceAddress(usize);
+
+impl SourceAddress {
+    #[inline]
+    const fn new(address: usize) -> Self {
+        Self(address)
+    }
+
+    #[inline]
+    fn offset_from(self, base: Self) -> Option<usize> {
+        self.0.checked_sub(base.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+struct RuntimeOffset(usize);
+
+impl RuntimeOffset {
+    #[inline]
+    const fn new(offset: usize) -> Self {
+        Self(offset)
+    }
+
+    #[inline]
+    const fn get(self) -> usize {
+        self.0
+    }
+
+    #[inline]
+    fn checked_add(self, delta: usize) -> Option<Self> {
+        self.0.checked_add(delta).map(Self)
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct MappedRuntimeMemory {
     arenas: MappedArenaMap,
@@ -34,18 +71,23 @@ pub(crate) struct MappedRuntimeMemory {
 #[derive(Clone, Copy)]
 struct RuntimeSectionMemory {
     section: SectionId,
-    source_address: usize,
-    runtime_offset: usize,
+    source_address: SourceAddress,
+    runtime_offset: RuntimeOffset,
     size: usize,
 }
 
 impl RuntimeSectionMemory {
-    fn source_offset(self, source_address: usize) -> Option<usize> {
-        let offset = source_address.checked_sub(self.source_address)?;
+    fn source_offset(self, source_address: SourceAddress) -> Option<usize> {
+        let offset = source_address.offset_from(self.source_address)?;
         if self.size == 0 {
             return (offset == 0).then_some(0);
         }
         (offset < self.size).then_some(offset)
+    }
+
+    fn runtime_offset(self, source_address: SourceAddress) -> Option<RuntimeOffset> {
+        self.source_offset(source_address)
+            .and_then(|offset| self.runtime_offset.checked_add(offset))
     }
 }
 
@@ -74,7 +116,7 @@ impl RuntimeModuleMemory {
             placed_sections.push((
                 section_id,
                 placement.address(),
-                metadata.source_address(),
+                SourceAddress::new(metadata.source_address()),
                 actual_address,
                 metadata.size(),
             ));
@@ -103,7 +145,12 @@ impl RuntimeModuleMemory {
             let runtime_offset = actual_address.checked_sub(base).ok_or_else(|| {
                 LinkerError::runtime_memory("arena-backed module address precedes runtime base")
             })?;
-            segment_slices.push(ElfSegments::slice(runtime_offset, *size, arena.backing()));
+            let runtime_offset = RuntimeOffset::new(runtime_offset);
+            segment_slices.push(ElfSegments::slice(
+                runtime_offset.get(),
+                *size,
+                arena.backing(),
+            ));
             runtime_sections.push(RuntimeSectionMemory {
                 section: *section,
                 source_address: *source_address,
@@ -118,12 +165,14 @@ impl RuntimeModuleMemory {
         })
     }
 
-    fn remap_source_address(&self, source_address: usize) -> Option<usize> {
-        self.sections.iter().copied().find_map(|section| {
-            section
-                .source_offset(source_address)
-                .map(|offset| section.runtime_offset + offset)
-        })
+    fn remap_source_to_runtime_offset(
+        &self,
+        source_address: SourceAddress,
+    ) -> Option<RuntimeOffset> {
+        self.sections
+            .iter()
+            .copied()
+            .find_map(|section| section.runtime_offset(source_address))
     }
 }
 
@@ -214,31 +263,33 @@ where
         match phdr.program_type() {
             ElfProgramType::DYNAMIC => {
                 let offset = runtime
-                    .remap_source_address(phdr.p_vaddr())
+                    .remap_source_to_runtime_offset(SourceAddress::new(phdr.p_vaddr()))
                     .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_DYNAMIC"))?;
                 dynamic_ptr = Some(
-                    NonNull::new(runtime.segments.get_mut_ptr(offset)).ok_or_else(|| {
+                    NonNull::new(runtime.segments.get_mut_ptr(offset.get())).ok_or_else(|| {
                         LinkerError::runtime_memory("PT_DYNAMIC remapped to a null pointer")
                     })?,
                 );
             }
             ElfProgramType::GNU_EH_FRAME => {
                 let offset = runtime
-                    .remap_source_address(phdr.p_vaddr())
+                    .remap_source_to_runtime_offset(SourceAddress::new(phdr.p_vaddr()))
                     .ok_or_else(|| {
                         LinkerError::runtime_memory("failed to remap PT_GNU_EH_FRAME")
                     })?;
                 eh_frame_hdr = Some(
-                    NonNull::new(runtime.segments.get_mut_ptr(offset)).ok_or_else(|| {
+                    NonNull::new(runtime.segments.get_mut_ptr(offset.get())).ok_or_else(|| {
                         LinkerError::runtime_memory("PT_GNU_EH_FRAME remapped to a null pointer")
                     })?,
                 );
             }
             ElfProgramType::TLS => {
                 let offset = runtime
-                    .remap_source_address(phdr.p_vaddr())
+                    .remap_source_to_runtime_offset(SourceAddress::new(phdr.p_vaddr()))
                     .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_TLS"))?;
-                let image = runtime.segments.get_slice::<u8>(offset, phdr.p_filesz());
+                let image = runtime
+                    .segments
+                    .get_slice::<u8>(offset.get(), phdr.p_filesz());
                 tls_info = Some(TlsInfo::new(phdr, image));
             }
             _ => {}
@@ -249,8 +300,8 @@ where
         .ok_or_else(|| LinkerError::runtime_memory("arena-backed module is missing PT_DYNAMIC"))?;
     let original_entry = scanned.ehdr().e_entry();
     let entry = runtime
-        .remap_source_address(original_entry)
-        .map(|offset| runtime.segments.base_addr().offset(offset))
+        .remap_source_to_runtime_offset(SourceAddress::new(original_entry))
+        .map(|offset| runtime.segments.base_addr().offset(offset.get()))
         .unwrap_or_else(|| runtime.segments.base_addr().offset(original_entry));
     let name = scanned.name().to_string();
 
