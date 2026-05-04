@@ -3,7 +3,7 @@ use crate::{
     AlignedBytes,
     elf::{ElfSectionFlags, ElfSectionType},
     entity::{PrimaryMap, SecondaryMap, entity_ref},
-    image::{ScannedDylib, ScannedSection, ScannedSectionId},
+    image::{ScannedDynamic, ScannedSection, ScannedSectionId},
     linker::plan::ModuleId,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -607,7 +607,7 @@ impl ModuleLayout {
     /// Builds a section-granularity layout seed from a scanned module.
     pub(crate) fn from_scanned(
         owner: ModuleId,
-        module: &ScannedDylib,
+        module: &ScannedDynamic,
         arena: &mut LayoutSectionArena,
     ) -> Self {
         let mut section_links = Vec::new();

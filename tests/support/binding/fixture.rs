@@ -7,7 +7,7 @@ use elf_loader::arch::{REL_DTPMOD, REL_DTPOFF};
 use elf_loader::{
     Loader,
     arch::{REL_COPY, REL_GOT, REL_IRELATIVE, REL_JUMP_SLOT, REL_RELATIVE, REL_SYMBOLIC},
-    image::LoadedDylib,
+    image::LoadedCore,
     input::ElfBinary,
 };
 use gen_elf::{
@@ -176,8 +176,8 @@ impl BindingFixture {
 pub(crate) struct BindingScenario {
     binding: BindingKind,
     main_output: ElfWriteOutput,
-    helper_dylib: LoadedDylib<()>,
-    loaded_dylib: LoadedDylib<()>,
+    helper_dylib: LoadedCore<()>,
+    loaded_dylib: LoadedCore<()>,
     host_symbol_addresses: HashMap<&'static str, usize>,
 }
 
@@ -186,11 +186,11 @@ impl BindingScenario {
         self.binding
     }
 
-    pub(crate) fn loaded_dylib(&self) -> &LoadedDylib<()> {
+    pub(crate) fn loaded_dylib(&self) -> &LoadedCore<()> {
         &self.loaded_dylib
     }
 
-    pub(crate) fn helper_dylib(&self) -> &LoadedDylib<()> {
+    pub(crate) fn helper_dylib(&self) -> &LoadedCore<()> {
         &self.helper_dylib
     }
 

@@ -14,7 +14,7 @@ use super::{
 use crate::{
     LinkerError, Loader, Result,
     entity::SecondaryMap,
-    image::{LoadedCore, RawDylib, ScannedDylib},
+    image::{LoadedCore, RawDynamic, ScannedDynamic},
     loader::LoadHook,
     os::{DefaultMmap, Mmap},
     relocation::{RelocationHandler, Relocator, SymbolLookup},
@@ -71,7 +71,7 @@ where
     #[inline]
     pub fn new() -> Self {
         Self {
-            loader: Loader::new().with_dylib_initializer::<D>(|_| Ok(())),
+            loader: Loader::new().with_dynamic_initializer::<D>(|_| Ok(())),
             resolver: (),
             pipeline: LinkPipeline::new(),
             relocator: Relocator::new(),
@@ -545,8 +545,8 @@ where
         plan: &MemoryLayoutPlan,
         mapped_runtime: &mut Option<mapped::MappedRuntimeMemory>,
         module_id: ModuleId,
-        scanned: ScannedDylib,
-    ) -> Result<RawDylib<D>> {
+        scanned: ScannedDynamic,
+    ) -> Result<RawDynamic<D>> {
         match plan
             .materialization(module_id)
             .unwrap_or(Materialization::WholeDsoRegion)
@@ -561,20 +561,20 @@ where
                     })?
                     .take_module(module_id)?;
                 let (init_fn, fini_fn) = loader.inner.lifecycle_handlers();
-                let mut raw = mapped::build_arena_raw_dylib::<D, Tls>(
+                let mut raw = mapped::build_arena_raw_dynamic::<D, Tls>(
                     scanned,
                     runtime,
                     init_fn.clone(),
                     fini_fn.clone(),
                     loader.inner.force_static_tls(),
                 )?;
-                loader.inner.initialize_dylib(&mut raw)?;
+                loader.inner.initialize_dynamic(&mut raw)?;
                 Ok(raw)
             }
             Materialization::WholeDsoRegion => {
-                let mut raw = loader.load_scanned_dylib_raw_impl(scanned)?;
+                let mut raw = loader.load_scanned_dynamic_raw_impl(scanned)?;
                 apply_section_overrides(&mut raw, module_id, plan);
-                loader.inner.initialize_dylib(&mut raw)?;
+                loader.inner.initialize_dynamic(&mut raw)?;
                 Ok(raw)
             }
         }
@@ -649,7 +649,7 @@ where
                     .with_object(raw)
                     .shared_scope(scope)
                     .relocate()?;
-                session.push_ready(key, (*loaded).clone(), direct_deps);
+                session.push_ready(key, loaded, direct_deps);
             }
             Ok(())
         })();
@@ -660,7 +660,7 @@ where
 
     fn build_relocation_order(
         root: &K,
-        pending: &BTreeMap<K, GraphEntry<K, RawDylib<D>>>,
+        pending: &BTreeMap<K, GraphEntry<K, RawDynamic<D>>>,
         order: &mut Vec<K>,
     ) {
         order.clear();
@@ -774,7 +774,11 @@ impl<K, D: 'static> PreparedLoad<K, D> {
     }
 }
 
-fn apply_section_overrides<D>(raw: &mut RawDylib<D>, module_id: ModuleId, plan: &MemoryLayoutPlan) {
+fn apply_section_overrides<D>(
+    raw: &mut RawDynamic<D>,
+    module_id: ModuleId,
+    plan: &MemoryLayoutPlan,
+) {
     let module = plan.module(module_id);
     let segments = raw.core_ref().segments();
 

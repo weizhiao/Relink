@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use elf_loader::image::LoadedDylib;
+use elf_loader::image::LoadedCore;
 use gen_elf::{ElfWriteOutput, RelocationInfo};
 
 use crate::support::memory::read_native_word;
@@ -34,7 +34,7 @@ pub(crate) fn anonymous_relocations(output: &ElfWriteOutput, r_type: u32) -> Vec
     relocations
 }
 
-pub(crate) fn slot_address(image: &LoadedDylib<()>, relocation: &RelocationInfo) -> usize {
+pub(crate) fn slot_address(image: &LoadedCore<()>, relocation: &RelocationInfo) -> usize {
     image.base()
         + relocation
             .vaddr
@@ -42,6 +42,6 @@ pub(crate) fn slot_address(image: &LoadedDylib<()>, relocation: &RelocationInfo)
             as usize
 }
 
-pub(crate) fn slot_word(image: &LoadedDylib<()>, relocation: &RelocationInfo) -> u64 {
+pub(crate) fn slot_word(image: &LoadedCore<()>, relocation: &RelocationInfo) -> u64 {
     read_native_word(slot_address(image, relocation))
 }

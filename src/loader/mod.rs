@@ -8,7 +8,7 @@
 //!
 //! - [`LoadHook`] for observing program headers as they are mapped
 //! - [`LifecycleHandler`] for customizing `.init` / `.fini` invocation
-//! - `with_dylib_initializer` for initializing shared-object user data
+//! - `with_dynamic_initializer` for initializing dynamic-image user data
 //! - `with_*` builder methods for swapping the memory-mapping backend or TLS resolver
 
 mod buffer;
@@ -18,7 +18,7 @@ mod load;
 use crate::{
     Result,
     elf::ElfPhdr,
-    image::RawDylib,
+    image::RawDynamic,
     os::{DefaultMmap, Mmap},
     segment::ElfSegments,
     sync::Arc,
@@ -148,11 +148,12 @@ pub(crate) type DynLifecycleHandler = Arc<Box<dyn LifecycleHandler>>;
 /// Configurable ELF loader.
 ///
 /// `Loader` maps ELF objects from files or memory and produces raw image types such as
-/// [`crate::image::RawElf`], [`crate::image::RawDylib`], and [`crate::image::RawExec`].
+/// [`crate::image::RawElf`], [`crate::image::RawDynamic`], [`crate::image::RawDylib`],
+/// and [`crate::image::RawExec`].
 /// Those raw images can then be relocated by calling `.relocator().relocate()`.
 ///
 /// Use the `with_*` builder methods to customize hooks, lifecycle handling,
-/// shared-object initialization, memory mapping, and TLS behavior.
+/// dynamic-image initialization, memory mapping, and TLS behavior.
 ///
 /// # Examples
 ///
@@ -182,7 +183,7 @@ pub(crate) struct LoaderInner<H, D: 'static> {
     /// When `true`, the ELF machine architecture check is skipped on load.
     /// Used for cross-architecture loading (e.g. x86-64 ELF on RISC-V).
     pub(crate) allow_cross_arch: bool,
-    dylib_initializer: Box<dyn FnMut(&mut RawDylib<D>) -> Result<()>>,
+    dynamic_initializer: Box<dyn FnMut(&mut RawDynamic<D>) -> Result<()>>,
 }
 
 impl Loader<DefaultMmap, (), (), ()> {
@@ -212,7 +213,7 @@ impl Loader<DefaultMmap, (), (), ()> {
                 fini_fn: c_abi,
                 force_static_tls: false,
                 allow_cross_arch: false,
-                dylib_initializer: Box::new(|_| Ok(())),
+                dynamic_initializer: Box::new(|_| Ok(())),
             },
             _marker: PhantomData,
         }
@@ -254,15 +255,15 @@ where
     }
 
     /// Consumes the current loader and returns a new one with the specified
-    /// shared-object user data type and initializer.
+    /// dynamic-image user data type and initializer.
     ///
-    /// Shared objects are first created with `NewD::default()`. The initializer
+    /// Dynamic images are first created with `NewD::default()`. The initializer
     /// then receives the completed raw image so it can fill or adjust the user
     /// data using dynamic metadata such as dependencies, run paths, and mapped
     /// addresses.
-    pub fn with_dylib_initializer<NewD>(
+    pub fn with_dynamic_initializer<NewD>(
         self,
-        initializer: impl FnMut(&mut RawDylib<NewD>) -> Result<()> + 'static,
+        initializer: impl FnMut(&mut RawDynamic<NewD>) -> Result<()> + 'static,
     ) -> Loader<M, H, NewD, Tls>
     where
         NewD: Default + 'static,
@@ -275,7 +276,7 @@ where
                 hook: self.inner.hook,
                 force_static_tls: self.inner.force_static_tls,
                 allow_cross_arch: self.inner.allow_cross_arch,
-                dylib_initializer: Box::new(initializer),
+                dynamic_initializer: Box::new(initializer),
             },
             _marker: PhantomData,
         }
@@ -294,7 +295,7 @@ where
                 hook,
                 force_static_tls: self.inner.force_static_tls,
                 allow_cross_arch: self.inner.allow_cross_arch,
-                dylib_initializer: self.inner.dylib_initializer,
+                dynamic_initializer: self.inner.dynamic_initializer,
             },
             _marker: PhantomData,
         }

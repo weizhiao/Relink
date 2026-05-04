@@ -1,7 +1,7 @@
 use super::view::DependencyGraphView;
 use crate::{
     Result,
-    image::{LoadedCore, RawDylib, ScannedDylib},
+    image::{LoadedCore, RawDylib, RawDynamic, ScannedDynamic},
     relocation::BindingMode,
     sync::Arc,
 };
@@ -49,7 +49,39 @@ impl<D: 'static> DependencyOwner for RawDylib<D> {
     }
 }
 
-impl DependencyOwner for ScannedDylib {
+impl<D: 'static> DependencyOwner for RawDynamic<D> {
+    #[inline]
+    fn name(&self) -> &str {
+        self.name()
+    }
+
+    #[inline]
+    fn rpath(&self) -> Option<&str> {
+        self.rpath()
+    }
+
+    #[inline]
+    fn runpath(&self) -> Option<&str> {
+        self.runpath()
+    }
+
+    #[inline]
+    fn interp(&self) -> Option<&str> {
+        self.interp()
+    }
+
+    #[inline]
+    fn needed_len(&self) -> usize {
+        self.needed_libs().len()
+    }
+
+    #[inline]
+    fn needed_lib(&self, index: usize) -> Option<&str> {
+        self.needed_libs().get(index).copied()
+    }
+}
+
+impl DependencyOwner for ScannedDynamic {
     #[inline]
     fn name(&self) -> &str {
         self.name()
@@ -211,21 +243,21 @@ where
     }
 }
 
-/// A mapped but unrelocated dylib observed during a link operation.
+/// A mapped but unrelocated dynamic image observed during a link operation.
 ///
-/// This event fires after a [`RawDylib`] has been materialized and before it is
+/// This event fires after a [`RawDynamic`] has been materialized and before it is
 /// inserted into the linker's pending session. The object is not relocated yet,
 /// so observers must not treat it as a ready-to-run module. Callers that create
 /// placeholder [`LoadedCore`] values from `raw().core()` are responsible for the
 /// safety contract of [`LoadedCore::from_core`].
 pub struct StagedDylib<'a, K, D: 'static> {
     key: &'a K,
-    raw: &'a RawDylib<D>,
+    raw: &'a RawDynamic<D>,
 }
 
 impl<'a, K, D: 'static> StagedDylib<'a, K, D> {
     #[inline]
-    pub(crate) fn new(key: &'a K, raw: &'a RawDylib<D>) -> Self {
+    pub(crate) fn new(key: &'a K, raw: &'a RawDynamic<D>) -> Self {
         Self { key, raw }
     }
 
@@ -235,16 +267,16 @@ impl<'a, K, D: 'static> StagedDylib<'a, K, D> {
         self.key
     }
 
-    /// Returns the mapped but unrelocated shared object.
+    /// Returns the mapped but unrelocated dynamic image.
     #[inline]
-    pub fn raw(&self) -> &'a RawDylib<D> {
+    pub fn raw(&self) -> &'a RawDynamic<D> {
         self.raw
     }
 }
 
 /// Observer for modules staged by [`super::Linker`].
 pub trait LoadObserver<K, D: 'static> {
-    /// Called when a new [`RawDylib`] is mapped but before relocation starts.
+    /// Called when a new [`RawDynamic`] is mapped but before relocation starts.
     fn on_staged_dylib(&mut self, _event: StagedDylib<'_, K, D>) -> Result<()> {
         Ok(())
     }
@@ -265,13 +297,13 @@ where
 /// A single relocation request for a newly mapped module.
 pub struct RelocationRequest<'a, K, D: 'static> {
     key: &'a K,
-    raw: RawDylib<D>,
+    raw: RawDynamic<D>,
     scope: &'a Arc<[LoadedCore<D>]>,
 }
 
 impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
     #[inline]
-    pub(crate) fn new(key: &'a K, raw: RawDylib<D>, scope: &'a Arc<[LoadedCore<D>]>) -> Self {
+    pub(crate) fn new(key: &'a K, raw: RawDynamic<D>, scope: &'a Arc<[LoadedCore<D>]>) -> Self {
         Self { key, raw, scope }
     }
 
@@ -283,7 +315,7 @@ impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
 
     /// Returns the raw module being relocated.
     #[inline]
-    pub fn raw(&self) -> &RawDylib<D> {
+    pub fn raw(&self) -> &RawDynamic<D> {
         &self.raw
     }
 
@@ -304,7 +336,7 @@ impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
 
     /// Consumes the request and returns the raw module being relocated.
     #[inline]
-    pub fn into_raw(self) -> RawDylib<D> {
+    pub fn into_raw(self) -> RawDynamic<D> {
         self.raw
     }
 }

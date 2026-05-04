@@ -8,7 +8,12 @@
 //!
 //! - Use [`Loader::load`] to auto-detect whether the input is a dylib, executable, or
 //!   relocatable object.
+//! - Use [`Loader::scan`] to classify executable or dynamic ELF metadata without mapping it.
 //! - Use [`Loader::load_dylib`] or [`Loader::load_exec`] when you want strict type checks.
+//! - Use [`Loader::load_dynamic`] when you want any `PT_DYNAMIC` image, including a dynamic
+//!   `ET_EXEC`.
+//! - Use [`Loader::scan`] and [`Loader::load_scanned_dynamic`] to split dynamic metadata
+//!   discovery from mapping.
 //! - Use `Loader::load_object` to load `ET_REL` object files when the `object` feature is enabled.
 //! - Inputs can come from file paths, raw bytes, [`input::ElfFile`], or [`input::ElfBinary`].
 //!

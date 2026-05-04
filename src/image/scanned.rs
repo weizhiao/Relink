@@ -1,4 +1,4 @@
-//! Pre-mapping dynamic-library descriptions and lazily readable section data.
+//! Pre-mapping ELF descriptions and lazily readable section data.
 
 use crate::{
     AlignedBytes, ParseDynamicError, ParsePhdrError, Result,
@@ -159,8 +159,8 @@ impl ScannedDynamicInfo {
     }
 }
 
-/// A dynamic library that has been parsed but not yet mapped into memory.
-pub struct ScannedDylib {
+/// A dynamic ELF image that has been parsed but not yet mapped into memory.
+pub struct ScannedDynamic {
     name: String,
     ehdr: ElfHeader,
     phdrs: Box<[ElfPhdr]>,
@@ -176,7 +176,26 @@ pub struct ScannedDylib {
     dynamic: ScannedDynamicInfo,
 }
 
-pub(crate) struct ScannedDylibLoadParts {
+/// A static executable that has been parsed but not yet mapped into memory.
+pub struct ScannedExec {
+    name: String,
+    ehdr: ElfHeader,
+    phdrs: Box<[ElfPhdr]>,
+    interp: Option<Box<[u8]>>,
+    section_table: Option<SectionTable>,
+    reader: Box<dyn ElfReader + 'static>,
+}
+
+/// A scanned ELF image classified by the metadata available before mapping.
+#[derive(Debug)]
+pub enum ScannedElf {
+    /// An image with `PT_DYNAMIC` metadata.
+    Dynamic(ScannedDynamic),
+    /// An executable without `PT_DYNAMIC` metadata.
+    StaticExec(ScannedExec),
+}
+
+pub(crate) struct ScannedDynamicLoadParts {
     pub(crate) ehdr: ElfHeader,
     pub(crate) phdrs: Box<[ElfPhdr]>,
     pub(crate) reader: Box<dyn ElfReader + 'static>,
@@ -391,9 +410,9 @@ impl<'a> fmt::Debug for ScannedSection<'a> {
     }
 }
 
-impl fmt::Debug for ScannedDylib {
+impl fmt::Debug for ScannedDynamic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ScannedDylib")
+        f.debug_struct("ScannedDynamic")
             .field("name", &self.name)
             .field("needed_libs", &self.needed_libs().collect::<Vec<_>>())
             .field(
@@ -410,7 +429,158 @@ impl fmt::Debug for ScannedDylib {
     }
 }
 
-impl ScannedDylib {
+impl fmt::Debug for ScannedExec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScannedExec")
+            .field("name", &self.name)
+            .field(
+                "sections",
+                &self
+                    .section_table
+                    .as_ref()
+                    .map_or(0, |table| table.sections.len()),
+            )
+            .finish()
+    }
+}
+
+impl ScannedElf {
+    /// Returns the file name or path selected for this image.
+    #[inline]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Dynamic(image) => image.name(),
+            Self::StaticExec(image) => image.name(),
+        }
+    }
+
+    /// Returns the short image name.
+    #[inline]
+    pub fn short_name(&self) -> &str {
+        match self {
+            Self::Dynamic(image) => image.short_name(),
+            Self::StaticExec(image) => image.short_name(),
+        }
+    }
+
+    /// Returns the parsed ELF header.
+    #[inline]
+    pub fn ehdr(&self) -> &ElfHeader {
+        match self {
+            Self::Dynamic(image) => image.ehdr(),
+            Self::StaticExec(image) => image.ehdr(),
+        }
+    }
+
+    /// Returns the parsed program headers.
+    #[inline]
+    pub fn phdrs(&self) -> &[ElfPhdr] {
+        match self {
+            Self::Dynamic(image) => image.phdrs(),
+            Self::StaticExec(image) => image.phdrs(),
+        }
+    }
+
+    /// Returns the PT_INTERP string when present.
+    #[inline]
+    pub fn interp(&self) -> Option<&str> {
+        match self {
+            Self::Dynamic(image) => image.interp(),
+            Self::StaticExec(image) => image.interp(),
+        }
+    }
+
+    /// Returns the dynamic scan data when this is a dynamic image.
+    #[inline]
+    pub fn as_dynamic(&self) -> Option<&ScannedDynamic> {
+        match self {
+            Self::Dynamic(image) => Some(image),
+            Self::StaticExec(_) => None,
+        }
+    }
+
+    /// Returns the static executable scan data when this is a static executable.
+    #[inline]
+    pub fn as_static_exec(&self) -> Option<&ScannedExec> {
+        match self {
+            Self::Dynamic(_) => None,
+            Self::StaticExec(image) => Some(image),
+        }
+    }
+
+    /// Consumes this value and returns dynamic scan data when present.
+    #[inline]
+    pub fn into_dynamic(self) -> Option<ScannedDynamic> {
+        match self {
+            Self::Dynamic(image) => Some(image),
+            Self::StaticExec(_) => None,
+        }
+    }
+
+    /// Consumes this value and returns static executable scan data when present.
+    #[inline]
+    pub fn into_static_exec(self) -> Option<ScannedExec> {
+        match self {
+            Self::Dynamic(_) => None,
+            Self::StaticExec(image) => Some(image),
+        }
+    }
+
+    /// Returns whether the image exposes a usable section-table view.
+    #[inline]
+    pub fn has_sections(&self) -> bool {
+        match self {
+            Self::Dynamic(image) => image.has_sections(),
+            Self::StaticExec(image) => image.has_sections(),
+        }
+    }
+
+    /// Returns the raw ELF section headers, when the section table is usable.
+    #[inline]
+    pub fn section_headers(&self) -> Option<&[ElfShdr]> {
+        match self {
+            Self::Dynamic(image) => image.section_headers(),
+            Self::StaticExec(image) => image.section_headers(),
+        }
+    }
+
+    /// Returns one scanned section by id.
+    #[inline]
+    pub fn section(&self, id: impl Into<ScannedSectionId>) -> Option<ScannedSection<'_>> {
+        match self {
+            Self::Dynamic(image) => image.section(id),
+            Self::StaticExec(image) => image.section(id),
+        }
+    }
+
+    /// Iterates over all scanned sections together with stable ids.
+    #[inline]
+    pub fn sections(&self) -> ScannedSections<'_> {
+        match self {
+            Self::Dynamic(image) => image.sections(),
+            Self::StaticExec(image) => image.sections(),
+        }
+    }
+
+    /// Iterates over sections that contribute to the loaded memory image.
+    #[inline]
+    pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_>> {
+        self.sections().filter(|section| section.is_allocated())
+    }
+
+    /// Captures one section's backing bytes.
+    pub fn section_data(
+        &mut self,
+        id: impl Into<ScannedSectionId>,
+    ) -> Result<Option<AlignedBytes>> {
+        match self {
+            Self::Dynamic(image) => image.section_data(id),
+            Self::StaticExec(image) => image.section_data(id),
+        }
+    }
+}
+
+impl ScannedDynamic {
     pub(crate) fn from_builder(builder: ScanBuilder) -> Result<Self> {
         let ScanBuilder {
             name,
@@ -451,13 +621,13 @@ impl ScannedDylib {
         })
     }
 
-    /// Returns the file name or path selected for this library.
+    /// Returns the file name or path selected for this image.
     #[inline]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Returns the short library name.
+    /// Returns the short image name.
     #[inline]
     pub fn short_name(&self) -> &str {
         let name = self.name();
@@ -618,7 +788,7 @@ impl ScannedDylib {
         &self.dynamic
     }
 
-    pub(crate) fn into_load_parts(self) -> ScannedDylibLoadParts {
+    pub(crate) fn into_load_parts(self) -> ScannedDynamicLoadParts {
         let Self {
             ehdr,
             phdrs,
@@ -626,11 +796,153 @@ impl ScannedDylib {
             ..
         } = self;
 
-        ScannedDylibLoadParts {
+        ScannedDynamicLoadParts {
             ehdr,
             phdrs,
             reader,
         }
+    }
+}
+
+impl ScannedExec {
+    pub(crate) fn from_builder(builder: ScanBuilder) -> Result<Self> {
+        let ScanBuilder {
+            name,
+            ehdr,
+            phdrs,
+            mut reader,
+        } = builder;
+        let interp = read_interp(reader.as_mut(), &phdrs)?;
+        let section_table = SectionTable::new(reader.as_mut(), &ehdr)?;
+
+        Ok(Self {
+            name,
+            ehdr,
+            phdrs,
+            interp,
+            section_table,
+            reader,
+        })
+    }
+
+    /// Returns the file name or path selected for this executable.
+    #[inline]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the short executable name.
+    #[inline]
+    pub fn short_name(&self) -> &str {
+        let name = self.name();
+        name.rsplit(|c| c == '/' || c == '\\')
+            .next()
+            .unwrap_or(name)
+    }
+
+    /// Returns the parsed ELF header.
+    #[inline]
+    pub fn ehdr(&self) -> &ElfHeader {
+        &self.ehdr
+    }
+
+    /// Returns the parsed program headers.
+    #[inline]
+    pub fn phdrs(&self) -> &[ElfPhdr] {
+        &self.phdrs
+    }
+
+    /// Returns the PT_INTERP string when present.
+    #[inline]
+    pub fn interp(&self) -> Option<&str> {
+        self.interp.as_deref().and_then(|bytes| {
+            let end = bytes
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(bytes.len());
+            core::str::from_utf8(&bytes[..end]).ok()
+        })
+    }
+
+    #[inline]
+    fn shstrtab(&self) -> Option<ElfStringTable> {
+        self.section_table
+            .as_ref()
+            .map(|table| ElfStringTable::new(table.shstrtab.as_ptr()))
+    }
+
+    /// Returns whether the executable exposes a usable section-table view.
+    #[inline]
+    pub fn has_sections(&self) -> bool {
+        self.section_table.is_some()
+    }
+
+    /// Returns the raw ELF section headers, when the section table is usable.
+    #[inline]
+    pub fn section_headers(&self) -> Option<&[ElfShdr]> {
+        self.section_table
+            .as_ref()
+            .map(|table| table.sections.as_ref())
+    }
+
+    /// Returns one scanned section by id.
+    #[inline]
+    pub fn section(&self, id: impl Into<ScannedSectionId>) -> Option<ScannedSection<'_>> {
+        let id = id.into();
+        let section_table = self.section_table.as_ref()?;
+        let shstrtab = self.shstrtab()?;
+        let header = section_table.sections.get(id.index())?;
+        Some(ScannedSection::new(
+            id,
+            shstrtab.get_str(header.sh_name() as usize),
+            header,
+        ))
+    }
+
+    /// Iterates over all scanned sections together with stable ids.
+    #[inline]
+    pub fn sections(&self) -> ScannedSections<'_> {
+        ScannedSections::new(
+            self.section_table
+                .as_ref()
+                .map_or(&[], |table| table.sections.as_ref()),
+            self.section_table
+                .as_ref()
+                .map_or(ptr::null(), |table| table.shstrtab.as_ptr()),
+        )
+    }
+
+    /// Iterates over sections that contribute to the loaded memory image.
+    #[inline]
+    pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_>> {
+        self.sections().filter(|section| section.is_allocated())
+    }
+
+    /// Captures one section's backing bytes.
+    pub fn section_data(
+        &mut self,
+        id: impl Into<ScannedSectionId>,
+    ) -> Result<Option<AlignedBytes>> {
+        let Some(section) = self.section(id) else {
+            return Ok(None);
+        };
+
+        if section.is_nobits() {
+            return Ok(Some(
+                AlignedBytes::with_len(section.size()).expect("failed to allocate section bytes"),
+            ));
+        }
+
+        Ok(Some(
+            self.read_bytes(section.file_offset(), section.size())?,
+        ))
+    }
+
+    #[inline]
+    fn read_bytes(&mut self, offset: usize, len: usize) -> Result<AlignedBytes> {
+        let mut bytes = AlignedBytes::with_len(len).ok_or(ParseDynamicError::AddressOverflow)?;
+        self.reader.read_slice(bytes.as_mut(), offset)?;
+        Ok(bytes)
     }
 }
 

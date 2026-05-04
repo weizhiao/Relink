@@ -1,4 +1,4 @@
-use crate::image::{LoadedCore, RawDylib};
+use crate::image::{LoadedCore, RawDynamic};
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
@@ -102,7 +102,7 @@ where
 }
 
 pub(crate) struct LoadSession<K, D: 'static> {
-    pub(crate) resolve: ResolveSession<K, RawDylib<D>>,
+    pub(crate) resolve: ResolveSession<K, RawDynamic<D>>,
     pub(crate) ready_to_commit: Vec<ReadyCommit<K, D>>,
 }
 
@@ -124,7 +124,7 @@ where
     pub(crate) fn insert_resolved_pending(
         &mut self,
         key: K,
-        raw: RawDylib<D>,
+        raw: RawDynamic<D>,
         direct_deps: Box<[K]>,
     ) {
         self.resolve.insert_resolved_entry(key, raw, direct_deps);

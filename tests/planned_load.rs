@@ -2,7 +2,8 @@ mod support;
 
 use elf_loader::{
     CustomError, Loader,
-    image::{LoadedCore, ModuleCapability},
+    elf::{ElfFileType, ElfProgramType},
+    image::{LoadedCore, ModuleCapability, ScannedElf},
     input::ElfBinary,
     linker::{Arena, ArenaSharing, MemoryClass},
     linker::{
@@ -182,14 +183,27 @@ impl VisibleModules<&'static str, ()> for StaticVisibleModule {
 }
 
 #[cfg(target_pointer_width = "64")]
+const E_PHOFF_OFFSET: usize = 0x20;
+#[cfg(target_pointer_width = "64")]
 const E_SHOFF_OFFSET: usize = 0x28;
+const E_TYPE_OFFSET: usize = 0x10;
+#[cfg(target_pointer_width = "64")]
+const E_PHENTSIZE_OFFSET: usize = 0x36;
+#[cfg(target_pointer_width = "64")]
+const E_PHNUM_OFFSET: usize = 0x38;
 #[cfg(target_pointer_width = "64")]
 const E_SHNUM_OFFSET: usize = 0x3c;
 #[cfg(target_pointer_width = "64")]
 const E_SHSTRNDX_OFFSET: usize = 0x3e;
 
 #[cfg(not(target_pointer_width = "64"))]
+const E_PHOFF_OFFSET: usize = 0x1c;
+#[cfg(not(target_pointer_width = "64"))]
 const E_SHOFF_OFFSET: usize = 0x20;
+#[cfg(not(target_pointer_width = "64"))]
+const E_PHENTSIZE_OFFSET: usize = 0x2a;
+#[cfg(not(target_pointer_width = "64"))]
+const E_PHNUM_OFFSET: usize = 0x2c;
 #[cfg(not(target_pointer_width = "64"))]
 const E_SHNUM_OFFSET: usize = 0x30;
 #[cfg(not(target_pointer_width = "64"))]
@@ -199,14 +213,28 @@ fn set_ehdr_u16(bytes: &mut [u8], offset: usize, value: u16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
 
+fn read_ehdr_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
 #[cfg(target_pointer_width = "64")]
 fn set_ehdr_usize(bytes: &mut [u8], offset: usize, value: usize) {
     bytes[offset..offset + 8].copy_from_slice(&(value as u64).to_le_bytes());
 }
 
+#[cfg(target_pointer_width = "64")]
+fn read_ehdr_usize(bytes: &[u8], offset: usize) -> usize {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize
+}
+
 #[cfg(not(target_pointer_width = "64"))]
 fn set_ehdr_usize(bytes: &mut [u8], offset: usize, value: usize) {
     bytes[offset..offset + 4].copy_from_slice(&(value as u32).to_le_bytes());
+}
+
+#[cfg(not(target_pointer_width = "64"))]
+fn read_ehdr_usize(bytes: &[u8], offset: usize) -> usize {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize
 }
 
 fn strip_section_headers(mut bytes: Vec<u8>) -> Vec<u8> {
@@ -219,6 +247,31 @@ fn strip_section_headers(mut bytes: Vec<u8>) -> Vec<u8> {
 fn break_section_name_table(mut bytes: Vec<u8>) -> Vec<u8> {
     set_ehdr_u16(&mut bytes, E_SHSTRNDX_OFFSET, u16::MAX);
     bytes
+}
+
+fn mark_dynamic_as_exec(mut bytes: Vec<u8>) -> Vec<u8> {
+    set_ehdr_u16(&mut bytes, E_TYPE_OFFSET, ElfFileType::EXEC.raw());
+    bytes
+}
+
+fn mark_as_static_exec(mut bytes: Vec<u8>) -> Vec<u8> {
+    set_ehdr_u16(&mut bytes, E_TYPE_OFFSET, ElfFileType::EXEC.raw());
+    let phoff = read_ehdr_usize(&bytes, E_PHOFF_OFFSET);
+    let phentsize = read_ehdr_u16(&bytes, E_PHENTSIZE_OFFSET) as usize;
+    let phnum = read_ehdr_u16(&bytes, E_PHNUM_OFFSET) as usize;
+
+    for index in 0..phnum {
+        let p_type_offset = phoff + index * phentsize;
+        let p_type =
+            u32::from_le_bytes(bytes[p_type_offset..p_type_offset + 4].try_into().unwrap());
+        if p_type == ElfProgramType::DYNAMIC.raw() {
+            bytes[p_type_offset..p_type_offset + 4]
+                .copy_from_slice(&ElfProgramType::NULL.raw().to_le_bytes());
+            return bytes;
+        }
+    }
+
+    panic!("generated test image should contain PT_DYNAMIC");
 }
 
 fn empty_relocation_plan(
@@ -234,7 +287,7 @@ fn load_uses_configured_visible_modules_without_committing_them_locally() {
     let dep = load_relocated_dylib(&mut loader, "visible_dep.so", &dep_output);
     let visible = StaticVisibleModule {
         key: "dep",
-        module: (*dep).clone(),
+        module: dep.clone(),
         direct_deps: Box::new([]),
     };
 
@@ -260,6 +313,127 @@ fn load_uses_configured_visible_modules_without_committing_them_locally() {
     assert!(context.contains_key(&"root"));
     assert!(!context.contains_key(&"dep"));
     assert_eq!(context.direct_deps(&"root"), Some(&["dep"][..]));
+}
+
+#[test]
+fn load_accepts_dynamic_exec_root() {
+    let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
+    let bytes: &'static [u8] = Box::leak(mark_dynamic_as_exec(output.data).into_boxed_slice());
+
+    let mut context = LinkContext::<&'static str, ()>::new();
+    let resolver = SingleBinaryResolver {
+        key: "root",
+        name: "dynamic_exec",
+        data: bytes,
+    };
+
+    let loaded = Linker::new()
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load(&mut context, "root")
+        .expect("legacy linker load should accept dynamic ET_EXEC roots");
+
+    assert!(context.contains_key(&"root"));
+    unsafe {
+        let ptr = loaded
+            .get::<u8>("value")
+            .expect("missing exported object symbol")
+            .into_raw() as *const u8;
+        assert!(loaded.contains_addr(ptr as usize));
+        assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
+    }
+}
+
+#[test]
+fn load_dynamic_accepts_dynamic_exec_without_relaxing_load_dylib() {
+    let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[9, 8, 7, 6])]);
+    let bytes: &'static [u8] = Box::leak(mark_dynamic_as_exec(output.data).into_boxed_slice());
+
+    let mut strict_loader = Loader::new();
+    assert!(
+        strict_loader
+            .load_dylib(ElfBinary::new("dynamic_exec", bytes))
+            .is_err(),
+        "load_dylib should remain strict about ET_DYN"
+    );
+
+    let mut dynamic_loader = Loader::new();
+    let loaded = dynamic_loader
+        .load_dynamic(ElfBinary::new("dynamic_exec", bytes))
+        .expect("load_dynamic should accept dynamic ET_EXEC")
+        .relocator()
+        .relocate()
+        .expect("failed to relocate dynamic ET_EXEC");
+
+    unsafe {
+        let ptr = loaded
+            .get::<u8>("value")
+            .expect("missing exported object symbol")
+            .into_raw() as *const u8;
+        assert!(loaded.contains_addr(ptr as usize));
+        assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
+    }
+}
+
+#[test]
+fn load_scanned_dynamic_accepts_dynamic_exec() {
+    let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[4, 3, 2, 1])]);
+    let bytes: &'static [u8] = Box::leak(mark_dynamic_as_exec(output.data).into_boxed_slice());
+
+    let mut loader = Loader::new();
+    let ScannedElf::Dynamic(scanned) = loader
+        .scan(ElfBinary::new("scanned_dynamic_exec", bytes))
+        .expect("scan should accept dynamic ET_EXEC")
+    else {
+        panic!("dynamic ET_EXEC should scan as dynamic");
+    };
+    let loaded = loader
+        .load_scanned_dynamic(scanned)
+        .expect("load_scanned_dynamic should accept scanned dynamic ET_EXEC")
+        .relocator()
+        .relocate()
+        .expect("failed to relocate scanned dynamic ET_EXEC");
+
+    unsafe {
+        let ptr = loaded
+            .get::<u8>("value")
+            .expect("missing exported object symbol")
+            .into_raw() as *const u8;
+        assert!(loaded.contains_addr(ptr as usize));
+        assert_eq!(std::slice::from_raw_parts(ptr, 4), &[4, 3, 2, 1]);
+    }
+}
+
+#[test]
+fn scan_classifies_dynamic_and_static_exec() {
+    let dynamic_output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1])]);
+    let dynamic_bytes: &'static [u8] = Box::leak(dynamic_output.data.into_boxed_slice());
+    let mut loader = Loader::new();
+
+    let scanned_dynamic = loader
+        .scan(ElfBinary::new("scanned.so", dynamic_bytes))
+        .expect("scan should accept dynamic image");
+    let ScannedElf::Dynamic(dynamic) = scanned_dynamic else {
+        panic!("PT_DYNAMIC image should scan as dynamic");
+    };
+    assert_eq!(dynamic.name(), "scanned.so");
+    assert!(dynamic.dynamic().bind_now());
+
+    let static_output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[2])]);
+    let static_bytes: &'static [u8] =
+        Box::leak(mark_as_static_exec(static_output.data).into_boxed_slice());
+    let scanned_static = loader
+        .scan(ElfBinary::new("static_exec", static_bytes))
+        .expect("scan should accept static executable metadata");
+    let ScannedElf::StaticExec(exec) = scanned_static else {
+        panic!("executable without PT_DYNAMIC should scan as static exec");
+    };
+    assert_eq!(exec.name(), "static_exec");
+    assert!(
+        exec.phdrs()
+            .iter()
+            .all(|phdr| phdr.program_type() != ElfProgramType::DYNAMIC)
+    );
 }
 
 struct TestPass<F>(F);
@@ -358,6 +532,35 @@ fn load_with_scan_legacy_path_loads_without_an_intermediate_plan() {
             .into_raw() as *const u8;
         assert!(loaded.contains_addr(ptr as usize));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
+    }
+}
+
+#[test]
+fn load_scan_first_accepts_dynamic_exec_root() {
+    let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[5, 6, 7, 8])]);
+    let bytes: &'static [u8] = Box::leak(mark_dynamic_as_exec(output.data).into_boxed_slice());
+
+    let mut context = LinkContext::<&'static str, ()>::new();
+    let resolver = SingleBinaryResolver {
+        key: "root",
+        name: "scanned_dynamic_exec",
+        data: bytes,
+    };
+
+    let loaded = Linker::new()
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "root")
+        .expect("scan-first linker load should accept dynamic ET_EXEC roots");
+
+    assert!(context.contains_key(&"root"));
+    unsafe {
+        let ptr = loaded
+            .get::<u8>("value")
+            .expect("missing exported object symbol")
+            .into_raw() as *const u8;
+        assert!(loaded.contains_addr(ptr as usize));
+        assert_eq!(std::slice::from_raw_parts(ptr, 4), &[5, 6, 7, 8]);
     }
 }
 
@@ -476,7 +679,7 @@ fn load_scan_first_observer_fires_after_scan_materialization() {
         move |_plan: &mut LinkPassPlan<'_, &'static str>| -> elf_loader::Result<()> {
             assert!(
                 observed.borrow().is_empty(),
-                "scan planning must not notify the staged RawDylib observer"
+                "scan planning must not notify the staged RawDynamic observer"
             );
             *saw_scan_phase.borrow_mut() = true;
             Ok(())

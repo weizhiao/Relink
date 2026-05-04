@@ -9,7 +9,7 @@ use core::{
 use elf_loader::{
     Loader, Result,
     arch::REL_RELATIVE,
-    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfRela},
+    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfRela, ElfRelocationType},
     image::RawElf,
     input::ElfFile,
 };
@@ -161,7 +161,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut ElfDyn) {
     let rela_ptr = (rela as usize + base) as *const ElfRela;
     let relas = unsafe { &*core::ptr::slice_from_raw_parts(rela_ptr, rela_count as usize) };
     for rela in relas {
-        if rela.r_type() != REL_RELATIVE as usize {
+        if rela.r_type() != ElfRelocationType::RELATIVE {
             print_str("unknown rela type");
         }
         let ptr = (rela.r_offset() + base) as *mut usize;

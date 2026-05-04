@@ -1,30 +1,27 @@
 //! Shared-object image types.
 //!
-//! Use [`RawDylib`] for a mapped-but-unrelocated shared object and [`LoadedDylib`]
-//! for the relocated form returned by `.relocator().relocate()`.
+//! Use [`RawDylib`] for a mapped-but-unrelocated shared object. Relocation returns
+//! the common [`LoadedCore`] representation.
 
 use crate::{
     Result,
     elf::{ElfDyn, ElfPhdr},
-    image::{DynamicImage, ElfCore, LoadedCore, dynamic::DynamicImageParts},
-    loader::{ImageBuilder, LoadHook},
-    os::Mmap,
+    image::{ElfCore, LoadedCore, RawDynamic},
     relocation::{Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup},
-    tls::TlsResolver,
 };
-use core::{borrow::Borrow, fmt::Debug, ops::Deref, ptr::NonNull};
+use core::{fmt::Debug, ptr::NonNull};
 
 /// A mapped but unrelocated shared object.
 ///
 /// Values of this type are returned by [`crate::Loader::load_dylib`]. They expose
-/// ELF metadata immediately and can later be turned into a [`LoadedDylib`] by
-/// running relocation.
+/// ELF metadata immediately and can later be turned into a [`LoadedCore`] by running
+/// relocation.
 pub struct RawDylib<D>
 where
     D: 'static,
 {
     /// The common part containing basic ELF object information.
-    pub(crate) inner: DynamicImage<D>,
+    pub(crate) inner: RawDynamic<D>,
 }
 
 impl<D> Debug for RawDylib<D> {
@@ -37,7 +34,7 @@ impl<D> Debug for RawDylib<D> {
 }
 
 impl<D> Relocatable<D> for RawDylib<D> {
-    type Output = LoadedDylib<D>;
+    type Output = LoadedCore<D>;
 
     fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
@@ -51,8 +48,7 @@ impl<D> Relocatable<D> for RawDylib<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        let inner = self.inner.relocate_impl(args)?;
-        Ok(LoadedDylib { inner })
+        Relocatable::relocate(self.inner, args)
     }
 }
 
@@ -60,28 +56,16 @@ impl<D> Relocatable<D> for RawDylib<D> {
 impl<D> crate::relocation::SupportLazy for RawDylib<D> {}
 
 impl<D> RawDylib<D> {
-    pub(crate) fn from_builder<'hook, H, M, Tls>(
-        builder: ImageBuilder<'hook, H, M, Tls, D>,
-        phdrs: &[ElfPhdr],
-    ) -> Result<Self>
-    where
-        H: LoadHook,
-        M: Mmap,
-        Tls: TlsResolver,
-    {
-        Ok(Self {
-            inner: DynamicImage::from_builder(builder, phdrs)?,
-        })
+    /// Creates a new `RawDylib` from a `RawDynamic`.
+    #[inline]
+    pub fn from_dynamic(inner: RawDynamic<D>) -> Self {
+        Self { inner }
     }
 
-    pub(crate) fn from_parts<Tls>(parts: DynamicImageParts<D>) -> Result<Self>
-    where
-        D: 'static,
-        Tls: TlsResolver,
-    {
-        Ok(Self {
-            inner: DynamicImage::from_parts::<Tls>(parts)?,
-        })
+    /// Converts this `RawDylib` into a `RawDynamic`.
+    #[inline]
+    pub fn into_dynamic(self) -> RawDynamic<D> {
+        self.inner
     }
 
     /// Gets the entry point of the ELF object.
@@ -112,6 +96,14 @@ impl<D> RawDylib<D> {
     #[inline]
     pub fn is_lazy(&self) -> bool {
         self.inner.is_lazy()
+    }
+
+    pub fn tls_mod_id(&self) -> Option<usize> {
+        self.inner.tls_mod_id()
+    }
+
+    pub fn tls_tp_offset(&self) -> Option<isize> {
+        self.inner.tls_tp_offset()
     }
 
     /// Returns the DT_RPATH value.
@@ -161,7 +153,7 @@ impl<D> RawDylib<D> {
 
     /// Returns the lowest runtime address covered by this object's mapped slices.
     pub(crate) fn mapped_base(&self) -> usize {
-        self.inner.core_ref().mapped_base()
+        self.inner.mapped_base()
     }
 
     /// Returns whether `addr` is inside one of this object's mapped slices.
@@ -193,34 +185,5 @@ impl<D> RawDylib<D> {
     /// Creates a relocation builder for this shared object.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
         Relocator::new().with_object(self)
-    }
-}
-
-/// A relocated dynamic library.
-///
-/// This is a thin wrapper around [`LoadedCore`] and dereferences to it for
-/// convenient access to common loaded-image operations.
-#[derive(Debug, Clone)]
-pub struct LoadedDylib<D> {
-    inner: LoadedCore<D>,
-}
-
-impl<D> Deref for LoadedDylib<D> {
-    type Target = LoadedCore<D>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<D> Borrow<LoadedCore<D>> for LoadedDylib<D> {
-    fn borrow(&self) -> &LoadedCore<D> {
-        &self.inner
-    }
-}
-
-impl<D> Borrow<LoadedCore<D>> for &LoadedDylib<D> {
-    fn borrow(&self) -> &LoadedCore<D> {
-        &self.inner
     }
 }

@@ -7,7 +7,7 @@ use crate::sync::Arc;
 use crate::{
     Result,
     elf::ElfPhdr,
-    image::{DynamicImage, LoadedCore},
+    image::{LoadedCore, RawDynamic},
     loader::{ImageBuilder, LoadHook},
     os::Mmap,
     relocation::{
@@ -111,7 +111,7 @@ impl<D: 'static> Relocatable<D> for RawExec<D> {
         match self.inner {
             ExecImageInner::Dynamic(image) => {
                 let entry = image.entry_addr();
-                let inner = image.relocate_impl(args)?;
+                let inner = Relocatable::relocate(image, args)?;
                 Ok(LoadedExec {
                     entry,
                     inner: LoadedExecInner::Dynamic(inner),
@@ -144,8 +144,7 @@ pub(crate) enum ExecImageInner<D>
 where
     D: 'static,
 {
-    /// The common part containing basic ELF object information.
-    Dynamic(DynamicImage<D>),
+    Dynamic(RawDynamic<D>),
     Static(StaticImage<D>),
 }
 
@@ -198,6 +197,14 @@ impl<D: 'static> RawExec<D> {
         match &self.inner {
             ExecImageInner::Dynamic(image) => image.interp(),
             ExecImageInner::Static(_) => None,
+        }
+    }
+
+    /// Returns the list of needed library names from the dynamic section.
+    pub fn needed_libs(&self) -> &[&str] {
+        match &self.inner {
+            ExecImageInner::Dynamic(image) => image.needed_libs(),
+            ExecImageInner::Static(_) => &[],
         }
     }
 
@@ -384,7 +391,7 @@ impl<D: 'static> RawExec<D> {
     {
         Ok(Self {
             inner: if has_dynamic {
-                ExecImageInner::Dynamic(DynamicImage::from_builder(builder, phdrs)?)
+                ExecImageInner::Dynamic(RawDynamic::from_builder(builder, phdrs)?)
             } else {
                 ExecImageInner::Static(StaticImage::from_builder(builder, phdrs)?)
             },

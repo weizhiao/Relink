@@ -2,7 +2,7 @@ use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner};
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType},
-    image::RawDylib,
+    image::RawDynamic,
     input::ElfReader,
     os::Mmap,
     segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
@@ -242,8 +242,8 @@ where
     }
 
     #[inline]
-    pub(crate) fn initialize_dylib(&mut self, dylib: &mut RawDylib<D>) -> Result<()> {
-        (self.dylib_initializer)(dylib)
+    pub(crate) fn initialize_dynamic(&mut self, dynamic: &mut RawDynamic<D>) -> Result<()> {
+        (self.dynamic_initializer)(dynamic)
     }
 }
 

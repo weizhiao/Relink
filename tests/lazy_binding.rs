@@ -4,7 +4,7 @@ mod support;
 use elf_loader::{
     Loader,
     arch::{REL_GOT, REL_JUMP_SLOT},
-    image::LoadedDylib,
+    image::LoadedCore,
     input::ElfBinary,
 };
 #[cfg(feature = "lazy-binding")]
@@ -67,7 +67,7 @@ fn write_scope_func_consumer(config: ElfWriterConfig) -> ElfWriteOutput {
 }
 
 #[cfg(feature = "lazy-binding")]
-fn scope_symbol_address(image: &LoadedDylib<()>, symbol_name: &str) -> u64 {
+fn scope_symbol_address(image: &LoadedCore<()>, symbol_name: &str) -> u64 {
     unsafe {
         image
             .get::<*const ()>(symbol_name)
@@ -77,7 +77,7 @@ fn scope_symbol_address(image: &LoadedDylib<()>, symbol_name: &str) -> u64 {
 }
 
 #[cfg(feature = "lazy-binding")]
-fn jump_slot_word(image: &LoadedDylib<()>, output: &ElfWriteOutput) -> u64 {
+fn jump_slot_word(image: &LoadedCore<()>, output: &ElfWriteOutput) -> u64 {
     slot_word(
         image,
         relocation_for_symbol(output, REL_JUMP_SLOT, SCOPED_FUNC_NAME),
@@ -85,7 +85,7 @@ fn jump_slot_word(image: &LoadedDylib<()>, output: &ElfWriteOutput) -> u64 {
 }
 
 #[cfg(feature = "lazy-binding")]
-fn got_slot_word(image: &LoadedDylib<()>, output: &ElfWriteOutput) -> u64 {
+fn got_slot_word(image: &LoadedCore<()>, output: &ElfWriteOutput) -> u64 {
     slot_word(
         image,
         relocation_for_symbol(output, REL_GOT, SCOPED_VAR_NAME),
@@ -93,7 +93,7 @@ fn got_slot_word(image: &LoadedDylib<()>, output: &ElfWriteOutput) -> u64 {
 }
 
 #[cfg(feature = "lazy-binding")]
-fn call_scope_helper(image: &LoadedDylib<()>) -> i32 {
+fn call_scope_helper(image: &LoadedCore<()>) -> i32 {
     let helper_name = format!("{SCOPED_FUNC_NAME}@plt_helper");
     let helper_fn: ScopedHelperFn = unsafe {
         core::mem::transmute(

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use elf_loader::{Loader, image::LoadedDylib, input::ElfBinary};
+use elf_loader::{Loader, image::LoadedCore, input::ElfBinary};
 use gen_elf::{Arch, DylibWriter, ElfWriteOutput, ElfWriterConfig, RelocEntry, SymbolDesc};
 
 pub(crate) fn write_test_dylib(relocs: &[RelocEntry], symbols: &[SymbolDesc]) -> ElfWriteOutput {
@@ -25,7 +25,7 @@ pub(crate) fn load_relocated_dylib<M>(
     loader: &mut Loader<M>,
     name: &str,
     output: &ElfWriteOutput,
-) -> LoadedDylib<()>
+) -> LoadedCore<()>
 where
     M: elf_loader::os::Mmap,
 {

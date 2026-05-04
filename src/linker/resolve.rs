@@ -5,8 +5,8 @@ use super::{
     view::DependencyGraphView,
 };
 use crate::{
-    LinkerError, Loader, Result, UnresolvedDependencyError,
-    image::{RawDylib, ScannedDylib},
+    LinkerError, Loader, ParsePhdrError, Result, UnresolvedDependencyError,
+    image::{RawDynamic, ScannedDynamic, ScannedElf},
     input::ElfReader,
     loader::LoadHook,
     os::Mmap,
@@ -75,7 +75,7 @@ where
 pub(crate) struct LoadStage;
 
 impl<'cfg, K, D: 'static, Meta, M, H, Tls, O, V>
-    ResolveStage<'cfg, K, D, Meta, RawDylib<D>, M, H, Tls, O, V> for LoadStage
+    ResolveStage<'cfg, K, D, Meta, RawDynamic<D>, M, H, Tls, O, V> for LoadStage
 where
     K: Clone + Ord,
     D: Default,
@@ -88,7 +88,7 @@ where
     fn stage_resolved(
         visible: CommittedStorageView<'_, K, D, Meta>,
         visible_modules: &V,
-        session: &mut ResolveSession<K, RawDylib<D>>,
+        session: &mut ResolveSession<K, RawDynamic<D>>,
         resolved: ResolvedKey<'cfg, K>,
         loader: &mut Loader<M, H, D, Tls>,
         observer: &mut O,
@@ -107,7 +107,7 @@ where
                 .into())
             }
             ResolvedKey::Load(key, reader) => {
-                let raw = loader.load_dylib_impl(reader)?;
+                let raw = loader.load_dynamic(reader)?;
                 assert!(
                     !session.contains_key(&key)
                         && !visible.contains_key(&key)
@@ -125,7 +125,7 @@ where
 pub(crate) struct ScanStage;
 
 impl<K, D: 'static, Meta, M, H, Tls, O, V>
-    ResolveStage<'static, K, D, Meta, ScannedDylib, M, H, Tls, O, V> for ScanStage
+    ResolveStage<'static, K, D, Meta, ScannedDynamic, M, H, Tls, O, V> for ScanStage
 where
     K: Clone + Ord,
     M: Mmap,
@@ -137,7 +137,7 @@ where
     fn stage_resolved(
         visible: CommittedStorageView<'_, K, D, Meta>,
         visible_modules: &V,
-        session: &mut ResolveSession<K, ScannedDylib>,
+        session: &mut ResolveSession<K, ScannedDynamic>,
         resolved: ResolvedKey<'static, K>,
         loader: &mut Loader<M, H, D, Tls>,
         _observer: &mut O,
@@ -162,7 +162,9 @@ where
                     )
                     .into());
                 }
-                let module = loader.scan_dylib_impl(reader)?;
+                let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
+                    return Err(ParsePhdrError::MissingDynamicSection.into());
+                };
                 session.insert_entry(key.clone(), module);
                 Ok(key)
             }
@@ -178,9 +180,9 @@ pub(crate) struct SessionResolveContext<'a, K: Clone, D: 'static, Meta, P, S, V>
 }
 
 pub(crate) type LoadResolveContext<'a, K, D, Meta = (), V = ()> =
-    SessionResolveContext<'a, K, D, Meta, RawDylib<D>, LoadStage, V>;
+    SessionResolveContext<'a, K, D, Meta, RawDynamic<D>, LoadStage, V>;
 pub(crate) type ScanResolveContext<'a, K, D, Meta = (), V = ()> =
-    SessionResolveContext<'a, K, D, Meta, ScannedDylib, ScanStage, V>;
+    SessionResolveContext<'a, K, D, Meta, ScannedDynamic, ScanStage, V>;
 
 impl<'a, K: Clone, D: 'static, Meta, P, S, V> SessionResolveContext<'a, K, D, Meta, P, S, V> {
     #[inline]

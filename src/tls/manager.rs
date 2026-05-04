@@ -366,7 +366,7 @@ impl TlsResolver for DefaultTlsResolver {
     }
 
     fn register_static(_tls_info: &TlsInfo) -> Result<(usize, isize)> {
-        Err(TlsError::UnsupportedStaticTls.into())
+        Err(TlsError::StaticResolverUnsupported.into())
     }
 
     fn add_static_tls(tls_info: &TlsInfo, offset: isize) -> Result<usize> {

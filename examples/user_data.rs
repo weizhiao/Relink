@@ -23,9 +23,9 @@ fn main() -> Result<()> {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     env_logger::init();
 
-    let mut loader = Loader::new().with_dylib_initializer::<MyContext>(|dylib| {
-        println!("Initializing user data for: {}", dylib.name());
-        if let Some(context) = dylib.user_data_mut() {
+    let mut loader = Loader::new().with_dynamic_initializer::<MyContext>(|dynamic| {
+        println!("Initializing user data for: {}", dynamic.name());
+        if let Some(context) = dynamic.user_data_mut() {
             context.load_time = std::time::SystemTime::now();
             context.custom_id = 42;
         }

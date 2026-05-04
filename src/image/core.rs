@@ -25,8 +25,8 @@ use elf::abi::DF_STATIC_TLS;
 
 /// A fully loaded and relocated ELF module with retained dependencies.
 ///
-/// This is the common loaded representation used by [`crate::image::LoadedDylib`],
-/// dynamic [`crate::image::LoadedExec`], and loaded object-file images.
+/// This is the common loaded representation used by relocated dylibs, dynamic
+/// [`crate::image::LoadedExec`] values, and loaded object-file images.
 pub struct LoadedCore<D = ()> {
     pub(crate) core: ElfCore<D>,
     pub(crate) deps: Arc<[LoadedCore<D>]>,
@@ -385,7 +385,7 @@ impl<D> LoadedCore<D> {
     ///
     /// # Examples
     /// ```no_run
-    /// # use elf_loader::{ElfFile, Symbol, mmap::DefaultMmap, Loader};
+    /// # use elf_loader::{Loader, input::ElfFile};
     /// # let mut loader = Loader::new();
     /// # let lib = loader
     /// #     .load_dylib(ElfFile::from_path("target/liba.so").unwrap())

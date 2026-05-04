@@ -2,7 +2,10 @@ use super::{LoadHook, Loader};
 use crate::{
     ParseEhdrError, ParsePhdrError, Result,
     elf::{ElfDyn, ElfFileType, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType},
-    image::{DynamicImageParts, RawDylib, RawElf, RawExec, ScannedDylib, ScannedDylibLoadParts},
+    image::{
+        RawDylib, RawDynamic, RawDynamicParts, RawElf, RawExec, ScannedDynamic,
+        ScannedDynamicLoadParts, ScannedElf, ScannedExec,
+    },
     input::{ElfReader, IntoElfReader},
     logging,
     os::Mmap,
@@ -38,6 +41,26 @@ where
     ) -> Result<Option<&[ElfPhdr]>> {
         self.buf.prepare_phdrs(ehdr, object)
     }
+
+    fn read_expected_ehdr(
+        &mut self,
+        object: &mut impl ElfReader,
+        expected: ExpectedElf,
+    ) -> Result<ElfHeader> {
+        let ehdr = self.read_ehdr(object)?;
+        if expected.matches(&ehdr) {
+            return Ok(ehdr);
+        }
+
+        let file_type = ehdr.file_type();
+        logging::error!(
+            "[{}] Type mismatch: expected {}, found {:?}",
+            object.file_name(),
+            expected.label(),
+            file_type
+        );
+        Err(expected.error(file_type).into())
+    }
 }
 
 impl<M, H, D, Tls> Loader<M, H, D, Tls>
@@ -47,32 +70,30 @@ where
     D: 'static,
     Tls: TlsResolver,
 {
-    /// Scans a shared object and returns metadata without mapping its segments.
-    pub fn scan_dylib<I>(&mut self, input: I) -> Result<ScannedDylib>
+    /// Scans an executable or dynamic ELF image without mapping its segments.
+    ///
+    /// Images with `PT_DYNAMIC` are returned as [`ScannedElf::Dynamic`]. Executable
+    /// images without `PT_DYNAMIC` are returned as [`ScannedElf::StaticExec`].
+    pub fn scan<I>(&mut self, input: I) -> Result<ScannedElf>
     where
         I: IntoElfReader<'static>,
     {
-        self.scan_dylib_impl(input.into_reader()?)
-    }
+        let mut object = input.into_reader()?;
+        logging::debug!("Scanning ELF metadata: {}", object.file_name());
 
-    pub(crate) fn scan_dylib_impl(
-        &mut self,
-        mut object: impl ElfReader + 'static,
-    ) -> Result<ScannedDylib> {
-        logging::debug!("Scanning dylib metadata: {}", object.file_name());
-
-        let ehdr = self.read_ehdr(&mut object)?;
-        if !ehdr.is_dylib() {
-            let file_type = ehdr.file_type();
-            return Err(ParseEhdrError::ExpectedDylib { found: file_type }.into());
-        }
-
+        let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Executable)?;
         let phdrs = self
             .buf
             .prepare_phdrs(&ehdr, &mut object)?
             .unwrap_or_default();
+        let has_dynamic = has_dynamic_phdr(phdrs);
         let builder = self.inner.create_scan_builder(ehdr, phdrs, object);
-        ScannedDylib::from_builder(builder)
+
+        if has_dynamic {
+            return ScannedDynamic::from_builder(builder).map(ScannedElf::Dynamic);
+        }
+
+        ScannedExec::from_builder(builder).map(ScannedElf::StaticExec)
     }
 }
 
@@ -98,23 +119,23 @@ where
 
         match ehdr.file_type() {
             ElfFileType::REL => self.load_rel(object),
-            ElfFileType::EXEC => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
+            ElfFileType::EXEC => Ok(RawElf::Exec(self.load_exec_from_ehdr(object, ehdr)?)),
             ElfFileType::DYN => {
                 let phdrs = self.read_phdr(&mut object, &ehdr)?.unwrap_or_default();
-                let has_dynamic = phdrs
-                    .iter()
-                    .any(|p| p.program_type() == ElfProgramType::DYNAMIC);
+                let has_dynamic = has_dynamic_phdr(phdrs);
                 let is_pie = phdrs
                     .iter()
                     .any(|p| p.program_type() == ElfProgramType::INTERP)
                     || !has_dynamic;
                 if is_pie {
-                    Ok(RawElf::Exec(self.load_exec_impl(object)?))
+                    Ok(RawElf::Exec(self.load_exec_from_ehdr(object, ehdr)?))
                 } else {
-                    Ok(RawElf::Dylib(self.load_dylib_impl(object)?))
+                    let mut dynamic = self.load_dynamic_from_ehdr(object, ehdr)?;
+                    self.inner.initialize_dynamic(&mut dynamic)?;
+                    Ok(RawElf::Dylib(RawDylib::from_dynamic(dynamic)))
                 }
             }
-            _ => Ok(RawElf::Exec(self.load_exec_impl(object)?)),
+            other => Err(ParseEhdrError::ExpectedExecutable { found: other }.into()),
         }
     }
 
@@ -151,12 +172,11 @@ where
     where
         I: IntoElfReader<'a>,
     {
-        self.load_dylib_impl(input.into_reader()?)
-    }
-
-    pub(crate) fn load_dylib_impl(&mut self, object: impl ElfReader) -> Result<RawDylib<D>> {
-        let mut dylib = self.load_dylib_raw_impl(object)?;
-        self.inner.initialize_dylib(&mut dylib)?;
+        let mut object = input.into_reader()?;
+        let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Dylib)?;
+        let mut dynamic = self.load_dynamic_from_ehdr(object, ehdr)?;
+        self.inner.initialize_dynamic(&mut dynamic)?;
+        let dylib = RawDylib::from_dynamic(dynamic);
 
         logging::info!(
             "Loaded dylib: {} at [0x{:x}-0x{:x}]",
@@ -168,68 +188,87 @@ where
         Ok(dylib)
     }
 
-    pub(crate) fn load_dylib_raw_impl(
+    /// Loads any dynamic ELF image into memory and returns a raw dynamic image.
+    ///
+    /// Unlike [`Loader::load_dylib`], this accepts both `ET_DYN` shared objects
+    /// and `ET_EXEC` executables that carry a `PT_DYNAMIC` segment. The returned
+    /// value is mapped but not yet relocated. Call `.relocator().relocate()` to
+    /// resolve symbols and produce a ready-to-use loaded image.
+    pub fn load_dynamic<'a, I>(&mut self, input: I) -> Result<RawDynamic<D>>
+    where
+        I: IntoElfReader<'a>,
+    {
+        let mut object = input.into_reader()?;
+        logging::debug!("Loading dynamic image: {}", object.file_name());
+
+        let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Dynamic)?;
+        let mut image = self.load_dynamic_from_ehdr(object, ehdr)?;
+        self.inner.initialize_dynamic(&mut image)?;
+
+        logging::info!(
+            "Loaded dynamic image: {} at [0x{:x}-0x{:x}]",
+            image.name(),
+            image.mapped_base(),
+            image.mapped_base() + image.mapped_len()
+        );
+
+        Ok(image)
+    }
+
+    fn load_dynamic_from_ehdr(
         &mut self,
         mut object: impl ElfReader,
-    ) -> Result<RawDylib<D>> {
-        logging::debug!("Loading dylib: {}", object.file_name());
-
-        let ehdr = self.read_ehdr(&mut object)?;
-        if !ehdr.is_dylib() {
-            let file_type = ehdr.file_type();
-            logging::error!(
-                "[{}] Type mismatch: expected dylib, found {:?}",
-                object.file_name(),
-                file_type
-            );
-            return Err(ParseEhdrError::ExpectedDylib { found: file_type }.into());
-        }
-
+        ehdr: ElfHeader,
+    ) -> Result<RawDynamic<D>> {
         let phdrs = self
             .buf
             .prepare_phdrs(&ehdr, &mut object)?
             .unwrap_or_default();
+        if !has_dynamic_phdr(phdrs) {
+            return Err(ParsePhdrError::MissingDynamicSection.into());
+        }
+
         let builder = self
             .inner
             .create_builder::<M, Tls>(ehdr, phdrs, object, D::default())?;
-        RawDylib::from_builder(builder, phdrs)
+        RawDynamic::from_builder(builder, phdrs)
     }
 
-    /// Maps a previously scanned shared object without rereading its ELF header
+    /// Maps a previously scanned dynamic image without rereading its ELF header
     /// or program headers.
     ///
     /// The scanned object's reader is reused for segment loading. User data is
-    /// initialized through the loader's dylib initializer, like ordinary loads.
-    pub fn load_scanned_dylib(&mut self, scanned: ScannedDylib) -> Result<RawDylib<D>> {
-        let mut dylib = self.load_scanned_dylib_raw_impl(scanned)?;
-        self.inner.initialize_dylib(&mut dylib)?;
+    /// initialized through the loader's dynamic initializer, like ordinary dynamic loads.
+    pub fn load_scanned_dynamic(&mut self, scanned: ScannedDynamic) -> Result<RawDynamic<D>> {
+        let mut image = self.load_scanned_dynamic_raw_impl(scanned)?;
+        self.inner.initialize_dynamic(&mut image)?;
 
         logging::info!(
-            "Loaded scanned dylib: {} at [0x{:x}-0x{:x}]",
-            dylib.name(),
-            dylib.mapped_base(),
-            dylib.mapped_base() + dylib.mapped_len()
+            "Loaded scanned dynamic image: {} at [0x{:x}-0x{:x}]",
+            image.name(),
+            image.mapped_base(),
+            image.mapped_base() + image.mapped_len()
         );
 
-        Ok(dylib)
+        Ok(image)
     }
 
-    pub(crate) fn load_scanned_dylib_raw_impl(
+    pub(crate) fn load_scanned_dynamic_raw_impl(
         &mut self,
-        scanned: ScannedDylib,
-    ) -> Result<RawDylib<D>> {
-        let ScannedDylibLoadParts {
+        scanned: ScannedDynamic,
+    ) -> Result<RawDynamic<D>> {
+        let ScannedDynamicLoadParts {
             ehdr,
             phdrs,
             reader,
         } = scanned.into_load_parts();
 
-        logging::debug!("Loading scanned dylib: {}", reader.file_name());
+        logging::debug!("Loading scanned dynamic image: {}", reader.file_name());
 
         let builder = self
             .inner
             .create_builder::<M, Tls>(ehdr, &phdrs, reader, D::default())?;
-        RawDylib::from_builder(builder, &phdrs)
+        RawDynamic::from_builder(builder, &phdrs)
     }
 
     /// Creates a raw dynamic image from an ELF object that is already mapped.
@@ -255,7 +294,7 @@ where
         load_bias: usize,
         phdrs: impl Into<Vec<ElfPhdr>>,
         entry: usize,
-    ) -> Result<RawDylib<D>> {
+    ) -> Result<RawDynamic<D>> {
         let name = name.into();
         let phdrs = phdrs.into();
         let layout = parse_segments(&phdrs, true)?;
@@ -277,17 +316,17 @@ where
             D::default(),
             self.inner.lifecycle_handlers(),
         )?;
-        let mut dylib = RawDylib::from_parts::<Tls>(parts)?;
-        self.inner.initialize_dylib(&mut dylib)?;
+        let mut image = RawDynamic::from_parts::<Tls>(parts)?;
+        self.inner.initialize_dynamic(&mut image)?;
 
         logging::info!(
             "Borrowed dynamic image: {} at [0x{:x}-0x{:x}]",
-            dylib.name(),
-            dylib.mapped_base(),
-            dylib.mapped_base() + dylib.mapped_len()
+            image.name(),
+            image.mapped_base(),
+            image.mapped_base() + image.mapped_len()
         );
 
-        Ok(dylib)
+        Ok(image)
     }
 
     /// Loads an executable image into memory and returns a raw executable.
@@ -307,30 +346,23 @@ where
     where
         I: IntoElfReader<'a>,
     {
-        self.load_exec_impl(input.into_reader()?)
-    }
-
-    pub(crate) fn load_exec_impl(&mut self, mut object: impl ElfReader) -> Result<RawExec<D>> {
+        let mut object = input.into_reader()?;
         logging::info!("Loading executable: {}", object.file_name());
 
-        let ehdr = self.read_ehdr(&mut object)?;
-        if !ehdr.is_executable() {
-            let file_type = ehdr.file_type();
-            logging::error!(
-                "File type mismatch for {}: expected executable, found {:?}",
-                object.file_name(),
-                file_type
-            );
-            return Err(ParseEhdrError::ExpectedExecutable { found: file_type }.into());
-        }
+        let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Executable)?;
+        self.load_exec_from_ehdr(object, ehdr)
+    }
 
+    fn load_exec_from_ehdr(
+        &mut self,
+        mut object: impl ElfReader,
+        ehdr: ElfHeader,
+    ) -> Result<RawExec<D>> {
         let phdrs = self
             .buf
             .prepare_phdrs(&ehdr, &mut object)?
             .unwrap_or_default();
-        let has_dynamic = phdrs
-            .iter()
-            .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC);
+        let has_dynamic = has_dynamic_phdr(phdrs);
 
         let builder = self
             .inner
@@ -351,6 +383,47 @@ where
     }
 }
 
+#[inline]
+fn has_dynamic_phdr(phdrs: &[ElfPhdr]) -> bool {
+    phdrs
+        .iter()
+        .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
+}
+
+#[derive(Clone, Copy)]
+enum ExpectedElf {
+    Dylib,
+    Dynamic,
+    Executable,
+}
+
+impl ExpectedElf {
+    #[inline]
+    fn matches(self, ehdr: &ElfHeader) -> bool {
+        match self {
+            Self::Dylib => ehdr.is_dylib(),
+            Self::Dynamic | Self::Executable => ehdr.is_executable(),
+        }
+    }
+
+    #[inline]
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Dylib => "dylib",
+            Self::Dynamic => "dynamic image",
+            Self::Executable => "executable",
+        }
+    }
+
+    #[inline]
+    const fn error(self, found: ElfFileType) -> ParseEhdrError {
+        match self {
+            Self::Dylib => ParseEhdrError::ExpectedDylib { found },
+            Self::Dynamic | Self::Executable => ParseEhdrError::ExpectedExecutable { found },
+        }
+    }
+}
+
 fn borrowed_dynamic_parts<M, D>(
     name: String,
     load_bias: usize,
@@ -360,7 +433,7 @@ fn borrowed_dynamic_parts<M, D>(
     force_static_tls: bool,
     user_data: D,
     lifecycle_handlers: (super::DynLifecycleHandler, super::DynLifecycleHandler),
-) -> Result<DynamicImageParts<D>>
+) -> Result<RawDynamicParts<D>>
 where
     M: Mmap,
     D: 'static,
@@ -406,7 +479,7 @@ where
     let dynamic_ptr = dynamic_ptr.ok_or(ParsePhdrError::MissingDynamicSection)?;
     let (init_fn, fini_fn) = lifecycle_handlers;
 
-    Ok(DynamicImageParts {
+    Ok(RawDynamicParts {
         name,
         entry: RelocAddr::new(entry),
         interp,

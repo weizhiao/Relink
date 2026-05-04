@@ -207,7 +207,7 @@ mod tests {
     use super::super::super::plan::LinkPlan;
     use super::*;
     use crate::os::DefaultMmap;
-    use crate::{input::ElfBinary, loader::Loader};
+    use crate::{image::ScannedElf, input::ElfBinary, loader::Loader};
     use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
     use gen_elf::{Arch, DylibWriter, ElfWriterConfig, SymbolDesc};
 
@@ -221,9 +221,12 @@ mod tests {
         .unwrap();
         let bytes: &'static [u8] = Box::leak(output.data.into_boxed_slice());
         let mut loader = Loader::new();
-        let scanned = loader
-            .scan_dylib(ElfBinary::new("arena-backed.so", bytes))
-            .unwrap();
+        let ScannedElf::Dynamic(scanned) = loader
+            .scan(ElfBinary::new("arena-backed.so", bytes))
+            .unwrap()
+        else {
+            panic!("generated dylib should scan as dynamic");
+        };
         let mut entries = BTreeMap::new();
         entries.insert("root", (scanned, Vec::<&str>::new().into_boxed_slice()));
         let mut plan = LinkPlan::new("root", Vec::from(["root"]), entries);

@@ -1,6 +1,6 @@
 mod support;
 
-use elf_loader::{Loader, arch::REL_GOT, image::LoadedDylib, input::ElfBinary};
+use elf_loader::{Loader, arch::REL_GOT, image::LoadedCore, input::ElfBinary};
 use gen_elf::{Arch, ElfWriteOutput, RelocEntry, SymbolDesc};
 use support::{
     dylib_relocation_checks::{relocation_for_symbol, slot_word},
@@ -22,11 +22,11 @@ fn write_got_consumer(symbol_name: &str) -> ElfWriteOutput {
     )
 }
 
-fn got_slot_word(image: &LoadedDylib<()>, output: &ElfWriteOutput, symbol_name: &str) -> u64 {
+fn got_slot_word(image: &LoadedCore<()>, output: &ElfWriteOutput, symbol_name: &str) -> u64 {
     slot_word(image, relocation_for_symbol(output, REL_GOT, symbol_name))
 }
 
-fn symbol_address(image: &LoadedDylib<()>, symbol_name: &str) -> u64 {
+fn symbol_address(image: &LoadedCore<()>, symbol_name: &str) -> u64 {
     unsafe {
         image
             .get::<u8>(symbol_name)

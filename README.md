@@ -148,7 +148,7 @@ path / bytes / ElfFile / ElfBinary
                  |
     +------------+-------------+
     |            |             |
- LoadedDylib   LoadedExec   LoadedObject*
+ LoadedCore    LoadedExec   LoadedObject*
                  |
       get() / deps() / TLS / metadata
 
@@ -182,24 +182,26 @@ fn main() -> Result<()> {
 This requires the `object` feature.
 
 ```rust,no_run
-# use elf_loader::{Loader, Result};
-# fn main() -> Result<()> {
-let mut loader = Loader::new();
+use elf_loader::{Loader, Result};
 
-let base = loader
-    .load_object("path/to/base.o")?
-    .relocator()
-    .pre_find_fn(|_| None)
-    .relocate()?;
+fn main() -> Result<()> {
+    let mut loader = Loader::new();
 
-let plugin = loader
-    .load_dylib("path/to/plugin.so")?
-    .relocator()
-    .scope([&base])
-    .relocate()?;
-# let _ = plugin;
-# Ok(())
-# }
+    let base = loader
+        .load_object("path/to/base.o")?
+        .relocator()
+        .pre_find_fn(|_| None)
+        .relocate()?;
+
+    let plugin = loader
+        .load_dylib("path/to/plugin.so")?
+        .relocator()
+        .scope([&base])
+        .relocate()?;
+
+    let _ = plugin;
+    Ok(())
+}
 ```
 
 ### Optimize a Runtime Dependency Graph Before Mapping
@@ -207,42 +209,47 @@ let plugin = loader
 Use `Linker` when loading is more than "map this one file". The scan-first path resolves `DT_NEEDED` edges, builds a plan for the whole pending group, lets you mutate layout/materialization, and only then maps and relocates the modules.
 
 ```rust,no_run
-# use elf_loader::{Result, input::ElfFile};
-# use elf_loader::linker::{
-#     DependencyRequest, KeyResolver, LinkContext, LinkPassPlan, Linker, Materialization,
-#     ReorderPass, ResolvedKey,
-# };
-# struct Resolver;
-# impl KeyResolver<'static, &'static str, ()> for Resolver {
-#     fn load_root(&mut self, key: &&'static str) -> Result<ResolvedKey<'static, &'static str>> {
-#         Ok(ResolvedKey::load(*key, ElfFile::from_path("path/to/plugin.so")?))
-#     }
-#     fn resolve_dependency(
-#         &mut self,
-#         _req: &DependencyRequest<'_, &'static str, ()>,
-#     ) -> Result<Option<ResolvedKey<'static, &'static str>>> {
-#         Ok(None)
-#     }
-# }
-# fn main() -> Result<()> {
-let mut context = LinkContext::<&'static str, ()>::new();
-let resolver = Resolver;
-
-let configure = |plan: &mut LinkPassPlan<'_, &'static str, ReorderPass>| -> Result<()> {
-    plan.set_materialization(plan.root(), Materialization::SectionRegions);
-    Ok(())
+use elf_loader::{Result, input::ElfFile};
+use elf_loader::linker::{
+    DependencyRequest, KeyResolver, LinkContext, LinkPassPlan, Linker, Materialization,
+    ReorderPass, ResolvedKey,
 };
 
-let plugin = Linker::new()
-    .resolver(resolver)
-    .map_pipeline(|mut pipeline| {
-        pipeline.push(configure);
-        pipeline
-    })
-    .load_scan_first(&mut context, "plugin")?;
-# let _ = plugin;
-# Ok(())
-# }
+struct Resolver;
+
+impl KeyResolver<'static, &'static str, ()> for Resolver {
+    fn load_root(&mut self, key: &&'static str) -> Result<ResolvedKey<'static, &'static str>> {
+        Ok(ResolvedKey::load(*key, ElfFile::from_path("path/to/plugin.so")?))
+    }
+
+    fn resolve_dependency(
+        &mut self,
+        _req: &DependencyRequest<'_, &'static str, ()>,
+    ) -> Result<Option<ResolvedKey<'static, &'static str>>> {
+        Ok(None)
+    }
+}
+
+fn main() -> Result<()> {
+    let mut context = LinkContext::<&'static str, ()>::new();
+    let resolver = Resolver;
+
+    let configure = |plan: &mut LinkPassPlan<'_, &'static str, ReorderPass>| -> Result<()> {
+        plan.set_materialization(plan.root(), Materialization::SectionRegions);
+        Ok(())
+    };
+
+    let plugin = Linker::new()
+        .resolver(resolver)
+        .map_pipeline(|mut pipeline| {
+            pipeline.push(configure);
+            pipeline
+        })
+        .load_scan_first(&mut context, "plugin")?;
+
+    let _ = plugin;
+    Ok(())
+}
 ```
 
 See `cargo run --example load_scan_first` for a complete example that constructs real `DT_NEEDED` edges and loads a dependency chain through the scan-first linker.
@@ -252,25 +259,30 @@ See `cargo run --example load_scan_first` for a complete example that constructs
 This requires the `lazy-binding` feature.
 
 ```rust,no_run
-# use elf_loader::{Loader, Result};
-# extern "C" fn host_double(value: i32) -> i32 { value * 2 }
-# fn main() -> Result<()> {
-let lib = Loader::new()
-    .load_dylib("path/to/plugin.so")?
-    .relocator()
-    .pre_find_fn(|name| {
-        if name == "host_double" {
-            Some(host_double as *const ())
-        } else {
-            None
-        }
-    })
-    .share_find_with_lazy()
-    .lazy()
-    .relocate()?;
-# let _ = lib;
-# Ok(())
-# }
+use elf_loader::{Loader, Result};
+
+extern "C" fn host_double(value: i32) -> i32 {
+    value * 2
+}
+
+fn main() -> Result<()> {
+    let lib = Loader::new()
+        .load_dylib("path/to/plugin.so")?
+        .relocator()
+        .pre_find_fn(|name| {
+            if name == "host_double" {
+                Some(host_double as *const ())
+            } else {
+                None
+            }
+        })
+        .share_find_with_lazy()
+        .lazy()
+        .relocate()?;
+
+    let _ = lib;
+    Ok(())
+}
 ```
 
 Use `share_find_with_lazy()` when PLT fixups should reuse the same host lookup policy as the initial relocation pass. If lazy fixups need different rules, configure `lazy_pre_find_fn()` / `lazy_post_find_fn()` directly.
@@ -336,7 +348,7 @@ The [`examples/`](examples/) directory covers the main extension points:
 | `load_hook` | Observe segment loading with `with_hook()` | `cargo run --example load_hook` |
 | `load_scan_first` | Discover `DT_NEEDED`, run layout passes, and materialize section regions | `cargo run --example load_scan_first` |
 | `lifecycle` | Custom `.init` / `.fini` handling | `cargo run --example lifecycle` |
-| `user_data` | Initialize per-dylib metadata with `with_dylib_initializer()` | `cargo run --example user_data` |
+| `user_data` | Initialize per-dynamic-image metadata with `with_dynamic_initializer()` | `cargo run --example user_data` |
 | `relocation_handler` | Intercept relocations with a custom handler | `cargo run --example relocation_handler` |
 | `load_object` | Load relocatable object files | `cargo run --example load_object --features object` |
 

@@ -2,7 +2,7 @@
 use crate::{
     ParseDynamicError, Result,
     elf::{ElfRelType, ElfRelocationType, ElfRelr},
-    image::{DynamicImage, LoadedCore},
+    image::{LoadedCore, RawDynamic},
     logging,
     relocation::{
         RelocHelper, RelocateArgs, RelocationHandler, ResolvedBinding, SymbolLookup, likely,
@@ -12,7 +12,7 @@ use crate::{
 };
 use core::num::NonZeroUsize;
 
-impl<D> DynamicImage<D> {
+impl<D> RawDynamic<D> {
     fn apply_relro(&self, binding: &ResolvedBinding) -> Result<()> {
         if binding.is_lazy() {
             return Ok(());
@@ -143,7 +143,7 @@ pub(crate) struct DynamicRelocation {
     dynrel: &'static [ElfRelType],
 }
 
-impl<D> DynamicImage<D> {
+impl<D> RawDynamic<D> {
     /// Relocate PLT (Procedure Linkage Table) entries
     fn relocate_pltrel<PreS, PostS, PreH, PostH>(
         &self,

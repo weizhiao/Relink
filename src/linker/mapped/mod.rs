@@ -5,7 +5,7 @@ use crate::{
     LinkerError, Result,
     elf::{ElfDyn, ElfPhdrs, ElfProgramType},
     entity::SecondaryMap,
-    image::{RawDylib, ScannedDylib},
+    image::{RawDynamic, ScannedDynamic},
     loader::DynLifecycleHandler,
     os::Mmap,
     segment::ElfSegments,
@@ -243,13 +243,13 @@ impl MappedRuntimeMemory {
     }
 }
 
-pub(crate) fn build_arena_raw_dylib<D, Tls>(
-    scanned: ScannedDylib,
+pub(crate) fn build_arena_raw_dynamic<D, Tls>(
+    scanned: ScannedDynamic,
     runtime: RuntimeModuleMemory,
     init_fn: DynLifecycleHandler,
     fini_fn: DynLifecycleHandler,
     force_static_tls: bool,
-) -> Result<RawDylib<D>>
+) -> Result<RawDynamic<D>>
 where
     D: Default + 'static,
     Tls: TlsResolver,
@@ -305,7 +305,7 @@ where
         .unwrap_or_else(|| runtime.segments.base_addr().offset(original_entry));
     let name = scanned.name().to_string();
 
-    RawDylib::from_parts::<Tls>(crate::image::DynamicImageParts {
+    RawDynamic::from_parts::<Tls>(crate::image::RawDynamicParts {
         name,
         entry,
         interp: None,

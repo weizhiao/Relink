@@ -2,6 +2,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use elf_loader::relocation::SymbolLookup;
+
 pub(crate) const EXTERNAL_FUNC_NAME: &str = "external_func";
 pub(crate) const EXTERNAL_FUNC_NAME2: &str = "external_func2";
 pub(crate) const EXTERNAL_VAR_NAME: &str = "external_var";
@@ -43,7 +45,18 @@ static mut EXTERNAL_VAR: i32 = 100;
 
 pub(crate) struct TestHostSymbols {
     pub(crate) addresses: HashMap<&'static str, usize>,
-    pub(crate) resolver: Arc<dyn Fn(&str) -> Option<*const ()> + Send + Sync>,
+    pub(crate) resolver: TestHostSymbolResolver,
+}
+
+#[derive(Clone)]
+pub(crate) struct TestHostSymbolResolver {
+    addresses: Arc<HashMap<&'static str, usize>>,
+}
+
+impl SymbolLookup for TestHostSymbolResolver {
+    fn lookup(&self, name: &str) -> Option<*const ()> {
+        self.addresses.get(name).map(|&addr| addr as *const ())
+    }
 }
 
 impl TestHostSymbols {
@@ -54,9 +67,9 @@ impl TestHostSymbols {
             (EXTERNAL_VAR_NAME, &raw const EXTERNAL_VAR as usize),
         ]);
 
-        let lookup_addresses = addresses.clone();
-        let resolver =
-            Arc::new(move |name: &str| lookup_addresses.get(name).map(|&addr| addr as *const ()));
+        let resolver = TestHostSymbolResolver {
+            addresses: Arc::new(addresses.clone()),
+        };
 
         Self {
             addresses,

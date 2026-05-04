@@ -7,14 +7,17 @@ use crate::{
     loader::{DynLifecycleHandler, ImageBuilder, LifecycleContext, LoadHook},
     logging,
     os::Mmap,
-    relocation::{DynamicRelocation, RelocAddr},
+    relocation::{
+        DynamicRelocation, RelocAddr, Relocatable, RelocateArgs, RelocationHandler, Relocator,
+        SymbolLookup,
+    },
     segment::ELFRelro,
     tls::{CoreTlsState, TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, ptr::NonNull};
 
-use super::{ElfCore, core::CoreInner};
+use super::{ElfCore, LoadedCore, core::CoreInner};
 
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo {
@@ -41,7 +44,7 @@ pub(crate) struct DynamicInfo {
     pub(crate) lazy: LazyBindingInfo,
 }
 
-pub(crate) struct DynamicImageParts<D> {
+pub(crate) struct RawDynamicParts<D> {
     pub(crate) name: alloc::string::String,
     pub(crate) entry: RelocAddr,
     pub(crate) interp: Option<&'static str>,
@@ -98,13 +101,11 @@ impl core::fmt::Debug for ElfExtraData {
     }
 }
 
-/// A common part of relocated ELF objects.
+/// A mapped but unrelocated dynamic ELF image.
 ///
-/// This structure represents the common components shared by all relocated
-/// ELF objects, whether they are dynamic libraries or executables.
-/// It contains basic information like entry point, name, and program headers,
-/// as well as the parsed data required for relocation and symbol lookup.
-pub(crate) struct DynamicImage<D>
+/// This is the common raw representation for ELF images with a `PT_DYNAMIC`
+/// segment, including shared objects and dynamically linked executables.
+pub struct RawDynamic<D>
 where
     D: 'static,
 {
@@ -120,9 +121,9 @@ where
     extra: ElfExtraData,
 }
 
-impl<D> core::fmt::Debug for DynamicImage<D> {
+impl<D> core::fmt::Debug for RawDynamic<D> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("DynamicImage")
+        f.debug_struct("RawDynamic")
             .field("entry", &format_args!("0x{:x}", self.entry.into_inner()))
             .field("module", &self.module)
             .field("extra", &self.extra)
@@ -130,10 +131,10 @@ impl<D> core::fmt::Debug for DynamicImage<D> {
     }
 }
 
-impl<D> DynamicImage<D> {
+impl<D> RawDynamic<D> {
     /// Gets the entry point of the ELF object.
     #[inline]
-    pub(crate) fn entry(&self) -> usize {
+    pub fn entry(&self) -> usize {
         self.entry_addr().into_inner()
     }
 
@@ -142,12 +143,12 @@ impl<D> DynamicImage<D> {
         self.entry
     }
 
-    pub(crate) fn tls_mod_id(&self) -> Option<usize> {
+    pub fn tls_mod_id(&self) -> Option<usize> {
         self.module.tls_mod_id()
     }
 
     /// Gets the TLS thread pointer offset
-    pub(crate) fn tls_tp_offset(&self) -> Option<isize> {
+    pub fn tls_tp_offset(&self) -> Option<isize> {
         self.module.tls_tp_offset()
     }
 
@@ -157,25 +158,25 @@ impl<D> DynamicImage<D> {
 
     /// Gets the core component reference of the ELF object.
     #[inline]
-    pub(crate) fn core_ref(&self) -> &ElfCore<D> {
+    pub fn core_ref(&self) -> &ElfCore<D> {
         &self.module
     }
 
     /// Gets the core component of the ELF object.
     #[inline]
-    pub(crate) fn core(&self) -> ElfCore<D> {
+    pub fn core(&self) -> ElfCore<D> {
         self.core_ref().clone()
     }
 
     /// Converts this object into its core component.
     #[inline]
-    pub(crate) fn into_core(self) -> ElfCore<D> {
+    pub fn into_core(self) -> ElfCore<D> {
         self.core()
     }
 
     /// Whether lazy binding is enabled for the current ELF object
     #[inline]
-    pub(crate) fn is_lazy(&self) -> bool {
+    pub fn is_lazy(&self) -> bool {
         self.extra.lazy
     }
 
@@ -184,7 +185,7 @@ impl<D> DynamicImage<D> {
     /// # Returns
     /// An optional string slice containing the RPATH value
     #[inline]
-    pub(crate) fn rpath(&self) -> Option<&str> {
+    pub fn rpath(&self) -> Option<&str> {
         self.extra.rpath
     }
 
@@ -193,7 +194,7 @@ impl<D> DynamicImage<D> {
     /// # Returns
     /// An optional string slice containing the RUNPATH value
     #[inline]
-    pub(crate) fn runpath(&self) -> Option<&str> {
+    pub fn runpath(&self) -> Option<&str> {
         self.extra.runpath
     }
 
@@ -202,18 +203,18 @@ impl<D> DynamicImage<D> {
     /// # Returns
     /// An optional string slice containing the interpreter path
     #[inline]
-    pub(crate) fn interp(&self) -> Option<&str> {
+    pub fn interp(&self) -> Option<&str> {
         self.interp
     }
 
     /// Gets the name of the ELF object
     #[inline]
-    pub(crate) fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         self.module.name()
     }
 
     /// Gets the program headers of the ELF object
-    pub(crate) fn phdrs(&self) -> &[ElfPhdr] {
+    pub fn phdrs(&self) -> &[ElfPhdr] {
         self.phdrs.as_slice()
     }
 
@@ -260,17 +261,17 @@ impl<D> DynamicImage<D> {
     /// # Returns
     /// An optional mutable reference to the user data
     #[inline]
-    pub(crate) fn user_data_mut(&mut self) -> Option<&mut D> {
+    pub fn user_data_mut(&mut self) -> Option<&mut D> {
         self.module.user_data_mut()
     }
 
     /// Gets the base address of the loaded ELF object
-    pub(crate) fn base(&self) -> usize {
+    pub fn base(&self) -> usize {
         self.module.base()
     }
 
     /// Gets the length of the bounding runtime span covered by mapped memory.
-    pub(crate) fn mapped_len(&self) -> usize {
+    pub fn mapped_len(&self) -> usize {
         self.module.mapped_len()
     }
 
@@ -280,12 +281,12 @@ impl<D> DynamicImage<D> {
     }
 
     /// Returns whether `addr` is inside one of this image's mapped slices.
-    pub(crate) fn contains_addr(&self, addr: usize) -> bool {
+    pub fn contains_addr(&self, addr: usize) -> bool {
         self.module.contains_addr(addr)
     }
 
     /// Gets the list of needed library names from the dynamic section
-    pub(crate) fn needed_libs(&self) -> &[&str] {
+    pub fn needed_libs(&self) -> &[&str] {
         &self.extra.needed_libs
     }
 
@@ -293,22 +294,22 @@ impl<D> DynamicImage<D> {
     ///
     /// # Returns
     /// An optional NonNull pointer to the dynamic section
-    pub(crate) fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn>> {
+    pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn>> {
         self.module.dynamic_ptr()
     }
 
     /// Gets a reference to the user data
-    pub(crate) fn user_data(&self) -> &D {
+    pub fn user_data(&self) -> &D {
         self.module.user_data()
     }
 }
 
-impl<D: 'static> DynamicImage<D> {
-    pub(crate) fn from_parts<Tls>(parts: DynamicImageParts<D>) -> Result<Self>
+impl<D: 'static> RawDynamic<D> {
+    pub(crate) fn from_parts<Tls>(parts: RawDynamicParts<D>) -> Result<Self>
     where
         Tls: TlsResolver,
     {
-        let DynamicImageParts {
+        let RawDynamicParts {
             name,
             entry,
             interp,
@@ -361,7 +362,7 @@ impl<D: 'static> DynamicImage<D> {
 
         let init_handler = init_fn;
 
-        Ok(DynamicImage {
+        Ok(RawDynamic {
             entry,
             interp,
             phdrs,
@@ -430,7 +431,7 @@ impl<D: 'static> DynamicImage<D> {
             .dynamic_ptr
             .ok_or(ParsePhdrError::MissingDynamicSection)?;
         let phdrs = builder.create_phdrs(phdrs);
-        Self::from_parts::<Tls>(DynamicImageParts {
+        Self::from_parts::<Tls>(RawDynamicParts {
             name: builder.name,
             entry: if builder.ehdr.is_dylib() {
                 builder.segments.base_addr().offset(builder.ehdr.e_entry())
@@ -454,4 +455,31 @@ impl<D: 'static> DynamicImage<D> {
             user_data: builder.user_data,
         })
     }
+
+    /// Creates a relocation builder for this dynamic image.
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
+        Relocator::new().with_object(self)
+    }
 }
+
+impl<D: 'static> Relocatable<D> for RawDynamic<D> {
+    type Output = LoadedCore<D>;
+
+    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+        self,
+        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+    ) -> Result<Self::Output>
+    where
+        PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
+        LazyPreS: SymbolLookup + Send + Sync + 'static,
+        LazyPostS: SymbolLookup + Send + Sync + 'static,
+        PreH: RelocationHandler + ?Sized,
+        PostH: RelocationHandler + ?Sized,
+    {
+        self.relocate_impl(args)
+    }
+}
+
+#[cfg(feature = "lazy-binding")]
+impl<D: 'static> crate::relocation::SupportLazy for RawDynamic<D> {}

@@ -1,6 +1,6 @@
 #[cfg(feature = "lazy-binding")]
 mod enabled {
-    use crate::image::{CoreInner, DynamicImage, DynamicInfo, LoadedCore};
+    use crate::image::{CoreInner, DynamicInfo, LoadedCore, RawDynamic};
     use crate::{
         RelocationError, Result,
         arch::prepare_lazy_bind,
@@ -47,7 +47,7 @@ mod enabled {
             matches!(self, Self::Lazy)
         }
 
-        pub(crate) fn prepare_plt<D>(&self, image: &DynamicImage<D>) -> Result<()>
+        pub(crate) fn prepare_plt<D>(&self, image: &RawDynamic<D>) -> Result<()>
         where
             D: 'static,
         {
@@ -80,7 +80,7 @@ mod enabled {
         }
     }
 
-    impl<D> DynamicImage<D> {
+    impl<D> RawDynamic<D> {
         pub(crate) fn resolve_binding(&self, binding: BindingMode) -> ResolvedBinding {
             match binding {
                 BindingMode::Default => {
@@ -132,7 +132,7 @@ mod enabled {
         }
     }
 
-    fn lazy_binding_got<D>(image: &DynamicImage<D>) -> Result<NonNull<usize>>
+    fn lazy_binding_got<D>(image: &RawDynamic<D>) -> Result<NonNull<usize>>
     where
         D: 'static,
     {
@@ -224,7 +224,7 @@ mod enabled {
 mod disabled {
     use crate::{
         elf::ElfRelType,
-        image::{DynamicImage, LoadedCore},
+        image::{LoadedCore, RawDynamic},
         relocation::{BindingMode, LazyLookupHooks, SymbolLookup},
         sync::Arc,
     };
@@ -239,7 +239,7 @@ mod disabled {
             false
         }
 
-        pub(crate) fn prepare_plt<D>(&self, _image: &DynamicImage<D>) -> crate::Result<()>
+        pub(crate) fn prepare_plt<D>(&self, _image: &RawDynamic<D>) -> crate::Result<()>
         where
             D: 'static,
         {
@@ -255,7 +255,7 @@ mod disabled {
         }
     }
 
-    impl<D> DynamicImage<D> {
+    impl<D> RawDynamic<D> {
         pub(crate) fn resolve_binding(&self, _binding: BindingMode) -> ResolvedBinding {
             ResolvedBinding::Eager
         }

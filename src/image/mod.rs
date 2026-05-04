@@ -1,11 +1,12 @@
 //! Public image types returned by the loader and relocation pipeline.
 //!
-//! `Loader` produces raw image types such as [`RawElf`], [`RawDylib`], and [`RawExec`].
+//! `Loader` produces raw image types such as [`RawElf`], [`RawDynamic`], [`RawDylib`],
+//! and [`RawExec`].
 //! Those raw values are mapped into memory but not yet relocated.
 //!
 //! After calling `.relocator().relocate()`, you get loaded image types such as
-//! [`LoadedElf`], [`LoadedDylib`], [`LoadedExec`], and [`LoadedCore`], which expose
-//! symbol lookup, metadata, and dependency retention.
+//! [`LoadedElf`], [`LoadedExec`], and [`LoadedCore`], which expose symbol lookup,
+//! metadata, and dependency retention.
 
 use crate::{
     Result,
@@ -25,20 +26,21 @@ mod symbol;
 
 #[cfg(any(feature = "lazy-binding", feature = "object"))]
 pub(crate) use core::CoreInner;
-pub(crate) use dynamic::DynamicImage;
-pub(crate) use dynamic::DynamicImageParts;
 pub(crate) use dynamic::DynamicInfo;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use dynamic::LazyBindingInfo;
-pub(crate) use scanned::ScannedDylibLoadParts;
+pub(crate) use dynamic::RawDynamicParts;
+pub(crate) use scanned::ScannedDynamicLoadParts;
 
 pub use core::{ElfCore, ElfCoreRef, LoadedCore};
-pub use dylib::{LoadedDylib, RawDylib};
+pub use dylib::RawDylib;
+pub use dynamic::RawDynamic;
 pub use exec::{LoadedExec, RawExec};
 #[cfg(feature = "object")]
 pub use object::{LoadedObject, RawObject};
 pub use scanned::{
-    ModuleCapability, ScannedDylib, ScannedDynamicInfo, ScannedSection, ScannedSectionId,
+    ModuleCapability, ScannedDynamic, ScannedDynamicInfo, ScannedElf, ScannedExec, ScannedSection,
+    ScannedSectionId,
 };
 pub use symbol::Symbol;
 
@@ -69,7 +71,7 @@ where
 #[derive(Debug, Clone)]
 pub enum LoadedElf<D> {
     /// A relocated dynamic library.
-    Dylib(LoadedDylib<D>),
+    Dylib(LoadedCore<D>),
 
     /// A relocated executable.
     Exec(LoadedExec<D>),
@@ -176,13 +178,13 @@ impl<D: 'static> RawElf<D> {
 impl<D: 'static> crate::relocation::SupportLazy for RawElf<D> {}
 
 impl<D> LoadedElf<D> {
-    /// Converts this LoadedElf into a LoadedDylib if it is one
+    /// Converts this LoadedElf into the loaded core for a dylib if it is one.
     ///
     /// # Returns
     /// * `Some(dylib)` - If this is a Dylib variant
     /// * `None` - If this is an Exec variant
     #[inline]
-    pub fn into_dylib(self) -> Option<LoadedDylib<D>> {
+    pub fn into_dylib(self) -> Option<LoadedCore<D>> {
         match self {
             LoadedElf::Dylib(dylib) => Some(dylib),
             _ => None,
@@ -216,13 +218,13 @@ impl<D> LoadedElf<D> {
         }
     }
 
-    /// Gets a reference to the LoadedDylib if this is one
+    /// Gets a reference to the loaded core for a dylib if this is one.
     ///
     /// # Returns
     /// * `Some(dylib)` - If this is a Dylib variant
     /// * `None` - If this is an Exec variant
     #[inline]
-    pub fn as_dylib(&self) -> Option<&LoadedDylib<D>> {
+    pub fn as_dylib(&self) -> Option<&LoadedCore<D>> {
         match self {
             LoadedElf::Dylib(dylib) => Some(dylib),
             _ => None,

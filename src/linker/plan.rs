@@ -7,7 +7,7 @@ use crate::{
     AlignedBytes, LinkerError, Result,
     aligned_bytes::ByteRepr,
     entity::{PrimaryMap, entity_ref},
-    image::{ModuleCapability, ScannedDylib, ScannedSectionId},
+    image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::marker::PhantomData;
@@ -181,7 +181,7 @@ where
     }
 
     /// Iterates over every planned module id, key, and scanned module.
-    pub fn entries(&self) -> impl Iterator<Item = (ModuleId, &K, &ScannedDylib)> {
+    pub fn entries(&self) -> impl Iterator<Item = (ModuleId, &K, &ScannedDynamic)> {
         self.plan
             .entries
             .iter()
@@ -481,13 +481,13 @@ impl<'a, K: Clone + Ord> LinkPipeline<'a, K> {
 
 pub struct PlannedModule<K> {
     key: K,
-    module: ScannedDylib,
+    module: ScannedDynamic,
     direct_deps: Box<[ModuleId]>,
 }
 
 struct PendingPlannedModule<K> {
     key: K,
-    module: ScannedDylib,
+    module: ScannedDynamic,
     direct_deps: Box<[K]>,
 }
 
@@ -517,7 +517,7 @@ where
 
 impl<K> PlannedModule<K> {
     #[inline]
-    pub(crate) fn new(key: K, module: ScannedDylib, direct_deps: Box<[ModuleId]>) -> Self {
+    pub(crate) fn new(key: K, module: ScannedDynamic, direct_deps: Box<[ModuleId]>) -> Self {
         Self {
             key,
             module,
@@ -531,12 +531,12 @@ impl<K> PlannedModule<K> {
     }
 
     #[inline]
-    pub fn module(&self) -> &ScannedDylib {
+    pub fn module(&self) -> &ScannedDynamic {
         &self.module
     }
 
     #[inline]
-    pub fn module_mut(&mut self) -> &mut ScannedDylib {
+    pub fn module_mut(&mut self) -> &mut ScannedDynamic {
         &mut self.module
     }
 
@@ -546,7 +546,7 @@ impl<K> PlannedModule<K> {
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (K, ScannedDylib, Box<[ModuleId]>) {
+    pub(crate) fn into_parts(self) -> (K, ScannedDynamic, Box<[ModuleId]>) {
         (self.key, self.module, self.direct_deps)
     }
 }
@@ -585,7 +585,7 @@ where
     pub(crate) fn new(
         root: K,
         group_order: Vec<K>,
-        mut entries: BTreeMap<K, (ScannedDylib, Box<[K]>)>,
+        mut entries: BTreeMap<K, (ScannedDynamic, Box<[K]>)>,
     ) -> Self {
         let group_keys = group_order;
         let mut module_ids = BTreeMap::new();

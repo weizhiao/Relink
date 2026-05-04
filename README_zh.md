@@ -182,24 +182,26 @@ fn main() -> Result<()> {
 这部分需要开启 `object` feature。
 
 ```rust,no_run
-# use elf_loader::{Loader, Result};
-# fn main() -> Result<()> {
-let mut loader = Loader::new();
+use elf_loader::{Loader, Result};
 
-let base = loader
-    .load_object("path/to/base.o")?
-    .relocator()
-    .pre_find_fn(|_| None)
-    .relocate()?;
+fn main() -> Result<()> {
+    let mut loader = Loader::new();
 
-let plugin = loader
-    .load_dylib("path/to/plugin.so")?
-    .relocator()
-    .scope([&base])
-    .relocate()?;
-# let _ = plugin;
-# Ok(())
-# }
+    let base = loader
+        .load_object("path/to/base.o")?
+        .relocator()
+        .pre_find_fn(|_| None)
+        .relocate()?;
+
+    let plugin = loader
+        .load_dylib("path/to/plugin.so")?
+        .relocator()
+        .scope([&base])
+        .relocate()?;
+
+    let _ = plugin;
+    Ok(())
+}
 ```
 
 ### 映射前优化运行时依赖图
@@ -207,42 +209,47 @@ let plugin = loader
 当你要做的不只是“映射这个文件”时，可以使用 `Linker`。scan-first 路径会先解析 `DT_NEEDED` 边，为整个待加载 group 构建计划，允许你修改布局和物化策略，然后才真正映射和重定位模块。
 
 ```rust,no_run
-# use elf_loader::{Result, input::ElfFile};
-# use elf_loader::linker::{
-#     DependencyRequest, KeyResolver, LinkContext, LinkPassPlan, Linker, Materialization,
-#     ReorderPass, ResolvedKey,
-# };
-# struct Resolver;
-# impl KeyResolver<'static, &'static str, ()> for Resolver {
-#     fn load_root(&mut self, key: &&'static str) -> Result<ResolvedKey<'static, &'static str>> {
-#         Ok(ResolvedKey::load(*key, ElfFile::from_path("path/to/plugin.so")?))
-#     }
-#     fn resolve_dependency(
-#         &mut self,
-#         _req: &DependencyRequest<'_, &'static str, ()>,
-#     ) -> Result<Option<ResolvedKey<'static, &'static str>>> {
-#         Ok(None)
-#     }
-# }
-# fn main() -> Result<()> {
-let mut context = LinkContext::<&'static str, ()>::new();
-let resolver = Resolver;
-
-let configure = |plan: &mut LinkPassPlan<'_, &'static str, (), ReorderPass>| -> Result<()> {
-    plan.set_materialization(plan.root(), Materialization::SectionRegions);
-    Ok(())
+use elf_loader::{Result, input::ElfFile};
+use elf_loader::linker::{
+    DependencyRequest, KeyResolver, LinkContext, LinkPassPlan, Linker, Materialization,
+    ReorderPass, ResolvedKey,
 };
 
-let plugin = Linker::new()
-    .resolver(resolver)
-    .map_pipeline(|mut pipeline| {
-        pipeline.push(configure);
-        pipeline
-    })
-    .load_scan_first(&mut context, "plugin")?;
-# let _ = plugin;
-# Ok(())
-# }
+struct Resolver;
+
+impl KeyResolver<'static, &'static str, ()> for Resolver {
+    fn load_root(&mut self, key: &&'static str) -> Result<ResolvedKey<'static, &'static str>> {
+        Ok(ResolvedKey::load(*key, ElfFile::from_path("path/to/plugin.so")?))
+    }
+
+    fn resolve_dependency(
+        &mut self,
+        _req: &DependencyRequest<'_, &'static str, ()>,
+    ) -> Result<Option<ResolvedKey<'static, &'static str>>> {
+        Ok(None)
+    }
+}
+
+fn main() -> Result<()> {
+    let mut context = LinkContext::<&'static str, ()>::new();
+    let resolver = Resolver;
+
+    let configure = |plan: &mut LinkPassPlan<'_, &'static str, (), ReorderPass>| -> Result<()> {
+        plan.set_materialization(plan.root(), Materialization::SectionRegions);
+        Ok(())
+    };
+
+    let plugin = Linker::new()
+        .resolver(resolver)
+        .map_pipeline(|mut pipeline| {
+            pipeline.push(configure);
+            pipeline
+        })
+        .load_scan_first(&mut context, "plugin")?;
+
+    let _ = plugin;
+    Ok(())
+}
 ```
 
 完整示例见 `cargo run --example load_scan_first`：它会构造真实的 `DT_NEEDED` 边，并通过 scan-first linker 加载依赖链。
@@ -252,25 +259,30 @@ let plugin = Linker::new()
 这部分需要开启 `lazy-binding` feature。
 
 ```rust,no_run
-# use elf_loader::{Loader, Result};
-# extern "C" fn host_double(value: i32) -> i32 { value * 2 }
-# fn main() -> Result<()> {
-let lib = Loader::new()
-    .load_dylib("path/to/plugin.so")?
-    .relocator()
-    .pre_find_fn(|name| {
-        if name == "host_double" {
-            Some(host_double as *const ())
-        } else {
-            None
-        }
-    })
-    .share_find_with_lazy()
-    .lazy()
-    .relocate()?;
-# let _ = lib;
-# Ok(())
-# }
+use elf_loader::{Loader, Result};
+
+extern "C" fn host_double(value: i32) -> i32 {
+    value * 2
+}
+
+fn main() -> Result<()> {
+    let lib = Loader::new()
+        .load_dylib("path/to/plugin.so")?
+        .relocator()
+        .pre_find_fn(|name| {
+            if name == "host_double" {
+                Some(host_double as *const ())
+            } else {
+                None
+            }
+        })
+        .share_find_with_lazy()
+        .lazy()
+        .relocate()?;
+
+    let _ = lib;
+    Ok(())
+}
 ```
 
 如果 PLT fixup 需要复用初始重定位阶段的宿主符号查找策略，可以使用 `share_find_with_lazy()`。如果 lazy fixup 需要单独的规则，则直接配置 `lazy_pre_find_fn()` / `lazy_post_find_fn()`。
@@ -336,7 +348,7 @@ fn main() -> Result<()> {
 | `load_hook` | 用 `with_hook()` 观察段加载 | `cargo run --example load_hook` |
 | `load_scan_first` | 发现 `DT_NEEDED`、运行布局 pass 并物化 section regions | `cargo run --example load_scan_first` |
 | `lifecycle` | 自定义 `.init` / `.fini` 调用流程 | `cargo run --example lifecycle` |
-| `user_data` | 用 `with_dylib_initializer()` 初始化 dylib 级上下文 | `cargo run --example user_data` |
+| `user_data` | 用 `with_dynamic_initializer()` 初始化 dynamic image 级上下文 | `cargo run --example user_data` |
 | `relocation_handler` | 用自定义 handler 拦截重定位 | `cargo run --example relocation_handler` |
 | `load_object` | 加载可重定位目标文件 | `cargo run --example load_object --features object` |
 

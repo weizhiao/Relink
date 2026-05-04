@@ -14,8 +14,6 @@ const STATIC_TLS_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
     "TLS support is not compiled into this build. Enable the `tls` cargo feature."
 };
 
-const UNSUPPORTED_STATIC_TLS_MESSAGE: &str = "unsupport static tls";
-
 /// Structured I/O error details.
 #[derive(Debug)]
 pub enum IoError {
@@ -474,8 +472,6 @@ pub enum TlsError {
     ResolverUnsupported,
     /// The current resolver does not support static TLS registration.
     StaticResolverUnsupported,
-    /// The active TLS backend cannot satisfy static TLS registration.
-    UnsupportedStaticTls,
 }
 
 impl Display for TlsError {
@@ -483,7 +479,6 @@ impl Display for TlsError {
         match self {
             Self::ResolverUnsupported => f.write_str(TLS_DISABLED_MESSAGE),
             Self::StaticResolverUnsupported => f.write_str(STATIC_TLS_DISABLED_MESSAGE),
-            Self::UnsupportedStaticTls => f.write_str(UNSUPPORTED_STATIC_TLS_MESSAGE),
         }
     }
 }
