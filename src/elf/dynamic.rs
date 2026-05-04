@@ -17,6 +17,8 @@ pub const DT_RELRSZ: i64 = 35;
 /// Elf64_Relr for the 64-bit file class. If this element is present,
 /// the dynamic structure must also have DT_RELRSZ and DT_RELRENT elements.
 pub const DT_RELR: i64 = 36;
+/// This element holds the size, in bytes, of the DT_RELR relocation entry.
+pub const DT_RELRENT: i64 = 37;
 
 /// Semantic wrapper for the ELF `d_tag` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -33,8 +35,10 @@ impl ElfDynamicTag {
     pub const SYMTAB: Self = Self(DT_SYMTAB);
     pub const RELA: Self = Self(DT_RELA);
     pub const RELASZ: Self = Self(DT_RELASZ);
+    pub const RELAENT: Self = Self(DT_RELAENT);
     pub const REL: Self = Self(DT_REL);
     pub const RELSZ: Self = Self(DT_RELSZ);
+    pub const RELENT: Self = Self(DT_RELENT);
     pub const PLTREL: Self = Self(DT_PLTREL);
     pub const DEBUG: Self = Self(elf::abi::DT_DEBUG);
     pub const JMPREL: Self = Self(DT_JMPREL);
@@ -59,6 +63,7 @@ impl ElfDynamicTag {
     pub const RELCOUNT: Self = Self(DT_RELCOUNT);
     pub const RELR: Self = Self(DT_RELR);
     pub const RELRSZ: Self = Self(DT_RELRSZ);
+    pub const RELRENT: Self = Self(DT_RELRENT);
 
     #[inline]
     pub const fn new(raw: i64) -> Self {

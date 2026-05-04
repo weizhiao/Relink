@@ -4,8 +4,8 @@ use super::{
     mapped, materialization,
     plan::{LinkPipeline, LinkPlan, ModuleId},
     request::{
-        DefaultRelocationPlanner, LoadObserver, RelocationPlanner, RelocationRequest, StagedDylib,
-        VisibleModules,
+        DefaultRelocationPlanner, LoadObserver, RelocationPlanner, RelocationRequest,
+        StagedDynamic, VisibleModules,
     },
     resolve::{KeyResolver, LoadResolveContext, ScanResolveContext},
     session::{GraphEntry, LoadSession, ResolveSession},
@@ -353,20 +353,56 @@ where
         Meta: Default,
         Resolver: KeyResolver<'cfg, K, D, Meta>,
     {
-        if let Some(loaded) = context.committed.get(&key) {
-            return Ok(loaded.clone());
-        }
-        if let Some(loaded) = self.visible_modules.loaded(&key) {
+        if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
             return Ok(loaded);
         }
 
         let prepared = Self::prepare_runtime_load(
             context,
-            &key,
             &mut self.loader,
             &mut self.resolver,
             &mut self.observer,
             &self.visible_modules,
+            |context, visible_modules, session, loader, resolver, observer| {
+                let mut resolve_context = LoadResolveContext::new(
+                    context.committed.view(),
+                    visible_modules,
+                    &mut session.resolve,
+                );
+                resolve_context.stage_resolved(resolver.load_root(&key)?, loader, observer)
+            },
+        )?;
+        self.execute_prepared_load(context, prepared)
+    }
+
+    /// Resolves dependencies and relocates a root dynamic image that has
+    /// already been mapped by the caller.
+    pub fn load_mapped_root<'cfg, Meta>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta>,
+        key: K,
+        raw: RawDynamic<D>,
+    ) -> Result<LoadedCore<D>>
+    where
+        K: 'cfg,
+        Meta: Default,
+        Resolver: KeyResolver<'cfg, K, D, Meta>,
+    {
+        if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
+            return Ok(loaded);
+        }
+
+        let prepared = Self::prepare_runtime_load(
+            context,
+            &mut self.loader,
+            &mut self.resolver,
+            &mut self.observer,
+            &self.visible_modules,
+            move |_, _, session, _, _, observer| {
+                observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
+                session.resolve.insert_entry(key.clone(), raw);
+                Ok(key)
+            },
         )?;
         self.execute_prepared_load(context, prepared)
     }
@@ -382,10 +418,7 @@ where
         Meta: Default,
         Resolver: KeyResolver<'static, K, D, Meta>,
     {
-        if let Some(loaded) = context.committed.get(&key) {
-            return Ok(loaded.clone());
-        }
-        if let Some(loaded) = self.visible_modules.loaded(&key) {
+        if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
             return Ok(loaded);
         }
 
@@ -405,25 +438,40 @@ where
         self.execute_prepared_load(context, prepared)
     }
 
-    fn prepare_runtime_load<'cfg, Meta>(
+    fn prepare_runtime_load<'cfg, Meta, Seed>(
         context: &LinkContext<K, D, Meta>,
-        key: &K,
         loader: &mut Loader<M, H, D, Tls>,
         resolver: &mut Resolver,
         observer: &mut O,
         visible_modules: &V,
+        seed_root: Seed,
     ) -> Result<PreparedLoad<K, D>>
     where
         K: 'cfg,
         Resolver: KeyResolver<'cfg, K, D, Meta>,
+        Seed: FnOnce(
+            &LinkContext<K, D, Meta>,
+            &V,
+            &mut LoadSession<K, D>,
+            &mut Loader<M, H, D, Tls>,
+            &mut Resolver,
+            &mut O,
+        ) -> Result<K>,
     {
         let mut session = LoadSession::new();
+        let root = seed_root(
+            context,
+            visible_modules,
+            &mut session,
+            loader,
+            resolver,
+            observer,
+        )?;
         let mut resolve_context = LoadResolveContext::new(
             context.committed.view(),
             visible_modules,
             &mut session.resolve,
         );
-        let root = resolve_context.stage_resolved(resolver.load_root(key)?, loader, observer)?;
         if resolve_context.contains_pending(&root) {
             resolve_context.resolve_dependency_graph(root.clone(), loader, resolver, observer)?;
         }
@@ -510,7 +558,7 @@ where
                 module_id,
                 module,
             )?;
-            observer.on_staged_dylib(StagedDylib::new(&key, &raw))?;
+            observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
             session.insert_resolved_pending(key, raw, direct_deps);
         }
 
@@ -604,11 +652,7 @@ where
 
         Self::commit_session(context, &mut session);
 
-        context
-            .committed
-            .get(&root)
-            .cloned()
-            .or_else(|| self.visible_modules.loaded(&root))
+        visible_loaded(context, &self.visible_modules, &root)
             .ok_or_else(|| LinkerError::context("load root missing after commit"))
             .map_err(Into::into)
     }
@@ -715,11 +759,7 @@ where
                 if let Some(entry) = session.resolve.entries.get(scope_key) {
                     unsafe { LoadedCore::from_core(entry.payload.core()) }
                 } else {
-                    context
-                        .committed
-                        .get(scope_key)
-                        .cloned()
-                        .or_else(|| visible_modules.loaded(scope_key))
+                    visible_loaded(context, visible_modules, scope_key)
                         .expect("scope key must resolve to a visible or pending module")
                 }
             })
@@ -798,4 +838,22 @@ fn apply_section_overrides<D>(
         );
         dst.copy_from_slice(data.as_ref());
     }
+}
+
+#[inline]
+fn visible_loaded<K, D, Meta, V>(
+    context: &LinkContext<K, D, Meta>,
+    visible_modules: &V,
+    key: &K,
+) -> Option<LoadedCore<D>>
+where
+    K: Clone + Ord,
+    D: 'static,
+    V: VisibleModules<K, D>,
+{
+    context
+        .committed
+        .get(key)
+        .cloned()
+        .or_else(|| visible_modules.loaded(key))
 }

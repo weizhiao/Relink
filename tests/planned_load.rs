@@ -9,7 +9,7 @@ use elf_loader::{
     linker::{
         DataPass, KeyResolver, LinkContext, LinkPass, LinkPassPlan, Linker, LoadObserver,
         Materialization, RelocationInputs, RelocationRequest, ReorderPass, ResolvedKey,
-        StagedDylib, VisibleModules,
+        StagedDynamic, VisibleModules,
     },
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
@@ -125,9 +125,9 @@ impl KeyResolver<'static, &'static str, ()> for MultiBinaryResolver {
 }
 
 impl LoadObserver<&'static str, ()> for RecordingObserver {
-    fn on_staged_dylib(
+    fn on_staged_dynamic(
         &mut self,
-        event: StagedDylib<'_, &'static str, ()>,
+        event: StagedDynamic<'_, &'static str, ()>,
     ) -> elf_loader::Result<()> {
         assert!(event.raw().mapped_len() > 0);
         self.events.borrow_mut().push((*event.key()).to_string());
@@ -136,9 +136,9 @@ impl LoadObserver<&'static str, ()> for RecordingObserver {
 }
 
 impl LoadObserver<&'static str, ()> for FailingObserver {
-    fn on_staged_dylib(
+    fn on_staged_dynamic(
         &mut self,
-        _event: StagedDylib<'_, &'static str, ()>,
+        _event: StagedDynamic<'_, &'static str, ()>,
     ) -> elf_loader::Result<()> {
         Err(elf_loader::Error::Custom(CustomError::Message(
             "observer failed".into(),

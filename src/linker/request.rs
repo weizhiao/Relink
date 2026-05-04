@@ -250,12 +250,12 @@ where
 /// so observers must not treat it as a ready-to-run module. Callers that create
 /// placeholder [`LoadedCore`] values from `raw().core()` are responsible for the
 /// safety contract of [`LoadedCore::from_core`].
-pub struct StagedDylib<'a, K, D: 'static> {
+pub struct StagedDynamic<'a, K, D: 'static> {
     key: &'a K,
     raw: &'a RawDynamic<D>,
 }
 
-impl<'a, K, D: 'static> StagedDylib<'a, K, D> {
+impl<'a, K, D: 'static> StagedDynamic<'a, K, D> {
     #[inline]
     pub(crate) fn new(key: &'a K, raw: &'a RawDynamic<D>) -> Self {
         Self { key, raw }
@@ -277,7 +277,7 @@ impl<'a, K, D: 'static> StagedDylib<'a, K, D> {
 /// Observer for modules staged by [`super::Linker`].
 pub trait LoadObserver<K, D: 'static> {
     /// Called when a new [`RawDynamic`] is mapped but before relocation starts.
-    fn on_staged_dylib(&mut self, _event: StagedDylib<'_, K, D>) -> Result<()> {
+    fn on_staged_dynamic(&mut self, _event: StagedDynamic<'_, K, D>) -> Result<()> {
         Ok(())
     }
 }
@@ -286,10 +286,10 @@ impl<K, D: 'static> LoadObserver<K, D> for () {}
 
 impl<K, D: 'static, F> LoadObserver<K, D> for F
 where
-    F: for<'a> FnMut(StagedDylib<'a, K, D>) -> Result<()>,
+    F: for<'a> FnMut(StagedDynamic<'a, K, D>) -> Result<()>,
 {
     #[inline]
-    fn on_staged_dylib(&mut self, event: StagedDylib<'_, K, D>) -> Result<()> {
+    fn on_staged_dynamic(&mut self, event: StagedDynamic<'_, K, D>) -> Result<()> {
         self(event)
     }
 }

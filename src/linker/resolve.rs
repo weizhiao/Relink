@@ -1,5 +1,5 @@
 use super::{
-    request::{DependencyOwner, DependencyRequest, LoadObserver, StagedDylib, VisibleModules},
+    request::{DependencyOwner, DependencyRequest, LoadObserver, StagedDynamic, VisibleModules},
     session::{ResolveSession, collect_unique_deps, extend_breadth_first},
     storage::CommittedStorageView,
     view::DependencyGraphView,
@@ -114,7 +114,7 @@ where
                         && !visible_modules.contains_key(&key),
                     "resolved reader produced an already-known key; use ResolvedKey::Existing to reuse a visible module"
                 );
-                observer.on_staged_dylib(StagedDylib::new(&key, &raw))?;
+                observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
                 session.insert_entry(key.clone(), raw);
                 Ok(key)
             }

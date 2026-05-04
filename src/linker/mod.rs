@@ -32,7 +32,7 @@ pub use plan::{
 };
 pub use request::{
     DefaultRelocationPlanner, DependencyOwner, DependencyRequest, LoadObserver, RelocationInputs,
-    RelocationPlanner, RelocationRequest, StagedDylib, VisibleModules,
+    RelocationPlanner, RelocationRequest, StagedDynamic, VisibleModules,
 };
 pub use resolve::{KeyResolver, ResolvedKey};
 pub use view::DependencyGraphView;
