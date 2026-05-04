@@ -346,6 +346,15 @@ impl<D> RelocationInputs<D> {
     }
 
     #[inline]
+    pub(crate) fn into_parts(self) -> (Arc<[LoadedCore<D>]>, BindingMode) {
+        let scope = match self.scope {
+            RelocationScope::Owned(scope) => Arc::from(scope),
+            RelocationScope::Shared(scope) => scope,
+        };
+        (scope, self.binding)
+    }
+
+    #[inline]
     pub fn binding(&self) -> BindingMode {
         self.binding
     }

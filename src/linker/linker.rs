@@ -641,12 +641,13 @@ where
                 let req = RelocationRequest::new(&key, entry.payload, &scope);
                 let inputs = self.planner.plan(&req)?;
                 let raw = req.into_raw();
+                let (scope, binding) = inputs.into_parts();
                 let loaded = self
                     .relocator
                     .clone()
-                    .binding(inputs.binding())
+                    .binding(binding)
                     .with_object(raw)
-                    .scope(inputs.scope().iter())
+                    .shared_scope(scope)
                     .relocate()?;
                 session.push_ready(key, (*loaded).clone(), direct_deps);
             }

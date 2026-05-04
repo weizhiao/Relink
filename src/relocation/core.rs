@@ -10,26 +10,24 @@ use crate::{
     sync::Arc,
     tls::TlsDescArgs,
 };
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 use core::ptr::null;
 
 /// Internal context for managing relocation state and handlers.
 pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized> {
     pub(crate) core: &'find ElfCore<D>,
-    pub(crate) scope: Vec<LoadedCore<D>>,
+    pub(crate) scope: Arc<[LoadedCore<D>]>,
     pub(crate) pre_find: &'find PreS,
     pub(crate) post_find: &'find PostS,
     pub(crate) pre_handler: &'find PreH,
     pub(crate) post_handler: &'find PostH,
-    pub(crate) dependency_flags: Vec<bool>,
     #[allow(dead_code)]
     pub(crate) tls_get_addr: RelocAddr,
     pub(crate) tls_desc_args: TlsDescArgs,
 }
 
-pub(crate) struct RelocArtifacts<D> {
-    pub(crate) deps: Vec<LoadedCore<D>>,
-    pub(crate) tls_desc_args: TlsDescArgs,
+fn empty_scope<D>() -> Arc<[LoadedCore<D>]> {
+    Arc::from(Vec::new())
 }
 
 impl<'find, D, PreS, PostS, PreH, PostH> RelocHelper<'find, D, PreS, PostS, PreH, PostH>
@@ -41,14 +39,13 @@ where
 {
     pub(crate) fn new(
         core: &'find ElfCore<D>,
-        scope: Vec<LoadedCore<D>>,
+        scope: Arc<[LoadedCore<D>]>,
         pre_find: &'find PreS,
         post_find: &'find PostS,
         pre_handler: &'find PreH,
         post_handler: &'find PostH,
         tls_get_addr: RelocAddr,
     ) -> Self {
-        let dependency_flags = vec![false; scope.len()];
         Self {
             core,
             scope,
@@ -56,82 +53,39 @@ where
             post_find,
             pre_handler,
             post_handler,
-            dependency_flags,
             tls_get_addr,
             tls_desc_args: TlsDescArgs::default(),
         }
     }
 
     #[inline]
-    fn finish_handler_result(&mut self, result: HandleResult) -> HandleResult {
-        match result {
-            HandleResult::Unhandled => HandleResult::Unhandled,
-            HandleResult::Handled => HandleResult::Handled,
-            HandleResult::HandledWithDependency(idx) => {
-                self.dependency_flags[idx] = true;
-                HandleResult::Handled
-            }
-        }
-    }
-
-    #[inline]
     pub(crate) fn handle_pre(&mut self, rel: &ElfRelType) -> Result<HandleResult> {
         let hctx = RelocationContext::new(rel, self.core, &self.scope);
-        Ok(self.finish_handler_result(self.pre_handler.handle(&hctx)?))
+        self.pre_handler.handle(&hctx)
     }
 
     #[inline]
     pub(crate) fn handle_post(&mut self, rel: &ElfRelType) -> Result<HandleResult> {
         let hctx = RelocationContext::new(rel, self.core, &self.scope);
-        Ok(self.finish_handler_result(self.post_handler.handle(&hctx)?))
+        self.post_handler.handle(&hctx)
     }
 
     #[inline]
     pub(crate) fn find_symbol(&mut self, r_sym: usize) -> Option<RelocAddr> {
-        let (symbol, idx) = find_symbol_addr(
+        find_symbol_addr(
             self.pre_find,
             self.post_find,
             self.core,
             self.core.symtab(),
             &self.scope,
             r_sym,
-        )?;
-        if let Some(idx) = idx {
-            self.dependency_flags[idx] = true;
-        }
-        Some(symbol)
+        )
     }
 
     #[inline]
     pub(crate) fn find_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, D>> {
         let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
-        let (symdef, idx) = find_symdef_impl(self.core, &self.scope, dynsym, &syminfo)?;
-        if let Some(idx) = idx {
-            self.dependency_flags[idx] = true;
-        }
-        Some(symdef)
-    }
-
-    pub(crate) fn finish(self, needed_libs: &[&str]) -> RelocArtifacts<D> {
-        let Self {
-            scope,
-            dependency_flags,
-            tls_desc_args,
-            ..
-        } = self;
-
-        let deps = scope
-            .into_iter()
-            .zip(dependency_flags)
-            .filter_map(|(module, flag)| {
-                (flag || needed_libs.contains(&module.short_name())).then(|| module)
-            })
-            .collect();
-
-        RelocArtifacts {
-            deps,
-            tls_desc_args,
-        }
+        find_symdef_impl(self.core, &self.scope, dynsym, &syminfo)
     }
 }
 
@@ -164,7 +118,7 @@ where
 /// ```
 pub struct Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D = ()> {
     object: T,
-    scope: Vec<LoadedCore<D>>,
+    scope: Arc<[LoadedCore<D>]>,
     pre_find: PreS,
     post_find: PostS,
     lazy_pre_find: LazyPreS,
@@ -205,7 +159,7 @@ impl Relocator<(), (), (), (), (), (), (), ()> {
     pub fn new() -> Self {
         Self {
             object: (),
-            scope: Vec::new(),
+            scope: empty_scope(),
             pre_find: (),
             post_find: (),
             lazy_pre_find: (),
@@ -303,28 +257,40 @@ where
     /// Replaces the current symbol-resolution scope.
     ///
     /// During relocation, symbols from these modules are searched in the provided order.
-    /// Any module used during relocation is retained as a dependency of the
-    /// relocated output.
+    /// Scope entries are retained as dependencies of the relocated output.
     pub fn scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
         R: core::borrow::Borrow<LoadedCore<D>>,
     {
-        self.scope.clear();
-        self.extend_scope(scope)
+        let scope: Vec<_> = scope.into_iter().map(|r| r.borrow().clone()).collect();
+        self.scope = Arc::from(scope);
+        self
+    }
+
+    /// Replaces the current symbol-resolution scope with a shared scope owner.
+    ///
+    /// Scope entries are searched in order and retained as dependencies of the
+    /// relocated output.
+    pub fn shared_scope(mut self, scope: Arc<[LoadedCore<D>]>) -> Self {
+        self.scope = scope;
+        self
     }
 
     /// Appends more modules to the symbol-resolution scope.
     ///
     /// During relocation, additional modules are searched after the existing
-    /// scope entries.
+    /// scope entries. Scope entries are retained as dependencies of the
+    /// relocated output.
     pub fn extend_scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
         R: core::borrow::Borrow<LoadedCore<D>>,
     {
-        self.scope
-            .extend(scope.into_iter().map(|r| r.borrow().clone()));
+        let mut extended = Vec::with_capacity(self.scope.len());
+        extended.extend(self.scope.iter().cloned());
+        extended.extend(scope.into_iter().map(|r| r.borrow().clone()));
+        self.scope = Arc::from(extended);
         self
     }
 
@@ -338,7 +304,7 @@ where
     {
         Relocator {
             object,
-            scope: Vec::new(),
+            scope: empty_scope(),
             pre_find: self.pre_find,
             post_find: self.post_find,
             lazy_pre_find: self.lazy_pre_find,
@@ -422,8 +388,8 @@ where
 {
     /// Executes relocation with the current configuration.
     ///
-    /// This consumes the builder, resolves relocations, records used
-    /// dependencies, and returns the final loaded image.
+    /// This consumes the builder, resolves relocations, retains the configured
+    /// relocation scope as dependencies, and returns the final loaded image.
     pub fn relocate(self) -> Result<T::Output> {
         let Self {
             object,
@@ -782,7 +748,7 @@ fn find_weak<'lib, D>(lib: &'lib ElfCore<D>, dynsym: &'lib ElfSymbol) -> Option<
 /// Finds the address of a symbol using the configured lookup strategies.
 ///
 /// Searches in order: pre_find, scope, post_find.
-/// Returns the resolved address and optionally the library index used.
+/// Returns the resolved address.
 #[inline]
 pub(crate) fn find_symbol_addr<PreS, PostS, D>(
     pre_find: &PreS,
@@ -791,7 +757,7 @@ pub(crate) fn find_symbol_addr<PreS, PostS, D>(
     symtab: &SymbolTable,
     scope: &[LoadedCore<D>],
     r_sym: usize,
-) -> Option<(RelocAddr, Option<usize>)>
+) -> Option<RelocAddr>
 where
     PreS: SymbolLookup + ?Sized,
     PostS: SymbolLookup + ?Sized,
@@ -803,10 +769,10 @@ where
             core.name(),
             syminfo.name()
         );
-        return Some((RelocAddr::from_ptr(addr), None));
+        return Some(RelocAddr::from_ptr(addr));
     }
     if let Some(res) = find_symdef_impl(core, scope, dynsym, &syminfo) {
-        return Some((res.0.convert(), res.1));
+        return Some(res.convert());
     }
     if let Some(addr) = post_find.lookup(syminfo.name()) {
         logging::trace!(
@@ -814,7 +780,7 @@ where
             core.name(),
             syminfo.name()
         );
-        return Some((RelocAddr::from_ptr(addr), None));
+        return Some(RelocAddr::from_ptr(addr));
     }
     None
 }
@@ -824,21 +790,17 @@ pub(crate) fn find_symdef_impl<'lib, D>(
     scope: &'lib [LoadedCore<D>],
     sym: &'lib ElfSymbol,
     syminfo: &SymbolInfo,
-) -> Option<(SymDef<'lib, D>, Option<usize>)> {
+) -> Option<SymDef<'lib, D>> {
     if unlikely(sym.is_local()) {
-        Some((
-            SymDef {
-                sym: Some(sym),
-                lib: core,
-            },
-            None,
-        ))
+        Some(SymDef {
+            sym: Some(sym),
+            lib: core,
+        })
     } else {
         let mut precompute = syminfo.precompute();
         scope
             .iter()
-            .enumerate()
-            .find_map(|(i, lib)| {
+            .find_map(|lib| {
                 lib.symtab()
                     .lookup_filter(syminfo, &mut precompute)
                     .map(|sym| {
@@ -848,19 +810,13 @@ pub(crate) fn find_symdef_impl<'lib, D>(
                             lib.name(),
                             syminfo.name()
                         );
-                        // 如果找到的库和当前 core 指向同一个 ELF（同一 allocation），
-                        // 不返回库索引，避免增加引用或产生生命周期循环导致内存泄漏。
-                        let same = Arc::as_ptr(&lib.core.inner) == Arc::as_ptr(&core.inner);
-                        (
-                            SymDef {
-                                sym: Some(sym),
-                                lib: &lib.core,
-                            },
-                            if same { None } else { Some(i) },
-                        )
+                        SymDef {
+                            sym: Some(sym),
+                            lib: &lib.core,
+                        }
                     })
             })
-            .or_else(|| find_weak(core, sym).map(|s| (s, None)))
+            .or_else(|| find_weak(core, sym))
     }
 }
 

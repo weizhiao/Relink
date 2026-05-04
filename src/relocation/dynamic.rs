@@ -1,13 +1,12 @@
 //! Relocation of elf objects
-use crate::sync::Arc;
 use crate::{
     ParseDynamicError, Result,
     elf::{ElfRelType, ElfRelocationType, ElfRelr},
     image::{DynamicImage, LoadedCore},
     logging,
     relocation::{
-        RelocArtifacts, RelocHelper, RelocateArgs, RelocationHandler, ResolvedBinding,
-        SymbolLookup, likely, reloc_error, resolve_ifunc, unlikely,
+        RelocHelper, RelocateArgs, RelocationHandler, ResolvedBinding, SymbolLookup, likely,
+        reloc_error, resolve_ifunc, unlikely,
     },
     tls::{handle_tls_reloc, lookup_tls_get_addr},
 };
@@ -83,17 +82,16 @@ impl<D> DynamicImage<D> {
                 .relocate_pltrel(&binding, &mut helper)?;
         }
 
-        let RelocArtifacts {
-            deps,
+        let RelocHelper {
+            scope: deps,
             tls_desc_args,
-        } = helper.finish(self.needed_libs());
+            ..
+        } = helper;
 
         // Persist TLSDESC backing storage collected during relocation.
         unsafe {
             self.core_ref().set_tls_desc_args(tls_desc_args);
         }
-
-        let deps: Arc<[LoadedCore<D>]> = Arc::from(deps);
 
         if !deps.is_empty() {
             logging::debug!(

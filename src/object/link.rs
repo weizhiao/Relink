@@ -5,7 +5,7 @@ use crate::{
     image::RawObject,
     loader::LifecycleContext,
     logging,
-    relocation::{RelocArtifacts, RelocHelper, RelocationHandler, SymbolLookup},
+    relocation::{RelocHelper, RelocationHandler, SymbolLookup},
 };
 
 use super::layout::PltGotSection;
@@ -42,7 +42,7 @@ impl<D: 'static> RawObject<D> {
 
         let mut helper = RelocHelper::new(
             &self.core,
-            scope.to_vec(),
+            scope.to_vec().into(),
             pre_find,
             post_find,
             pre_handler,
@@ -59,7 +59,7 @@ impl<D: 'static> RawObject<D> {
             }
         }
 
-        let RelocArtifacts { tls_desc_args, .. } = helper.finish(&[]);
+        let RelocHelper { tls_desc_args, .. } = helper;
 
         unsafe {
             self.core.set_tls_desc_args(tls_desc_args);

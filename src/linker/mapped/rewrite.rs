@@ -124,17 +124,11 @@ impl RuntimeModuleMemory {
         source_address: SourceAddress,
     ) -> Result<RelocationSection<'_>> {
         if let Some(section_id) = target {
-            return self.relocation_in_section(section_id, source_address, || {
-                LinkerError::metadata_rewrite("relocation target section is not arena-backed")
-            });
+            return self.relocation_in_section(section_id, source_address);
         }
 
         if let Some(section_id) = self.addr_to_section(source_address) {
-            return self.relocation_in_section(section_id, source_address, || {
-                LinkerError::metadata_rewrite(
-                    "allocated relocation entry offset does not map into arena-backed memory",
-                )
-            });
+            return self.relocation_in_section(section_id, source_address);
         }
 
         Err(LinkerError::metadata_rewrite(
@@ -147,9 +141,10 @@ impl RuntimeModuleMemory {
         &self,
         section_id: SectionId,
         source_address: SourceAddress,
-        missing_section: impl FnOnce() -> LinkerError,
     ) -> Result<RelocationSection<'_>> {
-        let section = self.section(section_id).ok_or_else(missing_section)?;
+        let section = self.section(section_id).ok_or_else(|| {
+            LinkerError::metadata_rewrite("relocation target section is not arena-backed")
+        })?;
         let offset = section.source_offset(source_address).ok_or_else(|| {
             LinkerError::metadata_rewrite("relocation offset does not map into its target section")
         })?;

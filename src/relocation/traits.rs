@@ -5,7 +5,7 @@ use crate::{
     image::{ElfCore, LoadedCore},
     sync::Arc,
 };
-use alloc::{boxed::Box, vec::Vec};
+use alloc::boxed::Box;
 
 /// A trait for looking up external symbols during relocation.
 ///
@@ -109,10 +109,8 @@ impl SymbolLookup for () {
 pub enum HandleResult {
     /// The handler did not process this relocation.
     Unhandled,
-    /// The handler processed this relocation without introducing a dependency.
+    /// The handler processed this relocation.
     Handled,
-    /// The handler processed this relocation and used `scope[idx]`.
-    HandledWithDependency(usize),
 }
 
 impl HandleResult {
@@ -130,9 +128,7 @@ pub trait RelocationHandler {
     ///
     /// # Returns
     /// * `Ok(HandleResult::Unhandled)` - Not handled, fall through to default behavior.
-    /// * `Ok(HandleResult::Handled)` - Handled successfully, no library dependency.
-    /// * `Ok(HandleResult::HandledWithDependency(idx))` - Handled successfully and used
-    ///   `scope[idx]`.
+    /// * `Ok(HandleResult::Handled)` - Handled successfully.
     /// * `Err(e)` - The handler failed.
     fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult>;
 }
@@ -178,7 +174,7 @@ impl<'a, D> RelocationContext<'a, D> {
 
     /// Find symbol definition in the current scope
     #[inline]
-    pub fn find_symdef(&self, r_sym: usize) -> Option<(SymDef<'a, D>, Option<usize>)> {
+    pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, D>> {
         let symbol = self.lib.symtab();
         let (sym, syminfo) = symbol.symbol_idx(r_sym);
         find_symdef_impl(self.lib, self.scope, sym, &syminfo)
@@ -286,7 +282,7 @@ pub struct RelocateArgs<
     PreH: ?Sized,
     PostH: ?Sized,
 > {
-    pub(crate) scope: Vec<LoadedCore<D>>,
+    pub(crate) scope: Arc<[LoadedCore<D>]>,
     pub(crate) binding: BindingMode,
     pub(crate) lookup: LookupHooks<'a, PreS, PostS>,
     pub(crate) lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
@@ -298,7 +294,7 @@ impl<'a, D, PreS: ?Sized, PostS: ?Sized, LazyPreS, LazyPostS, PreH: ?Sized, Post
 {
     #[inline]
     pub(crate) fn new(
-        scope: Vec<LoadedCore<D>>,
+        scope: Arc<[LoadedCore<D>]>,
         binding: BindingMode,
         lookup: LookupHooks<'a, PreS, PostS>,
         lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,

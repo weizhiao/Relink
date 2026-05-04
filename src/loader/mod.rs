@@ -182,7 +182,7 @@ pub(crate) struct LoaderInner<H, D: 'static> {
     /// When `true`, the ELF machine architecture check is skipped on load.
     /// Used for cross-architecture loading (e.g. x86-64 ELF on RISC-V).
     pub(crate) allow_cross_arch: bool,
-    dylib_initializer: Box<dyn FnMut(&mut crate::image::RawDylib<D>) -> Result<()>>,
+    dylib_initializer: Box<dyn FnMut(&mut RawDylib<D>) -> Result<()>>,
 }
 
 impl Loader<DefaultMmap, (), (), ()> {

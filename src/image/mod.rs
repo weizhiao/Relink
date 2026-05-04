@@ -321,7 +321,7 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
                 Ok(LoadedElf::Object(Relocatable::relocate(
                     relocatable,
                     RelocateArgs::new(
-                        alloc::vec::Vec::new(),
+                        crate::sync::Arc::from(alloc::vec::Vec::new()),
                         binding,
                         lookup,
                         lazy_lookup,

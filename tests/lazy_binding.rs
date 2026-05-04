@@ -57,6 +57,16 @@ fn write_scope_consumer(config: ElfWriterConfig) -> ElfWriteOutput {
 }
 
 #[cfg(feature = "lazy-binding")]
+fn write_scope_func_consumer(config: ElfWriterConfig) -> ElfWriteOutput {
+    let arch = Arch::current();
+    write_test_dylib_with_config(
+        config,
+        &[RelocEntry::jump_slot(SCOPED_FUNC_NAME, arch)],
+        &[SymbolDesc::undefined_func(SCOPED_FUNC_NAME)],
+    )
+}
+
+#[cfg(feature = "lazy-binding")]
 fn scope_symbol_address(image: &LoadedDylib<()>, symbol_name: &str) -> u64 {
     unsafe {
         image
@@ -144,6 +154,44 @@ fn default_lazy_binding_uses_retained_scope_dependency() {
         "expected one retained dependency"
     );
     assert_eq!(relocated.deps()[0].name(), provider.name());
+}
+
+#[cfg(feature = "lazy-binding")]
+#[test]
+fn default_lazy_binding_retains_scope_used_only_by_lazy_jump_slot() {
+    let mut loader = Loader::new();
+    let provider_output = write_scope_provider();
+    let provider = load_relocated_dylib(&mut loader, "libscope_provider.so", &provider_output);
+    let consumer_output = write_scope_func_consumer(ElfWriterConfig::default());
+
+    let relocated = loader
+        .load_dylib(ElfBinary::new(
+            "scope_func_consumer.so",
+            &consumer_output.data,
+        ))
+        .expect("failed to load scope consumer")
+        .relocator()
+        .scope(&[provider.clone()])
+        .relocate()
+        .expect("failed to relocate scope consumer");
+
+    let scoped_func_addr = scope_symbol_address(&provider, SCOPED_FUNC_NAME);
+    assert_ne!(
+        jump_slot_word(&relocated, &consumer_output),
+        scoped_func_addr,
+        "default lazy binding should leave the jump slot unresolved before the first call"
+    );
+    assert_eq!(
+        relocated.deps().len(),
+        1,
+        "lazy jump slot scope dependency should be retained before first call"
+    );
+    assert_eq!(relocated.deps()[0].name(), provider.name());
+    assert_eq!(call_scope_helper(&relocated), 42);
+    assert_eq!(
+        jump_slot_word(&relocated, &consumer_output),
+        scoped_func_addr
+    );
 }
 
 #[cfg(feature = "lazy-binding")]

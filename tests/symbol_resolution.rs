@@ -56,10 +56,12 @@ fn pre_find_beats_scope() {
         got_slot_word(&relocated, &consumer_output, EXTERNAL_VAR_NAME),
         host_symbols.addresses[EXTERNAL_VAR_NAME] as u64
     );
-    assert!(
-        relocated.deps().is_empty(),
-        "scope entry should not be retained when pre_find resolves the symbol"
+    assert_eq!(
+        relocated.deps().len(),
+        1,
+        "scope entries are retained even when pre_find resolves the symbol"
     );
+    assert_eq!(relocated.deps()[0].name(), helper.name());
 }
 
 #[test]
@@ -138,8 +140,9 @@ fn extend_scope_keeps_existing_precedence() {
     );
     assert_eq!(
         relocated.deps().len(),
-        1,
-        "expected one retained dependency"
+        2,
+        "all scope entries should be retained as dependencies"
     );
     assert_eq!(relocated.deps()[0].name(), first.name());
+    assert_eq!(relocated.deps()[1].name(), second.name());
 }
