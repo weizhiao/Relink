@@ -124,8 +124,8 @@ where
 
 pub(crate) struct ScanStage;
 
-impl<K, D: Default + 'static, Meta, M, H, Tls, O, V>
-    ResolveStage<'static, K, D, Meta, ScannedDylib<D>, M, H, Tls, O, V> for ScanStage
+impl<K, D: 'static, Meta, M, H, Tls, O, V>
+    ResolveStage<'static, K, D, Meta, ScannedDylib, M, H, Tls, O, V> for ScanStage
 where
     K: Clone + Ord,
     M: Mmap,
@@ -137,7 +137,7 @@ where
     fn stage_resolved(
         visible: CommittedStorageView<'_, K, D, Meta>,
         visible_modules: &V,
-        session: &mut ResolveSession<K, ScannedDylib<D>>,
+        session: &mut ResolveSession<K, ScannedDylib>,
         resolved: ResolvedKey<'static, K>,
         loader: &mut Loader<M, H, D, Tls>,
         _observer: &mut O,
@@ -180,7 +180,7 @@ pub(crate) struct SessionResolveContext<'a, K: Clone, D: 'static, Meta, P, S, V>
 pub(crate) type LoadResolveContext<'a, K, D, Meta = (), V = ()> =
     SessionResolveContext<'a, K, D, Meta, RawDylib<D>, LoadStage, V>;
 pub(crate) type ScanResolveContext<'a, K, D, Meta = (), V = ()> =
-    SessionResolveContext<'a, K, D, Meta, ScannedDylib<D>, ScanStage, V>;
+    SessionResolveContext<'a, K, D, Meta, ScannedDylib, ScanStage, V>;
 
 impl<'a, K: Clone, D: 'static, Meta, P, S, V> SessionResolveContext<'a, K, D, Meta, P, S, V> {
     #[inline]

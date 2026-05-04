@@ -274,10 +274,9 @@ impl MemoryLayoutPlan {
     }
 
     /// Builds a section-granularity layout seed from scanned metadata.
-    pub(in crate::linker) fn from_scanned<'a, D, I>(modules: I) -> Self
+    pub(in crate::linker) fn from_scanned<'a, I>(modules: I) -> Self
     where
-        D: 'static,
-        I: IntoIterator<Item = (ModuleId, &'a ScannedDylib<D>)>,
+        I: IntoIterator<Item = (ModuleId, &'a ScannedDylib)>,
     {
         let mut plan = Self::default();
         for (module_id, module) in modules {

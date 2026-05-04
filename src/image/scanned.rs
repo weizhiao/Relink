@@ -160,10 +160,7 @@ impl ScannedDynamicInfo {
 }
 
 /// A dynamic library that has been parsed but not yet mapped into memory.
-pub struct ScannedDylib<D = ()>
-where
-    D: 'static,
-{
+pub struct ScannedDylib {
     name: String,
     ehdr: ElfHeader,
     phdrs: Box<[ElfPhdr]>,
@@ -177,7 +174,12 @@ where
     capability: ModuleCapability,
     reader: Box<dyn ElfReader + 'static>,
     dynamic: ScannedDynamicInfo,
-    user_data: D,
+}
+
+pub(crate) struct ScannedDylibLoadParts {
+    pub(crate) ehdr: ElfHeader,
+    pub(crate) phdrs: Box<[ElfPhdr]>,
+    pub(crate) reader: Box<dyn ElfReader + 'static>,
 }
 
 /// A stable identifier for one scanned section.
@@ -389,7 +391,7 @@ impl<'a> fmt::Debug for ScannedSection<'a> {
     }
 }
 
-impl<D> fmt::Debug for ScannedDylib<D> {
+impl fmt::Debug for ScannedDylib {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScannedDylib")
             .field("name", &self.name)
@@ -408,14 +410,13 @@ impl<D> fmt::Debug for ScannedDylib<D> {
     }
 }
 
-impl<D> ScannedDylib<D> {
-    pub(crate) fn from_builder(builder: ScanBuilder<D>) -> Result<Self> {
+impl ScannedDylib {
+    pub(crate) fn from_builder(builder: ScanBuilder) -> Result<Self> {
         let ScanBuilder {
             name,
             ehdr,
             phdrs,
             mut reader,
-            user_data,
         } = builder;
         let interp = read_interp(reader.as_mut(), &phdrs)?;
         let DynamicScanParts {
@@ -447,7 +448,6 @@ impl<D> ScannedDylib<D> {
             capability,
             reader,
             dynamic,
-            user_data,
         })
     }
 
@@ -618,21 +618,19 @@ impl<D> ScannedDylib<D> {
         &self.dynamic
     }
 
-    /// Returns a reference to the user data associated with this scan result.
-    #[inline]
-    pub fn user_data(&self) -> &D {
-        &self.user_data
-    }
+    pub(crate) fn into_load_parts(self) -> ScannedDylibLoadParts {
+        let Self {
+            ehdr,
+            phdrs,
+            reader,
+            ..
+        } = self;
 
-    /// Returns a mutable reference to the user data associated with this scan result.
-    #[inline]
-    pub fn user_data_mut(&mut self) -> &mut D {
-        &mut self.user_data
-    }
-
-    #[inline]
-    pub(crate) fn into_reader(self) -> Box<dyn ElfReader + 'static> {
-        self.reader
+        ScannedDylibLoadParts {
+            ehdr,
+            phdrs,
+            reader,
+        }
     }
 }
 

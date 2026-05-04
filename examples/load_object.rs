@@ -34,7 +34,7 @@ fn main() -> Result<()> {
         .relocator()
         .pre_find(&pre_find)
         .scope([&a])
-        .add_scope([&b])
+        .extend_scope([&b])
         .relocate()?;
     let f = unsafe { a.get::<extern "C" fn() -> i32>("a").unwrap() };
     assert!(f() == 1);

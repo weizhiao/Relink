@@ -605,14 +605,11 @@ impl ModuleLayout {
     }
 
     /// Builds a section-granularity layout seed from a scanned module.
-    pub(crate) fn from_scanned<D>(
+    pub(crate) fn from_scanned(
         owner: ModuleId,
-        module: &ScannedDylib<D>,
+        module: &ScannedDylib,
         arena: &mut LayoutSectionArena,
-    ) -> Self
-    where
-        D: 'static,
-    {
+    ) -> Self {
         let mut section_links = Vec::new();
         let mut mappings = Vec::new();
         for section in module.sections() {

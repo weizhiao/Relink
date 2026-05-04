@@ -128,13 +128,12 @@ impl RuntimeModuleMemory {
 }
 
 impl MappedRuntimeMemory {
-    pub(crate) fn map<M, K, D>(plan: &LinkPlan<K, D>) -> Result<Option<Self>>
+    pub(crate) fn map<M, K>(plan: &LinkPlan<K>) -> Result<Option<Self>>
     where
         K: Clone + Ord,
-        D: 'static,
         M: Mmap,
     {
-        let Some(arenas) = MappedArenaMap::map_plan::<M, _, _>(plan)? else {
+        let Some(arenas) = MappedArenaMap::map_plan::<M, _>(plan)? else {
             return Ok(None);
         };
         Ok(Some(Self {
@@ -162,24 +161,18 @@ impl MappedRuntimeMemory {
             .map_err(Into::into)
     }
 
-    pub(crate) fn repair_module<K, D>(
-        &mut self,
-        id: ModuleId,
-        plan: &mut LinkPlan<K, D>,
-    ) -> Result<()>
+    pub(crate) fn repair_module<K>(&mut self, id: ModuleId, plan: &mut LinkPlan<K>) -> Result<()>
     where
         K: Clone + Ord,
-        D: 'static,
     {
         let runtime = self.build_module(id, plan.memory_layout())?;
         let mut rewriter = RuntimeMetadataRewriter::new(id, plan, runtime);
         rewriter.rewrite()
     }
 
-    pub(crate) fn populate<K, D>(&mut self, plan: &mut LinkPlan<K, D>) -> Result<()>
+    pub(crate) fn populate<K>(&mut self, plan: &mut LinkPlan<K>) -> Result<()>
     where
         K: Clone + Ord,
-        D: 'static,
     {
         self.arenas.populate(plan)
     }
@@ -202,7 +195,7 @@ impl MappedRuntimeMemory {
 }
 
 pub(crate) fn build_arena_raw_dylib<D, Tls>(
-    mut scanned: ScannedDylib<D>,
+    scanned: ScannedDylib,
     runtime: RuntimeModuleMemory,
     init_fn: DynLifecycleHandler,
     fini_fn: DynLifecycleHandler,
@@ -260,7 +253,6 @@ where
         .map(|offset| runtime.segments.base_addr().offset(offset))
         .unwrap_or_else(|| runtime.segments.base_addr().offset(original_entry));
     let name = scanned.name().to_string();
-    let user_data = core::mem::take(scanned.user_data_mut());
 
     RawDylib::from_parts::<Tls>(crate::image::DynamicImageParts {
         name,
@@ -275,6 +267,6 @@ where
         segments: runtime.segments,
         init_fn,
         fini_fn,
-        user_data,
+        user_data: D::default(),
     })
 }

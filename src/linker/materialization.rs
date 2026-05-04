@@ -8,10 +8,9 @@ use super::{
 use crate::{LinkerError, Result, image::ModuleCapability};
 use alloc::{collections::BTreeMap, vec::Vec};
 
-pub(crate) fn normalize_plan<K, D>(plan: &mut LinkPlan<K, D>) -> Result<()>
+pub(crate) fn normalize_plan<K>(plan: &mut LinkPlan<K>) -> Result<()>
 where
     K: Clone + Ord,
-    D: 'static,
 {
     plan.try_for_each_module(|plan, module_id| {
         let mode = resolve_materialization_mode(&*plan, module_id)?;
@@ -35,13 +34,12 @@ where
     Ok(())
 }
 
-fn resolve_materialization_mode<K, D>(
-    plan: &LinkPlan<K, D>,
+fn resolve_materialization_mode<K>(
+    plan: &LinkPlan<K>,
     module_id: ModuleId,
 ) -> Result<Materialization>
 where
     K: Clone + Ord,
-    D: 'static,
 {
     let capability = plan
         .module_capability(module_id)
@@ -81,13 +79,12 @@ where
     }
 }
 
-fn record_existing_section_placements<K, D>(
-    plan: &LinkPlan<K, D>,
+fn record_existing_section_placements<K>(
+    plan: &LinkPlan<K>,
     arena_state: &mut ArenaState,
     modules: &[ModuleId],
 ) where
     K: Clone + Ord,
-    D: 'static,
 {
     for module_id in modules.iter().copied() {
         let alloc_sections = plan.module_layout(module_id).alloc_sections().to_vec();
@@ -99,14 +96,13 @@ fn record_existing_section_placements<K, D>(
     }
 }
 
-fn assign_missing_section_placements<K, D>(
-    plan: &mut LinkPlan<K, D>,
+fn assign_missing_section_placements<K>(
+    plan: &mut LinkPlan<K>,
     arena_state: &mut ArenaState,
     modules: &[ModuleId],
     policy: PackingPolicy,
 ) where
     K: Clone + Ord,
-    D: 'static,
 {
     for module_id in modules.iter().copied() {
         let alloc_sections = plan.module_layout(module_id).alloc_sections().to_vec();
@@ -133,15 +129,14 @@ impl ArenaState {
         }
     }
 
-    fn register_existing_section<K, D>(
+    fn register_existing_section<K>(
         &mut self,
-        plan: &LinkPlan<K, D>,
+        plan: &LinkPlan<K>,
         module_id: ModuleId,
         section_id: SectionId,
         placement: SectionPlacement,
     ) where
         K: Clone + Ord,
-        D: 'static,
     {
         let metadata = plan.section_metadata(section_id);
         let memory_class = metadata
@@ -167,15 +162,14 @@ impl ArenaState {
         }
     }
 
-    fn assign_fallback_section<K, D>(
+    fn assign_fallback_section<K>(
         &mut self,
-        plan: &mut LinkPlan<K, D>,
+        plan: &mut LinkPlan<K>,
         module_id: ModuleId,
         section_id: SectionId,
         policy: PackingPolicy,
     ) where
         K: Clone + Ord,
-        D: 'static,
     {
         let (memory_class, alignment, size) = {
             let section = plan.section_metadata(section_id);

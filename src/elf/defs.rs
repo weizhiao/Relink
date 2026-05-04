@@ -22,7 +22,6 @@ pub(crate) use super::symbol::Elf32Sym;
 ///
 /// Keeping this behind a single trait lets us centralize the pointer-width
 /// mapping without forcing the rest of the module to become generic.
-#[doc(hidden)]
 pub(crate) trait ElfLayout {
     const E_CLASS: u8;
     const REL_MASK: usize;
@@ -38,7 +37,6 @@ pub(crate) trait ElfLayout {
     type Sym;
 }
 
-#[doc(hidden)]
 pub struct NativeElfLayout;
 
 #[cfg(target_pointer_width = "64")]

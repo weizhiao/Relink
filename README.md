@@ -228,7 +228,7 @@ Use `Linker` when loading is more than "map this one file". The scan-first path 
 let mut context = LinkContext::<&'static str, ()>::new();
 let resolver = Resolver;
 
-let configure = |plan: &mut LinkPassPlan<'_, &'static str, (), ReorderPass>| -> Result<()> {
+let configure = |plan: &mut LinkPassPlan<'_, &'static str, ReorderPass>| -> Result<()> {
     plan.set_materialization(plan.root(), Materialization::SectionRegions);
     Ok(())
 };

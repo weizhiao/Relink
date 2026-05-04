@@ -214,20 +214,19 @@ impl RuntimeModuleMemory {
     }
 }
 
-pub(crate) struct RuntimeMetadataRewriter<'a, K, D: 'static> {
+pub(crate) struct RuntimeMetadataRewriter<'a, K> {
     module_id: ModuleId,
-    plan: &'a mut LinkPlan<K, D>,
+    plan: &'a mut LinkPlan<K>,
     runtime: &'a RuntimeModuleMemory,
 }
 
-impl<'a, K, D> RuntimeMetadataRewriter<'a, K, D>
+impl<'a, K> RuntimeMetadataRewriter<'a, K>
 where
     K: Clone + Ord,
-    D: 'static,
 {
     pub(crate) fn new(
         module_id: ModuleId,
-        plan: &'a mut LinkPlan<K, D>,
+        plan: &'a mut LinkPlan<K>,
         runtime: &'a RuntimeModuleMemory,
     ) -> Self {
         Self {

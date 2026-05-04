@@ -25,7 +25,7 @@ use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
-use core::mem;
+use core::{marker::PhantomData, mem};
 
 /// Configurable front-end for dependency discovery, planning, and relocation.
 ///
@@ -52,12 +52,13 @@ pub struct Linker<
 > {
     loader: L,
     resolver: R,
-    pipeline: LinkPipeline<'a, K, D>,
+    pipeline: LinkPipeline<'a, K>,
     relocator: Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD>,
     planner: P,
     observer: O,
     visible_modules: V,
     scratch_relocation_order: Vec<K>,
+    _marker: PhantomData<fn() -> D>,
 }
 
 impl<'a, K, D> Linker<'a, K, D>
@@ -78,6 +79,7 @@ where
             observer: (),
             visible_modules: (),
             scratch_relocation_order: Vec::new(),
+            _marker: PhantomData,
         }
     }
 }
@@ -114,6 +116,7 @@ where
             observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
+            _marker: self._marker,
         }
     }
 
@@ -166,6 +169,7 @@ where
             observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
+            _marker: self._marker,
         }
     }
 
@@ -184,6 +188,7 @@ where
             observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
+            _marker: self._marker,
         }
     }
 
@@ -202,6 +207,7 @@ where
             observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
+            _marker: self._marker,
         }
     }
 
@@ -220,13 +226,14 @@ where
             observer: self.observer,
             visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
+            _marker: self._marker,
         }
     }
 
     /// Transforms the pre-map planning pipeline.
     pub fn map_pipeline(
         mut self,
-        configure: impl FnOnce(LinkPipeline<'a, K, D>) -> LinkPipeline<'a, K, D>,
+        configure: impl FnOnce(LinkPipeline<'a, K>) -> LinkPipeline<'a, K>,
     ) -> Self {
         self.pipeline = configure(self.pipeline);
         self
@@ -293,6 +300,7 @@ where
             observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
+            _marker: self._marker,
         }
     }
 }
@@ -428,9 +436,9 @@ where
         key: &K,
         loader: &mut Loader<M, H, D, Tls>,
         resolver: &mut Resolver,
-        pipeline: &mut LinkPipeline<'_, K, D>,
+        pipeline: &mut LinkPipeline<'_, K>,
         visible_modules: &V,
-    ) -> Result<ScanDiscovery<K, D>>
+    ) -> Result<ScanDiscovery<K>>
     where
         K: 'static,
         Resolver: KeyResolver<'static, K, D, Meta>,
@@ -468,7 +476,7 @@ where
     }
 
     fn prepare_planned_load(
-        mut plan: LinkPlan<K, D>,
+        mut plan: LinkPlan<K>,
         loader: &mut Loader<M, H, D, Tls>,
         observer: &mut O,
     ) -> Result<PreparedLoad<K, D>> {
@@ -514,10 +522,10 @@ where
     }
 
     fn prepare_mapped_runtime(
-        plan: &mut LinkPlan<K, D>,
+        plan: &mut LinkPlan<K>,
     ) -> Result<Option<mapped::MappedRuntimeMemory>> {
         materialization::normalize_plan(plan)?;
-        let mut mapped_runtime = mapped::MappedRuntimeMemory::map::<M, _, _>(plan)?;
+        let mut mapped_runtime = mapped::MappedRuntimeMemory::map::<M, _>(plan)?;
 
         if let Some(runtime) = mapped_runtime.as_mut() {
             let section_region_modules = plan
@@ -537,7 +545,7 @@ where
         plan: &MemoryLayoutPlan,
         mapped_runtime: &mut Option<mapped::MappedRuntimeMemory>,
         module_id: ModuleId,
-        scanned: ScannedDylib<D>,
+        scanned: ScannedDylib,
     ) -> Result<RawDylib<D>> {
         match plan
             .materialization(module_id)
@@ -564,7 +572,7 @@ where
                 Ok(raw)
             }
             Materialization::WholeDsoRegion => {
-                let mut raw = loader.load_dylib_raw_impl(scanned.into_reader())?;
+                let mut raw = loader.load_scanned_dylib_raw_impl(scanned)?;
                 apply_section_overrides(&mut raw, module_id, plan);
                 loader.inner.initialize_dylib(&mut raw)?;
                 Ok(raw)
@@ -738,9 +746,9 @@ struct PreparedLoad<K, D: 'static> {
     mapped_runtime: Option<mapped::MappedRuntimeMemory>,
 }
 
-enum ScanDiscovery<K, D: 'static> {
+enum ScanDiscovery<K> {
     Existing(K),
-    Plan(LinkPlan<K, D>),
+    Plan(LinkPlan<K>),
 }
 
 impl<K, D: 'static> PreparedLoad<K, D> {

@@ -115,7 +115,7 @@ fn post_find_resolves_scope_miss() {
 }
 
 #[test]
-fn add_scope_keeps_existing_precedence() {
+fn extend_scope_keeps_existing_precedence() {
     let mut loader = Loader::new();
     let first_output = write_helper_dylib(SHARED_VAR_NAME, &[0x11, 0x22, 0x33, 0x44]);
     let second_output = write_helper_dylib(SHARED_VAR_NAME, &[0x55, 0x66, 0x77, 0x88]);
@@ -128,7 +128,7 @@ fn add_scope_keeps_existing_precedence() {
         .expect("failed to load consumer")
         .relocator()
         .scope(&[first.clone()])
-        .add_scope(&[second.clone()])
+        .extend_scope(&[second.clone()])
         .relocate()
         .expect("failed to relocate consumer");
 

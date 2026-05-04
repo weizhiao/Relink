@@ -93,21 +93,21 @@ impl ReorderAccess for ReorderPass {}
 ///
 /// Graph queries expose the canonical plan. Scope-sensitive APIs such as
 /// materialization updates and section-data access enforce `S`.
-pub struct LinkPassPlan<'a, K, D: 'static, S = AnyPass>
+pub struct LinkPassPlan<'a, K, S = AnyPass>
 where
     S: PassScopeMode,
 {
-    plan: &'a mut LinkPlan<K, D>,
+    plan: &'a mut LinkPlan<K>,
     scope: PhantomData<fn() -> S>,
 }
 
-impl<'a, K, D: 'static, S> LinkPassPlan<'a, K, D, S>
+impl<'a, K, S> LinkPassPlan<'a, K, S>
 where
     K: Clone + Ord,
     S: PassScopeMode,
 {
     #[inline]
-    fn new(plan: &'a mut LinkPlan<K, D>) -> Self {
+    fn new(plan: &'a mut LinkPlan<K>) -> Self {
         Self {
             plan,
             scope: PhantomData,
@@ -170,18 +170,18 @@ where
 
     /// Returns the scanned metadata for `id`.
     #[inline]
-    pub fn get(&self, id: ModuleId) -> Option<&PlannedModule<K, D>> {
+    pub fn get(&self, id: ModuleId) -> Option<&PlannedModule<K>> {
         self.plan.get(id)
     }
 
     /// Returns the scanned metadata for `id` mutably.
     #[inline]
-    pub fn get_mut(&mut self, id: ModuleId) -> Option<&mut PlannedModule<K, D>> {
+    pub fn get_mut(&mut self, id: ModuleId) -> Option<&mut PlannedModule<K>> {
         self.plan.get_mut(id)
     }
 
     /// Iterates over every planned module id, key, and scanned module.
-    pub fn entries(&self) -> impl Iterator<Item = (ModuleId, &K, &ScannedDylib<D>)> {
+    pub fn entries(&self) -> impl Iterator<Item = (ModuleId, &K, &ScannedDylib)> {
         self.plan
             .entries
             .iter()
@@ -220,7 +220,7 @@ where
     }
 }
 
-impl<'a, K, D: 'static, S> LinkPassPlan<'a, K, D, S>
+impl<'a, K, S> LinkPassPlan<'a, K, S>
 where
     K: Clone + Ord,
     S: SectionDataAccess,
@@ -359,7 +359,7 @@ where
     }
 }
 
-impl<'a, K, D: 'static, S> LinkPassPlan<'a, K, D, S>
+impl<'a, K, S> LinkPassPlan<'a, K, S>
 where
     K: Clone + Ord,
     S: ReorderAccess,
@@ -424,32 +424,32 @@ where
 }
 
 /// A pass that inspects or rewrites a pre-map global link plan.
-pub trait LinkPass<K: Clone + Ord, D: 'static, S = AnyPass>
+pub trait LinkPass<K: Clone + Ord, S = AnyPass>
 where
     S: PassScopeMode,
 {
     /// Executes the pass over the current plan.
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, K, D, S>) -> Result<()>;
+    fn run(&mut self, plan: &mut LinkPassPlan<'_, K, S>) -> Result<()>;
 }
 
-type PipelinePass<'a, K, D> = Box<dyn FnMut(&mut LinkPlan<K, D>) -> Result<()> + 'a>;
+type PipelinePass<'a, K> = Box<dyn FnMut(&mut LinkPlan<K>) -> Result<()> + 'a>;
 
 /// An ordered collection of [`LinkPass`]es.
 ///
 /// This is the pass manager used with a discovered [`LinkPlan`] after
 /// metadata discovery finishes and before any module is mapped into memory.
-pub struct LinkPipeline<'a, K: Clone + Ord, D: 'static> {
-    passes: Vec<PipelinePass<'a, K, D>>,
+pub struct LinkPipeline<'a, K: Clone + Ord> {
+    passes: Vec<PipelinePass<'a, K>>,
 }
 
-impl<'a, K: Clone + Ord, D: 'static> Default for LinkPipeline<'a, K, D> {
+impl<'a, K: Clone + Ord> Default for LinkPipeline<'a, K> {
     #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'a, K: Clone + Ord, D: 'static> LinkPipeline<'a, K, D> {
+impl<'a, K: Clone + Ord> LinkPipeline<'a, K> {
     /// Creates an empty pipeline.
     #[inline]
     pub fn new() -> Self {
@@ -461,17 +461,17 @@ impl<'a, K: Clone + Ord, D: 'static> LinkPipeline<'a, K, D> {
     pub fn push<S, P>(&mut self, mut pass: P) -> &mut Self
     where
         S: PassScopeMode + 'a,
-        P: LinkPass<K, D, S> + 'a,
+        P: LinkPass<K, S> + 'a,
     {
         self.passes.push(Box::new(move |plan| {
-            let mut scoped = LinkPassPlan::<_, _, S>::new(plan);
+            let mut scoped = LinkPassPlan::<_, S>::new(plan);
             pass.run(&mut scoped)
         }));
         self
     }
 
     /// Runs the pipeline with caller-supplied query state.
-    pub(crate) fn run(&mut self, plan: &mut LinkPlan<K, D>) -> Result<()> {
+    pub(crate) fn run(&mut self, plan: &mut LinkPlan<K>) -> Result<()> {
         for pass in &mut self.passes {
             pass(plan)?;
         }
@@ -479,23 +479,23 @@ impl<'a, K: Clone + Ord, D: 'static> LinkPipeline<'a, K, D> {
     }
 }
 
-pub struct PlannedModule<K, D: 'static> {
+pub struct PlannedModule<K> {
     key: K,
-    module: ScannedDylib<D>,
+    module: ScannedDylib,
     direct_deps: Box<[ModuleId]>,
 }
 
-struct PendingPlannedModule<K, D: 'static> {
+struct PendingPlannedModule<K> {
     key: K,
-    module: ScannedDylib<D>,
+    module: ScannedDylib,
     direct_deps: Box<[K]>,
 }
 
-impl<K, D: 'static> PendingPlannedModule<K, D>
+impl<K> PendingPlannedModule<K>
 where
     K: Ord,
 {
-    fn resolve(self, module_ids: &BTreeMap<K, ModuleId>) -> PlannedModule<K, D> {
+    fn resolve(self, module_ids: &BTreeMap<K, ModuleId>) -> PlannedModule<K> {
         let Self {
             key,
             module,
@@ -515,9 +515,9 @@ where
     }
 }
 
-impl<K, D: 'static> PlannedModule<K, D> {
+impl<K> PlannedModule<K> {
     #[inline]
-    pub(crate) fn new(key: K, module: ScannedDylib<D>, direct_deps: Box<[ModuleId]>) -> Self {
+    pub(crate) fn new(key: K, module: ScannedDylib, direct_deps: Box<[ModuleId]>) -> Self {
         Self {
             key,
             module,
@@ -531,12 +531,12 @@ impl<K, D: 'static> PlannedModule<K, D> {
     }
 
     #[inline]
-    pub fn module(&self) -> &ScannedDylib<D> {
+    pub fn module(&self) -> &ScannedDylib {
         &self.module
     }
 
     #[inline]
-    pub fn module_mut(&mut self) -> &mut ScannedDylib<D> {
+    pub fn module_mut(&mut self) -> &mut ScannedDylib {
         &mut self.module
     }
 
@@ -546,15 +546,15 @@ impl<K, D: 'static> PlannedModule<K, D> {
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (K, ScannedDylib<D>, Box<[ModuleId]>) {
+    pub(crate) fn into_parts(self) -> (K, ScannedDylib, Box<[ModuleId]>) {
         (self.key, self.module, self.direct_deps)
     }
 }
 
-type LinkPlanParts<K, D> = (
+type LinkPlanParts<K> = (
     ModuleId,
     Vec<ModuleId>,
-    PrimaryMap<ModuleId, PlannedModule<K, D>>,
+    PrimaryMap<ModuleId, PlannedModule<K>>,
     MemoryLayoutPlan,
 );
 
@@ -569,15 +569,15 @@ fn section_data_entries<T: ByteRepr>(data: &AlignedBytes) -> Result<&[T]> {
 /// This plan owns the discovered logical module graph and accumulates later
 /// planning decisions such as physical memory-layout plans or future
 /// materialization policies.
-pub(crate) struct LinkPlan<K, D: 'static> {
+pub(crate) struct LinkPlan<K> {
     root: ModuleId,
     group_order: Vec<ModuleId>,
     module_ids: BTreeMap<K, ModuleId>,
-    entries: PrimaryMap<ModuleId, PlannedModule<K, D>>,
+    entries: PrimaryMap<ModuleId, PlannedModule<K>>,
     memory_layout: MemoryLayoutPlan,
 }
 
-impl<K, D: 'static> LinkPlan<K, D>
+impl<K> LinkPlan<K>
 where
     K: Clone + Ord,
 {
@@ -585,7 +585,7 @@ where
     pub(crate) fn new(
         root: K,
         group_order: Vec<K>,
-        mut entries: BTreeMap<K, (ScannedDylib<D>, Box<[K]>)>,
+        mut entries: BTreeMap<K, (ScannedDylib, Box<[K]>)>,
     ) -> Self {
         let group_keys = group_order;
         let mut module_ids = BTreeMap::new();
@@ -691,12 +691,12 @@ where
     }
 
     #[inline]
-    fn get(&self, id: ModuleId) -> Option<&PlannedModule<K, D>> {
+    fn get(&self, id: ModuleId) -> Option<&PlannedModule<K>> {
         self.entries.get(id)
     }
 
     #[inline]
-    fn get_mut(&mut self, id: ModuleId) -> Option<&mut PlannedModule<K, D>> {
+    fn get_mut(&mut self, id: ModuleId) -> Option<&mut PlannedModule<K>> {
         self.entries.get_mut(id)
     }
 
@@ -880,7 +880,7 @@ where
     }
 
     #[inline]
-    pub(in crate::linker) fn into_parts(self) -> LinkPlanParts<K, D> {
+    pub(in crate::linker) fn into_parts(self) -> LinkPlanParts<K> {
         (
             self.root,
             self.group_order,

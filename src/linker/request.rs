@@ -49,7 +49,7 @@ impl<D: 'static> DependencyOwner for RawDylib<D> {
     }
 }
 
-impl<D: 'static> DependencyOwner for ScannedDylib<D> {
+impl DependencyOwner for ScannedDylib {
     #[inline]
     fn name(&self) -> &str {
         self.name()

@@ -44,8 +44,8 @@ impl KeyResolver<'static, &'static str, ()> for FixtureResolver {
 
 struct ConfigureRootSectionRegions;
 
-impl LinkPass<&'static str, (), ReorderPass> for ConfigureRootSectionRegions {
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, &'static str, (), ReorderPass>) -> Result<()> {
+impl LinkPass<&'static str, ReorderPass> for ConfigureRootSectionRegions {
+    fn run(&mut self, plan: &mut LinkPassPlan<'_, &'static str, ReorderPass>) -> Result<()> {
         let root = plan.root();
         assert_eq!(
             plan.capability(root),

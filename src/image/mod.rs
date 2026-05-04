@@ -30,6 +30,7 @@ pub(crate) use dynamic::DynamicImageParts;
 pub(crate) use dynamic::DynamicInfo;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use dynamic::LazyBindingInfo;
+pub(crate) use scanned::ScannedDylibLoadParts;
 
 pub use core::{ElfCore, ElfCoreRef, LoadedCore};
 pub use dylib::{LoadedDylib, RawDylib};

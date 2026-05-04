@@ -310,15 +310,15 @@ where
         I: IntoIterator<Item = R>,
         R: core::borrow::Borrow<LoadedCore<D>>,
     {
-        self.scope = scope.into_iter().map(|r| r.borrow().clone()).collect();
-        self
+        self.scope.clear();
+        self.extend_scope(scope)
     }
 
     /// Appends more modules to the symbol-resolution scope.
     ///
     /// During relocation, additional modules are searched after the existing
     /// scope entries.
-    pub fn add_scope<I, R>(mut self, scope: I) -> Self
+    pub fn extend_scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
         R: core::borrow::Borrow<LoadedCore<D>>,
@@ -326,17 +326,6 @@ where
         self.scope
             .extend(scope.into_iter().map(|r| r.borrow().clone()));
         self
-    }
-
-    #[inline]
-    pub fn replace_scope<I, R>(&mut self, scope: I)
-    where
-        I: IntoIterator<Item = R>,
-        R: core::borrow::Borrow<LoadedCore<D>>,
-    {
-        self.scope.clear();
-        self.scope
-            .extend(scope.into_iter().map(|r| r.borrow().clone()));
     }
 
     /// Attaches an object and selects the user-data type carried by that object.

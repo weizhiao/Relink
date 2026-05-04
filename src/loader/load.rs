@@ -2,7 +2,7 @@ use super::{LoadHook, Loader};
 use crate::{
     ParseEhdrError, ParsePhdrError, Result,
     elf::{ElfDyn, ElfFileType, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType},
-    image::{DynamicImageParts, RawDylib, RawElf, RawExec, ScannedDylib},
+    image::{DynamicImageParts, RawDylib, RawElf, RawExec, ScannedDylib, ScannedDylibLoadParts},
     input::{ElfReader, IntoElfReader},
     logging,
     os::Mmap,
@@ -12,7 +12,7 @@ use crate::{
 };
 use alloc::{string::String, vec::Vec};
 use core::{
-    ffi::{CStr, c_void},
+    ffi::{CStr, c_char, c_void},
     ptr::NonNull,
 };
 
@@ -44,11 +44,11 @@ impl<M, H, D, Tls> Loader<M, H, D, Tls>
 where
     M: Mmap,
     H: LoadHook,
-    D: Default + 'static,
+    D: 'static,
     Tls: TlsResolver,
 {
     /// Scans a shared object and returns metadata without mapping its segments.
-    pub fn scan_dylib<I>(&mut self, input: I) -> Result<ScannedDylib<D>>
+    pub fn scan_dylib<I>(&mut self, input: I) -> Result<ScannedDylib>
     where
         I: IntoElfReader<'static>,
     {
@@ -58,7 +58,7 @@ where
     pub(crate) fn scan_dylib_impl(
         &mut self,
         mut object: impl ElfReader + 'static,
-    ) -> Result<ScannedDylib<D>> {
+    ) -> Result<ScannedDylib> {
         logging::debug!("Scanning dylib metadata: {}", object.file_name());
 
         let ehdr = self.read_ehdr(&mut object)?;
@@ -189,8 +189,47 @@ where
             .buf
             .prepare_phdrs(&ehdr, &mut object)?
             .unwrap_or_default();
-        let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
+        let builder = self
+            .inner
+            .create_builder::<M, Tls>(ehdr, phdrs, object, D::default())?;
         RawDylib::from_builder(builder, phdrs)
+    }
+
+    /// Maps a previously scanned shared object without rereading its ELF header
+    /// or program headers.
+    ///
+    /// The scanned object's reader is reused for segment loading. User data is
+    /// initialized through the loader's dylib initializer, like ordinary loads.
+    pub fn load_scanned_dylib(&mut self, scanned: ScannedDylib) -> Result<RawDylib<D>> {
+        let mut dylib = self.load_scanned_dylib_raw_impl(scanned)?;
+        self.inner.initialize_dylib(&mut dylib)?;
+
+        logging::info!(
+            "Loaded scanned dylib: {} at [0x{:x}-0x{:x}]",
+            dylib.name(),
+            dylib.mapped_base(),
+            dylib.mapped_base() + dylib.mapped_len()
+        );
+
+        Ok(dylib)
+    }
+
+    pub(crate) fn load_scanned_dylib_raw_impl(
+        &mut self,
+        scanned: ScannedDylib,
+    ) -> Result<RawDylib<D>> {
+        let ScannedDylibLoadParts {
+            ehdr,
+            phdrs,
+            reader,
+        } = scanned.into_load_parts();
+
+        logging::debug!("Loading scanned dylib: {}", reader.file_name());
+
+        let builder = self
+            .inner
+            .create_builder::<M, Tls>(ehdr, &phdrs, reader, D::default())?;
+        RawDylib::from_builder(builder, &phdrs)
     }
 
     /// Creates a raw dynamic image from an ELF object that is already mapped.
@@ -293,7 +332,9 @@ where
             .iter()
             .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC);
 
-        let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
+        let builder = self
+            .inner
+            .create_builder::<M, Tls>(ehdr, phdrs, object, D::default())?;
         let res = RawExec::from_builder(builder, phdrs, has_dynamic);
 
         if let Ok(ref exec) = res {
@@ -336,7 +377,7 @@ where
                 dynamic_ptr = NonNull::new(load_bias.wrapping_add(phdr.p_vaddr()) as *mut ElfDyn);
             }
             ElfProgramType::INTERP => {
-                let ptr = load_bias.wrapping_add(phdr.p_vaddr()) as *const i8;
+                let ptr = load_bias.wrapping_add(phdr.p_vaddr()) as *const c_char;
                 interp = Some(
                     unsafe { CStr::from_ptr(ptr) }
                         .to_str()

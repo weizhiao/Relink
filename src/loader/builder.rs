@@ -2,6 +2,7 @@ use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner};
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType},
+    image::RawDylib,
     input::ElfReader,
     os::Mmap,
     segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
@@ -67,35 +68,26 @@ where
     _marker: PhantomData<(M, Tls)>,
 }
 
-pub(crate) struct ScanBuilder<D = ()>
-where
-    D: 'static,
-{
+pub(crate) struct ScanBuilder {
     pub(crate) name: String,
     pub(crate) ehdr: ElfHeader,
     pub(crate) phdrs: Box<[ElfPhdr]>,
     pub(crate) reader: Box<dyn ElfReader + 'static>,
-    pub(crate) user_data: D,
 }
 
-impl<D> ScanBuilder<D>
-where
-    D: 'static,
-{
+impl ScanBuilder {
     #[inline]
     pub(crate) fn new(
         name: String,
         ehdr: ElfHeader,
         phdrs: Box<[ElfPhdr]>,
         reader: Box<dyn ElfReader + 'static>,
-        user_data: D,
     ) -> Self {
         Self {
             name,
             ehdr,
             phdrs,
             reader,
-            user_data,
         }
     }
 }
@@ -250,7 +242,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn initialize_dylib(&mut self, dylib: &mut crate::image::RawDylib<D>) -> Result<()> {
+    pub(crate) fn initialize_dylib(&mut self, dylib: &mut RawDylib<D>) -> Result<()> {
         (self.dylib_initializer)(dylib)
     }
 }
@@ -258,13 +250,14 @@ where
 impl<H, D> LoaderInner<H, D>
 where
     H: LoadHook,
-    D: Default + 'static,
+    D: 'static,
 {
     pub(crate) fn create_builder<M, Tls>(
         &mut self,
         ehdr: ElfHeader,
         phdrs: &[ElfPhdr],
-        mut object: impl crate::input::ElfReader,
+        mut object: impl ElfReader,
+        user_data: D,
     ) -> Result<ImageBuilder<'_, H, M, Tls, D>>
     where
         M: Mmap,
@@ -285,7 +278,7 @@ where
             init_fn,
             fini_fn,
             self.force_static_tls,
-            D::default(),
+            user_data,
         ))
     }
 
@@ -294,9 +287,9 @@ where
         ehdr: ElfHeader,
         phdrs: &[ElfPhdr],
         object: impl ElfReader + 'static,
-    ) -> ScanBuilder<D> {
+    ) -> ScanBuilder {
         let name = object.file_name().to_owned();
 
-        ScanBuilder::new(name, ehdr, phdrs.into(), Box::new(object), D::default())
+        ScanBuilder::new(name, ehdr, phdrs.into(), Box::new(object))
     }
 }

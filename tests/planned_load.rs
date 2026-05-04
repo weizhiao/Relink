@@ -264,12 +264,12 @@ fn load_uses_configured_visible_modules_without_committing_them_locally() {
 
 struct TestPass<F>(F);
 
-impl<S, F> LinkPass<&'static str, (), S> for TestPass<F>
+impl<S, F> LinkPass<&'static str, S> for TestPass<F>
 where
     S: elf_loader::linker::PassScopeMode,
-    F: for<'a> FnMut(&mut LinkPassPlan<'a, &'static str, (), S>) -> elf_loader::Result<()>,
+    F: for<'a> FnMut(&mut LinkPassPlan<'a, &'static str, S>) -> elf_loader::Result<()>,
 {
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, &'static str, (), S>) -> elf_loader::Result<()> {
+    fn run(&mut self, plan: &mut LinkPassPlan<'_, &'static str, S>) -> elf_loader::Result<()> {
         (self.0)(plan)
     }
 }
@@ -286,7 +286,7 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
         data: bytes,
     };
     let configure =
-        |plan: &mut LinkPassPlan<'_, &'static str, (), DataPass>| -> elf_loader::Result<()> {
+        |plan: &mut LinkPassPlan<'_, &'static str, DataPass>| -> elf_loader::Result<()> {
             let root = plan.root();
             let data_section = plan
                 .get(root)
@@ -473,7 +473,7 @@ fn load_scan_first_observer_fires_after_scan_materialization() {
     let configure = {
         let observed = Rc::clone(&observed);
         let saw_scan_phase = Rc::clone(&saw_scan_phase);
-        move |_plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
+        move |_plan: &mut LinkPassPlan<'_, &'static str>| -> elf_loader::Result<()> {
             assert!(
                 observed.borrow().is_empty(),
                 "scan planning must not notify the staged RawDylib observer"
@@ -545,7 +545,7 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
         data: bytes,
     };
     let configure =
-        |plan: &mut LinkPassPlan<'_, &'static str, (), ReorderPass>| -> elf_loader::Result<()> {
+        |plan: &mut LinkPassPlan<'_, &'static str, ReorderPass>| -> elf_loader::Result<()> {
             let root = plan.root();
             assert!(
                 plan.capability(root) == Some(ModuleCapability::SectionReorderable),
@@ -626,7 +626,7 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
     };
     let mut observed_offset = None;
     let configure =
-        |plan: &mut LinkPassPlan<'_, &'static str, (), ReorderPass>| -> elf_loader::Result<()> {
+        |plan: &mut LinkPassPlan<'_, &'static str, ReorderPass>| -> elf_loader::Result<()> {
             let root = plan.root();
             assert!(
                 plan.capability(root) == Some(ModuleCapability::SectionReorderable),
@@ -709,7 +709,7 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
         data: bytes,
     };
     let mut observed_capability = None;
-    let configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
+    let configure = |plan: &mut LinkPassPlan<'_, &'static str>| -> elf_loader::Result<()> {
         let root = plan.root();
         observed_capability = plan.capability(root);
         Ok(())
@@ -757,7 +757,7 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
     };
     let mut observed_capability = None;
     let mut saw_missing_section_headers = false;
-    let configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
+    let configure = |plan: &mut LinkPassPlan<'_, &'static str>| -> elf_loader::Result<()> {
         let root = plan.root();
         observed_capability = plan.capability(root);
         saw_missing_section_headers = plan
@@ -809,7 +809,7 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
         data: bytes,
     };
     let mut observed_capability = None;
-    let configure = |plan: &mut LinkPassPlan<'_, &'static str, ()>| -> elf_loader::Result<()> {
+    let configure = |plan: &mut LinkPassPlan<'_, &'static str>| -> elf_loader::Result<()> {
         let root = plan.root();
         observed_capability = plan.capability(root);
         Ok(())
@@ -843,7 +843,7 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
     let mut observed_capability = None;
     let mut observed_materialization = None;
     let configure =
-        |plan: &mut LinkPassPlan<'_, &'static str, (), DataPass>| -> elf_loader::Result<()> {
+        |plan: &mut LinkPassPlan<'_, &'static str, DataPass>| -> elf_loader::Result<()> {
             let root = plan.root();
             observed_capability = plan.capability(root);
             observed_materialization = plan.materialization(root);
@@ -917,7 +917,7 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
     let mut observed_capability = None;
     let mut observed_materialization = None;
     let configure =
-        |plan: &mut LinkPassPlan<'_, &'static str, (), DataPass>| -> elf_loader::Result<()> {
+        |plan: &mut LinkPassPlan<'_, &'static str, DataPass>| -> elf_loader::Result<()> {
             let root = plan.root();
             observed_capability = plan.capability(root);
 

@@ -23,10 +23,9 @@ pub(crate) struct MappedArenaMap {
 }
 
 impl MappedArenaMap {
-    pub(super) fn map_plan<M, K, D>(plan: &LinkPlan<K, D>) -> Result<Option<Self>>
+    pub(super) fn map_plan<M, K>(plan: &LinkPlan<K>) -> Result<Option<Self>>
     where
         K: Clone + Ord,
-        D: 'static,
         M: Mmap,
     {
         if plan
@@ -65,10 +64,9 @@ impl MappedArenaMap {
         Ok(Some(arenas))
     }
 
-    pub(super) fn populate<K, D>(&mut self, plan: &mut LinkPlan<K, D>) -> Result<()>
+    pub(super) fn populate<K>(&mut self, plan: &mut LinkPlan<K>) -> Result<()>
     where
         K: Clone + Ord,
-        D: 'static,
     {
         let placed_sections = plan
             .memory_layout()
@@ -247,7 +245,7 @@ mod tests {
         assert!(plan.memory_layout_mut().assign(section, arena, 0));
         plan.set_materialization(root, Materialization::SectionRegions);
 
-        let mut mapped = MappedArenaMap::map_plan::<DefaultMmap, _, _>(&plan)
+        let mut mapped = MappedArenaMap::map_plan::<DefaultMmap, _>(&plan)
             .unwrap()
             .unwrap();
         mapped.populate(&mut plan).unwrap();
