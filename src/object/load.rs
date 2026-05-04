@@ -116,7 +116,7 @@ mod tests {
         ehdr.e_shentsize = shentsize as _;
         ehdr.e_shnum = shnum as _;
 
-        ElfHeader::from_raw(ehdr).expect("failed to parse crafted object header")
+        ElfHeader::from_raw(ehdr, true).expect("failed to parse crafted object header")
     }
 
     #[test]

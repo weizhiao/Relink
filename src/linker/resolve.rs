@@ -124,7 +124,7 @@ where
 
 pub(crate) struct ScanStage;
 
-impl<K, D: 'static, Meta, M, H, Tls, O, V>
+impl<K, D: Default + 'static, Meta, M, H, Tls, O, V>
     ResolveStage<'static, K, D, Meta, ScannedDylib<D>, M, H, Tls, O, V> for ScanStage
 where
     K: Clone + Ord,

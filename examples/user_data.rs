@@ -23,12 +23,13 @@ fn main() -> Result<()> {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     env_logger::init();
 
-    let mut loader = Loader::new().with_context_loader(|ctx| {
-        println!("Loading user data for: {}", ctx.name());
-        MyContext {
-            load_time: std::time::SystemTime::now(),
-            custom_id: 42,
+    let mut loader = Loader::new().with_dylib_initializer::<MyContext>(|dylib| {
+        println!("Initializing user data for: {}", dylib.name());
+        if let Some(context) = dylib.user_data_mut() {
+            context.load_time = std::time::SystemTime::now();
+            context.custom_id = 42;
         }
+        Ok(())
     });
 
     let fixtures = fixture_support::ensure_all();

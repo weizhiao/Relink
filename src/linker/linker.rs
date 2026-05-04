@@ -70,7 +70,7 @@ where
     #[inline]
     pub fn new() -> Self {
         Self {
-            loader: Loader::new().with_context(),
+            loader: Loader::new().with_dylib_initializer::<D>(|_| Ok(())),
             resolver: (),
             pipeline: LinkPipeline::new(),
             relocator: Relocator::new(),
@@ -560,12 +560,13 @@ where
                     fini_fn.clone(),
                     loader.inner.force_static_tls(),
                 )?;
-                loader.inner.post_load_dylib(&mut raw)?;
+                loader.inner.initialize_dylib(&mut raw)?;
                 Ok(raw)
             }
             Materialization::WholeDsoRegion => {
-                let mut raw = loader.load_dylib_impl(scanned.into_reader())?;
+                let mut raw = loader.load_dylib_raw_impl(scanned.into_reader())?;
                 apply_section_overrides(&mut raw, module_id, plan);
+                loader.inner.initialize_dylib(&mut raw)?;
                 Ok(raw)
             }
         }

@@ -336,7 +336,7 @@ The [`examples/`](examples/) directory covers the main extension points:
 | `load_hook` | Observe segment loading with `with_hook()` | `cargo run --example load_hook` |
 | `load_scan_first` | Discover `DT_NEEDED`, run layout passes, and materialize section regions | `cargo run --example load_scan_first` |
 | `lifecycle` | Custom `.init` / `.fini` handling | `cargo run --example lifecycle` |
-| `user_data` | Attach per-image metadata with `with_context_loader()` | `cargo run --example user_data` |
+| `user_data` | Initialize per-dylib metadata with `with_dylib_initializer()` | `cargo run --example user_data` |
 | `relocation_handler` | Intercept relocations with a custom handler | `cargo run --example relocation_handler` |
 | `load_object` | Load relocatable object files | `cargo run --example load_object --features object` |
 

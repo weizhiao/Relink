@@ -1,12 +1,19 @@
 use super::{LoadHook, Loader};
 use crate::{
-    ParseEhdrError, Result,
-    elf::{ElfFileType, ElfHeader, ElfPhdr, ElfProgramType},
-    image::{RawDylib, RawElf, RawExec, ScannedDylib},
+    ParseEhdrError, ParsePhdrError, Result,
+    elf::{ElfDyn, ElfFileType, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType},
+    image::{DynamicImageParts, RawDylib, RawElf, RawExec, ScannedDylib},
     input::{ElfReader, IntoElfReader},
     logging,
     os::Mmap,
+    relocation::RelocAddr,
+    segment::{ELFRelro, ElfSegments, program::parse_segments},
     tls::TlsResolver,
+};
+use alloc::{string::String, vec::Vec};
+use core::{
+    ffi::{CStr, c_void},
+    ptr::NonNull,
 };
 
 impl<M, H, D, Tls> Loader<M, H, D, Tls>
@@ -16,8 +23,11 @@ where
     Tls: TlsResolver,
 {
     /// Reads the ELF header.
+    ///
+    /// The machine architecture check is controlled by the loader's
+    /// [`Loader::with_cross_arch`](super::Loader::with_cross_arch) setting.
     pub fn read_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader> {
-        self.buf.prepare_ehdr(object)
+        self.buf.prepare_ehdr(object, !self.inner.allow_cross_arch)
     }
 
     /// Reads the program header table.
@@ -34,7 +44,7 @@ impl<M, H, D, Tls> Loader<M, H, D, Tls>
 where
     M: Mmap,
     H: LoadHook,
-    D: 'static,
+    D: Default + 'static,
     Tls: TlsResolver,
 {
     /// Scans a shared object and returns metadata without mapping its segments.
@@ -70,7 +80,7 @@ impl<M, H, D, Tls> Loader<M, H, D, Tls>
 where
     M: Mmap,
     H: LoadHook,
-    D: Default,
+    D: Default + 'static,
     Tls: TlsResolver,
 {
     /// Loads an ELF input and chooses the appropriate raw image type automatically.
@@ -124,6 +134,11 @@ where
     /// Any [`IntoElfReader`] input is accepted, including paths, byte slices,
     /// [`crate::input::ElfFile`], and [`crate::input::ElfBinary`].
     ///
+    /// To load ELF files targeting a different CPU architecture than the host, configure
+    /// the loader with
+    /// [`Loader::with_cross_arch(true)`](super::Loader::with_cross_arch) before calling
+    /// this method.
+    ///
     /// # Examples
     /// ```no_run
     /// use elf_loader::Loader;
@@ -139,7 +154,24 @@ where
         self.load_dylib_impl(input.into_reader()?)
     }
 
-    pub(crate) fn load_dylib_impl(&mut self, mut object: impl ElfReader) -> Result<RawDylib<D>> {
+    pub(crate) fn load_dylib_impl(&mut self, object: impl ElfReader) -> Result<RawDylib<D>> {
+        let mut dylib = self.load_dylib_raw_impl(object)?;
+        self.inner.initialize_dylib(&mut dylib)?;
+
+        logging::info!(
+            "Loaded dylib: {} at [0x{:x}-0x{:x}]",
+            dylib.name(),
+            dylib.mapped_base(),
+            dylib.mapped_base() + dylib.mapped_len()
+        );
+
+        Ok(dylib)
+    }
+
+    pub(crate) fn load_dylib_raw_impl(
+        &mut self,
+        mut object: impl ElfReader,
+    ) -> Result<RawDylib<D>> {
         logging::debug!("Loading dylib: {}", object.file_name());
 
         let ehdr = self.read_ehdr(&mut object)?;
@@ -158,11 +190,59 @@ where
             .prepare_phdrs(&ehdr, &mut object)?
             .unwrap_or_default();
         let builder = self.inner.create_builder::<M, Tls>(ehdr, phdrs, object)?;
-        let mut dylib = RawDylib::from_builder(builder, phdrs)?;
-        (self.inner.post_load_dylib)(&mut dylib)?;
+        RawDylib::from_builder(builder, phdrs)
+    }
+
+    /// Creates a raw dynamic image from an ELF object that is already mapped.
+    ///
+    /// This is intended for dynamic-linker startup, where the kernel has already
+    /// mapped the main executable before transferring control to the interpreter.
+    /// The returned object is not relocated yet and can be passed through the
+    /// normal relocation pipeline.
+    ///
+    /// `load_bias` is the ELF load bias used to translate `p_vaddr` values into
+    /// runtime addresses. For PIE/`ET_DYN` images this is the randomized base
+    /// address; for fixed `ET_EXEC` images it is typically zero. `entry` must be
+    /// the runtime entry address, such as `AT_ENTRY`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that every `PT_LOAD` range described by `phdrs`
+    /// is mapped at `load_bias + p_vaddr`, remains mapped for the returned
+    /// object's lifetime, and is writable wherever relocation will write.
+    pub unsafe fn load_mapped_dynamic(
+        &mut self,
+        name: impl Into<String>,
+        load_bias: usize,
+        phdrs: impl Into<Vec<ElfPhdr>>,
+        entry: usize,
+    ) -> Result<RawDylib<D>> {
+        let name = name.into();
+        let phdrs = phdrs.into();
+        let layout = parse_segments(&phdrs, true)?;
+        let memory = load_bias.wrapping_add(layout.min_vaddr) as *mut c_void;
+        let segments = ElfSegments::with_base(
+            memory,
+            layout.mapped_len,
+            borrowed_munmap,
+            load_bias,
+            layout.min_vaddr,
+        );
+        let parts = borrowed_dynamic_parts::<M, D>(
+            name,
+            load_bias,
+            entry,
+            &phdrs,
+            segments,
+            self.inner.force_static_tls(),
+            D::default(),
+            self.inner.lifecycle_handlers(),
+        )?;
+        let mut dylib = RawDylib::from_parts::<Tls>(parts)?;
+        self.inner.initialize_dylib(&mut dylib)?;
 
         logging::info!(
-            "Loaded dylib: {} at [0x{:x}-0x{:x}]",
+            "Borrowed dynamic image: {} at [0x{:x}-0x{:x}]",
             dylib.name(),
             dylib.mapped_base(),
             dylib.mapped_base() + dylib.mapped_len()
@@ -230,6 +310,82 @@ where
     }
 }
 
+fn borrowed_dynamic_parts<M, D>(
+    name: String,
+    load_bias: usize,
+    entry: usize,
+    phdrs: &[ElfPhdr],
+    segments: ElfSegments,
+    force_static_tls: bool,
+    user_data: D,
+    lifecycle_handlers: (super::DynLifecycleHandler, super::DynLifecycleHandler),
+) -> Result<DynamicImageParts<D>>
+where
+    M: Mmap,
+    D: 'static,
+{
+    let mut dynamic_ptr = None;
+    let mut interp = None;
+    let mut eh_frame_hdr = None;
+    let mut tls_info = None;
+    let mut relro = None;
+
+    for phdr in phdrs {
+        match phdr.program_type() {
+            ElfProgramType::DYNAMIC => {
+                dynamic_ptr = NonNull::new(load_bias.wrapping_add(phdr.p_vaddr()) as *mut ElfDyn);
+            }
+            ElfProgramType::INTERP => {
+                let ptr = load_bias.wrapping_add(phdr.p_vaddr()) as *const i8;
+                interp = Some(
+                    unsafe { CStr::from_ptr(ptr) }
+                        .to_str()
+                        .map_err(|_| ParsePhdrError::InvalidUtf8 { field: "PT_INTERP" })?,
+                );
+            }
+            ElfProgramType::GNU_EH_FRAME => {
+                eh_frame_hdr = NonNull::new(load_bias.wrapping_add(phdr.p_vaddr()) as *mut u8);
+            }
+            ElfProgramType::TLS => {
+                let image = unsafe {
+                    core::slice::from_raw_parts(
+                        load_bias.wrapping_add(phdr.p_vaddr()) as *const u8,
+                        phdr.p_filesz(),
+                    )
+                };
+                tls_info = Some(crate::tls::TlsInfo::new(phdr, image));
+            }
+            ElfProgramType::GNU_RELRO => {
+                relro = Some(ELFRelro::new::<M>(phdr, RelocAddr::new(load_bias)));
+            }
+            _ => {}
+        }
+    }
+
+    let dynamic_ptr = dynamic_ptr.ok_or(ParsePhdrError::MissingDynamicSection)?;
+    let (init_fn, fini_fn) = lifecycle_handlers;
+
+    Ok(DynamicImageParts {
+        name,
+        entry: RelocAddr::new(entry),
+        interp,
+        phdrs: ElfPhdrs::Vec(Vec::from(phdrs)),
+        dynamic_ptr,
+        eh_frame_hdr,
+        tls_info,
+        force_static_tls,
+        relro,
+        segments,
+        init_fn,
+        fini_fn,
+        user_data,
+    })
+}
+
+unsafe fn borrowed_munmap(_memory: *mut c_void, _len: usize) -> Result<()> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ElfHeader, ElfPhdr};
@@ -287,7 +443,7 @@ mod tests {
         ehdr.e_shentsize = shentsize as _;
         ehdr.e_shnum = shnum as _;
 
-        ElfHeader::from_raw(ehdr).expect("failed to parse crafted header")
+        ElfHeader::from_raw(ehdr, true).expect("failed to parse crafted header")
     }
 
     #[test]

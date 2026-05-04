@@ -16,12 +16,20 @@ impl ElfBuf {
         }
     }
 
-    pub(crate) fn prepare_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader> {
+    /// Reads and parses the ELF header.
+    ///
+    /// When `check_arch` is `false` the machine architecture check is skipped,
+    /// enabling cross-architecture loading (e.g. loading x86-64 ELF on RISC-V).
+    pub(crate) fn prepare_ehdr(
+        &mut self,
+        object: &mut impl ElfReader,
+        check_arch: bool,
+    ) -> Result<ElfHeader> {
         let mut raw = MaybeUninit::<ElfEhdr>::uninit();
         let bytes =
             unsafe { core::slice::from_raw_parts_mut(raw.as_mut_ptr().cast::<u8>(), EHDR_SIZE) };
         object.read(bytes, 0)?;
-        ElfHeader::from_raw(unsafe { raw.assume_init() })
+        ElfHeader::from_raw(unsafe { raw.assume_init() }, check_arch)
     }
 
     pub(crate) fn prepare_phdrs(

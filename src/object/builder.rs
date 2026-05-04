@@ -191,11 +191,11 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
 impl<H, D> LoaderInner<H, D>
 where
     H: LoadHook,
-    D: 'static,
+    D: Default + 'static,
 {
     pub(crate) fn create_object_builder<M, Tls>(
         &mut self,
-        ehdr: ElfHeader,
+        _ehdr: ElfHeader,
         shdrs: &mut [ElfShdr],
         mut object: impl crate::input::ElfReader,
     ) -> Result<ObjectBuilder<Tls, D>>
@@ -212,7 +212,7 @@ where
             shdr_segments.mprotect::<M>()?;
             Ok(())
         });
-        let user_data = self.load_user_data(&name, &ehdr, None, Some(shdrs), None);
+        let user_data = D::default();
 
         ObjectBuilder::new(
             name, shdrs, init_fn, fini_fn, segments, mprotect, pltgot, user_data,

@@ -336,7 +336,7 @@ fn main() -> Result<()> {
 | `load_hook` | 用 `with_hook()` 观察段加载 | `cargo run --example load_hook` |
 | `load_scan_first` | 发现 `DT_NEEDED`、运行布局 pass 并物化 section regions | `cargo run --example load_scan_first` |
 | `lifecycle` | 自定义 `.init` / `.fini` 调用流程 | `cargo run --example lifecycle` |
-| `user_data` | 用 `with_context_loader()` 绑定模块级上下文 | `cargo run --example user_data` |
+| `user_data` | 用 `with_dylib_initializer()` 初始化 dylib 级上下文 | `cargo run --example user_data` |
 | `relocation_handler` | 用自定义 handler 拦截重定位 | `cargo run --example relocation_handler` |
 | `load_object` | 加载可重定位目标文件 | `cargo run --example load_object --features object` |
 

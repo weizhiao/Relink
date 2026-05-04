@@ -1,5 +1,5 @@
 use crate::{
-    Result,
+    ParsePhdrError, Result,
     elf::{ElfPhdr, ElfProgramFlags, ElfProgramType},
     os::{MapFlags, Mmap, ProtFlags},
     segment::{
@@ -45,17 +45,32 @@ impl<'phdr> ProgramSegments<'phdr> {
     }
 }
 
+/// Memory layout requirements derived from LOAD program headers.
+pub(crate) struct ProgramSegmentLayout {
+    /// Preferred address passed to `mmap`; `None` lets the OS choose.
+    pub(crate) preferred_addr: Option<usize>,
+    /// Total page-aligned memory range covered by LOAD segments.
+    pub(crate) mapped_len: usize,
+    /// Lowest page-aligned virtual address among LOAD segments.
+    pub(crate) min_vaddr: usize,
+}
+
 /// Parse segments to determine memory layout requirements
 #[inline]
-fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (Option<usize>, usize, usize) {
+pub(crate) fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> Result<ProgramSegmentLayout> {
     let mut min_vaddr = usize::MAX;
     let mut max_vaddr = 0;
+    let mut has_load_segment = false;
 
     // Find the minimum and maximum virtual addresses of LOAD segments
     for phdr in phdrs {
         if phdr.program_type() == ElfProgramType::LOAD {
+            has_load_segment = true;
             let vaddr_start = phdr.p_vaddr();
-            let vaddr_end = phdr.p_vaddr() + phdr.p_memsz();
+            let vaddr_end = phdr
+                .p_vaddr()
+                .checked_add(phdr.p_memsz())
+                .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
             if vaddr_start < min_vaddr {
                 min_vaddr = vaddr_start;
             }
@@ -65,31 +80,38 @@ fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> (Option<usize>, usize, u
         }
     }
 
+    if !has_load_segment {
+        return Err(ParsePhdrError::MalformedProgramHeaders.into());
+    }
+
     // Align addresses to page boundaries
     max_vaddr = roundup(max_vaddr, PAGE_SIZE);
     min_vaddr = rounddown(min_vaddr, PAGE_SIZE);
-    let total_size = max_vaddr - min_vaddr;
+    let total_size = max_vaddr
+        .checked_sub(min_vaddr)
+        .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
 
     // For shared libraries, let the OS choose the base address (None)
     // For executables, suggest the preferred base address (Some)
-    (
-        if is_dylib { None } else { Some(min_vaddr) },
-        total_size,
+    Ok(ProgramSegmentLayout {
+        preferred_addr: if is_dylib { None } else { Some(min_vaddr) },
+        mapped_len: total_size,
         min_vaddr,
-    )
+    })
 }
 
 impl SegmentBuilder for ProgramSegments<'_> {
     /// Reserve memory space for all segments
     fn create_space<M: Mmap>(&mut self) -> Result<ElfSegments> {
-        let (addr, len, min_vaddr) = parse_segments(self.phdrs, self.is_dylib);
-        let ptr = unsafe { M::mmap_reserve(addr, len, self.use_file) }?;
+        let layout = parse_segments(self.phdrs, self.is_dylib)?;
+        let ptr =
+            unsafe { M::mmap_reserve(layout.preferred_addr, layout.mapped_len, self.use_file) }?;
         Ok(ElfSegments::with_base(
             ptr,
-            len,
+            layout.mapped_len,
             M::munmap,
-            (ptr as usize).wrapping_sub(min_vaddr),
-            min_vaddr,
+            (ptr as usize).wrapping_sub(layout.min_vaddr),
+            layout.min_vaddr,
         ))
     }
 

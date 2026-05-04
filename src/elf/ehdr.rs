@@ -24,10 +24,15 @@ pub struct ElfHeader {
 }
 
 impl ElfHeader {
+    /// Wraps a raw header and validates it.
+    ///
+    /// When `check_arch` is `false` the machine architecture check is skipped,
+    /// allowing cross-architecture loading (e.g. loading an x86-64 ELF on a RISC-V
+    /// host). All other validations (magic, class, version) always run.
     #[inline]
-    pub(crate) fn from_raw(ehdr: ElfEhdr) -> Result<Self> {
+    pub(crate) fn from_raw(ehdr: ElfEhdr, check_arch: bool) -> Result<Self> {
         let ehdr = Self { ehdr };
-        ehdr.validate()?;
+        ehdr.validate(check_arch)?;
         Ok(ehdr)
     }
 
@@ -68,8 +73,12 @@ impl ElfHeader {
         self.ehdr.e_entry as usize
     }
 
-    /// Validates the ELF header magic, class, version, and architecture.
-    pub fn validate(&self) -> Result<()> {
+    /// Validates the ELF header magic, class, version, and optionally architecture.
+    ///
+    /// When `check_arch` is `false`, the machine architecture check is skipped. This
+    /// is intended for cross-architecture loaders that map ELF files targeting a
+    /// different CPU than the host.
+    pub(crate) fn validate(&self, check_arch: bool) -> Result<()> {
         // Check ELF magic bytes
         if self.ehdr.e_ident[0..4] != ELFMAGIC {
             return Err(ParseEhdrError::InvalidMagic.into());
@@ -90,14 +99,16 @@ impl ElfHeader {
             return Err(ParseEhdrError::InvalidVersion.into());
         }
 
-        // Check machine architecture
-        let machine = self.machine();
-        if machine.raw() != EM_ARCH {
-            return Err(ParseEhdrError::FileArchMismatch {
-                expected: ElfMachine::new(EM_ARCH),
-                found: machine,
+        if check_arch {
+            // Check machine architecture
+            let machine = self.machine();
+            if machine.raw() != EM_ARCH {
+                return Err(ParseEhdrError::FileArchMismatch {
+                    expected: ElfMachine::new(EM_ARCH),
+                    found: machine,
+                }
+                .into());
             }
-            .into());
         }
 
         Ok(())

@@ -8,7 +8,7 @@
 //!
 //! - [`LoadHook`] for observing program headers as they are mapped
 //! - [`LifecycleHandler`] for customizing `.init` / `.fini` invocation
-//! - [`UserDataLoaderContext`] for attaching user-defined metadata to loaded images
+//! - `with_dylib_initializer` for initializing shared-object user data
 //! - `with_*` builder methods for swapping the memory-mapping backend or TLS resolver
 
 mod buffer;
@@ -17,19 +17,15 @@ mod load;
 
 use crate::{
     Result,
-    elf::{ElfHeader, ElfPhdr, ElfShdr},
-    input::{ElfReader, ElfReaderExt},
-    logging,
+    elf::ElfPhdr,
+    image::RawDylib,
     os::{DefaultMmap, Mmap},
     segment::ElfSegments,
     sync::Arc,
     tls::TlsResolver,
 };
 use alloc::boxed::Box;
-use core::{
-    cell::{Cell, UnsafeCell},
-    marker::PhantomData,
-};
+use core::marker::PhantomData;
 
 pub(crate) use buffer::ElfBuf;
 pub(crate) use builder::{ImageBuilder, ScanBuilder};
@@ -149,141 +145,6 @@ where
 
 pub(crate) type DynLifecycleHandler = Arc<Box<dyn LifecycleHandler>>;
 
-struct LazyShdrs<'a> {
-    name: &'a str,
-    ehdr: &'a ElfHeader,
-    reader: Option<*mut (dyn ElfReader + 'a)>,
-    cached: UnsafeCell<Option<Box<[ElfShdr]>>>,
-    attempted: Cell<bool>,
-    _marker: PhantomData<&'a mut dyn ElfReader>,
-}
-
-impl<'a> LazyShdrs<'a> {
-    #[inline]
-    fn unavailable(name: &'a str, ehdr: &'a ElfHeader) -> Self {
-        Self {
-            name,
-            ehdr,
-            reader: None,
-            cached: UnsafeCell::new(None),
-            attempted: Cell::new(false),
-            _marker: PhantomData,
-        }
-    }
-
-    #[inline]
-    fn from_reader(name: &'a str, ehdr: &'a ElfHeader, reader: &'a mut dyn ElfReader) -> Self {
-        Self {
-            name,
-            ehdr,
-            reader: Some(reader as *mut dyn ElfReader),
-            cached: UnsafeCell::new(None),
-            attempted: Cell::new(false),
-            _marker: PhantomData,
-        }
-    }
-
-    fn load(&self) -> Option<&[ElfShdr]> {
-        let cached = unsafe { &*self.cached.get() };
-        if let Some(shdrs) = cached.as_deref() {
-            return Some(shdrs);
-        }
-
-        if self.attempted.replace(true) {
-            return None;
-        }
-
-        let Some((start, size)) = self.ehdr.checked_shdr_layout().ok().flatten() else {
-            return None;
-        };
-        let count = self.ehdr.e_shnum();
-        let Some(reader) = self.reader else {
-            return None;
-        };
-
-        let shdrs = match unsafe { (&mut *reader).read_to_vec::<ElfShdr>(start, count) } {
-            Ok(shdrs) => shdrs,
-            Err(err) => {
-                logging::debug!(
-                    "failed to lazily read section headers for {}: {err}",
-                    self.name
-                );
-                return None;
-            }
-        };
-        if shdrs.len() * core::mem::size_of::<ElfShdr>() != size {
-            logging::debug!(
-                "failed to lazily read section headers for {}: section header size mismatch",
-                self.name,
-            );
-            return None;
-        }
-
-        unsafe {
-            *self.cached.get() = Some(shdrs.into_boxed_slice());
-            (&*self.cached.get()).as_deref()
-        }
-    }
-}
-
-/// Context passed to [`Loader::with_context_loader`].
-pub struct UserDataLoaderContext<'a> {
-    /// The name of the ELF object being loaded.
-    name: &'a str,
-    /// The ELF header of the object.
-    ehdr: &'a ElfHeader,
-    /// The program headers of the object.
-    phdrs: Option<&'a [ElfPhdr]>,
-    /// The section headers of the object.
-    shdrs: Option<&'a [ElfShdr]>,
-    /// Lazily loads section headers when the hot path does not need them.
-    lazy_shdrs: LazyShdrs<'a>,
-}
-
-impl<'a> UserDataLoaderContext<'a> {
-    pub(crate) fn new(
-        name: &'a str,
-        ehdr: &'a ElfHeader,
-        phdrs: Option<&'a [ElfPhdr]>,
-        shdrs: Option<&'a [ElfShdr]>,
-        shdr_reader: Option<&'a mut dyn ElfReader>,
-    ) -> Self {
-        Self {
-            name,
-            ehdr,
-            phdrs,
-            shdrs,
-            lazy_shdrs: shdr_reader
-                .map(|reader| LazyShdrs::from_reader(name, ehdr, reader))
-                .unwrap_or_else(|| LazyShdrs::unavailable(name, ehdr)),
-        }
-    }
-
-    /// Returns the name of the ELF object being loaded.
-    pub fn name(&self) -> &str {
-        self.name
-    }
-
-    /// Returns the ELF header of the object.
-    pub fn ehdr(&self) -> &ElfHeader {
-        self.ehdr
-    }
-
-    /// Returns the program headers of the object.
-    pub fn phdrs(&self) -> Option<&[ElfPhdr]> {
-        self.phdrs
-    }
-
-    /// Returns the section headers of the object.
-    ///
-    /// For relocatable objects these are already available. For executables and
-    /// shared objects they are loaded on first access so the default load path
-    /// does not pay the cost unless a context loader actually asks for them.
-    pub fn shdrs(&self) -> Option<&[ElfShdr]> {
-        self.shdrs.or_else(|| self.lazy_shdrs.load())
-    }
-}
-
 /// Configurable ELF loader.
 ///
 /// `Loader` maps ELF objects from files or memory and produces raw image types such as
@@ -291,7 +152,7 @@ impl<'a> UserDataLoaderContext<'a> {
 /// Those raw images can then be relocated by calling `.relocator().relocate()`.
 ///
 /// Use the `with_*` builder methods to customize hooks, lifecycle handling,
-/// attached user data, memory mapping, and TLS behavior.
+/// shared-object initialization, memory mapping, and TLS behavior.
 ///
 /// # Examples
 ///
@@ -318,8 +179,10 @@ pub(crate) struct LoaderInner<H, D: 'static> {
     fini_fn: DynLifecycleHandler,
     hook: H,
     force_static_tls: bool,
-    user_data_loader: Box<dyn Fn(&UserDataLoaderContext) -> D>,
-    post_load_dylib: Box<dyn FnMut(&mut crate::image::RawDylib<D>) -> Result<()>>,
+    /// When `true`, the ELF machine architecture check is skipped on load.
+    /// Used for cross-architecture loading (e.g. x86-64 ELF on RISC-V).
+    pub(crate) allow_cross_arch: bool,
+    dylib_initializer: Box<dyn FnMut(&mut crate::image::RawDylib<D>) -> Result<()>>,
 }
 
 impl Loader<DefaultMmap, (), (), ()> {
@@ -348,8 +211,8 @@ impl Loader<DefaultMmap, (), (), ()> {
                 init_fn: c_abi.clone(),
                 fini_fn: c_abi,
                 force_static_tls: false,
-                user_data_loader: Box::new(|_| ()),
-                post_load_dylib: Box::new(|_| Ok(())),
+                allow_cross_arch: false,
+                dylib_initializer: Box::new(|_| Ok(())),
             },
             _marker: PhantomData,
         }
@@ -390,8 +253,17 @@ where
         self
     }
 
-    /// Consumes the current loader and returns a new one with the specified context data type.
-    pub fn with_context<NewD>(self) -> Loader<M, H, NewD, Tls>
+    /// Consumes the current loader and returns a new one with the specified
+    /// shared-object user data type and initializer.
+    ///
+    /// Shared objects are first created with `NewD::default()`. The initializer
+    /// then receives the completed raw image so it can fill or adjust the user
+    /// data using dynamic metadata such as dependencies, run paths, and mapped
+    /// addresses.
+    pub fn with_dylib_initializer<NewD>(
+        self,
+        initializer: impl FnMut(&mut RawDylib<NewD>) -> Result<()> + 'static,
+    ) -> Loader<M, H, NewD, Tls>
     where
         NewD: Default + 'static,
     {
@@ -402,43 +274,11 @@ where
                 fini_fn: self.inner.fini_fn,
                 hook: self.inner.hook,
                 force_static_tls: self.inner.force_static_tls,
-                user_data_loader: Box::new(|_| NewD::default()),
-                post_load_dylib: Box::new(|_| Ok(())),
+                allow_cross_arch: self.inner.allow_cross_arch,
+                dylib_initializer: Box::new(initializer),
             },
             _marker: PhantomData,
         }
-    }
-
-    /// Consumes the current loader and returns a new one with the specified user data generator.
-    pub fn with_context_loader<NewD>(
-        self,
-        loader: impl Fn(&UserDataLoaderContext) -> NewD + 'static,
-    ) -> Loader<M, H, NewD, Tls>
-    where
-        NewD: 'static,
-    {
-        Loader {
-            buf: self.buf,
-            inner: LoaderInner {
-                init_fn: self.inner.init_fn,
-                fini_fn: self.inner.fini_fn,
-                hook: self.inner.hook,
-                force_static_tls: self.inner.force_static_tls,
-                user_data_loader: Box::new(loader),
-                post_load_dylib: Box::new(|_| Ok(())),
-            },
-            _marker: PhantomData,
-        }
-    }
-
-    /// Sets a hook that runs after a shared object has been mapped and its raw
-    /// image has been created, but before it is returned to the caller.
-    pub fn with_dylib_post_load(
-        mut self,
-        hook: impl FnMut(&mut crate::image::RawDylib<D>) -> Result<()> + 'static,
-    ) -> Self {
-        self.inner.post_load_dylib = Box::new(hook);
-        self
     }
 
     /// Consumes the current loader and returns a new one with the specified hook.
@@ -453,11 +293,25 @@ where
                 fini_fn: self.inner.fini_fn,
                 hook,
                 force_static_tls: self.inner.force_static_tls,
-                user_data_loader: self.inner.user_data_loader,
-                post_load_dylib: self.inner.post_load_dylib,
+                allow_cross_arch: self.inner.allow_cross_arch,
+                dylib_initializer: self.inner.dylib_initializer,
             },
             _marker: PhantomData,
         }
+    }
+
+    /// Sets whether the loader is allowed to load ELF files targeting a different
+    /// CPU architecture than the host.
+    ///
+    /// When `enabled` is `true`, the `e_machine` check in the ELF header is skipped,
+    /// making it possible to map (for example) an x86-64 shared object on a RISC-V
+    /// host. The caller remains responsible for applying any target-specific
+    /// relocations afterwards.
+    ///
+    /// Defaults to `false`.
+    pub fn with_cross_arch(mut self, enabled: bool) -> Self {
+        self.inner.allow_cross_arch = enabled;
+        self
     }
 
     /// Returns a new loader with a custom `Mmap` implementation.

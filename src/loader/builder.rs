@@ -1,7 +1,7 @@
-use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner, UserDataLoaderContext};
+use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner};
 use crate::{
     ParsePhdrError, Result,
-    elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType, ElfShdr},
+    elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType},
     input::ElfReader,
     os::Mmap,
     segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
@@ -145,69 +145,45 @@ where
         }
     }
 
-    /// Parse a program header and extract relevant information
-    ///
-    /// This method processes a program header and extracts information
-    /// needed for relocation, such as the dynamic section, GNU_RELRO
-    /// segment, and interpreter path.
-    ///
-    /// # Arguments
-    /// * `phdr` - The program header to parse
-    ///
-    /// # Returns
-    /// * `Ok(())` - If parsing succeeds
-    /// * `Err(Error)` - If parsing fails
+    /// Parse a program header and extract relevant information.
     pub(crate) fn parse_phdr(&mut self, phdr: &ElfPhdr) -> Result<()> {
         let ctx = LoadHookContext::new(&self.name, phdr, &self.segments);
         self.hook.call(&ctx)?;
 
-        // Process different program header types
         match phdr.program_type() {
-            // Parse the .dynamic section
             ElfProgramType::DYNAMIC => {
                 self.dynamic_ptr = Some(
                     NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr()))
                         .ok_or(ParsePhdrError::MalformedProgramHeaders)?,
                 )
             }
-
-            // Store GNU_RELRO segment information
             ElfProgramType::GNU_RELRO => {
                 self.relro = Some(ELFRelro::new::<M>(phdr, self.segments.base_addr()))
             }
-
-            // Store program header table mapping
             ElfProgramType::PHDR => {
                 self.phdr_mmap = Some(
                     self.segments
                         .get_slice::<ElfPhdr>(phdr.p_vaddr(), phdr.p_memsz()),
                 );
             }
-
-            // Store interpreter path
             ElfProgramType::INTERP => {
                 self.interp = Some(
                     NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr()))
                         .ok_or(ParsePhdrError::MalformedProgramHeaders)?,
                 );
             }
-
             ElfProgramType::GNU_EH_FRAME => {
                 self.eh_frame_hdr = Some(
                     NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr()))
                         .ok_or(ParsePhdrError::MalformedProgramHeaders)?,
                 );
             }
-
-            // Store TLS segment information
             ElfProgramType::TLS => {
                 let tls_image = self
                     .segments
                     .get_slice::<u8>(phdr.p_vaddr(), phdr.p_filesz());
                 self.tls_info = Some(TlsInfo::new(phdr, tls_image));
             }
-
-            // Ignore other program header types
             _ => {}
         };
         Ok(())
@@ -274,27 +250,16 @@ where
     }
 
     #[inline]
-    pub(crate) fn post_load_dylib(&mut self, dylib: &mut crate::image::RawDylib<D>) -> Result<()> {
-        (self.post_load_dylib)(dylib)
+    pub(crate) fn initialize_dylib(&mut self, dylib: &mut crate::image::RawDylib<D>) -> Result<()> {
+        (self.dylib_initializer)(dylib)
     }
+}
 
-    pub(crate) fn load_user_data<'a>(
-        &self,
-        name: &'a str,
-        ehdr: &'a ElfHeader,
-        phdrs: Option<&'a [ElfPhdr]>,
-        shdrs: Option<&'a [ElfShdr]>,
-        shdr_reader: Option<&'a mut dyn crate::input::ElfReader>,
-    ) -> D {
-        (self.user_data_loader)(&UserDataLoaderContext::new(
-            name,
-            ehdr,
-            phdrs,
-            shdrs,
-            shdr_reader,
-        ))
-    }
-
+impl<H, D> LoaderInner<H, D>
+where
+    H: LoadHook,
+    D: Default + 'static,
+{
     pub(crate) fn create_builder<M, Tls>(
         &mut self,
         ehdr: ElfHeader,
@@ -312,8 +277,6 @@ where
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
 
-        let user_data = self.load_user_data(&name, &ehdr, Some(phdrs), None, Some(&mut object));
-
         Ok(ImageBuilder::new(
             &mut self.hook,
             segments,
@@ -322,7 +285,7 @@ where
             init_fn,
             fini_fn,
             self.force_static_tls,
-            user_data,
+            D::default(),
         ))
     }
 
@@ -330,11 +293,10 @@ where
         &self,
         ehdr: ElfHeader,
         phdrs: &[ElfPhdr],
-        mut object: impl ElfReader + 'static,
+        object: impl ElfReader + 'static,
     ) -> ScanBuilder<D> {
         let name = object.file_name().to_owned();
-        let user_data = self.load_user_data(&name, &ehdr, Some(phdrs), None, Some(&mut object));
 
-        ScanBuilder::new(name, ehdr, phdrs.into(), Box::new(object), user_data)
+        ScanBuilder::new(name, ehdr, phdrs.into(), Box::new(object), D::default())
     }
 }
