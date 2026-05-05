@@ -2,7 +2,8 @@ use super::{
     context::LinkContext,
     layout::{Materialization, MemoryLayoutPlan},
     mapped, materialization,
-    plan::{LinkPipeline, LinkPlan, ModuleId},
+    passes::LinkPipeline,
+    plan::{LinkPlan, ModuleId},
     request::{
         DefaultRelocationPlanner, LoadObserver, RelocationPlanner, RelocationRequest,
         StagedDynamic, VisibleModules,

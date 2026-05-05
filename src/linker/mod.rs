@@ -11,6 +11,7 @@ mod layout;
 mod linker;
 mod mapped;
 mod materialization;
+mod passes;
 mod plan;
 mod request;
 mod resolve;
@@ -26,10 +27,11 @@ pub use layout::{
 };
 pub use linker::Linker;
 pub(crate) use mapped::GotPltTarget;
-pub use plan::{
-    AnyPass, DataPass, LinkPass, LinkPassPlan, LinkPipeline, ModuleId, PassScope, PassScopeMode,
+pub use passes::{
+    AnyPass, DataPass, LinkPass, LinkPassPlan, LinkPipeline, PassScope, PassScopeMode,
     ReorderAccess, ReorderPass, SectionDataAccess,
 };
+pub use plan::ModuleId;
 pub use request::{
     DefaultRelocationPlanner, DependencyOwner, DependencyRequest, LoadObserver, RelocationInputs,
     RelocationPlanner, RelocationRequest, StagedDynamic, VisibleModules,
