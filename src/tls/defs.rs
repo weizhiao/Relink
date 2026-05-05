@@ -41,12 +41,74 @@ impl TlsInfo {
     }
 }
 
+/// TLS module ID assigned by a [`TlsResolver`](crate::tls::TlsResolver).
+///
+/// ID 0 is reserved by the platform TLS ABI; dynamically loaded modules start
+/// at non-zero IDs.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct TlsModuleId(usize);
+
+impl TlsModuleId {
+    /// The reserved module ID used when no TLS module is present.
+    pub const RESERVED: Self = Self(0);
+
+    /// Creates a module ID from its raw ABI value.
+    #[inline]
+    pub const fn new(raw: usize) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw ABI value.
+    #[inline]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+
+    /// Returns whether this is the reserved zero module ID.
+    #[inline]
+    pub const fn is_reserved(self) -> bool {
+        self.0 == Self::RESERVED.0
+    }
+}
+
+impl core::fmt::Display for TlsModuleId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// Signed offset from the thread pointer to a static TLS block.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct TlsTpOffset(isize);
+
+impl TlsTpOffset {
+    /// Creates a thread-pointer offset from its raw ABI value.
+    #[inline]
+    pub const fn new(raw: isize) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw signed offset from the thread pointer.
+    #[inline]
+    pub const fn get(self) -> isize {
+        self.0
+    }
+}
+
+impl core::fmt::Display for TlsTpOffset {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// The TLS Index structure passed to `__tls_get_addr`.
 /// This matches the C ABI.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct TlsIndex {
-    pub ti_module: usize,
+    pub ti_module: TlsModuleId,
     pub ti_offset: usize,
 }
 

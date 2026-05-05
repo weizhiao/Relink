@@ -14,7 +14,7 @@ use crate::{
         RelocAddr, Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup,
     },
     segment::ElfSegments,
-    tls::TlsResolver,
+    tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{string::String, vec::Vec};
 use core::fmt::Debug;
@@ -49,11 +49,11 @@ impl<D> StaticExec<D> {
         self.inner.entry
     }
 
-    pub fn tls_mod_id(&self) -> Option<usize> {
+    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         self.inner.tls_mod_id
     }
 
-    pub fn tls_tp_offset(&self) -> Option<isize> {
+    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         self.inner.tls_tp_offset
     }
 
@@ -99,10 +99,10 @@ struct StaticExecInner<D> {
     phdrs: Option<Vec<ElfPhdr>>,
 
     /// TLS module ID
-    tls_mod_id: Option<usize>,
+    tls_mod_id: Option<TlsModuleId>,
 
     /// TLS thread pointer offset
-    tls_tp_offset: Option<isize>,
+    tls_tp_offset: Option<TlsTpOffset>,
 }
 
 impl<D: 'static> Relocatable<D> for RawExec<D> {
@@ -186,14 +186,14 @@ impl<D: 'static> RawExec<D> {
         }
     }
 
-    pub fn tls_mod_id(&self) -> Option<usize> {
+    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         match self {
             RawExec::Dynamic(image) => image.tls_mod_id(),
             RawExec::Static(image) => image.tls_mod_id(),
         }
     }
 
-    pub fn tls_tp_offset(&self) -> Option<isize> {
+    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         match self {
             RawExec::Dynamic(image) => image.tls_tp_offset(),
             RawExec::Static(image) => image.tls_tp_offset(),
@@ -330,14 +330,14 @@ impl<D> LoadedExec<D> {
         }
     }
 
-    pub fn tls_mod_id(&self) -> Option<usize> {
+    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => module.core.tls_mod_id(),
             LoadedExecInner::Static(static_image) => static_image.tls_mod_id(),
         }
     }
 
-    pub fn tls_tp_offset(&self) -> Option<isize> {
+    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => module.core.tls_tp_offset(),
             LoadedExecInner::Static(static_image) => static_image.tls_tp_offset(),

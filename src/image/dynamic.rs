@@ -12,7 +12,7 @@ use crate::{
         SymbolLookup,
     },
     segment::ELFRelro,
-    tls::{CoreTlsState, TlsInfo, TlsResolver},
+    tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, ptr::NonNull};
@@ -141,12 +141,12 @@ impl<D> RawDynamic<D> {
         self.entry
     }
 
-    pub fn tls_mod_id(&self) -> Option<usize> {
+    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         self.module.tls_mod_id()
     }
 
     /// Gets the TLS thread pointer offset
-    pub fn tls_tp_offset(&self) -> Option<isize> {
+    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         self.module.tls_tp_offset()
     }
 

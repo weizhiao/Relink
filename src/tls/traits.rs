@@ -1,4 +1,4 @@
-use super::{TlsIndex, TlsInfo};
+use super::{TlsIndex, TlsInfo, TlsModuleId, TlsTpOffset};
 use crate::{Result, TlsError};
 
 const TLS_GET_ADDR_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
@@ -18,23 +18,23 @@ pub trait TlsResolver {
     /// # Errors
     ///
     /// Returns an error if the module ID cannot be allocated.
-    fn register(tls_info: &TlsInfo) -> Result<usize>;
+    fn register(tls_info: &TlsInfo) -> Result<TlsModuleId>;
 
     /// Registers a module with static TLS, returning the module ID and its thread pointer offset.
     ///
     /// # Errors
     ///
     /// Returns an error if space cannot be allocated in the static TLS area.
-    fn register_static(tls_info: &TlsInfo) -> Result<(usize, isize)>;
+    fn register_static(tls_info: &TlsInfo) -> Result<(TlsModuleId, TlsTpOffset)>;
 
     /// Records an existing static TLS module and returns its allocated module ID.
     ///
     /// This is used when the TLS block is already set up and its offset from the thread
     /// pointer is known.
-    fn add_static_tls(tls_info: &TlsInfo, offset: isize) -> Result<usize>;
+    fn add_static_tls(tls_info: &TlsInfo, offset: TlsTpOffset) -> Result<TlsModuleId>;
 
     /// Releases resources associated with the given module ID.
-    fn unregister(mod_id: usize);
+    fn unregister(mod_id: TlsModuleId);
 
     /// Returns the address of a thread-local variable for the given index.
     ///
@@ -43,19 +43,19 @@ pub trait TlsResolver {
 }
 
 impl TlsResolver for () {
-    fn register(_tls_info: &TlsInfo) -> Result<usize> {
+    fn register(_tls_info: &TlsInfo) -> Result<TlsModuleId> {
         Err(TlsError::ResolverUnsupported.into())
     }
 
-    fn register_static(_tls_info: &TlsInfo) -> Result<(usize, isize)> {
+    fn register_static(_tls_info: &TlsInfo) -> Result<(TlsModuleId, TlsTpOffset)> {
         Err(TlsError::StaticResolverUnsupported.into())
     }
 
-    fn add_static_tls(_tls_info: &TlsInfo, _offset: isize) -> Result<usize> {
+    fn add_static_tls(_tls_info: &TlsInfo, _offset: TlsTpOffset) -> Result<TlsModuleId> {
         Err(TlsError::StaticResolverUnsupported.into())
     }
 
-    fn unregister(_mod_id: usize) {
+    fn unregister(_mod_id: TlsModuleId) {
         // No-op for unit resolver as it doesn't maintain any state
     }
 

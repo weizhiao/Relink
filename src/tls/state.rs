@@ -1,6 +1,6 @@
 #[cfg(feature = "tls")]
 mod enabled {
-    use super::super::defs::TlsDescDynamicArg;
+    use super::super::defs::{TlsDescDynamicArg, TlsModuleId, TlsTpOffset};
     use crate::relocation::RelocAddr;
     use alloc::{boxed::Box, vec::Vec};
 
@@ -18,19 +18,19 @@ mod enabled {
     /// This keeps TLS-specific bookkeeping out of `CoreInner`, so TLS state can
     /// collapse to an empty implementation when the `tls` feature is disabled.
     pub(crate) struct CoreTlsState {
-        mod_id: Option<usize>,
-        tp_offset: Option<isize>,
+        mod_id: Option<TlsModuleId>,
+        tp_offset: Option<TlsTpOffset>,
         tls_get_addr: RelocAddr,
-        unregister: fn(usize),
+        unregister: fn(TlsModuleId),
         desc_args: Box<[Box<TlsDescDynamicArg>]>,
     }
 
     impl CoreTlsState {
         pub(crate) fn new(
-            mod_id: Option<usize>,
-            tp_offset: Option<isize>,
+            mod_id: Option<TlsModuleId>,
+            tp_offset: Option<TlsTpOffset>,
             tls_get_addr: RelocAddr,
-            unregister: fn(usize),
+            unregister: fn(TlsModuleId),
         ) -> Self {
             Self {
                 mod_id,
@@ -42,12 +42,12 @@ mod enabled {
         }
 
         #[inline]
-        pub(crate) fn mod_id(&self) -> Option<usize> {
+        pub(crate) fn mod_id(&self) -> Option<TlsModuleId> {
             self.mod_id
         }
 
         #[inline]
-        pub(crate) fn tp_offset(&self) -> Option<isize> {
+        pub(crate) fn tp_offset(&self) -> Option<TlsTpOffset> {
             self.tp_offset
         }
 
@@ -71,6 +71,7 @@ mod enabled {
 
 #[cfg(not(feature = "tls"))]
 mod disabled {
+    use super::super::defs::{TlsModuleId, TlsTpOffset};
     use crate::relocation::RelocAddr;
 
     #[derive(Default)]
@@ -84,21 +85,21 @@ mod disabled {
 
     impl CoreTlsState {
         pub(crate) fn new(
-            _mod_id: Option<usize>,
-            _tp_offset: Option<isize>,
+            _mod_id: Option<TlsModuleId>,
+            _tp_offset: Option<TlsTpOffset>,
             _tls_get_addr: RelocAddr,
-            _unregister: fn(usize),
+            _unregister: fn(TlsModuleId),
         ) -> Self {
             Self
         }
 
         #[inline]
-        pub(crate) fn mod_id(&self) -> Option<usize> {
+        pub(crate) fn mod_id(&self) -> Option<TlsModuleId> {
             None
         }
 
         #[inline]
-        pub(crate) fn tp_offset(&self) -> Option<isize> {
+        pub(crate) fn tp_offset(&self) -> Option<TlsTpOffset> {
             None
         }
 

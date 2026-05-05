@@ -15,7 +15,7 @@ use crate::{
     relocation::{RelocAddr, SymDef},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
-    tls::{CoreTlsState, TlsDescArgs, TlsInfo, TlsResolver},
+    tls::{CoreTlsState, TlsDescArgs, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -170,13 +170,13 @@ impl<D> LoadedCore<D> {
 
     /// Gets the TLS module ID of the ELF object
     #[inline]
-    pub fn tls_mod_id(&self) -> Option<usize> {
+    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         self.core.tls_mod_id()
     }
 
     /// Gets the TLS thread pointer offset of the ELF object
     #[inline]
-    pub fn tls_tp_offset(&self) -> Option<isize> {
+    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         self.core.tls_tp_offset()
     }
 
@@ -225,7 +225,7 @@ impl<D> LoadedCore<D> {
         phdrs: impl Into<Vec<ElfPhdr>>,
         memory: (*mut c_void, usize),
         munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
-        tls_tp_offset: Option<isize>,
+        tls_tp_offset: Option<TlsTpOffset>,
         user_data: D,
     ) -> Result<Self> {
         let segments = ElfSegments::new(memory.0, memory.1, munmap);
@@ -649,13 +649,13 @@ impl<D> ElfCore<D> {
 
     /// Gets the TLS module ID of the ELF object
     #[inline]
-    pub fn tls_mod_id(&self) -> Option<usize> {
+    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         self.inner.tls.mod_id()
     }
 
     /// Gets the TLS thread pointer offset of the ELF object
     #[inline]
-    pub fn tls_tp_offset(&self) -> Option<isize> {
+    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         self.inner.tls.tp_offset()
     }
 
@@ -682,10 +682,10 @@ impl<D> ElfCore<D> {
         phdrs: Vec<ElfPhdr>,
         eh_frame_hdr: Option<NonNull<u8>>,
         mut segments: ElfSegments,
-        tls_mod_id: Option<usize>,
-        tls_tp_offset: Option<isize>,
+        tls_mod_id: Option<TlsModuleId>,
+        tls_tp_offset: Option<TlsTpOffset>,
         tls_get_addr: RelocAddr,
-        tls_unregister: fn(usize),
+        tls_unregister: fn(TlsModuleId),
         user_data: D,
     ) -> Result<Self> {
         if dynamic_ptr.is_null() {

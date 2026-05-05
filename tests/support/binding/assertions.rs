@@ -154,7 +154,8 @@ impl BindingScenario {
         let tls_mod_id = self
             .helper_dylib()
             .tls_mod_id()
-            .expect("missing TLS mod id") as u64;
+            .expect("missing TLS mod id")
+            .get() as u64;
 
         for symbol_name in [EXTERNAL_TLS_NAME, EXTERNAL_TLS_NAME2] {
             let dtpmod = self.relocation_for_symbol(REL_DTPMOD, symbol_name);

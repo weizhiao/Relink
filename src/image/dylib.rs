@@ -8,6 +8,7 @@ use crate::{
     elf::{ElfDyn, ElfPhdr},
     image::{ElfCore, LoadedCore, RawDynamic},
     relocation::{Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup},
+    tls::{TlsModuleId, TlsTpOffset},
 };
 use core::{fmt::Debug, ptr::NonNull};
 
@@ -98,11 +99,11 @@ impl<D> RawDylib<D> {
         self.inner.is_lazy()
     }
 
-    pub fn tls_mod_id(&self) -> Option<usize> {
+    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         self.inner.tls_mod_id()
     }
 
-    pub fn tls_tp_offset(&self) -> Option<isize> {
+    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         self.inner.tls_tp_offset()
     }
 

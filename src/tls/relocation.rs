@@ -49,7 +49,7 @@ mod enabled {
                 };
 
                 if let Some(mod_id) = mod_id {
-                    segments.write(rel.r_offset(), RelocValue::new(mod_id));
+                    segments.write(rel.r_offset(), RelocValue::new(mod_id.get()));
                     return true;
                 }
             }
@@ -58,7 +58,7 @@ mod enabled {
                     let sym = symdef.sym.unwrap();
                     if let Some(tp_offset) = symdef.lib.tls_tp_offset() {
                         let tls_val =
-                            RelocValue::new((tp_offset + sym.st_value() as isize) as usize)
+                            RelocValue::new((tp_offset.get() + sym.st_value() as isize) as usize)
                                 .addend(r_addend);
                         segments.write(rel.r_offset(), tls_val);
                         return true;
@@ -69,8 +69,9 @@ mod enabled {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
                     let sym = symdef.sym.unwrap();
                     if let Some(tp_offset) = symdef.lib.tls_tp_offset() {
-                        let tpoff = RelocValue::new((tp_offset + sym.st_value() as isize) as usize)
-                            .addend(r_addend);
+                        let tpoff =
+                            RelocValue::new((tp_offset.get() + sym.st_value() as isize) as usize)
+                                .addend(r_addend);
                         segments.write(
                             rel.r_offset(),
                             RelocAddr::from_ptr(tlsdesc_resolver_static as *const ()),

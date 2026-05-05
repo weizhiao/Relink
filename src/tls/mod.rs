@@ -14,7 +14,7 @@ mod traits;
 
 pub(crate) use state::{CoreTlsState, TlsDescArgs};
 
-pub use defs::{TlsIndex, TlsInfo};
+pub use defs::{TlsIndex, TlsInfo, TlsModuleId, TlsTpOffset};
 #[cfg(feature = "tls")]
 pub use manager::DefaultTlsResolver;
 pub(crate) use relocation::{handle_tls_reloc, lookup_tls_get_addr};

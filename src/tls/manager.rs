@@ -1,7 +1,7 @@
 use crate::{
     Result, TlsError, logging,
     sync::{AtomicUsize, Ordering},
-    tls::{TlsIndex, TlsInfo, TlsResolver},
+    tls::{TlsIndex, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{
     alloc::{alloc, dealloc, handle_alloc_error},
@@ -26,7 +26,7 @@ struct ModuleTlsTemplate {
     image: &'static [u8],
     memsz: usize,
     align: usize,
-    tp_offset: Option<isize>,
+    tp_offset: Option<TlsTpOffset>,
 }
 
 /// Global registry for all loaded modules' TLS metadata.
@@ -40,7 +40,7 @@ static NEXT_MODULE_ID: AtomicUsize = AtomicUsize::new(1);
 /// DTVs use this to detect if they are stale and need updating.
 static GLOBAL_GENERATION: AtomicUsize = AtomicUsize::new(0);
 
-fn register_module(tls_info: &TlsInfo, tp_offset: Option<isize>) -> usize {
+fn register_module(tls_info: &TlsInfo, tp_offset: Option<TlsTpOffset>) -> TlsModuleId {
     let mut registry = MODULE_REGISTRY.write();
 
     // Try to find a free slot (excluding index 0 as it's typically unused/reserved)
@@ -82,12 +82,13 @@ fn register_module(tls_info: &TlsInfo, tp_offset: Option<isize>) -> usize {
         tp_offset
     );
 
-    mod_id
+    TlsModuleId::new(mod_id)
 }
 
 /// Mark a module as unloaded in the registry.
 /// This triggers lazy reclamation in threads that previously used this module.
-fn unregister_module(mod_id: usize) {
+fn unregister_module(mod_id: TlsModuleId) {
+    let mod_id = mod_id.get();
     let mut registry = MODULE_REGISTRY.write();
     assert!(mod_id < registry.len(), "Invalid module ID");
     // Increment global generation
@@ -102,9 +103,11 @@ fn unregister_module(mod_id: usize) {
     logging::debug!("Unregistered TLS module: ID {}", mod_id);
 }
 
-fn get_module_template(mod_id: usize) -> Option<ModuleTlsTemplate> {
+fn get_module_template(mod_id: TlsModuleId) -> Option<ModuleTlsTemplate> {
     let registry = MODULE_REGISTRY.read();
-    registry.get(mod_id).and_then(|slot| slot.template.clone())
+    registry
+        .get(mod_id.get())
+        .and_then(|slot| slot.template.clone())
 }
 
 // -----------------------------------------------------------------------------
@@ -164,7 +167,7 @@ impl ThreadDtv {
                     unsafe {
                         let tp = crate::arch::get_thread_pointer();
                         Some(DtvEntry::Static {
-                            ptr: tp.offset(offset),
+                            ptr: tp.offset(offset.get()),
                         })
                     }
                 } else {
@@ -204,7 +207,9 @@ impl ThreadDtv {
     }
 
     /// Retrieve the pointer for a specific module, allocating if necessary.
-    fn get_or_allocate(&mut self, mod_id: usize) -> Option<*mut u8> {
+    fn get_or_allocate(&mut self, mod_id: TlsModuleId) -> Option<*mut u8> {
+        let index = mod_id.get();
+
         // Sync with global generation first to cleanup stale modules
         let global_gen = GLOBAL_GENERATION.load(Ordering::Acquire);
         if self.generation < global_gen {
@@ -212,12 +217,12 @@ impl ThreadDtv {
         }
 
         // Ensure DTV is large enough
-        if mod_id >= self.dtv.len() {
-            self.dtv.resize_with(mod_id + 1, || None);
+        if index >= self.dtv.len() {
+            self.dtv.resize_with(index + 1, || None);
         }
 
         // Check if already allocated
-        if let Some(entry) = &self.dtv[mod_id] {
+        if let Some(entry) = &self.dtv[index] {
             return Some(entry.ptr());
         }
 
@@ -241,19 +246,20 @@ impl ThreadDtv {
             slice[image_len..].fill(0);
         }
 
-        self.dtv[mod_id] = Some(DtvEntry::Allocated { ptr, layout });
+        self.dtv[index] = Some(DtvEntry::Allocated { ptr, layout });
 
         Some(ptr)
     }
 
-    fn get(&self, mod_id: usize) -> Option<*mut u8> {
-        let entry = self.dtv.get(mod_id)?.as_ref()?;
+    fn get(&self, mod_id: TlsModuleId) -> Option<*mut u8> {
+        let index = mod_id.get();
+        let entry = self.dtv.get(index)?.as_ref()?;
 
         // If our DTV is stale, we check if this specific module has been updated.
         let global_gen = GLOBAL_GENERATION.load(Ordering::Acquire);
         if self.generation < global_gen {
             let registry = MODULE_REGISTRY.read();
-            match registry.get(mod_id) {
+            match registry.get(index) {
                 Some(slot) if slot.generation <= self.generation => {
                     // This module hasn't been changed since our last sync,
                     // so the pointer in our DTV is still valid.
@@ -336,7 +342,7 @@ impl DefaultTlsResolver {
     ///
     /// This will automatically synchronize the thread's TLS state and allocate the
     /// TLS block if it hasn't been initialized yet.
-    pub fn get_ptr(mod_id: usize) -> Option<*mut u8> {
+    pub fn get_ptr(mod_id: TlsModuleId) -> Option<*mut u8> {
         with_current_dtv(|dtv| dtv.get(mod_id))
     }
 
@@ -344,7 +350,7 @@ impl DefaultTlsResolver {
     ///
     /// This will automatically synchronize the thread's TLS state and allocate the
     /// TLS block if it hasn't been initialized yet.
-    pub fn get_tls_data(mod_id: usize) -> Option<&'static [u8]> {
+    pub fn get_tls_data(mod_id: TlsModuleId) -> Option<&'static [u8]> {
         let memsz = get_module_template(mod_id)?.memsz;
         Self::get_ptr(mod_id).map(|ptr| unsafe { core::slice::from_raw_parts(ptr, memsz) })
     }
@@ -353,28 +359,28 @@ impl DefaultTlsResolver {
     ///
     /// This will automatically synchronize the thread's TLS state and allocate the
     /// TLS block if it hasn't been initialized yet.
-    pub fn get_tls_data_mut(mod_id: usize) -> Option<&'static mut [u8]> {
+    pub fn get_tls_data_mut(mod_id: TlsModuleId) -> Option<&'static mut [u8]> {
         let memsz = get_module_template(mod_id)?.memsz;
         Self::get_ptr(mod_id).map(|ptr| unsafe { core::slice::from_raw_parts_mut(ptr, memsz) })
     }
 }
 
 impl TlsResolver for DefaultTlsResolver {
-    fn register(tls_info: &TlsInfo) -> Result<usize> {
+    fn register(tls_info: &TlsInfo) -> Result<TlsModuleId> {
         let id = register_module(tls_info, None);
         Ok(id)
     }
 
-    fn register_static(_tls_info: &TlsInfo) -> Result<(usize, isize)> {
+    fn register_static(_tls_info: &TlsInfo) -> Result<(TlsModuleId, TlsTpOffset)> {
         Err(TlsError::StaticResolverUnsupported.into())
     }
 
-    fn add_static_tls(tls_info: &TlsInfo, offset: isize) -> Result<usize> {
+    fn add_static_tls(tls_info: &TlsInfo, offset: TlsTpOffset) -> Result<TlsModuleId> {
         let id = register_module(tls_info, Some(offset));
         Ok(id)
     }
 
-    fn unregister(mod_id: usize) {
+    fn unregister(mod_id: TlsModuleId) {
         unregister_module(mod_id);
     }
 

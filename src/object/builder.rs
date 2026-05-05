@@ -12,7 +12,7 @@ use crate::{
     os::Mmap,
     relocation::RelocAddr,
     segment::{ElfSegments, SegmentBuilder},
-    tls::TlsResolver,
+    tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{borrow::ToOwned, boxed::Box, string::String, vec::Vec};
 use core::marker::PhantomData;
@@ -28,8 +28,8 @@ pub(crate) struct ObjectBuilder<Tls, D = ()> {
     pub(crate) relocation: ObjectRelocation,
     pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
     pub(crate) pltgot: PltGotSection,
-    pub(crate) tls_mod_id: Option<usize>,
-    pub(crate) tls_tp_offset: Option<isize>,
+    pub(crate) tls_mod_id: Option<TlsModuleId>,
+    pub(crate) tls_tp_offset: Option<TlsTpOffset>,
     pub(crate) user_data: D,
     _marker_tls: PhantomData<Tls>,
 }
