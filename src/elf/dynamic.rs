@@ -54,6 +54,7 @@ impl ElfDynamicTag {
     pub const FLAGS_1: Self = Self(DT_FLAGS_1);
     pub const STRSZ: Self = Self(DT_STRSZ);
     pub const GNU_HASH: Self = Self(DT_GNU_HASH);
+    pub const GNU_LIBLIST: Self = Self(DT_GNU_LIBLIST);
     pub const VERSYM: Self = Self(DT_VERSYM);
     pub const VERDEF: Self = Self(DT_VERDEF);
     pub const VERDEFNUM: Self = Self(DT_VERDEFNUM);
@@ -118,6 +119,7 @@ impl Display for ElfDynamicTag {
             DT_FLAGS => f.write_str("DT_FLAGS"),
             DT_FLAGS_1 => f.write_str("DT_FLAGS_1"),
             DT_GNU_HASH => f.write_str("DT_GNU_HASH"),
+            DT_GNU_LIBLIST => f.write_str("DT_GNU_LIBLIST"),
             DT_VERSYM => f.write_str("DT_VERSYM"),
             DT_VERDEF => f.write_str("DT_VERDEF"),
             DT_VERDEFNUM => f.write_str("DT_VERDEFNUM"),

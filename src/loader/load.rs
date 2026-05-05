@@ -367,19 +367,20 @@ where
         let builder = self
             .inner
             .create_builder::<M, Tls>(ehdr, phdrs, object, D::default())?;
-        let res = RawExec::from_builder(builder, phdrs, has_dynamic);
-
-        if let Ok(ref exec) = res {
-            logging::debug!(
-                "Load executable: {} at [0x{:x}-0x{:x}] ({})",
-                exec.name(),
-                exec.mapped_base(),
-                exec.mapped_base() + exec.mapped_len(),
-                if has_dynamic { "dynamic" } else { "static" }
-            );
+        let mut exec = RawExec::from_builder(builder, phdrs, has_dynamic)?;
+        if let RawExec::Dynamic(dynamic) = &mut exec {
+            self.inner.initialize_dynamic(dynamic)?;
         }
 
-        res
+        logging::debug!(
+            "Load executable: {} at [0x{:x}-0x{:x}] ({})",
+            exec.name(),
+            exec.mapped_base(),
+            exec.mapped_base() + exec.mapped_len(),
+            if has_dynamic { "dynamic" } else { "static" }
+        );
+
+        Ok(exec)
     }
 }
 

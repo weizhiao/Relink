@@ -35,7 +35,7 @@ pub(crate) use scanned::ScannedDynamicLoadParts;
 pub use core::{ElfCore, ElfCoreRef, LoadedCore};
 pub use dylib::RawDylib;
 pub use dynamic::RawDynamic;
-pub use exec::{LoadedExec, RawExec};
+pub use exec::{LoadedExec, RawExec, StaticExec};
 #[cfg(feature = "object")]
 pub use object::{LoadedObject, RawObject};
 pub use scanned::{

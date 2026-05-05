@@ -113,8 +113,6 @@ where
     entry: RelocAddr,
     /// PT_INTERP segment value (interpreter path).
     interp: Option<&'static str>,
-    /// Program headers.
-    phdrs: ElfPhdrs,
     /// Core component containing the basic ELF object information
     module: ElfCore<D>,
     /// Extra data needed for relocation
@@ -215,7 +213,9 @@ impl<D> RawDynamic<D> {
 
     /// Gets the program headers of the ELF object
     pub fn phdrs(&self) -> &[ElfPhdr] {
-        self.phdrs.as_slice()
+        self.module
+            .phdrs()
+            .expect("raw dynamic image should always carry program headers")
     }
 
     /// Gets the Global Offset Table pointer
@@ -325,7 +325,6 @@ impl<D: 'static> RawDynamic<D> {
             user_data,
         } = parts;
 
-        let dynamic_info_phdrs = phdrs.clone();
         let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &segments)?;
 
         logging::trace!("[{}] Dynamic info: {:?}", name, dynamic);
@@ -365,7 +364,6 @@ impl<D: 'static> RawDynamic<D> {
         Ok(RawDynamic {
             entry,
             interp,
-            phdrs,
             extra: ElfExtraData {
                 lazy: cfg!(feature = "lazy-binding") && !dynamic.bind_now,
                 relro,
@@ -398,7 +396,7 @@ impl<D: 'static> RawDynamic<D> {
                     dynamic_info: Some(Arc::new(DynamicInfo {
                         eh_frame_hdr,
                         dynamic_ptr,
-                        phdrs: dynamic_info_phdrs,
+                        phdrs,
                         #[cfg(feature = "lazy-binding")]
                         lazy: LazyBindingInfo::new(dynamic.pltrel),
                     })),

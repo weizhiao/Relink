@@ -19,20 +19,24 @@ use crate::{
 use alloc::{string::String, vec::Vec};
 use core::fmt::Debug;
 
+/// A mapped static executable.
+///
+/// Static executables do not have `PT_DYNAMIC`, so they are ready to run after
+/// mapping and any static TLS setup performed by the loader.
 #[derive(Clone)]
-pub(crate) struct StaticImage<D> {
-    inner: Arc<StaticImageInner<D>>,
+pub struct StaticExec<D> {
+    inner: Arc<StaticExecInner<D>>,
 }
 
-impl<D> Debug for StaticImage<D> {
+impl<D> Debug for StaticExec<D> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("StaticImage")
+        f.debug_struct("StaticExec")
             .field("name", &self.inner.name)
             .finish()
     }
 }
 
-impl<D> StaticImage<D> {
+impl<D> StaticExec<D> {
     pub fn name(&self) -> &str {
         &self.inner.name
     }
@@ -53,6 +57,14 @@ impl<D> StaticImage<D> {
         self.inner.tls_tp_offset
     }
 
+    pub fn user_data(&self) -> &D {
+        &self.inner.user_data
+    }
+
+    pub fn phdrs(&self) -> Option<&[ElfPhdr]> {
+        self.inner.phdrs.as_deref()
+    }
+
     pub fn base(&self) -> usize {
         self.inner.segments.base()
     }
@@ -70,7 +82,7 @@ impl<D> StaticImage<D> {
     }
 }
 
-struct StaticImageInner<D> {
+struct StaticExecInner<D> {
     /// File name of the ELF object
     name: String,
 
@@ -108,8 +120,8 @@ impl<D: 'static> Relocatable<D> for RawExec<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        match self.inner {
-            ExecImageInner::Dynamic(image) => {
+        match self {
+            RawExec::Dynamic(image) => {
                 let entry = image.entry_addr();
                 let inner = Relocatable::relocate(image, args)?;
                 Ok(LoadedExec {
@@ -117,7 +129,7 @@ impl<D: 'static> Relocatable<D> for RawExec<D> {
                     inner: LoadedExecInner::Dynamic(inner),
                 })
             }
-            ExecImageInner::Static(image) => Ok(LoadedExec {
+            RawExec::Static(image) => Ok(LoadedExec {
                 entry: image.entry_addr(),
                 inner: LoadedExecInner::Static(image),
             }),
@@ -133,19 +145,15 @@ impl<D: 'static> crate::relocation::SupportLazy for RawExec<D> {}
 /// Values of this type are returned by [`crate::Loader::load_exec`]. They may
 /// represent either a dynamic executable that still needs relocation or a
 /// static executable that is already ready to run.
-pub struct RawExec<D>
+pub enum RawExec<D>
 where
     D: 'static,
 {
-    pub(crate) inner: ExecImageInner<D>,
-}
-
-pub(crate) enum ExecImageInner<D>
-where
-    D: 'static,
-{
+    /// A dynamically linked executable with `PT_DYNAMIC`.
     Dynamic(RawDynamic<D>),
-    Static(StaticImage<D>),
+
+    /// A statically linked executable without `PT_DYNAMIC`.
+    Static(StaticExec<D>),
 }
 
 impl<D> Debug for RawExec<D> {
@@ -164,86 +172,86 @@ impl<D: 'static> RawExec<D> {
 
     /// Returns the name of the executable.
     pub fn name(&self) -> &str {
-        match &self.inner {
-            ExecImageInner::Dynamic(image) => image.name(),
-            ExecImageInner::Static(image) => image.name(),
+        match self {
+            RawExec::Dynamic(image) => image.name(),
+            RawExec::Static(image) => image.name(),
         }
     }
 
     /// Returns the entry point of the executable.
     pub fn entry(&self) -> usize {
-        match &self.inner {
-            ExecImageInner::Dynamic(image) => image.entry(),
-            ExecImageInner::Static(image) => image.entry(),
+        match self {
+            RawExec::Dynamic(image) => image.entry(),
+            RawExec::Static(image) => image.entry(),
         }
     }
 
     pub fn tls_mod_id(&self) -> Option<usize> {
-        match &self.inner {
-            ExecImageInner::Dynamic(image) => image.tls_mod_id(),
-            ExecImageInner::Static(image) => image.tls_mod_id(),
+        match self {
+            RawExec::Dynamic(image) => image.tls_mod_id(),
+            RawExec::Static(image) => image.tls_mod_id(),
         }
     }
 
     pub fn tls_tp_offset(&self) -> Option<isize> {
-        match &self.inner {
-            ExecImageInner::Dynamic(image) => image.tls_tp_offset(),
-            ExecImageInner::Static(image) => image.tls_tp_offset(),
+        match self {
+            RawExec::Dynamic(image) => image.tls_tp_offset(),
+            RawExec::Static(image) => image.tls_tp_offset(),
         }
     }
 
     /// Returns the PT_INTERP value.
     pub fn interp(&self) -> Option<&str> {
-        match &self.inner {
-            ExecImageInner::Dynamic(image) => image.interp(),
-            ExecImageInner::Static(_) => None,
+        match self {
+            RawExec::Dynamic(image) => image.interp(),
+            RawExec::Static(_) => None,
         }
     }
 
     /// Returns the list of needed library names from the dynamic section.
     pub fn needed_libs(&self) -> &[&str] {
-        match &self.inner {
-            ExecImageInner::Dynamic(image) => image.needed_libs(),
-            ExecImageInner::Static(_) => &[],
+        match self {
+            RawExec::Dynamic(image) => image.needed_libs(),
+            RawExec::Static(_) => &[],
         }
     }
 
     /// Returns the program headers of the executable.
     pub fn phdrs(&self) -> Option<&[ElfPhdr]> {
-        match &self.inner {
-            ExecImageInner::Dynamic(image) => Some(image.phdrs()),
-            ExecImageInner::Static(image) => image.inner.phdrs.as_deref(),
+        match self {
+            RawExec::Dynamic(image) => Some(image.phdrs()),
+            RawExec::Static(image) => image.phdrs(),
         }
     }
 
     /// Returns the length of the bounding runtime span covered by mapped slices.
     pub fn mapped_len(&self) -> usize {
-        match &self.inner {
-            ExecImageInner::Dynamic(image) => image.mapped_len(),
-            ExecImageInner::Static(image) => image.mapped_len(),
+        match self {
+            RawExec::Dynamic(image) => image.mapped_len(),
+            RawExec::Static(image) => image.mapped_len(),
         }
     }
 
     /// Returns the lowest runtime address covered by this executable's mapped slices.
     pub(crate) fn mapped_base(&self) -> usize {
-        match &self.inner {
-            ExecImageInner::Dynamic(image) => image.mapped_base(),
-            ExecImageInner::Static(image) => image.mapped_base(),
+        match self {
+            RawExec::Dynamic(image) => image.mapped_base(),
+            RawExec::Static(image) => image.mapped_base(),
         }
     }
 
     /// Returns whether `addr` is inside one of this executable's mapped slices.
     pub fn contains_addr(&self, addr: usize) -> bool {
-        match &self.inner {
-            ExecImageInner::Dynamic(image) => image.contains_addr(addr),
-            ExecImageInner::Static(image) => image.contains_addr(addr),
+        match self {
+            RawExec::Dynamic(image) => image.contains_addr(addr),
+            RawExec::Static(image) => image.contains_addr(addr),
         }
     }
 
     pub fn base(&self) -> usize {
-        match &self.inner {
-            ExecImageInner::Dynamic(image) => image.base(),
-            ExecImageInner::Static(image) => image.base(),
+        match self {
+            RawExec::Dynamic(image) => image.base(),
+            RawExec::Static(image) => image.base(),
         }
     }
 }
@@ -263,7 +271,7 @@ pub struct LoadedExec<D> {
 #[derive(Clone, Debug)]
 enum LoadedExecInner<D> {
     Dynamic(LoadedCore<D>),
-    Static(StaticImage<D>),
+    Static(StaticExec<D>),
 }
 
 impl<D> LoadedExec<D> {
@@ -337,7 +345,7 @@ impl<D> LoadedExec<D> {
     }
 }
 
-impl<D> StaticImage<D> {
+impl<D> StaticExec<D> {
     pub(crate) fn from_builder<'hook, H, M, Tls>(
         mut builder: ImageBuilder<'hook, H, M, Tls, D>,
         phdrs: &[ElfPhdr],
@@ -359,7 +367,7 @@ impl<D> StaticImage<D> {
             (None, None)
         };
 
-        let static_inner = StaticImageInner {
+        let static_inner = StaticExecInner {
             entry,
             name: builder.name,
             user_data: builder.user_data,
@@ -372,7 +380,7 @@ impl<D> StaticImage<D> {
             tls_mod_id,
             tls_tp_offset,
         };
-        Ok(StaticImage {
+        Ok(StaticExec {
             inner: Arc::new(static_inner),
         })
     }
@@ -389,12 +397,10 @@ impl<D: 'static> RawExec<D> {
         H: LoadHook,
         Tls: TlsResolver,
     {
-        Ok(Self {
-            inner: if has_dynamic {
-                ExecImageInner::Dynamic(RawDynamic::from_builder(builder, phdrs)?)
-            } else {
-                ExecImageInner::Static(StaticImage::from_builder(builder, phdrs)?)
-            },
-        })
+        if has_dynamic {
+            Ok(Self::Dynamic(RawDynamic::from_builder(builder, phdrs)?))
+        } else {
+            Ok(Self::Static(StaticExec::from_builder(builder, phdrs)?))
+        }
     }
 }
