@@ -114,7 +114,7 @@ cfg_if::cfg_if! {
         pub(crate) use linux_syscall::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
         pub(crate) use linux_syscall::RawFile;
         pub use linux_syscall::*;
-    }else if #[cfg(unix)]{
+    }else if #[cfg(all(unix, feature = "libc"))]{
         mod unix;
         #[cfg(feature = "tls")]
         pub(crate) use unix::{current_thread_id, get_thread_local_ptr, register_thread_destructor};

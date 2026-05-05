@@ -45,7 +45,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [target.'cfg(unix)'.dependencies]
-libc = { version = "0.2.180", default-features = false }
+libc = { version = "0.2.180", default-features = false, optional = true }
 
 [dependencies.syscalls]
 workspace = true
@@ -110,10 +110,12 @@ name = "load_object"
 required-features = ["object"]
 
 [features]
-default = ["tls"]
+default = ["tls", "libc"]
 
+# A feature that enables libc bindings for Unix-like platforms.
+libc = ["dep:libc"]
 # A feature that enables all features.
-full = ["tls", "lazy-binding", "object"]
+full = ["tls", "lazy-binding", "object", "libc"]
 # Use linux syscalls
 use-syscall = ["dep:syscalls"]
 # Use the version information of symbols when resolving them.
