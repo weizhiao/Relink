@@ -11,11 +11,13 @@
 //! - [`RelocationContext`] for inspecting the current relocation and search scope
 //! - binding policy and lazy-fixup support configured through `Relocator`
 
+mod arch;
 mod core;
 mod dynamic;
 mod lazy;
 mod traits;
 
+pub use arch::{NativeRelocationArch, RelocationArch};
 pub(crate) use core::{
     RelocAddr, RelocHelper, RelocValue, RelocationValueFormula, RelocationValueKind,
     RelocationValueProvider, SymDef, find_symdef_impl, likely, reloc_error, resolve_ifunc,

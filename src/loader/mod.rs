@@ -310,8 +310,10 @@ where
     ///
     /// When `enabled` is `true`, the `e_machine` check in the ELF header is skipped,
     /// making it possible to map (for example) an x86-64 shared object on a RISC-V
-    /// host. The caller remains responsible for applying any target-specific
-    /// relocations afterwards.
+    /// host. The native `.relocator().relocate()` path still uses the host
+    /// relocation numbering; callers that need same-class cross-architecture
+    /// relocation should provide a [`crate::relocation::RelocationArch`] backend
+    /// and call `.relocator().relocate_with_arch::<A>()`.
     ///
     /// Defaults to `false`.
     pub fn with_cross_arch(mut self, enabled: bool) -> Self {

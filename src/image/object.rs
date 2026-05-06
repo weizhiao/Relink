@@ -6,10 +6,11 @@
 
 use crate::object::{ObjectBuilder, ObjectRelocation, PltGotSection};
 use crate::{
-    Result,
+    RelocationError, Result,
     loader::DynLifecycleHandler,
     relocation::{
-        RelocAddr, Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup,
+        NativeRelocationArch, RelocAddr, Relocatable, RelocateArgs, RelocationArch,
+        RelocationHandler, Relocator, SymbolLookup,
     },
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
@@ -101,11 +102,12 @@ impl<D> Debug for RawObject<D> {
 impl<D: 'static> Relocatable<D> for RawObject<D> {
     type Output = LoadedObject<D>;
 
-    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
+        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
@@ -113,6 +115,10 @@ impl<D: 'static> Relocatable<D> for RawObject<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
+        if A::MACHINE != NativeRelocationArch::MACHINE {
+            return Err(RelocationError::UnsupportedRelocationType.into());
+        }
+
         let RelocateArgs {
             scope,
             lookup,

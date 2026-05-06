@@ -1,12 +1,12 @@
 //! Relocation of elf objects
 use crate::{
-    ParseDynamicError, Result,
-    elf::{ElfRelType, ElfRelocationType, ElfRelr},
+    ParseDynamicError, RelocationError, RelocationFailureReason, Result,
+    elf::{ElfRelType, ElfRelr},
     image::{LoadedCore, RawDynamic},
     logging,
     relocation::{
-        RelocHelper, RelocateArgs, RelocationHandler, ResolvedBinding, SymbolLookup, likely,
-        reloc_error, resolve_ifunc, unlikely,
+        BindingMode, RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, ResolvedBinding,
+        SymbolLookup, likely, reloc_error, resolve_ifunc, unlikely,
     },
     tls::{handle_tls_reloc, lookup_tls_get_addr},
 };
@@ -24,11 +24,12 @@ impl<D> RawDynamic<D> {
         Ok(())
     }
 
-    pub(crate) fn relocate_impl<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    pub(crate) fn relocate_impl<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<LoadedCore<D>>
     where
+        A: RelocationArch,
         D: 'static,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
@@ -52,7 +53,13 @@ impl<D> RawDynamic<D> {
             logging::debug!("No relocations needed for {}", self.name());
         }
 
-        let binding = self.resolve_binding(binding);
+        let binding = if A::SUPPORTS_NATIVE_RUNTIME {
+            self.resolve_binding(binding)
+        } else if binding == BindingMode::Lazy {
+            return Err(RelocationError::UnsupportedRelocationType.into());
+        } else {
+            self.resolve_binding(BindingMode::Eager)
+        };
         let tls_get_addr = self.tls_get_addr();
 
         if binding.is_lazy() {
@@ -60,8 +67,10 @@ impl<D> RawDynamic<D> {
         }
 
         let hooked_pre_find = |name: &str| -> Option<*const ()> {
-            if let Some(symbol) = lookup_tls_get_addr(name, tls_get_addr) {
-                return Some(symbol);
+            if A::SUPPORTS_NATIVE_RUNTIME {
+                if let Some(symbol) = lookup_tls_get_addr(name, tls_get_addr) {
+                    return Some(symbol);
+                }
             }
             lookup.pre_find.lookup(name)
         };
@@ -77,9 +86,9 @@ impl<D> RawDynamic<D> {
         );
 
         if !relocation.is_empty() {
-            self.relocate_relative()
-                .relocate_dynrel(&mut helper)?
-                .relocate_pltrel(&binding, &mut helper)?;
+            self.relocate_relative::<A>()
+                .relocate_dynrel::<A, _, _, _, _>(&mut helper)?
+                .relocate_pltrel::<A, _, _, _, _>(&binding, &mut helper)?;
         }
 
         let RelocHelper {
@@ -106,8 +115,15 @@ impl<D> RawDynamic<D> {
         self.apply_relro(&binding)?;
         self.install_lazy_lookup(binding, lazy_lookup, deps.clone())?;
 
-        logging::debug!("Executing initialization functions for {}", self.name());
-        self.call_init();
+        if A::SUPPORTS_NATIVE_RUNTIME {
+            logging::debug!("Executing initialization functions for {}", self.name());
+            self.call_init();
+        } else {
+            logging::debug!(
+                "Skipping initialization functions for non-native relocation of {}",
+                self.name()
+            );
+        }
 
         logging::info!("Relocation completed for {}", self.name());
 
@@ -145,12 +161,13 @@ pub(crate) struct DynamicRelocation {
 
 impl<D> RawDynamic<D> {
     /// Relocate PLT (Procedure Linkage Table) entries
-    fn relocate_pltrel<PreS, PostS, PreH, PostH>(
+    fn relocate_pltrel<A, PreS, PostS, PreH, PostH>(
         &self,
         binding: &ResolvedBinding,
         helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
+        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         PreH: RelocationHandler + ?Sized,
@@ -160,6 +177,9 @@ impl<D> RawDynamic<D> {
         let base = core.base_addr();
         let segments = core.segments();
         let reloc = self.relocation();
+        if binding.is_lazy() && !A::SUPPORTS_NATIVE_RUNTIME {
+            return Err(RelocationError::UnsupportedRelocationType.into());
+        }
         binding.prepare_plt(self)?;
 
         // Process PLT relocations
@@ -171,7 +191,7 @@ impl<D> RawDynamic<D> {
             let r_sym = rel.r_symbol();
 
             // Handle jump slot relocations
-            if likely(r_type == ElfRelocationType::JUMP_SLOT) {
+            if likely(r_type == A::JUMP_SLOT) {
                 if binding.relocate_jump_slot(base, rel) {
                     continue;
                 }
@@ -180,13 +200,13 @@ impl<D> RawDynamic<D> {
                     segments.write(rel.r_offset(), symbol);
                     continue;
                 }
-            } else if unlikely(r_type.is_irelative()) {
+            } else if unlikely(A::is_irelative(r_type) && A::SUPPORTS_NATIVE_RUNTIME) {
                 // Handle indirect function relocations
                 let r_addend = rel.r_addend(base.into_inner());
                 let addr = base.addend(r_addend);
                 segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 continue;
-            } else if unlikely(r_type.is_tlsdesc()) {
+            } else if unlikely(A::is_tlsdesc(r_type) && A::SUPPORTS_NATIVE_RUNTIME) {
                 // Handle TLSDESC relocations
                 if handle_tls_reloc(helper, rel) {
                     continue;
@@ -194,9 +214,9 @@ impl<D> RawDynamic<D> {
             }
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)?.is_unhandled() {
-                return Err(reloc_error(
+                return Err(reloc_error::<A, _>(
                     rel,
-                    crate::RelocationFailureReason::Unhandled,
+                    RelocationFailureReason::Unhandled,
                     core,
                 ));
             }
@@ -205,7 +225,10 @@ impl<D> RawDynamic<D> {
     }
 
     /// Perform relative relocations (REL_RELATIVE)
-    fn relocate_relative(&self) -> &Self {
+    fn relocate_relative<A>(&self) -> &Self
+    where
+        A: RelocationArch,
+    {
         let core = self.core_ref();
         let reloc = self.relocation();
         let segments = core.segments();
@@ -213,10 +236,10 @@ impl<D> RawDynamic<D> {
 
         match reloc.relative {
             RelativeRel::Rel(rel) => {
-                assert!(rel.is_empty() || rel[0].r_type().is_relative());
+                assert!(rel.is_empty() || A::is_relative(rel[0].r_type()));
                 // Apply all relative relocations: new_value = base_address + addend
                 for rel in rel {
-                    debug_assert!(rel.r_type().is_relative());
+                    debug_assert!(A::is_relative(rel.r_type()));
                     let r_addend = rel.r_addend(base.into_inner());
                     segments.write(rel.r_offset(), base.addend(r_addend));
                 }
@@ -254,11 +277,12 @@ impl<D> RawDynamic<D> {
     }
 
     /// Perform dynamic relocations (non-PLT, non-relative)
-    fn relocate_dynrel<PreS, PostS, PreH, PostH>(
+    fn relocate_dynrel<A, PreS, PostS, PreH, PostH>(
         &self,
         helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
+        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         PreH: RelocationHandler + ?Sized,
@@ -286,18 +310,18 @@ impl<D> RawDynamic<D> {
 
             // Handle `REL_NONE` first because some architectures use `0` as a
             // sentinel for unsupported relocation classes such as TLSDESC.
-            if r_type.is_none() {
+            if A::is_none(r_type) {
                 continue;
             }
 
-            if r_type == ElfRelocationType::GOT || r_type == ElfRelocationType::SYMBOLIC {
+            if r_type == A::GOT || r_type == A::SYMBOLIC {
                 // Handle GOT and symbolic relocations
                 if let Some(symbol) = helper.find_symbol(r_sym) {
                     let r_addend = rel.r_addend(base.into_inner());
                     segments.write(rel.r_offset(), symbol.addend(r_addend));
                     continue;
                 }
-            } else if r_type == ElfRelocationType::COPY {
+            } else if r_type == A::COPY {
                 // Handle copy relocations (typically for global data)
                 if let Some(symdef) = helper.find_symdef(r_sym) {
                     let len = core.symtab().symbol_idx(r_sym).0.st_size();
@@ -309,13 +333,13 @@ impl<D> RawDynamic<D> {
                     dest.copy_from_slice(src);
                     continue;
                 }
-            } else if r_type.is_irelative() {
+            } else if A::is_irelative(r_type) && A::SUPPORTS_NATIVE_RUNTIME {
                 // Handle indirect function relocations
                 let r_addend = rel.r_addend(base.into_inner());
                 let addr = base.addend(r_addend);
                 segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
                 continue;
-            } else if r_type.is_tls() {
+            } else if A::is_tls(r_type) && A::SUPPORTS_NATIVE_RUNTIME {
                 // Handle TLS (Thread Local Storage) relocations
                 if handle_tls_reloc(helper, rel) {
                     continue;
@@ -324,9 +348,9 @@ impl<D> RawDynamic<D> {
 
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)?.is_unhandled() {
-                return Err(reloc_error(
+                return Err(reloc_error::<A, _>(
                     rel,
-                    crate::RelocationFailureReason::Unhandled,
+                    RelocationFailureReason::Unhandled,
                     core,
                 ));
             }

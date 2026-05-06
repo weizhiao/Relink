@@ -1,4 +1,4 @@
-use super::{SymDef, find_symdef_impl};
+use super::{RelocationArch, SymDef, find_symdef_impl};
 use crate::{
     Result,
     elf::ElfRelType,
@@ -318,18 +318,13 @@ pub trait Relocatable<D = ()>: Sized {
     /// The type of the relocated object.
     type Output;
 
-    /// Execute the relocation process with the given configuration.
-    ///
-    /// # Arguments
-    /// * `args` - Scope, lookup hooks, handlers, and binding mode configuration.
-    ///
-    /// # Returns
-    /// The relocated object on success.
-    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    /// Execute relocation using relocation type numbers supplied by `A`.
+    fn relocate<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
+        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,

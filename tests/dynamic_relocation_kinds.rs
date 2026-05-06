@@ -4,6 +4,7 @@ use elf_loader::{
     Loader,
     arch::{REL_COPY, REL_IRELATIVE, REL_RELATIVE},
     input::ElfBinary,
+    relocation::NativeRelocationArch,
 };
 use gen_elf::{Arch, ElfWriterConfig, RelocEntry, SectionKind, SymbolDesc};
 use support::{
@@ -71,7 +72,7 @@ fn relative_relocation_uses_recorded_addend() {
         .load_dylib(ElfBinary::new("relative.so", &output.data))
         .expect("failed to load relative test dylib")
         .relocator()
-        .relocate()
+        .relocate_with_arch::<NativeRelocationArch>()
         .expect("failed to relocate relative test dylib");
 
     let relative = anonymous_relocations(&output, REL_RELATIVE)[0];

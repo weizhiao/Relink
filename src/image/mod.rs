@@ -11,7 +11,9 @@
 use crate::{
     Result,
     elf::ElfPhdr,
-    relocation::{Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup},
+    relocation::{
+        Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator, SymbolLookup,
+    },
 };
 use ::core::fmt::Debug;
 
@@ -295,11 +297,12 @@ impl<D> LoadedElf<D> {
 impl<D: 'static> Relocatable<D> for RawElf<D> {
     type Output = LoadedElf<D>;
 
-    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
+        A: RelocationArch,
         D: 'static,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
@@ -309,8 +312,18 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
         PostH: RelocationHandler + ?Sized,
     {
         match self {
-            RawElf::Dylib(dylib) => Ok(LoadedElf::Dylib(Relocatable::relocate(dylib, args)?)),
-            RawElf::Exec(exec) => Ok(LoadedElf::Exec(Relocatable::relocate(exec, args)?)),
+            RawElf::Dylib(dylib) => Ok(LoadedElf::Dylib(Relocatable::relocate::<
+                A,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+            >(dylib, args)?)),
+            RawElf::Exec(exec) => Ok(LoadedElf::Exec(
+                Relocatable::relocate::<A, _, _, _, _, _, _>(exec, args)?,
+            )),
             #[cfg(feature = "object")]
             RawElf::Object(relocatable) => {
                 let RelocateArgs {
@@ -320,7 +333,15 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
                     handlers,
                     ..
                 } = args;
-                Ok(LoadedElf::Object(Relocatable::relocate(
+                Ok(LoadedElf::Object(Relocatable::relocate::<
+                    A,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                >(
                     relocatable,
                     RelocateArgs::new(
                         crate::sync::Arc::from(alloc::vec::Vec::new()),

@@ -8,8 +8,8 @@ use crate::{
     logging,
     os::Mmap,
     relocation::{
-        DynamicRelocation, RelocAddr, Relocatable, RelocateArgs, RelocationHandler, Relocator,
-        SymbolLookup,
+        DynamicRelocation, RelocAddr, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
+        Relocator, SymbolLookup,
     },
     segment::ELFRelro,
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -463,11 +463,12 @@ impl<D: 'static> RawDynamic<D> {
 impl<D: 'static> Relocatable<D> for RawDynamic<D> {
     type Output = LoadedCore<D>;
 
-    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
+        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
@@ -475,7 +476,7 @@ impl<D: 'static> Relocatable<D> for RawDynamic<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        self.relocate_impl(args)
+        self.relocate_impl::<A, _, _, _, _, _, _>(args)
     }
 }
 

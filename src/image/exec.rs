@@ -11,7 +11,8 @@ use crate::{
     loader::{ImageBuilder, LoadHook},
     os::Mmap,
     relocation::{
-        RelocAddr, Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup,
+        RelocAddr, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
+        SymbolLookup,
     },
     segment::ElfSegments,
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
@@ -108,11 +109,12 @@ struct StaticExecInner<D> {
 impl<D: 'static> Relocatable<D> for RawExec<D> {
     type Output = LoadedExec<D>;
 
-    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
+        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
@@ -123,7 +125,7 @@ impl<D: 'static> Relocatable<D> for RawExec<D> {
         match self {
             RawExec::Dynamic(image) => {
                 let entry = image.entry_addr();
-                let inner = Relocatable::relocate(image, args)?;
+                let inner = Relocatable::relocate::<A, _, _, _, _, _, _>(image, args)?;
                 Ok(LoadedExec {
                     entry,
                     inner: LoadedExecInner::Dynamic(inner),

@@ -7,7 +7,9 @@ use crate::{
     Result,
     elf::{ElfDyn, ElfPhdr},
     image::{ElfCore, LoadedCore, RawDynamic},
-    relocation::{Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup},
+    relocation::{
+        Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator, SymbolLookup,
+    },
     tls::{TlsModuleId, TlsTpOffset},
 };
 use core::{fmt::Debug, ptr::NonNull};
@@ -37,11 +39,12 @@ impl<D> Debug for RawDylib<D> {
 impl<D> Relocatable<D> for RawDylib<D> {
     type Output = LoadedCore<D>;
 
-    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
+        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
@@ -49,7 +52,7 @@ impl<D> Relocatable<D> for RawDylib<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        Relocatable::relocate(self.inner, args)
+        Relocatable::relocate::<A, _, _, _, _, _, _>(self.inner, args)
     }
 }
 

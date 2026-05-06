@@ -6,7 +6,9 @@ use crate::{
         ObjectReloc,
         layout::{GotEntry, PltEntry, PltGotSection},
     },
-    relocation::{RelocAddr, RelocHelper, RelocationHandler, SymbolLookup, reloc_error},
+    relocation::{
+        NativeRelocationArch, RelocAddr, RelocHelper, RelocationHandler, SymbolLookup, reloc_error,
+    },
 };
 use elf::abi::*;
 
@@ -38,14 +40,14 @@ impl ObjectReloc for ObjectRelocator {
         let offset = rel.r_offset();
         let p = base.offset(rel.r_offset());
         let unknown_symbol = || {
-            reloc_error(
+            reloc_error::<NativeRelocationArch, _>(
                 rel,
                 crate::RelocationFailureReason::UnknownSymbol,
                 helper.core,
             )
         };
         let conversion_error = || {
-            reloc_error(
+            reloc_error::<NativeRelocationArch, _>(
                 rel,
                 crate::RelocationFailureReason::IntegralConversionOutOfRange,
                 helper.core,
