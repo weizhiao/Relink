@@ -205,7 +205,8 @@ where
     {
         let name = object.file_name().to_owned();
         let (init_fn, fini_fn) = self.lifecycle_handlers();
-        let mut shdr_segments = SectionSegments::new(shdrs, &mut object)?;
+        let mut shdr_segments =
+            SectionSegments::new(shdrs, &mut object, self.page_size::<M>()?.bytes())?;
         let segments = shdr_segments.load_segments::<M>(&mut object)?;
         let pltgot = shdr_segments.take_pltgot();
         let mprotect = Box::new(move || {

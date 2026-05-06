@@ -1,16 +1,15 @@
 use crate::{
     IoError, MmapError, Result,
     input::ElfReader,
-    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
+    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
 use alloc::{
     ffi::CString,
     string::{String, ToString},
 };
-#[cfg(feature = "tls")]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{ffi::c_void, str::FromStr};
-use libc::{O_RDONLY, SEEK_SET, madvise, mmap, mprotect, munmap};
+use libc::{_SC_PAGESIZE, O_RDONLY, SEEK_SET, madvise, mmap, mprotect, munmap, sysconf};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[inline]
@@ -35,6 +34,8 @@ fn last_os_error_code() -> u32 {
 
 /// An implementation of Mmap trait
 pub struct DefaultMmap;
+
+static CACHED_PAGE_SIZE: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(feature = "tls")]
 pub(crate) fn current_thread_id() -> usize {
@@ -90,6 +91,23 @@ pub(crate) struct RawFile {
 }
 
 impl Mmap for DefaultMmap {
+    fn page_size() -> PageSize {
+        let page_size = CACHED_PAGE_SIZE.load(Ordering::Relaxed);
+        if let Some(page_size) = PageSize::new(page_size) {
+            return page_size;
+        }
+
+        let page_size = unsafe { sysconf(_SC_PAGESIZE) };
+        if page_size <= 0 {
+            CACHED_PAGE_SIZE.store(PageSize::Base.bytes(), Ordering::Relaxed);
+            return PageSize::Base;
+        }
+
+        let page_size = PageSize::new(page_size as usize).unwrap_or_default();
+        CACHED_PAGE_SIZE.store(page_size.bytes(), Ordering::Relaxed);
+        page_size
+    }
+
     unsafe fn mmap(
         addr: Option<usize>,
         len: usize,

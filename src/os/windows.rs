@@ -1,13 +1,14 @@
 use crate::{
     IoError, MmapError, Result,
     input::ElfReader,
-    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
+    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
 use alloc::{ffi::CString, vec::Vec};
 use core::{
     ffi::c_void,
     mem::MaybeUninit,
     ptr::{null, null_mut},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 use windows_sys::Win32::{
     Foundation::{
@@ -24,10 +25,13 @@ use windows_sys::Win32::{
         PAGE_NOACCESS, PAGE_PROTECTION_FLAGS, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
         VirtualFree,
     },
+    System::SystemInformation::{GetSystemInfo, SYSTEM_INFO},
     System::Threading::GetCurrentProcess,
 };
 
 pub struct DefaultMmap;
+
+static CACHED_PAGE_SIZE: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(feature = "tls")]
 pub(crate) fn current_thread_id() -> usize {
@@ -88,6 +92,21 @@ fn prot_win(prot: ProtFlags, is_create_file_mapping: bool) -> PAGE_PROTECTION_FL
 }
 
 impl Mmap for DefaultMmap {
+    fn page_size() -> PageSize {
+        let page_size = CACHED_PAGE_SIZE.load(Ordering::Relaxed);
+        if let Some(page_size) = PageSize::new(page_size) {
+            return page_size;
+        }
+
+        let mut info = MaybeUninit::<SYSTEM_INFO>::uninit();
+        let page_size = unsafe {
+            GetSystemInfo(info.as_mut_ptr());
+            PageSize::new(info.assume_init().dwPageSize as usize).unwrap_or_default()
+        };
+        CACHED_PAGE_SIZE.store(page_size.bytes(), Ordering::Relaxed);
+        page_size
+    }
+
     unsafe fn mmap(
         addr: Option<usize>,
         len: usize,

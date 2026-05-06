@@ -5,10 +5,7 @@ use crate::{
     input::ElfReader,
     os::{MapFlags, Mmap, ProtFlags},
     relocation::RelocAddr,
-    segment::{
-        Address, ElfSegment, ElfSegments, FileMapInfo, PAGE_SIZE, SegmentBuilder, rounddown,
-        roundup,
-    },
+    segment::{Address, ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
 };
 use alloc::vec::Vec;
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
@@ -64,7 +61,11 @@ impl SegmentBuilder for SectionSegments {
 }
 
 impl SectionSegments {
-    pub(crate) fn new(shdrs: &mut [ElfShdr], object: &mut impl ElfReader) -> Result<Self> {
+    pub(crate) fn new(
+        shdrs: &mut [ElfShdr],
+        object: &mut impl ElfReader,
+        page_size: usize,
+    ) -> Result<Self> {
         let mut units: [SectionUnit; 4] = core::array::from_fn(|_| SectionUnit::new());
 
         let (got_cnt, plt_cnt) = PltGotSection::count_needed_entries(shdrs, object)?;
@@ -79,8 +80,8 @@ impl SectionSegments {
         let mut segments = Vec::new();
         let mut offset = 0;
         for unit in &mut units {
-            if let Some(segment) = unit.create_segment(&mut offset) {
-                offset = roundup(offset, PAGE_SIZE);
+            if let Some(segment) = unit.create_segment(&mut offset, page_size) {
+                offset = roundup(offset, page_size);
                 segments.push(segment);
             }
         }
@@ -291,7 +292,7 @@ impl<'shdr> SectionUnit<'shdr> {
         }
     }
 
-    fn create_segment(&mut self, base_offset: &mut usize) -> Option<ElfSegment> {
+    fn create_segment(&mut self, base_offset: &mut usize, page_size: usize) -> Option<ElfSegment> {
         let first_shdr = self
             .content_sections
             .first()
@@ -319,7 +320,7 @@ impl<'shdr> SectionUnit<'shdr> {
 
         if map_info.len() == 1 {
             let info = &mut map_info[0];
-            let file_offset = rounddown(info.offset, PAGE_SIZE);
+            let file_offset = rounddown(info.offset, page_size);
             let align_len = info.offset - file_offset;
 
             let shdr = self
@@ -343,7 +344,7 @@ impl<'shdr> SectionUnit<'shdr> {
         }
 
         let unaligned_total_size = current_offset - segment_start;
-        let total_size = roundup(unaligned_total_size, PAGE_SIZE);
+        let total_size = roundup(unaligned_total_size, page_size);
 
         if total_size == 0 {
             return None;
@@ -354,6 +355,7 @@ impl<'shdr> SectionUnit<'shdr> {
             addr,
             prot,
             len: total_size,
+            page_size,
             content_size,
             zero_size: unaligned_total_size - content_size,
             need_copy: false,

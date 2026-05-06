@@ -11,10 +11,9 @@ mod space;
 
 pub(crate) mod program;
 
-pub use layout::PAGE_SIZE;
 pub use space::ElfSegments;
 
-pub(crate) use layout::{MASK, align_up, rounddown, roundup};
+pub(crate) use layout::{align_up, rounddown, roundup};
 pub(crate) use mapping::{Address, ElfSegment, FileMapInfo, SegmentBuilder};
 pub(crate) use relro::ELFRelro;
 pub(crate) use space::ElfMemoryBacking;

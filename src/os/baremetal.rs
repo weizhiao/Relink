@@ -2,7 +2,6 @@ use crate::{
     Result,
     input::ElfReader,
     os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
-    segment::PAGE_SIZE,
 };
 use alloc::alloc::{dealloc, handle_alloc_error};
 use core::{alloc::Layout, ffi::c_void, slice::from_raw_parts_mut};
@@ -44,7 +43,8 @@ impl Mmap for DefaultMmap {
         } else {
             // 只有创建整个空间时会走这条路径
             assert!((MapFlags::MAP_FIXED & flags).bits() == 0);
-            let layout = unsafe { Layout::from_size_align_unchecked(len, PAGE_SIZE) };
+            let layout =
+                unsafe { Layout::from_size_align_unchecked(len, Self::page_size().bytes()) };
             let memory = unsafe { alloc::alloc::alloc(layout) };
             if memory.is_null() {
                 handle_alloc_error(layout);
@@ -68,7 +68,12 @@ impl Mmap for DefaultMmap {
     }
 
     unsafe fn munmap(addr: *mut c_void, len: usize) -> crate::Result<()> {
-        unsafe { dealloc(addr as _, Layout::from_size_align_unchecked(len, PAGE_SIZE)) };
+        unsafe {
+            dealloc(
+                addr as _,
+                Layout::from_size_align_unchecked(len, Self::page_size().bytes()),
+            )
+        };
         Ok(())
     }
 

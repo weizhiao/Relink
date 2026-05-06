@@ -259,12 +259,13 @@ impl ArenaState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::os::PageSize;
 
     #[test]
     fn fallback_shared_arena_reuses_existing_compatible_arena() {
         let mut plan = MemoryLayoutPlan::default();
         let arena_id = plan.create_arena(Arena::new(
-            2 * 1024 * 1024,
+            PageSize::Huge2MiB,
             MemoryClass::Code,
             ArenaSharing::Shared,
         ));
@@ -273,7 +274,7 @@ mod tests {
         let selected = state.ensure_arena(
             &mut plan,
             ModuleId::new(0),
-            ClassPolicy::new(2 * 1024 * 1024, ArenaSharing::Shared),
+            ClassPolicy::new(PageSize::Huge2MiB, ArenaSharing::Shared),
             MemoryClass::Code,
         );
 

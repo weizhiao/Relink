@@ -3,11 +3,12 @@ use crate::linker::plan::LinkPlan;
 use crate::{
     LinkerError, Result,
     entity::SecondaryMap,
-    os::{MapFlags, Mmap, ProtFlags},
+    os::{MapFlags, Mmap, PageSize, ProtFlags},
     segment::{ElfMemoryBacking, ElfSegments},
     sync::Arc,
 };
 use alloc::vec::Vec;
+use core::ffi::c_void;
 
 #[derive(Clone)]
 pub(crate) struct MappedArena {
@@ -45,14 +46,7 @@ impl MappedArenaMap {
                 continue;
             }
 
-            let ptr: *mut core::ffi::c_void = unsafe {
-                M::mmap_anonymous(
-                    0,
-                    len,
-                    initial_protection(arena.memory_class()),
-                    MapFlags::MAP_PRIVATE,
-                )
-            }?;
+            let ptr = map_arena::<M>(len, arena.memory_class(), arena.page_size())?;
 
             let backing = ElfSegments::create_backing(ptr, len, M::munmap);
             arenas.insert(
@@ -182,6 +176,23 @@ impl MappedArena {
     }
 }
 
+fn map_arena<M>(len: usize, memory_class: MemoryClass, page_size: PageSize) -> Result<*mut c_void>
+where
+    M: Mmap,
+{
+    let prot = initial_protection(memory_class);
+    let flags =
+        MapFlags::MAP_PRIVATE | MapFlags::huge_page_size(page_size).unwrap_or_else(MapFlags::empty);
+    let result = unsafe { M::mmap_anonymous(0, len, prot, flags) };
+
+    if flags.contains(MapFlags::MAP_HUGETLB) {
+        return result
+            .or_else(|_| unsafe { M::mmap_anonymous(0, len, prot, MapFlags::MAP_PRIVATE) });
+    }
+
+    result
+}
+
 fn initial_protection(class: MemoryClass) -> ProtFlags {
     match class {
         MemoryClass::Code => ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
@@ -241,7 +252,7 @@ mod tests {
             .unwrap();
 
         let arena = plan.memory_layout_mut().create_arena(Arena::new(
-            4096,
+            PageSize::Base,
             MemoryClass::WritableData,
             ArenaSharing::Shared,
         ));

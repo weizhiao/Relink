@@ -1,6 +1,6 @@
 use core::ffi::c_void;
 
-use super::{MadviseAdvice, MapFlags, ProtFlags};
+use super::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
 use crate::Result;
 
 /// A trait for low-level memory mapping operations.
@@ -35,6 +35,16 @@ use crate::Result;
 /// }
 /// ```
 pub trait Mmap {
+    /// Returns the base page size required by this mapping environment.
+    ///
+    /// Implementations that can query the host should return the active system
+    /// page size. Bare-metal or syscall-only implementations can keep the
+    /// default 4 KiB base page.
+    #[inline]
+    fn page_size() -> PageSize {
+        PageSize::Base
+    }
+
     /// Maps a file or creates an anonymous mapping into memory.
     ///
     /// This method creates a memory mapping, either backed by a file (if `fd` is provided)

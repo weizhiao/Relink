@@ -11,6 +11,7 @@ use elf_loader::{
         Materialization, RelocationInputs, RelocationRequest, ReorderPass, ResolvedKey,
         StagedDynamic, VisibleModules,
     },
+    os::PageSize,
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
 use std::{boxed::Box, cell::RefCell, rc::Rc, vec::Vec};
@@ -772,7 +773,7 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
                     .as_bytes_mut()
                     .copy_from_slice(&[9, 8, 7, 6]);
                 let arena = plan.create_arena(Arena::new(
-                    4096,
+                    PageSize::Base,
                     MemoryClass::WritableData,
                     ArenaSharing::Private,
                 ));
@@ -853,7 +854,7 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
                 .copy_from_slice(&[4, 3, 2, 1]);
 
             let arena = plan.create_arena(Arena::new(
-                4096,
+                PageSize::Base,
                 MemoryClass::WritableData,
                 ArenaSharing::Private,
             ));

@@ -297,7 +297,8 @@ where
     ) -> Result<RawDynamic<D>> {
         let name = name.into();
         let phdrs = phdrs.into();
-        let layout = parse_segments(&phdrs, true)?;
+        let page_size = self.inner.page_size::<M>()?.bytes();
+        let layout = parse_segments(&phdrs, true, page_size)?;
         let memory = load_bias.wrapping_add(layout.min_vaddr) as *mut c_void;
         let segments = ElfSegments::with_base(
             memory,
@@ -315,6 +316,7 @@ where
             self.inner.force_static_tls(),
             D::default(),
             self.inner.lifecycle_handlers(),
+            page_size,
         )?;
         let mut image = RawDynamic::from_parts::<Tls>(parts)?;
         self.inner.initialize_dynamic(&mut image)?;
@@ -434,6 +436,7 @@ fn borrowed_dynamic_parts<M, D>(
     force_static_tls: bool,
     user_data: D,
     lifecycle_handlers: (super::DynLifecycleHandler, super::DynLifecycleHandler),
+    page_size: usize,
 ) -> Result<RawDynamicParts<D>>
 where
     M: Mmap,
@@ -471,7 +474,11 @@ where
                 tls_info = Some(crate::tls::TlsInfo::new(phdr, image));
             }
             ElfProgramType::GNU_RELRO => {
-                relro = Some(ELFRelro::new::<M>(phdr, RelocAddr::new(load_bias)));
+                relro = Some(ELFRelro::new::<M>(
+                    phdr,
+                    RelocAddr::new(load_bias),
+                    page_size,
+                ));
             }
             _ => {}
         }

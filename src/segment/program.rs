@@ -2,10 +2,7 @@ use crate::{
     ParsePhdrError, Result,
     elf::{ElfPhdr, ElfProgramFlags, ElfProgramType},
     os::{MapFlags, Mmap, ProtFlags},
-    segment::{
-        Address, ElfSegment, ElfSegments, FileMapInfo, PAGE_SIZE, SegmentBuilder, rounddown,
-        roundup,
-    },
+    segment::{Address, ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
 };
 use alloc::vec::Vec;
 
@@ -31,16 +28,23 @@ pub(crate) struct ProgramSegments<'phdr> {
     segments: Vec<ElfSegment>,
     is_dylib: bool,
     use_file: bool,
+    page_size: usize,
 }
 
 impl<'phdr> ProgramSegments<'phdr> {
     /// Create a new [`ProgramSegments`] instance.
-    pub(crate) fn new(phdrs: &'phdr [ElfPhdr], is_dylib: bool, use_file: bool) -> Self {
+    pub(crate) fn new(
+        phdrs: &'phdr [ElfPhdr],
+        is_dylib: bool,
+        use_file: bool,
+        page_size: usize,
+    ) -> Self {
         Self {
             phdrs,
             segments: Vec::new(),
             is_dylib,
             use_file,
+            page_size,
         }
     }
 }
@@ -57,7 +61,11 @@ pub(crate) struct ProgramSegmentLayout {
 
 /// Parse segments to determine memory layout requirements
 #[inline]
-pub(crate) fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> Result<ProgramSegmentLayout> {
+pub(crate) fn parse_segments(
+    phdrs: &[ElfPhdr],
+    is_dylib: bool,
+    page_size: usize,
+) -> Result<ProgramSegmentLayout> {
     let mut min_vaddr = usize::MAX;
     let mut max_vaddr = 0;
     let mut has_load_segment = false;
@@ -65,6 +73,10 @@ pub(crate) fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> Result<Progra
     // Find the minimum and maximum virtual addresses of LOAD segments
     for phdr in phdrs {
         if phdr.program_type() == ElfProgramType::LOAD {
+            if phdr.p_vaddr() % page_size != phdr.p_offset() % page_size {
+                return Err(ParsePhdrError::PageAlignmentMismatch { page_size }.into());
+            }
+
             has_load_segment = true;
             let vaddr_start = phdr.p_vaddr();
             let vaddr_end = phdr
@@ -85,8 +97,8 @@ pub(crate) fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> Result<Progra
     }
 
     // Align addresses to page boundaries
-    max_vaddr = roundup(max_vaddr, PAGE_SIZE);
-    min_vaddr = rounddown(min_vaddr, PAGE_SIZE);
+    max_vaddr = roundup(max_vaddr, page_size);
+    min_vaddr = rounddown(min_vaddr, page_size);
     let total_size = max_vaddr
         .checked_sub(min_vaddr)
         .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
@@ -103,7 +115,7 @@ pub(crate) fn parse_segments(phdrs: &[ElfPhdr], is_dylib: bool) -> Result<Progra
 impl SegmentBuilder for ProgramSegments<'_> {
     /// Reserve memory space for all segments
     fn create_space<M: Mmap>(&mut self) -> Result<ElfSegments> {
-        let layout = parse_segments(self.phdrs, self.is_dylib)?;
+        let layout = parse_segments(self.phdrs, self.is_dylib, self.page_size)?;
         let ptr =
             unsafe { M::mmap_reserve(layout.preferred_addr, layout.mapped_len, self.use_file) }?;
         Ok(ElfSegments::with_base(
@@ -122,7 +134,7 @@ impl SegmentBuilder for ProgramSegments<'_> {
             .iter()
             .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
         {
-            self.segments.push(phdr.create_segment());
+            self.segments.push(phdr.create_segment(self.page_size));
         }
         Ok(())
     }
@@ -141,15 +153,15 @@ impl SegmentBuilder for ProgramSegments<'_> {
 impl ElfPhdr {
     /// Create an ElfSegment from an ELF program header
     #[inline]
-    fn create_segment(&self) -> ElfSegment {
+    fn create_segment(&self, page_size: usize) -> ElfSegment {
         // Align segment boundaries to page size
-        let min_vaddr = rounddown(self.p_vaddr(), PAGE_SIZE);
-        let max_vaddr = roundup(self.p_vaddr() + self.p_memsz(), PAGE_SIZE);
+        let min_vaddr = rounddown(self.p_vaddr(), page_size);
+        let max_vaddr = roundup(self.p_vaddr() + self.p_memsz(), page_size);
         let memsz = max_vaddr - min_vaddr;
         let prot = segment_prot(self.flags());
 
         // Align file offset to page boundary
-        let offset = rounddown(self.p_offset(), PAGE_SIZE);
+        let offset = rounddown(self.p_offset(), page_size);
         // Account for alignment adjustment in file size
         let align_len = self.p_offset() - offset;
         let filesz = self.p_filesz() + align_len;
@@ -159,6 +171,7 @@ impl ElfPhdr {
             prot,
             flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
             len: memsz,
+            page_size,
             content_size: filesz,
             zero_size: self.p_memsz() - self.p_filesz(),
             map_info: alloc::vec![FileMapInfo {

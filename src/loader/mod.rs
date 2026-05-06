@@ -19,7 +19,7 @@ use crate::{
     Result,
     elf::ElfPhdr,
     image::RawDynamic,
-    os::{DefaultMmap, Mmap},
+    os::{DefaultMmap, Mmap, PageSize},
     segment::ElfSegments,
     sync::Arc,
     tls::TlsResolver,
@@ -179,6 +179,7 @@ pub(crate) struct LoaderInner<H, D: 'static> {
     init_fn: DynLifecycleHandler,
     fini_fn: DynLifecycleHandler,
     hook: H,
+    page_size: Option<PageSize>,
     force_static_tls: bool,
     /// When `true`, the ELF machine architecture check is skipped on load.
     /// Used for cross-architecture loading (e.g. x86-64 ELF on RISC-V).
@@ -211,6 +212,7 @@ impl Loader<DefaultMmap, (), (), ()> {
                 hook: (),
                 init_fn: c_abi.clone(),
                 fini_fn: c_abi,
+                page_size: None,
                 force_static_tls: false,
                 allow_cross_arch: false,
                 dynamic_initializer: Box::new(|_| Ok(())),
@@ -274,6 +276,7 @@ where
                 init_fn: self.inner.init_fn,
                 fini_fn: self.inner.fini_fn,
                 hook: self.inner.hook,
+                page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
                 allow_cross_arch: self.inner.allow_cross_arch,
                 dynamic_initializer: Box::new(initializer),
@@ -293,6 +296,7 @@ where
                 init_fn: self.inner.init_fn,
                 fini_fn: self.inner.fini_fn,
                 hook,
+                page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
                 allow_cross_arch: self.inner.allow_cross_arch,
                 dynamic_initializer: self.inner.dynamic_initializer,
@@ -312,6 +316,16 @@ where
     /// Defaults to `false`.
     pub fn with_cross_arch(mut self, enabled: bool) -> Self {
         self.inner.allow_cross_arch = enabled;
+        self
+    }
+
+    /// Overrides the base page size used for segment layout decisions.
+    ///
+    /// By default, the loader uses [`Mmap::page_size`]. An override is useful
+    /// for special runtimes and tests, but it must remain compatible with the
+    /// mapping backend and with every loaded ELF's `PT_LOAD` alignment.
+    pub fn with_page_size(mut self, page_size: PageSize) -> Self {
+        self.inner.page_size = Some(page_size);
         self
     }
 

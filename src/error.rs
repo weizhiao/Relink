@@ -75,6 +75,13 @@ impl Display for IoError {
 /// Structured memory-mapping error details.
 #[derive(Debug)]
 pub enum MmapError {
+    /// The configured loader page size is incompatible with the mapping backend.
+    InvalidPageSize {
+        /// Page size requested by the loader.
+        configured: usize,
+        /// Minimum page size required by the mapping backend.
+        required: usize,
+    },
     #[cfg(not(windows))]
     /// `mmap failed with error: {code}`
     MmapFailed { code: u32 },
@@ -105,6 +112,13 @@ pub enum MmapError {
 impl Display for MmapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidPageSize {
+                configured,
+                required,
+            } => write!(
+                f,
+                "invalid loader page size: configured {configured}, required a multiple of {required}"
+            ),
             #[cfg(not(windows))]
             Self::MmapFailed { code } => write!(f, "mmap failed with error: {code}"),
             #[cfg(not(windows))]
@@ -226,6 +240,8 @@ impl Display for ParseEhdrError {
 pub enum ParsePhdrError {
     /// The program header table is malformed.
     MalformedProgramHeaders,
+    /// A `PT_LOAD` segment cannot be mapped with the selected page size.
+    PageAlignmentMismatch { page_size: usize },
     /// A dynamic image was expected to carry `PT_DYNAMIC`.
     MissingDynamicSection,
     /// `{field} contains invalid UTF-8`
@@ -236,6 +252,10 @@ impl Display for ParsePhdrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MalformedProgramHeaders => f.write_str("program headers are malformed"),
+            Self::PageAlignmentMismatch { page_size } => write!(
+                f,
+                "program headers are not compatible with page size {page_size}"
+            ),
             Self::MissingDynamicSection => f.write_str("program headers do not contain PT_DYNAMIC"),
             Self::InvalidUtf8 { field } => write!(f, "{field} contains invalid UTF-8"),
         }

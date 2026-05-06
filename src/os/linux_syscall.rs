@@ -43,7 +43,10 @@ fn mmap(
 ) -> Result<*mut c_void> {
     let ptr = unsafe {
         #[cfg(target_pointer_width = "32")]
-        let (syscall, offset) = (Sysno::mmap2, offset / crate::segment::PAGE_SIZE as isize);
+        let (syscall, offset) = (
+            Sysno::mmap2,
+            offset / crate::os::PageSize::BASE_BYTES as isize,
+        );
         #[cfg(not(target_pointer_width = "32"))]
         let syscall = Sysno::mmap;
         from_ret(

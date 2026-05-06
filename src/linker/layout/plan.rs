@@ -212,7 +212,7 @@ impl MemoryLayoutPlan {
             used_len = used_len.max(section_end);
         }
 
-        let mapped_len = align_up(used_len, arena.page_size());
+        let mapped_len = align_up(used_len, arena.page_size().bytes());
         ArenaUsage::new(section_count, used_len, mapped_len)
     }
 

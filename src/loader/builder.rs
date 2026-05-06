@@ -1,10 +1,10 @@
 use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner};
 use crate::{
-    ParsePhdrError, Result,
+    MmapError, ParsePhdrError, Result,
     elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType},
     image::RawDynamic,
     input::ElfReader,
-    os::Mmap,
+    os::{Mmap, PageSize},
     segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
     tls::{TlsInfo, TlsResolver},
 };
@@ -45,6 +45,9 @@ where
 
     /// Whether to use static TLS
     pub(crate) static_tls: bool,
+
+    /// Page size used for segment layout.
+    page_size: usize,
 
     /// User-defined data
     pub(crate) user_data: D,
@@ -116,6 +119,7 @@ where
         init_fn: DynLifecycleHandler,
         fini_fn: DynLifecycleHandler,
         static_tls: bool,
+        page_size: usize,
         user_data: D,
     ) -> Self {
         Self {
@@ -127,6 +131,7 @@ where
             dynamic_ptr: None,
             tls_info: None,
             static_tls,
+            page_size,
             segments,
             user_data,
             init_fn,
@@ -150,7 +155,11 @@ where
                 )
             }
             ElfProgramType::GNU_RELRO => {
-                self.relro = Some(ELFRelro::new::<M>(phdr, self.segments.base_addr()))
+                self.relro = Some(ELFRelro::new::<M>(
+                    phdr,
+                    self.segments.base_addr(),
+                    self.page_size,
+                ))
             }
             ElfProgramType::PHDR => {
                 self.phdr_mmap = Some(
@@ -242,6 +251,23 @@ where
     }
 
     #[inline]
+    pub(crate) fn page_size<M: Mmap>(&self) -> Result<PageSize> {
+        let required = M::page_size();
+        let page_size = self.page_size.unwrap_or(required);
+        if page_size.bytes() < required.bytes()
+            || !page_size.bytes().is_multiple_of(required.bytes())
+        {
+            return Err(MmapError::InvalidPageSize {
+                configured: page_size.bytes(),
+                required: required.bytes(),
+            }
+            .into());
+        }
+
+        Ok(page_size)
+    }
+
+    #[inline]
     pub(crate) fn initialize_dynamic(&mut self, dynamic: &mut RawDynamic<D>) -> Result<()> {
         (self.dynamic_initializer)(dynamic)
     }
@@ -265,8 +291,9 @@ where
     {
         let name = object.file_name().to_owned();
         let (init_fn, fini_fn) = self.lifecycle_handlers();
+        let page_size = self.page_size::<M>()?.bytes();
         let mut phdr_segments =
-            ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some());
+            ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some(), page_size);
         let segments = phdr_segments.load_segments::<M>(&mut object)?;
         phdr_segments.mprotect::<M>()?;
 
@@ -278,6 +305,7 @@ where
             init_fn,
             fini_fn,
             self.force_static_tls,
+            page_size,
             user_data,
         ))
     }

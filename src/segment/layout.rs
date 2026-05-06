@@ -1,9 +1,3 @@
-/// Standard page size used for memory mapping operations
-pub const PAGE_SIZE: usize = 0x1000;
-
-/// Mask used to align addresses to page boundaries
-pub const MASK: usize = !(PAGE_SIZE - 1);
-
 /// Round up a value to the nearest alignment boundary
 ///
 /// # Arguments

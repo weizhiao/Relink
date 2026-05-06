@@ -6,7 +6,7 @@ use crate::{
 };
 use core::ffi::c_void;
 
-use super::{MASK, PAGE_SIZE, roundup};
+use super::{rounddown, roundup};
 
 /// RELRO (RELocation Read-Only) segment information
 ///
@@ -19,6 +19,8 @@ pub(crate) struct ELFRelro {
     addr: RelocAddr,
     /// Size of the RELRO segment
     len: usize,
+    /// Page size used to align the protected range.
+    page_size: usize,
     /// Function pointer to the mprotect function
     mprotect: unsafe fn(*mut c_void, usize, ProtFlags) -> Result<()>,
 }
@@ -32,10 +34,11 @@ impl ELFRelro {
     ///
     /// # Returns
     /// A new ELFRelro instance
-    pub(crate) fn new<M: Mmap>(phdr: &ElfPhdr, base: RelocAddr) -> ELFRelro {
+    pub(crate) fn new<M: Mmap>(phdr: &ElfPhdr, base: RelocAddr, page_size: usize) -> ELFRelro {
         ELFRelro {
             addr: base.offset(phdr.p_vaddr()),
             len: phdr.p_memsz(),
+            page_size,
             mprotect: M::mprotect,
         }
     }
@@ -50,8 +53,8 @@ impl ELFRelro {
     #[inline]
     pub(crate) fn relro(&self) -> Result<()> {
         let addr = self.addr.into_inner();
-        let end = roundup(addr + self.len, PAGE_SIZE);
-        let start = addr & MASK;
+        let end = roundup(addr + self.len, self.page_size);
+        let start = rounddown(addr, self.page_size);
         let start_addr = start as *mut c_void;
         unsafe {
             (self.mprotect)(start_addr, end - start, ProtFlags::PROT_READ)?;

@@ -1,25 +1,22 @@
-use crate::entity::entity_ref;
+use crate::{entity::entity_ref, os::PageSize};
 
 /// The packing policy used to place one memory class into physical arenas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClassPolicy {
-    page_size: usize,
+    page_size: PageSize,
     sharing: ArenaSharing,
 }
 
 impl ClassPolicy {
     /// Creates one class policy.
     #[inline]
-    pub const fn new(page_size: usize, sharing: ArenaSharing) -> Self {
-        Self {
-            page_size: if page_size == 0 { 1 } else { page_size },
-            sharing,
-        }
+    pub const fn new(page_size: PageSize, sharing: ArenaSharing) -> Self {
+        Self { page_size, sharing }
     }
 
     /// Returns the page size used for arenas in this class.
     #[inline]
-    pub const fn page_size(self) -> usize {
+    pub const fn page_size(self) -> PageSize {
         self.page_size
     }
 
@@ -49,9 +46,6 @@ impl Default for PackingPolicy {
 }
 
 impl PackingPolicy {
-    const BASE_PAGE_SIZE: usize = 4 * 1024;
-    const HUGE_PAGE_SIZE: usize = 2 * 1024 * 1024;
-
     /// Creates a packing policy from explicit per-class rules.
     #[inline]
     pub const fn new(
@@ -71,7 +65,7 @@ impl PackingPolicy {
     /// Returns a conservative base-page policy with private arenas.
     #[inline]
     pub const fn private_base_pages() -> Self {
-        let base = ClassPolicy::new(Self::BASE_PAGE_SIZE, ArenaSharing::Private);
+        let base = ClassPolicy::new(PageSize::Base, ArenaSharing::Private);
         Self::new(base, base, base, base)
     }
 
@@ -79,10 +73,10 @@ impl PackingPolicy {
     #[inline]
     pub const fn shared_huge_pages() -> Self {
         Self::new(
-            ClassPolicy::new(Self::HUGE_PAGE_SIZE, ArenaSharing::Shared),
-            ClassPolicy::new(Self::HUGE_PAGE_SIZE, ArenaSharing::Shared),
-            ClassPolicy::new(Self::BASE_PAGE_SIZE, ArenaSharing::Private),
-            ClassPolicy::new(Self::BASE_PAGE_SIZE, ArenaSharing::Private),
+            ClassPolicy::new(PageSize::Huge2MiB, ArenaSharing::Shared),
+            ClassPolicy::new(PageSize::Huge2MiB, ArenaSharing::Shared),
+            ClassPolicy::new(PageSize::Base, ArenaSharing::Private),
+            ClassPolicy::new(PageSize::Base, ArenaSharing::Private),
         )
     }
 
@@ -138,7 +132,7 @@ impl ArenaUsage {
 /// One physical arena that can host sections from one or more modules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Arena {
-    page_size: usize,
+    page_size: PageSize,
     memory_class: MemoryClass,
     sharing: ArenaSharing,
 }
@@ -146,7 +140,11 @@ pub struct Arena {
 impl Arena {
     /// Creates a new arena descriptor.
     #[inline]
-    pub const fn new(page_size: usize, memory_class: MemoryClass, sharing: ArenaSharing) -> Self {
+    pub const fn new(
+        page_size: PageSize,
+        memory_class: MemoryClass,
+        sharing: ArenaSharing,
+    ) -> Self {
         Self {
             page_size,
             memory_class,
@@ -156,7 +154,7 @@ impl Arena {
 
     /// Returns the page size used by the arena.
     #[inline]
-    pub const fn page_size(&self) -> usize {
+    pub const fn page_size(&self) -> PageSize {
         self.page_size
     }
 

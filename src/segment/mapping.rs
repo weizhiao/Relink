@@ -3,7 +3,7 @@ use crate::os::{MapFlags, Mmap, ProtFlags};
 use crate::{Result, logging, segment::ElfSegments};
 use alloc::vec::Vec;
 
-use super::{PAGE_SIZE, roundup};
+use super::roundup;
 
 /// Address representation for ELF segments
 ///
@@ -75,6 +75,8 @@ pub(crate) struct ElfSegment {
     pub(crate) flags: MapFlags,
     /// Total length of the segment in bytes
     pub(crate) len: usize,
+    /// Page size used to align this segment.
+    pub(crate) page_size: usize,
     /// Size of zero-filled area at the end of the segment
     pub(crate) zero_size: usize,
     /// Size of content (non-zero) area in the segment
@@ -125,10 +127,10 @@ impl ElfSegment {
         let addr = self.addr.absolute_addr();
         let prot = self.mapping_prot();
 
-        debug_assert!(len.is_multiple_of(PAGE_SIZE));
+        debug_assert!(len.is_multiple_of(self.page_size));
 
         if self.map_info.len() == 1 {
-            debug_assert!(self.map_info[0].offset.is_multiple_of(PAGE_SIZE));
+            debug_assert!(self.map_info[0].offset.is_multiple_of(self.page_size));
             unsafe {
                 M::mmap(
                     Some(addr),
@@ -193,7 +195,7 @@ impl ElfSegment {
     fn mprotect<M: Mmap>(&self) -> Result<()> {
         if self.need_copy || self.from_relocatable {
             let len = self.len;
-            debug_assert!(len.is_multiple_of(PAGE_SIZE));
+            debug_assert!(len.is_multiple_of(self.page_size));
             let addr = self.addr.absolute_addr();
             unsafe { M::mprotect(addr as _, len, self.prot) }?;
 
@@ -219,7 +221,7 @@ impl ElfSegment {
     fn fill_zero<M: Mmap>(&self) -> Result<()> {
         if self.zero_size > 0 {
             let zero_start = self.addr.absolute_addr() + self.content_size;
-            let zero_end = roundup(zero_start, PAGE_SIZE);
+            let zero_end = roundup(zero_start, self.page_size);
             let write_len = zero_end - zero_start;
             let ptr = zero_start as *mut u8;
             unsafe {
