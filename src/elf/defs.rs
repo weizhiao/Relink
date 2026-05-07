@@ -11,10 +11,6 @@ use elf::abi::{
     ET_DYN, ET_EXEC, ET_NONE, ET_REL,
 };
 
-// All native relocation numbers come from the host's `RelocationArch` impl
-// via [`crate::arch::NativeArch`]. Reading them through the trait keeps
-// `ElfRelocationType` independent of which architecture is the host: no
-// per-arch path needs to be wired here.
 use crate::{arch::NativeArch, relocation::RelocationArch};
 
 #[cfg(feature = "object")]
@@ -239,8 +235,6 @@ impl ElfRelr {
 pub struct ElfRelocationType(u32);
 
 impl ElfRelocationType {
-    pub const JUMP_SLOT: Self = <NativeArch as RelocationArch>::JUMP_SLOT;
-
     #[inline]
     pub const fn new(raw: u32) -> Self {
         Self(raw)
@@ -249,25 +243,6 @@ impl ElfRelocationType {
     #[inline]
     pub const fn raw(self) -> u32 {
         self.0
-    }
-
-    /// Whether this is the ELF-standard "no relocation" entry (type 0 on
-    /// every architecture).
-    #[inline]
-    pub const fn is_none(self) -> bool {
-        self.0 == 0
-    }
-
-    /// Whether this is the host architecture's `RELATIVE` relocation.
-    #[inline]
-    pub fn is_relative(self) -> bool {
-        self.0 == <NativeArch as RelocationArch>::RELATIVE.raw()
-    }
-
-    /// Whether this is the host architecture's `IRELATIVE` relocation.
-    #[inline]
-    pub fn is_irelative(self) -> bool {
-        self.0 == <NativeArch as RelocationArch>::IRELATIVE.raw()
     }
 }
 
@@ -419,4 +394,3 @@ pub(crate) const ELF_REL_SECTION_TYPE: ElfSectionType =
     } else {
         ElfSectionType::RELA
     };
-

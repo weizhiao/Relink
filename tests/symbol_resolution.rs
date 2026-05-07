@@ -1,11 +1,7 @@
 mod support;
 
 use elf_loader::{
-    Loader,
-    arch::NativeArch,
-    image::LoadedCore,
-    input::ElfBinary,
-    relocation::RelocationArch,
+    Loader, arch::NativeArch, image::LoadedCore, input::ElfBinary, relocation::RelocationArch,
 };
 
 const REL_GOT: u32 = <NativeArch as RelocationArch>::GOT.raw();

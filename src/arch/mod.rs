@@ -69,7 +69,6 @@ cfg_if::cfg_if! {
     }
 }
 
-
 #[cfg(feature = "object")]
 pub(crate) mod object;
 

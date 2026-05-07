@@ -3,9 +3,11 @@ mod enabled {
     use crate::image::{CoreInner, DynamicInfo, LoadedCore, RawDynamic};
     use crate::{
         RelocationError, Result,
-        arch::prepare_lazy_bind,
-        elf::{ElfRelType, ElfRelocationType},
-        relocation::{BindingMode, LazyLookupHooks, RelocAddr, RelocationArch, SymbolLookup, unlikely},
+        arch::{NativeArch, prepare_lazy_bind},
+        elf::ElfRelType,
+        relocation::{
+            BindingMode, LazyLookupHooks, RelocAddr, RelocationArch, SymbolLookup, unlikely,
+        },
         sync::Arc,
         tls::lookup_tls_get_addr,
     };
@@ -201,7 +203,7 @@ mod enabled {
         let r_sym = rela.r_symbol();
         let segments = &dylib.segments;
 
-        if unlikely(r_type != ElfRelocationType::JUMP_SLOT || r_sym == 0) {
+        if unlikely(r_type != <NativeArch as RelocationArch>::JUMP_SLOT || r_sym == 0) {
             invalid_relocation(dylib.name.as_str(), rela_idx, rela);
         }
 

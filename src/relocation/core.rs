@@ -601,6 +601,7 @@ impl RelocAddr {
     }
 
     #[inline]
+    #[cfg(any(feature = "tls", feature = "object"))]
     pub const fn relative_to(self, place: usize) -> Self {
         Self(self.0.wrapping_sub(place))
     }

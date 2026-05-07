@@ -1,4 +1,8 @@
-use crate::image::{LoadedCore, RawDynamic};
+use crate::{
+    arch::NativeArch,
+    image::{LoadedCore, RawDynamic},
+    relocation::RelocationArch,
+};
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
@@ -101,12 +105,12 @@ where
     }
 }
 
-pub(crate) struct LoadSession<K, D: 'static> {
-    pub(crate) resolve: ResolveSession<K, RawDynamic<D>>,
+pub(crate) struct LoadSession<K, D: 'static, Arch: RelocationArch = NativeArch> {
+    pub(crate) resolve: ResolveSession<K, RawDynamic<D, Arch>>,
     pub(crate) ready_to_commit: Vec<ReadyCommit<K, D>>,
 }
 
-impl<K, D: 'static> LoadSession<K, D> {
+impl<K, D: 'static, Arch: RelocationArch> LoadSession<K, D, Arch> {
     #[inline]
     pub(crate) fn new() -> Self {
         Self {
@@ -116,7 +120,7 @@ impl<K, D: 'static> LoadSession<K, D> {
     }
 }
 
-impl<K, D: 'static> LoadSession<K, D>
+impl<K, D: 'static, Arch: RelocationArch> LoadSession<K, D, Arch>
 where
     K: Ord,
 {
@@ -124,7 +128,7 @@ where
     pub(crate) fn insert_resolved_pending(
         &mut self,
         key: K,
-        raw: RawDynamic<D>,
+        raw: RawDynamic<D, Arch>,
         direct_deps: Box<[K]>,
     ) {
         self.resolve.insert_resolved_entry(key, raw, direct_deps);

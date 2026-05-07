@@ -6,10 +6,12 @@ use super::{
 };
 use crate::{
     LinkerError, Loader, ParsePhdrError, Result, UnresolvedDependencyError,
+    arch::NativeArch,
     image::{RawDynamic, ScannedDynamic, ScannedElf},
     input::ElfReader,
     loader::LoadHook,
     os::Mmap,
+    relocation::RelocationArch,
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -53,13 +55,14 @@ pub trait KeyResolver<'cfg, K: Clone, D: 'static, Meta = ()> {
     ) -> Result<Option<ResolvedKey<'cfg, K>>>;
 }
 
-pub(crate) trait ResolveStage<'cfg, K, D: 'static, Meta, P, M, H, Tls, O, V>
+pub(crate) trait ResolveStage<'cfg, K, D: 'static, Meta, P, M, H, Tls, Arch, O, V>
 where
     K: Clone + Ord,
     M: Mmap,
     H: LoadHook,
     Tls: TlsResolver,
-    O: LoadObserver<K, D>,
+    Arch: RelocationArch,
+    O: LoadObserver<K, D, Arch>,
     V: VisibleModules<K, D>,
 {
     fn stage_resolved(
@@ -67,30 +70,31 @@ where
         visible_modules: &V,
         session: &mut ResolveSession<K, P>,
         resolved: ResolvedKey<'cfg, K>,
-        loader: &mut Loader<M, H, D, Tls>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
         observer: &mut O,
     ) -> Result<K>;
 }
 
 pub(crate) struct LoadStage;
 
-impl<'cfg, K, D: 'static, Meta, M, H, Tls, O, V>
-    ResolveStage<'cfg, K, D, Meta, RawDynamic<D>, M, H, Tls, O, V> for LoadStage
+impl<'cfg, K, D: 'static, Meta, M, H, Tls, Arch, O, V>
+    ResolveStage<'cfg, K, D, Meta, RawDynamic<D, Arch>, M, H, Tls, Arch, O, V> for LoadStage
 where
     K: Clone + Ord,
     D: Default,
     M: Mmap,
     H: LoadHook,
     Tls: TlsResolver,
-    O: LoadObserver<K, D>,
+    Arch: RelocationArch,
+    O: LoadObserver<K, D, Arch>,
     V: VisibleModules<K, D>,
 {
     fn stage_resolved(
         visible: CommittedStorageView<'_, K, D, Meta>,
         visible_modules: &V,
-        session: &mut ResolveSession<K, RawDynamic<D>>,
+        session: &mut ResolveSession<K, RawDynamic<D, Arch>>,
         resolved: ResolvedKey<'cfg, K>,
-        loader: &mut Loader<M, H, D, Tls>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
         observer: &mut O,
     ) -> Result<K> {
         match resolved {
@@ -124,14 +128,15 @@ where
 
 pub(crate) struct ScanStage;
 
-impl<K, D: 'static, Meta, M, H, Tls, O, V>
-    ResolveStage<'static, K, D, Meta, ScannedDynamic, M, H, Tls, O, V> for ScanStage
+impl<K, D: 'static, Meta, M, H, Tls, Arch, O, V>
+    ResolveStage<'static, K, D, Meta, ScannedDynamic, M, H, Tls, Arch, O, V> for ScanStage
 where
     K: Clone + Ord,
     M: Mmap,
     H: LoadHook,
     Tls: TlsResolver,
-    O: LoadObserver<K, D>,
+    Arch: RelocationArch,
+    O: LoadObserver<K, D, Arch>,
     V: VisibleModules<K, D>,
 {
     fn stage_resolved(
@@ -139,7 +144,7 @@ where
         visible_modules: &V,
         session: &mut ResolveSession<K, ScannedDynamic>,
         resolved: ResolvedKey<'static, K>,
-        loader: &mut Loader<M, H, D, Tls>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
         _observer: &mut O,
     ) -> Result<K> {
         match resolved {
@@ -179,8 +184,8 @@ pub(crate) struct SessionResolveContext<'a, K: Clone, D: 'static, Meta, P, S, V>
     _stage: PhantomData<S>,
 }
 
-pub(crate) type LoadResolveContext<'a, K, D, Meta = (), V = ()> =
-    SessionResolveContext<'a, K, D, Meta, RawDynamic<D>, LoadStage, V>;
+pub(crate) type LoadResolveContext<'a, K, D, Meta = (), V = (), Arch = NativeArch> =
+    SessionResolveContext<'a, K, D, Meta, RawDynamic<D, Arch>, LoadStage, V>;
 pub(crate) type ScanResolveContext<'a, K, D, Meta = (), V = ()> =
     SessionResolveContext<'a, K, D, Meta, ScannedDynamic, ScanStage, V>;
 
@@ -276,19 +281,20 @@ where
     P: DependencyOwner,
     V: VisibleModules<K, D>,
 {
-    fn direct_deps_for<M, H, Tls, O>(
+    fn direct_deps_for<M, H, Tls, Arch, O>(
         &mut self,
         key: &K,
-        loader: &mut Loader<M, H, D, Tls>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
         resolver: &mut impl KeyResolver<'cfg, K, D, Meta>,
         observer: &mut O,
     ) -> Result<Vec<K>>
     where
-        S: ResolveStage<'cfg, K, D, Meta, P, M, H, Tls, O, V>,
+        S: ResolveStage<'cfg, K, D, Meta, P, M, H, Tls, Arch, O, V>,
         M: Mmap,
         H: LoadHook,
         Tls: TlsResolver,
-        O: LoadObserver<K, D>,
+        Arch: RelocationArch,
+        O: LoadObserver<K, D, Arch>,
         V: VisibleModules<K, D>,
     {
         // Keys that resolve through visible / committed storage have their
@@ -313,19 +319,20 @@ where
         Ok(direct_deps)
     }
 
-    pub(crate) fn resolve_dependency_graph<M, H, Tls, O>(
+    pub(crate) fn resolve_dependency_graph<M, H, Tls, Arch, O>(
         &mut self,
         root: K,
-        loader: &mut Loader<M, H, D, Tls>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
         resolver: &mut impl KeyResolver<'cfg, K, D, Meta>,
         observer: &mut O,
     ) -> Result<()>
     where
-        S: ResolveStage<'cfg, K, D, Meta, P, M, H, Tls, O, V>,
+        S: ResolveStage<'cfg, K, D, Meta, P, M, H, Tls, Arch, O, V>,
         M: Mmap,
         H: LoadHook,
         Tls: TlsResolver,
-        O: LoadObserver<K, D>,
+        Arch: RelocationArch,
+        O: LoadObserver<K, D, Arch>,
         V: VisibleModules<K, D>,
     {
         let mut group_order = mem::take(&mut self.session.group_order);
@@ -336,18 +343,19 @@ where
         result
     }
 
-    pub(crate) fn stage_resolved<M, H, Tls, O>(
+    pub(crate) fn stage_resolved<M, H, Tls, Arch, O>(
         &mut self,
         resolved: ResolvedKey<'cfg, K>,
-        loader: &mut Loader<M, H, D, Tls>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
         observer: &mut O,
     ) -> Result<K>
     where
-        S: ResolveStage<'cfg, K, D, Meta, P, M, H, Tls, O, V>,
+        S: ResolveStage<'cfg, K, D, Meta, P, M, H, Tls, Arch, O, V>,
         M: Mmap,
         H: LoadHook,
         Tls: TlsResolver,
-        O: LoadObserver<K, D>,
+        Arch: RelocationArch,
+        O: LoadObserver<K, D, Arch>,
     {
         S::stage_resolved(
             self.visible,

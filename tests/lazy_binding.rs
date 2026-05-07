@@ -2,11 +2,7 @@ mod support;
 
 #[cfg(feature = "lazy-binding")]
 use elf_loader::{
-    Loader,
-    arch::NativeArch,
-    image::LoadedCore,
-    input::ElfBinary,
-    relocation::RelocationArch,
+    Loader, arch::NativeArch, image::LoadedCore, input::ElfBinary, relocation::RelocationArch,
 };
 
 #[cfg(feature = "lazy-binding")]

@@ -316,9 +316,7 @@ impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawElf<D, Arch> {
         PostH: RelocationHandler + ?Sized,
     {
         match self {
-            RawElf::Dylib(dylib) => {
-                Ok(LoadedElf::Dylib(Relocatable::relocate(dylib, args)?))
-            }
+            RawElf::Dylib(dylib) => Ok(LoadedElf::Dylib(Relocatable::relocate(dylib, args)?)),
             RawElf::Exec(exec) => Ok(LoadedElf::Exec(Relocatable::relocate(exec, args)?)),
             #[cfg(feature = "object")]
             RawElf::Object(relocatable) => {

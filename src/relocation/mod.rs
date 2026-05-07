@@ -16,7 +16,6 @@ mod dynamic;
 mod lazy;
 mod traits;
 
-pub use traits::RelocationArch;
 pub(crate) use core::{
     RelocAddr, RelocHelper, RelocValue, RelocationValueFormula, RelocationValueKind,
     RelocationValueProvider, SymDef, find_symdef_impl, likely, reloc_error, resolve_ifunc,
@@ -26,6 +25,7 @@ pub(crate) use dynamic::DynamicRelocation;
 pub(crate) use lazy::ResolvedBinding;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use lazy::dl_fixup;
+pub use traits::RelocationArch;
 pub(crate) use traits::{
     HandlerHooks, LazyLookupHooks, LookupHooks, Relocatable, RelocateArgs, SupportLazy,
 };

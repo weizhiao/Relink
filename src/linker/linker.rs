@@ -18,7 +18,9 @@ use crate::{
     image::{LoadedCore, RawDynamic, ScannedDynamic},
     loader::LoadHook,
     os::{DefaultMmap, Mmap},
-    relocation::{RelocationArch, RelocationHandler, Relocator, SymbolLookup},
+    relocation::{
+        RelocationArch, RelocationHandler, RelocationValueProvider, Relocator, SymbolLookup,
+    },
     sync::Arc,
     tls::TlsResolver,
 };
@@ -298,9 +300,7 @@ where
     /// ```
     pub fn map_loader<NewM, NewH, NewD, NewTls, NewArch>(
         self,
-        configure: impl FnOnce(
-            Loader<M, H, D, Tls, Arch>,
-        ) -> Loader<NewM, NewH, NewD, NewTls, NewArch>,
+        configure: impl FnOnce(Loader<M, H, D, Tls, Arch>) -> Loader<NewM, NewH, NewD, NewTls, NewArch>,
     ) -> Linker<
         'a,
         K,
@@ -339,12 +339,31 @@ where
     }
 }
 
-impl<'a, K, D, M, H, Tls, Resolver, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
+impl<
+    'a,
+    K,
+    D,
+    M,
+    H,
+    Tls,
+    Arch,
+    Resolver,
+    PreS,
+    PostS,
+    LazyPreS,
+    LazyPostS,
+    PreH,
+    PostH,
+    ScopeD,
+    P,
+    O,
+    V,
+>
     Linker<
         'a,
         K,
         D,
-        Loader<M, H, D, Tls>,
+        Loader<M, H, D, Tls, Arch>,
         Resolver,
         PreS,
         PostS,
@@ -363,14 +382,15 @@ where
     M: Mmap,
     H: LoadHook,
     Tls: TlsResolver,
+    Arch: RelocationArch,
     PreS: SymbolLookup + Clone,
     PostS: SymbolLookup + Clone,
     LazyPreS: SymbolLookup + Send + Sync + 'static + Clone,
     LazyPostS: SymbolLookup + Send + Sync + 'static + Clone,
     PreH: RelocationHandler + Clone,
     PostH: RelocationHandler + Clone,
-    P: RelocationPlanner<K, D>,
-    O: LoadObserver<K, D>,
+    P: RelocationPlanner<K, D, Arch>,
+    O: LoadObserver<K, D, Arch>,
     V: VisibleModules<K, D>,
 {
     /// Loads one module through the legacy map-then-resolve path.
@@ -415,7 +435,7 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta>,
         key: K,
-        raw: RawDynamic<D>,
+        raw: RawDynamic<D, Arch>,
     ) -> Result<LoadedCore<D>>
     where
         K: 'cfg,
@@ -442,6 +462,7 @@ where
     }
 
     /// Discovers, plans, and loads one module through the scan-first path.
+    #[allow(private_bounds)]
     pub fn load_scan_first<Meta>(
         &mut self,
         context: &mut LinkContext<K, D, Meta>,
@@ -451,6 +472,7 @@ where
         K: 'static,
         Meta: Default,
         Resolver: KeyResolver<'static, K, D, Meta>,
+        Arch: RelocationValueProvider + mapped::GotPltTarget,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
             return Ok(loaded);
@@ -474,20 +496,20 @@ where
 
     fn prepare_runtime_load<'cfg, Meta, Seed>(
         context: &LinkContext<K, D, Meta>,
-        loader: &mut Loader<M, H, D, Tls>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
         resolver: &mut Resolver,
         observer: &mut O,
         visible_modules: &V,
         seed_root: Seed,
-    ) -> Result<PreparedLoad<K, D>>
+    ) -> Result<PreparedLoad<K, D, Arch>>
     where
         K: 'cfg,
         Resolver: KeyResolver<'cfg, K, D, Meta>,
         Seed: FnOnce(
             &LinkContext<K, D, Meta>,
             &V,
-            &mut LoadSession<K, D>,
-            &mut Loader<M, H, D, Tls>,
+            &mut LoadSession<K, D, Arch>,
+            &mut Loader<M, H, D, Tls, Arch>,
             &mut Resolver,
             &mut O,
         ) -> Result<K>,
@@ -516,7 +538,7 @@ where
     fn prepare_scan_load<Meta>(
         context: &LinkContext<K, D, Meta>,
         key: &K,
-        loader: &mut Loader<M, H, D, Tls>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
         resolver: &mut Resolver,
         pipeline: &mut LinkPipeline<'_, K>,
         visible_modules: &V,
@@ -559,9 +581,12 @@ where
 
     fn prepare_planned_load(
         mut plan: LinkPlan<K>,
-        loader: &mut Loader<M, H, D, Tls>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
         observer: &mut O,
-    ) -> Result<PreparedLoad<K, D>> {
+    ) -> Result<PreparedLoad<K, D, Arch>>
+    where
+        Arch: RelocationValueProvider + mapped::GotPltTarget,
+    {
         // Scan discovery already seeded layout-side metadata before the pass pipeline ran.
         // The planned-load phase only needs to normalize materialization choices and rebuild
         // any derived addresses that those choices affect.
@@ -603,9 +628,10 @@ where
         ))
     }
 
-    fn prepare_mapped_runtime(
-        plan: &mut LinkPlan<K>,
-    ) -> Result<Option<mapped::MappedRuntimeMemory>> {
+    fn prepare_mapped_runtime(plan: &mut LinkPlan<K>) -> Result<Option<mapped::MappedRuntimeMemory>>
+    where
+        Arch: RelocationValueProvider + mapped::GotPltTarget,
+    {
         materialization::normalize_plan(plan)?;
         let mut mapped_runtime = mapped::MappedRuntimeMemory::map::<M, _>(plan)?;
 
@@ -614,7 +640,7 @@ where
                 .modules_with_materialization(Materialization::SectionRegions)
                 .collect::<Vec<_>>();
             for module_id in section_region_modules {
-                runtime.repair_module(module_id, plan)?;
+                runtime.repair_module::<_, Arch>(module_id, plan)?;
             }
             runtime.populate(plan)?;
         }
@@ -623,12 +649,12 @@ where
     }
 
     fn materialize_planned_raw(
-        loader: &mut Loader<M, H, D, Tls>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
         plan: &MemoryLayoutPlan,
         mapped_runtime: &mut Option<mapped::MappedRuntimeMemory>,
         module_id: ModuleId,
         scanned: ScannedDynamic,
-    ) -> Result<RawDynamic<D>> {
+    ) -> Result<RawDynamic<D, Arch>> {
         match plan
             .materialization(module_id)
             .unwrap_or(Materialization::WholeDsoRegion)
@@ -643,7 +669,7 @@ where
                     })?
                     .take_module(module_id)?;
                 let (init_fn, fini_fn) = loader.inner.lifecycle_handlers();
-                let mut raw = mapped::build_arena_raw_dynamic::<D, Tls>(
+                let mut raw = mapped::build_arena_raw_dynamic::<D, Tls, Arch>(
                     scanned,
                     runtime,
                     init_fn.clone(),
@@ -665,7 +691,7 @@ where
     fn execute_prepared_load<Meta>(
         &mut self,
         context: &mut LinkContext<K, D, Meta>,
-        prepared: PreparedLoad<K, D>,
+        prepared: PreparedLoad<K, D, Arch>,
     ) -> Result<LoadedCore<D>>
     where
         Meta: Default,
@@ -700,7 +726,7 @@ where
         &mut self,
         root: &K,
         context: &LinkContext<K, D, Meta>,
-        session: &mut LoadSession<K, D>,
+        session: &mut LoadSession<K, D, Arch>,
     ) -> Result<()> {
         let mut order = mem::take(&mut self.scratch_relocation_order);
         Self::build_relocation_order(root, &session.resolve.entries, &mut order);
@@ -738,7 +764,7 @@ where
 
     fn build_relocation_order(
         root: &K,
-        pending: &BTreeMap<K, GraphEntry<K, RawDynamic<D>>>,
+        pending: &BTreeMap<K, GraphEntry<K, RawDynamic<D, Arch>>>,
         order: &mut Vec<K>,
     ) {
         order.clear();
@@ -776,7 +802,7 @@ where
 
     fn build_group_scope<Meta>(
         context: &LinkContext<K, D, Meta>,
-        session: &LoadSession<K, D>,
+        session: &LoadSession<K, D, Arch>,
         visible_modules: &V,
     ) -> Arc<[LoadedCore<D>]>
     where
@@ -801,8 +827,10 @@ where
             .into()
     }
 
-    fn commit_session<Meta>(context: &mut LinkContext<K, D, Meta>, session: &mut LoadSession<K, D>)
-    where
+    fn commit_session<Meta>(
+        context: &mut LinkContext<K, D, Meta>,
+        session: &mut LoadSession<K, D, Arch>,
+    ) where
         Meta: Default,
     {
         let ready = mem::take(&mut session.ready_to_commit);
@@ -815,9 +843,9 @@ where
     }
 }
 
-struct PreparedLoad<K, D: 'static> {
+struct PreparedLoad<K, D: 'static, Arch: RelocationArch> {
     root: K,
-    session: LoadSession<K, D>,
+    session: LoadSession<K, D, Arch>,
     mapped_runtime: Option<mapped::MappedRuntimeMemory>,
 }
 
@@ -826,8 +854,8 @@ enum ScanDiscovery<K> {
     Plan(LinkPlan<K>),
 }
 
-impl<K, D: 'static> PreparedLoad<K, D> {
-    fn runtime(root: K, session: LoadSession<K, D>) -> Self {
+impl<K, D: 'static, Arch: RelocationArch> PreparedLoad<K, D, Arch> {
+    fn runtime(root: K, session: LoadSession<K, D, Arch>) -> Self {
         Self {
             root,
             session,
@@ -837,7 +865,7 @@ impl<K, D: 'static> PreparedLoad<K, D> {
 
     fn planned(
         root: K,
-        session: LoadSession<K, D>,
+        session: LoadSession<K, D, Arch>,
         mapped_runtime: Option<mapped::MappedRuntimeMemory>,
     ) -> Self {
         Self {
@@ -848,8 +876,8 @@ impl<K, D: 'static> PreparedLoad<K, D> {
     }
 }
 
-fn apply_section_overrides<D>(
-    raw: &mut RawDynamic<D>,
+fn apply_section_overrides<D, Arch: RelocationArch>(
+    raw: &mut RawDynamic<D, Arch>,
     module_id: ModuleId,
     plan: &MemoryLayoutPlan,
 ) {

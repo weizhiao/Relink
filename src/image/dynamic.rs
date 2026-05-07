@@ -8,8 +8,8 @@ use crate::{
     logging,
     os::Mmap,
     relocation::{
-        DynamicRelocation, RelocAddr, Relocatable, RelocateArgs, RelocationArch,
-        RelocationHandler, Relocator, SymbolLookup,
+        DynamicRelocation, RelocAddr, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
+        Relocator, SymbolLookup,
     },
     segment::ELFRelro,
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},

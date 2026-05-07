@@ -1,8 +1,9 @@
 use super::view::DependencyGraphView;
 use crate::{
     Result,
+    arch::NativeArch,
     image::{LoadedCore, RawDylib, RawDynamic, ScannedDynamic},
-    relocation::BindingMode,
+    relocation::{BindingMode, RelocationArch},
     sync::Arc,
 };
 use alloc::boxed::Box;
@@ -17,7 +18,7 @@ pub trait DependencyOwner {
     fn needed_lib(&self, index: usize) -> Option<&str>;
 }
 
-impl<D: 'static> DependencyOwner for RawDylib<D> {
+impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDylib<D, Arch> {
     #[inline]
     fn name(&self) -> &str {
         self.name()
@@ -49,7 +50,7 @@ impl<D: 'static> DependencyOwner for RawDylib<D> {
     }
 }
 
-impl<D: 'static> DependencyOwner for RawDynamic<D> {
+impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDynamic<D, Arch> {
     #[inline]
     fn name(&self) -> &str {
         self.name()
@@ -250,14 +251,14 @@ where
 /// so observers must not treat it as a ready-to-run module. Callers that create
 /// placeholder [`LoadedCore`] values from `raw().core()` are responsible for the
 /// safety contract of [`LoadedCore::from_core`].
-pub struct StagedDynamic<'a, K, D: 'static> {
+pub struct StagedDynamic<'a, K, D: 'static, Arch: RelocationArch = NativeArch> {
     key: &'a K,
-    raw: &'a RawDynamic<D>,
+    raw: &'a RawDynamic<D, Arch>,
 }
 
-impl<'a, K, D: 'static> StagedDynamic<'a, K, D> {
+impl<'a, K, D: 'static, Arch: RelocationArch> StagedDynamic<'a, K, D, Arch> {
     #[inline]
-    pub(crate) fn new(key: &'a K, raw: &'a RawDynamic<D>) -> Self {
+    pub(crate) fn new(key: &'a K, raw: &'a RawDynamic<D, Arch>) -> Self {
         Self { key, raw }
     }
 
@@ -269,41 +270,45 @@ impl<'a, K, D: 'static> StagedDynamic<'a, K, D> {
 
     /// Returns the mapped but unrelocated dynamic image.
     #[inline]
-    pub fn raw(&self) -> &'a RawDynamic<D> {
+    pub fn raw(&self) -> &'a RawDynamic<D, Arch> {
         self.raw
     }
 }
 
 /// Observer for modules staged by [`super::Linker`].
-pub trait LoadObserver<K, D: 'static> {
+pub trait LoadObserver<K, D: 'static, Arch: RelocationArch = NativeArch> {
     /// Called when a new [`RawDynamic`] is mapped but before relocation starts.
-    fn on_staged_dynamic(&mut self, _event: StagedDynamic<'_, K, D>) -> Result<()> {
+    fn on_staged_dynamic(&mut self, _event: StagedDynamic<'_, K, D, Arch>) -> Result<()> {
         Ok(())
     }
 }
 
-impl<K, D: 'static> LoadObserver<K, D> for () {}
+impl<K, D: 'static, Arch: RelocationArch> LoadObserver<K, D, Arch> for () {}
 
-impl<K, D: 'static, F> LoadObserver<K, D> for F
+impl<K, D: 'static, Arch: RelocationArch, F> LoadObserver<K, D, Arch> for F
 where
-    F: for<'a> FnMut(StagedDynamic<'a, K, D>) -> Result<()>,
+    F: for<'a> FnMut(StagedDynamic<'a, K, D, Arch>) -> Result<()>,
 {
     #[inline]
-    fn on_staged_dynamic(&mut self, event: StagedDynamic<'_, K, D>) -> Result<()> {
+    fn on_staged_dynamic(&mut self, event: StagedDynamic<'_, K, D, Arch>) -> Result<()> {
         self(event)
     }
 }
 
 /// A single relocation request for a newly mapped module.
-pub struct RelocationRequest<'a, K, D: 'static> {
+pub struct RelocationRequest<'a, K, D: 'static, Arch: RelocationArch = NativeArch> {
     key: &'a K,
-    raw: RawDynamic<D>,
+    raw: RawDynamic<D, Arch>,
     scope: &'a Arc<[LoadedCore<D>]>,
 }
 
-impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
+impl<'a, K, D: 'static, Arch: RelocationArch> RelocationRequest<'a, K, D, Arch> {
     #[inline]
-    pub(crate) fn new(key: &'a K, raw: RawDynamic<D>, scope: &'a Arc<[LoadedCore<D>]>) -> Self {
+    pub(crate) fn new(
+        key: &'a K,
+        raw: RawDynamic<D, Arch>,
+        scope: &'a Arc<[LoadedCore<D>]>,
+    ) -> Self {
         Self { key, raw, scope }
     }
 
@@ -315,7 +320,7 @@ impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
 
     /// Returns the raw module being relocated.
     #[inline]
-    pub fn raw(&self) -> &RawDynamic<D> {
+    pub fn raw(&self) -> &RawDynamic<D, Arch> {
         &self.raw
     }
 
@@ -336,7 +341,7 @@ impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
 
     /// Consumes the request and returns the raw module being relocated.
     #[inline]
-    pub fn into_raw(self) -> RawDynamic<D> {
+    pub fn into_raw(self) -> RawDynamic<D, Arch> {
         self.raw
     }
 }
@@ -411,9 +416,9 @@ impl<D> RelocationInputs<D> {
 }
 
 /// Runtime policy for assembling relocation inputs.
-pub trait RelocationPlanner<K, D: 'static> {
+pub trait RelocationPlanner<K, D: 'static, Arch: RelocationArch = NativeArch> {
     /// Plans the relocation scope and binding mode for one module.
-    fn plan(&mut self, req: &RelocationRequest<'_, K, D>) -> Result<RelocationInputs<D>>;
+    fn plan(&mut self, req: &RelocationRequest<'_, K, D, Arch>) -> Result<RelocationInputs<D>>;
 }
 
 /// Default relocation planner that uses the request's batch-start scope and
@@ -421,19 +426,21 @@ pub trait RelocationPlanner<K, D: 'static> {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultRelocationPlanner;
 
-impl<K, D: 'static> RelocationPlanner<K, D> for DefaultRelocationPlanner {
+impl<K, D: 'static, Arch: RelocationArch> RelocationPlanner<K, D, Arch>
+    for DefaultRelocationPlanner
+{
     #[inline]
-    fn plan(&mut self, req: &RelocationRequest<'_, K, D>) -> Result<RelocationInputs<D>> {
+    fn plan(&mut self, req: &RelocationRequest<'_, K, D, Arch>) -> Result<RelocationInputs<D>> {
         Ok(RelocationInputs::shared(req.shared_scope().clone()))
     }
 }
 
-impl<K, D: 'static, F> RelocationPlanner<K, D> for F
+impl<K, D: 'static, Arch: RelocationArch, F> RelocationPlanner<K, D, Arch> for F
 where
-    F: for<'a> FnMut(&RelocationRequest<'a, K, D>) -> Result<RelocationInputs<D>>,
+    F: for<'a> FnMut(&RelocationRequest<'a, K, D, Arch>) -> Result<RelocationInputs<D>>,
 {
     #[inline]
-    fn plan(&mut self, req: &RelocationRequest<'_, K, D>) -> Result<RelocationInputs<D>> {
+    fn plan(&mut self, req: &RelocationRequest<'_, K, D, Arch>) -> Result<RelocationInputs<D>> {
         self(req)
     }
 }

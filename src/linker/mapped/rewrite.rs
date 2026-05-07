@@ -6,11 +6,11 @@ use crate::linker::{
 use crate::{
     AlignedBytes, LinkerError, Result,
     aligned_bytes::ByteRepr,
-    arch::NativeArch,
     elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfRelocationType, ElfSymbol},
     image::ScannedSectionId,
+    relocation::{RelocationArch, RelocationValueProvider},
 };
-use core::{cell::Cell, mem::size_of};
+use core::{cell::Cell, marker::PhantomData, mem::size_of};
 
 #[derive(Clone, Copy)]
 struct RelocationSite {
@@ -215,15 +215,17 @@ impl RuntimeModuleMemory {
     }
 }
 
-pub(crate) struct RuntimeMetadataRewriter<'a, K> {
+pub(crate) struct RuntimeMetadataRewriter<'a, K, Arch: RelocationArch> {
     module_id: ModuleId,
     plan: &'a mut LinkPlan<K>,
     runtime: &'a RuntimeModuleMemory,
+    _arch: PhantomData<fn() -> Arch>,
 }
 
-impl<'a, K> RuntimeMetadataRewriter<'a, K>
+impl<'a, K, Arch> RuntimeMetadataRewriter<'a, K, Arch>
 where
     K: Clone + Ord,
+    Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
 {
     pub(crate) fn new(
         module_id: ModuleId,
@@ -234,6 +236,7 @@ where
             module_id,
             plan,
             runtime,
+            _arch: PhantomData,
         }
     }
 
@@ -299,7 +302,7 @@ where
                 let target_bytes = target_data.as_bytes_mut();
 
                 for entry in entries {
-                    write_retained_relocation(
+                    write_retained_relocation::<Arch>(
                         runtime,
                         target_section,
                         target_bytes,
@@ -371,7 +374,7 @@ where
                 section,
                 |entry, _| {
                     let entry_info = RelocationEntryInfo::new(entry);
-                    if entry_info.r_type.is_none() {
+                    if entry_info.r_type == Arch::NONE {
                         return Ok(None);
                     }
 
@@ -394,8 +397,8 @@ where
                                     site_data.as_bytes(),
                                     site.section_offset,
                                 )?);
-                                if entry_info.r_type.is_relative()
-                                    || entry_info.r_type.is_irelative()
+                                if entry_info.r_type == Arch::RELATIVE
+                                    || entry_info.r_type == Arch::IRELATIVE
                                 {
                                     let (runtime_offset, runtime_addend) =
                                         runtime.remap_relocation_addend(site)?;
@@ -410,7 +413,7 @@ where
                             },
                         );
                     }
-                    if entry_info.r_type.is_relative() || entry_info.r_type.is_irelative() {
+                    if entry_info.r_type == Arch::RELATIVE || entry_info.r_type == Arch::IRELATIVE {
                         site.addend = Some(runtime.remap_relocation_addend(site)?.1);
                     }
                     let data = plan.section_data_mut(section)?;
@@ -515,15 +518,18 @@ fn cast_section_slice_mut<T: ByteRepr>(data: &mut AlignedBytes) -> Result<&mut [
     })
 }
 
-fn write_retained_relocation(
+fn write_retained_relocation<Arch>(
     runtime: &RuntimeModuleMemory,
     target_section: SectionId,
     target_bytes: &mut [u8],
     entry: &ElfRelType,
     symbols: &[ElfSymbol],
-) -> Result<()> {
+) -> Result<()>
+where
+    Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
+{
     let entry_info = RelocationEntryInfo::new(entry);
-    if entry_info.r_type.is_none() {
+    if entry_info.r_type == Arch::NONE {
         return Ok(());
     }
 
@@ -536,7 +542,7 @@ fn write_retained_relocation(
         .addend
         .expect("retained relocation site should carry an addend");
     let symbol_value =
-        retained_relocation_target(runtime, target_bytes, entry, symbol, &site, addend)?;
+        retained_relocation_target::<Arch>(runtime, target_bytes, entry, symbol, &site, addend)?;
     let section_bytes = Cell::new(Some(target_bytes));
     let write_bytes = |src: &[u8]| {
         let section_bytes = section_bytes
@@ -554,7 +560,7 @@ fn write_retained_relocation(
         Ok(())
     };
 
-    <NativeArch as crate::relocation::RelocationValueProvider>::relocation_value(
+    <Arch as RelocationValueProvider>::relocation_value(
         entry.r_type().raw() as usize,
         symbol_value,
         addend,
@@ -566,15 +572,18 @@ fn write_retained_relocation(
     )?
 }
 
-fn retained_relocation_target(
+fn retained_relocation_target<Arch>(
     runtime: &RuntimeModuleMemory,
     target_bytes: &[u8],
     entry: &ElfRelType,
     symbol: &ElfSymbol,
     site: &RelocationSite,
     addend: isize,
-) -> Result<usize> {
-    if let Some(source_target) = <NativeArch as GotPltTarget>::got_plt_target(
+) -> Result<usize>
+where
+    Arch: RelocationArch + GotPltTarget,
+{
+    if let Some(source_target) = <Arch as GotPltTarget>::got_plt_target(
         target_bytes,
         entry.r_type(),
         symbol.is_undef(),

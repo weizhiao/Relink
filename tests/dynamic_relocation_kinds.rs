@@ -1,11 +1,6 @@
 mod support;
 
-use elf_loader::{
-    Loader,
-    arch::NativeArch,
-    input::ElfBinary,
-    relocation::RelocationArch,
-};
+use elf_loader::{Loader, arch::NativeArch, input::ElfBinary, relocation::RelocationArch};
 
 const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
 const REL_IRELATIVE: u32 = <NativeArch as RelocationArch>::IRELATIVE.raw();

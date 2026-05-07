@@ -8,6 +8,7 @@ use crate::{
     image::{RawDynamic, ScannedDynamic},
     loader::DynLifecycleHandler,
     os::Mmap,
+    relocation::{RelocationArch, RelocationValueProvider},
     segment::ElfSegments,
     tls::{TlsInfo, TlsResolver},
 };
@@ -210,12 +211,17 @@ impl MappedRuntimeMemory {
             .map_err(Into::into)
     }
 
-    pub(crate) fn repair_module<K>(&mut self, id: ModuleId, plan: &mut LinkPlan<K>) -> Result<()>
+    pub(crate) fn repair_module<K, Arch>(
+        &mut self,
+        id: ModuleId,
+        plan: &mut LinkPlan<K>,
+    ) -> Result<()>
     where
         K: Clone + Ord,
+        Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     {
         let runtime = self.build_module(id, plan.memory_layout())?;
-        let mut rewriter = RuntimeMetadataRewriter::new(id, plan, runtime);
+        let mut rewriter = RuntimeMetadataRewriter::<_, Arch>::new(id, plan, runtime);
         rewriter.rewrite()
     }
 
@@ -243,16 +249,17 @@ impl MappedRuntimeMemory {
     }
 }
 
-pub(crate) fn build_arena_raw_dynamic<D, Tls>(
+pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch>(
     scanned: ScannedDynamic,
     runtime: RuntimeModuleMemory,
     init_fn: DynLifecycleHandler,
     fini_fn: DynLifecycleHandler,
     force_static_tls: bool,
-) -> Result<RawDynamic<D>>
+) -> Result<RawDynamic<D, Arch>>
 where
     D: Default + 'static,
     Tls: TlsResolver,
+    Arch: RelocationArch,
 {
     let original_phdrs = scanned.phdrs().to_vec();
     let mut dynamic_ptr: Option<NonNull<ElfDyn>> = None;
