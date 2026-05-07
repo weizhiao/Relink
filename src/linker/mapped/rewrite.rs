@@ -6,7 +6,9 @@ use crate::linker::{
 use crate::{
     AlignedBytes, LinkerError, Result,
     aligned_bytes::ByteRepr,
-    elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfRelocationType, ElfSymbol},
+    elf::{
+        ElfDyn, ElfDynamicTag, ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfSymbol,
+    },
     image::ScannedSectionId,
     relocation::{RelocationArch, RelocationValueProvider},
 };
@@ -57,11 +59,14 @@ pub(crate) trait GotPltTarget {
 }
 
 impl RelocationEntryInfo {
-    fn new(entry: &ElfRelType) -> Self {
+    fn new<Arch>(entry: &ElfRelType<Arch>) -> Self
+    where
+        Arch: RelocationArch,
+    {
         Self {
             r_type: entry.r_type(),
             offset: SourceAddress::new(entry.r_offset()),
-            addend: relocation_addend(entry),
+            addend: relocation_addend::<Arch>(entry),
         }
     }
 }
@@ -92,12 +97,15 @@ impl RuntimeModuleMemory {
         .into())
     }
 
-    fn relocation_site(
+    fn relocation_site<Arch>(
         &self,
         section: RelocationSection<'_>,
         entry_info: RelocationEntryInfo,
         addend_bytes: Option<&[u8]>,
-    ) -> Result<RelocationSite> {
+    ) -> Result<RelocationSite>
+    where
+        Arch: RelocationArch,
+    {
         let place = section
             .memory
             .runtime_offset
@@ -106,7 +114,7 @@ impl RuntimeModuleMemory {
         let addend = match entry_info.addend {
             RelocationAddend::Explicit(addend) => Some(addend),
             RelocationAddend::Implicit => addend_bytes
-                .map(|bytes| implicit_relocation_addend(bytes, section.offset))
+                .map(|bytes| implicit_relocation_addend::<Arch>(bytes, section.offset))
                 .transpose()?,
         };
 
@@ -226,6 +234,7 @@ impl<'a, K, Arch> RuntimeMetadataRewriter<'a, K, Arch>
 where
     K: Clone + Ord,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
+    ElfRelType<Arch>: ByteRepr,
 {
     pub(crate) fn new(
         module_id: ModuleId,
@@ -287,17 +296,19 @@ where
                 let symbol_data = symbol_data.into_read();
                 let target_data = target_data.into_write();
                 let entries = relocation_data
-                    .try_cast_slice::<ElfRelType>()
+                    .try_cast_slice::<ElfRelType<Arch>>()
                     .ok_or_else(|| {
                         LinkerError::metadata_rewrite(
                             "retained relocation section bytes do not match relocation entries",
                         )
                     })?;
-                let symbols = symbol_data.try_cast_slice::<ElfSymbol>().ok_or_else(|| {
-                    LinkerError::metadata_rewrite(
-                        "retained relocation symbol table bytes do not match symbol entries",
-                    )
-                })?;
+                let symbols = symbol_data
+                    .try_cast_slice::<ElfSymbol<Arch::Layout>>()
+                    .ok_or_else(|| {
+                        LinkerError::metadata_rewrite(
+                            "retained relocation symbol table bytes do not match symbol entries",
+                        )
+                    })?;
 
                 let target_bytes = target_data.as_bytes_mut();
 
@@ -327,11 +338,13 @@ where
         for section in sections {
             let module_id = self.module_id;
             let runtime = self.runtime;
-            self.plan.for_each_section_data::<ElfSymbol, _>(
-                section,
-                |symbol, plan| {
-                    let symbol_section =
-                        match ScannedSectionId::from_symbol_shndx(symbol.st_shndx()) {
+            self.plan
+                .for_each_section_data::<ElfSymbol<Arch::Layout>, _>(
+                    section,
+                    |symbol, plan| {
+                        let symbol_section = match ScannedSectionId::from_symbol_shndx(
+                            symbol.st_shndx(),
+                        ) {
                             Some(scanned_section) => Some(
                                 plan.section_id(module_id, scanned_section).ok_or_else(|| {
                                     LinkerError::metadata_rewrite(
@@ -342,20 +355,20 @@ where
                             None => None,
                         }
                         .filter(|section| plan.section(*section).is_allocated());
-                    runtime
-                        .remap_symbol_value(symbol_section, symbol.st_value())
-                        .map(Some)
-                },
-                |plan, index, value| {
-                    let data = plan.section_data_mut(section)?;
-                    let symbols = cast_section_slice_mut::<ElfSymbol>(data)?;
-                    let symbol = symbols
-                        .get_mut(index)
-                        .expect("symbol table entry index should remain valid");
-                    symbol.set_value(value);
-                    Ok(())
-                },
-            )?;
+                        runtime
+                            .remap_symbol_value(symbol_section, symbol.st_value())
+                            .map(Some)
+                    },
+                    |plan, index, value| {
+                        let data = plan.section_data_mut(section)?;
+                        let symbols = cast_section_slice_mut::<ElfSymbol<Arch::Layout>>(data)?;
+                        let symbol = symbols
+                            .get_mut(index)
+                            .expect("symbol table entry index should remain valid");
+                        symbol.set_value(value);
+                        Ok(())
+                    },
+                )?;
         }
 
         Ok(())
@@ -370,17 +383,18 @@ where
         for section in sections {
             let target_section = self.plan.section_metadata(section).info_section();
             let runtime = self.runtime;
-            self.plan.for_each_section_data::<ElfRelType, _>(
+            self.plan.for_each_section_data::<ElfRelType<Arch>, _>(
                 section,
                 |entry, _| {
-                    let entry_info = RelocationEntryInfo::new(entry);
+                    let entry_info = RelocationEntryInfo::new::<Arch>(entry);
                     if entry_info.r_type == Arch::NONE {
                         return Ok(None);
                     }
 
                     let relocation_section =
                         runtime.relocation_section(target_section, entry_info.offset)?;
-                    let site = runtime.relocation_site(relocation_section, entry_info, None)?;
+                    let site =
+                        runtime.relocation_site::<Arch>(relocation_section, entry_info, None)?;
                     Ok(Some((entry_info, site)))
                 },
                 |plan, index, (entry_info, mut site)| {
@@ -393,7 +407,7 @@ where
                             |[relocation_data, site_data]| {
                                 let relocation_data = relocation_data.into_write();
                                 let site_data = site_data.into_write();
-                                site.addend = Some(implicit_relocation_addend(
+                                site.addend = Some(implicit_relocation_addend::<Arch>(
                                     site_data.as_bytes(),
                                     site.section_offset,
                                 )?);
@@ -402,14 +416,18 @@ where
                                 {
                                     let (runtime_offset, runtime_addend) =
                                         runtime.remap_relocation_addend(site)?;
-                                    write_runtime_relocation_addend(
+                                    write_runtime_relocation_addend::<Arch>(
                                         site_data,
                                         site,
                                         runtime_offset,
                                     )?;
                                     site.addend = Some(runtime_addend);
                                 }
-                                rewrite_allocated_relocation_entry(relocation_data, index, site)
+                                rewrite_allocated_relocation_entry::<Arch>(
+                                    relocation_data,
+                                    index,
+                                    site,
+                                )
                             },
                         );
                     }
@@ -417,7 +435,7 @@ where
                         site.addend = Some(runtime.remap_relocation_addend(site)?.1);
                     }
                     let data = plan.section_data_mut(section)?;
-                    rewrite_allocated_relocation_entry(data, index, site)?;
+                    rewrite_allocated_relocation_entry::<Arch>(data, index, site)?;
                     Ok(())
                 },
             )?;
@@ -433,7 +451,7 @@ where
         };
 
         let data = self.plan.section_data_mut(dynamic_section)?;
-        let dyns = cast_section_slice_mut::<ElfDyn>(data)?;
+        let dyns = cast_section_slice_mut::<ElfDyn<Arch::Layout>>(data)?;
 
         for dyn_ in dyns.iter_mut() {
             let tag = dyn_.tag();
@@ -449,67 +467,93 @@ where
     }
 }
 
-fn rewrite_allocated_relocation_entry(
+fn rewrite_allocated_relocation_entry<Arch>(
     data: &mut AlignedBytes,
     index: usize,
     site: RelocationSite,
-) -> Result<()> {
-    let entries = cast_section_slice_mut::<ElfRelType>(data)?;
+) -> Result<()>
+where
+    Arch: RelocationArch,
+    ElfRelType<Arch>: ByteRepr,
+{
+    let entries = cast_section_slice_mut::<ElfRelType<Arch>>(data)?;
     let rel = entries
         .get_mut(index)
         .expect("allocated relocation entry index should remain valid");
-    #[cfg(not(any(target_arch = "x86", target_arch = "arm")))]
-    if let Some(addend) = site.addend {
-        rel.set_addend(0, addend);
+    if !<ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::HAS_IMPLICIT_ADDEND {
+        if let Some(addend) = site.addend {
+            rel.set_addend(0, addend);
+        }
     }
     rel.set_offset(site.place.get());
     Ok(())
 }
 
-fn write_runtime_relocation_addend(
+fn write_runtime_relocation_addend<Arch>(
     data: &mut AlignedBytes,
     site: RelocationSite,
     addend: RuntimeOffset,
-) -> Result<()> {
-    #[cfg(any(target_arch = "x86", target_arch = "arm"))]
-    {
+) -> Result<()>
+where
+    Arch: RelocationArch,
+{
+    if <ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::HAS_IMPLICIT_ADDEND {
+        let len = size_of::<<Arch::Layout as ElfLayout>::Word>();
         let end = site
             .section_offset
-            .checked_add(size_of::<usize>())
+            .checked_add(len)
             .expect("allocated relocation addend range should not overflow");
         let bytes = data
             .as_bytes_mut()
             .get_mut(site.section_offset..end)
             .expect("allocated relocation addend should fit in its target section");
-        bytes.copy_from_slice(&addend.get().to_ne_bytes());
+        match len {
+            4 => bytes.copy_from_slice(&(addend.get() as u32).to_ne_bytes()),
+            8 => bytes.copy_from_slice(&(addend.get() as u64).to_ne_bytes()),
+            _ => unreachable!("unsupported ELF word size"),
+        }
+    } else {
+        let _ = (data, site, addend);
     }
-
-    #[cfg(not(any(target_arch = "x86", target_arch = "arm")))]
-    let _ = (data, site.section_offset, addend);
 
     Ok(())
 }
 
-#[cfg(not(any(target_arch = "x86", target_arch = "arm")))]
-fn relocation_addend(rel: &ElfRelType) -> RelocationAddend {
-    RelocationAddend::Explicit(rel.r_addend(0))
+fn relocation_addend<Arch>(rel: &ElfRelType<Arch>) -> RelocationAddend
+where
+    Arch: RelocationArch,
+{
+    if <ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::HAS_IMPLICIT_ADDEND {
+        RelocationAddend::Implicit
+    } else {
+        RelocationAddend::Explicit(rel.r_addend(0))
+    }
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "arm"))]
-fn relocation_addend(_rel: &ElfRelType) -> RelocationAddend {
-    RelocationAddend::Implicit
-}
-
-fn implicit_relocation_addend(bytes: &[u8], section_offset: usize) -> Result<isize> {
+fn implicit_relocation_addend<Arch>(bytes: &[u8], section_offset: usize) -> Result<isize>
+where
+    Arch: RelocationArch,
+{
+    let len = size_of::<<Arch::Layout as ElfLayout>::Word>();
     let end = section_offset
-        .checked_add(size_of::<usize>())
+        .checked_add(len)
         .expect("relocation addend range should not overflow");
     let bytes = bytes
         .get(section_offset..end)
         .ok_or_else(|| LinkerError::metadata_rewrite("relocation addend range exceeds section"))?;
-    let mut addend = [0u8; size_of::<usize>()];
-    addend.copy_from_slice(bytes);
-    Ok(usize::from_ne_bytes(addend) as isize)
+    Ok(match len {
+        4 => {
+            let mut addend = [0u8; 4];
+            addend.copy_from_slice(bytes);
+            u32::from_ne_bytes(addend) as isize
+        }
+        8 => {
+            let mut addend = [0u8; 8];
+            addend.copy_from_slice(bytes);
+            u64::from_ne_bytes(addend) as isize
+        }
+        _ => unreachable!("unsupported ELF word size"),
+    })
 }
 
 fn cast_section_slice_mut<T: ByteRepr>(data: &mut AlignedBytes) -> Result<&mut [T]> {
@@ -522,19 +566,20 @@ fn write_retained_relocation<Arch>(
     runtime: &RuntimeModuleMemory,
     target_section: SectionId,
     target_bytes: &mut [u8],
-    entry: &ElfRelType,
-    symbols: &[ElfSymbol],
+    entry: &ElfRelType<Arch>,
+    symbols: &[ElfSymbol<Arch::Layout>],
 ) -> Result<()>
 where
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
 {
-    let entry_info = RelocationEntryInfo::new(entry);
+    let entry_info = RelocationEntryInfo::new::<Arch>(entry);
     if entry_info.r_type == Arch::NONE {
         return Ok(());
     }
 
     let relocation_section = runtime.relocation_section(Some(target_section), entry_info.offset)?;
-    let site = runtime.relocation_site(relocation_section, entry_info, Some(target_bytes))?;
+    let site =
+        runtime.relocation_site::<Arch>(relocation_section, entry_info, Some(target_bytes))?;
     let symbol = symbols.get(entry.r_symbol()).ok_or_else(|| {
         LinkerError::metadata_rewrite("retained relocation references a missing symbol table entry")
     })?;
@@ -575,8 +620,8 @@ where
 fn retained_relocation_target<Arch>(
     runtime: &RuntimeModuleMemory,
     target_bytes: &[u8],
-    entry: &ElfRelType,
-    symbol: &ElfSymbol,
+    entry: &ElfRelType<Arch>,
+    symbol: &ElfSymbol<Arch::Layout>,
     site: &RelocationSite,
     addend: isize,
 ) -> Result<usize>

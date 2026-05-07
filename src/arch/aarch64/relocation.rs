@@ -8,7 +8,8 @@
 
 use elf::abi::*;
 
-use crate::elf::{ElfMachine, ElfRelocationType};
+use crate::arch::ArchKind;
+use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
 /// AArch64 (ARM64) architecture marker.
@@ -17,7 +18,10 @@ use crate::relocation::RelocationArch;
 pub struct AArch64Arch;
 
 impl RelocationArch for AArch64Arch {
+    const KIND: ArchKind = ArchKind::AArch64;
     const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    type Layout = Elf64Layout;
+    type Relocation = ElfRela<Self::Layout>;
 
     const NONE: ElfRelocationType = ElfRelocationType::new(0);
     const RELATIVE: ElfRelocationType = ElfRelocationType::new(R_AARCH64_RELATIVE);

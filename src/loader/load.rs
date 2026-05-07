@@ -1,19 +1,27 @@
 use super::{LoadHook, Loader};
 use crate::{
     ParseEhdrError, ParsePhdrError, Result,
-    elf::{ElfDyn, ElfFileType, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType},
+    arch::{
+        ArchKind, aarch64::relocation::AArch64Arch, arm::relocation::ArmArch,
+        loongarch64::relocation::LoongArch64Arch, riscv32::relocation::RiscV32Arch,
+        riscv64::relocation::RiscV64Arch, x86::relocation::X86Arch, x86_64::relocation::X86_64Arch,
+    },
+    elf::{
+        Elf32Layout, Elf64Layout, ElfDyn, ElfFileType, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType,
+    },
     image::{
-        RawDylib, RawDynamic, RawDynamicParts, RawElf, RawExec, ScannedDynamic,
+        AnyScannedDynamic, RawDylib, RawDynamic, RawDynamicParts, RawElf, RawExec, ScannedDynamic,
         ScannedDynamicLoadParts, ScannedElf, ScannedExec,
     },
     input::{ElfReader, IntoElfReader},
     logging,
     os::Mmap,
     relocation::{RelocAddr, RelocationArch},
-    segment::{ELFRelro, ElfSegments, program::parse_segments},
+    segment::{ELFRelro, ElfSegments, SegmentBuilder, program::parse_segments},
     tls::TlsResolver,
 };
-use alloc::{string::String, vec::Vec};
+use alloc::boxed::Box;
+use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use core::{
     ffi::{CStr, c_char, c_void},
     ptr::NonNull,
@@ -22,7 +30,7 @@ use core::{
 impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
 where
     M: Mmap,
-    H: LoadHook,
+    H: LoadHook<Arch::Layout>,
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
@@ -33,17 +41,17 @@ where
     /// the loader's relocation backend with
     /// [`Loader::for_arch`](super::Loader::for_arch) before calling
     /// `load_*`; the gate will then accept ELFs targeting `NewArch::MACHINE`.
-    pub fn read_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader> {
+    pub fn read_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
         self.buf
-            .prepare_ehdr(object, Some(<Arch as RelocationArch>::MACHINE))
+            .prepare_ehdr::<Arch::Layout>(object, Some(<Arch as RelocationArch>::MACHINE))
     }
 
     /// Reads the program header table.
     pub fn read_phdr(
         &mut self,
         object: &mut impl ElfReader,
-        ehdr: &ElfHeader,
-    ) -> Result<Option<&[ElfPhdr]>> {
+        ehdr: &ElfHeader<Arch::Layout>,
+    ) -> Result<Option<&[ElfPhdr<Arch::Layout>]>> {
         self.buf.prepare_phdrs(ehdr, object)
     }
 
@@ -51,7 +59,7 @@ where
         &mut self,
         object: &mut impl ElfReader,
         expected: ExpectedElf,
-    ) -> Result<ElfHeader> {
+    ) -> Result<ElfHeader<Arch::Layout>> {
         let ehdr = self.read_ehdr(object)?;
         if expected.matches(&ehdr) {
             return Ok(ehdr);
@@ -71,7 +79,276 @@ where
 impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
 where
     M: Mmap,
-    H: LoadHook,
+    H: LoadHook<Arch::Layout>,
+    D: Default + 'static,
+    Tls: TlsResolver,
+    Arch: RelocationArch,
+{
+    pub(crate) fn load_dynamic_as<'a, I>(
+        &mut self,
+        arch: ArchKind,
+        input: I,
+    ) -> Result<crate::linker::runtime::AnyRawDynamic<D>>
+    where
+        I: IntoElfReader<'a>,
+        Arch: crate::linker::runtime::BuiltinArch,
+        H: LoadHook<crate::elf::Elf32Layout> + LoadHook<crate::elf::Elf64Layout>,
+    {
+        if arch == Arch::KIND {
+            return self
+                .load_dynamic(input)
+                .map(crate::linker::runtime::BuiltinArch::wrap_raw);
+        }
+
+        match arch {
+            ArchKind::X86_64 => self
+                .load_dynamic_as_arch::<_, X86_64Arch>(input)
+                .map(crate::linker::runtime::AnyRawDynamic::X86_64),
+            ArchKind::AArch64 => self
+                .load_dynamic_as_arch::<_, AArch64Arch>(input)
+                .map(crate::linker::runtime::AnyRawDynamic::AArch64),
+            ArchKind::RiscV64 => self
+                .load_dynamic_as_arch::<_, RiscV64Arch>(input)
+                .map(crate::linker::runtime::AnyRawDynamic::RiscV64),
+            ArchKind::RiscV32 => self
+                .load_dynamic_as_arch::<_, RiscV32Arch>(input)
+                .map(crate::linker::runtime::AnyRawDynamic::RiscV32),
+            ArchKind::LoongArch64 => self
+                .load_dynamic_as_arch::<_, LoongArch64Arch>(input)
+                .map(crate::linker::runtime::AnyRawDynamic::LoongArch64),
+            ArchKind::X86 => self
+                .load_dynamic_as_arch::<_, X86Arch>(input)
+                .map(crate::linker::runtime::AnyRawDynamic::X86),
+            ArchKind::Arm => self
+                .load_dynamic_as_arch::<_, ArmArch>(input)
+                .map(crate::linker::runtime::AnyRawDynamic::Arm),
+        }
+    }
+
+    pub(crate) fn load_scanned_dynamic_as(
+        &mut self,
+        scanned: AnyScannedDynamic,
+    ) -> Result<crate::linker::runtime::AnyRawDynamic<D>>
+    where
+        Arch: crate::linker::runtime::BuiltinArch,
+        H: LoadHook<Elf32Layout> + LoadHook<Elf64Layout>,
+    {
+        if scanned.arch_kind() == Arch::KIND {
+            let scanned = Arch::unwrap_scanned(scanned)
+                .expect("scanned module arch kind matched the loader arch");
+            return self
+                .load_scanned_dynamic(scanned)
+                .map(crate::linker::runtime::BuiltinArch::wrap_raw);
+        }
+
+        match scanned {
+            AnyScannedDynamic::X86_64(scanned) => self
+                .load_scanned_dynamic_as_arch::<X86_64Arch>(scanned)
+                .map(crate::linker::runtime::AnyRawDynamic::X86_64),
+            AnyScannedDynamic::AArch64(scanned) => self
+                .load_scanned_dynamic_as_arch::<AArch64Arch>(scanned)
+                .map(crate::linker::runtime::AnyRawDynamic::AArch64),
+            AnyScannedDynamic::RiscV64(scanned) => self
+                .load_scanned_dynamic_as_arch::<RiscV64Arch>(scanned)
+                .map(crate::linker::runtime::AnyRawDynamic::RiscV64),
+            AnyScannedDynamic::RiscV32(scanned) => self
+                .load_scanned_dynamic_as_arch::<RiscV32Arch>(scanned)
+                .map(crate::linker::runtime::AnyRawDynamic::RiscV32),
+            AnyScannedDynamic::LoongArch64(scanned) => self
+                .load_scanned_dynamic_as_arch::<LoongArch64Arch>(scanned)
+                .map(crate::linker::runtime::AnyRawDynamic::LoongArch64),
+            AnyScannedDynamic::X86(scanned) => self
+                .load_scanned_dynamic_as_arch::<X86Arch>(scanned)
+                .map(crate::linker::runtime::AnyRawDynamic::X86),
+            AnyScannedDynamic::Arm(scanned) => self
+                .load_scanned_dynamic_as_arch::<ArmArch>(scanned)
+                .map(crate::linker::runtime::AnyRawDynamic::Arm),
+        }
+    }
+
+    pub(crate) fn scan_dynamic_as<I>(
+        &mut self,
+        arch: ArchKind,
+        input: I,
+    ) -> Result<AnyScannedDynamic>
+    where
+        I: IntoElfReader<'static>,
+        Arch: crate::linker::runtime::BuiltinArch,
+        H: LoadHook<Elf32Layout> + LoadHook<Elf64Layout>,
+    {
+        if arch == Arch::KIND {
+            let ScannedElf::Dynamic(module) = self.scan(input)? else {
+                return Err(ParsePhdrError::MissingDynamicSection.into());
+            };
+            return Ok(Arch::wrap_scanned(module));
+        }
+
+        match arch {
+            ArchKind::X86_64 => self
+                .scan_dynamic_as_arch::<_, X86_64Arch>(input)
+                .map(<X86_64Arch as crate::linker::runtime::BuiltinArch>::wrap_scanned),
+            ArchKind::AArch64 => self
+                .scan_dynamic_as_arch::<_, AArch64Arch>(input)
+                .map(<AArch64Arch as crate::linker::runtime::BuiltinArch>::wrap_scanned),
+            ArchKind::RiscV64 => self
+                .scan_dynamic_as_arch::<_, RiscV64Arch>(input)
+                .map(<RiscV64Arch as crate::linker::runtime::BuiltinArch>::wrap_scanned),
+            ArchKind::RiscV32 => self
+                .scan_dynamic_as_arch::<_, RiscV32Arch>(input)
+                .map(<RiscV32Arch as crate::linker::runtime::BuiltinArch>::wrap_scanned),
+            ArchKind::LoongArch64 => self
+                .scan_dynamic_as_arch::<_, LoongArch64Arch>(input)
+                .map(<LoongArch64Arch as crate::linker::runtime::BuiltinArch>::wrap_scanned),
+            ArchKind::X86 => self
+                .scan_dynamic_as_arch::<_, X86Arch>(input)
+                .map(<X86Arch as crate::linker::runtime::BuiltinArch>::wrap_scanned),
+            ArchKind::Arm => self
+                .scan_dynamic_as_arch::<_, ArmArch>(input)
+                .map(<ArmArch as crate::linker::runtime::BuiltinArch>::wrap_scanned),
+        }
+    }
+
+    fn load_dynamic_as_arch<'a, I, TargetArch>(
+        &mut self,
+        input: I,
+    ) -> Result<RawDynamic<D, TargetArch>>
+    where
+        I: IntoElfReader<'a>,
+        TargetArch: RelocationArch,
+        H: LoadHook<TargetArch::Layout>,
+    {
+        let mut object = input.into_reader()?;
+        logging::debug!("Loading dynamic image: {}", object.file_name());
+
+        let ehdr = self
+            .buf
+            .prepare_ehdr::<TargetArch::Layout>(&mut object, Some(TargetArch::MACHINE))?;
+        if !ExpectedElf::Dynamic.matches(&ehdr) {
+            return Err(ExpectedElf::Dynamic.error(ehdr.file_type()).into());
+        }
+
+        let phdrs = self
+            .buf
+            .prepare_phdrs(&ehdr, &mut object)?
+            .unwrap_or_default();
+        if !has_dynamic_phdr(phdrs) {
+            return Err(ParsePhdrError::MissingDynamicSection.into());
+        }
+
+        let name = object.file_name().to_owned();
+        let (init_fn, fini_fn) = self.inner.lifecycle_handlers();
+        let page_size = self.inner.page_size::<M>()?.bytes();
+        let force_static_tls = self.inner.force_static_tls();
+        let mut phdr_segments = crate::segment::program::ProgramSegments::new(
+            phdrs,
+            ehdr.is_dylib(),
+            object.as_fd().is_some(),
+            page_size,
+        );
+        let segments = phdr_segments.load_segments::<M>(&mut object)?;
+        phdr_segments.mprotect::<M>()?;
+        let builder: crate::loader::ImageBuilder<'_, H, M, Tls, D, TargetArch::Layout> =
+            crate::loader::ImageBuilder::new(
+                &mut self.inner.hook,
+                segments,
+                name,
+                ehdr,
+                init_fn,
+                fini_fn,
+                force_static_tls,
+                page_size,
+                D::default(),
+            );
+        let image = RawDynamic::from_builder(builder, phdrs)?;
+
+        logging::info!(
+            "Loaded dynamic image: {} at [0x{:x}-0x{:x}]",
+            image.name(),
+            image.mapped_base(),
+            image.mapped_base() + image.mapped_len()
+        );
+
+        Ok(image)
+    }
+
+    fn load_scanned_dynamic_as_arch<TargetArch>(
+        &mut self,
+        scanned: ScannedDynamic<TargetArch::Layout>,
+    ) -> Result<RawDynamic<D, TargetArch>>
+    where
+        TargetArch: RelocationArch,
+        H: LoadHook<TargetArch::Layout>,
+    {
+        let ScannedDynamicLoadParts {
+            ehdr,
+            phdrs,
+            mut reader,
+        } = scanned.into_load_parts();
+
+        logging::debug!("Loading scanned dynamic image: {}", reader.file_name());
+
+        let name = reader.file_name().to_owned();
+        let (init_fn, fini_fn) = self.inner.lifecycle_handlers();
+        let page_size = self.inner.page_size::<M>()?.bytes();
+        let force_static_tls = self.inner.force_static_tls();
+        let mut phdr_segments = crate::segment::program::ProgramSegments::new(
+            &phdrs,
+            ehdr.is_dylib(),
+            reader.as_fd().is_some(),
+            page_size,
+        );
+        let segments = phdr_segments.load_segments::<M>(&mut reader)?;
+        phdr_segments.mprotect::<M>()?;
+        let builder: crate::loader::ImageBuilder<'_, H, M, Tls, D, TargetArch::Layout> =
+            crate::loader::ImageBuilder::new(
+                &mut self.inner.hook,
+                segments,
+                name,
+                ehdr,
+                init_fn,
+                fini_fn,
+                force_static_tls,
+                page_size,
+                D::default(),
+            );
+        RawDynamic::from_builder(builder, &phdrs)
+    }
+
+    fn scan_dynamic_as_arch<I, TargetArch>(
+        &mut self,
+        input: I,
+    ) -> Result<ScannedDynamic<TargetArch::Layout>>
+    where
+        I: IntoElfReader<'static>,
+        TargetArch: RelocationArch,
+    {
+        let mut object = input.into_reader()?;
+        logging::debug!("Scanning ELF metadata: {}", object.file_name());
+
+        let ehdr = self
+            .buf
+            .prepare_ehdr::<TargetArch::Layout>(&mut object, Some(TargetArch::MACHINE))?;
+        if !ExpectedElf::Executable.matches(&ehdr) {
+            return Err(ExpectedElf::Executable.error(ehdr.file_type()).into());
+        }
+        let phdrs = self
+            .buf
+            .prepare_phdrs(&ehdr, &mut object)?
+            .unwrap_or_default();
+        if !has_dynamic_phdr(phdrs) {
+            return Err(ParsePhdrError::MissingDynamicSection.into());
+        }
+
+        let name = object.file_name().to_owned();
+        let builder = crate::loader::ScanBuilder::new(name, ehdr, phdrs.into(), Box::new(object));
+        ScannedDynamic::from_builder(builder)
+    }
+}
+
+impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
+where
+    M: Mmap,
+    H: LoadHook<Arch::Layout>,
     D: 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
@@ -80,7 +357,7 @@ where
     ///
     /// Images with `PT_DYNAMIC` are returned as [`ScannedElf::Dynamic`]. Executable
     /// images without `PT_DYNAMIC` are returned as [`ScannedElf::StaticExec`].
-    pub fn scan<I>(&mut self, input: I) -> Result<ScannedElf>
+    pub fn scan<I>(&mut self, input: I) -> Result<ScannedElf<Arch::Layout>>
     where
         I: IntoElfReader<'static>,
     {
@@ -106,7 +383,7 @@ where
 impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
 where
     M: Mmap,
-    H: LoadHook,
+    H: LoadHook<Arch::Layout>,
     D: Default + 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
@@ -231,7 +508,7 @@ where
     fn load_dynamic_from_ehdr(
         &mut self,
         mut object: impl ElfReader,
-        ehdr: ElfHeader,
+        ehdr: ElfHeader<Arch::Layout>,
     ) -> Result<RawDynamic<D, Arch>> {
         let phdrs = self
             .buf
@@ -252,7 +529,10 @@ where
     ///
     /// The scanned object's reader is reused for segment loading. User data is
     /// initialized through the loader's dynamic initializer, like ordinary dynamic loads.
-    pub fn load_scanned_dynamic(&mut self, scanned: ScannedDynamic) -> Result<RawDynamic<D, Arch>> {
+    pub fn load_scanned_dynamic(
+        &mut self,
+        scanned: ScannedDynamic<Arch::Layout>,
+    ) -> Result<RawDynamic<D, Arch>> {
         let mut image = self.load_scanned_dynamic_raw_impl(scanned)?;
         self.inner.initialize_dynamic(&mut image)?;
 
@@ -268,7 +548,7 @@ where
 
     pub(crate) fn load_scanned_dynamic_raw_impl(
         &mut self,
-        scanned: ScannedDynamic,
+        scanned: ScannedDynamic<Arch::Layout>,
     ) -> Result<RawDynamic<D, Arch>> {
         let ScannedDynamicLoadParts {
             ehdr,
@@ -305,7 +585,7 @@ where
         &mut self,
         name: impl Into<String>,
         load_bias: usize,
-        phdrs: impl Into<Vec<ElfPhdr>>,
+        phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
         entry: usize,
     ) -> Result<RawDynamic<D, Arch>> {
         let name = name.into();
@@ -320,7 +600,7 @@ where
             load_bias,
             layout.min_vaddr,
         );
-        let parts = borrowed_dynamic_parts::<M, D>(
+        let parts = borrowed_dynamic_parts::<M, D, Arch>(
             name,
             load_bias,
             entry,
@@ -371,7 +651,7 @@ where
     fn load_exec_from_ehdr(
         &mut self,
         mut object: impl ElfReader,
-        ehdr: ElfHeader,
+        ehdr: ElfHeader<Arch::Layout>,
     ) -> Result<RawExec<D, Arch>> {
         let phdrs = self
             .buf
@@ -400,7 +680,7 @@ where
 }
 
 #[inline]
-fn has_dynamic_phdr(phdrs: &[ElfPhdr]) -> bool {
+fn has_dynamic_phdr<L: crate::elf::ElfLayout>(phdrs: &[ElfPhdr<L>]) -> bool {
     phdrs
         .iter()
         .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
@@ -415,7 +695,7 @@ enum ExpectedElf {
 
 impl ExpectedElf {
     #[inline]
-    fn matches(self, ehdr: &ElfHeader) -> bool {
+    fn matches<L: crate::elf::ElfLayout>(self, ehdr: &ElfHeader<L>) -> bool {
         match self {
             Self::Dylib => ehdr.is_dylib(),
             Self::Dynamic | Self::Executable => ehdr.is_executable(),
@@ -440,20 +720,21 @@ impl ExpectedElf {
     }
 }
 
-fn borrowed_dynamic_parts<M, D>(
+fn borrowed_dynamic_parts<M, D, Arch>(
     name: String,
     load_bias: usize,
     entry: usize,
-    phdrs: &[ElfPhdr],
+    phdrs: &[ElfPhdr<Arch::Layout>],
     segments: ElfSegments,
     force_static_tls: bool,
     user_data: D,
     lifecycle_handlers: (super::DynLifecycleHandler, super::DynLifecycleHandler),
     page_size: usize,
-) -> Result<RawDynamicParts<D>>
+) -> Result<RawDynamicParts<D, Arch>>
 where
     M: Mmap,
     D: 'static,
+    Arch: RelocationArch,
 {
     let mut dynamic_ptr = None;
     let mut interp = None;
@@ -464,7 +745,9 @@ where
     for phdr in phdrs {
         match phdr.program_type() {
             ElfProgramType::DYNAMIC => {
-                dynamic_ptr = NonNull::new(load_bias.wrapping_add(phdr.p_vaddr()) as *mut ElfDyn);
+                dynamic_ptr = NonNull::new(
+                    load_bias.wrapping_add(phdr.p_vaddr()) as *mut ElfDyn<Arch::Layout>
+                );
             }
             ElfProgramType::INTERP => {
                 let ptr = load_bias.wrapping_add(phdr.p_vaddr()) as *const c_char;
@@ -487,7 +770,7 @@ where
                 tls_info = Some(crate::tls::TlsInfo::new(phdr, image));
             }
             ElfProgramType::GNU_RELRO => {
-                relro = Some(ELFRelro::new::<M>(
+                relro = Some(ELFRelro::new::<M, Arch::Layout>(
                     phdr,
                     RelocAddr::new(load_bias),
                     page_size,
@@ -527,7 +810,7 @@ mod tests {
     use crate::{
         Result,
         arch::EM_ARCH,
-        elf::{E_CLASS, EHDR_SIZE, ElfEhdr},
+        elf::{ElfEhdr, ElfLayout, NativeElfLayout},
         input::ElfReader,
         loader::ElfBuf,
     };
@@ -565,16 +848,16 @@ mod tests {
     fn make_header(phentsize: usize, phnum: usize, shentsize: usize, shnum: usize) -> ElfHeader {
         let mut ehdr = unsafe { core::mem::zeroed::<ElfEhdr>() };
         ehdr.e_ident[0..4].copy_from_slice(&ELFMAGIC);
-        ehdr.e_ident[EI_CLASS] = E_CLASS;
+        ehdr.e_ident[EI_CLASS] = <NativeElfLayout as ElfLayout>::E_CLASS;
         ehdr.e_ident[EI_VERSION] = EV_CURRENT;
         ehdr.e_type = ET_DYN as _;
         ehdr.e_machine = EM_ARCH;
         ehdr.e_version = EV_CURRENT as _;
-        ehdr.e_ehsize = EHDR_SIZE as _;
-        ehdr.e_phoff = EHDR_SIZE as _;
+        ehdr.e_ehsize = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
+        ehdr.e_phoff = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
         ehdr.e_phentsize = phentsize as _;
         ehdr.e_phnum = phnum as _;
-        ehdr.e_shoff = (EHDR_SIZE + 128) as _;
+        ehdr.e_shoff = (<NativeElfLayout as ElfLayout>::EHDR_SIZE + 128) as _;
         ehdr.e_shentsize = shentsize as _;
         ehdr.e_shnum = shnum as _;
 

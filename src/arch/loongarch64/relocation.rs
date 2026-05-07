@@ -1,6 +1,7 @@
 //! LoongArch 64-bit ELF relocation numbering.
 
-use crate::elf::{ElfMachine, ElfRelocationType};
+use crate::arch::ArchKind;
+use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
 // LoongArch relocation numbers are defined locally in `arch/loongarch64/mod.rs`
@@ -16,7 +17,10 @@ use super::{
 pub struct LoongArch64Arch;
 
 impl RelocationArch for LoongArch64Arch {
+    const KIND: ArchKind = ArchKind::LoongArch64;
     const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    type Layout = Elf64Layout;
+    type Relocation = ElfRela<Self::Layout>;
 
     const NONE: ElfRelocationType = ElfRelocationType::new(0);
     const RELATIVE: ElfRelocationType = ElfRelocationType::new(R_LARCH_RELATIVE);

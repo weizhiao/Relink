@@ -9,7 +9,7 @@ use super::{
 use crate::{
     AlignedBytes, LinkerError, Result,
     aligned_bytes::ByteRepr,
-    image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
+    image::{AnyScannedDynamic, ModuleCapability, ScannedSectionId},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::marker::PhantomData;
@@ -178,7 +178,7 @@ where
     }
 
     /// Iterates over every planned module id, key, and scanned module.
-    pub fn entries(&self) -> impl Iterator<Item = (ModuleId, &K, &ScannedDynamic)> {
+    pub fn entries(&self) -> impl Iterator<Item = (ModuleId, &K, &AnyScannedDynamic)> {
         self.plan
             .entries()
             .map(|(id, entry)| (id, entry.key(), entry.module()))

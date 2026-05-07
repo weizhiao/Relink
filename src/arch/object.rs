@@ -18,15 +18,23 @@ pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
 #[cfg(not(target_arch = "x86_64"))]
 impl crate::object::ObjectReloc for DummyObjectRelocator {
     fn relocate<D, PreS, PostS, PreH, PostH>(
-        _helper: &mut crate::relocation::RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
-        _rel: &crate::elf::ElfRelType,
+        _helper: &mut crate::relocation::RelocHelper<
+            '_,
+            D,
+            crate::arch::NativeArch,
+            PreS,
+            PostS,
+            PreH,
+            PostH,
+        >,
+        _rel: &crate::elf::ElfRelType<crate::arch::NativeArch>,
         _pltgot: &mut crate::object::layout::PltGotSection,
     ) -> crate::Result<()>
     where
         PreS: crate::relocation::SymbolLookup + ?Sized,
         PostS: crate::relocation::SymbolLookup + ?Sized,
-        PreH: crate::relocation::RelocationHandler + ?Sized,
-        PostH: crate::relocation::RelocationHandler + ?Sized,
+        PreH: crate::relocation::RelocationHandler<crate::arch::NativeArch> + ?Sized,
+        PostH: crate::relocation::RelocationHandler<crate::arch::NativeArch> + ?Sized,
     {
         Ok(())
     }

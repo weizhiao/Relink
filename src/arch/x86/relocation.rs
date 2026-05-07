@@ -1,6 +1,7 @@
 //! x86 (32-bit / i386) ELF relocation numbering.
 
-use crate::elf::{ElfMachine, ElfRelocationType};
+use crate::arch::ArchKind;
+use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
 // The constants below come from `super` because the elf crate does not always
@@ -17,7 +18,10 @@ use super::{
 pub struct X86Arch;
 
 impl RelocationArch for X86Arch {
+    const KIND: ArchKind = ArchKind::X86;
     const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    type Layout = Elf32Layout;
+    type Relocation = ElfRel<Self::Layout>;
 
     const NONE: ElfRelocationType = ElfRelocationType::new(0);
     const RELATIVE: ElfRelocationType = ElfRelocationType::new(R_386_RELATIVE);

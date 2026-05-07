@@ -5,7 +5,7 @@
 //! used in many ELF implementations.
 
 use super::ElfHashTable;
-use crate::elf::{ElfSymbol, PreCompute, SymbolTable, symbol::SymbolInfo};
+use crate::elf::{ElfLayout, ElfSymbol, PreCompute, SymbolTable, symbol::SymbolInfo};
 /// Header structure for SYSV ELF hash tables
 ///
 /// This structure represents the header of a SYSV hash table, which contains
@@ -114,11 +114,11 @@ impl ElfHashTable for ElfHash {
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol
     /// * `None` - If the symbol was not found
-    fn lookup<'sym>(
-        table: &'sym SymbolTable,
+    fn lookup<'sym, L: ElfLayout>(
+        table: &'sym SymbolTable<L>,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
-    ) -> Option<&'sym ElfSymbol> {
+    ) -> Option<&'sym ElfSymbol<L>> {
         // Get or compute the hash value for the symbol
         let hash = if let Some(hash) = precompute.hash {
             hash

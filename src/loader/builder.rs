@@ -1,7 +1,7 @@
 use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner};
 use crate::{
     MmapError, ParsePhdrError, Result,
-    elf::{ElfDyn, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType},
+    elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
     image::RawDynamic,
     input::ElfReader,
     os::{Mmap, PageSize},
@@ -16,9 +16,9 @@ use core::{ffi::c_char, marker::PhantomData, ptr::NonNull};
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocated ELF file before
 /// building the final loaded image.
-pub(crate) struct ImageBuilder<'hook, H, M, Tls, D = ()>
+pub(crate) struct ImageBuilder<'hook, H, M, Tls, D = (), L: ElfLayout = NativeElfLayout>
 where
-    H: LoadHook,
+    H: LoadHook<L>,
     M: Mmap,
     Tls: TlsResolver,
 {
@@ -26,19 +26,19 @@ where
     hook: &'hook mut H,
 
     /// Mapped program headers
-    phdr_mmap: Option<&'static [ElfPhdr]>,
+    phdr_mmap: Option<&'static [ElfPhdr<L>]>,
 
     /// Name of the ELF file
     pub(crate) name: String,
 
     /// ELF header
-    pub(crate) ehdr: ElfHeader,
+    pub(crate) ehdr: ElfHeader<L>,
 
     /// GNU_RELRO segment information
     pub(crate) relro: Option<ELFRelro>,
 
     /// Pointer to the dynamic section
-    pub(crate) dynamic_ptr: Option<NonNull<ElfDyn>>,
+    pub(crate) dynamic_ptr: Option<NonNull<ElfDyn<L>>>,
 
     /// TLS information
     pub(crate) tls_info: Option<TlsInfo>,
@@ -68,22 +68,22 @@ where
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
 
     /// Phantom data to maintain Mmap type information
-    _marker: PhantomData<(M, Tls)>,
+    _marker: PhantomData<(M, Tls, L)>,
 }
 
-pub(crate) struct ScanBuilder {
+pub(crate) struct ScanBuilder<L: ElfLayout = NativeElfLayout> {
     pub(crate) name: String,
-    pub(crate) ehdr: ElfHeader,
-    pub(crate) phdrs: Box<[ElfPhdr]>,
+    pub(crate) ehdr: ElfHeader<L>,
+    pub(crate) phdrs: Box<[ElfPhdr<L>]>,
     pub(crate) reader: Box<dyn ElfReader + 'static>,
 }
 
-impl ScanBuilder {
+impl<L: ElfLayout> ScanBuilder<L> {
     #[inline]
     pub(crate) fn new(
         name: String,
-        ehdr: ElfHeader,
-        phdrs: Box<[ElfPhdr]>,
+        ehdr: ElfHeader<L>,
+        phdrs: Box<[ElfPhdr<L>]>,
         reader: Box<dyn ElfReader + 'static>,
     ) -> Self {
         Self {
@@ -95,11 +95,12 @@ impl ScanBuilder {
     }
 }
 
-impl<'hook, H, M, Tls, D> ImageBuilder<'hook, H, M, Tls, D>
+impl<'hook, H, M, Tls, D, L> ImageBuilder<'hook, H, M, Tls, D, L>
 where
-    H: LoadHook,
+    H: LoadHook<L>,
     Tls: TlsResolver,
     M: Mmap,
+    L: ElfLayout,
 {
     /// Create a new [`ImageBuilder`].
     ///
@@ -115,7 +116,7 @@ where
         hook: &'hook mut H,
         segments: ElfSegments,
         name: String,
-        ehdr: ElfHeader,
+        ehdr: ElfHeader<L>,
         init_fn: DynLifecycleHandler,
         fini_fn: DynLifecycleHandler,
         static_tls: bool,
@@ -143,7 +144,7 @@ where
     }
 
     /// Parse a program header and extract relevant information.
-    pub(crate) fn parse_phdr(&mut self, phdr: &ElfPhdr) -> Result<()> {
+    pub(crate) fn parse_phdr(&mut self, phdr: &ElfPhdr<L>) -> Result<()> {
         let ctx = LoadHookContext::new(&self.name, phdr, &self.segments);
         self.hook.call(&ctx)?;
 
@@ -155,7 +156,7 @@ where
                 )
             }
             ElfProgramType::GNU_RELRO => {
-                self.relro = Some(ELFRelro::new::<M>(
+                self.relro = Some(ELFRelro::new::<M, L>(
                     phdr,
                     self.segments.base_addr(),
                     self.page_size,
@@ -164,7 +165,7 @@ where
             ElfProgramType::PHDR => {
                 self.phdr_mmap = Some(
                     self.segments
-                        .get_slice::<ElfPhdr>(phdr.p_vaddr(), phdr.p_memsz()),
+                        .get_slice::<ElfPhdr<L>>(phdr.p_vaddr(), phdr.p_memsz()),
                 );
             }
             ElfProgramType::INTERP => {
@@ -191,7 +192,7 @@ where
     }
 
     /// Parse all program headers and collect the builder state they describe.
-    pub(crate) fn parse_phdrs(&mut self, phdrs: &[ElfPhdr]) -> Result<()> {
+    pub(crate) fn parse_phdrs(&mut self, phdrs: &[ElfPhdr<L>]) -> Result<()> {
         for phdr in phdrs {
             self.parse_phdr(phdr)?;
         }
@@ -209,7 +210,7 @@ where
     ///
     /// # Returns
     /// An ElfPhdrs enum containing either mapped or vector-based headers
-    pub(crate) fn create_phdrs(&self, phdrs: &[ElfPhdr]) -> ElfPhdrs {
+    pub(crate) fn create_phdrs(&self, phdrs: &[ElfPhdr<L>]) -> ElfPhdrs<L> {
         let (phdr_start, phdr_end) = self.ehdr.phdr_range();
         let phdr_size = phdr_end - phdr_start;
 
@@ -223,7 +224,7 @@ where
                         let seg_start = phdr.p_offset();
                         let seg_end = seg_start + phdr.p_filesz();
                         if seg_start <= phdr_start && phdr_end <= seg_end {
-                            return Some(self.segments.get_slice::<ElfPhdr>(
+                            return Some(self.segments.get_slice::<ElfPhdr<L>>(
                                 phdr.p_vaddr() + (phdr_start - seg_start),
                                 phdr_size,
                             ));
@@ -238,7 +239,7 @@ where
 
 impl<H, D, Arch> LoaderInner<H, D, Arch>
 where
-    H: LoadHook,
+    H: LoadHook<Arch::Layout>,
     D: 'static,
     Arch: crate::relocation::RelocationArch,
 {
@@ -276,17 +277,17 @@ where
 
 impl<H, D, Arch> LoaderInner<H, D, Arch>
 where
-    H: LoadHook,
+    H: LoadHook<Arch::Layout>,
     D: 'static,
     Arch: crate::relocation::RelocationArch,
 {
     pub(crate) fn create_builder<M, Tls>(
         &mut self,
-        ehdr: ElfHeader,
-        phdrs: &[ElfPhdr],
+        ehdr: ElfHeader<Arch::Layout>,
+        phdrs: &[ElfPhdr<Arch::Layout>],
         mut object: impl ElfReader,
         user_data: D,
-    ) -> Result<ImageBuilder<'_, H, M, Tls, D>>
+    ) -> Result<ImageBuilder<'_, H, M, Tls, D, Arch::Layout>>
     where
         M: Mmap,
         Tls: TlsResolver,
@@ -314,10 +315,10 @@ where
 
     pub(crate) fn create_scan_builder(
         &self,
-        ehdr: ElfHeader,
-        phdrs: &[ElfPhdr],
+        ehdr: ElfHeader<Arch::Layout>,
+        phdrs: &[ElfPhdr<Arch::Layout>],
         object: impl ElfReader + 'static,
-    ) -> ScanBuilder {
+    ) -> ScanBuilder<Arch::Layout> {
         let name = object.file_name().to_owned();
 
         ScanBuilder::new(name, ehdr, phdrs.into(), Box::new(object))

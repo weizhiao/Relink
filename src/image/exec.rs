@@ -6,6 +6,7 @@
 use crate::sync::Arc;
 use crate::{
     Result,
+    arch::NativeArch,
     elf::ElfPhdr,
     image::{LoadedCore, RawDynamic},
     loader::{ImageBuilder, LoadHook},
@@ -25,11 +26,11 @@ use core::fmt::Debug;
 /// Static executables do not have `PT_DYNAMIC`, so they are ready to run after
 /// mapping and any static TLS setup performed by the loader.
 #[derive(Clone)]
-pub struct StaticExec<D> {
-    inner: Arc<StaticExecInner<D>>,
+pub struct StaticExec<D, Arch: RelocationArch = NativeArch> {
+    inner: Arc<StaticExecInner<D, Arch>>,
 }
 
-impl<D> Debug for StaticExec<D> {
+impl<D, Arch: RelocationArch> Debug for StaticExec<D, Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("StaticExec")
             .field("name", &self.inner.name)
@@ -37,7 +38,7 @@ impl<D> Debug for StaticExec<D> {
     }
 }
 
-impl<D> StaticExec<D> {
+impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
     pub fn name(&self) -> &str {
         &self.inner.name
     }
@@ -62,7 +63,7 @@ impl<D> StaticExec<D> {
         &self.inner.user_data
     }
 
-    pub fn phdrs(&self) -> Option<&[ElfPhdr]> {
+    pub fn phdrs(&self) -> Option<&[ElfPhdr<Arch::Layout>]> {
         self.inner.phdrs.as_deref()
     }
 
@@ -83,7 +84,7 @@ impl<D> StaticExec<D> {
     }
 }
 
-struct StaticExecInner<D> {
+struct StaticExecInner<D, Arch: RelocationArch = NativeArch> {
     /// File name of the ELF object
     name: String,
 
@@ -97,7 +98,7 @@ struct StaticExecInner<D> {
     segments: ElfSegments,
 
     /// Program headers
-    phdrs: Option<Vec<ElfPhdr>>,
+    phdrs: Option<Vec<ElfPhdr<Arch::Layout>>>,
 
     /// TLS module ID
     tls_mod_id: Option<TlsModuleId>,
@@ -107,20 +108,20 @@ struct StaticExecInner<D> {
 }
 
 impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawExec<D, Arch> {
-    type Output = LoadedExec<D>;
+    type Output = LoadedExec<D, Arch>;
     type Arch = Arch;
 
     fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
         LazyPostS: SymbolLookup + Send + Sync + 'static,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized,
+        PreH: RelocationHandler<Arch> + ?Sized,
+        PostH: RelocationHandler<Arch> + ?Sized,
     {
         match self {
             RawExec::Dynamic(image) => {
@@ -160,7 +161,7 @@ where
     Dynamic(RawDynamic<D, Arch>),
 
     /// A statically linked executable without `PT_DYNAMIC`.
-    Static(StaticExec<D>),
+    Static(StaticExec<D, Arch>),
 }
 
 impl<D, Arch: RelocationArch> Debug for RawExec<D, Arch> {
@@ -173,7 +174,7 @@ impl<D, Arch: RelocationArch> Debug for RawExec<D, Arch> {
 
 impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
     /// Creates a relocation builder for this executable image.
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D, Arch> {
         Relocator::new().with_object(self)
     }
 
@@ -224,7 +225,7 @@ impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
     }
 
     /// Returns the program headers of the executable.
-    pub fn phdrs(&self) -> Option<&[ElfPhdr]> {
+    pub fn phdrs(&self) -> Option<&[ElfPhdr<Arch::Layout>]> {
         match self {
             RawExec::Dynamic(image) => Some(image.phdrs()),
             RawExec::Static(image) => image.phdrs(),
@@ -268,20 +269,20 @@ impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
 /// Dynamic executables retain access to their underlying [`LoadedCore`], while
 /// static executables expose a smaller set of metadata directly on this wrapper.
 #[derive(Clone, Debug)]
-pub struct LoadedExec<D> {
+pub struct LoadedExec<D: 'static, Arch: RelocationArch = NativeArch> {
     /// Entry point of the executable.
     entry: RelocAddr,
     /// The relocated ELF object.
-    inner: LoadedExecInner<D>,
+    inner: LoadedExecInner<D, Arch>,
 }
 
 #[derive(Clone, Debug)]
-enum LoadedExecInner<D> {
-    Dynamic(LoadedCore<D>),
-    Static(StaticExec<D>),
+enum LoadedExecInner<D: 'static, Arch: RelocationArch = NativeArch> {
+    Dynamic(LoadedCore<D, Arch>),
+    Static(StaticExec<D, Arch>),
 }
 
-impl<D> LoadedExec<D> {
+impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
     /// Returns the entry point of the executable.
     #[inline]
     pub fn entry(&self) -> usize {
@@ -330,7 +331,7 @@ impl<D> LoadedExec<D> {
     }
 
     /// Returns a reference to the core ELF object if this is a dynamic executable.
-    pub fn core_ref(&self) -> Option<&LoadedCore<D>> {
+    pub fn core_ref(&self) -> Option<&LoadedCore<D, Arch>> {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => Some(module),
             LoadedExecInner::Static(_) => None,
@@ -352,14 +353,14 @@ impl<D> LoadedExec<D> {
     }
 }
 
-impl<D> StaticExec<D> {
+impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
     pub(crate) fn from_builder<'hook, H, M, Tls>(
-        mut builder: ImageBuilder<'hook, H, M, Tls, D>,
-        phdrs: &[ElfPhdr],
+        mut builder: ImageBuilder<'hook, H, M, Tls, D, Arch::Layout>,
+        phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where
         M: Mmap,
-        H: LoadHook,
+        H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
     {
         // Parse all program headers
@@ -395,13 +396,13 @@ impl<D> StaticExec<D> {
 
 impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
     pub(crate) fn from_builder<'hook, H, M, Tls>(
-        builder: ImageBuilder<'hook, H, M, Tls, D>,
-        phdrs: &[ElfPhdr],
+        builder: ImageBuilder<'hook, H, M, Tls, D, Arch::Layout>,
+        phdrs: &[ElfPhdr<Arch::Layout>],
         has_dynamic: bool,
     ) -> Result<Self>
     where
         M: Mmap,
-        H: LoadHook,
+        H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
     {
         if has_dynamic {

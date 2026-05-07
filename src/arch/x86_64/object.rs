@@ -1,6 +1,6 @@
 use crate::{
     RelocationError,
-    arch::x86_64::relocation::X86_64Arch,
+    arch::{NativeArch, x86_64::relocation::X86_64Arch},
     elf::ElfRelType,
     object::{
         ObjectReloc,
@@ -20,15 +20,15 @@ pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
 
 impl ObjectReloc for ObjectRelocator {
     fn relocate<D, PreS, PostS, PreH, PostH>(
-        helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
-        rel: &ElfRelType,
+        helper: &mut RelocHelper<'_, D, NativeArch, PreS, PostS, PreH, PostH>,
+        rel: &ElfRelType<NativeArch>,
         pltgot: &mut PltGotSection,
     ) -> crate::Result<()>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized,
+        PreH: RelocationHandler<NativeArch> + ?Sized,
+        PostH: RelocationHandler<NativeArch> + ?Sized,
     {
         let r_sym = rel.r_symbol();
         let r_type = rel.r_type();

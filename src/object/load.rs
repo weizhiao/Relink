@@ -1,5 +1,7 @@
 use crate::{
     ParseEhdrError, Result,
+    arch::NativeArch,
+    elf::NativeElfLayout,
     image::{RawElf, RawObject},
     input::{ElfReader, IntoElfReader},
     loader::{LoadHook, Loader},
@@ -12,7 +14,7 @@ use crate::{
 impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
 where
     M: Mmap,
-    H: LoadHook,
+    H: LoadHook<Arch::Layout>,
     D: Default + 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
@@ -41,7 +43,9 @@ where
     pub(crate) fn load_object_impl(&mut self, mut object: impl ElfReader) -> Result<RawObject<D>> {
         logging::debug!("Loading object: {}", object.file_name());
 
-        let ehdr = self.read_ehdr(&mut object)?;
+        let ehdr = self
+            .buf
+            .prepare_ehdr::<NativeElfLayout>(&mut object, Some(NativeArch::MACHINE))?;
         let shdrs = self
             .buf
             .prepare_shdrs_mut(&ehdr, &mut object)?
@@ -67,7 +71,7 @@ mod tests {
     use crate::{
         Result,
         arch::EM_ARCH,
-        elf::{E_CLASS, EHDR_SIZE, ElfEhdr},
+        elf::{ElfEhdr, ElfLayout, NativeElfLayout},
         input::ElfReader,
     };
     use crate::{
@@ -108,13 +112,13 @@ mod tests {
     fn make_object_header(shentsize: usize, shnum: usize) -> ElfHeader {
         let mut ehdr = unsafe { core::mem::zeroed::<ElfEhdr>() };
         ehdr.e_ident[0..4].copy_from_slice(&ELFMAGIC);
-        ehdr.e_ident[EI_CLASS] = E_CLASS;
+        ehdr.e_ident[EI_CLASS] = <NativeElfLayout as ElfLayout>::E_CLASS;
         ehdr.e_ident[EI_VERSION] = EV_CURRENT;
         ehdr.e_type = ET_REL as _;
         ehdr.e_machine = EM_ARCH;
         ehdr.e_version = EV_CURRENT as _;
-        ehdr.e_ehsize = EHDR_SIZE as _;
-        ehdr.e_shoff = EHDR_SIZE as _;
+        ehdr.e_ehsize = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
+        ehdr.e_shoff = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
         ehdr.e_shentsize = shentsize as _;
         ehdr.e_shnum = shnum as _;
 

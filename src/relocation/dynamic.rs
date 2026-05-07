@@ -1,12 +1,12 @@
 //! Relocation of elf objects
 use crate::{
     ParseDynamicError, RelocationError, RelocationFailureReason, Result,
-    elf::{ElfRelType, ElfRelr},
+    elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     image::{LoadedCore, RawDynamic},
     logging,
     relocation::{
-        BindingMode, RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, ResolvedBinding,
-        SymbolLookup, likely, reloc_error, resolve_ifunc, unlikely,
+        BindingMode, RelocHelper, RelocValue, RelocateArgs, RelocationArch, RelocationHandler,
+        ResolvedBinding, SymbolLookup, likely, reloc_error, resolve_ifunc, unlikely,
     },
     tls::{handle_tls_reloc, lookup_tls_get_addr},
 };
@@ -26,16 +26,16 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
 
     pub(crate) fn relocate_impl<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
-    ) -> Result<LoadedCore<D>>
+        args: RelocateArgs<'_, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+    ) -> Result<LoadedCore<D, Arch>>
     where
         D: 'static,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
         LazyPostS: SymbolLookup + Send + Sync + 'static,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized,
+        PreH: RelocationHandler<Arch> + ?Sized,
+        PostH: RelocationHandler<Arch> + ?Sized,
     {
         logging::info!("Relocating dynamic library: {}", self.name());
 
@@ -45,6 +45,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
             lookup,
             lazy_lookup,
             handlers,
+            ..
         } = args;
 
         let relocation = self.relocation();
@@ -131,14 +132,14 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
 }
 
 /// Types of relative relocations
-enum RelativeRel {
+enum RelativeRel<Arch: RelocationArch> {
     /// Standard REL/RELA relocations
-    Rel(&'static [ElfRelType]),
+    Rel(&'static [ElfRelType<Arch>]),
     /// Compact RELR relocations
-    Relr(&'static [ElfRelr]),
+    Relr(&'static [ElfRelr<Arch::Layout>]),
 }
 
-impl RelativeRel {
+impl<Arch: RelocationArch> RelativeRel<Arch> {
     #[inline]
     fn is_empty(&self) -> bool {
         match self {
@@ -149,13 +150,27 @@ impl RelativeRel {
 }
 
 /// Holds parsed relocation information
-pub(crate) struct DynamicRelocation {
+pub(crate) struct DynamicRelocation<Arch: RelocationArch = crate::arch::NativeArch> {
     /// Relative relocations (REL_RELATIVE)
-    relative: RelativeRel,
+    relative: RelativeRel<Arch>,
     /// PLT relocations
-    pub(in crate::relocation) pltrel: &'static [ElfRelType],
+    pub(in crate::relocation) pltrel: &'static [ElfRelType<Arch>],
     /// Other dynamic relocations
-    dynrel: &'static [ElfRelType],
+    dynrel: &'static [ElfRelType<Arch>],
+}
+
+#[inline]
+fn write_reloc_addr<Arch: RelocationArch>(
+    segments: &crate::segment::ElfSegments,
+    r_offset: usize,
+    value: crate::relocation::RelocAddr,
+) {
+    segments.write(
+        r_offset,
+        RelocValue::new(<Arch::Layout as ElfLayout>::Word::from_usize(
+            value.into_inner(),
+        )),
+    );
 }
 
 impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
@@ -163,13 +178,13 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     fn relocate_pltrel<PreS, PostS, PreH, PostH>(
         &self,
         binding: &ResolvedBinding,
-        helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
+        helper: &mut RelocHelper<'_, D, Arch, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized,
+        PreH: RelocationHandler<Arch> + ?Sized,
+        PostH: RelocationHandler<Arch> + ?Sized,
     {
         let core = self.core_ref();
         let base = core.base_addr();
@@ -190,12 +205,12 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
 
             // Handle jump slot relocations
             if likely(r_type == Arch::JUMP_SLOT) {
-                if binding.relocate_jump_slot(base, rel) {
+                if binding.relocate_jump_slot::<Arch>(base, rel) {
                     continue;
                 }
 
                 if let Some(symbol) = helper.find_symbol(r_sym) {
-                    segments.write(rel.r_offset(), symbol);
+                    write_reloc_addr::<Arch>(segments, rel.r_offset(), symbol);
                     continue;
                 }
             } else if unlikely(r_type == Arch::IRELATIVE) {
@@ -206,7 +221,9 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 if Arch::SUPPORTS_NATIVE_RUNTIME {
                     let r_addend = rel.r_addend(base.into_inner());
                     let addr = base.addend(r_addend);
-                    segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
+                    write_reloc_addr::<Arch>(segments, rel.r_offset(), unsafe {
+                        resolve_ifunc(addr)
+                    });
                     continue;
                 }
             } else if unlikely(Arch::is_tlsdesc(r_type)) {
@@ -243,20 +260,23 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 for rel in rel {
                     debug_assert!(rel.r_type() == Arch::RELATIVE);
                     let r_addend = rel.r_addend(base.into_inner());
-                    segments.write(rel.r_offset(), base.addend(r_addend));
+                    write_reloc_addr::<Arch>(segments, rel.r_offset(), base.addend(r_addend));
                 }
             }
             RelativeRel::Relr(relr) => {
                 // Apply compact relative relocations (RELR format)
-                let mut reloc_addr = core::ptr::null_mut::<usize>();
+                let mut reloc_addr = core::ptr::null_mut::<<Arch::Layout as ElfLayout>::Word>();
 
                 for relr in relr {
                     let value = relr.value();
 
                     unsafe {
                         if (value & 1) == 0 {
-                            reloc_addr = segments.get_mut_ptr(value);
-                            reloc_addr.write(base.offset(reloc_addr.read()).into_inner());
+                            reloc_addr =
+                                segments.get_mut_ptr::<<Arch::Layout as ElfLayout>::Word>(value);
+                            reloc_addr.write(<Arch::Layout as ElfLayout>::Word::from_usize(
+                                base.offset(reloc_addr.read().to_usize()).into_inner(),
+                            ));
                             reloc_addr = reloc_addr.add(1);
                             continue;
                         }
@@ -265,12 +285,14 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                         let mut ptr = reloc_addr;
                         while bitmap != 0 {
                             if (bitmap & 1) != 0 {
-                                ptr.write(base.offset(ptr.read()).into_inner());
+                                ptr.write(<Arch::Layout as ElfLayout>::Word::from_usize(
+                                    base.offset(ptr.read().to_usize()).into_inner(),
+                                ));
                             }
                             bitmap >>= 1;
                             ptr = ptr.add(1);
                         }
-                        reloc_addr = reloc_addr.add(usize::BITS as usize - 1);
+                        reloc_addr = reloc_addr.add(<Arch::Layout as ElfLayout>::Word::BITS - 1);
                     }
                 }
             }
@@ -281,13 +303,13 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     /// Perform dynamic relocations (non-PLT, non-relative)
     fn relocate_dynrel<PreS, PostS, PreH, PostH>(
         &self,
-        helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
+        helper: &mut RelocHelper<'_, D, Arch, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized,
+        PreH: RelocationHandler<Arch> + ?Sized,
+        PostH: RelocationHandler<Arch> + ?Sized,
     {
         /*
             Relocation formula components:
@@ -319,7 +341,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 // Handle GOT and symbolic relocations
                 if let Some(symbol) = helper.find_symbol(r_sym) {
                     let r_addend = rel.r_addend(base.into_inner());
-                    segments.write(rel.r_offset(), symbol.addend(r_addend));
+                    write_reloc_addr::<Arch>(segments, rel.r_offset(), symbol.addend(r_addend));
                     continue;
                 }
             } else if r_type == Arch::COPY {
@@ -327,10 +349,13 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
                     let len = core.symtab().symbol_idx(r_sym).0.st_size();
                     let dest = core.segments().get_slice_mut::<u8>(rel.r_offset(), len);
-                    let src = symdef
-                        .lib
-                        .segments()
-                        .get_slice(symdef.sym.unwrap().st_value(), len);
+                    let src = symdef.segment_slice(
+                        symdef
+                            .symbol()
+                            .expect("COPY relocation requires a defined symbol")
+                            .st_value(),
+                        len,
+                    );
                     dest.copy_from_slice(src);
                     continue;
                 }
@@ -342,7 +367,9 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 if Arch::SUPPORTS_NATIVE_RUNTIME {
                     let r_addend = rel.r_addend(base.into_inner());
                     let addr = base.addend(r_addend);
-                    segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
+                    write_reloc_addr::<Arch>(segments, rel.r_offset(), unsafe {
+                        resolve_ifunc(addr)
+                    });
                     continue;
                 }
             } else if Arch::is_tls(r_type) {
@@ -369,13 +396,13 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     }
 }
 
-impl DynamicRelocation {
+impl<Arch: RelocationArch> DynamicRelocation<Arch> {
     /// Create a new DynamicRelocation instance from parsed relocation data
     #[inline]
     pub(crate) fn new(
-        pltrel: Option<&'static [ElfRelType]>,
-        dynrel: Option<&'static [ElfRelType]>,
-        relr: Option<&'static [ElfRelr]>,
+        pltrel: Option<&'static [ElfRelType<Arch>]>,
+        dynrel: Option<&'static [ElfRelType<Arch>]>,
+        relr: Option<&'static [ElfRelr<Arch::Layout>]>,
         rela_count: Option<NonZeroUsize>,
     ) -> Result<Self> {
         if let Some(relr) = relr {
@@ -442,7 +469,7 @@ impl DynamicRelocation {
 #[cfg(test)]
 mod tests {
     use super::DynamicRelocation;
-    use crate::{Error, ParseDynamicError, elf::ElfRelType};
+    use crate::{Error, ParseDynamicError, arch::NativeArch, elf::ElfRelType};
     use alloc::boxed::Box;
     use core::num::NonZeroUsize;
 
@@ -453,8 +480,12 @@ mod tests {
     #[test]
     fn rejects_relative_count_past_dynrel_len() {
         let dynrel = Box::leak(Box::new([zeroed_rel()]));
-        let err = match DynamicRelocation::new(None, Some(&dynrel[..]), None, NonZeroUsize::new(2))
-        {
+        let err = match DynamicRelocation::<NativeArch>::new(
+            None,
+            Some(&dynrel[..]),
+            None,
+            NonZeroUsize::new(2),
+        ) {
             Ok(_) => panic!("relative count should be validated"),
             Err(err) => err,
         };
@@ -468,7 +499,7 @@ mod tests {
     #[test]
     fn rejects_pltrel_suffix_longer_than_remaining_dynrel() {
         let dynrel = Box::leak(Box::new([zeroed_rel(), zeroed_rel(), zeroed_rel()]));
-        let err = match DynamicRelocation::new(
+        let err = match DynamicRelocation::<NativeArch>::new(
             Some(&dynrel[..]),
             Some(&dynrel[..]),
             None,

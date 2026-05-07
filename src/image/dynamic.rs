@@ -1,5 +1,3 @@
-#[cfg(feature = "lazy-binding")]
-use crate::elf::ElfRelType;
 use crate::sync::{Arc, AtomicBool};
 use crate::{
     ParsePhdrError, Result,
@@ -14,21 +12,23 @@ use crate::{
     segment::ELFRelro,
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
+#[cfg(feature = "lazy-binding")]
+use crate::{arch::NativeArch, elf::ElfRelType};
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, marker::PhantomData, ptr::NonNull};
 
 use super::{ElfCore, LoadedCore, core::CoreInner};
 
 #[cfg(feature = "lazy-binding")]
-pub(crate) struct LazyBindingInfo {
-    pub(crate) pltrel: &'static [ElfRelType],
+pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch> {
+    pub(crate) pltrel: &'static [ElfRelType<Arch>],
     pub(crate) lookup: Option<Box<dyn crate::relocation::SymbolLookup + Send + Sync>>,
 }
 
 #[cfg(feature = "lazy-binding")]
-impl LazyBindingInfo {
+impl<Arch: RelocationArch> LazyBindingInfo<Arch> {
     #[inline]
-    pub(crate) fn new(pltrel: Option<&'static [ElfRelType]>) -> Self {
+    pub(crate) fn new(pltrel: Option<&'static [ElfRelType<Arch>]>) -> Self {
         Self {
             pltrel: pltrel.unwrap_or(&[]),
             lookup: None,
@@ -36,20 +36,20 @@ impl LazyBindingInfo {
     }
 }
 
-pub(crate) struct DynamicInfo {
+pub(crate) struct DynamicInfo<Arch: RelocationArch = crate::arch::NativeArch> {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
-    pub(crate) dynamic_ptr: NonNull<ElfDyn>,
-    pub(crate) phdrs: ElfPhdrs,
+    pub(crate) dynamic_ptr: NonNull<ElfDyn<Arch::Layout>>,
+    pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
     #[cfg(feature = "lazy-binding")]
-    pub(crate) lazy: LazyBindingInfo,
+    pub(crate) lazy: LazyBindingInfo<Arch>,
 }
 
-pub(crate) struct RawDynamicParts<D> {
+pub(crate) struct RawDynamicParts<D, Arch: RelocationArch = crate::arch::NativeArch> {
     pub(crate) name: alloc::string::String,
     pub(crate) entry: RelocAddr,
     pub(crate) interp: Option<&'static str>,
-    pub(crate) phdrs: ElfPhdrs,
-    pub(crate) dynamic_ptr: NonNull<ElfDyn>,
+    pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
+    pub(crate) dynamic_ptr: NonNull<ElfDyn<Arch::Layout>>,
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) tls_info: Option<TlsInfo>,
     pub(crate) force_static_tls: bool,
@@ -64,7 +64,7 @@ pub(crate) struct RawDynamicParts<D> {
 ///
 /// This structure holds additional data that is needed during the relocation
 /// process but is not part of the core ELF object structure.
-struct ElfExtraData {
+struct ElfExtraData<Arch: RelocationArch = crate::arch::NativeArch> {
     /// Indicates whether lazy binding is enabled for this object
     lazy: bool,
 
@@ -73,7 +73,7 @@ struct ElfExtraData {
     got_plt: Option<NonNull<usize>>,
 
     /// Dynamic relocation information (rela.dyn and rela.plt)
-    relocation: DynamicRelocation,
+    relocation: DynamicRelocation<Arch>,
 
     /// GNU_RELRO segment information for memory protection
     relro: Option<ELFRelro>,
@@ -91,7 +91,7 @@ struct ElfExtraData {
     needed_libs: Box<[&'static str]>,
 }
 
-impl core::fmt::Debug for ElfExtraData {
+impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfExtraData")
             .field("lazy", &self.lazy)
@@ -122,9 +122,9 @@ where
     /// PT_INTERP segment value (interpreter path).
     interp: Option<&'static str>,
     /// Core component containing the basic ELF object information
-    module: ElfCore<D>,
+    module: ElfCore<D, Arch>,
     /// Extra data needed for relocation
-    extra: ElfExtraData,
+    extra: ElfExtraData<Arch>,
     /// Tag identifying which relocation backend is used during relocation.
     ///
     /// `Arch` is a zero-sized type, so this field has no runtime cost.
@@ -168,19 +168,19 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
 
     /// Gets the core component reference of the ELF object.
     #[inline]
-    pub fn core_ref(&self) -> &ElfCore<D> {
+    pub fn core_ref(&self) -> &ElfCore<D, Arch> {
         &self.module
     }
 
     /// Gets the core component of the ELF object.
     #[inline]
-    pub fn core(&self) -> ElfCore<D> {
+    pub fn core(&self) -> ElfCore<D, Arch> {
         self.core_ref().clone()
     }
 
     /// Converts this object into its core component.
     #[inline]
-    pub fn into_core(self) -> ElfCore<D> {
+    pub fn into_core(self) -> ElfCore<D, Arch> {
         self.core()
     }
 
@@ -224,7 +224,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     }
 
     /// Gets the program headers of the ELF object
-    pub fn phdrs(&self) -> &[ElfPhdr] {
+    pub fn phdrs(&self) -> &[ElfPhdr<Arch::Layout>] {
         self.module
             .phdrs()
             .expect("raw dynamic image should always carry program headers")
@@ -245,7 +245,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     /// # Returns
     /// A reference to the DynamicRelocation structure
     #[inline]
-    pub(crate) fn relocation(&self) -> &DynamicRelocation {
+    pub(crate) fn relocation(&self) -> &DynamicRelocation<Arch> {
         &self.extra.relocation
     }
 
@@ -306,7 +306,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     ///
     /// # Returns
     /// An optional NonNull pointer to the dynamic section
-    pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn>> {
+    pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn<Arch::Layout>>> {
         self.module.dynamic_ptr()
     }
 
@@ -317,7 +317,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
 }
 
 impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
-    pub(crate) fn from_parts<Tls>(parts: RawDynamicParts<D>) -> Result<Self>
+    pub(crate) fn from_parts<Tls>(parts: RawDynamicParts<D, Arch>) -> Result<Self>
     where
         Tls: TlsResolver,
     {
@@ -337,7 +337,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             user_data,
         } = parts;
 
-        let dynamic = ElfDynamic::new(dynamic_ptr.as_ptr(), &segments)?;
+        let dynamic = ElfDynamic::<Arch>::new(dynamic_ptr.as_ptr(), &segments)?;
 
         logging::trace!("[{}] Dynamic info: {:?}", name, dynamic);
 
@@ -427,11 +427,11 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
 
     /// Build a dynamic image from the intermediate loader state.
     pub(crate) fn from_builder<'hook, H, M, Tls>(
-        mut builder: ImageBuilder<'hook, H, M, Tls, D>,
-        phdrs: &[ElfPhdr],
+        mut builder: ImageBuilder<'hook, H, M, Tls, D, Arch::Layout>,
+        phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where
-        H: LoadHook,
+        H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
         M: Mmap,
     {
@@ -468,26 +468,26 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
     }
 
     /// Creates a relocation builder for this dynamic image.
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D, Arch> {
         Relocator::new().with_object(self)
     }
 }
 
 impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawDynamic<D, Arch> {
-    type Output = LoadedCore<D>;
+    type Output = LoadedCore<D, Arch>;
     type Arch = Arch;
 
     fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
         LazyPostS: SymbolLookup + Send + Sync + 'static,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized,
+        PreH: RelocationHandler<Arch> + ?Sized,
+        PostH: RelocationHandler<Arch> + ?Sized,
     {
         self.relocate_impl::<_, _, _, _, _, _>(args)
     }

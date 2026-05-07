@@ -2,7 +2,8 @@
 
 use elf::abi::*;
 
-use crate::elf::{ElfMachine, ElfRelocationType};
+use crate::arch::ArchKind;
+use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
 // Place all architecture-specific trait impls on the single `ArmArch` ZST
@@ -14,7 +15,10 @@ use crate::relocation::RelocationArch;
 pub struct ArmArch;
 
 impl RelocationArch for ArmArch {
+    const KIND: ArchKind = ArchKind::Arm;
     const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    type Layout = Elf32Layout;
+    type Relocation = ElfRel<Self::Layout>;
 
     const NONE: ElfRelocationType = ElfRelocationType::new(0);
     const RELATIVE: ElfRelocationType = ElfRelocationType::new(R_ARM_RELATIVE);

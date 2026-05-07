@@ -18,7 +18,7 @@ mod load;
 use crate::{
     Result,
     arch::NativeArch,
-    elf::ElfPhdr,
+    elf::{ElfLayout, ElfPhdr, NativeElfLayout},
     image::RawDynamic,
     os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
@@ -33,14 +33,14 @@ pub(crate) use buffer::ElfBuf;
 pub(crate) use builder::{ImageBuilder, ScanBuilder};
 
 /// Context passed to [`LoadHook`] while a program header is being processed.
-pub struct LoadHookContext<'a> {
+pub struct LoadHookContext<'a, L: ElfLayout = NativeElfLayout> {
     name: &'a str,
-    phdr: &'a ElfPhdr,
+    phdr: &'a ElfPhdr<L>,
     segments: &'a ElfSegments,
 }
 
-impl<'a> LoadHookContext<'a> {
-    pub(crate) fn new(name: &'a str, phdr: &'a ElfPhdr, segments: &'a ElfSegments) -> Self {
+impl<'a, L: ElfLayout> LoadHookContext<'a, L> {
+    pub(crate) fn new(name: &'a str, phdr: &'a ElfPhdr<L>, segments: &'a ElfSegments) -> Self {
         Self {
             name,
             phdr,
@@ -54,7 +54,7 @@ impl<'a> LoadHookContext<'a> {
     }
 
     /// Returns the program header for the current segment.
-    pub fn phdr(&self) -> &ElfPhdr {
+    pub fn phdr(&self) -> &ElfPhdr<L> {
         self.phdr
     }
 
@@ -83,24 +83,25 @@ impl<'a> LoadHookContext<'a> {
 ///     }
 /// }
 /// ```
-pub trait LoadHook {
+pub trait LoadHook<L: ElfLayout = NativeElfLayout> {
     /// Executes the hook with the provided context.
     ///
     /// If an error is returned, the loading process will be aborted.
-    fn call<'a>(&mut self, ctx: &'a LoadHookContext<'a>) -> Result<()>;
+    fn call<'a>(&mut self, ctx: &'a LoadHookContext<'a, L>) -> Result<()>;
 }
 
-impl<F> LoadHook for F
+impl<L, F> LoadHook<L> for F
 where
-    F: for<'a> FnMut(&'a LoadHookContext<'a>) -> Result<()>,
+    L: ElfLayout,
+    F: for<'a> FnMut(&'a LoadHookContext<'a, L>) -> Result<()>,
 {
-    fn call<'a>(&mut self, ctx: &'a LoadHookContext<'a>) -> Result<()> {
+    fn call<'a>(&mut self, ctx: &'a LoadHookContext<'a, L>) -> Result<()> {
         (self)(ctx)
     }
 }
 
-impl LoadHook for () {
-    fn call<'a>(&mut self, _ctx: &'a LoadHookContext<'a>) -> Result<()> {
+impl<L: ElfLayout> LoadHook<L> for () {
+    fn call<'a>(&mut self, _ctx: &'a LoadHookContext<'a, L>) -> Result<()> {
         Ok(())
     }
 }
@@ -169,7 +170,7 @@ pub(crate) type DynLifecycleHandler = Arc<Box<dyn LifecycleHandler>>;
 pub struct Loader<M = DefaultMmap, H = (), D: 'static = (), Tls = (), Arch = NativeArch>
 where
     M: Mmap,
-    H: LoadHook,
+    H: LoadHook<Arch::Layout>,
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
@@ -229,7 +230,7 @@ impl Loader<DefaultMmap, (), (), (), NativeArch> {
 
 impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
 where
-    H: LoadHook,
+    H: LoadHook<Arch::Layout>,
     M: Mmap,
     D: 'static,
     Tls: TlsResolver,
@@ -293,7 +294,7 @@ where
     /// Consumes the current loader and returns a new one with the specified hook.
     pub fn with_hook<NewHook>(self, hook: NewHook) -> Loader<M, NewHook, D, Tls, Arch>
     where
-        NewHook: LoadHook,
+        NewHook: LoadHook<Arch::Layout>,
     {
         Loader {
             buf: self.buf,
@@ -382,7 +383,7 @@ where
 /// ```
 impl<M, H, Tls, Arch> Loader<M, H, (), Tls, Arch>
 where
-    H: LoadHook,
+    H: LoadHook<Arch::Layout>,
     M: Mmap,
     Tls: TlsResolver,
     Arch: RelocationArch,
@@ -415,6 +416,7 @@ where
     pub fn for_arch<NewArch>(self) -> Loader<M, H, (), Tls, NewArch>
     where
         NewArch: RelocationArch,
+        H: LoadHook<NewArch::Layout>,
     {
         Loader {
             buf: self.buf,

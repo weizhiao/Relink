@@ -1,7 +1,7 @@
 use crate::{
     Error, RelocationError, RelocationFailureReason, Result,
-    elf::{ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
-    image::{ElfCore, LoadedCore},
+    elf::{ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
+    image::{ElfCore, LoadedModule, ModuleProvider, ScopeSymbol},
     logging, relocate_context_error,
     relocation::{
         BindingMode, HandleResult, HandlerHooks, LazyLookupHooks, LookupHooks, Relocatable,
@@ -12,12 +12,20 @@ use crate::{
     tls::TlsDescArgs,
 };
 use alloc::vec::Vec;
-use core::ptr::null;
+use core::{marker::PhantomData, ptr::null};
 
 /// Internal context for managing relocation state and handlers.
-pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Sized, PostH: ?Sized> {
-    pub(crate) core: &'find ElfCore<D>,
-    pub(crate) scope: Arc<[LoadedCore<D>]>,
+pub(crate) struct RelocHelper<
+    'find,
+    D: 'static,
+    Arch: RelocationArch,
+    PreS: ?Sized,
+    PostS: ?Sized,
+    PreH: ?Sized,
+    PostH: ?Sized,
+> {
+    pub(crate) core: &'find ElfCore<D, Arch>,
+    pub(crate) scope: Arc<[LoadedModule<D>]>,
     pub(crate) pre_find: &'find PreS,
     pub(crate) post_find: &'find PostS,
     pub(crate) pre_handler: &'find PreH,
@@ -27,20 +35,22 @@ pub(crate) struct RelocHelper<'find, D, PreS: ?Sized, PostS: ?Sized, PreH: ?Size
     pub(crate) tls_desc_args: TlsDescArgs,
 }
 
-fn empty_scope<D>() -> Arc<[LoadedCore<D>]> {
+fn empty_scope<D: 'static>() -> Arc<[LoadedModule<D>]> {
     Arc::from(Vec::new())
 }
 
-impl<'find, D, PreS, PostS, PreH, PostH> RelocHelper<'find, D, PreS, PostS, PreH, PostH>
+impl<'find, D, Arch, PreS, PostS, PreH, PostH> RelocHelper<'find, D, Arch, PreS, PostS, PreH, PostH>
 where
+    D: 'static,
+    Arch: RelocationArch,
     PreS: SymbolLookup + ?Sized,
     PostS: SymbolLookup + ?Sized,
-    PreH: RelocationHandler + ?Sized,
-    PostH: RelocationHandler + ?Sized,
+    PreH: RelocationHandler<Arch> + ?Sized,
+    PostH: RelocationHandler<Arch> + ?Sized,
 {
     pub(crate) fn new(
-        core: &'find ElfCore<D>,
-        scope: Arc<[LoadedCore<D>]>,
+        core: &'find ElfCore<D, Arch>,
+        scope: Arc<[LoadedModule<D>]>,
         pre_find: &'find PreS,
         post_find: &'find PostS,
         pre_handler: &'find PreH,
@@ -60,13 +70,13 @@ where
     }
 
     #[inline]
-    pub(crate) fn handle_pre(&mut self, rel: &ElfRelType) -> Result<HandleResult> {
+    pub(crate) fn handle_pre(&mut self, rel: &ElfRelType<Arch>) -> Result<HandleResult> {
         let hctx = RelocationContext::new(rel, self.core, &self.scope);
         self.pre_handler.handle(&hctx)
     }
 
     #[inline]
-    pub(crate) fn handle_post(&mut self, rel: &ElfRelType) -> Result<HandleResult> {
+    pub(crate) fn handle_post(&mut self, rel: &ElfRelType<Arch>) -> Result<HandleResult> {
         let hctx = RelocationContext::new(rel, self.core, &self.scope);
         self.post_handler.handle(&hctx)
     }
@@ -117,9 +127,19 @@ where
 ///     Ok(())
 /// }
 /// ```
-pub struct Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D = ()> {
+pub struct Relocator<
+    T,
+    PreS,
+    PostS,
+    LazyPreS,
+    LazyPostS,
+    PreH,
+    PostH,
+    D: 'static = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+> {
     object: T,
-    scope: Arc<[LoadedCore<D>]>,
+    scope: Arc<[LoadedModule<D>]>,
     pre_find: PreS,
     post_find: PostS,
     lazy_pre_find: LazyPreS,
@@ -127,11 +147,13 @@ pub struct Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D = ()> {
     pre_handler: PreH,
     post_handler: PostH,
     binding: BindingMode,
+    _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
-impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D> Clone
-    for Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
+impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D: 'static, Arch> Clone
+    for Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D, Arch>
 where
+    Arch: RelocationArch,
     T: Clone,
     PreS: Clone,
     PostS: Clone,
@@ -151,6 +173,7 @@ where
             pre_handler: self.pre_handler.clone(),
             post_handler: self.post_handler.clone(),
             binding: self.binding,
+            _marker: PhantomData,
         }
     }
 }
@@ -168,19 +191,21 @@ impl Relocator<(), (), (), (), (), (), (), ()> {
             pre_handler: (),
             post_handler: (),
             binding: BindingMode::Default,
+            _marker: PhantomData,
         }
     }
 }
 
-impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
-    Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
+impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D: 'static, Arch>
+    Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D, Arch>
 where
+    Arch: RelocationArch,
     PreS: SymbolLookup,
     PostS: SymbolLookup,
     LazyPreS: SymbolLookup + Send + Sync + 'static,
     LazyPostS: SymbolLookup + Send + Sync + 'static,
-    PreH: RelocationHandler,
-    PostH: RelocationHandler,
+    PreH: RelocationHandler<Arch>,
+    PostH: RelocationHandler<Arch>,
 {
     /// Sets the preferred symbol lookup strategy.
     ///
@@ -189,7 +214,7 @@ where
     pub fn pre_find<NewPreS>(
         self,
         pre_find: NewPreS,
-    ) -> Relocator<T, NewPreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
+    ) -> Relocator<T, NewPreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D, Arch>
     where
         NewPreS: SymbolLookup,
     {
@@ -203,6 +228,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            _marker: PhantomData,
         }
     }
 
@@ -210,7 +236,7 @@ where
     pub fn pre_find_fn<F>(
         self,
         pre_find: F,
-    ) -> Relocator<T, F, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
+    ) -> Relocator<T, F, PostS, LazyPreS, LazyPostS, PreH, PostH, D, Arch>
     where
         F: Fn(&str) -> Option<*const ()>,
     {
@@ -224,7 +250,7 @@ where
     pub fn post_find_fn<F>(
         self,
         post_find: F,
-    ) -> Relocator<T, PreS, F, LazyPreS, LazyPostS, PreH, PostH, D>
+    ) -> Relocator<T, PreS, F, LazyPreS, LazyPostS, PreH, PostH, D, Arch>
     where
         F: Fn(&str) -> Option<*const ()>,
     {
@@ -238,7 +264,7 @@ where
     pub fn post_find<NewPostS>(
         self,
         post_find: NewPostS,
-    ) -> Relocator<T, PreS, NewPostS, LazyPreS, LazyPostS, PreH, PostH, D>
+    ) -> Relocator<T, PreS, NewPostS, LazyPreS, LazyPostS, PreH, PostH, D, Arch>
     where
         NewPostS: SymbolLookup,
     {
@@ -252,6 +278,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            _marker: PhantomData,
         }
     }
 
@@ -262,9 +289,9 @@ where
     pub fn scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
-        R: core::borrow::Borrow<LoadedCore<D>>,
+        R: Into<LoadedModule<D>>,
     {
-        let scope: Vec<_> = scope.into_iter().map(|r| r.borrow().clone()).collect();
+        let scope: Vec<_> = scope.into_iter().map(Into::into).collect();
         self.scope = Arc::from(scope);
         self
     }
@@ -273,7 +300,7 @@ where
     ///
     /// Scope entries are searched in order and retained as dependencies of the
     /// relocated output.
-    pub fn shared_scope(mut self, scope: Arc<[LoadedCore<D>]>) -> Self {
+    pub fn shared_scope(mut self, scope: Arc<[LoadedModule<D>]>) -> Self {
         self.scope = scope;
         self
     }
@@ -286,11 +313,11 @@ where
     pub fn extend_scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
-        R: core::borrow::Borrow<LoadedCore<D>>,
+        R: Into<LoadedModule<D>>,
     {
         let mut extended = Vec::with_capacity(self.scope.len());
         extended.extend(self.scope.iter().cloned());
-        extended.extend(scope.into_iter().map(|r| r.borrow().clone()));
+        extended.extend(scope.into_iter().map(Into::into));
         self.scope = Arc::from(extended);
         self
     }
@@ -299,7 +326,7 @@ where
     pub fn with_object<U, NewD>(
         self,
         object: U,
-    ) -> Relocator<U, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, NewD>
+    ) -> Relocator<U, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, NewD, U::Arch>
     where
         U: Relocatable<NewD>,
     {
@@ -313,6 +340,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            _marker: PhantomData,
         }
     }
 
@@ -323,9 +351,9 @@ where
     pub fn pre_handler<NewPreH>(
         self,
         handler: NewPreH,
-    ) -> Relocator<T, PreS, PostS, LazyPreS, LazyPostS, NewPreH, PostH, D>
+    ) -> Relocator<T, PreS, PostS, LazyPreS, LazyPostS, NewPreH, PostH, D, Arch>
     where
-        NewPreH: RelocationHandler,
+        NewPreH: RelocationHandler<Arch>,
     {
         Relocator {
             object: self.object,
@@ -337,6 +365,7 @@ where
             pre_handler: handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            _marker: PhantomData,
         }
     }
 
@@ -347,9 +376,9 @@ where
     pub fn post_handler<NewPostH>(
         self,
         handler: NewPostH,
-    ) -> Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, NewPostH, D>
+    ) -> Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, NewPostH, D, Arch>
     where
-        NewPostH: RelocationHandler,
+        NewPostH: RelocationHandler<Arch>,
     {
         Relocator {
             object: self.object,
@@ -361,6 +390,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: handler,
             binding: self.binding,
+            _marker: PhantomData,
         }
     }
 
@@ -376,16 +406,17 @@ where
     }
 }
 
-impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
-    Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
+impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D: 'static, Arch>
+    Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D, Arch>
 where
-    T: Relocatable<D>,
+    T: Relocatable<D, Arch = Arch>,
+    Arch: RelocationArch,
     PreS: SymbolLookup,
     PostS: SymbolLookup,
     LazyPreS: SymbolLookup + Send + Sync + 'static,
     LazyPostS: SymbolLookup + Send + Sync + 'static,
-    PreH: RelocationHandler,
-    PostH: RelocationHandler,
+    PreH: RelocationHandler<Arch>,
+    PostH: RelocationHandler<Arch>,
 {
     /// Executes relocation with the current configuration.
     ///
@@ -411,6 +442,7 @@ where
             pre_handler,
             post_handler,
             binding,
+            ..
         } = self;
 
         object.relocate(RelocateArgs::new(
@@ -423,16 +455,17 @@ where
     }
 }
 
-impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
-    Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
+impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D: 'static, Arch>
+    Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D, Arch>
 where
     T: SupportLazy,
+    Arch: RelocationArch,
     PreS: SymbolLookup,
     PostS: SymbolLookup,
     LazyPreS: SymbolLookup + Send + Sync + 'static,
     LazyPostS: SymbolLookup + Send + Sync + 'static,
-    PreH: RelocationHandler,
-    PostH: RelocationHandler,
+    PreH: RelocationHandler<Arch>,
+    PostH: RelocationHandler<Arch>,
 {
     /// Forces eager binding.
     pub fn eager(mut self) -> Self {
@@ -450,7 +483,7 @@ where
     pub fn lazy_pre_find<NewLazyPreS>(
         self,
         lazy_pre_find: NewLazyPreS,
-    ) -> Relocator<T, PreS, PostS, NewLazyPreS, LazyPostS, PreH, PostH, D>
+    ) -> Relocator<T, PreS, PostS, NewLazyPreS, LazyPostS, PreH, PostH, D, Arch>
     where
         NewLazyPreS: SymbolLookup + Send + Sync + 'static,
     {
@@ -464,6 +497,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            _marker: PhantomData,
         }
     }
 
@@ -471,7 +505,7 @@ where
     pub fn lazy_pre_find_fn<F>(
         self,
         lazy_pre_find: F,
-    ) -> Relocator<T, PreS, PostS, F, LazyPostS, PreH, PostH, D>
+    ) -> Relocator<T, PreS, PostS, F, LazyPostS, PreH, PostH, D, Arch>
     where
         F: Fn(&str) -> Option<*const ()> + Send + Sync + 'static,
     {
@@ -482,7 +516,7 @@ where
     pub fn lazy_post_find<NewLazyPostS>(
         self,
         lazy_post_find: NewLazyPostS,
-    ) -> Relocator<T, PreS, PostS, LazyPreS, NewLazyPostS, PreH, PostH, D>
+    ) -> Relocator<T, PreS, PostS, LazyPreS, NewLazyPostS, PreH, PostH, D, Arch>
     where
         NewLazyPostS: SymbolLookup + Send + Sync + 'static,
     {
@@ -496,6 +530,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            _marker: PhantomData,
         }
     }
 
@@ -503,7 +538,7 @@ where
     pub fn lazy_post_find_fn<F>(
         self,
         lazy_post_find: F,
-    ) -> Relocator<T, PreS, PostS, LazyPreS, F, PreH, PostH, D>
+    ) -> Relocator<T, PreS, PostS, LazyPreS, F, PreH, PostH, D, Arch>
     where
         F: Fn(&str) -> Option<*const ()> + Send + Sync + 'static,
     {
@@ -511,7 +546,9 @@ where
     }
 
     /// Reuses relocate-time symbol lookups for lazy binding fixups.
-    pub fn share_find_with_lazy(self) -> Relocator<T, PreS, PostS, PreS, PostS, PreH, PostH, D>
+    pub fn share_find_with_lazy(
+        self,
+    ) -> Relocator<T, PreS, PostS, PreS, PostS, PreH, PostH, D, Arch>
     where
         PreS: Clone + Send + Sync + 'static,
         PostS: Clone + Send + Sync + 'static,
@@ -526,6 +563,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            _marker: PhantomData,
         }
     }
 }
@@ -690,12 +728,12 @@ impl RelocSWord32 {
 ///
 /// Contains the symbol information and the module where it was found.
 /// Used to compute the final address of a symbol.
-pub struct SymDef<'lib, D> {
-    pub sym: Option<&'lib ElfSymbol>,
-    pub lib: &'lib ElfCore<D>,
+pub struct SymDef<'lib, D: 'static> {
+    pub(crate) sym: Option<ScopeSymbol>,
+    pub(crate) lib: &'lib dyn ModuleProvider<D>,
 }
 
-impl<'temp, D> SymDef<'temp, D> {
+impl<D: 'static> SymDef<'_, D> {
     /// Computes the real address of the symbol (base + st_value).
     ///
     /// For regular symbols, returns base + st_value.
@@ -706,7 +744,10 @@ impl<'temp, D> SymDef<'temp, D> {
             let base = self.lib.base_addr();
             let sym = unsafe { self.sym.unwrap_unchecked() };
             let addr = base.offset(sym.st_value());
-            if likely(sym.symbol_type() != ElfSymbolType::GNU_IFUNC) {
+            if likely(
+                sym.symbol_type() != ElfSymbolType::GNU_IFUNC
+                    || !self.lib.supports_native_runtime(),
+            ) {
                 addr
             } else {
                 unsafe { resolve_ifunc(addr) }
@@ -716,6 +757,37 @@ impl<'temp, D> SymDef<'temp, D> {
             RelocAddr::null()
         }
     }
+
+    /// Converts a symbol definition into an address for a use site owned by
+    /// `Arch`. Cross-architecture definitions are deliberately rejected here:
+    /// a binary-translation runtime must provide a thunk/bridge through
+    /// `pre_find`, `post_find`, or a relocation handler instead of writing a
+    /// foreign address directly into the target image.
+    pub(crate) fn convert_for<Arch: RelocationArch>(self) -> Option<RelocAddr> {
+        (self.sym.is_none() || self.lib.arch_kind() == Arch::KIND).then(|| self.convert())
+    }
+
+    #[inline]
+    pub(crate) fn symbol(&self) -> Option<ScopeSymbol> {
+        self.sym
+    }
+
+    #[inline]
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
+    pub(crate) fn tls_mod_id(&self) -> Option<crate::tls::TlsModuleId> {
+        self.lib.tls_mod_id()
+    }
+
+    #[inline]
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
+    pub(crate) fn tls_tp_offset(&self) -> Option<crate::tls::TlsTpOffset> {
+        self.lib.tls_tp_offset()
+    }
+
+    #[inline]
+    pub(crate) fn segment_slice(&self, offset: usize, len: usize) -> &[u8] {
+        self.lib.segment_slice(offset, len)
+    }
 }
 
 /// Creates a detailed relocation error.
@@ -723,9 +795,9 @@ impl<'temp, D> SymDef<'temp, D> {
 /// The dynamic parts are stored structurally and formatted only in `Display`.
 #[cold]
 pub(crate) fn reloc_error<A, D>(
-    rel: &ElfRelType,
+    rel: &ElfRelType<A>,
     reason: RelocationFailureReason,
-    lib: &ElfCore<D>,
+    lib: &ElfCore<D, A>,
 ) -> Error
 where
     A: RelocationArch,
@@ -744,14 +816,20 @@ where
     }
 }
 
-fn find_weak<'lib, D>(lib: &'lib ElfCore<D>, dynsym: &'lib ElfSymbol) -> Option<SymDef<'lib, D>> {
+fn find_weak<'lib, D, Arch: RelocationArch>(
+    lib: &'lib ElfCore<D, Arch>,
+    dynsym: &'lib ElfSymbol<Arch::Layout>,
+) -> Option<SymDef<'lib, D>>
+where
+    D: 'static,
+{
     // 弱符号 + WEAK 用 0 填充rela offset
     if dynsym.is_weak() && dynsym.is_undef() {
         assert!(dynsym.st_value() == 0);
         Some(SymDef { sym: None, lib })
     } else if dynsym.st_value() != 0 {
         Some(SymDef {
-            sym: Some(dynsym),
+            sym: Some(ScopeSymbol::new(dynsym)),
             lib,
         })
     } else {
@@ -764,15 +842,17 @@ fn find_weak<'lib, D>(lib: &'lib ElfCore<D>, dynsym: &'lib ElfSymbol) -> Option<
 /// Searches in order: pre_find, scope, post_find.
 /// Returns the resolved address.
 #[inline]
-pub(crate) fn find_symbol_addr<PreS, PostS, D>(
+pub(crate) fn find_symbol_addr<PreS, PostS, D, Arch>(
     pre_find: &PreS,
     post_find: &PostS,
-    core: &ElfCore<D>,
-    symtab: &SymbolTable,
-    scope: &[LoadedCore<D>],
+    core: &ElfCore<D, Arch>,
+    symtab: &SymbolTable<Arch::Layout>,
+    scope: &[LoadedModule<D>],
     r_sym: usize,
 ) -> Option<RelocAddr>
 where
+    Arch: RelocationArch,
+    D: 'static,
     PreS: SymbolLookup + ?Sized,
     PostS: SymbolLookup + ?Sized,
 {
@@ -786,7 +866,7 @@ where
         return Some(RelocAddr::from_ptr(addr));
     }
     if let Some(res) = find_symdef_impl(core, scope, dynsym, &syminfo) {
-        return Some(res.convert());
+        return res.convert_for::<Arch>();
     }
     if let Some(addr) = post_find.lookup(syminfo.name()) {
         logging::trace!(
@@ -799,34 +879,38 @@ where
     None
 }
 
-pub(crate) fn find_symdef_impl<'lib, D>(
-    core: &'lib ElfCore<D>,
-    scope: &'lib [LoadedCore<D>],
-    sym: &'lib ElfSymbol,
+pub(crate) fn find_symdef_impl<'lib, D, Arch: RelocationArch>(
+    core: &'lib ElfCore<D, Arch>,
+    scope: &'lib [LoadedModule<D>],
+    sym: &'lib ElfSymbol<Arch::Layout>,
     syminfo: &SymbolInfo,
-) -> Option<SymDef<'lib, D>> {
+) -> Option<SymDef<'lib, D>>
+where
+    D: 'static,
+{
     if unlikely(sym.is_local()) {
         Some(SymDef {
-            sym: Some(sym),
+            sym: Some(ScopeSymbol::new(sym)),
             lib: core,
         })
     } else {
         let mut precompute = syminfo.precompute();
         scope
             .iter()
-            .find_map(|lib| {
-                lib.symtab()
-                    .lookup_filter(syminfo, &mut precompute)
+            .find_map(|module| {
+                module
+                    .as_scope()
+                    .lookup_symbol(syminfo, &mut precompute)
                     .map(|sym| {
                         logging::trace!(
                             "binding file [{}] to [{}]: symbol [{}]",
                             core.name(),
-                            lib.name(),
+                            module.name(),
                             syminfo.name()
                         );
                         SymDef {
                             sym: Some(sym),
-                            lib: &lib.core,
+                            lib: module.as_scope(),
                         }
                     })
             })

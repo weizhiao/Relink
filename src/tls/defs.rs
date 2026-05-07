@@ -1,4 +1,4 @@
-use crate::elf::{ElfPhdr, ElfProgramType};
+use crate::elf::{ElfLayout, ElfPhdr, ElfProgramType};
 
 /// Information about a TLS segment from ELF headers.
 #[derive(Clone, Copy, Default)]
@@ -29,7 +29,7 @@ impl core::fmt::Debug for TlsInfo {
 
 impl TlsInfo {
     /// Creates a new `TlsInfo` from an ELF program header.
-    pub fn new(phdr: &ElfPhdr, image: &'static [u8]) -> Self {
+    pub fn new<L: ElfLayout>(phdr: &ElfPhdr<L>, image: &'static [u8]) -> Self {
         assert_eq!(phdr.program_type(), ElfProgramType::TLS);
         Self {
             vaddr: phdr.p_vaddr(),

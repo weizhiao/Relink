@@ -2,7 +2,8 @@
 
 use elf::abi::*;
 
-use crate::elf::{ElfMachine, ElfRelocationType};
+use crate::arch::ArchKind;
+use crate::elf::{Elf32Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
 /// RISC-V 32-bit architecture marker.
@@ -11,7 +12,10 @@ use crate::relocation::RelocationArch;
 pub struct RiscV32Arch;
 
 impl RelocationArch for RiscV32Arch {
+    const KIND: ArchKind = ArchKind::RiscV32;
     const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    type Layout = Elf32Layout;
+    type Relocation = ElfRela<Self::Layout>;
 
     const NONE: ElfRelocationType = ElfRelocationType::new(0);
     const RELATIVE: ElfRelocationType = ElfRelocationType::new(R_RISCV_RELATIVE);

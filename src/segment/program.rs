@@ -1,6 +1,6 @@
 use crate::{
     ParsePhdrError, Result,
-    elf::{ElfPhdr, ElfProgramFlags, ElfProgramType},
+    elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType, NativeElfLayout},
     os::{MapFlags, Mmap, ProtFlags},
     segment::{Address, ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
 };
@@ -23,18 +23,18 @@ fn segment_prot(flags: ElfProgramFlags) -> ProtFlags {
 }
 
 /// Manages segments parsed from ELF program headers
-pub(crate) struct ProgramSegments<'phdr> {
-    phdrs: &'phdr [ElfPhdr],
+pub(crate) struct ProgramSegments<'phdr, L: ElfLayout = NativeElfLayout> {
+    phdrs: &'phdr [ElfPhdr<L>],
     segments: Vec<ElfSegment>,
     is_dylib: bool,
     use_file: bool,
     page_size: usize,
 }
 
-impl<'phdr> ProgramSegments<'phdr> {
+impl<'phdr, L: ElfLayout> ProgramSegments<'phdr, L> {
     /// Create a new [`ProgramSegments`] instance.
     pub(crate) fn new(
-        phdrs: &'phdr [ElfPhdr],
+        phdrs: &'phdr [ElfPhdr<L>],
         is_dylib: bool,
         use_file: bool,
         page_size: usize,
@@ -62,7 +62,7 @@ pub(crate) struct ProgramSegmentLayout {
 /// Parse segments to determine memory layout requirements
 #[inline]
 pub(crate) fn parse_segments(
-    phdrs: &[ElfPhdr],
+    phdrs: &[ElfPhdr<impl ElfLayout>],
     is_dylib: bool,
     page_size: usize,
 ) -> Result<ProgramSegmentLayout> {
@@ -112,7 +112,7 @@ pub(crate) fn parse_segments(
     })
 }
 
-impl SegmentBuilder for ProgramSegments<'_> {
+impl<L: ElfLayout> SegmentBuilder for ProgramSegments<'_, L> {
     /// Reserve memory space for all segments
     fn create_space<M: Mmap>(&mut self) -> Result<ElfSegments> {
         let layout = parse_segments(self.phdrs, self.is_dylib, self.page_size)?;
@@ -150,7 +150,7 @@ impl SegmentBuilder for ProgramSegments<'_> {
     }
 }
 
-impl ElfPhdr {
+impl<L: ElfLayout> ElfPhdr<L> {
     /// Create an ElfSegment from an ELF program header
     #[inline]
     fn create_segment(&self, page_size: usize) -> ElfSegment {

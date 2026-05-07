@@ -1,8 +1,4 @@
-use crate::{
-    arch::NativeArch,
-    image::{LoadedCore, RawDynamic},
-    relocation::RelocationArch,
-};
+use crate::image::LoadedModule;
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
@@ -36,7 +32,7 @@ impl<K, P> GraphEntry<K, P> {
 
 pub(crate) struct ReadyCommit<K, D: 'static> {
     pub(crate) key: K,
-    pub(crate) module: LoadedCore<D>,
+    pub(crate) module: LoadedModule<D>,
     pub(crate) direct_deps: Box<[K]>,
 }
 
@@ -55,7 +51,7 @@ where
 
 impl<K, D: 'static> ReadyCommit<K, D> {
     #[inline]
-    fn new(key: K, module: LoadedCore<D>, direct_deps: Box<[K]>) -> Self {
+    fn new(key: K, module: LoadedModule<D>, direct_deps: Box<[K]>) -> Self {
         Self {
             key,
             module,
@@ -105,12 +101,12 @@ where
     }
 }
 
-pub(crate) struct LoadSession<K, D: 'static, Arch: RelocationArch = NativeArch> {
-    pub(crate) resolve: ResolveSession<K, RawDynamic<D, Arch>>,
+pub(crate) struct LoadSession<K, D: 'static> {
+    pub(crate) resolve: ResolveSession<K, super::runtime::AnyRawDynamic<D>>,
     pub(crate) ready_to_commit: Vec<ReadyCommit<K, D>>,
 }
 
-impl<K, D: 'static, Arch: RelocationArch> LoadSession<K, D, Arch> {
+impl<K, D: 'static> LoadSession<K, D> {
     #[inline]
     pub(crate) fn new() -> Self {
         Self {
@@ -120,7 +116,7 @@ impl<K, D: 'static, Arch: RelocationArch> LoadSession<K, D, Arch> {
     }
 }
 
-impl<K, D: 'static, Arch: RelocationArch> LoadSession<K, D, Arch>
+impl<K, D: 'static> LoadSession<K, D>
 where
     K: Ord,
 {
@@ -128,14 +124,14 @@ where
     pub(crate) fn insert_resolved_pending(
         &mut self,
         key: K,
-        raw: RawDynamic<D, Arch>,
+        raw: super::runtime::AnyRawDynamic<D>,
         direct_deps: Box<[K]>,
     ) {
         self.resolve.insert_resolved_entry(key, raw, direct_deps);
     }
 
     #[inline]
-    pub(crate) fn push_ready(&mut self, key: K, module: LoadedCore<D>, direct_deps: Box<[K]>) {
+    pub(crate) fn push_ready(&mut self, key: K, module: LoadedModule<D>, direct_deps: Box<[K]>) {
         self.ready_to_commit
             .push(ReadyCommit::new(key, module, direct_deps));
     }

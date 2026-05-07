@@ -15,7 +15,8 @@
 use core::mem::size_of;
 use elf::abi::*;
 
-use crate::elf::{ElfMachine, ElfRelocationType};
+use crate::arch::ArchKind;
+use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::{
     RelocationArch, RelocationValueFormula, RelocationValueKind, RelocationValueProvider,
 };
@@ -27,7 +28,10 @@ use crate::{LinkerError, RelocationError, Result};
 pub struct X86_64Arch;
 
 impl RelocationArch for X86_64Arch {
+    const KIND: ArchKind = ArchKind::X86_64;
     const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    type Layout = Elf64Layout;
+    type Relocation = ElfRela<Self::Layout>;
 
     const NONE: ElfRelocationType = ElfRelocationType::new(0);
     const RELATIVE: ElfRelocationType = ElfRelocationType::new(R_X86_64_RELATIVE);

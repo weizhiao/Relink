@@ -190,7 +190,7 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
 
 impl<H, D, Arch> LoaderInner<H, D, Arch>
 where
-    H: LoadHook,
+    H: LoadHook<Arch::Layout>,
     D: Default + 'static,
     Arch: crate::relocation::RelocationArch,
 {

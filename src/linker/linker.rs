@@ -9,18 +9,17 @@ use super::{
         StagedDynamic, VisibleModules,
     },
     resolve::{KeyResolver, LoadResolveContext, ScanResolveContext},
-    session::{GraphEntry, LoadSession, ResolveSession},
+    runtime::{AnyRawDynamic, BuiltinArch, BuiltinRelocationHandler},
+    session::{GraphEntry, LoadSession},
     storage::CommittedEntry,
 };
 use crate::{
     LinkerError, Loader, Result,
     entity::SecondaryMap,
-    image::{LoadedCore, RawDynamic, ScannedDynamic},
+    image::{AnyScannedDynamic, LoadedCore, LoadedModule, RawDynamic},
     loader::LoadHook,
     os::{DefaultMmap, Mmap},
-    relocation::{
-        RelocationArch, RelocationHandler, RelocationValueProvider, Relocator, SymbolLookup,
-    },
+    relocation::{RelocationArch, Relocator, SymbolLookup},
     sync::Arc,
     tls::TlsResolver,
 };
@@ -30,12 +29,11 @@ use alloc::{
 };
 use core::{marker::PhantomData, mem};
 
-/// Configurable front-end for dependency discovery, planning, and relocation.
+/// Configurable front-end for runtime dependency discovery and relocation.
 ///
-/// A `Linker` owns the per-load policy: pre-map planning passes, relocation
-/// hooks, relocation-scope planning, dependency resolution, and the concrete
-/// loader. The [`LinkContext`] passed to [`Linker::load`] or
-/// [`Linker::load_scan_first`] remains the committed module repository.
+/// `Linker` stores a heterogeneous dependency graph: every module carries its
+/// own `RelocationArch`, while the context and relocation scopes retain them
+/// through [`LoadedModule`].
 pub struct Linker<
     'a,
     K: Clone + Ord,
@@ -48,7 +46,7 @@ pub struct Linker<
     LazyPostS = (),
     PreH = (),
     PostH = (),
-    ScopeD = (),
+    ScopeD: 'static = (),
     P = DefaultRelocationPlanner,
     O = (),
     V = (),
@@ -68,13 +66,6 @@ impl<'a, K> Linker<'a, K, ()>
 where
     K: Clone + Ord,
 {
-    /// Creates a linker with an empty planning pipeline, default relocation
-    /// hooks, and the default relocation planner.
-    ///
-    /// The linker starts in the `D = ()` builder phase, mirroring
-    /// [`Loader::new`]. Switch to a custom user-data type with
-    /// [`Linker::with_dynamic_initializer`] after configuring the loader
-    /// (including [`Loader::for_arch`] via [`Linker::map_loader`]).
     #[inline]
     pub fn new() -> Self {
         Self {
@@ -101,13 +92,12 @@ where
     }
 }
 
-impl<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
+impl<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD: 'static, P, O, V>
     Linker<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
 where
     K: Clone + Ord,
     D: 'static,
 {
-    /// Replaces the resolver used by link operations.
     pub fn resolver<NewR>(
         self,
         resolver: NewR,
@@ -126,7 +116,6 @@ where
         }
     }
 
-    /// Transforms the relocation configuration.
     pub fn map_relocator<
         NewPreS,
         NewPostS,
@@ -134,7 +123,7 @@ where
         NewLazyPostS,
         NewPreH,
         NewPostH,
-        NewScopeD,
+        NewScopeD: 'static,
     >(
         self,
         configure: impl FnOnce(
@@ -179,7 +168,6 @@ where
         }
     }
 
-    /// Replaces the relocation planner.
     pub fn planner<NewP>(
         self,
         planner: NewP,
@@ -198,7 +186,6 @@ where
         }
     }
 
-    /// Replaces the staged-load observer used by link operations.
     pub fn observer<NewO>(
         self,
         observer: NewO,
@@ -217,7 +204,6 @@ where
         }
     }
 
-    /// Replaces the external visible-module overlay used by link operations.
     pub fn visible_modules<NewV>(
         self,
         visible_modules: NewV,
@@ -236,7 +222,6 @@ where
         }
     }
 
-    /// Transforms the pre-map planning pipeline.
     pub fn map_pipeline(
         mut self,
         configure: impl FnOnce(LinkPipeline<'a, K>) -> LinkPipeline<'a, K>,
@@ -246,12 +231,31 @@ where
     }
 }
 
-impl<'a, K, D, M, H, Tls, Arch, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
+impl<
+    'a,
+    K,
+    D,
+    M,
+    H,
+    Tls,
+    LoaderArch,
+    R,
+    PreS,
+    PostS,
+    LazyPreS,
+    LazyPostS,
+    PreH,
+    PostH,
+    ScopeD: 'static,
+    P,
+    O,
+    V,
+>
     Linker<
         'a,
         K,
         D,
-        Loader<M, H, D, Tls, Arch>,
+        Loader<M, H, D, Tls, LoaderArch>,
         R,
         PreS,
         PostS,
@@ -268,39 +272,15 @@ where
     K: Clone + Ord,
     D: 'static,
     M: Mmap,
-    H: LoadHook,
+    H: LoadHook<LoaderArch::Layout>,
     Tls: TlsResolver,
-    Arch: RelocationArch,
+    LoaderArch: RelocationArch,
 {
-    /// Transforms the loader configuration.
-    ///
-    /// The closure may switch any of the loader's type parameters,
-    /// including the user-data type `D` and the relocation backend `Arch`.
-    /// When `D` changes, the linker's own `D` follows: a closure that
-    /// returns `Loader<.., NewD, .., NewArch>` produces a
-    /// `Linker<.., NewD, ..>` whose subsequent
-    /// [`load`](Linker::load) calls yield `LoadedCore<NewD>`.
-    ///
-    /// Because [`Loader::for_arch`] is only available while the loader is
-    /// in its `D = ()` builder phase, the typical cross-architecture flow
-    /// is to start from a `Linker::<K>::new()` (which seeds `D = ()`),
-    /// then in this closure call `for_arch::<NewArch>()` *before*
-    /// [`with_dynamic_initializer`](Loader::with_dynamic_initializer):
-    ///
-    /// ```ignore
-    /// let linker = Linker::<&'static str>::new()
-    ///     .map_loader(|loader| {
-    ///         loader
-    ///             .for_arch::<X86_64Arch>()
-    ///             .with_dynamic_initializer::<MyData>(|raw| {
-    ///                 // populate user data from the relocated image
-    ///                 Ok(())
-    ///             })
-    ///     });
-    /// ```
     pub fn map_loader<NewM, NewH, NewD, NewTls, NewArch>(
         self,
-        configure: impl FnOnce(Loader<M, H, D, Tls, Arch>) -> Loader<NewM, NewH, NewD, NewTls, NewArch>,
+        configure: impl FnOnce(
+            Loader<M, H, D, Tls, LoaderArch>,
+        ) -> Loader<NewM, NewH, NewD, NewTls, NewArch>,
     ) -> Linker<
         'a,
         K,
@@ -320,7 +300,7 @@ where
     >
     where
         NewM: Mmap,
-        NewH: LoadHook,
+        NewH: LoadHook<NewArch::Layout>,
         NewD: 'static,
         NewTls: TlsResolver,
         NewArch: RelocationArch,
@@ -339,6 +319,7 @@ where
     }
 }
 
+#[allow(private_bounds)]
 impl<
     'a,
     K,
@@ -346,7 +327,7 @@ impl<
     M,
     H,
     Tls,
-    Arch,
+    LoaderArch,
     Resolver,
     PreS,
     PostS,
@@ -354,7 +335,7 @@ impl<
     LazyPostS,
     PreH,
     PostH,
-    ScopeD,
+    ScopeD: 'static,
     P,
     O,
     V,
@@ -363,7 +344,7 @@ impl<
         'a,
         K,
         D,
-        Loader<M, H, D, Tls, Arch>,
+        Loader<M, H, D, Tls, LoaderArch>,
         Resolver,
         PreS,
         PostS,
@@ -380,28 +361,28 @@ where
     K: Clone + Ord,
     D: Default + 'static,
     M: Mmap,
-    H: LoadHook,
+    H: LoadHook<crate::elf::Elf32Layout>
+        + LoadHook<crate::elf::Elf64Layout>
+        + LoadHook<LoaderArch::Layout>,
     Tls: TlsResolver,
-    Arch: RelocationArch,
+    LoaderArch: BuiltinArch,
     PreS: SymbolLookup + Clone,
     PostS: SymbolLookup + Clone,
     LazyPreS: SymbolLookup + Send + Sync + 'static + Clone,
     LazyPostS: SymbolLookup + Send + Sync + 'static + Clone,
-    PreH: RelocationHandler + Clone,
-    PostH: RelocationHandler + Clone,
-    P: RelocationPlanner<K, D, Arch>,
-    O: LoadObserver<K, D, Arch>,
+    PreH: BuiltinRelocationHandler + Clone,
+    PostH: BuiltinRelocationHandler + Clone,
+    ScopeD: 'static,
+    P: RelocationPlanner<K, D>,
+    O: LoadObserver<K, D>,
     V: VisibleModules<K, D>,
 {
-    /// Loads one module through the legacy map-then-resolve path.
-    ///
-    /// Repeated calls reuse already-loaded entries in the same context. The
-    /// context is mutated only after the current load succeeds.
+    /// Loads one module and returns the type-erased loaded module.
     pub fn load<'cfg, Meta>(
         &mut self,
         context: &mut LinkContext<K, D, Meta>,
         key: K,
-    ) -> Result<LoadedCore<D>>
+    ) -> Result<LoadedModule<D>>
     where
         K: 'cfg,
         Meta: Default,
@@ -411,12 +392,8 @@ where
             return Ok(loaded);
         }
 
-        let prepared = Self::prepare_runtime_load(
+        let prepared = self.prepare_runtime_load(
             context,
-            &mut self.loader,
-            &mut self.resolver,
-            &mut self.observer,
-            &self.visible_modules,
             |context, visible_modules, session, loader, resolver, observer| {
                 let mut resolve_context = LoadResolveContext::new(
                     context.committed.view(),
@@ -429,35 +406,48 @@ where
         self.execute_prepared_load(context, prepared)
     }
 
-    /// Resolves dependencies and relocates a root dynamic image that has
-    /// already been mapped by the caller.
-    pub fn load_mapped_root<'cfg, Meta>(
+    /// Loads one module and downcasts it to the expected architecture.
+    pub fn load_typed<'cfg, Meta, Arch>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta>,
+        key: K,
+    ) -> Result<LoadedCore<D, Arch>>
+    where
+        K: 'cfg,
+        Meta: Default,
+        Arch: RelocationArch,
+        Resolver: KeyResolver<'cfg, K, D, Meta>,
+    {
+        let loaded = self.load(context, key)?;
+        loaded.downcast::<Arch>().ok_or_else(|| {
+            LinkerError::context("loaded module architecture did not match requested type").into()
+        })
+    }
+
+    #[allow(private_bounds)]
+    pub fn load_mapped_root<'cfg, Meta, Arch>(
         &mut self,
         context: &mut LinkContext<K, D, Meta>,
         key: K,
         raw: RawDynamic<D, Arch>,
-    ) -> Result<LoadedCore<D>>
+    ) -> Result<LoadedModule<D>>
     where
         K: 'cfg,
         Meta: Default,
+        Arch: BuiltinArch,
         Resolver: KeyResolver<'cfg, K, D, Meta>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
             return Ok(loaded);
         }
 
-        let prepared = Self::prepare_runtime_load(
-            context,
-            &mut self.loader,
-            &mut self.resolver,
-            &mut self.observer,
-            &self.visible_modules,
-            move |_, _, session, _, _, observer| {
+        let raw = Arch::wrap_raw(raw);
+        let prepared =
+            self.prepare_runtime_load(context, move |_, _, session, _, _, observer| {
                 observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
                 session.resolve.insert_entry(key.clone(), raw);
                 Ok(key)
-            },
-        )?;
+            })?;
         self.execute_prepared_load(context, prepared)
     }
 
@@ -467,98 +457,50 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta>,
         key: K,
-    ) -> Result<LoadedCore<D>>
+    ) -> Result<LoadedModule<D>>
     where
         K: 'static,
         Meta: Default,
         Resolver: KeyResolver<'static, K, D, Meta>,
-        Arch: RelocationValueProvider + mapped::GotPltTarget,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
             return Ok(loaded);
         }
 
-        let prepared = match Self::prepare_scan_load(
-            context,
-            &key,
-            &mut self.loader,
-            &mut self.resolver,
-            &mut self.pipeline,
-            &self.visible_modules,
-        )? {
+        let prepared = match self.prepare_scan_load(context, &key)? {
             ScanDiscovery::Existing(root) => PreparedLoad::runtime(root, LoadSession::new()),
-            ScanDiscovery::Plan(plan) => {
-                Self::prepare_planned_load(plan, &mut self.loader, &mut self.observer)?
-            }
+            ScanDiscovery::Plan(plan) => self.prepare_planned_load(plan)?,
         };
         self.execute_prepared_load(context, prepared)
     }
 
-    fn prepare_runtime_load<'cfg, Meta, Seed>(
-        context: &LinkContext<K, D, Meta>,
-        loader: &mut Loader<M, H, D, Tls, Arch>,
-        resolver: &mut Resolver,
-        observer: &mut O,
-        visible_modules: &V,
-        seed_root: Seed,
-    ) -> Result<PreparedLoad<K, D, Arch>>
-    where
-        K: 'cfg,
-        Resolver: KeyResolver<'cfg, K, D, Meta>,
-        Seed: FnOnce(
-            &LinkContext<K, D, Meta>,
-            &V,
-            &mut LoadSession<K, D, Arch>,
-            &mut Loader<M, H, D, Tls, Arch>,
-            &mut Resolver,
-            &mut O,
-        ) -> Result<K>,
-    {
-        let mut session = LoadSession::new();
-        let root = seed_root(
-            context,
-            visible_modules,
-            &mut session,
-            loader,
-            resolver,
-            observer,
-        )?;
-        let mut resolve_context = LoadResolveContext::new(
-            context.committed.view(),
-            visible_modules,
-            &mut session.resolve,
-        );
-        if resolve_context.contains_pending(&root) {
-            resolve_context.resolve_dependency_graph(root.clone(), loader, resolver, observer)?;
-        }
-
-        Ok(PreparedLoad::runtime(root, session))
-    }
-
     fn prepare_scan_load<Meta>(
+        &mut self,
         context: &LinkContext<K, D, Meta>,
         key: &K,
-        loader: &mut Loader<M, H, D, Tls, Arch>,
-        resolver: &mut Resolver,
-        pipeline: &mut LinkPipeline<'_, K>,
-        visible_modules: &V,
     ) -> Result<ScanDiscovery<K>>
     where
         K: 'static,
         Resolver: KeyResolver<'static, K, D, Meta>,
     {
-        let mut session = ResolveSession::new();
-        let mut observer = ();
-        let mut resolve_context =
-            ScanResolveContext::new(context.committed.view(), visible_modules, &mut session);
+        let mut session = crate::linker::session::ResolveSession::new();
+        let mut resolve_context = ScanResolveContext::new(
+            context.committed.view(),
+            &self.visible_modules,
+            &mut session,
+        );
         let root =
-            resolve_context.stage_resolved(resolver.load_root(key)?, loader, &mut observer)?;
+            resolve_context.stage_resolved(self.resolver.load_root(key)?, &mut self.loader)?;
         if !resolve_context.contains_pending(&root) {
             return Ok(ScanDiscovery::Existing(root));
         }
-        resolve_context.resolve_dependency_graph(root.clone(), loader, resolver, &mut observer)?;
+        resolve_context.resolve_dependency_graph(
+            root.clone(),
+            &mut self.loader,
+            &mut self.resolver,
+        )?;
 
-        let ResolveSession {
+        let crate::linker::session::ResolveSession {
             entries,
             group_order,
         } = session;
@@ -575,22 +517,12 @@ where
                 })
                 .collect(),
         );
-        pipeline.run(&mut plan)?;
+        self.pipeline.run(&mut plan)?;
         Ok(ScanDiscovery::Plan(plan))
     }
 
-    fn prepare_planned_load(
-        mut plan: LinkPlan<K>,
-        loader: &mut Loader<M, H, D, Tls, Arch>,
-        observer: &mut O,
-    ) -> Result<PreparedLoad<K, D, Arch>>
-    where
-        Arch: RelocationValueProvider + mapped::GotPltTarget,
-    {
-        // Scan discovery already seeded layout-side metadata before the pass pipeline ran.
-        // The planned-load phase only needs to normalize materialization choices and rebuild
-        // any derived addresses that those choices affect.
-        let mut mapped_runtime = Self::prepare_mapped_runtime(&mut plan)?;
+    fn prepare_planned_load(&mut self, mut plan: LinkPlan<K>) -> Result<PreparedLoad<K, D>> {
+        let mut mapped_runtime = self.prepare_mapped_runtime(&mut plan)?;
 
         let (root, group_order, entries, memory_layout) = plan.into_parts();
         let mut session = LoadSession::new();
@@ -610,14 +542,14 @@ where
                 .map(|dep_id| module_keys[*dep_id].clone())
                 .collect::<Vec<_>>()
                 .into_boxed_slice();
-            let raw = Self::materialize_planned_raw(
-                loader,
+            let raw = self.materialize_planned_raw(
                 &memory_layout,
                 &mut mapped_runtime,
                 module_id,
                 module,
             )?;
-            observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
+            self.observer
+                .on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
             session.insert_resolved_pending(key, raw, direct_deps);
         }
 
@@ -628,10 +560,10 @@ where
         ))
     }
 
-    fn prepare_mapped_runtime(plan: &mut LinkPlan<K>) -> Result<Option<mapped::MappedRuntimeMemory>>
-    where
-        Arch: RelocationValueProvider + mapped::GotPltTarget,
-    {
+    fn prepare_mapped_runtime(
+        &mut self,
+        plan: &mut LinkPlan<K>,
+    ) -> Result<Option<mapped::MappedRuntimeMemory>> {
         materialization::normalize_plan(plan)?;
         let mut mapped_runtime = mapped::MappedRuntimeMemory::map::<M, _>(plan)?;
 
@@ -640,7 +572,7 @@ where
                 .modules_with_materialization(Materialization::SectionRegions)
                 .collect::<Vec<_>>();
             for module_id in section_region_modules {
-                runtime.repair_module::<_, Arch>(module_id, plan)?;
+                self.repair_planned_module(runtime, module_id, plan)?;
             }
             runtime.populate(plan)?;
         }
@@ -648,51 +580,144 @@ where
         Ok(mapped_runtime)
     }
 
+    fn repair_planned_module(
+        &mut self,
+        runtime: &mut mapped::MappedRuntimeMemory,
+        module_id: ModuleId,
+        plan: &mut LinkPlan<K>,
+    ) -> Result<()> {
+        match plan
+            .get(module_id)
+            .expect("planned runtime module must exist")
+            .module()
+            .arch_kind()
+        {
+            crate::arch::ArchKind::X86_64 => runtime
+                .repair_module::<_, crate::arch::x86_64::relocation::X86_64Arch>(module_id, plan),
+            crate::arch::ArchKind::AArch64 => runtime
+                .repair_module::<_, crate::arch::aarch64::relocation::AArch64Arch>(module_id, plan),
+            crate::arch::ArchKind::RiscV64 => runtime
+                .repair_module::<_, crate::arch::riscv64::relocation::RiscV64Arch>(module_id, plan),
+            crate::arch::ArchKind::RiscV32 => runtime
+                .repair_module::<_, crate::arch::riscv32::relocation::RiscV32Arch>(module_id, plan),
+            crate::arch::ArchKind::LoongArch64 => {
+                runtime.repair_module::<_, crate::arch::loongarch64::relocation::LoongArch64Arch>(
+                    module_id, plan,
+                )
+            }
+            crate::arch::ArchKind::X86 => {
+                runtime.repair_module::<_, crate::arch::x86::relocation::X86Arch>(module_id, plan)
+            }
+            crate::arch::ArchKind::Arm => {
+                runtime.repair_module::<_, crate::arch::arm::relocation::ArmArch>(module_id, plan)
+            }
+        }
+    }
+
     fn materialize_planned_raw(
-        loader: &mut Loader<M, H, D, Tls, Arch>,
+        &mut self,
         plan: &MemoryLayoutPlan,
         mapped_runtime: &mut Option<mapped::MappedRuntimeMemory>,
         module_id: ModuleId,
-        scanned: ScannedDynamic,
-    ) -> Result<RawDynamic<D, Arch>> {
+        scanned: AnyScannedDynamic,
+    ) -> Result<AnyRawDynamic<D>> {
         match plan
             .materialization(module_id)
             .unwrap_or(Materialization::WholeDsoRegion)
         {
             Materialization::SectionRegions => {
-                let runtime = mapped_runtime
-                    .as_mut()
-                    .ok_or_else(|| {
-                        LinkerError::runtime_memory(
-                            "section-region planned load is missing mapped runtime memory",
-                        )
-                    })?
-                    .take_module(module_id)?;
-                let (init_fn, fini_fn) = loader.inner.lifecycle_handlers();
-                let mut raw = mapped::build_arena_raw_dynamic::<D, Tls, Arch>(
-                    scanned,
-                    runtime,
-                    init_fn.clone(),
-                    fini_fn.clone(),
-                    loader.inner.force_static_tls(),
-                )?;
-                loader.inner.initialize_dynamic(&mut raw)?;
-                Ok(raw)
+                self.materialize_arena_raw(mapped_runtime, module_id, scanned)
             }
             Materialization::WholeDsoRegion => {
-                let mut raw = loader.load_scanned_dynamic_raw_impl(scanned)?;
-                apply_section_overrides(&mut raw, module_id, plan);
-                loader.inner.initialize_dynamic(&mut raw)?;
+                let mut raw = self.loader.load_scanned_dynamic_as(scanned)?;
+                apply_section_overrides_any(&mut raw, module_id, plan);
                 Ok(raw)
             }
         }
     }
 
+    fn materialize_arena_raw(
+        &mut self,
+        mapped_runtime: &mut Option<mapped::MappedRuntimeMemory>,
+        module_id: ModuleId,
+        scanned: AnyScannedDynamic,
+    ) -> Result<AnyRawDynamic<D>> {
+        let runtime = mapped_runtime
+            .as_mut()
+            .ok_or_else(|| {
+                LinkerError::runtime_memory(
+                    "section-region planned load is missing mapped runtime memory",
+                )
+            })?
+            .take_module(module_id)?;
+        let (init_fn, fini_fn) = self.loader.inner.lifecycle_handlers();
+        let force_static_tls = self.loader.inner.force_static_tls();
+
+        if scanned.arch_kind() == LoaderArch::KIND {
+            let scanned = LoaderArch::unwrap_scanned(scanned)
+                .expect("scanned module arch kind matched the loader arch");
+            let mut raw = mapped::build_arena_raw_dynamic::<D, Tls, LoaderArch>(
+                scanned,
+                runtime,
+                init_fn,
+                fini_fn,
+                force_static_tls,
+            )?;
+            self.loader.inner.initialize_dynamic(&mut raw)?;
+            return Ok(LoaderArch::wrap_raw(raw));
+        }
+
+        materialize_arena_raw_cross::<D, Tls>(scanned, runtime, init_fn, fini_fn, force_static_tls)
+    }
+
+    fn prepare_runtime_load<'cfg, Meta, Seed>(
+        &mut self,
+        context: &LinkContext<K, D, Meta>,
+        seed_root: Seed,
+    ) -> Result<PreparedLoad<K, D>>
+    where
+        K: 'cfg,
+        Resolver: KeyResolver<'cfg, K, D, Meta>,
+        Seed: FnOnce(
+            &LinkContext<K, D, Meta>,
+            &V,
+            &mut LoadSession<K, D>,
+            &mut Loader<M, H, D, Tls, LoaderArch>,
+            &mut Resolver,
+            &mut O,
+        ) -> Result<K>,
+    {
+        let mut session = LoadSession::new();
+        let root = seed_root(
+            context,
+            &self.visible_modules,
+            &mut session,
+            &mut self.loader,
+            &mut self.resolver,
+            &mut self.observer,
+        )?;
+        let mut resolve_context = LoadResolveContext::new(
+            context.committed.view(),
+            &self.visible_modules,
+            &mut session.resolve,
+        );
+        if resolve_context.contains_pending(&root) {
+            resolve_context.resolve_dependency_graph(
+                root.clone(),
+                &mut self.loader,
+                &mut self.resolver,
+                &mut self.observer,
+            )?;
+        }
+
+        Ok(PreparedLoad::runtime(root, session))
+    }
+
     fn execute_prepared_load<Meta>(
         &mut self,
         context: &mut LinkContext<K, D, Meta>,
-        prepared: PreparedLoad<K, D, Arch>,
-    ) -> Result<LoadedCore<D>>
+        prepared: PreparedLoad<K, D>,
+    ) -> Result<LoadedModule<D>>
     where
         Meta: Default,
     {
@@ -717,16 +742,11 @@ where
             .map_err(Into::into)
     }
 
-    /// Relocates every pending raw module reachable from `root`.
-    ///
-    /// Modules are relocated in post-order so dependencies are finalized before
-    /// dependents. The relocation planner receives a [`RelocationRequest`]
-    /// describing each key, raw module, and batch-start relocation scope.
     fn relocate_pending_modules<Meta>(
         &mut self,
         root: &K,
         context: &LinkContext<K, D, Meta>,
-        session: &mut LoadSession<K, D, Arch>,
+        session: &mut LoadSession<K, D>,
     ) -> Result<()> {
         let mut order = mem::take(&mut self.scratch_relocation_order);
         Self::build_relocation_order(root, &session.resolve.entries, &mut order);
@@ -746,13 +766,7 @@ where
                 let inputs = self.planner.plan(&req)?;
                 let raw = req.into_raw();
                 let (scope, binding) = inputs.into_parts();
-                let loaded = self
-                    .relocator
-                    .clone()
-                    .binding(binding)
-                    .with_object(raw)
-                    .shared_scope(scope)
-                    .relocate()?;
+                let loaded = raw.relocate(&self.relocator, scope, binding)?;
                 session.push_ready(key, loaded, direct_deps);
             }
             Ok(())
@@ -764,7 +778,7 @@ where
 
     fn build_relocation_order(
         root: &K,
-        pending: &BTreeMap<K, GraphEntry<K, RawDynamic<D, Arch>>>,
+        pending: &BTreeMap<K, GraphEntry<K, AnyRawDynamic<D>>>,
         order: &mut Vec<K>,
     ) {
         order.clear();
@@ -802,22 +816,19 @@ where
 
     fn build_group_scope<Meta>(
         context: &LinkContext<K, D, Meta>,
-        session: &LoadSession<K, D, Arch>,
+        session: &LoadSession<K, D>,
         visible_modules: &V,
-    ) -> Arc<[LoadedCore<D>]>
+    ) -> Arc<[LoadedModule<D>]>
     where
         K: Ord,
     {
-        // This snapshot is intentionally built once for the whole pending group.
-        // Pending modules contribute placeholder LoadedCore values until the
-        // session is committed into the stable context.
         session
             .resolve
             .group_order
             .iter()
             .map(|scope_key| {
                 if let Some(entry) = session.resolve.entries.get(scope_key) {
-                    unsafe { LoadedCore::from_core(entry.payload.core()) }
+                    entry.payload.placeholder_module()
                 } else {
                     visible_loaded(context, visible_modules, scope_key)
                         .expect("scope key must resolve to a visible or pending module")
@@ -827,10 +838,8 @@ where
             .into()
     }
 
-    fn commit_session<Meta>(
-        context: &mut LinkContext<K, D, Meta>,
-        session: &mut LoadSession<K, D, Arch>,
-    ) where
+    fn commit_session<Meta>(context: &mut LinkContext<K, D, Meta>, session: &mut LoadSession<K, D>)
+    where
         Meta: Default,
     {
         let ready = mem::take(&mut session.ready_to_commit);
@@ -843,9 +852,9 @@ where
     }
 }
 
-struct PreparedLoad<K, D: 'static, Arch: RelocationArch> {
+struct PreparedLoad<K, D: 'static> {
     root: K,
-    session: LoadSession<K, D, Arch>,
+    session: LoadSession<K, D>,
     mapped_runtime: Option<mapped::MappedRuntimeMemory>,
 }
 
@@ -854,8 +863,8 @@ enum ScanDiscovery<K> {
     Plan(LinkPlan<K>),
 }
 
-impl<K, D: 'static, Arch: RelocationArch> PreparedLoad<K, D, Arch> {
-    fn runtime(root: K, session: LoadSession<K, D, Arch>) -> Self {
+impl<K, D: 'static> PreparedLoad<K, D> {
+    fn runtime(root: K, session: LoadSession<K, D>) -> Self {
         Self {
             root,
             session,
@@ -865,7 +874,7 @@ impl<K, D: 'static, Arch: RelocationArch> PreparedLoad<K, D, Arch> {
 
     fn planned(
         root: K,
-        session: LoadSession<K, D, Arch>,
+        session: LoadSession<K, D>,
         mapped_runtime: Option<mapped::MappedRuntimeMemory>,
     ) -> Self {
         Self {
@@ -873,6 +882,109 @@ impl<K, D: 'static, Arch: RelocationArch> PreparedLoad<K, D, Arch> {
             session,
             mapped_runtime,
         }
+    }
+}
+
+fn materialize_arena_raw_cross<D, Tls>(
+    scanned: AnyScannedDynamic,
+    runtime: mapped::RuntimeModuleMemory,
+    init_fn: crate::loader::DynLifecycleHandler,
+    fini_fn: crate::loader::DynLifecycleHandler,
+    force_static_tls: bool,
+) -> Result<AnyRawDynamic<D>>
+where
+    D: Default + 'static,
+    Tls: TlsResolver,
+{
+    match scanned {
+        AnyScannedDynamic::X86_64(scanned) => {
+            mapped::build_arena_raw_dynamic::<D, Tls, crate::arch::x86_64::relocation::X86_64Arch>(
+                scanned,
+                runtime,
+                init_fn,
+                fini_fn,
+                force_static_tls,
+            )
+            .map(AnyRawDynamic::X86_64)
+        }
+        AnyScannedDynamic::AArch64(scanned) => mapped::build_arena_raw_dynamic::<
+            D,
+            Tls,
+            crate::arch::aarch64::relocation::AArch64Arch,
+        >(
+            scanned,
+            runtime,
+            init_fn,
+            fini_fn,
+            force_static_tls,
+        )
+        .map(AnyRawDynamic::AArch64),
+        AnyScannedDynamic::RiscV64(scanned) => mapped::build_arena_raw_dynamic::<
+            D,
+            Tls,
+            crate::arch::riscv64::relocation::RiscV64Arch,
+        >(
+            scanned,
+            runtime,
+            init_fn,
+            fini_fn,
+            force_static_tls,
+        )
+        .map(AnyRawDynamic::RiscV64),
+        AnyScannedDynamic::RiscV32(scanned) => mapped::build_arena_raw_dynamic::<
+            D,
+            Tls,
+            crate::arch::riscv32::relocation::RiscV32Arch,
+        >(
+            scanned,
+            runtime,
+            init_fn,
+            fini_fn,
+            force_static_tls,
+        )
+        .map(AnyRawDynamic::RiscV32),
+        AnyScannedDynamic::LoongArch64(scanned) => {
+            mapped::build_arena_raw_dynamic::<
+                D,
+                Tls,
+                crate::arch::loongarch64::relocation::LoongArch64Arch,
+            >(scanned, runtime, init_fn, fini_fn, force_static_tls)
+            .map(AnyRawDynamic::LoongArch64)
+        }
+        AnyScannedDynamic::X86(scanned) => mapped::build_arena_raw_dynamic::<
+            D,
+            Tls,
+            crate::arch::x86::relocation::X86Arch,
+        >(
+            scanned, runtime, init_fn, fini_fn, force_static_tls
+        )
+        .map(AnyRawDynamic::X86),
+        AnyScannedDynamic::Arm(scanned) => mapped::build_arena_raw_dynamic::<
+            D,
+            Tls,
+            crate::arch::arm::relocation::ArmArch,
+        >(
+            scanned, runtime, init_fn, fini_fn, force_static_tls
+        )
+        .map(AnyRawDynamic::Arm),
+    }
+}
+
+fn apply_section_overrides_any<D>(
+    raw: &mut AnyRawDynamic<D>,
+    module_id: ModuleId,
+    plan: &MemoryLayoutPlan,
+) where
+    D: 'static,
+{
+    match raw {
+        AnyRawDynamic::X86_64(raw) => apply_section_overrides(raw, module_id, plan),
+        AnyRawDynamic::AArch64(raw) => apply_section_overrides(raw, module_id, plan),
+        AnyRawDynamic::RiscV64(raw) => apply_section_overrides(raw, module_id, plan),
+        AnyRawDynamic::RiscV32(raw) => apply_section_overrides(raw, module_id, plan),
+        AnyRawDynamic::LoongArch64(raw) => apply_section_overrides(raw, module_id, plan),
+        AnyRawDynamic::X86(raw) => apply_section_overrides(raw, module_id, plan),
+        AnyRawDynamic::Arm(raw) => apply_section_overrides(raw, module_id, plan),
     }
 }
 
@@ -907,7 +1019,7 @@ fn visible_loaded<K, D, Meta, V>(
     context: &LinkContext<K, D, Meta>,
     visible_modules: &V,
     key: &K,
-) -> Option<LoadedCore<D>>
+) -> Option<LoadedModule<D>>
 where
     K: Clone + Ord,
     D: 'static,

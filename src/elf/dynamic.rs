@@ -1,7 +1,9 @@
 //! Parsing `.dynamic` section
 use crate::{
     ParseDynamicError, Result,
-    elf::{ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, NativeElfLayout},
+    arch::NativeArch,
+    elf::{ElfDynRaw, ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, NativeElfLayout},
+    relocation::RelocationArch,
     segment::ElfSegments,
 };
 use alloc::vec::Vec;
@@ -40,7 +42,7 @@ impl ElfDynamicTag {
     pub const RELSZ: Self = Self(DT_RELSZ);
     pub const RELENT: Self = Self(DT_RELENT);
     pub const PLTREL: Self = Self(DT_PLTREL);
-    pub const DEBUG: Self = Self(elf::abi::DT_DEBUG);
+    pub const DEBUG: Self = Self(DT_DEBUG);
     pub const JMPREL: Self = Self(DT_JMPREL);
     pub const INIT: Self = Self(DT_INIT);
     pub const FINI: Self = Self(DT_FINI);
@@ -137,42 +139,42 @@ impl Display for ElfDynamicTag {
 /// ELF dynamic section entry.
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct ElfDyn {
-    dyn_: <NativeElfLayout as ElfLayout>::Dyn,
+pub struct ElfDyn<L: ElfLayout = NativeElfLayout> {
+    dyn_: L::Dyn,
 }
 
-impl ElfDyn {
+impl<L: ElfLayout> ElfDyn<L> {
     /// Creates an owned ELF dynamic entry from a tag and payload value.
     #[inline]
     pub fn new(tag: ElfDynamicTag, value: usize) -> Self {
-        let mut dyn_: <NativeElfLayout as ElfLayout>::Dyn = unsafe { core::mem::zeroed() };
-        dyn_.d_tag = tag.raw() as _;
-        dyn_.d_un = value as _;
+        let mut dyn_: L::Dyn = unsafe { core::mem::zeroed() };
+        dyn_.set_d_tag(tag.raw());
+        dyn_.set_d_un(value);
         Self { dyn_ }
     }
 
     /// Returns the parsed ELF dynamic tag of this entry.
     #[inline]
     pub fn tag(&self) -> ElfDynamicTag {
-        ElfDynamicTag::new(self.dyn_.d_tag as i64)
+        ElfDynamicTag::new(self.dyn_.d_tag())
     }
 
     /// Returns the dynamic value or pointer payload.
     #[inline]
     pub fn value(&self) -> usize {
-        self.dyn_.d_un as usize
+        self.dyn_.d_un()
     }
 
     /// Sets the dynamic tag (`d_tag`).
     #[inline]
     pub fn set_tag(&mut self, tag: ElfDynamicTag) {
-        self.dyn_.d_tag = tag.raw() as _;
+        self.dyn_.set_d_tag(tag.raw());
     }
 
     /// Sets the dynamic payload value (`d_un`).
     #[inline]
     pub fn set_value(&mut self, value: usize) {
-        self.dyn_.d_un = value as _;
+        self.dyn_.set_d_un(value);
     }
 }
 
@@ -281,15 +283,15 @@ where
     parsed
 }
 
-struct DynamicPtrIter {
-    cur: *const ElfDyn,
+struct DynamicPtrIter<L: ElfLayout = NativeElfLayout> {
+    cur: *const ElfDyn<L>,
     done: bool,
-    _marker: PhantomData<ElfDyn>,
+    _marker: PhantomData<ElfDyn<L>>,
 }
 
-impl DynamicPtrIter {
+impl<L: ElfLayout> DynamicPtrIter<L> {
     #[inline]
-    fn new(cur: *const ElfDyn) -> Self {
+    fn new(cur: *const ElfDyn<L>) -> Self {
         Self {
             cur,
             done: false,
@@ -298,7 +300,7 @@ impl DynamicPtrIter {
     }
 }
 
-impl Iterator for DynamicPtrIter {
+impl<L: ElfLayout> Iterator for DynamicPtrIter<L> {
     type Item = (ElfDynamicTag, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -319,17 +321,21 @@ impl Iterator for DynamicPtrIter {
     }
 }
 
-impl ElfDynamic {
+impl<Arch> ElfDynamic<Arch>
+where
+    Arch: RelocationArch,
+{
     /// Parse the dynamic section of an ELF file
-    pub fn new(dynamic_ptr: *const ElfDyn, segments: &ElfSegments) -> Result<Self> {
+    pub fn new(dynamic_ptr: *const ElfDyn<Arch::Layout>, segments: &ElfSegments) -> Result<Self> {
         let parsed = parse_dynamic_entries(DynamicPtrIter::new(dynamic_ptr));
         let base = segments.base();
 
         // Verify relocation type consistency
         if let Some(is_rela) = parsed.is_rela {
             assert!(
-                is_rela && size_of::<ElfRelType>() == size_of::<ElfRela>()
-                    || !is_rela && size_of::<ElfRelType>() == size_of::<ElfRel>()
+                is_rela && size_of::<Arch::Relocation>() == size_of::<ElfRela<Arch::Layout>>()
+                    || !is_rela
+                        && size_of::<Arch::Relocation>() == size_of::<ElfRel<Arch::Layout>>()
             );
         }
 
@@ -455,9 +461,9 @@ pub enum ElfDynamicHashTab {
 
 #[allow(unused)]
 /// Information from the ELF dynamic section.
-pub(crate) struct ElfDynamic {
+pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     /// Pointer to the dynamic section.
-    pub dyn_ptr: *const ElfDyn,
+    pub dyn_ptr: *const ElfDyn<Arch::Layout>,
     /// Hash table information.
     pub hashtab: ElfDynamicHashTab,
     /// Symbol table address.
@@ -479,11 +485,11 @@ pub(crate) struct ElfDynamic {
     /// Finalization function array.
     pub fini_array_fn: Option<&'static [fn()]>,
     /// PLT relocation entries.
-    pub pltrel: Option<&'static [ElfRelType]>,
+    pub pltrel: Option<&'static [ElfRelType<Arch>]>,
     /// Dynamic relocation entries.
-    pub dynrel: Option<&'static [ElfRelType]>,
+    pub dynrel: Option<&'static [ElfRelType<Arch>]>,
     /// RELR relocation entries.
-    pub relr: Option<&'static [ElfRelr]>,
+    pub relr: Option<&'static [ElfRelr<Arch::Layout>]>,
     /// Count of relative relocations.
     pub rel_count: Option<NonZeroUsize>,
     /// Required libraries.
@@ -500,7 +506,7 @@ pub(crate) struct ElfDynamic {
     pub runpath_off: Option<NonZeroUsize>,
 }
 
-impl Debug for ElfDynamic {
+impl<Arch: RelocationArch> Debug for ElfDynamic<Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfDynamic")
             .field("dyn_ptr", &self.dyn_ptr)
@@ -523,7 +529,7 @@ mod tests {
 
     #[test]
     fn owned_dyn_round_trips_and_mutates() {
-        let mut dyn_ = ElfDyn::new(ElfDynamicTag::STRTAB, 0x1234);
+        let mut dyn_: ElfDyn = ElfDyn::new(ElfDynamicTag::STRTAB, 0x1234);
         assert_eq!(dyn_.tag(), ElfDynamicTag::STRTAB);
         assert_eq!(dyn_.value(), 0x1234);
 

@@ -218,6 +218,7 @@ mod tests {
     use super::super::super::plan::LinkPlan;
     use super::*;
     use crate::os::DefaultMmap;
+    use crate::{arch::NativeArch, linker::runtime::BuiltinArch};
     use crate::{image::ScannedElf, input::ElfBinary, loader::Loader};
     use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
     use gen_elf::{Arch, DylibWriter, ElfWriterConfig, SymbolDesc};
@@ -239,7 +240,13 @@ mod tests {
             panic!("generated dylib should scan as dynamic");
         };
         let mut entries = BTreeMap::new();
-        entries.insert("root", (scanned, Vec::<&str>::new().into_boxed_slice()));
+        entries.insert(
+            "root",
+            (
+                <NativeArch as BuiltinArch>::wrap_scanned(scanned),
+                Vec::<&str>::new().into_boxed_slice(),
+            ),
+        );
         let mut plan = LinkPlan::new("root", Vec::from(["root"]), entries);
         let root = plan.root_module();
         let section = plan

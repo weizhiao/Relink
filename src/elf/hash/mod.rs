@@ -8,7 +8,9 @@
 //! The GNU hash table (.gnu.hash) is generally preferred over the traditional
 //! SYSV hash table (.hash) as it provides better performance and memory usage.
 
-use crate::elf::{ElfDynamic, ElfDynamicHashTab, ElfSymbol, SymbolTable, symbol::SymbolInfo};
+use crate::elf::{
+    ElfDynamic, ElfDynamicHashTab, ElfLayout, ElfSymbol, SymbolTable, symbol::SymbolInfo,
+};
 #[cfg(feature = "object")]
 use crate::object::CustomHash;
 use core::fmt::Debug;
@@ -71,7 +73,7 @@ pub struct PreCompute {
     fofs: usize,
 
     /// Filter mask for GNU hash table lookups
-    fmask: usize,
+    fmask: u64,
 
     /// Traditional hash value (used for SYSV hash tables)
     hash: Option<u32>,
@@ -111,12 +113,15 @@ impl HashTable {
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol.
     /// * `None` - If the symbol was not found.
-    pub(crate) fn lookup<'sym>(
+    pub(crate) fn lookup<'sym, L>(
         &self,
-        table: &'sym SymbolTable,
+        table: &'sym SymbolTable<L>,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
-    ) -> Option<&'sym ElfSymbol> {
+    ) -> Option<&'sym ElfSymbol<L>>
+    where
+        L: ElfLayout,
+    {
         match self {
             HashTable::Gnu(_) => ElfGnuHash::lookup(table, symbol, precompute),
             HashTable::Elf(_) => ElfHash::lookup(table, symbol, precompute),
@@ -136,9 +141,14 @@ impl HashTable {
     ///
     /// # Returns
     /// A HashTable instance containing either a GNU or SYSV hash implementation.
-    pub(crate) fn from_dynamic(dynamic: &ElfDynamic) -> Self {
+    pub(crate) fn from_dynamic<Arch>(dynamic: &ElfDynamic<Arch>) -> Self
+    where
+        Arch: crate::relocation::RelocationArch,
+    {
         match dynamic.hashtab {
-            ElfDynamicHashTab::Gnu(off) => HashTable::Gnu(ElfGnuHash::parse(off as *const u8)),
+            ElfDynamicHashTab::Gnu(off) => {
+                HashTable::Gnu(ElfGnuHash::parse::<Arch::Layout>(off as *const u8))
+            }
             ElfDynamicHashTab::Elf(off) => HashTable::Elf(ElfHash::parse(off as *const u8)),
         }
     }
@@ -184,7 +194,7 @@ impl SymbolInfo<'_> {
         PreCompute {
             gnuhash,
             fofs: gnuhash as usize / usize::BITS as usize,
-            fmask: 1 << (gnuhash % (8 * size_of::<usize>() as u32)),
+            fmask: 1u64 << (gnuhash % u64::BITS),
             hash: None,
             #[cfg(feature = "object")]
             custom: None,

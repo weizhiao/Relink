@@ -5,7 +5,7 @@
 //! It serves as a bridge between the raw ELF data structures and the higher-level
 //! symbol resolution APIs.
 
-use super::defs::{ElfLayout, NativeElfLayout};
+use super::defs::{ElfLayout, ElfSymRaw, NativeElfLayout};
 use crate::elf::{ElfDynamic, HashTable, PreCompute};
 use core::ffi::CStr;
 use core::fmt::{self, Debug, Display};
@@ -185,7 +185,7 @@ impl Display for ElfSectionIndex {
 /// 32-bit ELF symbol table entry.
 /// This struct represents the native 32-bit symbol format used in ELF32 files.
 /// For 64-bit targets, the active native symbol layout resolves to `elf::symbol::Elf64_Sym`.
-pub(crate) struct Elf32Sym {
+pub struct Elf32Sym {
     pub st_name: u32,
     pub st_value: u32,
     pub st_size: u32,
@@ -199,51 +199,51 @@ pub(crate) struct Elf32Sym {
 ///
 /// This struct provides a unified interface for accessing ELF symbol information
 /// regardless of whether the ELF file is 32-bit or 64-bit.
-pub struct ElfSymbol {
-    sym: <NativeElfLayout as ElfLayout>::Sym,
+pub struct ElfSymbol<L: ElfLayout = NativeElfLayout> {
+    sym: L::Sym,
 }
 
-impl ElfSymbol {
+impl<L: ElfLayout> ElfSymbol<L> {
     /// Returns the symbol value.
     #[inline]
     pub fn st_value(&self) -> usize {
-        self.sym.st_value as usize
+        self.sym.st_value()
     }
 
     /// Returns the parsed ELF symbol binding.
     #[inline]
     pub fn bind(&self) -> ElfSymbolBind {
-        ElfSymbolBind::new(self.sym.st_info >> 4)
+        ElfSymbolBind::new(self.sym.st_info() >> 4)
     }
 
     /// Returns the parsed ELF symbol type.
     #[inline]
     pub fn symbol_type(&self) -> ElfSymbolType {
-        ElfSymbolType::new(self.sym.st_info & 0xf)
+        ElfSymbolType::new(self.sym.st_info() & 0xf)
     }
 
     /// Returns the section index.
     #[inline]
     pub fn st_shndx(&self) -> ElfSectionIndex {
-        ElfSectionIndex::new(self.sym.st_shndx)
+        ElfSectionIndex::new(self.sym.st_shndx())
     }
 
     /// Returns the symbol name index.
     #[inline]
     pub fn st_name(&self) -> usize {
-        self.sym.st_name as usize
+        self.sym.st_name()
     }
 
     /// Returns the symbol size.
     #[inline]
     pub fn st_size(&self) -> usize {
-        self.sym.st_size as usize
+        self.sym.st_size()
     }
 
     /// Returns the symbol visibility.
     #[inline]
     pub fn st_other(&self) -> u8 {
-        self.sym.st_other
+        self.sym.st_other()
     }
 
     /// Returns true if the symbol is undefined (not defined in this object file).
@@ -285,7 +285,7 @@ impl ElfSymbol {
     /// This is used internally when resolving symbol addresses during loading.
     #[inline]
     pub(crate) fn set_value(&mut self, value: usize) {
-        self.sym.st_value = value as _;
+        self.sym.set_st_value(value);
     }
 }
 
@@ -354,12 +354,12 @@ impl ElfStringTable {
 }
 
 /// Symbol table of an ELF file.
-pub struct SymbolTable {
+pub struct SymbolTable<L: ElfLayout = NativeElfLayout> {
     /// Hash table for efficient symbol lookup.
     pub(crate) hashtab: HashTable,
 
     /// Pointer to the symbol table.
-    pub(crate) symtab: *const ElfSymbol,
+    pub(crate) symtab: *const ElfSymbol<L>,
 
     /// String table for symbol names.
     pub(crate) strtab: ElfStringTable,
@@ -369,7 +369,7 @@ pub struct SymbolTable {
     pub(crate) version: Option<super::version::ELFVersion>,
 }
 
-impl Debug for SymbolTable {
+impl<L: ElfLayout> Debug for SymbolTable<L> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SymbolTable")
             .field("hashtab", &self.hashtab)
@@ -436,14 +436,17 @@ impl<'symtab> SymbolInfo<'symtab> {
     }
 }
 
-impl SymbolTable {
+impl<L: ElfLayout> SymbolTable<L> {
     /// Creates a symbol table from ELF dynamic section information.
-    pub(crate) fn from_dynamic(dynamic: &ElfDynamic) -> Self {
+    pub(crate) fn from_dynamic<Arch>(dynamic: &ElfDynamic<Arch>) -> Self
+    where
+        Arch: crate::relocation::RelocationArch<Layout = L>,
+    {
         // Create hash table from dynamic section information
         let hashtab = HashTable::from_dynamic(dynamic);
 
         // Get symbol table pointer
-        let symtab = dynamic.symtab as *const ElfSymbol;
+        let symtab = dynamic.symtab as *const ElfSymbol<L>;
 
         // Create string table wrapper
         let strtab = ElfStringTable::new(dynamic.strtab as *const u8);
@@ -471,14 +474,14 @@ impl SymbolTable {
     }
 
     /// Looks up a symbol by its name.
-    pub fn lookup_by_name(&self, name: impl AsRef<str>) -> Option<&ElfSymbol> {
+    pub fn lookup_by_name(&self, name: impl AsRef<str>) -> Option<&ElfSymbol<L>> {
         let info = SymbolInfo::from_str(name.as_ref(), None);
         let mut precompute = info.precompute();
         self.lookup(&info, &mut precompute)
     }
 
     /// Looks up a symbol in the symbol table using the hash table for efficiency.
-    fn lookup(&self, symbol: &SymbolInfo, precompute: &mut PreCompute) -> Option<&ElfSymbol> {
+    fn lookup(&self, symbol: &SymbolInfo, precompute: &mut PreCompute) -> Option<&ElfSymbol<L>> {
         self.hashtab.lookup(self, symbol, precompute)
     }
 
@@ -488,7 +491,7 @@ impl SymbolTable {
         &self,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
-    ) -> Option<&ElfSymbol> {
+    ) -> Option<&ElfSymbol<L>> {
         // Look up the symbol
         if let Some(sym) = self.lookup(symbol, precompute) {
             // Filter based on relocation requirements:
@@ -506,7 +509,7 @@ impl SymbolTable {
     pub fn symbol_idx<'symtab>(
         &'symtab self,
         idx: usize,
-    ) -> (&'symtab ElfSymbol, SymbolInfo<'symtab>) {
+    ) -> (&'symtab ElfSymbol<L>, SymbolInfo<'symtab>) {
         // Get the symbol at the specified index
         let symbol = unsafe { &*self.symtab.add(idx) };
 

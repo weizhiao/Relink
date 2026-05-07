@@ -6,7 +6,9 @@
 
 use crate::{
     ParseEhdrError, ParsePhdrError, Result,
-    elf::{E_CLASS, ElfClass, ElfEhdr, ElfFileType, ElfMachine, ElfPhdr, ElfShdr},
+    elf::{
+        ElfClass, ElfEhdrRaw, ElfFileType, ElfLayout, ElfMachine, ElfPhdr, ElfShdr, NativeElfLayout,
+    },
 };
 use core::mem::size_of;
 use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, EV_CURRENT};
@@ -17,12 +19,12 @@ use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, EV_CURRENT};
 /// to ensure the ELF file is compatible with the target architecture
 /// and follows the expected format.
 #[repr(transparent)]
-pub struct ElfHeader {
+pub struct ElfHeader<L: ElfLayout = NativeElfLayout> {
     /// The underlying ELF header structure
-    ehdr: ElfEhdr,
+    ehdr: L::Ehdr,
 }
 
-impl ElfHeader {
+impl<L: ElfLayout> ElfHeader<L> {
     /// Wraps a raw header and validates it.
     ///
     /// When `expected_machine` is `Some(value)`, validation requires
@@ -31,7 +33,7 @@ impl ElfHeader {
     /// mapping an x86-64 ELF on a RISC-V host). All other validations
     /// (magic, class, version) always run.
     #[inline]
-    pub(crate) fn from_raw(ehdr: ElfEhdr, expected_machine: Option<ElfMachine>) -> Result<Self> {
+    pub(crate) fn from_raw(ehdr: L::Ehdr, expected_machine: Option<ElfMachine>) -> Result<Self> {
         let ehdr = Self { ehdr };
         ehdr.validate(expected_machine)?;
         Ok(ehdr)
@@ -52,26 +54,26 @@ impl ElfHeader {
 
     /// Returns the parsed ELF class of this header.
     #[inline]
-    pub const fn class(&self) -> ElfClass {
-        ElfClass::new(self.ehdr.e_ident[EI_CLASS])
+    pub fn class(&self) -> ElfClass {
+        ElfClass::new(self.ehdr.e_ident()[EI_CLASS])
     }
 
     /// Returns the parsed ELF machine type of this header.
     #[inline]
-    pub const fn machine(&self) -> ElfMachine {
-        ElfMachine::new(self.ehdr.e_machine)
+    pub fn machine(&self) -> ElfMachine {
+        ElfMachine::new(self.ehdr.e_machine())
     }
 
     /// Returns the parsed ELF file type of this header.
     #[inline]
-    pub const fn file_type(&self) -> ElfFileType {
-        ElfFileType::new(self.ehdr.e_type)
+    pub fn file_type(&self) -> ElfFileType {
+        ElfFileType::new(self.ehdr.e_type())
     }
 
     /// Returns the entry-point virtual address (`e_entry`) as a native-sized value.
     #[inline]
     pub fn e_entry(&self) -> usize {
-        self.ehdr.e_entry as usize
+        self.ehdr.e_entry()
     }
 
     /// Validates the ELF header magic, class, version, and optionally architecture.
@@ -82,22 +84,22 @@ impl ElfHeader {
     /// the header's `e_machine` must equal `value`.
     pub(crate) fn validate(&self, expected_machine: Option<ElfMachine>) -> Result<()> {
         // Check ELF magic bytes
-        if self.ehdr.e_ident[0..4] != ELFMAGIC {
+        if self.ehdr.e_ident()[0..4] != ELFMAGIC {
             return Err(ParseEhdrError::InvalidMagic.into());
         }
 
         // Check file class (32-bit vs 64-bit)
         let class = self.class();
-        if class.raw() != E_CLASS {
+        if class.raw() != L::E_CLASS {
             return Err(ParseEhdrError::FileClassMismatch {
-                expected: ElfClass::new(E_CLASS),
+                expected: ElfClass::new(L::E_CLASS),
                 found: class,
             }
             .into());
         }
 
         // Check ELF version
-        if self.ehdr.e_ident[EI_VERSION] != EV_CURRENT {
+        if self.ehdr.e_ident()[EI_VERSION] != EV_CURRENT {
             return Err(ParseEhdrError::InvalidVersion.into());
         }
 
@@ -119,43 +121,43 @@ impl ElfHeader {
     /// Returns the number of program headers.
     #[inline]
     pub fn e_phnum(&self) -> usize {
-        self.ehdr.e_phnum as usize
+        self.ehdr.e_phnum()
     }
 
     /// Returns the size of each program header entry.
     #[inline]
     pub fn e_phentsize(&self) -> usize {
-        self.ehdr.e_phentsize as usize
+        self.ehdr.e_phentsize()
     }
 
     /// Returns the file offset of the program header table.
     #[inline]
     pub fn e_phoff(&self) -> usize {
-        self.ehdr.e_phoff as usize
+        self.ehdr.e_phoff()
     }
 
     /// Returns the file offset of the section header table.
     #[inline]
     pub fn e_shoff(&self) -> usize {
-        self.ehdr.e_shoff as usize
+        self.ehdr.e_shoff()
     }
 
     /// Returns the size of each section header entry.
     #[inline]
     pub fn e_shentsize(&self) -> usize {
-        self.ehdr.e_shentsize as usize
+        self.ehdr.e_shentsize()
     }
 
     /// Returns the number of section headers.
     #[inline]
     pub fn e_shnum(&self) -> usize {
-        self.ehdr.e_shnum as usize
+        self.ehdr.e_shnum()
     }
 
     /// Returns the section-name string-table index.
     #[inline]
     pub fn e_shstrndx(&self) -> usize {
-        self.ehdr.e_shstrndx as usize
+        self.ehdr.e_shstrndx()
     }
 
     /// Returns the `(start, end)` file offsets of the program header table.
@@ -171,7 +173,7 @@ impl ElfHeader {
     pub(crate) fn checked_phdr_layout(&self) -> Result<Option<(usize, usize)>> {
         checked_table_layout(
             self.e_phentsize(),
-            size_of::<ElfPhdr>(),
+            size_of::<ElfPhdr<L>>(),
             self.e_phnum(),
             self.e_phoff(),
             || ParsePhdrError::MalformedProgramHeaders.into(),
@@ -192,7 +194,7 @@ impl ElfHeader {
     pub(crate) fn checked_shdr_layout(&self) -> Result<Option<(usize, usize)>> {
         checked_table_layout(
             self.e_shentsize(),
-            size_of::<ElfShdr>(),
+            size_of::<ElfShdr<L>>(),
             self.e_shnum(),
             self.e_shoff(),
             || ParseEhdrError::MissingSectionHeaders.into(),

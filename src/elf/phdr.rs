@@ -11,7 +11,7 @@ use elf::abi::{
     PT_NULL, PT_PHDR, PT_SHLIB, PT_TLS,
 };
 
-use super::defs::{ElfLayout, NativeElfLayout};
+use super::defs::{ElfLayout, ElfPhdrRaw, NativeElfLayout};
 
 /// Semantic wrapper for the ELF `p_type` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -86,11 +86,11 @@ bitflags! {
 /// ELF program header describing segments to be loaded into memory.
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct ElfPhdr {
-    phdr: <NativeElfLayout as ElfLayout>::Phdr,
+pub struct ElfPhdr<L: ElfLayout = NativeElfLayout> {
+    phdr: L::Phdr,
 }
 
-impl ElfPhdr {
+impl<L: ElfLayout> ElfPhdr<L> {
     /// Creates an owned ELF program header from native-sized field values.
     #[inline]
     pub fn new(
@@ -103,116 +103,116 @@ impl ElfPhdr {
         p_memsz: usize,
         p_align: usize,
     ) -> Self {
-        let mut phdr: <NativeElfLayout as ElfLayout>::Phdr = unsafe { core::mem::zeroed() };
-        phdr.p_type = program_type.raw();
-        phdr.p_flags = flags.bits();
-        phdr.p_offset = p_offset as _;
-        phdr.p_vaddr = p_vaddr as _;
-        phdr.p_paddr = p_paddr as _;
-        phdr.p_filesz = p_filesz as _;
-        phdr.p_memsz = p_memsz as _;
-        phdr.p_align = p_align as _;
+        let mut phdr: L::Phdr = unsafe { core::mem::zeroed() };
+        phdr.set_p_type(program_type.raw());
+        phdr.set_p_flags(flags.bits());
+        phdr.set_p_offset(p_offset);
+        phdr.set_p_vaddr(p_vaddr);
+        phdr.set_p_paddr(p_paddr);
+        phdr.set_p_filesz(p_filesz);
+        phdr.set_p_memsz(p_memsz);
+        phdr.set_p_align(p_align);
         Self { phdr }
     }
 
     /// Returns the parsed ELF program type of this header.
     #[inline]
-    pub const fn program_type(&self) -> ElfProgramType {
-        ElfProgramType::new(self.phdr.p_type)
+    pub fn program_type(&self) -> ElfProgramType {
+        ElfProgramType::new(self.phdr.p_type())
     }
 
     /// Returns the parsed ELF program flags of this header.
     #[inline]
     pub fn flags(&self) -> ElfProgramFlags {
-        ElfProgramFlags::from_bits_retain(self.phdr.p_flags)
+        ElfProgramFlags::from_bits_retain(self.phdr.p_flags())
     }
 
     /// Returns the segment file offset (`p_offset`) as a native-sized value.
     #[inline]
     pub fn p_offset(&self) -> usize {
-        self.phdr.p_offset as usize
+        self.phdr.p_offset()
     }
 
     /// Returns the segment virtual address (`p_vaddr`) as a native-sized value.
     #[inline]
     pub fn p_vaddr(&self) -> usize {
-        self.phdr.p_vaddr as usize
+        self.phdr.p_vaddr()
     }
 
     /// Returns the segment physical address (`p_paddr`) as a native-sized value.
     #[inline]
     pub fn p_paddr(&self) -> usize {
-        self.phdr.p_paddr as usize
+        self.phdr.p_paddr()
     }
 
     /// Returns the segment size in the file (`p_filesz`) as a native-sized value.
     #[inline]
     pub fn p_filesz(&self) -> usize {
-        self.phdr.p_filesz as usize
+        self.phdr.p_filesz()
     }
 
     /// Returns the segment size in memory (`p_memsz`) as a native-sized value.
     #[inline]
     pub fn p_memsz(&self) -> usize {
-        self.phdr.p_memsz as usize
+        self.phdr.p_memsz()
     }
 
     /// Returns the segment alignment (`p_align`) as a native-sized value.
     #[inline]
     pub fn p_align(&self) -> usize {
-        self.phdr.p_align as usize
+        self.phdr.p_align()
     }
 
     /// Sets the program type (`p_type`).
     #[inline]
     pub fn set_program_type(&mut self, program_type: ElfProgramType) {
-        self.phdr.p_type = program_type.raw();
+        self.phdr.set_p_type(program_type.raw());
     }
 
     /// Sets the program flags (`p_flags`).
     #[inline]
     pub fn set_flags(&mut self, flags: ElfProgramFlags) {
-        self.phdr.p_flags = flags.bits();
+        self.phdr.set_p_flags(flags.bits());
     }
 
     /// Sets the segment file offset (`p_offset`).
     #[inline]
     pub fn set_p_offset(&mut self, p_offset: usize) {
-        self.phdr.p_offset = p_offset as _;
+        self.phdr.set_p_offset(p_offset);
     }
 
     /// Sets the segment virtual address (`p_vaddr`).
     #[inline]
     pub fn set_p_vaddr(&mut self, p_vaddr: usize) {
-        self.phdr.p_vaddr = p_vaddr as _;
+        self.phdr.set_p_vaddr(p_vaddr);
     }
 
     /// Sets the segment physical address (`p_paddr`).
     #[inline]
     pub fn set_p_paddr(&mut self, p_paddr: usize) {
-        self.phdr.p_paddr = p_paddr as _;
+        self.phdr.set_p_paddr(p_paddr);
     }
 
     /// Sets the segment size in the file (`p_filesz`).
     #[inline]
     pub fn set_p_filesz(&mut self, p_filesz: usize) {
-        self.phdr.p_filesz = p_filesz as _;
+        self.phdr.set_p_filesz(p_filesz);
     }
 
     /// Sets the segment size in memory (`p_memsz`).
     #[inline]
     pub fn set_p_memsz(&mut self, p_memsz: usize) {
-        self.phdr.p_memsz = p_memsz as _;
+        self.phdr.set_p_memsz(p_memsz);
     }
 
     /// Sets the segment alignment (`p_align`).
     #[inline]
     pub fn set_p_align(&mut self, p_align: usize) {
-        self.phdr.p_align = p_align as _;
+        self.phdr.set_p_align(p_align);
     }
 }
 
-impl Clone for ElfPhdr {
+impl<L: ElfLayout> Clone for ElfPhdr<L> {
     #[inline]
     fn clone(&self) -> Self {
         Self::new(
@@ -230,16 +230,16 @@ impl Clone for ElfPhdr {
 
 /// Internal representation of ELF program headers
 #[derive(Clone)]
-pub(crate) enum ElfPhdrs {
+pub(crate) enum ElfPhdrs<L: ElfLayout = NativeElfLayout> {
     /// Program headers mapped from memory
-    Mmap(&'static [ElfPhdr]),
+    Mmap(&'static [ElfPhdr<L>]),
 
     /// Program headers stored in a vector
-    Vec(Vec<ElfPhdr>),
+    Vec(Vec<ElfPhdr<L>>),
 }
 
-impl ElfPhdrs {
-    pub(crate) fn as_slice(&self) -> &[ElfPhdr] {
+impl<L: ElfLayout> ElfPhdrs<L> {
+    pub(crate) fn as_slice(&self) -> &[ElfPhdr<L>] {
         match self {
             ElfPhdrs::Mmap(phdrs) => phdrs,
             ElfPhdrs::Vec(phdrs) => phdrs,
@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn owned_phdr_round_trips_and_mutates() {
-        let mut phdr = ElfPhdr::new(
+        let mut phdr: ElfPhdr = ElfPhdr::new(
             ElfProgramType::LOAD,
             ElfProgramFlags::READ | ElfProgramFlags::WRITE,
             1,

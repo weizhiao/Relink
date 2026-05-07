@@ -42,20 +42,20 @@ impl<D, Arch: RelocationArch> Debug for RawDylib<D, Arch> {
 }
 
 impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawDylib<D, Arch> {
-    type Output = LoadedCore<D>;
+    type Output = LoadedCore<D, Arch>;
     type Arch = Arch;
 
     fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
         LazyPostS: SymbolLookup + Send + Sync + 'static,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized,
+        PreH: RelocationHandler<Arch> + ?Sized,
+        PostH: RelocationHandler<Arch> + ?Sized,
     {
         Relocatable::relocate(self.inner, args)
     }
@@ -85,19 +85,19 @@ impl<D, Arch: RelocationArch> RawDylib<D, Arch> {
 
     /// Gets the core component reference of the ELF object.
     #[inline]
-    pub fn core_ref(&self) -> &ElfCore<D> {
+    pub fn core_ref(&self) -> &ElfCore<D, Arch> {
         self.inner.core_ref()
     }
 
     /// Gets the core component of the ELF object.
     #[inline]
-    pub fn core(&self) -> ElfCore<D> {
+    pub fn core(&self) -> ElfCore<D, Arch> {
         self.inner.core()
     }
 
     /// Converts this object into its core component.
     #[inline]
-    pub fn into_core(self) -> ElfCore<D> {
+    pub fn into_core(self) -> ElfCore<D, Arch> {
         self.inner.into_core()
     }
 
@@ -146,7 +146,7 @@ impl<D, Arch: RelocationArch> RawDylib<D, Arch> {
     }
 
     /// Returns the program headers of the ELF object.
-    pub fn phdrs(&self) -> &[ElfPhdr] {
+    pub fn phdrs(&self) -> &[ElfPhdr<Arch::Layout>] {
         self.inner.phdrs()
     }
 
@@ -176,7 +176,7 @@ impl<D, Arch: RelocationArch> RawDylib<D, Arch> {
     }
 
     /// Returns the dynamic section pointer.
-    pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn>> {
+    pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn<Arch::Layout>>> {
         self.inner.dynamic_ptr()
     }
 
@@ -192,7 +192,7 @@ impl<D, Arch: RelocationArch> RawDylib<D, Arch> {
     }
 
     /// Creates a relocation builder for this shared object.
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D, Arch> {
         Relocator::new().with_object(self)
     }
 }

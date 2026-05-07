@@ -6,7 +6,7 @@
 
 use super::ElfHashTable;
 use crate::{
-    elf::ElfSymbol,
+    elf::{ElfLayout, ElfSymbol, ElfWord},
     elf::{PreCompute, SymbolTable, symbol::SymbolInfo},
 };
 
@@ -38,7 +38,7 @@ pub(crate) struct ElfGnuHash {
     header: ElfGnuHeader,
 
     /// Pointer to the bloom filter array
-    blooms: *const usize,
+    blooms: *const u8,
 
     /// Pointer to the bucket array
     buckets: *const u32,
@@ -59,14 +59,13 @@ impl ElfGnuHash {
     /// # Returns
     /// An ElfGnuHash instance representing the parsed hash table
     #[inline]
-    pub(crate) fn parse(ptr: *const u8) -> ElfGnuHash {
+    pub(crate) fn parse<L: ElfLayout>(ptr: *const u8) -> ElfGnuHash {
         const HEADER_SIZE: usize = size_of::<ElfGnuHeader>();
         let mut bytes = [0u8; HEADER_SIZE];
         bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(ptr, HEADER_SIZE) });
         let header: ElfGnuHeader = unsafe { core::mem::transmute(bytes) };
 
-        // Calculate the sizes of each section
-        let bloom_size = header.nbloom as usize * size_of::<usize>();
+        let bloom_size = header.nbloom as usize * size_of::<L::Word>();
         let bucket_size = header.nbucket as usize * size_of::<u32>();
 
         // Calculate pointers to each section
@@ -76,7 +75,7 @@ impl ElfGnuHash {
 
         ElfGnuHash {
             header,
-            blooms: blooms.cast(),
+            blooms,
             buckets: buckets.cast(),
             chains: chains.cast(),
         }
@@ -149,11 +148,11 @@ impl ElfHashTable for ElfGnuHash {
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol
     /// * `None` - If the symbol was not found
-    fn lookup<'sym>(
-        table: &'sym SymbolTable,
+    fn lookup<'sym, L: ElfLayout>(
+        table: &'sym SymbolTable<L>,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
-    ) -> Option<&'sym ElfSymbol> {
+    ) -> Option<&'sym ElfSymbol<L>> {
         // Get precomputed hash values
         let hash = precompute.gnuhash;
         let fofs = precompute.fofs;
@@ -164,7 +163,14 @@ impl ElfHashTable for ElfGnuHash {
 
         // Check bloom filter for fast negative lookup
         let bloom_idx = fofs & (hashtab.header.nbloom - 1) as usize;
-        let filter = unsafe { hashtab.blooms.add(bloom_idx).read() };
+        let filter = unsafe {
+            hashtab
+                .blooms
+                .cast::<L::Word>()
+                .add(bloom_idx)
+                .read_unaligned()
+                .to_u64()
+        };
 
         // First bloom filter check
         if filter & fmask == 0 {

@@ -219,6 +219,7 @@ impl MappedRuntimeMemory {
     where
         K: Clone + Ord,
         Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
+        crate::elf::ElfRelType<Arch>: crate::aligned_bytes::ByteRepr,
     {
         let runtime = self.build_module(id, plan.memory_layout())?;
         let mut rewriter = RuntimeMetadataRewriter::<_, Arch>::new(id, plan, runtime);
@@ -250,7 +251,7 @@ impl MappedRuntimeMemory {
 }
 
 pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch>(
-    scanned: ScannedDynamic,
+    scanned: ScannedDynamic<Arch::Layout>,
     runtime: RuntimeModuleMemory,
     init_fn: DynLifecycleHandler,
     fini_fn: DynLifecycleHandler,
@@ -262,7 +263,7 @@ where
     Arch: RelocationArch,
 {
     let original_phdrs = scanned.phdrs().to_vec();
-    let mut dynamic_ptr: Option<NonNull<ElfDyn>> = None;
+    let mut dynamic_ptr: Option<NonNull<ElfDyn<Arch::Layout>>> = None;
     let mut eh_frame_hdr: Option<NonNull<u8>> = None;
     let mut tls_info: Option<TlsInfo> = None;
 

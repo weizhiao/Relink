@@ -6,7 +6,7 @@ use crate::{
     AlignedBytes, LinkerError, Result,
     aligned_bytes::ByteRepr,
     entity::{PrimaryMap, entity_ref},
-    image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
+    image::{AnyScannedDynamic, ModuleCapability, ScannedSectionId},
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
@@ -17,13 +17,13 @@ entity_ref!(ModuleId);
 
 pub struct PlannedModule<K> {
     key: K,
-    module: ScannedDynamic,
+    module: AnyScannedDynamic,
     direct_deps: Box<[ModuleId]>,
 }
 
 struct PendingPlannedModule<K> {
     key: K,
-    module: ScannedDynamic,
+    module: AnyScannedDynamic,
     direct_deps: Box<[K]>,
 }
 
@@ -53,7 +53,7 @@ where
 
 impl<K> PlannedModule<K> {
     #[inline]
-    pub(crate) fn new(key: K, module: ScannedDynamic, direct_deps: Box<[ModuleId]>) -> Self {
+    pub(crate) fn new(key: K, module: AnyScannedDynamic, direct_deps: Box<[ModuleId]>) -> Self {
         Self {
             key,
             module,
@@ -67,12 +67,12 @@ impl<K> PlannedModule<K> {
     }
 
     #[inline]
-    pub fn module(&self) -> &ScannedDynamic {
+    pub fn module(&self) -> &AnyScannedDynamic {
         &self.module
     }
 
     #[inline]
-    pub fn module_mut(&mut self) -> &mut ScannedDynamic {
+    pub fn module_mut(&mut self) -> &mut AnyScannedDynamic {
         &mut self.module
     }
 
@@ -82,7 +82,7 @@ impl<K> PlannedModule<K> {
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (K, ScannedDynamic, Box<[ModuleId]>) {
+    pub(crate) fn into_parts(self) -> (K, AnyScannedDynamic, Box<[ModuleId]>) {
         (self.key, self.module, self.direct_deps)
     }
 }
@@ -121,7 +121,7 @@ where
     pub(crate) fn new(
         root: K,
         group_order: Vec<K>,
-        mut entries: BTreeMap<K, (ScannedDynamic, Box<[K]>)>,
+        mut entries: BTreeMap<K, (AnyScannedDynamic, Box<[K]>)>,
     ) -> Self {
         let group_keys = group_order;
         let mut module_ids = BTreeMap::new();

@@ -28,19 +28,22 @@ pub(crate) use shdr::ElfShdr;
 pub(crate) use symbol::{ElfStringTable, SymbolInfo, SymbolTable};
 
 // Public API exports
-pub use defs::{ElfClass, ElfFileType, ElfMachine, ElfRel, ElfRelType, ElfRela, ElfRelocationType};
+pub use defs::{
+    Elf32Layout, Elf64Layout, ElfClass, ElfFileType, ElfLayout, ElfMachine, ElfRel, ElfRelEntry,
+    ElfRelType, ElfRela, ElfRelocationType, NativeElfLayout,
+};
 pub use dynamic::{ElfDyn, ElfDynamicTag};
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::ElfHeader;
 pub use phdr::{ElfPhdr, ElfProgramFlags, ElfProgramType};
 pub use shdr::{ElfSectionFlags, ElfSectionType};
-pub use symbol::{ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType};
+pub use symbol::{Elf32Sym, ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType};
 
 unsafe impl ByteRepr for defs::ElfEhdr {}
-unsafe impl ByteRepr for dynamic::ElfDyn {}
-unsafe impl ByteRepr for phdr::ElfPhdr {}
-unsafe impl ByteRepr for shdr::ElfShdr {}
-unsafe impl ByteRepr for symbol::ElfSymbol {}
-unsafe impl ByteRepr for defs::ElfRelr {}
-unsafe impl ByteRepr for defs::ElfRela {}
-unsafe impl ByteRepr for defs::ElfRel {}
+unsafe impl<L: defs::ElfLayout> ByteRepr for dynamic::ElfDyn<L> {}
+unsafe impl<L: defs::ElfLayout> ByteRepr for phdr::ElfPhdr<L> {}
+unsafe impl<L: defs::ElfLayout> ByteRepr for shdr::ElfShdr<L> {}
+unsafe impl<L: defs::ElfLayout> ByteRepr for symbol::ElfSymbol<L> {}
+unsafe impl<L: defs::ElfLayout> ByteRepr for defs::ElfRelr<L> {}
+unsafe impl<L: defs::ElfLayout> ByteRepr for defs::ElfRela<L> {}
+unsafe impl<L: defs::ElfLayout> ByteRepr for defs::ElfRel<L> {}

@@ -1,4 +1,4 @@
-use crate::elf::{ElfSymbol, PreCompute, SymbolTable, symbol::SymbolInfo};
+use crate::elf::{ElfLayout, ElfSymbol, PreCompute, SymbolTable, symbol::SymbolInfo};
 
 /// A trait for ELF hash table implementations.
 ///
@@ -37,9 +37,9 @@ pub(crate) trait ElfHashTable {
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol.
     /// * `None` - If the symbol was not found.
-    fn lookup<'sym>(
-        table: &'sym SymbolTable,
+    fn lookup<'sym, L: ElfLayout>(
+        table: &'sym SymbolTable<L>,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
-    ) -> Option<&'sym ElfSymbol>;
+    ) -> Option<&'sym ElfSymbol<L>>;
 }

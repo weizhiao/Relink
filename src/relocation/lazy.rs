@@ -1,10 +1,10 @@
 #[cfg(feature = "lazy-binding")]
 mod enabled {
-    use crate::image::{CoreInner, DynamicInfo, LoadedCore, RawDynamic};
+    use crate::image::{CoreInner, DynamicInfo, LoadedModule, RawDynamic};
     use crate::{
         RelocationError, Result,
         arch::{NativeArch, prepare_lazy_bind},
-        elf::ElfRelType,
+        elf::{ElfRelEntry, ElfRelType},
         relocation::{
             BindingMode, LazyLookupHooks, RelocAddr, RelocationArch, SymbolLookup, unlikely,
         },
@@ -14,14 +14,14 @@ mod enabled {
     use alloc::boxed::Box;
     use core::ptr::NonNull;
 
-    struct LazyLookup<D = ()> {
-        libs: Arc<[LoadedCore<D>]>,
+    struct LazyLookup<D: 'static> {
+        libs: Arc<[LoadedModule<D>]>,
         pre_find: Box<dyn SymbolLookup + Send + Sync>,
         post_find: Box<dyn SymbolLookup + Send + Sync>,
         tls_get_addr: RelocAddr,
     }
 
-    impl<D> SymbolLookup for LazyLookup<D> {
+    impl<D: 'static> SymbolLookup for LazyLookup<D> {
         fn lookup(&self, name: &str) -> Option<*const ()> {
             if let Some(symbol) = lookup_tls_get_addr(name, self.tls_get_addr) {
                 return Some(symbol);
@@ -33,7 +33,7 @@ mod enabled {
 
             self.libs
                 .iter()
-                .find_map(|lib| unsafe { lib.get::<()>(name).map(|sym| sym.into_raw()) })
+                .find_map(|lib| lib.lookup_addr(name).map(|addr| addr.as_ptr()))
                 .or_else(|| self.post_find.lookup(name))
         }
     }
@@ -69,7 +69,11 @@ mod enabled {
             Ok(())
         }
 
-        pub(crate) fn relocate_jump_slot(&self, base: RelocAddr, rel: &ElfRelType) -> bool {
+        pub(crate) fn relocate_jump_slot<Arch: RelocationArch>(
+            &self,
+            base: RelocAddr,
+            rel: &ElfRelType<Arch>,
+        ) -> bool {
             if !self.is_lazy() {
                 return false;
             }
@@ -104,7 +108,7 @@ mod enabled {
             &self,
             binding: ResolvedBinding,
             lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
-            deps: Arc<[LoadedCore<D>]>,
+            deps: Arc<[LoadedModule<D>]>,
         ) -> Result<()>
         where
             LazyPreS: SymbolLookup + Send + Sync + 'static,
@@ -121,7 +125,7 @@ mod enabled {
                         detail: "lazy binding requires dynamic metadata",
                     },
                 )?;
-                let info = unsafe { &mut *(Arc::as_ptr(dynamic_info) as *mut DynamicInfo) };
+                let info = unsafe { &mut *(Arc::as_ptr(dynamic_info) as *mut DynamicInfo<Arch>) };
                 let LazyLookupHooks {
                     pre_find,
                     post_find,
@@ -231,7 +235,7 @@ mod enabled {
 mod disabled {
     use crate::{
         elf::ElfRelType,
-        image::{LoadedCore, RawDynamic},
+        image::{LoadedModule, RawDynamic},
         relocation::{BindingMode, LazyLookupHooks, RelocationArch, SymbolLookup},
         sync::Arc,
     };
@@ -256,10 +260,10 @@ mod disabled {
             Ok(())
         }
 
-        pub(crate) const fn relocate_jump_slot(
+        pub(crate) fn relocate_jump_slot<Arch: RelocationArch>(
             &self,
             _base: crate::relocation::RelocAddr,
-            _rel: &ElfRelType,
+            _rel: &ElfRelType<Arch>,
         ) -> bool {
             false
         }
@@ -274,7 +278,7 @@ mod disabled {
             &self,
             _binding: ResolvedBinding,
             lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
-            _deps: Arc<[LoadedCore<D>]>,
+            _deps: Arc<[LoadedModule<D>]>,
         ) -> crate::Result<()>
         where
             LazyPreS: SymbolLookup + Send + Sync + 'static,

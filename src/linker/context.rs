@@ -2,7 +2,11 @@ use super::{
     storage::{CommittedEntry, CommittedStorage},
     view::DependencyGraphView,
 };
-use crate::{LinkerError, Result, image::LoadedCore};
+use crate::{
+    LinkerError, Result,
+    image::{LoadedCore, LoadedModule},
+    relocation::RelocationArch,
+};
 use alloc::{
     boxed::Box,
     collections::{BTreeSet, VecDeque},
@@ -13,8 +17,9 @@ use core::borrow::Borrow;
 
 /// A reusable local module repository and committed dependency graph.
 ///
-/// This context stores only committed modules. Discovery, planning, relocation,
-/// and commit orchestration are owned by [`super::Linker`].
+/// The context is heterogeneous: committed entries may be loaded for different
+/// built-in architectures, while typed accessors let callers recover
+/// `LoadedCore<D, Arch>` when they know the expected module architecture.
 pub struct LinkContext<K, D: 'static, M = ()> {
     pub(super) committed: CommittedStorage<K, D, M>,
 }
@@ -39,13 +44,11 @@ impl<K, D: 'static, M> LinkContext<K, D, M>
 where
     K: Clone + Ord,
 {
-    /// Returns whether the context is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.committed.is_empty()
     }
 
-    /// Returns whether a committed module exists for `key`.
     #[inline]
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
@@ -55,9 +58,8 @@ where
         self.committed.contains_key(key)
     }
 
-    /// Returns the committed module for `key`.
     #[inline]
-    pub fn get<Q>(&self, key: &Q) -> Option<&LoadedCore<D>>
+    pub fn get<Q>(&self, key: &Q) -> Option<&LoadedModule<D>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -65,9 +67,18 @@ where
         self.committed.get(key)
     }
 
-    /// Returns the canonical committed key and module for `key`.
     #[inline]
-    pub fn get_key_value<Q>(&self, key: &Q) -> Option<(&K, &LoadedCore<D>)>
+    pub fn get_typed<Q, Arch>(&self, key: &Q) -> Option<LoadedCore<D, Arch>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+        Arch: RelocationArch,
+    {
+        self.get(key)?.downcast::<Arch>()
+    }
+
+    #[inline]
+    pub fn get_key_value<Q>(&self, key: &Q) -> Option<(&K, &LoadedModule<D>)>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -77,7 +88,6 @@ where
             .map(|(key, entry)| (key, &entry.module))
     }
 
-    /// Returns the committed direct dependencies recorded for `key`.
     #[inline]
     pub fn direct_deps<Q>(&self, key: &Q) -> Option<&[K]>
     where
@@ -87,19 +97,16 @@ where
         self.committed.view().direct_deps(key)
     }
 
-    /// Returns the committed keys in load order.
     #[inline]
     pub fn load_order(&self) -> &[K] {
         self.committed.load_order()
     }
 
-    /// Returns a read-only view over the current committed dependency graph.
     #[inline]
     pub fn view(&self) -> DependencyGraphView<'_, K, D, M> {
         DependencyGraphView::new_committed(self.committed.view())
     }
 
-    /// Returns the metadata associated with a committed module.
     #[inline]
     pub fn meta<Q>(&self, key: &Q) -> Option<&M>
     where
@@ -109,7 +116,6 @@ where
         self.committed.entry(key).map(|entry| &entry.meta)
     }
 
-    /// Returns mutable metadata associated with a committed module.
     #[inline]
     pub fn meta_mut<Q>(&mut self, key: &Q) -> Option<&mut M>
     where
@@ -119,22 +125,30 @@ where
         self.committed.entry_mut(key).map(|entry| &mut entry.meta)
     }
 
-    /// Inserts an already-loaded module into the committed context.
-    ///
-    /// This is intended for callers that bootstrap a process-global context
-    /// from externally discovered shared objects.
-    pub fn insert(&mut self, key: K, module: LoadedCore<D>, direct_deps: Box<[K]>) -> Result<()>
+    pub fn insert(&mut self, key: K, module: LoadedModule<D>, direct_deps: Box<[K]>) -> Result<()>
     where
         M: Default,
     {
         self.insert_with_meta(key, module, direct_deps, M::default())
     }
 
-    /// Inserts an already-loaded module with caller-managed metadata.
+    pub fn insert_typed<Arch>(
+        &mut self,
+        key: K,
+        module: LoadedCore<D, Arch>,
+        direct_deps: Box<[K]>,
+    ) -> Result<()>
+    where
+        M: Default,
+        Arch: RelocationArch,
+    {
+        self.insert(key, LoadedModule::from(module), direct_deps)
+    }
+
     pub fn insert_with_meta(
         &mut self,
         key: K,
-        module: LoadedCore<D>,
+        module: LoadedModule<D>,
         direct_deps: Box<[K]>,
         meta: M,
     ) -> Result<()> {
@@ -147,10 +161,21 @@ where
         Ok(())
     }
 
-    /// Removes a committed module and returns its module, direct dependencies,
-    /// and metadata.
+    pub fn insert_typed_with_meta<Arch>(
+        &mut self,
+        key: K,
+        module: LoadedCore<D, Arch>,
+        direct_deps: Box<[K]>,
+        meta: M,
+    ) -> Result<()>
+    where
+        Arch: RelocationArch,
+    {
+        self.insert_with_meta(key, LoadedModule::from(module), direct_deps, meta)
+    }
+
     #[inline]
-    pub fn remove<Q>(&mut self, key: &Q) -> Option<(LoadedCore<D>, Box<[K]>, M)>
+    pub fn remove<Q>(&mut self, key: &Q) -> Option<(LoadedModule<D>, Box<[K]>, M)>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -158,7 +183,6 @@ where
         self.committed.remove(key).map(CommittedEntry::into_parts)
     }
 
-    /// Builds the transitive dependency scope for `root` in breadth-first order.
     pub fn dependency_scope_keys(&self, root: &K) -> Vec<K> {
         if !self.committed.contains_key(root) {
             return Vec::new();
@@ -186,8 +210,7 @@ where
         scope
     }
 
-    /// Builds the transitive dependency scope for `root` in breadth-first order.
-    pub fn dependency_scope(&self, root: &K) -> Arc<[LoadedCore<D>]> {
+    pub fn dependency_scope(&self, root: &K) -> Arc<[LoadedModule<D>]> {
         let scope = self
             .dependency_scope_keys(root)
             .into_iter()
@@ -196,8 +219,6 @@ where
         Arc::from(scope)
     }
 
-    /// Copies committed modules from another context into this one in source
-    /// load order.
     pub fn extend(&mut self, other: &LinkContext<K, D, M>) -> Result<()>
     where
         M: Clone,
@@ -226,8 +247,6 @@ where
         Ok(())
     }
 
-    /// Creates a committed-graph snapshot that can be used as an isolated load
-    /// session and later merged back into the source context.
     pub fn snapshot(&self) -> Self
     where
         M: Clone,

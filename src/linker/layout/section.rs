@@ -3,7 +3,7 @@ use crate::{
     AlignedBytes,
     elf::{ElfSectionFlags, ElfSectionType},
     entity::{PrimaryMap, SecondaryMap, entity_ref},
-    image::{ScannedDynamic, ScannedSection, ScannedSectionId},
+    image::{AnyScannedDynamic, AnyScannedSection, ScannedSectionId},
     linker::plan::ModuleId,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -136,7 +136,7 @@ pub struct SectionMetadata {
 }
 
 impl SectionMetadata {
-    pub(super) fn from_scanned(section: ScannedSection<'_>) -> Self {
+    pub(super) fn from_scanned(section: AnyScannedSection<'_>) -> Self {
         Self {
             scanned_section: section.id(),
             name: section.name().into(),
@@ -607,7 +607,7 @@ impl ModuleLayout {
     /// Builds a section-granularity layout seed from a scanned module.
     pub(crate) fn from_scanned(
         owner: ModuleId,
-        module: &ScannedDynamic,
+        module: &AnyScannedDynamic,
         arena: &mut LayoutSectionArena,
     ) -> Self {
         let mut section_links = Vec::new();

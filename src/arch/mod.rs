@@ -22,6 +22,44 @@
 // crates that perform cross-arch relocation. From this crate's perspective
 // when built for a single host, the items in non-native submodules look
 // dead but are intentionally kept available.
+
+/// Runtime tag for the built-in relocation backends.
+///
+/// `RelocationArch` remains the strongly typed per-module backend. `ArchKind`
+/// is the small runtime discriminator used by heterogeneous linker state when a
+/// dependency graph may contain modules from more than one target architecture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ArchKind {
+    X86_64,
+    AArch64,
+    RiscV64,
+    RiscV32,
+    LoongArch64,
+    X86,
+    Arm,
+}
+
+impl ArchKind {
+    #[inline]
+    pub const fn native() -> Self {
+        <NativeArch as crate::relocation::RelocationArch>::KIND
+    }
+}
+
+impl core::fmt::Display for ArchKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::X86_64 => f.write_str("x86_64"),
+            Self::AArch64 => f.write_str("aarch64"),
+            Self::RiscV64 => f.write_str("riscv64"),
+            Self::RiscV32 => f.write_str("riscv32"),
+            Self::LoongArch64 => f.write_str("loongarch64"),
+            Self::X86 => f.write_str("x86"),
+            Self::Arm => f.write_str("arm"),
+        }
+    }
+}
+
 #[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
 pub mod aarch64;
 #[cfg_attr(not(target_arch = "arm"), allow(dead_code))]

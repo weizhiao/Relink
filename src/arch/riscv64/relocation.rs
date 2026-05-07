@@ -2,7 +2,8 @@
 
 use elf::abi::*;
 
-use crate::elf::{ElfMachine, ElfRelocationType};
+use crate::arch::ArchKind;
+use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
 /// RISC-V 64-bit architecture marker.
@@ -11,7 +12,10 @@ use crate::relocation::RelocationArch;
 pub struct RiscV64Arch;
 
 impl RelocationArch for RiscV64Arch {
+    const KIND: ArchKind = ArchKind::RiscV64;
     const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    type Layout = Elf64Layout;
+    type Relocation = ElfRela<Self::Layout>;
 
     const NONE: ElfRelocationType = ElfRelocationType::new(0);
     const RELATIVE: ElfRelocationType = ElfRelocationType::new(R_RISCV_RELATIVE);

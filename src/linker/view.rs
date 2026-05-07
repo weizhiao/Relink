@@ -79,7 +79,6 @@ where
         }
     }
 
-    /// Returns whether the key is already present in the visible dependency graph.
     #[inline]
     pub fn contains_key(&self, key: &K) -> bool {
         match self.source {
@@ -94,7 +93,6 @@ where
         }
     }
 
-    /// Returns the direct dependency keys recorded for a module.
     #[inline]
     pub fn direct_deps(&self, key: &K) -> Option<&'a [K]> {
         match self.source {

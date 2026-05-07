@@ -11,7 +11,7 @@ use elf::abi::{
     SHT_PROGBITS, SHT_REL, SHT_RELA, SHT_SHLIB, SHT_STRTAB, SHT_SYMTAB, SHT_SYMTAB_SHNDX,
 };
 
-use super::defs::{ElfLayout, NativeElfLayout};
+use super::defs::{ElfLayout, ElfShdrRaw, NativeElfLayout};
 
 /// Semantic wrapper for the ELF `sh_type` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -101,83 +101,83 @@ bitflags! {
 /// ELF section header describing sections of the ELF file.
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct ElfShdr {
-    shdr: <NativeElfLayout as ElfLayout>::Shdr,
+pub struct ElfShdr<L: ElfLayout = NativeElfLayout> {
+    shdr: L::Shdr,
 }
 
-impl ElfShdr {
+impl<L: ElfLayout> ElfShdr<L> {
     /// Returns the parsed ELF section type of this header.
     #[inline]
-    pub const fn section_type(&self) -> ElfSectionType {
-        ElfSectionType::new(self.shdr.sh_type)
+    pub fn section_type(&self) -> ElfSectionType {
+        ElfSectionType::new(self.shdr.sh_type())
     }
 
     /// Returns the section name index (`sh_name`) field.
     #[inline]
-    pub const fn sh_name(&self) -> u32 {
-        self.shdr.sh_name
+    pub fn sh_name(&self) -> u32 {
+        self.shdr.sh_name()
     }
 
     /// Returns the parsed ELF section flags of this header.
     #[inline]
     pub fn flags(&self) -> ElfSectionFlags {
-        ElfSectionFlags::from_bits_retain(self.shdr.sh_flags as u64)
+        ElfSectionFlags::from_bits_retain(self.shdr.sh_flags())
     }
 
     /// Returns the section address (`sh_addr`) as a native-sized value.
     #[inline]
     pub fn sh_addr(&self) -> usize {
-        self.shdr.sh_addr as usize
+        self.shdr.sh_addr()
     }
 
     /// Returns the section file offset (`sh_offset`) as a native-sized value.
     #[inline]
     pub fn sh_offset(&self) -> usize {
-        self.shdr.sh_offset as usize
+        self.shdr.sh_offset()
     }
 
     /// Returns the section size (`sh_size`) as a native-sized value.
     #[inline]
     pub fn sh_size(&self) -> usize {
-        self.shdr.sh_size as usize
+        self.shdr.sh_size()
     }
 
     /// Returns the section link (`sh_link`) field.
     #[inline]
-    pub const fn sh_link(&self) -> u32 {
-        self.shdr.sh_link
+    pub fn sh_link(&self) -> u32 {
+        self.shdr.sh_link()
     }
 
     /// Returns the section info (`sh_info`) field.
     #[inline]
-    pub const fn sh_info(&self) -> u32 {
-        self.shdr.sh_info
+    pub fn sh_info(&self) -> u32 {
+        self.shdr.sh_info()
     }
 
     /// Returns the section alignment (`sh_addralign`) as a native-sized value.
     #[inline]
     pub fn sh_addralign(&self) -> usize {
-        self.shdr.sh_addralign as usize
+        self.shdr.sh_addralign()
     }
 
     /// Returns the section entry size (`sh_entsize`) as a native-sized value.
     #[inline]
     pub fn sh_entsize(&self) -> usize {
-        self.shdr.sh_entsize as usize
+        self.shdr.sh_entsize()
     }
 
     /// Updates the section address (`sh_addr`) field.
     #[inline]
     #[cfg(feature = "object")]
     pub(crate) fn set_sh_addr(&mut self, addr: usize) {
-        self.shdr.sh_addr = addr as _;
+        self.shdr.set_sh_addr(addr);
     }
 
     /// Adds an offset to the section address (`sh_addr`) field.
     #[inline]
     #[cfg(feature = "object")]
     pub(crate) fn add_sh_addr(&mut self, delta: usize) {
-        self.shdr.sh_addr = self.shdr.sh_addr.wrapping_add(delta as _);
+        self.shdr.add_sh_addr(delta);
     }
 
     /// Creates a new ELF section header with the specified parameters.
@@ -206,22 +206,22 @@ impl ElfShdr {
         sh_addralign: usize,
         sh_entsize: usize,
     ) -> Self {
-        let mut shdr: <NativeElfLayout as ElfLayout>::Shdr = unsafe { core::mem::zeroed() };
-        shdr.sh_name = sh_name;
-        shdr.sh_type = sh_type.raw();
-        shdr.sh_flags = sh_flags.bits() as _;
-        shdr.sh_addr = sh_addr as _;
-        shdr.sh_offset = sh_offset as _;
-        shdr.sh_size = sh_size as _;
-        shdr.sh_link = sh_link;
-        shdr.sh_info = sh_info;
-        shdr.sh_addralign = sh_addralign as _;
-        shdr.sh_entsize = sh_entsize as _;
+        let mut shdr: L::Shdr = unsafe { core::mem::zeroed() };
+        shdr.set_sh_name(sh_name);
+        shdr.set_sh_type(sh_type.raw());
+        shdr.set_sh_flags(sh_flags.bits());
+        shdr.set_sh_addr(sh_addr);
+        shdr.set_sh_offset(sh_offset);
+        shdr.set_sh_size(sh_size);
+        shdr.set_sh_link(sh_link);
+        shdr.set_sh_info(sh_info);
+        shdr.set_sh_addralign(sh_addralign);
+        shdr.set_sh_entsize(sh_entsize);
         Self { shdr }
     }
 }
 
-impl ElfShdr {
+impl<L: ElfLayout> ElfShdr<L> {
     /// Returns a reference to the section content as a slice of the specified type.
     ///
     /// This method provides safe access to section data by interpreting the section

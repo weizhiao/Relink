@@ -2,10 +2,11 @@ use crate::{
     Result,
     arch::object::ObjectRelocator,
     elf::{ElfRelType, ElfRelocationType},
-    image::RawObject,
+    image::{LoadedModule, RawObject},
     loader::LifecycleContext,
     logging,
     relocation::{RelocHelper, RelocationHandler, SymbolLookup},
+    sync::Arc,
 };
 
 use super::layout::PltGotSection;
@@ -26,7 +27,7 @@ impl ObjectRelocation {
 impl<D: 'static> RawObject<D> {
     pub(crate) fn link_impl<PreS, PostS, PreH, PostH>(
         mut self,
-        scope: &[crate::image::LoadedCore<D>],
+        scope: Arc<[LoadedModule<D>]>,
         pre_find: &PreS,
         post_find: &PostS,
         pre_handler: &PreH,
@@ -35,14 +36,14 @@ impl<D: 'static> RawObject<D> {
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized,
+        PreH: RelocationHandler<crate::arch::NativeArch> + ?Sized,
+        PostH: RelocationHandler<crate::arch::NativeArch> + ?Sized,
     {
         logging::debug!("Relocating object: {}", self.core.name());
 
         let mut helper = RelocHelper::new(
             &self.core,
-            scope.to_vec().into(),
+            scope.clone(),
             pre_find,
             post_find,
             pre_handler,
@@ -73,21 +74,21 @@ impl<D: 'static> RawObject<D> {
 
         logging::info!("Relocation completed for {}", self.core.name());
 
-        Ok(unsafe { crate::image::LoadedCore::from_core(self.core) })
+        Ok(unsafe { crate::image::LoadedCore::from_core_deps(self.core, scope) })
     }
 }
 
 pub(crate) trait ObjectReloc {
     fn relocate<D, PreS, PostS, PreH, PostH>(
-        helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
-        rel: &ElfRelType,
+        helper: &mut RelocHelper<'_, D, crate::arch::NativeArch, PreS, PostS, PreH, PostH>,
+        rel: &ElfRelType<crate::arch::NativeArch>,
         pltgot: &mut PltGotSection,
     ) -> Result<()>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized;
+        PreH: RelocationHandler<crate::arch::NativeArch> + ?Sized,
+        PostH: RelocationHandler<crate::arch::NativeArch> + ?Sized;
 
     fn needs_got(_rel_type: ElfRelocationType) -> bool {
         false

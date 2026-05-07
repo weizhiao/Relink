@@ -1,11 +1,13 @@
 use super::{SymDef, find_symdef_impl};
 use crate::{
     Result,
-    elf::{ElfMachine, ElfRelType, ElfRelocationType},
-    image::{ElfCore, LoadedCore},
+    arch::{ArchKind, NativeArch},
+    elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType},
+    image::{ElfCore, LoadedModule},
     sync::Arc,
 };
 use alloc::boxed::Box;
+use core::marker::PhantomData;
 
 /// Architecture-specific dynamic relocation numbering.
 ///
@@ -14,9 +16,18 @@ use alloc::boxed::Box;
 /// The native relocation path uses [`crate::arch::NativeArch`]; cross-architecture
 /// callers may instantiate the per-architecture zero-sized backends declared
 /// in `crate::arch::<name>::relocation`.
-pub trait RelocationArch {
+pub trait RelocationArch: 'static {
+    /// Runtime tag for this built-in relocation backend.
+    const KIND: ArchKind;
+
     /// ELF machine value accepted by this relocation backend.
     const MACHINE: ElfMachine;
+
+    /// ELF class/layout used by this architecture.
+    type Layout: ElfLayout;
+
+    /// Dynamic relocation entry format used by this architecture.
+    type Relocation: ElfRelEntry<Self::Layout> + 'static;
 
     const NONE: ElfRelocationType;
     const RELATIVE: ElfRelocationType;
@@ -171,7 +182,7 @@ impl HandleResult {
     }
 }
 
-pub trait RelocationHandler {
+pub trait RelocationHandler<Arch: RelocationArch = NativeArch> {
     /// Handles a relocation.
     ///
     /// # Arguments
@@ -181,45 +192,45 @@ pub trait RelocationHandler {
     /// * `Ok(HandleResult::Unhandled)` - Not handled, fall through to default behavior.
     /// * `Ok(HandleResult::Handled)` - Handled successfully.
     /// * `Err(e)` - The handler failed.
-    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult>;
+    fn handle<D: 'static>(&self, ctx: &RelocationContext<'_, D, Arch>) -> Result<HandleResult>;
 }
 
 /// Context passed to [`RelocationHandler::handle`].
 ///
 /// This struct provides access to the relocation entry, the module being relocated,
 /// and the current symbol resolution scope.
-pub struct RelocationContext<'a, D> {
-    rel: &'a ElfRelType,
-    lib: &'a ElfCore<D>,
-    scope: &'a [LoadedCore<D>],
+pub struct RelocationContext<'a, D: 'static, Arch: RelocationArch = NativeArch> {
+    rel: &'a ElfRelType<Arch>,
+    lib: &'a ElfCore<D, Arch>,
+    scope: &'a [LoadedModule<D>],
 }
 
-impl<'a, D> RelocationContext<'a, D> {
+impl<'a, D: 'static, Arch: RelocationArch> RelocationContext<'a, D, Arch> {
     /// Construct a new `RelocationContext`.
     #[inline]
     pub(crate) fn new(
-        rel: &'a ElfRelType,
-        lib: &'a ElfCore<D>,
-        scope: &'a [LoadedCore<D>],
+        rel: &'a ElfRelType<Arch>,
+        lib: &'a ElfCore<D, Arch>,
+        scope: &'a [LoadedModule<D>],
     ) -> Self {
         Self { rel, lib, scope }
     }
 
     /// Access the relocation entry.
     #[inline]
-    pub fn rel(&self) -> &ElfRelType {
+    pub fn rel(&self) -> &ElfRelType<Arch> {
         self.rel
     }
 
     /// Access the core component where the relocation appears.
     #[inline]
-    pub fn lib(&self) -> &ElfCore<D> {
+    pub fn lib(&self) -> &ElfCore<D, Arch> {
         self.lib
     }
 
     /// Access the current resolution scope.
     #[inline]
-    pub fn scope(&self) -> &[LoadedCore<D>] {
+    pub fn scope(&self) -> &[LoadedModule<D>] {
         self.scope
     }
 
@@ -232,32 +243,32 @@ impl<'a, D> RelocationContext<'a, D> {
     }
 }
 
-impl RelocationHandler for () {
-    fn handle<D>(&self, _ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
+impl<Arch: RelocationArch> RelocationHandler<Arch> for () {
+    fn handle<D: 'static>(&self, _ctx: &RelocationContext<'_, D, Arch>) -> Result<HandleResult> {
         Ok(HandleResult::Unhandled)
     }
 }
 
-impl<H: RelocationHandler + ?Sized> RelocationHandler for &H {
-    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
+impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for &H {
+    fn handle<D: 'static>(&self, ctx: &RelocationContext<'_, D, Arch>) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
-impl<H: RelocationHandler + ?Sized> RelocationHandler for &mut H {
-    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
+impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for &mut H {
+    fn handle<D: 'static>(&self, ctx: &RelocationContext<'_, D, Arch>) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
-impl<H: RelocationHandler + ?Sized> RelocationHandler for Box<H> {
-    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
+impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for Box<H> {
+    fn handle<D: 'static>(&self, ctx: &RelocationContext<'_, D, Arch>) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
-impl<H: RelocationHandler + ?Sized> RelocationHandler for Arc<H> {
-    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
+impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for Arc<H> {
+    fn handle<D: 'static>(&self, ctx: &RelocationContext<'_, D, Arch>) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
@@ -325,7 +336,8 @@ impl<'a, PreH: ?Sized, PostH: ?Sized> HandlerHooks<'a, PreH, PostH> {
 /// Internal relocation configuration shared across raw image types.
 pub struct RelocateArgs<
     'a,
-    D,
+    D: 'static,
+    Arch: RelocationArch,
     PreS: ?Sized,
     PostS: ?Sized,
     LazyPreS,
@@ -333,19 +345,29 @@ pub struct RelocateArgs<
     PreH: ?Sized,
     PostH: ?Sized,
 > {
-    pub(crate) scope: Arc<[LoadedCore<D>]>,
+    pub(crate) scope: Arc<[LoadedModule<D>]>,
     pub(crate) binding: BindingMode,
     pub(crate) lookup: LookupHooks<'a, PreS, PostS>,
     pub(crate) lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
     pub(crate) handlers: HandlerHooks<'a, PreH, PostH>,
+    _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
-impl<'a, D, PreS: ?Sized, PostS: ?Sized, LazyPreS, LazyPostS, PreH: ?Sized, PostH: ?Sized>
-    RelocateArgs<'a, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>
+impl<
+    'a,
+    D: 'static,
+    Arch: RelocationArch,
+    PreS: ?Sized,
+    PostS: ?Sized,
+    LazyPreS,
+    LazyPostS,
+    PreH: ?Sized,
+    PostH: ?Sized,
+> RelocateArgs<'a, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>
 {
     #[inline]
     pub(crate) fn new(
-        scope: Arc<[LoadedCore<D>]>,
+        scope: Arc<[LoadedModule<D>]>,
         binding: BindingMode,
         lookup: LookupHooks<'a, PreS, PostS>,
         lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
@@ -357,6 +379,7 @@ impl<'a, D, PreS: ?Sized, PostS: ?Sized, LazyPreS, LazyPostS, PreH: ?Sized, Post
             lookup,
             lazy_lookup,
             handlers,
+            _marker: PhantomData,
         }
     }
 }
@@ -388,15 +411,15 @@ pub trait Relocatable<D = ()>: Sized {
     /// ([`Self::Arch`]).
     fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+        args: RelocateArgs<'_, D, Self::Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
         LazyPostS: SymbolLookup + Send + Sync + 'static,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized;
+        PreH: RelocationHandler<Self::Arch> + ?Sized,
+        PostH: RelocationHandler<Self::Arch> + ?Sized;
 }
 
 /// Marker trait for raw image types that support lazy-binding fixup hooks.

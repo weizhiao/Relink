@@ -10,6 +10,7 @@
 
 use crate::{
     Result,
+    arch::NativeArch,
     elf::ElfPhdr,
     relocation::{
         Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator, SymbolLookup,
@@ -28,21 +29,22 @@ mod symbol;
 
 #[cfg(any(feature = "lazy-binding", feature = "object"))]
 pub(crate) use core::CoreInner;
+pub(crate) use core::{ModuleProvider, ScopeSymbol};
 pub(crate) use dynamic::DynamicInfo;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use dynamic::LazyBindingInfo;
 pub(crate) use dynamic::RawDynamicParts;
 pub(crate) use scanned::ScannedDynamicLoadParts;
 
-pub use core::{ElfCore, ElfCoreRef, LoadedCore};
+pub use core::{ElfCore, ElfCoreRef, LoadedCore, LoadedModule};
 pub use dylib::RawDylib;
 pub use dynamic::RawDynamic;
 pub use exec::{LoadedExec, RawExec, StaticExec};
 #[cfg(feature = "object")]
 pub use object::{LoadedObject, RawObject};
 pub use scanned::{
-    ModuleCapability, ScannedDynamic, ScannedDynamicInfo, ScannedElf, ScannedExec, ScannedSection,
-    ScannedSectionId,
+    AnyScannedDynamic, AnyScannedSection, AnySectionHeaders, ModuleCapability, ScannedDynamic,
+    ScannedDynamicInfo, ScannedElf, ScannedExec, ScannedSection, ScannedSectionId,
 };
 pub use symbol::Symbol;
 
@@ -76,12 +78,12 @@ where
 /// This is the result of calling `.relocator().relocate()` on a [`RawElf`].
 /// Loaded images retain the dependencies that were actually used during relocation.
 #[derive(Debug, Clone)]
-pub enum LoadedElf<D> {
+pub enum LoadedElf<D: 'static, Arch: RelocationArch = NativeArch> {
     /// A relocated dynamic library.
-    Dylib(LoadedCore<D>),
+    Dylib(LoadedCore<D, Arch>),
 
     /// A relocated executable.
-    Exec(LoadedExec<D>),
+    Exec(LoadedExec<D, Arch>),
 
     /// A relocated object file.
     #[cfg(feature = "object")]
@@ -99,7 +101,7 @@ impl<D: 'static, Arch: RelocationArch> RawElf<D, Arch> {
     /// let raw = loader.load("path/to/input.elf").unwrap();
     /// let relocated = raw.relocator().relocate().unwrap();
     /// ```
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D, Arch> {
         Relocator::new().with_object(self)
     }
 
@@ -160,7 +162,7 @@ impl<D: 'static, Arch: RelocationArch> RawElf<D, Arch> {
 
     /// Returns the program headers of the ELF file.
     #[inline]
-    pub fn phdrs(&self) -> Option<&[ElfPhdr]> {
+    pub fn phdrs(&self) -> Option<&[ElfPhdr<Arch::Layout>]> {
         match self {
             RawElf::Dylib(dylib) => Some(dylib.phdrs()),
             RawElf::Exec(exec) => exec.phdrs(),
@@ -184,14 +186,14 @@ impl<D: 'static, Arch: RelocationArch> RawElf<D, Arch> {
 #[cfg(feature = "lazy-binding")]
 impl<D: 'static> crate::relocation::SupportLazy for RawElf<D> {}
 
-impl<D> LoadedElf<D> {
+impl<D: 'static, Arch: RelocationArch> LoadedElf<D, Arch> {
     /// Converts this LoadedElf into the loaded core for a dylib if it is one.
     ///
     /// # Returns
     /// * `Some(dylib)` - If this is a Dylib variant
     /// * `None` - If this is an Exec variant
     #[inline]
-    pub fn into_dylib(self) -> Option<LoadedCore<D>> {
+    pub fn into_dylib(self) -> Option<LoadedCore<D, Arch>> {
         match self {
             LoadedElf::Dylib(dylib) => Some(dylib),
             _ => None,
@@ -204,7 +206,7 @@ impl<D> LoadedElf<D> {
     /// * `Some(exec)` - If this is an Exec variant
     /// * `None` - If this is a Dylib variant
     #[inline]
-    pub fn into_exec(self) -> Option<LoadedExec<D>> {
+    pub fn into_exec(self) -> Option<LoadedExec<D, Arch>> {
         match self {
             LoadedElf::Exec(exec) => Some(exec),
             _ => None,
@@ -231,7 +233,7 @@ impl<D> LoadedElf<D> {
     /// * `Some(dylib)` - If this is a Dylib variant
     /// * `None` - If this is an Exec variant
     #[inline]
-    pub fn as_dylib(&self) -> Option<&LoadedCore<D>> {
+    pub fn as_dylib(&self) -> Option<&LoadedCore<D, Arch>> {
         match self {
             LoadedElf::Dylib(dylib) => Some(dylib),
             _ => None,
@@ -244,7 +246,7 @@ impl<D> LoadedElf<D> {
     /// * `Some(exec)` - If this is an Exec variant
     /// * `None` - If this is a Dylib variant
     #[inline]
-    pub fn as_exec(&self) -> Option<&LoadedExec<D>> {
+    pub fn as_exec(&self) -> Option<&LoadedExec<D, Arch>> {
         match self {
             LoadedElf::Exec(exec) => Some(exec),
             _ => None,
@@ -300,43 +302,30 @@ impl<D> LoadedElf<D> {
 }
 
 impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawElf<D, Arch> {
-    type Output = LoadedElf<D>;
+    type Output = LoadedElf<D, Arch>;
     type Arch = Arch;
 
     fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
         LazyPostS: SymbolLookup + Send + Sync + 'static,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized,
+        PreH: RelocationHandler<Arch> + ?Sized,
+        PostH: RelocationHandler<Arch> + ?Sized,
     {
         match self {
             RawElf::Dylib(dylib) => Ok(LoadedElf::Dylib(Relocatable::relocate(dylib, args)?)),
             RawElf::Exec(exec) => Ok(LoadedElf::Exec(Relocatable::relocate(exec, args)?)),
             #[cfg(feature = "object")]
             RawElf::Object(relocatable) => {
-                let RelocateArgs {
-                    binding,
-                    lookup,
-                    lazy_lookup,
-                    handlers,
-                    ..
-                } = args;
-                Ok(LoadedElf::Object(Relocatable::relocate(
-                    relocatable,
-                    RelocateArgs::new(
-                        crate::sync::Arc::from(alloc::vec::Vec::new()),
-                        binding,
-                        lookup,
-                        lazy_lookup,
-                        handlers,
-                    ),
-                )?))
+                let RelocateArgs { scope, lookup, .. } = args;
+                let inner =
+                    relocatable.link_impl(scope, lookup.pre_find, lookup.post_find, &(), &())?;
+                Ok(LoadedElf::Object(LoadedObject { inner }))
             }
         }
     }

@@ -1,4 +1,4 @@
-use crate::image::LoadedCore;
+use crate::image::LoadedModule;
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::borrow::Borrow;
 
@@ -54,7 +54,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn get<Q>(&self, key: &Q) -> Option<&LoadedCore<D>>
+    pub(crate) fn get<Q>(&self, key: &Q) -> Option<&LoadedModule<D>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -162,7 +162,7 @@ where
 }
 
 pub(crate) struct CommittedEntry<K, D: 'static, M = ()> {
-    pub(crate) module: LoadedCore<D>,
+    pub(crate) module: LoadedModule<D>,
     pub(crate) direct_deps: Box<[K]>,
     pub(crate) meta: M,
 }
@@ -183,7 +183,7 @@ where
 
 impl<K, D: 'static, M> CommittedEntry<K, D, M> {
     #[inline]
-    pub(crate) fn new(module: LoadedCore<D>, direct_deps: Box<[K]>, meta: M) -> Self {
+    pub(crate) fn new(module: LoadedModule<D>, direct_deps: Box<[K]>, meta: M) -> Self {
         Self {
             module,
             direct_deps,
@@ -192,7 +192,7 @@ impl<K, D: 'static, M> CommittedEntry<K, D, M> {
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (LoadedCore<D>, Box<[K]>, M) {
+    pub(crate) fn into_parts(self) -> (LoadedModule<D>, Box<[K]>, M) {
         (self.module, self.direct_deps, self.meta)
     }
 }

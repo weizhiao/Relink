@@ -3,10 +3,11 @@ mod enabled {
     use super::super::defs::{TlsDescDynamicArg, TlsIndex};
     use crate::{
         arch::{TLS_DTV_OFFSET, tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
-        elf::ElfRelType,
+        elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
         relocation::{
             RelocAddr, RelocHelper, RelocValue, RelocationArch, RelocationHandler, SymbolLookup,
         },
+        segment::ElfSegments,
     };
     use alloc::boxed::Box;
 
@@ -15,17 +16,25 @@ mod enabled {
         (name == "__tls_get_addr").then_some(tls_get_addr.as_ptr())
     }
 
+    #[inline]
+    fn write_tls_word<Arch: RelocationArch>(segments: &ElfSegments, offset: usize, value: usize) {
+        segments.write(
+            offset,
+            RelocValue::new(<Arch::Layout as ElfLayout>::Word::from_usize(value)),
+        );
+    }
+
     pub(crate) fn handle_tls_reloc<D, Arch, PreS, PostS, PreH, PostH>(
-        helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
-        rel: &ElfRelType,
+        helper: &mut RelocHelper<'_, D, Arch, PreS, PostS, PreH, PostH>,
+        rel: &ElfRelType<Arch>,
     ) -> bool
     where
         D: 'static,
         Arch: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized,
+        PreH: RelocationHandler<Arch> + ?Sized,
+        PostH: RelocationHandler<Arch> + ?Sized,
     {
         let r_type = rel.r_type();
         let r_sym = rel.r_symbol();
@@ -35,10 +44,15 @@ mod enabled {
         match r_type {
             value if value == Arch::DTPOFF => {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
-                    let tls_val = RelocValue::new(symdef.sym.unwrap().st_value() as usize)
-                        .addend(r_addend)
-                        .relative_to(TLS_DTV_OFFSET);
-                    segments.write(rel.r_offset(), tls_val);
+                    let tls_val = RelocValue::new(
+                        symdef
+                            .symbol()
+                            .expect("DTPOFF relocation requires a defined symbol")
+                            .st_value(),
+                    )
+                    .addend(r_addend)
+                    .relative_to(TLS_DTV_OFFSET);
+                    write_tls_word::<Arch>(segments, rel.r_offset(), tls_val.into_inner());
                     return true;
                 }
             }
@@ -46,24 +60,26 @@ mod enabled {
                 let mod_id = if r_sym == 0 {
                     helper.core.tls_mod_id()
                 } else if let Some(symdef) = helper.find_symdef(r_sym) {
-                    symdef.lib.tls_mod_id()
+                    symdef.tls_mod_id()
                 } else {
                     None
                 };
 
                 if let Some(mod_id) = mod_id {
-                    segments.write(rel.r_offset(), RelocValue::new(mod_id.get()));
+                    write_tls_word::<Arch>(segments, rel.r_offset(), mod_id.get());
                     return true;
                 }
             }
             value if value == Arch::TPOFF => {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
-                    let sym = symdef.sym.unwrap();
-                    if let Some(tp_offset) = symdef.lib.tls_tp_offset() {
+                    let sym = symdef
+                        .symbol()
+                        .expect("TPOFF relocation requires a defined symbol");
+                    if let Some(tp_offset) = symdef.tls_tp_offset() {
                         let tls_val =
                             RelocValue::new((tp_offset.get() + sym.st_value() as isize) as usize)
                                 .addend(r_addend);
-                        segments.write(rel.r_offset(), tls_val);
+                        write_tls_word::<Arch>(segments, rel.r_offset(), tls_val.into_inner());
                         return true;
                     }
                 }
@@ -78,20 +94,23 @@ mod enabled {
                     return false;
                 }
                 if let Some(symdef) = helper.find_symdef(r_sym) {
-                    let sym = symdef.sym.unwrap();
-                    if let Some(tp_offset) = symdef.lib.tls_tp_offset() {
+                    let sym = symdef
+                        .symbol()
+                        .expect("TLSDESC relocation requires a defined symbol");
+                    if let Some(tp_offset) = symdef.tls_tp_offset() {
                         let tpoff =
                             RelocValue::new((tp_offset.get() + sym.st_value() as isize) as usize)
                                 .addend(r_addend);
-                        segments.write(
+                        write_tls_word::<Arch>(
+                            segments,
                             rel.r_offset(),
-                            RelocAddr::from_ptr(tlsdesc_resolver_static as *const ()),
+                            tlsdesc_resolver_static as *const () as usize,
                         );
-                        segments.write(rel.r_offset() + 8, tpoff);
+                        write_tls_word::<Arch>(segments, rel.r_offset() + 8, tpoff.into_inner());
                         return true;
                     }
 
-                    if let Some(mod_id) = symdef.lib.tls_mod_id() {
+                    if let Some(mod_id) = symdef.tls_mod_id() {
                         let offset = RelocValue::new(sym.st_value() as usize).addend(r_addend);
                         let dynamic_arg = Box::new(TlsDescDynamicArg {
                             tls_get_addr: helper.tls_get_addr.into_inner(),
@@ -104,11 +123,12 @@ mod enabled {
                         let arg_ptr = RelocAddr::from_ptr(dynamic_arg.as_ref());
                         helper.tls_desc_args.push(dynamic_arg);
 
-                        segments.write(
+                        write_tls_word::<Arch>(
+                            segments,
                             rel.r_offset(),
-                            RelocAddr::from_ptr(tlsdesc_resolver_dynamic as *const ()),
+                            tlsdesc_resolver_dynamic as *const () as usize,
                         );
-                        segments.write(rel.r_offset() + 8, arg_ptr);
+                        write_tls_word::<Arch>(segments, rel.r_offset() + 8, arg_ptr.into_inner());
                         return true;
                     }
                 }
@@ -133,16 +153,16 @@ mod disabled {
 
     #[inline]
     pub(crate) fn handle_tls_reloc<D, Arch, PreS, PostS, PreH, PostH>(
-        _helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
-        _rel: &ElfRelType,
+        _helper: &mut RelocHelper<'_, D, Arch, PreS, PostS, PreH, PostH>,
+        _rel: &ElfRelType<Arch>,
     ) -> bool
     where
         D: 'static,
         Arch: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        PreH: RelocationHandler + ?Sized,
-        PostH: RelocationHandler + ?Sized,
+        PreH: RelocationHandler<Arch> + ?Sized,
+        PostH: RelocationHandler<Arch> + ?Sized,
     {
         false
     }

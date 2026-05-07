@@ -1,6 +1,6 @@
 use crate::{
     Result,
-    elf::ElfPhdr,
+    elf::{ElfLayout, ElfPhdr},
     os::{Mmap, ProtFlags},
     relocation::RelocAddr,
 };
@@ -34,7 +34,11 @@ impl ELFRelro {
     ///
     /// # Returns
     /// A new ELFRelro instance
-    pub(crate) fn new<M: Mmap>(phdr: &ElfPhdr, base: RelocAddr, page_size: usize) -> ELFRelro {
+    pub(crate) fn new<M: Mmap, L: ElfLayout>(
+        phdr: &ElfPhdr<L>,
+        base: RelocAddr,
+        page_size: usize,
+    ) -> ELFRelro {
         ELFRelro {
             addr: base.offset(phdr.p_vaddr()),
             len: phdr.p_memsz(),

@@ -413,7 +413,7 @@ impl<'a> SymbolVersion<'a> {
     }
 }
 
-impl SymbolTable {
+impl<L: crate::elf::ElfLayout> SymbolTable<L> {
     pub(crate) fn get_requirement(&self, sym_idx: usize) -> Option<SymbolVersion<'_>> {
         if let Some(gnu_version) = &self.version {
             let ver_ndx = gnu_version.version_ids.get(sym_idx);
