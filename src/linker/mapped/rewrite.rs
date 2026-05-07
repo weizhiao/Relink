@@ -6,7 +6,7 @@ use crate::linker::{
 use crate::{
     AlignedBytes, LinkerError, Result,
     aligned_bytes::ByteRepr,
-    arch::Architecture,
+    arch::NativeArch,
     elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfRelocationType, ElfSymbol},
     image::ScannedSectionId,
 };
@@ -554,7 +554,7 @@ fn write_retained_relocation(
         Ok(())
     };
 
-    <Architecture as crate::relocation::RelocationValueProvider>::relocation_value(
+    <NativeArch as crate::relocation::RelocationValueProvider>::relocation_value(
         entry.r_type().raw() as usize,
         symbol_value,
         addend,
@@ -574,7 +574,7 @@ fn retained_relocation_target(
     site: &RelocationSite,
     addend: isize,
 ) -> Result<usize> {
-    if let Some(source_target) = <Architecture as GotPltTarget>::got_plt_target(
+    if let Some(source_target) = <NativeArch as GotPltTarget>::got_plt_target(
         target_bytes,
         entry.r_type(),
         symbol.is_undef(),

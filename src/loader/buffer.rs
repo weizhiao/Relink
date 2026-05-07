@@ -1,6 +1,6 @@
 use crate::{
     AlignedBytes, ParseEhdrError, ParsePhdrError, Result,
-    elf::{EHDR_SIZE, ElfEhdr, ElfHeader, ElfPhdr, ElfShdr},
+    elf::{EHDR_SIZE, ElfEhdr, ElfHeader, ElfMachine, ElfPhdr, ElfShdr},
     input::ElfReader,
 };
 use core::mem::{MaybeUninit, align_of};
@@ -18,18 +18,19 @@ impl ElfBuf {
 
     /// Reads and parses the ELF header.
     ///
-    /// When `check_arch` is `false` the machine architecture check is skipped,
-    /// enabling cross-architecture loading (e.g. loading x86-64 ELF on RISC-V).
+    /// When `expected_machine` is `Some(machine)` the parsed header is
+    /// rejected unless its `e_machine` equals `machine`. `None` skips the
+    /// machine check entirely (cross-architecture loading).
     pub(crate) fn prepare_ehdr(
         &mut self,
         object: &mut impl ElfReader,
-        check_arch: bool,
+        expected_machine: Option<ElfMachine>,
     ) -> Result<ElfHeader> {
         let mut raw = MaybeUninit::<ElfEhdr>::uninit();
         let bytes =
             unsafe { core::slice::from_raw_parts_mut(raw.as_mut_ptr().cast::<u8>(), EHDR_SIZE) };
         object.read(bytes, 0)?;
-        ElfHeader::from_raw(unsafe { raw.assume_init() }, check_arch)
+        ElfHeader::from_raw(unsafe { raw.assume_init() }, expected_machine)
     }
 
     pub(crate) fn prepare_phdrs(

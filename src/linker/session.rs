@@ -179,26 +179,6 @@ where
     })
 }
 
-pub(crate) fn collect_unique_deps<K, E, F>(
-    needed_len: usize,
-    mut resolve: F,
-) -> core::result::Result<Vec<K>, E>
-where
-    K: PartialEq,
-    F: FnMut(usize) -> core::result::Result<K, E>,
-{
-    let mut direct_deps = Vec::with_capacity(needed_len);
-
-    for idx in 0..needed_len {
-        let dep_key = resolve(idx)?;
-        if !direct_deps.iter().any(|existing| existing == &dep_key) {
-            direct_deps.push(dep_key);
-        }
-    }
-
-    Ok(direct_deps)
-}
-
 #[cfg(test)]
 mod tests {
     use super::walk_breadth_first;

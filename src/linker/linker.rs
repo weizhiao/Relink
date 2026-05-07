@@ -18,7 +18,7 @@ use crate::{
     image::{LoadedCore, RawDynamic, ScannedDynamic},
     loader::LoadHook,
     os::{DefaultMmap, Mmap},
-    relocation::{RelocationHandler, Relocator, SymbolLookup},
+    relocation::{RelocationArch, RelocationHandler, Relocator, SymbolLookup},
     sync::Arc,
     tls::TlsResolver,
 };
@@ -38,7 +38,7 @@ pub struct Linker<
     'a,
     K: Clone + Ord,
     D: 'static,
-    L = Loader<DefaultMmap, (), D, ()>,
+    L = Loader<DefaultMmap, (), (), ()>,
     R = (),
     PreS = (),
     PostS = (),
@@ -62,17 +62,21 @@ pub struct Linker<
     _marker: PhantomData<fn() -> D>,
 }
 
-impl<'a, K, D> Linker<'a, K, D>
+impl<'a, K> Linker<'a, K, ()>
 where
     K: Clone + Ord,
-    D: Default + 'static,
 {
     /// Creates a linker with an empty planning pipeline, default relocation
     /// hooks, and the default relocation planner.
+    ///
+    /// The linker starts in the `D = ()` builder phase, mirroring
+    /// [`Loader::new`]. Switch to a custom user-data type with
+    /// [`Linker::with_dynamic_initializer`] after configuring the loader
+    /// (including [`Loader::for_arch`] via [`Linker::map_loader`]).
     #[inline]
     pub fn new() -> Self {
         Self {
-            loader: Loader::new().with_dynamic_initializer::<D>(|_| Ok(())),
+            loader: Loader::new(),
             resolver: (),
             pipeline: LinkPipeline::new(),
             relocator: Relocator::new(),
@@ -85,10 +89,9 @@ where
     }
 }
 
-impl<'a, K, D> Default for Linker<'a, K, D>
+impl<'a, K> Default for Linker<'a, K, ()>
 where
     K: Clone + Ord,
-    D: Default + 'static,
 {
     #[inline]
     fn default() -> Self {
@@ -241,12 +244,12 @@ where
     }
 }
 
-impl<'a, K, D, M, H, Tls, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
+impl<'a, K, D, M, H, Tls, Arch, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
     Linker<
         'a,
         K,
         D,
-        Loader<M, H, D, Tls>,
+        Loader<M, H, D, Tls, Arch>,
         R,
         PreS,
         PostS,
@@ -265,16 +268,44 @@ where
     M: Mmap,
     H: LoadHook,
     Tls: TlsResolver,
+    Arch: RelocationArch,
 {
     /// Transforms the loader configuration.
-    pub fn map_loader<NewM, NewH, NewTls>(
+    ///
+    /// The closure may switch any of the loader's type parameters,
+    /// including the user-data type `D` and the relocation backend `Arch`.
+    /// When `D` changes, the linker's own `D` follows: a closure that
+    /// returns `Loader<.., NewD, .., NewArch>` produces a
+    /// `Linker<.., NewD, ..>` whose subsequent
+    /// [`load`](Linker::load) calls yield `LoadedCore<NewD>`.
+    ///
+    /// Because [`Loader::for_arch`] is only available while the loader is
+    /// in its `D = ()` builder phase, the typical cross-architecture flow
+    /// is to start from a `Linker::<K>::new()` (which seeds `D = ()`),
+    /// then in this closure call `for_arch::<NewArch>()` *before*
+    /// [`with_dynamic_initializer`](Loader::with_dynamic_initializer):
+    ///
+    /// ```ignore
+    /// let linker = Linker::<&'static str>::new()
+    ///     .map_loader(|loader| {
+    ///         loader
+    ///             .for_arch::<X86_64Arch>()
+    ///             .with_dynamic_initializer::<MyData>(|raw| {
+    ///                 // populate user data from the relocated image
+    ///                 Ok(())
+    ///             })
+    ///     });
+    /// ```
+    pub fn map_loader<NewM, NewH, NewD, NewTls, NewArch>(
         self,
-        configure: impl FnOnce(Loader<M, H, D, Tls>) -> Loader<NewM, NewH, D, NewTls>,
+        configure: impl FnOnce(
+            Loader<M, H, D, Tls, Arch>,
+        ) -> Loader<NewM, NewH, NewD, NewTls, NewArch>,
     ) -> Linker<
         'a,
         K,
-        D,
-        Loader<NewM, NewH, D, NewTls>,
+        NewD,
+        Loader<NewM, NewH, NewD, NewTls, NewArch>,
         R,
         PreS,
         PostS,
@@ -290,7 +321,9 @@ where
     where
         NewM: Mmap,
         NewH: LoadHook,
+        NewD: 'static,
         NewTls: TlsResolver,
+        NewArch: RelocationArch,
     {
         Linker {
             loader: configure(self.loader),
@@ -301,7 +334,7 @@ where
             observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
-            _marker: self._marker,
+            _marker: PhantomData,
         }
     }
 }

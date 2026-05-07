@@ -4,9 +4,9 @@ use crate::{
     image::{ElfCore, LoadedCore},
     logging, relocate_context_error,
     relocation::{
-        BindingMode, HandleResult, HandlerHooks, LazyLookupHooks, LookupHooks,
-        NativeRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationContext,
-        RelocationHandler, SupportLazy, SymbolLookup,
+        BindingMode, HandleResult, HandlerHooks, LazyLookupHooks, LookupHooks, Relocatable,
+        RelocateArgs, RelocationArch, RelocationContext, RelocationHandler, SupportLazy,
+        SymbolLookup,
     },
     sync::Arc,
     tls::TlsDescArgs,
@@ -387,59 +387,19 @@ where
     PreH: RelocationHandler,
     PostH: RelocationHandler,
 {
-    /// Executes relocation with caller-selected relocation type numbers.
-    ///
-    /// This keeps the ordinary [`Relocator::relocate`] path native and
-    /// zero-cost. Use this only when the image was intentionally loaded with a
-    /// non-native `e_machine` value and `A` describes that target's relocation
-    /// numbering.
-    ///
-    /// Backends with `A::SUPPORTS_NATIVE_RUNTIME == false` do not execute target
-    /// IFUNC resolvers, install lazy-binding trampolines, use native TLS helper
-    /// stubs, or run init arrays. Default binding is treated as eager for those
-    /// backends; explicitly requested lazy binding is rejected. Unsupported
-    /// runtime relocations can still be intercepted by relocation handlers.
-    pub fn relocate_with_arch<A>(self) -> Result<T::Output>
-    where
-        A: RelocationArch,
-    {
-        let Self {
-            object,
-            scope,
-            pre_find,
-            post_find,
-            lazy_pre_find,
-            lazy_post_find,
-            pre_handler,
-            post_handler,
-            binding,
-        } = self;
-
-        object.relocate::<A, _, _, _, _, _, _>(RelocateArgs::new(
-            scope,
-            binding,
-            LookupHooks::new(&pre_find, &post_find),
-            LazyLookupHooks::new(lazy_pre_find, lazy_post_find),
-            HandlerHooks::new(&pre_handler, &post_handler),
-        ))
-    }
-}
-
-impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
-    Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D>
-where
-    T: Relocatable<D>,
-    PreS: SymbolLookup,
-    PostS: SymbolLookup,
-    LazyPreS: SymbolLookup + Send + Sync + 'static,
-    LazyPostS: SymbolLookup + Send + Sync + 'static,
-    PreH: RelocationHandler,
-    PostH: RelocationHandler,
-{
     /// Executes relocation with the current configuration.
     ///
     /// This consumes the builder, resolves relocations, retains the configured
     /// relocation scope as dependencies, and returns the final loaded image.
+    ///
+    /// The relocation backend is selected automatically from the relocated
+    /// object's [`Relocatable::Arch`]: native images use
+    /// [`crate::arch::NativeArch`] (the default) and run target init arrays,
+    /// IFUNC resolvers,
+    /// lazy-binding trampolines, and TLS resolver stubs as usual;
+    /// cross-architecture images carry their own backend with
+    /// `SUPPORTS_NATIVE_RUNTIME == false`, which skips those host-side
+    /// runtime hooks and rejects explicitly requested lazy binding.
     pub fn relocate(self) -> Result<T::Output> {
         let Self {
             object,
@@ -453,7 +413,7 @@ where
             binding,
         } = self;
 
-        object.relocate::<NativeRelocationArch, _, _, _, _, _, _>(RelocateArgs::new(
+        object.relocate(RelocateArgs::new(
             scope,
             binding,
             LookupHooks::new(&pre_find, &post_find),

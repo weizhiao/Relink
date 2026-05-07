@@ -1,11 +1,62 @@
-use super::{RelocationArch, SymDef, find_symdef_impl};
+use super::{SymDef, find_symdef_impl};
 use crate::{
     Result,
-    elf::ElfRelType,
+    elf::{ElfMachine, ElfRelType, ElfRelocationType},
     image::{ElfCore, LoadedCore},
     sync::Arc,
 };
 use alloc::boxed::Box;
+
+/// Architecture-specific dynamic relocation numbering.
+///
+/// This trait describes the relocation type numbers for one ELF target
+/// architecture without changing the in-memory relocation entry representation.
+/// The native relocation path uses [`crate::arch::NativeArch`]; cross-architecture
+/// callers may instantiate the per-architecture zero-sized backends declared
+/// in `crate::arch::<name>::relocation`.
+pub trait RelocationArch {
+    /// ELF machine value accepted by this relocation backend.
+    const MACHINE: ElfMachine;
+
+    const NONE: ElfRelocationType;
+    const RELATIVE: ElfRelocationType;
+    const GOT: ElfRelocationType;
+    const SYMBOLIC: ElfRelocationType;
+    const JUMP_SLOT: ElfRelocationType;
+    const IRELATIVE: ElfRelocationType;
+    const COPY: ElfRelocationType;
+
+    const DTPMOD: ElfRelocationType;
+    const DTPOFF: ElfRelocationType;
+    const TPOFF: ElfRelocationType;
+    const TLSDESC: Option<ElfRelocationType> = None;
+
+    /// Whether this backend may execute target code or install target runtime
+    /// hooks in the host process.
+    ///
+    /// Native relocation enables this so IFUNC resolvers, TLS resolver stubs,
+    /// lazy binding trampolines, and init arrays keep their current behavior.
+    /// Cross-architecture backends should normally leave this as `false`.
+    const SUPPORTS_NATIVE_RUNTIME: bool = false;
+
+    #[inline]
+    fn is_tlsdesc(r_type: ElfRelocationType) -> bool {
+        Self::TLSDESC.is_some_and(|tlsdesc| r_type == tlsdesc)
+    }
+
+    #[inline]
+    fn is_tls(r_type: ElfRelocationType) -> bool {
+        r_type == Self::DTPMOD
+            || r_type == Self::DTPOFF
+            || r_type == Self::TPOFF
+            || Self::is_tlsdesc(r_type)
+    }
+
+    #[inline]
+    fn rel_type_to_str(_r_type: ElfRelocationType) -> &'static str {
+        "UNKNOWN"
+    }
+}
 
 /// A trait for looking up external symbols during relocation.
 ///
@@ -314,17 +365,32 @@ impl<'a, D, PreS: ?Sized, PostS: ?Sized, LazyPreS, LazyPostS, PreH: ?Sized, Post
 ///
 /// In normal use, callers do not invoke this trait directly. Instead, they load a raw
 /// image with [`crate::Loader`] and then call `.relocator().relocate()`.
+///
+/// The relocation backend (i.e. the architecture's relocation type numbering)
+/// is selected by the implementor through the `Arch` associated type, so
+/// [`Relocator::relocate`] can dispatch to the correct backend automatically
+/// without callers having to specify a turbofish.
+///
+/// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
 pub trait Relocatable<D = ()>: Sized {
     /// The type of the relocated object.
     type Output;
 
-    /// Execute relocation using relocation type numbers supplied by `A`.
-    fn relocate<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    /// Relocation type numbering used when relocating this image.
+    ///
+    /// Defaults to [`crate::arch::NativeArch`] for raw images loaded for the host.
+    /// Cross-architecture images carry one of the per-ISA backends from
+    /// `crate::arch::<isa>::relocation` (e.g.
+    /// [`X86_64Arch`](crate::arch::x86_64::relocation::X86_64Arch)).
+    type Arch: RelocationArch;
+
+    /// Execute relocation using the implementor's relocation backend
+    /// ([`Self::Arch`]).
+    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
-        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,

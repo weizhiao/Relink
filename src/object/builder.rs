@@ -188,10 +188,11 @@ impl<T: TlsResolver, D> ObjectBuilder<T, D> {
     }
 }
 
-impl<H, D> LoaderInner<H, D>
+impl<H, D, Arch> LoaderInner<H, D, Arch>
 where
     H: LoadHook,
     D: Default + 'static,
+    Arch: crate::relocation::RelocationArch,
 {
     pub(crate) fn create_object_builder<M, Tls>(
         &mut self,

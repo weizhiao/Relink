@@ -106,15 +106,15 @@ struct StaticExecInner<D> {
     tls_tp_offset: Option<TlsTpOffset>,
 }
 
-impl<D: 'static> Relocatable<D> for RawExec<D> {
+impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawExec<D, Arch> {
     type Output = LoadedExec<D>;
+    type Arch = Arch;
 
-    fn relocate<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
-        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
@@ -125,7 +125,7 @@ impl<D: 'static> Relocatable<D> for RawExec<D> {
         match self {
             RawExec::Dynamic(image) => {
                 let entry = image.entry_addr();
-                let inner = Relocatable::relocate::<A, _, _, _, _, _, _>(image, args)?;
+                let inner = Relocatable::relocate(image, args)?;
                 Ok(LoadedExec {
                     entry,
                     inner: LoadedExecInner::Dynamic(inner),
@@ -140,25 +140,30 @@ impl<D: 'static> Relocatable<D> for RawExec<D> {
 }
 
 #[cfg(feature = "lazy-binding")]
-impl<D: 'static> crate::relocation::SupportLazy for RawExec<D> {}
+impl<D: 'static, Arch: RelocationArch> crate::relocation::SupportLazy for RawExec<D, Arch> {}
 
 /// A mapped but unrelocated executable image.
 ///
 /// Values of this type are returned by [`crate::Loader::load_exec`]. They may
 /// represent either a dynamic executable that still needs relocation or a
 /// static executable that is already ready to run.
-pub enum RawExec<D>
+///
+/// The optional `Arch` type parameter is forwarded to the underlying
+/// [`RawDynamic`] for dynamic executables. Static executables ignore it but
+/// still carry it so that downstream APIs can treat both variants uniformly.
+pub enum RawExec<D, Arch = crate::arch::NativeArch>
 where
     D: 'static,
+    Arch: RelocationArch,
 {
     /// A dynamically linked executable with `PT_DYNAMIC`.
-    Dynamic(RawDynamic<D>),
+    Dynamic(RawDynamic<D, Arch>),
 
     /// A statically linked executable without `PT_DYNAMIC`.
     Static(StaticExec<D>),
 }
 
-impl<D> Debug for RawExec<D> {
+impl<D, Arch: RelocationArch> Debug for RawExec<D, Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawExec")
             .field("name", &self.name())
@@ -166,7 +171,7 @@ impl<D> Debug for RawExec<D> {
     }
 }
 
-impl<D: 'static> RawExec<D> {
+impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
     /// Creates a relocation builder for this executable image.
     pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
         Relocator::new().with_object(self)
@@ -388,7 +393,7 @@ impl<D> StaticExec<D> {
     }
 }
 
-impl<D: 'static> RawExec<D> {
+impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
     pub(crate) fn from_builder<'hook, H, M, Tls>(
         builder: ImageBuilder<'hook, H, M, Tls, D>,
         phdrs: &[ElfPhdr],

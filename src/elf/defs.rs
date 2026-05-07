@@ -11,10 +11,11 @@ use elf::abi::{
     ET_DYN, ET_EXEC, ET_NONE, ET_REL,
 };
 
-use crate::arch::{
-    REL_COPY, REL_DTPMOD, REL_DTPOFF, REL_GOT, REL_IRELATIVE, REL_JUMP_SLOT, REL_NONE,
-    REL_RELATIVE, REL_SYMBOLIC, REL_TLSDESC, REL_TPOFF, rel_type_to_str,
-};
+// All native relocation numbers come from the host's `RelocationArch` impl
+// via [`crate::arch::NativeArch`]. Reading them through the trait keeps
+// `ElfRelocationType` independent of which architecture is the host: no
+// per-arch path needs to be wired here.
+use crate::{arch::NativeArch, relocation::RelocationArch};
 
 #[cfg(feature = "object")]
 use super::shdr::ElfSectionType;
@@ -238,19 +239,7 @@ impl ElfRelr {
 pub struct ElfRelocationType(u32);
 
 impl ElfRelocationType {
-    pub const NONE: Self = Self(REL_NONE);
-    pub const RELATIVE: Self = Self(REL_RELATIVE);
-    pub const GOT: Self = Self(REL_GOT);
-    pub const SYMBOLIC: Self = Self(REL_SYMBOLIC);
-    pub const JUMP_SLOT: Self = Self(REL_JUMP_SLOT);
-    pub const IRELATIVE: Self = Self(REL_IRELATIVE);
-    pub const COPY: Self = Self(REL_COPY);
-    pub const DTPMOD: Self = Self(REL_DTPMOD);
-    pub const DTPOFF: Self = Self(REL_DTPOFF);
-    pub const TPOFF: Self = Self(REL_TPOFF);
-    pub const TLSDESC: Self = Self(REL_TLSDESC);
-
-    const HAS_TLSDESC: bool = REL_TLSDESC != REL_NONE && REL_TLSDESC <= REL_MASK as u32;
+    pub const JUMP_SLOT: Self = <NativeArch as RelocationArch>::JUMP_SLOT;
 
     #[inline]
     pub const fn new(raw: u32) -> Self {
@@ -262,44 +251,23 @@ impl ElfRelocationType {
         self.0
     }
 
+    /// Whether this is the ELF-standard "no relocation" entry (type 0 on
+    /// every architecture).
     #[inline]
     pub const fn is_none(self) -> bool {
-        self.0 == REL_NONE
+        self.0 == 0
     }
 
+    /// Whether this is the host architecture's `RELATIVE` relocation.
     #[inline]
-    pub const fn is_relative(self) -> bool {
-        self.0 == REL_RELATIVE
+    pub fn is_relative(self) -> bool {
+        self.0 == <NativeArch as RelocationArch>::RELATIVE.raw()
     }
 
+    /// Whether this is the host architecture's `IRELATIVE` relocation.
     #[inline]
-    pub const fn is_irelative(self) -> bool {
-        self.0 == REL_IRELATIVE
-    }
-
-    #[inline]
-    pub const fn is_dtpmod(self) -> bool {
-        self.0 == REL_DTPMOD
-    }
-
-    #[inline]
-    pub const fn is_dtpoff(self) -> bool {
-        self.0 == REL_DTPOFF
-    }
-
-    #[inline]
-    pub const fn is_tpoff(self) -> bool {
-        self.0 == REL_TPOFF
-    }
-
-    #[inline]
-    pub const fn is_tlsdesc(self) -> bool {
-        Self::HAS_TLSDESC && self.0 == REL_TLSDESC
-    }
-
-    #[inline]
-    pub const fn is_tls(self) -> bool {
-        self.is_dtpmod() || self.is_dtpoff() || self.is_tpoff() || self.is_tlsdesc()
+    pub fn is_irelative(self) -> bool {
+        self.0 == <NativeArch as RelocationArch>::IRELATIVE.raw()
     }
 }
 
@@ -319,7 +287,7 @@ impl From<ElfRelocationType> for u32 {
 
 impl Display for ElfRelocationType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(rel_type_to_str(self.0 as usize))
+        f.write_str(<NativeArch as RelocationArch>::rel_type_to_str(*self))
     }
 }
 
@@ -452,11 +420,3 @@ pub(crate) const ELF_REL_SECTION_TYPE: ElfSectionType =
         ElfSectionType::RELA
     };
 
-impl ElfRelType {
-    /// Return a human readable relocation type name for the current arch
-    #[inline]
-    pub fn r_type_str(&self) -> &'static str {
-        let r_type = self.r_type();
-        rel_type_to_str(r_type.raw() as usize)
-    }
-}

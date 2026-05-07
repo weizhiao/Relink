@@ -2,10 +2,14 @@ mod support;
 
 use elf_loader::{
     Loader,
-    arch::{REL_COPY, REL_IRELATIVE, REL_RELATIVE},
+    arch::NativeArch,
     input::ElfBinary,
-    relocation::NativeRelocationArch,
+    relocation::RelocationArch,
 };
+
+const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
+const REL_IRELATIVE: u32 = <NativeArch as RelocationArch>::IRELATIVE.raw();
+const REL_RELATIVE: u32 = <NativeArch as RelocationArch>::RELATIVE.raw();
 use gen_elf::{Arch, ElfWriterConfig, RelocEntry, SectionKind, SymbolDesc};
 use support::{
     dylib_relocation_checks::{
@@ -72,7 +76,7 @@ fn relative_relocation_uses_recorded_addend() {
         .load_dylib(ElfBinary::new("relative.so", &output.data))
         .expect("failed to load relative test dylib")
         .relocator()
-        .relocate_with_arch::<NativeRelocationArch>()
+        .relocate()
         .expect("failed to relocate relative test dylib");
 
     let relative = anonymous_relocations(&output, REL_RELATIVE)[0];

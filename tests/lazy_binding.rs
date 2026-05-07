@@ -3,10 +3,16 @@ mod support;
 #[cfg(feature = "lazy-binding")]
 use elf_loader::{
     Loader,
-    arch::{REL_GOT, REL_JUMP_SLOT},
+    arch::NativeArch,
     image::LoadedCore,
     input::ElfBinary,
+    relocation::RelocationArch,
 };
+
+#[cfg(feature = "lazy-binding")]
+const REL_GOT: u32 = <NativeArch as RelocationArch>::GOT.raw();
+#[cfg(feature = "lazy-binding")]
+const REL_JUMP_SLOT: u32 = <NativeArch as RelocationArch>::JUMP_SLOT.raw();
 #[cfg(feature = "lazy-binding")]
 use gen_elf::ElfWriterConfig;
 #[cfg(feature = "lazy-binding")]

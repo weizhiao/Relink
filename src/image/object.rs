@@ -6,11 +6,10 @@
 
 use crate::object::{ObjectBuilder, ObjectRelocation, PltGotSection};
 use crate::{
-    RelocationError, Result,
+    Result,
     loader::DynLifecycleHandler,
     relocation::{
-        NativeRelocationArch, RelocAddr, Relocatable, RelocateArgs, RelocationArch,
-        RelocationHandler, Relocator, SymbolLookup,
+        RelocAddr, Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup,
     },
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
@@ -101,13 +100,17 @@ impl<D> Debug for RawObject<D> {
 
 impl<D: 'static> Relocatable<D> for RawObject<D> {
     type Output = LoadedObject<D>;
+    // Object files (.o) are always relocated with the host's relocation
+    // numbering. Cross-architecture object linking is intentionally not
+    // supported here; callers that need it should fail at the type level
+    // rather than at runtime.
+    type Arch = crate::arch::NativeArch;
 
-    fn relocate<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
-        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
@@ -115,10 +118,6 @@ impl<D: 'static> Relocatable<D> for RawObject<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        if A::MACHINE != NativeRelocationArch::MACHINE {
-            return Err(RelocationError::UnsupportedRelocationType.into());
-        }
-
         let RelocateArgs {
             scope,
             lookup,

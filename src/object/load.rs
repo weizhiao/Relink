@@ -5,17 +5,19 @@ use crate::{
     loader::{LoadHook, Loader},
     logging,
     os::Mmap,
+    relocation::RelocationArch,
     tls::TlsResolver,
 };
 
-impl<M, H, D, Tls> Loader<M, H, D, Tls>
+impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
 where
     M: Mmap,
     H: LoadHook,
     D: Default + 'static,
     Tls: TlsResolver,
+    Arch: RelocationArch,
 {
-    pub(crate) fn load_rel(&mut self, object: impl ElfReader) -> Result<RawElf<D>> {
+    pub(crate) fn load_rel(&mut self, object: impl ElfReader) -> Result<RawElf<D, Arch>> {
         Ok(RawElf::Object(self.load_object_impl(object)?))
     }
 
@@ -116,7 +118,8 @@ mod tests {
         ehdr.e_shentsize = shentsize as _;
         ehdr.e_shnum = shnum as _;
 
-        ElfHeader::from_raw(ehdr, true).expect("failed to parse crafted object header")
+        ElfHeader::from_raw(ehdr, Some(crate::elf::ElfMachine::new(EM_ARCH)))
+            .expect("failed to parse crafted object header")
     }
 
     #[test]

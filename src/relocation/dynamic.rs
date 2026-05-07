@@ -12,7 +12,7 @@ use crate::{
 };
 use core::num::NonZeroUsize;
 
-impl<D> RawDynamic<D> {
+impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     fn apply_relro(&self, binding: &ResolvedBinding) -> Result<()> {
         if binding.is_lazy() {
             return Ok(());
@@ -24,12 +24,11 @@ impl<D> RawDynamic<D> {
         Ok(())
     }
 
-    pub(crate) fn relocate_impl<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    pub(crate) fn relocate_impl<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<LoadedCore<D>>
     where
-        A: RelocationArch,
         D: 'static,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
@@ -53,7 +52,7 @@ impl<D> RawDynamic<D> {
             logging::debug!("No relocations needed for {}", self.name());
         }
 
-        let binding = if A::SUPPORTS_NATIVE_RUNTIME {
+        let binding = if Arch::SUPPORTS_NATIVE_RUNTIME {
             self.resolve_binding(binding)
         } else if binding == BindingMode::Lazy {
             return Err(RelocationError::UnsupportedRelocationType.into());
@@ -67,7 +66,7 @@ impl<D> RawDynamic<D> {
         }
 
         let hooked_pre_find = |name: &str| -> Option<*const ()> {
-            if A::SUPPORTS_NATIVE_RUNTIME {
+            if Arch::SUPPORTS_NATIVE_RUNTIME {
                 if let Some(symbol) = lookup_tls_get_addr(name, tls_get_addr) {
                     return Some(symbol);
                 }
@@ -86,9 +85,9 @@ impl<D> RawDynamic<D> {
         );
 
         if !relocation.is_empty() {
-            self.relocate_relative::<A>()
-                .relocate_dynrel::<A, _, _, _, _>(&mut helper)?
-                .relocate_pltrel::<A, _, _, _, _>(&binding, &mut helper)?;
+            self.relocate_relative()
+                .relocate_dynrel(&mut helper)?
+                .relocate_pltrel(&binding, &mut helper)?;
         }
 
         let RelocHelper {
@@ -115,7 +114,7 @@ impl<D> RawDynamic<D> {
         self.apply_relro(&binding)?;
         self.install_lazy_lookup(binding, lazy_lookup, deps.clone())?;
 
-        if A::SUPPORTS_NATIVE_RUNTIME {
+        if Arch::SUPPORTS_NATIVE_RUNTIME {
             logging::debug!("Executing initialization functions for {}", self.name());
             self.call_init();
         } else {
@@ -159,15 +158,14 @@ pub(crate) struct DynamicRelocation {
     dynrel: &'static [ElfRelType],
 }
 
-impl<D> RawDynamic<D> {
+impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     /// Relocate PLT (Procedure Linkage Table) entries
-    fn relocate_pltrel<A, PreS, PostS, PreH, PostH>(
+    fn relocate_pltrel<PreS, PostS, PreH, PostH>(
         &self,
         binding: &ResolvedBinding,
         helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
-        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         PreH: RelocationHandler + ?Sized,
@@ -177,7 +175,7 @@ impl<D> RawDynamic<D> {
         let base = core.base_addr();
         let segments = core.segments();
         let reloc = self.relocation();
-        if binding.is_lazy() && !A::SUPPORTS_NATIVE_RUNTIME {
+        if binding.is_lazy() && !Arch::SUPPORTS_NATIVE_RUNTIME {
             return Err(RelocationError::UnsupportedRelocationType.into());
         }
         binding.prepare_plt(self)?;
@@ -191,7 +189,7 @@ impl<D> RawDynamic<D> {
             let r_sym = rel.r_symbol();
 
             // Handle jump slot relocations
-            if likely(r_type == A::JUMP_SLOT) {
+            if likely(r_type == Arch::JUMP_SLOT) {
                 if binding.relocate_jump_slot(base, rel) {
                     continue;
                 }
@@ -200,21 +198,28 @@ impl<D> RawDynamic<D> {
                     segments.write(rel.r_offset(), symbol);
                     continue;
                 }
-            } else if unlikely(A::is_irelative(r_type) && A::SUPPORTS_NATIVE_RUNTIME) {
-                // Handle indirect function relocations
-                let r_addend = rel.r_addend(base.into_inner());
-                let addr = base.addend(r_addend);
-                segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
-                continue;
-            } else if unlikely(A::is_tlsdesc(r_type) && A::SUPPORTS_NATIVE_RUNTIME) {
-                // Handle TLSDESC relocations
-                if handle_tls_reloc(helper, rel) {
+            } else if unlikely(r_type == Arch::IRELATIVE) {
+                // IFUNC resolvers run on the host CPU, so they only make
+                // sense when the relocated module shares the host's ABI.
+                // Cross-architecture loaders fall through to the post
+                // `RelocationHandler` below.
+                if Arch::SUPPORTS_NATIVE_RUNTIME {
+                    let r_addend = rel.r_addend(base.into_inner());
+                    let addr = base.addend(r_addend);
+                    segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
+                    continue;
+                }
+            } else if unlikely(Arch::is_tlsdesc(r_type)) {
+                // `handle_tls_reloc` performs its own SUPPORTS_NATIVE_RUNTIME
+                // gate for TLSDESC; if it returns `false` we fall through to
+                // the post handler.
+                if handle_tls_reloc::<_, Arch, _, _, _, _>(helper, rel) {
                     continue;
                 }
             }
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)?.is_unhandled() {
-                return Err(reloc_error::<A, _>(
+                return Err(reloc_error::<Arch, _>(
                     rel,
                     RelocationFailureReason::Unhandled,
                     core,
@@ -225,10 +230,7 @@ impl<D> RawDynamic<D> {
     }
 
     /// Perform relative relocations (REL_RELATIVE)
-    fn relocate_relative<A>(&self) -> &Self
-    where
-        A: RelocationArch,
-    {
+    fn relocate_relative(&self) -> &Self {
         let core = self.core_ref();
         let reloc = self.relocation();
         let segments = core.segments();
@@ -236,10 +238,10 @@ impl<D> RawDynamic<D> {
 
         match reloc.relative {
             RelativeRel::Rel(rel) => {
-                assert!(rel.is_empty() || A::is_relative(rel[0].r_type()));
+                assert!(rel.is_empty() || rel[0].r_type() == Arch::RELATIVE);
                 // Apply all relative relocations: new_value = base_address + addend
                 for rel in rel {
-                    debug_assert!(A::is_relative(rel.r_type()));
+                    debug_assert!(rel.r_type() == Arch::RELATIVE);
                     let r_addend = rel.r_addend(base.into_inner());
                     segments.write(rel.r_offset(), base.addend(r_addend));
                 }
@@ -277,12 +279,11 @@ impl<D> RawDynamic<D> {
     }
 
     /// Perform dynamic relocations (non-PLT, non-relative)
-    fn relocate_dynrel<A, PreS, PostS, PreH, PostH>(
+    fn relocate_dynrel<PreS, PostS, PreH, PostH>(
         &self,
         helper: &mut RelocHelper<'_, D, PreS, PostS, PreH, PostH>,
     ) -> Result<&Self>
     where
-        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         PreH: RelocationHandler + ?Sized,
@@ -310,18 +311,18 @@ impl<D> RawDynamic<D> {
 
             // Handle `REL_NONE` first because some architectures use `0` as a
             // sentinel for unsupported relocation classes such as TLSDESC.
-            if A::is_none(r_type) {
+            if r_type == Arch::NONE {
                 continue;
             }
 
-            if r_type == A::GOT || r_type == A::SYMBOLIC {
+            if r_type == Arch::GOT || r_type == Arch::SYMBOLIC {
                 // Handle GOT and symbolic relocations
                 if let Some(symbol) = helper.find_symbol(r_sym) {
                     let r_addend = rel.r_addend(base.into_inner());
                     segments.write(rel.r_offset(), symbol.addend(r_addend));
                     continue;
                 }
-            } else if r_type == A::COPY {
+            } else if r_type == Arch::COPY {
                 // Handle copy relocations (typically for global data)
                 if let Some(symdef) = helper.find_symdef(r_sym) {
                     let len = core.symtab().symbol_idx(r_sym).0.st_size();
@@ -333,22 +334,31 @@ impl<D> RawDynamic<D> {
                     dest.copy_from_slice(src);
                     continue;
                 }
-            } else if A::is_irelative(r_type) && A::SUPPORTS_NATIVE_RUNTIME {
-                // Handle indirect function relocations
-                let r_addend = rel.r_addend(base.into_inner());
-                let addr = base.addend(r_addend);
-                segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
-                continue;
-            } else if A::is_tls(r_type) && A::SUPPORTS_NATIVE_RUNTIME {
-                // Handle TLS (Thread Local Storage) relocations
-                if handle_tls_reloc(helper, rel) {
+            } else if r_type == Arch::IRELATIVE {
+                // IFUNC resolvers run on the host CPU, so they only make
+                // sense when the relocated module shares the host's ABI.
+                // Cross-architecture loaders fall through to the post
+                // `RelocationHandler` below.
+                if Arch::SUPPORTS_NATIVE_RUNTIME {
+                    let r_addend = rel.r_addend(base.into_inner());
+                    let addr = base.addend(r_addend);
+                    segments.write(rel.r_offset(), unsafe { resolve_ifunc(addr) });
+                    continue;
+                }
+            } else if Arch::is_tls(r_type) {
+                // `handle_tls_reloc` is a pure data computation for
+                // DTPMOD/DTPOFF/TPOFF (safe under cross-arch loads) and
+                // gates TLSDESC on SUPPORTS_NATIVE_RUNTIME internally.
+                // Anything it cannot handle falls through to the post
+                // handler.
+                if handle_tls_reloc::<_, Arch, _, _, _, _>(helper, rel) {
                     continue;
                 }
             }
 
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)?.is_unhandled() {
-                return Err(reloc_error::<A, _>(
+                return Err(reloc_error::<Arch, _>(
                     rel,
                     RelocationFailureReason::Unhandled,
                     core,

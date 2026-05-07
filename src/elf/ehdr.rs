@@ -6,7 +6,6 @@
 
 use crate::{
     ParseEhdrError, ParsePhdrError, Result,
-    arch::EM_ARCH,
     elf::{E_CLASS, ElfClass, ElfEhdr, ElfFileType, ElfMachine, ElfPhdr, ElfShdr},
 };
 use core::mem::size_of;
@@ -26,13 +25,15 @@ pub struct ElfHeader {
 impl ElfHeader {
     /// Wraps a raw header and validates it.
     ///
-    /// When `check_arch` is `false` the machine architecture check is skipped,
-    /// allowing cross-architecture loading (e.g. loading an x86-64 ELF on a RISC-V
-    /// host). All other validations (magic, class, version) always run.
+    /// When `expected_machine` is `Some(value)`, validation requires
+    /// `e_machine == value`. When it is `None`, the machine architecture
+    /// check is skipped, enabling cross-architecture loading (for example
+    /// mapping an x86-64 ELF on a RISC-V host). All other validations
+    /// (magic, class, version) always run.
     #[inline]
-    pub(crate) fn from_raw(ehdr: ElfEhdr, check_arch: bool) -> Result<Self> {
+    pub(crate) fn from_raw(ehdr: ElfEhdr, expected_machine: Option<ElfMachine>) -> Result<Self> {
         let ehdr = Self { ehdr };
-        ehdr.validate(check_arch)?;
+        ehdr.validate(expected_machine)?;
         Ok(ehdr)
     }
 
@@ -75,10 +76,11 @@ impl ElfHeader {
 
     /// Validates the ELF header magic, class, version, and optionally architecture.
     ///
-    /// When `check_arch` is `false`, the machine architecture check is skipped. This
-    /// is intended for cross-architecture loaders that map ELF files targeting a
-    /// different CPU than the host.
-    pub(crate) fn validate(&self, check_arch: bool) -> Result<()> {
+    /// When `expected_machine` is `None`, the machine architecture check is
+    /// skipped. This is intended for cross-architecture loaders that map ELF
+    /// files targeting a different CPU than the host. When `Some(value)`,
+    /// the header's `e_machine` must equal `value`.
+    pub(crate) fn validate(&self, expected_machine: Option<ElfMachine>) -> Result<()> {
         // Check ELF magic bytes
         if self.ehdr.e_ident[0..4] != ELFMAGIC {
             return Err(ParseEhdrError::InvalidMagic.into());
@@ -99,12 +101,12 @@ impl ElfHeader {
             return Err(ParseEhdrError::InvalidVersion.into());
         }
 
-        if check_arch {
-            // Check machine architecture
+        if let Some(expected) = expected_machine {
+            // Check machine architecture against the caller-supplied target.
             let machine = self.machine();
-            if machine.raw() != EM_ARCH {
+            if machine != expected {
                 return Err(ParseEhdrError::FileArchMismatch {
-                    expected: ElfMachine::new(EM_ARCH),
+                    expected,
                     found: machine,
                 }
                 .into());

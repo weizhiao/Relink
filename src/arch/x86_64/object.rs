@@ -1,14 +1,12 @@
 use crate::{
     RelocationError,
-    arch::Architecture,
+    arch::x86_64::relocation::X86_64Arch,
     elf::ElfRelType,
     object::{
         ObjectReloc,
         layout::{GotEntry, PltEntry, PltGotSection},
     },
-    relocation::{
-        NativeRelocationArch, RelocAddr, RelocHelper, RelocationHandler, SymbolLookup, reloc_error,
-    },
+    relocation::{RelocAddr, RelocHelper, RelocationHandler, SymbolLookup, reloc_error},
 };
 use elf::abi::*;
 
@@ -40,14 +38,14 @@ impl ObjectReloc for ObjectRelocator {
         let offset = rel.r_offset();
         let p = base.offset(rel.r_offset());
         let unknown_symbol = || {
-            reloc_error::<NativeRelocationArch, _>(
+            reloc_error::<X86_64Arch, _>(
                 rel,
                 crate::RelocationFailureReason::UnknownSymbol,
                 helper.core,
             )
         };
         let conversion_error = || {
-            reloc_error::<NativeRelocationArch, _>(
+            reloc_error::<X86_64Arch, _>(
                 rel,
                 crate::RelocationFailureReason::IntegralConversionOutOfRange,
                 helper.core,
@@ -59,7 +57,7 @@ impl ObjectReloc for ObjectRelocator {
             _ => unreachable!("unexpected relocation error from value computation"),
         };
         let write_relocation_target = |target| {
-            <Architecture as crate::relocation::RelocationValueProvider>::relocation_value(
+            <X86_64Arch as crate::relocation::RelocationValueProvider>::relocation_value(
                 r_type.raw() as usize,
                 target,
                 append,

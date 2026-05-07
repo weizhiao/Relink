@@ -1,6 +1,14 @@
 mod support;
 
-use elf_loader::{Loader, arch::REL_GOT, image::LoadedCore, input::ElfBinary};
+use elf_loader::{
+    Loader,
+    arch::NativeArch,
+    image::LoadedCore,
+    input::ElfBinary,
+    relocation::RelocationArch,
+};
+
+const REL_GOT: u32 = <NativeArch as RelocationArch>::GOT.raw();
 use gen_elf::{Arch, ElfWriteOutput, RelocEntry, SymbolDesc};
 use support::{
     dylib_relocation_checks::{relocation_for_symbol, slot_word},

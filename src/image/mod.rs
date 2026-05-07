@@ -50,16 +50,21 @@ pub use symbol::Symbol;
 ///
 /// This is the type returned by [`crate::Loader::load`]. It can hold a raw shared
 /// object, executable, or relocatable object depending on the ELF input.
+///
+/// The optional `Arch` type parameter is forwarded to the dynamic variants
+/// ([`RawDylib`], [`RawExec`]). Object files are always relocated with the
+/// host's relocation numbering, so the `Object` variant ignores `Arch`.
 #[derive(Debug)]
-pub enum RawElf<D>
+pub enum RawElf<D, Arch = crate::arch::NativeArch>
 where
     D: 'static,
+    Arch: RelocationArch,
 {
     /// A dynamic library (shared object, typically `.so`).
-    Dylib(RawDylib<D>),
+    Dylib(RawDylib<D, Arch>),
 
     /// An executable file (typically a PIE or non-PIE executable).
-    Exec(RawExec<D>),
+    Exec(RawExec<D, Arch>),
 
     /// A relocatable object file (typically `.o`).
     #[cfg(feature = "object")]
@@ -83,7 +88,7 @@ pub enum LoadedElf<D> {
     Object(LoadedObject<D>),
 }
 
-impl<D: 'static> RawElf<D> {
+impl<D: 'static, Arch: RelocationArch> RawElf<D, Arch> {
     /// Creates a relocation builder for this raw image.
     ///
     /// # Examples
@@ -294,16 +299,15 @@ impl<D> LoadedElf<D> {
     }
 }
 
-impl<D: 'static> Relocatable<D> for RawElf<D> {
+impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawElf<D, Arch> {
     type Output = LoadedElf<D>;
+    type Arch = Arch;
 
-    fn relocate<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
-        A: RelocationArch,
-        D: 'static,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
@@ -312,18 +316,10 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
         PostH: RelocationHandler + ?Sized,
     {
         match self {
-            RawElf::Dylib(dylib) => Ok(LoadedElf::Dylib(Relocatable::relocate::<
-                A,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-            >(dylib, args)?)),
-            RawElf::Exec(exec) => Ok(LoadedElf::Exec(
-                Relocatable::relocate::<A, _, _, _, _, _, _>(exec, args)?,
-            )),
+            RawElf::Dylib(dylib) => {
+                Ok(LoadedElf::Dylib(Relocatable::relocate(dylib, args)?))
+            }
+            RawElf::Exec(exec) => Ok(LoadedElf::Exec(Relocatable::relocate(exec, args)?)),
             #[cfg(feature = "object")]
             RawElf::Object(relocatable) => {
                 let RelocateArgs {
@@ -333,15 +329,7 @@ impl<D: 'static> Relocatable<D> for RawElf<D> {
                     handlers,
                     ..
                 } = args;
-                Ok(LoadedElf::Object(Relocatable::relocate::<
-                    A,
-                    _,
-                    _,
-                    _,
-                    _,
-                    _,
-                    _,
-                >(
+                Ok(LoadedElf::Object(Relocatable::relocate(
                     relocatable,
                     RelocateArgs::new(
                         crate::sync::Arc::from(alloc::vec::Vec::new()),

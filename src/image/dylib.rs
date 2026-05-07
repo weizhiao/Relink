@@ -19,15 +19,20 @@ use core::{fmt::Debug, ptr::NonNull};
 /// Values of this type are returned by [`crate::Loader::load_dylib`]. They expose
 /// ELF metadata immediately and can later be turned into a [`LoadedCore`] by running
 /// relocation.
-pub struct RawDylib<D>
+///
+/// The optional `Arch` type parameter mirrors [`RawDynamic`]'s and selects the
+/// relocation backend used by [`Relocator::relocate`]. By default it is
+/// [`crate::arch::NativeArch`] (the host architecture).
+pub struct RawDylib<D, Arch = crate::arch::NativeArch>
 where
     D: 'static,
+    Arch: RelocationArch,
 {
     /// The common part containing basic ELF object information.
-    pub(crate) inner: RawDynamic<D>,
+    pub(crate) inner: RawDynamic<D, Arch>,
 }
 
-impl<D> Debug for RawDylib<D> {
+impl<D, Arch: RelocationArch> Debug for RawDylib<D, Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawDylib")
             .field("name", &self.inner.name())
@@ -36,15 +41,15 @@ impl<D> Debug for RawDylib<D> {
     }
 }
 
-impl<D> Relocatable<D> for RawDylib<D> {
+impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawDylib<D, Arch> {
     type Output = LoadedCore<D>;
+    type Arch = Arch;
 
-    fn relocate<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
-        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
@@ -52,23 +57,23 @@ impl<D> Relocatable<D> for RawDylib<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        Relocatable::relocate::<A, _, _, _, _, _, _>(self.inner, args)
+        Relocatable::relocate(self.inner, args)
     }
 }
 
 #[cfg(feature = "lazy-binding")]
-impl<D> crate::relocation::SupportLazy for RawDylib<D> {}
+impl<D, Arch: RelocationArch> crate::relocation::SupportLazy for RawDylib<D, Arch> {}
 
-impl<D> RawDylib<D> {
+impl<D, Arch: RelocationArch> RawDylib<D, Arch> {
     /// Creates a new `RawDylib` from a `RawDynamic`.
     #[inline]
-    pub fn from_dynamic(inner: RawDynamic<D>) -> Self {
+    pub fn from_dynamic(inner: RawDynamic<D, Arch>) -> Self {
         Self { inner }
     }
 
     /// Converts this `RawDylib` into a `RawDynamic`.
     #[inline]
-    pub fn into_dynamic(self) -> RawDynamic<D> {
+    pub fn into_dynamic(self) -> RawDynamic<D, Arch> {
         self.inner
     }
 

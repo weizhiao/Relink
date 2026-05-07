@@ -8,14 +8,14 @@ use crate::{
     logging,
     os::Mmap,
     relocation::{
-        DynamicRelocation, RelocAddr, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
-        Relocator, SymbolLookup,
+        DynamicRelocation, RelocAddr, Relocatable, RelocateArgs, RelocationArch,
+        RelocationHandler, Relocator, SymbolLookup,
     },
     segment::ELFRelro,
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{ffi::CStr, ptr::NonNull};
+use core::{ffi::CStr, marker::PhantomData, ptr::NonNull};
 
 use super::{ElfCore, LoadedCore, core::CoreInner};
 
@@ -105,9 +105,17 @@ impl core::fmt::Debug for ElfExtraData {
 ///
 /// This is the common raw representation for ELF images with a `PT_DYNAMIC`
 /// segment, including shared objects and dynamically linked executables.
-pub struct RawDynamic<D>
+///
+/// The optional `Arch` type parameter selects which relocation type numbering
+/// is applied during [`Relocator::relocate`]. By default it is
+/// [`crate::arch::NativeArch`] (the host architecture), which preserves the prior
+/// single-architecture behavior. Cross-architecture loading instead carries
+/// one of the per-ISA backends (e.g.
+/// [`crate::arch::x86_64::relocation::X86_64Arch`]).
+pub struct RawDynamic<D, Arch = crate::arch::NativeArch>
 where
     D: 'static,
+    Arch: RelocationArch,
 {
     /// Entry point of the ELF object.
     entry: RelocAddr,
@@ -117,9 +125,13 @@ where
     module: ElfCore<D>,
     /// Extra data needed for relocation
     extra: ElfExtraData,
+    /// Tag identifying which relocation backend is used during relocation.
+    ///
+    /// `Arch` is a zero-sized type, so this field has no runtime cost.
+    _arch: PhantomData<fn() -> Arch>,
 }
 
-impl<D> core::fmt::Debug for RawDynamic<D> {
+impl<D, Arch: RelocationArch> core::fmt::Debug for RawDynamic<D, Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawDynamic")
             .field("entry", &format_args!("0x{:x}", self.entry.into_inner()))
@@ -129,7 +141,7 @@ impl<D> core::fmt::Debug for RawDynamic<D> {
     }
 }
 
-impl<D> RawDynamic<D> {
+impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     /// Gets the entry point of the ELF object.
     #[inline]
     pub fn entry(&self) -> usize {
@@ -304,7 +316,7 @@ impl<D> RawDynamic<D> {
     }
 }
 
-impl<D: 'static> RawDynamic<D> {
+impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
     pub(crate) fn from_parts<Tls>(parts: RawDynamicParts<D>) -> Result<Self>
     where
         Tls: TlsResolver,
@@ -409,6 +421,7 @@ impl<D: 'static> RawDynamic<D> {
                     segments,
                 }),
             },
+            _arch: PhantomData,
         })
     }
 
@@ -460,15 +473,15 @@ impl<D: 'static> RawDynamic<D> {
     }
 }
 
-impl<D: 'static> Relocatable<D> for RawDynamic<D> {
+impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawDynamic<D, Arch> {
     type Output = LoadedCore<D>;
+    type Arch = Arch;
 
-    fn relocate<A, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
-        A: RelocationArch,
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
@@ -476,9 +489,9 @@ impl<D: 'static> Relocatable<D> for RawDynamic<D> {
         PreH: RelocationHandler + ?Sized,
         PostH: RelocationHandler + ?Sized,
     {
-        self.relocate_impl::<A, _, _, _, _, _, _>(args)
+        self.relocate_impl::<_, _, _, _, _, _>(args)
     }
 }
 
 #[cfg(feature = "lazy-binding")]
-impl<D: 'static> crate::relocation::SupportLazy for RawDynamic<D> {}
+impl<D: 'static, Arch: RelocationArch> crate::relocation::SupportLazy for RawDynamic<D, Arch> {}

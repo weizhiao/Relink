@@ -2,14 +2,24 @@
 
 use std::collections::HashMap;
 
-#[cfg(feature = "tls")]
-use elf_loader::arch::{REL_DTPMOD, REL_DTPOFF};
 use elf_loader::{
     Loader,
-    arch::{REL_COPY, REL_GOT, REL_IRELATIVE, REL_JUMP_SLOT, REL_RELATIVE, REL_SYMBOLIC},
+    arch::NativeArch,
     image::LoadedCore,
     input::ElfBinary,
+    relocation::RelocationArch,
 };
+
+const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
+const REL_GOT: u32 = <NativeArch as RelocationArch>::GOT.raw();
+const REL_IRELATIVE: u32 = <NativeArch as RelocationArch>::IRELATIVE.raw();
+const REL_JUMP_SLOT: u32 = <NativeArch as RelocationArch>::JUMP_SLOT.raw();
+const REL_RELATIVE: u32 = <NativeArch as RelocationArch>::RELATIVE.raw();
+const REL_SYMBOLIC: u32 = <NativeArch as RelocationArch>::SYMBOLIC.raw();
+#[cfg(feature = "tls")]
+const REL_DTPMOD: u32 = <NativeArch as RelocationArch>::DTPMOD.raw();
+#[cfg(feature = "tls")]
+const REL_DTPOFF: u32 = <NativeArch as RelocationArch>::DTPOFF.raw();
 use gen_elf::{
     Arch, DylibWriter, ElfWriteOutput, ElfWriterConfig, RelocEntry, RelocationInfo, SymbolDesc,
 };

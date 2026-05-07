@@ -9,7 +9,7 @@ use crate::{
     input::{ElfReader, IntoElfReader},
     logging,
     os::Mmap,
-    relocation::RelocAddr,
+    relocation::{RelocAddr, RelocationArch},
     segment::{ELFRelro, ElfSegments, program::parse_segments},
     tls::TlsResolver,
 };
@@ -19,18 +19,23 @@ use core::{
     ptr::NonNull,
 };
 
-impl<M, H, D, Tls> Loader<M, H, D, Tls>
+impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
 where
     M: Mmap,
     H: LoadHook,
     Tls: TlsResolver,
+    Arch: RelocationArch,
 {
     /// Reads the ELF header.
     ///
-    /// The machine architecture check is controlled by the loader's
-    /// [`Loader::with_cross_arch`](super::Loader::with_cross_arch) setting.
+    /// The header's `e_machine` is required to equal `Arch::MACHINE`. To
+    /// load an ELF whose target architecture differs from the host, switch
+    /// the loader's relocation backend with
+    /// [`Loader::for_arch`](super::Loader::for_arch) before calling
+    /// `load_*`; the gate will then accept ELFs targeting `NewArch::MACHINE`.
     pub fn read_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader> {
-        self.buf.prepare_ehdr(object, !self.inner.allow_cross_arch)
+        self.buf
+            .prepare_ehdr(object, Some(<Arch as RelocationArch>::MACHINE))
     }
 
     /// Reads the program header table.
@@ -63,12 +68,13 @@ where
     }
 }
 
-impl<M, H, D, Tls> Loader<M, H, D, Tls>
+impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
 where
     M: Mmap,
     H: LoadHook,
     D: 'static,
     Tls: TlsResolver,
+    Arch: RelocationArch,
 {
     /// Scans an executable or dynamic ELF image without mapping its segments.
     ///
@@ -97,19 +103,20 @@ where
     }
 }
 
-impl<M, H, D, Tls> Loader<M, H, D, Tls>
+impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
 where
     M: Mmap,
     H: LoadHook,
     D: Default + 'static,
     Tls: TlsResolver,
+    Arch: RelocationArch,
 {
     /// Loads an ELF input and chooses the appropriate raw image type automatically.
     ///
     /// This is the most flexible entry point when the caller does not already know
     /// whether the input is a shared object, executable, or relocatable object.
     /// `ET_DYN` inputs are classified by inspecting the program headers.
-    pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D>>
+    pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D, Arch>>
     where
         D: 'static,
         I: IntoElfReader<'a>,
@@ -140,7 +147,7 @@ where
     }
 
     #[cfg(not(feature = "object"))]
-    pub(crate) fn load_rel(&mut self, _object: impl ElfReader) -> Result<RawElf<D>>
+    pub(crate) fn load_rel(&mut self, _object: impl ElfReader) -> Result<RawElf<D, Arch>>
     where
         D: 'static,
     {
@@ -155,10 +162,16 @@ where
     /// Any [`IntoElfReader`] input is accepted, including paths, byte slices,
     /// [`crate::input::ElfFile`], and [`crate::input::ElfBinary`].
     ///
-    /// To load ELF files targeting a different CPU architecture than the host, configure
-    /// the loader with
-    /// [`Loader::with_cross_arch(true)`](super::Loader::with_cross_arch) before calling
-    /// this method.
+    /// To load ELF files targeting a different CPU architecture than the host,
+    /// switch the relocation backend with
+    /// [`Loader::for_arch::<NewArch>()`](super::Loader::for_arch) before
+    /// calling this method. The `e_machine` gate then validates against
+    /// `NewArch::MACHINE`, and the returned [`RawDylib`] carries the chosen
+    /// `Arch`, so [`Relocator::relocate`] uses the matching relocation
+    /// numbering and skips host-side runtime hooks (IFUNC, TLSDESC, lazy
+    /// binding, init arrays).
+    ///
+    /// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
     ///
     /// # Examples
     /// ```no_run
@@ -168,7 +181,7 @@ where
     /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
     /// let lib = raw.relocator().relocate().unwrap();
     /// ```
-    pub fn load_dylib<'a, I>(&mut self, input: I) -> Result<RawDylib<D>>
+    pub fn load_dylib<'a, I>(&mut self, input: I) -> Result<RawDylib<D, Arch>>
     where
         I: IntoElfReader<'a>,
     {
@@ -194,7 +207,7 @@ where
     /// and `ET_EXEC` executables that carry a `PT_DYNAMIC` segment. The returned
     /// value is mapped but not yet relocated. Call `.relocator().relocate()` to
     /// resolve symbols and produce a ready-to-use loaded image.
-    pub fn load_dynamic<'a, I>(&mut self, input: I) -> Result<RawDynamic<D>>
+    pub fn load_dynamic<'a, I>(&mut self, input: I) -> Result<RawDynamic<D, Arch>>
     where
         I: IntoElfReader<'a>,
     {
@@ -219,7 +232,7 @@ where
         &mut self,
         mut object: impl ElfReader,
         ehdr: ElfHeader,
-    ) -> Result<RawDynamic<D>> {
+    ) -> Result<RawDynamic<D, Arch>> {
         let phdrs = self
             .buf
             .prepare_phdrs(&ehdr, &mut object)?
@@ -239,7 +252,7 @@ where
     ///
     /// The scanned object's reader is reused for segment loading. User data is
     /// initialized through the loader's dynamic initializer, like ordinary dynamic loads.
-    pub fn load_scanned_dynamic(&mut self, scanned: ScannedDynamic) -> Result<RawDynamic<D>> {
+    pub fn load_scanned_dynamic(&mut self, scanned: ScannedDynamic) -> Result<RawDynamic<D, Arch>> {
         let mut image = self.load_scanned_dynamic_raw_impl(scanned)?;
         self.inner.initialize_dynamic(&mut image)?;
 
@@ -256,7 +269,7 @@ where
     pub(crate) fn load_scanned_dynamic_raw_impl(
         &mut self,
         scanned: ScannedDynamic,
-    ) -> Result<RawDynamic<D>> {
+    ) -> Result<RawDynamic<D, Arch>> {
         let ScannedDynamicLoadParts {
             ehdr,
             phdrs,
@@ -294,7 +307,7 @@ where
         load_bias: usize,
         phdrs: impl Into<Vec<ElfPhdr>>,
         entry: usize,
-    ) -> Result<RawDynamic<D>> {
+    ) -> Result<RawDynamic<D, Arch>> {
         let name = name.into();
         let phdrs = phdrs.into();
         let page_size = self.inner.page_size::<M>()?.bytes();
@@ -344,7 +357,7 @@ where
     /// let exec = loader.load_exec("path/to/program").unwrap();
     /// println!("entry = 0x{:x}", exec.entry());
     /// ```
-    pub fn load_exec<'a, I>(&mut self, input: I) -> Result<RawExec<D>>
+    pub fn load_exec<'a, I>(&mut self, input: I) -> Result<RawExec<D, Arch>>
     where
         I: IntoElfReader<'a>,
     {
@@ -359,7 +372,7 @@ where
         &mut self,
         mut object: impl ElfReader,
         ehdr: ElfHeader,
-    ) -> Result<RawExec<D>> {
+    ) -> Result<RawExec<D, Arch>> {
         let phdrs = self
             .buf
             .prepare_phdrs(&ehdr, &mut object)?
@@ -565,7 +578,8 @@ mod tests {
         ehdr.e_shentsize = shentsize as _;
         ehdr.e_shnum = shnum as _;
 
-        ElfHeader::from_raw(ehdr, true).expect("failed to parse crafted header")
+        ElfHeader::from_raw(ehdr, Some(crate::elf::ElfMachine::new(EM_ARCH)))
+            .expect("failed to parse crafted header")
     }
 
     #[test]

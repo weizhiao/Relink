@@ -3,54 +3,25 @@
 //! This module provides AArch64 specific implementations for ELF relocation,
 //! dynamic linking, and procedure linkage table (PLT) handling.
 
-#[cfg(feature = "lazy-binding")]
+// `lazy` and `tls` contain naked assembly that is only valid when the host
+// CPU matches this module's architecture. Other architectures only need the
+// pure-data items (relocation type numbers, ...) so we gate the
+// platform-specific submodules on `target_arch`.
+#[cfg(all(feature = "lazy-binding", target_arch = "aarch64"))]
 mod lazy;
-#[cfg(feature = "tls")]
+#[cfg(all(feature = "tls", target_arch = "aarch64"))]
 mod tls;
 
-use elf::abi::*;
+use elf::abi::EM_AARCH64;
 
-#[cfg(feature = "lazy-binding")]
+#[cfg(all(feature = "lazy-binding", target_arch = "aarch64"))]
 pub(crate) use lazy::{DYLIB_OFFSET, RESOLVE_FUNCTION_OFFSET, dl_runtime_resolve};
-#[cfg(feature = "tls")]
+#[cfg(all(feature = "tls", target_arch = "aarch64"))]
 pub(crate) use tls::{get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static};
+
+pub mod relocation;
 
 /// The ELF machine type for AArch64 architecture.
 pub const EM_ARCH: u16 = EM_AARCH64;
-/// Relative relocation type - add base address to relative offset.
-pub const REL_RELATIVE: u32 = R_AARCH64_RELATIVE;
-/// GOT entry relocation type - set GOT entry to symbol address.
-pub const REL_GOT: u32 = R_AARCH64_GLOB_DAT;
-/// Symbolic relocation type - set to absolute symbol address.
-pub const REL_SYMBOLIC: u32 = R_AARCH64_ABS64;
-/// PLT jump slot relocation type - set PLT entry to symbol address.
-pub const REL_JUMP_SLOT: u32 = R_AARCH64_JUMP_SLOT;
-/// IRELATIVE relocation type - call function to get address.
-pub const REL_IRELATIVE: u32 = R_AARCH64_IRELATIVE;
-/// COPY relocation type - copy data from shared object.
-pub const REL_COPY: u32 = R_AARCH64_COPY;
+/// TLS dynamic thread vector offset for AArch64.
 pub const TLS_DTV_OFFSET: usize = 0;
-pub const REL_DTPMOD: u32 = R_AARCH64_TLS_DTPMOD;
-pub const REL_DTPOFF: u32 = R_AARCH64_TLS_DTPREL;
-pub const REL_TPOFF: u32 = R_AARCH64_TLS_TPREL;
-pub const REL_TLSDESC: u32 = R_AARCH64_TLSDESC;
-
-pub(crate) struct Architecture;
-
-impl crate::relocation::RelocationValueProvider for Architecture {}
-
-/// Map aarch64 relocation type to human readable name
-pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
-    match r_type as u32 {
-        R_AARCH64_NONE => "R_AARCH64_NONE",
-        R_AARCH64_ABS64 => "R_AARCH64_ABS64",
-        R_AARCH64_GLOB_DAT => "R_AARCH64_GLOB_DAT",
-        R_AARCH64_RELATIVE => "R_AARCH64_RELATIVE",
-        R_AARCH64_JUMP_SLOT => "R_AARCH64_JUMP_SLOT",
-        R_AARCH64_IRELATIVE => "R_AARCH64_IRELATIVE",
-        R_AARCH64_COPY => "R_AARCH64_COPY",
-        R_AARCH64_TLS_TPREL => "R_AARCH64_TLS_TPREL",
-        R_AARCH64_TLSDESC => "R_AARCH64_TLSDESC",
-        _ => "UNKNOWN",
-    }
-}

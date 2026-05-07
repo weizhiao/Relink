@@ -1,6 +1,6 @@
 use super::{
     request::{DependencyOwner, DependencyRequest, LoadObserver, StagedDynamic, VisibleModules},
-    session::{ResolveSession, collect_unique_deps, extend_breadth_first},
+    session::{ResolveSession, extend_breadth_first},
     storage::CommittedStorageView,
     view::DependencyGraphView,
 };
@@ -236,9 +236,12 @@ where
     }
 
     fn set_direct_deps(&mut self, key: &K, direct_deps: Vec<K>) {
-        if let Some(entry) = self.session.entries.get_mut(key) {
-            entry.set_direct_deps(direct_deps);
-        }
+        let entry = self
+            .session
+            .entries
+            .get_mut(key)
+            .expect("session entry must exist for staged key");
+        entry.set_direct_deps(direct_deps);
     }
 
     fn resolve_dependency_edge<'cfg>(
@@ -288,8 +291,9 @@ where
         O: LoadObserver<K, D>,
         V: VisibleModules<K, D>,
     {
+        // Keys that resolve through visible / committed storage have their
+        // direct deps tracked elsewhere and have no session entry to update.
         if let Some(direct_deps) = self.known_direct_deps(key) {
-            self.set_direct_deps(key, direct_deps.clone());
             return Ok(direct_deps);
         }
 
@@ -297,10 +301,14 @@ where
             .owner(key)
             .expect("missing dependency owner while resolving direct deps")
             .needed_len();
-        let direct_deps = collect_unique_deps(needed_len, |idx| {
+        let mut direct_deps: Vec<K> = Vec::with_capacity(needed_len);
+        for idx in 0..needed_len {
             let resolved_key = self.resolve_dependency_edge(key, idx, resolver)?;
-            self.stage_resolved(resolved_key, loader, observer)
-        })?;
+            let dep_key = self.stage_resolved(resolved_key, loader, observer)?;
+            if !direct_deps.contains(&dep_key) {
+                direct_deps.push(dep_key);
+            }
+        }
         self.set_direct_deps(key, direct_deps.clone());
         Ok(direct_deps)
     }

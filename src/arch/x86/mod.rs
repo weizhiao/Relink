@@ -3,61 +3,34 @@
 //! This module provides x86 32-bit specific implementations for ELF relocation,
 //! dynamic linking, and procedure linkage table (PLT) handling.
 
-#[cfg(feature = "lazy-binding")]
+// See aarch64/mod.rs for why these are gated on `target_arch`.
+#[cfg(all(feature = "lazy-binding", target_arch = "x86"))]
 mod lazy;
-#[cfg(feature = "tls")]
+#[cfg(all(feature = "tls", target_arch = "x86"))]
 mod tls;
 
-use elf::abi::*;
+use elf::abi::EM_386;
 
-#[cfg(feature = "lazy-binding")]
+#[cfg(all(feature = "lazy-binding", target_arch = "x86"))]
 pub(crate) use lazy::{DYLIB_OFFSET, RESOLVE_FUNCTION_OFFSET, dl_runtime_resolve};
-#[cfg(feature = "tls")]
+#[cfg(all(feature = "tls", target_arch = "x86"))]
 pub(crate) use tls::{get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static};
 
 /// Custom relocation type constants for x86 (32-bit).
 /// These are defined locally since they may not be available in all elf crate versions.
-const R_386_32: u32 = 1;
-const R_386_GLOB_DAT: u32 = 6;
-const R_386_JMP_SLOT: u32 = 7;
-const R_386_RELATIVE: u32 = 8;
-const R_386_COPY: u32 = 5;
-const R_386_TLS_DTPMOD32: u32 = 35;
-const R_386_TLS_DTPOFF32: u32 = 36;
-const R_386_IRELATIVE: u32 = 42;
-const R_386_TLS_TPOFF: u32 = 14;
+pub(super) const R_386_32: u32 = 1;
+pub(super) const R_386_GLOB_DAT: u32 = 6;
+pub(super) const R_386_JMP_SLOT: u32 = 7;
+pub(super) const R_386_RELATIVE: u32 = 8;
+pub(super) const R_386_COPY: u32 = 5;
+pub(super) const R_386_TLS_DTPMOD32: u32 = 35;
+pub(super) const R_386_TLS_DTPOFF32: u32 = 36;
+pub(super) const R_386_IRELATIVE: u32 = 42;
+pub(super) const R_386_TLS_TPOFF: u32 = 14;
+
+pub mod relocation;
 
 /// The ELF machine type for x86 architecture.
 pub const EM_ARCH: u16 = EM_386;
-
-pub const REL_RELATIVE: u32 = R_386_RELATIVE;
-pub const REL_GOT: u32 = R_386_GLOB_DAT;
-pub const REL_SYMBOLIC: u32 = R_386_32;
-pub const REL_JUMP_SLOT: u32 = R_386_JMP_SLOT;
-pub const REL_IRELATIVE: u32 = R_386_IRELATIVE;
-pub const REL_COPY: u32 = R_386_COPY;
+/// TLS dynamic thread vector offset for x86.
 pub const TLS_DTV_OFFSET: usize = 0;
-pub const REL_DTPMOD: u32 = R_386_TLS_DTPMOD32;
-pub const REL_DTPOFF: u32 = R_386_TLS_DTPOFF32;
-pub const REL_TPOFF: u32 = R_386_TLS_TPOFF;
-pub const REL_TLSDESC: u32 = 0;
-
-pub(crate) struct Architecture;
-
-impl crate::relocation::RelocationValueProvider for Architecture {}
-
-/// Map x86 relocation type to human readable name
-pub(crate) fn rel_type_to_str(r_type: usize) -> &'static str {
-    match r_type as u32 {
-        R_386_32 => "R_386_32",
-        R_386_GLOB_DAT => "R_386_GLOB_DAT",
-        R_386_COPY => "R_386_COPY",
-        R_386_JMP_SLOT => "R_386_JMP_SLOT",
-        R_386_RELATIVE => "R_386_RELATIVE",
-        R_386_TLS_DTPMOD32 => "R_386_TLS_DTPMOD32",
-        R_386_TLS_DTPOFF32 => "R_386_TLS_DTPOFF32",
-        R_386_IRELATIVE => "R_386_IRELATIVE",
-        R_386_TLS_TPOFF => "R_386_TLS_TPOFF",
-        _ => "UNKNOWN",
-    }
-}

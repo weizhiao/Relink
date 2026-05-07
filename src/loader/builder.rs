@@ -236,10 +236,11 @@ where
     }
 }
 
-impl<H, D> LoaderInner<H, D>
+impl<H, D, Arch> LoaderInner<H, D, Arch>
 where
     H: LoadHook,
     D: 'static,
+    Arch: crate::relocation::RelocationArch,
 {
     pub(crate) fn lifecycle_handlers(&self) -> (DynLifecycleHandler, DynLifecycleHandler) {
         (self.init_fn.clone(), self.fini_fn.clone())
@@ -268,15 +269,16 @@ where
     }
 
     #[inline]
-    pub(crate) fn initialize_dynamic(&mut self, dynamic: &mut RawDynamic<D>) -> Result<()> {
+    pub(crate) fn initialize_dynamic(&mut self, dynamic: &mut RawDynamic<D, Arch>) -> Result<()> {
         (self.dynamic_initializer)(dynamic)
     }
 }
 
-impl<H, D> LoaderInner<H, D>
+impl<H, D, Arch> LoaderInner<H, D, Arch>
 where
     H: LoadHook,
     D: 'static,
+    Arch: crate::relocation::RelocationArch,
 {
     pub(crate) fn create_builder<M, Tls>(
         &mut self,

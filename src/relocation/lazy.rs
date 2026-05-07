@@ -5,7 +5,7 @@ mod enabled {
         RelocationError, Result,
         arch::prepare_lazy_bind,
         elf::{ElfRelType, ElfRelocationType},
-        relocation::{BindingMode, LazyLookupHooks, RelocAddr, SymbolLookup, unlikely},
+        relocation::{BindingMode, LazyLookupHooks, RelocAddr, RelocationArch, SymbolLookup, unlikely},
         sync::Arc,
         tls::lookup_tls_get_addr,
     };
@@ -47,7 +47,10 @@ mod enabled {
             matches!(self, Self::Lazy)
         }
 
-        pub(crate) fn prepare_plt<D>(&self, image: &RawDynamic<D>) -> Result<()>
+        pub(crate) fn prepare_plt<D, Arch: RelocationArch>(
+            &self,
+            image: &RawDynamic<D, Arch>,
+        ) -> Result<()>
         where
             D: 'static,
         {
@@ -80,7 +83,7 @@ mod enabled {
         }
     }
 
-    impl<D> RawDynamic<D> {
+    impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
         pub(crate) fn resolve_binding(&self, binding: BindingMode) -> ResolvedBinding {
             match binding {
                 BindingMode::Default => {
@@ -132,7 +135,9 @@ mod enabled {
         }
     }
 
-    fn lazy_binding_got<D>(image: &RawDynamic<D>) -> Result<NonNull<usize>>
+    fn lazy_binding_got<D, Arch: RelocationArch>(
+        image: &RawDynamic<D, Arch>,
+    ) -> Result<NonNull<usize>>
     where
         D: 'static,
     {
@@ -225,7 +230,7 @@ mod disabled {
     use crate::{
         elf::ElfRelType,
         image::{LoadedCore, RawDynamic},
-        relocation::{BindingMode, LazyLookupHooks, SymbolLookup},
+        relocation::{BindingMode, LazyLookupHooks, RelocationArch, SymbolLookup},
         sync::Arc,
     };
 
@@ -239,7 +244,10 @@ mod disabled {
             false
         }
 
-        pub(crate) fn prepare_plt<D>(&self, _image: &RawDynamic<D>) -> crate::Result<()>
+        pub(crate) fn prepare_plt<D, Arch: RelocationArch>(
+            &self,
+            _image: &RawDynamic<D, Arch>,
+        ) -> crate::Result<()>
         where
             D: 'static,
         {
@@ -255,7 +263,7 @@ mod disabled {
         }
     }
 
-    impl<D> RawDynamic<D> {
+    impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
         pub(crate) fn resolve_binding(&self, _binding: BindingMode) -> ResolvedBinding {
             ResolvedBinding::Eager
         }

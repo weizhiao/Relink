@@ -17,9 +17,11 @@ mod load;
 
 use crate::{
     Result,
+    arch::NativeArch,
     elf::ElfPhdr,
     image::RawDynamic,
     os::{DefaultMmap, Mmap, PageSize},
+    relocation::RelocationArch,
     segment::ElfSegments,
     sync::Arc,
     tls::TlsResolver,
@@ -164,32 +166,36 @@ pub(crate) type DynLifecycleHandler = Arc<Box<dyn LifecycleHandler>>;
 /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
 /// let lib = raw.relocator().relocate().unwrap();
 /// ```
-pub struct Loader<M = DefaultMmap, H = (), D: 'static = (), Tls = ()>
+pub struct Loader<M = DefaultMmap, H = (), D: 'static = (), Tls = (), Arch = NativeArch>
 where
     M: Mmap,
     H: LoadHook,
     Tls: TlsResolver,
+    Arch: RelocationArch,
 {
     pub(crate) buf: ElfBuf,
-    pub(crate) inner: LoaderInner<H, D>,
-    _marker: PhantomData<(M, Tls)>,
+    pub(crate) inner: LoaderInner<H, D, Arch>,
+    _marker: PhantomData<(M, Tls, Arch)>,
 }
 
-pub(crate) struct LoaderInner<H, D: 'static> {
+pub(crate) struct LoaderInner<H, D: 'static, Arch: RelocationArch> {
     init_fn: DynLifecycleHandler,
     fini_fn: DynLifecycleHandler,
     hook: H,
     page_size: Option<PageSize>,
     force_static_tls: bool,
-    /// When `true`, the ELF machine architecture check is skipped on load.
-    /// Used for cross-architecture loading (e.g. x86-64 ELF on RISC-V).
-    pub(crate) allow_cross_arch: bool,
-    dynamic_initializer: Box<dyn FnMut(&mut RawDynamic<D>) -> Result<()>>,
+    dynamic_initializer: Box<dyn FnMut(&mut RawDynamic<D, Arch>) -> Result<()>>,
 }
 
-impl Loader<DefaultMmap, (), (), ()> {
+impl Loader<DefaultMmap, (), (), (), NativeArch> {
     /// Creates a new [`Loader`] with the default mmap backend, no hook, no custom
-    /// user data, and no TLS resolver.
+    /// user data, no TLS resolver, and the host relocation backend
+    /// ([`NativeArch`]).
+    ///
+    /// To target a different ELF architecture (e.g. load an x86-64 shared
+    /// object on a RISC-V host), switch the relocation backend with
+    /// [`for_arch::<NewArch>()`](Self::for_arch); the `e_machine` gate
+    /// then validates against `NewArch::MACHINE` automatically.
     pub fn new() -> Self {
         let c_abi: DynLifecycleHandler = Arc::new(Box::new(|ctx: &LifecycleContext| {
             ctx.func()
@@ -214,7 +220,6 @@ impl Loader<DefaultMmap, (), (), ()> {
                 fini_fn: c_abi,
                 page_size: None,
                 force_static_tls: false,
-                allow_cross_arch: false,
                 dynamic_initializer: Box::new(|_| Ok(())),
             },
             _marker: PhantomData,
@@ -222,12 +227,13 @@ impl Loader<DefaultMmap, (), (), ()> {
     }
 }
 
-impl<M, H, D, Tls> Loader<M, H, D, Tls>
+impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
 where
     H: LoadHook,
     M: Mmap,
     D: 'static,
     Tls: TlsResolver,
+    Arch: RelocationArch,
 {
     /// Sets the initialization function handler.
     ///
@@ -265,8 +271,8 @@ where
     /// addresses.
     pub fn with_dynamic_initializer<NewD>(
         self,
-        initializer: impl FnMut(&mut RawDynamic<NewD>) -> Result<()> + 'static,
-    ) -> Loader<M, H, NewD, Tls>
+        initializer: impl FnMut(&mut RawDynamic<NewD, Arch>) -> Result<()> + 'static,
+    ) -> Loader<M, H, NewD, Tls, Arch>
     where
         NewD: Default + 'static,
     {
@@ -278,7 +284,6 @@ where
                 hook: self.inner.hook,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
-                allow_cross_arch: self.inner.allow_cross_arch,
                 dynamic_initializer: Box::new(initializer),
             },
             _marker: PhantomData,
@@ -286,7 +291,7 @@ where
     }
 
     /// Consumes the current loader and returns a new one with the specified hook.
-    pub fn with_hook<NewHook>(self, hook: NewHook) -> Loader<M, NewHook, D, Tls>
+    pub fn with_hook<NewHook>(self, hook: NewHook) -> Loader<M, NewHook, D, Tls, Arch>
     where
         NewHook: LoadHook,
     {
@@ -298,27 +303,10 @@ where
                 hook,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
-                allow_cross_arch: self.inner.allow_cross_arch,
                 dynamic_initializer: self.inner.dynamic_initializer,
             },
             _marker: PhantomData,
         }
-    }
-
-    /// Sets whether the loader is allowed to load ELF files targeting a different
-    /// CPU architecture than the host.
-    ///
-    /// When `enabled` is `true`, the `e_machine` check in the ELF header is skipped,
-    /// making it possible to map (for example) an x86-64 shared object on a RISC-V
-    /// host. The native `.relocator().relocate()` path still uses the host
-    /// relocation numbering; callers that need same-class cross-architecture
-    /// relocation should provide a [`crate::relocation::RelocationArch`] backend
-    /// and call `.relocator().relocate_with_arch::<A>()`.
-    ///
-    /// Defaults to `false`.
-    pub fn with_cross_arch(mut self, enabled: bool) -> Self {
-        self.inner.allow_cross_arch = enabled;
-        self
     }
 
     /// Overrides the base page size used for segment layout decisions.
@@ -332,7 +320,7 @@ where
     }
 
     /// Returns a new loader with a custom `Mmap` implementation.
-    pub fn with_mmap<NewMmap: Mmap>(self) -> Loader<NewMmap, H, D, Tls> {
+    pub fn with_mmap<NewMmap: Mmap>(self) -> Loader<NewMmap, H, D, Tls, Arch> {
         Loader {
             buf: self.buf,
             inner: self.inner,
@@ -342,7 +330,7 @@ where
 
     /// Consumes the current loader and returns a new one with the specified TLS resolver.
     #[cfg(feature = "tls")]
-    pub fn with_tls_resolver<NewTls>(self) -> Loader<M, H, D, NewTls>
+    pub fn with_tls_resolver<NewTls>(self) -> Loader<M, H, D, NewTls, Arch>
     where
         NewTls: TlsResolver,
     {
@@ -355,7 +343,9 @@ where
 
     /// Consumes the current loader and returns a new one with the default TLS resolver.
     #[cfg(feature = "tls")]
-    pub fn with_default_tls_resolver(self) -> Loader<M, H, D, crate::tls::DefaultTlsResolver> {
+    pub fn with_default_tls_resolver(
+        self,
+    ) -> Loader<M, H, D, crate::tls::DefaultTlsResolver, Arch> {
         Loader {
             buf: self.buf,
             inner: self.inner,
@@ -368,5 +358,78 @@ where
     pub fn with_static_tls(mut self, enabled: bool) -> Self {
         self.inner.force_static_tls = enabled;
         self
+    }
+}
+
+/// Cross-architecture builder step.
+///
+/// Switching the relocation backend is only meaningful while the loader has
+/// not yet been bound to a user-data type, because the dynamic initializer
+/// borrows `RawDynamic<D, Arch>` and cannot be carried across an `Arch`
+/// change. The builder therefore exposes [`Loader::for_arch`] only on
+/// loaders whose `D` is still `()` (i.e. before
+/// [`Loader::with_dynamic_initializer`] has been called). Callers should
+/// pick the relocation backend first and attach the user-data initializer
+/// afterwards:
+///
+/// ```no_run
+/// use elf_loader::Loader;
+/// use elf_loader::arch::x86_64::relocation::X86_64Arch;
+///
+/// let _loader = Loader::new()
+///     .for_arch::<X86_64Arch>()
+///     .with_dynamic_initializer::<()>(|_| Ok(()));
+/// ```
+impl<M, H, Tls, Arch> Loader<M, H, (), Tls, Arch>
+where
+    H: LoadHook,
+    M: Mmap,
+    Tls: TlsResolver,
+    Arch: RelocationArch,
+{
+    /// Consumes the current loader and returns a new one whose relocation
+    /// backend is `NewArch` instead of the previous `Arch`.
+    ///
+    /// This is the primary entry point for cross-architecture loading. Picking
+    /// a non-host backend (e.g.
+    /// [`X86_64Arch`](crate::arch::x86_64::relocation::X86_64Arch)) makes
+    /// every subsequent `load_*` call validate the ELF `e_machine` against
+    /// `NewArch::MACHINE` instead of the host's, and stamps the resulting
+    /// raw images with `NewArch` so [`Relocator::relocate`] uses the matching
+    /// relocation numbering.
+    ///
+    /// Per-ISA backends report `SUPPORTS_NATIVE_RUNTIME == false`, so guest
+    /// IFUNC resolvers, TLSDESC stubs, lazy-binding trampolines, and init
+    /// arrays are *not* executed on the host CPU.
+    ///
+    /// # Builder ordering
+    ///
+    /// `for_arch` is only available before
+    /// [`with_dynamic_initializer`](Loader::with_dynamic_initializer) has
+    /// been called. The dynamic initializer's signature mentions `Arch`,
+    /// so it cannot be retyped after the fact; instead, switch `Arch` first
+    /// and then attach the initializer once the relocation backend is
+    /// fixed.
+    ///
+    /// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
+    pub fn for_arch<NewArch>(self) -> Loader<M, H, (), Tls, NewArch>
+    where
+        NewArch: RelocationArch,
+    {
+        Loader {
+            buf: self.buf,
+            inner: LoaderInner {
+                init_fn: self.inner.init_fn,
+                fini_fn: self.inner.fini_fn,
+                hook: self.inner.hook,
+                page_size: self.inner.page_size,
+                force_static_tls: self.inner.force_static_tls,
+                // `D = ()` so the existing initializer is necessarily a
+                // no-op; rebuilding a fresh no-op typed against `NewArch`
+                // loses no information.
+                dynamic_initializer: Box::new(|_| Ok(())),
+            },
+            _marker: PhantomData,
+        }
     }
 }
