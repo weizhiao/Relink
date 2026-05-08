@@ -24,12 +24,11 @@ use crate::{LinkerError, RelocationError, Result};
 
 /// x86-64 (AMD64) architecture marker.
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code)]
 pub struct X86_64Arch;
 
 impl RelocationArch for X86_64Arch {
     const KIND: ArchKind = ArchKind::X86_64;
-    const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    const MACHINE: ElfMachine = ElfMachine::new(EM_X86_64);
     type Layout = Elf64Layout;
     type Relocation = ElfRela<Self::Layout>;
 
@@ -75,6 +74,38 @@ impl RelocationArch for X86_64Arch {
             R_X86_64_DTPOFF64 => "R_X86_64_DTPOFF64",
             _ => "UNKNOWN",
         }
+    }
+
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
+    #[allow(private_interfaces)]
+    fn relocate_object<D, PreS, PostS, PreH, PostH>(
+        helper: &mut crate::relocation::RelocHelper<'_, D, Self, PreS, PostS, PreH, PostH>,
+        rel: &crate::elf::ElfRelType<Self>,
+        pltgot: &mut crate::object::layout::PltGotSection,
+    ) -> Result<()>
+    where
+        D: 'static,
+        PreS: crate::relocation::SymbolLookup + ?Sized,
+        PostS: crate::relocation::SymbolLookup + ?Sized,
+        PreH: crate::relocation::RelocationHandler<Self> + ?Sized,
+        PostH: crate::relocation::RelocationHandler<Self> + ?Sized,
+    {
+        Self::relocate_object_impl(helper, rel, pltgot)
+    }
+
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
+    #[inline]
+    fn object_needs_got(r_type: ElfRelocationType) -> bool {
+        Self::object_needs_got_impl(r_type)
+    }
+
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
+    #[inline]
+    fn object_needs_plt(r_type: ElfRelocationType) -> bool {
+        Self::object_needs_plt_impl(r_type)
     }
 }
 

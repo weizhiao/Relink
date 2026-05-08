@@ -1,14 +1,12 @@
 use super::{
     request::{DependencyOwner, DependencyRequest, LoadObserver, StagedDynamic, VisibleModules},
-    runtime::AnyRawDynamic,
     session::{ResolveSession, extend_breadth_first},
     storage::CommittedStorageView,
     view::DependencyGraphView,
 };
 use crate::{
     LinkerError, Loader, Result, UnresolvedDependencyError,
-    arch::{ArchKind, NativeArch},
-    image::AnyScannedDynamic,
+    image::{RawDynamic, ScannedDynamic, ScannedElf},
     input::ElfReader,
     loader::LoadHook,
     os::Mmap,
@@ -25,7 +23,6 @@ pub enum ResolvedKey<'cfg, K> {
     Load {
         key: K,
         reader: Box<dyn ElfReader + 'cfg>,
-        arch: ArchKind,
     },
 }
 
@@ -37,59 +34,65 @@ impl<'cfg, K> ResolvedKey<'cfg, K> {
 
     #[inline]
     pub fn load(key: K, reader: impl ElfReader + 'cfg) -> Self {
-        Self::load_as::<NativeArch>(key, reader)
-    }
-
-    #[inline]
-    pub fn load_as<Arch>(key: K, reader: impl ElfReader + 'cfg) -> Self
-    where
-        Arch: RelocationArch,
-    {
         Self::Load {
             key,
             reader: Box::new(reader),
-            arch: Arch::KIND,
-        }
-    }
-
-    #[inline]
-    pub fn load_with_arch(key: K, reader: impl ElfReader + 'cfg, arch: ArchKind) -> Self {
-        Self::Load {
-            key,
-            reader: Box::new(reader),
-            arch,
         }
     }
 }
 
 /// Runtime key-resolution policy used by [`super::Linker`].
-pub trait KeyResolver<'cfg, K: Clone, D: 'static, Meta = ()> {
+pub trait KeyResolver<
+    'cfg,
+    K: Clone,
+    D: 'static,
+    Meta = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+>
+{
     fn load_root(&mut self, key: &K) -> Result<ResolvedKey<'cfg, K>>;
 
     fn resolve_dependency(
         &mut self,
-        req: &DependencyRequest<'_, K, D, Meta>,
+        req: &DependencyRequest<'_, K, D, Meta, Arch>,
     ) -> Result<Option<ResolvedKey<'cfg, K>>>;
 }
 
-pub(crate) struct LoadResolveContext<'a, K: Clone, D: 'static, Meta = (), V = ()> {
-    visible: CommittedStorageView<'a, K, D, Meta>,
+pub(crate) struct LoadResolveContext<
+    'a,
+    K: Clone,
+    D: 'static,
+    Meta = (),
+    V = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+> {
+    visible: CommittedStorageView<'a, K, D, Meta, Arch>,
     visible_modules: &'a V,
-    session: &'a mut ResolveSession<K, AnyRawDynamic<D>>,
+    session: &'a mut ResolveSession<K, RawDynamic<D, Arch>>,
 }
 
-pub(crate) struct ScanResolveContext<'a, K: Clone, D: 'static, Meta = (), V = ()> {
-    visible: CommittedStorageView<'a, K, D, Meta>,
+pub(crate) struct ScanResolveContext<
+    'a,
+    K: Clone,
+    D: 'static,
+    Meta = (),
+    V = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+> {
+    visible: CommittedStorageView<'a, K, D, Meta, Arch>,
     visible_modules: &'a V,
-    session: &'a mut ResolveSession<K, AnyScannedDynamic>,
+    session: &'a mut ResolveSession<K, ScannedDynamic<Arch::Layout>>,
 }
 
-impl<'a, K: Clone, D: 'static, Meta, V> ScanResolveContext<'a, K, D, Meta, V> {
+impl<'a, K: Clone, D: 'static, Meta, V, Arch> ScanResolveContext<'a, K, D, Meta, V, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     pub(crate) fn new(
-        visible: CommittedStorageView<'a, K, D, Meta>,
+        visible: CommittedStorageView<'a, K, D, Meta, Arch>,
         visible_modules: &'a V,
-        session: &'a mut ResolveSession<K, AnyScannedDynamic>,
+        session: &'a mut ResolveSession<K, ScannedDynamic<Arch::Layout>>,
     ) -> Self {
         Self {
             visible,
@@ -99,12 +102,15 @@ impl<'a, K: Clone, D: 'static, Meta, V> ScanResolveContext<'a, K, D, Meta, V> {
     }
 }
 
-impl<'a, K: Clone, D: 'static, Meta, V> LoadResolveContext<'a, K, D, Meta, V> {
+impl<'a, K: Clone, D: 'static, Meta, V, Arch> LoadResolveContext<'a, K, D, Meta, V, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     pub(crate) fn new(
-        visible: CommittedStorageView<'a, K, D, Meta>,
+        visible: CommittedStorageView<'a, K, D, Meta, Arch>,
         visible_modules: &'a V,
-        session: &'a mut ResolveSession<K, AnyRawDynamic<D>>,
+        session: &'a mut ResolveSession<K, RawDynamic<D, Arch>>,
     ) -> Self {
         Self {
             visible,
@@ -114,10 +120,11 @@ impl<'a, K: Clone, D: 'static, Meta, V> LoadResolveContext<'a, K, D, Meta, V> {
     }
 }
 
-impl<K, D: 'static, Meta, V> LoadResolveContext<'_, K, D, Meta, V>
+impl<K, D: 'static, Meta, V, Arch> LoadResolveContext<'_, K, D, Meta, V, Arch>
 where
     K: Clone + Ord,
-    V: VisibleModules<K, D>,
+    V: VisibleModules<K, D, Arch>,
+    Arch: RelocationArch,
 {
     #[inline]
     pub(crate) fn contains_pending(&self, key: &K) -> bool {
@@ -145,7 +152,7 @@ where
             .map(|entry| &entry.payload as &dyn DependencyOwner)
     }
 
-    fn visible_view(&self) -> DependencyGraphView<'_, K, D, Meta> {
+    fn visible_view(&self) -> DependencyGraphView<'_, K, D, Meta, Arch> {
         DependencyGraphView::new_overlay(self.visible, self.session, self.visible_modules)
     }
 
@@ -158,22 +165,19 @@ where
         entry.set_direct_deps(direct_deps);
     }
 
-    pub(crate) fn stage_resolved<'cfg, M, H, Tls, LoaderArch, O>(
+    pub(crate) fn stage_resolved<'cfg, M, H, Tls, O>(
         &mut self,
         resolved: ResolvedKey<'cfg, K>,
-        loader: &mut Loader<M, H, D, Tls, LoaderArch>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
         observer: &mut O,
     ) -> Result<K>
     where
         K: 'cfg,
         D: Default,
         M: Mmap,
-        H: LoadHook<crate::elf::Elf32Layout>
-            + LoadHook<crate::elf::Elf64Layout>
-            + LoadHook<LoaderArch::Layout>,
+        H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
-        LoaderArch: crate::linker::runtime::BuiltinArch,
-        O: LoadObserver<K, D>,
+        O: LoadObserver<K, D, Arch>,
     {
         match resolved {
             ResolvedKey::Existing(key) => {
@@ -188,14 +192,14 @@ where
                 )
                 .into())
             }
-            ResolvedKey::Load { key, reader, arch } => {
+            ResolvedKey::Load { key, reader } => {
                 assert!(
                     !self.session.contains_key(&key)
                         && !self.visible.contains_key(&key)
                         && !self.visible_modules.contains_key(&key),
                     "resolved reader produced an already-known key; use ResolvedKey::Existing to reuse a visible module"
                 );
-                let raw = loader.load_dynamic_as(arch, reader)?;
+                let raw = loader.load_dynamic(reader)?;
                 observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
                 self.session.insert_entry(key.clone(), raw);
                 Ok(key)
@@ -207,7 +211,7 @@ where
         &self,
         key: &K,
         needed_index: usize,
-        resolver: &mut impl KeyResolver<'cfg, K, D, Meta>,
+        resolver: &mut impl KeyResolver<'cfg, K, D, Meta, Arch>,
     ) -> Result<ResolvedKey<'cfg, K>>
     where
         K: 'cfg,
@@ -216,7 +220,7 @@ where
             let owner = self
                 .owner(key)
                 .expect("missing dependency owner while building request");
-            DependencyRequest::new(key, owner, needed_index, self.visible_view())
+            DependencyRequest::new(key, owner, Arch::KIND, needed_index, self.visible_view())
         };
 
         resolver.resolve_dependency(&req)?.ok_or_else(|| {
@@ -228,23 +232,20 @@ where
         })
     }
 
-    fn direct_deps_for<'cfg, M, H, Tls, LoaderArch, O>(
+    fn direct_deps_for<'cfg, M, H, Tls, O>(
         &mut self,
         key: &K,
-        loader: &mut Loader<M, H, D, Tls, LoaderArch>,
-        resolver: &mut impl KeyResolver<'cfg, K, D, Meta>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
+        resolver: &mut impl KeyResolver<'cfg, K, D, Meta, Arch>,
         observer: &mut O,
     ) -> Result<Vec<K>>
     where
         K: 'cfg,
         D: Default,
         M: Mmap,
-        H: LoadHook<crate::elf::Elf32Layout>
-            + LoadHook<crate::elf::Elf64Layout>
-            + LoadHook<LoaderArch::Layout>,
+        H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
-        LoaderArch: crate::linker::runtime::BuiltinArch,
-        O: LoadObserver<K, D>,
+        O: LoadObserver<K, D, Arch>,
     {
         if let Some(direct_deps) = self.known_direct_deps(key) {
             return Ok(direct_deps);
@@ -266,23 +267,20 @@ where
         Ok(direct_deps)
     }
 
-    pub(crate) fn resolve_dependency_graph<'cfg, M, H, Tls, LoaderArch, O>(
+    pub(crate) fn resolve_dependency_graph<'cfg, M, H, Tls, O>(
         &mut self,
         root: K,
-        loader: &mut Loader<M, H, D, Tls, LoaderArch>,
-        resolver: &mut impl KeyResolver<'cfg, K, D, Meta>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
+        resolver: &mut impl KeyResolver<'cfg, K, D, Meta, Arch>,
         observer: &mut O,
     ) -> Result<()>
     where
         K: 'cfg,
         D: Default,
         M: Mmap,
-        H: LoadHook<crate::elf::Elf32Layout>
-            + LoadHook<crate::elf::Elf64Layout>
-            + LoadHook<LoaderArch::Layout>,
+        H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
-        LoaderArch: crate::linker::runtime::BuiltinArch,
-        O: LoadObserver<K, D>,
+        O: LoadObserver<K, D, Arch>,
     {
         let mut group_order = Vec::new();
         extend_breadth_first(&mut group_order, root, |key| {
@@ -293,10 +291,11 @@ where
     }
 }
 
-impl<K, D: 'static, Meta, V> ScanResolveContext<'_, K, D, Meta, V>
+impl<K, D: 'static, Meta, V, Arch> ScanResolveContext<'_, K, D, Meta, V, Arch>
 where
     K: Clone + Ord,
-    V: VisibleModules<K, D>,
+    V: VisibleModules<K, D, Arch>,
+    Arch: RelocationArch,
 {
     #[inline]
     pub(crate) fn contains_pending(&self, key: &K) -> bool {
@@ -324,7 +323,7 @@ where
             .map(|entry| &entry.payload as &dyn DependencyOwner)
     }
 
-    fn visible_view(&self) -> DependencyGraphView<'_, K, D, Meta> {
+    fn visible_view(&self) -> DependencyGraphView<'_, K, D, Meta, Arch> {
         DependencyGraphView::new_overlay(self.visible, self.session, self.visible_modules)
     }
 
@@ -337,20 +336,17 @@ where
         entry.set_direct_deps(direct_deps);
     }
 
-    pub(crate) fn stage_resolved<M, H, Tls, LoaderArch>(
+    pub(crate) fn stage_resolved<M, H, Tls>(
         &mut self,
         resolved: ResolvedKey<'static, K>,
-        loader: &mut Loader<M, H, D, Tls, LoaderArch>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
     ) -> Result<K>
     where
         K: 'static,
         D: Default,
         M: Mmap,
-        H: LoadHook<crate::elf::Elf32Layout>
-            + LoadHook<crate::elf::Elf64Layout>
-            + LoadHook<LoaderArch::Layout>,
+        H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
-        LoaderArch: crate::linker::runtime::BuiltinArch,
     {
         match resolved {
             ResolvedKey::Existing(key) => {
@@ -362,7 +358,7 @@ where
                 }
                 Err(LinkerError::resolver("scan resolver referenced an unknown visible key").into())
             }
-            ResolvedKey::Load { key, reader, arch } => {
+            ResolvedKey::Load { key, reader } => {
                 if self.session.contains_key(&key)
                     || self.visible.contains_key(&key)
                     || self.visible_modules.contains_key(&key)
@@ -372,7 +368,9 @@ where
                     )
                     .into());
                 }
-                let module = loader.scan_dynamic_as(arch, reader)?;
+                let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
+                    return Err(crate::ParsePhdrError::MissingDynamicSection.into());
+                };
                 self.session.insert_entry(key.clone(), module);
                 Ok(key)
             }
@@ -383,7 +381,7 @@ where
         &self,
         key: &K,
         needed_index: usize,
-        resolver: &mut impl KeyResolver<'static, K, D, Meta>,
+        resolver: &mut impl KeyResolver<'static, K, D, Meta, Arch>,
     ) -> Result<ResolvedKey<'static, K>>
     where
         K: 'static,
@@ -392,7 +390,7 @@ where
             let owner = self
                 .owner(key)
                 .expect("missing dependency owner while building request");
-            DependencyRequest::new(key, owner, needed_index, self.visible_view())
+            DependencyRequest::new(key, owner, Arch::KIND, needed_index, self.visible_view())
         };
 
         resolver.resolve_dependency(&req)?.ok_or_else(|| {
@@ -404,21 +402,18 @@ where
         })
     }
 
-    fn direct_deps_for<M, H, Tls, LoaderArch>(
+    fn direct_deps_for<M, H, Tls>(
         &mut self,
         key: &K,
-        loader: &mut Loader<M, H, D, Tls, LoaderArch>,
-        resolver: &mut impl KeyResolver<'static, K, D, Meta>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
+        resolver: &mut impl KeyResolver<'static, K, D, Meta, Arch>,
     ) -> Result<Vec<K>>
     where
         K: 'static,
         D: Default,
         M: Mmap,
-        H: LoadHook<crate::elf::Elf32Layout>
-            + LoadHook<crate::elf::Elf64Layout>
-            + LoadHook<LoaderArch::Layout>,
+        H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
-        LoaderArch: crate::linker::runtime::BuiltinArch,
     {
         if let Some(direct_deps) = self.known_direct_deps(key) {
             return Ok(direct_deps);
@@ -440,21 +435,18 @@ where
         Ok(direct_deps)
     }
 
-    pub(crate) fn resolve_dependency_graph<M, H, Tls, LoaderArch>(
+    pub(crate) fn resolve_dependency_graph<M, H, Tls>(
         &mut self,
         root: K,
-        loader: &mut Loader<M, H, D, Tls, LoaderArch>,
-        resolver: &mut impl KeyResolver<'static, K, D, Meta>,
+        loader: &mut Loader<M, H, D, Tls, Arch>,
+        resolver: &mut impl KeyResolver<'static, K, D, Meta, Arch>,
     ) -> Result<()>
     where
         K: 'static,
         D: Default,
         M: Mmap,
-        H: LoadHook<crate::elf::Elf32Layout>
-            + LoadHook<crate::elf::Elf64Layout>
-            + LoadHook<LoaderArch::Layout>,
+        H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
-        LoaderArch: crate::linker::runtime::BuiltinArch,
     {
         let mut group_order = Vec::new();
         extend_breadth_first(&mut group_order, root, |key| {

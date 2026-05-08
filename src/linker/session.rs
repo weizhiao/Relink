@@ -1,4 +1,4 @@
-use crate::image::LoadedModule;
+use crate::{image::LoadedCore, relocation::RelocationArch};
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
@@ -30,15 +30,16 @@ impl<K, P> GraphEntry<K, P> {
     }
 }
 
-pub(crate) struct ReadyCommit<K, D: 'static> {
+pub(crate) struct ReadyCommit<K, D: 'static, Arch: RelocationArch> {
     pub(crate) key: K,
-    pub(crate) module: LoadedModule<D>,
+    pub(crate) module: LoadedCore<D, Arch>,
     pub(crate) direct_deps: Box<[K]>,
 }
 
-impl<K, D: 'static> Clone for ReadyCommit<K, D>
+impl<K, D: 'static, Arch> Clone for ReadyCommit<K, D, Arch>
 where
     K: Clone,
+    Arch: RelocationArch,
 {
     fn clone(&self) -> Self {
         Self {
@@ -49,9 +50,12 @@ where
     }
 }
 
-impl<K, D: 'static> ReadyCommit<K, D> {
+impl<K, D: 'static, Arch> ReadyCommit<K, D, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
-    fn new(key: K, module: LoadedModule<D>, direct_deps: Box<[K]>) -> Self {
+    fn new(key: K, module: LoadedCore<D, Arch>, direct_deps: Box<[K]>) -> Self {
         Self {
             key,
             module,
@@ -101,12 +105,15 @@ where
     }
 }
 
-pub(crate) struct LoadSession<K, D: 'static> {
-    pub(crate) resolve: ResolveSession<K, super::runtime::AnyRawDynamic<D>>,
-    pub(crate) ready_to_commit: Vec<ReadyCommit<K, D>>,
+pub(crate) struct LoadSession<K, D: 'static, Arch: RelocationArch> {
+    pub(crate) resolve: ResolveSession<K, crate::image::RawDynamic<D, Arch>>,
+    pub(crate) ready_to_commit: Vec<ReadyCommit<K, D, Arch>>,
 }
 
-impl<K, D: 'static> LoadSession<K, D> {
+impl<K, D: 'static, Arch> LoadSession<K, D, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     pub(crate) fn new() -> Self {
         Self {
@@ -116,22 +123,28 @@ impl<K, D: 'static> LoadSession<K, D> {
     }
 }
 
-impl<K, D: 'static> LoadSession<K, D>
+impl<K, D: 'static, Arch> LoadSession<K, D, Arch>
 where
     K: Ord,
+    Arch: RelocationArch,
 {
     #[inline]
     pub(crate) fn insert_resolved_pending(
         &mut self,
         key: K,
-        raw: super::runtime::AnyRawDynamic<D>,
+        raw: crate::image::RawDynamic<D, Arch>,
         direct_deps: Box<[K]>,
     ) {
         self.resolve.insert_resolved_entry(key, raw, direct_deps);
     }
 
     #[inline]
-    pub(crate) fn push_ready(&mut self, key: K, module: LoadedModule<D>, direct_deps: Box<[K]>) {
+    pub(crate) fn push_ready(
+        &mut self,
+        key: K,
+        module: LoadedCore<D, Arch>,
+        direct_deps: Box<[K]>,
+    ) {
         self.ready_to_commit
             .push(ReadyCommit::new(key, module, direct_deps));
     }

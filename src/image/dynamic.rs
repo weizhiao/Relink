@@ -1,3 +1,6 @@
+use crate::arch::NativeArch;
+#[cfg(feature = "lazy-binding")]
+use crate::elf::ElfRelType;
 use crate::sync::{Arc, AtomicBool};
 use crate::{
     ParsePhdrError, Result,
@@ -12,8 +15,6 @@ use crate::{
     segment::ELFRelro,
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
-#[cfg(feature = "lazy-binding")]
-use crate::{arch::NativeArch, elf::ElfRelType};
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, marker::PhantomData, ptr::NonNull};
 
@@ -36,7 +37,7 @@ impl<Arch: RelocationArch> LazyBindingInfo<Arch> {
     }
 }
 
-pub(crate) struct DynamicInfo<Arch: RelocationArch = crate::arch::NativeArch> {
+pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) dynamic_ptr: NonNull<ElfDyn<Arch::Layout>>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
@@ -44,7 +45,7 @@ pub(crate) struct DynamicInfo<Arch: RelocationArch = crate::arch::NativeArch> {
     pub(crate) lazy: LazyBindingInfo<Arch>,
 }
 
-pub(crate) struct RawDynamicParts<D, Arch: RelocationArch = crate::arch::NativeArch> {
+pub(crate) struct RawDynamicParts<D, Arch: RelocationArch = NativeArch> {
     pub(crate) name: alloc::string::String,
     pub(crate) entry: RelocAddr,
     pub(crate) interp: Option<&'static str>,
@@ -64,7 +65,7 @@ pub(crate) struct RawDynamicParts<D, Arch: RelocationArch = crate::arch::NativeA
 ///
 /// This structure holds additional data that is needed during the relocation
 /// process but is not part of the core ELF object structure.
-struct ElfExtraData<Arch: RelocationArch = crate::arch::NativeArch> {
+struct ElfExtraData<Arch: RelocationArch = NativeArch> {
     /// Indicates whether lazy binding is enabled for this object
     lazy: bool,
 
@@ -112,7 +113,7 @@ impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
 /// single-architecture behavior. Cross-architecture loading instead carries
 /// one of the per-ISA backends (e.g.
 /// [`crate::arch::x86_64::relocation::X86_64Arch`]).
-pub struct RawDynamic<D, Arch = crate::arch::NativeArch>
+pub struct RawDynamic<D, Arch = NativeArch>
 where
     D: 'static,
     Arch: RelocationArch,
@@ -492,6 +493,3 @@ impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawDynamic<D, Arch> {
         self.relocate_impl::<_, _, _, _, _, _>(args)
     }
 }
-
-#[cfg(feature = "lazy-binding")]
-impl<D: 'static, Arch: RelocationArch> crate::relocation::SupportLazy for RawDynamic<D, Arch> {}

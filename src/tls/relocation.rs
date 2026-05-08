@@ -2,7 +2,7 @@
 mod enabled {
     use super::super::defs::{TlsDescDynamicArg, TlsIndex};
     use crate::{
-        arch::{TLS_DTV_OFFSET, tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
+        arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
         relocation::{
             RelocAddr, RelocHelper, RelocValue, RelocationArch, RelocationHandler, SymbolLookup,
@@ -51,7 +51,7 @@ mod enabled {
                             .st_value(),
                     )
                     .addend(r_addend)
-                    .relative_to(TLS_DTV_OFFSET);
+                    .relative_to(Arch::TLS_DTV_OFFSET);
                     write_tls_word::<Arch>(segments, rel.r_offset(), tls_val.into_inner());
                     return true;
                 }

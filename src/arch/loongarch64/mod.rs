@@ -13,7 +13,7 @@ mod tls;
 
 /// Custom relocation type constants for LoongArch 64-bit.
 /// These are defined locally as they may not be available in all elf crate versions.
-const EM_LARCH: u16 = 258;
+pub(super) const EM_LARCH: u16 = 258;
 pub(super) const R_LARCH_64: u32 = 2;
 pub(super) const R_LARCH_RELATIVE: u32 = 3;
 pub(super) const R_LARCH_COPY: u32 = 4;
@@ -29,8 +29,3 @@ pub(crate) use lazy::{DYLIB_OFFSET, RESOLVE_FUNCTION_OFFSET, dl_runtime_resolve}
 pub(crate) use tls::{get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static};
 
 pub mod relocation;
-
-/// The ELF machine type for LoongArch architecture.
-pub const EM_ARCH: u16 = EM_LARCH;
-/// TLS dynamic thread vector offset for LoongArch 64-bit.
-pub const TLS_DTV_OFFSET: usize = 0;

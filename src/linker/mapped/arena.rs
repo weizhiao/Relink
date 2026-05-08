@@ -4,6 +4,7 @@ use crate::{
     LinkerError, Result,
     entity::SecondaryMap,
     os::{MapFlags, Mmap, PageSize, ProtFlags},
+    relocation::RelocationArch,
     segment::{ElfMemoryBacking, ElfSegments},
     sync::Arc,
 };
@@ -24,9 +25,10 @@ pub(crate) struct MappedArenaMap {
 }
 
 impl MappedArenaMap {
-    pub(super) fn map_plan<M, K>(plan: &LinkPlan<K>) -> Result<Option<Self>>
+    pub(super) fn map_plan<M, K, Arch>(plan: &LinkPlan<K, Arch>) -> Result<Option<Self>>
     where
         K: Clone + Ord,
+        Arch: RelocationArch,
         M: Mmap,
     {
         if plan
@@ -58,9 +60,10 @@ impl MappedArenaMap {
         Ok(Some(arenas))
     }
 
-    pub(super) fn populate<K>(&mut self, plan: &mut LinkPlan<K>) -> Result<()>
+    pub(super) fn populate<K, Arch>(&mut self, plan: &mut LinkPlan<K, Arch>) -> Result<()>
     where
         K: Clone + Ord,
+        Arch: RelocationArch,
     {
         let placed_sections = plan
             .memory_layout()
@@ -218,7 +221,6 @@ mod tests {
     use super::super::super::plan::LinkPlan;
     use super::*;
     use crate::os::DefaultMmap;
-    use crate::{arch::NativeArch, linker::runtime::BuiltinArch};
     use crate::{image::ScannedElf, input::ElfBinary, loader::Loader};
     use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
     use gen_elf::{Arch, DylibWriter, ElfWriterConfig, SymbolDesc};
@@ -240,14 +242,8 @@ mod tests {
             panic!("generated dylib should scan as dynamic");
         };
         let mut entries = BTreeMap::new();
-        entries.insert(
-            "root",
-            (
-                <NativeArch as BuiltinArch>::wrap_scanned(scanned),
-                Vec::<&str>::new().into_boxed_slice(),
-            ),
-        );
-        let mut plan = LinkPlan::new("root", Vec::from(["root"]), entries);
+        entries.insert("root", (scanned, Vec::<&str>::new().into_boxed_slice()));
+        let mut plan: LinkPlan<&str> = LinkPlan::new("root", Vec::from(["root"]), entries);
         let root = plan.root_module();
         let section = plan
             .memory_layout()
@@ -266,7 +262,7 @@ mod tests {
         assert!(plan.memory_layout_mut().assign(section, arena, 0));
         plan.set_materialization(root, Materialization::SectionRegions);
 
-        let mut mapped = MappedArenaMap::map_plan::<DefaultMmap, _>(&plan)
+        let mut mapped = MappedArenaMap::map_plan::<DefaultMmap, _, _>(&plan)
             .unwrap()
             .unwrap();
         mapped.populate(&mut plan).unwrap();

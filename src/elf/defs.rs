@@ -991,7 +991,3 @@ impl<L: ElfLayout> ElfRelEntry<L> for ElfRel<L> {
 }
 
 pub type ElfRelType<Arch = NativeArch> = <Arch as RelocationArch>::Relocation;
-
-#[cfg(feature = "object")]
-pub(crate) const ELF_REL_SECTION_TYPE: ElfSectionType =
-    <ElfRelType as ElfRelEntry<NativeElfLayout>>::SECTION_TYPE;

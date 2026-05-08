@@ -1,16 +1,14 @@
 use crate::{
     Result,
-    arch::object::{ObjectRelocator, PLT_ENTRY, PLT_ENTRY_SIZE},
-    elf::{ElfRelType, ElfSectionFlags, ElfSectionType, ElfShdr},
+    arch::object::{PLT_ENTRY, PLT_ENTRY_SIZE},
+    elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionType, ElfShdr},
     input::ElfReader,
     os::{MapFlags, Mmap, ProtFlags},
-    relocation::RelocAddr,
+    relocation::{RelocAddr, RelocationArch},
     segment::{Address, ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
 };
 use alloc::vec::Vec;
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
-
-use super::ObjectReloc;
 
 /// Convert section flags to memory protection flags
 pub(crate) fn section_prot(sh_flags: ElfSectionFlags) -> ProtFlags {
@@ -25,10 +23,11 @@ pub(crate) fn section_prot(sh_flags: ElfSectionFlags) -> ProtFlags {
 }
 
 /// Manages segments created from ELF section headers
-pub(crate) struct SectionSegments {
+pub(crate) struct SectionSegments<Arch: RelocationArch = crate::arch::NativeArch> {
     segments: Vec<ElfSegment>,
     total_size: usize,
     pltgot: Option<PltGotSection>,
+    _arch: core::marker::PhantomData<Arch>,
 }
 
 fn prot_to_idx(prot: ProtFlags) -> usize {
@@ -40,7 +39,7 @@ fn flags_to_idx(flags: ElfSectionFlags) -> usize {
     prot_to_idx(section_prot(flags))
 }
 
-impl SegmentBuilder for SectionSegments {
+impl<Arch: RelocationArch> SegmentBuilder for SectionSegments<Arch> {
     fn create_space<M: Mmap>(&mut self) -> Result<ElfSegments> {
         let len = self.total_size;
         let memory = unsafe { M::mmap_reserve(None, len, false) }?;
@@ -60,15 +59,16 @@ impl SegmentBuilder for SectionSegments {
     }
 }
 
-impl SectionSegments {
+impl<Arch: RelocationArch> SectionSegments<Arch> {
     pub(crate) fn new(
-        shdrs: &mut [ElfShdr],
+        shdrs: &mut [ElfShdr<Arch::Layout>],
         object: &mut impl ElfReader,
         page_size: usize,
     ) -> Result<Self> {
-        let mut units: [SectionUnit; 4] = core::array::from_fn(|_| SectionUnit::new());
+        let mut units: [SectionUnit<Arch::Layout>; 4] =
+            core::array::from_fn(|_| SectionUnit::new());
 
-        let (got_cnt, plt_cnt) = PltGotSection::count_needed_entries(shdrs, object)?;
+        let (got_cnt, plt_cnt) = PltGotSection::count_needed_entries::<Arch>(shdrs, object)?;
 
         let mut got_shdr = PltGotSection::create_got_shdr(got_cnt);
         let mut plt_shdr = PltGotSection::create_plt_shdr(plt_cnt);
@@ -90,6 +90,7 @@ impl SectionSegments {
             segments,
             total_size: offset,
             pltgot: Some(PltGotSection::new(&got_shdr, &plt_shdr)),
+            _arch: core::marker::PhantomData,
         })
     }
 
@@ -134,8 +135,8 @@ pub(crate) enum PltEntry<'plt> {
 }
 
 impl PltGotSection {
-    fn count_needed_entries(
-        shdrs: &[ElfShdr],
+    fn count_needed_entries<Arch: RelocationArch>(
+        shdrs: &[ElfShdr<Arch::Layout>],
         object: &mut impl ElfReader,
     ) -> Result<(usize, usize)> {
         let mut got_set = HashSet::new();
@@ -156,14 +157,14 @@ impl PltGotSection {
 
             for chunk in buf.chunks_exact(entsize) {
                 let rel_entry =
-                    unsafe { core::ptr::read_unaligned(chunk.as_ptr() as *const ElfRelType) };
+                    unsafe { core::ptr::read_unaligned(chunk.as_ptr() as *const ElfRelType<Arch>) };
                 let r_type = rel_entry.r_type();
                 let r_sym = rel_entry.r_symbol();
 
-                if ObjectRelocator::needs_got(r_type) {
+                if Arch::object_needs_got(r_type) {
                     got_set.insert(r_sym);
                 }
-                if ObjectRelocator::needs_plt(r_type) {
+                if Arch::object_needs_plt(r_type) {
                     plt_set.insert(r_sym);
                 }
             }
@@ -172,7 +173,7 @@ impl PltGotSection {
         Ok((got_set.len() + plt_set.len(), plt_set.len()))
     }
 
-    fn create_got_shdr(elem_cnt: usize) -> ElfShdr {
+    fn create_got_shdr<L: ElfLayout>(elem_cnt: usize) -> ElfShdr<L> {
         ElfShdr::new(
             0,
             ElfSectionType::NOBITS,
@@ -187,7 +188,7 @@ impl PltGotSection {
         )
     }
 
-    fn create_plt_shdr(elem_cnt: usize) -> ElfShdr {
+    fn create_plt_shdr<L: ElfLayout>(elem_cnt: usize) -> ElfShdr<L> {
         ElfShdr::new(
             0,
             ElfSectionType::NOBITS,
@@ -202,7 +203,7 @@ impl PltGotSection {
         )
     }
 
-    fn new(got: &ElfShdr, plt: &ElfShdr) -> Self {
+    fn new<L: ElfLayout>(got: &ElfShdr<L>, plt: &ElfShdr<L>) -> Self {
         Self {
             got_idx: 0,
             plt_idx: 0,
@@ -271,12 +272,12 @@ impl PltGotSection {
     }
 }
 
-struct SectionUnit<'shdr> {
-    content_sections: Vec<&'shdr mut ElfShdr>,
-    zero_sections: Vec<&'shdr mut ElfShdr>,
+struct SectionUnit<'shdr, L: ElfLayout> {
+    content_sections: Vec<&'shdr mut ElfShdr<L>>,
+    zero_sections: Vec<&'shdr mut ElfShdr<L>>,
 }
 
-impl<'shdr> SectionUnit<'shdr> {
+impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
     fn new() -> Self {
         Self {
             content_sections: Vec::new(),
@@ -284,7 +285,7 @@ impl<'shdr> SectionUnit<'shdr> {
         }
     }
 
-    fn add_section(&mut self, shdr: &'shdr mut ElfShdr) {
+    fn add_section(&mut self, shdr: &'shdr mut ElfShdr<L>) {
         if shdr.section_type() == ElfSectionType::NOBITS {
             self.zero_sections.push(shdr);
         } else {

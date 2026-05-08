@@ -8,12 +8,12 @@ use crate::{
     ParsePhdrError, Result,
     arch::ArchKind,
     elf::{
-        ElfDyn, ElfDynamic, ElfDynamicTag, ElfPhdr, ElfPhdrs, ElfProgramType, PreCompute,
-        SymbolInfo, SymbolTable,
+        ElfDyn, ElfDynamic, ElfDynamicTag, ElfPhdr, ElfPhdrs, ElfProgramType, SymbolInfo,
+        SymbolTable,
     },
     image::{DynamicInfo, Symbol},
     loader::{DynLifecycleHandler, LifecycleContext},
-    relocation::{RelocAddr, RelocationArch, SymDef, resolve_ifunc},
+    relocation::{RelocAddr, RelocationArch, SymDef},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{CoreTlsState, TlsDescArgs, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -21,7 +21,7 @@ use crate::{
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::{any::Any, ffi::c_void, fmt::Debug, marker::PhantomData, ptr::NonNull};
+use core::{ffi::c_void, fmt::Debug, marker::PhantomData, ptr::NonNull};
 use elf::abi::DF_STATIC_TLS;
 
 /// A fully loaded and relocated ELF module with retained dependencies.
@@ -30,195 +30,7 @@ use elf::abi::DF_STATIC_TLS;
 /// [`crate::image::LoadedExec`] values, and loaded object-file images.
 pub struct LoadedCore<D: 'static = (), Arch: RelocationArch = crate::arch::NativeArch> {
     pub(crate) core: ElfCore<D, Arch>,
-    pub(crate) deps: Arc<[LoadedModule<D>]>,
-}
-
-/// Type-erased loaded module retained in relocation scopes.
-///
-/// A `LoadedModule` may wrap a module loaded for any supported architecture. It
-/// keeps the mapped image alive and exposes the architecture-independent parts
-/// of symbol lookup used by relocation. Relocation hooks can therefore receive a
-/// mixed-architecture scope instead of being forced into the current target
-/// architecture.
-pub struct LoadedModule<D: 'static = ()> {
-    inner: Arc<dyn ModuleProvider<D>>,
-}
-
-impl<D: 'static> Clone for LoadedModule<D> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-impl<D: 'static> core::fmt::Debug for LoadedModule<D> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("LoadedModule")
-            .field("name", &self.name())
-            .field("base", &format_args!("0x{:x}", self.base()))
-            .finish()
-    }
-}
-
-impl<D: 'static> LoadedModule<D> {
-    #[inline]
-    pub fn arch_kind(&self) -> ArchKind {
-        self.inner.arch_kind()
-    }
-
-    #[inline]
-    pub fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    #[inline]
-    pub fn short_name(&self) -> &str {
-        self.inner.short_name()
-    }
-
-    #[inline]
-    pub fn base(&self) -> usize {
-        self.inner.base_addr().into_inner()
-    }
-
-    #[inline]
-    pub fn mapped_len(&self) -> usize {
-        self.inner.mapped_len()
-    }
-
-    #[inline]
-    pub fn contains_addr(&self, addr: usize) -> bool {
-        self.inner.contains_addr(addr)
-    }
-
-    #[inline]
-    pub fn is_contiguous_mapping(&self) -> bool {
-        self.inner.is_contiguous_mapping()
-    }
-
-    #[inline]
-    pub fn downcast<Arch>(&self) -> Option<LoadedCore<D, Arch>>
-    where
-        Arch: RelocationArch,
-    {
-        self.inner
-            .as_any()
-            .downcast_ref::<LoadedCore<D, Arch>>()
-            .cloned()
-    }
-
-    /// Looks up a symbol by name in this module.
-    ///
-    /// # Safety
-    /// The caller must request a `T` that matches the symbol's real type.
-    #[inline]
-    pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
-        self.inner.lookup_addr(name).map(|addr| Symbol {
-            ptr: addr.as_mut_ptr(),
-            pd: PhantomData,
-        })
-    }
-
-    #[inline]
-    pub(crate) fn as_scope(&self) -> &dyn ModuleProvider<D> {
-        self.inner.as_ref()
-    }
-
-    #[inline]
-    #[cfg_attr(not(feature = "lazy-binding"), allow(dead_code))]
-    pub(crate) fn lookup_addr(&self, name: &str) -> Option<RelocAddr> {
-        self.inner.lookup_addr(name)
-    }
-}
-
-impl<D, Arch> From<LoadedCore<D, Arch>> for LoadedModule<D>
-where
-    D: 'static,
-    Arch: RelocationArch + 'static,
-{
-    #[inline]
-    fn from(module: LoadedCore<D, Arch>) -> Self {
-        let inner: Box<dyn ModuleProvider<D>> = Box::new(module);
-        Self {
-            inner: Arc::from(inner),
-        }
-    }
-}
-
-impl<D, Arch> From<&LoadedCore<D, Arch>> for LoadedModule<D>
-where
-    D: 'static,
-    Arch: RelocationArch + 'static,
-{
-    #[inline]
-    fn from(module: &LoadedCore<D, Arch>) -> Self {
-        module.clone().into()
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct ScopeSymbol {
-    value: usize,
-    symbol_type: crate::elf::ElfSymbolType,
-}
-
-impl ScopeSymbol {
-    #[inline]
-    pub(crate) fn new<L: crate::elf::ElfLayout>(sym: &crate::elf::ElfSymbol<L>) -> Self {
-        Self {
-            value: sym.st_value(),
-            symbol_type: sym.symbol_type(),
-        }
-    }
-
-    #[inline]
-    pub(crate) const fn st_value(self) -> usize {
-        self.value
-    }
-
-    #[inline]
-    pub(crate) const fn symbol_type(self) -> crate::elf::ElfSymbolType {
-        self.symbol_type
-    }
-}
-
-pub(crate) trait ModuleProvider<D: 'static>: Send + Sync + Any {
-    fn as_any(&self) -> &dyn Any;
-    fn arch_kind(&self) -> ArchKind;
-    fn name(&self) -> &str;
-    fn short_name(&self) -> &str;
-    fn base_addr(&self) -> RelocAddr;
-    fn mapped_len(&self) -> usize;
-    fn contains_addr(&self, addr: usize) -> bool;
-    fn is_contiguous_mapping(&self) -> bool;
-    fn lookup_symbol(
-        &self,
-        syminfo: &SymbolInfo,
-        precompute: &mut PreCompute,
-    ) -> Option<ScopeSymbol>;
-    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    fn tls_mod_id(&self) -> Option<TlsModuleId>;
-    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    fn tls_tp_offset(&self) -> Option<TlsTpOffset>;
-    fn segment_slice(&self, offset: usize, len: usize) -> &[u8];
-    fn supports_native_runtime(&self) -> bool;
-
-    #[inline]
-    fn lookup_addr(&self, name: &str) -> Option<RelocAddr> {
-        let syminfo = SymbolInfo::from_str(name, None);
-        let mut precompute = syminfo.precompute();
-        let sym = self.lookup_symbol(&syminfo, &mut precompute)?;
-        let addr = self.base_addr().offset(sym.st_value());
-        if sym.symbol_type() == crate::elf::ElfSymbolType::GNU_IFUNC
-            && self.supports_native_runtime()
-        {
-            Some(unsafe { resolve_ifunc(addr) })
-        } else {
-            Some(addr)
-        }
-    }
+    pub(crate) deps: Arc<[LoadedCore<D, Arch>]>,
 }
 
 impl<D: 'static, Arch: RelocationArch> Debug for LoadedCore<D, Arch> {
@@ -248,6 +60,13 @@ impl<D: 'static, Arch: RelocationArch> Clone for LoadedCore<D, Arch> {
     }
 }
 
+impl<D: 'static, Arch: RelocationArch> From<&LoadedCore<D, Arch>> for LoadedCore<D, Arch> {
+    #[inline]
+    fn from(module: &LoadedCore<D, Arch>) -> Self {
+        module.clone()
+    }
+}
+
 impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     /// Wraps an [`ElfCore`] into a [`LoadedCore`] with no dependencies.
     ///
@@ -263,8 +82,14 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     }
 
     /// Returns a slice of the libraries this module depends on.
-    pub fn deps(&self) -> &[LoadedModule<D>] {
+    pub fn deps(&self) -> &[LoadedCore<D, Arch>] {
         &self.deps
+    }
+
+    /// Returns the relocation backend used by this loaded module.
+    #[inline]
+    pub const fn arch_kind(&self) -> ArchKind {
+        Arch::KIND
     }
 
     /// Returns the name (full path) of the ELF object.
@@ -378,7 +203,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     /// * `core` - The [`ElfCore`] to wrap.
     /// * `deps` - A vector of dependencies.
     #[inline]
-    pub unsafe fn from_core_deps(core: ElfCore<D, Arch>, deps: Arc<[LoadedModule<D>]>) -> Self {
+    pub unsafe fn from_core_deps(core: ElfCore<D, Arch>, deps: Arc<[LoadedCore<D, Arch>]>) -> Self {
         LoadedCore { core, deps }
     }
 
@@ -557,7 +382,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
             .lookup_filter(&syminfo, &mut precompute)
             .map(|sym| Symbol {
                 ptr: SymDef {
-                    sym: Some(ScopeSymbol::new(sym)),
+                    sym: Some(sym),
                     lib: unsafe { self.core_ref() },
                 }
                 .convert()
@@ -602,7 +427,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
             .lookup_filter(&syminfo, &mut precompute)
             .map(|sym| Symbol {
                 ptr: SymDef {
-                    sym: Some(ScopeSymbol::new(sym)),
+                    sym: Some(sym),
                     lib: unsafe { self.core_ref() },
                 }
                 .convert()
@@ -836,6 +661,11 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
         &self.inner.segments
     }
 
+    #[inline]
+    pub(crate) fn segment_slice(&self, offset: usize, len: usize) -> &[u8] {
+        self.segments().get_slice(offset, len)
+    }
+
     /// Gets the TLS module ID of the ELF object
     #[inline]
     pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
@@ -915,157 +745,5 @@ impl<D, Arch: RelocationArch> Debug for ElfCore<D, Arch> {
             .field("mapped_len", &self.mapped_len())
             .field("tls_mod_id", &self.tls_mod_id())
             .finish()
-    }
-}
-
-impl<D, Arch> ModuleProvider<D> for ElfCore<D, Arch>
-where
-    D: 'static,
-    Arch: RelocationArch,
-{
-    #[inline]
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    #[inline]
-    fn arch_kind(&self) -> ArchKind {
-        Arch::KIND
-    }
-
-    #[inline]
-    fn name(&self) -> &str {
-        self.name()
-    }
-
-    #[inline]
-    fn short_name(&self) -> &str {
-        self.short_name()
-    }
-
-    #[inline]
-    fn base_addr(&self) -> RelocAddr {
-        self.base_addr()
-    }
-
-    #[inline]
-    fn mapped_len(&self) -> usize {
-        self.mapped_len()
-    }
-
-    #[inline]
-    fn contains_addr(&self, addr: usize) -> bool {
-        self.contains_addr(addr)
-    }
-
-    #[inline]
-    fn is_contiguous_mapping(&self) -> bool {
-        self.is_contiguous_mapping()
-    }
-
-    #[inline]
-    fn lookup_symbol(
-        &self,
-        syminfo: &SymbolInfo,
-        precompute: &mut PreCompute,
-    ) -> Option<ScopeSymbol> {
-        self.symtab()
-            .lookup_filter(syminfo, precompute)
-            .map(ScopeSymbol::new)
-    }
-
-    #[inline]
-    fn tls_mod_id(&self) -> Option<TlsModuleId> {
-        self.tls_mod_id()
-    }
-
-    #[inline]
-    fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        self.tls_tp_offset()
-    }
-
-    #[inline]
-    fn segment_slice(&self, offset: usize, len: usize) -> &[u8] {
-        self.segments().get_slice(offset, len)
-    }
-
-    #[inline]
-    fn supports_native_runtime(&self) -> bool {
-        Arch::SUPPORTS_NATIVE_RUNTIME
-    }
-}
-
-impl<D, Arch> ModuleProvider<D> for LoadedCore<D, Arch>
-where
-    D: 'static,
-    Arch: RelocationArch,
-{
-    #[inline]
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    #[inline]
-    fn arch_kind(&self) -> ArchKind {
-        Arch::KIND
-    }
-
-    #[inline]
-    fn name(&self) -> &str {
-        self.core.name()
-    }
-
-    #[inline]
-    fn short_name(&self) -> &str {
-        self.core.short_name()
-    }
-
-    #[inline]
-    fn base_addr(&self) -> RelocAddr {
-        self.core.base_addr()
-    }
-
-    #[inline]
-    fn mapped_len(&self) -> usize {
-        self.core.mapped_len()
-    }
-
-    #[inline]
-    fn contains_addr(&self, addr: usize) -> bool {
-        self.core.contains_addr(addr)
-    }
-
-    #[inline]
-    fn is_contiguous_mapping(&self) -> bool {
-        self.core.is_contiguous_mapping()
-    }
-
-    #[inline]
-    fn lookup_symbol(
-        &self,
-        syminfo: &SymbolInfo,
-        precompute: &mut PreCompute,
-    ) -> Option<ScopeSymbol> {
-        self.core.lookup_symbol(syminfo, precompute)
-    }
-
-    #[inline]
-    fn tls_mod_id(&self) -> Option<TlsModuleId> {
-        self.core.tls_mod_id()
-    }
-
-    #[inline]
-    fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        self.core.tls_tp_offset()
-    }
-
-    #[inline]
-    fn segment_slice(&self, offset: usize, len: usize) -> &[u8] {
-        self.core.segment_slice(offset, len)
-    }
-
-    #[inline]
-    fn supports_native_runtime(&self) -> bool {
-        Arch::SUPPORTS_NATIVE_RUNTIME
     }
 }

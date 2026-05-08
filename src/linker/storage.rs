@@ -1,13 +1,21 @@
-use crate::image::LoadedModule;
+use crate::{image::LoadedCore, relocation::RelocationArch};
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::borrow::Borrow;
 
-pub(crate) struct CommittedStorage<K, D: 'static, M = ()> {
-    pub(crate) entries: BTreeMap<K, CommittedEntry<K, D, M>>,
+pub(crate) struct CommittedStorage<
+    K,
+    D: 'static,
+    M = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+> {
+    pub(crate) entries: BTreeMap<K, CommittedEntry<K, D, M, Arch>>,
     pub(crate) load_order: Vec<K>,
 }
 
-impl<K, D: 'static, M> CommittedStorage<K, D, M> {
+impl<K, D: 'static, M, Arch> CommittedStorage<K, D, M, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     pub(crate) const fn new() -> Self {
         Self {
@@ -17,9 +25,10 @@ impl<K, D: 'static, M> CommittedStorage<K, D, M> {
     }
 }
 
-impl<K, D: 'static, M> CommittedStorage<K, D, M>
+impl<K, D: 'static, M, Arch> CommittedStorage<K, D, M, Arch>
 where
     K: Ord,
+    Arch: RelocationArch,
 {
     #[inline]
     pub(crate) fn contains_key<Q>(&self, key: &Q) -> bool
@@ -31,7 +40,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn entry<Q>(&self, key: &Q) -> Option<&CommittedEntry<K, D, M>>
+    pub(crate) fn entry<Q>(&self, key: &Q) -> Option<&CommittedEntry<K, D, M, Arch>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -40,7 +49,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn entry_mut<Q>(&mut self, key: &Q) -> Option<&mut CommittedEntry<K, D, M>>
+    pub(crate) fn entry_mut<Q>(&mut self, key: &Q) -> Option<&mut CommittedEntry<K, D, M, Arch>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -54,7 +63,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn get<Q>(&self, key: &Q) -> Option<&LoadedModule<D>>
+    pub(crate) fn get<Q>(&self, key: &Q) -> Option<&LoadedCore<D, Arch>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -63,7 +72,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn get_key_value<Q>(&self, key: &Q) -> Option<(&K, &CommittedEntry<K, D, M>)>
+    pub(crate) fn get_key_value<Q>(&self, key: &Q) -> Option<(&K, &CommittedEntry<K, D, M, Arch>)>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -72,7 +81,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn view(&self) -> CommittedStorageView<'_, K, D, M> {
+    pub(crate) fn view(&self) -> CommittedStorageView<'_, K, D, M, Arch> {
         CommittedStorageView {
             entries: &self.entries,
         }
@@ -84,12 +93,13 @@ where
     }
 }
 
-impl<K, D: 'static, M> CommittedStorage<K, D, M>
+impl<K, D: 'static, M, Arch> CommittedStorage<K, D, M, Arch>
 where
     K: Clone + Ord,
+    Arch: RelocationArch,
 {
     #[inline]
-    pub(crate) fn insert_new(&mut self, key: K, entry: CommittedEntry<K, D, M>) {
+    pub(crate) fn insert_new(&mut self, key: K, entry: CommittedEntry<K, D, M, Arch>) {
         self.load_order.push(key.clone());
         let previous = self.entries.insert(key, entry);
         debug_assert!(
@@ -99,7 +109,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn remove<Q>(&mut self, key: &Q) -> Option<CommittedEntry<K, D, M>>
+    pub(crate) fn remove<Q>(&mut self, key: &Q) -> Option<CommittedEntry<K, D, M, Arch>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -116,22 +126,35 @@ where
     }
 }
 
-pub(crate) struct CommittedStorageView<'a, K, D: 'static, M = ()> {
-    entries: &'a BTreeMap<K, CommittedEntry<K, D, M>>,
+pub(crate) struct CommittedStorageView<
+    'a,
+    K,
+    D: 'static,
+    M = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+> {
+    entries: &'a BTreeMap<K, CommittedEntry<K, D, M, Arch>>,
 }
 
-impl<'a, K, D: 'static, M> Copy for CommittedStorageView<'a, K, D, M> {}
+impl<'a, K, D: 'static, M, Arch> Copy for CommittedStorageView<'a, K, D, M, Arch> where
+    Arch: RelocationArch
+{
+}
 
-impl<'a, K, D: 'static, M> Clone for CommittedStorageView<'a, K, D, M> {
+impl<'a, K, D: 'static, M, Arch> Clone for CommittedStorageView<'a, K, D, M, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, K, D: 'static, M> CommittedStorageView<'a, K, D, M>
+impl<'a, K, D: 'static, M, Arch> CommittedStorageView<'a, K, D, M, Arch>
 where
     K: Ord,
+    Arch: RelocationArch,
 {
     #[inline]
     pub(crate) fn contains_key<Q>(&self, key: &Q) -> bool
@@ -143,7 +166,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn entry<Q>(&self, key: &Q) -> Option<&'a CommittedEntry<K, D, M>>
+    pub(crate) fn entry<Q>(&self, key: &Q) -> Option<&'a CommittedEntry<K, D, M, Arch>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -161,16 +184,22 @@ where
     }
 }
 
-pub(crate) struct CommittedEntry<K, D: 'static, M = ()> {
-    pub(crate) module: LoadedModule<D>,
+pub(crate) struct CommittedEntry<
+    K,
+    D: 'static,
+    M = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+> {
+    pub(crate) module: LoadedCore<D, Arch>,
     pub(crate) direct_deps: Box<[K]>,
     pub(crate) meta: M,
 }
 
-impl<K, D: 'static, M> Clone for CommittedEntry<K, D, M>
+impl<K, D: 'static, M, Arch> Clone for CommittedEntry<K, D, M, Arch>
 where
     K: Clone,
     M: Clone,
+    Arch: RelocationArch,
 {
     fn clone(&self) -> Self {
         Self {
@@ -181,9 +210,12 @@ where
     }
 }
 
-impl<K, D: 'static, M> CommittedEntry<K, D, M> {
+impl<K, D: 'static, M, Arch> CommittedEntry<K, D, M, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
-    pub(crate) fn new(module: LoadedModule<D>, direct_deps: Box<[K]>, meta: M) -> Self {
+    pub(crate) fn new(module: LoadedCore<D, Arch>, direct_deps: Box<[K]>, meta: M) -> Self {
         Self {
             module,
             direct_deps,
@@ -192,7 +224,7 @@ impl<K, D: 'static, M> CommittedEntry<K, D, M> {
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (LoadedModule<D>, Box<[K]>, M) {
+    pub(crate) fn into_parts(self) -> (LoadedCore<D, Arch>, Box<[K]>, M) {
         (self.module, self.direct_deps, self.meta)
     }
 }

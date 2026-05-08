@@ -13,12 +13,11 @@ use super::{
 
 /// LoongArch 64-bit architecture marker.
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code)]
 pub struct LoongArch64Arch;
 
 impl RelocationArch for LoongArch64Arch {
     const KIND: ArchKind = ArchKind::LoongArch64;
-    const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    const MACHINE: ElfMachine = ElfMachine::new(super::EM_LARCH);
     type Layout = Elf64Layout;
     type Relocation = ElfRela<Self::Layout>;
 

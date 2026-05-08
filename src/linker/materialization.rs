@@ -5,12 +5,13 @@ use super::{
     },
     plan::{LinkPlan, ModuleId},
 };
-use crate::{LinkerError, Result, image::ModuleCapability};
+use crate::{LinkerError, Result, image::ModuleCapability, relocation::RelocationArch};
 use alloc::{collections::BTreeMap, vec::Vec};
 
-pub(crate) fn normalize_plan<K>(plan: &mut LinkPlan<K>) -> Result<()>
+pub(crate) fn normalize_plan<K, Arch>(plan: &mut LinkPlan<K, Arch>) -> Result<()>
 where
     K: Clone + Ord,
+    Arch: RelocationArch,
 {
     plan.try_for_each_module(|plan, module_id| {
         let mode = resolve_materialization_mode(&*plan, module_id)?;
@@ -35,7 +36,7 @@ where
 }
 
 fn resolve_materialization_mode<K>(
-    plan: &LinkPlan<K>,
+    plan: &LinkPlan<K, impl RelocationArch>,
     module_id: ModuleId,
 ) -> Result<Materialization>
 where
@@ -80,7 +81,7 @@ where
 }
 
 fn record_existing_section_placements<K>(
-    plan: &LinkPlan<K>,
+    plan: &LinkPlan<K, impl RelocationArch>,
     arena_state: &mut ArenaState,
     modules: &[ModuleId],
 ) where
@@ -97,7 +98,7 @@ fn record_existing_section_placements<K>(
 }
 
 fn assign_missing_section_placements<K>(
-    plan: &mut LinkPlan<K>,
+    plan: &mut LinkPlan<K, impl RelocationArch>,
     arena_state: &mut ArenaState,
     modules: &[ModuleId],
     policy: PackingPolicy,
@@ -131,7 +132,7 @@ impl ArenaState {
 
     fn register_existing_section<K>(
         &mut self,
-        plan: &LinkPlan<K>,
+        plan: &LinkPlan<K, impl RelocationArch>,
         module_id: ModuleId,
         section_id: SectionId,
         placement: SectionPlacement,
@@ -164,7 +165,7 @@ impl ArenaState {
 
     fn assign_fallback_section<K>(
         &mut self,
-        plan: &mut LinkPlan<K>,
+        plan: &mut LinkPlan<K, impl RelocationArch>,
         module_id: ModuleId,
         section_id: SectionId,
         policy: PackingPolicy,

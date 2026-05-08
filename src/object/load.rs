@@ -1,7 +1,5 @@
 use crate::{
     ParseEhdrError, Result,
-    arch::NativeArch,
-    elf::NativeElfLayout,
     image::{RawElf, RawObject},
     input::{ElfReader, IntoElfReader},
     loader::{LoadHook, Loader},
@@ -33,19 +31,22 @@ where
     /// let bytes = &[]; // Relocatable ELF bytes
     /// let rel = loader.load_object(ElfBinary::new("liba.o", bytes)).unwrap();
     /// ```
-    pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject<D>>
+    pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject<D, Arch>>
     where
         I: IntoElfReader<'a>,
     {
         self.load_object_impl(input.into_reader()?)
     }
 
-    pub(crate) fn load_object_impl(&mut self, mut object: impl ElfReader) -> Result<RawObject<D>> {
+    pub(crate) fn load_object_impl(
+        &mut self,
+        mut object: impl ElfReader,
+    ) -> Result<RawObject<D, Arch>> {
         logging::debug!("Loading object: {}", object.file_name());
 
         let ehdr = self
             .buf
-            .prepare_ehdr::<NativeElfLayout>(&mut object, Some(NativeArch::MACHINE))?;
+            .prepare_ehdr::<Arch::Layout>(&mut object, Some(Arch::MACHINE))?;
         let shdrs = self
             .buf
             .prepare_shdrs_mut(&ehdr, &mut object)?
@@ -70,9 +71,9 @@ where
 mod tests {
     use crate::{
         Result,
-        arch::EM_ARCH,
         elf::{ElfEhdr, ElfLayout, NativeElfLayout},
         input::ElfReader,
+        relocation::RelocationArch,
     };
     use crate::{
         elf::{ElfHeader, ElfShdr},
@@ -115,14 +116,14 @@ mod tests {
         ehdr.e_ident[EI_CLASS] = <NativeElfLayout as ElfLayout>::E_CLASS;
         ehdr.e_ident[EI_VERSION] = EV_CURRENT;
         ehdr.e_type = ET_REL as _;
-        ehdr.e_machine = EM_ARCH;
+        ehdr.e_machine = crate::arch::NativeArch::MACHINE.raw();
         ehdr.e_version = EV_CURRENT as _;
         ehdr.e_ehsize = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
         ehdr.e_shoff = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
         ehdr.e_shentsize = shentsize as _;
         ehdr.e_shnum = shnum as _;
 
-        ElfHeader::from_raw(ehdr, Some(crate::elf::ElfMachine::new(EM_ARCH)))
+        ElfHeader::from_raw(ehdr, Some(crate::arch::NativeArch::MACHINE))
             .expect("failed to parse crafted object header")
     }
 

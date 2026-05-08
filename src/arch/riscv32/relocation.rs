@@ -8,12 +8,11 @@ use crate::relocation::RelocationArch;
 
 /// RISC-V 32-bit architecture marker.
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code)]
 pub struct RiscV32Arch;
 
 impl RelocationArch for RiscV32Arch {
     const KIND: ArchKind = ArchKind::RiscV32;
-    const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    const MACHINE: ElfMachine = ElfMachine::new(EM_RISCV);
     type Layout = Elf32Layout;
     type Relocation = ElfRela<Self::Layout>;
 

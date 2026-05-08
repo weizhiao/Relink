@@ -225,7 +225,7 @@ impl RuntimeModuleMemory {
 
 pub(crate) struct RuntimeMetadataRewriter<'a, K, Arch: RelocationArch> {
     module_id: ModuleId,
-    plan: &'a mut LinkPlan<K>,
+    plan: &'a mut LinkPlan<K, Arch>,
     runtime: &'a RuntimeModuleMemory,
     _arch: PhantomData<fn() -> Arch>,
 }
@@ -238,7 +238,7 @@ where
 {
     pub(crate) fn new(
         module_id: ModuleId,
-        plan: &'a mut LinkPlan<K>,
+        plan: &'a mut LinkPlan<K, Arch>,
         runtime: &'a RuntimeModuleMemory,
     ) -> Self {
         Self {

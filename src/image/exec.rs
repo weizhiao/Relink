@@ -140,9 +140,6 @@ impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawExec<D, Arch> {
     }
 }
 
-#[cfg(feature = "lazy-binding")]
-impl<D: 'static, Arch: RelocationArch> crate::relocation::SupportLazy for RawExec<D, Arch> {}
-
 /// A mapped but unrelocated executable image.
 ///
 /// Values of this type are returned by [`crate::Loader::load_exec`]. They may

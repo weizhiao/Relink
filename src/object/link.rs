@@ -1,43 +1,44 @@
 use crate::{
     Result,
-    arch::object::ObjectRelocator,
-    elf::{ElfRelType, ElfRelocationType},
-    image::{LoadedModule, RawObject},
+    elf::ElfRelType,
+    image::{LoadedCore, RawObject},
     loader::LifecycleContext,
     logging,
-    relocation::{RelocHelper, RelocationHandler, SymbolLookup},
+    relocation::{RelocHelper, RelocationArch, RelocationHandler, SymbolLookup},
     sync::Arc,
 };
 
-use super::layout::PltGotSection;
 use alloc::{boxed::Box, vec::Vec};
 
-pub(crate) struct ObjectRelocation {
-    sections: Box<[&'static [ElfRelType]]>,
+pub(crate) struct ObjectRelocation<Arch: RelocationArch = crate::arch::NativeArch> {
+    sections: Box<[&'static [ElfRelType<Arch>]]>,
 }
 
-impl ObjectRelocation {
-    pub(crate) fn new(sections: Vec<&'static [ElfRelType]>) -> Self {
+impl<Arch: RelocationArch> ObjectRelocation<Arch> {
+    pub(crate) fn new(sections: Vec<&'static [ElfRelType<Arch>]>) -> Self {
         Self {
             sections: sections.into_boxed_slice(),
         }
     }
 }
 
-impl<D: 'static> RawObject<D> {
-    pub(crate) fn link_impl<PreS, PostS, PreH, PostH>(
+impl<D: 'static, Arch> RawObject<D, Arch>
+where
+    Arch: RelocationArch,
+{
+    pub(crate) fn relocate_impl<PreS, PostS, PreH, PostH>(
         mut self,
-        scope: Arc<[LoadedModule<D>]>,
+        scope: Arc<[LoadedCore<D, Arch>]>,
         pre_find: &PreS,
         post_find: &PostS,
         pre_handler: &PreH,
         post_handler: &PostH,
-    ) -> Result<crate::image::LoadedCore<D>>
+    ) -> Result<crate::image::LoadedCore<D, Arch>>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
-        PreH: RelocationHandler<crate::arch::NativeArch> + ?Sized,
-        PostH: RelocationHandler<crate::arch::NativeArch> + ?Sized,
+        PreH: RelocationHandler<Arch> + ?Sized,
+        PostH: RelocationHandler<Arch> + ?Sized,
     {
         logging::debug!("Relocating object: {}", self.core.name());
 
@@ -55,7 +56,7 @@ impl<D: 'static> RawObject<D> {
                 if !helper.handle_pre(rel)?.is_unhandled() {
                     continue;
                 }
-                ObjectRelocator::relocate(&mut helper, rel, &mut self.pltgot)?;
+                Arch::relocate_object(&mut helper, rel, &mut self.pltgot)?;
                 helper.handle_post(rel)?;
             }
         }
@@ -75,26 +76,5 @@ impl<D: 'static> RawObject<D> {
         logging::info!("Relocation completed for {}", self.core.name());
 
         Ok(unsafe { crate::image::LoadedCore::from_core_deps(self.core, scope) })
-    }
-}
-
-pub(crate) trait ObjectReloc {
-    fn relocate<D, PreS, PostS, PreH, PostH>(
-        helper: &mut RelocHelper<'_, D, crate::arch::NativeArch, PreS, PostS, PreH, PostH>,
-        rel: &ElfRelType<crate::arch::NativeArch>,
-        pltgot: &mut PltGotSection,
-    ) -> Result<()>
-    where
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
-        PreH: RelocationHandler<crate::arch::NativeArch> + ?Sized,
-        PostH: RelocationHandler<crate::arch::NativeArch> + ?Sized;
-
-    fn needs_got(_rel_type: ElfRelocationType) -> bool {
-        false
-    }
-
-    fn needs_plt(_rel_type: ElfRelocationType) -> bool {
-        false
     }
 }

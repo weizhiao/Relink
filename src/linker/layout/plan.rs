@@ -7,8 +7,9 @@ use super::{
 };
 use crate::{
     AlignedBytes,
+    elf::ElfLayout,
     entity::{PrimaryMap, SecondaryMap},
-    image::{AnyScannedDynamic, ModuleCapability, ScannedSectionId},
+    image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
     linker::plan::ModuleId,
     segment::align_up,
 };
@@ -274,9 +275,10 @@ impl MemoryLayoutPlan {
     }
 
     /// Builds a section-granularity layout seed from scanned metadata.
-    pub(in crate::linker) fn from_scanned<'a, I>(modules: I) -> Self
+    pub(in crate::linker) fn from_scanned<'a, I, L>(modules: I) -> Self
     where
-        I: IntoIterator<Item = (ModuleId, &'a AnyScannedDynamic)>,
+        L: ElfLayout + 'a,
+        I: IntoIterator<Item = (ModuleId, &'a ScannedDynamic<L>)>,
     {
         let mut plan = Self::default();
         for (module_id, module) in modules {

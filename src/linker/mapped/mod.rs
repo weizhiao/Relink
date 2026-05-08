@@ -178,12 +178,13 @@ impl RuntimeModuleMemory {
 }
 
 impl MappedRuntimeMemory {
-    pub(crate) fn map<M, K>(plan: &LinkPlan<K>) -> Result<Option<Self>>
+    pub(crate) fn map<M, K, Arch>(plan: &LinkPlan<K, Arch>) -> Result<Option<Self>>
     where
         K: Clone + Ord,
+        Arch: RelocationArch,
         M: Mmap,
     {
-        let Some(arenas) = MappedArenaMap::map_plan::<M, _>(plan)? else {
+        let Some(arenas) = MappedArenaMap::map_plan::<M, _, Arch>(plan)? else {
             return Ok(None);
         };
         Ok(Some(Self {
@@ -214,7 +215,7 @@ impl MappedRuntimeMemory {
     pub(crate) fn repair_module<K, Arch>(
         &mut self,
         id: ModuleId,
-        plan: &mut LinkPlan<K>,
+        plan: &mut LinkPlan<K, Arch>,
     ) -> Result<()>
     where
         K: Clone + Ord,
@@ -226,9 +227,10 @@ impl MappedRuntimeMemory {
         rewriter.rewrite()
     }
 
-    pub(crate) fn populate<K>(&mut self, plan: &mut LinkPlan<K>) -> Result<()>
+    pub(crate) fn populate<K, Arch>(&mut self, plan: &mut LinkPlan<K, Arch>) -> Result<()>
     where
         K: Clone + Ord,
+        Arch: RelocationArch,
     {
         self.arenas.populate(plan)
     }

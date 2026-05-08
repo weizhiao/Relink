@@ -61,9 +61,6 @@ impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawDylib<D, Arch> {
     }
 }
 
-#[cfg(feature = "lazy-binding")]
-impl<D, Arch: RelocationArch> crate::relocation::SupportLazy for RawDylib<D, Arch> {}
-
 impl<D, Arch: RelocationArch> RawDylib<D, Arch> {
     /// Creates a new `RawDylib` from a `RawDynamic`.
     #[inline]

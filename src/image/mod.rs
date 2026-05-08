@@ -29,14 +29,13 @@ mod symbol;
 
 #[cfg(any(feature = "lazy-binding", feature = "object"))]
 pub(crate) use core::CoreInner;
-pub(crate) use core::{ModuleProvider, ScopeSymbol};
 pub(crate) use dynamic::DynamicInfo;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use dynamic::LazyBindingInfo;
 pub(crate) use dynamic::RawDynamicParts;
 pub(crate) use scanned::ScannedDynamicLoadParts;
 
-pub use core::{ElfCore, ElfCoreRef, LoadedCore, LoadedModule};
+pub use core::{ElfCore, ElfCoreRef, LoadedCore};
 pub use dylib::RawDylib;
 pub use dynamic::RawDynamic;
 pub use exec::{LoadedExec, RawExec, StaticExec};
@@ -53,9 +52,8 @@ pub use symbol::Symbol;
 /// This is the type returned by [`crate::Loader::load`]. It can hold a raw shared
 /// object, executable, or relocatable object depending on the ELF input.
 ///
-/// The optional `Arch` type parameter is forwarded to the dynamic variants
-/// ([`RawDylib`], [`RawExec`]). Object files are always relocated with the
-/// host's relocation numbering, so the `Object` variant ignores `Arch`.
+/// The optional `Arch` type parameter is forwarded to every variant, including
+/// relocatable objects, so a raw image always belongs to one relocation domain.
 #[derive(Debug)]
 pub enum RawElf<D, Arch = crate::arch::NativeArch>
 where
@@ -70,7 +68,7 @@ where
 
     /// A relocatable object file (typically `.o`).
     #[cfg(feature = "object")]
-    Object(RawObject<D>),
+    Object(RawObject<D, Arch>),
 }
 
 /// A fully relocated and ready-to-use ELF module.
@@ -87,7 +85,7 @@ pub enum LoadedElf<D: 'static, Arch: RelocationArch = NativeArch> {
 
     /// A relocated object file.
     #[cfg(feature = "object")]
-    Object(LoadedObject<D>),
+    Object(LoadedObject<D, Arch>),
 }
 
 impl<D: 'static, Arch: RelocationArch> RawElf<D, Arch> {
@@ -101,7 +99,10 @@ impl<D: 'static, Arch: RelocationArch> RawElf<D, Arch> {
     /// let raw = loader.load("path/to/input.elf").unwrap();
     /// let relocated = raw.relocator().relocate().unwrap();
     /// ```
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D, Arch> {
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D, Arch>
+    where
+        Self: Relocatable<D, Arch = Arch>,
+    {
         Relocator::new().with_object(self)
     }
 
@@ -183,9 +184,6 @@ impl<D: 'static, Arch: RelocationArch> RawElf<D, Arch> {
     }
 }
 
-#[cfg(feature = "lazy-binding")]
-impl<D: 'static> crate::relocation::SupportLazy for RawElf<D> {}
-
 impl<D: 'static, Arch: RelocationArch> LoadedElf<D, Arch> {
     /// Converts this LoadedElf into the loaded core for a dylib if it is one.
     ///
@@ -220,7 +218,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedElf<D, Arch> {
     /// * `None` - If this is a Dylib or Exec variant
     #[cfg(feature = "object")]
     #[inline]
-    pub fn into_object(self) -> Option<LoadedObject<D>> {
+    pub fn into_object(self) -> Option<LoadedObject<D, Arch>> {
         match self {
             LoadedElf::Object(object) => Some(object),
             _ => None,
@@ -260,7 +258,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedElf<D, Arch> {
     /// * `None` - If this is a Dylib or Exec variant
     #[cfg(feature = "object")]
     #[inline]
-    pub fn as_object(&self) -> Option<&LoadedObject<D>> {
+    pub fn as_object(&self) -> Option<&LoadedObject<D, Arch>> {
         match self {
             LoadedElf::Object(object) => Some(object),
             _ => None,
@@ -322,10 +320,7 @@ impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawElf<D, Arch> {
             RawElf::Exec(exec) => Ok(LoadedElf::Exec(Relocatable::relocate(exec, args)?)),
             #[cfg(feature = "object")]
             RawElf::Object(relocatable) => {
-                let RelocateArgs { scope, lookup, .. } = args;
-                let inner =
-                    relocatable.link_impl(scope, lookup.pre_find, lookup.post_find, &(), &())?;
-                Ok(LoadedElf::Object(LoadedObject { inner }))
+                Ok(LoadedElf::Object(Relocatable::relocate(relocatable, args)?))
             }
         }
     }

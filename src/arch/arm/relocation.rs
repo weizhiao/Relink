@@ -11,12 +11,11 @@ use crate::relocation::RelocationArch;
 
 /// ARM (32-bit) architecture marker.
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code)]
 pub struct ArmArch;
 
 impl RelocationArch for ArmArch {
     const KIND: ArchKind = ArchKind::Arm;
-    const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    const MACHINE: ElfMachine = ElfMachine::new(EM_ARM);
     type Layout = Elf32Layout;
     type Relocation = ElfRel<Self::Layout>;
 

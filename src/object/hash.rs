@@ -20,14 +20,14 @@ pub(crate) struct CustomHash {
 }
 
 impl HashTable {
-    pub(crate) fn from_shdr(symtab: &ElfShdr, strtab: &ElfStringTable) -> Self {
+    pub(crate) fn from_shdr<L: ElfLayout>(symtab: &ElfShdr<L>, strtab: &ElfStringTable) -> Self {
         HashTable::Custom(CustomHash::from_shdr(symtab, strtab))
     }
 }
 
 impl CustomHash {
-    pub(crate) fn from_shdr(symtab: &ElfShdr, strtab: &ElfStringTable) -> Self {
-        let symbols: &mut [ElfSymbol] = symtab.content_mut();
+    pub(crate) fn from_shdr<L: ElfLayout>(symtab: &ElfShdr<L>, strtab: &ElfStringTable) -> Self {
+        let symbols: &mut [ElfSymbol<L>] = symtab.content_mut();
         let mut map = RawHashTable::with_capacity(symbols.len());
 
         for (idx, symbol) in symbols.iter_mut().enumerate() {

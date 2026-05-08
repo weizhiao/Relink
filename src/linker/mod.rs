@@ -15,7 +15,6 @@ mod passes;
 mod plan;
 mod request;
 mod resolve;
-pub(crate) mod runtime;
 mod session;
 mod storage;
 mod view;

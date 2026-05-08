@@ -2,11 +2,7 @@ use super::{
     storage::{CommittedEntry, CommittedStorage},
     view::DependencyGraphView,
 };
-use crate::{
-    LinkerError, Result,
-    image::{LoadedCore, LoadedModule},
-    relocation::RelocationArch,
-};
+use crate::{LinkerError, Result, arch::NativeArch, image::LoadedCore, relocation::RelocationArch};
 use alloc::{
     boxed::Box,
     collections::{BTreeSet, VecDeque},
@@ -17,21 +13,26 @@ use core::borrow::Borrow;
 
 /// A reusable local module repository and committed dependency graph.
 ///
-/// The context is heterogeneous: committed entries may be loaded for different
-/// built-in architectures, while typed accessors let callers recover
-/// `LoadedCore<D, Arch>` when they know the expected module architecture.
-pub struct LinkContext<K, D: 'static, M = ()> {
-    pub(super) committed: CommittedStorage<K, D, M>,
+/// The context is a single relocation-domain module repository and committed
+/// dependency graph.
+pub struct LinkContext<K, D: 'static, M = (), Arch: RelocationArch = NativeArch> {
+    pub(super) committed: CommittedStorage<K, D, M, Arch>,
 }
 
-impl<K, D: 'static, M> Default for LinkContext<K, D, M> {
+impl<K, D: 'static, M, Arch> Default for LinkContext<K, D, M, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K, D: 'static, M> LinkContext<K, D, M> {
+impl<K, D: 'static, M, Arch> LinkContext<K, D, M, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     pub const fn new() -> Self {
         Self {
@@ -40,9 +41,10 @@ impl<K, D: 'static, M> LinkContext<K, D, M> {
     }
 }
 
-impl<K, D: 'static, M> LinkContext<K, D, M>
+impl<K, D: 'static, M, Arch> LinkContext<K, D, M, Arch>
 where
     K: Clone + Ord,
+    Arch: RelocationArch,
 {
     #[inline]
     pub fn is_empty(&self) -> bool {
@@ -59,7 +61,7 @@ where
     }
 
     #[inline]
-    pub fn get<Q>(&self, key: &Q) -> Option<&LoadedModule<D>>
+    pub fn get<Q>(&self, key: &Q) -> Option<&LoadedCore<D, Arch>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -68,17 +70,7 @@ where
     }
 
     #[inline]
-    pub fn get_typed<Q, Arch>(&self, key: &Q) -> Option<LoadedCore<D, Arch>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-        Arch: RelocationArch,
-    {
-        self.get(key)?.downcast::<Arch>()
-    }
-
-    #[inline]
-    pub fn get_key_value<Q>(&self, key: &Q) -> Option<(&K, &LoadedModule<D>)>
+    pub fn get_key_value<Q>(&self, key: &Q) -> Option<(&K, &LoadedCore<D, Arch>)>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -103,7 +95,7 @@ where
     }
 
     #[inline]
-    pub fn view(&self) -> DependencyGraphView<'_, K, D, M> {
+    pub fn view(&self) -> DependencyGraphView<'_, K, D, M, Arch> {
         DependencyGraphView::new_committed(self.committed.view())
     }
 
@@ -125,14 +117,7 @@ where
         self.committed.entry_mut(key).map(|entry| &mut entry.meta)
     }
 
-    pub fn insert(&mut self, key: K, module: LoadedModule<D>, direct_deps: Box<[K]>) -> Result<()>
-    where
-        M: Default,
-    {
-        self.insert_with_meta(key, module, direct_deps, M::default())
-    }
-
-    pub fn insert_typed<Arch>(
+    pub fn insert(
         &mut self,
         key: K,
         module: LoadedCore<D, Arch>,
@@ -140,15 +125,14 @@ where
     ) -> Result<()>
     where
         M: Default,
-        Arch: RelocationArch,
     {
-        self.insert(key, LoadedModule::from(module), direct_deps)
+        self.insert_with_meta(key, module, direct_deps, M::default())
     }
 
     pub fn insert_with_meta(
         &mut self,
         key: K,
-        module: LoadedModule<D>,
+        module: LoadedCore<D, Arch>,
         direct_deps: Box<[K]>,
         meta: M,
     ) -> Result<()> {
@@ -161,21 +145,8 @@ where
         Ok(())
     }
 
-    pub fn insert_typed_with_meta<Arch>(
-        &mut self,
-        key: K,
-        module: LoadedCore<D, Arch>,
-        direct_deps: Box<[K]>,
-        meta: M,
-    ) -> Result<()>
-    where
-        Arch: RelocationArch,
-    {
-        self.insert_with_meta(key, LoadedModule::from(module), direct_deps, meta)
-    }
-
     #[inline]
-    pub fn remove<Q>(&mut self, key: &Q) -> Option<(LoadedModule<D>, Box<[K]>, M)>
+    pub fn remove<Q>(&mut self, key: &Q) -> Option<(LoadedCore<D, Arch>, Box<[K]>, M)>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -210,7 +181,7 @@ where
         scope
     }
 
-    pub fn dependency_scope(&self, root: &K) -> Arc<[LoadedModule<D>]> {
+    pub fn dependency_scope(&self, root: &K) -> Arc<[LoadedCore<D, Arch>]> {
         let scope = self
             .dependency_scope_keys(root)
             .into_iter()
@@ -219,7 +190,7 @@ where
         Arc::from(scope)
     }
 
-    pub fn extend(&mut self, other: &LinkContext<K, D, M>) -> Result<()>
+    pub fn extend(&mut self, other: &LinkContext<K, D, M, Arch>) -> Result<()>
     where
         M: Clone,
     {

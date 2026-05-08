@@ -15,17 +15,9 @@ pub(crate) mod object;
 #[cfg(all(feature = "tls", target_arch = "x86_64"))]
 mod tls;
 
-use elf::abi::EM_X86_64;
-
 #[cfg(all(feature = "lazy-binding", target_arch = "x86_64"))]
 pub(crate) use lazy::{DYLIB_OFFSET, RESOLVE_FUNCTION_OFFSET, dl_runtime_resolve};
 #[cfg(all(feature = "tls", target_arch = "x86_64"))]
 pub(crate) use tls::{get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static};
 
 pub mod relocation;
-
-/// The ELF machine type for x86-64 architecture.
-pub const EM_ARCH: u16 = EM_X86_64;
-
-/// TLS dynamic thread vector offset for x86-64.
-pub const TLS_DTV_OFFSET: usize = 0;

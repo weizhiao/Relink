@@ -1,12 +1,13 @@
 #[cfg(feature = "lazy-binding")]
 mod enabled {
-    use crate::image::{CoreInner, DynamicInfo, LoadedModule, RawDynamic};
+    use crate::image::{CoreInner, DynamicInfo, LoadedCore, RawDylib, RawDynamic, RawElf, RawExec};
     use crate::{
         RelocationError, Result,
         arch::{NativeArch, prepare_lazy_bind},
-        elf::{ElfRelEntry, ElfRelType},
+        elf::{ElfRelEntry, ElfRelType, SymbolInfo},
         relocation::{
-            BindingMode, LazyLookupHooks, RelocAddr, RelocationArch, SymbolLookup, unlikely,
+            BindingMode, LazyLookupHooks, RelocAddr, RelocationArch, SupportLazy, SymDef,
+            SymbolLookup, unlikely,
         },
         sync::Arc,
         tls::lookup_tls_get_addr,
@@ -14,14 +15,22 @@ mod enabled {
     use alloc::boxed::Box;
     use core::ptr::NonNull;
 
-    struct LazyLookup<D: 'static> {
-        libs: Arc<[LoadedModule<D>]>,
+    impl<D: 'static, Arch: RelocationArch> SupportLazy for RawDynamic<D, Arch> {}
+
+    impl<D: 'static, Arch: RelocationArch> SupportLazy for RawDylib<D, Arch> {}
+
+    impl<D: 'static, Arch: RelocationArch> SupportLazy for RawExec<D, Arch> {}
+
+    impl<D: 'static, Arch: RelocationArch> SupportLazy for RawElf<D, Arch> {}
+
+    struct LazyLookup<D: 'static, Arch: RelocationArch> {
+        libs: Arc<[LoadedCore<D, Arch>]>,
         pre_find: Box<dyn SymbolLookup + Send + Sync>,
         post_find: Box<dyn SymbolLookup + Send + Sync>,
         tls_get_addr: RelocAddr,
     }
 
-    impl<D: 'static> SymbolLookup for LazyLookup<D> {
+    impl<D: 'static, Arch: RelocationArch> SymbolLookup for LazyLookup<D, Arch> {
         fn lookup(&self, name: &str) -> Option<*const ()> {
             if let Some(symbol) = lookup_tls_get_addr(name, self.tls_get_addr) {
                 return Some(symbol);
@@ -33,9 +42,25 @@ mod enabled {
 
             self.libs
                 .iter()
-                .find_map(|lib| lib.lookup_addr(name).map(|addr| addr.as_ptr()))
+                .find_map(|lib| lookup_addr(lib, name).map(|addr| addr.as_ptr()))
                 .or_else(|| self.post_find.lookup(name))
         }
+    }
+
+    fn lookup_addr<D: 'static, Arch: RelocationArch>(
+        lib: &LoadedCore<D, Arch>,
+        name: &str,
+    ) -> Option<RelocAddr> {
+        let syminfo = SymbolInfo::from_str(name, None);
+        let mut precompute = syminfo.precompute();
+        let sym = lib.core.symtab().lookup_filter(&syminfo, &mut precompute)?;
+        Some(
+            SymDef {
+                sym: Some(sym),
+                lib: &lib.core,
+            }
+            .convert(),
+        )
     }
 
     pub(crate) enum ResolvedBinding {
@@ -108,7 +133,7 @@ mod enabled {
             &self,
             binding: ResolvedBinding,
             lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
-            deps: Arc<[LoadedModule<D>]>,
+            deps: Arc<[LoadedCore<D, Arch>]>,
         ) -> Result<()>
         where
             LazyPreS: SymbolLookup + Send + Sync + 'static,
@@ -235,7 +260,7 @@ mod enabled {
 mod disabled {
     use crate::{
         elf::ElfRelType,
-        image::{LoadedModule, RawDynamic},
+        image::{LoadedCore, RawDynamic},
         relocation::{BindingMode, LazyLookupHooks, RelocationArch, SymbolLookup},
         sync::Arc,
     };
@@ -278,7 +303,7 @@ mod disabled {
             &self,
             _binding: ResolvedBinding,
             lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
-            _deps: Arc<[LoadedModule<D>]>,
+            _deps: Arc<[LoadedCore<D, Arch>]>,
         ) -> crate::Result<()>
         where
             LazyPreS: SymbolLookup + Send + Sync + 'static,

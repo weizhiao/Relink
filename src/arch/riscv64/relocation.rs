@@ -8,12 +8,11 @@ use crate::relocation::RelocationArch;
 
 /// RISC-V 64-bit architecture marker.
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code)]
 pub struct RiscV64Arch;
 
 impl RelocationArch for RiscV64Arch {
     const KIND: ArchKind = ArchKind::RiscV64;
-    const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    const MACHINE: ElfMachine = ElfMachine::new(EM_RISCV);
     type Layout = Elf64Layout;
     type Relocation = ElfRela<Self::Layout>;
 

@@ -1,8 +1,9 @@
-use super::{runtime::AnyRawDynamic, view::DependencyGraphView};
+use super::view::DependencyGraphView;
 use crate::{
     Result,
     arch::ArchKind,
-    image::{AnyScannedDynamic, LoadedModule, RawDylib, RawDynamic},
+    elf::ElfLayout,
+    image::{LoadedCore, RawDylib, RawDynamic, ScannedDynamic},
     relocation::{BindingMode, RelocationArch},
     sync::Arc,
 };
@@ -11,7 +12,6 @@ use alloc::boxed::Box;
 /// Common metadata needed while resolving one dependency edge.
 pub trait DependencyOwner {
     fn name(&self) -> &str;
-    fn arch_kind(&self) -> ArchKind;
     fn rpath(&self) -> Option<&str>;
     fn runpath(&self) -> Option<&str>;
     fn interp(&self) -> Option<&str>;
@@ -23,11 +23,6 @@ impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDylib<D, Arch> {
     #[inline]
     fn name(&self) -> &str {
         self.name()
-    }
-
-    #[inline]
-    fn arch_kind(&self) -> ArchKind {
-        Arch::KIND
     }
 
     #[inline]
@@ -63,11 +58,6 @@ impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDynamic<D, Arch> {
     }
 
     #[inline]
-    fn arch_kind(&self) -> ArchKind {
-        Arch::KIND
-    }
-
-    #[inline]
     fn rpath(&self) -> Option<&str> {
         self.rpath()
     }
@@ -93,15 +83,10 @@ impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDynamic<D, Arch> {
     }
 }
 
-impl DependencyOwner for AnyScannedDynamic {
+impl<L: ElfLayout> DependencyOwner for ScannedDynamic<L> {
     #[inline]
     fn name(&self) -> &str {
         self.name()
-    }
-
-    #[inline]
-    fn arch_kind(&self) -> ArchKind {
-        self.arch_kind()
     }
 
     #[inline]
@@ -121,7 +106,7 @@ impl DependencyOwner for AnyScannedDynamic {
 
     #[inline]
     fn needed_len(&self) -> usize {
-        self.needed_len()
+        self.needed_libs().len()
     }
 
     #[inline]
@@ -131,24 +116,36 @@ impl DependencyOwner for AnyScannedDynamic {
 }
 
 /// A single dependency-resolution request.
-pub struct DependencyRequest<'a, K: Clone, D: 'static, M = ()> {
+pub struct DependencyRequest<
+    'a,
+    K: Clone,
+    D: 'static,
+    M = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+> {
     owner_key: &'a K,
     owner: &'a dyn DependencyOwner,
+    owner_arch: ArchKind,
     needed_index: usize,
-    visible: DependencyGraphView<'a, K, D, M>,
+    visible: DependencyGraphView<'a, K, D, M, Arch>,
 }
 
-impl<'a, K: Clone, D: 'static, M> DependencyRequest<'a, K, D, M> {
+impl<'a, K: Clone, D: 'static, M, Arch> DependencyRequest<'a, K, D, M, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     pub(crate) fn new(
         owner_key: &'a K,
         owner: &'a dyn DependencyOwner,
+        owner_arch: ArchKind,
         needed_index: usize,
-        visible: DependencyGraphView<'a, K, D, M>,
+        visible: DependencyGraphView<'a, K, D, M, Arch>,
     ) -> Self {
         Self {
             owner_key,
             owner,
+            owner_arch,
             needed_index,
             visible,
         }
@@ -171,7 +168,7 @@ impl<'a, K: Clone, D: 'static, M> DependencyRequest<'a, K, D, M> {
 
     #[inline]
     pub fn owner_arch(&self) -> ArchKind {
-        self.owner.arch_kind()
+        self.owner_arch
     }
 
     #[inline]
@@ -212,7 +209,7 @@ impl<'a, K: Clone, D: 'static, M> DependencyRequest<'a, K, D, M> {
 
 /// Read-only modules that should be visible to a link operation without being
 /// committed into its local [`LinkContext`](super::LinkContext).
-pub trait VisibleModules<K: Clone, D: 'static> {
+pub trait VisibleModules<K: Clone, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
     fn contains_key(&self, _key: &K) -> bool {
         false
     }
@@ -221,16 +218,17 @@ pub trait VisibleModules<K: Clone, D: 'static> {
         None
     }
 
-    fn loaded(&self, _key: &K) -> Option<LoadedModule<D>> {
+    fn loaded(&self, _key: &K) -> Option<LoadedCore<D, Arch>> {
         None
     }
 }
 
-impl<K: Clone, D: 'static> VisibleModules<K, D> for () {}
+impl<K: Clone, D: 'static, Arch: RelocationArch> VisibleModules<K, D, Arch> for () {}
 
-impl<K: Clone, D: 'static, V> VisibleModules<K, D> for &V
+impl<K: Clone, D: 'static, Arch, V> VisibleModules<K, D, Arch> for &V
 where
-    V: VisibleModules<K, D> + ?Sized,
+    Arch: RelocationArch,
+    V: VisibleModules<K, D, Arch> + ?Sized,
 {
     #[inline]
     fn contains_key(&self, key: &K) -> bool {
@@ -243,20 +241,23 @@ where
     }
 
     #[inline]
-    fn loaded(&self, key: &K) -> Option<LoadedModule<D>> {
+    fn loaded(&self, key: &K) -> Option<LoadedCore<D, Arch>> {
         (**self).loaded(key)
     }
 }
 
 /// A mapped but unrelocated dynamic image observed during a link operation.
-pub struct StagedDynamic<'a, K, D: 'static> {
+pub struct StagedDynamic<'a, K, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
     key: &'a K,
-    raw: &'a AnyRawDynamic<D>,
+    raw: &'a RawDynamic<D, Arch>,
 }
 
-impl<'a, K, D: 'static> StagedDynamic<'a, K, D> {
+impl<'a, K, D: 'static, Arch> StagedDynamic<'a, K, D, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
-    pub(crate) fn new(key: &'a K, raw: &'a AnyRawDynamic<D>) -> Self {
+    pub(crate) fn new(key: &'a K, raw: &'a RawDynamic<D, Arch>) -> Self {
         Self { key, raw }
     }
 
@@ -267,7 +268,7 @@ impl<'a, K, D: 'static> StagedDynamic<'a, K, D> {
 
     #[inline]
     pub fn arch_kind(&self) -> ArchKind {
-        self.raw.arch_kind()
+        Arch::KIND
     }
 
     #[inline]
@@ -277,37 +278,41 @@ impl<'a, K, D: 'static> StagedDynamic<'a, K, D> {
 }
 
 /// Observer for modules staged by [`super::Linker`].
-pub trait LoadObserver<K, D: 'static> {
-    fn on_staged_dynamic(&mut self, _event: StagedDynamic<'_, K, D>) -> Result<()> {
+pub trait LoadObserver<K, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
+    fn on_staged_dynamic(&mut self, _event: StagedDynamic<'_, K, D, Arch>) -> Result<()> {
         Ok(())
     }
 }
 
-impl<K, D: 'static> LoadObserver<K, D> for () {}
+impl<K, D: 'static, Arch: RelocationArch> LoadObserver<K, D, Arch> for () {}
 
-impl<K, D: 'static, F> LoadObserver<K, D> for F
+impl<K, D: 'static, Arch, F> LoadObserver<K, D, Arch> for F
 where
-    F: for<'a> FnMut(StagedDynamic<'a, K, D>) -> Result<()>,
+    Arch: RelocationArch,
+    F: for<'a> FnMut(StagedDynamic<'a, K, D, Arch>) -> Result<()>,
 {
     #[inline]
-    fn on_staged_dynamic(&mut self, event: StagedDynamic<'_, K, D>) -> Result<()> {
+    fn on_staged_dynamic(&mut self, event: StagedDynamic<'_, K, D, Arch>) -> Result<()> {
         self(event)
     }
 }
 
 /// A single relocation request for a newly mapped module.
-pub struct RelocationRequest<'a, K, D: 'static> {
+pub struct RelocationRequest<'a, K, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
     key: &'a K,
-    raw: AnyRawDynamic<D>,
-    scope: &'a Arc<[LoadedModule<D>]>,
+    raw: RawDynamic<D, Arch>,
+    scope: &'a Arc<[LoadedCore<D, Arch>]>,
 }
 
-impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
+impl<'a, K, D: 'static, Arch> RelocationRequest<'a, K, D, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     pub(crate) fn new(
         key: &'a K,
-        raw: AnyRawDynamic<D>,
-        scope: &'a Arc<[LoadedModule<D>]>,
+        raw: RawDynamic<D, Arch>,
+        scope: &'a Arc<[LoadedCore<D, Arch>]>,
     ) -> Self {
         Self { key, raw, scope }
     }
@@ -319,42 +324,45 @@ impl<'a, K, D: 'static> RelocationRequest<'a, K, D> {
 
     #[inline]
     pub fn arch_kind(&self) -> ArchKind {
-        self.raw.arch_kind()
+        Arch::KIND
     }
 
     #[inline]
-    pub fn scope(&self) -> &[LoadedModule<D>] {
+    pub fn scope(&self) -> &[LoadedCore<D, Arch>] {
         self.scope
     }
 
     #[inline]
-    pub fn shared_scope(&self) -> &Arc<[LoadedModule<D>]> {
+    pub fn shared_scope(&self) -> &Arc<[LoadedCore<D, Arch>]> {
         self.scope
     }
 
     #[inline]
-    pub(crate) fn into_raw(self) -> AnyRawDynamic<D> {
+    pub(crate) fn into_raw(self) -> RawDynamic<D, Arch> {
         self.raw
     }
 }
 
-enum RelocationScope<D: 'static> {
-    Owned(Box<[LoadedModule<D>]>),
-    Shared(Arc<[LoadedModule<D>]>),
+enum RelocationScope<D: 'static, Arch: RelocationArch> {
+    Owned(Box<[LoadedCore<D, Arch>]>),
+    Shared(Arc<[LoadedCore<D, Arch>]>),
 }
 
 /// Per-module relocation inputs produced by the caller's runtime policy.
-pub struct RelocationInputs<D: 'static = ()> {
-    scope: RelocationScope<D>,
+pub struct RelocationInputs<D: 'static = (), Arch: RelocationArch = crate::arch::NativeArch> {
+    scope: RelocationScope<D, Arch>,
     binding: BindingMode,
 }
 
-impl<D: 'static> RelocationInputs<D> {
+impl<D: 'static, Arch> RelocationInputs<D, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     pub fn new<I, R>(scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
-        R: Into<LoadedModule<D>>,
+        R: Into<LoadedCore<D, Arch>>,
     {
         Self {
             scope: RelocationScope::Owned(scope.into_iter().map(Into::into).collect()),
@@ -363,7 +371,7 @@ impl<D: 'static> RelocationInputs<D> {
     }
 
     #[inline]
-    pub fn shared(scope: Arc<[LoadedModule<D>]>) -> Self {
+    pub fn shared(scope: Arc<[LoadedCore<D, Arch>]>) -> Self {
         Self {
             scope: RelocationScope::Shared(scope),
             binding: BindingMode::Default,
@@ -371,7 +379,7 @@ impl<D: 'static> RelocationInputs<D> {
     }
 
     #[inline]
-    pub fn scope(&self) -> &[LoadedModule<D>] {
+    pub fn scope(&self) -> &[LoadedCore<D, Arch>] {
         match &self.scope {
             RelocationScope::Owned(scope) => scope,
             RelocationScope::Shared(scope) => scope,
@@ -379,7 +387,7 @@ impl<D: 'static> RelocationInputs<D> {
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (Arc<[LoadedModule<D>]>, BindingMode) {
+    pub(crate) fn into_parts(self) -> (Arc<[LoadedCore<D, Arch>]>, BindingMode) {
         let scope = match self.scope {
             RelocationScope::Owned(scope) => Arc::from(scope),
             RelocationScope::Shared(scope) => scope,
@@ -412,26 +420,39 @@ impl<D: 'static> RelocationInputs<D> {
 }
 
 /// Runtime policy for assembling relocation inputs.
-pub trait RelocationPlanner<K, D: 'static> {
-    fn plan(&mut self, req: &RelocationRequest<'_, K, D>) -> Result<RelocationInputs<D>>;
+pub trait RelocationPlanner<K, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
+    fn plan(
+        &mut self,
+        req: &RelocationRequest<'_, K, D, Arch>,
+    ) -> Result<RelocationInputs<D, Arch>>;
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultRelocationPlanner;
 
-impl<K, D: 'static> RelocationPlanner<K, D> for DefaultRelocationPlanner {
+impl<K, D: 'static, Arch> RelocationPlanner<K, D, Arch> for DefaultRelocationPlanner
+where
+    Arch: RelocationArch,
+{
     #[inline]
-    fn plan(&mut self, req: &RelocationRequest<'_, K, D>) -> Result<RelocationInputs<D>> {
+    fn plan(
+        &mut self,
+        req: &RelocationRequest<'_, K, D, Arch>,
+    ) -> Result<RelocationInputs<D, Arch>> {
         Ok(RelocationInputs::shared(req.shared_scope().clone()))
     }
 }
 
-impl<K, D: 'static, F> RelocationPlanner<K, D> for F
+impl<K, D: 'static, Arch, F> RelocationPlanner<K, D, Arch> for F
 where
-    F: for<'a> FnMut(&RelocationRequest<'a, K, D>) -> Result<RelocationInputs<D>>,
+    Arch: RelocationArch,
+    F: for<'a> FnMut(&RelocationRequest<'a, K, D, Arch>) -> Result<RelocationInputs<D, Arch>>,
 {
     #[inline]
-    fn plan(&mut self, req: &RelocationRequest<'_, K, D>) -> Result<RelocationInputs<D>> {
+    fn plan(
+        &mut self,
+        req: &RelocationRequest<'_, K, D, Arch>,
+    ) -> Result<RelocationInputs<D, Arch>> {
         self(req)
     }
 }

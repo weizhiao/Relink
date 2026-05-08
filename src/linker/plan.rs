@@ -6,7 +6,8 @@ use crate::{
     AlignedBytes, LinkerError, Result,
     aligned_bytes::ByteRepr,
     entity::{PrimaryMap, entity_ref},
-    image::{AnyScannedDynamic, ModuleCapability, ScannedSectionId},
+    image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
+    relocation::RelocationArch,
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
@@ -15,23 +16,24 @@ use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 pub struct ModuleId(usize);
 entity_ref!(ModuleId);
 
-pub struct PlannedModule<K> {
+pub struct PlannedModule<K, Arch: RelocationArch> {
     key: K,
-    module: AnyScannedDynamic,
+    module: ScannedDynamic<Arch::Layout>,
     direct_deps: Box<[ModuleId]>,
 }
 
-struct PendingPlannedModule<K> {
+struct PendingPlannedModule<K, Arch: RelocationArch> {
     key: K,
-    module: AnyScannedDynamic,
+    module: ScannedDynamic<Arch::Layout>,
     direct_deps: Box<[K]>,
 }
 
-impl<K> PendingPlannedModule<K>
+impl<K, Arch> PendingPlannedModule<K, Arch>
 where
     K: Ord,
+    Arch: RelocationArch,
 {
-    fn resolve(self, module_ids: &BTreeMap<K, ModuleId>) -> PlannedModule<K> {
+    fn resolve(self, module_ids: &BTreeMap<K, ModuleId>) -> PlannedModule<K, Arch> {
         let Self {
             key,
             module,
@@ -51,9 +53,16 @@ where
     }
 }
 
-impl<K> PlannedModule<K> {
+impl<K, Arch> PlannedModule<K, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
-    pub(crate) fn new(key: K, module: AnyScannedDynamic, direct_deps: Box<[ModuleId]>) -> Self {
+    pub(crate) fn new(
+        key: K,
+        module: ScannedDynamic<Arch::Layout>,
+        direct_deps: Box<[ModuleId]>,
+    ) -> Self {
         Self {
             key,
             module,
@@ -67,12 +76,12 @@ impl<K> PlannedModule<K> {
     }
 
     #[inline]
-    pub fn module(&self) -> &AnyScannedDynamic {
+    pub fn module(&self) -> &ScannedDynamic<Arch::Layout> {
         &self.module
     }
 
     #[inline]
-    pub fn module_mut(&mut self) -> &mut AnyScannedDynamic {
+    pub fn module_mut(&mut self) -> &mut ScannedDynamic<Arch::Layout> {
         &mut self.module
     }
 
@@ -82,15 +91,15 @@ impl<K> PlannedModule<K> {
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (K, AnyScannedDynamic, Box<[ModuleId]>) {
+    pub(crate) fn into_parts(self) -> (K, ScannedDynamic<Arch::Layout>, Box<[ModuleId]>) {
         (self.key, self.module, self.direct_deps)
     }
 }
 
-type LinkPlanParts<K> = (
+type LinkPlanParts<K, Arch> = (
     ModuleId,
     Vec<ModuleId>,
-    PrimaryMap<ModuleId, PlannedModule<K>>,
+    PrimaryMap<ModuleId, PlannedModule<K, Arch>>,
     MemoryLayoutPlan,
 );
 
@@ -105,23 +114,24 @@ fn section_data_entries<T: ByteRepr>(data: &AlignedBytes) -> Result<&[T]> {
 /// This plan owns the discovered logical module graph and accumulates later
 /// planning decisions such as physical memory-layout plans or future
 /// materialization policies.
-pub(crate) struct LinkPlan<K> {
+pub(crate) struct LinkPlan<K, Arch: RelocationArch = crate::arch::NativeArch> {
     root: ModuleId,
     group_order: Vec<ModuleId>,
     module_ids: BTreeMap<K, ModuleId>,
-    entries: PrimaryMap<ModuleId, PlannedModule<K>>,
+    entries: PrimaryMap<ModuleId, PlannedModule<K, Arch>>,
     memory_layout: MemoryLayoutPlan,
 }
 
-impl<K> LinkPlan<K>
+impl<K, Arch> LinkPlan<K, Arch>
 where
     K: Clone + Ord,
+    Arch: RelocationArch,
 {
     #[inline]
     pub(crate) fn new(
         root: K,
         group_order: Vec<K>,
-        mut entries: BTreeMap<K, (AnyScannedDynamic, Box<[K]>)>,
+        mut entries: BTreeMap<K, (ScannedDynamic<Arch::Layout>, Box<[K]>)>,
     ) -> Self {
         let group_keys = group_order;
         let mut module_ids = BTreeMap::new();
@@ -227,17 +237,22 @@ where
     }
 
     #[inline]
-    pub(in crate::linker) fn get(&self, id: ModuleId) -> Option<&PlannedModule<K>> {
+    pub(in crate::linker) fn get(&self, id: ModuleId) -> Option<&PlannedModule<K, Arch>> {
         self.entries.get(id)
     }
 
     #[inline]
-    pub(in crate::linker) fn get_mut(&mut self, id: ModuleId) -> Option<&mut PlannedModule<K>> {
+    pub(in crate::linker) fn get_mut(
+        &mut self,
+        id: ModuleId,
+    ) -> Option<&mut PlannedModule<K, Arch>> {
         self.entries.get_mut(id)
     }
 
     #[inline]
-    pub(in crate::linker) fn entries(&self) -> impl Iterator<Item = (ModuleId, &PlannedModule<K>)> {
+    pub(in crate::linker) fn entries(
+        &self,
+    ) -> impl Iterator<Item = (ModuleId, &PlannedModule<K, Arch>)> {
         self.entries.iter()
     }
 
@@ -421,7 +436,7 @@ where
     }
 
     #[inline]
-    pub(in crate::linker) fn into_parts(self) -> LinkPlanParts<K> {
+    pub(in crate::linker) fn into_parts(self) -> LinkPlanParts<K, Arch> {
         (
             self.root,
             self.group_order,

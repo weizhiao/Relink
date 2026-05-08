@@ -181,7 +181,7 @@ impl BindingScenario {
                     .into_raw() as usize
             };
             let expected = (tls_symbol - self.helper_dylib().base()) as u64 + dtpoff.addend as u64
-                - elf_loader::arch::TLS_DTV_OFFSET as u64;
+                - NativeArch::TLS_DTV_OFFSET as u64;
             assert_eq!(
                 self.slot_word(dtpoff),
                 expected,

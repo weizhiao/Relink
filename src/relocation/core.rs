@@ -1,7 +1,7 @@
 use crate::{
     Error, RelocationError, RelocationFailureReason, Result,
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
-    image::{ElfCore, LoadedModule, ModuleProvider, ScopeSymbol},
+    image::{ElfCore, LoadedCore},
     logging, relocate_context_error,
     relocation::{
         BindingMode, HandleResult, HandlerHooks, LazyLookupHooks, LookupHooks, Relocatable,
@@ -25,7 +25,7 @@ pub(crate) struct RelocHelper<
     PostH: ?Sized,
 > {
     pub(crate) core: &'find ElfCore<D, Arch>,
-    pub(crate) scope: Arc<[LoadedModule<D>]>,
+    pub(crate) scope: Arc<[LoadedCore<D, Arch>]>,
     pub(crate) pre_find: &'find PreS,
     pub(crate) post_find: &'find PostS,
     pub(crate) pre_handler: &'find PreH,
@@ -35,7 +35,7 @@ pub(crate) struct RelocHelper<
     pub(crate) tls_desc_args: TlsDescArgs,
 }
 
-fn empty_scope<D: 'static>() -> Arc<[LoadedModule<D>]> {
+fn empty_scope<D: 'static, Arch: RelocationArch>() -> Arc<[LoadedCore<D, Arch>]> {
     Arc::from(Vec::new())
 }
 
@@ -50,7 +50,7 @@ where
 {
     pub(crate) fn new(
         core: &'find ElfCore<D, Arch>,
-        scope: Arc<[LoadedModule<D>]>,
+        scope: Arc<[LoadedCore<D, Arch>]>,
         pre_find: &'find PreS,
         post_find: &'find PostS,
         pre_handler: &'find PreH,
@@ -94,7 +94,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn find_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, D>> {
+    pub(crate) fn find_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, D, Arch>> {
         let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
         find_symdef_impl(self.core, &self.scope, dynsym, &syminfo)
     }
@@ -139,7 +139,7 @@ pub struct Relocator<
     Arch: RelocationArch = crate::arch::NativeArch,
 > {
     object: T,
-    scope: Arc<[LoadedModule<D>]>,
+    scope: Arc<[LoadedCore<D, Arch>]>,
     pre_find: PreS,
     post_find: PostS,
     lazy_pre_find: LazyPreS,
@@ -183,7 +183,7 @@ impl Relocator<(), (), (), (), (), (), (), ()> {
     pub fn new() -> Self {
         Self {
             object: (),
-            scope: empty_scope(),
+            scope: empty_scope::<(), crate::arch::NativeArch>(),
             pre_find: (),
             post_find: (),
             lazy_pre_find: (),
@@ -289,7 +289,7 @@ where
     pub fn scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
-        R: Into<LoadedModule<D>>,
+        R: Into<LoadedCore<D, Arch>>,
     {
         let scope: Vec<_> = scope.into_iter().map(Into::into).collect();
         self.scope = Arc::from(scope);
@@ -300,7 +300,7 @@ where
     ///
     /// Scope entries are searched in order and retained as dependencies of the
     /// relocated output.
-    pub fn shared_scope(mut self, scope: Arc<[LoadedModule<D>]>) -> Self {
+    pub fn shared_scope(mut self, scope: Arc<[LoadedCore<D, Arch>]>) -> Self {
         self.scope = scope;
         self
     }
@@ -313,7 +313,7 @@ where
     pub fn extend_scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
-        R: Into<LoadedModule<D>>,
+        R: Into<LoadedCore<D, Arch>>,
     {
         let mut extended = Vec::with_capacity(self.scope.len());
         extended.extend(self.scope.iter().cloned());
@@ -332,7 +332,7 @@ where
     {
         Relocator {
             object,
-            scope: empty_scope(),
+            scope: empty_scope::<NewD, U::Arch>(),
             pre_find: self.pre_find,
             post_find: self.post_find,
             lazy_pre_find: self.lazy_pre_find,
@@ -728,12 +728,12 @@ impl RelocSWord32 {
 ///
 /// Contains the symbol information and the module where it was found.
 /// Used to compute the final address of a symbol.
-pub struct SymDef<'lib, D: 'static> {
-    pub(crate) sym: Option<ScopeSymbol>,
-    pub(crate) lib: &'lib dyn ModuleProvider<D>,
+pub struct SymDef<'lib, D: 'static, Arch: RelocationArch> {
+    pub(crate) sym: Option<&'lib ElfSymbol<Arch::Layout>>,
+    pub(crate) lib: &'lib ElfCore<D, Arch>,
 }
 
-impl<D: 'static> SymDef<'_, D> {
+impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
     /// Computes the real address of the symbol (base + st_value).
     ///
     /// For regular symbols, returns base + st_value.
@@ -745,8 +745,7 @@ impl<D: 'static> SymDef<'_, D> {
             let sym = unsafe { self.sym.unwrap_unchecked() };
             let addr = base.offset(sym.st_value());
             if likely(
-                sym.symbol_type() != ElfSymbolType::GNU_IFUNC
-                    || !self.lib.supports_native_runtime(),
+                sym.symbol_type() != ElfSymbolType::GNU_IFUNC || !Arch::SUPPORTS_NATIVE_RUNTIME,
             ) {
                 addr
             } else {
@@ -758,17 +757,8 @@ impl<D: 'static> SymDef<'_, D> {
         }
     }
 
-    /// Converts a symbol definition into an address for a use site owned by
-    /// `Arch`. Cross-architecture definitions are deliberately rejected here:
-    /// a binary-translation runtime must provide a thunk/bridge through
-    /// `pre_find`, `post_find`, or a relocation handler instead of writing a
-    /// foreign address directly into the target image.
-    pub(crate) fn convert_for<Arch: RelocationArch>(self) -> Option<RelocAddr> {
-        (self.sym.is_none() || self.lib.arch_kind() == Arch::KIND).then(|| self.convert())
-    }
-
     #[inline]
-    pub(crate) fn symbol(&self) -> Option<ScopeSymbol> {
+    pub(crate) fn symbol(&self) -> Option<&'lib ElfSymbol<Arch::Layout>> {
         self.sym
     }
 
@@ -819,7 +809,7 @@ where
 fn find_weak<'lib, D, Arch: RelocationArch>(
     lib: &'lib ElfCore<D, Arch>,
     dynsym: &'lib ElfSymbol<Arch::Layout>,
-) -> Option<SymDef<'lib, D>>
+) -> Option<SymDef<'lib, D, Arch>>
 where
     D: 'static,
 {
@@ -829,7 +819,7 @@ where
         Some(SymDef { sym: None, lib })
     } else if dynsym.st_value() != 0 {
         Some(SymDef {
-            sym: Some(ScopeSymbol::new(dynsym)),
+            sym: Some(dynsym),
             lib,
         })
     } else {
@@ -847,7 +837,7 @@ pub(crate) fn find_symbol_addr<PreS, PostS, D, Arch>(
     post_find: &PostS,
     core: &ElfCore<D, Arch>,
     symtab: &SymbolTable<Arch::Layout>,
-    scope: &[LoadedModule<D>],
+    scope: &[LoadedCore<D, Arch>],
     r_sym: usize,
 ) -> Option<RelocAddr>
 where
@@ -866,7 +856,7 @@ where
         return Some(RelocAddr::from_ptr(addr));
     }
     if let Some(res) = find_symdef_impl(core, scope, dynsym, &syminfo) {
-        return res.convert_for::<Arch>();
+        return Some(res.convert());
     }
     if let Some(addr) = post_find.lookup(syminfo.name()) {
         logging::trace!(
@@ -881,16 +871,16 @@ where
 
 pub(crate) fn find_symdef_impl<'lib, D, Arch: RelocationArch>(
     core: &'lib ElfCore<D, Arch>,
-    scope: &'lib [LoadedModule<D>],
+    scope: &'lib [LoadedCore<D, Arch>],
     sym: &'lib ElfSymbol<Arch::Layout>,
     syminfo: &SymbolInfo,
-) -> Option<SymDef<'lib, D>>
+) -> Option<SymDef<'lib, D, Arch>>
 where
     D: 'static,
 {
     if unlikely(sym.is_local()) {
         Some(SymDef {
-            sym: Some(ScopeSymbol::new(sym)),
+            sym: Some(sym),
             lib: core,
         })
     } else {
@@ -899,8 +889,9 @@ where
             .iter()
             .find_map(|module| {
                 module
-                    .as_scope()
-                    .lookup_symbol(syminfo, &mut precompute)
+                    .core
+                    .symtab()
+                    .lookup_filter(syminfo, &mut precompute)
                     .map(|sym| {
                         logging::trace!(
                             "binding file [{}] to [{}]: symbol [{}]",
@@ -910,7 +901,7 @@ where
                         );
                         SymDef {
                             sym: Some(sym),
-                            lib: module.as_scope(),
+                            lib: &module.core,
                         }
                     })
             })

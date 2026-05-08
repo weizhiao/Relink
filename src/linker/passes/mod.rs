@@ -9,7 +9,8 @@ use super::{
 use crate::{
     AlignedBytes, LinkerError, Result,
     aligned_bytes::ByteRepr,
-    image::{AnyScannedDynamic, ModuleCapability, ScannedSectionId},
+    image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
+    relocation::RelocationArch,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::marker::PhantomData;
@@ -90,21 +91,22 @@ impl ReorderAccess for ReorderPass {}
 ///
 /// Graph queries expose the canonical plan. Scope-sensitive APIs such as
 /// materialization updates and section-data access enforce `S`.
-pub struct LinkPassPlan<'a, K, S = AnyPass>
+pub struct LinkPassPlan<'a, K, S = AnyPass, Arch: RelocationArch = crate::arch::NativeArch>
 where
     S: PassScopeMode,
 {
-    plan: &'a mut LinkPlan<K>,
+    plan: &'a mut LinkPlan<K, Arch>,
     scope: PhantomData<fn() -> S>,
 }
 
-impl<'a, K, S> LinkPassPlan<'a, K, S>
+impl<'a, K, S, Arch> LinkPassPlan<'a, K, S, Arch>
 where
     K: Clone + Ord,
     S: PassScopeMode,
+    Arch: RelocationArch,
 {
     #[inline]
-    fn new(plan: &'a mut LinkPlan<K>) -> Self {
+    fn new(plan: &'a mut LinkPlan<K, Arch>) -> Self {
         Self {
             plan,
             scope: PhantomData,
@@ -167,18 +169,18 @@ where
 
     /// Returns the scanned metadata for `id`.
     #[inline]
-    pub fn get(&self, id: ModuleId) -> Option<&PlannedModule<K>> {
+    pub fn get(&self, id: ModuleId) -> Option<&PlannedModule<K, Arch>> {
         self.plan.get(id)
     }
 
     /// Returns the scanned metadata for `id` mutably.
     #[inline]
-    pub fn get_mut(&mut self, id: ModuleId) -> Option<&mut PlannedModule<K>> {
+    pub fn get_mut(&mut self, id: ModuleId) -> Option<&mut PlannedModule<K, Arch>> {
         self.plan.get_mut(id)
     }
 
     /// Iterates over every planned module id, key, and scanned module.
-    pub fn entries(&self) -> impl Iterator<Item = (ModuleId, &K, &AnyScannedDynamic)> {
+    pub fn entries(&self) -> impl Iterator<Item = (ModuleId, &K, &ScannedDynamic<Arch::Layout>)> {
         self.plan
             .entries()
             .map(|(id, entry)| (id, entry.key(), entry.module()))
@@ -216,10 +218,11 @@ where
     }
 }
 
-impl<'a, K, S> LinkPassPlan<'a, K, S>
+impl<'a, K, S, Arch> LinkPassPlan<'a, K, S, Arch>
 where
     K: Clone + Ord,
     S: SectionDataAccess,
+    Arch: RelocationArch,
 {
     /// Returns the planned layout for one visible module.
     #[inline]
@@ -355,10 +358,11 @@ where
     }
 }
 
-impl<'a, K, S> LinkPassPlan<'a, K, S>
+impl<'a, K, S, Arch> LinkPassPlan<'a, K, S, Arch>
 where
     K: Clone + Ord,
     S: ReorderAccess,
+    Arch: RelocationArch,
 {
     /// Creates one arena for section-region materialization.
     #[inline]
@@ -420,32 +424,40 @@ where
 }
 
 /// A pass that inspects or rewrites a pre-map global link plan.
-pub trait LinkPass<K: Clone + Ord, S = AnyPass>
+pub trait LinkPass<K: Clone + Ord, S = AnyPass, Arch: RelocationArch = crate::arch::NativeArch>
 where
     S: PassScopeMode,
 {
     /// Executes the pass over the current plan.
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, K, S>) -> Result<()>;
+    fn run(&mut self, plan: &mut LinkPassPlan<'_, K, S, Arch>) -> Result<()>;
 }
 
-type PipelinePass<'a, K> = Box<dyn FnMut(&mut LinkPlan<K>) -> Result<()> + 'a>;
+type PipelinePass<'a, K, Arch> = Box<dyn FnMut(&mut LinkPlan<K, Arch>) -> Result<()> + 'a>;
 
 /// An ordered collection of [`LinkPass`]es.
 ///
 /// This is the pass manager used with a discovered link plan after metadata
 /// discovery finishes and before any module is mapped into memory.
-pub struct LinkPipeline<'a, K: Clone + Ord> {
-    passes: Vec<PipelinePass<'a, K>>,
+pub struct LinkPipeline<'a, K: Clone + Ord, Arch: RelocationArch = crate::arch::NativeArch> {
+    passes: Vec<PipelinePass<'a, K, Arch>>,
 }
 
-impl<'a, K: Clone + Ord> Default for LinkPipeline<'a, K> {
+impl<'a, K, Arch> Default for LinkPipeline<'a, K, Arch>
+where
+    K: Clone + Ord,
+    Arch: RelocationArch,
+{
     #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'a, K: Clone + Ord> LinkPipeline<'a, K> {
+impl<'a, K, Arch> LinkPipeline<'a, K, Arch>
+where
+    K: Clone + Ord,
+    Arch: RelocationArch,
+{
     /// Creates an empty pipeline.
     #[inline]
     pub fn new() -> Self {
@@ -457,17 +469,17 @@ impl<'a, K: Clone + Ord> LinkPipeline<'a, K> {
     pub fn push<S, P>(&mut self, mut pass: P) -> &mut Self
     where
         S: PassScopeMode + 'a,
-        P: LinkPass<K, S> + 'a,
+        P: LinkPass<K, S, Arch> + 'a,
     {
         self.passes.push(Box::new(move |plan| {
-            let mut scoped = LinkPassPlan::<_, S>::new(plan);
+            let mut scoped = LinkPassPlan::<_, S, Arch>::new(plan);
             pass.run(&mut scoped)
         }));
         self
     }
 
     /// Runs the pipeline with caller-supplied query state.
-    pub(crate) fn run(&mut self, plan: &mut LinkPlan<K>) -> Result<()> {
+    pub(crate) fn run(&mut self, plan: &mut LinkPlan<K, Arch>) -> Result<()> {
         for pass in &mut self.passes {
             pass(plan)?;
         }

@@ -9,8 +9,6 @@ mod lazy;
 #[cfg(all(feature = "tls", target_arch = "x86"))]
 mod tls;
 
-use elf::abi::EM_386;
-
 #[cfg(all(feature = "lazy-binding", target_arch = "x86"))]
 pub(crate) use lazy::{DYLIB_OFFSET, RESOLVE_FUNCTION_OFFSET, dl_runtime_resolve};
 #[cfg(all(feature = "tls", target_arch = "x86"))]
@@ -29,8 +27,3 @@ pub(super) const R_386_IRELATIVE: u32 = 42;
 pub(super) const R_386_TLS_TPOFF: u32 = 14;
 
 pub mod relocation;
-
-/// The ELF machine type for x86 architecture.
-pub const EM_ARCH: u16 = EM_386;
-/// TLS dynamic thread vector offset for x86.
-pub const TLS_DTV_OFFSET: usize = 0;

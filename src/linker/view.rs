@@ -1,4 +1,5 @@
 use super::{request::VisibleModules, session::ResolveSession, storage::CommittedStorageView};
+use crate::relocation::RelocationArch;
 
 pub(crate) trait DependencyGraphEntries<K> {
     fn contains_key(&self, key: &K) -> bool;
@@ -21,18 +22,30 @@ where
     }
 }
 
-enum DependencyGraphSource<'a, K: Clone, D: 'static, M = ()> {
-    Committed(CommittedStorageView<'a, K, D, M>),
+enum DependencyGraphSource<
+    'a,
+    K: Clone,
+    D: 'static,
+    M = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+> {
+    Committed(CommittedStorageView<'a, K, D, M, Arch>),
     Overlay {
-        committed: CommittedStorageView<'a, K, D, M>,
+        committed: CommittedStorageView<'a, K, D, M, Arch>,
         local: &'a dyn DependencyGraphEntries<K>,
-        visible: &'a dyn VisibleModules<K, D>,
+        visible: &'a dyn VisibleModules<K, D, Arch>,
     },
 }
 
-impl<'a, K: Clone, D: 'static, M> Copy for DependencyGraphSource<'a, K, D, M> {}
+impl<'a, K: Clone, D: 'static, M, Arch> Copy for DependencyGraphSource<'a, K, D, M, Arch> where
+    Arch: RelocationArch
+{
+}
 
-impl<'a, K: Clone, D: 'static, M> Clone for DependencyGraphSource<'a, K, D, M> {
+impl<'a, K: Clone, D: 'static, M, Arch> Clone for DependencyGraphSource<'a, K, D, M, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     fn clone(&self) -> Self {
         *self
@@ -40,25 +53,38 @@ impl<'a, K: Clone, D: 'static, M> Clone for DependencyGraphSource<'a, K, D, M> {
 }
 
 /// Read-only dependency-graph view visible to one resolution pass.
-pub struct DependencyGraphView<'a, K: Clone, D: 'static, M = ()> {
-    source: DependencyGraphSource<'a, K, D, M>,
+pub struct DependencyGraphView<
+    'a,
+    K: Clone,
+    D: 'static,
+    M = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+> {
+    source: DependencyGraphSource<'a, K, D, M, Arch>,
 }
 
-impl<'a, K: Clone, D: 'static, M> Copy for DependencyGraphView<'a, K, D, M> {}
+impl<'a, K: Clone, D: 'static, M, Arch> Copy for DependencyGraphView<'a, K, D, M, Arch> where
+    Arch: RelocationArch
+{
+}
 
-impl<'a, K: Clone, D: 'static, M> Clone for DependencyGraphView<'a, K, D, M> {
+impl<'a, K: Clone, D: 'static, M, Arch> Clone for DependencyGraphView<'a, K, D, M, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, K, D: 'static, M> DependencyGraphView<'a, K, D, M>
+impl<'a, K, D: 'static, M, Arch> DependencyGraphView<'a, K, D, M, Arch>
 where
     K: Clone + Ord,
+    Arch: RelocationArch,
 {
     #[inline]
-    pub(crate) fn new_committed(committed: CommittedStorageView<'a, K, D, M>) -> Self {
+    pub(crate) fn new_committed(committed: CommittedStorageView<'a, K, D, M, Arch>) -> Self {
         Self {
             source: DependencyGraphSource::Committed(committed),
         }
@@ -66,9 +92,9 @@ where
 
     #[inline]
     pub(crate) fn new_overlay(
-        committed: CommittedStorageView<'a, K, D, M>,
+        committed: CommittedStorageView<'a, K, D, M, Arch>,
         local: &'a dyn DependencyGraphEntries<K>,
-        visible: &'a dyn VisibleModules<K, D>,
+        visible: &'a dyn VisibleModules<K, D, Arch>,
     ) -> Self {
         Self {
             source: DependencyGraphSource::Overlay {

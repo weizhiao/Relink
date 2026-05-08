@@ -14,12 +14,11 @@ use crate::relocation::RelocationArch;
 
 /// AArch64 (ARM64) architecture marker.
 #[derive(Debug, Clone, Copy, Default)]
-#[allow(dead_code)]
 pub struct AArch64Arch;
 
 impl RelocationArch for AArch64Arch {
     const KIND: ArchKind = ArchKind::AArch64;
-    const MACHINE: ElfMachine = ElfMachine::new(super::EM_ARCH);
+    const MACHINE: ElfMachine = ElfMachine::new(EM_AARCH64);
     type Layout = Elf64Layout;
     type Relocation = ElfRela<Self::Layout>;
 

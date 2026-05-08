@@ -4,13 +4,13 @@
 //! supported by the ELF loader, including relocation handlers, PLT entry definitions,
 //! and instruction-specific fixups.
 // All architecture submodules are declared unconditionally so that their
-// pure-data items (relocation type numbers, `EM_ARCH`, ...) are reachable
+// pure-data items (relocation type numbers, architecture markers, ...) are reachable
 // from any host. Platform-specific code inside each submodule (naked
 // assembly in `lazy.rs` / `tls.rs`) is gated on `target_arch` at the
 // submodule level, so this unconditional declaration is safe.
 //
 // The `cfg_if!` block below still picks exactly one submodule to re-export
-// at the crate-root level, preserving the `crate::arch::EM_ARCH` etc. paths
+// at the crate-root level, preserving paths such as `crate::arch::NativeArch`
 // and the `crate::arch::NativeArch` host-architecture marker.
 // `NativeArch` is the canonical "host relocation backend" name used by
 // `Loader`'s default `Arch` parameter and by `elf/defs.rs`.
@@ -60,19 +60,12 @@ impl core::fmt::Display for ArchKind {
     }
 }
 
-#[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
 pub mod aarch64;
-#[cfg_attr(not(target_arch = "arm"), allow(dead_code))]
 pub mod arm;
-#[cfg_attr(not(target_arch = "loongarch64"), allow(dead_code))]
 pub mod loongarch64;
-#[cfg_attr(not(target_arch = "riscv32"), allow(dead_code))]
 pub mod riscv32;
-#[cfg_attr(not(target_arch = "riscv64"), allow(dead_code))]
 pub mod riscv64;
-#[cfg_attr(not(target_arch = "x86"), allow(dead_code))]
 pub mod x86;
-#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 pub mod x86_64;
 
 cfg_if::cfg_if! {

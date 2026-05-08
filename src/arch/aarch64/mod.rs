@@ -12,16 +12,9 @@ mod lazy;
 #[cfg(all(feature = "tls", target_arch = "aarch64"))]
 mod tls;
 
-use elf::abi::EM_AARCH64;
-
 #[cfg(all(feature = "lazy-binding", target_arch = "aarch64"))]
 pub(crate) use lazy::{DYLIB_OFFSET, RESOLVE_FUNCTION_OFFSET, dl_runtime_resolve};
 #[cfg(all(feature = "tls", target_arch = "aarch64"))]
 pub(crate) use tls::{get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static};
 
 pub mod relocation;
-
-/// The ELF machine type for AArch64 architecture.
-pub const EM_ARCH: u16 = EM_AARCH64;
-/// TLS dynamic thread vector offset for AArch64.
-pub const TLS_DTV_OFFSET: usize = 0;

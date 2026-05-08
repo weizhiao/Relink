@@ -9,7 +9,8 @@ use crate::{
     Result,
     loader::DynLifecycleHandler,
     relocation::{
-        RelocAddr, Relocatable, RelocateArgs, RelocationHandler, Relocator, SymbolLookup,
+        RelocAddr, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
+        SymbolLookup,
     },
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
@@ -24,12 +25,12 @@ use super::{CoreInner, ElfCore, LoadedCore};
 /// This structure represents a relocatable ELF file (typically a `.o` file)
 /// that has been loaded into memory and is ready for relocation. It contains
 /// all the necessary information to perform the relocation process.
-pub struct RawObject<D: 'static = ()> {
+pub struct RawObject<D: 'static = (), Arch: RelocationArch = crate::arch::NativeArch> {
     /// Core component containing basic ELF information.
-    pub(crate) core: ElfCore<D>,
+    pub(crate) core: ElfCore<D, Arch>,
 
     /// Object relocation information.
-    pub(crate) relocation: ObjectRelocation,
+    pub(crate) relocation: ObjectRelocation<Arch>,
 
     /// PLT/GOT section information.
     pub(crate) pltgot: PltGotSection,
@@ -44,16 +45,16 @@ pub struct RawObject<D: 'static = ()> {
     pub(crate) init_array: Option<&'static [fn()]>,
 }
 
-impl<D: 'static> Deref for RawObject<D> {
-    type Target = ElfCore<D>;
+impl<D: 'static, Arch: RelocationArch> Deref for RawObject<D, Arch> {
+    type Target = ElfCore<D, Arch>;
 
     fn deref(&self) -> &Self::Target {
         &self.core
     }
 }
 
-impl<D: 'static> RawObject<D> {
-    pub(crate) fn from_builder<T: TlsResolver>(builder: ObjectBuilder<T, D>) -> Self {
+impl<D: 'static, Arch: RelocationArch> RawObject<D, Arch> {
+    pub(crate) fn from_builder<T: TlsResolver>(builder: ObjectBuilder<T, D, Arch>) -> Self {
         let inner = CoreInner {
             is_init: AtomicBool::new(false),
             name: builder.name,
@@ -85,12 +86,15 @@ impl<D: 'static> RawObject<D> {
     }
 
     /// Creates a builder for relocating the relocatable file.
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D> {
+    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D, Arch>
+    where
+        Self: Relocatable<D, Arch = Arch>,
+    {
         Relocator::new().with_object(self)
     }
 }
 
-impl<D: 'static> Debug for RawObject<D> {
+impl<D: 'static, Arch: RelocationArch> Debug for RawObject<D, Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawObject")
             .field("core", &self.core)
@@ -98,35 +102,24 @@ impl<D: 'static> Debug for RawObject<D> {
     }
 }
 
-impl<D: 'static> Relocatable<D> for RawObject<D> {
-    type Output = LoadedObject<D>;
-    // Object files (.o) are always relocated with the host's relocation
-    // numbering. Cross-architecture object linking is intentionally not
-    // supported here; callers that need it should fail at the type level
-    // rather than at runtime.
-    type Arch = crate::arch::NativeArch;
+impl<D: 'static, Arch> Relocatable<D> for RawObject<D, Arch>
+where
+    Arch: RelocationArch,
+{
+    type Output = LoadedObject<D, Arch>;
+    type Arch = Arch;
 
     fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
         self,
-        args: RelocateArgs<
-            '_,
-            D,
-            crate::arch::NativeArch,
-            PreS,
-            PostS,
-            LazyPreS,
-            LazyPostS,
-            PreH,
-            PostH,
-        >,
+        args: RelocateArgs<'_, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
     ) -> Result<Self::Output>
     where
         PreS: SymbolLookup + ?Sized,
         PostS: SymbolLookup + ?Sized,
         LazyPreS: SymbolLookup + Send + Sync + 'static,
         LazyPostS: SymbolLookup + Send + Sync + 'static,
-        PreH: RelocationHandler<crate::arch::NativeArch> + ?Sized,
-        PostH: RelocationHandler<crate::arch::NativeArch> + ?Sized,
+        PreH: RelocationHandler<Arch> + ?Sized,
+        PostH: RelocationHandler<Arch> + ?Sized,
     {
         let RelocateArgs {
             scope,
@@ -134,7 +127,7 @@ impl<D: 'static> Relocatable<D> for RawObject<D> {
             handlers,
             ..
         } = args;
-        let inner = self.link_impl(
+        let inner = self.relocate_impl(
             scope,
             lookup.pre_find,
             lookup.post_find,
@@ -147,26 +140,40 @@ impl<D: 'static> Relocatable<D> for RawObject<D> {
 
 /// A relocated object file.
 #[derive(Debug, Clone)]
-pub struct LoadedObject<D: 'static> {
-    pub(crate) inner: LoadedCore<D>,
+pub struct LoadedObject<D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
+    pub(crate) inner: LoadedCore<D, Arch>,
 }
 
-impl<D: 'static> Deref for LoadedObject<D> {
-    type Target = LoadedCore<D>;
+impl<D: 'static, Arch: RelocationArch> Deref for LoadedObject<D, Arch> {
+    type Target = LoadedCore<D, Arch>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<D: 'static> Borrow<LoadedCore<D>> for LoadedObject<D> {
-    fn borrow(&self) -> &LoadedCore<D> {
+impl<D: 'static, Arch: RelocationArch> Borrow<LoadedCore<D, Arch>> for LoadedObject<D, Arch> {
+    fn borrow(&self) -> &LoadedCore<D, Arch> {
         &self.inner
     }
 }
 
-impl<D: 'static> Borrow<LoadedCore<D>> for &LoadedObject<D> {
-    fn borrow(&self) -> &LoadedCore<D> {
+impl<D: 'static, Arch: RelocationArch> Borrow<LoadedCore<D, Arch>> for &LoadedObject<D, Arch> {
+    fn borrow(&self) -> &LoadedCore<D, Arch> {
         &self.inner
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch> From<LoadedObject<D, Arch>> for LoadedCore<D, Arch> {
+    #[inline]
+    fn from(object: LoadedObject<D, Arch>) -> Self {
+        object.inner
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch> From<&LoadedObject<D, Arch>> for LoadedCore<D, Arch> {
+    #[inline]
+    fn from(object: &LoadedObject<D, Arch>) -> Self {
+        object.inner.clone()
     }
 }

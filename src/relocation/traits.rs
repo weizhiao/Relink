@@ -1,9 +1,11 @@
+#[cfg(feature = "object")]
+use super::RelocHelper;
 use super::{SymDef, find_symdef_impl};
 use crate::{
     Result,
     arch::{ArchKind, NativeArch},
     elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType},
-    image::{ElfCore, LoadedModule},
+    image::{ElfCore, LoadedCore},
     sync::Arc,
 };
 use alloc::boxed::Box;
@@ -41,6 +43,7 @@ pub trait RelocationArch: 'static {
     const DTPOFF: ElfRelocationType;
     const TPOFF: ElfRelocationType;
     const TLSDESC: Option<ElfRelocationType> = None;
+    const TLS_DTV_OFFSET: usize = 0;
 
     /// Whether this backend may execute target code or install target runtime
     /// hooks in the host process.
@@ -66,6 +69,45 @@ pub trait RelocationArch: 'static {
     #[inline]
     fn rel_type_to_str(_r_type: ElfRelocationType) -> &'static str {
         "UNKNOWN"
+    }
+
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
+    #[allow(private_interfaces)]
+    fn relocate_object<D, PreS, PostS, PreH, PostH>(
+        _helper: &mut RelocHelper<'_, D, Self, PreS, PostS, PreH, PostH>,
+        _rel: &ElfRelType<Self>,
+        _pltgot: &mut crate::object::layout::PltGotSection,
+    ) -> Result<()>
+    where
+        Self: Sized,
+        D: 'static,
+        PreS: SymbolLookup + ?Sized,
+        PostS: SymbolLookup + ?Sized,
+        PreH: RelocationHandler<Self> + ?Sized,
+        PostH: RelocationHandler<Self> + ?Sized,
+    {
+        Err(crate::RelocationError::UnsupportedRelocationType.into())
+    }
+
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
+    #[inline]
+    fn object_needs_got(_r_type: ElfRelocationType) -> bool
+    where
+        Self: Sized,
+    {
+        false
+    }
+
+    #[cfg(feature = "object")]
+    #[doc(hidden)]
+    #[inline]
+    fn object_needs_plt(_r_type: ElfRelocationType) -> bool
+    where
+        Self: Sized,
+    {
+        false
     }
 }
 
@@ -202,7 +244,7 @@ pub trait RelocationHandler<Arch: RelocationArch = NativeArch> {
 pub struct RelocationContext<'a, D: 'static, Arch: RelocationArch = NativeArch> {
     rel: &'a ElfRelType<Arch>,
     lib: &'a ElfCore<D, Arch>,
-    scope: &'a [LoadedModule<D>],
+    scope: &'a [LoadedCore<D, Arch>],
 }
 
 impl<'a, D: 'static, Arch: RelocationArch> RelocationContext<'a, D, Arch> {
@@ -211,7 +253,7 @@ impl<'a, D: 'static, Arch: RelocationArch> RelocationContext<'a, D, Arch> {
     pub(crate) fn new(
         rel: &'a ElfRelType<Arch>,
         lib: &'a ElfCore<D, Arch>,
-        scope: &'a [LoadedModule<D>],
+        scope: &'a [LoadedCore<D, Arch>],
     ) -> Self {
         Self { rel, lib, scope }
     }
@@ -230,13 +272,13 @@ impl<'a, D: 'static, Arch: RelocationArch> RelocationContext<'a, D, Arch> {
 
     /// Access the current resolution scope.
     #[inline]
-    pub fn scope(&self) -> &[LoadedModule<D>] {
+    pub fn scope(&self) -> &[LoadedCore<D, Arch>] {
         self.scope
     }
 
     /// Find symbol definition in the current scope
     #[inline]
-    pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, D>> {
+    pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, D, Arch>> {
         let symbol = self.lib.symtab();
         let (sym, syminfo) = symbol.symbol_idx(r_sym);
         find_symdef_impl(self.lib, self.scope, sym, &syminfo)
@@ -345,7 +387,7 @@ pub struct RelocateArgs<
     PreH: ?Sized,
     PostH: ?Sized,
 > {
-    pub(crate) scope: Arc<[LoadedModule<D>]>,
+    pub(crate) scope: Arc<[LoadedCore<D, Arch>]>,
     pub(crate) binding: BindingMode,
     pub(crate) lookup: LookupHooks<'a, PreS, PostS>,
     pub(crate) lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
@@ -367,7 +409,7 @@ impl<
 {
     #[inline]
     pub(crate) fn new(
-        scope: Arc<[LoadedModule<D>]>,
+        scope: Arc<[LoadedCore<D, Arch>]>,
         binding: BindingMode,
         lookup: LookupHooks<'a, PreS, PostS>,
         lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,

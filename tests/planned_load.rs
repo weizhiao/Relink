@@ -3,7 +3,7 @@ mod support;
 use elf_loader::{
     CustomError, Loader,
     elf::{ElfFileType, ElfProgramType},
-    image::{LoadedCore, LoadedModule, ModuleCapability, ScannedElf},
+    image::{LoadedCore, ModuleCapability, ScannedElf},
     input::ElfBinary,
     linker::{Arena, ArenaSharing, MemoryClass},
     linker::{
@@ -178,8 +178,8 @@ impl VisibleModules<&'static str, ()> for StaticVisibleModule {
         (*key == self.key).then(|| self.direct_deps.clone())
     }
 
-    fn loaded(&self, key: &&'static str) -> Option<LoadedModule<()>> {
-        (*key == self.key).then(|| LoadedModule::from(self.module.clone()))
+    fn loaded(&self, key: &&'static str) -> Option<LoadedCore<()>> {
+        (*key == self.key).then(|| self.module.clone())
     }
 }
 
@@ -278,7 +278,7 @@ fn mark_as_static_exec(mut bytes: Vec<u8>) -> Vec<u8> {
 fn empty_relocation_plan(
     _req: &RelocationRequest<'_, &'static str, ()>,
 ) -> Result<RelocationInputs<()>, elf_loader::Error> {
-    Ok(RelocationInputs::new(Vec::<LoadedModule<()>>::new()))
+    Ok(RelocationInputs::new(Vec::<LoadedCore<()>>::new()))
 }
 
 #[test]
@@ -642,7 +642,7 @@ fn load_observer_fires_for_runtime_root_and_dependency_before_relocation() {
                 vec!["root".to_string(), "dep".to_string()],
                 "all staged modules should be observed before relocation planning"
             );
-            Ok(RelocationInputs::new(Vec::<LoadedModule<()>>::new()))
+            Ok(RelocationInputs::new(Vec::<LoadedCore<()>>::new()))
         }
     };
 
