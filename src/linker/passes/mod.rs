@@ -1,7 +1,7 @@
 //! Link-plan transformation passes.
 
 use super::{
-    Arena, ArenaId, ArenaUsage, SectionId,
+    ArenaDescriptor, SectionId,
     layout::{DataAccess, SectionDataAccessRef},
     plan::{LinkPlan, ModuleId},
 };
@@ -12,8 +12,10 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 use core::marker::PhantomData;
 
+mod arena;
 mod module;
 mod section;
+pub use arena::Arena;
 pub use module::Module;
 pub use section::Section;
 
@@ -260,32 +262,17 @@ where
 {
     /// Creates one arena for section-region materialization.
     #[inline]
-    pub fn create_arena(&mut self, arena: Arena) -> ArenaId {
-        self.plan.memory_layout_mut().create_arena(arena)
+    pub fn create_arena(&mut self, arena: ArenaDescriptor) -> Arena<'a> {
+        Arena::new(self.plan.memory_layout_mut().create_arena(arena))
     }
 
-    /// Returns all planned arenas.
+    /// Iterates over planned arenas.
     #[inline]
-    pub fn arenas(&self) -> &[Arena] {
-        self.plan.memory_layout().arenas()
-    }
-
-    /// Iterates over planned arenas together with their stable arena ids.
-    #[inline]
-    pub fn arena_pairs(&self) -> impl Iterator<Item = (ArenaId, &Arena)> {
-        self.plan.memory_layout().arena_pairs()
-    }
-
-    /// Returns one arena descriptor by arena id.
-    #[inline]
-    pub fn arena(&self, arena: ArenaId) -> &Arena {
-        self.plan.memory_layout().arena(arena)
-    }
-
-    /// Returns one arena's derived usage summary.
-    #[inline]
-    pub fn usage(&self, arena: ArenaId) -> ArenaUsage {
-        self.plan.memory_layout().usage(arena)
+    pub fn arenas(&self) -> impl Iterator<Item = Arena<'a>> + '_ {
+        self.plan
+            .memory_layout()
+            .arena_pairs()
+            .map(|(arena, _)| Arena::new(arena))
     }
 }
 

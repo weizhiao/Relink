@@ -9,7 +9,7 @@ mod plan;
 mod section;
 
 pub use arena::{
-    Arena, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, MemoryClass, PackingPolicy,
+    ArenaDescriptor, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, MemoryClass, PackingPolicy,
 };
 pub use plan::Materialization;
 pub use section::{ModuleLayout, SectionAddress, SectionMetadata, SectionPlacement};

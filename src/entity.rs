@@ -126,12 +126,6 @@ where
             .enumerate()
             .map(|(index, value)| (K::new(index), value))
     }
-
-    /// Returns the underlying dense slice of values.
-    #[inline]
-    pub fn as_slice(&self) -> &[V] {
-        &self.values
-    }
 }
 
 impl<K, V> Iterator for PrimaryMapIntoIter<K, V>

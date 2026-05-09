@@ -217,7 +217,7 @@ fn final_protection(class: MemoryClass) -> ProtFlags {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::layout::{Arena, ArenaSharing};
+    use super::super::super::layout::{ArenaDescriptor, ArenaSharing};
     use super::super::super::plan::LinkPlan;
     use super::*;
     use crate::os::DefaultMmap;
@@ -254,7 +254,7 @@ mod tests {
             .find(|section| plan.memory_layout().section(*section).name() == ".data")
             .unwrap();
 
-        let arena = plan.memory_layout_mut().create_arena(Arena::new(
+        let arena = plan.memory_layout_mut().create_arena(ArenaDescriptor::new(
             PageSize::Base,
             MemoryClass::WritableData,
             ArenaSharing::Shared,

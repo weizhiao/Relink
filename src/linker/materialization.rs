@@ -1,7 +1,7 @@
 use super::{
     layout::{
-        Arena, ArenaId, ArenaSharing, ClassPolicy, Materialization, MemoryClass, MemoryLayoutPlan,
-        PackingPolicy, SectionId, SectionPlacement,
+        ArenaDescriptor, ArenaId, ArenaSharing, ClassPolicy, Materialization, MemoryClass,
+        MemoryLayoutPlan, PackingPolicy, SectionId, SectionPlacement,
     },
     plan::{LinkPlan, ModuleId},
 };
@@ -221,7 +221,7 @@ impl ArenaState {
                     return arena_id;
                 }
 
-                let arena_id = layout.create_arena(Arena::new(
+                let arena_id = layout.create_arena(ArenaDescriptor::new(
                     class_policy.page_size(),
                     memory_class,
                     ArenaSharing::Shared,
@@ -233,7 +233,7 @@ impl ArenaState {
                 .private_arenas
                 .entry((module_id, memory_class))
                 .or_insert_with(|| {
-                    layout.create_arena(Arena::new(
+                    layout.create_arena(ArenaDescriptor::new(
                         class_policy.page_size(),
                         memory_class,
                         ArenaSharing::Private,
@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn fallback_shared_arena_reuses_existing_compatible_arena() {
         let mut plan = MemoryLayoutPlan::default();
-        let arena_id = plan.create_arena(Arena::new(
+        let arena_id = plan.create_arena(ArenaDescriptor::new(
             PageSize::Huge2MiB,
             MemoryClass::Code,
             ArenaSharing::Shared,
@@ -280,6 +280,6 @@ mod tests {
         );
 
         assert_eq!(selected, arena_id);
-        assert_eq!(plan.arenas().len(), 1);
+        assert_eq!(plan.arena_pairs().count(), 1);
     }
 }

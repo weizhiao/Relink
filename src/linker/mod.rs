@@ -22,15 +22,15 @@ mod view;
 pub use context::LinkContext;
 pub(in crate::linker) use layout::SectionId;
 pub use layout::{
-    Arena, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, DataAccess, Materialization,
+    ArenaDescriptor, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, DataAccess, Materialization,
     MemoryClass, ModuleLayout, PackingPolicy, SectionAddress, SectionDataAccessRef,
     SectionMetadata, SectionPlacement,
 };
 pub use linker::Linker;
 pub(crate) use mapped::GotPltTarget;
 pub use passes::{
-    AnyPass, DataPass, LinkPass, LinkPassPlan, LinkPipeline, Module, PassScope, PassScopeMode,
-    ReorderAccess, ReorderPass, Section, SectionDataAccess,
+    AnyPass, Arena, DataPass, LinkPass, LinkPassPlan, LinkPipeline, Module, PassScope,
+    PassScopeMode, ReorderAccess, ReorderPass, Section, SectionDataAccess,
 };
 pub use request::{
     DefaultRelocationPlanner, DependencyOwner, DependencyRequest, LoadObserver, RelocationInputs,

@@ -18,13 +18,13 @@ entity_ref!(ModuleId);
 
 pub struct PlannedModule<K, Arch: RelocationArch> {
     key: K,
-    module: ScannedDynamic<Arch::Layout>,
+    module: ScannedDynamic<Arch>,
     direct_deps: Box<[ModuleId]>,
 }
 
 struct PendingPlannedModule<K, Arch: RelocationArch> {
     key: K,
-    module: ScannedDynamic<Arch::Layout>,
+    module: ScannedDynamic<Arch>,
     direct_deps: Box<[K]>,
 }
 
@@ -58,11 +58,7 @@ where
     Arch: RelocationArch,
 {
     #[inline]
-    pub(crate) fn new(
-        key: K,
-        module: ScannedDynamic<Arch::Layout>,
-        direct_deps: Box<[ModuleId]>,
-    ) -> Self {
+    pub(crate) fn new(key: K, module: ScannedDynamic<Arch>, direct_deps: Box<[ModuleId]>) -> Self {
         Self {
             key,
             module,
@@ -76,12 +72,12 @@ where
     }
 
     #[inline]
-    pub fn module(&self) -> &ScannedDynamic<Arch::Layout> {
+    pub fn module(&self) -> &ScannedDynamic<Arch> {
         &self.module
     }
 
     #[inline]
-    pub fn module_mut(&mut self) -> &mut ScannedDynamic<Arch::Layout> {
+    pub fn module_mut(&mut self) -> &mut ScannedDynamic<Arch> {
         &mut self.module
     }
 
@@ -91,7 +87,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (K, ScannedDynamic<Arch::Layout>, Box<[ModuleId]>) {
+    pub(crate) fn into_parts(self) -> (K, ScannedDynamic<Arch>, Box<[ModuleId]>) {
         (self.key, self.module, self.direct_deps)
     }
 }
@@ -131,7 +127,7 @@ where
     pub(crate) fn new(
         root: K,
         group_order: Vec<K>,
-        mut entries: BTreeMap<K, (ScannedDynamic<Arch::Layout>, Box<[K]>)>,
+        mut entries: BTreeMap<K, (ScannedDynamic<Arch>, Box<[K]>)>,
     ) -> Self {
         let group_keys = group_order;
         let mut module_ids = BTreeMap::new();

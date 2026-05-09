@@ -47,7 +47,7 @@ where
     pub fn scanned<'borrow, K, Arch>(
         self,
         plan: &'borrow LinkPassPlan<'scope, K, S, Arch>,
-    ) -> &'borrow ScannedDynamic<Arch::Layout>
+    ) -> &'borrow ScannedDynamic<Arch>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
@@ -63,7 +63,7 @@ where
     pub fn scanned_mut<'borrow, K, Arch>(
         self,
         plan: &'borrow mut LinkPassPlan<'scope, K, S, Arch>,
-    ) -> &'borrow mut ScannedDynamic<Arch::Layout>
+    ) -> &'borrow mut ScannedDynamic<Arch>
     where
         K: Clone + Ord,
         Arch: RelocationArch,

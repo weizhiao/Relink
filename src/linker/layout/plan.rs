@@ -1,5 +1,5 @@
 use super::{
-    arena::{Arena, ArenaId, ArenaUsage},
+    arena::{ArenaDescriptor, ArenaId, ArenaUsage},
     section::{
         DataAccess, ModuleLayout, SectionArena, SectionDataAccessRef, SectionId, SectionMetadata,
         SectionPlacement,
@@ -7,10 +7,10 @@ use super::{
 };
 use crate::{
     AlignedBytes, LinkerError, Result,
-    elf::ElfLayout,
     entity::{PrimaryMap, SecondaryMap},
     image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
     linker::plan::ModuleId,
+    relocation::RelocationArch,
     segment::align_up,
 };
 
@@ -41,28 +41,24 @@ impl Materialization {
 /// physical arena placements selected by planning passes.
 #[derive(Debug, Clone, Default)]
 pub(in crate::linker) struct MemoryLayoutPlan {
-    arenas: PrimaryMap<ArenaId, Arena>,
+    arenas: PrimaryMap<ArenaId, ArenaDescriptor>,
     modules: SecondaryMap<ModuleId, ModuleLayout>,
     materialization: SecondaryMap<ModuleId, Materialization>,
     sections: SectionArena,
 }
 
 impl MemoryLayoutPlan {
-    /// Returns the planned physical arenas for the current load session.
-    #[inline]
-    pub(in crate::linker) fn arenas(&self) -> &[Arena] {
-        self.arenas.as_slice()
-    }
-
     /// Iterates over planned arenas together with their stable arena ids.
     #[inline]
-    pub(in crate::linker) fn arena_pairs(&self) -> impl Iterator<Item = (ArenaId, &Arena)> {
+    pub(in crate::linker) fn arena_pairs(
+        &self,
+    ) -> impl Iterator<Item = (ArenaId, &ArenaDescriptor)> {
         self.arenas.iter()
     }
 
     /// Returns one arena descriptor by arena id.
     #[inline]
-    pub(in crate::linker) fn arena(&self, id: ArenaId) -> &Arena {
+    pub(in crate::linker) fn arena(&self, id: ArenaId) -> &ArenaDescriptor {
         self.arenas
             .get(id)
             .expect("layout plan referenced missing arena")
@@ -265,15 +261,15 @@ impl MemoryLayoutPlan {
 
     /// Creates one physical arena and returns its stable arena id.
     #[inline]
-    pub(in crate::linker) fn create_arena(&mut self, arena: Arena) -> ArenaId {
+    pub(in crate::linker) fn create_arena(&mut self, arena: ArenaDescriptor) -> ArenaId {
         self.arenas.push(arena)
     }
 
     /// Builds a section-granularity layout seed from scanned metadata.
-    pub(in crate::linker) fn from_scanned<'a, I, L>(modules: I) -> Self
+    pub(in crate::linker) fn from_scanned<'a, I, Arch>(modules: I) -> Self
     where
-        L: ElfLayout + 'a,
-        I: IntoIterator<Item = (ModuleId, &'a ScannedDynamic<L>)>,
+        Arch: RelocationArch + 'a,
+        I: IntoIterator<Item = (ModuleId, &'a ScannedDynamic<Arch>)>,
     {
         let mut plan = Self::default();
         for (module_id, module) in modules {

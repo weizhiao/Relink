@@ -2,6 +2,7 @@
 
 use crate::{
     AlignedBytes, ParseDynamicError, ParsePhdrError, Result,
+    arch::NativeArch,
     elf::{
         ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, ElfSectionFlags, ElfSectionIndex,
         ElfSectionType, ElfShdr, ElfStringTable, NativeElfLayout, parse_dynamic_entries,
@@ -9,6 +10,7 @@ use crate::{
     entity::entity_ref,
     input::{ElfReader, ElfReaderExt},
     loader::ScanBuilder,
+    relocation::RelocationArch,
 };
 use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{fmt, mem::size_of, num::NonZeroUsize, ptr};
@@ -160,14 +162,14 @@ impl ScannedDynamicInfo {
 }
 
 /// A dynamic ELF image that has been parsed but not yet mapped into memory.
-pub struct ScannedDynamic<L: ElfLayout = NativeElfLayout> {
+pub struct ScannedDynamic<Arch: RelocationArch = NativeArch> {
     name: String,
-    ehdr: ElfHeader<L>,
-    phdrs: Box<[ElfPhdr<L>]>,
+    ehdr: ElfHeader<Arch::Layout>,
+    phdrs: Box<[ElfPhdr<Arch::Layout>]>,
     interp: Option<Box<[u8]>>,
     _strtab_bytes: Box<[u8]>,
     strtab: ElfStringTable,
-    section_table: Option<SectionTable<L>>,
+    section_table: Option<SectionTable<Arch::Layout>>,
     rpath: Option<usize>,
     runpath: Option<usize>,
     needed_libs: Box<[usize]>,
@@ -177,28 +179,28 @@ pub struct ScannedDynamic<L: ElfLayout = NativeElfLayout> {
 }
 
 /// A static executable that has been parsed but not yet mapped into memory.
-pub struct ScannedExec<L: ElfLayout = NativeElfLayout> {
+pub struct ScannedExec<Arch: RelocationArch = NativeArch> {
     name: String,
-    ehdr: ElfHeader<L>,
-    phdrs: Box<[ElfPhdr<L>]>,
+    ehdr: ElfHeader<Arch::Layout>,
+    phdrs: Box<[ElfPhdr<Arch::Layout>]>,
     interp: Option<Box<[u8]>>,
-    section_table: Option<SectionTable<L>>,
+    section_table: Option<SectionTable<Arch::Layout>>,
     #[allow(dead_code)]
     reader: Box<dyn ElfReader + 'static>,
 }
 
 /// A scanned ELF image classified by the metadata available before mapping.
 #[derive(Debug)]
-pub enum ScannedElf<L: ElfLayout = NativeElfLayout> {
+pub enum ScannedElf<Arch: RelocationArch = NativeArch> {
     /// An image with `PT_DYNAMIC` metadata.
-    Dynamic(ScannedDynamic<L>),
+    Dynamic(ScannedDynamic<Arch>),
     /// An executable without `PT_DYNAMIC` metadata.
-    StaticExec(ScannedExec<L>),
+    StaticExec(ScannedExec<Arch>),
 }
 
-pub(crate) struct ScannedDynamicLoadParts<L: ElfLayout = NativeElfLayout> {
-    pub(crate) ehdr: ElfHeader<L>,
-    pub(crate) phdrs: Box<[ElfPhdr<L>]>,
+pub(crate) struct ScannedDynamicLoadParts<Arch: RelocationArch = NativeArch> {
+    pub(crate) ehdr: ElfHeader<Arch::Layout>,
+    pub(crate) phdrs: Box<[ElfPhdr<Arch::Layout>]>,
     pub(crate) reader: Box<dyn ElfReader + 'static>,
 }
 
@@ -207,20 +209,6 @@ pub(crate) struct ScannedDynamicLoadParts<L: ElfLayout = NativeElfLayout> {
 #[repr(transparent)]
 pub struct ScannedSectionId(usize);
 entity_ref!(ScannedSectionId);
-
-impl From<usize> for ScannedSectionId {
-    #[inline]
-    fn from(index: usize) -> Self {
-        Self::new(index)
-    }
-}
-
-impl From<ScannedSectionId> for usize {
-    #[inline]
-    fn from(id: ScannedSectionId) -> Self {
-        id.index()
-    }
-}
 
 impl ScannedSectionId {
     /// Converts a symbol `st_shndx` value into a scanned section id when it
@@ -419,7 +407,7 @@ impl<'a, L: ElfLayout> fmt::Debug for ScannedSection<'a, L> {
     }
 }
 
-impl<L: ElfLayout> fmt::Debug for ScannedDynamic<L> {
+impl<Arch: RelocationArch> fmt::Debug for ScannedDynamic<Arch> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScannedDynamic")
             .field("name", &self.name)
@@ -438,7 +426,7 @@ impl<L: ElfLayout> fmt::Debug for ScannedDynamic<L> {
     }
 }
 
-impl<L: ElfLayout> fmt::Debug for ScannedExec<L> {
+impl<Arch: RelocationArch> fmt::Debug for ScannedExec<Arch> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScannedExec")
             .field("name", &self.name)
@@ -453,7 +441,7 @@ impl<L: ElfLayout> fmt::Debug for ScannedExec<L> {
     }
 }
 
-impl<L: ElfLayout> ScannedElf<L> {
+impl<Arch: RelocationArch> ScannedElf<Arch> {
     /// Returns the file name or path selected for this image.
     #[inline]
     pub fn name(&self) -> &str {
@@ -474,7 +462,7 @@ impl<L: ElfLayout> ScannedElf<L> {
 
     /// Returns the parsed ELF header.
     #[inline]
-    pub fn ehdr(&self) -> &ElfHeader<L> {
+    pub fn ehdr(&self) -> &ElfHeader<Arch::Layout> {
         match self {
             Self::Dynamic(image) => image.ehdr(),
             Self::StaticExec(image) => image.ehdr(),
@@ -483,7 +471,7 @@ impl<L: ElfLayout> ScannedElf<L> {
 
     /// Returns the parsed program headers.
     #[inline]
-    pub fn phdrs(&self) -> &[ElfPhdr<L>] {
+    pub fn phdrs(&self) -> &[ElfPhdr<Arch::Layout>] {
         match self {
             Self::Dynamic(image) => image.phdrs(),
             Self::StaticExec(image) => image.phdrs(),
@@ -501,7 +489,7 @@ impl<L: ElfLayout> ScannedElf<L> {
 
     /// Returns the dynamic scan data when this is a dynamic image.
     #[inline]
-    pub fn as_dynamic(&self) -> Option<&ScannedDynamic<L>> {
+    pub fn as_dynamic(&self) -> Option<&ScannedDynamic<Arch>> {
         match self {
             Self::Dynamic(image) => Some(image),
             Self::StaticExec(_) => None,
@@ -510,7 +498,7 @@ impl<L: ElfLayout> ScannedElf<L> {
 
     /// Returns the static executable scan data when this is a static executable.
     #[inline]
-    pub fn as_static_exec(&self) -> Option<&ScannedExec<L>> {
+    pub fn as_static_exec(&self) -> Option<&ScannedExec<Arch>> {
         match self {
             Self::Dynamic(_) => None,
             Self::StaticExec(image) => Some(image),
@@ -519,7 +507,7 @@ impl<L: ElfLayout> ScannedElf<L> {
 
     /// Consumes this value and returns dynamic scan data when present.
     #[inline]
-    pub fn into_dynamic(self) -> Option<ScannedDynamic<L>> {
+    pub fn into_dynamic(self) -> Option<ScannedDynamic<Arch>> {
         match self {
             Self::Dynamic(image) => Some(image),
             Self::StaticExec(_) => None,
@@ -528,7 +516,7 @@ impl<L: ElfLayout> ScannedElf<L> {
 
     /// Consumes this value and returns static executable scan data when present.
     #[inline]
-    pub fn into_static_exec(self) -> Option<ScannedExec<L>> {
+    pub fn into_static_exec(self) -> Option<ScannedExec<Arch>> {
         match self {
             Self::Dynamic(_) => None,
             Self::StaticExec(image) => Some(image),
@@ -546,7 +534,7 @@ impl<L: ElfLayout> ScannedElf<L> {
 
     /// Returns the raw ELF section headers, when the section table is usable.
     #[inline]
-    pub fn section_headers(&self) -> Option<&[ElfShdr<L>]> {
+    pub fn section_headers(&self) -> Option<&[ElfShdr<Arch::Layout>]> {
         match self {
             Self::Dynamic(image) => image.section_headers(),
             Self::StaticExec(image) => image.section_headers(),
@@ -555,7 +543,10 @@ impl<L: ElfLayout> ScannedElf<L> {
 
     /// Returns one scanned section by id.
     #[inline]
-    pub fn section(&self, id: impl Into<ScannedSectionId>) -> Option<ScannedSection<'_, L>> {
+    pub fn section(
+        &self,
+        id: impl Into<ScannedSectionId>,
+    ) -> Option<ScannedSection<'_, Arch::Layout>> {
         match self {
             Self::Dynamic(image) => image.section(id),
             Self::StaticExec(image) => image.section(id),
@@ -564,7 +555,7 @@ impl<L: ElfLayout> ScannedElf<L> {
 
     /// Iterates over all scanned sections together with stable ids.
     #[inline]
-    pub fn sections(&self) -> ScannedSections<'_, L> {
+    pub fn sections(&self) -> ScannedSections<'_, Arch::Layout> {
         match self {
             Self::Dynamic(image) => image.sections(),
             Self::StaticExec(image) => image.sections(),
@@ -573,25 +564,13 @@ impl<L: ElfLayout> ScannedElf<L> {
 
     /// Iterates over sections that contribute to the loaded memory image.
     #[inline]
-    pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, L>> {
+    pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
         self.sections().filter(|section| section.is_allocated())
-    }
-
-    /// Captures one section's backing bytes.
-    #[allow(dead_code)]
-    pub(crate) fn section_data(
-        &mut self,
-        id: impl Into<ScannedSectionId>,
-    ) -> Result<Option<AlignedBytes>> {
-        match self {
-            Self::Dynamic(image) => image.section_data(id),
-            Self::StaticExec(image) => image.section_data(id),
-        }
     }
 }
 
-impl<L: ElfLayout> ScannedDynamic<L> {
-    pub(crate) fn from_builder(builder: ScanBuilder<L>) -> Result<Self> {
+impl<Arch: RelocationArch> ScannedDynamic<Arch> {
+    pub(crate) fn from_builder(builder: ScanBuilder<Arch::Layout>) -> Result<Self> {
         let ScanBuilder {
             name,
             ehdr,
@@ -648,13 +627,13 @@ impl<L: ElfLayout> ScannedDynamic<L> {
 
     /// Returns the parsed ELF header.
     #[inline]
-    pub fn ehdr(&self) -> &ElfHeader<L> {
+    pub fn ehdr(&self) -> &ElfHeader<Arch::Layout> {
         &self.ehdr
     }
 
     /// Returns the parsed program headers.
     #[inline]
-    pub fn phdrs(&self) -> &[ElfPhdr<L>] {
+    pub fn phdrs(&self) -> &[ElfPhdr<Arch::Layout>] {
         &self.phdrs
     }
 
@@ -719,7 +698,7 @@ impl<L: ElfLayout> ScannedDynamic<L> {
 
     /// Returns the raw ELF section headers, when the section table is usable.
     #[inline]
-    pub fn section_headers(&self) -> Option<&[ElfShdr<L>]> {
+    pub fn section_headers(&self) -> Option<&[ElfShdr<Arch::Layout>]> {
         self.section_table
             .as_ref()
             .map(|table| table.sections.as_ref())
@@ -727,7 +706,10 @@ impl<L: ElfLayout> ScannedDynamic<L> {
 
     /// Returns one scanned section by id.
     #[inline]
-    pub fn section(&self, id: impl Into<ScannedSectionId>) -> Option<ScannedSection<'_, L>> {
+    pub fn section(
+        &self,
+        id: impl Into<ScannedSectionId>,
+    ) -> Option<ScannedSection<'_, Arch::Layout>> {
         let id = id.into();
         let section_table = self.section_table.as_ref()?;
         let shstrtab = self.shstrtab()?;
@@ -741,7 +723,7 @@ impl<L: ElfLayout> ScannedDynamic<L> {
 
     /// Iterates over all scanned sections together with stable ids.
     #[inline]
-    pub fn sections(&self) -> ScannedSections<'_, L> {
+    pub fn sections(&self) -> ScannedSections<'_, Arch::Layout> {
         ScannedSections::new(
             self.section_table
                 .as_ref()
@@ -754,13 +736,13 @@ impl<L: ElfLayout> ScannedDynamic<L> {
 
     /// Iterates over sections that contribute to the loaded memory image.
     #[inline]
-    pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, L>> {
+    pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
         self.sections().filter(|section| section.is_allocated())
     }
 
     /// Iterates over retained relocation sections emitted into the section table.
     #[inline]
-    pub fn relocation_sections(&self) -> impl Iterator<Item = ScannedSection<'_, L>> {
+    pub fn relocation_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
         self.sections()
             .filter(|section| section.is_relocation_section())
     }
@@ -798,7 +780,7 @@ impl<L: ElfLayout> ScannedDynamic<L> {
         &self.dynamic
     }
 
-    pub(crate) fn into_load_parts(self) -> ScannedDynamicLoadParts<L> {
+    pub(crate) fn into_load_parts(self) -> ScannedDynamicLoadParts<Arch> {
         let Self {
             ehdr,
             phdrs,
@@ -814,8 +796,8 @@ impl<L: ElfLayout> ScannedDynamic<L> {
     }
 }
 
-impl<L: ElfLayout> ScannedExec<L> {
-    pub(crate) fn from_builder(builder: ScanBuilder<L>) -> Result<Self> {
+impl<Arch: RelocationArch> ScannedExec<Arch> {
+    pub(crate) fn from_builder(builder: ScanBuilder<Arch::Layout>) -> Result<Self> {
         let ScanBuilder {
             name,
             ehdr,
@@ -852,13 +834,13 @@ impl<L: ElfLayout> ScannedExec<L> {
 
     /// Returns the parsed ELF header.
     #[inline]
-    pub fn ehdr(&self) -> &ElfHeader<L> {
+    pub fn ehdr(&self) -> &ElfHeader<Arch::Layout> {
         &self.ehdr
     }
 
     /// Returns the parsed program headers.
     #[inline]
-    pub fn phdrs(&self) -> &[ElfPhdr<L>] {
+    pub fn phdrs(&self) -> &[ElfPhdr<Arch::Layout>] {
         &self.phdrs
     }
 
@@ -889,7 +871,7 @@ impl<L: ElfLayout> ScannedExec<L> {
 
     /// Returns the raw ELF section headers, when the section table is usable.
     #[inline]
-    pub fn section_headers(&self) -> Option<&[ElfShdr<L>]> {
+    pub fn section_headers(&self) -> Option<&[ElfShdr<Arch::Layout>]> {
         self.section_table
             .as_ref()
             .map(|table| table.sections.as_ref())
@@ -897,7 +879,10 @@ impl<L: ElfLayout> ScannedExec<L> {
 
     /// Returns one scanned section by id.
     #[inline]
-    pub fn section(&self, id: impl Into<ScannedSectionId>) -> Option<ScannedSection<'_, L>> {
+    pub fn section(
+        &self,
+        id: impl Into<ScannedSectionId>,
+    ) -> Option<ScannedSection<'_, Arch::Layout>> {
         let id = id.into();
         let section_table = self.section_table.as_ref()?;
         let shstrtab = self.shstrtab()?;
@@ -911,7 +896,7 @@ impl<L: ElfLayout> ScannedExec<L> {
 
     /// Iterates over all scanned sections together with stable ids.
     #[inline]
-    pub fn sections(&self) -> ScannedSections<'_, L> {
+    pub fn sections(&self) -> ScannedSections<'_, Arch::Layout> {
         ScannedSections::new(
             self.section_table
                 .as_ref()
@@ -924,7 +909,7 @@ impl<L: ElfLayout> ScannedExec<L> {
 
     /// Iterates over sections that contribute to the loaded memory image.
     #[inline]
-    pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, L>> {
+    pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
         self.sections().filter(|section| section.is_allocated())
     }
 

@@ -1,8 +1,8 @@
-use super::{LinkPassPlan, Module, ReorderAccess, SectionDataAccess};
+use super::{Arena, LinkPassPlan, Module, ReorderAccess, SectionDataAccess};
 use crate::{
     LinkerError, Result,
     aligned_bytes::ByteRepr,
-    linker::layout::{ArenaId, SectionId, SectionMetadata, SectionPlacement},
+    linker::layout::{SectionId, SectionMetadata, SectionPlacement},
     relocation::RelocationArch,
 };
 use core::marker::PhantomData;
@@ -194,14 +194,16 @@ where
     pub fn assign<K, Arch>(
         self,
         plan: &mut LinkPassPlan<'scope, K, S, Arch>,
-        arena: ArenaId,
+        arena: Arena<'scope>,
         offset: usize,
     ) -> bool
     where
         K: Clone + Ord,
         Arch: RelocationArch,
     {
-        plan.plan.memory_layout_mut().assign(self.id, arena, offset)
+        plan.plan
+            .memory_layout_mut()
+            .assign(self.id, arena.id(), offset)
     }
 
     /// Assigns this section to the next aligned arena offset through `plan`.
@@ -209,13 +211,15 @@ where
     pub fn assign_next<K, Arch>(
         self,
         plan: &mut LinkPassPlan<'scope, K, S, Arch>,
-        arena: ArenaId,
+        arena: Arena<'scope>,
     ) -> bool
     where
         K: Clone + Ord,
         Arch: RelocationArch,
     {
-        plan.plan.memory_layout_mut().assign_next(self.id, arena)
+        plan.plan
+            .memory_layout_mut()
+            .assign_next(self.id, arena.id())
     }
 
     /// Clears this section's arena assignment through `plan`.

@@ -658,7 +658,7 @@ where
         plan: &MemoryLayoutPlan,
         mapped_runtime: &mut Option<mapped::MappedRuntimeMemory>,
         module_id: ModuleId,
-        scanned: ScannedDynamic<Arch::Layout>,
+        scanned: ScannedDynamic<Arch>,
     ) -> Result<RawDynamic<D, Arch>> {
         match plan
             .materialization(module_id)
@@ -679,7 +679,7 @@ where
         &mut self,
         mapped_runtime: &mut Option<mapped::MappedRuntimeMemory>,
         module_id: ModuleId,
-        scanned: ScannedDynamic<Arch::Layout>,
+        scanned: ScannedDynamic<Arch>,
     ) -> Result<RawDynamic<D, Arch>> {
         let runtime = mapped_runtime
             .as_mut()

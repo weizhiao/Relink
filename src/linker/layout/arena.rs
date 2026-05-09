@@ -129,15 +129,15 @@ impl ArenaUsage {
     }
 }
 
-/// One physical arena that can host sections from one or more modules.
+/// Descriptor for one physical arena that can host sections from one or more modules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Arena {
+pub struct ArenaDescriptor {
     page_size: PageSize,
     memory_class: MemoryClass,
     sharing: ArenaSharing,
 }
 
-impl Arena {
+impl ArenaDescriptor {
     /// Creates a new arena descriptor.
     #[inline]
     pub const fn new(

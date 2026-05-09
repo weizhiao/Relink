@@ -5,7 +5,7 @@ use elf_loader::{
     elf::{ElfFileType, ElfProgramType},
     image::{LoadedCore, ModuleCapability, ScannedElf},
     input::ElfBinary,
-    linker::{Arena, ArenaSharing, MemoryClass},
+    linker::{ArenaDescriptor, ArenaSharing, MemoryClass},
     linker::{
         DataPass, KeyResolver, LinkContext, LinkPass, LinkPassPlan, Linker, LoadObserver,
         Materialization, RelocationInputs, RelocationRequest, ReorderPass, ResolvedKey,
@@ -766,7 +766,7 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
                 layout_section
                     .data_mut(plan)?
                     .copy_from_slice(&[9, 8, 7, 6]);
-                let arena = plan.create_arena(Arena::new(
+                let arena = plan.create_arena(ArenaDescriptor::new(
                     PageSize::Base,
                     MemoryClass::WritableData,
                     ArenaSharing::Private,
@@ -847,7 +847,7 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
                 .data_mut(plan)?
                 .copy_from_slice(&[4, 3, 2, 1, 8, 7, 6, 5]);
 
-            let arena = plan.create_arena(Arena::new(
+            let arena = plan.create_arena(ArenaDescriptor::new(
                 PageSize::Base,
                 MemoryClass::WritableData,
                 ArenaSharing::Private,

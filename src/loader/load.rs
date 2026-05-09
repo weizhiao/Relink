@@ -80,7 +80,7 @@ where
     ///
     /// Images with `PT_DYNAMIC` are returned as [`ScannedElf::Dynamic`]. Executable
     /// images without `PT_DYNAMIC` are returned as [`ScannedElf::StaticExec`].
-    pub fn scan<I>(&mut self, input: I) -> Result<ScannedElf<Arch::Layout>>
+    pub fn scan<I>(&mut self, input: I) -> Result<ScannedElf<Arch>>
     where
         I: IntoElfReader<'static>,
     {
@@ -96,10 +96,10 @@ where
         let builder = self.inner.create_scan_builder(ehdr, phdrs, object);
 
         if has_dynamic {
-            return ScannedDynamic::from_builder(builder).map(ScannedElf::Dynamic);
+            return ScannedDynamic::<Arch>::from_builder(builder).map(ScannedElf::Dynamic);
         }
 
-        ScannedExec::from_builder(builder).map(ScannedElf::StaticExec)
+        ScannedExec::<Arch>::from_builder(builder).map(ScannedElf::StaticExec)
     }
 }
 
@@ -254,7 +254,7 @@ where
     /// initialized through the loader's dynamic initializer, like ordinary dynamic loads.
     pub fn load_scanned_dynamic(
         &mut self,
-        scanned: ScannedDynamic<Arch::Layout>,
+        scanned: ScannedDynamic<Arch>,
     ) -> Result<RawDynamic<D, Arch>> {
         let mut image = self.load_scanned_dynamic_raw_impl(scanned)?;
         self.inner.initialize_dynamic(&mut image)?;
@@ -271,7 +271,7 @@ where
 
     pub(crate) fn load_scanned_dynamic_raw_impl(
         &mut self,
-        scanned: ScannedDynamic<Arch::Layout>,
+        scanned: ScannedDynamic<Arch>,
     ) -> Result<RawDynamic<D, Arch>> {
         let ScannedDynamicLoadParts {
             ehdr,

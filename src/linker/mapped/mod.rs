@@ -253,7 +253,7 @@ impl MappedRuntimeMemory {
 }
 
 pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch>(
-    scanned: ScannedDynamic<Arch::Layout>,
+    scanned: ScannedDynamic<Arch>,
     runtime: RuntimeModuleMemory,
     init_fn: DynLifecycleHandler,
     fini_fn: DynLifecycleHandler,

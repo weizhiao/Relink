@@ -2,7 +2,6 @@ use super::view::DependencyGraphView;
 use crate::{
     Result,
     arch::ArchKind,
-    elf::ElfLayout,
     image::{LoadedCore, RawDylib, RawDynamic, ScannedDynamic},
     relocation::{BindingMode, RelocationArch},
     sync::Arc,
@@ -83,7 +82,7 @@ impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDynamic<D, Arch> {
     }
 }
 
-impl<L: ElfLayout> DependencyOwner for ScannedDynamic<L> {
+impl<Arch: RelocationArch> DependencyOwner for ScannedDynamic<Arch> {
     #[inline]
     fn name(&self) -> &str {
         self.name()

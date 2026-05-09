@@ -5,6 +5,7 @@ use crate::{
     entity::{PrimaryMap, SecondaryMap, entity_ref},
     image::{ScannedDynamic, ScannedSection, ScannedSectionId},
     linker::plan::ModuleId,
+    relocation::RelocationArch,
 };
 use alloc::{boxed::Box, vec::Vec};
 
@@ -634,9 +635,9 @@ impl ModuleLayout {
     }
 
     /// Builds a section-granularity layout seed from a scanned module.
-    pub(in crate::linker) fn from_scanned<L: ElfLayout>(
+    pub(in crate::linker) fn from_scanned<Arch: RelocationArch>(
         owner: ModuleId,
-        module: &ScannedDynamic<L>,
+        module: &ScannedDynamic<Arch>,
         arena: &mut SectionArena,
     ) -> Self {
         let mut section_links = Vec::new();

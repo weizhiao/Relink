@@ -81,7 +81,7 @@ pub(crate) struct ScanResolveContext<
 > {
     visible: CommittedStorageView<'a, K, D, Meta, Arch>,
     visible_modules: &'a V,
-    session: &'a mut ResolveSession<K, ScannedDynamic<Arch::Layout>>,
+    session: &'a mut ResolveSession<K, ScannedDynamic<Arch>>,
 }
 
 impl<'a, K: Clone, D: 'static, Meta, V, Arch> ScanResolveContext<'a, K, D, Meta, V, Arch>
@@ -92,7 +92,7 @@ where
     pub(crate) fn new(
         visible: CommittedStorageView<'a, K, D, Meta, Arch>,
         visible_modules: &'a V,
-        session: &'a mut ResolveSession<K, ScannedDynamic<Arch::Layout>>,
+        session: &'a mut ResolveSession<K, ScannedDynamic<Arch>>,
     ) -> Self {
         Self {
             visible,
