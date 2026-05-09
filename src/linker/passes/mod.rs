@@ -1,7 +1,7 @@
 //! Link-plan transformation passes.
 
 use super::{
-    Arena, ArenaId, ArenaUsage, Materialization, ModuleLayout, SectionId, SectionMetadata,
+    Arena, ArenaId, ArenaUsage, Materialization, ModuleLayout, SectionId,
     layout::{DataAccess, SectionDataAccessRef},
     plan::{LinkPlan, ModuleId, PlannedModule},
 };
@@ -243,24 +243,20 @@ where
         id: impl Into<ScannedSectionId>,
     ) -> Option<Section<'a, S>> {
         let section = self.plan.module_section_id(module_id, id)?;
-        self.section_by_id(section)
+        self.checked_section(section)
     }
 
-    /// Returns one checked section handle from a stable section id.
     #[inline]
-    pub fn section_by_id(&self, id: SectionId) -> Option<Section<'a, S>> {
+    fn checked_section(&self, id: SectionId) -> Option<Section<'a, S>> {
         self.accepts_section(id).then(|| Section::new(id))
     }
 
-    /// Iterates over section metadata records owned by modules visible through this pass scope.
-    pub fn sections(&self) -> impl Iterator<Item = (Section<'a, S>, &SectionMetadata)> + '_ {
+    /// Iterates over sections visible through this pass scope.
+    pub fn sections(&self) -> impl Iterator<Item = Section<'a, S>> + '_ {
         self.plan
             .memory_layout()
             .sections()
-            .filter_map(move |(section, metadata)| {
-                self.accepts_section(section)
-                    .then(|| (Section::new(section), metadata))
-            })
+            .filter_map(move |(section, _)| self.checked_section(section))
     }
 
     /// Iterates visible entries from one section without exposing the layout

@@ -827,6 +827,7 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
         data: bytes,
     };
     let mut observed_offset = None;
+    let mut observed_size = None;
     let configure =
         |plan: &mut LinkPassPlan<'_, &'static str, ReorderPass>| -> elf_loader::Result<()> {
             let root = plan.root();
@@ -846,9 +847,11 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
             let layout_section = plan
                 .section(root, data_section)
                 .expect("missing planned .data section");
+            layout_section.resize(plan, 8)?;
+            assert_eq!(layout_section.metadata(plan).size(), 8);
             layout_section
                 .data_mut(plan)?
-                .copy_from_slice(&[4, 3, 2, 1]);
+                .copy_from_slice(&[4, 3, 2, 1, 8, 7, 6, 5]);
 
             let arena = plan.create_arena(Arena::new(
                 PageSize::Base,
@@ -862,6 +865,9 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
             observed_offset = layout_section
                 .placement(plan)
                 .map(|placement| placement.offset());
+            observed_size = layout_section
+                .placement(plan)
+                .map(|placement| placement.size());
             Ok(())
         };
 
@@ -876,6 +882,7 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
         .expect("failed to execute arena-backed scan-first load with assign_next");
 
     assert_eq!(observed_offset, Some(0));
+    assert_eq!(observed_size, Some(8));
     assert!(
         !loaded.is_contiguous_mapping(),
         "arena-backed load should expose a sparse mapped span",

@@ -20,9 +20,10 @@ mod storage;
 mod view;
 
 pub use context::LinkContext;
+pub(in crate::linker) use layout::SectionId;
 pub use layout::{
     Arena, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, DataAccess, Materialization,
-    MemoryClass, ModuleLayout, PackingPolicy, SectionAddress, SectionDataAccessRef, SectionId,
+    MemoryClass, ModuleLayout, PackingPolicy, SectionAddress, SectionDataAccessRef,
     SectionMetadata, SectionPlacement,
 };
 pub use linker::Linker;

@@ -12,7 +12,8 @@ pub use arena::{
     Arena, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, MemoryClass, PackingPolicy,
 };
 pub use plan::Materialization;
-pub use section::{ModuleLayout, SectionAddress, SectionId, SectionMetadata, SectionPlacement};
+pub use section::{ModuleLayout, SectionAddress, SectionMetadata, SectionPlacement};
 
 pub(in crate::linker) use plan::MemoryLayoutPlan;
+pub(in crate::linker) use section::SectionId;
 pub use section::{DataAccess, SectionDataAccessRef};

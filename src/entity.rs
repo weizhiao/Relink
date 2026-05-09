@@ -19,6 +19,7 @@ macro_rules! entity_ref {
         impl $name {
             /// Creates a new typed entity reference from a zero-based index.
             #[inline]
+            #[allow(dead_code)]
             pub const fn new(index: usize) -> Self {
                 Self(index)
             }

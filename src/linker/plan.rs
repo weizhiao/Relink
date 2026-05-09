@@ -435,6 +435,24 @@ where
             .map_err(Into::into)
     }
 
+    pub(in crate::linker) fn resize_section(
+        &mut self,
+        section: SectionId,
+        byte_len: usize,
+    ) -> Result<()> {
+        self.materialize_section_data(section)?;
+        self.memory_layout.resize_section(section, byte_len)?;
+        self.memory_layout.mark_section_data_override(section);
+        if self.memory_layout.section(section).is_allocated() {
+            let owner = self.memory_layout.owner(section).ok_or_else(|| {
+                LinkerError::section_data("section resize requested for an unowned section")
+            })?;
+            self.memory_layout
+                .set_materialization(owner, Materialization::SectionRegions);
+        }
+        Ok(())
+    }
+
     #[inline]
     pub(in crate::linker) fn into_parts(self) -> LinkPlanParts<K, Arch> {
         (

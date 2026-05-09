@@ -1,6 +1,6 @@
 use super::{LinkPassPlan, ReorderAccess, SectionDataAccess};
 use crate::{
-    AlignedBytes, LinkerError, Result,
+    LinkerError, Result,
     aligned_bytes::ByteRepr,
     linker::{
         layout::{ArenaId, SectionId, SectionMetadata, SectionPlacement},
@@ -28,7 +28,7 @@ impl<'plan, S> Section<'plan, S> {
 
     /// Returns the underlying stable section id.
     #[inline]
-    pub const fn id(self) -> SectionId {
+    pub(in crate::linker) const fn id(self) -> SectionId {
         self.id
     }
 }
@@ -62,28 +62,30 @@ where
         plan.plan.section_metadata(self.id)
     }
 
+    /// Returns the section referenced by this section's `sh_link`, when present.
     #[inline]
-    fn aligned_data<'borrow, K, Arch>(
-        self,
-        plan: &'borrow mut LinkPassPlan<'scope, K, S, Arch>,
-    ) -> Result<&'borrow AlignedBytes>
+    pub fn linked_section<K, Arch>(self, plan: &LinkPassPlan<'scope, K, S, Arch>) -> Option<Self>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
     {
-        plan.plan.section_data(self.id)
+        plan.plan
+            .section_metadata(self.id)
+            .linked_section()
+            .map(Self::new)
     }
 
+    /// Returns the section referenced by this section's `sh_info`, when present.
     #[inline]
-    fn aligned_data_mut<'borrow, K, Arch>(
-        self,
-        plan: &'borrow mut LinkPassPlan<'scope, K, S, Arch>,
-    ) -> Result<&'borrow mut AlignedBytes>
+    pub fn info_section<K, Arch>(self, plan: &LinkPassPlan<'scope, K, S, Arch>) -> Option<Self>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
     {
-        plan.plan.section_data_mut(self.id)
+        plan.plan
+            .section_metadata(self.id)
+            .info_section()
+            .map(Self::new)
     }
 
     /// Returns this section's data bytes through `plan`, materializing them on demand.
@@ -96,7 +98,7 @@ where
         K: Clone + Ord,
         Arch: RelocationArch,
     {
-        Ok(self.aligned_data(plan)?.as_bytes())
+        Ok(plan.plan.section_data(self.id)?.as_bytes())
     }
 
     /// Returns this section's mutable data bytes through `plan`, materializing them on demand.
@@ -109,7 +111,7 @@ where
         K: Clone + Ord,
         Arch: RelocationArch,
     {
-        Ok(self.aligned_data_mut(plan)?.as_bytes_mut())
+        Ok(plan.plan.section_data_mut(self.id)?.as_bytes_mut())
     }
 
     /// Returns this section's data as typed entries through `plan`.
@@ -123,7 +125,8 @@ where
         Arch: RelocationArch,
         T: ByteRepr,
     {
-        self.aligned_data(plan)?
+        plan.plan
+            .section_data(self.id)?
             .try_cast_slice::<T>()
             .ok_or_else(|| {
                 LinkerError::section_data("section data bytes do not match requested entry type")
@@ -142,17 +145,27 @@ where
         Arch: RelocationArch,
         T: ByteRepr,
     {
-        self.aligned_data_mut(plan)?
+        plan.plan
+            .section_data_mut(self.id)?
             .try_cast_slice_mut::<T>()
             .ok_or_else(|| {
                 LinkerError::section_data("section data bytes do not match requested entry type")
                     .into()
             })
     }
+}
 
-    /// Sets this section data's logical byte length through `plan`.
+impl<'scope, S> Section<'scope, S>
+where
+    S: ReorderAccess,
+{
+    /// Resizes this section's data and layout metadata through `plan`.
+    ///
+    /// Existing arena placement is cleared. Allocated sections are forced into
+    /// section-region materialization so the resized section is packed from its
+    /// updated metadata.
     #[inline]
-    pub fn set_data_len<K, Arch>(
+    pub fn resize<K, Arch>(
         self,
         plan: &mut LinkPassPlan<'scope, K, S, Arch>,
         byte_len: usize,
@@ -161,17 +174,9 @@ where
         K: Clone + Ord,
         Arch: RelocationArch,
     {
-        let data = self.aligned_data_mut(plan)?;
-        data.set_len(byte_len)
-            .ok_or_else(|| LinkerError::section_data("section data length overflow"))?;
-        Ok(())
+        plan.plan.resize_section(self.id, byte_len)
     }
-}
 
-impl<'scope, S> Section<'scope, S>
-where
-    S: ReorderAccess,
-{
     /// Returns this section's arena placement through `plan`.
     #[inline]
     pub fn placement<K, Arch>(

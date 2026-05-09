@@ -1,12 +1,12 @@
 use super::{
     arena::{Arena, ArenaId, ArenaUsage},
     section::{
-        DataAccess, LayoutSectionArena, ModuleLayout, SectionDataAccessRef, SectionId,
-        SectionMetadata, SectionPlacement,
+        DataAccess, ModuleLayout, SectionArena, SectionDataAccessRef, SectionId, SectionMetadata,
+        SectionPlacement,
     },
 };
 use crate::{
-    AlignedBytes,
+    AlignedBytes, LinkerError, Result,
     elf::ElfLayout,
     entity::{PrimaryMap, SecondaryMap},
     image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
@@ -44,7 +44,7 @@ pub(in crate::linker) struct MemoryLayoutPlan {
     arenas: PrimaryMap<ArenaId, Arena>,
     modules: SecondaryMap<ModuleId, ModuleLayout>,
     materialization: SecondaryMap<ModuleId, Materialization>,
-    sections: LayoutSectionArena,
+    sections: SectionArena,
 }
 
 impl MemoryLayoutPlan {
@@ -129,6 +129,18 @@ impl MemoryLayoutPlan {
     }
 
     #[inline]
+    pub(in crate::linker) fn resize_section(
+        &mut self,
+        section: SectionId,
+        byte_len: usize,
+    ) -> Result<()> {
+        self.sections.resize_data(section, byte_len).ok_or_else(|| {
+            LinkerError::section_data("section data length overflow or missing materialized data")
+                .into()
+        })
+    }
+
+    #[inline]
     pub(in crate::linker) fn install_data(&mut self, section: SectionId, bytes: AlignedBytes) {
         self.sections.install_data(section, bytes);
     }
@@ -167,11 +179,7 @@ impl MemoryLayoutPlan {
     pub(in crate::linker) fn section_placements(
         &self,
     ) -> impl Iterator<Item = (SectionId, SectionPlacement)> + '_ {
-        self.sections
-            .iter_records()
-            .filter_map(|(section, record)| {
-                record.placement().map(|placement| (section, placement))
-            })
+        self.sections.placements()
     }
 
     /// Returns the section id for one scanned section inside one module.
@@ -188,14 +196,7 @@ impl MemoryLayoutPlan {
         &self,
         arena: ArenaId,
     ) -> impl Iterator<Item = (SectionId, SectionPlacement)> + '_ {
-        self.sections
-            .iter_records()
-            .filter_map(move |(section, record)| {
-                record
-                    .placement()
-                    .filter(|placement| placement.arena() == arena)
-                    .map(|placement| (section, placement))
-            })
+        self.sections.placements_in(arena)
     }
 
     /// Returns the derived usage summary for one arena.
