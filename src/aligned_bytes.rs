@@ -1,24 +1,34 @@
 use alloc::{boxed::Box, vec::Vec};
 use core::mem::size_of;
 
+const WORD_BYTES: usize = 8;
+
+#[repr(align(8))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AlignedWord([u8; WORD_BYTES]);
+
+impl AlignedWord {
+    const ZERO: Self = Self([0; WORD_BYTES]);
+}
+
 /// Owned bytes backed by word-aligned storage.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub(crate) struct AlignedBytes {
-    words: Vec<u64>,
+    words: Vec<AlignedWord>,
     len: usize,
 }
 
 impl AlignedBytes {
     #[inline]
     fn required_words(byte_len: usize) -> Option<usize> {
-        let word_size = size_of::<u64>();
+        let word_size = size_of::<AlignedWord>();
         byte_len.checked_add(word_size - 1).map(|v| v / word_size)
     }
 
     pub(crate) fn with_len(byte_len: usize) -> Option<Self> {
         let words = Self::required_words(byte_len)?;
         let mut storage = Vec::new();
-        storage.resize(words, 0);
+        storage.resize(words, AlignedWord::ZERO);
         Some(Self {
             words: storage,
             len: byte_len,
@@ -31,11 +41,15 @@ impl AlignedBytes {
     }
 
     pub(crate) fn set_len(&mut self, byte_len: usize) -> Option<()> {
+        let old_len = self.len;
         let words = Self::required_words(byte_len)?;
         if words > self.words.len() {
-            self.words.resize(words, 0);
+            self.words.resize(words, AlignedWord::ZERO);
         }
         self.len = byte_len;
+        if byte_len > old_len {
+            self.as_bytes_mut()[old_len..].fill(0);
+        }
         Some(())
     }
 
@@ -86,6 +100,13 @@ impl AlignedBytes {
     }
 }
 
+impl PartialEq for AlignedBytes {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
 impl AsRef<[u8]> for AlignedBytes {
     #[inline]
     fn as_ref(&self) -> &[u8] {
@@ -121,7 +142,7 @@ impl<const N: usize> From<[u8; N]> for AlignedBytes {
     }
 }
 
-/// Types that can be safely overwritten from arbitrary bytes.
+/// Types that can be safely viewed from arbitrary bytes.
 ///
 /// # Safety
 /// Implementors must be plain data:
@@ -129,6 +150,19 @@ impl<const N: usize> From<[u8; N]> for AlignedBytes {
 /// - the type has no drop glue
 /// - its in-memory representation matches its byte layout, with no padding
 ///   bytes that may be uninitialized
-pub(crate) unsafe trait ByteRepr: Sized {}
+///
+/// This trait only describes memory validity and layout. It does not imply
+/// that multi-byte fields have any particular endian interpretation.
+pub unsafe trait ByteRepr: Sized {}
 
-unsafe impl ByteRepr for u8 {}
+macro_rules! impl_byte_repr {
+    ($($ty:ty),+ $(,)?) => {
+        $(unsafe impl ByteRepr for $ty {})+
+    };
+}
+
+impl_byte_repr!(
+    u8, i8, u16, i16, u32, i32, u64, i64, u128, i128, usize, isize, f32, f64,
+);
+
+unsafe impl<T: ByteRepr, const N: usize> ByteRepr for [T; N] {}

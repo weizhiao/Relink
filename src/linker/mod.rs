@@ -29,7 +29,7 @@ pub use linker::Linker;
 pub(crate) use mapped::GotPltTarget;
 pub use passes::{
     AnyPass, DataPass, LinkPass, LinkPassPlan, LinkPipeline, PassScope, PassScopeMode,
-    ReorderAccess, ReorderPass, SectionDataAccess,
+    ReorderAccess, ReorderPass, Section, SectionDataAccess,
 };
 pub use plan::ModuleId;
 pub use request::{

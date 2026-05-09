@@ -220,7 +220,7 @@ impl MappedRuntimeMemory {
     where
         K: Clone + Ord,
         Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
-        crate::elf::ElfRelType<Arch>: crate::aligned_bytes::ByteRepr,
+        crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     {
         let runtime = self.build_module(id, plan.memory_layout())?;
         let mut rewriter = RuntimeMetadataRewriter::<_, Arch>::new(id, plan, runtime);

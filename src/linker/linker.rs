@@ -448,7 +448,7 @@ where
     H: LoadHook<Arch::Layout>,
     Tls: TlsResolver,
     Arch: RelocationArch + crate::relocation::RelocationValueProvider + mapped::GotPltTarget,
-    crate::elf::ElfRelType<Arch>: crate::aligned_bytes::ByteRepr,
+    crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     PreS: SymbolLookup + Clone,
     PostS: SymbolLookup + Clone,
     LazyPreS: SymbolLookup + Send + Sync + 'static + Clone,
@@ -489,7 +489,6 @@ where
         self.execute_prepared_load(context, prepared)
     }
 
-    #[allow(private_bounds)]
     pub fn load_mapped_root<'cfg, Meta>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
@@ -515,7 +514,6 @@ where
     }
 
     /// Discovers, plans, and loads one module through the scan-first path.
-    #[allow(private_bounds)]
     pub fn load_scan_first<Meta>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
