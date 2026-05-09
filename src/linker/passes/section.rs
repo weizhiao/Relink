@@ -1,11 +1,8 @@
-use super::{LinkPassPlan, ReorderAccess, SectionDataAccess};
+use super::{LinkPassPlan, Module, ReorderAccess, SectionDataAccess};
 use crate::{
     LinkerError, Result,
     aligned_bytes::ByteRepr,
-    linker::{
-        layout::{ArenaId, SectionId, SectionMetadata, SectionPlacement},
-        plan::ModuleId,
-    },
+    linker::layout::{ArenaId, SectionId, SectionMetadata, SectionPlacement},
     relocation::RelocationArch,
 };
 use core::marker::PhantomData;
@@ -39,14 +36,16 @@ where
 {
     /// Returns this section's owner module through `plan`.
     #[inline]
-    pub fn owner<K, Arch>(self, plan: &LinkPassPlan<'scope, K, S, Arch>) -> ModuleId
+    pub fn owner<K, Arch>(self, plan: &LinkPassPlan<'scope, K, S, Arch>) -> Module<'scope, S>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
     {
-        plan.plan
+        let owner = plan
+            .plan
             .section_owner(self.id)
-            .expect("checked section handle should have an owner")
+            .expect("checked section handle should have an owner");
+        Module::new(owner)
     }
 
     /// Returns this section's metadata through `plan`.

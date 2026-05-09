@@ -392,7 +392,11 @@ pub(crate) struct SectionArena {
 
 impl SectionArena {
     #[inline]
-    pub(crate) fn insert(&mut self, owner: ModuleId, metadata: SectionMetadata) -> SectionId {
+    pub(in crate::linker) fn insert(
+        &mut self,
+        owner: ModuleId,
+        metadata: SectionMetadata,
+    ) -> SectionId {
         self.sections.push(SectionRecord::new(owner, metadata))
     }
 
@@ -404,7 +408,7 @@ impl SectionArena {
 
     /// Returns the owner module of one section.
     #[inline]
-    pub(crate) fn owner(&self, id: SectionId) -> Option<ModuleId> {
+    pub(in crate::linker) fn owner(&self, id: SectionId) -> Option<ModuleId> {
         self.sections.get(id).map(SectionRecord::owner)
     }
 
@@ -630,7 +634,7 @@ impl ModuleLayout {
     }
 
     /// Builds a section-granularity layout seed from a scanned module.
-    pub(crate) fn from_scanned<L: ElfLayout>(
+    pub(in crate::linker) fn from_scanned<L: ElfLayout>(
         owner: ModuleId,
         module: &ScannedDynamic<L>,
         arena: &mut SectionArena,

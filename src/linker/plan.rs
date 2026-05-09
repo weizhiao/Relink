@@ -13,7 +13,7 @@ use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
 /// A stable id for one planned module stored inside a [`LinkPlan`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ModuleId(usize);
+pub(in crate::linker) struct ModuleId(usize);
 entity_ref!(ModuleId);
 
 pub struct PlannedModule<K, Arch: RelocationArch> {
@@ -187,13 +187,13 @@ where
 
     /// Returns the canonical root module id of the plan.
     #[inline]
-    pub(crate) const fn root_module(&self) -> ModuleId {
+    pub(in crate::linker) const fn root_module(&self) -> ModuleId {
         self.root
     }
 
     /// Returns the breadth-first module ids discovered from the root.
     #[inline]
-    pub(crate) fn group_order(&self) -> &[ModuleId] {
+    pub(in crate::linker) fn group_order(&self) -> &[ModuleId] {
         &self.group_order
     }
 
@@ -207,7 +207,7 @@ where
             .filter(move |module_id| self.materialization(*module_id) == Some(mode))
     }
 
-    pub(crate) fn try_for_each_module(
+    pub(in crate::linker) fn try_for_each_module(
         &mut self,
         mut f: impl FnMut(&mut Self, ModuleId) -> Result<()>,
     ) -> Result<()> {
@@ -249,13 +249,6 @@ where
         self.entries.get_mut(id)
     }
 
-    #[inline]
-    pub(in crate::linker) fn entries(
-        &self,
-    ) -> impl Iterator<Item = (ModuleId, &PlannedModule<K, Arch>)> {
-        self.entries.iter()
-    }
-
     pub(crate) fn placement(&self, section: SectionId) -> Option<SectionPlacement> {
         self.memory_layout.placement(section)
     }
@@ -274,19 +267,19 @@ where
 
     /// Returns one module's layout view by stable module id.
     #[inline]
-    pub(crate) fn module_layout(&self, id: ModuleId) -> &ModuleLayout {
+    pub(in crate::linker) fn module_layout(&self, id: ModuleId) -> &ModuleLayout {
         self.memory_layout.module(id)
     }
 
     /// Returns the owning module id for one stable section id.
     #[inline]
-    pub(crate) fn section_owner(&self, section: SectionId) -> Option<ModuleId> {
+    pub(in crate::linker) fn section_owner(&self, section: SectionId) -> Option<ModuleId> {
         self.memory_layout.owner(section)
     }
 
     /// Returns the stable section id for one scanned section inside one module.
     #[inline]
-    pub(crate) fn module_section_id(
+    pub(in crate::linker) fn module_section_id(
         &self,
         module_id: ModuleId,
         id: impl Into<ScannedSectionId>,
@@ -301,18 +294,18 @@ where
     }
 
     #[inline]
-    pub(crate) fn module_capability(&self, id: ModuleId) -> Option<ModuleCapability> {
+    pub(in crate::linker) fn module_capability(&self, id: ModuleId) -> Option<ModuleCapability> {
         self.get(id).map(|entry| entry.module().capability())
     }
 
     #[inline]
-    pub(crate) fn materialization(&self, id: ModuleId) -> Option<Materialization> {
+    pub(in crate::linker) fn materialization(&self, id: ModuleId) -> Option<Materialization> {
         self.memory_layout.materialization(id)
     }
 
     /// Selects the materialization mode for one module.
     #[inline]
-    pub(crate) fn set_materialization(
+    pub(in crate::linker) fn set_materialization(
         &mut self,
         id: ModuleId,
         mode: Materialization,

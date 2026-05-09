@@ -1,20 +1,20 @@
 //! Link-plan transformation passes.
 
 use super::{
-    Arena, ArenaId, ArenaUsage, Materialization, ModuleLayout, SectionId,
+    Arena, ArenaId, ArenaUsage, SectionId,
     layout::{DataAccess, SectionDataAccessRef},
-    plan::{LinkPlan, ModuleId, PlannedModule},
+    plan::{LinkPlan, ModuleId},
 };
 use crate::{
-    LinkerError, Result,
-    aligned_bytes::ByteRepr,
-    image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
+    LinkerError, Result, aligned_bytes::ByteRepr, image::ModuleCapability,
     relocation::RelocationArch,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::marker::PhantomData;
 
+mod module;
 mod section;
+pub use module::Module;
 pub use section::Section;
 
 /// The minimum module capability required by one planning pass.
@@ -129,21 +129,21 @@ where
             .is_some_and(|id| self.accepts_module(id))
     }
 
+    #[inline]
+    fn checked_module(&self, id: ModuleId) -> Option<Module<'a, S>> {
+        self.accepts_module(id).then(|| Module::new(id))
+    }
+
     /// Returns the canonical root key of the underlying plan.
     #[inline]
     pub fn root_key(&self) -> &K {
         self.plan.root_key()
     }
 
-    /// Returns the canonical root module id of the underlying plan.
+    /// Returns the canonical root module when it is visible through this pass scope.
     #[inline]
-    pub fn root(&self) -> ModuleId {
-        self.plan.root_module()
-    }
-
-    /// Iterates over all module ids in discovery order.
-    pub fn group_order(&self) -> impl Iterator<Item = ModuleId> + '_ {
-        self.plan.group_order().iter().copied()
+    pub fn root(&self) -> Option<Module<'a, S>> {
+        self.checked_module(self.plan.root_module())
     }
 
     /// Returns whether the underlying plan contains `key`.
@@ -152,66 +152,19 @@ where
         self.plan.contains_key(key)
     }
 
-    /// Returns the stable module id for `key`.
+    /// Returns one planned module by canonical key, when visible through this pass scope.
     #[inline]
-    pub fn module_id(&self, key: &K) -> Option<ModuleId> {
-        self.plan.module_id(key)
+    pub fn module(&self, key: &K) -> Option<Module<'a, S>> {
+        self.checked_module(self.plan.module_id(key)?)
     }
 
-    /// Returns the canonical key for `id`.
-    #[inline]
-    pub fn module_key(&self, id: ModuleId) -> Option<&K> {
-        self.plan.module_key(id)
-    }
-
-    /// Returns the scanned metadata for `id`.
-    #[inline]
-    pub fn get(&self, id: ModuleId) -> Option<&PlannedModule<K, Arch>> {
-        self.plan.get(id)
-    }
-
-    /// Returns the scanned metadata for `id` mutably.
-    #[inline]
-    pub fn get_mut(&mut self, id: ModuleId) -> Option<&mut PlannedModule<K, Arch>> {
-        self.plan.get_mut(id)
-    }
-
-    /// Iterates over every planned module id, key, and scanned module.
-    pub fn entries(&self) -> impl Iterator<Item = (ModuleId, &K, &ScannedDynamic<Arch::Layout>)> {
+    /// Iterates over modules visible through this pass scope in discovery order.
+    pub fn modules(&self) -> impl Iterator<Item = Module<'a, S>> + '_ {
         self.plan
-            .entries()
-            .map(|(id, entry)| (id, entry.key(), entry.module()))
-    }
-
-    /// Returns direct dependency module ids recorded for `id`.
-    #[inline]
-    pub fn direct_deps(&self, id: ModuleId) -> Option<impl Iterator<Item = ModuleId> + '_> {
-        Some(self.plan.get(id)?.direct_deps().iter().copied())
-    }
-
-    /// Returns the planning capability of `id`.
-    #[inline]
-    pub fn capability(&self, id: ModuleId) -> Option<ModuleCapability> {
-        self.plan.module_capability(id)
-    }
-
-    /// Returns the configured materialization mode of `id`.
-    #[inline]
-    pub fn materialization(&self, id: ModuleId) -> Option<Materialization> {
-        self.plan.materialization(id)
-    }
-
-    /// Selects the materialization mode for `id`, when the module is
-    /// visible through this pass scope.
-    #[inline]
-    pub fn set_materialization(
-        &mut self,
-        id: ModuleId,
-        mode: Materialization,
-    ) -> Option<Materialization> {
-        self.accepts_module(id)
-            .then(|| self.plan.set_materialization(id, mode))
-            .flatten()
+            .group_order()
+            .iter()
+            .copied()
+            .filter_map(move |id| self.checked_module(id))
     }
 }
 
@@ -221,31 +174,6 @@ where
     S: SectionDataAccess,
     Arch: RelocationArch,
 {
-    /// Returns the planned layout for one visible module.
-    #[inline]
-    pub fn layout(&self, id: ModuleId) -> Option<&ModuleLayout> {
-        self.accepts_module(id).then(|| self.plan.module_layout(id))
-    }
-
-    /// Iterates over module layouts visible through this pass scope.
-    pub fn layouts(&self) -> impl Iterator<Item = (ModuleId, &ModuleLayout)> + '_ {
-        self.plan
-            .memory_layout()
-            .modules()
-            .filter(move |(id, _)| self.accepts_module(*id))
-    }
-
-    /// Returns one checked section handle for a scanned section inside one visible module.
-    #[inline]
-    pub fn section(
-        &self,
-        module_id: ModuleId,
-        id: impl Into<ScannedSectionId>,
-    ) -> Option<Section<'a, S>> {
-        let section = self.plan.module_section_id(module_id, id)?;
-        self.checked_section(section)
-    }
-
     #[inline]
     fn checked_section(&self, id: SectionId) -> Option<Section<'a, S>> {
         self.accepts_section(id).then(|| Section::new(id))

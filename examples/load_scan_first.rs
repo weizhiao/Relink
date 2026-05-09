@@ -46,12 +46,9 @@ struct ConfigureRootSectionRegions;
 
 impl LinkPass<&'static str, ReorderPass> for ConfigureRootSectionRegions {
     fn run(&mut self, plan: &mut LinkPassPlan<'_, &'static str, ReorderPass>) -> Result<()> {
-        let root = plan.root();
-        assert_eq!(
-            plan.capability(root),
-            Some(ModuleCapability::SectionReorderable),
-        );
-        plan.set_materialization(root, Materialization::SectionRegions);
+        let root = plan.root().expect("root module should be visible");
+        assert_eq!(root.capability(plan), ModuleCapability::SectionReorderable,);
+        root.set_materialization(plan, Materialization::SectionRegions);
         Ok(())
     }
 }

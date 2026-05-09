@@ -76,12 +76,6 @@ impl MemoryLayoutPlan {
             .expect("layout plan referenced missing module layout")
     }
 
-    /// Iterates over all planned module layouts.
-    #[inline]
-    pub(in crate::linker) fn modules(&self) -> impl Iterator<Item = (ModuleId, &ModuleLayout)> {
-        self.modules.iter()
-    }
-
     /// Returns the currently configured materialization mode for one module.
     #[inline]
     pub(in crate::linker) fn materialization(

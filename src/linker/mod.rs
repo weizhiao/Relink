@@ -29,10 +29,9 @@ pub use layout::{
 pub use linker::Linker;
 pub(crate) use mapped::GotPltTarget;
 pub use passes::{
-    AnyPass, DataPass, LinkPass, LinkPassPlan, LinkPipeline, PassScope, PassScopeMode,
+    AnyPass, DataPass, LinkPass, LinkPassPlan, LinkPipeline, Module, PassScope, PassScopeMode,
     ReorderAccess, ReorderPass, Section, SectionDataAccess,
 };
-pub use plan::ModuleId;
 pub use request::{
     DefaultRelocationPlanner, DependencyOwner, DependencyRequest, LoadObserver, RelocationInputs,
     RelocationPlanner, RelocationRequest, StagedDynamic, VisibleModules,

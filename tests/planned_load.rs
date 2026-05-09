@@ -462,17 +462,15 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
     };
     let configure =
         |plan: &mut LinkPassPlan<'_, &'static str, DataPass>| -> elf_loader::Result<()> {
-            let root = plan.root();
-            let data_section = plan
-                .get(root)
-                .expect("missing scanned root module")
-                .module()
+            let root = plan.root().expect("root module should be visible");
+            let data_section = root
+                .scanned(plan)
                 .alloc_sections()
                 .find(|section| section.name() == ".data")
                 .expect("generated test dylib should contain a .data section")
                 .id();
-            let layout_section = plan
-                .section(root, data_section)
+            let layout_section = root
+                .section(plan, data_section)
                 .expect("missing planned .data section");
             layout_section
                 .data_mut(plan)?
@@ -749,22 +747,20 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
     };
     let configure =
         |plan: &mut LinkPassPlan<'_, &'static str, ReorderPass>| -> elf_loader::Result<()> {
-            let root = plan.root();
+            let root = plan.root().expect("root module should be visible");
             assert!(
-                plan.capability(root) == Some(ModuleCapability::SectionReorderable),
+                root.capability(plan) == ModuleCapability::SectionReorderable,
                 "generated test dylib should expose retained relocation repair inputs",
             );
 
-            let data_section = plan
-                .get(root)
-                .expect("missing scanned root module")
-                .module()
+            let data_section = root
+                .scanned(plan)
                 .alloc_sections()
                 .find(|section| section.name() == ".data")
                 .expect("generated test dylib should contain a .data section")
                 .id();
-            let layout_section = plan
-                .section(root, data_section)
+            let layout_section = root
+                .section(plan, data_section)
                 .expect("missing planned .data section");
             {
                 layout_section
@@ -830,22 +826,20 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
     let mut observed_size = None;
     let configure =
         |plan: &mut LinkPassPlan<'_, &'static str, ReorderPass>| -> elf_loader::Result<()> {
-            let root = plan.root();
+            let root = plan.root().expect("root module should be visible");
             assert!(
-                plan.capability(root) == Some(ModuleCapability::SectionReorderable),
+                root.capability(plan) == ModuleCapability::SectionReorderable,
                 "generated test dylib should expose retained relocation repair inputs",
             );
 
-            let data_section = plan
-                .get(root)
-                .expect("missing scanned root module")
-                .module()
+            let data_section = root
+                .scanned(plan)
                 .alloc_sections()
                 .find(|section| section.name() == ".data")
                 .expect("generated test dylib should contain a .data section")
                 .id();
-            let layout_section = plan
-                .section(root, data_section)
+            let layout_section = root
+                .section(plan, data_section)
                 .expect("missing planned .data section");
             layout_section.resize(plan, 8)?;
             assert_eq!(layout_section.metadata(plan).size(), 8);
@@ -918,8 +912,8 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
     };
     let mut observed_capability = None;
     let configure = |plan: &mut LinkPassPlan<'_, &'static str>| -> elf_loader::Result<()> {
-        let root = plan.root();
-        observed_capability = plan.capability(root);
+        let root = plan.root().expect("root module should be visible");
+        observed_capability = Some(root.capability(plan));
         Ok(())
     };
 
@@ -966,13 +960,10 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
     let mut observed_capability = None;
     let mut saw_missing_section_headers = false;
     let configure = |plan: &mut LinkPassPlan<'_, &'static str>| -> elf_loader::Result<()> {
-        let root = plan.root();
-        observed_capability = plan.capability(root);
-        saw_missing_section_headers = plan
-            .get(root)
-            .and_then(|module| module.module().section_headers())
-            .is_none();
-        plan.set_materialization(root, Materialization::WholeDsoRegion);
+        let root = plan.root().expect("root module should be visible");
+        observed_capability = Some(root.capability(plan));
+        saw_missing_section_headers = root.scanned(plan).section_headers().is_none();
+        root.set_materialization(plan, Materialization::WholeDsoRegion);
         Ok(())
     };
 
@@ -1018,8 +1009,8 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
     };
     let mut observed_capability = None;
     let configure = |plan: &mut LinkPassPlan<'_, &'static str>| -> elf_loader::Result<()> {
-        let root = plan.root();
-        observed_capability = plan.capability(root);
+        let root = plan.root().expect("root module should be visible");
+        observed_capability = Some(root.capability(plan));
         Ok(())
     };
 
@@ -1052,26 +1043,24 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
     let mut observed_materialization = None;
     let configure =
         |plan: &mut LinkPassPlan<'_, &'static str, DataPass>| -> elf_loader::Result<()> {
-            let root = plan.root();
-            observed_capability = plan.capability(root);
-            observed_materialization = plan.materialization(root);
+            let root = plan.root().expect("root module should be visible");
+            observed_capability = Some(root.capability(plan));
+            observed_materialization = root.materialization(plan);
 
-            let data_section = plan
-                .get(root)
-                .expect("missing scanned root module")
-                .module()
+            let data_section = root
+                .scanned(plan)
                 .alloc_sections()
                 .find(|section| section.name() == ".data")
                 .expect("generated test dylib should contain a .data section")
                 .id();
-            let layout_section = plan
-                .section(root, data_section)
+            let layout_section = root
+                .section(plan, data_section)
                 .expect("missing planned .data section");
             layout_section
                 .data_mut(plan)?
                 .copy_from_slice(&[9, 8, 7, 6]);
-            plan.set_materialization(root, Materialization::WholeDsoRegion);
-            observed_materialization = plan.materialization(root);
+            root.set_materialization(plan, Materialization::WholeDsoRegion);
+            observed_materialization = root.materialization(plan);
             Ok(())
         };
 
@@ -1125,14 +1114,14 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
     let mut observed_materialization = None;
     let configure =
         |plan: &mut LinkPassPlan<'_, &'static str, DataPass>| -> elf_loader::Result<()> {
-            let root = plan.root();
-            observed_capability = plan.capability(root);
+            let root = plan.root().expect("root module should be visible");
+            observed_capability = Some(root.capability(plan));
 
             assert_eq!(
-                plan.set_materialization(root, Materialization::SectionRegions),
+                root.set_materialization(plan, Materialization::SectionRegions),
                 None,
             );
-            observed_materialization = plan.materialization(root);
+            observed_materialization = root.materialization(plan);
             Ok(())
         };
 
