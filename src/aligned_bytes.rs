@@ -1,12 +1,9 @@
 use alloc::{boxed::Box, vec::Vec};
-use core::{
-    mem::{align_of, size_of},
-    ptr::NonNull,
-};
+use core::mem::size_of;
 
 /// Owned bytes backed by word-aligned storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AlignedBytes {
+pub(crate) struct AlignedBytes {
     words: Vec<u64>,
     len: usize,
 }
@@ -18,7 +15,7 @@ impl AlignedBytes {
         byte_len.checked_add(word_size - 1).map(|v| v / word_size)
     }
 
-    pub fn with_len(byte_len: usize) -> Option<Self> {
+    pub(crate) fn with_len(byte_len: usize) -> Option<Self> {
         let words = Self::required_words(byte_len)?;
         let mut storage = Vec::new();
         storage.resize(words, 0);
@@ -29,16 +26,11 @@ impl AlignedBytes {
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.len
     }
 
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn set_len(&mut self, byte_len: usize) -> Option<()> {
+    pub(crate) fn set_len(&mut self, byte_len: usize) -> Option<()> {
         let words = Self::required_words(byte_len)?;
         if words > self.words.len() {
             self.words.resize(words, 0);
@@ -48,12 +40,12 @@ impl AlignedBytes {
     }
 
     #[inline]
-    pub fn as_bytes(&self) -> &[u8] {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
         unsafe { core::slice::from_raw_parts(self.words.as_ptr().cast::<u8>(), self.len) }
     }
 
     #[inline]
-    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
+    pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8] {
         unsafe { core::slice::from_raw_parts_mut(self.words.as_mut_ptr().cast::<u8>(), self.len) }
     }
 
@@ -67,48 +59,30 @@ impl AlignedBytes {
 
     #[inline]
     pub(crate) fn try_cast_slice<T: ByteRepr>(&self) -> Option<&[T]> {
-        let bytes = self.as_ref();
-        let elem_size = size_of::<T>();
-        if elem_size == 0 {
+        if size_of::<T>() == 0 {
             return None;
         }
-        if bytes.is_empty() {
-            return Some(unsafe {
-                core::slice::from_raw_parts(NonNull::<T>::dangling().as_ptr(), 0)
-            });
+
+        let (prefix, values, suffix) = unsafe { self.as_bytes().align_to::<T>() };
+        if prefix.is_empty() && suffix.is_empty() {
+            Some(values)
+        } else {
+            None
         }
-        if !bytes.len().is_multiple_of(elem_size) {
-            return None;
-        }
-        if !(bytes.as_ptr() as usize).is_multiple_of(align_of::<T>()) {
-            return None;
-        }
-        Some(unsafe {
-            core::slice::from_raw_parts(bytes.as_ptr().cast::<T>(), bytes.len() / elem_size)
-        })
     }
 
     #[inline]
     pub(crate) fn try_cast_slice_mut<T: ByteRepr>(&mut self) -> Option<&mut [T]> {
-        let bytes = self.as_mut();
-        let elem_size = size_of::<T>();
-        if elem_size == 0 {
+        if size_of::<T>() == 0 {
             return None;
         }
-        if bytes.is_empty() {
-            return Some(unsafe {
-                core::slice::from_raw_parts_mut(NonNull::<T>::dangling().as_ptr(), 0)
-            });
+
+        let (prefix, values, suffix) = unsafe { self.as_bytes_mut().align_to_mut::<T>() };
+        if prefix.is_empty() && suffix.is_empty() {
+            Some(values)
+        } else {
+            None
         }
-        if !bytes.len().is_multiple_of(elem_size) {
-            return None;
-        }
-        if !(bytes.as_ptr() as usize).is_multiple_of(align_of::<T>()) {
-            return None;
-        }
-        Some(unsafe {
-            core::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast::<T>(), bytes.len() / elem_size)
-        })
     }
 }
 
@@ -153,7 +127,8 @@ impl<const N: usize> From<[u8; N]> for AlignedBytes {
 /// Implementors must be plain data:
 /// - every bit pattern is a valid value
 /// - the type has no drop glue
-/// - its in-memory representation matches its byte layout
+/// - its in-memory representation matches its byte layout, with no padding
+///   bytes that may be uninitialized
 pub(crate) unsafe trait ByteRepr: Sized {}
 
 unsafe impl ByteRepr for u8 {}

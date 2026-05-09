@@ -20,19 +20,21 @@ pub enum DataAccess {
 }
 
 pub enum SectionDataAccessRef<'a> {
-    Read(&'a AlignedBytes),
-    Write(&'a mut AlignedBytes),
+    Read(&'a [u8]),
+    Write(&'a mut [u8]),
 }
 
 impl<'a> SectionDataAccessRef<'a> {
-    pub fn into_read(self) -> &'a AlignedBytes {
+    #[inline]
+    pub fn into_read(self) -> &'a [u8] {
         match self {
             Self::Read(data) => data,
             Self::Write(_) => panic!("section data access should be read-only"),
         }
     }
 
-    pub fn into_write(self) -> &'a mut AlignedBytes {
+    #[inline]
+    pub fn into_write(self) -> &'a mut [u8] {
         match self {
             Self::Write(data) => data,
             Self::Read(_) => panic!("section data access should be writable"),
@@ -473,11 +475,13 @@ impl LayoutSectionArena {
             match accesses[index].1 {
                 DataAccess::Read => SectionDataAccessRef::Read(
                     unsafe { (&*record).data() }
-                        .expect("section data access should be materialized"),
+                        .expect("section data access should be materialized")
+                        .as_bytes(),
                 ),
                 DataAccess::Write => SectionDataAccessRef::Write(
                     unsafe { (&mut *record).data_mut() }
-                        .expect("section data access should be materialized"),
+                        .expect("section data access should be materialized")
+                        .as_bytes_mut(),
                 ),
             }
         });

@@ -258,38 +258,6 @@ where
             .filter(move |(section, _)| self.accepts_section(*section))
     }
 
-    /// Returns the visible owner module of `section`.
-    #[inline]
-    pub fn owner(&self, section: SectionId) -> Option<ModuleId> {
-        let owner = self.plan.section_owner(section)?;
-        self.accepts_module(owner).then_some(owner)
-    }
-
-    /// Returns one metadata record for a section owned by a visible module.
-    #[inline]
-    pub fn metadata(&self, section: SectionId) -> Option<&SectionMetadata> {
-        self.visible_section(section)
-            .map(|section| self.plan.section_metadata(section))
-    }
-
-    /// Returns one section's data, materializing it on demand when its owner is
-    /// visible through this pass scope.
-    #[inline]
-    pub fn data(&mut self, section: SectionId) -> Result<Option<&AlignedBytes>> {
-        self.visible_section(section)
-            .map(|section| self.plan.section_data(section))
-            .transpose()
-    }
-
-    /// Returns mutable section data, materializing it on demand when its owner
-    /// is visible through this pass scope.
-    #[inline]
-    pub fn data_mut(&mut self, section: SectionId) -> Result<Option<&mut AlignedBytes>> {
-        self.visible_section(section)
-            .map(|section| self.plan.section_data_mut(section))
-            .transpose()
-    }
-
     /// Iterates visible entries from one section without exposing the layout
     /// internals used to materialize the section.
     #[inline]
@@ -393,33 +361,219 @@ where
     pub fn usage(&self, arena: ArenaId) -> ArenaUsage {
         self.plan.memory_layout().usage(arena)
     }
+}
 
-    /// Returns the arena placement for one visible section.
+impl SectionId {
+    /// Returns this section's visible owner module through `plan`.
     #[inline]
-    pub fn placement(&self, section: SectionId) -> Option<SectionPlacement> {
-        self.visible_section(section)
-            .and_then(|section| self.plan.placement(section))
+    pub fn owner<K, S, Arch>(self, plan: &LinkPassPlan<'_, K, S, Arch>) -> Option<ModuleId>
+    where
+        K: Clone + Ord,
+        S: SectionDataAccess,
+        Arch: RelocationArch,
+    {
+        let owner = plan.plan.section_owner(self)?;
+        plan.accepts_module(owner).then_some(owner)
     }
 
-    /// Assigns a visible section to an arena.
+    /// Returns this section's visible metadata through `plan`.
     #[inline]
-    pub fn assign(&mut self, section: SectionId, arena: ArenaId, offset: usize) -> bool {
-        self.visible_section(section)
-            .is_some_and(|section| self.plan.memory_layout_mut().assign(section, arena, offset))
+    pub fn metadata<'plan, K, S, Arch>(
+        self,
+        plan: &'plan LinkPassPlan<'_, K, S, Arch>,
+    ) -> Option<&'plan SectionMetadata>
+    where
+        K: Clone + Ord,
+        S: SectionDataAccess,
+        Arch: RelocationArch,
+    {
+        plan.visible_section(self)
+            .map(|section| plan.plan.section_metadata(section))
     }
 
-    /// Assigns a visible section to an arena at the next aligned offset.
     #[inline]
-    pub fn assign_next(&mut self, section: SectionId, arena: ArenaId) -> bool {
-        self.visible_section(section)
-            .is_some_and(|section| self.plan.memory_layout_mut().assign_next(section, arena))
+    fn aligned_data<'plan, K, S, Arch>(
+        self,
+        plan: &'plan mut LinkPassPlan<'_, K, S, Arch>,
+    ) -> Result<Option<&'plan AlignedBytes>>
+    where
+        K: Clone + Ord,
+        S: SectionDataAccess,
+        Arch: RelocationArch,
+    {
+        plan.visible_section(self)
+            .map(|section| plan.plan.section_data(section))
+            .transpose()
     }
 
-    /// Clears the arena assignment for one visible section.
     #[inline]
-    pub fn clear_section(&mut self, section: SectionId) -> Option<SectionPlacement> {
-        self.visible_section(section)
-            .and_then(|section| self.plan.memory_layout_mut().clear_section(section))
+    fn aligned_data_mut<'plan, K, S, Arch>(
+        self,
+        plan: &'plan mut LinkPassPlan<'_, K, S, Arch>,
+    ) -> Result<Option<&'plan mut AlignedBytes>>
+    where
+        K: Clone + Ord,
+        S: SectionDataAccess,
+        Arch: RelocationArch,
+    {
+        plan.visible_section(self)
+            .map(|section| plan.plan.section_data_mut(section))
+            .transpose()
+    }
+
+    /// Returns this section's data bytes through `plan`, materializing them on demand.
+    #[inline]
+    pub fn data<'plan, K, S, Arch>(
+        self,
+        plan: &'plan mut LinkPassPlan<'_, K, S, Arch>,
+    ) -> Result<Option<&'plan [u8]>>
+    where
+        K: Clone + Ord,
+        S: SectionDataAccess,
+        Arch: RelocationArch,
+    {
+        let Some(data) = self.aligned_data(plan)? else {
+            return Ok(None);
+        };
+        Ok(Some(data.as_bytes()))
+    }
+
+    /// Returns this section's mutable data bytes through `plan`, materializing them on demand.
+    #[inline]
+    pub fn data_mut<'plan, K, S, Arch>(
+        self,
+        plan: &'plan mut LinkPassPlan<'_, K, S, Arch>,
+    ) -> Result<Option<&'plan mut [u8]>>
+    where
+        K: Clone + Ord,
+        S: SectionDataAccess,
+        Arch: RelocationArch,
+    {
+        let Some(data) = self.aligned_data_mut(plan)? else {
+            return Ok(None);
+        };
+        Ok(Some(data.as_bytes_mut()))
+    }
+
+    /// Returns this section's data as typed entries through `plan`.
+    #[inline]
+    #[allow(private_bounds)]
+    pub fn entries<'plan, K, S, Arch, T>(
+        self,
+        plan: &'plan mut LinkPassPlan<'_, K, S, Arch>,
+    ) -> Result<Option<&'plan [T]>>
+    where
+        K: Clone + Ord,
+        S: SectionDataAccess,
+        Arch: RelocationArch,
+        T: ByteRepr,
+    {
+        let Some(data) = self.aligned_data(plan)? else {
+            return Ok(None);
+        };
+        section_data_entries::<T>(data).map(Some)
+    }
+
+    /// Returns this section's mutable data as typed entries through `plan`.
+    #[inline]
+    #[allow(private_bounds)]
+    pub fn entries_mut<'plan, K, S, Arch, T>(
+        self,
+        plan: &'plan mut LinkPassPlan<'_, K, S, Arch>,
+    ) -> Result<Option<&'plan mut [T]>>
+    where
+        K: Clone + Ord,
+        S: SectionDataAccess,
+        Arch: RelocationArch,
+        T: ByteRepr,
+    {
+        let Some(data) = self.aligned_data_mut(plan)? else {
+            return Ok(None);
+        };
+        section_data_entries_mut::<T>(data).map(Some)
+    }
+
+    /// Sets this section data's logical byte length through `plan`.
+    #[inline]
+    pub fn set_data_len<K, S, Arch>(
+        self,
+        plan: &mut LinkPassPlan<'_, K, S, Arch>,
+        byte_len: usize,
+    ) -> Result<Option<()>>
+    where
+        K: Clone + Ord,
+        S: SectionDataAccess,
+        Arch: RelocationArch,
+    {
+        let Some(data) = self.aligned_data_mut(plan)? else {
+            return Ok(None);
+        };
+        data.set_len(byte_len)
+            .ok_or_else(|| LinkerError::section_data("section data length overflow"))?;
+        Ok(Some(()))
+    }
+
+    /// Returns this section's arena placement through `plan`.
+    #[inline]
+    pub fn placement<K, S, Arch>(
+        self,
+        plan: &LinkPassPlan<'_, K, S, Arch>,
+    ) -> Option<SectionPlacement>
+    where
+        K: Clone + Ord,
+        S: ReorderAccess,
+        Arch: RelocationArch,
+    {
+        plan.visible_section(self)
+            .and_then(|section| plan.plan.placement(section))
+    }
+
+    /// Assigns this section to an arena through `plan`.
+    #[inline]
+    pub fn assign<K, S, Arch>(
+        self,
+        plan: &mut LinkPassPlan<'_, K, S, Arch>,
+        arena: ArenaId,
+        offset: usize,
+    ) -> bool
+    where
+        K: Clone + Ord,
+        S: ReorderAccess,
+        Arch: RelocationArch,
+    {
+        plan.visible_section(self)
+            .is_some_and(|section| plan.plan.memory_layout_mut().assign(section, arena, offset))
+    }
+
+    /// Assigns this section to the next aligned arena offset through `plan`.
+    #[inline]
+    pub fn assign_next<K, S, Arch>(
+        self,
+        plan: &mut LinkPassPlan<'_, K, S, Arch>,
+        arena: ArenaId,
+    ) -> bool
+    where
+        K: Clone + Ord,
+        S: ReorderAccess,
+        Arch: RelocationArch,
+    {
+        plan.visible_section(self)
+            .is_some_and(|section| plan.plan.memory_layout_mut().assign_next(section, arena))
+    }
+
+    /// Clears this section's arena assignment through `plan`.
+    #[inline]
+    pub fn clear_placement<K, S, Arch>(
+        self,
+        plan: &mut LinkPassPlan<'_, K, S, Arch>,
+    ) -> Option<SectionPlacement>
+    where
+        K: Clone + Ord,
+        S: ReorderAccess,
+        Arch: RelocationArch,
+    {
+        plan.visible_section(self)
+            .and_then(|section| plan.plan.memory_layout_mut().clear_section(section))
     }
 }
 
@@ -489,6 +643,12 @@ where
 
 fn section_data_entries<T: ByteRepr>(data: &AlignedBytes) -> Result<&[T]> {
     data.try_cast_slice::<T>().ok_or_else(|| {
+        LinkerError::section_data("section data bytes do not match requested entry type").into()
+    })
+}
+
+fn section_data_entries_mut<T: ByteRepr>(data: &mut AlignedBytes) -> Result<&mut [T]> {
+    data.try_cast_slice_mut::<T>().ok_or_else(|| {
         LinkerError::section_data("section data bytes do not match requested entry type").into()
     })
 }

@@ -474,9 +474,9 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
             let layout_section = plan
                 .section(root, data_section)
                 .expect("missing planned .data section");
-            plan.data_mut(layout_section)?
+            layout_section
+                .data_mut(plan)?
                 .expect("missing materialized .data bytes")
-                .as_bytes_mut()
                 .copy_from_slice(&[9, 8, 7, 6]);
             Ok(())
         };
@@ -768,9 +768,9 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
                 .section(root, data_section)
                 .expect("missing planned .data section");
             {
-                plan.data_mut(layout_section)?
+                layout_section
+                    .data_mut(plan)?
                     .expect("missing materialized .data bytes")
-                    .as_bytes_mut()
                     .copy_from_slice(&[9, 8, 7, 6]);
                 let arena = plan.create_arena(Arena::new(
                     PageSize::Base,
@@ -778,7 +778,7 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
                     ArenaSharing::Private,
                 ));
                 assert!(
-                    plan.assign(layout_section, arena, 0),
+                    layout_section.assign(plan, arena, 0),
                     "failed to assign .data into arena",
                 );
             }
@@ -848,9 +848,9 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
             let layout_section = plan
                 .section(root, data_section)
                 .expect("missing planned .data section");
-            plan.data_mut(layout_section)?
+            layout_section
+                .data_mut(plan)?
                 .expect("missing materialized .data bytes")
-                .as_bytes_mut()
                 .copy_from_slice(&[4, 3, 2, 1]);
 
             let arena = plan.create_arena(Arena::new(
@@ -859,11 +859,11 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
                 ArenaSharing::Private,
             ));
             assert!(
-                plan.assign_next(layout_section, arena),
+                layout_section.assign_next(plan, arena),
                 "failed to assign .data into arena at the next aligned offset",
             );
-            observed_offset = plan
-                .placement(layout_section)
+            observed_offset = layout_section
+                .placement(plan)
                 .map(|placement| placement.offset());
             Ok(())
         };
@@ -1063,9 +1063,9 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
             let layout_section = plan
                 .section(root, data_section)
                 .expect("missing planned .data section");
-            plan.data_mut(layout_section)?
+            layout_section
+                .data_mut(plan)?
                 .expect("missing materialized .data bytes")
-                .as_bytes_mut()
                 .copy_from_slice(&[9, 8, 7, 6]);
             plan.set_materialization(root, Materialization::WholeDsoRegion);
             observed_materialization = plan.materialization(root);

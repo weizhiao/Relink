@@ -4,7 +4,7 @@ use crate::linker::{
     plan::{LinkPlan, ModuleId},
 };
 use crate::{
-    AlignedBytes, LinkerError, Result,
+    LinkerError, Result,
     aligned_bytes::ByteRepr,
     elf::{
         ElfDyn, ElfDynamicTag, ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfSymbol,
@@ -295,28 +295,14 @@ where
                 let relocation_data = relocation_data.into_read();
                 let symbol_data = symbol_data.into_read();
                 let target_data = target_data.into_write();
-                let entries = relocation_data
-                    .try_cast_slice::<ElfRelType<Arch>>()
-                    .ok_or_else(|| {
-                        LinkerError::metadata_rewrite(
-                            "retained relocation section bytes do not match relocation entries",
-                        )
-                    })?;
-                let symbols = symbol_data
-                    .try_cast_slice::<ElfSymbol<Arch::Layout>>()
-                    .ok_or_else(|| {
-                        LinkerError::metadata_rewrite(
-                            "retained relocation symbol table bytes do not match symbol entries",
-                        )
-                    })?;
-
-                let target_bytes = target_data.as_bytes_mut();
+                let entries = cast_section_bytes::<ElfRelType<Arch>>(relocation_data)?;
+                let symbols = cast_section_bytes::<ElfSymbol<Arch::Layout>>(symbol_data)?;
 
                 for entry in entries {
                     write_retained_relocation::<Arch>(
                         runtime,
                         target_section,
-                        target_bytes,
+                        target_data,
                         entry,
                         symbols,
                     )?;
@@ -361,7 +347,8 @@ where
                     },
                     |plan, index, value| {
                         let data = plan.section_data_mut(section)?;
-                        let symbols = cast_section_slice_mut::<ElfSymbol<Arch::Layout>>(data)?;
+                        let symbols =
+                            cast_section_bytes_mut::<ElfSymbol<Arch::Layout>>(data.as_bytes_mut())?;
                         let symbol = symbols
                             .get_mut(index)
                             .expect("symbol table entry index should remain valid");
@@ -408,7 +395,7 @@ where
                                 let relocation_data = relocation_data.into_write();
                                 let site_data = site_data.into_write();
                                 site.addend = Some(implicit_relocation_addend::<Arch>(
-                                    site_data.as_bytes(),
+                                    site_data,
                                     site.section_offset,
                                 )?);
                                 if entry_info.r_type == Arch::RELATIVE
@@ -435,7 +422,7 @@ where
                         site.addend = Some(runtime.remap_relocation_addend(site)?.1);
                     }
                     let data = plan.section_data_mut(section)?;
-                    rewrite_allocated_relocation_entry::<Arch>(data, index, site)?;
+                    rewrite_allocated_relocation_entry::<Arch>(data.as_bytes_mut(), index, site)?;
                     Ok(())
                 },
             )?;
@@ -451,7 +438,7 @@ where
         };
 
         let data = self.plan.section_data_mut(dynamic_section)?;
-        let dyns = cast_section_slice_mut::<ElfDyn<Arch::Layout>>(data)?;
+        let dyns = cast_section_bytes_mut::<ElfDyn<Arch::Layout>>(data.as_bytes_mut())?;
 
         for dyn_ in dyns.iter_mut() {
             let tag = dyn_.tag();
@@ -468,7 +455,7 @@ where
 }
 
 fn rewrite_allocated_relocation_entry<Arch>(
-    data: &mut AlignedBytes,
+    data: &mut [u8],
     index: usize,
     site: RelocationSite,
 ) -> Result<()>
@@ -476,7 +463,7 @@ where
     Arch: RelocationArch,
     ElfRelType<Arch>: ByteRepr,
 {
-    let entries = cast_section_slice_mut::<ElfRelType<Arch>>(data)?;
+    let entries = cast_section_bytes_mut::<ElfRelType<Arch>>(data)?;
     let rel = entries
         .get_mut(index)
         .expect("allocated relocation entry index should remain valid");
@@ -490,7 +477,7 @@ where
 }
 
 fn write_runtime_relocation_addend<Arch>(
-    data: &mut AlignedBytes,
+    data: &mut [u8],
     site: RelocationSite,
     addend: RuntimeOffset,
 ) -> Result<()>
@@ -504,7 +491,6 @@ where
             .checked_add(len)
             .expect("allocated relocation addend range should not overflow");
         let bytes = data
-            .as_bytes_mut()
             .get_mut(site.section_offset..end)
             .expect("allocated relocation addend should fit in its target section");
         match len {
@@ -556,10 +542,42 @@ where
     })
 }
 
-fn cast_section_slice_mut<T: ByteRepr>(data: &mut AlignedBytes) -> Result<&mut [T]> {
-    data.try_cast_slice_mut::<T>().ok_or_else(|| {
-        LinkerError::metadata_rewrite("section bytes do not match the requested type layout").into()
-    })
+fn cast_section_bytes<T: ByteRepr>(bytes: &[u8]) -> Result<&[T]> {
+    if size_of::<T>() == 0 {
+        return Err(LinkerError::metadata_rewrite(
+            "section bytes do not match the requested type layout",
+        )
+        .into());
+    }
+
+    let (prefix, values, suffix) = unsafe { bytes.align_to::<T>() };
+    if prefix.is_empty() && suffix.is_empty() {
+        Ok(values)
+    } else {
+        Err(
+            LinkerError::metadata_rewrite("section bytes do not match the requested type layout")
+                .into(),
+        )
+    }
+}
+
+fn cast_section_bytes_mut<T: ByteRepr>(bytes: &mut [u8]) -> Result<&mut [T]> {
+    if size_of::<T>() == 0 {
+        return Err(LinkerError::metadata_rewrite(
+            "section bytes do not match the requested type layout",
+        )
+        .into());
+    }
+
+    let (prefix, values, suffix) = unsafe { bytes.align_to_mut::<T>() };
+    if prefix.is_empty() && suffix.is_empty() {
+        Ok(values)
+    } else {
+        Err(
+            LinkerError::metadata_rewrite("section bytes do not match the requested type layout")
+                .into(),
+        )
+    }
 }
 
 fn write_retained_relocation<Arch>(

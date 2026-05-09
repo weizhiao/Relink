@@ -2,11 +2,9 @@
 
 use crate::{
     AlignedBytes, ParseDynamicError, ParsePhdrError, Result,
-    arch::ArchKind,
     elf::{
-        Elf32Layout, Elf64Layout, ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType,
-        ElfSectionFlags, ElfSectionIndex, ElfSectionType, ElfShdr, ElfStringTable, NativeElfLayout,
-        parse_dynamic_entries,
+        ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, ElfSectionFlags, ElfSectionIndex,
+        ElfSectionType, ElfShdr, ElfStringTable, NativeElfLayout, parse_dynamic_entries,
     },
     entity::entity_ref,
     input::{ElfReader, ElfReaderExt},
@@ -185,6 +183,7 @@ pub struct ScannedExec<L: ElfLayout = NativeElfLayout> {
     phdrs: Box<[ElfPhdr<L>]>,
     interp: Option<Box<[u8]>>,
     section_table: Option<SectionTable<L>>,
+    #[allow(dead_code)]
     reader: Box<dyn ElfReader + 'static>,
 }
 
@@ -259,38 +258,6 @@ pub struct ScannedSections<'a, L: ElfLayout = NativeElfLayout> {
     index: usize,
 }
 
-/// Layout-erased scanned dynamic image used by heterogeneous planning.
-pub enum AnyScannedDynamic {
-    X86_64(ScannedDynamic<Elf64Layout>),
-    AArch64(ScannedDynamic<Elf64Layout>),
-    RiscV64(ScannedDynamic<Elf64Layout>),
-    RiscV32(ScannedDynamic<Elf32Layout>),
-    LoongArch64(ScannedDynamic<Elf64Layout>),
-    X86(ScannedDynamic<Elf32Layout>),
-    Arm(ScannedDynamic<Elf32Layout>),
-}
-
-/// Layout-erased section metadata exposed by planned-load passes.
-#[derive(Clone, Copy)]
-pub struct AnyScannedSection<'a> {
-    id: ScannedSectionId,
-    name: &'a str,
-    section_type: ElfSectionType,
-    flags: ElfSectionFlags,
-    address: usize,
-    file_offset: usize,
-    size: usize,
-    alignment: usize,
-    linked_section: Option<ScannedSectionId>,
-    info_section: Option<ScannedSectionId>,
-}
-
-/// Layout-erased view of a scanned section-header table.
-pub enum AnySectionHeaders<'a> {
-    Elf32(&'a [ElfShdr<Elf32Layout>]),
-    Elf64(&'a [ElfShdr<Elf64Layout>]),
-}
-
 impl<'a, L: ElfLayout> ScannedSections<'a, L> {
     #[inline]
     fn new(sections: &'a [ElfShdr<L>], shstrtab: *const u8) -> Self {
@@ -325,340 +292,6 @@ impl<'a, L: ElfLayout> Iterator for ScannedSections<'a, L> {
 }
 
 impl<L: ElfLayout> ExactSizeIterator for ScannedSections<'_, L> {}
-
-impl<'a, L: ElfLayout> From<ScannedSection<'a, L>> for AnyScannedSection<'a> {
-    #[inline]
-    fn from(section: ScannedSection<'a, L>) -> Self {
-        Self {
-            id: section.id(),
-            name: section.name(),
-            section_type: section.section_type(),
-            flags: section.flags(),
-            address: section.address(),
-            file_offset: section.file_offset(),
-            size: section.size(),
-            alignment: section.alignment(),
-            linked_section: section.linked_section_id(),
-            info_section: section.info_section_id(),
-        }
-    }
-}
-
-impl<'a> AnyScannedSection<'a> {
-    /// Returns the stable section id.
-    #[inline]
-    pub const fn id(&self) -> ScannedSectionId {
-        self.id
-    }
-
-    /// Returns the section name.
-    #[inline]
-    pub const fn name(&self) -> &'a str {
-        self.name
-    }
-
-    /// Returns the parsed section type.
-    #[inline]
-    pub const fn section_type(&self) -> ElfSectionType {
-        self.section_type
-    }
-
-    /// Returns the parsed section flags.
-    #[inline]
-    pub const fn flags(&self) -> ElfSectionFlags {
-        self.flags
-    }
-
-    /// Returns the section address.
-    #[inline]
-    pub const fn address(&self) -> usize {
-        self.address
-    }
-
-    /// Returns the section file offset.
-    #[inline]
-    pub const fn file_offset(&self) -> usize {
-        self.file_offset
-    }
-
-    /// Returns the section size in bytes.
-    #[inline]
-    pub const fn size(&self) -> usize {
-        self.size
-    }
-
-    /// Returns the section alignment in bytes.
-    #[inline]
-    pub const fn alignment(&self) -> usize {
-        self.alignment
-    }
-
-    /// Returns whether the section contributes to the loaded memory image.
-    #[inline]
-    pub fn is_allocated(&self) -> bool {
-        self.flags().contains(ElfSectionFlags::ALLOC)
-    }
-
-    /// Returns whether the section is writable after mapping.
-    #[inline]
-    pub fn is_writable(&self) -> bool {
-        self.flags().contains(ElfSectionFlags::WRITE)
-    }
-
-    /// Returns whether the section is executable.
-    #[inline]
-    pub fn is_executable(&self) -> bool {
-        self.flags().contains(ElfSectionFlags::EXECINSTR)
-    }
-
-    /// Returns whether the section belongs to TLS storage.
-    #[inline]
-    pub fn is_tls(&self) -> bool {
-        self.flags().contains(ElfSectionFlags::TLS)
-    }
-
-    /// Returns whether the section is zero-fill only (`SHT_NOBITS`).
-    #[inline]
-    pub fn is_nobits(&self) -> bool {
-        self.section_type() == ElfSectionType::NOBITS
-    }
-
-    /// Returns whether the section stores retained relocations.
-    #[inline]
-    pub fn is_relocation_section(&self) -> bool {
-        matches!(
-            self.section_type(),
-            ElfSectionType::REL | ElfSectionType::RELA
-        )
-    }
-
-    /// Returns the linked section id referenced by `sh_link`, when non-zero.
-    #[inline]
-    pub const fn linked_section_id(&self) -> Option<ScannedSectionId> {
-        self.linked_section
-    }
-
-    /// Returns the info section id referenced by `sh_info`, when non-zero.
-    #[inline]
-    pub const fn info_section_id(&self) -> Option<ScannedSectionId> {
-        self.info_section
-    }
-}
-
-impl fmt::Debug for AnyScannedSection<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AnyScannedSection")
-            .field("id", &self.id)
-            .field("name", &self.name)
-            .field("type", &self.section_type)
-            .field("size", &self.size)
-            .field("align", &self.alignment)
-            .finish()
-    }
-}
-
-impl AnySectionHeaders<'_> {
-    /// Returns the number of section headers.
-    #[inline]
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Elf32(headers) => headers.len(),
-            Self::Elf64(headers) => headers.len(),
-        }
-    }
-
-    /// Returns whether the table is empty.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-impl fmt::Debug for AnySectionHeaders<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AnySectionHeaders")
-            .field("len", &self.len())
-            .finish()
-    }
-}
-
-impl fmt::Debug for AnyScannedDynamic {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AnyScannedDynamic")
-            .field("arch", &self.arch_kind())
-            .field("name", &self.name())
-            .field("needed_libs", &self.needed_libs().collect::<Vec<_>>())
-            .field("capability", &self.capability())
-            .field("bind_now", &self.dynamic().bind_now())
-            .field("static_tls", &self.dynamic().static_tls())
-            .finish()
-    }
-}
-
-macro_rules! any_scanned_dynamic {
-    ($($variant:ident => $kind:ident),+ $(,)?) => {
-        impl AnyScannedDynamic {
-            /// Returns the relocation backend selected for this scanned module.
-            #[inline]
-            pub const fn arch_kind(&self) -> ArchKind {
-                match self {
-                    $(Self::$variant(_) => ArchKind::$kind,)+
-                }
-            }
-
-            /// Returns the file name or path selected for this image.
-            #[inline]
-            pub fn name(&self) -> &str {
-                match self {
-                    $(Self::$variant(module) => module.name(),)+
-                }
-            }
-
-            /// Returns the short image name.
-            #[inline]
-            pub fn short_name(&self) -> &str {
-                match self {
-                    $(Self::$variant(module) => module.short_name(),)+
-                }
-            }
-
-            /// Returns the PT_INTERP string when present.
-            #[inline]
-            pub fn interp(&self) -> Option<&str> {
-                match self {
-                    $(Self::$variant(module) => module.interp(),)+
-                }
-            }
-
-            /// Returns the DT_RPATH string when present.
-            #[inline]
-            pub fn rpath(&self) -> Option<&str> {
-                match self {
-                    $(Self::$variant(module) => module.rpath(),)+
-                }
-            }
-
-            /// Returns the DT_RUNPATH string when present.
-            #[inline]
-            pub fn runpath(&self) -> Option<&str> {
-                match self {
-                    $(Self::$variant(module) => module.runpath(),)+
-                }
-            }
-
-            /// Returns one `DT_NEEDED` entry by index.
-            #[inline]
-            pub fn needed_lib(&self, index: usize) -> Option<&str> {
-                match self {
-                    $(Self::$variant(module) => module.needed_lib(index),)+
-                }
-            }
-
-            /// Returns the number of `DT_NEEDED` entries.
-            #[inline]
-            pub fn needed_len(&self) -> usize {
-                match self {
-                    $(Self::$variant(module) => module.needed_libs().len(),)+
-                }
-            }
-
-            /// Iterates over the `DT_NEEDED` entries.
-            #[inline]
-            pub fn needed_libs(&self) -> impl Iterator<Item = &str> + '_ {
-                (0..self.needed_len()).map(|index| {
-                    self.needed_lib(index)
-                        .expect("AnyScannedDynamic DT_NEEDED index out of bounds")
-                })
-            }
-
-            /// Returns the planning capability of this module.
-            #[inline]
-            pub fn capability(&self) -> ModuleCapability {
-                match self {
-                    $(Self::$variant(module) => module.capability(),)+
-                }
-            }
-
-            /// Returns whether the module exposes a usable section-table view.
-            #[inline]
-            pub fn has_sections(&self) -> bool {
-                match self {
-                    $(Self::$variant(module) => module.has_sections(),)+
-                }
-            }
-
-            /// Returns one scanned section by id.
-            #[inline]
-            pub fn section(&self, id: impl Into<ScannedSectionId>) -> Option<AnyScannedSection<'_>> {
-                let id = id.into();
-                match self {
-                    $(Self::$variant(module) => module.section(id).map(Into::into),)+
-                }
-            }
-
-            /// Iterates over all scanned sections together with stable ids.
-            #[inline]
-            pub fn sections(&self) -> Box<dyn Iterator<Item = AnyScannedSection<'_>> + '_> {
-                match self {
-                    $(Self::$variant(module) => Box::new(module.sections().map(Into::into)),)+
-                }
-            }
-
-            /// Iterates over sections that contribute to the loaded memory image.
-            #[inline]
-            pub fn alloc_sections(&self) -> Box<dyn Iterator<Item = AnyScannedSection<'_>> + '_> {
-                match self {
-                    $(Self::$variant(module) => Box::new(module.alloc_sections().map(Into::into)),)+
-                }
-            }
-
-            /// Captures one section's backing bytes.
-            pub fn section_data(
-                &mut self,
-                id: impl Into<ScannedSectionId>,
-            ) -> Result<Option<AlignedBytes>> {
-                let id = id.into();
-                match self {
-                    $(Self::$variant(module) => module.section_data(id),)+
-                }
-            }
-
-            /// Returns the dynamic binding and TLS policy flags discovered during scan.
-            #[inline]
-            pub fn dynamic(&self) -> &ScannedDynamicInfo {
-                match self {
-                    $(Self::$variant(module) => module.dynamic(),)+
-                }
-            }
-        }
-    };
-}
-
-any_scanned_dynamic!(
-    X86_64 => X86_64,
-    AArch64 => AArch64,
-    RiscV64 => RiscV64,
-    RiscV32 => RiscV32,
-    LoongArch64 => LoongArch64,
-    X86 => X86,
-    Arm => Arm,
-);
-
-impl AnyScannedDynamic {
-    /// Returns the raw ELF section headers, when the section table is usable.
-    #[inline]
-    pub fn section_headers(&self) -> Option<AnySectionHeaders<'_>> {
-        match self {
-            Self::X86_64(module)
-            | Self::AArch64(module)
-            | Self::RiscV64(module)
-            | Self::LoongArch64(module) => module.section_headers().map(AnySectionHeaders::Elf64),
-            Self::RiscV32(module) | Self::X86(module) | Self::Arm(module) => {
-                module.section_headers().map(AnySectionHeaders::Elf32)
-            }
-        }
-    }
-}
 
 impl<'a, L: ElfLayout> ScannedSection<'a, L> {
     #[inline]
@@ -945,7 +578,8 @@ impl<L: ElfLayout> ScannedElf<L> {
     }
 
     /// Captures one section's backing bytes.
-    pub fn section_data(
+    #[allow(dead_code)]
+    pub(crate) fn section_data(
         &mut self,
         id: impl Into<ScannedSectionId>,
     ) -> Result<Option<AlignedBytes>> {
@@ -1132,7 +766,7 @@ impl<L: ElfLayout> ScannedDynamic<L> {
     }
 
     /// Captures one section's backing bytes.
-    pub fn section_data(
+    pub(crate) fn section_data(
         &mut self,
         id: impl Into<ScannedSectionId>,
     ) -> Result<Option<AlignedBytes>> {
@@ -1295,7 +929,8 @@ impl<L: ElfLayout> ScannedExec<L> {
     }
 
     /// Captures one section's backing bytes.
-    pub fn section_data(
+    #[allow(dead_code)]
+    pub(crate) fn section_data(
         &mut self,
         id: impl Into<ScannedSectionId>,
     ) -> Result<Option<AlignedBytes>> {
@@ -1315,6 +950,7 @@ impl<L: ElfLayout> ScannedExec<L> {
     }
 
     #[inline]
+    #[allow(dead_code)]
     fn read_bytes(&mut self, offset: usize, len: usize) -> Result<AlignedBytes> {
         let mut bytes = AlignedBytes::with_len(len).ok_or(ParseDynamicError::AddressOverflow)?;
         self.reader.read_slice(bytes.as_mut(), offset)?;
