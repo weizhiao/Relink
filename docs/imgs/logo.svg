@@ -1,0 +1,58 @@
+<svg width="1200" height="420" viewBox="0 0 1200 420" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Relink logo</title>
+  <desc id="desc">A stylized runtime linker mark with the Relink wordmark and tagline.</desc>
+  <defs>
+    <linearGradient id="mark-stroke" x1="76" y1="72" x2="256" y2="278" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F97316"/>
+      <stop offset="0.52" stop-color="#F59E0B"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="link-stroke" x1="73" y1="236" x2="255" y2="76" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#F8FAFC"/>
+    </linearGradient>
+    <linearGradient id="wordmark" x1="405" y1="90" x2="880" y2="226" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#1E293B"/>
+    </linearGradient>
+    <filter id="soft-shadow" x="30" y="28" width="300" height="304" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#0F172A" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="420" fill="#F8FAFC"/>
+
+  <g filter="url(#soft-shadow)">
+    <rect x="62" y="54" width="256" height="256" rx="58" fill="#0F172A"/>
+    <path d="M126 254V108H198C246 108 276 134 276 176C276 218 245 242 197 242H126" stroke="url(#mark-stroke)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M194 242L271 288" stroke="url(#mark-stroke)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M95 251C126 211 152 194 190 173C221 156 243 132 263 91" stroke="url(#link-stroke)" stroke-width="18" stroke-linecap="round"/>
+    <path d="M238 94L267 84L262 114" stroke="#F8FAFC" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="96" cy="251" r="13" fill="#38BDF8"/>
+    <circle cx="190" cy="173" r="11" fill="#F8FAFC"/>
+    <circle cx="263" cy="91" r="13" fill="#F97316"/>
+  </g>
+
+  <g opacity="0.42" stroke="#94A3B8" stroke-width="3">
+    <path d="M893 90L946 60L1014 90L1074 56"/>
+    <path d="M946 60L982 135L1044 150L1122 112"/>
+    <path d="M982 135L922 184L1013 222L1088 199"/>
+  </g>
+  <g fill="#64748B" opacity="0.42">
+    <circle cx="893" cy="90" r="8"/>
+    <circle cx="946" cy="60" r="9"/>
+    <circle cx="1014" cy="90" r="8"/>
+    <circle cx="1074" cy="56" r="9"/>
+    <circle cx="982" cy="135" r="10"/>
+    <circle cx="1044" cy="150" r="9"/>
+    <circle cx="1122" cy="112" r="8"/>
+    <circle cx="922" cy="184" r="8"/>
+    <circle cx="1013" cy="222" r="10"/>
+    <circle cx="1088" cy="199" r="8"/>
+  </g>
+
+  <text x="390" y="190" fill="url(#wordmark)" font-family="Nimbus Sans, Arial, sans-serif" font-size="124" font-weight="700" letter-spacing="0">Relink</text>
+  <text x="398" y="251" fill="#334155" font-family="Nimbus Sans, Arial, sans-serif" font-size="34" font-weight="400" letter-spacing="0">ELF loading and dynamic link-time optimization</text>
+  <path d="M402 286H628" stroke="#F97316" stroke-width="8" stroke-linecap="round"/>
+  <path d="M650 286H776" stroke="#2563EB" stroke-width="8" stroke-linecap="round"/>
+</svg>

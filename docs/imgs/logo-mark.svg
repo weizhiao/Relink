@@ -1,0 +1,28 @@
+<svg width="320" height="320" viewBox="0 0 320 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Relink mark</title>
+  <desc id="desc">A stylized R crossed by a relocation arrow.</desc>
+  <defs>
+    <linearGradient id="mark-stroke" x1="76" y1="72" x2="256" y2="278" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F97316"/>
+      <stop offset="0.52" stop-color="#F59E0B"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="link-stroke" x1="73" y1="236" x2="255" y2="76" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#F8FAFC"/>
+    </linearGradient>
+    <filter id="soft-shadow" x="30" y="28" width="300" height="304" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#0F172A" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+  <g filter="url(#soft-shadow)">
+    <rect x="32" y="32" width="256" height="256" rx="58" fill="#0F172A"/>
+    <path d="M96 232V86H168C216 86 246 112 246 154C246 196 215 220 167 220H96" stroke="url(#mark-stroke)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M164 220L241 266" stroke="url(#mark-stroke)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M65 229C96 189 122 172 160 151C191 134 213 110 233 69" stroke="url(#link-stroke)" stroke-width="18" stroke-linecap="round"/>
+    <path d="M208 72L237 62L232 92" stroke="#F8FAFC" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="66" cy="229" r="13" fill="#38BDF8"/>
+    <circle cx="160" cy="151" r="11" fill="#F8FAFC"/>
+    <circle cx="233" cy="69" r="13" fill="#F97316"/>
+  </g>
+</svg>
