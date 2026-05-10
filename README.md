@@ -316,15 +316,10 @@ The [`examples/`](examples/) directory covers the main extension points:
 
 | Architecture | Dynamic libraries / executables | Dynamic link-time optimization | `.o` / `ET_REL` |
 | --- | --- | --- | --- |
-| `x86_64` | Supported, primary validation path | Supported: layout passes, section placement, hot-code packing, and huge-page arenas | Supported with the `object` feature |
-| `x86` | Supported | Basic dependency planning supported; complex section reordering and hot-code packing are not implemented yet | Not supported, pending implementation |
-| `aarch64` | Supported | Basic dependency planning supported; complex section reordering and hot-code packing are not implemented yet | Not supported, pending implementation |
-| `arm` | Supported | Basic dependency planning supported; complex section reordering and hot-code packing are not implemented yet | Not supported, pending implementation |
-| `riscv64` | Supported | Basic dependency planning supported; complex section reordering and hot-code packing are not implemented yet | Not supported, pending implementation |
-| `riscv32` | Supported | Basic dependency planning supported; complex section reordering and hot-code packing are not implemented yet | Not supported, pending implementation |
-| `loongarch64` | Supported | Basic dependency planning supported; complex section reordering and hot-code packing are not implemented yet | Not supported, pending implementation |
+| `x86_64` | ✅ Primary validation path | ✅ Layout passes / placement / hot code / huge-page arenas | ✅ `object` feature |
+| `x86` / `aarch64` / `arm` / `riscv64` / `riscv32` / `loongarch64` | ✅ | 🟡 Basic dependency planning; complex reordering pending | ⏳ Pending |
 
-Dynamic library and executable loading are the primary supported paths across all built-in architecture backends. Complex section-reorder repair and `.o` / `ET_REL` support are currently centered on `x86_64` relocation handling; the other architectures are still pending implementation.
+Legend: ✅ supported, 🟡 basic support, ⏳ pending. Complex section-reorder repair and `.o` / `ET_REL` support are currently centered on `x86_64` relocation handling; contributions for the other architectures are welcome.
 
 - Symbol lookup is name-based and does not perform Rust name mangling for you. Export C ABI symbols when you want stable runtime lookup names.
 

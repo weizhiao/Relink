@@ -1,3 +1,4 @@
+use super::storage::KeyId;
 use crate::{image::LoadedCore, relocation::RelocationArch};
 use alloc::{
     boxed::Box,
@@ -5,12 +6,12 @@ use alloc::{
     vec::Vec,
 };
 
-pub(crate) struct GraphEntry<K, P> {
+pub(crate) struct GraphEntry<P> {
     pub(crate) payload: P,
-    pub(crate) direct_deps: Option<Box<[K]>>,
+    pub(crate) direct_deps: Option<Box<[KeyId]>>,
 }
 
-impl<K, P> GraphEntry<K, P> {
+impl<P> GraphEntry<P> {
     #[inline]
     pub(crate) fn new(payload: P) -> Self {
         Self {
@@ -20,56 +21,52 @@ impl<K, P> GraphEntry<K, P> {
     }
 
     #[inline]
-    pub(crate) fn direct_deps(&self) -> Option<&[K]> {
+    pub(crate) fn direct_deps(&self) -> Option<&[KeyId]> {
         self.direct_deps.as_deref()
     }
 
     #[inline]
-    pub(crate) fn set_direct_deps(&mut self, direct_deps: Vec<K>) {
+    pub(crate) fn set_direct_deps(&mut self, direct_deps: Vec<KeyId>) {
         self.direct_deps = Some(direct_deps.into_boxed_slice());
     }
 }
 
-pub(crate) struct ReadyCommit<K, D: 'static, Arch: RelocationArch> {
-    pub(crate) key: K,
+pub(crate) struct ReadyCommit<D: 'static, Arch: RelocationArch> {
     pub(crate) module: LoadedCore<D, Arch>,
-    pub(crate) direct_deps: Box<[K]>,
+    pub(crate) direct_deps: Box<[KeyId]>,
 }
 
-impl<K, D: 'static, Arch> Clone for ReadyCommit<K, D, Arch>
+impl<D: 'static, Arch> Clone for ReadyCommit<D, Arch>
 where
-    K: Clone,
     Arch: RelocationArch,
 {
     fn clone(&self) -> Self {
         Self {
-            key: self.key.clone(),
             module: self.module.clone(),
             direct_deps: self.direct_deps.clone(),
         }
     }
 }
 
-impl<K, D: 'static, Arch> ReadyCommit<K, D, Arch>
+impl<D: 'static, Arch> ReadyCommit<D, Arch>
 where
     Arch: RelocationArch,
 {
     #[inline]
-    fn new(key: K, module: LoadedCore<D, Arch>, direct_deps: Box<[K]>) -> Self {
+    fn new(module: LoadedCore<D, Arch>, direct_deps: Box<[KeyId]>) -> Self {
         Self {
-            key,
             module,
             direct_deps,
         }
     }
 }
 
-pub(crate) struct ResolveSession<K, P> {
-    pub(crate) entries: BTreeMap<K, GraphEntry<K, P>>,
-    pub(crate) group_order: Vec<K>,
+pub(crate) struct ResolveSession<P> {
+    pub(crate) entries: BTreeMap<KeyId, GraphEntry<P>>,
+    pub(crate) group_order: Vec<KeyId>,
 }
 
-impl<K, P> ResolveSession<K, P> {
+impl<P> ResolveSession<P> {
     #[inline]
     pub(crate) fn new() -> Self {
         Self {
@@ -79,24 +76,26 @@ impl<K, P> ResolveSession<K, P> {
     }
 }
 
-impl<K, P> ResolveSession<K, P>
-where
-    K: Ord,
-{
+impl<P> ResolveSession<P> {
     #[inline]
-    pub(crate) fn contains_key(&self, key: &K) -> bool {
-        self.entries.contains_key(key)
+    pub(crate) fn contains(&self, id: KeyId) -> bool {
+        self.entries.contains_key(&id)
     }
 
     #[inline]
-    pub(crate) fn insert_entry(&mut self, key: K, payload: P) {
-        self.entries.insert(key, GraphEntry::new(payload));
+    pub(crate) fn insert_entry(&mut self, id: KeyId, payload: P) {
+        self.entries.insert(id, GraphEntry::new(payload));
     }
 
     #[inline]
-    pub(crate) fn insert_resolved_entry(&mut self, key: K, payload: P, direct_deps: Box<[K]>) {
+    pub(crate) fn insert_resolved_entry(
+        &mut self,
+        id: KeyId,
+        payload: P,
+        direct_deps: Box<[KeyId]>,
+    ) {
         self.entries.insert(
-            key,
+            id,
             GraphEntry {
                 payload,
                 direct_deps: Some(direct_deps),
@@ -105,12 +104,12 @@ where
     }
 }
 
-pub(crate) struct LoadSession<K, D: 'static, Arch: RelocationArch> {
-    pub(crate) resolve: ResolveSession<K, crate::image::RawDynamic<D, Arch>>,
-    pub(crate) ready_to_commit: Vec<ReadyCommit<K, D, Arch>>,
+pub(crate) struct LoadSession<D: 'static, Arch: RelocationArch> {
+    pub(crate) resolve: ResolveSession<crate::image::RawDynamic<D, Arch>>,
+    pub(crate) ready_to_commit: BTreeMap<KeyId, ReadyCommit<D, Arch>>,
 }
 
-impl<K, D: 'static, Arch> LoadSession<K, D, Arch>
+impl<D: 'static, Arch> LoadSession<D, Arch>
 where
     Arch: RelocationArch,
 {
@@ -118,35 +117,36 @@ where
     pub(crate) fn new() -> Self {
         Self {
             resolve: ResolveSession::new(),
-            ready_to_commit: Vec::new(),
+            ready_to_commit: BTreeMap::new(),
         }
     }
 }
 
-impl<K, D: 'static, Arch> LoadSession<K, D, Arch>
+impl<D: 'static, Arch> LoadSession<D, Arch>
 where
-    K: Ord,
     Arch: RelocationArch,
 {
     #[inline]
     pub(crate) fn insert_resolved_pending(
         &mut self,
-        key: K,
+        id: KeyId,
         raw: crate::image::RawDynamic<D, Arch>,
-        direct_deps: Box<[K]>,
+        direct_deps: Box<[KeyId]>,
     ) {
-        self.resolve.insert_resolved_entry(key, raw, direct_deps);
+        self.resolve.insert_resolved_entry(id, raw, direct_deps);
     }
 
     #[inline]
     pub(crate) fn push_ready(
         &mut self,
-        key: K,
+        id: KeyId,
         module: LoadedCore<D, Arch>,
-        direct_deps: Box<[K]>,
+        direct_deps: Box<[KeyId]>,
     ) {
-        self.ready_to_commit
-            .push(ReadyCommit::new(key, module, direct_deps));
+        let previous = self
+            .ready_to_commit
+            .insert(id, ReadyCommit::new(module, direct_deps));
+        debug_assert!(previous.is_none(), "ready commit entries must be unique");
     }
 }
 

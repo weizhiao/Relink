@@ -10,7 +10,7 @@ use super::{
     },
     resolve::{KeyResolver, LoadResolveContext, ScanResolveContext},
     session::{GraphEntry, LoadSession},
-    storage::CommittedEntry,
+    storage::KeyId,
 };
 use crate::{
     LinkerError, Loader, Result,
@@ -23,10 +23,58 @@ use crate::{
     tls::TlsResolver,
 };
 use alloc::{
+    boxed::Box,
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
-use core::{marker::PhantomData, mem};
+use core::{marker::PhantomData, mem, ops::Deref};
+
+/// Result of a successful linker load operation.
+///
+/// `committed` contains the newly committed modules' [`KeyId`] values in load
+/// order.
+#[derive(Debug)]
+pub struct LoadResult<D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
+    root: LoadedCore<D, Arch>,
+    committed: Box<[KeyId]>,
+}
+
+impl<D: 'static, Arch> LoadResult<D, Arch>
+where
+    Arch: RelocationArch,
+{
+    #[inline]
+    pub(crate) fn new(root: LoadedCore<D, Arch>, committed: Box<[KeyId]>) -> Self {
+        Self { root, committed }
+    }
+
+    #[inline]
+    pub fn root(&self) -> &LoadedCore<D, Arch> {
+        &self.root
+    }
+
+    #[inline]
+    pub fn committed(&self) -> &[KeyId] {
+        &self.committed
+    }
+
+    #[inline]
+    pub fn into_root(self) -> LoadedCore<D, Arch> {
+        self.root
+    }
+}
+
+impl<D: 'static, Arch> Deref for LoadResult<D, Arch>
+where
+    Arch: RelocationArch,
+{
+    type Target = LoadedCore<D, Arch>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.root
+    }
+}
 
 /// Configurable front-end for runtime dependency discovery and relocation.
 ///
@@ -57,7 +105,7 @@ pub struct Linker<
     planner: P,
     observer: O,
     visible_modules: V,
-    scratch_relocation_order: Vec<K>,
+    scratch_relocation_order: Vec<KeyId>,
     _marker: PhantomData<fn() -> (D, LinkArch)>,
 }
 
@@ -465,21 +513,21 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         key: K,
-    ) -> Result<LoadedCore<D, Arch>>
+    ) -> Result<LoadResult<D, Arch>>
     where
         K: 'cfg,
         Meta: Default,
         Resolver: KeyResolver<'cfg, K, D, Meta, Arch>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
-            return Ok(loaded);
+            return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
         }
 
         let prepared = self.prepare_runtime_load(
             context,
             |context, visible_modules, session, loader, resolver, observer| {
                 let mut resolve_context = LoadResolveContext::new(
-                    context.committed.view(),
+                    &mut context.committed,
                     visible_modules,
                     &mut session.resolve,
                 );
@@ -494,21 +542,22 @@ where
         context: &mut LinkContext<K, D, Meta, Arch>,
         key: K,
         raw: RawDynamic<D, Arch>,
-    ) -> Result<LoadedCore<D, Arch>>
+    ) -> Result<LoadResult<D, Arch>>
     where
         K: 'cfg,
         Meta: Default,
         Resolver: KeyResolver<'cfg, K, D, Meta, Arch>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
-            return Ok(loaded);
+            return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
         }
 
         let prepared =
-            self.prepare_runtime_load(context, move |_, _, session, _, _, observer| {
+            self.prepare_runtime_load(context, move |context, _, session, _, _, observer| {
                 observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
-                session.resolve.insert_entry(key.clone(), raw);
-                Ok(key)
+                let id = context.committed.intern_key(key.clone());
+                session.resolve.insert_entry(id, raw);
+                Ok(id)
             })?;
         self.execute_prepared_load(context, prepared)
     }
@@ -518,26 +567,26 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         key: K,
-    ) -> Result<LoadedCore<D, Arch>>
+    ) -> Result<LoadResult<D, Arch>>
     where
         K: 'static,
         Meta: Default,
         Resolver: KeyResolver<'static, K, D, Meta, Arch>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
-            return Ok(loaded);
+            return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
         }
 
         let prepared = match self.prepare_scan_load(context, &key)? {
             ScanDiscovery::Existing(root) => PreparedLoad::runtime(root, LoadSession::new()),
-            ScanDiscovery::Plan(plan) => self.prepare_planned_load(plan)?,
+            ScanDiscovery::Plan(plan) => self.prepare_planned_load(context, plan)?,
         };
         self.execute_prepared_load(context, prepared)
     }
 
     fn prepare_scan_load<Meta>(
         &mut self,
-        context: &LinkContext<K, D, Meta, Arch>,
+        context: &mut LinkContext<K, D, Meta, Arch>,
         key: &K,
     ) -> Result<ScanDiscovery<K, Arch>>
     where
@@ -545,35 +594,61 @@ where
         Resolver: KeyResolver<'static, K, D, Meta, Arch>,
     {
         let mut session = crate::linker::session::ResolveSession::new();
-        let mut resolve_context = ScanResolveContext::new(
-            context.committed.view(),
-            &self.visible_modules,
-            &mut session,
-        );
-        let root =
-            resolve_context.stage_resolved(self.resolver.load_root(key)?, &mut self.loader)?;
-        if !resolve_context.contains_pending(&root) {
-            return Ok(ScanDiscovery::Existing(root));
-        }
-        resolve_context.resolve_dependency_graph(
-            root.clone(),
-            &mut self.loader,
-            &mut self.resolver,
-        )?;
+        let root = {
+            let mut resolve_context = ScanResolveContext::new(
+                &mut context.committed,
+                &self.visible_modules,
+                &mut session,
+            );
+            let root =
+                resolve_context.stage_resolved(self.resolver.load_root(key)?, &mut self.loader)?;
+            if !resolve_context.contains_pending(root) {
+                return Ok(ScanDiscovery::Existing(root));
+            }
+            resolve_context.resolve_dependency_graph(root, &mut self.loader, &mut self.resolver)?;
+            root
+        };
 
         let crate::linker::session::ResolveSession {
             entries,
             group_order,
         } = session;
+        let root_key = context
+            .key(root)
+            .expect("scan root id must resolve to an interned key")
+            .clone();
+        let group_order = group_order
+            .into_iter()
+            .map(|id| {
+                context
+                    .key(id)
+                    .expect("scan group id must resolve to an interned key")
+                    .clone()
+            })
+            .collect::<Vec<_>>();
         let mut plan = LinkPlan::new(
-            root,
+            root_key,
             group_order,
             entries
                 .into_iter()
-                .map(|(key, entry)| {
+                .map(|(id, entry)| {
+                    let key = context
+                        .key(id)
+                        .expect("scan entry id must resolve to an interned key")
+                        .clone();
                     let direct_deps = entry
                         .direct_deps
-                        .expect("missing resolved dependencies while building scan plan");
+                        .expect("missing resolved dependencies while building scan plan")
+                        .into_vec()
+                        .into_iter()
+                        .map(|dep| {
+                            context
+                                .key(dep)
+                                .expect("scan dependency id must resolve to an interned key")
+                                .clone()
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice();
                     (key, (entry.payload, direct_deps))
                 })
                 .collect(),
@@ -582,28 +657,31 @@ where
         Ok(ScanDiscovery::Plan(plan))
     }
 
-    fn prepare_planned_load(
+    fn prepare_planned_load<Meta>(
         &mut self,
+        context: &mut LinkContext<K, D, Meta, Arch>,
         mut plan: LinkPlan<K, Arch>,
-    ) -> Result<PreparedLoad<K, D, Arch>> {
+    ) -> Result<PreparedLoad<D, Arch>> {
         let mut mapped_runtime = self.prepare_mapped_runtime(&mut plan)?;
 
         let (root, group_order, entries, memory_layout) = plan.into_parts();
         let mut session = LoadSession::new();
-        let mut module_keys = SecondaryMap::default();
+        let mut module_ids = SecondaryMap::default();
         for (module_id, entry) in entries.iter() {
-            let _ = module_keys.insert(module_id, entry.key().clone());
+            let id = context.committed.intern_key(entry.key().clone());
+            let _ = module_ids.insert(module_id, id);
         }
         session.resolve.group_order = group_order
             .iter()
-            .map(|module_id| module_keys[*module_id].clone())
+            .map(|module_id| module_ids[*module_id])
             .collect();
 
         for (module_id, entry) in entries {
-            let (key, module, direct_dep_ids) = entry.into_parts();
-            let direct_deps = direct_dep_ids
+            let (key, module, dep_ids) = entry.into_parts();
+            let id = module_ids[module_id];
+            let direct_deps = dep_ids
                 .iter()
-                .map(|dep_id| module_keys[*dep_id].clone())
+                .map(|dep_id| module_ids[*dep_id])
                 .collect::<Vec<_>>()
                 .into_boxed_slice();
             let raw = self.materialize_planned_raw(
@@ -614,11 +692,11 @@ where
             )?;
             self.observer
                 .on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
-            session.insert_resolved_pending(key, raw, direct_deps);
+            session.insert_resolved_pending(id, raw, direct_deps);
         }
 
         Ok(PreparedLoad::planned(
-            module_keys[root].clone(),
+            module_ids[root],
             session,
             mapped_runtime,
         ))
@@ -705,20 +783,20 @@ where
 
     fn prepare_runtime_load<'cfg, Meta, Seed>(
         &mut self,
-        context: &LinkContext<K, D, Meta, Arch>,
+        context: &mut LinkContext<K, D, Meta, Arch>,
         seed_root: Seed,
-    ) -> Result<PreparedLoad<K, D, Arch>>
+    ) -> Result<PreparedLoad<D, Arch>>
     where
         K: 'cfg,
         Resolver: KeyResolver<'cfg, K, D, Meta, Arch>,
         Seed: FnOnce(
-            &LinkContext<K, D, Meta, Arch>,
+            &mut LinkContext<K, D, Meta, Arch>,
             &V,
-            &mut LoadSession<K, D, Arch>,
+            &mut LoadSession<D, Arch>,
             &mut Loader<M, H, D, Tls, Arch>,
             &mut Resolver,
             &mut O,
-        ) -> Result<K>,
+        ) -> Result<KeyId>,
     {
         let mut session = LoadSession::new();
         let root = seed_root(
@@ -730,13 +808,13 @@ where
             &mut self.observer,
         )?;
         let mut resolve_context = LoadResolveContext::new(
-            context.committed.view(),
+            &mut context.committed,
             &self.visible_modules,
             &mut session.resolve,
         );
-        if resolve_context.contains_pending(&root) {
+        if resolve_context.contains_pending(root) {
             resolve_context.resolve_dependency_graph(
-                root.clone(),
+                root,
                 &mut self.loader,
                 &mut self.resolver,
                 &mut self.observer,
@@ -749,8 +827,8 @@ where
     fn execute_prepared_load<Meta>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
-        prepared: PreparedLoad<K, D, Arch>,
-    ) -> Result<LoadedCore<D, Arch>>
+        prepared: PreparedLoad<D, Arch>,
+    ) -> Result<LoadResult<D, Arch>>
     where
         Meta: Default,
     {
@@ -761,40 +839,44 @@ where
         } = prepared;
 
         if !session.resolve.entries.is_empty() {
-            self.relocate_pending_modules(&root, context, &mut session)?;
+            self.relocate_pending_modules(root, context, &mut session)?;
         }
 
         if let Some(mapped_runtime) = mapped_runtime.as_ref() {
             mapped_runtime.protect::<M>()?;
         }
 
-        Self::commit_session(context, &mut session);
+        let committed = Self::commit_session(context, &mut session);
 
-        visible_loaded(context, &self.visible_modules, &root)
-            .ok_or_else(|| LinkerError::context("load root missing after commit"))
-            .map_err(Into::into)
+        let root = visible_loaded_id(context, &self.visible_modules, root)
+            .ok_or_else(|| LinkerError::context("load root missing after commit"))?;
+        Ok(LoadResult::new(root, committed))
     }
 
     fn relocate_pending_modules<Meta>(
         &mut self,
-        root: &K,
+        root: KeyId,
         context: &LinkContext<K, D, Meta, Arch>,
-        session: &mut LoadSession<K, D, Arch>,
+        session: &mut LoadSession<D, Arch>,
     ) -> Result<()> {
         let mut order = mem::take(&mut self.scratch_relocation_order);
         Self::build_relocation_order(root, &session.resolve.entries, &mut order);
         let scope = Self::build_group_scope(context, session, &self.visible_modules);
 
         let result = (|| {
-            for key in order.drain(..) {
+            for id in order.drain(..) {
                 let entry = session
                     .resolve
                     .entries
-                    .remove(&key)
+                    .remove(&id)
                     .expect("missing pending module while relocating");
                 let direct_deps = entry
                     .direct_deps
                     .expect("missing resolved dependencies while relocating");
+                let key = context
+                    .key(id)
+                    .expect("pending module id must resolve to an interned key")
+                    .clone();
                 let req = RelocationRequest::new(&key, entry.payload, &scope);
                 let inputs = self.planner.plan(&req)?;
                 let raw = req.into_raw();
@@ -806,7 +888,7 @@ where
                     .shared_scope(scope)
                     .binding(binding)
                     .relocate()?;
-                session.push_ready(key, loaded, direct_deps);
+                session.push_ready(id, loaded, direct_deps);
             }
             Ok(())
         })();
@@ -816,38 +898,38 @@ where
     }
 
     fn build_relocation_order(
-        root: &K,
-        pending: &BTreeMap<K, GraphEntry<K, RawDynamic<D, Arch>>>,
-        order: &mut Vec<K>,
+        root: KeyId,
+        pending: &BTreeMap<KeyId, GraphEntry<RawDynamic<D, Arch>>>,
+        order: &mut Vec<KeyId>,
     ) {
         order.clear();
         if order.capacity() < pending.len() {
             order.reserve(pending.len() - order.capacity());
         }
-        let mut visited: BTreeSet<&K> = BTreeSet::new();
+        let mut visited = BTreeSet::new();
         let mut stack = Vec::with_capacity(pending.len().saturating_mul(2));
         stack.push((root, false));
 
-        while let Some((key, expanded)) = stack.pop() {
+        while let Some((id, expanded)) = stack.pop() {
             if expanded {
-                order.push(key.clone());
+                order.push(id);
                 continue;
             }
 
-            if !visited.insert(key) {
+            if !visited.insert(id) {
                 continue;
             }
 
-            let Some(slot) = pending.get(key) else {
+            let Some(slot) = pending.get(&id) else {
                 continue;
             };
 
-            stack.push((key, true));
+            stack.push((id, true));
             let direct_deps = slot
                 .direct_deps
                 .as_deref()
                 .expect("missing resolved dependencies while building relocation order");
-            for dep in direct_deps.iter().rev() {
+            for dep in direct_deps.iter().rev().copied() {
                 stack.push((dep, false));
             }
         }
@@ -855,7 +937,7 @@ where
 
     fn build_group_scope<Meta>(
         context: &LinkContext<K, D, Meta, Arch>,
-        session: &LoadSession<K, D, Arch>,
+        session: &LoadSession<D, Arch>,
         visible_modules: &V,
     ) -> Arc<[LoadedCore<D, Arch>]>
     where
@@ -865,11 +947,11 @@ where
             .resolve
             .group_order
             .iter()
-            .map(|scope_key| {
-                if let Some(entry) = session.resolve.entries.get(scope_key) {
+            .map(|id| {
+                if let Some(entry) = session.resolve.entries.get(id) {
                     unsafe { LoadedCore::from_core(entry.payload.core()) }
                 } else {
-                    visible_loaded(context, visible_modules, scope_key)
+                    visible_loaded_id(context, visible_modules, *id)
                         .expect("scope key must resolve to a visible or pending module")
                 }
             })
@@ -879,33 +961,43 @@ where
 
     fn commit_session<Meta>(
         context: &mut LinkContext<K, D, Meta, Arch>,
-        session: &mut LoadSession<K, D, Arch>,
-    ) where
+        session: &mut LoadSession<D, Arch>,
+    ) -> Box<[KeyId]>
+    where
         Meta: Default,
     {
-        let ready = mem::take(&mut session.ready_to_commit);
-        for entry in ready {
-            context.committed.insert_new(
-                entry.key,
-                CommittedEntry::new(entry.module, entry.direct_deps, Meta::default()),
-            );
+        let mut ready = mem::take(&mut session.ready_to_commit);
+        let mut committed = Vec::with_capacity(ready.len());
+        for id in session.resolve.group_order.iter().copied() {
+            let Some(entry) = ready.remove(&id) else {
+                continue;
+            };
+            context
+                .committed
+                .insert_new_id(id, entry.module, entry.direct_deps, Meta::default());
+            committed.push(id);
         }
+        assert!(
+            ready.is_empty(),
+            "ready commit entries must all be present in group_order"
+        );
+        committed.into_boxed_slice()
     }
 }
 
-struct PreparedLoad<K, D: 'static, Arch: RelocationArch> {
-    root: K,
-    session: LoadSession<K, D, Arch>,
+struct PreparedLoad<D: 'static, Arch: RelocationArch> {
+    root: KeyId,
+    session: LoadSession<D, Arch>,
     mapped_runtime: Option<mapped::MappedRuntimeMemory>,
 }
 
 enum ScanDiscovery<K, Arch: RelocationArch> {
-    Existing(K),
+    Existing(KeyId),
     Plan(LinkPlan<K, Arch>),
 }
 
-impl<K, D: 'static, Arch: RelocationArch> PreparedLoad<K, D, Arch> {
-    fn runtime(root: K, session: LoadSession<K, D, Arch>) -> Self {
+impl<D: 'static, Arch: RelocationArch> PreparedLoad<D, Arch> {
+    fn runtime(root: KeyId, session: LoadSession<D, Arch>) -> Self {
         Self {
             root,
             session,
@@ -914,8 +1006,8 @@ impl<K, D: 'static, Arch: RelocationArch> PreparedLoad<K, D, Arch> {
     }
 
     fn planned(
-        root: K,
-        session: LoadSession<K, D, Arch>,
+        root: KeyId,
+        session: LoadSession<D, Arch>,
         mapped_runtime: Option<mapped::MappedRuntimeMemory>,
     ) -> Self {
         Self {
@@ -966,7 +1058,26 @@ where
 {
     context
         .committed
-        .get(key)
+        .key_id(key)
+        .and_then(|id| context.committed.get(id))
         .cloned()
         .or_else(|| visible_modules.loaded(key))
+}
+
+#[inline]
+fn visible_loaded_id<K, D, Meta, V, Arch>(
+    context: &LinkContext<K, D, Meta, Arch>,
+    visible_modules: &V,
+    id: KeyId,
+) -> Option<LoadedCore<D, Arch>>
+where
+    K: Clone + Ord,
+    D: 'static,
+    Arch: RelocationArch,
+    V: VisibleModules<K, D, Arch>,
+{
+    context.committed.get(id).cloned().or_else(|| {
+        let key = context.committed.key(id)?;
+        visible_modules.loaded(key)
+    })
 }

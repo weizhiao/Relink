@@ -26,7 +26,7 @@ pub use layout::{
     MemoryClass, ModuleLayout, PackingPolicy, SectionAddress, SectionDataAccessRef,
     SectionMetadata, SectionPlacement,
 };
-pub use linker::Linker;
+pub use linker::{Linker, LoadResult};
 pub(crate) use mapped::GotPltTarget;
 pub use passes::{
     AnyPass, Arena, DataPass, LinkPass, LinkPassPlan, LinkPipeline, Module, PassScope,
@@ -37,4 +37,5 @@ pub use request::{
     RelocationPlanner, RelocationRequest, StagedDynamic, VisibleModules,
 };
 pub use resolve::{KeyResolver, ResolvedKey};
+pub use storage::KeyId;
 pub use view::DependencyGraphView;

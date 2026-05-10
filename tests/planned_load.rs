@@ -312,8 +312,16 @@ fn load_uses_configured_visible_modules_without_committing_them_locally() {
 
     assert_eq!(root.short_name(), "visible_root.so");
     assert!(context.contains_key(&"root"));
-    assert!(!context.contains_key(&"dep"));
-    assert_eq!(context.direct_deps(&"root"), Some(&["dep"][..]));
+    let root_id = context.key_id(&"root").unwrap();
+    let dep_id = context.key_id(&"dep").unwrap();
+    assert!(!context.contains(dep_id));
+    let direct_deps = context
+        .direct_deps(root_id)
+        .unwrap()
+        .iter()
+        .map(|id| *context.key(*id).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(direct_deps, vec!["dep"]);
 }
 
 #[test]

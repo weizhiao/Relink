@@ -1,24 +1,26 @@
-use super::{request::VisibleModules, session::ResolveSession, storage::CommittedStorageView};
+use super::{
+    request::VisibleModules,
+    session::ResolveSession,
+    storage::{CommittedStorageView, KeyId},
+};
 use crate::relocation::RelocationArch;
+use alloc::vec::Vec;
 
-pub(crate) trait DependencyGraphEntries<K> {
-    fn contains_key(&self, key: &K) -> bool;
+pub(crate) trait DependencyGraphEntries {
+    fn contains(&self, id: KeyId) -> bool;
 
-    fn direct_deps(&self, key: &K) -> Option<&[K]>;
+    fn direct_deps(&self, id: KeyId) -> Option<&[KeyId]>;
 }
 
-impl<K, P> DependencyGraphEntries<K> for ResolveSession<K, P>
-where
-    K: Ord,
-{
+impl<P> DependencyGraphEntries for ResolveSession<P> {
     #[inline]
-    fn contains_key(&self, key: &K) -> bool {
-        self.entries.contains_key(key)
+    fn contains(&self, id: KeyId) -> bool {
+        self.entries.contains_key(&id)
     }
 
     #[inline]
-    fn direct_deps(&self, key: &K) -> Option<&[K]> {
-        self.entries.get(key).and_then(|entry| entry.direct_deps())
+    fn direct_deps(&self, id: KeyId) -> Option<&[KeyId]> {
+        self.entries.get(&id).and_then(|entry| entry.direct_deps())
     }
 }
 
@@ -32,7 +34,7 @@ enum DependencyGraphSource<
     Committed(CommittedStorageView<'a, K, D, M, Arch>),
     Overlay {
         committed: CommittedStorageView<'a, K, D, M, Arch>,
-        local: &'a dyn DependencyGraphEntries<K>,
+        local: &'a dyn DependencyGraphEntries,
         visible: &'a dyn VisibleModules<K, D, Arch>,
     },
 }
@@ -93,7 +95,7 @@ where
     #[inline]
     pub(crate) fn new_overlay(
         committed: CommittedStorageView<'a, K, D, M, Arch>,
-        local: &'a dyn DependencyGraphEntries<K>,
+        local: &'a dyn DependencyGraphEntries,
         visible: &'a dyn VisibleModules<K, D, Arch>,
     ) -> Self {
         Self {
@@ -114,20 +116,49 @@ where
                 local,
                 visible,
             } => {
-                local.contains_key(key) || committed.contains_key(key) || visible.contains_key(key)
+                committed
+                    .key_id(key)
+                    .is_some_and(|id| local.contains(id) || committed.contains(id))
+                    || visible.contains_key(key)
             }
         }
     }
 
     #[inline]
-    pub fn direct_deps(&self, key: &K) -> Option<&'a [K]> {
+    pub fn direct_deps(&self, key: &K) -> Option<Vec<K>> {
+        fn keys_for_deps<K, D: 'static, M, Arch>(
+            committed: CommittedStorageView<'_, K, D, M, Arch>,
+            deps: &[KeyId],
+        ) -> Vec<K>
+        where
+            K: Clone + Ord,
+            Arch: RelocationArch,
+        {
+            deps.iter()
+                .map(|id| {
+                    committed
+                        .key(*id)
+                        .expect("dependency id must resolve to an interned key")
+                        .clone()
+                })
+                .collect()
+        }
+
         match self.source {
-            DependencyGraphSource::Committed(committed) => committed.direct_deps(key),
+            DependencyGraphSource::Committed(committed) => committed.direct_deps_key(key),
             DependencyGraphSource::Overlay {
                 committed, local, ..
-            } => local
-                .direct_deps(key)
-                .or_else(|| committed.direct_deps(key)),
+            } => {
+                let id = committed.key_id(key)?;
+                local
+                    .direct_deps(id)
+                    .map(|deps| keys_for_deps(committed, deps))
+                    .or_else(|| {
+                        committed
+                            .direct_deps(id)
+                            .map(|deps| keys_for_deps(committed, deps))
+                    })
+            }
         }
     }
 }

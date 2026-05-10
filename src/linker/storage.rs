@@ -1,6 +1,14 @@
-use crate::{image::LoadedCore, relocation::RelocationArch};
+use crate::{
+    entity::{PrimaryMap, SecondaryMap, entity_ref},
+    image::LoadedCore,
+    relocation::RelocationArch,
+    sync::Arc,
+};
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
-use core::borrow::Borrow;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct KeyId(usize);
+entity_ref!(KeyId);
 
 pub(crate) struct CommittedStorage<
     K,
@@ -8,8 +16,10 @@ pub(crate) struct CommittedStorage<
     M = (),
     Arch: RelocationArch = crate::arch::NativeArch,
 > {
-    pub(crate) entries: BTreeMap<K, CommittedEntry<K, D, M, Arch>>,
-    pub(crate) load_order: Vec<K>,
+    key_ids: BTreeMap<Arc<K>, KeyId>,
+    keys: PrimaryMap<KeyId, Arc<K>>,
+    entries: SecondaryMap<KeyId, StoredEntry<D, M, Arch>>,
+    load_order: Vec<KeyId>,
 }
 
 impl<K, D: 'static, M, Arch> CommittedStorage<K, D, M, Arch>
@@ -17,9 +27,11 @@ where
     Arch: RelocationArch,
 {
     #[inline]
-    pub(crate) const fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            entries: BTreeMap::new(),
+            key_ids: BTreeMap::new(),
+            keys: PrimaryMap::new(),
+            entries: SecondaryMap::new(),
             load_order: Vec::new(),
         }
     }
@@ -31,65 +43,78 @@ where
     Arch: RelocationArch,
 {
     #[inline]
-    pub(crate) fn contains_key<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.entries.contains_key(key)
+    pub(crate) fn key(&self, id: KeyId) -> Option<&K> {
+        self.keys.get(id).map(Arc::as_ref)
     }
 
     #[inline]
-    pub(crate) fn entry<Q>(&self, key: &Q) -> Option<&CommittedEntry<K, D, M, Arch>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.entries.get(key)
+    pub(crate) fn key_id(&self, key: &K) -> Option<KeyId> {
+        self.key_ids.get(key).copied()
     }
 
     #[inline]
-    pub(crate) fn entry_mut<Q>(&mut self, key: &Q) -> Option<&mut CommittedEntry<K, D, M, Arch>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.entries.get_mut(key)
+    pub(crate) fn contains_key(&self, key: &K) -> bool {
+        self.key_id(key)
+            .is_some_and(|id| self.entries.get(id).is_some())
+    }
+
+    #[inline]
+    pub(crate) fn contains(&self, id: KeyId) -> bool {
+        self.entries.get(id).is_some()
     }
 
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.iter().next().is_none()
     }
 
     #[inline]
-    pub(crate) fn get<Q>(&self, key: &Q) -> Option<&LoadedCore<D, Arch>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.entry(key).map(|entry| &entry.module)
+    pub(crate) fn get(&self, id: KeyId) -> Option<&LoadedCore<D, Arch>> {
+        self.entries.get(id).map(|entry| &entry.module)
     }
 
     #[inline]
-    pub(crate) fn get_key_value<Q>(&self, key: &Q) -> Option<(&K, &CommittedEntry<K, D, M, Arch>)>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.entries.get_key_value(key)
+    pub(crate) fn meta(&self, id: KeyId) -> Option<&M> {
+        self.entries.get(id).map(|entry| &entry.meta)
+    }
+
+    #[inline]
+    pub(crate) fn meta_mut(&mut self, id: KeyId) -> Option<&mut M> {
+        self.entries.get_mut(id).map(|entry| &mut entry.meta)
     }
 
     #[inline]
     pub(crate) fn view(&self) -> CommittedStorageView<'_, K, D, M, Arch> {
-        CommittedStorageView {
-            entries: &self.entries,
-        }
+        CommittedStorageView { storage: self }
     }
 
     #[inline]
-    pub(crate) fn load_order(&self) -> &[K] {
-        &self.load_order
+    pub(crate) fn load_order(&self) -> impl Iterator<Item = KeyId> + '_ {
+        self.load_order.iter().copied()
+    }
+
+    #[inline]
+    pub(crate) fn direct_deps_key(&self, key: &K) -> Option<Vec<K>>
+    where
+        K: Clone,
+    {
+        let direct_deps = self.direct_deps(self.key_id(key)?)?;
+        Some(
+            direct_deps
+                .iter()
+                .map(|id| {
+                    self.key(*id)
+                        .expect("direct dependency id must resolve to an interned key")
+                        .clone()
+                })
+                .collect(),
+        )
+    }
+
+    #[inline]
+    pub(crate) fn direct_deps(&self, id: KeyId) -> Option<&[KeyId]> {
+        let entry = self.entries.get(id)?;
+        Some(entry.direct_deps.as_ref())
     }
 }
 
@@ -98,32 +123,74 @@ where
     K: Clone + Ord,
     Arch: RelocationArch,
 {
-    #[inline]
-    pub(crate) fn insert_new(&mut self, key: K, entry: CommittedEntry<K, D, M, Arch>) {
-        self.load_order.push(key.clone());
-        let previous = self.entries.insert(key, entry);
-        debug_assert!(
-            previous.is_none(),
-            "linked storage inserted a duplicate key"
-        );
+    pub(crate) fn intern_key(&mut self, key: K) -> KeyId {
+        if let Some(id) = self.key_id(&key) {
+            return id;
+        }
+
+        let key = Arc::new(key);
+        let id = self.keys.push(key.clone());
+        let previous = self.key_ids.insert(key, id);
+        debug_assert!(previous.is_none(), "interned key inserted twice");
+        id
     }
 
     #[inline]
-    pub(crate) fn remove<Q>(&mut self, key: &Q) -> Option<CommittedEntry<K, D, M, Arch>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        let removed = self.entries.remove(key)?;
-        if let Some(idx) = self
-            .load_order
-            .iter()
-            .position(|existing| <K as Borrow<Q>>::borrow(existing) == key)
-        {
+    pub(crate) fn insert_new(&mut self, key: K, entry: CommittedEntry<K, D, M, Arch>) -> KeyId {
+        let id = self.intern_key(key);
+        let direct_deps = entry
+            .direct_deps
+            .into_vec()
+            .into_iter()
+            .map(|key| self.intern_key(key))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        self.insert_new_id(id, entry.module, direct_deps, entry.meta)
+    }
+
+    #[inline]
+    pub(crate) fn insert_new_id(
+        &mut self,
+        id: KeyId,
+        module: LoadedCore<D, Arch>,
+        direct_deps: Box<[KeyId]>,
+        meta: M,
+    ) -> KeyId {
+        assert!(
+            self.keys.get(id).is_some(),
+            "linked storage inserted an unknown key id"
+        );
+        assert!(
+            self.entries.get(id).is_none(),
+            "linked storage inserted a duplicate key"
+        );
+        self.load_order.push(id);
+        let previous = self.entries.insert(
+            id,
+            StoredEntry {
+                module,
+                direct_deps,
+                meta,
+            },
+        );
+        debug_assert!(previous.is_none(), "linked storage precheck must be exact");
+        id
+    }
+
+    #[inline]
+    pub(crate) fn remove(&mut self, id: KeyId) -> Option<(LoadedCore<D, Arch>, Box<[KeyId]>, M)> {
+        let removed = self.entries.remove(id)?;
+        if let Some(idx) = self.load_order.iter().position(|existing| *existing == id) {
             self.load_order.remove(idx);
         }
-        Some(removed)
+        Some((removed.module, removed.direct_deps, removed.meta))
     }
+}
+
+struct StoredEntry<D: 'static, M = (), Arch: RelocationArch = crate::arch::NativeArch> {
+    module: LoadedCore<D, Arch>,
+    direct_deps: Box<[KeyId]>,
+    meta: M,
 }
 
 pub(crate) struct CommittedStorageView<
@@ -133,7 +200,7 @@ pub(crate) struct CommittedStorageView<
     M = (),
     Arch: RelocationArch = crate::arch::NativeArch,
 > {
-    entries: &'a BTreeMap<K, CommittedEntry<K, D, M, Arch>>,
+    storage: &'a CommittedStorage<K, D, M, Arch>,
 }
 
 impl<'a, K, D: 'static, M, Arch> Copy for CommittedStorageView<'a, K, D, M, Arch> where
@@ -153,34 +220,37 @@ where
 
 impl<'a, K, D: 'static, M, Arch> CommittedStorageView<'a, K, D, M, Arch>
 where
-    K: Ord,
+    K: Clone + Ord,
     Arch: RelocationArch,
 {
     #[inline]
-    pub(crate) fn contains_key<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.entries.contains_key(key)
+    pub(crate) fn contains_key(&self, key: &K) -> bool {
+        self.storage.contains_key(key)
     }
 
     #[inline]
-    pub(crate) fn entry<Q>(&self, key: &Q) -> Option<&'a CommittedEntry<K, D, M, Arch>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.entries.get(key)
+    pub(crate) fn contains(&self, id: KeyId) -> bool {
+        self.storage.contains(id)
     }
 
     #[inline]
-    pub(crate) fn direct_deps<Q>(&self, key: &Q) -> Option<&'a [K]>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.entry(key).map(|entry| entry.direct_deps.as_ref())
+    pub(crate) fn key_id(&self, key: &K) -> Option<KeyId> {
+        self.storage.key_id(key)
+    }
+
+    #[inline]
+    pub(crate) fn key(&self, id: KeyId) -> Option<&K> {
+        self.storage.key(id)
+    }
+
+    #[inline]
+    pub(crate) fn direct_deps_key(&self, key: &K) -> Option<Vec<K>> {
+        self.storage.direct_deps_key(key)
+    }
+
+    #[inline]
+    pub(crate) fn direct_deps(&self, id: KeyId) -> Option<&[KeyId]> {
+        self.storage.direct_deps(id)
     }
 }
 
@@ -221,10 +291,5 @@ where
             direct_deps,
             meta,
         }
-    }
-
-    #[inline]
-    pub(crate) fn into_parts(self) -> (LoadedCore<D, Arch>, Box<[K]>, M) {
-        (self.module, self.direct_deps, self.meta)
     }
 }

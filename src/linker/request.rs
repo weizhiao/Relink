@@ -124,7 +124,6 @@ pub struct DependencyRequest<
 > {
     owner_key: &'a K,
     owner: &'a dyn DependencyOwner,
-    owner_arch: ArchKind,
     needed_index: usize,
     visible: DependencyGraphView<'a, K, D, M, Arch>,
 }
@@ -137,14 +136,12 @@ where
     pub(crate) fn new(
         owner_key: &'a K,
         owner: &'a dyn DependencyOwner,
-        owner_arch: ArchKind,
         needed_index: usize,
         visible: DependencyGraphView<'a, K, D, M, Arch>,
     ) -> Self {
         Self {
             owner_key,
             owner,
-            owner_arch,
             needed_index,
             visible,
         }
@@ -163,11 +160,6 @@ where
     #[inline]
     pub fn owner_name(&self) -> &'a str {
         self.owner.name()
-    }
-
-    #[inline]
-    pub fn owner_arch(&self) -> ArchKind {
-        self.owner_arch
     }
 
     #[inline]

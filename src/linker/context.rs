@@ -1,5 +1,5 @@
 use super::{
-    storage::{CommittedEntry, CommittedStorage},
+    storage::{CommittedEntry, CommittedStorage, KeyId},
     view::DependencyGraphView,
 };
 use crate::{LinkerError, Result, arch::NativeArch, image::LoadedCore, relocation::RelocationArch};
@@ -9,7 +9,6 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
-use core::borrow::Borrow;
 
 /// A reusable local module repository and committed dependency graph.
 ///
@@ -34,7 +33,7 @@ where
     Arch: RelocationArch,
 {
     #[inline]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             committed: CommittedStorage::new(),
         }
@@ -52,45 +51,37 @@ where
     }
 
     #[inline]
-    pub fn contains_key<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
+    pub fn contains_key(&self, key: &K) -> bool {
         self.committed.contains_key(key)
     }
 
     #[inline]
-    pub fn get<Q>(&self, key: &Q) -> Option<&LoadedCore<D, Arch>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.committed.get(key)
+    pub fn contains(&self, id: KeyId) -> bool {
+        self.committed.contains(id)
     }
 
     #[inline]
-    pub fn get_key_value<Q>(&self, key: &Q) -> Option<(&K, &LoadedCore<D, Arch>)>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.committed
-            .get_key_value(key)
-            .map(|(key, entry)| (key, &entry.module))
+    pub fn key_id(&self, key: &K) -> Option<KeyId> {
+        self.committed.key_id(key)
     }
 
     #[inline]
-    pub fn direct_deps<Q>(&self, key: &Q) -> Option<&[K]>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.committed.view().direct_deps(key)
+    pub fn key(&self, id: KeyId) -> Option<&K> {
+        self.committed.key(id)
     }
 
     #[inline]
-    pub fn load_order(&self) -> &[K] {
+    pub fn get(&self, id: KeyId) -> Option<&LoadedCore<D, Arch>> {
+        self.committed.get(id)
+    }
+
+    #[inline]
+    pub fn direct_deps(&self, id: KeyId) -> Option<&[KeyId]> {
+        self.committed.direct_deps(id)
+    }
+
+    #[inline]
+    pub fn load_order(&self) -> impl Iterator<Item = KeyId> + '_ {
         self.committed.load_order()
     }
 
@@ -100,21 +91,13 @@ where
     }
 
     #[inline]
-    pub fn meta<Q>(&self, key: &Q) -> Option<&M>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.committed.entry(key).map(|entry| &entry.meta)
+    pub fn meta(&self, id: KeyId) -> Option<&M> {
+        self.committed.meta(id)
     }
 
     #[inline]
-    pub fn meta_mut<Q>(&mut self, key: &Q) -> Option<&mut M>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.committed.entry_mut(key).map(|entry| &mut entry.meta)
+    pub fn meta_mut(&mut self, id: KeyId) -> Option<&mut M> {
+        self.committed.meta_mut(id)
     }
 
     pub fn insert(
@@ -122,7 +105,7 @@ where
         key: K,
         module: LoadedCore<D, Arch>,
         direct_deps: Box<[K]>,
-    ) -> Result<()>
+    ) -> Result<KeyId>
     where
         M: Default,
     {
@@ -135,45 +118,41 @@ where
         module: LoadedCore<D, Arch>,
         direct_deps: Box<[K]>,
         meta: M,
-    ) -> Result<()> {
+    ) -> Result<KeyId> {
         if self.committed.contains_key(&key) {
             return Err(LinkerError::context("duplicate linked module key").into());
         }
 
-        self.committed
-            .insert_new(key, CommittedEntry::new(module, direct_deps, meta));
-        Ok(())
+        Ok(self
+            .committed
+            .insert_new(key, CommittedEntry::new(module, direct_deps, meta)))
     }
 
     #[inline]
-    pub fn remove<Q>(&mut self, key: &Q) -> Option<(LoadedCore<D, Arch>, Box<[K]>, M)>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.committed.remove(key).map(CommittedEntry::into_parts)
+    pub fn remove(&mut self, id: KeyId) -> Option<(LoadedCore<D, Arch>, Box<[KeyId]>, M)> {
+        self.committed.remove(id)
     }
 
-    pub fn dependency_scope_keys(&self, root: &K) -> Vec<K> {
-        if !self.committed.contains_key(root) {
+    pub fn dependency_scope(&self, root: KeyId) -> Vec<KeyId> {
+        if !self.committed.contains(root) {
             return Vec::new();
         }
 
         let mut scope = Vec::new();
         let mut visited = BTreeSet::new();
         let mut queue = VecDeque::new();
-        visited.insert(root.clone());
-        queue.push_back(root.clone());
+        visited.insert(root);
+        queue.push_back(root);
 
-        while let Some(key) = queue.pop_front() {
-            let Some(entry) = self.committed.entry(&key) else {
+        while let Some(id) = queue.pop_front() {
+            let Some(direct_deps) = self.committed.direct_deps(id) else {
                 continue;
             };
-            scope.push(key);
 
-            for dep in &entry.direct_deps {
-                if visited.insert(dep.clone()) {
-                    queue.push_back(dep.clone());
+            scope.push(id);
+            for dep in direct_deps.iter().copied() {
+                if visited.insert(dep) {
+                    queue.push_back(dep);
                 }
             }
         }
@@ -181,11 +160,11 @@ where
         scope
     }
 
-    pub fn dependency_scope(&self, root: &K) -> Arc<[LoadedCore<D, Arch>]> {
+    pub fn dependency_modules(&self, root: KeyId) -> Arc<[LoadedCore<D, Arch>]> {
         let scope = self
-            .dependency_scope_keys(root)
+            .dependency_scope(root)
             .into_iter()
-            .filter_map(|key| self.committed.get(&key).cloned())
+            .filter_map(|id| self.committed.get(id).cloned())
             .collect::<Vec<_>>();
         Arc::from(scope)
     }
@@ -194,22 +173,32 @@ where
     where
         M: Clone,
     {
-        for key in other.load_order() {
+        for id in other.load_order() {
+            let key = other
+                .key(id)
+                .expect("load_order entries must resolve to interned keys");
             if self.committed.contains_key(key) {
                 continue;
             }
 
             let module = other
-                .get(key)
+                .get(id)
                 .cloned()
                 .expect("load_order entries must resolve to committed modules");
             let direct_deps = other
-                .direct_deps(key)
+                .direct_deps(id)
                 .unwrap_or(&[])
-                .to_vec()
+                .iter()
+                .map(|dep| {
+                    other
+                        .key(*dep)
+                        .expect("direct dependency ids must resolve to interned keys")
+                        .clone()
+                })
+                .collect::<Vec<_>>()
                 .into_boxed_slice();
             let meta = other
-                .meta(key)
+                .meta(id)
                 .cloned()
                 .expect("load_order entries must resolve to committed metadata");
             self.committed
