@@ -15,7 +15,6 @@ const STATIC_TLS_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
 };
 
 /// Structured I/O error details.
-#[derive(Debug)]
 pub enum IoError {
     /// The provided path contains an interior NUL byte.
     NullByteInPath,
@@ -73,7 +72,6 @@ impl Display for IoError {
 }
 
 /// Structured memory-mapping error details.
-#[derive(Debug)]
 pub enum MmapError {
     /// The configured loader page size is incompatible with the mapping backend.
     InvalidPageSize {
@@ -150,7 +148,6 @@ impl Display for MmapError {
 }
 
 /// Structured dynamic-section parsing error details.
-#[derive(Debug)]
 pub enum ParseDynamicError {
     /// The dynamic section omitted both `DT_GNU_HASH` and `DT_HASH`.
     MissingHashTable,
@@ -183,7 +180,6 @@ impl Display for ParseDynamicError {
 }
 
 /// Structured ELF header parsing error details.
-#[derive(Debug)]
 pub enum ParseEhdrError {
     /// The ELF magic bytes do not match `0x7fELF`.
     InvalidMagic,
@@ -236,7 +232,6 @@ impl Display for ParseEhdrError {
 }
 
 /// Structured program-header parsing error details.
-#[derive(Debug)]
 pub enum ParsePhdrError {
     /// The program header table is malformed.
     MalformedProgramHeaders,
@@ -262,7 +257,7 @@ impl Display for ParsePhdrError {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub(crate) enum RelocationFailureReason {
     #[cfg(feature = "object")]
     UnknownSymbol,
@@ -286,7 +281,6 @@ impl Display for RelocationFailureReason {
 }
 
 /// Relocation context carried separately so the top-level [`Error`] stays compact.
-#[derive(Debug)]
 pub struct RelocationContextError {
     file: Box<str>,
     r_type: &'static str,
@@ -324,7 +318,6 @@ impl Display for RelocationContextError {
 }
 
 /// Structured relocation error details.
-#[derive(Debug)]
 pub enum RelocationError {
     /// `out of range integral type conversion attempted`
     IntegerConversionOverflow,
@@ -357,7 +350,6 @@ impl Display for RelocationError {
 }
 
 /// Structured user-defined error details.
-#[derive(Debug)]
 pub enum CustomError {
     /// A plain message supplied by the caller.
     Message(Cow<'static, str>),
@@ -372,7 +364,6 @@ impl Display for CustomError {
 }
 
 /// Linker dependency context carried separately so the top-level [`Error`] stays compact.
-#[derive(Debug)]
 pub struct UnresolvedDependencyError {
     owner: Box<str>,
     dependency: Box<str>,
@@ -399,7 +390,6 @@ impl Display for UnresolvedDependencyError {
 }
 
 /// Structured linker error details.
-#[derive(Debug)]
 pub enum LinkerError {
     /// A dependency could not be resolved by the resolver callback.
     UnresolvedDependency(Box<UnresolvedDependencyError>),
@@ -486,7 +476,6 @@ impl Display for LinkerError {
 }
 
 /// Structured TLS error details.
-#[derive(Debug)]
 pub enum TlsError {
     /// The current resolver does not support dynamic TLS.
     ResolverUnsupported,
@@ -506,7 +495,6 @@ impl Display for TlsError {
 /// Error types used throughout the `elf_loader` library.
 /// These errors represent various failure conditions that can occur during
 /// ELF file loading, parsing, and relocation operations.
-#[derive(Debug)]
 pub enum Error {
     /// An error occurred while opening, reading, or writing ELF files.
     Io(IoError),
@@ -620,6 +608,35 @@ impl Display for Error {
 
 impl core::error::Error for Error {}
 
+macro_rules! debug_as_display {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl fmt::Debug for $ty {
+                #[inline]
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    Display::fmt(self, f)
+                }
+            }
+        )*
+    };
+}
+
+debug_as_display!(
+    IoError,
+    MmapError,
+    ParseDynamicError,
+    ParseEhdrError,
+    ParsePhdrError,
+    RelocationFailureReason,
+    RelocationContextError,
+    RelocationError,
+    CustomError,
+    UnresolvedDependencyError,
+    LinkerError,
+    TlsError,
+    Error,
+);
+
 #[cold]
 #[inline(never)]
 pub(crate) fn relocate_context_error(
@@ -643,6 +660,7 @@ pub fn custom_error(msg: impl Into<Cow<'static, str>>) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::{format, string::ToString};
     use core::mem::size_of;
 
     #[test]
@@ -652,5 +670,14 @@ mod tests {
             "Error grew to {} bytes",
             size_of::<Error>()
         );
+    }
+
+    #[test]
+    fn debug_matches_display() {
+        let parse_err = ParseEhdrError::InvalidMagic;
+        assert_eq!(format!("{parse_err:?}"), parse_err.to_string());
+
+        let err = Error::from(parse_err);
+        assert_eq!(format!("{err:?}"), err.to_string());
     }
 }
