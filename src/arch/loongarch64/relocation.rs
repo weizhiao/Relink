@@ -1,15 +1,19 @@
 //! LoongArch 64-bit ELF relocation numbering.
 
+use elf::abi::EM_LOONGARCH;
+
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
-// LoongArch relocation numbers are defined locally in `arch/loongarch64/mod.rs`
-// because the elf crate does not always publish them.
-use super::{
-    R_LARCH_64, R_LARCH_COPY, R_LARCH_IRELATIVE, R_LARCH_JUMP_SLOT, R_LARCH_RELATIVE,
-    R_LARCH_TLS_DTPMOD64, R_LARCH_TLS_DTPREL64, R_LARCH_TLS_TPREL64,
-};
+const R_LARCH_64: u32 = 2;
+const R_LARCH_RELATIVE: u32 = 3;
+const R_LARCH_COPY: u32 = 4;
+const R_LARCH_JUMP_SLOT: u32 = 5;
+const R_LARCH_TLS_DTPMOD64: u32 = 7;
+const R_LARCH_TLS_DTPREL64: u32 = 9;
+const R_LARCH_TLS_TPREL64: u32 = 11;
+const R_LARCH_IRELATIVE: u32 = 12;
 
 /// LoongArch 64-bit architecture marker.
 #[derive(Debug, Clone, Copy, Default)]
@@ -17,7 +21,7 @@ pub struct LoongArch64Arch;
 
 impl RelocationArch for LoongArch64Arch {
     const KIND: ArchKind = ArchKind::LoongArch64;
-    const MACHINE: ElfMachine = ElfMachine::new(super::EM_LARCH);
+    const MACHINE: ElfMachine = ElfMachine::new(EM_LOONGARCH);
     type Layout = Elf64Layout;
     type Relocation = ElfRela<Self::Layout>;
 

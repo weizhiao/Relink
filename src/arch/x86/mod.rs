@@ -14,16 +14,4 @@ pub(crate) use lazy::{DYLIB_OFFSET, RESOLVE_FUNCTION_OFFSET, dl_runtime_resolve}
 #[cfg(all(feature = "tls", target_arch = "x86"))]
 pub(crate) use tls::{get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static};
 
-/// Custom relocation type constants for x86 (32-bit).
-/// These are defined locally since they may not be available in all elf crate versions.
-pub(super) const R_386_32: u32 = 1;
-pub(super) const R_386_GLOB_DAT: u32 = 6;
-pub(super) const R_386_JMP_SLOT: u32 = 7;
-pub(super) const R_386_RELATIVE: u32 = 8;
-pub(super) const R_386_COPY: u32 = 5;
-pub(super) const R_386_TLS_DTPMOD32: u32 = 35;
-pub(super) const R_386_TLS_DTPOFF32: u32 = 36;
-pub(super) const R_386_IRELATIVE: u32 = 42;
-pub(super) const R_386_TLS_TPOFF: u32 = 14;
-
 pub mod relocation;

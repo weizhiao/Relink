@@ -6,13 +6,15 @@ use crate::arch::ArchKind;
 use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
-// The constants below come from `super` because the elf crate does not always
-// publish the i386 relocation numbers; they are defined locally in
-// `arch/x86/mod.rs`.
-use super::{
-    R_386_32, R_386_COPY, R_386_GLOB_DAT, R_386_IRELATIVE, R_386_JMP_SLOT, R_386_RELATIVE,
-    R_386_TLS_DTPMOD32, R_386_TLS_DTPOFF32, R_386_TLS_TPOFF,
-};
+const R_386_32: u32 = 1;
+const R_386_COPY: u32 = 5;
+const R_386_GLOB_DAT: u32 = 6;
+const R_386_JMP_SLOT: u32 = 7;
+const R_386_RELATIVE: u32 = 8;
+const R_386_TLS_TPOFF: u32 = 14;
+const R_386_TLS_DTPMOD32: u32 = 35;
+const R_386_TLS_DTPOFF32: u32 = 36;
+const R_386_IRELATIVE: u32 = 42;
 
 /// x86 (i386, 32-bit) architecture marker.
 #[derive(Debug, Clone, Copy, Default)]

@@ -11,18 +11,6 @@ mod lazy;
 #[cfg(all(feature = "tls", target_arch = "loongarch64"))]
 mod tls;
 
-/// Custom relocation type constants for LoongArch 64-bit.
-/// These are defined locally as they may not be available in all elf crate versions.
-pub(super) const EM_LARCH: u16 = 258;
-pub(super) const R_LARCH_64: u32 = 2;
-pub(super) const R_LARCH_RELATIVE: u32 = 3;
-pub(super) const R_LARCH_COPY: u32 = 4;
-pub(super) const R_LARCH_JUMP_SLOT: u32 = 5;
-pub(super) const R_LARCH_TLS_DTPMOD64: u32 = 7;
-pub(super) const R_LARCH_TLS_DTPREL64: u32 = 9;
-pub(super) const R_LARCH_TLS_TPREL64: u32 = 11;
-pub(super) const R_LARCH_IRELATIVE: u32 = 12;
-
 #[cfg(all(feature = "lazy-binding", target_arch = "loongarch64"))]
 pub(crate) use lazy::{DYLIB_OFFSET, RESOLVE_FUNCTION_OFFSET, dl_runtime_resolve};
 #[cfg(all(feature = "tls", target_arch = "loongarch64"))]
