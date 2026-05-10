@@ -69,12 +69,6 @@ pub struct PreCompute {
     /// GNU hash value for the symbol name
     gnuhash: u32,
 
-    /// Filter offset for GNU hash table lookups
-    fofs: usize,
-
-    /// Filter mask for GNU hash table lookups
-    fmask: u64,
-
     /// Traditional hash value (used for SYSV hash tables)
     hash: Option<u32>,
 
@@ -193,8 +187,6 @@ impl SymbolInfo<'_> {
         let gnuhash = ElfGnuHash::hash(self.name().as_bytes()) as u32;
         PreCompute {
             gnuhash,
-            fofs: gnuhash as usize / usize::BITS as usize,
-            fmask: 1u64 << (gnuhash % u64::BITS),
             hash: None,
             #[cfg(feature = "object")]
             custom: None,

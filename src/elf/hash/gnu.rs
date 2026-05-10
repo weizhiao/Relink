@@ -155,8 +155,9 @@ impl ElfHashTable for ElfGnuHash {
     ) -> Option<&'sym ElfSymbol<L>> {
         // Get precomputed hash values
         let hash = precompute.gnuhash;
-        let fofs = precompute.fofs;
-        let fmask = precompute.fmask;
+        let word_bits = L::Word::BITS;
+        let fofs = hash as usize / word_bits;
+        let fmask = 1u64 << (hash as usize % word_bits);
 
         // Get the hash table implementation
         let hashtab = table.hashtab.into_gnuhash().unwrap();
@@ -178,7 +179,7 @@ impl ElfHashTable for ElfGnuHash {
         }
 
         // Second bloom filter check
-        let filter2 = filter >> ((hash >> hashtab.header.nshift) as usize % usize::BITS as usize);
+        let filter2 = filter >> ((hash >> hashtab.header.nshift) as usize % word_bits);
         if filter2 & 1 == 0 {
             return None;
         }

@@ -1,4 +1,4 @@
-# Relink：ELF 加载与动态链接时优化
+# Relink：Rust ELF 加载器与 Runtime/JIT 链接器
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/weizhiao/elf_loader/main/docs/imgs/logo.svg" width="560" alt="Relink logo">
@@ -22,10 +22,10 @@
 </p>
 
 <p align="center">
-  <strong>动态链接时优化，支持异构加载与深度定制。</strong><br>
+  <strong>面向 Rust 的 no_std ELF loader、runtime linker 和 JIT linker，支持动态链接时优化。</strong><br>
 </p>
 
-Relink 是一个高性能、`no_std` 友好的 Rust ELF 加载器与 runtime/JIT 链接器。它可以从文件或内存加载 ELF 镜像，执行运行时重定位和符号解析，并支持插件系统、热重载、内核、嵌入式运行时和自定义动态链接策略。
+Relink 是一个高性能、`no_std` 友好的 Rust ELF loader、runtime linker 和 JIT linker。它可以从文件或内存加载 ELF 镜像，执行动态加载、重定位和符号解析，并支持插件系统、热重载、内核、嵌入式运行时和自定义动态链接策略。
 
 ## 适用场景
 

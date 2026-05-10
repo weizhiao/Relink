@@ -1,4 +1,4 @@
-# Relink: ELF Loading and Dynamic Link-Time Optimization
+# Relink: Rust ELF Loader and Runtime/JIT Linker
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/weizhiao/elf_loader/main/docs/imgs/logo.svg" width="560" alt="Relink logo">
@@ -22,10 +22,10 @@
 </p>
 
 <p align="center">
-  <strong>Dynamic link-time optimization, heterogeneous loading, and deep customization.</strong><br>
+  <strong>Rust no_std ELF loader, runtime linker, and JIT linker with dynamic link-time optimization.</strong><br>
 </p>
 
-Relink is a high-performance, no_std-friendly ELF loader and runtime/JIT linker for Rust. It loads ELF images from files or memory, performs runtime relocation and symbol resolution, and supports plugin systems, hot reload, kernels, embedded runtimes, and custom dynamic linking policies.
+Relink is a high-performance, no_std-friendly Rust ELF loader, runtime linker, and JIT linker. It loads ELF images from files or memory, performs dynamic loading, relocation, and symbol resolution, and supports plugin systems, hot reload, kernels, embedded runtimes, and custom dynamic linking policies.
 
 ## Use Cases
 

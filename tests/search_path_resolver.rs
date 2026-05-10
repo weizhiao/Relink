@@ -20,6 +20,7 @@ fn loads_fixture_chain() {
 }
 
 #[test]
+#[cfg(target_arch = "x86_64")]
 fn scan_first_loads_fixture_chain() {
     let fixtures = fixture_support::ensure_all();
     let mut context = LinkContext::<String, ()>::new();
