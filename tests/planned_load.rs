@@ -56,7 +56,7 @@ struct StaticVisibleModule {
     direct_deps: Box<[&'static str]>,
 }
 
-impl KeyResolver<'static, &'static str, ()> for SingleBinaryResolver {
+impl KeyResolver<'static, &'static str> for SingleBinaryResolver {
     fn load_root(
         &mut self,
         key: &&'static str,
@@ -76,7 +76,7 @@ impl KeyResolver<'static, &'static str, ()> for SingleBinaryResolver {
     }
 }
 
-impl KeyResolver<'static, &'static str, ()> for ExistingRootResolver {
+impl KeyResolver<'static, &'static str> for ExistingRootResolver {
     fn load_root(
         &mut self,
         key: &&'static str,
@@ -102,7 +102,7 @@ impl MultiBinaryResolver {
     }
 }
 
-impl KeyResolver<'static, &'static str, ()> for MultiBinaryResolver {
+impl KeyResolver<'static, &'static str> for MultiBinaryResolver {
     fn load_root(
         &mut self,
         key: &&'static str,
@@ -147,7 +147,7 @@ impl LoadObserver<&'static str, ()> for FailingObserver {
     }
 }
 
-impl KeyResolver<'static, &'static str, ()> for VisibleDependencyResolver {
+impl KeyResolver<'static, &'static str> for VisibleDependencyResolver {
     fn load_root(
         &mut self,
         key: &&'static str,

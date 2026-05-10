@@ -8,7 +8,8 @@ use super::{
         DefaultRelocationPlanner, LoadObserver, RelocationPlanner, RelocationRequest,
         StagedDynamic, VisibleModules,
     },
-    resolve::{KeyResolver, LoadResolveContext, ScanResolveContext},
+    resolve::{LoadResolveContext, ScanResolveContext},
+    resolver::KeyResolver,
     session::{GraphEntry, LoadSession},
     storage::KeyId,
 };
@@ -16,6 +17,7 @@ use crate::{
     LinkerError, Loader, Result,
     entity::SecondaryMap,
     image::{LoadedCore, RawDynamic, ScannedDynamic},
+    linker::session::ResolveSession,
     loader::LoadHook,
     os::{DefaultMmap, Mmap},
     relocation::{RelocationArch, RelocationHandler, Relocator, SymbolLookup},
@@ -517,7 +519,7 @@ where
     where
         K: 'cfg,
         Meta: Default,
-        Resolver: KeyResolver<'cfg, K, D, Meta, Arch>,
+        Resolver: KeyResolver<'cfg, K>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
             return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
@@ -546,7 +548,7 @@ where
     where
         K: 'cfg,
         Meta: Default,
-        Resolver: KeyResolver<'cfg, K, D, Meta, Arch>,
+        Resolver: KeyResolver<'cfg, K>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
             return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
@@ -571,7 +573,7 @@ where
     where
         K: 'static,
         Meta: Default,
-        Resolver: KeyResolver<'static, K, D, Meta, Arch>,
+        Resolver: KeyResolver<'static, K>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
             return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
@@ -591,25 +593,20 @@ where
     ) -> Result<ScanDiscovery<K, Arch>>
     where
         K: 'static,
-        Resolver: KeyResolver<'static, K, D, Meta, Arch>,
+        Resolver: KeyResolver<'static, K>,
     {
-        let mut session = crate::linker::session::ResolveSession::new();
-        let root = {
-            let mut resolve_context = ScanResolveContext::new(
-                &mut context.committed,
-                &self.visible_modules,
-                &mut session,
-            );
-            let root =
-                resolve_context.stage_resolved(self.resolver.load_root(key)?, &mut self.loader)?;
-            if !resolve_context.contains_pending(root) {
-                return Ok(ScanDiscovery::Existing(root));
-            }
-            resolve_context.resolve_dependency_graph(root, &mut self.loader, &mut self.resolver)?;
-            root
-        };
+        let mut session = ResolveSession::new();
 
-        let crate::linker::session::ResolveSession {
+        let mut resolve_context =
+            ScanResolveContext::new(&mut context.committed, &self.visible_modules, &mut session);
+        let root =
+            resolve_context.stage_resolved(self.resolver.load_root(key)?, &mut self.loader)?;
+        if !resolve_context.contains_pending(root) {
+            return Ok(ScanDiscovery::Existing(root));
+        }
+        resolve_context.resolve_dependency_graph(root, &mut self.loader, &mut self.resolver)?;
+
+        let ResolveSession {
             entries,
             group_order,
         } = session;
@@ -788,7 +785,7 @@ where
     ) -> Result<PreparedLoad<D, Arch>>
     where
         K: 'cfg,
-        Resolver: KeyResolver<'cfg, K, D, Meta, Arch>,
+        Resolver: KeyResolver<'cfg, K>,
         Seed: FnOnce(
             &mut LinkContext<K, D, Meta, Arch>,
             &V,

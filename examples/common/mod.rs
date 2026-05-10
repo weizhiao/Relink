@@ -103,7 +103,8 @@ fn build_rust_fixtures(target_dir: &Path) {
         let dylib = target_dir.join(format!("lib{crate_name}.so"));
         let dylib_dep = rust_fixture_dylib_dependency(crate_name);
         let needs_dylib_rebuild = needs_rebuild(&dylib, [&source])
-            || dylib_dep.is_some_and(|dep| !dylib_mentions_needed(&dylib, dep));
+            || dylib_dep.is_some_and(|dep| !dylib_mentions_needed(&dylib, dep))
+            || !dylib_mentions_origin_runpath(&dylib);
         if needs_dylib_rebuild {
             let mut cmd = Command::new(&rustc);
             cmd.arg(&source)
@@ -118,7 +119,11 @@ fn build_rust_fixtures(target_dir: &Path) {
                 .arg("-C")
                 .arg("linker=rust-lld")
                 .arg("-C")
-                .arg("link-arg=--emit-relocs");
+                .arg("link-arg=--emit-relocs")
+                .arg("-C")
+                .arg("link-arg=-rpath")
+                .arg("-C")
+                .arg("link-arg=$ORIGIN");
             if let Some(dep) = dylib_dep {
                 cmd.arg("-L")
                     .arg(format!("native={}", target_dir.display()))
@@ -159,6 +164,16 @@ fn dylib_mentions_needed(dylib: &Path, dep: &str) -> bool {
             bytes
                 .windows(needed.len())
                 .any(|window| window == needed.as_bytes())
+        })
+        .unwrap_or(false)
+}
+
+fn dylib_mentions_origin_runpath(dylib: &Path) -> bool {
+    fs::read(dylib)
+        .map(|bytes| {
+            bytes
+                .windows(b"$ORIGIN".len())
+                .any(|window| window == b"$ORIGIN")
         })
         .unwrap_or(false)
 }

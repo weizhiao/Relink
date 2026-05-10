@@ -14,6 +14,9 @@ fn a() -> i32 {
     1
 }
 
+#[unsafe(no_mangle)]
+fn print(_: &str) {}
+
 #[repr(C)]
 pub struct S {
     a: u64,

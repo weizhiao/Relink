@@ -1,61 +1,18 @@
 use super::{
     request::{DependencyOwner, DependencyRequest, LoadObserver, StagedDynamic, VisibleModules},
+    resolver::{KeyResolver, ResolvedKey},
     session::{ResolveSession, extend_breadth_first},
     storage::{CommittedStorage, KeyId},
 };
 use crate::{
     LinkerError, Loader, Result,
     image::{RawDynamic, ScannedDynamic, ScannedElf},
-    input::ElfReader,
     loader::LoadHook,
     os::Mmap,
     relocation::RelocationArch,
     tls::TlsResolver,
 };
-use alloc::{boxed::Box, vec::Vec};
-
-/// A key-resolution result chosen by caller policy.
-pub enum ResolvedKey<'cfg, K> {
-    /// Reuses a module that is already visible in the current link context.
-    Existing(K),
-    /// Loads a new module for the provided canonical key and target arch.
-    Load {
-        key: K,
-        reader: Box<dyn ElfReader + 'cfg>,
-    },
-}
-
-impl<'cfg, K> ResolvedKey<'cfg, K> {
-    #[inline]
-    pub fn existing(key: K) -> Self {
-        Self::Existing(key)
-    }
-
-    #[inline]
-    pub fn load(key: K, reader: impl ElfReader + 'cfg) -> Self {
-        Self::Load {
-            key,
-            reader: Box::new(reader),
-        }
-    }
-}
-
-/// Runtime key-resolution policy used by [`super::Linker`].
-pub trait KeyResolver<
-    'cfg,
-    K: Clone,
-    D: 'static,
-    Meta = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
->
-{
-    fn load_root(&mut self, key: &K) -> Result<ResolvedKey<'cfg, K>>;
-
-    fn resolve_dependency(
-        &mut self,
-        req: &DependencyRequest<'_, K>,
-    ) -> Result<ResolvedKey<'cfg, K>>;
-}
+use alloc::vec::Vec;
 
 pub(crate) struct ResolveContext<
     'a,
@@ -161,7 +118,7 @@ where
         &self,
         id: KeyId,
         needed_index: usize,
-        resolver: &mut impl KeyResolver<'cfg, K, D, Meta, Arch>,
+        resolver: &mut impl KeyResolver<'cfg, K>,
     ) -> Result<ResolvedKey<'cfg, K>>
     where
         K: 'cfg,
@@ -184,7 +141,7 @@ where
         &mut self,
         id: KeyId,
         loader: &mut Loader<M, H, D, Tls, Arch>,
-        resolver: &mut impl KeyResolver<'cfg, K, D, Meta, Arch>,
+        resolver: &mut impl KeyResolver<'cfg, K>,
         stage: &mut F,
     ) -> Result<Vec<KeyId>>
     where
@@ -218,7 +175,7 @@ where
         &mut self,
         root: KeyId,
         loader: &mut Loader<M, H, D, Tls, Arch>,
-        resolver: &mut impl KeyResolver<'cfg, K, D, Meta, Arch>,
+        resolver: &mut impl KeyResolver<'cfg, K>,
         mut stage: F,
     ) -> Result<()>
     where
@@ -285,7 +242,7 @@ where
         &mut self,
         root: KeyId,
         loader: &mut Loader<M, H, D, Tls, Arch>,
-        resolver: &mut impl KeyResolver<'cfg, K, D, Meta, Arch>,
+        resolver: &mut impl KeyResolver<'cfg, K>,
         observer: &mut O,
     ) -> Result<()>
     where
@@ -348,7 +305,7 @@ where
         &mut self,
         root: KeyId,
         loader: &mut Loader<M, H, D, Tls, Arch>,
-        resolver: &mut impl KeyResolver<'static, K, D, Meta, Arch>,
+        resolver: &mut impl KeyResolver<'static, K>,
     ) -> Result<()>
     where
         K: 'static,

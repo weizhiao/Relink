@@ -50,7 +50,7 @@ fn scanned_dynamic_load_reuses_scanned_metadata() {
         &[],
         &[SymbolDesc::global_func("answer", &return_42_stub(arch))],
     );
-    let bytes: &'static [u8] = Box::leak(output.data.into_boxed_slice());
+    let bytes = output.data;
 
     let mut loader = Loader::new().with_dynamic_initializer::<ScanData>(|dynamic| {
         if let Some(data) = dynamic.user_data_mut() {
@@ -59,7 +59,7 @@ fn scanned_dynamic_load_reuses_scanned_metadata() {
         Ok(())
     });
     let ScannedElf::Dynamic(scanned) = loader
-        .scan(ElfBinary::new("scanned.so", bytes))
+        .scan(ElfBinary::owned("scanned.so", bytes))
         .expect("failed to scan dylib")
     else {
         panic!("generated dylib should scan as dynamic");

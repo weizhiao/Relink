@@ -4,7 +4,9 @@
 //! `DT_NEEDED` edges without hard-coding a process-global loader policy.
 //! `elf_loader` stays responsible for mapping and local relocation, while
 //! callers decide how dependencies are discovered and how search scopes are
-//! assembled.
+//! assembled. Use [`SearchPathResolver`] for the common filesystem-backed case,
+//! or implement [`KeyResolver`] when dependencies come from custom registries,
+//! memory blobs, package stores, or host-specific search rules.
 
 mod context;
 mod layout;
@@ -15,6 +17,7 @@ mod passes;
 mod plan;
 mod request;
 mod resolve;
+mod resolver;
 mod session;
 mod storage;
 
@@ -35,5 +38,5 @@ pub use request::{
     DefaultRelocationPlanner, DependencyOwner, DependencyRequest, LoadObserver, RelocationInputs,
     RelocationPlanner, RelocationRequest, StagedDynamic, VisibleModules,
 };
-pub use resolve::{KeyResolver, ResolvedKey};
+pub use resolver::{KeyResolver, ResolvedKey, SearchPathResolver};
 pub use storage::KeyId;

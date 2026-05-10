@@ -15,7 +15,8 @@
 //! - Use [`Loader::scan`] and [`Loader::load_scanned_dynamic`] to split dynamic metadata
 //!   discovery from mapping.
 //! - Use `Loader::load_object` to load `ET_REL` object files when the `object` feature is enabled.
-//! - Inputs can come from file paths, raw bytes, [`input::ElfFile`], or [`input::ElfBinary`].
+//! - Inputs can come from file paths, [`input::Path`] / [`input::PathBuf`], raw bytes,
+//!   [`input::ElfFile`], or [`input::ElfBinary`].
 //!
 //! ## Highlights
 //!

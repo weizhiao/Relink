@@ -222,7 +222,7 @@ mod tests {
     use super::*;
     use crate::os::DefaultMmap;
     use crate::{image::ScannedElf, input::ElfBinary, loader::Loader};
-    use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+    use alloc::{collections::BTreeMap, vec::Vec};
     use gen_elf::{Arch, DylibWriter, ElfWriterConfig, SymbolDesc};
 
     #[test]
@@ -233,10 +233,10 @@ mod tests {
         )
         .write(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])])
         .unwrap();
-        let bytes: &'static [u8] = Box::leak(output.data.into_boxed_slice());
+        let bytes = output.data;
         let mut loader = Loader::new();
         let ScannedElf::Dynamic(scanned) = loader
-            .scan(ElfBinary::new("arena-backed.so", bytes))
+            .scan(ElfBinary::owned("arena-backed.so", bytes))
             .unwrap()
         else {
             panic!("generated dylib should scan as dynamic");

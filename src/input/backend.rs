@@ -1,6 +1,7 @@
-use super::{ElfReader, IntoElfReader};
+use super::{ElfReader, IntoElfReader, Path, PathBuf};
 use crate::{Result, logging, os::RawFile};
 use alloc::{
+    borrow::Cow,
     boxed::Box,
     string::{String, ToString},
     vec::Vec,
@@ -15,7 +16,7 @@ pub struct ElfBinary<'bytes> {
     /// The name assigned to this ELF object.
     name: String,
     /// The raw ELF data.
-    bytes: &'bytes [u8],
+    bytes: Cow<'bytes, [u8]>,
 }
 
 impl<'bytes> ElfBinary<'bytes> {
@@ -31,7 +32,18 @@ impl<'bytes> ElfBinary<'bytes> {
     pub fn new(name: &str, bytes: &'bytes [u8]) -> Self {
         Self {
             name: name.to_string(),
-            bytes,
+            bytes: Cow::Borrowed(bytes),
+        }
+    }
+
+    /// Creates a new memory-based ELF object that owns its bytes.
+    ///
+    /// This is useful for scanned images, which retain their reader until the
+    /// later mapping phase.
+    pub fn owned(name: impl Into<String>, bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            name: name.into(),
+            bytes: Cow::Owned(bytes.into()),
         }
     }
 }
@@ -44,7 +56,14 @@ impl<'bytes> ElfReader for ElfBinary<'bytes> {
 
     /// Reads data from the memory-based ELF object.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> crate::Result<()> {
-        buf.copy_from_slice(&self.bytes[offset..offset + buf.len()]);
+        let bytes = self.bytes.as_ref();
+        if offset + buf.len() > bytes.len() {
+            return Err(crate::IoError::ReadOffsetOutOfBounds(Box::new(
+                crate::ReadOffsetOutOfBoundsError::new(offset, buf.len(), bytes.len()),
+            ))
+            .into());
+        }
+        buf.copy_from_slice(&bytes[offset..offset + buf.len()]);
         Ok(())
     }
 
@@ -68,18 +87,19 @@ impl ElfFile {
     ///
     /// # Safety
     /// The caller must ensure that `raw_fd` is valid and owned by this object.
-    pub unsafe fn from_owned_fd(path: &str, raw_fd: i32) -> Self {
+    pub unsafe fn from_owned_fd(path: impl AsRef<Path>, raw_fd: i32) -> Self {
+        let path = path.as_ref();
         ElfFile {
-            inner: RawFile::from_owned_fd(path, raw_fd),
+            inner: RawFile::from_owned_fd(path.as_str(), raw_fd),
         }
     }
 
     /// Creates a new file-based ELF object by opening a file at the given path.
-    pub fn from_path(path: impl AsRef<str>) -> Result<Self> {
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         logging::debug!("Opening ELF file: {}", path);
 
-        let inner = RawFile::from_path(path)?;
+        let inner = RawFile::from_path(path.as_str())?;
         Ok(ElfFile { inner })
     }
 }
@@ -143,7 +163,31 @@ impl<'a> IntoElfReader<'a> for String {
     type Reader = ElfFile;
 
     fn into_reader(self) -> Result<Self::Reader> {
-        ElfFile::from_path(&self)
+        ElfFile::from_path(self)
+    }
+}
+
+impl<'a> IntoElfReader<'a> for &'a Path {
+    type Reader = ElfFile;
+
+    fn into_reader(self) -> Result<Self::Reader> {
+        ElfFile::from_path(self)
+    }
+}
+
+impl<'a> IntoElfReader<'a> for PathBuf {
+    type Reader = ElfFile;
+
+    fn into_reader(self) -> Result<Self::Reader> {
+        ElfFile::from_path(self)
+    }
+}
+
+impl<'a> IntoElfReader<'a> for &'a PathBuf {
+    type Reader = ElfFile;
+
+    fn into_reader(self) -> Result<Self::Reader> {
+        ElfFile::from_path(self)
     }
 }
 
@@ -161,6 +205,22 @@ impl<'a> IntoElfReader<'a> for &'a Vec<u8> {
 
     fn into_reader(self) -> Result<Self::Reader> {
         Ok(ElfBinary::new("<memory>", self.as_slice()))
+    }
+}
+
+impl<'a> IntoElfReader<'a> for Vec<u8> {
+    type Reader = ElfBinary<'static>;
+
+    fn into_reader(self) -> Result<Self::Reader> {
+        Ok(ElfBinary::owned("<memory>", self))
+    }
+}
+
+impl<'a> IntoElfReader<'a> for Box<[u8]> {
+    type Reader = ElfBinary<'static>;
+
+    fn into_reader(self) -> Result<Self::Reader> {
+        Ok(ElfBinary::owned("<memory>", self.into_vec()))
     }
 }
 
