@@ -75,6 +75,37 @@ Relink 是一个高性能、`no_std` 友好的 Rust ELF loader、runtime linker 
 | 异构加载         | 支持：面向不同 ELF 布局、ABI 或目标架构镜像的扫描与装载                | 依赖宿主平台动态链接器能力 |
 | 符号生命周期安全 | 支持：类型化符号与已加载镜像生命周期绑定                               | 不支持                     |
 
+## 基准测试
+
+下表是 GitHub Actions 的 CI snapshot，不是通用性能承诺。它更适合作为当前 benchmark suite 的可复现参考点；真正面向你的业务环境时，仍建议在目标机器上运行 `cargo bench`。
+
+- Run: [actions/runs/25632675040/job/75239090388](https://github.com/weizhiao/Relink/actions/runs/25632675040/job/75239090388)
+- Commit: `e2d252b44be4c28823f6d500c58159767014b8cd`
+- Runner: GitHub-hosted `ubuntu-24.04`（`ubuntu-latest`），`x86_64-unknown-linux-gnu`
+- Rust: `rustc 1.95.0 (59807616e 2026-04-14)`
+- 命令路径：`TARGET=x86_64-unknown-linux-gnu FEATURES=use-syscall OP=bench sh ci/run.sh`
+- Fixture：仓库内的 `libc -> libb -> liba` 测试链，不是系统 C library
+
+加载耗时越低越好。条形图以 `libloading/lazy` 为 `1.00x` 基线，条越短表示越快。`scan_first` 包含依赖扫描和 section-region 规划成本，因此它展示的是规划路径开销，不是和 `dlopen` 完全同质的直接替换。
+
+| 测试项 | 耗时 | 相对耗时 |
+| --- | ---: | --- |
+| `elf_loader/memory` | `89.531 µs` | `0.78x` ████████ |
+| `elf_loader/file` | `101.01 µs` | `0.88x` █████████ |
+| `linker/runtime` | `111.32 µs` | `0.97x` ██████████ |
+| `libloading/lazy` | `115.34 µs` | `1.00x` ██████████ |
+| `libloading/now` | `115.77 µs` | `1.00x` ██████████ |
+| `linker/scan_first` | `288.92 µs` | `2.51x` █████████████████████████ |
+
+符号查找对比是在两边都已经加载完 fixture chain 后测量的。每组 hit/miss 都以 `libloading` 为 `1.00x` 基线，条越短表示越快。
+
+| 测试项 | 耗时 | 相对耗时 |
+| --- | ---: | --- |
+| `symbol/elf_loader/hit` | `10.280 ns` | `0.13x` █ |
+| `symbol/libloading/hit` | `80.154 ns` | `1.00x` ██████████ |
+| `symbol/elf_loader/miss` | `11.548 ns` | `0.03x` ▏ |
+| `symbol/libloading/miss` | `375.49 ns` | `1.00x` ██████████ |
+
 ## 快速开始
 
 默认 feature 集合适合直接加载动态库、可执行文件和处理 TLS：

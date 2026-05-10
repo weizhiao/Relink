@@ -75,6 +75,37 @@ If you want automatic ELF type detection, use `Loader::load()`. If you want stri
 | Heterogeneous loading | Supported: scan and load images with different ELF layouts, ABIs, or target architectures | Depends on the host platform dynamic linker |
 | Symbol lifetime safety | Supported: typed symbols are lifetime-bound to loaded images | Not supported |
 
+## Benchmarks
+
+The table below is a GitHub Actions snapshot, not a universal performance claim. It is meant as a reproducible reference point for this benchmark suite; run `cargo bench` on your target environment for numbers that matter to your workload.
+
+- Run: [actions/runs/25632675040/job/75239090388](https://github.com/weizhiao/Relink/actions/runs/25632675040/job/75239090388)
+- Commit: `e2d252b44be4c28823f6d500c58159767014b8cd`
+- Runner: GitHub-hosted `ubuntu-24.04` (`ubuntu-latest`), `x86_64-unknown-linux-gnu`
+- Rust: `rustc 1.95.0 (59807616e 2026-04-14)`
+- Command path: `TARGET=x86_64-unknown-linux-gnu FEATURES=use-syscall OP=bench sh ci/run.sh`
+- Fixture: the repository's `libc -> libb -> liba` test chain, not the system C library
+
+Lower is better for loading. Bars show relative time with `libloading/lazy` as `1.00x`; shorter bars are faster. `scan_first` includes dependency scanning and section-region planning, so it is a planning-path cost rather than a direct `dlopen` replacement.
+
+| Benchmark | Time | Relative time |
+| --- | ---: | --- |
+| `elf_loader/memory` | `89.531 µs` | `0.78x` ████████ |
+| `elf_loader/file` | `101.01 µs` | `0.88x` █████████ |
+| `linker/runtime` | `111.32 µs` | `0.97x` ██████████ |
+| `libloading/lazy` | `115.34 µs` | `1.00x` ██████████ |
+| `libloading/now` | `115.77 µs` | `1.00x` ██████████ |
+| `linker/scan_first` | `288.92 µs` | `2.51x` █████████████████████████ |
+
+Symbol lookup was measured after both loaders had already loaded the fixture chain. For each hit/miss pair, `libloading` is the `1.00x` baseline; shorter bars are faster.
+
+| Benchmark | Time | Relative time |
+| --- | ---: | --- |
+| `symbol/elf_loader/hit` | `10.280 ns` | `0.13x` █ |
+| `symbol/libloading/hit` | `80.154 ns` | `1.00x` ██████████ |
+| `symbol/elf_loader/miss` | `11.548 ns` | `0.03x` ▏ |
+| `symbol/libloading/miss` | `375.49 ns` | `1.00x` ██████████ |
+
 ## Quick Start
 
 The default feature set is suitable for loading dynamic libraries, executables, and handling TLS:
