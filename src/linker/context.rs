@@ -1,7 +1,4 @@
-use super::{
-    storage::{CommittedEntry, CommittedStorage, KeyId},
-    view::DependencyGraphView,
-};
+use super::storage::{CommittedEntry, CommittedStorage, KeyId};
 use crate::{LinkerError, Result, arch::NativeArch, image::LoadedCore, relocation::RelocationArch};
 use alloc::{
     boxed::Box,
@@ -83,11 +80,6 @@ where
     #[inline]
     pub fn load_order(&self) -> impl Iterator<Item = KeyId> + '_ {
         self.committed.load_order()
-    }
-
-    #[inline]
-    pub fn view(&self) -> DependencyGraphView<'_, K, D, M, Arch> {
-        DependencyGraphView::new_committed(self.committed.view())
     }
 
     #[inline]

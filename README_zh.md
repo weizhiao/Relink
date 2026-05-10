@@ -204,13 +204,13 @@ impl KeyResolver<'static, &'static str, ()> for Resolver {
 
     fn resolve_dependency(
         &mut self,
-        req: &DependencyRequest<'_, &'static str, ()>,
-    ) -> Result<Option<ResolvedKey<'static, &'static str>>> {
+        req: &DependencyRequest<'_, &'static str>,
+    ) -> Result<ResolvedKey<'static, &'static str>> {
         let resolved = match req.needed() {
             "libdep.so" => ResolvedKey::load("dep", ElfFile::from_path("path/to/libdep.so")?),
-            _ => return Ok(None),
+            _ => return Err(req.unresolved()),
         };
-        Ok(Some(resolved))
+        Ok(resolved)
     }
 }
 

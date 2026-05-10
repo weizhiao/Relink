@@ -17,7 +17,6 @@ mod request;
 mod resolve;
 mod session;
 mod storage;
-mod view;
 
 pub use context::LinkContext;
 pub(in crate::linker) use layout::SectionId;
@@ -38,4 +37,3 @@ pub use request::{
 };
 pub use resolve::{KeyResolver, ResolvedKey};
 pub use storage::KeyId;
-pub use view::DependencyGraphView;

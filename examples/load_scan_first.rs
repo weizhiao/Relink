@@ -31,14 +31,14 @@ impl KeyResolver<'static, &'static str, ()> for FixtureResolver {
 
     fn resolve_dependency(
         &mut self,
-        req: &DependencyRequest<'_, &'static str, ()>,
-    ) -> Result<Option<ResolvedKey<'static, &'static str>>> {
+        req: &DependencyRequest<'_, &'static str>,
+    ) -> Result<ResolvedKey<'static, &'static str>> {
         let resolved = match req.needed() {
             "liba.so" => ResolvedKey::load("liba", ElfFile::from_path(&self.liba)?),
             "libb.so" => ResolvedKey::load("libb", ElfFile::from_path(&self.libb)?),
-            _ => return Ok(None),
+            _ => return Err(req.unresolved()),
         };
-        Ok(Some(resolved))
+        Ok(resolved)
     }
 }
 

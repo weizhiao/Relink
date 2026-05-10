@@ -2,10 +2,9 @@ use super::{
     request::{DependencyOwner, DependencyRequest, LoadObserver, StagedDynamic, VisibleModules},
     session::{ResolveSession, extend_breadth_first},
     storage::{CommittedStorage, KeyId},
-    view::DependencyGraphView,
 };
 use crate::{
-    LinkerError, Loader, Result, UnresolvedDependencyError,
+    LinkerError, Loader, Result,
     image::{RawDynamic, ScannedDynamic, ScannedElf},
     input::ElfReader,
     loader::LoadHook,
@@ -54,8 +53,8 @@ pub trait KeyResolver<
 
     fn resolve_dependency(
         &mut self,
-        req: &DependencyRequest<'_, K, D, Meta, Arch>,
-    ) -> Result<Option<ResolvedKey<'cfg, K>>>;
+        req: &DependencyRequest<'_, K>,
+    ) -> Result<ResolvedKey<'cfg, K>>;
 }
 
 pub(crate) struct ResolveContext<
@@ -149,10 +148,6 @@ where
             .map(|entry| &entry.payload as &dyn DependencyOwner)
     }
 
-    fn visible_view(&self) -> DependencyGraphView<'_, K, D, Meta, Arch> {
-        DependencyGraphView::new_overlay(self.committed.view(), self.session, self.visible_modules)
-    }
-
     fn set_direct_deps(&mut self, id: KeyId, direct_deps: Vec<KeyId>) {
         let entry = self
             .session
@@ -171,23 +166,18 @@ where
     where
         K: 'cfg,
     {
-        let req = {
+        let is_visible = |key: &K| self.contains_visible_or_pending(key);
+        let req: DependencyRequest<'_, K> = {
             let owner = self
                 .owner(id)
                 .expect("missing dependency owner while building request");
             let owner_key = self
                 .key(id)
                 .expect("dependency owner id must resolve to an interned key");
-            DependencyRequest::new(owner_key, owner, needed_index, self.visible_view())
+            DependencyRequest::new(owner_key, owner, needed_index, &is_visible)
         };
 
-        resolver.resolve_dependency(&req)?.ok_or_else(|| {
-            LinkerError::UnresolvedDependency(Box::new(UnresolvedDependencyError::new(
-                req.owner_name(),
-                req.needed(),
-            )))
-            .into()
-        })
+        resolver.resolve_dependency(&req)
     }
 
     fn direct_deps_for_with<'cfg, M, H, Tls, F>(

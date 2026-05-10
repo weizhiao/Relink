@@ -84,31 +84,8 @@ where
     }
 
     #[inline]
-    pub(crate) fn view(&self) -> CommittedStorageView<'_, K, D, M, Arch> {
-        CommittedStorageView { storage: self }
-    }
-
-    #[inline]
     pub(crate) fn load_order(&self) -> impl Iterator<Item = KeyId> + '_ {
         self.load_order.iter().copied()
-    }
-
-    #[inline]
-    pub(crate) fn direct_deps_key(&self, key: &K) -> Option<Vec<K>>
-    where
-        K: Clone,
-    {
-        let direct_deps = self.direct_deps(self.key_id(key)?)?;
-        Some(
-            direct_deps
-                .iter()
-                .map(|id| {
-                    self.key(*id)
-                        .expect("direct dependency id must resolve to an interned key")
-                        .clone()
-                })
-                .collect(),
-        )
     }
 
     #[inline]
@@ -191,67 +168,6 @@ struct StoredEntry<D: 'static, M = (), Arch: RelocationArch = crate::arch::Nativ
     module: LoadedCore<D, Arch>,
     direct_deps: Box<[KeyId]>,
     meta: M,
-}
-
-pub(crate) struct CommittedStorageView<
-    'a,
-    K,
-    D: 'static,
-    M = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
-> {
-    storage: &'a CommittedStorage<K, D, M, Arch>,
-}
-
-impl<'a, K, D: 'static, M, Arch> Copy for CommittedStorageView<'a, K, D, M, Arch> where
-    Arch: RelocationArch
-{
-}
-
-impl<'a, K, D: 'static, M, Arch> Clone for CommittedStorageView<'a, K, D, M, Arch>
-where
-    Arch: RelocationArch,
-{
-    #[inline]
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<'a, K, D: 'static, M, Arch> CommittedStorageView<'a, K, D, M, Arch>
-where
-    K: Clone + Ord,
-    Arch: RelocationArch,
-{
-    #[inline]
-    pub(crate) fn contains_key(&self, key: &K) -> bool {
-        self.storage.contains_key(key)
-    }
-
-    #[inline]
-    pub(crate) fn contains(&self, id: KeyId) -> bool {
-        self.storage.contains(id)
-    }
-
-    #[inline]
-    pub(crate) fn key_id(&self, key: &K) -> Option<KeyId> {
-        self.storage.key_id(key)
-    }
-
-    #[inline]
-    pub(crate) fn key(&self, id: KeyId) -> Option<&K> {
-        self.storage.key(id)
-    }
-
-    #[inline]
-    pub(crate) fn direct_deps_key(&self, key: &K) -> Option<Vec<K>> {
-        self.storage.direct_deps_key(key)
-    }
-
-    #[inline]
-    pub(crate) fn direct_deps(&self, id: KeyId) -> Option<&[KeyId]> {
-        self.storage.direct_deps(id)
-    }
 }
 
 pub(crate) struct CommittedEntry<

@@ -70,9 +70,9 @@ impl KeyResolver<'static, &'static str, ()> for SingleBinaryResolver {
 
     fn resolve_dependency(
         &mut self,
-        _req: &elf_loader::linker::DependencyRequest<'_, &'static str, ()>,
-    ) -> elf_loader::Result<Option<ResolvedKey<'static, &'static str>>> {
-        Ok(None)
+        req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+        Err(req.unresolved())
     }
 }
 
@@ -87,8 +87,8 @@ impl KeyResolver<'static, &'static str, ()> for ExistingRootResolver {
 
     fn resolve_dependency(
         &mut self,
-        _req: &elf_loader::linker::DependencyRequest<'_, &'static str, ()>,
-    ) -> elf_loader::Result<Option<ResolvedKey<'static, &'static str>>> {
+        _req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
         panic!("existing scan root should not resolve dependencies")
     }
 }
@@ -117,11 +117,11 @@ impl KeyResolver<'static, &'static str, ()> for MultiBinaryResolver {
 
     fn resolve_dependency(
         &mut self,
-        req: &elf_loader::linker::DependencyRequest<'_, &'static str, ()>,
-    ) -> elf_loader::Result<Option<ResolvedKey<'static, &'static str>>> {
-        Ok(self
-            .module(req.needed())
-            .map(|module| ResolvedKey::load(module.key, ElfBinary::new(module.name, module.data))))
+        req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+        self.module(req.needed())
+            .map(|module| ResolvedKey::load(module.key, ElfBinary::new(module.name, module.data)))
+            .ok_or_else(|| req.unresolved())
     }
 }
 
@@ -161,11 +161,11 @@ impl KeyResolver<'static, &'static str, ()> for VisibleDependencyResolver {
 
     fn resolve_dependency(
         &mut self,
-        req: &elf_loader::linker::DependencyRequest<'_, &'static str, ()>,
-    ) -> elf_loader::Result<Option<ResolvedKey<'static, &'static str>>> {
+        req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
         assert_eq!(req.needed(), "dep");
         assert!(req.is_visible(&"dep"));
-        Ok(Some(ResolvedKey::existing("dep")))
+        Ok(ResolvedKey::existing("dep"))
     }
 }
 

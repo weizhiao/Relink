@@ -1,6 +1,5 @@
-use super::view::DependencyGraphView;
 use crate::{
-    Result,
+    LinkerError, Result, UnresolvedDependencyError,
     arch::ArchKind,
     image::{LoadedCore, RawDylib, RawDynamic, ScannedDynamic},
     relocation::{BindingMode, RelocationArch},
@@ -115,35 +114,26 @@ impl<Arch: RelocationArch> DependencyOwner for ScannedDynamic<Arch> {
 }
 
 /// A single dependency-resolution request.
-pub struct DependencyRequest<
-    'a,
-    K: Clone,
-    D: 'static,
-    M = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
-> {
+pub struct DependencyRequest<'a, K: Clone> {
     owner_key: &'a K,
     owner: &'a dyn DependencyOwner,
     needed_index: usize,
-    visible: DependencyGraphView<'a, K, D, M, Arch>,
+    is_visible: &'a dyn Fn(&K) -> bool,
 }
 
-impl<'a, K: Clone, D: 'static, M, Arch> DependencyRequest<'a, K, D, M, Arch>
-where
-    Arch: RelocationArch,
-{
+impl<'a, K: Clone> DependencyRequest<'a, K> {
     #[inline]
     pub(crate) fn new(
         owner_key: &'a K,
         owner: &'a dyn DependencyOwner,
         needed_index: usize,
-        visible: DependencyGraphView<'a, K, D, M, Arch>,
+        is_visible: &'a dyn Fn(&K) -> bool,
     ) -> Self {
         Self {
             owner_key,
             owner,
             needed_index,
-            visible,
+            is_visible,
         }
     }
 
@@ -190,11 +180,17 @@ where
     }
 
     #[inline]
-    pub fn is_visible(&self, key: &K) -> bool
-    where
-        K: Ord,
-    {
-        self.visible.contains_key(key)
+    pub fn is_visible(&self, key: &K) -> bool {
+        (self.is_visible)(key)
+    }
+
+    #[inline]
+    pub fn unresolved(&self) -> crate::Error {
+        LinkerError::UnresolvedDependency(Box::new(UnresolvedDependencyError::new(
+            self.owner_name(),
+            self.needed(),
+        )))
+        .into()
     }
 }
 
