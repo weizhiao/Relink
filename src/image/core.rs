@@ -98,6 +98,12 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         self.core.name()
     }
 
+    /// Returns the DT_SONAME value when this is a dynamic object.
+    #[inline]
+    pub fn soname(&self) -> Option<&str> {
+        self.core.soname()
+    }
+
     /// Returns the short name of the ELF object.
     #[inline]
     pub fn short_name(&self) -> &str {
@@ -587,6 +593,15 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
         &self.inner.name
     }
 
+    /// Returns the DT_SONAME value when this core has dynamic metadata.
+    #[inline]
+    pub fn soname(&self) -> Option<&str> {
+        self.inner
+            .dynamic_info
+            .as_ref()
+            .and_then(|info| info.soname)
+    }
+
     /// Gets the short name of the ELF object
     #[inline]
     pub fn short_name(&self) -> &str {
@@ -713,15 +728,20 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
 
         segments.set_base(base);
         let dynamic = ElfDynamic::<Arch>::new(dynamic_ptr, &segments)?;
+        let symtab = SymbolTable::from_dynamic(&dynamic);
+        let soname = dynamic
+            .soname_off
+            .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
         Ok(Self {
             inner: Arc::new(CoreInner {
                 name,
                 is_init: AtomicBool::new(true),
-                symtab: SymbolTable::from_dynamic(&dynamic),
+                symtab,
                 dynamic_info: Some(Arc::new(DynamicInfo {
                     eh_frame_hdr,
                     dynamic_ptr: unsafe { NonNull::new_unchecked(dynamic_ptr.cast_mut()) },
                     phdrs: ElfPhdrs::Vec(phdrs),
+                    soname,
                     #[cfg(feature = "lazy-binding")]
                     lazy: super::LazyBindingInfo::new(dynamic.pltrel),
                 })),

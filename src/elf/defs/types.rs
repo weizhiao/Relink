@@ -32,11 +32,16 @@ impl ElfDynamicTag {
     pub const RELA: Self = Self(DT_RELA);
     pub const RELASZ: Self = Self(DT_RELASZ);
     pub const RELAENT: Self = Self(DT_RELAENT);
+    pub const SYMENT: Self = Self(DT_SYMENT);
     pub const REL: Self = Self(DT_REL);
     pub const RELSZ: Self = Self(DT_RELSZ);
     pub const RELENT: Self = Self(DT_RELENT);
     pub const PLTREL: Self = Self(DT_PLTREL);
     pub const DEBUG: Self = Self(DT_DEBUG);
+    pub const SONAME: Self = Self(DT_SONAME);
+    pub const SYMBOLIC: Self = Self(DT_SYMBOLIC);
+    pub const TEXTREL: Self = Self(DT_TEXTREL);
+    pub const BIND_NOW: Self = Self(DT_BIND_NOW);
     pub const JMPREL: Self = Self(DT_JMPREL);
     pub const INIT: Self = Self(DT_INIT);
     pub const FINI: Self = Self(DT_FINI);
@@ -49,6 +54,9 @@ impl ElfDynamicTag {
     pub const FLAGS: Self = Self(DT_FLAGS);
     pub const FLAGS_1: Self = Self(DT_FLAGS_1);
     pub const STRSZ: Self = Self(DT_STRSZ);
+    pub const PREINIT_ARRAY: Self = Self(DT_PREINIT_ARRAY);
+    pub const PREINIT_ARRAYSZ: Self = Self(DT_PREINIT_ARRAYSZ);
+    pub const SYMTAB_SHNDX: Self = Self(DT_SYMTAB_SHNDX);
     pub const GNU_HASH: Self = Self(DT_GNU_HASH);
     pub const GNU_LIBLIST: Self = Self(DT_GNU_LIBLIST);
     pub const VERSYM: Self = Self(DT_VERSYM);
@@ -99,10 +107,18 @@ impl Display for ElfDynamicTag {
             DT_SYMTAB => f.write_str("DT_SYMTAB"),
             DT_RELA => f.write_str("DT_RELA"),
             DT_RELASZ => f.write_str("DT_RELASZ"),
+            DT_RELAENT => f.write_str("DT_RELAENT"),
+            DT_STRSZ => f.write_str("DT_STRSZ"),
+            DT_SYMENT => f.write_str("DT_SYMENT"),
+            DT_SONAME => f.write_str("DT_SONAME"),
             DT_REL => f.write_str("DT_REL"),
             DT_RELSZ => f.write_str("DT_RELSZ"),
+            DT_RELENT => f.write_str("DT_RELENT"),
             DT_PLTREL => f.write_str("DT_PLTREL"),
             elf::abi::DT_DEBUG => f.write_str("DT_DEBUG"),
+            DT_SYMBOLIC => f.write_str("DT_SYMBOLIC"),
+            DT_TEXTREL => f.write_str("DT_TEXTREL"),
+            DT_BIND_NOW => f.write_str("DT_BIND_NOW"),
             DT_JMPREL => f.write_str("DT_JMPREL"),
             DT_INIT => f.write_str("DT_INIT"),
             DT_FINI => f.write_str("DT_FINI"),
@@ -114,6 +130,9 @@ impl Display for ElfDynamicTag {
             DT_RUNPATH => f.write_str("DT_RUNPATH"),
             DT_FLAGS => f.write_str("DT_FLAGS"),
             DT_FLAGS_1 => f.write_str("DT_FLAGS_1"),
+            DT_PREINIT_ARRAY => f.write_str("DT_PREINIT_ARRAY"),
+            DT_PREINIT_ARRAYSZ => f.write_str("DT_PREINIT_ARRAYSZ"),
+            DT_SYMTAB_SHNDX => f.write_str("DT_SYMTAB_SHNDX"),
             DT_GNU_HASH => f.write_str("DT_GNU_HASH"),
             DT_GNU_LIBLIST => f.write_str("DT_GNU_LIBLIST"),
             DT_VERSYM => f.write_str("DT_VERSYM"),
@@ -125,6 +144,7 @@ impl Display for ElfDynamicTag {
             DT_RELCOUNT => f.write_str("DT_RELCOUNT"),
             DT_RELR => f.write_str("DT_RELR"),
             DT_RELRSZ => f.write_str("DT_RELRSZ"),
+            DT_RELRENT => f.write_str("DT_RELRENT"),
             raw => write!(f, "unknown ELF dynamic tag {raw}"),
         }
     }

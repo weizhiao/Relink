@@ -83,8 +83,10 @@ pub(crate) struct ParsedDynamic {
     pub(crate) verneed_num: Option<NonZeroUsize>,
     pub(crate) verdef_off: Option<NonZeroUsize>,
     pub(crate) verdef_num: Option<NonZeroUsize>,
+    pub(crate) soname_off: Option<NonZeroUsize>,
     pub(crate) rpath_off: Option<NonZeroUsize>,
     pub(crate) runpath_off: Option<NonZeroUsize>,
+    pub(crate) bind_now: bool,
     pub(crate) flags: usize,
     pub(crate) flags_1: usize,
     pub(crate) is_rela: Option<bool>,
@@ -105,6 +107,8 @@ impl ParsedDynamic {
             }
             ElfDynamicTag::HASH => self.elf_hash_off = Some(value),
             ElfDynamicTag::GNU_HASH => self.gnu_hash_off = Some(value),
+            ElfDynamicTag::BIND_NOW => self.bind_now = true,
+            ElfDynamicTag::SONAME => self.soname_off = NonZeroUsize::new(value),
             ElfDynamicTag::SYMTAB => self.symtab_off = value,
             ElfDynamicTag::STRTAB => self.strtab_off = value,
             ElfDynamicTag::PLTRELSZ => self.pltrel_size = NonZeroUsize::new(value),
@@ -303,7 +307,8 @@ where
             symtab: add_base(parsed.symtab_off)?,
             strtab: add_base(parsed.strtab_off)?,
             // Check if binding should be done immediately
-            bind_now: parsed.flags & DF_BIND_NOW as usize != 0
+            bind_now: parsed.bind_now
+                || parsed.flags & DF_BIND_NOW as usize != 0
                 || parsed.flags_1 & DF_1_NOW as usize != 0,
             static_tls: parsed.flags & DF_STATIC_TLS as usize != 0,
             got_plt: parsed
@@ -320,6 +325,7 @@ where
             fini_fn,
             fini_array_fn,
             rel_count: parsed.rel_count,
+            soname_off: parsed.soname_off,
             rpath_off: parsed.rpath_off,
             runpath_off: parsed.runpath_off,
             version_idx,
@@ -378,6 +384,8 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     pub verneed: Option<(NonZeroUsize, NonZeroUsize)>,
     /// Version definition information.
     pub verdef: Option<(NonZeroUsize, NonZeroUsize)>,
+    /// Shared-object name.
+    pub soname_off: Option<NonZeroUsize>,
     /// Runtime library search path.
     pub rpath_off: Option<NonZeroUsize>,
     /// Runtime library search path (overrides RPATH).
@@ -403,7 +411,8 @@ impl<Arch: RelocationArch> Debug for ElfDynamic<Arch> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ElfDyn, ElfDynamicTag};
+    use super::{ElfDyn, ElfDynamicTag, parse_dynamic_entries};
+    use core::num::NonZeroUsize;
 
     #[test]
     fn owned_dyn_round_trips_and_mutates() {
@@ -415,5 +424,17 @@ mod tests {
         dyn_.set_value(0x5678);
         assert_eq!(dyn_.tag(), ElfDynamicTag::NULL);
         assert_eq!(dyn_.value(), 0x5678);
+    }
+
+    #[test]
+    fn parses_metadata_only_dynamic_tags() {
+        let parsed = parse_dynamic_entries([
+            (ElfDynamicTag::SONAME, 0x24),
+            (ElfDynamicTag::BIND_NOW, 0),
+            (ElfDynamicTag::NULL, 0),
+        ]);
+
+        assert_eq!(parsed.soname_off, NonZeroUsize::new(0x24));
+        assert!(parsed.bind_now);
     }
 }

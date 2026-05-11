@@ -53,6 +53,7 @@ pub(crate) struct SymTabMetadata {
     helper_index: HashMap<usize, usize>, // plt_sym_idx -> helper_sym_idx
     tls_helper_index: HashMap<usize, usize>, // tls_sym_idx -> helper_sym_idx
     symbols: Vec<SymbolDesc>,
+    soname_offset: Option<u32>,
     needed_offsets: Vec<u32>,
     dynsym_id: SectionId,
     dynsym_size: u64,
@@ -82,6 +83,7 @@ impl SymTabMetadata {
         arch: Arch,
         symbols: &[SymbolDesc],
         relocs: &[RelocEntry],
+        soname: Option<&str>,
         needed_libs: &[String],
         allocator: &mut SectionAllocator,
     ) -> Self {
@@ -97,6 +99,7 @@ impl SymTabMetadata {
             helper_index: HashMap::new(),
             tls_helper_index: HashMap::new(),
             symbols: vec![],
+            soname_offset: None,
             needed_offsets: Vec::new(),
             dynsym_id,
             dynstr_id,
@@ -129,6 +132,7 @@ impl SymTabMetadata {
         symtab.add_symbols(symbols);
         symtab.add_plt_symbols(relocs);
         symtab.add_tls_symbols(relocs);
+        symtab.soname_offset = soname.map(|name| symtab.dynstr.add(name));
         symtab.needed_offsets = needed_libs
             .iter()
             .map(|name| symtab.dynstr.add(name))
@@ -156,6 +160,10 @@ impl SymTabMetadata {
 
     pub(crate) fn needed_offsets(&self) -> &[u32] {
         &self.needed_offsets
+    }
+
+    pub(crate) fn soname_offset(&self) -> Option<u32> {
+        self.soname_offset
     }
 
     fn add_symbols(&mut self, symbols: &[SymbolDesc]) {

@@ -28,6 +28,7 @@ impl DynamicMetadata {
         sections: &[Section],
         allocator: &mut SectionAllocator,
         bind_now: bool,
+        soname_offset: Option<u32>,
         needed_offsets: &[u32],
     ) -> Self {
         let dynamic_id = allocator.allocate(0);
@@ -37,6 +38,9 @@ impl DynamicMetadata {
             dynamic_id,
         };
         instance.init_from_sections(sections);
+        if let Some(offset) = soname_offset {
+            instance.insert_entry(DT_SONAME as i64, offset as u64);
+        }
         for offset in needed_offsets {
             instance.insert_entry(DT_NEEDED as i64, *offset as u64);
         }

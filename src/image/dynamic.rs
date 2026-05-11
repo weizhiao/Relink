@@ -41,6 +41,7 @@ pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) dynamic_ptr: NonNull<ElfDyn<Arch::Layout>>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
+    pub(crate) soname: Option<&'static str>,
     #[cfg(feature = "lazy-binding")]
     pub(crate) lazy: LazyBindingInfo<Arch>,
 }
@@ -209,6 +210,15 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
         self.extra.runpath
     }
 
+    /// Gets the DT_SONAME value
+    ///
+    /// # Returns
+    /// An optional string slice containing the shared-object name
+    #[inline]
+    pub fn soname(&self) -> Option<&str> {
+        self.module.soname()
+    }
+
     /// Gets the PT_INTERP value
     ///
     /// # Returns
@@ -360,6 +370,9 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
         if !needed_libs.is_empty() {
             logging::debug!("[{}] Dependencies: {:?}", name, needed_libs);
         }
+        let soname = dynamic
+            .soname_off
+            .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
 
         let (tls_mod_id, tls_tp_offset) = if let Some(info) = &tls_info {
             if static_tls {
@@ -410,6 +423,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
                         eh_frame_hdr,
                         dynamic_ptr,
                         phdrs,
+                        soname,
                         #[cfg(feature = "lazy-binding")]
                         lazy: LazyBindingInfo::new(dynamic.pltrel),
                     })),
