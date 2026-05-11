@@ -5,13 +5,15 @@
 //! It serves as a bridge between the raw ELF data structures and the higher-level
 //! symbol resolution APIs.
 
-use super::defs::{ElfLayout, ElfSymRaw, NativeElfLayout};
+use super::defs::{
+    ElfLayout, ElfSectionIndex, ElfSymRaw, ElfSymbolBind, ElfSymbolType, NativeElfLayout,
+};
 use crate::elf::{ElfDynamic, HashTable, PreCompute};
 use core::ffi::CStr;
-use core::fmt::{self, Debug, Display};
+use core::fmt::Debug;
 use elf::abi::{
-    SHN_ABS, SHN_COMMON, SHN_UNDEF, SHN_XINDEX, STB_GLOBAL, STB_GNU_UNIQUE, STB_LOCAL, STB_WEAK,
-    STT_COMMON, STT_FILE, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE, STT_OBJECT, STT_SECTION, STT_TLS,
+    STB_GLOBAL, STB_GNU_UNIQUE, STB_WEAK, STT_COMMON, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE,
+    STT_OBJECT, STT_TLS,
 };
 
 /// Valid symbol binding types bitmask.
@@ -26,173 +28,6 @@ const OK_TYPES: usize = 1 << STT_NOTYPE
     | 1 << STT_COMMON
     | 1 << STT_TLS
     | 1 << STT_GNU_IFUNC;
-
-/// Semantic wrapper for the ELF symbol binding field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-pub struct ElfSymbolBind(u8);
-
-impl ElfSymbolBind {
-    pub const LOCAL: Self = Self(STB_LOCAL);
-    pub const GLOBAL: Self = Self(STB_GLOBAL);
-    pub const WEAK: Self = Self(STB_WEAK);
-    pub const GNU_UNIQUE: Self = Self(STB_GNU_UNIQUE);
-
-    #[inline]
-    pub const fn new(raw: u8) -> Self {
-        Self(raw)
-    }
-
-    #[inline]
-    pub const fn raw(self) -> u8 {
-        self.0
-    }
-}
-
-impl From<u8> for ElfSymbolBind {
-    #[inline]
-    fn from(value: u8) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<ElfSymbolBind> for u8 {
-    #[inline]
-    fn from(value: ElfSymbolBind) -> Self {
-        value.raw()
-    }
-}
-
-impl Display for ElfSymbolBind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            STB_LOCAL => f.write_str("STB_LOCAL"),
-            STB_GLOBAL => f.write_str("STB_GLOBAL"),
-            STB_WEAK => f.write_str("STB_WEAK"),
-            STB_GNU_UNIQUE => f.write_str("STB_GNU_UNIQUE"),
-            raw => write!(f, "unknown ELF symbol bind {raw}"),
-        }
-    }
-}
-
-/// Semantic wrapper for the ELF symbol type field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-pub struct ElfSymbolType(u8);
-
-impl ElfSymbolType {
-    pub const NOTYPE: Self = Self(STT_NOTYPE);
-    pub const OBJECT: Self = Self(STT_OBJECT);
-    pub const FUNC: Self = Self(STT_FUNC);
-    pub const SECTION: Self = Self(STT_SECTION);
-    pub const FILE: Self = Self(STT_FILE);
-    pub const COMMON: Self = Self(STT_COMMON);
-    pub const TLS: Self = Self(STT_TLS);
-    pub const GNU_IFUNC: Self = Self(STT_GNU_IFUNC);
-
-    #[inline]
-    pub const fn new(raw: u8) -> Self {
-        Self(raw)
-    }
-
-    #[inline]
-    pub const fn raw(self) -> u8 {
-        self.0
-    }
-}
-
-impl From<u8> for ElfSymbolType {
-    #[inline]
-    fn from(value: u8) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<ElfSymbolType> for u8 {
-    #[inline]
-    fn from(value: ElfSymbolType) -> Self {
-        value.raw()
-    }
-}
-
-impl Display for ElfSymbolType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            STT_NOTYPE => f.write_str("STT_NOTYPE"),
-            STT_OBJECT => f.write_str("STT_OBJECT"),
-            STT_FUNC => f.write_str("STT_FUNC"),
-            STT_SECTION => f.write_str("STT_SECTION"),
-            STT_FILE => f.write_str("STT_FILE"),
-            STT_COMMON => f.write_str("STT_COMMON"),
-            STT_TLS => f.write_str("STT_TLS"),
-            STT_GNU_IFUNC => f.write_str("STT_GNU_IFUNC"),
-            raw => write!(f, "unknown ELF symbol type {raw}"),
-        }
-    }
-}
-
-/// Semantic wrapper for the ELF symbol `st_shndx` field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-pub struct ElfSectionIndex(u16);
-
-impl ElfSectionIndex {
-    pub const UNDEF: Self = Self(SHN_UNDEF);
-    pub const ABS: Self = Self(SHN_ABS);
-    pub const COMMON: Self = Self(SHN_COMMON);
-    pub const XINDEX: Self = Self(SHN_XINDEX);
-
-    #[inline]
-    pub const fn new(raw: u16) -> Self {
-        Self(raw)
-    }
-
-    #[inline]
-    pub const fn raw(self) -> u16 {
-        self.0
-    }
-
-    #[inline]
-    pub const fn index(self) -> usize {
-        self.0 as usize
-    }
-
-    #[inline]
-    pub const fn is_undef(self) -> bool {
-        self.0 == SHN_UNDEF
-    }
-
-    #[inline]
-    pub const fn is_abs(self) -> bool {
-        self.0 == SHN_ABS
-    }
-}
-
-impl Display for ElfSectionIndex {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            SHN_UNDEF => f.write_str("SHN_UNDEF"),
-            SHN_ABS => f.write_str("SHN_ABS"),
-            SHN_COMMON => f.write_str("SHN_COMMON"),
-            SHN_XINDEX => f.write_str("SHN_XINDEX"),
-            raw => write!(f, "ELF symbol section index {raw}"),
-        }
-    }
-}
-
-#[allow(unused)]
-#[repr(C)]
-/// 32-bit ELF symbol table entry.
-/// This struct represents the native 32-bit symbol format used in ELF32 files.
-/// For 64-bit targets, the active native symbol layout resolves to `elf::symbol::Elf64_Sym`.
-pub struct Elf32Sym {
-    pub st_name: u32,
-    pub st_value: u32,
-    pub st_size: u32,
-    pub st_info: u8,
-    pub st_other: u8,
-    pub st_shndx: u16,
-}
 
 #[repr(transparent)]
 /// ELF symbol table entry.

@@ -1,87 +1,9 @@
 //! Program-header related ELF types.
 //!
-//! This module contains the semantic wrapper types for ELF program headers,
-//! including `ElfProgramType`, `ElfProgramFlags`, `ElfPhdr`, and `ElfPhdrs`.
+//! This module contains program-header views and storage used while loading ELF segments.
 
+use super::defs::{ElfLayout, ElfPhdrRaw, ElfProgramFlags, ElfProgramType, NativeElfLayout};
 use alloc::vec::Vec;
-use bitflags::bitflags;
-use core::fmt::{self, Display};
-use elf::abi::{
-    PF_R, PF_W, PF_X, PT_DYNAMIC, PT_GNU_EH_FRAME, PT_GNU_RELRO, PT_INTERP, PT_LOAD, PT_NOTE,
-    PT_NULL, PT_PHDR, PT_SHLIB, PT_TLS,
-};
-
-use super::defs::{ElfLayout, ElfPhdrRaw, NativeElfLayout};
-
-/// Semantic wrapper for the ELF `p_type` field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(transparent)]
-pub struct ElfProgramType(u32);
-
-impl ElfProgramType {
-    pub const NULL: Self = Self(PT_NULL);
-    pub const LOAD: Self = Self(PT_LOAD);
-    pub const DYNAMIC: Self = Self(PT_DYNAMIC);
-    pub const INTERP: Self = Self(PT_INTERP);
-    pub const NOTE: Self = Self(PT_NOTE);
-    pub const SHLIB: Self = Self(PT_SHLIB);
-    pub const PHDR: Self = Self(PT_PHDR);
-    pub const TLS: Self = Self(PT_TLS);
-    pub const GNU_EH_FRAME: Self = Self(PT_GNU_EH_FRAME);
-    pub const GNU_RELRO: Self = Self(PT_GNU_RELRO);
-
-    #[inline]
-    pub const fn new(raw: u32) -> Self {
-        Self(raw)
-    }
-
-    #[inline]
-    pub const fn raw(self) -> u32 {
-        self.0
-    }
-}
-
-impl From<u32> for ElfProgramType {
-    #[inline]
-    fn from(value: u32) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<ElfProgramType> for u32 {
-    #[inline]
-    fn from(value: ElfProgramType) -> Self {
-        value.raw()
-    }
-}
-
-impl Display for ElfProgramType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            PT_NULL => f.write_str("PT_NULL"),
-            PT_LOAD => f.write_str("PT_LOAD"),
-            PT_DYNAMIC => f.write_str("PT_DYNAMIC"),
-            PT_INTERP => f.write_str("PT_INTERP"),
-            PT_NOTE => f.write_str("PT_NOTE"),
-            PT_SHLIB => f.write_str("PT_SHLIB"),
-            PT_PHDR => f.write_str("PT_PHDR"),
-            PT_TLS => f.write_str("PT_TLS"),
-            PT_GNU_EH_FRAME => f.write_str("PT_GNU_EH_FRAME"),
-            PT_GNU_RELRO => f.write_str("PT_GNU_RELRO"),
-            raw => write!(f, "unknown ELF program type {raw}"),
-        }
-    }
-}
-
-bitflags! {
-    /// Bitflags wrapper for the ELF `p_flags` field.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    pub struct ElfProgramFlags: u32 {
-        const EXEC = PF_X;
-        const WRITE = PF_W;
-        const READ = PF_R;
-    }
-}
 
 /// ELF program header describing segments to be loaded into memory.
 #[derive(Debug)]

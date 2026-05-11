@@ -29,15 +29,16 @@ pub(crate) use symbol::{ElfStringTable, SymbolInfo, SymbolTable};
 
 // Public API exports
 pub use defs::{
-    Elf32Layout, Elf64Layout, ElfClass, ElfFileType, ElfLayout, ElfMachine, ElfRel, ElfRelEntry,
-    ElfRelType, ElfRela, ElfRelocationType, NativeElfLayout,
+    Elf32Layout, Elf32Sym, Elf64Layout, ElfClass, ElfDynamicTag, ElfFileType, ElfLayout,
+    ElfMachine, ElfProgramFlags, ElfProgramType, ElfRel, ElfRelEntry, ElfRelType, ElfRela,
+    ElfRelocationType, ElfSectionFlags, ElfSectionIndex, ElfSectionType, ElfSymbolBind,
+    ElfSymbolType, NativeElfLayout,
 };
-pub use dynamic::{ElfDyn, ElfDynamicTag};
+pub use dynamic::ElfDyn;
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::ElfHeader;
-pub use phdr::{ElfPhdr, ElfProgramFlags, ElfProgramType};
-pub use shdr::{ElfSectionFlags, ElfSectionType};
-pub use symbol::{Elf32Sym, ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType};
+pub use phdr::ElfPhdr;
+pub use symbol::ElfSymbol;
 
 unsafe impl ByteRepr for defs::ElfEhdr {}
 unsafe impl<L: defs::ElfLayout> ByteRepr for dynamic::ElfDyn<L> {}
