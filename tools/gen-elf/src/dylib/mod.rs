@@ -63,6 +63,8 @@ pub struct ElfWriterConfig {
     pub bind_now: bool,
     /// Whether to emit one retained relocation section for the data section.
     pub emit_retained_relocations: bool,
+    /// DT_SONAME entry to emit into the dynamic section.
+    pub soname: Option<String>,
     /// DT_NEEDED entries to emit into the dynamic section.
     pub needed: Vec<String>,
 }
@@ -75,6 +77,7 @@ impl Default for ElfWriterConfig {
             ifunc_resolver_val: None,
             bind_now: false,
             emit_retained_relocations: false,
+            soname: None,
             needed: Vec::new(),
         }
     }
@@ -108,6 +111,12 @@ impl ElfWriterConfig {
     /// Emit a minimal retained relocation section for the data section.
     pub fn with_emit_retained_relocations(mut self, emit: bool) -> Self {
         self.emit_retained_relocations = emit;
+        self
+    }
+
+    /// Set the DT_SONAME entry for the generated ELF.
+    pub fn with_soname(mut self, name: impl Into<String>) -> Self {
+        self.soname = Some(name.into());
         self
     }
 
@@ -233,6 +242,7 @@ impl DylibWriter {
             self.arch,
             symbols,
             &final_relocs,
+            self.config.soname.as_deref(),
             &self.config.needed,
             &mut allocator,
         );
@@ -293,6 +303,7 @@ impl DylibWriter {
             &sections,
             &mut allocator,
             self.config.bind_now,
+            symtab.soname_offset(),
             symtab.needed_offsets(),
         );
         dyn_meta.create_section(&mut sections);

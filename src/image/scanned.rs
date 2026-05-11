@@ -20,6 +20,7 @@ struct DynamicScanParts {
     dynamic: ScannedDynamicInfo,
     strtab: Box<[u8]>,
     needed_libs: Box<[usize]>,
+    soname: Option<usize>,
     rpath: Option<usize>,
     runpath: Option<usize>,
 }
@@ -58,16 +59,20 @@ impl DynamicScanParts {
             .map(|offset| offset.get())
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let soname = parsed.soname_off.map(|offset| offset.get());
         let rpath = parsed.rpath_off.map(|offset| offset.get());
         let runpath = parsed.runpath_off.map(|offset| offset.get());
 
         Ok(Self {
             dynamic: ScannedDynamicInfo::new(
-                parsed.flags & DF_BIND_NOW as usize != 0 || parsed.flags_1 & DF_1_NOW as usize != 0,
+                parsed.bind_now
+                    || parsed.flags & DF_BIND_NOW as usize != 0
+                    || parsed.flags_1 & DF_1_NOW as usize != 0,
                 parsed.flags & DF_STATIC_TLS as usize != 0,
             ),
             strtab: strtab.into_boxed_slice(),
             needed_libs,
+            soname,
             rpath,
             runpath,
         })
@@ -170,6 +175,7 @@ pub struct ScannedDynamic<Arch: RelocationArch = NativeArch> {
     _strtab_bytes: Box<[u8]>,
     strtab: ElfStringTable,
     section_table: Option<SectionTable<Arch::Layout>>,
+    soname: Option<usize>,
     rpath: Option<usize>,
     runpath: Option<usize>,
     needed_libs: Box<[usize]>,
@@ -411,6 +417,7 @@ impl<Arch: RelocationArch> fmt::Debug for ScannedDynamic<Arch> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScannedDynamic")
             .field("name", &self.name)
+            .field("soname", &self.soname())
             .field("needed_libs", &self.needed_libs().collect::<Vec<_>>())
             .field(
                 "sections",
@@ -582,6 +589,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             dynamic,
             strtab,
             needed_libs,
+            soname,
             rpath,
             runpath,
         } = DynamicScanParts::new(reader.as_mut(), &phdrs)?;
@@ -601,6 +609,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             _strtab_bytes: strtab,
             strtab: strtab_view,
             section_table,
+            soname,
             rpath,
             runpath,
             needed_libs,
@@ -659,6 +668,12 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     #[inline]
     pub fn runpath(&self) -> Option<&str> {
         self.runpath.map(|offset| self.strtab.get_str(offset))
+    }
+
+    /// Returns the DT_SONAME string when present.
+    #[inline]
+    pub fn soname(&self) -> Option<&str> {
+        self.soname.map(|offset| self.strtab.get_str(offset))
     }
 
     /// Returns one `DT_NEEDED` entry by index.

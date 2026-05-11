@@ -124,6 +124,12 @@ impl<D, Arch: RelocationArch> RawDylib<D, Arch> {
         self.inner.runpath()
     }
 
+    /// Returns the DT_SONAME value.
+    #[inline]
+    pub fn soname(&self) -> Option<&str> {
+        self.inner.soname()
+    }
+
     /// Returns the PT_INTERP value.
     #[inline]
     pub fn interp(&self) -> Option<&str> {

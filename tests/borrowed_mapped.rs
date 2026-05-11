@@ -1,8 +1,8 @@
 mod support;
 
 use elf_loader::{Loader, image::ScannedElf, input::ElfBinary};
-use gen_elf::{Arch, SymbolDesc};
-use support::{generated_dylib::return_42_stub, test_dylib::write_test_dylib};
+use gen_elf::{Arch, ElfWriterConfig, SymbolDesc};
+use support::{generated_dylib::return_42_stub, test_dylib::write_test_dylib_with_config};
 
 #[derive(Default)]
 struct ScanData {
@@ -12,7 +12,10 @@ struct ScanData {
 #[test]
 fn borrowed_dynamic_reuses_existing_mapping() {
     let arch = Arch::current();
-    let output = write_test_dylib(
+    let output = write_test_dylib_with_config(
+        ElfWriterConfig::default()
+            .with_bind_now(true)
+            .with_soname("libowner.so"),
         &[],
         &[SymbolDesc::global_func("answer", &return_42_stub(arch))],
     );
@@ -41,12 +44,17 @@ fn borrowed_dynamic_reuses_existing_mapping() {
     assert!(borrowed.contains_addr(owner.base()));
     assert_eq!(borrowed.dynamic_ptr(), Some(owner_dynamic));
     assert_eq!(borrowed.needed_libs(), owner.needed_libs());
+    assert_eq!(owner.soname(), Some("libowner.so"));
+    assert_eq!(borrowed.soname(), owner.soname());
 }
 
 #[test]
 fn scanned_dynamic_load_reuses_scanned_metadata() {
     let arch = Arch::current();
-    let output = write_test_dylib(
+    let output = write_test_dylib_with_config(
+        ElfWriterConfig::default()
+            .with_bind_now(true)
+            .with_soname("libscanned.so"),
         &[],
         &[SymbolDesc::global_func("answer", &return_42_stub(arch))],
     );
@@ -64,12 +72,14 @@ fn scanned_dynamic_load_reuses_scanned_metadata() {
     else {
         panic!("generated dylib should scan as dynamic");
     };
+    assert_eq!(scanned.soname(), Some("libscanned.so"));
 
     let raw = loader
         .load_scanned_dynamic(scanned)
         .expect("failed to load scanned dynamic image");
 
     assert_eq!(raw.name(), "scanned.so");
+    assert_eq!(raw.soname(), Some("libscanned.so"));
     assert_eq!(raw.user_data().value, 42);
     assert!(raw.dynamic_ptr().is_some());
 }
