@@ -206,12 +206,12 @@ cfg_if::cfg_if! {
         pub(crate) use linux_syscall::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
         pub(crate) use linux_syscall::RawFile;
         pub use linux_syscall::*;
-    }else if #[cfg(all(unix, feature = "libc"))]{
-        mod unix;
+    }else if #[cfg(all(any(target_os = "linux", target_os = "android"), feature = "libc"))]{
+        mod linux_libc;
         #[cfg(feature = "tls")]
-        pub(crate) use unix::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
-        pub(crate) use unix::RawFile;
-        pub use unix::DefaultMmap;
+        pub(crate) use linux_libc::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
+        pub(crate) use linux_libc::RawFile;
+        pub use linux_libc::DefaultMmap;
     }else {
         mod baremetal;
         #[cfg(feature = "tls")]

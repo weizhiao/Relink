@@ -44,7 +44,7 @@ windows-sys = { version = "0.61", features = [
 	"Win32_System_Threading",
 ] }
 
-[target.'cfg(unix)'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 libc = { version = "0.2.180", default-features = false, optional = true }
 
 [dependencies.syscalls]
@@ -112,7 +112,7 @@ required-features = ["object"]
 [features]
 default = ["tls", "libc"]
 
-# A feature that enables libc bindings for Unix-like platforms.
+# A feature that enables the libc backend for Linux and Android.
 libc = ["dep:libc"]
 # A feature that enables all features.
 full = ["tls", "lazy-binding", "object", "libc"]

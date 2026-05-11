@@ -11,25 +11,9 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{ffi::c_void, str::FromStr};
 use libc::{_SC_PAGESIZE, O_RDONLY, SEEK_SET, madvise, mmap, mprotect, munmap, sysconf};
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
 #[inline]
 fn last_os_error_code() -> u32 {
     unsafe { *libc::__errno_location() as u32 }
-}
-
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "tvos",
-    target_os = "watchos",
-    target_os = "freebsd",
-    target_os = "dragonfly",
-    target_os = "netbsd",
-    target_os = "openbsd"
-))]
-#[inline]
-fn last_os_error_code() -> u32 {
-    unsafe { *libc::__error() as u32 }
 }
 
 /// An implementation of Mmap trait

@@ -311,7 +311,7 @@ fn main() -> Result<()> {
 
 | Feature | Default | Purpose |
 | --- | --- | --- |
-| `libc` | Yes | Use the libc backend on Unix-like platforms |
+| `libc` | Yes | Use the libc backend on Linux and Android |
 | `tls` | Yes | Enable TLS relocation handling and the built-in TLS resolver |
 | `lazy-binding` | No | Enable PLT/GOT lazy binding and lazy-fixup lookup configuration |
 | `object` | No | Enable relocatable object (`ET_REL`) loading and `Loader::load_object()` |
