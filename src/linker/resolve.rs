@@ -1,16 +1,19 @@
 use super::{
-    request::{DependencyOwner, DependencyRequest, LoadObserver, StagedDynamic, VisibleModules},
+    request::{
+        DependencyOwner, DependencyRequest, LoadObserver, RootRequest, StagedDynamic,
+        VisibleModules,
+    },
     resolver::{KeyResolver, ResolvedKey},
-    session::{ResolveSession, extend_breadth_first},
+    session::{extend_breadth_first, ResolveSession},
     storage::{CommittedStorage, KeyId},
 };
 use crate::{
-    LinkerError, Loader, Result,
     image::{RawDynamic, ScannedDynamic, ScannedElf},
     loader::LoadHook,
     os::Mmap,
     relocation::RelocationArch,
     tls::TlsResolver,
+    LinkerError, Loader, Result,
 };
 use alloc::vec::Vec;
 
@@ -135,6 +138,19 @@ where
         };
 
         resolver.resolve_dependency(&req)
+    }
+
+    pub(crate) fn resolve_root<'cfg>(
+        &self,
+        key: &K,
+        resolver: &mut impl KeyResolver<'cfg, K>,
+    ) -> Result<ResolvedKey<'cfg, K>>
+    where
+        K: 'cfg,
+    {
+        let is_visible = |key: &K| self.contains_visible_or_pending(key);
+        let req = RootRequest::new(key, &is_visible);
+        resolver.load_root(&req)
     }
 
     fn direct_deps_for_with<'cfg, M, H, Tls, F>(

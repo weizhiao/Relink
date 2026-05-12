@@ -14,7 +14,6 @@ use super::{
     storage::KeyId,
 };
 use crate::{
-    LinkerError, Loader, Result,
     entity::SecondaryMap,
     image::{LoadedCore, RawDynamic, ScannedDynamic},
     linker::session::ResolveSession,
@@ -23,6 +22,7 @@ use crate::{
     relocation::{RelocationArch, RelocationHandler, Relocator, SymbolLookup},
     sync::Arc,
     tls::TlsResolver,
+    LinkerError, Loader, Result,
 };
 use alloc::{
     boxed::Box,
@@ -86,7 +86,8 @@ pub struct Linker<
     'a,
     K: Clone + Ord,
     D: 'static,
-    L = Loader<DefaultMmap, (), (), ()>,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    L = Loader<DefaultMmap, (), (), (), Arch>,
     R = (),
     PreS = (),
     PostS = (),
@@ -98,17 +99,16 @@ pub struct Linker<
     P = DefaultRelocationPlanner,
     O = (),
     V = (),
-    LinkArch: RelocationArch = crate::arch::NativeArch,
 > {
     loader: L,
     resolver: R,
-    pipeline: LinkPipeline<'a, K, LinkArch>,
-    relocator: Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, LinkArch>,
+    pipeline: LinkPipeline<'a, K, Arch>,
+    relocator: Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, Arch>,
     planner: P,
     observer: O,
     visible_modules: V,
     scratch_relocation_order: Vec<KeyId>,
-    _marker: PhantomData<fn() -> (D, LinkArch)>,
+    _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
 impl<'a, K> Linker<'a, K, ()>
@@ -129,6 +129,48 @@ where
             _marker: PhantomData,
         }
     }
+
+    /// Switch the linker's relocation domain before a loader is attached.
+    ///
+    /// This mirrors [`Loader::for_arch`] for the dependency-linking front-end:
+    /// all modules committed through the resulting [`LinkContext`] use
+    /// `NewArch`.
+    #[inline]
+    pub fn for_arch<NewArch>(
+        self,
+    ) -> Linker<
+        'a,
+        K,
+        (),
+        NewArch,
+        Loader<DefaultMmap, (), (), (), NewArch>,
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        DefaultRelocationPlanner,
+        (),
+        (),
+    >
+    where
+        NewArch: RelocationArch,
+    {
+        Linker {
+            loader: self.loader.for_arch::<NewArch>(),
+            resolver: (),
+            pipeline: LinkPipeline::new(),
+            relocator: self.relocator.for_arch::<NewArch>(),
+            planner: DefaultRelocationPlanner,
+            observer: (),
+            visible_modules: (),
+            scratch_relocation_order: Vec::new(),
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<'a, K> Default for Linker<'a, K, ()>
@@ -142,27 +184,27 @@ where
 }
 
 impl<
-    'a,
-    K,
-    D,
-    L,
-    R,
-    PreS,
-    PostS,
-    LazyPreS,
-    LazyPostS,
-    PreH,
-    PostH,
-    ScopeD: 'static,
-    P,
-    O,
-    V,
-    LinkArch,
-> Linker<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V, LinkArch>
+        'a,
+        K,
+        D,
+        L,
+        R,
+        PreS,
+        PostS,
+        LazyPreS,
+        LazyPostS,
+        PreH,
+        PostH,
+        ScopeD: 'static,
+        P,
+        O,
+        V,
+        Arch,
+    > Linker<'a, K, D, Arch, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
 where
     K: Clone + Ord,
     D: 'static,
-    LinkArch: RelocationArch,
+    Arch: RelocationArch,
 {
     pub fn resolver<NewR>(
         self,
@@ -171,6 +213,7 @@ where
         'a,
         K,
         D,
+        Arch,
         L,
         NewR,
         PreS,
@@ -183,7 +226,6 @@ where
         P,
         O,
         V,
-        LinkArch,
     > {
         Linker {
             loader: self.loader,
@@ -209,7 +251,7 @@ where
     >(
         self,
         configure: impl FnOnce(
-            Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, LinkArch>,
+            Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, Arch>,
         ) -> Relocator<
             (),
             NewPreS,
@@ -219,12 +261,13 @@ where
             NewPreH,
             NewPostH,
             NewScopeD,
-            LinkArch,
+            Arch,
         >,
     ) -> Linker<
         'a,
         K,
         D,
+        Arch,
         L,
         R,
         NewPreS,
@@ -237,7 +280,6 @@ where
         P,
         O,
         V,
-        LinkArch,
     > {
         Linker {
             loader: self.loader,
@@ -259,6 +301,7 @@ where
         'a,
         K,
         D,
+        Arch,
         L,
         R,
         PreS,
@@ -271,7 +314,6 @@ where
         NewP,
         O,
         V,
-        LinkArch,
     > {
         Linker {
             loader: self.loader,
@@ -293,6 +335,7 @@ where
         'a,
         K,
         D,
+        Arch,
         L,
         R,
         PreS,
@@ -305,7 +348,6 @@ where
         P,
         NewO,
         V,
-        LinkArch,
     > {
         Linker {
             loader: self.loader,
@@ -327,6 +369,7 @@ where
         'a,
         K,
         D,
+        Arch,
         L,
         R,
         PreS,
@@ -339,7 +382,6 @@ where
         P,
         O,
         NewV,
-        LinkArch,
     > {
         Linker {
             loader: self.loader,
@@ -356,7 +398,7 @@ where
 
     pub fn map_pipeline(
         mut self,
-        configure: impl FnOnce(LinkPipeline<'a, K, LinkArch>) -> LinkPipeline<'a, K, LinkArch>,
+        configure: impl FnOnce(LinkPipeline<'a, K, Arch>) -> LinkPipeline<'a, K, Arch>,
     ) -> Self {
         self.pipeline = configure(self.pipeline);
         self
@@ -364,30 +406,31 @@ where
 }
 
 impl<
-    'a,
-    K,
-    D,
-    M,
-    H,
-    Tls,
-    LoaderArch,
-    R,
-    PreS,
-    PostS,
-    LazyPreS,
-    LazyPostS,
-    PreH,
-    PostH,
-    ScopeD: 'static,
-    P,
-    O,
-    V,
->
+        'a,
+        K,
+        D,
+        M,
+        H,
+        Tls,
+        Arch,
+        R,
+        PreS,
+        PostS,
+        LazyPreS,
+        LazyPostS,
+        PreH,
+        PostH,
+        ScopeD: 'static,
+        P,
+        O,
+        V,
+    >
     Linker<
         'a,
         K,
         D,
-        Loader<M, H, D, Tls, LoaderArch>,
+        Arch,
+        Loader<M, H, D, Tls, Arch>,
         R,
         PreS,
         PostS,
@@ -399,26 +442,24 @@ impl<
         P,
         O,
         V,
-        LoaderArch,
     >
 where
     K: Clone + Ord,
     D: 'static,
     M: Mmap,
-    H: LoadHook<LoaderArch::Layout>,
+    H: LoadHook<Arch::Layout>,
     Tls: TlsResolver,
-    LoaderArch: RelocationArch,
+    Arch: RelocationArch,
 {
     pub fn map_loader<NewM, NewH, NewD, NewTls>(
         self,
-        configure: impl FnOnce(
-            Loader<M, H, D, Tls, LoaderArch>,
-        ) -> Loader<NewM, NewH, NewD, NewTls, LoaderArch>,
+        configure: impl FnOnce(Loader<M, H, D, Tls, Arch>) -> Loader<NewM, NewH, NewD, NewTls, Arch>,
     ) -> Linker<
         'a,
         K,
         NewD,
-        Loader<NewM, NewH, NewD, NewTls, LoaderArch>,
+        Arch,
+        Loader<NewM, NewH, NewD, NewTls, Arch>,
         R,
         PreS,
         PostS,
@@ -430,11 +471,10 @@ where
         P,
         O,
         V,
-        LoaderArch,
     >
     where
         NewM: Mmap,
-        NewH: LoadHook<LoaderArch::Layout>,
+        NewH: LoadHook<Arch::Layout>,
         NewD: 'static,
         NewTls: TlsResolver,
     {
@@ -454,29 +494,30 @@ where
 
 #[allow(private_bounds)]
 impl<
-    'a,
-    K,
-    D,
-    M,
-    H,
-    Tls,
-    Arch,
-    Resolver,
-    PreS,
-    PostS,
-    LazyPreS,
-    LazyPostS,
-    PreH,
-    PostH,
-    ScopeD: 'static,
-    P,
-    O,
-    V,
->
+        'a,
+        K,
+        D,
+        M,
+        H,
+        Tls,
+        Arch,
+        Resolver,
+        PreS,
+        PostS,
+        LazyPreS,
+        LazyPostS,
+        PreH,
+        PostH,
+        ScopeD: 'static,
+        P,
+        O,
+        V,
+    >
     Linker<
         'a,
         K,
         D,
+        Arch,
         Loader<M, H, D, Tls, Arch>,
         Resolver,
         PreS,
@@ -489,7 +530,6 @@ impl<
         P,
         O,
         V,
-        Arch,
     >
 where
     K: Clone + Ord,
@@ -533,7 +573,8 @@ where
                     visible_modules,
                     &mut session.resolve,
                 );
-                resolve_context.stage_resolved(resolver.load_root(&key)?, loader, observer)
+                let resolved = resolve_context.resolve_root(&key, resolver)?;
+                resolve_context.stage_resolved(resolved, loader, observer)
             },
         )?;
         self.execute_prepared_load(context, prepared)
@@ -599,8 +640,8 @@ where
 
         let mut resolve_context =
             ScanResolveContext::new(&mut context.committed, &self.visible_modules, &mut session);
-        let root =
-            resolve_context.stage_resolved(self.resolver.load_root(key)?, &mut self.loader)?;
+        let resolved = resolve_context.resolve_root(key, &mut self.resolver)?;
+        let root = resolve_context.stage_resolved(resolved, &mut self.loader)?;
         if !resolve_context.contains_pending(root) {
             return Ok(ScanDiscovery::Existing(root));
         }

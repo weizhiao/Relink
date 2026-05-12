@@ -5,11 +5,8 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use elf_loader::{
     Loader, Result,
     image::{LoadedCore, ModuleCapability},
-    input::ElfFile,
-    linker::{
-        LinkContext, LinkPass, LinkPassPlan, Linker, Materialization, ReorderPass,
-        SearchPathResolver,
-    },
+    input::{ElfFile, PathBuf},
+    linker::{LinkContext, LinkPass, LinkPassPlan, Linker, Materialization, ReorderPass},
 };
 use libloading::os::unix::{Library as UnixLibrary, RTLD_LAZY, RTLD_LOCAL, RTLD_NOW};
 use std::{fs, hint::black_box};
@@ -32,8 +29,8 @@ impl FixtureBytes {
 
 struct UseRootSectionRegions;
 
-impl LinkPass<String, ReorderPass> for UseRootSectionRegions {
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, String, ReorderPass>) -> Result<()> {
+impl LinkPass<PathBuf, ReorderPass> for UseRootSectionRegions {
+    fn run(&mut self, plan: &mut LinkPassPlan<'_, PathBuf, ReorderPass>) -> Result<()> {
         let root = plan.root().expect("root module should be visible");
         assert_eq!(root.capability(plan), ModuleCapability::SectionReorderable);
         root.set_materialization(plan, Materialization::SectionRegions);
@@ -89,19 +86,19 @@ fn load_manual_memory(fixtures: &FixtureBytes) -> LoadedCore<()> {
         .unwrap()
 }
 
-fn load_linker(root: String) {
-    let mut context = LinkContext::<String, ()>::new();
+fn load_linker(root: PathBuf) {
+    let mut context = LinkContext::<PathBuf, ()>::new();
     let loaded = Linker::new()
-        .resolver(SearchPathResolver::new())
+        .resolver(fixture_support::search_path_resolver())
         .load(&mut context, black_box(root))
         .unwrap();
     black_box(loaded);
 }
 
-fn load_scan_first(root: String) {
-    let mut context = LinkContext::<String, ()>::new();
+fn load_scan_first(root: PathBuf) {
+    let mut context = LinkContext::<PathBuf, ()>::new();
     let loaded = Linker::new()
-        .resolver(SearchPathResolver::new())
+        .resolver(fixture_support::search_path_resolver())
         .map_pipeline(|mut pipeline| {
             pipeline.push(UseRootSectionRegions);
             pipeline
@@ -129,14 +126,14 @@ fn bench_load(c: &mut Criterion) {
     });
     group.bench_function("linker/runtime", |b| {
         b.iter_batched(
-            || fixtures.libc_str().to_owned(),
+            || PathBuf::from(fixtures.libc_str()),
             load_linker,
             BatchSize::SmallInput,
         );
     });
     group.bench_function("linker/scan_first", |b| {
         b.iter_batched(
-            || fixtures.libc_str().to_owned(),
+            || PathBuf::from(fixtures.libc_str()),
             load_scan_first,
             BatchSize::SmallInput,
         );

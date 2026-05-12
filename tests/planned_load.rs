@@ -9,7 +9,7 @@ use elf_loader::{
     linker::{
         DataPass, KeyResolver, LinkContext, LinkPass, LinkPassPlan, Linker, LoadObserver,
         Materialization, RelocationInputs, RelocationRequest, ReorderPass, ResolvedKey,
-        StagedDynamic, VisibleModules,
+        RootRequest, StagedDynamic, VisibleModules,
     },
     os::PageSize,
 };
@@ -59,8 +59,9 @@ struct StaticVisibleModule {
 impl KeyResolver<'static, &'static str> for SingleBinaryResolver {
     fn load_root(
         &mut self,
-        key: &&'static str,
+        req: &RootRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+        let key = req.key();
         assert_eq!(*key, self.key);
         Ok(ResolvedKey::load(
             self.key,
@@ -79,9 +80,11 @@ impl KeyResolver<'static, &'static str> for SingleBinaryResolver {
 impl KeyResolver<'static, &'static str> for ExistingRootResolver {
     fn load_root(
         &mut self,
-        key: &&'static str,
+        req: &RootRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+        let key = req.key();
         assert_eq!(*key, self.requested);
+        assert!(req.is_visible(&self.existing));
         Ok(ResolvedKey::existing(self.existing))
     }
 
@@ -105,8 +108,9 @@ impl MultiBinaryResolver {
 impl KeyResolver<'static, &'static str> for MultiBinaryResolver {
     fn load_root(
         &mut self,
-        key: &&'static str,
+        req: &RootRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+        let key = req.key();
         assert_eq!(*key, self.root);
         let module = self.module(key).expect("missing root module");
         Ok(ResolvedKey::load(
@@ -150,8 +154,9 @@ impl LoadObserver<&'static str, ()> for FailingObserver {
 impl KeyResolver<'static, &'static str> for VisibleDependencyResolver {
     fn load_root(
         &mut self,
-        key: &&'static str,
+        req: &RootRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+        let key = req.key();
         assert_eq!(*key, "root");
         Ok(ResolvedKey::load(
             "root",

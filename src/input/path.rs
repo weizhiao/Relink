@@ -42,6 +42,16 @@ impl Path {
         }
     }
 
+    pub fn file_name(&self) -> &str {
+        let path = self.as_str();
+        let slash = path.rfind('/');
+        let backslash = path.rfind('\\');
+        let Some(index) = slash.into_iter().chain(backslash).max() else {
+            return path;
+        };
+        &path[index + 1..]
+    }
+
     pub fn join(&self, name: impl AsRef<str>) -> PathBuf {
         let dir = self.as_str();
         let name = name.as_ref();
@@ -220,6 +230,13 @@ mod tests {
         assert_eq!(Path::new("liba.so").origin_dir().as_str(), ".");
         assert_eq!(Path::new("target/liba.so").origin_dir().as_str(), "target");
         assert_eq!(Path::new("/liba.so").origin_dir().as_str(), "/");
+    }
+
+    #[test]
+    fn file_name_returns_last_component() {
+        assert_eq!(Path::new("liba.so").file_name(), "liba.so");
+        assert_eq!(Path::new("target/liba.so").file_name(), "liba.so");
+        assert_eq!(Path::new("target\\liba.so").file_name(), "liba.so");
     }
 
     #[test]

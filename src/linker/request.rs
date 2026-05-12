@@ -1,9 +1,9 @@
 use crate::{
-    LinkerError, Result, UnresolvedDependencyError,
     arch::ArchKind,
     image::{LoadedCore, RawDylib, RawDynamic, ScannedDynamic},
     relocation::{BindingMode, RelocationArch},
     sync::Arc,
+    LinkerError, Result, UnresolvedDependencyError,
 };
 use alloc::boxed::Box;
 
@@ -110,6 +110,29 @@ impl<Arch: RelocationArch> DependencyOwner for ScannedDynamic<Arch> {
     #[inline]
     fn needed_lib(&self, index: usize) -> Option<&str> {
         self.needed_lib(index)
+    }
+}
+
+/// A root module resolution request.
+pub struct RootRequest<'a, K: Clone> {
+    key: &'a K,
+    is_visible: &'a dyn Fn(&K) -> bool,
+}
+
+impl<'a, K: Clone> RootRequest<'a, K> {
+    #[inline]
+    pub(crate) fn new(key: &'a K, is_visible: &'a dyn Fn(&K) -> bool) -> Self {
+        Self { key, is_visible }
+    }
+
+    #[inline]
+    pub fn key(&self) -> &'a K {
+        self.key
+    }
+
+    #[inline]
+    pub fn is_visible(&self, key: &K) -> bool {
+        (self.is_visible)(key)
     }
 }
 
@@ -262,6 +285,11 @@ where
     pub fn mapped_len(&self) -> usize {
         self.raw.mapped_len()
     }
+
+    #[inline]
+    pub fn raw(&self) -> &'a RawDynamic<D, Arch> {
+        self.raw
+    }
 }
 
 /// Observer for modules staged by [`super::Linker`].
@@ -322,6 +350,11 @@ where
     #[inline]
     pub fn shared_scope(&self) -> &Arc<[LoadedCore<D, Arch>]> {
         self.scope
+    }
+
+    #[inline]
+    pub fn raw(&self) -> &RawDynamic<D, Arch> {
+        &self.raw
     }
 
     #[inline]

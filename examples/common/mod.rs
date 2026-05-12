@@ -8,6 +8,11 @@ use std::{
     time::SystemTime,
 };
 
+use elf_loader::{
+    input::Path as ElfPath,
+    linker::{CandidateRequest, SearchPathResolver},
+};
+
 const RUST_FIXTURES: [(&str, &str); 3] = [("liba", "a"), ("libb", "b"), ("libc", "c")];
 static FIXTURE_BUILD_LOCK: Mutex<()> = Mutex::new(());
 
@@ -73,6 +78,37 @@ pub(crate) fn ensure_all() -> FixturePaths {
 pub(crate) fn ensure_exec_a() -> PathBuf {
     ensure_scope(FixtureScope::ExecA);
     exec_target_dir().join("exec_a")
+}
+
+pub(crate) fn search_path_resolver() -> SearchPathResolver {
+    let mut resolver = SearchPathResolver::new();
+    resolver.push_search_dir_provider(|request, out| {
+        let CandidateRequest::Dependency {
+            requested,
+            origin,
+            runpath,
+            rpath,
+            ..
+        } = request
+        else {
+            return Ok(());
+        };
+
+        if requested.has_dir_separator() {
+            return Ok(());
+        }
+
+        if let Some(path_list) = runpath.or(rpath) {
+            for dir in path_list.split(':') {
+                if !dir.is_empty() {
+                    out.push(ElfPath::expand_origin(dir, origin));
+                }
+            }
+        }
+
+        Ok(())
+    });
+    resolver
 }
 
 enum FixtureScope {

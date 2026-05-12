@@ -196,6 +196,26 @@ impl Relocator<(), (), (), (), (), (), (), ()> {
     }
 }
 
+impl<Arch: RelocationArch> Relocator<(), (), (), (), (), (), (), (), Arch> {
+    /// Switches an empty relocator configuration to a different relocation backend.
+    pub fn for_arch<NewArch: RelocationArch>(
+        self,
+    ) -> Relocator<(), (), (), (), (), (), (), (), NewArch> {
+        Relocator {
+            object: self.object,
+            scope: empty_scope::<(), NewArch>(),
+            pre_find: self.pre_find,
+            post_find: self.post_find,
+            lazy_pre_find: self.lazy_pre_find,
+            lazy_post_find: self.lazy_post_find,
+            pre_handler: self.pre_handler,
+            post_handler: self.post_handler,
+            binding: self.binding,
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D: 'static, Arch>
     Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D, Arch>
 where
@@ -758,8 +778,13 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
     }
 
     #[inline]
-    pub(crate) fn symbol(&self) -> Option<&'lib ElfSymbol<Arch::Layout>> {
+    pub fn symbol(&self) -> Option<&'lib ElfSymbol<Arch::Layout>> {
         self.sym
+    }
+
+    #[inline]
+    pub fn lib(&self) -> &'lib ElfCore<D, Arch> {
+        self.lib
     }
 
     #[inline]

@@ -36,7 +36,10 @@ pub use passes::{
 };
 pub use request::{
     DefaultRelocationPlanner, DependencyOwner, DependencyRequest, LoadObserver, RelocationInputs,
-    RelocationPlanner, RelocationRequest, StagedDynamic, VisibleModules,
+    RelocationPlanner, RelocationRequest, RootRequest, StagedDynamic, VisibleModules,
 };
-pub use resolver::{KeyResolver, ResolvedKey, SearchPathResolver};
+pub use resolver::{
+    CandidateRequest, KeyResolver, ResolvedKey, SearchDirProvider, SearchDirSource,
+    SearchPathResolver,
+};
 pub use storage::KeyId;

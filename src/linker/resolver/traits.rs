@@ -1,4 +1,8 @@
-use crate::{Result, input::ElfReader, linker::DependencyRequest};
+use crate::{
+    input::ElfReader,
+    linker::{DependencyRequest, RootRequest},
+    Result,
+};
 use alloc::boxed::Box;
 
 /// A key-resolution result chosen by caller policy.
@@ -29,7 +33,7 @@ impl<'cfg, K> ResolvedKey<'cfg, K> {
 
 /// Runtime key-resolution policy used by [`super::super::Linker`].
 pub trait KeyResolver<'cfg, K: Clone> {
-    fn load_root(&mut self, key: &K) -> Result<ResolvedKey<'cfg, K>>;
+    fn load_root(&mut self, req: &RootRequest<'_, K>) -> Result<ResolvedKey<'cfg, K>>;
 
     fn resolve_dependency(
         &mut self,
