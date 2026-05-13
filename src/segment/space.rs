@@ -1,85 +1,12 @@
 use crate::{
-    Result, logging,
+    Result,
     relocation::{RelocAddr, RelocValue},
     sync::Arc,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::c_void, fmt::Debug, mem::size_of, ptr::NonNull};
 
-pub(crate) struct ElfMemoryBacking {
-    memory: *mut c_void,
-    len: usize,
-    munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
-}
-
-impl ElfMemoryBacking {
-    #[inline]
-    fn new(
-        memory: *mut c_void,
-        len: usize,
-        munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
-    ) -> Self {
-        Self {
-            memory,
-            len,
-            munmap,
-        }
-    }
-}
-
-impl Drop for ElfMemoryBacking {
-    fn drop(&mut self) {
-        let res = unsafe { (self.munmap)(self.memory, self.len) };
-        debug_assert!(res.is_ok(), "failed to unmap ELF segments");
-        if let Err(err) = res {
-            logging::error!("failed to unmap ELF segments: {err}");
-        }
-    }
-}
-
-// Safety: the backing only owns an mmap-style region and unmaps it on drop.
-unsafe impl Send for ElfMemoryBacking {}
-// Safety: the backing does not expose interior mutability beyond the mapped bytes themselves.
-unsafe impl Sync for ElfMemoryBacking {}
-
-#[derive(Clone)]
-pub(crate) struct ElfSegmentSlice {
-    offset: usize,
-    len: usize,
-    // This shared owner keeps the mapped arena alive even when address math
-    // only needs the slice bounds at runtime.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    backing: Arc<ElfMemoryBacking>,
-}
-
-impl ElfSegmentSlice {
-    #[inline]
-    pub(crate) fn new(offset: usize, len: usize, backing: Arc<ElfMemoryBacking>) -> Self {
-        Self {
-            offset,
-            len,
-            backing,
-        }
-    }
-
-    #[inline]
-    fn contains_range(&self, start: usize, len: usize) -> bool {
-        start
-            .checked_sub(self.offset)
-            .and_then(|delta| delta.checked_add(len))
-            .is_some_and(|end| end <= self.len)
-    }
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.len
-    }
-
-    #[inline]
-    fn offset(&self) -> usize {
-        self.offset
-    }
-}
+use super::{ElfSegmentBacking, ElfSegmentSlice};
 
 /// The mapped memory of an ELF object.
 ///
@@ -141,7 +68,7 @@ impl ElfSegments {
         base: usize,
         offset: usize,
     ) -> Self {
-        let backing = Arc::new(ElfMemoryBacking::new(memory, len, munmap));
+        let backing = Arc::new(ElfSegmentBacking::new(memory, len, munmap));
         let slice = ElfSegmentSlice::new(offset, len, backing);
         Self {
             base,
@@ -173,8 +100,8 @@ impl ElfSegments {
         memory: *mut c_void,
         len: usize,
         munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
-    ) -> Arc<ElfMemoryBacking> {
-        Arc::new(ElfMemoryBacking::new(memory, len, munmap))
+    ) -> Arc<ElfSegmentBacking> {
+        Arc::new(ElfSegmentBacking::new(memory, len, munmap))
     }
 
     /// Creates one mapped slice descriptor backed by a shared owner.
@@ -182,7 +109,7 @@ impl ElfSegments {
     pub(crate) fn slice(
         offset: usize,
         len: usize,
-        backing: Arc<ElfMemoryBacking>,
+        backing: Arc<ElfSegmentBacking>,
     ) -> ElfSegmentSlice {
         ElfSegmentSlice::new(offset, len, backing)
     }

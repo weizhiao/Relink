@@ -11,24 +11,25 @@
 //! - [`RelocationContext`] for inspecting the current relocation and search scope
 //! - binding policy and lazy-fixup support configured through `Relocator`
 
+mod defs;
 mod dynamic;
+mod helper;
 mod lazy;
 mod relocator;
-mod support;
 mod traits;
 
+pub(crate) use defs::{
+    RelocAddr, RelocValue, RelocationValueFormula, RelocationValueKind, resolve_ifunc,
+};
 pub(crate) use dynamic::DynamicRelocation;
+pub(crate) use helper::{RelocHelper, SymDef, find_symdef_impl, likely, reloc_error, unlikely};
 pub(crate) use lazy::ResolvedBinding;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use lazy::dl_fixup;
-pub(crate) use support::{
-    RelocAddr, RelocHelper, RelocValue, RelocationValueFormula, RelocationValueKind,
-    RelocationValueProvider, SymDef, find_symdef_impl, likely, reloc_error, resolve_ifunc,
-    unlikely,
-};
 pub use traits::RelocationArch;
 pub(crate) use traits::{
-    HandlerHooks, LazyLookupHooks, LookupHooks, Relocatable, RelocateArgs, SupportLazy,
+    HandlerHooks, LazyLookupHooks, LookupHooks, Relocatable, RelocateArgs, RelocationValueProvider,
+    SupportLazy,
 };
 
 pub use relocator::Relocator;

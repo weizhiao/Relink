@@ -5,7 +5,7 @@ use crate::{
     entity::SecondaryMap,
     os::{MapFlags, Mmap, PageSize, ProtFlags},
     relocation::RelocationArch,
-    segment::{ElfMemoryBacking, ElfSegments},
+    segment::{ElfSegmentBacking, ElfSegments},
     sync::Arc,
 };
 use alloc::vec::Vec;
@@ -16,7 +16,7 @@ pub(crate) struct MappedArena {
     memory_class: MemoryClass,
     base: usize,
     len: usize,
-    backing: Arc<ElfMemoryBacking>,
+    backing: Arc<ElfSegmentBacking>,
 }
 
 #[derive(Clone, Default)]
@@ -134,7 +134,7 @@ impl MappedArena {
         memory_class: MemoryClass,
         base: usize,
         len: usize,
-        backing: Arc<ElfMemoryBacking>,
+        backing: Arc<ElfSegmentBacking>,
     ) -> Self {
         Self {
             memory_class,
@@ -150,7 +150,7 @@ impl MappedArena {
     }
 
     #[inline]
-    pub(super) fn backing(&self) -> Arc<ElfMemoryBacking> {
+    pub(super) fn backing(&self) -> Arc<ElfSegmentBacking> {
         Arc::clone(&self.backing)
     }
 

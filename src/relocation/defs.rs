@@ -1,6 +1,5 @@
-use crate::RelocationError;
 #[cfg(feature = "object")]
-use crate::Result;
+use crate::{RelocationError, Result};
 use core::ptr::null;
 
 /// A wrapper type for relocation values, providing type safety and arithmetic operations.
@@ -90,7 +89,7 @@ impl RelocAddr {
 
 impl RelocationValueFormula {
     #[inline]
-    fn compute(self, target: usize, addend: isize, place: usize) -> i128 {
+    pub(crate) fn compute(self, target: usize, addend: isize, place: usize) -> i128 {
         let target = target as i128;
         let addend = addend as i128;
         let place = place as i128;
@@ -98,45 +97,6 @@ impl RelocationValueFormula {
         match self {
             RelocationValueFormula::Absolute => target + addend,
             RelocationValueFormula::RelativeToPlace => target + addend - place,
-        }
-    }
-}
-
-pub(crate) trait RelocationValueProvider {
-    fn relocation_value_kind(
-        _relocation_type: usize,
-    ) -> core::result::Result<RelocationValueKind, RelocationError> {
-        Err(RelocationError::UnsupportedRelocationType)
-    }
-
-    fn relocation_value<T>(
-        relocation_type: usize,
-        target: usize,
-        addend: isize,
-        place: usize,
-        skip: impl FnOnce(RelocValue<()>) -> T,
-        write_addr: impl FnOnce(RelocAddr) -> T,
-        write_word32: impl FnOnce(RelocValue<u32>) -> T,
-        write_sword32: impl FnOnce(RelocValue<i32>) -> T,
-    ) -> core::result::Result<T, RelocationError> {
-        let kind = Self::relocation_value_kind(relocation_type)?;
-        match kind {
-            RelocationValueKind::None => Ok(skip(RelocValue::new(()))),
-            RelocationValueKind::Address(formula) => Ok(write_addr(RelocAddr::new(
-                formula.compute(target, addend, place) as usize,
-            ))),
-            RelocationValueKind::Word32(formula) => {
-                u32::try_from(formula.compute(target, addend, place))
-                    .map(RelocValue::new)
-                    .map(write_word32)
-                    .map_err(|_| RelocationError::IntegerConversionOverflow)
-            }
-            RelocationValueKind::SWord32(formula) => {
-                i32::try_from(formula.compute(target, addend, place))
-                    .map(RelocValue::new)
-                    .map(write_sword32)
-                    .map_err(|_| RelocationError::IntegerConversionOverflow)
-            }
         }
     }
 }
