@@ -265,11 +265,9 @@ pub(crate) enum FailureReason {
     TlsModuleIdUnavailable,
     #[cfg(feature = "tls")]
     TlsTpOffsetUnavailable,
-    #[cfg(feature = "tls")]
-    TlsNativeRuntimeUnsupported,
     #[cfg(not(feature = "tls"))]
     TlsDisabled,
-    NativeRuntimeUnsupported,
+    EmulatorUnavailable,
     #[cfg(feature = "object")]
     IntegralConversionOutOfRange,
 }
@@ -283,15 +281,9 @@ impl Display for FailureReason {
             Self::TlsModuleIdUnavailable => f.write_str("TLS module id is unavailable"),
             #[cfg(feature = "tls")]
             Self::TlsTpOffsetUnavailable => f.write_str("TLS thread-pointer offset is unavailable"),
-            #[cfg(feature = "tls")]
-            Self::TlsNativeRuntimeUnsupported => {
-                f.write_str("TLS descriptor relocation requires native runtime support")
-            }
             #[cfg(not(feature = "tls"))]
             Self::TlsDisabled => f.write_str("TLS relocation support is disabled"),
-            Self::NativeRuntimeUnsupported => {
-                f.write_str("relocation requires native runtime support")
-            }
+            Self::EmulatorUnavailable => f.write_str("relocation requires an emulator"),
             #[cfg(feature = "object")]
             Self::IntegralConversionOutOfRange => {
                 f.write_str("out of range integral type conversion attempted")

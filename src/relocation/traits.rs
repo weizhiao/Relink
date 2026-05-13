@@ -1,6 +1,6 @@
 #[cfg(feature = "object")]
 use super::RelocHelper;
-use super::{RelocAddr, RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
+use super::{Emulator, RelocAddr, RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
 use crate::{
     RelocationError, Result,
     arch::{ArchKind, NativeArch},
@@ -431,6 +431,7 @@ pub struct RelocateArgs<
     pub(crate) lookup: LookupHooks<'a, PreS, PostS>,
     pub(crate) lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
     pub(crate) handlers: HandlerHooks<'a, PreH, PostH>,
+    pub(crate) emu: Option<Arc<dyn Emulator<Arch>>>,
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
@@ -453,6 +454,7 @@ impl<
         lookup: LookupHooks<'a, PreS, PostS>,
         lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
         handlers: HandlerHooks<'a, PreH, PostH>,
+        emu: Option<Arc<dyn Emulator<Arch>>>,
     ) -> Self {
         Self {
             scope,
@@ -460,6 +462,7 @@ impl<
             lookup,
             lazy_lookup,
             handlers,
+            emu,
             _marker: PhantomData,
         }
     }

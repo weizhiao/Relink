@@ -8,7 +8,7 @@ mod handle;
 mod loaded;
 mod symbol;
 
-pub(crate) use handle::CoreInner;
+pub(crate) use handle::{CoreFiniHandler, CoreInner};
 pub use handle::{ElfCore, ElfCoreRef};
 pub use loaded::LoadedCore;
 pub use symbol::Symbol;

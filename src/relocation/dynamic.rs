@@ -8,7 +8,7 @@ use crate::{
         BindingMode, RelocHelper, RelocValue, RelocateArgs, RelocationArch, RelocationHandler,
         ResolvedBinding, SymbolLookup, likely, reloc_error, resolve_ifunc, unlikely,
     },
-    tls::{handle_tls_reloc, lookup_tls_get_addr},
+    tls::{TlsRelocOutcome, handle_tls_reloc, lookup_tls_get_addr},
 };
 use core::num::NonZeroUsize;
 
@@ -45,6 +45,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
             lookup,
             lazy_lookup,
             handlers,
+            emu,
             ..
         } = args;
 
@@ -83,6 +84,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
             handlers.pre,
             handlers.post,
             tls_get_addr,
+            emu.clone(),
         );
 
         if !relocation.is_empty() {
@@ -118,6 +120,12 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
         if Arch::SUPPORTS_NATIVE_RUNTIME {
             logging::debug!("Executing initialization functions for {}", self.name());
             self.call_init();
+        } else if let Some(emu) = emu {
+            logging::debug!(
+                "Executing initialization functions with emulator for {}",
+                self.name()
+            );
+            self.call_init_with_emu(emu)?;
         } else {
             logging::debug!(
                 "Skipping initialization functions for non-native relocation of {}",
@@ -216,27 +224,28 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 }
                 failure_reason = FailureReason::UnknownSymbol;
             } else if unlikely(r_type == Arch::IRELATIVE) {
-                // IFUNC resolvers run on the host CPU, so they only make
-                // sense when the relocated module shares the host's ABI.
-                // Cross-architecture loaders fall through to the post
-                // `RelocationHandler` below.
-                if Arch::SUPPORTS_NATIVE_RUNTIME {
-                    let r_addend = rel.r_addend(base.into_inner());
-                    let addr = base.addend(r_addend);
+                let r_addend = rel.r_addend(base.into_inner());
+                let addr = base.addend(r_addend);
+                if !Arch::SUPPORTS_NATIVE_RUNTIME {
+                    if let Some(resolved) = helper.resolve_ifunc_with_emu(rel, addr)? {
+                        write_reloc_addr::<Arch>(segments, rel.r_offset(), resolved);
+                        continue;
+                    }
+                    failure_reason = FailureReason::EmulatorUnavailable;
+                } else {
                     write_reloc_addr::<Arch>(segments, rel.r_offset(), unsafe {
                         resolve_ifunc(addr)
                     });
                     continue;
                 }
-                failure_reason = FailureReason::NativeRuntimeUnsupported;
             } else if unlikely(Arch::is_tlsdesc(r_type)) {
                 // `handle_tls_reloc` performs its own SUPPORTS_NATIVE_RUNTIME
                 // gate for TLSDESC. If the built-in path cannot handle it,
                 // keep the specific TLS failure for the final error while
                 // still giving the post handler a chance.
-                match handle_tls_reloc::<_, Arch, _, _, _, _>(helper, rel) {
-                    Ok(()) => continue,
-                    Err(reason) => failure_reason = reason,
+                match handle_tls_reloc::<_, Arch, _, _, _, _>(helper, rel)? {
+                    TlsRelocOutcome::Applied => continue,
+                    TlsRelocOutcome::Failed(reason) => failure_reason = reason,
                 }
             }
             // Handle unknown relocations with the provided handler
@@ -360,28 +369,29 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 }
                 failure_reason = FailureReason::UnknownSymbol;
             } else if r_type == Arch::IRELATIVE {
-                // IFUNC resolvers run on the host CPU, so they only make
-                // sense when the relocated module shares the host's ABI.
-                // Cross-architecture loaders fall through to the post
-                // `RelocationHandler` below.
-                if Arch::SUPPORTS_NATIVE_RUNTIME {
-                    let r_addend = rel.r_addend(base.into_inner());
-                    let addr = base.addend(r_addend);
+                let r_addend = rel.r_addend(base.into_inner());
+                let addr = base.addend(r_addend);
+                if !Arch::SUPPORTS_NATIVE_RUNTIME {
+                    if let Some(resolved) = helper.resolve_ifunc_with_emu(rel, addr)? {
+                        write_reloc_addr::<Arch>(segments, rel.r_offset(), resolved);
+                        continue;
+                    }
+                    failure_reason = FailureReason::EmulatorUnavailable;
+                } else {
                     write_reloc_addr::<Arch>(segments, rel.r_offset(), unsafe {
                         resolve_ifunc(addr)
                     });
                     continue;
                 }
-                failure_reason = FailureReason::NativeRuntimeUnsupported;
             } else if Arch::is_tls(r_type) {
                 // `handle_tls_reloc` is a pure data computation for
                 // DTPMOD/DTPOFF/TPOFF (safe under cross-arch loads) and
                 // gates TLSDESC on SUPPORTS_NATIVE_RUNTIME internally.
                 // Anything the built-in path cannot handle still gets a post
                 // handler chance before reporting the specific TLS reason.
-                match handle_tls_reloc::<_, Arch, _, _, _, _>(helper, rel) {
-                    Ok(()) => continue,
-                    Err(reason) => failure_reason = reason,
+                match handle_tls_reloc::<_, Arch, _, _, _, _>(helper, rel)? {
+                    TlsRelocOutcome::Applied => continue,
+                    TlsRelocOutcome::Failed(reason) => failure_reason = reason,
                 }
             }
 

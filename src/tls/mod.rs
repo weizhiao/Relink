@@ -17,5 +17,5 @@ pub(crate) use state::{CoreTlsState, TlsDescArgs};
 pub use defs::{TlsIndex, TlsInfo, TlsModuleId, TlsTpOffset};
 #[cfg(feature = "tls")]
 pub use manager::DefaultTlsResolver;
-pub(crate) use relocation::{handle_tls_reloc, lookup_tls_get_addr};
+pub(crate) use relocation::{TlsRelocOutcome, handle_tls_reloc, lookup_tls_get_addr};
 pub use traits::TlsResolver;

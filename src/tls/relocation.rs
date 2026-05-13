@@ -1,12 +1,22 @@
+use crate::FailureReason;
+
+pub(crate) enum TlsRelocOutcome {
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
+    Applied,
+    Failed(FailureReason),
+}
+
 #[cfg(feature = "tls")]
 mod enabled {
     use super::super::defs::{TlsDescDynamicArg, TlsIndex};
+    use super::TlsRelocOutcome;
     use crate::{
-        FailureReason,
+        FailureReason, Result,
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
         relocation::{
             RelocAddr, RelocHelper, RelocValue, RelocationArch, RelocationHandler, SymbolLookup,
+            TlsDescEmuRequest,
         },
         segment::ElfSegments,
     };
@@ -28,7 +38,7 @@ mod enabled {
     pub(crate) fn handle_tls_reloc<D, Arch, PreS, PostS, PreH, PostH>(
         helper: &mut RelocHelper<'_, D, Arch, PreS, PostS, PreH, PostH>,
         rel: &ElfRelType<Arch>,
-    ) -> Result<(), FailureReason>
+    ) -> Result<TlsRelocOutcome>
     where
         D: 'static,
         Arch: RelocationArch,
@@ -46,15 +56,15 @@ mod enabled {
             value if value == Arch::DTPOFF => {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
                     let Some(sym) = symdef.symbol() else {
-                        return Err(FailureReason::UnknownSymbol);
+                        return Ok(TlsRelocOutcome::Failed(FailureReason::UnknownSymbol));
                     };
                     let tls_val = RelocValue::new(sym.st_value())
                         .addend(r_addend)
                         .relative_to(Arch::TLS_DTV_OFFSET);
                     write_tls_word::<Arch>(segments, rel.r_offset(), tls_val.into_inner());
-                    return Ok(());
+                    return Ok(TlsRelocOutcome::Applied);
                 }
-                return Err(FailureReason::UnknownSymbol);
+                return Ok(TlsRelocOutcome::Failed(FailureReason::UnknownSymbol));
             }
             value if value == Arch::DTPMOD => {
                 let Some(mod_id) = (if r_sym == 0 {
@@ -64,43 +74,55 @@ mod enabled {
                 } else {
                     None
                 }) else {
-                    return Err(FailureReason::UnknownSymbol);
+                    return Ok(TlsRelocOutcome::Failed(FailureReason::UnknownSymbol));
                 };
                 let Some(mod_id) = mod_id else {
-                    return Err(FailureReason::TlsModuleIdUnavailable);
+                    return Ok(TlsRelocOutcome::Failed(
+                        FailureReason::TlsModuleIdUnavailable,
+                    ));
                 };
                 write_tls_word::<Arch>(segments, rel.r_offset(), mod_id.get());
-                return Ok(());
+                return Ok(TlsRelocOutcome::Applied);
             }
             value if value == Arch::TPOFF => {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
                     let Some(sym) = symdef.symbol() else {
-                        return Err(FailureReason::UnknownSymbol);
+                        return Ok(TlsRelocOutcome::Failed(FailureReason::UnknownSymbol));
                     };
                     if let Some(tp_offset) = symdef.tls_tp_offset() {
                         let tls_val =
                             RelocValue::new((tp_offset.get() + sym.st_value() as isize) as usize)
                                 .addend(r_addend);
                         write_tls_word::<Arch>(segments, rel.r_offset(), tls_val.into_inner());
-                        return Ok(());
+                        return Ok(TlsRelocOutcome::Applied);
                     }
-                    return Err(FailureReason::TlsTpOffsetUnavailable);
+                    return Ok(TlsRelocOutcome::Failed(
+                        FailureReason::TlsTpOffsetUnavailable,
+                    ));
                 }
-                return Err(FailureReason::UnknownSymbol);
+                return Ok(TlsRelocOutcome::Failed(FailureReason::UnknownSymbol));
             }
             value if Arch::is_tlsdesc(value) => {
-                // TLSDESC writes a host function pointer into the slot
-                // (`tlsdesc_resolver_static` / `_dynamic`). That stub only
-                // makes sense when the relocated module shares the host's
-                // ABI and CPU; cross-architecture loaders must defer this
-                // class of relocation to a custom `RelocationHandler`.
-                if !Arch::SUPPORTS_NATIVE_RUNTIME {
-                    return Err(FailureReason::TlsNativeRuntimeUnsupported);
-                }
                 if let Some(symdef) = helper.find_symdef(r_sym) {
                     let Some(sym) = symdef.symbol() else {
-                        return Err(FailureReason::UnknownSymbol);
+                        return Ok(TlsRelocOutcome::Failed(FailureReason::UnknownSymbol));
                     };
+                    if !Arch::SUPPORTS_NATIVE_RUNTIME {
+                        let request = TlsDescEmuRequest::new(
+                            sym.st_value(),
+                            r_addend,
+                            symdef.tls_mod_id(),
+                            symdef.tls_tp_offset(),
+                            helper.tls_get_addr.into_inner(),
+                        );
+                        let Some(desc) = helper.resolve_tlsdesc_with_emu(rel, request)? else {
+                            return Ok(TlsRelocOutcome::Failed(FailureReason::EmulatorUnavailable));
+                        };
+                        write_tls_word::<Arch>(segments, rel.r_offset(), desc.resolver());
+                        write_tls_word::<Arch>(segments, rel.r_offset() + 8, desc.arg());
+                        return Ok(TlsRelocOutcome::Applied);
+                    }
+
                     if let Some(tp_offset) = symdef.tls_tp_offset() {
                         let tpoff =
                             RelocValue::new((tp_offset.get() + sym.st_value() as isize) as usize)
@@ -111,7 +133,7 @@ mod enabled {
                             tlsdesc_resolver_static as *const () as usize,
                         );
                         write_tls_word::<Arch>(segments, rel.r_offset() + 8, tpoff.into_inner());
-                        return Ok(());
+                        return Ok(TlsRelocOutcome::Applied);
                     }
 
                     if let Some(mod_id) = symdef.tls_mod_id() {
@@ -133,11 +155,13 @@ mod enabled {
                             tlsdesc_resolver_dynamic as *const () as usize,
                         );
                         write_tls_word::<Arch>(segments, rel.r_offset() + 8, arg_ptr.into_inner());
-                        return Ok(());
+                        return Ok(TlsRelocOutcome::Applied);
                     }
-                    return Err(FailureReason::TlsModuleIdUnavailable);
+                    return Ok(TlsRelocOutcome::Failed(
+                        FailureReason::TlsModuleIdUnavailable,
+                    ));
                 }
-                return Err(FailureReason::UnknownSymbol);
+                return Ok(TlsRelocOutcome::Failed(FailureReason::UnknownSymbol));
             }
             _ => unreachable!("handle_tls_reloc called with a non-TLS relocation"),
         }
@@ -146,8 +170,9 @@ mod enabled {
 
 #[cfg(not(feature = "tls"))]
 mod disabled {
+    use super::TlsRelocOutcome;
     use crate::{
-        FailureReason,
+        FailureReason, Result,
         elf::{ElfRelEntry, ElfRelType},
         relocation::{RelocAddr, RelocHelper, RelocationArch, RelocationHandler, SymbolLookup},
     };
@@ -161,7 +186,7 @@ mod disabled {
     pub(crate) fn handle_tls_reloc<D, Arch, PreS, PostS, PreH, PostH>(
         _helper: &mut RelocHelper<'_, D, Arch, PreS, PostS, PreH, PostH>,
         rel: &ElfRelType<Arch>,
-    ) -> Result<(), FailureReason>
+    ) -> Result<TlsRelocOutcome>
     where
         D: 'static,
         Arch: RelocationArch,
@@ -171,7 +196,7 @@ mod disabled {
         PostH: RelocationHandler<Arch> + ?Sized,
     {
         debug_assert!(Arch::is_tls(rel.r_type()));
-        Err(FailureReason::TlsDisabled)
+        Ok(TlsRelocOutcome::Failed(FailureReason::TlsDisabled))
     }
 }
 

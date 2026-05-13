@@ -1,11 +1,13 @@
 use super::{RelocAddr, resolve_ifunc};
+use crate::relocation::{TlsDescEmuRequest, TlsDescEmuValue};
 use crate::{
     Error, FailureReason, Result,
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
     image::{ElfCore, LoadedCore},
     logging, relocate_context_error,
     relocation::{
-        HandleResult, RelocationArch, RelocationContext, RelocationHandler, SymbolLookup,
+        EmuRelocationContext, Emulator, HandleResult, RelocationArch, RelocationContext,
+        RelocationHandler, SymbolLookup,
     },
     sync::Arc,
     tls::TlsDescArgs,
@@ -30,6 +32,7 @@ pub(crate) struct RelocHelper<
     #[allow(dead_code)]
     pub(crate) tls_get_addr: RelocAddr,
     pub(crate) tls_desc_args: TlsDescArgs,
+    pub(crate) emu: Option<Arc<dyn Emulator<Arch>>>,
 }
 
 impl<'find, D, Arch, PreS, PostS, PreH, PostH> RelocHelper<'find, D, Arch, PreS, PostS, PreH, PostH>
@@ -49,6 +52,7 @@ where
         pre_handler: &'find PreH,
         post_handler: &'find PostH,
         tls_get_addr: RelocAddr,
+        emu: Option<Arc<dyn Emulator<Arch>>>,
     ) -> Self {
         Self {
             core,
@@ -59,6 +63,7 @@ where
             post_handler,
             tls_get_addr,
             tls_desc_args: TlsDescArgs::default(),
+            emu,
         }
     }
 
@@ -90,6 +95,35 @@ where
     pub(crate) fn find_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, D, Arch>> {
         let (dynsym, syminfo) = self.core.symtab().symbol_idx(r_sym);
         find_symdef_impl(self.core, &self.scope, dynsym, &syminfo)
+    }
+
+    #[inline]
+    pub(crate) fn resolve_ifunc_with_emu(
+        &self,
+        rel: &ElfRelType<Arch>,
+        resolver: RelocAddr,
+    ) -> Result<Option<RelocAddr>> {
+        let Some(emu) = &self.emu else {
+            return Ok(None);
+        };
+        let ctx = EmuRelocationContext::new(self.core, rel);
+        emu.resolve_ifunc(&ctx, resolver.into_inner())
+            .map(RelocAddr::new)
+            .map(Some)
+    }
+
+    #[inline]
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
+    pub(crate) fn resolve_tlsdesc_with_emu(
+        &self,
+        rel: &ElfRelType<Arch>,
+        request: TlsDescEmuRequest,
+    ) -> Result<Option<TlsDescEmuValue>> {
+        let Some(emu) = &self.emu else {
+            return Ok(None);
+        };
+        let ctx = EmuRelocationContext::new(self.core, rel);
+        emu.resolve_tlsdesc(&ctx, request).map(Some)
     }
 }
 

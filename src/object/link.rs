@@ -50,6 +50,7 @@ where
             pre_handler,
             post_handler,
             self.core.tls_get_addr(),
+            None,
         );
         for reloc in self.relocation.sections.iter() {
             for rel in *reloc {

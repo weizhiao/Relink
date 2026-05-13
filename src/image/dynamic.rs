@@ -9,8 +9,8 @@ use crate::{
     logging,
     os::Mmap,
     relocation::{
-        DynamicRelocation, RelocAddr, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
-        Relocator, SymbolLookup,
+        DynamicRelocation, EmuContext, EmuLifecycle, Emulator, RelocAddr, Relocatable,
+        RelocateArgs, RelocationArch, RelocationHandler, Relocator, SymbolLookup,
     },
     segment::ELFRelro,
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -18,7 +18,7 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::CStr, marker::PhantomData, ptr::NonNull};
 
-use super::{ElfCore, LoadedCore, core::CoreInner};
+use super::{ElfCore, LoadedCore, core::CoreFiniHandler, core::CoreInner};
 
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch> {
@@ -80,8 +80,14 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
     /// GNU_RELRO segment information for memory protection
     relro: Option<ELFRelro>,
 
-    /// Initialization function to be called after relocation
-    init: Box<dyn Fn()>,
+    /// Custom initialization handler.
+    init_handler: DynLifecycleHandler,
+
+    /// Initialization function to be called after relocation.
+    init: Option<fn()>,
+
+    /// Initialization function array to be called after relocation.
+    init_array: Option<&'static [fn()]>,
 
     /// DT_RPATH value from the dynamic section
     rpath: Option<&'static str>,
@@ -267,7 +273,22 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     #[inline]
     pub(crate) fn call_init(&self) {
         self.module.set_init();
-        self.extra.init.as_ref()();
+        self.extra.init_handler.call(&LifecycleContext::new(
+            self.extra.init,
+            self.extra.init_array,
+        ));
+    }
+
+    /// Marks the ELF object as initialized and delegates initialization to an emulator.
+    pub(crate) fn call_init_with_emu(&self, emu: Arc<dyn Emulator<Arch>>) -> Result<()> {
+        let ctx = EmuContext::new(self.core_ref());
+        let lifecycle = EmuLifecycle::new(self.extra.init, self.extra.init_array);
+        emu.call_init(&ctx, &lifecycle)?;
+        unsafe {
+            self.core_ref().set_emu_fini(emu);
+        }
+        self.module.set_init();
+        Ok(())
     }
 
     /// Gets the GNU_RELRO segment information
@@ -385,8 +406,6 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             (None, None)
         };
 
-        let init_handler = init_fn;
-
         Ok(RawDynamic {
             entry,
             interp,
@@ -394,12 +413,9 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
                 lazy: cfg!(feature = "lazy-binding") && !dynamic.bind_now,
                 relro,
                 relocation,
-                init: Box::new(move || {
-                    init_handler.call(&LifecycleContext::new(
-                        dynamic.init_fn,
-                        dynamic.init_array_fn,
-                    ))
-                }),
+                init_handler: init_fn,
+                init: dynamic.init_fn,
+                init_array: dynamic.init_array_fn,
                 #[cfg(feature = "lazy-binding")]
                 got_plt: dynamic.got_plt,
                 rpath: dynamic
@@ -417,7 +433,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
                     symtab,
                     fini: dynamic.fini_fn,
                     fini_array: dynamic.fini_array_fn,
-                    fini_handler: fini_fn,
+                    fini_handler: CoreFiniHandler::Native(fini_fn),
                     user_data,
                     dynamic_info: Some(Arc::new(DynamicInfo {
                         eh_frame_hdr,

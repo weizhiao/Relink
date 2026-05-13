@@ -3,7 +3,7 @@ use crate::{
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
     image::DynamicInfo,
     loader::{DynLifecycleHandler, LifecycleContext},
-    relocation::{RelocAddr, RelocationArch},
+    relocation::{EmuContext, EmuLifecycle, Emulator, RelocAddr, RelocationArch},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{CoreTlsState, TlsDescArgs, TlsModuleId, TlsTpOffset},
@@ -31,8 +31,8 @@ pub(crate) struct CoreInner<D = (), Arch: RelocationArch = crate::arch::NativeAr
     /// Finalization array of functions
     pub(crate) fini_array: Option<&'static [fn()]>,
 
-    /// Custom finalization handler
-    pub(crate) fini_handler: DynLifecycleHandler,
+    /// Finalization handler
+    pub(crate) fini_handler: CoreFiniHandler<Arch>,
 
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
@@ -51,11 +51,27 @@ impl<D, Arch: RelocationArch> Drop for CoreInner<D, Arch> {
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed) {
-            self.fini_handler
-                .call(&LifecycleContext::new(self.fini, self.fini_array));
+            match &self.fini_handler {
+                CoreFiniHandler::Native(handler) => {
+                    handler.call(&LifecycleContext::new(self.fini, self.fini_array));
+                }
+                CoreFiniHandler::Emu(emu) => {
+                    let ctx = EmuContext::from_parts(
+                        self.name.as_str(),
+                        self.segments.base(),
+                        &self.segments,
+                    );
+                    emu.call_fini(&ctx, &EmuLifecycle::new(self.fini, self.fini_array));
+                }
+            }
         }
         self.tls.cleanup();
     }
+}
+
+pub(crate) enum CoreFiniHandler<Arch: RelocationArch> {
+    Native(DynLifecycleHandler),
+    Emu(Arc<dyn Emulator<Arch>>),
 }
 
 /// A non-owning reference to an [`ElfCore`].
@@ -278,6 +294,18 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
         }
     }
 
+    /// Set the finalization handler used after emulated initialization.
+    ///
+    /// # Safety
+    /// This should only be called during relocation before the loaded image is
+    /// published to callers.
+    pub(crate) unsafe fn set_emu_fini(&self, emu: Arc<dyn Emulator<Arch>>) {
+        let inner = Arc::as_ptr(&self.inner) as *mut CoreInner<D, Arch>;
+        unsafe {
+            (*inner).fini_handler = CoreFiniHandler::Emu(emu);
+        }
+    }
+
     /// Creates an ElfCore from raw components
     pub(super) unsafe fn from_raw(
         name: String,
@@ -319,7 +347,9 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
                 segments,
                 fini: None,
                 fini_array: None,
-                fini_handler: Arc::new(Box::new(|_: &LifecycleContext| {})),
+                fini_handler: CoreFiniHandler::Native(Arc::new(Box::new(
+                    |_: &LifecycleContext| {},
+                ))),
                 user_data,
             }),
         })

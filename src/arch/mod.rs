@@ -68,6 +68,27 @@ pub mod riscv64;
 pub mod x86;
 pub mod x86_64;
 
+#[cfg(not(target_arch = "x86_64"))]
+impl crate::relocation::EmulatedArch for x86_64::relocation::X86_64Arch {}
+
+#[cfg(not(target_arch = "aarch64"))]
+impl crate::relocation::EmulatedArch for aarch64::relocation::AArch64Arch {}
+
+#[cfg(not(target_arch = "riscv64"))]
+impl crate::relocation::EmulatedArch for riscv64::relocation::RiscV64Arch {}
+
+#[cfg(not(target_arch = "riscv32"))]
+impl crate::relocation::EmulatedArch for riscv32::relocation::RiscV32Arch {}
+
+#[cfg(not(target_arch = "loongarch64"))]
+impl crate::relocation::EmulatedArch for loongarch64::relocation::LoongArch64Arch {}
+
+#[cfg(not(target_arch = "x86"))]
+impl crate::relocation::EmulatedArch for x86::relocation::X86Arch {}
+
+#[cfg(not(target_arch = "arm"))]
+impl crate::relocation::EmulatedArch for arm::relocation::ArmArch {}
+
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")]{
         pub use x86_64::*;

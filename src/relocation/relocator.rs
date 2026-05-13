@@ -2,8 +2,8 @@ use crate::{
     Result,
     image::LoadedCore,
     relocation::{
-        BindingMode, HandlerHooks, LazyLookupHooks, LookupHooks, Relocatable, RelocateArgs,
-        RelocationArch, RelocationHandler, SupportLazy, SymbolLookup,
+        BindingMode, EmulatedArch, Emulator, HandlerHooks, LazyLookupHooks, LookupHooks,
+        Relocatable, RelocateArgs, RelocationArch, RelocationHandler, SupportLazy, SymbolLookup,
     },
     sync::Arc,
 };
@@ -61,6 +61,7 @@ pub struct Relocator<
     pre_handler: PreH,
     post_handler: PostH,
     binding: BindingMode,
+    emu: Option<Arc<dyn Emulator<Arch>>>,
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
@@ -87,6 +88,7 @@ where
             pre_handler: self.pre_handler.clone(),
             post_handler: self.post_handler.clone(),
             binding: self.binding,
+            emu: self.emu.clone(),
             _marker: PhantomData,
         }
     }
@@ -105,6 +107,7 @@ impl Relocator<(), (), (), (), (), (), (), ()> {
             pre_handler: (),
             post_handler: (),
             binding: BindingMode::Default,
+            emu: None,
             _marker: PhantomData,
         }
     }
@@ -125,6 +128,7 @@ impl<Arch: RelocationArch> Relocator<(), (), (), (), (), (), (), (), Arch> {
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            emu: None,
             _marker: PhantomData,
         }
     }
@@ -162,6 +166,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            emu: self.emu,
             _marker: PhantomData,
         }
     }
@@ -212,6 +217,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            emu: self.emu,
             _marker: PhantomData,
         }
     }
@@ -274,6 +280,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            emu: None,
             _marker: PhantomData,
         }
     }
@@ -299,6 +306,7 @@ where
             pre_handler: handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            emu: self.emu,
             _marker: PhantomData,
         }
     }
@@ -324,6 +332,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: handler,
             binding: self.binding,
+            emu: self.emu,
             _marker: PhantomData,
         }
     }
@@ -337,6 +346,32 @@ where
     #[inline]
     pub fn set_binding(&mut self, binding: BindingMode) {
         self.binding = binding;
+    }
+}
+
+impl<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D: 'static, Arch>
+    Relocator<T, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, D, Arch>
+where
+    Arch: EmulatedArch,
+{
+    /// Sets the emulator used for non-native runtime hooks.
+    ///
+    /// This method is available only for non-native architecture backends.
+    pub fn emulator<E>(mut self, emu: E) -> Self
+    where
+        E: Emulator<Arch>,
+    {
+        self.emu = Some(Arc::new(emu));
+        self
+    }
+
+    /// Alias for [`Relocator::emulator`].
+    #[inline]
+    pub fn emu<E>(self, emu: E) -> Self
+    where
+        E: Emulator<Arch>,
+    {
+        self.emulator(emu)
     }
 }
 
@@ -363,8 +398,9 @@ where
     /// IFUNC resolvers,
     /// lazy-binding trampolines, and TLS resolver stubs as usual;
     /// cross-architecture images carry their own backend with
-    /// `SUPPORTS_NATIVE_RUNTIME == false`, which skips those host-side
-    /// runtime hooks and rejects explicitly requested lazy binding.
+    /// `SUPPORTS_NATIVE_RUNTIME == false`; attach an
+    /// [`Emulator`](crate::relocation::Emulator) when guest runtime hooks such
+    /// as IFUNC, TLSDESC, and lifecycle callbacks must be executed.
     pub fn relocate(self) -> Result<T::Output> {
         let Self {
             object,
@@ -376,7 +412,8 @@ where
             pre_handler,
             post_handler,
             binding,
-            ..
+            emu,
+            _marker,
         } = self;
 
         object.relocate(RelocateArgs::new(
@@ -385,6 +422,7 @@ where
             LookupHooks::new(&pre_find, &post_find),
             LazyLookupHooks::new(lazy_pre_find, lazy_post_find),
             HandlerHooks::new(&pre_handler, &post_handler),
+            emu,
         ))
     }
 }
@@ -431,6 +469,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            emu: self.emu,
             _marker: PhantomData,
         }
     }
@@ -464,6 +503,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            emu: self.emu,
             _marker: PhantomData,
         }
     }
@@ -497,6 +537,7 @@ where
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
             binding: self.binding,
+            emu: self.emu,
             _marker: PhantomData,
         }
     }

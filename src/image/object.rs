@@ -18,7 +18,7 @@ use crate::{
 use alloc::boxed::Box;
 use core::{borrow::Borrow, fmt::Debug, ops::Deref};
 
-use super::{CoreInner, ElfCore, LoadedCore};
+use super::{CoreInner, ElfCore, LoadedCore, core::CoreFiniHandler};
 
 /// A relocatable ELF object.
 ///
@@ -61,7 +61,7 @@ impl<D: 'static, Arch: RelocationArch> RawObject<D, Arch> {
             symtab: builder.symtab,
             fini: None,
             fini_array: None,
-            fini_handler: builder.fini_fn,
+            fini_handler: CoreFiniHandler::Native(builder.fini_fn),
             user_data: builder.user_data,
             dynamic_info: None,
             tls: CoreTlsState::new(
