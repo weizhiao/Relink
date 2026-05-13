@@ -4,7 +4,7 @@ use crate::{
     elf::{ElfLayout, ElfSectionFlags, ElfSectionType},
     entity::{PrimaryMap, SecondaryMap, entity_ref},
     image::{ScannedDynamic, ScannedSection, ScannedSectionId},
-    linker::plan::ModuleId,
+    linker::scan::ModuleId,
     relocation::RelocationArch,
 };
 use alloc::{boxed::Box, vec::Vec};

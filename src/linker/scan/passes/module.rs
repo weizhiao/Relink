@@ -1,7 +1,7 @@
 use super::{LinkPassPlan, PassScopeMode, Section, SectionDataAccess};
 use crate::{
     image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
-    linker::{Materialization, layout::ModuleLayout, plan::ModuleId},
+    linker::scan::{Materialization, ModuleId, ModuleLayout},
     relocation::RelocationArch,
 };
 use core::marker::PhantomData;

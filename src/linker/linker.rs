@@ -1,15 +1,16 @@
 use super::{
+    GotPltTarget,
     context::LinkContext,
-    layout::{Materialization, MemoryLayoutPlan},
-    mapped, materialization,
-    passes::LinkPipeline,
-    plan::{LinkPlan, ModuleId},
     request::{
         DefaultRelocationPlanner, LoadObserver, RelocationPlanner, RelocationRequest,
         StagedDynamic, VisibleModules,
     },
     resolve::{LoadResolveContext, ScanResolveContext},
     resolver::KeyResolver,
+    scan::{
+        LinkPipeline, LinkPlan, MappedRuntimeMemory, Materialization, MemoryLayoutPlan, ModuleId,
+        build_arena_raw_dynamic, normalize_plan,
+    },
     session::{GraphEntry, LoadSession},
     storage::KeyId,
 };
@@ -521,7 +522,7 @@ where
     M: Mmap,
     H: LoadHook<Arch::Layout>,
     Tls: TlsResolver,
-    Arch: RelocationArch + crate::relocation::RelocationValueProvider + mapped::GotPltTarget,
+    Arch: RelocationArch + crate::relocation::RelocationValueProvider + GotPltTarget,
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     PreS: SymbolLookup + Clone,
     PostS: SymbolLookup + Clone,
@@ -727,9 +728,9 @@ where
     fn prepare_mapped_runtime(
         &mut self,
         plan: &mut LinkPlan<K, Arch>,
-    ) -> Result<Option<mapped::MappedRuntimeMemory>> {
-        materialization::normalize_plan(plan)?;
-        let mut mapped_runtime = mapped::MappedRuntimeMemory::map::<M, _, Arch>(plan)?;
+    ) -> Result<Option<MappedRuntimeMemory>> {
+        normalize_plan(plan)?;
+        let mut mapped_runtime = MappedRuntimeMemory::map::<M, _, Arch>(plan)?;
 
         if let Some(runtime) = mapped_runtime.as_mut() {
             let section_region_modules = plan
@@ -746,7 +747,7 @@ where
 
     fn repair_planned_module(
         &mut self,
-        runtime: &mut mapped::MappedRuntimeMemory,
+        runtime: &mut MappedRuntimeMemory,
         module_id: ModuleId,
         plan: &mut LinkPlan<K, Arch>,
     ) -> Result<()> {
@@ -756,7 +757,7 @@ where
     fn materialize_planned_raw(
         &mut self,
         plan: &MemoryLayoutPlan,
-        mapped_runtime: &mut Option<mapped::MappedRuntimeMemory>,
+        mapped_runtime: &mut Option<MappedRuntimeMemory>,
         module_id: ModuleId,
         scanned: ScannedDynamic<Arch>,
     ) -> Result<RawDynamic<D, Arch>> {
@@ -777,7 +778,7 @@ where
 
     fn materialize_arena_raw(
         &mut self,
-        mapped_runtime: &mut Option<mapped::MappedRuntimeMemory>,
+        mapped_runtime: &mut Option<MappedRuntimeMemory>,
         module_id: ModuleId,
         scanned: ScannedDynamic<Arch>,
     ) -> Result<RawDynamic<D, Arch>> {
@@ -792,7 +793,7 @@ where
         let (init_fn, fini_fn) = self.loader.inner.lifecycle_handlers();
         let force_static_tls = self.loader.inner.force_static_tls();
 
-        let mut raw = mapped::build_arena_raw_dynamic::<D, Tls, Arch>(
+        let mut raw = build_arena_raw_dynamic::<D, Tls, Arch>(
             scanned,
             runtime,
             init_fn,
@@ -1010,7 +1011,7 @@ where
 struct PreparedLoad<D: 'static, Arch: RelocationArch> {
     root: KeyId,
     session: LoadSession<D, Arch>,
-    mapped_runtime: Option<mapped::MappedRuntimeMemory>,
+    mapped_runtime: Option<MappedRuntimeMemory>,
 }
 
 enum ScanDiscovery<K, Arch: RelocationArch> {
@@ -1030,7 +1031,7 @@ impl<D: 'static, Arch: RelocationArch> PreparedLoad<D, Arch> {
     fn planned(
         root: KeyId,
         session: LoadSession<D, Arch>,
-        mapped_runtime: Option<mapped::MappedRuntimeMemory>,
+        mapped_runtime: Option<MappedRuntimeMemory>,
     ) -> Self {
         Self {
             root,

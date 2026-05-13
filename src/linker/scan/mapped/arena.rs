@@ -1,5 +1,5 @@
 use super::super::layout::{ArenaId, Materialization, MemoryClass};
-use crate::linker::plan::LinkPlan;
+use super::super::plan::LinkPlan;
 use crate::{
     LinkerError, Result,
     entity::SecondaryMap,
@@ -217,8 +217,7 @@ fn final_protection(class: MemoryClass) -> ProtFlags {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::layout::{ArenaDescriptor, ArenaSharing};
-    use super::super::super::plan::LinkPlan;
+    use super::super::super::{ArenaDescriptor, ArenaSharing, LinkPlan};
     use super::*;
     use crate::os::DefaultMmap;
     use crate::{image::ScannedElf, input::ElfBinary, loader::Loader};

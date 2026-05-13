@@ -9,31 +9,16 @@
 //! memory blobs, package stores, or host-specific search rules.
 
 mod context;
-mod layout;
 mod linker;
-mod mapped;
-mod materialization;
-mod passes;
-mod plan;
 mod request;
 mod resolve;
 mod resolver;
+mod scan;
 mod session;
 mod storage;
 
 pub use context::LinkContext;
-pub(in crate::linker) use layout::SectionId;
-pub use layout::{
-    ArenaDescriptor, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, DataAccess, Materialization,
-    MemoryClass, ModuleLayout, PackingPolicy, SectionAddress, SectionDataAccessRef,
-    SectionMetadata, SectionPlacement,
-};
 pub use linker::{Linker, LoadResult};
-pub(crate) use mapped::GotPltTarget;
-pub use passes::{
-    AnyPass, Arena, DataPass, LinkPass, LinkPassPlan, LinkPipeline, Module, PassScope,
-    PassScopeMode, ReorderAccess, ReorderPass, Section, SectionDataAccess,
-};
 pub use request::{
     DefaultRelocationPlanner, DependencyOwner, DependencyRequest, LoadObserver, RelocationInputs,
     RelocationPlanner, RelocationRequest, RootRequest, StagedDynamic, VisibleModules,
@@ -41,5 +26,16 @@ pub use request::{
 pub use resolver::{
     CandidateRequest, KeyResolver, ResolvedKey, SearchDirProvider, SearchDirSource,
     SearchPathResolver,
+};
+pub(crate) use scan::GotPltTarget;
+pub(in crate::linker) use scan::SectionId;
+pub use scan::{
+    AnyPass, Arena, DataPass, LinkPass, LinkPassPlan, LinkPipeline, Module, PassScope,
+    PassScopeMode, ReorderAccess, ReorderPass, Section, SectionDataAccess,
+};
+pub use scan::{
+    ArenaDescriptor, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, DataAccess, Materialization,
+    MemoryClass, ModuleLayout, PackingPolicy, SectionAddress, SectionDataAccessRef,
+    SectionMetadata, SectionPlacement,
 };
 pub use storage::KeyId;

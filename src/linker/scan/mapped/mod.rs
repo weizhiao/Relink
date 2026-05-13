@@ -1,6 +1,5 @@
 use super::layout::{MemoryLayoutPlan, SectionId};
-use crate::linker::mapped::rewrite::RuntimeMetadataRewriter;
-use crate::linker::plan::{LinkPlan, ModuleId};
+use super::plan::{LinkPlan, ModuleId};
 use crate::{
     LinkerError, Result,
     elf::{ElfDyn, ElfPhdrs, ElfProgramType},
@@ -20,6 +19,7 @@ mod rewrite;
 
 use arena::MappedArenaMap;
 pub(crate) use rewrite::GotPltTarget;
+use rewrite::RuntimeMetadataRewriter;
 
 pub(crate) struct RuntimeModuleMemory {
     sections: Box<[RuntimeSectionMemory]>,

@@ -1,8 +1,5 @@
 use super::{RuntimeModuleMemory, RuntimeOffset, RuntimeSectionMemory, SectionId, SourceAddress};
-use crate::linker::{
-    layout::DataAccess,
-    plan::{LinkPlan, ModuleId},
-};
+use crate::linker::scan::{DataAccess, LinkPlan, ModuleId};
 use crate::{
     LinkerError, Result,
     aligned_bytes::ByteRepr,

@@ -9,7 +9,7 @@ use crate::{
     AlignedBytes, LinkerError, Result,
     entity::{PrimaryMap, SecondaryMap},
     image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
-    linker::plan::ModuleId,
+    linker::scan::ModuleId,
     relocation::RelocationArch,
     segment::align_up,
 };
