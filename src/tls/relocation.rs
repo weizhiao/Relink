@@ -2,6 +2,7 @@
 mod enabled {
     use super::super::defs::{TlsDescDynamicArg, TlsIndex};
     use crate::{
+        FailureReason,
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
         relocation::{
@@ -27,7 +28,7 @@ mod enabled {
     pub(crate) fn handle_tls_reloc<D, Arch, PreS, PostS, PreH, PostH>(
         helper: &mut RelocHelper<'_, D, Arch, PreS, PostS, PreH, PostH>,
         rel: &ElfRelType<Arch>,
-    ) -> bool
+    ) -> Result<(), FailureReason>
     where
         D: 'static,
         Arch: RelocationArch,
@@ -44,45 +45,48 @@ mod enabled {
         match r_type {
             value if value == Arch::DTPOFF => {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
-                    let tls_val = RelocValue::new(
-                        symdef
-                            .symbol()
-                            .expect("DTPOFF relocation requires a defined symbol")
-                            .st_value(),
-                    )
-                    .addend(r_addend)
-                    .relative_to(Arch::TLS_DTV_OFFSET);
+                    let Some(sym) = symdef.symbol() else {
+                        return Err(FailureReason::UnknownSymbol);
+                    };
+                    let tls_val = RelocValue::new(sym.st_value())
+                        .addend(r_addend)
+                        .relative_to(Arch::TLS_DTV_OFFSET);
                     write_tls_word::<Arch>(segments, rel.r_offset(), tls_val.into_inner());
-                    return true;
+                    return Ok(());
                 }
+                return Err(FailureReason::UnknownSymbol);
             }
             value if value == Arch::DTPMOD => {
-                let mod_id = if r_sym == 0 {
-                    helper.core.tls_mod_id()
+                let Some(mod_id) = (if r_sym == 0 {
+                    Some(helper.core.tls_mod_id())
                 } else if let Some(symdef) = helper.find_symdef(r_sym) {
-                    symdef.tls_mod_id()
+                    Some(symdef.tls_mod_id())
                 } else {
                     None
+                }) else {
+                    return Err(FailureReason::UnknownSymbol);
                 };
-
-                if let Some(mod_id) = mod_id {
-                    write_tls_word::<Arch>(segments, rel.r_offset(), mod_id.get());
-                    return true;
-                }
+                let Some(mod_id) = mod_id else {
+                    return Err(FailureReason::TlsModuleIdUnavailable);
+                };
+                write_tls_word::<Arch>(segments, rel.r_offset(), mod_id.get());
+                return Ok(());
             }
             value if value == Arch::TPOFF => {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
-                    let sym = symdef
-                        .symbol()
-                        .expect("TPOFF relocation requires a defined symbol");
+                    let Some(sym) = symdef.symbol() else {
+                        return Err(FailureReason::UnknownSymbol);
+                    };
                     if let Some(tp_offset) = symdef.tls_tp_offset() {
                         let tls_val =
                             RelocValue::new((tp_offset.get() + sym.st_value() as isize) as usize)
                                 .addend(r_addend);
                         write_tls_word::<Arch>(segments, rel.r_offset(), tls_val.into_inner());
-                        return true;
+                        return Ok(());
                     }
+                    return Err(FailureReason::TlsTpOffsetUnavailable);
                 }
+                return Err(FailureReason::UnknownSymbol);
             }
             value if Arch::is_tlsdesc(value) => {
                 // TLSDESC writes a host function pointer into the slot
@@ -91,12 +95,12 @@ mod enabled {
                 // ABI and CPU; cross-architecture loaders must defer this
                 // class of relocation to a custom `RelocationHandler`.
                 if !Arch::SUPPORTS_NATIVE_RUNTIME {
-                    return false;
+                    return Err(FailureReason::TlsNativeRuntimeUnsupported);
                 }
                 if let Some(symdef) = helper.find_symdef(r_sym) {
-                    let sym = symdef
-                        .symbol()
-                        .expect("TLSDESC relocation requires a defined symbol");
+                    let Some(sym) = symdef.symbol() else {
+                        return Err(FailureReason::UnknownSymbol);
+                    };
                     if let Some(tp_offset) = symdef.tls_tp_offset() {
                         let tpoff =
                             RelocValue::new((tp_offset.get() + sym.st_value() as isize) as usize)
@@ -107,7 +111,7 @@ mod enabled {
                             tlsdesc_resolver_static as *const () as usize,
                         );
                         write_tls_word::<Arch>(segments, rel.r_offset() + 8, tpoff.into_inner());
-                        return true;
+                        return Ok(());
                     }
 
                     if let Some(mod_id) = symdef.tls_mod_id() {
@@ -129,20 +133,22 @@ mod enabled {
                             tlsdesc_resolver_dynamic as *const () as usize,
                         );
                         write_tls_word::<Arch>(segments, rel.r_offset() + 8, arg_ptr.into_inner());
-                        return true;
+                        return Ok(());
                     }
+                    return Err(FailureReason::TlsModuleIdUnavailable);
                 }
+                return Err(FailureReason::UnknownSymbol);
             }
-            _ => return false,
+            _ => unreachable!("handle_tls_reloc called with a non-TLS relocation"),
         }
-        false
     }
 }
 
 #[cfg(not(feature = "tls"))]
 mod disabled {
     use crate::{
-        elf::ElfRelType,
+        FailureReason,
+        elf::{ElfRelEntry, ElfRelType},
         relocation::{RelocAddr, RelocHelper, RelocationArch, RelocationHandler, SymbolLookup},
     };
 
@@ -154,8 +160,8 @@ mod disabled {
     #[inline]
     pub(crate) fn handle_tls_reloc<D, Arch, PreS, PostS, PreH, PostH>(
         _helper: &mut RelocHelper<'_, D, Arch, PreS, PostS, PreH, PostH>,
-        _rel: &ElfRelType<Arch>,
-    ) -> bool
+        rel: &ElfRelType<Arch>,
+    ) -> Result<(), FailureReason>
     where
         D: 'static,
         Arch: RelocationArch,
@@ -164,7 +170,8 @@ mod disabled {
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
     {
-        false
+        debug_assert!(Arch::is_tls(rel.r_type()));
+        Err(FailureReason::TlsDisabled)
     }
 }
 

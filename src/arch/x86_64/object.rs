@@ -36,17 +36,12 @@ impl X86_64Arch {
         let append = rel.r_addend(base.into_inner());
         let offset = rel.r_offset();
         let p = base.offset(rel.r_offset());
-        let unknown_symbol = || {
-            reloc_error::<Self, _>(
-                rel,
-                crate::RelocationFailureReason::UnknownSymbol,
-                helper.core,
-            )
-        };
+        let unknown_symbol =
+            || reloc_error::<Self, _>(rel, crate::FailureReason::UnknownSymbol, helper.core);
         let conversion_error = || {
             reloc_error::<Self, _>(
                 rel,
-                crate::RelocationFailureReason::IntegralConversionOutOfRange,
+                crate::FailureReason::IntegralConversionOutOfRange,
                 helper.core,
             )
         };

@@ -1,6 +1,6 @@
 use super::{RelocAddr, resolve_ifunc};
 use crate::{
-    Error, RelocationFailureReason, Result,
+    Error, FailureReason, Result,
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
     image::{ElfCore, LoadedCore},
     logging, relocate_context_error,
@@ -160,7 +160,7 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
 #[cold]
 pub(crate) fn reloc_error<A, D>(
     rel: &ElfRelType<A>,
-    reason: RelocationFailureReason,
+    reason: FailureReason,
     lib: &ElfCore<D, A>,
 ) -> Error
 where

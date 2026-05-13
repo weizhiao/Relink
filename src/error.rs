@@ -258,20 +258,40 @@ impl Display for ParsePhdrError {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum RelocationFailureReason {
-    #[cfg(feature = "object")]
+pub(crate) enum FailureReason {
     UnknownSymbol,
     Unhandled,
+    #[cfg(feature = "tls")]
+    TlsModuleIdUnavailable,
+    #[cfg(feature = "tls")]
+    TlsTpOffsetUnavailable,
+    #[cfg(feature = "tls")]
+    TlsNativeRuntimeUnsupported,
+    #[cfg(not(feature = "tls"))]
+    TlsDisabled,
+    NativeRuntimeUnsupported,
     #[cfg(feature = "object")]
     IntegralConversionOutOfRange,
 }
 
-impl Display for RelocationFailureReason {
+impl Display for FailureReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            #[cfg(feature = "object")]
             Self::UnknownSymbol => f.write_str("unknown symbol"),
             Self::Unhandled => f.write_str("Unhandled relocation"),
+            #[cfg(feature = "tls")]
+            Self::TlsModuleIdUnavailable => f.write_str("TLS module id is unavailable"),
+            #[cfg(feature = "tls")]
+            Self::TlsTpOffsetUnavailable => f.write_str("TLS thread-pointer offset is unavailable"),
+            #[cfg(feature = "tls")]
+            Self::TlsNativeRuntimeUnsupported => {
+                f.write_str("TLS descriptor relocation requires native runtime support")
+            }
+            #[cfg(not(feature = "tls"))]
+            Self::TlsDisabled => f.write_str("TLS relocation support is disabled"),
+            Self::NativeRuntimeUnsupported => {
+                f.write_str("relocation requires native runtime support")
+            }
             #[cfg(feature = "object")]
             Self::IntegralConversionOutOfRange => {
                 f.write_str("out of range integral type conversion attempted")
@@ -285,7 +305,7 @@ pub struct RelocationContextError {
     file: Box<str>,
     r_type: &'static str,
     symbol: Option<Box<str>>,
-    reason: RelocationFailureReason,
+    reason: FailureReason,
 }
 
 impl RelocationContextError {
@@ -294,7 +314,7 @@ impl RelocationContextError {
         file: &str,
         r_type: &'static str,
         symbol: Option<&str>,
-        reason: RelocationFailureReason,
+        reason: FailureReason,
     ) -> Self {
         Self {
             file: file.into(),
@@ -627,7 +647,7 @@ debug_as_display!(
     ParseDynamicError,
     ParseEhdrError,
     ParsePhdrError,
-    RelocationFailureReason,
+    FailureReason,
     RelocationContextError,
     RelocationError,
     CustomError,
@@ -643,7 +663,7 @@ pub(crate) fn relocate_context_error(
     file: &str,
     r_type: &'static str,
     symbol: Option<&str>,
-    reason: RelocationFailureReason,
+    reason: FailureReason,
 ) -> Error {
     Error::Relocation(RelocationError::RelocationContext(Box::new(
         RelocationContextError::new(file, r_type, symbol, reason),

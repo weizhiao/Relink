@@ -1,6 +1,6 @@
 //! Relocation of elf objects
 use crate::{
-    ParseDynamicError, RelocationError, RelocationFailureReason, Result,
+    FailureReason, ParseDynamicError, RelocationError, Result,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     image::{LoadedCore, RawDynamic},
     logging,
@@ -202,6 +202,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
             }
             let r_type = rel.r_type();
             let r_sym = rel.r_symbol();
+            let mut failure_reason = FailureReason::Unhandled;
 
             // Handle jump slot relocations
             if likely(r_type == Arch::JUMP_SLOT) {
@@ -213,6 +214,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                     write_reloc_addr::<Arch>(segments, rel.r_offset(), symbol);
                     continue;
                 }
+                failure_reason = FailureReason::UnknownSymbol;
             } else if unlikely(r_type == Arch::IRELATIVE) {
                 // IFUNC resolvers run on the host CPU, so they only make
                 // sense when the relocated module shares the host's ABI.
@@ -226,21 +228,20 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                     });
                     continue;
                 }
+                failure_reason = FailureReason::NativeRuntimeUnsupported;
             } else if unlikely(Arch::is_tlsdesc(r_type)) {
                 // `handle_tls_reloc` performs its own SUPPORTS_NATIVE_RUNTIME
-                // gate for TLSDESC; if it returns `false` we fall through to
-                // the post handler.
-                if handle_tls_reloc::<_, Arch, _, _, _, _>(helper, rel) {
-                    continue;
+                // gate for TLSDESC. If the built-in path cannot handle it,
+                // keep the specific TLS failure for the final error while
+                // still giving the post handler a chance.
+                match handle_tls_reloc::<_, Arch, _, _, _, _>(helper, rel) {
+                    Ok(()) => continue,
+                    Err(reason) => failure_reason = reason,
                 }
             }
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)?.is_unhandled() {
-                return Err(reloc_error::<Arch, _>(
-                    rel,
-                    RelocationFailureReason::Unhandled,
-                    core,
-                ));
+                return Err(reloc_error::<Arch, _>(rel, failure_reason, core));
             }
         }
         Ok(self)
@@ -330,6 +331,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
             }
             let r_type = rel.r_type();
             let r_sym = rel.r_symbol();
+            let mut failure_reason = FailureReason::Unhandled;
 
             // Handle `REL_NONE` first because some architectures use `0` as a
             // sentinel for unsupported relocation classes such as TLSDESC.
@@ -344,21 +346,19 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                     write_reloc_addr::<Arch>(segments, rel.r_offset(), symbol.addend(r_addend));
                     continue;
                 }
+                failure_reason = FailureReason::UnknownSymbol;
             } else if r_type == Arch::COPY {
                 // Handle copy relocations (typically for global data)
                 if let Some(symdef) = helper.find_symdef(r_sym) {
-                    let len = core.symtab().symbol_idx(r_sym).0.st_size();
-                    let dest = core.segments().get_slice_mut::<u8>(rel.r_offset(), len);
-                    let src = symdef.segment_slice(
-                        symdef
-                            .symbol()
-                            .expect("COPY relocation requires a defined symbol")
-                            .st_value(),
-                        len,
-                    );
-                    dest.copy_from_slice(src);
-                    continue;
+                    if let Some(sym) = symdef.symbol() {
+                        let len = core.symtab().symbol_idx(r_sym).0.st_size();
+                        let dest = core.segments().get_slice_mut::<u8>(rel.r_offset(), len);
+                        let src = symdef.segment_slice(sym.st_value(), len);
+                        dest.copy_from_slice(src);
+                        continue;
+                    }
                 }
+                failure_reason = FailureReason::UnknownSymbol;
             } else if r_type == Arch::IRELATIVE {
                 // IFUNC resolvers run on the host CPU, so they only make
                 // sense when the relocated module shares the host's ABI.
@@ -372,24 +372,22 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                     });
                     continue;
                 }
+                failure_reason = FailureReason::NativeRuntimeUnsupported;
             } else if Arch::is_tls(r_type) {
                 // `handle_tls_reloc` is a pure data computation for
                 // DTPMOD/DTPOFF/TPOFF (safe under cross-arch loads) and
                 // gates TLSDESC on SUPPORTS_NATIVE_RUNTIME internally.
-                // Anything it cannot handle falls through to the post
-                // handler.
-                if handle_tls_reloc::<_, Arch, _, _, _, _>(helper, rel) {
-                    continue;
+                // Anything the built-in path cannot handle still gets a post
+                // handler chance before reporting the specific TLS reason.
+                match handle_tls_reloc::<_, Arch, _, _, _, _>(helper, rel) {
+                    Ok(()) => continue,
+                    Err(reason) => failure_reason = reason,
                 }
             }
 
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)?.is_unhandled() {
-                return Err(reloc_error::<Arch, _>(
-                    rel,
-                    RelocationFailureReason::Unhandled,
-                    core,
-                ));
+                return Err(reloc_error::<Arch, _>(rel, failure_reason, core));
             }
         }
         Ok(self)
