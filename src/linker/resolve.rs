@@ -4,16 +4,16 @@ use super::{
         VisibleModules,
     },
     resolver::{KeyResolver, ResolvedKey},
-    session::{extend_breadth_first, ResolveSession},
+    session::{ResolveSession, extend_breadth_first},
     storage::{CommittedStorage, KeyId},
 };
 use crate::{
+    LinkerError, Loader, Result,
     image::{RawDynamic, ScannedDynamic, ScannedElf},
     loader::LoadHook,
     os::Mmap,
     relocation::RelocationArch,
     tls::TlsResolver,
-    LinkerError, Loader, Result,
 };
 use alloc::vec::Vec;
 

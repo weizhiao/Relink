@@ -1,7 +1,7 @@
 use crate::{
+    Result,
     input::ElfReader,
     linker::{DependencyRequest, RootRequest},
-    Result,
 };
 use alloc::boxed::Box;
 

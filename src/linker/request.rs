@@ -1,9 +1,9 @@
 use crate::{
+    LinkerError, Result, UnresolvedDependencyError,
     arch::ArchKind,
     image::{LoadedCore, RawDylib, RawDynamic, ScannedDynamic},
     relocation::{BindingMode, RelocationArch},
     sync::Arc,
-    LinkerError, Result, UnresolvedDependencyError,
 };
 use alloc::boxed::Box;
 

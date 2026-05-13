@@ -1,9 +1,9 @@
 use super::{KeyResolver, ResolvedKey};
 use crate::{
+    Error, IoError, LinkerError, ParseEhdrError, Result,
     input::{ElfFile, ElfReader, Path, PathBuf},
     linker::{DependencyRequest, RootRequest},
     sync::Arc,
-    Error, IoError, LinkerError, ParseEhdrError, Result,
 };
 use alloc::vec::Vec;
 use core::fmt;

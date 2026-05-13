@@ -14,6 +14,7 @@ use super::{
     storage::KeyId,
 };
 use crate::{
+    LinkerError, Loader, Result,
     entity::SecondaryMap,
     image::{LoadedCore, RawDynamic, ScannedDynamic},
     linker::session::ResolveSession,
@@ -22,7 +23,6 @@ use crate::{
     relocation::{RelocationArch, RelocationHandler, Relocator, SymbolLookup},
     sync::Arc,
     tls::TlsResolver,
-    LinkerError, Loader, Result,
 };
 use alloc::{
     boxed::Box,
@@ -183,24 +183,8 @@ where
     }
 }
 
-impl<
-        'a,
-        K,
-        D,
-        L,
-        R,
-        PreS,
-        PostS,
-        LazyPreS,
-        LazyPostS,
-        PreH,
-        PostH,
-        ScopeD: 'static,
-        P,
-        O,
-        V,
-        Arch,
-    > Linker<'a, K, D, Arch, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
+impl<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD: 'static, P, O, V, Arch>
+    Linker<'a, K, D, Arch, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
 where
     K: Clone + Ord,
     D: 'static,
@@ -406,25 +390,25 @@ where
 }
 
 impl<
-        'a,
-        K,
-        D,
-        M,
-        H,
-        Tls,
-        Arch,
-        R,
-        PreS,
-        PostS,
-        LazyPreS,
-        LazyPostS,
-        PreH,
-        PostH,
-        ScopeD: 'static,
-        P,
-        O,
-        V,
-    >
+    'a,
+    K,
+    D,
+    M,
+    H,
+    Tls,
+    Arch,
+    R,
+    PreS,
+    PostS,
+    LazyPreS,
+    LazyPostS,
+    PreH,
+    PostH,
+    ScopeD: 'static,
+    P,
+    O,
+    V,
+>
     Linker<
         'a,
         K,
@@ -494,25 +478,25 @@ where
 
 #[allow(private_bounds)]
 impl<
-        'a,
-        K,
-        D,
-        M,
-        H,
-        Tls,
-        Arch,
-        Resolver,
-        PreS,
-        PostS,
-        LazyPreS,
-        LazyPostS,
-        PreH,
-        PostH,
-        ScopeD: 'static,
-        P,
-        O,
-        V,
-    >
+    'a,
+    K,
+    D,
+    M,
+    H,
+    Tls,
+    Arch,
+    Resolver,
+    PreS,
+    PostS,
+    LazyPreS,
+    LazyPostS,
+    PreH,
+    PostH,
+    ScopeD: 'static,
+    P,
+    O,
+    V,
+>
     Linker<
         'a,
         K,
