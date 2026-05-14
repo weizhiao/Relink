@@ -1,8 +1,8 @@
 use crate::{
     Result,
     elf::ElfRelType,
+    elf::Lifecycle,
     image::{ModuleScope, RawObject},
-    loader::LifecycleContext,
     logging,
     relocation::{RelocHelper, RelocationArch, RelocationHandler},
 };
@@ -67,8 +67,7 @@ where
         (self.mprotect)()?;
 
         logging::trace!("[{}] Executing init functions", self.core.name());
-        self.init
-            .call(&LifecycleContext::new(None, self.init_array));
+        self.init.call(&Lifecycle::new(None, self.init_array));
 
         logging::info!("Relocation completed for {}", self.core.name());
 

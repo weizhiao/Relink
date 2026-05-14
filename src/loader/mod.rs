@@ -18,7 +18,7 @@ mod load;
 use crate::{
     Result,
     arch::NativeArch,
-    elf::{ElfLayout, ElfPhdr, NativeElfLayout},
+    elf::{ElfLayout, ElfPhdr, Lifecycle, NativeElfLayout},
     image::RawDynamic,
     os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
@@ -106,42 +106,20 @@ impl<L: ElfLayout> LoadHook<L> for () {
     }
 }
 
-/// Context provided to the initialization/finalization handler.
-pub struct LifecycleContext<'a> {
-    func: Option<fn()>,
-    func_array: Option<&'a [fn()]>,
-}
-
-impl<'a> LifecycleContext<'a> {
-    pub(crate) fn new(func: Option<fn()>, func_array: Option<&'a [fn()]>) -> Self {
-        Self { func, func_array }
-    }
-
-    /// Returns the single initialization/finalization function.
-    pub fn func(&self) -> Option<fn()> {
-        self.func
-    }
-
-    /// Returns the array of initialization/finalization functions.
-    pub fn func_array(&self) -> Option<&[fn()]> {
-        self.func_array
-    }
-}
-
 /// Handler trait for ELF lifecycle callbacks.
 ///
 /// Implementations control how initialization functions such as `.init` / `.init_array`
 /// and finalization functions such as `.fini` / `.fini_array` are invoked.
 pub trait LifecycleHandler: Send + Sync {
     /// Executes the handler with the provided context.
-    fn call(&self, ctx: &LifecycleContext);
+    fn call(&self, ctx: &Lifecycle<'_>);
 }
 
 impl<F> LifecycleHandler for F
 where
-    F: Fn(&LifecycleContext) + Send + Sync,
+    F: Fn(&Lifecycle<'_>) + Send + Sync,
 {
-    fn call(&self, ctx: &LifecycleContext) {
+    fn call(&self, ctx: &Lifecycle<'_>) {
         (self)(ctx)
     }
 }
@@ -198,7 +176,7 @@ impl Loader<DefaultMmap, (), (), (), NativeArch> {
     /// [`for_arch::<NewArch>()`](Self::for_arch); the `e_machine` gate
     /// then validates against `NewArch::MACHINE` automatically.
     pub fn new() -> Self {
-        let c_abi: DynLifecycleHandler = Arc::new(Box::new(|ctx: &LifecycleContext| {
+        let c_abi: DynLifecycleHandler = Arc::new(Box::new(|ctx: &Lifecycle<'_>| {
             ctx.func()
                 .iter()
                 .chain(ctx.func_array().unwrap_or(&[]).iter())

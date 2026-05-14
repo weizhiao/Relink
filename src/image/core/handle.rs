@@ -1,9 +1,12 @@
 use crate::{
     ParsePhdrError, Result,
-    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, PreCompute, SymbolInfo, SymbolTable},
+    elf::{
+        ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, Lifecycle, PreCompute, SymbolInfo,
+        SymbolTable,
+    },
     image::{DynamicInfo, Module},
-    loader::{DynLifecycleHandler, LifecycleContext},
-    relocation::{EmuContext, EmuLifecycle, Emulator, RelocAddr, RelocationArch},
+    loader::DynLifecycleHandler,
+    relocation::{EmuContext, Emulator, RelocAddr, RelocationArch},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{CoreTlsState, TlsDescArgs, TlsModuleId, TlsTpOffset},
@@ -25,11 +28,8 @@ pub(crate) struct CoreInner<D = (), Arch: RelocationArch = crate::arch::NativeAr
     /// ELF symbols table
     pub(crate) symtab: SymbolTable<Arch::Layout>,
 
-    /// Finalization function
-    pub(crate) fini: Option<fn()>,
-
-    /// Finalization array of functions
-    pub(crate) fini_array: Option<&'static [fn()]>,
+    /// Finalization functions.
+    pub(crate) fini: Lifecycle<'static>,
 
     /// Finalization handler
     pub(crate) fini_handler: CoreFiniHandler<Arch>,
@@ -53,7 +53,7 @@ impl<D, Arch: RelocationArch> Drop for CoreInner<D, Arch> {
         if self.is_init.load(Ordering::Relaxed) {
             match &self.fini_handler {
                 CoreFiniHandler::Native(handler) => {
-                    handler.call(&LifecycleContext::new(self.fini, self.fini_array));
+                    handler.call(&self.fini);
                 }
                 CoreFiniHandler::Emu(emu) => {
                     let ctx = EmuContext::from_parts(
@@ -61,7 +61,7 @@ impl<D, Arch: RelocationArch> Drop for CoreInner<D, Arch> {
                         self.segments.base(),
                         &self.segments,
                     );
-                    emu.call_fini(&ctx, &EmuLifecycle::new(self.fini, self.fini_array));
+                    emu.call_fini(&ctx, &self.fini);
                 }
             }
         }
@@ -345,11 +345,8 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
                 })),
                 tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_get_addr, tls_unregister),
                 segments,
-                fini: None,
-                fini_array: None,
-                fini_handler: CoreFiniHandler::Native(Arc::new(Box::new(
-                    |_: &LifecycleContext| {},
-                ))),
+                fini: Lifecycle::empty(),
+                fini_handler: CoreFiniHandler::Native(Arc::new(Box::new(|_: &Lifecycle<'_>| {}))),
                 user_data,
             }),
         })

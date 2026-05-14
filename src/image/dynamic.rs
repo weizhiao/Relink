@@ -4,13 +4,13 @@ use crate::elf::ElfRelType;
 use crate::sync::{Arc, AtomicBool};
 use crate::{
     ParsePhdrError, Result,
-    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
-    loader::{DynLifecycleHandler, ImageBuilder, LifecycleContext, LoadHook},
+    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, Lifecycle, SymbolTable},
+    loader::{DynLifecycleHandler, ImageBuilder, LoadHook},
     logging,
     os::Mmap,
     relocation::{
-        DynamicRelocation, EmuContext, EmuLifecycle, Emulator, RelocAddr, Relocatable,
-        RelocateArgs, RelocationArch, RelocationHandler, Relocator,
+        DynamicRelocation, EmuContext, Emulator, RelocAddr, Relocatable, RelocateArgs,
+        RelocationArch, RelocationHandler, Relocator,
     },
     segment::ELFRelro,
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -83,11 +83,8 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
     /// Custom initialization handler.
     init_handler: DynLifecycleHandler,
 
-    /// Initialization function to be called after relocation.
-    init: Option<fn()>,
-
-    /// Initialization function array to be called after relocation.
-    init_array: Option<&'static [fn()]>,
+    /// Initialization functions to be called after relocation.
+    init: Lifecycle<'static>,
 
     /// DT_RPATH value from the dynamic section
     rpath: Option<&'static str>,
@@ -273,17 +270,13 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     #[inline]
     pub(crate) fn call_init(&self) {
         self.module.set_init();
-        self.extra.init_handler.call(&LifecycleContext::new(
-            self.extra.init,
-            self.extra.init_array,
-        ));
+        self.extra.init_handler.call(&self.extra.init);
     }
 
     /// Marks the ELF object as initialized and delegates initialization to an emulator.
     pub(crate) fn call_init_with_emu(&self, emu: Arc<dyn Emulator<Arch>>) -> Result<()> {
         let ctx = EmuContext::new(self.core_ref());
-        let lifecycle = EmuLifecycle::new(self.extra.init, self.extra.init_array);
-        emu.call_init(&ctx, &lifecycle)?;
+        emu.call_init(&ctx, &self.extra.init)?;
         unsafe {
             self.core_ref().set_emu_fini(emu);
         }
@@ -414,8 +407,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
                 relro,
                 relocation,
                 init_handler: init_fn,
-                init: dynamic.init_fn,
-                init_array: dynamic.init_array_fn,
+                init: Lifecycle::new(dynamic.init_fn, dynamic.init_array_fn),
                 #[cfg(feature = "lazy-binding")]
                 got_plt: dynamic.got_plt,
                 rpath: dynamic
@@ -431,8 +423,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
                     is_init: AtomicBool::new(false),
                     name,
                     symtab,
-                    fini: dynamic.fini_fn,
-                    fini_array: dynamic.fini_array_fn,
+                    fini: Lifecycle::new(dynamic.fini_fn, dynamic.fini_array_fn),
                     fini_handler: CoreFiniHandler::Native(fini_fn),
                     user_data,
                     dynamic_info: Some(Arc::new(DynamicInfo {

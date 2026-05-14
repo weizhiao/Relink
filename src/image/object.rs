@@ -7,6 +7,7 @@
 use crate::object::{ObjectBuilder, ObjectRelocation, PltGotSection};
 use crate::{
     Result,
+    elf::Lifecycle,
     loader::DynLifecycleHandler,
     relocation::{
         RelocAddr, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
@@ -58,8 +59,7 @@ impl<D: 'static, Arch: RelocationArch> RawObject<D, Arch> {
             is_init: AtomicBool::new(false),
             name: builder.name,
             symtab: builder.symtab,
-            fini: None,
-            fini_array: None,
+            fini: Lifecycle::empty(),
             fini_handler: CoreFiniHandler::Native(builder.fini_fn),
             user_data: builder.user_data,
             dynamic_info: None,

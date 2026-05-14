@@ -33,7 +33,7 @@ pub use defs::{
     Elf32Layout, Elf32Sym, Elf64Layout, ElfClass, ElfDynamicTag, ElfFileType, ElfLayout,
     ElfMachine, ElfProgramFlags, ElfProgramType, ElfRel, ElfRelEntry, ElfRelType, ElfRela,
     ElfRelocationType, ElfSectionFlags, ElfSectionIndex, ElfSectionType, ElfSymbolBind,
-    ElfSymbolType, NativeElfLayout,
+    ElfSymbolType, Lifecycle, NativeElfLayout,
 };
 pub use dynamic::ElfDyn;
 /// Core ELF data types for program headers, relocations, and symbols.

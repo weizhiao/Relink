@@ -1,6 +1,11 @@
 use super::RelocationArch;
 use crate::tls::{TlsModuleId, TlsTpOffset};
-use crate::{Result, elf::ElfRelType, image::ElfCore, segment::ElfSegments};
+use crate::{
+    Result,
+    elf::{ElfRelType, Lifecycle},
+    image::ElfCore,
+    segment::ElfSegments,
+};
 use core::marker::PhantomData;
 
 /// Marker for architecture backends that may be driven through an emulator.
@@ -50,34 +55,6 @@ impl<'a, Arch: RelocationArch> EmuContext<'a, Arch> {
     #[inline]
     pub fn contains_addr(&self, addr: usize) -> bool {
         self.segments.contains_addr(addr)
-    }
-}
-
-/// Guest lifecycle callbacks associated with a dynamic image.
-pub struct EmuLifecycle<'a> {
-    func: Option<fn()>,
-    func_array: Option<&'a [fn()]>,
-}
-
-impl<'a> EmuLifecycle<'a> {
-    #[inline]
-    pub(crate) const fn new(func: Option<fn()>, func_array: Option<&'a [fn()]>) -> Self {
-        Self { func, func_array }
-    }
-
-    /// Address of the single lifecycle function, if present.
-    #[inline]
-    pub fn func_addr(&self) -> Option<usize> {
-        self.func.map(|func| func as usize)
-    }
-
-    /// Addresses from the lifecycle function array.
-    #[inline]
-    pub fn func_array_addrs(&self) -> impl Iterator<Item = usize> + '_ {
-        self.func_array
-            .unwrap_or(&[])
-            .iter()
-            .map(|func| *func as usize)
     }
 }
 
@@ -207,13 +184,13 @@ pub trait Emulator<Arch: RelocationArch>: Send + Sync + 'static {
     -> Result<usize>;
 
     /// Executes `.init` / `.init_array` functions in the guest environment.
-    fn call_init(&self, ctx: &EmuContext<'_, Arch>, lifecycle: &EmuLifecycle<'_>) -> Result<()>;
+    fn call_init(&self, ctx: &EmuContext<'_, Arch>, lifecycle: &Lifecycle<'_>) -> Result<()>;
 
     /// Executes `.fini` / `.fini_array` functions in the guest environment.
     ///
     /// This mirrors the native finalizer contract: finalization runs during
     /// drop and therefore cannot report errors to the caller.
-    fn call_fini(&self, ctx: &EmuContext<'_, Arch>, lifecycle: &EmuLifecycle<'_>);
+    fn call_fini(&self, ctx: &EmuContext<'_, Arch>, lifecycle: &Lifecycle<'_>);
 
     /// Builds the guest TLSDESC pair for a TLSDESC relocation.
     fn resolve_tlsdesc(

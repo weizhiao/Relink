@@ -24,7 +24,7 @@ pub(crate) use defs::{
     RelocAddr, RelocValue, RelocationValueFormula, RelocationValueKind, resolve_ifunc,
 };
 pub(crate) use dynamic::DynamicRelocation;
-pub use emu::{EmuContext, EmuLifecycle, EmuRelocationContext, EmulatedArch, Emulator};
+pub use emu::{EmuContext, EmuRelocationContext, EmulatedArch, Emulator};
 pub use emu::{TlsDescEmuRequest, TlsDescEmuValue};
 pub(crate) use helper::{RelocHelper, SymDef, find_symdef_impl, likely, reloc_error, unlikely};
 pub(crate) use lazy::ResolvedBinding;

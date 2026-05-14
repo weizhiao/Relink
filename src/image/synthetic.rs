@@ -67,7 +67,7 @@ impl SyntheticSymbol {
     }
 }
 
-struct SyntheticSymbolEntry<L: ElfLayout> {
+struct SymbolEntry<L: ElfLayout> {
     name: String,
     symbol: ElfSymbol<L>,
 }
@@ -79,7 +79,7 @@ struct SyntheticSymbolEntry<L: ElfLayout> {
 /// lifetimes.
 pub struct SyntheticModule<Arch: RelocationArch = NativeArch> {
     name: String,
-    symbols: Vec<SyntheticSymbolEntry<Arch::Layout>>,
+    symbols: Vec<SymbolEntry<Arch::Layout>>,
     index: BTreeMap<String, usize>,
 }
 
@@ -107,7 +107,7 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
 
     /// Inserts or replaces one symbol.
     pub fn insert(&mut self, symbol: SyntheticSymbol) {
-        let entry = SyntheticSymbolEntry {
+        let entry = SymbolEntry {
             name: symbol.name,
             symbol: ElfSymbol::synthetic(
                 symbol.value,
