@@ -79,15 +79,13 @@ impl RelocationArch for X86_64Arch {
     #[cfg(feature = "object")]
     #[doc(hidden)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, PreS, PostS, PreH, PostH>(
-        helper: &mut crate::relocation::RelocHelper<'_, D, Self, PreS, PostS, PreH, PostH>,
+    fn relocate_object<D, PreH, PostH>(
+        helper: &mut crate::relocation::RelocHelper<'_, D, Self, PreH, PostH>,
         rel: &crate::elf::ElfRelType<Self>,
         pltgot: &mut crate::object::layout::PltGotSection,
     ) -> Result<()>
     where
         D: 'static,
-        PreS: crate::relocation::SymbolLookup + ?Sized,
-        PostS: crate::relocation::SymbolLookup + ?Sized,
         PreH: crate::relocation::RelocationHandler<Self> + ?Sized,
         PostH: crate::relocation::RelocationHandler<Self> + ?Sized,
     {

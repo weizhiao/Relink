@@ -125,7 +125,10 @@ elf_loader = { version = "0.14.1", features = ["full"] }
 ### 加载动态库并调用符号
 
 ```rust
-use elf_loader::{Loader, Result};
+use elf_loader::{
+    image::{SyntheticSymbol, SyntheticModule},
+    Loader, Result,
+};
 
 extern "C" fn host_double(value: i32) -> i32 {
     value * 2
@@ -135,13 +138,10 @@ fn main() -> Result<()> {
     let lib = Loader::new()
         .load_dylib("path/to/plugin.so")?
         .relocator()
-        .pre_find_fn(|name| {
-            if name == "host_double" {
-                Some(host_double as *const ())
-            } else {
-                None
-            }
-        })
+        .scope([SyntheticModule::new(
+            "__host",
+            [SyntheticSymbol::function("host_double", host_double as *const ())],
+        )])
         .relocate()?;
 
     let run = unsafe {
@@ -190,15 +190,13 @@ fn main() -> Result<()> {
 
 ### 宿主符号、作用域与 lazy binding
 
-Relink 的重定位阶段可以由调用方提供符号策略：
+Relink 的重定位阶段可以由调用方提供符号作用域和重定位 hook：
 
-- `pre_find_fn()` / `post_find_fn()`：在目标镜像自身符号查找前后注入宿主符号。
-- `scope()` / `add_scope()`：把已经加载的对象加入当前镜像的搜索作用域。
+- `scope()` / `extend_scope()`：把已经加载的对象或 `SyntheticModule` 加入当前镜像的搜索作用域。
+- `SyntheticModule`：把宿主回调、native bridge wrapper 或 virtual DSO 符号作为普通模块暴露出来。
 - `pre_handler()` / `post_handler()`：在重定位写入前后拦截请求。
-- `share_find_with_lazy()`：让 lazy binding 的 PLT fixup 复用初始重定位阶段的查找规则。
-- `lazy_pre_find_fn()` / `lazy_post_find_fn()`：为 lazy fixup 单独配置符号查找策略。
 
-`lazy binding` 相关接口需要开启 `lazy-binding` feature。
+`lazy binding` 会保留同一个 `ModuleScope` 供 PLT fixup 继续查找；相关接口需要开启 `lazy-binding` feature。
 
 ### 使用 Linker 管理运行时依赖图
 
@@ -293,7 +291,6 @@ fn main() -> Result<()> {
     let base = loader
         .load_object("path/to/base.o")?
         .relocator()
-        .pre_find_fn(|_| None)
         .relocate()?;
 
     let plugin = loader

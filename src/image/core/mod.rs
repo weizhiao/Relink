@@ -10,5 +10,5 @@ mod symbol;
 
 pub(crate) use handle::{CoreFiniHandler, CoreInner};
 pub use handle::{ElfCore, ElfCoreRef};
-pub use loaded::LoadedCore;
+pub use loaded::{LoadedCore, LoadedDeps};
 pub use symbol::Symbol;

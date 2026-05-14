@@ -5,7 +5,7 @@ use crate::{
     RelocationError, Result,
     arch::{ArchKind, NativeArch},
     elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType},
-    image::{ElfCore, LoadedCore},
+    image::{ElfCore, ModuleScope},
     sync::Arc,
 };
 use alloc::boxed::Box;
@@ -74,16 +74,14 @@ pub trait RelocationArch: 'static {
     #[cfg(feature = "object")]
     #[doc(hidden)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, PreS, PostS, PreH, PostH>(
-        _helper: &mut RelocHelper<'_, D, Self, PreS, PostS, PreH, PostH>,
+    fn relocate_object<D, PreH, PostH>(
+        _helper: &mut RelocHelper<'_, D, Self, PreH, PostH>,
         _rel: &ElfRelType<Self>,
         _pltgot: &mut crate::object::layout::PltGotSection,
     ) -> Result<()>
     where
         Self: Sized,
         D: 'static,
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
     {
@@ -150,76 +148,6 @@ pub(crate) trait RelocationValueProvider {
     }
 }
 
-/// A trait for looking up external symbols during relocation.
-///
-/// Implement this trait when the default relocation scope is not enough and you need
-/// to supply addresses from the host process, an embedding runtime, or another
-/// custom symbol source.
-///
-/// Closures of type `Fn(&str) -> Option<*const ()>` implement this trait automatically.
-///
-/// # Examples
-///
-/// Using a closure for simple lookups:
-/// ```rust
-/// use elf_loader::relocation::SymbolLookup;
-///
-/// let lookup = |name: &str| {
-///     match name {
-///         "malloc" => Some(0x1234 as *const ()),
-///         "free" => Some(0x5678 as *const ()),
-///         _ => None,
-///     }
-/// };
-/// ```
-///
-/// Using a struct for complex resolution:
-/// ```rust
-/// use elf_loader::relocation::SymbolLookup;
-/// use std::collections::HashMap;
-///
-/// struct SymbolResolver {
-///     symbols: HashMap<String, *const ()>,
-/// }
-///
-/// impl SymbolLookup for SymbolResolver {
-///     fn lookup(&self, name: &str) -> Option<*const ()> {
-///         self.symbols.get(name).copied()
-///     }
-/// }
-/// ```
-pub trait SymbolLookup {
-    /// Finds the address of a symbol by its name, returning `None` if not found.
-    fn lookup(&self, name: &str) -> Option<*const ()>;
-}
-
-impl<F: ?Sized> SymbolLookup for F
-where
-    F: Fn(&str) -> Option<*const ()>,
-{
-    fn lookup(&self, name: &str) -> Option<*const ()> {
-        self(name)
-    }
-}
-
-impl<S: SymbolLookup + ?Sized> SymbolLookup for Arc<S> {
-    fn lookup(&self, name: &str) -> Option<*const ()> {
-        (**self).lookup(name)
-    }
-}
-
-impl<S: SymbolLookup + ?Sized> SymbolLookup for &Arc<S> {
-    fn lookup(&self, name: &str) -> Option<*const ()> {
-        (**self).lookup(name)
-    }
-}
-
-impl SymbolLookup for () {
-    fn lookup(&self, _name: &str) -> Option<*const ()> {
-        None
-    }
-}
-
 /// A trait for intercepting relocations during relocation.
 ///
 /// Implement this to override specific relocations, record relocation activity,
@@ -283,7 +211,7 @@ pub trait RelocationHandler<Arch: RelocationArch = NativeArch> {
 pub struct RelocationContext<'a, D: 'static, Arch: RelocationArch = NativeArch> {
     rel: &'a ElfRelType<Arch>,
     lib: &'a ElfCore<D, Arch>,
-    scope: &'a [LoadedCore<D, Arch>],
+    scope: &'a ModuleScope<Arch>,
 }
 
 impl<'a, D: 'static, Arch: RelocationArch> RelocationContext<'a, D, Arch> {
@@ -292,7 +220,7 @@ impl<'a, D: 'static, Arch: RelocationArch> RelocationContext<'a, D, Arch> {
     pub(crate) fn new(
         rel: &'a ElfRelType<Arch>,
         lib: &'a ElfCore<D, Arch>,
-        scope: &'a [LoadedCore<D, Arch>],
+        scope: &'a ModuleScope<Arch>,
     ) -> Self {
         Self { rel, lib, scope }
     }
@@ -311,8 +239,8 @@ impl<'a, D: 'static, Arch: RelocationArch> RelocationContext<'a, D, Arch> {
 
     /// Access the current resolution scope.
     #[inline]
-    pub fn scope(&self) -> &[LoadedCore<D, Arch>] {
-        self.scope
+    pub fn scope(&self) -> &ModuleScope<Arch> {
+        &self.scope
     }
 
     /// Find symbol definition in the current scope
@@ -369,99 +297,32 @@ pub enum BindingMode {
     Lazy,
 }
 
-/// Relocation-time symbol lookup hooks.
-pub(crate) struct LookupHooks<'a, PreS: ?Sized, PostS: ?Sized> {
-    pub(crate) pre_find: &'a PreS,
-    pub(crate) post_find: &'a PostS,
-}
-
-impl<'a, PreS: ?Sized, PostS: ?Sized> LookupHooks<'a, PreS, PostS> {
-    #[inline]
-    pub(crate) const fn new(pre_find: &'a PreS, post_find: &'a PostS) -> Self {
-        Self {
-            pre_find,
-            post_find,
-        }
-    }
-}
-
-/// Lazy-fixup symbol lookup hooks.
-pub(crate) struct LazyLookupHooks<LazyPreS, LazyPostS> {
-    pub(crate) pre_find: LazyPreS,
-    pub(crate) post_find: LazyPostS,
-}
-
-impl<LazyPreS, LazyPostS> LazyLookupHooks<LazyPreS, LazyPostS> {
-    #[inline]
-    pub(crate) const fn new(pre_find: LazyPreS, post_find: LazyPostS) -> Self {
-        Self {
-            pre_find,
-            post_find,
-        }
-    }
-}
-
-/// Relocation handlers that run before and after the built-in relocation logic.
-pub(crate) struct HandlerHooks<'a, PreH: ?Sized, PostH: ?Sized> {
-    pub(crate) pre: &'a PreH,
-    pub(crate) post: &'a PostH,
-}
-
-impl<'a, PreH: ?Sized, PostH: ?Sized> HandlerHooks<'a, PreH, PostH> {
-    #[inline]
-    pub(crate) const fn new(pre: &'a PreH, post: &'a PostH) -> Self {
-        Self { pre, post }
-    }
-}
-
 /// Internal relocation configuration shared across raw image types.
-pub struct RelocateArgs<
-    'a,
-    D: 'static,
-    Arch: RelocationArch,
-    PreS: ?Sized,
-    PostS: ?Sized,
-    LazyPreS,
-    LazyPostS,
-    PreH: ?Sized,
-    PostH: ?Sized,
-> {
-    pub(crate) scope: Arc<[LoadedCore<D, Arch>]>,
+pub struct RelocateArgs<'a, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized> {
+    pub(crate) scope: ModuleScope<Arch>,
     pub(crate) binding: BindingMode,
-    pub(crate) lookup: LookupHooks<'a, PreS, PostS>,
-    pub(crate) lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
-    pub(crate) handlers: HandlerHooks<'a, PreH, PostH>,
+    pub(crate) pre_handler: &'a PreH,
+    pub(crate) post_handler: &'a PostH,
     pub(crate) emu: Option<Arc<dyn Emulator<Arch>>>,
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
-impl<
-    'a,
-    D: 'static,
-    Arch: RelocationArch,
-    PreS: ?Sized,
-    PostS: ?Sized,
-    LazyPreS,
-    LazyPostS,
-    PreH: ?Sized,
-    PostH: ?Sized,
-> RelocateArgs<'a, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>
+impl<'a, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized>
+    RelocateArgs<'a, D, Arch, PreH, PostH>
 {
     #[inline]
     pub(crate) fn new(
-        scope: Arc<[LoadedCore<D, Arch>]>,
+        scope: ModuleScope<Arch>,
         binding: BindingMode,
-        lookup: LookupHooks<'a, PreS, PostS>,
-        lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
-        handlers: HandlerHooks<'a, PreH, PostH>,
+        pre_handler: &'a PreH,
+        post_handler: &'a PostH,
         emu: Option<Arc<dyn Emulator<Arch>>>,
     ) -> Self {
         Self {
             scope,
             binding,
-            lookup,
-            lazy_lookup,
-            handlers,
+            pre_handler,
+            post_handler,
             emu,
             _marker: PhantomData,
         }
@@ -493,15 +354,11 @@ pub trait Relocatable<D = ()>: Sized {
 
     /// Execute relocation using the implementor's relocation backend
     /// ([`Self::Arch`]).
-    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, Self::Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+        args: RelocateArgs<'_, D, Self::Arch, PreH, PostH>,
     ) -> Result<Self::Output>
     where
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
-        LazyPreS: SymbolLookup + Send + Sync + 'static,
-        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler<Self::Arch> + ?Sized,
         PostH: RelocationHandler<Self::Arch> + ?Sized;
 }

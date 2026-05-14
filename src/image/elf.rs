@@ -2,9 +2,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::ElfPhdr,
-    relocation::{
-        Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator, SymbolLookup,
-    },
+    relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
 };
 
 use super::{LoadedCore, LoadedExec, RawDylib, RawExec};
@@ -63,7 +61,7 @@ impl<D: 'static, Arch: RelocationArch> RawElf<D, Arch> {
     /// let raw = loader.load("path/to/input.elf").unwrap();
     /// let relocated = raw.relocator().relocate().unwrap();
     /// ```
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D, Arch>
+    pub fn relocator(self) -> Relocator<Self, (), (), D, Arch>
     where
         Self: Relocatable<D, Arch = Arch>,
     {
@@ -267,15 +265,11 @@ impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawElf<D, Arch> {
     type Output = LoadedElf<D, Arch>;
     type Arch = Arch;
 
-    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreH, PostH>,
     ) -> Result<Self::Output>
     where
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
-        LazyPreS: SymbolLookup + Send + Sync + 'static,
-        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
     {

@@ -10,7 +10,7 @@ use crate::{
     os::Mmap,
     relocation::{
         DynamicRelocation, EmuContext, EmuLifecycle, Emulator, RelocAddr, Relocatable,
-        RelocateArgs, RelocationArch, RelocationHandler, Relocator, SymbolLookup,
+        RelocateArgs, RelocationArch, RelocationHandler, Relocator,
     },
     segment::ELFRelro,
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -23,7 +23,7 @@ use super::{ElfCore, LoadedCore, core::CoreFiniHandler, core::CoreInner};
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) pltrel: &'static [ElfRelType<Arch>],
-    pub(crate) lookup: Option<Box<dyn crate::relocation::SymbolLookup + Send + Sync>>,
+    pub(crate) scope: Option<crate::image::ModuleScope<Arch>>,
 }
 
 #[cfg(feature = "lazy-binding")]
@@ -32,7 +32,7 @@ impl<Arch: RelocationArch> LazyBindingInfo<Arch> {
     pub(crate) fn new(pltrel: Option<&'static [ElfRelType<Arch>]>) -> Self {
         Self {
             pltrel: pltrel.unwrap_or(&[]),
-            lookup: None,
+            scope: None,
         }
     }
 }
@@ -499,7 +499,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
     }
 
     /// Creates a relocation builder for this dynamic image.
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D, Arch> {
+    pub fn relocator(self) -> Relocator<Self, (), (), D, Arch> {
         Relocator::new().with_object(self)
     }
 }
@@ -508,18 +508,14 @@ impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawDynamic<D, Arch> {
     type Output = LoadedCore<D, Arch>;
     type Arch = Arch;
 
-    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreH, PostH>,
     ) -> Result<Self::Output>
     where
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
-        LazyPreS: SymbolLookup + Send + Sync + 'static,
-        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
     {
-        self.relocate_impl::<_, _, _, _, _, _>(args)
+        self.relocate_impl::<_, _>(args)
     }
 }

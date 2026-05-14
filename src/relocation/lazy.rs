@@ -1,18 +1,16 @@
 #[cfg(feature = "lazy-binding")]
 mod enabled {
-    use crate::image::{CoreInner, DynamicInfo, LoadedCore, RawDylib, RawDynamic, RawElf, RawExec};
+    use crate::image::{
+        CoreInner, DynamicInfo, Module, ModuleScope, RawDylib, RawDynamic, RawElf, RawExec,
+    };
     use crate::{
         RelocationError, Result,
         arch::{NativeArch, prepare_lazy_bind},
         elf::{ElfRelEntry, ElfRelType, SymbolInfo},
-        relocation::{
-            BindingMode, LazyLookupHooks, RelocAddr, RelocationArch, SupportLazy, SymDef,
-            SymbolLookup, unlikely,
-        },
+        relocation::{BindingMode, RelocAddr, RelocationArch, SupportLazy, SymDef, unlikely},
         sync::Arc,
         tls::lookup_tls_get_addr,
     };
-    use alloc::boxed::Box;
     use core::ptr::NonNull;
 
     impl<D: 'static, Arch: RelocationArch> SupportLazy for RawDynamic<D, Arch> {}
@@ -23,44 +21,14 @@ mod enabled {
 
     impl<D: 'static, Arch: RelocationArch> SupportLazy for RawElf<D, Arch> {}
 
-    struct LazyLookup<D: 'static, Arch: RelocationArch> {
-        libs: Arc<[LoadedCore<D, Arch>]>,
-        pre_find: Box<dyn SymbolLookup + Send + Sync>,
-        post_find: Box<dyn SymbolLookup + Send + Sync>,
-        tls_get_addr: RelocAddr,
-    }
-
-    impl<D: 'static, Arch: RelocationArch> SymbolLookup for LazyLookup<D, Arch> {
-        fn lookup(&self, name: &str) -> Option<*const ()> {
-            if let Some(symbol) = lookup_tls_get_addr(name, self.tls_get_addr) {
-                return Some(symbol);
-            }
-
-            if let Some(symbol) = self.pre_find.lookup(name) {
-                return Some(symbol);
-            }
-
-            self.libs
-                .iter()
-                .find_map(|lib| lookup_addr(lib, name).map(|addr| addr.as_ptr()))
-                .or_else(|| self.post_find.lookup(name))
-        }
-    }
-
-    fn lookup_addr<D: 'static, Arch: RelocationArch>(
-        lib: &LoadedCore<D, Arch>,
+    fn lookup_addr<Arch: RelocationArch>(
+        source: &dyn Module<Arch>,
         name: &str,
     ) -> Option<RelocAddr> {
         let syminfo = SymbolInfo::from_str(name, None);
         let mut precompute = syminfo.precompute();
-        let sym = lib.core.symtab().lookup_filter(&syminfo, &mut precompute)?;
-        Some(
-            SymDef {
-                sym: Some(sym),
-                lib: &lib.core,
-            }
-            .convert(),
-        )
+        let sym = source.lookup_symbol(&syminfo, &mut precompute)?;
+        Some(SymDef::<(), Arch>::new(Some(sym), source).convert())
     }
 
     pub(crate) enum ResolvedBinding {
@@ -129,15 +97,12 @@ mod enabled {
             }
         }
 
-        pub(crate) fn install_lazy_lookup<LazyPreS, LazyPostS>(
+        pub(crate) fn install_lazy_lookup(
             &self,
             binding: ResolvedBinding,
-            lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
-            deps: Arc<[LoadedCore<D, Arch>]>,
+            scope: ModuleScope<Arch>,
         ) -> Result<()>
         where
-            LazyPreS: SymbolLookup + Send + Sync + 'static,
-            LazyPostS: SymbolLookup + Send + Sync + 'static,
             D: 'static,
         {
             if let ResolvedBinding::Lazy = binding {
@@ -151,16 +116,7 @@ mod enabled {
                     },
                 )?;
                 let info = unsafe { &mut *(Arc::as_ptr(dynamic_info) as *mut DynamicInfo<Arch>) };
-                let LazyLookupHooks {
-                    pre_find,
-                    post_find,
-                } = lazy_lookup;
-                info.lazy.lookup = Some(Box::new(LazyLookup {
-                    libs: deps,
-                    pre_find: Box::new(pre_find),
-                    post_find: Box::new(post_find),
-                    tls_get_addr: self.core_ref().tls_get_addr(),
-                }));
+                info.lazy.scope = Some(scope);
             }
             Ok(())
         }
@@ -243,13 +199,17 @@ mod enabled {
 
         let (_, syminfo) = dylib.symtab.symbol_idx(r_sym);
 
-        let Some(lookup) = dynamic_info.lazy.lookup.as_ref() else {
+        let Some(scope) = dynamic_info.lazy.scope.as_ref() else {
             invalid_state(dylib.name.as_str(), "missing lazy lookup")
         };
-        let symbol = match lookup.lookup(syminfo.name()) {
-            Some(symbol) => RelocAddr::from_ptr(symbol),
-            None => unresolved_symbol(dylib.name.as_str(), syminfo.name()),
-        };
+        let symbol = lookup_tls_get_addr(syminfo.name(), dylib.tls.tls_get_addr())
+            .map(RelocAddr::from_ptr)
+            .or_else(|| {
+                scope
+                    .iter()
+                    .find_map(|source| lookup_addr::<NativeArch>(&**source, syminfo.name()))
+            })
+            .unwrap_or_else(|| unresolved_symbol(dylib.name.as_str(), syminfo.name()));
 
         segments.write(rela.r_offset(), symbol);
         symbol.into_inner()
@@ -260,9 +220,8 @@ mod enabled {
 mod disabled {
     use crate::{
         elf::ElfRelType,
-        image::{LoadedCore, RawDynamic},
-        relocation::{BindingMode, LazyLookupHooks, RelocationArch, SymbolLookup},
-        sync::Arc,
+        image::{ModuleScope, RawDynamic},
+        relocation::{BindingMode, RelocationArch},
     };
 
     pub(crate) enum ResolvedBinding {
@@ -299,19 +258,14 @@ mod disabled {
             ResolvedBinding::Eager
         }
 
-        pub(crate) fn install_lazy_lookup<LazyPreS, LazyPostS>(
+        pub(crate) fn install_lazy_lookup(
             &self,
             _binding: ResolvedBinding,
-            lazy_lookup: LazyLookupHooks<LazyPreS, LazyPostS>,
-            _deps: Arc<[LoadedCore<D, Arch>]>,
+            _scope: ModuleScope<Arch>,
         ) -> crate::Result<()>
         where
-            LazyPreS: SymbolLookup + Send + Sync + 'static,
-            LazyPostS: SymbolLookup + Send + Sync + 'static,
             D: 'static,
         {
-            lazy_lookup.pre_find;
-            lazy_lookup.post_find;
             Ok(())
         }
     }

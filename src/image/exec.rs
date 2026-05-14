@@ -13,7 +13,6 @@ use crate::{
     os::Mmap,
     relocation::{
         RelocAddr, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
-        SymbolLookup,
     },
     segment::ElfSegments,
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
@@ -111,15 +110,11 @@ impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawExec<D, Arch> {
     type Output = LoadedExec<D, Arch>;
     type Arch = Arch;
 
-    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreH, PostH>,
     ) -> Result<Self::Output>
     where
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
-        LazyPreS: SymbolLookup + Send + Sync + 'static,
-        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
     {
@@ -171,7 +166,7 @@ impl<D, Arch: RelocationArch> Debug for RawExec<D, Arch> {
 
 impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
     /// Creates a relocation builder for this executable image.
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D, Arch> {
+    pub fn relocator(self) -> Relocator<Self, (), (), D, Arch> {
         Relocator::new().with_object(self)
     }
 

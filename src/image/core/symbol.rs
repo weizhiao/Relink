@@ -90,12 +90,9 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         self.symtab()
             .lookup_filter(&syminfo, &mut precompute)
             .map(|sym| Symbol {
-                ptr: SymDef {
-                    sym: Some(sym),
-                    lib: unsafe { self.core_ref() },
-                }
-                .convert()
-                .as_mut_ptr(),
+                ptr: SymDef::<D, Arch>::new(Some(sym), unsafe { self.core_ref() })
+                    .convert()
+                    .as_mut_ptr(),
                 pd: PhantomData,
             })
     }
@@ -135,12 +132,9 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         self.symtab()
             .lookup_filter(&syminfo, &mut precompute)
             .map(|sym| Symbol {
-                ptr: SymDef {
-                    sym: Some(sym),
-                    lib: unsafe { self.core_ref() },
-                }
-                .convert()
-                .as_mut_ptr(),
+                ptr: SymDef::<D, Arch>::new(Some(sym), unsafe { self.core_ref() })
+                    .convert()
+                    .as_mut_ptr(),
                 pd: PhantomData,
             })
     }

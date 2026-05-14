@@ -1,40 +1,46 @@
 #[path = "common/mod.rs"]
 mod fixture_support;
 
-use elf_loader::{Loader, Result};
-use std::collections::HashMap;
+use elf_loader::{
+    Loader, Result,
+    image::{ModuleHandle, SyntheticModule, SyntheticSymbol},
+};
+
+fn host_symbols() -> SyntheticModule {
+    fn print(s: &str) {
+        println!("{}", s);
+    }
+
+    SyntheticModule::new(
+        "__host",
+        [SyntheticSymbol::function("print", print as *const ())],
+    )
+}
 
 fn main() -> Result<()> {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     env_logger::init();
 
-    fn print(s: &str) {
-        println!("{}", s);
-    }
-
-    let mut map = HashMap::new();
-    map.insert("print", print as *const () as usize);
-    let pre_find =
-        |name: &str| -> Option<*const ()> { map.get(name).copied().map(|p| p as *const ()) };
     let fixtures = fixture_support::ensure_all();
     let mut loader = Loader::new();
     let a = loader
         .load_object(fixtures.a_object_str())?
         .relocator()
-        .pre_find(&pre_find)
+        .scope([host_symbols()])
         .relocate()?;
     let b = loader
         .load_dylib(fixtures.libb_str())?
         .relocator()
-        .pre_find(&pre_find)
-        .scope([&a])
+        .scope([ModuleHandle::from(host_symbols()), ModuleHandle::from(&a)])
         .relocate()?;
     let c = loader
         .load_object(fixtures.c_object_str())?
         .relocator()
-        .pre_find(&pre_find)
-        .scope([&a])
-        .extend_scope([&b])
+        .scope([
+            ModuleHandle::from(host_symbols()),
+            ModuleHandle::from(&a),
+            ModuleHandle::from(&b),
+        ])
         .relocate()?;
     let f = unsafe { a.get::<extern "C" fn() -> i32>("a").unwrap() };
     assert!(f() == 1);

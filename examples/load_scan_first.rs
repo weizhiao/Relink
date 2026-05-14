@@ -3,11 +3,13 @@ mod fixture_support;
 
 use elf_loader::{
     Result,
-    image::ModuleCapability,
+    image::{ModuleCapability, SyntheticModule, SyntheticSymbol},
     input::PathBuf,
-    linker::{LinkContext, LinkPass, LinkPassPlan, Linker, Materialization, ReorderPass},
+    linker::{
+        LinkContext, LinkPass, LinkPassPlan, Linker, Materialization, RelocationInputs,
+        RelocationRequest, ReorderPass,
+    },
 };
-use std::collections::HashMap;
 
 struct ConfigureRootSectionRegions;
 
@@ -20,17 +22,20 @@ impl LinkPass<PathBuf, ReorderPass> for ConfigureRootSectionRegions {
     }
 }
 
-fn main() -> Result<()> {
-    unsafe { std::env::set_var("RUST_LOG", "trace") };
-    env_logger::init();
-
+fn host_symbols() -> SyntheticModule {
     fn print(s: &str) {
         println!("{}", s);
     }
 
-    let mut symbols = HashMap::new();
-    symbols.insert("print", print as *const ());
-    let pre_find = |name: &str| -> Option<*const ()> { symbols.get(name).copied() };
+    SyntheticModule::new(
+        "__host",
+        [SyntheticSymbol::function("print", print as *const ())],
+    )
+}
+
+fn main() -> Result<()> {
+    unsafe { std::env::set_var("RUST_LOG", "trace") };
+    env_logger::init();
 
     let fixtures = fixture_support::ensure_all();
     let mut context = LinkContext::<PathBuf, ()>::new();
@@ -41,7 +46,11 @@ fn main() -> Result<()> {
             pipeline.push(ConfigureRootSectionRegions);
             pipeline
         })
-        .map_relocator(|relocator| relocator.pre_find(&pre_find))
+        .planner(|req: &RelocationRequest<'_, PathBuf, ()>| {
+            Ok(RelocationInputs::scope(
+                req.scope().extend([host_symbols()]),
+            ))
+        })
         .load_scan_first(&mut context, PathBuf::from(fixtures.libc_str()))?;
 
     let c = unsafe { loaded.get::<fn() -> i32>("c").unwrap() };

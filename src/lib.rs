@@ -22,38 +22,39 @@
 //!
 //! - Safer symbol lifetimes. Typed symbols borrow the loaded image, so they cannot outlive
 //!   the library that produced them.
-//! - Hybrid linking. Compose `.so` and `.o` inputs at runtime with `scope()` and
-//!   `add_scope()`.
+//! - Hybrid linking. Compose `.so`, `.o`, and synthetic modules at runtime with `scope()` and
+//!   `extend_scope()`.
 //! - Explicit dependency loading. Build your own dependency policy with an
 //!   actual [`Loader`], [`linker::KeyResolver`], [`linker::Linker`], and
 //!   [`linker::LinkContext`].
-//! - Deep customization. Override relocation-time lookup with `pre_find_fn()` /
-//!   `post_find_fn()`, provide lazy-fixup lookup with `lazy_pre_find_fn()` /
-//!   `lazy_post_find_fn()`, intercept relocations with handlers, and inspect segments
-//!   with [`loader::LoadHook`].
+//! - Deep customization. Inject host or bridge symbols with
+//!   [`image::SyntheticModule`], intercept relocations with handlers, and
+//!   inspect segments with [`loader::LoadHook`].
 //! - Optional advanced features. TLS relocation handling, lazy binding, relocatable object
 //!   loading, logging, and versioned symbol lookup are feature-gated.
 //!
 //! ## Example
 //!
 //! ```rust,no_run
-//! use elf_loader::{Loader, Result};
+//! use elf_loader::{
+//!     Loader, Result,
+//!     image::{SyntheticSymbol, SyntheticModule},
+//! };
 //!
 //! extern "C" fn host_double(value: i32) -> i32 {
 //!     value * 2
 //! }
 //!
 //! fn main() -> Result<()> {
+//!     let host = SyntheticModule::new(
+//!         "__host",
+//!         [SyntheticSymbol::function("host_double", host_double as *const ())],
+//!     );
+//!
 //!     let lib = Loader::new()
 //!         .load_dylib("path/to/plugin.so")?
 //!         .relocator()
-//!         .pre_find_fn(|name| {
-//!             if name == "host_double" {
-//!                 Some(host_double as *const ())
-//!             } else {
-//!                 None
-//!             }
-//!         })
+//!         .scope([host])
 //!         .relocate()?;
 //!
 //!     let run = unsafe {

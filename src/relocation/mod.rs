@@ -1,4 +1,4 @@
-//! Relocation configuration, symbol lookup hooks, and binding policy.
+//! Relocation configuration, symbol scopes, and binding policy.
 //!
 //! Raw images returned by [`crate::Loader`] become executable through the relocation
 //! pipeline. In practice, most users configure that pipeline through the builder
@@ -6,7 +6,7 @@
 //!
 //! This module exposes the main customization points used during relocation:
 //!
-//! - [`SymbolLookup`] for providing external symbol addresses
+//! - [`crate::image::SyntheticModule`] for providing external symbol addresses
 //! - [`RelocationHandler`] for intercepting or overriding relocations
 //! - [`Emulator`] for guest runtime hooks during non-native relocation
 //! - [`RelocationContext`] for inspecting the current relocation and search scope
@@ -31,10 +31,7 @@ pub(crate) use lazy::ResolvedBinding;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use lazy::dl_fixup;
 pub use traits::RelocationArch;
-pub(crate) use traits::{
-    HandlerHooks, LazyLookupHooks, LookupHooks, Relocatable, RelocateArgs, RelocationValueProvider,
-    SupportLazy,
-};
+pub(crate) use traits::{Relocatable, RelocateArgs, RelocationValueProvider, SupportLazy};
 
 pub use relocator::Relocator;
-pub use traits::{BindingMode, HandleResult, RelocationContext, RelocationHandler, SymbolLookup};
+pub use traits::{BindingMode, HandleResult, RelocationContext, RelocationHandler};

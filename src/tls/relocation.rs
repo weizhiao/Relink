@@ -15,7 +15,7 @@ mod enabled {
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
         relocation::{
-            RelocAddr, RelocHelper, RelocValue, RelocationArch, RelocationHandler, SymbolLookup,
+            RelocAddr, RelocHelper, RelocValue, RelocationArch, RelocationHandler,
             TlsDescEmuRequest,
         },
         segment::ElfSegments,
@@ -35,15 +35,13 @@ mod enabled {
         );
     }
 
-    pub(crate) fn handle_tls_reloc<D, Arch, PreS, PostS, PreH, PostH>(
-        helper: &mut RelocHelper<'_, D, Arch, PreS, PostS, PreH, PostH>,
+    pub(crate) fn handle_tls_reloc<D, Arch, PreH, PostH>(
+        helper: &mut RelocHelper<'_, D, Arch, PreH, PostH>,
         rel: &ElfRelType<Arch>,
     ) -> Result<TlsRelocOutcome>
     where
         D: 'static,
         Arch: RelocationArch,
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
     {
@@ -174,7 +172,7 @@ mod disabled {
     use crate::{
         FailureReason, Result,
         elf::{ElfRelEntry, ElfRelType},
-        relocation::{RelocAddr, RelocHelper, RelocationArch, RelocationHandler, SymbolLookup},
+        relocation::{RelocAddr, RelocHelper, RelocationArch, RelocationHandler},
     };
 
     #[inline]
@@ -183,15 +181,13 @@ mod disabled {
     }
 
     #[inline]
-    pub(crate) fn handle_tls_reloc<D, Arch, PreS, PostS, PreH, PostH>(
-        _helper: &mut RelocHelper<'_, D, Arch, PreS, PostS, PreH, PostH>,
+    pub(crate) fn handle_tls_reloc<D, Arch, PreH, PostH>(
+        _helper: &mut RelocHelper<'_, D, Arch, PreH, PostH>,
         rel: &ElfRelType<Arch>,
     ) -> Result<TlsRelocOutcome>
     where
         D: 'static,
         Arch: RelocationArch,
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
     {

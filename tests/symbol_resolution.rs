@@ -1,7 +1,11 @@
 mod support;
 
 use elf_loader::{
-    Loader, arch::NativeArch, image::LoadedCore, input::ElfBinary, relocation::RelocationArch,
+    Loader,
+    arch::NativeArch,
+    image::{LoadedCore, ModuleHandle},
+    input::ElfBinary,
+    relocation::RelocationArch,
 };
 
 const REL_GOT: u32 = <NativeArch as RelocationArch>::GOT.raw();
@@ -40,7 +44,7 @@ fn symbol_address(image: &LoadedCore<()>, symbol_name: &str) -> u64 {
 }
 
 #[test]
-fn pre_find_beats_scope() {
+fn synthetic_module_beats_loaded_scope() {
     let mut loader = Loader::new();
     let helper_output = write_helper_dylib(EXTERNAL_VAR_NAME, &[1, 2, 3, 4]);
     let helper = load_relocated_dylib(&mut loader, "libscope.so", &helper_output);
@@ -51,8 +55,10 @@ fn pre_find_beats_scope() {
         .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
         .expect("failed to load consumer")
         .relocator()
-        .pre_find(host_symbols.resolver.clone())
-        .scope(&[helper.clone()])
+        .scope([
+            ModuleHandle::from(host_symbols.source("__host")),
+            ModuleHandle::from(&helper),
+        ])
         .relocate()
         .expect("failed to relocate consumer");
 
@@ -60,16 +66,17 @@ fn pre_find_beats_scope() {
         got_slot_word(&relocated, &consumer_output, EXTERNAL_VAR_NAME),
         host_symbols.addresses[EXTERNAL_VAR_NAME] as u64
     );
+    let deps = relocated.deps().collect::<Vec<_>>();
     assert_eq!(
-        relocated.deps().len(),
+        deps.len(),
         1,
-        "scope entries are retained even when pre_find resolves the symbol"
+        "scope entries are retained even when a synthetic module resolves the symbol"
     );
-    assert_eq!(relocated.deps()[0].name(), helper.name());
+    assert_eq!(deps[0].name(), helper.name());
 }
 
 #[test]
-fn scope_beats_post_find() {
+fn loaded_scope_beats_late_synthetic_module() {
     let mut loader = Loader::new();
     let helper_output = write_helper_dylib(EXTERNAL_VAR_NAME, &[5, 6, 7, 8]);
     let helper = load_relocated_dylib(&mut loader, "libscope.so", &helper_output);
@@ -80,8 +87,10 @@ fn scope_beats_post_find() {
         .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
         .expect("failed to load consumer")
         .relocator()
-        .scope(&[helper.clone()])
-        .post_find(host_symbols.resolver.clone())
+        .scope([
+            ModuleHandle::from(&helper),
+            ModuleHandle::from(host_symbols.source("__host")),
+        ])
         .relocate()
         .expect("failed to relocate consumer");
 
@@ -89,16 +98,13 @@ fn scope_beats_post_find() {
         got_slot_word(&relocated, &consumer_output, EXTERNAL_VAR_NAME),
         symbol_address(&helper, EXTERNAL_VAR_NAME)
     );
-    assert_eq!(
-        relocated.deps().len(),
-        1,
-        "expected one retained dependency"
-    );
-    assert_eq!(relocated.deps()[0].name(), helper.name());
+    let deps = relocated.deps().collect::<Vec<_>>();
+    assert_eq!(deps.len(), 1, "expected one retained dependency");
+    assert_eq!(deps[0].name(), helper.name());
 }
 
 #[test]
-fn post_find_resolves_scope_miss() {
+fn synthetic_module_resolves_scope_miss() {
     let consumer_output = write_got_consumer(EXTERNAL_VAR_NAME);
     let host_symbols = TestHostSymbols::new();
 
@@ -106,7 +112,7 @@ fn post_find_resolves_scope_miss() {
         .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
         .expect("failed to load consumer")
         .relocator()
-        .post_find(host_symbols.resolver.clone())
+        .scope([host_symbols.source("__host")])
         .relocate()
         .expect("failed to relocate consumer");
 
@@ -116,7 +122,7 @@ fn post_find_resolves_scope_miss() {
     );
     assert!(
         relocated.deps().is_empty(),
-        "post_find should not retain scope dependencies"
+        "synthetic modules should not appear as loaded dependencies"
     );
 }
 
@@ -142,11 +148,12 @@ fn extend_scope_keeps_existing_precedence() {
         got_slot_word(&relocated, &consumer_output, SHARED_VAR_NAME),
         symbol_address(&first, SHARED_VAR_NAME)
     );
+    let deps = relocated.deps().collect::<Vec<_>>();
     assert_eq!(
-        relocated.deps().len(),
+        deps.len(),
         2,
         "all scope entries should be retained as dependencies"
     );
-    assert_eq!(relocated.deps()[0].name(), first.name());
-    assert_eq!(relocated.deps()[1].name(), second.name());
+    assert_eq!(deps[0].name(), first.name());
+    assert_eq!(deps[1].name(), second.name());
 }

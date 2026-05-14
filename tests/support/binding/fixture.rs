@@ -3,7 +3,11 @@
 use std::collections::HashMap;
 
 use elf_loader::{
-    Loader, arch::NativeArch, image::LoadedCore, input::ElfBinary, relocation::RelocationArch,
+    Loader,
+    arch::NativeArch,
+    image::{LoadedCore, ModuleHandle},
+    input::ElfBinary,
+    relocation::RelocationArch,
 };
 
 const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
@@ -149,14 +153,14 @@ impl BindingFixture {
             .load_dylib(ElfBinary::new("test_dynamic.so", &main_output.data))
             .expect("failed to load dylib");
 
-        let prepared_relocator = pending_dylib
-            .relocator()
-            .pre_find(self.host_symbols.resolver.clone())
-            .scope(&[helper_dylib.clone()]);
+        let prepared_relocator = pending_dylib.relocator().scope([
+            ModuleHandle::from(self.host_symbols.source("__host")),
+            ModuleHandle::from(&helper_dylib),
+        ]);
 
         #[cfg(feature = "lazy-binding")]
         let loaded_dylib = if binding.is_lazy() {
-            prepared_relocator.share_find_with_lazy().lazy().relocate()
+            prepared_relocator.lazy().relocate()
         } else {
             prepared_relocator.relocate()
         }

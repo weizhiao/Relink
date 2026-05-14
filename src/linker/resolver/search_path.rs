@@ -5,7 +5,7 @@ use crate::{
     linker::{DependencyRequest, RootRequest},
     sync::Arc,
 };
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
 
 /// Runtime directory provider used by [`SearchDirSource::Dynamic`].
@@ -36,7 +36,7 @@ impl SearchDirSource {
     where
         F: for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()> + 'static,
     {
-        Self::Dynamic(Arc::new(resolver))
+        Self::Dynamic(Arc::from(Box::new(resolver) as Box<SearchDirProvider>))
     }
 }
 
@@ -185,7 +185,9 @@ impl SearchPathResolver {
     where
         F: for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()> + 'static,
     {
-        self.push_search_dir_source(SearchDirSource::Dynamic(Arc::new(provider)))
+        self.push_search_dir_source(SearchDirSource::Dynamic(Arc::from(
+            Box::new(provider) as Box<SearchDirProvider>
+        )))
     }
 
     #[inline]

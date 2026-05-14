@@ -43,12 +43,9 @@ fn copy_relocation_copies_bytes() {
 
     let copy = relocation_for_symbol(&consumer_output, REL_COPY, COPY_SOURCE_NAME);
     assert_eq!(copy.section, SectionKind::Data);
-    assert_eq!(
-        relocated.deps().len(),
-        1,
-        "expected one retained dependency"
-    );
-    assert_eq!(relocated.deps()[0].name(), helper.name());
+    let deps = relocated.deps().collect::<Vec<_>>();
+    assert_eq!(deps.len(), 1, "expected one retained dependency");
+    assert_eq!(deps[0].name(), helper.name());
 
     unsafe {
         let src = helper
@@ -149,12 +146,9 @@ fn copy_relocations_keep_symbols_separate() {
         .relocate()
         .expect("failed to relocate copy consumer");
 
-    assert_eq!(
-        relocated.deps().len(),
-        1,
-        "expected one retained dependency"
-    );
-    assert_eq!(relocated.deps()[0].name(), helper.name());
+    let deps = relocated.deps().collect::<Vec<_>>();
+    assert_eq!(deps.len(), 1, "expected one retained dependency");
+    assert_eq!(deps[0].name(), helper.name());
 
     for (name, expected_bytes) in copy_sources {
         let relocation = relocation_for_symbol(&consumer_output, REL_COPY, name);

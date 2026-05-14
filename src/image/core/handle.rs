@@ -1,7 +1,7 @@
 use crate::{
     ParsePhdrError, Result,
-    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
-    image::DynamicInfo,
+    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, PreCompute, SymbolInfo, SymbolTable},
+    image::{DynamicInfo, Module},
     loader::{DynLifecycleHandler, LifecycleContext},
     relocation::{EmuContext, EmuLifecycle, Emulator, RelocAddr, RelocationArch},
     segment::ElfSegments,
@@ -11,7 +11,7 @@ use crate::{
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::{fmt::Debug, ptr::NonNull};
+use core::{any::Any, fmt::Debug, ptr::NonNull};
 
 /// Inner structure for ElfCore
 #[repr(C)]
@@ -365,5 +365,55 @@ impl<D, Arch: RelocationArch> Debug for ElfCore<D, Arch> {
             .field("mapped_len", &self.mapped_len())
             .field("tls_mod_id", &self.tls_mod_id())
             .finish()
+    }
+}
+
+impl<D, Arch> Module<Arch> for ElfCore<D, Arch>
+where
+    D: 'static,
+    Arch: RelocationArch,
+{
+    #[inline]
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    #[inline]
+    fn name(&self) -> &str {
+        ElfCore::name(self)
+    }
+
+    #[inline]
+    fn soname(&self) -> Option<&str> {
+        ElfCore::soname(self)
+    }
+
+    #[inline]
+    fn lookup_symbol<'source>(
+        &'source self,
+        symbol: &SymbolInfo<'_>,
+        precompute: &mut PreCompute,
+    ) -> Option<&'source ElfSymbol<Arch::Layout>> {
+        self.symtab().lookup_filter(symbol, precompute)
+    }
+
+    #[inline]
+    fn base_addr(&self) -> usize {
+        self.base()
+    }
+
+    #[inline]
+    fn segment_slice(&self, offset: usize, len: usize) -> Option<&[u8]> {
+        Some(ElfCore::segment_slice(self, offset, len))
+    }
+
+    #[inline]
+    fn tls_mod_id(&self) -> Option<TlsModuleId> {
+        ElfCore::tls_mod_id(self)
+    }
+
+    #[inline]
+    fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
+        ElfCore::tls_tp_offset(self)
     }
 }

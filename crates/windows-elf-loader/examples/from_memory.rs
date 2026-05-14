@@ -1,5 +1,6 @@
-use std::{collections::HashMap, ffi::CStr};
+use std::ffi::CStr;
 
+use elf_loader::image::{ModuleHandle, SyntheticModule, SyntheticSymbol};
 use windows_elf_loader::WinElfLoader;
 
 fn main() {
@@ -8,31 +9,30 @@ fn main() {
         println!("{}", s);
     }
 
-    let mut map = HashMap::new();
-    map.insert("print", print as _);
-    let pre_find = |name: &str| -> Option<*const ()> { map.get(name).copied() };
+    let host = ModuleHandle::from(SyntheticModule::new(
+        "__host",
+        [SyntheticSymbol::function("print", print as *const ())],
+    ));
     let mut loader = WinElfLoader::new();
     let liba = loader
         .load_dylib("liba", include_bytes!("../example_dylib/liba.so"))
         .unwrap()
         .relocator()
-        .pre_find_fn(pre_find)
+        .scope([host.clone()])
         .relocate()
         .unwrap();
     let libb = loader
         .load_dylib("libb", include_bytes!("../example_dylib/libb.so"))
         .unwrap()
         .relocator()
-        .pre_find_fn(pre_find)
-        .scope([&liba])
+        .scope([host.clone(), ModuleHandle::from(&liba)])
         .relocate()
         .unwrap();
     let libc = loader
         .load_dylib("libc", include_bytes!("../example_dylib/libc.so"))
         .unwrap()
         .relocator()
-        .pre_find_fn(pre_find)
-        .scope([&libb])
+        .scope([host.clone(), ModuleHandle::from(&libb)])
         .relocate()
         .unwrap();
     let f = unsafe { liba.get::<extern "sysv64" fn() -> i32>("a").unwrap() };

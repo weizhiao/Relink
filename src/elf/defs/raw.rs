@@ -480,7 +480,15 @@ macro_rules! impl_rela_raw {
 impl_rela_raw!(elf::relocation::Elf32_Rela);
 impl_rela_raw!(elf::relocation::Elf64_Rela);
 
-pub trait ElfSymRaw: 'static {
+pub trait ElfSymRaw: Send + Sync + 'static {
+    fn from_fields(
+        st_name: usize,
+        st_value: usize,
+        st_size: usize,
+        st_info: u8,
+        st_other: u8,
+        st_shndx: u16,
+    ) -> Self;
     fn st_name(&self) -> usize;
     fn st_value(&self) -> usize;
     fn set_st_value(&mut self, value: usize);
@@ -493,6 +501,25 @@ pub trait ElfSymRaw: 'static {
 macro_rules! impl_sym_raw {
     ($ty:ty) => {
         impl ElfSymRaw for $ty {
+            #[inline]
+            fn from_fields(
+                st_name: usize,
+                st_value: usize,
+                st_size: usize,
+                st_info: u8,
+                st_other: u8,
+                st_shndx: u16,
+            ) -> Self {
+                Self {
+                    st_name: st_name as _,
+                    st_value: st_value as _,
+                    st_size: st_size as _,
+                    st_info,
+                    st_other,
+                    st_shndx: st_shndx as _,
+                }
+            }
+
             #[inline]
             fn st_name(&self) -> usize {
                 self.st_name as usize

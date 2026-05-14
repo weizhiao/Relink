@@ -1,11 +1,10 @@
 use crate::{
     Result,
     elf::ElfRelType,
-    image::{LoadedCore, RawObject},
+    image::{ModuleScope, RawObject},
     loader::LifecycleContext,
     logging,
-    relocation::{RelocHelper, RelocationArch, RelocationHandler, SymbolLookup},
-    sync::Arc,
+    relocation::{RelocHelper, RelocationArch, RelocationHandler},
 };
 
 use alloc::{boxed::Box, vec::Vec};
@@ -26,17 +25,13 @@ impl<D: 'static, Arch> RawObject<D, Arch>
 where
     Arch: RelocationArch,
 {
-    pub(crate) fn relocate_impl<PreS, PostS, PreH, PostH>(
+    pub(crate) fn relocate_impl<PreH, PostH>(
         mut self,
-        scope: Arc<[LoadedCore<D, Arch>]>,
-        pre_find: &PreS,
-        post_find: &PostS,
+        scope: ModuleScope<Arch>,
         pre_handler: &PreH,
         post_handler: &PostH,
     ) -> Result<crate::image::LoadedCore<D, Arch>>
     where
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
     {
@@ -44,9 +39,7 @@ where
 
         let mut helper = RelocHelper::new(
             &self.core,
-            scope.clone(),
-            pre_find,
-            post_find,
+            scope,
             pre_handler,
             post_handler,
             self.core.tls_get_addr(),
@@ -62,8 +55,11 @@ where
             }
         }
 
-        let RelocHelper { tls_desc_args, .. } = helper;
-
+        let RelocHelper {
+            scope,
+            tls_desc_args,
+            ..
+        } = helper;
         unsafe {
             self.core.set_tls_desc_args(tls_desc_args);
         }

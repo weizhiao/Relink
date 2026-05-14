@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-use elf_loader::relocation::SymbolLookup;
+use elf_loader::image::{SyntheticModule, SyntheticSymbol};
 
 pub(crate) const EXTERNAL_FUNC_NAME: &str = "external_func";
 pub(crate) const EXTERNAL_FUNC_NAME2: &str = "external_func2";
@@ -45,18 +45,6 @@ static mut EXTERNAL_VAR: i32 = 100;
 
 pub(crate) struct TestHostSymbols {
     pub(crate) addresses: HashMap<&'static str, usize>,
-    pub(crate) resolver: TestHostSymbolResolver,
-}
-
-#[derive(Clone)]
-pub(crate) struct TestHostSymbolResolver {
-    addresses: Arc<HashMap<&'static str, usize>>,
-}
-
-impl SymbolLookup for TestHostSymbolResolver {
-    fn lookup(&self, name: &str) -> Option<*const ()> {
-        self.addresses.get(name).map(|&addr| addr as *const ())
-    }
 }
 
 impl TestHostSymbols {
@@ -67,13 +55,20 @@ impl TestHostSymbols {
             (EXTERNAL_VAR_NAME, &raw const EXTERNAL_VAR as usize),
         ]);
 
-        let resolver = TestHostSymbolResolver {
-            addresses: Arc::new(addresses.clone()),
-        };
+        Self { addresses }
+    }
 
-        Self {
-            addresses,
-            resolver,
+    pub(crate) fn source(&self, name: impl Into<String>) -> SyntheticModule {
+        let mut source = SyntheticModule::empty(name);
+        for (&symbol_name, &address) in self.addresses.iter() {
+            let symbol = match symbol_name {
+                EXTERNAL_FUNC_NAME | EXTERNAL_FUNC_NAME2 => {
+                    SyntheticSymbol::function(symbol_name, address as *const ())
+                }
+                _ => SyntheticSymbol::object(symbol_name, address as *const (), 0),
+            };
+            source.insert(symbol);
         }
+        source
     }
 }

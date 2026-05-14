@@ -39,6 +39,19 @@ pub struct ElfSymbol<L: ElfLayout = NativeElfLayout> {
 }
 
 impl<L: ElfLayout> ElfSymbol<L> {
+    pub(crate) fn synthetic(
+        value: usize,
+        size: usize,
+        bind: ElfSymbolBind,
+        symbol_type: ElfSymbolType,
+        section_index: ElfSectionIndex,
+    ) -> Self {
+        let st_info = (bind.raw() << 4) | (symbol_type.raw() & 0xf);
+        Self {
+            sym: L::Sym::from_fields(0, value, size, st_info, 0, section_index.raw()),
+        }
+    }
+
     /// Returns the symbol value.
     #[inline]
     pub fn st_value(&self) -> usize {

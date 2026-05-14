@@ -17,12 +17,11 @@ use super::{
 use crate::{
     LinkerError, Loader, Result,
     entity::SecondaryMap,
-    image::{LoadedCore, RawDynamic, ScannedDynamic},
+    image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     linker::session::ResolveSession,
     loader::LoadHook,
     os::{DefaultMmap, Mmap},
-    relocation::{RelocationArch, RelocationHandler, Relocator, SymbolLookup},
-    sync::Arc,
+    relocation::{RelocationArch, RelocationHandler, Relocator},
     tls::TlsResolver,
 };
 use alloc::{
@@ -90,13 +89,8 @@ pub struct Linker<
     Arch: RelocationArch = crate::arch::NativeArch,
     L = Loader<DefaultMmap, (), (), (), Arch>,
     R = (),
-    PreS = (),
-    PostS = (),
-    LazyPreS = (),
-    LazyPostS = (),
     PreH = (),
     PostH = (),
-    ScopeD: 'static = (),
     P = DefaultRelocationPlanner,
     O = (),
     V = (),
@@ -104,7 +98,7 @@ pub struct Linker<
     loader: L,
     resolver: R,
     pipeline: LinkPipeline<'a, K, Arch>,
-    relocator: Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, Arch>,
+    relocator: Relocator<(), PreH, PostH, (), Arch>,
     planner: P,
     observer: O,
     visible_modules: V,
@@ -148,11 +142,6 @@ where
         (),
         (),
         (),
-        (),
-        (),
-        (),
-        (),
-        (),
         DefaultRelocationPlanner,
         (),
         (),
@@ -184,8 +173,7 @@ where
     }
 }
 
-impl<'a, K, D, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD: 'static, P, O, V, Arch>
-    Linker<'a, K, D, Arch, L, R, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, P, O, V>
+impl<'a, K, D, L, R, PreH, PostH, P, O, V, Arch> Linker<'a, K, D, Arch, L, R, PreH, PostH, P, O, V>
 where
     K: Clone + Ord,
     D: 'static,
@@ -194,24 +182,7 @@ where
     pub fn resolver<NewR>(
         self,
         resolver: NewR,
-    ) -> Linker<
-        'a,
-        K,
-        D,
-        Arch,
-        L,
-        NewR,
-        PreS,
-        PostS,
-        LazyPreS,
-        LazyPostS,
-        PreH,
-        PostH,
-        ScopeD,
-        P,
-        O,
-        V,
-    > {
+    ) -> Linker<'a, K, D, Arch, L, NewR, PreH, PostH, P, O, V> {
         Linker {
             loader: self.loader,
             resolver,
@@ -225,47 +196,12 @@ where
         }
     }
 
-    pub fn map_relocator<
-        NewPreS,
-        NewPostS,
-        NewLazyPreS,
-        NewLazyPostS,
-        NewPreH,
-        NewPostH,
-        NewScopeD: 'static,
-    >(
+    pub fn map_relocator<NewPreH, NewPostH>(
         self,
         configure: impl FnOnce(
-            Relocator<(), PreS, PostS, LazyPreS, LazyPostS, PreH, PostH, ScopeD, Arch>,
-        ) -> Relocator<
-            (),
-            NewPreS,
-            NewPostS,
-            NewLazyPreS,
-            NewLazyPostS,
-            NewPreH,
-            NewPostH,
-            NewScopeD,
-            Arch,
-        >,
-    ) -> Linker<
-        'a,
-        K,
-        D,
-        Arch,
-        L,
-        R,
-        NewPreS,
-        NewPostS,
-        NewLazyPreS,
-        NewLazyPostS,
-        NewPreH,
-        NewPostH,
-        NewScopeD,
-        P,
-        O,
-        V,
-    > {
+            Relocator<(), PreH, PostH, (), Arch>,
+        ) -> Relocator<(), NewPreH, NewPostH, (), Arch>,
+    ) -> Linker<'a, K, D, Arch, L, R, NewPreH, NewPostH, P, O, V> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -282,24 +218,7 @@ where
     pub fn planner<NewP>(
         self,
         planner: NewP,
-    ) -> Linker<
-        'a,
-        K,
-        D,
-        Arch,
-        L,
-        R,
-        PreS,
-        PostS,
-        LazyPreS,
-        LazyPostS,
-        PreH,
-        PostH,
-        ScopeD,
-        NewP,
-        O,
-        V,
-    > {
+    ) -> Linker<'a, K, D, Arch, L, R, PreH, PostH, NewP, O, V> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -316,24 +235,7 @@ where
     pub fn observer<NewO>(
         self,
         observer: NewO,
-    ) -> Linker<
-        'a,
-        K,
-        D,
-        Arch,
-        L,
-        R,
-        PreS,
-        PostS,
-        LazyPreS,
-        LazyPostS,
-        PreH,
-        PostH,
-        ScopeD,
-        P,
-        NewO,
-        V,
-    > {
+    ) -> Linker<'a, K, D, Arch, L, R, PreH, PostH, P, NewO, V> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -350,24 +252,7 @@ where
     pub fn visible_modules<NewV>(
         self,
         visible_modules: NewV,
-    ) -> Linker<
-        'a,
-        K,
-        D,
-        Arch,
-        L,
-        R,
-        PreS,
-        PostS,
-        LazyPreS,
-        LazyPostS,
-        PreH,
-        PostH,
-        ScopeD,
-        P,
-        O,
-        NewV,
-    > {
+    ) -> Linker<'a, K, D, Arch, L, R, PreH, PostH, P, O, NewV> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -390,44 +275,8 @@ where
     }
 }
 
-impl<
-    'a,
-    K,
-    D,
-    M,
-    H,
-    Tls,
-    Arch,
-    R,
-    PreS,
-    PostS,
-    LazyPreS,
-    LazyPostS,
-    PreH,
-    PostH,
-    ScopeD: 'static,
-    P,
-    O,
-    V,
->
-    Linker<
-        'a,
-        K,
-        D,
-        Arch,
-        Loader<M, H, D, Tls, Arch>,
-        R,
-        PreS,
-        PostS,
-        LazyPreS,
-        LazyPostS,
-        PreH,
-        PostH,
-        ScopeD,
-        P,
-        O,
-        V,
-    >
+impl<'a, K, D, M, H, Tls, Arch, R, PreH, PostH, P, O, V>
+    Linker<'a, K, D, Arch, Loader<M, H, D, Tls, Arch>, R, PreH, PostH, P, O, V>
 where
     K: Clone + Ord,
     D: 'static,
@@ -439,24 +288,7 @@ where
     pub fn map_loader<NewM, NewH, NewD, NewTls>(
         self,
         configure: impl FnOnce(Loader<M, H, D, Tls, Arch>) -> Loader<NewM, NewH, NewD, NewTls, Arch>,
-    ) -> Linker<
-        'a,
-        K,
-        NewD,
-        Arch,
-        Loader<NewM, NewH, NewD, NewTls, Arch>,
-        R,
-        PreS,
-        PostS,
-        LazyPreS,
-        LazyPostS,
-        PreH,
-        PostH,
-        ScopeD,
-        P,
-        O,
-        V,
-    >
+    ) -> Linker<'a, K, NewD, Arch, Loader<NewM, NewH, NewD, NewTls, Arch>, R, PreH, PostH, P, O, V>
     where
         NewM: Mmap,
         NewH: LoadHook<Arch::Layout>,
@@ -478,44 +310,8 @@ where
 }
 
 #[allow(private_bounds)]
-impl<
-    'a,
-    K,
-    D,
-    M,
-    H,
-    Tls,
-    Arch,
-    Resolver,
-    PreS,
-    PostS,
-    LazyPreS,
-    LazyPostS,
-    PreH,
-    PostH,
-    ScopeD: 'static,
-    P,
-    O,
-    V,
->
-    Linker<
-        'a,
-        K,
-        D,
-        Arch,
-        Loader<M, H, D, Tls, Arch>,
-        Resolver,
-        PreS,
-        PostS,
-        LazyPreS,
-        LazyPostS,
-        PreH,
-        PostH,
-        ScopeD,
-        P,
-        O,
-        V,
-    >
+impl<'a, K, D, M, H, Tls, Arch, Resolver, PreH, PostH, P, O, V>
+    Linker<'a, K, D, Arch, Loader<M, H, D, Tls, Arch>, Resolver, PreH, PostH, P, O, V>
 where
     K: Clone + Ord,
     D: Default + 'static,
@@ -524,13 +320,8 @@ where
     Tls: TlsResolver,
     Arch: RelocationArch + crate::relocation::RelocationValueProvider + GotPltTarget,
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
-    PreS: SymbolLookup + Clone,
-    PostS: SymbolLookup + Clone,
-    LazyPreS: SymbolLookup + Send + Sync + 'static + Clone,
-    LazyPostS: SymbolLookup + Send + Sync + 'static + Clone,
     PreH: RelocationHandler<Arch> + Clone,
     PostH: RelocationHandler<Arch> + Clone,
-    ScopeD: 'static,
     P: RelocationPlanner<K, D, Arch>,
     O: LoadObserver<K, D, Arch>,
     V: VisibleModules<K, D, Arch>,
@@ -871,7 +662,8 @@ where
 
         let committed = Self::commit_session(context, &mut session);
 
-        let root = visible_loaded_id(context, &self.visible_modules, root)
+        let root = visible_module(context, &self.visible_modules, root)
+            .and_then(|module| module.as_loaded::<D>().cloned())
             .ok_or_else(|| LinkerError::context("load root missing after commit"))?;
         Ok(LoadResult::new(root, committed))
     }
@@ -962,24 +754,25 @@ where
         context: &LinkContext<K, D, Meta, Arch>,
         session: &LoadSession<D, Arch>,
         visible_modules: &V,
-    ) -> Arc<[LoadedCore<D, Arch>]>
+    ) -> ModuleScope<Arch>
     where
         K: Ord,
     {
-        session
+        let modules = session
             .resolve
             .group_order
             .iter()
             .map(|id| {
                 if let Some(entry) = session.resolve.entries.get(id) {
-                    unsafe { LoadedCore::from_core(entry.payload.core()) }
+                    let module = unsafe { LoadedCore::from_core(entry.payload.core()) };
+                    ModuleHandle::from(module)
                 } else {
-                    visible_loaded_id(context, visible_modules, *id)
+                    visible_module(context, visible_modules, *id)
                         .expect("scope key must resolve to a visible or pending module")
                 }
             })
-            .collect::<Vec<_>>()
-            .into()
+            .collect::<Vec<_>>();
+        ModuleScope::from(modules)
     }
 
     fn commit_session<Meta>(
@@ -1082,25 +875,25 @@ where
     context
         .committed
         .key_id(key)
-        .and_then(|id| context.committed.get(id))
-        .cloned()
-        .or_else(|| visible_modules.loaded(key))
+        .and_then(|id| visible_module(context, visible_modules, id))
+        .or_else(|| visible_modules.module(key))
+        .and_then(|module| module.as_loaded::<D>().cloned())
 }
 
 #[inline]
-fn visible_loaded_id<K, D, Meta, V, Arch>(
+fn visible_module<K, D, Meta, V, Arch>(
     context: &LinkContext<K, D, Meta, Arch>,
     visible_modules: &V,
     id: KeyId,
-) -> Option<LoadedCore<D, Arch>>
+) -> Option<ModuleHandle<Arch>>
 where
     K: Clone + Ord,
     D: 'static,
     Arch: RelocationArch,
     V: VisibleModules<K, D, Arch>,
 {
-    context.committed.get(id).cloned().or_else(|| {
+    context.committed.get(id).map(Into::into).or_else(|| {
         let key = context.committed.key(id)?;
-        visible_modules.loaded(key)
+        visible_modules.module(key)
     })
 }

@@ -6,9 +6,9 @@ use crate::{
     logging,
     relocation::{
         BindingMode, RelocHelper, RelocValue, RelocateArgs, RelocationArch, RelocationHandler,
-        ResolvedBinding, SymbolLookup, likely, reloc_error, resolve_ifunc, unlikely,
+        ResolvedBinding, likely, reloc_error, resolve_ifunc, unlikely,
     },
-    tls::{TlsRelocOutcome, handle_tls_reloc, lookup_tls_get_addr},
+    tls::{TlsRelocOutcome, handle_tls_reloc},
 };
 use core::num::NonZeroUsize;
 
@@ -24,16 +24,12 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
         Ok(())
     }
 
-    pub(crate) fn relocate_impl<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    pub(crate) fn relocate_impl<PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreH, PostH>,
     ) -> Result<LoadedCore<D, Arch>>
     where
         D: 'static,
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
-        LazyPreS: SymbolLookup + Send + Sync + 'static,
-        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
     {
@@ -42,9 +38,8 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
         let RelocateArgs {
             scope,
             binding,
-            lookup,
-            lazy_lookup,
-            handlers,
+            pre_handler,
+            post_handler,
             emu,
             ..
         } = args;
@@ -67,22 +62,11 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
             logging::debug!("Using lazy binding for {}", self.name());
         }
 
-        let hooked_pre_find = |name: &str| -> Option<*const ()> {
-            if Arch::SUPPORTS_NATIVE_RUNTIME {
-                if let Some(symbol) = lookup_tls_get_addr(name, tls_get_addr) {
-                    return Some(symbol);
-                }
-            }
-            lookup.pre_find.lookup(name)
-        };
-
         let mut helper = RelocHelper::new(
             self.core_ref(),
             scope,
-            &hooked_pre_find,
-            lookup.post_find,
-            handlers.pre,
-            handlers.post,
+            pre_handler,
+            post_handler,
             tls_get_addr,
             emu.clone(),
         );
@@ -94,28 +78,26 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
         }
 
         let RelocHelper {
-            scope: deps,
+            scope,
             tls_desc_args,
             ..
         } = helper;
-
         // Persist TLSDESC backing storage collected during relocation.
         unsafe {
             self.core_ref().set_tls_desc_args(tls_desc_args);
         }
 
-        if !deps.is_empty() {
-            logging::debug!(
-                "[{}] Bound dependencies: {:?}",
-                self.name(),
-                deps.iter()
-                    .map(|d| d.name())
-                    .collect::<alloc::vec::Vec<_>>()
-            );
+        let dep_names = scope
+            .iter()
+            .filter_map(|source| source.as_any().downcast_ref::<LoadedCore<D, Arch>>())
+            .map(|d| d.name())
+            .collect::<alloc::vec::Vec<_>>();
+        if !dep_names.is_empty() {
+            logging::debug!("[{}] Bound dependencies: {:?}", self.name(), dep_names);
         }
 
         self.apply_relro(&binding)?;
-        self.install_lazy_lookup(binding, lazy_lookup, deps.clone())?;
+        self.install_lazy_lookup(binding, scope.clone())?;
 
         if Arch::SUPPORTS_NATIVE_RUNTIME {
             logging::debug!("Executing initialization functions for {}", self.name());
@@ -135,7 +117,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
 
         logging::info!("Relocation completed for {}", self.name());
 
-        Ok(unsafe { LoadedCore::from_core_deps(self.into_core(), deps) })
+        Ok(unsafe { LoadedCore::from_core_deps(self.into_core(), scope) })
     }
 }
 
@@ -183,14 +165,12 @@ fn write_reloc_addr<Arch: RelocationArch>(
 
 impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     /// Relocate PLT (Procedure Linkage Table) entries
-    fn relocate_pltrel<PreS, PostS, PreH, PostH>(
+    fn relocate_pltrel<PreH, PostH>(
         &self,
         binding: &ResolvedBinding,
-        helper: &mut RelocHelper<'_, D, Arch, PreS, PostS, PreH, PostH>,
+        helper: &mut RelocHelper<'_, D, Arch, PreH, PostH>,
     ) -> Result<&Self>
     where
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
     {
@@ -243,7 +223,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 // gate for TLSDESC. If the built-in path cannot handle it,
                 // keep the specific TLS failure for the final error while
                 // still giving the post handler a chance.
-                match handle_tls_reloc::<_, Arch, _, _, _, _>(helper, rel)? {
+                match handle_tls_reloc::<_, Arch, _, _>(helper, rel)? {
                     TlsRelocOutcome::Applied => continue,
                     TlsRelocOutcome::Failed(reason) => failure_reason = reason,
                 }
@@ -311,13 +291,11 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     }
 
     /// Perform dynamic relocations (non-PLT, non-relative)
-    fn relocate_dynrel<PreS, PostS, PreH, PostH>(
+    fn relocate_dynrel<PreH, PostH>(
         &self,
-        helper: &mut RelocHelper<'_, D, Arch, PreS, PostS, PreH, PostH>,
+        helper: &mut RelocHelper<'_, D, Arch, PreH, PostH>,
     ) -> Result<&Self>
     where
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
     {
@@ -362,9 +340,10 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                     if let Some(sym) = symdef.symbol() {
                         let len = core.symtab().symbol_idx(r_sym).0.st_size();
                         let dest = core.segments().get_slice_mut::<u8>(rel.r_offset(), len);
-                        let src = symdef.segment_slice(sym.st_value(), len);
-                        dest.copy_from_slice(src);
-                        continue;
+                        if let Some(src) = symdef.segment_slice(sym.st_value(), len) {
+                            dest.copy_from_slice(src);
+                            continue;
+                        }
                     }
                 }
                 failure_reason = FailureReason::UnknownSymbol;
@@ -389,7 +368,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 // gates TLSDESC on SUPPORTS_NATIVE_RUNTIME internally.
                 // Anything the built-in path cannot handle still gets a post
                 // handler chance before reporting the specific TLS reason.
-                match handle_tls_reloc::<_, Arch, _, _, _, _>(helper, rel)? {
+                match handle_tls_reloc::<_, Arch, _, _>(helper, rel)? {
                     TlsRelocOutcome::Applied => continue,
                     TlsRelocOutcome::Failed(reason) => failure_reason = reason,
                 }

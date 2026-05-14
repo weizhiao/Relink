@@ -3,7 +3,7 @@ mod support;
 use elf_loader::{
     CustomError, Loader,
     elf::{ElfFileType, ElfProgramType},
-    image::{LoadedCore, ModuleCapability, ScannedElf},
+    image::{LoadedCore, ModuleCapability, ModuleHandle, ScannedElf},
     input::ElfBinary,
     linker::{ArenaDescriptor, ArenaSharing, MemoryClass},
     linker::{
@@ -183,8 +183,8 @@ impl VisibleModules<&'static str, ()> for StaticVisibleModule {
         (*key == self.key).then(|| self.direct_deps.clone())
     }
 
-    fn loaded(&self, key: &&'static str) -> Option<LoadedCore<()>> {
-        (*key == self.key).then(|| self.module.clone())
+    fn module(&self, key: &&'static str) -> Option<ModuleHandle> {
+        (*key == self.key).then(|| self.module.clone().into())
     }
 }
 

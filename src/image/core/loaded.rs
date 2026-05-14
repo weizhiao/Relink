@@ -2,15 +2,18 @@ use super::{ElfCore, ElfCoreRef};
 use crate::{
     Result,
     arch::ArchKind,
-    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, SymbolTable},
+    elf::{
+        ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, PreCompute, SymbolInfo,
+        SymbolTable,
+    },
+    image::{Module, ModuleHandle, ModuleScope},
     relocation::{RelocAddr, RelocationArch},
     segment::ElfSegments,
-    sync::Arc,
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::{ffi::c_void, fmt::Debug, ptr::NonNull};
+use core::{any::Any, ffi::c_void, fmt::Debug, marker::PhantomData, ptr::NonNull};
 use elf::abi::DF_STATIC_TLS;
 
 /// A fully loaded and relocated ELF module with retained dependencies.
@@ -19,8 +22,66 @@ use elf::abi::DF_STATIC_TLS;
 /// [`crate::image::LoadedExec`] values, and loaded object-file images.
 pub struct LoadedCore<D: 'static = (), Arch: RelocationArch = crate::arch::NativeArch> {
     pub(crate) core: ElfCore<D, Arch>,
-    pub(crate) deps: Arc<[LoadedCore<D, Arch>]>,
+    pub(crate) deps: ModuleScope<Arch>,
 }
+
+/// Iterator over the loaded-library dependencies retained by a [`LoadedCore`].
+pub struct LoadedDeps<'a, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
+    modules: &'a [ModuleHandle<Arch>],
+    next: usize,
+    remaining: usize,
+    _marker: PhantomData<fn() -> D>,
+}
+
+impl<'a, D: 'static, Arch: RelocationArch> LoadedDeps<'a, D, Arch> {
+    #[inline]
+    fn new(modules: &'a [ModuleHandle<Arch>]) -> Self {
+        let remaining = modules
+            .iter()
+            .filter(|module| module.as_any().is::<LoadedCore<D, Arch>>())
+            .count();
+        Self {
+            modules,
+            next: 0,
+            remaining,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Returns the number of loaded dependencies remaining in this iterator.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.remaining
+    }
+
+    /// Returns whether this iterator has no loaded dependencies remaining.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.remaining == 0
+    }
+}
+
+impl<'a, D: 'static, Arch: RelocationArch> Iterator for LoadedDeps<'a, D, Arch> {
+    type Item = &'a LoadedCore<D, Arch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(module) = self.modules.get(self.next) {
+            self.next += 1;
+            if let Some(dep) = module.as_any().downcast_ref::<LoadedCore<D, Arch>>() {
+                self.remaining -= 1;
+                return Some(dep);
+            }
+        }
+        None
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch> ExactSizeIterator for LoadedDeps<'_, D, Arch> {}
 
 impl<D: 'static, Arch: RelocationArch> Debug for LoadedCore<D, Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -30,8 +91,7 @@ impl<D: 'static, Arch: RelocationArch> Debug for LoadedCore<D, Arch> {
             .field(
                 "deps",
                 &self
-                    .deps
-                    .iter()
+                    .deps()
                     .map(|d| d.name())
                     .collect::<alloc::vec::Vec<_>>(),
             )
@@ -44,7 +104,7 @@ impl<D: 'static, Arch: RelocationArch> Clone for LoadedCore<D, Arch> {
     fn clone(&self) -> Self {
         LoadedCore {
             core: self.core.clone(),
-            deps: Arc::clone(&self.deps),
+            deps: self.deps.clone(),
         }
     }
 }
@@ -53,6 +113,20 @@ impl<D: 'static, Arch: RelocationArch> From<&LoadedCore<D, Arch>> for LoadedCore
     #[inline]
     fn from(module: &LoadedCore<D, Arch>) -> Self {
         module.clone()
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch> From<LoadedCore<D, Arch>> for ModuleHandle<Arch> {
+    #[inline]
+    fn from(module: LoadedCore<D, Arch>) -> Self {
+        Self::new(module)
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch> From<&LoadedCore<D, Arch>> for ModuleHandle<Arch> {
+    #[inline]
+    fn from(module: &LoadedCore<D, Arch>) -> Self {
+        Self::new(module.clone())
     }
 }
 
@@ -66,13 +140,13 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     pub unsafe fn from_core(core: ElfCore<D, Arch>) -> Self {
         LoadedCore {
             core,
-            deps: Arc::from([]),
+            deps: ModuleScope::empty(),
         }
     }
 
-    /// Returns a slice of the libraries this module depends on.
-    pub fn deps(&self) -> &[LoadedCore<D, Arch>] {
-        &self.deps
+    /// Returns an iterator over the loaded libraries this module depends on.
+    pub fn deps(&self) -> LoadedDeps<'_, D, Arch> {
+        LoadedDeps::new(self.deps.as_slice())
     }
 
     /// Returns the relocation backend used by this loaded module.
@@ -189,17 +263,19 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         self.core.tls_tp_offset()
     }
 
-    /// Creates a [`LoadedCore`] from an [`ElfCore`] and its explicit dependencies.
+    /// Creates a [`LoadedCore`] from an [`ElfCore`] and its retained dependencies.
     ///
     /// # Safety
     /// The caller must ensure the ELF object has been properly relocated.
-    ///
-    /// # Arguments
-    /// * `core` - The [`ElfCore`] to wrap.
-    /// * `deps` - A vector of dependencies.
     #[inline]
-    pub unsafe fn from_core_deps(core: ElfCore<D, Arch>, deps: Arc<[LoadedCore<D, Arch>]>) -> Self {
-        LoadedCore { core, deps }
+    pub unsafe fn from_core_deps<S>(core: ElfCore<D, Arch>, deps: S) -> Self
+    where
+        S: Into<ModuleScope<Arch>>,
+    {
+        LoadedCore {
+            core,
+            deps: deps.into(),
+        }
     }
 
     /// Returns a reference to the underlying [`ElfCore`].
@@ -319,12 +395,67 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                     user_data,
                 )
             }?,
-            deps: Arc::from([]),
+            deps: ModuleScope::empty(),
         })
     }
 
     /// Gets the symbol table
     pub fn symtab(&self) -> &SymbolTable<Arch::Layout> {
         &self.core.symtab()
+    }
+}
+
+impl<D, Arch> Module<Arch> for LoadedCore<D, Arch>
+where
+    D: 'static,
+    Arch: RelocationArch,
+{
+    #[inline]
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    #[inline]
+    fn is_loaded(&self) -> bool {
+        true
+    }
+
+    #[inline]
+    fn name(&self) -> &str {
+        LoadedCore::name(self)
+    }
+
+    #[inline]
+    fn soname(&self) -> Option<&str> {
+        LoadedCore::soname(self)
+    }
+
+    #[inline]
+    fn lookup_symbol<'source>(
+        &'source self,
+        symbol: &SymbolInfo<'_>,
+        precompute: &mut PreCompute,
+    ) -> Option<&'source ElfSymbol<Arch::Layout>> {
+        self.core.symtab().lookup_filter(symbol, precompute)
+    }
+
+    #[inline]
+    fn base_addr(&self) -> usize {
+        self.base()
+    }
+
+    #[inline]
+    fn segment_slice(&self, offset: usize, len: usize) -> Option<&[u8]> {
+        Some(self.core.segment_slice(offset, len))
+    }
+
+    #[inline]
+    fn tls_mod_id(&self) -> Option<TlsModuleId> {
+        LoadedCore::tls_mod_id(self)
+    }
+
+    #[inline]
+    fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
+        LoadedCore::tls_tp_offset(self)
     }
 }

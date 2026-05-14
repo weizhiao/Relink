@@ -7,9 +7,7 @@ use crate::{
     Result,
     elf::{ElfDyn, ElfPhdr},
     image::{ElfCore, LoadedCore, RawDynamic},
-    relocation::{
-        Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator, SymbolLookup,
-    },
+    relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     tls::{TlsModuleId, TlsTpOffset},
 };
 use core::{fmt::Debug, ptr::NonNull};
@@ -45,15 +43,11 @@ impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawDylib<D, Arch> {
     type Output = LoadedCore<D, Arch>;
     type Arch = Arch;
 
-    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreH, PostH>,
     ) -> Result<Self::Output>
     where
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
-        LazyPreS: SymbolLookup + Send + Sync + 'static,
-        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
     {
@@ -195,7 +189,7 @@ impl<D, Arch: RelocationArch> RawDylib<D, Arch> {
     }
 
     /// Creates a relocation builder for this shared object.
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D, Arch> {
+    pub fn relocator(self) -> Relocator<Self, (), (), D, Arch> {
         Relocator::new().with_object(self)
     }
 }

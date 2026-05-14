@@ -3,10 +3,7 @@ use crate::{
     arch::x86_64::relocation::X86_64Arch,
     elf::ElfRelType,
     object::layout::{GotEntry, PltEntry, PltGotSection},
-    relocation::{
-        RelocAddr, RelocHelper, RelocationHandler, RelocationValueProvider, SymbolLookup,
-        reloc_error,
-    },
+    relocation::{RelocAddr, RelocHelper, RelocationHandler, RelocationValueProvider, reloc_error},
 };
 use elf::abi::*;
 
@@ -17,15 +14,13 @@ pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
 ];
 
 impl X86_64Arch {
-    pub(crate) fn relocate_object_impl<D, PreS, PostS, PreH, PostH>(
-        helper: &mut RelocHelper<'_, D, Self, PreS, PostS, PreH, PostH>,
+    pub(crate) fn relocate_object_impl<D, PreH, PostH>(
+        helper: &mut RelocHelper<'_, D, Self, PreH, PostH>,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
     ) -> crate::Result<()>
     where
         D: 'static,
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
     {

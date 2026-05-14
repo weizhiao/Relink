@@ -125,23 +125,25 @@ elf_loader = { version = "0.14.1", features = ["full"] }
 ### Load a Dynamic Library and Call a Symbol
 
 ```rust
-use elf_loader::{Loader, Result};
+use elf_loader::{
+    Loader, Result,
+    image::{SyntheticSymbol, SyntheticModule},
+};
 
 extern "C" fn host_double(value: i32) -> i32 {
     value * 2
 }
 
 fn main() -> Result<()> {
+    let host = SyntheticModule::new(
+        "__host",
+        [SyntheticSymbol::function("host_double", host_double as *const ())],
+    );
+
     let lib = Loader::new()
         .load_dylib("path/to/plugin.so")?
         .relocator()
-        .pre_find_fn(|name| {
-            if name == "host_double" {
-                Some(host_double as *const ())
-            } else {
-                None
-            }
-        })
+        .scope([host])
         .relocate()?;
 
     let run = unsafe {
@@ -192,13 +194,11 @@ fn main() -> Result<()> {
 
 The relocation stage can use caller-provided symbol policy:
 
-- `pre_find_fn()` / `post_find_fn()`: inject host symbols before or after looking up symbols inside the target image.
-- `scope()` / `add_scope()`: add already-loaded objects to the current image's lookup scope.
+- `SyntheticModule`: expose host, wrapper, or native-bridge symbols as a normal lookup module.
+- `scope()` / `extend_scope()`: provide the ordered lookup scope. Put synthetic modules first for interposition, or last for fallback behavior.
 - `pre_handler()` / `post_handler()`: intercept relocation requests before or after writes.
-- `share_find_with_lazy()`: let PLT lazy binding reuse the initial relocation symbol lookup rules.
-- `lazy_pre_find_fn()` / `lazy_post_find_fn()`: configure separate lookup rules for lazy fixups.
 
-Lazy-binding APIs require the `lazy-binding` feature.
+Lazy binding uses the retained relocation scope and requires the `lazy-binding` feature.
 
 ### Use Linker to Manage Runtime Dependency Graphs
 
@@ -293,7 +293,6 @@ fn main() -> Result<()> {
     let base = loader
         .load_object("path/to/base.o")?
         .relocator()
-        .pre_find_fn(|_| None)
         .relocate()?;
 
     let plugin = loader

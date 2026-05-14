@@ -76,7 +76,7 @@ fn object_relocations_match() {
         ))
         .expect("failed to load object")
         .relocator()
-        .pre_find(host_symbols.resolver.clone())
+        .scope([host_symbols.source("__host")])
         .relocate()
         .expect("relocation failed");
 
@@ -169,7 +169,7 @@ fn object_addends_apply() {
         ))
         .expect("failed to load object")
         .relocator()
-        .pre_find(host_symbols.resolver.clone())
+        .scope([host_symbols.source("__host")])
         .relocate()
         .expect("relocation failed");
 

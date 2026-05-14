@@ -10,7 +10,6 @@ use crate::{
     loader::DynLifecycleHandler,
     relocation::{
         RelocAddr, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
-        SymbolLookup,
     },
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
@@ -18,7 +17,7 @@ use crate::{
 use alloc::boxed::Box;
 use core::{borrow::Borrow, fmt::Debug, ops::Deref};
 
-use super::{CoreInner, ElfCore, LoadedCore, core::CoreFiniHandler};
+use super::{CoreInner, ElfCore, LoadedCore, ModuleHandle, core::CoreFiniHandler};
 
 /// A relocatable ELF object.
 ///
@@ -86,7 +85,7 @@ impl<D: 'static, Arch: RelocationArch> RawObject<D, Arch> {
     }
 
     /// Creates a builder for relocating the relocatable file.
-    pub fn relocator(self) -> Relocator<Self, (), (), (), (), (), (), D, Arch>
+    pub fn relocator(self) -> Relocator<Self, (), (), D, Arch>
     where
         Self: Relocatable<D, Arch = Arch>,
     {
@@ -109,31 +108,21 @@ where
     type Output = LoadedObject<D, Arch>;
     type Arch = Arch;
 
-    fn relocate<PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>(
+    fn relocate<PreH, PostH>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreS, PostS, LazyPreS, LazyPostS, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreH, PostH>,
     ) -> Result<Self::Output>
     where
-        PreS: SymbolLookup + ?Sized,
-        PostS: SymbolLookup + ?Sized,
-        LazyPreS: SymbolLookup + Send + Sync + 'static,
-        LazyPostS: SymbolLookup + Send + Sync + 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
     {
         let RelocateArgs {
             scope,
-            lookup,
-            handlers,
+            pre_handler,
+            post_handler,
             ..
         } = args;
-        let inner = self.relocate_impl(
-            scope,
-            lookup.pre_find,
-            lookup.post_find,
-            handlers.pre,
-            handlers.post,
-        )?;
+        let inner = self.relocate_impl(scope, pre_handler, post_handler)?;
         Ok(LoadedObject { inner })
     }
 }
@@ -175,5 +164,19 @@ impl<D: 'static, Arch: RelocationArch> From<&LoadedObject<D, Arch>> for LoadedCo
     #[inline]
     fn from(object: &LoadedObject<D, Arch>) -> Self {
         object.inner.clone()
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch> From<LoadedObject<D, Arch>> for ModuleHandle<Arch> {
+    #[inline]
+    fn from(object: LoadedObject<D, Arch>) -> Self {
+        Self::new(object.inner)
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch> From<&LoadedObject<D, Arch>> for ModuleHandle<Arch> {
+    #[inline]
+    fn from(object: &LoadedObject<D, Arch>) -> Self {
+        Self::new(object.inner.clone())
     }
 }

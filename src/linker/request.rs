@@ -1,9 +1,8 @@
 use crate::{
     LinkerError, Result, UnresolvedDependencyError,
     arch::ArchKind,
-    image::{LoadedCore, RawDylib, RawDynamic, ScannedDynamic},
+    image::{ModuleHandle, ModuleScope, RawDylib, RawDynamic, ScannedDynamic},
     relocation::{BindingMode, RelocationArch},
-    sync::Arc,
 };
 use alloc::boxed::Box;
 
@@ -220,15 +219,15 @@ impl<'a, K: Clone> DependencyRequest<'a, K> {
 /// Read-only modules that should be visible to a link operation without being
 /// committed into its local [`LinkContext`](super::LinkContext).
 pub trait VisibleModules<K: Clone, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
-    fn contains_key(&self, _key: &K) -> bool {
-        false
+    fn contains_key(&self, key: &K) -> bool {
+        self.module(key).is_some()
     }
 
     fn direct_deps(&self, _key: &K) -> Option<Box<[K]>> {
         None
     }
 
-    fn loaded(&self, _key: &K) -> Option<LoadedCore<D, Arch>> {
+    fn module(&self, _key: &K) -> Option<ModuleHandle<Arch>> {
         None
     }
 }
@@ -251,8 +250,8 @@ where
     }
 
     #[inline]
-    fn loaded(&self, key: &K) -> Option<LoadedCore<D, Arch>> {
-        (**self).loaded(key)
+    fn module(&self, key: &K) -> Option<ModuleHandle<Arch>> {
+        (**self).module(key)
     }
 }
 
@@ -316,7 +315,8 @@ where
 pub struct RelocationRequest<'a, K, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
     key: &'a K,
     raw: RawDynamic<D, Arch>,
-    scope: &'a Arc<[LoadedCore<D, Arch>]>,
+    scope: &'a ModuleScope<Arch>,
+    _marker: core::marker::PhantomData<fn() -> D>,
 }
 
 impl<'a, K, D: 'static, Arch> RelocationRequest<'a, K, D, Arch>
@@ -324,12 +324,13 @@ where
     Arch: RelocationArch,
 {
     #[inline]
-    pub(crate) fn new(
-        key: &'a K,
-        raw: RawDynamic<D, Arch>,
-        scope: &'a Arc<[LoadedCore<D, Arch>]>,
-    ) -> Self {
-        Self { key, raw, scope }
+    pub(crate) fn new(key: &'a K, raw: RawDynamic<D, Arch>, scope: &'a ModuleScope<Arch>) -> Self {
+        Self {
+            key,
+            raw,
+            scope,
+            _marker: core::marker::PhantomData,
+        }
     }
 
     #[inline]
@@ -343,12 +344,7 @@ where
     }
 
     #[inline]
-    pub fn scope(&self) -> &[LoadedCore<D, Arch>] {
-        self.scope
-    }
-
-    #[inline]
-    pub fn shared_scope(&self) -> &Arc<[LoadedCore<D, Arch>]> {
+    pub fn scope(&self) -> &ModuleScope<Arch> {
         self.scope
     }
 
@@ -363,14 +359,10 @@ where
     }
 }
 
-enum RelocationScope<D: 'static, Arch: RelocationArch> {
-    Owned(Box<[LoadedCore<D, Arch>]>),
-    Shared(Arc<[LoadedCore<D, Arch>]>),
-}
-
 /// Per-module relocation inputs produced by the caller's runtime policy.
 pub struct RelocationInputs<D: 'static = (), Arch: RelocationArch = crate::arch::NativeArch> {
-    scope: RelocationScope<D, Arch>,
+    scope: ModuleScope<Arch>,
+    _marker: core::marker::PhantomData<fn() -> D>,
     binding: BindingMode,
 }
 
@@ -382,37 +374,27 @@ where
     pub fn new<I, R>(scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
-        R: Into<LoadedCore<D, Arch>>,
+        R: Into<ModuleHandle<Arch>>,
     {
         Self {
-            scope: RelocationScope::Owned(scope.into_iter().map(Into::into).collect()),
+            scope: ModuleScope::new(scope),
+            _marker: core::marker::PhantomData,
             binding: BindingMode::Default,
         }
     }
 
     #[inline]
-    pub fn shared(scope: Arc<[LoadedCore<D, Arch>]>) -> Self {
+    pub fn scope(scope: ModuleScope<Arch>) -> Self {
         Self {
-            scope: RelocationScope::Shared(scope),
+            scope,
+            _marker: core::marker::PhantomData,
             binding: BindingMode::Default,
         }
     }
 
     #[inline]
-    pub fn scope(&self) -> &[LoadedCore<D, Arch>] {
-        match &self.scope {
-            RelocationScope::Owned(scope) => scope,
-            RelocationScope::Shared(scope) => scope,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn into_parts(self) -> (Arc<[LoadedCore<D, Arch>]>, BindingMode) {
-        let scope = match self.scope {
-            RelocationScope::Owned(scope) => Arc::from(scope),
-            RelocationScope::Shared(scope) => scope,
-        };
-        (scope, self.binding)
+    pub(crate) fn into_parts(self) -> (ModuleScope<Arch>, BindingMode) {
+        (self.scope, self.binding)
     }
 
     #[inline]
@@ -437,6 +419,15 @@ where
         self.binding = binding;
         self
     }
+
+    pub fn extend_scope<I, R>(mut self, scope: I) -> Self
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<ModuleHandle<Arch>>,
+    {
+        self.scope = self.scope.extend(scope);
+        self
+    }
 }
 
 /// Runtime policy for assembling relocation inputs.
@@ -459,7 +450,7 @@ where
         &mut self,
         req: &RelocationRequest<'_, K, D, Arch>,
     ) -> Result<RelocationInputs<D, Arch>> {
-        Ok(RelocationInputs::shared(req.shared_scope().clone()))
+        Ok(RelocationInputs::scope(req.scope().clone()))
     }
 }
 
