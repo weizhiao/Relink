@@ -73,14 +73,14 @@ The default feature set is suitable for loading dynamic libraries, executables, 
 
 ```toml
 [dependencies]
-elf_loader = "0.15.0"
+elf_loader = "0.15.1"
 ```
 
 To enable the common advanced features in one bundle:
 
 ```toml
 [dependencies]
-elf_loader = { version = "0.15.0", features = ["full"] }
+elf_loader = { version = "0.15.1", features = ["full"] }
 ```
 
 ### Load a Dynamic Library and Call a Symbol

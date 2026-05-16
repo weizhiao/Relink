@@ -1,6 +1,6 @@
 [package]
 name = "elf_loader"
-version = "0.15.0"
+version = "0.15.1"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -30,7 +30,7 @@ members = ["crates/windows-elf-loader", "crates/mini-loader", "tools/gen-elf"]
 syscalls = { version = "0.8.1", default-features = false }
 elf = { version = "0.8", default-features = false }
 cfg-if = '1.0'
-elf_loader = { version = "0.15.0", path = ".", default-features = false }
+elf_loader = { version = "0.15.1", path = ".", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

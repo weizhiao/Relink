@@ -118,7 +118,7 @@
 //! - The crate currently targets `x86_64`, `x86`, `aarch64`, `arm`, `riscv64`, `riscv32`,
 //!   and `loongarch64`.
 //! - Relocatable object support is currently centered on `x86_64`.
-#![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![no_std]
 #![warn(
     clippy::unnecessary_wraps,
