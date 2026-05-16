@@ -66,6 +66,40 @@
 //! }
 //! ```
 //!
+//! ## Loading Dependencies With [`linker::Linker`]
+//!
+//! Use [`linker::Linker::load`] when you want a reusable [`linker::LinkContext`]
+//! and resolver-driven `DT_NEEDED` dependency loading. The built-in
+//! [`linker::SearchPathResolver`] covers the common filesystem search-path case;
+//! implement [`linker::KeyResolver`] when dependencies come from memory,
+//! package stores, or another registry.
+//!
+//! ```rust,no_run
+//! use elf_loader::{
+//!     Result,
+//!     input::PathBuf,
+//!     linker::{LinkContext, Linker, SearchPathResolver},
+//! };
+//!
+//! fn main() -> Result<()> {
+//!     let root = PathBuf::from("path/to/plugin.so");
+//!     let mut context: LinkContext<PathBuf, ()> = LinkContext::new();
+//!
+//!     let loaded = Linker::new()
+//!         .resolver(SearchPathResolver::new())
+//!         .load(&mut context, root)?;
+//!
+//!     let run = unsafe {
+//!         loaded
+//!             .get::<extern "C" fn() -> i32>("run")
+//!             .expect("symbol `run` not found")
+//!     };
+//!     let _ = run();
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
 //! ## Feature Flags
 //!
 //! - `tls` (default): enables TLS relocation handling. For TLS-using modules, start from
@@ -79,7 +113,8 @@
 //! ## More
 //!
 //! - The [`examples`](https://github.com/weizhiao/elf_loader/tree/main/examples) directory
-//!   covers loading from memory, lifecycle hooks, relocation handlers, and object loading.
+//!   covers loading from memory, `Linker::load`, scan-first linking, lifecycle hooks,
+//!   relocation handlers, and object loading.
 //! - The crate currently targets `x86_64`, `x86`, `aarch64`, `arm`, `riscv64`, `riscv32`,
 //!   and `loongarch64`.
 //! - Relocatable object support is currently centered on `x86_64`.
