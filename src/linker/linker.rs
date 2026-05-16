@@ -10,7 +10,7 @@ use super::{
         GotPltTarget, LinkPipeline, LinkPlan, MappedRuntimeMemory, Materialization,
         MemoryLayoutPlan, ModuleId, build_arena_raw_dynamic, normalize_plan,
     },
-    session::{GraphEntry, LoadSession},
+    session::{GraphEntry, LoadSession, ModulePayload},
     storage::KeyId,
 };
 use crate::{
@@ -345,7 +345,7 @@ where
     where
         K: 'cfg,
         Meta: Default,
-        Resolver: KeyResolver<'cfg, K>,
+        Resolver: KeyResolver<'cfg, K, Arch>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
             return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
@@ -376,7 +376,7 @@ where
     where
         K: 'cfg,
         Meta: Default,
-        Resolver: KeyResolver<'cfg, K>,
+        Resolver: KeyResolver<'cfg, K, Arch>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
             return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
@@ -401,7 +401,7 @@ where
     where
         K: 'static,
         Meta: Default,
-        Resolver: KeyResolver<'static, K>,
+        Resolver: KeyResolver<'static, K, Arch>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
             return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
@@ -421,7 +421,7 @@ where
     ) -> Result<ScanDiscovery<K, Arch>>
     where
         K: 'static,
-        Resolver: KeyResolver<'static, K>,
+        Resolver: KeyResolver<'static, K, Arch>,
     {
         let mut session = ResolveSession::new();
 
@@ -509,15 +509,24 @@ where
                 .map(|dep_id| module_ids[*dep_id])
                 .collect::<Vec<_>>()
                 .into_boxed_slice();
-            let raw = self.materialize_planned_raw(
-                &memory_layout,
-                &mut mapped_runtime,
-                module_id,
-                module,
-            )?;
-            self.observer
-                .on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
-            session.insert_resolved_pending(id, raw, direct_deps);
+            match module {
+                ModulePayload::Dynamic(module) => {
+                    let raw = self.materialize_planned_raw(
+                        &memory_layout,
+                        &mut mapped_runtime,
+                        module_id,
+                        module,
+                    )?;
+                    self.observer
+                        .on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
+                    session.insert_resolved_pending(id, raw, direct_deps);
+                }
+                ModulePayload::Synthetic(module) => {
+                    session
+                        .resolve
+                        .insert_synthetic_entry(id, module, direct_deps);
+                }
+            }
         }
 
         Ok(PreparedLoad::planned(
@@ -613,7 +622,7 @@ where
     ) -> Result<PreparedLoad<D, Arch>>
     where
         K: 'cfg,
-        Resolver: KeyResolver<'cfg, K>,
+        Resolver: KeyResolver<'cfg, K, Arch>,
         Seed: FnOnce(
             &mut LinkContext<K, D, Meta, Arch>,
             &V,
@@ -703,18 +712,25 @@ where
                     .key(id)
                     .expect("pending module id must resolve to an interned key")
                     .clone();
-                let req = RelocationRequest::new(&key, entry.payload, &scope);
-                let inputs = self.planner.plan(&req)?;
-                let raw = req.into_raw();
-                let (scope, binding) = inputs.into_parts();
-                let loaded = self
-                    .relocator
-                    .clone()
-                    .with_object(raw)
-                    .shared_scope(scope)
-                    .binding(binding)
-                    .relocate()?;
-                session.push_ready(id, loaded, direct_deps);
+                match entry.payload {
+                    ModulePayload::Dynamic(raw) => {
+                        let req = RelocationRequest::new(&key, raw, &scope);
+                        let inputs = self.planner.plan(&req)?;
+                        let raw = req.into_raw();
+                        let (scope, binding) = inputs.into_parts();
+                        let loaded = self
+                            .relocator
+                            .clone()
+                            .with_object(raw)
+                            .shared_scope(scope)
+                            .binding(binding)
+                            .relocate()?;
+                        session.push_ready(id, loaded, direct_deps);
+                    }
+                    ModulePayload::Synthetic(module) => {
+                        session.push_ready(id, module, direct_deps);
+                    }
+                }
             }
             Ok(())
         })();
@@ -725,7 +741,7 @@ where
 
     fn build_relocation_order(
         root: KeyId,
-        pending: &BTreeMap<KeyId, GraphEntry<RawDynamic<D, Arch>>>,
+        pending: &BTreeMap<KeyId, GraphEntry<ModulePayload<RawDynamic<D, Arch>, Arch>>>,
         order: &mut Vec<KeyId>,
     ) {
         order.clear();
@@ -775,8 +791,13 @@ where
             .iter()
             .map(|id| {
                 if let Some(entry) = session.resolve.entries.get(id) {
-                    let module = unsafe { LoadedCore::from_core(entry.payload.core()) };
-                    ModuleHandle::from(module)
+                    match &entry.payload {
+                        ModulePayload::Dynamic(raw) => {
+                            let module = unsafe { LoadedCore::from_core(raw.core()) };
+                            ModuleHandle::from(module)
+                        }
+                        ModulePayload::Synthetic(module) => module.clone(),
+                    }
                 } else {
                     visible_module(context, visible_modules, *id)
                         .expect("scope key must resolve to a visible or pending module")
@@ -801,7 +822,7 @@ where
             };
             context
                 .committed
-                .insert_new_id(id, entry.module, entry.direct_deps, Meta::default());
+                .insert_new(id, entry.module, entry.direct_deps, Meta::default());
             committed.push(id);
         }
         assert!(
@@ -903,7 +924,7 @@ where
     Arch: RelocationArch,
     V: VisibleModules<K, D, Arch>,
 {
-    context.committed.get(id).map(Into::into).or_else(|| {
+    context.committed.get(id).cloned().or_else(|| {
         let key = context.committed.key(id)?;
         visible_modules.module(key)
     })

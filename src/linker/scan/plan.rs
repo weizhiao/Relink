@@ -2,6 +2,7 @@ use super::{
     Materialization, ModuleLayout, SectionId, SectionMetadata, SectionPlacement,
     layout::{DataAccess, MemoryLayoutPlan, SectionDataAccessRef},
 };
+use crate::linker::session::ModulePayload;
 use crate::{
     AlignedBytes, LinkerError, Result,
     aligned_bytes::ByteRepr,
@@ -18,39 +19,23 @@ entity_ref!(ModuleId);
 
 pub struct PlannedModule<K, Arch: RelocationArch> {
     key: K,
-    module: ScannedDynamic<Arch>,
+    module: ModulePayload<ScannedDynamic<Arch>, Arch>,
     direct_deps: Box<[ModuleId]>,
 }
 
-struct PendingPlannedModule<K, Arch: RelocationArch> {
-    key: K,
-    module: ScannedDynamic<Arch>,
-    direct_deps: Box<[K]>,
-}
-
-impl<K, Arch> PendingPlannedModule<K, Arch>
+fn resolve_direct_deps<K>(module_ids: &BTreeMap<K, ModuleId>, direct_deps: &[K]) -> Box<[ModuleId]>
 where
     K: Ord,
-    Arch: RelocationArch,
 {
-    fn resolve(self, module_ids: &BTreeMap<K, ModuleId>) -> PlannedModule<K, Arch> {
-        let Self {
-            key,
-            module,
-            direct_deps,
-        } = self;
-        let direct_deps = direct_deps
-            .iter()
-            .map(|dep_key| {
-                *module_ids.get(dep_key).unwrap_or_else(|| {
-                    panic!("planned module dependency referenced an unknown module key")
-                })
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-
-        PlannedModule::new(key, module, direct_deps)
-    }
+    direct_deps
+        .iter()
+        .map(|dep_key| {
+            *module_ids
+                .get(dep_key)
+                .expect("planned module dependency referenced an unknown module key")
+        })
+        .collect::<Vec<_>>()
+        .into_boxed_slice()
 }
 
 impl<K, Arch> PlannedModule<K, Arch>
@@ -58,7 +43,11 @@ where
     Arch: RelocationArch,
 {
     #[inline]
-    pub(crate) fn new(key: K, module: ScannedDynamic<Arch>, direct_deps: Box<[ModuleId]>) -> Self {
+    pub(in crate::linker) fn new(
+        key: K,
+        module: ModulePayload<ScannedDynamic<Arch>, Arch>,
+        direct_deps: Box<[ModuleId]>,
+    ) -> Self {
         Self {
             key,
             module,
@@ -72,13 +61,24 @@ where
     }
 
     #[inline]
-    pub fn module(&self) -> &ScannedDynamic<Arch> {
-        &self.module
+    pub(in crate::linker) const fn is_dynamic(&self) -> bool {
+        matches!(self.module, ModulePayload::Dynamic(_))
     }
 
     #[inline]
-    pub fn module_mut(&mut self) -> &mut ScannedDynamic<Arch> {
-        &mut self.module
+    pub(in crate::linker) fn dynamic(&self) -> Option<&ScannedDynamic<Arch>> {
+        match &self.module {
+            ModulePayload::Dynamic(module) => Some(module),
+            ModulePayload::Synthetic(_) => None,
+        }
+    }
+
+    #[inline]
+    pub(in crate::linker) fn dynamic_mut(&mut self) -> Option<&mut ScannedDynamic<Arch>> {
+        match &mut self.module {
+            ModulePayload::Dynamic(module) => Some(module),
+            ModulePayload::Synthetic(_) => None,
+        }
     }
 
     #[inline]
@@ -87,7 +87,13 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (K, ScannedDynamic<Arch>, Box<[ModuleId]>) {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        K,
+        ModulePayload<ScannedDynamic<Arch>, Arch>,
+        Box<[ModuleId]>,
+    ) {
         (self.key, self.module, self.direct_deps)
     }
 }
@@ -124,10 +130,10 @@ where
     Arch: RelocationArch,
 {
     #[inline]
-    pub(crate) fn new(
+    pub(in crate::linker) fn new(
         root: K,
         group_order: Vec<K>,
-        mut entries: BTreeMap<K, (ScannedDynamic<Arch>, Box<[K]>)>,
+        mut entries: BTreeMap<K, (ModulePayload<ScannedDynamic<Arch>, Arch>, Box<[K]>)>,
     ) -> Self {
         let group_keys = group_order;
         let mut module_ids = BTreeMap::new();
@@ -137,11 +143,7 @@ where
             let (module, direct_deps) = entries
                 .remove(&key)
                 .expect("scan plan group order referenced a missing discovered module");
-            let id = pending_entries.push(PendingPlannedModule {
-                key: key.clone(),
-                module,
-                direct_deps,
-            });
+            let id = pending_entries.push((key.clone(), module, direct_deps));
             let previous = module_ids.insert(key, id);
             assert!(
                 previous.is_none(),
@@ -154,7 +156,10 @@ where
             .get(&root)
             .expect("scan plan root must exist in discovery order");
 
-        let planned_entries = pending_entries.map_values(|_, pending| pending.resolve(&module_ids));
+        let planned_entries = pending_entries.map_values(|_, (key, module, direct_deps)| {
+            let direct_deps = resolve_direct_deps(&module_ids, &direct_deps);
+            PlannedModule::new(key, module, direct_deps)
+        });
         assert!(
             entries.is_empty(),
             "scan plan contained modules that were not present in discovery order"
@@ -163,7 +168,7 @@ where
         let memory_layout = MemoryLayoutPlan::from_scanned(
             planned_entries
                 .iter()
-                .map(|(id, entry)| (id, entry.module())),
+                .filter_map(|(id, entry)| entry.dynamic().map(|module| (id, module))),
         );
         Self {
             root,
@@ -210,6 +215,12 @@ where
         let group_len = self.group_order.len();
         for index in 0..group_len {
             let id = self.group_order[index];
+            let Some(entry) = self.entries.get(id) else {
+                continue;
+            };
+            if !entry.is_dynamic() {
+                continue;
+            }
             f(self, id)?;
         }
         Ok(())
@@ -291,7 +302,8 @@ where
 
     #[inline]
     pub(in crate::linker) fn module_capability(&self, id: ModuleId) -> Option<ModuleCapability> {
-        self.get(id).map(|entry| entry.module().capability())
+        self.get(id)
+            .and_then(|entry| entry.dynamic().map(ScannedDynamic::capability))
     }
 
     #[inline]
@@ -321,19 +333,19 @@ where
         let entry = self.entries.get_mut(id).ok_or_else(|| {
             LinkerError::section_data("section data requested for a missing planned module")
         })?;
-        if !entry.module().capability().has_section_data() {
+        let module = entry.dynamic_mut().ok_or_else(|| {
+            LinkerError::section_data("section data requested for a synthetic module")
+        })?;
+        if !module.capability().has_section_data() {
             return Err(LinkerError::section_data(
                 "section data requested for a module without section data",
             )
             .into());
         }
 
-        let snapshot = entry
-            .module_mut()
-            .section_data(scanned_section)?
-            .ok_or_else(|| {
-                LinkerError::section_data("section data requested for a missing scanned section")
-            })?;
+        let snapshot = module.section_data(scanned_section)?.ok_or_else(|| {
+            LinkerError::section_data("section data requested for a missing scanned section")
+        })?;
 
         self.memory_layout.install_data(section, snapshot);
         Ok(())

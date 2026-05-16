@@ -1,9 +1,10 @@
-use super::storage::{CommittedEntry, CommittedStorage, KeyId};
-use crate::{LinkerError, Result, arch::NativeArch, image::LoadedCore, relocation::RelocationArch};
+use super::storage::{CommittedStorage, KeyId};
+use crate::{
+    LinkerError, Result, arch::NativeArch, image::ModuleHandle, relocation::RelocationArch,
+};
 use alloc::{
     boxed::Box,
     collections::{BTreeSet, VecDeque},
-    sync::Arc,
     vec::Vec,
 };
 
@@ -73,9 +74,9 @@ where
         self.committed.key(id)
     }
 
-    /// Returns the loaded module associated with an interned id.
+    /// Returns the retained module handle associated with an interned id.
     #[inline]
-    pub fn get(&self, id: KeyId) -> Option<&LoadedCore<D, Arch>> {
+    pub fn get(&self, id: KeyId) -> Option<&ModuleHandle<Arch>> {
         self.committed.get(id)
     }
 
@@ -103,39 +104,45 @@ where
         self.committed.meta_mut(id)
     }
 
-    /// Inserts an already loaded module with default metadata.
-    pub fn insert(
-        &mut self,
-        key: K,
-        module: LoadedCore<D, Arch>,
-        direct_deps: Box<[K]>,
-    ) -> Result<KeyId>
+    /// Inserts an already retained module with default metadata.
+    pub fn insert<R>(&mut self, key: K, module: R, direct_deps: Box<[K]>) -> Result<KeyId>
     where
         M: Default,
+        R: Into<ModuleHandle<Arch>>,
     {
         self.insert_with_meta(key, module, direct_deps, M::default())
     }
 
-    /// Inserts an already loaded module with explicit metadata.
-    pub fn insert_with_meta(
+    /// Inserts an already retained module with explicit metadata.
+    pub fn insert_with_meta<R>(
         &mut self,
         key: K,
-        module: LoadedCore<D, Arch>,
+        module: R,
         direct_deps: Box<[K]>,
         meta: M,
-    ) -> Result<KeyId> {
+    ) -> Result<KeyId>
+    where
+        R: Into<ModuleHandle<Arch>>,
+    {
         if self.committed.contains_key(&key) {
             return Err(LinkerError::context("duplicate linked module key").into());
         }
 
+        let id = self.committed.intern_key(key);
+        let direct_deps = direct_deps
+            .into_vec()
+            .into_iter()
+            .map(|key| self.committed.intern_key(key))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Ok(self
             .committed
-            .insert_new(key, CommittedEntry::new(module, direct_deps, meta)))
+            .insert_new(id, module.into(), direct_deps, meta))
     }
 
-    /// Removes a committed module and returns its image, dependencies, and metadata.
+    /// Removes a committed module and returns its handle, dependencies, and metadata.
     #[inline]
-    pub fn remove(&mut self, id: KeyId) -> Option<(LoadedCore<D, Arch>, Box<[KeyId]>, M)> {
+    pub fn remove(&mut self, id: KeyId) -> Option<(ModuleHandle<Arch>, Box<[KeyId]>, M)> {
         self.committed.remove(id)
     }
 
@@ -165,16 +172,6 @@ where
         }
 
         scope
-    }
-
-    /// Returns retained loaded modules in the dependency scope rooted at `root`.
-    pub fn dependency_modules(&self, root: KeyId) -> Arc<[LoadedCore<D, Arch>]> {
-        let scope = self
-            .dependency_scope(root)
-            .into_iter()
-            .filter_map(|id| self.committed.get(id).cloned())
-            .collect::<Vec<_>>();
-        Arc::from(scope)
     }
 
     /// Extends this context with modules from another context.
@@ -210,8 +207,7 @@ where
                 .meta(id)
                 .cloned()
                 .expect("load_order entries must resolve to committed metadata");
-            self.committed
-                .insert_new(key.clone(), CommittedEntry::new(module, direct_deps, meta));
+            self.insert_with_meta(key.clone(), module, direct_deps, meta)?;
         }
         Ok(())
     }

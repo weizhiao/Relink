@@ -3,7 +3,7 @@ mod support;
 use elf_loader::{
     CustomError, Loader,
     elf::{ElfFileType, ElfProgramType},
-    image::{LoadedCore, ModuleCapability, ModuleHandle, ScannedElf},
+    image::{LoadedCore, ModuleCapability, ModuleHandle, ScannedElf, SyntheticModule},
     input::ElfBinary,
     linker::{
         KeyResolver, LinkContext, Linker, LoadObserver, RelocationInputs, RelocationRequest,
@@ -49,6 +49,10 @@ struct RecordingObserver {
 struct FailingObserver;
 
 struct VisibleDependencyResolver {
+    root_data: &'static [u8],
+}
+
+struct SyntheticDependencyResolver {
     root_data: &'static [u8],
 }
 
@@ -173,6 +177,32 @@ impl KeyResolver<'static, &'static str> for VisibleDependencyResolver {
         assert_eq!(req.needed(), "dep");
         assert!(req.is_visible(&"dep"));
         Ok(ResolvedKey::existing("dep"))
+    }
+}
+
+impl KeyResolver<'static, &'static str> for SyntheticDependencyResolver {
+    fn load_root(
+        &mut self,
+        req: &RootRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+        let key = req.key();
+        assert_eq!(*key, "root");
+        Ok(ResolvedKey::load(
+            "root",
+            ElfBinary::new("scan_synthetic_root.so", self.root_data),
+        ))
+    }
+
+    fn resolve_dependency(
+        &mut self,
+        req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+        assert_eq!(req.needed(), "dep");
+        Ok(ResolvedKey::synthetic(
+            "dep",
+            SyntheticModule::empty("dep"),
+            Vec::new(),
+        ))
     }
 }
 
@@ -322,6 +352,47 @@ fn load_uses_configured_visible_modules_without_committing_them_locally() {
     let root_id = context.key_id(&"root").unwrap();
     let dep_id = context.key_id(&"dep").unwrap();
     assert!(!context.contains(dep_id));
+    let direct_deps = context
+        .direct_deps(root_id)
+        .unwrap()
+        .iter()
+        .map(|id| *context.key(*id).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(direct_deps, vec!["dep"]);
+}
+
+#[test]
+fn load_scan_first_supports_synthetic_dependencies() {
+    let root_output = write_test_dylib_with_config(
+        ElfWriterConfig::default()
+            .with_bind_now(true)
+            .with_needed_lib("dep"),
+        &[],
+        &[SymbolDesc::global_object("root_value", &[2])],
+    );
+    let root_data: &'static [u8] = Box::leak(root_output.data.into_boxed_slice());
+    let resolver = SyntheticDependencyResolver { root_data };
+    let mut context = LinkContext::<&'static str, ()>::new();
+
+    let root = Linker::new()
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .load_scan_first(&mut context, "root")
+        .expect("scan-first load should accept a synthetic dependency");
+
+    assert_eq!(root.path().file_name(), "scan_synthetic_root.so");
+    assert!(context.contains_key(&"root"));
+    assert!(context.contains_key(&"dep"));
+
+    let root_id = context.key_id(&"root").unwrap();
+    let dep_id = context.key_id(&"dep").unwrap();
+    let dep_module = context.get(dep_id).expect("synthetic dependency committed");
+    assert_eq!(dep_module.name(), "dep");
+    assert!(
+        dep_module.as_loaded::<()>().is_none(),
+        "synthetic dependency should be retained as a module handle, not a loaded ELF"
+    );
+
     let direct_deps = context
         .direct_deps(root_id)
         .unwrap()

@@ -1,6 +1,6 @@
 use crate::{
     entity::{PrimaryMap, SecondaryMap, entity_ref},
-    image::LoadedCore,
+    image::ModuleHandle,
     relocation::RelocationArch,
     sync::Arc,
 };
@@ -70,7 +70,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn get(&self, id: KeyId) -> Option<&LoadedCore<D, Arch>> {
+    pub(crate) fn get(&self, id: KeyId) -> Option<&ModuleHandle<Arch>> {
         self.entries.get(id).map(|entry| &entry.module)
     }
 
@@ -114,23 +114,10 @@ where
     }
 
     #[inline]
-    pub(crate) fn insert_new(&mut self, key: K, entry: CommittedEntry<K, D, M, Arch>) -> KeyId {
-        let id = self.intern_key(key);
-        let direct_deps = entry
-            .direct_deps
-            .into_vec()
-            .into_iter()
-            .map(|key| self.intern_key(key))
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        self.insert_new_id(id, entry.module, direct_deps, entry.meta)
-    }
-
-    #[inline]
-    pub(crate) fn insert_new_id(
+    pub(crate) fn insert_new(
         &mut self,
         id: KeyId,
-        module: LoadedCore<D, Arch>,
+        module: ModuleHandle<Arch>,
         direct_deps: Box<[KeyId]>,
         meta: M,
     ) -> KeyId {
@@ -149,6 +136,7 @@ where
                 module,
                 direct_deps,
                 meta,
+                _marker: core::marker::PhantomData,
             },
         );
         debug_assert!(previous.is_none(), "linked storage precheck must be exact");
@@ -156,7 +144,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn remove(&mut self, id: KeyId) -> Option<(LoadedCore<D, Arch>, Box<[KeyId]>, M)> {
+    pub(crate) fn remove(&mut self, id: KeyId) -> Option<(ModuleHandle<Arch>, Box<[KeyId]>, M)> {
         let removed = self.entries.remove(id)?;
         if let Some(idx) = self.load_order.iter().position(|existing| *existing == id) {
             self.load_order.remove(idx);
@@ -166,47 +154,8 @@ where
 }
 
 struct StoredEntry<D: 'static, M = (), Arch: RelocationArch = crate::arch::NativeArch> {
-    module: LoadedCore<D, Arch>,
+    module: ModuleHandle<Arch>,
     direct_deps: Box<[KeyId]>,
     meta: M,
-}
-
-pub(crate) struct CommittedEntry<
-    K,
-    D: 'static,
-    M = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
-> {
-    pub(crate) module: LoadedCore<D, Arch>,
-    pub(crate) direct_deps: Box<[K]>,
-    pub(crate) meta: M,
-}
-
-impl<K, D: 'static, M, Arch> Clone for CommittedEntry<K, D, M, Arch>
-where
-    K: Clone,
-    M: Clone,
-    Arch: RelocationArch,
-{
-    fn clone(&self) -> Self {
-        Self {
-            module: self.module.clone(),
-            direct_deps: self.direct_deps.clone(),
-            meta: self.meta.clone(),
-        }
-    }
-}
-
-impl<K, D: 'static, M, Arch> CommittedEntry<K, D, M, Arch>
-where
-    Arch: RelocationArch,
-{
-    #[inline]
-    pub(crate) fn new(module: LoadedCore<D, Arch>, direct_deps: Box<[K]>, meta: M) -> Self {
-        Self {
-            module,
-            direct_deps,
-            meta,
-        }
-    }
+    _marker: core::marker::PhantomData<fn() -> D>,
 }

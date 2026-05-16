@@ -55,7 +55,8 @@ where
         plan.plan
             .get(self.id)
             .expect("checked module handle should resolve to a planned module")
-            .module()
+            .dynamic()
+            .expect("checked module handle should resolve to a scanned dynamic module")
     }
 
     /// Returns this module's scanned image mutably through `plan`.
@@ -71,7 +72,8 @@ where
         plan.plan
             .get_mut(self.id)
             .expect("checked module handle should resolve to a planned module")
-            .module_mut()
+            .dynamic_mut()
+            .expect("checked module handle should resolve to a scanned dynamic module")
     }
 
     /// Iterates over visible direct dependency modules recorded for this module.

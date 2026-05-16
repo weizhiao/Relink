@@ -28,7 +28,7 @@ pub(crate) struct ResolveContext<
 > {
     committed: &'a mut CommittedStorage<K, D, Meta, Arch>,
     visible_modules: &'a V,
-    session: &'a mut ResolveSession<P>,
+    session: &'a mut ResolveSession<P, Arch>,
 }
 
 pub(crate) type LoadResolveContext<'a, K, D, Meta = (), V = (), Arch = crate::arch::NativeArch> =
@@ -45,7 +45,7 @@ where
     pub(crate) fn new(
         committed: &'a mut CommittedStorage<K, D, Meta, Arch>,
         visible_modules: &'a V,
-        session: &'a mut ResolveSession<P>,
+        session: &'a mut ResolveSession<P, Arch>,
     ) -> Self {
         Self {
             committed,
@@ -121,8 +121,8 @@ where
         &self,
         id: KeyId,
         needed_index: usize,
-        resolver: &mut impl KeyResolver<'cfg, K>,
-    ) -> Result<ResolvedKey<'cfg, K>>
+        resolver: &mut impl KeyResolver<'cfg, K, Arch>,
+    ) -> Result<ResolvedKey<'cfg, K, Arch>>
     where
         K: 'cfg,
     {
@@ -143,8 +143,8 @@ where
     pub(crate) fn resolve_root<'cfg>(
         &self,
         key: &K,
-        resolver: &mut impl KeyResolver<'cfg, K>,
-    ) -> Result<ResolvedKey<'cfg, K>>
+        resolver: &mut impl KeyResolver<'cfg, K, Arch>,
+    ) -> Result<ResolvedKey<'cfg, K, Arch>>
     where
         K: 'cfg,
     {
@@ -157,7 +157,7 @@ where
         &mut self,
         id: KeyId,
         loader: &mut Loader<M, H, D, Tls, Arch>,
-        resolver: &mut impl KeyResolver<'cfg, K>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch>,
         stage: &mut F,
     ) -> Result<Vec<KeyId>>
     where
@@ -165,7 +165,11 @@ where
         M: Mmap,
         H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
-        F: FnMut(&mut Self, ResolvedKey<'cfg, K>, &mut Loader<M, H, D, Tls, Arch>) -> Result<KeyId>,
+        F: FnMut(
+            &mut Self,
+            ResolvedKey<'cfg, K, Arch>,
+            &mut Loader<M, H, D, Tls, Arch>,
+        ) -> Result<KeyId>,
     {
         if let Some(direct_deps) = self.known_direct_deps(id) {
             return Ok(direct_deps);
@@ -191,7 +195,7 @@ where
         &mut self,
         root: KeyId,
         loader: &mut Loader<M, H, D, Tls, Arch>,
-        resolver: &mut impl KeyResolver<'cfg, K>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch>,
         mut stage: F,
     ) -> Result<()>
     where
@@ -199,7 +203,11 @@ where
         M: Mmap,
         H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
-        F: FnMut(&mut Self, ResolvedKey<'cfg, K>, &mut Loader<M, H, D, Tls, Arch>) -> Result<KeyId>,
+        F: FnMut(
+            &mut Self,
+            ResolvedKey<'cfg, K, Arch>,
+            &mut Loader<M, H, D, Tls, Arch>,
+        ) -> Result<KeyId>,
     {
         let mut group_order = Vec::new();
         extend_breadth_first(&mut group_order, root, |key| {
@@ -218,7 +226,7 @@ where
 {
     pub(crate) fn stage_resolved<'cfg, M, H, Tls, O>(
         &mut self,
-        resolved: ResolvedKey<'cfg, K>,
+        resolved: ResolvedKey<'cfg, K, Arch>,
         loader: &mut Loader<M, H, D, Tls, Arch>,
         observer: &mut O,
     ) -> Result<KeyId>
@@ -251,6 +259,27 @@ where
                 self.session.insert_entry(id, raw);
                 Ok(id)
             }
+            ResolvedKey::Synthetic { key, module, deps } => {
+                if self.contains_visible_or_pending(&key) {
+                    return Err(LinkerError::resolver(
+                        "resolved synthetic module produced an already-known key",
+                    )
+                    .into());
+                }
+
+                let mut direct_deps = Vec::with_capacity(deps.len());
+                for dep in deps {
+                    let dep_id = self.stage_resolved(dep, loader, observer)?;
+                    if !direct_deps.contains(&dep_id) {
+                        direct_deps.push(dep_id);
+                    }
+                }
+
+                let id = self.intern_key(key);
+                self.session
+                    .insert_synthetic_entry(id, module, direct_deps.into_boxed_slice());
+                Ok(id)
+            }
         }
     }
 
@@ -258,7 +287,7 @@ where
         &mut self,
         root: KeyId,
         loader: &mut Loader<M, H, D, Tls, Arch>,
-        resolver: &mut impl KeyResolver<'cfg, K>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch>,
         observer: &mut O,
     ) -> Result<()>
     where
@@ -283,7 +312,7 @@ where
 {
     pub(crate) fn stage_resolved<M, H, Tls>(
         &mut self,
-        resolved: ResolvedKey<'static, K>,
+        resolved: ResolvedKey<'static, K, Arch>,
         loader: &mut Loader<M, H, D, Tls, Arch>,
     ) -> Result<KeyId>
     where
@@ -314,6 +343,27 @@ where
                 self.session.insert_entry(id, module);
                 Ok(id)
             }
+            ResolvedKey::Synthetic { key, module, deps } => {
+                if self.contains_visible_or_pending(&key) {
+                    return Err(LinkerError::resolver(
+                        "scan resolver produced an already-known synthetic key",
+                    )
+                    .into());
+                }
+
+                let mut direct_deps = Vec::with_capacity(deps.len());
+                for dep in deps {
+                    let dep_id = self.stage_resolved(dep, loader)?;
+                    if !direct_deps.contains(&dep_id) {
+                        direct_deps.push(dep_id);
+                    }
+                }
+
+                let id = self.intern_key(key);
+                self.session
+                    .insert_synthetic_entry(id, module, direct_deps.into_boxed_slice());
+                Ok(id)
+            }
         }
     }
 
@@ -321,7 +371,7 @@ where
         &mut self,
         root: KeyId,
         loader: &mut Loader<M, H, D, Tls, Arch>,
-        resolver: &mut impl KeyResolver<'static, K>,
+        resolver: &mut impl KeyResolver<'static, K, Arch>,
     ) -> Result<()>
     where
         K: 'static,

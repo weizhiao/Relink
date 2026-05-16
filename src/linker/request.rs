@@ -1,7 +1,7 @@
 use crate::{
     LinkerError, Result, UnresolvedDependency,
     arch::ArchKind,
-    image::{ModuleHandle, ModuleScope, RawDylib, RawDynamic, ScannedDynamic},
+    image::{ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     input::Path,
     relocation::{BindingMode, RelocationArch},
 };
@@ -23,43 +23,6 @@ pub trait DependencyOwner {
     fn needed_len(&self) -> usize;
     /// Returns one `DT_NEEDED` entry by index.
     fn needed_lib(&self, index: usize) -> Option<&str>;
-}
-
-impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDylib<D, Arch> {
-    #[inline]
-    fn path(&self) -> &Path {
-        self.path()
-    }
-
-    #[inline]
-    fn name(&self) -> &str {
-        self.name()
-    }
-
-    #[inline]
-    fn rpath(&self) -> Option<&str> {
-        self.rpath()
-    }
-
-    #[inline]
-    fn runpath(&self) -> Option<&str> {
-        self.runpath()
-    }
-
-    #[inline]
-    fn interp(&self) -> Option<&str> {
-        self.interp()
-    }
-
-    #[inline]
-    fn needed_len(&self) -> usize {
-        self.needed_libs().len()
-    }
-
-    #[inline]
-    fn needed_lib(&self, index: usize) -> Option<&str> {
-        self.needed_libs().get(index).copied()
-    }
 }
 
 impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDynamic<D, Arch> {

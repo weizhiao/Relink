@@ -1,5 +1,5 @@
-use super::storage::KeyId;
-use crate::{image::LoadedCore, relocation::RelocationArch};
+use super::{request::DependencyOwner, storage::KeyId};
+use crate::{image::ModuleHandle, input::Path, relocation::RelocationArch};
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
@@ -32,8 +32,9 @@ impl<P> GraphEntry<P> {
 }
 
 pub(crate) struct ReadyCommit<D: 'static, Arch: RelocationArch> {
-    pub(crate) module: LoadedCore<D, Arch>,
+    pub(crate) module: ModuleHandle<Arch>,
     pub(crate) direct_deps: Box<[KeyId]>,
+    _marker: core::marker::PhantomData<fn() -> D>,
 }
 
 impl<D: 'static, Arch> Clone for ReadyCommit<D, Arch>
@@ -44,6 +45,7 @@ where
         Self {
             module: self.module.clone(),
             direct_deps: self.direct_deps.clone(),
+            _marker: core::marker::PhantomData,
         }
     }
 }
@@ -53,20 +55,91 @@ where
     Arch: RelocationArch,
 {
     #[inline]
-    fn new(module: LoadedCore<D, Arch>, direct_deps: Box<[KeyId]>) -> Self {
+    fn new(module: ModuleHandle<Arch>, direct_deps: Box<[KeyId]>) -> Self {
         Self {
             module,
             direct_deps,
+            _marker: core::marker::PhantomData,
         }
     }
 }
 
-pub(crate) struct ResolveSession<P> {
-    pub(crate) entries: BTreeMap<KeyId, GraphEntry<P>>,
+pub(crate) enum ModulePayload<P, Arch: RelocationArch> {
+    Dynamic(P),
+    Synthetic(ModuleHandle<Arch>),
+}
+
+impl<P, Arch> DependencyOwner for ModulePayload<P, Arch>
+where
+    P: DependencyOwner,
+    Arch: RelocationArch,
+{
+    #[inline]
+    fn path(&self) -> &Path {
+        match self {
+            Self::Dynamic(module) => module.path(),
+            Self::Synthetic(module) => Path::new(module.name()),
+        }
+    }
+
+    #[inline]
+    fn name(&self) -> &str {
+        match self {
+            Self::Dynamic(module) => module.name(),
+            Self::Synthetic(module) => module.name(),
+        }
+    }
+
+    #[inline]
+    fn rpath(&self) -> Option<&str> {
+        match self {
+            Self::Dynamic(module) => module.rpath(),
+            Self::Synthetic(_) => None,
+        }
+    }
+
+    #[inline]
+    fn runpath(&self) -> Option<&str> {
+        match self {
+            Self::Dynamic(module) => module.runpath(),
+            Self::Synthetic(_) => None,
+        }
+    }
+
+    #[inline]
+    fn interp(&self) -> Option<&str> {
+        match self {
+            Self::Dynamic(module) => module.interp(),
+            Self::Synthetic(_) => None,
+        }
+    }
+
+    #[inline]
+    fn needed_len(&self) -> usize {
+        match self {
+            Self::Dynamic(module) => module.needed_len(),
+            Self::Synthetic(_) => 0,
+        }
+    }
+
+    #[inline]
+    fn needed_lib(&self, index: usize) -> Option<&str> {
+        match self {
+            Self::Dynamic(module) => module.needed_lib(index),
+            Self::Synthetic(_) => None,
+        }
+    }
+}
+
+pub(crate) struct ResolveSession<P, Arch: RelocationArch> {
+    pub(crate) entries: BTreeMap<KeyId, GraphEntry<ModulePayload<P, Arch>>>,
     pub(crate) group_order: Vec<KeyId>,
 }
 
-impl<P> ResolveSession<P> {
+impl<P, Arch> ResolveSession<P, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     pub(crate) fn new() -> Self {
         Self {
@@ -76,7 +149,10 @@ impl<P> ResolveSession<P> {
     }
 }
 
-impl<P> ResolveSession<P> {
+impl<P, Arch> ResolveSession<P, Arch>
+where
+    Arch: RelocationArch,
+{
     #[inline]
     pub(crate) fn contains(&self, id: KeyId) -> bool {
         self.entries.contains_key(&id)
@@ -84,7 +160,24 @@ impl<P> ResolveSession<P> {
 
     #[inline]
     pub(crate) fn insert_entry(&mut self, id: KeyId, payload: P) {
-        self.entries.insert(id, GraphEntry::new(payload));
+        self.entries
+            .insert(id, GraphEntry::new(ModulePayload::Dynamic(payload)));
+    }
+
+    #[inline]
+    pub(crate) fn insert_synthetic_entry(
+        &mut self,
+        id: KeyId,
+        module: ModuleHandle<Arch>,
+        direct_deps: Box<[KeyId]>,
+    ) {
+        self.entries.insert(
+            id,
+            GraphEntry {
+                payload: ModulePayload::Synthetic(module),
+                direct_deps: Some(direct_deps),
+            },
+        );
     }
 
     #[inline]
@@ -97,7 +190,7 @@ impl<P> ResolveSession<P> {
         self.entries.insert(
             id,
             GraphEntry {
-                payload,
+                payload: ModulePayload::Dynamic(payload),
                 direct_deps: Some(direct_deps),
             },
         );
@@ -105,7 +198,7 @@ impl<P> ResolveSession<P> {
 }
 
 pub(crate) struct LoadSession<D: 'static, Arch: RelocationArch> {
-    pub(crate) resolve: ResolveSession<crate::image::RawDynamic<D, Arch>>,
+    pub(crate) resolve: ResolveSession<crate::image::RawDynamic<D, Arch>, Arch>,
     pub(crate) ready_to_commit: BTreeMap<KeyId, ReadyCommit<D, Arch>>,
 }
 
@@ -137,15 +230,13 @@ where
     }
 
     #[inline]
-    pub(crate) fn push_ready(
-        &mut self,
-        id: KeyId,
-        module: LoadedCore<D, Arch>,
-        direct_deps: Box<[KeyId]>,
-    ) {
+    pub(crate) fn push_ready<R>(&mut self, id: KeyId, module: R, direct_deps: Box<[KeyId]>)
+    where
+        R: Into<ModuleHandle<Arch>>,
+    {
         let previous = self
             .ready_to_commit
-            .insert(id, ReadyCommit::new(module, direct_deps));
+            .insert(id, ReadyCommit::new(module.into(), direct_deps));
         debug_assert!(previous.is_none(), "ready commit entries must be unique");
     }
 }

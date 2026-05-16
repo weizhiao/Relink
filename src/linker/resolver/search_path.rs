@@ -3,6 +3,7 @@ use crate::{
     Error, IoError, LinkerError, ParseEhdrError, Result,
     input::{ElfFile, ElfReader, Path, PathBuf},
     linker::{DependencyRequest, RootRequest},
+    relocation::RelocationArch,
     sync::Arc,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -308,7 +309,11 @@ impl SearchPathResolver {
     }
 
     #[inline]
-    fn resolved_key<'cfg, K>(key: K, file: ElfFile, is_visible: bool) -> ResolvedKey<'cfg, K> {
+    fn resolved_key<'cfg, K, Arch: RelocationArch>(
+        key: K,
+        file: ElfFile,
+        is_visible: bool,
+    ) -> ResolvedKey<'cfg, K, Arch> {
         if is_visible {
             ResolvedKey::existing(key)
         } else {
@@ -335,11 +340,12 @@ impl SearchPathResolver {
     }
 }
 
-impl<'cfg, K> KeyResolver<'cfg, K> for SearchPathResolver
+impl<'cfg, K, Arch> KeyResolver<'cfg, K, Arch> for SearchPathResolver
 where
     K: Clone + AsRef<Path> + From<PathBuf>,
+    Arch: RelocationArch,
 {
-    fn load_root(&mut self, req: &RootRequest<'_, K>) -> Result<ResolvedKey<'cfg, K>> {
+    fn load_root(&mut self, req: &RootRequest<'_, K>) -> Result<ResolvedKey<'cfg, K, Arch>> {
         if let Some((_, file)) = self.resolve_key(CandidateRequest::root(req.key().as_ref()))? {
             let key = req.key().clone();
             let is_visible = req.is_visible(&key);
@@ -352,7 +358,7 @@ where
     fn resolve_dependency(
         &mut self,
         req: &DependencyRequest<'_, K>,
-    ) -> Result<ResolvedKey<'cfg, K>> {
+    ) -> Result<ResolvedKey<'cfg, K, Arch>> {
         let origin = req.owner_path().parent();
         let needed = expand_origin(req.needed(), origin);
         let request = CandidateRequest::dependency(
