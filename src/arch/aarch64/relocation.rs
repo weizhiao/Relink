@@ -55,4 +55,4 @@ impl RelocationArch for AArch64Arch {
 }
 
 impl crate::relocation::RelocationValueProvider for AArch64Arch {}
-impl crate::linker::GotPltTarget for AArch64Arch {}
+impl crate::linker::scan::GotPltTarget for AArch64Arch {}

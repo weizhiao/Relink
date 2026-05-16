@@ -61,4 +61,4 @@ impl RelocationArch for X86Arch {
 }
 
 impl crate::relocation::RelocationValueProvider for X86Arch {}
-impl crate::linker::GotPltTarget for X86Arch {}
+impl crate::linker::scan::GotPltTarget for X86Arch {}

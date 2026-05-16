@@ -48,4 +48,4 @@ impl RelocationArch for RiscV64Arch {
 }
 
 impl crate::relocation::RelocationValueProvider for RiscV64Arch {}
-impl crate::linker::GotPltTarget for RiscV64Arch {}
+impl crate::linker::scan::GotPltTarget for RiscV64Arch {}

@@ -117,7 +117,7 @@ impl RelocationValueProvider for X86_64Arch {
     }
 }
 
-impl crate::linker::GotPltTarget for X86_64Arch {
+impl crate::linker::scan::GotPltTarget for X86_64Arch {
     fn got_plt_target(
         target_bytes: &[u8],
         relocation_type: ElfRelocationType,

@@ -58,4 +58,4 @@ impl RelocationArch for LoongArch64Arch {
 }
 
 impl crate::relocation::RelocationValueProvider for LoongArch64Arch {}
-impl crate::linker::GotPltTarget for LoongArch64Arch {}
+impl crate::linker::scan::GotPltTarget for LoongArch64Arch {}

@@ -52,4 +52,4 @@ impl RelocationArch for ArmArch {
 }
 
 impl crate::relocation::RelocationValueProvider for ArmArch {}
-impl crate::linker::GotPltTarget for ArmArch {}
+impl crate::linker::scan::GotPltTarget for ArmArch {}

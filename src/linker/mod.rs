@@ -13,7 +13,7 @@ mod linker;
 mod request;
 mod resolve;
 mod resolver;
-mod scan;
+pub mod scan;
 mod session;
 mod storage;
 
@@ -26,16 +26,5 @@ pub use request::{
 pub use resolver::{
     CandidateRequest, KeyResolver, ResolvedKey, SearchDirProvider, SearchDirSource,
     SearchPathResolver,
-};
-pub(crate) use scan::GotPltTarget;
-pub(in crate::linker) use scan::SectionId;
-pub use scan::{
-    AnyPass, Arena, DataPass, LinkPass, LinkPassPlan, LinkPipeline, Module, PassScope,
-    PassScopeMode, ReorderAccess, ReorderPass, Section, SectionDataAccess,
-};
-pub use scan::{
-    ArenaDescriptor, ArenaId, ArenaSharing, ArenaUsage, ClassPolicy, DataAccess, Materialization,
-    MemoryClass, ModuleLayout, PackingPolicy, SectionAddress, SectionDataAccessRef,
-    SectionMetadata, SectionPlacement,
 };
 pub use storage::KeyId;

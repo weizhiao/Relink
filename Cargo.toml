@@ -8,8 +8,8 @@ license.workspace = true
 rust-version.workspace = true
 readme = "README.md"
 keywords = ["elf", "loader", "jit", "linker", "no-std"]
-categories = ["no-std", "embedded", "os", "parsing", "development-tools"]
-description = "A high-performance, no_std compliant ELF loader and JIT linker for Rust."
+categories = ["no-std", "os", "parsing", "embedded", "compilers"]
+description = "A no_std-friendly ELF loader, runtime linker, and JIT linker for Rust."
 exclude = [".gitignore", "ci", "docs"]
 
 [package.metadata.docs.rs]

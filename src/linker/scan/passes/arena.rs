@@ -1,6 +1,6 @@
 use super::{LinkPassPlan, ReorderAccess};
 use crate::{
-    linker::{ArenaDescriptor, ArenaId, ArenaUsage},
+    linker::scan::{ArenaDescriptor, ArenaId, ArenaUsage},
     relocation::RelocationArch,
 };
 use core::marker::PhantomData;

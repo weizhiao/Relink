@@ -1,5 +1,4 @@
 use super::{
-    GotPltTarget,
     context::LinkContext,
     request::{
         DefaultRelocationPlanner, LoadObserver, RelocationPlanner, RelocationRequest,
@@ -8,8 +7,8 @@ use super::{
     resolve::{LoadResolveContext, ScanResolveContext},
     resolver::KeyResolver,
     scan::{
-        LinkPipeline, LinkPlan, MappedRuntimeMemory, Materialization, MemoryLayoutPlan, ModuleId,
-        build_arena_raw_dynamic, normalize_plan,
+        GotPltTarget, LinkPipeline, LinkPlan, MappedRuntimeMemory, Materialization,
+        MemoryLayoutPlan, ModuleId, build_arena_raw_dynamic, normalize_plan,
     },
     session::{GraphEntry, LoadSession},
     storage::KeyId,

@@ -5,11 +5,13 @@ use elf_loader::{
     elf::{ElfFileType, ElfProgramType},
     image::{LoadedCore, ModuleCapability, ModuleHandle, ScannedElf},
     input::ElfBinary,
-    linker::{ArenaDescriptor, ArenaSharing, MemoryClass},
     linker::{
-        DataPass, KeyResolver, LinkContext, LinkPass, LinkPassPlan, Linker, LoadObserver,
-        Materialization, RelocationInputs, RelocationRequest, ReorderPass, ResolvedKey,
-        RootRequest, StagedDynamic, VisibleModules,
+        KeyResolver, LinkContext, Linker, LoadObserver, RelocationInputs, RelocationRequest,
+        ResolvedKey, RootRequest, StagedDynamic, VisibleModules,
+        scan::{
+            ArenaDescriptor, ArenaSharing, DataPass, LinkPass, LinkPassPlan, Materialization,
+            MemoryClass, PassScopeMode, ReorderPass,
+        },
     },
     os::PageSize,
 };
@@ -454,7 +456,7 @@ struct TestPass<F>(F);
 
 impl<S, F> LinkPass<&'static str, S> for TestPass<F>
 where
-    S: elf_loader::linker::PassScopeMode,
+    S: PassScopeMode,
     F: for<'a> FnMut(&mut LinkPassPlan<'a, &'static str, S>) -> elf_loader::Result<()>,
 {
     fn run(&mut self, plan: &mut LinkPassPlan<'_, &'static str, S>) -> elf_loader::Result<()> {

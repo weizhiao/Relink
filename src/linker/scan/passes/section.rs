@@ -2,7 +2,7 @@ use super::{Arena, LinkPassPlan, Module, ReorderAccess, SectionDataAccess};
 use crate::{
     LinkerError, Result,
     aligned_bytes::ByteRepr,
-    linker::{SectionId, SectionMetadata, SectionPlacement},
+    linker::scan::{SectionId, SectionMetadata, SectionPlacement},
     relocation::RelocationArch,
 };
 use core::marker::PhantomData;
