@@ -236,7 +236,10 @@ where
         } else if let Some(off) = parsed.elf_hash_off {
             ElfDynamicHashTab::Elf(add_base(off)?)
         } else {
-            return Err(ParseDynamicError::MissingHashTable.into());
+            return Err(ParseDynamicError::MissingRequiredTag {
+                tag: "DT_GNU_HASH or DT_HASH",
+            }
+            .into());
         };
 
         // Extract relocation tables
@@ -284,7 +287,9 @@ where
                     add_base_nonzero(verneed_off)?,
                     parsed
                         .verneed_num
-                        .ok_or(ParseDynamicError::MissingVersionCount { tag: "DT_VERNEED" })?,
+                        .ok_or(ParseDynamicError::MissingRequiredTag {
+                            tag: "DT_VERNEEDNUM",
+                        })?,
                 ))
             })
             .transpose()?;
@@ -295,7 +300,9 @@ where
                     add_base_nonzero(verdef_off)?,
                     parsed
                         .verdef_num
-                        .ok_or(ParseDynamicError::MissingVersionCount { tag: "DT_VERDEF" })?,
+                        .ok_or(ParseDynamicError::MissingRequiredTag {
+                            tag: "DT_VERDEFNUM",
+                        })?,
                 ))
             })
             .transpose()?;

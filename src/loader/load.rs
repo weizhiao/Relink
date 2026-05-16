@@ -599,7 +599,7 @@ mod tests {
             .expect_err("phdr entry size mismatch should fail");
         assert!(matches!(
             err,
-            crate::Error::ParsePhdr(crate::ParsePhdrError::MalformedProgramHeaders)
+            crate::Error::ParsePhdr(crate::ParsePhdrError::Malformed { .. })
         ));
     }
 }

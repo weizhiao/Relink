@@ -32,7 +32,9 @@ impl DynamicScanParts {
             .find(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
             .ok_or(ParsePhdrError::MissingDynamicSection)?;
         if dynamic_phdr.p_filesz() % size_of::<ElfDyn<L>>() != 0 {
-            return Err(ParsePhdrError::MalformedProgramHeaders.into());
+            return Err(
+                ParsePhdrError::malformed("PT_DYNAMIC size is not a multiple of ElfDyn").into(),
+            );
         }
 
         let dyns = object.read_to_vec::<ElfDyn<L>>(
@@ -1004,5 +1006,5 @@ fn vaddr_to_file_offset<L: ElfLayout>(vaddr: usize, phdrs: &[ElfPhdr<L>]) -> Res
         }
     }
 
-    Err(ParsePhdrError::MalformedProgramHeaders.into())
+    Err(ParsePhdrError::malformed("virtual address is not covered by a PT_LOAD segment").into())
 }

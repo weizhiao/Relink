@@ -59,7 +59,7 @@ where
         }
 
         if !has_symtab {
-            return Err(RelocationError::MissingObjectSymbolTable.into());
+            return Err(RelocationError::MissingSymbolTable.into());
         }
 
         Ok(())
@@ -160,7 +160,7 @@ where
         }
 
         Ok(ObjectSectionData {
-            symtab: symtab.ok_or(RelocationError::MissingObjectSymbolTable)?,
+            symtab: symtab.ok_or(RelocationError::MissingSymbolTable)?,
             relocation: ObjectRelocation::new(relocation),
             init_array,
         })

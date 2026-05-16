@@ -151,8 +151,9 @@ where
         match phdr.program_type() {
             ElfProgramType::DYNAMIC => {
                 self.dynamic_ptr = Some(
-                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr()))
-                        .ok_or(ParsePhdrError::MalformedProgramHeaders)?,
+                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr())).ok_or(
+                        ParsePhdrError::malformed("PT_DYNAMIC is outside mapped segments"),
+                    )?,
                 )
             }
             ElfProgramType::GNU_RELRO => {
@@ -170,14 +171,16 @@ where
             }
             ElfProgramType::INTERP => {
                 self.interp = Some(
-                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr()))
-                        .ok_or(ParsePhdrError::MalformedProgramHeaders)?,
+                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr())).ok_or(
+                        ParsePhdrError::malformed("PT_INTERP is outside mapped segments"),
+                    )?,
                 );
             }
             ElfProgramType::GNU_EH_FRAME => {
                 self.eh_frame_hdr = Some(
-                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr()))
-                        .ok_or(ParsePhdrError::MalformedProgramHeaders)?,
+                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr())).ok_or(
+                        ParsePhdrError::malformed("PT_GNU_EH_FRAME is outside mapped segments"),
+                    )?,
                 );
             }
             ElfProgramType::TLS => {

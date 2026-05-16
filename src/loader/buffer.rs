@@ -44,16 +44,18 @@ impl ElfBuf {
         };
         let count = ehdr.e_phnum();
 
-        self.buf
-            .set_len(size)
-            .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
+        self.buf.set_len(size).ok_or(ParsePhdrError::malformed(
+            "program header table is too large",
+        ))?;
         object.read(self.buf.as_bytes_mut(), start)?;
         let phdrs = self
             .buf
             .try_cast_slice::<ElfPhdr<L>>()
-            .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
+            .ok_or(ParsePhdrError::malformed(
+                "program header table is not aligned",
+            ))?;
         if phdrs.len() != count {
-            return Err(ParsePhdrError::MalformedProgramHeaders.into());
+            return Err(ParsePhdrError::malformed("program header count mismatch").into());
         }
 
         Ok(Some(phdrs))

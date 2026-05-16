@@ -1,7 +1,7 @@
 use super::{RuntimeModuleMemory, RuntimeOffset, RuntimeSectionMemory, SectionId, SourceAddress};
 use crate::linker::scan::{DataAccess, LinkPlan, ModuleId};
 use crate::{
-    LinkerError, Result,
+    LinkerError, RelocReason, Result,
     aligned_bytes::ByteRepr,
     elf::{
         ElfDyn, ElfDynamicTag, ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfSymbol,
@@ -629,7 +629,17 @@ where
         |value| write_bytes(&value.into_inner().to_ne_bytes()),
         |value| write_bytes(&value.into_inner().to_ne_bytes()),
         |value| write_bytes(&value.into_inner().to_ne_bytes()),
-    )?
+    )
+    .map_err(retained_relocation_value_error)?
+}
+
+fn retained_relocation_value_error(reason: RelocReason) -> crate::Error {
+    LinkerError::metadata_rewrite(match reason {
+        RelocReason::IntConversionOutOfRange => "retained relocation value is out of range",
+        RelocReason::Unsupported => "retained relocation type is unsupported",
+        _ => "retained relocation value computation failed",
+    })
+    .into()
 }
 
 fn retained_relocation_target<Arch>(

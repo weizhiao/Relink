@@ -27,20 +27,20 @@ pub enum IoError {
     /// `failed to fill buffer`
     FailedToFillBuffer,
     /// `read offset out of bounds: offset {offset}, len {len}, available {available}`
-    ReadOffsetOutOfBounds(Box<ReadOffsetOutOfBoundsError>),
+    ReadOutOfBounds(Box<ReadBoundsError>),
     /// `close failed`
     CloseFailed,
 }
 
 /// Structured details for an out-of-bounds read.
 #[derive(Debug)]
-pub struct ReadOffsetOutOfBoundsError {
+pub struct ReadBoundsError {
     offset: usize,
     len: usize,
     available: usize,
 }
 
-impl ReadOffsetOutOfBoundsError {
+impl ReadBoundsError {
     #[inline]
     pub(crate) fn new(offset: usize, len: usize, available: usize) -> Self {
         Self {
@@ -61,7 +61,7 @@ impl Display for IoError {
             Self::SeekFailed { code } => write!(f, "seek failed with error: {code}"),
             Self::ReadFailed { code } => write!(f, "read failed with error: {code}"),
             Self::FailedToFillBuffer => f.write_str("failed to fill buffer"),
-            Self::ReadOffsetOutOfBounds(err) => write!(
+            Self::ReadOutOfBounds(err) => write!(
                 f,
                 "read offset out of bounds: offset {}, len {}, available {}",
                 err.offset, err.len, err.available
@@ -149,32 +149,22 @@ impl Display for MmapError {
 
 /// Structured dynamic-section parsing error details.
 pub enum ParseDynamicError {
-    /// The dynamic section omitted both `DT_GNU_HASH` and `DT_HASH`.
-    MissingHashTable,
     /// `{tag}` is required by the ABI but missing from the dynamic section.
     MissingRequiredTag { tag: &'static str },
     /// A dynamic-section address calculation overflowed.
     AddressOverflow,
     /// A relocation table described by the dynamic section is malformed.
     MalformedRelocationTable { detail: &'static str },
-    /// `{tag} was present without its required count tag`
-    MissingVersionCount { tag: &'static str },
 }
 
 impl Display for ParseDynamicError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingHashTable => {
-                f.write_str("dynamic section does not have DT_GNU_HASH nor DT_HASH")
-            }
             Self::MissingRequiredTag { tag } => {
                 write!(f, "dynamic section is missing required tag {tag}")
             }
             Self::AddressOverflow => f.write_str("dynamic section address calculation overflowed"),
             Self::MalformedRelocationTable { detail } => f.write_str(detail),
-            Self::MissingVersionCount { tag } => {
-                write!(f, "{tag} is missing its required version-count tag")
-            }
         }
     }
 }
@@ -234,7 +224,7 @@ impl Display for ParseEhdrError {
 /// Structured program-header parsing error details.
 pub enum ParsePhdrError {
     /// The program header table is malformed.
-    MalformedProgramHeaders,
+    Malformed { detail: &'static str },
     /// A `PT_LOAD` segment cannot be mapped with the selected page size.
     PageAlignmentMismatch { page_size: usize },
     /// A dynamic image was expected to carry `PT_DYNAMIC`.
@@ -243,10 +233,17 @@ pub enum ParsePhdrError {
     InvalidUtf8 { field: &'static str },
 }
 
+impl ParsePhdrError {
+    #[inline]
+    pub(crate) const fn malformed(detail: &'static str) -> Self {
+        Self::Malformed { detail }
+    }
+}
+
 impl Display for ParsePhdrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MalformedProgramHeaders => f.write_str("program headers are malformed"),
+            Self::Malformed { detail } => f.write_str(detail),
             Self::PageAlignmentMismatch { page_size } => write!(
                 f,
                 "program headers are not compatible with page size {page_size}"
@@ -258,55 +255,53 @@ impl Display for ParsePhdrError {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum FailureReason {
+pub(crate) enum RelocReason {
     UnknownSymbol,
-    Unhandled,
+    Unsupported,
     #[cfg(feature = "tls")]
-    TlsModuleIdUnavailable,
+    MissingTlsModuleId,
     #[cfg(feature = "tls")]
-    TlsTpOffsetUnavailable,
+    MissingTlsTpOffset,
     #[cfg(not(feature = "tls"))]
     TlsDisabled,
-    EmulatorUnavailable,
-    #[cfg(feature = "object")]
-    IntegralConversionOutOfRange,
+    MissingEmulator,
+    IntConversionOutOfRange,
 }
 
-impl Display for FailureReason {
+impl Display for RelocReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownSymbol => f.write_str("unknown symbol"),
-            Self::Unhandled => f.write_str("Unhandled relocation"),
+            Self::Unsupported => f.write_str("unsupported relocation"),
             #[cfg(feature = "tls")]
-            Self::TlsModuleIdUnavailable => f.write_str("TLS module id is unavailable"),
+            Self::MissingTlsModuleId => f.write_str("TLS module id is unavailable"),
             #[cfg(feature = "tls")]
-            Self::TlsTpOffsetUnavailable => f.write_str("TLS thread-pointer offset is unavailable"),
+            Self::MissingTlsTpOffset => f.write_str("TLS thread-pointer offset is unavailable"),
             #[cfg(not(feature = "tls"))]
             Self::TlsDisabled => f.write_str("TLS relocation support is disabled"),
-            Self::EmulatorUnavailable => f.write_str("relocation requires an emulator"),
-            #[cfg(feature = "object")]
-            Self::IntegralConversionOutOfRange => {
+            Self::MissingEmulator => f.write_str("relocation requires an emulator"),
+            Self::IntConversionOutOfRange => {
                 f.write_str("out of range integral type conversion attempted")
             }
         }
     }
 }
 
-/// Relocation context carried separately so the top-level [`Error`] stays compact.
-pub struct RelocationContextError {
+/// Detailed relocation failure carried separately so the top-level [`Error`] stays compact.
+pub struct RelocationFailure {
     file: Box<str>,
     r_type: &'static str,
     symbol: Option<Box<str>>,
-    reason: FailureReason,
+    reason: RelocReason,
 }
 
-impl RelocationContextError {
+impl RelocationFailure {
     #[inline]
     pub(crate) fn new(
         file: &str,
         r_type: &'static str,
         symbol: Option<&str>,
-        reason: FailureReason,
+        reason: RelocReason,
     ) -> Self {
         Self {
             file: file.into(),
@@ -317,7 +312,7 @@ impl RelocationContextError {
     }
 }
 
-impl Display for RelocationContextError {
+impl Display for RelocationFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "file: {}, relocation type: {}, ", self.file, self.r_type)?;
         if let Some(symbol) = &self.symbol {
@@ -331,32 +326,24 @@ impl Display for RelocationContextError {
 
 /// Structured relocation error details.
 pub enum RelocationError {
-    /// `out of range integral type conversion attempted`
-    IntegerConversionOverflow,
-    /// `unsupported relocation type`
-    UnsupportedRelocationType,
     /// Detailed relocation context, formatted lazily in `Display`.
-    RelocationContext(Box<RelocationContextError>),
+    Context(Box<RelocationFailure>),
     #[cfg(feature = "lazy-binding")]
     /// `lazy binding setup failed: {detail}`
     LazyBindingSetup { detail: &'static str },
     /// `object file missing symbol table`
-    MissingObjectSymbolTable,
+    MissingSymbolTable,
 }
 
 impl Display for RelocationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::IntegerConversionOverflow => {
-                f.write_str("out of range integral type conversion attempted")
-            }
-            Self::UnsupportedRelocationType => f.write_str("unsupported relocation type"),
-            Self::RelocationContext(ctx) => Display::fmt(ctx, f),
+            Self::Context(ctx) => Display::fmt(ctx, f),
             #[cfg(feature = "lazy-binding")]
             Self::LazyBindingSetup { detail } => {
                 write!(f, "lazy binding setup failed: {detail}")
             }
-            Self::MissingObjectSymbolTable => f.write_str("object file missing symbol table"),
+            Self::MissingSymbolTable => f.write_str("object file missing symbol table"),
         }
     }
 }
@@ -375,13 +362,13 @@ impl Display for CustomError {
     }
 }
 
-/// Linker dependency context carried separately so the top-level [`Error`] stays compact.
-pub struct UnresolvedDependencyError {
+/// Unresolved dependency details carried separately so the top-level [`Error`] stays compact.
+pub struct UnresolvedDependency {
     owner: Box<str>,
     dependency: Box<str>,
 }
 
-impl UnresolvedDependencyError {
+impl UnresolvedDependency {
     #[inline]
     pub(crate) fn new(owner: &str, dependency: &str) -> Self {
         Self {
@@ -391,7 +378,7 @@ impl UnresolvedDependencyError {
     }
 }
 
-impl Display for UnresolvedDependencyError {
+impl Display for UnresolvedDependency {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -404,7 +391,7 @@ impl Display for UnresolvedDependencyError {
 /// Structured linker error details.
 pub enum LinkerError {
     /// A dependency could not be resolved by the resolver callback.
-    UnresolvedDependency(Box<UnresolvedDependencyError>),
+    UnresolvedDependency(Box<UnresolvedDependency>),
     /// Committed linker context state rejected an operation.
     Context { detail: &'static str },
     /// Resolver state was inconsistent with the current link context.
@@ -548,9 +535,9 @@ impl From<MmapError> for Error {
     }
 }
 
-impl From<RelocationContextError> for RelocationError {
-    fn from(err: RelocationContextError) -> Self {
-        Self::RelocationContext(Box::new(err))
+impl From<RelocationFailure> for RelocationError {
+    fn from(err: RelocationFailure) -> Self {
+        Self::Context(Box::new(err))
     }
 }
 
@@ -560,8 +547,8 @@ impl From<RelocationError> for Error {
     }
 }
 
-impl From<RelocationContextError> for Error {
-    fn from(err: RelocationContextError) -> Self {
+impl From<RelocationFailure> for Error {
+    fn from(err: RelocationFailure) -> Self {
         RelocationError::from(err).into()
     }
 }
@@ -639,11 +626,11 @@ debug_as_display!(
     ParseDynamicError,
     ParseEhdrError,
     ParsePhdrError,
-    FailureReason,
-    RelocationContextError,
+    RelocReason,
+    RelocationFailure,
     RelocationError,
     CustomError,
-    UnresolvedDependencyError,
+    UnresolvedDependency,
     LinkerError,
     TlsError,
     Error,
@@ -655,11 +642,11 @@ pub(crate) fn relocate_context_error(
     file: &str,
     r_type: &'static str,
     symbol: Option<&str>,
-    reason: FailureReason,
+    reason: RelocReason,
 ) -> Error {
-    Error::Relocation(RelocationError::RelocationContext(Box::new(
-        RelocationContextError::new(file, r_type, symbol, reason),
-    )))
+    Error::Relocation(RelocationError::Context(Box::new(RelocationFailure::new(
+        file, r_type, symbol, reason,
+    ))))
 }
 
 #[cold]

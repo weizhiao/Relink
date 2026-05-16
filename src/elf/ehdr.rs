@@ -176,7 +176,7 @@ impl<L: ElfLayout> ElfHeader<L> {
             size_of::<ElfPhdr<L>>(),
             self.e_phnum(),
             self.e_phoff(),
-            || ParsePhdrError::MalformedProgramHeaders.into(),
+            || ParsePhdrError::malformed("program header table layout is invalid").into(),
         )
     }
 

@@ -1,5 +1,5 @@
 use crate::{
-    RelocationError,
+    RelocReason,
     arch::x86_64::relocation::X86_64Arch,
     elf::ElfRelType,
     object::layout::{GotEntry, PltEntry, PltGotSection},
@@ -32,19 +32,8 @@ impl X86_64Arch {
         let offset = rel.r_offset();
         let p = base.offset(rel.r_offset());
         let unknown_symbol =
-            || reloc_error::<Self, _>(rel, crate::FailureReason::UnknownSymbol, helper.core);
-        let conversion_error = || {
-            reloc_error::<Self, _>(
-                rel,
-                crate::FailureReason::IntegralConversionOutOfRange,
-                helper.core,
-            )
-        };
-        let value_error = |err| match err {
-            RelocationError::UnsupportedRelocationType => unknown_symbol(),
-            RelocationError::IntegerConversionOverflow => conversion_error(),
-            _ => unreachable!("unexpected relocation error from value computation"),
-        };
+            || reloc_error::<Self, _>(rel, crate::RelocReason::UnknownSymbol, helper.core);
+        let value_error = |reason| reloc_error::<Self, _>(rel, reason, helper.core);
         let write_relocation_target = |target| {
             <Self as RelocationValueProvider>::relocation_value(
                 r_type.raw() as usize,
@@ -78,8 +67,7 @@ impl X86_64Arch {
                 };
                 match write_relocation_target(sym.into_inner()) {
                     Ok(()) => {}
-                    Err(RelocationError::UnsupportedRelocationType) => return Err(unknown_symbol()),
-                    Err(RelocationError::IntegerConversionOverflow) => {
+                    Err(RelocReason::IntConversionOutOfRange) => {
                         let plt_entry = pltgot.add_plt_entry(r_sym);
                         let plt_entry_addr = match plt_entry {
                             PltEntry::Occupied(plt_entry_addr) => plt_entry_addr,
@@ -90,9 +78,8 @@ impl X86_64Arch {
                                     .get_addr()
                                     .relative_to(plt_entry_addr.into_inner())
                                     .relative_to(10);
-                                let call_offset_val = call_offset
-                                    .try_into_sword32()
-                                    .map_err(|_| conversion_error())?;
+                                let call_offset_val =
+                                    call_offset.try_into_sword32().map_err(value_error)?;
                                 plt[6..10].copy_from_slice(&call_offset_val.to_ne_bytes());
                                 plt_entry_addr
                             }
@@ -100,7 +87,7 @@ impl X86_64Arch {
                         write_relocation_target(plt_entry_addr.into_inner())
                             .map_err(value_error)?;
                     }
-                    Err(_) => unreachable!("unexpected relocation error from value computation"),
+                    Err(reason) => return Err(value_error(reason)),
                 }
             }
             R_X86_64_GOTPCREL => {

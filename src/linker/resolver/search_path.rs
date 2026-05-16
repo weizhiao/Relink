@@ -8,6 +8,14 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
 
+fn expand_origin(value: &str, origin: &Path) -> PathBuf {
+    PathBuf::from(
+        value
+            .replace("${ORIGIN}", origin.as_str())
+            .replace("$ORIGIN", origin.as_str()),
+    )
+}
+
 /// Runtime directory provider used by [`SearchDirSource::Dynamic`].
 ///
 /// Implementations append directories to `out` in the order they should be
@@ -114,7 +122,7 @@ impl<'a> CandidateRequest<'a> {
     pub fn origin(&self) -> Option<&'a Path> {
         match self {
             Self::Root { .. } => None,
-            Self::Dependency { owner_path, .. } => Some(owner_path.origin_dir()),
+            Self::Dependency { owner_path, .. } => Some(owner_path.parent()),
         }
     }
 
@@ -148,12 +156,12 @@ impl<'a> CandidateRequest<'a> {
             return None;
         }
 
-        let origin = owner_path.origin_dir();
+        let origin = owner_path.parent();
         Some(
             path_list?
                 .split(':')
                 .filter(|dir| !dir.is_empty())
-                .map(|dir| Path::expand_origin(dir, origin))
+                .map(|dir| expand_origin(dir, origin))
                 .collect(),
         )
     }
@@ -322,8 +330,8 @@ where
         &mut self,
         req: &DependencyRequest<'_, K>,
     ) -> Result<ResolvedKey<'cfg, K>> {
-        let origin = req.owner_path().origin_dir();
-        let needed = Path::expand_origin(req.needed(), origin);
+        let origin = req.owner_path().parent();
+        let needed = expand_origin(req.needed(), origin);
         let request = CandidateRequest::dependency(
             needed.as_path(),
             req.owner_name(),

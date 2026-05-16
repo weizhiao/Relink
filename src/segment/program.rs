@@ -78,11 +78,17 @@ pub(crate) fn parse_segments(
             }
 
             has_load_segment = true;
+            if phdr.p_filesz() > phdr.p_memsz() {
+                return Err(ParsePhdrError::malformed("PT_LOAD p_filesz exceeds p_memsz").into());
+            }
+
             let vaddr_start = phdr.p_vaddr();
-            let vaddr_end = phdr
-                .p_vaddr()
-                .checked_add(phdr.p_memsz())
-                .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
+            let vaddr_end =
+                phdr.p_vaddr()
+                    .checked_add(phdr.p_memsz())
+                    .ok_or(ParsePhdrError::malformed(
+                        "PT_LOAD virtual address range overflows",
+                    ))?;
             if vaddr_start < min_vaddr {
                 min_vaddr = vaddr_start;
             }
@@ -93,7 +99,7 @@ pub(crate) fn parse_segments(
     }
 
     if !has_load_segment {
-        return Err(ParsePhdrError::MalformedProgramHeaders.into());
+        return Err(ParsePhdrError::malformed("program headers do not contain PT_LOAD").into());
     }
 
     // Align addresses to page boundaries
@@ -101,7 +107,9 @@ pub(crate) fn parse_segments(
     min_vaddr = rounddown(min_vaddr, page_size);
     let total_size = max_vaddr
         .checked_sub(min_vaddr)
-        .ok_or(ParsePhdrError::MalformedProgramHeaders)?;
+        .ok_or(ParsePhdrError::malformed(
+            "PT_LOAD virtual address range is inverted",
+        ))?;
 
     // For shared libraries, let the OS choose the base address (None)
     // For executables, suggest the preferred base address (Some)

@@ -2,7 +2,7 @@
 use super::RelocHelper;
 use super::{Emulator, RelocAddr, RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
 use crate::{
-    RelocationError, Result,
+    RelocReason, Result,
     arch::{ArchKind, NativeArch},
     elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType},
     image::{ElfCore, ModuleScope},
@@ -75,8 +75,8 @@ pub trait RelocationArch: 'static {
     #[doc(hidden)]
     #[allow(private_interfaces)]
     fn relocate_object<D, PreH, PostH>(
-        _helper: &mut RelocHelper<'_, D, Self, PreH, PostH>,
-        _rel: &ElfRelType<Self>,
+        helper: &mut RelocHelper<'_, D, Self, PreH, PostH>,
+        rel: &ElfRelType<Self>,
         _pltgot: &mut crate::object::layout::PltGotSection,
     ) -> Result<()>
     where
@@ -85,7 +85,11 @@ pub trait RelocationArch: 'static {
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
     {
-        Err(crate::RelocationError::UnsupportedRelocationType.into())
+        Err(super::reloc_error::<Self, _>(
+            rel,
+            RelocReason::Unsupported,
+            helper.core,
+        ))
     }
 
     #[cfg(feature = "object")]
@@ -112,8 +116,8 @@ pub trait RelocationArch: 'static {
 pub(crate) trait RelocationValueProvider {
     fn relocation_value_kind(
         _relocation_type: usize,
-    ) -> core::result::Result<RelocationValueKind, RelocationError> {
-        Err(RelocationError::UnsupportedRelocationType)
+    ) -> core::result::Result<RelocationValueKind, RelocReason> {
+        Err(RelocReason::Unsupported)
     }
 
     fn relocation_value<T>(
@@ -125,7 +129,7 @@ pub(crate) trait RelocationValueProvider {
         write_addr: impl FnOnce(RelocAddr) -> T,
         write_word32: impl FnOnce(RelocValue<u32>) -> T,
         write_sword32: impl FnOnce(RelocValue<i32>) -> T,
-    ) -> core::result::Result<T, RelocationError> {
+    ) -> core::result::Result<T, RelocReason> {
         let kind = Self::relocation_value_kind(relocation_type)?;
         match kind {
             RelocationValueKind::None => Ok(skip(RelocValue::new(()))),
@@ -136,13 +140,13 @@ pub(crate) trait RelocationValueProvider {
                 u32::try_from(formula.compute(target, addend, place))
                     .map(RelocValue::new)
                     .map(write_word32)
-                    .map_err(|_| RelocationError::IntegerConversionOverflow)
+                    .map_err(|_| RelocReason::IntConversionOutOfRange)
             }
             RelocationValueKind::SWord32(formula) => {
                 i32::try_from(formula.compute(target, addend, place))
                     .map(RelocValue::new)
                     .map(write_sword32)
-                    .map_err(|_| RelocationError::IntegerConversionOverflow)
+                    .map_err(|_| RelocReason::IntConversionOutOfRange)
             }
         }
     }

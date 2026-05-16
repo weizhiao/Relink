@@ -53,10 +53,14 @@ impl<'bytes> ElfReader for ElfBinary<'bytes> {
     fn read(&mut self, buf: &mut [u8], offset: usize) -> crate::Result<()> {
         let bytes = self.bytes.as_ref();
         if offset + buf.len() > bytes.len() {
-            return Err(crate::IoError::ReadOffsetOutOfBounds(Box::new(
-                crate::ReadOffsetOutOfBoundsError::new(offset, buf.len(), bytes.len()),
-            ))
-            .into());
+            return Err(
+                crate::IoError::ReadOutOfBounds(Box::new(crate::ReadBoundsError::new(
+                    offset,
+                    buf.len(),
+                    bytes.len(),
+                )))
+                .into(),
+            );
         }
         buf.copy_from_slice(&bytes[offset..offset + buf.len()]);
         Ok(())
@@ -129,10 +133,14 @@ impl<'a> ElfReader for &'a [u8] {
     /// Reads data from the byte slice at the specified offset.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         if offset + buf.len() > self.len() {
-            return Err(crate::IoError::ReadOffsetOutOfBounds(Box::new(
-                crate::ReadOffsetOutOfBoundsError::new(offset, buf.len(), self.len()),
-            ))
-            .into());
+            return Err(
+                crate::IoError::ReadOutOfBounds(Box::new(crate::ReadBoundsError::new(
+                    offset,
+                    buf.len(),
+                    self.len(),
+                )))
+                .into(),
+            );
         }
         buf.copy_from_slice(&self[offset..offset + buf.len()]);
         Ok(())

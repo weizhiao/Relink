@@ -1,7 +1,7 @@
 use super::{RelocAddr, resolve_ifunc};
 use crate::relocation::{TlsDescEmuRequest, TlsDescEmuValue};
 use crate::{
-    Error, FailureReason, Result,
+    Error, RelocReason, Result,
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
     image::{ElfCore, Module, ModuleScope},
     logging, relocate_context_error,
@@ -192,7 +192,7 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
 #[cold]
 pub(crate) fn reloc_error<A, D>(
     rel: &ElfRelType<A>,
-    reason: FailureReason,
+    reason: RelocReason,
     lib: &ElfCore<D, A>,
 ) -> Error
 where

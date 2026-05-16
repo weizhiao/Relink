@@ -1,6 +1,6 @@
 //! Relocation of elf objects
 use crate::{
-    FailureReason, ParseDynamicError, RelocationError, Result,
+    ParseDynamicError, RelocReason, Result,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     image::{LoadedCore, RawDynamic},
     logging,
@@ -176,9 +176,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
         let base = core.base_addr();
         let segments = core.segments();
         let reloc = self.relocation();
-        if binding.is_lazy() && !Arch::SUPPORTS_NATIVE_RUNTIME {
-            return Err(RelocationError::UnsupportedRelocationType.into());
-        }
+        debug_assert!(Arch::SUPPORTS_NATIVE_RUNTIME || !binding.is_lazy());
         binding.prepare_plt(self)?;
 
         // Process PLT relocations
@@ -188,7 +186,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
             }
             let r_type = rel.r_type();
             let r_sym = rel.r_symbol();
-            let mut failure_reason = FailureReason::Unhandled;
+            let mut failure_reason = RelocReason::Unsupported;
 
             // Handle jump slot relocations
             if likely(r_type == Arch::JUMP_SLOT) {
@@ -200,7 +198,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                     write_reloc_addr::<Arch>(segments, rel.r_offset(), symbol);
                     continue;
                 }
-                failure_reason = FailureReason::UnknownSymbol;
+                failure_reason = RelocReason::UnknownSymbol;
             } else if unlikely(r_type == Arch::IRELATIVE) {
                 let r_addend = rel.r_addend(base.into_inner());
                 let addr = base.addend(r_addend);
@@ -209,7 +207,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                         write_reloc_addr::<Arch>(segments, rel.r_offset(), resolved);
                         continue;
                     }
-                    failure_reason = FailureReason::EmulatorUnavailable;
+                    failure_reason = RelocReason::MissingEmulator;
                 } else {
                     write_reloc_addr::<Arch>(segments, rel.r_offset(), unsafe {
                         resolve_ifunc(addr)
@@ -316,7 +314,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
             }
             let r_type = rel.r_type();
             let r_sym = rel.r_symbol();
-            let mut failure_reason = FailureReason::Unhandled;
+            let mut failure_reason = RelocReason::Unsupported;
 
             // Handle `REL_NONE` first because some architectures use `0` as a
             // sentinel for unsupported relocation classes such as TLSDESC.
@@ -331,7 +329,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                     write_reloc_addr::<Arch>(segments, rel.r_offset(), symbol.addend(r_addend));
                     continue;
                 }
-                failure_reason = FailureReason::UnknownSymbol;
+                failure_reason = RelocReason::UnknownSymbol;
             } else if r_type == Arch::COPY {
                 // Handle copy relocations (typically for global data)
                 if let Some(symdef) = helper.find_symdef(r_sym) {
@@ -344,7 +342,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                         }
                     }
                 }
-                failure_reason = FailureReason::UnknownSymbol;
+                failure_reason = RelocReason::UnknownSymbol;
             } else if r_type == Arch::IRELATIVE {
                 let r_addend = rel.r_addend(base.into_inner());
                 let addr = base.addend(r_addend);
@@ -353,7 +351,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                         write_reloc_addr::<Arch>(segments, rel.r_offset(), resolved);
                         continue;
                     }
-                    failure_reason = FailureReason::EmulatorUnavailable;
+                    failure_reason = RelocReason::MissingEmulator;
                 } else {
                     write_reloc_addr::<Arch>(segments, rel.r_offset(), unsafe {
                         resolve_ifunc(addr)

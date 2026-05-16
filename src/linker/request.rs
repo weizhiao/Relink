@@ -1,5 +1,5 @@
 use crate::{
-    LinkerError, Result, UnresolvedDependencyError,
+    LinkerError, Result, UnresolvedDependency,
     arch::ArchKind,
     image::{ModuleHandle, ModuleScope, RawDylib, RawDynamic, ScannedDynamic},
     input::Path,
@@ -230,7 +230,7 @@ impl<'a, K: Clone> DependencyRequest<'a, K> {
 
     #[inline]
     pub fn unresolved(&self) -> crate::Error {
-        LinkerError::UnresolvedDependency(Box::new(UnresolvedDependencyError::new(
+        LinkerError::UnresolvedDependency(Box::new(UnresolvedDependency::new(
             self.owner_name(),
             self.needed(),
         )))

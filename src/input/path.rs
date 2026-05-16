@@ -28,7 +28,7 @@ impl Path {
         self.as_str().contains('/') || self.as_str().contains('\\')
     }
 
-    pub fn origin_dir(&self) -> &Self {
+    pub fn parent(&self) -> &Self {
         let path = self.as_str();
         let slash = path.rfind('/');
         let backslash = path.rfind('\\');
@@ -67,14 +67,6 @@ impl Path {
         }
         path.push_str(name);
         PathBuf::from(path)
-    }
-
-    pub fn expand_origin(value: &str, origin: &Self) -> PathBuf {
-        PathBuf::from(
-            value
-                .replace("${ORIGIN}", origin.as_str())
-                .replace("$ORIGIN", origin.as_str()),
-        )
     }
 }
 
@@ -223,20 +215,10 @@ mod tests {
     use super::{Path, PathBuf};
 
     #[test]
-    fn origin_expansion_handles_common_forms() {
-        let origin = Path::new("target");
-        assert_eq!(Path::expand_origin("$ORIGIN", origin).as_str(), "target");
-        assert_eq!(
-            Path::expand_origin("${ORIGIN}/deps", origin).as_str(),
-            "target/deps"
-        );
-    }
-
-    #[test]
-    fn origin_dir_falls_back_to_current_directory() {
-        assert_eq!(Path::new("liba.so").origin_dir().as_str(), ".");
-        assert_eq!(Path::new("target/liba.so").origin_dir().as_str(), "target");
-        assert_eq!(Path::new("/liba.so").origin_dir().as_str(), "/");
+    fn parent_falls_back_to_current_directory() {
+        assert_eq!(Path::new("liba.so").parent().as_str(), ".");
+        assert_eq!(Path::new("target/liba.so").parent().as_str(), "target");
+        assert_eq!(Path::new("/liba.so").parent().as_str(), "/");
     }
 
     #[test]
@@ -263,6 +245,6 @@ mod tests {
     fn owned_path_derefs_to_borrowed_path() {
         let path = PathBuf::from("target/liba.so");
         assert!(path.has_dir_separator());
-        assert_eq!(path.origin_dir().as_str(), "target");
+        assert_eq!(path.parent().as_str(), "target");
     }
 }

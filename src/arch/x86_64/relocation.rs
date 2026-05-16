@@ -20,7 +20,7 @@ use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::{
     RelocationArch, RelocationValueFormula, RelocationValueKind, RelocationValueProvider,
 };
-use crate::{LinkerError, RelocationError, Result};
+use crate::{LinkerError, RelocReason, Result};
 
 /// x86-64 (AMD64) architecture marker.
 #[derive(Debug, Clone, Copy, Default)]
@@ -110,7 +110,7 @@ impl RelocationArch for X86_64Arch {
 impl RelocationValueProvider for X86_64Arch {
     fn relocation_value_kind(
         relocation_type: usize,
-    ) -> core::result::Result<RelocationValueKind, RelocationError> {
+    ) -> core::result::Result<RelocationValueKind, RelocReason> {
         use RelocationValueFormula::{Absolute, RelativeToPlace};
         match relocation_type as u32 {
             R_X86_64_NONE => Ok(RelocationValueKind::None),
@@ -120,7 +120,7 @@ impl RelocationValueProvider for X86_64Arch {
             R_X86_64_PC32 | R_X86_64_PLT32 | R_X86_64_GOTPCREL => {
                 Ok(RelocationValueKind::SWord32(RelativeToPlace))
             }
-            _ => Err(RelocationError::UnsupportedRelocationType),
+            _ => Err(RelocReason::Unsupported),
         }
     }
 }

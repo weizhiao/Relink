@@ -1,5 +1,5 @@
 #[cfg(feature = "object")]
-use crate::{RelocationError, Result};
+use crate::RelocReason;
 use core::ptr::null;
 
 /// A wrapper type for relocation values, providing type safety and arithmetic operations.
@@ -80,10 +80,10 @@ impl RelocAddr {
 
     #[inline]
     #[cfg(feature = "object")]
-    pub fn try_into_sword32(self) -> Result<RelocSWord32> {
+    pub(crate) fn try_into_sword32(self) -> core::result::Result<RelocSWord32, RelocReason> {
         i32::try_from(self.0 as isize)
             .map(RelocValue::new)
-            .map_err(|_| RelocationError::IntegerConversionOverflow.into())
+            .map_err(|_| RelocReason::IntConversionOutOfRange)
     }
 }
 
