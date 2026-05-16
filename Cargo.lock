@@ -281,7 +281,7 @@ checksum = "55dd888a213fc57e957abf2aa305ee3e8a28dbe05687a251f33b637cd46b0070"
 
 [[package]]
 name = "elf_loader"
-version = "0.14.1"
+version = "0.15.0"
 dependencies = [
  "bitflags",
  "cfg-if",

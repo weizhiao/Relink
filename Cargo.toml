@@ -1,6 +1,6 @@
 [package]
 name = "elf_loader"
-version = "0.14.1"
+version = "0.15.0"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
