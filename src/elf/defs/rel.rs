@@ -127,15 +127,24 @@ impl<L: ElfLayout> ElfRel<L> {
     }
 }
 
+/// Common interface shared by ELF `REL` and `RELA` relocation entries.
 pub trait ElfRelEntry<L: ElfLayout = NativeElfLayout> {
+    /// Section type used by this relocation entry format.
     const SECTION_TYPE: ElfSectionType;
+    /// Whether the addend is stored at the relocation target address.
     const HAS_IMPLICIT_ADDEND: bool;
 
+    /// Returns the relocation type number.
     fn r_type(&self) -> ElfRelocationType;
+    /// Returns the symbol table index referenced by the relocation.
     fn r_symbol(&self) -> usize;
+    /// Returns the relocation target offset.
     fn r_offset(&self) -> usize;
+    /// Returns the relocation addend, reading implicit addends relative to `base`.
     fn r_addend(&self, base: usize) -> isize;
+    /// Updates the relocation target offset.
     fn set_offset(&mut self, offset: usize);
+    /// Updates the relocation addend.
     fn set_addend(&mut self, base: usize, addend: isize);
 }
 
@@ -209,4 +218,5 @@ impl<L: ElfLayout> ElfRelEntry<L> for ElfRel<L> {
     }
 }
 
+/// Relocation entry type selected by a target architecture.
 pub type ElfRelType<Arch = NativeArch> = <Arch as RelocationArch>::Relocation;

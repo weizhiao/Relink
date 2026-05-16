@@ -9,12 +9,19 @@ use alloc::boxed::Box;
 
 /// Common metadata needed while resolving one dependency edge.
 pub trait DependencyOwner {
+    /// Returns the owner path/key used by the loader.
     fn path(&self) -> &Path;
+    /// Returns the owner name used in diagnostics.
     fn name(&self) -> &str;
+    /// Returns the owner's `DT_RPATH`, if present.
     fn rpath(&self) -> Option<&str>;
+    /// Returns the owner's `DT_RUNPATH`, if present.
     fn runpath(&self) -> Option<&str>;
+    /// Returns the owner's `PT_INTERP` path, if present.
     fn interp(&self) -> Option<&str>;
+    /// Returns the number of `DT_NEEDED` entries.
     fn needed_len(&self) -> usize;
+    /// Returns one `DT_NEEDED` entry by index.
     fn needed_lib(&self, index: usize) -> Option<&str>;
 }
 
@@ -141,11 +148,13 @@ impl<'a, K: Clone> RootRequest<'a, K> {
         Self { key, is_visible }
     }
 
+    /// Returns the root key requested by the caller.
     #[inline]
     pub fn key(&self) -> &'a K {
         self.key
     }
 
+    /// Returns whether `key` is visible for reuse in the current context.
     #[inline]
     pub fn is_visible(&self, key: &K) -> bool {
         (self.is_visible)(key)
@@ -176,26 +185,31 @@ impl<'a, K: Clone> DependencyRequest<'a, K> {
         }
     }
 
+    /// Returns the key of the module that owns this dependency edge.
     #[inline]
     pub fn owner_key(&self) -> &'a K {
         self.owner_key
     }
 
+    /// Returns metadata for the owner that requested this dependency.
     #[inline]
     pub fn owner(&self) -> &'a dyn DependencyOwner {
         self.owner
     }
 
+    /// Returns the owner name used in diagnostics.
     #[inline]
     pub fn owner_name(&self) -> &'a str {
         self.owner.name()
     }
 
+    /// Returns the owner path/key used by search-path resolvers.
     #[inline]
     pub fn owner_path(&self) -> &'a Path {
         self.owner.path()
     }
 
+    /// Returns the `DT_NEEDED` entry being resolved.
     #[inline]
     pub fn needed(&self) -> &'a str {
         self.owner
@@ -203,31 +217,37 @@ impl<'a, K: Clone> DependencyRequest<'a, K> {
             .expect("DT_NEEDED index out of bounds")
     }
 
+    /// Returns the index of this dependency in the owner's `DT_NEEDED` list.
     #[inline]
     pub fn needed_index(&self) -> usize {
         self.needed_index
     }
 
+    /// Returns the owner's `DT_RPATH`, if present.
     #[inline]
     pub fn rpath(&self) -> Option<&'a str> {
         self.owner.rpath()
     }
 
+    /// Returns the owner's `DT_RUNPATH`, if present.
     #[inline]
     pub fn runpath(&self) -> Option<&'a str> {
         self.owner.runpath()
     }
 
+    /// Returns the owner's `PT_INTERP` path, if present.
     #[inline]
     pub fn interp(&self) -> Option<&'a str> {
         self.owner.interp()
     }
 
+    /// Returns whether `key` is visible for reuse in the current context.
     #[inline]
     pub fn is_visible(&self, key: &K) -> bool {
         (self.is_visible)(key)
     }
 
+    /// Creates the standard unresolved-dependency error for this edge.
     #[inline]
     pub fn unresolved(&self) -> crate::Error {
         LinkerError::UnresolvedDependency(Box::new(UnresolvedDependency::new(
@@ -241,14 +261,17 @@ impl<'a, K: Clone> DependencyRequest<'a, K> {
 /// Read-only modules that should be visible to a link operation without being
 /// committed into its local [`LinkContext`](super::LinkContext).
 pub trait VisibleModules<K: Clone, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
+    /// Returns whether a visible module with `key` exists.
     fn contains_key(&self, key: &K) -> bool {
         self.module(key).is_some()
     }
 
+    /// Returns direct dependency keys for a visible module.
     fn direct_deps(&self, _key: &K) -> Option<Box<[K]>> {
         None
     }
 
+    /// Returns a retained visible module by key.
     fn module(&self, _key: &K) -> Option<ModuleHandle<Arch>> {
         None
     }
@@ -292,21 +315,25 @@ where
         Self { key, raw }
     }
 
+    /// Returns the key of the staged module.
     #[inline]
     pub fn key(&self) -> &'a K {
         self.key
     }
 
+    /// Returns the architecture kind of the staged module.
     #[inline]
     pub fn arch_kind(&self) -> ArchKind {
         Arch::KIND
     }
 
+    /// Returns the mapped byte length of the staged module.
     #[inline]
     pub fn mapped_len(&self) -> usize {
         self.raw.mapped_len()
     }
 
+    /// Returns the unrelocated dynamic image.
     #[inline]
     pub fn raw(&self) -> &'a RawDynamic<D, Arch> {
         self.raw
@@ -315,6 +342,7 @@ where
 
 /// Observer for modules staged by [`super::Linker`].
 pub trait LoadObserver<K, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
+    /// Called when a dynamic image has been mapped but not yet relocated.
     fn on_staged_dynamic(&mut self, _event: StagedDynamic<'_, K, D, Arch>) -> Result<()> {
         Ok(())
     }
@@ -355,21 +383,25 @@ where
         }
     }
 
+    /// Returns the key of the module being relocated.
     #[inline]
     pub fn key(&self) -> &'a K {
         self.key
     }
 
+    /// Returns the architecture kind of the module being relocated.
     #[inline]
     pub fn arch_kind(&self) -> ArchKind {
         Arch::KIND
     }
 
+    /// Returns the symbol lookup scope that will be retained by the relocated module.
     #[inline]
     pub fn scope(&self) -> &ModuleScope<Arch> {
         self.scope
     }
 
+    /// Returns the mapped dynamic image before relocation.
     #[inline]
     pub fn raw(&self) -> &RawDynamic<D, Arch> {
         &self.raw
@@ -392,6 +424,7 @@ impl<D: 'static, Arch> RelocationInputs<D, Arch>
 where
     Arch: RelocationArch,
 {
+    /// Creates relocation inputs from an ordered lookup scope.
     #[inline]
     pub fn new<I, R>(scope: I) -> Self
     where
@@ -405,6 +438,7 @@ where
         }
     }
 
+    /// Creates relocation inputs from an existing module scope.
     #[inline]
     pub fn scope(scope: ModuleScope<Arch>) -> Self {
         Self {
@@ -419,29 +453,34 @@ where
         (self.scope, self.binding)
     }
 
+    /// Returns the configured binding mode.
     #[inline]
     pub fn binding(&self) -> BindingMode {
         self.binding
     }
 
+    /// Forces eager binding for this relocation request.
     #[inline]
     pub fn eager(mut self) -> Self {
         self.binding = BindingMode::Eager;
         self
     }
 
+    /// Forces lazy binding for this relocation request.
     #[inline]
     pub fn lazy(mut self) -> Self {
         self.binding = BindingMode::Lazy;
         self
     }
 
+    /// Sets the binding mode for this relocation request.
     #[inline]
     pub fn with_binding(mut self, binding: BindingMode) -> Self {
         self.binding = binding;
         self
     }
 
+    /// Appends modules after the existing lookup scope.
     pub fn extend_scope<I, R>(mut self, scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
@@ -454,12 +493,14 @@ where
 
 /// Runtime policy for assembling relocation inputs.
 pub trait RelocationPlanner<K, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
+    /// Builds relocation inputs for one mapped module.
     fn plan(
         &mut self,
         req: &RelocationRequest<'_, K, D, Arch>,
     ) -> Result<RelocationInputs<D, Arch>>;
 }
 
+/// Default relocation planner that uses the request-provided dependency scope.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultRelocationPlanner;
 

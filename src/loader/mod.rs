@@ -169,11 +169,11 @@ pub(crate) struct LoaderInner<H, D: 'static, Arch: RelocationArch> {
 
 impl Loader<DefaultMmap, (), (), (), NativeArch> {
     /// Creates a new [`Loader`] with the default mmap backend, no hook, no custom
-    /// user data, no TLS resolver, and the host relocation backend
+    /// user data, no TLS resolver, and the host target architecture
     /// ([`NativeArch`]).
     ///
     /// To target a different ELF architecture (e.g. load an x86-64 shared
-    /// object on a RISC-V host), switch the relocation backend with
+    /// object on a RISC-V host), switch the target architecture with
     /// [`for_arch::<NewArch>()`](Self::for_arch); the `e_machine` gate
     /// then validates against `NewArch::MACHINE` automatically.
     pub fn new() -> Self {
@@ -343,13 +343,13 @@ where
 
 /// Cross-architecture builder step.
 ///
-/// Switching the relocation backend is only meaningful while the loader has
+/// Switching the target architecture is only meaningful while the loader has
 /// not yet been bound to a user-data type, because the dynamic initializer
 /// borrows `RawDynamic<D, Arch>` and cannot be carried across an `Arch`
 /// change. The builder therefore exposes [`Loader::for_arch`] only on
 /// loaders whose `D` is still `()` (i.e. before
 /// [`Loader::with_dynamic_initializer`] has been called). Callers should
-/// pick the relocation backend first and attach the user-data initializer
+/// pick the target architecture first and attach the user-data initializer
 /// afterwards:
 ///
 /// ```no_run
@@ -367,18 +367,18 @@ where
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
-    /// Consumes the current loader and returns a new one whose relocation
-    /// backend is `NewArch` instead of the previous `Arch`.
+    /// Consumes the current loader and returns a new one whose target
+    /// architecture is `NewArch` instead of the previous `Arch`.
     ///
     /// This is the primary entry point for cross-architecture loading. Picking
-    /// a non-host backend (e.g.
+    /// a non-host architecture (e.g.
     /// [`X86_64Arch`](crate::arch::x86_64::relocation::X86_64Arch)) makes
     /// every subsequent `load_*` call validate the ELF `e_machine` against
     /// `NewArch::MACHINE` instead of the host's, and stamps the resulting
     /// raw images with `NewArch` so [`Relocator::relocate`] uses the matching
     /// relocation numbering.
     ///
-    /// Per-ISA backends report `SUPPORTS_NATIVE_RUNTIME == false`, so guest
+    /// Non-host architectures do not execute guest
     /// IFUNC resolvers, TLSDESC stubs, lazy-binding trampolines, and init
     /// arrays are *not* executed on the host CPU.
     ///
@@ -388,8 +388,7 @@ where
     /// [`with_dynamic_initializer`](Loader::with_dynamic_initializer) has
     /// been called. The dynamic initializer's signature mentions `Arch`,
     /// so it cannot be retyped after the fact; instead, switch `Arch` first
-    /// and then attach the initializer once the relocation backend is
-    /// fixed.
+    /// and then attach the initializer once the target architecture is fixed.
     ///
     /// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
     pub fn for_arch<NewArch>(self) -> Loader<M, H, (), Tls, NewArch>

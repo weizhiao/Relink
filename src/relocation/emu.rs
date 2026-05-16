@@ -8,7 +8,7 @@ use crate::{
 };
 use core::marker::PhantomData;
 
-/// Marker for architecture backends that may be driven through an emulator.
+/// Marker for non-native target architectures that may be driven through an emulator.
 ///
 /// Built-in architecture markers implement this trait only when they are not
 /// the host architecture. Native relocation already has a real host ABI
@@ -97,6 +97,7 @@ pub struct TlsDescEmuRequest {
 }
 
 impl TlsDescEmuRequest {
+    /// Creates an emulated TLSDESC request.
     #[inline]
     pub const fn new(
         symbol_value: usize,
@@ -176,7 +177,7 @@ impl TlsDescEmuValue {
 ///
 /// This is intentionally exposed only through
 /// [`Relocator::emulator`](crate::relocation::Relocator::emulator), which is
-/// available for [`EmulatedArch`] backends. Implementors are expected to provide
+/// available for [`EmulatedArch`] targets. Implementors are expected to provide
 /// the complete guest-side behavior for every hook in this trait.
 pub trait Emulator<Arch: RelocationArch>: Send + Sync + 'static {
     /// Executes an IFUNC resolver in the guest environment and returns its value.

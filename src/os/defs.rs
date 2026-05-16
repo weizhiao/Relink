@@ -134,50 +134,65 @@ impl MapFlags {
 
 /// Behaviors for the madvise() Linux system call.
 ///
-/// See https://man7.org/linux/man-pages/man2/madvise.2.html for documentation
+/// See <https://man7.org/linux/man-pages/man2/madvise.2.html> for documentation
 ///
-/// Defined in Linux at https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/mman-common.h.
+/// Defined in Linux at <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/mman-common.h>.
 ///
 /// TODO some of these values are incorrect for alpha, mips, parisc, and xtensa arches.
 #[repr(C)]
 pub enum MadviseAdvice {
+    /// No special treatment.
     Normal = 0,
+    /// Expect random page references.
     Random = 1,
+    /// Expect sequential page references.
     Sequential = 2,
+    /// Expect access in the near future.
     WillNeed = 3,
+    /// Pages are no longer needed.
     DontNeed = 4,
+    /// Free pages in a shared mapping.
     Free = 8,
+    /// Remove pages from a shared mapping.
     Remove = 9,
+    /// Exclude pages from `fork`.
     DontFork = 10,
+    /// Include pages in `fork`.
     DoFork = 11,
+    /// Mark pages as hardware poisoned.
     HWPoison = 100,
+    /// Soft-offline pages.
     SoftOffline = 101,
+    /// Mark pages as mergeable by KSM.
     Mergeable = 12,
+    /// Mark pages as unmergeable by KSM.
     Unmergeable = 13,
+    /// Request transparent huge pages.
     HugePage = 14,
+    /// Disable transparent huge pages.
     NoHugePage = 15,
-    // Introduced in Linux 3.4.
+    /// Exclude pages from core dumps. Introduced in Linux 3.4.
     DontDump = 16,
-    // Introduced in Linux 3.4.
+    /// Include pages in core dumps. Introduced in Linux 3.4.
     DoDump = 17,
-    // Introduced in Linux 4.14.
+    /// Wipe pages in a child after `fork`. Introduced in Linux 4.14.
     WipeOnFork = 18,
-    // Introduced in Linux 4.14.
+    /// Keep pages in a child after `fork`. Introduced in Linux 4.14.
     KeepOnFork = 19,
-    // Introduced in Linux 5.4.
+    /// Mark pages as cold. Introduced in Linux 5.4.
     Cold = 20,
-    // Introduced in Linux 5.4.
+    /// Reclaim pages aggressively. Introduced in Linux 5.4.
     PageOut = 21,
-    // Introduced in Linux 5.14.
+    /// Populate readable page tables. Introduced in Linux 5.14.
     PopulateRead = 22,
-    // Introduced in Linux 5.14.
+    /// Populate writable page tables. Introduced in Linux 5.14.
     PopulateWrite = 23,
-    // Introduced in Linux 5.18.
+    /// Like `DontNeed`, but valid for locked mappings. Introduced in Linux 5.18.
     DontNeedLocked = 24,
-    // Introduced in Linux 6.1.
+    /// Collapse pages into a transparent huge page. Introduced in Linux 6.1.
     Collapse = 25,
-    // Introduced in Linux 6.13.
+    /// Install a guard region. Introduced in Linux 6.13.
     GuardInstall = 102,
-    // Introduced in Linux 6.13.
+    /// Remove a guard region. Introduced in Linux 6.13.
     GuardRemove = 103,
 }

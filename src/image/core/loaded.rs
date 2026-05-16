@@ -149,7 +149,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         LoadedDeps::new(self.deps.as_slice())
     }
 
-    /// Returns the relocation backend used by this loaded module.
+    /// Returns the target architecture used by this loaded module.
     #[inline]
     pub const fn arch_kind(&self) -> ArchKind {
         Arch::KIND

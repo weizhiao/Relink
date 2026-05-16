@@ -117,7 +117,7 @@ pub trait Mmap {
     /// Give advice about the use of memory.
     ///
     /// The activity performed is highly dependent on the "advice" being applied.
-    /// See the madvise(2) man page (https://man7.org/linux/man-pages/man2/madvise.2.html)
+    /// See the madvise(2) man page (<https://man7.org/linux/man-pages/man2/madvise.2.html>)
     /// for more details.
     ///
     /// # Arguments

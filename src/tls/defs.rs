@@ -108,7 +108,9 @@ impl core::fmt::Display for TlsTpOffset {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct TlsIndex {
+    /// TLS module id.
     pub ti_module: TlsModuleId,
+    /// Offset inside the module's TLS block.
     pub ti_offset: usize,
 }
 

@@ -95,7 +95,7 @@ impl Relocator<(), (), (), ()> {
 }
 
 impl<Arch: RelocationArch> Relocator<(), (), (), (), Arch> {
-    /// Switches an empty relocator configuration to a different relocation backend.
+    /// Switches an empty relocator configuration to a different target architecture.
     pub fn for_arch<NewArch: RelocationArch>(self) -> Relocator<(), (), (), (), NewArch> {
         Relocator {
             object: self.object,
@@ -212,6 +212,7 @@ where
     }
 
     #[inline]
+    /// Updates the relocation binding mode in place.
     pub fn set_binding(&mut self, binding: BindingMode) {
         self.binding = binding;
     }
@@ -223,7 +224,7 @@ where
 {
     /// Sets the emulator used for non-native runtime hooks.
     ///
-    /// This method is available only for non-native architecture backends.
+    /// This method is available only for non-native target architectures.
     pub fn emulator<E>(mut self, emu: E) -> Self
     where
         E: Emulator<Arch>,
@@ -254,13 +255,12 @@ where
     /// This consumes the builder, resolves relocations, retains the configured
     /// relocation scope as dependencies, and returns the final loaded image.
     ///
-    /// The relocation backend is selected automatically from the relocated
-    /// object's [`Relocatable::Arch`]: native images use
+    /// The target architecture is selected automatically from the relocated
+    /// image: native images use
     /// [`crate::arch::NativeArch`] (the default) and run target init arrays,
     /// IFUNC resolvers,
     /// lazy-binding trampolines, and TLS resolver stubs as usual;
-    /// cross-architecture images carry their own backend with
-    /// `SUPPORTS_NATIVE_RUNTIME == false`; attach an
+    /// cross-architecture images avoid host execution of target code; attach an
     /// [`Emulator`](crate::relocation::Emulator) when guest runtime hooks such
     /// as IFUNC, TLSDESC, and lifecycle callbacks must be executed.
     pub fn relocate(self) -> Result<T::Output> {

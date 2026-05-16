@@ -15,14 +15,14 @@ use core::marker::PhantomData;
 ///
 /// This trait describes the relocation type numbers for one ELF target
 /// architecture without changing the in-memory relocation entry representation.
-/// The native relocation path uses [`crate::arch::NativeArch`]; cross-architecture
-/// callers may instantiate the per-architecture zero-sized backends declared
-/// in `crate::arch::<name>::relocation`.
+/// Most users get the native implementation automatically through
+/// [`crate::Loader`]; cross-architecture callers select a target architecture
+/// with [`crate::Loader::for_arch`].
 pub trait RelocationArch: 'static {
-    /// Runtime tag for this built-in relocation backend.
+    /// Runtime tag for this target architecture.
     const KIND: ArchKind;
 
-    /// ELF machine value accepted by this relocation backend.
+    /// ELF machine value accepted by this architecture.
     const MACHINE: ElfMachine;
 
     /// ELF class/layout used by this architecture.
@@ -31,33 +31,47 @@ pub trait RelocationArch: 'static {
     /// Dynamic relocation entry format used by this architecture.
     type Relocation: ElfRelEntry<Self::Layout> + 'static;
 
+    /// Relocation type that performs no operation.
     const NONE: ElfRelocationType;
+    /// Relative relocation type.
     const RELATIVE: ElfRelocationType;
+    /// GOT entry relocation type.
     const GOT: ElfRelocationType;
+    /// Symbolic absolute relocation type.
     const SYMBOLIC: ElfRelocationType;
+    /// PLT jump-slot relocation type.
     const JUMP_SLOT: ElfRelocationType;
+    /// IFUNC relative relocation type.
     const IRELATIVE: ElfRelocationType;
+    /// COPY relocation type.
     const COPY: ElfRelocationType;
 
+    /// TLS module-id relocation type.
     const DTPMOD: ElfRelocationType;
+    /// TLS dynamic offset relocation type.
     const DTPOFF: ElfRelocationType;
+    /// TLS static thread-pointer offset relocation type.
     const TPOFF: ElfRelocationType;
+    /// TLSDESC relocation type, if the architecture defines one.
     const TLSDESC: Option<ElfRelocationType> = None;
+    /// DTV offset used by this architecture's TLS ABI.
     const TLS_DTV_OFFSET: usize = 0;
 
-    /// Whether this backend may execute target code or install target runtime
-    /// hooks in the host process.
+    /// Whether relocation may execute target code or install target runtime
+    /// hooks directly in the current process.
     ///
     /// Native relocation enables this so IFUNC resolvers, TLS resolver stubs,
     /// lazy binding trampolines, and init arrays keep their current behavior.
-    /// Cross-architecture backends should normally leave this as `false`.
+    /// Cross-architecture implementations normally leave this as `false`.
     const SUPPORTS_NATIVE_RUNTIME: bool = false;
 
+    /// Returns whether `r_type` is this architecture's TLSDESC relocation.
     #[inline]
     fn is_tlsdesc(r_type: ElfRelocationType) -> bool {
         Self::TLSDESC.is_some_and(|tlsdesc| r_type == tlsdesc)
     }
 
+    /// Returns whether `r_type` is one of this architecture's TLS relocations.
     #[inline]
     fn is_tls(r_type: ElfRelocationType) -> bool {
         r_type == Self::DTPMOD
@@ -66,6 +80,7 @@ pub trait RelocationArch: 'static {
             || Self::is_tlsdesc(r_type)
     }
 
+    /// Returns a diagnostic name for a relocation type.
     #[inline]
     fn rel_type_to_str(_r_type: ElfRelocationType) -> &'static str {
         "UNKNOWN"
@@ -189,12 +204,14 @@ pub enum HandleResult {
 }
 
 impl HandleResult {
+    /// Returns whether the handler left the relocation for the default path.
     #[inline]
     pub const fn is_unhandled(self) -> bool {
         matches!(self, Self::Unhandled)
     }
 }
 
+/// Hook trait for observing or overriding relocation processing.
 pub trait RelocationHandler<Arch: RelocationArch = NativeArch> {
     /// Handles a relocation.
     ///
@@ -338,9 +355,8 @@ impl<'a, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized>
 /// In normal use, callers do not invoke this trait directly. Instead, they load a raw
 /// image with [`crate::Loader`] and then call `.relocator().relocate()`.
 ///
-/// The relocation backend (i.e. the architecture's relocation type numbering)
-/// is selected by the implementor through the `Arch` associated type, so
-/// [`Relocator::relocate`] can dispatch to the correct backend automatically
+/// The target architecture is selected by the implementor through the `Arch`
+/// associated type, so [`Relocator::relocate`] can dispatch automatically
 /// without callers having to specify a turbofish.
 ///
 /// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
@@ -350,14 +366,11 @@ pub trait Relocatable<D = ()>: Sized {
 
     /// Relocation type numbering used when relocating this image.
     ///
-    /// Defaults to [`crate::arch::NativeArch`] for raw images loaded for the host.
-    /// Cross-architecture images carry one of the per-ISA backends from
-    /// `crate::arch::<isa>::relocation` (e.g.
-    /// [`X86_64Arch`](crate::arch::x86_64::relocation::X86_64Arch)).
+    /// Defaults to [`crate::arch::NativeArch`] for images loaded for the host.
+    /// Cross-architecture images use the architecture selected on the loader.
     type Arch: RelocationArch;
 
-    /// Execute relocation using the implementor's relocation backend
-    /// ([`Self::Arch`]).
+    /// Executes relocation using the implementor's target architecture.
     fn relocate<PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, Self::Arch, PreH, PostH>,

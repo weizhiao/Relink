@@ -1,16 +1,8 @@
-//! x86-64 ELF relocation numbering and architecture-specific trait impls.
-//!
-//! [`X86_64Arch`] is the single ZST that carries every architecture-specific
-//! trait for x86-64 ([`crate::relocation::RelocationArch`],
-//! [`crate::relocation::RelocationValueProvider`],
-//! [`crate::linker::GotPltTarget`]). It is used both as the cross-arch
-//! backend (when some other host drives x86-64 relocation) and, via the
-//! `crate::arch::NativeArch` re-export, as the host's relocation backend when
-//! this crate is compiled for x86-64.
-//!
-//! Numeric relocation numbers come straight from `elf::abi::*` so this module
-//! is the single source of truth and there is no separate layer of `REL_*`
-//! re-aliases to keep in sync.
+//! x86-64 ELF relocation support.
+
+// `X86_64Arch` carries the architecture-specific trait impls for both native
+// and cross-architecture relocation. Numeric relocation values come from
+// `elf::abi::*`; avoid adding a separate local alias layer to keep in sync.
 
 use core::mem::size_of;
 use elf::abi::*;

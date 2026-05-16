@@ -7,22 +7,36 @@ use super::raw::{
 
 /// Groups the raw ELF types/constants selected for one ELF class.
 pub trait ElfLayout: 'static {
+    /// ELF class value (`ELFCLASS32` or `ELFCLASS64`).
     const E_CLASS: u8;
+    /// Bit mask used to extract relocation type bits from `r_info`.
     const REL_MASK: usize;
+    /// Bit shift used to extract relocation symbol bits from `r_info`.
     const REL_BIT: usize;
+    /// Size of this layout's ELF header.
     const EHDR_SIZE: usize;
 
+    /// Raw program-header type for this class.
     type Phdr: ElfPhdrRaw;
+    /// Raw section-header type for this class.
     type Shdr: ElfShdrRaw;
+    /// Raw dynamic-entry type for this class.
     type Dyn: ElfDynRaw;
+    /// Raw ELF-header type for this class.
     type Ehdr: ElfEhdrRaw;
+    /// Raw explicit-addend relocation type for this class.
     type Rela: ElfRelaRaw;
+    /// Raw implicit-addend relocation type for this class.
     type Rel: ElfRelRaw;
+    /// Raw compact RELR relocation word for this class.
     type Relr: ElfWord;
+    /// Native ELF word type for this class.
     type Word: ElfWord;
+    /// Raw symbol-table entry type for this class.
     type Sym: ElfSymRaw;
 }
 
+/// Marker for 32-bit ELF class layouts.
 #[derive(Debug, Clone, Copy)]
 pub struct Elf32Layout;
 
@@ -43,6 +57,7 @@ impl ElfLayout for Elf32Layout {
     type Sym = Elf32Sym;
 }
 
+/// Marker for 64-bit ELF class layouts.
 #[derive(Debug, Clone, Copy)]
 pub struct Elf64Layout;
 
@@ -64,8 +79,10 @@ impl ElfLayout for Elf64Layout {
 }
 
 #[cfg(target_pointer_width = "64")]
+/// ELF layout matching the host pointer width.
 pub type NativeElfLayout = Elf64Layout;
 #[cfg(not(target_pointer_width = "64"))]
+/// ELF layout matching the host pointer width.
 pub type NativeElfLayout = Elf32Layout;
 
 pub(crate) type ElfEhdr = <NativeElfLayout as ElfLayout>::Ehdr;

@@ -112,12 +112,8 @@ impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
 /// This is the common raw representation for ELF images with a `PT_DYNAMIC`
 /// segment, including shared objects and dynamically linked executables.
 ///
-/// The optional `Arch` type parameter selects which relocation type numbering
-/// is applied during [`Relocator::relocate`]. By default it is
-/// [`crate::arch::NativeArch`] (the host architecture), which preserves the prior
-/// single-architecture behavior. Cross-architecture loading instead carries
-/// one of the per-ISA backends (e.g.
-/// [`crate::arch::x86_64::relocation::X86_64Arch`]).
+/// The optional `Arch` type parameter selects the target architecture used
+/// during [`Relocator::relocate`]. By default it is [`crate::arch::NativeArch`].
 pub struct RawDynamic<D, Arch = NativeArch>
 where
     D: 'static,
@@ -131,9 +127,7 @@ where
     module: ElfCore<D, Arch>,
     /// Extra data needed for relocation
     extra: ElfExtraData<Arch>,
-    /// Tag identifying which relocation backend is used during relocation.
-    ///
-    /// `Arch` is a zero-sized type, so this field has no runtime cost.
+    /// Target architecture marker used during relocation.
     _arch: PhantomData<fn() -> Arch>,
 }
 
@@ -159,6 +153,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
         self.entry
     }
 
+    /// Returns the TLS module id assigned to this image, when registered.
     pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         self.module.tls_mod_id()
     }

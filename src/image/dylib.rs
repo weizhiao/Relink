@@ -19,9 +19,8 @@ use core::{fmt::Debug, ptr::NonNull};
 /// ELF metadata immediately and can later be turned into a [`LoadedCore`] by running
 /// relocation.
 ///
-/// The optional `Arch` type parameter mirrors [`RawDynamic`]'s and selects the
-/// relocation backend used by [`Relocator::relocate`]. By default it is
-/// [`crate::arch::NativeArch`] (the host architecture).
+/// The optional `Arch` type parameter selects the target architecture used by
+/// [`Relocator::relocate`]. By default it is [`crate::arch::NativeArch`].
 pub struct RawDylib<D, Arch = crate::arch::NativeArch>
 where
     D: 'static,
@@ -99,10 +98,12 @@ impl<D, Arch: RelocationArch> RawDylib<D, Arch> {
         self.inner.is_lazy()
     }
 
+    /// Returns the TLS module id assigned to this image, when registered.
     pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         self.inner.tls_mod_id()
     }
 
+    /// Returns the static TLS thread-pointer offset, when assigned.
     pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         self.inner.tls_tp_offset()
     }

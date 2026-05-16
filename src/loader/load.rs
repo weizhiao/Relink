@@ -30,7 +30,7 @@ where
     ///
     /// The header's `e_machine` is required to equal `Arch::MACHINE`. To
     /// load an ELF whose target architecture differs from the host, switch
-    /// the loader's relocation backend with
+    /// the loader's target architecture with
     /// [`Loader::for_arch`](super::Loader::for_arch) before calling
     /// `load_*`; the gate will then accept ELFs targeting `NewArch::MACHINE`.
     pub fn read_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
@@ -163,7 +163,7 @@ where
     /// [`crate::input::ElfFile`], and [`crate::input::ElfBinary`].
     ///
     /// To load ELF files targeting a different CPU architecture than the host,
-    /// switch the relocation backend with
+    /// switch the loader's target architecture with
     /// [`Loader::for_arch::<NewArch>()`](super::Loader::for_arch) before
     /// calling this method. The `e_machine` gate then validates against
     /// `NewArch::MACHINE`, and the returned [`RawDylib`] carries the chosen

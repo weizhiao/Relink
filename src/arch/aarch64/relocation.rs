@@ -1,10 +1,7 @@
-//! AArch64 ELF relocation numbering and architecture-specific trait impls.
-//!
-//! [`AArch64Arch`] is the single ZST that carries every architecture-specific
-//! trait for AArch64. It is used both as the cross-arch backend (when some
-//! other host drives AArch64 relocation) and, via the `crate::arch::NativeArch`
-//! re-export, as the host's relocation backend when this crate is compiled
-//! for AArch64.
+//! AArch64 ELF relocation support.
+
+// `AArch64Arch` carries the architecture-specific trait impls for both native
+// and cross-architecture relocation.
 
 use elf::abi::*;
 

@@ -50,16 +50,19 @@ where
         Self { root, committed }
     }
 
+    /// Returns the loaded root module.
     #[inline]
     pub fn root(&self) -> &LoadedCore<D, Arch> {
         &self.root
     }
 
+    /// Returns module ids committed by this load operation in load order.
     #[inline]
     pub fn committed(&self) -> &[KeyId] {
         &self.committed
     }
 
+    /// Consumes the result and returns the loaded root module.
     #[inline]
     pub fn into_root(self) -> LoadedCore<D, Arch> {
         self.root
@@ -110,6 +113,7 @@ impl<'a, K> Linker<'a, K, ()>
 where
     K: Clone + Ord,
 {
+    /// Creates a linker using the default loader and native target architecture.
     #[inline]
     pub fn new() -> Self {
         Self {
@@ -179,6 +183,7 @@ where
     D: 'static,
     Arch: RelocationArch,
 {
+    /// Sets the key resolver used to resolve root keys and dependencies.
     pub fn resolver<NewR>(
         self,
         resolver: NewR,
@@ -196,6 +201,7 @@ where
         }
     }
 
+    /// Reconfigures the relocator template used for loaded modules.
     pub fn map_relocator<NewPreH, NewPostH>(
         self,
         configure: impl FnOnce(
@@ -215,6 +221,7 @@ where
         }
     }
 
+    /// Sets the relocation planner used after dependency discovery.
     pub fn planner<NewP>(
         self,
         planner: NewP,
@@ -232,6 +239,7 @@ where
         }
     }
 
+    /// Sets the load observer used during staging and materialization.
     pub fn observer<NewO>(
         self,
         observer: NewO,
@@ -249,6 +257,7 @@ where
         }
     }
 
+    /// Sets additional modules that are visible for reuse or lookup.
     pub fn visible_modules<NewV>(
         self,
         visible_modules: NewV,
@@ -266,6 +275,7 @@ where
         }
     }
 
+    /// Reconfigures the scan-first pipeline.
     pub fn map_pipeline(
         mut self,
         configure: impl FnOnce(LinkPipeline<'a, K, Arch>) -> LinkPipeline<'a, K, Arch>,
@@ -285,6 +295,7 @@ where
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
+    /// Reconfigures the underlying loader.
     pub fn map_loader<NewM, NewH, NewD, NewTls>(
         self,
         configure: impl FnOnce(Loader<M, H, D, Tls, Arch>) -> Loader<NewM, NewH, NewD, NewTls, Arch>,
@@ -356,6 +367,7 @@ where
         self.execute_prepared_load(context, prepared)
     }
 
+    /// Loads a pre-mapped root dynamic image and resolves its dependencies.
     pub fn load_mapped_root<'cfg, Meta>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,

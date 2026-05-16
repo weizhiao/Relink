@@ -3,7 +3,7 @@
 //! This module provides LoongArch 64-bit specific implementations for ELF relocation,
 //! dynamic linking, and procedure linkage table (PLT) handling.
 //!
-//! Reference: https://loongson.github.io/LoongArch-Documentation/LoongArch-ELF-ABI-CN.html
+//! Reference: <https://loongson.github.io/LoongArch-Documentation/LoongArch-ELF-ABI-CN.html>
 
 // See aarch64/mod.rs for why these are gated on `target_arch`.
 #[cfg(all(feature = "lazy-binding", target_arch = "loongarch64"))]

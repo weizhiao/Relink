@@ -6,6 +6,7 @@ use crate::{
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
+/// Stable id for a module key stored in a [`LinkContext`](super::LinkContext).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct KeyId(usize);
 entity_ref!(KeyId);

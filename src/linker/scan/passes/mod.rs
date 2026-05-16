@@ -189,8 +189,7 @@ where
             .filter_map(move |(section, _)| self.checked_section(section))
     }
 
-    /// Iterates visible entries from one section without exposing the layout
-    /// internals used to materialize the section.
+    /// Iterates visible entries from one section.
     #[inline]
     pub fn for_each_section_data<T, P>(
         &mut self,

@@ -328,6 +328,7 @@ where
 pub struct DefaultTlsResolver;
 
 impl DefaultTlsResolver {
+    /// Creates a default TLS resolver handle.
     pub fn new() -> Self {
         Self
     }

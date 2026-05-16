@@ -11,6 +11,7 @@ use core::{fmt, ops::Deref};
 pub struct Path(str);
 
 impl Path {
+    /// Creates a borrowed loader path from a string slice.
     #[inline]
     pub fn new(path: &str) -> &Self {
         // `Path` is a transparent wrapper around `str`, so the metadata and
@@ -18,16 +19,22 @@ impl Path {
         unsafe { &*(path as *const str as *const Self) }
     }
 
+    /// Returns this path as its underlying UTF-8 string.
     #[inline]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    /// Returns whether the path contains `/` or `\`.
     #[inline]
     pub fn has_dir_separator(&self) -> bool {
         self.as_str().contains('/') || self.as_str().contains('\\')
     }
 
+    /// Returns the parent directory used for `$ORIGIN` expansion.
+    ///
+    /// Paths without a directory separator return `"."`; paths directly under
+    /// the filesystem root return `"/"`.
     pub fn parent(&self) -> &Self {
         let path = self.as_str();
         let slash = path.rfind('/');
@@ -42,6 +49,7 @@ impl Path {
         }
     }
 
+    /// Returns the last path component.
     pub fn file_name(&self) -> &str {
         let path = self.as_str();
         let slash = path.rfind('/');
@@ -52,6 +60,7 @@ impl Path {
         &path[index + 1..]
     }
 
+    /// Joins a child path or filename to this directory.
     pub fn join(&self, name: impl AsRef<str>) -> PathBuf {
         let dir = self.as_str();
         let name = name.as_ref();
@@ -117,21 +126,25 @@ impl AsRef<Path> for String {
 pub struct PathBuf(String);
 
 impl PathBuf {
+    /// Creates an owned loader path.
     #[inline]
     pub fn new(path: impl Into<String>) -> Self {
         Self(path.into())
     }
 
+    /// Returns this owned path as a borrowed [`Path`].
     #[inline]
     pub fn as_path(&self) -> &Path {
         Path::new(&self.0)
     }
 
+    /// Returns this path as its underlying UTF-8 string.
     #[inline]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    /// Consumes the path and returns the owned string.
     #[inline]
     pub fn into_string(self) -> String {
         self.0

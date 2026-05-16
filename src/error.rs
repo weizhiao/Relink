@@ -19,11 +19,22 @@ pub enum IoError {
     /// The provided path contains an interior NUL byte.
     NullByteInPath,
     /// `open failed for {path} with error: {code}`
-    OpenFailed { path: Box<str>, code: u32 },
+    OpenFailed {
+        /// Path that failed to open.
+        path: Box<str>,
+        /// Platform error code returned by the open operation.
+        code: u32,
+    },
     /// `seek failed with error: {code}`
-    SeekFailed { code: u32 },
+    SeekFailed {
+        /// Platform error code returned by the seek operation.
+        code: u32,
+    },
     /// `read failed with error: {code}`
-    ReadFailed { code: u32 },
+    ReadFailed {
+        /// Platform error code returned by the read operation.
+        code: u32,
+    },
     /// `failed to fill buffer`
     FailedToFillBuffer,
     /// `read offset out of bounds: offset {offset}, len {len}, available {available}`
@@ -82,29 +93,56 @@ pub enum MmapError {
     },
     #[cfg(not(windows))]
     /// `mmap failed with error: {code}`
-    MmapFailed { code: u32 },
+    MmapFailed {
+        /// Platform error code returned by `mmap`.
+        code: u32,
+    },
     #[cfg(not(windows))]
     /// `mmap anonymous failed with error: {code}`
-    MmapAnonymousFailed { code: u32 },
+    MmapAnonymousFailed {
+        /// Platform error code returned by anonymous `mmap`.
+        code: u32,
+    },
     #[cfg(not(windows))]
     /// `munmap failed with error: {code}`
-    MunmapFailed { code: u32 },
+    MunmapFailed {
+        /// Platform error code returned by `munmap`.
+        code: u32,
+    },
     #[cfg(windows)]
     /// `MapViewOfFile3 failed with error: {code}`
-    MapViewOfFile3 { code: u32 },
+    MapViewOfFile3 {
+        /// Windows error code returned by `MapViewOfFile3`.
+        code: u32,
+    },
     #[cfg(windows)]
     /// `VirtualAlloc failed with error: {code}`
-    VirtualAlloc { code: u32 },
+    VirtualAlloc {
+        /// Windows error code returned by `VirtualAlloc`.
+        code: u32,
+    },
     /// `mprotect failed with error: {code}`
-    Mprotect { code: u32 },
+    Mprotect {
+        /// Platform error code returned by memory protection changes.
+        code: u32,
+    },
     /// `madvise failed with error: {code}`
-    Madvise { code: u32 },
+    Madvise {
+        /// Platform error code returned by `madvise`.
+        code: u32,
+    },
     #[cfg(windows)]
     /// `CreateFileMappingW failed with error: {code}`
-    CreateFileMappingW { code: u32 },
+    CreateFileMappingW {
+        /// Windows error code returned by `CreateFileMappingW`.
+        code: u32,
+    },
     #[cfg(windows)]
     /// `VirtualFree failed with error: {code}`
-    VirtualFree { code: u32 },
+    VirtualFree {
+        /// Windows error code returned by `VirtualFree`.
+        code: u32,
+    },
 }
 
 impl Display for MmapError {
@@ -150,11 +188,17 @@ impl Display for MmapError {
 /// Structured dynamic-section parsing error details.
 pub enum ParseDynamicError {
     /// `{tag}` is required by the ABI but missing from the dynamic section.
-    MissingRequiredTag { tag: &'static str },
+    MissingRequiredTag {
+        /// Name of the required dynamic tag.
+        tag: &'static str,
+    },
     /// A dynamic-section address calculation overflowed.
     AddressOverflow,
     /// A relocation table described by the dynamic section is malformed.
-    MalformedRelocationTable { detail: &'static str },
+    MalformedRelocationTable {
+        /// Static detail describing why the table is malformed.
+        detail: &'static str,
+    },
 }
 
 impl Display for ParseDynamicError {
@@ -174,18 +218,31 @@ pub enum ParseEhdrError {
     /// The ELF magic bytes do not match `0x7fELF`.
     InvalidMagic,
     /// `file class mismatch: expected {expected}, found {found}`
-    FileClassMismatch { expected: ElfClass, found: ElfClass },
+    FileClassMismatch {
+        /// ELF class expected by the selected loader configuration.
+        expected: ElfClass,
+        /// ELF class found in the file header.
+        found: ElfClass,
+    },
     /// The ELF version is not `EV_CURRENT`.
     InvalidVersion,
     /// `file arch mismatch: expected {expected}, found {found}`
     FileArchMismatch {
+        /// Machine type expected by the selected target architecture.
         expected: ElfMachine,
+        /// Machine type found in the file header.
         found: ElfMachine,
     },
     /// A shared object was required but the file type was different.
-    ExpectedDylib { found: ElfFileType },
+    ExpectedDylib {
+        /// File type found in the ELF header.
+        found: ElfFileType,
+    },
     /// An executable or PIE-compatible file was required but the file type was different.
-    ExpectedExecutable { found: ElfFileType },
+    ExpectedExecutable {
+        /// File type found in the ELF header.
+        found: ElfFileType,
+    },
     /// Relocatable object support is disabled for this build.
     RelocatableObjectsDisabled,
     /// A relocatable object was expected to carry section headers.
@@ -224,13 +281,22 @@ impl Display for ParseEhdrError {
 /// Structured program-header parsing error details.
 pub enum ParsePhdrError {
     /// The program header table is malformed.
-    Malformed { detail: &'static str },
+    Malformed {
+        /// Static detail describing why the program headers are malformed.
+        detail: &'static str,
+    },
     /// A `PT_LOAD` segment cannot be mapped with the selected page size.
-    PageAlignmentMismatch { page_size: usize },
+    PageAlignmentMismatch {
+        /// Loader page size used for validation.
+        page_size: usize,
+    },
     /// A dynamic image was expected to carry `PT_DYNAMIC`.
     MissingDynamicSection,
     /// `{field} contains invalid UTF-8`
-    InvalidUtf8 { field: &'static str },
+    InvalidUtf8 {
+        /// Program-header field or payload that failed UTF-8 validation.
+        field: &'static str,
+    },
 }
 
 impl ParsePhdrError {
@@ -330,7 +396,10 @@ pub enum RelocationError {
     Context(Box<RelocationFailure>),
     #[cfg(feature = "lazy-binding")]
     /// `lazy binding setup failed: {detail}`
-    LazyBindingSetup { detail: &'static str },
+    LazyBindingSetup {
+        /// Static detail describing the lazy-binding setup failure.
+        detail: &'static str,
+    },
     /// `object file missing symbol table`
     MissingSymbolTable,
 }
@@ -393,19 +462,40 @@ pub enum LinkerError {
     /// A dependency could not be resolved by the resolver callback.
     UnresolvedDependency(Box<UnresolvedDependency>),
     /// Committed linker context state rejected an operation.
-    Context { detail: &'static str },
+    Context {
+        /// Static detail describing the context failure.
+        detail: &'static str,
+    },
     /// Resolver state was inconsistent with the current link context.
-    Resolver { detail: &'static str },
+    Resolver {
+        /// Static detail describing the resolver failure.
+        detail: &'static str,
+    },
     /// A requested materialization mode is invalid for the module/layout.
-    Materialization { detail: &'static str },
+    Materialization {
+        /// Static detail describing the materialization failure.
+        detail: &'static str,
+    },
     /// Section data could not be materialized or borrowed as requested.
-    SectionData { detail: &'static str },
+    SectionData {
+        /// Static detail describing the section-data failure.
+        detail: &'static str,
+    },
     /// Mapped section-arena memory is inconsistent with the layout plan.
-    MappedArena { detail: &'static str },
+    MappedArena {
+        /// Static detail describing the mapped-arena failure.
+        detail: &'static str,
+    },
     /// Runtime memory built for section-region materialization is invalid.
-    RuntimeMemory { detail: &'static str },
+    RuntimeMemory {
+        /// Static detail describing the runtime-memory failure.
+        detail: &'static str,
+    },
     /// Runtime metadata repair failed after section-region mapping.
-    MetadataRewrite { detail: &'static str },
+    MetadataRewrite {
+        /// Static detail describing the metadata rewrite failure.
+        detail: &'static str,
+    },
 }
 
 impl LinkerError {

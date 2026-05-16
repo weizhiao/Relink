@@ -99,7 +99,7 @@ impl MemoryLayoutPlan {
         self.sections.iter()
     }
 
-    /// Returns one section metadata record by internal section id.
+    /// Returns one section metadata record by section id.
     #[inline]
     pub(in crate::linker) fn section(&self, id: SectionId) -> &SectionMetadata {
         self.sections

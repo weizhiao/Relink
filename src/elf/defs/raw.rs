@@ -564,11 +564,17 @@ macro_rules! impl_sym_raw {
 /// This struct represents the native 32-bit symbol format used in ELF32 files.
 /// For 64-bit targets, the active native symbol layout resolves to `elf::symbol::Elf64_Sym`.
 pub struct Elf32Sym {
+    /// Offset into the symbol string table.
     pub st_name: u32,
+    /// Symbol value.
     pub st_value: u32,
+    /// Symbol size in bytes.
     pub st_size: u32,
+    /// Packed symbol binding and type.
     pub st_info: u8,
+    /// Symbol visibility and target-specific flags.
     pub st_other: u8,
+    /// Section index associated with this symbol.
     pub st_shndx: u16,
 }
 

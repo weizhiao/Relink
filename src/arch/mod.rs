@@ -23,23 +23,30 @@
 // when built for a single host, the items in non-native submodules look
 // dead but are intentionally kept available.
 
-/// Runtime tag for the built-in relocation backends.
+/// Runtime tag for a supported target architecture.
 ///
-/// `RelocationArch` remains the strongly typed per-module backend. `ArchKind`
-/// is the small runtime discriminator used by heterogeneous linker state when a
-/// dependency graph may contain modules from more than one target architecture.
+/// `ArchKind` is used when linker state may contain modules from more than one
+/// target architecture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ArchKind {
+    /// x86-64 (`EM_X86_64`).
     X86_64,
+    /// AArch64 (`EM_AARCH64`).
     AArch64,
+    /// 64-bit RISC-V (`EM_RISCV` with ELF64 layout).
     RiscV64,
+    /// 32-bit RISC-V (`EM_RISCV` with ELF32 layout).
     RiscV32,
+    /// LoongArch64 (`EM_LOONGARCH` with ELF64 layout).
     LoongArch64,
+    /// 32-bit x86 (`EM_386`).
     X86,
+    /// 32-bit ARM (`EM_ARM`).
     Arm,
 }
 
 impl ArchKind {
+    /// Returns the architecture kind for the current compilation target.
     #[inline]
     pub const fn native() -> Self {
         <NativeArch as crate::relocation::RelocationArch>::KIND

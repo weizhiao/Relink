@@ -75,8 +75,8 @@ struct SymbolEntry<L: ElfLayout> {
 /// A [`Module`] backed by a synthetic table of absolute symbols.
 ///
 /// The module owns stable synthetic ELF symbols, so it can be retained in a
-/// [`ModuleScope`] and used by the existing relocation path without callback
-/// lifetimes.
+/// [`ModuleScope`](crate::image::ModuleScope) without borrowing callback-owned
+/// symbol metadata.
 pub struct SyntheticModule<Arch: RelocationArch = NativeArch> {
     name: String,
     symbols: Vec<SymbolEntry<Arch::Layout>>,

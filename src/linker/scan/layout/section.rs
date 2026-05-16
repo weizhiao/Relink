@@ -14,18 +14,25 @@ use alloc::{boxed::Box, vec::Vec};
 pub(crate) struct SectionId(usize);
 entity_ref!(SectionId);
 
+/// Requested access mode for section data materialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataAccess {
+    /// Read-only access to section bytes.
     Read,
+    /// Mutable access to section bytes.
     Write,
 }
 
+/// Borrowed section data returned by a materialization access request.
 pub enum SectionDataAccessRef<'a> {
+    /// Read-only section bytes.
     Read(&'a [u8]),
+    /// Mutable section bytes.
     Write(&'a mut [u8]),
 }
 
 impl<'a> SectionDataAccessRef<'a> {
+    /// Returns read-only bytes or panics if the request was writable.
     #[inline]
     pub fn into_read(self) -> &'a [u8] {
         match self {
@@ -34,6 +41,7 @@ impl<'a> SectionDataAccessRef<'a> {
         }
     }
 
+    /// Returns writable bytes or panics if the request was read-only.
     #[inline]
     pub fn into_write(self) -> &'a mut [u8] {
         match self {

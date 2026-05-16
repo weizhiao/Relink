@@ -34,11 +34,13 @@ pub enum SearchDirSource {
 }
 
 impl SearchDirSource {
+    /// Creates a fixed search directory source.
     #[inline]
     pub fn fixed(dir: impl Into<PathBuf>) -> Self {
         Self::Fixed(dir.into())
     }
 
+    /// Creates a callback-backed search directory source.
     #[inline]
     pub fn dynamic<F>(resolver: F) -> Self
     where
@@ -61,23 +63,33 @@ impl fmt::Debug for SearchDirSource {
 #[derive(Clone, Copy, Debug)]
 pub enum CandidateRequest<'a> {
     /// Resolving the root key passed to [`KeyResolver::load_root`].
-    Root { requested: &'a Path },
+    Root {
+        /// Path requested by the root load.
+        requested: &'a Path,
+    },
     /// Resolving one `DT_NEEDED` entry for an already-loaded owner.
     Dependency {
+        /// Dependency name after applying `$ORIGIN` to the requested value.
         requested: &'a Path,
+        /// Diagnostic name of the owner that requested this dependency.
         owner_name: &'a str,
+        /// Loaded path/key of the owner that requested this dependency.
         owner_path: &'a Path,
+        /// Raw `DT_RUNPATH` value, when present.
         runpath: Option<&'a str>,
+        /// Raw `DT_RPATH` value, when present.
         rpath: Option<&'a str>,
     },
 }
 
 impl<'a> CandidateRequest<'a> {
+    /// Creates a root candidate request.
     #[inline]
     pub const fn root(requested: &'a Path) -> Self {
         Self::Root { requested }
     }
 
+    /// Creates a dependency candidate request.
     #[inline]
     pub const fn dependency(
         requested: &'a Path,
@@ -95,6 +107,7 @@ impl<'a> CandidateRequest<'a> {
         }
     }
 
+    /// Returns the requested root path or dependency name/path.
     #[inline]
     pub const fn requested(&self) -> &'a Path {
         match self {
@@ -102,6 +115,7 @@ impl<'a> CandidateRequest<'a> {
         }
     }
 
+    /// Returns the owner name for dependency requests.
     #[inline]
     pub const fn owner_name(&self) -> Option<&'a str> {
         match self {
@@ -110,6 +124,7 @@ impl<'a> CandidateRequest<'a> {
         }
     }
 
+    /// Returns the owner path for dependency requests.
     #[inline]
     pub const fn owner_path(&self) -> Option<&'a Path> {
         match self {
@@ -118,6 +133,7 @@ impl<'a> CandidateRequest<'a> {
         }
     }
 
+    /// Returns the owner directory used for `$ORIGIN` expansion.
     #[inline]
     pub fn origin(&self) -> Option<&'a Path> {
         match self {
@@ -126,6 +142,7 @@ impl<'a> CandidateRequest<'a> {
         }
     }
 
+    /// Returns expanded `DT_RUNPATH` directories for dependency requests.
     #[inline]
     pub fn runpath(&self) -> Option<Vec<PathBuf>> {
         match self {
@@ -134,6 +151,7 @@ impl<'a> CandidateRequest<'a> {
         }
     }
 
+    /// Returns expanded `DT_RPATH` directories for dependency requests.
     #[inline]
     pub fn rpath(&self) -> Option<Vec<PathBuf>> {
         match self {
@@ -206,6 +224,7 @@ impl fmt::Debug for SearchPathResolver {
 }
 
 impl SearchPathResolver {
+    /// Creates an empty search-path resolver.
     #[inline]
     pub fn new() -> Self {
         Self {
@@ -213,15 +232,18 @@ impl SearchPathResolver {
         }
     }
 
+    /// Appends one search directory source.
     pub fn push_search_dir_source(&mut self, source: SearchDirSource) -> &mut Self {
         self.search_dir_sources.push(source);
         self
     }
 
+    /// Appends a fixed search directory.
     pub fn push_fixed_dir(&mut self, dir: impl Into<PathBuf>) -> &mut Self {
         self.push_search_dir_source(SearchDirSource::Fixed(dir.into()))
     }
 
+    /// Appends a callback that can provide search directories per request.
     pub fn push_search_dir_provider<F>(&mut self, provider: F) -> &mut Self
     where
         F: for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()> + 'static,
@@ -231,6 +253,7 @@ impl SearchPathResolver {
         )))
     }
 
+    /// Returns the configured search directory sources in lookup order.
     #[inline]
     pub fn search_dir_sources(&self) -> &[SearchDirSource] {
         &self.search_dir_sources

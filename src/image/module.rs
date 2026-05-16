@@ -24,6 +24,7 @@ impl<Arch: RelocationArch> Clone for ModuleHandle<Arch> {
 }
 
 impl<Arch: RelocationArch> ModuleHandle<Arch> {
+    /// Retains a module behind a shared trait-object handle.
     #[inline]
     pub fn new<M>(module: M) -> Self
     where
@@ -34,26 +35,31 @@ impl<Arch: RelocationArch> ModuleHandle<Arch> {
         }
     }
 
+    /// Wraps an existing shared module trait object.
     #[inline]
     pub fn from_shared(module: Arc<dyn Module<Arch>>) -> Self {
         Self { module }
     }
 
+    /// Returns the underlying dynamic module reference.
     #[inline]
     pub fn as_dyn(&self) -> &(dyn Module<Arch> + 'static) {
         &*self.module
     }
 
+    /// Downcasts the retained module to a concrete type.
     #[inline]
     pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
         self.as_any().downcast_ref()
     }
 
+    /// Downcasts the retained module to a loaded ELF image.
     #[inline]
     pub fn as_loaded<D: 'static>(&self) -> Option<&LoadedCore<D, Arch>> {
         self.downcast_ref()
     }
 
+    /// Consumes the handle and returns the shared module trait object.
     #[inline]
     pub fn into_inner(self) -> Arc<dyn Module<Arch>> {
         self.module
@@ -112,6 +118,7 @@ impl<Arch: RelocationArch> Clone for ModuleScope<Arch> {
 }
 
 impl<Arch: RelocationArch> ModuleScope<Arch> {
+    /// Returns an empty lookup scope.
     #[inline]
     pub fn empty() -> Self {
         Self {
@@ -119,6 +126,7 @@ impl<Arch: RelocationArch> ModuleScope<Arch> {
         }
     }
 
+    /// Builds a lookup scope from an ordered sequence of modules.
     pub fn new<I, R>(modules: I) -> Self
     where
         I: IntoIterator<Item = R>,
@@ -129,31 +137,37 @@ impl<Arch: RelocationArch> ModuleScope<Arch> {
         }
     }
 
+    /// Wraps an existing shared module slice.
     #[inline]
     pub fn from_shared(modules: Arc<[ModuleHandle<Arch>]>) -> Self {
         Self { modules }
     }
 
+    /// Returns the modules in lookup order.
     #[inline]
     pub fn as_slice(&self) -> &[ModuleHandle<Arch>] {
         &self.modules
     }
 
+    /// Iterates over modules in lookup order.
     #[inline]
     pub fn iter(&self) -> slice::Iter<'_, ModuleHandle<Arch>> {
         self.modules.iter()
     }
 
+    /// Returns the number of modules in this scope.
     #[inline]
     pub fn len(&self) -> usize {
         self.modules.len()
     }
 
+    /// Returns whether the scope contains no modules.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.modules.is_empty()
     }
 
+    /// Returns a new scope with additional modules appended after existing ones.
     pub fn extend<I, R>(&self, modules: I) -> Self
     where
         I: IntoIterator<Item = R>,

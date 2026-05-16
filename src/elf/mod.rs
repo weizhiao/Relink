@@ -6,6 +6,7 @@
 
 use crate::ByteRepr;
 
+/// ELF ABI constants.
 pub mod abi;
 mod defs;
 mod dynamic;

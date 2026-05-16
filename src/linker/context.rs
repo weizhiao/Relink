@@ -29,6 +29,7 @@ impl<K, D: 'static, M, Arch> LinkContext<K, D, M, Arch>
 where
     Arch: RelocationArch,
 {
+    /// Creates an empty link context.
     #[inline]
     pub fn new() -> Self {
         Self {
@@ -42,56 +43,67 @@ where
     K: Clone + Ord,
     Arch: RelocationArch,
 {
+    /// Returns whether no modules have been committed.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.committed.is_empty()
     }
 
+    /// Returns whether the context contains a module with `key`.
     #[inline]
     pub fn contains_key(&self, key: &K) -> bool {
         self.committed.contains_key(key)
     }
 
+    /// Returns whether the context contains an entry with `id`.
     #[inline]
     pub fn contains(&self, id: KeyId) -> bool {
         self.committed.contains(id)
     }
 
+    /// Returns the interned id for a committed key.
     #[inline]
     pub fn key_id(&self, key: &K) -> Option<KeyId> {
         self.committed.key_id(key)
     }
 
+    /// Returns the key associated with an interned id.
     #[inline]
     pub fn key(&self, id: KeyId) -> Option<&K> {
         self.committed.key(id)
     }
 
+    /// Returns the loaded module associated with an interned id.
     #[inline]
     pub fn get(&self, id: KeyId) -> Option<&LoadedCore<D, Arch>> {
         self.committed.get(id)
     }
 
+    /// Returns direct dependency ids for a committed module.
     #[inline]
     pub fn direct_deps(&self, id: KeyId) -> Option<&[KeyId]> {
         self.committed.direct_deps(id)
     }
 
+    /// Iterates committed modules in load order.
     #[inline]
     pub fn load_order(&self) -> impl Iterator<Item = KeyId> + '_ {
         self.committed.load_order()
     }
 
+    /// Returns immutable user metadata for a committed module.
     #[inline]
     pub fn meta(&self, id: KeyId) -> Option<&M> {
         self.committed.meta(id)
     }
 
+    /// Returns mutable user metadata for a committed module.
     #[inline]
     pub fn meta_mut(&mut self, id: KeyId) -> Option<&mut M> {
         self.committed.meta_mut(id)
     }
 
+    /// Inserts an already loaded module with default metadata.
     pub fn insert(
         &mut self,
         key: K,
@@ -104,6 +116,7 @@ where
         self.insert_with_meta(key, module, direct_deps, M::default())
     }
 
+    /// Inserts an already loaded module with explicit metadata.
     pub fn insert_with_meta(
         &mut self,
         key: K,
@@ -120,11 +133,13 @@ where
             .insert_new(key, CommittedEntry::new(module, direct_deps, meta)))
     }
 
+    /// Removes a committed module and returns its image, dependencies, and metadata.
     #[inline]
     pub fn remove(&mut self, id: KeyId) -> Option<(LoadedCore<D, Arch>, Box<[KeyId]>, M)> {
         self.committed.remove(id)
     }
 
+    /// Returns the breadth-first dependency scope rooted at `root`.
     pub fn dependency_scope(&self, root: KeyId) -> Vec<KeyId> {
         if !self.committed.contains(root) {
             return Vec::new();
@@ -152,6 +167,7 @@ where
         scope
     }
 
+    /// Returns retained loaded modules in the dependency scope rooted at `root`.
     pub fn dependency_modules(&self, root: KeyId) -> Arc<[LoadedCore<D, Arch>]> {
         let scope = self
             .dependency_scope(root)
@@ -161,6 +177,7 @@ where
         Arc::from(scope)
     }
 
+    /// Extends this context with modules from another context.
     pub fn extend(&mut self, other: &LinkContext<K, D, M, Arch>) -> Result<()>
     where
         M: Clone,
@@ -199,6 +216,7 @@ where
         Ok(())
     }
 
+    /// Creates a detached clone of the committed context state.
     pub fn snapshot(&self) -> Self
     where
         M: Clone,

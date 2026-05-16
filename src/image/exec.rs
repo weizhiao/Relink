@@ -39,14 +39,17 @@ impl<D, Arch: RelocationArch> Debug for StaticExec<D, Arch> {
 }
 
 impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
+    /// Returns the source path or caller-provided path identifier.
     pub fn path(&self) -> &Path {
         self.inner.path.as_path()
     }
 
+    /// Returns the final path component.
     pub fn name(&self) -> &str {
         self.path().file_name()
     }
 
+    /// Returns the executable entry point address.
     pub fn entry(&self) -> usize {
         self.entry_addr().into_inner()
     }
@@ -55,22 +58,27 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
         self.inner.entry
     }
 
+    /// Returns the TLS module id assigned to this image, when registered.
     pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         self.inner.tls_mod_id
     }
 
+    /// Returns the static TLS thread-pointer offset, when assigned.
     pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         self.inner.tls_tp_offset
     }
 
+    /// Returns user data associated with the image.
     pub fn user_data(&self) -> &D {
         &self.inner.user_data
     }
 
+    /// Returns program headers when they were retained by the loader.
     pub fn phdrs(&self) -> Option<&[ElfPhdr<Arch::Layout>]> {
         self.inner.phdrs.as_deref()
     }
 
+    /// Returns the runtime base address.
     pub fn base(&self) -> usize {
         self.inner.segments.base()
     }
@@ -79,10 +87,12 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
         self.inner.segments.mapped_base()
     }
 
+    /// Returns the mapped memory length in bytes.
     pub fn mapped_len(&self) -> usize {
         self.inner.segments.mapped_len()
     }
 
+    /// Returns whether `addr` lies inside this executable mapping.
     pub fn contains_addr(&self, addr: usize) -> bool {
         self.inner.segments.contains_addr(addr)
     }
@@ -199,6 +209,7 @@ impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
         }
     }
 
+    /// Returns the TLS module id assigned to this executable, when registered.
     pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         match self {
             RawExec::Dynamic(image) => image.tls_mod_id(),
@@ -206,6 +217,7 @@ impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
         }
     }
 
+    /// Returns the static TLS thread-pointer offset, when assigned.
     pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         match self {
             RawExec::Dynamic(image) => image.tls_tp_offset(),
@@ -261,6 +273,7 @@ impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
         }
     }
 
+    /// Returns the runtime base address.
     pub fn base(&self) -> usize {
         match self {
             RawExec::Dynamic(image) => image.base(),
@@ -345,6 +358,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
     }
 
     /// Returns a reference to the core ELF object if this is a dynamic executable.
+    /// Returns the loaded dynamic core, or `None` for static executables.
     pub fn core_ref(&self) -> Option<&LoadedCore<D, Arch>> {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => Some(module),
@@ -352,6 +366,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
         }
     }
 
+    /// Returns the TLS module id assigned to this executable, when registered.
     pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => module.core.tls_mod_id(),
@@ -359,6 +374,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
         }
     }
 
+    /// Returns the static TLS thread-pointer offset, when assigned.
     pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => module.core.tls_tp_offset(),

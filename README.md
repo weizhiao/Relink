@@ -14,97 +14,58 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> | <a href="README_zh.md">简体中文</a>
-</p>
-
-<p align="center">
+  <a href="README.md">English</a> | <a href="README_zh.md">简体中文</a> |
   <a href="CONTRIBUTING.md">Contributing</a> | <a href="CONTRIBUTING_zh.md">贡献指南</a>
 </p>
 
 <p align="center">
-  <strong>Rust no_std ELF loader, runtime linker, and JIT linker with dynamic link-time optimization.</strong><br>
+  <strong>Rust no_std ELF loader, runtime linker, and JIT linker with dynamic link-time optimization.</strong>
 </p>
 
-Relink is a high-performance, no_std-friendly Rust ELF loader, runtime linker, and JIT linker. It loads ELF images from files or memory, performs dynamic loading, relocation, and symbol resolution, and supports plugin systems, hot reload, kernels, embedded runtimes, and custom dynamic linking policies.
+Relink loads ELF images from files or memory and performs dynamic loading, dependency resolution, relocation, and symbol lookup. It fits plugin systems, JIT and hot-reload flows, isolated link contexts, scan-first layout optimization, kernels, and embedded runtimes when `dlopen` is too rigid.
 
 ## Use Cases
 
-| Use case                                     | What Relink is built to handle                                                                                                                                                                                                              |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Plugin systems, JITs, hot reload             | Runtime loading, symbol resolution, and dependency-graph policy without being locked into the fixed `dlopen` flow                                                                                                                           |
-| High-performance server applications         | With linker `--emit-relocs` enabled, rewrite section layout before mapping, pack hot code into tighter runtime regions, run custom dynamic link-time optimization passes, and use huge-page mappings to reduce address-translation overhead |
-| Kernels, embedded loaders, `no_std` runtimes | Keep ELF scanning, mapping, and relocation available in constrained environments                                                                                                                                                            |
-| Heterogeneous loading                        | Scan, rewrite, and load images with different ELF layouts, ABIs, or target architectures from a host runtime                                                                                                                                |
-| Deeply customized linking policy             | Compose dependency resolution and relocation interception into your own loading flow                                                                                                                                                        |
-
-When `dlopen` is too rigid, and maintaining hand-written dependency resolution, layout optimization, and relocation logic would be too costly, Relink provides a composable alternative.
+- Load plugins, JIT artifacts, or hot-update modules at runtime with custom dependency resolution and symbol scopes.
+- Scan dependencies and sections before mapping, then use `--emit-relocs` to reorder layout, pack hot code, use huge pages, or run custom passes.
+- Keep ELF scanning, mapping, and relocation available in `no_std`, kernel, embedded, or custom mmap environments.
+- Scan, rewrite, and load images with different ELF layouts, ABIs, or target architectures.
+- Compose shared objects, executable images, and relocatable objects in one loading flow.
 
 ## What It Loads
 
 - Shared objects / dynamic libraries (`ET_DYN`)
 - Executables and PIE-style images (`ET_EXEC`, plus executable-style `ET_DYN`)
 - Relocatable object files (`ET_REL`) when the `object` feature is enabled
-- File-backed or in-memory inputs via `&str`, `String`, `&[u8]`, `&Vec<u8]`, `ElfFile`, and `ElfBinary`
+- File-backed or in-memory inputs via `&str`, `String`, `&[u8]`, `Vec<u8>`, `ElfFile`, and `ElfBinary`
 
-If you want automatic ELF type detection, use `Loader::load()`. If you want strict type checks, use `load_dylib()`, `load_exec()`, or `load_object()`.
+Use `Loader::load()` when you want automatic ELF type detection. Use `load_dylib()`, `load_exec()`, or `load_object()` when you want strict type checks.
 
 ## Core Capabilities
 
-| Capability                          | What Relink provides                                                                                                                                                       |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dynamic link-time optimization      | Scan dependencies and sections first, then run passes before mapping; with `--emit-relocs`, callers can reorder layout, pack hot code, and run custom optimizations        |
-| Custom dependency and symbol policy | Caller-controlled `DT_NEEDED` resolution, symbol lookup order, symbol interception, and runtime scopes                                                                     |
-| Isolated link contexts              | Each `LinkContext` is an independent module repository, dependency graph, and relocation scope; sharing is explicit through `snapshot()` or `extend()`                     |
-| Section-level layout planning       | For modules with reorder-repair support, assign section placement / arena before mapping, then choose final runtime mapping by memory class, page size, and sharing policy |
-| Heterogeneous and low-level loading | Scan and load images with different ELF layouts, ABIs, or target architectures while keeping a `no_std`-friendly core                                                      |
-| Type-safe symbol access             | Typed symbol handles are tied to the lifetime of their loaded image, reducing dangling-symbol risks                                                                        |
-| Hybrid linking                      | Compose shared objects, executable images, and relocatable objects in one runtime loading flow                                                                             |
-| Replaceable mapping backend         | Let callers plug in platform-specific mmap, permission, and huge-page strategies                                                                                           |
+| Capability | What Relink provides |
+| --- | --- |
+| In-memory loading | Load ELF images from paths, memory buffers, or parsed inputs |
+| Custom linking policy | Caller-controlled `DT_NEEDED` resolution, symbol lookup order, scopes, and relocation interception |
+| Isolated link contexts | Multiple `LinkContext`s keep independent module stores, dependency graphs, and symbol scopes |
+| Scan-first planning | Scan dependencies and sections first, then adjust layout, materialization, or section data before mapping |
+| Dynamic link-time optimization | With `--emit-relocs`, reorder sections, pack hot code, and run custom passes |
+| Replaceable mapping backend | Plug in platform-specific mmap, permission, page-size, or huge-page policies |
+| Type-safe symbol access | Symbol handles are tied to the lifetime of their loaded image, reducing dangling-symbol risks |
+| Hybrid linking | Compose `.so`, executable images, and feature-gated `.o` / `ET_REL` inputs |
 
-### Compared With Typical Approaches
+### Compared With `dlopen`
 
-| Capability                     | Relink                                                     | `dlopen`-style loading          |
-| ------------------------------ | ---------------------------------------------------------- | ------------------------------- |
-| In-memory loading              | ✅ Paths / memory buffers / parsed ELF                      | △ Usually path-based            |
-| `ET_REL` loading               | ✅ Feature-gated                                            | ❌ Not supported                 |
-| Pre-link planning              | ✅ Dependencies / sections / mapping strategy               | ❌ Not supported                 |
-| Dynamic link-time optimization | ✅ Section reordering / hot-code packing / custom passes    | ❌ Not supported                 |
-| Huge pages and mapping policy  | ✅ Replaceable mapping backend                              | △ Usually not caller-controlled |
-| Dependency and symbol policy   | ✅ Dependency graph / scope / lookup / interception control | △ Usually not caller-controlled |
-| Link-context isolation         | ✅ Multiple isolated `LinkContext`s                         | △ Usually process-global        |
-| Heterogeneous loading          | ✅ Different ELF layouts / ABIs / target architectures      | △ Host dynamic-linker dependent |
-| Symbol lifetime safety         | ✅ Typed symbols tied to loaded images                      | ❌ Not supported                 |
-
-## Benchmarks
-
-The table below is a GitHub Actions snapshot, not a universal performance claim. It is meant as a reproducible reference point for this benchmark suite; run `cargo bench` on your target environment for numbers that matter to your workload.
-
-- Run: [actions/runs/25632675040/job/75239090388](https://github.com/weizhiao/Relink/actions/runs/25632675040/job/75239090388)
-- Commit: `e2d252b44be4c28823f6d500c58159767014b8cd`
-- Runner: GitHub-hosted `ubuntu-24.04` (`ubuntu-latest`), `x86_64-unknown-linux-gnu`
-- Rust: `rustc 1.95.0 (59807616e 2026-04-14)`
-- Command path: `TARGET=x86_64-unknown-linux-gnu FEATURES=use-syscall OP=bench sh ci/run.sh`
-- Fixture: the repository's `libc -> libb -> liba` test chain, not the system C library
-
-Lower is better for loading. Bars show relative time with `libloading/lazy` as `1.00x`; shorter bars are faster. `scan_first` includes dependency scanning and section-region planning, so it is a planning-path cost rather than a direct `dlopen` replacement.
-
-| Benchmark           |        Time | Relative time                     |
-| ------------------- | ----------: | --------------------------------- |
-| `elf_loader/memory` | `89.531 µs` | `0.78x` ████████                  |
-| `elf_loader/file`   | `101.01 µs` | `0.88x` █████████                 |
-| `linker/runtime`    | `111.32 µs` | `0.97x` ██████████                |
-| `libloading/lazy`   | `115.34 µs` | `1.00x` ██████████                |
-| `libloading/now`    | `115.77 µs` | `1.00x` ██████████                |
-| `linker/scan_first` | `288.92 µs` | `2.51x` █████████████████████████ |
-
-Symbol lookup was measured after both loaders had already loaded the fixture chain. For each hit/miss pair, `libloading` is the `1.00x` baseline; shorter bars are faster.
-
-| Benchmark                |        Time | Relative time      |
-| ------------------------ | ----------: | ------------------ |
-| `symbol/elf_loader/hit`  | `10.280 ns` | `0.13x` █          |
-| `symbol/libloading/hit`  | `80.154 ns` | `1.00x` ██████████ |
-| `symbol/elf_loader/miss` | `11.548 ns` | `0.03x` ▏          |
-| `symbol/libloading/miss` | `375.49 ns` | `1.00x` ██████████ |
+| Capability | Relink | `dlopen`-style loading |
+| --- | --- | --- |
+| In-memory loading | ✅ Paths / memory buffers / parsed ELF | ❌ Not supported |
+| `ET_REL` loading | ✅ Feature-gated | ❌ Not supported |
+| Pre-link planning | ✅ Dependencies / sections / mapping strategy | ❌ Not supported |
+| Dynamic link-time optimization | ✅ Section reordering / hot-code packing / custom passes | ❌ Not supported |
+| Mapping policy | ✅ Replaceable mmap backend, page size, and huge-page policy | ❌ Not supported |
+| Dependency and symbol policy | ✅ Dependency graph / scope / lookup / interception control | ❌ Not supported |
+| Context isolation | ✅ Multiple `LinkContext`s isolate dependency graphs and symbol scopes | ❌ Not supported |
+| Heterogeneous loading | ✅ Different ELF layouts / ABIs / target architectures | ❌ Not supported |
 
 ## Quick Start
 
@@ -126,8 +87,8 @@ elf_loader = { version = "0.14.1", features = ["full"] }
 
 ```rust
 use elf_loader::{
+    image::{SyntheticModule, SyntheticSymbol},
     Loader, Result,
-    image::{SyntheticSymbol, SyntheticModule},
 };
 
 extern "C" fn host_double(value: i32) -> i32 {
@@ -135,15 +96,13 @@ extern "C" fn host_double(value: i32) -> i32 {
 }
 
 fn main() -> Result<()> {
-    let host = SyntheticModule::new(
-        "__host",
-        [SyntheticSymbol::function("host_double", host_double as *const ())],
-    );
-
     let lib = Loader::new()
         .load_dylib("path/to/plugin.so")?
         .relocator()
-        .scope([host])
+        .scope([SyntheticModule::new(
+            "__host",
+            [SyntheticSymbol::function("host_double", host_double as *const ())],
+        )])
         .relocate()?;
 
     let run = unsafe {
@@ -158,167 +117,66 @@ fn main() -> Result<()> {
 
 ## Loading Paths
 
-| Path                       | Entry point                                              | Best for                                                                                                                          |
-| -------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Direct loading             | `Loader::load_dylib()` / `load_exec()` / `load_object()` | You already know which image to load and only need custom symbol lookup, scopes, TLS, lazy binding, or relocation hooks           |
-| Runtime dependency linking | `Linker::load()`                                         | Use `KeyResolver` and `LinkContext` to manage dependency graphs, scopes, and context isolation without pre-map layout passes      |
-| Scan-first linking         | `Linker::load_scan_first()`                              | Discover `DT_NEEDED` dependencies first, then run layout passes, choose materialization policy, and relocate as one planned group |
-| Relocatable objects        | `Loader::load_object()`                                  | Compose `.o` and `.so` inputs at runtime; requires the `object` feature                                                           |
-| Custom mapping environment | `Loader::with_mmap()` / `with_page_size()`               | Plug in custom mmap, permission, page-size, or huge-page policies                                                                 |
+| Path | Entry point | Best for |
+| --- | --- | --- |
+| Direct loading | `Loader::load_dylib()` / `load_exec()` / `load_object()` | You already know which image to load and only need scopes, TLS, lazy binding, or relocation hooks |
+| Runtime dependency linking | `Linker::load()` | Use `KeyResolver` and `LinkContext` to manage dependency graphs, scopes, and context isolation |
+| Scan-first linking | `Linker::load_scan_first()` | Discover `DT_NEEDED` dependencies first, then run layout passes, choose materialization policy, and relocate as one group |
+| Relocatable objects | `Loader::load_object()` | Compose `.o` and `.so` inputs at runtime; requires the `object` feature |
+| Custom mapping environment | `Loader::with_mmap()` / `with_page_size()` | Plug in custom mmap, permission, page-size, or huge-page policies |
 
-The direct path is shorter and fits plugin or tooling workflows. `Linker::load()` fits runtime loading that needs isolated dependency graphs and scopes. The scan-first path is better for servers, runtimes, and kernels that need to plan before mapping.
+## Advanced Capability Index
 
-## Typical Workflows
+| Topic | Entry point / example |
+| --- | --- |
+| Load from memory | `ElfBinary::new(name, bytes)`, or direct `load_dylib(&bytes)` / `load_exec(&bytes)` |
+| Host symbols and scopes | `SyntheticModule`, `scope()`, `extend_scope()` |
+| Relocation interception | `pre_handler()`, `post_handler()`, see `cargo run --example relocation_handler` |
+| Lazy binding | `relocator().lazy()`, requires the `lazy-binding` feature |
+| Runtime dependency graphs | `KeyResolver`, `LinkContext`, `Linker::load()` |
+| Pre-map layout optimization | `Linker::load_scan_first()`, `map_pipeline()`, see `cargo run --example load_scan_first` |
+| Relocatable objects | `cargo run --example load_object --features object` |
+| Lifecycle callbacks | `cargo run --example lifecycle` |
 
-### Load from Memory
+Dynamic link-time layout optimization usually requires the target ELF to retain relocation information, for example by passing `-Wl,--emit-relocs` to the linker. Scan-first passes can inspect sections, modify data, adjust materialization, and place code, read-only data, writable data, or TLS into different arenas before mapping.
 
-```rust
-use elf_loader::{input::ElfBinary, Loader, Result};
+## Benchmarks
 
-fn main() -> Result<()> {
-    let bytes = std::fs::read("path/to/plugin.so").unwrap();
+The table below is a GitHub Actions snapshot, not a universal performance claim. It is meant as a reproducible reference point for the current benchmark suite; run `cargo bench` on your target environment for numbers that matter to your workload. Full environment details are in [actions/runs/25632675040/job/75239090388](https://github.com/weizhiao/Relink/actions/runs/25632675040/job/75239090388), and the fixture is the repository's `libc -> libb -> liba` test chain, not the system C library.
 
-    let lib = Loader::new()
-        .load_dylib(ElfBinary::new("plugin.so", &bytes))?
-        .relocator()
-        .relocate()?;
+Lower is better for loading. `scan_first` includes dependency scanning and section-region planning, so it is a planning-path cost rather than a direct `dlopen` replacement.
 
-    println!("loaded {} at 0x{:x}", lib.name(), lib.base());
-    Ok(())
-}
-```
+| Benchmark | Time | Relative time |
+| --- | ---: | --- |
+| `elf_loader/memory` | `89.531 µs` | `0.78x` |
+| `elf_loader/file` | `101.01 µs` | `0.88x` |
+| `linker/runtime` | `111.32 µs` | `0.97x` |
+| `libloading/lazy` | `115.34 µs` | `1.00x` |
+| `libloading/now` | `115.77 µs` | `1.00x` |
+| `linker/scan_first` | `288.92 µs` | `2.51x` |
 
-`load_dylib(&bytes)` and `load_exec(&bytes)` also work if you do not need a custom display name.
+Symbol lookup was measured after both loaders had already loaded the fixture chain:
 
-### Host Symbols, Scopes, and Lazy Binding
-
-The relocation stage can use caller-provided symbol policy:
-
-- `SyntheticModule`: expose host, wrapper, or native-bridge symbols as a normal lookup module.
-- `scope()` / `extend_scope()`: provide the ordered lookup scope. Put synthetic modules first for interposition, or last for fallback behavior.
-- `pre_handler()` / `post_handler()`: intercept relocation requests before or after writes.
-
-Lazy binding uses the retained relocation scope and requires the `lazy-binding` feature.
-
-### Use Linker to Manage Runtime Dependency Graphs
-
-Use `Linker` when loading is more than "open this one file." It resolves root modules and `DT_NEEDED` dependencies through `KeyResolver`, then commits loaded modules into a caller-provided `LinkContext` so different loading domains can keep isolated dependency graphs and symbol scopes.
-
-| Component         | Role                                                                                                                          |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `KeyResolver`     | Resolves root keys and `DT_NEEDED` names into concrete ELF inputs                                                             |
-| `LinkContext`     | Stores an isolated set of loaded modules, dependencies, and symbol scopes; separate contexts do not share state automatically |
-| `LinkPipeline`    | Runs passes before mapping in `load_scan_first()` to adjust layout, materialization, or section data                          |
-| `map_relocator()` | Configures host symbols, scopes, lazy binding, or relocation handlers before final relocation                                 |
-
-`Linker` exposes two loading interfaces:
-
-| API                         | Behavior                                                                                                                                  |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `Linker::load()`            | Resolves dependencies and relocates during loading; use it when you need dependency graphs, scopes, and context isolation                 |
-| `Linker::load_scan_first()` | Scans the whole pending group and builds a mutable link plan first; use it for pre-map layout planning and dynamic link-time optimization |
-
-The minimal shape is: implement a resolver, then pass a root key to `load()`:
-
-```rust
-use elf_loader::{input::ElfFile, Result};
-use elf_loader::linker::{
-    DependencyRequest, KeyResolver, LinkContext, Linker, ResolvedKey,
-};
-
-struct Resolver;
-
-impl KeyResolver<'static, &'static str, ()> for Resolver {
-    fn load_root(&mut self, key: &&'static str) -> Result<ResolvedKey<'static, &'static str>> {
-        Ok(ResolvedKey::load(*key, ElfFile::from_path("path/to/plugin.so")?))
-    }
-
-    fn resolve_dependency(
-        &mut self,
-        req: &DependencyRequest<'_, &'static str>,
-    ) -> Result<ResolvedKey<'static, &'static str>> {
-        let resolved = match req.needed() {
-            "libdep.so" => ResolvedKey::load("dep", ElfFile::from_path("path/to/libdep.so")?),
-            _ => return Err(req.unresolved()),
-        };
-        Ok(resolved)
-    }
-}
-
-fn main() -> Result<()> {
-    let mut context = LinkContext::<&'static str, ()>::new();
-
-    let plugin = Linker::new()
-        .resolver(Resolver)
-        .load(&mut context, "plugin")?;
-
-    let run = unsafe {
-        plugin
-            .get::<extern "C" fn() -> i32>("run")
-            .expect("symbol `run` not found")
-    };
-    let _ = run();
-
-    Ok(())
-}
-```
-
-For layout optimization, switch to `load_scan_first()` and add passes with `map_pipeline()`. Configure host symbols or relocation interception with `map_relocator()`.
-
-### Dynamic Link-Time Optimization and Huge-Page Layout
-
-If you want to reorder sections at runtime, the target ELF must retain relocation information. A common approach is to pass `--emit-relocs` to the linker when building the target dynamic library or executable, for example through `-Wl,--emit-relocs`.
-
-Scan-first passes can inspect sections, modify data, adjust materialization, and place code, read-only data, writable data, or TLS into different arenas. For performance-sensitive server applications, common strategies include:
-
-| Optimization              | What a pass can do                                                                                        |
-| ------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Hot-code packing          | Place hot code sections into a tighter executable arena to reduce locality loss                           |
-| Huge-page mapping         | Choose `Huge2MiB` / `Huge1GiB` page sizes for code or read-only data arenas                               |
-| Custom layout             | Rearrange section placement by profile data, module source, symbol grouping, or application policy        |
-| Relocation-time rewriting | Use retained relocation information to repair metadata affected by layout changes before final relocation |
-
-See `cargo run --example load_scan_first` for a complete scan-first loading flow. If you want to write your own layout optimization pass, start with `LinkPipeline`, `ReorderPass`, `ArenaDescriptor`, and `Section`.
-
-### Mix `.o` and `.so`
-
-With the `object` feature enabled, you can load a relocatable object first and use it as a lookup scope for later dynamic libraries:
-
-```rust
-use elf_loader::{Loader, Result};
-
-fn main() -> Result<()> {
-    let mut loader = Loader::new();
-
-    let base = loader
-        .load_object("path/to/base.o")?
-        .relocator()
-        .relocate()?;
-
-    let plugin = loader
-        .load_dylib("path/to/plugin.so")?
-        .relocator()
-        .scope([&base])
-        .relocate()?;
-
-    let _ = plugin;
-    Ok(())
-}
-```
+| Benchmark | Time | Relative time |
+| --- | ---: | --- |
+| `symbol/elf_loader/hit` | `10.280 ns` | `0.13x` |
+| `symbol/libloading/hit` | `80.154 ns` | `1.00x` |
+| `symbol/elf_loader/miss` | `11.548 ns` | `0.03x` |
+| `symbol/libloading/miss` | `375.49 ns` | `1.00x` |
 
 ## Feature Flags
 
-| Feature           | Default | Purpose                                                                  |
-| ----------------- | ------- | ------------------------------------------------------------------------ |
-| `libc`            | Yes     | Use the libc backend on Linux and Android                                |
-| `tls`             | Yes     | Enable TLS relocation handling and the built-in TLS resolver             |
-| `lazy-binding`    | No      | Enable PLT/GOT lazy binding and lazy-fixup lookup configuration          |
-| `object`          | No      | Enable relocatable object (`ET_REL`) loading and `Loader::load_object()` |
-| `version`         | No      | Enable version-aware symbol lookup such as `get_version()`               |
-| `log`             | No      | Enable `log` integration for loader and relocation diagnostics           |
-| `portable-atomic` | No      | Support targets without native pointer-sized atomics                     |
-| `use-syscall`     | No      | Use the Linux syscall backend instead of libc                            |
-| `full`            | No      | Convenience bundle: `tls`, `lazy-binding`, `object`, `libc`              |
+| Feature | Default | Purpose |
+| --- | --- | --- |
+| `libc` | Yes | Use the libc backend on Unix-like platforms |
+| `tls` | Yes | Enable TLS relocation handling and the built-in TLS resolver |
+| `lazy-binding` | No | Enable PLT/GOT lazy binding and lazy-fixup lookup configuration |
+| `object` | No | Enable relocatable object (`ET_REL`) loading and `Loader::load_object()` |
+| `version` | No | Enable version-aware symbol lookup such as `get_version()` |
+| `log` | No | Enable `log` integration for loader and relocation diagnostics |
+| `portable-atomic` | No | Support targets without native pointer-sized atomics |
+| `use-syscall` | No | Use the Linux syscall backend instead of libc |
+| `full` | No | Convenience bundle: `tls`, `lazy-binding`, `object`, `libc` |
 
 Notes:
 
@@ -330,36 +188,32 @@ Notes:
 
 The [`examples/`](examples/) directory covers the main extension points:
 
-| Example              | What it demonstrates                                                      | Command                                             |
-| -------------------- | ------------------------------------------------------------------------- | --------------------------------------------------- |
-| `load_dylib`         | Load shared objects and resolve host symbols                              | `cargo run --example load_dylib`                    |
-| `from_memory`        | Load ELF data from a byte buffer                                          | `cargo run --example from_memory`                   |
-| `load_exec`          | Inspect executable entry and base addresses                               | `cargo run --example load_exec`                     |
-| `load_hook`          | Observe segment loading with `with_hook()`                                | `cargo run --example load_hook`                     |
-| `load_scan_first`    | Discover `DT_NEEDED`, run scan-first passes, and configure pre-map layout | `cargo run --example load_scan_first`               |
-| `lifecycle`          | Custom `.init` / `.fini` handling                                         | `cargo run --example lifecycle`                     |
-| `user_data`          | Initialize dynamic-image metadata                                         | `cargo run --example user_data`                     |
-| `relocation_handler` | Intercept relocations with a custom handler                               | `cargo run --example relocation_handler`            |
-| `load_object`        | Load relocatable object files                                             | `cargo run --example load_object --features object` |
+| Example | What it demonstrates | Command |
+| --- | --- | --- |
+| `load_dylib` | Load shared objects and resolve host symbols | `cargo run --example load_dylib` |
+| `from_memory` | Load ELF data from a byte buffer | `cargo run --example from_memory` |
+| `load_exec` | Inspect executable entry and base addresses | `cargo run --example load_exec` |
+| `load_hook` | Observe segment loading with `with_hook()` | `cargo run --example load_hook` |
+| `load_scan_first` | Discover `DT_NEEDED`, run scan-first passes, and configure pre-map layout | `cargo run --example load_scan_first` |
+| `lifecycle` | Custom `.init` / `.fini` handling | `cargo run --example lifecycle` |
+| `user_data` | Initialize dynamic-image metadata | `cargo run --example user_data` |
+| `relocation_handler` | Intercept relocations with a custom handler | `cargo run --example relocation_handler` |
+| `load_object` | Load relocatable object files | `cargo run --example load_object --features object` |
 
 ## Platform Notes
 
-| Architecture                                                      | Dynamic libraries / executables | Dynamic link-time optimization                            | `.o` / `ET_REL`    |
-| ----------------------------------------------------------------- | ------------------------------- | --------------------------------------------------------- | ------------------ |
-| `x86_64`                                                          | ✅ Primary validation path       | ✅ Layout passes / placement / hot code / huge-page arenas | ✅ `object` feature |
-| `x86` / `aarch64` / `arm` / `riscv64` / `riscv32` / `loongarch64` | ✅                               | 🟡 Basic dependency planning; complex reordering pending   | ⏳ Pending          |
+| Architecture | Dynamic libraries / executables | Dynamic link-time optimization | `.o` / `ET_REL` |
+| --- | --- | --- | --- |
+| `x86_64` | ✅ Primary validation path | ✅ Layout passes / placement / hot code / huge-page arenas | ✅ `object` feature |
+| `x86` / `aarch64` / `arm` / `riscv64` / `riscv32` / `loongarch64` | ✅ | 🟡 Basic dependency planning; complex reordering pending | ⏳ Pending |
 
 Legend: ✅ supported, 🟡 basic support, ⏳ pending. Complex section-reorder repair and `.o` / `ET_REL` support are currently centered on `x86_64` relocation handling; contributions for the other architectures are welcome.
 
-- Symbol lookup is name-based and does not perform Rust name mangling for you. Export C ABI symbols when you want stable runtime lookup names.
+Symbol lookup is name-based and does not perform Rust name mangling for you. Export C ABI symbols when you want stable runtime lookup names.
 
 ## Contributing
 
-Issues and pull requests are welcome, especially around platform support and documentation examples.
-
-- Open an issue if you hit a loader or relocation edge case.
-- Send a PR if you want to improve architecture support, examples, or diagnostics.
-- Star the project if it is useful in your work.
+Issues and pull requests are welcome, especially around platform support, examples, and diagnostics. Star the project if it is useful in your work.
 
 ## License
 
