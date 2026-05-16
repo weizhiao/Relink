@@ -58,14 +58,14 @@ Use `Loader::load()` when you want automatic ELF type detection. Use `load_dylib
 
 | Capability | Relink | `dlopen`-style loading |
 | --- | --- | --- |
-| In-memory loading | ✅ Paths / memory buffers / parsed ELF | ❌ Not supported |
-| `ET_REL` loading | ✅ Feature-gated | ❌ Not supported |
-| Pre-link planning | ✅ Dependencies / sections / mapping strategy | ❌ Not supported |
-| Dynamic link-time optimization | ✅ Section reordering / hot-code packing / custom passes | ❌ Not supported |
-| Mapping policy | ✅ Replaceable mmap backend, page size, and huge-page policy | ❌ Not supported |
-| Dependency and symbol policy | ✅ Dependency graph / scope / lookup / interception control | ❌ Not supported |
-| Context isolation | ✅ Multiple `LinkContext`s isolate dependency graphs and symbol scopes | ❌ Not supported |
-| Heterogeneous loading | ✅ Different ELF layouts / ABIs / target architectures | ❌ Not supported |
+| In-memory loading | ✅ Paths / memory buffers / parsed ELF | ❌ |
+| `ET_REL` loading | ✅ Feature-gated | ❌ |
+| Pre-link planning | ✅ Dependencies / sections / mapping strategy | ❌ |
+| Dynamic link-time optimization | ✅ Section reordering / hot-code packing / custom passes | ❌ |
+| Mapping policy | ✅ Replaceable mmap backend, page size, and huge-page policy | ❌ |
+| Dependency and symbol policy | ✅ Dependency graph / scope / lookup / interception control | ❌ |
+| Context isolation | ✅ Multiple `LinkContext`s isolate dependency graphs and symbol scopes | ❌ |
+| Heterogeneous loading | ✅ Different ELF layouts / ABIs / target architectures | ❌ |
 
 ## Quick Start
 
@@ -134,7 +134,7 @@ fn main() -> Result<()> {
 | Relocation interception | `pre_handler()`, `post_handler()`, see `cargo run --example relocation_handler` |
 | Lazy binding | `relocator().lazy()`, requires the `lazy-binding` feature |
 | Runtime dependency graphs | `KeyResolver`, `LinkContext`, `Linker::load()` |
-| Pre-map layout optimization | `Linker::load_scan_first()`, `map_pipeline()`, see `cargo run --example load_scan_first` |
+| Pre-map layout optimization | `Linker::load_scan_first()`, `map_pipeline()`, see `cargo run --example linker_scan_first` |
 | Relocatable objects | `cargo run --example load_object --features object` |
 | Lifecycle callbacks | `cargo run --example lifecycle` |
 
@@ -191,10 +191,11 @@ The [`examples/`](examples/) directory covers the main extension points:
 | Example | What it demonstrates | Command |
 | --- | --- | --- |
 | `load_dylib` | Load shared objects and resolve host symbols | `cargo run --example load_dylib` |
+| `linker_load` | Resolve `DT_NEEDED` dependencies with `Linker::load()` | `cargo run --example linker_load` |
 | `from_memory` | Load ELF data from a byte buffer | `cargo run --example from_memory` |
 | `load_exec` | Inspect executable entry and base addresses | `cargo run --example load_exec` |
 | `load_hook` | Observe segment loading with `with_hook()` | `cargo run --example load_hook` |
-| `load_scan_first` | Discover `DT_NEEDED`, run scan-first passes, and configure pre-map layout | `cargo run --example load_scan_first` |
+| `linker_scan_first` | Discover `DT_NEEDED`, run scan-first passes, and configure pre-map layout | `cargo run --example linker_scan_first` |
 | `lifecycle` | Custom `.init` / `.fini` handling | `cargo run --example lifecycle` |
 | `user_data` | Initialize dynamic-image metadata | `cargo run --example user_data` |
 | `relocation_handler` | Intercept relocations with a custom handler | `cargo run --example relocation_handler` |

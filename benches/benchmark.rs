@@ -6,7 +6,10 @@ use elf_loader::{
     Loader, Result,
     image::{LoadedCore, ModuleCapability},
     input::{ElfFile, PathBuf},
-    linker::{LinkContext, LinkPass, LinkPassPlan, Linker, Materialization, ReorderPass},
+    linker::{
+        LinkContext, Linker,
+        scan::{LinkPass, LinkPassPlan, Materialization, ReorderPass},
+    },
 };
 use libloading::os::unix::{Library as UnixLibrary, RTLD_LAZY, RTLD_LOCAL, RTLD_NOW};
 use std::{fs, hint::black_box};
@@ -87,7 +90,7 @@ fn load_manual_memory(fixtures: &FixtureBytes) -> LoadedCore<()> {
 }
 
 fn load_linker(root: PathBuf) {
-    let mut context = LinkContext::<PathBuf, ()>::new();
+    let mut context: LinkContext<PathBuf, ()> = LinkContext::new();
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
         .load(&mut context, black_box(root))
@@ -96,7 +99,7 @@ fn load_linker(root: PathBuf) {
 }
 
 fn load_scan_first(root: PathBuf) {
-    let mut context = LinkContext::<PathBuf, ()>::new();
+    let mut context: LinkContext<PathBuf, ()> = LinkContext::new();
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
         .map_pipeline(|mut pipeline| {

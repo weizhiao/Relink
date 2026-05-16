@@ -15,7 +15,7 @@ fn a() -> i32 {
 }
 
 #[unsafe(no_mangle)]
-fn print(_: &str) {}
+pub fn print(_: &str) {}
 
 #[repr(C)]
 pub struct S {
