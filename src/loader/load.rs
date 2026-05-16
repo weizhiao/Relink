@@ -6,14 +6,14 @@ use crate::{
         RawDylib, RawDynamic, RawDynamicParts, RawElf, RawExec, ScannedDynamic,
         ScannedDynamicLoadParts, ScannedElf, ScannedExec,
     },
-    input::{ElfReader, IntoElfReader},
+    input::{ElfReader, IntoElfReader, PathBuf},
     logging,
     os::Mmap,
     relocation::{RelocAddr, RelocationArch},
     segment::{ELFRelro, ElfSegments, program::parse_segments},
     tls::TlsResolver,
 };
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
 use core::{
     ffi::{CStr, c_char, c_void},
     ptr::NonNull,
@@ -60,7 +60,7 @@ where
         let file_type = ehdr.file_type();
         logging::error!(
             "[{}] Type mismatch: expected {}, found {:?}",
-            object.file_name(),
+            object.path(),
             expected.label(),
             file_type
         );
@@ -85,7 +85,7 @@ where
         I: IntoElfReader<'static>,
     {
         let mut object = input.into_reader()?;
-        logging::debug!("Scanning ELF metadata: {}", object.file_name());
+        logging::debug!("Scanning ELF metadata: {}", object.path());
 
         let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Executable)?;
         let phdrs = self
@@ -212,7 +212,7 @@ where
         I: IntoElfReader<'a>,
     {
         let mut object = input.into_reader()?;
-        logging::debug!("Loading dynamic image: {}", object.file_name());
+        logging::debug!("Loading dynamic image: {}", object.path());
 
         let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Dynamic)?;
         let mut image = self.load_dynamic_from_ehdr(object, ehdr)?;
@@ -279,7 +279,7 @@ where
             reader,
         } = scanned.into_load_parts();
 
-        logging::debug!("Loading scanned dynamic image: {}", reader.file_name());
+        logging::debug!("Loading scanned dynamic image: {}", reader.path());
 
         let builder = self
             .inner
@@ -306,12 +306,12 @@ where
     /// object's lifetime, and is writable wherever relocation will write.
     pub unsafe fn load_mapped_dynamic(
         &mut self,
-        name: impl Into<String>,
+        path: impl Into<PathBuf>,
         load_bias: usize,
         phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
         entry: usize,
     ) -> Result<RawDynamic<D, Arch>> {
-        let name = name.into();
+        let path = path.into();
         let phdrs = phdrs.into();
         let page_size = self.inner.page_size::<M>()?.bytes();
         let layout = parse_segments(&phdrs, true, page_size)?;
@@ -324,7 +324,7 @@ where
             layout.min_vaddr,
         );
         let parts = borrowed_dynamic_parts::<M, D, Arch>(
-            name,
+            path,
             load_bias,
             entry,
             &phdrs,
@@ -365,7 +365,7 @@ where
         I: IntoElfReader<'a>,
     {
         let mut object = input.into_reader()?;
-        logging::info!("Loading executable: {}", object.file_name());
+        logging::info!("Loading executable: {}", object.path());
 
         let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Executable)?;
         self.load_exec_from_ehdr(object, ehdr)
@@ -444,7 +444,7 @@ impl ExpectedElf {
 }
 
 fn borrowed_dynamic_parts<M, D, Arch>(
-    name: String,
+    path: PathBuf,
     load_bias: usize,
     entry: usize,
     phdrs: &[ElfPhdr<Arch::Layout>],
@@ -507,7 +507,7 @@ where
     let (init_fn, fini_fn) = lifecycle_handlers;
 
     Ok(RawDynamicParts {
-        name,
+        path,
         entry: RelocAddr::new(entry),
         interp,
         phdrs: ElfPhdrs::Vec(Vec::from(phdrs)),
@@ -533,7 +533,7 @@ mod tests {
     use crate::{
         Result,
         elf::{ElfEhdr, ElfLayout, NativeElfLayout},
-        input::ElfReader,
+        input::{ElfReader, Path},
         loader::ElfBuf,
         relocation::RelocationArch,
     };
@@ -554,8 +554,8 @@ mod tests {
     }
 
     impl ElfReader for TestReader {
-        fn file_name(&self) -> &str {
-            "<test>"
+        fn path(&self) -> &Path {
+            Path::new("<test>")
         }
 
         fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {

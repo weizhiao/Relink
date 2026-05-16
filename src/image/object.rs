@@ -57,7 +57,7 @@ impl<D: 'static, Arch: RelocationArch> RawObject<D, Arch> {
     pub(crate) fn from_builder<T: TlsResolver>(builder: ObjectBuilder<T, D, Arch>) -> Self {
         let inner = CoreInner {
             is_init: AtomicBool::new(false),
-            name: builder.name,
+            path: builder.path,
             symtab: builder.symtab,
             fini: Lifecycle::empty(),
             fini_handler: CoreFiniHandler::Native(builder.fini_fn),

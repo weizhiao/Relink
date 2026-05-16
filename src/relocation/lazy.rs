@@ -177,30 +177,30 @@ mod enabled {
 
     pub(crate) unsafe extern "C" fn dl_fixup(dylib: &CoreInner, rela_idx: usize) -> usize {
         let Some(dynamic_info) = dylib.dynamic_info.as_ref() else {
-            invalid_state(dylib.name.as_str(), "missing dynamic metadata")
+            invalid_state(dylib.path.as_str(), "missing dynamic metadata")
         };
         let pltrel = dynamic_info.lazy.pltrel;
 
         let Some(rela) = pltrel.get(rela_idx) else {
-            invalid_relocation_index(dylib.name.as_str(), rela_idx, pltrel.len())
+            invalid_relocation_index(dylib.path.as_str(), rela_idx, pltrel.len())
         };
         let r_type = rela.r_type();
         let r_sym = rela.r_symbol();
         let segments = &dylib.segments;
 
         if unlikely(r_type != <NativeArch as RelocationArch>::JUMP_SLOT || r_sym == 0) {
-            invalid_relocation(dylib.name.as_str(), rela_idx, rela);
+            invalid_relocation(dylib.path.as_str(), rela_idx, rela);
         }
 
         let sym_count = dylib.symtab.count_syms();
         if unlikely(r_sym >= sym_count) {
-            invalid_symbol_index(dylib.name.as_str(), r_sym, sym_count);
+            invalid_symbol_index(dylib.path.as_str(), r_sym, sym_count);
         }
 
         let (_, syminfo) = dylib.symtab.symbol_idx(r_sym);
 
         let Some(scope) = dynamic_info.lazy.scope.as_ref() else {
-            invalid_state(dylib.name.as_str(), "missing lazy lookup")
+            invalid_state(dylib.path.as_str(), "missing lazy lookup")
         };
         let symbol = lookup_tls_get_addr(syminfo.name(), dylib.tls.tls_get_addr())
             .map(RelocAddr::from_ptr)
@@ -209,7 +209,7 @@ mod enabled {
                     .iter()
                     .find_map(|source| lookup_addr::<NativeArch>(&**source, syminfo.name()))
             })
-            .unwrap_or_else(|| unresolved_symbol(dylib.name.as_str(), syminfo.name()));
+            .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()));
 
         segments.write(rela.r_offset(), symbol);
         symbol.into_inner()

@@ -42,7 +42,7 @@ where
         &mut self,
         mut object: impl ElfReader,
     ) -> Result<RawObject<D, Arch>> {
-        logging::debug!("Loading object: {}", object.file_name());
+        logging::debug!("Loading object: {}", object.path());
 
         let ehdr = self
             .buf
@@ -51,9 +51,7 @@ where
             .buf
             .prepare_shdrs_mut(&ehdr, &mut object)?
             .ok_or(ParseEhdrError::MissingSectionHeaders)?;
-        let builder = self
-            .inner
-            .create_object_builder::<M, Tls>(ehdr, shdrs, object)?;
+        let builder = self.inner.create_object_builder::<M, Tls>(shdrs, object)?;
         let raw = RawObject::from_builder(builder);
 
         logging::info!(
@@ -72,7 +70,7 @@ mod tests {
     use crate::{
         Result,
         elf::{ElfEhdr, ElfLayout, NativeElfLayout},
-        input::ElfReader,
+        input::{ElfReader, Path},
         relocation::RelocationArch,
     };
     use crate::{
@@ -96,8 +94,8 @@ mod tests {
     }
 
     impl ElfReader for TestReader {
-        fn file_name(&self) -> &str {
-            "<test>"
+        fn path(&self) -> &Path {
+            Path::new("<test>")
         }
 
         fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {

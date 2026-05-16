@@ -7,11 +7,11 @@ use crate::{
         SymbolTable,
     },
     image::{Module, ModuleHandle, ModuleScope},
+    input::{Path, PathBuf},
     relocation::{RelocAddr, RelocationArch},
     segment::ElfSegments,
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
-use alloc::string::String;
 use alloc::vec::Vec;
 use core::{any::Any, ffi::c_void, fmt::Debug, marker::PhantomData, ptr::NonNull};
 use elf::abi::DF_STATIC_TLS;
@@ -155,22 +155,16 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         Arch::KIND
     }
 
-    /// Returns the name (full path) of the ELF object.
+    /// Returns the loader source path or caller-provided source identifier.
+    #[inline]
+    pub fn path(&self) -> &Path {
+        self.core.path()
+    }
+
+    /// Returns the ELF module identity used for diagnostics.
     #[inline]
     pub fn name(&self) -> &str {
         self.core.name()
-    }
-
-    /// Returns the DT_SONAME value when this is a dynamic object.
-    #[inline]
-    pub fn soname(&self) -> Option<&str> {
-        self.core.soname()
-    }
-
-    /// Returns the short name of the ELF object.
-    #[inline]
-    pub fn short_name(&self) -> &str {
-        self.core.short_name()
     }
 
     /// Returns the base address of the ELF object.
@@ -295,7 +289,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     /// describe a valid loaded ELF image.
     ///
     /// # Arguments
-    /// * `name` - The name of the ELF file
+    /// * `path` - Loader source path or caller-provided source identifier
     /// * `phdrs` - The program headers
     /// * `memory` - The mapped memory (pointer and length)
     /// * `munmap` - Function to unmap the memory
@@ -306,7 +300,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     /// A new [`LoadedCore`] instance
     #[inline]
     pub unsafe fn new_unchecked<Tls: TlsResolver>(
-        name: String,
+        path: impl Into<PathBuf>,
         phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
         memory: (*mut c_void, usize),
         munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
@@ -382,7 +376,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         Ok(Self {
             core: unsafe {
                 ElfCore::from_raw(
-                    name,
+                    path.into(),
                     base,
                     dynamic_ptr,
                     phdrs,
@@ -427,7 +421,7 @@ where
 
     #[inline]
     fn soname(&self) -> Option<&str> {
-        LoadedCore::soname(self)
+        self.core.soname()
     }
 
     #[inline]

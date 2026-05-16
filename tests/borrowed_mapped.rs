@@ -37,7 +37,8 @@ fn borrowed_dynamic_reuses_existing_mapping() {
     }
     .expect("failed to wrap borrowed mapping");
 
-    assert_eq!(borrowed.name(), "borrowed-main");
+    assert_eq!(borrowed.path().as_str(), "borrowed-main");
+    assert_eq!(borrowed.name(), "libowner.so");
     assert_eq!(borrowed.base(), owner.base());
     assert_eq!(borrowed.entry(), owner.entry());
     assert_eq!(borrowed.mapped_len(), owner.mapped_len());
@@ -78,7 +79,8 @@ fn scanned_dynamic_load_reuses_scanned_metadata() {
         .load_scanned_dynamic(scanned)
         .expect("failed to load scanned dynamic image");
 
-    assert_eq!(raw.name(), "scanned.so");
+    assert_eq!(raw.path().as_str(), "scanned.so");
+    assert_eq!(raw.name(), "libscanned.so");
     assert_eq!(raw.soname(), Some("libscanned.so"));
     assert_eq!(raw.user_data().value, 42);
     assert!(raw.dynamic_ptr().is_some());

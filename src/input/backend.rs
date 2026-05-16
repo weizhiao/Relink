@@ -1,11 +1,6 @@
 use super::{ElfReader, IntoElfReader, Path, PathBuf};
 use crate::{Result, logging, os::RawFile};
-use alloc::{
-    borrow::Cow,
-    boxed::Box,
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::{borrow::Cow, boxed::Box, string::String, vec::Vec};
 
 /// An ELF object source backed by an in-memory byte slice.
 ///
@@ -13,8 +8,8 @@ use alloc::{
 /// those embedded in the binary or received over a network.
 #[derive(Debug)]
 pub struct ElfBinary<'bytes> {
-    /// The name assigned to this ELF object.
-    name: String,
+    /// Loader source path or caller-provided source identifier.
+    path: PathBuf,
     /// The raw ELF data.
     bytes: Cow<'bytes, [u8]>,
 }
@@ -29,9 +24,9 @@ impl<'bytes> ElfBinary<'bytes> {
     /// let data = &[]; // In practice, this would be the bytes of an ELF file
     /// let binary = ElfBinary::new("liba.so", data);
     /// ```
-    pub fn new(name: &str, bytes: &'bytes [u8]) -> Self {
+    pub fn new(path: impl Into<PathBuf>, bytes: &'bytes [u8]) -> Self {
         Self {
-            name: name.to_string(),
+            path: path.into(),
             bytes: Cow::Borrowed(bytes),
         }
     }
@@ -40,18 +35,18 @@ impl<'bytes> ElfBinary<'bytes> {
     ///
     /// This is useful for scanned images, which retain their reader until the
     /// later mapping phase.
-    pub fn owned(name: impl Into<String>, bytes: impl Into<Vec<u8>>) -> Self {
+    pub fn owned(path: impl Into<PathBuf>, bytes: impl Into<Vec<u8>>) -> Self {
         Self {
-            name: name.into(),
+            path: path.into(),
             bytes: Cow::Owned(bytes.into()),
         }
     }
 }
 
 impl<'bytes> ElfReader for ElfBinary<'bytes> {
-    /// Returns the name of the ELF binary.
-    fn file_name(&self) -> &str {
-        &self.name
+    /// Returns the source path or caller-provided identifier.
+    fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Reads data from the memory-based ELF object.
@@ -90,7 +85,7 @@ impl ElfFile {
     pub unsafe fn from_owned_fd(path: impl AsRef<Path>, raw_fd: i32) -> Self {
         let path = path.as_ref();
         ElfFile {
-            inner: RawFile::from_owned_fd(path.as_str(), raw_fd),
+            inner: RawFile::from_owned_fd(path, raw_fd),
         }
     }
 
@@ -99,15 +94,15 @@ impl ElfFile {
         let path = path.as_ref();
         logging::debug!("Opening ELF file: {}", path);
 
-        let inner = RawFile::from_path(path.as_str())?;
+        let inner = RawFile::from_path(path)?;
         Ok(ElfFile { inner })
     }
 }
 
 impl ElfReader for ElfFile {
-    /// Returns the name of the ELF file.
-    fn file_name(&self) -> &str {
-        self.inner.file_name()
+    /// Returns the path of the ELF file.
+    fn path(&self) -> &Path {
+        self.inner.path()
     }
 
     /// Reads data from the file-based ELF object.
@@ -127,8 +122,8 @@ impl ElfReader for ElfFile {
 // for in-memory ELF data.
 impl<'a> ElfReader for &'a [u8] {
     /// Returns a generic name for memory-based data.
-    fn file_name(&self) -> &str {
-        "<memory>"
+    fn path(&self) -> &Path {
+        Path::new("<memory>")
     }
 
     /// Reads data from the byte slice at the specified offset.

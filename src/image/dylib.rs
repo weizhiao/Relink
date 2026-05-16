@@ -7,6 +7,7 @@ use crate::{
     Result,
     elf::{ElfDyn, ElfPhdr},
     image::{ElfCore, LoadedCore, RawDynamic},
+    input::Path,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     tls::{TlsModuleId, TlsTpOffset},
 };
@@ -130,16 +131,16 @@ impl<D, Arch: RelocationArch> RawDylib<D, Arch> {
         self.inner.interp()
     }
 
-    /// Returns the name of the ELF object.
+    /// Returns the loader source path or caller-provided source identifier.
+    #[inline]
+    pub fn path(&self) -> &Path {
+        self.inner.path()
+    }
+
+    /// Returns the ELF module identity used for diagnostics.
     #[inline]
     pub fn name(&self) -> &str {
         self.inner.name()
-    }
-
-    /// Returns the short name of the ELF object.
-    #[inline]
-    pub fn short_name(&self) -> &str {
-        self.inner.core_ref().short_name()
     }
 
     /// Returns the program headers of the ELF object.

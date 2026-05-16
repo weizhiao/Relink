@@ -8,11 +8,11 @@ use crate::{
         ElfSectionType, ElfShdr, ElfStringTable, NativeElfLayout, parse_dynamic_entries,
     },
     entity::entity_ref,
-    input::{ElfReader, ElfReaderExt},
+    input::{ElfReader, ElfReaderExt, Path, PathBuf},
     loader::ScanBuilder,
     relocation::RelocationArch,
 };
-use alloc::{boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use core::{fmt, mem::size_of, num::NonZeroUsize, ptr};
 use elf::abi::{DF_1_NOW, DF_BIND_NOW, DF_STATIC_TLS};
 
@@ -168,7 +168,7 @@ impl ScannedDynamicInfo {
 
 /// A dynamic ELF image that has been parsed but not yet mapped into memory.
 pub struct ScannedDynamic<Arch: RelocationArch = NativeArch> {
-    name: String,
+    path: PathBuf,
     ehdr: ElfHeader<Arch::Layout>,
     phdrs: Box<[ElfPhdr<Arch::Layout>]>,
     interp: Option<Box<[u8]>>,
@@ -186,7 +186,7 @@ pub struct ScannedDynamic<Arch: RelocationArch = NativeArch> {
 
 /// A static executable that has been parsed but not yet mapped into memory.
 pub struct ScannedExec<Arch: RelocationArch = NativeArch> {
-    name: String,
+    path: PathBuf,
     ehdr: ElfHeader<Arch::Layout>,
     phdrs: Box<[ElfPhdr<Arch::Layout>]>,
     interp: Option<Box<[u8]>>,
@@ -416,7 +416,7 @@ impl<'a, L: ElfLayout> fmt::Debug for ScannedSection<'a, L> {
 impl<Arch: RelocationArch> fmt::Debug for ScannedDynamic<Arch> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScannedDynamic")
-            .field("name", &self.name)
+            .field("path", &self.path)
             .field("soname", &self.soname())
             .field("needed_libs", &self.needed_libs().collect::<Vec<_>>())
             .field(
@@ -436,7 +436,7 @@ impl<Arch: RelocationArch> fmt::Debug for ScannedDynamic<Arch> {
 impl<Arch: RelocationArch> fmt::Debug for ScannedExec<Arch> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScannedExec")
-            .field("name", &self.name)
+            .field("path", &self.path)
             .field(
                 "sections",
                 &self
@@ -449,21 +449,21 @@ impl<Arch: RelocationArch> fmt::Debug for ScannedExec<Arch> {
 }
 
 impl<Arch: RelocationArch> ScannedElf<Arch> {
-    /// Returns the file name or path selected for this image.
+    /// Returns the loader source path or caller-provided source identifier.
+    #[inline]
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Dynamic(image) => image.path(),
+            Self::StaticExec(image) => image.path(),
+        }
+    }
+
+    /// Returns the ELF image identity used for diagnostics.
     #[inline]
     pub fn name(&self) -> &str {
         match self {
             Self::Dynamic(image) => image.name(),
             Self::StaticExec(image) => image.name(),
-        }
-    }
-
-    /// Returns the short image name.
-    #[inline]
-    pub fn short_name(&self) -> &str {
-        match self {
-            Self::Dynamic(image) => image.short_name(),
-            Self::StaticExec(image) => image.short_name(),
         }
     }
 
@@ -579,7 +579,7 @@ impl<Arch: RelocationArch> ScannedElf<Arch> {
 impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     pub(crate) fn from_builder(builder: ScanBuilder<Arch::Layout>) -> Result<Self> {
         let ScanBuilder {
-            name,
+            path,
             ehdr,
             phdrs,
             mut reader,
@@ -602,7 +602,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             });
 
         Ok(Self {
-            name,
+            path,
             ehdr,
             phdrs,
             interp,
@@ -619,19 +619,16 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         })
     }
 
-    /// Returns the file name or path selected for this image.
+    /// Returns the loader source path or caller-provided source identifier.
     #[inline]
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
     }
 
-    /// Returns the short image name.
+    /// Returns the ELF image identity used for diagnostics.
     #[inline]
-    pub fn short_name(&self) -> &str {
-        let name = self.name();
-        name.rsplit(|c| c == '/' || c == '\\')
-            .next()
-            .unwrap_or(name)
+    pub fn name(&self) -> &str {
+        self.soname().unwrap_or_else(|| self.path().file_name())
     }
 
     /// Returns the parsed ELF header.
@@ -814,7 +811,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
 impl<Arch: RelocationArch> ScannedExec<Arch> {
     pub(crate) fn from_builder(builder: ScanBuilder<Arch::Layout>) -> Result<Self> {
         let ScanBuilder {
-            name,
+            path,
             ehdr,
             phdrs,
             mut reader,
@@ -823,7 +820,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
         let section_table = SectionTable::new(reader.as_mut(), &ehdr)?;
 
         Ok(Self {
-            name,
+            path,
             ehdr,
             phdrs,
             interp,
@@ -832,19 +829,16 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
         })
     }
 
-    /// Returns the file name or path selected for this executable.
+    /// Returns the loader source path or caller-provided source identifier.
     #[inline]
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn path(&self) -> &Path {
+        self.path.as_path()
     }
 
-    /// Returns the short executable name.
+    /// Returns the executable identity used for diagnostics.
     #[inline]
-    pub fn short_name(&self) -> &str {
-        let name = self.name();
-        name.rsplit(|c| c == '/' || c == '\\')
-            .next()
-            .unwrap_or(name)
+    pub fn name(&self) -> &str {
+        self.path().file_name()
     }
 
     /// Returns the parsed ELF header.

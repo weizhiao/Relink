@@ -1,6 +1,6 @@
 use crate::{
     Result,
-    input::ElfReader,
+    input::{ElfReader, Path},
     os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
 };
 use alloc::alloc::{dealloc, handle_alloc_error};
@@ -93,17 +93,17 @@ impl Mmap for DefaultMmap {
 pub(crate) struct RawFile;
 
 impl RawFile {
-    pub(crate) fn from_path(_path: &str) -> Result<Self> {
+    pub(crate) fn from_path(_path: &Path) -> Result<Self> {
         unimplemented!()
     }
 
-    pub(crate) fn from_owned_fd(_path: &str, _raw_fd: i32) -> Self {
+    pub(crate) fn from_owned_fd(_path: &Path, _raw_fd: i32) -> Self {
         todo!()
     }
 }
 
 impl ElfReader for RawFile {
-    fn file_name(&self) -> &str {
+    fn path(&self) -> &Path {
         todo!()
     }
 

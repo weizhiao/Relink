@@ -1,14 +1,11 @@
 use crate::{
     IoError, MmapError, Result,
-    input::ElfReader,
+    input::{ElfReader, Path, PathBuf},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
-use alloc::{
-    ffi::CString,
-    string::{String, ToString},
-};
+use alloc::ffi::CString;
+use core::ffi::c_void;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use core::{ffi::c_void, str::FromStr};
 use libc::{_SC_PAGESIZE, O_RDONLY, SEEK_SET, madvise, mmap, mprotect, munmap, sysconf};
 
 #[inline]
@@ -70,7 +67,7 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
 }
 
 pub(crate) struct RawFile {
-    name: String,
+    path: PathBuf,
     fd: isize,
 }
 
@@ -211,25 +208,26 @@ impl Drop for RawFile {
 }
 
 impl RawFile {
-    pub(crate) fn from_path(path: &str) -> Result<Self> {
-        let name = CString::from_str(path).map_err(|_| IoError::NullByteInPath)?;
+    pub(crate) fn from_path(path: &Path) -> Result<Self> {
+        let path_str = path.as_str();
+        let name = CString::new(path_str).map_err(|_| IoError::NullByteInPath)?;
         let fd = unsafe { libc::open(name.as_ptr(), O_RDONLY) };
         if fd == -1 {
             return Err(IoError::OpenFailed {
-                path: path.into(),
+                path: path_str.into(),
                 code: last_os_error_code(),
             }
             .into());
         }
         Ok(Self {
-            name: path.to_string(),
+            path: PathBuf::from(path),
             fd: fd as isize,
         })
     }
 
-    pub(crate) fn from_owned_fd(path: &str, raw_fd: i32) -> Self {
+    pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Self {
         Self {
-            name: path.to_string(),
+            path: PathBuf::from(path),
             fd: raw_fd as isize,
         }
     }
@@ -280,8 +278,8 @@ impl ElfReader for RawFile {
         Ok(())
     }
 
-    fn file_name(&self) -> &str {
-        &self.name
+    fn path(&self) -> &Path {
+        self.path.as_path()
     }
 
     fn as_fd(&self) -> Option<isize> {

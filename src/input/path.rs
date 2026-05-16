@@ -211,6 +211,13 @@ impl From<&PathBuf> for PathBuf {
     }
 }
 
+impl From<PathBuf> for String {
+    #[inline]
+    fn from(path: PathBuf) -> Self {
+        path.into_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Path, PathBuf};

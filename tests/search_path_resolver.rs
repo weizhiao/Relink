@@ -6,8 +6,8 @@ mod fixture_support;
 use std::{fs, path::PathBuf as StdPathBuf};
 
 use elf_loader::{
-    input::PathBuf,
-    linker::{LinkContext, Linker, SearchPathResolver},
+    input::{Path as ElfPath, PathBuf},
+    linker::{CandidateRequest, LinkContext, Linker, SearchPathResolver},
 };
 
 #[test]
@@ -18,6 +18,20 @@ fn loads_fixture_chain() {
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
         .load(&mut context, PathBuf::from(fixtures.libc_str()))
+        .unwrap();
+
+    let c = unsafe { loaded.get::<fn() -> i32>("c").unwrap() };
+    assert_eq!(c(), 3);
+}
+
+#[test]
+fn supports_string_keys() {
+    let fixtures = fixture_support::ensure_all();
+    let mut context = LinkContext::<String, ()>::new();
+
+    let loaded = Linker::new()
+        .resolver(fixture_support::search_path_resolver())
+        .load(&mut context, fixtures.libc_str().to_owned())
         .unwrap();
 
     let c = unsafe { loaded.get::<fn() -> i32>("c").unwrap() };
@@ -70,7 +84,25 @@ fn dynamic_dirs_share_search_order_with_static_dirs() {
         .load(&mut context, PathBuf::from("libpick.so"))
         .unwrap();
 
-    assert_eq!(loaded.name(), expected_key);
+    assert_eq!(loaded.path().as_str(), expected_key);
+}
+
+#[test]
+fn elf_dynamic_dirs_expand_origin_and_prefer_runpath() {
+    let request = CandidateRequest::dependency(
+        ElfPath::new("libdep.so"),
+        "libowner.so",
+        ElfPath::new("/tmp/owner/libowner.so"),
+        Some("$ORIGIN/run:${ORIGIN}/alt"),
+        Some("$ORIGIN/rpath"),
+    );
+    let runpath = request.runpath().expect("expected parsed runpath");
+    let rpath = request.rpath().expect("expected parsed rpath");
+
+    let runpath = runpath.iter().map(PathBuf::as_str).collect::<Vec<_>>();
+    let rpath = rpath.iter().map(PathBuf::as_str).collect::<Vec<_>>();
+    assert_eq!(runpath, ["/tmp/owner/run", "/tmp/owner/alt"]);
+    assert_eq!(rpath, ["/tmp/owner/rpath"]);
 }
 
 fn unique_test_dir(name: &str) -> StdPathBuf {

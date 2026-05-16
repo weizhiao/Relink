@@ -153,7 +153,7 @@ where
         resolver.load_root(&req)
     }
 
-    fn direct_deps_for_with<'cfg, M, H, Tls, F>(
+    fn direct_deps_for<'cfg, M, H, Tls, F>(
         &mut self,
         id: KeyId,
         loader: &mut Loader<M, H, D, Tls, Arch>,
@@ -203,7 +203,7 @@ where
     {
         let mut group_order = Vec::new();
         extend_breadth_first(&mut group_order, root, |key| {
-            self.direct_deps_for_with(*key, loader, resolver, &mut stage)
+            self.direct_deps_for(*key, loader, resolver, &mut stage)
         })?;
         self.session.group_order = group_order;
         Ok(())

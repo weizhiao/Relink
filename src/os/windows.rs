@@ -1,9 +1,9 @@
 use crate::{
     IoError, MmapError, Result,
-    input::ElfReader,
+    input::{ElfReader, Path, PathBuf},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
-use alloc::{ffi::CString, vec::Vec};
+use alloc::vec::Vec;
 use core::{
     ffi::c_void,
     mem::MaybeUninit,
@@ -52,7 +52,7 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
 }
 
 pub(crate) struct RawFile {
-    name: CString,
+    path: PathBuf,
     fd: HANDLE,
     /// Stores the mapping handle for the file.
     mapping: HANDLE,
@@ -283,7 +283,7 @@ impl Drop for RawFile {
 }
 
 impl RawFile {
-    pub(crate) fn from_owned_fd(path: &str, raw_fd: i32) -> Self {
+    pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Self {
         let handle = raw_fd as isize as HANDLE;
         let mapping_handle = unsafe {
             CreateFileMappingW(
@@ -302,15 +302,16 @@ impl RawFile {
         }
 
         Self {
-            name: CString::new(path).unwrap(),
+            path: PathBuf::from(path),
             fd: handle,
             mapping: mapping_handle,
         }
     }
 
-    pub(crate) fn from_path(path: &str) -> Result<Self> {
-        let mut wide_path = Vec::<u16>::with_capacity(path.len() + 1);
-        for c in path.encode_utf16() {
+    pub(crate) fn from_path(path: &Path) -> Result<Self> {
+        let path_str = path.as_str();
+        let mut wide_path = Vec::<u16>::with_capacity(path_str.len() + 1);
+        for c in path_str.encode_utf16() {
             wide_path.push(c);
         }
         wide_path.push(0);
@@ -330,7 +331,7 @@ impl RawFile {
         if handle == INVALID_HANDLE_VALUE {
             let err_code = unsafe { GetLastError() };
             return Err(IoError::OpenFailed {
-                path: path.into(),
+                path: path_str.into(),
                 code: err_code,
             }
             .into());
@@ -352,7 +353,7 @@ impl RawFile {
         }
 
         Ok(Self {
-            name: CString::new(path).unwrap(),
+            path: PathBuf::from(path),
             fd: handle,
             mapping: mapping_handle,
         })
@@ -419,8 +420,8 @@ impl ElfReader for RawFile {
         Ok(())
     }
 
-    fn file_name(&self) -> &str {
-        self.name.to_str().unwrap()
+    fn path(&self) -> &Path {
+        self.path.as_path()
     }
 
     fn as_fd(&self) -> Option<isize> {

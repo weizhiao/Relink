@@ -5,6 +5,7 @@ use crate::sync::{Arc, AtomicBool};
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, Lifecycle, SymbolTable},
+    input::{Path, PathBuf},
     loader::{DynLifecycleHandler, ImageBuilder, LoadHook},
     logging,
     os::Mmap,
@@ -47,7 +48,7 @@ pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
 }
 
 pub(crate) struct RawDynamicParts<D, Arch: RelocationArch = NativeArch> {
-    pub(crate) name: alloc::string::String,
+    pub(crate) path: PathBuf,
     pub(crate) entry: RelocAddr,
     pub(crate) interp: Option<&'static str>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
@@ -231,7 +232,13 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
         self.interp
     }
 
-    /// Gets the name of the ELF object
+    /// Returns the loader source path or caller-provided source identifier.
+    #[inline]
+    pub fn path(&self) -> &Path {
+        self.module.path()
+    }
+
+    /// Gets the ELF module identity used for diagnostics.
     #[inline]
     pub fn name(&self) -> &str {
         self.module.name()
@@ -347,7 +354,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
         Tls: TlsResolver,
     {
         let RawDynamicParts {
-            name,
+            path,
             entry,
             interp,
             phdrs,
@@ -364,7 +371,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
 
         let dynamic = ElfDynamic::<Arch>::new(dynamic_ptr.as_ptr(), &segments)?;
 
-        logging::trace!("[{}] Dynamic info: {:?}", name, dynamic);
+        logging::trace!("[{}] Dynamic info: {:?}", path, dynamic);
 
         let relocation = DynamicRelocation::new(
             dynamic.pltrel,
@@ -382,7 +389,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             .collect();
 
         if !needed_libs.is_empty() {
-            logging::debug!("[{}] Dependencies: {:?}", name, needed_libs);
+            logging::debug!("[{}] Dependencies: {:?}", path, needed_libs);
         }
         let soname = dynamic
             .soname_off
@@ -421,7 +428,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             module: ElfCore {
                 inner: Arc::new(CoreInner {
                     is_init: AtomicBool::new(false),
-                    name,
+                    path,
                     symtab,
                     fini: Lifecycle::new(dynamic.fini_fn, dynamic.fini_array_fn),
                     fini_handler: CoreFiniHandler::Native(fini_fn),
@@ -465,7 +472,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             .ok_or(ParsePhdrError::MissingDynamicSection)?;
         let phdrs = builder.create_phdrs(phdrs);
         Self::from_parts::<Tls>(RawDynamicParts {
-            name: builder.name,
+            path: builder.path,
             entry: if builder.ehdr.is_dylib() {
                 builder.segments.base_addr().offset(builder.ehdr.e_entry())
             } else {

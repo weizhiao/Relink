@@ -1,4 +1,4 @@
-use crate::input::ElfReader;
+use crate::input::{ElfReader, Path, PathBuf};
 use crate::{
     Error, IoError, MmapError, Result, logging,
     os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
@@ -28,7 +28,7 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
 }
 
 pub(crate) struct RawFile {
-    name: CString,
+    path: PathBuf,
     fd: isize,
 }
 
@@ -197,26 +197,27 @@ where
 }
 
 impl RawFile {
-    pub(crate) fn from_owned_fd(path: &str, raw_fd: i32) -> Self {
+    pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Self {
         Self {
-            name: CString::new(path).unwrap(),
+            path: PathBuf::from(path),
             fd: raw_fd as isize,
         }
     }
 
-    pub(crate) fn from_path(path: &str) -> Result<Self> {
+    pub(crate) fn from_path(path: &Path) -> Result<Self> {
         const RDONLY: u32 = 0;
-        let name = CString::new(path).map_err(|_| IoError::NullByteInPath)?;
+        let path_str = path.as_str();
+        let c_path = CString::new(path_str).map_err(|_| IoError::NullByteInPath)?;
         #[cfg(not(any(
             target_arch = "aarch64",
             target_arch = "riscv64",
             target_arch = "loongarch64"
         )))]
         let fd = unsafe {
-            let res = syscalls::raw_syscall!(Sysno::open, name.as_ptr(), RDONLY, 0);
+            let res = syscalls::raw_syscall!(Sysno::open, c_path.as_ptr(), RDONLY, 0);
             if res > -4096isize as usize {
                 return Err(IoError::OpenFailed {
-                    path: path.into(),
+                    path: path_str.into(),
                     code: (-(res as isize)) as u32,
                 }
                 .into());
@@ -230,17 +231,20 @@ impl RawFile {
         ))]
         let fd = unsafe {
             const AT_FDCWD: core::ffi::c_int = -100;
-            let res = syscalls::raw_syscall!(Sysno::openat, AT_FDCWD, name.as_ptr(), RDONLY, 0);
+            let res = syscalls::raw_syscall!(Sysno::openat, AT_FDCWD, c_path.as_ptr(), RDONLY, 0);
             if res > -4096isize as usize {
                 return Err(IoError::OpenFailed {
-                    path: path.into(),
+                    path: path_str.into(),
                     code: (-(res as isize)) as u32,
                 }
                 .into());
             }
             res
         };
-        Ok(RawFile { fd: fd as _, name })
+        Ok(RawFile {
+            path: PathBuf::from(path),
+            fd: fd as _,
+        })
     }
 }
 
@@ -277,8 +281,8 @@ impl ElfReader for RawFile {
         Ok(())
     }
 
-    fn file_name(&self) -> &str {
-        unsafe { core::str::from_utf8_unchecked(self.name.as_bytes()) }
+    fn path(&self) -> &Path {
+        self.path.as_path()
     }
 
     fn as_fd(&self) -> Option<isize> {

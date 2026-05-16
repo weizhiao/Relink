@@ -9,6 +9,7 @@ use crate::{
     arch::NativeArch,
     elf::ElfPhdr,
     image::{LoadedCore, RawDynamic},
+    input::{Path, PathBuf},
     loader::{ImageBuilder, LoadHook},
     os::Mmap,
     relocation::{
@@ -17,7 +18,7 @@ use crate::{
     segment::ElfSegments,
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
 use core::fmt::Debug;
 
 /// A mapped static executable.
@@ -32,14 +33,18 @@ pub struct StaticExec<D, Arch: RelocationArch = NativeArch> {
 impl<D, Arch: RelocationArch> Debug for StaticExec<D, Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("StaticExec")
-            .field("name", &self.inner.name)
+            .field("path", &self.inner.path)
             .finish()
     }
 }
 
 impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
+    pub fn path(&self) -> &Path {
+        self.inner.path.as_path()
+    }
+
     pub fn name(&self) -> &str {
-        &self.inner.name
+        self.path().file_name()
     }
 
     pub fn entry(&self) -> usize {
@@ -84,8 +89,8 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
 }
 
 struct StaticExecInner<D, Arch: RelocationArch = NativeArch> {
-    /// File name of the ELF object
-    name: String,
+    /// Loader source path or caller-provided source identifier.
+    path: PathBuf,
 
     /// Entry point of the executable
     entry: RelocAddr,
@@ -170,7 +175,15 @@ impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
         Relocator::new().with_object(self)
     }
 
-    /// Returns the name of the executable.
+    /// Returns the loader source path or caller-provided source identifier.
+    pub fn path(&self) -> &Path {
+        match self {
+            RawExec::Dynamic(image) => image.path(),
+            RawExec::Static(image) => image.path(),
+        }
+    }
+
+    /// Returns the executable identity used for diagnostics.
     pub fn name(&self) -> &str {
         match self {
             RawExec::Dynamic(image) => image.name(),
@@ -281,12 +294,21 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
         self.entry.into_inner()
     }
 
-    /// Returns the name of the executable.
+    /// Returns the loader source path or caller-provided source identifier.
+    #[inline]
+    pub fn path(&self) -> &Path {
+        match &self.inner {
+            LoadedExecInner::Dynamic(module) => unsafe { module.core_ref().path() },
+            LoadedExecInner::Static(static_image) => static_image.path(),
+        }
+    }
+
+    /// Returns the executable identity used for diagnostics.
     #[inline]
     pub fn name(&self) -> &str {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => unsafe { module.core_ref().name() },
-            LoadedExecInner::Static(static_image) => &static_image.inner.name,
+            LoadedExecInner::Static(static_image) => static_image.name(),
         }
     }
 
@@ -369,7 +391,7 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
 
         let static_inner = StaticExecInner {
             entry,
-            name: builder.name,
+            path: builder.path,
             user_data: builder.user_data,
             segments: builder.segments,
             phdrs: if phdrs.is_empty() {

@@ -2,6 +2,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::ElfPhdr,
+    input::Path,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
 };
 
@@ -68,7 +69,18 @@ impl<D: 'static, Arch: RelocationArch> RawElf<D, Arch> {
         Relocator::new().with_object(self)
     }
 
-    /// Gets the name of the ELF file
+    /// Returns the loader source path or caller-provided source identifier.
+    #[inline]
+    pub fn path(&self) -> &Path {
+        match self {
+            RawElf::Dylib(dylib) => dylib.path(),
+            RawElf::Exec(exec) => exec.path(),
+            #[cfg(feature = "object")]
+            RawElf::Object(object) => object.path(),
+        }
+    }
+
+    /// Gets the ELF image identity used for diagnostics.
     #[inline]
     pub fn name(&self) -> &str {
         match self {
@@ -227,7 +239,18 @@ impl<D: 'static, Arch: RelocationArch> LoadedElf<D, Arch> {
         }
     }
 
-    /// Gets the name of the ELF file
+    /// Returns the loader source path or caller-provided source identifier.
+    #[inline]
+    pub fn path(&self) -> &Path {
+        match self {
+            LoadedElf::Dylib(dylib) => dylib.path(),
+            LoadedElf::Exec(exec) => exec.path(),
+            #[cfg(feature = "object")]
+            LoadedElf::Object(object) => object.path(),
+        }
+    }
+
+    /// Gets the ELF image identity used for diagnostics.
     #[inline]
     pub fn name(&self) -> &str {
         match self {

@@ -5,6 +5,7 @@ use crate::{
         SymbolTable,
     },
     image::{DynamicInfo, Module},
+    input::{Path, PathBuf},
     loader::DynLifecycleHandler,
     relocation::{EmuContext, Emulator, RelocAddr, RelocationArch},
     segment::ElfSegments,
@@ -12,7 +13,6 @@ use crate::{
     tls::{CoreTlsState, TlsDescArgs, TlsModuleId, TlsTpOffset},
 };
 use alloc::boxed::Box;
-use alloc::string::String;
 use alloc::vec::Vec;
 use core::{any::Any, fmt::Debug, ptr::NonNull};
 
@@ -22,8 +22,8 @@ pub(crate) struct CoreInner<D = (), Arch: RelocationArch = crate::arch::NativeAr
     /// Indicates whether the component has been initialized
     pub(crate) is_init: AtomicBool,
 
-    /// Full path of the ELF object
-    pub(crate) name: String,
+    /// Loader source path or caller-provided source identifier.
+    pub(crate) path: PathBuf,
 
     /// ELF symbols table
     pub(crate) symtab: SymbolTable<Arch::Layout>,
@@ -57,7 +57,7 @@ impl<D, Arch: RelocationArch> Drop for CoreInner<D, Arch> {
                 }
                 CoreFiniHandler::Emu(emu) => {
                     let ctx = EmuContext::from_parts(
-                        self.name.as_str(),
+                        self.path.as_str(),
                         self.segments.base(),
                         &self.segments,
                     );
@@ -173,28 +173,28 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
         Arc::weak_count(&self.inner)
     }
 
-    /// Gets the name (full path) of the ELF object
+    /// Returns the loader source path or caller-provided source identifier.
+    #[inline]
+    pub fn path(&self) -> &Path {
+        &self.inner.path
+    }
+
+    /// Returns the ELF module identity used for diagnostics.
+    ///
+    /// Dynamic images prefer `DT_SONAME`; other images fall back to the basename
+    /// of the loader source path.
     #[inline]
     pub fn name(&self) -> &str {
-        &self.inner.name
+        self.soname().unwrap_or_else(|| self.path().file_name())
     }
 
     /// Returns the DT_SONAME value when this core has dynamic metadata.
     #[inline]
-    pub fn soname(&self) -> Option<&str> {
+    pub(crate) fn soname(&self) -> Option<&str> {
         self.inner
             .dynamic_info
             .as_ref()
             .and_then(|info| info.soname)
-    }
-
-    /// Gets the short name of the ELF object
-    #[inline]
-    pub fn short_name(&self) -> &str {
-        let name = self.name();
-        name.rsplit(|c| c == '/' || c == '\\')
-            .next()
-            .unwrap_or(name)
     }
 
     /// Gets the base address of the ELF object
@@ -308,7 +308,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
 
     /// Creates an ElfCore from raw components
     pub(super) unsafe fn from_raw(
-        name: String,
+        path: PathBuf,
         base: usize,
         dynamic_ptr: *const ElfDyn<Arch::Layout>,
         phdrs: Vec<ElfPhdr<Arch::Layout>>,
@@ -332,7 +332,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
             .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
         Ok(Self {
             inner: Arc::new(CoreInner {
-                name,
+                path,
                 is_init: AtomicBool::new(true),
                 symtab,
                 dynamic_info: Some(Arc::new(DynamicInfo {
@@ -357,7 +357,7 @@ impl<D, Arch: RelocationArch> Debug for ElfCore<D, Arch> {
     /// Formats the ElfCore for debugging purposes.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfCore")
-            .field("name", &self.inner.name)
+            .field("path", &self.inner.path)
             .field("base", &format_args!("0x{:x}", self.base()))
             .field("mapped_len", &self.mapped_len())
             .field("tls_mod_id", &self.tls_mod_id())

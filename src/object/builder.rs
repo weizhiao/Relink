@@ -5,21 +5,21 @@ use super::{
 use crate::{
     RelocationError, Result,
     elf::{
-        ElfHeader, ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr, ElfSymbol, ElfSymbolType,
-        SymbolTable,
+        ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr, ElfSymbol, ElfSymbolType, SymbolTable,
     },
+    input::PathBuf,
     loader::{DynLifecycleHandler, LoadHook, LoaderInner},
     os::Mmap,
     relocation::{RelocAddr, RelocationArch},
     segment::{ElfSegments, SegmentBuilder},
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
-use alloc::{borrow::ToOwned, boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use core::marker::PhantomData;
 
 /// Builder for creating relocatable ELF objects.
 pub(crate) struct ObjectBuilder<Tls, D = (), Arch: RelocationArch = crate::arch::NativeArch> {
-    pub(crate) name: String,
+    pub(crate) path: PathBuf,
     pub(crate) symtab: SymbolTable<Arch::Layout>,
     pub(crate) init_array: Option<&'static [fn()]>,
     pub(crate) init_fn: DynLifecycleHandler,
@@ -167,7 +167,7 @@ where
     }
 
     pub(crate) fn new(
-        name: String,
+        path: PathBuf,
         shdrs: &mut [ElfShdr<Arch::Layout>],
         init_fn: DynLifecycleHandler,
         fini_fn: DynLifecycleHandler,
@@ -186,7 +186,7 @@ where
         } = Self::prepare_section_data(shdrs, base)?;
 
         Ok(Self {
-            name,
+            path,
             symtab,
             init_fn,
             fini_fn,
@@ -212,7 +212,6 @@ where
 {
     pub(crate) fn create_object_builder<M, Tls>(
         &mut self,
-        _ehdr: ElfHeader<Arch::Layout>,
         shdrs: &mut [ElfShdr<Arch::Layout>],
         mut object: impl crate::input::ElfReader,
     ) -> Result<ObjectBuilder<Tls, D, Arch>>
@@ -220,7 +219,7 @@ where
         M: Mmap,
         Tls: TlsResolver,
     {
-        let name = object.file_name().to_owned();
+        let path = PathBuf::from(object.path());
         let (init_fn, fini_fn) = self.lifecycle_handlers();
         let mut shdr_segments =
             SectionSegments::<Arch>::new(shdrs, &mut object, self.page_size::<M>()?.bytes())?;
@@ -233,7 +232,7 @@ where
         let user_data = D::default();
 
         ObjectBuilder::new(
-            name, shdrs, init_fn, fini_fn, segments, mprotect, pltgot, user_data,
+            path, shdrs, init_fn, fini_fn, segments, mprotect, pltgot, user_data,
         )
     }
 }

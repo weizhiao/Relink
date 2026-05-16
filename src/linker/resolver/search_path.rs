@@ -58,7 +58,7 @@ pub enum CandidateRequest<'a> {
     Dependency {
         requested: &'a Path,
         owner_name: &'a str,
-        origin: &'a Path,
+        owner_path: &'a Path,
         runpath: Option<&'a str>,
         rpath: Option<&'a str>,
     },
@@ -74,14 +74,14 @@ impl<'a> CandidateRequest<'a> {
     pub const fn dependency(
         requested: &'a Path,
         owner_name: &'a str,
-        origin: &'a Path,
+        owner_path: &'a Path,
         runpath: Option<&'a str>,
         rpath: Option<&'a str>,
     ) -> Self {
         Self::Dependency {
             requested,
             owner_name,
-            origin,
+            owner_path,
             runpath,
             rpath,
         }
@@ -103,35 +103,68 @@ impl<'a> CandidateRequest<'a> {
     }
 
     #[inline]
-    pub const fn origin(&self) -> Option<&'a Path> {
+    pub const fn owner_path(&self) -> Option<&'a Path> {
         match self {
             Self::Root { .. } => None,
-            Self::Dependency { origin, .. } => Some(origin),
+            Self::Dependency { owner_path, .. } => Some(owner_path),
         }
     }
 
     #[inline]
-    pub const fn runpath(&self) -> Option<&'a str> {
+    pub fn origin(&self) -> Option<&'a Path> {
         match self {
             Self::Root { .. } => None,
-            Self::Dependency { runpath, .. } => *runpath,
+            Self::Dependency { owner_path, .. } => Some(owner_path.origin_dir()),
         }
     }
 
     #[inline]
-    pub const fn rpath(&self) -> Option<&'a str> {
+    pub fn runpath(&self) -> Option<Vec<PathBuf>> {
         match self {
             Self::Root { .. } => None,
-            Self::Dependency { rpath, .. } => *rpath,
+            Self::Dependency { runpath, .. } => self.expand_dynamic_path_list(*runpath),
         }
+    }
+
+    #[inline]
+    pub fn rpath(&self) -> Option<Vec<PathBuf>> {
+        match self {
+            Self::Root { .. } => None,
+            Self::Dependency { rpath, .. } => self.expand_dynamic_path_list(*rpath),
+        }
+    }
+
+    fn expand_dynamic_path_list(&self, path_list: Option<&str>) -> Option<Vec<PathBuf>> {
+        let Self::Dependency {
+            requested,
+            owner_path,
+            ..
+        } = self
+        else {
+            return None;
+        };
+
+        if requested.has_dir_separator() {
+            return None;
+        }
+
+        let origin = owner_path.origin_dir();
+        Some(
+            path_list?
+                .split(':')
+                .filter(|dir| !dir.is_empty())
+                .map(|dir| Path::expand_origin(dir, origin))
+                .collect(),
+        )
     }
 }
 
 /// Filesystem-backed dependency resolver for [`Linker`](crate::linker::Linker).
 ///
 /// `SearchPathResolver` is an opt-in convenience resolver for callers whose
-/// linker keys are [`PathBuf`]s. Root requests and dependencies with directory
-/// separators are tried directly. Plain-name searches walk the ordered
+/// linker keys can be viewed as loader paths and constructed from resolved
+/// paths. Root requests and dependencies with directory separators are tried
+/// directly. Plain-name searches walk the ordered
 /// [`SearchDirSource`] list.
 ///
 /// This resolver intentionally does not model the host dynamic linker's global
@@ -244,11 +277,7 @@ impl SearchPathResolver {
     }
 
     #[inline]
-    fn resolved_key<'cfg>(
-        key: PathBuf,
-        file: ElfFile,
-        is_visible: bool,
-    ) -> ResolvedKey<'cfg, PathBuf> {
+    fn resolved_key<'cfg, K>(key: K, file: ElfFile, is_visible: bool) -> ResolvedKey<'cfg, K> {
         if is_visible {
             ResolvedKey::existing(key)
         } else {
@@ -275,9 +304,13 @@ impl SearchPathResolver {
     }
 }
 
-impl<'cfg> KeyResolver<'cfg, PathBuf> for SearchPathResolver {
-    fn load_root(&mut self, req: &RootRequest<'_, PathBuf>) -> Result<ResolvedKey<'cfg, PathBuf>> {
-        if let Some((key, file)) = self.resolve_key(CandidateRequest::root(req.key().as_path()))? {
+impl<'cfg, K> KeyResolver<'cfg, K> for SearchPathResolver
+where
+    K: Clone + AsRef<Path> + From<PathBuf>,
+{
+    fn load_root(&mut self, req: &RootRequest<'_, K>) -> Result<ResolvedKey<'cfg, K>> {
+        if let Some((_, file)) = self.resolve_key(CandidateRequest::root(req.key().as_ref()))? {
+            let key = req.key().clone();
             let is_visible = req.is_visible(&key);
             return Ok(Self::resolved_key(key, file, is_visible));
         }
@@ -287,19 +320,19 @@ impl<'cfg> KeyResolver<'cfg, PathBuf> for SearchPathResolver {
 
     fn resolve_dependency(
         &mut self,
-        req: &DependencyRequest<'_, PathBuf>,
-    ) -> Result<ResolvedKey<'cfg, PathBuf>> {
-        let owner = Path::new(req.owner_name());
-        let origin = owner.origin_dir();
+        req: &DependencyRequest<'_, K>,
+    ) -> Result<ResolvedKey<'cfg, K>> {
+        let origin = req.owner_path().origin_dir();
         let needed = Path::expand_origin(req.needed(), origin);
         let request = CandidateRequest::dependency(
             needed.as_path(),
             req.owner_name(),
-            origin,
+            req.owner_path(),
             req.runpath(),
             req.rpath(),
         );
         if let Some((key, file)) = self.resolve_key(request)? {
+            let key = K::from(key);
             let is_visible = req.is_visible(&key);
             return Ok(Self::resolved_key(key, file, is_visible));
         }

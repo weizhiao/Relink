@@ -5,13 +5,14 @@ use crate::{
     elf::{ElfDyn, ElfPhdrs, ElfProgramType},
     entity::SecondaryMap,
     image::{RawDynamic, ScannedDynamic},
+    input::PathBuf,
     loader::DynLifecycleHandler,
     os::Mmap,
     relocation::{RelocationArch, RelocationValueProvider},
     segment::ElfSegments,
     tls::{TlsInfo, TlsResolver},
 };
-use alloc::{boxed::Box, string::ToString, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use core::ptr::NonNull;
 
 mod arena;
@@ -313,10 +314,10 @@ where
         .remap_source_to_runtime_offset(SourceAddress::new(original_entry))
         .map(|offset| runtime.segments.base_addr().offset(offset.get()))
         .unwrap_or_else(|| runtime.segments.base_addr().offset(original_entry));
-    let name = scanned.name().to_string();
+    let path = PathBuf::from(scanned.path());
 
     RawDynamic::from_parts::<Tls>(crate::image::RawDynamicParts {
-        name,
+        path,
         entry,
         interp: None,
         phdrs: ElfPhdrs::Vec(original_phdrs),

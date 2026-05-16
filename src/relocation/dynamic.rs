@@ -49,13 +49,11 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
             logging::debug!("No relocations needed for {}", self.name());
         }
 
-        let binding = if Arch::SUPPORTS_NATIVE_RUNTIME {
-            self.resolve_binding(binding)
-        } else if binding == BindingMode::Lazy {
-            return Err(RelocationError::UnsupportedRelocationType.into());
+        let binding = self.resolve_binding(if Arch::SUPPORTS_NATIVE_RUNTIME {
+            binding
         } else {
-            self.resolve_binding(BindingMode::Eager)
-        };
+            BindingMode::Eager
+        });
         let tls_get_addr = self.tls_get_addr();
 
         if binding.is_lazy() {

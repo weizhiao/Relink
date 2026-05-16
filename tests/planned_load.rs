@@ -315,7 +315,7 @@ fn load_uses_configured_visible_modules_without_committing_them_locally() {
         .load(&mut context, "root")
         .expect("load should resolve dependency through visible overlay");
 
-    assert_eq!(root.short_name(), "visible_root.so");
+    assert_eq!(root.path().file_name(), "visible_root.so");
     assert!(context.contains_key(&"root"));
     let root_id = context.key_id(&"root").unwrap();
     let dep_id = context.key_id(&"dep").unwrap();

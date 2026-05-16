@@ -3,12 +3,12 @@ use crate::{
     MmapError, ParsePhdrError, Result,
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
     image::RawDynamic,
-    input::ElfReader,
+    input::{ElfReader, PathBuf},
     os::{Mmap, PageSize},
     segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
     tls::{TlsInfo, TlsResolver},
 };
-use alloc::{borrow::ToOwned, boxed::Box, string::String, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::c_char, marker::PhantomData, ptr::NonNull};
 
 /// Builder for creating relocated ELF objects
@@ -28,8 +28,8 @@ where
     /// Mapped program headers
     phdr_mmap: Option<&'static [ElfPhdr<L>]>,
 
-    /// Name of the ELF file
-    pub(crate) name: String,
+    /// Loader source path or caller-provided source identifier.
+    pub(crate) path: PathBuf,
 
     /// ELF header
     pub(crate) ehdr: ElfHeader<L>,
@@ -72,7 +72,7 @@ where
 }
 
 pub(crate) struct ScanBuilder<L: ElfLayout = NativeElfLayout> {
-    pub(crate) name: String,
+    pub(crate) path: PathBuf,
     pub(crate) ehdr: ElfHeader<L>,
     pub(crate) phdrs: Box<[ElfPhdr<L>]>,
     pub(crate) reader: Box<dyn ElfReader + 'static>,
@@ -81,13 +81,13 @@ pub(crate) struct ScanBuilder<L: ElfLayout = NativeElfLayout> {
 impl<L: ElfLayout> ScanBuilder<L> {
     #[inline]
     pub(crate) fn new(
-        name: String,
+        path: PathBuf,
         ehdr: ElfHeader<L>,
         phdrs: Box<[ElfPhdr<L>]>,
         reader: Box<dyn ElfReader + 'static>,
     ) -> Self {
         Self {
-            name,
+            path,
             ehdr,
             phdrs,
             reader,
@@ -107,7 +107,7 @@ where
     /// # Arguments
     /// * `hook` - Hook function for processing program headers
     /// * `segments` - Memory segments of the ELF file
-    /// * `name` - Name of the ELF file
+    /// * `path` - Loader source path or caller-provided source identifier
     /// * `ehdr` - ELF header
     /// * `init_fn` - Initialization function handler
     /// * `fini_fn` - Finalization function handler
@@ -115,7 +115,7 @@ where
     pub(crate) fn new(
         hook: &'hook mut H,
         segments: ElfSegments,
-        name: String,
+        path: PathBuf,
         ehdr: ElfHeader<L>,
         init_fn: DynLifecycleHandler,
         fini_fn: DynLifecycleHandler,
@@ -126,7 +126,7 @@ where
         Self {
             hook,
             phdr_mmap: None,
-            name,
+            path,
             ehdr,
             relro: None,
             dynamic_ptr: None,
@@ -145,7 +145,7 @@ where
 
     /// Parse a program header and extract relevant information.
     pub(crate) fn parse_phdr(&mut self, phdr: &ElfPhdr<L>) -> Result<()> {
-        let ctx = LoadHookContext::new(&self.name, phdr, &self.segments);
+        let ctx = LoadHookContext::new(self.path.as_path(), phdr, &self.segments);
         self.hook.call(&ctx)?;
 
         match phdr.program_type() {
@@ -292,7 +292,7 @@ where
         M: Mmap,
         Tls: TlsResolver,
     {
-        let name = object.file_name().to_owned();
+        let path = PathBuf::from(object.path());
         let (init_fn, fini_fn) = self.lifecycle_handlers();
         let page_size = self.page_size::<M>()?.bytes();
         let mut phdr_segments =
@@ -303,7 +303,7 @@ where
         Ok(ImageBuilder::new(
             &mut self.hook,
             segments,
-            name,
+            path,
             ehdr,
             init_fn,
             fini_fn,
@@ -319,8 +319,8 @@ where
         phdrs: &[ElfPhdr<Arch::Layout>],
         object: impl ElfReader + 'static,
     ) -> ScanBuilder<Arch::Layout> {
-        let name = object.file_name().to_owned();
+        let path = PathBuf::from(object.path());
 
-        ScanBuilder::new(name, ehdr, phdrs.into(), Box::new(object))
+        ScanBuilder::new(path, ehdr, phdrs.into(), Box::new(object))
     }
 }

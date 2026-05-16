@@ -20,6 +20,7 @@ use crate::{
     arch::NativeArch,
     elf::{ElfLayout, ElfPhdr, Lifecycle, NativeElfLayout},
     image::RawDynamic,
+    input::Path,
     os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
     segment::ElfSegments,
@@ -34,23 +35,23 @@ pub(crate) use builder::{ImageBuilder, ScanBuilder};
 
 /// Context passed to [`LoadHook`] while a program header is being processed.
 pub struct LoadHookContext<'a, L: ElfLayout = NativeElfLayout> {
-    name: &'a str,
+    path: &'a Path,
     phdr: &'a ElfPhdr<L>,
     segments: &'a ElfSegments,
 }
 
 impl<'a, L: ElfLayout> LoadHookContext<'a, L> {
-    pub(crate) fn new(name: &'a str, phdr: &'a ElfPhdr<L>, segments: &'a ElfSegments) -> Self {
+    pub(crate) fn new(path: &'a Path, phdr: &'a ElfPhdr<L>, segments: &'a ElfSegments) -> Self {
         Self {
-            name,
+            path,
             phdr,
             segments,
         }
     }
 
-    /// Returns the name of the ELF object being loaded.
-    pub fn name(&self) -> &str {
-        self.name
+    /// Returns the loader source path or caller-provided source identifier.
+    pub fn path(&self) -> &Path {
+        self.path
     }
 
     /// Returns the program header for the current segment.

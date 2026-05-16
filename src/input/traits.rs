@@ -7,13 +7,15 @@ use core::{
 use crate::{ByteRepr, Result};
 use alloc::boxed::Box;
 
+use super::Path;
+
 /// A trait for reading ELF data from various sources.
 ///
 /// `ElfReader` abstracts the underlying storage (memory, file system, etc.)
 /// providing a unified interface for the loader to access ELF headers and segments.
 pub trait ElfReader {
-    /// Returns the full name or path of the ELF object.
-    fn file_name(&self) -> &str;
+    /// Returns the loader source path or caller-provided source identifier.
+    fn path(&self) -> &Path;
 
     /// Reads data from the ELF object at the given offset into the provided buffer.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()>;
@@ -24,10 +26,9 @@ pub trait ElfReader {
     /// Returns `None` for memory-based sources.
     fn as_fd(&self) -> Option<isize>;
 
-    /// Returns the short name of the ELF object (the filename without the path).
-    fn shortname(&self) -> &str {
-        let name = self.file_name();
-        name.rsplit('/').next().unwrap_or(name)
+    /// Returns the final path component of the ELF source path.
+    fn file_name(&self) -> &str {
+        self.path().file_name()
     }
 }
 
@@ -92,8 +93,8 @@ pub trait IntoElfReader<'a> {
 
 impl<R: ElfReader + ?Sized> ElfReader for Box<R> {
     #[inline]
-    fn file_name(&self) -> &str {
-        (**self).file_name()
+    fn path(&self) -> &Path {
+        (**self).path()
     }
 
     #[inline]

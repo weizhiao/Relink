@@ -2,12 +2,14 @@ use crate::{
     LinkerError, Result, UnresolvedDependencyError,
     arch::ArchKind,
     image::{ModuleHandle, ModuleScope, RawDylib, RawDynamic, ScannedDynamic},
+    input::Path,
     relocation::{BindingMode, RelocationArch},
 };
 use alloc::boxed::Box;
 
 /// Common metadata needed while resolving one dependency edge.
 pub trait DependencyOwner {
+    fn path(&self) -> &Path;
     fn name(&self) -> &str;
     fn rpath(&self) -> Option<&str>;
     fn runpath(&self) -> Option<&str>;
@@ -17,6 +19,11 @@ pub trait DependencyOwner {
 }
 
 impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDylib<D, Arch> {
+    #[inline]
+    fn path(&self) -> &Path {
+        self.path()
+    }
+
     #[inline]
     fn name(&self) -> &str {
         self.name()
@@ -50,6 +57,11 @@ impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDylib<D, Arch> {
 
 impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDynamic<D, Arch> {
     #[inline]
+    fn path(&self) -> &Path {
+        self.path()
+    }
+
+    #[inline]
     fn name(&self) -> &str {
         self.name()
     }
@@ -81,6 +93,11 @@ impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDynamic<D, Arch> {
 }
 
 impl<Arch: RelocationArch> DependencyOwner for ScannedDynamic<Arch> {
+    #[inline]
+    fn path(&self) -> &Path {
+        self.path()
+    }
+
     #[inline]
     fn name(&self) -> &str {
         self.name()
@@ -172,6 +189,11 @@ impl<'a, K: Clone> DependencyRequest<'a, K> {
     #[inline]
     pub fn owner_name(&self) -> &'a str {
         self.owner.name()
+    }
+
+    #[inline]
+    pub fn owner_path(&self) -> &'a Path {
+        self.owner.path()
     }
 
     #[inline]
