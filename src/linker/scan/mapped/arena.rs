@@ -3,13 +3,12 @@ use super::super::plan::LinkPlan;
 use crate::{
     LinkerError, Result,
     entity::SecondaryMap,
-    os::{MapFlags, Mapper, Mmap, PageSize, ProtFlags},
+    os::{MapFlags, MappedRegion, Mapper, Mmap, PageSize, ProtFlags},
     relocation::RelocationArch,
-    segment::{ElfSegments, MappedRegion},
+    segment::ElfSegments,
     sync::Arc,
 };
 use alloc::vec::Vec;
-use core::ffi::c_void;
 
 #[derive(Clone)]
 pub(crate) struct MappedArena {
@@ -50,17 +49,18 @@ impl MappedArenaMap {
                 continue;
             }
 
-            let ptr = map_arena(
+            let mapped = map_arena(
                 mapper.as_ref(),
                 len,
                 arena.memory_class(),
                 arena.page_size(),
             )?;
 
-            let region = ElfSegments::create_region(ptr, len, mapper.clone());
+            let base = mapped.addr().get();
+            let region = ElfSegments::create_region(mapped);
             arenas.insert(
                 id,
-                MappedArena::new(arena.memory_class(), ptr as usize, len, region),
+                MappedArena::new(arena.memory_class(), base, len, region),
             );
         }
 
@@ -79,26 +79,20 @@ impl MappedArenaMap {
 
         for (section_id, placement) in placed_sections {
             let data = plan.section_data(section_id)?;
-            let arena = self.get_mut(placement.arena()).ok_or_else(|| {
+            let arena = self.get(placement.arena()).ok_or_else(|| {
                 LinkerError::mapped_arena("mapped section arenas referenced a missing arena")
             })?;
-            let dst = arena
-                .slice_mut(placement.offset(), placement.size())
-                .ok_or_else(|| {
-                    LinkerError::mapped_arena(
-                        "mapped section arena placement exceeds the allocated arena bounds",
-                    )
-                })?;
+            arena.check_range(placement.offset(), placement.size())?;
 
             let bytes = data.as_ref();
-            if bytes.len() != dst.len() {
+            if bytes.len() != placement.size() {
                 return Err(LinkerError::mapped_arena(
                     "mapped section arena size does not match its materialized section bytes",
                 )
                 .into());
             }
 
-            dst.copy_from_slice(bytes);
+            arena.write_bytes(placement.offset(), bytes)?;
         }
 
         Ok(())
@@ -119,11 +113,6 @@ impl MappedArenaMap {
     #[inline]
     pub(super) fn get(&self, id: ArenaId) -> Option<&MappedArena> {
         self.arenas.get(id)
-    }
-
-    #[inline]
-    pub(super) fn get_mut(&mut self, id: ArenaId) -> Option<&mut MappedArena> {
-        self.arenas.get_mut(id)
     }
 
     #[inline]
@@ -149,32 +138,42 @@ impl MappedArena {
     }
 
     #[inline]
+    pub(super) const fn base(&self) -> usize {
+        self.base
+    }
+
+    #[inline]
+    fn check_range(&self, offset: usize, len: usize) -> Result<()> {
+        let end = offset.checked_add(len).ok_or_else(|| {
+            LinkerError::mapped_arena(
+                "mapped section arena placement exceeds the allocated arena bounds",
+            )
+        })?;
+        if end > self.len {
+            return Err(LinkerError::mapped_arena(
+                "mapped section arena placement exceeds the allocated arena bounds",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn write_bytes(&self, offset: usize, bytes: &[u8]) -> Result<()> {
+        self.region.write_bytes(offset, bytes)
+    }
+
+    #[inline]
     pub(super) fn region(&self) -> Arc<MappedRegion> {
         Arc::clone(&self.region)
     }
 
-    #[inline]
-    fn bytes_mut(&mut self) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.base as *mut u8, self.len) }
-    }
-
-    #[inline]
-    fn slice_mut(&mut self, offset: usize, len: usize) -> Option<&mut [u8]> {
-        let end = offset.checked_add(len)?;
-        self.bytes_mut().get_mut(offset..end)
-    }
-
-    fn protect(&self, mapper: &dyn Mmap) -> Result<()> {
+    fn protect(&self, _mapper: &dyn Mmap) -> Result<()> {
         if self.len == 0 {
             return Ok(());
         }
-        unsafe {
-            mapper.mprotect(
-                self.base as *mut _,
-                self.len,
-                final_protection(self.memory_class),
-            )
-        }
+        self.region
+            .mprotect(0, self.len, final_protection(self.memory_class))
     }
 }
 
@@ -183,7 +182,7 @@ fn map_arena(
     len: usize,
     memory_class: MemoryClass,
     page_size: PageSize,
-) -> Result<*mut c_void> {
+) -> Result<MappedRegion> {
     let prot = initial_protection(memory_class);
     let flags =
         MapFlags::MAP_PRIVATE | MapFlags::huge_page_size(page_size).unwrap_or_else(MapFlags::empty);
@@ -273,7 +272,9 @@ mod tests {
         let mut mapped = MappedArenaMap::map_plan(mapper, &plan).unwrap().unwrap();
         mapped.populate(&mut plan).unwrap();
 
-        let mapped_arena = mapped.get_mut(arena).unwrap();
-        assert_eq!(&mapped_arena.bytes_mut()[0..4], [1_u8, 2, 3, 4].as_slice());
+        let mapped_arena = mapped.get(arena).unwrap();
+        let mut actual = [0_u8; 4];
+        mapped_arena.region.read_bytes(0, &mut actual).unwrap();
+        assert_eq!(actual, [1, 2, 3, 4]);
     }
 }

@@ -2,7 +2,7 @@
 use super::RelocHelper;
 use super::{Emulator, RelocAddr, RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
 use crate::{
-    RelocReason, Result,
+    ByteRepr, RelocReason, Result,
     arch::{ArchKind, NativeArch},
     elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType},
     image::{ElfCore, ModuleScope},
@@ -29,7 +29,7 @@ pub trait RelocationArch: 'static {
     type Layout: ElfLayout;
 
     /// Dynamic relocation entry format used by this architecture.
-    type Relocation: ElfRelEntry<Self::Layout> + 'static;
+    type Relocation: ByteRepr + ElfRelEntry<Self::Layout> + 'static;
 
     /// Relocation type that performs no operation.
     const NONE: ElfRelocationType;

@@ -1,5 +1,6 @@
 use super::LoadedCore;
 use crate::{
+    Result,
     arch::NativeArch,
     elf::{ElfSymbol, PreCompute, SymbolInfo},
     relocation::RelocationArch,
@@ -229,9 +230,9 @@ pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
     /// Returns the runtime base address used with `st_value`.
     fn base_addr(&self) -> usize;
 
-    /// Returns bytes from the module image for COPY relocations.
-    fn segment_slice(&self, _offset: usize, _len: usize) -> Option<&[u8]> {
-        None
+    /// Reads bytes from the module image for COPY relocations.
+    fn read_segment(&self, _offset: usize, _dst: &mut [u8]) -> Result<bool> {
+        Ok(false)
     }
 
     /// Returns the TLS module id, when this module owns TLS storage.
@@ -285,8 +286,8 @@ where
     }
 
     #[inline]
-    fn segment_slice(&self, offset: usize, len: usize) -> Option<&[u8]> {
-        (**self).segment_slice(offset, len)
+    fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<bool> {
+        (**self).read_segment(offset, dst)
     }
 
     #[inline]

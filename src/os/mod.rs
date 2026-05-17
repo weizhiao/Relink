@@ -7,10 +7,13 @@
 
 pub use defs::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
 pub(crate) use mapper::Mapper;
+pub(crate) use memory::MappedView;
+pub use memory::{MappedRegion, MappedRegionControl, MappedRegionOps, MmapResult, TargetAddr};
 pub use traits::Mmap;
 
 mod defs;
 mod mapper;
+mod memory;
 mod traits;
 
 cfg_if::cfg_if! {

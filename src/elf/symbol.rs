@@ -8,9 +8,14 @@
 use super::defs::{
     ElfLayout, ElfSectionIndex, ElfSymRaw, ElfSymbolBind, ElfSymbolType, NativeElfLayout,
 };
-use crate::elf::{ElfDynamic, HashTable, PreCompute};
+use crate::{
+    ParseDynamicError, Result,
+    elf::{ElfDynamic, HashTable, PreCompute},
+    segment::ElfSegments,
+};
 use core::ffi::CStr;
 use core::fmt::Debug;
+use core::mem::size_of;
 use elf::abi::{
     STB_GLOBAL, STB_GNU_UNIQUE, STB_WEAK, STT_COMMON, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE,
     STT_OBJECT, STT_TLS,
@@ -142,20 +147,37 @@ impl<L: ElfLayout> ElfSymbol<L> {
 /// This structure provides safe access to the ELF string table, which contains
 /// null-terminated strings for symbol names and other ELF metadata.
 pub(crate) struct ElfStringTable {
-    /// Pointer to the raw string table data in memory
+    /// Pointer to the raw string table data in memory.
     data: *const u8,
+
+    /// Size of the string table in bytes.
+    len: usize,
 }
 
 impl ElfStringTable {
-    /// Create a new string table wrapper from a raw pointer
+    /// Create a new string table wrapper from borrowed bytes.
+    pub(crate) const fn new(data: &'static [u8]) -> Self {
+        ElfStringTable {
+            data: data.as_ptr(),
+            len: data.len(),
+        }
+    }
+
+    /// Create a new string table wrapper from raw bounded bytes.
     ///
-    /// # Arguments
-    /// * `data` - Pointer to the string table data in memory
-    ///
-    /// # Returns
-    /// A new ElfStringTable instance
-    pub(crate) const fn new(data: *const u8) -> Self {
-        ElfStringTable { data }
+    /// # Safety
+    /// `data..data + len` must remain readable while this table is used.
+    pub(crate) const unsafe fn from_raw_parts(data: *const u8, len: usize) -> Self {
+        ElfStringTable { data, len }
+    }
+
+    #[inline]
+    fn bytes_from(&self, offset: usize) -> &'static [u8] {
+        assert!(
+            offset <= self.len,
+            "ELF string table offset is out of bounds"
+        );
+        unsafe { core::slice::from_raw_parts(self.data.add(offset), self.len - offset) }
     }
 
     /// Get a C-style string from the string table at the specified offset
@@ -167,10 +189,12 @@ impl ElfStringTable {
     /// A static reference to the C-style string at the specified offset
     #[inline]
     pub(crate) fn get_cstr(&self, offset: usize) -> &'static CStr {
-        unsafe {
-            let start = self.data.add(offset).cast();
-            CStr::from_ptr(start)
-        }
+        let bytes = self.bytes_from(offset);
+        let end = bytes
+            .iter()
+            .position(|byte| *byte == 0)
+            .expect("ELF string table entry is missing a NUL terminator");
+        unsafe { CStr::from_bytes_with_nul_unchecked(&bytes[..=end]) }
     }
 
     /// Convert a C-style string to a Rust string slice
@@ -204,10 +228,10 @@ impl ElfStringTable {
 /// Symbol table of an ELF file.
 pub struct SymbolTable<L: ElfLayout = NativeElfLayout> {
     /// Hash table for efficient symbol lookup.
-    pub(crate) hashtab: HashTable,
+    pub(crate) hashtab: HashTable<L>,
 
-    /// Pointer to the symbol table.
-    pub(crate) symtab: *const ElfSymbol<L>,
+    /// Symbol table entries.
+    pub(crate) symbols: &'static [ElfSymbol<L>],
 
     /// String table for symbol names.
     pub(crate) strtab: ElfStringTable,
@@ -221,7 +245,7 @@ impl<L: ElfLayout> Debug for SymbolTable<L> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SymbolTable")
             .field("hashtab", &self.hashtab)
-            .field("symtab_ptr", &self.symtab)
+            .field("symbol_count", &self.symbols.len())
             .finish()
     }
 }
@@ -286,18 +310,46 @@ impl<'symtab> SymbolInfo<'symtab> {
 
 impl<L: ElfLayout> SymbolTable<L> {
     /// Creates a symbol table from ELF dynamic section information.
-    pub(crate) fn from_dynamic<Arch>(dynamic: &ElfDynamic<Arch>) -> Self
+    pub(crate) fn from_dynamic<Arch>(
+        dynamic: &ElfDynamic<Arch>,
+        segments: &ElfSegments,
+    ) -> Result<Self>
     where
         Arch: crate::relocation::RelocationArch<Layout = L>,
     {
         // Create hash table from dynamic section information
-        let hashtab = HashTable::from_dynamic(dynamic);
+        let hashtab = HashTable::from_dynamic(dynamic, segments)?;
+        let symbol_count = hashtab.count_syms();
 
-        // Get symbol table pointer
-        let symtab = dynamic.symtab as *const ElfSymbol<L>;
+        let symtab_off = dynamic
+            .symtab
+            .get()
+            .checked_sub(segments.base())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let symtab_size = symbol_count
+            .checked_mul(size_of::<ElfSymbol<L>>())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let symbols = segments
+            .read_view::<ElfSymbol<L>>(symtab_off, symtab_size)?
+            .ok_or(ParseDynamicError::MalformedSymbolTable {
+                detail: "DT_SYMTAB symbol table size is malformed",
+            })?
+            .as_slice();
 
-        // Create string table wrapper
-        let strtab = ElfStringTable::new(dynamic.strtab as *const u8);
+        let strtab_size = dynamic
+            .strtab_size
+            .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_STRSZ" })?;
+        let strtab_off = dynamic
+            .strtab
+            .get()
+            .checked_sub(segments.base())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let strtab = segments
+            .read_view::<u8>(strtab_off, strtab_size.get())?
+            .ok_or(ParseDynamicError::MalformedStringTable {
+                detail: "DT_STRTAB string table size is malformed",
+            })?;
+        let strtab = ElfStringTable::new(strtab.as_slice());
 
         // Create version information (when version feature is enabled)
         #[cfg(feature = "version")]
@@ -308,13 +360,13 @@ impl<L: ElfLayout> SymbolTable<L> {
             &strtab,
         );
 
-        SymbolTable {
+        Ok(SymbolTable {
             hashtab,
-            symtab,
+            symbols,
             strtab,
             #[cfg(feature = "version")]
             version,
-        }
+        })
     }
     /// Returns a reference to the string table.
     pub(crate) fn strtab(&self) -> &ElfStringTable {
@@ -359,7 +411,10 @@ impl<L: ElfLayout> SymbolTable<L> {
         idx: usize,
     ) -> (&'symtab ElfSymbol<L>, SymbolInfo<'symtab>) {
         // Get the symbol at the specified index
-        let symbol = unsafe { &*self.symtab.add(idx) };
+        let symbol = self
+            .symbols
+            .get(idx)
+            .expect("ELF symbol index is out of bounds");
 
         // Get the symbol name as a C-style string
         let cname = self.strtab.get_cstr(symbol.st_name());

@@ -1,10 +1,8 @@
 use crate::{
-    logging,
-    os::{MapFlags, Mapper, ProtFlags},
+    os::{MapFlags, MappedRegion, ProtFlags},
     sync::Arc,
 };
 use alloc::vec::Vec;
-use core::ffi::c_void;
 
 /// Address representation for ELF segments
 ///
@@ -90,42 +88,11 @@ pub(crate) struct ElfSegment {
     pub(crate) from_relocatable: bool,
 }
 
-pub(crate) struct MappedRegion {
-    pub(super) memory: *mut c_void,
-    pub(super) len: usize,
-    mapper: Mapper,
-}
-
-impl MappedRegion {
-    #[inline]
-    pub(super) fn new(memory: *mut c_void, len: usize, mapper: Mapper) -> Self {
-        Self {
-            memory,
-            len,
-            mapper,
-        }
-    }
-}
-
-impl Drop for MappedRegion {
-    fn drop(&mut self) {
-        let res = unsafe { self.mapper.munmap(self.memory, self.len) };
-        debug_assert!(res.is_ok(), "failed to unmap ELF segments");
-        if let Err(err) = res {
-            logging::error!("failed to unmap ELF segments: {err}");
-        }
-    }
-}
-
-// Safety: the region only owns an mmap-style allocation and unmaps it on drop.
-unsafe impl Send for MappedRegion {}
-// Safety: the region does not expose interior mutability beyond the mapped bytes themselves.
-unsafe impl Sync for MappedRegion {}
-
 #[derive(Clone)]
 pub(crate) struct MappedSlice {
     pub(super) offset: usize,
     pub(super) len: usize,
+    pub(super) region_offset: usize,
     // This shared owner keeps the mapped arena alive even when address math
     // only needs the slice bounds at runtime.
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -134,10 +101,16 @@ pub(crate) struct MappedSlice {
 
 impl MappedSlice {
     #[inline]
-    pub(super) fn new(offset: usize, len: usize, region: Arc<MappedRegion>) -> Self {
+    pub(super) fn new(
+        offset: usize,
+        len: usize,
+        region_offset: usize,
+        region: Arc<MappedRegion>,
+    ) -> Self {
         Self {
             offset,
             len,
+            region_offset,
             region,
         }
     }
@@ -158,5 +131,12 @@ impl MappedSlice {
     #[inline]
     pub(super) fn offset(&self) -> usize {
         self.offset
+    }
+
+    #[inline]
+    pub(super) fn region_offset(&self, start: usize) -> Option<usize> {
+        start
+            .checked_sub(self.offset)
+            .and_then(|delta| self.region_offset.checked_add(delta))
     }
 }

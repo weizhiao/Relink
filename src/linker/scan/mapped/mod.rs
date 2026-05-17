@@ -64,7 +64,6 @@ impl RuntimeOffset {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct MappedRuntimeMemory {
     arenas: MappedArenaMap,
     modules: SecondaryMap<ModuleId, RuntimeModuleMemory>,
@@ -151,6 +150,9 @@ impl RuntimeModuleMemory {
             mapped_slices.push(ElfSegments::create_slice(
                 runtime_offset.get(),
                 *size,
+                actual_address.checked_sub(arena.base()).ok_or_else(|| {
+                    LinkerError::runtime_memory("arena-backed section precedes arena base")
+                })?,
                 arena.region(),
             ));
             runtime_sections.push(RuntimeSectionMemory {
@@ -262,7 +264,7 @@ where
     Arch: RelocationArch,
 {
     let original_phdrs = scanned.phdrs().to_vec();
-    let mut dynamic_ptr: Option<NonNull<ElfDyn<Arch::Layout>>> = None;
+    let mut dynamic = None;
     let mut eh_frame_hdr: Option<NonNull<u8>> = None;
     let mut tls_info: Option<TlsInfo> = None;
 
@@ -272,11 +274,21 @@ where
                 let offset = runtime
                     .remap_source_to_runtime_offset(SourceAddress::new(phdr.p_vaddr()))
                     .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_DYNAMIC"))?;
-                dynamic_ptr = Some(
-                    NonNull::new(runtime.segments.get_mut_ptr(offset.get())).ok_or_else(|| {
-                        LinkerError::runtime_memory("PT_DYNAMIC remapped to a null pointer")
-                    })?,
-                );
+                let view = runtime
+                    .segments
+                    .read_view::<ElfDyn<Arch::Layout>>(offset.get(), phdr.p_filesz())?
+                    .ok_or_else(|| {
+                        LinkerError::runtime_memory(
+                            "PT_DYNAMIC is not directly readable from mapped segments",
+                        )
+                    })?;
+                if view.is_empty() {
+                    return Err(LinkerError::runtime_memory(
+                        "PT_DYNAMIC is not directly readable from mapped segments",
+                    )
+                    .into());
+                }
+                dynamic = Some(view);
             }
             ElfProgramType::GNU_EH_FRAME => {
                 let offset = runtime
@@ -285,9 +297,14 @@ where
                         LinkerError::runtime_memory("failed to remap PT_GNU_EH_FRAME")
                     })?;
                 eh_frame_hdr = Some(
-                    NonNull::new(runtime.segments.get_mut_ptr(offset.get())).ok_or_else(|| {
-                        LinkerError::runtime_memory("PT_GNU_EH_FRAME remapped to a null pointer")
-                    })?,
+                    runtime
+                        .segments
+                        .borrowed_ptr::<u8>(offset.get(), phdr.p_filesz())?
+                        .ok_or_else(|| {
+                            LinkerError::runtime_memory(
+                                "PT_GNU_EH_FRAME is not directly readable from mapped segments",
+                            )
+                        })?,
                 );
             }
             ElfProgramType::TLS => {
@@ -296,14 +313,15 @@ where
                     .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_TLS"))?;
                 let image = runtime
                     .segments
-                    .get_slice::<u8>(offset.get(), phdr.p_filesz());
-                tls_info = Some(TlsInfo::new(phdr, image));
+                    .read_view::<u8>(offset.get(), phdr.p_filesz())?
+                    .ok_or_else(|| LinkerError::runtime_memory("PT_TLS image is malformed"))?;
+                tls_info = Some(TlsInfo::new(phdr, image.as_slice()));
             }
             _ => {}
         }
     }
 
-    let dynamic_ptr = dynamic_ptr
+    let dynamic = dynamic
         .ok_or_else(|| LinkerError::runtime_memory("arena-backed module is missing PT_DYNAMIC"))?;
     let original_entry = scanned.ehdr().e_entry();
     let entry = runtime
@@ -317,7 +335,7 @@ where
         entry,
         interp: None,
         phdrs: ElfPhdrs::Vec(original_phdrs),
-        dynamic_ptr,
+        dynamic,
         eh_frame_hdr,
         tls_info,
         force_static_tls,

@@ -8,7 +8,7 @@ use crate::{
     },
     image::{Module, ModuleHandle, ModuleScope},
     input::{Path, PathBuf},
-    os::Mapper,
+    os::{MappedRegion, Mapper},
     relocation::{RelocAddr, RelocationArch},
     segment::ElfSegments,
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -309,9 +309,11 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         user_data: D,
     ) -> Result<Self> {
         let segments = ElfSegments::new(
-            memory.0,
-            memory.1,
-            Mapper::from_munmap(move |addr, len| unsafe { munmap(addr, len) }),
+            MappedRegion::local(
+                memory.0,
+                memory.1,
+                Mapper::from_munmap(move |addr, len| unsafe { munmap(addr, len) }),
+            ),
             memory.0 as usize,
             0,
         );
@@ -319,7 +321,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         let mut tls_mod_id = None;
         let mut actual_tls_tp_offset = tls_tp_offset;
 
-        let mut dynamic_ptr = core::ptr::null();
+        let mut dynamic = None;
         let mut eh_frame_hdr = None;
         let mut tls_phdr = None;
         let phdrs = phdrs.into();
@@ -327,10 +329,26 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         for phdr in &phdrs {
             match phdr.program_type() {
                 ElfProgramType::DYNAMIC => {
-                    dynamic_ptr = base.wrapping_add(phdr.p_vaddr()) as *const ElfDyn<Arch::Layout>;
+                    let view = segments
+                        .read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())?
+                        .ok_or(crate::ParsePhdrError::malformed(
+                            "PT_DYNAMIC is not directly readable from mapped segments",
+                        ))?;
+                    if view.is_empty() {
+                        return Err(crate::ParsePhdrError::malformed(
+                            "PT_DYNAMIC is not directly readable from mapped segments",
+                        )
+                        .into());
+                    }
+                    dynamic = Some(view);
                 }
                 ElfProgramType::GNU_EH_FRAME => {
-                    eh_frame_hdr = NonNull::new(base.wrapping_add(phdr.p_vaddr()) as *mut u8);
+                    eh_frame_hdr = segments
+                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
+                        .ok_or(crate::ParsePhdrError::malformed(
+                            "PT_GNU_EH_FRAME is not directly readable from mapped segments",
+                        ))
+                        .map(Some)?;
                 }
                 ElfProgramType::TLS => {
                     tls_phdr = Some(phdr);
@@ -340,44 +358,39 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         }
 
         if let Some(phdr) = tls_phdr {
-            unsafe {
-                let template = core::slice::from_raw_parts(
-                    base.wrapping_add(phdr.p_vaddr()) as *const u8,
-                    phdr.p_filesz(),
-                );
-                let info = TlsInfo::new(phdr, core::mem::transmute(template));
+            let template = segments
+                .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
+                .ok_or(crate::ParsePhdrError::malformed(
+                    "PT_TLS image is malformed",
+                ))?;
+            let info = TlsInfo::new(phdr, template.as_slice());
 
-                let mut static_tls = actual_tls_tp_offset.is_some();
-                if !static_tls && !dynamic_ptr.is_null() {
-                    let mut cur = dynamic_ptr;
-                    loop {
-                        let dynamic = &*cur;
-                        let tag = dynamic.tag();
-                        if tag == ElfDynamicTag::NULL {
-                            break;
-                        }
-                        if tag == ElfDynamicTag::FLAGS
-                            && dynamic.value() & DF_STATIC_TLS as usize != 0
-                        {
-                            static_tls = true;
-                            break;
-                        }
-                        cur = cur.add(1);
+            let mut static_tls = actual_tls_tp_offset.is_some();
+            if !static_tls && let Some(dynamic_entries) = dynamic.as_ref() {
+                for dynamic in dynamic_entries.as_slice() {
+                    let tag = dynamic.tag();
+                    if tag == ElfDynamicTag::NULL {
+                        break;
+                    }
+                    if tag == ElfDynamicTag::FLAGS && dynamic.value() & DF_STATIC_TLS as usize != 0
+                    {
+                        static_tls = true;
+                        break;
                     }
                 }
+            }
 
-                // The Tls::register will register the TLS module and return the ID.
-                if static_tls {
-                    if let Some(offset) = actual_tls_tp_offset {
-                        tls_mod_id = Some(Tls::add_static_tls(&info, offset)?);
-                    } else {
-                        let (mid, offset) = Tls::register_static(&info)?;
-                        tls_mod_id = Some(mid);
-                        actual_tls_tp_offset = Some(offset);
-                    }
+            // The Tls::register will register the TLS module and return the ID.
+            if static_tls {
+                if let Some(offset) = actual_tls_tp_offset {
+                    tls_mod_id = Some(Tls::add_static_tls(&info, offset)?);
                 } else {
-                    tls_mod_id = Some(Tls::register(&info)?);
+                    let (mid, offset) = Tls::register_static(&info)?;
+                    tls_mod_id = Some(mid);
+                    actual_tls_tp_offset = Some(offset);
                 }
+            } else {
+                tls_mod_id = Some(Tls::register(&info)?);
             }
         }
         Ok(Self {
@@ -385,7 +398,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                 ElfCore::from_raw(
                     path.into(),
                     base,
-                    dynamic_ptr,
+                    dynamic.ok_or(crate::ParsePhdrError::MissingDynamicSection)?,
                     phdrs,
                     eh_frame_hdr,
                     segments,
@@ -446,8 +459,9 @@ where
     }
 
     #[inline]
-    fn segment_slice(&self, offset: usize, len: usize) -> Option<&[u8]> {
-        Some(self.core.segment_slice(offset, len))
+    fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<bool> {
+        self.core.read_segment(offset, dst)?;
+        Ok(true)
     }
 
     #[inline]

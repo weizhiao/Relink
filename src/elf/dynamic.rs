@@ -3,14 +3,15 @@ use crate::{
     ParseDynamicError, Result,
     arch::NativeArch,
     elf::{
-        ElfDynRaw, ElfDynamicTag, ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, NativeElfLayout,
+        ElfDynRaw, ElfDynamicTag, ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, ElfWord,
+        Lifecycle, LifecycleArray, NativeElfLayout,
     },
+    os::{MappedView, TargetAddr},
     relocation::RelocationArch,
     segment::ElfSegments,
 };
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use core::marker::PhantomData;
 use core::{num::NonZeroUsize, ptr::NonNull};
 use elf::abi::*;
 
@@ -165,51 +166,26 @@ where
     parsed
 }
 
-struct DynamicPtrIter<L: ElfLayout = NativeElfLayout> {
-    cur: *const ElfDyn<L>,
-    done: bool,
-    _marker: PhantomData<ElfDyn<L>>,
-}
-
-impl<L: ElfLayout> DynamicPtrIter<L> {
-    #[inline]
-    fn new(cur: *const ElfDyn<L>) -> Self {
-        Self {
-            cur,
-            done: false,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<L: ElfLayout> Iterator for DynamicPtrIter<L> {
-    type Item = (ElfDynamicTag, usize);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-
-        unsafe {
-            let dynamic = &*self.cur;
-            let tag = dynamic.tag();
-            let value = dynamic.value();
-            self.cur = self.cur.add(1);
-            if tag == ElfDynamicTag::NULL {
-                self.done = true;
-            }
-            Some((tag, value))
-        }
-    }
-}
-
 impl<Arch> ElfDynamic<Arch>
 where
     Arch: RelocationArch,
 {
     /// Parse the dynamic section of an ELF file
-    pub fn new(dynamic_ptr: *const ElfDyn<Arch::Layout>, segments: &ElfSegments) -> Result<Self> {
-        let parsed = parse_dynamic_entries(DynamicPtrIter::new(dynamic_ptr));
+    pub fn new(
+        dynamic_entries: MappedView<ElfDyn<Arch::Layout>>,
+        segments: &ElfSegments,
+    ) -> Result<Self> {
+        let dynamic_ptr = dynamic_entries
+            .as_slice()
+            .first()
+            .map(|entry| entry as *const ElfDyn<Arch::Layout>)
+            .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_NULL" })?;
+        let parsed = parse_dynamic_entries(
+            dynamic_entries
+                .as_slice()
+                .iter()
+                .map(|entry| (entry.tag(), entry.value())),
+        );
         let base = segments.base();
 
         // Verify relocation type consistency
@@ -225,6 +201,8 @@ where
             base.checked_add(offset)
                 .ok_or(ParseDynamicError::AddressOverflow.into())
         };
+        let add_base_addr =
+            |offset: usize| -> Result<TargetAddr> { Ok(TargetAddr::new(add_base(offset)?)) };
         let add_base_nonzero = |offset: NonZeroUsize| -> Result<NonZeroUsize> {
             NonZeroUsize::new(add_base(offset.get())?)
                 .ok_or_else(|| ParseDynamicError::AddressOverflow.into())
@@ -232,9 +210,9 @@ where
 
         // Determine which hash table to use (prefer GNU hash)
         let hash_off = if let Some(off) = parsed.gnu_hash_off {
-            ElfDynamicHashTab::Gnu(add_base(off)?)
+            ElfDynamicHashTab::Gnu(add_base_addr(off)?)
         } else if let Some(off) = parsed.elf_hash_off {
-            ElfDynamicHashTab::Elf(add_base(off)?)
+            ElfDynamicHashTab::Elf(add_base_addr(off)?)
         } else {
             return Err(ParseDynamicError::MissingRequiredTag {
                 tag: "DT_GNU_HASH or DT_HASH",
@@ -243,41 +221,80 @@ where
         };
 
         // Extract relocation tables
-        let pltrel = parsed.pltrel_off.map(|pltrel_off| {
-            segments.get_slice(
-                pltrel_off.get(),
-                parsed.pltrel_size.map(|s| s.get()).unwrap_or(0),
-            )
-        });
-        let dynrel = parsed.rel_off.map(|rel_off| {
-            segments.get_slice(rel_off.get(), parsed.rel_size.map(|s| s.get()).unwrap_or(0))
-        });
-        let relr = parsed.relr_off.map(|relr_off| {
-            segments.get_slice(
-                relr_off.get(),
-                parsed.relr_size.map(|s| s.get()).unwrap_or(0),
-            )
-        });
+        let pltrel = parsed
+            .pltrel_off
+            .map(|pltrel_off| -> Result<_> {
+                let view = segments
+                    .read_view::<ElfRelType<Arch>>(
+                        pltrel_off.get(),
+                        parsed.pltrel_size.map(|len| len.get()).unwrap_or(0),
+                    )?
+                    .ok_or(ParseDynamicError::MalformedRelocationTable {
+                        detail: "DT_JMPREL relocation table size is malformed",
+                    })?;
+                Ok(view)
+            })
+            .transpose()?;
+        let dynrel = parsed
+            .rel_off
+            .map(|rel_off| -> Result<_> {
+                let view = segments
+                    .read_view::<ElfRelType<Arch>>(
+                        rel_off.get(),
+                        parsed.rel_size.map(|len| len.get()).unwrap_or(0),
+                    )?
+                    .ok_or(ParseDynamicError::MalformedRelocationTable {
+                        detail: "DT_REL/DT_RELA relocation table size is malformed",
+                    })?;
+                Ok(view)
+            })
+            .transpose()?;
+        let relr = parsed
+            .relr_off
+            .map(|relr_off| -> Result<_> {
+                let view = segments
+                    .read_view::<ElfRelr<Arch::Layout>>(
+                        relr_off.get(),
+                        parsed.relr_size.map(|len| len.get()).unwrap_or(0),
+                    )?
+                    .ok_or(ParseDynamicError::MalformedRelocationTable {
+                        detail: "DT_RELR relocation table size is malformed",
+                    })?;
+                Ok(view)
+            })
+            .transpose()?;
 
         // Extract initialization and finalization functions
         let init_fn = parsed
             .init_off
-            .map(|val| unsafe { core::mem::transmute(segments.get_ptr::<fn()>(val.get())) });
-        let init_array_fn = parsed.init_array_off.map(|init_array_off| {
-            segments.get_slice(
-                init_array_off.get(),
-                parsed.init_array_size.map(|s| s.get()).unwrap_or(0),
-            )
-        });
-        let fini_fn = parsed.fini_off.map(|fini_off| unsafe {
-            core::mem::transmute(segments.get_ptr::<fn()>(fini_off.get()))
-        });
-        let fini_array_fn = parsed.fini_array_off.map(|fini_array_off| {
-            segments.get_slice(
-                fini_array_off.get(),
-                parsed.fini_array_size.map(|s| s.get()).unwrap_or(0),
-            )
-        });
+            .map(|init_off| add_base_addr(init_off.get()))
+            .transpose()?;
+        let init_array_fn = parsed
+            .init_array_off
+            .map(|init_array_off| {
+                read_lifecycle_array::<Arch::Layout>(
+                    segments,
+                    init_array_off,
+                    parsed.init_array_size,
+                    "DT_INIT_ARRAY size is malformed",
+                )
+            })
+            .transpose()?;
+        let fini_fn = parsed
+            .fini_off
+            .map(|fini_off| add_base_addr(fini_off.get()))
+            .transpose()?;
+        let fini_array_fn = parsed
+            .fini_array_off
+            .map(|fini_array_off| {
+                read_lifecycle_array::<Arch::Layout>(
+                    segments,
+                    fini_array_off,
+                    parsed.fini_array_size,
+                    "DT_FINI_ARRAY size is malformed",
+                )
+            })
+            .transpose()?;
 
         // Extract versioning information
         let verneed = parsed
@@ -311,8 +328,9 @@ where
         Ok(ElfDynamic {
             dyn_ptr: dynamic_ptr,
             hashtab: hash_off,
-            symtab: add_base(parsed.symtab_off)?,
-            strtab: add_base(parsed.strtab_off)?,
+            symtab: add_base_addr(parsed.symtab_off)?,
+            strtab: add_base_addr(parsed.strtab_off)?,
+            strtab_size: parsed.strtab_size,
             // Check if binding should be done immediately
             bind_now: parsed.bind_now
                 || parsed.flags & DF_BIND_NOW as usize != 0
@@ -342,12 +360,31 @@ where
     }
 }
 
+fn read_lifecycle_array<L: ElfLayout>(
+    segments: &ElfSegments,
+    offset: NonZeroUsize,
+    byte_len: Option<NonZeroUsize>,
+    malformed: &'static str,
+) -> Result<LifecycleArray> {
+    let words = segments
+        .read_view::<L::Word>(offset.get(), byte_len.map(|len| len.get()).unwrap_or(0))?
+        .ok_or_else(|| ParseDynamicError::MalformedLifecycleTable { detail: malformed })?;
+
+    Ok(Lifecycle::array_from_addrs(
+        words
+            .as_slice()
+            .iter()
+            .copied()
+            .map(|addr| TargetAddr::new(addr.to_usize())),
+    ))
+}
+
 /// Hash table type used for symbol lookup
 pub enum ElfDynamicHashTab {
     /// GNU-style hash table (DT_GNU_HASH)
-    Gnu(usize),
+    Gnu(TargetAddr),
     /// Traditional ELF hash table (DT_HASH)
-    Elf(usize),
+    Elf(TargetAddr),
 }
 
 #[allow(unused)]
@@ -358,9 +395,11 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     /// Hash table information.
     pub hashtab: ElfDynamicHashTab,
     /// Symbol table address.
-    pub symtab: usize,
+    pub symtab: TargetAddr,
     /// String table address.
-    pub strtab: usize,
+    pub strtab: TargetAddr,
+    /// String table size.
+    pub strtab_size: Option<NonZeroUsize>,
     /// Whether to bind symbols immediately.
     pub bind_now: bool,
     /// Whether the object uses static thread-local storage.
@@ -368,19 +407,19 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     /// Global Offset Table address.
     pub got_plt: Option<NonNull<usize>>,
     /// Initialization function.
-    pub init_fn: Option<fn()>,
+    pub init_fn: Option<TargetAddr>,
     /// Initialization function array.
-    pub init_array_fn: Option<&'static [fn()]>,
+    pub init_array_fn: Option<LifecycleArray>,
     /// Finalization function.
-    pub fini_fn: Option<fn()>,
+    pub fini_fn: Option<TargetAddr>,
     /// Finalization function array.
-    pub fini_array_fn: Option<&'static [fn()]>,
+    pub fini_array_fn: Option<LifecycleArray>,
     /// PLT relocation entries.
-    pub pltrel: Option<&'static [ElfRelType<Arch>]>,
+    pub pltrel: Option<MappedView<ElfRelType<Arch>>>,
     /// Dynamic relocation entries.
-    pub dynrel: Option<&'static [ElfRelType<Arch>]>,
+    pub dynrel: Option<MappedView<ElfRelType<Arch>>>,
     /// RELR relocation entries.
-    pub relr: Option<&'static [ElfRelr<Arch::Layout>]>,
+    pub relr: Option<MappedView<ElfRelr<Arch::Layout>>>,
     /// Count of relative relocations.
     pub rel_count: Option<NonZeroUsize>,
     /// Required libraries.
@@ -403,15 +442,24 @@ impl<Arch: RelocationArch> Debug for ElfDynamic<Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfDynamic")
             .field("dyn_ptr", &self.dyn_ptr)
-            .field("symtab", &format_args!("0x{:x}", self.symtab))
-            .field("strtab", &format_args!("0x{:x}", self.strtab))
+            .field("symtab", &format_args!("0x{:x}", self.symtab.get()))
+            .field("strtab", &format_args!("0x{:x}", self.strtab.get()))
             .field("bind_now", &self.bind_now)
             .field("static_tls", &self.static_tls)
             .field("got_plt", &self.got_plt)
             .field("needed_libs_count", &self.needed_libs.len())
-            .field("pltrel_count", &self.pltrel.map(|r| r.len()).unwrap_or(0))
-            .field("dynrel_count", &self.dynrel.map(|r| r.len()).unwrap_or(0))
-            .field("relr_count", &self.relr.map(|r| r.len()).unwrap_or(0))
+            .field(
+                "pltrel_count",
+                &self.pltrel.as_ref().map(|r| r.len()).unwrap_or(0),
+            )
+            .field(
+                "dynrel_count",
+                &self.dynrel.as_ref().map(|r| r.len()).unwrap_or(0),
+            )
+            .field(
+                "relr_count",
+                &self.relr.as_ref().map(|r| r.len()).unwrap_or(0),
+            )
             .finish()
     }
 }

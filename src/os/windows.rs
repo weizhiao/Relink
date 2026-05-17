@@ -1,7 +1,7 @@
 use crate::{
     IoError, MmapError, Result,
     input::{ElfReader, Path, PathBuf},
-    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
+    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, PageSize, ProtFlags},
 };
 use alloc::vec::Vec;
 use core::{
@@ -116,8 +116,8 @@ impl Mmap for DefaultMmap {
         _flags: MapFlags,
         offset: usize,
         fd: Option<isize>,
-        need_copy: &mut bool,
-    ) -> Result<*mut c_void> {
+    ) -> Result<MmapResult> {
+        let mut needs_copy = false;
         let ptr = if let Some(fd) = fd {
             debug_assert!(addr.is_some(), "Address must be specified.");
             let addr = addr.unwrap();
@@ -143,7 +143,7 @@ impl Mmap for DefaultMmap {
             }
             ptr.Value
         } else {
-            *need_copy = true;
+            needs_copy = true;
             debug_assert!(addr.is_some(), "Address must be specified.");
             let addr = addr.unwrap();
 
@@ -168,7 +168,10 @@ impl Mmap for DefaultMmap {
                 ptr
             }
         };
-        Ok(ptr)
+        Ok(MmapResult::new(
+            MappedRegion::local_alias(ptr, len, *self),
+            needs_copy,
+        ))
     }
 
     unsafe fn mmap_anonymous(
@@ -177,7 +180,7 @@ impl Mmap for DefaultMmap {
         len: usize,
         prot: ProtFlags,
         _flags: MapFlags,
-    ) -> Result<*mut c_void> {
+    ) -> Result<MappedRegion> {
         // Try to replace a placeholder first (standard for Windows placeholder-based mapping)
         let ptr = unsafe {
             Memory::VirtualAlloc2(
@@ -192,7 +195,7 @@ impl Mmap for DefaultMmap {
         };
 
         if !ptr.is_null() {
-            return Ok(ptr);
+            return Ok(MappedRegion::local_alias(ptr, len, *self));
         }
 
         // Fallback for non-placeholder case (e.g. anonymous mapping not in a reserved region,
@@ -203,7 +206,7 @@ impl Mmap for DefaultMmap {
             let err_code = unsafe { GetLastError() };
             return Err(MmapError::VirtualAlloc { code: err_code }.into());
         }
-        Ok(ptr)
+        Ok(MappedRegion::local(ptr, len, *self))
     }
 
     unsafe fn munmap(&self, addr: *mut c_void, _len: usize) -> Result<()> {
@@ -240,7 +243,7 @@ impl Mmap for DefaultMmap {
         addr: Option<usize>,
         len: usize,
         use_file: bool,
-    ) -> Result<*mut c_void> {
+    ) -> Result<MappedRegion> {
         let ptr = if use_file {
             if let Some(addr) = addr {
                 unsafe {
@@ -282,7 +285,7 @@ impl Mmap for DefaultMmap {
             let err_code = unsafe { GetLastError() };
             return Err(MmapError::VirtualAlloc { code: err_code }.into());
         }
-        Ok(ptr)
+        Ok(MappedRegion::local(ptr, len, *self))
     }
 }
 

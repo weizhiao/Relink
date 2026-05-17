@@ -1,6 +1,8 @@
 //! Raw ELF32/ELF64 access traits used by layout-generic wrappers.
 
-pub trait ElfWord: Copy + 'static {
+use crate::ByteRepr;
+
+pub trait ElfWord: Copy + ByteRepr + 'static {
     const BITS: usize;
 
     fn from_usize(value: usize) -> Self;

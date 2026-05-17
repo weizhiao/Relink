@@ -6,9 +6,13 @@
 
 use super::ElfHashTable;
 use crate::{
+    ParseDynamicError, Result,
     elf::{ElfLayout, ElfSymbol, ElfWord},
     elf::{PreCompute, SymbolTable, symbol::SymbolInfo},
+    os::{MappedView, TargetAddr},
+    segment::ElfSegments,
 };
+use core::mem::size_of;
 
 /// Header structure for GNU ELF hash tables
 ///
@@ -33,21 +37,21 @@ struct ElfGnuHeader {
 ///
 /// This structure represents a GNU hash table, which uses an optimized structure
 /// with bloom filters, buckets, and chains to provide efficient symbol lookup.
-pub(crate) struct ElfGnuHash {
+pub(crate) struct ElfGnuHash<L: ElfLayout> {
     /// Hash table header containing metadata
     header: ElfGnuHeader,
 
-    /// Pointer to the bloom filter array
-    blooms: *const u8,
+    /// Bloom filter array
+    blooms: MappedView<L::Word>,
 
-    /// Pointer to the bucket array
-    buckets: *const u32,
+    /// Bucket array
+    buckets: MappedView<u32>,
 
-    /// Pointer to the chain array
-    chains: *const u32,
+    /// Chain array
+    chains: MappedView<u32>,
 }
 
-impl ElfGnuHash {
+impl<L: ElfLayout> ElfGnuHash<L> {
     /// Parse a GNU hash table from raw memory
     ///
     /// This method creates an ElfGnuHash instance by parsing the hash table data
@@ -59,30 +63,127 @@ impl ElfGnuHash {
     /// # Returns
     /// An ElfGnuHash instance representing the parsed hash table
     #[inline]
-    pub(crate) fn parse<L: ElfLayout>(ptr: *const u8) -> ElfGnuHash {
+    pub(crate) fn parse(segments: &ElfSegments, addr: TargetAddr) -> Result<Self> {
         const HEADER_SIZE: usize = size_of::<ElfGnuHeader>();
+        let start = addr
+            .get()
+            .checked_sub(segments.base())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
         let mut bytes = [0u8; HEADER_SIZE];
-        bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(ptr, HEADER_SIZE) });
+        segments.read_bytes(start, &mut bytes)?;
         let header: ElfGnuHeader = unsafe { core::mem::transmute(bytes) };
 
-        let bloom_size = header.nbloom as usize * size_of::<L::Word>();
-        let bucket_size = header.nbucket as usize * size_of::<u32>();
+        if header.nbloom == 0 {
+            return Err(ParseDynamicError::MalformedHashTable {
+                detail: "DT_GNU_HASH bloom filter is empty",
+            }
+            .into());
+        }
 
-        // Calculate pointers to each section
-        let blooms = unsafe { ptr.add(HEADER_SIZE) };
-        let buckets = unsafe { blooms.add(bloom_size) };
-        let chains = unsafe { buckets.add(bucket_size) };
+        if header.nbucket == 0 {
+            return Err(ParseDynamicError::MalformedHashTable {
+                detail: "DT_GNU_HASH bucket table is empty",
+            }
+            .into());
+        }
 
-        ElfGnuHash {
+        let bloom_size = (header.nbloom as usize)
+            .checked_mul(size_of::<L::Word>())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let bucket_size = (header.nbucket as usize)
+            .checked_mul(size_of::<u32>())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+
+        let blooms_off = start
+            .checked_add(HEADER_SIZE)
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let buckets_off = blooms_off
+            .checked_add(bloom_size)
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let chains_off = buckets_off
+            .checked_add(bucket_size)
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+
+        let blooms = segments.read_view(blooms_off, bloom_size)?.ok_or(
+            ParseDynamicError::MalformedHashTable {
+                detail: "DT_GNU_HASH bloom filter size is malformed",
+            },
+        )?;
+        let buckets = segments.read_view(buckets_off, bucket_size)?.ok_or(
+            ParseDynamicError::MalformedHashTable {
+                detail: "DT_GNU_HASH bucket table size is malformed",
+            },
+        )?;
+        let chain_count = Self::count_chain_entries(segments, chains_off, &header, &buckets)?;
+        let chain_size = chain_count
+            .checked_mul(size_of::<u32>())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let chains = segments.read_view(chains_off, chain_size)?.ok_or(
+            ParseDynamicError::MalformedHashTable {
+                detail: "DT_GNU_HASH chain table size is malformed",
+            },
+        )?;
+
+        Ok(Self {
             header,
             blooms,
-            buckets: buckets.cast(),
-            chains: chains.cast(),
+            buckets,
+            chains,
+        })
+    }
+
+    fn count_chain_entries(
+        segments: &ElfSegments,
+        chains_off: usize,
+        header: &ElfGnuHeader,
+        buckets: &MappedView<u32>,
+    ) -> Result<usize> {
+        let Some(nsym) = buckets
+            .as_slice()
+            .iter()
+            .copied()
+            .max()
+            .map(|idx| idx as usize)
+        else {
+            return Ok(0);
+        };
+
+        if nsym == 0 {
+            return Ok(0);
+        }
+
+        let symbias = header.symbias as usize;
+        if nsym < symbias {
+            return Err(ParseDynamicError::MalformedHashTable {
+                detail: "DT_GNU_HASH bucket index precedes symbol bias",
+            }
+            .into());
+        }
+
+        let mut idx = nsym - symbias;
+        loop {
+            let offset = idx
+                .checked_mul(size_of::<u32>())
+                .ok_or(ParseDynamicError::AddressOverflow)?;
+            let offset = chains_off
+                .checked_add(offset)
+                .ok_or(ParseDynamicError::AddressOverflow)?;
+            let mut bytes = [0u8; size_of::<u32>()];
+            segments.read_bytes(offset, &mut bytes)?;
+            let value = u32::from_ne_bytes(bytes);
+            if value & 1 != 0 {
+                return Ok(idx
+                    .checked_add(1)
+                    .ok_or(ParseDynamicError::AddressOverflow)?);
+            }
+            idx = idx
+                .checked_add(1)
+                .ok_or(ParseDynamicError::AddressOverflow)?;
         }
     }
 }
 
-impl ElfHashTable for ElfGnuHash {
+impl<Layout: ElfLayout> ElfHashTable for ElfGnuHash<Layout> {
     /// Compute the GNU hash value for a symbol name
     ///
     /// This method implements the GNU hash algorithm, which is based on
@@ -113,21 +214,20 @@ impl ElfHashTable for ElfGnuHash {
     /// The number of symbols in the hash table
     fn count_syms(&self) -> usize {
         let mut nsym = 0;
+        let buckets = self.buckets.as_slice();
+        let chains = self.chains.as_slice();
 
         // Find the maximum symbol index referenced by buckets
-        for i in 0..self.header.nbucket as usize {
-            nsym = nsym.max(unsafe { self.buckets.add(i).read() as usize });
+        for bucket in buckets {
+            nsym = nsym.max(*bucket as usize);
         }
 
         // If we found a valid symbol index, check the chains for the end marker
         if nsym > 0 {
-            unsafe {
-                let mut val = self.chains.add(nsym - self.header.symbias as usize);
-                // Find the end of the chain (marked by LSB = 1)
-                while val.read() & 1 == 0 {
-                    nsym += 1;
-                    val = val.add(1);
-                }
+            let mut idx = nsym.saturating_sub(self.header.symbias as usize);
+            while chains.get(idx).is_some_and(|chain| chain & 1 == 0) {
+                nsym += 1;
+                idx += 1;
             }
         }
 
@@ -161,17 +261,13 @@ impl ElfHashTable for ElfGnuHash {
 
         // Get the hash table implementation
         let hashtab = table.hashtab.into_gnuhash().unwrap();
+        let blooms = hashtab.blooms.as_slice();
+        let buckets = hashtab.buckets.as_slice();
+        let chains = hashtab.chains.as_slice();
 
         // Check bloom filter for fast negative lookup
         let bloom_idx = fofs & (hashtab.header.nbloom - 1) as usize;
-        let filter = unsafe {
-            hashtab
-                .blooms
-                .cast::<L::Word>()
-                .add(bloom_idx)
-                .read_unaligned()
-                .to_u64()
-        };
+        let filter = blooms.get(bloom_idx)?.to_u64();
 
         // First bloom filter check
         if filter & fmask == 0 {
@@ -186,12 +282,8 @@ impl ElfHashTable for ElfGnuHash {
 
         // Bloom filters passed, now check the actual hash chains
         let table_start_idx = hashtab.header.symbias as usize;
-        let chain_start_idx = unsafe {
-            hashtab
-                .buckets
-                .add((hash as usize) % hashtab.header.nbucket as usize)
-                .read()
-        } as usize;
+        let chain_start_idx =
+            *buckets.get((hash as usize) % hashtab.header.nbucket as usize)? as usize;
 
         // If bucket is empty, symbol is not present
         if chain_start_idx == 0 {
@@ -201,15 +293,15 @@ impl ElfHashTable for ElfGnuHash {
         // Traverse the chain to find the symbol
         #[cfg(feature = "version")]
         let mut dynsym_idx = chain_start_idx;
-        let mut cur_chain = unsafe { hashtab.chains.add(chain_start_idx - table_start_idx) };
-        let mut cur_symbol_ptr = unsafe { table.symtab.add(chain_start_idx) };
+        let mut chain_idx = chain_start_idx.checked_sub(table_start_idx)?;
+        let mut cur_symbol_idx = chain_start_idx;
 
         loop {
-            let chain_hash = unsafe { cur_chain.read() };
+            let chain_hash = *chains.get(chain_idx)?;
 
             // Check if this chain entry matches our hash (ignoring LSB)
             if hash | 1 == chain_hash | 1 {
-                let cur_symbol = unsafe { &*cur_symbol_ptr };
+                let cur_symbol = table.symbols.get(cur_symbol_idx)?;
                 let sym_name = table.strtab.get_str(cur_symbol.st_name());
 
                 // Check if this is the symbol we're looking for
@@ -229,8 +321,8 @@ impl ElfHashTable for ElfGnuHash {
             }
 
             // Move to the next entry in the chain
-            cur_chain = unsafe { cur_chain.add(1) };
-            cur_symbol_ptr = unsafe { cur_symbol_ptr.add(1) };
+            chain_idx += 1;
+            cur_symbol_idx += 1;
             #[cfg(feature = "version")]
             {
                 dynsym_idx += 1;

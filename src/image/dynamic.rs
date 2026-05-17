@@ -1,6 +1,7 @@
 use crate::arch::NativeArch;
 #[cfg(feature = "lazy-binding")]
 use crate::elf::ElfRelType;
+use crate::os::MappedView;
 use crate::sync::{Arc, AtomicBool};
 use crate::{
     ParsePhdrError, Result,
@@ -16,22 +17,22 @@ use crate::{
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{ffi::CStr, marker::PhantomData, ptr::NonNull};
+use core::{marker::PhantomData, ptr::NonNull};
 
 use super::{ElfCore, LoadedCore, core::CoreFiniHandler, core::CoreInner};
 
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch> {
-    pub(crate) pltrel: &'static [ElfRelType<Arch>],
+    pub(crate) pltrel: MappedView<ElfRelType<Arch>>,
     pub(crate) scope: Option<crate::image::ModuleScope<Arch>>,
 }
 
 #[cfg(feature = "lazy-binding")]
 impl<Arch: RelocationArch> LazyBindingInfo<Arch> {
     #[inline]
-    pub(crate) fn new(pltrel: Option<&'static [ElfRelType<Arch>]>) -> Self {
+    pub(crate) fn new(pltrel: Option<MappedView<ElfRelType<Arch>>>) -> Self {
         Self {
-            pltrel: pltrel.unwrap_or(&[]),
+            pltrel: pltrel.unwrap_or_else(MappedView::empty),
             scope: None,
         }
     }
@@ -51,7 +52,7 @@ pub(crate) struct RawDynamicParts<D, Arch: RelocationArch = NativeArch> {
     pub(crate) entry: RelocAddr,
     pub(crate) interp: Option<&'static str>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
-    pub(crate) dynamic_ptr: NonNull<ElfDyn<Arch::Layout>>,
+    pub(crate) dynamic: MappedView<ElfDyn<Arch::Layout>>,
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) tls_info: Option<TlsInfo>,
     pub(crate) force_static_tls: bool,
@@ -352,7 +353,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             entry,
             interp,
             phdrs,
-            dynamic_ptr,
+            dynamic,
             eh_frame_hdr,
             tls_info,
             force_static_tls,
@@ -363,19 +364,19 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             user_data,
         } = parts;
 
-        let dynamic = ElfDynamic::<Arch>::new(dynamic_ptr.as_ptr(), &segments)?;
+        let dynamic = ElfDynamic::<Arch>::new(dynamic, &segments)?;
 
         logging::trace!("[{}] Dynamic info: {:?}", path, dynamic);
 
         let relocation = DynamicRelocation::new(
-            dynamic.pltrel,
-            dynamic.dynrel,
-            dynamic.relr,
+            dynamic.pltrel.clone(),
+            dynamic.dynrel.clone(),
+            dynamic.relr.clone(),
             dynamic.rel_count,
         )?;
 
         let static_tls = force_static_tls | dynamic.static_tls;
-        let symtab = SymbolTable::from_dynamic(&dynamic);
+        let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
         let needed_libs: Vec<&'static str> = dynamic
             .needed_libs
             .iter()
@@ -408,7 +409,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
                 relro,
                 relocation,
                 init_handler: init_fn,
-                init: Lifecycle::new(dynamic.init_fn, dynamic.init_array_fn),
+                init: Lifecycle::new(dynamic.init_fn, dynamic.init_array_fn.clone()),
                 #[cfg(feature = "lazy-binding")]
                 got_plt: dynamic.got_plt,
                 rpath: dynamic
@@ -424,16 +425,16 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
                     is_init: AtomicBool::new(false),
                     path,
                     symtab,
-                    fini: Lifecycle::new(dynamic.fini_fn, dynamic.fini_array_fn),
+                    fini: Lifecycle::new(dynamic.fini_fn, dynamic.fini_array_fn.clone()),
                     fini_handler: CoreFiniHandler::Native(fini_fn),
                     user_data,
                     dynamic_info: Some(Arc::new(DynamicInfo {
                         eh_frame_hdr,
-                        dynamic_ptr,
+                        dynamic_ptr: unsafe { NonNull::new_unchecked(dynamic.dyn_ptr.cast_mut()) },
                         phdrs,
                         soname,
                         #[cfg(feature = "lazy-binding")]
-                        lazy: LazyBindingInfo::new(dynamic.pltrel),
+                        lazy: LazyBindingInfo::new(dynamic.pltrel.clone()),
                     })),
                     tls: CoreTlsState::new(
                         tls_mod_id,
@@ -460,10 +461,10 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
         // Parse all program headers
         builder.parse_phdrs(phdrs)?;
 
-        let dynamic_ptr = builder
-            .dynamic_ptr
+        let phdrs = builder.create_phdrs(phdrs)?;
+        let dynamic = builder
+            .dynamic
             .ok_or(ParsePhdrError::MissingDynamicSection)?;
-        let phdrs = builder.create_phdrs(phdrs);
         Self::from_parts::<Tls>(RawDynamicParts {
             path: builder.path,
             entry: if builder.ehdr.is_dylib() {
@@ -471,13 +472,9 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             } else {
                 RelocAddr::new(builder.ehdr.e_entry())
             },
-            interp: builder
-                .interp
-                .map(|s| unsafe { CStr::from_ptr(s.as_ptr()) }.to_str())
-                .transpose()
-                .map_err(|_| ParsePhdrError::InvalidUtf8 { field: "PT_INTERP" })?,
+            interp: builder.interp,
             phdrs,
-            dynamic_ptr,
+            dynamic,
             eh_frame_hdr: builder.eh_frame_hdr,
             tls_info: builder.tls_info,
             force_static_tls: builder.static_tls,
@@ -495,7 +492,12 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawDynamic<D, Arch> {
+impl<D, Arch> Relocatable<D> for RawDynamic<D, Arch>
+where
+    D: 'static,
+    Arch: RelocationArch,
+    <Arch::Layout as crate::elf::ElfLayout>::Word: crate::ByteRepr,
+{
     type Output = LoadedCore<D, Arch>;
     type Arch = Arch;
 

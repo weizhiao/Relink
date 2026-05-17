@@ -5,7 +5,13 @@
 //! used in many ELF implementations.
 
 use super::ElfHashTable;
-use crate::elf::{ElfLayout, ElfSymbol, PreCompute, SymbolTable, symbol::SymbolInfo};
+use crate::{
+    ParseDynamicError, Result,
+    elf::{ElfLayout, ElfSymbol, PreCompute, SymbolTable, symbol::SymbolInfo},
+    os::{MappedView, TargetAddr},
+    segment::ElfSegments,
+};
+use core::mem::size_of;
 /// Header structure for SYSV ELF hash tables
 ///
 /// This structure represents the header of a SYSV hash table, which contains
@@ -27,11 +33,11 @@ pub(crate) struct ElfHash {
     /// Hash table header containing metadata
     header: ElfHashHeader,
 
-    /// Pointer to the bucket array
-    buckets: *const u32,
+    /// Bucket array
+    buckets: MappedView<u32>,
 
-    /// Pointer to the chain array
-    chains: *const u32,
+    /// Chain array
+    chains: MappedView<u32>,
 }
 
 impl ElfHash {
@@ -46,20 +52,52 @@ impl ElfHash {
     /// # Returns
     /// An ElfHash instance representing the parsed hash table
     #[inline]
-    pub(crate) fn parse(ptr: *const u8) -> ElfHash {
+    pub(crate) fn parse(segments: &ElfSegments, addr: TargetAddr) -> Result<ElfHash> {
         const HEADER_SIZE: usize = size_of::<ElfHashHeader>();
+        let start = addr
+            .get()
+            .checked_sub(segments.base())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
         let mut bytes = [0u8; HEADER_SIZE];
-        bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(ptr, HEADER_SIZE) });
+        segments.read_bytes(start, &mut bytes)?;
         let header: ElfHashHeader = unsafe { core::mem::transmute(bytes) };
-        let bucket_size = header.nbucket as usize * size_of::<u32>();
 
-        let buckets = unsafe { ptr.add(HEADER_SIZE) };
-        let chains = unsafe { buckets.add(bucket_size) };
-        ElfHash {
-            header,
-            buckets: buckets.cast(),
-            chains: chains.cast(),
+        if header.nbucket == 0 {
+            return Err(ParseDynamicError::MalformedHashTable {
+                detail: "DT_HASH bucket table is empty",
+            }
+            .into());
         }
+
+        let bucket_size = (header.nbucket as usize)
+            .checked_mul(size_of::<u32>())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+
+        let buckets_off = start
+            .checked_add(HEADER_SIZE)
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let chains_off = buckets_off
+            .checked_add(bucket_size)
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let buckets = segments.read_view(buckets_off, bucket_size)?.ok_or(
+            ParseDynamicError::MalformedHashTable {
+                detail: "DT_HASH bucket table size is malformed",
+            },
+        )?;
+        let chain_size = (header.nchain as usize)
+            .checked_mul(size_of::<u32>())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let chains = segments.read_view(chains_off, chain_size)?.ok_or(
+            ParseDynamicError::MalformedHashTable {
+                detail: "DT_HASH chain table size is malformed",
+            },
+        )?;
+
+        Ok(ElfHash {
+            header,
+            buckets,
+            chains,
+        })
     }
 }
 
@@ -130,11 +168,12 @@ impl ElfHashTable for ElfHash {
 
         // Get the hash table implementation
         let hashtab = table.hashtab.into_elfhash().unwrap();
+        let buckets = hashtab.buckets.as_slice();
+        let chains = hashtab.chains.as_slice();
 
         // Calculate the bucket index and get the first chain index
         let bucket_idx = (hash as usize) % hashtab.header.nbucket as usize;
-        let bucket_ptr = unsafe { hashtab.buckets.add(bucket_idx) };
-        let mut chain_idx = unsafe { bucket_ptr.read() as usize };
+        let mut chain_idx = *buckets.get(bucket_idx)? as usize;
 
         // Traverse the chain to find the symbol
         loop {
@@ -144,8 +183,8 @@ impl ElfHashTable for ElfHash {
             }
 
             // Get the current symbol and its name
-            let chain_ptr = unsafe { hashtab.chains.add(chain_idx) };
-            let cur_symbol = unsafe { &*table.symtab.add(chain_idx) };
+            let next_chain = *chains.get(chain_idx)? as usize;
+            let cur_symbol = table.symbols.get(chain_idx)?;
             let sym_name = table.strtab.get_str(cur_symbol.st_name());
 
             // Check if this is the symbol we're looking for
@@ -159,7 +198,7 @@ impl ElfHashTable for ElfHash {
             }
 
             // Move to the next entry in the chain
-            chain_idx = unsafe { chain_ptr.read() as usize };
+            chain_idx = next_chain;
         }
     }
 }

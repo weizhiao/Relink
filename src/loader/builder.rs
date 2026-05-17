@@ -1,15 +1,14 @@
 use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner};
 use crate::{
-    MmapError, ParsePhdrError, Result,
+    ByteRepr, ParsePhdrError, Result,
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
-    image::RawDynamic,
     input::{ElfReader, PathBuf},
-    os::{Mapper, PageSize},
+    os::{MappedView, Mapper},
     segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
     tls::{TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{ffi::c_char, marker::PhantomData, ptr::NonNull};
+use core::{marker::PhantomData, ptr::NonNull};
 
 /// Builder for creating relocated ELF objects
 ///
@@ -24,9 +23,6 @@ where
     /// Hook function for processing program headers (always present)
     hook: &'hook mut H,
 
-    /// Mapped program headers
-    phdr_mmap: Option<&'static [ElfPhdr<L>]>,
-
     /// Loader source path or caller-provided source identifier.
     pub(crate) path: PathBuf,
 
@@ -36,8 +32,8 @@ where
     /// GNU_RELRO segment information
     pub(crate) relro: Option<ELFRelro>,
 
-    /// Pointer to the dynamic section
-    pub(crate) dynamic_ptr: Option<NonNull<ElfDyn<L>>>,
+    /// Dynamic section entries
+    pub(crate) dynamic: Option<MappedView<ElfDyn<L>>>,
 
     /// TLS information
     pub(crate) tls_info: Option<TlsInfo>,
@@ -63,8 +59,8 @@ where
     /// Finalization function handler
     pub(crate) fini_fn: DynLifecycleHandler,
 
-    /// Pointer to the interpreter path (PT_INTERP)
-    pub(crate) interp: Option<NonNull<c_char>>,
+    /// Interpreter path (PT_INTERP)
+    pub(crate) interp: Option<&'static str>,
 
     /// Pointer to the .eh_frame_hdr section (PT_GNU_EH_FRAME)
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
@@ -127,11 +123,10 @@ where
     ) -> Self {
         Self {
             hook,
-            phdr_mmap: None,
             path,
             ehdr,
             relro: None,
-            dynamic_ptr: None,
+            dynamic: None,
             tls_info: None,
             static_tls,
             page_size,
@@ -153,11 +148,10 @@ where
 
         match phdr.program_type() {
             ElfProgramType::DYNAMIC => {
-                self.dynamic_ptr = Some(
-                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr())).ok_or(
-                        ParsePhdrError::malformed("PT_DYNAMIC is outside mapped segments"),
-                    )?,
-                )
+                self.dynamic = Some(self.read_segment_view::<ElfDyn<L>>(
+                    phdr,
+                    "PT_DYNAMIC is not directly readable from mapped segments",
+                )?)
             }
             ElfProgramType::GNU_RELRO => {
                 self.relro = Some(ELFRelro::new(
@@ -167,35 +161,71 @@ where
                     self.mapper.clone(),
                 ))
             }
-            ElfProgramType::PHDR => {
-                self.phdr_mmap = Some(
-                    self.segments
-                        .get_slice::<ElfPhdr<L>>(phdr.p_vaddr(), phdr.p_memsz()),
-                );
-            }
+            ElfProgramType::PHDR => {}
             ElfProgramType::INTERP => {
-                self.interp = Some(
-                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr())).ok_or(
-                        ParsePhdrError::malformed("PT_INTERP is outside mapped segments"),
-                    )?,
-                );
+                self.interp = Some(self.read_interp(phdr)?);
             }
             ElfProgramType::GNU_EH_FRAME => {
-                self.eh_frame_hdr = Some(
-                    NonNull::new(self.segments.get_mut_ptr(phdr.p_vaddr())).ok_or(
-                        ParsePhdrError::malformed("PT_GNU_EH_FRAME is outside mapped segments"),
-                    )?,
-                );
+                self.eh_frame_hdr = Some(self.borrowed_segment_ptr::<u8>(
+                    phdr,
+                    "PT_GNU_EH_FRAME is not directly readable from mapped segments",
+                )?);
             }
             ElfProgramType::TLS => {
                 let tls_image = self
                     .segments
-                    .get_slice::<u8>(phdr.p_vaddr(), phdr.p_filesz());
-                self.tls_info = Some(TlsInfo::new(phdr, tls_image));
+                    .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
+                    .ok_or_else(|| ParsePhdrError::malformed("PT_TLS image is malformed"))?;
+                self.tls_info = Some(TlsInfo::new(phdr, tls_image.as_slice()));
             }
             _ => {}
         };
         Ok(())
+    }
+
+    #[inline]
+    fn read_segment_view<T: ByteRepr + 'static>(
+        &self,
+        phdr: &ElfPhdr<L>,
+        detail: &'static str,
+    ) -> Result<MappedView<T>> {
+        let view = self
+            .segments
+            .read_view::<T>(phdr.p_vaddr(), phdr.p_filesz())?
+            .ok_or_else(|| ParsePhdrError::malformed(detail))?;
+        if view.is_empty() {
+            return Err(ParsePhdrError::malformed(detail).into());
+        }
+        Ok(view)
+    }
+
+    #[inline]
+    fn borrowed_segment_ptr<T: ByteRepr + 'static>(
+        &self,
+        phdr: &ElfPhdr<L>,
+        detail: &'static str,
+    ) -> Result<NonNull<T>> {
+        self.segments
+            .borrowed_ptr::<T>(phdr.p_vaddr(), phdr.p_filesz())?
+            .ok_or_else(|| ParsePhdrError::malformed(detail).into())
+    }
+
+    fn read_interp(&self, phdr: &ElfPhdr<L>) -> Result<&'static str> {
+        let view = self
+            .segments
+            .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
+            .ok_or_else(|| {
+                ParsePhdrError::malformed("PT_INTERP is not directly readable from mapped segments")
+            })?;
+        let bytes = view.as_slice();
+        let Some(nul) = bytes.iter().position(|byte| *byte == 0) else {
+            return Err(ParsePhdrError::malformed("PT_INTERP is missing a NUL terminator").into());
+        };
+        if nul == 0 {
+            return Err(ParsePhdrError::malformed("PT_INTERP is empty").into());
+        }
+        core::str::from_utf8(&bytes[..nul])
+            .map_err(|_| ParsePhdrError::InvalidUtf8 { field: "PT_INTERP" }.into())
     }
 
     /// Parse all program headers and collect the builder state they describe.
@@ -217,73 +247,43 @@ where
     ///
     /// # Returns
     /// An ElfPhdrs enum containing either mapped or vector-based headers
-    pub(crate) fn create_phdrs(&self, phdrs: &[ElfPhdr<L>]) -> ElfPhdrs<L> {
-        let (phdr_start, phdr_end) = self.ehdr.phdr_range();
-        let phdr_size = phdr_end - phdr_start;
-
-        // Get mapped program headers or create them from loaded segments
-        self.phdr_mmap
-            .or_else(|| {
-                phdrs
-                    .iter()
-                    .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
-                    .find_map(|phdr| {
-                        let seg_start = phdr.p_offset();
-                        let seg_end = seg_start + phdr.p_filesz();
-                        if seg_start <= phdr_start && phdr_end <= seg_end {
-                            return Some(self.segments.get_slice::<ElfPhdr<L>>(
-                                phdr.p_vaddr() + (phdr_start - seg_start),
-                                phdr_size,
-                            ));
-                        }
-                        None
-                    })
-            })
-            .map(ElfPhdrs::Mmap)
-            .unwrap_or_else(|| ElfPhdrs::Vec(Vec::from(phdrs)))
-    }
-}
-
-impl<H, D, Arch> LoaderInner<H, D, Arch>
-where
-    H: LoadHook<Arch::Layout>,
-    D: 'static,
-    Arch: crate::relocation::RelocationArch,
-{
-    pub(crate) fn lifecycle_handlers(&self) -> (DynLifecycleHandler, DynLifecycleHandler) {
-        (self.init_fn.clone(), self.fini_fn.clone())
-    }
-
-    #[inline]
-    pub(crate) fn force_static_tls(&self) -> bool {
-        self.force_static_tls
-    }
-
-    #[inline]
-    pub(crate) fn mapper(&self) -> Mapper {
-        self.mapper.clone()
-    }
-
-    #[inline]
-    pub(crate) fn page_size(&self) -> Result<PageSize> {
-        let required = self.mapper.page_size();
-        let page_size = self.page_size.unwrap_or(required);
-        if page_size.bytes() < required.bytes()
-            || !page_size.bytes().is_multiple_of(required.bytes())
-        {
-            return Err(MmapError::InvalidPageSize {
-                configured: page_size.bytes(),
-                required: required.bytes(),
+    pub(crate) fn create_phdrs(&self, phdrs: &[ElfPhdr<L>]) -> Result<ElfPhdrs<L>> {
+        for phdr in phdrs {
+            if phdr.program_type() != ElfProgramType::PHDR {
+                continue;
             }
-            .into());
+            if let Some(mapped) = self
+                .segments
+                .read_view::<ElfPhdr<L>>(phdr.p_vaddr(), phdr.p_memsz())?
+            {
+                return Ok(ElfPhdrs::Mapped(mapped));
+            }
         }
 
-        Ok(page_size)
-    }
+        let (phdr_start, phdr_end) = self.ehdr.phdr_range();
+        let phdr_size = phdr_end - phdr_start;
+        for phdr in phdrs {
+            if phdr.program_type() != ElfProgramType::LOAD {
+                continue;
+            }
+            let seg_start = phdr.p_offset();
+            let Some(seg_end) = seg_start.checked_add(phdr.p_filesz()) else {
+                continue;
+            };
+            if seg_start <= phdr_start && phdr_end <= seg_end {
+                let Some(phdr_vaddr) = phdr.p_vaddr().checked_add(phdr_start - seg_start) else {
+                    continue;
+                };
+                if let Some(mapped) = self
+                    .segments
+                    .read_view::<ElfPhdr<L>>(phdr_vaddr, phdr_size)?
+                {
+                    return Ok(ElfPhdrs::Mapped(mapped));
+                }
+            }
+        }
 
-    #[inline]
-    pub(crate) fn initialize_dynamic(&mut self, dynamic: &mut RawDynamic<D, Arch>) -> Result<()> {
-        (self.dynamic_initializer)(dynamic)
+        Ok(ElfPhdrs::Vec(Vec::from(phdrs)))
     }
 }
 

@@ -181,8 +181,8 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
     }
 
     #[inline]
-    pub(crate) fn segment_slice(&self, offset: usize, len: usize) -> Option<&[u8]> {
-        self.source.segment_slice(offset, len)
+    pub(crate) fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<bool> {
+        self.source.read_segment(offset, dst)
     }
 }
 

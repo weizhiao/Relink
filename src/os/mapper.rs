@@ -1,6 +1,8 @@
 use core::{ffi::c_void, ops::Deref};
 
-use super::{MadviseAdvice, MapFlags, Mmap, ProtFlags};
+use super::{
+    MadviseAdvice, MapFlags, MappedRegion, MappedRegionControl, Mmap, MmapResult, ProtFlags,
+};
 use crate::{Result, sync::Arc};
 use alloc::boxed::Box;
 
@@ -38,6 +40,23 @@ impl Deref for Mapper {
     }
 }
 
+impl MappedRegionControl for Mapper {
+    #[inline]
+    unsafe fn munmap(&self, addr: *mut c_void, len: usize) -> Result<()> {
+        unsafe { self.0.munmap(addr, len) }
+    }
+
+    #[inline]
+    unsafe fn madvise(&self, addr: *mut c_void, len: usize, behavior: MadviseAdvice) -> Result<()> {
+        unsafe { self.0.madvise(addr, len, behavior) }
+    }
+
+    #[inline]
+    unsafe fn mprotect(&self, addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
+        unsafe { self.0.mprotect(addr, len, prot) }
+    }
+}
+
 struct MunmapAdapter<F> {
     munmap: F,
 }
@@ -61,8 +80,7 @@ where
         _flags: MapFlags,
         _offset: usize,
         _fd: Option<isize>,
-        _need_copy: &mut bool,
-    ) -> Result<*mut c_void> {
+    ) -> Result<MmapResult> {
         unreachable!("MunmapAdapter only supports munmap")
     }
 
@@ -72,7 +90,7 @@ where
         _len: usize,
         _prot: ProtFlags,
         _flags: MapFlags,
-    ) -> Result<*mut c_void> {
+    ) -> Result<MappedRegion> {
         unreachable!("MunmapAdapter only supports munmap")
     }
 

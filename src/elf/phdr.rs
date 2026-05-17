@@ -3,6 +3,7 @@
 //! This module contains program-header views and storage used while loading ELF segments.
 
 use super::defs::{ElfLayout, ElfPhdrRaw, ElfProgramFlags, ElfProgramType, NativeElfLayout};
+use crate::os::MappedView;
 use alloc::vec::Vec;
 
 /// ELF program header describing segments to be loaded into memory.
@@ -153,8 +154,8 @@ impl<L: ElfLayout> Clone for ElfPhdr<L> {
 /// Internal representation of ELF program headers
 #[derive(Clone)]
 pub(crate) enum ElfPhdrs<L: ElfLayout = NativeElfLayout> {
-    /// Program headers mapped from memory
-    Mmap(&'static [ElfPhdr<L>]),
+    /// Program headers borrowed from mapped memory
+    Mapped(MappedView<ElfPhdr<L>>),
 
     /// Program headers stored in a vector
     Vec(Vec<ElfPhdr<L>>),
@@ -163,7 +164,7 @@ pub(crate) enum ElfPhdrs<L: ElfLayout = NativeElfLayout> {
 impl<L: ElfLayout> ElfPhdrs<L> {
     pub(crate) fn as_slice(&self) -> &[ElfPhdr<L>] {
         match self {
-            ElfPhdrs::Mmap(phdrs) => phdrs,
+            ElfPhdrs::Mapped(phdrs) => phdrs.as_slice(),
             ElfPhdrs::Vec(phdrs) => phdrs,
         }
     }

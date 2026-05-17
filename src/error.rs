@@ -131,6 +131,8 @@ pub enum MmapError {
         /// Platform error code returned by `madvise`.
         code: u32,
     },
+    /// A mapped-region byte range is outside the region bounds.
+    InvalidMappedRegionRange,
     #[cfg(windows)]
     /// `CreateFileMappingW failed with error: {code}`
     CreateFileMappingW {
@@ -173,6 +175,7 @@ impl Display for MmapError {
             }
             Self::Mprotect { code } => write!(f, "mprotect failed with error: {code}"),
             Self::Madvise { code } => write!(f, "madvise failed with error: {code}"),
+            Self::InvalidMappedRegionRange => f.write_str("mapped region range is out of bounds"),
             #[cfg(windows)]
             Self::CreateFileMappingW { code } => {
                 write!(f, "CreateFileMappingW failed with error: {code}")
@@ -199,6 +202,26 @@ pub enum ParseDynamicError {
         /// Static detail describing why the table is malformed.
         detail: &'static str,
     },
+    /// A symbol hash table described by the dynamic section is malformed.
+    MalformedHashTable {
+        /// Static detail describing why the table is malformed.
+        detail: &'static str,
+    },
+    /// A symbol table described by the dynamic section is malformed.
+    MalformedSymbolTable {
+        /// Static detail describing why the table is malformed.
+        detail: &'static str,
+    },
+    /// A string table described by the dynamic section is malformed.
+    MalformedStringTable {
+        /// Static detail describing why the table is malformed.
+        detail: &'static str,
+    },
+    /// A lifecycle function table described by the dynamic section is malformed.
+    MalformedLifecycleTable {
+        /// Static detail describing why the table is malformed.
+        detail: &'static str,
+    },
 }
 
 impl Display for ParseDynamicError {
@@ -209,6 +232,10 @@ impl Display for ParseDynamicError {
             }
             Self::AddressOverflow => f.write_str("dynamic section address calculation overflowed"),
             Self::MalformedRelocationTable { detail } => f.write_str(detail),
+            Self::MalformedHashTable { detail } => f.write_str(detail),
+            Self::MalformedSymbolTable { detail } => f.write_str(detail),
+            Self::MalformedStringTable { detail } => f.write_str(detail),
+            Self::MalformedLifecycleTable { detail } => f.write_str(detail),
         }
     }
 }

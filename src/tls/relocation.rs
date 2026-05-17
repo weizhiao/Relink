@@ -28,11 +28,18 @@ mod enabled {
     }
 
     #[inline]
-    fn write_tls_word<Arch: RelocationArch>(segments: &ElfSegments, offset: usize, value: usize) {
-        segments.write(
+    fn write_tls_word<Arch: RelocationArch>(
+        segments: &ElfSegments,
+        offset: usize,
+        value: usize,
+    ) -> Result<()>
+    where
+        <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+    {
+        segments.write_value(
             offset,
             RelocValue::new(<Arch::Layout as ElfLayout>::Word::from_usize(value)),
-        );
+        )
     }
 
     pub(crate) fn handle_tls_reloc<D, Arch, PreH, PostH>(
@@ -44,6 +51,7 @@ mod enabled {
         Arch: RelocationArch,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
+        <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
         let r_type = rel.r_type();
         let r_sym = rel.r_symbol();
@@ -59,7 +67,7 @@ mod enabled {
                     let tls_val = RelocValue::new(sym.st_value())
                         .addend(r_addend)
                         .relative_to(Arch::TLS_DTV_OFFSET);
-                    write_tls_word::<Arch>(segments, rel.r_offset(), tls_val.into_inner());
+                    write_tls_word::<Arch>(segments, rel.r_offset(), tls_val.into_inner())?;
                     return Ok(TlsRelocOutcome::Applied);
                 }
                 return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
@@ -77,7 +85,7 @@ mod enabled {
                 let Some(mod_id) = mod_id else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
                 };
-                write_tls_word::<Arch>(segments, rel.r_offset(), mod_id.get());
+                write_tls_word::<Arch>(segments, rel.r_offset(), mod_id.get())?;
                 return Ok(TlsRelocOutcome::Applied);
             }
             value if value == Arch::TPOFF => {
@@ -89,7 +97,7 @@ mod enabled {
                         let tls_val =
                             RelocValue::new((tp_offset.get() + sym.st_value() as isize) as usize)
                                 .addend(r_addend);
-                        write_tls_word::<Arch>(segments, rel.r_offset(), tls_val.into_inner());
+                        write_tls_word::<Arch>(segments, rel.r_offset(), tls_val.into_inner())?;
                         return Ok(TlsRelocOutcome::Applied);
                     }
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsTpOffset));
@@ -112,8 +120,8 @@ mod enabled {
                         let Some(desc) = helper.resolve_tlsdesc_with_emu(rel, request)? else {
                             return Ok(TlsRelocOutcome::Failed(RelocReason::MissingEmulator));
                         };
-                        write_tls_word::<Arch>(segments, rel.r_offset(), desc.resolver());
-                        write_tls_word::<Arch>(segments, rel.r_offset() + 8, desc.arg());
+                        write_tls_word::<Arch>(segments, rel.r_offset(), desc.resolver())?;
+                        write_tls_word::<Arch>(segments, rel.r_offset() + 8, desc.arg())?;
                         return Ok(TlsRelocOutcome::Applied);
                     }
 
@@ -125,8 +133,8 @@ mod enabled {
                             segments,
                             rel.r_offset(),
                             tlsdesc_resolver_static as *const () as usize,
-                        );
-                        write_tls_word::<Arch>(segments, rel.r_offset() + 8, tpoff.into_inner());
+                        )?;
+                        write_tls_word::<Arch>(segments, rel.r_offset() + 8, tpoff.into_inner())?;
                         return Ok(TlsRelocOutcome::Applied);
                     }
 
@@ -147,8 +155,8 @@ mod enabled {
                             segments,
                             rel.r_offset(),
                             tlsdesc_resolver_dynamic as *const () as usize,
-                        );
-                        write_tls_word::<Arch>(segments, rel.r_offset() + 8, arg_ptr.into_inner());
+                        )?;
+                        write_tls_word::<Arch>(segments, rel.r_offset() + 8, arg_ptr.into_inner())?;
                         return Ok(TlsRelocOutcome::Applied);
                     }
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));

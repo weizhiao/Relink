@@ -1,7 +1,7 @@
 use crate::{
     Result,
     input::{ElfReader, Path},
-    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
+    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, ProtFlags},
 };
 use alloc::alloc::{dealloc, handle_alloc_error};
 use core::{alloc::Layout, ffi::c_void, slice::from_raw_parts_mut};
@@ -36,12 +36,13 @@ impl Mmap for DefaultMmap {
         flags: MapFlags,
         _offset: usize,
         _fd: Option<isize>,
-        need_copy: &mut bool,
-    ) -> crate::Result<*mut c_void> {
-        *need_copy = true;
+    ) -> crate::Result<MmapResult> {
         if let Some(addr) = addr {
             let ptr = addr as *mut u8;
-            Ok(ptr as _)
+            Ok(MmapResult::new(
+                MappedRegion::local_alias(ptr as _, len, *self),
+                true,
+            ))
         } else {
             // 只有创建整个空间时会走这条路径
             assert!((MapFlags::MAP_FIXED & flags).bits() == 0);
@@ -53,7 +54,10 @@ impl Mmap for DefaultMmap {
             }
             // use this set prot to test no_mmap
             //libc::mprotect(memory as _, len, crate::mmap::ProtFlags::all().bits());
-            Ok(memory as _)
+            Ok(MmapResult::new(
+                MappedRegion::local(memory as _, len, *self),
+                true,
+            ))
         }
     }
 
@@ -63,11 +67,16 @@ impl Mmap for DefaultMmap {
         len: usize,
         _prot: ProtFlags,
         _flags: MapFlags,
-    ) -> crate::Result<*mut c_void> {
+    ) -> crate::Result<MappedRegion> {
         let ptr = addr as *mut u8;
         let dest = unsafe { from_raw_parts_mut(ptr, len) };
         dest.fill(0);
-        Ok(ptr as _)
+        let region = if _flags.contains(MapFlags::MAP_FIXED) {
+            MappedRegion::local_alias(ptr as _, len, *self)
+        } else {
+            MappedRegion::local(ptr as _, len, *self)
+        };
+        Ok(region)
     }
 
     unsafe fn munmap(&self, addr: *mut c_void, len: usize) -> crate::Result<()> {

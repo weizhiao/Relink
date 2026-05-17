@@ -5,10 +5,12 @@ use super::{
 use crate::{
     RelocationError, Result,
     elf::{
-        ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr, ElfSymbol, ElfSymbolType, SymbolTable,
+        ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr, ElfSymbol, ElfSymbolType, Lifecycle,
+        LifecycleArray, SymbolTable,
     },
     input::PathBuf,
     loader::{DynLifecycleHandler, LoadHook, LoaderInner},
+    os::TargetAddr,
     relocation::{RelocAddr, RelocationArch},
     segment::{ElfSegments, SegmentBuilder},
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
@@ -20,7 +22,7 @@ use core::marker::PhantomData;
 pub(crate) struct ObjectBuilder<Tls, D = (), Arch: RelocationArch = crate::arch::NativeArch> {
     pub(crate) path: PathBuf,
     pub(crate) symtab: SymbolTable<Arch::Layout>,
-    pub(crate) init_array: Option<&'static [fn()]>,
+    pub(crate) init_array: Option<LifecycleArray>,
     pub(crate) init_fn: DynLifecycleHandler,
     pub(crate) fini_fn: DynLifecycleHandler,
     pub(crate) segments: ElfSegments,
@@ -37,7 +39,7 @@ pub(crate) struct ObjectBuilder<Tls, D = (), Arch: RelocationArch = crate::arch:
 struct ObjectSectionData<Arch: RelocationArch> {
     symtab: SymbolTable<Arch::Layout>,
     relocation: ObjectRelocation<Arch>,
-    init_array: Option<&'static [fn()]>,
+    init_array: Option<LifecycleArray>,
 }
 
 impl<T, D, Arch> ObjectBuilder<T, D, Arch>
@@ -132,9 +134,9 @@ where
         relocation_shdr.content()
     }
 
-    fn prepare_init_array(init_array_shdr: &ElfShdr<Arch::Layout>) -> &'static [fn()] {
+    fn prepare_init_array(init_array_shdr: &ElfShdr<Arch::Layout>) -> LifecycleArray {
         let array: &[usize] = init_array_shdr.content_mut();
-        unsafe { core::mem::transmute(array) }
+        Lifecycle::array_from_addrs(array.iter().copied().map(TargetAddr::new))
     }
 
     fn prepare_section_data(

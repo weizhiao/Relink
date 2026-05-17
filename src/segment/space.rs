@@ -1,12 +1,17 @@
 use crate::{
-    os::Mapper,
+    ByteRepr, Result,
+    os::{MappedRegion, MappedView, TargetAddr},
     relocation::{RelocAddr, RelocValue},
     sync::Arc,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{ffi::c_void, fmt::Debug, mem::size_of, ptr::NonNull};
+use core::{
+    fmt::Debug,
+    mem::{MaybeUninit, size_of},
+    ptr::NonNull,
+};
 
-use super::{MappedRegion, MappedSlice};
+use super::MappedSlice;
 
 /// The mapped memory of an ELF object.
 ///
@@ -52,15 +57,10 @@ impl ElfSegments {
 
     /// Create a new contiguous [`ElfSegments`] instance whose mapped bytes begin
     /// at the module-relative `offset`.
-    pub(crate) fn new(
-        memory: *mut c_void,
-        len: usize,
-        mapper: Mapper,
-        base: usize,
-        offset: usize,
-    ) -> Self {
-        let region = Arc::new(MappedRegion::new(memory, len, mapper));
-        let slice = MappedSlice::new(offset, len, region);
+    pub(crate) fn new(region: MappedRegion, base: usize, offset: usize) -> Self {
+        let len = region.len();
+        let region = Arc::new(region);
+        let slice = MappedSlice::new(offset, len, 0, region);
         Self {
             base,
             slices: alloc::vec![slice].into_boxed_slice(),
@@ -87,12 +87,8 @@ impl ElfSegments {
     }
 
     /// Creates one shared mapped region owner.
-    pub(crate) fn create_region(
-        memory: *mut c_void,
-        len: usize,
-        mapper: Mapper,
-    ) -> Arc<MappedRegion> {
-        Arc::new(MappedRegion::new(memory, len, mapper))
+    pub(crate) fn create_region(region: MappedRegion) -> Arc<MappedRegion> {
+        Arc::new(region)
     }
 
     /// Creates one mapped slice descriptor covered by a shared region.
@@ -100,9 +96,10 @@ impl ElfSegments {
     pub(crate) fn create_slice(
         offset: usize,
         len: usize,
+        region_offset: usize,
         region: Arc<MappedRegion>,
     ) -> MappedSlice {
-        MappedSlice::new(offset, len, region)
+        MappedSlice::new(offset, len, region_offset, region)
     }
 
     /// Rebinds the module base address while preserving the existing slice layout.
@@ -114,10 +111,10 @@ impl ElfSegments {
     /// Returns the first mapped region, when this object owns one.
     #[inline]
     #[cfg(windows)]
-    pub(crate) fn primary_region(&self) -> Option<(*mut c_void, usize)> {
+    pub(crate) fn primary_region(&self) -> Option<(*mut core::ffi::c_void, usize)> {
         self.slices
             .first()
-            .map(|slice| (slice.region.memory, slice.region.len))
+            .map(|slice| (slice.region.addr().as_mut_ptr(), slice.region.len()))
     }
 
     /// Returns whether no slices are mapped.
@@ -162,58 +159,125 @@ impl ElfSegments {
             .all(|pair| self.slice_end(&pair[0]) == self.slice_base(&pair[1]))
     }
 
-    /// Gets a slice from the mapped memory.
     #[inline]
-    pub(crate) fn get_slice<T>(&self, start: usize, len: usize) -> &'static [T] {
-        if len == 0 {
-            return unsafe { core::slice::from_raw_parts(NonNull::<T>::dangling().as_ptr(), 0) };
-        }
-        let byte_len = len;
-        assert!(
-            self.find_slice(start, byte_len).is_some(),
-            "ELF segment range is not fully backed by one mapped slice",
-        );
-        unsafe { core::slice::from_raw_parts(self.get_ptr::<T>(start), len / size_of::<T>()) }
+    fn runtime_slice(&self, start: usize, len: usize) -> &MappedSlice {
+        self.find_slice(start, len)
+            .expect("ELF segment range is not fully backed by one mapped slice")
     }
 
-    /// Gets a mutable slice from the mapped memory.
     #[inline]
-    pub(crate) fn get_slice_mut<T>(&self, start: usize, len: usize) -> &'static mut [T] {
-        if len == 0 {
-            return unsafe {
-                core::slice::from_raw_parts_mut(NonNull::<T>::dangling().as_ptr(), 0)
-            };
-        }
-        let byte_len = len;
-        assert!(
-            self.find_slice(start, byte_len).is_some(),
-            "ELF segment range is not fully backed by one mapped slice",
-        );
+    fn region_offset(slice: &MappedSlice, start: usize) -> usize {
+        slice
+            .region_offset(start)
+            .expect("ELF segment range precedes mapped slice")
+    }
+
+    #[inline]
+    fn runtime_addr(&self, start: usize, len: usize) -> TargetAddr {
+        let slice = self.runtime_slice(start, len);
+        slice
+            .region
+            .addr()
+            .wrapping_add(Self::region_offset(slice, start))
+    }
+
+    #[inline]
+    pub(crate) fn write_bytes(&self, start: usize, src: &[u8]) -> Result<()> {
+        let slice = self.runtime_slice(start, src.len());
         unsafe {
-            core::slice::from_raw_parts_mut(self.get_mut_ptr::<T>(start), len / size_of::<T>())
+            slice
+                .region
+                .write_bytes_unchecked(Self::region_offset(slice, start), src)
         }
     }
 
-    /// Gets a pointer from the mapped memory.
     #[inline]
-    pub(crate) fn get_ptr<T>(&self, offset: usize) -> *const T {
-        assert!(
-            self.find_slice(offset, size_of::<T>()).is_some() || size_of::<T>() == 0,
-            "ELF segment pointer is not backed by a mapped slice",
-        );
-        self.base_addr().offset(offset).as_ptr()
+    pub(crate) fn zero_bytes(&self, start: usize, len: usize) -> Result<()> {
+        let slice = self.runtime_slice(start, len);
+        unsafe {
+            slice
+                .region
+                .zero_bytes_unchecked(Self::region_offset(slice, start), len)
+        }
     }
 
-    /// Gets a mutable pointer from the mapped memory.
     #[inline]
-    pub(crate) fn get_mut_ptr<T>(&self, offset: usize) -> *mut T {
-        self.get_ptr::<T>(offset) as *mut T
+    pub(crate) fn read_bytes(&self, start: usize, dst: &mut [u8]) -> Result<()> {
+        let slice = self.runtime_slice(start, dst.len());
+        unsafe {
+            slice
+                .region
+                .read_bytes_unchecked(Self::region_offset(slice, start), dst)
+        }
     }
 
-    /// Writes a value into the mapped memory.
     #[inline]
-    pub(crate) fn write<T>(&self, r_offset: usize, val: RelocValue<T>) {
-        unsafe { self.get_mut_ptr::<T>(r_offset).write(val.into_inner()) };
+    pub(crate) fn read_view<T: ByteRepr + 'static>(
+        &self,
+        start: usize,
+        byte_len: usize,
+    ) -> Result<Option<MappedView<T>>> {
+        let slice = self.runtime_slice(start, byte_len);
+        MappedView::read_region(
+            &slice.region,
+            Self::region_offset(slice, start),
+            self.runtime_addr(start, byte_len),
+            byte_len,
+        )
+    }
+
+    #[inline]
+    pub(crate) fn borrowed_ptr<T: ByteRepr + 'static>(
+        &self,
+        start: usize,
+        byte_len: usize,
+    ) -> Result<Option<NonNull<T>>> {
+        Ok(self
+            .read_view::<T>(start, byte_len)?
+            .and_then(|view| view.as_slice().first().map(NonNull::from)))
+    }
+
+    #[inline]
+    pub(crate) fn write_value<T: ByteRepr>(
+        &self,
+        r_offset: usize,
+        val: RelocValue<T>,
+    ) -> Result<()> {
+        let value = val.into_inner();
+        let bytes = unsafe {
+            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
+        };
+        let slice = self.runtime_slice(r_offset, bytes.len());
+        unsafe {
+            slice
+                .region
+                .write_bytes_unchecked(Self::region_offset(slice, r_offset), bytes)
+        }
+    }
+
+    #[inline]
+    pub(crate) fn update_value<T: ByteRepr + Copy>(
+        &self,
+        r_offset: usize,
+        update: impl FnOnce(T) -> T,
+    ) -> Result<()> {
+        if size_of::<T>() == 0 {
+            return Ok(());
+        }
+
+        let slice = self.runtime_slice(r_offset, size_of::<T>());
+        let region_offset = Self::region_offset(slice, r_offset);
+        let mut value = MaybeUninit::<T>::uninit();
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
+        };
+        unsafe {
+            slice.region.read_bytes_unchecked(region_offset, bytes)?;
+            let value = update(value.assume_init());
+            let bytes =
+                core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>());
+            slice.region.write_bytes_unchecked(region_offset, bytes)
+        }
     }
 
     /// Gets the base address of the mapped memory.

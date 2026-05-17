@@ -577,7 +577,7 @@ where
             }
             Materialization::WholeDsoRegion => {
                 let mut raw = self.loader.load_scanned_dynamic(scanned)?;
-                apply_section_overrides(&mut raw, module_id, plan);
+                apply_section_overrides(&mut raw, module_id, plan)?;
                 Ok(raw)
             }
         }
@@ -867,9 +867,10 @@ fn apply_section_overrides<D, Arch: RelocationArch>(
     raw: &mut RawDynamic<D, Arch>,
     module_id: ModuleId,
     plan: &MemoryLayoutPlan,
-) {
+) -> Result<()> {
     let module = plan.module(module_id);
-    let segments = raw.core_ref().segments();
+    let core = raw.core_ref();
+    let segments = core.segments();
 
     for section_id in module.alloc_sections().iter().copied() {
         if !plan.section_is_override(section_id) {
@@ -879,14 +880,14 @@ fn apply_section_overrides<D, Arch: RelocationArch>(
         let data = plan
             .data(section_id)
             .expect("missing section data for planned override");
-        let dst = segments.get_slice_mut::<u8>(metadata.source_address(), metadata.size());
         assert_eq!(
             data.len(),
-            dst.len(),
+            metadata.size(),
             "planned section override size does not match the loaded section"
         );
-        dst.copy_from_slice(data.as_ref());
+        segments.write_bytes(metadata.source_address(), data.as_ref())?;
     }
+    Ok(())
 }
 
 #[inline]

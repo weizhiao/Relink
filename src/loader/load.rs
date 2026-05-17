@@ -1,23 +1,20 @@
 use super::{LoadHook, Loader};
 use crate::{
-    ParseEhdrError, ParsePhdrError, Result,
-    elf::{ElfDyn, ElfFileType, ElfHeader, ElfPhdr, ElfPhdrs, ElfProgramType},
+    ByteRepr, ParseEhdrError, ParsePhdrError, Result,
+    elf::{ElfDyn, ElfFileType, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType},
     image::{
         RawDylib, RawDynamic, RawDynamicParts, RawElf, RawExec, ScannedDynamic,
         ScannedDynamicLoadParts, ScannedElf, ScannedExec,
     },
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
-    os::Mapper,
+    os::MappedRegion,
     relocation::{RelocAddr, RelocationArch},
     segment::{ELFRelro, ElfSegments, program::parse_segments},
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
-use core::{
-    ffi::{CStr, c_char, c_void},
-    ptr::NonNull,
-};
+use core::{ffi::c_void, ptr::NonNull};
 
 impl<H, D, Tls, Arch> Loader<H, D, Tls, Arch>
 where
@@ -313,11 +310,9 @@ where
         let mapper = self.mapper();
         let page_size = self.inner.page_size()?.bytes();
         let layout = parse_segments(&phdrs, true, page_size)?;
-        let memory = load_bias.wrapping_add(layout.min_vaddr) as *mut c_void;
+        let mapped_memory = load_bias.wrapping_add(layout.min_vaddr) as *mut c_void;
         let segments = ElfSegments::new(
-            memory,
-            layout.mapped_len,
-            Mapper::from_munmap(|_, _| Ok(())),
+            MappedRegion::local_alias(mapped_memory, layout.mapped_len, mapper.clone()),
             load_bias,
             layout.min_vaddr,
         );
@@ -458,7 +453,7 @@ where
     D: 'static,
     Arch: RelocationArch,
 {
-    let mut dynamic_ptr = None;
+    let mut dynamic = None;
     let mut interp = None;
     let mut eh_frame_hdr = None;
     let mut tls_info = None;
@@ -467,29 +462,29 @@ where
     for phdr in phdrs {
         match phdr.program_type() {
             ElfProgramType::DYNAMIC => {
-                dynamic_ptr = NonNull::new(
-                    load_bias.wrapping_add(phdr.p_vaddr()) as *mut ElfDyn<Arch::Layout>
-                );
+                dynamic = Some(read_segment_view::<_, ElfDyn<Arch::Layout>>(
+                    &segments,
+                    phdr,
+                    "PT_DYNAMIC is not directly readable from mapped segments",
+                )?);
             }
             ElfProgramType::INTERP => {
-                let ptr = load_bias.wrapping_add(phdr.p_vaddr()) as *const c_char;
-                interp = Some(
-                    unsafe { CStr::from_ptr(ptr) }
-                        .to_str()
-                        .map_err(|_| ParsePhdrError::InvalidUtf8 { field: "PT_INTERP" })?,
-                );
+                interp = Some(read_borrowed_interp(&segments, phdr)?);
             }
             ElfProgramType::GNU_EH_FRAME => {
-                eh_frame_hdr = NonNull::new(load_bias.wrapping_add(phdr.p_vaddr()) as *mut u8);
+                eh_frame_hdr = Some(borrowed_segment_ptr::<_, u8>(
+                    &segments,
+                    phdr,
+                    "PT_GNU_EH_FRAME is not directly readable from mapped segments",
+                )?);
             }
             ElfProgramType::TLS => {
-                let image = unsafe {
-                    core::slice::from_raw_parts(
-                        load_bias.wrapping_add(phdr.p_vaddr()) as *const u8,
-                        phdr.p_filesz(),
-                    )
-                };
-                tls_info = Some(crate::tls::TlsInfo::new(phdr, image));
+                let image = segments
+                    .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
+                    .ok_or(crate::ParsePhdrError::malformed(
+                        "PT_TLS image is malformed",
+                    ))?;
+                tls_info = Some(crate::tls::TlsInfo::new(phdr, image.as_slice()));
             }
             ElfProgramType::GNU_RELRO => {
                 relro = Some(ELFRelro::new(
@@ -503,7 +498,7 @@ where
         }
     }
 
-    let dynamic_ptr = dynamic_ptr.ok_or(ParsePhdrError::MissingDynamicSection)?;
+    let dynamic = dynamic.ok_or(ParsePhdrError::MissingDynamicSection)?;
     let (init_fn, fini_fn) = lifecycle_handlers;
 
     Ok(RawDynamicParts {
@@ -511,7 +506,7 @@ where
         entry: RelocAddr::new(entry),
         interp,
         phdrs: ElfPhdrs::Vec(Vec::from(phdrs)),
-        dynamic_ptr,
+        dynamic,
         eh_frame_hdr,
         tls_info,
         force_static_tls,
@@ -521,6 +516,60 @@ where
         fini_fn,
         user_data,
     })
+}
+
+#[inline]
+fn read_segment_view<L, T>(
+    segments: &ElfSegments,
+    phdr: &ElfPhdr<L>,
+    detail: &'static str,
+) -> Result<crate::os::MappedView<T>>
+where
+    L: ElfLayout,
+    T: ByteRepr + 'static,
+{
+    let view = segments
+        .read_view::<T>(phdr.p_vaddr(), phdr.p_filesz())?
+        .ok_or_else(|| ParsePhdrError::malformed(detail))?;
+    if view.is_empty() {
+        return Err(ParsePhdrError::malformed(detail).into());
+    }
+    Ok(view)
+}
+
+#[inline]
+fn borrowed_segment_ptr<L, T>(
+    segments: &ElfSegments,
+    phdr: &ElfPhdr<L>,
+    detail: &'static str,
+) -> Result<NonNull<T>>
+where
+    L: ElfLayout,
+    T: ByteRepr + 'static,
+{
+    segments
+        .borrowed_ptr::<T>(phdr.p_vaddr(), phdr.p_filesz())?
+        .ok_or_else(|| ParsePhdrError::malformed(detail).into())
+}
+
+fn read_borrowed_interp<L>(segments: &ElfSegments, phdr: &ElfPhdr<L>) -> Result<&'static str>
+where
+    L: ElfLayout,
+{
+    let view = segments
+        .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
+        .ok_or_else(|| {
+            ParsePhdrError::malformed("PT_INTERP is not directly readable from mapped segments")
+        })?;
+    let bytes = view.as_slice();
+    let Some(nul) = bytes.iter().position(|byte| *byte == 0) else {
+        return Err(ParsePhdrError::malformed("PT_INTERP is missing a NUL terminator").into());
+    };
+    if nul == 0 {
+        return Err(ParsePhdrError::malformed("PT_INTERP is empty").into());
+    }
+    core::str::from_utf8(&bytes[..nul])
+        .map_err(|_| ParsePhdrError::InvalidUtf8 { field: "PT_INTERP" }.into())
 }
 
 #[cfg(test)]

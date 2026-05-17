@@ -1,6 +1,6 @@
 use super::{DynLifecycleHandler, LifecycleHandler, LoadHook};
 use crate::{
-    Result,
+    MmapError, Result,
     arch::NativeArch,
     elf::Lifecycle,
     image::RawDynamic,
@@ -52,6 +52,49 @@ pub(crate) struct LoaderInner<H, D: 'static, Arch: RelocationArch> {
     pub(crate) dynamic_initializer: Box<dyn FnMut(&mut RawDynamic<D, Arch>) -> Result<()>>,
 }
 
+impl<H, D, Arch> LoaderInner<H, D, Arch>
+where
+    H: LoadHook<Arch::Layout>,
+    D: 'static,
+    Arch: RelocationArch,
+{
+    pub(crate) fn lifecycle_handlers(&self) -> (DynLifecycleHandler, DynLifecycleHandler) {
+        (self.init_fn.clone(), self.fini_fn.clone())
+    }
+
+    #[inline]
+    pub(crate) fn force_static_tls(&self) -> bool {
+        self.force_static_tls
+    }
+
+    #[inline]
+    pub(crate) fn mapper(&self) -> Mapper {
+        self.mapper.clone()
+    }
+
+    #[inline]
+    pub(crate) fn page_size(&self) -> Result<PageSize> {
+        let required = self.mapper.page_size();
+        let page_size = self.page_size.unwrap_or(required);
+        if page_size.bytes() < required.bytes()
+            || !page_size.bytes().is_multiple_of(required.bytes())
+        {
+            return Err(MmapError::InvalidPageSize {
+                configured: page_size.bytes(),
+                required: required.bytes(),
+            }
+            .into());
+        }
+
+        Ok(page_size)
+    }
+
+    #[inline]
+    pub(crate) fn initialize_dynamic(&mut self, dynamic: &mut RawDynamic<D, Arch>) -> Result<()> {
+        (self.dynamic_initializer)(dynamic)
+    }
+}
+
 impl Loader<(), (), (), NativeArch> {
     /// Creates a new [`Loader`] with the default mmap backend, no hook, no custom
     /// user data, no TLS resolver, and the host target architecture
@@ -63,19 +106,16 @@ impl Loader<(), (), (), NativeArch> {
     /// then validates against `NewArch::MACHINE` automatically.
     pub fn new() -> Self {
         let c_abi: DynLifecycleHandler = Arc::new(Box::new(|ctx: &Lifecycle<'_>| {
-            ctx.func()
-                .iter()
-                .chain(ctx.func_array().unwrap_or(&[]).iter())
-                .for_each(|init| {
-                    #[cfg(not(windows))]
-                    unsafe {
-                        core::mem::transmute::<_, &extern "C" fn()>(init)()
-                    };
-                    #[cfg(windows)]
-                    unsafe {
-                        core::mem::transmute::<_, &extern "sysv64" fn()>(init)()
-                    };
-                })
+            ctx.func_addrs().for_each(|addr| {
+                #[cfg(not(windows))]
+                unsafe {
+                    core::mem::transmute::<usize, extern "C" fn()>(addr)()
+                };
+                #[cfg(windows)]
+                unsafe {
+                    core::mem::transmute::<usize, extern "sysv64" fn()>(addr)()
+                };
+            })
         }));
         Self {
             buf: super::ElfBuf::new(),

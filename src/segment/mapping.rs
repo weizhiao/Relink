@@ -1,6 +1,7 @@
 use crate::input::ElfReader;
 use crate::os::{MapFlags, Mapper, Mmap, ProtFlags};
 use crate::{Result, logging};
+use alloc::vec::Vec;
 
 use super::{Address, ElfSegment, ElfSegments, roundup};
 
@@ -37,14 +38,13 @@ impl ElfSegment {
     /// * `Ok(())` - If mapping succeeds
     /// * `Err(Error)` - If mapping fails
     fn mmap_segment(&mut self, mapper: &dyn Mmap, object: &mut impl ElfReader) -> Result<()> {
-        let mut need_copy = false;
         let len = self.len;
         let addr = self.addr.absolute_addr();
         let prot = self.mapping_prot();
 
         debug_assert!(len.is_multiple_of(self.page_size));
 
-        if self.map_info.len() == 1 {
+        let mapped = if self.map_info.len() == 1 {
             debug_assert!(self.map_info[0].offset.is_multiple_of(self.page_size));
             unsafe {
                 mapper.mmap(
@@ -54,11 +54,10 @@ impl ElfSegment {
                     self.flags,
                     self.map_info[0].offset,
                     object.as_fd(),
-                    &mut need_copy,
                 )
             }?
         } else {
-            unsafe { mapper.mmap(Some(addr), len, prot, self.flags, 0, None, &mut need_copy) }?
+            unsafe { mapper.mmap(Some(addr), len, prot, self.flags, 0, None) }?
         };
 
         logging::trace!(
@@ -70,7 +69,7 @@ impl ElfSegment {
             self.map_info
         );
 
-        self.need_copy = need_copy;
+        self.need_copy = mapped.needs_copy();
         Ok(())
     }
 
@@ -85,13 +84,20 @@ impl ElfSegment {
     /// # Returns
     /// * `Ok(())` - If copying succeeds
     /// * `Err(Error)` - If copying fails
-    fn copy_data(&self, object: &mut impl ElfReader) -> Result<()> {
+    fn copy_data(&self, space: &ElfSegments, object: &mut impl ElfReader) -> Result<()> {
         if self.need_copy {
-            let ptr = self.addr.absolute_addr() as *mut u8;
+            const COPY_CHUNK_SIZE: usize = 64 * 1024;
+
+            let segment_start = self.addr.absolute_addr() - space.base();
+            let mut scratch = Vec::new();
             for info in &self.map_info {
-                unsafe {
-                    let dest = core::slice::from_raw_parts_mut(ptr.add(info.start), info.filesz);
-                    object.read(dest, info.offset)?;
+                let mut copied = 0;
+                while copied < info.filesz {
+                    let copy_len = (info.filesz - copied).min(COPY_CHUNK_SIZE);
+                    scratch.resize(copy_len, 0);
+                    object.read(&mut scratch, info.offset + copied)?;
+                    space.write_bytes(segment_start + info.start + copied, &scratch)?;
+                    copied += copy_len;
                 }
             }
         }
@@ -133,15 +139,12 @@ impl ElfSegment {
     /// # Returns
     /// * `Ok(())` - If filling succeeds
     /// * `Err(Error)` - If filling fails
-    fn fill_zero(&self, mapper: &dyn Mmap) -> Result<()> {
+    fn fill_zero(&self, mapper: &dyn Mmap, space: &ElfSegments) -> Result<()> {
         if self.zero_size > 0 {
             let zero_start = self.addr.absolute_addr() + self.content_size;
             let zero_end = roundup(zero_start, self.page_size);
             let write_len = zero_end - zero_start;
-            let ptr = zero_start as *mut u8;
-            unsafe {
-                ptr.write_bytes(0, write_len);
-            };
+            space.zero_bytes(zero_start - space.base(), write_len)?;
 
             if write_len < self.zero_size {
                 let zero_mmap_addr = zero_end;
@@ -240,8 +243,8 @@ pub(crate) trait SegmentBuilder {
                 last_addr = addr + len;
             }
             segment.mmap_segment(mapper.as_ref(), object)?;
-            segment.copy_data(object)?;
-            segment.fill_zero(mapper.as_ref())?;
+            segment.copy_data(&space, object)?;
+            segment.fill_zero(mapper.as_ref(), &space)?;
         }
         Ok(space)
     }

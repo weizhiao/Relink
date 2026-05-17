@@ -50,7 +50,7 @@ Use `Loader::load()` when you want automatic ELF type detection. Use `load_dylib
 | Isolated link contexts | Multiple `LinkContext`s keep independent module stores, dependency graphs, and symbol scopes |
 | Scan-first planning | Scan dependencies and sections first, then adjust layout, materialization, or section data before mapping |
 | Dynamic link-time optimization | With `--emit-relocs`, reorder sections, pack hot code, and run custom passes |
-| Replaceable mapping backend | Plug in platform-specific mmap, permission, page-size, or huge-page policies |
+| Replaceable mapping backend | Plug in platform-specific mmap backends whose mapped regions define read/write/borrow behavior, permissions, page size, and huge-page policy |
 | Type-safe symbol access | Symbol handles are tied to the lifetime of their loaded image, reducing dangling-symbol risks |
 | Hybrid linking | Compose `.so`, executable images, and feature-gated `.o` / `ET_REL` inputs |
 
@@ -62,7 +62,7 @@ Use `Loader::load()` when you want automatic ELF type detection. Use `load_dylib
 | `ET_REL` loading | ✅ Feature-gated | ❌ |
 | Pre-link planning | ✅ Dependencies / sections / mapping strategy | ❌ |
 | Dynamic link-time optimization | ✅ Section reordering / hot-code packing / custom passes | ❌ |
-| Mapping policy | ✅ Replaceable mmap backend, page size, and huge-page policy | ❌ |
+| Mapping policy | ✅ Replaceable mmap backend, mapped-region access model, page size, and huge-page policy | ❌ |
 | Dependency and symbol policy | ✅ Dependency graph / scope / lookup / interception control | ❌ |
 | Context isolation | ✅ Multiple `LinkContext`s isolate dependency graphs and symbol scopes | ❌ |
 | Heterogeneous loading | ✅ Different ELF layouts / ABIs / target architectures | ❌ |
@@ -123,7 +123,7 @@ fn main() -> Result<()> {
 | Runtime dependency linking | `Linker::load()` | Use `KeyResolver` and `LinkContext` to manage dependency graphs, scopes, and context isolation |
 | Scan-first linking | `Linker::load_scan_first()` | Discover `DT_NEEDED` dependencies first, then run layout passes, choose materialization policy, and relocate as one group |
 | Relocatable objects | `Loader::load_object()` | Compose `.o` and `.so` inputs at runtime; requires the `object` feature |
-| Custom mapping environment | `Loader::with_mmap(mapper)` / `with_page_size()` | Plug in custom mmap, permission, page-size, or huge-page policies |
+| Custom mapping environment | `Loader::with_mmap(mapper)` / `with_page_size()` | Plug in custom mmap backends returning `MappedRegion`/`MmapResult` values with region-controlled access, permission, page-size, or huge-page policies |
 
 ## Advanced Capability Index
 

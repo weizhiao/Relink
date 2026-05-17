@@ -1,7 +1,11 @@
-use crate::elf::{ElfLayout, ElfPhdr, ElfProgramType};
+use crate::{
+    elf::{ElfLayout, ElfPhdr, ElfProgramType},
+    sync::Arc,
+};
+use alloc::boxed::Box;
 
 /// Information about a TLS segment from ELF headers.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone)]
 pub struct TlsInfo {
     /// Virtual address of the TLS template in the ELF file.
     pub vaddr: usize,
@@ -12,7 +16,20 @@ pub struct TlsInfo {
     /// Alignment requirement of the TLS block.
     pub align: usize,
     /// The initial TLS data (template).
-    pub image: &'static [u8],
+    image: Arc<Box<[u8]>>,
+}
+
+impl Default for TlsInfo {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            vaddr: 0,
+            filesz: 0,
+            memsz: 0,
+            align: 0,
+            image: Arc::new(Box::default()),
+        }
+    }
 }
 
 impl core::fmt::Debug for TlsInfo {
@@ -22,22 +39,33 @@ impl core::fmt::Debug for TlsInfo {
             .field("filesz", &self.filesz)
             .field("memsz", &self.memsz)
             .field("align", &self.align)
-            .field("image_len", &self.image.len())
+            .field("image_len", &self.image().len())
             .finish()
     }
 }
 
 impl TlsInfo {
     /// Creates a new `TlsInfo` from an ELF program header.
-    pub fn new<L: ElfLayout>(phdr: &ElfPhdr<L>, image: &'static [u8]) -> Self {
+    pub fn new<L: ElfLayout>(phdr: &ElfPhdr<L>, image: impl Into<Box<[u8]>>) -> Self {
         assert_eq!(phdr.program_type(), ElfProgramType::TLS);
         Self {
             vaddr: phdr.p_vaddr(),
             filesz: phdr.p_filesz(),
             memsz: phdr.p_memsz(),
             align: phdr.p_align(),
-            image,
+            image: Arc::new(image.into()),
         }
+    }
+
+    /// Returns the initial TLS image.
+    #[inline]
+    pub fn image(&self) -> &[u8] {
+        self.image.as_ref().as_ref()
+    }
+
+    #[inline]
+    pub(crate) fn image_arc(&self) -> Arc<Box<[u8]>> {
+        self.image.clone()
     }
 }
 

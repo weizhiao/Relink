@@ -1,6 +1,6 @@
 use crate::{
     Result, TlsError, logging,
-    sync::{AtomicUsize, Ordering},
+    sync::{Arc, AtomicUsize, Ordering},
     tls::{TlsIndex, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{
@@ -23,7 +23,7 @@ struct ModuleSlot {
 /// Stores the static TLS template information for a loaded ELF module.
 #[derive(Debug, Clone)]
 struct ModuleTlsTemplate {
-    image: &'static [u8],
+    image: Arc<Box<[u8]>>,
     memsz: usize,
     align: usize,
     tp_offset: Option<TlsTpOffset>,
@@ -60,7 +60,7 @@ fn register_module(tls_info: &TlsInfo, tp_offset: Option<TlsTpOffset>) -> TlsMod
     }
 
     let template = ModuleTlsTemplate {
-        image: tls_info.image,
+        image: tls_info.image_arc(),
         memsz: tls_info.memsz,
         align: tls_info.align,
         tp_offset,
@@ -239,9 +239,10 @@ impl ThreadDtv {
         // Initialize memory (Copy image + Zero BSS)
         unsafe {
             let slice = core::slice::from_raw_parts_mut(ptr, template.memsz);
-            let image_len = template.image.len();
+            let image = template.image.as_ref().as_ref();
+            let image_len = image.len();
             // Copy initialized data
-            slice[..image_len].copy_from_slice(template.image);
+            slice[..image_len].copy_from_slice(image);
             // Zero initialize remaining part (BSS)
             slice[image_len..].fill(0);
         }

@@ -1,6 +1,8 @@
 use core::ffi::c_void;
 
-use super::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
+use super::{
+    MadviseAdvice, MapFlags, MappedRegion, MappedRegionControl, MmapResult, PageSize, ProtFlags,
+};
 use crate::Result;
 
 /// A trait for low-level memory mapping operations.
@@ -28,8 +30,7 @@ use crate::Result;
 ///         flags: MapFlags,
 ///         offset: usize,
 ///         fd: Option<isize>,
-///         need_copy: &mut bool,
-///     ) -> Result<*mut c_void> {
+///     ) -> Result<MmapResult> {
 ///         // Platform-specific implementation
 ///         todo!()
 ///     }
@@ -61,10 +62,8 @@ pub trait Mmap: Send + Sync + 'static {
     /// * `flags` - Mapping configuration (private, fixed address, anonymous).
     /// * `offset` - File offset for file-backed mappings (must be page-aligned).
     /// * `fd` - File descriptor for file-backed mappings, or `None` for anonymous.
-    /// * `need_copy` - Set to `true` if the implementation needs to copy data.
-    ///
     /// # Returns
-    /// A pointer to the mapped memory region on success.
+    /// A mapped region on success.
     ///
     /// # Safety
     /// This function manipulates the process's address space. Ensure:
@@ -79,8 +78,7 @@ pub trait Mmap: Send + Sync + 'static {
         flags: MapFlags,
         offset: usize,
         fd: Option<isize>,
-        need_copy: &mut bool,
-    ) -> Result<*mut c_void>;
+    ) -> Result<MmapResult>;
 
     /// Creates an anonymous memory mapping.
     ///
@@ -94,7 +92,7 @@ pub trait Mmap: Send + Sync + 'static {
     /// * `flags` - Mapping configuration flags.
     ///
     /// # Returns
-    /// A pointer to the allocated memory region on success.
+    /// A mapped anonymous region on success.
     ///
     /// # Safety
     /// Manipulates address space. Ensure `addr` is valid and page-aligned if specified.
@@ -104,7 +102,7 @@ pub trait Mmap: Send + Sync + 'static {
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> Result<*mut c_void>;
+    ) -> Result<MappedRegion>;
 
     /// Unmaps a memory region, releasing the associated resources.
     ///
@@ -176,7 +174,7 @@ pub trait Mmap: Send + Sync + 'static {
     /// * `_use_file` - Hint whether the region will be file-backed (may be ignored).
     ///
     /// # Returns
-    /// A pointer to the reserved region on success.
+    /// A reserved mapped region on success.
     ///
     /// # Safety
     /// Manipulates address space. The reserved region should not be accessed until properly mapped.
@@ -185,8 +183,7 @@ pub trait Mmap: Send + Sync + 'static {
         addr: Option<usize>,
         len: usize,
         _use_file: bool,
-    ) -> Result<*mut c_void> {
-        let mut need_copy = false;
+    ) -> Result<MappedRegion> {
         // Reserve address space with PROT_NONE (no physical memory committed)
         unsafe {
             self.mmap(
@@ -196,8 +193,25 @@ pub trait Mmap: Send + Sync + 'static {
                 MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS,
                 0,
                 None,
-                &mut need_copy,
             )
+            .map(MmapResult::into_region)
         }
+    }
+}
+
+impl<T: Mmap> MappedRegionControl for T {
+    #[inline]
+    unsafe fn munmap(&self, addr: *mut c_void, len: usize) -> Result<()> {
+        unsafe { Mmap::munmap(self, addr, len) }
+    }
+
+    #[inline]
+    unsafe fn madvise(&self, addr: *mut c_void, len: usize, behavior: MadviseAdvice) -> Result<()> {
+        unsafe { Mmap::madvise(self, addr, len, behavior) }
+    }
+
+    #[inline]
+    unsafe fn mprotect(&self, addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
+        unsafe { Mmap::mprotect(self, addr, len, prot) }
     }
 }

@@ -1,7 +1,7 @@
 use crate::{
     IoError, MmapError, Result,
     input::{ElfReader, Path, PathBuf},
-    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
+    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, PageSize, ProtFlags},
 };
 use alloc::ffi::CString;
 use core::ffi::c_void;
@@ -99,8 +99,8 @@ impl Mmap for DefaultMmap {
         flags: MapFlags,
         offset: usize,
         fd: Option<isize>,
-        need_copy: &mut bool,
-    ) -> crate::Result<*mut c_void> {
+    ) -> crate::Result<MmapResult> {
+        let mut needs_copy = false;
         let ptr = if let Some(fd) = fd {
             unsafe {
                 mmap(
@@ -113,7 +113,7 @@ impl Mmap for DefaultMmap {
                 )
             }
         } else {
-            *need_copy = true;
+            needs_copy = true;
             addr.unwrap() as _
         };
         if core::ptr::eq(ptr, libc::MAP_FAILED) {
@@ -122,7 +122,10 @@ impl Mmap for DefaultMmap {
             }
             .into());
         }
-        Ok(ptr)
+        Ok(MmapResult::new(
+            MappedRegion::local_alias(ptr, len, *self),
+            needs_copy,
+        ))
     }
 
     unsafe fn mmap_anonymous(
@@ -131,7 +134,7 @@ impl Mmap for DefaultMmap {
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> crate::Result<*mut c_void> {
+    ) -> crate::Result<MappedRegion> {
         let ptr = unsafe {
             mmap(
                 addr as _,
@@ -148,7 +151,12 @@ impl Mmap for DefaultMmap {
             }
             .into());
         }
-        Ok(ptr)
+        let region = if flags.contains(MapFlags::MAP_FIXED) {
+            MappedRegion::local_alias(ptr, len, *self)
+        } else {
+            MappedRegion::local(ptr, len, *self)
+        };
+        Ok(region)
     }
 
     unsafe fn munmap(&self, addr: *mut c_void, len: usize) -> crate::Result<()> {
@@ -194,7 +202,7 @@ impl Mmap for DefaultMmap {
         addr: Option<usize>,
         len: usize,
         use_file: bool,
-    ) -> Result<*mut c_void> {
+    ) -> Result<MappedRegion> {
         let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS;
         let prot = if use_file {
             ProtFlags::PROT_NONE
@@ -211,7 +219,13 @@ impl Mmap for DefaultMmap {
                 0,
             )
         };
-        Ok(ptr)
+        if core::ptr::eq(ptr, libc::MAP_FAILED) {
+            return Err(MmapError::MmapAnonymousFailed {
+                code: last_os_error_code(),
+            }
+            .into());
+        }
+        Ok(MappedRegion::local(ptr, len, *self))
     }
 }
 

@@ -19,12 +19,6 @@ pub(crate) struct CustomHash {
     map: RawHashTable<TableEntry>,
 }
 
-impl HashTable {
-    pub(crate) fn from_shdr<L: ElfLayout>(symtab: &ElfShdr<L>, strtab: &ElfStringTable) -> Self {
-        HashTable::Custom(CustomHash::from_shdr(symtab, strtab))
-    }
-}
-
 impl CustomHash {
     pub(crate) fn from_shdr<L: ElfLayout>(symtab: &ElfShdr<L>, strtab: &ElfStringTable) -> Self {
         let symbols: &mut [ElfSymbol<L>] = symtab.content_mut();

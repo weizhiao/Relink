@@ -6,8 +6,9 @@ mod enabled {
     use crate::{
         RelocationError, Result,
         arch::{NativeArch, prepare_lazy_bind},
-        elf::{ElfRelEntry, ElfRelType, SymbolInfo},
+        elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolInfo},
         relocation::{BindingMode, RelocAddr, RelocationArch, SupportLazy, SymDef, unlikely},
+        segment::ElfSegments,
         sync::Arc,
         tls::lookup_tls_get_addr,
     };
@@ -50,7 +51,7 @@ mod enabled {
             D: 'static,
         {
             if self.is_lazy() {
-                let pltrel = image.relocation().pltrel;
+                let pltrel = image.relocation().pltrel.as_slice();
                 if pltrel.is_empty() {
                     return Ok(());
                 }
@@ -64,21 +65,26 @@ mod enabled {
 
         pub(crate) fn relocate_jump_slot<Arch: RelocationArch>(
             &self,
+            segments: &ElfSegments,
             base: RelocAddr,
             rel: &ElfRelType<Arch>,
-        ) -> bool {
+        ) -> Result<bool>
+        where
+            <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+        {
             if !self.is_lazy() {
-                return false;
+                return Ok(false);
             }
 
-            let addr = base.offset(rel.r_offset());
-            let ptr = addr.as_mut_ptr::<usize>();
-            unsafe {
-                let origin_val = ptr.read();
-                let new_val = base.offset(origin_val).into_inner();
-                ptr.write(new_val);
-            }
-            true
+            segments.update_value::<_>(
+                rel.r_offset(),
+                |word: <Arch::Layout as ElfLayout>::Word| {
+                    <Arch::Layout as ElfLayout>::Word::from_usize(
+                        base.offset(word.to_usize()).into_inner(),
+                    )
+                },
+            )?;
+            Ok(true)
         }
     }
 
@@ -179,7 +185,7 @@ mod enabled {
         let Some(dynamic_info) = dylib.dynamic_info.as_ref() else {
             invalid_state(dylib.path.as_str(), "missing dynamic metadata")
         };
-        let pltrel = dynamic_info.lazy.pltrel;
+        let pltrel = dynamic_info.lazy.pltrel.as_slice();
 
         let Some(rela) = pltrel.get(rela_idx) else {
             invalid_relocation_index(dylib.path.as_str(), rela_idx, pltrel.len())
@@ -211,7 +217,9 @@ mod enabled {
             })
             .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()));
 
-        segments.write(rela.r_offset(), symbol);
+        segments
+            .write_value(rela.r_offset(), symbol)
+            .unwrap_or_else(|err| panic!("lazy binding failed for {}: {err}", dylib.path));
         symbol.into_inner()
     }
 }
@@ -246,10 +254,11 @@ mod disabled {
 
         pub(crate) fn relocate_jump_slot<Arch: RelocationArch>(
             &self,
+            _segments: &crate::segment::ElfSegments,
             _base: crate::relocation::RelocAddr,
             _rel: &ElfRelType<Arch>,
-        ) -> bool {
-            false
+        ) -> crate::Result<bool> {
+            Ok(false)
         }
     }
 

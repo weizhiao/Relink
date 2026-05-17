@@ -124,14 +124,13 @@ impl<L: ElfLayout> SegmentBuilder for ProgramSegments<'_, L> {
     /// Reserve memory space for all segments
     fn create_space(&mut self, mapper: Mapper) -> Result<ElfSegments> {
         let layout = parse_segments(self.phdrs, self.is_dylib, self.page_size)?;
-        let ptr = unsafe {
+        let region = unsafe {
             mapper.mmap_reserve(layout.preferred_addr, layout.mapped_len, self.use_file)
         }?;
+        let ptr = region.addr().get();
         Ok(ElfSegments::new(
-            ptr,
-            layout.mapped_len,
-            mapper,
-            (ptr as usize).wrapping_sub(layout.min_vaddr),
+            region,
+            ptr.wrapping_sub(layout.min_vaddr),
             layout.min_vaddr,
         ))
     }

@@ -1,7 +1,7 @@
 use crate::input::{ElfReader, Path, PathBuf};
 use crate::{
     Error, IoError, MmapError, Result, logging,
-    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
+    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, ProtFlags},
 };
 use alloc::ffi::CString;
 use core::ffi::{c_int, c_void};
@@ -116,8 +116,8 @@ impl Mmap for DefaultMmap {
         flags: MapFlags,
         offset: usize,
         fd: Option<isize>,
-        need_copy: &mut bool,
-    ) -> crate::Result<*mut core::ffi::c_void> {
+    ) -> crate::Result<MmapResult> {
+        let mut needs_copy = false;
         let ptr = if let Some(fd) = fd {
             mmap(
                 addr.unwrap_or(0) as _,
@@ -128,10 +128,13 @@ impl Mmap for DefaultMmap {
                 offset as _,
             )?
         } else {
-            *need_copy = true;
+            needs_copy = true;
             addr.unwrap() as _
         };
-        Ok(ptr)
+        Ok(MmapResult::new(
+            MappedRegion::local_alias(ptr, len, *self),
+            needs_copy,
+        ))
     }
 
     unsafe fn mmap_anonymous(
@@ -140,9 +143,14 @@ impl Mmap for DefaultMmap {
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> crate::Result<*mut core::ffi::c_void> {
+    ) -> crate::Result<MappedRegion> {
         let ptr = mmap_anonymous(addr as _, len, prot, flags)?;
-        Ok(ptr)
+        let region = if flags.contains(MapFlags::MAP_FIXED) {
+            MappedRegion::local_alias(ptr, len, *self)
+        } else {
+            MappedRegion::local(ptr, len, *self)
+        };
+        Ok(region)
     }
 
     unsafe fn munmap(&self, addr: *mut core::ffi::c_void, len: usize) -> crate::Result<()> {
@@ -174,7 +182,7 @@ impl Mmap for DefaultMmap {
         addr: Option<usize>,
         len: usize,
         use_file: bool,
-    ) -> Result<*mut core::ffi::c_void> {
+    ) -> Result<MappedRegion> {
         let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS;
         let prot = if use_file {
             ProtFlags::PROT_NONE
@@ -182,7 +190,7 @@ impl Mmap for DefaultMmap {
             ProtFlags::PROT_WRITE
         };
         let ptr = mmap_anonymous(addr.unwrap_or(0) as _, len, prot, flags)?;
-        Ok(ptr)
+        Ok(MappedRegion::local(ptr, len, *self))
     }
 }
 

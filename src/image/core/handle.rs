@@ -7,6 +7,7 @@ use crate::{
     image::{DynamicInfo, Module},
     input::{Path, PathBuf},
     loader::DynLifecycleHandler,
+    os::MappedView,
     relocation::{EmuContext, Emulator, RelocAddr, RelocationArch},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
@@ -263,8 +264,8 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
     }
 
     #[inline]
-    pub(crate) fn segment_slice(&self, offset: usize, len: usize) -> &[u8] {
-        self.segments().get_slice(offset, len)
+    pub(crate) fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<()> {
+        self.segments().read_bytes(offset, dst)
     }
 
     /// Gets the TLS module ID of the ELF object
@@ -310,7 +311,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
     pub(super) unsafe fn from_raw(
         path: PathBuf,
         base: usize,
-        dynamic_ptr: *const ElfDyn<Arch::Layout>,
+        dynamic_entries: MappedView<ElfDyn<Arch::Layout>>,
         phdrs: Vec<ElfPhdr<Arch::Layout>>,
         eh_frame_hdr: Option<NonNull<u8>>,
         mut segments: ElfSegments,
@@ -320,13 +321,15 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
         tls_unregister: fn(TlsModuleId),
         user_data: D,
     ) -> Result<Self> {
-        if dynamic_ptr.is_null() {
-            return Err(ParsePhdrError::MissingDynamicSection.into());
-        }
+        let dynamic_ptr = dynamic_entries
+            .as_slice()
+            .first()
+            .map(NonNull::from)
+            .ok_or(ParsePhdrError::MissingDynamicSection)?;
 
         segments.set_base(base);
-        let dynamic = ElfDynamic::<Arch>::new(dynamic_ptr, &segments)?;
-        let symtab = SymbolTable::from_dynamic(&dynamic);
+        let dynamic = ElfDynamic::<Arch>::new(dynamic_entries, &segments)?;
+        let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
         let soname = dynamic
             .soname_off
             .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
@@ -337,11 +340,11 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
                 symtab,
                 dynamic_info: Some(Arc::new(DynamicInfo {
                     eh_frame_hdr,
-                    dynamic_ptr: unsafe { NonNull::new_unchecked(dynamic_ptr.cast_mut()) },
+                    dynamic_ptr,
                     phdrs: ElfPhdrs::Vec(phdrs),
                     soname,
                     #[cfg(feature = "lazy-binding")]
-                    lazy: crate::image::LazyBindingInfo::new(dynamic.pltrel),
+                    lazy: crate::image::LazyBindingInfo::new(dynamic.pltrel.clone()),
                 })),
                 tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_get_addr, tls_unregister),
                 segments,
@@ -400,8 +403,9 @@ where
     }
 
     #[inline]
-    fn segment_slice(&self, offset: usize, len: usize) -> Option<&[u8]> {
-        Some(ElfCore::segment_slice(self, offset, len))
+    fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<bool> {
+        ElfCore::read_segment(self, offset, dst)?;
+        Ok(true)
     }
 
     #[inline]
