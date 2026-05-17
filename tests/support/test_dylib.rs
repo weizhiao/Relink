@@ -21,14 +21,11 @@ pub(crate) fn write_test_dylib_with_config(
         .expect("failed to generate test dylib")
 }
 
-pub(crate) fn load_relocated_dylib<M>(
-    loader: &mut Loader<M>,
+pub(crate) fn load_relocated_dylib(
+    loader: &mut Loader,
     name: &str,
     output: &ElfWriteOutput,
-) -> LoadedCore<()>
-where
-    M: elf_loader::os::Mmap,
-{
+) -> LoadedCore<()> {
     loader
         .load_dylib(ElfBinary::new(name, &output.data))
         .expect("failed to load test dylib")

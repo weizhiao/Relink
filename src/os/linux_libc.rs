@@ -5,6 +5,7 @@ use crate::{
 };
 use alloc::ffi::CString;
 use core::ffi::c_void;
+#[cfg(feature = "tls")]
 use core::sync::atomic::{AtomicUsize, Ordering};
 use libc::{_SC_PAGESIZE, O_RDONLY, SEEK_SET, madvise, mmap, mprotect, munmap, sysconf};
 
@@ -14,9 +15,22 @@ fn last_os_error_code() -> u32 {
 }
 
 /// An implementation of Mmap trait
-pub struct DefaultMmap;
+#[derive(Clone, Copy)]
+pub struct DefaultMmap {
+    page_size: PageSize,
+}
 
-static CACHED_PAGE_SIZE: AtomicUsize = AtomicUsize::new(0);
+impl Default for DefaultMmap {
+    fn default() -> Self {
+        let page_size = unsafe { sysconf(_SC_PAGESIZE) };
+        let page_size = if page_size <= 0 {
+            PageSize::Base
+        } else {
+            PageSize::new(page_size as usize).unwrap_or_default()
+        };
+        Self { page_size }
+    }
+}
 
 #[cfg(feature = "tls")]
 pub(crate) fn current_thread_id() -> usize {
@@ -72,24 +86,13 @@ pub(crate) struct RawFile {
 }
 
 impl Mmap for DefaultMmap {
-    fn page_size() -> PageSize {
-        let page_size = CACHED_PAGE_SIZE.load(Ordering::Relaxed);
-        if let Some(page_size) = PageSize::new(page_size) {
-            return page_size;
-        }
-
-        let page_size = unsafe { sysconf(_SC_PAGESIZE) };
-        if page_size <= 0 {
-            CACHED_PAGE_SIZE.store(PageSize::Base.bytes(), Ordering::Relaxed);
-            return PageSize::Base;
-        }
-
-        let page_size = PageSize::new(page_size as usize).unwrap_or_default();
-        CACHED_PAGE_SIZE.store(page_size.bytes(), Ordering::Relaxed);
-        page_size
+    #[inline]
+    fn page_size(&self) -> PageSize {
+        self.page_size
     }
 
     unsafe fn mmap(
+        &self,
         addr: Option<usize>,
         len: usize,
         prot: ProtFlags,
@@ -123,6 +126,7 @@ impl Mmap for DefaultMmap {
     }
 
     unsafe fn mmap_anonymous(
+        &self,
         addr: usize,
         len: usize,
         prot: ProtFlags,
@@ -147,7 +151,7 @@ impl Mmap for DefaultMmap {
         Ok(ptr)
     }
 
-    unsafe fn munmap(addr: *mut c_void, len: usize) -> crate::Result<()> {
+    unsafe fn munmap(&self, addr: *mut c_void, len: usize) -> crate::Result<()> {
         let res = unsafe { munmap(addr, len) };
         if res != 0 {
             return Err(MmapError::MunmapFailed {
@@ -158,7 +162,12 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn madvise(addr: *mut c_void, len: usize, behavior: MadviseAdvice) -> crate::Result<()> {
+    unsafe fn madvise(
+        &self,
+        addr: *mut c_void,
+        len: usize,
+        behavior: MadviseAdvice,
+    ) -> crate::Result<()> {
         let res = unsafe { madvise(addr, len, behavior as _) };
         if res != 0 {
             return Err(MmapError::Madvise {
@@ -169,7 +178,7 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> crate::Result<()> {
+    unsafe fn mprotect(&self, addr: *mut c_void, len: usize, prot: ProtFlags) -> crate::Result<()> {
         let res = unsafe { mprotect(addr, len, prot.bits()) };
         if res != 0 {
             return Err(MmapError::Mprotect {
@@ -180,7 +189,12 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn mmap_reserve(addr: Option<usize>, len: usize, use_file: bool) -> Result<*mut c_void> {
+    unsafe fn mmap_reserve(
+        &self,
+        addr: Option<usize>,
+        len: usize,
+        use_file: bool,
+    ) -> Result<*mut c_void> {
         let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS;
         let prot = if use_file {
             ProtFlags::PROT_NONE

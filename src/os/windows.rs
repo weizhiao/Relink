@@ -8,7 +8,6 @@ use core::{
     ffi::c_void,
     mem::MaybeUninit,
     ptr::{null, null_mut},
-    sync::atomic::{AtomicUsize, Ordering},
 };
 use windows_sys::Win32::{
     Foundation::{
@@ -29,9 +28,21 @@ use windows_sys::Win32::{
     System::Threading::GetCurrentProcess,
 };
 
-pub struct DefaultMmap;
+#[derive(Clone, Copy)]
+pub struct DefaultMmap {
+    page_size: PageSize,
+}
 
-static CACHED_PAGE_SIZE: AtomicUsize = AtomicUsize::new(0);
+impl Default for DefaultMmap {
+    fn default() -> Self {
+        let mut info = MaybeUninit::<SYSTEM_INFO>::uninit();
+        let page_size = unsafe {
+            GetSystemInfo(info.as_mut_ptr());
+            PageSize::new(info.assume_init().dwPageSize as usize).unwrap_or_default()
+        };
+        Self { page_size }
+    }
+}
 
 #[cfg(feature = "tls")]
 pub(crate) fn current_thread_id() -> usize {
@@ -92,22 +103,13 @@ fn prot_win(prot: ProtFlags, is_create_file_mapping: bool) -> PAGE_PROTECTION_FL
 }
 
 impl Mmap for DefaultMmap {
-    fn page_size() -> PageSize {
-        let page_size = CACHED_PAGE_SIZE.load(Ordering::Relaxed);
-        if let Some(page_size) = PageSize::new(page_size) {
-            return page_size;
-        }
-
-        let mut info = MaybeUninit::<SYSTEM_INFO>::uninit();
-        let page_size = unsafe {
-            GetSystemInfo(info.as_mut_ptr());
-            PageSize::new(info.assume_init().dwPageSize as usize).unwrap_or_default()
-        };
-        CACHED_PAGE_SIZE.store(page_size.bytes(), Ordering::Relaxed);
-        page_size
+    #[inline]
+    fn page_size(&self) -> PageSize {
+        self.page_size
     }
 
     unsafe fn mmap(
+        &self,
         addr: Option<usize>,
         len: usize,
         prot: ProtFlags,
@@ -170,6 +172,7 @@ impl Mmap for DefaultMmap {
     }
 
     unsafe fn mmap_anonymous(
+        &self,
         addr: usize,
         len: usize,
         prot: ProtFlags,
@@ -203,7 +206,7 @@ impl Mmap for DefaultMmap {
         Ok(ptr)
     }
 
-    unsafe fn munmap(addr: *mut c_void, _len: usize) -> Result<()> {
+    unsafe fn munmap(&self, addr: *mut c_void, _len: usize) -> Result<()> {
         unsafe {
             windows_sys::Win32::System::Memory::UnmapViewOfFile(
                 windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS { Value: addr },
@@ -212,11 +215,16 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn madvise(_addr: *mut c_void, _len: usize, behavior: MadviseAdvice) -> Result<()> {
+    unsafe fn madvise(
+        &self,
+        _addr: *mut c_void,
+        _len: usize,
+        behavior: MadviseAdvice,
+    ) -> Result<()> {
         Ok(())
     }
 
-    unsafe fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
+    unsafe fn mprotect(&self, addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
         let mut old = MaybeUninit::uninit();
         if unsafe { Memory::VirtualProtect(addr, len, prot_win(prot, false), old.as_mut_ptr()) }
             == 0
@@ -227,7 +235,12 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn mmap_reserve(addr: Option<usize>, len: usize, use_file: bool) -> Result<*mut c_void> {
+    unsafe fn mmap_reserve(
+        &self,
+        addr: Option<usize>,
+        len: usize,
+        use_file: bool,
+    ) -> Result<*mut c_void> {
         let ptr = if use_file {
             if let Some(addr) = addr {
                 unsafe {

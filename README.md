@@ -123,7 +123,7 @@ fn main() -> Result<()> {
 | Runtime dependency linking | `Linker::load()` | Use `KeyResolver` and `LinkContext` to manage dependency graphs, scopes, and context isolation |
 | Scan-first linking | `Linker::load_scan_first()` | Discover `DT_NEEDED` dependencies first, then run layout passes, choose materialization policy, and relocate as one group |
 | Relocatable objects | `Loader::load_object()` | Compose `.o` and `.so` inputs at runtime; requires the `object` feature |
-| Custom mapping environment | `Loader::with_mmap()` / `with_page_size()` | Plug in custom mmap, permission, page-size, or huge-page policies |
+| Custom mapping environment | `Loader::with_mmap(mapper)` / `with_page_size()` | Plug in custom mmap, permission, page-size, or huge-page policies |
 
 ## Advanced Capability Index
 

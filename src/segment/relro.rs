@@ -1,7 +1,7 @@
 use crate::{
     Result,
     elf::{ElfLayout, ElfPhdr},
-    os::{Mmap, ProtFlags},
+    os::{Mapper, ProtFlags},
     relocation::RelocAddr,
 };
 use core::ffi::c_void;
@@ -21,8 +21,8 @@ pub(crate) struct ELFRelro {
     len: usize,
     /// Page size used to align the protected range.
     page_size: usize,
-    /// Function pointer to the mprotect function
-    mprotect: unsafe fn(*mut c_void, usize, ProtFlags) -> Result<()>,
+    /// Mapping backend used for protection changes.
+    mapper: Mapper,
 }
 
 impl ELFRelro {
@@ -34,16 +34,17 @@ impl ELFRelro {
     ///
     /// # Returns
     /// A new ELFRelro instance
-    pub(crate) fn new<M: Mmap, L: ElfLayout>(
+    pub(crate) fn new<L: ElfLayout>(
         phdr: &ElfPhdr<L>,
         base: RelocAddr,
         page_size: usize,
+        mapper: Mapper,
     ) -> ELFRelro {
         ELFRelro {
             addr: base.offset(phdr.p_vaddr()),
             len: phdr.p_memsz(),
             page_size,
-            mprotect: M::mprotect,
+            mapper,
         }
     }
 
@@ -61,7 +62,8 @@ impl ELFRelro {
         let start = rounddown(addr, self.page_size);
         let start_addr = start as *mut c_void;
         unsafe {
-            (self.mprotect)(start_addr, end - start, ProtFlags::PROT_READ)?;
+            self.mapper
+                .mprotect(start_addr, end - start, ProtFlags::PROT_READ)?;
         }
         Ok(())
     }

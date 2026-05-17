@@ -11,7 +11,6 @@ use crate::{
     image::{LoadedCore, RawDynamic},
     input::{Path, PathBuf},
     loader::{ImageBuilder, LoadHook},
-    os::Mmap,
     relocation::{
         RelocAddr, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
     },
@@ -384,12 +383,11 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
 }
 
 impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
-    pub(crate) fn from_builder<'hook, H, M, Tls>(
-        mut builder: ImageBuilder<'hook, H, M, Tls, D, Arch::Layout>,
+    pub(crate) fn from_builder<'hook, H, Tls>(
+        mut builder: ImageBuilder<'hook, H, Tls, D, Arch::Layout>,
         phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where
-        M: Mmap,
         H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
     {
@@ -425,13 +423,12 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
 }
 
 impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
-    pub(crate) fn from_builder<'hook, H, M, Tls>(
-        builder: ImageBuilder<'hook, H, M, Tls, D, Arch::Layout>,
+    pub(crate) fn from_builder<'hook, H, Tls>(
+        builder: ImageBuilder<'hook, H, Tls, D, Arch::Layout>,
         phdrs: &[ElfPhdr<Arch::Layout>],
         has_dynamic: bool,
     ) -> Result<Self>
     where
-        M: Mmap,
         H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
     {

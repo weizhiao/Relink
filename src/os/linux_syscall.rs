@@ -8,6 +8,7 @@ use core::ffi::{c_int, c_void};
 use syscalls::Sysno;
 
 /// An implementation of Mmap trait
+#[derive(Clone, Copy, Default)]
 pub struct DefaultMmap;
 
 #[cfg(feature = "tls")]
@@ -108,6 +109,7 @@ fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
 
 impl Mmap for DefaultMmap {
     unsafe fn mmap(
+        &self,
         addr: Option<usize>,
         len: usize,
         prot: ProtFlags,
@@ -133,6 +135,7 @@ impl Mmap for DefaultMmap {
     }
 
     unsafe fn mmap_anonymous(
+        &self,
         addr: usize,
         len: usize,
         prot: ProtFlags,
@@ -142,13 +145,13 @@ impl Mmap for DefaultMmap {
         Ok(ptr)
     }
 
-    unsafe fn munmap(addr: *mut core::ffi::c_void, len: usize) -> crate::Result<()> {
+    unsafe fn munmap(&self, addr: *mut core::ffi::c_void, len: usize) -> crate::Result<()> {
         munmap(addr, len)?;
         Ok(())
     }
 
     #[inline]
-    unsafe fn madvise(addr: *mut c_void, len: usize, behavior: MadviseAdvice) -> Result<()> {
+    unsafe fn madvise(&self, addr: *mut c_void, len: usize, behavior: MadviseAdvice) -> Result<()> {
         from_ret(
             syscalls::raw_syscall!(Sysno::madvise, addr, len, behavior as c_int),
             |code| MmapError::Madvise { code }.into(),
@@ -157,6 +160,7 @@ impl Mmap for DefaultMmap {
     }
 
     unsafe fn mprotect(
+        &self,
         addr: *mut core::ffi::c_void,
         len: usize,
         prot: ProtFlags,
@@ -166,6 +170,7 @@ impl Mmap for DefaultMmap {
     }
 
     unsafe fn mmap_reserve(
+        &self,
         addr: Option<usize>,
         len: usize,
         use_file: bool,

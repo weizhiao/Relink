@@ -19,7 +19,6 @@ use crate::{
     image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     linker::session::ResolveSession,
     loader::LoadHook,
-    os::{DefaultMmap, Mmap},
     relocation::{RelocationArch, RelocationHandler, Relocator},
     tls::TlsResolver,
 };
@@ -89,7 +88,7 @@ pub struct Linker<
     K: Clone + Ord,
     D: 'static,
     Arch: RelocationArch = crate::arch::NativeArch,
-    L = Loader<DefaultMmap, (), (), (), Arch>,
+    L = Loader<(), (), (), Arch>,
     R = (),
     PreH = (),
     PostH = (),
@@ -141,7 +140,7 @@ where
         K,
         (),
         NewArch,
-        Loader<DefaultMmap, (), (), (), NewArch>,
+        Loader<(), (), (), NewArch>,
         (),
         (),
         (),
@@ -284,23 +283,21 @@ where
     }
 }
 
-impl<'a, K, D, M, H, Tls, Arch, R, PreH, PostH, P, O, V>
-    Linker<'a, K, D, Arch, Loader<M, H, D, Tls, Arch>, R, PreH, PostH, P, O, V>
+impl<'a, K, D, H, Tls, Arch, R, PreH, PostH, P, O, V>
+    Linker<'a, K, D, Arch, Loader<H, D, Tls, Arch>, R, PreH, PostH, P, O, V>
 where
     K: Clone + Ord,
     D: 'static,
-    M: Mmap,
     H: LoadHook<Arch::Layout>,
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
     /// Reconfigures the underlying loader.
-    pub fn map_loader<NewM, NewH, NewD, NewTls>(
+    pub fn map_loader<NewH, NewD, NewTls>(
         self,
-        configure: impl FnOnce(Loader<M, H, D, Tls, Arch>) -> Loader<NewM, NewH, NewD, NewTls, Arch>,
-    ) -> Linker<'a, K, NewD, Arch, Loader<NewM, NewH, NewD, NewTls, Arch>, R, PreH, PostH, P, O, V>
+        configure: impl FnOnce(Loader<H, D, Tls, Arch>) -> Loader<NewH, NewD, NewTls, Arch>,
+    ) -> Linker<'a, K, NewD, Arch, Loader<NewH, NewD, NewTls, Arch>, R, PreH, PostH, P, O, V>
     where
-        NewM: Mmap,
         NewH: LoadHook<Arch::Layout>,
         NewD: 'static,
         NewTls: TlsResolver,
@@ -320,12 +317,11 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'a, K, D, M, H, Tls, Arch, Resolver, PreH, PostH, P, O, V>
-    Linker<'a, K, D, Arch, Loader<M, H, D, Tls, Arch>, Resolver, PreH, PostH, P, O, V>
+impl<'a, K, D, H, Tls, Arch, Resolver, PreH, PostH, P, O, V>
+    Linker<'a, K, D, Arch, Loader<H, D, Tls, Arch>, Resolver, PreH, PostH, P, O, V>
 where
     K: Clone + Ord,
     D: Default + 'static,
-    M: Mmap,
     H: LoadHook<Arch::Layout>,
     Tls: TlsResolver,
     Arch: RelocationArch + crate::relocation::RelocationValueProvider + GotPltTarget,
@@ -541,7 +537,7 @@ where
         plan: &mut LinkPlan<K, Arch>,
     ) -> Result<Option<MappedRuntimeMemory>> {
         normalize_plan(plan)?;
-        let mut mapped_runtime = MappedRuntimeMemory::map::<M, _, Arch>(plan)?;
+        let mut mapped_runtime = MappedRuntimeMemory::map(self.loader.mapper(), plan)?;
 
         if let Some(runtime) = mapped_runtime.as_mut() {
             let section_region_modules = plan
@@ -627,7 +623,7 @@ where
             &mut LinkContext<K, D, Meta, Arch>,
             &V,
             &mut LoadSession<D, Arch>,
-            &mut Loader<M, H, D, Tls, Arch>,
+            &mut Loader<H, D, Tls, Arch>,
             &mut Resolver,
             &mut O,
         ) -> Result<KeyId>,
@@ -677,7 +673,8 @@ where
         }
 
         if let Some(mapped_runtime) = mapped_runtime.as_ref() {
-            mapped_runtime.protect::<M>()?;
+            let mapper = self.loader.mapper();
+            mapped_runtime.protect(mapper.as_ref())?;
         }
 
         let committed = Self::commit_session(context, &mut session);

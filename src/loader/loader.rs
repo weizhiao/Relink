@@ -4,7 +4,7 @@ use crate::{
     arch::NativeArch,
     elf::Lifecycle,
     image::RawDynamic,
-    os::{DefaultMmap, Mmap, PageSize},
+    os::{DefaultMmap, Mapper, Mmap, PageSize},
     relocation::RelocationArch,
     sync::Arc,
     tls::TlsResolver,
@@ -31,19 +31,19 @@ use core::marker::PhantomData;
 /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
 /// let lib = raw.relocator().relocate().unwrap();
 /// ```
-pub struct Loader<M = DefaultMmap, H = (), D: 'static = (), Tls = (), Arch = NativeArch>
+pub struct Loader<H = (), D: 'static = (), Tls = (), Arch = NativeArch>
 where
-    M: Mmap,
     H: LoadHook<Arch::Layout>,
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
     pub(crate) buf: super::ElfBuf,
     pub(crate) inner: LoaderInner<H, D, Arch>,
-    _marker: PhantomData<(M, Tls, Arch)>,
+    _marker: PhantomData<(Tls, Arch)>,
 }
 
 pub(crate) struct LoaderInner<H, D: 'static, Arch: RelocationArch> {
+    pub(crate) mapper: Mapper,
     pub(crate) init_fn: DynLifecycleHandler,
     pub(crate) fini_fn: DynLifecycleHandler,
     pub(crate) hook: H,
@@ -52,7 +52,7 @@ pub(crate) struct LoaderInner<H, D: 'static, Arch: RelocationArch> {
     pub(crate) dynamic_initializer: Box<dyn FnMut(&mut RawDynamic<D, Arch>) -> Result<()>>,
 }
 
-impl Loader<DefaultMmap, (), (), (), NativeArch> {
+impl Loader<(), (), (), NativeArch> {
     /// Creates a new [`Loader`] with the default mmap backend, no hook, no custom
     /// user data, no TLS resolver, and the host target architecture
     /// ([`NativeArch`]).
@@ -80,6 +80,7 @@ impl Loader<DefaultMmap, (), (), (), NativeArch> {
         Self {
             buf: super::ElfBuf::new(),
             inner: LoaderInner {
+                mapper: Mapper::new(DefaultMmap::default()),
                 hook: (),
                 init_fn: c_abi.clone(),
                 fini_fn: c_abi,
@@ -92,14 +93,18 @@ impl Loader<DefaultMmap, (), (), (), NativeArch> {
     }
 }
 
-impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
+impl<H, D, Tls, Arch> Loader<H, D, Tls, Arch>
 where
     H: LoadHook<Arch::Layout>,
-    M: Mmap,
     D: 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
+    #[inline]
+    pub(crate) fn mapper(&self) -> Mapper {
+        self.inner.mapper()
+    }
+
     /// Sets the initialization function handler.
     ///
     /// This handler is responsible for calling the initialization functions
@@ -137,13 +142,14 @@ where
     pub fn with_dynamic_initializer<NewD>(
         self,
         initializer: impl FnMut(&mut RawDynamic<NewD, Arch>) -> Result<()> + 'static,
-    ) -> Loader<M, H, NewD, Tls, Arch>
+    ) -> Loader<H, NewD, Tls, Arch>
     where
         NewD: Default + 'static,
     {
         Loader {
             buf: self.buf,
             inner: LoaderInner {
+                mapper: self.inner.mapper,
                 init_fn: self.inner.init_fn,
                 fini_fn: self.inner.fini_fn,
                 hook: self.inner.hook,
@@ -156,13 +162,14 @@ where
     }
 
     /// Consumes the current loader and returns a new one with the specified hook.
-    pub fn with_hook<NewHook>(self, hook: NewHook) -> Loader<M, NewHook, D, Tls, Arch>
+    pub fn with_hook<NewHook>(self, hook: NewHook) -> Loader<NewHook, D, Tls, Arch>
     where
         NewHook: LoadHook<Arch::Layout>,
     {
         Loader {
             buf: self.buf,
             inner: LoaderInner {
+                mapper: self.inner.mapper,
                 init_fn: self.inner.init_fn,
                 fini_fn: self.inner.fini_fn,
                 hook,
@@ -184,18 +191,20 @@ where
         self
     }
 
-    /// Returns a new loader with a custom `Mmap` implementation.
-    pub fn with_mmap<NewMmap: Mmap>(self) -> Loader<NewMmap, H, D, Tls, Arch> {
+    /// Returns a new loader with a custom `Mmap` backend value.
+    pub fn with_mmap<NewMmap: Mmap>(self, mapper: NewMmap) -> Self {
+        let mut inner = self.inner;
+        inner.mapper = Mapper::new(mapper);
         Loader {
             buf: self.buf,
-            inner: self.inner,
+            inner,
             _marker: PhantomData,
         }
     }
 
     /// Consumes the current loader and returns a new one with the specified TLS resolver.
     #[cfg(feature = "tls")]
-    pub fn with_tls_resolver<NewTls>(self) -> Loader<M, H, D, NewTls, Arch>
+    pub fn with_tls_resolver<NewTls>(self) -> Loader<H, D, NewTls, Arch>
     where
         NewTls: TlsResolver,
     {
@@ -208,9 +217,7 @@ where
 
     /// Consumes the current loader and returns a new one with the default TLS resolver.
     #[cfg(feature = "tls")]
-    pub fn with_default_tls_resolver(
-        self,
-    ) -> Loader<M, H, D, crate::tls::DefaultTlsResolver, Arch> {
+    pub fn with_default_tls_resolver(self) -> Loader<H, D, crate::tls::DefaultTlsResolver, Arch> {
         Loader {
             buf: self.buf,
             inner: self.inner,
@@ -245,10 +252,9 @@ where
 ///     .for_arch::<X86_64Arch>()
 ///     .with_dynamic_initializer::<()>(|_| Ok(()));
 /// ```
-impl<M, H, Tls, Arch> Loader<M, H, (), Tls, Arch>
+impl<H, Tls, Arch> Loader<H, (), Tls, Arch>
 where
     H: LoadHook<Arch::Layout>,
-    M: Mmap,
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
@@ -276,7 +282,7 @@ where
     /// and then attach the initializer once the target architecture is fixed.
     ///
     /// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
-    pub fn for_arch<NewArch>(self) -> Loader<M, H, (), Tls, NewArch>
+    pub fn for_arch<NewArch>(self) -> Loader<H, (), Tls, NewArch>
     where
         NewArch: RelocationArch,
         H: LoadHook<NewArch::Layout>,
@@ -284,6 +290,7 @@ where
         Loader {
             buf: self.buf,
             inner: LoaderInner {
+                mapper: self.inner.mapper,
                 init_fn: self.inner.init_fn,
                 fini_fn: self.inner.fini_fn,
                 hook: self.inner.hook,

@@ -3,9 +3,9 @@ use super::super::plan::LinkPlan;
 use crate::{
     LinkerError, Result,
     entity::SecondaryMap,
-    os::{MapFlags, Mmap, PageSize, ProtFlags},
+    os::{MapFlags, Mapper, Mmap, PageSize, ProtFlags},
     relocation::RelocationArch,
-    segment::{ElfSegmentBacking, ElfSegments},
+    segment::{ElfSegments, MappedRegion},
     sync::Arc,
 };
 use alloc::vec::Vec;
@@ -16,7 +16,7 @@ pub(crate) struct MappedArena {
     memory_class: MemoryClass,
     base: usize,
     len: usize,
-    backing: Arc<ElfSegmentBacking>,
+    region: Arc<MappedRegion>,
 }
 
 #[derive(Clone, Default)]
@@ -25,11 +25,13 @@ pub(crate) struct MappedArenaMap {
 }
 
 impl MappedArenaMap {
-    pub(super) fn map_plan<M, K, Arch>(plan: &LinkPlan<K, Arch>) -> Result<Option<Self>>
+    pub(super) fn map_plan<K, Arch>(
+        mapper: Mapper,
+        plan: &LinkPlan<K, Arch>,
+    ) -> Result<Option<Self>>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        M: Mmap,
     {
         if plan
             .modules_with_materialization(Materialization::SectionRegions)
@@ -48,12 +50,17 @@ impl MappedArenaMap {
                 continue;
             }
 
-            let ptr = map_arena::<M>(len, arena.memory_class(), arena.page_size())?;
+            let ptr = map_arena(
+                mapper.as_ref(),
+                len,
+                arena.memory_class(),
+                arena.page_size(),
+            )?;
 
-            let backing = ElfSegments::create_backing(ptr, len, M::munmap);
+            let region = ElfSegments::create_region(ptr, len, mapper.clone());
             arenas.insert(
                 id,
-                MappedArena::new(arena.memory_class(), ptr as usize, len, backing),
+                MappedArena::new(arena.memory_class(), ptr as usize, len, region),
             );
         }
 
@@ -97,12 +104,9 @@ impl MappedArenaMap {
         Ok(())
     }
 
-    pub(super) fn protect<M>(&self) -> Result<()>
-    where
-        M: Mmap,
-    {
+    pub(super) fn protect(&self, mapper: &dyn Mmap) -> Result<()> {
         for (_, arena) in self.iter() {
-            arena.protect::<M>()?;
+            arena.protect(mapper)?;
         }
         Ok(())
     }
@@ -130,17 +134,12 @@ impl MappedArenaMap {
 
 impl MappedArena {
     #[inline]
-    fn new(
-        memory_class: MemoryClass,
-        base: usize,
-        len: usize,
-        backing: Arc<ElfSegmentBacking>,
-    ) -> Self {
+    fn new(memory_class: MemoryClass, base: usize, len: usize, region: Arc<MappedRegion>) -> Self {
         Self {
             memory_class,
             base,
             len,
-            backing,
+            region,
         }
     }
 
@@ -150,8 +149,8 @@ impl MappedArena {
     }
 
     #[inline]
-    pub(super) fn backing(&self) -> Arc<ElfSegmentBacking> {
-        Arc::clone(&self.backing)
+    pub(super) fn region(&self) -> Arc<MappedRegion> {
+        Arc::clone(&self.region)
     }
 
     #[inline]
@@ -165,12 +164,12 @@ impl MappedArena {
         self.bytes_mut().get_mut(offset..end)
     }
 
-    fn protect<M: Mmap>(&self) -> Result<()> {
+    fn protect(&self, mapper: &dyn Mmap) -> Result<()> {
         if self.len == 0 {
             return Ok(());
         }
         unsafe {
-            M::mprotect(
+            mapper.mprotect(
                 self.base as *mut _,
                 self.len,
                 final_protection(self.memory_class),
@@ -179,18 +178,20 @@ impl MappedArena {
     }
 }
 
-fn map_arena<M>(len: usize, memory_class: MemoryClass, page_size: PageSize) -> Result<*mut c_void>
-where
-    M: Mmap,
-{
+fn map_arena(
+    mapper: &dyn Mmap,
+    len: usize,
+    memory_class: MemoryClass,
+    page_size: PageSize,
+) -> Result<*mut c_void> {
     let prot = initial_protection(memory_class);
     let flags =
         MapFlags::MAP_PRIVATE | MapFlags::huge_page_size(page_size).unwrap_or_else(MapFlags::empty);
-    let result = unsafe { M::mmap_anonymous(0, len, prot, flags) };
+    let result = unsafe { mapper.mmap_anonymous(0, len, prot, flags) };
 
     if flags.contains(MapFlags::MAP_HUGETLB) {
         return result
-            .or_else(|_| unsafe { M::mmap_anonymous(0, len, prot, MapFlags::MAP_PRIVATE) });
+            .or_else(|_| unsafe { mapper.mmap_anonymous(0, len, prot, MapFlags::MAP_PRIVATE) });
     }
 
     result
@@ -268,9 +269,8 @@ mod tests {
         assert!(plan.memory_layout_mut().assign(section, arena, 0));
         plan.set_materialization(root, Materialization::SectionRegions);
 
-        let mut mapped = MappedArenaMap::map_plan::<DefaultMmap, _, _>(&plan)
-            .unwrap()
-            .unwrap();
+        let mapper = crate::os::Mapper::new(DefaultMmap::default());
+        let mut mapped = MappedArenaMap::map_plan(mapper, &plan).unwrap().unwrap();
         mapped.populate(&mut plan).unwrap();
 
         let mapped_arena = mapped.get_mut(arena).unwrap();

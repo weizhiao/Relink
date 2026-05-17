@@ -8,7 +8,6 @@ use crate::{
     input::{Path, PathBuf},
     loader::{DynLifecycleHandler, ImageBuilder, LoadHook},
     logging,
-    os::Mmap,
     relocation::{
         DynamicRelocation, EmuContext, Emulator, RelocAddr, Relocatable, RelocateArgs,
         RelocationArch, RelocationHandler, Relocator,
@@ -450,14 +449,13 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
     }
 
     /// Build a dynamic image from the intermediate loader state.
-    pub(crate) fn from_builder<'hook, H, M, Tls>(
-        mut builder: ImageBuilder<'hook, H, M, Tls, D, Arch::Layout>,
+    pub(crate) fn from_builder<'hook, H, Tls>(
+        mut builder: ImageBuilder<'hook, H, Tls, D, Arch::Layout>,
         phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where
         H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
-        M: Mmap,
     {
         // Parse all program headers
         builder.parse_phdrs(phdrs)?;

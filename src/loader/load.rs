@@ -8,7 +8,7 @@ use crate::{
     },
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
-    os::Mmap,
+    os::Mapper,
     relocation::{RelocAddr, RelocationArch},
     segment::{ELFRelro, ElfSegments, program::parse_segments},
     tls::TlsResolver,
@@ -19,9 +19,8 @@ use core::{
     ptr::NonNull,
 };
 
-impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
+impl<H, D, Tls, Arch> Loader<H, D, Tls, Arch>
 where
-    M: Mmap,
     H: LoadHook<Arch::Layout>,
     Tls: TlsResolver,
     Arch: RelocationArch,
@@ -68,9 +67,8 @@ where
     }
 }
 
-impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
+impl<H, D, Tls, Arch> Loader<H, D, Tls, Arch>
 where
-    M: Mmap,
     H: LoadHook<Arch::Layout>,
     D: 'static,
     Tls: TlsResolver,
@@ -103,9 +101,8 @@ where
     }
 }
 
-impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
+impl<H, D, Tls, Arch> Loader<H, D, Tls, Arch>
 where
-    M: Mmap,
     H: LoadHook<Arch::Layout>,
     D: Default + 'static,
     Tls: TlsResolver,
@@ -243,7 +240,7 @@ where
 
         let builder = self
             .inner
-            .create_builder::<M, Tls>(ehdr, phdrs, object, D::default())?;
+            .create_builder::<Tls>(ehdr, phdrs, object, D::default())?;
         RawDynamic::from_builder(builder, phdrs)
     }
 
@@ -283,7 +280,7 @@ where
 
         let builder = self
             .inner
-            .create_builder::<M, Tls>(ehdr, &phdrs, reader, D::default())?;
+            .create_builder::<Tls>(ehdr, &phdrs, reader, D::default())?;
         RawDynamic::from_builder(builder, &phdrs)
     }
 
@@ -313,17 +310,18 @@ where
     ) -> Result<RawDynamic<D, Arch>> {
         let path = path.into();
         let phdrs = phdrs.into();
-        let page_size = self.inner.page_size::<M>()?.bytes();
+        let mapper = self.mapper();
+        let page_size = self.inner.page_size()?.bytes();
         let layout = parse_segments(&phdrs, true, page_size)?;
         let memory = load_bias.wrapping_add(layout.min_vaddr) as *mut c_void;
-        let segments = ElfSegments::with_base(
+        let segments = ElfSegments::new(
             memory,
             layout.mapped_len,
-            borrowed_munmap,
+            Mapper::from_munmap(|_, _| Ok(())),
             load_bias,
             layout.min_vaddr,
         );
-        let parts = borrowed_dynamic_parts::<M, D, Arch>(
+        let parts = borrowed_dynamic_parts::<D, Arch>(
             path,
             load_bias,
             entry,
@@ -333,6 +331,7 @@ where
             D::default(),
             self.inner.lifecycle_handlers(),
             page_size,
+            mapper,
         )?;
         let mut image = RawDynamic::from_parts::<Tls>(parts)?;
         self.inner.initialize_dynamic(&mut image)?;
@@ -384,7 +383,7 @@ where
 
         let builder = self
             .inner
-            .create_builder::<M, Tls>(ehdr, phdrs, object, D::default())?;
+            .create_builder::<Tls>(ehdr, phdrs, object, D::default())?;
         let mut exec = RawExec::from_builder(builder, phdrs, has_dynamic)?;
         if let RawExec::Dynamic(dynamic) = &mut exec {
             self.inner.initialize_dynamic(dynamic)?;
@@ -443,7 +442,7 @@ impl ExpectedElf {
     }
 }
 
-fn borrowed_dynamic_parts<M, D, Arch>(
+fn borrowed_dynamic_parts<D, Arch>(
     path: PathBuf,
     load_bias: usize,
     entry: usize,
@@ -453,9 +452,9 @@ fn borrowed_dynamic_parts<M, D, Arch>(
     user_data: D,
     lifecycle_handlers: (super::DynLifecycleHandler, super::DynLifecycleHandler),
     page_size: usize,
+    mapper: crate::os::Mapper,
 ) -> Result<RawDynamicParts<D, Arch>>
 where
-    M: Mmap,
     D: 'static,
     Arch: RelocationArch,
 {
@@ -493,10 +492,11 @@ where
                 tls_info = Some(crate::tls::TlsInfo::new(phdr, image));
             }
             ElfProgramType::GNU_RELRO => {
-                relro = Some(ELFRelro::new::<M, Arch::Layout>(
+                relro = Some(ELFRelro::new(
                     phdr,
                     RelocAddr::new(load_bias),
                     page_size,
+                    mapper.clone(),
                 ));
             }
             _ => {}
@@ -521,10 +521,6 @@ where
         fini_fn,
         user_data,
     })
-}
-
-unsafe fn borrowed_munmap(_memory: *mut c_void, _len: usize) -> Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]

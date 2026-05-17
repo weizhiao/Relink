@@ -7,6 +7,7 @@ use alloc::alloc::{dealloc, handle_alloc_error};
 use core::{alloc::Layout, ffi::c_void, slice::from_raw_parts_mut};
 
 /// An implementation of Mmap trait
+#[derive(Clone, Copy, Default)]
 pub struct DefaultMmap;
 
 #[cfg(feature = "tls")]
@@ -28,6 +29,7 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
 
 impl Mmap for DefaultMmap {
     unsafe fn mmap(
+        &self,
         addr: Option<usize>,
         len: usize,
         _prot: ProtFlags,
@@ -44,7 +46,7 @@ impl Mmap for DefaultMmap {
             // 只有创建整个空间时会走这条路径
             assert!((MapFlags::MAP_FIXED & flags).bits() == 0);
             let layout =
-                unsafe { Layout::from_size_align_unchecked(len, Self::page_size().bytes()) };
+                unsafe { Layout::from_size_align_unchecked(len, self.page_size().bytes()) };
             let memory = unsafe { alloc::alloc::alloc(layout) };
             if memory.is_null() {
                 handle_alloc_error(layout);
@@ -56,6 +58,7 @@ impl Mmap for DefaultMmap {
     }
 
     unsafe fn mmap_anonymous(
+        &self,
         addr: usize,
         len: usize,
         _prot: ProtFlags,
@@ -67,17 +70,18 @@ impl Mmap for DefaultMmap {
         Ok(ptr as _)
     }
 
-    unsafe fn munmap(addr: *mut c_void, len: usize) -> crate::Result<()> {
+    unsafe fn munmap(&self, addr: *mut c_void, len: usize) -> crate::Result<()> {
         unsafe {
             dealloc(
                 addr as _,
-                Layout::from_size_align_unchecked(len, Self::page_size().bytes()),
+                Layout::from_size_align_unchecked(len, self.page_size().bytes()),
             )
         };
         Ok(())
     }
 
     unsafe fn madvise(
+        &self,
         _addr: *mut c_void,
         _len: usize,
         _behavior: MadviseAdvice,
@@ -85,7 +89,12 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn mprotect(_addr: *mut c_void, _len: usize, _prot: ProtFlags) -> crate::Result<()> {
+    unsafe fn mprotect(
+        &self,
+        _addr: *mut c_void,
+        _len: usize,
+        _prot: ProtFlags,
+    ) -> crate::Result<()> {
         Ok(())
     }
 }

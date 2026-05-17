@@ -3,7 +3,7 @@ use crate::{
     arch::object::{PLT_ENTRY, PLT_ENTRY_SIZE},
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionType, ElfShdr},
     input::ElfReader,
-    os::{MapFlags, Mmap, ProtFlags},
+    os::{MapFlags, Mapper, ProtFlags},
     relocation::{RelocAddr, RelocationArch},
     segment::{Address, ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
 };
@@ -40,10 +40,10 @@ fn flags_to_idx(flags: ElfSectionFlags) -> usize {
 }
 
 impl<Arch: RelocationArch> SegmentBuilder for SectionSegments<Arch> {
-    fn create_space<M: Mmap>(&mut self) -> Result<ElfSegments> {
+    fn create_space(&mut self, mapper: Mapper) -> Result<ElfSegments> {
         let len = self.total_size;
-        let memory = unsafe { M::mmap_reserve(None, len, false) }?;
-        Ok(ElfSegments::new(memory, len, M::munmap))
+        let memory = unsafe { mapper.mmap_reserve(None, len, false) }?;
+        Ok(ElfSegments::new(memory, len, mapper, memory as usize, 0))
     }
 
     fn create_segments(&mut self) -> Result<()> {

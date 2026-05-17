@@ -8,6 +8,7 @@ use crate::{
     },
     image::{Module, ModuleHandle, ModuleScope},
     input::{Path, PathBuf},
+    os::Mapper,
     relocation::{RelocAddr, RelocationArch},
     segment::ElfSegments,
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -307,7 +308,13 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         tls_tp_offset: Option<TlsTpOffset>,
         user_data: D,
     ) -> Result<Self> {
-        let segments = ElfSegments::new(memory.0, memory.1, munmap);
+        let segments = ElfSegments::new(
+            memory.0,
+            memory.1,
+            Mapper::from_munmap(move |addr, len| unsafe { munmap(addr, len) }),
+            memory.0 as usize,
+            0,
+        );
         let base = segments.base();
         let mut tls_mod_id = None;
         let mut actual_tls_tp_offset = tls_tp_offset;

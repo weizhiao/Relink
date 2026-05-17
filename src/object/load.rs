@@ -4,14 +4,12 @@ use crate::{
     input::{ElfReader, IntoElfReader},
     loader::{LoadHook, Loader},
     logging,
-    os::Mmap,
     relocation::RelocationArch,
     tls::TlsResolver,
 };
 
-impl<M, H, D, Tls, Arch> Loader<M, H, D, Tls, Arch>
+impl<H, D, Tls, Arch> Loader<H, D, Tls, Arch>
 where
-    M: Mmap,
     H: LoadHook<Arch::Layout>,
     D: Default + 'static,
     Tls: TlsResolver,
@@ -51,7 +49,7 @@ where
             .buf
             .prepare_shdrs_mut(&ehdr, &mut object)?
             .ok_or(ParseEhdrError::MissingSectionHeaders)?;
-        let builder = self.inner.create_object_builder::<M, Tls>(shdrs, object)?;
+        let builder = self.inner.create_object_builder::<Tls>(shdrs, object)?;
         let raw = RawObject::from_builder(builder);
 
         logging::info!(

@@ -7,7 +7,7 @@ use crate::{
     image::{RawDynamic, ScannedDynamic},
     input::PathBuf,
     loader::DynLifecycleHandler,
-    os::Mmap,
+    os::{Mapper, Mmap},
     relocation::{RelocationArch, RelocationValueProvider},
     segment::ElfSegments,
     tls::{TlsInfo, TlsResolver},
@@ -135,7 +135,7 @@ impl RuntimeModuleMemory {
             .into());
         };
 
-        let mut segment_slices = Vec::with_capacity(placed_sections.len());
+        let mut mapped_slices = Vec::with_capacity(placed_sections.len());
         let mut runtime_sections = Vec::with_capacity(placed_sections.len());
 
         for (section, layout_address, source_address, actual_address, size) in &placed_sections {
@@ -148,10 +148,10 @@ impl RuntimeModuleMemory {
                 LinkerError::runtime_memory("arena-backed module address precedes runtime base")
             })?;
             let runtime_offset = RuntimeOffset::new(runtime_offset);
-            segment_slices.push(ElfSegments::slice(
+            mapped_slices.push(ElfSegments::create_slice(
                 runtime_offset.get(),
                 *size,
-                arena.backing(),
+                arena.region(),
             ));
             runtime_sections.push(RuntimeSectionMemory {
                 section: *section,
@@ -163,7 +163,7 @@ impl RuntimeModuleMemory {
 
         Ok(RuntimeModuleMemory {
             sections: runtime_sections.into_boxed_slice(),
-            segments: ElfSegments::from_slices(base, segment_slices),
+            segments: ElfSegments::from_slices(base, mapped_slices),
         })
     }
 
@@ -179,13 +179,12 @@ impl RuntimeModuleMemory {
 }
 
 impl MappedRuntimeMemory {
-    pub(crate) fn map<M, K, Arch>(plan: &LinkPlan<K, Arch>) -> Result<Option<Self>>
+    pub(crate) fn map<K, Arch>(mapper: Mapper, plan: &LinkPlan<K, Arch>) -> Result<Option<Self>>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        M: Mmap,
     {
-        let Some(arenas) = MappedArenaMap::map_plan::<M, _, Arch>(plan)? else {
+        let Some(arenas) = MappedArenaMap::map_plan(mapper, plan)? else {
             return Ok(None);
         };
         Ok(Some(Self {
@@ -236,11 +235,8 @@ impl MappedRuntimeMemory {
         self.arenas.populate(plan)
     }
 
-    pub(crate) fn protect<M>(&self) -> Result<()>
-    where
-        M: Mmap,
-    {
-        self.arenas.protect::<M>()
+    pub(crate) fn protect(&self, mapper: &dyn Mmap) -> Result<()> {
+        self.arenas.protect(mapper)
     }
 
     pub(crate) fn take_module(&mut self, module_id: ModuleId) -> Result<RuntimeModuleMemory> {

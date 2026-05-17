@@ -6,9 +6,11 @@
 //! and bare-metal environments.
 
 pub use defs::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
+pub(crate) use mapper::Mapper;
 pub use traits::Mmap;
 
 mod defs;
+mod mapper;
 mod traits;
 
 cfg_if::cfg_if! {

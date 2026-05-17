@@ -9,7 +9,6 @@ use crate::{
     },
     input::PathBuf,
     loader::{DynLifecycleHandler, LoadHook, LoaderInner},
-    os::Mmap,
     relocation::{RelocAddr, RelocationArch},
     segment::{ElfSegments, SegmentBuilder},
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
@@ -210,23 +209,23 @@ where
     D: Default + 'static,
     Arch: crate::relocation::RelocationArch,
 {
-    pub(crate) fn create_object_builder<M, Tls>(
+    pub(crate) fn create_object_builder<Tls>(
         &mut self,
         shdrs: &mut [ElfShdr<Arch::Layout>],
         mut object: impl crate::input::ElfReader,
     ) -> Result<ObjectBuilder<Tls, D, Arch>>
     where
-        M: Mmap,
         Tls: TlsResolver,
     {
         let path = PathBuf::from(object.path());
         let (init_fn, fini_fn) = self.lifecycle_handlers();
+        let mapper = self.mapper();
         let mut shdr_segments =
-            SectionSegments::<Arch>::new(shdrs, &mut object, self.page_size::<M>()?.bytes())?;
-        let segments = shdr_segments.load_segments::<M>(&mut object)?;
+            SectionSegments::<Arch>::new(shdrs, &mut object, self.page_size()?.bytes())?;
+        let segments = shdr_segments.load_segments(mapper.clone(), &mut object)?;
         let pltgot = shdr_segments.take_pltgot();
         let mprotect = Box::new(move || {
-            shdr_segments.mprotect::<M>()?;
+            shdr_segments.mprotect(mapper.as_ref())?;
             Ok(())
         });
         let user_data = D::default();

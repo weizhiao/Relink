@@ -11,7 +11,6 @@ use crate::{
     LinkerError, Loader, Result,
     image::{RawDynamic, ScannedDynamic, ScannedElf},
     loader::LoadHook,
-    os::Mmap,
     relocation::RelocationArch,
     tls::TlsResolver,
 };
@@ -153,22 +152,21 @@ where
         resolver.load_root(&req)
     }
 
-    fn direct_deps_for<'cfg, M, H, Tls, F>(
+    fn direct_deps_for<'cfg, H, Tls, F>(
         &mut self,
         id: KeyId,
-        loader: &mut Loader<M, H, D, Tls, Arch>,
+        loader: &mut Loader<H, D, Tls, Arch>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch>,
         stage: &mut F,
     ) -> Result<Vec<KeyId>>
     where
         K: 'cfg,
-        M: Mmap,
         H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
         F: FnMut(
             &mut Self,
             ResolvedKey<'cfg, K, Arch>,
-            &mut Loader<M, H, D, Tls, Arch>,
+            &mut Loader<H, D, Tls, Arch>,
         ) -> Result<KeyId>,
     {
         if let Some(direct_deps) = self.known_direct_deps(id) {
@@ -191,22 +189,21 @@ where
         Ok(direct_deps)
     }
 
-    fn resolve_dependency_graph_with<'cfg, M, H, Tls, F>(
+    fn resolve_dependency_graph_with<'cfg, H, Tls, F>(
         &mut self,
         root: KeyId,
-        loader: &mut Loader<M, H, D, Tls, Arch>,
+        loader: &mut Loader<H, D, Tls, Arch>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch>,
         mut stage: F,
     ) -> Result<()>
     where
         K: 'cfg,
-        M: Mmap,
         H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
         F: FnMut(
             &mut Self,
             ResolvedKey<'cfg, K, Arch>,
-            &mut Loader<M, H, D, Tls, Arch>,
+            &mut Loader<H, D, Tls, Arch>,
         ) -> Result<KeyId>,
     {
         let mut group_order = Vec::new();
@@ -224,16 +221,15 @@ where
     V: VisibleModules<K, D, Arch>,
     Arch: RelocationArch,
 {
-    pub(crate) fn stage_resolved<'cfg, M, H, Tls, O>(
+    pub(crate) fn stage_resolved<'cfg, H, Tls, O>(
         &mut self,
         resolved: ResolvedKey<'cfg, K, Arch>,
-        loader: &mut Loader<M, H, D, Tls, Arch>,
+        loader: &mut Loader<H, D, Tls, Arch>,
         observer: &mut O,
     ) -> Result<KeyId>
     where
         K: 'cfg,
         D: Default,
-        M: Mmap,
         H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
         O: LoadObserver<K, D, Arch>,
@@ -283,17 +279,16 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<'cfg, M, H, Tls, O>(
+    pub(crate) fn resolve_dependency_graph<'cfg, H, Tls, O>(
         &mut self,
         root: KeyId,
-        loader: &mut Loader<M, H, D, Tls, Arch>,
+        loader: &mut Loader<H, D, Tls, Arch>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch>,
         observer: &mut O,
     ) -> Result<()>
     where
         K: 'cfg,
         D: Default,
-        M: Mmap,
         H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
         O: LoadObserver<K, D, Arch>,
@@ -310,15 +305,14 @@ where
     V: VisibleModules<K, D, Arch>,
     Arch: RelocationArch,
 {
-    pub(crate) fn stage_resolved<M, H, Tls>(
+    pub(crate) fn stage_resolved<H, Tls>(
         &mut self,
         resolved: ResolvedKey<'static, K, Arch>,
-        loader: &mut Loader<M, H, D, Tls, Arch>,
+        loader: &mut Loader<H, D, Tls, Arch>,
     ) -> Result<KeyId>
     where
         K: 'static,
         D: Default,
-        M: Mmap,
         H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
     {
@@ -367,16 +361,15 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<M, H, Tls>(
+    pub(crate) fn resolve_dependency_graph<H, Tls>(
         &mut self,
         root: KeyId,
-        loader: &mut Loader<M, H, D, Tls, Arch>,
+        loader: &mut Loader<H, D, Tls, Arch>,
         resolver: &mut impl KeyResolver<'static, K, Arch>,
     ) -> Result<()>
     where
         K: 'static,
         D: Default,
-        M: Mmap,
         H: LoadHook<Arch::Layout>,
         Tls: TlsResolver,
     {

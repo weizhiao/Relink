@@ -1,12 +1,12 @@
 use crate::{
-    Result,
+    os::Mapper,
     relocation::{RelocAddr, RelocValue},
     sync::Arc,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{ffi::c_void, fmt::Debug, mem::size_of, ptr::NonNull};
 
-use super::{ElfSegmentBacking, ElfSegmentSlice};
+use super::{MappedRegion, MappedSlice};
 
 /// The mapped memory of an ELF object.
 ///
@@ -15,7 +15,7 @@ use super::{ElfSegmentBacking, ElfSegmentSlice};
 /// The slices are kept sorted by offset and must not overlap.
 pub struct ElfSegments {
     base: usize,
-    slices: Box<[ElfSegmentSlice]>,
+    slices: Box<[MappedSlice]>,
 }
 
 impl Debug for ElfSegments {
@@ -34,42 +34,33 @@ impl Debug for ElfSegments {
 
 impl ElfSegments {
     #[inline]
-    fn find_slice(&self, start: usize, len: usize) -> Option<&ElfSegmentSlice> {
+    fn find_slice(&self, start: usize, len: usize) -> Option<&MappedSlice> {
         self.slices
             .iter()
             .find(|slice| slice.contains_range(start, len))
     }
 
     #[inline]
-    fn slice_base(&self, slice: &ElfSegmentSlice) -> usize {
+    fn slice_base(&self, slice: &MappedSlice) -> usize {
         self.base.saturating_add(slice.offset)
     }
 
     #[inline]
-    fn slice_end(&self, slice: &ElfSegmentSlice) -> usize {
+    fn slice_end(&self, slice: &MappedSlice) -> usize {
         self.slice_base(slice).saturating_add(slice.len)
-    }
-
-    /// Create a new contiguous [`ElfSegments`] instance with `base == memory`.
-    pub(crate) fn new(
-        memory: *mut c_void,
-        len: usize,
-        munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
-    ) -> Self {
-        Self::with_base(memory, len, munmap, memory as usize, 0)
     }
 
     /// Create a new contiguous [`ElfSegments`] instance whose mapped bytes begin
     /// at the module-relative `offset`.
-    pub(crate) fn with_base(
+    pub(crate) fn new(
         memory: *mut c_void,
         len: usize,
-        munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
+        mapper: Mapper,
         base: usize,
         offset: usize,
     ) -> Self {
-        let backing = Arc::new(ElfSegmentBacking::new(memory, len, munmap));
-        let slice = ElfSegmentSlice::new(offset, len, backing);
+        let region = Arc::new(MappedRegion::new(memory, len, mapper));
+        let slice = MappedSlice::new(offset, len, region);
         Self {
             base,
             slices: alloc::vec![slice].into_boxed_slice(),
@@ -77,7 +68,7 @@ impl ElfSegments {
     }
 
     /// Creates an [`ElfSegments`] instance from explicit mapped slices.
-    pub(crate) fn from_slices(base: usize, mut slices: Vec<ElfSegmentSlice>) -> Self {
+    pub(crate) fn from_slices(base: usize, mut slices: Vec<MappedSlice>) -> Self {
         slices.sort_by_key(|slice| (slice.offset(), slice.len()));
         for pair in slices.windows(2) {
             let previous = &pair[0];
@@ -95,23 +86,23 @@ impl ElfSegments {
         Self { base, slices }
     }
 
-    /// Creates one shared backing owner for a mapped region.
-    pub(crate) fn create_backing(
+    /// Creates one shared mapped region owner.
+    pub(crate) fn create_region(
         memory: *mut c_void,
         len: usize,
-        munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
-    ) -> Arc<ElfSegmentBacking> {
-        Arc::new(ElfSegmentBacking::new(memory, len, munmap))
+        mapper: Mapper,
+    ) -> Arc<MappedRegion> {
+        Arc::new(MappedRegion::new(memory, len, mapper))
     }
 
-    /// Creates one mapped slice descriptor backed by a shared owner.
+    /// Creates one mapped slice descriptor covered by a shared region.
     #[inline]
-    pub(crate) fn slice(
+    pub(crate) fn create_slice(
         offset: usize,
         len: usize,
-        backing: Arc<ElfSegmentBacking>,
-    ) -> ElfSegmentSlice {
-        ElfSegmentSlice::new(offset, len, backing)
+        region: Arc<MappedRegion>,
+    ) -> MappedSlice {
+        MappedSlice::new(offset, len, region)
     }
 
     /// Rebinds the module base address while preserving the existing slice layout.
@@ -120,13 +111,13 @@ impl ElfSegments {
         self.base = base;
     }
 
-    /// Returns the first mapped backing region, when this object owns one.
+    /// Returns the first mapped region, when this object owns one.
     #[inline]
     #[cfg(windows)]
-    pub(crate) fn primary_backing(&self) -> Option<(*mut c_void, usize)> {
+    pub(crate) fn primary_region(&self) -> Option<(*mut c_void, usize)> {
         self.slices
             .first()
-            .map(|slice| (slice.backing.memory, slice.backing.len))
+            .map(|slice| (slice.region.memory, slice.region.len))
     }
 
     /// Returns whether no slices are mapped.
@@ -164,7 +155,7 @@ impl ElfSegments {
         })
     }
 
-    /// Returns whether the backing memory is one contiguous span with no gaps.
+    /// Returns whether the mapped memory is one contiguous span with no gaps.
     pub fn is_contiguous_mapping(&self) -> bool {
         self.slices
             .windows(2)

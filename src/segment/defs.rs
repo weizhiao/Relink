@@ -1,6 +1,6 @@
 use crate::{
-    Result, logging,
-    os::{MapFlags, ProtFlags},
+    logging,
+    os::{MapFlags, Mapper, ProtFlags},
     sync::Arc,
 };
 use alloc::vec::Vec;
@@ -90,30 +90,26 @@ pub(crate) struct ElfSegment {
     pub(crate) from_relocatable: bool,
 }
 
-pub(crate) struct ElfSegmentBacking {
+pub(crate) struct MappedRegion {
     pub(super) memory: *mut c_void,
     pub(super) len: usize,
-    munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
+    mapper: Mapper,
 }
 
-impl ElfSegmentBacking {
+impl MappedRegion {
     #[inline]
-    pub(super) fn new(
-        memory: *mut c_void,
-        len: usize,
-        munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
-    ) -> Self {
+    pub(super) fn new(memory: *mut c_void, len: usize, mapper: Mapper) -> Self {
         Self {
             memory,
             len,
-            munmap,
+            mapper,
         }
     }
 }
 
-impl Drop for ElfSegmentBacking {
+impl Drop for MappedRegion {
     fn drop(&mut self) {
-        let res = unsafe { (self.munmap)(self.memory, self.len) };
+        let res = unsafe { self.mapper.munmap(self.memory, self.len) };
         debug_assert!(res.is_ok(), "failed to unmap ELF segments");
         if let Err(err) = res {
             logging::error!("failed to unmap ELF segments: {err}");
@@ -121,28 +117,28 @@ impl Drop for ElfSegmentBacking {
     }
 }
 
-// Safety: the backing only owns an mmap-style region and unmaps it on drop.
-unsafe impl Send for ElfSegmentBacking {}
-// Safety: the backing does not expose interior mutability beyond the mapped bytes themselves.
-unsafe impl Sync for ElfSegmentBacking {}
+// Safety: the region only owns an mmap-style allocation and unmaps it on drop.
+unsafe impl Send for MappedRegion {}
+// Safety: the region does not expose interior mutability beyond the mapped bytes themselves.
+unsafe impl Sync for MappedRegion {}
 
 #[derive(Clone)]
-pub(crate) struct ElfSegmentSlice {
+pub(crate) struct MappedSlice {
     pub(super) offset: usize,
     pub(super) len: usize,
     // This shared owner keeps the mapped arena alive even when address math
     // only needs the slice bounds at runtime.
     #[cfg_attr(not(windows), allow(dead_code))]
-    pub(super) backing: Arc<ElfSegmentBacking>,
+    pub(super) region: Arc<MappedRegion>,
 }
 
-impl ElfSegmentSlice {
+impl MappedSlice {
     #[inline]
-    pub(super) fn new(offset: usize, len: usize, backing: Arc<ElfSegmentBacking>) -> Self {
+    pub(super) fn new(offset: usize, len: usize, region: Arc<MappedRegion>) -> Self {
         Self {
             offset,
             len,
-            backing,
+            region,
         }
     }
 

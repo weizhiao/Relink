@@ -15,10 +15,13 @@ use crate::Result;
 ///
 /// # Example
 /// ```rust,ignore
-/// struct MyMmap;
+/// struct MyMmap {
+///     // Put loader/task/address-space context here.
+/// }
 ///
-/// unsafe impl Mmap for MyMmap {
+/// impl Mmap for MyMmap {
 ///     unsafe fn mmap(
+///         &self,
 ///         addr: Option<usize>,
 ///         len: usize,
 ///         prot: ProtFlags,
@@ -34,14 +37,14 @@ use crate::Result;
 ///     // Implement other required methods...
 /// }
 /// ```
-pub trait Mmap {
+pub trait Mmap: Send + Sync + 'static {
     /// Returns the base page size required by this mapping environment.
     ///
     /// Implementations that can query the host should return the active system
     /// page size. Bare-metal or syscall-only implementations can keep the
     /// default 4 KiB base page.
     #[inline]
-    fn page_size() -> PageSize {
+    fn page_size(&self) -> PageSize {
         PageSize::Base
     }
 
@@ -69,6 +72,7 @@ pub trait Mmap {
     /// - `len` and `offset` are valid and don't cause overflow.
     /// - File descriptors are valid and accessible.
     unsafe fn mmap(
+        &self,
         addr: Option<usize>,
         len: usize,
         prot: ProtFlags,
@@ -95,6 +99,7 @@ pub trait Mmap {
     /// # Safety
     /// Manipulates address space. Ensure `addr` is valid and page-aligned if specified.
     unsafe fn mmap_anonymous(
+        &self,
         addr: usize,
         len: usize,
         prot: ProtFlags,
@@ -112,7 +117,7 @@ pub trait Mmap {
     ///
     /// # Safety
     /// Ensure `addr` and `len` match the original mapping. Do not access the region after unmapping.
-    unsafe fn munmap(addr: *mut c_void, len: usize) -> Result<()>;
+    unsafe fn munmap(&self, addr: *mut c_void, len: usize) -> Result<()>;
 
     /// Give advice about the use of memory.
     ///
@@ -136,7 +141,7 @@ pub trait Mmap {
     /// nothing except for updating bookkeeping inside the kernel. Others (like
     /// MADV_REMOVE) effectively free the memory. Caller is responsible for
     /// taking appropriate action given the advice applied.
-    unsafe fn madvise(addr: *mut c_void, len: usize, behavior: MadviseAdvice) -> Result<()>;
+    unsafe fn madvise(&self, addr: *mut c_void, len: usize, behavior: MadviseAdvice) -> Result<()>;
 
     /// Changes the protection of a memory region.
     ///
@@ -155,7 +160,7 @@ pub trait Mmap {
     /// # Safety
     /// Changing permissions can affect running code. Ensure no code is executing in the region
     /// when removing execute permissions. `addr` must be page-aligned.
-    unsafe fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()>;
+    unsafe fn mprotect(&self, addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()>;
 
     /// Reserves a region of virtual address space without committing physical memory.
     ///
@@ -176,6 +181,7 @@ pub trait Mmap {
     /// # Safety
     /// Manipulates address space. The reserved region should not be accessed until properly mapped.
     unsafe fn mmap_reserve(
+        &self,
         addr: Option<usize>,
         len: usize,
         _use_file: bool,
@@ -183,7 +189,7 @@ pub trait Mmap {
         let mut need_copy = false;
         // Reserve address space with PROT_NONE (no physical memory committed)
         unsafe {
-            Self::mmap(
+            self.mmap(
                 addr,
                 len,
                 ProtFlags::PROT_NONE,

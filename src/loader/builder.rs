@@ -4,7 +4,7 @@ use crate::{
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
     image::RawDynamic,
     input::{ElfReader, PathBuf},
-    os::{Mmap, PageSize},
+    os::{Mapper, PageSize},
     segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
     tls::{TlsInfo, TlsResolver},
 };
@@ -16,10 +16,9 @@ use core::{ffi::c_char, marker::PhantomData, ptr::NonNull};
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocated ELF file before
 /// building the final loaded image.
-pub(crate) struct ImageBuilder<'hook, H, M, Tls, D = (), L: ElfLayout = NativeElfLayout>
+pub(crate) struct ImageBuilder<'hook, H, Tls, D = (), L: ElfLayout = NativeElfLayout>
 where
     H: LoadHook<L>,
-    M: Mmap,
     Tls: TlsResolver,
 {
     /// Hook function for processing program headers (always present)
@@ -49,6 +48,9 @@ where
     /// Page size used for segment layout.
     page_size: usize,
 
+    /// Mapping backend used by protections created from this builder.
+    mapper: Mapper,
+
     /// User-defined data
     pub(crate) user_data: D,
 
@@ -67,8 +69,8 @@ where
     /// Pointer to the .eh_frame_hdr section (PT_GNU_EH_FRAME)
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
 
-    /// Phantom data to maintain Mmap type information
-    _marker: PhantomData<(M, Tls, L)>,
+    /// Phantom data to maintain TLS type information.
+    _marker: PhantomData<(Tls, L)>,
 }
 
 pub(crate) struct ScanBuilder<L: ElfLayout = NativeElfLayout> {
@@ -95,11 +97,10 @@ impl<L: ElfLayout> ScanBuilder<L> {
     }
 }
 
-impl<'hook, H, M, Tls, D, L> ImageBuilder<'hook, H, M, Tls, D, L>
+impl<'hook, H, Tls, D, L> ImageBuilder<'hook, H, Tls, D, L>
 where
     H: LoadHook<L>,
     Tls: TlsResolver,
-    M: Mmap,
     L: ElfLayout,
 {
     /// Create a new [`ImageBuilder`].
@@ -121,6 +122,7 @@ where
         fini_fn: DynLifecycleHandler,
         static_tls: bool,
         page_size: usize,
+        mapper: Mapper,
         user_data: D,
     ) -> Self {
         Self {
@@ -133,6 +135,7 @@ where
             tls_info: None,
             static_tls,
             page_size,
+            mapper,
             segments,
             user_data,
             init_fn,
@@ -157,10 +160,11 @@ where
                 )
             }
             ElfProgramType::GNU_RELRO => {
-                self.relro = Some(ELFRelro::new::<M, L>(
+                self.relro = Some(ELFRelro::new(
                     phdr,
                     self.segments.base_addr(),
                     self.page_size,
+                    self.mapper.clone(),
                 ))
             }
             ElfProgramType::PHDR => {
@@ -256,8 +260,13 @@ where
     }
 
     #[inline]
-    pub(crate) fn page_size<M: Mmap>(&self) -> Result<PageSize> {
-        let required = M::page_size();
+    pub(crate) fn mapper(&self) -> Mapper {
+        self.mapper.clone()
+    }
+
+    #[inline]
+    pub(crate) fn page_size(&self) -> Result<PageSize> {
+        let required = self.mapper.page_size();
         let page_size = self.page_size.unwrap_or(required);
         if page_size.bytes() < required.bytes()
             || !page_size.bytes().is_multiple_of(required.bytes())
@@ -284,24 +293,24 @@ where
     D: 'static,
     Arch: crate::relocation::RelocationArch,
 {
-    pub(crate) fn create_builder<M, Tls>(
+    pub(crate) fn create_builder<Tls>(
         &mut self,
         ehdr: ElfHeader<Arch::Layout>,
         phdrs: &[ElfPhdr<Arch::Layout>],
         mut object: impl ElfReader,
         user_data: D,
-    ) -> Result<ImageBuilder<'_, H, M, Tls, D, Arch::Layout>>
+    ) -> Result<ImageBuilder<'_, H, Tls, D, Arch::Layout>>
     where
-        M: Mmap,
         Tls: TlsResolver,
     {
         let path = PathBuf::from(object.path());
         let (init_fn, fini_fn) = self.lifecycle_handlers();
-        let page_size = self.page_size::<M>()?.bytes();
+        let mapper = self.mapper();
+        let page_size = self.page_size()?.bytes();
         let mut phdr_segments =
             ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some(), page_size);
-        let segments = phdr_segments.load_segments::<M>(&mut object)?;
-        phdr_segments.mprotect::<M>()?;
+        let segments = phdr_segments.load_segments(mapper.clone(), &mut object)?;
+        phdr_segments.mprotect(mapper.as_ref())?;
 
         Ok(ImageBuilder::new(
             &mut self.hook,
@@ -312,6 +321,7 @@ where
             fini_fn,
             self.force_static_tls,
             page_size,
+            mapper,
             user_data,
         ))
     }

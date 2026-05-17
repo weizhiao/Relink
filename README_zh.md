@@ -123,7 +123,7 @@ fn main() -> Result<()> {
 | 运行时依赖链接 | `Linker::load()` | 需要 `KeyResolver` 和 `LinkContext` 管理依赖图、作用域和上下文隔离 |
 | Scan-first 链接 | `Linker::load_scan_first()` | 需要先发现 `DT_NEEDED` 依赖图，再运行布局 pass、选择物化策略并统一重定位 |
 | 可重定位对象 | `Loader::load_object()` | 需要运行时组合 `.o` 与 `.so`；需要开启 `object` feature |
-| 自定义映射环境 | `Loader::with_mmap()` / `with_page_size()` | 需要接入自己的 mmap、权限模型、页大小或大页策略 |
+| 自定义映射环境 | `Loader::with_mmap(mapper)` / `with_page_size()` | 需要接入自己的 mmap、权限模型、页大小或大页策略 |
 
 ## 进阶能力索引
 
