@@ -1,6 +1,6 @@
 #[cfg(feature = "object")]
 use super::RelocHelper;
-use super::{Emulator, RelocAddr, RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
+use super::{Emulator, RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
 #[cfg(feature = "object")]
 use crate::segment::RelocWrite;
 use crate::{
@@ -8,6 +8,7 @@ use crate::{
     arch::{ArchKind, NativeArch},
     elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType},
     image::{ElfCore, ModuleScope},
+    os::VmAddr,
     sync::Arc,
 };
 use alloc::boxed::Box;
@@ -146,14 +147,14 @@ pub(crate) trait RelocationValueProvider {
         addend: isize,
         place: usize,
         skip: impl FnOnce(RelocValue<()>) -> T,
-        write_addr: impl FnOnce(RelocAddr) -> T,
+        write_addr: impl FnOnce(VmAddr) -> T,
         write_word32: impl FnOnce(RelocValue<u32>) -> T,
         write_sword32: impl FnOnce(RelocValue<i32>) -> T,
     ) -> core::result::Result<T, RelocReason> {
         let kind = Self::relocation_value_kind(relocation_type)?;
         match kind {
             RelocationValueKind::None => Ok(skip(RelocValue::new(()))),
-            RelocationValueKind::Address(formula) => Ok(write_addr(RelocAddr::new(
+            RelocationValueKind::Address(formula) => Ok(write_addr(VmAddr::new(
                 formula.compute(target, addend, place) as usize,
             ))),
             RelocationValueKind::Word32(formula) => {

@@ -185,13 +185,13 @@ pub trait Emulator<Arch: RelocationArch>: Send + Sync + 'static {
     -> Result<usize>;
 
     /// Executes `.init` / `.init_array` functions in the guest environment.
-    fn call_init(&self, ctx: &EmuContext<'_, Arch>, lifecycle: &Lifecycle<'_>) -> Result<()>;
+    fn call_init(&self, ctx: &EmuContext<'_, Arch>, lifecycle: &Lifecycle) -> Result<()>;
 
     /// Executes `.fini` / `.fini_array` functions in the guest environment.
     ///
     /// This mirrors the native finalizer contract: finalization runs during
     /// drop and therefore cannot report errors to the caller.
-    fn call_fini(&self, ctx: &EmuContext<'_, Arch>, lifecycle: &Lifecycle<'_>);
+    fn call_fini(&self, ctx: &EmuContext<'_, Arch>, lifecycle: &Lifecycle);
 
     /// Builds the guest TLSDESC pair for a TLSDESC relocation.
     fn resolve_tlsdesc(

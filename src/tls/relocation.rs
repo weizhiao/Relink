@@ -14,16 +14,16 @@ mod enabled {
         RelocReason, Result,
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
+        os::VmAddr,
         relocation::{
-            RelocAddr, RelocHelper, RelocValue, RelocationArch, RelocationHandler,
-            TlsDescEmuRequest,
+            RelocHelper, RelocValue, RelocationArch, RelocationHandler, TlsDescEmuRequest,
         },
         segment::RelocWrite,
     };
     use alloc::boxed::Box;
 
     #[inline]
-    pub(crate) fn lookup_tls_get_addr(name: &str, tls_get_addr: RelocAddr) -> Option<*const ()> {
+    pub(crate) fn lookup_tls_get_addr(name: &str, tls_get_addr: VmAddr) -> Option<*const ()> {
         (name == "__tls_get_addr").then_some(tls_get_addr.as_ptr())
     }
 
@@ -66,7 +66,7 @@ mod enabled {
                     let Some(sym) = symdef.symbol() else {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                     };
-                    let tls_val = RelocValue::new(sym.st_value())
+                    let tls_val = VmAddr::new(sym.st_value())
                         .addend(r_addend)
                         .relative_to(Arch::TLS_DTV_OFFSET);
                     write_tls_word::<Arch, W>(writer, rel.r_offset(), tls_val.into_inner());
@@ -97,7 +97,7 @@ mod enabled {
                     };
                     if let Some(tp_offset) = symdef.tls_tp_offset() {
                         let tls_val =
-                            RelocValue::new((tp_offset.get() + sym.st_value() as isize) as usize)
+                            VmAddr::new((tp_offset.get() + sym.st_value() as isize) as usize)
                                 .addend(r_addend);
                         write_tls_word::<Arch, W>(writer, rel.r_offset(), tls_val.into_inner());
                         return Ok(TlsRelocOutcome::Applied);
@@ -129,7 +129,7 @@ mod enabled {
 
                     if let Some(tp_offset) = symdef.tls_tp_offset() {
                         let tpoff =
-                            RelocValue::new((tp_offset.get() + sym.st_value() as isize) as usize)
+                            VmAddr::new((tp_offset.get() + sym.st_value() as isize) as usize)
                                 .addend(r_addend);
                         write_tls_word::<Arch, W>(
                             writer,
@@ -141,7 +141,7 @@ mod enabled {
                     }
 
                     if let Some(mod_id) = symdef.tls_mod_id() {
-                        let offset = RelocValue::new(sym.st_value() as usize).addend(r_addend);
+                        let offset = VmAddr::new(sym.st_value() as usize).addend(r_addend);
                         let dynamic_arg = Box::new(TlsDescDynamicArg {
                             tls_get_addr: helper.tls_get_addr.into_inner(),
                             ti: TlsIndex {
@@ -150,7 +150,7 @@ mod enabled {
                             },
                         });
 
-                        let arg_ptr = RelocAddr::from_ptr(dynamic_arg.as_ref());
+                        let arg_ptr = VmAddr::from_ptr(dynamic_arg.as_ref());
                         helper.tls_desc_args.push(dynamic_arg);
 
                         write_tls_word::<Arch, W>(
@@ -176,11 +176,12 @@ mod disabled {
     use crate::{
         RelocReason, Result,
         elf::{ElfRelEntry, ElfRelType},
-        relocation::{RelocAddr, RelocHelper, RelocationArch, RelocationHandler},
+        os::VmAddr,
+        relocation::{RelocHelper, RelocationArch, RelocationHandler},
     };
 
     #[inline]
-    pub(crate) fn lookup_tls_get_addr(_name: &str, _tls_get_addr: RelocAddr) -> Option<*const ()> {
+    pub(crate) fn lookup_tls_get_addr(_name: &str, _tls_get_addr: VmAddr) -> Option<*const ()> {
         None
     }
 

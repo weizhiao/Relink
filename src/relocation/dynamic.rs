@@ -4,7 +4,7 @@ use crate::{
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     image::{LoadedCore, RawDynamic},
     logging,
-    os::MappedView,
+    os::{MappedView, VmAddr},
     relocation::{
         BindingMode, RelocHelper, RelocValue, RelocateArgs, RelocationArch, RelocationHandler,
         ResolvedBinding, likely, reloc_error, resolve_ifunc, unlikely,
@@ -169,7 +169,7 @@ pub(crate) struct DynamicRelocation<Arch: RelocationArch = crate::arch::NativeAr
 fn write_reloc_addr<Arch: RelocationArch, W: RelocWrite>(
     writer: &mut W,
     r_offset: usize,
-    value: crate::relocation::RelocAddr,
+    value: VmAddr,
 ) where
     <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
 {
@@ -187,7 +187,7 @@ fn write_reloc_addr<Arch: RelocationArch, W: RelocWrite>(
 fn update_relative_word<Arch: RelocationArch, W: RelocWrite>(
     writer: &mut W,
     r_offset: usize,
-    base: crate::relocation::RelocAddr,
+    base: VmAddr,
 ) where
     <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
 {
@@ -504,7 +504,7 @@ mod tests {
         ByteRepr, Error, ParseDynamicError,
         arch::NativeArch,
         elf::ElfRelType,
-        os::{MappedRegion, MappedView, Mapper, TargetAddr},
+        os::{MappedRegion, MappedView, Mapper, VmAddr},
     };
     use alloc::boxed::Box;
     use core::num::NonZeroUsize;
@@ -520,14 +520,9 @@ mod tests {
             byte_len,
             Mapper::from_munmap(|_, _| Ok(())),
         );
-        MappedView::read_region(
-            &region,
-            0,
-            TargetAddr::new(slice.as_ptr() as usize),
-            byte_len,
-        )
-        .unwrap()
-        .unwrap()
+        MappedView::read_region(&region, 0, VmAddr::new(slice.as_ptr() as usize), byte_len)
+            .unwrap()
+            .unwrap()
     }
 
     #[test]

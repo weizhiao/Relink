@@ -7,7 +7,8 @@ mod enabled {
         RelocationError, Result,
         arch::{NativeArch, prepare_lazy_bind},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolInfo},
-        relocation::{BindingMode, RelocAddr, RelocationArch, SupportLazy, SymDef, unlikely},
+        os::VmAddr,
+        relocation::{BindingMode, RelocValue, RelocationArch, SupportLazy, SymDef, unlikely},
         segment::{RelocWrite, RelocWriter},
         sync::Arc,
         tls::lookup_tls_get_addr,
@@ -22,10 +23,7 @@ mod enabled {
 
     impl<D: 'static, Arch: RelocationArch> SupportLazy for RawElf<D, Arch> {}
 
-    fn lookup_addr<Arch: RelocationArch>(
-        source: &dyn Module<Arch>,
-        name: &str,
-    ) -> Option<RelocAddr> {
+    fn lookup_addr<Arch: RelocationArch>(source: &dyn Module<Arch>, name: &str) -> Option<VmAddr> {
         let syminfo = SymbolInfo::from_str(name, None);
         let mut precompute = syminfo.precompute();
         let sym = source.lookup_symbol(&syminfo, &mut precompute)?;
@@ -58,7 +56,7 @@ mod enabled {
 
                 let got = lazy_binding_got(image)?;
                 let core = image.core_ref();
-                prepare_lazy_bind(got.as_ptr(), RelocAddr::from_ptr(Arc::as_ptr(&core.inner)));
+                prepare_lazy_bind(got.as_ptr(), VmAddr::from_ptr(Arc::as_ptr(&core.inner)));
             }
             Ok(())
         }
@@ -66,7 +64,7 @@ mod enabled {
         pub(crate) fn relocate_jump_slot<Arch: RelocationArch, W: RelocWrite>(
             &self,
             writer: &mut W,
-            base: RelocAddr,
+            base: VmAddr,
             rel: &ElfRelType<Arch>,
         ) -> Result<bool>
         where
@@ -211,7 +209,7 @@ mod enabled {
             invalid_state(dylib.path.as_str(), "missing lazy lookup")
         };
         let symbol = lookup_tls_get_addr(syminfo.name(), dylib.tls.tls_get_addr())
-            .map(RelocAddr::from_ptr)
+            .map(VmAddr::from_ptr)
             .or_else(|| {
                 scope
                     .iter()
@@ -221,10 +219,14 @@ mod enabled {
 
         match segments.reloc_writer() {
             RelocWriter::Linear(mut writer) => {
-                unsafe { writer.write_value(rela.r_offset(), symbol) };
+                unsafe {
+                    writer.write_value(rela.r_offset(), RelocValue::new(symbol.into_inner()))
+                };
             }
             RelocWriter::Sparse(mut writer) => {
-                unsafe { writer.write_value(rela.r_offset(), symbol) };
+                unsafe {
+                    writer.write_value(rela.r_offset(), RelocValue::new(symbol.into_inner()))
+                };
             }
         }
         symbol.into_inner()
@@ -262,7 +264,7 @@ mod disabled {
         pub(crate) fn relocate_jump_slot<Arch: RelocationArch, W>(
             &self,
             _writer: &mut W,
-            _base: crate::relocation::RelocAddr,
+            _base: crate::os::VmAddr,
             _rel: &ElfRelType<Arch>,
         ) -> crate::Result<bool> {
             Ok(false)

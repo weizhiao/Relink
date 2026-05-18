@@ -3,6 +3,7 @@ use crate::{
     elf::ElfRelType,
     elf::Lifecycle,
     image::{ModuleScope, RawObject},
+    loader::LifecycleContext,
     logging,
     relocation::{RelocHelper, RelocationArch, RelocationHandler},
     segment::RelocWriter,
@@ -83,8 +84,10 @@ where
         (self.mprotect)()?;
 
         logging::trace!("[{}] Executing init functions", self.core.name());
-        self.init
-            .call(&Lifecycle::new(None, self.init_array.clone()));
+        let init_array = self.init_array.take();
+        let lifecycle = Lifecycle::new(None, init_array);
+        let ctx = LifecycleContext::new(&lifecycle, self.core.segments());
+        self.init.call(&ctx);
 
         logging::info!("Relocation completed for {}", self.core.name());
 

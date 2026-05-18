@@ -1,6 +1,6 @@
-use core::ffi::c_void;
+use core::{ffi::c_void, ptr::NonNull};
 
-use super::{MadviseAdvice, MapFlags, MappedRegion, PageSize, ProtFlags, TargetAddr};
+use super::{MadviseAdvice, MapFlags, MappedRegion, PageSize, ProtFlags, VmAddr};
 use crate::Result;
 
 /// Result of an mmap-style operation.
@@ -39,7 +39,7 @@ impl MmapResult {
 /// Operations supported by one mapped region.
 pub trait MappedRegionOps: Send + Sync + 'static {
     /// Base target address of this mapping.
-    fn addr(&self) -> TargetAddr;
+    fn addr(&self) -> VmAddr;
 
     /// Length of this mapping in bytes.
     fn len(&self) -> usize;
@@ -69,6 +69,14 @@ pub trait MappedRegionOps: Send + Sync + 'static {
     /// Implementations may only return `Some` when the byte range remains
     /// readable through the returned lifetime.
     unsafe fn borrow_bytes(&self, offset: usize, len: usize) -> Option<&'static [u8]>;
+
+    /// Returns a host-accessible pointer into the mapping without checking bounds.
+    ///
+    /// # Safety
+    /// The caller must ensure `offset` is inside this region. Implementations
+    /// may only return `Some` when the address is directly usable by the
+    /// current process.
+    unsafe fn host_ptr(&self, offset: usize) -> Option<NonNull<u8>>;
 
     /// Applies memory advice to a range without checking bounds.
     ///

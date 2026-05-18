@@ -8,8 +8,8 @@ use crate::{
     },
     image::{Module, ModuleHandle, ModuleScope},
     input::{Path, PathBuf},
-    os::{MappedRegion, Mapper},
-    relocation::{RelocAddr, RelocationArch},
+    os::{MappedRegion, Mapper, VmAddr},
+    relocation::RelocationArch,
     segment::ElfSegments,
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
@@ -404,7 +404,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                     segments,
                     tls_mod_id,
                     actual_tls_tp_offset,
-                    RelocAddr::from_ptr(Tls::tls_get_addr as *const ()),
+                    VmAddr::from_ptr(Tls::tls_get_addr as *const ()),
                     Tls::unregister,
                     user_data,
                 )

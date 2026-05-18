@@ -8,7 +8,7 @@ use super::ElfHashTable;
 use crate::{
     ParseDynamicError, Result,
     elf::{ElfLayout, ElfSymbol, PreCompute, SymbolTable, symbol::SymbolInfo},
-    os::{MappedView, TargetAddr},
+    os::{MappedView, VmAddr},
     segment::ElfSegments,
 };
 use core::mem::size_of;
@@ -52,7 +52,7 @@ impl ElfHash {
     /// # Returns
     /// An ElfHash instance representing the parsed hash table
     #[inline]
-    pub(crate) fn parse(segments: &ElfSegments, addr: TargetAddr) -> Result<ElfHash> {
+    pub(crate) fn parse(segments: &ElfSegments, addr: VmAddr) -> Result<ElfHash> {
         const HEADER_SIZE: usize = size_of::<ElfHashHeader>();
         let start = addr
             .get()

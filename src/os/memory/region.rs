@@ -1,6 +1,6 @@
 use crate::{
     MmapError, Result,
-    os::{MadviseAdvice, MappedRegionOps, ProtFlags, TargetAddr},
+    os::{MadviseAdvice, MappedRegionOps, ProtFlags, VmAddr},
     sync::Arc,
 };
 use alloc::boxed::Box;
@@ -16,7 +16,7 @@ impl MappedRegion {
     }
 
     #[inline]
-    pub fn addr(&self) -> TargetAddr {
+    pub fn addr(&self) -> VmAddr {
         self.0.addr()
     }
 
@@ -72,6 +72,12 @@ impl MappedRegion {
     pub unsafe fn borrow_bytes(&self, offset: usize, len: usize) -> Option<&'static [u8]> {
         self.check_range(offset, len).ok()?;
         unsafe { self.0.borrow_bytes(offset, len) }
+    }
+
+    #[inline]
+    pub fn host_ptr(&self, offset: usize) -> Option<core::ptr::NonNull<u8>> {
+        self.check_range(offset, 1).ok()?;
+        unsafe { self.0.host_ptr(offset) }
     }
 
     #[inline]

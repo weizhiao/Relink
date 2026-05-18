@@ -1,17 +1,16 @@
 #[cfg(feature = "object")]
 use crate::RelocReason;
-use core::ptr::null;
+use crate::os::VmAddr;
 
-/// A wrapper type for relocation values, providing type safety and arithmetic operations.
+/// A wrapper type for raw values written into relocation slots.
 ///
-/// This type represents computed addresses or offsets used in relocations.
-/// It supports addition and subtraction for address calculations.
+/// Address-like relocation results use [`VmAddr`]; this type keeps plain
+/// integer payloads distinct from unchecked writes.
 #[must_use = "relocation arithmetic returns a new value"]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub(crate) struct RelocValue<T>(T);
 
-pub(crate) type RelocAddr = RelocValue<usize>;
 #[cfg(feature = "object")]
 pub(crate) type RelocSWord32 = RelocValue<i32>;
 
@@ -41,52 +40,6 @@ impl<T> RelocValue<T> {
     }
 }
 
-impl RelocAddr {
-    #[inline]
-    pub fn from_ptr<T>(ptr: *const T) -> Self {
-        Self(ptr as usize)
-    }
-
-    #[inline]
-    pub fn null() -> Self {
-        Self::from_ptr(null::<()>())
-    }
-
-    #[inline]
-    pub const fn as_ptr<T>(self) -> *const T {
-        self.0 as *const T
-    }
-
-    #[inline]
-    pub const fn as_mut_ptr<T>(self) -> *mut T {
-        self.0 as *mut T
-    }
-
-    #[inline]
-    pub const fn offset(self, rhs: usize) -> Self {
-        Self(self.0.wrapping_add(rhs))
-    }
-
-    #[inline]
-    pub const fn addend(self, rhs: isize) -> Self {
-        Self(self.0.wrapping_add_signed(rhs))
-    }
-
-    #[inline]
-    #[cfg(any(feature = "tls", feature = "object"))]
-    pub const fn relative_to(self, place: usize) -> Self {
-        Self(self.0.wrapping_sub(place))
-    }
-
-    #[inline]
-    #[cfg(feature = "object")]
-    pub(crate) fn try_into_sword32(self) -> core::result::Result<RelocSWord32, RelocReason> {
-        i32::try_from(self.0 as isize)
-            .map(RelocValue::new)
-            .map_err(|_| RelocReason::IntConversionOutOfRange)
-    }
-}
-
 impl RelocationValueFormula {
     #[inline]
     pub(crate) fn compute(self, target: usize, addend: isize, place: usize) -> i128 {
@@ -106,9 +59,19 @@ impl RelocationValueFormula {
 /// # Safety
 /// The address must point to a valid IFUNC resolver function.
 #[inline(always)]
-pub(crate) unsafe fn resolve_ifunc(addr: RelocAddr) -> RelocAddr {
+pub(crate) unsafe fn resolve_ifunc(addr: VmAddr) -> VmAddr {
     let ifunc: fn() -> usize = unsafe { core::mem::transmute(addr.into_inner()) };
-    RelocAddr::new(ifunc())
+    VmAddr::new(ifunc())
+}
+
+#[cfg(feature = "object")]
+impl VmAddr {
+    #[inline]
+    pub(crate) fn try_into_sword32(self) -> core::result::Result<RelocSWord32, RelocReason> {
+        i32::try_from(self.into_inner() as isize)
+            .map(RelocValue::new)
+            .map_err(|_| RelocReason::IntConversionOutOfRange)
+    }
 }
 
 #[cfg(feature = "object")]

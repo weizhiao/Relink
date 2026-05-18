@@ -1,12 +1,12 @@
 use core::mem::size_of;
 
-use crate::{ByteRepr, Result, os::TargetAddr};
+use crate::{ByteRepr, Result, os::VmAddr};
 
 use super::MappedRegion;
 
 /// A typed borrowed view of a mapped region.
 pub(crate) struct MappedView<T: 'static> {
-    source_addr: TargetAddr,
+    source_addr: VmAddr,
     slice: &'static [T],
 }
 
@@ -24,7 +24,7 @@ impl<T: 'static> MappedView<T> {
     #[inline]
     pub(crate) const fn empty() -> Self {
         Self {
-            source_addr: TargetAddr::new(0),
+            source_addr: VmAddr::new(0),
             slice: &[],
         }
     }
@@ -32,7 +32,7 @@ impl<T: 'static> MappedView<T> {
     pub(crate) fn read_region(
         region: &MappedRegion,
         offset: usize,
-        source_addr: TargetAddr,
+        source_addr: VmAddr,
         byte_len: usize,
     ) -> Result<Option<Self>>
     where
@@ -80,7 +80,7 @@ impl<T: 'static> MappedView<T> {
     }
 
     #[inline]
-    pub(crate) fn source_end(&self) -> Option<TargetAddr> {
+    pub(crate) fn source_end(&self) -> Option<VmAddr> {
         let byte_len = self.len().checked_mul(size_of::<T>())?;
         self.source_addr.checked_add(byte_len)
     }

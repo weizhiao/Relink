@@ -21,5 +21,5 @@ pub(crate) use buffer::ElfBuf;
 pub(crate) use builder::{ImageBuilder, ScanBuilder};
 pub use loader::Loader;
 pub(crate) use loader::LoaderInner;
-pub(crate) use traits::DynLifecycleHandler;
-pub use traits::{LifecycleHandler, LoadHook, LoadHookContext};
+pub use traits::{LifecycleContext, LifecycleHandler, LoadHook, LoadHookContext};
+pub(crate) use traits::{SharedLifecycleHandler, shared_lifecycle_handler};

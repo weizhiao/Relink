@@ -1,17 +1,17 @@
 use crate::arch::NativeArch;
 #[cfg(feature = "lazy-binding")]
 use crate::elf::ElfRelType;
-use crate::os::MappedView;
 use crate::sync::{Arc, AtomicBool};
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, Lifecycle, SymbolTable},
     input::{Path, PathBuf},
-    loader::{DynLifecycleHandler, ImageBuilder, LoadHook},
+    loader::{ImageBuilder, LifecycleContext, LoadHook, SharedLifecycleHandler},
     logging,
+    os::{MappedView, VmAddr},
     relocation::{
-        DynamicRelocation, EmuContext, Emulator, RelocAddr, Relocatable, RelocateArgs,
-        RelocationArch, RelocationHandler, Relocator,
+        DynamicRelocation, EmuContext, Emulator, Relocatable, RelocateArgs, RelocationArch,
+        RelocationHandler, Relocator,
     },
     segment::ELFRelro,
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -49,7 +49,7 @@ pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
 
 pub(crate) struct RawDynamicParts<D, Arch: RelocationArch = NativeArch> {
     pub(crate) path: PathBuf,
-    pub(crate) entry: RelocAddr,
+    pub(crate) entry: VmAddr,
     pub(crate) interp: Option<&'static str>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
     pub(crate) dynamic: MappedView<ElfDyn<Arch::Layout>>,
@@ -58,8 +58,8 @@ pub(crate) struct RawDynamicParts<D, Arch: RelocationArch = NativeArch> {
     pub(crate) force_static_tls: bool,
     pub(crate) relro: Option<ELFRelro>,
     pub(crate) segments: crate::segment::ElfSegments,
-    pub(crate) init_fn: DynLifecycleHandler,
-    pub(crate) fini_fn: DynLifecycleHandler,
+    pub(crate) init_fn: SharedLifecycleHandler,
+    pub(crate) fini_fn: SharedLifecycleHandler,
     pub(crate) user_data: D,
 }
 
@@ -82,10 +82,10 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
     relro: Option<ELFRelro>,
 
     /// Custom initialization handler.
-    init_handler: DynLifecycleHandler,
+    init_handler: SharedLifecycleHandler,
 
     /// Initialization functions to be called after relocation.
-    init: Lifecycle<'static>,
+    init: Lifecycle,
 
     /// DT_RPATH value from the dynamic section
     rpath: Option<&'static str>,
@@ -120,7 +120,7 @@ where
     Arch: RelocationArch,
 {
     /// Entry point of the ELF object.
-    entry: RelocAddr,
+    entry: VmAddr,
     /// PT_INTERP segment value (interpreter path).
     interp: Option<&'static str>,
     /// Core component containing the basic ELF object information
@@ -149,7 +149,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     }
 
     #[inline]
-    pub(crate) fn entry_addr(&self) -> RelocAddr {
+    pub(crate) fn entry_addr(&self) -> VmAddr {
         self.entry
     }
 
@@ -163,7 +163,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
         self.module.tls_tp_offset()
     }
 
-    pub(crate) fn tls_get_addr(&self) -> RelocAddr {
+    pub(crate) fn tls_get_addr(&self) -> VmAddr {
         self.module.tls_get_addr()
     }
 
@@ -272,7 +272,8 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     #[inline]
     pub(crate) fn call_init(&self) {
         self.module.set_init();
-        self.extra.init_handler.call(&self.extra.init);
+        let ctx = LifecycleContext::new(&self.extra.init, self.module.segments());
+        self.extra.init_handler.call(&ctx);
     }
 
     /// Marks the ELF object as initialized and delegates initialization to an emulator.
@@ -364,7 +365,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             user_data,
         } = parts;
 
-        let dynamic = ElfDynamic::<Arch>::new(dynamic, &segments)?;
+        let mut dynamic = ElfDynamic::<Arch>::new(dynamic, &segments)?;
 
         logging::trace!("[{}] Dynamic info: {:?}", path, dynamic);
 
@@ -401,6 +402,9 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             (None, None)
         };
 
+        let init_array_fn = dynamic.init_array_fn.take();
+        let fini_array_fn = dynamic.fini_array_fn.take();
+
         Ok(RawDynamic {
             entry,
             interp,
@@ -409,7 +413,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
                 relro,
                 relocation,
                 init_handler: init_fn,
-                init: Lifecycle::new(dynamic.init_fn, dynamic.init_array_fn.clone()),
+                init: Lifecycle::new(dynamic.init_fn, init_array_fn),
                 #[cfg(feature = "lazy-binding")]
                 got_plt: dynamic.got_plt,
                 rpath: dynamic
@@ -425,12 +429,12 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
                     is_init: AtomicBool::new(false),
                     path,
                     symtab,
-                    fini: Lifecycle::new(dynamic.fini_fn, dynamic.fini_array_fn.clone()),
+                    fini: Lifecycle::new(dynamic.fini_fn, fini_array_fn),
                     fini_handler: CoreFiniHandler::Native(fini_fn),
                     user_data,
                     dynamic_info: Some(Arc::new(DynamicInfo {
                         eh_frame_hdr,
-                        dynamic_ptr: unsafe { NonNull::new_unchecked(dynamic.dyn_ptr.cast_mut()) },
+                        dynamic_ptr: dynamic.dynamic_ptr,
                         phdrs,
                         soname,
                         #[cfg(feature = "lazy-binding")]
@@ -439,7 +443,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
                     tls: CoreTlsState::new(
                         tls_mod_id,
                         tls_tp_offset,
-                        RelocAddr::from_ptr(Tls::tls_get_addr as *const ()),
+                        VmAddr::from_ptr(Tls::tls_get_addr as *const ()),
                         Tls::unregister,
                     ),
                     segments,
@@ -470,7 +474,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             entry: if builder.ehdr.is_dylib() {
                 builder.segments.base_addr().offset(builder.ehdr.e_entry())
             } else {
-                RelocAddr::new(builder.ehdr.e_entry())
+                VmAddr::new(builder.ehdr.e_entry())
             },
             interp: builder.interp,
             phdrs,

@@ -20,9 +20,7 @@ mod lazy;
 mod relocator;
 mod traits;
 
-pub(crate) use defs::{
-    RelocAddr, RelocValue, RelocationValueFormula, RelocationValueKind, resolve_ifunc,
-};
+pub(crate) use defs::{RelocValue, RelocationValueFormula, RelocationValueKind, resolve_ifunc};
 pub(crate) use dynamic::DynamicRelocation;
 pub use emu::{EmuContext, EmuRelocationContext, EmulatedArch, Emulator};
 pub use emu::{TlsDescEmuRequest, TlsDescEmuValue};

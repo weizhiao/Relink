@@ -3,8 +3,8 @@ use crate::{
     arch::object::{PLT_ENTRY, PLT_ENTRY_SIZE},
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionType, ElfShdr},
     input::ElfReader,
-    os::{MapFlags, Mapper, ProtFlags},
-    relocation::{RelocAddr, RelocationArch},
+    os::{MapFlags, Mapper, ProtFlags, VmAddr},
+    relocation::RelocationArch,
     segment::{Address, ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
 };
 use alloc::vec::Vec;
@@ -102,8 +102,8 @@ impl<Arch: RelocationArch> SectionSegments<Arch> {
 
 /// Manages PLT (Procedure Linkage Table) and GOT (Global Offset Table) sections
 pub(crate) struct PltGotSection {
-    got_base: RelocAddr,
-    plt_base: RelocAddr,
+    got_base: VmAddr,
+    plt_base: VmAddr,
     got_idx: usize,
     plt_idx: usize,
     got_map: HashMap<usize, usize>,
@@ -113,22 +113,22 @@ pub(crate) struct PltGotSection {
 pub(crate) struct UsizeEntry<'entry>(&'entry mut usize);
 
 impl UsizeEntry<'_> {
-    pub(crate) fn update(&mut self, value: RelocAddr) {
+    pub(crate) fn update(&mut self, value: VmAddr) {
         *self.0 = value.into_inner();
     }
 
-    pub(crate) fn get_addr(&self) -> RelocAddr {
-        RelocAddr::from_ptr(self.0 as *const _)
+    pub(crate) fn get_addr(&self) -> VmAddr {
+        VmAddr::from_ptr(self.0 as *const _)
     }
 }
 
 pub(crate) enum GotEntry<'got> {
-    Occupied(RelocAddr),
+    Occupied(VmAddr),
     Vacant(UsizeEntry<'got>),
 }
 
 pub(crate) enum PltEntry<'plt> {
-    Occupied(RelocAddr),
+    Occupied(VmAddr),
     Vacant {
         plt: &'plt mut [u8],
         got: UsizeEntry<'plt>,
@@ -210,12 +210,12 @@ impl PltGotSection {
             plt_idx: 0,
             got_map: HashMap::new(),
             plt_map: HashMap::new(),
-            got_base: RelocAddr::new(got.sh_addr()),
-            plt_base: RelocAddr::new(plt.sh_addr()),
+            got_base: VmAddr::new(got.sh_addr()),
+            plt_base: VmAddr::new(plt.sh_addr()),
         }
     }
 
-    pub(crate) fn rebase(&mut self, base: RelocAddr) {
+    pub(crate) fn rebase(&mut self, base: VmAddr) {
         self.got_base = self.got_base.offset(base.into_inner());
         self.plt_base = self.plt_base.offset(base.into_inner());
     }

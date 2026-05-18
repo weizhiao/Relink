@@ -2,6 +2,7 @@ use crate::{
     Result,
     elf::{ElfLayout, ElfPhdr, Lifecycle, NativeElfLayout},
     input::Path,
+    os::VmAddr,
     segment::ElfSegments,
     sync::Arc,
 };
@@ -81,22 +82,76 @@ impl<L: ElfLayout> LoadHook<L> for () {
     }
 }
 
+/// Context passed to lifecycle handlers when `.init` / `.fini` functions run.
+pub struct LifecycleContext<'a> {
+    lifecycle: &'a Lifecycle,
+    segments: &'a ElfSegments,
+}
+
+impl<'a> LifecycleContext<'a> {
+    #[inline]
+    pub(crate) fn new(lifecycle: &'a Lifecycle, segments: &'a ElfSegments) -> Self {
+        Self {
+            lifecycle,
+            segments,
+        }
+    }
+
+    /// Returns the lifecycle address table.
+    #[inline]
+    pub fn lifecycle(&self) -> &Lifecycle {
+        self.lifecycle
+    }
+
+    /// Returns the mapped segments that own the lifecycle targets.
+    #[inline]
+    pub fn segments(&self) -> &ElfSegments {
+        self.segments
+    }
+
+    /// VM address of the single lifecycle function, if present.
+    #[inline]
+    pub fn func_addr(&self) -> Option<VmAddr> {
+        self.lifecycle.func_addr()
+    }
+
+    /// VM addresses from the lifecycle function array.
+    #[inline]
+    pub fn func_array_addrs(&self) -> impl Iterator<Item = VmAddr> + '_ {
+        self.lifecycle.func_array_addrs()
+    }
+
+    /// All lifecycle function VM addresses in call order.
+    #[inline]
+    pub fn func_addrs(&self) -> impl Iterator<Item = VmAddr> + '_ {
+        self.lifecycle.func_addrs()
+    }
+}
+
 /// Handler trait for ELF lifecycle callbacks.
 ///
 /// Implementations control how initialization functions such as `.init` / `.init_array`
 /// and finalization functions such as `.fini` / `.fini_array` are invoked.
 pub trait LifecycleHandler: Send + Sync {
     /// Executes the handler with the provided context.
-    fn call(&self, ctx: &Lifecycle<'_>);
+    fn call(&self, ctx: &LifecycleContext<'_>);
 }
 
 impl<F> LifecycleHandler for F
 where
-    F: Fn(&Lifecycle<'_>) + Send + Sync,
+    F: Fn(&LifecycleContext<'_>) + Send + Sync,
 {
-    fn call(&self, ctx: &Lifecycle<'_>) {
+    fn call(&self, ctx: &LifecycleContext<'_>) {
         (self)(ctx)
     }
 }
 
-pub(crate) type DynLifecycleHandler = Arc<Box<dyn LifecycleHandler>>;
+pub(crate) type SharedLifecycleHandler = Arc<dyn LifecycleHandler>;
+
+#[inline]
+pub(crate) fn shared_lifecycle_handler<F>(handler: F) -> SharedLifecycleHandler
+where
+    F: LifecycleHandler + 'static,
+{
+    Arc::from(Box::new(handler) as Box<dyn LifecycleHandler>)
+}

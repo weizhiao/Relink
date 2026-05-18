@@ -1,10 +1,12 @@
-use super::{RelocAddr, resolve_ifunc};
+use super::resolve_ifunc;
 use crate::relocation::{TlsDescEmuRequest, TlsDescEmuValue};
 use crate::{
     Error, RelocReason, Result,
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
     image::{ElfCore, Module, ModuleScope},
-    logging, relocate_context_error,
+    logging,
+    os::VmAddr,
+    relocate_context_error,
     relocation::{
         EmuRelocationContext, Emulator, HandleResult, RelocationArch, RelocationContext,
         RelocationHandler,
@@ -22,7 +24,7 @@ pub(crate) struct RelocHelper<'find, D: 'static, Arch: RelocationArch, PreH: ?Si
     pub(crate) pre_handler: &'find PreH,
     pub(crate) post_handler: &'find PostH,
     #[allow(dead_code)]
-    pub(crate) tls_get_addr: RelocAddr,
+    pub(crate) tls_get_addr: VmAddr,
     pub(crate) tls_desc_args: TlsDescArgs,
     pub(crate) emu: Option<Arc<dyn Emulator<Arch>>>,
 }
@@ -39,7 +41,7 @@ where
         scope: ModuleScope<Arch>,
         pre_handler: &'find PreH,
         post_handler: &'find PostH,
-        tls_get_addr: RelocAddr,
+        tls_get_addr: VmAddr,
         emu: Option<Arc<dyn Emulator<Arch>>>,
     ) -> Self {
         Self {
@@ -66,7 +68,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn find_symbol(&mut self, r_sym: usize) -> Option<RelocAddr> {
+    pub(crate) fn find_symbol(&mut self, r_sym: usize) -> Option<VmAddr> {
         find_symbol_addr(
             self.core,
             self.core.symtab(),
@@ -86,14 +88,14 @@ where
     pub(crate) fn resolve_ifunc_with_emu(
         &self,
         rel: &ElfRelType<Arch>,
-        resolver: RelocAddr,
-    ) -> Result<Option<RelocAddr>> {
+        resolver: VmAddr,
+    ) -> Result<Option<VmAddr>> {
         let Some(emu) = &self.emu else {
             return Ok(None);
         };
         let ctx = EmuRelocationContext::new(self.core, rel);
         emu.resolve_ifunc(&ctx, resolver.into_inner())
-            .map(RelocAddr::new)
+            .map(VmAddr::new)
             .map(Some)
     }
 
@@ -140,9 +142,9 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
     /// For regular symbols, returns base + st_value.
     /// For IFUNC symbols, calls the resolver function and returns its result.
     /// For undefined weak symbols, returns null.
-    pub(crate) fn convert(self) -> RelocAddr {
+    pub(crate) fn convert(self) -> VmAddr {
         if likely(self.sym.is_some()) {
-            let base = RelocAddr::new(self.source.base_addr());
+            let base = VmAddr::new(self.source.base_addr());
             let sym = unsafe { self.sym.unwrap_unchecked() };
             let addr = base.offset(sym.st_value());
             if likely(
@@ -154,7 +156,7 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
             }
         } else {
             // 未定义的弱符号返回null
-            RelocAddr::null()
+            VmAddr::null()
         }
     }
 
@@ -239,8 +241,8 @@ fn find_symbol_addr<D, Arch>(
     symtab: &SymbolTable<Arch::Layout>,
     scope: &ModuleScope<Arch>,
     r_sym: usize,
-    tls_get_addr: RelocAddr,
-) -> Option<RelocAddr>
+    tls_get_addr: VmAddr,
+) -> Option<VmAddr>
 where
     Arch: RelocationArch,
     D: 'static,
@@ -254,7 +256,7 @@ where
             core.name(),
             syminfo.name()
         );
-        return Some(RelocAddr::from_ptr(addr));
+        return Some(VmAddr::from_ptr(addr));
     }
     if let Some(res) = find_symdef_impl(core, scope, dynsym, &syminfo) {
         return Some(res.convert());

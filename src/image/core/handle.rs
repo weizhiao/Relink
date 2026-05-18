@@ -6,14 +6,13 @@ use crate::{
     },
     image::{DynamicInfo, Module},
     input::{Path, PathBuf},
-    loader::DynLifecycleHandler,
-    os::MappedView,
-    relocation::{EmuContext, Emulator, RelocAddr, RelocationArch},
+    loader::{LifecycleContext, SharedLifecycleHandler, shared_lifecycle_handler},
+    os::{MappedView, VmAddr},
+    relocation::{EmuContext, Emulator, RelocationArch},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{CoreTlsState, TlsDescArgs, TlsModuleId, TlsTpOffset},
 };
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::{any::Any, fmt::Debug, ptr::NonNull};
 
@@ -30,7 +29,7 @@ pub(crate) struct CoreInner<D = (), Arch: RelocationArch = crate::arch::NativeAr
     pub(crate) symtab: SymbolTable<Arch::Layout>,
 
     /// Finalization functions.
-    pub(crate) fini: Lifecycle<'static>,
+    pub(crate) fini: Lifecycle,
 
     /// Finalization handler
     pub(crate) fini_handler: CoreFiniHandler<Arch>,
@@ -54,7 +53,8 @@ impl<D, Arch: RelocationArch> Drop for CoreInner<D, Arch> {
         if self.is_init.load(Ordering::Relaxed) {
             match &self.fini_handler {
                 CoreFiniHandler::Native(handler) => {
-                    handler.call(&self.fini);
+                    let ctx = LifecycleContext::new(&self.fini, &self.segments);
+                    handler.call(&ctx);
                 }
                 CoreFiniHandler::Emu(emu) => {
                     let ctx = EmuContext::from_parts(
@@ -71,7 +71,7 @@ impl<D, Arch: RelocationArch> Drop for CoreInner<D, Arch> {
 }
 
 pub(crate) enum CoreFiniHandler<Arch: RelocationArch> {
-    Native(DynLifecycleHandler),
+    Native(SharedLifecycleHandler),
     Emu(Arc<dyn Emulator<Arch>>),
 }
 
@@ -205,7 +205,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
     }
 
     #[inline]
-    pub(crate) fn base_addr(&self) -> RelocAddr {
+    pub(crate) fn base_addr(&self) -> VmAddr {
         self.inner.segments.base_addr()
     }
 
@@ -281,7 +281,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
     }
 
     #[inline]
-    pub(crate) fn tls_get_addr(&self) -> RelocAddr {
+    pub(crate) fn tls_get_addr(&self) -> VmAddr {
         self.inner.tls.tls_get_addr()
     }
 
@@ -317,7 +317,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
         mut segments: ElfSegments,
         tls_mod_id: Option<TlsModuleId>,
         tls_tp_offset: Option<TlsTpOffset>,
-        tls_get_addr: RelocAddr,
+        tls_get_addr: VmAddr,
         tls_unregister: fn(TlsModuleId),
         user_data: D,
     ) -> Result<Self> {
@@ -349,7 +349,9 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
                 tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_get_addr, tls_unregister),
                 segments,
                 fini: Lifecycle::empty(),
-                fini_handler: CoreFiniHandler::Native(Arc::new(Box::new(|_: &Lifecycle<'_>| {}))),
+                fini_handler: CoreFiniHandler::Native(shared_lifecycle_handler(
+                    |_: &LifecycleContext<'_>| {},
+                )),
                 user_data,
             }),
         })

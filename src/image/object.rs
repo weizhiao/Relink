@@ -8,10 +8,9 @@ use crate::object::{ObjectBuilder, ObjectRelocation, PltGotSection};
 use crate::{
     Result,
     elf::{Lifecycle, LifecycleArray},
-    loader::DynLifecycleHandler,
-    relocation::{
-        RelocAddr, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
-    },
+    loader::SharedLifecycleHandler,
+    os::VmAddr,
+    relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
 };
@@ -39,7 +38,7 @@ pub struct RawObject<D: 'static = (), Arch: RelocationArch = crate::arch::Native
     pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
 
     /// Initialization function handler.
-    pub(crate) init: DynLifecycleHandler,
+    pub(crate) init: SharedLifecycleHandler,
 
     /// Initialization function array.
     pub(crate) init_array: Option<LifecycleArray>,
@@ -66,7 +65,7 @@ impl<D: 'static, Arch: RelocationArch> RawObject<D, Arch> {
             tls: CoreTlsState::new(
                 builder.tls_mod_id,
                 builder.tls_tp_offset,
-                RelocAddr::from_ptr(T::tls_get_addr as *const ()),
+                VmAddr::from_ptr(T::tls_get_addr as *const ()),
                 T::unregister,
             ),
             segments: builder.segments,

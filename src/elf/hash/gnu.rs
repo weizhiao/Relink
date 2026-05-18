@@ -9,7 +9,7 @@ use crate::{
     ParseDynamicError, Result,
     elf::{ElfLayout, ElfSymbol, ElfWord},
     elf::{PreCompute, SymbolTable, symbol::SymbolInfo},
-    os::{MappedView, TargetAddr},
+    os::{MappedView, VmAddr},
     segment::ElfSegments,
 };
 use core::mem::size_of;
@@ -63,7 +63,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
     /// # Returns
     /// An ElfGnuHash instance representing the parsed hash table
     #[inline]
-    pub(crate) fn parse(segments: &ElfSegments, addr: TargetAddr) -> Result<Self> {
+    pub(crate) fn parse(segments: &ElfSegments, addr: VmAddr) -> Result<Self> {
         const HEADER_SIZE: usize = size_of::<ElfGnuHeader>();
         let start = addr
             .get()

@@ -1,29 +1,31 @@
 #[path = "common/mod.rs"]
 mod fixture_support;
 
-use elf_loader::{Loader, Result, elf::Lifecycle};
+use elf_loader::{Loader, Result, loader::LifecycleContext};
 
 fn main() -> Result<()> {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     env_logger::init();
 
     let mut loader = Loader::new()
-        .with_init(|ctx: &Lifecycle<'_>| {
+        .with_init(|ctx: &LifecycleContext<'_>| {
             println!("Initialization hook called!");
-            if let Some(f) = ctx.func() {
-                println!("Single init function at {:p}", f as *const ());
+            if let Some(addr) = ctx.func_addr() {
+                println!("Single init function at 0x{:x}", addr.get());
             }
-            if let Some(arr) = ctx.func_array() {
-                println!("Init array has {} functions", arr.len());
+            let init_array_len = ctx.func_array_addrs().count();
+            if init_array_len != 0 {
+                println!("Init array has {init_array_len} functions");
             }
         })
-        .with_fini(|ctx: &Lifecycle<'_>| {
+        .with_fini(|ctx: &LifecycleContext<'_>| {
             println!("Finalization hook called!");
-            if let Some(f) = ctx.func() {
-                println!("Single fini function at {:p}", f as *const ());
+            if let Some(addr) = ctx.func_addr() {
+                println!("Single fini function at 0x{:x}", addr.get());
             }
-            if let Some(arr) = ctx.func_array() {
-                println!("Fini array has {} functions", arr.len());
+            let fini_array_len = ctx.func_array_addrs().count();
+            if fini_array_len != 0 {
+                println!("Fini array has {fini_array_len} functions");
             }
         });
 

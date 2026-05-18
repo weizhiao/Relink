@@ -6,7 +6,7 @@ use crate::{
     entity::SecondaryMap,
     image::{RawDynamic, ScannedDynamic},
     input::PathBuf,
-    loader::DynLifecycleHandler,
+    loader::SharedLifecycleHandler,
     os::{Mapper, Mmap},
     relocation::{RelocationArch, RelocationValueProvider},
     segment::ElfSegments,
@@ -254,8 +254,8 @@ impl MappedRuntimeMemory {
 pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch>(
     scanned: ScannedDynamic<Arch>,
     runtime: RuntimeModuleMemory,
-    init_fn: DynLifecycleHandler,
-    fini_fn: DynLifecycleHandler,
+    init_fn: SharedLifecycleHandler,
+    fini_fn: SharedLifecycleHandler,
     force_static_tls: bool,
 ) -> Result<RawDynamic<D, Arch>>
 where

@@ -1,7 +1,7 @@
 use crate::{
     ByteRepr, Result,
-    os::{MappedRegion, MappedView},
-    relocation::{RelocAddr, RelocValue},
+    os::{MappedRegion, MappedView, VmAddr},
+    relocation::RelocValue,
     sync::Arc,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -448,6 +448,18 @@ impl ElfSegments {
             .and_then(|view| view.as_slice().first().map(NonNull::from)))
     }
 
+    /// Translates an image VM address into a host-accessible pointer.
+    ///
+    /// Returns `None` when the address is outside this image or the backing
+    /// mapping cannot be borrowed directly by the current process.
+    #[inline]
+    pub fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
+        let start = addr.get().checked_sub(self.base)?;
+        let slice = self.find_slice(start, 1)?;
+        let region_offset = Self::region_offset(slice, start);
+        slice.region.host_ptr(region_offset)
+    }
+
     #[inline]
     pub(crate) fn read_bytes(&self, start: usize, dst: &mut [u8]) -> Result<()> {
         let slice = self.runtime_slice(start, dst.len());
@@ -488,7 +500,7 @@ impl ElfSegments {
     }
 
     #[inline]
-    pub(crate) fn base_addr(&self) -> RelocAddr {
-        RelocAddr::new(self.base)
+    pub(crate) fn base_addr(&self) -> VmAddr {
+        VmAddr::new(self.base)
     }
 }

@@ -9,9 +9,9 @@ use crate::{
         LifecycleArray, SymbolTable,
     },
     input::PathBuf,
-    loader::{DynLifecycleHandler, LoadHook, LoaderInner},
-    os::TargetAddr,
-    relocation::{RelocAddr, RelocationArch},
+    loader::{LoadHook, LoaderInner, SharedLifecycleHandler},
+    os::VmAddr,
+    relocation::RelocationArch,
     segment::{ElfSegments, SegmentBuilder},
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
@@ -23,8 +23,8 @@ pub(crate) struct ObjectBuilder<Tls, D = (), Arch: RelocationArch = crate::arch:
     pub(crate) path: PathBuf,
     pub(crate) symtab: SymbolTable<Arch::Layout>,
     pub(crate) init_array: Option<LifecycleArray>,
-    pub(crate) init_fn: DynLifecycleHandler,
-    pub(crate) fini_fn: DynLifecycleHandler,
+    pub(crate) init_fn: SharedLifecycleHandler,
+    pub(crate) fini_fn: SharedLifecycleHandler,
     pub(crate) segments: ElfSegments,
     pub(crate) relocation: ObjectRelocation<Arch>,
     pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
@@ -88,7 +88,7 @@ where
     fn rebase_loaded_sections(
         shdrs: &mut [ElfShdr<Arch::Layout>],
         pltgot: &mut PltGotSection,
-        base: RelocAddr,
+        base: VmAddr,
     ) {
         shdrs.iter_mut().for_each(|shdr| {
             shdr.set_sh_addr(base.offset(shdr.sh_addr()).into_inner());
@@ -99,7 +99,7 @@ where
     fn prepare_symbol_table(
         symtab_shdr: &ElfShdr<Arch::Layout>,
         shdrs: &[ElfShdr<Arch::Layout>],
-        base: RelocAddr,
+        base: VmAddr,
     ) -> SymbolTable<Arch::Layout> {
         let symbols: &mut [ElfSymbol<Arch::Layout>] = symtab_shdr.content_mut();
         for symbol in symbols {
@@ -107,8 +107,8 @@ where
             if symbol.symbol_type() == ElfSymbolType::FILE || section_index.is_undef() {
                 continue;
             }
-            let section_base = RelocAddr::new(shdrs[section_index.index()].sh_addr())
-                .relative_to(base.into_inner());
+            let section_base =
+                VmAddr::new(shdrs[section_index.index()].sh_addr()).relative_to(base.into_inner());
             symbol.set_value(section_base.offset(symbol.st_value()).into_inner());
         }
 
@@ -118,10 +118,10 @@ where
     fn prepare_relocation_section(
         relocation_shdr: &ElfShdr<Arch::Layout>,
         shdrs: &[ElfShdr<Arch::Layout>],
-        base: RelocAddr,
+        base: VmAddr,
     ) -> &'static [ElfRelType<Arch>] {
         let rels: &mut [ElfRelType<Arch>] = relocation_shdr.content_mut();
-        let section_base = RelocAddr::new(shdrs[relocation_shdr.sh_info() as usize].sh_addr());
+        let section_base = VmAddr::new(shdrs[relocation_shdr.sh_info() as usize].sh_addr());
         for rel in rels {
             rel.set_offset(
                 section_base
@@ -136,12 +136,12 @@ where
 
     fn prepare_init_array(init_array_shdr: &ElfShdr<Arch::Layout>) -> LifecycleArray {
         let array: &[usize] = init_array_shdr.content_mut();
-        Lifecycle::array_from_addrs(array.iter().copied().map(TargetAddr::new))
+        Lifecycle::array_from_vm_addrs(array.iter().copied().map(VmAddr::new))
     }
 
     fn prepare_section_data(
         shdrs: &[ElfShdr<Arch::Layout>],
-        base: RelocAddr,
+        base: VmAddr,
     ) -> Result<ObjectSectionData<Arch>> {
         let mut symtab = None;
         let mut relocation = Vec::with_capacity(shdrs.len());
@@ -170,8 +170,8 @@ where
     pub(crate) fn new(
         path: PathBuf,
         shdrs: &mut [ElfShdr<Arch::Layout>],
-        init_fn: DynLifecycleHandler,
-        fini_fn: DynLifecycleHandler,
+        init_fn: SharedLifecycleHandler,
+        fini_fn: SharedLifecycleHandler,
         segments: ElfSegments,
         mprotect: Box<dyn Fn() -> Result<()>>,
         mut pltgot: PltGotSection,

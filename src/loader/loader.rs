@@ -1,12 +1,12 @@
-use super::{DynLifecycleHandler, LifecycleHandler, LoadHook};
+use super::{
+    LifecycleContext, LifecycleHandler, LoadHook, SharedLifecycleHandler, shared_lifecycle_handler,
+};
 use crate::{
     MmapError, Result,
     arch::NativeArch,
-    elf::Lifecycle,
     image::RawDynamic,
     os::{DefaultMmap, Mapper, Mmap, PageSize},
     relocation::RelocationArch,
-    sync::Arc,
     tls::TlsResolver,
 };
 use alloc::boxed::Box;
@@ -44,8 +44,8 @@ where
 
 pub(crate) struct LoaderInner<H, D: 'static, Arch: RelocationArch> {
     pub(crate) mapper: Mapper,
-    pub(crate) init_fn: DynLifecycleHandler,
-    pub(crate) fini_fn: DynLifecycleHandler,
+    pub(crate) init_fn: SharedLifecycleHandler,
+    pub(crate) fini_fn: SharedLifecycleHandler,
     pub(crate) hook: H,
     pub(crate) page_size: Option<PageSize>,
     pub(crate) force_static_tls: bool,
@@ -58,7 +58,7 @@ where
     D: 'static,
     Arch: RelocationArch,
 {
-    pub(crate) fn lifecycle_handlers(&self) -> (DynLifecycleHandler, DynLifecycleHandler) {
+    pub(crate) fn lifecycle_handlers(&self) -> (SharedLifecycleHandler, SharedLifecycleHandler) {
         (self.init_fn.clone(), self.fini_fn.clone())
     }
 
@@ -105,18 +105,26 @@ impl Loader<(), (), (), NativeArch> {
     /// [`for_arch::<NewArch>()`](Self::for_arch); the `e_machine` gate
     /// then validates against `NewArch::MACHINE` automatically.
     pub fn new() -> Self {
-        let c_abi: DynLifecycleHandler = Arc::new(Box::new(|ctx: &Lifecycle<'_>| {
-            ctx.func_addrs().for_each(|addr| {
-                #[cfg(not(windows))]
-                unsafe {
-                    core::mem::transmute::<usize, extern "C" fn()>(addr)()
-                };
-                #[cfg(windows)]
-                unsafe {
-                    core::mem::transmute::<usize, extern "sysv64" fn()>(addr)()
-                };
-            })
-        }));
+        let c_abi: SharedLifecycleHandler =
+            shared_lifecycle_handler(|ctx: &LifecycleContext<'_>| {
+                ctx.func_addrs().for_each(|addr| {
+                    let ptr = ctx
+                    .segments()
+                    .host_ptr(addr)
+                    .expect(
+                        "lifecycle function address is not backed by host-accessible mapped memory",
+                    )
+                    .as_ptr() as usize;
+                    #[cfg(not(windows))]
+                    unsafe {
+                        core::mem::transmute::<usize, extern "C" fn()>(ptr)()
+                    };
+                    #[cfg(windows)]
+                    unsafe {
+                        core::mem::transmute::<usize, extern "sysv64" fn()>(ptr)()
+                    };
+                });
+            });
         Self {
             buf: super::ElfBuf::new(),
             inner: LoaderInner {
@@ -156,7 +164,7 @@ where
     where
         F: LifecycleHandler + 'static,
     {
-        self.inner.init_fn = Arc::new(Box::new(init_fn));
+        self.inner.init_fn = shared_lifecycle_handler(init_fn);
         self
     }
 
@@ -168,7 +176,7 @@ where
     where
         F: LifecycleHandler + 'static,
     {
-        self.inner.fini_fn = Arc::new(Box::new(fini_fn));
+        self.inner.fini_fn = shared_lifecycle_handler(fini_fn);
         self
     }
 

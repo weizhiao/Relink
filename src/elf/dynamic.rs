@@ -6,7 +6,7 @@ use crate::{
         ElfDynRaw, ElfDynamicTag, ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, ElfWord,
         Lifecycle, LifecycleArray, NativeElfLayout,
     },
-    os::{MappedView, TargetAddr},
+    os::{MappedView, VmAddr},
     relocation::RelocationArch,
     segment::ElfSegments,
 };
@@ -178,7 +178,7 @@ where
         let dynamic_ptr = dynamic_entries
             .as_slice()
             .first()
-            .map(|entry| entry as *const ElfDyn<Arch::Layout>)
+            .map(NonNull::from)
             .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_NULL" })?;
         let parsed = parse_dynamic_entries(
             dynamic_entries
@@ -202,7 +202,7 @@ where
                 .ok_or(ParseDynamicError::AddressOverflow.into())
         };
         let add_base_addr =
-            |offset: usize| -> Result<TargetAddr> { Ok(TargetAddr::new(add_base(offset)?)) };
+            |offset: usize| -> Result<VmAddr> { Ok(VmAddr::new(add_base(offset)?)) };
         let add_base_nonzero = |offset: NonZeroUsize| -> Result<NonZeroUsize> {
             NonZeroUsize::new(add_base(offset.get())?)
                 .ok_or_else(|| ParseDynamicError::AddressOverflow.into())
@@ -274,6 +274,7 @@ where
             .map(|init_array_off| {
                 read_lifecycle_array::<Arch::Layout>(
                     segments,
+                    base,
                     init_array_off,
                     parsed.init_array_size,
                     "DT_INIT_ARRAY size is malformed",
@@ -289,6 +290,7 @@ where
             .map(|fini_array_off| {
                 read_lifecycle_array::<Arch::Layout>(
                     segments,
+                    base,
                     fini_array_off,
                     parsed.fini_array_size,
                     "DT_FINI_ARRAY size is malformed",
@@ -326,7 +328,7 @@ where
         let version_idx = parsed.version_ids_off.map(add_base_nonzero).transpose()?;
 
         Ok(ElfDynamic {
-            dyn_ptr: dynamic_ptr,
+            dynamic_ptr,
             hashtab: hash_off,
             symtab: add_base_addr(parsed.symtab_off)?,
             strtab: add_base_addr(parsed.strtab_off)?,
@@ -362,6 +364,7 @@ where
 
 fn read_lifecycle_array<L: ElfLayout>(
     segments: &ElfSegments,
+    base: usize,
     offset: NonZeroUsize,
     byte_len: Option<NonZeroUsize>,
     malformed: &'static str,
@@ -370,34 +373,39 @@ fn read_lifecycle_array<L: ElfLayout>(
         .read_view::<L::Word>(offset.get(), byte_len.map(|len| len.get()).unwrap_or(0))?
         .ok_or_else(|| ParseDynamicError::MalformedLifecycleTable { detail: malformed })?;
 
-    Ok(Lifecycle::array_from_addrs(
-        words
-            .as_slice()
-            .iter()
-            .copied()
-            .map(|addr| TargetAddr::new(addr.to_usize())),
-    ))
+    let vm_addrs = words
+        .as_slice()
+        .iter()
+        .copied()
+        .map(|addr| {
+            base.checked_add(addr.to_usize())
+                .map(VmAddr::new)
+                .ok_or_else(|| ParseDynamicError::AddressOverflow.into())
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(Lifecycle::array_from_vm_addrs(vm_addrs))
 }
 
 /// Hash table type used for symbol lookup
 pub enum ElfDynamicHashTab {
     /// GNU-style hash table (DT_GNU_HASH)
-    Gnu(TargetAddr),
+    Gnu(VmAddr),
     /// Traditional ELF hash table (DT_HASH)
-    Elf(TargetAddr),
+    Elf(VmAddr),
 }
 
 #[allow(unused)]
 /// Information from the ELF dynamic section.
 pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     /// Pointer to the dynamic section.
-    pub dyn_ptr: *const ElfDyn<Arch::Layout>,
+    pub dynamic_ptr: NonNull<ElfDyn<Arch::Layout>>,
     /// Hash table information.
     pub hashtab: ElfDynamicHashTab,
     /// Symbol table address.
-    pub symtab: TargetAddr,
+    pub symtab: VmAddr,
     /// String table address.
-    pub strtab: TargetAddr,
+    pub strtab: VmAddr,
     /// String table size.
     pub strtab_size: Option<NonZeroUsize>,
     /// Whether to bind symbols immediately.
@@ -407,11 +415,11 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     /// Global Offset Table address.
     pub got_plt: Option<NonNull<usize>>,
     /// Initialization function.
-    pub init_fn: Option<TargetAddr>,
+    pub init_fn: Option<VmAddr>,
     /// Initialization function array.
     pub init_array_fn: Option<LifecycleArray>,
     /// Finalization function.
-    pub fini_fn: Option<TargetAddr>,
+    pub fini_fn: Option<VmAddr>,
     /// Finalization function array.
     pub fini_array_fn: Option<LifecycleArray>,
     /// PLT relocation entries.
@@ -441,7 +449,7 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
 impl<Arch: RelocationArch> Debug for ElfDynamic<Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfDynamic")
-            .field("dyn_ptr", &self.dyn_ptr)
+            .field("dynamic_ptr", &self.dynamic_ptr)
             .field("symtab", &format_args!("0x{:x}", self.symtab.get()))
             .field("strtab", &format_args!("0x{:x}", self.strtab.get()))
             .field("bind_now", &self.bind_now)

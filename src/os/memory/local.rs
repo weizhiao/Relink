@@ -2,7 +2,7 @@ use core::{ffi::c_void, ptr};
 
 use crate::{
     Result,
-    os::{MadviseAdvice, MappedRegionOps, Mmap, ProtFlags, TargetAddr},
+    os::{MadviseAdvice, MappedRegionOps, Mmap, ProtFlags, VmAddr},
 };
 
 use super::MappedRegion;
@@ -38,8 +38,8 @@ struct LocalMappedRegion<M: Mmap> {
 
 impl<M: Mmap> MappedRegionOps for LocalMappedRegion<M> {
     #[inline]
-    fn addr(&self) -> TargetAddr {
-        TargetAddr::new(self.addr as usize)
+    fn addr(&self) -> VmAddr {
+        VmAddr::new(self.addr as usize)
     }
 
     #[inline]
@@ -87,6 +87,11 @@ impl<M: Mmap> MappedRegionOps for LocalMappedRegion<M> {
             return Some(&[]);
         }
         Some(unsafe { core::slice::from_raw_parts(self.addr.cast::<u8>().add(offset), len) })
+    }
+
+    #[inline]
+    unsafe fn host_ptr(&self, offset: usize) -> Option<ptr::NonNull<u8>> {
+        Some(unsafe { ptr::NonNull::new_unchecked(self.addr.cast::<u8>().add(offset)) })
     }
 
     #[inline]

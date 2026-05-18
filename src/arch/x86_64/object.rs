@@ -3,8 +3,9 @@ use crate::{
     arch::x86_64::relocation::X86_64Arch,
     elf::ElfRelType,
     object::layout::{GotEntry, PltEntry, PltGotSection},
+    os::VmAddr,
     relocation::{
-        RelocAddr, RelocHelper, RelocValue, RelocationHandler, RelocationValueProvider, reloc_error,
+        RelocHelper, RelocValue, RelocationHandler, RelocationValueProvider, reloc_error,
     },
     segment::RelocWrite,
 };
@@ -18,7 +19,7 @@ pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
 
 enum ObjectWrite {
     None,
-    Addr(RelocAddr),
+    Addr(VmAddr),
     Word32(RelocValue<u32>),
     SWord32(RelocValue<i32>),
 }
@@ -60,7 +61,9 @@ impl X86_64Arch {
             unsafe {
                 match value {
                     ObjectWrite::None => {}
-                    ObjectWrite::Addr(value) => writer.write_value(offset, value),
+                    ObjectWrite::Addr(value) => {
+                        writer.write_value(offset, RelocValue::new(value.into_inner()))
+                    }
                     ObjectWrite::Word32(value) => writer.write_value(offset, value),
                     ObjectWrite::SWord32(value) => writer.write_value(offset, value),
                 }
@@ -93,7 +96,7 @@ impl X86_64Arch {
                         let plt_entry_addr = match plt_entry {
                             PltEntry::Occupied(plt_entry_addr) => plt_entry_addr,
                             PltEntry::Vacant { plt, mut got } => {
-                                let plt_entry_addr = RelocAddr::from_ptr(plt.as_ptr());
+                                let plt_entry_addr = VmAddr::from_ptr(plt.as_ptr());
                                 got.update(sym);
                                 let call_offset = got
                                     .get_addr()

@@ -222,7 +222,7 @@ impl Mmap for DefaultMmap {
         &self,
         _addr: *mut c_void,
         _len: usize,
-        behavior: MadviseAdvice,
+        _behavior: MadviseAdvice,
     ) -> Result<()> {
         Ok(())
     }

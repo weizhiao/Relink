@@ -1,8 +1,7 @@
 use crate::{
     Result,
     elf::{ElfLayout, ElfPhdr},
-    os::{Mapper, ProtFlags},
-    relocation::RelocAddr,
+    os::{Mapper, ProtFlags, VmAddr},
 };
 use core::ffi::c_void;
 
@@ -16,7 +15,7 @@ use super::{rounddown, roundup};
 #[allow(unused)]
 pub(crate) struct ELFRelro {
     /// Virtual address of the RELRO segment
-    addr: RelocAddr,
+    addr: VmAddr,
     /// Size of the RELRO segment
     len: usize,
     /// Page size used to align the protected range.
@@ -36,7 +35,7 @@ impl ELFRelro {
     /// A new ELFRelro instance
     pub(crate) fn new<L: ElfLayout>(
         phdr: &ElfPhdr<L>,
-        base: RelocAddr,
+        base: VmAddr,
         page_size: usize,
         mapper: Mapper,
     ) -> ELFRelro {

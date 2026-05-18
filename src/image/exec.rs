@@ -11,9 +11,8 @@ use crate::{
     image::{LoadedCore, RawDynamic},
     input::{Path, PathBuf},
     loader::{ImageBuilder, LoadHook},
-    relocation::{
-        RelocAddr, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
-    },
+    os::VmAddr,
+    relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     segment::ElfSegments,
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
@@ -53,7 +52,7 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
         self.entry_addr().into_inner()
     }
 
-    pub(crate) fn entry_addr(&self) -> RelocAddr {
+    pub(crate) fn entry_addr(&self) -> VmAddr {
         self.inner.entry
     }
 
@@ -102,7 +101,7 @@ struct StaticExecInner<D, Arch: RelocationArch = NativeArch> {
     path: PathBuf,
 
     /// Entry point of the executable
-    entry: RelocAddr,
+    entry: VmAddr,
 
     /// User-defined data
     user_data: D,
@@ -288,7 +287,7 @@ impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
 #[derive(Clone, Debug)]
 pub struct LoadedExec<D: 'static, Arch: RelocationArch = NativeArch> {
     /// Entry point of the executable.
-    entry: RelocAddr,
+    entry: VmAddr,
     /// The relocated ELF object.
     inner: LoadedExecInner<D, Arch>,
 }
@@ -394,7 +393,7 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
         // Parse all program headers
         builder.parse_phdrs(phdrs)?;
 
-        let entry = RelocAddr::new(builder.ehdr.e_entry());
+        let entry = VmAddr::new(builder.ehdr.e_entry());
         let (tls_mod_id, tls_tp_offset) = if let Some(info) = &builder.tls_info {
             // Static executables always use static TLS if PT_TLS is present.
             let (mod_id, offset) = Tls::register_static(info)?;

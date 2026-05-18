@@ -1,6 +1,6 @@
-use super::{DynLifecycleHandler, LoadHook, LoadHookContext, LoaderInner};
+use super::{LoadHook, LoadHookContext, LoaderInner, SharedLifecycleHandler};
 use crate::{
-    ByteRepr, ParsePhdrError, Result,
+    ParsePhdrError, Result,
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
     input::{ElfReader, PathBuf},
     os::{MappedView, Mapper},
@@ -54,10 +54,10 @@ where
     pub(crate) segments: ElfSegments,
 
     /// Initialization function handler
-    pub(crate) init_fn: DynLifecycleHandler,
+    pub(crate) init_fn: SharedLifecycleHandler,
 
     /// Finalization function handler
-    pub(crate) fini_fn: DynLifecycleHandler,
+    pub(crate) fini_fn: SharedLifecycleHandler,
 
     /// Interpreter path (PT_INTERP)
     pub(crate) interp: Option<&'static str>,
@@ -114,8 +114,8 @@ where
         segments: ElfSegments,
         path: PathBuf,
         ehdr: ElfHeader<L>,
-        init_fn: DynLifecycleHandler,
-        fini_fn: DynLifecycleHandler,
+        init_fn: SharedLifecycleHandler,
+        fini_fn: SharedLifecycleHandler,
         static_tls: bool,
         page_size: usize,
         mapper: Mapper,
@@ -148,10 +148,15 @@ where
 
         match phdr.program_type() {
             ElfProgramType::DYNAMIC => {
-                self.dynamic = Some(self.read_segment_view::<ElfDyn<L>>(
-                    phdr,
-                    "PT_DYNAMIC is not directly readable from mapped segments",
-                )?)
+                self.dynamic = Some(
+                    self.segments
+                        .read_view::<ElfDyn<L>>(phdr.p_vaddr(), phdr.p_filesz())?
+                        .ok_or_else(|| {
+                            ParsePhdrError::malformed(
+                                "PT_DYNAMIC is not directly readable from mapped segments",
+                            )
+                        })?,
+                )
             }
             ElfProgramType::GNU_RELRO => {
                 self.relro = Some(ELFRelro::new(
@@ -166,10 +171,15 @@ where
                 self.interp = Some(self.read_interp(phdr)?);
             }
             ElfProgramType::GNU_EH_FRAME => {
-                self.eh_frame_hdr = Some(self.borrowed_segment_ptr::<u8>(
-                    phdr,
-                    "PT_GNU_EH_FRAME is not directly readable from mapped segments",
-                )?);
+                self.eh_frame_hdr = Some(
+                    self.segments
+                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
+                        .ok_or_else(|| {
+                            ParsePhdrError::malformed(
+                                "PT_GNU_EH_FRAME is not directly readable from mapped segments",
+                            )
+                        })?,
+                );
             }
             ElfProgramType::TLS => {
                 let tls_image = self
@@ -181,33 +191,6 @@ where
             _ => {}
         };
         Ok(())
-    }
-
-    #[inline]
-    fn read_segment_view<T: ByteRepr + 'static>(
-        &self,
-        phdr: &ElfPhdr<L>,
-        detail: &'static str,
-    ) -> Result<MappedView<T>> {
-        let view = self
-            .segments
-            .read_view::<T>(phdr.p_vaddr(), phdr.p_filesz())?
-            .ok_or_else(|| ParsePhdrError::malformed(detail))?;
-        if view.is_empty() {
-            return Err(ParsePhdrError::malformed(detail).into());
-        }
-        Ok(view)
-    }
-
-    #[inline]
-    fn borrowed_segment_ptr<T: ByteRepr + 'static>(
-        &self,
-        phdr: &ElfPhdr<L>,
-        detail: &'static str,
-    ) -> Result<NonNull<T>> {
-        self.segments
-            .borrowed_ptr::<T>(phdr.p_vaddr(), phdr.p_filesz())?
-            .ok_or_else(|| ParsePhdrError::malformed(detail).into())
     }
 
     fn read_interp(&self, phdr: &ElfPhdr<L>) -> Result<&'static str> {
