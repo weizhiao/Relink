@@ -9,6 +9,7 @@ use crate::{
         BindingMode, RelocHelper, RelocValue, RelocateArgs, RelocationArch, RelocationHandler,
         ResolvedBinding, likely, reloc_error, resolve_ifunc, unlikely,
     },
+    segment::{RelocWrite, RelocWriter},
     tls::{TlsRelocOutcome, handle_tls_reloc},
 };
 use alloc::vec::Vec;
@@ -73,9 +74,18 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
         );
 
         if !relocation.is_empty() {
-            self.relocate_relative()?
-                .relocate_dynrel(&mut helper)?
-                .relocate_pltrel(&binding, &mut helper)?;
+            match self.core_ref().segments().reloc_writer() {
+                RelocWriter::Linear(mut writer) => {
+                    self.relocate_relative(&mut writer)?
+                        .relocate_dynrel(&mut writer, &mut helper)?
+                        .relocate_pltrel(&mut writer, &binding, &mut helper)?;
+                }
+                RelocWriter::Sparse(mut writer) => {
+                    self.relocate_relative(&mut writer)?
+                        .relocate_dynrel(&mut writer, &mut helper)?
+                        .relocate_pltrel(&mut writer, &binding, &mut helper)?;
+                }
+            }
         }
 
         let RelocHelper {
@@ -155,51 +165,55 @@ pub(crate) struct DynamicRelocation<Arch: RelocationArch = crate::arch::NativeAr
     dynrel_end: usize,
 }
 
-#[inline]
-fn write_reloc_addr<Arch: RelocationArch>(
-    segments: &crate::segment::ElfSegments,
+#[inline(always)]
+fn write_reloc_addr<Arch: RelocationArch, W: RelocWrite>(
+    writer: &mut W,
     r_offset: usize,
     value: crate::relocation::RelocAddr,
-) -> Result<()>
-where
+) where
     <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
 {
-    segments.write_value(
-        r_offset,
-        RelocValue::new(<Arch::Layout as ElfLayout>::Word::from_usize(
-            value.into_inner(),
-        )),
-    )
+    unsafe {
+        writer.write_value(
+            r_offset,
+            RelocValue::new(<Arch::Layout as ElfLayout>::Word::from_usize(
+                value.into_inner(),
+            )),
+        )
+    };
 }
 
-fn update_relative_word<Arch: RelocationArch>(
-    segments: &crate::segment::ElfSegments,
+#[inline(always)]
+fn update_relative_word<Arch: RelocationArch, W: RelocWrite>(
+    writer: &mut W,
     r_offset: usize,
     base: crate::relocation::RelocAddr,
-) -> Result<()>
-where
+) where
     <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
 {
-    segments.update_value::<_>(r_offset, |word: <Arch::Layout as ElfLayout>::Word| {
-        <Arch::Layout as ElfLayout>::Word::from_usize(base.offset(word.to_usize()).into_inner())
-    })
+    unsafe {
+        writer.update_value::<_>(r_offset, |word: <Arch::Layout as ElfLayout>::Word| {
+            <Arch::Layout as ElfLayout>::Word::from_usize(base.offset(word.to_usize()).into_inner())
+        })
+    };
 }
 
 impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     /// Relocate PLT (Procedure Linkage Table) entries
-    fn relocate_pltrel<PreH, PostH>(
+    fn relocate_pltrel<W, PreH, PostH>(
         &self,
+        writer: &mut W,
         binding: &ResolvedBinding,
         helper: &mut RelocHelper<'_, D, Arch, PreH, PostH>,
     ) -> Result<&Self>
     where
+        W: RelocWrite,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
         let core = self.core_ref();
         let base = core.base_addr();
-        let segments = core.segments();
         let reloc = self.relocation();
         debug_assert!(Arch::SUPPORTS_NATIVE_RUNTIME || !binding.is_lazy());
         binding.prepare_plt(self)?;
@@ -216,12 +230,12 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
 
             // Handle jump slot relocations
             if likely(r_type == Arch::JUMP_SLOT) {
-                if binding.relocate_jump_slot::<Arch>(segments, base, rel)? {
+                if binding.relocate_jump_slot::<Arch, W>(writer, base, rel)? {
                     continue;
                 }
 
                 if let Some(symbol) = helper.find_symbol(r_sym) {
-                    write_reloc_addr::<Arch>(segments, rel.r_offset(), symbol)?;
+                    write_reloc_addr::<Arch, W>(writer, rel.r_offset(), symbol);
                     continue;
                 }
                 failure_reason = RelocReason::UnknownSymbol;
@@ -230,14 +244,14 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 let addr = base.addend(r_addend);
                 if !Arch::SUPPORTS_NATIVE_RUNTIME {
                     if let Some(resolved) = helper.resolve_ifunc_with_emu(rel, addr)? {
-                        write_reloc_addr::<Arch>(segments, rel.r_offset(), resolved)?;
+                        write_reloc_addr::<Arch, W>(writer, rel.r_offset(), resolved);
                         continue;
                     }
                     failure_reason = RelocReason::MissingEmulator;
                 } else {
-                    write_reloc_addr::<Arch>(segments, rel.r_offset(), unsafe {
+                    write_reloc_addr::<Arch, W>(writer, rel.r_offset(), unsafe {
                         resolve_ifunc(addr)
-                    })?;
+                    });
                     continue;
                 }
             } else if unlikely(Arch::is_tlsdesc(r_type)) {
@@ -245,7 +259,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 // gate for TLSDESC. If the built-in path cannot handle it,
                 // keep the specific TLS failure for the final error while
                 // still giving the post handler a chance.
-                match handle_tls_reloc::<_, Arch, _, _>(helper, rel)? {
+                match handle_tls_reloc(helper, writer, rel)? {
                     TlsRelocOutcome::Applied => continue,
                     TlsRelocOutcome::Failed(reason) => failure_reason = reason,
                 }
@@ -259,13 +273,13 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     }
 
     /// Perform relative relocations (REL_RELATIVE)
-    fn relocate_relative(&self) -> Result<&Self>
+    fn relocate_relative<W>(&self, writer: &mut W) -> Result<&Self>
     where
+        W: RelocWrite,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
         let core = self.core_ref();
         let reloc = self.relocation();
-        let segments = core.segments();
         let base = core.base_addr();
 
         match &reloc.relative {
@@ -276,7 +290,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 for rel in rel {
                     debug_assert!(rel.r_type() == Arch::RELATIVE);
                     let r_addend = rel.r_addend(base.into_inner());
-                    write_reloc_addr::<Arch>(segments, rel.r_offset(), base.addend(r_addend))?;
+                    write_reloc_addr::<Arch, W>(writer, rel.r_offset(), base.addend(r_addend));
                 }
             }
             RelativeRel::Relr(relr) => {
@@ -289,7 +303,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
 
                     if (value & 1) == 0 {
                         reloc_offset = value;
-                        update_relative_word::<Arch>(segments, reloc_offset, base)?;
+                        update_relative_word::<Arch, W>(writer, reloc_offset, base);
                         reloc_offset += core::mem::size_of::<<Arch::Layout as ElfLayout>::Word>();
                         continue;
                     }
@@ -298,7 +312,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                     let mut offset = reloc_offset;
                     while bitmap != 0 {
                         if (bitmap & 1) != 0 {
-                            update_relative_word::<Arch>(segments, offset, base)?;
+                            update_relative_word::<Arch, W>(writer, offset, base);
                         }
                         bitmap >>= 1;
                         offset += core::mem::size_of::<<Arch::Layout as ElfLayout>::Word>();
@@ -312,11 +326,13 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     }
 
     /// Perform dynamic relocations (non-PLT, non-relative)
-    fn relocate_dynrel<PreH, PostH>(
+    fn relocate_dynrel<W, PreH, PostH>(
         &self,
+        writer: &mut W,
         helper: &mut RelocHelper<'_, D, Arch, PreH, PostH>,
     ) -> Result<&Self>
     where
+        W: RelocWrite,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
@@ -330,7 +346,6 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
 
         let core = self.core_ref();
         let reloc = self.relocation();
-        let segments = core.segments();
         let base = core.base_addr();
 
         // Process each dynamic relocation entry
@@ -353,7 +368,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 // Handle GOT and symbolic relocations
                 if let Some(symbol) = helper.find_symbol(r_sym) {
                     let r_addend = rel.r_addend(base.into_inner());
-                    write_reloc_addr::<Arch>(segments, rel.r_offset(), symbol.addend(r_addend))?;
+                    write_reloc_addr::<Arch, W>(writer, rel.r_offset(), symbol.addend(r_addend));
                     continue;
                 }
                 failure_reason = RelocReason::UnknownSymbol;
@@ -376,14 +391,14 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 let addr = base.addend(r_addend);
                 if !Arch::SUPPORTS_NATIVE_RUNTIME {
                     if let Some(resolved) = helper.resolve_ifunc_with_emu(rel, addr)? {
-                        write_reloc_addr::<Arch>(segments, rel.r_offset(), resolved)?;
+                        write_reloc_addr::<Arch, W>(writer, rel.r_offset(), resolved);
                         continue;
                     }
                     failure_reason = RelocReason::MissingEmulator;
                 } else {
-                    write_reloc_addr::<Arch>(segments, rel.r_offset(), unsafe {
+                    write_reloc_addr::<Arch, W>(writer, rel.r_offset(), unsafe {
                         resolve_ifunc(addr)
-                    })?;
+                    });
                     continue;
                 }
             } else if Arch::is_tls(r_type) {
@@ -392,7 +407,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                 // gates TLSDESC on SUPPORTS_NATIVE_RUNTIME internally.
                 // Anything the built-in path cannot handle still gets a post
                 // handler chance before reporting the specific TLS reason.
-                match handle_tls_reloc::<_, Arch, _, _>(helper, rel)? {
+                match handle_tls_reloc(helper, writer, rel)? {
                     TlsRelocOutcome::Applied => continue,
                     TlsRelocOutcome::Failed(reason) => failure_reason = reason,
                 }

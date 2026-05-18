@@ -1,8 +1,6 @@
 use core::{ffi::c_void, ops::Deref};
 
-use super::{
-    MadviseAdvice, MapFlags, MappedRegion, MappedRegionControl, Mmap, MmapResult, ProtFlags,
-};
+use super::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, ProtFlags};
 use crate::{Result, sync::Arc};
 use alloc::boxed::Box;
 
@@ -40,7 +38,36 @@ impl Deref for Mapper {
     }
 }
 
-impl MappedRegionControl for Mapper {
+impl Mmap for Mapper {
+    #[inline]
+    fn page_size(&self) -> super::PageSize {
+        self.0.page_size()
+    }
+
+    #[inline]
+    unsafe fn mmap(
+        &self,
+        addr: Option<usize>,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+        offset: usize,
+        fd: Option<isize>,
+    ) -> Result<MmapResult> {
+        unsafe { self.0.mmap(addr, len, prot, flags, offset, fd) }
+    }
+
+    #[inline]
+    unsafe fn mmap_anonymous(
+        &self,
+        addr: usize,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+    ) -> Result<MappedRegion> {
+        unsafe { self.0.mmap_anonymous(addr, len, prot, flags) }
+    }
+
     #[inline]
     unsafe fn munmap(&self, addr: *mut c_void, len: usize) -> Result<()> {
         unsafe { self.0.munmap(addr, len) }
@@ -54,6 +81,16 @@ impl MappedRegionControl for Mapper {
     #[inline]
     unsafe fn mprotect(&self, addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
         unsafe { self.0.mprotect(addr, len, prot) }
+    }
+
+    #[inline]
+    unsafe fn mmap_reserve(
+        &self,
+        addr: Option<usize>,
+        len: usize,
+        use_file: bool,
+    ) -> Result<MappedRegion> {
+        unsafe { self.0.mmap_reserve(addr, len, use_file) }
     }
 }
 

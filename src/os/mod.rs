@@ -8,38 +8,13 @@
 pub use defs::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
 pub(crate) use mapper::Mapper;
 pub(crate) use memory::MappedView;
-pub use memory::{MappedRegion, MappedRegionControl, MappedRegionOps, MmapResult, TargetAddr};
-pub use traits::Mmap;
+pub use memory::{MappedRegion, TargetAddr};
+pub use platform::DefaultMmap;
+pub(crate) use platform::*;
+pub use traits::{MappedRegionOps, Mmap, MmapResult};
 
 mod defs;
 mod mapper;
 mod memory;
+mod platform;
 mod traits;
-
-cfg_if::cfg_if! {
-    if #[cfg(windows)]{
-        mod windows;
-        #[cfg(feature = "tls")]
-        pub(crate) use windows::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
-        pub(crate) use windows::{RawFile, virtual_free};
-        pub use windows::DefaultMmap;
-    }else if #[cfg(feature = "use-syscall")]{
-        mod linux_syscall;
-        #[cfg(feature = "tls")]
-        pub(crate) use linux_syscall::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
-        pub(crate) use linux_syscall::RawFile;
-        pub use linux_syscall::*;
-    }else if #[cfg(all(any(target_os = "linux", target_os = "android"), feature = "libc"))]{
-        mod linux_libc;
-        #[cfg(feature = "tls")]
-        pub(crate) use linux_libc::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
-        pub(crate) use linux_libc::RawFile;
-        pub use linux_libc::DefaultMmap;
-    }else {
-        mod baremetal;
-        #[cfg(feature = "tls")]
-        pub(crate) use baremetal::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
-        pub(crate) use baremetal::RawFile;
-        pub use baremetal::*;
-    }
-}

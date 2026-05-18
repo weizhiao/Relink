@@ -160,7 +160,9 @@ impl MappedArena {
 
     #[inline]
     fn write_bytes(&self, offset: usize, bytes: &[u8]) -> Result<()> {
-        self.region.write_bytes(offset, bytes)
+        self.check_range(offset, bytes.len())?;
+        unsafe { self.region.write_bytes(offset, bytes) };
+        Ok(())
     }
 
     #[inline]
@@ -274,7 +276,7 @@ mod tests {
 
         let mapped_arena = mapped.get(arena).unwrap();
         let mut actual = [0_u8; 4];
-        mapped_arena.region.read_bytes(0, &mut actual).unwrap();
+        unsafe { mapped_arena.region.read_bytes(0, &mut actual) };
         assert_eq!(actual, [1, 2, 3, 4]);
     }
 }

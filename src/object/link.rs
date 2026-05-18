@@ -5,6 +5,7 @@ use crate::{
     image::{ModuleScope, RawObject},
     logging,
     relocation::{RelocHelper, RelocationArch, RelocationHandler},
+    segment::RelocWriter,
 };
 
 use alloc::{boxed::Box, vec::Vec};
@@ -45,13 +46,28 @@ where
             self.core.tls_get_addr(),
             None,
         );
-        for reloc in self.relocation.sections.iter() {
-            for rel in *reloc {
-                if !helper.handle_pre(rel)?.is_unhandled() {
-                    continue;
+        match self.core.segments().reloc_writer() {
+            RelocWriter::Linear(mut writer) => {
+                for reloc in self.relocation.sections.iter() {
+                    for rel in *reloc {
+                        if !helper.handle_pre(rel)?.is_unhandled() {
+                            continue;
+                        }
+                        Arch::relocate_object(&mut helper, &mut writer, rel, &mut self.pltgot)?;
+                        helper.handle_post(rel)?;
+                    }
                 }
-                Arch::relocate_object(&mut helper, rel, &mut self.pltgot)?;
-                helper.handle_post(rel)?;
+            }
+            RelocWriter::Sparse(mut writer) => {
+                for reloc in self.relocation.sections.iter() {
+                    for rel in *reloc {
+                        if !helper.handle_pre(rel)?.is_unhandled() {
+                            continue;
+                        }
+                        Arch::relocate_object(&mut helper, &mut writer, rel, &mut self.pltgot)?;
+                        helper.handle_post(rel)?;
+                    }
+                }
             }
         }
 

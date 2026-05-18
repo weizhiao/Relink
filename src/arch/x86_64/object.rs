@@ -3,7 +3,10 @@ use crate::{
     arch::x86_64::relocation::X86_64Arch,
     elf::ElfRelType,
     object::layout::{GotEntry, PltEntry, PltGotSection},
-    relocation::{RelocAddr, RelocHelper, RelocationHandler, RelocationValueProvider, reloc_error},
+    relocation::{
+        RelocAddr, RelocHelper, RelocValue, RelocationHandler, RelocationValueProvider, reloc_error,
+    },
+    segment::RelocWrite,
 };
 use elf::abi::*;
 
@@ -13,38 +16,56 @@ pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
     0xf3, 0x0f, 0x1e, 0xfa, 0xff, 0x25, 0, 0, 0, 0, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
 ];
 
+enum ObjectWrite {
+    None,
+    Addr(RelocAddr),
+    Word32(RelocValue<u32>),
+    SWord32(RelocValue<i32>),
+}
+
 impl X86_64Arch {
-    pub(crate) fn relocate_object_impl<D, PreH, PostH>(
+    pub(crate) fn relocate_object_impl<D, PreH, PostH, W>(
         helper: &mut RelocHelper<'_, D, Self, PreH, PostH>,
+        writer: &mut W,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
     ) -> crate::Result<()>
     where
         D: 'static,
+        W: RelocWrite,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
     {
         let r_sym = rel.r_symbol();
         let r_type = rel.r_type();
         let base = helper.core.base_addr();
-        let segments = helper.core.segments();
         let append = rel.r_addend(base.into_inner());
         let offset = rel.r_offset();
         let p = base.offset(rel.r_offset());
         let unknown_symbol =
             || reloc_error::<Self, _>(rel, crate::RelocReason::UnknownSymbol, helper.core);
         let value_error = |reason| reloc_error::<Self, _>(rel, reason, helper.core);
-        let write_relocation_target = |target| {
-            <Self as RelocationValueProvider>::relocation_value(
+        let mut write_relocation_target = |target| {
+            let value = <Self as RelocationValueProvider>::relocation_value(
                 r_type.raw() as usize,
                 target,
                 append,
                 p.into_inner(),
-                |_| Ok(()),
-                |value| segments.write_value(offset, value),
-                |value| segments.write_value(offset, value),
-                |value| segments.write_value(offset, value),
-            )
+                |_| ObjectWrite::None,
+                ObjectWrite::Addr,
+                ObjectWrite::Word32,
+                ObjectWrite::SWord32,
+            )?;
+
+            unsafe {
+                match value {
+                    ObjectWrite::None => {}
+                    ObjectWrite::Addr(value) => writer.write_value(offset, value),
+                    ObjectWrite::Word32(value) => writer.write_value(offset, value),
+                    ObjectWrite::SWord32(value) => writer.write_value(offset, value),
+                }
+            }
+            Ok(())
         };
 
         match r_type.raw() {
@@ -53,21 +74,20 @@ impl X86_64Arch {
                 let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(unknown_symbol());
                 };
-                write_relocation_target(sym.into_inner()).map_err(value_error)??;
+                write_relocation_target(sym.into_inner()).map_err(value_error)?;
             }
             R_X86_64_PC32 => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(unknown_symbol());
                 };
-                write_relocation_target(sym.into_inner()).map_err(value_error)??;
+                write_relocation_target(sym.into_inner()).map_err(value_error)?;
             }
             R_X86_64_PLT32 => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(unknown_symbol());
                 };
                 match write_relocation_target(sym.into_inner()) {
-                    Ok(Ok(())) => {}
-                    Ok(Err(err)) => return Err(err),
+                    Ok(()) => {}
                     Err(RelocReason::IntConversionOutOfRange) => {
                         let plt_entry = pltgot.add_plt_entry(r_sym);
                         let plt_entry_addr = match plt_entry {
@@ -86,7 +106,7 @@ impl X86_64Arch {
                             }
                         };
                         write_relocation_target(plt_entry_addr.into_inner())
-                            .map_err(value_error)??;
+                            .map_err(value_error)?;
                     }
                     Err(reason) => return Err(value_error(reason)),
                 }
@@ -103,19 +123,19 @@ impl X86_64Arch {
                         got.get_addr()
                     }
                 };
-                write_relocation_target(got_entry_addr.into_inner()).map_err(value_error)??;
+                write_relocation_target(got_entry_addr.into_inner()).map_err(value_error)?;
             }
             R_X86_64_32 => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(unknown_symbol());
                 };
-                write_relocation_target(sym.into_inner()).map_err(value_error)??;
+                write_relocation_target(sym.into_inner()).map_err(value_error)?;
             }
             R_X86_64_32S => {
                 let Some(sym) = helper.find_symbol(r_sym) else {
                     return Err(unknown_symbol());
                 };
-                write_relocation_target(sym.into_inner()).map_err(value_error)??;
+                write_relocation_target(sym.into_inner()).map_err(value_error)?;
             }
             _ => return Err(unknown_symbol()),
         }
