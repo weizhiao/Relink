@@ -465,6 +465,11 @@ where
     }
 
     #[inline]
+    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
+        self.core.host_ptr(addr)
+    }
+
+    #[inline]
     fn tls_mod_id(&self) -> Option<TlsModuleId> {
         LoadedCore::tls_mod_id(self)
     }

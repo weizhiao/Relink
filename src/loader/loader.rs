@@ -107,14 +107,8 @@ impl Loader<(), (), (), NativeArch> {
     pub fn new() -> Self {
         let c_abi: SharedLifecycleHandler =
             shared_lifecycle_handler(|ctx: &LifecycleContext<'_>| {
-                ctx.func_addrs().for_each(|addr| {
-                    let ptr = ctx
-                    .segments()
-                    .host_ptr(addr)
-                    .expect(
-                        "lifecycle function address is not backed by host-accessible mapped memory",
-                    )
-                    .as_ptr() as usize;
+                ctx.func_addrs().for_each(|ptr| {
+                    let ptr = ptr.as_ptr() as usize;
                     #[cfg(not(windows))]
                     unsafe {
                         core::mem::transmute::<usize, extern "C" fn()>(ptr)()

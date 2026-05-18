@@ -7,6 +7,7 @@ use crate::{
     sync::Arc,
 };
 use alloc::boxed::Box;
+use core::ptr::NonNull;
 
 /// Context passed to [`LoadHook`] while a program header is being processed.
 pub struct LoadHookContext<'a, L: ElfLayout = NativeElfLayout> {
@@ -103,28 +104,31 @@ impl<'a> LifecycleContext<'a> {
         self.lifecycle
     }
 
-    /// Returns the mapped segments that own the lifecycle targets.
     #[inline]
-    pub fn segments(&self) -> &ElfSegments {
+    fn host_ptr(&self, addr: VmAddr) -> NonNull<u8> {
         self.segments
+            .host_ptr(addr)
+            .expect("lifecycle function address is not backed by host-accessible mapped memory")
     }
 
-    /// VM address of the single lifecycle function, if present.
+    /// Host pointer of the single lifecycle function, if present.
     #[inline]
-    pub fn func_addr(&self) -> Option<VmAddr> {
-        self.lifecycle.func_addr()
+    pub fn func_addr(&self) -> Option<NonNull<u8>> {
+        self.lifecycle.func_addr().map(|addr| self.host_ptr(addr))
     }
 
-    /// VM addresses from the lifecycle function array.
+    /// Host pointers from the lifecycle function array.
     #[inline]
-    pub fn func_array_addrs(&self) -> impl Iterator<Item = VmAddr> + '_ {
-        self.lifecycle.func_array_addrs()
+    pub fn func_array_addrs(&self) -> impl Iterator<Item = NonNull<u8>> + '_ {
+        self.lifecycle
+            .func_array_addrs()
+            .map(|addr| self.host_ptr(addr))
     }
 
-    /// All lifecycle function VM addresses in call order.
+    /// All lifecycle function host pointers in call order.
     #[inline]
-    pub fn func_addrs(&self) -> impl Iterator<Item = VmAddr> + '_ {
-        self.lifecycle.func_addrs()
+    pub fn func_addrs(&self) -> impl Iterator<Item = NonNull<u8>> + '_ {
+        self.lifecycle.func_addrs().map(|addr| self.host_ptr(addr))
     }
 }
 

@@ -1,6 +1,7 @@
 #[cfg(feature = "object")]
 use crate::RelocReason;
 use crate::os::VmAddr;
+use core::ptr::NonNull;
 
 /// A wrapper type for raw values written into relocation slots.
 ///
@@ -57,10 +58,10 @@ impl RelocationValueFormula {
 /// Resolve the final address for an IFUNC resolver entry.
 ///
 /// # Safety
-/// The address must point to a valid IFUNC resolver function.
+/// The pointer must point to a valid host-callable IFUNC resolver function.
 #[inline(always)]
-pub(crate) unsafe fn resolve_ifunc(addr: VmAddr) -> VmAddr {
-    let ifunc: fn() -> usize = unsafe { core::mem::transmute(addr.into_inner()) };
+pub(crate) unsafe fn resolve_ifunc(ptr: NonNull<u8>) -> VmAddr {
+    let ifunc: fn() -> usize = unsafe { core::mem::transmute(ptr.as_ptr() as usize) };
     VmAddr::new(ifunc())
 }
 

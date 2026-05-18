@@ -7,7 +7,7 @@ use crate::{
     os::{MappedView, VmAddr},
     relocation::{
         BindingMode, RelocHelper, RelocValue, RelocateArgs, RelocationArch, RelocationHandler,
-        ResolvedBinding, likely, reloc_error, resolve_ifunc, unlikely,
+        ResolvedBinding, likely, reloc_error, unlikely,
     },
     segment::{RelocWrite, RelocWriter},
     tls::{TlsRelocOutcome, handle_tls_reloc},
@@ -250,7 +250,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                     failure_reason = RelocReason::MissingEmulator;
                 } else {
                     write_reloc_addr::<Arch, W>(writer, rel.r_offset(), unsafe {
-                        resolve_ifunc(addr)
+                        helper.resolve_ifunc_native(addr)
                     });
                     continue;
                 }
@@ -397,7 +397,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
                     failure_reason = RelocReason::MissingEmulator;
                 } else {
                     write_reloc_addr::<Arch, W>(writer, rel.r_offset(), unsafe {
-                        resolve_ifunc(addr)
+                        helper.resolve_ifunc_native(addr)
                     });
                     continue;
                 }

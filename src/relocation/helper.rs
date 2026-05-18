@@ -100,6 +100,15 @@ where
     }
 
     #[inline]
+    pub(crate) unsafe fn resolve_ifunc_native(&self, resolver: VmAddr) -> VmAddr {
+        let ptr = self
+            .core
+            .host_ptr(resolver)
+            .expect("IFUNC resolver address is not backed by host-accessible mapped memory");
+        unsafe { resolve_ifunc(ptr) }
+    }
+
+    #[inline]
     #[cfg_attr(not(feature = "tls"), allow(dead_code))]
     pub(crate) fn resolve_tlsdesc_with_emu(
         &self,
@@ -152,7 +161,10 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
             ) {
                 addr
             } else {
-                unsafe { resolve_ifunc(addr) }
+                let ptr = self.source.host_ptr(addr).expect(
+                    "IFUNC resolver address is not backed by host-accessible mapped memory",
+                );
+                unsafe { resolve_ifunc(ptr) }
             }
         } else {
             // 未定义的弱符号返回null

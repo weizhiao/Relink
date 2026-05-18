@@ -10,8 +10,8 @@ fn main() -> Result<()> {
     let mut loader = Loader::new()
         .with_init(|ctx: &LifecycleContext<'_>| {
             println!("Initialization hook called!");
-            if let Some(addr) = ctx.func_addr() {
-                println!("Single init function at 0x{:x}", addr.get());
+            if let Some(ptr) = ctx.func_addr() {
+                println!("Single init function at {:p}", ptr.as_ptr());
             }
             let init_array_len = ctx.func_array_addrs().count();
             if init_array_len != 0 {
@@ -20,8 +20,8 @@ fn main() -> Result<()> {
         })
         .with_fini(|ctx: &LifecycleContext<'_>| {
             println!("Finalization hook called!");
-            if let Some(addr) = ctx.func_addr() {
-                println!("Single fini function at 0x{:x}", addr.get());
+            if let Some(ptr) = ctx.func_addr() {
+                println!("Single fini function at {:p}", ptr.as_ptr());
             }
             let fini_array_len = ctx.func_array_addrs().count();
             if fini_array_len != 0 {

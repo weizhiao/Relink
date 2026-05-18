@@ -268,6 +268,11 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
         self.segments().read_bytes(offset, dst)
     }
 
+    #[inline]
+    pub(crate) fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
+        self.segments().host_ptr(addr)
+    }
+
     /// Gets the TLS module ID of the ELF object
     #[inline]
     pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
@@ -408,6 +413,11 @@ where
     fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<bool> {
         ElfCore::read_segment(self, offset, dst)?;
         Ok(true)
+    }
+
+    #[inline]
+    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
+        ElfCore::host_ptr(self, addr)
     }
 
     #[inline]

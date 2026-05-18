@@ -3,12 +3,13 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfSymbol, PreCompute, SymbolInfo},
+    os::VmAddr,
     relocation::RelocationArch,
     sync::Arc,
     tls::{TlsModuleId, TlsTpOffset},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{any::Any, ops::Deref, slice};
+use core::{any::Any, ops::Deref, ptr::NonNull, slice};
 
 /// Shared ownership handle for one retained module.
 pub struct ModuleHandle<Arch: RelocationArch = NativeArch> {
@@ -235,6 +236,11 @@ pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
         Ok(false)
     }
 
+    /// Translates a module VM address into a host-accessible pointer.
+    fn host_ptr(&self, _addr: VmAddr) -> Option<NonNull<u8>> {
+        None
+    }
+
     /// Returns the TLS module id, when this module owns TLS storage.
     fn tls_mod_id(&self) -> Option<TlsModuleId> {
         None
@@ -288,6 +294,11 @@ where
     #[inline]
     fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<bool> {
         (**self).read_segment(offset, dst)
+    }
+
+    #[inline]
+    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
+        (**self).host_ptr(addr)
     }
 
     #[inline]
