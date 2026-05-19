@@ -1,5 +1,5 @@
 use crate::input::ElfReader;
-use crate::os::{MapFlags, Mapper, Mmap, ProtFlags};
+use crate::os::{MapFlags, Mapper, Mmap, ProtFlags, VmAddr};
 use crate::{Result, logging};
 use alloc::vec::Vec;
 
@@ -96,7 +96,10 @@ impl ElfSegment {
                     let copy_len = (info.filesz - copied).min(COPY_CHUNK_SIZE);
                     scratch.resize(copy_len, 0);
                     object.read(&mut scratch, info.offset + copied)?;
-                    space.write_bytes(segment_start + info.start + copied, &scratch)?;
+                    space.write_bytes(
+                        VmAddr::new(space.base() + segment_start + info.start + copied),
+                        &scratch,
+                    )?;
                     copied += copy_len;
                 }
             }
@@ -144,7 +147,7 @@ impl ElfSegment {
             let zero_start = self.addr.absolute_addr() + self.content_size;
             let zero_end = roundup(zero_start, self.page_size);
             let write_len = zero_end - zero_start;
-            space.zero_bytes(zero_start - space.base(), write_len)?;
+            space.zero_bytes(VmAddr::new(zero_start), write_len)?;
 
             if write_len < self.zero_size {
                 let zero_mmap_addr = zero_end;

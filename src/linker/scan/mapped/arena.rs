@@ -3,22 +3,22 @@ use super::super::plan::LinkPlan;
 use crate::{
     LinkerError, Result,
     entity::SecondaryMap,
-    os::{MapFlags, MappedRegion, Mapper, Mmap, PageSize, ProtFlags},
+    os::{MapFlags, MappedRegion, Mapper, Mmap, ProtFlags},
     relocation::RelocationArch,
-    segment::ElfSegments,
+    segment::align_up,
 };
 use alloc::vec::Vec;
 
 #[derive(Clone)]
 pub(crate) struct MappedArena {
     memory_class: MemoryClass,
-    base: usize,
+    region_offset: usize,
     len: usize,
-    region: MappedRegion,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct MappedArenaMap {
+    region: MappedRegion,
     arenas: SecondaryMap<ArenaId, MappedArena>,
 }
 
@@ -40,7 +40,8 @@ impl MappedArenaMap {
         }
 
         let layout = plan.memory_layout();
-        let mut arenas = Self::default();
+        let mut arena_layouts = Vec::new();
+        let mut total_len = 0usize;
 
         for (id, arena) in layout.arena_pairs() {
             let len = layout.usage(id).mapped_len();
@@ -48,19 +49,36 @@ impl MappedArenaMap {
                 continue;
             }
 
-            let mapped = map_arena(
-                mapper.as_ref(),
-                len,
-                arena.memory_class(),
-                arena.page_size(),
-            )?;
+            total_len = align_up(total_len, arena.page_size().bytes());
+            let region_offset = total_len;
+            total_len = total_len.checked_add(len).ok_or_else(|| {
+                LinkerError::mapped_arena("mapped section arena allocation length overflowed")
+            })?;
+            arena_layouts.push((id, arena.memory_class(), region_offset, len));
+        }
 
-            let base = mapped.addr().get();
-            let region = ElfSegments::create_region(mapped);
-            arenas.insert(
-                id,
-                MappedArena::new(arena.memory_class(), base, len, region),
-            );
+        if total_len == 0 {
+            return Err(LinkerError::mapped_arena(
+                "section-region planned load does not contain mapped arena bytes",
+            )
+            .into());
+        }
+
+        let region = unsafe {
+            mapper.mmap_anonymous(
+                0,
+                total_len,
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
+                MapFlags::MAP_PRIVATE,
+            )
+        }?;
+        let mut arenas = Self {
+            region,
+            arenas: SecondaryMap::default(),
+        };
+
+        for (id, memory_class, region_offset, len) in arena_layouts {
+            arenas.insert(id, MappedArena::new(memory_class, region_offset, len));
         }
 
         Ok(Some(arenas))
@@ -91,15 +109,36 @@ impl MappedArenaMap {
                 .into());
             }
 
-            arena.write_bytes(placement.offset(), bytes)?;
+            arena.write_bytes(&self.region, placement.offset(), bytes)?;
         }
 
         Ok(())
     }
 
     pub(super) fn protect(&self) -> Result<()> {
-        for (_, arena) in self.iter() {
-            arena.protect()?;
+        let mut arenas = self.iter().collect::<Vec<_>>();
+        arenas.sort_by_key(|(_, arena)| arena.region_offset);
+
+        let mut cursor = 0usize;
+        for (_, arena) in arenas {
+            if cursor < arena.region_offset {
+                unsafe {
+                    self.region.mprotect(
+                        cursor,
+                        arena.region_offset - cursor,
+                        ProtFlags::PROT_NONE,
+                    )?;
+                }
+            }
+            arena.protect(&self.region)?;
+            cursor = arena.end();
+        }
+
+        if cursor < self.region.len() {
+            unsafe {
+                self.region
+                    .mprotect(cursor, self.region.len() - cursor, ProtFlags::PROT_NONE)?;
+            }
         }
         Ok(())
     }
@@ -115,6 +154,11 @@ impl MappedArenaMap {
     }
 
     #[inline]
+    pub(super) fn region(&self) -> MappedRegion {
+        self.region.clone()
+    }
+
+    #[inline]
     fn iter(&self) -> impl Iterator<Item = (ArenaId, &MappedArena)> {
         self.arenas.iter()
     }
@@ -122,23 +166,28 @@ impl MappedArenaMap {
 
 impl MappedArena {
     #[inline]
-    fn new(memory_class: MemoryClass, base: usize, len: usize, region: MappedRegion) -> Self {
+    fn new(memory_class: MemoryClass, region_offset: usize, len: usize) -> Self {
         Self {
             memory_class,
-            base,
+            region_offset,
             len,
-            region,
         }
     }
 
     #[inline]
-    pub(super) fn address(&self, offset: usize) -> Option<usize> {
-        self.base.checked_add(offset)
+    pub(super) fn address(&self, region: &MappedRegion, offset: usize) -> Option<usize> {
+        region
+            .addr()
+            .get()
+            .checked_add(self.region_offset)?
+            .checked_add(offset)
     }
 
     #[inline]
-    pub(super) const fn base(&self) -> usize {
-        self.base
+    fn end(&self) -> usize {
+        self.region_offset
+            .checked_add(self.len)
+            .expect("mapped section arena range overflowed")
     }
 
     #[inline]
@@ -158,52 +207,24 @@ impl MappedArena {
     }
 
     #[inline]
-    fn write_bytes(&self, offset: usize, bytes: &[u8]) -> Result<()> {
+    fn write_bytes(&self, region: &MappedRegion, offset: usize, bytes: &[u8]) -> Result<()> {
         self.check_range(offset, bytes.len())?;
-        unsafe { self.region.write_bytes(offset, bytes) };
-        Ok(())
+        let region_offset = self.region_offset.checked_add(offset).ok_or_else(|| {
+            LinkerError::mapped_arena("mapped section arena write offset overflowed")
+        })?;
+        unsafe { region.write_bytes(region_offset, bytes) }
     }
 
-    #[inline]
-    pub(super) fn region(&self) -> MappedRegion {
-        self.region.clone()
-    }
-
-    fn protect(&self) -> Result<()> {
+    fn protect(&self, region: &MappedRegion) -> Result<()> {
         if self.len == 0 {
             return Ok(());
         }
         unsafe {
-            self.region
-                .mprotect(0, self.len, final_protection(self.memory_class))
-        }
-    }
-}
-
-fn map_arena(
-    mapper: &dyn Mmap,
-    len: usize,
-    memory_class: MemoryClass,
-    page_size: PageSize,
-) -> Result<MappedRegion> {
-    let prot = initial_protection(memory_class);
-    let flags =
-        MapFlags::MAP_PRIVATE | MapFlags::huge_page_size(page_size).unwrap_or_else(MapFlags::empty);
-    let result = unsafe { mapper.mmap_anonymous(0, len, prot, flags) };
-
-    if flags.contains(MapFlags::MAP_HUGETLB) {
-        return result
-            .or_else(|_| unsafe { mapper.mmap_anonymous(0, len, prot, MapFlags::MAP_PRIVATE) });
-    }
-
-    result
-}
-
-fn initial_protection(class: MemoryClass) -> ProtFlags {
-    match class {
-        MemoryClass::Code => ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
-        MemoryClass::ReadOnlyData | MemoryClass::WritableData | MemoryClass::ThreadLocalData => {
-            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE
+            region.mprotect(
+                self.region_offset,
+                self.len,
+                final_protection(self.memory_class),
+            )
         }
     }
 }
@@ -223,7 +244,7 @@ mod tests {
     use super::super::super::{ArenaDescriptor, ArenaSharing, LinkPlan};
     use super::*;
     use crate::linker::session::ModulePayload;
-    use crate::os::DefaultMmap;
+    use crate::os::{DefaultMmap, PageSize};
     use crate::{image::ScannedElf, input::ElfBinary, loader::Loader};
     use alloc::{collections::BTreeMap, vec::Vec};
     use gen_elf::{Arch, DylibWriter, ElfWriterConfig, SymbolDesc};
@@ -276,8 +297,13 @@ mod tests {
         mapped.populate(&mut plan).unwrap();
 
         let mapped_arena = mapped.get(arena).unwrap();
+        let region = mapped.region();
         let mut actual = [0_u8; 4];
-        unsafe { mapped_arena.region.read_bytes(0, &mut actual) };
+        unsafe {
+            region
+                .read_bytes(mapped_arena.region_offset, &mut actual)
+                .unwrap()
+        };
         assert_eq!(actual, [1, 2, 3, 4]);
     }
 }

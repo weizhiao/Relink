@@ -64,9 +64,9 @@ impl<M: Mmap> RegionAccess for HostRegion<M> {
     }
 
     #[inline]
-    unsafe fn read_bytes(&self, offset: usize, dst: &mut [u8]) {
+    unsafe fn read_bytes(&self, offset: usize, dst: &mut [u8]) -> Result<()> {
         if dst.is_empty() {
-            return;
+            return Ok(());
         }
         unsafe {
             ptr::copy_nonoverlapping(
@@ -75,12 +75,13 @@ impl<M: Mmap> RegionAccess for HostRegion<M> {
                 dst.len(),
             );
         }
+        Ok(())
     }
 
     #[inline]
-    unsafe fn write_bytes(&self, offset: usize, src: &[u8]) {
+    unsafe fn write_bytes(&self, offset: usize, src: &[u8]) -> Result<()> {
         if src.is_empty() {
-            return;
+            return Ok(());
         }
         unsafe {
             ptr::copy_nonoverlapping(
@@ -89,16 +90,18 @@ impl<M: Mmap> RegionAccess for HostRegion<M> {
                 src.len(),
             );
         }
+        Ok(())
     }
 
     #[inline]
-    unsafe fn zero_bytes(&self, offset: usize, len: usize) {
+    unsafe fn zero_bytes(&self, offset: usize, len: usize) -> Result<()> {
         if len == 0 {
-            return;
+            return Ok(());
         }
         unsafe {
             ptr::write_bytes(self.host_ptr.cast::<u8>().add(offset), 0, len);
         }
+        Ok(())
     }
 
     #[inline]

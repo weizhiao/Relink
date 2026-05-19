@@ -70,7 +70,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
             .checked_sub(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let mut bytes = [0u8; HEADER_SIZE];
-        segments.read_bytes(start, &mut bytes)?;
+        segments.read_bytes(addr, &mut bytes)?;
         let header: ElfGnuHeader = unsafe { core::mem::transmute(bytes) };
 
         if header.nbloom == 0 {
@@ -169,7 +169,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
                 .checked_add(offset)
                 .ok_or(ParseDynamicError::AddressOverflow)?;
             let mut bytes = [0u8; size_of::<u32>()];
-            segments.read_bytes(offset, &mut bytes)?;
+            segments.read_bytes(segments.base_addr().offset(offset), &mut bytes)?;
             let value = u32::from_ne_bytes(bytes);
             if value & 1 != 0 {
                 return Ok(idx

@@ -64,6 +64,7 @@ impl TlsInfo {
     }
 
     #[inline]
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
     pub(crate) fn image_arc(&self) -> Arc<Box<[u8]>> {
         self.image.clone()
     }

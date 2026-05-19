@@ -1,8 +1,6 @@
 #[cfg(feature = "object")]
 use super::RelocHelper;
 use super::{Emulator, RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
-#[cfg(feature = "object")]
-use crate::segment::RelocWrite;
 use crate::{
     ByteRepr, RelocReason, Result,
     arch::{ArchKind, NativeArch},
@@ -93,16 +91,14 @@ pub trait RelocationArch: 'static {
     #[doc(hidden)]
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, PreH, PostH, W>(
+    fn relocate_object<D, PreH, PostH>(
         helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH>,
-        _writer: &mut W,
         rel: &ElfRelType<Self>,
         _pltgot: &mut crate::object::layout::PltGotSection,
     ) -> Result<()>
     where
         Self: Sized,
         D: 'static,
-        W: RelocWrite,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
     {

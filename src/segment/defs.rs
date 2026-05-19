@@ -1,4 +1,4 @@
-use crate::os::{HostRegion, MapFlags, MappedRegion, ProtFlags, RegionAccess};
+use crate::os::{MapFlags, ProtFlags};
 use alloc::vec::Vec;
 
 /// Address representation for ELF segments
@@ -83,57 +83,4 @@ pub(crate) struct ElfSegment {
     pub(crate) need_copy: bool,
     /// Indicates if this segment comes from a relocatable object
     pub(crate) from_relocatable: bool,
-}
-
-#[derive(Clone)]
-pub(crate) struct MappedSlice<R: RegionAccess = HostRegion> {
-    pub(super) offset: usize,
-    pub(super) len: usize,
-    pub(super) region_offset: usize,
-    // This shared owner keeps the mapped arena alive even when address math
-    // only needs the slice bounds at runtime.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    pub(super) region: MappedRegion<R>,
-}
-
-impl<R: RegionAccess> MappedSlice<R> {
-    #[inline]
-    pub(super) fn new(
-        offset: usize,
-        len: usize,
-        region_offset: usize,
-        region: MappedRegion<R>,
-    ) -> Self {
-        Self {
-            offset,
-            len,
-            region_offset,
-            region,
-        }
-    }
-
-    #[inline]
-    pub(super) fn contains_range(&self, start: usize, len: usize) -> bool {
-        start
-            .checked_sub(self.offset)
-            .and_then(|delta| delta.checked_add(len))
-            .is_some_and(|end| end <= self.len)
-    }
-
-    #[inline]
-    pub(super) fn len(&self) -> usize {
-        self.len
-    }
-
-    #[inline]
-    pub(super) fn offset(&self) -> usize {
-        self.offset
-    }
-
-    #[inline]
-    pub(super) fn region_offset(&self, start: usize) -> Option<usize> {
-        start
-            .checked_sub(self.offset)
-            .and_then(|delta| self.region_offset.checked_add(delta))
-    }
 }

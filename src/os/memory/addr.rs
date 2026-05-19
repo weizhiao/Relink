@@ -31,6 +31,7 @@ impl VmAddr {
     }
 
     #[inline]
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
     pub(crate) const fn as_ptr<T>(self) -> *const T {
         self.0 as *const T
     }

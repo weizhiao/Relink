@@ -10,443 +10,244 @@ use core::{
     ptr::NonNull,
 };
 
-use super::MappedSlice;
+#[derive(Clone, Copy)]
+struct MappedRange {
+    offset: usize,
+    len: usize,
+}
+
+impl MappedRange {
+    #[inline]
+    const fn new(offset: usize, len: usize) -> Self {
+        Self { offset, len }
+    }
+
+    #[inline]
+    fn contains_offset_range(self, offset: usize, len: usize) -> bool {
+        offset
+            .checked_sub(self.offset)
+            .and_then(|delta| delta.checked_add(len))
+            .is_some_and(|end| end <= self.len)
+    }
+
+    #[inline]
+    fn end(self) -> usize {
+        self.offset
+            .checked_add(self.len)
+            .expect("ELF mapped range overflowed")
+    }
+}
 
 /// The mapped memory of an ELF object.
 ///
-/// This type now supports both a single contiguous legacy mapping and a sparse
-/// collection of mapped slices backed by one or more shared arena mappings.
-/// The slices are kept sorted by offset and must not overlap.
+/// All mapped bytes are backed by one region. `ranges` records the parts of
+/// the module-runtime address space owned by this image.
 pub struct ElfSegments<R: RegionAccess = HostRegion> {
     base: usize,
-    slices: Box<[MappedSlice<R>]>,
-    access: SegmentAccess<R>,
-}
-
-enum SegmentAccess<R: RegionAccess> {
-    Linear(LinearAccess<R>),
-    Sparse,
-}
-
-struct LinearAccess<R: RegionAccess> {
     region: MappedRegion<R>,
-    region_offset_bias: usize,
-    mapped_start: usize,
-    mapped_end: usize,
+    ranges: Box<[MappedRange]>,
     contiguous: bool,
-}
-
-impl<R: RegionAccess> LinearAccess<R> {
-    fn new(slices: &[MappedSlice<R>], contiguous: bool) -> Option<Self> {
-        let first = slices.first()?;
-        let region = first.region.clone();
-        let region_offset_bias = first.region_offset.wrapping_sub(first.offset);
-        let mapped_start = first.offset;
-        let mapped_end = slices
-            .last()
-            .and_then(|slice| slice.offset.checked_add(slice.len))?;
-
-        let is_linear = slices.iter().all(|slice| {
-            core::ptr::addr_eq(slice.region.as_ptr(), region.as_ptr())
-                && slice.region_offset.wrapping_sub(slice.offset) == region_offset_bias
-        });
-
-        is_linear.then(|| Self {
-            region,
-            region_offset_bias,
-            mapped_start,
-            mapped_end,
-            contiguous,
-        })
-    }
-
-    #[inline]
-    fn contains_range(&self, start: usize, len: usize) -> bool {
-        start >= self.mapped_start
-            && start
-                .checked_add(len)
-                .is_some_and(|end| end <= self.mapped_end)
-    }
-
-    #[inline]
-    fn region_offset(&self, start: usize) -> usize {
-        start.wrapping_add(self.region_offset_bias)
-    }
-}
-
-#[inline]
-fn find_slice_index<R: RegionAccess>(
-    slices: &[MappedSlice<R>],
-    start: usize,
-    len: usize,
-) -> Option<usize> {
-    let idx = slices
-        .partition_point(|slice| slice.offset() <= start)
-        .checked_sub(1)?;
-    slices[idx].contains_range(start, len).then_some(idx)
-}
-
-pub(crate) trait RelocWrite {
-    /// Writes bytes to a relocation target without checked range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `start..start + src.len()` is backed by writable
-    /// mapped memory owned by this image.
-    unsafe fn write_bytes(&mut self, start: usize, src: &[u8]);
-
-    /// Reads bytes from a relocation target without checked range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `start..start + dst.len()` is backed by readable
-    /// mapped memory owned by this image.
-    unsafe fn read_bytes(&mut self, start: usize, dst: &mut [u8]);
-
-    /// Writes a typed relocation value without checked range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `r_offset..r_offset + size_of::<T>()` is backed by
-    /// writable mapped memory owned by this image.
-    #[inline]
-    unsafe fn write_value<T: ByteRepr>(&mut self, r_offset: usize, val: RelocValue<T>) {
-        let value = val.into_inner();
-        let bytes = unsafe {
-            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
-        };
-        unsafe { self.write_bytes(r_offset, bytes) };
-    }
-
-    /// Updates a typed relocation value without checked range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `r_offset..r_offset + size_of::<T>()` is backed by
-    /// readable and writable mapped memory owned by this image.
-    #[inline]
-    unsafe fn update_value<T: ByteRepr + Copy>(
-        &mut self,
-        r_offset: usize,
-        update: impl FnOnce(T) -> T,
-    ) {
-        if size_of::<T>() == 0 {
-            return;
-        }
-
-        let mut value = MaybeUninit::<T>::uninit();
-        let bytes = unsafe {
-            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
-        };
-        unsafe { self.read_bytes(r_offset, bytes) };
-        let value = update(unsafe { value.assume_init() });
-        let bytes = unsafe {
-            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
-        };
-        unsafe { self.write_bytes(r_offset, bytes) };
-    }
-}
-
-pub(crate) enum RelocWriter<'a, R: RegionAccess = HostRegion> {
-    Linear(LinearWriter<'a, R>),
-    Sparse(SparseWriter<'a, R>),
-}
-
-pub(crate) struct LinearWriter<'a, R: RegionAccess> {
-    linear: &'a LinearAccess<R>,
-}
-
-impl<R: RegionAccess> RelocWrite for LinearWriter<'_, R> {
-    #[inline]
-    unsafe fn write_bytes(&mut self, start: usize, src: &[u8]) {
-        debug_assert!(self.linear.contains_range(start, src.len()));
-        unsafe {
-            self.linear
-                .region
-                .write_bytes(self.linear.region_offset(start), src)
-        };
-    }
-
-    #[inline]
-    unsafe fn read_bytes(&mut self, start: usize, dst: &mut [u8]) {
-        debug_assert!(self.linear.contains_range(start, dst.len()));
-        unsafe {
-            self.linear
-                .region
-                .read_bytes(self.linear.region_offset(start), dst)
-        };
-    }
-}
-
-pub(crate) struct SparseWriter<'a, R: RegionAccess> {
-    slices: &'a [MappedSlice<R>],
-    current: usize,
-}
-
-impl<'a, R: RegionAccess> SparseWriter<'a, R> {
-    #[inline]
-    fn new(slices: &'a [MappedSlice<R>]) -> Self {
-        Self { slices, current: 0 }
-    }
-
-    #[inline]
-    fn slice_index(&mut self, start: usize, len: usize) -> usize {
-        if self
-            .slices
-            .get(self.current)
-            .is_some_and(|slice| slice.contains_range(start, len))
-        {
-            return self.current;
-        }
-
-        for idx in self.current.saturating_add(1)..self.slices.len() {
-            let slice = &self.slices[idx];
-            if slice.offset() > start {
-                break;
-            }
-            if slice.contains_range(start, len) {
-                self.current = idx;
-                return idx;
-            }
-        }
-
-        let idx = find_slice_index(self.slices, start, len)
-            .expect("ELF relocation target is not fully backed by one mapped slice");
-        self.current = idx;
-        idx
-    }
-}
-
-impl<R: RegionAccess> RelocWrite for SparseWriter<'_, R> {
-    #[inline]
-    unsafe fn write_bytes(&mut self, start: usize, src: &[u8]) {
-        let slice = &self.slices[self.slice_index(start, src.len())];
-        let region_offset = unsafe { ElfSegments::region_offset_unchecked(slice, start) };
-        unsafe { slice.region.write_bytes(region_offset, src) };
-    }
-
-    #[inline]
-    unsafe fn read_bytes(&mut self, start: usize, dst: &mut [u8]) {
-        let slice = &self.slices[self.slice_index(start, dst.len())];
-        let region_offset = unsafe { ElfSegments::region_offset_unchecked(slice, start) };
-        unsafe { slice.region.read_bytes(region_offset, dst) };
-    }
 }
 
 impl<R: RegionAccess> Debug for ElfSegments<R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let slices = self
-            .slices
+        let ranges = self
+            .ranges
             .iter()
-            .map(|slice| (slice.offset(), slice.len()))
+            .map(|range| (range.offset, range.len))
             .collect::<Vec<_>>();
         f.debug_struct("ElfSegments")
             .field("base", &format_args!("0x{:x}", self.base()))
-            .field("slices", &slices)
+            .field("ranges", &ranges)
+            .field("contiguous", &self.contiguous)
             .finish()
     }
 }
 
 impl<R: RegionAccess> ElfSegments<R> {
-    #[inline]
-    fn find_slice(&self, start: usize, len: usize) -> Option<&MappedSlice<R>> {
-        find_slice_index(&self.slices, start, len).map(|idx| &self.slices[idx])
+    fn normalize_ranges(mut ranges: Vec<MappedRange>) -> (Box<[MappedRange]>, bool) {
+        ranges.sort_by_key(|range| (range.offset, range.len));
+        for pair in ranges.windows(2) {
+            let previous = pair[0];
+            let next = pair[1];
+            assert!(
+                previous.end() <= next.offset,
+                "ELF mapped ranges must not overlap",
+            );
+        }
+
+        let contiguous = ranges
+            .windows(2)
+            .all(|pair| pair[0].end() == pair[1].offset);
+        (ranges.into_boxed_slice(), contiguous)
     }
 
     #[inline]
-    fn slice_base(&self, slice: &MappedSlice<R>) -> usize {
-        self.base.saturating_add(slice.offset)
+    fn first_range(&self) -> Option<MappedRange> {
+        self.ranges.first().copied()
     }
 
     #[inline]
-    fn slice_end(&self, slice: &MappedSlice<R>) -> usize {
-        self.slice_base(slice).saturating_add(slice.len)
+    fn last_range(&self) -> Option<MappedRange> {
+        self.ranges.last().copied()
+    }
+
+    #[inline]
+    fn find_range(&self, addr: VmAddr, len: usize) -> Option<MappedRange> {
+        let offset = addr.get().checked_sub(self.base)?;
+        let idx = self
+            .ranges
+            .partition_point(|range| range.offset <= offset)
+            .checked_sub(1)?;
+        let range = self.ranges[idx];
+        range.contains_offset_range(offset, len).then_some(range)
+    }
+
+    #[inline]
+    fn contains_range(&self, addr: VmAddr, len: usize) -> bool {
+        self.find_range(addr, len).is_some()
+    }
+
+    #[inline]
+    fn range_base(&self, range: MappedRange) -> usize {
+        self.base.saturating_add(range.offset)
+    }
+
+    #[inline]
+    fn region_offset(&self, addr: VmAddr) -> usize {
+        addr.get().wrapping_sub(self.region.addr().get())
     }
 
     /// Create a new contiguous [`ElfSegments`] instance whose mapped bytes begin
     /// at the module-relative `offset`.
     pub(crate) fn new(region: MappedRegion<R>, base: usize, offset: usize) -> Self {
         let len = region.len();
-        let slice = MappedSlice::new(offset, len, 0, region);
-        let slices = alloc::vec![slice].into_boxed_slice();
-        let access = SegmentAccess::Linear(
-            LinearAccess::new(&slices, true).expect("single mapped slice must be linear"),
-        );
+        let range = MappedRange::new(offset, len);
+        let (ranges, contiguous) = Self::normalize_ranges(alloc::vec![range]);
         Self {
             base,
-            slices,
-            access,
+            region,
+            ranges,
+            contiguous,
         }
     }
 
-    /// Creates an [`ElfSegments`] instance from explicit mapped slices.
-    pub(crate) fn from_slices(base: usize, mut slices: Vec<MappedSlice<R>>) -> Self {
-        slices.sort_by_key(|slice| (slice.offset(), slice.len()));
-        for pair in slices.windows(2) {
-            let previous = &pair[0];
-            let next = &pair[1];
-            let previous_end = previous
-                .offset
-                .checked_add(previous.len)
-                .expect("ELF segment slice range overflowed");
+    /// Creates an [`ElfSegments`] instance from mapped ranges inside one shared
+    /// backing region.
+    pub(crate) fn from_ranges(
+        region: MappedRegion<R>,
+        base: usize,
+        ranges: Vec<(usize, usize)>,
+    ) -> Self {
+        let ranges = ranges
+            .into_iter()
+            .map(|(offset, len)| MappedRange::new(offset, len))
+            .collect::<Vec<_>>();
+        let (ranges, contiguous) = Self::normalize_ranges(ranges);
+
+        for range in ranges.iter().copied() {
+            let region_offset = base
+                .checked_add(range.offset)
+                .and_then(|addr| addr.checked_sub(region.addr().get()))
+                .expect("ELF mapped range precedes its backing region");
             assert!(
-                previous_end <= next.offset,
-                "ELF segment slices must not overlap",
+                region_offset
+                    .checked_add(range.len)
+                    .is_some_and(|end| end <= region.len()),
+                "ELF mapped range exceeds its backing region",
             );
         }
-        let contiguous = slices.windows(2).all(|pair| {
-            pair[0]
-                .offset
-                .checked_add(pair[0].len)
-                .is_some_and(|end| end == pair[1].offset)
-        });
-        let slices = slices.into_boxed_slice();
-        let access = LinearAccess::new(&slices, contiguous)
-            .map(SegmentAccess::Linear)
-            .unwrap_or(SegmentAccess::Sparse);
+
         Self {
             base,
-            slices,
-            access,
+            region,
+            ranges,
+            contiguous,
         }
     }
 
-    /// Creates one shared mapped region owner.
-    pub(crate) fn create_region(region: MappedRegion<R>) -> MappedRegion<R> {
-        region
-    }
-
-    /// Creates one mapped slice descriptor covered by a shared region.
-    #[inline]
-    pub(crate) fn create_slice(
-        offset: usize,
-        len: usize,
-        region_offset: usize,
-        region: MappedRegion<R>,
-    ) -> MappedSlice<R> {
-        MappedSlice::new(offset, len, region_offset, region)
-    }
-
-    #[inline]
-    pub(crate) fn reloc_writer(&self) -> RelocWriter<'_, R> {
-        match &self.access {
-            SegmentAccess::Linear(linear) => RelocWriter::Linear(LinearWriter { linear }),
-            SegmentAccess::Sparse => RelocWriter::Sparse(SparseWriter::new(&self.slices)),
-        }
-    }
-
-    /// Rebinds the module base address while preserving the existing slice layout.
+    /// Rebinds the module base address while preserving the existing range layout.
     #[inline]
     pub(crate) fn set_base(&mut self, base: usize) {
         self.base = base;
     }
 
-    /// Returns the first mapped region, when this object owns one.
+    /// Returns the mapped region, when this object owns one.
     #[inline]
     #[cfg(windows)]
     pub(crate) fn primary_region(&self) -> Option<(*mut core::ffi::c_void, usize)> {
-        self.slices
-            .first()
-            .map(|slice| (slice.region.addr().get() as *mut _, slice.region.len()))
+        Some((self.region.addr().get() as *mut _, self.region.len()))
     }
 
-    /// Returns whether no slices are mapped.
+    /// Returns whether no ranges are mapped.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.slices.is_empty()
+        self.ranges.is_empty()
     }
 
-    /// Returns the lowest runtime address covered by this image's mapped slices.
+    /// Returns the lowest runtime address covered by this image's mapped ranges.
     #[inline]
     pub fn mapped_base(&self) -> usize {
-        self.slices
-            .first()
-            .map(|slice| self.slice_base(slice))
+        self.first_range()
+            .map(|range| self.range_base(range))
             .unwrap_or(0)
     }
 
-    /// Returns the length of the bounding runtime span covered by mapped slices.
+    /// Returns the length of the bounding runtime span covered by mapped ranges.
     #[inline]
     pub fn mapped_len(&self) -> usize {
-        let Some((first, last)) = self.slices.first().zip(self.slices.last()) else {
+        let Some((first, last)) = self.first_range().zip(self.last_range()) else {
             return 0;
         };
-        let base = self.slice_base(first);
-        let end = self.slice_end(last);
-        end.saturating_sub(base)
+        self.range_base(last)
+            .saturating_add(last.len)
+            .saturating_sub(self.range_base(first))
     }
 
-    /// Returns whether `addr` is inside one of this image's mapped slices.
+    /// Returns whether `addr` is inside one of this image's mapped ranges.
     #[inline]
     pub fn contains_addr(&self, addr: usize) -> bool {
-        if let SegmentAccess::Linear(linear) = &self.access
-            && linear.contiguous
-        {
-            return addr
-                .checked_sub(self.base.saturating_add(linear.mapped_start))
-                .is_some_and(|offset| offset < linear.mapped_end - linear.mapped_start);
+        if self.contiguous {
+            let Some(first) = self.first_range() else {
+                return false;
+            };
+            let start = self.base.saturating_add(first.offset);
+            let len = self.mapped_len();
+            return addr.checked_sub(start).is_some_and(|offset| offset < len);
         }
 
-        self.slices.iter().any(|slice| {
-            addr.checked_sub(self.slice_base(slice))
-                .is_some_and(|offset| offset < slice.len)
+        self.ranges.iter().copied().any(|range| {
+            addr.checked_sub(self.range_base(range))
+                .is_some_and(|offset| offset < range.len)
         })
     }
 
     /// Returns whether the mapped memory is one contiguous span with no gaps.
+    #[inline]
     pub fn is_contiguous_mapping(&self) -> bool {
-        if let SegmentAccess::Linear(linear) = &self.access {
-            return linear.contiguous;
-        }
-
-        self.slices
-            .windows(2)
-            .all(|pair| self.slice_end(&pair[0]) == self.slice_base(&pair[1]))
-    }
-
-    #[inline]
-    fn runtime_slice(&self, start: usize, len: usize) -> &MappedSlice<R> {
-        self.find_slice(start, len)
-            .expect("ELF segment range is not fully backed by one mapped slice")
-    }
-
-    #[inline]
-    fn region_offset(slice: &MappedSlice<R>, start: usize) -> usize {
-        slice
-            .region_offset(start)
-            .expect("ELF segment range precedes mapped slice")
-    }
-
-    /// Computes a region offset without validating that `start` belongs to `slice`.
-    ///
-    /// # Safety
-    /// The caller must ensure `start` is inside `slice`.
-    #[inline]
-    unsafe fn region_offset_unchecked(slice: &MappedSlice<R>, start: usize) -> usize {
-        debug_assert!(start >= slice.offset);
-        slice.region_offset + (start - slice.offset)
+        self.contiguous
     }
 
     #[inline]
     pub(crate) fn read_view<T: ByteRepr + 'static>(
         &self,
-        start: usize,
+        offset: usize,
         byte_len: usize,
     ) -> Result<Option<MappedView<T>>> {
-        let slice = self.runtime_slice(start, byte_len);
-        let region_offset = Self::region_offset(slice, start);
-        MappedView::read_region(
-            &slice.region,
-            region_offset,
-            slice.region.addr().wrapping_add(region_offset),
-            byte_len,
-        )
+        let addr = self.base_addr().offset(offset);
+        debug_assert!(self.contains_range(addr, byte_len));
+        let region_offset = self.region_offset(addr);
+        MappedView::read_region(&self.region, region_offset, addr, byte_len)
     }
 
     #[inline]
     pub(crate) fn borrowed_ptr<T: ByteRepr + 'static>(
         &self,
-        start: usize,
+        offset: usize,
         byte_len: usize,
     ) -> Result<Option<NonNull<T>>> {
         Ok(self
-            .read_view::<T>(start, byte_len)?
+            .read_view::<T>(offset, byte_len)?
             .and_then(|view| view.as_slice().first().map(NonNull::from)))
     }
 
@@ -456,43 +257,71 @@ impl<R: RegionAccess> ElfSegments<R> {
     /// mapping cannot be borrowed directly by the current process.
     #[inline]
     pub fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        let start = addr.get().checked_sub(self.base)?;
-        let slice = self.find_slice(start, 1)?;
-        let region_offset = Self::region_offset(slice, start);
-        unsafe { slice.region.host_ptr(region_offset) }
+        self.find_range(addr, 1)?;
+        unsafe { self.region.host_ptr(self.region_offset(addr)) }
     }
 
     #[inline]
-    pub(crate) fn read_bytes(&self, start: usize, dst: &mut [u8]) -> Result<()> {
-        let slice = self.runtime_slice(start, dst.len());
-        unsafe {
-            slice
-                .region
-                .read_bytes(Self::region_offset(slice, start), dst)
-        };
-        Ok(())
+    pub(crate) fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
+        debug_assert!(self.contains_range(addr, dst.len()));
+        unsafe { self.region.read_bytes(self.region_offset(addr), dst) }
     }
 
     #[inline]
-    pub(crate) fn write_bytes(&self, start: usize, src: &[u8]) -> Result<()> {
-        let slice = self.runtime_slice(start, src.len());
-        unsafe {
-            slice
-                .region
-                .write_bytes(Self::region_offset(slice, start), src)
-        };
-        Ok(())
+    pub(crate) fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
+        debug_assert!(self.contains_range(addr, src.len()));
+        unsafe { self.region.write_bytes(self.region_offset(addr), src) }
     }
 
     #[inline]
-    pub(crate) fn zero_bytes(&self, start: usize, len: usize) -> Result<()> {
-        let slice = self.runtime_slice(start, len);
-        unsafe {
-            slice
-                .region
-                .zero_bytes(Self::region_offset(slice, start), len)
+    pub(crate) fn zero_bytes(&self, addr: VmAddr, len: usize) -> Result<()> {
+        debug_assert!(self.contains_range(addr, len));
+        unsafe { self.region.zero_bytes(self.region_offset(addr), len) }
+    }
+
+    /// Writes a typed relocation value without checked range validation.
+    ///
+    /// # Safety
+    /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
+    /// writable mapped memory owned by this image.
+    #[inline]
+    pub(crate) unsafe fn write_value<T: ByteRepr>(
+        &self,
+        addr: VmAddr,
+        val: RelocValue<T>,
+    ) -> Result<()> {
+        let value = val.into_inner();
+        let bytes = unsafe {
+            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
         };
-        Ok(())
+        self.write_bytes(addr, bytes)
+    }
+
+    /// Updates a typed relocation value without checked range validation.
+    ///
+    /// # Safety
+    /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
+    /// readable and writable mapped memory owned by this image.
+    #[inline]
+    pub(crate) unsafe fn update_value<T: ByteRepr + Copy>(
+        &self,
+        addr: VmAddr,
+        update: impl FnOnce(T) -> T,
+    ) -> Result<()> {
+        if size_of::<T>() == 0 {
+            return Ok(());
+        }
+
+        let mut value = MaybeUninit::<T>::uninit();
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
+        };
+        self.read_bytes(addr, bytes)?;
+        let value = update(unsafe { value.assume_init() });
+        let bytes = unsafe {
+            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
+        };
+        self.write_bytes(addr, bytes)
     }
 
     /// Gets the base address of the mapped memory.

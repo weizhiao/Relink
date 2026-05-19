@@ -13,9 +13,8 @@ mod space;
 pub(crate) mod program;
 
 pub use space::ElfSegments;
-pub(crate) use space::{RelocWrite, RelocWriter};
 
-pub(crate) use defs::{Address, ElfSegment, FileMapInfo, MappedSlice};
+pub(crate) use defs::{Address, ElfSegment, FileMapInfo};
 pub(crate) use layout::{align_up, rounddown, roundup};
 pub(crate) use mapping::SegmentBuilder;
 pub(crate) use relro::ELFRelro;

@@ -26,21 +26,30 @@ pub trait RegionAccess: Send + Sync + 'static {
 
     /// Reads bytes without checking bounds.
     ///
+    /// The returned error represents backend access failure; it is not a
+    /// substitute for range validation.
+    ///
     /// # Safety
     /// The caller must ensure `offset..offset + dst.len()` is inside this region.
-    unsafe fn read_bytes(&self, offset: usize, dst: &mut [u8]);
+    unsafe fn read_bytes(&self, offset: usize, dst: &mut [u8]) -> Result<()>;
 
     /// Writes bytes without checking bounds.
     ///
+    /// The returned error represents backend access failure; it is not a
+    /// substitute for range validation.
+    ///
     /// # Safety
     /// The caller must ensure `offset..offset + src.len()` is inside this region.
-    unsafe fn write_bytes(&self, offset: usize, src: &[u8]);
+    unsafe fn write_bytes(&self, offset: usize, src: &[u8]) -> Result<()>;
 
     /// Fills bytes with zeroes without checking bounds.
     ///
+    /// The returned error represents backend access failure; it is not a
+    /// substitute for range validation.
+    ///
     /// # Safety
     /// The caller must ensure `offset..offset + len` is inside this region.
-    unsafe fn zero_bytes(&self, offset: usize, len: usize);
+    unsafe fn zero_bytes(&self, offset: usize, len: usize) -> Result<()>;
 
     /// Borrows directly readable host bytes without checking bounds.
     ///
@@ -85,11 +94,6 @@ impl<R: RegionAccess> MappedRegion<R> {
     }
 
     #[inline]
-    pub(crate) fn as_ptr(&self) -> *const R {
-        Arc::as_ptr(&self.0)
-    }
-
-    #[inline]
     pub fn addr(&self) -> VmAddr {
         self.0.addr()
     }
@@ -106,28 +110,37 @@ impl<R: RegionAccess> MappedRegion<R> {
 
     /// Reads bytes from the region without checking bounds.
     ///
+    /// The returned error represents backend access failure; it is not a
+    /// substitute for range validation.
+    ///
     /// # Safety
     /// The caller must ensure `offset..offset + dst.len()` is inside this region.
     #[inline]
-    pub(crate) unsafe fn read_bytes(&self, offset: usize, dst: &mut [u8]) {
+    pub(crate) unsafe fn read_bytes(&self, offset: usize, dst: &mut [u8]) -> Result<()> {
         unsafe { self.0.read_bytes(offset, dst) }
     }
 
     /// Writes bytes into the region without checking bounds.
     ///
+    /// The returned error represents backend access failure; it is not a
+    /// substitute for range validation.
+    ///
     /// # Safety
     /// The caller must ensure `offset..offset + src.len()` is inside this region.
     #[inline]
-    pub(crate) unsafe fn write_bytes(&self, offset: usize, src: &[u8]) {
+    pub(crate) unsafe fn write_bytes(&self, offset: usize, src: &[u8]) -> Result<()> {
         unsafe { self.0.write_bytes(offset, src) }
     }
 
     /// Fills bytes in the region without checking bounds.
     ///
+    /// The returned error represents backend access failure; it is not a
+    /// substitute for range validation.
+    ///
     /// # Safety
     /// The caller must ensure `offset..offset + len` is inside this region.
     #[inline]
-    pub(crate) unsafe fn zero_bytes(&self, offset: usize, len: usize) {
+    pub(crate) unsafe fn zero_bytes(&self, offset: usize, len: usize) -> Result<()> {
         unsafe { self.0.zero_bytes(offset, len) }
     }
 

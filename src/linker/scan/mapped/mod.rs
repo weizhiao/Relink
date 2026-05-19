@@ -99,6 +99,7 @@ impl RuntimeModuleMemory {
         mapped_section_arenas: &MappedArenaMap,
     ) -> Result<Self> {
         let module = layout.module(module_id);
+        let region = mapped_section_arenas.region();
 
         let mut placed_sections = Vec::with_capacity(module.alloc_sections().len());
         for section_id in module.alloc_sections().iter().copied() {
@@ -111,12 +112,11 @@ impl RuntimeModuleMemory {
                 .ok_or_else(|| {
                     LinkerError::runtime_memory("arena-backed module referenced an unmapped arena")
                 })?;
-            let actual_address = arena.address(placement.offset()).ok_or_else(|| {
+            let actual_address = arena.address(&region, placement.offset()).ok_or_else(|| {
                 LinkerError::runtime_memory("arena-backed module section address overflowed")
             })?;
             placed_sections.push((
                 section_id,
-                placement.address(),
                 SourceAddress::new(metadata.source_address()),
                 actual_address,
                 metadata.size(),
@@ -125,7 +125,7 @@ impl RuntimeModuleMemory {
 
         let Some(base) = placed_sections
             .iter()
-            .map(|(_, _, _, actual_address, _)| *actual_address)
+            .map(|(_, _, actual_address, _)| *actual_address)
             .min()
         else {
             return Err(LinkerError::runtime_memory(
@@ -134,27 +134,15 @@ impl RuntimeModuleMemory {
             .into());
         };
 
-        let mut mapped_slices = Vec::with_capacity(placed_sections.len());
+        let mut mapped_ranges = Vec::with_capacity(placed_sections.len());
         let mut runtime_sections = Vec::with_capacity(placed_sections.len());
 
-        for (section, layout_address, source_address, actual_address, size) in &placed_sections {
-            let arena = mapped_section_arenas
-                .get(layout_address.arena())
-                .ok_or_else(|| {
-                    LinkerError::runtime_memory("arena-backed module referenced an unmapped arena")
-                })?;
+        for (section, source_address, actual_address, size) in &placed_sections {
             let runtime_offset = actual_address.checked_sub(base).ok_or_else(|| {
                 LinkerError::runtime_memory("arena-backed module address precedes runtime base")
             })?;
             let runtime_offset = RuntimeOffset::new(runtime_offset);
-            mapped_slices.push(ElfSegments::create_slice(
-                runtime_offset.get(),
-                *size,
-                actual_address.checked_sub(arena.base()).ok_or_else(|| {
-                    LinkerError::runtime_memory("arena-backed section precedes arena base")
-                })?,
-                arena.region(),
-            ));
+            mapped_ranges.push((runtime_offset.get(), *size));
             runtime_sections.push(RuntimeSectionMemory {
                 section: *section,
                 source_address: *source_address,
@@ -165,7 +153,7 @@ impl RuntimeModuleMemory {
 
         Ok(RuntimeModuleMemory {
             sections: runtime_sections.into_boxed_slice(),
-            segments: ElfSegments::from_slices(base, mapped_slices),
+            segments: ElfSegments::from_ranges(region, base, mapped_ranges),
         })
     }
 

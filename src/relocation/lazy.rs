@@ -9,7 +9,7 @@ mod enabled {
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolInfo},
         os::{RegionAccess, VmAddr},
         relocation::{BindingMode, RelocValue, RelocationArch, SupportLazy, SymDef, unlikely},
-        segment::{RelocWrite, RelocWriter},
+        segment::ElfSegments,
         sync::Arc,
         tls::lookup_tls_get_addr,
     };
@@ -61,9 +61,9 @@ mod enabled {
             Ok(())
         }
 
-        pub(crate) fn relocate_jump_slot<Arch: RelocationArch, W: RelocWrite>(
+        pub(crate) fn relocate_jump_slot<Arch: RelocationArch, R: RegionAccess>(
             &self,
-            writer: &mut W,
+            segments: &ElfSegments<R>,
             base: VmAddr,
             rel: &ElfRelType<Arch>,
         ) -> Result<bool>
@@ -75,14 +75,14 @@ mod enabled {
             }
 
             unsafe {
-                writer.update_value::<_>(
-                    rel.r_offset(),
+                segments.update_value::<_>(
+                    base.offset(rel.r_offset()),
                     |word: <Arch::Layout as ElfLayout>::Word| {
                         <Arch::Layout as ElfLayout>::Word::from_usize(
                             base.offset(word.to_usize()).into_inner(),
                         )
                     },
-                )
+                )?
             };
             Ok(true)
         }
@@ -217,18 +217,17 @@ mod enabled {
             })
             .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()));
 
-        match segments.reloc_writer() {
-            RelocWriter::Linear(mut writer) => {
-                unsafe {
-                    writer.write_value(rela.r_offset(), RelocValue::new(symbol.into_inner()))
-                };
+        unsafe {
+            if segments
+                .write_value(
+                    dylib.segments.base_addr().offset(rela.r_offset()),
+                    RelocValue::new(symbol.into_inner()),
+                )
+                .is_err()
+            {
+                invalid_state(dylib.path.as_str(), "lazy binding write failed");
             }
-            RelocWriter::Sparse(mut writer) => {
-                unsafe {
-                    writer.write_value(rela.r_offset(), RelocValue::new(symbol.into_inner()))
-                };
-            }
-        }
+        };
         symbol.into_inner()
     }
 }
@@ -262,9 +261,9 @@ mod disabled {
             Ok(())
         }
 
-        pub(crate) fn relocate_jump_slot<Arch: RelocationArch, W>(
+        pub(crate) fn relocate_jump_slot<Arch: RelocationArch, R: RegionAccess>(
             &self,
-            _writer: &mut W,
+            _segments: &crate::segment::ElfSegments<R>,
             _base: crate::os::VmAddr,
             _rel: &ElfRelType<Arch>,
         ) -> crate::Result<bool> {

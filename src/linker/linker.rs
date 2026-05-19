@@ -884,7 +884,10 @@ fn apply_section_overrides<D, Arch: RelocationArch>(
             metadata.size(),
             "planned section override size does not match the loaded section"
         );
-        segments.write_bytes(metadata.source_address(), data.as_ref())?;
+        segments.write_bytes(
+            segments.base_addr().offset(metadata.source_address()),
+            data.as_ref(),
+        )?;
     }
     Ok(())
 }

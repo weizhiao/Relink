@@ -62,7 +62,7 @@ impl ElfHash {
             .checked_sub(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let mut bytes = [0u8; HEADER_SIZE];
-        segments.read_bytes(start, &mut bytes)?;
+        segments.read_bytes(addr, &mut bytes)?;
         let header: ElfHashHeader = unsafe { core::mem::transmute(bytes) };
 
         if header.nbucket == 0 {
