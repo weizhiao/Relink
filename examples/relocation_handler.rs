@@ -3,6 +3,7 @@ mod fixture_support;
 
 use elf_loader::{
     Loader, Result,
+    os::RegionAccess,
     relocation::{HandleResult, RelocationContext, RelocationHandler},
 };
 
@@ -13,7 +14,10 @@ fn my_print(s: &str) {
 }
 
 impl RelocationHandler for MyRelocHandler {
-    fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
+    fn handle<D: 'static, R: RegionAccess>(
+        &self,
+        ctx: &RelocationContext<'_, D, elf_loader::arch::NativeArch, R>,
+    ) -> Result<HandleResult> {
         let r_sym = ctx.rel().r_symbol();
         let symtab = ctx.lib().symtab();
         let (_, sym_info) = symtab.symbol_idx(r_sym);

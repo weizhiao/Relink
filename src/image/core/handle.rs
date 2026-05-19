@@ -7,7 +7,7 @@ use crate::{
     image::{DynamicInfo, Module},
     input::{Path, PathBuf},
     loader::{LifecycleContext, SharedLifecycleHandler, shared_lifecycle_handler},
-    os::{MappedView, VmAddr},
+    os::{HostRegion, MappedView, RegionAccess, VmAddr},
     relocation::{EmuContext, Emulator, RelocationArch},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
@@ -18,7 +18,11 @@ use core::{any::Any, fmt::Debug, ptr::NonNull};
 
 /// Inner structure for ElfCore
 #[repr(C)]
-pub(crate) struct CoreInner<D = (), Arch: RelocationArch = crate::arch::NativeArch> {
+pub(crate) struct CoreInner<
+    D = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = HostRegion,
+> {
     /// Indicates whether the component has been initialized
     pub(crate) is_init: AtomicBool,
 
@@ -32,7 +36,7 @@ pub(crate) struct CoreInner<D = (), Arch: RelocationArch = crate::arch::NativeAr
     pub(crate) fini: Lifecycle,
 
     /// Finalization handler
-    pub(crate) fini_handler: CoreFiniHandler<Arch>,
+    pub(crate) fini_handler: CoreFiniHandler<Arch, R>,
 
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
@@ -41,13 +45,13 @@ pub(crate) struct CoreInner<D = (), Arch: RelocationArch = crate::arch::NativeAr
     pub(crate) tls: CoreTlsState,
 
     /// Memory segments
-    pub(crate) segments: ElfSegments,
+    pub(crate) segments: ElfSegments<R>,
 
     /// User-defined data
     pub(crate) user_data: D,
 }
 
-impl<D, Arch: RelocationArch> Drop for CoreInner<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Arch, R> {
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed) {
@@ -70,8 +74,8 @@ impl<D, Arch: RelocationArch> Drop for CoreInner<D, Arch> {
     }
 }
 
-pub(crate) enum CoreFiniHandler<Arch: RelocationArch> {
-    Native(SharedLifecycleHandler),
+pub(crate) enum CoreFiniHandler<Arch: RelocationArch, R: RegionAccess = HostRegion> {
+    Native(SharedLifecycleHandler<R>),
     Emu(Arc<dyn Emulator<Arch>>),
 }
 
@@ -81,18 +85,22 @@ pub(crate) enum CoreFiniHandler<Arch: RelocationArch> {
 /// when you want to avoid extending the lifetime of a loaded image unnecessarily
 /// or need to detect when the image has been dropped.
 #[derive(Clone)]
-pub struct ElfCoreRef<D = (), Arch: RelocationArch = crate::arch::NativeArch> {
+pub struct ElfCoreRef<
+    D = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = HostRegion,
+> {
     /// Weak reference to the shared core allocation.
-    inner: Weak<CoreInner<D, Arch>>,
+    inner: Weak<CoreInner<D, Arch, R>>,
 }
 
-impl<D, Arch: RelocationArch> ElfCoreRef<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> ElfCoreRef<D, Arch, R> {
     /// Attempts to upgrade the weak pointer to an [`ElfCore`].
     ///
     /// # Returns
     /// * `Some(ElfCore)` - If the component is still alive and the upgrade is successful.
     /// * `None` - If the [`ElfCore`] has been dropped.
-    pub fn upgrade(&self) -> Option<ElfCore<D, Arch>> {
+    pub fn upgrade(&self) -> Option<ElfCore<D, Arch, R>> {
         self.inner.upgrade().map(|inner| ElfCore { inner })
     }
 }
@@ -102,12 +110,16 @@ impl<D, Arch: RelocationArch> ElfCoreRef<D, Arch> {
 /// `ElfCore` stores metadata, symbol tables, segments, TLS state, and lifecycle
 /// handlers behind an [`Arc`]. Higher-level image wrappers delegate most common
 /// operations to this type.
-pub struct ElfCore<D = (), Arch: RelocationArch = crate::arch::NativeArch> {
+pub struct ElfCore<
+    D = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = HostRegion,
+> {
     /// Shared reference to the inner component data.
-    pub(crate) inner: Arc<CoreInner<D, Arch>>,
+    pub(crate) inner: Arc<CoreInner<D, Arch, R>>,
 }
 
-impl<D, Arch: RelocationArch> Clone for ElfCore<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> Clone for ElfCore<D, Arch, R> {
     /// Clones the [`ElfCore`], incrementing the internal reference count.
     fn clone(&self) -> Self {
         ElfCore {
@@ -117,11 +129,11 @@ impl<D, Arch: RelocationArch> Clone for ElfCore<D, Arch> {
 }
 
 // Safety: ModuleInner can be shared between threads
-unsafe impl<D, Arch: RelocationArch> Sync for CoreInner<D, Arch> {}
+unsafe impl<D, Arch: RelocationArch, R: RegionAccess> Sync for CoreInner<D, Arch, R> {}
 // Safety: ModuleInner can be sent between threads
-unsafe impl<D, Arch: RelocationArch> Send for CoreInner<D, Arch> {}
+unsafe impl<D, Arch: RelocationArch, R: RegionAccess> Send for CoreInner<D, Arch, R> {}
 
-impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     /// Returns whether the ELF object has been initialized.
     #[inline]
     pub fn is_init(&self) -> bool {
@@ -136,7 +148,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
 
     /// Creates a weak reference to this ELF core.
     #[inline]
-    pub fn downgrade(&self) -> ElfCoreRef<D, Arch> {
+    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R> {
         ElfCoreRef {
             inner: Arc::downgrade(&self.inner),
         }
@@ -259,7 +271,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
 
     /// Gets the segments
     #[inline]
-    pub(crate) fn segments(&self) -> &ElfSegments {
+    pub(crate) fn segments(&self) -> &ElfSegments<R> {
         &self.inner.segments
     }
 
@@ -294,7 +306,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
     /// # Safety
     /// This should only be called during the relocation process
     pub(crate) unsafe fn set_tls_desc_args(&self, args: TlsDescArgs) {
-        let inner = Arc::as_ptr(&self.inner) as *mut CoreInner<D, Arch>;
+        let inner = Arc::as_ptr(&self.inner) as *mut CoreInner<D, Arch, R>;
         unsafe {
             (*inner).tls.set_desc_args(args);
         }
@@ -306,7 +318,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
     /// This should only be called during relocation before the loaded image is
     /// published to callers.
     pub(crate) unsafe fn set_emu_fini(&self, emu: Arc<dyn Emulator<Arch>>) {
-        let inner = Arc::as_ptr(&self.inner) as *mut CoreInner<D, Arch>;
+        let inner = Arc::as_ptr(&self.inner) as *mut CoreInner<D, Arch, R>;
         unsafe {
             (*inner).fini_handler = CoreFiniHandler::Emu(emu);
         }
@@ -319,7 +331,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
         dynamic_entries: MappedView<ElfDyn<Arch::Layout>>,
         phdrs: Vec<ElfPhdr<Arch::Layout>>,
         eh_frame_hdr: Option<NonNull<u8>>,
-        mut segments: ElfSegments,
+        mut segments: ElfSegments<R>,
         tls_mod_id: Option<TlsModuleId>,
         tls_tp_offset: Option<TlsTpOffset>,
         tls_get_addr: VmAddr,
@@ -355,7 +367,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
                 segments,
                 fini: Lifecycle::empty(),
                 fini_handler: CoreFiniHandler::Native(shared_lifecycle_handler(
-                    |_: &LifecycleContext<'_>| {},
+                    |_: &LifecycleContext<'_, R>| {},
                 )),
                 user_data,
             }),
@@ -363,7 +375,7 @@ impl<D, Arch: RelocationArch> ElfCore<D, Arch> {
     }
 }
 
-impl<D, Arch: RelocationArch> Debug for ElfCore<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> Debug for ElfCore<D, Arch, R> {
     /// Formats the ElfCore for debugging purposes.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfCore")
@@ -375,10 +387,11 @@ impl<D, Arch: RelocationArch> Debug for ElfCore<D, Arch> {
     }
 }
 
-impl<D, Arch> Module<Arch> for ElfCore<D, Arch>
+impl<D, Arch, R> Module<Arch> for ElfCore<D, Arch, R>
 where
     D: 'static,
     Arch: RelocationArch,
+    R: RegionAccess,
 {
     #[inline]
     fn as_any(&self) -> &dyn Any {

@@ -2,7 +2,7 @@ use crate::{
     Result,
     elf::{ElfLayout, ElfPhdr, Lifecycle, NativeElfLayout},
     input::Path,
-    os::VmAddr,
+    os::{HostRegion, RegionAccess, VmAddr},
     segment::ElfSegments,
     sync::Arc,
 };
@@ -84,14 +84,14 @@ impl<L: ElfLayout> LoadHook<L> for () {
 }
 
 /// Context passed to lifecycle handlers when `.init` / `.fini` functions run.
-pub struct LifecycleContext<'a> {
+pub struct LifecycleContext<'a, R: RegionAccess = HostRegion> {
     lifecycle: &'a Lifecycle,
-    segments: &'a ElfSegments,
+    segments: &'a ElfSegments<R>,
 }
 
-impl<'a> LifecycleContext<'a> {
+impl<'a, R: RegionAccess> LifecycleContext<'a, R> {
     #[inline]
-    pub(crate) fn new(lifecycle: &'a Lifecycle, segments: &'a ElfSegments) -> Self {
+    pub(crate) fn new(lifecycle: &'a Lifecycle, segments: &'a ElfSegments<R>) -> Self {
         Self {
             lifecycle,
             segments,
@@ -136,26 +136,28 @@ impl<'a> LifecycleContext<'a> {
 ///
 /// Implementations control how initialization functions such as `.init` / `.init_array`
 /// and finalization functions such as `.fini` / `.fini_array` are invoked.
-pub trait LifecycleHandler: Send + Sync {
+pub trait LifecycleHandler<R: RegionAccess = HostRegion>: Send + Sync {
     /// Executes the handler with the provided context.
-    fn call(&self, ctx: &LifecycleContext<'_>);
+    fn call(&self, ctx: &LifecycleContext<'_, R>);
 }
 
-impl<F> LifecycleHandler for F
+impl<F, R> LifecycleHandler<R> for F
 where
-    F: Fn(&LifecycleContext<'_>) + Send + Sync,
+    F: Fn(&LifecycleContext<'_, R>) + Send + Sync,
+    R: RegionAccess,
 {
-    fn call(&self, ctx: &LifecycleContext<'_>) {
+    fn call(&self, ctx: &LifecycleContext<'_, R>) {
         (self)(ctx)
     }
 }
 
-pub(crate) type SharedLifecycleHandler = Arc<dyn LifecycleHandler>;
+pub(crate) type SharedLifecycleHandler<R = HostRegion> = Arc<dyn LifecycleHandler<R>>;
 
 #[inline]
-pub(crate) fn shared_lifecycle_handler<F>(handler: F) -> SharedLifecycleHandler
+pub(crate) fn shared_lifecycle_handler<F, R>(handler: F) -> SharedLifecycleHandler<R>
 where
-    F: LifecycleHandler + 'static,
+    F: LifecycleHandler<R> + 'static,
+    R: RegionAccess,
 {
-    Arc::from(Box::new(handler) as Box<dyn LifecycleHandler>)
+    Arc::from(Box::new(handler) as Box<dyn LifecycleHandler<R>>)
 }

@@ -1,7 +1,4 @@
-use crate::{
-    os::{MapFlags, MappedRegion, ProtFlags},
-    sync::Arc,
-};
+use crate::os::{HostRegion, MapFlags, MappedRegion, ProtFlags, RegionAccess};
 use alloc::vec::Vec;
 
 /// Address representation for ELF segments
@@ -89,23 +86,23 @@ pub(crate) struct ElfSegment {
 }
 
 #[derive(Clone)]
-pub(crate) struct MappedSlice {
+pub(crate) struct MappedSlice<R: RegionAccess = HostRegion> {
     pub(super) offset: usize,
     pub(super) len: usize,
     pub(super) region_offset: usize,
     // This shared owner keeps the mapped arena alive even when address math
     // only needs the slice bounds at runtime.
     #[cfg_attr(not(windows), allow(dead_code))]
-    pub(super) region: Arc<MappedRegion>,
+    pub(super) region: MappedRegion<R>,
 }
 
-impl MappedSlice {
+impl<R: RegionAccess> MappedSlice<R> {
     #[inline]
     pub(super) fn new(
         offset: usize,
         len: usize,
         region_offset: usize,
-        region: Arc<MappedRegion>,
+        region: MappedRegion<R>,
     ) -> Self {
         Self {
             offset,

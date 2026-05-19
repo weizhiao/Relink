@@ -13,7 +13,7 @@ use crate::elf::{
 };
 #[cfg(feature = "object")]
 use crate::object::CustomHash;
-use crate::{Result, segment::ElfSegments};
+use crate::{Result, os::RegionAccess, segment::ElfSegments};
 use core::fmt::Debug;
 use gnu::ElfGnuHash;
 use sysv::ElfHash;
@@ -133,12 +133,13 @@ impl<L: ElfLayout> HashTable<L> {
     ///
     /// # Returns
     /// A HashTable instance containing either a GNU or SYSV hash implementation.
-    pub(crate) fn from_dynamic<Arch>(
+    pub(crate) fn from_dynamic<Arch, R>(
         dynamic: &ElfDynamic<Arch>,
-        segments: &ElfSegments,
+        segments: &ElfSegments<R>,
     ) -> Result<Self>
     where
         Arch: crate::relocation::RelocationArch<Layout = L>,
+        R: RegionAccess,
     {
         Ok(match dynamic.hashtab {
             ElfDynamicHashTab::Gnu(addr) => HashTable::Gnu(ElfGnuHash::parse(segments, addr)?),

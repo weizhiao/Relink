@@ -6,7 +6,7 @@ use crate::{
         ElfDynRaw, ElfDynamicTag, ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, ElfWord,
         Lifecycle, LifecycleArray, NativeElfLayout,
     },
-    os::{MappedView, VmAddr},
+    os::{MappedView, RegionAccess, VmAddr},
     relocation::RelocationArch,
     segment::ElfSegments,
 };
@@ -171,9 +171,9 @@ where
     Arch: RelocationArch,
 {
     /// Parse the dynamic section of an ELF file
-    pub fn new(
+    pub fn new<R: RegionAccess>(
         dynamic_entries: MappedView<ElfDyn<Arch::Layout>>,
-        segments: &ElfSegments,
+        segments: &ElfSegments<R>,
     ) -> Result<Self> {
         let dynamic_ptr = dynamic_entries
             .as_slice()
@@ -272,7 +272,7 @@ where
         let init_array_fn = parsed
             .init_array_off
             .map(|init_array_off| {
-                read_lifecycle_array::<Arch::Layout>(
+                read_lifecycle_array::<Arch::Layout, R>(
                     segments,
                     base,
                     init_array_off,
@@ -288,7 +288,7 @@ where
         let fini_array_fn = parsed
             .fini_array_off
             .map(|fini_array_off| {
-                read_lifecycle_array::<Arch::Layout>(
+                read_lifecycle_array::<Arch::Layout, R>(
                     segments,
                     base,
                     fini_array_off,
@@ -362,8 +362,8 @@ where
     }
 }
 
-fn read_lifecycle_array<L: ElfLayout>(
-    segments: &ElfSegments,
+fn read_lifecycle_array<L: ElfLayout, R: RegionAccess>(
+    segments: &ElfSegments<R>,
     base: usize,
     offset: NonZeroUsize,
     byte_len: Option<NonZeroUsize>,

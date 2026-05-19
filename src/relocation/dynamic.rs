@@ -4,7 +4,7 @@ use crate::{
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     image::{LoadedCore, RawDynamic},
     logging,
-    os::{MappedView, VmAddr},
+    os::{MappedView, RegionAccess, VmAddr},
     relocation::{
         BindingMode, RelocHelper, RelocValue, RelocateArgs, RelocationArch, RelocationHandler,
         ResolvedBinding, likely, reloc_error, unlikely,
@@ -15,7 +15,7 @@ use crate::{
 use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 
-impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     fn apply_relro(&self, binding: &ResolvedBinding) -> Result<()> {
         if binding.is_lazy() {
             return Ok(());
@@ -30,7 +30,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     pub(crate) fn relocate_impl<PreH, PostH>(
         self,
         args: RelocateArgs<'_, D, Arch, PreH, PostH>,
-    ) -> Result<LoadedCore<D, Arch>>
+    ) -> Result<LoadedCore<D, Arch, R>>
     where
         D: 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
@@ -100,7 +100,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
 
         let dep_names = scope
             .iter()
-            .filter_map(|source| source.as_any().downcast_ref::<LoadedCore<D, Arch>>())
+            .filter_map(|source| source.as_any().downcast_ref::<LoadedCore<D, Arch, R>>())
             .map(|d| d.name())
             .collect::<alloc::vec::Vec<_>>();
         if !dep_names.is_empty() {
@@ -198,13 +198,13 @@ fn update_relative_word<Arch: RelocationArch, W: RelocWrite>(
     };
 }
 
-impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     /// Relocate PLT (Procedure Linkage Table) entries
     fn relocate_pltrel<W, PreH, PostH>(
         &self,
         writer: &mut W,
         binding: &ResolvedBinding,
-        helper: &mut RelocHelper<'_, D, Arch, PreH, PostH>,
+        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH>,
     ) -> Result<&Self>
     where
         W: RelocWrite,
@@ -266,7 +266,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
             }
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)?.is_unhandled() {
-                return Err(reloc_error::<Arch, _>(rel, failure_reason, core));
+                return Err(reloc_error(rel, failure_reason, core));
             }
         }
         Ok(self)
@@ -329,7 +329,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     fn relocate_dynrel<W, PreH, PostH>(
         &self,
         writer: &mut W,
-        helper: &mut RelocHelper<'_, D, Arch, PreH, PostH>,
+        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH>,
     ) -> Result<&Self>
     where
         W: RelocWrite,
@@ -415,7 +415,7 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
 
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)?.is_unhandled() {
-                return Err(reloc_error::<Arch, _>(rel, failure_reason, core));
+                return Err(reloc_error(rel, failure_reason, core));
             }
         }
         Ok(self)

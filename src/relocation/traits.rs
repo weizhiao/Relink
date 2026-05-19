@@ -8,7 +8,7 @@ use crate::{
     arch::{ArchKind, NativeArch},
     elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType},
     image::{ElfCore, ModuleScope},
-    os::VmAddr,
+    os::{HostRegion, RegionAccess, VmAddr},
     sync::Arc,
 };
 use alloc::boxed::Box;
@@ -94,7 +94,7 @@ pub trait RelocationArch: 'static {
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
     fn relocate_object<D, PreH, PostH, W>(
-        helper: &mut RelocHelper<'_, D, Self, PreH, PostH>,
+        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH>,
         _writer: &mut W,
         rel: &ElfRelType<Self>,
         _pltgot: &mut crate::object::layout::PltGotSection,
@@ -106,7 +106,7 @@ pub trait RelocationArch: 'static {
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
     {
-        Err(super::reloc_error::<Self, _>(
+        Err(super::reloc_error::<Self, _, HostRegion>(
             rel,
             RelocReason::Unsupported,
             helper.core,
@@ -182,13 +182,17 @@ pub(crate) trait RelocationValueProvider {
 ///
 /// ```rust
 /// use elf_loader::elf::ElfRelocationType;
+/// use elf_loader::os::RegionAccess;
 /// use elf_loader::relocation::{HandleResult, RelocationContext, RelocationHandler};
 /// use elf_loader::Result;
 ///
 /// struct CustomHandler;
 ///
 /// impl RelocationHandler for CustomHandler {
-///     fn handle<D>(&self, ctx: &RelocationContext<'_, D>) -> Result<HandleResult> {
+///     fn handle<D: 'static, R: RegionAccess>(
+///         &self,
+///         ctx: &RelocationContext<'_, D, elf_loader::arch::NativeArch, R>,
+///     ) -> Result<HandleResult> {
 ///         let rel = ctx.rel();
 ///         // Handle specific relocation types
 ///         match rel.r_type() {
@@ -228,25 +232,33 @@ pub trait RelocationHandler<Arch: RelocationArch = NativeArch> {
     /// * `Ok(HandleResult::Unhandled)` - Not handled, fall through to default behavior.
     /// * `Ok(HandleResult::Handled)` - Handled successfully.
     /// * `Err(e)` - The handler failed.
-    fn handle<D: 'static>(&self, ctx: &RelocationContext<'_, D, Arch>) -> Result<HandleResult>;
+    fn handle<D: 'static, R: RegionAccess>(
+        &self,
+        ctx: &RelocationContext<'_, D, Arch, R>,
+    ) -> Result<HandleResult>;
 }
 
 /// Context passed to [`RelocationHandler::handle`].
 ///
 /// This struct provides access to the relocation entry, the module being relocated,
 /// and the current symbol resolution scope.
-pub struct RelocationContext<'a, D: 'static, Arch: RelocationArch = NativeArch> {
+pub struct RelocationContext<
+    'a,
+    D: 'static,
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = HostRegion,
+> {
     rel: &'a ElfRelType<Arch>,
-    lib: &'a ElfCore<D, Arch>,
+    lib: &'a ElfCore<D, Arch, R>,
     scope: &'a ModuleScope<Arch>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch> RelocationContext<'a, D, Arch> {
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> RelocationContext<'a, D, Arch, R> {
     /// Construct a new `RelocationContext`.
     #[inline]
     pub(crate) fn new(
         rel: &'a ElfRelType<Arch>,
-        lib: &'a ElfCore<D, Arch>,
+        lib: &'a ElfCore<D, Arch, R>,
         scope: &'a ModuleScope<Arch>,
     ) -> Self {
         Self { rel, lib, scope }
@@ -260,7 +272,7 @@ impl<'a, D: 'static, Arch: RelocationArch> RelocationContext<'a, D, Arch> {
 
     /// Access the core component where the relocation appears.
     #[inline]
-    pub fn lib(&self) -> &ElfCore<D, Arch> {
+    pub fn lib(&self) -> &ElfCore<D, Arch, R> {
         self.lib
     }
 
@@ -280,31 +292,46 @@ impl<'a, D: 'static, Arch: RelocationArch> RelocationContext<'a, D, Arch> {
 }
 
 impl<Arch: RelocationArch> RelocationHandler<Arch> for () {
-    fn handle<D: 'static>(&self, _ctx: &RelocationContext<'_, D, Arch>) -> Result<HandleResult> {
+    fn handle<D: 'static, R: RegionAccess>(
+        &self,
+        _ctx: &RelocationContext<'_, D, Arch, R>,
+    ) -> Result<HandleResult> {
         Ok(HandleResult::Unhandled)
     }
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for &H {
-    fn handle<D: 'static>(&self, ctx: &RelocationContext<'_, D, Arch>) -> Result<HandleResult> {
+    fn handle<D: 'static, R: RegionAccess>(
+        &self,
+        ctx: &RelocationContext<'_, D, Arch, R>,
+    ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for &mut H {
-    fn handle<D: 'static>(&self, ctx: &RelocationContext<'_, D, Arch>) -> Result<HandleResult> {
+    fn handle<D: 'static, R: RegionAccess>(
+        &self,
+        ctx: &RelocationContext<'_, D, Arch, R>,
+    ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for Box<H> {
-    fn handle<D: 'static>(&self, ctx: &RelocationContext<'_, D, Arch>) -> Result<HandleResult> {
+    fn handle<D: 'static, R: RegionAccess>(
+        &self,
+        ctx: &RelocationContext<'_, D, Arch, R>,
+    ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for Arc<H> {
-    fn handle<D: 'static>(&self, ctx: &RelocationContext<'_, D, Arch>) -> Result<HandleResult> {
+    fn handle<D: 'static, R: RegionAccess>(
+        &self,
+        ctx: &RelocationContext<'_, D, Arch, R>,
+    ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }

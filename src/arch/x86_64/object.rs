@@ -3,7 +3,7 @@ use crate::{
     arch::x86_64::relocation::X86_64Arch,
     elf::ElfRelType,
     object::layout::{GotEntry, PltEntry, PltGotSection},
-    os::VmAddr,
+    os::{HostRegion, VmAddr},
     relocation::{
         RelocHelper, RelocValue, RelocationHandler, RelocationValueProvider, reloc_error,
     },
@@ -26,7 +26,7 @@ enum ObjectWrite {
 
 impl X86_64Arch {
     pub(crate) fn relocate_object_impl<D, PreH, PostH, W>(
-        helper: &mut RelocHelper<'_, D, Self, PreH, PostH>,
+        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH>,
         writer: &mut W,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
@@ -43,9 +43,10 @@ impl X86_64Arch {
         let append = rel.r_addend(base.into_inner());
         let offset = rel.r_offset();
         let p = base.offset(rel.r_offset());
-        let unknown_symbol =
-            || reloc_error::<Self, _>(rel, crate::RelocReason::UnknownSymbol, helper.core);
-        let value_error = |reason| reloc_error::<Self, _>(rel, reason, helper.core);
+        let unknown_symbol = || {
+            reloc_error::<Self, _, HostRegion>(rel, crate::RelocReason::UnknownSymbol, helper.core)
+        };
+        let value_error = |reason| reloc_error::<Self, _, HostRegion>(rel, reason, helper.core);
         let mut write_relocation_target = |target| {
             let value = <Self as RelocationValueProvider>::relocation_value(
                 r_type.raw() as usize,

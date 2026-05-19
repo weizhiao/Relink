@@ -7,7 +7,7 @@ mod enabled {
         RelocationError, Result,
         arch::{NativeArch, prepare_lazy_bind},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolInfo},
-        os::VmAddr,
+        os::{RegionAccess, VmAddr},
         relocation::{BindingMode, RelocValue, RelocationArch, SupportLazy, SymDef, unlikely},
         segment::{RelocWrite, RelocWriter},
         sync::Arc,
@@ -15,9 +15,9 @@ mod enabled {
     };
     use core::ptr::NonNull;
 
-    impl<D: 'static, Arch: RelocationArch> SupportLazy for RawDynamic<D, Arch> {}
+    impl<D: 'static, Arch: RelocationArch, R: RegionAccess> SupportLazy for RawDynamic<D, Arch, R> {}
 
-    impl<D: 'static, Arch: RelocationArch> SupportLazy for RawDylib<D, Arch> {}
+    impl<D: 'static, Arch: RelocationArch, R: RegionAccess> SupportLazy for RawDylib<D, Arch, R> {}
 
     impl<D: 'static, Arch: RelocationArch> SupportLazy for RawExec<D, Arch> {}
 
@@ -41,9 +41,9 @@ mod enabled {
             matches!(self, Self::Lazy)
         }
 
-        pub(crate) fn prepare_plt<D, Arch: RelocationArch>(
+        pub(crate) fn prepare_plt<D, Arch: RelocationArch, R: RegionAccess>(
             &self,
-            image: &RawDynamic<D, Arch>,
+            image: &RawDynamic<D, Arch, R>,
         ) -> Result<()>
         where
             D: 'static,
@@ -88,7 +88,7 @@ mod enabled {
         }
     }
 
-    impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
+    impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         pub(crate) fn resolve_binding(&self, binding: BindingMode) -> ResolvedBinding {
             match binding {
                 BindingMode::Default => {
@@ -128,8 +128,8 @@ mod enabled {
         }
     }
 
-    fn lazy_binding_got<D, Arch: RelocationArch>(
-        image: &RawDynamic<D, Arch>,
+    fn lazy_binding_got<D, Arch: RelocationArch, R: RegionAccess>(
+        image: &RawDynamic<D, Arch, R>,
     ) -> Result<NonNull<usize>>
     where
         D: 'static,
@@ -238,6 +238,7 @@ mod disabled {
     use crate::{
         elf::ElfRelType,
         image::{ModuleScope, RawDynamic},
+        os::RegionAccess,
         relocation::{BindingMode, RelocationArch},
     };
 
@@ -251,9 +252,9 @@ mod disabled {
             false
         }
 
-        pub(crate) fn prepare_plt<D, Arch: RelocationArch>(
+        pub(crate) fn prepare_plt<D, Arch: RelocationArch, R: RegionAccess>(
             &self,
-            _image: &RawDynamic<D, Arch>,
+            _image: &RawDynamic<D, Arch, R>,
         ) -> crate::Result<()>
         where
             D: 'static,
@@ -271,7 +272,7 @@ mod disabled {
         }
     }
 
-    impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
+    impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         pub(crate) fn resolve_binding(&self, _binding: BindingMode) -> ResolvedBinding {
             ResolvedBinding::Eager
         }

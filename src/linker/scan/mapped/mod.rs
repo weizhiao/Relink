@@ -7,7 +7,7 @@ use crate::{
     image::{RawDynamic, ScannedDynamic},
     input::PathBuf,
     loader::SharedLifecycleHandler,
-    os::{Mapper, Mmap},
+    os::Mapper,
     relocation::{RelocationArch, RelocationValueProvider},
     segment::ElfSegments,
     tls::{TlsInfo, TlsResolver},
@@ -237,8 +237,8 @@ impl MappedRuntimeMemory {
         self.arenas.populate(plan)
     }
 
-    pub(crate) fn protect(&self, mapper: &dyn Mmap) -> Result<()> {
-        self.arenas.protect(mapper)
+    pub(crate) fn protect(&self) -> Result<()> {
+        self.arenas.protect()
     }
 
     pub(crate) fn take_module(&mut self, module_id: ModuleId) -> Result<RuntimeModuleMemory> {

@@ -8,7 +8,7 @@ use crate::{
     },
     image::{Module, ModuleHandle, ModuleScope},
     input::{Path, PathBuf},
-    os::{MappedRegion, Mapper, VmAddr},
+    os::{HostRegion, MappedRegion, Mapper, RegionAccess, VmAddr},
     relocation::RelocationArch,
     segment::ElfSegments,
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -21,25 +21,34 @@ use elf::abi::DF_STATIC_TLS;
 ///
 /// This is the common loaded representation used by relocated dylibs, dynamic
 /// [`crate::image::LoadedExec`] values, and loaded object-file images.
-pub struct LoadedCore<D: 'static = (), Arch: RelocationArch = crate::arch::NativeArch> {
-    pub(crate) core: ElfCore<D, Arch>,
+pub struct LoadedCore<
+    D: 'static = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = HostRegion,
+> {
+    pub(crate) core: ElfCore<D, Arch, R>,
     pub(crate) deps: ModuleScope<Arch>,
 }
 
 /// Iterator over the loaded-library dependencies retained by a [`LoadedCore`].
-pub struct LoadedDeps<'a, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
+pub struct LoadedDeps<
+    'a,
+    D: 'static,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = HostRegion,
+> {
     modules: &'a [ModuleHandle<Arch>],
     next: usize,
     remaining: usize,
-    _marker: PhantomData<fn() -> D>,
+    _marker: PhantomData<fn() -> (D, R)>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch> LoadedDeps<'a, D, Arch> {
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedDeps<'a, D, Arch, R> {
     #[inline]
     fn new(modules: &'a [ModuleHandle<Arch>]) -> Self {
         let remaining = modules
             .iter()
-            .filter(|module| module.as_any().is::<LoadedCore<D, Arch>>())
+            .filter(|module| module.as_any().is::<LoadedCore<D, Arch, R>>())
             .count();
         Self {
             modules,
@@ -62,13 +71,15 @@ impl<'a, D: 'static, Arch: RelocationArch> LoadedDeps<'a, D, Arch> {
     }
 }
 
-impl<'a, D: 'static, Arch: RelocationArch> Iterator for LoadedDeps<'a, D, Arch> {
-    type Item = &'a LoadedCore<D, Arch>;
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> Iterator
+    for LoadedDeps<'a, D, Arch, R>
+{
+    type Item = &'a LoadedCore<D, Arch, R>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(module) = self.modules.get(self.next) {
             self.next += 1;
-            if let Some(dep) = module.as_any().downcast_ref::<LoadedCore<D, Arch>>() {
+            if let Some(dep) = module.as_any().downcast_ref::<LoadedCore<D, Arch, R>>() {
                 self.remaining -= 1;
                 return Some(dep);
             }
@@ -82,9 +93,12 @@ impl<'a, D: 'static, Arch: RelocationArch> Iterator for LoadedDeps<'a, D, Arch> 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> ExactSizeIterator for LoadedDeps<'_, D, Arch> {}
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ExactSizeIterator
+    for LoadedDeps<'_, D, Arch, R>
+{
+}
 
-impl<D: 'static, Arch: RelocationArch> Debug for LoadedCore<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedCore<D, Arch, R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LoadedCore")
             .field("name", &self.core.name())
@@ -100,7 +114,7 @@ impl<D: 'static, Arch: RelocationArch> Debug for LoadedCore<D, Arch> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> Clone for LoadedCore<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedCore<D, Arch, R> {
     /// Clones the [`LoadedCore`], incrementing the reference count of its core and dependencies.
     fn clone(&self) -> Self {
         LoadedCore {
@@ -110,35 +124,41 @@ impl<D: 'static, Arch: RelocationArch> Clone for LoadedCore<D, Arch> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> From<&LoadedCore<D, Arch>> for LoadedCore<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedCore<D, Arch, R>>
+    for LoadedCore<D, Arch, R>
+{
     #[inline]
-    fn from(module: &LoadedCore<D, Arch>) -> Self {
+    fn from(module: &LoadedCore<D, Arch, R>) -> Self {
         module.clone()
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> From<LoadedCore<D, Arch>> for ModuleHandle<Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<LoadedCore<D, Arch, R>>
+    for ModuleHandle<Arch>
+{
     #[inline]
-    fn from(module: LoadedCore<D, Arch>) -> Self {
+    fn from(module: LoadedCore<D, Arch, R>) -> Self {
         Self::new(module)
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> From<&LoadedCore<D, Arch>> for ModuleHandle<Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedCore<D, Arch, R>>
+    for ModuleHandle<Arch>
+{
     #[inline]
-    fn from(module: &LoadedCore<D, Arch>) -> Self {
+    fn from(module: &LoadedCore<D, Arch, R>) -> Self {
         Self::new(module.clone())
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     /// Wraps an [`ElfCore`] into a [`LoadedCore`] with no dependencies.
     ///
     /// # Safety
     ///
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
-    pub unsafe fn from_core(core: ElfCore<D, Arch>) -> Self {
+    pub unsafe fn from_core(core: ElfCore<D, Arch, R>) -> Self {
         LoadedCore {
             core,
             deps: ModuleScope::empty(),
@@ -146,7 +166,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     }
 
     /// Returns an iterator over the loaded libraries this module depends on.
-    pub fn deps(&self) -> LoadedDeps<'_, D, Arch> {
+    pub fn deps(&self) -> LoadedDeps<'_, D, Arch, R> {
         LoadedDeps::new(self.deps.as_slice())
     }
 
@@ -242,7 +262,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
 
     /// Creates a weak reference to this ELF core.
     #[inline]
-    pub fn downgrade(&self) -> ElfCoreRef<D, Arch> {
+    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R> {
         self.core.downgrade()
     }
 
@@ -263,7 +283,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     /// # Safety
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
-    pub unsafe fn from_core_deps<S>(core: ElfCore<D, Arch>, deps: S) -> Self
+    pub unsafe fn from_core_deps<S>(core: ElfCore<D, Arch, R>, deps: S) -> Self
     where
         S: Into<ModuleScope<Arch>>,
     {
@@ -279,10 +299,12 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     /// Lifecycle information is lost, so the dependencies of the current
     /// loaded object can be dropped too early if this reference is used carelessly.
     #[inline]
-    pub unsafe fn core_ref(&self) -> &ElfCore<D, Arch> {
+    pub unsafe fn core_ref(&self) -> &ElfCore<D, Arch, R> {
         &self.core
     }
+}
 
+impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     /// Creates a new [`LoadedCore`] from raw parts without validation.
     ///
     /// # Safety
@@ -419,10 +441,11 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     }
 }
 
-impl<D, Arch> Module<Arch> for LoadedCore<D, Arch>
+impl<D, Arch, R> Module<Arch> for LoadedCore<D, Arch, R>
 where
     D: 'static,
     Arch: RelocationArch,
+    R: RegionAccess,
 {
     #[inline]
     fn as_any(&self) -> &dyn Any {

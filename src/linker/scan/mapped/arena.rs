@@ -6,7 +6,6 @@ use crate::{
     os::{MapFlags, MappedRegion, Mapper, Mmap, PageSize, ProtFlags},
     relocation::RelocationArch,
     segment::ElfSegments,
-    sync::Arc,
 };
 use alloc::vec::Vec;
 
@@ -15,7 +14,7 @@ pub(crate) struct MappedArena {
     memory_class: MemoryClass,
     base: usize,
     len: usize,
-    region: Arc<MappedRegion>,
+    region: MappedRegion,
 }
 
 #[derive(Clone, Default)]
@@ -98,9 +97,9 @@ impl MappedArenaMap {
         Ok(())
     }
 
-    pub(super) fn protect(&self, mapper: &dyn Mmap) -> Result<()> {
+    pub(super) fn protect(&self) -> Result<()> {
         for (_, arena) in self.iter() {
-            arena.protect(mapper)?;
+            arena.protect()?;
         }
         Ok(())
     }
@@ -123,7 +122,7 @@ impl MappedArenaMap {
 
 impl MappedArena {
     #[inline]
-    fn new(memory_class: MemoryClass, base: usize, len: usize, region: Arc<MappedRegion>) -> Self {
+    fn new(memory_class: MemoryClass, base: usize, len: usize, region: MappedRegion) -> Self {
         Self {
             memory_class,
             base,
@@ -166,16 +165,18 @@ impl MappedArena {
     }
 
     #[inline]
-    pub(super) fn region(&self) -> Arc<MappedRegion> {
-        Arc::clone(&self.region)
+    pub(super) fn region(&self) -> MappedRegion {
+        self.region.clone()
     }
 
-    fn protect(&self, _mapper: &dyn Mmap) -> Result<()> {
+    fn protect(&self) -> Result<()> {
         if self.len == 0 {
             return Ok(());
         }
-        self.region
-            .mprotect(0, self.len, final_protection(self.memory_class))
+        unsafe {
+            self.region
+                .mprotect(0, self.len, final_protection(self.memory_class))
+        }
     }
 }
 

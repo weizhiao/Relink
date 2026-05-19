@@ -11,6 +11,7 @@ use super::defs::{
 use crate::{
     ParseDynamicError, Result,
     elf::{ElfDynamic, HashTable, PreCompute},
+    os::RegionAccess,
     segment::ElfSegments,
 };
 use core::ffi::CStr;
@@ -310,12 +311,13 @@ impl<'symtab> SymbolInfo<'symtab> {
 
 impl<L: ElfLayout> SymbolTable<L> {
     /// Creates a symbol table from ELF dynamic section information.
-    pub(crate) fn from_dynamic<Arch>(
+    pub(crate) fn from_dynamic<Arch, R>(
         dynamic: &ElfDynamic<Arch>,
-        segments: &ElfSegments,
+        segments: &ElfSegments<R>,
     ) -> Result<Self>
     where
         Arch: crate::relocation::RelocationArch<Layout = L>,
+        R: RegionAccess,
     {
         // Create hash table from dynamic section information
         let hashtab = HashTable::from_dynamic(dynamic, segments)?;

@@ -1,10 +1,11 @@
 use super::RelocationArch;
-use crate::tls::{TlsModuleId, TlsTpOffset};
 use crate::{
     Result,
     elf::{ElfRelType, Lifecycle},
     image::ElfCore,
+    os::RegionAccess,
     segment::ElfSegments,
+    tls::{TlsModuleId, TlsTpOffset},
 };
 use core::marker::PhantomData;
 
@@ -15,22 +16,37 @@ use core::marker::PhantomData;
 /// runtime, so the emulator hook is intentionally unavailable there.
 pub trait EmulatedArch: RelocationArch {}
 
+trait EmuSegments {
+    fn contains_addr(&self, addr: usize) -> bool;
+}
+
+impl<R: RegionAccess> EmuSegments for ElfSegments<R> {
+    #[inline]
+    fn contains_addr(&self, addr: usize) -> bool {
+        ElfSegments::contains_addr(self, addr)
+    }
+}
+
 /// Image context visible to an emulator.
 pub struct EmuContext<'a, Arch: RelocationArch> {
     name: &'a str,
     base: usize,
-    segments: &'a ElfSegments,
+    segments: &'a dyn EmuSegments,
     _marker: PhantomData<fn() -> Arch>,
 }
 
 impl<'a, Arch: RelocationArch> EmuContext<'a, Arch> {
     #[inline]
-    pub(crate) fn new<D: 'static>(core: &'a ElfCore<D, Arch>) -> Self {
+    pub(crate) fn new<D: 'static, R: RegionAccess>(core: &'a ElfCore<D, Arch, R>) -> Self {
         Self::from_parts(core.name(), core.base_addr().into_inner(), core.segments())
     }
 
     #[inline]
-    pub(crate) const fn from_parts(name: &'a str, base: usize, segments: &'a ElfSegments) -> Self {
+    pub(crate) fn from_parts<R: RegionAccess>(
+        name: &'a str,
+        base: usize,
+        segments: &'a ElfSegments<R>,
+    ) -> Self {
         Self {
             name,
             base,
@@ -66,7 +82,10 @@ pub struct EmuRelocationContext<'a, Arch: RelocationArch> {
 
 impl<'a, Arch: RelocationArch> EmuRelocationContext<'a, Arch> {
     #[inline]
-    pub(crate) fn new<D: 'static>(core: &'a ElfCore<D, Arch>, rel: &'a ElfRelType<Arch>) -> Self {
+    pub(crate) fn new<D: 'static, R: RegionAccess>(
+        core: &'a ElfCore<D, Arch, R>,
+        rel: &'a ElfRelType<Arch>,
+    ) -> Self {
         Self {
             image: EmuContext::new(core),
             rel,

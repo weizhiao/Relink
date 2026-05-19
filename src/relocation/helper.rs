@@ -5,7 +5,7 @@ use crate::{
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
     image::{ElfCore, Module, ModuleScope},
     logging,
-    os::VmAddr,
+    os::{RegionAccess, VmAddr},
     relocate_context_error,
     relocation::{
         EmuRelocationContext, Emulator, HandleResult, RelocationArch, RelocationContext,
@@ -17,9 +17,15 @@ use crate::{
 use core::marker::PhantomData;
 
 /// Internal context for managing relocation state and handlers.
-pub(crate) struct RelocHelper<'find, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized>
-{
-    pub(crate) core: &'find ElfCore<D, Arch>,
+pub(crate) struct RelocHelper<
+    'find,
+    D: 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    PreH: ?Sized,
+    PostH: ?Sized,
+> {
+    pub(crate) core: &'find ElfCore<D, Arch, R>,
     pub(crate) scope: ModuleScope<Arch>,
     pub(crate) pre_handler: &'find PreH,
     pub(crate) post_handler: &'find PostH,
@@ -29,15 +35,16 @@ pub(crate) struct RelocHelper<'find, D: 'static, Arch: RelocationArch, PreH: ?Si
     pub(crate) emu: Option<Arc<dyn Emulator<Arch>>>,
 }
 
-impl<'find, D, Arch, PreH, PostH> RelocHelper<'find, D, Arch, PreH, PostH>
+impl<'find, D, Arch, R, PreH, PostH> RelocHelper<'find, D, Arch, R, PreH, PostH>
 where
     D: 'static,
     Arch: RelocationArch,
+    R: RegionAccess,
     PreH: RelocationHandler<Arch> + ?Sized,
     PostH: RelocationHandler<Arch> + ?Sized,
 {
     pub(crate) fn new(
-        core: &'find ElfCore<D, Arch>,
+        core: &'find ElfCore<D, Arch, R>,
         scope: ModuleScope<Arch>,
         pre_handler: &'find PreH,
         post_handler: &'find PostH,
@@ -204,13 +211,14 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
 ///
 /// The dynamic parts are stored structurally and formatted only in `Display`.
 #[cold]
-pub(crate) fn reloc_error<A, D>(
+pub(crate) fn reloc_error<A, D, R>(
     rel: &ElfRelType<A>,
     reason: RelocReason,
-    lib: &ElfCore<D, A>,
+    lib: &ElfCore<D, A, R>,
 ) -> Error
 where
     A: RelocationArch,
+    R: RegionAccess,
 {
     let r_type_str = A::rel_type_to_str(rel.r_type());
     let r_sym = rel.r_symbol();
@@ -226,8 +234,8 @@ where
     }
 }
 
-fn find_weak<'lib, D, Arch: RelocationArch>(
-    lib: &'lib ElfCore<D, Arch>,
+fn find_weak<'lib, D, Arch: RelocationArch, R: RegionAccess>(
+    lib: &'lib ElfCore<D, Arch, R>,
     dynsym: &'lib ElfSymbol<Arch::Layout>,
 ) -> Option<SymDef<'lib, D, Arch>>
 where
@@ -249,7 +257,7 @@ where
 /// Returns the resolved address.
 #[inline]
 fn find_symbol_addr<D, Arch>(
-    core: &ElfCore<D, Arch>,
+    core: &ElfCore<D, Arch, impl RegionAccess>,
     symtab: &SymbolTable<Arch::Layout>,
     scope: &ModuleScope<Arch>,
     r_sym: usize,
@@ -276,8 +284,8 @@ where
     None
 }
 
-pub(crate) fn find_symdef_impl<'lib, D, Arch: RelocationArch>(
-    core: &'lib ElfCore<D, Arch>,
+pub(crate) fn find_symdef_impl<'lib, D, Arch: RelocationArch, R: RegionAccess>(
+    core: &'lib ElfCore<D, Arch, R>,
     scope: &'lib ModuleScope<Arch>,
     sym: &'lib ElfSymbol<Arch::Layout>,
     syminfo: &SymbolInfo,

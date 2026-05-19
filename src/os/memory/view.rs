@@ -2,7 +2,7 @@ use core::mem::size_of;
 
 use crate::{ByteRepr, Result, os::VmAddr};
 
-use super::MappedRegion;
+use super::{MappedRegion, RegionAccess};
 
 /// A typed borrowed view of a mapped region.
 pub(crate) struct MappedView<T: 'static> {
@@ -30,7 +30,7 @@ impl<T: 'static> MappedView<T> {
     }
 
     pub(crate) fn read_region(
-        region: &MappedRegion,
+        region: &MappedRegion<impl RegionAccess>,
         offset: usize,
         source_addr: VmAddr,
         byte_len: usize,

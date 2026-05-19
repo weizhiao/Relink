@@ -4,8 +4,9 @@ use super::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, ProtFlags};
 use crate::{Result, sync::Arc};
 use alloc::boxed::Box;
 
+/// Type-erased mmap backend used by the default loader path.
 #[derive(Clone)]
-pub(crate) struct Mapper(Arc<dyn Mmap>);
+pub struct Mapper(Arc<dyn Mmap>);
 
 impl Mapper {
     #[inline]

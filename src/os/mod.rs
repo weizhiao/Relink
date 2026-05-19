@@ -6,12 +6,12 @@
 //! and bare-metal environments.
 
 pub use defs::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
-pub(crate) use mapper::Mapper;
+pub use mapper::Mapper;
 pub(crate) use memory::MappedView;
-pub use memory::{MappedRegion, VmAddr};
+pub use memory::{HostRegion, MappedRegion, RegionAccess, VmAddr};
 pub use platform::DefaultMmap;
 pub(crate) use platform::*;
-pub use traits::{MappedRegionOps, Mmap, MmapResult};
+pub use traits::{Mmap, MmapResult};
 
 mod defs;
 mod mapper;

@@ -1,27 +1,27 @@
-use core::{ffi::c_void, ptr::NonNull};
+use core::ffi::c_void;
 
-use super::{MadviseAdvice, MapFlags, MappedRegion, PageSize, ProtFlags, VmAddr};
+use super::{HostRegion, MadviseAdvice, MapFlags, MappedRegion, PageSize, ProtFlags, RegionAccess};
 use crate::Result;
 
 /// Result of an mmap-style operation.
-pub struct MmapResult {
-    region: MappedRegion,
+pub struct MmapResult<R: RegionAccess = HostRegion> {
+    region: MappedRegion<R>,
     needs_copy: bool,
 }
 
-impl MmapResult {
+impl<R: RegionAccess> MmapResult<R> {
     #[inline]
-    pub fn new(region: MappedRegion, needs_copy: bool) -> Self {
+    pub fn new(region: MappedRegion<R>, needs_copy: bool) -> Self {
         Self { region, needs_copy }
     }
 
     #[inline]
-    pub fn region(&self) -> &MappedRegion {
+    pub fn region(&self) -> &MappedRegion<R> {
         &self.region
     }
 
     #[inline]
-    pub fn into_region(self) -> MappedRegion {
+    pub fn into_region(self) -> MappedRegion<R> {
         self.region
     }
 
@@ -31,64 +31,9 @@ impl MmapResult {
     }
 
     #[inline]
-    pub fn into_parts(self) -> (MappedRegion, bool) {
+    pub fn into_parts(self) -> (MappedRegion<R>, bool) {
         (self.region, self.needs_copy)
     }
-}
-
-/// Operations supported by one mapped region.
-pub trait MappedRegionOps: Send + Sync + 'static {
-    /// Base target address of this mapping.
-    fn addr(&self) -> VmAddr;
-
-    /// Length of this mapping in bytes.
-    fn len(&self) -> usize;
-
-    /// Reads bytes from the mapping without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + dst.len()` is inside this region.
-    unsafe fn read_bytes(&self, offset: usize, dst: &mut [u8]);
-
-    /// Writes bytes into the mapping without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + src.len()` is inside this region.
-    unsafe fn write_bytes(&self, offset: usize, src: &[u8]);
-
-    /// Fills bytes in the mapping with zeroes without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + len` is inside this region.
-    unsafe fn zero_bytes(&self, offset: usize, len: usize);
-
-    /// Borrows mapped bytes without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + len` is inside this region.
-    /// Implementations may only return `Some` when the byte range remains
-    /// readable through the returned lifetime.
-    unsafe fn borrow_bytes(&self, offset: usize, len: usize) -> Option<&'static [u8]>;
-
-    /// Returns a host-accessible pointer into the mapping without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset` is inside this region. Implementations
-    /// may only return `Some` when the address is directly usable by the
-    /// current process.
-    unsafe fn host_ptr(&self, offset: usize) -> Option<NonNull<u8>>;
-
-    /// Applies memory advice to a range without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + len` is inside this region.
-    unsafe fn madvise(&self, offset: usize, len: usize, behavior: MadviseAdvice) -> Result<()>;
-
-    /// Changes protection for a range without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + len` is inside this region.
-    unsafe fn mprotect(&self, offset: usize, len: usize, prot: ProtFlags) -> Result<()>;
 }
 
 /// A trait for low-level memory mapping operations.

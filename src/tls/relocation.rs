@@ -14,7 +14,7 @@ mod enabled {
         RelocReason, Result,
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
-        os::VmAddr,
+        os::{RegionAccess, VmAddr},
         relocation::{
             RelocHelper, RelocValue, RelocationArch, RelocationHandler, TlsDescEmuRequest,
         },
@@ -43,14 +43,15 @@ mod enabled {
         };
     }
 
-    pub(crate) fn handle_tls_reloc<D, Arch, PreH, PostH, W>(
-        helper: &mut RelocHelper<'_, D, Arch, PreH, PostH>,
+    pub(crate) fn handle_tls_reloc<D, Arch, R, PreH, PostH, W>(
+        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH>,
         writer: &mut W,
         rel: &ElfRelType<Arch>,
     ) -> Result<TlsRelocOutcome>
     where
         D: 'static,
         Arch: RelocationArch,
+        R: RegionAccess,
         W: RelocWrite,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,

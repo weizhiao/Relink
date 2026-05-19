@@ -1,8 +1,7 @@
 use crate::{
     ByteRepr, Result,
-    os::{MappedRegion, MappedView, VmAddr},
+    os::{HostRegion, MappedRegion, MappedView, RegionAccess, VmAddr},
     relocation::RelocValue,
-    sync::Arc,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{
@@ -18,29 +17,29 @@ use super::MappedSlice;
 /// This type now supports both a single contiguous legacy mapping and a sparse
 /// collection of mapped slices backed by one or more shared arena mappings.
 /// The slices are kept sorted by offset and must not overlap.
-pub struct ElfSegments {
+pub struct ElfSegments<R: RegionAccess = HostRegion> {
     base: usize,
-    slices: Box<[MappedSlice]>,
-    access: SegmentAccess,
+    slices: Box<[MappedSlice<R>]>,
+    access: SegmentAccess<R>,
 }
 
-enum SegmentAccess {
-    Linear(LinearAccess),
+enum SegmentAccess<R: RegionAccess> {
+    Linear(LinearAccess<R>),
     Sparse,
 }
 
-struct LinearAccess {
-    region: Arc<MappedRegion>,
+struct LinearAccess<R: RegionAccess> {
+    region: MappedRegion<R>,
     region_offset_bias: usize,
     mapped_start: usize,
     mapped_end: usize,
     contiguous: bool,
 }
 
-impl LinearAccess {
-    fn new(slices: &[MappedSlice], contiguous: bool) -> Option<Self> {
+impl<R: RegionAccess> LinearAccess<R> {
+    fn new(slices: &[MappedSlice<R>], contiguous: bool) -> Option<Self> {
         let first = slices.first()?;
-        let region_ptr = Arc::as_ptr(&first.region);
+        let region = first.region.clone();
         let region_offset_bias = first.region_offset.wrapping_sub(first.offset);
         let mapped_start = first.offset;
         let mapped_end = slices
@@ -48,12 +47,12 @@ impl LinearAccess {
             .and_then(|slice| slice.offset.checked_add(slice.len))?;
 
         let is_linear = slices.iter().all(|slice| {
-            core::ptr::addr_eq(Arc::as_ptr(&slice.region), region_ptr)
+            core::ptr::addr_eq(slice.region.as_ptr(), region.as_ptr())
                 && slice.region_offset.wrapping_sub(slice.offset) == region_offset_bias
         });
 
         is_linear.then(|| Self {
-            region: first.region.clone(),
+            region,
             region_offset_bias,
             mapped_start,
             mapped_end,
@@ -76,7 +75,11 @@ impl LinearAccess {
 }
 
 #[inline]
-fn find_slice_index(slices: &[MappedSlice], start: usize, len: usize) -> Option<usize> {
+fn find_slice_index<R: RegionAccess>(
+    slices: &[MappedSlice<R>],
+    start: usize,
+    len: usize,
+) -> Option<usize> {
     let idx = slices
         .partition_point(|slice| slice.offset() <= start)
         .checked_sub(1)?;
@@ -140,16 +143,16 @@ pub(crate) trait RelocWrite {
     }
 }
 
-pub(crate) enum RelocWriter<'a> {
-    Linear(LinearWriter<'a>),
-    Sparse(SparseWriter<'a>),
+pub(crate) enum RelocWriter<'a, R: RegionAccess = HostRegion> {
+    Linear(LinearWriter<'a, R>),
+    Sparse(SparseWriter<'a, R>),
 }
 
-pub(crate) struct LinearWriter<'a> {
-    linear: &'a LinearAccess,
+pub(crate) struct LinearWriter<'a, R: RegionAccess> {
+    linear: &'a LinearAccess<R>,
 }
 
-impl RelocWrite for LinearWriter<'_> {
+impl<R: RegionAccess> RelocWrite for LinearWriter<'_, R> {
     #[inline]
     unsafe fn write_bytes(&mut self, start: usize, src: &[u8]) {
         debug_assert!(self.linear.contains_range(start, src.len()));
@@ -171,14 +174,14 @@ impl RelocWrite for LinearWriter<'_> {
     }
 }
 
-pub(crate) struct SparseWriter<'a> {
-    slices: &'a [MappedSlice],
+pub(crate) struct SparseWriter<'a, R: RegionAccess> {
+    slices: &'a [MappedSlice<R>],
     current: usize,
 }
 
-impl<'a> SparseWriter<'a> {
+impl<'a, R: RegionAccess> SparseWriter<'a, R> {
     #[inline]
-    fn new(slices: &'a [MappedSlice]) -> Self {
+    fn new(slices: &'a [MappedSlice<R>]) -> Self {
         Self { slices, current: 0 }
     }
 
@@ -210,7 +213,7 @@ impl<'a> SparseWriter<'a> {
     }
 }
 
-impl RelocWrite for SparseWriter<'_> {
+impl<R: RegionAccess> RelocWrite for SparseWriter<'_, R> {
     #[inline]
     unsafe fn write_bytes(&mut self, start: usize, src: &[u8]) {
         let slice = &self.slices[self.slice_index(start, src.len())];
@@ -226,7 +229,7 @@ impl RelocWrite for SparseWriter<'_> {
     }
 }
 
-impl Debug for ElfSegments {
+impl<R: RegionAccess> Debug for ElfSegments<R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let slices = self
             .slices
@@ -240,27 +243,26 @@ impl Debug for ElfSegments {
     }
 }
 
-impl ElfSegments {
+impl<R: RegionAccess> ElfSegments<R> {
     #[inline]
-    fn find_slice(&self, start: usize, len: usize) -> Option<&MappedSlice> {
+    fn find_slice(&self, start: usize, len: usize) -> Option<&MappedSlice<R>> {
         find_slice_index(&self.slices, start, len).map(|idx| &self.slices[idx])
     }
 
     #[inline]
-    fn slice_base(&self, slice: &MappedSlice) -> usize {
+    fn slice_base(&self, slice: &MappedSlice<R>) -> usize {
         self.base.saturating_add(slice.offset)
     }
 
     #[inline]
-    fn slice_end(&self, slice: &MappedSlice) -> usize {
+    fn slice_end(&self, slice: &MappedSlice<R>) -> usize {
         self.slice_base(slice).saturating_add(slice.len)
     }
 
     /// Create a new contiguous [`ElfSegments`] instance whose mapped bytes begin
     /// at the module-relative `offset`.
-    pub(crate) fn new(region: MappedRegion, base: usize, offset: usize) -> Self {
+    pub(crate) fn new(region: MappedRegion<R>, base: usize, offset: usize) -> Self {
         let len = region.len();
-        let region = Arc::new(region);
         let slice = MappedSlice::new(offset, len, 0, region);
         let slices = alloc::vec![slice].into_boxed_slice();
         let access = SegmentAccess::Linear(
@@ -274,7 +276,7 @@ impl ElfSegments {
     }
 
     /// Creates an [`ElfSegments`] instance from explicit mapped slices.
-    pub(crate) fn from_slices(base: usize, mut slices: Vec<MappedSlice>) -> Self {
+    pub(crate) fn from_slices(base: usize, mut slices: Vec<MappedSlice<R>>) -> Self {
         slices.sort_by_key(|slice| (slice.offset(), slice.len()));
         for pair in slices.windows(2) {
             let previous = &pair[0];
@@ -306,8 +308,8 @@ impl ElfSegments {
     }
 
     /// Creates one shared mapped region owner.
-    pub(crate) fn create_region(region: MappedRegion) -> Arc<MappedRegion> {
-        Arc::new(region)
+    pub(crate) fn create_region(region: MappedRegion<R>) -> MappedRegion<R> {
+        region
     }
 
     /// Creates one mapped slice descriptor covered by a shared region.
@@ -316,13 +318,13 @@ impl ElfSegments {
         offset: usize,
         len: usize,
         region_offset: usize,
-        region: Arc<MappedRegion>,
-    ) -> MappedSlice {
+        region: MappedRegion<R>,
+    ) -> MappedSlice<R> {
         MappedSlice::new(offset, len, region_offset, region)
     }
 
     #[inline]
-    pub(crate) fn reloc_writer(&self) -> RelocWriter<'_> {
+    pub(crate) fn reloc_writer(&self) -> RelocWriter<'_, R> {
         match &self.access {
             SegmentAccess::Linear(linear) => RelocWriter::Linear(LinearWriter { linear }),
             SegmentAccess::Sparse => RelocWriter::Sparse(SparseWriter::new(&self.slices)),
@@ -399,13 +401,13 @@ impl ElfSegments {
     }
 
     #[inline]
-    fn runtime_slice(&self, start: usize, len: usize) -> &MappedSlice {
+    fn runtime_slice(&self, start: usize, len: usize) -> &MappedSlice<R> {
         self.find_slice(start, len)
             .expect("ELF segment range is not fully backed by one mapped slice")
     }
 
     #[inline]
-    fn region_offset(slice: &MappedSlice, start: usize) -> usize {
+    fn region_offset(slice: &MappedSlice<R>, start: usize) -> usize {
         slice
             .region_offset(start)
             .expect("ELF segment range precedes mapped slice")
@@ -416,7 +418,7 @@ impl ElfSegments {
     /// # Safety
     /// The caller must ensure `start` is inside `slice`.
     #[inline]
-    unsafe fn region_offset_unchecked(slice: &MappedSlice, start: usize) -> usize {
+    unsafe fn region_offset_unchecked(slice: &MappedSlice<R>, start: usize) -> usize {
         debug_assert!(start >= slice.offset);
         slice.region_offset + (start - slice.offset)
     }
@@ -457,7 +459,7 @@ impl ElfSegments {
         let start = addr.get().checked_sub(self.base)?;
         let slice = self.find_slice(start, 1)?;
         let region_offset = Self::region_offset(slice, start);
-        slice.region.host_ptr(region_offset)
+        unsafe { slice.region.host_ptr(region_offset) }
     }
 
     #[inline]

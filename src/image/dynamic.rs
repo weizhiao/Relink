@@ -8,7 +8,7 @@ use crate::{
     input::{Path, PathBuf},
     loader::{ImageBuilder, LifecycleContext, LoadHook, SharedLifecycleHandler},
     logging,
-    os::{MappedView, VmAddr},
+    os::{HostRegion, MappedView, RegionAccess, VmAddr},
     relocation::{
         DynamicRelocation, EmuContext, Emulator, Relocatable, RelocateArgs, RelocationArch,
         RelocationHandler, Relocator,
@@ -47,7 +47,11 @@ pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) lazy: LazyBindingInfo<Arch>,
 }
 
-pub(crate) struct RawDynamicParts<D, Arch: RelocationArch = NativeArch> {
+pub(crate) struct RawDynamicParts<
+    D,
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = HostRegion,
+> {
     pub(crate) path: PathBuf,
     pub(crate) entry: VmAddr,
     pub(crate) interp: Option<&'static str>,
@@ -57,9 +61,9 @@ pub(crate) struct RawDynamicParts<D, Arch: RelocationArch = NativeArch> {
     pub(crate) tls_info: Option<TlsInfo>,
     pub(crate) force_static_tls: bool,
     pub(crate) relro: Option<ELFRelro>,
-    pub(crate) segments: crate::segment::ElfSegments,
-    pub(crate) init_fn: SharedLifecycleHandler,
-    pub(crate) fini_fn: SharedLifecycleHandler,
+    pub(crate) segments: crate::segment::ElfSegments<R>,
+    pub(crate) init_fn: SharedLifecycleHandler<R>,
+    pub(crate) fini_fn: SharedLifecycleHandler<R>,
     pub(crate) user_data: D,
 }
 
@@ -67,7 +71,7 @@ pub(crate) struct RawDynamicParts<D, Arch: RelocationArch = NativeArch> {
 ///
 /// This structure holds additional data that is needed during the relocation
 /// process but is not part of the core ELF object structure.
-struct ElfExtraData<Arch: RelocationArch = NativeArch> {
+struct ElfExtraData<Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
     /// Indicates whether lazy binding is enabled for this object
     lazy: bool,
 
@@ -82,7 +86,7 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
     relro: Option<ELFRelro>,
 
     /// Custom initialization handler.
-    init_handler: SharedLifecycleHandler,
+    init_handler: SharedLifecycleHandler<R>,
 
     /// Initialization functions to be called after relocation.
     init: Lifecycle,
@@ -97,7 +101,7 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
     needed_libs: Box<[&'static str]>,
 }
 
-impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
+impl<Arch: RelocationArch, R: RegionAccess> core::fmt::Debug for ElfExtraData<Arch, R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfExtraData")
             .field("lazy", &self.lazy)
@@ -114,7 +118,7 @@ impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
 ///
 /// The optional `Arch` type parameter selects the target architecture used
 /// during [`Relocator::relocate`]. By default it is [`crate::arch::NativeArch`].
-pub struct RawDynamic<D, Arch = NativeArch>
+pub struct RawDynamic<D, Arch = NativeArch, R: RegionAccess = HostRegion>
 where
     D: 'static,
     Arch: RelocationArch,
@@ -124,14 +128,14 @@ where
     /// PT_INTERP segment value (interpreter path).
     interp: Option<&'static str>,
     /// Core component containing the basic ELF object information
-    module: ElfCore<D, Arch>,
+    module: ElfCore<D, Arch, R>,
     /// Extra data needed for relocation
-    extra: ElfExtraData<Arch>,
+    extra: ElfExtraData<Arch, R>,
     /// Target architecture marker used during relocation.
     _arch: PhantomData<fn() -> Arch>,
 }
 
-impl<D, Arch: RelocationArch> core::fmt::Debug for RawDynamic<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> core::fmt::Debug for RawDynamic<D, Arch, R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawDynamic")
             .field("entry", &format_args!("0x{:x}", self.entry.into_inner()))
@@ -141,7 +145,7 @@ impl<D, Arch: RelocationArch> core::fmt::Debug for RawDynamic<D, Arch> {
     }
 }
 
-impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     /// Gets the entry point of the ELF object.
     #[inline]
     pub fn entry(&self) -> usize {
@@ -169,19 +173,19 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
 
     /// Gets the core component reference of the ELF object.
     #[inline]
-    pub fn core_ref(&self) -> &ElfCore<D, Arch> {
+    pub fn core_ref(&self) -> &ElfCore<D, Arch, R> {
         &self.module
     }
 
     /// Gets the core component of the ELF object.
     #[inline]
-    pub fn core(&self) -> ElfCore<D, Arch> {
+    pub fn core(&self) -> ElfCore<D, Arch, R> {
         self.core_ref().clone()
     }
 
     /// Converts this object into its core component.
     #[inline]
-    pub fn into_core(self) -> ElfCore<D, Arch> {
+    pub fn into_core(self) -> ElfCore<D, Arch, R> {
         self.core()
     }
 
@@ -344,8 +348,8 @@ impl<D, Arch: RelocationArch> RawDynamic<D, Arch> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
-    pub(crate) fn from_parts<Tls>(parts: RawDynamicParts<D, Arch>) -> Result<Self>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
+    pub(crate) fn from_parts<Tls>(parts: RawDynamicParts<D, Arch, R>) -> Result<Self>
     where
         Tls: TlsResolver,
     {
@@ -453,6 +457,13 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
         })
     }
 
+    /// Creates a relocation builder for this dynamic image.
+    pub fn relocator(self) -> Relocator<Self, (), (), D, Arch> {
+        Relocator::new().with_object(self)
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
     /// Build a dynamic image from the intermediate loader state.
     pub(crate) fn from_builder<'hook, H, Tls>(
         mut builder: ImageBuilder<'hook, H, Tls, D, Arch::Layout>,
@@ -489,20 +500,16 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             user_data: builder.user_data,
         })
     }
-
-    /// Creates a relocation builder for this dynamic image.
-    pub fn relocator(self) -> Relocator<Self, (), (), D, Arch> {
-        Relocator::new().with_object(self)
-    }
 }
 
-impl<D, Arch> Relocatable<D> for RawDynamic<D, Arch>
+impl<D, Arch, R> Relocatable<D> for RawDynamic<D, Arch, R>
 where
     D: 'static,
     Arch: RelocationArch,
+    R: RegionAccess,
     <Arch::Layout as crate::elf::ElfLayout>::Word: crate::ByteRepr,
 {
-    type Output = LoadedCore<D, Arch>;
+    type Output = LoadedCore<D, Arch, R>;
     type Arch = Arch;
 
     fn relocate<PreH, PostH>(

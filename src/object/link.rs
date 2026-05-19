@@ -54,8 +54,15 @@ where
                         if !helper.handle_pre(rel)?.is_unhandled() {
                             continue;
                         }
-                        Arch::relocate_object(&mut helper, &mut writer, rel, &mut self.pltgot)?;
-                        helper.handle_post(rel)?;
+                        match Arch::relocate_object(&mut helper, &mut writer, rel, &mut self.pltgot)
+                        {
+                            Ok(()) => continue,
+                            Err(err) => {
+                                if helper.handle_post(rel)?.is_unhandled() {
+                                    return Err(err);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -65,8 +72,15 @@ where
                         if !helper.handle_pre(rel)?.is_unhandled() {
                             continue;
                         }
-                        Arch::relocate_object(&mut helper, &mut writer, rel, &mut self.pltgot)?;
-                        helper.handle_post(rel)?;
+                        match Arch::relocate_object(&mut helper, &mut writer, rel, &mut self.pltgot)
+                        {
+                            Ok(()) => continue,
+                            Err(err) => {
+                                if helper.handle_post(rel)?.is_unhandled() {
+                                    return Err(err);
+                                }
+                            }
+                        }
                     }
                 }
             }

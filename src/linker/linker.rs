@@ -673,8 +673,7 @@ where
         }
 
         if let Some(mapped_runtime) = mapped_runtime.as_ref() {
-            let mapper = self.loader.mapper();
-            mapped_runtime.protect(mapper.as_ref())?;
+            mapped_runtime.protect()?;
         }
 
         let committed = Self::commit_session(context, &mut session);

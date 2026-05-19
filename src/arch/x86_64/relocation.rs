@@ -73,7 +73,14 @@ impl RelocationArch for X86_64Arch {
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
     fn relocate_object<D, PreH, PostH, W>(
-        helper: &mut crate::relocation::RelocHelper<'_, D, Self, PreH, PostH>,
+        helper: &mut crate::relocation::RelocHelper<
+            '_,
+            D,
+            Self,
+            crate::os::HostRegion,
+            PreH,
+            PostH,
+        >,
         writer: &mut W,
         rel: &crate::elf::ElfRelType<Self>,
         pltgot: &mut crate::object::layout::PltGotSection,
