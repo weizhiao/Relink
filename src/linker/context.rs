@@ -7,6 +7,7 @@ use alloc::{
     collections::{BTreeSet, VecDeque},
     vec::Vec,
 };
+use core::borrow::Borrow;
 
 /// A reusable local module repository and committed dependency graph.
 ///
@@ -52,7 +53,11 @@ where
 
     /// Returns whether the context contains a module with `key`.
     #[inline]
-    pub fn contains_key(&self, key: &K) -> bool {
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         self.committed.contains_key(key)
     }
 
@@ -64,7 +69,11 @@ where
 
     /// Returns the interned id for a committed key.
     #[inline]
-    pub fn key_id(&self, key: &K) -> Option<KeyId> {
+    pub fn key_id<Q>(&self, key: &Q) -> Option<KeyId>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         self.committed.key_id(key)
     }
 

@@ -2,12 +2,12 @@ use crate::{
     entity::{PrimaryMap, SecondaryMap, entity_ref},
     image::ModuleHandle,
     relocation::RelocationArch,
-    sync::Arc,
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use core::borrow::Borrow;
 
 /// Stable id for a module key stored in a [`LinkContext`](super::LinkContext).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KeyId(usize);
 entity_ref!(KeyId);
 
@@ -17,8 +17,8 @@ pub(crate) struct CommittedStorage<
     M = (),
     Arch: RelocationArch = crate::arch::NativeArch,
 > {
-    key_ids: BTreeMap<Arc<K>, KeyId>,
-    keys: PrimaryMap<KeyId, Arc<K>>,
+    key_ids: BTreeMap<K, KeyId>,
+    keys: PrimaryMap<KeyId, K>,
     entries: SecondaryMap<KeyId, StoredEntry<D, M, Arch>>,
     load_order: Vec<KeyId>,
 }
@@ -45,16 +45,24 @@ where
 {
     #[inline]
     pub(crate) fn key(&self, id: KeyId) -> Option<&K> {
-        self.keys.get(id).map(Arc::as_ref)
+        self.keys.get(id)
     }
 
     #[inline]
-    pub(crate) fn key_id(&self, key: &K) -> Option<KeyId> {
+    pub(crate) fn key_id<Q>(&self, key: &Q) -> Option<KeyId>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         self.key_ids.get(key).copied()
     }
 
     #[inline]
-    pub(crate) fn contains_key(&self, key: &K) -> bool {
+    pub(crate) fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         self.key_id(key)
             .is_some_and(|id| self.entries.get(id).is_some())
     }
@@ -106,7 +114,6 @@ where
             return id;
         }
 
-        let key = Arc::new(key);
         let id = self.keys.push(key.clone());
         let previous = self.key_ids.insert(key, id);
         debug_assert!(previous.is_none(), "interned key inserted twice");
