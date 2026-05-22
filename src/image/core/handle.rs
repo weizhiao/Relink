@@ -325,6 +325,18 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
         }
     }
 
+    /// Replaces the finalization lifecycle.
+    ///
+    /// # Safety
+    /// This should only be called during relocation before the loaded image is
+    /// published to callers.
+    pub(crate) unsafe fn set_fini(&self, fini: Lifecycle) {
+        let inner = Arc::as_ptr(&self.inner) as *mut CoreInner<D, Arch, R>;
+        unsafe {
+            (*inner).fini = fini;
+        }
+    }
+
     /// Creates an ElfCore from raw components
     pub(super) unsafe fn from_raw(
         path: PathBuf,

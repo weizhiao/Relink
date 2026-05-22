@@ -21,7 +21,7 @@ pub mod write;
 
 // Internal module re-exports for use within the crate
 pub(crate) use defs::*;
-pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab, parse_dynamic_entries};
+pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab, LifecycleSpec, parse_dynamic_entries};
 #[cfg(feature = "object")]
 pub(crate) use hash::ElfHashTable;
 pub(crate) use hash::HashTable;

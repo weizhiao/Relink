@@ -82,7 +82,7 @@ impl ElfHash {
         let chains_off = buckets_off
             .checked_add(bucket_size)
             .ok_or(ParseDynamicError::AddressOverflow)?;
-        let buckets = segments.read_view(buckets_off, bucket_size)?.ok_or(
+        let buckets = segments.read_view(buckets_off, bucket_size).ok_or(
             ParseDynamicError::MalformedHashTable {
                 detail: "DT_HASH bucket table size is malformed",
             },
@@ -90,7 +90,7 @@ impl ElfHash {
         let chain_size = (header.nchain as usize)
             .checked_mul(size_of::<u32>())
             .ok_or(ParseDynamicError::AddressOverflow)?;
-        let chains = segments.read_view(chains_off, chain_size)?.ok_or(
+        let chains = segments.read_view(chains_off, chain_size).ok_or(
             ParseDynamicError::MalformedHashTable {
                 detail: "DT_HASH chain table size is malformed",
             },

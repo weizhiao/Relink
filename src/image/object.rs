@@ -7,7 +7,7 @@
 use crate::object::{ObjectBuilder, ObjectRelocation, PltGotSection};
 use crate::{
     Result,
-    elf::{Lifecycle, LifecycleArray},
+    elf::Lifecycle,
     loader::SharedLifecycleHandler,
     os::VmAddr,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
@@ -38,10 +38,10 @@ pub struct RawObject<D: 'static = (), Arch: RelocationArch = crate::arch::Native
     pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
 
     /// Initialization function handler.
-    pub(crate) init: SharedLifecycleHandler,
+    pub(crate) init_handler: SharedLifecycleHandler,
 
-    /// Initialization function array.
-    pub(crate) init_array: Option<LifecycleArray>,
+    /// Initialization lifecycle.
+    pub(crate) init: Lifecycle,
 }
 
 impl<D: 'static, Arch: RelocationArch> Deref for RawObject<D, Arch> {
@@ -78,8 +78,8 @@ impl<D: 'static, Arch: RelocationArch> RawObject<D, Arch> {
             pltgot: builder.pltgot,
             relocation: builder.relocation,
             mprotect: builder.mprotect,
-            init_array: builder.init_array,
-            init: builder.init_fn,
+            init: builder.init,
+            init_handler: builder.init_fn,
         }
     }
 

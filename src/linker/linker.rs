@@ -330,7 +330,7 @@ where
     PostH: RelocationHandler<Arch> + Clone,
     P: RelocationPlanner<K, D, Arch>,
     O: LoadObserver<K, D, Arch>,
-    V: VisibleModules<K, D, Arch>,
+    V: VisibleModules<K, Arch>,
 {
     /// Loads one module into this linker's relocation domain.
     pub fn load<'cfg, Meta>(
@@ -902,7 +902,7 @@ where
     K: Clone + Ord,
     D: 'static,
     Arch: RelocationArch,
-    V: VisibleModules<K, D, Arch>,
+    V: VisibleModules<K, Arch>,
 {
     context
         .committed
@@ -922,7 +922,7 @@ where
     K: Clone + Ord,
     D: 'static,
     Arch: RelocationArch,
-    V: VisibleModules<K, D, Arch>,
+    V: VisibleModules<K, Arch>,
 {
     context.committed.get(id).cloned().or_else(|| {
         let key = context.committed.key(id)?;

@@ -57,7 +57,7 @@ where
 impl<K, D: 'static, Meta, V, Arch, P> ResolveContext<'_, K, D, Meta, V, Arch, P>
 where
     K: Clone + Ord,
-    V: VisibleModules<K, D, Arch>,
+    V: VisibleModules<K, Arch>,
     Arch: RelocationArch,
     P: DependencyOwner,
 {
@@ -218,7 +218,7 @@ where
 impl<K, D: 'static, Meta, V, Arch> ResolveContext<'_, K, D, Meta, V, Arch, RawDynamic<D, Arch>>
 where
     K: Clone + Ord,
-    V: VisibleModules<K, D, Arch>,
+    V: VisibleModules<K, Arch>,
     Arch: RelocationArch,
 {
     pub(crate) fn stage_resolved<'cfg, H, Tls, O>(
@@ -302,7 +302,7 @@ where
 impl<K, D: 'static, Meta, V, Arch> ResolveContext<'_, K, D, Meta, V, Arch, ScannedDynamic<Arch>>
 where
     K: Clone + Ord,
-    V: VisibleModules<K, D, Arch>,
+    V: VisibleModules<K, Arch>,
     Arch: RelocationArch,
 {
     pub(crate) fn stage_resolved<H, Tls>(

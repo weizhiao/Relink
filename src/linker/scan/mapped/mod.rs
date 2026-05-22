@@ -264,7 +264,7 @@ where
                     .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_DYNAMIC"))?;
                 let view = runtime
                     .segments
-                    .read_view::<ElfDyn<Arch::Layout>>(offset.get(), phdr.p_filesz())?
+                    .read_view::<ElfDyn<Arch::Layout>>(offset.get(), phdr.p_filesz())
                     .ok_or_else(|| {
                         LinkerError::runtime_memory(
                             "PT_DYNAMIC is not directly readable from mapped segments",
@@ -287,7 +287,7 @@ where
                 eh_frame_hdr = Some(
                     runtime
                         .segments
-                        .borrowed_ptr::<u8>(offset.get(), phdr.p_filesz())?
+                        .borrowed_ptr::<u8>(offset.get(), phdr.p_filesz())
                         .ok_or_else(|| {
                             LinkerError::runtime_memory(
                                 "PT_GNU_EH_FRAME is not directly readable from mapped segments",
@@ -301,7 +301,7 @@ where
                     .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_TLS"))?;
                 let image = runtime
                     .segments
-                    .read_view::<u8>(offset.get(), phdr.p_filesz())?
+                    .read_view::<u8>(offset.get(), phdr.p_filesz())
                     .ok_or_else(|| LinkerError::runtime_memory("PT_TLS image is malformed"))?;
                 tls_info = Some(TlsInfo::new(phdr, image.as_slice()));
             }

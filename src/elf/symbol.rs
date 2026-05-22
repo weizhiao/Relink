@@ -332,7 +332,7 @@ impl<L: ElfLayout> SymbolTable<L> {
             .checked_mul(size_of::<ElfSymbol<L>>())
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let symbols = segments
-            .read_view::<ElfSymbol<L>>(symtab_off, symtab_size)?
+            .read_view::<ElfSymbol<L>>(symtab_off, symtab_size)
             .ok_or(ParseDynamicError::MalformedSymbolTable {
                 detail: "DT_SYMTAB symbol table size is malformed",
             })?
@@ -347,7 +347,7 @@ impl<L: ElfLayout> SymbolTable<L> {
             .checked_sub(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let strtab = segments
-            .read_view::<u8>(strtab_off, strtab_size.get())?
+            .read_view::<u8>(strtab_off, strtab_size.get())
             .ok_or(ParseDynamicError::MalformedStringTable {
                 detail: "DT_STRTAB string table size is malformed",
             })?;

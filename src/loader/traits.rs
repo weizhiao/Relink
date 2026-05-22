@@ -111,20 +111,6 @@ impl<'a, R: RegionAccess> LifecycleContext<'a, R> {
             .expect("lifecycle function address is not backed by host-accessible mapped memory")
     }
 
-    /// Host pointer of the single lifecycle function, if present.
-    #[inline]
-    pub fn func_addr(&self) -> Option<NonNull<u8>> {
-        self.lifecycle.func_addr().map(|addr| self.host_ptr(addr))
-    }
-
-    /// Host pointers from the lifecycle function array.
-    #[inline]
-    pub fn func_array_addrs(&self) -> impl Iterator<Item = NonNull<u8>> + '_ {
-        self.lifecycle
-            .func_array_addrs()
-            .map(|addr| self.host_ptr(addr))
-    }
-
     /// All lifecycle function host pointers in call order.
     #[inline]
     pub fn func_addrs(&self) -> impl Iterator<Item = NonNull<u8>> + '_ {

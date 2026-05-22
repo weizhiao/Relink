@@ -8,7 +8,7 @@ use crate::{
     },
     image::{Module, ModuleHandle, ModuleScope},
     input::{Path, PathBuf},
-    os::{HostRegion, MappedRegion, Mapper, RegionAccess, VmAddr},
+    os::{HostRegion, MappedRegion, MappedView, Mapper, RegionAccess, VmAddr},
     relocation::RelocationArch,
     segment::ElfSegments,
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -305,6 +305,35 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
 }
 
 impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
+    fn read_dynamic_view(
+        segments: &ElfSegments,
+        base: usize,
+        phdr: &ElfPhdr<Arch::Layout>,
+    ) -> Result<MappedView<ElfDyn<Arch::Layout>>> {
+        let malformed = "PT_DYNAMIC is not directly readable from mapped segments";
+        if let Some(view) =
+            segments.read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())
+            && !view.is_empty()
+        {
+            return Ok(view);
+        }
+
+        let addr = base.wrapping_add(phdr.p_vaddr());
+        let byte_len = phdr.p_filesz();
+        let region = MappedRegion::local_alias(
+            addr as *mut c_void,
+            byte_len,
+            Mapper::from_munmap(|_, _| Ok(())),
+        );
+        let view = region
+            .read_view::<ElfDyn<Arch::Layout>>(0, VmAddr::new(addr), byte_len)
+            .ok_or(crate::ParsePhdrError::malformed(malformed))?;
+        if view.is_empty() {
+            return Err(crate::ParsePhdrError::malformed(malformed).into());
+        }
+        Ok(view)
+    }
+
     /// Creates a new [`LoadedCore`] from raw parts without validation.
     ///
     /// # Safety
@@ -351,22 +380,11 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         for phdr in &phdrs {
             match phdr.program_type() {
                 ElfProgramType::DYNAMIC => {
-                    let view = segments
-                        .read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())?
-                        .ok_or(crate::ParsePhdrError::malformed(
-                            "PT_DYNAMIC is not directly readable from mapped segments",
-                        ))?;
-                    if view.is_empty() {
-                        return Err(crate::ParsePhdrError::malformed(
-                            "PT_DYNAMIC is not directly readable from mapped segments",
-                        )
-                        .into());
-                    }
-                    dynamic = Some(view);
+                    dynamic = Some(Self::read_dynamic_view(&segments, base, phdr)?);
                 }
                 ElfProgramType::GNU_EH_FRAME => {
                     eh_frame_hdr = segments
-                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
+                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())
                         .ok_or(crate::ParsePhdrError::malformed(
                             "PT_GNU_EH_FRAME is not directly readable from mapped segments",
                         ))
@@ -381,7 +399,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
 
         if let Some(phdr) = tls_phdr {
             let template = segments
-                .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
+                .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
                 .ok_or(crate::ParsePhdrError::malformed(
                     "PT_TLS image is malformed",
                 ))?;

@@ -233,11 +233,13 @@ impl<R: RegionAccess> ElfSegments<R> {
         &self,
         offset: usize,
         byte_len: usize,
-    ) -> Result<Option<MappedView<T>>> {
+    ) -> Option<MappedView<T>> {
         let addr = self.base_addr().offset(offset);
-        debug_assert!(self.contains_range(addr, byte_len));
+        if !self.contains_range(addr, byte_len) {
+            return None;
+        }
         let region_offset = self.region_offset(addr);
-        MappedView::read_region(&self.region, region_offset, addr, byte_len)
+        self.region.read_view(region_offset, addr, byte_len)
     }
 
     #[inline]
@@ -245,10 +247,9 @@ impl<R: RegionAccess> ElfSegments<R> {
         &self,
         offset: usize,
         byte_len: usize,
-    ) -> Result<Option<NonNull<T>>> {
-        Ok(self
-            .read_view::<T>(offset, byte_len)?
-            .and_then(|view| view.as_slice().first().map(NonNull::from)))
+    ) -> Option<NonNull<T>> {
+        self.read_view::<T>(offset, byte_len)
+            .and_then(|view| view.as_slice().first().map(NonNull::from))
     }
 
     /// Translates an image VM address into a host-accessible pointer.

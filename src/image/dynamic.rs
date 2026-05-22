@@ -4,7 +4,7 @@ use crate::elf::ElfRelType;
 use crate::sync::{Arc, AtomicBool};
 use crate::{
     ParsePhdrError, Result,
-    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, Lifecycle, SymbolTable},
+    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, Lifecycle, LifecycleSpec, SymbolTable},
     input::{Path, PathBuf},
     loader::{ImageBuilder, LifecycleContext, LoadHook, SharedLifecycleHandler},
     logging,
@@ -88,8 +88,11 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch, R: RegionAccess = HostReg
     /// Custom initialization handler.
     init_handler: SharedLifecycleHandler<R>,
 
-    /// Initialization functions to be called after relocation.
-    init: Lifecycle,
+    /// Initialization functions to resolve after relocation.
+    init: LifecycleSpec,
+
+    /// Finalization functions to resolve after relocation.
+    fini: LifecycleSpec,
 
     /// DT_RPATH value from the dynamic section
     rpath: Option<&'static str>,
@@ -269,21 +272,38 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         &self.extra.relocation
     }
 
+    pub(crate) fn resolve_lifecycle(&self) -> Result<(Lifecycle, Lifecycle)> {
+        let segments = self.module.segments();
+        let init = self
+            .extra
+            .init
+            .resolve::<Arch::Layout, R>(segments, "DT_INIT_ARRAY size is malformed")?;
+        let fini = self
+            .extra
+            .fini
+            .resolve::<Arch::Layout, R>(segments, "DT_FINI_ARRAY size is malformed")?;
+        Ok((init, fini))
+    }
+
     /// Marks the ELF object as finished and calls the initialization function
     ///
     /// This method marks the ELF object as fully initialized and calls
     /// any registered initialization functions.
     #[inline]
-    pub(crate) fn call_init(&self) {
+    pub(crate) fn call_init(&self, init: &Lifecycle) {
         self.module.set_init();
-        let ctx = LifecycleContext::new(&self.extra.init, self.module.segments());
+        let ctx = LifecycleContext::new(init, self.module.segments());
         self.extra.init_handler.call(&ctx);
     }
 
     /// Marks the ELF object as initialized and delegates initialization to an emulator.
-    pub(crate) fn call_init_with_emu(&self, emu: Arc<dyn Emulator<Arch>>) -> Result<()> {
+    pub(crate) fn call_init_with_emu(
+        &self,
+        emu: Arc<dyn Emulator<Arch>>,
+        init: &Lifecycle,
+    ) -> Result<()> {
         let ctx = EmuContext::new(self.core_ref());
-        emu.call_init(&ctx, &self.extra.init)?;
+        emu.call_init(&ctx, init)?;
         unsafe {
             self.core_ref().set_emu_fini(emu);
         }
@@ -369,7 +389,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             user_data,
         } = parts;
 
-        let mut dynamic = ElfDynamic::<Arch>::new(dynamic, &segments)?;
+        let dynamic = ElfDynamic::<Arch>::new(dynamic, &segments)?;
 
         logging::trace!("[{}] Dynamic info: {:?}", path, dynamic);
 
@@ -406,9 +426,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             (None, None)
         };
 
-        let init_array_fn = dynamic.init_array_fn.take();
-        let fini_array_fn = dynamic.fini_array_fn.take();
-
         Ok(RawDynamic {
             entry,
             interp,
@@ -417,7 +434,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                 relro,
                 relocation,
                 init_handler: init_fn,
-                init: Lifecycle::new(dynamic.init_fn, init_array_fn),
+                init: dynamic.init,
+                fini: dynamic.fini,
                 #[cfg(feature = "lazy-binding")]
                 got_plt: dynamic.got_plt,
                 rpath: dynamic
@@ -433,7 +451,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                     is_init: AtomicBool::new(false),
                     path,
                     symtab,
-                    fini: Lifecycle::new(dynamic.fini_fn, fini_array_fn),
+                    fini: Lifecycle::empty(),
                     fini_handler: CoreFiniHandler::Native(fini_fn),
                     user_data,
                     dynamic_info: Some(Arc::new(DynamicInfo {

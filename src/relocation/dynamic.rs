@@ -89,6 +89,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             self.core_ref().set_tls_desc_args(tls_desc_args);
         }
 
+        let (init, fini) = self.resolve_lifecycle()?;
+        unsafe {
+            self.core_ref().set_fini(fini);
+        }
+
         let dep_names = scope
             .iter()
             .filter_map(|source| source.as_any().downcast_ref::<LoadedCore<D, Arch, R>>())
@@ -103,13 +108,13 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
         if Arch::SUPPORTS_NATIVE_RUNTIME {
             logging::debug!("Executing initialization functions for {}", self.name());
-            self.call_init();
+            self.call_init(&init);
         } else if let Some(emu) = emu {
             logging::debug!(
                 "Executing initialization functions with emulator for {}",
                 self.name()
             );
-            self.call_init_with_emu(emu)?;
+            self.call_init_with_emu(emu, &init)?;
         } else {
             logging::debug!(
                 "Skipping initialization functions for non-native relocation of {}",
@@ -517,8 +522,8 @@ mod tests {
             byte_len,
             Mapper::from_munmap(|_, _| Ok(())),
         );
-        MappedView::read_region(&region, 0, VmAddr::new(slice.as_ptr() as usize), byte_len)
-            .unwrap()
+        region
+            .read_view::<T>(0, VmAddr::new(slice.as_ptr() as usize), byte_len)
             .unwrap()
     }
 

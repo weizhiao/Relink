@@ -464,7 +464,7 @@ where
             ElfProgramType::DYNAMIC => {
                 dynamic = Some(
                     segments
-                        .read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())?
+                        .read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())
                         .ok_or_else(|| {
                             ParsePhdrError::malformed(
                                 "PT_DYNAMIC is not directly readable from mapped segments",
@@ -478,7 +478,7 @@ where
             ElfProgramType::GNU_EH_FRAME => {
                 eh_frame_hdr = Some(
                     segments
-                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
+                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())
                         .ok_or_else(|| {
                             ParsePhdrError::malformed(
                                 "PT_GNU_EH_FRAME is not directly readable from mapped segments",
@@ -488,7 +488,7 @@ where
             }
             ElfProgramType::TLS => {
                 let image = segments
-                    .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
+                    .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
                     .ok_or(crate::ParsePhdrError::malformed(
                         "PT_TLS image is malformed",
                     ))?;
@@ -531,7 +531,7 @@ where
     L: ElfLayout,
 {
     let view = segments
-        .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())?
+        .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
         .ok_or_else(|| {
             ParsePhdrError::malformed("PT_INTERP is not directly readable from mapped segments")
         })?;

@@ -223,7 +223,7 @@ impl<'a, K: Clone> DependencyRequest<'a, K> {
 
 /// Read-only modules that should be visible to a link operation without being
 /// committed into its local [`LinkContext`](super::LinkContext).
-pub trait VisibleModules<K: Clone, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
+pub trait VisibleModules<K: Clone, Arch: RelocationArch = crate::arch::NativeArch> {
     /// Returns whether a visible module with `key` exists.
     fn contains_key(&self, key: &K) -> bool {
         self.module(key).is_some()
@@ -240,12 +240,12 @@ pub trait VisibleModules<K: Clone, D: 'static, Arch: RelocationArch = crate::arc
     }
 }
 
-impl<K: Clone, D: 'static, Arch: RelocationArch> VisibleModules<K, D, Arch> for () {}
+impl<K: Clone, Arch: RelocationArch> VisibleModules<K, Arch> for () {}
 
-impl<K: Clone, D: 'static, Arch, V> VisibleModules<K, D, Arch> for &V
+impl<K: Clone, Arch, V> VisibleModules<K, Arch> for &V
 where
     Arch: RelocationArch,
-    V: VisibleModules<K, D, Arch> + ?Sized,
+    V: VisibleModules<K, Arch> + ?Sized,
 {
     #[inline]
     fn contains_key(&self, key: &K) -> bool {

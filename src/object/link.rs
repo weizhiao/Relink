@@ -1,7 +1,6 @@
 use crate::{
     Result,
     elf::ElfRelType,
-    elf::Lifecycle,
     image::{ModuleScope, RawObject},
     loader::LifecycleContext,
     logging,
@@ -74,10 +73,8 @@ where
         (self.mprotect)()?;
 
         logging::trace!("[{}] Executing init functions", self.core.name());
-        let init_array = self.init_array.take();
-        let lifecycle = Lifecycle::new(None, init_array);
-        let ctx = LifecycleContext::new(&lifecycle, self.core.segments());
-        self.init.call(&ctx);
+        let ctx = LifecycleContext::new(&self.init, self.core.segments());
+        self.init_handler.call(&ctx);
 
         logging::info!("Relocation completed for {}", self.core.name());
 

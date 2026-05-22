@@ -6,7 +6,7 @@ use crate::{
     RelocationError, Result,
     elf::{
         ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr, ElfSymbol, ElfSymbolType, Lifecycle,
-        LifecycleArray, SymbolTable,
+        SymbolTable,
     },
     input::PathBuf,
     loader::{LoadHook, LoaderInner, SharedLifecycleHandler},
@@ -22,7 +22,7 @@ use core::marker::PhantomData;
 pub(crate) struct ObjectBuilder<Tls, D = (), Arch: RelocationArch = crate::arch::NativeArch> {
     pub(crate) path: PathBuf,
     pub(crate) symtab: SymbolTable<Arch::Layout>,
-    pub(crate) init_array: Option<LifecycleArray>,
+    pub(crate) init: Lifecycle,
     pub(crate) init_fn: SharedLifecycleHandler,
     pub(crate) fini_fn: SharedLifecycleHandler,
     pub(crate) segments: ElfSegments,
@@ -39,7 +39,7 @@ pub(crate) struct ObjectBuilder<Tls, D = (), Arch: RelocationArch = crate::arch:
 struct ObjectSectionData<Arch: RelocationArch> {
     symtab: SymbolTable<Arch::Layout>,
     relocation: ObjectRelocation<Arch>,
-    init_array: Option<LifecycleArray>,
+    init: Lifecycle,
 }
 
 impl<T, D, Arch> ObjectBuilder<T, D, Arch>
@@ -134,9 +134,10 @@ where
         relocation_shdr.content()
     }
 
-    fn prepare_init_array(init_array_shdr: &ElfShdr<Arch::Layout>) -> LifecycleArray {
+    fn prepare_init_array(init_array_shdr: &ElfShdr<Arch::Layout>) -> Lifecycle {
         let array: &[usize] = init_array_shdr.content_mut();
-        Lifecycle::array_from_vm_addrs(array.iter().copied().map(VmAddr::new))
+        let array = array.iter().copied().map(VmAddr::new).collect::<Box<[_]>>();
+        Lifecycle::new(None, Some(array))
     }
 
     fn prepare_section_data(
@@ -145,7 +146,7 @@ where
     ) -> Result<ObjectSectionData<Arch>> {
         let mut symtab = None;
         let mut relocation = Vec::with_capacity(shdrs.len());
-        let mut init_array = None;
+        let mut init = Lifecycle::empty();
 
         for shdr in shdrs {
             match shdr.section_type() {
@@ -155,7 +156,7 @@ where
                 ElfSectionType::RELA | ElfSectionType::REL => {
                     relocation.push(Self::prepare_relocation_section(shdr, shdrs, base))
                 }
-                ElfSectionType::INIT_ARRAY => init_array = Some(Self::prepare_init_array(shdr)),
+                ElfSectionType::INIT_ARRAY => init = Self::prepare_init_array(shdr),
                 _ => {}
             }
         }
@@ -163,7 +164,7 @@ where
         Ok(ObjectSectionData {
             symtab: symtab.ok_or(RelocationError::MissingSymbolTable)?,
             relocation: ObjectRelocation::new(relocation),
-            init_array,
+            init,
         })
     }
 
@@ -183,7 +184,7 @@ where
         let ObjectSectionData {
             symtab,
             relocation,
-            init_array,
+            init,
         } = Self::prepare_section_data(shdrs, base)?;
 
         Ok(Self {
@@ -195,7 +196,7 @@ where
             mprotect,
             relocation,
             pltgot,
-            init_array,
+            init,
             tls_mod_id: None,
             tls_tp_offset: None,
             user_data,

@@ -4,7 +4,7 @@ use crate::{
     arch::NativeArch,
     elf::{
         ElfDynRaw, ElfDynamicTag, ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, ElfWord,
-        Lifecycle, LifecycleArray, NativeElfLayout,
+        Lifecycle, NativeElfLayout,
     },
     os::{MappedView, RegionAccess, VmAddr},
     relocation::RelocationArch,
@@ -228,7 +228,7 @@ where
                     .read_view::<ElfRelType<Arch>>(
                         pltrel_off.get(),
                         parsed.pltrel_size.map(|len| len.get()).unwrap_or(0),
-                    )?
+                    )
                     .ok_or(ParseDynamicError::MalformedRelocationTable {
                         detail: "DT_JMPREL relocation table size is malformed",
                     })?;
@@ -242,7 +242,7 @@ where
                     .read_view::<ElfRelType<Arch>>(
                         rel_off.get(),
                         parsed.rel_size.map(|len| len.get()).unwrap_or(0),
-                    )?
+                    )
                     .ok_or(ParseDynamicError::MalformedRelocationTable {
                         detail: "DT_REL/DT_RELA relocation table size is malformed",
                     })?;
@@ -256,7 +256,7 @@ where
                     .read_view::<ElfRelr<Arch::Layout>>(
                         relr_off.get(),
                         parsed.relr_size.map(|len| len.get()).unwrap_or(0),
-                    )?
+                    )
                     .ok_or(ParseDynamicError::MalformedRelocationTable {
                         detail: "DT_RELR relocation table size is malformed",
                     })?;
@@ -269,34 +269,12 @@ where
             .init_off
             .map(|init_off| add_base_addr(init_off.get()))
             .transpose()?;
-        let init_array_fn = parsed
-            .init_array_off
-            .map(|init_array_off| {
-                read_lifecycle_array::<Arch::Layout, R>(
-                    segments,
-                    base,
-                    init_array_off,
-                    parsed.init_array_size,
-                    "DT_INIT_ARRAY size is malformed",
-                )
-            })
-            .transpose()?;
+        let init_array_size = parsed.init_array_size.map(|len| len.get()).unwrap_or(0);
         let fini_fn = parsed
             .fini_off
             .map(|fini_off| add_base_addr(fini_off.get()))
             .transpose()?;
-        let fini_array_fn = parsed
-            .fini_array_off
-            .map(|fini_array_off| {
-                read_lifecycle_array::<Arch::Layout, R>(
-                    segments,
-                    base,
-                    fini_array_off,
-                    parsed.fini_array_size,
-                    "DT_FINI_ARRAY size is malformed",
-                )
-            })
-            .transpose()?;
+        let fini_array_size = parsed.fini_array_size.map(|len| len.get()).unwrap_or(0);
 
         // Extract versioning information
         let verneed = parsed
@@ -347,10 +325,8 @@ where
             pltrel,
             dynrel,
             relr,
-            init_fn,
-            init_array_fn,
-            fini_fn,
-            fini_array_fn,
+            init: LifecycleSpec::new(init_fn, parsed.init_array_off, init_array_size),
+            fini: LifecycleSpec::new(fini_fn, parsed.fini_array_off, fini_array_size),
             rel_count: parsed.rel_count,
             soname_off: parsed.soname_off,
             rpath_off: parsed.rpath_off,
@@ -362,29 +338,51 @@ where
     }
 }
 
-fn read_lifecycle_array<L: ElfLayout, R: RegionAccess>(
-    segments: &ElfSegments<R>,
-    base: usize,
-    offset: NonZeroUsize,
-    byte_len: Option<NonZeroUsize>,
-    malformed: &'static str,
-) -> Result<LifecycleArray> {
-    let words = segments
-        .read_view::<L::Word>(offset.get(), byte_len.map(|len| len.get()).unwrap_or(0))?
-        .ok_or_else(|| ParseDynamicError::MalformedLifecycleTable { detail: malformed })?;
+#[derive(Clone, Copy)]
+pub(crate) struct LifecycleSpec {
+    func: Option<VmAddr>,
+    array_offset: Option<NonZeroUsize>,
+    array_byte_len: usize,
+}
 
-    let vm_addrs = words
-        .as_slice()
-        .iter()
-        .copied()
-        .map(|addr| {
-            base.checked_add(addr.to_usize())
-                .map(VmAddr::new)
-                .ok_or_else(|| ParseDynamicError::AddressOverflow.into())
-        })
-        .collect::<Result<Vec<_>>>()?;
+impl LifecycleSpec {
+    #[inline]
+    const fn new(
+        func: Option<VmAddr>,
+        array_offset: Option<NonZeroUsize>,
+        array_byte_len: usize,
+    ) -> Self {
+        Self {
+            func,
+            array_offset,
+            array_byte_len,
+        }
+    }
 
-    Ok(Lifecycle::array_from_vm_addrs(vm_addrs))
+    pub(crate) fn resolve<L: ElfLayout, R: RegionAccess>(
+        self,
+        segments: &ElfSegments<R>,
+        malformed: &'static str,
+    ) -> Result<Lifecycle> {
+        let array = self
+            .array_offset
+            .map(|offset| -> Result<_> {
+                let words = segments
+                    .read_view::<L::Word>(offset.get(), self.array_byte_len)
+                    .ok_or_else(|| ParseDynamicError::MalformedLifecycleTable {
+                        detail: malformed,
+                    })?;
+
+                Ok(words
+                    .as_slice()
+                    .iter()
+                    .copied()
+                    .map(|addr| VmAddr::new(addr.to_usize()))
+                    .collect())
+            })
+            .transpose()?;
+        Ok(Lifecycle::new(self.func, array))
+    }
 }
 
 /// Hash table type used for symbol lookup
@@ -414,14 +412,10 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     pub static_tls: bool,
     /// Global Offset Table address.
     pub got_plt: Option<NonNull<usize>>,
-    /// Initialization function.
-    pub init_fn: Option<VmAddr>,
-    /// Initialization function array.
-    pub init_array_fn: Option<LifecycleArray>,
-    /// Finalization function.
-    pub fini_fn: Option<VmAddr>,
-    /// Finalization function array.
-    pub fini_array_fn: Option<LifecycleArray>,
+    /// Initialization lifecycle functions.
+    pub init: LifecycleSpec,
+    /// Finalization lifecycle functions.
+    pub fini: LifecycleSpec,
     /// PLT relocation entries.
     pub pltrel: Option<MappedView<ElfRelType<Arch>>>,
     /// Dynamic relocation entries.
