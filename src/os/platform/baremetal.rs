@@ -1,7 +1,7 @@
 use crate::{
     Result,
     input::{ElfReader, Path},
-    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, ProtFlags},
+    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, ProtFlags, VmAddr},
 };
 use alloc::alloc::{dealloc, handle_alloc_error};
 use core::{alloc::Layout, ffi::c_void, slice::from_raw_parts_mut};
@@ -30,7 +30,7 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
 impl Mmap for DefaultMmap {
     unsafe fn mmap(
         &self,
-        addr: Option<usize>,
+        addr: Option<VmAddr>,
         len: usize,
         _prot: ProtFlags,
         flags: MapFlags,
@@ -38,7 +38,7 @@ impl Mmap for DefaultMmap {
         _fd: Option<isize>,
     ) -> crate::Result<MmapResult> {
         if let Some(addr) = addr {
-            let ptr = addr as *mut u8;
+            let ptr = addr.as_mut_ptr::<u8>();
             Ok(MmapResult::new(
                 MappedRegion::local_alias(ptr as _, len, *self),
                 true,
@@ -63,12 +63,12 @@ impl Mmap for DefaultMmap {
 
     unsafe fn mmap_anonymous(
         &self,
-        addr: usize,
+        addr: VmAddr,
         len: usize,
         _prot: ProtFlags,
         _flags: MapFlags,
     ) -> crate::Result<MappedRegion> {
-        let ptr = addr as *mut u8;
+        let ptr = addr.as_mut_ptr::<u8>();
         let dest = unsafe { from_raw_parts_mut(ptr, len) };
         dest.fill(0);
         let region = if _flags.contains(MapFlags::MAP_FIXED) {
@@ -79,10 +79,10 @@ impl Mmap for DefaultMmap {
         Ok(region)
     }
 
-    unsafe fn munmap(&self, addr: *mut c_void, len: usize) -> crate::Result<()> {
+    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> crate::Result<()> {
         unsafe {
             dealloc(
-                addr as _,
+                addr.as_mut_ptr(),
                 Layout::from_size_align_unchecked(len, self.page_size().bytes()),
             )
         };
@@ -91,19 +91,14 @@ impl Mmap for DefaultMmap {
 
     unsafe fn madvise(
         &self,
-        _addr: *mut c_void,
+        _addr: VmAddr,
         _len: usize,
         _behavior: MadviseAdvice,
     ) -> crate::Result<()> {
         Ok(())
     }
 
-    unsafe fn mprotect(
-        &self,
-        _addr: *mut c_void,
-        _len: usize,
-        _prot: ProtFlags,
-    ) -> crate::Result<()> {
+    unsafe fn mprotect(&self, _addr: VmAddr, _len: usize, _prot: ProtFlags) -> crate::Result<()> {
         Ok(())
     }
 }

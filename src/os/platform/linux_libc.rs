@@ -1,7 +1,7 @@
 use crate::{
     IoError, MmapError, Result,
     input::{ElfReader, Path, PathBuf},
-    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, PageSize, ProtFlags},
+    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, PageSize, ProtFlags, VmAddr},
 };
 use alloc::ffi::CString;
 use core::ffi::c_void;
@@ -93,7 +93,7 @@ impl Mmap for DefaultMmap {
 
     unsafe fn mmap(
         &self,
-        addr: Option<usize>,
+        addr: Option<VmAddr>,
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
@@ -104,7 +104,7 @@ impl Mmap for DefaultMmap {
         let ptr = if let Some(fd) = fd {
             unsafe {
                 mmap(
-                    addr.unwrap_or(0) as _,
+                    addr.map_or(core::ptr::null_mut(), VmAddr::as_mut_ptr),
                     len,
                     prot.bits(),
                     flags.bits(),
@@ -114,7 +114,7 @@ impl Mmap for DefaultMmap {
             }
         } else {
             needs_copy = true;
-            addr.unwrap() as _
+            addr.unwrap().as_mut_ptr()
         };
         if core::ptr::eq(ptr, libc::MAP_FAILED) {
             return Err(MmapError::MmapFailed {
@@ -130,14 +130,14 @@ impl Mmap for DefaultMmap {
 
     unsafe fn mmap_anonymous(
         &self,
-        addr: usize,
+        addr: VmAddr,
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
     ) -> crate::Result<MappedRegion> {
         let ptr = unsafe {
             mmap(
-                addr as _,
+                addr.as_mut_ptr(),
                 len,
                 prot.bits(),
                 flags.union(MapFlags::MAP_ANONYMOUS).bits(),
@@ -159,8 +159,8 @@ impl Mmap for DefaultMmap {
         Ok(region)
     }
 
-    unsafe fn munmap(&self, addr: *mut c_void, len: usize) -> crate::Result<()> {
-        let res = unsafe { munmap(addr, len) };
+    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> crate::Result<()> {
+        let res = unsafe { munmap(addr.as_mut_ptr(), len) };
         if res != 0 {
             return Err(MmapError::MunmapFailed {
                 code: last_os_error_code(),
@@ -172,11 +172,11 @@ impl Mmap for DefaultMmap {
 
     unsafe fn madvise(
         &self,
-        addr: *mut c_void,
+        addr: VmAddr,
         len: usize,
         behavior: MadviseAdvice,
     ) -> crate::Result<()> {
-        let res = unsafe { madvise(addr, len, behavior as _) };
+        let res = unsafe { madvise(addr.as_mut_ptr(), len, behavior as _) };
         if res != 0 {
             return Err(MmapError::Madvise {
                 code: last_os_error_code(),
@@ -186,8 +186,8 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn mprotect(&self, addr: *mut c_void, len: usize, prot: ProtFlags) -> crate::Result<()> {
-        let res = unsafe { mprotect(addr, len, prot.bits()) };
+    unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> crate::Result<()> {
+        let res = unsafe { mprotect(addr.as_mut_ptr(), len, prot.bits()) };
         if res != 0 {
             return Err(MmapError::Mprotect {
                 code: last_os_error_code(),
@@ -199,7 +199,7 @@ impl Mmap for DefaultMmap {
 
     unsafe fn mmap_reserve(
         &self,
-        addr: Option<usize>,
+        addr: Option<VmAddr>,
         len: usize,
         use_file: bool,
     ) -> Result<MappedRegion> {
@@ -211,7 +211,7 @@ impl Mmap for DefaultMmap {
         };
         let ptr = unsafe {
             mmap(
-                addr.unwrap_or(0) as _,
+                addr.map_or(core::ptr::null_mut(), VmAddr::as_mut_ptr),
                 len,
                 prot.bits(),
                 flags.bits(),

@@ -1,6 +1,6 @@
 use core::{ffi::c_void, ops::Deref};
 
-use super::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, ProtFlags};
+use super::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, ProtFlags, VmAddr};
 use crate::{Result, sync::Arc};
 use alloc::boxed::Box;
 
@@ -48,7 +48,7 @@ impl Mmap for Mapper {
     #[inline]
     unsafe fn mmap(
         &self,
-        addr: Option<usize>,
+        addr: Option<VmAddr>,
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
@@ -61,7 +61,7 @@ impl Mmap for Mapper {
     #[inline]
     unsafe fn mmap_anonymous(
         &self,
-        addr: usize,
+        addr: VmAddr,
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
@@ -70,24 +70,24 @@ impl Mmap for Mapper {
     }
 
     #[inline]
-    unsafe fn munmap(&self, addr: *mut c_void, len: usize) -> Result<()> {
+    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
         unsafe { self.0.munmap(addr, len) }
     }
 
     #[inline]
-    unsafe fn madvise(&self, addr: *mut c_void, len: usize, behavior: MadviseAdvice) -> Result<()> {
+    unsafe fn madvise(&self, addr: VmAddr, len: usize, behavior: MadviseAdvice) -> Result<()> {
         unsafe { self.0.madvise(addr, len, behavior) }
     }
 
     #[inline]
-    unsafe fn mprotect(&self, addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
+    unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
         unsafe { self.0.mprotect(addr, len, prot) }
     }
 
     #[inline]
     unsafe fn mmap_reserve(
         &self,
-        addr: Option<usize>,
+        addr: Option<VmAddr>,
         len: usize,
         use_file: bool,
     ) -> Result<MappedRegion> {
@@ -112,7 +112,7 @@ where
 {
     unsafe fn mmap(
         &self,
-        _addr: Option<usize>,
+        _addr: Option<VmAddr>,
         _len: usize,
         _prot: ProtFlags,
         _flags: MapFlags,
@@ -124,7 +124,7 @@ where
 
     unsafe fn mmap_anonymous(
         &self,
-        _addr: usize,
+        _addr: VmAddr,
         _len: usize,
         _prot: ProtFlags,
         _flags: MapFlags,
@@ -132,20 +132,15 @@ where
         unreachable!("MunmapAdapter only supports munmap")
     }
 
-    unsafe fn munmap(&self, addr: *mut c_void, len: usize) -> Result<()> {
-        (self.munmap)(addr, len)
+    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
+        (self.munmap)(addr.as_mut_ptr(), len)
     }
 
-    unsafe fn madvise(
-        &self,
-        _addr: *mut c_void,
-        _len: usize,
-        _behavior: MadviseAdvice,
-    ) -> Result<()> {
+    unsafe fn madvise(&self, _addr: VmAddr, _len: usize, _behavior: MadviseAdvice) -> Result<()> {
         unreachable!("MunmapAdapter only supports munmap")
     }
 
-    unsafe fn mprotect(&self, _addr: *mut c_void, _len: usize, _prot: ProtFlags) -> Result<()> {
+    unsafe fn mprotect(&self, _addr: VmAddr, _len: usize, _prot: ProtFlags) -> Result<()> {
         unreachable!("MunmapAdapter only supports munmap")
     }
 }

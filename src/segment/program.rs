@@ -1,8 +1,8 @@
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType, NativeElfLayout},
-    os::{MapFlags, Mapper, ProtFlags},
-    segment::{Address, ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
+    os::{MapFlags, Mapper, ProtFlags, VmAddr},
+    segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
 };
 use alloc::vec::Vec;
 
@@ -52,7 +52,7 @@ impl<'phdr, L: ElfLayout> ProgramSegments<'phdr, L> {
 /// Memory layout requirements derived from LOAD program headers.
 pub(crate) struct ProgramSegmentLayout {
     /// Preferred address passed to `mmap`; `None` lets the OS choose.
-    pub(crate) preferred_addr: Option<usize>,
+    pub(crate) preferred_addr: Option<VmAddr>,
     /// Total page-aligned memory range covered by LOAD segments.
     pub(crate) mapped_len: usize,
     /// Lowest page-aligned virtual address among LOAD segments.
@@ -114,7 +114,11 @@ pub(crate) fn parse_segments(
     // For shared libraries, let the OS choose the base address (None)
     // For executables, suggest the preferred base address (Some)
     Ok(ProgramSegmentLayout {
-        preferred_addr: if is_dylib { None } else { Some(min_vaddr) },
+        preferred_addr: if is_dylib {
+            None
+        } else {
+            Some(VmAddr::new(min_vaddr))
+        },
         mapped_len: total_size,
         min_vaddr,
     })
@@ -175,7 +179,7 @@ impl<L: ElfLayout> ElfPhdr<L> {
         let filesz = self.p_filesz() + align_len;
 
         ElfSegment {
-            addr: Address::Relative(min_vaddr),
+            offset: min_vaddr,
             prot,
             flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
             len: memsz,

@@ -1,48 +1,6 @@
 use crate::os::{MapFlags, ProtFlags};
 use alloc::vec::Vec;
 
-/// Address representation for ELF segments
-///
-/// This enum represents either a relative address (offset from base)
-/// or an absolute address (fully resolved virtual address).
-pub(crate) enum Address {
-    /// Relative address (offset from base address)
-    Relative(usize),
-
-    /// Absolute address (fully resolved virtual address)
-    Absolute(usize),
-}
-
-impl Address {
-    /// Get the absolute address
-    ///
-    /// # Returns
-    /// The absolute address value
-    ///
-    /// # Panics
-    /// Panics if called on a Relative address variant
-    pub(super) fn absolute_addr(&self) -> usize {
-        match self {
-            Address::Relative(_) => unreachable!(),
-            Address::Absolute(addr) => *addr,
-        }
-    }
-
-    /// Get the relative address
-    ///
-    /// # Returns
-    /// The relative address value
-    ///
-    /// # Panics
-    /// Panics if called on an Absolute address variant
-    pub(super) fn relative_addr(&self) -> usize {
-        match self {
-            Address::Relative(addr) => *addr,
-            Address::Absolute(_) => unreachable!(),
-        }
-    }
-}
-
 /// Information about a file mapping within a segment
 ///
 /// This structure describes how a portion of a file is mapped
@@ -63,8 +21,8 @@ pub(crate) struct FileMapInfo {
 /// information needed to manage its memory mapping, protection,
 /// and data content.
 pub(crate) struct ElfSegment {
-    /// Address of the segment in memory
-    pub(crate) addr: Address,
+    /// Module-relative offset of the segment.
+    pub(crate) offset: usize,
     /// Memory protection flags for the segment
     pub(crate) prot: ProtFlags,
     /// Memory mapping flags for the segment

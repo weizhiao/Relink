@@ -2,79 +2,11 @@ use core::{mem::size_of, ptr::NonNull};
 
 use crate::{
     ByteRepr, Result,
-    os::{MadviseAdvice, ProtFlags, VmAddr},
+    os::{ProtFlags, VmAddr},
     sync::Arc,
 };
 
-use super::HostRegion;
-
-/// Memory access backend for a mapped VM range.
-///
-/// Implementations can be host-backed mmap regions, guest VM memory adapters,
-/// or any other backend that can service byte reads/writes for the range.
-pub trait RegionAccess: Send + Sync + 'static {
-    /// Base VM address covered by this region.
-    fn addr(&self) -> VmAddr;
-
-    /// Length of this region in bytes.
-    fn len(&self) -> usize;
-
-    #[inline]
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Reads bytes without checking bounds.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + dst.len()` is inside this region.
-    unsafe fn read_bytes(&self, offset: usize, dst: &mut [u8]) -> Result<()>;
-
-    /// Writes bytes without checking bounds.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + src.len()` is inside this region.
-    unsafe fn write_bytes(&self, offset: usize, src: &[u8]) -> Result<()>;
-
-    /// Fills bytes with zeroes without checking bounds.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + len` is inside this region.
-    unsafe fn zero_bytes(&self, offset: usize, len: usize) -> Result<()>;
-
-    /// Borrows directly readable host bytes without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + len` is inside this region.
-    unsafe fn borrow_bytes(&self, offset: usize, len: usize) -> Option<&'static [u8]>;
-
-    /// Returns a host-accessible pointer without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset` is inside this region.
-    unsafe fn host_ptr(&self, offset: usize) -> Option<NonNull<u8>>;
-
-    /// Applies memory advice to a range without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + len` is inside this region.
-    unsafe fn madvise(&self, offset: usize, len: usize, behavior: MadviseAdvice) -> Result<()>;
-
-    /// Changes protection for a range without checking bounds.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + len` is inside this region.
-    unsafe fn mprotect(&self, offset: usize, len: usize, prot: ProtFlags) -> Result<()>;
-}
+use super::{HostRegion, traits::RegionAccess};
 
 /// A mapped region returned by [`Mmap`](crate::os::Mmap), backed by any
 /// [`RegionAccess`] implementation.

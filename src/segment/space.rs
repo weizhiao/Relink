@@ -93,19 +93,18 @@ impl<R: RegionAccess> ElfSegments<R> {
     }
 
     #[inline]
-    fn find_range(&self, addr: VmAddr, len: usize) -> Option<MappedRange> {
-        let offset = addr.get().checked_sub(self.base)?;
-        let idx = self
+    fn contains_range(&self, addr: VmAddr, len: usize) -> bool {
+        let Some(offset) = addr.get().checked_sub(self.base) else {
+            return false;
+        };
+        let Some(idx) = self
             .ranges
             .partition_point(|range| range.offset <= offset)
-            .checked_sub(1)?;
-        let range = self.ranges[idx];
-        range.contains_offset_range(offset, len).then_some(range)
-    }
-
-    #[inline]
-    fn contains_range(&self, addr: VmAddr, len: usize) -> bool {
-        self.find_range(addr, len).is_some()
+            .checked_sub(1)
+        else {
+            return false;
+        };
+        self.ranges[idx].contains_offset_range(offset, len)
     }
 
     #[inline]
@@ -258,7 +257,13 @@ impl<R: RegionAccess> ElfSegments<R> {
     /// mapping cannot be borrowed directly by the current process.
     #[inline]
     pub fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        self.find_range(addr, 1)?;
+        debug_assert!(self.contains_range(addr, 1));
+        unsafe { self.region.host_ptr(self.region_offset(addr)) }
+    }
+
+    #[inline]
+    pub(crate) fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>> {
+        debug_assert!(self.contains_range(addr, len));
         unsafe { self.region.host_ptr(self.region_offset(addr)) }
     }
 

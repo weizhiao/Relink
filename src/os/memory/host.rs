@@ -120,16 +120,22 @@ impl<M: Mmap> RegionAccess for HostRegion<M> {
     #[inline]
     unsafe fn madvise(&self, offset: usize, len: usize, behavior: MadviseAdvice) -> Result<()> {
         unsafe {
-            self.control
-                .madvise(self.host_ptr.cast::<u8>().add(offset).cast(), len, behavior)
+            self.control.madvise(
+                VmAddr::from_ptr(self.host_ptr.cast::<u8>().add(offset)),
+                len,
+                behavior,
+            )
         }
     }
 
     #[inline]
     unsafe fn mprotect(&self, offset: usize, len: usize, prot: ProtFlags) -> Result<()> {
         unsafe {
-            self.control
-                .mprotect(self.host_ptr.cast::<u8>().add(offset).cast(), len, prot)
+            self.control.mprotect(
+                VmAddr::from_ptr(self.host_ptr.cast::<u8>().add(offset)),
+                len,
+                prot,
+            )
         }
     }
 }
@@ -137,7 +143,10 @@ impl<M: Mmap> RegionAccess for HostRegion<M> {
 impl<M: Mmap> Drop for HostRegion<M> {
     fn drop(&mut self) {
         if self.unmap_on_drop {
-            let _ = unsafe { self.control.munmap(self.host_ptr, self.len) };
+            let _ = unsafe {
+                self.control
+                    .munmap(VmAddr::from_ptr(self.host_ptr), self.len)
+            };
         }
     }
 }

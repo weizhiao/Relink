@@ -1,7 +1,7 @@
 use crate::{
     IoError, MmapError, Result,
     input::{ElfReader, Path, PathBuf},
-    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, PageSize, ProtFlags},
+    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, PageSize, ProtFlags, VmAddr},
 };
 use alloc::vec::Vec;
 use core::{
@@ -110,7 +110,7 @@ impl Mmap for DefaultMmap {
 
     unsafe fn mmap(
         &self,
-        addr: Option<usize>,
+        addr: Option<VmAddr>,
         len: usize,
         prot: ProtFlags,
         _flags: MapFlags,
@@ -122,7 +122,7 @@ impl Mmap for DefaultMmap {
             debug_assert!(addr.is_some(), "Address must be specified.");
             let addr = addr.unwrap();
             let handle = fd as HANDLE;
-            let desired_addr = addr as *mut c_void;
+            let desired_addr = addr.as_mut_ptr::<c_void>();
 
             let ptr = unsafe {
                 MapViewOfFile3(
@@ -146,13 +146,14 @@ impl Mmap for DefaultMmap {
             needs_copy = true;
             debug_assert!(addr.is_some(), "Address must be specified.");
             let addr = addr.unwrap();
+            let desired_addr = addr.as_mut_ptr::<c_void>();
 
             // If the address is within a placeholder reservation, we must replace it
             // with a real allocation before we can copy data into it.
             let ptr = unsafe {
                 Memory::VirtualAlloc2(
                     GetCurrentProcess(),
-                    addr as _,
+                    desired_addr,
                     len,
                     MEM_COMMIT | MEM_RESERVE | MEM_REPLACE_PLACEHOLDER,
                     PAGE_READWRITE,
@@ -163,7 +164,7 @@ impl Mmap for DefaultMmap {
 
             if ptr.is_null() {
                 // Fallback: if it's not a placeholder, assume it's already accessible
-                addr as _
+                desired_addr
             } else {
                 ptr
             }
@@ -176,7 +177,7 @@ impl Mmap for DefaultMmap {
 
     unsafe fn mmap_anonymous(
         &self,
-        addr: usize,
+        addr: VmAddr,
         len: usize,
         prot: ProtFlags,
         _flags: MapFlags,
@@ -185,7 +186,7 @@ impl Mmap for DefaultMmap {
         let ptr = unsafe {
             Memory::VirtualAlloc2(
                 GetCurrentProcess(),
-                addr as _,
+                addr.as_mut_ptr(),
                 len,
                 MEM_COMMIT | MEM_RESERVE | MEM_REPLACE_PLACEHOLDER,
                 prot_win(prot, false),
@@ -200,8 +201,9 @@ impl Mmap for DefaultMmap {
 
         // Fallback for non-placeholder case (e.g. anonymous mapping not in a reserved region,
         // or a region reserved without MEM_RESERVE_PLACEHOLDER)
-        let ptr =
-            unsafe { Memory::VirtualAlloc(addr as _, len, MEM_COMMIT, prot_win(prot, false)) };
+        let ptr = unsafe {
+            Memory::VirtualAlloc(addr.as_mut_ptr(), len, MEM_COMMIT, prot_win(prot, false))
+        };
         if ptr.is_null() {
             let err_code = unsafe { GetLastError() };
             return Err(MmapError::VirtualAlloc { code: err_code }.into());
@@ -209,28 +211,31 @@ impl Mmap for DefaultMmap {
         Ok(MappedRegion::local(ptr, len, *self))
     }
 
-    unsafe fn munmap(&self, addr: *mut c_void, _len: usize) -> Result<()> {
+    unsafe fn munmap(&self, addr: VmAddr, _len: usize) -> Result<()> {
         unsafe {
             windows_sys::Win32::System::Memory::UnmapViewOfFile(
-                windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS { Value: addr },
+                windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
+                    Value: addr.as_mut_ptr(),
+                },
             )
         };
         Ok(())
     }
 
-    unsafe fn madvise(
-        &self,
-        _addr: *mut c_void,
-        _len: usize,
-        _behavior: MadviseAdvice,
-    ) -> Result<()> {
+    unsafe fn madvise(&self, _addr: VmAddr, _len: usize, _behavior: MadviseAdvice) -> Result<()> {
         Ok(())
     }
 
-    unsafe fn mprotect(&self, addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
+    unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
         let mut old = MaybeUninit::uninit();
-        if unsafe { Memory::VirtualProtect(addr, len, prot_win(prot, false), old.as_mut_ptr()) }
-            == 0
+        if unsafe {
+            Memory::VirtualProtect(
+                addr.as_mut_ptr(),
+                len,
+                prot_win(prot, false),
+                old.as_mut_ptr(),
+            )
+        } == 0
         {
             let err_code = unsafe { GetLastError() };
             return Err(MmapError::Mprotect { code: err_code }.into());
@@ -240,7 +245,7 @@ impl Mmap for DefaultMmap {
 
     unsafe fn mmap_reserve(
         &self,
-        addr: Option<usize>,
+        addr: Option<VmAddr>,
         len: usize,
         use_file: bool,
     ) -> Result<MappedRegion> {
@@ -249,7 +254,7 @@ impl Mmap for DefaultMmap {
                 unsafe {
                     Memory::VirtualAlloc2(
                         GetCurrentProcess(),
-                        addr as _,
+                        addr.as_mut_ptr(),
                         len,
                         MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
                         PAGE_NOACCESS,

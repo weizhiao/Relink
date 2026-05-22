@@ -5,7 +5,7 @@ use crate::{
     input::ElfReader,
     os::{MapFlags, Mapper, ProtFlags, VmAddr},
     relocation::RelocationArch,
-    segment::{Address, ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
+    segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
 };
 use alloc::vec::Vec;
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
@@ -302,7 +302,6 @@ impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
 
         let prot = section_prot(first_shdr.flags());
         let segment_start = *base_offset;
-        let addr = Address::Relative(segment_start);
 
         let mut current_offset = segment_start;
         let mut map_info = Vec::new();
@@ -354,7 +353,7 @@ impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
 
         *base_offset += total_size;
         Some(ElfSegment {
-            addr,
+            offset: segment_start,
             prot,
             len: total_size,
             page_size,

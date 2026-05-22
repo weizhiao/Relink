@@ -226,9 +226,10 @@ where
         let mut shdr_segments =
             SectionSegments::<Arch>::new(shdrs, &mut object, self.page_size()?.bytes())?;
         let segments = shdr_segments.load_segments(mapper.clone(), &mut object)?;
+        let base = segments.base_addr();
         let pltgot = shdr_segments.take_pltgot();
         let mprotect = Box::new(move || {
-            shdr_segments.mprotect(mapper.as_ref())?;
+            shdr_segments.mprotect(mapper.as_ref(), base)?;
             Ok(())
         });
         let user_data = D::default();

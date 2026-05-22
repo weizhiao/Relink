@@ -3,7 +3,6 @@ use crate::{
     elf::{ElfLayout, ElfPhdr},
     os::{Mapper, ProtFlags, VmAddr},
 };
-use core::ffi::c_void;
 
 use super::{rounddown, roundup};
 
@@ -59,10 +58,9 @@ impl ELFRelro {
         let addr = self.addr.into_inner();
         let end = roundup(addr + self.len, self.page_size);
         let start = rounddown(addr, self.page_size);
-        let start_addr = start as *mut c_void;
         unsafe {
             self.mapper
-                .mprotect(start_addr, end - start, ProtFlags::PROT_READ)?;
+                .mprotect(VmAddr::new(start), end - start, ProtFlags::PROT_READ)?;
         }
         Ok(())
     }

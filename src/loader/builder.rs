@@ -290,7 +290,7 @@ where
         let mut phdr_segments =
             ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some(), page_size);
         let segments = phdr_segments.load_segments(mapper.clone(), &mut object)?;
-        phdr_segments.mprotect(mapper.as_ref())?;
+        phdr_segments.mprotect(mapper.as_ref(), segments.base_addr())?;
 
         Ok(ImageBuilder::new(
             &mut self.hook,

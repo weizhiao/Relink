@@ -206,7 +206,7 @@ impl KeyResolver<'static, &'static str> for SyntheticDependencyResolver {
     }
 }
 
-impl VisibleModules<&'static str, ()> for StaticVisibleModule {
+impl VisibleModules<&'static str> for StaticVisibleModule {
     fn contains_key(&self, key: &&'static str) -> bool {
         *key == self.key
     }

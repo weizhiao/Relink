@@ -1,9 +1,8 @@
 use crate::input::ElfReader;
 use crate::os::{MapFlags, Mapper, Mmap, ProtFlags, VmAddr};
 use crate::{Result, logging};
-use alloc::vec::Vec;
 
-use super::{Address, ElfSegment, ElfSegments, roundup};
+use super::{ElfSegment, ElfSegments, roundup};
 
 impl ElfSegment {
     #[inline]
@@ -15,15 +14,9 @@ impl ElfSegment {
         }
     }
 
-    /// Rebase the segment with a new base address
-    ///
-    /// This method converts a relative address to an absolute address
-    /// by adding the provided base address.
-    ///
-    /// # Arguments
-    /// * `base` - The base address to add to the relative address
-    fn rebase(&mut self, base: usize) {
-        self.addr = Address::Absolute(base + self.addr.relative_addr());
+    #[inline]
+    fn vm_addr(&self, base: VmAddr) -> VmAddr {
+        base.offset(self.offset)
     }
 
     /// Map the segment into memory
@@ -37,9 +30,14 @@ impl ElfSegment {
     /// # Returns
     /// * `Ok(())` - If mapping succeeds
     /// * `Err(Error)` - If mapping fails
-    fn mmap_segment(&mut self, mapper: &dyn Mmap, object: &mut impl ElfReader) -> Result<()> {
+    fn mmap_segment(
+        &mut self,
+        mapper: &dyn Mmap,
+        object: &mut impl ElfReader,
+        base: VmAddr,
+    ) -> Result<()> {
         let len = self.len;
-        let addr = self.addr.absolute_addr();
+        let addr = self.vm_addr(base);
         let prot = self.mapping_prot();
 
         debug_assert!(len.is_multiple_of(self.page_size));
@@ -62,7 +60,7 @@ impl ElfSegment {
 
         logging::trace!(
             "[Mmap] address: 0x{:x}, length: {}, flags: {:?}, zero_size: {}, map_info: {:?}",
-            addr,
+            addr.into_inner(),
             len,
             prot,
             self.zero_size,
@@ -86,22 +84,13 @@ impl ElfSegment {
     /// * `Err(Error)` - If copying fails
     fn copy_data(&self, space: &ElfSegments, object: &mut impl ElfReader) -> Result<()> {
         if self.need_copy {
-            const COPY_CHUNK_SIZE: usize = 64 * 1024;
-
-            let segment_start = self.addr.absolute_addr() - space.base();
-            let mut scratch = Vec::new();
             for info in &self.map_info {
-                let mut copied = 0;
-                while copied < info.filesz {
-                    let copy_len = (info.filesz - copied).min(COPY_CHUNK_SIZE);
-                    scratch.resize(copy_len, 0);
-                    object.read(&mut scratch, info.offset + copied)?;
-                    space.write_bytes(
-                        VmAddr::new(space.base() + segment_start + info.start + copied),
-                        &scratch,
-                    )?;
-                    copied += copy_len;
-                }
+                let addr = space.base_addr().offset(self.offset + info.start);
+                let dst = space
+                    .host_ptr_range(addr, info.filesz)
+                    .expect("segment copy target is not host-accessible");
+                let dst = unsafe { core::slice::from_raw_parts_mut(dst.as_ptr(), info.filesz) };
+                object.read(dst, info.offset)?;
             }
         }
         Ok(())
@@ -116,16 +105,16 @@ impl ElfSegment {
     /// # Returns
     /// * `Ok(())` - If protection change succeeds
     /// * `Err(Error)` - If protection change fails
-    fn mprotect(&self, mapper: &dyn Mmap) -> Result<()> {
+    fn mprotect(&self, mapper: &dyn Mmap, base: VmAddr) -> Result<()> {
         if self.need_copy || self.from_relocatable {
             let len = self.len;
             debug_assert!(len.is_multiple_of(self.page_size));
-            let addr = self.addr.absolute_addr();
-            unsafe { mapper.mprotect(addr as _, len, self.prot) }?;
+            let addr = self.vm_addr(base);
+            unsafe { mapper.mprotect(addr, len, self.prot) }?;
 
             logging::trace!(
                 "[Mprotect] address: 0x{:x}, length: {}, prot: {:?}",
-                addr,
+                addr.into_inner(),
                 len,
                 self.prot,
             );
@@ -144,7 +133,10 @@ impl ElfSegment {
     /// * `Err(Error)` - If filling fails
     fn fill_zero(&self, mapper: &dyn Mmap, space: &ElfSegments) -> Result<()> {
         if self.zero_size > 0 {
-            let zero_start = self.addr.absolute_addr() + self.content_size;
+            let zero_start = space
+                .base_addr()
+                .offset(self.offset + self.content_size)
+                .into_inner();
             let zero_end = roundup(zero_start, self.page_size);
             let write_len = zero_end - zero_start;
             space.zero_bytes(VmAddr::new(zero_start), write_len)?;
@@ -156,7 +148,7 @@ impl ElfSegment {
 
                 unsafe {
                     mapper.mmap_anonymous(
-                        zero_mmap_addr,
+                        VmAddr::new(zero_mmap_addr),
                         zero_mmap_len,
                         prot,
                         MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
@@ -219,19 +211,18 @@ pub(crate) trait SegmentBuilder {
         let space = self.create_space(mapper.clone())?;
         self.create_segments()?;
         let segments = self.segments_mut();
-        let base = space.base();
+        let base = space.base_addr();
 
         #[cfg(windows)]
         let mut last_addr = space
             .primary_region()
             .map(|(memory, _)| memory as usize)
-            .unwrap_or(base);
+            .unwrap_or_else(|| base.into_inner());
 
         for segment in segments.iter_mut() {
-            segment.rebase(base);
             #[cfg(windows)]
             if object.as_fd().is_some() {
-                let addr = segment.addr.absolute_addr();
+                let addr = segment.vm_addr(base).into_inner();
                 let len = segment.len;
                 if addr > last_addr {
                     crate::os::virtual_free(last_addr, addr - last_addr)?;
@@ -245,7 +236,7 @@ pub(crate) trait SegmentBuilder {
                 }
                 last_addr = addr + len;
             }
-            segment.mmap_segment(mapper.as_ref(), object)?;
+            segment.mmap_segment(mapper.as_ref(), object, base)?;
             segment.copy_data(&space, object)?;
             segment.fill_zero(mapper.as_ref(), &space)?;
         }
@@ -260,10 +251,10 @@ pub(crate) trait SegmentBuilder {
     /// # Returns
     /// * `Ok(())` - If protection changes succeed
     /// * `Err(Error)` - If protection changes fail
-    fn mprotect(&self, mapper: &dyn Mmap) -> Result<()> {
+    fn mprotect(&self, mapper: &dyn Mmap, base: VmAddr) -> Result<()> {
         let segments = self.segments();
         for segment in segments {
-            segment.mprotect(mapper)?;
+            segment.mprotect(mapper, base)?;
         }
         Ok(())
     }

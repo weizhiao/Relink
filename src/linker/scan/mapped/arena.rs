@@ -3,7 +3,7 @@ use super::super::plan::LinkPlan;
 use crate::{
     LinkerError, Result,
     entity::SecondaryMap,
-    os::{MapFlags, MappedRegion, Mapper, Mmap, ProtFlags},
+    os::{MapFlags, MappedRegion, Mapper, Mmap, ProtFlags, VmAddr},
     relocation::RelocationArch,
     segment::align_up,
 };
@@ -66,7 +66,7 @@ impl MappedArenaMap {
 
         let region = unsafe {
             mapper.mmap_anonymous(
-                0,
+                VmAddr::null(),
                 total_len,
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
                 MapFlags::MAP_PRIVATE,
