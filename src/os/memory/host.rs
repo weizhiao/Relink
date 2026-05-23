@@ -1,10 +1,11 @@
 use core::{
     ffi::c_void,
+    mem::{MaybeUninit, align_of, size_of},
     ptr::{self, NonNull},
 };
 
 use crate::{
-    Result,
+    ByteRepr, Result,
     os::{MadviseAdvice, Mapper, Mmap, ProtFlags, VmAddr},
 };
 
@@ -89,6 +90,29 @@ impl<M: Mmap> RegionAccess for HostRegion<M> {
                 self.host_ptr.cast::<u8>().add(offset),
                 src.len(),
             );
+        }
+        Ok(())
+    }
+
+    #[inline]
+    unsafe fn read_value<T: ByteRepr>(&self, offset: usize) -> Result<T> {
+        if size_of::<T>() == 0 {
+            return Ok(unsafe { MaybeUninit::<T>::zeroed().assume_init() });
+        }
+        let ptr = unsafe { self.host_ptr.cast::<u8>().add(offset).cast::<T>() };
+        debug_assert!((ptr as usize).is_multiple_of(align_of::<T>()));
+        Ok(unsafe { ptr::read(ptr) })
+    }
+
+    #[inline]
+    unsafe fn write_value<T: ByteRepr>(&self, offset: usize, value: T) -> Result<()> {
+        if size_of::<T>() == 0 {
+            return Ok(());
+        }
+        let ptr = unsafe { self.host_ptr.cast::<u8>().add(offset).cast::<T>() };
+        debug_assert!((ptr as usize).is_multiple_of(align_of::<T>()));
+        unsafe {
+            ptr::write(ptr, value);
         }
         Ok(())
     }

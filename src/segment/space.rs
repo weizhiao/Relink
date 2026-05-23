@@ -4,11 +4,7 @@ use crate::{
     relocation::RelocValue,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{
-    fmt::Debug,
-    mem::{MaybeUninit, size_of},
-    ptr::NonNull,
-};
+use core::{fmt::Debug, mem::size_of, ptr::NonNull};
 
 #[derive(Clone, Copy)]
 struct MappedRange {
@@ -291,10 +287,7 @@ impl<R: RegionAccess> ElfSegments<R> {
         val: RelocValue<T>,
     ) -> Result<()> {
         let value = val.into_inner();
-        let bytes = unsafe {
-            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
-        };
-        self.write_bytes(addr, bytes)
+        unsafe { self.region.write_value(self.region_offset(addr), value) }
     }
 
     /// Updates a typed relocation value without checked range validation.
@@ -312,16 +305,10 @@ impl<R: RegionAccess> ElfSegments<R> {
             return Ok(());
         }
 
-        let mut value = MaybeUninit::<T>::uninit();
-        let bytes = unsafe {
-            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
-        };
-        self.read_bytes(addr, bytes)?;
-        let value = update(unsafe { value.assume_init() });
-        let bytes = unsafe {
-            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
-        };
-        self.write_bytes(addr, bytes)
+        let region_offset = self.region_offset(addr);
+        let value = unsafe { self.region.read_value(region_offset)? };
+        let value = update(value);
+        unsafe { self.region.write_value(region_offset, value) }
     }
 
     /// Returns the base address of the mapped memory as a raw integer.

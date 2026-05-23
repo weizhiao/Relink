@@ -1,7 +1,10 @@
-use core::ptr::NonNull;
+use core::{
+    mem::{MaybeUninit, size_of},
+    ptr::NonNull,
+};
 
 use crate::{
-    Result,
+    ByteRepr, Result,
     os::{MadviseAdvice, ProtFlags, VmAddr},
 };
 
@@ -30,6 +33,24 @@ pub trait RegionAccess: Send + Sync + 'static {
     /// The caller must ensure `offset..offset + dst.len()` is inside this region.
     unsafe fn read_bytes(&self, offset: usize, dst: &mut [u8]) -> Result<()>;
 
+    /// Reads one typed value without checking bounds.
+    ///
+    /// The returned error represents backend access failure; it is not a
+    /// substitute for range validation.
+    ///
+    /// # Safety
+    /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region
+    /// and `offset` is aligned for `T`.
+    #[inline]
+    unsafe fn read_value<T: ByteRepr>(&self, offset: usize) -> Result<T> {
+        let mut value = MaybeUninit::<T>::uninit();
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
+        };
+        unsafe { self.read_bytes(offset, bytes)? };
+        Ok(unsafe { value.assume_init() })
+    }
+
     /// Writes bytes without checking bounds.
     ///
     /// The returned error represents backend access failure; it is not a
@@ -38,6 +59,22 @@ pub trait RegionAccess: Send + Sync + 'static {
     /// # Safety
     /// The caller must ensure `offset..offset + src.len()` is inside this region.
     unsafe fn write_bytes(&self, offset: usize, src: &[u8]) -> Result<()>;
+
+    /// Writes one typed value without checking bounds.
+    ///
+    /// The returned error represents backend access failure; it is not a
+    /// substitute for range validation.
+    ///
+    /// # Safety
+    /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region
+    /// and `offset` is aligned for `T`.
+    #[inline]
+    unsafe fn write_value<T: ByteRepr>(&self, offset: usize, value: T) -> Result<()> {
+        let bytes = unsafe {
+            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
+        };
+        unsafe { self.write_bytes(offset, bytes) }
+    }
 
     /// Fills bytes with zeroes without checking bounds.
     ///
