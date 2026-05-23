@@ -47,8 +47,23 @@ impl VmAddr {
     }
 
     #[inline]
+    pub fn checked_offset_from(self, base: Self) -> Option<usize> {
+        self.0.checked_sub(base.0)
+    }
+
+    #[inline]
     pub fn wrapping_add(self, offset: usize) -> Self {
         Self(self.0.wrapping_add(offset))
+    }
+
+    #[inline]
+    pub fn wrapping_sub(self, offset: usize) -> Self {
+        Self(self.0.wrapping_sub(offset))
+    }
+
+    #[inline]
+    pub(crate) const fn wrapping_offset_from(self, base: Self) -> usize {
+        self.0.wrapping_sub(base.0)
     }
 
     #[inline]

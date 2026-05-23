@@ -131,12 +131,8 @@ impl<L: ElfLayout> SegmentBuilder for ProgramSegments<'_, L> {
         let region = unsafe {
             mapper.mmap_reserve(layout.preferred_addr, layout.mapped_len, self.use_file)
         }?;
-        let ptr = region.addr().get();
-        Ok(ElfSegments::new(
-            region,
-            ptr.wrapping_sub(layout.min_vaddr),
-            layout.min_vaddr,
-        ))
+        let base = region.addr().wrapping_sub(layout.min_vaddr);
+        Ok(ElfSegments::new(region, base, layout.min_vaddr))
     }
 
     /// Create individual segments from program headers

@@ -7,7 +7,7 @@ use crate::{
     image::{RawDynamic, ScannedDynamic},
     input::PathBuf,
     loader::SharedLifecycleHandler,
-    os::Mapper,
+    os::{Mapper, VmAddr},
     relocation::{RelocationArch, RelocationValueProvider},
     segment::ElfSegments,
     tls::{TlsInfo, TlsResolver},
@@ -153,7 +153,7 @@ impl RuntimeModuleMemory {
 
         Ok(RuntimeModuleMemory {
             sections: runtime_sections.into_boxed_slice(),
-            segments: ElfSegments::from_ranges(region, base, mapped_ranges),
+            segments: ElfSegments::from_ranges(region, VmAddr::new(base), mapped_ranges),
         })
     }
 

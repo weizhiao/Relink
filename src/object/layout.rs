@@ -43,7 +43,7 @@ impl<Arch: RelocationArch> SegmentBuilder for SectionSegments<Arch> {
     fn create_space(&mut self, mapper: Mapper) -> Result<ElfSegments> {
         let len = self.total_size;
         let region = unsafe { mapper.mmap_reserve(None, len, false) }?;
-        let base = region.addr().get();
+        let base = region.addr();
         Ok(ElfSegments::new(region, base, 0))
     }
 

@@ -313,7 +313,7 @@ where
         let mapped_memory = load_bias.wrapping_add(layout.min_vaddr) as *mut c_void;
         let segments = ElfSegments::new(
             MappedRegion::local_alias(mapped_memory, layout.mapped_len, mapper.clone()),
-            load_bias,
+            VmAddr::new(load_bias),
             layout.min_vaddr,
         );
         let parts = borrowed_dynamic_parts::<D, Arch>(

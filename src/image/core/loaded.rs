@@ -307,7 +307,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
 impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     fn read_dynamic_view(
         segments: &ElfSegments,
-        base: usize,
+        base: VmAddr,
         phdr: &ElfPhdr<Arch::Layout>,
     ) -> Result<MappedView<ElfDyn<Arch::Layout>>> {
         let malformed = "PT_DYNAMIC is not directly readable from mapped segments";
@@ -321,12 +321,12 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         let addr = base.wrapping_add(phdr.p_vaddr());
         let byte_len = phdr.p_filesz();
         let region = MappedRegion::local_alias(
-            addr as *mut c_void,
+            addr.as_mut_ptr::<c_void>(),
             byte_len,
             Mapper::from_munmap(|_, _| Ok(())),
         );
         let view = region
-            .read_view::<ElfDyn<Arch::Layout>>(0, VmAddr::new(addr), byte_len)
+            .read_view::<ElfDyn<Arch::Layout>>(0, addr, byte_len)
             .ok_or(crate::ParsePhdrError::malformed(malformed))?;
         if view.is_empty() {
             return Err(crate::ParsePhdrError::malformed(malformed).into());
@@ -365,10 +365,10 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                 memory.1,
                 Mapper::from_munmap(move |addr, len| unsafe { munmap(addr, len) }),
             ),
-            memory.0 as usize,
+            VmAddr::from_ptr(memory.0),
             0,
         );
-        let base = segments.base();
+        let base = segments.base_addr();
         let mut tls_mod_id = None;
         let mut actual_tls_tp_offset = tls_tp_offset;
 

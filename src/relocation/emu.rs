@@ -3,7 +3,7 @@ use crate::{
     Result,
     elf::{ElfRelType, Lifecycle},
     image::ElfCore,
-    os::RegionAccess,
+    os::{RegionAccess, VmAddr},
     segment::ElfSegments,
     tls::{TlsModuleId, TlsTpOffset},
 };
@@ -30,7 +30,7 @@ impl<R: RegionAccess> EmuSegments for ElfSegments<R> {
 /// Image context visible to an emulator.
 pub struct EmuContext<'a, Arch: RelocationArch> {
     name: &'a str,
-    base: usize,
+    base: VmAddr,
     segments: &'a dyn EmuSegments,
     _marker: PhantomData<fn() -> Arch>,
 }
@@ -38,13 +38,13 @@ pub struct EmuContext<'a, Arch: RelocationArch> {
 impl<'a, Arch: RelocationArch> EmuContext<'a, Arch> {
     #[inline]
     pub(crate) fn new<D: 'static, R: RegionAccess>(core: &'a ElfCore<D, Arch, R>) -> Self {
-        Self::from_parts(core.name(), core.base_addr().into_inner(), core.segments())
+        Self::from_parts(core.name(), core.base_addr(), core.segments())
     }
 
     #[inline]
     pub(crate) fn from_parts<R: RegionAccess>(
         name: &'a str,
-        base: usize,
+        base: VmAddr,
         segments: &'a ElfSegments<R>,
     ) -> Self {
         Self {
@@ -64,7 +64,7 @@ impl<'a, Arch: RelocationArch> EmuContext<'a, Arch> {
     /// Runtime base address of the mapped image.
     #[inline]
     pub fn base(&self) -> usize {
-        self.base
+        self.base.get()
     }
 
     /// Returns whether an absolute address is covered by this image.

@@ -82,7 +82,7 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
     }
 
     pub(crate) fn mapped_base(&self) -> usize {
-        self.inner.segments.mapped_base()
+        self.inner.segments.mapped_base().get()
     }
 
     /// Returns the mapped memory length in bytes.

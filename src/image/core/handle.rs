@@ -63,7 +63,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Arch, R> {
                 CoreFiniHandler::Emu(emu) => {
                     let ctx = EmuContext::from_parts(
                         self.path.as_str(),
-                        self.segments.base(),
+                        self.segments.base_addr(),
                         &self.segments,
                     );
                     emu.call_fini(&ctx, &self.fini);
@@ -230,7 +230,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     /// Returns the lowest runtime address covered by this image's mapped slices.
     #[inline]
     pub(crate) fn mapped_base(&self) -> usize {
-        self.inner.segments.mapped_base()
+        self.inner.segments.mapped_base().get()
     }
 
     /// Returns whether `addr` is inside one of this image's mapped slices.
@@ -340,7 +340,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     /// Creates an ElfCore from raw components
     pub(super) unsafe fn from_raw(
         path: PathBuf,
-        base: usize,
+        base: VmAddr,
         dynamic_entries: MappedView<ElfDyn<Arch::Layout>>,
         phdrs: Vec<ElfPhdr<Arch::Layout>>,
         eh_frame_hdr: Option<NonNull<u8>>,

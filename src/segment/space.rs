@@ -43,10 +43,9 @@ impl MappedRange {
 /// All mapped bytes are backed by one region. `ranges` records the parts of
 /// the module-runtime address space owned by this image.
 pub struct ElfSegments<R: RegionAccess = HostRegion> {
-    base: usize,
+    base: VmAddr,
     region: MappedRegion<R>,
     ranges: Box<[MappedRange]>,
-    contiguous: bool,
 }
 
 impl<R: RegionAccess> Debug for ElfSegments<R> {
@@ -59,75 +58,71 @@ impl<R: RegionAccess> Debug for ElfSegments<R> {
         f.debug_struct("ElfSegments")
             .field("base", &format_args!("0x{:x}", self.base()))
             .field("ranges", &ranges)
-            .field("contiguous", &self.contiguous)
+            .field("contiguous", &self.is_contiguous_mapping())
             .finish()
     }
 }
 
 impl<R: RegionAccess> ElfSegments<R> {
-    fn normalize_ranges(mut ranges: Vec<MappedRange>) -> (Box<[MappedRange]>, bool) {
+    fn normalize_ranges(mut ranges: Vec<MappedRange>) -> Box<[MappedRange]> {
         ranges.sort_by_key(|range| (range.offset, range.len));
-        for pair in ranges.windows(2) {
-            let previous = pair[0];
-            let next = pair[1];
+
+        let mut merged = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            let range_end = range.end();
+            let Some(previous_idx) = merged.len().checked_sub(1) else {
+                merged.push(range);
+                continue;
+            };
+
+            let previous = merged[previous_idx];
+            let previous_end = previous.end();
             assert!(
-                previous.end() <= next.offset,
+                previous_end <= range.offset,
                 "ELF mapped ranges must not overlap",
             );
+
+            if previous_end == range.offset {
+                merged[previous_idx].len = range_end
+                    .checked_sub(previous.offset)
+                    .expect("ELF mapped range overflowed");
+            } else {
+                merged.push(range);
+            }
         }
 
-        let contiguous = ranges
-            .windows(2)
-            .all(|pair| pair[0].end() == pair[1].offset);
-        (ranges.into_boxed_slice(), contiguous)
-    }
-
-    #[inline]
-    fn first_range(&self) -> Option<MappedRange> {
-        self.ranges.first().copied()
-    }
-
-    #[inline]
-    fn last_range(&self) -> Option<MappedRange> {
-        self.ranges.last().copied()
+        merged.into_boxed_slice()
     }
 
     #[inline]
     fn contains_range(&self, addr: VmAddr, len: usize) -> bool {
-        let Some(offset) = addr.get().checked_sub(self.base) else {
+        let Some(offset) = addr.checked_offset_from(self.base) else {
             return false;
         };
-        let Some(idx) = self
-            .ranges
-            .partition_point(|range| range.offset <= offset)
-            .checked_sub(1)
-        else {
-            return false;
-        };
-        self.ranges[idx].contains_offset_range(offset, len)
+        let idx = self.ranges.partition_point(|range| range.offset <= offset);
+        idx > 0 && self.ranges[idx - 1].contains_offset_range(offset, len)
     }
 
     #[inline]
-    fn range_base(&self, range: MappedRange) -> usize {
-        self.base.saturating_add(range.offset)
+    fn range_base(&self, range: MappedRange) -> VmAddr {
+        self.base.wrapping_add(range.offset)
     }
 
     #[inline]
     fn region_offset(&self, addr: VmAddr) -> usize {
-        addr.get().wrapping_sub(self.region.addr().get())
+        addr.wrapping_offset_from(self.region.addr())
     }
 
     /// Create a new contiguous [`ElfSegments`] instance whose mapped bytes begin
     /// at the module-relative `offset`.
-    pub(crate) fn new(region: MappedRegion<R>, base: usize, offset: usize) -> Self {
+    pub(crate) fn new(region: MappedRegion<R>, base: VmAddr, offset: usize) -> Self {
         let len = region.len();
         let range = MappedRange::new(offset, len);
-        let (ranges, contiguous) = Self::normalize_ranges(alloc::vec![range]);
+        let ranges = Box::new([range]);
         Self {
             base,
             region,
             ranges,
-            contiguous,
         }
     }
 
@@ -135,19 +130,19 @@ impl<R: RegionAccess> ElfSegments<R> {
     /// backing region.
     pub(crate) fn from_ranges(
         region: MappedRegion<R>,
-        base: usize,
+        base: VmAddr,
         ranges: Vec<(usize, usize)>,
     ) -> Self {
         let ranges = ranges
             .into_iter()
             .map(|(offset, len)| MappedRange::new(offset, len))
             .collect::<Vec<_>>();
-        let (ranges, contiguous) = Self::normalize_ranges(ranges);
+        let ranges = Self::normalize_ranges(ranges);
 
         for range in ranges.iter().copied() {
             let region_offset = base
                 .checked_add(range.offset)
-                .and_then(|addr| addr.checked_sub(region.addr().get()))
+                .and_then(|addr| addr.checked_offset_from(region.addr()))
                 .expect("ELF mapped range precedes its backing region");
             assert!(
                 region_offset
@@ -161,13 +156,12 @@ impl<R: RegionAccess> ElfSegments<R> {
             base,
             region,
             ranges,
-            contiguous,
         }
     }
 
     /// Rebinds the module base address while preserving the existing range layout.
     #[inline]
-    pub(crate) fn set_base(&mut self, base: usize) {
+    pub(crate) fn set_base(&mut self, base: VmAddr) {
         self.base = base;
     }
 
@@ -186,37 +180,34 @@ impl<R: RegionAccess> ElfSegments<R> {
 
     /// Returns the lowest runtime address covered by this image's mapped ranges.
     #[inline]
-    pub fn mapped_base(&self) -> usize {
-        self.first_range()
+    pub fn mapped_base(&self) -> VmAddr {
+        self.ranges
+            .first()
+            .copied()
             .map(|range| self.range_base(range))
-            .unwrap_or(0)
+            .unwrap_or_else(VmAddr::null)
     }
 
     /// Returns the length of the bounding runtime span covered by mapped ranges.
     #[inline]
     pub fn mapped_len(&self) -> usize {
-        let Some((first, last)) = self.first_range().zip(self.last_range()) else {
+        let Some((first, last)) = self
+            .ranges
+            .first()
+            .copied()
+            .zip(self.ranges.last().copied())
+        else {
             return 0;
         };
-        self.range_base(last)
-            .saturating_add(last.len)
-            .saturating_sub(self.range_base(first))
+        last.end().saturating_sub(first.offset)
     }
 
     /// Returns whether `addr` is inside one of this image's mapped ranges.
     #[inline]
     pub fn contains_addr(&self, addr: usize) -> bool {
-        if self.contiguous {
-            let Some(first) = self.first_range() else {
-                return false;
-            };
-            let start = self.base.saturating_add(first.offset);
-            let len = self.mapped_len();
-            return addr.checked_sub(start).is_some_and(|offset| offset < len);
-        }
-
+        let addr = VmAddr::new(addr);
         self.ranges.iter().copied().any(|range| {
-            addr.checked_sub(self.range_base(range))
+            addr.checked_offset_from(self.range_base(range))
                 .is_some_and(|offset| offset < range.len)
         })
     }
@@ -224,7 +215,7 @@ impl<R: RegionAccess> ElfSegments<R> {
     /// Returns whether the mapped memory is one contiguous span with no gaps.
     #[inline]
     pub fn is_contiguous_mapping(&self) -> bool {
-        self.contiguous
+        self.ranges.len() <= 1
     }
 
     #[inline]
@@ -330,14 +321,15 @@ impl<R: RegionAccess> ElfSegments<R> {
         self.write_bytes(addr, bytes)
     }
 
-    /// Gets the base address of the mapped memory.
+    /// Returns the base address of the mapped memory as a raw integer.
     #[inline]
     pub fn base(&self) -> usize {
-        self.base_addr().into_inner()
+        self.base.get()
     }
 
+    /// Returns the base address of the mapped memory.
     #[inline]
-    pub(crate) fn base_addr(&self) -> VmAddr {
-        VmAddr::new(self.base)
+    pub fn base_addr(&self) -> VmAddr {
+        self.base
     }
 }
