@@ -18,7 +18,7 @@ fn main() -> Result<()> {
     )?;
     println!("Loaded executable: {}", exec.name());
     println!("Entry point: 0x{:x}", exec.entry());
-    println!("Base address: 0x{:x}", exec.base());
+    println!("Base address: {}", exec.base());
 
     Ok(())
 }

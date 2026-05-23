@@ -29,22 +29,6 @@ pub(crate) struct RuntimeModuleMemory {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-struct SourceAddress(usize);
-
-impl SourceAddress {
-    #[inline]
-    const fn new(address: usize) -> Self {
-        Self(address)
-    }
-
-    #[inline]
-    fn offset_from(self, base: Self) -> Option<usize> {
-        self.0.checked_sub(base.0)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
 struct RuntimeOffset(usize);
 
 impl RuntimeOffset {
@@ -72,21 +56,23 @@ pub(crate) struct MappedRuntimeMemory {
 #[derive(Clone, Copy)]
 struct RuntimeSectionMemory {
     section: SectionId,
-    source_address: SourceAddress,
+    source_address: VmOffset,
     runtime_offset: RuntimeOffset,
     size: usize,
 }
 
 impl RuntimeSectionMemory {
-    fn source_offset(self, source_address: SourceAddress) -> Option<usize> {
-        let offset = source_address.offset_from(self.source_address)?;
+    fn source_offset(self, source_address: VmOffset) -> Option<usize> {
+        let offset = source_address
+            .checked_offset_from(self.source_address)?
+            .get();
         if self.size == 0 {
             return (offset == 0).then_some(0);
         }
         (offset < self.size).then_some(offset)
     }
 
-    fn runtime_offset(self, source_address: SourceAddress) -> Option<RuntimeOffset> {
+    fn runtime_offset(self, source_address: VmOffset) -> Option<RuntimeOffset> {
         self.source_offset(source_address)
             .and_then(|offset| self.runtime_offset.checked_add(offset))
     }
@@ -117,7 +103,7 @@ impl RuntimeModuleMemory {
             })?;
             placed_sections.push((
                 section_id,
-                SourceAddress::new(metadata.source_address()),
+                VmOffset::new(metadata.source_address()),
                 actual_address,
                 metadata.size(),
             ));
@@ -157,10 +143,7 @@ impl RuntimeModuleMemory {
         })
     }
 
-    fn remap_source_to_runtime_offset(
-        &self,
-        source_address: SourceAddress,
-    ) -> Option<RuntimeOffset> {
+    fn remap_source_to_runtime_offset(&self, source_address: VmOffset) -> Option<RuntimeOffset> {
         self.sections
             .iter()
             .copied()
@@ -260,7 +243,7 @@ where
         match phdr.program_type() {
             ElfProgramType::DYNAMIC => {
                 let offset = runtime
-                    .remap_source_to_runtime_offset(SourceAddress::new(phdr.p_vaddr()))
+                    .remap_source_to_runtime_offset(phdr.p_vaddr())
                     .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_DYNAMIC"))?;
                 let view = runtime
                     .segments
@@ -280,7 +263,7 @@ where
             }
             ElfProgramType::GNU_EH_FRAME => {
                 let offset = runtime
-                    .remap_source_to_runtime_offset(SourceAddress::new(phdr.p_vaddr()))
+                    .remap_source_to_runtime_offset(phdr.p_vaddr())
                     .ok_or_else(|| {
                         LinkerError::runtime_memory("failed to remap PT_GNU_EH_FRAME")
                     })?;
@@ -297,7 +280,7 @@ where
             }
             ElfProgramType::TLS => {
                 let offset = runtime
-                    .remap_source_to_runtime_offset(SourceAddress::new(phdr.p_vaddr()))
+                    .remap_source_to_runtime_offset(phdr.p_vaddr())
                     .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_TLS"))?;
                 let image = runtime
                     .segments
@@ -313,7 +296,7 @@ where
         .ok_or_else(|| LinkerError::runtime_memory("arena-backed module is missing PT_DYNAMIC"))?;
     let original_entry = scanned.ehdr().e_entry();
     let entry = runtime
-        .remap_source_to_runtime_offset(SourceAddress::new(original_entry))
+        .remap_source_to_runtime_offset(VmOffset::new(original_entry))
         .map(|offset| {
             runtime
                 .segments

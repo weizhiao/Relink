@@ -22,18 +22,20 @@ impl VmOffset {
     }
 
     #[inline]
-    pub fn checked_add(self, offset: usize) -> Option<Self> {
-        self.0.checked_add(offset).map(Self)
+    pub fn checked_add(self, bytes: usize) -> Option<Self> {
+        self.0.checked_add(bytes).map(Self)
     }
 
     #[inline]
-    pub fn checked_offset_from(self, base: Self) -> Option<usize> {
-        self.0.checked_sub(base.0)
+    pub fn checked_offset_from(self, base: Self) -> Option<Self> {
+        self.0.checked_sub(base.0).map(Self)
     }
+}
 
+impl core::fmt::Display for VmOffset {
     #[inline]
-    pub fn saturating_offset_from(self, base: Self) -> usize {
-        self.0.saturating_sub(base.0)
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "0x{:x}", self.0)
     }
 }
 
@@ -49,28 +51,22 @@ impl VmAddr {
     }
 
     #[inline]
-    pub(crate) const fn into_inner(self) -> usize {
-        self.0
-    }
-
-    #[inline]
-    pub(crate) fn from_ptr<T>(ptr: *const T) -> Self {
+    pub fn from_ptr<T>(ptr: *const T) -> Self {
         Self(ptr as usize)
     }
 
     #[inline]
-    pub(crate) fn null() -> Self {
-        Self::from_ptr(core::ptr::null::<()>())
+    pub const fn null() -> Self {
+        Self(0)
     }
 
     #[inline]
-    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    pub(crate) const fn as_ptr<T>(self) -> *const T {
+    pub const fn as_ptr<T>(self) -> *const T {
         self.0 as *const T
     }
 
     #[inline]
-    pub(crate) const fn as_mut_ptr<T>(self) -> *mut T {
+    pub const fn as_mut_ptr<T>(self) -> *mut T {
         self.0 as *mut T
     }
 
@@ -95,32 +91,19 @@ impl VmAddr {
     }
 
     #[inline]
-    pub(crate) const fn wrapping_offset_from(self, base: Self) -> VmOffset {
+    pub const fn wrapping_offset_from(self, base: Self) -> VmOffset {
         VmOffset(self.0.wrapping_sub(base.0))
     }
 
     #[inline]
-    pub(crate) const fn addend(self, rhs: isize) -> Self {
+    pub const fn wrapping_add_signed(self, rhs: isize) -> Self {
         Self(self.0.wrapping_add_signed(rhs))
     }
-
-    #[inline]
-    #[cfg(any(feature = "tls", feature = "object"))]
-    pub(crate) const fn relative_to(self, place: usize) -> Self {
-        Self(self.0.wrapping_sub(place))
-    }
 }
 
-impl core::fmt::LowerHex for VmAddr {
+impl core::fmt::Display for VmAddr {
     #[inline]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::LowerHex::fmt(&self.0, f)
-    }
-}
-
-impl core::fmt::UpperHex for VmAddr {
-    #[inline]
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::UpperHex::fmt(&self.0, f)
+        write!(f, "0x{:x}", self.0)
     }
 }

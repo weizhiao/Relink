@@ -54,7 +54,7 @@ where
         let raw = RawObject::from_builder(builder);
 
         logging::info!(
-            "Loaded object: {} at [0x{:x}-0x{:x}]",
+            "Loaded object: {} at [{}-{}]",
             raw.name(),
             raw.mapped_base(),
             raw.mapped_base()

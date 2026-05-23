@@ -1,7 +1,7 @@
 use crate::{
     Result,
     elf::{ElfLayout, ElfPhdr},
-    os::{Mapper, ProtFlags, VmAddr, VmOffset},
+    os::{Mapper, ProtFlags, VmAddr},
 };
 
 use super::{rounddown, roundup};
@@ -39,7 +39,7 @@ impl ELFRelro {
         mapper: Mapper,
     ) -> ELFRelro {
         ELFRelro {
-            addr: base.wrapping_add(VmOffset::new(phdr.p_vaddr())),
+            addr: base.wrapping_add(phdr.p_vaddr()),
             len: phdr.p_memsz(),
             page_size,
             mapper,
@@ -55,7 +55,7 @@ impl ELFRelro {
     /// * `Err(Error)` - If RELRO protection fails
     #[inline]
     pub(crate) fn relro(&self) -> Result<()> {
-        let addr = self.addr.into_inner();
+        let addr = self.addr.get();
         let end = roundup(addr + self.len, self.page_size);
         let start = rounddown(addr, self.page_size);
         unsafe {

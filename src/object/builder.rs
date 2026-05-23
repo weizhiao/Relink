@@ -91,10 +91,7 @@ where
         base: VmAddr,
     ) {
         shdrs.iter_mut().for_each(|shdr| {
-            shdr.set_sh_addr(
-                base.wrapping_add(VmOffset::new(shdr.sh_addr()))
-                    .into_inner(),
-            );
+            shdr.set_sh_addr(base.wrapping_add(VmOffset::new(shdr.sh_addr())).get());
         });
         pltgot.rebase(base);
     }
@@ -110,13 +107,10 @@ where
             if symbol.symbol_type() == ElfSymbolType::FILE || section_index.is_undef() {
                 continue;
             }
-            let section_base =
-                VmAddr::new(shdrs[section_index.index()].sh_addr()).relative_to(base.into_inner());
-            symbol.set_value(
-                section_base
-                    .wrapping_add(VmOffset::new(symbol.st_value()))
-                    .into_inner(),
-            );
+            let section_base = shdrs[section_index.index()]
+                .sh_addr()
+                .wrapping_sub(base.get());
+            symbol.set_value(section_base.wrapping_add(symbol.st_value()));
         }
 
         SymbolTable::from_shdrs(symtab_shdr, shdrs)
@@ -130,12 +124,11 @@ where
         let rels: &mut [ElfRelType<Arch>] = relocation_shdr.content_mut();
         let section_base = VmAddr::new(shdrs[relocation_shdr.sh_info() as usize].sh_addr());
         for rel in rels {
-            rel.set_offset(VmOffset::new(
+            rel.set_offset(
                 section_base
                     .wrapping_add(rel.r_offset())
-                    .relative_to(base.into_inner())
-                    .into_inner(),
-            ));
+                    .wrapping_offset_from(base),
+            );
         }
 
         relocation_shdr.content()

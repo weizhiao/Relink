@@ -114,7 +114,7 @@ pub(crate) struct UsizeEntry<'entry>(&'entry mut usize);
 
 impl UsizeEntry<'_> {
     pub(crate) fn update(&mut self, value: VmAddr) {
-        *self.0 = value.into_inner();
+        *self.0 = value.get();
     }
 
     pub(crate) fn get_addr(&self) -> VmAddr {
@@ -216,8 +216,8 @@ impl PltGotSection {
     }
 
     pub(crate) fn rebase(&mut self, base: VmAddr) {
-        self.got_base = self.got_base.wrapping_add(VmOffset::new(base.into_inner()));
-        self.plt_base = self.plt_base.wrapping_add(VmOffset::new(base.into_inner()));
+        self.got_base = self.got_base.wrapping_add(VmOffset::new(base.get()));
+        self.plt_base = self.plt_base.wrapping_add(VmOffset::new(base.get()));
     }
 
     pub(crate) fn add_got_entry(&mut self, r_sym: usize) -> GotEntry<'_> {

@@ -11,7 +11,7 @@ fn main() -> Result<()> {
         println!("Loading segment for {}:", ctx.path());
         println!("  Type: {:?}", ctx.phdr().program_type());
         println!("  Offset: 0x{:x}", ctx.phdr().p_offset());
-        println!("  Vaddr: 0x{:x}", ctx.phdr().p_vaddr());
+        println!("  Vaddr: {}", ctx.phdr().p_vaddr());
         println!("  Filesz: 0x{:x}", ctx.phdr().p_filesz());
         println!("  Memsz: 0x{:x}", ctx.phdr().p_memsz());
         println!("  Flags: {:?}", ctx.phdr().flags());

@@ -70,9 +70,10 @@ mod enabled {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                     };
                     let tls_val = VmAddr::new(sym.st_value())
-                        .addend(r_addend)
-                        .relative_to(Arch::TLS_DTV_OFFSET);
-                    write_tls_word::<Arch, R>(segments, place, tls_val.into_inner())?;
+                        .wrapping_add_signed(r_addend)
+                        .get()
+                        .wrapping_sub(Arch::TLS_DTV_OFFSET);
+                    write_tls_word::<Arch, R>(segments, place, tls_val)?;
                     return Ok(TlsRelocOutcome::Applied);
                 }
                 return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
@@ -101,8 +102,8 @@ mod enabled {
                     if let Some(tp_offset) = symdef.tls_tp_offset() {
                         let tls_val =
                             VmAddr::new((tp_offset.get() + sym.st_value() as isize) as usize)
-                                .addend(r_addend);
-                        write_tls_word::<Arch, R>(segments, place, tls_val.into_inner())?;
+                                .wrapping_add_signed(r_addend);
+                        write_tls_word::<Arch, R>(segments, place, tls_val.get())?;
                         return Ok(TlsRelocOutcome::Applied);
                     }
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsTpOffset));
@@ -120,7 +121,7 @@ mod enabled {
                             r_addend,
                             symdef.tls_mod_id(),
                             symdef.tls_tp_offset(),
-                            helper.tls_get_addr.into_inner(),
+                            helper.tls_get_addr.get(),
                         );
                         let Some(desc) = helper.resolve_tlsdesc_with_emu(rel, request)? else {
                             return Ok(TlsRelocOutcome::Failed(RelocReason::MissingEmulator));
@@ -137,7 +138,7 @@ mod enabled {
                     if let Some(tp_offset) = symdef.tls_tp_offset() {
                         let tpoff =
                             VmAddr::new((tp_offset.get() + sym.st_value() as isize) as usize)
-                                .addend(r_addend);
+                                .wrapping_add_signed(r_addend);
                         write_tls_word::<Arch, R>(
                             segments,
                             place,
@@ -146,18 +147,19 @@ mod enabled {
                         write_tls_word::<Arch, R>(
                             segments,
                             place.wrapping_add(VmOffset::new(8)),
-                            tpoff.into_inner(),
+                            tpoff.get(),
                         )?;
                         return Ok(TlsRelocOutcome::Applied);
                     }
 
                     if let Some(mod_id) = symdef.tls_mod_id() {
-                        let offset = VmAddr::new(sym.st_value() as usize).addend(r_addend);
+                        let offset =
+                            VmAddr::new(sym.st_value() as usize).wrapping_add_signed(r_addend);
                         let dynamic_arg = Box::new(TlsDescDynamicArg {
-                            tls_get_addr: helper.tls_get_addr.into_inner(),
+                            tls_get_addr: helper.tls_get_addr.get(),
                             ti: TlsIndex {
                                 ti_module: mod_id,
-                                ti_offset: offset.into_inner(),
+                                ti_offset: offset.get(),
                             },
                         });
 
@@ -172,7 +174,7 @@ mod enabled {
                         write_tls_word::<Arch, R>(
                             segments,
                             place.wrapping_add(VmOffset::new(8)),
-                            arg_ptr.into_inner(),
+                            arg_ptr.get(),
                         )?;
                         return Ok(TlsRelocOutcome::Applied);
                     }

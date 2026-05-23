@@ -1,4 +1,4 @@
-use super::{RuntimeModuleMemory, RuntimeOffset, RuntimeSectionMemory, SectionId, SourceAddress};
+use super::{RuntimeModuleMemory, RuntimeOffset, RuntimeSectionMemory, SectionId};
 use crate::linker::scan::{DataAccess, LinkPlan, ModuleId};
 use crate::{
     LinkerError, RelocReason, Result,
@@ -30,7 +30,7 @@ struct RelocationSection<'a> {
 #[derive(Clone, Copy)]
 struct RelocationEntryInfo {
     r_type: ElfRelocationType,
-    offset: SourceAddress,
+    offset: VmOffset,
     addend: RelocationAddend,
 }
 
@@ -63,7 +63,7 @@ impl RelocationEntryInfo {
     {
         Self {
             r_type: entry.r_type(),
-            offset: SourceAddress::new(entry.r_offset().get()),
+            offset: entry.r_offset(),
             addend: relocation_addend::<Arch>(entry),
         }
     }
@@ -86,7 +86,7 @@ impl RuntimeModuleMemory {
             )
             .into());
         };
-        if let Some(offset) = section.runtime_offset(SourceAddress::new(value)) {
+        if let Some(offset) = section.runtime_offset(VmOffset::new(value)) {
             return Ok(offset.get());
         }
         Err(LinkerError::metadata_rewrite(
@@ -127,7 +127,7 @@ impl RuntimeModuleMemory {
     fn relocation_section(
         &self,
         target: Option<SectionId>,
-        source_address: SourceAddress,
+        source_address: VmOffset,
     ) -> Result<RelocationSection<'_>> {
         if let Some(section_id) = target {
             return self.relocation_in_section(section_id, source_address);
@@ -146,7 +146,7 @@ impl RuntimeModuleMemory {
     fn relocation_in_section(
         &self,
         section_id: SectionId,
-        source_address: SourceAddress,
+        source_address: VmOffset,
     ) -> Result<RelocationSection<'_>> {
         let section = self.section(section_id).ok_or_else(|| {
             LinkerError::metadata_rewrite("relocation target section is not arena-backed")
@@ -161,7 +161,7 @@ impl RuntimeModuleMemory {
         })
     }
 
-    fn addr_to_section(&self, source_address: SourceAddress) -> Option<SectionId> {
+    fn addr_to_section(&self, source_address: VmOffset) -> Option<SectionId> {
         self.sections.iter().find_map(|section| {
             section
                 .source_offset(source_address)
@@ -170,7 +170,7 @@ impl RuntimeModuleMemory {
     }
 
     fn remap_relocation_addend(&self, site: RelocationSite) -> Result<(RuntimeOffset, isize)> {
-        let source_address = SourceAddress::new(
+        let source_address = VmOffset::new(
             usize::try_from(
                 site.addend
                     .expect("allocated relocation should carry an addend"),
@@ -208,7 +208,7 @@ impl RuntimeModuleMemory {
             | ElfDynamicTag::VERSYM
             | ElfDynamicTag::VERNEED
             | ElfDynamicTag::VERDEF => self
-                .remap_source_to_runtime_offset(SourceAddress::new(value))
+                .remap_source_to_runtime_offset(VmOffset::new(value))
                 .map(Some)
                 .ok_or_else(|| {
                     LinkerError::metadata_rewrite(
@@ -627,7 +627,7 @@ where
         addend,
         site.place.get(),
         |_| Ok(()),
-        |value| write_bytes(&value.into_inner().to_ne_bytes()),
+        |value| write_bytes(&value.get().to_ne_bytes()),
         |value| write_bytes(&value.into_inner().to_ne_bytes()),
         |value| write_bytes(&value.into_inner().to_ne_bytes()),
     )
@@ -663,7 +663,7 @@ where
         addend,
     )? {
         let runtime_target = runtime
-            .remap_source_to_runtime_offset(SourceAddress::new(source_target))
+            .remap_source_to_runtime_offset(VmOffset::new(source_target))
             .ok_or_else(|| {
                 LinkerError::metadata_rewrite(
                     "retained relocation indirect target does not map into arena-backed memory",

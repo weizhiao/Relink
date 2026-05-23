@@ -154,7 +154,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut ElfDyn) {
         let phdrs = unsafe { &*core::ptr::slice_from_raw_parts(ph, phnum as usize) };
         for phdr in phdrs {
             if phdr.program_type() == ElfProgramType::DYNAMIC {
-                base = dynv as usize - phdr.p_vaddr();
+                base = dynv as usize - phdr.p_vaddr().get();
                 break;
             }
         }

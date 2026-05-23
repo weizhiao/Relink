@@ -388,7 +388,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Debug for ElfCore<D, Arch, R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfCore")
             .field("path", &self.inner.path)
-            .field("base", &format_args!("0x{:x}", self.base()))
+            .field("base", &format_args!("{}", self.base()))
             .field("mapped_len", &self.mapped_len())
             .field("tls_mod_id", &self.tls_mod_id())
             .finish()

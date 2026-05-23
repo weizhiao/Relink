@@ -173,9 +173,7 @@ where
     unsafe {
         segments.write_value(
             addr,
-            RelocValue::new(<Arch::Layout as ElfLayout>::Word::from_usize(
-                value.into_inner(),
-            )),
+            RelocValue::new(<Arch::Layout as ElfLayout>::Word::from_usize(value.get())),
         )
     }
 }
@@ -192,8 +190,7 @@ where
     unsafe {
         segments.update_value::<_>(addr, |word: <Arch::Layout as ElfLayout>::Word| {
             <Arch::Layout as ElfLayout>::Word::from_usize(
-                base.wrapping_add(VmOffset::new(word.to_usize()))
-                    .into_inner(),
+                base.wrapping_add(VmOffset::new(word.to_usize())).get(),
             )
         })
     }
@@ -242,7 +239,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                 failure_reason = RelocReason::UnknownSymbol;
             } else if unlikely(r_type == Arch::IRELATIVE) {
                 let r_addend = rel.r_addend(base);
-                let addr = base.addend(r_addend);
+                let addr = base.wrapping_add_signed(r_addend);
                 if !Arch::SUPPORTS_NATIVE_RUNTIME {
                     if let Some(resolved) = helper.resolve_ifunc_with_emu(rel, addr)? {
                         write_reloc_addr::<Arch, R>(segments, place, resolved)?;
@@ -294,7 +291,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                     write_reloc_addr::<Arch, R>(
                         segments,
                         base.wrapping_add(rel.r_offset()),
-                        base.addend(r_addend),
+                        base.wrapping_add_signed(r_addend),
                     )?;
                 }
             }
@@ -381,7 +378,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                 // Handle GOT and symbolic relocations
                 if let Some(symbol) = helper.find_symbol(r_sym) {
                     let r_addend = rel.r_addend(base);
-                    write_reloc_addr::<Arch, R>(segments, place, symbol.addend(r_addend))?;
+                    write_reloc_addr::<Arch, R>(
+                        segments,
+                        place,
+                        symbol.wrapping_add_signed(r_addend),
+                    )?;
                     continue;
                 }
                 failure_reason = RelocReason::UnknownSymbol;
@@ -401,7 +402,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                 failure_reason = RelocReason::UnknownSymbol;
             } else if r_type == Arch::IRELATIVE {
                 let r_addend = rel.r_addend(base);
-                let addr = base.addend(r_addend);
+                let addr = base.wrapping_add_signed(r_addend);
                 if !Arch::SUPPORTS_NATIVE_RUNTIME {
                     if let Some(resolved) = helper.resolve_ifunc_with_emu(rel, addr)? {
                         write_reloc_addr::<Arch, R>(segments, place, resolved)?;

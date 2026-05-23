@@ -3,7 +3,7 @@ use crate::{
     ParsePhdrError, Result,
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
     input::{ElfReader, PathBuf},
-    os::{MappedView, Mapper, VmOffset},
+    os::{MappedView, Mapper},
     segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
     tls::{TlsInfo, TlsResolver},
 };
@@ -150,7 +150,7 @@ where
             ElfProgramType::DYNAMIC => {
                 self.dynamic = Some(
                     self.segments
-                        .read_view::<ElfDyn<L>>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
+                        .read_view::<ElfDyn<L>>(phdr.p_vaddr(), phdr.p_filesz())
                         .ok_or_else(|| {
                             ParsePhdrError::malformed(
                                 "PT_DYNAMIC is not directly readable from mapped segments",
@@ -173,7 +173,7 @@ where
             ElfProgramType::GNU_EH_FRAME => {
                 self.eh_frame_hdr = Some(
                     self.segments
-                        .borrowed_ptr::<u8>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
+                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())
                         .ok_or_else(|| {
                             ParsePhdrError::malformed(
                                 "PT_GNU_EH_FRAME is not directly readable from mapped segments",
@@ -184,7 +184,7 @@ where
             ElfProgramType::TLS => {
                 let tls_image = self
                     .segments
-                    .read_view::<u8>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
+                    .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
                     .ok_or_else(|| ParsePhdrError::malformed("PT_TLS image is malformed"))?;
                 self.tls_info = Some(TlsInfo::new(phdr, tls_image.as_slice()));
             }
@@ -196,7 +196,7 @@ where
     fn read_interp(&self, phdr: &ElfPhdr<L>) -> Result<&'static str> {
         let view = self
             .segments
-            .read_view::<u8>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
+            .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
             .ok_or_else(|| {
                 ParsePhdrError::malformed("PT_INTERP is not directly readable from mapped segments")
             })?;
@@ -237,7 +237,7 @@ where
             }
             if let Some(mapped) = self
                 .segments
-                .read_view::<ElfPhdr<L>>(VmOffset::new(phdr.p_vaddr()), phdr.p_memsz())
+                .read_view::<ElfPhdr<L>>(phdr.p_vaddr(), phdr.p_memsz())
             {
                 return Ok(ElfPhdrs::Mapped(mapped));
             }
@@ -257,10 +257,7 @@ where
                 let Some(phdr_vaddr) = phdr.p_vaddr().checked_add(phdr_start - seg_start) else {
                     continue;
                 };
-                if let Some(mapped) = self
-                    .segments
-                    .read_view::<ElfPhdr<L>>(VmOffset::new(phdr_vaddr), phdr_size)
-                {
+                if let Some(mapped) = self.segments.read_view::<ElfPhdr<L>>(phdr_vaddr, phdr_size) {
                     return Ok(ElfPhdrs::Mapped(mapped));
                 }
             }

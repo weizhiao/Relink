@@ -995,7 +995,7 @@ fn vaddr_to_file_offset<L: ElfLayout>(vaddr: usize, phdrs: &[ElfPhdr<L>]) -> Res
         .iter()
         .filter(|phdr| phdr.program_type() == ElfProgramType::LOAD)
     {
-        let seg_start = phdr.p_vaddr();
+        let seg_start = phdr.p_vaddr().get();
         let seg_end = seg_start
             .checked_add(phdr.p_filesz())
             .ok_or(ParseDynamicError::AddressOverflow)?;

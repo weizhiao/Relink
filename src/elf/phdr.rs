@@ -3,7 +3,7 @@
 //! This module contains program-header views and storage used while loading ELF segments.
 
 use super::defs::{ElfLayout, ElfPhdrRaw, ElfProgramFlags, ElfProgramType, NativeElfLayout};
-use crate::os::MappedView;
+use crate::os::{MappedView, VmOffset};
 use alloc::vec::Vec;
 
 /// ELF program header describing segments to be loaded into memory.
@@ -20,7 +20,7 @@ impl<L: ElfLayout> ElfPhdr<L> {
         program_type: ElfProgramType,
         flags: ElfProgramFlags,
         p_offset: usize,
-        p_vaddr: usize,
+        p_vaddr: VmOffset,
         p_paddr: usize,
         p_filesz: usize,
         p_memsz: usize,
@@ -30,7 +30,7 @@ impl<L: ElfLayout> ElfPhdr<L> {
         phdr.set_p_type(program_type.raw());
         phdr.set_p_flags(flags.bits());
         phdr.set_p_offset(p_offset);
-        phdr.set_p_vaddr(p_vaddr);
+        phdr.set_p_vaddr(p_vaddr.get());
         phdr.set_p_paddr(p_paddr);
         phdr.set_p_filesz(p_filesz);
         phdr.set_p_memsz(p_memsz);
@@ -56,10 +56,10 @@ impl<L: ElfLayout> ElfPhdr<L> {
         self.phdr.p_offset()
     }
 
-    /// Returns the segment virtual address (`p_vaddr`) as a native-sized value.
+    /// Returns the segment virtual address (`p_vaddr`) as an image virtual offset.
     #[inline]
-    pub fn p_vaddr(&self) -> usize {
-        self.phdr.p_vaddr()
+    pub fn p_vaddr(&self) -> VmOffset {
+        VmOffset::new(self.phdr.p_vaddr())
     }
 
     /// Returns the segment physical address (`p_paddr`) as a native-sized value.
@@ -106,8 +106,8 @@ impl<L: ElfLayout> ElfPhdr<L> {
 
     /// Sets the segment virtual address (`p_vaddr`).
     #[inline]
-    pub fn set_p_vaddr(&mut self, p_vaddr: usize) {
-        self.phdr.set_p_vaddr(p_vaddr);
+    pub fn set_p_vaddr(&mut self, p_vaddr: VmOffset) {
+        self.phdr.set_p_vaddr(p_vaddr.get());
     }
 
     /// Sets the segment physical address (`p_paddr`).
@@ -173,6 +173,7 @@ impl<L: ElfLayout> ElfPhdrs<L> {
 #[cfg(test)]
 mod tests {
     use super::{ElfPhdr, ElfProgramFlags, ElfProgramType};
+    use crate::os::VmOffset;
 
     #[test]
     fn owned_phdr_round_trips_and_mutates() {
@@ -180,7 +181,7 @@ mod tests {
             ElfProgramType::LOAD,
             ElfProgramFlags::READ | ElfProgramFlags::WRITE,
             1,
-            2,
+            VmOffset::new(2),
             3,
             4,
             5,
@@ -190,7 +191,7 @@ mod tests {
         assert_eq!(phdr.program_type(), ElfProgramType::LOAD);
         assert_eq!(phdr.flags(), ElfProgramFlags::READ | ElfProgramFlags::WRITE);
         assert_eq!(phdr.p_offset(), 1);
-        assert_eq!(phdr.p_vaddr(), 2);
+        assert_eq!(phdr.p_vaddr(), VmOffset::new(2));
         assert_eq!(phdr.p_paddr(), 3);
         assert_eq!(phdr.p_filesz(), 4);
         assert_eq!(phdr.p_memsz(), 5);
@@ -199,7 +200,7 @@ mod tests {
         phdr.set_program_type(ElfProgramType::DYNAMIC);
         phdr.set_flags(ElfProgramFlags::READ);
         phdr.set_p_offset(7);
-        phdr.set_p_vaddr(8);
+        phdr.set_p_vaddr(VmOffset::new(8));
         phdr.set_p_paddr(9);
         phdr.set_p_filesz(10);
         phdr.set_p_memsz(11);
@@ -208,7 +209,7 @@ mod tests {
         assert_eq!(phdr.program_type(), ElfProgramType::DYNAMIC);
         assert_eq!(phdr.flags(), ElfProgramFlags::READ);
         assert_eq!(phdr.p_offset(), 7);
-        assert_eq!(phdr.p_vaddr(), 8);
+        assert_eq!(phdr.p_vaddr(), VmOffset::new(8));
         assert_eq!(phdr.p_paddr(), 9);
         assert_eq!(phdr.p_filesz(), 10);
         assert_eq!(phdr.p_memsz(), 11);

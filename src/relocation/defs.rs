@@ -69,7 +69,7 @@ pub(crate) unsafe fn resolve_ifunc(ptr: NonNull<u8>) -> VmAddr {
 impl VmAddr {
     #[inline]
     pub(crate) fn try_into_sword32(self) -> core::result::Result<RelocSWord32, RelocReason> {
-        i32::try_from(self.into_inner() as isize)
+        i32::try_from(self.get() as isize)
             .map(RelocValue::new)
             .map_err(|_| RelocReason::IntConversionOutOfRange)
     }

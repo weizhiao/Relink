@@ -101,9 +101,7 @@ where
             return Ok(None);
         };
         let ctx = EmuRelocationContext::new(self.core, rel);
-        emu.resolve_ifunc(&ctx, resolver.into_inner())
-            .map(VmAddr::new)
-            .map(Some)
+        emu.resolve_ifunc(&ctx, resolver).map(Some)
     }
 
     #[inline]

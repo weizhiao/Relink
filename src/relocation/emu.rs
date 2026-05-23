@@ -200,8 +200,11 @@ impl TlsDescEmuValue {
 /// the complete guest-side behavior for every hook in this trait.
 pub trait Emulator<Arch: RelocationArch>: Send + Sync + 'static {
     /// Executes an IFUNC resolver in the guest environment and returns its value.
-    fn resolve_ifunc(&self, ctx: &EmuRelocationContext<'_, Arch>, resolver: usize)
-    -> Result<usize>;
+    fn resolve_ifunc(
+        &self,
+        ctx: &EmuRelocationContext<'_, Arch>,
+        resolver: VmAddr,
+    ) -> Result<VmAddr>;
 
     /// Executes `.init` / `.init_array` functions in the guest environment.
     fn call_init(&self, ctx: &EmuContext<'_, Arch>, lifecycle: &Lifecycle) -> Result<()>;

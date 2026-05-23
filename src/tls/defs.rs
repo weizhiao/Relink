@@ -49,7 +49,7 @@ impl TlsInfo {
     pub fn new<L: ElfLayout>(phdr: &ElfPhdr<L>, image: impl Into<Box<[u8]>>) -> Self {
         assert_eq!(phdr.program_type(), ElfProgramType::TLS);
         Self {
-            vaddr: phdr.p_vaddr(),
+            vaddr: phdr.p_vaddr().get(),
             filesz: phdr.p_filesz(),
             memsz: phdr.p_memsz(),
             align: phdr.p_align(),

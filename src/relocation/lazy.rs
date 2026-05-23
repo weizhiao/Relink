@@ -79,8 +79,7 @@ mod enabled {
                     base.wrapping_add(rel.r_offset()),
                     |word: <Arch::Layout as ElfLayout>::Word| {
                         <Arch::Layout as ElfLayout>::Word::from_usize(
-                            base.wrapping_add(VmOffset::new(word.to_usize()))
-                                .into_inner(),
+                            base.wrapping_add(VmOffset::new(word.to_usize())).get(),
                         )
                     },
                 )?
@@ -222,14 +221,14 @@ mod enabled {
             if segments
                 .write_value(
                     dylib.segments.base().wrapping_add(rela.r_offset()),
-                    RelocValue::new(symbol.into_inner()),
+                    RelocValue::new(symbol.get()),
                 )
                 .is_err()
             {
                 invalid_state(dylib.path.as_str(), "lazy binding write failed");
             }
         };
-        symbol.into_inner()
+        symbol.get()
     }
 }
 

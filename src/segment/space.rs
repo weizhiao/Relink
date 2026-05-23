@@ -56,7 +56,7 @@ impl<R: RegionAccess> Debug for ElfSegments<R> {
             .map(|range| (range.offset, range.len))
             .collect::<Vec<_>>();
         f.debug_struct("ElfSegments")
-            .field("base", &format_args!("0x{:x}", self.base()))
+            .field("base", &format_args!("{}", self.base()))
             .field("ranges", &ranges)
             .field("contiguous", &self.is_contiguous_mapping())
             .finish()
@@ -85,7 +85,8 @@ impl<R: RegionAccess> ElfSegments<R> {
             if previous_end == range.offset {
                 merged[previous_idx].len = range_end
                     .checked_offset_from(previous.offset)
-                    .expect("ELF mapped range overflowed");
+                    .expect("ELF mapped range overflowed")
+                    .get();
             } else {
                 merged.push(range);
             }
@@ -199,7 +200,10 @@ impl<R: RegionAccess> ElfSegments<R> {
         else {
             return 0;
         };
-        last.end().saturating_offset_from(first.offset)
+        last.end()
+            .checked_offset_from(first.offset)
+            .expect("ELF mapped range end precedes its start")
+            .get()
     }
 
     /// Returns whether `addr` is inside one of this image's mapped ranges.

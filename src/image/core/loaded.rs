@@ -102,7 +102,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedCore<D, 
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LoadedCore")
             .field("name", &self.core.name())
-            .field("base", &format_args!("0x{:x}", self.core.base()))
+            .field("base", &format_args!("{}", self.core.base()))
             .field(
                 "deps",
                 &self
@@ -311,14 +311,14 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         phdr: &ElfPhdr<Arch::Layout>,
     ) -> Result<MappedView<ElfDyn<Arch::Layout>>> {
         let malformed = "PT_DYNAMIC is not directly readable from mapped segments";
-        if let Some(view) = segments
-            .read_view::<ElfDyn<Arch::Layout>>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
+        if let Some(view) =
+            segments.read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())
             && !view.is_empty()
         {
             return Ok(view);
         }
 
-        let addr = base.wrapping_add(VmOffset::new(phdr.p_vaddr()));
+        let addr = base.wrapping_add(phdr.p_vaddr());
         let byte_len = phdr.p_filesz();
         let region = MappedRegion::local_alias(
             addr.as_mut_ptr::<c_void>(),
@@ -384,7 +384,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                 }
                 ElfProgramType::GNU_EH_FRAME => {
                     eh_frame_hdr = segments
-                        .borrowed_ptr::<u8>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
+                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())
                         .ok_or(crate::ParsePhdrError::malformed(
                             "PT_GNU_EH_FRAME is not directly readable from mapped segments",
                         ))
@@ -399,7 +399,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
 
         if let Some(phdr) = tls_phdr {
             let template = segments
-                .read_view::<u8>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
+                .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
                 .ok_or(crate::ParsePhdrError::malformed(
                     "PT_TLS image is malformed",
                 ))?;

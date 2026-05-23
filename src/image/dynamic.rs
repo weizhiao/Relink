@@ -141,7 +141,7 @@ where
 impl<D, Arch: RelocationArch, R: RegionAccess> core::fmt::Debug for RawDynamic<D, Arch, R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawDynamic")
-            .field("entry", &format_args!("0x{:x}", self.entry.into_inner()))
+            .field("entry", &format_args!("0x{:x}", self.entry.get()))
             .field("module", &self.module)
             .field("extra", &self.extra)
             .finish()
@@ -152,7 +152,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     /// Gets the entry point of the ELF object.
     #[inline]
     pub fn entry(&self) -> usize {
-        self.entry_addr().into_inner()
+        self.entry_addr().get()
     }
 
     #[inline]

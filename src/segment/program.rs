@@ -73,7 +73,8 @@ pub(crate) fn parse_segments(
     // Find the minimum and maximum virtual addresses of LOAD segments
     for phdr in phdrs {
         if phdr.program_type() == ElfProgramType::LOAD {
-            if phdr.p_vaddr() % page_size != phdr.p_offset() % page_size {
+            let vaddr_start = phdr.p_vaddr();
+            if vaddr_start.get() % page_size != phdr.p_offset() % page_size {
                 return Err(ParsePhdrError::PageAlignmentMismatch { page_size }.into());
             }
 
@@ -82,13 +83,13 @@ pub(crate) fn parse_segments(
                 return Err(ParsePhdrError::malformed("PT_LOAD p_filesz exceeds p_memsz").into());
             }
 
-            let vaddr_start = phdr.p_vaddr();
-            let vaddr_end =
-                phdr.p_vaddr()
-                    .checked_add(phdr.p_memsz())
-                    .ok_or(ParsePhdrError::malformed(
-                        "PT_LOAD virtual address range overflows",
-                    ))?;
+            let vaddr_end = vaddr_start
+                .checked_add(phdr.p_memsz())
+                .map(VmOffset::get)
+                .ok_or(ParsePhdrError::malformed(
+                    "PT_LOAD virtual address range overflows",
+                ))?;
+            let vaddr_start = vaddr_start.get();
             if vaddr_start < min_vaddr {
                 min_vaddr = vaddr_start;
             }
@@ -163,8 +164,9 @@ impl<L: ElfLayout> ElfPhdr<L> {
     #[inline]
     fn create_segment(&self, page_size: usize) -> ElfSegment {
         // Align segment boundaries to page size
-        let min_vaddr = rounddown(self.p_vaddr(), page_size);
-        let max_vaddr = roundup(self.p_vaddr() + self.p_memsz(), page_size);
+        let p_vaddr = self.p_vaddr().get();
+        let min_vaddr = rounddown(p_vaddr, page_size);
+        let max_vaddr = roundup(p_vaddr + self.p_memsz(), page_size);
         let memsz = max_vaddr - min_vaddr;
         let prot = segment_prot(self.flags());
 

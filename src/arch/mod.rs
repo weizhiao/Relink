@@ -136,7 +136,7 @@ pub(crate) mod object;
 pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: crate::os::VmAddr) {
     // 这是安全的，延迟绑定时库是存在的
     unsafe {
-        got.add(DYLIB_OFFSET).write(dylib.into_inner());
+        got.add(DYLIB_OFFSET).write(dylib.get());
         got.add(RESOLVE_FUNCTION_OFFSET)
             .write(dl_runtime_resolve as *const () as usize);
     }

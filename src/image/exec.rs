@@ -49,7 +49,7 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
 
     /// Returns the executable entry point address.
     pub fn entry(&self) -> usize {
-        self.entry_addr().into_inner()
+        self.entry_addr().get()
     }
 
     pub(crate) fn entry_addr(&self) -> VmAddr {
@@ -302,7 +302,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
     /// Returns the entry point of the executable.
     #[inline]
     pub fn entry(&self) -> usize {
-        self.entry.into_inner()
+        self.entry.get()
     }
 
     /// Returns the loader source path or caller-provided source identifier.

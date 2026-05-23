@@ -66,8 +66,8 @@ impl ElfSegment {
         };
 
         logging::trace!(
-            "[Mmap] address: 0x{:x}, length: {}, flags: {:?}, zero_size: {}, map_info: {:?}",
-            addr.into_inner(),
+            "[Mmap] address: {}, length: {}, flags: {:?}, zero_size: {}, map_info: {:?}",
+            addr,
             len,
             prot,
             self.zero_size,
@@ -120,8 +120,8 @@ impl ElfSegment {
             unsafe { mapper.mprotect(addr, len, self.prot) }?;
 
             logging::trace!(
-                "[Mprotect] address: 0x{:x}, length: {}, prot: {:?}",
-                addr.into_inner(),
+                "[Mprotect] address: {}, length: {}, prot: {:?}",
+                addr,
                 len,
                 self.prot,
             );
@@ -143,7 +143,7 @@ impl ElfSegment {
             let zero_start = space
                 .base()
                 .wrapping_add(self.segment_offset(self.content_size))
-                .into_inner();
+                .get();
             let zero_end = roundup(zero_start, self.page_size);
             let write_len = zero_end - zero_start;
             space.zero_bytes(VmAddr::new(zero_start), write_len)?;
@@ -224,12 +224,12 @@ pub(crate) trait SegmentBuilder {
         let mut last_addr = space
             .primary_region()
             .map(|(memory, _)| memory as usize)
-            .unwrap_or_else(|| base.into_inner());
+            .unwrap_or_else(|| base.get());
 
         for segment in segments.iter_mut() {
             #[cfg(windows)]
             if object.as_fd().is_some() {
-                let addr = segment.vm_addr(base).into_inner();
+                let addr = segment.vm_addr(base).get();
                 let len = segment.len;
                 if addr > last_addr {
                     crate::os::virtual_free(last_addr, addr - last_addr)?;
