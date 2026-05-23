@@ -2,7 +2,7 @@ use core::{mem::size_of, ptr::NonNull};
 
 use crate::{
     ByteRepr, Result,
-    os::{ProtFlags, VmAddr, VmOffset},
+    os::{ProtFlags, VmAddr},
     sync::Arc,
 };
 
@@ -14,7 +14,6 @@ pub struct MappedRegion<R: RegionAccess = HostRegion>(Arc<R>);
 
 /// A typed borrowed view of a mapped region.
 pub(crate) struct MappedView<T: 'static> {
-    source_addr: VmAddr,
     slice: &'static [T],
 }
 
@@ -28,10 +27,7 @@ impl<R: RegionAccess> Clone for MappedRegion<R> {
 impl<T: 'static> Clone for MappedView<T> {
     #[inline]
     fn clone(&self) -> Self {
-        Self {
-            source_addr: self.source_addr,
-            slice: self.slice,
-        }
+        Self { slice: self.slice }
     }
 }
 
@@ -100,7 +96,6 @@ impl<R: RegionAccess> MappedRegion<R> {
     pub(crate) fn read_view<T: ByteRepr + 'static>(
         &self,
         offset: usize,
-        source_addr: VmAddr,
         byte_len: usize,
     ) -> Option<MappedView<T>> {
         let elem_size = size_of::<T>();
@@ -109,10 +104,7 @@ impl<R: RegionAccess> MappedRegion<R> {
         }
 
         if byte_len == 0 {
-            return Some(MappedView {
-                source_addr,
-                slice: &[],
-            });
+            return Some(MappedView { slice: &[] });
         }
 
         let Some(bytes) = (unsafe { self.borrow_bytes(offset, byte_len) }) else {
@@ -123,10 +115,7 @@ impl<R: RegionAccess> MappedRegion<R> {
             return None;
         }
 
-        Some(MappedView {
-            source_addr,
-            slice: values,
-        })
+        Some(MappedView { slice: values })
     }
 
     /// Returns a host-accessible pointer without checking bounds.
@@ -147,10 +136,7 @@ impl<R: RegionAccess> MappedRegion<R> {
 impl<T: 'static> MappedView<T> {
     #[inline]
     pub(crate) const fn empty() -> Self {
-        Self {
-            source_addr: VmAddr::new(0),
-            slice: &[],
-        }
+        Self { slice: &[] }
     }
 
     #[inline]
@@ -166,12 +152,6 @@ impl<T: 'static> MappedView<T> {
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.as_slice().is_empty()
-    }
-
-    #[inline]
-    pub(crate) fn source_end(&self) -> Option<VmAddr> {
-        let byte_len = self.len().checked_mul(size_of::<T>())?;
-        self.source_addr.checked_add(VmOffset::new(byte_len))
     }
 }
 

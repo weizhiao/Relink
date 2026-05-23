@@ -444,6 +444,7 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
         dynrel: Option<MappedView<ElfRelType<Arch>>>,
         relr: Option<MappedView<ElfRelr<Arch::Layout>>>,
         rela_count: Option<NonZeroUsize>,
+        pltrel_is_dynrel_tail: bool,
     ) -> Result<Self> {
         let pltrel = pltrel.unwrap_or_else(MappedView::empty);
         let dynrel = dynrel.unwrap_or_else(MappedView::empty);
@@ -478,10 +479,7 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
             };
             let temp_dynrel_len = dynrel.len() - nrelative;
 
-            let dynrel_len = if matches!(
-                (dynrel.source_end(), pltrel.source_end()),
-                (Some(dynrel_end), Some(pltrel_end)) if dynrel_end == pltrel_end
-            ) {
+            let dynrel_len = if pltrel_is_dynrel_tail {
                 // If contiguous, exclude pltrel entries from dynrel
                 temp_dynrel_len.checked_sub(pltrel.len()).ok_or(
                     ParseDynamicError::MalformedRelocationTable {
@@ -518,7 +516,7 @@ mod tests {
         ByteRepr, Error, ParseDynamicError,
         arch::NativeArch,
         elf::ElfRelType,
-        os::{MappedRegion, MappedView, Mapper, VmAddr},
+        os::{MappedRegion, MappedView, Mapper},
     };
     use alloc::boxed::Box;
     use core::num::NonZeroUsize;
@@ -534,9 +532,7 @@ mod tests {
             byte_len,
             Mapper::from_munmap(|_, _| Ok(())),
         );
-        region
-            .read_view::<T>(0, VmAddr::new(slice.as_ptr() as usize), byte_len)
-            .unwrap()
+        region.read_view::<T>(0, byte_len).unwrap()
     }
 
     #[test]
@@ -547,6 +543,7 @@ mod tests {
             Some(mapped_view(&dynrel[..])),
             None,
             NonZeroUsize::new(2),
+            false,
         ) {
             Ok(_) => panic!("relative count should be validated"),
             Err(err) => err,
@@ -566,6 +563,7 @@ mod tests {
             Some(mapped_view(&dynrel[..])),
             None,
             NonZeroUsize::new(1),
+            true,
         ) {
             Ok(_) => panic!("contiguous PLT suffix should fit in the non-relative tail"),
             Err(err) => err,

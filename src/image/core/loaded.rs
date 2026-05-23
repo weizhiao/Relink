@@ -326,7 +326,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
             Mapper::from_munmap(|_, _| Ok(())),
         );
         let view = region
-            .read_view::<ElfDyn<Arch::Layout>>(0, addr, byte_len)
+            .read_view::<ElfDyn<Arch::Layout>>(0, byte_len)
             .ok_or(crate::ParsePhdrError::malformed(malformed))?;
         if view.is_empty() {
             return Err(crate::ParsePhdrError::malformed(malformed).into());

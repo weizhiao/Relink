@@ -39,7 +39,6 @@ fn flags_to_idx(flags: ElfSectionFlags) -> usize {
     prot_to_idx(section_prot(flags))
 }
 
-#[inline]
 impl<Arch: RelocationArch> SegmentBuilder for SectionSegments<Arch> {
     fn create_space(&mut self, mapper: Mapper) -> Result<ElfSegments> {
         let len = self.total_size;

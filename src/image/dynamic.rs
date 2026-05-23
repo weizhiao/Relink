@@ -398,6 +398,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             dynamic.dynrel.clone(),
             dynamic.relr.clone(),
             dynamic.rel_count,
+            dynamic.pltrel_is_dynrel_tail,
         )?;
 
         let static_tls = force_static_tls | dynamic.static_tls;

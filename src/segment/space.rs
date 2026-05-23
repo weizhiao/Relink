@@ -232,7 +232,7 @@ impl<R: RegionAccess> ElfSegments<R> {
             return None;
         }
         let region_offset = self.region_offset(addr);
-        self.region.read_view(region_offset, addr, byte_len)
+        self.region.read_view(region_offset, byte_len)
     }
 
     #[inline]

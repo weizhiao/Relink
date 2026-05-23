@@ -94,6 +94,11 @@ pub(crate) struct ParsedDynamic {
     pub(crate) needed_libs: Vec<NonZeroUsize>,
 }
 
+#[inline]
+fn dynamic_table_end(offset: Option<NonZeroUsize>, size: Option<NonZeroUsize>) -> Option<usize> {
+    offset?.get().checked_add(size.map_or(0, NonZeroUsize::get))
+}
+
 impl ParsedDynamic {
     #[inline]
     fn apply(&mut self, tag: ElfDynamicTag, value: usize) -> bool {
@@ -261,6 +266,13 @@ where
                 Ok(view)
             })
             .transpose()?;
+        let pltrel_is_dynrel_tail = matches!(
+            (
+                dynamic_table_end(parsed.rel_off, parsed.rel_size),
+                dynamic_table_end(parsed.pltrel_off, parsed.pltrel_size),
+            ),
+            (Some(dynrel_end), Some(pltrel_end)) if dynrel_end == pltrel_end
+        );
 
         // Extract initialization and finalization functions
         let init_fn = parsed
@@ -323,6 +335,7 @@ where
             pltrel,
             dynrel,
             relr,
+            pltrel_is_dynrel_tail,
             init: LifecycleSpec::new(init_fn, parsed.init_array_off, init_array_size),
             fini: LifecycleSpec::new(fini_fn, parsed.fini_array_off, fini_array_size),
             rel_count: parsed.rel_count,
@@ -420,6 +433,8 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     pub dynrel: Option<MappedView<ElfRelType<Arch>>>,
     /// RELR relocation entries.
     pub relr: Option<MappedView<ElfRelr<Arch::Layout>>>,
+    /// Whether PLT relocation entries are the tail of the dynamic relocation table.
+    pub pltrel_is_dynrel_tail: bool,
     /// Count of relative relocations.
     pub rel_count: Option<NonZeroUsize>,
     /// Required libraries.
