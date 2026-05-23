@@ -318,7 +318,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
             return Ok(view);
         }
 
-        let addr = base.wrapping_add(phdr.p_vaddr());
+        let addr = base + phdr.p_vaddr();
         let byte_len = phdr.p_filesz();
         let region = MappedRegion::local_alias(
             addr.as_mut_ptr::<c_void>(),

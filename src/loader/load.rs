@@ -189,9 +189,7 @@ where
             "Loaded dylib: {} at [{}-{}]",
             dylib.name(),
             dylib.mapped_base(),
-            dylib
-                .mapped_base()
-                .wrapping_add(VmOffset::new(dylib.mapped_len()))
+            dylib.mapped_base() + VmOffset::new(dylib.mapped_len())
         );
 
         Ok(dylib)
@@ -218,9 +216,7 @@ where
             "Loaded dynamic image: {} at [{}-{}]",
             image.name(),
             image.mapped_base(),
-            image
-                .mapped_base()
-                .wrapping_add(VmOffset::new(image.mapped_len()))
+            image.mapped_base() + VmOffset::new(image.mapped_len())
         );
 
         Ok(image)
@@ -261,9 +257,7 @@ where
             "Loaded scanned dynamic image: {} at [{}-{}]",
             image.name(),
             image.mapped_base(),
-            image
-                .mapped_base()
-                .wrapping_add(VmOffset::new(image.mapped_len()))
+            image.mapped_base() + VmOffset::new(image.mapped_len())
         );
 
         Ok(image)
@@ -316,9 +310,7 @@ where
         let mapper = self.mapper();
         let page_size = self.inner.page_size()?.bytes();
         let layout = parse_segments(&phdrs, true, page_size)?;
-        let mapped_memory = load_bias
-            .wrapping_add(layout.min_vaddr)
-            .as_mut_ptr::<c_void>();
+        let mapped_memory = (load_bias + layout.min_vaddr).as_mut_ptr::<c_void>();
         let segments = ElfSegments::new(
             MappedRegion::local_alias(mapped_memory, layout.mapped_len, mapper.clone()),
             load_bias,
@@ -343,9 +335,7 @@ where
             "Borrowed dynamic image: {} at [{}-{}]",
             image.name(),
             image.mapped_base(),
-            image
-                .mapped_base()
-                .wrapping_add(VmOffset::new(image.mapped_len()))
+            image.mapped_base() + VmOffset::new(image.mapped_len())
         );
 
         Ok(image)
@@ -398,8 +388,7 @@ where
             "Load executable: {} at [{}-{}] ({})",
             exec.name(),
             exec.mapped_base(),
-            exec.mapped_base()
-                .wrapping_add(VmOffset::new(exec.mapped_len())),
+            exec.mapped_base() + VmOffset::new(exec.mapped_len()),
             if has_dynamic { "dynamic" } else { "static" }
         );
 

@@ -106,7 +106,7 @@ impl<R: RegionAccess> ElfSegments<R> {
 
     #[inline]
     fn range_base(&self, range: MappedRange) -> VmAddr {
-        self.base.wrapping_add(range.offset)
+        self.base + range.offset
     }
 
     #[inline]
@@ -227,7 +227,7 @@ impl<R: RegionAccess> ElfSegments<R> {
         offset: VmOffset,
         byte_len: usize,
     ) -> Option<MappedView<T>> {
-        let addr = self.base().wrapping_add(offset);
+        let addr = self.base() + offset;
         if !self.contains_range(addr, byte_len) {
             return None;
         }

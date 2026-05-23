@@ -160,7 +160,7 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
         if likely(self.sym.is_some()) {
             let base = self.source.base();
             let sym = unsafe { self.sym.unwrap_unchecked() };
-            let addr = base.wrapping_add(VmOffset::new(sym.st_value()));
+            let addr = base + VmOffset::new(sym.st_value());
             if likely(
                 sym.symbol_type() != ElfSymbolType::GNU_IFUNC || !Arch::SUPPORTS_NATIVE_RUNTIME,
             ) {

@@ -2,7 +2,7 @@ use crate::input::ElfReader;
 use crate::os::{MapFlags, Mapper, Mmap, ProtFlags, VmAddr, VmOffset};
 use crate::{Result, logging};
 
-use super::{ElfSegment, ElfSegments, roundup};
+use super::{ElfSegment, ElfSegments};
 
 impl ElfSegment {
     #[inline]
@@ -16,7 +16,7 @@ impl ElfSegment {
 
     #[inline]
     fn vm_addr(&self, base: VmAddr) -> VmAddr {
-        base.wrapping_add(self.offset)
+        base + self.offset
     }
 
     #[inline]
@@ -92,7 +92,7 @@ impl ElfSegment {
     fn copy_data(&self, space: &ElfSegments, object: &mut impl ElfReader) -> Result<()> {
         if self.need_copy {
             for info in &self.map_info {
-                let addr = space.base().wrapping_add(self.segment_offset(info.start));
+                let addr = space.base() + self.segment_offset(info.start);
                 let dst = space
                     .host_ptr_range(addr, info.filesz)
                     .expect("segment copy target is not host-accessible");
@@ -140,13 +140,13 @@ impl ElfSegment {
     /// * `Err(Error)` - If filling fails
     fn fill_zero(&self, mapper: &dyn Mmap, space: &ElfSegments) -> Result<()> {
         if self.zero_size > 0 {
-            let zero_start = space
-                .base()
-                .wrapping_add(self.segment_offset(self.content_size))
+            let zero_start = space.base() + self.segment_offset(self.content_size);
+            let zero_end = zero_start.roundup(self.page_size);
+            let write_len = zero_end
+                .checked_offset_from(zero_start)
+                .expect("ELF zero-fill range overflowed")
                 .get();
-            let zero_end = roundup(zero_start, self.page_size);
-            let write_len = zero_end - zero_start;
-            space.zero_bytes(VmAddr::new(zero_start), write_len)?;
+            space.zero_bytes(zero_start, write_len)?;
 
             if write_len < self.zero_size {
                 let zero_mmap_addr = zero_end;
@@ -155,7 +155,7 @@ impl ElfSegment {
 
                 unsafe {
                     mapper.mmap_anonymous(
-                        VmAddr::new(zero_mmap_addr),
+                        zero_mmap_addr,
                         zero_mmap_len,
                         prot,
                         MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,

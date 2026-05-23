@@ -1,10 +1,8 @@
 use crate::{
     Result,
     elf::{ElfLayout, ElfPhdr},
-    os::{Mapper, ProtFlags, VmAddr},
+    os::{Mapper, ProtFlags, VmAddr, VmOffset},
 };
-
-use super::{rounddown, roundup};
 
 /// RELRO (RELocation Read-Only) segment information
 ///
@@ -39,7 +37,7 @@ impl ELFRelro {
         mapper: Mapper,
     ) -> ELFRelro {
         ELFRelro {
-            addr: base.wrapping_add(phdr.p_vaddr()),
+            addr: base + phdr.p_vaddr(),
             len: phdr.p_memsz(),
             page_size,
             mapper,
@@ -55,12 +53,14 @@ impl ELFRelro {
     /// * `Err(Error)` - If RELRO protection fails
     #[inline]
     pub(crate) fn relro(&self) -> Result<()> {
-        let addr = self.addr.get();
-        let end = roundup(addr + self.len, self.page_size);
-        let start = rounddown(addr, self.page_size);
+        let start = self.addr.rounddown(self.page_size);
+        let end = (self.addr + VmOffset::new(self.len)).roundup(self.page_size);
+        let len = end
+            .checked_offset_from(start)
+            .expect("RELRO rounded range end precedes its start")
+            .get();
         unsafe {
-            self.mapper
-                .mprotect(VmAddr::new(start), end - start, ProtFlags::PROT_READ)?;
+            self.mapper.mprotect(start, len, ProtFlags::PROT_READ)?;
         }
         Ok(())
     }

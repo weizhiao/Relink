@@ -3,9 +3,8 @@ use super::super::plan::LinkPlan;
 use crate::{
     LinkerError, Result,
     entity::SecondaryMap,
-    os::{MapFlags, MappedRegion, Mapper, Mmap, ProtFlags, VmAddr},
+    os::{MapFlags, MappedRegion, Mapper, Mmap, ProtFlags, VmAddr, align_up},
     relocation::RelocationArch,
-    segment::align_up,
 };
 use alloc::vec::Vec;
 

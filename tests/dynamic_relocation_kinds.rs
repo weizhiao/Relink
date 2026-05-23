@@ -105,10 +105,7 @@ fn irelative_relocation_uses_ifunc_resolver() {
     assert_eq!(irelative.section, SectionKind::Got);
     assert_eq!(
         slot_word(&relocated, irelative),
-        relocated
-            .base()
-            .wrapping_add(VmOffset::new(resolver_offset as usize))
-            .get() as u64
+        (relocated.base() + VmOffset::new(resolver_offset as usize)).get() as u64
     );
     assert!(
         relocated.deps().is_empty(),
@@ -226,10 +223,7 @@ fn irelative_relocations_apply_to_all_slots() {
         assert_eq!(irelative.section, SectionKind::Got);
         assert_eq!(
             slot_word(&relocated, irelative),
-            relocated
-                .base()
-                .wrapping_add(VmOffset::new(resolver_offset as usize))
-                .get() as u64
+            (relocated.base() + VmOffset::new(resolver_offset as usize)).get() as u64
         );
     }
     assert!(

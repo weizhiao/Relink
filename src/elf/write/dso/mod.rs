@@ -47,7 +47,7 @@ mod tests {
         let symbol = unsafe { lib.get::<*const ()>("virtual_func").unwrap() };
         assert_eq!(
             symbol.into_raw() as usize,
-            lib.base().wrapping_add(VmOffset::new(expected_addr)).get(),
+            (lib.base() + VmOffset::new(expected_addr)).get(),
             "symbol value should be relative to the DSO base"
         );
         assert_eq!(X86_64Arch::MACHINE.raw(), 62);

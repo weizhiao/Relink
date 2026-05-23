@@ -76,10 +76,10 @@ mod enabled {
 
             unsafe {
                 segments.update_value::<_>(
-                    base.wrapping_add(rel.r_offset()),
+                    base + rel.r_offset(),
                     |word: <Arch::Layout as ElfLayout>::Word| {
                         <Arch::Layout as ElfLayout>::Word::from_usize(
-                            base.wrapping_add(VmOffset::new(word.to_usize())).get(),
+                            (base + VmOffset::new(word.to_usize())).get(),
                         )
                     },
                 )?
@@ -220,7 +220,7 @@ mod enabled {
         unsafe {
             if segments
                 .write_value(
-                    dylib.segments.base().wrapping_add(rela.r_offset()),
+                    dylib.segments.base() + rela.r_offset(),
                     RelocValue::new(symbol.get()),
                 )
                 .is_err()

@@ -57,8 +57,7 @@ where
             "Loaded object: {} at [{}-{}]",
             raw.name(),
             raw.mapped_base(),
-            raw.mapped_base()
-                .wrapping_add(VmOffset::new(raw.mapped_len()))
+            raw.mapped_base() + VmOffset::new(raw.mapped_len())
         );
 
         Ok(raw)

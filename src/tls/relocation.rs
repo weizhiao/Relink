@@ -60,7 +60,7 @@ mod enabled {
         let r_sym = rel.r_symbol();
         let segments = helper.core.segments();
         let base = segments.base();
-        let place = base.wrapping_add(rel.r_offset());
+        let place = base + rel.r_offset();
         let r_addend = rel.r_addend(base);
 
         match r_type {
@@ -127,11 +127,7 @@ mod enabled {
                             return Ok(TlsRelocOutcome::Failed(RelocReason::MissingEmulator));
                         };
                         write_tls_word::<Arch, R>(segments, place, desc.resolver())?;
-                        write_tls_word::<Arch, R>(
-                            segments,
-                            place.wrapping_add(VmOffset::new(8)),
-                            desc.arg(),
-                        )?;
+                        write_tls_word::<Arch, R>(segments, place + VmOffset::new(8), desc.arg())?;
                         return Ok(TlsRelocOutcome::Applied);
                     }
 
@@ -144,11 +140,7 @@ mod enabled {
                             place,
                             tlsdesc_resolver_static as *const () as usize,
                         )?;
-                        write_tls_word::<Arch, R>(
-                            segments,
-                            place.wrapping_add(VmOffset::new(8)),
-                            tpoff.get(),
-                        )?;
+                        write_tls_word::<Arch, R>(segments, place + VmOffset::new(8), tpoff.get())?;
                         return Ok(TlsRelocOutcome::Applied);
                     }
 
@@ -173,7 +165,7 @@ mod enabled {
                         )?;
                         write_tls_word::<Arch, R>(
                             segments,
-                            place.wrapping_add(VmOffset::new(8)),
+                            place + VmOffset::new(8),
                             arg_ptr.get(),
                         )?;
                         return Ok(TlsRelocOutcome::Applied);

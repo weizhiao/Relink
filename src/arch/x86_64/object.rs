@@ -79,7 +79,7 @@ impl X86_64Arch {
         let segments = core.segments();
         let base = core.base();
         let append = rel.r_addend(base);
-        let place = base.wrapping_add(rel.r_offset());
+        let place = base + rel.r_offset();
         let unknown_symbol = || {
             reloc_error::<Self, _, HostRegion>(rel, crate::RelocReason::UnknownSymbol, helper.core)
         };

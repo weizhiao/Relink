@@ -204,10 +204,8 @@ impl BindingScenario {
         assert_eq!(irelative.section, SectionKind::Got);
         assert_eq!(
             self.slot_word(irelative),
-            self.loaded_dylib()
-                .base()
-                .wrapping_add(VmOffset::new(IFUNC_RESOLVER_OFFSET as usize))
-                .get() as u64,
+            (self.loaded_dylib().base() + VmOffset::new(IFUNC_RESOLVER_OFFSET as usize)).get()
+                as u64,
             "REL_IRELATIVE mismatch"
         );
     }

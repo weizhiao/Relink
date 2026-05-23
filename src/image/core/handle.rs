@@ -273,7 +273,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     #[inline]
     pub(crate) fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<()> {
         self.segments()
-            .read_bytes(self.base().wrapping_add(VmOffset::new(offset)), dst)
+            .read_bytes(self.base() + VmOffset::new(offset), dst)
     }
 
     #[inline]

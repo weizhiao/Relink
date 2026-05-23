@@ -3,9 +3,9 @@ use crate::{
     arch::object::{PLT_ENTRY, PLT_ENTRY_SIZE},
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionType, ElfShdr},
     input::ElfReader,
-    os::{MapFlags, Mapper, ProtFlags, VmAddr, VmOffset},
+    os::{MapFlags, Mapper, ProtFlags, VmAddr, VmOffset, rounddown, roundup},
     relocation::RelocationArch,
-    segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
+    segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder},
 };
 use alloc::vec::Vec;
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
@@ -39,6 +39,7 @@ fn flags_to_idx(flags: ElfSectionFlags) -> usize {
     prot_to_idx(section_prot(flags))
 }
 
+#[inline]
 impl<Arch: RelocationArch> SegmentBuilder for SectionSegments<Arch> {
     fn create_space(&mut self, mapper: Mapper) -> Result<ElfSegments> {
         let len = self.total_size;
@@ -216,8 +217,8 @@ impl PltGotSection {
     }
 
     pub(crate) fn rebase(&mut self, base: VmAddr) {
-        self.got_base = self.got_base.wrapping_add(VmOffset::new(base.get()));
-        self.plt_base = self.plt_base.wrapping_add(VmOffset::new(base.get()));
+        self.got_base = self.got_base + VmOffset::new(base.get());
+        self.plt_base = self.plt_base + VmOffset::new(base.get());
     }
 
     pub(crate) fn add_got_entry(&mut self, r_sym: usize) -> GotEntry<'_> {
@@ -225,17 +226,13 @@ impl PltGotSection {
         let ent_size = size_of::<usize>();
         match self.got_map.entry(r_sym) {
             Entry::Occupied(mut entry) => {
-                GotEntry::Occupied(base.wrapping_add(VmOffset::new(*entry.get_mut() * ent_size)))
+                GotEntry::Occupied(base + VmOffset::new(*entry.get_mut() * ent_size))
             }
             Entry::Vacant(entry) => {
                 let idx = *entry.insert(self.got_idx);
                 self.got_idx += 1;
                 GotEntry::Vacant(unsafe {
-                    UsizeEntry(
-                        &mut *base
-                            .wrapping_add(VmOffset::new(idx * ent_size))
-                            .as_mut_ptr(),
-                    )
+                    UsizeEntry(&mut *(base + VmOffset::new(idx * ent_size)).as_mut_ptr())
                 })
             }
         }
@@ -247,9 +244,9 @@ impl PltGotSection {
         let plt_ent_size = PLT_ENTRY_SIZE;
         let got_ent_size = size_of::<usize>();
         match self.plt_map.entry(r_sym) {
-            Entry::Occupied(mut entry) => PltEntry::Occupied(
-                plt_base.wrapping_add(VmOffset::new(*entry.get_mut() * plt_ent_size)),
-            ),
+            Entry::Occupied(mut entry) => {
+                PltEntry::Occupied(plt_base + VmOffset::new(*entry.get_mut() * plt_ent_size))
+            }
             Entry::Vacant(entry) => {
                 let plt_idx = *entry.insert(self.plt_idx);
                 self.plt_idx += 1;
@@ -259,9 +256,7 @@ impl PltGotSection {
 
                 let plt = unsafe {
                     core::slice::from_raw_parts_mut(
-                        plt_base
-                            .wrapping_add(VmOffset::new(plt_idx * plt_ent_size))
-                            .as_mut_ptr(),
+                        (plt_base + VmOffset::new(plt_idx * plt_ent_size)).as_mut_ptr(),
                         plt_ent_size,
                     )
                 };
@@ -272,9 +267,7 @@ impl PltGotSection {
                     plt,
                     got: unsafe {
                         UsizeEntry(
-                            &mut *got_base
-                                .wrapping_add(VmOffset::new(got_idx * got_ent_size))
-                                .as_mut_ptr(),
+                            &mut *(got_base + VmOffset::new(got_idx * got_ent_size)).as_mut_ptr(),
                         )
                     },
                 }

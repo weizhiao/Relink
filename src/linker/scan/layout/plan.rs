@@ -10,8 +10,8 @@ use crate::{
     entity::{PrimaryMap, SecondaryMap},
     image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
     linker::scan::ModuleId,
+    os::align_up,
     relocation::RelocationArch,
-    segment::align_up,
 };
 
 /// The requested materialization mode for one module during planned load.

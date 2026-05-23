@@ -105,7 +105,7 @@ impl<L: ElfLayout> ElfRel<L> {
     /// * `base` - The base address to add to the offset.
     #[inline]
     pub fn r_addend(&self, base: VmAddr) -> isize {
-        let ptr = base.wrapping_add(self.r_offset()).as_ptr::<L::Word>();
+        let ptr = (base + self.r_offset()).as_ptr::<L::Word>();
         unsafe { ptr.read_unaligned().to_usize() as isize }
     }
 
@@ -126,7 +126,7 @@ impl<L: ElfLayout> ElfRel<L> {
     #[inline]
     #[allow(dead_code)]
     pub(crate) fn set_addend(&mut self, base: VmAddr, addend: isize) {
-        let ptr = base.wrapping_add(self.r_offset()).as_mut_ptr::<L::Word>();
+        let ptr = (base + self.r_offset()).as_mut_ptr::<L::Word>();
         unsafe { ptr.write_unaligned(L::Word::from_usize(addend as usize)) };
     }
 }

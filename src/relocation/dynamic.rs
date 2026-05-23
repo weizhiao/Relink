@@ -190,7 +190,7 @@ where
     unsafe {
         segments.update_value::<_>(addr, |word: <Arch::Layout as ElfLayout>::Word| {
             <Arch::Layout as ElfLayout>::Word::from_usize(
-                base.wrapping_add(VmOffset::new(word.to_usize())).get(),
+                (base + VmOffset::new(word.to_usize())).get(),
             )
         })
     }
@@ -223,7 +223,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             }
             let r_type = rel.r_type();
             let r_sym = rel.r_symbol();
-            let place = base.wrapping_add(rel.r_offset());
+            let place = base + rel.r_offset();
             let mut failure_reason = RelocReason::Unsupported;
 
             // Handle jump slot relocations
@@ -290,7 +290,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                     let r_addend = rel.r_addend(base);
                     write_reloc_addr::<Arch, R>(
                         segments,
-                        base.wrapping_add(rel.r_offset()),
+                        base + rel.r_offset(),
                         base.wrapping_add_signed(r_addend),
                     )?;
                 }
@@ -307,7 +307,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                         reloc_offset = value;
                         update_relative_word::<Arch, R>(
                             segments,
-                            base.wrapping_add(VmOffset::new(reloc_offset)),
+                            base + VmOffset::new(reloc_offset),
                             base,
                         )?;
                         reloc_offset += core::mem::size_of::<<Arch::Layout as ElfLayout>::Word>();
@@ -320,7 +320,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                         if (bitmap & 1) != 0 {
                             update_relative_word::<Arch, R>(
                                 segments,
-                                base.wrapping_add(VmOffset::new(offset)),
+                                base + VmOffset::new(offset),
                                 base,
                             )?;
                         }
@@ -365,7 +365,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             }
             let r_type = rel.r_type();
             let r_sym = rel.r_symbol();
-            let place = base.wrapping_add(rel.r_offset());
+            let place = base + rel.r_offset();
             let mut failure_reason = RelocReason::Unsupported;
 
             // Handle `REL_NONE` first because some architectures use `0` as a
@@ -394,7 +394,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                         let mut src = Vec::new();
                         src.resize(len, 0);
                         if symdef.read_segment(sym.st_value(), &mut src)? {
-                            segments.write_bytes(base.wrapping_add(rel.r_offset()), &src)?;
+                            segments.write_bytes(base + rel.r_offset(), &src)?;
                             continue;
                         }
                     }

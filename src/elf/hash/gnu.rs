@@ -168,7 +168,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
                 .checked_add(offset)
                 .ok_or(ParseDynamicError::AddressOverflow)?;
             let mut bytes = [0u8; size_of::<u32>()];
-            segments.read_bytes(segments.base().wrapping_add(offset), &mut bytes)?;
+            segments.read_bytes(segments.base() + offset, &mut bytes)?;
             let value = u32::from_ne_bytes(bytes);
             if value & 1 != 0 {
                 return Ok(idx

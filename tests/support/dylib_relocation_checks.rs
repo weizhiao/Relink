@@ -35,15 +35,14 @@ pub(crate) fn anonymous_relocations(output: &ElfWriteOutput, r_type: u32) -> Vec
 }
 
 pub(crate) fn slot_address(image: &LoadedCore<()>, relocation: &RelocationInfo) -> usize {
-    image
-        .base()
-        .wrapping_add(VmOffset::new(
+    (image.base()
+        + VmOffset::new(
             relocation
                 .vaddr
                 .expect("dynamic relocation metadata should include a virtual address")
                 as usize,
         ))
-        .get()
+    .get()
 }
 
 pub(crate) fn slot_word(image: &LoadedCore<()>, relocation: &RelocationInfo) -> u64 {

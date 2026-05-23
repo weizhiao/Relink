@@ -167,7 +167,7 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut ElfDyn) {
         if rela.r_type() != <NativeArch as RelocationArch>::RELATIVE {
             print_str("unknown rela type");
         }
-        let ptr = base_addr.wrapping_add(rela.r_offset()).get() as *mut usize;
+        let ptr = (base_addr + rela.r_offset()).get() as *mut usize;
         unsafe { ptr.write(base.wrapping_add_signed(rela.r_addend(base_addr))) };
     }
     // 至此就完成自举，可以进行函数调用了

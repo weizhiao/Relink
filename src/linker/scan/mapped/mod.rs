@@ -297,18 +297,8 @@ where
     let original_entry = scanned.ehdr().e_entry();
     let entry = runtime
         .remap_source_to_runtime_offset(VmOffset::new(original_entry))
-        .map(|offset| {
-            runtime
-                .segments
-                .base()
-                .wrapping_add(VmOffset::new(offset.get()))
-        })
-        .unwrap_or_else(|| {
-            runtime
-                .segments
-                .base()
-                .wrapping_add(VmOffset::new(original_entry))
-        });
+        .map(|offset| runtime.segments.base() + VmOffset::new(offset.get()))
+        .unwrap_or_else(|| runtime.segments.base() + VmOffset::new(original_entry));
     let path = PathBuf::from(scanned.path());
 
     RawDynamic::from_parts::<Tls>(crate::image::RawDynamicParts {

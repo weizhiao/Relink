@@ -501,10 +501,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
         Self::from_parts::<Tls>(RawDynamicParts {
             path: builder.path,
             entry: if builder.ehdr.is_dylib() {
-                builder
-                    .segments
-                    .base()
-                    .wrapping_add(VmOffset::new(builder.ehdr.e_entry()))
+                builder.segments.base() + VmOffset::new(builder.ehdr.e_entry())
             } else {
                 VmAddr::new(builder.ehdr.e_entry())
             },

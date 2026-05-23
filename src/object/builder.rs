@@ -91,7 +91,7 @@ where
         base: VmAddr,
     ) {
         shdrs.iter_mut().for_each(|shdr| {
-            shdr.set_sh_addr(base.wrapping_add(VmOffset::new(shdr.sh_addr())).get());
+            shdr.set_sh_addr((base + VmOffset::new(shdr.sh_addr())).get());
         });
         pltgot.rebase(base);
     }
@@ -124,11 +124,7 @@ where
         let rels: &mut [ElfRelType<Arch>] = relocation_shdr.content_mut();
         let section_base = VmAddr::new(shdrs[relocation_shdr.sh_info() as usize].sh_addr());
         for rel in rels {
-            rel.set_offset(
-                section_base
-                    .wrapping_add(rel.r_offset())
-                    .wrapping_offset_from(base),
-            );
+            rel.set_offset((section_base + rel.r_offset()).wrapping_offset_from(base));
         }
 
         relocation_shdr.content()

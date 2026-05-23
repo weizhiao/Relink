@@ -1,8 +1,8 @@
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType, NativeElfLayout},
-    os::{MapFlags, Mapper, ProtFlags, VmAddr, VmOffset},
-    segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
+    os::{MapFlags, Mapper, ProtFlags, VmAddr, VmOffset, rounddown, roundup},
+    segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder},
 };
 use alloc::vec::Vec;
 
@@ -132,7 +132,7 @@ impl<L: ElfLayout> SegmentBuilder for ProgramSegments<'_, L> {
         let region = unsafe {
             mapper.mmap_reserve(layout.preferred_addr, layout.mapped_len, self.use_file)
         }?;
-        let base = region.addr().wrapping_sub(layout.min_vaddr);
+        let base = region.addr() - layout.min_vaddr;
         Ok(ElfSegments::new(region, base, layout.min_vaddr))
     }
 
