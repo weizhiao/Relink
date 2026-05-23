@@ -1,10 +1,12 @@
 use super::{Module, ModuleHandle};
 use crate::{
+    Result,
     arch::NativeArch,
+    custom_error,
     elf::{
         ElfLayout, ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType, PreCompute, SymbolInfo,
     },
-    os::VmAddr,
+    os::{VmAddr, VmOffset},
     relocation::RelocationArch,
 };
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
@@ -175,6 +177,13 @@ where
     #[inline]
     fn base(&self) -> VmAddr {
         VmAddr::null()
+    }
+
+    #[inline]
+    fn read_bytes(&self, _offset: VmOffset, _dst: &mut [u8]) -> Result<()> {
+        Err(custom_error(
+            "synthetic modules do not expose readable image bytes",
+        ))
     }
 }
 

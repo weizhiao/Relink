@@ -271,9 +271,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     }
 
     #[inline]
-    pub(crate) fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<()> {
-        self.segments()
-            .read_bytes(self.base() + VmOffset::new(offset), dst)
+    pub(crate) fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()> {
+        self.segments().read_bytes(self.base() + offset, dst)
     }
 
     #[inline]
@@ -412,11 +411,6 @@ where
     }
 
     #[inline]
-    fn soname(&self) -> Option<&str> {
-        ElfCore::soname(self)
-    }
-
-    #[inline]
     fn lookup_symbol<'source>(
         &'source self,
         symbol: &SymbolInfo<'_>,
@@ -431,9 +425,8 @@ where
     }
 
     #[inline]
-    fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<bool> {
-        ElfCore::read_segment(self, offset, dst)?;
-        Ok(true)
+    fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()> {
+        ElfCore::read_bytes(self, offset, dst)
     }
 
     #[inline]

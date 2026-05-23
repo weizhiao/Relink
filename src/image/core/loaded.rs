@@ -481,11 +481,6 @@ where
     }
 
     #[inline]
-    fn soname(&self) -> Option<&str> {
-        self.core.soname()
-    }
-
-    #[inline]
     fn lookup_symbol<'source>(
         &'source self,
         symbol: &SymbolInfo<'_>,
@@ -500,9 +495,8 @@ where
     }
 
     #[inline]
-    fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<bool> {
-        self.core.read_segment(offset, dst)?;
-        Ok(true)
+    fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()> {
+        self.core.read_bytes(offset, dst)
     }
 
     #[inline]

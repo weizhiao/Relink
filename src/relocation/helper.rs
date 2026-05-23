@@ -200,8 +200,8 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
     }
 
     #[inline]
-    pub(crate) fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<bool> {
-        self.source.read_segment(offset, dst)
+    pub(crate) fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()> {
+        self.source.read_bytes(offset, dst)
     }
 }
 

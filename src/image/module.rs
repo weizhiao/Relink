@@ -3,7 +3,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfSymbol, PreCompute, SymbolInfo},
-    os::VmAddr,
+    os::{VmAddr, VmOffset},
     relocation::RelocationArch,
     sync::Arc,
     tls::{TlsModuleId, TlsTpOffset},
@@ -216,11 +216,6 @@ pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
     /// Returns the module name used for diagnostics.
     fn name(&self) -> &str;
 
-    /// Returns the DT_SONAME-like identity when one exists.
-    fn soname(&self) -> Option<&str> {
-        None
-    }
-
     /// Looks up a relocatable symbol definition.
     fn lookup_symbol<'source>(
         &'source self,
@@ -232,9 +227,7 @@ pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
     fn base(&self) -> VmAddr;
 
     /// Reads bytes from the module image for COPY relocations.
-    fn read_segment(&self, _offset: usize, _dst: &mut [u8]) -> Result<bool> {
-        Ok(false)
-    }
+    fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()>;
 
     /// Translates a module VM address into a host-accessible pointer.
     fn host_ptr(&self, _addr: VmAddr) -> Option<NonNull<u8>> {
@@ -273,11 +266,6 @@ where
     }
 
     #[inline]
-    fn soname(&self) -> Option<&str> {
-        (**self).soname()
-    }
-
-    #[inline]
     fn lookup_symbol<'source>(
         &'source self,
         symbol: &SymbolInfo<'_>,
@@ -292,8 +280,8 @@ where
     }
 
     #[inline]
-    fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<bool> {
-        (**self).read_segment(offset, dst)
+    fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()> {
+        (**self).read_bytes(offset, dst)
     }
 
     #[inline]

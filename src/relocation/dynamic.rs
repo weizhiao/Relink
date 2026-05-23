@@ -393,10 +393,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                         let len = core.symtab().symbol_idx(r_sym).0.st_size();
                         let mut src = Vec::new();
                         src.resize(len, 0);
-                        if symdef.read_segment(sym.st_value(), &mut src)? {
-                            segments.write_bytes(base + rel.r_offset(), &src)?;
-                            continue;
-                        }
+                        symdef.read_bytes(VmOffset::new(sym.st_value()), &mut src)?;
+                        segments.write_bytes(base + rel.r_offset(), &src)?;
+                        continue;
                     }
                 }
                 failure_reason = RelocReason::UnknownSymbol;
