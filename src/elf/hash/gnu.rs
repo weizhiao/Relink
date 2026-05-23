@@ -33,6 +33,36 @@ struct ElfGnuHeader {
     nshift: u32,
 }
 
+impl ElfGnuHeader {
+    #[inline]
+    fn from_bytes(bytes: [u8; size_of::<Self>()]) -> Self {
+        let [
+            b0,
+            b1,
+            b2,
+            b3,
+            s0,
+            s1,
+            s2,
+            s3,
+            l0,
+            l1,
+            l2,
+            l3,
+            h0,
+            h1,
+            h2,
+            h3,
+        ] = bytes;
+        Self {
+            nbucket: u32::from_ne_bytes([b0, b1, b2, b3]),
+            symbias: u32::from_ne_bytes([s0, s1, s2, s3]),
+            nbloom: u32::from_ne_bytes([l0, l1, l2, l3]),
+            nshift: u32::from_ne_bytes([h0, h1, h2, h3]),
+        }
+    }
+}
+
 /// GNU ELF hash table implementation
 ///
 /// This structure represents a GNU hash table, which uses an optimized structure
@@ -70,7 +100,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let mut bytes = [0u8; HEADER_SIZE];
         segments.read_bytes(addr, &mut bytes)?;
-        let header: ElfGnuHeader = unsafe { core::mem::transmute(bytes) };
+        let header = ElfGnuHeader::from_bytes(bytes);
 
         if header.nbloom == 0 {
             return Err(ParseDynamicError::MalformedHashTable {

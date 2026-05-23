@@ -23,11 +23,6 @@ impl Lifecycle {
         }
     }
 
-    #[inline]
-    pub(crate) fn empty() -> Self {
-        Self::new(None, None)
-    }
-
     /// All lifecycle function VM addresses in call order.
     ///
     /// These addresses are not necessarily directly callable in the current

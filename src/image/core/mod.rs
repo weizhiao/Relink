@@ -4,11 +4,11 @@
 //! [`crate::image`]. They store metadata, symbol tables, mapped segments,
 //! lifecycle handlers, TLS state, and dependency ownership.
 
+mod defs;
 mod handle;
 mod loaded;
-mod symbol;
 
-pub(crate) use handle::{CoreFiniHandler, CoreInner};
+pub(crate) use defs::CoreInner;
+pub use defs::Symbol;
 pub use handle::{ElfCore, ElfCoreRef};
 pub use loaded::{LoadedCore, LoadedDeps};
-pub use symbol::Symbol;

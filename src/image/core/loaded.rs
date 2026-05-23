@@ -1,4 +1,4 @@
-use super::{ElfCore, ElfCoreRef};
+use super::{ElfCore, ElfCoreRef, Symbol};
 use crate::{
     Result,
     arch::ArchKind,
@@ -9,7 +9,7 @@ use crate::{
     image::{Module, ModuleHandle, ModuleScope},
     input::{Path, PathBuf},
     os::{HostRegion, MappedRegion, MappedView, Mapper, RegionAccess, VmAddr, VmOffset},
-    relocation::RelocationArch,
+    relocation::{RelocationArch, SymDef},
     segment::ElfSegments,
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
@@ -152,6 +152,14 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedCore<D, Arch
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
+    #[inline]
+    pub(crate) fn from_relocated_core(core: ElfCore<D, Arch, R>) -> Self {
+        LoadedCore {
+            core,
+            deps: ModuleScope::empty(),
+        }
+    }
+
     /// Wraps an [`ElfCore`] into a [`LoadedCore`] with no dependencies.
     ///
     /// # Safety
@@ -159,9 +167,17 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
     pub unsafe fn from_core(core: ElfCore<D, Arch, R>) -> Self {
+        Self::from_relocated_core(core)
+    }
+
+    #[inline]
+    pub(crate) fn from_relocated_core_deps<S>(core: ElfCore<D, Arch, R>, deps: S) -> Self
+    where
+        S: Into<ModuleScope<Arch>>,
+    {
         LoadedCore {
             core,
-            deps: ModuleScope::empty(),
+            deps: deps.into(),
         }
     }
 
@@ -248,6 +264,105 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         self.core.dynamic_ptr()
     }
 
+    /// Gets a pointer to a function or static variable by symbol name.
+    ///
+    /// The symbol is interpreted as-is; no mangling is done. This means
+    /// that symbols like `x::y` are most likely invalid.
+    ///
+    /// # Safety
+    /// Users of this API must specify the correct type of the function
+    /// or variable loaded.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use elf_loader::{input::ElfBinary, image::Symbol, Loader};
+    /// # let mut loader = Loader::new();
+    /// # let lib = loader
+    /// #     .load_dylib(ElfBinary::new("target/liba.so", &[]))
+    /// #        .unwrap().relocator().relocate().unwrap();
+    /// unsafe {
+    ///     let awesome_function = lib.get::<unsafe extern "C" fn(f64) -> f64>("awesome_function").unwrap();
+    ///     awesome_function(0.42);
+    /// }
+    /// ```
+    ///
+    /// A static variable may also be loaded and inspected:
+    /// ```no_run
+    /// # use elf_loader::{input::ElfBinary, image::Symbol, Loader};
+    /// # let mut loader = Loader::new();
+    /// # let lib = loader
+    /// #     .load_dylib(ElfBinary::new("target/liba.so", &[]))
+    /// #        .unwrap().relocator().relocate().unwrap();
+    /// unsafe {
+    ///     let awesome_variable = lib.get::<*mut f64>("awesome_variable").unwrap();
+    ///     **awesome_variable = 42.0;
+    /// };
+    /// ```
+    ///
+    /// # Arguments
+    /// * `name` - The name of the symbol to look up
+    ///
+    /// # Returns
+    /// * `Some(symbol)` - If the symbol is found
+    /// * `None` - If the symbol is not found
+    #[inline]
+    pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
+        let syminfo = SymbolInfo::from_str(name, None);
+        let mut precompute = syminfo.precompute();
+        self.core
+            .symtab()
+            .lookup_filter(&syminfo, &mut precompute)
+            .map(|sym| Symbol {
+                ptr: SymDef::<D, Arch>::new(Some(sym), self)
+                    .convert()
+                    .as_mut_ptr(),
+                pd: PhantomData,
+            })
+    }
+
+    /// Load a versioned symbol from the ELF object.
+    ///
+    /// # Safety
+    /// Users of this API must specify the correct type of the function
+    /// or variable loaded.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use elf_loader::{Loader, input::ElfFile};
+    /// # let mut loader = Loader::new();
+    /// # let lib = loader
+    /// #     .load_dylib(ElfFile::from_path("target/liba.so").unwrap())
+    /// #        .unwrap().relocator().relocate().unwrap();;
+    /// let symbol = unsafe { lib.get_version::<fn()>("function_name", "1.0").unwrap() };
+    /// ```
+    ///
+    /// # Arguments
+    /// * `name` - The name of the symbol to look up
+    /// * `version` - The version of the symbol to look up
+    ///
+    /// # Returns
+    /// * `Some(symbol)` - If the symbol is found
+    /// * `None` - If the symbol is not found
+    #[cfg(feature = "version")]
+    #[inline]
+    pub unsafe fn get_version<'lib, T>(
+        &'lib self,
+        name: &str,
+        version: &str,
+    ) -> Option<Symbol<'lib, T>> {
+        let syminfo = SymbolInfo::from_str(name, Some(version));
+        let mut precompute = syminfo.precompute();
+        self.core
+            .symtab()
+            .lookup_filter(&syminfo, &mut precompute)
+            .map(|sym| Symbol {
+                ptr: SymDef::<D, Arch>::new(Some(sym), self)
+                    .convert()
+                    .as_mut_ptr(),
+                pd: PhantomData,
+            })
+    }
+
     /// Gets the number of strong references to the ELF object
     #[inline]
     pub fn strong_count(&self) -> usize {
@@ -287,10 +402,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     where
         S: Into<ModuleScope<Arch>>,
     {
-        LoadedCore {
-            core,
-            deps: deps.into(),
-        }
+        Self::from_relocated_core_deps(core, deps)
     }
 
     /// Returns a reference to the underlying [`ElfCore`].
@@ -455,7 +567,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
 
     /// Gets the symbol table
     pub fn symtab(&self) -> &SymbolTable<Arch::Layout> {
-        &self.core.symtab()
+        self.core.symtab()
     }
 }
 

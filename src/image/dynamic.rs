@@ -17,14 +17,14 @@ use crate::{
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{marker::PhantomData, ptr::NonNull};
+use core::{cell::OnceCell, marker::PhantomData, ptr::NonNull};
 
-use super::{ElfCore, LoadedCore, core::CoreFiniHandler, core::CoreInner};
+use super::{ElfCore, LoadedCore, core::CoreInner};
 
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) pltrel: MappedView<ElfRelType<Arch>>,
-    pub(crate) scope: Option<crate::image::ModuleScope<Arch>>,
+    pub(crate) scope: OnceCell<crate::image::ModuleScope<Arch>>,
 }
 
 #[cfg(feature = "lazy-binding")]
@@ -33,7 +33,7 @@ impl<Arch: RelocationArch> LazyBindingInfo<Arch> {
     pub(crate) fn new(pltrel: Option<MappedView<ElfRelType<Arch>>>) -> Self {
         Self {
             pltrel: pltrel.unwrap_or_else(MappedView::empty),
-            scope: None,
+            scope: OnceCell::new(),
         }
     }
 }
@@ -304,9 +304,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     ) -> Result<()> {
         let ctx = EmuContext::new(self.core_ref());
         emu.call_init(&ctx, init)?;
-        unsafe {
-            self.core_ref().set_emu_fini(emu);
-        }
+        self.core_ref().set_emu_fini(emu);
         self.module.set_init();
         Ok(())
     }
@@ -452,8 +450,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                     is_init: AtomicBool::new(false),
                     path,
                     symtab,
-                    fini: Lifecycle::empty(),
-                    fini_handler: CoreFiniHandler::Native(fini_fn),
+                    fini: OnceCell::new(),
+                    fini_handler: fini_fn,
+                    emu_fini: OnceCell::new(),
                     user_data,
                     dynamic_info: Some(Arc::new(DynamicInfo {
                         eh_frame_hdr,

@@ -3,6 +3,7 @@ mod enabled {
     use super::super::defs::{TlsDescDynamicArg, TlsModuleId, TlsTpOffset};
     use crate::os::VmAddr;
     use alloc::{boxed::Box, vec::Vec};
+    use core::cell::OnceCell;
 
     #[derive(Default)]
     pub(crate) struct TlsDescArgs(Vec<Box<TlsDescDynamicArg>>);
@@ -22,7 +23,7 @@ mod enabled {
         tp_offset: Option<TlsTpOffset>,
         tls_get_addr: VmAddr,
         unregister: fn(TlsModuleId),
-        desc_args: Box<[Box<TlsDescDynamicArg>]>,
+        desc_args: OnceCell<Box<[Box<TlsDescDynamicArg>]>>,
     }
 
     impl CoreTlsState {
@@ -37,7 +38,7 @@ mod enabled {
                 tp_offset,
                 tls_get_addr,
                 unregister,
-                desc_args: Box::new([]),
+                desc_args: OnceCell::new(),
             }
         }
 
@@ -63,8 +64,11 @@ mod enabled {
             }
         }
 
-        pub(crate) fn set_desc_args(&mut self, args: TlsDescArgs) {
-            self.desc_args = args.0.into_boxed_slice();
+        pub(crate) fn set_desc_args(&self, args: TlsDescArgs) {
+            assert!(
+                self.desc_args.set(args.0.into_boxed_slice()).is_ok(),
+                "TLS descriptor arguments must be set only once",
+            );
         }
     }
 }
@@ -111,7 +115,7 @@ mod disabled {
         #[inline]
         pub(crate) fn cleanup(&self) {}
 
-        pub(crate) fn set_desc_args(&mut self, _args: TlsDescArgs) {}
+        pub(crate) fn set_desc_args(&self, _args: TlsDescArgs) {}
     }
 }
 

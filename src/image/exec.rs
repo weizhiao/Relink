@@ -309,7 +309,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
     #[inline]
     pub fn path(&self) -> &Path {
         match &self.inner {
-            LoadedExecInner::Dynamic(module) => unsafe { module.core_ref().path() },
+            LoadedExecInner::Dynamic(module) => module.path(),
             LoadedExecInner::Static(static_image) => static_image.path(),
         }
     }
@@ -318,7 +318,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
     #[inline]
     pub fn name(&self) -> &str {
         match &self.inner {
-            LoadedExecInner::Dynamic(module) => unsafe { module.core_ref().name() },
+            LoadedExecInner::Dynamic(module) => module.name(),
             LoadedExecInner::Static(static_image) => static_image.name(),
         }
     }
@@ -326,7 +326,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
     /// Returns the length of the bounding runtime span covered by mapped slices.
     pub fn mapped_len(&self) -> usize {
         match &self.inner {
-            LoadedExecInner::Dynamic(module) => unsafe { module.core_ref().mapped_len() },
+            LoadedExecInner::Dynamic(module) => module.mapped_len(),
             LoadedExecInner::Static(static_image) => static_image.mapped_len(),
         }
     }
@@ -342,7 +342,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
     /// Returns a reference to the user-defined data associated with this executable.
     pub fn user_data(&self) -> &D {
         match &self.inner {
-            LoadedExecInner::Dynamic(module) => unsafe { &module.core_ref().user_data() },
+            LoadedExecInner::Dynamic(module) => module.user_data(),
             LoadedExecInner::Static(static_image) => &static_image.inner.user_data,
         }
     }

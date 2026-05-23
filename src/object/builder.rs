@@ -142,7 +142,7 @@ where
     ) -> Result<ObjectSectionData<Arch>> {
         let mut symtab = None;
         let mut relocation = Vec::with_capacity(shdrs.len());
-        let mut init = Lifecycle::empty();
+        let mut init = Lifecycle::new(None, None);
 
         for shdr in shdrs {
             match shdr.section_type() {

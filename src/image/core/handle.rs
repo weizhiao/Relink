@@ -1,3 +1,4 @@
+use super::CoreInner;
 use crate::{
     ParsePhdrError, Result,
     elf::{
@@ -6,78 +7,15 @@ use crate::{
     },
     image::{DynamicInfo, Module},
     input::{Path, PathBuf},
-    loader::{LifecycleContext, SharedLifecycleHandler, shared_lifecycle_handler},
+    loader::{LifecycleContext, shared_lifecycle_handler},
     os::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
-    relocation::{EmuContext, Emulator, RelocationArch},
+    relocation::{Emulator, RelocationArch},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{CoreTlsState, TlsDescArgs, TlsModuleId, TlsTpOffset},
 };
 use alloc::vec::Vec;
-use core::{any::Any, fmt::Debug, ptr::NonNull};
-
-/// Inner structure for ElfCore
-#[repr(C)]
-pub(crate) struct CoreInner<
-    D = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
-    R: RegionAccess = HostRegion,
-> {
-    /// Indicates whether the component has been initialized
-    pub(crate) is_init: AtomicBool,
-
-    /// Loader source path or caller-provided source identifier.
-    pub(crate) path: PathBuf,
-
-    /// ELF symbols table
-    pub(crate) symtab: SymbolTable<Arch::Layout>,
-
-    /// Finalization functions.
-    pub(crate) fini: Lifecycle,
-
-    /// Finalization handler
-    pub(crate) fini_handler: CoreFiniHandler<Arch, R>,
-
-    /// Dynamic information
-    pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
-
-    /// TLS runtime state for the loaded object.
-    pub(crate) tls: CoreTlsState,
-
-    /// Memory segments
-    pub(crate) segments: ElfSegments<R>,
-
-    /// User-defined data
-    pub(crate) user_data: D,
-}
-
-impl<D, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Arch, R> {
-    /// Executes finalization functions when the component is dropped
-    fn drop(&mut self) {
-        if self.is_init.load(Ordering::Relaxed) {
-            match &self.fini_handler {
-                CoreFiniHandler::Native(handler) => {
-                    let ctx = LifecycleContext::new(&self.fini, &self.segments);
-                    handler.call(&ctx);
-                }
-                CoreFiniHandler::Emu(emu) => {
-                    let ctx = EmuContext::from_parts(
-                        self.path.as_str(),
-                        self.segments.base(),
-                        &self.segments,
-                    );
-                    emu.call_fini(&ctx, &self.fini);
-                }
-            }
-        }
-        self.tls.cleanup();
-    }
-}
-
-pub(crate) enum CoreFiniHandler<Arch: RelocationArch, R: RegionAccess = HostRegion> {
-    Native(SharedLifecycleHandler<R>),
-    Emu(Arc<dyn Emulator<Arch>>),
-}
+use core::{any::Any, cell::OnceCell, fmt::Debug, ptr::NonNull};
 
 /// A non-owning reference to an [`ElfCore`].
 ///
@@ -127,11 +65,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Clone for ElfCore<D, Arch, R> {
         }
     }
 }
-
-// Safety: ModuleInner can be shared between threads
-unsafe impl<D, Arch: RelocationArch, R: RegionAccess> Sync for CoreInner<D, Arch, R> {}
-// Safety: ModuleInner can be sent between threads
-unsafe impl<D, Arch: RelocationArch, R: RegionAccess> Send for CoreInner<D, Arch, R> {}
 
 impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     /// Returns whether the ELF object has been initialized.
@@ -297,38 +230,25 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
         self.inner.tls.tls_get_addr()
     }
 
-    /// Set the TLS descriptor arguments (used for dynamic relocation)
-    /// # Safety
-    /// This should only be called during the relocation process
-    pub(crate) unsafe fn set_tls_desc_args(&self, args: TlsDescArgs) {
-        let inner = Arc::as_ptr(&self.inner) as *mut CoreInner<D, Arch, R>;
-        unsafe {
-            (*inner).tls.set_desc_args(args);
-        }
+    /// Set the TLS descriptor arguments used by dynamic relocation.
+    pub(crate) fn set_tls_desc_args(&self, args: TlsDescArgs) {
+        self.inner.tls.set_desc_args(args);
     }
 
     /// Set the finalization handler used after emulated initialization.
-    ///
-    /// # Safety
-    /// This should only be called during relocation before the loaded image is
-    /// published to callers.
-    pub(crate) unsafe fn set_emu_fini(&self, emu: Arc<dyn Emulator<Arch>>) {
-        let inner = Arc::as_ptr(&self.inner) as *mut CoreInner<D, Arch, R>;
-        unsafe {
-            (*inner).fini_handler = CoreFiniHandler::Emu(emu);
-        }
+    pub(crate) fn set_emu_fini(&self, emu: Arc<dyn Emulator<Arch>>) {
+        assert!(
+            self.inner.emu_fini.set(emu).is_ok(),
+            "emulated finalization handler must be set only once",
+        );
     }
 
-    /// Replaces the finalization lifecycle.
-    ///
-    /// # Safety
-    /// This should only be called during relocation before the loaded image is
-    /// published to callers.
-    pub(crate) unsafe fn set_fini(&self, fini: Lifecycle) {
-        let inner = Arc::as_ptr(&self.inner) as *mut CoreInner<D, Arch, R>;
-        unsafe {
-            (*inner).fini = fini;
-        }
+    /// Sets the finalization lifecycle.
+    pub(crate) fn set_fini(&self, fini: Lifecycle) {
+        assert!(
+            self.inner.fini.set(fini).is_ok(),
+            "finalization lifecycle must be set only once",
+        );
     }
 
     /// Creates an ElfCore from raw components
@@ -372,10 +292,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
                 })),
                 tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_get_addr, tls_unregister),
                 segments,
-                fini: Lifecycle::empty(),
-                fini_handler: CoreFiniHandler::Native(shared_lifecycle_handler(
-                    |_: &LifecycleContext<'_, R>| {},
-                )),
+                fini: OnceCell::new(),
+                fini_handler: shared_lifecycle_handler(|_: &LifecycleContext<'_, R>| {}),
+                emu_fini: OnceCell::new(),
                 user_data,
             }),
         })

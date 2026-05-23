@@ -11,7 +11,7 @@ use super::defs::{
 use crate::{
     ParseDynamicError, Result,
     elf::{ElfDynamic, HashTable, PreCompute},
-    os::RegionAccess,
+    os::{MappedView, RegionAccess},
     segment::ElfSegments,
 };
 use core::ffi::CStr;
@@ -148,37 +148,25 @@ impl<L: ElfLayout> ElfSymbol<L> {
 /// This structure provides safe access to the ELF string table, which contains
 /// null-terminated strings for symbol names and other ELF metadata.
 pub(crate) struct ElfStringTable {
-    /// Pointer to the raw string table data in memory.
-    data: *const u8,
-
-    /// Size of the string table in bytes.
-    len: usize,
+    /// Borrowed view of the raw string table bytes.
+    view: MappedView<u8>,
 }
 
 impl ElfStringTable {
-    /// Create a new string table wrapper from borrowed bytes.
-    pub(crate) const fn new(data: &'static [u8]) -> Self {
-        ElfStringTable {
-            data: data.as_ptr(),
-            len: data.len(),
-        }
-    }
-
-    /// Create a new string table wrapper from raw bounded bytes.
-    ///
-    /// # Safety
-    /// `data..data + len` must remain readable while this table is used.
-    pub(crate) const unsafe fn from_raw_parts(data: *const u8, len: usize) -> Self {
-        ElfStringTable { data, len }
+    /// Create a new string table wrapper from a mapped byte view.
+    #[inline]
+    pub(crate) const fn new(view: MappedView<u8>) -> Self {
+        Self { view }
     }
 
     #[inline]
     fn bytes_from(&self, offset: usize) -> &'static [u8] {
+        let bytes = self.view.as_slice();
         assert!(
-            offset <= self.len,
+            offset <= bytes.len(),
             "ELF string table offset is out of bounds"
         );
-        unsafe { core::slice::from_raw_parts(self.data.add(offset), self.len - offset) }
+        &bytes[offset..]
     }
 
     /// Get a C-style string from the string table at the specified offset
@@ -191,11 +179,8 @@ impl ElfStringTable {
     #[inline]
     pub(crate) fn get_cstr(&self, offset: usize) -> &'static CStr {
         let bytes = self.bytes_from(offset);
-        let end = bytes
-            .iter()
-            .position(|byte| *byte == 0)
-            .expect("ELF string table entry is missing a NUL terminator");
-        unsafe { CStr::from_bytes_with_nul_unchecked(&bytes[..=end]) }
+        CStr::from_bytes_until_nul(bytes)
+            .expect("ELF string table entry is missing a NUL terminator")
     }
 
     /// Convert a C-style string to a Rust string slice
@@ -207,7 +192,7 @@ impl ElfStringTable {
     /// A string slice containing the same data as the C-style string
     #[inline]
     fn convert_cstr(s: &CStr) -> &str {
-        unsafe { core::str::from_utf8_unchecked(s.to_bytes()) }
+        core::str::from_utf8(s.to_bytes()).expect("ELF string table entry is not valid UTF-8")
     }
 
     /// Get a Rust string slice from the string table at the specified offset
@@ -349,7 +334,7 @@ impl<L: ElfLayout> SymbolTable<L> {
             .ok_or(ParseDynamicError::MalformedStringTable {
                 detail: "DT_STRTAB string table size is malformed",
             })?;
-        let strtab = ElfStringTable::new(strtab.as_slice());
+        let strtab = ElfStringTable::new(strtab);
 
         // Create version information (when version feature is enabled)
         #[cfg(feature = "version")]

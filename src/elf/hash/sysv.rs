@@ -25,6 +25,17 @@ struct ElfHashHeader {
     nchain: u32,
 }
 
+impl ElfHashHeader {
+    #[inline]
+    fn from_bytes(bytes: [u8; size_of::<Self>()]) -> Self {
+        let [n0, n1, n2, n3, c0, c1, c2, c3] = bytes;
+        Self {
+            nbucket: u32::from_ne_bytes([n0, n1, n2, n3]),
+            nchain: u32::from_ne_bytes([c0, c1, c2, c3]),
+        }
+    }
+}
+
 /// SYSV ELF hash table implementation
 ///
 /// This structure represents a SYSV hash table, which uses a bucket/chain
@@ -62,7 +73,7 @@ impl ElfHash {
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let mut bytes = [0u8; HEADER_SIZE];
         segments.read_bytes(addr, &mut bytes)?;
-        let header: ElfHashHeader = unsafe { core::mem::transmute(bytes) };
+        let header = ElfHashHeader::from_bytes(bytes);
 
         if header.nbucket == 0 {
             return Err(ParseDynamicError::MalformedHashTable {

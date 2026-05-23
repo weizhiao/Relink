@@ -10,6 +10,7 @@ use crate::{
     entity::entity_ref,
     input::{ElfReader, ElfReaderExt, Path, PathBuf},
     loader::ScanBuilder,
+    os::MappedView,
     relocation::RelocationArch,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -109,6 +110,13 @@ impl<L: ElfLayout> SectionTable<L> {
             sections: shdrs.into_boxed_slice(),
             shstrtab: shstrtab.into_boxed_slice(),
         }))
+    }
+
+    #[inline]
+    fn shstrtab(&self) -> ElfStringTable {
+        let bytes =
+            unsafe { core::slice::from_raw_parts(self.shstrtab.as_ptr(), self.shstrtab.len()) };
+        ElfStringTable::new(MappedView::from_slice(bytes))
     }
 }
 
@@ -250,13 +258,13 @@ impl<L: ElfLayout> Clone for ScannedSection<'_, L> {
 /// Iterator over the usable section-table entries of a scanned module.
 pub struct ScannedSections<'a, L: ElfLayout = NativeElfLayout> {
     sections: &'a [ElfShdr<L>],
-    shstrtab: &'a [u8],
+    shstrtab: ElfStringTable,
     index: usize,
 }
 
 impl<'a, L: ElfLayout> ScannedSections<'a, L> {
     #[inline]
-    fn new(sections: &'a [ElfShdr<L>], shstrtab: &'a [u8]) -> Self {
+    fn new(sections: &'a [ElfShdr<L>], shstrtab: ElfStringTable) -> Self {
         Self {
             sections,
             shstrtab,
@@ -265,10 +273,13 @@ impl<'a, L: ElfLayout> ScannedSections<'a, L> {
     }
 
     #[inline]
+    fn empty() -> Self {
+        Self::new(&[], ElfStringTable::new(MappedView::empty()))
+    }
+
+    #[inline]
     fn section_name(&self, section: &ElfShdr<L>) -> &'a str {
-        let table =
-            unsafe { ElfStringTable::from_raw_parts(self.shstrtab.as_ptr(), self.shstrtab.len()) };
-        table.get_str(section.sh_name() as usize)
+        self.shstrtab.get_str(section.sh_name() as usize)
     }
 }
 
@@ -597,7 +608,8 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             runpath,
         } = DynamicScanParts::new(reader.as_mut(), &phdrs)?;
         let section_table = SectionTable::new(reader.as_mut(), &ehdr)?;
-        let strtab_view = unsafe { ElfStringTable::from_raw_parts(strtab.as_ptr(), strtab.len()) };
+        let strtab_bytes = unsafe { core::slice::from_raw_parts(strtab.as_ptr(), strtab.len()) };
+        let strtab_view = ElfStringTable::new(MappedView::from_slice(strtab_bytes));
         let capability = section_table
             .as_ref()
             .map_or(ModuleCapability::Opaque, |table| {
@@ -698,13 +710,6 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         self.capability
     }
 
-    #[inline]
-    fn shstrtab(&self) -> Option<ElfStringTable> {
-        self.section_table.as_ref().map(|table| unsafe {
-            ElfStringTable::from_raw_parts(table.shstrtab.as_ptr(), table.shstrtab.len())
-        })
-    }
-
     /// Returns whether the module exposes a usable section-table view.
     #[inline]
     pub fn has_sections(&self) -> bool {
@@ -727,7 +732,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     ) -> Option<ScannedSection<'_, Arch::Layout>> {
         let id = id.into();
         let section_table = self.section_table.as_ref()?;
-        let shstrtab = self.shstrtab()?;
+        let shstrtab = section_table.shstrtab();
         let header = section_table.sections.get(id.index())?;
         Some(ScannedSection::new(
             id,
@@ -739,14 +744,11 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     /// Iterates over all scanned sections together with stable ids.
     #[inline]
     pub fn sections(&self) -> ScannedSections<'_, Arch::Layout> {
-        ScannedSections::new(
-            self.section_table
-                .as_ref()
-                .map_or(&[], |table| table.sections.as_ref()),
-            self.section_table
-                .as_ref()
-                .map_or(&[], |table| table.shstrtab.as_ref()),
-        )
+        self.section_table
+            .as_ref()
+            .map_or_else(ScannedSections::empty, |table| {
+                ScannedSections::new(table.sections.as_ref(), table.shstrtab())
+            })
     }
 
     /// Iterates over sections that contribute to the loaded memory image.
@@ -868,13 +870,6 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
         })
     }
 
-    #[inline]
-    fn shstrtab(&self) -> Option<ElfStringTable> {
-        self.section_table.as_ref().map(|table| unsafe {
-            ElfStringTable::from_raw_parts(table.shstrtab.as_ptr(), table.shstrtab.len())
-        })
-    }
-
     /// Returns whether the executable exposes a usable section-table view.
     #[inline]
     pub fn has_sections(&self) -> bool {
@@ -897,7 +892,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
     ) -> Option<ScannedSection<'_, Arch::Layout>> {
         let id = id.into();
         let section_table = self.section_table.as_ref()?;
-        let shstrtab = self.shstrtab()?;
+        let shstrtab = section_table.shstrtab();
         let header = section_table.sections.get(id.index())?;
         Some(ScannedSection::new(
             id,
@@ -909,14 +904,11 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
     /// Iterates over all scanned sections together with stable ids.
     #[inline]
     pub fn sections(&self) -> ScannedSections<'_, Arch::Layout> {
-        ScannedSections::new(
-            self.section_table
-                .as_ref()
-                .map_or(&[], |table| table.sections.as_ref()),
-            self.section_table
-                .as_ref()
-                .map_or(&[], |table| table.shstrtab.as_ref()),
-        )
+        self.section_table
+            .as_ref()
+            .map_or_else(ScannedSections::empty, |table| {
+                ScannedSections::new(table.sections.as_ref(), table.shstrtab())
+            })
     }
 
     /// Iterates over sections that contribute to the loaded memory image.

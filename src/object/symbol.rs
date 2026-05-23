@@ -1,4 +1,5 @@
 use crate::elf::{ElfLayout, ElfShdr, ElfStringTable, HashTable, SymbolTable};
+use crate::os::MappedView;
 
 impl<L: ElfLayout> SymbolTable<L> {
     /// Creates a symbol table from section headers, typically used for relocatable objects.
@@ -7,7 +8,7 @@ impl<L: ElfLayout> SymbolTable<L> {
         let strtab_bytes = unsafe {
             core::slice::from_raw_parts(strtab_shdr.sh_addr() as *const u8, strtab_shdr.sh_size())
         };
-        let strtab = ElfStringTable::new(strtab_bytes);
+        let strtab = ElfStringTable::new(MappedView::from_slice(strtab_bytes));
         let hashtab = HashTable::from_shdr(symtab, &strtab);
 
         Self {

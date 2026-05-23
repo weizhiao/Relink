@@ -790,7 +790,7 @@ where
                 if let Some(entry) = session.resolve.entries.get(id) {
                     match &entry.payload {
                         ModulePayload::Dynamic(raw) => {
-                            let module = unsafe { LoadedCore::from_core(raw.core()) };
+                            let module = LoadedCore::from_relocated_core(raw.core());
                             ModuleHandle::from(module)
                         }
                         ModulePayload::Synthetic(module) => module.clone(),

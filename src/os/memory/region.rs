@@ -161,6 +161,11 @@ impl<R: RegionAccess> MappedRegion<R> {
 
 impl<T: 'static> MappedView<T> {
     #[inline]
+    pub(crate) const fn from_slice(slice: &'static [T]) -> Self {
+        Self { slice }
+    }
+
+    #[inline]
     pub(crate) const fn empty() -> Self {
         Self { slice: &[] }
     }

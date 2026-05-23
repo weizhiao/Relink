@@ -15,9 +15,9 @@ use crate::{
     tls::{CoreTlsState, TlsResolver},
 };
 use alloc::boxed::Box;
-use core::{borrow::Borrow, fmt::Debug, ops::Deref};
+use core::{borrow::Borrow, cell::OnceCell, fmt::Debug, ops::Deref};
 
-use super::{CoreInner, ElfCore, LoadedCore, ModuleHandle, core::CoreFiniHandler};
+use super::{CoreInner, ElfCore, LoadedCore, ModuleHandle};
 
 /// A relocatable ELF object.
 ///
@@ -58,8 +58,9 @@ impl<D: 'static, Arch: RelocationArch> RawObject<D, Arch> {
             is_init: AtomicBool::new(false),
             path: builder.path,
             symtab: builder.symtab,
-            fini: Lifecycle::empty(),
-            fini_handler: CoreFiniHandler::Native(builder.fini_fn),
+            fini: OnceCell::new(),
+            fini_handler: builder.fini_fn,
+            emu_fini: OnceCell::new(),
             user_data: builder.user_data,
             dynamic_info: None,
             tls: CoreTlsState::new(

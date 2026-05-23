@@ -66,9 +66,7 @@ where
             tls_desc_args,
             ..
         } = helper;
-        unsafe {
-            self.core.set_tls_desc_args(tls_desc_args);
-        }
+        self.core.set_tls_desc_args(tls_desc_args);
 
         (self.mprotect)()?;
 
@@ -78,6 +76,8 @@ where
 
         logging::info!("Relocation completed for {}", self.core.name());
 
-        Ok(unsafe { crate::image::LoadedCore::from_core_deps(self.core, scope) })
+        Ok(crate::image::LoadedCore::from_relocated_core_deps(
+            self.core, scope,
+        ))
     }
 }

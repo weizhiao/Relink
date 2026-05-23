@@ -85,14 +85,10 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             ..
         } = helper;
         // Persist TLSDESC backing storage collected during relocation.
-        unsafe {
-            self.core_ref().set_tls_desc_args(tls_desc_args);
-        }
+        self.core_ref().set_tls_desc_args(tls_desc_args);
 
         let (init, fini) = self.resolve_lifecycle()?;
-        unsafe {
-            self.core_ref().set_fini(fini);
-        }
+        self.core_ref().set_fini(fini);
 
         let dep_names = scope
             .iter()
@@ -124,7 +120,10 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
         logging::info!("Relocation completed for {}", self.name());
 
-        Ok(unsafe { LoadedCore::from_core_deps(self.into_core(), scope) })
+        Ok(LoadedCore::from_relocated_core_deps(
+            self.into_core(),
+            scope,
+        ))
     }
 }
 

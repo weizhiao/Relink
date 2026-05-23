@@ -1,8 +1,6 @@
 #[cfg(feature = "lazy-binding")]
 mod enabled {
-    use crate::image::{
-        CoreInner, DynamicInfo, Module, ModuleScope, RawDylib, RawDynamic, RawElf, RawExec,
-    };
+    use crate::image::{CoreInner, Module, ModuleScope, RawDylib, RawDynamic, RawElf, RawExec};
     use crate::{
         RelocationError, Result,
         arch::{NativeArch, prepare_lazy_bind},
@@ -121,8 +119,10 @@ mod enabled {
                         detail: "lazy binding requires dynamic metadata",
                     },
                 )?;
-                let info = unsafe { &mut *(Arc::as_ptr(dynamic_info) as *mut DynamicInfo<Arch>) };
-                info.lazy.scope = Some(scope);
+                assert!(
+                    dynamic_info.lazy.scope.set(scope).is_ok(),
+                    "lazy binding scope must be installed only once",
+                );
             }
             Ok(())
         }
@@ -205,7 +205,7 @@ mod enabled {
 
         let (_, syminfo) = dylib.symtab.symbol_idx(r_sym);
 
-        let Some(scope) = dynamic_info.lazy.scope.as_ref() else {
+        let Some(scope) = dynamic_info.lazy.scope.get() else {
             invalid_state(dylib.path.as_str(), "missing lazy lookup")
         };
         let symbol = lookup_tls_get_addr(syminfo.name(), dylib.tls.tls_get_addr())
