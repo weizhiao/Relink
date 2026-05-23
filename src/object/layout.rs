@@ -3,7 +3,7 @@ use crate::{
     arch::object::{PLT_ENTRY, PLT_ENTRY_SIZE},
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionType, ElfShdr},
     input::ElfReader,
-    os::{MapFlags, Mapper, ProtFlags, VmAddr},
+    os::{MapFlags, Mapper, ProtFlags, VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
 };
@@ -44,7 +44,7 @@ impl<Arch: RelocationArch> SegmentBuilder for SectionSegments<Arch> {
         let len = self.total_size;
         let region = unsafe { mapper.mmap_reserve(None, len, false) }?;
         let base = region.addr();
-        Ok(ElfSegments::new(region, base, 0))
+        Ok(ElfSegments::new(region, base, VmOffset::new(0)))
     }
 
     fn create_segments(&mut self) -> Result<()> {
@@ -216,8 +216,8 @@ impl PltGotSection {
     }
 
     pub(crate) fn rebase(&mut self, base: VmAddr) {
-        self.got_base = self.got_base.offset(base.into_inner());
-        self.plt_base = self.plt_base.offset(base.into_inner());
+        self.got_base = self.got_base.wrapping_add(VmOffset::new(base.into_inner()));
+        self.plt_base = self.plt_base.wrapping_add(VmOffset::new(base.into_inner()));
     }
 
     pub(crate) fn add_got_entry(&mut self, r_sym: usize) -> GotEntry<'_> {
@@ -225,13 +225,17 @@ impl PltGotSection {
         let ent_size = size_of::<usize>();
         match self.got_map.entry(r_sym) {
             Entry::Occupied(mut entry) => {
-                GotEntry::Occupied(base.offset(*entry.get_mut() * ent_size))
+                GotEntry::Occupied(base.wrapping_add(VmOffset::new(*entry.get_mut() * ent_size)))
             }
             Entry::Vacant(entry) => {
                 let idx = *entry.insert(self.got_idx);
                 self.got_idx += 1;
                 GotEntry::Vacant(unsafe {
-                    UsizeEntry(&mut *base.offset(idx * ent_size).as_mut_ptr())
+                    UsizeEntry(
+                        &mut *base
+                            .wrapping_add(VmOffset::new(idx * ent_size))
+                            .as_mut_ptr(),
+                    )
                 })
             }
         }
@@ -243,9 +247,9 @@ impl PltGotSection {
         let plt_ent_size = PLT_ENTRY_SIZE;
         let got_ent_size = size_of::<usize>();
         match self.plt_map.entry(r_sym) {
-            Entry::Occupied(mut entry) => {
-                PltEntry::Occupied(plt_base.offset(*entry.get_mut() * plt_ent_size))
-            }
+            Entry::Occupied(mut entry) => PltEntry::Occupied(
+                plt_base.wrapping_add(VmOffset::new(*entry.get_mut() * plt_ent_size)),
+            ),
             Entry::Vacant(entry) => {
                 let plt_idx = *entry.insert(self.plt_idx);
                 self.plt_idx += 1;
@@ -255,7 +259,9 @@ impl PltGotSection {
 
                 let plt = unsafe {
                     core::slice::from_raw_parts_mut(
-                        plt_base.offset(plt_idx * plt_ent_size).as_mut_ptr(),
+                        plt_base
+                            .wrapping_add(VmOffset::new(plt_idx * plt_ent_size))
+                            .as_mut_ptr(),
                         plt_ent_size,
                     )
                 };
@@ -265,7 +271,11 @@ impl PltGotSection {
                 PltEntry::Vacant {
                     plt,
                     got: unsafe {
-                        UsizeEntry(&mut *got_base.offset(got_idx * got_ent_size).as_mut_ptr())
+                        UsizeEntry(
+                            &mut *got_base
+                                .wrapping_add(VmOffset::new(got_idx * got_ent_size))
+                                .as_mut_ptr(),
+                        )
                     },
                 }
             }
@@ -353,7 +363,7 @@ impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
 
         *base_offset += total_size;
         Some(ElfSegment {
-            offset: segment_start,
+            offset: VmOffset::new(segment_start),
             prot,
             len: total_size,
             page_size,

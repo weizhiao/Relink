@@ -20,7 +20,8 @@ pub use types::{DsoExport, DsoExportLayout, DsoImage, DsoSymbolBind, DsoSymbolKi
 mod tests {
     use super::{DsoBuilder, sysv_hash};
     use crate::{
-        Loader, arch::x86_64::relocation::X86_64Arch, input::ElfBinary, relocation::RelocationArch,
+        Loader, arch::x86_64::relocation::X86_64Arch, input::ElfBinary, os::VmOffset,
+        relocation::RelocationArch,
     };
 
     #[test]
@@ -46,7 +47,7 @@ mod tests {
         let symbol = unsafe { lib.get::<*const ()>("virtual_func").unwrap() };
         assert_eq!(
             symbol.into_raw() as usize,
-            lib.base() + expected_addr,
+            lib.base().wrapping_add(VmOffset::new(expected_addr)).get(),
             "symbol value should be relative to the DSO base"
         );
         assert_eq!(X86_64Arch::MACHINE.raw(), 62);

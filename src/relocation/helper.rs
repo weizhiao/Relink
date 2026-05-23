@@ -5,7 +5,7 @@ use crate::{
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
     image::{ElfCore, Module, ModuleScope},
     logging,
-    os::{RegionAccess, VmAddr},
+    os::{RegionAccess, VmAddr, VmOffset},
     relocate_context_error,
     relocation::{
         EmuRelocationContext, Emulator, HandleResult, RelocationArch, RelocationContext,
@@ -160,9 +160,9 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
     /// For undefined weak symbols, returns null.
     pub(crate) fn convert(self) -> VmAddr {
         if likely(self.sym.is_some()) {
-            let base = VmAddr::new(self.source.base_addr());
+            let base = self.source.base();
             let sym = unsafe { self.sym.unwrap_unchecked() };
-            let addr = base.offset(sym.st_value());
+            let addr = base.wrapping_add(VmOffset::new(sym.st_value()));
             if likely(
                 sym.symbol_type() != ElfSymbolType::GNU_IFUNC || !Arch::SUPPORTS_NATIVE_RUNTIME,
             ) {

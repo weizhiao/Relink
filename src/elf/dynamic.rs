@@ -6,7 +6,7 @@ use crate::{
         ElfDynRaw, ElfDynamicTag, ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, ElfWord,
         Lifecycle, NativeElfLayout,
     },
-    os::{MappedView, RegionAccess, VmAddr},
+    os::{MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::ElfSegments,
 };
@@ -197,22 +197,20 @@ where
             );
         }
 
-        let add_base = |offset: usize| -> Result<usize> {
-            base.checked_add(offset)
+        let add_base = |offset: usize| -> Result<VmAddr> {
+            base.checked_add(VmOffset::new(offset))
                 .ok_or(ParseDynamicError::AddressOverflow.into())
         };
-        let add_base_addr =
-            |offset: usize| -> Result<VmAddr> { Ok(VmAddr::new(add_base(offset)?)) };
         let add_base_nonzero = |offset: NonZeroUsize| -> Result<NonZeroUsize> {
-            NonZeroUsize::new(add_base(offset.get())?)
+            NonZeroUsize::new(add_base(offset.get())?.get())
                 .ok_or_else(|| ParseDynamicError::AddressOverflow.into())
         };
 
         // Determine which hash table to use (prefer GNU hash)
         let hash_off = if let Some(off) = parsed.gnu_hash_off {
-            ElfDynamicHashTab::Gnu(add_base_addr(off)?)
+            ElfDynamicHashTab::Gnu(add_base(off)?)
         } else if let Some(off) = parsed.elf_hash_off {
-            ElfDynamicHashTab::Elf(add_base_addr(off)?)
+            ElfDynamicHashTab::Elf(add_base(off)?)
         } else {
             return Err(ParseDynamicError::MissingRequiredTag {
                 tag: "DT_GNU_HASH or DT_HASH",
@@ -226,7 +224,7 @@ where
             .map(|pltrel_off| -> Result<_> {
                 let view = segments
                     .read_view::<ElfRelType<Arch>>(
-                        pltrel_off.get(),
+                        VmOffset::new(pltrel_off.get()),
                         parsed.pltrel_size.map(|len| len.get()).unwrap_or(0),
                     )
                     .ok_or(ParseDynamicError::MalformedRelocationTable {
@@ -240,7 +238,7 @@ where
             .map(|rel_off| -> Result<_> {
                 let view = segments
                     .read_view::<ElfRelType<Arch>>(
-                        rel_off.get(),
+                        VmOffset::new(rel_off.get()),
                         parsed.rel_size.map(|len| len.get()).unwrap_or(0),
                     )
                     .ok_or(ParseDynamicError::MalformedRelocationTable {
@@ -254,7 +252,7 @@ where
             .map(|relr_off| -> Result<_> {
                 let view = segments
                     .read_view::<ElfRelr<Arch::Layout>>(
-                        relr_off.get(),
+                        VmOffset::new(relr_off.get()),
                         parsed.relr_size.map(|len| len.get()).unwrap_or(0),
                     )
                     .ok_or(ParseDynamicError::MalformedRelocationTable {
@@ -267,12 +265,12 @@ where
         // Extract initialization and finalization functions
         let init_fn = parsed
             .init_off
-            .map(|init_off| add_base_addr(init_off.get()))
+            .map(|init_off| add_base(init_off.get()))
             .transpose()?;
         let init_array_size = parsed.init_array_size.map(|len| len.get()).unwrap_or(0);
         let fini_fn = parsed
             .fini_off
-            .map(|fini_off| add_base_addr(fini_off.get()))
+            .map(|fini_off| add_base(fini_off.get()))
             .transpose()?;
         let fini_array_size = parsed.fini_array_size.map(|len| len.get()).unwrap_or(0);
 
@@ -308,8 +306,8 @@ where
         Ok(ElfDynamic {
             dynamic_ptr,
             hashtab: hash_off,
-            symtab: add_base_addr(parsed.symtab_off)?,
-            strtab: add_base_addr(parsed.strtab_off)?,
+            symtab: add_base(parsed.symtab_off)?,
+            strtab: add_base(parsed.strtab_off)?,
             strtab_size: parsed.strtab_size,
             // Check if binding should be done immediately
             bind_now: parsed.bind_now
@@ -320,7 +318,7 @@ where
                 .got_off
                 .map(|off| add_base(off.get()))
                 .transpose()?
-                .map(|addr| unsafe { NonNull::new_unchecked(addr as *mut usize) }),
+                .map(|addr| unsafe { NonNull::new_unchecked(addr.as_mut_ptr::<usize>()) }),
             needed_libs: parsed.needed_libs,
             pltrel,
             dynrel,
@@ -368,7 +366,7 @@ impl LifecycleSpec {
             .array_offset
             .map(|offset| -> Result<_> {
                 let words = segments
-                    .read_view::<L::Word>(offset.get(), self.array_byte_len)
+                    .read_view::<L::Word>(VmOffset::new(offset.get()), self.array_byte_len)
                     .ok_or_else(|| ParseDynamicError::MalformedLifecycleTable {
                         detail: malformed,
                     })?;

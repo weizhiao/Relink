@@ -229,7 +229,7 @@ pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
     ) -> Option<&'source ElfSymbol<Arch::Layout>>;
 
     /// Returns the runtime base address used with `st_value`.
-    fn base_addr(&self) -> usize;
+    fn base(&self) -> VmAddr;
 
     /// Reads bytes from the module image for COPY relocations.
     fn read_segment(&self, _offset: usize, _dst: &mut [u8]) -> Result<bool> {
@@ -287,8 +287,8 @@ where
     }
 
     #[inline]
-    fn base_addr(&self) -> usize {
-        (**self).base_addr()
+    fn base(&self) -> VmAddr {
+        (**self).base()
     }
 
     #[inline]

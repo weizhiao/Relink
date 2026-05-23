@@ -8,7 +8,7 @@
 pub use defs::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
 pub use mapper::Mapper;
 pub(crate) use memory::MappedView;
-pub use memory::{HostRegion, MappedRegion, RegionAccess, VmAddr};
+pub use memory::{HostRegion, MappedRegion, RegionAccess, VmAddr, VmOffset};
 pub use platform::DefaultMmap;
 pub(crate) use platform::*;
 pub use traits::{Mmap, MmapResult};

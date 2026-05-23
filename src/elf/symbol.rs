@@ -325,8 +325,7 @@ impl<L: ElfLayout> SymbolTable<L> {
 
         let symtab_off = dynamic
             .symtab
-            .get()
-            .checked_sub(segments.base())
+            .checked_offset_from(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let symtab_size = symbol_count
             .checked_mul(size_of::<ElfSymbol<L>>())
@@ -343,8 +342,7 @@ impl<L: ElfLayout> SymbolTable<L> {
             .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_STRSZ" })?;
         let strtab_off = dynamic
             .strtab
-            .get()
-            .checked_sub(segments.base())
+            .checked_offset_from(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let strtab = segments
             .read_view::<u8>(strtab_off, strtab_size.get())

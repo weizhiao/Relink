@@ -23,7 +23,8 @@ impl RelocationHandler for MyRelocHandler {
         let (_, sym_info) = symtab.symbol_idx(r_sym);
 
         if sym_info.name() == "print" {
-            let target_addr = (ctx.lib().base() + ctx.rel().r_offset()) as *mut usize;
+            let target_addr =
+                ctx.lib().base().wrapping_add(ctx.rel().r_offset()).get() as *mut usize;
             println!(
                 "Relocating 'print' for {} at {:p}",
                 ctx.lib().name(),

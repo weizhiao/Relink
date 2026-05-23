@@ -7,7 +7,7 @@ use crate::{
     image::{DynamicInfo, Module},
     input::{Path, PathBuf},
     loader::{LifecycleContext, SharedLifecycleHandler, shared_lifecycle_handler},
-    os::{HostRegion, MappedView, RegionAccess, VmAddr},
+    os::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{EmuContext, Emulator, RelocationArch},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
@@ -63,7 +63,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Arch, R> {
                 CoreFiniHandler::Emu(emu) => {
                     let ctx = EmuContext::from_parts(
                         self.path.as_str(),
-                        self.segments.base_addr(),
+                        self.segments.base(),
                         &self.segments,
                     );
                     emu.call_fini(&ctx, &self.fini);
@@ -212,13 +212,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
 
     /// Gets the base address of the ELF object
     #[inline]
-    pub fn base(&self) -> usize {
+    pub fn base(&self) -> VmAddr {
         self.inner.segments.base()
-    }
-
-    #[inline]
-    pub(crate) fn base_addr(&self) -> VmAddr {
-        self.inner.segments.base_addr()
     }
 
     /// Gets the length of the bounding runtime span covered by mapped memory.
@@ -229,13 +224,13 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
 
     /// Returns the lowest runtime address covered by this image's mapped slices.
     #[inline]
-    pub(crate) fn mapped_base(&self) -> usize {
-        self.inner.segments.mapped_base().get()
+    pub(crate) fn mapped_base(&self) -> VmAddr {
+        self.inner.segments.mapped_base()
     }
 
     /// Returns whether `addr` is inside one of this image's mapped slices.
     #[inline]
-    pub fn contains_addr(&self, addr: usize) -> bool {
+    pub fn contains_addr(&self, addr: VmAddr) -> bool {
         self.inner.segments.contains_addr(addr)
     }
 
@@ -278,7 +273,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     #[inline]
     pub(crate) fn read_segment(&self, offset: usize, dst: &mut [u8]) -> Result<()> {
         self.segments()
-            .read_bytes(self.base_addr().offset(offset), dst)
+            .read_bytes(self.base().wrapping_add(VmOffset::new(offset)), dst)
     }
 
     #[inline]
@@ -431,8 +426,8 @@ where
     }
 
     #[inline]
-    fn base_addr(&self) -> usize {
-        self.base()
+    fn base(&self) -> VmAddr {
+        ElfCore::base(self)
     }
 
     #[inline]

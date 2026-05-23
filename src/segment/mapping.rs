@@ -1,5 +1,5 @@
 use crate::input::ElfReader;
-use crate::os::{MapFlags, Mapper, Mmap, ProtFlags, VmAddr};
+use crate::os::{MapFlags, Mapper, Mmap, ProtFlags, VmAddr, VmOffset};
 use crate::{Result, logging};
 
 use super::{ElfSegment, ElfSegments, roundup};
@@ -16,7 +16,14 @@ impl ElfSegment {
 
     #[inline]
     fn vm_addr(&self, base: VmAddr) -> VmAddr {
-        base.offset(self.offset)
+        base.wrapping_add(self.offset)
+    }
+
+    #[inline]
+    fn segment_offset(&self, offset: usize) -> VmOffset {
+        self.offset
+            .checked_add(offset)
+            .expect("ELF segment offset overflowed")
     }
 
     /// Map the segment into memory
@@ -85,7 +92,7 @@ impl ElfSegment {
     fn copy_data(&self, space: &ElfSegments, object: &mut impl ElfReader) -> Result<()> {
         if self.need_copy {
             for info in &self.map_info {
-                let addr = space.base_addr().offset(self.offset + info.start);
+                let addr = space.base().wrapping_add(self.segment_offset(info.start));
                 let dst = space
                     .host_ptr_range(addr, info.filesz)
                     .expect("segment copy target is not host-accessible");
@@ -134,8 +141,8 @@ impl ElfSegment {
     fn fill_zero(&self, mapper: &dyn Mmap, space: &ElfSegments) -> Result<()> {
         if self.zero_size > 0 {
             let zero_start = space
-                .base_addr()
-                .offset(self.offset + self.content_size)
+                .base()
+                .wrapping_add(self.segment_offset(self.content_size))
                 .into_inner();
             let zero_end = roundup(zero_start, self.page_size);
             let write_len = zero_end - zero_start;
@@ -211,7 +218,7 @@ pub(crate) trait SegmentBuilder {
         let space = self.create_space(mapper.clone())?;
         self.create_segments()?;
         let segments = self.segments_mut();
-        let base = space.base_addr();
+        let base = space.base();
 
         #[cfg(windows)]
         let mut last_addr = space

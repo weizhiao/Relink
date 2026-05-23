@@ -6,7 +6,7 @@ use std::{
     thread,
 };
 
-use elf_loader::{arch::NativeArch, relocation::RelocationArch};
+use elf_loader::{arch::NativeArch, os::VmOffset, relocation::RelocationArch};
 
 const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
 const REL_GOT: u32 = <NativeArch as RelocationArch>::GOT.raw();
@@ -180,7 +180,8 @@ impl BindingScenario {
                     .unwrap_or_else(|| panic!("missing TLS symbol {symbol_name}"))
                     .into_raw() as usize
             };
-            let expected = (tls_symbol - self.helper_dylib().base()) as u64 + dtpoff.addend as u64
+            let expected = (tls_symbol - self.helper_dylib().base().get()) as u64
+                + dtpoff.addend as u64
                 - NativeArch::TLS_DTV_OFFSET as u64;
             assert_eq!(
                 self.slot_word(dtpoff),
@@ -195,7 +196,7 @@ impl BindingScenario {
         assert_eq!(relative.section, SectionKind::Got);
         assert_eq!(
             self.slot_word(relative),
-            (self.loaded_dylib().base() as i64 + relative.addend) as u64,
+            (self.loaded_dylib().base().get() as i64 + relative.addend) as u64,
             "REL_RELATIVE mismatch"
         );
 
@@ -203,7 +204,10 @@ impl BindingScenario {
         assert_eq!(irelative.section, SectionKind::Got);
         assert_eq!(
             self.slot_word(irelative),
-            self.loaded_dylib().base() as u64 + IFUNC_RESOLVER_OFFSET,
+            self.loaded_dylib()
+                .base()
+                .wrapping_add(VmOffset::new(IFUNC_RESOLVER_OFFSET as usize))
+                .get() as u64,
             "REL_IRELATIVE mismatch"
         );
     }

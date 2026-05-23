@@ -14,7 +14,7 @@ mod enabled {
         RelocReason, Result,
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
-        os::{RegionAccess, VmAddr},
+        os::{RegionAccess, VmAddr, VmOffset},
         relocation::{
             RelocHelper, RelocValue, RelocationArch, RelocationHandler, TlsDescEmuRequest,
         },
@@ -59,9 +59,9 @@ mod enabled {
         let r_type = rel.r_type();
         let r_sym = rel.r_symbol();
         let segments = helper.core.segments();
-        let base = segments.base_addr();
-        let place = base.offset(rel.r_offset());
-        let r_addend = rel.r_addend(base.into_inner());
+        let base = segments.base();
+        let place = base.wrapping_add(rel.r_offset());
+        let r_addend = rel.r_addend(base);
 
         match r_type {
             value if value == Arch::DTPOFF => {
@@ -126,7 +126,11 @@ mod enabled {
                             return Ok(TlsRelocOutcome::Failed(RelocReason::MissingEmulator));
                         };
                         write_tls_word::<Arch, R>(segments, place, desc.resolver())?;
-                        write_tls_word::<Arch, R>(segments, place.offset(8), desc.arg())?;
+                        write_tls_word::<Arch, R>(
+                            segments,
+                            place.wrapping_add(VmOffset::new(8)),
+                            desc.arg(),
+                        )?;
                         return Ok(TlsRelocOutcome::Applied);
                     }
 
@@ -139,7 +143,11 @@ mod enabled {
                             place,
                             tlsdesc_resolver_static as *const () as usize,
                         )?;
-                        write_tls_word::<Arch, R>(segments, place.offset(8), tpoff.into_inner())?;
+                        write_tls_word::<Arch, R>(
+                            segments,
+                            place.wrapping_add(VmOffset::new(8)),
+                            tpoff.into_inner(),
+                        )?;
                         return Ok(TlsRelocOutcome::Applied);
                     }
 
@@ -161,7 +169,11 @@ mod enabled {
                             place,
                             tlsdesc_resolver_dynamic as *const () as usize,
                         )?;
-                        write_tls_word::<Arch, R>(segments, place.offset(8), arg_ptr.into_inner())?;
+                        write_tls_word::<Arch, R>(
+                            segments,
+                            place.wrapping_add(VmOffset::new(8)),
+                            arg_ptr.into_inner(),
+                        )?;
                         return Ok(TlsRelocOutcome::Applied);
                     }
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));

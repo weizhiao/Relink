@@ -8,7 +8,7 @@ use crate::{
     },
     image::{Module, ModuleHandle, ModuleScope},
     input::{Path, PathBuf},
-    os::{HostRegion, MappedRegion, MappedView, Mapper, RegionAccess, VmAddr},
+    os::{HostRegion, MappedRegion, MappedView, Mapper, RegionAccess, VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::ElfSegments,
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -190,7 +190,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
 
     /// Returns the base address of the ELF object.
     #[inline]
-    pub fn base(&self) -> usize {
+    pub fn base(&self) -> VmAddr {
         self.core.base()
     }
 
@@ -202,7 +202,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
 
     /// Returns whether `addr` is inside one of this module's mapped slices.
     #[inline]
-    pub fn contains_addr(&self, addr: usize) -> bool {
+    pub fn contains_addr(&self, addr: VmAddr) -> bool {
         self.core.contains_addr(addr)
     }
 
@@ -311,14 +311,14 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         phdr: &ElfPhdr<Arch::Layout>,
     ) -> Result<MappedView<ElfDyn<Arch::Layout>>> {
         let malformed = "PT_DYNAMIC is not directly readable from mapped segments";
-        if let Some(view) =
-            segments.read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())
+        if let Some(view) = segments
+            .read_view::<ElfDyn<Arch::Layout>>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
             && !view.is_empty()
         {
             return Ok(view);
         }
 
-        let addr = base.wrapping_add(phdr.p_vaddr());
+        let addr = base.wrapping_add(VmOffset::new(phdr.p_vaddr()));
         let byte_len = phdr.p_filesz();
         let region = MappedRegion::local_alias(
             addr.as_mut_ptr::<c_void>(),
@@ -366,9 +366,9 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                 Mapper::from_munmap(move |addr, len| unsafe { munmap(addr, len) }),
             ),
             VmAddr::from_ptr(memory.0),
-            0,
+            VmOffset::new(0),
         );
-        let base = segments.base_addr();
+        let base = segments.base();
         let mut tls_mod_id = None;
         let mut actual_tls_tp_offset = tls_tp_offset;
 
@@ -384,7 +384,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                 }
                 ElfProgramType::GNU_EH_FRAME => {
                     eh_frame_hdr = segments
-                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())
+                        .borrowed_ptr::<u8>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
                         .ok_or(crate::ParsePhdrError::malformed(
                             "PT_GNU_EH_FRAME is not directly readable from mapped segments",
                         ))
@@ -399,7 +399,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
 
         if let Some(phdr) = tls_phdr {
             let template = segments
-                .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
+                .read_view::<u8>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
                 .ok_or(crate::ParsePhdrError::malformed(
                     "PT_TLS image is malformed",
                 ))?;
@@ -495,8 +495,8 @@ where
     }
 
     #[inline]
-    fn base_addr(&self) -> usize {
-        self.base()
+    fn base(&self) -> VmAddr {
+        self.core.base()
     }
 
     #[inline]

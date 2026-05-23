@@ -19,6 +19,7 @@ use crate::{
     image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     linker::session::ResolveSession,
     loader::LoadHook,
+    os::VmOffset,
     relocation::{RelocationArch, RelocationHandler, Relocator},
     tls::TlsResolver,
 };
@@ -885,7 +886,9 @@ fn apply_section_overrides<D, Arch: RelocationArch>(
             "planned section override size does not match the loaded section"
         );
         segments.write_bytes(
-            segments.base_addr().offset(metadata.source_address()),
+            segments
+                .base()
+                .wrapping_add(VmOffset::new(metadata.source_address())),
             data.as_ref(),
         )?;
     }

@@ -9,7 +9,7 @@ use crate::{
     ParseDynamicError, Result,
     elf::{ElfLayout, ElfSymbol, ElfWord},
     elf::{PreCompute, SymbolTable, symbol::SymbolInfo},
-    os::{MappedView, RegionAccess, VmAddr},
+    os::{MappedView, RegionAccess, VmAddr, VmOffset},
     segment::ElfSegments,
 };
 use core::mem::size_of;
@@ -66,8 +66,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
     pub(crate) fn parse<R: RegionAccess>(segments: &ElfSegments<R>, addr: VmAddr) -> Result<Self> {
         const HEADER_SIZE: usize = size_of::<ElfGnuHeader>();
         let start = addr
-            .get()
-            .checked_sub(segments.base())
+            .checked_offset_from(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let mut bytes = [0u8; HEADER_SIZE];
         segments.read_bytes(addr, &mut bytes)?;
@@ -134,7 +133,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
 
     fn count_chain_entries<R: RegionAccess>(
         segments: &ElfSegments<R>,
-        chains_off: usize,
+        chains_off: VmOffset,
         header: &ElfGnuHeader,
         buckets: &MappedView<u32>,
     ) -> Result<usize> {
@@ -169,7 +168,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
                 .checked_add(offset)
                 .ok_or(ParseDynamicError::AddressOverflow)?;
             let mut bytes = [0u8; size_of::<u32>()];
-            segments.read_bytes(segments.base_addr().offset(offset), &mut bytes)?;
+            segments.read_bytes(segments.base().wrapping_add(offset), &mut bytes)?;
             let value = u32::from_ne_bytes(bytes);
             if value & 1 != 0 {
                 return Ok(idx

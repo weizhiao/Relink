@@ -77,12 +77,12 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
     }
 
     /// Returns the runtime base address.
-    pub fn base(&self) -> usize {
+    pub fn base(&self) -> VmAddr {
         self.inner.segments.base()
     }
 
-    pub(crate) fn mapped_base(&self) -> usize {
-        self.inner.segments.mapped_base().get()
+    pub(crate) fn mapped_base(&self) -> VmAddr {
+        self.inner.segments.mapped_base()
     }
 
     /// Returns the mapped memory length in bytes.
@@ -91,7 +91,7 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
     }
 
     /// Returns whether `addr` lies inside this executable mapping.
-    pub fn contains_addr(&self, addr: usize) -> bool {
+    pub fn contains_addr(&self, addr: VmAddr) -> bool {
         self.inner.segments.contains_addr(addr)
     }
 }
@@ -256,7 +256,7 @@ impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
     }
 
     /// Returns the lowest runtime address covered by this executable's mapped slices.
-    pub(crate) fn mapped_base(&self) -> usize {
+    pub(crate) fn mapped_base(&self) -> VmAddr {
         match self {
             RawExec::Dynamic(image) => image.mapped_base(),
             RawExec::Static(image) => image.mapped_base(),
@@ -264,7 +264,7 @@ impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
     }
 
     /// Returns whether `addr` is inside one of this executable's mapped slices.
-    pub fn contains_addr(&self, addr: usize) -> bool {
+    pub fn contains_addr(&self, addr: VmAddr) -> bool {
         match self {
             RawExec::Dynamic(image) => image.contains_addr(addr),
             RawExec::Static(image) => image.contains_addr(addr),
@@ -272,7 +272,7 @@ impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
     }
 
     /// Returns the runtime base address.
-    pub fn base(&self) -> usize {
+    pub fn base(&self) -> VmAddr {
         match self {
             RawExec::Dynamic(image) => image.base(),
             RawExec::Static(image) => image.base(),
@@ -332,7 +332,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
     }
 
     /// Returns whether `addr` is inside one of this executable's mapped slices.
-    pub fn contains_addr(&self, addr: usize) -> bool {
+    pub fn contains_addr(&self, addr: VmAddr) -> bool {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => module.contains_addr(addr),
             LoadedExecInner::Static(static_image) => static_image.contains_addr(addr),

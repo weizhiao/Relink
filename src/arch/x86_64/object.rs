@@ -3,7 +3,7 @@ use crate::{
     arch::x86_64::relocation::X86_64Arch,
     elf::ElfRelType,
     object::layout::{GotEntry, PltEntry, PltGotSection},
-    os::{HostRegion, VmAddr},
+    os::{HostRegion, VmAddr, VmOffset},
     relocation::{
         RelocHelper, RelocValue, RelocationHandler, RelocationValueProvider, reloc_error,
     },
@@ -77,9 +77,9 @@ impl X86_64Arch {
         let r_type = rel.r_type();
         let core = helper.core;
         let segments = core.segments();
-        let base = core.base_addr();
-        let append = rel.r_addend(base.into_inner());
-        let place = base.offset(rel.r_offset());
+        let base = core.base();
+        let append = rel.r_addend(base);
+        let place = base.wrapping_add(rel.r_offset());
         let unknown_symbol = || {
             reloc_error::<Self, _, HostRegion>(rel, crate::RelocReason::UnknownSymbol, helper.core)
         };

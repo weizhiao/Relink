@@ -10,7 +10,7 @@ use crate::{
     },
     input::PathBuf,
     loader::{LoadHook, LoaderInner, SharedLifecycleHandler},
-    os::VmAddr,
+    os::{VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::{ElfSegments, SegmentBuilder},
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
@@ -91,7 +91,10 @@ where
         base: VmAddr,
     ) {
         shdrs.iter_mut().for_each(|shdr| {
-            shdr.set_sh_addr(base.offset(shdr.sh_addr()).into_inner());
+            shdr.set_sh_addr(
+                base.wrapping_add(VmOffset::new(shdr.sh_addr()))
+                    .into_inner(),
+            );
         });
         pltgot.rebase(base);
     }
@@ -109,7 +112,11 @@ where
             }
             let section_base =
                 VmAddr::new(shdrs[section_index.index()].sh_addr()).relative_to(base.into_inner());
-            symbol.set_value(section_base.offset(symbol.st_value()).into_inner());
+            symbol.set_value(
+                section_base
+                    .wrapping_add(VmOffset::new(symbol.st_value()))
+                    .into_inner(),
+            );
         }
 
         SymbolTable::from_shdrs(symtab_shdr, shdrs)
@@ -123,12 +130,12 @@ where
         let rels: &mut [ElfRelType<Arch>] = relocation_shdr.content_mut();
         let section_base = VmAddr::new(shdrs[relocation_shdr.sh_info() as usize].sh_addr());
         for rel in rels {
-            rel.set_offset(
+            rel.set_offset(VmOffset::new(
                 section_base
-                    .offset(rel.r_offset())
+                    .wrapping_add(rel.r_offset())
                     .relative_to(base.into_inner())
                     .into_inner(),
-            );
+            ));
         }
 
         relocation_shdr.content()
@@ -179,7 +186,7 @@ where
         user_data: D,
     ) -> Result<Self> {
         Self::validate_shdrs(shdrs)?;
-        let base = segments.base_addr();
+        let base = segments.base();
         Self::rebase_loaded_sections(shdrs, &mut pltgot, base);
         let ObjectSectionData {
             symtab,
@@ -226,7 +233,7 @@ where
         let mut shdr_segments =
             SectionSegments::<Arch>::new(shdrs, &mut object, self.page_size()?.bytes())?;
         let segments = shdr_segments.load_segments(mapper.clone(), &mut object)?;
-        let base = segments.base_addr();
+        let base = segments.base();
         let pltgot = shdr_segments.take_pltgot();
         let mprotect = Box::new(move || {
             shdr_segments.mprotect(mapper.as_ref(), base)?;

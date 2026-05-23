@@ -7,7 +7,7 @@ mod enabled {
         RelocationError, Result,
         arch::{NativeArch, prepare_lazy_bind},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolInfo},
-        os::{RegionAccess, VmAddr},
+        os::{RegionAccess, VmAddr, VmOffset},
         relocation::{BindingMode, RelocValue, RelocationArch, SupportLazy, SymDef, unlikely},
         segment::ElfSegments,
         sync::Arc,
@@ -76,10 +76,11 @@ mod enabled {
 
             unsafe {
                 segments.update_value::<_>(
-                    base.offset(rel.r_offset()),
+                    base.wrapping_add(rel.r_offset()),
                     |word: <Arch::Layout as ElfLayout>::Word| {
                         <Arch::Layout as ElfLayout>::Word::from_usize(
-                            base.offset(word.to_usize()).into_inner(),
+                            base.wrapping_add(VmOffset::new(word.to_usize()))
+                                .into_inner(),
                         )
                     },
                 )?
@@ -220,7 +221,7 @@ mod enabled {
         unsafe {
             if segments
                 .write_value(
-                    dylib.segments.base_addr().offset(rela.r_offset()),
+                    dylib.segments.base().wrapping_add(rela.r_offset()),
                     RelocValue::new(symbol.into_inner()),
                 )
                 .is_err()

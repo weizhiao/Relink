@@ -1,6 +1,10 @@
 //! ELF relocation-entry wrappers.
 
-use crate::{arch::NativeArch, relocation::RelocationArch};
+use crate::{
+    arch::NativeArch,
+    os::{VmAddr, VmOffset},
+    relocation::RelocationArch,
+};
 
 use super::{
     layout::{ElfLayout, NativeElfLayout},
@@ -43,27 +47,27 @@ impl<L: ElfLayout> ElfRela<L> {
 
     /// Returns the relocation offset.
     #[inline]
-    pub fn r_offset(&self) -> usize {
-        self.rela.r_offset()
+    pub fn r_offset(&self) -> VmOffset {
+        VmOffset::new(self.rela.r_offset())
     }
 
     /// Returns the relocation addend.
     #[inline]
-    pub fn r_addend(&self, _base: usize) -> isize {
+    pub fn r_addend(&self, _base: VmAddr) -> isize {
         self.rela.r_addend()
     }
 
     /// Sets the relocation offset.
     /// This is used internally when adjusting relocation entries during loading.
     #[inline]
-    pub(crate) fn set_offset(&mut self, offset: usize) {
-        self.rela.set_r_offset(offset);
+    pub(crate) fn set_offset(&mut self, offset: VmOffset) {
+        self.rela.set_r_offset(offset.get());
     }
 
     /// Sets the relocation addend.
     /// This is used internally when adjusting relocation entries during loading.
     #[inline]
-    pub(crate) fn set_addend(&mut self, _base: usize, addend: isize) {
+    pub(crate) fn set_addend(&mut self, _base: VmAddr, addend: isize) {
         self.rela.set_r_addend(addend);
     }
 }
@@ -89,8 +93,8 @@ impl<L: ElfLayout> ElfRel<L> {
 
     /// Returns the relocation offset.
     #[inline]
-    pub fn r_offset(&self) -> usize {
-        self.rel.r_offset()
+    pub fn r_offset(&self) -> VmOffset {
+        VmOffset::new(self.rel.r_offset())
     }
 
     /// Returns the relocation addend.
@@ -100,16 +104,16 @@ impl<L: ElfLayout> ElfRel<L> {
     /// # Arguments
     /// * `base` - The base address to add to the offset.
     #[inline]
-    pub fn r_addend(&self, base: usize) -> isize {
-        let ptr = (self.r_offset() + base) as *const L::Word;
+    pub fn r_addend(&self, base: VmAddr) -> isize {
+        let ptr = base.wrapping_add(self.r_offset()).as_ptr::<L::Word>();
         unsafe { ptr.read_unaligned().to_usize() as isize }
     }
 
     /// Sets the relocation offset.
     /// This is used internally when adjusting relocation entries during loading.
     #[inline]
-    pub(crate) fn set_offset(&mut self, offset: usize) {
-        self.rel.set_r_offset(offset);
+    pub(crate) fn set_offset(&mut self, offset: VmOffset) {
+        self.rel.set_r_offset(offset.get());
     }
 
     /// Sets the relocation addend.
@@ -121,8 +125,8 @@ impl<L: ElfLayout> ElfRel<L> {
     /// * `addend` - The new implicit addend value.
     #[inline]
     #[allow(dead_code)]
-    pub(crate) fn set_addend(&mut self, base: usize, addend: isize) {
-        let ptr = (self.r_offset() + base) as *mut L::Word;
+    pub(crate) fn set_addend(&mut self, base: VmAddr, addend: isize) {
+        let ptr = base.wrapping_add(self.r_offset()).as_mut_ptr::<L::Word>();
         unsafe { ptr.write_unaligned(L::Word::from_usize(addend as usize)) };
     }
 }
@@ -139,13 +143,13 @@ pub trait ElfRelEntry<L: ElfLayout = NativeElfLayout> {
     /// Returns the symbol table index referenced by the relocation.
     fn r_symbol(&self) -> usize;
     /// Returns the relocation target offset.
-    fn r_offset(&self) -> usize;
+    fn r_offset(&self) -> VmOffset;
     /// Returns the relocation addend, reading implicit addends relative to `base`.
-    fn r_addend(&self, base: usize) -> isize;
+    fn r_addend(&self, base: VmAddr) -> isize;
     /// Updates the relocation target offset.
-    fn set_offset(&mut self, offset: usize);
+    fn set_offset(&mut self, offset: VmOffset);
     /// Updates the relocation addend.
-    fn set_addend(&mut self, base: usize, addend: isize);
+    fn set_addend(&mut self, base: VmAddr, addend: isize);
 }
 
 impl<L: ElfLayout> ElfRelEntry<L> for ElfRela<L> {
@@ -163,22 +167,22 @@ impl<L: ElfLayout> ElfRelEntry<L> for ElfRela<L> {
     }
 
     #[inline]
-    fn r_offset(&self) -> usize {
+    fn r_offset(&self) -> VmOffset {
         self.r_offset()
     }
 
     #[inline]
-    fn r_addend(&self, base: usize) -> isize {
+    fn r_addend(&self, base: VmAddr) -> isize {
         self.r_addend(base)
     }
 
     #[inline]
-    fn set_offset(&mut self, offset: usize) {
+    fn set_offset(&mut self, offset: VmOffset) {
         self.set_offset(offset);
     }
 
     #[inline]
-    fn set_addend(&mut self, base: usize, addend: isize) {
+    fn set_addend(&mut self, base: VmAddr, addend: isize) {
         self.set_addend(base, addend);
     }
 }
@@ -198,22 +202,22 @@ impl<L: ElfLayout> ElfRelEntry<L> for ElfRel<L> {
     }
 
     #[inline]
-    fn r_offset(&self) -> usize {
+    fn r_offset(&self) -> VmOffset {
         self.r_offset()
     }
 
     #[inline]
-    fn r_addend(&self, base: usize) -> isize {
+    fn r_addend(&self, base: VmAddr) -> isize {
         self.r_addend(base)
     }
 
     #[inline]
-    fn set_offset(&mut self, offset: usize) {
+    fn set_offset(&mut self, offset: VmOffset) {
         self.set_offset(offset);
     }
 
     #[inline]
-    fn set_addend(&mut self, base: usize, addend: isize) {
+    fn set_addend(&mut self, base: VmAddr, addend: isize) {
         self.set_addend(base, addend);
     }
 }

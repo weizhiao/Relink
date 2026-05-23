@@ -2,7 +2,7 @@ use core::{mem::size_of, ptr::NonNull};
 
 use crate::{
     ByteRepr, Result,
-    os::{ProtFlags, VmAddr},
+    os::{ProtFlags, VmAddr, VmOffset},
     sync::Arc,
 };
 
@@ -171,7 +171,7 @@ impl<T: 'static> MappedView<T> {
     #[inline]
     pub(crate) fn source_end(&self) -> Option<VmAddr> {
         let byte_len = self.len().checked_mul(size_of::<T>())?;
-        self.source_addr.checked_add(byte_len)
+        self.source_addr.checked_add(VmOffset::new(byte_len))
     }
 }
 

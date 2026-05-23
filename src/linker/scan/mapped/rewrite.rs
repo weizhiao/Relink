@@ -7,6 +7,7 @@ use crate::{
         ElfDyn, ElfDynamicTag, ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfSymbol,
     },
     image::ScannedSectionId,
+    os::{VmAddr, VmOffset},
     relocation::{RelocationArch, RelocationValueProvider},
 };
 use core::{cell::Cell, marker::PhantomData, mem::size_of};
@@ -62,7 +63,7 @@ impl RelocationEntryInfo {
     {
         Self {
             r_type: entry.r_type(),
-            offset: SourceAddress::new(entry.r_offset()),
+            offset: SourceAddress::new(entry.r_offset().get()),
             addend: relocation_addend::<Arch>(entry),
         }
     }
@@ -466,10 +467,10 @@ where
         .expect("allocated relocation entry index should remain valid");
     if !<ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::HAS_IMPLICIT_ADDEND {
         if let Some(addend) = site.addend {
-            rel.set_addend(0, addend);
+            rel.set_addend(VmAddr::null(), addend);
         }
     }
-    rel.set_offset(site.place.get());
+    rel.set_offset(VmOffset::new(site.place.get()));
     Ok(())
 }
 
@@ -509,7 +510,7 @@ where
     if <ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::HAS_IMPLICIT_ADDEND {
         RelocationAddend::Implicit
     } else {
-        RelocationAddend::Explicit(rel.r_addend(0))
+        RelocationAddend::Explicit(rel.r_addend(VmAddr::null()))
     }
 }
 
@@ -658,7 +659,7 @@ where
         entry.r_type(),
         symbol.is_undef(),
         site.section_offset,
-        entry.r_offset(),
+        entry.r_offset().get(),
         addend,
     )? {
         let runtime_target = runtime

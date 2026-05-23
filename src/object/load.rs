@@ -4,6 +4,7 @@ use crate::{
     input::{ElfReader, IntoElfReader},
     loader::{LoadHook, Loader},
     logging,
+    os::VmOffset,
     relocation::RelocationArch,
     tls::TlsResolver,
 };
@@ -56,7 +57,8 @@ where
             "Loaded object: {} at [0x{:x}-0x{:x}]",
             raw.name(),
             raw.mapped_base(),
-            raw.mapped_base() + raw.mapped_len()
+            raw.mapped_base()
+                .wrapping_add(VmOffset::new(raw.mapped_len()))
         );
 
         Ok(raw)

@@ -1,6 +1,6 @@
 use crate::{
     ByteRepr, Result,
-    os::{HostRegion, MappedRegion, MappedView, RegionAccess, VmAddr},
+    os::{HostRegion, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::RelocValue,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -12,26 +12,26 @@ use core::{
 
 #[derive(Clone, Copy)]
 struct MappedRange {
-    offset: usize,
+    offset: VmOffset,
     len: usize,
 }
 
 impl MappedRange {
     #[inline]
-    const fn new(offset: usize, len: usize) -> Self {
+    const fn new(offset: VmOffset, len: usize) -> Self {
         Self { offset, len }
     }
 
     #[inline]
     fn contains_offset_range(self, offset: usize, len: usize) -> bool {
         offset
-            .checked_sub(self.offset)
+            .checked_sub(self.offset.get())
             .and_then(|delta| delta.checked_add(len))
             .is_some_and(|end| end <= self.len)
     }
 
     #[inline]
-    fn end(self) -> usize {
+    fn end(self) -> VmOffset {
         self.offset
             .checked_add(self.len)
             .expect("ELF mapped range overflowed")
@@ -84,7 +84,7 @@ impl<R: RegionAccess> ElfSegments<R> {
 
             if previous_end == range.offset {
                 merged[previous_idx].len = range_end
-                    .checked_sub(previous.offset)
+                    .checked_offset_from(previous.offset)
                     .expect("ELF mapped range overflowed");
             } else {
                 merged.push(range);
@@ -100,7 +100,7 @@ impl<R: RegionAccess> ElfSegments<R> {
             return false;
         };
         let idx = self.ranges.partition_point(|range| range.offset <= offset);
-        idx > 0 && self.ranges[idx - 1].contains_offset_range(offset, len)
+        idx > 0 && self.ranges[idx - 1].contains_offset_range(offset.get(), len)
     }
 
     #[inline]
@@ -110,12 +110,12 @@ impl<R: RegionAccess> ElfSegments<R> {
 
     #[inline]
     fn region_offset(&self, addr: VmAddr) -> usize {
-        addr.wrapping_offset_from(self.region.addr())
+        addr.wrapping_offset_from(self.region.addr()).get()
     }
 
     /// Create a new contiguous [`ElfSegments`] instance whose mapped bytes begin
     /// at the module-relative `offset`.
-    pub(crate) fn new(region: MappedRegion<R>, base: VmAddr, offset: usize) -> Self {
+    pub(crate) fn new(region: MappedRegion<R>, base: VmAddr, offset: VmOffset) -> Self {
         let len = region.len();
         let range = MappedRange::new(offset, len);
         let ranges = Box::new([range]);
@@ -135,7 +135,7 @@ impl<R: RegionAccess> ElfSegments<R> {
     ) -> Self {
         let ranges = ranges
             .into_iter()
-            .map(|(offset, len)| MappedRange::new(offset, len))
+            .map(|(offset, len)| MappedRange::new(VmOffset::new(offset), len))
             .collect::<Vec<_>>();
         let ranges = Self::normalize_ranges(ranges);
 
@@ -147,7 +147,7 @@ impl<R: RegionAccess> ElfSegments<R> {
             assert!(
                 region_offset
                     .checked_add(range.len)
-                    .is_some_and(|end| end <= region.len()),
+                    .is_some_and(|end| end.get() <= region.len()),
                 "ELF mapped range exceeds its backing region",
             );
         }
@@ -199,16 +199,15 @@ impl<R: RegionAccess> ElfSegments<R> {
         else {
             return 0;
         };
-        last.end().saturating_sub(first.offset)
+        last.end().saturating_offset_from(first.offset)
     }
 
     /// Returns whether `addr` is inside one of this image's mapped ranges.
     #[inline]
-    pub fn contains_addr(&self, addr: usize) -> bool {
-        let addr = VmAddr::new(addr);
+    pub fn contains_addr(&self, addr: VmAddr) -> bool {
         self.ranges.iter().copied().any(|range| {
             addr.checked_offset_from(self.range_base(range))
-                .is_some_and(|offset| offset < range.len)
+                .is_some_and(|offset| offset.get() < range.len)
         })
     }
 
@@ -221,10 +220,10 @@ impl<R: RegionAccess> ElfSegments<R> {
     #[inline]
     pub(crate) fn read_view<T: ByteRepr + 'static>(
         &self,
-        offset: usize,
+        offset: VmOffset,
         byte_len: usize,
     ) -> Option<MappedView<T>> {
-        let addr = self.base_addr().offset(offset);
+        let addr = self.base().wrapping_add(offset);
         if !self.contains_range(addr, byte_len) {
             return None;
         }
@@ -235,7 +234,7 @@ impl<R: RegionAccess> ElfSegments<R> {
     #[inline]
     pub(crate) fn borrowed_ptr<T: ByteRepr + 'static>(
         &self,
-        offset: usize,
+        offset: VmOffset,
         byte_len: usize,
     ) -> Option<NonNull<T>> {
         self.read_view::<T>(offset, byte_len)
@@ -323,13 +322,7 @@ impl<R: RegionAccess> ElfSegments<R> {
 
     /// Returns the base address of the mapped memory as a raw integer.
     #[inline]
-    pub fn base(&self) -> usize {
-        self.base.get()
-    }
-
-    /// Returns the base address of the mapped memory.
-    #[inline]
-    pub fn base_addr(&self) -> VmAddr {
+    pub fn base(&self) -> VmAddr {
         self.base
     }
 }

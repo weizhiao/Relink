@@ -12,6 +12,7 @@ use elf_loader::{
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfRela},
     image::RawElf,
     input::ElfFile,
+    os::VmAddr,
     relocation::RelocationArch,
 };
 use linked_list_allocator::LockedHeap;
@@ -161,12 +162,13 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut ElfDyn) {
     // 自举，mini-loader自己对自己重定位
     let rela_ptr = (rela as usize + base) as *const ElfRela;
     let relas = unsafe { &*core::ptr::slice_from_raw_parts(rela_ptr, rela_count as usize) };
+    let base_addr = VmAddr::new(base);
     for rela in relas {
         if rela.r_type() != <NativeArch as RelocationArch>::RELATIVE {
             print_str("unknown rela type");
         }
-        let ptr = (rela.r_offset() + base) as *mut usize;
-        unsafe { ptr.write(base.wrapping_add_signed(rela.r_addend(base))) };
+        let ptr = base_addr.wrapping_add(rela.r_offset()).get() as *mut usize;
+        unsafe { ptr.write(base.wrapping_add_signed(rela.r_addend(base_addr))) };
     }
     // 至此就完成自举，可以进行函数调用了
     unsafe {
@@ -203,7 +205,9 @@ unsafe extern "C" fn rust_main(sp: *mut usize, dynv: *mut ElfDyn) {
             AT_PHENT => cur_aux.val = size_of::<ElfPhdr>() as u64,
             AT_ENTRY => cur_aux.val = elf.entry() as u64,
             AT_EXECFN => cur_aux.val = unsafe { argv.add(1).read() } as u64,
-            AT_BASE => cur_aux.val = interp_dylib.as_ref().map(|e| e.base()).unwrap_or(0) as u64,
+            AT_BASE => {
+                cur_aux.val = interp_dylib.as_ref().map(|e| e.base().get()).unwrap_or(0) as u64
+            }
             _ => {}
         }
         cur_aux_ptr = unsafe { cur_aux_ptr.add(1) };

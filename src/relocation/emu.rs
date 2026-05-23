@@ -17,12 +17,12 @@ use core::marker::PhantomData;
 pub trait EmulatedArch: RelocationArch {}
 
 trait EmuSegments {
-    fn contains_addr(&self, addr: usize) -> bool;
+    fn contains_addr(&self, addr: VmAddr) -> bool;
 }
 
 impl<R: RegionAccess> EmuSegments for ElfSegments<R> {
     #[inline]
-    fn contains_addr(&self, addr: usize) -> bool {
+    fn contains_addr(&self, addr: VmAddr) -> bool {
         ElfSegments::contains_addr(self, addr)
     }
 }
@@ -38,7 +38,7 @@ pub struct EmuContext<'a, Arch: RelocationArch> {
 impl<'a, Arch: RelocationArch> EmuContext<'a, Arch> {
     #[inline]
     pub(crate) fn new<D: 'static, R: RegionAccess>(core: &'a ElfCore<D, Arch, R>) -> Self {
-        Self::from_parts(core.name(), core.base_addr(), core.segments())
+        Self::from_parts(core.name(), core.base(), core.segments())
     }
 
     #[inline]
@@ -63,13 +63,13 @@ impl<'a, Arch: RelocationArch> EmuContext<'a, Arch> {
 
     /// Runtime base address of the mapped image.
     #[inline]
-    pub fn base(&self) -> usize {
-        self.base.get()
+    pub fn base(&self) -> VmAddr {
+        self.base
     }
 
     /// Returns whether an absolute address is covered by this image.
     #[inline]
-    pub fn contains_addr(&self, addr: usize) -> bool {
+    pub fn contains_addr(&self, addr: VmAddr) -> bool {
         self.segments.contains_addr(addr)
     }
 }

@@ -1,4 +1,4 @@
-use crate::os::{MapFlags, ProtFlags};
+use crate::os::{MapFlags, ProtFlags, VmOffset};
 use alloc::vec::Vec;
 
 /// Information about a file mapping within a segment
@@ -22,7 +22,7 @@ pub(crate) struct FileMapInfo {
 /// and data content.
 pub(crate) struct ElfSegment {
     /// Module-relative offset of the segment.
-    pub(crate) offset: usize,
+    pub(crate) offset: VmOffset,
     /// Memory protection flags for the segment
     pub(crate) prot: ProtFlags,
     /// Memory mapping flags for the segment

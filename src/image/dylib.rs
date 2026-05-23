@@ -8,7 +8,7 @@ use crate::{
     elf::{ElfDyn, ElfPhdr},
     image::{ElfCore, LoadedCore, RawDynamic},
     input::Path,
-    os::{HostRegion, RegionAccess},
+    os::{HostRegion, RegionAccess, VmAddr},
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     tls::{TlsModuleId, TlsTpOffset},
 };
@@ -151,7 +151,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDylib<D, Arch, R> {
     }
 
     /// Returns the base address of the loaded ELF object.
-    pub fn base(&self) -> usize {
+    pub fn base(&self) -> VmAddr {
         self.inner.base()
     }
 
@@ -161,12 +161,12 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDylib<D, Arch, R> {
     }
 
     /// Returns the lowest runtime address covered by this object's mapped slices.
-    pub(crate) fn mapped_base(&self) -> usize {
+    pub(crate) fn mapped_base(&self) -> VmAddr {
         self.inner.mapped_base()
     }
 
     /// Returns whether `addr` is inside one of this object's mapped slices.
-    pub fn contains_addr(&self, addr: usize) -> bool {
+    pub fn contains_addr(&self, addr: VmAddr) -> bool {
         self.inner.contains_addr(addr)
     }
 

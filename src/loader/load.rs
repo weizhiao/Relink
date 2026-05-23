@@ -8,7 +8,7 @@ use crate::{
     },
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
-    os::{MappedRegion, VmAddr},
+    os::{MappedRegion, VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::{ELFRelro, ElfSegments, program::parse_segments},
     tls::TlsResolver,
@@ -189,7 +189,9 @@ where
             "Loaded dylib: {} at [0x{:x}-0x{:x}]",
             dylib.name(),
             dylib.mapped_base(),
-            dylib.mapped_base() + dylib.mapped_len()
+            dylib
+                .mapped_base()
+                .wrapping_add(VmOffset::new(dylib.mapped_len()))
         );
 
         Ok(dylib)
@@ -216,7 +218,9 @@ where
             "Loaded dynamic image: {} at [0x{:x}-0x{:x}]",
             image.name(),
             image.mapped_base(),
-            image.mapped_base() + image.mapped_len()
+            image
+                .mapped_base()
+                .wrapping_add(VmOffset::new(image.mapped_len()))
         );
 
         Ok(image)
@@ -257,7 +261,9 @@ where
             "Loaded scanned dynamic image: {} at [0x{:x}-0x{:x}]",
             image.name(),
             image.mapped_base(),
-            image.mapped_base() + image.mapped_len()
+            image
+                .mapped_base()
+                .wrapping_add(VmOffset::new(image.mapped_len()))
         );
 
         Ok(image)
@@ -301,7 +307,7 @@ where
     pub unsafe fn load_mapped_dynamic(
         &mut self,
         path: impl Into<PathBuf>,
-        load_bias: usize,
+        load_bias: VmAddr,
         phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
         entry: usize,
     ) -> Result<RawDynamic<D, Arch>> {
@@ -310,10 +316,12 @@ where
         let mapper = self.mapper();
         let page_size = self.inner.page_size()?.bytes();
         let layout = parse_segments(&phdrs, true, page_size)?;
-        let mapped_memory = load_bias.wrapping_add(layout.min_vaddr) as *mut c_void;
+        let mapped_memory = load_bias
+            .wrapping_add(layout.min_vaddr)
+            .as_mut_ptr::<c_void>();
         let segments = ElfSegments::new(
             MappedRegion::local_alias(mapped_memory, layout.mapped_len, mapper.clone()),
-            VmAddr::new(load_bias),
+            load_bias,
             layout.min_vaddr,
         );
         let parts = borrowed_dynamic_parts::<D, Arch>(
@@ -335,7 +343,9 @@ where
             "Borrowed dynamic image: {} at [0x{:x}-0x{:x}]",
             image.name(),
             image.mapped_base(),
-            image.mapped_base() + image.mapped_len()
+            image
+                .mapped_base()
+                .wrapping_add(VmOffset::new(image.mapped_len()))
         );
 
         Ok(image)
@@ -388,7 +398,8 @@ where
             "Load executable: {} at [0x{:x}-0x{:x}] ({})",
             exec.name(),
             exec.mapped_base(),
-            exec.mapped_base() + exec.mapped_len(),
+            exec.mapped_base()
+                .wrapping_add(VmOffset::new(exec.mapped_len())),
             if has_dynamic { "dynamic" } else { "static" }
         );
 
@@ -439,7 +450,7 @@ impl ExpectedElf {
 
 fn borrowed_dynamic_parts<D, Arch>(
     path: PathBuf,
-    load_bias: usize,
+    load_bias: VmAddr,
     entry: usize,
     phdrs: &[ElfPhdr<Arch::Layout>],
     segments: ElfSegments,
@@ -464,7 +475,10 @@ where
             ElfProgramType::DYNAMIC => {
                 dynamic = Some(
                     segments
-                        .read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())
+                        .read_view::<ElfDyn<Arch::Layout>>(
+                            VmOffset::new(phdr.p_vaddr()),
+                            phdr.p_filesz(),
+                        )
                         .ok_or_else(|| {
                             ParsePhdrError::malformed(
                                 "PT_DYNAMIC is not directly readable from mapped segments",
@@ -478,7 +492,7 @@ where
             ElfProgramType::GNU_EH_FRAME => {
                 eh_frame_hdr = Some(
                     segments
-                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())
+                        .borrowed_ptr::<u8>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
                         .ok_or_else(|| {
                             ParsePhdrError::malformed(
                                 "PT_GNU_EH_FRAME is not directly readable from mapped segments",
@@ -488,19 +502,14 @@ where
             }
             ElfProgramType::TLS => {
                 let image = segments
-                    .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
+                    .read_view::<u8>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
                     .ok_or(crate::ParsePhdrError::malformed(
                         "PT_TLS image is malformed",
                     ))?;
                 tls_info = Some(crate::tls::TlsInfo::new(phdr, image.as_slice()));
             }
             ElfProgramType::GNU_RELRO => {
-                relro = Some(ELFRelro::new(
-                    phdr,
-                    VmAddr::new(load_bias),
-                    page_size,
-                    mapper.clone(),
-                ));
+                relro = Some(ELFRelro::new(phdr, load_bias, page_size, mapper.clone()));
             }
             _ => {}
         }
@@ -531,7 +540,7 @@ where
     L: ElfLayout,
 {
     let view = segments
-        .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
+        .read_view::<u8>(VmOffset::new(phdr.p_vaddr()), phdr.p_filesz())
         .ok_or_else(|| {
             ParsePhdrError::malformed("PT_INTERP is not directly readable from mapped segments")
         })?;

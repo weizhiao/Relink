@@ -8,7 +8,7 @@ use crate::{
     input::{Path, PathBuf},
     loader::{ImageBuilder, LifecycleContext, LoadHook, SharedLifecycleHandler},
     logging,
-    os::{HostRegion, MappedView, RegionAccess, VmAddr},
+    os::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{
         DynamicRelocation, EmuContext, Emulator, Relocatable, RelocateArgs, RelocationArch,
         RelocationHandler, Relocator,
@@ -330,7 +330,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     }
 
     /// Gets the base address of the loaded ELF object
-    pub fn base(&self) -> usize {
+    pub fn base(&self) -> VmAddr {
         self.module.base()
     }
 
@@ -340,12 +340,12 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     }
 
     /// Gets the lowest runtime address covered by mapped memory.
-    pub(crate) fn mapped_base(&self) -> usize {
+    pub(crate) fn mapped_base(&self) -> VmAddr {
         self.module.mapped_base()
     }
 
     /// Returns whether `addr` is inside one of this image's mapped slices.
-    pub fn contains_addr(&self, addr: usize) -> bool {
+    pub fn contains_addr(&self, addr: VmAddr) -> bool {
         self.module.contains_addr(addr)
     }
 
@@ -501,7 +501,10 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
         Self::from_parts::<Tls>(RawDynamicParts {
             path: builder.path,
             entry: if builder.ehdr.is_dylib() {
-                builder.segments.base_addr().offset(builder.ehdr.e_entry())
+                builder
+                    .segments
+                    .base()
+                    .wrapping_add(VmOffset::new(builder.ehdr.e_entry()))
             } else {
                 VmAddr::new(builder.ehdr.e_entry())
             },

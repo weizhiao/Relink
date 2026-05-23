@@ -1,7 +1,7 @@
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType, NativeElfLayout},
-    os::{MapFlags, Mapper, ProtFlags, VmAddr},
+    os::{MapFlags, Mapper, ProtFlags, VmAddr, VmOffset},
     segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder, rounddown, roundup},
 };
 use alloc::vec::Vec;
@@ -56,7 +56,7 @@ pub(crate) struct ProgramSegmentLayout {
     /// Total page-aligned memory range covered by LOAD segments.
     pub(crate) mapped_len: usize,
     /// Lowest page-aligned virtual address among LOAD segments.
-    pub(crate) min_vaddr: usize,
+    pub(crate) min_vaddr: VmOffset,
 }
 
 /// Parse segments to determine memory layout requirements
@@ -120,7 +120,7 @@ pub(crate) fn parse_segments(
             Some(VmAddr::new(min_vaddr))
         },
         mapped_len: total_size,
-        min_vaddr,
+        min_vaddr: VmOffset::new(min_vaddr),
     })
 }
 
@@ -175,7 +175,7 @@ impl<L: ElfLayout> ElfPhdr<L> {
         let filesz = self.p_filesz() + align_len;
 
         ElfSegment {
-            offset: min_vaddr,
+            offset: VmOffset::new(min_vaddr),
             prot,
             flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
             len: memsz,

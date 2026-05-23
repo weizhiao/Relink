@@ -4,6 +4,7 @@ use crate::{
     elf::{
         ElfLayout, ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType, PreCompute, SymbolInfo,
     },
+    os::VmAddr,
     relocation::RelocationArch,
 };
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
@@ -172,8 +173,8 @@ where
     }
 
     #[inline]
-    fn base_addr(&self) -> usize {
-        0
+    fn base(&self) -> VmAddr {
+        VmAddr::null()
     }
 }
 

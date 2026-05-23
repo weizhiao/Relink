@@ -58,8 +58,7 @@ impl ElfHash {
     ) -> Result<ElfHash> {
         const HEADER_SIZE: usize = size_of::<ElfHashHeader>();
         let start = addr
-            .get()
-            .checked_sub(segments.base())
+            .checked_offset_from(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
         let mut bytes = [0u8; HEADER_SIZE];
         segments.read_bytes(addr, &mut bytes)?;

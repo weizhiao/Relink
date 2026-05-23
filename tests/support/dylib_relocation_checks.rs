@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use elf_loader::image::LoadedCore;
+use elf_loader::{image::LoadedCore, os::VmOffset};
 use gen_elf::{ElfWriteOutput, RelocationInfo};
 
 use crate::support::memory::read_native_word;
@@ -35,11 +35,15 @@ pub(crate) fn anonymous_relocations(output: &ElfWriteOutput, r_type: u32) -> Vec
 }
 
 pub(crate) fn slot_address(image: &LoadedCore<()>, relocation: &RelocationInfo) -> usize {
-    image.base()
-        + relocation
-            .vaddr
-            .expect("dynamic relocation metadata should include a virtual address")
-            as usize
+    image
+        .base()
+        .wrapping_add(VmOffset::new(
+            relocation
+                .vaddr
+                .expect("dynamic relocation metadata should include a virtual address")
+                as usize,
+        ))
+        .get()
 }
 
 pub(crate) fn slot_word(image: &LoadedCore<()>, relocation: &RelocationInfo) -> u64 {

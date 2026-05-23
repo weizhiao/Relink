@@ -3,6 +3,7 @@ use crate::{
     arch::NativeArch,
     elf::ElfPhdr,
     input::Path,
+    os::VmAddr,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
 };
 
@@ -104,7 +105,7 @@ impl<D: 'static, Arch: RelocationArch> RawElf<D, Arch> {
 
     /// Returns whether `addr` is inside this image's mapped memory.
     #[inline]
-    pub fn contains_addr(&self, addr: usize) -> bool {
+    pub fn contains_addr(&self, addr: VmAddr) -> bool {
         match self {
             RawElf::Dylib(dylib) => dylib.contains_addr(addr),
             RawElf::Exec(exec) => exec.contains_addr(addr),
@@ -148,7 +149,7 @@ impl<D: 'static, Arch: RelocationArch> RawElf<D, Arch> {
 
     /// Returns the base address of the ELF file.
     #[inline]
-    pub fn base(&self) -> usize {
+    pub fn base(&self) -> VmAddr {
         match self {
             RawElf::Dylib(dylib) => dylib.base(),
             RawElf::Exec(exec) => exec.base(),
@@ -274,7 +275,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedElf<D, Arch> {
 
     /// Returns whether `addr` is inside this image's mapped memory.
     #[inline]
-    pub fn contains_addr(&self, addr: usize) -> bool {
+    pub fn contains_addr(&self, addr: VmAddr) -> bool {
         match self {
             LoadedElf::Dylib(dylib) => dylib.contains_addr(addr),
             LoadedElf::Exec(exec) => exec.contains_addr(addr),

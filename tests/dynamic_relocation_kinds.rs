@@ -1,6 +1,8 @@
 mod support;
 
-use elf_loader::{Loader, arch::NativeArch, input::ElfBinary, relocation::RelocationArch};
+use elf_loader::{
+    Loader, arch::NativeArch, input::ElfBinary, os::VmOffset, relocation::RelocationArch,
+};
 
 const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
 const REL_IRELATIVE: u32 = <NativeArch as RelocationArch>::IRELATIVE.raw();
@@ -75,7 +77,7 @@ fn relative_relocation_uses_recorded_addend() {
     assert_eq!(relative.section, SectionKind::Got);
     assert_eq!(
         slot_word(&relocated, relative),
-        (relocated.base() as i64 + relative.addend) as u64
+        (relocated.base().get() as i64 + relative.addend) as u64
     );
     assert!(
         relocated.deps().is_empty(),
@@ -103,7 +105,10 @@ fn irelative_relocation_uses_ifunc_resolver() {
     assert_eq!(irelative.section, SectionKind::Got);
     assert_eq!(
         slot_word(&relocated, irelative),
-        relocated.base() as u64 + resolver_offset
+        relocated
+            .base()
+            .wrapping_add(VmOffset::new(resolver_offset as usize))
+            .get() as u64
     );
     assert!(
         relocated.deps().is_empty(),
@@ -187,7 +192,7 @@ fn relative_relocations_apply_to_all_slots() {
         assert_eq!(relative.section, SectionKind::Got);
         assert_eq!(
             slot_word(&relocated, relative),
-            (relocated.base() as i64 + relative.addend) as u64
+            (relocated.base().get() as i64 + relative.addend) as u64
         );
     }
     assert!(
@@ -221,7 +226,10 @@ fn irelative_relocations_apply_to_all_slots() {
         assert_eq!(irelative.section, SectionKind::Got);
         assert_eq!(
             slot_word(&relocated, irelative),
-            relocated.base() as u64 + resolver_offset
+            relocated
+                .base()
+                .wrapping_add(VmOffset::new(resolver_offset as usize))
+                .get() as u64
         );
     }
     assert!(
