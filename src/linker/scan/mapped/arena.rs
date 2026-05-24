@@ -3,7 +3,7 @@ use super::super::plan::LinkPlan;
 use crate::{
     LinkerError, Result,
     entity::SecondaryMap,
-    os::{MapFlags, MappedRegion, Mapper, Mmap, ProtFlags, VmAddr, align_up},
+    os::{MappedRegion, Mapper, Mmap, ProtFlags, VmAddr, align_up},
     relocation::RelocationArch,
 };
 use alloc::vec::Vec;
@@ -64,11 +64,11 @@ impl MappedArenaMap {
         }
 
         let region = unsafe {
-            mapper.mmap_anonymous(
-                VmAddr::null(),
+            mapper.create_space(
+                Some(VmAddr::null()),
                 total_len,
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
-                MapFlags::MAP_PRIVATE,
+                false,
             )
         }?;
         let mut arenas = Self {

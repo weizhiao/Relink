@@ -1,7 +1,7 @@
 use crate::{
     IoError, MmapError, Result,
     input::{ElfReader, Path, PathBuf},
-    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, PageSize, ProtFlags, VmAddr},
+    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, PageSize, ProtFlags, VmAddr},
 };
 use alloc::ffi::CString;
 use core::ffi::c_void;
@@ -91,30 +91,50 @@ impl Mmap for DefaultMmap {
         self.page_size
     }
 
-    unsafe fn mmap(
+    unsafe fn create_space(
         &self,
         addr: Option<VmAddr>,
         len: usize,
         prot: ProtFlags,
+        _populate_later: bool,
+    ) -> crate::Result<MappedRegion> {
+        let ptr = unsafe {
+            mmap(
+                addr.map_or(core::ptr::null_mut(), VmAddr::as_mut_ptr),
+                len,
+                prot.bits(),
+                (MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS).bits(),
+                -1,
+                0,
+            )
+        };
+        if core::ptr::eq(ptr, libc::MAP_FAILED) {
+            return Err(MmapError::MmapAnonymousFailed {
+                code: last_os_error_code(),
+            }
+            .into());
+        }
+        Ok(MappedRegion::local(ptr, len, *self))
+    }
+
+    unsafe fn map_file_at(
+        &self,
+        addr: VmAddr,
+        len: usize,
+        prot: ProtFlags,
         flags: MapFlags,
         offset: usize,
-        fd: Option<isize>,
-    ) -> crate::Result<MmapResult> {
-        let mut needs_copy = false;
-        let ptr = if let Some(fd) = fd {
-            unsafe {
-                mmap(
-                    addr.map_or(core::ptr::null_mut(), VmAddr::as_mut_ptr),
-                    len,
-                    prot.bits(),
-                    flags.bits(),
-                    fd as i32,
-                    offset as _,
-                )
-            }
-        } else {
-            needs_copy = true;
-            addr.unwrap().as_mut_ptr()
+        fd: isize,
+    ) -> crate::Result<()> {
+        let ptr = unsafe {
+            mmap(
+                addr.as_mut_ptr(),
+                len,
+                prot.bits(),
+                flags.bits(),
+                fd as i32,
+                offset as _,
+            )
         };
         if core::ptr::eq(ptr, libc::MAP_FAILED) {
             return Err(MmapError::MmapFailed {
@@ -122,19 +142,36 @@ impl Mmap for DefaultMmap {
             }
             .into());
         }
-        Ok(MmapResult::new(
-            MappedRegion::local_alias(ptr, len, *self),
-            needs_copy,
-        ))
+        Ok(())
     }
 
-    unsafe fn mmap_anonymous(
+    unsafe fn map_copy_at(&self, addr: VmAddr, len: usize, flags: MapFlags) -> crate::Result<()> {
+        let ptr = unsafe {
+            mmap(
+                addr.as_mut_ptr(),
+                len,
+                ProtFlags::PROT_WRITE.bits(),
+                flags.union(MapFlags::MAP_ANONYMOUS).bits(),
+                -1,
+                0,
+            )
+        };
+        if core::ptr::eq(ptr, libc::MAP_FAILED) {
+            return Err(MmapError::MmapAnonymousFailed {
+                code: last_os_error_code(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    unsafe fn map_zero_at(
         &self,
         addr: VmAddr,
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> crate::Result<MappedRegion> {
+    ) -> crate::Result<()> {
         let ptr = unsafe {
             mmap(
                 addr.as_mut_ptr(),
@@ -151,12 +188,7 @@ impl Mmap for DefaultMmap {
             }
             .into());
         }
-        let region = if flags.contains(MapFlags::MAP_FIXED) {
-            MappedRegion::local_alias(ptr, len, *self)
-        } else {
-            MappedRegion::local(ptr, len, *self)
-        };
-        Ok(region)
+        Ok(())
     }
 
     unsafe fn munmap(&self, addr: VmAddr, len: usize) -> crate::Result<()> {
@@ -195,37 +227,6 @@ impl Mmap for DefaultMmap {
             .into());
         }
         Ok(())
-    }
-
-    unsafe fn mmap_reserve(
-        &self,
-        addr: Option<VmAddr>,
-        len: usize,
-        use_file: bool,
-    ) -> Result<MappedRegion> {
-        let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS;
-        let prot = if use_file {
-            ProtFlags::PROT_NONE
-        } else {
-            ProtFlags::PROT_WRITE
-        };
-        let ptr = unsafe {
-            mmap(
-                addr.map_or(core::ptr::null_mut(), VmAddr::as_mut_ptr),
-                len,
-                prot.bits(),
-                flags.bits(),
-                -1,
-                0,
-            )
-        };
-        if core::ptr::eq(ptr, libc::MAP_FAILED) {
-            return Err(MmapError::MmapAnonymousFailed {
-                code: last_os_error_code(),
-            }
-            .into());
-        }
-        Ok(MappedRegion::local(ptr, len, *self))
     }
 }
 

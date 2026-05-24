@@ -129,8 +129,18 @@ impl<L: ElfLayout> SegmentBuilder for ProgramSegments<'_, L> {
     /// Reserve memory space for all segments
     fn create_space(&mut self, mapper: Mapper) -> Result<ElfSegments> {
         let layout = parse_segments(self.phdrs, self.is_dylib, self.page_size)?;
+        let prot = if self.use_file {
+            ProtFlags::PROT_NONE
+        } else {
+            ProtFlags::PROT_WRITE
+        };
         let region = unsafe {
-            mapper.mmap_reserve(layout.preferred_addr, layout.mapped_len, self.use_file)
+            mapper.create_space(
+                layout.preferred_addr,
+                layout.mapped_len,
+                prot,
+                self.use_file,
+            )
         }?;
         let base = region.addr() - layout.min_vaddr;
         Ok(ElfSegments::new(region, base, layout.min_vaddr))

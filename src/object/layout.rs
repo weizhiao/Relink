@@ -42,7 +42,7 @@ fn flags_to_idx(flags: ElfSectionFlags) -> usize {
 impl<Arch: RelocationArch> SegmentBuilder for SectionSegments<Arch> {
     fn create_space(&mut self, mapper: Mapper) -> Result<ElfSegments> {
         let len = self.total_size;
-        let region = unsafe { mapper.mmap_reserve(None, len, false) }?;
+        let region = unsafe { mapper.create_space(None, len, ProtFlags::PROT_WRITE, false) }?;
         let base = region.addr();
         Ok(ElfSegments::new(region, base, VmOffset::new(0)))
     }

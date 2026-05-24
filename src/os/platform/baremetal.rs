@@ -1,10 +1,12 @@
 use crate::{
     Result,
     input::{ElfReader, Path},
-    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, ProtFlags, VmAddr},
+    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, ProtFlags, VmAddr},
 };
 use alloc::alloc::{dealloc, handle_alloc_error};
-use core::{alloc::Layout, ffi::c_void, slice::from_raw_parts_mut};
+#[cfg(feature = "tls")]
+use core::ffi::c_void;
+use core::{alloc::Layout, slice::from_raw_parts_mut};
 
 /// An implementation of Mmap trait
 #[derive(Clone, Copy, Default)]
@@ -28,24 +30,17 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
 }
 
 impl Mmap for DefaultMmap {
-    unsafe fn mmap(
+    unsafe fn create_space(
         &self,
         addr: Option<VmAddr>,
         len: usize,
         _prot: ProtFlags,
-        flags: MapFlags,
-        _offset: usize,
-        _fd: Option<isize>,
-    ) -> crate::Result<MmapResult> {
+        _populate_later: bool,
+    ) -> crate::Result<MappedRegion> {
         if let Some(addr) = addr {
             let ptr = addr.as_mut_ptr::<u8>();
-            Ok(MmapResult::new(
-                MappedRegion::local_alias(ptr as _, len, *self),
-                true,
-            ))
+            Ok(MappedRegion::local_alias(ptr as _, len, *self))
         } else {
-            // 只有创建整个空间时会走这条路径
-            assert!((MapFlags::MAP_FIXED & flags).bits() == 0);
             let layout =
                 unsafe { Layout::from_size_align_unchecked(len, self.page_size().bytes()) };
             let memory = unsafe { alloc::alloc::alloc(layout) };
@@ -54,29 +49,42 @@ impl Mmap for DefaultMmap {
             }
             // use this set prot to test no_mmap
             //libc::mprotect(memory as _, len, crate::mmap::ProtFlags::all().bits());
-            Ok(MmapResult::new(
-                MappedRegion::local(memory as _, len, *self),
-                true,
-            ))
+            Ok(MappedRegion::local(memory as _, len, *self))
         }
     }
 
-    unsafe fn mmap_anonymous(
+    unsafe fn map_file_at(
+        &self,
+        _addr: VmAddr,
+        _len: usize,
+        _prot: ProtFlags,
+        _flags: MapFlags,
+        _offset: usize,
+        _fd: isize,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
+
+    unsafe fn map_copy_at(
+        &self,
+        _addr: VmAddr,
+        _len: usize,
+        _flags: MapFlags,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
+
+    unsafe fn map_zero_at(
         &self,
         addr: VmAddr,
         len: usize,
         _prot: ProtFlags,
         _flags: MapFlags,
-    ) -> crate::Result<MappedRegion> {
+    ) -> crate::Result<()> {
         let ptr = addr.as_mut_ptr::<u8>();
         let dest = unsafe { from_raw_parts_mut(ptr, len) };
         dest.fill(0);
-        let region = if _flags.contains(MapFlags::MAP_FIXED) {
-            MappedRegion::local_alias(ptr as _, len, *self)
-        } else {
-            MappedRegion::local(ptr as _, len, *self)
-        };
-        Ok(region)
+        Ok(())
     }
 
     unsafe fn munmap(&self, addr: VmAddr, len: usize) -> crate::Result<()> {

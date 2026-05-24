@@ -26,7 +26,7 @@ impl ElfSegment {
             .expect("ELF segment offset overflowed")
     }
 
-    /// Map the segment into memory
+    /// Map the segment into memory and copy bytes when direct file mapping is unavailable.
     ///
     /// This method maps the segment into memory using the appropriate
     /// memory mapping operations based on the segment's properties.
@@ -37,59 +37,36 @@ impl ElfSegment {
     /// # Returns
     /// * `Ok(())` - If mapping succeeds
     /// * `Err(Error)` - If mapping fails
-    fn mmap_segment(
+    fn map_segment(
         &mut self,
         mapper: &dyn Mmap,
         object: &mut impl ElfReader,
-        base: VmAddr,
+        space: &ElfSegments,
     ) -> Result<()> {
         let len = self.len;
+        let base = space.base();
         let addr = self.vm_addr(base);
         let prot = self.mapping_prot();
 
         debug_assert!(len.is_multiple_of(self.page_size));
 
-        let mapped = if self.map_info.len() == 1 {
+        self.need_copy = if !self.from_relocatable {
+            debug_assert_eq!(self.map_info.len(), 1);
             debug_assert!(self.map_info[0].offset.is_multiple_of(self.page_size));
-            unsafe {
-                mapper.mmap(
-                    Some(addr),
-                    len,
-                    prot,
-                    self.flags,
-                    self.map_info[0].offset,
-                    object.as_fd(),
-                )
-            }?
+            if let Some(fd) = object.as_fd() {
+                unsafe {
+                    mapper.map_file_at(addr, len, prot, self.flags, self.map_info[0].offset, fd)
+                }?;
+                false
+            } else {
+                unsafe { mapper.map_copy_at(addr, len, self.flags) }?;
+                true
+            }
         } else {
-            unsafe { mapper.mmap(Some(addr), len, prot, self.flags, 0, None) }?
+            unsafe { mapper.map_copy_at(addr, len, self.flags) }?;
+            true
         };
 
-        logging::trace!(
-            "[Mmap] address: {}, length: {}, flags: {:?}, zero_size: {}, map_info: {:?}",
-            addr,
-            len,
-            prot,
-            self.zero_size,
-            self.map_info
-        );
-
-        self.need_copy = mapped.needs_copy();
-        Ok(())
-    }
-
-    /// Copy data into the mapped segment
-    ///
-    /// This method copies data from the ELF object into the mapped
-    /// memory segment when manual copying is required.
-    ///
-    /// # Arguments
-    /// * `object` - The ELF object to copy data from
-    ///
-    /// # Returns
-    /// * `Ok(())` - If copying succeeds
-    /// * `Err(Error)` - If copying fails
-    fn copy_data(&self, space: &ElfSegments, object: &mut impl ElfReader) -> Result<()> {
         if self.need_copy {
             for info in &self.map_info {
                 let addr = space.base() + self.segment_offset(info.start);
@@ -100,6 +77,16 @@ impl ElfSegment {
                 object.read(dst, info.offset)?;
             }
         }
+
+        logging::trace!(
+            "[Mmap] address: {}, length: {}, flags: {:?}, zero_size: {}, map_info: {:?}",
+            addr,
+            len,
+            prot,
+            self.zero_size,
+            self.map_info
+        );
+
         Ok(())
     }
 
@@ -154,7 +141,7 @@ impl ElfSegment {
                 let prot = self.mapping_prot();
 
                 unsafe {
-                    mapper.mmap_anonymous(
+                    mapper.map_zero_at(
                         zero_mmap_addr,
                         zero_mmap_len,
                         prot,
@@ -218,8 +205,9 @@ pub(crate) trait SegmentBuilder {
         let space = self.create_space(mapper.clone())?;
         self.create_segments()?;
         let segments = self.segments_mut();
-        let base = space.base();
 
+        #[cfg(windows)]
+        let base = space.base();
         #[cfg(windows)]
         let mut last_addr = space
             .primary_region()
@@ -243,8 +231,7 @@ pub(crate) trait SegmentBuilder {
                 }
                 last_addr = addr + len;
             }
-            segment.mmap_segment(mapper.as_ref(), object, base)?;
-            segment.copy_data(&space, object)?;
+            segment.map_segment(mapper.as_ref(), object, &space)?;
             segment.fill_zero(mapper.as_ref(), &space)?;
         }
         Ok(space)

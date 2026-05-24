@@ -11,7 +11,7 @@ pub use memory::{HostRegion, MappedRegion, RegionAccess, VmAddr, VmOffset};
 pub(crate) use memory::{MappedView, align_up, rounddown, roundup};
 pub use platform::DefaultMmap;
 pub(crate) use platform::*;
-pub use traits::{Mmap, MmapResult};
+pub use traits::Mmap;
 
 mod defs;
 mod mapper;

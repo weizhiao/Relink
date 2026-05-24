@@ -1,6 +1,6 @@
 use core::{ffi::c_void, ops::Deref};
 
-use super::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, ProtFlags, VmAddr};
+use super::{MadviseAdvice, MapFlags, MappedRegion, Mmap, ProtFlags, VmAddr};
 use crate::{Result, sync::Arc};
 use alloc::boxed::Box;
 
@@ -46,27 +46,43 @@ impl Mmap for Mapper {
     }
 
     #[inline]
-    unsafe fn mmap(
+    unsafe fn create_space(
         &self,
         addr: Option<VmAddr>,
         len: usize,
         prot: ProtFlags,
-        flags: MapFlags,
-        offset: usize,
-        fd: Option<isize>,
-    ) -> Result<MmapResult> {
-        unsafe { self.0.mmap(addr, len, prot, flags, offset, fd) }
+        populate_later: bool,
+    ) -> Result<MappedRegion> {
+        unsafe { self.0.create_space(addr, len, prot, populate_later) }
     }
 
     #[inline]
-    unsafe fn mmap_anonymous(
+    unsafe fn map_file_at(
         &self,
         addr: VmAddr,
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> Result<MappedRegion> {
-        unsafe { self.0.mmap_anonymous(addr, len, prot, flags) }
+        offset: usize,
+        fd: isize,
+    ) -> Result<()> {
+        unsafe { self.0.map_file_at(addr, len, prot, flags, offset, fd) }
+    }
+
+    #[inline]
+    unsafe fn map_copy_at(&self, addr: VmAddr, len: usize, flags: MapFlags) -> Result<()> {
+        unsafe { self.0.map_copy_at(addr, len, flags) }
+    }
+
+    #[inline]
+    unsafe fn map_zero_at(
+        &self,
+        addr: VmAddr,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+    ) -> Result<()> {
+        unsafe { self.0.map_zero_at(addr, len, prot, flags) }
     }
 
     #[inline]
@@ -82,16 +98,6 @@ impl Mmap for Mapper {
     #[inline]
     unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
         unsafe { self.0.mprotect(addr, len, prot) }
-    }
-
-    #[inline]
-    unsafe fn mmap_reserve(
-        &self,
-        addr: Option<VmAddr>,
-        len: usize,
-        use_file: bool,
-    ) -> Result<MappedRegion> {
-        unsafe { self.0.mmap_reserve(addr, len, use_file) }
     }
 }
 
@@ -110,25 +116,39 @@ impl<F> Mmap for MunmapAdapter<F>
 where
     F: Fn(*mut c_void, usize) -> Result<()> + Send + Sync + 'static,
 {
-    unsafe fn mmap(
+    unsafe fn create_space(
         &self,
         _addr: Option<VmAddr>,
         _len: usize,
         _prot: ProtFlags,
-        _flags: MapFlags,
-        _offset: usize,
-        _fd: Option<isize>,
-    ) -> Result<MmapResult> {
+        _populate_later: bool,
+    ) -> Result<MappedRegion> {
         unreachable!("MunmapAdapter only supports munmap")
     }
 
-    unsafe fn mmap_anonymous(
+    unsafe fn map_file_at(
         &self,
         _addr: VmAddr,
         _len: usize,
         _prot: ProtFlags,
         _flags: MapFlags,
-    ) -> Result<MappedRegion> {
+        _offset: usize,
+        _fd: isize,
+    ) -> Result<()> {
+        unreachable!("MunmapAdapter only supports munmap")
+    }
+
+    unsafe fn map_copy_at(&self, _addr: VmAddr, _len: usize, _flags: MapFlags) -> Result<()> {
+        unreachable!("MunmapAdapter only supports munmap")
+    }
+
+    unsafe fn map_zero_at(
+        &self,
+        _addr: VmAddr,
+        _len: usize,
+        _prot: ProtFlags,
+        _flags: MapFlags,
+    ) -> Result<()> {
         unreachable!("MunmapAdapter only supports munmap")
     }
 

@@ -1,45 +1,12 @@
-use super::{
-    HostRegion, MadviseAdvice, MapFlags, MappedRegion, PageSize, ProtFlags, RegionAccess, VmAddr,
-};
+use super::{MadviseAdvice, MapFlags, MappedRegion, PageSize, ProtFlags, VmAddr};
 use crate::Result;
-
-/// Result of an mmap-style operation.
-pub struct MmapResult<R: RegionAccess = HostRegion> {
-    region: MappedRegion<R>,
-    needs_copy: bool,
-}
-
-impl<R: RegionAccess> MmapResult<R> {
-    #[inline]
-    pub fn new(region: MappedRegion<R>, needs_copy: bool) -> Self {
-        Self { region, needs_copy }
-    }
-
-    #[inline]
-    pub fn region(&self) -> &MappedRegion<R> {
-        &self.region
-    }
-
-    #[inline]
-    pub fn into_region(self) -> MappedRegion<R> {
-        self.region
-    }
-
-    #[inline]
-    pub const fn needs_copy(&self) -> bool {
-        self.needs_copy
-    }
-
-    #[inline]
-    pub fn into_parts(self) -> (MappedRegion<R>, bool) {
-        (self.region, self.needs_copy)
-    }
-}
 
 /// A trait for low-level memory mapping operations.
 ///
-/// This trait provides a unified interface for memory-mapped I/O and anonymous memory allocation.
-/// It abstracts platform-specific details, allowing the ELF loader to work across different systems.
+/// Loading first creates an owning address space with [`Mmap::create_space`].
+/// Later calls fill parts of that space with file-backed pages, writable copy
+/// targets, or anonymous zero pages. Only the space owns the final lifetime;
+/// per-segment mapping methods do not return temporary regions.
 ///
 /// # Safety
 /// All methods are unsafe because they manipulate the process's virtual address space.
@@ -53,16 +20,13 @@ impl<R: RegionAccess> MmapResult<R> {
 /// }
 ///
 /// impl Mmap for MyMmap {
-///     unsafe fn mmap(
+///     unsafe fn create_space(
 ///         &self,
 ///         addr: Option<VmAddr>,
 ///         len: usize,
 ///         prot: ProtFlags,
-///         flags: MapFlags,
-///         offset: usize,
-///         fd: Option<isize>,
-///     ) -> Result<MmapResult> {
-///         // Platform-specific implementation
+///         populate_later: bool,
+///     ) -> Result<MappedRegion> {
 ///         todo!()
 ///     }
 ///
@@ -80,64 +44,60 @@ pub trait Mmap: Send + Sync + 'static {
         PageSize::Base
     }
 
-    /// Maps a file or creates an anonymous mapping into memory.
-    ///
-    /// This method creates a memory mapping, either backed by a file (if `fd` is provided)
-    /// or anonymous (if `fd` is `None`). The mapping can be used for efficient file I/O
-    /// or dynamic memory allocation.
+    /// Creates the owning virtual address space for a loaded image or arena.
     ///
     /// # Arguments
     /// * `addr` - Preferred starting address (page-aligned). `None` lets the system choose.
-    /// * `len` - Size of the mapping in bytes (rounded up to page size).
-    /// * `prot` - Memory protection flags (read, write, execute permissions).
-    /// * `flags` - Mapping configuration (private, fixed address, anonymous).
-    /// * `offset` - File offset for file-backed mappings (must be page-aligned).
-    /// * `fd` - File descriptor for file-backed mappings, or `None` for anonymous.
-    /// # Returns
-    /// A mapped region on success.
+    /// * `len` - Size of the space in bytes.
+    /// * `prot` - Initial protection for committed spaces.
+    /// * `populate_later` - Whether file/zero pages will later replace subranges.
     ///
     /// # Safety
-    /// This function manipulates the process's address space. Ensure:
-    /// - `addr` is page-aligned if specified.
-    /// - `len` and `offset` are valid and don't cause overflow.
-    /// - File descriptors are valid and accessible.
-    unsafe fn mmap(
+    /// Manipulates address space. `addr` must be page-aligned if specified.
+    unsafe fn create_space(
         &self,
         addr: Option<VmAddr>,
         len: usize,
         prot: ProtFlags,
-        flags: MapFlags,
-        offset: usize,
-        fd: Option<isize>,
-    ) -> Result<MmapResult>;
+        populate_later: bool,
+    ) -> Result<MappedRegion>;
 
-    /// Creates an anonymous memory mapping.
+    /// Maps file-backed pages into an already-created space.
     ///
-    /// Allocates a region of memory not backed by any file, useful for dynamic memory
-    /// allocation or creating private data areas.
-    ///
-    /// # Arguments
-    /// * `addr` - Preferred starting address (page-aligned). `None` lets the system choose.
-    /// * `len` - Size of the mapping in bytes.
-    /// * `prot` - Initial memory protection flags.
-    /// * `flags` - Mapping configuration flags.
-    ///
-    /// # Returns
-    /// A mapped anonymous region on success.
-    ///
-    /// # Safety
-    /// Manipulates address space. Ensure `addr` is valid and page-aligned if specified.
-    unsafe fn mmap_anonymous(
+    /// The mapped range is owned by the surrounding space created with
+    /// [`Mmap::create_space`].
+    unsafe fn map_file_at(
         &self,
         addr: VmAddr,
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> Result<MappedRegion>;
+        offset: usize,
+        fd: isize,
+    ) -> Result<()>;
+
+    /// Prepares a writable range that the loader will populate by copying bytes.
+    ///
+    /// Backends that create a fully writable space can implement this as a
+    /// no-op. Placeholder/reservation based backends should commit or replace
+    /// the target range here.
+    unsafe fn map_copy_at(&self, addr: VmAddr, len: usize, flags: MapFlags) -> Result<()>;
+
+    /// Maps or commits anonymous zero-filled pages into an already-created space.
+    ///
+    /// The mapped range is owned by the surrounding space created with
+    /// [`Mmap::create_space`].
+    unsafe fn map_zero_at(
+        &self,
+        addr: VmAddr,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+    ) -> Result<()>;
 
     /// Unmaps a memory region, releasing the associated resources.
     ///
-    /// Removes a memory mapping created by `mmap` or `mmap_anonymous`.
+    /// Removes a memory space created by [`Mmap::create_space`].
     /// After unmapping, accessing the memory region will cause a segmentation fault.
     ///
     /// # Arguments
@@ -190,42 +150,4 @@ pub trait Mmap: Send + Sync + 'static {
     /// Changing permissions can affect running code. Ensure no code is executing in the region
     /// when removing execute permissions. `addr` must be page-aligned.
     unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()>;
-
-    /// Reserves a region of virtual address space without committing physical memory.
-    ///
-    /// Reserves address space for future use without allocating physical storage.
-    /// Useful for ELF loading when the total memory footprint is known in advance,
-    /// allowing reservation of the entire address space before creating individual mappings.
-    ///
-    /// The default implementation uses `PROT_NONE` to reserve space without committing memory.
-    ///
-    /// # Arguments
-    /// * `addr` - Preferred starting address, or `None` to let the system choose.
-    /// * `len` - Size of the region to reserve in bytes.
-    /// * `_use_file` - Hint whether the region will be file-backed (may be ignored).
-    ///
-    /// # Returns
-    /// A reserved mapped region on success.
-    ///
-    /// # Safety
-    /// Manipulates address space. The reserved region should not be accessed until properly mapped.
-    unsafe fn mmap_reserve(
-        &self,
-        addr: Option<VmAddr>,
-        len: usize,
-        _use_file: bool,
-    ) -> Result<MappedRegion> {
-        // Reserve address space with PROT_NONE (no physical memory committed)
-        unsafe {
-            self.mmap(
-                addr,
-                len,
-                ProtFlags::PROT_NONE,
-                MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS,
-                0,
-                None,
-            )
-            .map(MmapResult::into_region)
-        }
-    }
 }

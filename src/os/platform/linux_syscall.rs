@@ -1,7 +1,7 @@
 use crate::input::{ElfReader, Path, PathBuf};
 use crate::{
     Error, IoError, MmapError, Result, logging,
-    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, MmapResult, ProtFlags, VmAddr},
+    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, ProtFlags, VmAddr},
 };
 use alloc::ffi::CString;
 use core::ffi::{c_int, c_void};
@@ -33,128 +33,122 @@ pub(crate) struct RawFile {
     fd: isize,
 }
 
-#[inline]
-fn mmap(
-    addr: *mut c_void,
-    len: usize,
-    prot: ProtFlags,
-    flags: MapFlags,
-    fd: c_int,
-    offset: isize,
-) -> Result<*mut c_void> {
-    let ptr = unsafe {
-        #[cfg(target_pointer_width = "32")]
-        let (syscall, offset) = (
-            Sysno::mmap2,
-            offset / crate::os::PageSize::BASE_BYTES as isize,
-        );
-        #[cfg(not(target_pointer_width = "32"))]
-        let syscall = Sysno::mmap;
-        from_ret(
-            syscalls::raw_syscall!(syscall, addr, len, prot.bits(), flags.bits(), fd, offset),
-            |code| MmapError::MmapFailed { code }.into(),
-        )?
-    };
-    Ok(ptr as *mut c_void)
-}
-
-#[inline]
-fn mmap_anonymous(
-    addr: *mut c_void,
-    len: usize,
-    prot: ProtFlags,
-    flags: MapFlags,
-) -> Result<*mut c_void> {
-    let ptr = unsafe {
-        #[cfg(target_pointer_width = "32")]
-        let syscall = Sysno::mmap2;
-        #[cfg(not(target_pointer_width = "32"))]
-        let syscall = Sysno::mmap;
-        from_ret(
-            syscalls::raw_syscall!(
-                syscall,
-                addr,
-                len,
-                prot.bits(),
-                flags.union(MapFlags::MAP_ANONYMOUS).bits(),
-                usize::MAX,
-                0
-            ),
-            |code| MmapError::MmapAnonymousFailed { code }.into(),
-        )?
-    };
-    Ok(ptr as *mut c_void)
-}
-
-#[inline]
-fn munmap(addr: *mut c_void, len: usize) -> Result<()> {
-    unsafe {
-        from_ret(syscalls::raw_syscall!(Sysno::munmap, addr, len), |code| {
-            MmapError::MunmapFailed { code }.into()
-        })?;
-    }
-    Ok(())
-}
-
-#[inline]
-fn mprotect(addr: *mut c_void, len: usize, prot: ProtFlags) -> Result<()> {
-    unsafe {
-        from_ret(
-            syscalls::raw_syscall!(Sysno::mprotect, addr, len, prot.bits()),
-            |code| MmapError::Mprotect { code }.into(),
-        )?;
-    }
-    Ok(())
-}
-
 impl Mmap for DefaultMmap {
-    unsafe fn mmap(
+    unsafe fn create_space(
         &self,
         addr: Option<VmAddr>,
         len: usize,
         prot: ProtFlags,
-        flags: MapFlags,
-        offset: usize,
-        fd: Option<isize>,
-    ) -> crate::Result<MmapResult> {
-        let mut needs_copy = false;
-        let ptr = if let Some(fd) = fd {
-            mmap(
-                addr.map_or(core::ptr::null_mut(), VmAddr::as_mut_ptr),
-                len,
-                prot,
-                flags,
-                fd as i32,
-                offset as _,
-            )?
-        } else {
-            needs_copy = true;
-            addr.unwrap().as_mut_ptr()
+        _populate_later: bool,
+    ) -> crate::Result<MappedRegion> {
+        let ptr = unsafe {
+            #[cfg(target_pointer_width = "32")]
+            let syscall = Sysno::mmap2;
+            #[cfg(not(target_pointer_width = "32"))]
+            let syscall = Sysno::mmap;
+            from_ret(
+                syscalls::raw_syscall!(
+                    syscall,
+                    addr.map_or(core::ptr::null_mut::<c_void>(), |addr| {
+                        addr.as_mut_ptr::<c_void>()
+                    }),
+                    len,
+                    prot.bits(),
+                    (MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS).bits(),
+                    usize::MAX,
+                    0
+                ),
+                |code| MmapError::MmapAnonymousFailed { code }.into(),
+            )? as *mut c_void
         };
-        Ok(MmapResult::new(
-            MappedRegion::local_alias(ptr, len, *self),
-            needs_copy,
-        ))
+        Ok(MappedRegion::local(ptr, len, *self))
     }
 
-    unsafe fn mmap_anonymous(
+    unsafe fn map_file_at(
         &self,
         addr: VmAddr,
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> crate::Result<MappedRegion> {
-        let ptr = mmap_anonymous(addr.as_mut_ptr(), len, prot, flags)?;
-        let region = if flags.contains(MapFlags::MAP_FIXED) {
-            MappedRegion::local_alias(ptr, len, *self)
-        } else {
-            MappedRegion::local(ptr, len, *self)
-        };
-        Ok(region)
+        offset: usize,
+        fd: isize,
+    ) -> crate::Result<()> {
+        unsafe {
+            #[cfg(target_pointer_width = "32")]
+            let (syscall, offset) = (Sysno::mmap2, offset / crate::os::PageSize::BASE_BYTES);
+            #[cfg(not(target_pointer_width = "32"))]
+            let syscall = Sysno::mmap;
+            from_ret(
+                syscalls::raw_syscall!(
+                    syscall,
+                    addr.as_mut_ptr::<c_void>(),
+                    len,
+                    prot.bits(),
+                    flags.bits(),
+                    fd as c_int,
+                    offset
+                ),
+                |code| MmapError::MmapFailed { code }.into(),
+            )?;
+        }
+        Ok(())
+    }
+
+    unsafe fn map_copy_at(&self, addr: VmAddr, len: usize, flags: MapFlags) -> crate::Result<()> {
+        unsafe {
+            #[cfg(target_pointer_width = "32")]
+            let syscall = Sysno::mmap2;
+            #[cfg(not(target_pointer_width = "32"))]
+            let syscall = Sysno::mmap;
+            from_ret(
+                syscalls::raw_syscall!(
+                    syscall,
+                    addr.as_mut_ptr::<c_void>(),
+                    len,
+                    ProtFlags::PROT_WRITE.bits(),
+                    flags.union(MapFlags::MAP_ANONYMOUS).bits(),
+                    usize::MAX,
+                    0
+                ),
+                |code| MmapError::MmapAnonymousFailed { code }.into(),
+            )?;
+        }
+        Ok(())
+    }
+
+    unsafe fn map_zero_at(
+        &self,
+        addr: VmAddr,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+    ) -> crate::Result<()> {
+        unsafe {
+            #[cfg(target_pointer_width = "32")]
+            let syscall = Sysno::mmap2;
+            #[cfg(not(target_pointer_width = "32"))]
+            let syscall = Sysno::mmap;
+            from_ret(
+                syscalls::raw_syscall!(
+                    syscall,
+                    addr.as_mut_ptr::<c_void>(),
+                    len,
+                    prot.bits(),
+                    flags.union(MapFlags::MAP_ANONYMOUS).bits(),
+                    usize::MAX,
+                    0
+                ),
+                |code| MmapError::MmapAnonymousFailed { code }.into(),
+            )?;
+        }
+        Ok(())
     }
 
     unsafe fn munmap(&self, addr: VmAddr, len: usize) -> crate::Result<()> {
-        munmap(addr.as_mut_ptr(), len)?;
+        from_ret(
+            syscalls::raw_syscall!(Sysno::munmap, addr.as_mut_ptr::<c_void>(), len),
+            |code| MmapError::MunmapFailed { code }.into(),
+        )?;
         Ok(())
     }
 
@@ -173,29 +167,16 @@ impl Mmap for DefaultMmap {
     }
 
     unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> crate::Result<()> {
-        mprotect(addr.as_mut_ptr(), len, prot)?;
-        Ok(())
-    }
-
-    unsafe fn mmap_reserve(
-        &self,
-        addr: Option<VmAddr>,
-        len: usize,
-        use_file: bool,
-    ) -> Result<MappedRegion> {
-        let flags = MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS;
-        let prot = if use_file {
-            ProtFlags::PROT_NONE
-        } else {
-            ProtFlags::PROT_WRITE
-        };
-        let ptr = mmap_anonymous(
-            addr.map_or(core::ptr::null_mut(), VmAddr::as_mut_ptr),
-            len,
-            prot,
-            flags,
+        from_ret(
+            syscalls::raw_syscall!(
+                Sysno::mprotect,
+                addr.as_mut_ptr::<c_void>(),
+                len,
+                prot.bits()
+            ),
+            |code| MmapError::Mprotect { code }.into(),
         )?;
-        Ok(MappedRegion::local(ptr, len, *self))
+        Ok(())
     }
 }
 
