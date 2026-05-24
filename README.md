@@ -1,7 +1,7 @@
 # Relink: Rust ELF Loader and Runtime/JIT Linker
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/weizhiao/elf_loader/main/docs/imgs/logo.svg" width="560" alt="Relink logo">
+  <img src="https://raw.githubusercontent.com/weizhiao/elf_loader/main/docs/assets/logo.svg" width="560" alt="Relink logo">
 </p>
 
 <p align="center">
