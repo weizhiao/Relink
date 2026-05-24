@@ -173,26 +173,6 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn map_copy_at(&self, addr: VmAddr, len: usize, _flags: MapFlags) -> Result<()> {
-        let ptr = unsafe {
-            Memory::VirtualAlloc2(
-                GetCurrentProcess(),
-                addr.as_mut_ptr(),
-                len,
-                MEM_COMMIT | MEM_RESERVE | MEM_REPLACE_PLACEHOLDER,
-                PAGE_READWRITE,
-                null_mut(),
-                0,
-            )
-        };
-
-        if !ptr.is_null() {
-            return Ok(());
-        }
-
-        Ok(())
-    }
-
     unsafe fn map_zero_at(
         &self,
         addr: VmAddr,

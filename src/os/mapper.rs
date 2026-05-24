@@ -70,11 +70,6 @@ impl Mmap for Mapper {
     }
 
     #[inline]
-    unsafe fn map_copy_at(&self, addr: VmAddr, len: usize, flags: MapFlags) -> Result<()> {
-        unsafe { self.0.map_copy_at(addr, len, flags) }
-    }
-
-    #[inline]
     unsafe fn map_zero_at(
         &self,
         addr: VmAddr,
@@ -135,10 +130,6 @@ where
         _offset: usize,
         _fd: isize,
     ) -> Result<()> {
-        unreachable!("MunmapAdapter only supports munmap")
-    }
-
-    unsafe fn map_copy_at(&self, _addr: VmAddr, _len: usize, _flags: MapFlags) -> Result<()> {
         unreachable!("MunmapAdapter only supports munmap")
     }
 

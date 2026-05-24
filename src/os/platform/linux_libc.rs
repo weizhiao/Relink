@@ -145,26 +145,6 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn map_copy_at(&self, addr: VmAddr, len: usize, flags: MapFlags) -> crate::Result<()> {
-        let ptr = unsafe {
-            mmap(
-                addr.as_mut_ptr(),
-                len,
-                ProtFlags::PROT_WRITE.bits(),
-                flags.union(MapFlags::MAP_ANONYMOUS).bits(),
-                -1,
-                0,
-            )
-        };
-        if core::ptr::eq(ptr, libc::MAP_FAILED) {
-            return Err(MmapError::MmapAnonymousFailed {
-                code: last_os_error_code(),
-            }
-            .into());
-        }
-        Ok(())
-    }
-
     unsafe fn map_zero_at(
         &self,
         addr: VmAddr,

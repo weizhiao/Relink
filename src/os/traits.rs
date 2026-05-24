@@ -76,13 +76,6 @@ pub trait Mmap: Send + Sync + 'static {
         fd: isize,
     ) -> Result<()>;
 
-    /// Prepares a writable range that the loader will populate by copying bytes.
-    ///
-    /// Backends that create a fully writable space can implement this as a
-    /// no-op. Placeholder/reservation based backends should commit or replace
-    /// the target range here.
-    unsafe fn map_copy_at(&self, addr: VmAddr, len: usize, flags: MapFlags) -> Result<()>;
-
     /// Maps or commits anonymous zero-filled pages into an already-created space.
     ///
     /// The mapped range is owned by the surrounding space created with

@@ -94,28 +94,6 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn map_copy_at(&self, addr: VmAddr, len: usize, flags: MapFlags) -> crate::Result<()> {
-        unsafe {
-            #[cfg(target_pointer_width = "32")]
-            let syscall = Sysno::mmap2;
-            #[cfg(not(target_pointer_width = "32"))]
-            let syscall = Sysno::mmap;
-            from_ret(
-                syscalls::raw_syscall!(
-                    syscall,
-                    addr.as_mut_ptr::<c_void>(),
-                    len,
-                    ProtFlags::PROT_WRITE.bits(),
-                    flags.union(MapFlags::MAP_ANONYMOUS).bits(),
-                    usize::MAX,
-                    0
-                ),
-                |code| MmapError::MmapAnonymousFailed { code }.into(),
-            )?;
-        }
-        Ok(())
-    }
-
     unsafe fn map_zero_at(
         &self,
         addr: VmAddr,

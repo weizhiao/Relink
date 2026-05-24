@@ -50,22 +50,17 @@ impl ElfSegment {
 
         debug_assert!(len.is_multiple_of(self.page_size));
 
-        self.need_copy = if !self.from_relocatable {
+        self.need_copy = true;
+        if !self.from_relocatable {
             debug_assert_eq!(self.map_info.len(), 1);
             debug_assert!(self.map_info[0].offset.is_multiple_of(self.page_size));
             if let Some(fd) = object.as_fd() {
                 unsafe {
                     mapper.map_file_at(addr, len, prot, self.flags, self.map_info[0].offset, fd)
                 }?;
-                false
-            } else {
-                unsafe { mapper.map_copy_at(addr, len, self.flags) }?;
-                true
+                self.need_copy = false;
             }
-        } else {
-            unsafe { mapper.map_copy_at(addr, len, self.flags) }?;
-            true
-        };
+        }
 
         if self.need_copy {
             for info in &self.map_info {

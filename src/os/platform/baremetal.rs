@@ -65,15 +65,6 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn map_copy_at(
-        &self,
-        _addr: VmAddr,
-        _len: usize,
-        _flags: MapFlags,
-    ) -> crate::Result<()> {
-        Ok(())
-    }
-
     unsafe fn map_zero_at(
         &self,
         addr: VmAddr,
