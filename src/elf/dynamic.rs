@@ -87,6 +87,7 @@ pub(crate) struct ParsedDynamic {
     pub(crate) soname_off: Option<NonZeroUsize>,
     pub(crate) rpath_off: Option<NonZeroUsize>,
     pub(crate) runpath_off: Option<NonZeroUsize>,
+    pub(crate) dt_debug_idx: Option<usize>,
     pub(crate) bind_now: bool,
     pub(crate) flags: usize,
     pub(crate) flags_1: usize,
@@ -101,7 +102,7 @@ fn dynamic_table_end(offset: Option<NonZeroUsize>, size: Option<NonZeroUsize>) -
 
 impl ParsedDynamic {
     #[inline]
-    fn apply(&mut self, tag: ElfDynamicTag, value: usize) -> bool {
+    fn apply(&mut self, idx: usize, tag: ElfDynamicTag, value: usize) -> bool {
         match tag {
             ElfDynamicTag::FLAGS => self.flags = value,
             ElfDynamicTag::FLAGS_1 => self.flags_1 = value,
@@ -148,6 +149,7 @@ impl ParsedDynamic {
             ElfDynamicTag::RPATH => self.rpath_off = NonZeroUsize::new(value),
             ElfDynamicTag::RUNPATH => self.runpath_off = NonZeroUsize::new(value),
             ElfDynamicTag::STRSZ => self.strtab_size = NonZeroUsize::new(value),
+            ElfDynamicTag::DEBUG => self.dt_debug_idx = Some(idx),
             ElfDynamicTag::NULL => return true,
             _ => {}
         }
@@ -163,8 +165,8 @@ where
     I: IntoIterator<Item = (ElfDynamicTag, usize)>,
 {
     let mut parsed = ParsedDynamic::default();
-    for (tag, value) in entries {
-        if parsed.apply(tag, value) {
+    for (idx, (tag, value)) in entries.into_iter().enumerate() {
+        if parsed.apply(idx, tag, value) {
             break;
         }
     }
@@ -178,12 +180,12 @@ where
     /// Parse the dynamic section of an ELF file
     pub fn new<R: RegionAccess>(
         dynamic_entries: MappedView<ElfDyn<Arch::Layout>>,
+        dynamic_addr: VmAddr,
         segments: &ElfSegments<R>,
     ) -> Result<Self> {
-        let dynamic_ptr = dynamic_entries
+        dynamic_entries
             .as_slice()
             .first()
-            .map(NonNull::from)
             .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_NULL" })?;
         let parsed = parse_dynamic_entries(
             dynamic_entries
@@ -191,6 +193,17 @@ where
                 .iter()
                 .map(|entry| (entry.tag(), entry.value())),
         );
+        let dt_debug_addr = parsed
+            .dt_debug_idx
+            .map(|idx| -> Result<_> {
+                let offset = idx
+                    .checked_mul(size_of::<ElfDyn<Arch::Layout>>())
+                    .ok_or(ParseDynamicError::AddressOverflow)?;
+                dynamic_addr
+                    .checked_add(VmOffset::new(offset))
+                    .ok_or_else(|| ParseDynamicError::AddressOverflow.into())
+            })
+            .transpose()?;
         let base = segments.base();
 
         // Verify relocation type consistency
@@ -316,7 +329,7 @@ where
         let version_idx = parsed.version_ids_off.map(add_base_nonzero).transpose()?;
 
         Ok(ElfDynamic {
-            dynamic_ptr,
+            dt_debug_addr,
             hashtab: hash_off,
             symtab: add_base(parsed.symtab_off)?,
             strtab: add_base(parsed.strtab_off)?,
@@ -407,8 +420,8 @@ pub enum ElfDynamicHashTab {
 #[allow(unused)]
 /// Information from the ELF dynamic section.
 pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
-    /// Pointer to the dynamic section.
-    pub dynamic_ptr: NonNull<ElfDyn<Arch::Layout>>,
+    /// Runtime address of the DT_DEBUG entry, when present.
+    pub dt_debug_addr: Option<VmAddr>,
     /// Hash table information.
     pub hashtab: ElfDynamicHashTab,
     /// Symbol table address.
@@ -456,7 +469,7 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
 impl<Arch: RelocationArch> Debug for ElfDynamic<Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfDynamic")
-            .field("dynamic_ptr", &self.dynamic_ptr)
+            .field("dt_debug_addr", &self.dt_debug_addr)
             .field("symtab", &format_args!("0x{:x}", self.symtab.get()))
             .field("strtab", &format_args!("0x{:x}", self.strtab.get()))
             .field("bind_now", &self.bind_now)

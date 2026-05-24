@@ -1,9 +1,6 @@
 use super::{
     context::LinkContext,
-    request::{
-        DefaultRelocationPlanner, LoadObserver, RelocationPlanner, RelocationRequest,
-        StagedDynamic, VisibleModules,
-    },
+    request::{DefaultRelocationPlanner, RelocationPlanner, RelocationRequest, VisibleModules},
     resolve::{LoadResolveContext, ScanResolveContext},
     resolver::KeyResolver,
     scan::{
@@ -18,7 +15,7 @@ use crate::{
     entity::SecondaryMap,
     image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     linker::session::ResolveSession,
-    loader::LoadHook,
+    observer::{LinkObserver, LoadObserver, RelocationObserver, StagedDynamic},
     os::VmOffset,
     relocation::{RelocationArch, RelocationHandler, Relocator},
     tls::TlsResolver,
@@ -93,6 +90,7 @@ pub struct Linker<
     R = (),
     PreH = (),
     PostH = (),
+    RelocObs = (),
     P = DefaultRelocationPlanner,
     O = (),
     V = (),
@@ -100,7 +98,7 @@ pub struct Linker<
     loader: L,
     resolver: R,
     pipeline: LinkPipeline<'a, K, Arch>,
-    relocator: Relocator<(), PreH, PostH, (), Arch>,
+    relocator: Relocator<(), PreH, PostH, (), Arch, RelocObs>,
     planner: P,
     observer: O,
     visible_modules: V,
@@ -145,6 +143,7 @@ where
         (),
         (),
         (),
+        (),
         DefaultRelocationPlanner,
         (),
         (),
@@ -176,7 +175,8 @@ where
     }
 }
 
-impl<'a, K, D, L, R, PreH, PostH, P, O, V, Arch> Linker<'a, K, D, Arch, L, R, PreH, PostH, P, O, V>
+impl<'a, K, D, L, R, PreH, PostH, RelocObs, P, O, V, Arch>
+    Linker<'a, K, D, Arch, L, R, PreH, PostH, RelocObs, P, O, V>
 where
     K: Clone + Ord,
     D: 'static,
@@ -186,7 +186,7 @@ where
     pub fn resolver<NewR>(
         self,
         resolver: NewR,
-    ) -> Linker<'a, K, D, Arch, L, NewR, PreH, PostH, P, O, V> {
+    ) -> Linker<'a, K, D, Arch, L, NewR, PreH, PostH, RelocObs, P, O, V> {
         Linker {
             loader: self.loader,
             resolver,
@@ -201,12 +201,12 @@ where
     }
 
     /// Reconfigures the relocator template used for loaded modules.
-    pub fn map_relocator<NewPreH, NewPostH>(
+    pub fn map_relocator<NewPreH, NewPostH, NewRelocObs>(
         self,
         configure: impl FnOnce(
-            Relocator<(), PreH, PostH, (), Arch>,
-        ) -> Relocator<(), NewPreH, NewPostH, (), Arch>,
-    ) -> Linker<'a, K, D, Arch, L, R, NewPreH, NewPostH, P, O, V> {
+            Relocator<(), PreH, PostH, (), Arch, RelocObs>,
+        ) -> Relocator<(), NewPreH, NewPostH, (), Arch, NewRelocObs>,
+    ) -> Linker<'a, K, D, Arch, L, R, NewPreH, NewPostH, NewRelocObs, P, O, V> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -224,7 +224,7 @@ where
     pub fn planner<NewP>(
         self,
         planner: NewP,
-    ) -> Linker<'a, K, D, Arch, L, R, PreH, PostH, NewP, O, V> {
+    ) -> Linker<'a, K, D, Arch, L, R, PreH, PostH, RelocObs, NewP, O, V> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -238,11 +238,11 @@ where
         }
     }
 
-    /// Sets the load observer used during staging and materialization.
+    /// Sets the observer used for linker-level dependency and staging events.
     pub fn observer<NewO>(
         self,
         observer: NewO,
-    ) -> Linker<'a, K, D, Arch, L, R, PreH, PostH, P, NewO, V> {
+    ) -> Linker<'a, K, D, Arch, L, R, PreH, PostH, RelocObs, P, NewO, V> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -260,7 +260,7 @@ where
     pub fn visible_modules<NewV>(
         self,
         visible_modules: NewV,
-    ) -> Linker<'a, K, D, Arch, L, R, PreH, PostH, P, O, NewV> {
+    ) -> Linker<'a, K, D, Arch, L, R, PreH, PostH, RelocObs, P, O, NewV> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -284,22 +284,35 @@ where
     }
 }
 
-impl<'a, K, D, H, Tls, Arch, R, PreH, PostH, P, O, V>
-    Linker<'a, K, D, Arch, Loader<H, D, Tls, Arch>, R, PreH, PostH, P, O, V>
+impl<'a, K, D, Obs, Tls, Arch, R, PreH, PostH, RelocObs, P, O, V>
+    Linker<'a, K, D, Arch, Loader<Obs, D, Tls, Arch>, R, PreH, PostH, RelocObs, P, O, V>
 where
     K: Clone + Ord,
     D: 'static,
-    H: LoadHook<Arch::Layout>,
+    Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
     /// Reconfigures the underlying loader.
-    pub fn map_loader<NewH, NewD, NewTls>(
+    pub fn map_loader<NewObs, NewD, NewTls>(
         self,
-        configure: impl FnOnce(Loader<H, D, Tls, Arch>) -> Loader<NewH, NewD, NewTls, Arch>,
-    ) -> Linker<'a, K, NewD, Arch, Loader<NewH, NewD, NewTls, Arch>, R, PreH, PostH, P, O, V>
+        configure: impl FnOnce(Loader<Obs, D, Tls, Arch>) -> Loader<NewObs, NewD, NewTls, Arch>,
+    ) -> Linker<
+        'a,
+        K,
+        NewD,
+        Arch,
+        Loader<NewObs, NewD, NewTls, Arch>,
+        R,
+        PreH,
+        PostH,
+        RelocObs,
+        P,
+        O,
+        V,
+    >
     where
-        NewH: LoadHook<Arch::Layout>,
+        NewObs: LoadObserver<Arch>,
         NewD: 'static,
         NewTls: TlsResolver,
     {
@@ -318,19 +331,20 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'a, K, D, H, Tls, Arch, Resolver, PreH, PostH, P, O, V>
-    Linker<'a, K, D, Arch, Loader<H, D, Tls, Arch>, Resolver, PreH, PostH, P, O, V>
+impl<'a, K, D, Obs, Tls, Arch, Resolver, PreH, PostH, RelocObs, P, O, V>
+    Linker<'a, K, D, Arch, Loader<Obs, D, Tls, Arch>, Resolver, PreH, PostH, RelocObs, P, O, V>
 where
     K: Clone + Ord,
     D: Default + 'static,
-    H: LoadHook<Arch::Layout>,
+    Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch + crate::relocation::RelocationValueProvider + GotPltTarget,
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     PreH: RelocationHandler<Arch> + Clone,
     PostH: RelocationHandler<Arch> + Clone,
+    RelocObs: RelocationObserver<Arch> + Clone,
     P: RelocationPlanner<K, D, Arch>,
-    O: LoadObserver<K, D, Arch>,
+    O: LinkObserver<Arch>,
     V: VisibleModules<K, Arch>,
 {
     /// Loads one module into this linker's relocation domain.
@@ -356,7 +370,7 @@ where
                     visible_modules,
                     &mut session.resolve,
                 );
-                let resolved = resolve_context.resolve_root(&key, resolver)?;
+                let resolved = resolve_context.resolve_root(&key, resolver, observer)?;
                 resolve_context.stage_resolved(resolved, loader, observer)
             },
         )?;
@@ -424,12 +438,17 @@ where
 
         let mut resolve_context =
             ScanResolveContext::new(&mut context.committed, &self.visible_modules, &mut session);
-        let resolved = resolve_context.resolve_root(key, &mut self.resolver)?;
+        let resolved = resolve_context.resolve_root(key, &mut self.resolver, &mut self.observer)?;
         let root = resolve_context.stage_resolved(resolved, &mut self.loader)?;
         if !resolve_context.contains_pending(root) {
             return Ok(ScanDiscovery::Existing(root));
         }
-        resolve_context.resolve_dependency_graph(root, &mut self.loader, &mut self.resolver)?;
+        resolve_context.resolve_dependency_graph(
+            root,
+            &mut self.loader,
+            &mut self.resolver,
+            &mut self.observer,
+        )?;
 
         let ResolveSession {
             entries,
@@ -598,15 +617,13 @@ where
                 )
             })?
             .take_module(module_id)?;
-        let (init_fn, fini_fn) = self.loader.inner.lifecycle_handlers();
         let force_static_tls = self.loader.inner.force_static_tls();
 
-        let mut raw = build_arena_raw_dynamic::<D, Tls, Arch>(
+        let mut raw = build_arena_raw_dynamic::<D, Tls, Arch, _>(
             scanned,
             runtime,
-            init_fn,
-            fini_fn,
             force_static_tls,
+            &mut self.loader.inner.observer,
         )?;
         self.loader.inner.initialize_dynamic(&mut raw)?;
         Ok(raw)
@@ -624,7 +641,7 @@ where
             &mut LinkContext<K, D, Meta, Arch>,
             &V,
             &mut LoadSession<D, Arch>,
-            &mut Loader<H, D, Tls, Arch>,
+            &mut Loader<Obs, D, Tls, Arch>,
             &mut Resolver,
             &mut O,
         ) -> Result<KeyId>,

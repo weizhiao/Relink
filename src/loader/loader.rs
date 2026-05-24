@@ -1,10 +1,8 @@
-use super::{
-    LifecycleContext, LifecycleHandler, LoadHook, SharedLifecycleHandler, shared_lifecycle_handler,
-};
 use crate::{
     MmapError, Result,
     arch::NativeArch,
     image::RawDynamic,
+    observer::LoadObserver,
     os::{DefaultMmap, Mapper, Mmap, PageSize},
     relocation::RelocationArch,
     tls::TlsResolver,
@@ -31,37 +29,31 @@ use core::marker::PhantomData;
 /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
 /// let lib = raw.relocator().relocate().unwrap();
 /// ```
-pub struct Loader<H = (), D: 'static = (), Tls = (), Arch = NativeArch>
+pub struct Loader<Obs = (), D: 'static = (), Tls = (), Arch = NativeArch>
 where
-    H: LoadHook<Arch::Layout>,
+    Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
     pub(crate) buf: super::ElfBuf,
-    pub(crate) inner: LoaderInner<H, D, Arch>,
+    pub(crate) inner: LoaderInner<Obs, D, Arch>,
     _marker: PhantomData<(Tls, Arch)>,
 }
 
-pub(crate) struct LoaderInner<H, D: 'static, Arch: RelocationArch> {
+pub(crate) struct LoaderInner<Obs, D: 'static, Arch: RelocationArch> {
     pub(crate) mapper: Mapper,
-    pub(crate) init_fn: SharedLifecycleHandler,
-    pub(crate) fini_fn: SharedLifecycleHandler,
-    pub(crate) hook: H,
+    pub(crate) observer: Obs,
     pub(crate) page_size: Option<PageSize>,
     pub(crate) force_static_tls: bool,
     pub(crate) dynamic_initializer: Box<dyn FnMut(&mut RawDynamic<D, Arch>) -> Result<()>>,
 }
 
-impl<H, D, Arch> LoaderInner<H, D, Arch>
+impl<Obs, D, Arch> LoaderInner<Obs, D, Arch>
 where
-    H: LoadHook<Arch::Layout>,
+    Obs: LoadObserver<Arch>,
     D: 'static,
     Arch: RelocationArch,
 {
-    pub(crate) fn lifecycle_handlers(&self) -> (SharedLifecycleHandler, SharedLifecycleHandler) {
-        (self.init_fn.clone(), self.fini_fn.clone())
-    }
-
     #[inline]
     pub(crate) fn force_static_tls(&self) -> bool {
         self.force_static_tls
@@ -96,8 +88,8 @@ where
 }
 
 impl Loader<(), (), (), NativeArch> {
-    /// Creates a new [`Loader`] with the default mmap backend, no hook, no custom
-    /// user data, no TLS resolver, and the host target architecture
+    /// Creates a new [`Loader`] with the default mmap backend, no observer, no
+    /// custom user data, no TLS resolver, and the host target architecture
     /// ([`NativeArch`]).
     ///
     /// To target a different ELF architecture (e.g. load an x86-64 shared
@@ -105,27 +97,11 @@ impl Loader<(), (), (), NativeArch> {
     /// [`for_arch::<NewArch>()`](Self::for_arch); the `e_machine` gate
     /// then validates against `NewArch::MACHINE` automatically.
     pub fn new() -> Self {
-        let c_abi: SharedLifecycleHandler =
-            shared_lifecycle_handler(|ctx: &LifecycleContext<'_>| {
-                ctx.func_addrs().for_each(|ptr| {
-                    let ptr = ptr.as_ptr() as usize;
-                    #[cfg(not(windows))]
-                    unsafe {
-                        core::mem::transmute::<usize, extern "C" fn()>(ptr)()
-                    };
-                    #[cfg(windows)]
-                    unsafe {
-                        core::mem::transmute::<usize, extern "sysv64" fn()>(ptr)()
-                    };
-                });
-            });
         Self {
             buf: super::ElfBuf::new(),
             inner: LoaderInner {
                 mapper: Mapper::new(DefaultMmap::default()),
-                hook: (),
-                init_fn: c_abi.clone(),
-                fini_fn: c_abi,
+                observer: (),
                 page_size: None,
                 force_static_tls: false,
                 dynamic_initializer: Box::new(|_| Ok(())),
@@ -135,9 +111,9 @@ impl Loader<(), (), (), NativeArch> {
     }
 }
 
-impl<H, D, Tls, Arch> Loader<H, D, Tls, Arch>
+impl<Obs, D, Tls, Arch> Loader<Obs, D, Tls, Arch>
 where
-    H: LoadHook<Arch::Layout>,
+    Obs: LoadObserver<Arch>,
     D: 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
@@ -145,33 +121,6 @@ where
     #[inline]
     pub(crate) fn mapper(&self) -> Mapper {
         self.inner.mapper()
-    }
-
-    /// Sets the initialization function handler.
-    ///
-    /// This handler is responsible for calling the initialization functions
-    /// (e.g., `.init` and `.init_array`) of the loaded ELF object.
-    ///
-    /// Note: glibc passes `argc`, `argv`, and `envp` to functions in `.init_array`
-    /// as a non-standard extension.
-    pub fn with_init<F>(mut self, init_fn: F) -> Self
-    where
-        F: LifecycleHandler + 'static,
-    {
-        self.inner.init_fn = shared_lifecycle_handler(init_fn);
-        self
-    }
-
-    /// Sets the finalization function handler.
-    ///
-    /// This handler is responsible for calling the finalization functions
-    /// (e.g., `.fini` and `.fini_array`) of the loaded ELF object.
-    pub fn with_fini<F>(mut self, fini_fn: F) -> Self
-    where
-        F: LifecycleHandler + 'static,
-    {
-        self.inner.fini_fn = shared_lifecycle_handler(fini_fn);
-        self
     }
 
     /// Consumes the current loader and returns a new one with the specified
@@ -184,7 +133,7 @@ where
     pub fn with_dynamic_initializer<NewD>(
         self,
         initializer: impl FnMut(&mut RawDynamic<NewD, Arch>) -> Result<()> + 'static,
-    ) -> Loader<H, NewD, Tls, Arch>
+    ) -> Loader<Obs, NewD, Tls, Arch>
     where
         NewD: Default + 'static,
     {
@@ -192,9 +141,7 @@ where
             buf: self.buf,
             inner: LoaderInner {
                 mapper: self.inner.mapper,
-                init_fn: self.inner.init_fn,
-                fini_fn: self.inner.fini_fn,
-                hook: self.inner.hook,
+                observer: self.inner.observer,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
                 dynamic_initializer: Box::new(initializer),
@@ -203,18 +150,17 @@ where
         }
     }
 
-    /// Consumes the current loader and returns a new one with the specified hook.
-    pub fn with_hook<NewHook>(self, hook: NewHook) -> Loader<NewHook, D, Tls, Arch>
+    /// Consumes the current loader and returns a new one with the specified
+    /// load observer.
+    pub fn with_observer<NewObs>(self, observer: NewObs) -> Loader<NewObs, D, Tls, Arch>
     where
-        NewHook: LoadHook<Arch::Layout>,
+        NewObs: LoadObserver<Arch>,
     {
         Loader {
             buf: self.buf,
             inner: LoaderInner {
                 mapper: self.inner.mapper,
-                init_fn: self.inner.init_fn,
-                fini_fn: self.inner.fini_fn,
-                hook,
+                observer,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
                 dynamic_initializer: self.inner.dynamic_initializer,
@@ -246,7 +192,7 @@ where
 
     /// Consumes the current loader and returns a new one with the specified TLS resolver.
     #[cfg(feature = "tls")]
-    pub fn with_tls_resolver<NewTls>(self) -> Loader<H, D, NewTls, Arch>
+    pub fn with_tls_resolver<NewTls>(self) -> Loader<Obs, D, NewTls, Arch>
     where
         NewTls: TlsResolver,
     {
@@ -259,7 +205,7 @@ where
 
     /// Consumes the current loader and returns a new one with the default TLS resolver.
     #[cfg(feature = "tls")]
-    pub fn with_default_tls_resolver(self) -> Loader<H, D, crate::tls::DefaultTlsResolver, Arch> {
+    pub fn with_default_tls_resolver(self) -> Loader<Obs, D, crate::tls::DefaultTlsResolver, Arch> {
         Loader {
             buf: self.buf,
             inner: self.inner,
@@ -294,9 +240,9 @@ where
 ///     .for_arch::<X86_64Arch>()
 ///     .with_dynamic_initializer::<()>(|_| Ok(()));
 /// ```
-impl<H, Tls, Arch> Loader<H, (), Tls, Arch>
+impl<Obs, Tls, Arch> Loader<Obs, (), Tls, Arch>
 where
-    H: LoadHook<Arch::Layout>,
+    Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
@@ -324,18 +270,16 @@ where
     /// and then attach the initializer once the target architecture is fixed.
     ///
     /// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
-    pub fn for_arch<NewArch>(self) -> Loader<H, (), Tls, NewArch>
+    pub fn for_arch<NewArch>(self) -> Loader<Obs, (), Tls, NewArch>
     where
         NewArch: RelocationArch,
-        H: LoadHook<NewArch::Layout>,
+        Obs: LoadObserver<NewArch>,
     {
         Loader {
             buf: self.buf,
             inner: LoaderInner {
                 mapper: self.inner.mapper,
-                init_fn: self.inner.init_fn,
-                fini_fn: self.inner.fini_fn,
-                hook: self.inner.hook,
+                observer: self.inner.observer,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
                 // `D = ()` so the existing initializer is necessarily a

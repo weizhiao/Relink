@@ -8,7 +8,7 @@ use crate::object::{ObjectBuilder, ObjectRelocation, PltGotSection};
 use crate::{
     Result,
     elf::Lifecycle,
-    loader::SharedLifecycleHandler,
+    observer::RelocationObserver,
     os::VmAddr,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     sync::{Arc, AtomicBool},
@@ -37,9 +37,6 @@ pub struct RawObject<D: 'static = (), Arch: RelocationArch = crate::arch::Native
     /// Memory protection function.
     pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
 
-    /// Initialization function handler.
-    pub(crate) init_handler: SharedLifecycleHandler,
-
     /// Initialization lifecycle.
     pub(crate) init: Lifecycle,
 }
@@ -59,7 +56,8 @@ impl<D: 'static, Arch: RelocationArch> RawObject<D, Arch> {
             path: builder.path,
             symtab: builder.symtab,
             fini: OnceCell::new(),
-            fini_handler: builder.fini_fn,
+            fini_executor: OnceCell::new(),
+            unload_hook: OnceCell::new(),
             emu_fini: OnceCell::new(),
             user_data: builder.user_data,
             dynamic_info: None,
@@ -80,7 +78,6 @@ impl<D: 'static, Arch: RelocationArch> RawObject<D, Arch> {
             relocation: builder.relocation,
             mprotect: builder.mprotect,
             init: builder.init,
-            init_handler: builder.init_fn,
         }
     }
 
@@ -108,21 +105,23 @@ where
     type Output = LoadedObject<D, Arch>;
     type Arch = Arch;
 
-    fn relocate<PreH, PostH>(
+    fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
+        Obs: RelocationObserver<Arch> + ?Sized,
     {
         let RelocateArgs {
             scope,
             pre_handler,
             post_handler,
+            observer,
             ..
         } = args;
-        let inner = self.relocate_impl(scope, pre_handler, post_handler)?;
+        let inner = self.relocate_impl(scope, pre_handler, post_handler, observer)?;
         Ok(LoadedObject { inner })
     }
 }

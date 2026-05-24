@@ -2,8 +2,8 @@ use crate::{
     Result,
     elf::ElfRelType,
     image::{ModuleScope, RawObject},
-    loader::LifecycleContext,
     logging,
+    observer::{LifecycleEvent, LifecyclePhase, RelocationObserver},
     relocation::{RelocHelper, RelocationArch, RelocationHandler},
 };
 
@@ -25,15 +25,17 @@ impl<D: 'static, Arch> RawObject<D, Arch>
 where
     Arch: RelocationArch,
 {
-    pub(crate) fn relocate_impl<PreH, PostH>(
+    pub(crate) fn relocate_impl<PreH, PostH, Obs>(
         mut self,
         scope: ModuleScope<Arch>,
         pre_handler: &PreH,
         post_handler: &PostH,
+        observer: &mut Obs,
     ) -> Result<crate::image::LoadedCore<D, Arch>>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
+        Obs: RelocationObserver<Arch> + ?Sized,
     {
         logging::debug!("Relocating object: {}", self.core.name());
 
@@ -71,8 +73,9 @@ where
         (self.mprotect)()?;
 
         logging::trace!("[{}] Executing init functions", self.core.name());
-        let ctx = LifecycleContext::new(&self.init, self.core.segments());
-        self.init_handler.call(&ctx);
+        let mut event = LifecycleEvent::new(LifecyclePhase::Init, &self.init, self.core.segments());
+        observer.on_lifecycle(&mut event)?;
+        event.run();
 
         logging::info!("Relocation completed for {}", self.core.name());
 

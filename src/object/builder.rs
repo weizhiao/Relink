@@ -9,7 +9,8 @@ use crate::{
         SymbolTable,
     },
     input::PathBuf,
-    loader::{LoadHook, LoaderInner, SharedLifecycleHandler},
+    loader::LoaderInner,
+    observer::LoadObserver,
     os::{VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::{ElfSegments, SegmentBuilder},
@@ -23,8 +24,6 @@ pub(crate) struct ObjectBuilder<Tls, D = (), Arch: RelocationArch = crate::arch:
     pub(crate) path: PathBuf,
     pub(crate) symtab: SymbolTable<Arch::Layout>,
     pub(crate) init: Lifecycle,
-    pub(crate) init_fn: SharedLifecycleHandler,
-    pub(crate) fini_fn: SharedLifecycleHandler,
     pub(crate) segments: ElfSegments,
     pub(crate) relocation: ObjectRelocation<Arch>,
     pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
@@ -167,8 +166,6 @@ where
     pub(crate) fn new(
         path: PathBuf,
         shdrs: &mut [ElfShdr<Arch::Layout>],
-        init_fn: SharedLifecycleHandler,
-        fini_fn: SharedLifecycleHandler,
         segments: ElfSegments,
         mprotect: Box<dyn Fn() -> Result<()>>,
         mut pltgot: PltGotSection,
@@ -186,8 +183,6 @@ where
         Ok(Self {
             path,
             symtab,
-            init_fn,
-            fini_fn,
             segments,
             mprotect,
             relocation,
@@ -202,9 +197,9 @@ where
     }
 }
 
-impl<H, D, Arch> LoaderInner<H, D, Arch>
+impl<Obs, D, Arch> LoaderInner<Obs, D, Arch>
 where
-    H: LoadHook<Arch::Layout>,
+    Obs: LoadObserver<Arch>,
     D: Default + 'static,
     Arch: crate::relocation::RelocationArch,
 {
@@ -217,7 +212,6 @@ where
         Tls: TlsResolver,
     {
         let path = PathBuf::from(object.path());
-        let (init_fn, fini_fn) = self.lifecycle_handlers();
         let mapper = self.mapper();
         let mut shdr_segments =
             SectionSegments::<Arch>::new(shdrs, &mut object, self.page_size()?.bytes())?;
@@ -230,8 +224,6 @@ where
         });
         let user_data = D::default();
 
-        ObjectBuilder::new(
-            path, shdrs, init_fn, fini_fn, segments, mprotect, pltgot, user_data,
-        )
+        ObjectBuilder::new(path, shdrs, segments, mprotect, pltgot, user_data)
     }
 }

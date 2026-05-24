@@ -1,4 +1,4 @@
-use super::{LoadHook, Loader};
+use super::Loader;
 use crate::{
     ParseEhdrError, ParsePhdrError, Result,
     elf::{ElfDyn, ElfFileType, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType},
@@ -8,6 +8,7 @@ use crate::{
     },
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
+    observer::LoadObserver,
     os::{MappedRegion, VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::{ELFRelro, ElfSegments, program::parse_segments},
@@ -16,9 +17,9 @@ use crate::{
 use alloc::vec::Vec;
 use core::ffi::c_void;
 
-impl<H, D, Tls, Arch> Loader<H, D, Tls, Arch>
+impl<Obs, D, Tls, Arch> Loader<Obs, D, Tls, Arch>
 where
-    H: LoadHook<Arch::Layout>,
+    Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
@@ -64,9 +65,9 @@ where
     }
 }
 
-impl<H, D, Tls, Arch> Loader<H, D, Tls, Arch>
+impl<Obs, D, Tls, Arch> Loader<Obs, D, Tls, Arch>
 where
-    H: LoadHook<Arch::Layout>,
+    Obs: LoadObserver<Arch>,
     D: 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
@@ -98,9 +99,9 @@ where
     }
 }
 
-impl<H, D, Tls, Arch> Loader<H, D, Tls, Arch>
+impl<Obs, D, Tls, Arch> Loader<Obs, D, Tls, Arch>
 where
-    H: LoadHook<Arch::Layout>,
+    Obs: LoadObserver<Arch>,
     D: Default + 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
@@ -324,11 +325,10 @@ where
             segments,
             self.inner.force_static_tls(),
             D::default(),
-            self.inner.lifecycle_handlers(),
             page_size,
             mapper,
         )?;
-        let mut image = RawDynamic::from_parts::<Tls>(parts)?;
+        let mut image = RawDynamic::from_parts::<Tls, _>(parts, &mut self.inner.observer)?;
         self.inner.initialize_dynamic(&mut image)?;
 
         logging::info!(
@@ -445,7 +445,6 @@ fn borrowed_dynamic_parts<D, Arch>(
     segments: ElfSegments,
     force_static_tls: bool,
     user_data: D,
-    lifecycle_handlers: (super::SharedLifecycleHandler, super::SharedLifecycleHandler),
     page_size: usize,
     mapper: crate::os::Mapper,
 ) -> Result<RawDynamicParts<D, Arch>>
@@ -454,6 +453,7 @@ where
     Arch: RelocationArch,
 {
     let mut dynamic = None;
+    let mut dynamic_addr = None;
     let mut interp = None;
     let mut eh_frame_hdr = None;
     let mut tls_info = None;
@@ -462,6 +462,7 @@ where
     for phdr in phdrs {
         match phdr.program_type() {
             ElfProgramType::DYNAMIC => {
+                dynamic_addr = Some(load_bias + phdr.p_vaddr());
                 dynamic = Some(
                     segments
                         .read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())
@@ -502,21 +503,19 @@ where
     }
 
     let dynamic = dynamic.ok_or(ParsePhdrError::MissingDynamicSection)?;
-    let (init_fn, fini_fn) = lifecycle_handlers;
-
+    let dynamic_addr = dynamic_addr.ok_or(ParsePhdrError::MissingDynamicSection)?;
     Ok(RawDynamicParts {
         path,
         entry: VmAddr::new(entry),
         interp,
         phdrs: ElfPhdrs::Vec(Vec::from(phdrs)),
         dynamic,
+        dynamic_addr,
         eh_frame_hdr,
         tls_info,
         force_static_tls,
         relro,
         segments,
-        init_fn,
-        fini_fn,
         user_data,
     })
 }

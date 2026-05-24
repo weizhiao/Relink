@@ -196,7 +196,7 @@ The [`examples/`](examples/) directory covers the main extension points:
 | `linker_load` | Resolve `DT_NEEDED` dependencies with `Linker::load()` | `cargo run --example linker_load` |
 | `from_memory` | Load ELF data from a byte buffer | `cargo run --example from_memory` |
 | `load_exec` | Inspect executable entry and base addresses | `cargo run --example load_exec` |
-| `load_hook` | Observe segment loading with `with_hook()` | `cargo run --example load_hook` |
+| `load_hook` | Observe segment loading with `with_observer()` | `cargo run --example load_hook` |
 | `linker_scan_first` | Discover `DT_NEEDED`, run scan-first passes, and configure pre-map layout | `cargo run --example linker_scan_first` |
 | `lifecycle` | Custom `.init` / `.fini` handling | `cargo run --example lifecycle` |
 | `user_data` | Initialize dynamic-image metadata | `cargo run --example user_data` |

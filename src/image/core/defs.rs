@@ -2,7 +2,11 @@ use crate::{
     elf::{Lifecycle, SymbolTable},
     image::DynamicInfo,
     input::PathBuf,
-    loader::{LifecycleContext, SharedLifecycleHandler},
+    logging,
+    observer::{
+        LifecycleEvent, LifecyclePhase, ModuleUnloadEvent, SharedLifecycleExecutor,
+        SharedModuleUnloadHook,
+    },
     os::{HostRegion, RegionAccess},
     relocation::{EmuContext, Emulator, RelocationArch},
     segment::ElfSegments,
@@ -14,7 +18,7 @@ use core::{cell::OnceCell, marker::PhantomData, ops::Deref};
 /// Inner structure for ElfCore
 #[repr(C)]
 pub(crate) struct CoreInner<
-    D = (),
+    D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
 > {
@@ -30,8 +34,11 @@ pub(crate) struct CoreInner<
     /// Finalization functions resolved during relocation.
     pub(crate) fini: OnceCell<Lifecycle>,
 
-    /// Native finalization handler.
-    pub(crate) fini_handler: SharedLifecycleHandler<R>,
+    /// Native finalization executor.
+    pub(crate) fini_executor: OnceCell<SharedLifecycleExecutor<R>>,
+
+    /// Optional callback installed by the relocation observer for unload.
+    pub(crate) unload_hook: OnceCell<SharedModuleUnloadHook<D, Arch, R>>,
 
     /// Emulated finalization handler, when native finalization is unavailable.
     pub(crate) emu_fini: OnceCell<Arc<dyn Emulator<Arch>>>,
@@ -49,7 +56,17 @@ pub(crate) struct CoreInner<
     pub(crate) user_data: D,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> CoreInner<D, Arch, R> {
+    #[inline]
+    pub(crate) fn name(&self) -> &str {
+        self.dynamic_info
+            .as_ref()
+            .and_then(|info| info.soname)
+            .unwrap_or_else(|| self.path.file_name())
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Arch, R> {
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed)
@@ -63,8 +80,31 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Arch, R> {
                 );
                 emu.call_fini(&ctx, fini);
             } else {
-                let ctx = LifecycleContext::new(fini, &self.segments);
-                self.fini_handler.call(&ctx);
+                let executor = self
+                    .fini_executor
+                    .get()
+                    .expect("finalization executor must be set with finalization lifecycle")
+                    .clone();
+                let mut event = LifecycleEvent::with_executor(
+                    LifecyclePhase::Fini,
+                    fini,
+                    &self.segments,
+                    executor,
+                );
+                event.run();
+            }
+        }
+        if let Some(unload_hook) = self.unload_hook.get() {
+            let name = self.name();
+            let event = ModuleUnloadEvent::new(
+                &self.path,
+                name,
+                self.segments.base(),
+                &self.segments,
+                &self.user_data,
+            );
+            if let Err(err) = unload_hook(event) {
+                logging::error!("module unload hook failed for {}: {err}", name);
             }
         }
         self.tls.cleanup();
@@ -72,9 +112,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Arch, R> {
 }
 
 // Safety: CoreInner can be shared between threads.
-unsafe impl<D, Arch: RelocationArch, R: RegionAccess> Sync for CoreInner<D, Arch, R> {}
+unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Sync for CoreInner<D, Arch, R> {}
 // Safety: CoreInner can be sent between threads.
-unsafe impl<D, Arch: RelocationArch, R: RegionAccess> Send for CoreInner<D, Arch, R> {}
+unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Send for CoreInner<D, Arch, R> {}
 
 /// A typed symbol retrieved from a loaded ELF module.
 ///

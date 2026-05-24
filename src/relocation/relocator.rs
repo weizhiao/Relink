@@ -1,6 +1,7 @@
 use crate::{
     Result,
     image::{ModuleHandle, ModuleScope},
+    observer::RelocationObserver,
     relocation::{
         BindingMode, EmulatedArch, Emulator, Relocatable, RelocateArgs, RelocationArch,
         RelocationHandler, SupportLazy,
@@ -49,22 +50,25 @@ pub struct Relocator<
     PostH,
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
+    Obs = (),
 > {
     object: T,
     scope: ModuleScope<Arch>,
     pre_handler: PreH,
     post_handler: PostH,
+    observer: Obs,
     binding: BindingMode,
     emu: Option<Arc<dyn Emulator<Arch>>>,
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
-impl<T, PreH, PostH, D: 'static, Arch> Clone for Relocator<T, PreH, PostH, D, Arch>
+impl<T, PreH, PostH, D: 'static, Arch, Obs> Clone for Relocator<T, PreH, PostH, D, Arch, Obs>
 where
     Arch: RelocationArch,
     T: Clone,
     PreH: Clone,
     PostH: Clone,
+    Obs: Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -72,6 +76,7 @@ where
             scope: self.scope.clone(),
             pre_handler: self.pre_handler.clone(),
             post_handler: self.post_handler.clone(),
+            observer: self.observer.clone(),
             binding: self.binding,
             emu: self.emu.clone(),
             _marker: PhantomData,
@@ -87,6 +92,7 @@ impl Relocator<(), (), (), ()> {
             scope: ModuleScope::empty(),
             pre_handler: (),
             post_handler: (),
+            observer: (),
             binding: BindingMode::Default,
             emu: None,
             _marker: PhantomData,
@@ -102,6 +108,7 @@ impl<Arch: RelocationArch> Relocator<(), (), (), (), Arch> {
             scope: ModuleScope::empty(),
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
+            observer: self.observer,
             binding: self.binding,
             emu: None,
             _marker: PhantomData,
@@ -109,11 +116,12 @@ impl<Arch: RelocationArch> Relocator<(), (), (), (), Arch> {
     }
 }
 
-impl<T, PreH, PostH, D: 'static, Arch> Relocator<T, PreH, PostH, D, Arch>
+impl<T, PreH, PostH, D: 'static, Arch, Obs> Relocator<T, PreH, PostH, D, Arch, Obs>
 where
     Arch: RelocationArch,
     PreH: RelocationHandler<Arch>,
     PostH: RelocationHandler<Arch>,
+    Obs: RelocationObserver<Arch>,
 {
     /// Replaces the current module scope used for symbol resolution.
     ///
@@ -152,15 +160,17 @@ where
     }
 
     /// Attaches an object and selects the user-data type carried by that object.
-    pub fn with_object<U, NewD>(self, object: U) -> Relocator<U, PreH, PostH, NewD, U::Arch>
+    pub fn with_object<U, NewD>(self, object: U) -> Relocator<U, PreH, PostH, NewD, U::Arch, Obs>
     where
         U: Relocatable<NewD>,
+        Obs: RelocationObserver<U::Arch>,
     {
         Relocator {
             object,
             scope: ModuleScope::empty(),
             pre_handler: self.pre_handler,
             post_handler: self.post_handler,
+            observer: self.observer,
             binding: self.binding,
             emu: None,
             _marker: PhantomData,
@@ -171,7 +181,10 @@ where
     ///
     /// This is useful for intercepting selected relocations or providing
     /// custom behavior before the default implementation runs.
-    pub fn pre_handler<NewPreH>(self, handler: NewPreH) -> Relocator<T, NewPreH, PostH, D, Arch>
+    pub fn pre_handler<NewPreH>(
+        self,
+        handler: NewPreH,
+    ) -> Relocator<T, NewPreH, PostH, D, Arch, Obs>
     where
         NewPreH: RelocationHandler<Arch>,
     {
@@ -180,6 +193,7 @@ where
             scope: self.scope,
             pre_handler: handler,
             post_handler: self.post_handler,
+            observer: self.observer,
             binding: self.binding,
             emu: self.emu,
             _marker: PhantomData,
@@ -190,7 +204,10 @@ where
     ///
     /// This handler is called only if the relocation was not already handled
     /// by the pre-handler or the default relocation logic.
-    pub fn post_handler<NewPostH>(self, handler: NewPostH) -> Relocator<T, PreH, NewPostH, D, Arch>
+    pub fn post_handler<NewPostH>(
+        self,
+        handler: NewPostH,
+    ) -> Relocator<T, PreH, NewPostH, D, Arch, Obs>
     where
         NewPostH: RelocationHandler<Arch>,
     {
@@ -199,6 +216,24 @@ where
             scope: self.scope,
             pre_handler: self.pre_handler,
             post_handler: handler,
+            observer: self.observer,
+            binding: self.binding,
+            emu: self.emu,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Sets the runtime-linker observer used during relocation.
+    pub fn observer<NewObs>(self, observer: NewObs) -> Relocator<T, PreH, PostH, D, Arch, NewObs>
+    where
+        NewObs: RelocationObserver<Arch>,
+    {
+        Relocator {
+            object: self.object,
+            scope: self.scope,
+            pre_handler: self.pre_handler,
+            post_handler: self.post_handler,
+            observer,
             binding: self.binding,
             emu: self.emu,
             _marker: PhantomData,
@@ -218,7 +253,7 @@ where
     }
 }
 
-impl<T, PreH, PostH, D: 'static, Arch> Relocator<T, PreH, PostH, D, Arch>
+impl<T, PreH, PostH, D: 'static, Arch, Obs> Relocator<T, PreH, PostH, D, Arch, Obs>
 where
     Arch: EmulatedArch,
 {
@@ -243,12 +278,13 @@ where
     }
 }
 
-impl<T, PreH, PostH, D: 'static, Arch> Relocator<T, PreH, PostH, D, Arch>
+impl<T, PreH, PostH, D: 'static, Arch, Obs> Relocator<T, PreH, PostH, D, Arch, Obs>
 where
     T: Relocatable<D, Arch = Arch>,
     Arch: RelocationArch,
     PreH: RelocationHandler<Arch>,
     PostH: RelocationHandler<Arch>,
+    Obs: RelocationObserver<Arch>,
 {
     /// Executes relocation with the current configuration.
     ///
@@ -269,6 +305,7 @@ where
             scope,
             pre_handler,
             post_handler,
+            mut observer,
             binding,
             emu,
             _marker,
@@ -279,17 +316,19 @@ where
             binding,
             &pre_handler,
             &post_handler,
+            &mut observer,
             emu,
         ))
     }
 }
 
-impl<T, PreH, PostH, D: 'static, Arch> Relocator<T, PreH, PostH, D, Arch>
+impl<T, PreH, PostH, D: 'static, Arch, Obs> Relocator<T, PreH, PostH, D, Arch, Obs>
 where
     T: SupportLazy,
     Arch: RelocationArch,
     PreH: RelocationHandler<Arch>,
     PostH: RelocationHandler<Arch>,
+    Obs: RelocationObserver<Arch>,
 {
     /// Forces eager binding.
     pub fn eager(mut self) -> Self {

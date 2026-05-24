@@ -1,13 +1,13 @@
 use super::CoreInner;
 use crate::{
-    ParsePhdrError, Result,
+    Result,
     elf::{
         ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, Lifecycle, PreCompute, SymbolInfo,
         SymbolTable,
     },
     image::{DynamicInfo, Module},
     input::{Path, PathBuf},
-    loader::{LifecycleContext, shared_lifecycle_handler},
+    observer::{SharedLifecycleExecutor, SharedModuleUnloadHook},
     os::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{Emulator, RelocationArch},
     segment::ElfSegments,
@@ -24,7 +24,7 @@ use core::{any::Any, cell::OnceCell, fmt::Debug, ptr::NonNull};
 /// or need to detect when the image has been dropped.
 #[derive(Clone)]
 pub struct ElfCoreRef<
-    D = (),
+    D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
 > {
@@ -32,7 +32,7 @@ pub struct ElfCoreRef<
     inner: Weak<CoreInner<D, Arch, R>>,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> ElfCoreRef<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCoreRef<D, Arch, R> {
     /// Attempts to upgrade the weak pointer to an [`ElfCore`].
     ///
     /// # Returns
@@ -49,7 +49,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCoreRef<D, Arch, R> {
 /// handlers behind an [`Arc`]. Higher-level image wrappers delegate most common
 /// operations to this type.
 pub struct ElfCore<
-    D = (),
+    D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
 > {
@@ -57,7 +57,7 @@ pub struct ElfCore<
     pub(crate) inner: Arc<CoreInner<D, Arch, R>>,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> Clone for ElfCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for ElfCore<D, Arch, R> {
     /// Clones the [`ElfCore`], incrementing the internal reference count.
     fn clone(&self) -> Self {
         ElfCore {
@@ -66,7 +66,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Clone for ElfCore<D, Arch, R> {
     }
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     /// Returns whether the ELF object has been initialized.
     #[inline]
     pub fn is_init(&self) -> bool {
@@ -131,7 +131,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     /// of the loader source path.
     #[inline]
     pub fn name(&self) -> &str {
-        self.soname().unwrap_or_else(|| self.path().file_name())
+        self.inner.name()
     }
 
     /// Returns the DT_SONAME value when this core has dynamic metadata.
@@ -177,15 +177,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     #[inline]
     pub fn symtab(&self) -> &SymbolTable<Arch::Layout> {
         &self.inner.symtab
-    }
-
-    /// Gets a pointer to the dynamic section
-    #[inline]
-    pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn<Arch::Layout>>> {
-        self.inner
-            .dynamic_info
-            .as_ref()
-            .map(|info| info.dynamic_ptr)
     }
 
     /// Gets the EH frame header pointer
@@ -244,10 +235,22 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     }
 
     /// Sets the finalization lifecycle.
-    pub(crate) fn set_fini(&self, fini: Lifecycle) {
+    pub(crate) fn set_fini(&self, fini: Lifecycle, executor: SharedLifecycleExecutor<R>) {
         assert!(
             self.inner.fini.set(fini).is_ok(),
             "finalization lifecycle must be set only once",
+        );
+        assert!(
+            self.inner.fini_executor.set(executor).is_ok(),
+            "finalization executor must be set only once",
+        );
+    }
+
+    /// Sets the unload hook installed by the relocation observer.
+    pub(crate) fn set_unload_hook(&self, hook: SharedModuleUnloadHook<D, Arch, R>) {
+        assert!(
+            self.inner.unload_hook.set(hook).is_ok(),
+            "module unload hook must be set only once",
         );
     }
 
@@ -256,6 +259,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
         path: PathBuf,
         base: VmAddr,
         dynamic_entries: MappedView<ElfDyn<Arch::Layout>>,
+        dynamic_addr: VmAddr,
         phdrs: Vec<ElfPhdr<Arch::Layout>>,
         eh_frame_hdr: Option<NonNull<u8>>,
         mut segments: ElfSegments<R>,
@@ -265,14 +269,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
         tls_unregister: fn(TlsModuleId),
         user_data: D,
     ) -> Result<Self> {
-        let dynamic_ptr = dynamic_entries
-            .as_slice()
-            .first()
-            .map(NonNull::from)
-            .ok_or(ParsePhdrError::MissingDynamicSection)?;
-
         segments.set_base(base);
-        let dynamic = ElfDynamic::<Arch>::new(dynamic_entries, &segments)?;
+        let dynamic = ElfDynamic::<Arch>::new(dynamic_entries, dynamic_addr, &segments)?;
         let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
         let soname = dynamic
             .soname_off
@@ -284,7 +282,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
                 symtab,
                 dynamic_info: Some(Arc::new(DynamicInfo {
                     eh_frame_hdr,
-                    dynamic_ptr,
                     phdrs: ElfPhdrs::Vec(phdrs),
                     soname,
                     #[cfg(feature = "lazy-binding")]
@@ -293,7 +290,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
                 tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_get_addr, tls_unregister),
                 segments,
                 fini: OnceCell::new(),
-                fini_handler: shared_lifecycle_handler(|_: &LifecycleContext<'_, R>| {}),
+                fini_executor: OnceCell::new(),
+                unload_hook: OnceCell::new(),
                 emu_fini: OnceCell::new(),
                 user_data,
             }),
@@ -301,7 +299,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     }
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> Debug for ElfCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for ElfCore<D, Arch, R> {
     /// Formats the ElfCore for debugging purposes.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfCore")

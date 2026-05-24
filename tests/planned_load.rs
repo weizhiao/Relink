@@ -6,13 +6,14 @@ use elf_loader::{
     image::{LoadedCore, ModuleCapability, ModuleHandle, ScannedElf, SyntheticModule},
     input::ElfBinary,
     linker::{
-        KeyResolver, LinkContext, Linker, LoadObserver, RelocationInputs, RelocationRequest,
-        ResolvedKey, RootRequest, StagedDynamic, VisibleModules,
+        KeyResolver, LinkContext, Linker, RelocationInputs, RelocationRequest, ResolvedKey,
+        RootRequest, VisibleModules,
         scan::{
             ArenaDescriptor, ArenaSharing, DataPass, LinkPass, LinkPassPlan, Materialization,
             MemoryClass, PassScopeMode, ReorderPass,
         },
     },
+    observer::{LinkObserver, StagedDynamic},
     os::{PageSize, VmAddr},
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
@@ -135,21 +136,21 @@ impl KeyResolver<'static, &'static str> for MultiBinaryResolver {
     }
 }
 
-impl LoadObserver<&'static str, ()> for RecordingObserver {
-    fn on_staged_dynamic(
+impl LinkObserver for RecordingObserver {
+    fn on_staged_dynamic<K, D: 'static>(
         &mut self,
-        event: StagedDynamic<'_, &'static str, ()>,
+        event: StagedDynamic<'_, K, D>,
     ) -> elf_loader::Result<()> {
         assert!(event.mapped_len() > 0);
-        self.events.borrow_mut().push((*event.key()).to_string());
+        self.events.borrow_mut().push(event.raw().name().to_string());
         Ok(())
     }
 }
 
-impl LoadObserver<&'static str, ()> for FailingObserver {
-    fn on_staged_dynamic(
+impl LinkObserver for FailingObserver {
+    fn on_staged_dynamic<K, D: 'static>(
         &mut self,
-        _event: StagedDynamic<'_, &'static str, ()>,
+        _event: StagedDynamic<'_, K, D>,
     ) -> elf_loader::Result<()> {
         Err(elf_loader::Error::Custom(CustomError::Message(
             "observer failed".into(),
@@ -722,7 +723,7 @@ fn load_observer_fires_for_runtime_root_and_dependency_before_relocation() {
             planned.borrow_mut().push((*req.key()).to_string());
             assert_eq!(
                 *observed.borrow(),
-                vec!["root".to_string(), "dep".to_string()],
+                vec!["root.so".to_string(), "dep.so".to_string()],
                 "all staged modules should be observed before relocation planning"
             );
             Ok(RelocationInputs::new(Vec::<LoadedCore<()>>::new()))
@@ -739,7 +740,7 @@ fn load_observer_fires_for_runtime_root_and_dependency_before_relocation() {
 
     assert_eq!(
         *observed.borrow(),
-        vec!["root".to_string(), "dep".to_string()]
+        vec!["root.so".to_string(), "dep.so".to_string()]
     );
     assert_eq!(
         *planned.borrow(),
@@ -789,7 +790,7 @@ fn load_scan_first_observer_fires_after_scan_materialization() {
         .expect("failed to execute scan-first observer test");
 
     assert!(*saw_scan_phase.borrow());
-    assert_eq!(*observed.borrow(), vec!["root".to_string()]);
+    assert_eq!(*observed.borrow(), vec!["scan_observer_root.so".to_string()]);
     assert!(context.contains_key(&"root"));
 }
 

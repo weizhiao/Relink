@@ -1,8 +1,5 @@
 use super::{
-    request::{
-        DependencyOwner, DependencyRequest, LoadObserver, RootRequest, StagedDynamic,
-        VisibleModules,
-    },
+    request::{DependencyOwner, DependencyRequest, RootRequest, VisibleModules},
     resolver::{KeyResolver, ResolvedKey},
     session::{ResolveSession, extend_breadth_first},
     storage::{CommittedStorage, KeyId},
@@ -10,7 +7,9 @@ use super::{
 use crate::{
     LinkerError, Loader, Result,
     image::{RawDynamic, ScannedDynamic, ScannedElf},
-    loader::LoadHook,
+    observer::{
+        LinkObserver, LoadObserver, ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
+    },
     relocation::RelocationArch,
     tls::TlsResolver,
 };
@@ -116,14 +115,16 @@ where
         entry.set_direct_deps(direct_deps);
     }
 
-    fn resolve_dependency_edge<'cfg>(
+    fn resolve_dependency_edge<'cfg, O>(
         &self,
         id: KeyId,
         needed_index: usize,
         resolver: &mut impl KeyResolver<'cfg, K, Arch>,
+        observer: &mut O,
     ) -> Result<ResolvedKey<'cfg, K, Arch>>
     where
         K: 'cfg,
+        O: LinkObserver<Arch>,
     {
         let is_visible = |key: &K| self.contains_visible_or_pending(key);
         let req: DependencyRequest<'_, K> = {
@@ -136,37 +137,53 @@ where
             DependencyRequest::new(owner_key, owner, needed_index, &is_visible)
         };
 
+        observer.on_resolve_dependency(ResolveDependencyEvent::new(
+            req.owner_key(),
+            req.owner_name(),
+            req.owner_path(),
+            req.needed(),
+            req.needed_index(),
+            req.rpath(),
+            req.runpath(),
+            req.interp(),
+        ))?;
         resolver.resolve_dependency(&req)
     }
 
-    pub(crate) fn resolve_root<'cfg>(
+    pub(crate) fn resolve_root<'cfg, O>(
         &self,
         key: &K,
         resolver: &mut impl KeyResolver<'cfg, K, Arch>,
+        observer: &mut O,
     ) -> Result<ResolvedKey<'cfg, K, Arch>>
     where
         K: 'cfg,
+        O: LinkObserver<Arch>,
     {
         let is_visible = |key: &K| self.contains_visible_or_pending(key);
         let req = RootRequest::new(key, &is_visible);
+        observer.on_resolve_root(ResolveRootEvent::new(key))?;
         resolver.load_root(&req)
     }
 
-    fn direct_deps_for<'cfg, H, Tls, F>(
+    fn direct_deps_for<'cfg, Obs, Tls, O, F>(
         &mut self,
         id: KeyId,
-        loader: &mut Loader<H, D, Tls, Arch>,
+        loader: &mut Loader<Obs, D, Tls, Arch>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch>,
+        observer: &mut O,
         stage: &mut F,
     ) -> Result<Vec<KeyId>>
     where
         K: 'cfg,
-        H: LoadHook<Arch::Layout>,
+        Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
+        O: LinkObserver<Arch>,
         F: FnMut(
             &mut Self,
             ResolvedKey<'cfg, K, Arch>,
-            &mut Loader<H, D, Tls, Arch>,
+            &mut Loader<Obs, D, Tls, Arch>,
+            &mut O,
         ) -> Result<KeyId>,
     {
         if let Some(direct_deps) = self.known_direct_deps(id) {
@@ -179,8 +196,8 @@ where
             .needed_len();
         let mut direct_deps = Vec::with_capacity(needed_len);
         for idx in 0..needed_len {
-            let resolved_key = self.resolve_dependency_edge(id, idx, resolver)?;
-            let dep_id = stage(self, resolved_key, loader)?;
+            let resolved_key = self.resolve_dependency_edge(id, idx, resolver, observer)?;
+            let dep_id = stage(self, resolved_key, loader, observer)?;
             if !direct_deps.contains(&dep_id) {
                 direct_deps.push(dep_id);
             }
@@ -189,26 +206,29 @@ where
         Ok(direct_deps)
     }
 
-    fn resolve_dependency_graph_with<'cfg, H, Tls, F>(
+    fn resolve_dependency_graph_with<'cfg, Obs, Tls, O, F>(
         &mut self,
         root: KeyId,
-        loader: &mut Loader<H, D, Tls, Arch>,
+        loader: &mut Loader<Obs, D, Tls, Arch>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch>,
+        observer: &mut O,
         mut stage: F,
     ) -> Result<()>
     where
         K: 'cfg,
-        H: LoadHook<Arch::Layout>,
+        Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
+        O: LinkObserver<Arch>,
         F: FnMut(
             &mut Self,
             ResolvedKey<'cfg, K, Arch>,
-            &mut Loader<H, D, Tls, Arch>,
+            &mut Loader<Obs, D, Tls, Arch>,
+            &mut O,
         ) -> Result<KeyId>,
     {
         let mut group_order = Vec::new();
         extend_breadth_first(&mut group_order, root, |key| {
-            self.direct_deps_for(*key, loader, resolver, &mut stage)
+            self.direct_deps_for(*key, loader, resolver, observer, &mut stage)
         })?;
         self.session.group_order = group_order;
         Ok(())
@@ -221,18 +241,18 @@ where
     V: VisibleModules<K, Arch>,
     Arch: RelocationArch,
 {
-    pub(crate) fn stage_resolved<'cfg, H, Tls, O>(
+    pub(crate) fn stage_resolved<'cfg, Obs, Tls, O>(
         &mut self,
         resolved: ResolvedKey<'cfg, K, Arch>,
-        loader: &mut Loader<H, D, Tls, Arch>,
+        loader: &mut Loader<Obs, D, Tls, Arch>,
         observer: &mut O,
     ) -> Result<KeyId>
     where
         K: 'cfg,
         D: Default,
-        H: LoadHook<Arch::Layout>,
+        Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
-        O: LoadObserver<K, D, Arch>,
+        O: LinkObserver<Arch>,
     {
         match resolved {
             ResolvedKey::Existing(key) => {
@@ -279,23 +299,27 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<'cfg, H, Tls, O>(
+    pub(crate) fn resolve_dependency_graph<'cfg, Obs, Tls, O>(
         &mut self,
         root: KeyId,
-        loader: &mut Loader<H, D, Tls, Arch>,
+        loader: &mut Loader<Obs, D, Tls, Arch>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch>,
         observer: &mut O,
     ) -> Result<()>
     where
         K: 'cfg,
         D: Default,
-        H: LoadHook<Arch::Layout>,
+        Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
-        O: LoadObserver<K, D, Arch>,
+        O: LinkObserver<Arch>,
     {
-        self.resolve_dependency_graph_with(root, loader, resolver, |ctx, resolved, loader| {
-            ctx.stage_resolved(resolved, loader, observer)
-        })
+        self.resolve_dependency_graph_with(
+            root,
+            loader,
+            resolver,
+            observer,
+            |ctx, resolved, loader, observer| ctx.stage_resolved(resolved, loader, observer),
+        )
     }
 }
 
@@ -305,15 +329,15 @@ where
     V: VisibleModules<K, Arch>,
     Arch: RelocationArch,
 {
-    pub(crate) fn stage_resolved<H, Tls>(
+    pub(crate) fn stage_resolved<Obs, Tls>(
         &mut self,
         resolved: ResolvedKey<'static, K, Arch>,
-        loader: &mut Loader<H, D, Tls, Arch>,
+        loader: &mut Loader<Obs, D, Tls, Arch>,
     ) -> Result<KeyId>
     where
         K: 'static,
         D: Default,
-        H: LoadHook<Arch::Layout>,
+        Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
     {
         match resolved {
@@ -361,20 +385,26 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<H, Tls>(
+    pub(crate) fn resolve_dependency_graph<Obs, Tls, O>(
         &mut self,
         root: KeyId,
-        loader: &mut Loader<H, D, Tls, Arch>,
+        loader: &mut Loader<Obs, D, Tls, Arch>,
         resolver: &mut impl KeyResolver<'static, K, Arch>,
+        observer: &mut O,
     ) -> Result<()>
     where
         K: 'static,
         D: Default,
-        H: LoadHook<Arch::Layout>,
+        Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
+        O: LinkObserver<Arch>,
     {
-        self.resolve_dependency_graph_with(root, loader, resolver, |ctx, resolved, loader| {
-            ctx.stage_resolved(resolved, loader)
-        })
+        self.resolve_dependency_graph_with(
+            root,
+            loader,
+            resolver,
+            observer,
+            |ctx, resolved, loader, _| ctx.stage_resolved(resolved, loader),
+        )
     }
 }

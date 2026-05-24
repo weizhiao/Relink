@@ -2,16 +2,17 @@ use crate::{
     ParseEhdrError, Result,
     image::{RawElf, RawObject},
     input::{ElfReader, IntoElfReader},
-    loader::{LoadHook, Loader},
+    loader::Loader,
     logging,
+    observer::LoadObserver,
     os::VmOffset,
     relocation::RelocationArch,
     tls::TlsResolver,
 };
 
-impl<H, D, Tls, Arch> Loader<H, D, Tls, Arch>
+impl<Obs, D, Tls, Arch> Loader<Obs, D, Tls, Arch>
 where
-    H: LoadHook<Arch::Layout>,
+    Obs: LoadObserver<Arch>,
     D: Default + 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,

@@ -17,11 +17,12 @@ pub mod scan;
 mod session;
 mod storage;
 
+pub use crate::observer::StagedDynamic;
 pub use context::LinkContext;
 pub use linker::{Linker, LoadResult};
 pub use request::{
-    DefaultRelocationPlanner, DependencyOwner, DependencyRequest, LoadObserver, RelocationInputs,
-    RelocationPlanner, RelocationRequest, RootRequest, StagedDynamic, VisibleModules,
+    DefaultRelocationPlanner, DependencyOwner, DependencyRequest, RelocationInputs,
+    RelocationPlanner, RelocationRequest, RootRequest, VisibleModules,
 };
 pub use resolver::{
     CandidateRequest, KeyResolver, ResolvedKey, SearchDirProvider, SearchDirSource,

@@ -196,7 +196,7 @@ fn main() -> Result<()> {
 | `linker_load` | 使用 `Linker::load()` 解析 `DT_NEEDED` 依赖 | `cargo run --example linker_load` |
 | `from_memory` | 从字节缓冲区加载 ELF | `cargo run --example from_memory` |
 | `load_exec` | 查看可执行文件的入口地址和基址 | `cargo run --example load_exec` |
-| `load_hook` | 用 `with_hook()` 观察段加载 | `cargo run --example load_hook` |
+| `load_hook` | 用 `with_observer()` 观察段加载 | `cargo run --example load_hook` |
 | `linker_scan_first` | 发现 `DT_NEEDED`、运行 scan-first pass 并配置映射前布局 | `cargo run --example linker_scan_first` |
 | `lifecycle` | 自定义 `.init` / `.fini` 调用流程 | `cargo run --example lifecycle` |
 | `user_data` | 初始化 dynamic image 级上下文 | `cargo run --example user_data` |

@@ -10,7 +10,8 @@ use crate::{
     elf::ElfPhdr,
     image::{LoadedCore, RawDynamic},
     input::{Path, PathBuf},
-    loader::{ImageBuilder, LoadHook},
+    loader::ImageBuilder,
+    observer::{LoadObserver, RelocationObserver},
     os::VmAddr,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     segment::ElfSegments,
@@ -123,13 +124,14 @@ impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawExec<D, Arch> {
     type Output = LoadedExec<D, Arch>;
     type Arch = Arch;
 
-    fn relocate<PreH, PostH>(
+    fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
+        Obs: RelocationObserver<Arch> + ?Sized,
     {
         match self {
             RawExec::Dynamic(image) => {
@@ -382,12 +384,12 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
 }
 
 impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
-    pub(crate) fn from_builder<'hook, H, Tls>(
-        mut builder: ImageBuilder<'hook, H, Tls, D, Arch::Layout>,
+    pub(crate) fn from_builder<'obs, Obs, Tls>(
+        mut builder: ImageBuilder<'obs, Obs, Tls, D, Arch>,
         phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where
-        H: LoadHook<Arch::Layout>,
+        Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
     {
         // Parse all program headers
@@ -422,13 +424,13 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
 }
 
 impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
-    pub(crate) fn from_builder<'hook, H, Tls>(
-        builder: ImageBuilder<'hook, H, Tls, D, Arch::Layout>,
+    pub(crate) fn from_builder<'obs, Obs, Tls>(
+        builder: ImageBuilder<'obs, Obs, Tls, D, Arch>,
         phdrs: &[ElfPhdr<Arch::Layout>],
         has_dynamic: bool,
     ) -> Result<Self>
     where
-        H: LoadHook<Arch::Layout>,
+        Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
     {
         if has_dynamic {

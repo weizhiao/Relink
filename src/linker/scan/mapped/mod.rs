@@ -6,7 +6,7 @@ use crate::{
     entity::SecondaryMap,
     image::{RawDynamic, ScannedDynamic},
     input::PathBuf,
-    loader::SharedLifecycleHandler,
+    observer::LoadObserver,
     os::{Mapper, VmAddr, VmOffset},
     relocation::{RelocationArch, RelocationValueProvider},
     segment::ElfSegments,
@@ -222,20 +222,21 @@ impl MappedRuntimeMemory {
     }
 }
 
-pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch>(
+pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch, Obs>(
     scanned: ScannedDynamic<Arch>,
     runtime: RuntimeModuleMemory,
-    init_fn: SharedLifecycleHandler,
-    fini_fn: SharedLifecycleHandler,
     force_static_tls: bool,
+    observer: &mut Obs,
 ) -> Result<RawDynamic<D, Arch>>
 where
     D: Default + 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
+    Obs: LoadObserver<Arch> + ?Sized,
 {
     let original_phdrs = scanned.phdrs().to_vec();
     let mut dynamic = None;
+    let mut dynamic_addr = None;
     let mut eh_frame_hdr: Option<NonNull<u8>> = None;
     let mut tls_info: Option<TlsInfo> = None;
 
@@ -259,6 +260,7 @@ where
                     )
                     .into());
                 }
+                dynamic_addr = Some(runtime.segments.base() + VmOffset::new(offset.get()));
                 dynamic = Some(view);
             }
             ElfProgramType::GNU_EH_FRAME => {
@@ -294,6 +296,8 @@ where
 
     let dynamic = dynamic
         .ok_or_else(|| LinkerError::runtime_memory("arena-backed module is missing PT_DYNAMIC"))?;
+    let dynamic_addr = dynamic_addr
+        .ok_or_else(|| LinkerError::runtime_memory("arena-backed module is missing PT_DYNAMIC"))?;
     let original_entry = scanned.ehdr().e_entry();
     let entry = runtime
         .remap_source_to_runtime_offset(VmOffset::new(original_entry))
@@ -301,19 +305,21 @@ where
         .unwrap_or_else(|| runtime.segments.base() + VmOffset::new(original_entry));
     let path = PathBuf::from(scanned.path());
 
-    RawDynamic::from_parts::<Tls>(crate::image::RawDynamicParts {
-        path,
-        entry,
-        interp: None,
-        phdrs: ElfPhdrs::Vec(original_phdrs),
-        dynamic,
-        eh_frame_hdr,
-        tls_info,
-        force_static_tls,
-        relro: None,
-        segments: runtime.segments,
-        init_fn,
-        fini_fn,
-        user_data: D::default(),
-    })
+    RawDynamic::from_parts::<Tls, _>(
+        crate::image::RawDynamicParts {
+            path,
+            entry,
+            interp: None,
+            phdrs: ElfPhdrs::Vec(original_phdrs),
+            dynamic,
+            dynamic_addr,
+            eh_frame_hdr,
+            tls_info,
+            force_static_tls,
+            relro: None,
+            segments: runtime.segments,
+            user_data: D::default(),
+        },
+        observer,
+    )
 }

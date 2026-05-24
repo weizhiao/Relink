@@ -6,6 +6,7 @@ use crate::{
     arch::{ArchKind, NativeArch},
     elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType},
     image::{ElfCore, ModuleScope},
+    observer::RelocationObserver,
     os::{HostRegion, RegionAccess, VmAddr},
     sync::Arc,
 };
@@ -348,17 +349,25 @@ pub enum BindingMode {
 }
 
 /// Internal relocation configuration shared across raw image types.
-pub struct RelocateArgs<'a, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized> {
+pub struct RelocateArgs<
+    'a,
+    D: 'static,
+    Arch: RelocationArch,
+    PreH: ?Sized,
+    PostH: ?Sized,
+    Obs: ?Sized,
+> {
     pub(crate) scope: ModuleScope<Arch>,
     pub(crate) binding: BindingMode,
     pub(crate) pre_handler: &'a PreH,
     pub(crate) post_handler: &'a PostH,
+    pub(crate) observer: &'a mut Obs,
     pub(crate) emu: Option<Arc<dyn Emulator<Arch>>>,
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized>
-    RelocateArgs<'a, D, Arch, PreH, PostH>
+impl<'a, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized, Obs: ?Sized>
+    RelocateArgs<'a, D, Arch, PreH, PostH, Obs>
 {
     #[inline]
     pub(crate) fn new(
@@ -366,6 +375,7 @@ impl<'a, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized>
         binding: BindingMode,
         pre_handler: &'a PreH,
         post_handler: &'a PostH,
+        observer: &'a mut Obs,
         emu: Option<Arc<dyn Emulator<Arch>>>,
     ) -> Self {
         Self {
@@ -373,6 +383,7 @@ impl<'a, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized>
             binding,
             pre_handler,
             post_handler,
+            observer,
             emu,
             _marker: PhantomData,
         }
@@ -400,13 +411,14 @@ pub trait Relocatable<D = ()>: Sized {
     type Arch: RelocationArch;
 
     /// Executes relocation using the implementor's target architecture.
-    fn relocate<PreH, PostH>(
+    fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Self::Arch, PreH, PostH>,
+        args: RelocateArgs<'_, D, Self::Arch, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Self::Arch> + ?Sized,
-        PostH: RelocationHandler<Self::Arch> + ?Sized;
+        PostH: RelocationHandler<Self::Arch> + ?Sized,
+        Obs: RelocationObserver<Self::Arch> + ?Sized;
 }
 
 /// Marker trait for raw image types that support lazy-binding fixup hooks.

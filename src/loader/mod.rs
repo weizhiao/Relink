@@ -6,8 +6,8 @@
 //!
 //! It also exposes the main customization points used during loading:
 //!
-//! - [`LoadHook`] for observing program headers as they are mapped
-//! - [`LifecycleHandler`] for customizing `.init` / `.fini` invocation
+//! - [`crate::observer::LoadObserver`] for observing program headers during loading
+//! - [`crate::observer::RelocationObserver`] lifecycle events for customizing `.init` / `.fini`
 //! - `with_dynamic_initializer` for initializing dynamic-image user data
 //! - `with_*` builder methods for swapping the memory-mapping backend or TLS resolver
 
@@ -15,11 +15,8 @@ mod buffer;
 mod builder;
 mod load;
 mod loader;
-mod traits;
 
 pub(crate) use buffer::ElfBuf;
 pub(crate) use builder::{ImageBuilder, ScanBuilder};
 pub use loader::Loader;
 pub(crate) use loader::LoaderInner;
-pub use traits::{LifecycleContext, LifecycleHandler, LoadHook, LoadHookContext};
-pub(crate) use traits::{SharedLifecycleHandler, shared_lifecycle_handler};

@@ -4,6 +4,9 @@ use crate::{
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     image::{LoadedCore, RawDynamic},
     logging,
+    observer::{
+        LifecycleEvent, LifecyclePhase, LinkActivity, ModuleRelocatedEvent, RelocationObserver,
+    },
     os::{MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{
         BindingMode, RelocHelper, RelocValue, RelocateArgs, RelocationArch, RelocationHandler,
@@ -27,14 +30,15 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         Ok(())
     }
 
-    pub(crate) fn relocate_impl<PreH, PostH>(
+    pub(crate) fn relocate_impl<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreH, PostH, Obs>,
     ) -> Result<LoadedCore<D, Arch, R>>
     where
         D: 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
+        Obs: RelocationObserver<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
         logging::info!("Relocating dynamic library: {}", self.name());
@@ -44,9 +48,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             binding,
             pre_handler,
             post_handler,
+            observer,
             emu,
             ..
         } = args;
+        let observer = observer;
 
         let relocation = self.relocation();
         if relocation.is_empty() {
@@ -63,6 +69,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         if binding.is_lazy() {
             logging::debug!("Using lazy binding for {}", self.name());
         }
+        observer.on_activity(LinkActivity::Add)?;
 
         let mut helper = RelocHelper::new(
             self.core_ref(),
@@ -88,7 +95,12 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         self.core_ref().set_tls_desc_args(tls_desc_args);
 
         let (init, fini) = self.resolve_lifecycle()?;
-        self.core_ref().set_fini(fini);
+        let mut fini_event =
+            LifecycleEvent::new(LifecyclePhase::Fini, &fini, self.core_ref().segments());
+        observer.on_lifecycle(&mut fini_event)?;
+        let fini_executor = fini_event.executor();
+        self.core_ref()
+            .set_fini(fini_event.into_lifecycle(), fini_executor);
 
         let dep_names = scope
             .iter()
@@ -101,10 +113,16 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
         self.apply_relro(&binding)?;
         self.install_lazy_lookup(binding, scope.clone())?;
+        let mut module_event = ModuleRelocatedEvent::new(self.core_ref(), self.dynamic_addr());
+        observer.on_module_relocated(&mut module_event)?;
+        if let Some(unload_hook) = module_event.into_unload_hook() {
+            self.core_ref().set_unload_hook(unload_hook);
+        }
+        observer.on_activity(LinkActivity::Consistent)?;
 
         if Arch::SUPPORTS_NATIVE_RUNTIME {
             logging::debug!("Executing initialization functions for {}", self.name());
-            self.call_init(&init);
+            self.call_init(observer, &init)?;
         } else if let Some(emu) = emu {
             logging::debug!(
                 "Executing initialization functions with emulator for {}",

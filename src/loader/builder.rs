@@ -1,9 +1,12 @@
-use super::{LoadHook, LoadHookContext, LoaderInner, SharedLifecycleHandler};
+use super::LoaderInner;
 use crate::{
     ParsePhdrError, Result,
+    arch::NativeArch,
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
     input::{ElfReader, PathBuf},
-    os::{MappedView, Mapper},
+    observer::{LoadObserver, ProgramHeaderEvent},
+    os::{MappedView, Mapper, VmAddr},
+    relocation::RelocationArch,
     segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
     tls::{TlsInfo, TlsResolver},
 };
@@ -15,25 +18,29 @@ use core::{marker::PhantomData, ptr::NonNull};
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocated ELF file before
 /// building the final loaded image.
-pub(crate) struct ImageBuilder<'hook, H, Tls, D = (), L: ElfLayout = NativeElfLayout>
+pub(crate) struct ImageBuilder<'obs, Obs, Tls, D = (), Arch: RelocationArch = NativeArch>
 where
-    H: LoadHook<L>,
+    Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
+    Arch: RelocationArch,
 {
-    /// Hook function for processing program headers (always present)
-    hook: &'hook mut H,
+    /// Observer for loading and linking events.
+    pub(crate) observer: &'obs mut Obs,
 
     /// Loader source path or caller-provided source identifier.
     pub(crate) path: PathBuf,
 
     /// ELF header
-    pub(crate) ehdr: ElfHeader<L>,
+    pub(crate) ehdr: ElfHeader<Arch::Layout>,
 
     /// GNU_RELRO segment information
     pub(crate) relro: Option<ELFRelro>,
 
     /// Dynamic section entries
-    pub(crate) dynamic: Option<MappedView<ElfDyn<L>>>,
+    pub(crate) dynamic: Option<MappedView<ElfDyn<Arch::Layout>>>,
+
+    /// Runtime address of the first dynamic section entry.
+    pub(crate) dynamic_addr: Option<VmAddr>,
 
     /// TLS information
     pub(crate) tls_info: Option<TlsInfo>,
@@ -53,12 +60,6 @@ where
     /// Memory segments
     pub(crate) segments: ElfSegments,
 
-    /// Initialization function handler
-    pub(crate) init_fn: SharedLifecycleHandler,
-
-    /// Finalization function handler
-    pub(crate) fini_fn: SharedLifecycleHandler,
-
     /// Interpreter path (PT_INTERP)
     pub(crate) interp: Option<&'static str>,
 
@@ -66,7 +67,7 @@ where
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
 
     /// Phantom data to maintain TLS type information.
-    _marker: PhantomData<(Tls, L)>,
+    _marker: PhantomData<(Tls, Arch)>,
 }
 
 pub(crate) struct ScanBuilder<L: ElfLayout = NativeElfLayout> {
@@ -93,48 +94,42 @@ impl<L: ElfLayout> ScanBuilder<L> {
     }
 }
 
-impl<'hook, H, Tls, D, L> ImageBuilder<'hook, H, Tls, D, L>
+impl<'obs, Obs, Tls, D, Arch> ImageBuilder<'obs, Obs, Tls, D, Arch>
 where
-    H: LoadHook<L>,
+    Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
-    L: ElfLayout,
+    Arch: RelocationArch,
 {
     /// Create a new [`ImageBuilder`].
     ///
     /// # Arguments
-    /// * `hook` - Hook function for processing program headers
+    /// * `observer` - Observer for loading and linking events
     /// * `segments` - Memory segments of the ELF file
     /// * `path` - Loader source path or caller-provided source identifier
     /// * `ehdr` - ELF header
-    /// * `init_fn` - Initialization function handler
-    /// * `fini_fn` - Finalization function handler
-    ///
     pub(crate) fn new(
-        hook: &'hook mut H,
+        observer: &'obs mut Obs,
         segments: ElfSegments,
         path: PathBuf,
-        ehdr: ElfHeader<L>,
-        init_fn: SharedLifecycleHandler,
-        fini_fn: SharedLifecycleHandler,
+        ehdr: ElfHeader<Arch::Layout>,
         static_tls: bool,
         page_size: usize,
         mapper: Mapper,
         user_data: D,
     ) -> Self {
         Self {
-            hook,
+            observer,
             path,
             ehdr,
             relro: None,
             dynamic: None,
+            dynamic_addr: None,
             tls_info: None,
             static_tls,
             page_size,
             mapper,
             segments,
             user_data,
-            init_fn,
-            fini_fn,
             interp: None,
             eh_frame_hdr: None,
             _marker: PhantomData,
@@ -142,15 +137,16 @@ where
     }
 
     /// Parse a program header and extract relevant information.
-    pub(crate) fn parse_phdr(&mut self, phdr: &ElfPhdr<L>) -> Result<()> {
-        let ctx = LoadHookContext::new(self.path.as_path(), phdr, &self.segments);
-        self.hook.call(&ctx)?;
+    pub(crate) fn parse_phdr(&mut self, phdr: &ElfPhdr<Arch::Layout>) -> Result<()> {
+        let ctx = ProgramHeaderEvent::new(self.path.as_path(), phdr, &self.segments);
+        self.observer.on_program_header(ctx)?;
 
         match phdr.program_type() {
             ElfProgramType::DYNAMIC => {
+                self.dynamic_addr = Some(self.segments.base() + phdr.p_vaddr());
                 self.dynamic = Some(
                     self.segments
-                        .read_view::<ElfDyn<L>>(phdr.p_vaddr(), phdr.p_filesz())
+                        .read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())
                         .ok_or_else(|| {
                             ParsePhdrError::malformed(
                                 "PT_DYNAMIC is not directly readable from mapped segments",
@@ -193,7 +189,7 @@ where
         Ok(())
     }
 
-    fn read_interp(&self, phdr: &ElfPhdr<L>) -> Result<&'static str> {
+    fn read_interp(&self, phdr: &ElfPhdr<Arch::Layout>) -> Result<&'static str> {
         let view = self
             .segments
             .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
@@ -212,7 +208,7 @@ where
     }
 
     /// Parse all program headers and collect the builder state they describe.
-    pub(crate) fn parse_phdrs(&mut self, phdrs: &[ElfPhdr<L>]) -> Result<()> {
+    pub(crate) fn parse_phdrs(&mut self, phdrs: &[ElfPhdr<Arch::Layout>]) -> Result<()> {
         for phdr in phdrs {
             self.parse_phdr(phdr)?;
         }
@@ -230,14 +226,17 @@ where
     ///
     /// # Returns
     /// An ElfPhdrs enum containing either mapped or vector-based headers
-    pub(crate) fn create_phdrs(&self, phdrs: &[ElfPhdr<L>]) -> Result<ElfPhdrs<L>> {
+    pub(crate) fn create_phdrs(
+        &self,
+        phdrs: &[ElfPhdr<Arch::Layout>],
+    ) -> Result<ElfPhdrs<Arch::Layout>> {
         for phdr in phdrs {
             if phdr.program_type() != ElfProgramType::PHDR {
                 continue;
             }
             if let Some(mapped) = self
                 .segments
-                .read_view::<ElfPhdr<L>>(phdr.p_vaddr(), phdr.p_memsz())
+                .read_view::<ElfPhdr<Arch::Layout>>(phdr.p_vaddr(), phdr.p_memsz())
             {
                 return Ok(ElfPhdrs::Mapped(mapped));
             }
@@ -257,7 +256,10 @@ where
                 let Some(phdr_vaddr) = phdr.p_vaddr().checked_add(phdr_start - seg_start) else {
                     continue;
                 };
-                if let Some(mapped) = self.segments.read_view::<ElfPhdr<L>>(phdr_vaddr, phdr_size) {
+                if let Some(mapped) = self
+                    .segments
+                    .read_view::<ElfPhdr<Arch::Layout>>(phdr_vaddr, phdr_size)
+                {
                     return Ok(ElfPhdrs::Mapped(mapped));
                 }
             }
@@ -267,11 +269,11 @@ where
     }
 }
 
-impl<H, D, Arch> LoaderInner<H, D, Arch>
+impl<Obs, D, Arch> LoaderInner<Obs, D, Arch>
 where
-    H: LoadHook<Arch::Layout>,
+    Obs: LoadObserver<Arch>,
     D: 'static,
-    Arch: crate::relocation::RelocationArch,
+    Arch: RelocationArch,
 {
     pub(crate) fn create_builder<Tls>(
         &mut self,
@@ -279,12 +281,11 @@ where
         phdrs: &[ElfPhdr<Arch::Layout>],
         mut object: impl ElfReader,
         user_data: D,
-    ) -> Result<ImageBuilder<'_, H, Tls, D, Arch::Layout>>
+    ) -> Result<ImageBuilder<'_, Obs, Tls, D, Arch>>
     where
         Tls: TlsResolver,
     {
         let path = PathBuf::from(object.path());
-        let (init_fn, fini_fn) = self.lifecycle_handlers();
         let mapper = self.mapper();
         let page_size = self.page_size()?.bytes();
         let mut phdr_segments =
@@ -293,12 +294,10 @@ where
         phdr_segments.mprotect(mapper.as_ref(), segments.base())?;
 
         Ok(ImageBuilder::new(
-            &mut self.hook,
+            &mut self.observer,
             segments,
             path,
             ehdr,
-            init_fn,
-            fini_fn,
             self.force_static_tls,
             page_size,
             mapper,

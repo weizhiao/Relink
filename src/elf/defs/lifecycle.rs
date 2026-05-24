@@ -1,13 +1,15 @@
 use crate::os::VmAddr;
-use alloc::{boxed::Box, vec::Vec};
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 /// ELF lifecycle functions associated with `.init`, `.init_array`, `.fini`, or `.fini_array`.
 ///
 /// The loader stores target addresses here rather than host function pointers.
 /// Native handlers may convert those addresses into callable function pointers;
 /// emulators can execute the same addresses in the guest environment.
+#[derive(Clone, Debug, Default)]
 pub struct Lifecycle {
-    funcs: Box<[VmAddr]>,
+    funcs: Vec<VmAddr>,
 }
 
 impl Lifecycle {
@@ -18,9 +20,7 @@ impl Lifecycle {
         if let Some(array) = func_array {
             funcs.extend(array);
         }
-        Self {
-            funcs: funcs.into_boxed_slice(),
-        }
+        Self { funcs }
     }
 
     /// All lifecycle function VM addresses in call order.
@@ -30,5 +30,17 @@ impl Lifecycle {
     #[inline]
     pub fn func_addrs(&self) -> impl Iterator<Item = VmAddr> + '_ {
         self.funcs.iter().copied()
+    }
+
+    /// Returns the lifecycle function VM addresses in call order.
+    #[inline]
+    pub fn as_slice(&self) -> &[VmAddr] {
+        &self.funcs
+    }
+
+    /// Returns mutable lifecycle function VM addresses in call order.
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> &mut [VmAddr] {
+        &mut self.funcs
     }
 }

@@ -258,12 +258,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         self.core.eh_frame_hdr()
     }
 
-    /// Gets a pointer to the dynamic section
-    #[inline]
-    pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn<Arch::Layout>>> {
-        self.core.dynamic_ptr()
-    }
-
     /// Gets a pointer to a function or static variable by symbol name.
     ///
     /// The symbol is interpreted as-is; no mangling is done. This means
@@ -485,6 +479,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         let mut actual_tls_tp_offset = tls_tp_offset;
 
         let mut dynamic = None;
+        let mut dynamic_addr = None;
         let mut eh_frame_hdr = None;
         let mut tls_phdr = None;
         let phdrs = phdrs.into();
@@ -492,6 +487,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         for phdr in &phdrs {
             match phdr.program_type() {
                 ElfProgramType::DYNAMIC => {
+                    dynamic_addr = Some(base + phdr.p_vaddr());
                     dynamic = Some(Self::read_dynamic_view(&segments, base, phdr)?);
                 }
                 ElfProgramType::GNU_EH_FRAME => {
@@ -551,6 +547,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                     path.into(),
                     base,
                     dynamic.ok_or(crate::ParsePhdrError::MissingDynamicSection)?,
+                    dynamic_addr.ok_or(crate::ParsePhdrError::MissingDynamicSection)?,
                     phdrs,
                     eh_frame_hdr,
                     segments,

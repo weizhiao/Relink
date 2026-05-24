@@ -5,14 +5,15 @@
 
 use crate::{
     Result,
-    elf::{ElfDyn, ElfPhdr},
+    elf::ElfPhdr,
     image::{ElfCore, LoadedCore, RawDynamic},
     input::Path,
+    observer::RelocationObserver,
     os::{HostRegion, RegionAccess, VmAddr},
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     tls::{TlsModuleId, TlsTpOffset},
 };
-use core::{fmt::Debug, ptr::NonNull};
+use core::fmt::Debug;
 
 /// A mapped but unrelocated shared object.
 ///
@@ -44,13 +45,14 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Relocatable<D> for RawDy
     type Output = LoadedCore<D, Arch, R>;
     type Arch = Arch;
 
-    fn relocate<PreH, PostH>(
+    fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
+        Obs: RelocationObserver<Arch> + ?Sized,
     {
         Relocatable::relocate(self.inner, args)
     }
@@ -173,11 +175,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDylib<D, Arch, R> {
     /// Returns the list of needed library names from the dynamic section.
     pub fn needed_libs(&self) -> &[&str] {
         self.inner.needed_libs()
-    }
-
-    /// Returns the dynamic section pointer.
-    pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn<Arch::Layout>>> {
-        self.inner.dynamic_ptr()
     }
 
     /// Returns a reference to the user data.

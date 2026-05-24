@@ -6,8 +6,9 @@ use crate::{
     ParsePhdrError, Result,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, Lifecycle, LifecycleSpec, SymbolTable},
     input::{Path, PathBuf},
-    loader::{ImageBuilder, LifecycleContext, LoadHook, SharedLifecycleHandler},
+    loader::ImageBuilder,
     logging,
+    observer::{DtDebugEntry, LifecycleEvent, LifecyclePhase, LoadObserver, RelocationObserver},
     os::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{
         DynamicRelocation, EmuContext, Emulator, Relocatable, RelocateArgs, RelocationArch,
@@ -40,7 +41,6 @@ impl<Arch: RelocationArch> LazyBindingInfo<Arch> {
 
 pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
-    pub(crate) dynamic_ptr: NonNull<ElfDyn<Arch::Layout>>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
     pub(crate) soname: Option<&'static str>,
     #[cfg(feature = "lazy-binding")]
@@ -57,13 +57,12 @@ pub(crate) struct RawDynamicParts<
     pub(crate) interp: Option<&'static str>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
     pub(crate) dynamic: MappedView<ElfDyn<Arch::Layout>>,
+    pub(crate) dynamic_addr: VmAddr,
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) tls_info: Option<TlsInfo>,
     pub(crate) force_static_tls: bool,
     pub(crate) relro: Option<ELFRelro>,
     pub(crate) segments: crate::segment::ElfSegments<R>,
-    pub(crate) init_fn: SharedLifecycleHandler<R>,
-    pub(crate) fini_fn: SharedLifecycleHandler<R>,
     pub(crate) user_data: D,
 }
 
@@ -71,7 +70,7 @@ pub(crate) struct RawDynamicParts<
 ///
 /// This structure holds additional data that is needed during the relocation
 /// process but is not part of the core ELF object structure.
-struct ElfExtraData<Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
+struct ElfExtraData<Arch: RelocationArch = NativeArch> {
     /// Indicates whether lazy binding is enabled for this object
     lazy: bool,
 
@@ -85,8 +84,8 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch, R: RegionAccess = HostReg
     /// GNU_RELRO segment information for memory protection
     relro: Option<ELFRelro>,
 
-    /// Custom initialization handler.
-    init_handler: SharedLifecycleHandler<R>,
+    /// Runtime address of the dynamic section.
+    dynamic_addr: VmAddr,
 
     /// Initialization functions to resolve after relocation.
     init: LifecycleSpec,
@@ -104,7 +103,7 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch, R: RegionAccess = HostReg
     needed_libs: Box<[&'static str]>,
 }
 
-impl<Arch: RelocationArch, R: RegionAccess> core::fmt::Debug for ElfExtraData<Arch, R> {
+impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfExtraData")
             .field("lazy", &self.lazy)
@@ -133,7 +132,7 @@ where
     /// Core component containing the basic ELF object information
     module: ElfCore<D, Arch, R>,
     /// Extra data needed for relocation
-    extra: ElfExtraData<Arch, R>,
+    extra: ElfExtraData<Arch>,
     /// Target architecture marker used during relocation.
     _arch: PhantomData<fn() -> Arch>,
 }
@@ -290,10 +289,15 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     /// This method marks the ELF object as fully initialized and calls
     /// any registered initialization functions.
     #[inline]
-    pub(crate) fn call_init(&self, init: &Lifecycle) {
+    pub(crate) fn call_init<Obs>(&self, observer: &mut Obs, init: &Lifecycle) -> Result<()>
+    where
+        Obs: RelocationObserver<Arch> + ?Sized,
+    {
         self.module.set_init();
-        let ctx = LifecycleContext::new(init, self.module.segments());
-        self.extra.init_handler.call(&ctx);
+        let mut event = LifecycleEvent::new(LifecyclePhase::Init, init, self.module.segments());
+        observer.on_lifecycle(&mut event)?;
+        event.run();
+        Ok(())
     }
 
     /// Marks the ELF object as initialized and delegates initialization to an emulator.
@@ -352,14 +356,12 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         &self.extra.needed_libs
     }
 
-    /// Gets the dynamic section pointer
-    ///
-    /// # Returns
-    /// An optional NonNull pointer to the dynamic section
-    pub fn dynamic_ptr(&self) -> Option<NonNull<ElfDyn<Arch::Layout>>> {
-        self.module.dynamic_ptr()
+    #[inline]
+    pub(crate) fn dynamic_addr(&self) -> VmAddr {
+        self.extra.dynamic_addr
     }
 
+    #[inline]
     /// Gets a reference to the user data
     pub fn user_data(&self) -> &D {
         self.module.user_data()
@@ -367,9 +369,13 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
-    pub(crate) fn from_parts<Tls>(parts: RawDynamicParts<D, Arch, R>) -> Result<Self>
+    pub(crate) fn from_parts<Tls, Obs>(
+        parts: RawDynamicParts<D, Arch, R>,
+        observer: &mut Obs,
+    ) -> Result<Self>
     where
         Tls: TlsResolver,
+        Obs: LoadObserver<Arch> + ?Sized,
     {
         let RawDynamicParts {
             path,
@@ -377,17 +383,19 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             interp,
             phdrs,
             dynamic,
+            dynamic_addr,
             eh_frame_hdr,
             tls_info,
             force_static_tls,
             relro,
             segments,
-            init_fn,
-            fini_fn,
             user_data,
         } = parts;
 
-        let dynamic = ElfDynamic::<Arch>::new(dynamic, &segments)?;
+        let dynamic = ElfDynamic::<Arch>::new(dynamic, dynamic_addr, &segments)?;
+        if let Some(addr) = dynamic.dt_debug_addr {
+            observer.on_dt_debug(DtDebugEntry::new(addr, &segments))?;
+        }
 
         logging::trace!("[{}] Dynamic info: {:?}", path, dynamic);
 
@@ -428,11 +436,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         Ok(RawDynamic {
             entry,
             interp,
-            extra: ElfExtraData {
+            extra: ElfExtraData::<Arch> {
                 lazy: cfg!(feature = "lazy-binding") && !dynamic.bind_now,
                 relro,
+                dynamic_addr,
                 relocation,
-                init_handler: init_fn,
                 init: dynamic.init,
                 fini: dynamic.fini,
                 #[cfg(feature = "lazy-binding")]
@@ -451,12 +459,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                     path,
                     symtab,
                     fini: OnceCell::new(),
-                    fini_handler: fini_fn,
+                    fini_executor: OnceCell::new(),
+                    unload_hook: OnceCell::new(),
                     emu_fini: OnceCell::new(),
                     user_data,
                     dynamic_info: Some(Arc::new(DynamicInfo {
                         eh_frame_hdr,
-                        dynamic_ptr: dynamic.dynamic_ptr,
                         phdrs,
                         soname,
                         #[cfg(feature = "lazy-binding")]
@@ -483,12 +491,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
 impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
     /// Build a dynamic image from the intermediate loader state.
-    pub(crate) fn from_builder<'hook, H, Tls>(
-        mut builder: ImageBuilder<'hook, H, Tls, D, Arch::Layout>,
+    pub(crate) fn from_builder<'obs, Obs, Tls>(
+        mut builder: ImageBuilder<'obs, Obs, Tls, D, Arch>,
         phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where
-        H: LoadHook<Arch::Layout>,
+        Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
     {
         // Parse all program headers
@@ -498,7 +506,7 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
         let dynamic = builder
             .dynamic
             .ok_or(ParsePhdrError::MissingDynamicSection)?;
-        Self::from_parts::<Tls>(RawDynamicParts {
+        let parts = RawDynamicParts {
             path: builder.path,
             entry: if builder.ehdr.is_dylib() {
                 builder.segments.base() + VmOffset::new(builder.ehdr.e_entry())
@@ -508,15 +516,17 @@ impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
             interp: builder.interp,
             phdrs,
             dynamic,
+            dynamic_addr: builder
+                .dynamic_addr
+                .ok_or(ParsePhdrError::MissingDynamicSection)?,
             eh_frame_hdr: builder.eh_frame_hdr,
             tls_info: builder.tls_info,
             force_static_tls: builder.static_tls,
             relro: builder.relro,
             segments: builder.segments,
-            init_fn: builder.init_fn,
-            fini_fn: builder.fini_fn,
             user_data: builder.user_data,
-        })
+        };
+        Self::from_parts::<Tls, _>(parts, builder.observer)
     }
 }
 
@@ -530,14 +540,15 @@ where
     type Output = LoadedCore<D, Arch, R>;
     type Arch = Arch;
 
-    fn relocate<PreH, PostH>(
+    fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
+        Obs: RelocationObserver<Arch> + ?Sized,
     {
-        self.relocate_impl::<_, _>(args)
+        self.relocate_impl::<_, _, _>(args)
     }
 }

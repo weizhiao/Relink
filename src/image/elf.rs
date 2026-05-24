@@ -3,6 +3,7 @@ use crate::{
     arch::NativeArch,
     elf::ElfPhdr,
     input::Path,
+    observer::RelocationObserver,
     os::VmAddr,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
 };
@@ -289,13 +290,14 @@ impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawElf<D, Arch> {
     type Output = LoadedElf<D, Arch>;
     type Arch = Arch;
 
-    fn relocate<PreH, PostH>(
+    fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreH, PostH>,
+        args: RelocateArgs<'_, D, Arch, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
+        Obs: RelocationObserver<Arch> + ?Sized,
     {
         match self {
             RawElf::Dylib(dylib) => Ok(LoadedElf::Dylib(Relocatable::relocate(dylib, args)?)),

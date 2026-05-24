@@ -263,67 +263,6 @@ where
     }
 }
 
-/// A mapped but unrelocated dynamic image observed during a link operation.
-pub struct StagedDynamic<'a, K, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
-    key: &'a K,
-    raw: &'a RawDynamic<D, Arch>,
-}
-
-impl<'a, K, D: 'static, Arch> StagedDynamic<'a, K, D, Arch>
-where
-    Arch: RelocationArch,
-{
-    #[inline]
-    pub(crate) fn new(key: &'a K, raw: &'a RawDynamic<D, Arch>) -> Self {
-        Self { key, raw }
-    }
-
-    /// Returns the key of the staged module.
-    #[inline]
-    pub fn key(&self) -> &'a K {
-        self.key
-    }
-
-    /// Returns the architecture kind of the staged module.
-    #[inline]
-    pub fn arch_kind(&self) -> ArchKind {
-        Arch::KIND
-    }
-
-    /// Returns the mapped byte length of the staged module.
-    #[inline]
-    pub fn mapped_len(&self) -> usize {
-        self.raw.mapped_len()
-    }
-
-    /// Returns the unrelocated dynamic image.
-    #[inline]
-    pub fn raw(&self) -> &'a RawDynamic<D, Arch> {
-        self.raw
-    }
-}
-
-/// Observer for modules staged by [`super::Linker`].
-pub trait LoadObserver<K, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
-    /// Called when a dynamic image has been mapped but not yet relocated.
-    fn on_staged_dynamic(&mut self, _event: StagedDynamic<'_, K, D, Arch>) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl<K, D: 'static, Arch: RelocationArch> LoadObserver<K, D, Arch> for () {}
-
-impl<K, D: 'static, Arch, F> LoadObserver<K, D, Arch> for F
-where
-    Arch: RelocationArch,
-    F: for<'a> FnMut(StagedDynamic<'a, K, D, Arch>) -> Result<()>,
-{
-    #[inline]
-    fn on_staged_dynamic(&mut self, event: StagedDynamic<'_, K, D, Arch>) -> Result<()> {
-        self(event)
-    }
-}
-
 /// A single relocation request for a newly mapped module.
 pub struct RelocationRequest<'a, K, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
     key: &'a K,
