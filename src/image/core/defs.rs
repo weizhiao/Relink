@@ -8,7 +8,7 @@ use crate::{
         SharedModuleUnloadHook,
     },
     os::{HostRegion, RegionAccess},
-    relocation::{EmuContext, Emulator, RelocationArch},
+    relocation::RelocationArch,
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering},
     tls::CoreTlsState,
@@ -40,9 +40,6 @@ pub(crate) struct CoreInner<
     /// Optional callback installed by the relocation observer for unload.
     pub(crate) unload_hook: OnceCell<SharedModuleUnloadHook<D, Arch, R>>,
 
-    /// Emulated finalization handler, when native finalization is unavailable.
-    pub(crate) emu_fini: OnceCell<Arc<dyn Emulator<Arch>>>,
-
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
 
@@ -72,37 +69,24 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Ar
         if self.is_init.load(Ordering::Relaxed)
             && let Some(fini) = self.fini.get()
         {
-            if let Some(emu) = self.emu_fini.get() {
-                let ctx = EmuContext::from_parts(
-                    self.path.as_str(),
-                    self.segments.base(),
-                    &self.segments,
-                );
-                emu.call_fini(&ctx, fini);
-            } else {
-                let executor = self
-                    .fini_executor
-                    .get()
-                    .expect("finalization executor must be set with finalization lifecycle")
-                    .clone();
-                let mut event = LifecycleEvent::with_executor(
-                    LifecyclePhase::Fini,
-                    fini,
-                    &self.segments,
-                    executor,
-                );
-                event.run();
-            }
+            let executor = self
+                .fini_executor
+                .get()
+                .expect("finalization executor must be set with finalization lifecycle")
+                .clone();
+            let name = self.name();
+            let mut event = LifecycleEvent::with_executor(
+                LifecyclePhase::Fini,
+                name,
+                fini,
+                &self.segments,
+                executor,
+            );
+            event.run();
         }
         if let Some(unload_hook) = self.unload_hook.get() {
             let name = self.name();
-            let event = ModuleUnloadEvent::new(
-                &self.path,
-                name,
-                self.segments.base(),
-                &self.segments,
-                &self.user_data,
-            );
+            let event = ModuleUnloadEvent::new(self);
             if let Err(err) = unload_hook(event) {
                 logging::error!("module unload hook failed for {}: {err}", name);
             }

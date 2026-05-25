@@ -58,7 +58,6 @@ impl<D: 'static, Arch: RelocationArch> RawObject<D, Arch> {
             fini: OnceCell::new(),
             fini_executor: OnceCell::new(),
             unload_hook: OnceCell::new(),
-            emu_fini: OnceCell::new(),
             user_data: builder.user_data,
             dynamic_info: None,
             tls: CoreTlsState::new(

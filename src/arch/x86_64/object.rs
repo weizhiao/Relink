@@ -63,8 +63,8 @@ impl X86_64Arch {
         Ok(())
     }
 
-    pub(crate) fn relocate_object_impl<D, PreH, PostH>(
-        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH>,
+    pub(crate) fn relocate_object_impl<D, PreH, PostH, Obs>(
+        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
     ) -> crate::Result<()>
@@ -72,6 +72,7 @@ impl X86_64Arch {
         D: 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
+        Obs: crate::observer::RelocationObserver<Self> + ?Sized,
     {
         let r_sym = rel.r_symbol();
         let r_type = rel.r_type();

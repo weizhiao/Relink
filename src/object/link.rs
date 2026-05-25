@@ -3,6 +3,7 @@ use crate::{
     elf::ElfRelType,
     image::{ModuleScope, RawObject},
     logging,
+    observer::default_lifecycle_executor,
     observer::{LifecycleEvent, LifecyclePhase, RelocationObserver},
     relocation::{RelocHelper, RelocationArch, RelocationHandler},
 };
@@ -44,8 +45,8 @@ where
             scope,
             pre_handler,
             post_handler,
+            observer,
             self.core.tls_get_addr(),
-            None,
         );
         for reloc in self.relocation.sections.iter() {
             for rel in *reloc {
@@ -73,7 +74,13 @@ where
         (self.mprotect)()?;
 
         logging::trace!("[{}] Executing init functions", self.core.name());
-        let mut event = LifecycleEvent::new(LifecyclePhase::Init, &self.init, self.core.segments());
+        let mut event = LifecycleEvent::with_executor(
+            LifecyclePhase::Init,
+            self.core.name(),
+            &self.init,
+            self.core.segments(),
+            default_lifecycle_executor(),
+        );
         observer.on_lifecycle(&mut event)?;
         event.run();
 

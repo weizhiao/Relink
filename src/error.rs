@@ -357,7 +357,6 @@ pub(crate) enum RelocReason {
     MissingTlsTpOffset,
     #[cfg(not(feature = "tls"))]
     TlsDisabled,
-    MissingEmulator,
     IntConversionOutOfRange,
 }
 
@@ -372,7 +371,6 @@ impl Display for RelocReason {
             Self::MissingTlsTpOffset => f.write_str("TLS thread-pointer offset is unavailable"),
             #[cfg(not(feature = "tls"))]
             Self::TlsDisabled => f.write_str("TLS relocation support is disabled"),
-            Self::MissingEmulator => f.write_str("relocation requires an emulator"),
             Self::IntConversionOutOfRange => {
                 f.write_str("out of range integral type conversion attempted")
             }

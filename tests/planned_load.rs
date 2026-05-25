@@ -142,7 +142,9 @@ impl LinkObserver for RecordingObserver {
         event: StagedDynamic<'_, K, D>,
     ) -> elf_loader::Result<()> {
         assert!(event.mapped_len() > 0);
-        self.events.borrow_mut().push(event.raw().name().to_string());
+        self.events
+            .borrow_mut()
+            .push(event.raw().name().to_string());
         Ok(())
     }
 }
@@ -790,7 +792,10 @@ fn load_scan_first_observer_fires_after_scan_materialization() {
         .expect("failed to execute scan-first observer test");
 
     assert!(*saw_scan_phase.borrow());
-    assert_eq!(*observed.borrow(), vec!["scan_observer_root.so".to_string()]);
+    assert_eq!(
+        *observed.borrow(),
+        vec!["scan_observer_root.so".to_string()]
+    );
     assert!(context.contains_key(&"root"));
 }
 

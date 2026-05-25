@@ -14,13 +14,19 @@ mod enabled {
         RelocReason, Result,
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
-        os::{RegionAccess, VmAddr, VmOffset},
-        relocation::{
-            RelocHelper, RelocValue, RelocationArch, RelocationHandler, TlsDescEmuRequest,
+        observer::{
+            RelocationObserver, TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
         },
+        os::{RegionAccess, VmAddr, VmOffset},
+        relocation::{RelocHelper, RelocValue, RelocationArch, RelocationHandler},
         segment::ElfSegments,
     };
     use alloc::boxed::Box;
+
+    pub(crate) enum TlsDescResolution {
+        Resolved(TlsDescBindingValue),
+        Failed(RelocReason),
+    }
 
     #[inline]
     pub(crate) fn lookup_tls_get_addr(name: &str, tls_get_addr: VmAddr) -> Option<*const ()> {
@@ -44,8 +50,66 @@ mod enabled {
         }
     }
 
-    pub(crate) fn handle_tls_reloc<D, Arch, R, PreH, PostH>(
-        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH>,
+    impl<'find, D, Arch, R, PreH, PostH, Obs> RelocHelper<'find, D, Arch, R, PreH, PostH, Obs>
+    where
+        D: 'static,
+        Arch: RelocationArch,
+        R: RegionAccess,
+        PreH: RelocationHandler<Arch> + ?Sized,
+        PostH: RelocationHandler<Arch> + ?Sized,
+        Obs: RelocationObserver<Arch> + ?Sized,
+    {
+        #[inline]
+        pub(crate) fn resolve_tlsdesc(
+            &mut self,
+            rel: &ElfRelType<Arch>,
+            request: TlsDescBindingRequest,
+        ) -> Result<TlsDescResolution> {
+            let mut event = TlsDescBindingEvent::new(self.core, rel, request);
+            self.observer.on_tlsdesc_binding(&mut event)?;
+            if let Some(value) = event.into_value() {
+                return Ok(TlsDescResolution::Resolved(value));
+            }
+            if !Arch::SUPPORTS_NATIVE_RUNTIME {
+                return Ok(TlsDescResolution::Failed(RelocReason::UnknownSymbol));
+            }
+
+            let sym_value = request.symbol_value();
+            let addend = request.addend();
+
+            if let Some(tp_offset) = request.tp_offset() {
+                let tpoff = VmAddr::new((tp_offset.get() + sym_value as isize) as usize)
+                    .wrapping_add_signed(addend);
+                return Ok(TlsDescResolution::Resolved(TlsDescBindingValue::new(
+                    VmAddr::from_ptr(tlsdesc_resolver_static as *const ()),
+                    tpoff.get(),
+                )));
+            }
+
+            if let Some(module_id) = request.module_id() {
+                let offset = VmAddr::new(sym_value).wrapping_add_signed(addend);
+                let dynamic_arg = Box::new(TlsDescDynamicArg {
+                    tls_get_addr: request.tls_get_addr().get(),
+                    ti: TlsIndex {
+                        ti_module: module_id,
+                        ti_offset: offset.get(),
+                    },
+                });
+                let arg_ptr = VmAddr::from_ptr(dynamic_arg.as_ref());
+                self.tls_desc_args.push(dynamic_arg);
+
+                return Ok(TlsDescResolution::Resolved(TlsDescBindingValue::new(
+                    VmAddr::from_ptr(tlsdesc_resolver_dynamic as *const ()),
+                    arg_ptr.get(),
+                )));
+            }
+
+            Ok(TlsDescResolution::Failed(RelocReason::MissingTlsModuleId))
+        }
+    }
+
+    pub(crate) fn handle_tls_reloc<D, Arch, R, PreH, PostH, Obs>(
+        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH, Obs>,
         rel: &ElfRelType<Arch>,
     ) -> Result<TlsRelocOutcome>
     where
@@ -54,6 +118,7 @@ mod enabled {
         R: RegionAccess,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
+        Obs: RelocationObserver<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
         let r_type = rel.r_type();
@@ -115,62 +180,31 @@ mod enabled {
                     let Some(sym) = symdef.symbol() else {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                     };
-                    if !Arch::SUPPORTS_NATIVE_RUNTIME {
-                        let request = TlsDescEmuRequest::new(
-                            sym.st_value(),
-                            r_addend,
-                            symdef.tls_mod_id(),
-                            symdef.tls_tp_offset(),
-                            helper.tls_get_addr.get(),
-                        );
-                        let Some(desc) = helper.resolve_tlsdesc_with_emu(rel, request)? else {
-                            return Ok(TlsRelocOutcome::Failed(RelocReason::MissingEmulator));
-                        };
-                        write_tls_word::<Arch, R>(segments, place, desc.resolver())?;
-                        write_tls_word::<Arch, R>(segments, place + VmOffset::new(8), desc.arg())?;
-                        return Ok(TlsRelocOutcome::Applied);
+                    let sym_value = sym.st_value();
+                    let tls_mod_id = symdef.tls_mod_id();
+                    let tls_tp_offset = symdef.tls_tp_offset();
+                    let tls_get_addr = helper.tls_get_addr;
+                    let request = TlsDescBindingRequest::new(
+                        sym_value,
+                        r_addend,
+                        tls_mod_id,
+                        tls_tp_offset,
+                        tls_get_addr,
+                    );
+                    match helper.resolve_tlsdesc(rel, request)? {
+                        TlsDescResolution::Resolved(desc) => {
+                            write_tls_word::<Arch, R>(segments, place, desc.resolver().get())?;
+                            write_tls_word::<Arch, R>(
+                                segments,
+                                place + VmOffset::new(8),
+                                desc.arg(),
+                            )?;
+                            return Ok(TlsRelocOutcome::Applied);
+                        }
+                        TlsDescResolution::Failed(reason) => {
+                            return Ok(TlsRelocOutcome::Failed(reason));
+                        }
                     }
-
-                    if let Some(tp_offset) = symdef.tls_tp_offset() {
-                        let tpoff =
-                            VmAddr::new((tp_offset.get() + sym.st_value() as isize) as usize)
-                                .wrapping_add_signed(r_addend);
-                        write_tls_word::<Arch, R>(
-                            segments,
-                            place,
-                            tlsdesc_resolver_static as *const () as usize,
-                        )?;
-                        write_tls_word::<Arch, R>(segments, place + VmOffset::new(8), tpoff.get())?;
-                        return Ok(TlsRelocOutcome::Applied);
-                    }
-
-                    if let Some(mod_id) = symdef.tls_mod_id() {
-                        let offset =
-                            VmAddr::new(sym.st_value() as usize).wrapping_add_signed(r_addend);
-                        let dynamic_arg = Box::new(TlsDescDynamicArg {
-                            tls_get_addr: helper.tls_get_addr.get(),
-                            ti: TlsIndex {
-                                ti_module: mod_id,
-                                ti_offset: offset.get(),
-                            },
-                        });
-
-                        let arg_ptr = VmAddr::from_ptr(dynamic_arg.as_ref());
-                        helper.tls_desc_args.push(dynamic_arg);
-
-                        write_tls_word::<Arch, R>(
-                            segments,
-                            place,
-                            tlsdesc_resolver_dynamic as *const () as usize,
-                        )?;
-                        write_tls_word::<Arch, R>(
-                            segments,
-                            place + VmOffset::new(8),
-                            arg_ptr.get(),
-                        )?;
-                        return Ok(TlsRelocOutcome::Applied);
-                    }
-                    return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
                 }
                 return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
             }
@@ -185,6 +219,7 @@ mod disabled {
     use crate::{
         RelocReason, Result,
         elf::{ElfRelEntry, ElfRelType},
+        observer::RelocationObserver,
         os::{RegionAccess, VmAddr},
         relocation::{RelocHelper, RelocationArch, RelocationHandler},
     };
@@ -195,8 +230,8 @@ mod disabled {
     }
 
     #[inline]
-    pub(crate) fn handle_tls_reloc<D, Arch, R, PreH, PostH>(
-        _helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH>,
+    pub(crate) fn handle_tls_reloc<D, Arch, R, PreH, PostH, Obs>(
+        _helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH, Obs>,
         rel: &ElfRelType<Arch>,
     ) -> Result<TlsRelocOutcome>
     where
@@ -205,6 +240,7 @@ mod disabled {
         R: RegionAccess,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
+        Obs: RelocationObserver<Arch> + ?Sized,
     {
         debug_assert!(Arch::is_tls(rel.r_type()));
         Ok(TlsRelocOutcome::Failed(RelocReason::TlsDisabled))

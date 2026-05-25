@@ -1,6 +1,6 @@
 #[cfg(feature = "object")]
 use super::RelocHelper;
-use super::{Emulator, RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
+use super::{RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
 use crate::{
     ByteRepr, RelocReason, Result,
     arch::{ArchKind, NativeArch},
@@ -92,8 +92,8 @@ pub trait RelocationArch: 'static {
     #[doc(hidden)]
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, PreH, PostH>(
-        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH>,
+    fn relocate_object<D, PreH, PostH, Obs>(
+        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
         rel: &ElfRelType<Self>,
         _pltgot: &mut crate::object::layout::PltGotSection,
     ) -> Result<()>
@@ -102,6 +102,7 @@ pub trait RelocationArch: 'static {
         D: 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
+        Obs: RelocationObserver<Self> + ?Sized,
     {
         Err(super::reloc_error::<Self, _, HostRegion>(
             rel,
@@ -362,7 +363,6 @@ pub struct RelocateArgs<
     pub(crate) pre_handler: &'a PreH,
     pub(crate) post_handler: &'a PostH,
     pub(crate) observer: &'a mut Obs,
-    pub(crate) emu: Option<Arc<dyn Emulator<Arch>>>,
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
@@ -376,7 +376,6 @@ impl<'a, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized, Obs: ?Si
         pre_handler: &'a PreH,
         post_handler: &'a PostH,
         observer: &'a mut Obs,
-        emu: Option<Arc<dyn Emulator<Arch>>>,
     ) -> Self {
         Self {
             scope,
@@ -384,7 +383,6 @@ impl<'a, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized, Obs: ?Si
             pre_handler,
             post_handler,
             observer,
-            emu,
             _marker: PhantomData,
         }
     }

@@ -1,12 +1,14 @@
 mod event;
-mod lifecycle;
 mod traits;
 
-pub(crate) use event::SharedModuleUnloadHook;
 pub use event::{
-    DtDebugEntry, LinkActivity, ModuleRelocatedEvent, ModuleUnloadEvent, ProgramHeaderEvent,
-    ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
+    DtDebugEntry, IfuncBindingEvent, LifecycleEvent, LifecyclePhase, LinkActivity,
+    ModuleRelocatedEvent, ModuleUnloadEvent, ProgramHeaderEvent, ResolveDependencyEvent,
+    ResolveRootEvent, StagedDynamic, TlsDescBindingEvent, TlsDescBindingRequest,
+    TlsDescBindingValue,
 };
-pub(crate) use lifecycle::SharedLifecycleExecutor;
-pub use lifecycle::{LifecycleEvent, LifecyclePhase};
+pub(crate) use event::{
+    SharedLifecycleExecutor, SharedModuleUnloadHook, default_lifecycle_executor,
+    noop_lifecycle_executor,
+};
 pub use traits::{LinkObserver, LoadObserver, RelocationObserver};

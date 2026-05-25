@@ -25,6 +25,7 @@ pub(crate) type SharedLifecycleExecutor<R = HostRegion> =
 /// address list before executing it.
 pub struct LifecycleEvent<'a, R: RegionAccess = HostRegion> {
     phase: LifecyclePhase,
+    name: &'a str,
     lifecycle: Lifecycle,
     segments: &'a ElfSegments<R>,
     executor: SharedLifecycleExecutor<R>,
@@ -32,28 +33,16 @@ pub struct LifecycleEvent<'a, R: RegionAccess = HostRegion> {
 
 impl<'a, R: RegionAccess> LifecycleEvent<'a, R> {
     #[inline]
-    pub(crate) fn new(
-        phase: LifecyclePhase,
-        lifecycle: &'a Lifecycle,
-        segments: &'a ElfSegments<R>,
-    ) -> Self {
-        Self::with_executor(
-            phase,
-            lifecycle,
-            segments,
-            default_lifecycle_executor::<R>(),
-        )
-    }
-
-    #[inline]
     pub(crate) fn with_executor(
         phase: LifecyclePhase,
+        name: &'a str,
         lifecycle: &'a Lifecycle,
         segments: &'a ElfSegments<R>,
         executor: SharedLifecycleExecutor<R>,
     ) -> Self {
         Self {
             phase,
+            name,
             lifecycle: lifecycle.clone(),
             segments,
             executor,
@@ -64,6 +53,24 @@ impl<'a, R: RegionAccess> LifecycleEvent<'a, R> {
     #[inline]
     pub const fn phase(&self) -> LifecyclePhase {
         self.phase
+    }
+
+    /// Returns the module identity used for diagnostics.
+    #[inline]
+    pub const fn name(&self) -> &'a str {
+        self.name
+    }
+
+    /// Returns the load base used by this image.
+    #[inline]
+    pub fn base(&self) -> VmAddr {
+        self.segments.base()
+    }
+
+    /// Returns whether an absolute address is covered by this image.
+    #[inline]
+    pub fn contains_addr(&self, addr: VmAddr) -> bool {
+        self.segments.contains_addr(addr)
     }
 
     /// Returns the lifecycle address table for this event.
@@ -138,6 +145,11 @@ pub(crate) fn default_lifecycle_executor<R: RegionAccess>() -> SharedLifecycleEx
             };
         });
     })
+}
+
+#[inline]
+pub(crate) fn noop_lifecycle_executor<R: RegionAccess>() -> SharedLifecycleExecutor<R> {
+    shared_lifecycle_executor(|_ctx: &mut LifecycleEvent<'_, R>| {})
 }
 
 #[inline]

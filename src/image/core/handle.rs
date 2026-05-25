@@ -9,7 +9,7 @@ use crate::{
     input::{Path, PathBuf},
     observer::{SharedLifecycleExecutor, SharedModuleUnloadHook},
     os::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
-    relocation::{Emulator, RelocationArch},
+    relocation::RelocationArch,
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{CoreTlsState, TlsDescArgs, TlsModuleId, TlsTpOffset},
@@ -226,14 +226,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
         self.inner.tls.set_desc_args(args);
     }
 
-    /// Set the finalization handler used after emulated initialization.
-    pub(crate) fn set_emu_fini(&self, emu: Arc<dyn Emulator<Arch>>) {
-        assert!(
-            self.inner.emu_fini.set(emu).is_ok(),
-            "emulated finalization handler must be set only once",
-        );
-    }
-
     /// Sets the finalization lifecycle.
     pub(crate) fn set_fini(&self, fini: Lifecycle, executor: SharedLifecycleExecutor<R>) {
         assert!(
@@ -292,7 +284,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
                 fini: OnceCell::new(),
                 fini_executor: OnceCell::new(),
                 unload_hook: OnceCell::new(),
-                emu_fini: OnceCell::new(),
                 user_data,
             }),
         })

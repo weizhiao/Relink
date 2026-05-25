@@ -1,6 +1,7 @@
 use super::{
-    DtDebugEntry, LifecycleEvent, LinkActivity, ModuleRelocatedEvent, ProgramHeaderEvent,
-    ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
+    DtDebugEntry, IfuncBindingEvent, LifecycleEvent, LinkActivity, ModuleRelocatedEvent,
+    ProgramHeaderEvent, ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
+    TlsDescBindingEvent,
 };
 use crate::{Result, arch::NativeArch, os::RegionAccess, relocation::RelocationArch};
 use alloc::boxed::Box;
@@ -35,6 +36,24 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     /// Called before lifecycle functions are executed or recorded for finalization.
     #[inline]
     fn on_lifecycle<R: RegionAccess>(&mut self, _event: &mut LifecycleEvent<'_, R>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called when an IFUNC resolver needs runtime binding.
+    #[inline]
+    fn on_ifunc_binding<D: 'static, R: RegionAccess>(
+        &mut self,
+        _event: &mut IfuncBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called when a TLSDESC relocation needs runtime binding.
+    #[inline]
+    fn on_tlsdesc_binding<D: 'static, R: RegionAccess>(
+        &mut self,
+        _event: &mut TlsDescBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -112,6 +131,22 @@ where
     #[inline]
     fn on_lifecycle<R: RegionAccess>(&mut self, event: &mut LifecycleEvent<'_, R>) -> Result<()> {
         (**self).on_lifecycle(event)
+    }
+
+    #[inline]
+    fn on_ifunc_binding<D: 'static, R: RegionAccess>(
+        &mut self,
+        event: &mut IfuncBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
+        (**self).on_ifunc_binding(event)
+    }
+
+    #[inline]
+    fn on_tlsdesc_binding<D: 'static, R: RegionAccess>(
+        &mut self,
+        event: &mut TlsDescBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
+        (**self).on_tlsdesc_binding(event)
     }
 
     #[inline]
@@ -206,6 +241,22 @@ where
     #[inline]
     fn on_lifecycle<R: RegionAccess>(&mut self, event: &mut LifecycleEvent<'_, R>) -> Result<()> {
         (**self).on_lifecycle(event)
+    }
+
+    #[inline]
+    fn on_ifunc_binding<D: 'static, R: RegionAccess>(
+        &mut self,
+        event: &mut IfuncBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
+        (**self).on_ifunc_binding(event)
+    }
+
+    #[inline]
+    fn on_tlsdesc_binding<D: 'static, R: RegionAccess>(
+        &mut self,
+        event: &mut TlsDescBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
+        (**self).on_tlsdesc_binding(event)
     }
 
     #[inline]

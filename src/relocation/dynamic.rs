@@ -6,6 +6,7 @@ use crate::{
     logging,
     observer::{
         LifecycleEvent, LifecyclePhase, LinkActivity, ModuleRelocatedEvent, RelocationObserver,
+        default_lifecycle_executor, noop_lifecycle_executor,
     },
     os::{MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{
@@ -49,7 +50,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             pre_handler,
             post_handler,
             observer,
-            emu,
             ..
         } = args;
         let observer = observer;
@@ -76,8 +76,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             scope,
             pre_handler,
             post_handler,
+            observer,
             tls_get_addr,
-            emu.clone(),
         );
 
         if !relocation.is_empty() {
@@ -95,8 +95,23 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         self.core_ref().set_tls_desc_args(tls_desc_args);
 
         let (init, fini) = self.resolve_lifecycle()?;
-        let mut fini_event =
-            LifecycleEvent::new(LifecyclePhase::Fini, &fini, self.core_ref().segments());
+        let mut fini_event = if Arch::SUPPORTS_NATIVE_RUNTIME {
+            LifecycleEvent::with_executor(
+                LifecyclePhase::Fini,
+                self.name(),
+                &fini,
+                self.core_ref().segments(),
+                default_lifecycle_executor(),
+            )
+        } else {
+            LifecycleEvent::with_executor(
+                LifecyclePhase::Fini,
+                self.name(),
+                &fini,
+                self.core_ref().segments(),
+                noop_lifecycle_executor(),
+            )
+        };
         observer.on_lifecycle(&mut fini_event)?;
         let fini_executor = fini_event.executor();
         self.core_ref()
@@ -120,21 +135,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         }
         observer.on_activity(LinkActivity::Consistent)?;
 
-        if Arch::SUPPORTS_NATIVE_RUNTIME {
-            logging::debug!("Executing initialization functions for {}", self.name());
-            self.call_init(observer, &init)?;
-        } else if let Some(emu) = emu {
-            logging::debug!(
-                "Executing initialization functions with emulator for {}",
-                self.name()
-            );
-            self.call_init_with_emu(emu, &init)?;
-        } else {
-            logging::debug!(
-                "Skipping initialization functions for non-native relocation of {}",
-                self.name()
-            );
-        }
+        logging::debug!("Preparing initialization functions for {}", self.name());
+        self.call_init(observer, &init)?;
 
         logging::info!("Relocation completed for {}", self.name());
 
@@ -215,14 +217,15 @@ where
 
 impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     /// Relocate PLT (Procedure Linkage Table) entries
-    fn relocate_pltrel<PreH, PostH>(
+    fn relocate_pltrel<PreH, PostH, Obs>(
         &self,
         binding: &ResolvedBinding,
-        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH>,
+        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH, Obs>,
     ) -> Result<&Self>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
+        Obs: RelocationObserver<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
         let core = self.core_ref();
@@ -257,18 +260,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             } else if unlikely(r_type == Arch::IRELATIVE) {
                 let r_addend = rel.r_addend(base);
                 let addr = base.wrapping_add_signed(r_addend);
-                if !Arch::SUPPORTS_NATIVE_RUNTIME {
-                    if let Some(resolved) = helper.resolve_ifunc_with_emu(rel, addr)? {
-                        write_reloc_addr::<Arch, R>(segments, place, resolved)?;
-                        continue;
-                    }
-                    failure_reason = RelocReason::MissingEmulator;
-                } else {
-                    write_reloc_addr::<Arch, R>(segments, place, unsafe {
-                        helper.resolve_ifunc_native(addr)
-                    })?;
-                    continue;
-                }
+                write_reloc_addr::<Arch, R>(segments, place, helper.resolve_ifunc(rel, addr)?)?;
+                continue;
             } else if unlikely(Arch::is_tlsdesc(r_type)) {
                 // `handle_tls_reloc` performs its own SUPPORTS_NATIVE_RUNTIME
                 // gate for TLSDESC. If the built-in path cannot handle it,
@@ -353,13 +346,14 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     }
 
     /// Perform dynamic relocations (non-PLT, non-relative)
-    fn relocate_dynrel<PreH, PostH>(
+    fn relocate_dynrel<PreH, PostH, Obs>(
         &self,
-        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH>,
+        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH, Obs>,
     ) -> Result<&Self>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
+        Obs: RelocationObserver<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
         /*
@@ -419,18 +413,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             } else if r_type == Arch::IRELATIVE {
                 let r_addend = rel.r_addend(base);
                 let addr = base.wrapping_add_signed(r_addend);
-                if !Arch::SUPPORTS_NATIVE_RUNTIME {
-                    if let Some(resolved) = helper.resolve_ifunc_with_emu(rel, addr)? {
-                        write_reloc_addr::<Arch, R>(segments, place, resolved)?;
-                        continue;
-                    }
-                    failure_reason = RelocReason::MissingEmulator;
-                } else {
-                    write_reloc_addr::<Arch, R>(segments, place, unsafe {
-                        helper.resolve_ifunc_native(addr)
-                    })?;
-                    continue;
-                }
+                write_reloc_addr::<Arch, R>(segments, place, helper.resolve_ifunc(rel, addr)?)?;
+                continue;
             } else if Arch::is_tls(r_type) {
                 // `handle_tls_reloc` is a pure data computation for
                 // DTPMOD/DTPOFF/TPOFF (safe under cross-arch loads) and

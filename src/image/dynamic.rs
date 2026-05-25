@@ -8,11 +8,13 @@ use crate::{
     input::{Path, PathBuf},
     loader::ImageBuilder,
     logging,
-    observer::{DtDebugEntry, LifecycleEvent, LifecyclePhase, LoadObserver, RelocationObserver},
+    observer::{
+        DtDebugEntry, LifecycleEvent, LifecyclePhase, LoadObserver, RelocationObserver,
+        default_lifecycle_executor, noop_lifecycle_executor,
+    },
     os::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{
-        DynamicRelocation, EmuContext, Emulator, Relocatable, RelocateArgs, RelocationArch,
-        RelocationHandler, Relocator,
+        DynamicRelocation, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
     },
     segment::ELFRelro,
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -294,22 +296,25 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         Obs: RelocationObserver<Arch> + ?Sized,
     {
         self.module.set_init();
-        let mut event = LifecycleEvent::new(LifecyclePhase::Init, init, self.module.segments());
+        let mut event = if Arch::SUPPORTS_NATIVE_RUNTIME {
+            LifecycleEvent::with_executor(
+                LifecyclePhase::Init,
+                self.name(),
+                init,
+                self.module.segments(),
+                default_lifecycle_executor(),
+            )
+        } else {
+            LifecycleEvent::with_executor(
+                LifecyclePhase::Init,
+                self.name(),
+                init,
+                self.module.segments(),
+                noop_lifecycle_executor(),
+            )
+        };
         observer.on_lifecycle(&mut event)?;
         event.run();
-        Ok(())
-    }
-
-    /// Marks the ELF object as initialized and delegates initialization to an emulator.
-    pub(crate) fn call_init_with_emu(
-        &self,
-        emu: Arc<dyn Emulator<Arch>>,
-        init: &Lifecycle,
-    ) -> Result<()> {
-        let ctx = EmuContext::new(self.core_ref());
-        emu.call_init(&ctx, init)?;
-        self.core_ref().set_emu_fini(emu);
-        self.module.set_init();
         Ok(())
     }
 
@@ -461,7 +466,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                     fini: OnceCell::new(),
                     fini_executor: OnceCell::new(),
                     unload_hook: OnceCell::new(),
-                    emu_fini: OnceCell::new(),
                     user_data,
                     dynamic_info: Some(Arc::new(DynamicInfo {
                         eh_frame_hdr,

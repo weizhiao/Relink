@@ -1,17 +1,13 @@
 use super::resolve_ifunc;
-use crate::relocation::{TlsDescEmuRequest, TlsDescEmuValue};
 use crate::{
     Error, RelocReason, Result,
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
     image::{ElfCore, Module, ModuleScope},
     logging,
+    observer::{IfuncBindingEvent, RelocationObserver},
     os::{RegionAccess, VmAddr, VmOffset},
     relocate_context_error,
-    relocation::{
-        EmuRelocationContext, Emulator, HandleResult, RelocationArch, RelocationContext,
-        RelocationHandler,
-    },
-    sync::Arc,
+    relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
     tls::{TlsDescArgs, lookup_tls_get_addr},
 };
 use core::marker::PhantomData;
@@ -24,41 +20,43 @@ pub(crate) struct RelocHelper<
     R: RegionAccess,
     PreH: ?Sized,
     PostH: ?Sized,
+    Obs: ?Sized,
 > {
     pub(crate) core: &'find ElfCore<D, Arch, R>,
     pub(crate) scope: ModuleScope<Arch>,
     pub(crate) pre_handler: &'find PreH,
     pub(crate) post_handler: &'find PostH,
+    pub(crate) observer: &'find mut Obs,
     #[allow(dead_code)]
     pub(crate) tls_get_addr: VmAddr,
     pub(crate) tls_desc_args: TlsDescArgs,
-    pub(crate) emu: Option<Arc<dyn Emulator<Arch>>>,
 }
 
-impl<'find, D, Arch, R, PreH, PostH> RelocHelper<'find, D, Arch, R, PreH, PostH>
+impl<'find, D, Arch, R, PreH, PostH, Obs> RelocHelper<'find, D, Arch, R, PreH, PostH, Obs>
 where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     PreH: RelocationHandler<Arch> + ?Sized,
     PostH: RelocationHandler<Arch> + ?Sized,
+    Obs: RelocationObserver<Arch> + ?Sized,
 {
     pub(crate) fn new(
         core: &'find ElfCore<D, Arch, R>,
         scope: ModuleScope<Arch>,
         pre_handler: &'find PreH,
         post_handler: &'find PostH,
+        observer: &'find mut Obs,
         tls_get_addr: VmAddr,
-        emu: Option<Arc<dyn Emulator<Arch>>>,
     ) -> Self {
         Self {
             core,
             scope,
             pre_handler,
             post_handler,
+            observer,
             tls_get_addr,
             tls_desc_args: TlsDescArgs::default(),
-            emu,
         }
     }
 
@@ -92,39 +90,24 @@ where
     }
 
     #[inline]
-    pub(crate) fn resolve_ifunc_with_emu(
-        &self,
+    pub(crate) fn resolve_ifunc(
+        &mut self,
         rel: &ElfRelType<Arch>,
         resolver: VmAddr,
-    ) -> Result<Option<VmAddr>> {
-        let Some(emu) = &self.emu else {
-            return Ok(None);
-        };
-        let ctx = EmuRelocationContext::new(self.core, rel);
-        emu.resolve_ifunc(&ctx, resolver).map(Some)
-    }
-
-    #[inline]
-    pub(crate) unsafe fn resolve_ifunc_native(&self, resolver: VmAddr) -> VmAddr {
+    ) -> Result<VmAddr> {
+        let mut event = IfuncBindingEvent::new(self.core, rel, resolver);
+        self.observer.on_ifunc_binding(&mut event)?;
+        if let Some(resolved) = event.into_resolved_addr() {
+            return Ok(resolved);
+        }
+        if !Arch::SUPPORTS_NATIVE_RUNTIME {
+            return Err(reloc_error(rel, RelocReason::UnknownSymbol, self.core));
+        }
         let ptr = self
             .core
             .host_ptr(resolver)
             .expect("IFUNC resolver address is not backed by host-accessible mapped memory");
-        unsafe { resolve_ifunc(ptr) }
-    }
-
-    #[inline]
-    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    pub(crate) fn resolve_tlsdesc_with_emu(
-        &self,
-        rel: &ElfRelType<Arch>,
-        request: TlsDescEmuRequest,
-    ) -> Result<Option<TlsDescEmuValue>> {
-        let Some(emu) = &self.emu else {
-            return Ok(None);
-        };
-        let ctx = EmuRelocationContext::new(self.core, rel);
-        emu.resolve_tlsdesc(&ctx, request).map(Some)
+        Ok(unsafe { resolve_ifunc(ptr) })
     }
 }
 

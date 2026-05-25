@@ -43,13 +43,17 @@ fn borrowed_dynamic_reuses_existing_mapping() {
     assert_eq!(borrowed.mapped_len(), owner.mapped_len());
     assert!(borrowed.contains_addr(owner.base()));
     assert_eq!(borrowed.phdrs().len(), owner.phdrs().len());
-    assert!(borrowed
-        .phdrs()
-        .iter()
-        .zip(owner.phdrs())
-        .all(|(borrowed, owner)| borrowed.program_type() == owner.program_type()
-            && borrowed.p_vaddr() == owner.p_vaddr()
-            && borrowed.p_memsz() == owner.p_memsz()));
+    assert!(
+        borrowed
+            .phdrs()
+            .iter()
+            .zip(owner.phdrs())
+            .all(
+                |(borrowed, owner)| borrowed.program_type() == owner.program_type()
+                    && borrowed.p_vaddr() == owner.p_vaddr()
+                    && borrowed.p_memsz() == owner.p_memsz()
+            )
+    );
     assert_eq!(borrowed.needed_libs(), owner.needed_libs());
     assert_eq!(owner.soname(), Some("libowner.so"));
     assert_eq!(borrowed.soname(), owner.soname());
@@ -89,8 +93,9 @@ fn scanned_dynamic_load_reuses_scanned_metadata() {
     assert_eq!(raw.name(), "libscanned.so");
     assert_eq!(raw.soname(), Some("libscanned.so"));
     assert_eq!(raw.user_data().value, 42);
-    assert!(raw
-        .phdrs()
-        .iter()
-        .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC));
+    assert!(
+        raw.phdrs()
+            .iter()
+            .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
+    );
 }

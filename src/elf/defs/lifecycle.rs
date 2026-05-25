@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 ///
 /// The loader stores target addresses here rather than host function pointers.
 /// Native handlers may convert those addresses into callable function pointers;
-/// emulators can execute the same addresses in the guest environment.
+/// guest runtimes can execute the same addresses in their own environment.
 #[derive(Clone, Debug, Default)]
 pub struct Lifecycle {
     funcs: Vec<VmAddr>,

@@ -3,12 +3,9 @@ use crate::{
     image::{ModuleHandle, ModuleScope},
     observer::RelocationObserver,
     relocation::{
-        BindingMode, EmulatedArch, Emulator, Relocatable, RelocateArgs, RelocationArch,
-        RelocationHandler, SupportLazy,
+        BindingMode, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, SupportLazy,
     },
-    sync::Arc,
 };
-use alloc::boxed::Box;
 use core::marker::PhantomData;
 
 /// A builder for configuring and executing relocation.
@@ -58,7 +55,6 @@ pub struct Relocator<
     post_handler: PostH,
     observer: Obs,
     binding: BindingMode,
-    emu: Option<Arc<dyn Emulator<Arch>>>,
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
@@ -78,7 +74,6 @@ where
             post_handler: self.post_handler.clone(),
             observer: self.observer.clone(),
             binding: self.binding,
-            emu: self.emu.clone(),
             _marker: PhantomData,
         }
     }
@@ -94,7 +89,6 @@ impl Relocator<(), (), (), ()> {
             post_handler: (),
             observer: (),
             binding: BindingMode::Default,
-            emu: None,
             _marker: PhantomData,
         }
     }
@@ -110,7 +104,6 @@ impl<Arch: RelocationArch> Relocator<(), (), (), (), Arch> {
             post_handler: self.post_handler,
             observer: self.observer,
             binding: self.binding,
-            emu: None,
             _marker: PhantomData,
         }
     }
@@ -172,7 +165,6 @@ where
             post_handler: self.post_handler,
             observer: self.observer,
             binding: self.binding,
-            emu: None,
             _marker: PhantomData,
         }
     }
@@ -195,7 +187,6 @@ where
             post_handler: self.post_handler,
             observer: self.observer,
             binding: self.binding,
-            emu: self.emu,
             _marker: PhantomData,
         }
     }
@@ -218,7 +209,6 @@ where
             post_handler: handler,
             observer: self.observer,
             binding: self.binding,
-            emu: self.emu,
             _marker: PhantomData,
         }
     }
@@ -235,7 +225,6 @@ where
             post_handler: self.post_handler,
             observer,
             binding: self.binding,
-            emu: self.emu,
             _marker: PhantomData,
         }
     }
@@ -250,31 +239,6 @@ where
     /// Updates the relocation binding mode in place.
     pub fn set_binding(&mut self, binding: BindingMode) {
         self.binding = binding;
-    }
-}
-
-impl<T, PreH, PostH, D: 'static, Arch, Obs> Relocator<T, PreH, PostH, D, Arch, Obs>
-where
-    Arch: EmulatedArch,
-{
-    /// Sets the emulator used for non-native runtime hooks.
-    ///
-    /// This method is available only for non-native target architectures.
-    pub fn emulator<E>(mut self, emu: E) -> Self
-    where
-        E: Emulator<Arch>,
-    {
-        self.emu = Some(Arc::from(Box::new(emu) as Box<dyn Emulator<Arch>>));
-        self
-    }
-
-    /// Alias for [`Relocator::emulator`].
-    #[inline]
-    pub fn emu<E>(self, emu: E) -> Self
-    where
-        E: Emulator<Arch>,
-    {
-        self.emulator(emu)
     }
 }
 
@@ -296,9 +260,9 @@ where
     /// [`crate::arch::NativeArch`] (the default) and run target init arrays,
     /// IFUNC resolvers,
     /// lazy-binding trampolines, and TLS resolver stubs as usual;
-    /// cross-architecture images avoid host execution of target code; attach an
-    /// [`Emulator`](crate::relocation::Emulator) when guest runtime hooks such
-    /// as IFUNC, TLSDESC, and lifecycle callbacks must be executed.
+    /// cross-architecture images avoid host execution of target code; attach a
+    /// [`RelocationObserver`](crate::observer::RelocationObserver) that handles
+    /// binding and lifecycle events when guest runtime hooks must be executed.
     pub fn relocate(self) -> Result<T::Output> {
         let Self {
             object,
@@ -307,7 +271,6 @@ where
             post_handler,
             mut observer,
             binding,
-            emu,
             _marker,
         } = self;
 
@@ -317,7 +280,6 @@ where
             &pre_handler,
             &post_handler,
             &mut observer,
-            emu,
         ))
     }
 }
