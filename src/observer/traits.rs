@@ -1,7 +1,7 @@
 use super::{
     DtDebugEntry, IfuncBindingEvent, LifecycleEvent, LinkActivity, ModuleRelocatedEvent,
     ProgramHeaderEvent, ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
-    TlsDescBindingEvent,
+    SymbolBindingEvent, TlsDescBindingEvent,
 };
 use crate::{Result, arch::NativeArch, os::RegionAccess, relocation::RelocationArch};
 use alloc::boxed::Box;
@@ -36,6 +36,15 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     /// Called before lifecycle functions are executed or recorded for finalization.
     #[inline]
     fn on_lifecycle<R: RegionAccess>(&mut self, _event: &mut LifecycleEvent<'_, R>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called when a regular symbol relocation needs runtime binding.
+    #[inline]
+    fn on_symbol_binding<D: 'static, R: RegionAccess>(
+        &mut self,
+        _event: &mut SymbolBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -131,6 +140,14 @@ where
     #[inline]
     fn on_lifecycle<R: RegionAccess>(&mut self, event: &mut LifecycleEvent<'_, R>) -> Result<()> {
         (**self).on_lifecycle(event)
+    }
+
+    #[inline]
+    fn on_symbol_binding<D: 'static, R: RegionAccess>(
+        &mut self,
+        event: &mut SymbolBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
+        (**self).on_symbol_binding(event)
     }
 
     #[inline]
@@ -241,6 +258,14 @@ where
     #[inline]
     fn on_lifecycle<R: RegionAccess>(&mut self, event: &mut LifecycleEvent<'_, R>) -> Result<()> {
         (**self).on_lifecycle(event)
+    }
+
+    #[inline]
+    fn on_symbol_binding<D: 'static, R: RegionAccess>(
+        &mut self,
+        event: &mut SymbolBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
+        (**self).on_symbol_binding(event)
     }
 
     #[inline]

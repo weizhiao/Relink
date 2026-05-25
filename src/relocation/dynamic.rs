@@ -242,7 +242,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                 continue;
             }
             let r_type = rel.r_type();
-            let r_sym = rel.r_symbol();
             let place = base + rel.r_offset();
             let mut failure_reason = RelocReason::Unsupported;
 
@@ -252,7 +251,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                     continue;
                 }
 
-                if let Some(symbol) = helper.find_symbol(r_sym) {
+                if let Some(symbol) = helper.find_symbol(rel)? {
                     write_reloc_addr::<Arch, R>(segments, place, symbol)?;
                     continue;
                 }
@@ -387,7 +386,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
             if r_type == Arch::GOT || r_type == Arch::SYMBOLIC {
                 // Handle GOT and symbolic relocations
-                if let Some(symbol) = helper.find_symbol(r_sym) {
+                if let Some(symbol) = helper.find_symbol(rel)? {
                     let r_addend = rel.r_addend(base);
                     write_reloc_addr::<Arch, R>(
                         segments,

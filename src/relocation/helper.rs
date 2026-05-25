@@ -1,10 +1,10 @@
 use super::resolve_ifunc;
 use crate::{
     Error, RelocReason, Result,
-    elf::{ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo, SymbolTable},
+    elf::{ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo},
     image::{ElfCore, Module, ModuleScope},
     logging,
-    observer::{IfuncBindingEvent, RelocationObserver},
+    observer::{IfuncBindingEvent, RelocationObserver, SymbolBindingEvent},
     os::{RegionAccess, VmAddr, VmOffset},
     relocate_context_error,
     relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
@@ -73,14 +73,13 @@ where
     }
 
     #[inline]
-    pub(crate) fn find_symbol(&mut self, r_sym: usize) -> Option<VmAddr> {
-        find_symbol_addr(
-            self.core,
-            self.core.symtab(),
-            &self.scope,
-            r_sym,
-            self.tls_get_addr,
-        )
+    pub(crate) fn find_symbol(&mut self, rel: &ElfRelType<Arch>) -> Result<Option<VmAddr>> {
+        let (dynsym, syminfo) = self.core.symtab().symbol_idx(rel.r_symbol());
+        let resolved =
+            find_symbol_addr(self.core, &self.scope, dynsym, &syminfo, self.tls_get_addr);
+        let mut event = SymbolBindingEvent::new(self.core, rel, dynsym, syminfo.name(), resolved);
+        self.observer.on_symbol_binding(&mut event)?;
+        Ok(event.into_resolved_addr())
     }
 
     #[inline]
@@ -239,16 +238,15 @@ where
 #[inline]
 fn find_symbol_addr<D, Arch>(
     core: &ElfCore<D, Arch, impl RegionAccess>,
-    symtab: &SymbolTable<Arch::Layout>,
     scope: &ModuleScope<Arch>,
-    r_sym: usize,
+    dynsym: &ElfSymbol<Arch::Layout>,
+    syminfo: &SymbolInfo<'_>,
     tls_get_addr: VmAddr,
 ) -> Option<VmAddr>
 where
     Arch: RelocationArch,
     D: 'static,
 {
-    let (dynsym, syminfo) = symtab.symbol_idx(r_sym);
     if Arch::SUPPORTS_NATIVE_RUNTIME
         && let Some(addr) = lookup_tls_get_addr(syminfo.name(), tls_get_addr)
     {

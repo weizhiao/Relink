@@ -81,10 +81,9 @@ impl X86_64Arch {
         let base = core.base();
         let append = rel.r_addend(base);
         let place = base + rel.r_offset();
-        let unknown_symbol = || {
-            reloc_error::<Self, _, HostRegion>(rel, crate::RelocReason::UnknownSymbol, helper.core)
-        };
-        let value_error = |reason| reloc_error::<Self, _, HostRegion>(rel, reason, helper.core);
+        let unknown_symbol =
+            || reloc_error::<Self, _, HostRegion>(rel, crate::RelocReason::UnknownSymbol, core);
+        let value_error = |reason| reloc_error::<Self, _, HostRegion>(rel, reason, core);
         let relocation_target_value = |target| {
             Self::object_relocation_value(r_type.raw() as usize, target, append, place.get())
         };
@@ -99,19 +98,19 @@ impl X86_64Arch {
         match r_type.raw() {
             R_X86_64_NONE => {}
             R_X86_64_64 => {
-                let Some(sym) = helper.find_symbol(r_sym) else {
+                let Some(sym) = helper.find_symbol(rel)? else {
                     return Err(unknown_symbol());
                 };
                 write_relocation_target(sym.get())?;
             }
             R_X86_64_PC32 => {
-                let Some(sym) = helper.find_symbol(r_sym) else {
+                let Some(sym) = helper.find_symbol(rel)? else {
                     return Err(unknown_symbol());
                 };
                 write_relocation_target(sym.get())?;
             }
             R_X86_64_PLT32 => {
-                let Some(sym) = helper.find_symbol(r_sym) else {
+                let Some(sym) = helper.find_symbol(rel)? else {
                     return Err(unknown_symbol());
                 };
                 match relocation_target_value(sym.get()) {
@@ -141,7 +140,7 @@ impl X86_64Arch {
                 }
             }
             R_X86_64_GOTPCREL => {
-                let Some(sym) = helper.find_symbol(r_sym) else {
+                let Some(sym) = helper.find_symbol(rel)? else {
                     return Err(unknown_symbol());
                 };
                 let got_entry = pltgot.add_got_entry(r_sym);
@@ -155,13 +154,13 @@ impl X86_64Arch {
                 write_relocation_target(got_entry_addr.get())?;
             }
             R_X86_64_32 => {
-                let Some(sym) = helper.find_symbol(r_sym) else {
+                let Some(sym) = helper.find_symbol(rel)? else {
                     return Err(unknown_symbol());
                 };
                 write_relocation_target(sym.get())?;
             }
             R_X86_64_32S => {
-                let Some(sym) = helper.find_symbol(r_sym) else {
+                let Some(sym) = helper.find_symbol(rel)? else {
                     return Err(unknown_symbol());
                 };
                 write_relocation_target(sym.get())?;
