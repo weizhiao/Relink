@@ -2,8 +2,6 @@ use elf_loader::{Loader, Result};
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
-    env_logger::init();
-
     // 调试：打印当前工作目录
     let cwd = std::env::current_dir().expect("Failed to get current directory");
     eprintln!("Current working directory: {:?}", cwd);

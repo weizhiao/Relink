@@ -33,10 +33,6 @@ use crate::{RelocReason, Result, os::HostRegion};
 pub trait ObjectRelocationArch: RelocationArch {
     type ObjectRelocationState: Default;
 
-    /// Whether relocatable-object relocation sites may be less aligned than the
-    /// typed value being patched.
-    const OBJECT_RELOCATION_ALLOWS_UNALIGNED_ACCESS: bool = false;
-
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
     fn prepare_object_relocation<D, PreH, PostH, Obs>(

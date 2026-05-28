@@ -3,12 +3,8 @@
 use elf::abi::*;
 
 use crate::arch::ArchKind;
-#[cfg(feature = "object")]
-use crate::arch::object::ObjectRelocationArch;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
-#[cfg(feature = "object")]
-use crate::{Result, os::HostRegion};
 
 /// RISC-V 64-bit architecture marker.
 #[derive(Debug, Clone, Copy, Default)]
@@ -76,56 +72,6 @@ impl RelocationArch for RiscV64Arch {
             R_RISCV_RVC_JUMP => "R_RISCV_RVC_JUMP",
             _ => "UNKNOWN",
         }
-    }
-}
-
-#[cfg(feature = "object")]
-impl ObjectRelocationArch for RiscV64Arch {
-    type ObjectRelocationState = super::object::RiscV64ObjectRelocationState;
-
-    const OBJECT_RELOCATION_ALLOWS_UNALIGNED_ACCESS: bool = true;
-
-    #[allow(private_bounds)]
-    #[allow(private_interfaces)]
-    fn prepare_object_relocation<D, PreH, PostH, Obs>(
-        state: &mut Self::ObjectRelocationState,
-        helper: &mut crate::relocation::RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
-        sections: &[&'static [crate::elf::ElfRelType<Self>]],
-    ) -> Result<()>
-    where
-        D: 'static,
-        PreH: crate::relocation::RelocationHandler<Self> + ?Sized,
-        PostH: crate::relocation::RelocationHandler<Self> + ?Sized,
-        Obs: crate::observer::RelocationObserver<Self> + ?Sized,
-    {
-        Self::prepare_object_relocation_impl(state, helper, sections)
-    }
-
-    #[allow(private_bounds)]
-    #[allow(private_interfaces)]
-    fn relocate_object<D, PreH, PostH, Obs>(
-        state: &mut Self::ObjectRelocationState,
-        helper: &mut crate::relocation::RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
-        rel: &crate::elf::ElfRelType<Self>,
-        pltgot: &mut crate::object::layout::PltGotSection,
-    ) -> Result<()>
-    where
-        D: 'static,
-        PreH: crate::relocation::RelocationHandler<Self> + ?Sized,
-        PostH: crate::relocation::RelocationHandler<Self> + ?Sized,
-        Obs: crate::observer::RelocationObserver<Self> + ?Sized,
-    {
-        Self::relocate_object_impl(state, helper, rel, pltgot)
-    }
-
-    #[inline]
-    fn object_needs_got(r_type: ElfRelocationType) -> bool {
-        Self::object_needs_got_impl(r_type)
-    }
-
-    #[inline]
-    fn object_needs_plt(r_type: ElfRelocationType) -> bool {
-        Self::object_needs_plt_impl(r_type)
     }
 }
 

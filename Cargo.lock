@@ -303,6 +303,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "elf_loader-riscv64-tests"
+version = "0.15.1"
+dependencies = [
+ "elf_loader",
+]
+
+[[package]]
 name = "env_filter"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

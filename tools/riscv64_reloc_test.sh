@@ -5,6 +5,7 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 CARGO_OUTPUT_DIR=${CARGO_TARGET_DIR:-"$ROOT_DIR/target"}
 TEST_ROOT=${ELF_TEST_DIR:-"$ROOT_DIR"}
 OUT_DIR="$TEST_ROOT/target/riscv64-test"
+TEST_CRATE_MANIFEST="$ROOT_DIR/tests/riscv64/Cargo.toml"
 SYSROOT=${RISCV64_SYSROOT:-/usr/riscv64-linux-gnu}
 LINKER=${RISCV64_LINKER:-riscv64-linux-gnu-gcc}
 AR=${RISCV64_AR:-riscv64-linux-gnu-ar}
@@ -44,17 +45,17 @@ mkdir -p "$OUT_DIR"
 
 echo "Compiling comprehensive RISC-V relocation tests..."
 
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/fixtures/riscv64/a.c" -o "$OUT_DIR/a.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/fixtures/riscv64/b.c" -o "$OUT_DIR/b.o"
+"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/a.c" -o "$OUT_DIR/a.o"
+"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/b.c" -o "$OUT_DIR/b.o"
 
 # 编译所有测试模块
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/fixtures/riscv64/test_call.c" -o "$OUT_DIR/test_call.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/fixtures/riscv64/test_globals.c" -o "$OUT_DIR/test_globals.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/fixtures/riscv64/test_branches.c" -o "$OUT_DIR/test_branches.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/fixtures/riscv64/test_hi_lo.c" -o "$OUT_DIR/test_hi_lo.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/fixtures/riscv64/test_pointers.c" -o "$OUT_DIR/test_pointers.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/fixtures/riscv64/test_32bit.c" -o "$OUT_DIR/test_32bit.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/fixtures/riscv64/test_main.c" -o "$OUT_DIR/test_main.o"
+"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_call.c" -o "$OUT_DIR/test_call.o"
+"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_globals.c" -o "$OUT_DIR/test_globals.o"
+"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_branches.c" -o "$OUT_DIR/test_branches.o"
+"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_hi_lo.c" -o "$OUT_DIR/test_hi_lo.o"
+"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_pointers.c" -o "$OUT_DIR/test_pointers.o"
+"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_32bit.c" -o "$OUT_DIR/test_32bit.o"
+"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_main.c" -o "$OUT_DIR/test_main.o"
 
 echo "Compiled all test modules successfully!"
 echo ""
@@ -94,7 +95,7 @@ build_test_exe() {
     CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUSTFLAGS="$RUSTFLAGS" \
     CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER="$LINKER" \
     CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_AR="$AR" \
-    "$CARGO" test --features object,log,riscv64-tests $BUILD_STD_ARGS --test "$name" \
+    "$CARGO" test --manifest-path "$TEST_CRATE_MANIFEST" $BUILD_STD_ARGS --test "$name" \
       --target riscv64gc-unknown-linux-gnu --no-run --message-format=json | \
     awk -v name="$name" 'index($0, "\"name\":\"" name "\"") && index($0, "\"executable\"") { match($0, /"executable":"([^"]+)"/, m); if (m[1] != "") { print m[1]; } }' | \
     tail -n 1)

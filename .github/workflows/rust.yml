@@ -67,7 +67,7 @@ jobs:
     - env:
         TARGET: ${{ matrix.target }}
         CHANNEL: ${{ matrix.channel }}
-        FEATURES: ${{ matrix.features }}${{ matrix.target == 'riscv64gc-unknown-linux-gnu' && ',riscv64-tests' || '' }}
+        FEATURES: ${{ matrix.features }}
         OP: test
       run: sh ci/run.sh
     strategy:

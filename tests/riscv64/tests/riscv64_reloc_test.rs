@@ -2,8 +2,6 @@ use elf_loader::{Loader, Result};
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
-    env_logger::init();
-
     let base_dir = if let Ok(dir) = std::env::var("ELF_TEST_DIR") {
         PathBuf::from(dir)
     } else {

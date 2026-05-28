@@ -51,6 +51,23 @@ pub trait RegionAccess: Send + Sync + 'static {
         Ok(unsafe { value.assume_init() })
     }
 
+    /// Reads one typed value without requiring alignment.
+    ///
+    /// The returned error represents backend access failure; it is not a
+    /// substitute for range validation.
+    ///
+    /// # Safety
+    /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region.
+    #[inline]
+    unsafe fn read_unaligned_value<T: ByteRepr>(&self, offset: usize) -> Result<T> {
+        let mut value = MaybeUninit::<T>::uninit();
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
+        };
+        unsafe { self.read_bytes(offset, bytes)? };
+        Ok(unsafe { value.assume_init() })
+    }
+
     /// Writes bytes without checking bounds.
     ///
     /// The returned error represents backend access failure; it is not a
@@ -70,6 +87,21 @@ pub trait RegionAccess: Send + Sync + 'static {
     /// and `offset` is aligned for `T`.
     #[inline]
     unsafe fn write_value<T: ByteRepr>(&self, offset: usize, value: T) -> Result<()> {
+        let bytes = unsafe {
+            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
+        };
+        unsafe { self.write_bytes(offset, bytes) }
+    }
+
+    /// Writes one typed value without requiring alignment.
+    ///
+    /// The returned error represents backend access failure; it is not a
+    /// substitute for range validation.
+    ///
+    /// # Safety
+    /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region.
+    #[inline]
+    unsafe fn write_unaligned_value<T: ByteRepr>(&self, offset: usize, value: T) -> Result<()> {
         let bytes = unsafe {
             core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
         };
