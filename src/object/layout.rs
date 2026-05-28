@@ -3,8 +3,8 @@ use crate::{
     arch::object::{PLT_ENTRY, PLT_ENTRY_SIZE},
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionType, ElfShdr},
     input::ElfReader,
-    os::{MapFlags, Mmap, ProtFlags, VmAddr, VmOffset, rounddown, roundup},
-    relocation::RelocationArch,
+    os::{MapFlags, Mapper, ProtFlags, VmAddr, VmOffset, rounddown, roundup},
+    relocation::ObjectRelocationArch,
     segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder},
 };
 use alloc::vec::Vec;
@@ -23,7 +23,7 @@ pub(crate) fn section_prot(sh_flags: ElfSectionFlags) -> ProtFlags {
 }
 
 /// Manages segments created from ELF section headers
-pub(crate) struct SectionSegments<Arch: RelocationArch = crate::arch::NativeArch> {
+pub(crate) struct SectionSegments<Arch: ObjectRelocationArch = crate::arch::NativeArch> {
     segments: Vec<ElfSegment>,
     total_size: usize,
     pltgot: Option<PltGotSection>,
@@ -39,11 +39,8 @@ fn flags_to_idx(flags: ElfSectionFlags) -> usize {
     prot_to_idx(section_prot(flags))
 }
 
-impl<Arch: RelocationArch> SegmentBuilder for SectionSegments<Arch> {
-    fn create_space<M>(&mut self, mapper: &M) -> Result<ElfSegments<M::Region>>
-    where
-        M: Mmap + ?Sized,
-    {
+impl<Arch: ObjectRelocationArch> SegmentBuilder for SectionSegments<Arch> {
+    fn create_space(&mut self, mapper: Mapper) -> Result<ElfSegments> {
         let len = self.total_size;
         let region = unsafe {
             mapper.create_space(
@@ -70,7 +67,7 @@ impl<Arch: RelocationArch> SegmentBuilder for SectionSegments<Arch> {
     }
 }
 
-impl<Arch: RelocationArch> SectionSegments<Arch> {
+impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
     pub(crate) fn new(
         shdrs: &mut [ElfShdr<Arch::Layout>],
         object: &mut impl ElfReader,
@@ -146,7 +143,7 @@ pub(crate) enum PltEntry<'plt> {
 }
 
 impl PltGotSection {
-    fn count_needed_entries<Arch: RelocationArch>(
+    fn count_needed_entries<Arch: ObjectRelocationArch>(
         shdrs: &[ElfShdr<Arch::Layout>],
         object: &mut impl ElfReader,
     ) -> Result<(usize, usize)> {

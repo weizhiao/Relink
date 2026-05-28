@@ -4,11 +4,9 @@ use crate::{
     relocation::RelocValue,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{
-    fmt::Debug,
-    mem::{MaybeUninit, size_of},
-    ptr::NonNull,
-};
+#[cfg(feature = "object")]
+use core::mem::MaybeUninit;
+use core::{fmt::Debug, mem::size_of, ptr::NonNull};
 
 #[derive(Clone, Copy)]
 struct MappedRange {
@@ -350,7 +348,7 @@ impl<R: RegionAccess> ElfSegments<R> {
         val: RelocValue<T>,
     ) -> Result<()>
     where
-        Arch: crate::relocation::RelocationArch,
+        Arch: crate::arch::object::ObjectRelocationArch,
         T: ByteRepr,
     {
         let value = val.into_inner();
@@ -369,7 +367,7 @@ impl<R: RegionAccess> ElfSegments<R> {
         update: impl FnOnce(T) -> T,
     ) -> Result<()>
     where
-        Arch: crate::relocation::RelocationArch,
+        Arch: crate::arch::object::ObjectRelocationArch,
         T: ByteRepr + Copy,
     {
         if Arch::OBJECT_RELOCATION_ALLOWS_UNALIGNED_ACCESS {

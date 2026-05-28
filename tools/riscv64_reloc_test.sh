@@ -15,8 +15,15 @@ BUILD_STD_ARGS=${RISCV64_BUILD_STD_ARGS:-"-Z build-std=std,panic_unwind"}
 CLANG=${RISCV64_CLANG:-clang}
 LLD=${RISCV64_LLD:-ld.lld}
 USE_LLD=${RISCV64_USE_LLD:-1}
+IS_CROSS=0
 
-if [ "$USE_LLD" = "1" ] && command -v "$CLANG" >/dev/null 2>&1 && command -v "$LLD" >/dev/null 2>&1; then
+case "$CARGO" in
+  cross|*/cross)
+    IS_CROSS=1
+    ;;
+esac
+
+if [ "$IS_CROSS" = "0" ] && [ "$USE_LLD" = "1" ] && command -v "$CLANG" >/dev/null 2>&1 && command -v "$LLD" >/dev/null 2>&1; then
   LINKER="$CLANG"
   GCC_LIB_PATH="/usr/lib/gcc-cross/riscv64-linux-gnu/14"
   CFLAGS="$CFLAGS --target=riscv64-linux-gnu --sysroot=$SYSROOT -fuse-ld=lld -L$GCC_LIB_PATH"
@@ -69,6 +76,18 @@ echo "========================================"
 echo ""
 
 cd "$ROOT_DIR"
+resolve_test_exe() {
+  exe="$1"
+  case "$exe" in
+    /target/*)
+      printf '%s\n' "$CARGO_OUTPUT_DIR${exe#/target}"
+      ;;
+    *)
+      printf '%s\n' "$exe"
+      ;;
+  esac
+}
+
 build_test_exe() {
   name="$1"
   exe=$(RUSTFLAGS="$RUSTFLAGS" \
@@ -85,7 +104,7 @@ build_test_exe() {
     exit 1
   fi
 
-  printf '%s\n' "$exe"
+  resolve_test_exe "$exe"
 }
 
 echo "Building Rust test binaries..."

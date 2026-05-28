@@ -3,6 +3,8 @@
 use elf::abi::*;
 
 use crate::arch::ArchKind;
+#[cfg(feature = "object")]
+use crate::arch::object::ObjectRelocationArch;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
 #[cfg(feature = "object")]
@@ -75,15 +77,14 @@ impl RelocationArch for RiscV64Arch {
             _ => "UNKNOWN",
         }
     }
+}
 
-    #[cfg(feature = "object")]
+#[cfg(feature = "object")]
+impl ObjectRelocationArch for RiscV64Arch {
     type ObjectRelocationState = super::object::RiscV64ObjectRelocationState;
 
-    #[cfg(feature = "object")]
     const OBJECT_RELOCATION_ALLOWS_UNALIGNED_ACCESS: bool = true;
 
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
     fn prepare_object_relocation<D, PreH, PostH, Obs>(
@@ -100,8 +101,6 @@ impl RelocationArch for RiscV64Arch {
         Self::prepare_object_relocation_impl(state, helper, sections)
     }
 
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
     fn relocate_object<D, PreH, PostH, Obs>(
@@ -119,15 +118,11 @@ impl RelocationArch for RiscV64Arch {
         Self::relocate_object_impl(state, helper, rel, pltgot)
     }
 
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
     #[inline]
     fn object_needs_got(r_type: ElfRelocationType) -> bool {
         Self::object_needs_got_impl(r_type)
     }
 
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
     #[inline]
     fn object_needs_plt(r_type: ElfRelocationType) -> bool {
         Self::object_needs_plt_impl(r_type)

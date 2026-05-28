@@ -3,6 +3,8 @@
 use elf::abi::EM_386;
 
 use crate::arch::ArchKind;
+#[cfg(feature = "object")]
+use crate::arch::object::ObjectRelocationArch;
 use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
@@ -58,8 +60,10 @@ impl RelocationArch for X86Arch {
             _ => "UNKNOWN",
         }
     }
+}
 
-    #[cfg(feature = "object")]
+#[cfg(feature = "object")]
+impl ObjectRelocationArch for X86Arch {
     type ObjectRelocationState = ();
 }
 

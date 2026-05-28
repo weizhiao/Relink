@@ -1,12 +1,10 @@
-#[cfg(feature = "object")]
-use super::RelocHelper;
 use super::{RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
+#[cfg(feature = "object")]
+use super::{RelocHelper, reloc_error};
 use crate::{
     ByteRepr, RelocReason, Result,
     arch::{ArchKind, NativeArch},
-    elf::{
-        ElfHashTable, ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType, HashTable,
-    },
+    elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType},
     image::{ElfCore, ModuleScope},
     observer::RelocationObserver,
     os::{HostRegion, RegionAccess, VmAddr},
@@ -69,12 +67,6 @@ pub trait RelocationArch: 'static {
     /// Cross-architecture implementations normally leave this as `false`.
     const SUPPORTS_NATIVE_RUNTIME: bool = false;
 
-    /// Whether relocatable-object relocation sites may be less aligned than the
-    /// typed value being patched.
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
-    const OBJECT_RELOCATION_ALLOWS_UNALIGNED_ACCESS: bool = false;
-
     /// Returns whether `r_type` is this architecture's TLSDESC relocation.
     #[inline]
     fn is_tlsdesc(r_type: ElfRelocationType) -> bool {
@@ -95,25 +87,24 @@ pub trait RelocationArch: 'static {
     fn rel_type_to_str(_r_type: ElfRelocationType) -> &'static str {
         "UNKNOWN"
     }
+}
 
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
+/// Object-file (`ET_REL`) relocation support layered on top of [`RelocationArch`].
+#[cfg(feature = "object")]
+#[doc(hidden)]
+pub trait ObjectRelocationArch: RelocationArch {
     type ObjectRelocationState: Default;
 
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn prepare_object_relocation<D, R, PreH, PostH, Obs, H>(
+    fn prepare_object_relocation<D, PreH, PostH, Obs>(
         _state: &mut Self::ObjectRelocationState,
-        _helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
+        _helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
         _sections: &[&'static [ElfRelType<Self>]],
     ) -> Result<()>
     where
         Self: Sized,
         D: 'static,
-        R: RegionAccess,
-        H: ElfHashTable<Self::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -121,30 +112,28 @@ pub trait RelocationArch: 'static {
         Ok(())
     }
 
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, R, PreH, PostH, Obs, H>(
+    fn relocate_object<D, PreH, PostH, Obs>(
         _state: &mut Self::ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
+        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
         rel: &ElfRelType<Self>,
         _pltgot: &mut crate::object::layout::PltGotSection,
     ) -> Result<()>
     where
         Self: Sized,
         D: 'static,
-        R: RegionAccess,
-        H: ElfHashTable<Self::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
     {
-        Err(super::reloc_error(rel, RelocReason::Unsupported, helper.core))
+        Err(reloc_error::<Self, _, HostRegion>(
+            rel,
+            RelocReason::Unsupported,
+            helper.core,
+        ))
     }
 
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
     #[inline]
     fn object_needs_got(_r_type: ElfRelocationType) -> bool
     where
@@ -153,8 +142,6 @@ pub trait RelocationArch: 'static {
         false
     }
 
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
     #[inline]
     fn object_needs_plt(_r_type: ElfRelocationType) -> bool
     where
@@ -163,6 +150,13 @@ pub trait RelocationArch: 'static {
         false
     }
 }
+
+#[cfg(not(feature = "object"))]
+#[doc(hidden)]
+pub trait ObjectRelocationArch: RelocationArch {}
+
+#[cfg(not(feature = "object"))]
+impl<T: RelocationArch> ObjectRelocationArch for T {}
 
 pub(crate) trait RelocationValueProvider {
     fn relocation_value_kind(
@@ -211,22 +205,18 @@ pub(crate) trait RelocationValueProvider {
 /// # Examples
 ///
 /// ```rust
-/// use elf_loader::arch::NativeArch;
-/// use elf_loader::elf::{ElfHashTable, ElfRelocationType};
+/// use elf_loader::elf::ElfRelocationType;
 /// use elf_loader::os::RegionAccess;
-/// use elf_loader::relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler};
+/// use elf_loader::relocation::{HandleResult, RelocationContext, RelocationHandler};
 /// use elf_loader::Result;
 ///
 /// struct CustomHandler;
 ///
 /// impl RelocationHandler for CustomHandler {
-///     fn handle<D: 'static, R: RegionAccess, H>(
+///     fn handle<D: 'static, R: RegionAccess>(
 ///         &self,
-///         ctx: &RelocationContext<'_, D, NativeArch, R, H>,
-///     ) -> Result<HandleResult>
-///     where
-///         H: ElfHashTable<<NativeArch as RelocationArch>::Layout> + 'static,
-///     {
+///         ctx: &RelocationContext<'_, D, elf_loader::arch::NativeArch, R>,
+///     ) -> Result<HandleResult> {
 ///         let rel = ctx.rel();
 ///         // Handle specific relocation types
 ///         match rel.r_type() {
@@ -266,12 +256,10 @@ pub trait RelocationHandler<Arch: RelocationArch = NativeArch> {
     /// * `Ok(HandleResult::Unhandled)` - Not handled, fall through to default behavior.
     /// * `Ok(HandleResult::Handled)` - Handled successfully.
     /// * `Err(e)` - The handler failed.
-    fn handle<D: 'static, R: RegionAccess, H>(
+    fn handle<D: 'static, R: RegionAccess>(
         &self,
-        ctx: &RelocationContext<'_, D, Arch, R, H>,
-    ) -> Result<HandleResult>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static;
+        ctx: &RelocationContext<'_, D, Arch, R>,
+    ) -> Result<HandleResult>;
 }
 
 /// Context passed to [`RelocationHandler::handle`].
@@ -283,22 +271,18 @@ pub struct RelocationContext<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
     rel: &'a ElfRelType<Arch>,
-    lib: &'a ElfCore<D, Arch, R, H>,
+    lib: &'a ElfCore<D, Arch, R>,
     scope: &'a ModuleScope<Arch>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H> RelocationContext<'a, D, Arch, R, H>
-where
-    H: ElfHashTable<Arch::Layout> + 'static,
-{
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> RelocationContext<'a, D, Arch, R> {
     /// Construct a new `RelocationContext`.
     #[inline]
     pub(crate) fn new(
         rel: &'a ElfRelType<Arch>,
-        lib: &'a ElfCore<D, Arch, R, H>,
+        lib: &'a ElfCore<D, Arch, R>,
         scope: &'a ModuleScope<Arch>,
     ) -> Self {
         Self { rel, lib, scope }
@@ -312,7 +296,7 @@ where
 
     /// Access the core component where the relocation appears.
     #[inline]
-    pub fn lib(&self) -> &ElfCore<D, Arch, R, H> {
+    pub fn lib(&self) -> &ElfCore<D, Arch, R> {
         self.lib
     }
 
@@ -332,61 +316,46 @@ where
 }
 
 impl<Arch: RelocationArch> RelocationHandler<Arch> for () {
-    fn handle<D: 'static, R: RegionAccess, H>(
+    fn handle<D: 'static, R: RegionAccess>(
         &self,
-        _ctx: &RelocationContext<'_, D, Arch, R, H>,
-    ) -> Result<HandleResult>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static,
-    {
+        _ctx: &RelocationContext<'_, D, Arch, R>,
+    ) -> Result<HandleResult> {
         Ok(HandleResult::Unhandled)
     }
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for &H {
-    fn handle<D: 'static, R: RegionAccess, Hash>(
+    fn handle<D: 'static, R: RegionAccess>(
         &self,
-        ctx: &RelocationContext<'_, D, Arch, R, Hash>,
-    ) -> Result<HandleResult>
-    where
-        Hash: ElfHashTable<Arch::Layout> + 'static,
-    {
+        ctx: &RelocationContext<'_, D, Arch, R>,
+    ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for &mut H {
-    fn handle<D: 'static, R: RegionAccess, Hash>(
+    fn handle<D: 'static, R: RegionAccess>(
         &self,
-        ctx: &RelocationContext<'_, D, Arch, R, Hash>,
-    ) -> Result<HandleResult>
-    where
-        Hash: ElfHashTable<Arch::Layout> + 'static,
-    {
+        ctx: &RelocationContext<'_, D, Arch, R>,
+    ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for Box<H> {
-    fn handle<D: 'static, R: RegionAccess, Hash>(
+    fn handle<D: 'static, R: RegionAccess>(
         &self,
-        ctx: &RelocationContext<'_, D, Arch, R, Hash>,
-    ) -> Result<HandleResult>
-    where
-        Hash: ElfHashTable<Arch::Layout> + 'static,
-    {
+        ctx: &RelocationContext<'_, D, Arch, R>,
+    ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for Arc<H> {
-    fn handle<D: 'static, R: RegionAccess, Hash>(
+    fn handle<D: 'static, R: RegionAccess>(
         &self,
-        ctx: &RelocationContext<'_, D, Arch, R, Hash>,
-    ) -> Result<HandleResult>
-    where
-        Hash: ElfHashTable<Arch::Layout> + 'static,
-    {
+        ctx: &RelocationContext<'_, D, Arch, R>,
+    ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }

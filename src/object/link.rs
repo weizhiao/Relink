@@ -5,30 +5,26 @@ use crate::{
     logging,
     observer::default_lifecycle_executor,
     observer::{LifecycleEvent, LifecyclePhase, RelocationObserver},
-    os::RegionAccess,
-    relocation::{RelocHelper, RelocationArch, RelocationHandler},
+    relocation::{ObjectRelocationArch, RelocHelper, RelocationHandler},
 };
 
 use alloc::{boxed::Box, vec::Vec};
 
-pub(crate) struct ObjectRelocation<Arch: RelocationArch = crate::arch::NativeArch> {
+pub(crate) struct ObjectRelocation<Arch: ObjectRelocationArch = crate::arch::NativeArch> {
     sections: Box<[&'static [ElfRelType<Arch>]]>,
-    state: Arch::ObjectRelocationState,
 }
 
-impl<Arch: RelocationArch> ObjectRelocation<Arch> {
+impl<Arch: ObjectRelocationArch> ObjectRelocation<Arch> {
     pub(crate) fn new(sections: Vec<&'static [ElfRelType<Arch>]>) -> Self {
         Self {
             sections: sections.into_boxed_slice(),
-            state: Arch::ObjectRelocationState::default(),
         }
     }
 }
 
-impl<D: 'static, Arch, R> RawObject<D, Arch, R>
+impl<D: 'static, Arch> RawObject<D, Arch>
 where
-    Arch: RelocationArch,
-    R: RegionAccess,
+    Arch: ObjectRelocationArch,
 {
     pub(crate) fn relocate_impl<PreH, PostH, Obs>(
         mut self,
@@ -36,7 +32,7 @@ where
         pre_handler: &PreH,
         post_handler: &PostH,
         observer: &mut Obs,
-    ) -> Result<crate::image::LoadedCore<D, Arch, R, crate::object::CustomHash>>
+    ) -> Result<crate::image::LoadedCore<D, Arch>>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
@@ -52,14 +48,15 @@ where
             observer,
             self.core.tls_get_addr(),
         );
-        let ObjectRelocation { sections, state } = &mut self.relocation;
-        Arch::prepare_object_relocation(state, &mut helper, sections)?;
+        let sections = &self.relocation.sections;
+        let mut state = Arch::ObjectRelocationState::default();
+        Arch::prepare_object_relocation(&mut state, &mut helper, sections)?;
         for reloc in sections.iter() {
             for rel in *reloc {
                 if !helper.handle_pre(rel)?.is_unhandled() {
                     continue;
                 }
-                match Arch::relocate_object(state, &mut helper, rel, &mut self.pltgot) {
+                match Arch::relocate_object(&mut state, &mut helper, rel, &mut self.pltgot) {
                     Ok(()) => continue,
                     Err(err) => {
                         if helper.handle_post(rel)?.is_unhandled() {
@@ -77,7 +74,7 @@ where
         } = helper;
         self.core.set_tls_desc_args(tls_desc_args);
 
-        (self.mprotect)(self.core.segments())?;
+        (self.mprotect)()?;
 
         logging::trace!("[{}] Executing init functions", self.core.name());
         let mut event = LifecycleEvent::with_executor(

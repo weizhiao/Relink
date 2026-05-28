@@ -115,14 +115,16 @@ jobs:
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: nightly
-    - name: Install RISC-V tooling
+        components: rust-src
+    - name: Install RISC-V host tooling
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
-        rustup component add rust-src
+    - name: Install cross
+      run: cargo install --locked cross --git https://github.com/cross-rs/cross
     - name: Run RISC-V object relocation examples
       env:
-        RISCV64_USE_LLD: 0
+        CARGO: cross
       run: sh tools/riscv64_reloc_test.sh
 
   test-windows-loader:
