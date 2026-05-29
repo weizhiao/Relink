@@ -3,8 +3,10 @@ mod fixture_support;
 
 use elf_loader::{
     Loader, Result,
+    arch::NativeArch,
+    elf::ElfHashTable,
     os::RegionAccess,
-    relocation::{HandleResult, RelocationContext, RelocationHandler},
+    relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
 };
 
 struct MyRelocHandler;
@@ -14,10 +16,13 @@ fn my_print(s: &str) {
 }
 
 impl RelocationHandler for MyRelocHandler {
-    fn handle<D: 'static, R: RegionAccess>(
+    fn handle<D: 'static, R: RegionAccess, H>(
         &self,
-        ctx: &RelocationContext<'_, D, elf_loader::arch::NativeArch, R>,
-    ) -> Result<HandleResult> {
+        ctx: &RelocationContext<'_, D, NativeArch, R, H>,
+    ) -> Result<HandleResult>
+    where
+        H: ElfHashTable<<NativeArch as RelocationArch>::Layout> + 'static,
+    {
         let r_sym = ctx.rel().r_symbol();
         let symtab = ctx.lib().symtab();
         let (_, sym_info) = symtab.symbol_idx(r_sym);

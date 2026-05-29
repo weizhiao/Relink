@@ -14,7 +14,7 @@ use elf_loader::{
         },
     },
     observer::{LinkObserver, StagedDynamic},
-    os::{PageSize, VmAddr},
+    os::{PageSize, RegionAccess, VmAddr},
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
 use std::{boxed::Box, cell::RefCell, rc::Rc, vec::Vec};
@@ -137,9 +137,9 @@ impl KeyResolver<'static, &'static str> for MultiBinaryResolver {
 }
 
 impl LinkObserver for RecordingObserver {
-    fn on_staged_dynamic<K, D: 'static>(
+    fn on_staged_dynamic<K, D: 'static, R: RegionAccess>(
         &mut self,
-        event: StagedDynamic<'_, K, D>,
+        event: StagedDynamic<'_, K, D, elf_loader::arch::NativeArch, R>,
     ) -> elf_loader::Result<()> {
         assert!(event.mapped_len() > 0);
         self.events
@@ -150,9 +150,9 @@ impl LinkObserver for RecordingObserver {
 }
 
 impl LinkObserver for FailingObserver {
-    fn on_staged_dynamic<K, D: 'static>(
+    fn on_staged_dynamic<K, D: 'static, R: RegionAccess>(
         &mut self,
-        _event: StagedDynamic<'_, K, D>,
+        _event: StagedDynamic<'_, K, D, elf_loader::arch::NativeArch, R>,
     ) -> elf_loader::Result<()> {
         Err(elf_loader::Error::Custom(CustomError::Message(
             "observer failed".into(),
@@ -392,7 +392,7 @@ fn load_scan_first_supports_synthetic_dependencies() {
     let dep_module = context.get(dep_id).expect("synthetic dependency committed");
     assert_eq!(dep_module.name(), "dep");
     assert!(
-        dep_module.as_loaded::<()>().is_none(),
+        !dep_module.is_loaded(),
         "synthetic dependency should be retained as a module handle, not a loaded ELF"
     );
 

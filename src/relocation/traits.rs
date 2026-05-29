@@ -182,18 +182,22 @@ pub(crate) trait RelocationValueProvider {
 /// # Examples
 ///
 /// ```rust
-/// use elf_loader::elf::ElfRelocationType;
+/// use elf_loader::arch::NativeArch;
+/// use elf_loader::elf::{ElfHashTable, ElfRelocationType};
 /// use elf_loader::os::RegionAccess;
-/// use elf_loader::relocation::{HandleResult, RelocationContext, RelocationHandler};
+/// use elf_loader::relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler};
 /// use elf_loader::Result;
 ///
 /// struct CustomHandler;
 ///
 /// impl RelocationHandler for CustomHandler {
-///     fn handle<D: 'static, R: RegionAccess>(
+///     fn handle<D: 'static, R: RegionAccess, H>(
 ///         &self,
-///         ctx: &RelocationContext<'_, D, elf_loader::arch::NativeArch, R>,
-///     ) -> Result<HandleResult> {
+///         ctx: &RelocationContext<'_, D, NativeArch, R, H>,
+///     ) -> Result<HandleResult>
+///     where
+///         H: ElfHashTable<<NativeArch as RelocationArch>::Layout> + 'static,
+///     {
 ///         let rel = ctx.rel();
 ///         // Handle specific relocation types
 ///         match rel.r_type() {

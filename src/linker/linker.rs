@@ -25,13 +25,12 @@ use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
-use core::{marker::PhantomData, mem, ops::Deref};
+use core::{fmt, marker::PhantomData, mem, ops::Deref};
 
 /// Result of a successful linker load operation.
 ///
 /// `committed` contains the newly committed modules' [`KeyId`] values in load
 /// order.
-#[derive(Debug)]
 pub struct LoadResult<
     D: 'static,
     Arch: RelocationArch = crate::arch::NativeArch,
@@ -39,6 +38,19 @@ pub struct LoadResult<
 > {
     root: LoadedCore<D, Arch, R>,
     committed: Box<[KeyId]>,
+}
+
+impl<D: 'static, Arch, R> fmt::Debug for LoadResult<D, Arch, R>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoadResult")
+            .field("root", &self.root.name())
+            .field("committed", &self.committed)
+            .finish()
+    }
 }
 
 impl<D: 'static, Arch, R> LoadResult<D, Arch, R>

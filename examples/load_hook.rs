@@ -5,15 +5,16 @@ use elf_loader::{
     Loader, Result,
     arch::NativeArch,
     observer::{LoadObserver, ProgramHeaderEvent},
+    os::RegionAccess,
     relocation::RelocationArch,
 };
 
 struct PrintObserver;
 
 impl LoadObserver for PrintObserver {
-    fn on_program_header(
+    fn on_program_header<R: RegionAccess>(
         &mut self,
-        ctx: ProgramHeaderEvent<'_, <NativeArch as RelocationArch>::Layout>,
+        ctx: ProgramHeaderEvent<'_, <NativeArch as RelocationArch>::Layout, R>,
     ) -> Result<()> {
         println!("Loading segment for {}:", ctx.path());
         println!("  Type: {:?}", ctx.phdr().program_type());
