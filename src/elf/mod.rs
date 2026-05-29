@@ -22,9 +22,6 @@ pub mod write;
 // Internal module re-exports for use within the crate
 pub(crate) use defs::*;
 pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab, LifecycleSpec, parse_dynamic_entries};
-#[cfg(feature = "object")]
-pub(crate) use hash::ElfHashTable;
-pub(crate) use hash::HashTable;
 pub(crate) use phdr::ElfPhdrs;
 pub(crate) use shdr::ElfShdr;
 pub(crate) use symbol::ElfStringTable;
@@ -40,6 +37,7 @@ pub use dynamic::ElfDyn;
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::ElfHeader;
 pub use hash::PreCompute;
+pub use hash::{ElfHashTable, HashTable};
 pub use phdr::ElfPhdr;
 pub use symbol::{ElfSymbol, SymbolInfo, SymbolTable};
 

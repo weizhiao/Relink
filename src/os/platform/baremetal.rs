@@ -1,7 +1,7 @@
 use crate::{
     Result,
     input::{ElfReader, Path},
-    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, ProtFlags, VmAddr},
+    os::{HostRegion, MadviseAdvice, MapFlags, MappedRegion, Mmap, ProtFlags, VmAddr},
 };
 use alloc::alloc::{dealloc, handle_alloc_error};
 #[cfg(feature = "tls")]
@@ -30,13 +30,15 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
 }
 
 impl Mmap for DefaultMmap {
+    type Region = HostRegion;
+
     unsafe fn create_space(
         &self,
         addr: Option<VmAddr>,
         len: usize,
         _prot: ProtFlags,
         _populate_later: bool,
-    ) -> crate::Result<MappedRegion> {
+    ) -> crate::Result<MappedRegion<Self::Region>> {
         if let Some(addr) = addr {
             let ptr = addr.as_mut_ptr::<u8>();
             Ok(MappedRegion::local_alias(ptr as _, len, *self))
@@ -51,6 +53,10 @@ impl Mmap for DefaultMmap {
             //libc::mprotect(memory as _, len, crate::mmap::ProtFlags::all().bits());
             Ok(MappedRegion::local(memory as _, len, *self))
         }
+    }
+
+    unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
+        Ok(MappedRegion::local_alias(addr.as_mut_ptr(), len, *self))
     }
 
     unsafe fn map_file_at(

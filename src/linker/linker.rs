@@ -16,7 +16,7 @@ use crate::{
     image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     linker::session::ResolveSession,
     observer::{LinkObserver, LoadObserver, RelocationObserver, StagedDynamic},
-    os::VmOffset,
+    os::{Mmap, RegionAccess, VmOffset},
     relocation::{RelocationArch, RelocationHandler, Relocator},
     tls::TlsResolver,
 };
@@ -32,23 +32,28 @@ use core::{marker::PhantomData, mem, ops::Deref};
 /// `committed` contains the newly committed modules' [`KeyId`] values in load
 /// order.
 #[derive(Debug)]
-pub struct LoadResult<D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
-    root: LoadedCore<D, Arch>,
+pub struct LoadResult<
+    D: 'static,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = crate::os::HostRegion,
+> {
+    root: LoadedCore<D, Arch, R>,
     committed: Box<[KeyId]>,
 }
 
-impl<D: 'static, Arch> LoadResult<D, Arch>
+impl<D: 'static, Arch, R> LoadResult<D, Arch, R>
 where
     Arch: RelocationArch,
+    R: RegionAccess,
 {
     #[inline]
-    pub(crate) fn new(root: LoadedCore<D, Arch>, committed: Box<[KeyId]>) -> Self {
+    pub(crate) fn new(root: LoadedCore<D, Arch, R>, committed: Box<[KeyId]>) -> Self {
         Self { root, committed }
     }
 
     /// Returns the loaded root module.
     #[inline]
-    pub fn root(&self) -> &LoadedCore<D, Arch> {
+    pub fn root(&self) -> &LoadedCore<D, Arch, R> {
         &self.root
     }
 
@@ -60,16 +65,17 @@ where
 
     /// Consumes the result and returns the loaded root module.
     #[inline]
-    pub fn into_root(self) -> LoadedCore<D, Arch> {
+    pub fn into_root(self) -> LoadedCore<D, Arch, R> {
         self.root
     }
 }
 
-impl<D: 'static, Arch> Deref for LoadResult<D, Arch>
+impl<D: 'static, Arch, R> Deref for LoadResult<D, Arch, R>
 where
     Arch: RelocationArch,
+    R: RegionAccess,
 {
-    type Target = LoadedCore<D, Arch>;
+    type Target = LoadedCore<D, Arch, R>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -284,25 +290,26 @@ where
     }
 }
 
-impl<'a, K, D, Obs, Tls, Arch, R, PreH, PostH, RelocObs, P, O, V>
-    Linker<'a, K, D, Arch, Loader<Obs, D, Tls, Arch>, R, PreH, PostH, RelocObs, P, O, V>
+impl<'a, K, D, Obs, Tls, Arch, M, R, PreH, PostH, RelocObs, P, O, V>
+    Linker<'a, K, D, Arch, Loader<Obs, D, Tls, Arch, M>, R, PreH, PostH, RelocObs, P, O, V>
 where
     K: Clone + Ord,
     D: 'static,
     Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
+    M: Mmap,
 {
     /// Reconfigures the underlying loader.
-    pub fn map_loader<NewObs, NewD, NewTls>(
+    pub fn map_loader<NewObs, NewD, NewTls, NewM>(
         self,
-        configure: impl FnOnce(Loader<Obs, D, Tls, Arch>) -> Loader<NewObs, NewD, NewTls, Arch>,
+        configure: impl FnOnce(Loader<Obs, D, Tls, Arch, M>) -> Loader<NewObs, NewD, NewTls, Arch, NewM>,
     ) -> Linker<
         'a,
         K,
         NewD,
         Arch,
-        Loader<NewObs, NewD, NewTls, Arch>,
+        Loader<NewObs, NewD, NewTls, Arch, NewM>,
         R,
         PreH,
         PostH,
@@ -315,6 +322,7 @@ where
         NewObs: LoadObserver<Arch>,
         NewD: 'static,
         NewTls: TlsResolver,
+        NewM: Mmap,
     {
         Linker {
             loader: configure(self.loader),
@@ -331,19 +339,20 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'a, K, D, Obs, Tls, Arch, Resolver, PreH, PostH, RelocObs, P, O, V>
-    Linker<'a, K, D, Arch, Loader<Obs, D, Tls, Arch>, Resolver, PreH, PostH, RelocObs, P, O, V>
+impl<'a, K, D, Obs, Tls, Arch, M, Resolver, PreH, PostH, RelocObs, P, O, V>
+    Linker<'a, K, D, Arch, Loader<Obs, D, Tls, Arch, M>, Resolver, PreH, PostH, RelocObs, P, O, V>
 where
     K: Clone + Ord,
     D: Default + 'static,
     Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch + crate::relocation::RelocationValueProvider + GotPltTarget,
+    M: Mmap,
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     PreH: RelocationHandler<Arch> + Clone,
     PostH: RelocationHandler<Arch> + Clone,
     RelocObs: RelocationObserver<Arch> + Clone,
-    P: RelocationPlanner<K, D, Arch>,
+    P: RelocationPlanner<K, D, Arch, M::Region>,
     O: LinkObserver<Arch>,
     V: VisibleModules<K, Arch>,
 {
@@ -352,7 +361,7 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         key: K,
-    ) -> Result<LoadResult<D, Arch>>
+    ) -> Result<LoadResult<D, Arch, M::Region>>
     where
         K: 'cfg,
         Meta: Default,
@@ -382,8 +391,8 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         key: K,
-        raw: RawDynamic<D, Arch>,
-    ) -> Result<LoadResult<D, Arch>>
+        raw: RawDynamic<D, Arch, M::Region>,
+    ) -> Result<LoadResult<D, Arch, M::Region>>
     where
         K: 'cfg,
         Meta: Default,
@@ -408,7 +417,7 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         key: K,
-    ) -> Result<LoadResult<D, Arch>>
+    ) -> Result<LoadResult<D, Arch, M::Region>>
     where
         K: 'static,
         Meta: Default,
@@ -502,7 +511,7 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         mut plan: LinkPlan<K, Arch>,
-    ) -> Result<PreparedLoad<D, Arch>> {
+    ) -> Result<PreparedLoad<D, Arch, M::Region>> {
         let mut mapped_runtime = self.prepare_mapped_runtime(&mut plan)?;
 
         let (root, group_order, entries, memory_layout) = plan.into_parts();
@@ -555,7 +564,7 @@ where
     fn prepare_mapped_runtime(
         &mut self,
         plan: &mut LinkPlan<K, Arch>,
-    ) -> Result<Option<MappedRuntimeMemory>> {
+    ) -> Result<Option<MappedRuntimeMemory<M::Region>>> {
         normalize_plan(plan)?;
         let mut mapped_runtime = MappedRuntimeMemory::map(self.loader.mapper(), plan)?;
 
@@ -574,7 +583,7 @@ where
 
     fn repair_planned_module(
         &mut self,
-        runtime: &mut MappedRuntimeMemory,
+        runtime: &mut MappedRuntimeMemory<M::Region>,
         module_id: ModuleId,
         plan: &mut LinkPlan<K, Arch>,
     ) -> Result<()> {
@@ -584,10 +593,10 @@ where
     fn materialize_planned_raw(
         &mut self,
         plan: &MemoryLayoutPlan,
-        mapped_runtime: &mut Option<MappedRuntimeMemory>,
+        mapped_runtime: &mut Option<MappedRuntimeMemory<M::Region>>,
         module_id: ModuleId,
         scanned: ScannedDynamic<Arch>,
-    ) -> Result<RawDynamic<D, Arch>> {
+    ) -> Result<RawDynamic<D, Arch, M::Region>> {
         match plan
             .materialization(module_id)
             .unwrap_or(Materialization::WholeDsoRegion)
@@ -605,10 +614,10 @@ where
 
     fn materialize_arena_raw(
         &mut self,
-        mapped_runtime: &mut Option<MappedRuntimeMemory>,
+        mapped_runtime: &mut Option<MappedRuntimeMemory<M::Region>>,
         module_id: ModuleId,
         scanned: ScannedDynamic<Arch>,
-    ) -> Result<RawDynamic<D, Arch>> {
+    ) -> Result<RawDynamic<D, Arch, M::Region>> {
         let runtime = mapped_runtime
             .as_mut()
             .ok_or_else(|| {
@@ -619,7 +628,7 @@ where
             .take_module(module_id)?;
         let force_static_tls = self.loader.inner.force_static_tls();
 
-        let mut raw = build_arena_raw_dynamic::<D, Tls, Arch, _>(
+        let mut raw = build_arena_raw_dynamic::<D, Tls, Arch, _, M::Region>(
             scanned,
             runtime,
             force_static_tls,
@@ -633,15 +642,15 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         seed_root: Seed,
-    ) -> Result<PreparedLoad<D, Arch>>
+    ) -> Result<PreparedLoad<D, Arch, M::Region>>
     where
         K: 'cfg,
         Resolver: KeyResolver<'cfg, K, Arch>,
         Seed: FnOnce(
             &mut LinkContext<K, D, Meta, Arch>,
             &V,
-            &mut LoadSession<D, Arch>,
-            &mut Loader<Obs, D, Tls, Arch>,
+            &mut LoadSession<D, Arch, M::Region>,
+            &mut Loader<Obs, D, Tls, Arch, M>,
             &mut Resolver,
             &mut O,
         ) -> Result<KeyId>,
@@ -675,8 +684,8 @@ where
     fn execute_prepared_load<Meta>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
-        prepared: PreparedLoad<D, Arch>,
-    ) -> Result<LoadResult<D, Arch>>
+        prepared: PreparedLoad<D, Arch, M::Region>,
+    ) -> Result<LoadResult<D, Arch, M::Region>>
     where
         Meta: Default,
     {
@@ -697,7 +706,7 @@ where
         let committed = Self::commit_session(context, &mut session);
 
         let root = visible_module(context, &self.visible_modules, root)
-            .and_then(|module| module.as_loaded::<D>().cloned())
+            .and_then(|module| module.as_loaded::<D, M::Region, _>().cloned())
             .ok_or_else(|| LinkerError::context("load root missing after commit"))?;
         Ok(LoadResult::new(root, committed))
     }
@@ -706,7 +715,7 @@ where
         &mut self,
         root: KeyId,
         context: &LinkContext<K, D, Meta, Arch>,
-        session: &mut LoadSession<D, Arch>,
+        session: &mut LoadSession<D, Arch, M::Region>,
     ) -> Result<()> {
         let mut order = mem::take(&mut self.scratch_relocation_order);
         Self::build_relocation_order(root, &session.resolve.entries, &mut order);
@@ -755,7 +764,7 @@ where
 
     fn build_relocation_order(
         root: KeyId,
-        pending: &BTreeMap<KeyId, GraphEntry<ModulePayload<RawDynamic<D, Arch>, Arch>>>,
+        pending: &BTreeMap<KeyId, GraphEntry<ModulePayload<RawDynamic<D, Arch, M::Region>, Arch>>>,
         order: &mut Vec<KeyId>,
     ) {
         order.clear();
@@ -793,7 +802,7 @@ where
 
     fn build_group_scope<Meta>(
         context: &LinkContext<K, D, Meta, Arch>,
-        session: &LoadSession<D, Arch>,
+        session: &LoadSession<D, Arch, M::Region>,
         visible_modules: &V,
     ) -> ModuleScope<Arch>
     where
@@ -823,7 +832,7 @@ where
 
     fn commit_session<Meta>(
         context: &mut LinkContext<K, D, Meta, Arch>,
-        session: &mut LoadSession<D, Arch>,
+        session: &mut LoadSession<D, Arch, M::Region>,
     ) -> Box<[KeyId]>
     where
         Meta: Default,
@@ -847,10 +856,10 @@ where
     }
 }
 
-struct PreparedLoad<D: 'static, Arch: RelocationArch> {
+struct PreparedLoad<D: 'static, Arch: RelocationArch, R: RegionAccess> {
     root: KeyId,
-    session: LoadSession<D, Arch>,
-    mapped_runtime: Option<MappedRuntimeMemory>,
+    session: LoadSession<D, Arch, R>,
+    mapped_runtime: Option<MappedRuntimeMemory<R>>,
 }
 
 enum ScanDiscovery<K, Arch: RelocationArch> {
@@ -858,8 +867,8 @@ enum ScanDiscovery<K, Arch: RelocationArch> {
     Plan(LinkPlan<K, Arch>),
 }
 
-impl<D: 'static, Arch: RelocationArch> PreparedLoad<D, Arch> {
-    fn runtime(root: KeyId, session: LoadSession<D, Arch>) -> Self {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> PreparedLoad<D, Arch, R> {
+    fn runtime(root: KeyId, session: LoadSession<D, Arch, R>) -> Self {
         Self {
             root,
             session,
@@ -869,8 +878,8 @@ impl<D: 'static, Arch: RelocationArch> PreparedLoad<D, Arch> {
 
     fn planned(
         root: KeyId,
-        session: LoadSession<D, Arch>,
-        mapped_runtime: Option<MappedRuntimeMemory>,
+        session: LoadSession<D, Arch, R>,
+        mapped_runtime: Option<MappedRuntimeMemory<R>>,
     ) -> Self {
         Self {
             root,
@@ -880,11 +889,15 @@ impl<D: 'static, Arch: RelocationArch> PreparedLoad<D, Arch> {
     }
 }
 
-fn apply_section_overrides<D, Arch: RelocationArch>(
-    raw: &mut RawDynamic<D, Arch>,
+fn apply_section_overrides<D, Arch, R>(
+    raw: &mut RawDynamic<D, Arch, R>,
     module_id: ModuleId,
     plan: &MemoryLayoutPlan,
-) -> Result<()> {
+) -> Result<()>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+{
     let module = plan.module(module_id);
     let core = raw.core_ref();
     let segments = core.segments();
@@ -911,15 +924,16 @@ fn apply_section_overrides<D, Arch: RelocationArch>(
 }
 
 #[inline]
-fn visible_loaded<K, D, Meta, V, Arch>(
+fn visible_loaded<K, D, Meta, V, Arch, R>(
     context: &LinkContext<K, D, Meta, Arch>,
     visible_modules: &V,
     key: &K,
-) -> Option<LoadedCore<D, Arch>>
+) -> Option<LoadedCore<D, Arch, R>>
 where
     K: Clone + Ord,
     D: 'static,
     Arch: RelocationArch,
+    R: RegionAccess,
     V: VisibleModules<K, Arch>,
 {
     context
@@ -927,7 +941,7 @@ where
         .key_id(key)
         .and_then(|id| visible_module(context, visible_modules, id))
         .or_else(|| visible_modules.module(key))
-        .and_then(|module| module.as_loaded::<D>().cloned())
+        .and_then(|module| module.as_loaded::<D, R, _>().cloned())
 }
 
 #[inline]

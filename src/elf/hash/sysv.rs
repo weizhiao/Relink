@@ -52,6 +52,24 @@ pub(crate) struct ElfHash {
 }
 
 impl ElfHash {
+    /// Compute the SYSV hash value for a symbol name.
+    #[inline]
+    pub(crate) fn hash(name: &[u8]) -> u64 {
+        let mut hash = 0u32;
+        #[allow(unused_assignments)]
+        let mut g = 0u32;
+
+        for byte in name {
+            hash = (hash << 4) + u32::from(*byte);
+            g = hash & 0xf0000000;
+            if g != 0 {
+                hash ^= g >> 24;
+            }
+            hash &= !g;
+        }
+        hash as u64
+    }
+
     /// Parse a SYSV hash table from raw memory
     ///
     /// This method creates an ElfHash instance by parsing the hash table data
@@ -114,35 +132,7 @@ impl ElfHash {
     }
 }
 
-impl ElfHashTable for ElfHash {
-    /// Compute the SYSV hash value for a symbol name
-    ///
-    /// This method implements the traditional SYSV hash algorithm, which is
-    /// used to map symbol names to hash table entries.
-    ///
-    /// # Arguments
-    /// * `name` - The symbol name as a byte slice
-    ///
-    /// # Returns
-    /// The computed hash value
-    #[inline]
-    fn hash(name: &[u8]) -> u64 {
-        let mut hash = 0u32;
-        #[allow(unused_assignments)]
-        let mut g = 0u32;
-
-        // SYSV hash algorithm
-        for byte in name {
-            hash = (hash << 4) + u32::from(*byte);
-            g = hash & 0xf0000000;
-            if g != 0 {
-                hash ^= g >> 24;
-            }
-            hash &= !g;
-        }
-        hash as u64
-    }
-
+impl<L: ElfLayout> ElfHashTable<L> for ElfHash {
     /// Get the number of symbols in the hash table
     ///
     /// # Returns
@@ -165,8 +155,9 @@ impl ElfHashTable for ElfHash {
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol
     /// * `None` - If the symbol was not found
-    fn lookup<'sym, L: ElfLayout>(
-        table: &'sym SymbolTable<L>,
+    fn lookup<'sym, H>(
+        &self,
+        table: &'sym SymbolTable<L, H>,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
     ) -> Option<&'sym ElfSymbol<L>> {
@@ -174,18 +165,16 @@ impl ElfHashTable for ElfHash {
         let hash = if let Some(hash) = precompute.hash {
             hash
         } else {
-            let hash = ElfHash::hash(symbol.name().as_bytes()) as u32;
+            let hash = Self::hash(symbol.name().as_bytes()) as u32;
             precompute.hash = Some(hash);
             hash
         };
 
-        // Get the hash table implementation
-        let hashtab = table.hashtab.into_elfhash().unwrap();
-        let buckets = hashtab.buckets.as_slice();
-        let chains = hashtab.chains.as_slice();
+        let buckets = self.buckets.as_slice();
+        let chains = self.chains.as_slice();
 
         // Calculate the bucket index and get the first chain index
-        let bucket_idx = (hash as usize) % hashtab.header.nbucket as usize;
+        let bucket_idx = (hash as usize) % self.header.nbucket as usize;
         let mut chain_idx = *buckets.get(bucket_idx)? as usize;
 
         // Traverse the chain to find the symbol

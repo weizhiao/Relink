@@ -5,19 +5,23 @@ use crate::{
     loader::Loader,
     logging,
     observer::LoadObserver,
-    os::VmOffset,
+    os::{Mmap, VmOffset},
     relocation::RelocationArch,
     tls::TlsResolver,
 };
 
-impl<Obs, D, Tls, Arch> Loader<Obs, D, Tls, Arch>
+impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<Arch>,
     D: Default + 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
+    M: Mmap,
 {
-    pub(crate) fn load_rel(&mut self, object: impl ElfReader) -> Result<RawElf<D, Arch>> {
+    pub(crate) fn load_rel(
+        &mut self,
+        object: impl ElfReader,
+    ) -> Result<RawElf<D, Arch, M::Region>> {
         Ok(RawElf::Object(self.load_object_impl(object)?))
     }
 
@@ -31,7 +35,7 @@ where
     /// let bytes = &[]; // Relocatable ELF bytes
     /// let rel = loader.load_object(ElfBinary::new("liba.o", bytes)).unwrap();
     /// ```
-    pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject<D, Arch>>
+    pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject<D, Arch, M::Region>>
     where
         I: IntoElfReader<'a>,
     {
@@ -41,7 +45,7 @@ where
     pub(crate) fn load_object_impl(
         &mut self,
         mut object: impl ElfReader,
-    ) -> Result<RawObject<D, Arch>> {
+    ) -> Result<RawObject<D, Arch, M::Region>> {
         logging::debug!("Loading object: {}", object.path());
 
         let ehdr = self

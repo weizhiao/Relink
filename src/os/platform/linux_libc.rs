@@ -1,7 +1,7 @@
 use crate::{
     IoError, MmapError, Result,
     input::{ElfReader, Path, PathBuf},
-    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, PageSize, ProtFlags, VmAddr},
+    os::{HostRegion, MadviseAdvice, MapFlags, MappedRegion, Mmap, PageSize, ProtFlags, VmAddr},
 };
 use alloc::ffi::CString;
 use core::ffi::c_void;
@@ -86,6 +86,8 @@ pub(crate) struct RawFile {
 }
 
 impl Mmap for DefaultMmap {
+    type Region = HostRegion;
+
     #[inline]
     fn page_size(&self) -> PageSize {
         self.page_size
@@ -97,7 +99,7 @@ impl Mmap for DefaultMmap {
         len: usize,
         prot: ProtFlags,
         _populate_later: bool,
-    ) -> crate::Result<MappedRegion> {
+    ) -> crate::Result<MappedRegion<Self::Region>> {
         let ptr = unsafe {
             mmap(
                 addr.map_or(core::ptr::null_mut(), VmAddr::as_mut_ptr),
@@ -115,6 +117,10 @@ impl Mmap for DefaultMmap {
             .into());
         }
         Ok(MappedRegion::local(ptr, len, *self))
+    }
+
+    unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
+        Ok(MappedRegion::local_alias(addr.as_mut_ptr(), len, *self))
     }
 
     unsafe fn map_file_at(

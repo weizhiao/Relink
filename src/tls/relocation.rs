@@ -13,7 +13,7 @@ mod enabled {
     use crate::{
         RelocReason, Result,
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
-        elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
+        elf::{ElfHashTable, ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
         observer::{
             RelocationObserver, TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
         },
@@ -50,11 +50,12 @@ mod enabled {
         }
     }
 
-    impl<'find, D, Arch, R, PreH, PostH, Obs> RelocHelper<'find, D, Arch, R, PreH, PostH, Obs>
+    impl<'find, D, Arch, R, PreH, PostH, Obs, H> RelocHelper<'find, D, Arch, R, PreH, PostH, Obs, H>
     where
         D: 'static,
         Arch: RelocationArch,
         R: RegionAccess,
+        H: ElfHashTable<Arch::Layout> + 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
@@ -108,14 +109,15 @@ mod enabled {
         }
     }
 
-    pub(crate) fn handle_tls_reloc<D, Arch, R, PreH, PostH, Obs>(
-        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH, Obs>,
+    pub(crate) fn handle_tls_reloc<D, Arch, R, PreH, PostH, Obs, H>(
+        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH, Obs, H>,
         rel: &ElfRelType<Arch>,
     ) -> Result<TlsRelocOutcome>
     where
         D: 'static,
         Arch: RelocationArch,
         R: RegionAccess,
+        H: ElfHashTable<Arch::Layout> + 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,

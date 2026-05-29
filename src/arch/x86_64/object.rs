@@ -3,7 +3,7 @@ use crate::{
     arch::x86_64::relocation::X86_64Arch,
     elf::ElfRelType,
     object::layout::{GotEntry, PltEntry, PltGotSection},
-    os::{HostRegion, VmAddr},
+    os::{RegionAccess, VmAddr},
     relocation::{
         RelocHelper, RelocValue, RelocationHandler, RelocationValueProvider, reloc_error,
     },
@@ -45,8 +45,8 @@ impl X86_64Arch {
     }
 
     #[inline]
-    fn write_object_value(
-        segments: &ElfSegments,
+    fn write_object_value<R: RegionAccess>(
+        segments: &ElfSegments<R>,
         place: VmAddr,
         value: ObjectWrite,
     ) -> crate::Result<()> {
@@ -63,13 +63,14 @@ impl X86_64Arch {
         Ok(())
     }
 
-    pub(crate) fn relocate_object_impl<D, PreH, PostH, Obs>(
-        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
+    pub(crate) fn relocate_object_impl<D, R, PreH, PostH, Obs>(
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, crate::object::CustomHash>,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
     ) -> crate::Result<()>
     where
         D: 'static,
+        R: RegionAccess,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: crate::observer::RelocationObserver<Self> + ?Sized,
@@ -81,9 +82,8 @@ impl X86_64Arch {
         let base = core.base();
         let append = rel.r_addend(base);
         let place = base + rel.r_offset();
-        let unknown_symbol =
-            || reloc_error::<Self, _, HostRegion>(rel, crate::RelocReason::UnknownSymbol, core);
-        let value_error = |reason| reloc_error::<Self, _, HostRegion>(rel, reason, core);
+        let unknown_symbol = || reloc_error(rel, crate::RelocReason::UnknownSymbol, core);
+        let value_error = |reason| reloc_error(rel, reason, core);
         let relocation_target_value = |target| {
             Self::object_relocation_value(r_type.raw() as usize, target, append, place.get())
         };

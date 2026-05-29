@@ -9,19 +9,19 @@ use crate::{
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
     observer::LoadObserver,
-    os::{MappedRegion, VmAddr, VmOffset},
+    os::{Mmap, RegionAccess, VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::{ELFRelro, ElfSegments, program::parse_segments},
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
-use core::ffi::c_void;
 
-impl<Obs, D, Tls, Arch> Loader<Obs, D, Tls, Arch>
+impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
+    M: Mmap,
 {
     /// Reads the ELF header.
     ///
@@ -65,12 +65,13 @@ where
     }
 }
 
-impl<Obs, D, Tls, Arch> Loader<Obs, D, Tls, Arch>
+impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<Arch>,
     D: 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
+    M: Mmap,
 {
     /// Scans an executable or dynamic ELF image without mapping its segments.
     ///
@@ -99,19 +100,20 @@ where
     }
 }
 
-impl<Obs, D, Tls, Arch> Loader<Obs, D, Tls, Arch>
+impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<Arch>,
     D: Default + 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
+    M: Mmap,
 {
     /// Loads an ELF input and chooses the appropriate raw image type automatically.
     ///
     /// This is the most flexible entry point when the caller does not already know
     /// whether the input is a shared object, executable, or relocatable object.
     /// `ET_DYN` inputs are classified by inspecting the program headers.
-    pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D, Arch>>
+    pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D, Arch, M::Region>>
     where
         D: 'static,
         I: IntoElfReader<'a>,
@@ -142,7 +144,7 @@ where
     }
 
     #[cfg(not(feature = "object"))]
-    pub(crate) fn load_rel(&mut self, _object: impl ElfReader) -> Result<RawElf<D, Arch>>
+    pub(crate) fn load_rel(&mut self, _object: impl ElfReader) -> Result<RawElf<D, Arch, M::Region>>
     where
         D: 'static,
     {
@@ -176,7 +178,7 @@ where
     /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
     /// let lib = raw.relocator().relocate().unwrap();
     /// ```
-    pub fn load_dylib<'a, I>(&mut self, input: I) -> Result<RawDylib<D, Arch>>
+    pub fn load_dylib<'a, I>(&mut self, input: I) -> Result<RawDylib<D, Arch, M::Region>>
     where
         I: IntoElfReader<'a>,
     {
@@ -202,7 +204,7 @@ where
     /// and `ET_EXEC` executables that carry a `PT_DYNAMIC` segment. The returned
     /// value is mapped but not yet relocated. Call `.relocator().relocate()` to
     /// resolve symbols and produce a ready-to-use loaded image.
-    pub fn load_dynamic<'a, I>(&mut self, input: I) -> Result<RawDynamic<D, Arch>>
+    pub fn load_dynamic<'a, I>(&mut self, input: I) -> Result<RawDynamic<D, Arch, M::Region>>
     where
         I: IntoElfReader<'a>,
     {
@@ -227,7 +229,7 @@ where
         &mut self,
         mut object: impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
-    ) -> Result<RawDynamic<D, Arch>> {
+    ) -> Result<RawDynamic<D, Arch, M::Region>> {
         let phdrs = self
             .buf
             .prepare_phdrs(&ehdr, &mut object)?
@@ -250,7 +252,7 @@ where
     pub fn load_scanned_dynamic(
         &mut self,
         scanned: ScannedDynamic<Arch>,
-    ) -> Result<RawDynamic<D, Arch>> {
+    ) -> Result<RawDynamic<D, Arch, M::Region>> {
         let mut image = self.load_scanned_dynamic_raw_impl(scanned)?;
         self.inner.initialize_dynamic(&mut image)?;
 
@@ -267,7 +269,7 @@ where
     pub(crate) fn load_scanned_dynamic_raw_impl(
         &mut self,
         scanned: ScannedDynamic<Arch>,
-    ) -> Result<RawDynamic<D, Arch>> {
+    ) -> Result<RawDynamic<D, Arch, M::Region>> {
         let ScannedDynamicLoadParts {
             ehdr,
             phdrs,
@@ -305,19 +307,18 @@ where
         load_bias: VmAddr,
         phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
         entry: usize,
-    ) -> Result<RawDynamic<D, Arch>> {
+    ) -> Result<RawDynamic<D, Arch, M::Region>> {
         let path = path.into();
         let phdrs = phdrs.into();
-        let mapper = self.mapper();
         let page_size = self.inner.page_size()?.bytes();
         let layout = parse_segments(&phdrs, true, page_size)?;
-        let mapped_memory = (load_bias + layout.min_vaddr).as_mut_ptr::<c_void>();
+        let mapped_addr = load_bias + layout.min_vaddr;
         let segments = ElfSegments::new(
-            MappedRegion::local_alias(mapped_memory, layout.mapped_len, mapper.clone()),
+            unsafe { self.mapper().alias_space(mapped_addr, layout.mapped_len)? },
             load_bias,
             layout.min_vaddr,
         );
-        let parts = borrowed_dynamic_parts::<D, Arch>(
+        let parts = borrowed_dynamic_parts::<D, Arch, M::Region>(
             path,
             load_bias,
             entry,
@@ -326,7 +327,6 @@ where
             self.inner.force_static_tls(),
             D::default(),
             page_size,
-            mapper,
         )?;
         let mut image = RawDynamic::from_parts::<Tls, _>(parts, &mut self.inner.observer)?;
         self.inner.initialize_dynamic(&mut image)?;
@@ -354,7 +354,7 @@ where
     /// let exec = loader.load_exec("path/to/program").unwrap();
     /// println!("entry = 0x{:x}", exec.entry());
     /// ```
-    pub fn load_exec<'a, I>(&mut self, input: I) -> Result<RawExec<D, Arch>>
+    pub fn load_exec<'a, I>(&mut self, input: I) -> Result<RawExec<D, Arch, M::Region>>
     where
         I: IntoElfReader<'a>,
     {
@@ -369,7 +369,7 @@ where
         &mut self,
         mut object: impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
-    ) -> Result<RawExec<D, Arch>> {
+    ) -> Result<RawExec<D, Arch, M::Region>> {
         let phdrs = self
             .buf
             .prepare_phdrs(&ehdr, &mut object)?
@@ -437,20 +437,20 @@ impl ExpectedElf {
     }
 }
 
-fn borrowed_dynamic_parts<D, Arch>(
+fn borrowed_dynamic_parts<D, Arch, R>(
     path: PathBuf,
     load_bias: VmAddr,
     entry: usize,
     phdrs: &[ElfPhdr<Arch::Layout>],
-    segments: ElfSegments,
+    segments: ElfSegments<R>,
     force_static_tls: bool,
     user_data: D,
     page_size: usize,
-    mapper: crate::os::Mapper,
-) -> Result<RawDynamicParts<D, Arch>>
+) -> Result<RawDynamicParts<D, Arch, R>>
 where
     D: 'static,
     Arch: RelocationArch,
+    R: RegionAccess,
 {
     let mut dynamic = None;
     let mut dynamic_addr = None;
@@ -496,7 +496,7 @@ where
                 tls_info = Some(crate::tls::TlsInfo::new(phdr, image.as_slice()));
             }
             ElfProgramType::GNU_RELRO => {
-                relro = Some(ELFRelro::new(phdr, load_bias, page_size, mapper.clone()));
+                relro = Some(ELFRelro::new(phdr, load_bias, page_size));
             }
             _ => {}
         }
@@ -520,9 +520,10 @@ where
     })
 }
 
-fn read_borrowed_interp<L>(segments: &ElfSegments, phdr: &ElfPhdr<L>) -> Result<&'static str>
+fn read_borrowed_interp<L, R>(segments: &ElfSegments<R>, phdr: &ElfPhdr<L>) -> Result<&'static str>
 where
     L: ElfLayout,
+    R: RegionAccess,
 {
     let view = segments
         .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())

@@ -3,6 +3,7 @@ use crate::{
     arch::ArchKind,
     image::{ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     input::Path,
+    os::{HostRegion, RegionAccess},
     relocation::{BindingMode, RelocationArch},
 };
 use alloc::boxed::Box;
@@ -25,7 +26,7 @@ pub trait DependencyOwner {
     fn needed_lib(&self, index: usize) -> Option<&str>;
 }
 
-impl<D: 'static, Arch: RelocationArch> DependencyOwner for RawDynamic<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> DependencyOwner for RawDynamic<D, Arch, R> {
     #[inline]
     fn path(&self) -> &Path {
         self.path()
@@ -264,19 +265,30 @@ where
 }
 
 /// A single relocation request for a newly mapped module.
-pub struct RelocationRequest<'a, K, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
+pub struct RelocationRequest<
+    'a,
+    K,
+    D: 'static,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = HostRegion,
+> {
     key: &'a K,
-    raw: RawDynamic<D, Arch>,
+    raw: RawDynamic<D, Arch, R>,
     scope: &'a ModuleScope<Arch>,
     _marker: core::marker::PhantomData<fn() -> D>,
 }
 
-impl<'a, K, D: 'static, Arch> RelocationRequest<'a, K, D, Arch>
+impl<'a, K, D: 'static, Arch, R> RelocationRequest<'a, K, D, Arch, R>
 where
     Arch: RelocationArch,
+    R: RegionAccess,
 {
     #[inline]
-    pub(crate) fn new(key: &'a K, raw: RawDynamic<D, Arch>, scope: &'a ModuleScope<Arch>) -> Self {
+    pub(crate) fn new(
+        key: &'a K,
+        raw: RawDynamic<D, Arch, R>,
+        scope: &'a ModuleScope<Arch>,
+    ) -> Self {
         Self {
             key,
             raw,
@@ -305,12 +317,12 @@ where
 
     /// Returns the mapped dynamic image before relocation.
     #[inline]
-    pub fn raw(&self) -> &RawDynamic<D, Arch> {
+    pub fn raw(&self) -> &RawDynamic<D, Arch, R> {
         &self.raw
     }
 
     #[inline]
-    pub(crate) fn into_raw(self) -> RawDynamic<D, Arch> {
+    pub(crate) fn into_raw(self) -> RawDynamic<D, Arch, R> {
         self.raw
     }
 }
@@ -394,11 +406,17 @@ where
 }
 
 /// Runtime policy for assembling relocation inputs.
-pub trait RelocationPlanner<K, D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
+pub trait RelocationPlanner<
+    K,
+    D: 'static,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = HostRegion,
+>
+{
     /// Builds relocation inputs for one mapped module.
     fn plan(
         &mut self,
-        req: &RelocationRequest<'_, K, D, Arch>,
+        req: &RelocationRequest<'_, K, D, Arch, R>,
     ) -> Result<RelocationInputs<D, Arch>>;
 }
 
@@ -406,28 +424,30 @@ pub trait RelocationPlanner<K, D: 'static, Arch: RelocationArch = crate::arch::N
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultRelocationPlanner;
 
-impl<K, D: 'static, Arch> RelocationPlanner<K, D, Arch> for DefaultRelocationPlanner
+impl<K, D: 'static, Arch, R> RelocationPlanner<K, D, Arch, R> for DefaultRelocationPlanner
 where
     Arch: RelocationArch,
+    R: RegionAccess,
 {
     #[inline]
     fn plan(
         &mut self,
-        req: &RelocationRequest<'_, K, D, Arch>,
+        req: &RelocationRequest<'_, K, D, Arch, R>,
     ) -> Result<RelocationInputs<D, Arch>> {
         Ok(RelocationInputs::scope(req.scope().clone()))
     }
 }
 
-impl<K, D: 'static, Arch, F> RelocationPlanner<K, D, Arch> for F
+impl<K, D: 'static, Arch, R, F> RelocationPlanner<K, D, Arch, R> for F
 where
     Arch: RelocationArch,
-    F: for<'a> FnMut(&RelocationRequest<'a, K, D, Arch>) -> Result<RelocationInputs<D, Arch>>,
+    R: RegionAccess,
+    F: for<'a> FnMut(&RelocationRequest<'a, K, D, Arch, R>) -> Result<RelocationInputs<D, Arch>>,
 {
     #[inline]
     fn plan(
         &mut self,
-        req: &RelocationRequest<'_, K, D, Arch>,
+        req: &RelocationRequest<'_, K, D, Arch, R>,
     ) -> Result<RelocationInputs<D, Arch>> {
         self(req)
     }

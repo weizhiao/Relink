@@ -1,4 +1,4 @@
-use super::{MadviseAdvice, MapFlags, MappedRegion, PageSize, ProtFlags, VmAddr};
+use super::{MadviseAdvice, MapFlags, MappedRegion, PageSize, ProtFlags, RegionAccess, VmAddr};
 use crate::Result;
 
 /// A trait for low-level memory mapping operations.
@@ -34,6 +34,9 @@ use crate::Result;
 /// }
 /// ```
 pub trait Mmap: Send + Sync + 'static {
+    /// Region type created by this mapping backend.
+    type Region: RegionAccess;
+
     /// Returns the base page size required by this mapping environment.
     ///
     /// Implementations that can query the host should return the active system
@@ -60,7 +63,19 @@ pub trait Mmap: Send + Sync + 'static {
         len: usize,
         prot: ProtFlags,
         populate_later: bool,
-    ) -> Result<MappedRegion>;
+    ) -> Result<MappedRegion<Self::Region>>;
+
+    /// Creates a non-owning region view for an address range that is already mapped.
+    ///
+    /// This is used for startup images that were mapped before the loader took
+    /// control. The returned region must not unmap the range on drop, but it
+    /// should still support operations such as [`RegionAccess::mprotect`] when
+    /// the backend can apply them.
+    ///
+    /// # Safety
+    /// `addr..addr + len` must describe a valid mapped range for the returned
+    /// region's lifetime.
+    unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>>;
 
     /// Maps file-backed pages into an already-created space.
     ///

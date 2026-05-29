@@ -26,7 +26,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         }
 
         if let Some(relro) = self.relro() {
-            relro.relro()?;
+            relro.relro(self.core_ref().segments())?;
         }
         Ok(())
     }
@@ -515,7 +515,7 @@ mod tests {
         ByteRepr, Error, ParseDynamicError,
         arch::NativeArch,
         elf::ElfRelType,
-        os::{MappedRegion, MappedView, Mapper},
+        os::{MappedRegion, MappedView},
     };
     use alloc::boxed::Box;
     use core::num::NonZeroUsize;
@@ -526,11 +526,7 @@ mod tests {
 
     fn mapped_view<T: ByteRepr + 'static>(slice: &'static [T]) -> MappedView<T> {
         let byte_len = core::mem::size_of_val(slice);
-        let region = MappedRegion::local_alias(
-            slice.as_ptr().cast_mut().cast(),
-            byte_len,
-            Mapper::from_munmap(|_, _| Ok(())),
-        );
+        let region = MappedRegion::local_alias_no_unmap(slice.as_ptr().cast_mut().cast(), byte_len);
         region.read_view::<T>(0, byte_len).unwrap()
     }
 

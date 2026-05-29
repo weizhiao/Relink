@@ -4,46 +4,72 @@ use core::{
     ptr::{self, NonNull},
 };
 
+use alloc::boxed::Box;
+
 use crate::{
     ByteRepr, Result,
-    os::{MadviseAdvice, Mapper, Mmap, ProtFlags, VmAddr},
+    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags, VmAddr},
 };
 
 use super::{MappedRegion, RegionAccess};
 
 /// Host-addressable mmap region.
-pub struct HostRegion<M: Mmap = Mapper> {
+pub struct HostRegion {
     host_ptr: *mut c_void,
     len: usize,
-    control: M,
+    control: Box<dyn Mmap<Region = HostRegion>>,
     unmap_on_drop: bool,
 }
 
 impl MappedRegion<HostRegion> {
     #[inline]
-    pub fn local<M: Mmap>(host_ptr: *mut c_void, len: usize, control: M) -> Self {
+    pub fn local<M>(host_ptr: *mut c_void, len: usize, control: M) -> Self
+    where
+        M: Mmap<Region = HostRegion>,
+    {
         Self::new(HostRegion::with_control(
             host_ptr,
             len,
-            Mapper::new(control),
+            Box::new(control),
             true,
         ))
     }
 
     #[inline]
-    pub fn local_alias<M: Mmap>(host_ptr: *mut c_void, len: usize, control: M) -> Self {
+    pub fn local_alias<M>(host_ptr: *mut c_void, len: usize, control: M) -> Self
+    where
+        M: Mmap<Region = HostRegion>,
+    {
         Self::new(HostRegion::with_control(
             host_ptr,
             len,
-            Mapper::new(control),
+            Box::new(control),
             false,
         ))
     }
+
+    #[inline]
+    pub(crate) fn local_with_munmap<F>(host_ptr: *mut c_void, len: usize, munmap: F) -> Self
+    where
+        F: Fn(*mut c_void, usize) -> Result<()> + Send + Sync + 'static,
+    {
+        Self::local(host_ptr, len, MunmapAdapter { munmap })
+    }
+
+    #[inline]
+    pub(crate) fn local_alias_no_unmap(host_ptr: *mut c_void, len: usize) -> Self {
+        Self::local_alias(host_ptr, len, NoopMmap)
+    }
 }
 
-impl<M: Mmap> HostRegion<M> {
+impl HostRegion {
     #[inline]
-    fn with_control(host_ptr: *mut c_void, len: usize, control: M, unmap_on_drop: bool) -> Self {
+    fn with_control(
+        host_ptr: *mut c_void,
+        len: usize,
+        control: Box<dyn Mmap<Region = HostRegion>>,
+        unmap_on_drop: bool,
+    ) -> Self {
         Self {
             host_ptr,
             len,
@@ -53,7 +79,7 @@ impl<M: Mmap> HostRegion<M> {
     }
 }
 
-impl<M: Mmap> RegionAccess for HostRegion<M> {
+impl RegionAccess for HostRegion {
     #[inline]
     fn addr(&self) -> VmAddr {
         VmAddr::new(self.host_ptr as usize)
@@ -164,7 +190,7 @@ impl<M: Mmap> RegionAccess for HostRegion<M> {
     }
 }
 
-impl<M: Mmap> Drop for HostRegion<M> {
+impl Drop for HostRegion {
     fn drop(&mut self) {
         if self.unmap_on_drop {
             let _ = unsafe {
@@ -177,6 +203,123 @@ impl<M: Mmap> Drop for HostRegion<M> {
 
 // Safety: mapped regions operate on an mmap-style allocation and delegate
 // synchronization requirements to the mapping backend.
-unsafe impl<M: Mmap> Send for HostRegion<M> {}
+unsafe impl Send for HostRegion {}
 // Safety: shared access only exposes byte operations over the mapped range.
-unsafe impl<M: Mmap> Sync for HostRegion<M> {}
+unsafe impl Sync for HostRegion {}
+
+struct MunmapAdapter<F> {
+    munmap: F,
+}
+
+impl<F> Mmap for MunmapAdapter<F>
+where
+    F: Fn(*mut c_void, usize) -> Result<()> + Send + Sync + 'static,
+{
+    type Region = HostRegion;
+
+    unsafe fn create_space(
+        &self,
+        _addr: Option<VmAddr>,
+        _len: usize,
+        _prot: ProtFlags,
+        _populate_later: bool,
+    ) -> Result<MappedRegion<Self::Region>> {
+        unreachable!("MunmapAdapter only supports munmap")
+    }
+
+    unsafe fn alias_space(&self, _addr: VmAddr, _len: usize) -> Result<MappedRegion<Self::Region>> {
+        unreachable!("MunmapAdapter only supports munmap")
+    }
+
+    unsafe fn map_file_at(
+        &self,
+        _addr: VmAddr,
+        _len: usize,
+        _prot: ProtFlags,
+        _flags: MapFlags,
+        _offset: usize,
+        _fd: isize,
+    ) -> Result<()> {
+        unreachable!("MunmapAdapter only supports munmap")
+    }
+
+    unsafe fn map_zero_at(
+        &self,
+        _addr: VmAddr,
+        _len: usize,
+        _prot: ProtFlags,
+        _flags: MapFlags,
+    ) -> Result<()> {
+        unreachable!("MunmapAdapter only supports munmap")
+    }
+
+    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
+        (self.munmap)(addr.as_mut_ptr(), len)
+    }
+
+    unsafe fn madvise(&self, _addr: VmAddr, _len: usize, _behavior: MadviseAdvice) -> Result<()> {
+        unreachable!("MunmapAdapter only supports munmap")
+    }
+
+    unsafe fn mprotect(&self, _addr: VmAddr, _len: usize, _prot: ProtFlags) -> Result<()> {
+        unreachable!("MunmapAdapter only supports munmap")
+    }
+}
+
+struct NoopMmap;
+
+impl Mmap for NoopMmap {
+    type Region = HostRegion;
+
+    fn page_size(&self) -> PageSize {
+        PageSize::Base
+    }
+
+    unsafe fn create_space(
+        &self,
+        _addr: Option<VmAddr>,
+        _len: usize,
+        _prot: ProtFlags,
+        _populate_later: bool,
+    ) -> Result<MappedRegion<Self::Region>> {
+        unreachable!("NoopMmap only supports borrowed aliases")
+    }
+
+    unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
+        Ok(MappedRegion::local_alias_no_unmap(addr.as_mut_ptr(), len))
+    }
+
+    unsafe fn map_file_at(
+        &self,
+        _addr: VmAddr,
+        _len: usize,
+        _prot: ProtFlags,
+        _flags: MapFlags,
+        _offset: usize,
+        _fd: isize,
+    ) -> Result<()> {
+        unreachable!("NoopMmap only supports borrowed aliases")
+    }
+
+    unsafe fn map_zero_at(
+        &self,
+        _addr: VmAddr,
+        _len: usize,
+        _prot: ProtFlags,
+        _flags: MapFlags,
+    ) -> Result<()> {
+        unreachable!("NoopMmap only supports borrowed aliases")
+    }
+
+    unsafe fn munmap(&self, _addr: VmAddr, _len: usize) -> Result<()> {
+        Ok(())
+    }
+
+    unsafe fn madvise(&self, _addr: VmAddr, _len: usize, _behavior: MadviseAdvice) -> Result<()> {
+        Ok(())
+    }
+
+    unsafe fn mprotect(&self, _addr: VmAddr, _len: usize, _prot: ProtFlags) -> Result<()> {
+        Ok(())
+    }
+}

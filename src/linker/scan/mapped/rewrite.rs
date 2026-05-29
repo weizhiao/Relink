@@ -7,7 +7,7 @@ use crate::{
         ElfDyn, ElfDynamicTag, ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfSymbol,
     },
     image::ScannedSectionId,
-    os::{VmAddr, VmOffset},
+    os::{RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, RelocationValueProvider},
 };
 use core::{cell::Cell, marker::PhantomData, mem::size_of};
@@ -69,7 +69,7 @@ impl RelocationEntryInfo {
     }
 }
 
-impl RuntimeModuleMemory {
+impl<R: RegionAccess> RuntimeModuleMemory<R> {
     fn section(&self, section: SectionId) -> Option<&RuntimeSectionMemory> {
         self.sections
             .iter()
@@ -221,23 +221,24 @@ impl RuntimeModuleMemory {
     }
 }
 
-pub(crate) struct RuntimeMetadataRewriter<'a, K, Arch: RelocationArch> {
+pub(crate) struct RuntimeMetadataRewriter<'a, K, Arch: RelocationArch, R: RegionAccess> {
     module_id: ModuleId,
     plan: &'a mut LinkPlan<K, Arch>,
-    runtime: &'a RuntimeModuleMemory,
+    runtime: &'a RuntimeModuleMemory<R>,
     _arch: PhantomData<fn() -> Arch>,
 }
 
-impl<'a, K, Arch> RuntimeMetadataRewriter<'a, K, Arch>
+impl<'a, K, Arch, R> RuntimeMetadataRewriter<'a, K, Arch, R>
 where
     K: Clone + Ord,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
+    R: RegionAccess,
     ElfRelType<Arch>: ByteRepr,
 {
     pub(crate) fn new(
         module_id: ModuleId,
         plan: &'a mut LinkPlan<K, Arch>,
-        runtime: &'a RuntimeModuleMemory,
+        runtime: &'a RuntimeModuleMemory<R>,
     ) -> Self {
         Self {
             module_id,
@@ -297,7 +298,7 @@ where
                 let symbols = cast_section_bytes::<ElfSymbol<Arch::Layout>>(symbol_data)?;
 
                 for entry in entries {
-                    write_retained_relocation::<Arch>(
+                    write_retained_relocation::<Arch, R>(
                         runtime,
                         target_section,
                         target_data,
@@ -578,8 +579,8 @@ fn cast_section_bytes_mut<T: ByteRepr>(bytes: &mut [u8]) -> Result<&mut [T]> {
     }
 }
 
-fn write_retained_relocation<Arch>(
-    runtime: &RuntimeModuleMemory,
+fn write_retained_relocation<Arch, R>(
+    runtime: &RuntimeModuleMemory<R>,
     target_section: SectionId,
     target_bytes: &mut [u8],
     entry: &ElfRelType<Arch>,
@@ -587,6 +588,7 @@ fn write_retained_relocation<Arch>(
 ) -> Result<()>
 where
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
+    R: RegionAccess,
 {
     let entry_info = RelocationEntryInfo::new::<Arch>(entry);
     if entry_info.r_type == Arch::NONE {
@@ -603,7 +605,7 @@ where
         .addend
         .expect("retained relocation site should carry an addend");
     let symbol_value =
-        retained_relocation_target::<Arch>(runtime, target_bytes, entry, symbol, &site, addend)?;
+        retained_relocation_target::<Arch, R>(runtime, target_bytes, entry, symbol, &site, addend)?;
     let section_bytes = Cell::new(Some(target_bytes));
     let write_bytes = |src: &[u8]| {
         let section_bytes = section_bytes
@@ -643,8 +645,8 @@ fn retained_relocation_value_error(reason: RelocReason) -> crate::Error {
     .into()
 }
 
-fn retained_relocation_target<Arch>(
-    runtime: &RuntimeModuleMemory,
+fn retained_relocation_target<Arch, R>(
+    runtime: &RuntimeModuleMemory<R>,
     target_bytes: &[u8],
     entry: &ElfRelType<Arch>,
     symbol: &ElfSymbol<Arch::Layout>,
@@ -653,6 +655,7 @@ fn retained_relocation_target<Arch>(
 ) -> Result<usize>
 where
     Arch: RelocationArch + GotPltTarget,
+    R: RegionAccess,
 {
     if let Some(source_target) = <Arch as GotPltTarget>::got_plt_target(
         target_bytes,

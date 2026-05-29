@@ -12,7 +12,7 @@ use crate::{
     input::{Path, PathBuf},
     loader::ImageBuilder,
     observer::{LoadObserver, RelocationObserver},
-    os::VmAddr,
+    os::{HostRegion, RegionAccess, VmAddr},
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     segment::ElfSegments,
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
@@ -25,11 +25,11 @@ use core::fmt::Debug;
 /// Static executables do not have `PT_DYNAMIC`, so they are ready to run after
 /// mapping and any static TLS setup performed by the loader.
 #[derive(Clone)]
-pub struct StaticExec<D, Arch: RelocationArch = NativeArch> {
-    inner: Arc<StaticExecInner<D, Arch>>,
+pub struct StaticExec<D, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
+    inner: Arc<StaticExecInner<D, Arch, R>>,
 }
 
-impl<D, Arch: RelocationArch> Debug for StaticExec<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> Debug for StaticExec<D, Arch, R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("StaticExec")
             .field("path", &self.inner.path)
@@ -37,7 +37,7 @@ impl<D, Arch: RelocationArch> Debug for StaticExec<D, Arch> {
     }
 }
 
-impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
     /// Returns the source path or caller-provided path identifier.
     pub fn path(&self) -> &Path {
         self.inner.path.as_path()
@@ -97,7 +97,7 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
     }
 }
 
-struct StaticExecInner<D, Arch: RelocationArch = NativeArch> {
+struct StaticExecInner<D, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
     /// Loader source path or caller-provided source identifier.
     path: PathBuf,
 
@@ -108,7 +108,7 @@ struct StaticExecInner<D, Arch: RelocationArch = NativeArch> {
     user_data: D,
 
     /// Memory segments
-    segments: ElfSegments,
+    segments: ElfSegments<R>,
 
     /// Program headers
     phdrs: Option<Vec<ElfPhdr<Arch::Layout>>>,
@@ -120,8 +120,8 @@ struct StaticExecInner<D, Arch: RelocationArch = NativeArch> {
     tls_tp_offset: Option<TlsTpOffset>,
 }
 
-impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawExec<D, Arch> {
-    type Output = LoadedExec<D, Arch>;
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Relocatable<D> for RawExec<D, Arch, R> {
+    type Output = LoadedExec<D, Arch, R>;
     type Arch = Arch;
 
     fn relocate<PreH, PostH, Obs>(
@@ -159,19 +159,19 @@ impl<D: 'static, Arch: RelocationArch> Relocatable<D> for RawExec<D, Arch> {
 /// The optional `Arch` type parameter is forwarded to the underlying
 /// [`RawDynamic`] for dynamic executables. Static executables ignore it but
 /// still carry it so that downstream APIs can treat both variants uniformly.
-pub enum RawExec<D, Arch = crate::arch::NativeArch>
+pub enum RawExec<D, Arch = crate::arch::NativeArch, R: RegionAccess = HostRegion>
 where
     D: 'static,
     Arch: RelocationArch,
 {
     /// A dynamically linked executable with `PT_DYNAMIC`.
-    Dynamic(RawDynamic<D, Arch>),
+    Dynamic(RawDynamic<D, Arch, R>),
 
     /// A statically linked executable without `PT_DYNAMIC`.
-    Static(StaticExec<D, Arch>),
+    Static(StaticExec<D, Arch, R>),
 }
 
-impl<D, Arch: RelocationArch> Debug for RawExec<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> Debug for RawExec<D, Arch, R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawExec")
             .field("name", &self.name())
@@ -179,7 +179,7 @@ impl<D, Arch: RelocationArch> Debug for RawExec<D, Arch> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawExec<D, Arch, R> {
     /// Creates a relocation builder for this executable image.
     pub fn relocator(self) -> Relocator<Self, (), (), D, Arch> {
         Relocator::new().with_object(self)
@@ -287,20 +287,20 @@ impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
 /// Dynamic executables retain access to their underlying [`LoadedCore`], while
 /// static executables expose a smaller set of metadata directly on this wrapper.
 #[derive(Clone, Debug)]
-pub struct LoadedExec<D: 'static, Arch: RelocationArch = NativeArch> {
+pub struct LoadedExec<D: 'static, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
     /// Entry point of the executable.
     entry: VmAddr,
     /// The relocated ELF object.
-    inner: LoadedExecInner<D, Arch>,
+    inner: LoadedExecInner<D, Arch, R>,
 }
 
 #[derive(Clone, Debug)]
-enum LoadedExecInner<D: 'static, Arch: RelocationArch = NativeArch> {
-    Dynamic(LoadedCore<D, Arch>),
-    Static(StaticExec<D, Arch>),
+enum LoadedExecInner<D: 'static, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
+    Dynamic(LoadedCore<D, Arch, R>),
+    Static(StaticExec<D, Arch, R>),
 }
 
-impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedExec<D, Arch, R> {
     /// Returns the entry point of the executable.
     #[inline]
     pub fn entry(&self) -> usize {
@@ -359,7 +359,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
 
     /// Returns a reference to the core ELF object if this is a dynamic executable.
     /// Returns the loaded dynamic core, or `None` for static executables.
-    pub fn core_ref(&self) -> Option<&LoadedCore<D, Arch>> {
+    pub fn core_ref(&self) -> Option<&LoadedCore<D, Arch, R>> {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => Some(module),
             LoadedExecInner::Static(_) => None,
@@ -383,9 +383,9 @@ impl<D: 'static, Arch: RelocationArch> LoadedExec<D, Arch> {
     }
 }
 
-impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
+impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
     pub(crate) fn from_builder<'obs, Obs, Tls>(
-        mut builder: ImageBuilder<'obs, Obs, Tls, D, Arch>,
+        mut builder: ImageBuilder<'obs, Obs, Tls, D, Arch, R>,
         phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where
@@ -423,9 +423,9 @@ impl<D, Arch: RelocationArch> StaticExec<D, Arch> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> RawExec<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawExec<D, Arch, R> {
     pub(crate) fn from_builder<'obs, Obs, Tls>(
-        builder: ImageBuilder<'obs, Obs, Tls, D, Arch>,
+        builder: ImageBuilder<'obs, Obs, Tls, D, Arch, R>,
         phdrs: &[ElfPhdr<Arch::Layout>],
         has_dynamic: bool,
     ) -> Result<Self>

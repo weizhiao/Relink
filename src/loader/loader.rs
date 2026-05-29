@@ -3,7 +3,7 @@ use crate::{
     arch::NativeArch,
     image::RawDynamic,
     observer::LoadObserver,
-    os::{DefaultMmap, Mapper, Mmap, PageSize},
+    os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
     tls::TlsResolver,
 };
@@ -29,30 +29,33 @@ use core::marker::PhantomData;
 /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
 /// let lib = raw.relocator().relocate().unwrap();
 /// ```
-pub struct Loader<Obs = (), D: 'static = (), Tls = (), Arch = NativeArch>
+pub struct Loader<Obs = (), D: 'static = (), Tls = (), Arch = NativeArch, M = DefaultMmap>
 where
     Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
+    M: Mmap,
 {
     pub(crate) buf: super::ElfBuf,
-    pub(crate) inner: LoaderInner<Obs, D, Arch>,
+    pub(crate) inner: LoaderInner<Obs, D, Arch, M>,
     _marker: PhantomData<(Tls, Arch)>,
 }
 
-pub(crate) struct LoaderInner<Obs, D: 'static, Arch: RelocationArch> {
-    pub(crate) mapper: Mapper,
+pub(crate) struct LoaderInner<Obs, D: 'static, Arch: RelocationArch, M: Mmap = DefaultMmap> {
+    pub(crate) mapper: M,
     pub(crate) observer: Obs,
     pub(crate) page_size: Option<PageSize>,
     pub(crate) force_static_tls: bool,
-    pub(crate) dynamic_initializer: Box<dyn FnMut(&mut RawDynamic<D, Arch>) -> Result<()>>,
+    pub(crate) dynamic_initializer:
+        Box<dyn FnMut(&mut RawDynamic<D, Arch, M::Region>) -> Result<()>>,
 }
 
-impl<Obs, D, Arch> LoaderInner<Obs, D, Arch>
+impl<Obs, D, Arch, M> LoaderInner<Obs, D, Arch, M>
 where
     Obs: LoadObserver<Arch>,
     D: 'static,
     Arch: RelocationArch,
+    M: Mmap,
 {
     #[inline]
     pub(crate) fn force_static_tls(&self) -> bool {
@@ -60,8 +63,8 @@ where
     }
 
     #[inline]
-    pub(crate) fn mapper(&self) -> Mapper {
-        self.mapper.clone()
+    pub(crate) fn mapper(&self) -> &M {
+        &self.mapper
     }
 
     #[inline]
@@ -82,7 +85,10 @@ where
     }
 
     #[inline]
-    pub(crate) fn initialize_dynamic(&mut self, dynamic: &mut RawDynamic<D, Arch>) -> Result<()> {
+    pub(crate) fn initialize_dynamic(
+        &mut self,
+        dynamic: &mut RawDynamic<D, Arch, M::Region>,
+    ) -> Result<()> {
         (self.dynamic_initializer)(dynamic)
     }
 }
@@ -100,7 +106,7 @@ impl Loader<(), (), (), NativeArch> {
         Self {
             buf: super::ElfBuf::new(),
             inner: LoaderInner {
-                mapper: Mapper::new(DefaultMmap::default()),
+                mapper: DefaultMmap::default(),
                 observer: (),
                 page_size: None,
                 force_static_tls: false,
@@ -111,15 +117,16 @@ impl Loader<(), (), (), NativeArch> {
     }
 }
 
-impl<Obs, D, Tls, Arch> Loader<Obs, D, Tls, Arch>
+impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<Arch>,
     D: 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
+    M: Mmap,
 {
     #[inline]
-    pub(crate) fn mapper(&self) -> Mapper {
+    pub(crate) fn mapper(&self) -> &M {
         self.inner.mapper()
     }
 
@@ -132,8 +139,8 @@ where
     /// addresses.
     pub fn with_dynamic_initializer<NewD>(
         self,
-        initializer: impl FnMut(&mut RawDynamic<NewD, Arch>) -> Result<()> + 'static,
-    ) -> Loader<Obs, NewD, Tls, Arch>
+        initializer: impl FnMut(&mut RawDynamic<NewD, Arch, M::Region>) -> Result<()> + 'static,
+    ) -> Loader<Obs, NewD, Tls, Arch, M>
     where
         NewD: Default + 'static,
     {
@@ -152,7 +159,7 @@ where
 
     /// Consumes the current loader and returns a new one with the specified
     /// load observer.
-    pub fn with_observer<NewObs>(self, observer: NewObs) -> Loader<NewObs, D, Tls, Arch>
+    pub fn with_observer<NewObs>(self, observer: NewObs) -> Loader<NewObs, D, Tls, Arch, M>
     where
         NewObs: LoadObserver<Arch>,
     {
@@ -179,20 +186,9 @@ where
         self
     }
 
-    /// Returns a new loader with a custom `Mmap` backend value.
-    pub fn with_mmap<NewMmap: Mmap>(self, mapper: NewMmap) -> Self {
-        let mut inner = self.inner;
-        inner.mapper = Mapper::new(mapper);
-        Loader {
-            buf: self.buf,
-            inner,
-            _marker: PhantomData,
-        }
-    }
-
     /// Consumes the current loader and returns a new one with the specified TLS resolver.
     #[cfg(feature = "tls")]
-    pub fn with_tls_resolver<NewTls>(self) -> Loader<Obs, D, NewTls, Arch>
+    pub fn with_tls_resolver<NewTls>(self) -> Loader<Obs, D, NewTls, Arch, M>
     where
         NewTls: TlsResolver,
     {
@@ -205,7 +201,9 @@ where
 
     /// Consumes the current loader and returns a new one with the default TLS resolver.
     #[cfg(feature = "tls")]
-    pub fn with_default_tls_resolver(self) -> Loader<Obs, D, crate::tls::DefaultTlsResolver, Arch> {
+    pub fn with_default_tls_resolver(
+        self,
+    ) -> Loader<Obs, D, crate::tls::DefaultTlsResolver, Arch, M> {
         Loader {
             buf: self.buf,
             inner: self.inner,
@@ -240,12 +238,31 @@ where
 ///     .for_arch::<X86_64Arch>()
 ///     .with_dynamic_initializer::<()>(|_| Ok(()));
 /// ```
-impl<Obs, Tls, Arch> Loader<Obs, (), Tls, Arch>
+impl<Obs, Tls, Arch, M> Loader<Obs, (), Tls, Arch, M>
 where
     Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
+    M: Mmap,
 {
+    /// Returns a new loader with a custom `Mmap` backend.
+    pub fn with_mmap<NewMmap>(self, mapper: NewMmap) -> Loader<Obs, (), Tls, Arch, NewMmap>
+    where
+        NewMmap: Mmap,
+    {
+        Loader {
+            buf: self.buf,
+            inner: LoaderInner {
+                mapper,
+                observer: self.inner.observer,
+                page_size: self.inner.page_size,
+                force_static_tls: self.inner.force_static_tls,
+                dynamic_initializer: Box::new(|_| Ok(())),
+            },
+            _marker: PhantomData,
+        }
+    }
+
     /// Consumes the current loader and returns a new one whose target
     /// architecture is `NewArch` instead of the previous `Arch`.
     ///
@@ -270,7 +287,7 @@ where
     /// and then attach the initializer once the target architecture is fixed.
     ///
     /// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
-    pub fn for_arch<NewArch>(self) -> Loader<Obs, (), Tls, NewArch>
+    pub fn for_arch<NewArch>(self) -> Loader<Obs, (), Tls, NewArch, M>
     where
         NewArch: RelocationArch,
         Obs: LoadObserver<NewArch>,

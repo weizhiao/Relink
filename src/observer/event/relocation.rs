@@ -1,7 +1,7 @@
 use crate::{
     Result,
     arch::NativeArch,
-    elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol},
+    elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol, HashTable},
     image::{CoreInner, ElfCore},
     input::Path,
     os::{HostRegion, RegionAccess, VmAddr},
@@ -69,18 +69,21 @@ pub struct SymbolBindingEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
+    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
-    core: &'a ElfCore<D, Arch, R>,
+    core: &'a ElfCore<D, Arch, R, H>,
     rel: &'a ElfRelType<Arch>,
     symbol: &'a ElfSymbol<Arch::Layout>,
     symbol_name: &'a str,
     resolved: Option<VmAddr>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> SymbolBindingEvent<'a, D, Arch, R> {
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
+    SymbolBindingEvent<'a, D, Arch, R, H>
+{
     #[inline]
     pub(crate) const fn new(
-        core: &'a ElfCore<D, Arch, R>,
+        core: &'a ElfCore<D, Arch, R, H>,
         rel: &'a ElfRelType<Arch>,
         symbol: &'a ElfSymbol<Arch::Layout>,
         symbol_name: &'a str,
@@ -97,7 +100,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> SymbolBindingEvent<'
 
     /// Returns the image core associated with this binding.
     #[inline]
-    pub const fn core(&self) -> &ElfCore<D, Arch, R> {
+    pub const fn core(&self) -> &ElfCore<D, Arch, R, H> {
         self.core
     }
 
@@ -152,17 +155,20 @@ pub struct IfuncBindingEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
+    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
-    core: &'a ElfCore<D, Arch, R>,
+    core: &'a ElfCore<D, Arch, R, H>,
     rel: &'a ElfRelType<Arch>,
     resolver: VmAddr,
     resolved: Option<VmAddr>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> IfuncBindingEvent<'a, D, Arch, R> {
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
+    IfuncBindingEvent<'a, D, Arch, R, H>
+{
     #[inline]
     pub(crate) const fn new(
-        core: &'a ElfCore<D, Arch, R>,
+        core: &'a ElfCore<D, Arch, R, H>,
         rel: &'a ElfRelType<Arch>,
         resolver: VmAddr,
     ) -> Self {
@@ -176,7 +182,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> IfuncBindingEvent<'a
 
     /// Returns the image core associated with this binding.
     #[inline]
-    pub const fn core(&self) -> &ElfCore<D, Arch, R> {
+    pub const fn core(&self) -> &ElfCore<D, Arch, R, H> {
         self.core
     }
 
@@ -315,18 +321,21 @@ pub struct TlsDescBindingEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
+    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
-    core: &'a ElfCore<D, Arch, R>,
+    core: &'a ElfCore<D, Arch, R, H>,
     rel: &'a ElfRelType<Arch>,
     request: TlsDescBindingRequest,
     value: Option<TlsDescBindingValue>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> TlsDescBindingEvent<'a, D, Arch, R> {
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
+    TlsDescBindingEvent<'a, D, Arch, R, H>
+{
     #[inline]
     #[cfg(feature = "tls")]
     pub(crate) const fn new(
-        core: &'a ElfCore<D, Arch, R>,
+        core: &'a ElfCore<D, Arch, R, H>,
         rel: &'a ElfRelType<Arch>,
         request: TlsDescBindingRequest,
     ) -> Self {
@@ -340,7 +349,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> TlsDescBindingEvent<
 
     /// Returns the image core associated with this binding.
     #[inline]
-    pub const fn core(&self) -> &ElfCore<D, Arch, R> {
+    pub const fn core(&self) -> &ElfCore<D, Arch, R, H> {
         self.core
     }
 
@@ -465,8 +474,12 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleRelocatedEvent
     }
 }
 
-pub(crate) type SharedModuleUnloadHook<D, Arch = NativeArch, R = HostRegion> =
-    Arc<dyn for<'a> Fn(ModuleUnloadEvent<'a, D, Arch, R>) -> Result<()> + Send + Sync>;
+pub(crate) type SharedModuleUnloadHook<
+    D,
+    Arch = NativeArch,
+    R = HostRegion,
+    H = HashTable<<Arch as RelocationArch>::Layout>,
+> = Arc<dyn for<'a> Fn(ModuleUnloadEvent<'a, D, Arch, R, H>) -> Result<()> + Send + Sync>;
 
 /// Module-level event emitted when a loaded image is being dropped.
 pub struct ModuleUnloadEvent<
@@ -474,13 +487,16 @@ pub struct ModuleUnloadEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
+    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
-    core: &'a CoreInner<D, Arch, R>,
+    core: &'a CoreInner<D, Arch, R, H>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleUnloadEvent<'a, D, Arch, R> {
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
+    ModuleUnloadEvent<'a, D, Arch, R, H>
+{
     #[inline]
-    pub(crate) const fn new(core: &'a CoreInner<D, Arch, R>) -> Self {
+    pub(crate) const fn new(core: &'a CoreInner<D, Arch, R, H>) -> Self {
         Self { core }
     }
 

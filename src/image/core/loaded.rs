@@ -3,12 +3,12 @@ use crate::{
     Result,
     arch::ArchKind,
     elf::{
-        ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, PreCompute, SymbolInfo,
-        SymbolTable,
+        ElfDyn, ElfDynamicTag, ElfHashTable, ElfPhdr, ElfProgramType, ElfSymbol, HashTable,
+        PreCompute, SymbolInfo, SymbolTable,
     },
     image::{Module, ModuleHandle, ModuleScope},
     input::{Path, PathBuf},
-    os::{HostRegion, MappedRegion, MappedView, Mapper, RegionAccess, VmAddr, VmOffset},
+    os::{HostRegion, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymDef},
     segment::ElfSegments,
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -25,8 +25,9 @@ pub struct LoadedCore<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
+    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
-    pub(crate) core: ElfCore<D, Arch, R>,
+    pub(crate) core: ElfCore<D, Arch, R, H>,
     pub(crate) deps: ModuleScope<Arch>,
 }
 
@@ -98,7 +99,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ExactSizeIterator
 {
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Debug for LoadedCore<D, Arch, R, H>
+where
+    H: ElfHashTable<Arch::Layout> + 'static,
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LoadedCore")
             .field("name", &self.core.name())
@@ -114,7 +118,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedCore<D, 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Clone for LoadedCore<D, Arch, R, H> {
     /// Clones the [`LoadedCore`], incrementing the reference count of its core and dependencies.
     fn clone(&self) -> Self {
         LoadedCore {
@@ -124,36 +128,43 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedCore<D, 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedCore<D, Arch, R>>
-    for LoadedCore<D, Arch, R>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> From<&LoadedCore<D, Arch, R, H>>
+    for LoadedCore<D, Arch, R, H>
 {
     #[inline]
-    fn from(module: &LoadedCore<D, Arch, R>) -> Self {
+    fn from(module: &LoadedCore<D, Arch, R, H>) -> Self {
         module.clone()
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<LoadedCore<D, Arch, R>>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> From<LoadedCore<D, Arch, R, H>>
     for ModuleHandle<Arch>
+where
+    H: ElfHashTable<Arch::Layout> + 'static,
 {
     #[inline]
-    fn from(module: LoadedCore<D, Arch, R>) -> Self {
+    fn from(module: LoadedCore<D, Arch, R, H>) -> Self {
         Self::new(module)
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedCore<D, Arch, R>>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> From<&LoadedCore<D, Arch, R, H>>
     for ModuleHandle<Arch>
+where
+    H: ElfHashTable<Arch::Layout> + 'static,
 {
     #[inline]
-    fn from(module: &LoadedCore<D, Arch, R>) -> Self {
+    fn from(module: &LoadedCore<D, Arch, R, H>) -> Self {
         Self::new(module.clone())
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> LoadedCore<D, Arch, R, H>
+where
+    H: ElfHashTable<Arch::Layout> + 'static,
+{
     #[inline]
-    pub(crate) fn from_relocated_core(core: ElfCore<D, Arch, R>) -> Self {
+    pub(crate) fn from_relocated_core(core: ElfCore<D, Arch, R, H>) -> Self {
         LoadedCore {
             core,
             deps: ModuleScope::empty(),
@@ -166,12 +177,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     ///
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
-    pub unsafe fn from_core(core: ElfCore<D, Arch, R>) -> Self {
+    pub unsafe fn from_core(core: ElfCore<D, Arch, R, H>) -> Self {
         Self::from_relocated_core(core)
     }
 
     #[inline]
-    pub(crate) fn from_relocated_core_deps<S>(core: ElfCore<D, Arch, R>, deps: S) -> Self
+    pub(crate) fn from_relocated_core_deps<S>(core: ElfCore<D, Arch, R, H>, deps: S) -> Self
     where
         S: Into<ModuleScope<Arch>>,
     {
@@ -371,7 +382,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
 
     /// Creates a weak reference to this ELF core.
     #[inline]
-    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R> {
+    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R, H> {
         self.core.downgrade()
     }
 
@@ -392,7 +403,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     /// # Safety
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
-    pub unsafe fn from_core_deps<S>(core: ElfCore<D, Arch, R>, deps: S) -> Self
+    pub unsafe fn from_core_deps<S>(core: ElfCore<D, Arch, R, H>, deps: S) -> Self
     where
         S: Into<ModuleScope<Arch>>,
     {
@@ -405,7 +416,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     /// Lifecycle information is lost, so the dependencies of the current
     /// loaded object can be dropped too early if this reference is used carelessly.
     #[inline]
-    pub unsafe fn core_ref(&self) -> &ElfCore<D, Arch, R> {
+    pub unsafe fn core_ref(&self) -> &ElfCore<D, Arch, R, H> {
         &self.core
     }
 }
@@ -426,11 +437,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
 
         let addr = base + phdr.p_vaddr();
         let byte_len = phdr.p_filesz();
-        let region = MappedRegion::local_alias(
-            addr.as_mut_ptr::<c_void>(),
-            byte_len,
-            Mapper::from_munmap(|_, _| Ok(())),
-        );
+        let region = MappedRegion::local_alias_no_unmap(addr.as_mut_ptr::<c_void>(), byte_len);
         let view = region
             .read_view::<ElfDyn<Arch::Layout>>(0, byte_len)
             .ok_or(crate::ParsePhdrError::malformed(malformed))?;
@@ -466,11 +473,9 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         user_data: D,
     ) -> Result<Self> {
         let segments = ElfSegments::new(
-            MappedRegion::local(
-                memory.0,
-                memory.1,
-                Mapper::from_munmap(move |addr, len| unsafe { munmap(addr, len) }),
-            ),
+            MappedRegion::local_with_munmap(memory.0, memory.1, move |addr, len| unsafe {
+                munmap(addr, len)
+            }),
             VmAddr::from_ptr(memory.0),
             VmOffset::new(0),
         );
@@ -568,11 +573,12 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     }
 }
 
-impl<D, Arch, R> Module<Arch> for LoadedCore<D, Arch, R>
+impl<D, Arch, R, H> Module<Arch> for LoadedCore<D, Arch, R, H>
 where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
+    H: ElfHashTable<Arch::Layout> + 'static,
 {
     #[inline]
     fn as_any(&self) -> &dyn Any {

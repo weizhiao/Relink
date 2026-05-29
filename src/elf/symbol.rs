@@ -10,7 +10,7 @@ use super::defs::{
 };
 use crate::{
     ParseDynamicError, Result,
-    elf::{ElfDynamic, HashTable, PreCompute},
+    elf::{ElfDynamic, ElfHashTable, HashTable, PreCompute},
     os::{MappedView, RegionAccess},
     segment::ElfSegments,
 };
@@ -212,9 +212,9 @@ impl ElfStringTable {
 }
 
 /// Symbol table of an ELF file.
-pub struct SymbolTable<L: ElfLayout = NativeElfLayout> {
+pub struct SymbolTable<L: ElfLayout = NativeElfLayout, H = HashTable<L>> {
     /// Hash table for efficient symbol lookup.
-    pub(crate) hashtab: HashTable<L>,
+    pub(crate) hashtab: H,
 
     /// Symbol table entries.
     pub(crate) symbols: &'static [ElfSymbol<L>],
@@ -227,7 +227,7 @@ pub struct SymbolTable<L: ElfLayout = NativeElfLayout> {
     pub(crate) version: Option<super::version::ELFVersion>,
 }
 
-impl<L: ElfLayout> Debug for SymbolTable<L> {
+impl<L: ElfLayout, H: Debug> Debug for SymbolTable<L, H> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SymbolTable")
             .field("hashtab", &self.hashtab)
@@ -294,7 +294,7 @@ impl<'symtab> SymbolInfo<'symtab> {
     }
 }
 
-impl<L: ElfLayout> SymbolTable<L> {
+impl<L: ElfLayout> SymbolTable<L, HashTable<L>> {
     /// Creates a symbol table from ELF dynamic section information.
     pub(crate) fn from_dynamic<Arch, R>(
         dynamic: &ElfDynamic<Arch>,
@@ -353,11 +353,45 @@ impl<L: ElfLayout> SymbolTable<L> {
             version,
         })
     }
+}
+
+impl<L: ElfLayout, H> SymbolTable<L, H> {
     /// Returns a reference to the string table.
     pub(crate) fn strtab(&self) -> &ElfStringTable {
         &self.strtab
     }
 
+    /// Returns the symbol and its information for the given index.
+    pub fn symbol_idx<'symtab>(
+        &'symtab self,
+        idx: usize,
+    ) -> (&'symtab ElfSymbol<L>, SymbolInfo<'symtab>) {
+        // Get the symbol at the specified index
+        let symbol = self
+            .symbols
+            .get(idx)
+            .expect("ELF symbol index is out of bounds");
+
+        // Get the symbol name as a C-style string
+        let cname = self.strtab.get_cstr(symbol.st_name());
+
+        // Convert to a Rust string slice
+        let name = ElfStringTable::convert_cstr(cname);
+
+        // Create and return the symbol and its information
+        (
+            symbol,
+            SymbolInfo {
+                name,
+                cname: Some(cname),
+                #[cfg(feature = "version")]
+                version: self.get_requirement(idx),
+            },
+        )
+    }
+}
+
+impl<L: ElfLayout, H: ElfHashTable<L>> SymbolTable<L, H> {
     /// Looks up a symbol by its name.
     pub fn lookup_by_name(&self, name: impl AsRef<str>) -> Option<&ElfSymbol<L>> {
         let info = SymbolInfo::from_str(name.as_ref(), None);
@@ -388,35 +422,6 @@ impl<L: ElfLayout> SymbolTable<L> {
             }
         }
         None
-    }
-
-    /// Returns the symbol and its information for the given index.
-    pub fn symbol_idx<'symtab>(
-        &'symtab self,
-        idx: usize,
-    ) -> (&'symtab ElfSymbol<L>, SymbolInfo<'symtab>) {
-        // Get the symbol at the specified index
-        let symbol = self
-            .symbols
-            .get(idx)
-            .expect("ELF symbol index is out of bounds");
-
-        // Get the symbol name as a C-style string
-        let cname = self.strtab.get_cstr(symbol.st_name());
-
-        // Convert to a Rust string slice
-        let name = ElfStringTable::convert_cstr(cname);
-
-        // Create and return the symbol and its information
-        (
-            symbol,
-            SymbolInfo {
-                name,
-                cname: Some(cname),
-                #[cfg(feature = "version")]
-                version: self.get_requirement(idx),
-            },
-        )
     }
 
     /// Returns the number of symbols in the symbol table.

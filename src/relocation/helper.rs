@@ -1,7 +1,7 @@
 use super::resolve_ifunc;
 use crate::{
     Error, RelocReason, Result,
-    elf::{ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, SymbolInfo},
+    elf::{ElfHashTable, ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, HashTable, SymbolInfo},
     image::{ElfCore, Module, ModuleScope},
     logging,
     observer::{IfuncBindingEvent, RelocationObserver, SymbolBindingEvent},
@@ -21,8 +21,9 @@ pub(crate) struct RelocHelper<
     PreH: ?Sized,
     PostH: ?Sized,
     Obs: ?Sized,
+    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
-    pub(crate) core: &'find ElfCore<D, Arch, R>,
+    pub(crate) core: &'find ElfCore<D, Arch, R, H>,
     pub(crate) scope: ModuleScope<Arch>,
     pub(crate) pre_handler: &'find PreH,
     pub(crate) post_handler: &'find PostH,
@@ -32,17 +33,18 @@ pub(crate) struct RelocHelper<
     pub(crate) tls_desc_args: TlsDescArgs,
 }
 
-impl<'find, D, Arch, R, PreH, PostH, Obs> RelocHelper<'find, D, Arch, R, PreH, PostH, Obs>
+impl<'find, D, Arch, R, PreH, PostH, Obs, H> RelocHelper<'find, D, Arch, R, PreH, PostH, Obs, H>
 where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
+    H: ElfHashTable<Arch::Layout> + 'static,
     PreH: RelocationHandler<Arch> + ?Sized,
     PostH: RelocationHandler<Arch> + ?Sized,
     Obs: RelocationObserver<Arch> + ?Sized,
 {
     pub(crate) fn new(
-        core: &'find ElfCore<D, Arch, R>,
+        core: &'find ElfCore<D, Arch, R, H>,
         scope: ModuleScope<Arch>,
         pre_handler: &'find PreH,
         post_handler: &'find PostH,
@@ -191,14 +193,15 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
 ///
 /// The dynamic parts are stored structurally and formatted only in `Display`.
 #[cold]
-pub(crate) fn reloc_error<A, D, R>(
+pub(crate) fn reloc_error<A, D, R, H>(
     rel: &ElfRelType<A>,
     reason: RelocReason,
-    lib: &ElfCore<D, A, R>,
+    lib: &ElfCore<D, A, R, H>,
 ) -> Error
 where
     A: RelocationArch,
     R: RegionAccess,
+    H: ElfHashTable<A::Layout> + 'static,
 {
     let r_type_str = A::rel_type_to_str(rel.r_type());
     let r_sym = rel.r_symbol();
@@ -214,12 +217,13 @@ where
     }
 }
 
-fn find_weak<'lib, D, Arch: RelocationArch, R: RegionAccess>(
-    lib: &'lib ElfCore<D, Arch, R>,
+fn find_weak<'lib, D, Arch: RelocationArch, R: RegionAccess, H>(
+    lib: &'lib ElfCore<D, Arch, R, H>,
     dynsym: &'lib ElfSymbol<Arch::Layout>,
 ) -> Option<SymDef<'lib, D, Arch>>
 where
     D: 'static,
+    H: ElfHashTable<Arch::Layout> + 'static,
 {
     // 弱符号 + WEAK 用 0 填充rela offset
     if dynsym.is_weak() && dynsym.is_undef() {
@@ -236,8 +240,8 @@ where
 ///
 /// Returns the resolved address.
 #[inline]
-fn find_symbol_addr<D, Arch>(
-    core: &ElfCore<D, Arch, impl RegionAccess>,
+fn find_symbol_addr<D, Arch, R, H>(
+    core: &ElfCore<D, Arch, R, H>,
     scope: &ModuleScope<Arch>,
     dynsym: &ElfSymbol<Arch::Layout>,
     syminfo: &SymbolInfo<'_>,
@@ -245,7 +249,9 @@ fn find_symbol_addr<D, Arch>(
 ) -> Option<VmAddr>
 where
     Arch: RelocationArch,
+    R: RegionAccess,
     D: 'static,
+    H: ElfHashTable<Arch::Layout> + 'static,
 {
     if Arch::SUPPORTS_NATIVE_RUNTIME
         && let Some(addr) = lookup_tls_get_addr(syminfo.name(), tls_get_addr)
@@ -263,14 +269,15 @@ where
     None
 }
 
-pub(crate) fn find_symdef_impl<'lib, D, Arch: RelocationArch, R: RegionAccess>(
-    core: &'lib ElfCore<D, Arch, R>,
+pub(crate) fn find_symdef_impl<'lib, D, Arch: RelocationArch, R: RegionAccess, H>(
+    core: &'lib ElfCore<D, Arch, R, H>,
     scope: &'lib ModuleScope<Arch>,
     sym: &'lib ElfSymbol<Arch::Layout>,
     syminfo: &SymbolInfo,
 ) -> Option<SymDef<'lib, D, Arch>>
 where
     D: 'static,
+    H: ElfHashTable<Arch::Layout> + 'static,
 {
     if unlikely(sym.is_local()) {
         Some(SymDef::new(Some(sym), core))

@@ -1,7 +1,7 @@
 use crate::input::{ElfReader, Path, PathBuf};
 use crate::{
     Error, IoError, MmapError, Result, logging,
-    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, ProtFlags, VmAddr},
+    os::{HostRegion, MadviseAdvice, MapFlags, MappedRegion, Mmap, ProtFlags, VmAddr},
 };
 use alloc::ffi::CString;
 use core::ffi::{c_int, c_void};
@@ -34,13 +34,15 @@ pub(crate) struct RawFile {
 }
 
 impl Mmap for DefaultMmap {
+    type Region = HostRegion;
+
     unsafe fn create_space(
         &self,
         addr: Option<VmAddr>,
         len: usize,
         prot: ProtFlags,
         _populate_later: bool,
-    ) -> crate::Result<MappedRegion> {
+    ) -> crate::Result<MappedRegion<Self::Region>> {
         let ptr = unsafe {
             #[cfg(target_pointer_width = "32")]
             let syscall = Sysno::mmap2;
@@ -62,6 +64,10 @@ impl Mmap for DefaultMmap {
             )? as *mut c_void
         };
         Ok(MappedRegion::local(ptr, len, *self))
+    }
+
+    unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
+        Ok(MappedRegion::local_alias(addr.as_mut_ptr(), len, *self))
     }
 
     unsafe fn map_file_at(

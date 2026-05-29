@@ -1,5 +1,5 @@
 use super::{
-    ObjectRelocation,
+    CustomHash, ObjectRelocation,
     layout::{PltGotSection, SectionSegments},
 };
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
     input::PathBuf,
     loader::LoaderInner,
     observer::LoadObserver,
-    os::{VmAddr, VmOffset},
+    os::{HostRegion, RegionAccess, VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::{ElfSegments, SegmentBuilder},
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
@@ -20,13 +20,18 @@ use alloc::{boxed::Box, vec::Vec};
 use core::marker::PhantomData;
 
 /// Builder for creating relocatable ELF objects.
-pub(crate) struct ObjectBuilder<Tls, D = (), Arch: RelocationArch = crate::arch::NativeArch> {
+pub(crate) struct ObjectBuilder<
+    Tls,
+    D = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = HostRegion,
+> {
     pub(crate) path: PathBuf,
-    pub(crate) symtab: SymbolTable<Arch::Layout>,
+    pub(crate) symtab: SymbolTable<Arch::Layout, CustomHash>,
     pub(crate) init: Lifecycle,
-    pub(crate) segments: ElfSegments,
+    pub(crate) segments: ElfSegments<R>,
     pub(crate) relocation: ObjectRelocation<Arch>,
-    pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
+    pub(crate) mprotect: Box<dyn Fn(&ElfSegments<R>) -> Result<()>>,
     pub(crate) pltgot: PltGotSection,
     pub(crate) tls_mod_id: Option<TlsModuleId>,
     pub(crate) tls_tp_offset: Option<TlsTpOffset>,
@@ -36,15 +41,16 @@ pub(crate) struct ObjectBuilder<Tls, D = (), Arch: RelocationArch = crate::arch:
 }
 
 struct ObjectSectionData<Arch: RelocationArch> {
-    symtab: SymbolTable<Arch::Layout>,
+    symtab: SymbolTable<Arch::Layout, CustomHash>,
     relocation: ObjectRelocation<Arch>,
     init: Lifecycle,
 }
 
-impl<T, D, Arch> ObjectBuilder<T, D, Arch>
+impl<T, D, Arch, R> ObjectBuilder<T, D, Arch, R>
 where
     T: TlsResolver,
     Arch: RelocationArch,
+    R: RegionAccess,
 {
     #[inline]
     pub(crate) fn validate_shdrs(shdrs: &[ElfShdr<Arch::Layout>]) -> Result<()> {
@@ -99,7 +105,7 @@ where
         symtab_shdr: &ElfShdr<Arch::Layout>,
         shdrs: &[ElfShdr<Arch::Layout>],
         base: VmAddr,
-    ) -> SymbolTable<Arch::Layout> {
+    ) -> SymbolTable<Arch::Layout, CustomHash> {
         let symbols: &mut [ElfSymbol<Arch::Layout>] = symtab_shdr.content_mut();
         for symbol in symbols {
             let section_index = symbol.st_shndx();
@@ -166,8 +172,8 @@ where
     pub(crate) fn new(
         path: PathBuf,
         shdrs: &mut [ElfShdr<Arch::Layout>],
-        segments: ElfSegments,
-        mprotect: Box<dyn Fn() -> Result<()>>,
+        segments: ElfSegments<R>,
+        mprotect: Box<dyn Fn(&ElfSegments<R>) -> Result<()>>,
         mut pltgot: PltGotSection,
         user_data: D,
     ) -> Result<Self> {
@@ -197,17 +203,18 @@ where
     }
 }
 
-impl<Obs, D, Arch> LoaderInner<Obs, D, Arch>
+impl<Obs, D, Arch, M> LoaderInner<Obs, D, Arch, M>
 where
     Obs: LoadObserver<Arch>,
     D: Default + 'static,
     Arch: crate::relocation::RelocationArch,
+    M: crate::os::Mmap,
 {
     pub(crate) fn create_object_builder<Tls>(
         &mut self,
         shdrs: &mut [ElfShdr<Arch::Layout>],
         mut object: impl crate::input::ElfReader,
-    ) -> Result<ObjectBuilder<Tls, D, Arch>>
+    ) -> Result<ObjectBuilder<Tls, D, Arch, M::Region>>
     where
         Tls: TlsResolver,
     {
@@ -215,13 +222,10 @@ where
         let mapper = self.mapper();
         let mut shdr_segments =
             SectionSegments::<Arch>::new(shdrs, &mut object, self.page_size()?.bytes())?;
-        let segments = shdr_segments.load_segments(mapper.clone(), &mut object)?;
-        let base = segments.base();
+        let segments = shdr_segments.load_segments(mapper, &mut object)?;
         let pltgot = shdr_segments.take_pltgot();
-        let mprotect = Box::new(move || {
-            shdr_segments.mprotect(mapper.as_ref(), base)?;
-            Ok(())
-        });
+        let mprotect =
+            Box::new(move |segments: &ElfSegments<M::Region>| shdr_segments.mprotect(segments));
         let user_data = D::default();
 
         ObjectBuilder::new(path, shdrs, segments, mprotect, pltgot, user_data)

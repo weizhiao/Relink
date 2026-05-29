@@ -167,6 +167,8 @@ pub mod loader;
 mod logging;
 #[cfg(feature = "object")]
 mod object;
+#[cfg(feature = "object")]
+pub use object::CustomHash;
 pub mod observer;
 pub mod os;
 pub mod relocation;

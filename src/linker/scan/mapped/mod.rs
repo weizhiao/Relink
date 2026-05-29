@@ -7,7 +7,7 @@ use crate::{
     image::{RawDynamic, ScannedDynamic},
     input::PathBuf,
     observer::LoadObserver,
-    os::{Mapper, VmAddr, VmOffset},
+    os::{HostRegion, Mmap, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, RelocationValueProvider},
     segment::ElfSegments,
     tls::{TlsInfo, TlsResolver},
@@ -22,9 +22,9 @@ use arena::MappedArenaMap;
 pub(crate) use rewrite::GotPltTarget;
 use rewrite::RuntimeMetadataRewriter;
 
-pub(crate) struct RuntimeModuleMemory {
+pub(crate) struct RuntimeModuleMemory<R: RegionAccess = HostRegion> {
     sections: Box<[RuntimeSectionMemory]>,
-    segments: ElfSegments,
+    segments: ElfSegments<R>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -48,9 +48,9 @@ impl RuntimeOffset {
     }
 }
 
-pub(crate) struct MappedRuntimeMemory {
-    arenas: MappedArenaMap,
-    modules: SecondaryMap<ModuleId, RuntimeModuleMemory>,
+pub(crate) struct MappedRuntimeMemory<R: RegionAccess = HostRegion> {
+    arenas: MappedArenaMap<R>,
+    modules: SecondaryMap<ModuleId, RuntimeModuleMemory<R>>,
 }
 
 #[derive(Clone, Copy)]
@@ -78,11 +78,11 @@ impl RuntimeSectionMemory {
     }
 }
 
-impl RuntimeModuleMemory {
+impl<R: RegionAccess> RuntimeModuleMemory<R> {
     fn build(
         module_id: ModuleId,
         layout: &MemoryLayoutPlan,
-        mapped_section_arenas: &MappedArenaMap,
+        mapped_section_arenas: &MappedArenaMap<R>,
     ) -> Result<Self> {
         let module = layout.module(module_id);
         let region = mapped_section_arenas.region();
@@ -151,11 +151,12 @@ impl RuntimeModuleMemory {
     }
 }
 
-impl MappedRuntimeMemory {
-    pub(crate) fn map<K, Arch>(mapper: Mapper, plan: &LinkPlan<K, Arch>) -> Result<Option<Self>>
+impl<R: RegionAccess> MappedRuntimeMemory<R> {
+    pub(crate) fn map<K, Arch, M>(mapper: &M, plan: &LinkPlan<K, Arch>) -> Result<Option<Self>>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        M: Mmap<Region = R> + ?Sized,
     {
         let Some(arenas) = MappedArenaMap::map_plan(mapper, plan)? else {
             return Ok(None);
@@ -170,7 +171,7 @@ impl MappedRuntimeMemory {
         &mut self,
         id: ModuleId,
         layout: &MemoryLayoutPlan,
-    ) -> Result<&RuntimeModuleMemory> {
+    ) -> Result<&RuntimeModuleMemory<R>> {
         let runtime = RuntimeModuleMemory::build(id, layout, &self.arenas)?;
         let res = self.modules.insert(id, runtime);
         debug_assert!(
@@ -196,7 +197,7 @@ impl MappedRuntimeMemory {
         crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     {
         let runtime = self.build_module(id, plan.memory_layout())?;
-        let mut rewriter = RuntimeMetadataRewriter::<_, Arch>::new(id, plan, runtime);
+        let mut rewriter = RuntimeMetadataRewriter::<_, Arch, R>::new(id, plan, runtime);
         rewriter.rewrite()
     }
 
@@ -212,7 +213,7 @@ impl MappedRuntimeMemory {
         self.arenas.protect()
     }
 
-    pub(crate) fn take_module(&mut self, module_id: ModuleId) -> Result<RuntimeModuleMemory> {
+    pub(crate) fn take_module(&mut self, module_id: ModuleId) -> Result<RuntimeModuleMemory<R>> {
         self.modules
             .remove(module_id)
             .ok_or_else(|| {
@@ -222,17 +223,18 @@ impl MappedRuntimeMemory {
     }
 }
 
-pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch, Obs>(
+pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch, Obs, R>(
     scanned: ScannedDynamic<Arch>,
-    runtime: RuntimeModuleMemory,
+    runtime: RuntimeModuleMemory<R>,
     force_static_tls: bool,
     observer: &mut Obs,
-) -> Result<RawDynamic<D, Arch>>
+) -> Result<RawDynamic<D, Arch, R>>
 where
     D: Default + 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
     Obs: LoadObserver<Arch> + ?Sized,
+    R: RegionAccess,
 {
     let original_phdrs = scanned.phdrs().to_vec();
     let mut dynamic = None;

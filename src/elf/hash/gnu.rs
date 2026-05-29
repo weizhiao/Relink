@@ -82,6 +82,17 @@ pub(crate) struct ElfGnuHash<L: ElfLayout> {
 }
 
 impl<L: ElfLayout> ElfGnuHash<L> {
+    /// Compute the GNU hash value for a symbol name.
+    #[inline]
+    pub(crate) fn hash(name: &[u8]) -> u64 {
+        let mut hash = 5381u32;
+
+        for byte in name {
+            hash = hash.wrapping_mul(33).wrapping_add(u32::from(*byte));
+        }
+        hash as u64
+    }
+
     /// Parse a GNU hash table from raw memory
     ///
     /// This method creates an ElfGnuHash instance by parsing the hash table data
@@ -212,28 +223,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
     }
 }
 
-impl<Layout: ElfLayout> ElfHashTable for ElfGnuHash<Layout> {
-    /// Compute the GNU hash value for a symbol name
-    ///
-    /// This method implements the GNU hash algorithm, which is based on
-    /// the djb2 hash function and provides good distribution properties.
-    ///
-    /// # Arguments
-    /// * `name` - The symbol name as a byte slice
-    ///
-    /// # Returns
-    /// The computed hash value
-    #[inline]
-    fn hash(name: &[u8]) -> u64 {
-        let mut hash = 5381u32; // Initial value for djb2 hash
-
-        // GNU hash algorithm (djb2 variant)
-        for byte in name {
-            hash = hash.wrapping_mul(33).wrapping_add(u32::from(*byte));
-        }
-        hash as u64
-    }
-
+impl<L: ElfLayout> ElfHashTable<L> for ElfGnuHash<L> {
     /// Get the number of symbols in the hash table
     ///
     /// This method calculates the number of symbols by examining the bucket
@@ -277,8 +267,9 @@ impl<Layout: ElfLayout> ElfHashTable for ElfGnuHash<Layout> {
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol
     /// * `None` - If the symbol was not found
-    fn lookup<'sym, L: ElfLayout>(
-        table: &'sym SymbolTable<L>,
+    fn lookup<'sym, H>(
+        &self,
+        table: &'sym SymbolTable<L, H>,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
     ) -> Option<&'sym ElfSymbol<L>> {
@@ -288,14 +279,12 @@ impl<Layout: ElfLayout> ElfHashTable for ElfGnuHash<Layout> {
         let fofs = hash as usize / word_bits;
         let fmask = 1u64 << (hash as usize % word_bits);
 
-        // Get the hash table implementation
-        let hashtab = table.hashtab.into_gnuhash().unwrap();
-        let blooms = hashtab.blooms.as_slice();
-        let buckets = hashtab.buckets.as_slice();
-        let chains = hashtab.chains.as_slice();
+        let blooms = self.blooms.as_slice();
+        let buckets = self.buckets.as_slice();
+        let chains = self.chains.as_slice();
 
         // Check bloom filter for fast negative lookup
-        let bloom_idx = fofs & (hashtab.header.nbloom - 1) as usize;
+        let bloom_idx = fofs & (self.header.nbloom - 1) as usize;
         let filter = blooms.get(bloom_idx)?.to_u64();
 
         // First bloom filter check
@@ -304,15 +293,15 @@ impl<Layout: ElfLayout> ElfHashTable for ElfGnuHash<Layout> {
         }
 
         // Second bloom filter check
-        let filter2 = filter >> ((hash >> hashtab.header.nshift) as usize % word_bits);
+        let filter2 = filter >> ((hash >> self.header.nshift) as usize % word_bits);
         if filter2 & 1 == 0 {
             return None;
         }
 
         // Bloom filters passed, now check the actual hash chains
-        let table_start_idx = hashtab.header.symbias as usize;
+        let table_start_idx = self.header.symbias as usize;
         let chain_start_idx =
-            *buckets.get((hash as usize) % hashtab.header.nbucket as usize)? as usize;
+            *buckets.get((hash as usize) % self.header.nbucket as usize)? as usize;
 
         // If bucket is empty, symbol is not present
         if chain_start_idx == 0 {

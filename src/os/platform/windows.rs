@@ -1,7 +1,7 @@
 use crate::{
     IoError, MmapError, Result,
     input::{ElfReader, Path, PathBuf},
-    os::{MadviseAdvice, MapFlags, MappedRegion, Mmap, PageSize, ProtFlags, VmAddr},
+    os::{HostRegion, MadviseAdvice, MapFlags, MappedRegion, Mmap, PageSize, ProtFlags, VmAddr},
 };
 use alloc::vec::Vec;
 use core::{
@@ -103,6 +103,8 @@ fn prot_win(prot: ProtFlags, is_create_file_mapping: bool) -> PAGE_PROTECTION_FL
 }
 
 impl Mmap for DefaultMmap {
+    type Region = HostRegion;
+
     #[inline]
     fn page_size(&self) -> PageSize {
         self.page_size
@@ -114,7 +116,7 @@ impl Mmap for DefaultMmap {
         len: usize,
         prot: ProtFlags,
         populate_later: bool,
-    ) -> Result<MappedRegion> {
+    ) -> Result<MappedRegion<Self::Region>> {
         let ptr = if populate_later {
             unsafe {
                 Memory::VirtualAlloc2(
@@ -142,6 +144,10 @@ impl Mmap for DefaultMmap {
             return Err(MmapError::VirtualAlloc { code: err_code }.into());
         }
         Ok(MappedRegion::local(ptr, len, *self))
+    }
+
+    unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
+        Ok(MappedRegion::local_alias(addr.as_mut_ptr(), len, *self))
     }
 
     unsafe fn map_file_at(

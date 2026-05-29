@@ -493,10 +493,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> RawDynamic<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     /// Build a dynamic image from the intermediate loader state.
     pub(crate) fn from_builder<'obs, Obs, Tls>(
-        mut builder: ImageBuilder<'obs, Obs, Tls, D, Arch>,
+        mut builder: ImageBuilder<'obs, Obs, Tls, D, Arch, R>,
         phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where

@@ -1,6 +1,6 @@
 use crate::{
     ByteRepr, Result,
-    os::{HostRegion, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
+    os::{HostRegion, MappedRegion, MappedView, ProtFlags, RegionAccess, VmAddr, VmOffset},
     relocation::RelocValue,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -273,6 +273,12 @@ impl<R: RegionAccess> ElfSegments<R> {
     pub(crate) fn zero_bytes(&self, addr: VmAddr, len: usize) -> Result<()> {
         debug_assert!(self.contains_range(addr, len));
         unsafe { self.region.zero_bytes(self.region_offset(addr), len) }
+    }
+
+    #[inline]
+    pub(crate) fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
+        debug_assert!(self.contains_range(addr, len));
+        unsafe { self.region.mprotect(self.region_offset(addr), len, prot) }
     }
 
     /// Writes a typed relocation value without checked range validation.

@@ -1,5 +1,5 @@
 use super::{request::DependencyOwner, storage::KeyId};
-use crate::{image::ModuleHandle, input::Path, relocation::RelocationArch};
+use crate::{image::ModuleHandle, input::Path, os::RegionAccess, relocation::RelocationArch};
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
@@ -197,14 +197,15 @@ where
     }
 }
 
-pub(crate) struct LoadSession<D: 'static, Arch: RelocationArch> {
-    pub(crate) resolve: ResolveSession<crate::image::RawDynamic<D, Arch>, Arch>,
+pub(crate) struct LoadSession<D: 'static, Arch: RelocationArch, R: RegionAccess> {
+    pub(crate) resolve: ResolveSession<crate::image::RawDynamic<D, Arch, R>, Arch>,
     pub(crate) ready_to_commit: BTreeMap<KeyId, ReadyCommit<D, Arch>>,
 }
 
-impl<D: 'static, Arch> LoadSession<D, Arch>
+impl<D: 'static, Arch, R> LoadSession<D, Arch, R>
 where
     Arch: RelocationArch,
+    R: RegionAccess,
 {
     #[inline]
     pub(crate) fn new() -> Self {
@@ -215,24 +216,25 @@ where
     }
 }
 
-impl<D: 'static, Arch> LoadSession<D, Arch>
+impl<D: 'static, Arch, R> LoadSession<D, Arch, R>
 where
     Arch: RelocationArch,
+    R: RegionAccess,
 {
     #[inline]
     pub(crate) fn insert_resolved_pending(
         &mut self,
         id: KeyId,
-        raw: crate::image::RawDynamic<D, Arch>,
+        raw: crate::image::RawDynamic<D, Arch, R>,
         direct_deps: Box<[KeyId]>,
     ) {
         self.resolve.insert_resolved_entry(id, raw, direct_deps);
     }
 
     #[inline]
-    pub(crate) fn push_ready<R>(&mut self, id: KeyId, module: R, direct_deps: Box<[KeyId]>)
+    pub(crate) fn push_ready<T>(&mut self, id: KeyId, module: T, direct_deps: Box<[KeyId]>)
     where
-        R: Into<ModuleHandle<Arch>>,
+        T: Into<ModuleHandle<Arch>>,
     {
         let previous = self
             .ready_to_commit

@@ -1,8 +1,8 @@
 //! Custom ELF hash table implementation for relocatable objects.
 
 use crate::elf::{
-    ElfHashTable, ElfLayout, ElfShdr, ElfStringTable, ElfSymbol, ElfSymbolType, HashTable,
-    PreCompute, SymbolInfo, SymbolTable,
+    ElfHashTable, ElfLayout, ElfShdr, ElfStringTable, ElfSymbol, ElfSymbolType, PreCompute,
+    SymbolInfo, SymbolTable,
 };
 use core::hash::{Hash, Hasher};
 use foldhash::{SharedSeed, fast::FoldHasher};
@@ -15,11 +15,17 @@ struct TableEntry {
 
 const HASHER: FoldHasher<'static> = FoldHasher::with_seed(0, SharedSeed::global_fixed());
 
-pub(crate) struct CustomHash {
+pub struct CustomHash {
     map: RawHashTable<TableEntry>,
 }
 
 impl CustomHash {
+    pub(crate) fn hash(name: &[u8]) -> u64 {
+        let mut hasher = HASHER.clone();
+        name.hash(&mut hasher);
+        hasher.finish()
+    }
+
     pub(crate) fn from_shdr<L: ElfLayout>(symtab: &ElfShdr<L>, strtab: &ElfStringTable) -> Self {
         let symbols: &mut [ElfSymbol<L>] = symtab.content_mut();
         let mut map = RawHashTable::with_capacity(symbols.len());
@@ -40,25 +46,17 @@ impl CustomHash {
     }
 }
 
-impl ElfHashTable for CustomHash {
-    fn hash(name: &[u8]) -> u64 {
-        let mut hasher = HASHER.clone();
-        name.hash(&mut hasher);
-        hasher.finish()
-    }
-
+impl<L: ElfLayout> ElfHashTable<L> for CustomHash {
     fn count_syms(&self) -> usize {
         self.map.len()
     }
 
-    fn lookup<'sym, L: ElfLayout>(
-        table: &'sym SymbolTable<L>,
+    fn lookup<'sym, H>(
+        &self,
+        table: &'sym SymbolTable<L, H>,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
     ) -> Option<&'sym ElfSymbol<L>> {
-        let HashTable::Custom(custom_hash) = &table.hashtab else {
-            unreachable!("object symbol lookup requires custom hash table");
-        };
         let name = symbol.name();
         let hash = if let Some(hash) = precompute.custom {
             hash
@@ -68,8 +66,7 @@ impl ElfHashTable for CustomHash {
             hash
         };
 
-        custom_hash
-            .map
+        self.map
             .find(hash, |entry| entry.name == name)
             .map(|entry| table.symbol_idx(entry.idx).0)
     }

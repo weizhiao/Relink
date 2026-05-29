@@ -3,7 +3,7 @@ use super::super::plan::LinkPlan;
 use crate::{
     LinkerError, Result,
     entity::SecondaryMap,
-    os::{MappedRegion, Mapper, Mmap, ProtFlags, VmAddr, align_up},
+    os::{HostRegion, MappedRegion, Mmap, ProtFlags, RegionAccess, VmAddr, align_up},
     relocation::RelocationArch,
 };
 use alloc::vec::Vec;
@@ -16,19 +16,17 @@ pub(crate) struct MappedArena {
 }
 
 #[derive(Clone)]
-pub(crate) struct MappedArenaMap {
-    region: MappedRegion,
+pub(crate) struct MappedArenaMap<R: RegionAccess = HostRegion> {
+    region: MappedRegion<R>,
     arenas: SecondaryMap<ArenaId, MappedArena>,
 }
 
-impl MappedArenaMap {
-    pub(super) fn map_plan<K, Arch>(
-        mapper: Mapper,
-        plan: &LinkPlan<K, Arch>,
-    ) -> Result<Option<Self>>
+impl<R: RegionAccess> MappedArenaMap<R> {
+    pub(super) fn map_plan<K, Arch, M>(mapper: &M, plan: &LinkPlan<K, Arch>) -> Result<Option<Self>>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        M: Mmap<Region = R> + ?Sized,
     {
         if plan
             .modules_with_materialization(Materialization::SectionRegions)
@@ -153,7 +151,7 @@ impl MappedArenaMap {
     }
 
     #[inline]
-    pub(super) fn region(&self) -> MappedRegion {
+    pub(super) fn region(&self) -> MappedRegion<R> {
         self.region.clone()
     }
 
@@ -174,7 +172,11 @@ impl MappedArena {
     }
 
     #[inline]
-    pub(super) fn address(&self, region: &MappedRegion, offset: usize) -> Option<usize> {
+    pub(super) fn address<R: RegionAccess>(
+        &self,
+        region: &MappedRegion<R>,
+        offset: usize,
+    ) -> Option<usize> {
         region
             .addr()
             .get()
@@ -206,7 +208,12 @@ impl MappedArena {
     }
 
     #[inline]
-    fn write_bytes(&self, region: &MappedRegion, offset: usize, bytes: &[u8]) -> Result<()> {
+    fn write_bytes<R: RegionAccess>(
+        &self,
+        region: &MappedRegion<R>,
+        offset: usize,
+        bytes: &[u8],
+    ) -> Result<()> {
         self.check_range(offset, bytes.len())?;
         let region_offset = self.region_offset.checked_add(offset).ok_or_else(|| {
             LinkerError::mapped_arena("mapped section arena write offset overflowed")
@@ -214,7 +221,7 @@ impl MappedArena {
         unsafe { region.write_bytes(region_offset, bytes) }
     }
 
-    fn protect(&self, region: &MappedRegion) -> Result<()> {
+    fn protect<R: RegionAccess>(&self, region: &MappedRegion<R>) -> Result<()> {
         if self.len == 0 {
             return Ok(());
         }
@@ -291,8 +298,8 @@ mod tests {
         assert!(plan.memory_layout_mut().assign(section, arena, 0));
         plan.set_materialization(root, Materialization::SectionRegions);
 
-        let mapper = crate::os::Mapper::new(DefaultMmap::default());
-        let mut mapped = MappedArenaMap::map_plan(mapper, &plan).unwrap().unwrap();
+        let mapper = DefaultMmap::default();
+        let mut mapped = MappedArenaMap::map_plan(&mapper, &plan).unwrap().unwrap();
         mapped.populate(&mut plan).unwrap();
 
         let mapped_arena = mapped.get(arena).unwrap();

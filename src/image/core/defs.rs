@@ -1,5 +1,5 @@
 use crate::{
-    elf::{Lifecycle, SymbolTable},
+    elf::{HashTable, Lifecycle, SymbolTable},
     image::DynamicInfo,
     input::PathBuf,
     logging,
@@ -21,6 +21,7 @@ pub(crate) struct CoreInner<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
+    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
     /// Indicates whether the component has been initialized
     pub(crate) is_init: AtomicBool,
@@ -29,7 +30,7 @@ pub(crate) struct CoreInner<
     pub(crate) path: PathBuf,
 
     /// ELF symbols table
-    pub(crate) symtab: SymbolTable<Arch::Layout>,
+    pub(crate) symtab: SymbolTable<Arch::Layout, H>,
 
     /// Finalization functions resolved during relocation.
     pub(crate) fini: OnceCell<Lifecycle>,
@@ -38,7 +39,7 @@ pub(crate) struct CoreInner<
     pub(crate) fini_executor: OnceCell<SharedLifecycleExecutor<R>>,
 
     /// Optional callback installed by the relocation observer for unload.
-    pub(crate) unload_hook: OnceCell<SharedModuleUnloadHook<D, Arch, R>>,
+    pub(crate) unload_hook: OnceCell<SharedModuleUnloadHook<D, Arch, R, H>>,
 
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
@@ -53,7 +54,7 @@ pub(crate) struct CoreInner<
     pub(crate) user_data: D,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> CoreInner<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> CoreInner<D, Arch, R, H> {
     #[inline]
     pub(crate) fn name(&self) -> &str {
         self.dynamic_info
@@ -63,7 +64,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> CoreInner<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Drop for CoreInner<D, Arch, R, H> {
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed)
@@ -96,9 +97,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Ar
 }
 
 // Safety: CoreInner can be shared between threads.
-unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Sync for CoreInner<D, Arch, R> {}
+unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Sync
+    for CoreInner<D, Arch, R, H>
+{
+}
 // Safety: CoreInner can be sent between threads.
-unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Send for CoreInner<D, Arch, R> {}
+unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Send
+    for CoreInner<D, Arch, R, H>
+{
+}
 
 /// A typed symbol retrieved from a loaded ELF module.
 ///

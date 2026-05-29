@@ -2,8 +2,8 @@ use super::CoreInner;
 use crate::{
     Result,
     elf::{
-        ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, Lifecycle, PreCompute, SymbolInfo,
-        SymbolTable,
+        ElfDyn, ElfDynamic, ElfHashTable, ElfPhdr, ElfPhdrs, ElfSymbol, HashTable, Lifecycle,
+        PreCompute, SymbolInfo, SymbolTable,
     },
     image::{DynamicInfo, Module},
     input::{Path, PathBuf},
@@ -27,18 +27,19 @@ pub struct ElfCoreRef<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
+    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
     /// Weak reference to the shared core allocation.
-    inner: Weak<CoreInner<D, Arch, R>>,
+    inner: Weak<CoreInner<D, Arch, R, H>>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCoreRef<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> ElfCoreRef<D, Arch, R, H> {
     /// Attempts to upgrade the weak pointer to an [`ElfCore`].
     ///
     /// # Returns
     /// * `Some(ElfCore)` - If the component is still alive and the upgrade is successful.
     /// * `None` - If the [`ElfCore`] has been dropped.
-    pub fn upgrade(&self) -> Option<ElfCore<D, Arch, R>> {
+    pub fn upgrade(&self) -> Option<ElfCore<D, Arch, R, H>> {
         self.inner.upgrade().map(|inner| ElfCore { inner })
     }
 }
@@ -52,12 +53,13 @@ pub struct ElfCore<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
+    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
     /// Shared reference to the inner component data.
-    pub(crate) inner: Arc<CoreInner<D, Arch, R>>,
+    pub(crate) inner: Arc<CoreInner<D, Arch, R, H>>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for ElfCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Clone for ElfCore<D, Arch, R, H> {
     /// Clones the [`ElfCore`], incrementing the internal reference count.
     fn clone(&self) -> Self {
         ElfCore {
@@ -66,7 +68,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for ElfCore<D, Arc
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> ElfCore<D, Arch, R, H> {
     /// Returns whether the ELF object has been initialized.
     #[inline]
     pub fn is_init(&self) -> bool {
@@ -81,7 +83,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
 
     /// Creates a weak reference to this ELF core.
     #[inline]
-    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R> {
+    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R, H> {
         ElfCoreRef {
             inner: Arc::downgrade(&self.inner),
         }
@@ -175,7 +177,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
 
     /// Gets the symbol table
     #[inline]
-    pub fn symtab(&self) -> &SymbolTable<Arch::Layout> {
+    pub fn symtab(&self) -> &SymbolTable<Arch::Layout, H> {
         &self.inner.symtab
     }
 
@@ -239,13 +241,17 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     }
 
     /// Sets the unload hook installed by the relocation observer.
-    pub(crate) fn set_unload_hook(&self, hook: SharedModuleUnloadHook<D, Arch, R>) {
+    pub(crate) fn set_unload_hook(&self, hook: SharedModuleUnloadHook<D, Arch, R, H>) {
         assert!(
             self.inner.unload_hook.set(hook).is_ok(),
             "module unload hook must be set only once",
         );
     }
+}
 
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess>
+    ElfCore<D, Arch, R, HashTable<Arch::Layout>>
+{
     /// Creates an ElfCore from raw components
     pub(super) unsafe fn from_raw(
         path: PathBuf,
@@ -290,7 +296,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for ElfCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Debug for ElfCore<D, Arch, R, H> {
     /// Formats the ElfCore for debugging purposes.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfCore")
@@ -302,11 +308,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for ElfCore<D, Arc
     }
 }
 
-impl<D, Arch, R> Module<Arch> for ElfCore<D, Arch, R>
+impl<D, Arch, R, H> Module<Arch> for ElfCore<D, Arch, R, H>
 where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
+    H: ElfHashTable<Arch::Layout> + 'static,
 {
     #[inline]
     fn as_any(&self) -> &dyn Any {

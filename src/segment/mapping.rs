@@ -1,5 +1,5 @@
 use crate::input::ElfReader;
-use crate::os::{MapFlags, Mapper, Mmap, ProtFlags, VmAddr, VmOffset};
+use crate::os::{MapFlags, Mmap, ProtFlags, VmAddr, VmOffset};
 use crate::{Result, logging};
 
 use super::{ElfSegment, ElfSegments};
@@ -37,12 +37,15 @@ impl ElfSegment {
     /// # Returns
     /// * `Ok(())` - If mapping succeeds
     /// * `Err(Error)` - If mapping fails
-    fn map_segment(
+    fn map_segment<M>(
         &mut self,
-        mapper: &dyn Mmap,
+        mapper: &M,
         object: &mut impl ElfReader,
-        space: &ElfSegments,
-    ) -> Result<()> {
+        space: &ElfSegments<M::Region>,
+    ) -> Result<()>
+    where
+        M: Mmap + ?Sized,
+    {
         let len = self.len;
         let base = space.base();
         let addr = self.vm_addr(base);
@@ -94,12 +97,15 @@ impl ElfSegment {
     /// # Returns
     /// * `Ok(())` - If protection change succeeds
     /// * `Err(Error)` - If protection change fails
-    fn mprotect(&self, mapper: &dyn Mmap, base: VmAddr) -> Result<()> {
+    fn mprotect<R>(&self, space: &ElfSegments<R>) -> Result<()>
+    where
+        R: crate::os::RegionAccess,
+    {
         if self.need_copy || self.from_relocatable {
             let len = self.len;
             debug_assert!(len.is_multiple_of(self.page_size));
-            let addr = self.vm_addr(base);
-            unsafe { mapper.mprotect(addr, len, self.prot) }?;
+            let addr = self.vm_addr(space.base());
+            space.mprotect(addr, len, self.prot)?;
 
             logging::trace!(
                 "[Mprotect] address: {}, length: {}, prot: {:?}",
@@ -120,7 +126,10 @@ impl ElfSegment {
     /// # Returns
     /// * `Ok(())` - If filling succeeds
     /// * `Err(Error)` - If filling fails
-    fn fill_zero(&self, mapper: &dyn Mmap, space: &ElfSegments) -> Result<()> {
+    fn fill_zero<M>(&self, mapper: &M, space: &ElfSegments<M::Region>) -> Result<()>
+    where
+        M: Mmap + ?Sized,
+    {
         if self.zero_size > 0 {
             let zero_start = space.base() + self.segment_offset(self.content_size);
             let zero_end = zero_start.roundup(self.page_size);
@@ -159,7 +168,9 @@ pub(crate) trait SegmentBuilder {
     /// # Returns
     /// * `Ok(ElfSegments)` - The created segment space
     /// * `Err(Error)` - If creation fails
-    fn create_space(&mut self, mapper: Mapper) -> Result<ElfSegments>;
+    fn create_space<M>(&mut self, mapper: &M) -> Result<ElfSegments<M::Region>>
+    where
+        M: Mmap + ?Sized;
 
     /// Create the individual segments
     ///
@@ -192,12 +203,15 @@ pub(crate) trait SegmentBuilder {
     /// # Returns
     /// * `Ok(ElfSegments)` - The loaded segments
     /// * `Err(Error)` - If loading fails
-    fn load_segments(
+    fn load_segments<M>(
         &mut self,
-        mapper: Mapper,
+        mapper: &M,
         object: &mut impl ElfReader,
-    ) -> Result<ElfSegments> {
-        let space = self.create_space(mapper.clone())?;
+    ) -> Result<ElfSegments<M::Region>>
+    where
+        M: Mmap + ?Sized,
+    {
+        let space = self.create_space(mapper)?;
         self.create_segments()?;
         let segments = self.segments_mut();
 
@@ -226,8 +240,8 @@ pub(crate) trait SegmentBuilder {
                 }
                 last_addr = addr + len;
             }
-            segment.map_segment(mapper.as_ref(), object, &space)?;
-            segment.fill_zero(mapper.as_ref(), &space)?;
+            segment.map_segment(mapper, object, &space)?;
+            segment.fill_zero(mapper, &space)?;
         }
         Ok(space)
     }
@@ -240,10 +254,13 @@ pub(crate) trait SegmentBuilder {
     /// # Returns
     /// * `Ok(())` - If protection changes succeed
     /// * `Err(Error)` - If protection changes fail
-    fn mprotect(&self, mapper: &dyn Mmap, base: VmAddr) -> Result<()> {
+    fn mprotect<R>(&self, space: &ElfSegments<R>) -> Result<()>
+    where
+        R: crate::os::RegionAccess,
+    {
         let segments = self.segments();
         for segment in segments {
-            segment.mprotect(mapper, base)?;
+            segment.mprotect(space)?;
         }
         Ok(())
     }

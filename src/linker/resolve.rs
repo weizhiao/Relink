@@ -10,6 +10,7 @@ use crate::{
     observer::{
         LinkObserver, LoadObserver, ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
     },
+    os::{Mmap, RegionAccess},
     relocation::RelocationArch,
     tls::TlsResolver,
 };
@@ -29,8 +30,15 @@ pub(crate) struct ResolveContext<
     session: &'a mut ResolveSession<P, Arch>,
 }
 
-pub(crate) type LoadResolveContext<'a, K, D, Meta = (), V = (), Arch = crate::arch::NativeArch> =
-    ResolveContext<'a, K, D, Meta, V, Arch, RawDynamic<D, Arch>>;
+pub(crate) type LoadResolveContext<
+    'a,
+    K,
+    D,
+    Meta = (),
+    V = (),
+    Arch = crate::arch::NativeArch,
+    R = crate::os::HostRegion,
+> = ResolveContext<'a, K, D, Meta, V, Arch, RawDynamic<D, Arch, R>>;
 
 pub(crate) type ScanResolveContext<'a, K, D, Meta = (), V = (), Arch = crate::arch::NativeArch> =
     ResolveContext<'a, K, D, Meta, V, Arch, ScannedDynamic<Arch>>;
@@ -166,10 +174,10 @@ where
         resolver.load_root(&req)
     }
 
-    fn direct_deps_for<'cfg, Obs, Tls, O, F>(
+    fn direct_deps_for<'cfg, Obs, Tls, O, F, M>(
         &mut self,
         id: KeyId,
-        loader: &mut Loader<Obs, D, Tls, Arch>,
+        loader: &mut Loader<Obs, D, Tls, Arch, M>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch>,
         observer: &mut O,
         stage: &mut F,
@@ -178,11 +186,12 @@ where
         K: 'cfg,
         Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
+        M: Mmap,
         O: LinkObserver<Arch>,
         F: FnMut(
             &mut Self,
             ResolvedKey<'cfg, K, Arch>,
-            &mut Loader<Obs, D, Tls, Arch>,
+            &mut Loader<Obs, D, Tls, Arch, M>,
             &mut O,
         ) -> Result<KeyId>,
     {
@@ -206,10 +215,10 @@ where
         Ok(direct_deps)
     }
 
-    fn resolve_dependency_graph_with<'cfg, Obs, Tls, O, F>(
+    fn resolve_dependency_graph_with<'cfg, Obs, Tls, O, F, M>(
         &mut self,
         root: KeyId,
-        loader: &mut Loader<Obs, D, Tls, Arch>,
+        loader: &mut Loader<Obs, D, Tls, Arch, M>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch>,
         observer: &mut O,
         mut stage: F,
@@ -218,11 +227,12 @@ where
         K: 'cfg,
         Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
+        M: Mmap,
         O: LinkObserver<Arch>,
         F: FnMut(
             &mut Self,
             ResolvedKey<'cfg, K, Arch>,
-            &mut Loader<Obs, D, Tls, Arch>,
+            &mut Loader<Obs, D, Tls, Arch, M>,
             &mut O,
         ) -> Result<KeyId>,
     {
@@ -235,16 +245,18 @@ where
     }
 }
 
-impl<K, D: 'static, Meta, V, Arch> ResolveContext<'_, K, D, Meta, V, Arch, RawDynamic<D, Arch>>
+impl<K, D: 'static, Meta, V, Arch, R>
+    ResolveContext<'_, K, D, Meta, V, Arch, RawDynamic<D, Arch, R>>
 where
     K: Clone + Ord,
     V: VisibleModules<K, Arch>,
     Arch: RelocationArch,
+    R: RegionAccess,
 {
-    pub(crate) fn stage_resolved<'cfg, Obs, Tls, O>(
+    pub(crate) fn stage_resolved<'cfg, Obs, Tls, O, M>(
         &mut self,
         resolved: ResolvedKey<'cfg, K, Arch>,
-        loader: &mut Loader<Obs, D, Tls, Arch>,
+        loader: &mut Loader<Obs, D, Tls, Arch, M>,
         observer: &mut O,
     ) -> Result<KeyId>
     where
@@ -252,6 +264,7 @@ where
         D: Default,
         Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
+        M: Mmap<Region = R>,
         O: LinkObserver<Arch>,
     {
         match resolved {
@@ -299,10 +312,10 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<'cfg, Obs, Tls, O>(
+    pub(crate) fn resolve_dependency_graph<'cfg, Obs, Tls, O, M>(
         &mut self,
         root: KeyId,
-        loader: &mut Loader<Obs, D, Tls, Arch>,
+        loader: &mut Loader<Obs, D, Tls, Arch, M>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch>,
         observer: &mut O,
     ) -> Result<()>
@@ -311,6 +324,7 @@ where
         D: Default,
         Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
+        M: Mmap<Region = R>,
         O: LinkObserver<Arch>,
     {
         self.resolve_dependency_graph_with(
@@ -329,16 +343,17 @@ where
     V: VisibleModules<K, Arch>,
     Arch: RelocationArch,
 {
-    pub(crate) fn stage_resolved<Obs, Tls>(
+    pub(crate) fn stage_resolved<Obs, Tls, M>(
         &mut self,
         resolved: ResolvedKey<'static, K, Arch>,
-        loader: &mut Loader<Obs, D, Tls, Arch>,
+        loader: &mut Loader<Obs, D, Tls, Arch, M>,
     ) -> Result<KeyId>
     where
         K: 'static,
         D: Default,
         Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
+        M: Mmap,
     {
         match resolved {
             ResolvedKey::Existing(key) => {
@@ -385,10 +400,10 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<Obs, Tls, O>(
+    pub(crate) fn resolve_dependency_graph<Obs, Tls, O, M>(
         &mut self,
         root: KeyId,
-        loader: &mut Loader<Obs, D, Tls, Arch>,
+        loader: &mut Loader<Obs, D, Tls, Arch, M>,
         resolver: &mut impl KeyResolver<'static, K, Arch>,
         observer: &mut O,
     ) -> Result<()>
@@ -397,6 +412,7 @@ where
         D: Default,
         Obs: LoadObserver<Arch>,
         Tls: TlsResolver,
+        M: Mmap,
         O: LinkObserver<Arch>,
     {
         self.resolve_dependency_graph_with(

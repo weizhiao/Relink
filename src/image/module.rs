@@ -3,7 +3,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfSymbol, PreCompute, SymbolInfo},
-    os::{VmAddr, VmOffset},
+    os::{RegionAccess, VmAddr, VmOffset},
     relocation::RelocationArch,
     sync::Arc,
     tls::{TlsModuleId, TlsTpOffset},
@@ -57,7 +57,12 @@ impl<Arch: RelocationArch> ModuleHandle<Arch> {
 
     /// Downcasts the retained module to a loaded ELF image.
     #[inline]
-    pub fn as_loaded<D: 'static>(&self) -> Option<&LoadedCore<D, Arch>> {
+    pub fn as_loaded<D, R, H>(&self) -> Option<&LoadedCore<D, Arch, R, H>>
+    where
+        D: 'static,
+        R: RegionAccess,
+        H: 'static,
+    {
         self.downcast_ref()
     }
 

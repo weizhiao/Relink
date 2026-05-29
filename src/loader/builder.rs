@@ -5,7 +5,7 @@ use crate::{
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
     input::{ElfReader, PathBuf},
     observer::{LoadObserver, ProgramHeaderEvent},
-    os::{MappedView, Mapper, VmAddr},
+    os::{MappedView, Mmap, RegionAccess, VmAddr},
     relocation::RelocationArch,
     segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
     tls::{TlsInfo, TlsResolver},
@@ -18,8 +18,14 @@ use core::{marker::PhantomData, ptr::NonNull};
 /// This structure is used internally during the loading process to collect
 /// and organize the various components of a relocated ELF file before
 /// building the final loaded image.
-pub(crate) struct ImageBuilder<'obs, Obs, Tls, D = (), Arch: RelocationArch = NativeArch>
-where
+pub(crate) struct ImageBuilder<
+    'obs,
+    Obs,
+    Tls,
+    D = (),
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = crate::os::HostRegion,
+> where
     Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
@@ -51,14 +57,11 @@ where
     /// Page size used for segment layout.
     page_size: usize,
 
-    /// Mapping backend used by protections created from this builder.
-    mapper: Mapper,
-
     /// User-defined data
     pub(crate) user_data: D,
 
     /// Memory segments
-    pub(crate) segments: ElfSegments,
+    pub(crate) segments: ElfSegments<R>,
 
     /// Interpreter path (PT_INTERP)
     pub(crate) interp: Option<&'static str>,
@@ -94,11 +97,12 @@ impl<L: ElfLayout> ScanBuilder<L> {
     }
 }
 
-impl<'obs, Obs, Tls, D, Arch> ImageBuilder<'obs, Obs, Tls, D, Arch>
+impl<'obs, Obs, Tls, D, Arch, R> ImageBuilder<'obs, Obs, Tls, D, Arch, R>
 where
     Obs: LoadObserver<Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
+    R: RegionAccess,
 {
     /// Create a new [`ImageBuilder`].
     ///
@@ -109,12 +113,11 @@ where
     /// * `ehdr` - ELF header
     pub(crate) fn new(
         observer: &'obs mut Obs,
-        segments: ElfSegments,
+        segments: ElfSegments<R>,
         path: PathBuf,
         ehdr: ElfHeader<Arch::Layout>,
         static_tls: bool,
         page_size: usize,
-        mapper: Mapper,
         user_data: D,
     ) -> Self {
         Self {
@@ -127,7 +130,6 @@ where
             tls_info: None,
             static_tls,
             page_size,
-            mapper,
             segments,
             user_data,
             interp: None,
@@ -155,12 +157,7 @@ where
                 )
             }
             ElfProgramType::GNU_RELRO => {
-                self.relro = Some(ELFRelro::new(
-                    phdr,
-                    self.segments.base(),
-                    self.page_size,
-                    self.mapper.clone(),
-                ))
+                self.relro = Some(ELFRelro::new(phdr, self.segments.base(), self.page_size))
             }
             ElfProgramType::PHDR => {}
             ElfProgramType::INTERP => {
@@ -269,11 +266,12 @@ where
     }
 }
 
-impl<Obs, D, Arch> LoaderInner<Obs, D, Arch>
+impl<Obs, D, Arch, M> LoaderInner<Obs, D, Arch, M>
 where
     Obs: LoadObserver<Arch>,
     D: 'static,
     Arch: RelocationArch,
+    M: Mmap,
 {
     pub(crate) fn create_builder<Tls>(
         &mut self,
@@ -281,7 +279,7 @@ where
         phdrs: &[ElfPhdr<Arch::Layout>],
         mut object: impl ElfReader,
         user_data: D,
-    ) -> Result<ImageBuilder<'_, Obs, Tls, D, Arch>>
+    ) -> Result<ImageBuilder<'_, Obs, Tls, D, Arch, M::Region>>
     where
         Tls: TlsResolver,
     {
@@ -290,8 +288,8 @@ where
         let page_size = self.page_size()?.bytes();
         let mut phdr_segments =
             ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some(), page_size);
-        let segments = phdr_segments.load_segments(mapper.clone(), &mut object)?;
-        phdr_segments.mprotect(mapper.as_ref(), segments.base())?;
+        let segments = phdr_segments.load_segments(mapper, &mut object)?;
+        phdr_segments.mprotect(&segments)?;
 
         Ok(ImageBuilder::new(
             &mut self.observer,
@@ -300,7 +298,6 @@ where
             ehdr,
             self.force_static_tls,
             page_size,
-            mapper,
             user_data,
         ))
     }

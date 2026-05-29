@@ -5,19 +5,7 @@ use crate::elf::{ElfLayout, ElfSymbol, PreCompute, SymbolTable, symbol::SymbolIn
 /// This trait defines the common interface for different ELF symbol hash table
 /// implementations. Each implementation must provide methods for computing hash
 /// values and looking up symbols.
-pub(crate) trait ElfHashTable {
-    /// Compute the hash value for a symbol name.
-    ///
-    /// This method computes a hash value for the given symbol name using the
-    /// algorithm specific to the hash table implementation.
-    ///
-    /// # Arguments
-    /// * `name` - The symbol name as a byte slice.
-    ///
-    /// # Returns
-    /// The computed hash value.
-    fn hash(name: &[u8]) -> u64;
-
+pub trait ElfHashTable<L: ElfLayout> {
     /// Get the number of symbols in the hash table.
     ///
     /// # Returns
@@ -37,8 +25,9 @@ pub(crate) trait ElfHashTable {
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol.
     /// * `None` - If the symbol was not found.
-    fn lookup<'sym, L: ElfLayout>(
-        table: &'sym SymbolTable<L>,
+    fn lookup<'sym, H>(
+        &self,
+        table: &'sym SymbolTable<L, H>,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
     ) -> Option<&'sym ElfSymbol<L>>;

@@ -1,7 +1,7 @@
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType, NativeElfLayout},
-    os::{MapFlags, Mapper, ProtFlags, VmAddr, VmOffset, rounddown, roundup},
+    os::{MapFlags, Mmap, ProtFlags, VmAddr, VmOffset, rounddown, roundup},
     segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder},
 };
 use alloc::vec::Vec;
@@ -127,7 +127,10 @@ pub(crate) fn parse_segments(
 
 impl<L: ElfLayout> SegmentBuilder for ProgramSegments<'_, L> {
     /// Reserve memory space for all segments
-    fn create_space(&mut self, mapper: Mapper) -> Result<ElfSegments> {
+    fn create_space<M>(&mut self, mapper: &M) -> Result<ElfSegments<M::Region>>
+    where
+        M: Mmap + ?Sized,
+    {
         let layout = parse_segments(self.phdrs, self.is_dylib, self.page_size)?;
         let prot = if self.use_file {
             ProtFlags::PROT_NONE

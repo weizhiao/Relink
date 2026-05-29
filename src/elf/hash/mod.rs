@@ -11,8 +11,6 @@
 use crate::elf::{
     ElfDynamic, ElfDynamicHashTab, ElfLayout, ElfSymbol, SymbolTable, symbol::SymbolInfo,
 };
-#[cfg(feature = "object")]
-use crate::object::CustomHash;
 use crate::{Result, os::RegionAccess, segment::ElfSegments};
 use core::fmt::Debug;
 use gnu::ElfGnuHash;
@@ -21,42 +19,28 @@ use sysv::ElfHash;
 mod gnu;
 mod sysv;
 mod traits;
-pub(crate) use traits::ElfHashTable;
+pub use traits::ElfHashTable;
 
-/// An enumeration of supported ELF hash table types.
+/// Standard dynamic ELF symbol hash table.
 ///
-/// This enum represents the different hash table formats that can be used
-/// for symbol lookup in ELF files. The variant used depends on what hash
-/// sections are present in the ELF file.
-pub(crate) enum HashTable<L: ElfLayout = crate::elf::NativeElfLayout> {
-    /// GNU hash table (.gnu.hash section)
-    ///
-    /// This is the preferred hash table format in modern ELF implementations
-    /// as it provides better performance and memory efficiency compared to
-    /// the traditional SYSV hash table.
+/// Dynamic ELF files may carry either a GNU hash table or the traditional SYSV
+/// hash table. Both represent the same role in this loader, so the distinction
+/// is kept inside this implementation detail.
+pub struct HashTable<L: ElfLayout = crate::elf::NativeElfLayout>(HashTableKind<L>);
+
+enum HashTableKind<L: ElfLayout = crate::elf::NativeElfLayout> {
+    /// GNU hash table (.gnu.hash section).
     Gnu(ElfGnuHash<L>),
 
-    /// Traditional SYSV hash table (.hash section)
-    ///
-    /// This is the original ELF hash table format. While still widely supported,
-    /// it is generally less efficient than the GNU hash table.
-    Elf(ElfHash),
-
-    /// Custom hash table implementation
-    ///
-    /// This is a fallback implementation that can be used when no standard
-    /// hash sections are available.
-    #[cfg(feature = "object")]
-    Custom(CustomHash),
+    /// Traditional SYSV hash table (.hash section).
+    Sysv(ElfHash),
 }
 
 impl<L: ElfLayout> Debug for HashTable<L> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            HashTable::Gnu(_) => write!(f, "GnuHash"),
-            HashTable::Elf(_) => write!(f, "ElfHash"),
-            #[cfg(feature = "object")]
-            HashTable::Custom(_) => write!(f, "CustomHash"),
+        match &self.0 {
+            HashTableKind::Gnu(_) => write!(f, "GnuHash"),
+            HashTableKind::Sysv(_) => write!(f, "ElfHash"),
         }
     }
 }
@@ -79,49 +63,6 @@ pub struct PreCompute {
 }
 
 impl<L: ElfLayout> HashTable<L> {
-    /// Get the number of symbols in the hash table.
-    ///
-    /// # Returns
-    /// The number of symbols that can be looked up in this hash table.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn count_syms(&self) -> usize {
-        match &self {
-            HashTable::Gnu(hashtab) => hashtab.count_syms(),
-            HashTable::Elf(hashtab) => hashtab.count_syms(),
-            #[cfg(feature = "object")]
-            HashTable::Custom(hashtab) => hashtab.count_syms(),
-        }
-    }
-
-    /// Look up a symbol in the hash table.
-    ///
-    /// This method searches for a symbol in the hash table using the provided
-    /// symbol information and precomputed hash values. The actual lookup
-    /// implementation depends on the hash table type.
-    ///
-    /// # Arguments
-    /// * `table` - The symbol table to search in.
-    /// * `symbol` - Information about the symbol to look up.
-    /// * `precompute` - Precomputed hash values to speed up the lookup.
-    ///
-    /// # Returns
-    /// * `Some(symbol)` - A reference to the found symbol.
-    /// * `None` - If the symbol was not found.
-    pub(crate) fn lookup<'sym>(
-        &self,
-        table: &'sym SymbolTable<L>,
-        symbol: &SymbolInfo,
-        precompute: &mut PreCompute,
-    ) -> Option<&'sym ElfSymbol<L>> {
-        match self {
-            HashTable::Gnu(_) => ElfGnuHash::<L>::lookup(table, symbol, precompute),
-            HashTable::Elf(_) => ElfHash::lookup(table, symbol, precompute),
-            #[cfg(feature = "object")]
-            HashTable::Custom(_) => CustomHash::lookup(table, symbol, precompute),
-        }
-    }
-
     /// Create a hash table from dynamic section information.
     ///
     /// This method creates a hash table based on the information in the
@@ -141,46 +82,31 @@ impl<L: ElfLayout> HashTable<L> {
         Arch: crate::relocation::RelocationArch<Layout = L>,
         R: RegionAccess,
     {
-        Ok(match dynamic.hashtab {
-            ElfDynamicHashTab::Gnu(addr) => HashTable::Gnu(ElfGnuHash::parse(segments, addr)?),
-            ElfDynamicHashTab::Elf(addr) => HashTable::Elf(ElfHash::parse(segments, addr)?),
-        })
+        Ok(Self(match dynamic.hashtab {
+            ElfDynamicHashTab::Gnu(addr) => HashTableKind::Gnu(ElfGnuHash::parse(segments, addr)?),
+            ElfDynamicHashTab::Elf(addr) => HashTableKind::Sysv(ElfHash::parse(segments, addr)?),
+        }))
     }
+}
 
-    #[cfg(feature = "object")]
-    pub(crate) fn custom(custom: CustomHash) -> Self {
-        Self::Custom(custom)
-    }
-
-    #[cfg(feature = "object")]
-    pub(crate) fn from_shdr(
-        symtab: &crate::elf::ElfShdr<L>,
-        strtab: &crate::elf::ElfStringTable,
-    ) -> Self {
-        Self::custom(CustomHash::from_shdr(symtab, strtab))
-    }
-
-    /// Get a reference to the GNU hash table, if this is one.
-    ///
-    /// # Returns
-    /// * `Some(gnu_hash)` - A reference to the GNU hash table.
-    /// * `None` - If this is not a GNU hash table.
-    fn into_gnuhash(&self) -> Option<&ElfGnuHash<L>> {
-        match self {
-            HashTable::Gnu(hashtab) => Some(hashtab),
-            _ => None,
+impl<L: ElfLayout> ElfHashTable<L> for HashTable<L> {
+    #[inline]
+    fn count_syms(&self) -> usize {
+        match &self.0 {
+            HashTableKind::Gnu(hashtab) => hashtab.count_syms(),
+            HashTableKind::Sysv(hashtab) => <ElfHash as ElfHashTable<L>>::count_syms(hashtab),
         }
     }
 
-    /// Get a reference to the GNU hash table, if this is one.
-    ///
-    /// # Returns
-    /// * `Some(gnu_hash)` - A reference to the GNU hash table.
-    /// * `None` - If this is not a GNU hash table.
-    fn into_elfhash(&self) -> Option<&ElfHash> {
-        match self {
-            HashTable::Elf(hashtab) => Some(hashtab),
-            _ => None,
+    fn lookup<'sym, H>(
+        &self,
+        table: &'sym SymbolTable<L, H>,
+        symbol: &SymbolInfo,
+        precompute: &mut PreCompute,
+    ) -> Option<&'sym ElfSymbol<L>> {
+        match &self.0 {
+            HashTableKind::Gnu(hashtab) => hashtab.lookup(table, symbol, precompute),
+            HashTableKind::Sysv(hashtab) => hashtab.lookup(table, symbol, precompute),
         }
     }
 }
