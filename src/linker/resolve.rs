@@ -184,7 +184,7 @@ where
     ) -> Result<Vec<KeyId>>
     where
         K: 'cfg,
-        Obs: LoadObserver<Arch>,
+        Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
         M: Mmap,
         O: LinkObserver<Arch>,
@@ -225,7 +225,7 @@ where
     ) -> Result<()>
     where
         K: 'cfg,
-        Obs: LoadObserver<Arch>,
+        Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
         M: Mmap,
         O: LinkObserver<Arch>,
@@ -262,7 +262,7 @@ where
     where
         K: 'cfg,
         D: Default,
-        Obs: LoadObserver<Arch>,
+        Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
         M: Mmap<Region = R>,
         O: LinkObserver<Arch>,
@@ -322,7 +322,7 @@ where
     where
         K: 'cfg,
         D: Default,
-        Obs: LoadObserver<Arch>,
+        Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
         M: Mmap<Region = R>,
         O: LinkObserver<Arch>,
@@ -351,7 +351,7 @@ where
     where
         K: 'static,
         D: Default,
-        Obs: LoadObserver<Arch>,
+        Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
         M: Mmap,
     {
@@ -410,7 +410,7 @@ where
     where
         K: 'static,
         D: Default,
-        Obs: LoadObserver<Arch>,
+        Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
         M: Mmap,
         O: LinkObserver<Arch>,

@@ -15,7 +15,7 @@ use crate::{
     entity::SecondaryMap,
     image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     linker::session::ResolveSession,
-    observer::{LinkObserver, LoadObserver, RelocationObserver, StagedDynamic},
+    observer::{DynamicLoadedEvent, LinkObserver, LoadObserver, RelocationObserver, StagedDynamic},
     os::{Mmap, RegionAccess, VmOffset},
     relocation::{RelocationArch, RelocationHandler, Relocator},
     tls::TlsResolver,
@@ -307,7 +307,7 @@ impl<'a, K, D, Obs, Tls, Arch, M, R, PreH, PostH, RelocObs, P, O, V>
 where
     K: Clone + Ord,
     D: 'static,
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
     M: Mmap,
@@ -331,7 +331,7 @@ where
         V,
     >
     where
-        NewObs: LoadObserver<Arch>,
+        NewObs: LoadObserver<NewD, Arch>,
         NewD: 'static,
         NewTls: TlsResolver,
         NewM: Mmap,
@@ -356,7 +356,7 @@ impl<'a, K, D, Obs, Tls, Arch, M, Resolver, PreH, PostH, RelocObs, P, O, V>
 where
     K: Clone + Ord,
     D: Default + 'static,
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch + crate::relocation::RelocationValueProvider + GotPltTarget,
     M: Mmap,
@@ -646,7 +646,10 @@ where
             force_static_tls,
             &mut self.loader.inner.observer,
         )?;
-        self.loader.inner.initialize_dynamic(&mut raw)?;
+        self.loader
+            .inner
+            .observer
+            .on_dynamic_loaded(DynamicLoadedEvent::new(&mut raw))?;
         Ok(raw)
     }
 

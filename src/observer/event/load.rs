@@ -48,6 +48,39 @@ impl<'a, L: ElfLayout, R: RegionAccess> ProgramHeaderEvent<'a, L, R> {
     }
 }
 
+/// A dynamic image that has been mapped and parsed, before relocation.
+pub struct DynamicLoadedEvent<
+    'a,
+    D: 'static,
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = HostRegion,
+> {
+    raw: &'a mut RawDynamic<D, Arch, R>,
+}
+
+impl<'a, D: 'static, Arch, R> DynamicLoadedEvent<'a, D, Arch, R>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+{
+    #[inline]
+    pub(crate) const fn new(raw: &'a mut RawDynamic<D, Arch, R>) -> Self {
+        Self { raw }
+    }
+
+    /// Returns the dynamic image.
+    #[inline]
+    pub const fn raw(&self) -> &RawDynamic<D, Arch, R> {
+        self.raw
+    }
+
+    /// Returns the mutable dynamic image.
+    #[inline]
+    pub fn raw_mut(&mut self) -> &mut RawDynamic<D, Arch, R> {
+        self.raw
+    }
+}
+
 /// A mapped but unrelocated dynamic image observed during a link operation.
 pub struct StagedDynamic<
     'a,

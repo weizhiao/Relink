@@ -233,7 +233,7 @@ where
     D: Default + 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
-    Obs: LoadObserver<Arch> + ?Sized,
+    Obs: LoadObserver<D, Arch> + ?Sized,
     R: RegionAccess,
 {
     let original_phdrs = scanned.phdrs().to_vec();

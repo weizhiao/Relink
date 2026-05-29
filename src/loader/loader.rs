@@ -1,13 +1,11 @@
 use crate::{
     MmapError, Result,
     arch::NativeArch,
-    image::RawDynamic,
     observer::LoadObserver,
     os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
     tls::TlsResolver,
 };
-use alloc::boxed::Box;
 use core::marker::PhantomData;
 
 /// Configurable ELF loader.
@@ -18,7 +16,7 @@ use core::marker::PhantomData;
 /// Those raw images can then be relocated by calling `.relocator().relocate()`.
 ///
 /// Use the `with_*` builder methods to customize hooks, lifecycle handling,
-/// dynamic-image initialization, memory mapping, and TLS behavior.
+/// dynamic-image user data, memory mapping, and TLS behavior.
 ///
 /// # Examples
 ///
@@ -31,7 +29,7 @@ use core::marker::PhantomData;
 /// ```
 pub struct Loader<Obs = (), D: 'static = (), Tls = (), Arch = NativeArch, M = DefaultMmap>
 where
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
     M: Mmap,
@@ -46,13 +44,12 @@ pub(crate) struct LoaderInner<Obs, D: 'static, Arch: RelocationArch, M: Mmap = D
     pub(crate) observer: Obs,
     pub(crate) page_size: Option<PageSize>,
     pub(crate) force_static_tls: bool,
-    pub(crate) dynamic_initializer:
-        Box<dyn FnMut(&mut RawDynamic<D, Arch, M::Region>) -> Result<()>>,
+    _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
 impl<Obs, D, Arch, M> LoaderInner<Obs, D, Arch, M>
 where
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     D: 'static,
     Arch: RelocationArch,
     M: Mmap,
@@ -83,14 +80,6 @@ where
 
         Ok(page_size)
     }
-
-    #[inline]
-    pub(crate) fn initialize_dynamic(
-        &mut self,
-        dynamic: &mut RawDynamic<D, Arch, M::Region>,
-    ) -> Result<()> {
-        (self.dynamic_initializer)(dynamic)
-    }
 }
 
 impl Loader<(), (), (), NativeArch> {
@@ -110,7 +99,7 @@ impl Loader<(), (), (), NativeArch> {
                 observer: (),
                 page_size: None,
                 force_static_tls: false,
-                dynamic_initializer: Box::new(|_| Ok(())),
+                _marker: PhantomData,
             },
             _marker: PhantomData,
         }
@@ -119,7 +108,7 @@ impl Loader<(), (), (), NativeArch> {
 
 impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     D: 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
@@ -131,18 +120,15 @@ where
     }
 
     /// Consumes the current loader and returns a new one with the specified
-    /// dynamic-image user data type and initializer.
+    /// dynamic-image user data type.
     ///
-    /// Dynamic images are first created with `NewD::default()`. The initializer
-    /// then receives the completed raw image so it can fill or adjust the user
-    /// data using dynamic metadata such as dependencies, run paths, and mapped
-    /// addresses.
-    pub fn with_dynamic_initializer<NewD>(
-        self,
-        initializer: impl FnMut(&mut RawDynamic<NewD, Arch, M::Region>) -> Result<()> + 'static,
-    ) -> Loader<Obs, NewD, Tls, Arch, M>
+    /// Dynamic images are created with `NewD::default()`. To fill or adjust
+    /// that data after dynamic metadata has been parsed, implement
+    /// [`LoadObserver::on_dynamic_loaded`] on the configured load observer.
+    pub fn with_data<NewD>(self) -> Loader<Obs, NewD, Tls, Arch, M>
     where
         NewD: Default + 'static,
+        Obs: LoadObserver<NewD, Arch>,
     {
         Loader {
             buf: self.buf,
@@ -151,7 +137,7 @@ where
                 observer: self.inner.observer,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
-                dynamic_initializer: Box::new(initializer),
+                _marker: PhantomData,
             },
             _marker: PhantomData,
         }
@@ -161,7 +147,7 @@ where
     /// load observer.
     pub fn with_observer<NewObs>(self, observer: NewObs) -> Loader<NewObs, D, Tls, Arch, M>
     where
-        NewObs: LoadObserver<Arch>,
+        NewObs: LoadObserver<D, Arch>,
     {
         Loader {
             buf: self.buf,
@@ -170,7 +156,7 @@ where
                 observer,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
-                dynamic_initializer: self.inner.dynamic_initializer,
+                _marker: PhantomData,
             },
             _marker: PhantomData,
         }
@@ -222,13 +208,9 @@ where
 /// Cross-architecture builder step.
 ///
 /// Switching the target architecture is only meaningful while the loader has
-/// not yet been bound to a user-data type, because the dynamic initializer
-/// borrows `RawDynamic<D, Arch>` and cannot be carried across an `Arch`
-/// change. The builder therefore exposes [`Loader::for_arch`] only on
-/// loaders whose `D` is still `()` (i.e. before
-/// [`Loader::with_dynamic_initializer`] has been called). Callers should
-/// pick the target architecture first and attach the user-data initializer
-/// afterwards:
+/// not yet been bound to a user-data type. The builder therefore exposes
+/// [`Loader::for_arch`] only on loaders whose `D` is still `()`. Callers should
+/// pick the target architecture first and attach the user-data type afterwards:
 ///
 /// ```no_run
 /// use elf_loader::Loader;
@@ -236,11 +218,11 @@ where
 ///
 /// let _loader = Loader::new()
 ///     .for_arch::<X86_64Arch>()
-///     .with_dynamic_initializer::<()>(|_| Ok(()));
+///     .with_data::<()>();
 /// ```
 impl<Obs, Tls, Arch, M> Loader<Obs, (), Tls, Arch, M>
 where
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<(), Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
     M: Mmap,
@@ -257,7 +239,7 @@ where
                 observer: self.inner.observer,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
-                dynamic_initializer: Box::new(|_| Ok(())),
+                _marker: PhantomData,
             },
             _marker: PhantomData,
         }
@@ -281,16 +263,15 @@ where
     /// # Builder ordering
     ///
     /// `for_arch` is only available before
-    /// [`with_dynamic_initializer`](Loader::with_dynamic_initializer) has
-    /// been called. The dynamic initializer's signature mentions `Arch`,
-    /// so it cannot be retyped after the fact; instead, switch `Arch` first
-    /// and then attach the initializer once the target architecture is fixed.
+    /// [`with_data`](Loader::with_data) has been called; instead, switch `Arch`
+    /// first and then attach the user-data type once the target architecture is
+    /// fixed.
     ///
     /// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
     pub fn for_arch<NewArch>(self) -> Loader<Obs, (), Tls, NewArch, M>
     where
         NewArch: RelocationArch,
-        Obs: LoadObserver<NewArch>,
+        Obs: LoadObserver<(), NewArch>,
     {
         Loader {
             buf: self.buf,
@@ -299,10 +280,7 @@ where
                 observer: self.inner.observer,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
-                // `D = ()` so the existing initializer is necessarily a
-                // no-op; rebuilding a fresh no-op typed against `NewArch`
-                // loses no information.
-                dynamic_initializer: Box::new(|_| Ok(())),
+                _marker: PhantomData,
             },
             _marker: PhantomData,
         }

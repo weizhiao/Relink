@@ -4,7 +4,7 @@ mod relocation;
 mod resolve;
 
 pub use lifecycle::{LifecycleEvent, LifecyclePhase};
-pub use load::{ProgramHeaderEvent, StagedDynamic};
+pub use load::{DynamicLoadedEvent, ProgramHeaderEvent, StagedDynamic};
 pub use relocation::{
     DtDebugEntry, IfuncBindingEvent, LinkActivity, ModuleRelocatedEvent, ModuleUnloadEvent,
     SymbolBindingEvent, TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,

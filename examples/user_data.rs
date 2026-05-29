@@ -1,7 +1,12 @@
 #[path = "common/mod.rs"]
 mod fixture_support;
 
-use elf_loader::{Loader, Result};
+use elf_loader::{
+    Loader, Result,
+    arch::NativeArch,
+    observer::{DynamicLoadedEvent, LoadObserver},
+    os::RegionAccess,
+};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -19,18 +24,29 @@ impl Default for MyContext {
     }
 }
 
-fn main() -> Result<()> {
-    unsafe { std::env::set_var("RUST_LOG", "trace") };
-    env_logger::init();
+struct MyObserver;
 
-    let mut loader = Loader::new().with_dynamic_initializer::<MyContext>(|dynamic| {
-        println!("Initializing user data for: {}", dynamic.name());
-        if let Some(context) = dynamic.user_data_mut() {
+impl LoadObserver<MyContext> for MyObserver {
+    fn on_dynamic_loaded<R: RegionAccess>(
+        &mut self,
+        mut event: DynamicLoadedEvent<'_, MyContext, NativeArch, R>,
+    ) -> Result<()> {
+        println!("Initializing user data for: {}", event.raw().name());
+        if let Some(context) = event.raw_mut().user_data_mut() {
             context.load_time = std::time::SystemTime::now();
             context.custom_id = 42;
         }
         Ok(())
-    });
+    }
+}
+
+fn main() -> Result<()> {
+    unsafe { std::env::set_var("RUST_LOG", "trace") };
+    env_logger::init();
+
+    let mut loader = Loader::new()
+        .with_data::<MyContext>()
+        .with_observer(MyObserver);
 
     let fixtures = fixture_support::ensure_all();
     let lib = loader

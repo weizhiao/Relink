@@ -2,10 +2,10 @@ mod event;
 mod traits;
 
 pub use event::{
-    DtDebugEntry, IfuncBindingEvent, LifecycleEvent, LifecyclePhase, LinkActivity,
-    ModuleRelocatedEvent, ModuleUnloadEvent, ProgramHeaderEvent, ResolveDependencyEvent,
-    ResolveRootEvent, StagedDynamic, SymbolBindingEvent, TlsDescBindingEvent,
-    TlsDescBindingRequest, TlsDescBindingValue,
+    DtDebugEntry, DynamicLoadedEvent, IfuncBindingEvent, LifecycleEvent, LifecyclePhase,
+    LinkActivity, ModuleRelocatedEvent, ModuleUnloadEvent, ProgramHeaderEvent,
+    ResolveDependencyEvent, ResolveRootEvent, StagedDynamic, SymbolBindingEvent,
+    TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
 };
 pub(crate) use event::{
     SharedLifecycleExecutor, SharedModuleUnloadHook, default_lifecycle_executor,

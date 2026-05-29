@@ -1,12 +1,34 @@
 mod support;
 
-use elf_loader::{Loader, elf::ElfProgramType, image::ScannedElf, input::ElfBinary};
+use elf_loader::{
+    Loader,
+    arch::NativeArch,
+    elf::ElfProgramType,
+    image::ScannedElf,
+    input::ElfBinary,
+    observer::{DynamicLoadedEvent, LoadObserver},
+    os::RegionAccess,
+};
 use gen_elf::{Arch, ElfWriterConfig, SymbolDesc};
 use support::{generated_dylib::return_42_stub, test_dylib::write_test_dylib_with_config};
 
 #[derive(Default)]
 struct ScanData {
     value: usize,
+}
+
+struct ScanObserver;
+
+impl LoadObserver<ScanData> for ScanObserver {
+    fn on_dynamic_loaded<R: RegionAccess>(
+        &mut self,
+        mut event: DynamicLoadedEvent<'_, ScanData, NativeArch, R>,
+    ) -> elf_loader::Result<()> {
+        if let Some(data) = event.raw_mut().user_data_mut() {
+            data.value = 42;
+        }
+        Ok(())
+    }
 }
 
 #[test]
@@ -71,12 +93,9 @@ fn scanned_dynamic_load_reuses_scanned_metadata() {
     );
     let bytes = output.data;
 
-    let mut loader = Loader::new().with_dynamic_initializer::<ScanData>(|dynamic| {
-        if let Some(data) = dynamic.user_data_mut() {
-            data.value = 42;
-        }
-        Ok(())
-    });
+    let mut loader = Loader::new()
+        .with_data::<ScanData>()
+        .with_observer(ScanObserver);
     let ScannedElf::Dynamic(scanned) = loader
         .scan(ElfBinary::owned("scanned.so", bytes))
         .expect("failed to scan dylib")

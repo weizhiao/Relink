@@ -1,7 +1,7 @@
 use super::{
-    DtDebugEntry, IfuncBindingEvent, LifecycleEvent, LinkActivity, ModuleRelocatedEvent,
-    ProgramHeaderEvent, ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
-    SymbolBindingEvent, TlsDescBindingEvent,
+    DtDebugEntry, DynamicLoadedEvent, IfuncBindingEvent, LifecycleEvent, LinkActivity,
+    ModuleRelocatedEvent, ProgramHeaderEvent, ResolveDependencyEvent, ResolveRootEvent,
+    StagedDynamic, SymbolBindingEvent, TlsDescBindingEvent,
 };
 use crate::{
     Result, arch::NativeArch, elf::ElfHashTable, os::RegionAccess, relocation::RelocationArch,
@@ -9,7 +9,7 @@ use crate::{
 use alloc::boxed::Box;
 
 /// Event hook for images as they are loaded.
-pub trait LoadObserver<Arch: RelocationArch = NativeArch> {
+pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
     /// Called as each program header is processed during loading.
     #[inline]
     fn on_program_header<R: RegionAccess>(
@@ -22,6 +22,15 @@ pub trait LoadObserver<Arch: RelocationArch = NativeArch> {
     /// Called when a mutable `DT_DEBUG` entry is available during dynamic parsing.
     #[inline]
     fn on_dt_debug<R: RegionAccess>(&mut self, _entry: DtDebugEntry<'_, Arch, R>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called after a dynamic image has been mapped and parsed, before relocation.
+    #[inline]
+    fn on_dynamic_loaded<R: RegionAccess>(
+        &mut self,
+        _event: DynamicLoadedEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
         Ok(())
     }
 }
@@ -121,14 +130,15 @@ pub trait LinkObserver<Arch: RelocationArch = NativeArch> {
 
 impl<Arch: RelocationArch> LinkObserver<Arch> for () {}
 
-impl<Arch: RelocationArch> LoadObserver<Arch> for () {}
+impl<D: 'static, Arch: RelocationArch> LoadObserver<D, Arch> for () {}
 
 impl<Arch: RelocationArch> RelocationObserver<Arch> for () {}
 
-impl<Arch, O> LoadObserver<Arch> for &mut O
+impl<D, Arch, O> LoadObserver<D, Arch> for &mut O
 where
+    D: 'static,
     Arch: RelocationArch,
-    O: LoadObserver<Arch> + ?Sized,
+    O: LoadObserver<D, Arch> + ?Sized,
 {
     #[inline]
     fn on_program_header<R: RegionAccess>(
@@ -141,6 +151,14 @@ where
     #[inline]
     fn on_dt_debug<R: RegionAccess>(&mut self, entry: DtDebugEntry<'_, Arch, R>) -> Result<()> {
         (**self).on_dt_debug(entry)
+    }
+
+    #[inline]
+    fn on_dynamic_loaded<R: RegionAccess>(
+        &mut self,
+        event: DynamicLoadedEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
+        (**self).on_dynamic_loaded(event)
     }
 }
 
@@ -201,10 +219,11 @@ where
     }
 }
 
-impl<Arch, O> LoadObserver<Arch> for Box<O>
+impl<D, Arch, O> LoadObserver<D, Arch> for Box<O>
 where
+    D: 'static,
     Arch: RelocationArch,
-    O: LoadObserver<Arch> + ?Sized,
+    O: LoadObserver<D, Arch> + ?Sized,
 {
     #[inline]
     fn on_program_header<R: RegionAccess>(
@@ -217,6 +236,14 @@ where
     #[inline]
     fn on_dt_debug<R: RegionAccess>(&mut self, entry: DtDebugEntry<'_, Arch, R>) -> Result<()> {
         (**self).on_dt_debug(entry)
+    }
+
+    #[inline]
+    fn on_dynamic_loaded<R: RegionAccess>(
+        &mut self,
+        event: DynamicLoadedEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
+        (**self).on_dynamic_loaded(event)
     }
 }
 

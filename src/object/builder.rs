@@ -205,7 +205,7 @@ where
 
 impl<Obs, D, Arch, M> LoaderInner<Obs, D, Arch, M>
 where
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     D: Default + 'static,
     Arch: crate::relocation::RelocationArch,
     M: crate::os::Mmap,

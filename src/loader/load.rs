@@ -8,7 +8,7 @@ use crate::{
     },
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
-    observer::LoadObserver,
+    observer::{DynamicLoadedEvent, LoadObserver},
     os::{Mmap, RegionAccess, VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::{ELFRelro, ElfSegments, program::parse_segments},
@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 
 impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
     M: Mmap,
@@ -67,7 +67,7 @@ where
 
 impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     D: 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
@@ -102,7 +102,7 @@ where
 
 impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     D: Default + 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
@@ -135,7 +135,9 @@ where
                     Ok(RawElf::Exec(self.load_exec_from_ehdr(object, ehdr)?))
                 } else {
                     let mut dynamic = self.load_dynamic_from_ehdr(object, ehdr)?;
-                    self.inner.initialize_dynamic(&mut dynamic)?;
+                    self.inner
+                        .observer
+                        .on_dynamic_loaded(DynamicLoadedEvent::new(&mut dynamic))?;
                     Ok(RawElf::Dylib(RawDylib::from_dynamic(dynamic)))
                 }
             }
@@ -185,7 +187,9 @@ where
         let mut object = input.into_reader()?;
         let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Dylib)?;
         let mut dynamic = self.load_dynamic_from_ehdr(object, ehdr)?;
-        self.inner.initialize_dynamic(&mut dynamic)?;
+        self.inner
+            .observer
+            .on_dynamic_loaded(DynamicLoadedEvent::new(&mut dynamic))?;
         let dylib = RawDylib::from_dynamic(dynamic);
 
         logging::info!(
@@ -213,7 +217,9 @@ where
 
         let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Dynamic)?;
         let mut image = self.load_dynamic_from_ehdr(object, ehdr)?;
-        self.inner.initialize_dynamic(&mut image)?;
+        self.inner
+            .observer
+            .on_dynamic_loaded(DynamicLoadedEvent::new(&mut image))?;
 
         logging::info!(
             "Loaded dynamic image: {} at [{}-{}]",
@@ -254,7 +260,9 @@ where
         scanned: ScannedDynamic<Arch>,
     ) -> Result<RawDynamic<D, Arch, M::Region>> {
         let mut image = self.load_scanned_dynamic_raw_impl(scanned)?;
-        self.inner.initialize_dynamic(&mut image)?;
+        self.inner
+            .observer
+            .on_dynamic_loaded(DynamicLoadedEvent::new(&mut image))?;
 
         logging::info!(
             "Loaded scanned dynamic image: {} at [{}-{}]",
@@ -329,7 +337,9 @@ where
             page_size,
         )?;
         let mut image = RawDynamic::from_parts::<Tls, _>(parts, &mut self.inner.observer)?;
-        self.inner.initialize_dynamic(&mut image)?;
+        self.inner
+            .observer
+            .on_dynamic_loaded(DynamicLoadedEvent::new(&mut image))?;
 
         logging::info!(
             "Borrowed dynamic image: {} at [{}-{}]",
@@ -381,7 +391,9 @@ where
             .create_builder::<Tls>(ehdr, phdrs, object, D::default())?;
         let mut exec = RawExec::from_builder(builder, phdrs, has_dynamic)?;
         if let RawExec::Dynamic(dynamic) = &mut exec {
-            self.inner.initialize_dynamic(dynamic)?;
+            self.inner
+                .observer
+                .on_dynamic_loaded(DynamicLoadedEvent::new(dynamic))?;
         }
 
         logging::debug!(

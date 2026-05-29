@@ -22,11 +22,11 @@ pub(crate) struct ImageBuilder<
     'obs,
     Obs,
     Tls,
-    D = (),
+    D: 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = crate::os::HostRegion,
 > where
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
@@ -97,9 +97,9 @@ impl<L: ElfLayout> ScanBuilder<L> {
     }
 }
 
-impl<'obs, Obs, Tls, D, Arch, R> ImageBuilder<'obs, Obs, Tls, D, Arch, R>
+impl<'obs, Obs, Tls, D: 'static, Arch, R> ImageBuilder<'obs, Obs, Tls, D, Arch, R>
 where
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
     R: RegionAccess,
@@ -268,7 +268,7 @@ where
 
 impl<Obs, D, Arch, M> LoaderInner<Obs, D, Arch, M>
 where
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     D: 'static,
     Arch: RelocationArch,
     M: Mmap,

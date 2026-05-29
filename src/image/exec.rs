@@ -37,7 +37,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Debug for StaticExec<D, Arch, R> 
     }
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
     /// Returns the source path or caller-provided path identifier.
     pub fn path(&self) -> &Path {
         self.inner.path.as_path()
@@ -389,7 +389,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
         phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where
-        Obs: LoadObserver<Arch>,
+        Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
     {
         // Parse all program headers
@@ -430,7 +430,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawExec<D, Arch, R> {
         has_dynamic: bool,
     ) -> Result<Self>
     where
-        Obs: LoadObserver<Arch>,
+        Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
     {
         if has_dynamic {

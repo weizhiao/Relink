@@ -12,7 +12,7 @@ use crate::{
 
 impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
-    Obs: LoadObserver<Arch>,
+    Obs: LoadObserver<D, Arch>,
     D: Default + 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,

@@ -380,7 +380,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     ) -> Result<Self>
     where
         Tls: TlsResolver,
-        Obs: LoadObserver<Arch> + ?Sized,
+        Obs: LoadObserver<D, Arch> + ?Sized,
     {
         let RawDynamicParts {
             path,
@@ -500,7 +500,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where
-        Obs: LoadObserver<Arch>,
+        Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
     {
         // Parse all program headers
