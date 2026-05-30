@@ -289,7 +289,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedElf<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Relocatable<D> for RawElf<D, Arch, R> {
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Relocatable<D>
+    for RawElf<D, Arch, R>
+{
     type Output = LoadedElf<D, Arch, R>;
     type Arch = Arch;
 

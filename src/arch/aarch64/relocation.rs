@@ -6,9 +6,9 @@
 use elf::abi::*;
 
 use crate::arch::ArchKind;
+use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 #[cfg(feature = "object")]
 use crate::relocation::ObjectRelocationArch;
-use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
 /// AArch64 (ARM64) architecture marker.

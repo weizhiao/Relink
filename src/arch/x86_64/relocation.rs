@@ -8,9 +8,9 @@ use core::mem::size_of;
 use elf::abi::*;
 
 use crate::arch::ArchKind;
+use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 #[cfg(feature = "object")]
 use crate::relocation::ObjectRelocationArch;
-use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::{
     RelocationArch, RelocationValueFormula, RelocationValueKind, RelocationValueProvider,
 };
@@ -79,16 +79,7 @@ impl ObjectRelocationArch for X86_64Arch {
     #[allow(private_interfaces)]
     fn relocate_object<D, R, PreH, PostH, Obs, H>(
         _state: &mut Self::ObjectRelocationState,
-        helper: &mut crate::relocation::RelocHelper<
-            '_,
-            D,
-            Self,
-            R,
-            PreH,
-            PostH,
-            Obs,
-            H,
-        >,
+        helper: &mut crate::relocation::RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
         rel: &crate::elf::ElfRelType<Self>,
         pltgot: &mut crate::object::layout::PltGotSection,
     ) -> Result<()>

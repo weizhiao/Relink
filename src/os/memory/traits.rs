@@ -43,12 +43,7 @@ pub trait RegionAccess: Send + Sync + 'static {
     /// and `offset` is aligned for `T`.
     #[inline]
     unsafe fn read_value<T: ByteRepr>(&self, offset: usize) -> Result<T> {
-        let mut value = MaybeUninit::<T>::uninit();
-        let bytes = unsafe {
-            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
-        };
-        unsafe { self.read_bytes(offset, bytes)? };
-        Ok(unsafe { value.assume_init() })
+        unsafe { self.read_unaligned_value(offset) }
     }
 
     /// Reads one typed value without requiring alignment.
@@ -87,10 +82,7 @@ pub trait RegionAccess: Send + Sync + 'static {
     /// and `offset` is aligned for `T`.
     #[inline]
     unsafe fn write_value<T: ByteRepr>(&self, offset: usize, value: T) -> Result<()> {
-        let bytes = unsafe {
-            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
-        };
-        unsafe { self.write_bytes(offset, bytes) }
+        unsafe { self.write_unaligned_value(offset, value) }
     }
 
     /// Writes one typed value without requiring alignment.

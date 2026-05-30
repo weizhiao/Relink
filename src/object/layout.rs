@@ -46,7 +46,12 @@ impl<Arch: ObjectRelocationArch> SegmentBuilder for SectionSegments<Arch> {
     {
         let len = self.total_size;
         let region = unsafe {
-            mapper.create_space(None, len, ProtFlags::PROT_READ | ProtFlags::PROT_WRITE, false)
+            mapper.create_space(
+                None,
+                len,
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+                false,
+            )
         }?;
         let base = region.addr();
         Ok(ElfSegments::new(region, base, VmOffset::new(0)))

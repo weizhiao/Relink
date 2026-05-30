@@ -329,7 +329,10 @@ impl<R: RegionAccess> ElfSegments<R> {
         T: ByteRepr,
     {
         let value = val.into_inner();
-        unsafe { self.region.write_unaligned_value(self.region_offset(addr), value) }
+        unsafe {
+            self.region
+                .write_unaligned_value(self.region_offset(addr), value)
+        }
     }
 
     #[cfg(feature = "object")]
@@ -344,7 +347,10 @@ impl<R: RegionAccess> ElfSegments<R> {
     {
         let value = unsafe { self.region.read_unaligned_value(self.region_offset(addr))? };
         let value = update(value);
-        unsafe { self.region.write_unaligned_value(self.region_offset(addr), value) }
+        unsafe {
+            self.region
+                .write_unaligned_value(self.region_offset(addr), value)
+        }
     }
 
     /// Returns the base address of the mapped memory as a raw integer.

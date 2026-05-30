@@ -3,9 +3,9 @@
 use elf::abi::EM_386;
 
 use crate::arch::ArchKind;
+use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
 #[cfg(feature = "object")]
 use crate::relocation::ObjectRelocationArch;
-use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
 const R_386_32: u32 = 1;

@@ -190,7 +190,8 @@ impl RiscV64Arch {
         let base = core.base();
         let addend = rel.r_addend(base);
         let place = base.wrapping_add(rel.r_offset());
-        let unknown_symbol = || reloc_error::<Self, _, R, H>(rel, RelocReason::UnknownSymbol, helper.core);
+        let unknown_symbol =
+            || reloc_error::<Self, _, R, H>(rel, RelocReason::UnknownSymbol, helper.core);
         let value_error = |reason| reloc_error::<Self, _, R, H>(rel, reason, helper.core);
 
         match r_type {
@@ -370,9 +371,8 @@ impl RiscV64Arch {
                 };
                 let value = sym.wrapping_add_signed(addend).get() as u8;
                 unsafe {
-                    segments.update_object_value::<u8>(place, |old| {
-                        (old & 0xc0) | (value & 0x3f)
-                    })?
+                    segments
+                        .update_object_value::<u8>(place, |old| (old & 0xc0) | (value & 0x3f))?
                 };
             }
             R_RISCV_SET8 => {
@@ -515,10 +515,9 @@ impl RiscV64Arch {
             segments.update_object_value::<u32>(place, |insn| {
                 Self::encode_imm(insn, hi20, ImmType::U)
             })?;
-            segments
-                .update_object_value::<u32>(place.wrapping_add(VmOffset::new(4)), |insn| {
-                    Self::encode_imm(insn, lo12, ImmType::I)
-                })?;
+            segments.update_object_value::<u32>(place.wrapping_add(VmOffset::new(4)), |insn| {
+                Self::encode_imm(insn, lo12, ImmType::I)
+            })?;
         }
         Ok(())
     }

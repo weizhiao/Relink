@@ -1,12 +1,11 @@
-use super::{RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
 #[cfg(feature = "object")]
 use super::{RelocHelper, reloc_error};
+use super::{RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
 use crate::{
     ByteRepr, RelocReason, Result,
     arch::{ArchKind, NativeArch},
     elf::{
-        ElfHashTable, ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType,
-        HashTable,
+        ElfHashTable, ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType, HashTable,
     },
     image::{ElfCore, ModuleScope},
     observer::RelocationObserver,
@@ -134,7 +133,11 @@ pub trait ObjectRelocationArch: RelocationArch {
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
     {
-        Err(reloc_error::<Self, _, R, H>(rel, RelocReason::Unsupported, helper.core))
+        Err(reloc_error::<Self, _, R, H>(
+            rel,
+            RelocReason::Unsupported,
+            helper.core,
+        ))
     }
 
     #[inline]

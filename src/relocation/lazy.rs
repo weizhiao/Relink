@@ -6,7 +6,10 @@ mod enabled {
         arch::{NativeArch, prepare_lazy_bind},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolInfo},
         os::{RegionAccess, VmAddr, VmOffset},
-        relocation::{BindingMode, RelocValue, RelocationArch, SupportLazy, SymDef, unlikely},
+        relocation::{
+            BindingMode, ObjectRelocationArch, RelocValue, RelocationArch, SupportLazy, SymDef,
+            unlikely,
+        },
         segment::ElfSegments,
         sync::Arc,
         tls::lookup_tls_get_addr,
@@ -19,7 +22,7 @@ mod enabled {
 
     impl<D: 'static, Arch: RelocationArch> SupportLazy for RawExec<D, Arch> {}
 
-    impl<D: 'static, Arch: RelocationArch> SupportLazy for RawElf<D, Arch> {}
+    impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> SupportLazy for RawElf<D, Arch, R> {}
 
     fn lookup_addr<Arch: RelocationArch>(source: &dyn Module<Arch>, name: &str) -> Option<VmAddr> {
         let syminfo = SymbolInfo::from_str(name, None);

@@ -25,7 +25,8 @@ fn main() {
         return;
     }
 
-    let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("missing manifest dir"));
+    let manifest_dir =
+        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("missing manifest dir"));
     let workspace_root = manifest_dir
         .parent()
         .and_then(Path::parent)
@@ -62,7 +63,10 @@ fn main() {
         cmd.arg("-fPIC").arg("-c").arg(&src).arg("-o").arg(&obj);
 
         let status = cmd.status().unwrap_or_else(|err| {
-            panic!("failed to spawn fixture compiler `{linker}` for {}: {err}", src.display())
+            panic!(
+                "failed to spawn fixture compiler `{linker}` for {}: {err}",
+                src.display()
+            )
         });
         if !status.success() {
             panic!(
@@ -74,5 +78,6 @@ fn main() {
 }
 
 fn env_var(keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| env::var(key).ok().filter(|value| !value.is_empty()))
+    keys.iter()
+        .find_map(|key| env::var(key).ok().filter(|value| !value.is_empty()))
 }

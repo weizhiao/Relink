@@ -73,7 +73,8 @@ impl X86_64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        H: crate::elf::ElfHashTable<<X86_64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
+        H: crate::elf::ElfHashTable<<X86_64Arch as crate::relocation::RelocationArch>::Layout>
+            + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: crate::observer::RelocationObserver<Self> + ?Sized,

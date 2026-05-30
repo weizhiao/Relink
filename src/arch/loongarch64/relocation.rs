@@ -3,9 +3,9 @@
 use elf::abi::EM_LOONGARCH;
 
 use crate::arch::ArchKind;
+use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 #[cfg(feature = "object")]
 use crate::relocation::ObjectRelocationArch;
-use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
 const R_LARCH_64: u32 = 2;

@@ -3,9 +3,9 @@
 use elf::abi::*;
 
 use crate::arch::ArchKind;
+use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
 #[cfg(feature = "object")]
 use crate::relocation::ObjectRelocationArch;
-use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
 // Place all architecture-specific trait impls on the single `ArmArch` ZST
