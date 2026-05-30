@@ -211,11 +211,11 @@ The [`examples/`](examples/) directory covers the main extension points:
 | `x86` | ✅ | 🟡 | ⏳ |
 | `aarch64` | ✅ | 🟡 | ⏳ |
 | `arm` | ✅ | 🟡 | ⏳ |
-| `riscv64` | ✅ | 🟡 | ⏳ |
+| `riscv64` | ✅ | 🟡 | ✅ |
 | `riscv32` | ✅ | 🟡 | ⏳ |
 | `loongarch64` | ✅ | 🟡 | ⏳ |
 
-Legend: ✅ supported, 🟡 basic support, ⏳ pending. Complex section-reorder repair and `.o` / `ET_REL` support are currently centered on `x86_64` relocation handling; contributions for the other architectures are welcome.
+Legend: ✅ supported, 🟡 basic support, ⏳ pending. Complex section-reorder repair and `.o` / `ET_REL` support are currently centered on `x86_64` and `riscv64` relocation handling; contributions for the other architectures are welcome.
 
 Symbol lookup is name-based and does not perform Rust name mangling for you. Export C ABI symbols when you want stable runtime lookup names.
 
