@@ -5,6 +5,7 @@ use crate::{
     logging,
     observer::default_lifecycle_executor,
     observer::{LifecycleEvent, LifecyclePhase, RelocationObserver},
+    os::RegionAccess,
     relocation::{ObjectRelocationArch, RelocHelper, RelocationHandler},
 };
 
@@ -22,9 +23,10 @@ impl<Arch: ObjectRelocationArch> ObjectRelocation<Arch> {
     }
 }
 
-impl<D: 'static, Arch> RawObject<D, Arch>
+impl<D: 'static, Arch, R> RawObject<D, Arch, R>
 where
     Arch: ObjectRelocationArch,
+    R: RegionAccess,
 {
     pub(crate) fn relocate_impl<PreH, PostH, Obs>(
         mut self,
@@ -32,7 +34,7 @@ where
         pre_handler: &PreH,
         post_handler: &PostH,
         observer: &mut Obs,
-    ) -> Result<crate::image::LoadedCore<D, Arch>>
+    ) -> Result<crate::image::LoadedCore<D, Arch, R, crate::object::CustomHash>>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
@@ -74,7 +76,7 @@ where
         } = helper;
         self.core.set_tls_desc_args(tls_desc_args);
 
-        (self.mprotect)()?;
+        (self.mprotect)(self.core.segments())?;
 
         logging::trace!("[{}] Executing init functions", self.core.name());
         let mut event = LifecycleEvent::with_executor(

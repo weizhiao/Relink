@@ -1,12 +1,11 @@
 use crate::{
     RelocReason, Result,
-    arch::object::ObjectRelocationArch,
     arch::riscv64::relocation::RiscV64Arch,
-    elf::{ElfRelType, ElfRelocationType},
+    elf::{ElfHashTable, ElfRelType, ElfRelocationType},
     object::layout::{GotEntry, PltEntry, PltGotSection},
     observer::RelocationObserver,
-    os::{HostRegion, VmAddr, VmOffset},
-    relocation::{RelocHelper, RelocValue, RelocationHandler, reloc_error},
+    os::{RegionAccess, VmAddr, VmOffset},
+    relocation::{ObjectRelocationArch, RelocHelper, RelocValue, RelocationHandler, reloc_error},
     segment::ElfSegments,
 };
 use elf::abi::*;
@@ -83,13 +82,15 @@ impl ObjectRelocationArch for RiscV64Arch {
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn prepare_object_relocation<D, PreH, PostH, Obs>(
+    fn prepare_object_relocation<D, R, PreH, PostH, Obs, H>(
         state: &mut Self::ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
         sections: &[&'static [ElfRelType<Self>]],
     ) -> Result<()>
     where
         D: 'static,
+        R: RegionAccess,
+        H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -99,14 +100,16 @@ impl ObjectRelocationArch for RiscV64Arch {
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, PreH, PostH, Obs>(
+    fn relocate_object<D, R, PreH, PostH, Obs, H>(
         state: &mut Self::ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
     ) -> Result<()>
     where
         D: 'static,
+        R: RegionAccess,
+        H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -126,13 +129,15 @@ impl ObjectRelocationArch for RiscV64Arch {
 }
 
 impl RiscV64Arch {
-    pub(crate) fn prepare_object_relocation_impl<D, PreH, PostH, Obs>(
+    pub(crate) fn prepare_object_relocation_impl<D, R, PreH, PostH, Obs, H>(
         state: &mut RiscV64ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
         sections: &[&'static [ElfRelType<Self>]],
     ) -> Result<()>
     where
         D: 'static,
+        R: RegionAccess,
+        H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -164,14 +169,16 @@ impl RiscV64Arch {
         Ok(())
     }
 
-    pub(crate) fn relocate_object_impl<D, PreH, PostH, Obs>(
+    pub(crate) fn relocate_object_impl<D, R, PreH, PostH, Obs, H>(
         state: &mut RiscV64ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
     ) -> Result<()>
     where
         D: 'static,
+        R: RegionAccess,
+        H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -183,9 +190,8 @@ impl RiscV64Arch {
         let base = core.base();
         let addend = rel.r_addend(base);
         let place = base.wrapping_add(rel.r_offset());
-        let unknown_symbol =
-            || reloc_error::<Self, _, HostRegion>(rel, RelocReason::UnknownSymbol, helper.core);
-        let value_error = |reason| reloc_error::<Self, _, HostRegion>(rel, reason, helper.core);
+        let unknown_symbol = || reloc_error::<Self, _, R, H>(rel, RelocReason::UnknownSymbol, helper.core);
+        let value_error = |reason| reloc_error::<Self, _, R, H>(rel, reason, helper.core);
 
         match r_type {
             R_RISCV_NONE | R_RISCV_RELAX => {}
@@ -333,16 +339,16 @@ impl RiscV64Arch {
                 );
                 match r_type {
                     R_RISCV_ADD8 | R_RISCV_SUB8 => {
-                        Self::apply_wrapping_arith::<u8>(segments, place, value, is_add)?
+                        Self::apply_wrapping_arith::<u8, R>(segments, place, value, is_add)?
                     }
                     R_RISCV_ADD16 | R_RISCV_SUB16 => {
-                        Self::apply_wrapping_arith::<u16>(segments, place, value, is_add)?
+                        Self::apply_wrapping_arith::<u16, R>(segments, place, value, is_add)?
                     }
                     R_RISCV_ADD32 | R_RISCV_SUB32 => {
-                        Self::apply_wrapping_arith::<u32>(segments, place, value, is_add)?
+                        Self::apply_wrapping_arith::<u32, R>(segments, place, value, is_add)?
                     }
                     R_RISCV_ADD64 | R_RISCV_SUB64 => {
-                        Self::apply_wrapping_arith::<u64>(segments, place, value, is_add)?
+                        Self::apply_wrapping_arith::<u64, R>(segments, place, value, is_add)?
                     }
                     _ => unreachable!(),
                 }
@@ -370,13 +376,13 @@ impl RiscV64Arch {
                 };
             }
             R_RISCV_SET8 => {
-                Self::write_truncated::<u8, D, PreH, PostH, Obs>(helper, rel, addend, place)?
+                Self::write_truncated::<u8, D, R, PreH, PostH, Obs, H>(helper, rel, addend, place)?
             }
             R_RISCV_SET16 => {
-                Self::write_truncated::<u16, D, PreH, PostH, Obs>(helper, rel, addend, place)?
+                Self::write_truncated::<u16, D, R, PreH, PostH, Obs, H>(helper, rel, addend, place)?
             }
             R_RISCV_SET32 => {
-                Self::write_truncated::<u32, D, PreH, PostH, Obs>(helper, rel, addend, place)?
+                Self::write_truncated::<u32, D, R, PreH, PostH, Obs, H>(helper, rel, addend, place)?
             }
             R_RISCV_RVC_BRANCH => {
                 let off = branch_offset(helper, addend, place, rel, 256)?;
@@ -441,27 +447,29 @@ impl RiscV64Arch {
         }
     }
 
-    fn resolve_pcrel_lo12<D, PreH, PostH, Obs>(
+    fn resolve_pcrel_lo12<D, R, PreH, PostH, Obs, H>(
         state: &RiscV64ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
     ) -> Result<i64>
     where
         D: 'static,
+        R: RegionAccess,
+        H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
     {
         let Some(auipc_addr) = helper.find_symbol(rel)? else {
-            return Err(reloc_error::<Self, _, HostRegion>(
+            return Err(reloc_error::<Self, _, R, H>(
                 rel,
                 RelocReason::UnknownSymbol,
                 helper.core,
             ));
         };
         let Some(hi20) = state.hi20_cache.get(&auipc_addr).copied() else {
-            return Err(reloc_error::<Self, _, HostRegion>(
+            return Err(reloc_error::<Self, _, R, H>(
                 rel,
                 RelocReason::Unsupported,
                 helper.core,
@@ -470,7 +478,7 @@ impl RiscV64Arch {
 
         let off = if hi20.r_type == R_RISCV_GOT_HI20 {
             let Some(sym) = helper.find_symdef(hi20.symbol).map(|sym| sym.convert()) else {
-                return Err(reloc_error::<Self, _, HostRegion>(
+                return Err(reloc_error::<Self, _, R, H>(
                     rel,
                     RelocReason::UnknownSymbol,
                     helper.core,
@@ -480,7 +488,7 @@ impl RiscV64Arch {
             got_addr.get() as i64 - auipc_addr.get() as i64
         } else {
             let Some(sym) = helper.find_symdef(hi20.symbol).map(|sym| sym.convert()) else {
-                return Err(reloc_error::<Self, _, HostRegion>(
+                return Err(reloc_error::<Self, _, R, H>(
                     rel,
                     RelocReason::UnknownSymbol,
                     helper.core,
@@ -496,7 +504,11 @@ impl RiscV64Arch {
         Ok(off - (hi20 << 12))
     }
 
-    fn write_auipc_pair(segments: &ElfSegments, place: VmAddr, off: i64) -> Result<()> {
+    fn write_auipc_pair<R: RegionAccess>(
+        segments: &ElfSegments<R>,
+        place: VmAddr,
+        off: i64,
+    ) -> Result<()> {
         let hi20 = (off + 0x800) >> 12;
         let lo12 = off & 0xfff;
         unsafe {
@@ -511,14 +523,15 @@ impl RiscV64Arch {
         Ok(())
     }
 
-    fn apply_wrapping_arith<T>(
-        segments: &ElfSegments,
+    fn apply_wrapping_arith<T, R>(
+        segments: &ElfSegments<R>,
         place: VmAddr,
         value: usize,
         is_add: bool,
     ) -> Result<()>
     where
         T: WrappingRelocWord + crate::ByteRepr,
+        R: RegionAccess,
     {
         unsafe {
             segments.update_object_value::<T>(place, |old| {
@@ -533,8 +546,8 @@ impl RiscV64Arch {
         Ok(())
     }
 
-    fn write_truncated<T, D, PreH, PostH, Obs>(
-        helper: &mut RelocHelper<'_, D, Self, HostRegion, PreH, PostH, Obs>,
+    fn write_truncated<T, D, R, PreH, PostH, Obs, H>(
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
         rel: &ElfRelType<Self>,
         addend: isize,
         place: VmAddr,
@@ -542,12 +555,14 @@ impl RiscV64Arch {
     where
         T: WrappingRelocWord + crate::ByteRepr,
         D: 'static,
+        R: RegionAccess,
+        H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
     {
         let Some(sym) = helper.find_symbol(rel)? else {
-            return Err(reloc_error::<Self, _, HostRegion>(
+            return Err(reloc_error::<Self, _, R, H>(
                 rel,
                 RelocReason::UnknownSymbol,
                 helper.core,
@@ -626,8 +641,8 @@ fn signed_offset(target: VmAddr, addend: isize, place: VmAddr) -> i64 {
     (target.get() as i128 + addend as i128 - place.get() as i128) as i64
 }
 
-fn branch_offset<D, PreH, PostH, Obs>(
-    helper: &mut RelocHelper<'_, D, RiscV64Arch, HostRegion, PreH, PostH, Obs>,
+fn branch_offset<D, R, PreH, PostH, Obs, H>(
+    helper: &mut RelocHelper<'_, D, RiscV64Arch, R, PreH, PostH, Obs, H>,
     addend: isize,
     place: VmAddr,
     rel: &ElfRelType<RiscV64Arch>,
@@ -635,12 +650,14 @@ fn branch_offset<D, PreH, PostH, Obs>(
 ) -> Result<i64>
 where
     D: 'static,
+    R: RegionAccess,
+    H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
     PreH: RelocationHandler<RiscV64Arch> + ?Sized,
     PostH: RelocationHandler<RiscV64Arch> + ?Sized,
     Obs: RelocationObserver<RiscV64Arch> + ?Sized,
 {
     let Some(sym) = helper.find_symbol(rel)? else {
-        return Err(reloc_error::<RiscV64Arch, _, HostRegion>(
+        return Err(reloc_error::<RiscV64Arch, _, R, H>(
             rel,
             RelocReason::UnknownSymbol,
             helper.core,
@@ -648,7 +665,7 @@ where
     };
     let off = signed_offset(sym, addend, place);
     if off & 1 != 0 || off < -range || off >= range {
-        return Err(reloc_error::<RiscV64Arch, _, HostRegion>(
+        return Err(reloc_error::<RiscV64Arch, _, R, H>(
             rel,
             RelocReason::IntConversionOutOfRange,
             helper.core,

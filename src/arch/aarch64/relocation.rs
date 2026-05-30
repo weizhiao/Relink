@@ -7,7 +7,7 @@ use elf::abi::*;
 
 use crate::arch::ArchKind;
 #[cfg(feature = "object")]
-use crate::arch::object::ObjectRelocationArch;
+use crate::relocation::ObjectRelocationArch;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
 

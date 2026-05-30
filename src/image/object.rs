@@ -4,12 +4,12 @@
 //! ELF files (also known as object files). These are typically `.o` files that
 //! contain code and data that need to be relocated before they can be executed.
 
-use crate::object::{ObjectBuilder, ObjectRelocation, PltGotSection};
+use crate::object::{CustomHash, ObjectBuilder, ObjectRelocation, PltGotSection};
 use crate::{
     Result,
     elf::Lifecycle,
     observer::RelocationObserver,
-    os::VmAddr,
+    os::{HostRegion, RegionAccess, VmAddr},
     relocation::{
         ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
         Relocator,
@@ -27,9 +27,13 @@ use super::{CoreInner, ElfCore, LoadedCore, ModuleHandle};
 /// This structure represents a relocatable ELF file (typically a `.o` file)
 /// that has been loaded into memory and is ready for relocation. It contains
 /// all the necessary information to perform the relocation process.
-pub struct RawObject<D: 'static = (), Arch: ObjectRelocationArch = crate::arch::NativeArch> {
+pub struct RawObject<
+    D: 'static = (),
+    Arch: ObjectRelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = HostRegion,
+> {
     /// Core component containing basic ELF information.
-    pub(crate) core: ElfCore<D, Arch>,
+    pub(crate) core: ElfCore<D, Arch, R, CustomHash>,
 
     /// Object relocation information.
     pub(crate) relocation: ObjectRelocation<Arch>,
@@ -38,22 +42,22 @@ pub struct RawObject<D: 'static = (), Arch: ObjectRelocationArch = crate::arch::
     pub(crate) pltgot: PltGotSection,
 
     /// Memory protection function.
-    pub(crate) mprotect: Box<dyn Fn() -> Result<()>>,
+    pub(crate) mprotect: Box<dyn Fn(&crate::segment::ElfSegments<R>) -> Result<()>>,
 
     /// Initialization lifecycle.
     pub(crate) init: Lifecycle,
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch> Deref for RawObject<D, Arch> {
-    type Target = ElfCore<D, Arch>;
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Deref for RawObject<D, Arch, R> {
+    type Target = ElfCore<D, Arch, R, CustomHash>;
 
     fn deref(&self) -> &Self::Target {
         &self.core
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch> RawObject<D, Arch> {
-    pub(crate) fn from_builder<T: TlsResolver>(builder: ObjectBuilder<T, D, Arch>) -> Self {
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch, R> {
+    pub(crate) fn from_builder<T: TlsResolver>(builder: ObjectBuilder<T, D, Arch, R>) -> Self {
         let inner = CoreInner {
             is_init: AtomicBool::new(false),
             path: builder.path,
@@ -92,7 +96,7 @@ impl<D: 'static, Arch: ObjectRelocationArch> RawObject<D, Arch> {
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch> Debug for RawObject<D, Arch> {
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Debug for RawObject<D, Arch, R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawObject")
             .field("core", &self.core)
@@ -100,11 +104,12 @@ impl<D: 'static, Arch: ObjectRelocationArch> Debug for RawObject<D, Arch> {
     }
 }
 
-impl<D: 'static, Arch> Relocatable<D> for RawObject<D, Arch>
+impl<D: 'static, Arch, R> Relocatable<D> for RawObject<D, Arch, R>
 where
     Arch: ObjectRelocationArch,
+    R: RegionAccess,
 {
-    type Output = LoadedObject<D, Arch>;
+    type Output = LoadedObject<D, Arch, R>;
     type Arch = Arch;
 
     fn relocate<PreH, PostH, Obs>(
@@ -129,55 +134,87 @@ where
 }
 
 /// A relocated object file.
-#[derive(Debug, Clone)]
-pub struct LoadedObject<D: 'static, Arch: RelocationArch = crate::arch::NativeArch> {
-    pub(crate) inner: LoadedCore<D, Arch>,
+pub struct LoadedObject<
+    D: 'static = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = HostRegion,
+> {
+    pub(crate) inner: LoadedCore<D, Arch, R, CustomHash>,
 }
 
-impl<D: 'static, Arch: RelocationArch> Deref for LoadedObject<D, Arch> {
-    type Target = LoadedCore<D, Arch>;
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedObject<D, Arch, R> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedObject<D, Arch, R> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LoadedObject")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Deref for LoadedObject<D, Arch, R> {
+    type Target = LoadedCore<D, Arch, R, CustomHash>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> Borrow<LoadedCore<D, Arch>> for LoadedObject<D, Arch> {
-    fn borrow(&self) -> &LoadedCore<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Borrow<LoadedCore<D, Arch, R, CustomHash>>
+    for LoadedObject<D, Arch, R>
+{
+    fn borrow(&self) -> &LoadedCore<D, Arch, R, CustomHash> {
         &self.inner
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> Borrow<LoadedCore<D, Arch>> for &LoadedObject<D, Arch> {
-    fn borrow(&self) -> &LoadedCore<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Borrow<LoadedCore<D, Arch, R, CustomHash>>
+    for &LoadedObject<D, Arch, R>
+{
+    fn borrow(&self) -> &LoadedCore<D, Arch, R, CustomHash> {
         &self.inner
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> From<LoadedObject<D, Arch>> for LoadedCore<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<LoadedObject<D, Arch, R>>
+    for LoadedCore<D, Arch, R, CustomHash>
+{
     #[inline]
-    fn from(object: LoadedObject<D, Arch>) -> Self {
+    fn from(object: LoadedObject<D, Arch, R>) -> Self {
         object.inner
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> From<&LoadedObject<D, Arch>> for LoadedCore<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedObject<D, Arch, R>>
+    for LoadedCore<D, Arch, R, CustomHash>
+{
     #[inline]
-    fn from(object: &LoadedObject<D, Arch>) -> Self {
+    fn from(object: &LoadedObject<D, Arch, R>) -> Self {
         object.inner.clone()
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> From<LoadedObject<D, Arch>> for ModuleHandle<Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<LoadedObject<D, Arch, R>>
+    for ModuleHandle<Arch>
+{
     #[inline]
-    fn from(object: LoadedObject<D, Arch>) -> Self {
+    fn from(object: LoadedObject<D, Arch, R>) -> Self {
         Self::new(object.inner)
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> From<&LoadedObject<D, Arch>> for ModuleHandle<Arch> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedObject<D, Arch, R>>
+    for ModuleHandle<Arch>
+{
     #[inline]
-    fn from(object: &LoadedObject<D, Arch>) -> Self {
+    fn from(object: &LoadedObject<D, Arch, R>) -> Self {
         Self::new(object.inner.clone())
     }
 }

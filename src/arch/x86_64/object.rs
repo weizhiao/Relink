@@ -65,14 +65,15 @@ impl X86_64Arch {
         Ok(())
     }
 
-    pub(crate) fn relocate_object_impl<D, R, PreH, PostH, Obs>(
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, crate::object::CustomHash>,
+    pub(crate) fn relocate_object_impl<D, R, PreH, PostH, Obs, H>(
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
     ) -> crate::Result<()>
     where
         D: 'static,
         R: RegionAccess,
+        H: crate::elf::ElfHashTable<<X86_64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: crate::observer::RelocationObserver<Self> + ?Sized,
