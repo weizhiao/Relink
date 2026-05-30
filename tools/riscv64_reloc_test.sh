@@ -43,39 +43,6 @@ fi
 
 mkdir -p "$OUT_DIR"
 
-echo "Compiling comprehensive RISC-V relocation tests..."
-
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/a.c" -o "$OUT_DIR/a.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/b.c" -o "$OUT_DIR/b.o"
-
-# 编译所有测试模块
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_call.c" -o "$OUT_DIR/test_call.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_globals.c" -o "$OUT_DIR/test_globals.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_branches.c" -o "$OUT_DIR/test_branches.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_hi_lo.c" -o "$OUT_DIR/test_hi_lo.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_pointers.c" -o "$OUT_DIR/test_pointers.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_32bit.c" -o "$OUT_DIR/test_32bit.o"
-"$LINKER" $CFLAGS -fPIC -c "$ROOT_DIR/tests/riscv64/fixtures/riscv64/test_main.c" -o "$OUT_DIR/test_main.o"
-
-echo "Compiled all test modules successfully!"
-echo ""
-echo "Analyzing relocations in test modules:"
-echo "========================================"
-
-# 显示每个模块的重定位类型统计
-for obj in test_call test_globals test_branches test_hi_lo test_pointers test_32bit test_main; do
-  echo ""
-  echo "Module: $obj.o"
-  echo "----------------------------------------"
-  if command -v riscv64-linux-gnu-readelf >/dev/null 2>&1; then
-    riscv64-linux-gnu-readelf -r "$OUT_DIR/$obj.o" 2>/dev/null | grep -E "R_RISCV_" | awk '{print $3}' | sort | uniq -c || true
-  fi
-done
-
-echo ""
-echo "========================================"
-echo ""
-
 cd "$ROOT_DIR"
 resolve_test_exe() {
   exe="$1"
@@ -91,7 +58,10 @@ resolve_test_exe() {
 
 build_test_exe() {
   name="$1"
-  exe=$(RUSTFLAGS="$RUSTFLAGS" \
+  exe=$(ELF_TEST_DIR="$TEST_ROOT" \
+    RISCV64_LINKER="$LINKER" \
+    RISCV64_CFLAGS="$CFLAGS" \
+    RUSTFLAGS="$RUSTFLAGS" \
     CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUSTFLAGS="$RUSTFLAGS" \
     CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER="$LINKER" \
     CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_AR="$AR" \
@@ -108,9 +78,27 @@ build_test_exe() {
   resolve_test_exe "$exe"
 }
 
-echo "Building Rust test binaries..."
+echo "Building Rust test binaries and fixture objects..."
 OBJECT_LINK_EXE=$(build_test_exe riscv64_object_link)
 RELOC_TEST_EXE=$(build_test_exe riscv64_reloc_test)
+
+echo "Built fixture objects successfully!"
+echo ""
+echo "Analyzing relocations in test modules:"
+echo "========================================"
+
+for obj in test_call test_globals test_branches test_hi_lo test_pointers test_32bit test_main; do
+  echo ""
+  echo "Module: $obj.o"
+  echo "----------------------------------------"
+  if command -v riscv64-linux-gnu-readelf >/dev/null 2>&1; then
+    riscv64-linux-gnu-readelf -r "$OUT_DIR/$obj.o" 2>/dev/null | grep -E "R_RISCV_" | awk '{print $3}' | sort | uniq -c || true
+  fi
+done
+
+echo ""
+echo "========================================"
+echo ""
 
 echo ""
 echo "Running object-link example..."
