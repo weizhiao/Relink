@@ -274,6 +274,18 @@ pub enum ParseEhdrError {
     RelocatableObjectsDisabled,
     /// A relocatable object was expected to carry section headers.
     MissingSectionHeaders,
+    /// The section header table is malformed.
+    MalformedSectionHeaders {
+        /// Static detail describing why the section headers are malformed.
+        detail: &'static str,
+    },
+}
+
+impl ParseEhdrError {
+    #[inline]
+    pub(crate) const fn malformed_section_headers(detail: &'static str) -> Self {
+        Self::MalformedSectionHeaders { detail }
+    }
 }
 
 impl Display for ParseEhdrError {
@@ -301,6 +313,7 @@ impl Display for ParseEhdrError {
                 f.write_str("file type ET_REL requires enabling the `object` feature")
             }
             Self::MissingSectionHeaders => f.write_str("object file must have section headers"),
+            Self::MalformedSectionHeaders { detail } => f.write_str(detail),
         }
     }
 }

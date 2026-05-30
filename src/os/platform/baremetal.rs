@@ -115,13 +115,17 @@ impl RawFile {
         unimplemented!()
     }
 
-    pub(crate) fn from_owned_fd(_path: &Path, _raw_fd: i32) -> Self {
+    pub(crate) fn from_owned_fd(_path: &Path, _raw_fd: i32) -> Result<Self> {
         todo!()
     }
 }
 
 impl ElfReader for RawFile {
     fn path(&self) -> &Path {
+        todo!()
+    }
+
+    fn len(&self) -> usize {
         todo!()
     }
 

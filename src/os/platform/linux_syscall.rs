@@ -31,6 +31,7 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
 pub(crate) struct RawFile {
     path: PathBuf,
     fd: isize,
+    len: usize,
 }
 
 impl Mmap for DefaultMmap {
@@ -180,11 +181,13 @@ where
 }
 
 impl RawFile {
-    pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Self {
-        Self {
+    pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Result<Self> {
+        let fd = raw_fd as isize;
+        Ok(Self {
             path: PathBuf::from(path),
-            fd: raw_fd as isize,
-        }
+            fd,
+            len: Self::query_len(fd)?,
+        })
     }
 
     pub(crate) fn from_path(path: &Path) -> Result<Self> {
@@ -224,10 +227,22 @@ impl RawFile {
             }
             res
         };
+        let fd = fd as isize;
         Ok(RawFile {
             path: PathBuf::from(path),
-            fd: fd as _,
+            fd,
+            len: Self::query_len(fd)?,
         })
+    }
+
+    fn query_len(fd: isize) -> Result<usize> {
+        const SEEK_END: u32 = 2;
+        unsafe {
+            from_ret(
+                syscalls::raw_syscall!(Sysno::lseek, fd, 0, SEEK_END),
+                |code| IoError::SeekFailed { code }.into(),
+            )
+        }
     }
 }
 
@@ -246,6 +261,10 @@ impl Drop for RawFile {
 }
 
 impl ElfReader for RawFile {
+    fn len(&self) -> usize {
+        self.len
+    }
+
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         const SEEK_START: u32 = 0;
         unsafe {

@@ -585,6 +585,10 @@ mod tests {
             Path::new("<test>")
         }
 
+        fn len(&self) -> usize {
+            self.bytes.len()
+        }
+
         fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
             buf.copy_from_slice(&self.bytes[offset..offset + buf.len()]);
             Ok(())

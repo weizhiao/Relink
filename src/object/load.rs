@@ -1,5 +1,6 @@
 use crate::{
     ParseEhdrError, Result,
+    elf::{ElfLayout, ElfSectionType, ElfShdr},
     image::{RawElf, RawObject},
     input::{ElfReader, IntoElfReader},
     loader::Loader,
@@ -55,6 +56,7 @@ where
             .buf
             .prepare_shdrs_mut(&ehdr, &mut object)?
             .ok_or(ParseEhdrError::MissingSectionHeaders)?;
+        validate_object_shdrs(shdrs, object.len())?;
         let builder = self.inner.create_object_builder::<Tls>(shdrs, object)?;
         let raw = RawObject::from_builder(builder);
 
@@ -69,12 +71,42 @@ where
     }
 }
 
+fn validate_object_shdrs<L: ElfLayout>(shdrs: &[ElfShdr<L>], object_len: usize) -> Result<()> {
+    let first = shdrs.first().ok_or(ParseEhdrError::MissingSectionHeaders)?;
+    if first.section_type() != ElfSectionType::NULL || first.sh_size() != 0 {
+        return Err(ParseEhdrError::malformed_section_headers(
+            "section 0 must be an empty SHT_NULL section",
+        )
+        .into());
+    }
+
+    for shdr in shdrs.iter() {
+        if shdr.sh_size() == 0 || shdr.section_type() == ElfSectionType::NOBITS {
+            continue;
+        }
+        let end = shdr
+            .sh_offset()
+            .checked_add(shdr.sh_size())
+            .ok_or_else(|| {
+                ParseEhdrError::malformed_section_headers("section content range overflows")
+            })?;
+        if end > object_len {
+            return Err(ParseEhdrError::malformed_section_headers(
+                "section content exceeds object length",
+            )
+            .into());
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
-        Result,
-        elf::{ElfEhdr, ElfLayout, NativeElfLayout},
-        input::{ElfReader, Path},
+        Loader, Result,
+        elf::{ElfEhdr, ElfLayout, ElfSectionFlags, ElfSectionType, NativeElfLayout},
+        input::{ElfBinary, ElfReader, Path},
         relocation::RelocationArch,
     };
     use crate::{
@@ -102,6 +134,10 @@ mod tests {
             Path::new("<test>")
         }
 
+        fn len(&self) -> usize {
+            self.bytes.len()
+        }
+
         fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
             buf.copy_from_slice(&self.bytes[offset..offset + buf.len()]);
             Ok(())
@@ -113,6 +149,13 @@ mod tests {
     }
 
     fn make_object_header(shentsize: usize, shnum: usize) -> ElfHeader {
+        let ehdr = make_raw_object_header(shentsize, shnum);
+
+        ElfHeader::from_raw(ehdr, Some(crate::arch::NativeArch::MACHINE))
+            .expect("failed to parse crafted object header")
+    }
+
+    fn make_raw_object_header(shentsize: usize, shnum: usize) -> ElfEhdr {
         let mut ehdr = unsafe { core::mem::zeroed::<ElfEhdr>() };
         ehdr.e_ident[0..4].copy_from_slice(&ELFMAGIC);
         ehdr.e_ident[EI_CLASS] = <NativeElfLayout as ElfLayout>::E_CLASS;
@@ -125,8 +168,14 @@ mod tests {
         ehdr.e_shentsize = shentsize as _;
         ehdr.e_shnum = shnum as _;
 
-        ElfHeader::from_raw(ehdr, Some(crate::arch::NativeArch::MACHINE))
-            .expect("failed to parse crafted object header")
+        ehdr
+    }
+
+    fn write_value<T>(bytes: &mut [u8], offset: usize, value: &T) {
+        let raw = unsafe {
+            core::slice::from_raw_parts((value as *const T).cast::<u8>(), size_of::<T>())
+        };
+        bytes[offset..offset + raw.len()].copy_from_slice(raw);
     }
 
     #[test]
@@ -141,6 +190,68 @@ mod tests {
         assert!(matches!(
             err,
             crate::Error::ParseEhdr(crate::ParseEhdrError::MissingSectionHeaders)
+        ));
+    }
+
+    #[test]
+    fn prepare_shdrs_rejects_table_past_object_len() {
+        let mut elf_buf = ElfBuf::new();
+        let header = make_object_header(size_of::<ElfShdr>(), 2);
+        let mut reader =
+            TestReader::zeroed(<NativeElfLayout as ElfLayout>::EHDR_SIZE + size_of::<ElfShdr>());
+
+        let err = elf_buf
+            .prepare_shdrs_mut(&header, &mut reader)
+            .expect_err("shdr table past object length should fail");
+        assert!(matches!(
+            err,
+            crate::Error::ParseEhdr(crate::ParseEhdrError::MalformedSectionHeaders { .. })
+        ));
+    }
+
+    #[test]
+    fn load_object_rejects_section_content_past_object_len() {
+        let ehdr_size = <NativeElfLayout as ElfLayout>::EHDR_SIZE;
+        let shdr_size = size_of::<ElfShdr>();
+        let mut bytes = alloc::vec![0u8; ehdr_size + shdr_size * 2];
+
+        let ehdr = make_raw_object_header(shdr_size, 2);
+        write_value(&mut bytes, 0, &ehdr);
+
+        let null_shdr: ElfShdr<NativeElfLayout> = ElfShdr::new(
+            0,
+            ElfSectionType::NULL,
+            ElfSectionFlags::empty(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        let content_shdr: ElfShdr<NativeElfLayout> = ElfShdr::new(
+            0,
+            ElfSectionType::PROGBITS,
+            ElfSectionFlags::empty(),
+            0,
+            bytes.len() - 4,
+            8,
+            0,
+            0,
+            1,
+            0,
+        );
+        write_value(&mut bytes, ehdr_size, &null_shdr);
+        write_value(&mut bytes, ehdr_size + shdr_size, &content_shdr);
+
+        let mut loader = Loader::new();
+        let result = loader.load_object(ElfBinary::owned("bad.o", bytes));
+        assert!(matches!(
+            result,
+            Err(crate::Error::ParseEhdr(
+                crate::ParseEhdrError::MalformedSectionHeaders { .. }
+            ))
         ));
     }
 }

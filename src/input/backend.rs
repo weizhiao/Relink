@@ -1,6 +1,19 @@
 use super::{ElfReader, IntoElfReader, Path, PathBuf};
 use crate::{Result, logging, os::RawFile};
 use alloc::{borrow::Cow, boxed::Box, string::String, vec::Vec};
+use core::ops::Range;
+
+fn checked_read_range(offset: usize, len: usize, available: usize) -> Result<Range<usize>> {
+    let Some(end) = offset.checked_add(len).filter(|&end| end <= available) else {
+        return Err(
+            crate::IoError::ReadOutOfBounds(Box::new(crate::ReadBoundsError::new(
+                offset, len, available,
+            )))
+            .into(),
+        );
+    };
+    Ok(offset..end)
+}
 
 /// An ELF object source backed by an in-memory byte slice.
 ///
@@ -49,20 +62,16 @@ impl<'bytes> ElfReader for ElfBinary<'bytes> {
         &self.path
     }
 
+    /// Returns the byte length of the in-memory ELF object.
+    fn len(&self) -> usize {
+        self.bytes.as_ref().len()
+    }
+
     /// Reads data from the memory-based ELF object.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> crate::Result<()> {
         let bytes = self.bytes.as_ref();
-        if offset + buf.len() > bytes.len() {
-            return Err(
-                crate::IoError::ReadOutOfBounds(Box::new(crate::ReadBoundsError::new(
-                    offset,
-                    buf.len(),
-                    bytes.len(),
-                )))
-                .into(),
-            );
-        }
-        buf.copy_from_slice(&bytes[offset..offset + buf.len()]);
+        let range = checked_read_range(offset, buf.len(), bytes.len())?;
+        buf.copy_from_slice(&bytes[range]);
         Ok(())
     }
 
@@ -86,11 +95,11 @@ impl ElfFile {
     ///
     /// # Safety
     /// The caller must ensure that `raw_fd` is valid and owned by this object.
-    pub unsafe fn from_owned_fd(path: impl AsRef<Path>, raw_fd: i32) -> Self {
+    pub unsafe fn from_owned_fd(path: impl AsRef<Path>, raw_fd: i32) -> Result<Self> {
         let path = path.as_ref();
-        ElfFile {
-            inner: RawFile::from_owned_fd(path, raw_fd),
-        }
+        Ok(ElfFile {
+            inner: RawFile::from_owned_fd(path, raw_fd)?,
+        })
     }
 
     /// Creates a new file-based ELF object by opening a file at the given path.
@@ -107,6 +116,11 @@ impl ElfReader for ElfFile {
     /// Returns the path of the ELF file.
     fn path(&self) -> &Path {
         self.inner.path()
+    }
+
+    /// Returns the byte length of the file-backed ELF object.
+    fn len(&self) -> usize {
+        self.inner.len()
     }
 
     /// Reads data from the file-based ELF object.
@@ -130,19 +144,16 @@ impl<'a> ElfReader for &'a [u8] {
         Path::new("<memory>")
     }
 
+    /// Returns the byte length of the slice-backed ELF object.
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+
     /// Reads data from the byte slice at the specified offset.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
-        if offset + buf.len() > self.len() {
-            return Err(
-                crate::IoError::ReadOutOfBounds(Box::new(crate::ReadBoundsError::new(
-                    offset,
-                    buf.len(),
-                    self.len(),
-                )))
-                .into(),
-            );
-        }
-        buf.copy_from_slice(&self[offset..offset + buf.len()]);
+        let bytes = *self;
+        let range = checked_read_range(offset, buf.len(), bytes.len())?;
+        buf.copy_from_slice(&bytes[range]);
         Ok(())
     }
 

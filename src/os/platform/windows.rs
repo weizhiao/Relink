@@ -14,8 +14,8 @@ use windows_sys::Win32::{
         CloseHandle, GENERIC_EXECUTE, GENERIC_READ, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
     },
     Storage::FileSystem::{
-        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_BEGIN, FILE_SHARE_READ, OPEN_EXISTING, ReadFile,
-        SetFilePointerEx,
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_BEGIN, FILE_SHARE_READ, GetFileSizeEx,
+        OPEN_EXISTING, ReadFile, SetFilePointerEx,
     },
     System::Memory::{
         self as Memory, CreateFileMappingW, MEM_COMMIT, MEM_PRESERVE_PLACEHOLDER, MEM_RELEASE,
@@ -65,6 +65,7 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
 pub(crate) struct RawFile {
     path: PathBuf,
     fd: HANDLE,
+    len: usize,
     /// Stores the mapping handle for the file.
     mapping: HANDLE,
 }
@@ -255,7 +256,7 @@ impl Drop for RawFile {
 }
 
 impl RawFile {
-    pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Self {
+    pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Result<Self> {
         let handle = raw_fd as isize as HANDLE;
         let mapping_handle = unsafe {
             CreateFileMappingW(
@@ -270,14 +271,15 @@ impl RawFile {
 
         if mapping_handle.is_null() {
             let err_code = unsafe { GetLastError() };
-            panic!("CreateFileMappingW failed with error: {}", err_code);
+            return Err(MmapError::CreateFileMappingW { code: err_code }.into());
         }
 
-        Self {
+        Ok(Self {
             path: PathBuf::from(path),
             fd: handle,
+            len: Self::query_len(handle)?,
             mapping: mapping_handle,
-        }
+        })
     }
 
     pub(crate) fn from_path(path: &Path) -> Result<Self> {
@@ -327,8 +329,21 @@ impl RawFile {
         Ok(Self {
             path: PathBuf::from(path),
             fd: handle,
+            len: Self::query_len(handle)?,
             mapping: mapping_handle,
         })
+    }
+
+    fn query_len(handle: HANDLE) -> Result<usize> {
+        let mut size = 0i64;
+        if unsafe { GetFileSizeEx(handle, &mut size) } == 0 {
+            let err_code = unsafe { GetLastError() };
+            return Err(IoError::SeekFailed { code: err_code }.into());
+        }
+        if size < 0 || size as u64 > usize::MAX as u64 {
+            return Err(IoError::FailedToFillBuffer.into());
+        }
+        Ok(size as usize)
     }
 }
 
@@ -386,6 +401,10 @@ pub(crate) fn virtual_free(addr: usize, len: usize) -> Result<()> {
 }
 
 impl ElfReader for RawFile {
+    fn len(&self) -> usize {
+        self.len
+    }
+
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         win_seek(self.fd as HANDLE, offset)?;
         win_read_exact(self.fd as HANDLE, buf)?;

@@ -71,6 +71,15 @@ impl ElfBuf {
             return Ok(None);
         };
         let count = ehdr.e_shnum();
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| ParseEhdrError::MissingSectionHeaders)?;
+        if end > object.len() {
+            return Err(ParseEhdrError::malformed_section_headers(
+                "section header table exceeds object length",
+            )
+            .into());
+        }
 
         self.buf
             .set_len(size)

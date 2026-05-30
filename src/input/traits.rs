@@ -17,6 +17,9 @@ pub trait ElfReader {
     /// Returns the loader source path or caller-provided source identifier.
     fn path(&self) -> &Path;
 
+    /// Returns the total length in bytes of the ELF object source.
+    fn len(&self) -> usize;
+
     /// Reads data from the ELF object at the given offset into the provided buffer.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()>;
 
@@ -95,6 +98,11 @@ impl<R: ElfReader + ?Sized> ElfReader for Box<R> {
     #[inline]
     fn path(&self) -> &Path {
         (**self).path()
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        (**self).len()
     }
 
     #[inline]

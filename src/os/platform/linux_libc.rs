@@ -7,7 +7,7 @@ use alloc::ffi::CString;
 use core::ffi::c_void;
 #[cfg(feature = "tls")]
 use core::sync::atomic::{AtomicUsize, Ordering};
-use libc::{_SC_PAGESIZE, O_RDONLY, SEEK_SET, madvise, mmap, mprotect, munmap, sysconf};
+use libc::{_SC_PAGESIZE, O_RDONLY, SEEK_END, SEEK_SET, madvise, mmap, mprotect, munmap, sysconf};
 
 #[inline]
 fn last_os_error_code() -> u32 {
@@ -83,6 +83,7 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
 pub(crate) struct RawFile {
     path: PathBuf,
     fd: isize,
+    len: usize,
 }
 
 impl Mmap for DefaultMmap {
@@ -234,17 +235,32 @@ impl RawFile {
             }
             .into());
         }
+        let fd = fd as isize;
         Ok(Self {
             path: PathBuf::from(path),
-            fd: fd as isize,
+            fd,
+            len: Self::query_len(fd)?,
         })
     }
 
-    pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Self {
-        Self {
+    pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Result<Self> {
+        let fd = raw_fd as isize;
+        Ok(Self {
             path: PathBuf::from(path),
-            fd: raw_fd as isize,
+            fd,
+            len: Self::query_len(fd)?,
+        })
+    }
+
+    fn query_len(fd: isize) -> Result<usize> {
+        let off = unsafe { libc::lseek(fd as i32, 0, SEEK_END) };
+        if off < 0 {
+            return Err(IoError::SeekFailed {
+                code: last_os_error_code(),
+            }
+            .into());
         }
+        Ok(off as usize)
     }
 }
 
@@ -287,6 +303,10 @@ fn read_exact(fd: i32, mut bytes: &mut [u8]) -> Result<()> {
 }
 
 impl ElfReader for RawFile {
+    fn len(&self) -> usize {
+        self.len
+    }
+
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         lseek(self.fd as i32, offset)?;
         read_exact(self.fd as i32, buf)?;
