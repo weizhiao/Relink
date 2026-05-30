@@ -116,16 +116,15 @@ jobs:
       with:
         toolchain: nightly
         components: rust-src
-    - name: Install RISC-V host tooling
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
     - name: Install cross
       run: cargo install --locked cross --git https://github.com/cross-rs/cross
-    - name: Run RISC-V object relocation examples
+    - name: Run RISC-V object relocation tests
       env:
-        CARGO: cross
-      run: sh tools/riscv64_reloc_test.sh
+        RUSTFLAGS: -C target-cpu=generic-rv64 -C target-feature=+m,+a,+f,+d,+c,+crt-static
+        CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=generic-rv64 -C target-feature=+m,+a,+f,+d,+c,+crt-static
+        CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+        CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_AR: riscv64-linux-gnu-ar
+      run: cross test --manifest-path tests/riscv64/Cargo.toml -Z build-std=std,panic_unwind --target riscv64gc-unknown-linux-gnu -- --nocapture
 
   test-windows-loader:
     runs-on: windows-latest
