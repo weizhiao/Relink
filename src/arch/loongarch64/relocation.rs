@@ -3,6 +3,8 @@
 use elf::abi::EM_LOONGARCH;
 
 use crate::arch::ArchKind;
+#[cfg(feature = "object")]
+use crate::relocation::ObjectRelocationArch;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
@@ -55,6 +57,11 @@ impl RelocationArch for LoongArch64Arch {
             _ => "UNKNOWN",
         }
     }
+}
+
+#[cfg(feature = "object")]
+impl ObjectRelocationArch for LoongArch64Arch {
+    type ObjectRelocationState = ();
 }
 
 impl crate::relocation::RelocationValueProvider for LoongArch64Arch {}

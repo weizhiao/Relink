@@ -6,16 +6,16 @@ use crate::{
     observer::default_lifecycle_executor,
     observer::{LifecycleEvent, LifecyclePhase, RelocationObserver},
     os::RegionAccess,
-    relocation::{RelocHelper, RelocationArch, RelocationHandler},
+    relocation::{ObjectRelocationArch, RelocHelper, RelocationHandler},
 };
 
 use alloc::{boxed::Box, vec::Vec};
 
-pub(crate) struct ObjectRelocation<Arch: RelocationArch = crate::arch::NativeArch> {
+pub(crate) struct ObjectRelocation<Arch: ObjectRelocationArch = crate::arch::NativeArch> {
     sections: Box<[&'static [ElfRelType<Arch>]]>,
 }
 
-impl<Arch: RelocationArch> ObjectRelocation<Arch> {
+impl<Arch: ObjectRelocationArch> ObjectRelocation<Arch> {
     pub(crate) fn new(sections: Vec<&'static [ElfRelType<Arch>]>) -> Self {
         Self {
             sections: sections.into_boxed_slice(),
@@ -25,7 +25,7 @@ impl<Arch: RelocationArch> ObjectRelocation<Arch> {
 
 impl<D: 'static, Arch, R> RawObject<D, Arch, R>
 where
-    Arch: RelocationArch,
+    Arch: ObjectRelocationArch,
     R: RegionAccess,
 {
     pub(crate) fn relocate_impl<PreH, PostH, Obs>(
@@ -50,12 +50,15 @@ where
             observer,
             self.core.tls_get_addr(),
         );
-        for reloc in self.relocation.sections.iter() {
+        let sections = &self.relocation.sections;
+        let mut state = Arch::ObjectRelocationState::default();
+        Arch::prepare_object_relocation(&mut state, &mut helper, sections)?;
+        for reloc in sections.iter() {
             for rel in *reloc {
                 if !helper.handle_pre(rel)?.is_unhandled() {
                     continue;
                 }
-                match Arch::relocate_object(&mut helper, rel, &mut self.pltgot) {
+                match Arch::relocate_object(&mut state, &mut helper, rel, &mut self.pltgot) {
                     Ok(()) => continue,
                     Err(err) => {
                         if helper.handle_post(rel)?.is_unhandled() {

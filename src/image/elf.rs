@@ -5,7 +5,10 @@ use crate::{
     input::Path,
     observer::RelocationObserver,
     os::{HostRegion, RegionAccess, VmAddr},
-    relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
+    relocation::{
+        ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
+        Relocator,
+    },
 };
 
 use super::{LoadedCore, LoadedExec, RawDylib, RawExec};
@@ -23,7 +26,7 @@ use super::{LoadedObject, RawObject};
 pub enum RawElf<D, Arch = crate::arch::NativeArch, R: RegionAccess = HostRegion>
 where
     D: 'static,
-    Arch: RelocationArch,
+    Arch: ObjectRelocationArch,
 {
     /// A dynamic library (shared object, typically `.so`).
     Dylib(RawDylib<D, Arch, R>),
@@ -53,7 +56,7 @@ pub enum LoadedElf<D: 'static, Arch: RelocationArch = NativeArch, R: RegionAcces
     Object(LoadedObject<D, Arch, R>),
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawElf<D, Arch, R> {
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawElf<D, Arch, R> {
     /// Creates a relocation builder for this raw image.
     ///
     /// # Examples
@@ -286,7 +289,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedElf<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Relocatable<D> for RawElf<D, Arch, R> {
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Relocatable<D> for RawElf<D, Arch, R> {
     type Output = LoadedElf<D, Arch, R>;
     type Arch = Arch;
 

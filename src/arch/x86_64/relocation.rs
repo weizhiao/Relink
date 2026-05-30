@@ -8,6 +8,8 @@ use core::mem::size_of;
 use elf::abi::*;
 
 use crate::arch::ArchKind;
+#[cfg(feature = "object")]
+use crate::relocation::ObjectRelocationArch;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::{
     RelocationArch, RelocationValueFormula, RelocationValueKind, RelocationValueProvider,
@@ -67,12 +69,16 @@ impl RelocationArch for X86_64Arch {
             _ => "UNKNOWN",
         }
     }
+}
 
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
+#[cfg(feature = "object")]
+impl ObjectRelocationArch for X86_64Arch {
+    type ObjectRelocationState = ();
+
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, R, PreH, PostH, Obs>(
+    fn relocate_object<D, R, PreH, PostH, Obs, H>(
+        _state: &mut Self::ObjectRelocationState,
         helper: &mut crate::relocation::RelocHelper<
             '_,
             D,
@@ -81,7 +87,7 @@ impl RelocationArch for X86_64Arch {
             PreH,
             PostH,
             Obs,
-            crate::object::CustomHash,
+            H,
         >,
         rel: &crate::elf::ElfRelType<Self>,
         pltgot: &mut crate::object::layout::PltGotSection,
@@ -89,6 +95,7 @@ impl RelocationArch for X86_64Arch {
     where
         D: 'static,
         R: crate::os::RegionAccess,
+        H: crate::elf::ElfHashTable<Self::Layout> + 'static,
         PreH: crate::relocation::RelocationHandler<Self> + ?Sized,
         PostH: crate::relocation::RelocationHandler<Self> + ?Sized,
         Obs: crate::observer::RelocationObserver<Self> + ?Sized,
@@ -96,15 +103,11 @@ impl RelocationArch for X86_64Arch {
         Self::relocate_object_impl(helper, rel, pltgot)
     }
 
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
     #[inline]
     fn object_needs_got(r_type: ElfRelocationType) -> bool {
         Self::object_needs_got_impl(r_type)
     }
 
-    #[cfg(feature = "object")]
-    #[doc(hidden)]
     #[inline]
     fn object_needs_plt(r_type: ElfRelocationType) -> bool {
         Self::object_needs_plt_impl(r_type)

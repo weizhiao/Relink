@@ -24,7 +24,12 @@ license = "MIT/Apache-2.0"
 rust-version = "1.93.0"
 
 [workspace]
-members = ["crates/windows-elf-loader", "crates/mini-loader", "tools/gen-elf"]
+members = [
+	"crates/windows-elf-loader",
+	"crates/mini-loader",
+	"tools/gen-elf",
+	"tests/riscv64",
+]
 
 [workspace.dependencies]
 syscalls = { version = "0.8.1", default-features = false }

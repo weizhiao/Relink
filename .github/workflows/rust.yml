@@ -108,6 +108,24 @@ jobs:
         target: [ x86_64-unknown-none]
         channel: [ nightly ]
 
+  test-riscv64-object-relocation:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: nightly
+        components: rust-src
+    - name: Install cross
+      run: cargo install --locked cross --git https://github.com/cross-rs/cross
+    - name: Run RISC-V object relocation tests
+      env:
+        RUSTFLAGS: -C target-cpu=generic-rv64 -C target-feature=+m,+a,+f,+d,+c,+crt-static
+        CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=generic-rv64 -C target-feature=+m,+a,+f,+d,+c,+crt-static
+        CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+        CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_AR: riscv64-linux-gnu-ar
+      run: cross test --manifest-path tests/riscv64/Cargo.toml -Z build-std=std,panic_unwind --target riscv64gc-unknown-linux-gnu -- --nocapture
+
   test-windows-loader:
     runs-on: windows-latest
     steps:

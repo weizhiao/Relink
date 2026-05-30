@@ -6,6 +6,8 @@
 use elf::abi::*;
 
 use crate::arch::ArchKind;
+#[cfg(feature = "object")]
+use crate::relocation::ObjectRelocationArch;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::relocation::RelocationArch;
 
@@ -52,6 +54,11 @@ impl RelocationArch for AArch64Arch {
             _ => "UNKNOWN",
         }
     }
+}
+
+#[cfg(feature = "object")]
+impl ObjectRelocationArch for AArch64Arch {
+    type ObjectRelocationState = ();
 }
 
 impl crate::relocation::RelocationValueProvider for AArch64Arch {}

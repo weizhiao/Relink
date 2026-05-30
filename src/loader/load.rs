@@ -10,7 +10,7 @@ use crate::{
     logging,
     observer::{DynamicLoadedEvent, LoadObserver},
     os::{Mmap, RegionAccess, VmAddr, VmOffset},
-    relocation::RelocationArch,
+    relocation::{ObjectRelocationArch, RelocationArch},
     segment::{ELFRelro, ElfSegments, program::parse_segments},
     tls::TlsResolver,
 };
@@ -116,6 +116,7 @@ where
     pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D, Arch, M::Region>>
     where
         D: 'static,
+        Arch: ObjectRelocationArch,
         I: IntoElfReader<'a>,
     {
         let mut object = input.into_reader()?;

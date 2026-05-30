@@ -11,8 +11,10 @@ use crate::{
 };
 use elf::abi::*;
 
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 pub(crate) const PLT_ENTRY_SIZE: usize = 16;
 
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 pub(crate) const PLT_ENTRY: [u8; PLT_ENTRY_SIZE] = [
     0xf3, 0x0f, 0x1e, 0xfa, 0xff, 0x25, 0, 0, 0, 0, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
 ];
@@ -63,14 +65,15 @@ impl X86_64Arch {
         Ok(())
     }
 
-    pub(crate) fn relocate_object_impl<D, R, PreH, PostH, Obs>(
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, crate::object::CustomHash>,
+    pub(crate) fn relocate_object_impl<D, R, PreH, PostH, Obs, H>(
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
     ) -> crate::Result<()>
     where
         D: 'static,
         R: RegionAccess,
+        H: crate::elf::ElfHashTable<<X86_64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: crate::observer::RelocationObserver<Self> + ?Sized,

@@ -6,7 +6,7 @@ use crate::{
     logging,
     observer::LoadObserver,
     os::{Mmap, VmOffset},
-    relocation::RelocationArch,
+    relocation::ObjectRelocationArch,
     tls::TlsResolver,
 };
 
@@ -15,7 +15,7 @@ where
     Obs: LoadObserver<D, Arch>,
     D: Default + 'static,
     Tls: TlsResolver,
-    Arch: RelocationArch,
+    Arch: ObjectRelocationArch,
     M: Mmap,
 {
     pub(crate) fn load_rel(

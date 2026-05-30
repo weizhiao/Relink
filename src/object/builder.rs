@@ -12,7 +12,7 @@ use crate::{
     loader::LoaderInner,
     observer::LoadObserver,
     os::{HostRegion, RegionAccess, VmAddr, VmOffset},
-    relocation::RelocationArch,
+    relocation::ObjectRelocationArch,
     segment::{ElfSegments, SegmentBuilder},
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
@@ -23,7 +23,7 @@ use core::marker::PhantomData;
 pub(crate) struct ObjectBuilder<
     Tls,
     D = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: ObjectRelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
 > {
     pub(crate) path: PathBuf,
@@ -40,7 +40,7 @@ pub(crate) struct ObjectBuilder<
     _marker_arch: PhantomData<Arch>,
 }
 
-struct ObjectSectionData<Arch: RelocationArch> {
+struct ObjectSectionData<Arch: ObjectRelocationArch> {
     symtab: SymbolTable<Arch::Layout, CustomHash>,
     relocation: ObjectRelocation<Arch>,
     init: Lifecycle,
@@ -49,7 +49,7 @@ struct ObjectSectionData<Arch: RelocationArch> {
 impl<T, D, Arch, R> ObjectBuilder<T, D, Arch, R>
 where
     T: TlsResolver,
-    Arch: RelocationArch,
+    Arch: ObjectRelocationArch,
     R: RegionAccess,
 {
     #[inline]
@@ -207,7 +207,7 @@ impl<Obs, D, Arch, M> LoaderInner<Obs, D, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: Default + 'static,
-    Arch: crate::relocation::RelocationArch,
+    Arch: crate::relocation::ObjectRelocationArch,
     M: crate::os::Mmap,
 {
     pub(crate) fn create_object_builder<Tls>(

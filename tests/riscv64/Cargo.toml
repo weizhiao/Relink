@@ -1,0 +1,22 @@
+[package]
+name = "elf_loader-riscv64-tests"
+version = "0.15.1"
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+elf_loader = { path = "../..", features = ["object", "log"] }
+
+[[test]]
+name = "riscv64_object_link"
+path = "tests/riscv64_object_link.rs"
+harness = false
+
+[[test]]
+name = "riscv64_reloc_test"
+path = "tests/riscv64_reloc_test.rs"
+harness = false

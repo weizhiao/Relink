@@ -25,7 +25,7 @@ pub(crate) use helper::{RelocHelper, SymDef, find_symdef_impl, likely, reloc_err
 pub(crate) use lazy::ResolvedBinding;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use lazy::dl_fixup;
-pub use traits::RelocationArch;
+pub use traits::{ObjectRelocationArch, RelocationArch};
 pub(crate) use traits::{Relocatable, RelocateArgs, RelocationValueProvider, SupportLazy};
 
 pub use relocator::Relocator;

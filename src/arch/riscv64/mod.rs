@@ -6,6 +6,8 @@
 // See aarch64/mod.rs for why these are gated on `target_arch`.
 #[cfg(all(feature = "lazy-binding", target_arch = "riscv64"))]
 mod lazy;
+#[cfg(feature = "object")]
+pub(crate) mod object;
 #[cfg(all(feature = "tls", target_arch = "riscv64"))]
 mod tls;
 

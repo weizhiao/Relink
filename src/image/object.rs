@@ -10,7 +10,10 @@ use crate::{
     elf::Lifecycle,
     observer::RelocationObserver,
     os::{HostRegion, RegionAccess, VmAddr},
-    relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
+    relocation::{
+        ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
+        Relocator,
+    },
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
 };
@@ -26,7 +29,7 @@ use super::{CoreInner, ElfCore, LoadedCore, ModuleHandle};
 /// all the necessary information to perform the relocation process.
 pub struct RawObject<
     D: 'static = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: ObjectRelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
 > {
     /// Core component containing basic ELF information.
@@ -45,7 +48,7 @@ pub struct RawObject<
     pub(crate) init: Lifecycle,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Deref for RawObject<D, Arch, R> {
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Deref for RawObject<D, Arch, R> {
     type Target = ElfCore<D, Arch, R, CustomHash>;
 
     fn deref(&self) -> &Self::Target {
@@ -53,7 +56,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Deref for RawObject<D, A
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawObject<D, Arch, R> {
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch, R> {
     pub(crate) fn from_builder<T: TlsResolver>(builder: ObjectBuilder<T, D, Arch, R>) -> Self {
         let inner = CoreInner {
             is_init: AtomicBool::new(false),
@@ -93,7 +96,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawObject<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for RawObject<D, Arch, R> {
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Debug for RawObject<D, Arch, R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawObject")
             .field("core", &self.core)
@@ -103,7 +106,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for RawObject<D, A
 
 impl<D: 'static, Arch, R> Relocatable<D> for RawObject<D, Arch, R>
 where
-    Arch: RelocationArch,
+    Arch: ObjectRelocationArch,
     R: RegionAccess,
 {
     type Output = LoadedObject<D, Arch, R>;
