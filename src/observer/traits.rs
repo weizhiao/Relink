@@ -1,7 +1,7 @@
 use super::{
     DtDebugEntry, DynamicLoadedEvent, IfuncBindingEvent, LifecycleEvent, LinkActivity,
-    ModuleRelocatedEvent, ProgramHeaderEvent, ResolveDependencyEvent, ResolveRootEvent,
-    StagedDynamic, SymbolBindingEvent, TlsDescBindingEvent,
+    ModuleRelocatedEvent, ObjectMetadataEvent, ProgramHeaderEvent, ResolveDependencyEvent,
+    ResolveRootEvent, StagedDynamic, SymbolBindingEvent, TlsDescBindingEvent,
 };
 use crate::{
     Result, arch::NativeArch, elf::ElfHashTable, os::RegionAccess, relocation::RelocationArch,
@@ -22,6 +22,16 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
     /// Called when a mutable `DT_DEBUG` entry is available during dynamic parsing.
     #[inline]
     fn on_dt_debug<R: RegionAccess>(&mut self, _entry: DtDebugEntry<'_, Arch, R>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called after relocatable-object section headers have been validated,
+    /// before section contents are mapped.
+    #[inline]
+    fn on_object_metadata(
+        &mut self,
+        _event: ObjectMetadataEvent<'_, D, Arch::Layout>,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -154,6 +164,14 @@ where
     }
 
     #[inline]
+    fn on_object_metadata(
+        &mut self,
+        event: ObjectMetadataEvent<'_, D, Arch::Layout>,
+    ) -> Result<()> {
+        (**self).on_object_metadata(event)
+    }
+
+    #[inline]
     fn on_dynamic_loaded<R: RegionAccess>(
         &mut self,
         event: DynamicLoadedEvent<'_, D, Arch, R>,
@@ -236,6 +254,14 @@ where
     #[inline]
     fn on_dt_debug<R: RegionAccess>(&mut self, entry: DtDebugEntry<'_, Arch, R>) -> Result<()> {
         (**self).on_dt_debug(entry)
+    }
+
+    #[inline]
+    fn on_object_metadata(
+        &mut self,
+        event: ObjectMetadataEvent<'_, D, Arch::Layout>,
+    ) -> Result<()> {
+        (**self).on_object_metadata(event)
     }
 
     #[inline]

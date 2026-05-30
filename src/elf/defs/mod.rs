@@ -18,6 +18,6 @@ pub(crate) use raw::{ElfDynRaw, ElfEhdrRaw, ElfPhdrRaw, ElfShdrRaw, ElfSymRaw};
 pub use rel::{ElfRel, ElfRelEntry, ElfRelType, ElfRela, ElfRelr};
 pub use types::{
     ElfClass, ElfDynamicTag, ElfFileType, ElfMachine, ElfProgramFlags, ElfProgramType,
-    ElfRelocationType, ElfSectionFlags, ElfSectionIndex, ElfSectionType, ElfSymbolBind,
-    ElfSymbolType,
+    ElfRelocationType, ElfSectionFlags, ElfSectionId, ElfSectionIndex, ElfSectionType,
+    ElfSymbolBind, ElfSymbolType,
 };

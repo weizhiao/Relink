@@ -235,7 +235,6 @@ macro_rules! impl_phdr_raw {
 impl_phdr_raw!(elf::segment::Elf32_Phdr);
 impl_phdr_raw!(elf::segment::Elf64_Phdr);
 
-#[cfg_attr(not(feature = "object"), allow(dead_code))]
 pub trait ElfShdrRaw: 'static {
     fn set_sh_name(&mut self, value: u32);
     fn set_sh_type(&mut self, value: u32);

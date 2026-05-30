@@ -1,6 +1,7 @@
 use super::{LinkPassPlan, PassScopeMode, Section, SectionDataAccess};
 use crate::{
-    image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
+    elf::ElfSectionId,
+    image::{ModuleCapability, ScannedDynamic},
     linker::scan::{Materialization, ModuleId, ModuleLayout},
     relocation::RelocationArch,
 };
@@ -158,7 +159,7 @@ where
     pub fn section<K, Arch>(
         self,
         plan: &LinkPassPlan<'scope, K, S, Arch>,
-        id: impl Into<ScannedSectionId>,
+        id: ElfSectionId,
     ) -> Option<Section<'scope, S>>
     where
         K: Clone + Ord,

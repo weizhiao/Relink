@@ -23,15 +23,14 @@ pub mod write;
 pub(crate) use defs::*;
 pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab, LifecycleSpec, parse_dynamic_entries};
 pub(crate) use phdr::ElfPhdrs;
-pub(crate) use shdr::ElfShdr;
 pub(crate) use symbol::ElfStringTable;
 
 // Public API exports
 pub use defs::{
     Elf32Layout, Elf32Sym, Elf64Layout, ElfClass, ElfDynamicTag, ElfFileType, ElfLayout,
     ElfMachine, ElfProgramFlags, ElfProgramType, ElfRel, ElfRelEntry, ElfRelType, ElfRela,
-    ElfRelocationType, ElfSectionFlags, ElfSectionIndex, ElfSectionType, ElfSymbolBind,
-    ElfSymbolType, Lifecycle, NativeElfLayout,
+    ElfRelocationType, ElfSectionFlags, ElfSectionId, ElfSectionIndex, ElfSectionType,
+    ElfSymbolBind, ElfSymbolType, Lifecycle, NativeElfLayout,
 };
 pub use dynamic::ElfDyn;
 /// Core ELF data types for program headers, relocations, and symbols.
@@ -39,6 +38,7 @@ pub use ehdr::ElfHeader;
 pub use hash::PreCompute;
 pub use hash::{ElfHashTable, HashTable};
 pub use phdr::ElfPhdr;
+pub use shdr::ElfShdr;
 pub use symbol::{ElfSymbol, SymbolInfo, SymbolTable};
 
 unsafe impl ByteRepr for defs::ElfEhdr {}

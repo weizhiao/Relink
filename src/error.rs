@@ -270,6 +270,11 @@ pub enum ParseEhdrError {
         /// File type found in the ELF header.
         found: ElfFileType,
     },
+    /// A relocatable object was required but the file type was different.
+    ExpectedRelocatable {
+        /// File type found in the ELF header.
+        found: ElfFileType,
+    },
     /// Relocatable object support is disabled for this build.
     RelocatableObjectsDisabled,
     /// A relocatable object was expected to carry section headers.
@@ -309,6 +314,9 @@ impl Display for ParseEhdrError {
                 "file type mismatch: expected ET_EXEC or ET_DYN, found {}",
                 found,
             ),
+            Self::ExpectedRelocatable { found } => {
+                write!(f, "file type mismatch: expected ET_REL, found {found}")
+            }
             Self::RelocatableObjectsDisabled => {
                 f.write_str("file type ET_REL requires enabling the `object` feature")
             }

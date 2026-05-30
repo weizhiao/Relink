@@ -3,7 +3,7 @@ mod traits;
 
 pub use event::{
     DtDebugEntry, DynamicLoadedEvent, IfuncBindingEvent, LifecycleEvent, LifecyclePhase,
-    LinkActivity, ModuleRelocatedEvent, ModuleUnloadEvent, ProgramHeaderEvent,
+    LinkActivity, ModuleRelocatedEvent, ModuleUnloadEvent, ObjectMetadataEvent, ProgramHeaderEvent,
     ResolveDependencyEvent, ResolveRootEvent, StagedDynamic, SymbolBindingEvent,
     TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
 };

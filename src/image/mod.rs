@@ -35,6 +35,5 @@ pub use object::{LoadedObject, RawObject};
 pub(crate) use scanned::ScannedDynamicLoadParts;
 pub use scanned::{
     ModuleCapability, ScannedDynamic, ScannedDynamicInfo, ScannedElf, ScannedExec, ScannedSection,
-    ScannedSectionId,
 };
 pub use synthetic::{SyntheticModule, SyntheticSymbol};

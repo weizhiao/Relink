@@ -72,18 +72,70 @@ impl<L: ElfLayout> ElfShdr<L> {
         self.shdr.sh_entsize()
     }
 
+    /// Updates the section name index (`sh_name`) field.
+    #[inline]
+    pub fn set_sh_name(&mut self, name: u32) {
+        self.shdr.set_sh_name(name);
+    }
+
+    /// Updates the section type (`sh_type`) field.
+    #[inline]
+    pub fn set_section_type(&mut self, ty: ElfSectionType) {
+        self.shdr.set_sh_type(ty.raw());
+    }
+
+    /// Updates the section flags (`sh_flags`) field.
+    #[inline]
+    pub fn set_flags(&mut self, flags: ElfSectionFlags) {
+        self.shdr.set_sh_flags(flags.bits());
+    }
+
     /// Updates the section address (`sh_addr`) field.
     #[inline]
-    #[cfg(feature = "object")]
-    pub(crate) fn set_sh_addr(&mut self, addr: usize) {
+    pub fn set_sh_addr(&mut self, addr: usize) {
         self.shdr.set_sh_addr(addr);
     }
 
     /// Adds an offset to the section address (`sh_addr`) field.
     #[inline]
-    #[cfg(feature = "object")]
-    pub(crate) fn add_sh_addr(&mut self, delta: usize) {
+    pub fn add_sh_addr(&mut self, delta: usize) {
         self.shdr.add_sh_addr(delta);
+    }
+
+    /// Updates the section file offset (`sh_offset`) field.
+    #[inline]
+    pub fn set_sh_offset(&mut self, offset: usize) {
+        self.shdr.set_sh_offset(offset);
+    }
+
+    /// Updates the section size (`sh_size`) field.
+    #[inline]
+    pub fn set_sh_size(&mut self, size: usize) {
+        self.shdr.set_sh_size(size);
+    }
+
+    /// Updates the section link (`sh_link`) field.
+    #[inline]
+    pub fn set_sh_link(&mut self, link: u32) {
+        self.shdr.set_sh_link(link);
+    }
+
+    /// Updates the section info (`sh_info`) field.
+    #[inline]
+    pub fn set_sh_info(&mut self, info: u32) {
+        self.shdr.set_sh_info(info);
+    }
+
+    /// Updates the section alignment (`sh_addralign`) field.
+    #[inline]
+    pub fn set_sh_addralign(&mut self, addralign: usize) {
+        self.shdr.set_sh_addralign(addralign);
+    }
+
+    /// Updates the section entry size (`sh_entsize`) field.
+    #[inline]
+    pub fn set_sh_entsize(&mut self, entsize: usize) {
+        self.shdr.set_sh_entsize(entsize);
     }
 
     /// Creates a new ELF section header with the specified parameters.

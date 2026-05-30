@@ -75,6 +75,13 @@ impl<'bytes> ElfReader for ElfBinary<'bytes> {
         Ok(())
     }
 
+    /// Borrows data directly from the memory-based ELF object.
+    fn borrow_bytes(&self, offset: usize, len: usize) -> Result<Option<&[u8]>> {
+        let bytes = self.bytes.as_ref();
+        let range = checked_read_range(offset, len, bytes.len())?;
+        Ok(Some(&bytes[range]))
+    }
+
     /// Returns `None` since memory-based objects don't have file descriptors.
     fn as_fd(&self) -> Option<isize> {
         None
@@ -155,6 +162,13 @@ impl<'a> ElfReader for &'a [u8] {
         let range = checked_read_range(offset, buf.len(), bytes.len())?;
         buf.copy_from_slice(&bytes[range]);
         Ok(())
+    }
+
+    /// Borrows data directly from the byte slice.
+    fn borrow_bytes(&self, offset: usize, len: usize) -> Result<Option<&[u8]>> {
+        let bytes = *self;
+        let range = checked_read_range(offset, len, bytes.len())?;
+        Ok(Some(&bytes[range]))
     }
 
     /// Memory-based readers do not have file descriptors.

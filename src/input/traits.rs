@@ -23,6 +23,15 @@ pub trait ElfReader {
     /// Reads data from the ELF object at the given offset into the provided buffer.
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()>;
 
+    /// Borrows bytes directly from the ELF object when the backend can provide
+    /// a stable in-memory view.
+    ///
+    /// Backends that cannot expose borrowed bytes return `Ok(None)`. Callers
+    /// should fall back to [`ElfReader::read`] in that case.
+    fn borrow_bytes(&self, _offset: usize, _len: usize) -> Result<Option<&[u8]>> {
+        Ok(None)
+    }
+
     /// Returns the underlying file descriptor if the source is a file.
     ///
     /// This is used by the loader to perform efficient memory mapping (`mmap`).
@@ -108,6 +117,11 @@ impl<R: ElfReader + ?Sized> ElfReader for Box<R> {
     #[inline]
     fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
         (**self).read(buf, offset)
+    }
+
+    #[inline]
+    fn borrow_bytes(&self, offset: usize, len: usize) -> Result<Option<&[u8]>> {
+        (**self).borrow_bytes(offset, len)
     }
 
     #[inline]

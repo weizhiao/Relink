@@ -4,9 +4,9 @@ use crate::{
     LinkerError, RelocReason, Result,
     aligned_bytes::ByteRepr,
     elf::{
-        ElfDyn, ElfDynamicTag, ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfSymbol,
+        ElfDyn, ElfDynamicTag, ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfSectionId,
+        ElfSymbol,
     },
-    image::ScannedSectionId,
     os::{RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, RelocationValueProvider},
 };
@@ -327,7 +327,7 @@ where
                 .for_each_section_data::<ElfSymbol<Arch::Layout>, _>(
                     section,
                     |symbol, plan| {
-                        let symbol_section = match ScannedSectionId::from_symbol_shndx(
+                        let symbol_section = match ElfSectionId::from_symbol_shndx(
                             symbol.st_shndx(),
                         ) {
                             Some(scanned_section) => Some(

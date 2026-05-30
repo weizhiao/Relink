@@ -1,12 +1,13 @@
 use crate::{
     arch::{ArchKind, NativeArch},
-    elf::{ElfLayout, ElfPhdr, NativeElfLayout},
+    elf::{ElfHeader, ElfLayout, ElfPhdr, ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout},
     image::RawDynamic,
-    input::Path,
+    input::{ElfReader, Path},
     os::{HostRegion, RegionAccess},
     relocation::RelocationArch,
     segment::ElfSegments,
 };
+use alloc::vec::Vec;
 
 /// Program-header event emitted while an ELF image is being loaded.
 pub struct ProgramHeaderEvent<'a, L: ElfLayout = NativeElfLayout, R: RegionAccess = HostRegion> {
@@ -45,6 +46,152 @@ impl<'a, L: ElfLayout, R: RegionAccess> ProgramHeaderEvent<'a, L, R> {
     #[inline]
     pub const fn segments(&self) -> &ElfSegments<R> {
         self.segments
+    }
+}
+
+/// Relocatable-object metadata observed after section-header validation and
+/// before section contents are mapped.
+pub struct ObjectMetadataEvent<'a, D: 'static, L: ElfLayout = NativeElfLayout> {
+    ehdr: &'a ElfHeader<L>,
+    shdrs: &'a mut [ElfShdr<L>],
+    shstrtab: &'a [u8],
+    object: &'a mut dyn ElfReader,
+    user_data: &'a mut D,
+}
+
+impl<'a, D: 'static, L: ElfLayout> ObjectMetadataEvent<'a, D, L> {
+    #[inline]
+    #[cfg_attr(not(feature = "object"), allow(dead_code))]
+    pub(crate) fn new(
+        ehdr: &'a ElfHeader<L>,
+        shdrs: &'a mut [ElfShdr<L>],
+        shstrtab: &'a [u8],
+        object: &'a mut dyn ElfReader,
+        user_data: &'a mut D,
+    ) -> Self {
+        Self {
+            ehdr,
+            shdrs,
+            shstrtab,
+            object,
+            user_data,
+        }
+    }
+
+    /// Returns the loader source path or caller-provided source identifier.
+    #[inline]
+    pub fn path(&self) -> &Path {
+        self.object.path()
+    }
+
+    /// Returns the parsed ELF header.
+    #[inline]
+    pub const fn ehdr(&self) -> &ElfHeader<L> {
+        self.ehdr
+    }
+
+    /// Returns the validated section headers.
+    #[inline]
+    pub const fn sections(&self) -> &[ElfShdr<L>] {
+        self.shdrs
+    }
+
+    /// Returns one section header by index.
+    #[inline]
+    pub fn section(&self, id: ElfSectionId) -> Option<&ElfShdr<L>> {
+        self.shdrs.get(id.index())
+    }
+
+    /// Returns mutable validated section headers.
+    #[inline]
+    pub fn sections_mut(&mut self) -> &mut [ElfShdr<L>] {
+        self.shdrs
+    }
+
+    /// Returns one mutable section header by index.
+    #[inline]
+    pub fn section_mut(&mut self, id: ElfSectionId) -> Option<&mut ElfShdr<L>> {
+        self.shdrs.get_mut(id.index())
+    }
+
+    /// Returns the raw section-name string table bytes.
+    #[inline]
+    pub const fn section_name_table(&self) -> &[u8] {
+        self.shstrtab
+    }
+
+    /// Returns one section name as UTF-8 when it is present and valid.
+    #[inline]
+    pub fn section_name(&self, id: ElfSectionId) -> Option<&str> {
+        let shdr = self.section(id)?;
+        let bytes = self.shstrtab.get(shdr.sh_name() as usize..)?;
+        let end = bytes.iter().position(|&byte| byte == 0)?;
+        core::str::from_utf8(&bytes[..end]).ok()
+    }
+
+    /// Finds the first section whose name equals `name`.
+    #[inline]
+    pub fn find_section(&self, name: &str) -> Option<ElfSectionId> {
+        self.shdrs.iter().enumerate().find_map(|(index, _)| {
+            let id = ElfSectionId::new(index);
+            (self.section_name(id)? == name).then_some(id)
+        })
+    }
+
+    /// Borrows one section's file-backed contents when the reader is backed by
+    /// memory.
+    ///
+    /// Returns `Ok(None)` when the reader cannot provide a borrowed view.
+    /// `SHT_NOBITS` and zero-sized sections return `Ok(Some(&[]))`.
+    pub fn borrow_section_bytes(&self, id: ElfSectionId) -> crate::Result<Option<&[u8]>> {
+        let Some((offset, len)) = self.section_content_range(id)? else {
+            return Ok(Some(&[]));
+        };
+        self.object.borrow_bytes(offset, len)
+    }
+
+    /// Reads one section's file-backed contents and passes them to `f`.
+    ///
+    /// Memory-backed readers pass a borrowed slice directly. Other readers
+    /// reuse `scratch` as temporary storage.
+    pub fn with_section_bytes<T>(
+        &mut self,
+        id: ElfSectionId,
+        scratch: &mut Vec<u8>,
+        f: impl FnOnce(&[u8]) -> crate::Result<T>,
+    ) -> crate::Result<T> {
+        let Some((offset, len)) = self.section_content_range(id)? else {
+            return f(&[]);
+        };
+        if let Some(bytes) = self.object.borrow_bytes(offset, len)? {
+            return f(bytes);
+        }
+        scratch.resize(len, 0);
+        self.object.read(scratch.as_mut_slice(), offset)?;
+        f(scratch.as_slice())
+    }
+
+    /// Returns immutable user data for this object image.
+    #[inline]
+    pub const fn user_data(&self) -> &D {
+        self.user_data
+    }
+
+    /// Returns mutable user data for this object image.
+    #[inline]
+    pub fn user_data_mut(&mut self) -> &mut D {
+        self.user_data
+    }
+
+    fn section_content_range(&self, id: ElfSectionId) -> crate::Result<Option<(usize, usize)>> {
+        let shdr = self.section(id).ok_or_else(|| {
+            crate::ParseEhdrError::malformed_section_headers("section index is out of range")
+        })?;
+        let len = shdr.sh_size();
+        if len == 0 || shdr.section_type() == ElfSectionType::NOBITS {
+            return Ok(None);
+        }
+        Ok(Some((shdr.sh_offset(), len)))
     }
 }
 

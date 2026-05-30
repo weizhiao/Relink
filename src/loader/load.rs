@@ -44,7 +44,7 @@ where
         self.buf.prepare_phdrs(ehdr, object)
     }
 
-    fn read_expected_ehdr(
+    pub(crate) fn read_expected_ehdr(
         &mut self,
         object: &mut impl ElfReader,
         expected: ExpectedElf,
@@ -123,7 +123,17 @@ where
         let ehdr = self.read_ehdr(&mut object)?;
 
         match ehdr.file_type() {
-            ElfFileType::REL => self.load_rel(object),
+            ElfFileType::REL => {
+                #[cfg(feature = "object")]
+                {
+                    Ok(RawElf::Object(self.load_object_from_ehdr(object, ehdr)?))
+                }
+                #[cfg(not(feature = "object"))]
+                {
+                    let _ = object;
+                    Err(ParseEhdrError::RelocatableObjectsDisabled.into())
+                }
+            }
             ElfFileType::EXEC => Ok(RawElf::Exec(self.load_exec_from_ehdr(object, ehdr)?)),
             ElfFileType::DYN => {
                 let phdrs = self.read_phdr(&mut object, &ehdr)?.unwrap_or_default();
@@ -144,14 +154,6 @@ where
             }
             other => Err(ParseEhdrError::ExpectedExecutable { found: other }.into()),
         }
-    }
-
-    #[cfg(not(feature = "object"))]
-    pub(crate) fn load_rel(&mut self, _object: impl ElfReader) -> Result<RawElf<D, Arch, M::Region>>
-    where
-        D: 'static,
-    {
-        Err(ParseEhdrError::RelocatableObjectsDisabled.into())
     }
 
     /// Loads a shared object (`ET_DYN`) into memory and returns a raw dylib image.
@@ -417,10 +419,12 @@ fn has_dynamic_phdr<L: crate::elf::ElfLayout>(phdrs: &[ElfPhdr<L>]) -> bool {
 }
 
 #[derive(Clone, Copy)]
-enum ExpectedElf {
+pub(crate) enum ExpectedElf {
     Dylib,
     Dynamic,
     Executable,
+    #[cfg(feature = "object")]
+    Relocatable,
 }
 
 impl ExpectedElf {
@@ -429,6 +433,8 @@ impl ExpectedElf {
         match self {
             Self::Dylib => ehdr.is_dylib(),
             Self::Dynamic | Self::Executable => ehdr.is_executable(),
+            #[cfg(feature = "object")]
+            Self::Relocatable => ehdr.file_type() == ElfFileType::REL,
         }
     }
 
@@ -438,6 +444,8 @@ impl ExpectedElf {
             Self::Dylib => "dylib",
             Self::Dynamic => "dynamic image",
             Self::Executable => "executable",
+            #[cfg(feature = "object")]
+            Self::Relocatable => "relocatable object",
         }
     }
 
@@ -446,6 +454,8 @@ impl ExpectedElf {
         match self {
             Self::Dylib => ParseEhdrError::ExpectedDylib { found },
             Self::Dynamic | Self::Executable => ParseEhdrError::ExpectedExecutable { found },
+            #[cfg(feature = "object")]
+            Self::Relocatable => ParseEhdrError::ExpectedRelocatable { found },
         }
     }
 }

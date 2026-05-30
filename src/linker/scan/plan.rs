@@ -6,8 +6,9 @@ use crate::linker::session::ModulePayload;
 use crate::{
     AlignedBytes, LinkerError, Result,
     aligned_bytes::ByteRepr,
+    elf::ElfSectionId,
     entity::{PrimaryMap, entity_ref},
-    image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
+    image::{ModuleCapability, ScannedDynamic},
     relocation::RelocationArch,
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
@@ -289,7 +290,7 @@ where
     pub(in crate::linker) fn module_section_id(
         &self,
         module_id: ModuleId,
-        id: impl Into<ScannedSectionId>,
+        id: ElfSectionId,
     ) -> Option<SectionId> {
         self.memory_layout.section_id(module_id, id)
     }

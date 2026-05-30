@@ -4,10 +4,9 @@ use crate::{
     AlignedBytes, ParseDynamicError, ParsePhdrError, Result,
     arch::NativeArch,
     elf::{
-        ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, ElfSectionFlags, ElfSectionIndex,
+        ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, ElfSectionFlags, ElfSectionId,
         ElfSectionType, ElfShdr, ElfStringTable, NativeElfLayout, parse_dynamic_entries,
     },
-    entity::entity_ref,
     input::{ElfReader, ElfReaderExt, Path, PathBuf},
     loader::ScanBuilder,
     os::MappedView,
@@ -220,28 +219,9 @@ pub(crate) struct ScannedDynamicLoadParts<Arch: RelocationArch = NativeArch> {
     pub(crate) reader: Box<dyn ElfReader + 'static>,
 }
 
-/// A stable identifier for one scanned section.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub struct ScannedSectionId(usize);
-entity_ref!(ScannedSectionId);
-
-impl ScannedSectionId {
-    /// Converts a symbol `st_shndx` value into a scanned section id when it
-    /// names a real section table entry.
-    #[inline]
-    pub const fn from_symbol_shndx(index: ElfSectionIndex) -> Option<Self> {
-        if index.is_undef() || index.is_abs() {
-            None
-        } else {
-            Some(Self::new(index.index()))
-        }
-    }
-}
-
 /// A readable view over one scanned section and its metadata.
 pub struct ScannedSection<'a, L: ElfLayout = NativeElfLayout> {
-    id: ScannedSectionId,
+    id: ElfSectionId,
     name: &'a str,
     header: &'a ElfShdr<L>,
 }
@@ -288,7 +268,7 @@ impl<'a, L: ElfLayout> Iterator for ScannedSections<'a, L> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let header = self.sections.get(self.index)?;
-        let id = ScannedSectionId::new(self.index);
+        let id = ElfSectionId::new(self.index);
         self.index += 1;
         Some(ScannedSection::new(id, self.section_name(header), header))
     }
@@ -303,13 +283,13 @@ impl<L: ElfLayout> ExactSizeIterator for ScannedSections<'_, L> {}
 
 impl<'a, L: ElfLayout> ScannedSection<'a, L> {
     #[inline]
-    fn new(id: ScannedSectionId, name: &'a str, header: &'a ElfShdr<L>) -> Self {
+    fn new(id: ElfSectionId, name: &'a str, header: &'a ElfShdr<L>) -> Self {
         Self { id, name, header }
     }
 
     /// Returns the stable section id.
     #[inline]
-    pub const fn id(&self) -> ScannedSectionId {
+    pub const fn id(&self) -> ElfSectionId {
         self.id
     }
 
@@ -402,16 +382,14 @@ impl<'a, L: ElfLayout> ScannedSection<'a, L> {
 
     /// Returns the linked section id referenced by `sh_link`, when non-zero.
     #[inline]
-    pub fn linked_section_id(&self) -> Option<ScannedSectionId> {
-        (self.header.sh_link() != 0)
-            .then_some(ScannedSectionId::new(self.header.sh_link() as usize))
+    pub fn linked_section_id(&self) -> Option<ElfSectionId> {
+        (self.header.sh_link() != 0).then_some(ElfSectionId::new(self.header.sh_link() as usize))
     }
 
     /// Returns the info section id referenced by `sh_info`, when non-zero.
     #[inline]
-    pub fn info_section_id(&self) -> Option<ScannedSectionId> {
-        (self.header.sh_info() != 0)
-            .then_some(ScannedSectionId::new(self.header.sh_info() as usize))
+    pub fn info_section_id(&self) -> Option<ElfSectionId> {
+        (self.header.sh_info() != 0).then_some(ElfSectionId::new(self.header.sh_info() as usize))
     }
 }
 
@@ -564,10 +542,7 @@ impl<Arch: RelocationArch> ScannedElf<Arch> {
 
     /// Returns one scanned section by id.
     #[inline]
-    pub fn section(
-        &self,
-        id: impl Into<ScannedSectionId>,
-    ) -> Option<ScannedSection<'_, Arch::Layout>> {
+    pub fn section(&self, id: ElfSectionId) -> Option<ScannedSection<'_, Arch::Layout>> {
         match self {
             Self::Dynamic(image) => image.section(id),
             Self::StaticExec(image) => image.section(id),
@@ -726,11 +701,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
 
     /// Returns one scanned section by id.
     #[inline]
-    pub fn section(
-        &self,
-        id: impl Into<ScannedSectionId>,
-    ) -> Option<ScannedSection<'_, Arch::Layout>> {
-        let id = id.into();
+    pub fn section(&self, id: ElfSectionId) -> Option<ScannedSection<'_, Arch::Layout>> {
         let section_table = self.section_table.as_ref()?;
         let shstrtab = section_table.shstrtab();
         let header = section_table.sections.get(id.index())?;
@@ -765,10 +736,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     }
 
     /// Captures one section's backing bytes.
-    pub(crate) fn section_data(
-        &mut self,
-        id: impl Into<ScannedSectionId>,
-    ) -> Result<Option<AlignedBytes>> {
+    pub(crate) fn section_data(&mut self, id: ElfSectionId) -> Result<Option<AlignedBytes>> {
         let Some(section) = self.section(id) else {
             return Ok(None);
         };
@@ -886,11 +854,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
 
     /// Returns one scanned section by id.
     #[inline]
-    pub fn section(
-        &self,
-        id: impl Into<ScannedSectionId>,
-    ) -> Option<ScannedSection<'_, Arch::Layout>> {
-        let id = id.into();
+    pub fn section(&self, id: ElfSectionId) -> Option<ScannedSection<'_, Arch::Layout>> {
         let section_table = self.section_table.as_ref()?;
         let shstrtab = section_table.shstrtab();
         let header = section_table.sections.get(id.index())?;
@@ -919,10 +883,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
 
     /// Captures one section's backing bytes.
     #[allow(dead_code)]
-    pub(crate) fn section_data(
-        &mut self,
-        id: impl Into<ScannedSectionId>,
-    ) -> Result<Option<AlignedBytes>> {
+    pub(crate) fn section_data(&mut self, id: ElfSectionId) -> Result<Option<AlignedBytes>> {
         let Some(section) = self.section(id) else {
             return Ok(None);
         };

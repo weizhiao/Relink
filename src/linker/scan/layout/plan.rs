@@ -7,8 +7,9 @@ use super::{
 };
 use crate::{
     AlignedBytes, LinkerError, Result,
+    elf::ElfSectionId,
     entity::{PrimaryMap, SecondaryMap},
-    image::{ModuleCapability, ScannedDynamic, ScannedSectionId},
+    image::{ModuleCapability, ScannedDynamic},
     linker::scan::ModuleId,
     os::align_up,
     relocation::RelocationArch,
@@ -177,7 +178,7 @@ impl MemoryLayoutPlan {
     pub(in crate::linker) fn section_id(
         &self,
         module_id: ModuleId,
-        id: impl Into<ScannedSectionId>,
+        id: ElfSectionId,
     ) -> Option<SectionId> {
         self.module(module_id).section_id(id)
     }

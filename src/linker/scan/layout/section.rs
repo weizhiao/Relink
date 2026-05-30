@@ -1,9 +1,9 @@
 use super::arena::{ArenaId, MemoryClass};
 use crate::{
     AlignedBytes,
-    elf::{ElfLayout, ElfSectionFlags, ElfSectionType},
+    elf::{ElfLayout, ElfSectionFlags, ElfSectionId, ElfSectionType},
     entity::{PrimaryMap, SecondaryMap, entity_ref},
-    image::{ScannedDynamic, ScannedSection, ScannedSectionId},
+    image::{ScannedDynamic, ScannedSection},
     linker::scan::ModuleId,
     relocation::RelocationArch,
 };
@@ -134,7 +134,7 @@ impl SectionPlacement {
 /// The immutable metadata tracked for one planned section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionMetadata {
-    scanned_section: ScannedSectionId,
+    scanned_section: ElfSectionId,
     name: Box<str>,
     section_type: ElfSectionType,
     section_flags: ElfSectionFlags,
@@ -164,7 +164,7 @@ impl SectionMetadata {
 
     /// Returns the original scanned section id.
     #[inline]
-    pub const fn scanned_section(&self) -> ScannedSectionId {
+    pub const fn scanned_section(&self) -> ElfSectionId {
         self.scanned_section
     }
 
@@ -573,7 +573,7 @@ impl SectionArena {
 /// One module's logical section view inside the layout plan.
 #[derive(Debug, Clone, Default)]
 pub struct ModuleLayout {
-    scanned_sections: SecondaryMap<ScannedSectionId, SectionId>,
+    scanned_sections: SecondaryMap<ElfSectionId, SectionId>,
     alloc_sections: Box<[SectionId]>,
     relocation_sections: Box<[SectionId]>,
     symbol_table_sections: Box<[SectionId]>,
@@ -589,10 +589,9 @@ impl ModuleLayout {
     }
 
     /// Creates one module layout from explicit scanned-section mappings.
-    pub(crate) fn from_sections<I, S>(sections: I, arena: &SectionArena) -> Self
+    pub(crate) fn from_sections<I>(sections: I, arena: &SectionArena) -> Self
     where
-        I: IntoIterator<Item = (S, SectionId)>,
-        S: Into<ScannedSectionId>,
+        I: IntoIterator<Item = (ElfSectionId, SectionId)>,
     {
         let mut scanned_sections = SecondaryMap::default();
         let mut alloc_sections = Vec::new();
@@ -602,7 +601,6 @@ impl ModuleLayout {
         let mut dynamic_section = None;
 
         for (scanned_section, section_id) in sections {
-            let scanned_section = scanned_section.into();
             let previous = scanned_sections.insert(scanned_section, section_id);
             assert!(
                 previous.is_none(),
@@ -704,10 +702,7 @@ impl ModuleLayout {
 
     /// Returns one section id by its original scanned section id.
     #[inline]
-    pub(in crate::linker) fn section_id(
-        &self,
-        section: impl Into<ScannedSectionId>,
-    ) -> Option<SectionId> {
-        self.scanned_sections.get(section.into()).copied()
+    pub(in crate::linker) fn section_id(&self, section: ElfSectionId) -> Option<SectionId> {
+        self.scanned_sections.get(section).copied()
     }
 }

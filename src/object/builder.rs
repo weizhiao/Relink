@@ -214,6 +214,7 @@ where
         &mut self,
         shdrs: &mut [ElfShdr<Arch::Layout>],
         mut object: impl crate::input::ElfReader,
+        user_data: D,
     ) -> Result<ObjectBuilder<Tls, D, Arch, M::Region>>
     where
         Tls: TlsResolver,
@@ -226,7 +227,6 @@ where
         let pltgot = shdr_segments.take_pltgot();
         let mprotect =
             Box::new(move |segments: &ElfSegments<M::Region>| shdr_segments.mprotect(segments));
-        let user_data = D::default();
 
         ObjectBuilder::new(path, shdrs, segments, mprotect, pltgot, user_data)
     }

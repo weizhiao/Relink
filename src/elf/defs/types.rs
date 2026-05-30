@@ -556,6 +556,18 @@ impl ElfSectionIndex {
     pub const fn is_abs(self) -> bool {
         self.0 == SHN_ABS
     }
+
+    /// Returns whether this is `SHN_COMMON`.
+    #[inline]
+    pub const fn is_common(self) -> bool {
+        self.0 == SHN_COMMON
+    }
+
+    /// Returns whether this is `SHN_XINDEX`.
+    #[inline]
+    pub const fn is_xindex(self) -> bool {
+        self.0 == SHN_XINDEX
+    }
 }
 
 impl Display for ElfSectionIndex {
@@ -567,6 +579,54 @@ impl Display for ElfSectionIndex {
             SHN_XINDEX => f.write_str("SHN_XINDEX"),
             raw => write!(f, "ELF symbol section index {raw}"),
         }
+    }
+}
+
+/// Stable identifier for a real section-header table entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct ElfSectionId(usize);
+
+impl ElfSectionId {
+    /// Creates a section id from a zero-based section-header table index.
+    #[inline]
+    pub const fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    /// Returns the zero-based section-header table index.
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0
+    }
+
+    /// Converts a symbol `st_shndx` value into a section id when it names a
+    /// real section-header table entry.
+    #[inline]
+    pub const fn from_symbol_shndx(index: ElfSectionIndex) -> Option<Self> {
+        if index.is_undef() || index.is_abs() || index.is_common() || index.is_xindex() {
+            None
+        } else {
+            Some(Self::new(index.index()))
+        }
+    }
+}
+
+impl crate::entity::EntityRef for ElfSectionId {
+    #[inline]
+    fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    #[inline]
+    fn index(self) -> usize {
+        self.0
+    }
+}
+
+impl Display for ElfSectionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ELF section {}", self.0)
     }
 }
 
