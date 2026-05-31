@@ -1,15 +1,16 @@
-use super::lifecycle::{CodeExecutor, Finalizer, LifecycleEvent};
+use super::lifecycle::{Finalizer, LifecycleEvent};
 use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol, HashTable, Lifecycle},
     image::ElfCore,
     input::Path,
-    os::{HostRegion, RegionAccess, VmAddr},
+    os::{CodeContext, CodeExecutor, HostRegion, NativeCodeExecutor, RegionAccess, VmAddr},
     relocation::{RelocValue, RelocationArch},
     segment::ElfSegments,
     tls::{TlsModuleId, TlsTpOffset},
 };
+use alloc::boxed::Box;
 use core::marker::PhantomData;
 
 /// Runtime linker state change notification.
@@ -160,13 +161,14 @@ pub struct IfuncBindingEvent<
     rel: &'a ElfRelType<Arch>,
     resolver: VmAddr,
     resolved: Option<VmAddr>,
+    executor: Option<Box<dyn CodeExecutor<Arch, R>>>,
 }
 
 impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
     IfuncBindingEvent<'a, D, Arch, R, H>
 {
     #[inline]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         core: &'a ElfCore<D, Arch, R, H>,
         rel: &'a ElfRelType<Arch>,
         resolver: VmAddr,
@@ -176,6 +178,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
             rel,
             resolver,
             resolved: None,
+            executor: None,
         }
     }
 
@@ -221,9 +224,24 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
         self.resolved = Some(addr);
     }
 
+    /// Replaces the executor used when no resolved address is provided.
     #[inline]
-    pub(crate) const fn into_resolved_addr(self) -> Option<VmAddr> {
-        self.resolved
+    pub fn set_executor<E>(&mut self, executor: E)
+    where
+        E: CodeExecutor<Arch, R>,
+    {
+        self.executor = Some(Box::new(executor));
+    }
+
+    #[inline]
+    pub(crate) fn resolve(self, ctx: CodeContext<'_, Arch, R>) -> Result<VmAddr> {
+        if let Some(addr) = self.resolved {
+            Ok(addr)
+        } else if let Some(executor) = self.executor {
+            executor.resolve_ifunc(ctx, self.resolver)
+        } else {
+            NativeCodeExecutor.resolve_ifunc(ctx, self.resolver)
+        }
     }
 }
 
@@ -404,7 +422,7 @@ pub struct ModuleRelocatedEvent<
 > {
     core: &'a ElfCore<D, Arch, R>,
     dynamic_addr: VmAddr,
-    finalizer: Option<Finalizer<R>>,
+    finalizer: Option<Finalizer<Arch, R>>,
 }
 
 impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleRelocatedEvent<'a, D, Arch, R> {
@@ -412,7 +430,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleRelocatedEvent
     pub(crate) const fn new(
         core: &'a ElfCore<D, Arch, R>,
         dynamic_addr: VmAddr,
-        finalizer: Option<Finalizer<R>>,
+        finalizer: Option<Finalizer<Arch, R>>,
     ) -> Self {
         Self {
             core,
@@ -468,7 +486,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleRelocatedEvent
     #[inline]
     pub fn set_fini_executor<E>(&mut self, executor: E)
     where
-        E: CodeExecutor<R>,
+        E: CodeExecutor<Arch, R>,
     {
         if let Some(finalizer) = &mut self.finalizer {
             finalizer.set_executor(executor);
@@ -479,7 +497,10 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleRelocatedEvent
     #[inline]
     pub fn set_fini_hook<F>(&mut self, hook: F)
     where
-        F: for<'event> Fn(&mut LifecycleEvent<'event, R>) -> Result<()> + Send + Sync + 'static,
+        F: for<'event> Fn(&mut LifecycleEvent<'event, Arch, R>) -> Result<()>
+            + Send
+            + Sync
+            + 'static,
     {
         if let Some(finalizer) = &mut self.finalizer {
             finalizer.set_hook(hook);
@@ -493,7 +514,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleRelocatedEvent
     }
 
     #[inline]
-    pub(crate) fn into_finalizer(self) -> Option<Finalizer<R>> {
+    pub(crate) fn into_finalizer(self) -> Option<Finalizer<Arch, R>> {
         self.finalizer
     }
 }

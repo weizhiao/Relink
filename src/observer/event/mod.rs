@@ -3,7 +3,7 @@ mod load;
 mod relocation;
 mod resolve;
 
-pub use lifecycle::{CodeExecutor, LifecycleEvent, LifecyclePhase, NativeCodeExecutor};
+pub use lifecycle::{LifecycleEvent, LifecyclePhase};
 pub use load::{DynamicLoadedEvent, ObjectMetadataEvent, ProgramHeaderEvent, StagedDynamic};
 pub use relocation::{
     DtDebugEntry, IfuncBindingEvent, LinkActivity, ModuleRelocatedEvent, SymbolBindingEvent,
@@ -11,4 +11,4 @@ pub use relocation::{
 };
 pub use resolve::{ResolveDependencyEvent, ResolveRootEvent};
 
-pub(crate) use lifecycle::{Finalizer, default_lifecycle_executor, noop_lifecycle_executor};
+pub(crate) use lifecycle::{Finalizer, default_lifecycle_executor};

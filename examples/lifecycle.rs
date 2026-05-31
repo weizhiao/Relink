@@ -3,6 +3,7 @@ mod fixture_support;
 
 use elf_loader::{
     Loader, Result,
+    arch::NativeArch,
     observer::{LifecycleEvent, LifecyclePhase, RelocationObserver},
     os::RegionAccess,
 };
@@ -10,7 +11,10 @@ use elf_loader::{
 struct LifecycleLogger;
 
 impl RelocationObserver for LifecycleLogger {
-    fn on_lifecycle<R: RegionAccess>(&mut self, event: &mut LifecycleEvent<'_, R>) -> Result<()> {
+    fn on_init<R: RegionAccess>(
+        &mut self,
+        event: &mut LifecycleEvent<'_, NativeArch, R>,
+    ) -> Result<()> {
         let label = match event.phase() {
             LifecyclePhase::Init => "Init",
             LifecyclePhase::Fini => "Fini",

@@ -1,7 +1,9 @@
 use crate::{
-    MmapError, Result,
+    Result,
+    arch::NativeArch,
     elf::Lifecycle,
-    os::{HostRegion, RegionAccess, VmAddr},
+    os::{CodeContext, CodeExecutor, HostRegion, NativeCodeExecutor, RegionAccess, VmAddr},
+    relocation::RelocationArch,
     segment::ElfSegments,
 };
 use alloc::boxed::Box;
@@ -15,65 +17,20 @@ pub enum LifecyclePhase {
     Fini,
 }
 
-pub(crate) type CodeExecutorBox<R = HostRegion> = Box<dyn CodeExecutor<R>>;
-pub(crate) type LifecycleHook<R = HostRegion> =
-    Box<dyn for<'event> Fn(&mut LifecycleEvent<'event, R>) -> Result<()> + Send + Sync>;
-
-/// Executes one lifecycle function address for a mapped image.
-///
-/// Native hosts can call the address through a host pointer. Remote process,
-/// guest, kernel-module, or bare-metal environments can provide their own
-/// executor that interprets the VM address in their runtime.
-pub trait CodeExecutor<R: RegionAccess = HostRegion>: Send + Sync + 'static {
-    /// Executes one lifecycle function address.
-    fn call_void(&self, event: &LifecycleEvent<'_, R>, addr: VmAddr) -> Result<()>;
-}
-
-/// Lifecycle executor for images mapped into the current process.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NativeCodeExecutor;
-
-impl<R: RegionAccess> CodeExecutor<R> for NativeCodeExecutor {
-    #[inline]
-    fn call_void(&self, event: &LifecycleEvent<'_, R>, addr: VmAddr) -> Result<()> {
-        let ptr = event
-            .segments
-            .host_ptr(addr)
-            .ok_or(MmapError::HostPointerUnavailable)?;
-        let ptr = ptr.as_ptr() as usize;
-        #[cfg(not(windows))]
-        unsafe {
-            core::mem::transmute::<usize, extern "C" fn()>(ptr)()
-        };
-        #[cfg(windows)]
-        unsafe {
-            core::mem::transmute::<usize, extern "sysv64" fn()>(ptr)()
-        };
-        Ok(())
-    }
-}
-
-/// Lifecycle executor that intentionally skips every function address.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NoopCodeExecutor;
-
-impl<R: RegionAccess> CodeExecutor<R> for NoopCodeExecutor {
-    #[inline]
-    fn call_void(&self, _event: &LifecycleEvent<'_, R>, _addr: VmAddr) -> Result<()> {
-        Ok(())
-    }
-}
+pub(crate) type CodeExecutorBox<Arch = NativeArch, R = HostRegion> = Box<dyn CodeExecutor<Arch, R>>;
+pub(crate) type LifecycleHook<Arch = NativeArch, R = HostRegion> =
+    Box<dyn for<'event> Fn(&mut LifecycleEvent<'event, Arch, R>) -> Result<()> + Send + Sync>;
 
 /// Finalization state retained until an image is unloaded.
-pub(crate) struct Finalizer<R: RegionAccess = HostRegion> {
+pub(crate) struct Finalizer<Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
     lifecycle: Lifecycle,
-    executor: CodeExecutorBox<R>,
-    hook: Option<LifecycleHook<R>>,
+    executor: CodeExecutorBox<Arch, R>,
+    hook: Option<LifecycleHook<Arch, R>>,
 }
 
-impl<R: RegionAccess> Finalizer<R> {
+impl<Arch: RelocationArch, R: RegionAccess> Finalizer<Arch, R> {
     #[inline]
-    pub(crate) const fn new(lifecycle: Lifecycle, executor: CodeExecutorBox<R>) -> Self {
+    pub(crate) const fn new(lifecycle: Lifecycle, executor: CodeExecutorBox<Arch, R>) -> Self {
         Self {
             lifecycle,
             executor,
@@ -94,7 +51,7 @@ impl<R: RegionAccess> Finalizer<R> {
     #[inline]
     pub(crate) fn set_executor<E>(&mut self, executor: E)
     where
-        E: CodeExecutor<R>,
+        E: CodeExecutor<Arch, R>,
     {
         self.executor = Box::new(executor);
     }
@@ -102,7 +59,10 @@ impl<R: RegionAccess> Finalizer<R> {
     #[inline]
     pub(crate) fn set_hook<F>(&mut self, hook: F)
     where
-        F: for<'event> Fn(&mut LifecycleEvent<'event, R>) -> Result<()> + Send + Sync + 'static,
+        F: for<'event> Fn(&mut LifecycleEvent<'event, Arch, R>) -> Result<()>
+            + Send
+            + Sync
+            + 'static,
     {
         self.hook = Some(Box::new(hook));
     }
@@ -131,22 +91,22 @@ impl<R: RegionAccess> Finalizer<R> {
 ///
 /// The observer may inspect, filter, reorder, or replace the lifecycle function
 /// address list before executing it.
-pub struct LifecycleEvent<'a, R: RegionAccess = HostRegion> {
+pub struct LifecycleEvent<'a, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
     phase: LifecyclePhase,
     name: &'a str,
     lifecycle: Lifecycle,
     segments: &'a ElfSegments<R>,
-    executor: CodeExecutorBox<R>,
+    executor: CodeExecutorBox<Arch, R>,
 }
 
-impl<'a, R: RegionAccess> LifecycleEvent<'a, R> {
+impl<'a, Arch: RelocationArch, R: RegionAccess> LifecycleEvent<'a, Arch, R> {
     #[inline]
     pub(crate) fn with_executor(
         phase: LifecyclePhase,
         name: &'a str,
         lifecycle: &'a Lifecycle,
         segments: &'a ElfSegments<R>,
-        executor: CodeExecutorBox<R>,
+        executor: CodeExecutorBox<Arch, R>,
     ) -> Self {
         Self {
             phase,
@@ -191,26 +151,23 @@ impl<'a, R: RegionAccess> LifecycleEvent<'a, R> {
     #[inline]
     pub fn set_executor<E>(&mut self, executor: E)
     where
-        E: CodeExecutor<R>,
+        E: CodeExecutor<Arch, R>,
     {
         self.executor = Box::new(executor);
     }
 
     #[inline]
     pub(crate) fn run(&mut self) -> Result<()> {
+        let ctx = CodeContext::<Arch, R>::new(self.name, self.segments);
         for addr in self.lifecycle.func_addrs() {
-            self.executor.call_void(self, addr)?;
+            self.executor.call_void(ctx, addr)?;
         }
         Ok(())
     }
 }
 
 #[inline]
-pub(crate) fn default_lifecycle_executor<R: RegionAccess>() -> CodeExecutorBox<R> {
+pub(crate) fn default_lifecycle_executor<Arch: RelocationArch, R: RegionAccess>()
+-> CodeExecutorBox<Arch, R> {
     Box::new(NativeCodeExecutor)
-}
-
-#[inline]
-pub(crate) fn noop_lifecycle_executor<R: RegionAccess>() -> CodeExecutorBox<R> {
-    Box::new(NoopCodeExecutor)
 }

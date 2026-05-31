@@ -5,7 +5,7 @@ use crate::{
     image::{ElfCore, Module, ModuleScope},
     logging,
     observer::{IfuncBindingEvent, RelocationObserver, SymbolBindingEvent},
-    os::{RegionAccess, VmAddr, VmOffset},
+    os::{CodeContext, RegionAccess, VmAddr, VmOffset},
     relocate_context_error,
     relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
     tls::{TlsDescArgs, lookup_tls_get_addr},
@@ -98,17 +98,8 @@ where
     ) -> Result<VmAddr> {
         let mut event = IfuncBindingEvent::new(self.core, rel, resolver);
         self.observer.on_ifunc_binding(&mut event)?;
-        if let Some(resolved) = event.into_resolved_addr() {
-            return Ok(resolved);
-        }
-        if !Arch::SUPPORTS_NATIVE_RUNTIME {
-            return Err(reloc_error(rel, RelocReason::UnknownSymbol, self.core));
-        }
-        let ptr = self
-            .core
-            .host_ptr(resolver)
-            .expect("IFUNC resolver address is not backed by host-accessible mapped memory");
-        Ok(unsafe { resolve_ifunc(ptr) })
+        let ctx = CodeContext::<Arch, R>::new(self.core.name(), self.core.segments());
+        event.resolve(ctx)
     }
 }
 

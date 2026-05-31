@@ -30,7 +30,7 @@ pub(crate) struct CoreInner<
     pub(crate) symtab: SymbolTable<Arch::Layout, H>,
 
     /// Finalization behavior resolved during relocation.
-    pub(crate) finalizer: OnceCell<Finalizer<R>>,
+    pub(crate) finalizer: OnceCell<Finalizer<Arch, R>>,
 
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,

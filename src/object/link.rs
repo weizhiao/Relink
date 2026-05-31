@@ -86,7 +86,7 @@ where
             self.core.segments(),
             default_lifecycle_executor(),
         );
-        observer.on_lifecycle(&mut event)?;
+        observer.on_init(&mut event)?;
         event.run()?;
 
         logging::info!("Relocation completed for {}", self.core.name());

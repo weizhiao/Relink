@@ -57,9 +57,9 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
         Ok(())
     }
 
-    /// Called before lifecycle functions are executed or recorded for finalization.
+    /// Called before initialization functions are executed.
     #[inline]
-    fn on_lifecycle<R: RegionAccess>(&mut self, _event: &mut LifecycleEvent<'_, R>) -> Result<()> {
+    fn on_init<R: RegionAccess>(&mut self, _event: &mut LifecycleEvent<'_, Arch, R>) -> Result<()> {
         Ok(())
     }
 
@@ -192,8 +192,8 @@ where
     }
 
     #[inline]
-    fn on_lifecycle<R: RegionAccess>(&mut self, event: &mut LifecycleEvent<'_, R>) -> Result<()> {
-        (**self).on_lifecycle(event)
+    fn on_init<R: RegionAccess>(&mut self, event: &mut LifecycleEvent<'_, Arch, R>) -> Result<()> {
+        (**self).on_init(event)
     }
 
     #[inline]
@@ -339,8 +339,8 @@ where
     }
 
     #[inline]
-    fn on_lifecycle<R: RegionAccess>(&mut self, event: &mut LifecycleEvent<'_, R>) -> Result<()> {
-        (**self).on_lifecycle(event)
+    fn on_init<R: RegionAccess>(&mut self, event: &mut LifecycleEvent<'_, Arch, R>) -> Result<()> {
+        (**self).on_init(event)
     }
 
     #[inline]

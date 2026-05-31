@@ -569,6 +569,22 @@ impl Display for RelocationError {
     }
 }
 
+/// Structured runtime code execution error details.
+pub enum CodeError {
+    /// Native code execution is not supported for this target architecture.
+    NativeUnsupported,
+}
+
+impl Display for CodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NativeUnsupported => {
+                f.write_str("native code execution is not supported for this target architecture")
+            }
+        }
+    }
+}
+
 /// Structured user-defined error details.
 pub enum CustomError {
     /// A plain message supplied by the caller.
@@ -761,6 +777,9 @@ pub enum Error {
     /// An error occurred during linker resolution, planning, or materialization.
     Linker(LinkerError),
 
+    /// An error occurred while executing mapped code.
+    Code(CodeError),
+
     /// An error occurred in a user-defined callback or handler.
     Custom(CustomError),
 
@@ -828,6 +847,12 @@ impl From<LinkerError> for Error {
     }
 }
 
+impl From<CodeError> for Error {
+    fn from(err: CodeError) -> Self {
+        Self::Code(err)
+    }
+}
+
 impl From<CustomError> for Error {
     fn from(err: CustomError) -> Self {
         Self::Custom(err)
@@ -851,6 +876,7 @@ impl Display for Error {
             Self::ParseShdr(err) => write!(f, "Section header parsing error: {err}"),
             Self::ParsePhdr(err) => write!(f, "Program header parsing error: {err}"),
             Self::Linker(err) => write!(f, "Linker error: {err}"),
+            Self::Code(err) => write!(f, "Code execution error: {err}"),
             Self::Custom(err) => write!(f, "Custom error: {err}"),
             Self::Tls(err) => write!(f, "TLS error: {err}"),
         }
@@ -882,6 +908,7 @@ debug_as_display!(
     RelocReason,
     RelocationFailure,
     RelocationError,
+    CodeError,
     CustomError,
     UnresolvedDependency,
     LinkerError,
@@ -904,7 +931,6 @@ pub(crate) fn relocate_context_error(
 
 #[cold]
 #[inline(never)]
-#[allow(dead_code)]
 pub fn custom_error(msg: impl Into<Cow<'static, str>>) -> Error {
     Error::Custom(CustomError::Message(msg.into()))
 }

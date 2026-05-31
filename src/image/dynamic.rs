@@ -10,7 +10,7 @@ use crate::{
     logging,
     observer::{
         DtDebugEntry, LifecycleEvent, LifecyclePhase, LoadObserver, RelocationObserver,
-        default_lifecycle_executor, noop_lifecycle_executor,
+        default_lifecycle_executor,
     },
     os::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{
@@ -296,24 +296,14 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         Obs: RelocationObserver<Arch> + ?Sized,
     {
         self.module.set_init();
-        let mut event = if Arch::SUPPORTS_NATIVE_RUNTIME {
-            LifecycleEvent::with_executor(
-                LifecyclePhase::Init,
-                self.name(),
-                init,
-                self.module.segments(),
-                default_lifecycle_executor(),
-            )
-        } else {
-            LifecycleEvent::with_executor(
-                LifecyclePhase::Init,
-                self.name(),
-                init,
-                self.module.segments(),
-                noop_lifecycle_executor(),
-            )
-        };
-        observer.on_lifecycle(&mut event)?;
+        let mut event = LifecycleEvent::with_executor(
+            LifecyclePhase::Init,
+            self.name(),
+            init,
+            self.module.segments(),
+            default_lifecycle_executor(),
+        );
+        observer.on_init(&mut event)?;
         event.run()?;
         Ok(())
     }

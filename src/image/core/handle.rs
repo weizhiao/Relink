@@ -229,7 +229,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> ElfCore<D, Arch, R, H
     }
 
     /// Sets the finalizer that will run when the initialized image is dropped.
-    pub(crate) fn set_finalizer(&self, finalizer: Finalizer<R>) {
+    pub(crate) fn set_finalizer(&self, finalizer: Finalizer<Arch, R>) {
         assert!(
             self.inner.finalizer.set(finalizer).is_ok(),
             "finalizer must be set only once",

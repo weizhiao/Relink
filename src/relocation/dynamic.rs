@@ -6,7 +6,7 @@ use crate::{
     logging,
     observer::{
         Finalizer, LinkActivity, ModuleRelocatedEvent, RelocationObserver,
-        default_lifecycle_executor, noop_lifecycle_executor,
+        default_lifecycle_executor,
     },
     os::{MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{
@@ -95,12 +95,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         self.core_ref().set_tls_desc_args(tls_desc_args);
 
         let (init, fini) = self.resolve_lifecycle()?;
-        let fini_executor = if Arch::SUPPORTS_NATIVE_RUNTIME {
-            default_lifecycle_executor()
-        } else {
-            noop_lifecycle_executor()
-        };
-        let finalizer = Some(Finalizer::new(fini, fini_executor));
+        let finalizer = Some(Finalizer::new(fini, default_lifecycle_executor()));
 
         let dep_names = scope
             .iter()
