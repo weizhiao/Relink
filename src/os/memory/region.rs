@@ -212,6 +212,15 @@ impl<T: 'static> MappedView<T> {
     pub(crate) fn is_empty(&self) -> bool {
         self.as_slice().is_empty()
     }
+
+    #[inline]
+    pub(crate) fn split_at(&self, mid: usize) -> Option<(Self, Self)> {
+        if mid > self.len() {
+            return None;
+        }
+        let (head, tail) = self.slice.split_at(mid);
+        Some((Self::from_slice(head), Self::from_slice(tail)))
+    }
 }
 
 impl<T: 'static> AsRef<[T]> for MappedView<T> {

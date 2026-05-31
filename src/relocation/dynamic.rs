@@ -131,10 +131,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 /// Types of relative relocations
 enum RelativeRel<Arch: RelocationArch> {
     /// Standard REL/RELA relocations
-    Rel {
-        entries: MappedView<ElfRelType<Arch>>,
-        len: usize,
-    },
+    Rel(MappedView<ElfRelType<Arch>>),
     /// Compact RELR relocations
     Relr(MappedView<ElfRelr<Arch::Layout>>),
 }
@@ -143,7 +140,7 @@ impl<Arch: RelocationArch> RelativeRel<Arch> {
     #[inline]
     fn is_empty(&self) -> bool {
         match self {
-            RelativeRel::Rel { len, .. } => *len == 0,
+            RelativeRel::Rel(rel) => rel.is_empty(),
             RelativeRel::Relr(relr) => relr.is_empty(),
         }
     }
@@ -157,8 +154,6 @@ pub(crate) struct DynamicRelocation<Arch: RelocationArch = crate::arch::NativeAr
     pub(in crate::relocation) pltrel: MappedView<ElfRelType<Arch>>,
     /// Other dynamic relocations
     dynrel: MappedView<ElfRelType<Arch>>,
-    dynrel_start: usize,
-    dynrel_end: usize,
 }
 
 #[inline(always)]
@@ -271,8 +266,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         let segments = core.segments();
 
         match &reloc.relative {
-            RelativeRel::Rel { entries, len } => {
-                let rel = &entries.as_slice()[..*len];
+            RelativeRel::Rel(rel) => {
+                let rel = rel.as_slice();
                 assert!(rel.is_empty() || rel[0].r_type() == Arch::RELATIVE);
                 // Apply all relative relocations: new_value = base_address + addend
                 for rel in rel {
@@ -349,7 +344,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         let segments = core.segments();
 
         // Process each dynamic relocation entry
-        let dynrel = &reloc.dynrel.as_slice()[reloc.dynrel_start..reloc.dynrel_end];
+        let dynrel = reloc.dynrel.as_slice();
         for rel in dynrel {
             if !helper.handle_pre(rel)?.is_unhandled() {
                 continue;
@@ -431,53 +426,46 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
 
         if let Some(relr) = relr {
             // Use RELR relocations if available (more compact format)
-            let dynrel_end = dynrel.len();
             Ok(Self {
                 relative: RelativeRel::Relr(relr),
                 pltrel,
                 dynrel,
-                dynrel_start: 0,
-                dynrel_end,
             })
         } else {
             // Use traditional REL/RELA relocations
             // nrelative indicates the count of REL_RELATIVE relocation types
             let nrelative = rela_count.map(|v| v.get()).unwrap_or(0);
 
-            if nrelative > dynrel.len() {
+            let Some((relative, dynrel)) = dynrel.split_at(nrelative) else {
                 return Err(ParseDynamicError::RelativeRelocationCountOutOfRange {
                     count: nrelative,
                     table_len: dynrel.len(),
                 }
                 .into());
-            }
+            };
 
             // Split relocations into relative and non-relative parts
-            let relative = RelativeRel::Rel {
-                entries: dynrel.clone(),
-                len: nrelative,
-            };
-            let temp_dynrel_len = dynrel.len() - nrelative;
-
-            let dynrel_len = if pltrel_is_dynrel_tail {
+            let dynrel = if pltrel_is_dynrel_tail {
                 // If contiguous, exclude pltrel entries from dynrel
-                temp_dynrel_len.checked_sub(pltrel.len()).ok_or(
+                let dynrel_len = dynrel.len().checked_sub(pltrel.len()).ok_or(
                     ParseDynamicError::PltRelocationTailOutOfRange {
                         plt_len: pltrel.len(),
-                        dynrel_tail_len: temp_dynrel_len,
+                        dynrel_tail_len: dynrel.len(),
                     },
-                )?
+                )?;
+                let Some((dynrel, _)) = dynrel.split_at(dynrel_len) else {
+                    unreachable!("validated dynamic relocation split");
+                };
+                dynrel
             } else {
                 // Otherwise, use all remaining entries
-                temp_dynrel_len
+                dynrel
             };
 
             Ok(Self {
-                relative,
+                relative: RelativeRel::Rel(relative),
                 pltrel,
                 dynrel,
-                dynrel_start: nrelative,
-                dynrel_end: nrelative + dynrel_len,
             })
         }
     }
@@ -485,7 +473,7 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
     /// Check if there are no relocations to process
     #[inline]
     fn is_empty(&self) -> bool {
-        self.relative.is_empty() && self.dynrel_start == self.dynrel_end && self.pltrel.is_empty()
+        self.relative.is_empty() && self.dynrel.is_empty() && self.pltrel.is_empty()
     }
 }
 
