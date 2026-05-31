@@ -94,8 +94,8 @@ impl ElfHash {
         let header = ElfHashHeader::from_bytes(bytes);
 
         if header.nbucket == 0 {
-            return Err(ParseDynamicError::MalformedHashTable {
-                detail: "DT_HASH bucket table is empty",
+            return Err(ParseDynamicError::EmptyHashTable {
+                table: "DT_HASH bucket table",
             }
             .into());
         }

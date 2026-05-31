@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 use core::{
     mem,
-    mem::{MaybeUninit, size_of},
+    mem::{MaybeUninit, align_of, size_of},
 };
 
-use crate::{ByteRepr, Result};
+use crate::{AlignedBytes, ByteRepr, IoError, ReadBoundsError, Result, try_cast_bytes};
 use alloc::boxed::Box;
 
 use super::Path;
@@ -21,7 +21,7 @@ pub trait ElfReader {
     fn len(&self) -> usize;
 
     /// Reads data from the ELF object at the given offset into the provided buffer.
-    fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()>;
+    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()>;
 
     /// Borrows bytes directly from the ELF object when the backend can provide
     /// a stable in-memory view.
@@ -46,9 +46,47 @@ pub trait ElfReader {
 
 /// Convenience helpers for reading ELF payloads through an [`ElfReader`].
 pub(crate) trait ElfReaderExt: ElfReader {
+    /// Borrows bytes from the source when possible, otherwise reads them into
+    /// `scratch`, casts them to `V`, and passes the resulting view to `f`.
+    #[inline]
+    fn with_bytes<'a, V, S, T>(
+        &'a self,
+        offset: usize,
+        len: usize,
+        scratch: &'a mut S,
+        f: impl FnOnce(&'a [V]) -> Result<T>,
+    ) -> Result<T>
+    where
+        V: ByteRepr + 'a,
+        S: ByteScratch + ?Sized,
+    {
+        if let Some(bytes) = self.borrow_bytes(offset, len)? {
+            if let Some(values) = try_cast_bytes::<V>(bytes) {
+                return f(values);
+            }
+        }
+
+        let Some(bytes) = scratch.resize_bytes(len) else {
+            return Err(IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(
+                offset,
+                len,
+                self.len(),
+            )))
+            .into());
+        };
+        self.read(bytes, offset)?;
+        let Some(values) = try_cast_bytes::<V>(bytes) else {
+            return Err(IoError::ReadBufferNotAligned {
+                align: align_of::<V>(),
+            }
+            .into());
+        };
+        f(values)
+    }
+
     /// Reads values from the underlying object into a new vector.
     #[inline]
-    fn read_to_vec<T: ByteRepr>(&mut self, offset: usize, count: usize) -> Result<Vec<T>> {
+    fn read_to_vec<T: ByteRepr>(&self, offset: usize, count: usize) -> Result<Vec<T>> {
         let byte_len = count
             .checked_mul(size_of::<T>())
             .expect("ElfReaderExt::read_to_vec length overflow");
@@ -61,21 +99,29 @@ pub(crate) trait ElfReaderExt: ElfReader {
         self.read(bytes, offset)?;
         Ok(unsafe { assume_init_vec(values) })
     }
-
-    /// Reads raw bytes into an existing typed slice.
-    #[inline]
-    fn read_slice<T: ByteRepr>(&mut self, buf: &mut [T], offset: usize) -> Result<()> {
-        let byte_len = buf
-            .len()
-            .checked_mul(size_of::<T>())
-            .expect("ElfReaderExt::read_slice length overflow");
-        let bytes =
-            unsafe { core::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<u8>(), byte_len) };
-        self.read(bytes, offset)
-    }
 }
 
 impl<T: ElfReader + ?Sized> ElfReaderExt for T {}
+
+pub(crate) trait ByteScratch {
+    fn resize_bytes(&mut self, len: usize) -> Option<&mut [u8]>;
+}
+
+impl ByteScratch for AlignedBytes {
+    #[inline]
+    fn resize_bytes(&mut self, len: usize) -> Option<&mut [u8]> {
+        self.resize(len)?;
+        Some(self.as_bytes_mut())
+    }
+}
+
+impl ByteScratch for Vec<u8> {
+    #[inline]
+    fn resize_bytes(&mut self, len: usize) -> Option<&mut [u8]> {
+        self.resize(len, 0);
+        Some(self.as_mut_slice())
+    }
+}
 
 #[inline]
 unsafe fn assume_init_vec<T>(mut values: Vec<MaybeUninit<T>>) -> Vec<T> {
@@ -115,7 +161,7 @@ impl<R: ElfReader + ?Sized> ElfReader for Box<R> {
     }
 
     #[inline]
-    fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
+    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
         (**self).read(buf, offset)
     }
 

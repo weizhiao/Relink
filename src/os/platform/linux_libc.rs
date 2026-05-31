@@ -3,11 +3,11 @@ use crate::{
     input::{ElfReader, Path, PathBuf},
     os::{HostRegion, MadviseAdvice, MapFlags, MappedRegion, Mmap, PageSize, ProtFlags, VmAddr},
 };
-use alloc::ffi::CString;
+use alloc::{boxed::Box, ffi::CString};
 use core::ffi::c_void;
 #[cfg(feature = "tls")]
 use core::sync::atomic::{AtomicUsize, Ordering};
-use libc::{_SC_PAGESIZE, O_RDONLY, SEEK_END, SEEK_SET, madvise, mmap, mprotect, munmap, sysconf};
+use libc::{_SC_PAGESIZE, O_RDONLY, SEEK_END, madvise, mmap, mprotect, munmap, pread, sysconf};
 
 #[inline]
 fn last_os_error_code() -> u32 {
@@ -264,40 +264,29 @@ impl RawFile {
     }
 }
 
-fn lseek(fd: i32, offset: usize) -> Result<()> {
-    let off = unsafe { libc::lseek(fd, offset as _, SEEK_SET) };
-    if off == -1 || off as usize != offset {
-        return Err(IoError::SeekFailed {
-            code: last_os_error_code(),
-        }
-        .into());
-    }
-    Ok(())
-}
-
-fn read_exact(fd: i32, mut bytes: &mut [u8]) -> Result<()> {
+fn pread_exact(fd: i32, mut bytes: &mut [u8], mut offset: usize) -> Result<()> {
     loop {
         if bytes.is_empty() {
             return Ok(());
         }
-        // 尝试读取剩余的字节数
         let bytes_to_read = bytes.len();
         let ptr = bytes.as_mut_ptr() as *mut libc::c_void;
-        let result = unsafe { libc::read(fd, ptr, bytes_to_read) };
+        let result = unsafe { pread(fd, ptr, bytes_to_read, offset as _) };
 
         if result < 0 {
-            // 出现错误
             return Err(IoError::ReadFailed {
                 code: last_os_error_code(),
             }
             .into());
         } else if result == 0 {
-            // 意外到达文件末尾
             return Err(IoError::FailedToFillBuffer.into());
         }
-        // 成功读取了部分字节
         let n = result as usize;
-        // 更新剩余需要读取的部分
+        offset = offset
+            .checked_add(n)
+            .ok_or(IoError::ReadOutOfBounds(Box::new(
+                crate::ReadBoundsError::new(offset, bytes_to_read, usize::MAX),
+            )))?;
         bytes = &mut bytes[n..];
     }
 }
@@ -307,10 +296,8 @@ impl ElfReader for RawFile {
         self.len
     }
 
-    fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
-        lseek(self.fd as i32, offset)?;
-        read_exact(self.fd as i32, buf)?;
-        Ok(())
+    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
+        pread_exact(self.fd as i32, buf, offset)
     }
 
     fn path(&self) -> &Path {

@@ -324,7 +324,7 @@ impl SearchPathResolver {
     /// Open `path` if it exists, returning `Ok(None)` for ordinary open
     /// failures and propagating parse/read errors for files that were found.
     fn open_elf(path: &Path) -> Result<Option<ElfFile>> {
-        let mut file = match ElfFile::from_path(path) {
+        let file = match ElfFile::from_path(path) {
             Ok(file) => file,
             Err(Error::Io(IoError::OpenFailed { .. })) => return Ok(None),
             Err(err) => return Err(err),

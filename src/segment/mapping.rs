@@ -40,7 +40,7 @@ impl ElfSegment {
     fn map_segment<M>(
         &mut self,
         mapper: &M,
-        object: &mut impl ElfReader,
+        object: &impl ElfReader,
         space: &ElfSegments<M::Region>,
     ) -> Result<()>
     where
@@ -206,7 +206,7 @@ pub(crate) trait SegmentBuilder {
     fn load_segments<M>(
         &mut self,
         mapper: &M,
-        object: &mut impl ElfReader,
+        object: &impl ElfReader,
     ) -> Result<ElfSegments<M::Region>>
     where
         M: Mmap + ?Sized,

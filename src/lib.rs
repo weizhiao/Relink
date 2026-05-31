@@ -176,13 +176,13 @@ mod segment;
 mod sync;
 pub mod tls;
 
-pub(crate) use aligned_bytes::AlignedBytes;
+pub(crate) use aligned_bytes::{AlignedBytes, try_cast_bytes, try_cast_bytes_mut};
 pub(crate) use error::*;
 
 pub use aligned_bytes::ByteRepr;
 pub use error::{
     CustomError, Error, IoError, LinkerError, MmapError, ParseDynamicError, ParseEhdrError,
-    ParsePhdrError, RelocationError, RelocationFailure, TlsError,
+    ParsePhdrError, ParseShdrError, RelocationError, RelocationFailure, TlsError,
 };
 pub use loader::Loader;
 

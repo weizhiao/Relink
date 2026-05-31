@@ -3,7 +3,7 @@ use crate::{
     Error, IoError, MmapError, Result, logging,
     os::{HostRegion, MadviseAdvice, MapFlags, MappedRegion, Mmap, ProtFlags, VmAddr},
 };
-use alloc::ffi::CString;
+use alloc::{boxed::Box, ffi::CString};
 use core::ffi::{c_int, c_void};
 use syscalls::Sysno;
 
@@ -180,6 +180,36 @@ where
     Ok(value)
 }
 
+#[inline]
+unsafe fn pread64(fd: isize, buf: *mut u8, len: usize, offset: usize) -> usize {
+    #[cfg(target_pointer_width = "64")]
+    {
+        unsafe { syscalls::raw_syscall!(Sysno::pread64, fd, buf, len, offset) }
+    }
+
+    #[cfg(all(
+        target_pointer_width = "32",
+        any(target_arch = "arm", target_arch = "mips", target_arch = "mips32r6")
+    ))]
+    {
+        let offset = offset as u64;
+        let hi = (offset >> 32) as usize;
+        let lo = offset as usize;
+        unsafe { syscalls::raw_syscall!(Sysno::pread64, fd, buf, len, 0, lo, hi) }
+    }
+
+    #[cfg(all(
+        target_pointer_width = "32",
+        not(any(target_arch = "arm", target_arch = "mips", target_arch = "mips32r6"))
+    ))]
+    {
+        let offset = offset as u64;
+        let hi = (offset >> 32) as usize;
+        let lo = offset as usize;
+        unsafe { syscalls::raw_syscall!(Sysno::pread64, fd, buf, len, lo, hi) }
+    }
+}
+
 impl RawFile {
     pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Result<Self> {
         let fd = raw_fd as isize;
@@ -265,19 +295,26 @@ impl ElfReader for RawFile {
         self.len
     }
 
-    fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
-        const SEEK_START: u32 = 0;
+    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
+        let mut bytes = buf;
+        let mut offset = offset;
         unsafe {
-            from_ret(
-                syscalls::raw_syscall!(Sysno::lseek, self.fd, offset, SEEK_START),
-                |code| IoError::SeekFailed { code }.into(),
-            )?;
-            let size = from_ret(
-                syscalls::raw_syscall!(Sysno::read, self.fd, buf.as_mut_ptr(), buf.len()),
-                |code| IoError::ReadFailed { code }.into(),
-            )?;
-            if size != buf.len() {
-                return Err(IoError::FailedToFillBuffer.into());
+            while !bytes.is_empty() {
+                let size = from_ret(
+                    pread64(self.fd, bytes.as_mut_ptr(), bytes.len(), offset),
+                    |code| IoError::ReadFailed { code }.into(),
+                )?;
+                if size == 0 {
+                    return Err(IoError::FailedToFillBuffer.into());
+                }
+                offset = offset.checked_add(size).ok_or_else(|| {
+                    IoError::ReadOutOfBounds(Box::new(crate::ReadBoundsError::new(
+                        offset,
+                        bytes.len(),
+                        usize::MAX,
+                    )))
+                })?;
+                bytes = &mut bytes[size..];
             }
         }
         Ok(())

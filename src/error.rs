@@ -39,6 +39,11 @@ pub enum IoError {
     FailedToFillBuffer,
     /// `read offset out of bounds: offset {offset}, len {len}, available {available}`
     ReadOutOfBounds(Box<ReadBoundsError>),
+    /// The temporary read buffer is not aligned for the requested view.
+    ReadBufferNotAligned {
+        /// Required byte alignment.
+        align: usize,
+    },
     /// `close failed`
     CloseFailed,
 }
@@ -77,6 +82,9 @@ impl Display for IoError {
                 "read offset out of bounds: offset {}, len {}, available {}",
                 err.offset, err.len, err.available
             ),
+            Self::ReadBufferNotAligned { align } => {
+                write!(f, "read buffer is not aligned to {align} bytes")
+            }
             Self::CloseFailed => f.write_str("close failed"),
         }
     }
@@ -197,10 +205,43 @@ pub enum ParseDynamicError {
     },
     /// A dynamic-section address calculation overflowed.
     AddressOverflow,
+    /// The dynamic table byte size is not a multiple of an `ElfDyn` entry.
+    InvalidDynamicTableSize {
+        /// Byte size declared by `PT_DYNAMIC.p_filesz`.
+        size: usize,
+        /// Size of one dynamic-table entry for the selected ELF layout.
+        entry_size: usize,
+    },
+    /// `DT_RELCOUNT`/`DT_RELACOUNT` exceeds the dynamic relocation table length.
+    RelativeRelocationCountOutOfRange {
+        /// Relative relocation count declared by the dynamic section.
+        count: usize,
+        /// Number of entries in the dynamic relocation table.
+        table_len: usize,
+    },
+    /// `DT_JMPREL` cannot fit as the tail of `DT_REL`/`DT_RELA`.
+    PltRelocationTailOutOfRange {
+        /// Number of PLT relocation entries.
+        plt_len: usize,
+        /// Number of dynamic relocation entries available after relative relocations.
+        dynrel_tail_len: usize,
+    },
     /// A relocation table described by the dynamic section is malformed.
     MalformedRelocationTable {
         /// Static detail describing why the table is malformed.
         detail: &'static str,
+    },
+    /// A required dynamic hash subtable is empty.
+    EmptyHashTable {
+        /// Name of the empty hash subtable.
+        table: &'static str,
+    },
+    /// A GNU hash bucket names a symbol index before the GNU hash symbol bias.
+    GnuHashBucketBeforeSymbolBias {
+        /// Symbol index read from the GNU hash bucket table.
+        bucket_symbol: usize,
+        /// GNU hash symbol bias declared by the hash header.
+        symbol_bias: usize,
     },
     /// A symbol hash table described by the dynamic section is malformed.
     MalformedHashTable {
@@ -231,7 +272,30 @@ impl Display for ParseDynamicError {
                 write!(f, "dynamic section is missing required tag {tag}")
             }
             Self::AddressOverflow => f.write_str("dynamic section address calculation overflowed"),
+            Self::InvalidDynamicTableSize { size, entry_size } => write!(
+                f,
+                "dynamic table size {size} is not a multiple of entry size {entry_size}"
+            ),
+            Self::RelativeRelocationCountOutOfRange { count, table_len } => write!(
+                f,
+                "relative relocation count {count} exceeds dynamic relocation table length {table_len}"
+            ),
+            Self::PltRelocationTailOutOfRange {
+                plt_len,
+                dynrel_tail_len,
+            } => write!(
+                f,
+                "PLT relocation tail length {plt_len} exceeds remaining dynamic relocation length {dynrel_tail_len}"
+            ),
             Self::MalformedRelocationTable { detail } => f.write_str(detail),
+            Self::EmptyHashTable { table } => write!(f, "{table} is empty"),
+            Self::GnuHashBucketBeforeSymbolBias {
+                bucket_symbol,
+                symbol_bias,
+            } => write!(
+                f,
+                "DT_GNU_HASH bucket symbol index {bucket_symbol} precedes symbol bias {symbol_bias}"
+            ),
             Self::MalformedHashTable { detail } => f.write_str(detail),
             Self::MalformedSymbolTable { detail } => f.write_str(detail),
             Self::MalformedStringTable { detail } => f.write_str(detail),
@@ -277,20 +341,6 @@ pub enum ParseEhdrError {
     },
     /// Relocatable object support is disabled for this build.
     RelocatableObjectsDisabled,
-    /// A relocatable object was expected to carry section headers.
-    MissingSectionHeaders,
-    /// The section header table is malformed.
-    MalformedSectionHeaders {
-        /// Static detail describing why the section headers are malformed.
-        detail: &'static str,
-    },
-}
-
-impl ParseEhdrError {
-    #[inline]
-    pub(crate) const fn malformed_section_headers(detail: &'static str) -> Self {
-        Self::MalformedSectionHeaders { detail }
-    }
 }
 
 impl Display for ParseEhdrError {
@@ -320,14 +370,57 @@ impl Display for ParseEhdrError {
             Self::RelocatableObjectsDisabled => {
                 f.write_str("file type ET_REL requires enabling the `object` feature")
             }
-            Self::MissingSectionHeaders => f.write_str("object file must have section headers"),
-            Self::MalformedSectionHeaders { detail } => f.write_str(detail),
+        }
+    }
+}
+
+/// Structured section-header parsing error details.
+pub enum ParseShdrError {
+    /// A section-header table was required but not present.
+    MissingSectionHeaders,
+    /// The section header entry size does not match the selected ELF layout.
+    InvalidEntrySize {
+        /// Entry size required by the selected ELF layout.
+        expected: usize,
+        /// Entry size found in the ELF header.
+        found: usize,
+    },
+    /// The section header table is malformed.
+    Malformed {
+        /// Static detail describing why the section headers are malformed.
+        detail: &'static str,
+    },
+}
+
+impl ParseShdrError {
+    #[inline]
+    pub(crate) const fn malformed(detail: &'static str) -> Self {
+        Self::Malformed { detail }
+    }
+}
+
+impl Display for ParseShdrError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingSectionHeaders => f.write_str("section header table is missing"),
+            Self::InvalidEntrySize { expected, found } => write!(
+                f,
+                "section header entry size mismatch: expected {expected}, found {found}"
+            ),
+            Self::Malformed { detail } => f.write_str(detail),
         }
     }
 }
 
 /// Structured program-header parsing error details.
 pub enum ParsePhdrError {
+    /// The program header entry size does not match the selected ELF layout.
+    InvalidEntrySize {
+        /// Entry size required by the selected ELF layout.
+        expected: usize,
+        /// Entry size found in the ELF header.
+        found: usize,
+    },
     /// The program header table is malformed.
     Malformed {
         /// Static detail describing why the program headers are malformed.
@@ -357,6 +450,10 @@ impl ParsePhdrError {
 impl Display for ParsePhdrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidEntrySize { expected, found } => write!(
+                f,
+                "program header entry size mismatch: expected {expected}, found {found}"
+            ),
             Self::Malformed { detail } => f.write_str(detail),
             Self::PageAlignmentMismatch { page_size } => write!(
                 f,
@@ -646,6 +743,9 @@ pub enum Error {
     /// An error occurred while parsing the ELF header.
     ParseEhdr(ParseEhdrError),
 
+    /// An error occurred while parsing section headers.
+    ParseShdr(ParseShdrError),
+
     /// An error occurred while parsing program headers.
     ParsePhdr(ParsePhdrError),
 
@@ -701,6 +801,12 @@ impl From<ParseEhdrError> for Error {
     }
 }
 
+impl From<ParseShdrError> for Error {
+    fn from(err: ParseShdrError) -> Self {
+        Self::ParseShdr(err)
+    }
+}
+
 impl From<ParsePhdrError> for Error {
     fn from(err: ParsePhdrError) -> Self {
         Self::ParsePhdr(err)
@@ -733,6 +839,7 @@ impl Display for Error {
             Self::Relocation(err) => write!(f, "Relocation error: {err}"),
             Self::ParseDynamic(err) => write!(f, "Dynamic section parsing error: {err}"),
             Self::ParseEhdr(err) => write!(f, "ELF header parsing error: {err}"),
+            Self::ParseShdr(err) => write!(f, "Section header parsing error: {err}"),
             Self::ParsePhdr(err) => write!(f, "Program header parsing error: {err}"),
             Self::Linker(err) => write!(f, "Linker error: {err}"),
             Self::Custom(err) => write!(f, "Custom error: {err}"),
@@ -761,6 +868,7 @@ debug_as_display!(
     MmapError,
     ParseDynamicError,
     ParseEhdrError,
+    ParseShdrError,
     ParsePhdrError,
     RelocReason,
     RelocationFailure,

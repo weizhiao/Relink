@@ -1,9 +1,10 @@
-use core::{mem::size_of, ptr::NonNull};
+use core::ptr::NonNull;
 
 use crate::{
     ByteRepr, Result,
     os::{ProtFlags, VmAddr},
     sync::Arc,
+    try_cast_bytes,
 };
 
 use super::{HostRegion, traits::RegionAccess};
@@ -154,8 +155,7 @@ impl<R: RegionAccess> MappedRegion<R> {
         offset: usize,
         byte_len: usize,
     ) -> Option<MappedView<T>> {
-        let elem_size = size_of::<T>();
-        if elem_size == 0 || !byte_len.is_multiple_of(elem_size) {
+        if core::mem::size_of::<T>() == 0 {
             return None;
         }
 
@@ -166,12 +166,10 @@ impl<R: RegionAccess> MappedRegion<R> {
         let Some(bytes) = (unsafe { self.borrow_bytes(offset, byte_len) }) else {
             return None;
         };
-        let (prefix, values, suffix) = unsafe { bytes.align_to::<T>() };
-        if !prefix.is_empty() || !suffix.is_empty() {
-            return None;
-        }
 
-        Some(MappedView { slice: values })
+        Some(MappedView {
+            slice: try_cast_bytes(bytes)?,
+        })
     }
 
     /// Returns a host-accessible pointer without checking bounds.

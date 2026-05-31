@@ -40,7 +40,7 @@ impl AlignedBytes {
         self.len
     }
 
-    pub(crate) fn set_len(&mut self, byte_len: usize) -> Option<()> {
+    pub(crate) fn resize(&mut self, byte_len: usize) -> Option<()> {
         let old_len = self.len;
         let words = Self::required_words(byte_len)?;
         if words > self.words.len() {
@@ -73,31 +73,33 @@ impl AlignedBytes {
 
     #[inline]
     pub(crate) fn try_cast_slice<T: ByteRepr>(&self) -> Option<&[T]> {
-        if size_of::<T>() == 0 {
-            return None;
-        }
-
-        let (prefix, values, suffix) = unsafe { self.as_bytes().align_to::<T>() };
-        if prefix.is_empty() && suffix.is_empty() {
-            Some(values)
-        } else {
-            None
-        }
+        try_cast_bytes(self.as_bytes())
     }
 
     #[inline]
     pub(crate) fn try_cast_slice_mut<T: ByteRepr>(&mut self) -> Option<&mut [T]> {
-        if size_of::<T>() == 0 {
-            return None;
-        }
-
-        let (prefix, values, suffix) = unsafe { self.as_bytes_mut().align_to_mut::<T>() };
-        if prefix.is_empty() && suffix.is_empty() {
-            Some(values)
-        } else {
-            None
-        }
+        try_cast_bytes_mut(self.as_bytes_mut())
     }
+}
+
+#[inline]
+pub(crate) fn try_cast_bytes<T: ByteRepr>(bytes: &[u8]) -> Option<&[T]> {
+    if size_of::<T>() == 0 {
+        return None;
+    }
+
+    let (prefix, values, suffix) = unsafe { bytes.align_to::<T>() };
+    if prefix.is_empty() && suffix.is_empty() {
+        Some(values)
+    } else {
+        None
+    }
+}
+
+#[inline]
+pub(crate) fn try_cast_bytes_mut<T: ByteRepr>(bytes: &mut [u8]) -> Option<&mut [T]> {
+    let len = try_cast_bytes::<T>(bytes)?.len();
+    Some(unsafe { core::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast::<T>(), len) })
 }
 
 impl PartialEq for AlignedBytes {

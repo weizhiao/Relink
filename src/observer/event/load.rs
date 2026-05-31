@@ -2,7 +2,7 @@ use crate::{
     arch::{ArchKind, NativeArch},
     elf::{ElfHeader, ElfLayout, ElfPhdr, ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout},
     image::RawDynamic,
-    input::{ElfReader, Path},
+    input::{ElfReader, ElfReaderExt, Path},
     os::{HostRegion, RegionAccess},
     relocation::RelocationArch,
     segment::ElfSegments,
@@ -55,7 +55,7 @@ pub struct ObjectMetadataEvent<'a, D: 'static, L: ElfLayout = NativeElfLayout> {
     ehdr: &'a ElfHeader<L>,
     shdrs: &'a mut [ElfShdr<L>],
     shstrtab: &'a [u8],
-    object: &'a mut dyn ElfReader,
+    object: &'a dyn ElfReader,
     user_data: &'a mut D,
 }
 
@@ -66,7 +66,7 @@ impl<'a, D: 'static, L: ElfLayout> ObjectMetadataEvent<'a, D, L> {
         ehdr: &'a ElfHeader<L>,
         shdrs: &'a mut [ElfShdr<L>],
         shstrtab: &'a [u8],
-        object: &'a mut dyn ElfReader,
+        object: &'a dyn ElfReader,
         user_data: &'a mut D,
     ) -> Self {
         Self {
@@ -163,12 +163,7 @@ impl<'a, D: 'static, L: ElfLayout> ObjectMetadataEvent<'a, D, L> {
         let Some((offset, len)) = self.section_content_range(id)? else {
             return f(&[]);
         };
-        if let Some(bytes) = self.object.borrow_bytes(offset, len)? {
-            return f(bytes);
-        }
-        scratch.resize(len, 0);
-        self.object.read(scratch.as_mut_slice(), offset)?;
-        f(scratch.as_slice())
+        self.object.with_bytes::<u8, _, _>(offset, len, scratch, f)
     }
 
     /// Returns immutable user data for this object image.
@@ -184,9 +179,9 @@ impl<'a, D: 'static, L: ElfLayout> ObjectMetadataEvent<'a, D, L> {
     }
 
     fn section_content_range(&self, id: ElfSectionId) -> crate::Result<Option<(usize, usize)>> {
-        let shdr = self.section(id).ok_or_else(|| {
-            crate::ParseEhdrError::malformed_section_headers("section index is out of range")
-        })?;
+        let shdr = self
+            .section(id)
+            .ok_or_else(|| crate::ParseShdrError::malformed("section index is out of range"))?;
         let len = shdr.sh_size();
         if len == 0 || shdr.section_type() == ElfSectionType::NOBITS {
             return Ok(None);

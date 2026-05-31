@@ -9,6 +9,7 @@ use crate::{
     },
     os::{RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, RelocationValueProvider},
+    try_cast_bytes, try_cast_bytes_mut,
 };
 use core::{cell::Cell, marker::PhantomData, mem::size_of};
 
@@ -542,41 +543,15 @@ where
 }
 
 fn cast_section_bytes<T: ByteRepr>(bytes: &[u8]) -> Result<&[T]> {
-    if size_of::<T>() == 0 {
-        return Err(LinkerError::metadata_rewrite(
-            "section bytes do not match the requested type layout",
-        )
-        .into());
-    }
-
-    let (prefix, values, suffix) = unsafe { bytes.align_to::<T>() };
-    if prefix.is_empty() && suffix.is_empty() {
-        Ok(values)
-    } else {
-        Err(
-            LinkerError::metadata_rewrite("section bytes do not match the requested type layout")
-                .into(),
-        )
-    }
+    try_cast_bytes(bytes).ok_or_else(|| {
+        LinkerError::metadata_rewrite("section bytes do not match the requested type layout").into()
+    })
 }
 
 fn cast_section_bytes_mut<T: ByteRepr>(bytes: &mut [u8]) -> Result<&mut [T]> {
-    if size_of::<T>() == 0 {
-        return Err(LinkerError::metadata_rewrite(
-            "section bytes do not match the requested type layout",
-        )
-        .into());
-    }
-
-    let (prefix, values, suffix) = unsafe { bytes.align_to_mut::<T>() };
-    if prefix.is_empty() && suffix.is_empty() {
-        Ok(values)
-    } else {
-        Err(
-            LinkerError::metadata_rewrite("section bytes do not match the requested type layout")
-                .into(),
-        )
-    }
+    try_cast_bytes_mut(bytes).ok_or_else(|| {
+        LinkerError::metadata_rewrite("section bytes do not match the requested type layout").into()
+    })
 }
 
 fn write_retained_relocation<Arch, R>(

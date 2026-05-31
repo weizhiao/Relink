@@ -3,7 +3,7 @@ use crate::{
     input::{ElfReader, Path, PathBuf},
     os::{HostRegion, MadviseAdvice, MapFlags, MappedRegion, Mmap, PageSize, ProtFlags, VmAddr},
 };
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use core::{
     ffi::c_void,
     mem::MaybeUninit,
@@ -14,8 +14,7 @@ use windows_sys::Win32::{
         CloseHandle, GENERIC_EXECUTE, GENERIC_READ, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
     },
     Storage::FileSystem::{
-        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_BEGIN, FILE_SHARE_READ, GetFileSizeEx,
-        OPEN_EXISTING, ReadFile, SetFilePointerEx,
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GetFileSizeEx, OPEN_EXISTING, ReadFile,
     },
     System::Memory::{
         self as Memory, CreateFileMappingW, MEM_COMMIT, MEM_PRESERVE_PLACEHOLDER, MEM_RELEASE,
@@ -24,8 +23,11 @@ use windows_sys::Win32::{
         PAGE_NOACCESS, PAGE_PROTECTION_FLAGS, PAGE_READONLY, PAGE_READWRITE, PAGE_WRITECOPY,
         VirtualFree,
     },
-    System::SystemInformation::{GetSystemInfo, SYSTEM_INFO},
     System::Threading::GetCurrentProcess,
+    System::{
+        IO::{OVERLAPPED, OVERLAPPED_0_0},
+        SystemInformation::{GetSystemInfo, SYSTEM_INFO},
+    },
 };
 
 #[derive(Clone, Copy)]
@@ -347,20 +349,7 @@ impl RawFile {
     }
 }
 
-fn win_seek(handle: HANDLE, offset: usize) -> Result<()> {
-    let distance = offset as i64;
-    let mut new_pos = 0i64;
-
-    let res = unsafe { SetFilePointerEx(handle, distance, &mut new_pos, FILE_BEGIN) };
-
-    if res == 0 || new_pos as usize != offset {
-        let err_code = unsafe { GetLastError() };
-        return Err(IoError::SeekFailed { code: err_code }.into());
-    }
-    Ok(())
-}
-
-fn win_read_exact(handle: HANDLE, mut bytes: &mut [u8]) -> Result<()> {
+fn win_read_exact_at(handle: HANDLE, mut bytes: &mut [u8], mut offset: usize) -> Result<()> {
     loop {
         if bytes.is_empty() {
             return Ok(());
@@ -369,6 +358,11 @@ fn win_read_exact(handle: HANDLE, mut bytes: &mut [u8]) -> Result<()> {
         let bytes_to_read = bytes.len().min(u32::MAX as usize) as u32;
         let ptr = bytes.as_mut_ptr();
         let mut read_count = 0u32;
+        let mut overlapped = OVERLAPPED::default();
+        overlapped.Anonymous.Anonymous = OVERLAPPED_0_0 {
+            Offset: offset as u32,
+            OffsetHigh: (offset >> 32) as u32,
+        };
 
         let result = unsafe {
             ReadFile(
@@ -376,7 +370,7 @@ fn win_read_exact(handle: HANDLE, mut bytes: &mut [u8]) -> Result<()> {
                 ptr as *mut u8,
                 bytes_to_read,
                 &mut read_count,
-                null_mut(),
+                &mut overlapped,
             )
         };
 
@@ -388,6 +382,13 @@ fn win_read_exact(handle: HANDLE, mut bytes: &mut [u8]) -> Result<()> {
         }
 
         let n = read_count as usize;
+        offset = offset.checked_add(n).ok_or_else(|| {
+            IoError::ReadOutOfBounds(Box::new(crate::ReadBoundsError::new(
+                offset,
+                bytes.len(),
+                usize::MAX,
+            )))
+        })?;
         bytes = &mut bytes[n..];
     }
 }
@@ -405,10 +406,8 @@ impl ElfReader for RawFile {
         self.len
     }
 
-    fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
-        win_seek(self.fd as HANDLE, offset)?;
-        win_read_exact(self.fd as HANDLE, buf)?;
-        Ok(())
+    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
+        win_read_exact_at(self.fd as HANDLE, buf, offset)
     }
 
     fn path(&self) -> &Path {

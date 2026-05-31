@@ -5,11 +5,12 @@
 //! file type, and section/program header information.
 
 use crate::{
-    ParseEhdrError, ParsePhdrError, Result,
+    IoError, ParseEhdrError, ParsePhdrError, ParseShdrError, ReadBoundsError, Result,
     elf::{
         ElfClass, ElfEhdrRaw, ElfFileType, ElfLayout, ElfMachine, ElfPhdr, ElfShdr, NativeElfLayout,
     },
 };
+use alloc::boxed::Box;
 use core::mem::size_of;
 use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, EV_CURRENT};
 
@@ -163,68 +164,93 @@ impl<L: ElfLayout> ElfHeader<L> {
     /// Returns the `(start, end)` file offsets of the program header table.
     #[inline]
     pub fn phdr_range(&self) -> (usize, usize) {
-        table_range(self.e_phoff(), self.e_phentsize(), self.e_phnum())
+        let start = self.e_phoff();
+        let end = start + self.e_phentsize() * self.e_phnum();
+        (start, end)
     }
 
     /// Returns the checked `(start, size)` layout for the program header table.
     ///
-    /// This validates entry-size compatibility and overflow-prone arithmetic.
+    /// This validates entry-size compatibility, overflow-prone arithmetic, and
+    /// that the table stays within the object length.
     #[inline]
-    pub(crate) fn checked_phdr_layout(&self) -> Result<Option<(usize, usize)>> {
+    pub(crate) fn checked_phdr_layout(&self, object_len: usize) -> Result<Option<(usize, usize)>> {
+        if self.e_phentsize() != size_of::<ElfPhdr<L>>() {
+            return Err(ParsePhdrError::InvalidEntrySize {
+                expected: size_of::<ElfPhdr<L>>(),
+                found: self.e_phentsize(),
+            }
+            .into());
+        }
+
         checked_table_layout(
             self.e_phentsize(),
-            size_of::<ElfPhdr<L>>(),
             self.e_phnum(),
             self.e_phoff(),
-            || ParsePhdrError::malformed("program header table layout is invalid").into(),
+            object_len,
         )
     }
 
     /// Returns the `(start, end)` file offsets of the section header table.
     #[inline]
     pub fn shdr_range(&self) -> (usize, usize) {
-        table_range(self.e_shoff(), self.e_shentsize(), self.e_shnum())
+        let start = self.e_shoff();
+        let end = start + self.e_shentsize() * self.e_shnum();
+        (start, end)
     }
 
     /// Returns the checked `(start, size)` layout for the section header table.
     ///
-    /// This validates entry-size compatibility and overflow-prone arithmetic.
+    /// This validates entry-size compatibility, overflow-prone arithmetic, and
+    /// that the table stays within the object length.
     #[inline]
     #[cfg_attr(not(feature = "object"), allow(dead_code))]
-    pub(crate) fn checked_shdr_layout(&self) -> Result<Option<(usize, usize)>> {
+    pub(crate) fn checked_shdr_layout(&self, object_len: usize) -> Result<Option<(usize, usize)>> {
+        if self.e_shentsize() != size_of::<ElfShdr<L>>() {
+            return Err(ParseShdrError::InvalidEntrySize {
+                expected: size_of::<ElfShdr<L>>(),
+                found: self.e_shentsize(),
+            }
+            .into());
+        }
+
         checked_table_layout(
             self.e_shentsize(),
-            size_of::<ElfShdr<L>>(),
             self.e_shnum(),
             self.e_shoff(),
-            || ParseEhdrError::MissingSectionHeaders.into(),
+            object_len,
         )
     }
 }
 
 #[inline]
-const fn table_range(offset: usize, entsize: usize, count: usize) -> (usize, usize) {
-    let size = entsize * count;
-    (offset, offset + size)
-}
-
-#[inline]
 fn checked_table_layout(
     entsize: usize,
-    expected_entsize: usize,
     count: usize,
     offset: usize,
-    err: impl Fn() -> crate::Error,
+    object_len: usize,
 ) -> Result<Option<(usize, usize)>> {
-    if entsize != expected_entsize {
-        return Err(err());
-    }
-
-    let size = entsize.checked_mul(count).ok_or_else(&err)?;
+    let size = entsize.checked_mul(count).ok_or_else(|| {
+        IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(
+            offset,
+            usize::MAX,
+            object_len,
+        )))
+    })?;
     if size == 0 {
         return Ok(None);
     }
 
-    offset.checked_add(size).ok_or_else(err)?;
+    if offset
+        .checked_add(size)
+        .filter(|&end| end <= object_len)
+        .is_none()
+    {
+        return Err(IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(
+            offset, size, object_len,
+        )))
+        .into());
+    }
+
     Ok(Some((offset, size)))
 }

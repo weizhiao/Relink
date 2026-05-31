@@ -68,7 +68,7 @@ impl<'bytes> ElfReader for ElfBinary<'bytes> {
     }
 
     /// Reads data from the memory-based ELF object.
-    fn read(&mut self, buf: &mut [u8], offset: usize) -> crate::Result<()> {
+    fn read(&self, buf: &mut [u8], offset: usize) -> crate::Result<()> {
         let bytes = self.bytes.as_ref();
         let range = checked_read_range(offset, buf.len(), bytes.len())?;
         buf.copy_from_slice(&bytes[range]);
@@ -131,7 +131,7 @@ impl ElfReader for ElfFile {
     }
 
     /// Reads data from the file-based ELF object.
-    fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
+    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
         self.inner.read(buf, offset)
     }
 
@@ -157,7 +157,7 @@ impl<'a> ElfReader for &'a [u8] {
     }
 
     /// Reads data from the byte slice at the specified offset.
-    fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
+    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
         let bytes = *self;
         let range = checked_read_range(offset, buf.len(), bytes.len())?;
         buf.copy_from_slice(&bytes[range]);

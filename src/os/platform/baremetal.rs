@@ -129,7 +129,7 @@ impl ElfReader for RawFile {
         todo!()
     }
 
-    fn read(&mut self, _buf: &mut [u8], _offset: usize) -> Result<()> {
+    fn read(&self, _buf: &mut [u8], _offset: usize) -> Result<()> {
         todo!()
     }
 

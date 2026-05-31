@@ -1,8 +1,9 @@
 use crate::{
-    AlignedBytes, ParseEhdrError, ParsePhdrError, Result,
+    AlignedBytes, IoError, ReadBoundsError, Result,
     elf::{Elf32Layout, Elf64Layout, ElfHeader, ElfLayout, ElfMachine, ElfPhdr, ElfShdr},
-    input::ElfReader,
+    input::{ElfReader, ElfReaderExt},
 };
+use alloc::boxed::Box;
 use core::mem::{MaybeUninit, align_of, size_of};
 
 pub(crate) struct ElfBuf {
@@ -24,7 +25,7 @@ impl ElfBuf {
     /// machine check entirely (cross-architecture loading).
     pub(crate) fn prepare_ehdr<L: ElfLayout>(
         &mut self,
-        object: &mut impl ElfReader,
+        object: &impl ElfReader,
         expected_machine: Option<ElfMachine>,
     ) -> Result<ElfHeader<L>> {
         let mut raw = MaybeUninit::<L::Ehdr>::uninit();
@@ -34,65 +35,50 @@ impl ElfBuf {
         ElfHeader::from_raw(unsafe { raw.assume_init() }, expected_machine)
     }
 
-    pub(crate) fn prepare_phdrs<L: ElfLayout>(
-        &mut self,
+    pub(crate) fn prepare_phdrs<'a, L: ElfLayout>(
+        &'a mut self,
         ehdr: &ElfHeader<L>,
-        object: &mut impl ElfReader,
-    ) -> Result<Option<&[ElfPhdr<L>]>> {
-        let Some((start, size)) = ehdr.checked_phdr_layout()? else {
+        object: &'a impl ElfReader,
+    ) -> Result<Option<&'a [ElfPhdr<L>]>> {
+        let Some((start, size)) = ehdr.checked_phdr_layout(object.len())? else {
             return Ok(None);
         };
-        let count = ehdr.e_phnum();
 
-        self.buf.set_len(size).ok_or(ParsePhdrError::malformed(
-            "program header table is too large",
-        ))?;
-        object.read(self.buf.as_bytes_mut(), start)?;
-        let phdrs = self
-            .buf
-            .try_cast_slice::<ElfPhdr<L>>()
-            .ok_or(ParsePhdrError::malformed(
-                "program header table is not aligned",
-            ))?;
-        if phdrs.len() != count {
-            return Err(ParsePhdrError::malformed("program header count mismatch").into());
-        }
+        object.with_bytes::<ElfPhdr<L>, _, _>(start, size, &mut self.buf, |phdrs| Ok(Some(phdrs)))
+    }
 
-        Ok(Some(phdrs))
+    pub(crate) fn prepare_shdrs<'a, L: ElfLayout>(
+        &'a mut self,
+        ehdr: &ElfHeader<L>,
+        object: &'a impl ElfReader,
+    ) -> Result<Option<&'a [ElfShdr<L>]>> {
+        let Some((start, size)) = ehdr.checked_shdr_layout(object.len())? else {
+            return Ok(None);
+        };
+
+        object.with_bytes::<ElfShdr<L>, _, _>(start, size, &mut self.buf, |shdrs| Ok(Some(shdrs)))
     }
 
     #[cfg_attr(not(feature = "object"), allow(dead_code))]
     pub(crate) fn prepare_shdrs_mut<L: ElfLayout>(
         &mut self,
         ehdr: &ElfHeader<L>,
-        object: &mut impl ElfReader,
+        object: &impl ElfReader,
     ) -> Result<Option<&mut [ElfShdr<L>]>> {
-        let Some((start, size)) = ehdr.checked_shdr_layout()? else {
+        let Some((start, size)) = ehdr.checked_shdr_layout(object.len())? else {
             return Ok(None);
         };
-        let count = ehdr.e_shnum();
-        let end = start
-            .checked_add(size)
-            .ok_or_else(|| ParseEhdrError::MissingSectionHeaders)?;
-        if end > object.len() {
-            return Err(ParseEhdrError::malformed_section_headers(
-                "section header table exceeds object length",
-            )
-            .into());
-        }
 
-        self.buf
-            .set_len(size)
-            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
+        self.buf.resize(size).ok_or_else(|| {
+            IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(start, size, object.len())))
+        })?;
         object.read(self.buf.as_bytes_mut(), start)?;
 
-        let shdrs = self
-            .buf
-            .try_cast_slice_mut::<ElfShdr<L>>()
-            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
-        if shdrs.len() != count {
-            return Err(ParseEhdrError::MissingSectionHeaders.into());
-        }
+        let shdrs = self.buf.try_cast_slice_mut::<ElfShdr<L>>().ok_or_else(|| {
+            IoError::ReadBufferNotAligned {
+                align: align_of::<ElfShdr<L>>(),
+            }
+        })?;
 
         Ok(Some(shdrs))
     }

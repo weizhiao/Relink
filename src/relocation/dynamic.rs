@@ -464,9 +464,9 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
             let nrelative = rela_count.map(|v| v.get()).unwrap_or(0);
 
             if nrelative > dynrel.len() {
-                return Err(ParseDynamicError::MalformedRelocationTable {
-                    detail:
-                        "DT_RELCOUNT/DT_RELACOUNT relocation table is malformed: relative relocation count exceeds the relocation table length",
+                return Err(ParseDynamicError::RelativeRelocationCountOutOfRange {
+                    count: nrelative,
+                    table_len: dynrel.len(),
                 }
                 .into());
             }
@@ -481,9 +481,9 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
             let dynrel_len = if pltrel_is_dynrel_tail {
                 // If contiguous, exclude pltrel entries from dynrel
                 temp_dynrel_len.checked_sub(pltrel.len()).ok_or(
-                    ParseDynamicError::MalformedRelocationTable {
-                        detail:
-                            "DT_JMPREL relocation table is malformed: PLT relocations exceed the tail of DT_REL/DT_RELA",
+                    ParseDynamicError::PltRelocationTailOutOfRange {
+                        plt_len: pltrel.len(),
+                        dynrel_tail_len: temp_dynrel_len,
                     },
                 )?
             } else {
@@ -546,7 +546,7 @@ mod tests {
 
         assert!(matches!(
             err,
-            Error::ParseDynamic(ParseDynamicError::MalformedRelocationTable { .. })
+            Error::ParseDynamic(ParseDynamicError::RelativeRelocationCountOutOfRange { .. })
         ));
     }
 
@@ -566,7 +566,7 @@ mod tests {
 
         assert!(matches!(
             err,
-            Error::ParseDynamic(ParseDynamicError::MalformedRelocationTable { .. })
+            Error::ParseDynamic(ParseDynamicError::PltRelocationTailOutOfRange { .. })
         ));
     }
 }

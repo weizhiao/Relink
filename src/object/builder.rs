@@ -213,7 +213,7 @@ where
     pub(crate) fn create_object_builder<Tls>(
         &mut self,
         shdrs: &mut [ElfShdr<Arch::Layout>],
-        mut object: impl crate::input::ElfReader,
+        object: impl crate::input::ElfReader,
         user_data: D,
     ) -> Result<ObjectBuilder<Tls, D, Arch, M::Region>>
     where
@@ -222,8 +222,8 @@ where
         let path = PathBuf::from(object.path());
         let mapper = self.mapper();
         let mut shdr_segments =
-            SectionSegments::<Arch>::new(shdrs, &mut object, self.page_size()?.bytes())?;
-        let segments = shdr_segments.load_segments(mapper, &mut object)?;
+            SectionSegments::<Arch>::new(shdrs, &object, self.page_size()?.bytes())?;
+        let segments = shdr_segments.load_segments(mapper, &object)?;
         let pltgot = shdr_segments.take_pltgot();
         let mprotect =
             Box::new(move |segments: &ElfSegments<M::Region>| shdr_segments.mprotect(segments));

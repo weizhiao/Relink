@@ -1,7 +1,7 @@
 use super::Loader;
 use crate::{
     ParseEhdrError, ParsePhdrError, Result,
-    elf::{ElfDyn, ElfFileType, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType},
+    elf::{ElfDyn, ElfFileType, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, ElfShdr},
     image::{
         RawDylib, RawDynamic, RawDynamicParts, RawElf, RawExec, ScannedDynamic,
         ScannedDynamicLoadParts, ScannedElf, ScannedExec,
@@ -14,7 +14,7 @@ use crate::{
     segment::{ELFRelro, ElfSegments, program::parse_segments},
     tls::TlsResolver,
 };
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
@@ -30,23 +30,32 @@ where
     /// the loader's target architecture with
     /// [`Loader::for_arch`](super::Loader::for_arch) before calling
     /// `load_*`; the gate will then accept ELFs targeting `NewArch::MACHINE`.
-    pub fn read_ehdr(&mut self, object: &mut impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
+    pub fn read_ehdr(&mut self, object: &impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
         self.buf
             .prepare_ehdr::<Arch::Layout>(object, Some(<Arch as RelocationArch>::MACHINE))
     }
 
     /// Reads the program header table.
-    pub fn read_phdr(
-        &mut self,
-        object: &mut impl ElfReader,
+    pub fn read_phdrs<'a>(
+        &'a mut self,
+        object: &'a impl ElfReader,
         ehdr: &ElfHeader<Arch::Layout>,
-    ) -> Result<Option<&[ElfPhdr<Arch::Layout>]>> {
+    ) -> Result<Option<&'a [ElfPhdr<Arch::Layout>]>> {
         self.buf.prepare_phdrs(ehdr, object)
+    }
+
+    /// Reads the section header table.
+    pub fn read_shdrs<'a>(
+        &'a mut self,
+        object: &'a impl ElfReader,
+        ehdr: &ElfHeader<Arch::Layout>,
+    ) -> Result<Option<&'a [ElfShdr<Arch::Layout>]>> {
+        self.buf.prepare_shdrs(ehdr, object)
     }
 
     pub(crate) fn read_expected_ehdr(
         &mut self,
-        object: &mut impl ElfReader,
+        object: &impl ElfReader,
         expected: ExpectedElf,
     ) -> Result<ElfHeader<Arch::Layout>> {
         let ehdr = self.read_ehdr(object)?;
@@ -81,15 +90,13 @@ where
     where
         I: IntoElfReader<'static>,
     {
-        let mut object = input.into_reader()?;
+        let object = input.into_reader()?;
         logging::debug!("Scanning ELF metadata: {}", object.path());
 
-        let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Executable)?;
-        let phdrs = self
-            .buf
-            .prepare_phdrs(&ehdr, &mut object)?
-            .unwrap_or_default();
+        let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Executable)?;
+        let phdrs = self.buf.prepare_phdrs(&ehdr, &object)?.unwrap_or_default();
         let has_dynamic = has_dynamic_phdr(phdrs);
+        let phdrs = Box::from(phdrs);
         let builder = self.inner.create_scan_builder(ehdr, phdrs, object);
 
         if has_dynamic {
@@ -119,8 +126,8 @@ where
         Arch: ObjectRelocationArch,
         I: IntoElfReader<'a>,
     {
-        let mut object = input.into_reader()?;
-        let ehdr = self.read_ehdr(&mut object)?;
+        let object = input.into_reader()?;
+        let ehdr = self.read_ehdr(&object)?;
 
         match ehdr.file_type() {
             ElfFileType::REL => {
@@ -134,18 +141,20 @@ where
                     Err(ParseEhdrError::RelocatableObjectsDisabled.into())
                 }
             }
-            ElfFileType::EXEC => Ok(RawElf::Exec(self.load_exec_from_ehdr(object, ehdr)?)),
+            ElfFileType::EXEC => Ok(RawElf::Exec(self.load_exec_from_ehdr(&object, ehdr)?)),
             ElfFileType::DYN => {
-                let phdrs = self.read_phdr(&mut object, &ehdr)?.unwrap_or_default();
-                let has_dynamic = has_dynamic_phdr(phdrs);
-                let is_pie = phdrs
-                    .iter()
-                    .any(|p| p.program_type() == ElfProgramType::INTERP)
-                    || !has_dynamic;
+                let is_pie = {
+                    let phdrs = self.read_phdrs(&object, &ehdr)?.unwrap_or_default();
+                    let has_dynamic = has_dynamic_phdr(phdrs);
+                    phdrs
+                        .iter()
+                        .any(|p| p.program_type() == ElfProgramType::INTERP)
+                        || !has_dynamic
+                };
                 if is_pie {
-                    Ok(RawElf::Exec(self.load_exec_from_ehdr(object, ehdr)?))
+                    Ok(RawElf::Exec(self.load_exec_from_ehdr(&object, ehdr)?))
                 } else {
-                    let mut dynamic = self.load_dynamic_from_ehdr(object, ehdr)?;
+                    let mut dynamic = self.load_dynamic_from_ehdr(&object, ehdr)?;
                     self.inner
                         .observer
                         .on_dynamic_loaded(DynamicLoadedEvent::new(&mut dynamic))?;
@@ -187,9 +196,9 @@ where
     where
         I: IntoElfReader<'a>,
     {
-        let mut object = input.into_reader()?;
-        let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Dylib)?;
-        let mut dynamic = self.load_dynamic_from_ehdr(object, ehdr)?;
+        let object = input.into_reader()?;
+        let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Dylib)?;
+        let mut dynamic = self.load_dynamic_from_ehdr(&object, ehdr)?;
         self.inner
             .observer
             .on_dynamic_loaded(DynamicLoadedEvent::new(&mut dynamic))?;
@@ -215,11 +224,11 @@ where
     where
         I: IntoElfReader<'a>,
     {
-        let mut object = input.into_reader()?;
+        let object = input.into_reader()?;
         logging::debug!("Loading dynamic image: {}", object.path());
 
-        let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Dynamic)?;
-        let mut image = self.load_dynamic_from_ehdr(object, ehdr)?;
+        let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Dynamic)?;
+        let mut image = self.load_dynamic_from_ehdr(&object, ehdr)?;
         self.inner
             .observer
             .on_dynamic_loaded(DynamicLoadedEvent::new(&mut image))?;
@@ -236,13 +245,10 @@ where
 
     fn load_dynamic_from_ehdr(
         &mut self,
-        mut object: impl ElfReader,
+        object: &impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
     ) -> Result<RawDynamic<D, Arch, M::Region>> {
-        let phdrs = self
-            .buf
-            .prepare_phdrs(&ehdr, &mut object)?
-            .unwrap_or_default();
+        let phdrs = self.buf.prepare_phdrs(&ehdr, object)?.unwrap_or_default();
         if !has_dynamic_phdr(phdrs) {
             return Err(ParsePhdrError::MissingDynamicSection.into());
         }
@@ -291,7 +297,7 @@ where
 
         let builder = self
             .inner
-            .create_builder::<Tls>(ehdr, &phdrs, reader, D::default())?;
+            .create_builder::<Tls>(ehdr, &phdrs, &reader, D::default())?;
         RawDynamic::from_builder(builder, &phdrs)
     }
 
@@ -371,22 +377,19 @@ where
     where
         I: IntoElfReader<'a>,
     {
-        let mut object = input.into_reader()?;
+        let object = input.into_reader()?;
         logging::info!("Loading executable: {}", object.path());
 
-        let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Executable)?;
-        self.load_exec_from_ehdr(object, ehdr)
+        let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Executable)?;
+        self.load_exec_from_ehdr(&object, ehdr)
     }
 
     fn load_exec_from_ehdr(
         &mut self,
-        mut object: impl ElfReader,
+        object: &impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
     ) -> Result<RawExec<D, Arch, M::Region>> {
-        let phdrs = self
-            .buf
-            .prepare_phdrs(&ehdr, &mut object)?
-            .unwrap_or_default();
+        let phdrs = self.buf.prepare_phdrs(&ehdr, object)?.unwrap_or_default();
         let has_dynamic = has_dynamic_phdr(phdrs);
 
         let builder = self
@@ -582,6 +585,10 @@ mod tests {
         bytes: Vec<u8>,
     }
 
+    struct UnalignedBorrowReader {
+        bytes: Vec<u8>,
+    }
+
     impl TestReader {
         fn zeroed(size: usize) -> Self {
             Self {
@@ -599,9 +606,42 @@ mod tests {
             self.bytes.len()
         }
 
-        fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
+        fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
             buf.copy_from_slice(&self.bytes[offset..offset + buf.len()]);
             Ok(())
+        }
+
+        fn as_fd(&self) -> Option<isize> {
+            None
+        }
+    }
+
+    impl UnalignedBorrowReader {
+        fn zeroed(size: usize) -> Self {
+            Self {
+                bytes: alloc::vec![0; size + 1],
+            }
+        }
+    }
+
+    impl ElfReader for UnalignedBorrowReader {
+        fn path(&self) -> &Path {
+            Path::new("<test>")
+        }
+
+        fn len(&self) -> usize {
+            self.bytes.len() - 1
+        }
+
+        fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
+            let offset = offset + 1;
+            buf.copy_from_slice(&self.bytes[offset..offset + buf.len()]);
+            Ok(())
+        }
+
+        fn borrow_bytes(&self, offset: usize, len: usize) -> Result<Option<&[u8]>> {
+            let offset = offset + 1;
+            Ok(Some(&self.bytes[offset..offset + len]))
         }
 
         fn as_fd(&self) -> Option<isize> {
@@ -640,7 +680,38 @@ mod tests {
             .expect_err("phdr entry size mismatch should fail");
         assert!(matches!(
             err,
-            crate::Error::ParsePhdr(crate::ParsePhdrError::Malformed { .. })
+            crate::Error::ParsePhdr(crate::ParsePhdrError::InvalidEntrySize { .. })
         ));
+    }
+
+    #[test]
+    fn prepare_phdrs_rejects_table_past_object_len() {
+        let mut elf_buf = ElfBuf::new();
+        let header = make_header(size_of::<ElfPhdr>(), 2, 0, 0);
+        let mut reader =
+            TestReader::zeroed(<NativeElfLayout as ElfLayout>::EHDR_SIZE + size_of::<ElfPhdr>());
+
+        let err = elf_buf
+            .prepare_phdrs(&header, &mut reader)
+            .expect_err("phdr table past object length should fail");
+        assert!(matches!(
+            err,
+            crate::Error::Io(crate::IoError::ReadOutOfBounds(_))
+        ));
+    }
+
+    #[test]
+    fn prepare_phdrs_falls_back_when_borrow_is_unaligned() {
+        let mut elf_buf = ElfBuf::new();
+        let header = make_header(size_of::<ElfPhdr>(), 1, 0, 0);
+        let reader = UnalignedBorrowReader::zeroed(
+            <NativeElfLayout as ElfLayout>::EHDR_SIZE + size_of::<ElfPhdr>(),
+        );
+
+        let phdrs = elf_buf
+            .prepare_phdrs(&header, &reader)
+            .expect("unaligned borrow should fall back to aligned scratch")
+            .expect("program headers should exist");
+        assert_eq!(phdrs.len(), 1);
     }
 }

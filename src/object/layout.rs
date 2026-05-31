@@ -1,8 +1,8 @@
 use crate::{
-    Result,
+    AlignedBytes, ParseShdrError, Result,
     arch::object::{PLT_ENTRY, PLT_ENTRY_SIZE},
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionType, ElfShdr},
-    input::ElfReader,
+    input::{ElfReader, ElfReaderExt},
     os::{MapFlags, Mmap, ProtFlags, VmAddr, VmOffset, rounddown, roundup},
     relocation::ObjectRelocationArch,
     segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder},
@@ -73,7 +73,7 @@ impl<Arch: ObjectRelocationArch> SegmentBuilder for SectionSegments<Arch> {
 impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
     pub(crate) fn new(
         shdrs: &mut [ElfShdr<Arch::Layout>],
-        object: &mut impl ElfReader,
+        object: &impl ElfReader,
         page_size: usize,
     ) -> Result<Self> {
         let mut units: [SectionUnit<Arch::Layout>; 4] =
@@ -148,37 +148,60 @@ pub(crate) enum PltEntry<'plt> {
 impl PltGotSection {
     fn count_needed_entries<Arch: ObjectRelocationArch>(
         shdrs: &[ElfShdr<Arch::Layout>],
-        object: &mut impl ElfReader,
+        object: &impl ElfReader,
     ) -> Result<(usize, usize)> {
         let mut got_set = HashSet::new();
         let mut plt_set = HashSet::new();
+        let mut scratch =
+            AlignedBytes::with_len(0).expect("failed to initialize relocation buffer");
 
         for shdr in shdrs
             .iter()
             .filter(|s| matches!(s.section_type(), ElfSectionType::REL | ElfSectionType::RELA))
         {
             let size = shdr.sh_size();
-            let entsize = shdr.sh_entsize();
-            if size == 0 || entsize == 0 {
+            if size == 0 {
                 continue;
             }
 
-            let mut buf = alloc::vec![0u8; size];
-            object.read(&mut buf, shdr.sh_offset())?;
-
-            for chunk in buf.chunks_exact(entsize) {
-                let rel_entry =
-                    unsafe { core::ptr::read_unaligned(chunk.as_ptr() as *const ElfRelType<Arch>) };
-                let r_type = rel_entry.r_type();
-                let r_sym = rel_entry.r_symbol();
-
-                if Arch::object_needs_got(r_type) {
-                    got_set.insert(r_sym);
-                }
-                if Arch::object_needs_plt(r_type) {
-                    plt_set.insert(r_sym);
-                }
+            if shdr.section_type() != <ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::SECTION_TYPE
+            {
+                return Err(ParseShdrError::malformed(
+                    "relocation section type does not match target architecture",
+                )
+                .into());
             }
+
+            let expected_entsize = size_of::<ElfRelType<Arch>>();
+            if shdr.sh_entsize() != expected_entsize {
+                return Err(ParseShdrError::malformed("relocation entry size mismatch").into());
+            }
+            if !size.is_multiple_of(expected_entsize) {
+                return Err(ParseShdrError::malformed(
+                    "relocation section size is not a multiple of entry size",
+                )
+                .into());
+            }
+
+            object.with_bytes::<ElfRelType<Arch>, _, _>(
+                shdr.sh_offset(),
+                size,
+                &mut scratch,
+                |relocations| {
+                    for rel_entry in relocations {
+                        let r_type = rel_entry.r_type();
+                        let r_sym = rel_entry.r_symbol();
+
+                        if Arch::object_needs_got(r_type) {
+                            got_set.insert(r_sym);
+                        }
+                        if Arch::object_needs_plt(r_type) {
+                            plt_set.insert(r_sym);
+                        }
+                    }
+                    Ok(())
+                },
+            )?;
         }
 
         Ok((got_set.len() + plt_set.len(), plt_set.len()))

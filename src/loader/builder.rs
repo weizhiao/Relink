@@ -277,7 +277,7 @@ where
         &mut self,
         ehdr: ElfHeader<Arch::Layout>,
         phdrs: &[ElfPhdr<Arch::Layout>],
-        mut object: impl ElfReader,
+        object: &impl ElfReader,
         user_data: D,
     ) -> Result<ImageBuilder<'_, Obs, Tls, D, Arch, M::Region>>
     where
@@ -288,7 +288,7 @@ where
         let page_size = self.page_size()?.bytes();
         let mut phdr_segments =
             ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some(), page_size);
-        let segments = phdr_segments.load_segments(mapper, &mut object)?;
+        let segments = phdr_segments.load_segments(mapper, object)?;
         phdr_segments.mprotect(&segments)?;
 
         Ok(ImageBuilder::new(
@@ -305,11 +305,11 @@ where
     pub(crate) fn create_scan_builder(
         &self,
         ehdr: ElfHeader<Arch::Layout>,
-        phdrs: &[ElfPhdr<Arch::Layout>],
+        phdrs: Box<[ElfPhdr<Arch::Layout>]>,
         object: impl ElfReader + 'static,
     ) -> ScanBuilder<Arch::Layout> {
         let path = PathBuf::from(object.path());
 
-        ScanBuilder::new(path, ehdr, phdrs.into(), Box::new(object))
+        ScanBuilder::new(path, ehdr, phdrs, Box::new(object))
     }
 }

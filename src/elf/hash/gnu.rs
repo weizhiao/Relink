@@ -114,15 +114,15 @@ impl<L: ElfLayout> ElfGnuHash<L> {
         let header = ElfGnuHeader::from_bytes(bytes);
 
         if header.nbloom == 0 {
-            return Err(ParseDynamicError::MalformedHashTable {
-                detail: "DT_GNU_HASH bloom filter is empty",
+            return Err(ParseDynamicError::EmptyHashTable {
+                table: "DT_GNU_HASH bloom filter",
             }
             .into());
         }
 
         if header.nbucket == 0 {
-            return Err(ParseDynamicError::MalformedHashTable {
-                detail: "DT_GNU_HASH bucket table is empty",
+            return Err(ParseDynamicError::EmptyHashTable {
+                table: "DT_GNU_HASH bucket table",
             }
             .into());
         }
@@ -194,8 +194,9 @@ impl<L: ElfLayout> ElfGnuHash<L> {
 
         let symbias = header.symbias as usize;
         if nsym < symbias {
-            return Err(ParseDynamicError::MalformedHashTable {
-                detail: "DT_GNU_HASH bucket index precedes symbol bias",
+            return Err(ParseDynamicError::GnuHashBucketBeforeSymbolBias {
+                bucket_symbol: nsym,
+                symbol_bias: symbias,
             }
             .into());
         }

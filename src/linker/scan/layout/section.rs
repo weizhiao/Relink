@@ -386,7 +386,7 @@ impl SectionRecord {
 
     #[inline]
     fn resize_data(&mut self, byte_len: usize) -> Option<()> {
-        self.data.as_mut()?.set_len(byte_len)?;
+        self.data.as_mut()?.resize(byte_len)?;
         self.metadata.set_size(byte_len);
         self.clear_placement();
         Some(())

@@ -1,5 +1,5 @@
 use crate::{
-    ParseEhdrError, Result,
+    ParseShdrError, Result,
     elf::{ElfHeader, ElfLayout, ElfSectionType, ElfShdr},
     image::RawObject,
     input::{ElfReader, ElfReaderExt, IntoElfReader},
@@ -33,24 +33,24 @@ where
     where
         I: IntoElfReader<'a>,
     {
-        let mut object = input.into_reader()?;
+        let object = input.into_reader()?;
         logging::debug!("Loading object: {}", object.path());
 
-        let ehdr = self.read_expected_ehdr(&mut object, ExpectedElf::Relocatable)?;
+        let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Relocatable)?;
         self.load_object_from_ehdr(object, ehdr)
     }
 
     pub(crate) fn load_object_from_ehdr(
         &mut self,
-        mut object: impl ElfReader,
+        object: impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
     ) -> Result<RawObject<D, Arch, M::Region>> {
         let shdrs = self
             .buf
-            .prepare_shdrs_mut(&ehdr, &mut object)?
-            .ok_or(ParseEhdrError::MissingSectionHeaders)?;
-        validate_object_shdrs(&ehdr, shdrs, &mut object)?;
-        let shstrtab = read_section_name_table(&ehdr, shdrs, &mut object)?;
+            .prepare_shdrs_mut(&ehdr, &object)?
+            .ok_or(ParseShdrError::MissingSectionHeaders)?;
+        validate_object_shdrs(&ehdr, shdrs, &object)?;
+        let shstrtab = read_section_name_table(&ehdr, shdrs, &object)?;
         let mut user_data = D::default();
         self.inner
             .observer
@@ -58,7 +58,7 @@ where
                 &ehdr,
                 shdrs,
                 &shstrtab,
-                &mut object,
+                &object,
                 &mut user_data,
             ))?;
         let builder = self
@@ -80,43 +80,39 @@ where
 fn read_section_name_table<L: ElfLayout>(
     ehdr: &ElfHeader<L>,
     shdrs: &[ElfShdr<L>],
-    object: &mut impl ElfReader,
+    object: &impl ElfReader,
 ) -> Result<alloc::vec::Vec<u8>> {
     let shstrtab = shdrs
         .get(ehdr.e_shstrndx())
-        .ok_or_else(|| ParseEhdrError::malformed_section_headers("e_shstrndx is out of range"))?;
+        .ok_or_else(|| ParseShdrError::malformed("e_shstrndx is out of range"))?;
     object.read_to_vec(shstrtab.sh_offset(), shstrtab.sh_size())
 }
 
 fn validate_object_shdrs<L: ElfLayout>(
     ehdr: &ElfHeader<L>,
     shdrs: &[ElfShdr<L>],
-    object: &mut impl ElfReader,
+    object: &impl ElfReader,
 ) -> Result<()> {
-    let first = shdrs.first().ok_or(ParseEhdrError::MissingSectionHeaders)?;
+    let first = shdrs.first().ok_or(ParseShdrError::MissingSectionHeaders)?;
     if first.section_type() != ElfSectionType::NULL || first.sh_size() != 0 {
-        return Err(ParseEhdrError::malformed_section_headers(
-            "section 0 must be an empty SHT_NULL section",
-        )
-        .into());
+        return Err(
+            ParseShdrError::malformed("section 0 must be an empty SHT_NULL section").into(),
+        );
     }
 
     let shstrtab = shdrs
         .get(ehdr.e_shstrndx())
-        .ok_or_else(|| ParseEhdrError::malformed_section_headers("e_shstrndx is out of range"))?;
+        .ok_or_else(|| ParseShdrError::malformed("e_shstrndx is out of range"))?;
     let shstrtab_size = shstrtab.sh_size();
     if shstrtab_size == 0 {
-        return Err(ParseEhdrError::malformed_section_headers(
-            "section name string table is empty",
-        )
-        .into());
+        return Err(ParseShdrError::malformed("section name string table is empty").into());
     }
     for shdr in shdrs.iter() {
         if shdr.section_type() == ElfSectionType::NULL {
             continue;
         }
         if shdr.sh_name() as usize >= shstrtab_size {
-            return Err(ParseEhdrError::malformed_section_headers(
+            return Err(ParseShdrError::malformed(
                 "section name offset exceeds section name string table",
             )
             .into());
@@ -131,30 +127,22 @@ fn validate_object_shdrs<L: ElfLayout>(
         let end = shdr
             .sh_offset()
             .checked_add(shdr.sh_size())
-            .ok_or_else(|| {
-                ParseEhdrError::malformed_section_headers("section content range overflows")
-            })?;
+            .ok_or_else(|| ParseShdrError::malformed("section content range overflows"))?;
         if end > object_len {
-            return Err(ParseEhdrError::malformed_section_headers(
-                "section content exceeds object length",
-            )
-            .into());
+            return Err(ParseShdrError::malformed("section content exceeds object length").into());
         }
     }
 
     let last = shstrtab
         .sh_offset()
         .checked_add(shstrtab_size - 1)
-        .ok_or_else(|| {
-            ParseEhdrError::malformed_section_headers("section name string table range overflows")
-        })?;
+        .ok_or_else(|| ParseShdrError::malformed("section name string table range overflows"))?;
     let mut last_byte = [0];
     object.read(&mut last_byte, last)?;
     if last_byte[0] != 0 {
-        return Err(ParseEhdrError::malformed_section_headers(
-            "section name string table must end with NUL",
-        )
-        .into());
+        return Err(
+            ParseShdrError::malformed("section name string table must end with NUL").into(),
+        );
     }
 
     Ok(())
@@ -247,7 +235,7 @@ mod tests {
             self.bytes.len()
         }
 
-        fn read(&mut self, buf: &mut [u8], offset: usize) -> Result<()> {
+        fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
             buf.copy_from_slice(&self.bytes[offset..offset + buf.len()]);
             Ok(())
         }
@@ -343,7 +331,7 @@ mod tests {
             .expect_err("shdr entry size mismatch should fail");
         assert!(matches!(
             err,
-            crate::Error::ParseEhdr(crate::ParseEhdrError::MissingSectionHeaders)
+            crate::Error::ParseShdr(crate::ParseShdrError::InvalidEntrySize { .. })
         ));
     }
 
@@ -359,7 +347,7 @@ mod tests {
             .expect_err("shdr table past object length should fail");
         assert!(matches!(
             err,
-            crate::Error::ParseEhdr(crate::ParseEhdrError::MalformedSectionHeaders { .. })
+            crate::Error::Io(crate::IoError::ReadOutOfBounds(_))
         ));
     }
 
@@ -420,8 +408,8 @@ mod tests {
         let result = loader.load_object(ElfBinary::owned("bad.o", bytes));
         assert!(matches!(
             result,
-            Err(crate::Error::ParseEhdr(
-                crate::ParseEhdrError::MalformedSectionHeaders { .. }
+            Err(crate::Error::ParseShdr(
+                crate::ParseShdrError::Malformed { .. }
             ))
         ));
     }
@@ -435,8 +423,8 @@ mod tests {
         ));
         assert!(matches!(
             result,
-            Err(crate::Error::ParseEhdr(
-                crate::ParseEhdrError::MalformedSectionHeaders { .. }
+            Err(crate::Error::ParseShdr(
+                crate::ParseShdrError::Malformed { .. }
             ))
         ));
     }
@@ -448,8 +436,8 @@ mod tests {
             loader.load_object(ElfBinary::owned("bad.o", make_two_section_object(b"\0", 1)));
         assert!(matches!(
             result,
-            Err(crate::Error::ParseEhdr(
-                crate::ParseEhdrError::MalformedSectionHeaders { .. }
+            Err(crate::Error::ParseShdr(
+                crate::ParseShdrError::Malformed { .. }
             ))
         ));
     }

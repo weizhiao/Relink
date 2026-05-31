@@ -26,20 +26,23 @@ struct DynamicScanParts {
 }
 
 impl DynamicScanParts {
-    fn new<L: ElfLayout>(object: &mut dyn ElfReader, phdrs: &[ElfPhdr<L>]) -> Result<Self> {
+    fn new<L: ElfLayout>(object: &dyn ElfReader, phdrs: &[ElfPhdr<L>]) -> Result<Self> {
         let dynamic_phdr = phdrs
             .iter()
             .find(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
             .ok_or(ParsePhdrError::MissingDynamicSection)?;
-        if dynamic_phdr.p_filesz() % size_of::<ElfDyn<L>>() != 0 {
-            return Err(
-                ParsePhdrError::malformed("PT_DYNAMIC size is not a multiple of ElfDyn").into(),
-            );
+        let dynamic_entry_size = size_of::<ElfDyn<L>>();
+        if dynamic_phdr.p_filesz() % dynamic_entry_size != 0 {
+            return Err(ParseDynamicError::InvalidDynamicTableSize {
+                size: dynamic_phdr.p_filesz(),
+                entry_size: dynamic_entry_size,
+            }
+            .into());
         }
 
         let dyns = object.read_to_vec::<ElfDyn<L>>(
             dynamic_phdr.p_offset(),
-            dynamic_phdr.p_filesz() / core::mem::size_of::<ElfDyn<L>>(),
+            dynamic_phdr.p_filesz() / dynamic_entry_size,
         )?;
         let parsed = parse_dynamic_entries(
             dyns.into_iter()
@@ -87,12 +90,12 @@ struct SectionTable<L: ElfLayout = NativeElfLayout> {
 }
 
 impl<L: ElfLayout> SectionTable<L> {
-    fn new(object: &mut dyn ElfReader, ehdr: &ElfHeader<L>) -> Result<Option<Self>> {
+    fn new(object: &dyn ElfReader, ehdr: &ElfHeader<L>) -> Result<Option<Self>> {
         if ehdr.e_shnum() == 0 {
             return Ok(None);
         }
 
-        let Some((start, _)) = ehdr.checked_shdr_layout()? else {
+        let Some((start, _)) = ehdr.checked_shdr_layout(object.len())? else {
             return Ok(None);
         };
 
@@ -755,7 +758,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     #[inline]
     fn read_bytes(&mut self, offset: usize, len: usize) -> Result<AlignedBytes> {
         let mut bytes = AlignedBytes::with_len(len).ok_or(ParseDynamicError::AddressOverflow)?;
-        self.reader.read_slice(bytes.as_mut(), offset)?;
+        self.reader.read(bytes.as_mut(), offset)?;
         Ok(bytes)
     }
 
@@ -903,7 +906,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
     #[allow(dead_code)]
     fn read_bytes(&mut self, offset: usize, len: usize) -> Result<AlignedBytes> {
         let mut bytes = AlignedBytes::with_len(len).ok_or(ParseDynamicError::AddressOverflow)?;
-        self.reader.read_slice(bytes.as_mut(), offset)?;
+        self.reader.read(bytes.as_mut(), offset)?;
         Ok(bytes)
     }
 }
@@ -929,7 +932,7 @@ fn classify_module_capability<L: ElfLayout>(sections: &[ElfShdr<L>]) -> ModuleCa
 }
 
 fn read_interp<L: ElfLayout>(
-    object: &mut dyn ElfReader,
+    object: &dyn ElfReader,
     phdrs: &[ElfPhdr<L>],
 ) -> Result<Option<Box<[u8]>>> {
     let Some(interp) = phdrs
