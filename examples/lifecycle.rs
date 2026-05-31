@@ -18,9 +18,9 @@ impl RelocationObserver for LifecycleLogger {
 
         println!("{label} lifecycle hook called!");
         let mut count = 0;
-        for ptr in event.func_addrs() {
+        for addr in event.lifecycle().func_addrs() {
             count += 1;
-            println!("{label} function at {:p}", ptr.as_ptr());
+            println!("{label} function at {addr}");
         }
         if count != 0 {
             println!("{label} lifecycle has {count} functions");

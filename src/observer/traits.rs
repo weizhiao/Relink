@@ -101,7 +101,8 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
 
     /// Called after a dynamic image has been relocated and registered.
     ///
-    /// Implementations may install a per-module unload hook on the event.
+    /// Implementations may adjust the retained finalizer before it is stored
+    /// with the relocated image.
     #[inline]
     fn on_module_relocated<D: 'static, R: RegionAccess>(
         &mut self,

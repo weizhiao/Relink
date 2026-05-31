@@ -314,7 +314,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             )
         };
         observer.on_lifecycle(&mut event)?;
-        event.run();
+        event.run()?;
         Ok(())
     }
 
@@ -463,9 +463,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                     is_init: AtomicBool::new(false),
                     path,
                     symtab,
-                    fini: OnceCell::new(),
-                    fini_executor: OnceCell::new(),
-                    unload_hook: OnceCell::new(),
+                    finalizer: OnceCell::new(),
                     user_data,
                     dynamic_info: Some(Arc::new(DynamicInfo {
                         eh_frame_hdr,

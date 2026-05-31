@@ -1,16 +1,15 @@
+use super::lifecycle::{CodeExecutor, Finalizer, LifecycleEvent};
 use crate::{
     Result,
     arch::NativeArch,
-    elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol, HashTable},
-    image::{CoreInner, ElfCore},
+    elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol, HashTable, Lifecycle},
+    image::ElfCore,
     input::Path,
     os::{HostRegion, RegionAccess, VmAddr},
     relocation::{RelocValue, RelocationArch},
     segment::ElfSegments,
-    sync::Arc,
     tls::{TlsModuleId, TlsTpOffset},
 };
-use alloc::boxed::Box;
 use core::marker::PhantomData;
 
 /// Runtime linker state change notification.
@@ -405,16 +404,20 @@ pub struct ModuleRelocatedEvent<
 > {
     core: &'a ElfCore<D, Arch, R>,
     dynamic_addr: VmAddr,
-    unload_hook: Option<SharedModuleUnloadHook<D, Arch, R>>,
+    finalizer: Option<Finalizer<R>>,
 }
 
 impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleRelocatedEvent<'a, D, Arch, R> {
     #[inline]
-    pub(crate) const fn new(core: &'a ElfCore<D, Arch, R>, dynamic_addr: VmAddr) -> Self {
+    pub(crate) const fn new(
+        core: &'a ElfCore<D, Arch, R>,
+        dynamic_addr: VmAddr,
+        finalizer: Option<Finalizer<R>>,
+    ) -> Self {
         Self {
             core,
             dynamic_addr,
-            unload_hook: None,
+            finalizer,
         }
     }
 
@@ -448,85 +451,49 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleRelocatedEvent
         self.dynamic_addr
     }
 
-    /// Installs a callback that will run when this module is dropped.
-    ///
-    /// The original relocation observer is usually gone by then, so unload
-    /// handling is represented as a per-module hook captured during load.
+    /// Returns the finalization lifecycle that will be run when the initialized
+    /// image is dropped.
     #[inline]
-    pub fn set_unload_hook<F>(&mut self, hook: F)
+    pub fn fini(&self) -> Option<&Lifecycle> {
+        self.finalizer.as_ref().map(Finalizer::lifecycle)
+    }
+
+    /// Returns mutable finalization lifecycle addresses.
+    #[inline]
+    pub fn fini_mut(&mut self) -> Option<&mut Lifecycle> {
+        self.finalizer.as_mut().map(Finalizer::lifecycle_mut)
+    }
+
+    /// Replaces the executor used to run finalization functions.
+    #[inline]
+    pub fn set_fini_executor<E>(&mut self, executor: E)
     where
-        F: for<'unload> Fn(ModuleUnloadEvent<'unload, D, Arch, R>) -> Result<()>
-            + Send
-            + Sync
-            + 'static,
+        E: CodeExecutor<R>,
     {
-        self.unload_hook = Some(Arc::from(Box::new(hook)
-            as Box<
-                dyn for<'unload> Fn(ModuleUnloadEvent<'unload, D, Arch, R>) -> Result<()>
-                    + Send
-                    + Sync,
-            >));
+        if let Some(finalizer) = &mut self.finalizer {
+            finalizer.set_executor(executor);
+        }
+    }
+
+    /// Installs a hook that runs immediately before finalization functions.
+    #[inline]
+    pub fn set_fini_hook<F>(&mut self, hook: F)
+    where
+        F: for<'event> Fn(&mut LifecycleEvent<'event, R>) -> Result<()> + Send + Sync + 'static,
+    {
+        if let Some(finalizer) = &mut self.finalizer {
+            finalizer.set_hook(hook);
+        }
+    }
+
+    /// Prevents finalization functions from being run when the image is dropped.
+    #[inline]
+    pub fn disable_fini(&mut self) {
+        self.finalizer = None;
     }
 
     #[inline]
-    pub(crate) fn into_unload_hook(self) -> Option<SharedModuleUnloadHook<D, Arch, R>> {
-        self.unload_hook
-    }
-}
-
-pub(crate) type SharedModuleUnloadHook<
-    D,
-    Arch = NativeArch,
-    R = HostRegion,
-    H = HashTable<<Arch as RelocationArch>::Layout>,
-> = Arc<dyn for<'a> Fn(ModuleUnloadEvent<'a, D, Arch, R, H>) -> Result<()> + Send + Sync>;
-
-/// Module-level event emitted when a loaded image is being dropped.
-pub struct ModuleUnloadEvent<
-    'a,
-    D: 'static,
-    Arch: RelocationArch = NativeArch,
-    R: RegionAccess = HostRegion,
-    H = HashTable<<Arch as RelocationArch>::Layout>,
-> {
-    core: &'a CoreInner<D, Arch, R, H>,
-}
-
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
-    ModuleUnloadEvent<'a, D, Arch, R, H>
-{
-    #[inline]
-    pub(crate) const fn new(core: &'a CoreInner<D, Arch, R, H>) -> Self {
-        Self { core }
-    }
-
-    /// Returns the loader source path or caller-provided source identifier.
-    #[inline]
-    pub fn path(&self) -> &Path {
-        &self.core.path
-    }
-
-    /// Returns the module identity used for diagnostics.
-    #[inline]
-    pub fn name(&self) -> &str {
-        self.core.name()
-    }
-
-    /// Returns the load base used by this image.
-    #[inline]
-    pub fn base(&self) -> VmAddr {
-        self.core.segments.base()
-    }
-
-    /// Returns the mapped segments that are still available during unload.
-    #[inline]
-    pub const fn segments(&self) -> &'a ElfSegments<R> {
-        &self.core.segments
-    }
-
-    /// Returns the module user data.
-    #[inline]
-    pub const fn user_data(&self) -> &'a D {
-        &self.core.user_data
+    pub(crate) fn into_finalizer(self) -> Option<Finalizer<R>> {
+        self.finalizer
     }
 }

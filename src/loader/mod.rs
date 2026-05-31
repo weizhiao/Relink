@@ -7,7 +7,7 @@
 //! It also exposes the main customization points used during loading:
 //!
 //! - [`crate::observer::LoadObserver`] for observing program headers and loaded dynamic images
-//! - [`crate::observer::RelocationObserver`] lifecycle events for customizing `.init` / `.fini`
+//! - [`crate::observer::RelocationObserver`] events for lifecycle and relocation customization
 //! - `with_data` for selecting dynamic-image user data
 //! - `with_*` builder methods for swapping the memory-mapping backend or TLS resolver
 

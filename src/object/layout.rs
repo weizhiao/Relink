@@ -1,5 +1,5 @@
 use crate::{
-    AlignedBytes, ParseShdrError, Result,
+    AlignedBytes, Result,
     arch::object::{PLT_ENTRY, PLT_ENTRY_SIZE},
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionType, ElfShdr},
     input::{ElfReader, ElfReaderExt},
@@ -162,25 +162,6 @@ impl PltGotSection {
             let size = shdr.sh_size();
             if size == 0 {
                 continue;
-            }
-
-            if shdr.section_type() != <ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::SECTION_TYPE
-            {
-                return Err(ParseShdrError::malformed(
-                    "relocation section type does not match target architecture",
-                )
-                .into());
-            }
-
-            let expected_entsize = size_of::<ElfRelType<Arch>>();
-            if shdr.sh_entsize() != expected_entsize {
-                return Err(ParseShdrError::malformed("relocation entry size mismatch").into());
-            }
-            if !size.is_multiple_of(expected_entsize) {
-                return Err(ParseShdrError::malformed(
-                    "relocation section size is not a multiple of entry size",
-                )
-                .into());
             }
 
             object.with_bytes::<ElfRelType<Arch>, _, _>(

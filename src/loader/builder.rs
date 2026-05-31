@@ -239,7 +239,9 @@ where
             }
         }
 
-        let (phdr_start, phdr_end) = self.ehdr.phdr_range();
+        let Some((phdr_start, phdr_end)) = self.ehdr.phdr_range()? else {
+            return Ok(ElfPhdrs::Vec(Vec::from(phdrs)));
+        };
         let phdr_size = phdr_end - phdr_start;
         for phdr in phdrs {
             if phdr.program_type() != ElfProgramType::LOAD {

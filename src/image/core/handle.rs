@@ -2,12 +2,12 @@ use super::CoreInner;
 use crate::{
     Result,
     elf::{
-        ElfDyn, ElfDynamic, ElfHashTable, ElfPhdr, ElfPhdrs, ElfSymbol, HashTable, Lifecycle,
-        PreCompute, SymbolInfo, SymbolTable,
+        ElfDyn, ElfDynamic, ElfHashTable, ElfPhdr, ElfPhdrs, ElfSymbol, HashTable, PreCompute,
+        SymbolInfo, SymbolTable,
     },
     image::{DynamicInfo, Module},
     input::{Path, PathBuf},
-    observer::{SharedLifecycleExecutor, SharedModuleUnloadHook},
+    observer::Finalizer,
     os::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::ElfSegments,
@@ -228,23 +228,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> ElfCore<D, Arch, R, H
         self.inner.tls.set_desc_args(args);
     }
 
-    /// Sets the finalization lifecycle.
-    pub(crate) fn set_fini(&self, fini: Lifecycle, executor: SharedLifecycleExecutor<R>) {
+    /// Sets the finalizer that will run when the initialized image is dropped.
+    pub(crate) fn set_finalizer(&self, finalizer: Finalizer<R>) {
         assert!(
-            self.inner.fini.set(fini).is_ok(),
-            "finalization lifecycle must be set only once",
-        );
-        assert!(
-            self.inner.fini_executor.set(executor).is_ok(),
-            "finalization executor must be set only once",
-        );
-    }
-
-    /// Sets the unload hook installed by the relocation observer.
-    pub(crate) fn set_unload_hook(&self, hook: SharedModuleUnloadHook<D, Arch, R, H>) {
-        assert!(
-            self.inner.unload_hook.set(hook).is_ok(),
-            "module unload hook must be set only once",
+            self.inner.finalizer.set(finalizer).is_ok(),
+            "finalizer must be set only once",
         );
     }
 }
@@ -287,9 +275,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess>
                 })),
                 tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_get_addr, tls_unregister),
                 segments,
-                fini: OnceCell::new(),
-                fini_executor: OnceCell::new(),
-                unload_hook: OnceCell::new(),
+                finalizer: OnceCell::new(),
                 user_data,
             }),
         })

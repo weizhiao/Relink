@@ -89,8 +89,11 @@ pub(crate) trait ElfReaderExt: ElfReader {
     fn read_to_vec<T: ByteRepr>(&self, offset: usize, count: usize) -> Result<Vec<T>> {
         let byte_len = count
             .checked_mul(size_of::<T>())
-            .expect("ElfReaderExt::read_to_vec length overflow");
-        let mut values = Vec::<MaybeUninit<T>>::with_capacity(count);
+            .ok_or(IoError::ReadBufferTooLarge)?;
+        let mut values = Vec::<MaybeUninit<T>>::new();
+        values
+            .try_reserve_exact(count)
+            .map_err(|_| IoError::OutOfMemory)?;
         unsafe {
             values.set_len(count);
         }

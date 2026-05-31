@@ -163,10 +163,8 @@ impl<L: ElfLayout> ElfHeader<L> {
 
     /// Returns the `(start, end)` file offsets of the program header table.
     #[inline]
-    pub fn phdr_range(&self) -> (usize, usize) {
-        let start = self.e_phoff();
-        let end = start + self.e_phentsize() * self.e_phnum();
-        (start, end)
+    pub fn phdr_range(&self) -> Result<Option<(usize, usize)>> {
+        checked_table_range(self.e_phentsize(), self.e_phnum(), self.e_phoff())
     }
 
     /// Returns the checked `(start, size)` layout for the program header table.
@@ -193,10 +191,8 @@ impl<L: ElfLayout> ElfHeader<L> {
 
     /// Returns the `(start, end)` file offsets of the section header table.
     #[inline]
-    pub fn shdr_range(&self) -> (usize, usize) {
-        let start = self.e_shoff();
-        let end = start + self.e_shentsize() * self.e_shnum();
-        (start, end)
+    pub fn shdr_range(&self) -> Result<Option<(usize, usize)>> {
+        checked_table_range(self.e_shentsize(), self.e_shnum(), self.e_shoff())
     }
 
     /// Returns the checked `(start, size)` layout for the section header table.
@@ -230,22 +226,12 @@ fn checked_table_layout(
     offset: usize,
     object_len: usize,
 ) -> Result<Option<(usize, usize)>> {
-    let size = entsize.checked_mul(count).ok_or_else(|| {
-        IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(
-            offset,
-            usize::MAX,
-            object_len,
-        )))
-    })?;
-    if size == 0 {
+    let Some((offset, end)) = checked_table_range(entsize, count, offset)? else {
         return Ok(None);
-    }
+    };
+    let size = end - offset;
 
-    if offset
-        .checked_add(size)
-        .filter(|&end| end <= object_len)
-        .is_none()
-    {
+    if end > object_len {
         return Err(IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(
             offset, size, object_len,
         )))
@@ -253,4 +239,23 @@ fn checked_table_layout(
     }
 
     Ok(Some((offset, size)))
+}
+
+#[inline]
+fn checked_table_range(
+    entsize: usize,
+    count: usize,
+    offset: usize,
+) -> Result<Option<(usize, usize)>> {
+    let size = entsize
+        .checked_mul(count)
+        .ok_or(IoError::ReadBufferTooLarge)?;
+    if size == 0 {
+        return Ok(None);
+    }
+
+    let end = offset
+        .checked_add(size)
+        .ok_or(IoError::ReadBufferTooLarge)?;
+    Ok(Some((offset, end)))
 }

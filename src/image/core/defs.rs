@@ -1,12 +1,9 @@
 use crate::{
-    elf::{HashTable, Lifecycle, SymbolTable},
+    elf::{HashTable, SymbolTable},
     image::DynamicInfo,
     input::PathBuf,
     logging,
-    observer::{
-        LifecycleEvent, LifecyclePhase, ModuleUnloadEvent, SharedLifecycleExecutor,
-        SharedModuleUnloadHook,
-    },
+    observer::{Finalizer, LifecyclePhase},
     os::{HostRegion, RegionAccess},
     relocation::RelocationArch,
     segment::ElfSegments,
@@ -32,14 +29,8 @@ pub(crate) struct CoreInner<
     /// ELF symbols table
     pub(crate) symtab: SymbolTable<Arch::Layout, H>,
 
-    /// Finalization functions resolved during relocation.
-    pub(crate) fini: OnceCell<Lifecycle>,
-
-    /// Native finalization executor.
-    pub(crate) fini_executor: OnceCell<SharedLifecycleExecutor<R>>,
-
-    /// Optional callback installed by the relocation observer for unload.
-    pub(crate) unload_hook: OnceCell<SharedModuleUnloadHook<D, Arch, R, H>>,
+    /// Finalization behavior resolved during relocation.
+    pub(crate) finalizer: OnceCell<Finalizer<R>>,
 
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
@@ -68,28 +59,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Drop for CoreInner<D,
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed)
-            && let Some(fini) = self.fini.get()
+            && let Some(finalizer) = self.finalizer.take()
         {
-            let executor = self
-                .fini_executor
-                .get()
-                .expect("finalization executor must be set with finalization lifecycle")
-                .clone();
             let name = self.name();
-            let mut event = LifecycleEvent::with_executor(
-                LifecyclePhase::Fini,
-                name,
-                fini,
-                &self.segments,
-                executor,
-            );
-            event.run();
-        }
-        if let Some(unload_hook) = self.unload_hook.get() {
-            let name = self.name();
-            let event = ModuleUnloadEvent::new(self);
-            if let Err(err) = unload_hook(event) {
-                logging::error!("module unload hook failed for {}: {err}", name);
+            if let Err(err) = finalizer.run(LifecyclePhase::Fini, name, &self.segments) {
+                logging::error!("finalization lifecycle failed for {}: {err}", name);
             }
         }
         self.tls.cleanup();

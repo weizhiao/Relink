@@ -5,7 +5,7 @@ use crate::{
     image::{LoadedCore, RawDynamic},
     logging,
     observer::{
-        LifecycleEvent, LifecyclePhase, LinkActivity, ModuleRelocatedEvent, RelocationObserver,
+        Finalizer, LinkActivity, ModuleRelocatedEvent, RelocationObserver,
         default_lifecycle_executor, noop_lifecycle_executor,
     },
     os::{MappedView, RegionAccess, VmAddr, VmOffset},
@@ -95,27 +95,12 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         self.core_ref().set_tls_desc_args(tls_desc_args);
 
         let (init, fini) = self.resolve_lifecycle()?;
-        let mut fini_event = if Arch::SUPPORTS_NATIVE_RUNTIME {
-            LifecycleEvent::with_executor(
-                LifecyclePhase::Fini,
-                self.name(),
-                &fini,
-                self.core_ref().segments(),
-                default_lifecycle_executor(),
-            )
+        let fini_executor = if Arch::SUPPORTS_NATIVE_RUNTIME {
+            default_lifecycle_executor()
         } else {
-            LifecycleEvent::with_executor(
-                LifecyclePhase::Fini,
-                self.name(),
-                &fini,
-                self.core_ref().segments(),
-                noop_lifecycle_executor(),
-            )
+            noop_lifecycle_executor()
         };
-        observer.on_lifecycle(&mut fini_event)?;
-        let fini_executor = fini_event.executor();
-        self.core_ref()
-            .set_fini(fini_event.into_lifecycle(), fini_executor);
+        let finalizer = Some(Finalizer::new(fini, fini_executor));
 
         let dep_names = scope
             .iter()
@@ -128,10 +113,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
         self.apply_relro(&binding)?;
         self.install_lazy_lookup(binding, scope.clone())?;
-        let mut module_event = ModuleRelocatedEvent::new(self.core_ref(), self.dynamic_addr());
+        let mut module_event =
+            ModuleRelocatedEvent::new(self.core_ref(), self.dynamic_addr(), finalizer);
         observer.on_module_relocated(&mut module_event)?;
-        if let Some(unload_hook) = module_event.into_unload_hook() {
-            self.core_ref().set_unload_hook(unload_hook);
+        if let Some(finalizer) = module_event.into_finalizer() {
+            self.core_ref().set_finalizer(finalizer);
         }
         observer.on_activity(LinkActivity::Consistent)?;
 

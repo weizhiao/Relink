@@ -3,7 +3,7 @@ use super::{
     layout::{PltGotSection, SectionSegments},
 };
 use crate::{
-    RelocationError, Result,
+    ParseShdrError, RelocationError, Result,
     elf::{
         ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr, ElfSymbol, ElfSymbolType, Lifecycle,
         SymbolTable,
@@ -17,7 +17,7 @@ use crate::{
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::marker::PhantomData;
+use core::{marker::PhantomData, mem::size_of};
 
 /// Builder for creating relocatable ELF objects.
 pub(crate) struct ObjectBuilder<
@@ -78,14 +78,24 @@ where
             ElfSectionType::REL | ElfSectionType::RELA
         ));
 
-        debug_assert_eq!(
-            shdr.section_type(),
-            <ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::SECTION_TYPE
-        );
+        if shdr.section_type() != <ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::SECTION_TYPE {
+            return Err(ParseShdrError::malformed(
+                "relocation section type does not match target architecture",
+            )
+            .into());
+        }
 
-        let expected = core::mem::size_of::<ElfRelType<Arch>>();
+        let expected = size_of::<ElfRelType<Arch>>();
         let found = shdr.sh_entsize();
-        debug_assert_eq!(found, expected);
+        if found != expected {
+            return Err(ParseShdrError::malformed("relocation entry size mismatch").into());
+        }
+        if !shdr.sh_size().is_multiple_of(expected) {
+            return Err(ParseShdrError::malformed(
+                "relocation section size is not a multiple of entry size",
+            )
+            .into());
+        }
 
         Ok(())
     }
@@ -177,7 +187,6 @@ where
         mut pltgot: PltGotSection,
         user_data: D,
     ) -> Result<Self> {
-        Self::validate_shdrs(shdrs)?;
         let base = segments.base();
         Self::rebase_loaded_sections(shdrs, &mut pltgot, base);
         let ObjectSectionData {
@@ -221,6 +230,7 @@ where
     {
         let path = PathBuf::from(object.path());
         let mapper = self.mapper();
+        ObjectBuilder::<Tls, D, Arch, M::Region>::validate_shdrs(shdrs)?;
         let mut shdr_segments =
             SectionSegments::<Arch>::new(shdrs, &object, self.page_size()?.bytes())?;
         let segments = shdr_segments.load_segments(mapper, &object)?;

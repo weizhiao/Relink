@@ -37,6 +37,10 @@ pub enum IoError {
     },
     /// `failed to fill buffer`
     FailedToFillBuffer,
+    /// `read buffer is too large`
+    ReadBufferTooLarge,
+    /// `out of memory while allocating read buffer`
+    OutOfMemory,
     /// `read offset out of bounds: offset {offset}, len {len}, available {available}`
     ReadOutOfBounds(Box<ReadBoundsError>),
     /// The temporary read buffer is not aligned for the requested view.
@@ -77,6 +81,8 @@ impl Display for IoError {
             Self::SeekFailed { code } => write!(f, "seek failed with error: {code}"),
             Self::ReadFailed { code } => write!(f, "read failed with error: {code}"),
             Self::FailedToFillBuffer => f.write_str("failed to fill buffer"),
+            Self::ReadBufferTooLarge => f.write_str("read buffer is too large"),
+            Self::OutOfMemory => f.write_str("out of memory while allocating read buffer"),
             Self::ReadOutOfBounds(err) => write!(
                 f,
                 "read offset out of bounds: offset {}, len {}, available {}",
@@ -141,6 +147,8 @@ pub enum MmapError {
     },
     /// A mapped-region byte range is outside the region bounds.
     InvalidMappedRegionRange,
+    /// The mapped region cannot expose a host-accessible pointer.
+    HostPointerUnavailable,
     #[cfg(windows)]
     /// `CreateFileMappingW failed with error: {code}`
     CreateFileMappingW {
@@ -184,6 +192,7 @@ impl Display for MmapError {
             Self::Mprotect { code } => write!(f, "mprotect failed with error: {code}"),
             Self::Madvise { code } => write!(f, "madvise failed with error: {code}"),
             Self::InvalidMappedRegionRange => f.write_str("mapped region range is out of bounds"),
+            Self::HostPointerUnavailable => f.write_str("mapped region is not host-accessible"),
             #[cfg(windows)]
             Self::CreateFileMappingW { code } => {
                 write!(f, "CreateFileMappingW failed with error: {code}")

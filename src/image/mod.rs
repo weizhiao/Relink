@@ -19,6 +19,7 @@ mod object;
 mod scanned;
 mod synthetic;
 
+#[cfg(any(feature = "object", feature = "lazy-binding"))]
 pub(crate) use core::CoreInner;
 pub use core::{ElfCore, ElfCoreRef, LoadedCore, LoadedDeps, Symbol};
 pub use dylib::RawDylib;
