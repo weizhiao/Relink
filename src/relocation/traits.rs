@@ -140,6 +140,10 @@ pub trait ObjectRelocationArch: RelocationArch {
         ))
     }
 
+    /// Returns whether this object relocation reserves a regular GOT entry.
+    ///
+    /// PLT relocations should report through [`Self::object_needs_plt`]; that
+    /// reservation includes the associated GOT.PLT slot.
     #[inline]
     fn object_needs_got(_r_type: ElfRelocationType) -> bool
     where
@@ -148,6 +152,8 @@ pub trait ObjectRelocationArch: RelocationArch {
         false
     }
 
+    /// Returns whether this object relocation reserves a PLT entry and its
+    /// associated GOT.PLT slot.
     #[inline]
     fn object_needs_plt(_r_type: ElfRelocationType) -> bool
     where

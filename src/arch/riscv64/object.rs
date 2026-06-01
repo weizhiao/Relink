@@ -2,7 +2,7 @@ use crate::{
     RelocReason, Result,
     arch::riscv64::relocation::RiscV64Arch,
     elf::{ElfHashTable, ElfRelType, ElfRelocationType},
-    object::layout::{GotEntry, PltEntry, PltGotSection},
+    object::layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
     observer::RelocationObserver,
     os::{RegionAccess, VmAddr, VmOffset},
     relocation::{ObjectRelocationArch, RelocHelper, RelocValue, RelocationHandler, reloc_error},
@@ -69,6 +69,7 @@ struct Hi20Relocation {
     symbol: usize,
     addend: isize,
     r_type: u32,
+    got_key: Option<ObjectRelocKey>,
 }
 
 #[derive(Default)]
@@ -160,6 +161,8 @@ impl RiscV64Arch {
                             symbol: rel.r_symbol(),
                             addend,
                             r_type,
+                            got_key: (r_type == R_RISCV_GOT_HI20)
+                                .then(|| ObjectRelocKey::new::<Self>(rel)),
                         },
                     );
                 }
@@ -183,7 +186,6 @@ impl RiscV64Arch {
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
     {
-        let r_sym = rel.r_symbol();
         let r_type = rel.r_type().raw();
         let core = helper.core;
         let segments = core.segments();
@@ -252,7 +254,8 @@ impl RiscV64Arch {
                 if r_type == R_RISCV_CALL_PLT
                     && !(direct_off >= -(1i64 << 31) && direct_off < (1i64 << 31))
                 {
-                    target = Self::ensure_plt_entry(pltgot, r_sym, sym)?;
+                    let key = ObjectRelocKey::new::<Self>(rel);
+                    target = Self::ensure_plt_entry(pltgot, key, sym)?;
                 }
 
                 let off = signed_offset(target, addend, place);
@@ -268,7 +271,8 @@ impl RiscV64Arch {
                 let Some(sym) = helper.find_symbol(rel)? else {
                     return Err(unknown_symbol());
                 };
-                let got_addr = Self::ensure_got_entry(pltgot, r_sym, sym);
+                let key = ObjectRelocKey::new::<Self>(rel);
+                let got_addr = Self::ensure_got_entry(pltgot, key, sym);
                 let hi20 = (got_addr.get() as i64 - place.get() as i64 + 0x800) >> 12;
                 unsafe {
                     segments.update_object_value::<u32>(place, |insn| {
@@ -406,17 +410,17 @@ impl RiscV64Arch {
         Ok(())
     }
 
-    pub(crate) fn object_needs_got_impl(rel_type: ElfRelocationType) -> bool {
-        matches!(rel_type.raw(), R_RISCV_GOT_HI20 | R_RISCV_CALL_PLT)
+    pub(crate) fn object_needs_got_impl(r_type: ElfRelocationType) -> bool {
+        r_type.raw() == R_RISCV_GOT_HI20
     }
 
-    pub(crate) fn object_needs_plt_impl(rel_type: ElfRelocationType) -> bool {
-        rel_type.raw() == R_RISCV_CALL_PLT
+    pub(crate) fn object_needs_plt_impl(r_type: ElfRelocationType) -> bool {
+        r_type.raw() == R_RISCV_CALL_PLT
     }
 
     #[inline]
-    fn ensure_got_entry(pltgot: &mut PltGotSection, r_sym: usize, sym: VmAddr) -> VmAddr {
-        match pltgot.add_got_entry(r_sym) {
+    fn ensure_got_entry(pltgot: &mut PltGotSection, key: ObjectRelocKey, sym: VmAddr) -> VmAddr {
+        match pltgot.add_got_entry(key) {
             GotEntry::Occupied(addr) => addr,
             GotEntry::Vacant(mut got) => {
                 got.update(sym);
@@ -425,8 +429,12 @@ impl RiscV64Arch {
         }
     }
 
-    fn ensure_plt_entry(pltgot: &mut PltGotSection, r_sym: usize, sym: VmAddr) -> Result<VmAddr> {
-        match pltgot.add_plt_entry(r_sym) {
+    fn ensure_plt_entry(
+        pltgot: &mut PltGotSection,
+        key: ObjectRelocKey,
+        sym: VmAddr,
+    ) -> Result<VmAddr> {
+        match pltgot.add_plt_entry(key) {
             PltEntry::Occupied(addr) => Ok(addr),
             PltEntry::Vacant { plt, mut got } => {
                 let plt_entry_addr = VmAddr::from_ptr(plt.as_ptr());
@@ -484,7 +492,10 @@ impl RiscV64Arch {
                     helper.core,
                 ));
             };
-            let got_addr = Self::ensure_got_entry(pltgot, hi20.symbol, sym);
+            let key = hi20
+                .got_key
+                .expect("R_RISCV_GOT_HI20 relocation must carry a GOT key");
+            let got_addr = Self::ensure_got_entry(pltgot, key, sym);
             got_addr.get() as i64 - auipc_addr.get() as i64
         } else {
             let Some(sym) = helper.find_symdef(hi20.symbol).map(|sym| sym.convert()) else {

@@ -2,7 +2,7 @@ use crate::{
     RelocReason,
     arch::x86_64::relocation::X86_64Arch,
     elf::ElfRelType,
-    object::layout::{GotEntry, PltEntry, PltGotSection},
+    object::layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
     os::{RegionAccess, VmAddr},
     relocation::{
         RelocHelper, RelocValue, RelocationHandler, RelocationValueProvider, reloc_error,
@@ -79,7 +79,6 @@ impl X86_64Arch {
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: crate::observer::RelocationObserver<Self> + ?Sized,
     {
-        let r_sym = rel.r_symbol();
         let r_type = rel.r_type();
         let core = helper.core;
         let segments = core.segments();
@@ -120,7 +119,8 @@ impl X86_64Arch {
                 match relocation_target_value(sym.get()) {
                     Ok(value) => Self::write_object_value(segments, place, value)?,
                     Err(RelocReason::IntConversionOutOfRange) => {
-                        let plt_entry = pltgot.add_plt_entry(r_sym);
+                        let key = ObjectRelocKey::new::<Self>(rel);
+                        let plt_entry = pltgot.add_plt_entry(key);
                         let plt_entry_addr = match plt_entry {
                             PltEntry::Occupied(plt_entry_addr) => plt_entry_addr,
                             PltEntry::Vacant { plt, mut got } => {
@@ -147,7 +147,8 @@ impl X86_64Arch {
                 let Some(sym) = helper.find_symbol(rel)? else {
                     return Err(unknown_symbol());
                 };
-                let got_entry = pltgot.add_got_entry(r_sym);
+                let key = ObjectRelocKey::new::<Self>(rel);
+                let got_entry = pltgot.add_got_entry(key);
                 let got_entry_addr = match got_entry {
                     GotEntry::Occupied(got_entry_addr) => got_entry_addr,
                     GotEntry::Vacant(mut got) => {
@@ -175,11 +176,11 @@ impl X86_64Arch {
         Ok(())
     }
 
-    pub(crate) fn object_needs_got_impl(rel_type: crate::elf::ElfRelocationType) -> bool {
-        matches!(rel_type.raw(), R_X86_64_GOTPCREL | R_X86_64_PLT32)
+    pub(crate) fn object_needs_got_impl(r_type: crate::elf::ElfRelocationType) -> bool {
+        r_type.raw() == R_X86_64_GOTPCREL
     }
 
-    pub(crate) fn object_needs_plt_impl(rel_type: crate::elf::ElfRelocationType) -> bool {
-        rel_type.raw() == R_X86_64_PLT32
+    pub(crate) fn object_needs_plt_impl(r_type: crate::elf::ElfRelocationType) -> bool {
+        r_type.raw() == R_X86_64_PLT32
     }
 }

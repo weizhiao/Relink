@@ -4,7 +4,7 @@ use crate::{
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionType, ElfShdr},
     input::{ElfReader, ElfReaderExt},
     os::{MapFlags, Mmap, ProtFlags, VmAddr, VmOffset, rounddown, roundup},
-    relocation::ObjectRelocationArch,
+    relocation::{ObjectRelocationArch, RelocationArch},
     segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder},
 };
 use alloc::vec::Vec;
@@ -82,9 +82,13 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
         let (got_cnt, plt_cnt) = PltGotSection::count_needed_entries::<Arch>(shdrs, object)?;
 
         let mut got_shdr = PltGotSection::create_got_shdr(got_cnt);
+        let mut got_plt_shdr = PltGotSection::create_got_plt_shdr(plt_cnt);
         let mut plt_shdr = PltGotSection::create_plt_shdr(plt_cnt);
 
-        for shdr in shdrs.iter_mut().chain([&mut got_shdr, &mut plt_shdr]) {
+        for shdr in shdrs
+            .iter_mut()
+            .chain([&mut got_shdr, &mut got_plt_shdr, &mut plt_shdr])
+        {
             units[flags_to_idx(shdr.flags())].add_section(shdr);
         }
 
@@ -100,7 +104,7 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
         Ok(Self {
             segments,
             total_size: offset,
-            pltgot: Some(PltGotSection::new(&got_shdr, &plt_shdr)),
+            pltgot: Some(PltGotSection::new(&got_shdr, &got_plt_shdr, &plt_shdr)),
             _arch: core::marker::PhantomData,
         })
     }
@@ -113,11 +117,13 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
 /// Manages PLT (Procedure Linkage Table) and GOT (Global Offset Table) sections
 pub(crate) struct PltGotSection {
     got_base: VmAddr,
+    got_plt_base: VmAddr,
     plt_base: VmAddr,
     got_idx: usize,
+    got_plt_idx: usize,
     plt_idx: usize,
-    got_map: HashMap<usize, usize>,
-    plt_map: HashMap<usize, usize>,
+    got_map: HashMap<ObjectRelocKey, usize>,
+    plt_map: HashMap<ObjectRelocKey, usize>,
 }
 
 pub(crate) struct UsizeEntry<'entry>(&'entry mut usize);
@@ -145,13 +151,37 @@ pub(crate) enum PltEntry<'plt> {
     },
 }
 
+/// Relocation identity used to deduplicate object GOT/PLT entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ObjectRelocKey {
+    r_type: crate::elf::ElfRelocationType,
+    r_sym: usize,
+    addend: isize,
+}
+
+impl ObjectRelocKey {
+    #[inline]
+    pub(crate) fn new<Arch: RelocationArch>(rel: &ElfRelType<Arch>) -> Self {
+        let addend = if <ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::HAS_IMPLICIT_ADDEND {
+            0
+        } else {
+            rel.r_addend(VmAddr::null())
+        };
+        Self {
+            r_type: rel.r_type(),
+            r_sym: rel.r_symbol(),
+            addend,
+        }
+    }
+}
+
 impl PltGotSection {
     fn count_needed_entries<Arch: ObjectRelocationArch>(
         shdrs: &[ElfShdr<Arch::Layout>],
         object: &impl ElfReader,
     ) -> Result<(usize, usize)> {
         let mut got_set = HashSet::new();
-        let mut plt_set = HashSet::new();
+        let mut got_plt_set = HashSet::new();
         let mut scratch =
             AlignedBytes::with_len(0).expect("failed to initialize relocation buffer");
 
@@ -171,13 +201,13 @@ impl PltGotSection {
                 |relocations| {
                     for rel_entry in relocations {
                         let r_type = rel_entry.r_type();
-                        let r_sym = rel_entry.r_symbol();
+                        let key = ObjectRelocKey::new::<Arch>(rel_entry);
 
                         if Arch::object_needs_got(r_type) {
-                            got_set.insert(r_sym);
+                            got_set.insert(key);
                         }
                         if Arch::object_needs_plt(r_type) {
-                            plt_set.insert(r_sym);
+                            got_plt_set.insert(key);
                         }
                     }
                     Ok(())
@@ -185,10 +215,25 @@ impl PltGotSection {
             )?;
         }
 
-        Ok((got_set.len() + plt_set.len(), plt_set.len()))
+        Ok((got_set.len(), got_plt_set.len()))
     }
 
     fn create_got_shdr<L: ElfLayout>(elem_cnt: usize) -> ElfShdr<L> {
+        ElfShdr::new(
+            0,
+            ElfSectionType::NOBITS,
+            ElfSectionFlags::ALLOC | ElfSectionFlags::WRITE,
+            0,
+            0,
+            elem_cnt * size_of::<usize>(),
+            0,
+            0,
+            16,
+            size_of::<usize>(),
+        )
+    }
+
+    fn create_got_plt_shdr<L: ElfLayout>(elem_cnt: usize) -> ElfShdr<L> {
         ElfShdr::new(
             0,
             ElfSectionType::NOBITS,
@@ -218,26 +263,29 @@ impl PltGotSection {
         )
     }
 
-    fn new<L: ElfLayout>(got: &ElfShdr<L>, plt: &ElfShdr<L>) -> Self {
+    fn new<L: ElfLayout>(got: &ElfShdr<L>, got_plt: &ElfShdr<L>, plt: &ElfShdr<L>) -> Self {
         Self {
             got_idx: 0,
+            got_plt_idx: 0,
             plt_idx: 0,
             got_map: HashMap::new(),
             plt_map: HashMap::new(),
             got_base: VmAddr::new(got.sh_addr()),
+            got_plt_base: VmAddr::new(got_plt.sh_addr()),
             plt_base: VmAddr::new(plt.sh_addr()),
         }
     }
 
     pub(crate) fn rebase(&mut self, base: VmAddr) {
         self.got_base = self.got_base + VmOffset::new(base.get());
+        self.got_plt_base = self.got_plt_base + VmOffset::new(base.get());
         self.plt_base = self.plt_base + VmOffset::new(base.get());
     }
 
-    pub(crate) fn add_got_entry(&mut self, r_sym: usize) -> GotEntry<'_> {
+    pub(crate) fn add_got_entry(&mut self, key: ObjectRelocKey) -> GotEntry<'_> {
         let base = self.got_base;
         let ent_size = size_of::<usize>();
-        match self.got_map.entry(r_sym) {
+        match self.got_map.entry(key) {
             Entry::Occupied(mut entry) => {
                 GotEntry::Occupied(base + VmOffset::new(*entry.get_mut() * ent_size))
             }
@@ -251,12 +299,12 @@ impl PltGotSection {
         }
     }
 
-    pub(crate) fn add_plt_entry(&mut self, r_sym: usize) -> PltEntry<'_> {
+    pub(crate) fn add_plt_entry(&mut self, key: ObjectRelocKey) -> PltEntry<'_> {
         let plt_base = self.plt_base;
-        let got_base = self.got_base;
+        let got_plt_base = self.got_plt_base;
         let plt_ent_size = PLT_ENTRY_SIZE;
         let got_ent_size = size_of::<usize>();
-        match self.plt_map.entry(r_sym) {
+        match self.plt_map.entry(key) {
             Entry::Occupied(mut entry) => {
                 PltEntry::Occupied(plt_base + VmOffset::new(*entry.get_mut() * plt_ent_size))
             }
@@ -264,8 +312,8 @@ impl PltGotSection {
                 let plt_idx = *entry.insert(self.plt_idx);
                 self.plt_idx += 1;
 
-                let got_idx = self.got_idx;
-                self.got_idx += 1;
+                let got_idx = self.got_plt_idx;
+                self.got_plt_idx += 1;
 
                 let plt = unsafe {
                     core::slice::from_raw_parts_mut(
@@ -280,7 +328,8 @@ impl PltGotSection {
                     plt,
                     got: unsafe {
                         UsizeEntry(
-                            &mut *(got_base + VmOffset::new(got_idx * got_ent_size)).as_mut_ptr(),
+                            &mut *(got_plt_base + VmOffset::new(got_idx * got_ent_size))
+                                .as_mut_ptr(),
                         )
                     },
                 }
