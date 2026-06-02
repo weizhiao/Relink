@@ -30,7 +30,7 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
     #[inline]
     fn on_object_metadata(
         &mut self,
-        _event: ObjectMetadataEvent<'_, D, Arch::Layout>,
+        _event: ObjectMetadataEvent<'_, '_, D, Arch::Layout>,
     ) -> Result<()> {
         Ok(())
     }
@@ -167,7 +167,7 @@ where
     #[inline]
     fn on_object_metadata(
         &mut self,
-        event: ObjectMetadataEvent<'_, D, Arch::Layout>,
+        event: ObjectMetadataEvent<'_, '_, D, Arch::Layout>,
     ) -> Result<()> {
         (**self).on_object_metadata(event)
     }
@@ -260,7 +260,7 @@ where
     #[inline]
     fn on_object_metadata(
         &mut self,
-        event: ObjectMetadataEvent<'_, D, Arch::Layout>,
+        event: ObjectMetadataEvent<'_, '_, D, Arch::Layout>,
     ) -> Result<()> {
         (**self).on_object_metadata(event)
     }

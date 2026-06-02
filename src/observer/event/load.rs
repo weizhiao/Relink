@@ -1,6 +1,9 @@
 use crate::{
     arch::{ArchKind, NativeArch},
-    elf::{ElfHeader, ElfLayout, ElfPhdr, ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout},
+    elf::{
+        ElfHeader, ElfLayout, ElfPhdr, ElfSectionId, ElfSectionType, ElfSections, ElfShdr,
+        NativeElfLayout,
+    },
     image::RawDynamic,
     input::{ElfReader, ElfReaderExt, Path},
     os::{HostRegion, RegionAccess},
@@ -8,6 +11,7 @@ use crate::{
     segment::ElfSegments,
 };
 use alloc::vec::Vec;
+use core::ffi::CStr;
 
 /// Program-header event emitted while an ELF image is being loaded.
 pub struct ProgramHeaderEvent<'a, L: ElfLayout = NativeElfLayout, R: RegionAccess = HostRegion> {
@@ -51,28 +55,25 @@ impl<'a, L: ElfLayout, R: RegionAccess> ProgramHeaderEvent<'a, L, R> {
 
 /// Relocatable-object metadata observed after section-header validation and
 /// before section contents are mapped.
-pub struct ObjectMetadataEvent<'a, D: 'static, L: ElfLayout = NativeElfLayout> {
-    ehdr: &'a ElfHeader<L>,
-    shdrs: &'a mut [ElfShdr<L>],
-    shstrtab: &'a [u8],
-    object: &'a dyn ElfReader,
-    user_data: &'a mut D,
+pub struct ObjectMetadataEvent<'event, 'sections, D: 'static, L: ElfLayout = NativeElfLayout> {
+    ehdr: &'event ElfHeader<L>,
+    sections: &'event mut ElfSections<'sections, L>,
+    object: &'event dyn ElfReader,
+    user_data: &'event mut D,
 }
 
-impl<'a, D: 'static, L: ElfLayout> ObjectMetadataEvent<'a, D, L> {
+impl<'event, 'sections, D: 'static, L: ElfLayout> ObjectMetadataEvent<'event, 'sections, D, L> {
     #[inline]
     #[cfg_attr(not(feature = "object"), allow(dead_code))]
     pub(crate) fn new(
-        ehdr: &'a ElfHeader<L>,
-        shdrs: &'a mut [ElfShdr<L>],
-        shstrtab: &'a [u8],
-        object: &'a dyn ElfReader,
-        user_data: &'a mut D,
+        ehdr: &'event ElfHeader<L>,
+        sections: &'event mut ElfSections<'sections, L>,
+        object: &'event dyn ElfReader,
+        user_data: &'event mut D,
     ) -> Self {
         Self {
             ehdr,
-            shdrs,
-            shstrtab,
+            sections,
             object,
             user_data,
         }
@@ -92,50 +93,44 @@ impl<'a, D: 'static, L: ElfLayout> ObjectMetadataEvent<'a, D, L> {
 
     /// Returns the validated section headers.
     #[inline]
-    pub const fn sections(&self) -> &[ElfShdr<L>] {
-        self.shdrs
+    pub fn sections(&self) -> &[ElfShdr<L>] {
+        self.sections.headers()
     }
 
     /// Returns one section header by index.
     #[inline]
-    pub fn section(&self, id: ElfSectionId) -> Option<&ElfShdr<L>> {
-        self.shdrs.get(id.index())
+    pub fn section(&self, id: ElfSectionId) -> &ElfShdr<L> {
+        self.sections.section(id)
     }
 
     /// Returns mutable validated section headers.
     #[inline]
     pub fn sections_mut(&mut self) -> &mut [ElfShdr<L>] {
-        self.shdrs
+        self.sections.headers_mut()
     }
 
     /// Returns one mutable section header by index.
     #[inline]
-    pub fn section_mut(&mut self, id: ElfSectionId) -> Option<&mut ElfShdr<L>> {
-        self.shdrs.get_mut(id.index())
+    pub fn section_mut(&mut self, id: ElfSectionId) -> &mut ElfShdr<L> {
+        self.sections.section_mut(id)
     }
 
     /// Returns the raw section-name string table bytes.
     #[inline]
-    pub const fn section_name_table(&self) -> &[u8] {
-        self.shstrtab
+    pub fn section_name_table(&self) -> &[u8] {
+        self.sections.name_table()
     }
 
-    /// Returns one section name as UTF-8 when it is present and valid.
+    /// Returns one validated section name as a NUL-terminated byte string.
     #[inline]
-    pub fn section_name(&self, id: ElfSectionId) -> Option<&str> {
-        let shdr = self.section(id)?;
-        let bytes = self.shstrtab.get(shdr.sh_name() as usize..)?;
-        let end = bytes.iter().position(|&byte| byte == 0)?;
-        core::str::from_utf8(&bytes[..end]).ok()
+    pub fn section_name(&self, id: ElfSectionId) -> &CStr {
+        self.sections.section_name(id)
     }
 
     /// Finds the first section whose name equals `name`.
     #[inline]
     pub fn find_section(&self, name: &str) -> Option<ElfSectionId> {
-        self.shdrs.iter().enumerate().find_map(|(index, _)| {
-            let id = ElfSectionId::new(index);
-            (self.section_name(id)? == name).then_some(id)
-        })
+        self.sections.find_section(name)
     }
 
     /// Borrows one section's file-backed contents when the reader is backed by
@@ -179,9 +174,7 @@ impl<'a, D: 'static, L: ElfLayout> ObjectMetadataEvent<'a, D, L> {
     }
 
     fn section_content_range(&self, id: ElfSectionId) -> crate::Result<Option<(usize, usize)>> {
-        let shdr = self
-            .section(id)
-            .ok_or_else(|| crate::ParseShdrError::malformed("section index is out of range"))?;
+        let shdr = self.section(id);
         let len = shdr.sh_size();
         if len == 0 || shdr.section_type() == ElfSectionType::NOBITS {
             return Ok(None);

@@ -1,7 +1,10 @@
 use crate::{
     AlignedBytes, Result,
     arch::object::{PLT_ENTRY, PLT_ENTRY_SIZE},
-    elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionType, ElfShdr},
+    elf::{
+        ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionId, ElfSectionType,
+        ElfSections, ElfShdr,
+    },
     input::{ElfReader, ElfReaderExt},
     os::{MapFlags, Mmap, ProtFlags, VmAddr, VmOffset, rounddown, roundup},
     relocation::{ObjectRelocationArch, RelocationArch},
@@ -39,6 +42,119 @@ fn flags_to_idx(flags: ElfSectionFlags) -> usize {
     prot_to_idx(section_prot(flags))
 }
 
+enum PltGotShdr<L: ElfLayout> {
+    Existing(ElfSectionId),
+    Synthetic(ElfShdr<L>),
+}
+
+impl<L: ElfLayout> PltGotShdr<L> {
+    #[inline]
+    fn new(existing: Option<ElfSectionId>, synthetic: impl FnOnce() -> ElfShdr<L>) -> Self {
+        match existing {
+            Some(id) => Self::Existing(id),
+            None => Self::Synthetic(synthetic()),
+        }
+    }
+
+    #[inline]
+    fn addr(&self, sections: &ElfSections<'_, L>) -> VmAddr {
+        let addr = match self {
+            Self::Existing(id) => sections.section(*id).sh_addr(),
+            Self::Synthetic(shdr) => shdr.sh_addr(),
+        };
+        VmAddr::new(addr)
+    }
+}
+
+struct PltGotShdrs<L: ElfLayout> {
+    got: PltGotShdr<L>,
+    got_plt: PltGotShdr<L>,
+    plt: PltGotShdr<L>,
+}
+
+fn prepare_pltgot_shdrs<L: ElfLayout>(
+    sections: &mut ElfSections<'_, L>,
+    got_cnt: usize,
+    plt_cnt: usize,
+) -> PltGotShdrs<L> {
+    let mut got = None;
+    let mut got_plt = None;
+    let mut plt = None;
+    for index in 0..sections.headers().len() {
+        let id = ElfSectionId::new(index);
+        match sections.section_name(id).to_bytes() {
+            b".got" => got = Some(id),
+            b".got.plt" => got_plt = Some(id),
+            b".plt" => plt = Some(id),
+            _ => {}
+        }
+    }
+
+    if let Some(id) = got {
+        configure_pltgot_shdr(
+            &mut sections.headers_mut()[id.index()],
+            ElfSectionFlags::ALLOC | ElfSectionFlags::WRITE,
+            got_cnt,
+            size_of::<usize>(),
+        );
+    }
+    if let Some(id) = got_plt {
+        configure_pltgot_shdr(
+            &mut sections.headers_mut()[id.index()],
+            ElfSectionFlags::ALLOC | ElfSectionFlags::WRITE,
+            plt_cnt,
+            size_of::<usize>(),
+        );
+    }
+    if let Some(id) = plt {
+        configure_pltgot_shdr(
+            &mut sections.headers_mut()[id.index()],
+            ElfSectionFlags::ALLOC | ElfSectionFlags::EXECINSTR,
+            plt_cnt,
+            PLT_ENTRY_SIZE,
+        );
+        sections.headers_mut()[id.index()].set_sh_addralign(size_of::<usize>());
+    }
+
+    PltGotShdrs {
+        got: PltGotShdr::new(got, || PltGotSection::create_got_shdr(got_cnt)),
+        got_plt: PltGotShdr::new(got_plt, || PltGotSection::create_got_plt_shdr(plt_cnt)),
+        plt: PltGotShdr::new(plt, || PltGotSection::create_plt_shdr(plt_cnt)),
+    }
+}
+
+fn configure_pltgot_shdr<L: ElfLayout>(
+    shdr: &mut ElfShdr<L>,
+    flags: ElfSectionFlags,
+    elem_cnt: usize,
+    ent_size: usize,
+) {
+    shdr.set_section_type(ElfSectionType::NOBITS);
+    shdr.set_flags(flags);
+    shdr.set_sh_size(elem_cnt * ent_size);
+    shdr.set_sh_addralign(16);
+    shdr.set_sh_entsize(ent_size);
+}
+
+fn create_pltgot_shdr<L: ElfLayout>(
+    flags: ElfSectionFlags,
+    elem_cnt: usize,
+    ent_size: usize,
+) -> ElfShdr<L> {
+    ElfShdr::new(
+        0,
+        ElfSectionType::NOBITS,
+        flags,
+        0,
+        0,
+        elem_cnt * ent_size,
+        0,
+        0,
+        16,
+        ent_size,
+    )
+}
+
 impl<Arch: ObjectRelocationArch> SegmentBuilder for SectionSegments<Arch> {
     fn create_space<M>(&mut self, mapper: &M) -> Result<ElfSegments<M::Region>>
     where
@@ -72,23 +188,28 @@ impl<Arch: ObjectRelocationArch> SegmentBuilder for SectionSegments<Arch> {
 
 impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
     pub(crate) fn new(
-        shdrs: &mut [ElfShdr<Arch::Layout>],
+        sections: &mut ElfSections<'_, Arch::Layout>,
         object: &impl ElfReader,
         page_size: usize,
     ) -> Result<Self> {
         let mut units: [SectionUnit<Arch::Layout>; 4] =
             core::array::from_fn(|_| SectionUnit::new());
 
-        let (got_cnt, plt_cnt) = PltGotSection::count_needed_entries::<Arch>(shdrs, object)?;
+        let (got_cnt, plt_cnt) =
+            PltGotSection::count_needed_entries::<Arch>(sections.headers(), object)?;
 
-        let mut got_shdr = PltGotSection::create_got_shdr(got_cnt);
-        let mut got_plt_shdr = PltGotSection::create_got_plt_shdr(plt_cnt);
-        let mut plt_shdr = PltGotSection::create_plt_shdr(plt_cnt);
+        let mut pltgot_shdrs = prepare_pltgot_shdrs(sections, got_cnt, plt_cnt);
 
-        for shdr in shdrs
-            .iter_mut()
-            .chain([&mut got_shdr, &mut got_plt_shdr, &mut plt_shdr])
-        {
+        for shdr in sections.headers_mut().iter_mut() {
+            units[flags_to_idx(shdr.flags())].add_section(shdr);
+        }
+        if let PltGotShdr::Synthetic(shdr) = &mut pltgot_shdrs.got {
+            units[flags_to_idx(shdr.flags())].add_section(shdr);
+        }
+        if let PltGotShdr::Synthetic(shdr) = &mut pltgot_shdrs.got_plt {
+            units[flags_to_idx(shdr.flags())].add_section(shdr);
+        }
+        if let PltGotShdr::Synthetic(shdr) = &mut pltgot_shdrs.plt {
             units[flags_to_idx(shdr.flags())].add_section(shdr);
         }
 
@@ -100,11 +221,16 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
                 segments.push(segment);
             }
         }
+        drop(units);
+
+        let got_base = pltgot_shdrs.got.addr(sections);
+        let got_plt_base = pltgot_shdrs.got_plt.addr(sections);
+        let plt_base = pltgot_shdrs.plt.addr(sections);
 
         Ok(Self {
             segments,
             total_size: offset,
-            pltgot: Some(PltGotSection::new(&got_shdr, &got_plt_shdr, &plt_shdr)),
+            pltgot: Some(PltGotSection::new(got_base, got_plt_base, plt_base)),
             _arch: core::marker::PhantomData,
         })
     }
@@ -219,60 +345,41 @@ impl PltGotSection {
     }
 
     fn create_got_shdr<L: ElfLayout>(elem_cnt: usize) -> ElfShdr<L> {
-        ElfShdr::new(
-            0,
-            ElfSectionType::NOBITS,
+        create_pltgot_shdr(
             ElfSectionFlags::ALLOC | ElfSectionFlags::WRITE,
-            0,
-            0,
-            elem_cnt * size_of::<usize>(),
-            0,
-            0,
-            16,
+            elem_cnt,
             size_of::<usize>(),
         )
     }
 
     fn create_got_plt_shdr<L: ElfLayout>(elem_cnt: usize) -> ElfShdr<L> {
-        ElfShdr::new(
-            0,
-            ElfSectionType::NOBITS,
+        create_pltgot_shdr(
             ElfSectionFlags::ALLOC | ElfSectionFlags::WRITE,
-            0,
-            0,
-            elem_cnt * size_of::<usize>(),
-            0,
-            0,
-            16,
+            elem_cnt,
             size_of::<usize>(),
         )
     }
 
     fn create_plt_shdr<L: ElfLayout>(elem_cnt: usize) -> ElfShdr<L> {
-        ElfShdr::new(
-            0,
-            ElfSectionType::NOBITS,
+        let mut shdr = create_pltgot_shdr(
             ElfSectionFlags::ALLOC | ElfSectionFlags::EXECINSTR,
-            0,
-            0,
-            elem_cnt * PLT_ENTRY_SIZE,
-            0,
-            0,
-            size_of::<usize>(),
+            elem_cnt,
             PLT_ENTRY_SIZE,
-        )
+        );
+        shdr.set_sh_addralign(size_of::<usize>());
+        shdr
     }
 
-    fn new<L: ElfLayout>(got: &ElfShdr<L>, got_plt: &ElfShdr<L>, plt: &ElfShdr<L>) -> Self {
+    fn new(got_base: VmAddr, got_plt_base: VmAddr, plt_base: VmAddr) -> Self {
         Self {
             got_idx: 0,
             got_plt_idx: 0,
             plt_idx: 0,
             got_map: HashMap::new(),
             plt_map: HashMap::new(),
-            got_base: VmAddr::new(got.sh_addr()),
-            got_plt_base: VmAddr::new(got_plt.sh_addr()),
-            plt_base: VmAddr::new(plt.sh_addr()),
+            got_base,
+            got_plt_base,
+            plt_base,
         }
     }
 

@@ -5,8 +5,8 @@ use super::{
 use crate::{
     ParseShdrError, RelocationError, Result,
     elf::{
-        ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr, ElfSymbol, ElfSymbolType, Lifecycle,
-        SymbolTable,
+        ElfRelEntry, ElfRelType, ElfSectionType, ElfSections, ElfShdr, ElfSymbol, ElfSymbolType,
+        Lifecycle, SymbolTable,
     },
     input::PathBuf,
     loader::LoaderInner,
@@ -221,7 +221,7 @@ where
 {
     pub(crate) fn create_object_builder<Tls>(
         &mut self,
-        shdrs: &mut [ElfShdr<Arch::Layout>],
+        mut sections: ElfSections<'_, Arch::Layout>,
         object: impl crate::input::ElfReader,
         user_data: D,
     ) -> Result<ObjectBuilder<Tls, D, Arch, M::Region>>
@@ -230,14 +230,21 @@ where
     {
         let path = PathBuf::from(object.path());
         let mapper = self.mapper();
-        ObjectBuilder::<Tls, D, Arch, M::Region>::validate_shdrs(shdrs)?;
+        ObjectBuilder::<Tls, D, Arch, M::Region>::validate_shdrs(sections.headers())?;
         let mut shdr_segments =
-            SectionSegments::<Arch>::new(shdrs, &object, self.page_size()?.bytes())?;
+            SectionSegments::<Arch>::new(&mut sections, &object, self.page_size()?.bytes())?;
         let segments = shdr_segments.load_segments(mapper, &object)?;
         let pltgot = shdr_segments.take_pltgot();
         let mprotect =
             Box::new(move |segments: &ElfSegments<M::Region>| shdr_segments.mprotect(segments));
 
-        ObjectBuilder::new(path, shdrs, segments, mprotect, pltgot, user_data)
+        ObjectBuilder::new(
+            path,
+            sections.headers_mut(),
+            segments,
+            mprotect,
+            pltgot,
+            user_data,
+        )
     }
 }

@@ -1,6 +1,6 @@
 use crate::{
     ParseShdrError, Result,
-    elf::{ElfHeader, ElfLayout, ElfSectionType, ElfShdr},
+    elf::{ElfHeader, ElfLayout, ElfSectionType, ElfSections, ElfShdr},
     image::RawObject,
     input::{ElfReader, ElfReaderExt, IntoElfReader},
     loader::{ExpectedElf, Loader},
@@ -51,19 +51,19 @@ where
             .ok_or(ParseShdrError::MissingSectionHeaders)?;
         validate_object_shdrs(&ehdr, shdrs, &object)?;
         let shstrtab = read_section_name_table(&ehdr, shdrs, &object)?;
+        let mut sections = ElfSections::new(shdrs, shstrtab);
         let mut user_data = D::default();
         self.inner
             .observer
             .on_object_metadata(ObjectMetadataEvent::new(
                 &ehdr,
-                shdrs,
-                &shstrtab,
+                &mut sections,
                 &object,
                 &mut user_data,
             ))?;
         let builder = self
             .inner
-            .create_object_builder::<Tls>(shdrs, object, user_data)?;
+            .create_object_builder::<Tls>(sections, object, user_data)?;
         let raw = RawObject::from_builder(builder);
 
         logging::info!(
@@ -108,9 +108,6 @@ fn validate_object_shdrs<L: ElfLayout>(
         return Err(ParseShdrError::malformed("section name string table is empty").into());
     }
     for shdr in shdrs.iter() {
-        if shdr.section_type() == ElfSectionType::NULL {
-            continue;
-        }
         if shdr.sh_name() as usize >= shstrtab_size {
             return Err(ParseShdrError::malformed(
                 "section name offset exceeds section name string table",
@@ -186,14 +183,14 @@ mod tests {
     impl LoadObserver<ObjectData> for ObjectObserver {
         fn on_object_metadata(
             &mut self,
-            mut event: ObjectMetadataEvent<'_, ObjectData, NativeElfLayout>,
+            mut event: ObjectMetadataEvent<'_, '_, ObjectData, NativeElfLayout>,
         ) -> Result<()> {
             let shstrtab = event.find_section(".shstrtab");
             event.user_data_mut().shstrtab = shstrtab;
             self.found_shstrtab = shstrtab;
             self.shstrtab_name_seen = shstrtab
-                .and_then(|index| event.section_name(index))
-                .is_some_and(|name| name == ".shstrtab");
+                .map(|index| event.section_name(index))
+                .is_some_and(|name| name.to_bytes() == b".shstrtab");
             self.borrowed_shstrtab = shstrtab
                 .map(|index| {
                     event
@@ -208,12 +205,12 @@ mod tests {
                 .transpose()?
                 .unwrap_or_default();
             if let Some(index) = shstrtab {
-                let shdr = event.section_mut(index).expect("found section must exist");
+                let shdr = event.section_mut(index);
                 shdr.set_sh_name(0);
             }
             self.renamed_shstrtab = shstrtab
-                .and_then(|index| event.section_name(index))
-                .is_some_and(str::is_empty);
+                .map(|index| event.section_name(index))
+                .is_some_and(|name| name.to_bytes().is_empty());
             Ok(())
         }
     }
