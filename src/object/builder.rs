@@ -1,6 +1,6 @@
 use super::{
     CustomHash, ObjectRelocation,
-    layout::{PltGotSection, SectionSegments},
+    layout::{ObjectSegmentView, ObjectSegments, PltGotSection, SectionSegments},
 };
 use crate::{
     ParseShdrError, RelocationError, Result,
@@ -11,9 +11,8 @@ use crate::{
     input::PathBuf,
     loader::LoaderInner,
     observer::LoadObserver,
-    os::{HostRegion, RegionAccess, VmAddr, VmOffset},
+    os::{HostRegion, RegionAccess, VmAddr},
     relocation::ObjectRelocationArch,
-    segment::{ElfSegments, SegmentBuilder},
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -29,9 +28,9 @@ pub(crate) struct ObjectBuilder<
     pub(crate) path: PathBuf,
     pub(crate) symtab: SymbolTable<Arch::Layout, CustomHash>,
     pub(crate) init: Lifecycle,
-    pub(crate) segments: ElfSegments<R>,
+    pub(crate) segments: ObjectSegments<R>,
     pub(crate) relocation: ObjectRelocation<Arch>,
-    pub(crate) mprotect: Box<dyn Fn(&ElfSegments<R>) -> Result<()>>,
+    pub(crate) mprotect: Box<dyn for<'segments> Fn(&ObjectSegmentView<'segments, R>) -> Result<()>>,
     pub(crate) pltgot: PltGotSection,
     pub(crate) tls_mod_id: Option<TlsModuleId>,
     pub(crate) tls_tp_offset: Option<TlsTpOffset>,
@@ -98,17 +97,6 @@ where
         }
 
         Ok(())
-    }
-
-    fn rebase_loaded_sections(
-        shdrs: &mut [ElfShdr<Arch::Layout>],
-        pltgot: &mut PltGotSection,
-        base: VmAddr,
-    ) {
-        shdrs.iter_mut().for_each(|shdr| {
-            shdr.set_sh_addr((base + VmOffset::new(shdr.sh_addr())).get());
-        });
-        pltgot.rebase(base);
     }
 
     fn prepare_symbol_table(
@@ -182,13 +170,12 @@ where
     pub(crate) fn new(
         path: PathBuf,
         shdrs: &mut [ElfShdr<Arch::Layout>],
-        segments: ElfSegments<R>,
-        mprotect: Box<dyn Fn(&ElfSegments<R>) -> Result<()>>,
-        mut pltgot: PltGotSection,
+        segments: ObjectSegments<R>,
+        mprotect: Box<dyn for<'segments> Fn(&ObjectSegmentView<'segments, R>) -> Result<()>>,
+        pltgot: PltGotSection,
         user_data: D,
     ) -> Result<Self> {
-        let base = segments.base();
-        Self::rebase_loaded_sections(shdrs, &mut pltgot, base);
+        let base = segments.core().base();
         let ObjectSectionData {
             symtab,
             relocation,
@@ -229,14 +216,21 @@ where
         Tls: TlsResolver,
     {
         let path = PathBuf::from(object.path());
-        let mapper = self.mapper();
+        let page_size = self.page_size()?.bytes();
         ObjectBuilder::<Tls, D, Arch, M::Region>::validate_shdrs(sections.headers())?;
-        let mut shdr_segments =
-            SectionSegments::<Arch>::new(&mut sections, &object, self.page_size()?.bytes())?;
+        let mut shdr_segments = SectionSegments::<Arch>::new::<D, _>(
+            &mut sections,
+            &object,
+            page_size,
+            &mut self.observer,
+        )?;
+        let mapper = self.mapper();
         let segments = shdr_segments.load_segments(mapper, &object)?;
-        let pltgot = shdr_segments.take_pltgot();
-        let mprotect =
-            Box::new(move |segments: &ElfSegments<M::Region>| shdr_segments.mprotect(segments));
+        let mut pltgot = shdr_segments.take_pltgot();
+        shdr_segments.rebase_loaded_sections(sections.headers_mut(), &mut pltgot, &segments);
+        let mprotect = Box::new(move |segments: &ObjectSegmentView<'_, M::Region>| {
+            shdr_segments.mprotect(segments)
+        });
 
         ObjectBuilder::new(
             path,

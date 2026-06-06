@@ -99,9 +99,9 @@ pub trait ObjectRelocationArch: RelocationArch {
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn prepare_object_relocation<D, R, PreH, PostH, Obs, H>(
+    fn prepare_object_relocation<D, R, PreH, PostH, Obs, H, Memory>(
         _state: &mut Self::ObjectRelocationState,
-        _helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
+        _helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         _sections: &[&'static [ElfRelType<Self>]],
     ) -> Result<()>
     where
@@ -112,15 +112,16 @@ pub trait ObjectRelocationArch: RelocationArch {
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
+        Memory: crate::os::ImageMemory,
     {
         Ok(())
     }
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, R, PreH, PostH, Obs, H>(
+    fn relocate_object<D, R, PreH, PostH, Obs, H, Memory>(
         _state: &mut Self::ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         _pltgot: &mut crate::object::layout::PltGotSection,
     ) -> Result<()>
@@ -132,6 +133,7 @@ pub trait ObjectRelocationArch: RelocationArch {
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
+        Memory: crate::os::ImageMemory,
     {
         Err(reloc_error::<Self, _, R, H>(
             rel,

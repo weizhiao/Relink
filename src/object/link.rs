@@ -3,6 +3,7 @@ use crate::{
     elf::ElfRelType,
     image::{ModuleScope, RawObject},
     logging,
+    object::ObjectSegmentView,
     observer::default_lifecycle_executor,
     observer::{LifecycleEvent, LifecyclePhase, RelocationObserver},
     os::RegionAccess,
@@ -42,52 +43,60 @@ where
     {
         logging::debug!("Relocating object: {}", self.core.name());
 
-        let mut helper = RelocHelper::new(
-            &self.core,
-            scope,
-            pre_handler,
-            post_handler,
-            observer,
-            self.core.tls_get_addr(),
-        );
-        let sections = &self.relocation.sections;
-        let mut state = Arch::ObjectRelocationState::default();
-        Arch::prepare_object_relocation(&mut state, &mut helper, sections)?;
-        for reloc in sections.iter() {
-            for rel in *reloc {
-                if !helper.handle_pre(rel)?.is_unhandled() {
-                    continue;
-                }
-                match Arch::relocate_object(&mut state, &mut helper, rel, &mut self.pltgot) {
-                    Ok(()) => continue,
-                    Err(err) => {
-                        if helper.handle_post(rel)?.is_unhandled() {
-                            return Err(err);
+        let scope = {
+            let object_segments =
+                ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
+            let mut helper = RelocHelper::new(
+                &self.core,
+                object_segments,
+                scope,
+                pre_handler,
+                post_handler,
+                observer,
+                self.core.tls_get_addr(),
+            );
+            let sections = &self.relocation.sections;
+            let mut state = Arch::ObjectRelocationState::default();
+            Arch::prepare_object_relocation(&mut state, &mut helper, sections)?;
+            for reloc in sections.iter() {
+                for rel in *reloc {
+                    if !helper.handle_pre(rel)?.is_unhandled() {
+                        continue;
+                    }
+                    match Arch::relocate_object(&mut state, &mut helper, rel, &mut self.pltgot) {
+                        Ok(()) => continue,
+                        Err(err) => {
+                            if helper.handle_post(rel)?.is_unhandled() {
+                                return Err(err);
+                            }
                         }
                     }
                 }
             }
-        }
 
-        let RelocHelper {
-            scope,
-            tls_desc_args,
-            ..
-        } = helper;
-        self.core.set_tls_desc_args(tls_desc_args);
+            let RelocHelper {
+                scope,
+                tls_desc_args,
+                ..
+            } = helper;
+            self.core.set_tls_desc_args(tls_desc_args);
 
-        (self.mprotect)(self.core.segments())?;
+            (self.mprotect)(&object_segments)?;
 
-        logging::trace!("[{}] Executing init functions", self.core.name());
-        let mut event = LifecycleEvent::with_executor(
-            LifecyclePhase::Init,
-            self.core.name(),
-            &self.init,
-            self.core.segments(),
-            default_lifecycle_executor(),
-        );
-        observer.on_init(&mut event)?;
-        event.run()?;
+            logging::trace!("[{}] Executing init functions", self.core.name());
+            let mut event = LifecycleEvent::<Arch, R>::with_executor(
+                LifecyclePhase::Init,
+                self.core.name(),
+                &self.init,
+                &object_segments,
+                default_lifecycle_executor(),
+            );
+            observer.on_init(&mut event)?;
+            event.run()?;
+            scope
+        };
+        drop(self.init_segments.take());
+        self.core.set_init();
 
         logging::info!("Relocation completed for {}", self.core.name());
 

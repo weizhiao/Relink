@@ -5,8 +5,11 @@ use crate::{
     elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol, HashTable, Lifecycle},
     image::ElfCore,
     input::Path,
-    os::{CodeContext, CodeExecutor, HostRegion, NativeCodeExecutor, RegionAccess, VmAddr},
-    relocation::{RelocValue, RelocationArch},
+    os::{
+        CodeContext, CodeExecutor, HostRegion, ImageMemory, NativeCodeExecutor, RegionAccess,
+        VmAddr,
+    },
+    relocation::RelocationArch,
     segment::ElfSegments,
     tls::{TlsModuleId, TlsTpOffset},
 };
@@ -57,7 +60,7 @@ impl<'a, Arch: RelocationArch, R: RegionAccess> DtDebugEntry<'a, Arch, R> {
     #[inline]
     pub fn write_r_debug_addr(&self, addr: VmAddr) -> Result<()> {
         let entry = ElfDyn::<Arch::Layout>::new(ElfDynamicTag::DEBUG, addr.get());
-        unsafe { self.segments.write_value(self.addr, RelocValue::new(entry)) }
+        unsafe { ImageMemory::write_value(self.segments, self.addr, entry) }
     }
 }
 

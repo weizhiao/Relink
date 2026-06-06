@@ -8,12 +8,11 @@ use crate::{
         Finalizer, LinkActivity, ModuleRelocatedEvent, RelocationObserver,
         default_lifecycle_executor,
     },
-    os::{MappedView, RegionAccess, VmAddr, VmOffset},
+    os::{ImageMemory, MappedView, RegionAccess, VmOffset},
     relocation::{
-        BindingMode, RelocHelper, RelocValue, RelocateArgs, RelocationArch, RelocationHandler,
-        ResolvedBinding, likely, reloc_error, unlikely,
+        BindingMode, RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, ResolvedBinding,
+        likely, reloc_error, unlikely,
     },
-    segment::ElfSegments,
     tls::{TlsRelocOutcome, handle_tls_reloc},
 };
 use alloc::vec::Vec;
@@ -73,6 +72,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
         let mut helper = RelocHelper::new(
             self.core_ref(),
+            self.core_ref().segments(),
             scope,
             pre_handler,
             post_handler,
@@ -81,7 +81,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         );
 
         if !relocation.is_empty() {
-            self.relocate_relative()?
+            self.relocate_relative(helper.memory())?
                 .relocate_dynrel(&mut helper)?
                 .relocate_pltrel(&binding, &mut helper)?;
         }
@@ -156,41 +156,6 @@ pub(crate) struct DynamicRelocation<Arch: RelocationArch = crate::arch::NativeAr
     dynrel: MappedView<ElfRelType<Arch>>,
 }
 
-#[inline(always)]
-fn write_reloc_addr<Arch: RelocationArch, R: RegionAccess>(
-    segments: &ElfSegments<R>,
-    addr: VmAddr,
-    value: VmAddr,
-) -> Result<()>
-where
-    <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
-{
-    unsafe {
-        segments.write_value(
-            addr,
-            RelocValue::new(<Arch::Layout as ElfLayout>::Word::from_usize(value.get())),
-        )
-    }
-}
-
-#[inline(always)]
-fn update_relative_word<Arch: RelocationArch, R: RegionAccess>(
-    segments: &ElfSegments<R>,
-    addr: VmAddr,
-    base: VmAddr,
-) -> Result<()>
-where
-    <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
-{
-    unsafe {
-        segments.update_value::<_>(addr, |word: <Arch::Layout as ElfLayout>::Word| {
-            <Arch::Layout as ElfLayout>::Word::from_usize(
-                (base + VmOffset::new(word.to_usize())).get(),
-            )
-        })
-    }
-}
-
 impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     /// Relocate PLT (Procedure Linkage Table) entries
     fn relocate_pltrel<PreH, PostH, Obs>(
@@ -206,7 +171,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     {
         let core = self.core_ref();
         let base = core.base();
-        let segments = core.segments();
         let reloc = self.relocation();
         debug_assert!(Arch::SUPPORTS_NATIVE_RUNTIME || !binding.is_lazy());
         binding.prepare_plt(self)?;
@@ -223,19 +187,22 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
             // Handle jump slot relocations
             if likely(r_type == Arch::JUMP_SLOT) {
-                if binding.relocate_jump_slot::<Arch, R>(segments, base, rel)? {
+                if binding.relocate_jump_slot::<Arch, R, _>(helper.memory(), base, rel)? {
                     continue;
                 }
 
                 if let Some(symbol) = helper.find_symbol(rel)? {
-                    write_reloc_addr::<Arch, R>(segments, place, symbol)?;
+                    let word = <Arch::Layout as ElfLayout>::Word::from_usize(symbol.get());
+                    unsafe { helper.memory().write_value(place, word)? };
                     continue;
                 }
                 failure_reason = RelocReason::UnknownSymbol;
             } else if unlikely(r_type == Arch::IRELATIVE) {
                 let r_addend = rel.r_addend(base);
                 let addr = base.wrapping_add_signed(r_addend);
-                write_reloc_addr::<Arch, R>(segments, place, helper.resolve_ifunc(rel, addr)?)?;
+                let resolved = helper.resolve_ifunc(rel, addr)?;
+                let word = <Arch::Layout as ElfLayout>::Word::from_usize(resolved.get());
+                unsafe { helper.memory().write_value(place, word)? };
                 continue;
             } else if unlikely(Arch::is_tlsdesc(r_type)) {
                 // `handle_tls_reloc` performs its own SUPPORTS_NATIVE_RUNTIME
@@ -256,14 +223,14 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     }
 
     /// Perform relative relocations (REL_RELATIVE)
-    fn relocate_relative(&self) -> Result<&Self>
+    fn relocate_relative<Memory>(&self, memory: &Memory) -> Result<&Self>
     where
+        Memory: ImageMemory,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
         let core = self.core_ref();
         let reloc = self.relocation();
         let base = core.base();
-        let segments = core.segments();
 
         match &reloc.relative {
             RelativeRel::Rel(rel) => {
@@ -273,28 +240,29 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                 for rel in rel {
                     debug_assert!(rel.r_type() == Arch::RELATIVE);
                     let r_addend = rel.r_addend(base);
-                    write_reloc_addr::<Arch, R>(
-                        segments,
-                        base + rel.r_offset(),
-                        base.wrapping_add_signed(r_addend),
-                    )?;
+                    let value = base.wrapping_add_signed(r_addend);
+                    let word = <Arch::Layout as ElfLayout>::Word::from_usize(value.get());
+                    unsafe { memory.write_value(base + rel.r_offset(), word)? };
                 }
             }
             RelativeRel::Relr(relr) => {
                 let relr = relr.as_slice();
                 // Apply compact relative relocations (RELR format)
                 let mut reloc_offset = 0usize;
+                let update_relative_word = |addr| unsafe {
+                    memory.update_value::<_>(addr, |word: <Arch::Layout as ElfLayout>::Word| {
+                        <Arch::Layout as ElfLayout>::Word::from_usize(
+                            (base + VmOffset::new(word.to_usize())).get(),
+                        )
+                    })
+                };
 
                 for relr in relr {
                     let value = relr.value();
 
                     if (value & 1) == 0 {
                         reloc_offset = value;
-                        update_relative_word::<Arch, R>(
-                            segments,
-                            base + VmOffset::new(reloc_offset),
-                            base,
-                        )?;
+                        update_relative_word(base + VmOffset::new(reloc_offset))?;
                         reloc_offset += core::mem::size_of::<<Arch::Layout as ElfLayout>::Word>();
                         continue;
                     }
@@ -303,11 +271,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                     let mut offset = reloc_offset;
                     while bitmap != 0 {
                         if (bitmap & 1) != 0 {
-                            update_relative_word::<Arch, R>(
-                                segments,
-                                base + VmOffset::new(offset),
-                                base,
-                            )?;
+                            update_relative_word(base + VmOffset::new(offset))?;
                         }
                         bitmap >>= 1;
                         offset += core::mem::size_of::<<Arch::Layout as ElfLayout>::Word>();
@@ -341,7 +305,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         let core = self.core_ref();
         let reloc = self.relocation();
         let base = core.base();
-        let segments = core.segments();
 
         // Process each dynamic relocation entry
         let dynrel = reloc.dynrel.as_slice();
@@ -364,11 +327,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                 // Handle GOT and symbolic relocations
                 if let Some(symbol) = helper.find_symbol(rel)? {
                     let r_addend = rel.r_addend(base);
-                    write_reloc_addr::<Arch, R>(
-                        segments,
-                        place,
-                        symbol.wrapping_add_signed(r_addend),
-                    )?;
+                    let value = symbol.wrapping_add_signed(r_addend);
+                    let word = <Arch::Layout as ElfLayout>::Word::from_usize(value.get());
+                    unsafe { helper.memory().write_value(place, word)? };
                     continue;
                 }
                 failure_reason = RelocReason::UnknownSymbol;
@@ -380,7 +341,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                         let mut src = Vec::new();
                         src.resize(len, 0);
                         symdef.read_bytes(VmOffset::new(sym.st_value()), &mut src)?;
-                        segments.write_bytes(base + rel.r_offset(), &src)?;
+                        helper.memory().write_bytes(base + rel.r_offset(), &src)?;
                         continue;
                     }
                 }
@@ -388,7 +349,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             } else if r_type == Arch::IRELATIVE {
                 let r_addend = rel.r_addend(base);
                 let addr = base.wrapping_add_signed(r_addend);
-                write_reloc_addr::<Arch, R>(segments, place, helper.resolve_ifunc(rel, addr)?)?;
+                let resolved = helper.resolve_ifunc(rel, addr)?;
+                let word = <Arch::Layout as ElfLayout>::Word::from_usize(resolved.get());
+                unsafe { helper.memory().write_value(place, word)? };
                 continue;
             } else if Arch::is_tls(r_type) {
                 // `handle_tls_reloc` is a pure data computation for

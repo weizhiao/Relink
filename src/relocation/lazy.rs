@@ -5,12 +5,10 @@ mod enabled {
         RelocationError, Result,
         arch::{NativeArch, prepare_lazy_bind},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolInfo},
-        os::{RegionAccess, VmAddr, VmOffset},
+        os::{ImageMemory, RegionAccess, VmAddr, VmOffset},
         relocation::{
-            BindingMode, ObjectRelocationArch, RelocValue, RelocationArch, SupportLazy, SymDef,
-            unlikely,
+            BindingMode, ObjectRelocationArch, RelocationArch, SupportLazy, SymDef, unlikely,
         },
-        segment::ElfSegments,
         sync::Arc,
         tls::lookup_tls_get_addr,
     };
@@ -62,13 +60,16 @@ mod enabled {
             Ok(())
         }
 
-        pub(crate) fn relocate_jump_slot<Arch: RelocationArch, R: RegionAccess>(
+        pub(crate) fn relocate_jump_slot<Arch, R, Memory>(
             &self,
-            segments: &ElfSegments<R>,
+            memory: &Memory,
             base: VmAddr,
             rel: &ElfRelType<Arch>,
         ) -> Result<bool>
         where
+            Arch: RelocationArch,
+            R: RegionAccess,
+            Memory: ImageMemory,
             <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
         {
             if !self.is_lazy() {
@@ -76,7 +77,8 @@ mod enabled {
             }
 
             unsafe {
-                segments.update_value::<_>(
+                ImageMemory::update_value(
+                    memory,
                     base + rel.r_offset(),
                     |word: <Arch::Layout as ElfLayout>::Word| {
                         <Arch::Layout as ElfLayout>::Word::from_usize(
@@ -221,12 +223,12 @@ mod enabled {
             .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()));
 
         unsafe {
-            if segments
-                .write_value(
-                    dylib.segments.base() + rela.r_offset(),
-                    RelocValue::new(symbol.get()),
-                )
-                .is_err()
+            if ImageMemory::write_value(
+                segments,
+                dylib.segments.base() + rela.r_offset(),
+                symbol.get(),
+            )
+            .is_err()
             {
                 invalid_state(dylib.path.as_str(), "lazy binding write failed");
             }
@@ -240,7 +242,7 @@ mod disabled {
     use crate::{
         elf::ElfRelType,
         image::{ModuleScope, RawDynamic},
-        os::RegionAccess,
+        os::{ImageMemory, RegionAccess, VmAddr},
         relocation::{BindingMode, RelocationArch},
     };
 
@@ -264,12 +266,17 @@ mod disabled {
             Ok(())
         }
 
-        pub(crate) fn relocate_jump_slot<Arch: RelocationArch, R: RegionAccess>(
+        pub(crate) fn relocate_jump_slot<Arch, R, Memory>(
             &self,
-            _segments: &crate::segment::ElfSegments<R>,
-            _base: crate::os::VmAddr,
+            _memory: &Memory,
+            _base: VmAddr,
             _rel: &ElfRelType<Arch>,
-        ) -> crate::Result<bool> {
+        ) -> crate::Result<bool>
+        where
+            Arch: RelocationArch,
+            R: RegionAccess,
+            Memory: ImageMemory,
+        {
             Ok(false)
         }
     }

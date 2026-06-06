@@ -4,9 +4,8 @@ use crate::{
     elf::{ElfHashTable, ElfRelType, ElfRelocationType},
     object::layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
     observer::RelocationObserver,
-    os::{RegionAccess, VmAddr, VmOffset},
-    relocation::{ObjectRelocationArch, RelocHelper, RelocValue, RelocationHandler, reloc_error},
-    segment::ElfSegments,
+    os::{ImageMemory, RegionAccess, VmAddr, VmOffset},
+    relocation::{ObjectRelocationArch, RelocHelper, RelocationHandler, reloc_error},
 };
 use elf::abi::*;
 use hashbrown::HashMap;
@@ -83,9 +82,9 @@ impl ObjectRelocationArch for RiscV64Arch {
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn prepare_object_relocation<D, R, PreH, PostH, Obs, H>(
+    fn prepare_object_relocation<D, R, PreH, PostH, Obs, H, Memory>(
         state: &mut Self::ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         sections: &[&'static [ElfRelType<Self>]],
     ) -> Result<()>
     where
@@ -95,15 +94,16 @@ impl ObjectRelocationArch for RiscV64Arch {
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
+        Memory: ImageMemory,
     {
         Self::prepare_object_relocation_impl(state, helper, sections)
     }
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, R, PreH, PostH, Obs, H>(
+    fn relocate_object<D, R, PreH, PostH, Obs, H, Memory>(
         state: &mut Self::ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
     ) -> Result<()>
@@ -114,6 +114,7 @@ impl ObjectRelocationArch for RiscV64Arch {
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
+        Memory: ImageMemory,
     {
         Self::relocate_object_impl(state, helper, rel, pltgot)
     }
@@ -130,9 +131,9 @@ impl ObjectRelocationArch for RiscV64Arch {
 }
 
 impl RiscV64Arch {
-    pub(crate) fn prepare_object_relocation_impl<D, R, PreH, PostH, Obs, H>(
+    pub(crate) fn prepare_object_relocation_impl<D, R, PreH, PostH, Obs, H, Memory>(
         state: &mut RiscV64ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         sections: &[&'static [ElfRelType<Self>]],
     ) -> Result<()>
     where
@@ -142,6 +143,7 @@ impl RiscV64Arch {
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
+        Memory: ImageMemory,
     {
         let base = helper.core.base();
         state.hi20_cache.clear();
@@ -172,9 +174,9 @@ impl RiscV64Arch {
         Ok(())
     }
 
-    pub(crate) fn relocate_object_impl<D, R, PreH, PostH, Obs, H>(
+    pub(crate) fn relocate_object_impl<D, R, PreH, PostH, Obs, H, Memory>(
         state: &mut RiscV64ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
     ) -> Result<()>
@@ -185,10 +187,10 @@ impl RiscV64Arch {
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
+        Memory: ImageMemory,
     {
         let r_type = rel.r_type().raw();
         let core = helper.core;
-        let segments = core.segments();
         let base = core.base();
         let addend = rel.r_addend(base);
         let place = base.wrapping_add(rel.r_offset());
@@ -203,10 +205,9 @@ impl RiscV64Arch {
                     return Err(unknown_symbol());
                 };
                 unsafe {
-                    segments.write_object_value(
-                        place,
-                        RelocValue::new(sym.wrapping_add_signed(addend).get()),
-                    )?
+                    helper
+                        .memory()
+                        .write_value(place, sym.wrapping_add_signed(addend).get())?
                 };
             }
             R_RISCV_32 => {
@@ -214,9 +215,8 @@ impl RiscV64Arch {
                     return Err(unknown_symbol());
                 };
                 let value = u32::try_from(sym.wrapping_add_signed(addend).get())
-                    .map(RelocValue::new)
                     .map_err(|_| value_error(RelocReason::IntConversionOutOfRange))?;
-                unsafe { segments.write_object_value(place, value)? };
+                unsafe { helper.memory().write_value(place, value)? };
             }
             R_RISCV_32_PCREL => {
                 let Some(sym) = helper.find_symbol(rel)? else {
@@ -225,14 +225,13 @@ impl RiscV64Arch {
                 let value = i32::try_from(
                     sym.wrapping_add_signed(addend).get() as i128 - place.get() as i128,
                 )
-                .map(RelocValue::new)
                 .map_err(|_| value_error(RelocReason::IntConversionOutOfRange))?;
-                unsafe { segments.write_object_value(place, value)? };
+                unsafe { helper.memory().write_value(place, value)? };
             }
             R_RISCV_BRANCH => {
                 let off = branch_offset(helper, addend, place, rel, 4096)?;
                 unsafe {
-                    segments.update_object_value::<u32>(place, |insn| {
+                    helper.memory().update_value::<u32>(place, |insn| {
                         Self::encode_imm(insn, off, ImmType::B)
                     })?
                 };
@@ -240,7 +239,7 @@ impl RiscV64Arch {
             R_RISCV_JAL => {
                 let off = branch_offset(helper, addend, place, rel, 1 << 20)?;
                 unsafe {
-                    segments.update_object_value::<u32>(place, |insn| {
+                    helper.memory().update_value::<u32>(place, |insn| {
                         Self::encode_imm(insn, off, ImmType::J)
                     })?
                 };
@@ -262,7 +261,7 @@ impl RiscV64Arch {
                 if !(off >= -(1i64 << 31) && off < (1i64 << 31)) {
                     return Err(value_error(RelocReason::IntConversionOutOfRange));
                 }
-                Self::write_auipc_pair(segments, place, off)?;
+                Self::write_auipc_pair(helper.memory(), place, off)?;
             }
             R_RISCV_GOT_HI20 => {
                 if addend != 0 {
@@ -275,7 +274,7 @@ impl RiscV64Arch {
                 let got_addr = Self::ensure_got_entry(pltgot, key, sym);
                 let hi20 = (got_addr.get() as i64 - place.get() as i64 + 0x800) >> 12;
                 unsafe {
-                    segments.update_object_value::<u32>(place, |insn| {
+                    helper.memory().update_value::<u32>(place, |insn| {
                         Self::encode_imm(insn, hi20, ImmType::U)
                     })?
                 };
@@ -287,7 +286,7 @@ impl RiscV64Arch {
                 let off = signed_offset(sym, addend, place);
                 let hi20 = (off + 0x800) >> 12;
                 unsafe {
-                    segments.update_object_value::<u32>(place, |insn| {
+                    helper.memory().update_value::<u32>(place, |insn| {
                         Self::encode_imm(insn, hi20, ImmType::U)
                     })?
                 };
@@ -300,9 +299,9 @@ impl RiscV64Arch {
                     ImmType::S
                 };
                 unsafe {
-                    segments.update_object_value::<u32>(place, |insn| {
-                        Self::encode_imm(insn, lo12, imm_type)
-                    })?
+                    helper
+                        .memory()
+                        .update_value::<u32>(place, |insn| Self::encode_imm(insn, lo12, imm_type))?
                 };
             }
             R_RISCV_HI20 => {
@@ -311,7 +310,7 @@ impl RiscV64Arch {
                 };
                 let hi20 = (sym.wrapping_add_signed(addend).get() as i64 + 0x800) >> 12;
                 unsafe {
-                    segments.update_object_value::<u32>(place, |insn| {
+                    helper.memory().update_value::<u32>(place, |insn| {
                         Self::encode_imm(insn, hi20, ImmType::U)
                     })?
                 };
@@ -327,9 +326,9 @@ impl RiscV64Arch {
                     ImmType::S
                 };
                 unsafe {
-                    segments.update_object_value::<u32>(place, |insn| {
-                        Self::encode_imm(insn, lo12, imm_type)
-                    })?
+                    helper
+                        .memory()
+                        .update_value::<u32>(place, |insn| Self::encode_imm(insn, lo12, imm_type))?
                 };
             }
             R_RISCV_ADD8 | R_RISCV_ADD16 | R_RISCV_ADD32 | R_RISCV_ADD64 | R_RISCV_SUB8
@@ -343,18 +342,30 @@ impl RiscV64Arch {
                     R_RISCV_ADD8 | R_RISCV_ADD16 | R_RISCV_ADD32 | R_RISCV_ADD64
                 );
                 match r_type {
-                    R_RISCV_ADD8 | R_RISCV_SUB8 => {
-                        Self::apply_wrapping_arith::<u8, R>(segments, place, value, is_add)?
-                    }
-                    R_RISCV_ADD16 | R_RISCV_SUB16 => {
-                        Self::apply_wrapping_arith::<u16, R>(segments, place, value, is_add)?
-                    }
-                    R_RISCV_ADD32 | R_RISCV_SUB32 => {
-                        Self::apply_wrapping_arith::<u32, R>(segments, place, value, is_add)?
-                    }
-                    R_RISCV_ADD64 | R_RISCV_SUB64 => {
-                        Self::apply_wrapping_arith::<u64, R>(segments, place, value, is_add)?
-                    }
+                    R_RISCV_ADD8 | R_RISCV_SUB8 => Self::apply_wrapping_arith::<u8, Memory>(
+                        helper.memory(),
+                        place,
+                        value,
+                        is_add,
+                    )?,
+                    R_RISCV_ADD16 | R_RISCV_SUB16 => Self::apply_wrapping_arith::<u16, Memory>(
+                        helper.memory(),
+                        place,
+                        value,
+                        is_add,
+                    )?,
+                    R_RISCV_ADD32 | R_RISCV_SUB32 => Self::apply_wrapping_arith::<u32, Memory>(
+                        helper.memory(),
+                        place,
+                        value,
+                        is_add,
+                    )?,
+                    R_RISCV_ADD64 | R_RISCV_SUB64 => Self::apply_wrapping_arith::<u64, Memory>(
+                        helper.memory(),
+                        place,
+                        value,
+                        is_add,
+                    )?,
                     _ => unreachable!(),
                 }
             }
@@ -364,7 +375,7 @@ impl RiscV64Arch {
                 };
                 let value = sym.wrapping_add_signed(addend).get() as u8;
                 unsafe {
-                    segments.update_object_value::<u8>(place, |old| {
+                    helper.memory().update_value::<u8>(place, |old| {
                         (old & 0xc0) | ((old & 0x3f).wrapping_sub(value) & 0x3f)
                     })?
                 };
@@ -375,23 +386,24 @@ impl RiscV64Arch {
                 };
                 let value = sym.wrapping_add_signed(addend).get() as u8;
                 unsafe {
-                    segments
-                        .update_object_value::<u8>(place, |old| (old & 0xc0) | (value & 0x3f))?
+                    helper
+                        .memory()
+                        .update_value::<u8>(place, |old| (old & 0xc0) | (value & 0x3f))?
                 };
             }
-            R_RISCV_SET8 => {
-                Self::write_truncated::<u8, D, R, PreH, PostH, Obs, H>(helper, rel, addend, place)?
-            }
-            R_RISCV_SET16 => {
-                Self::write_truncated::<u16, D, R, PreH, PostH, Obs, H>(helper, rel, addend, place)?
-            }
-            R_RISCV_SET32 => {
-                Self::write_truncated::<u32, D, R, PreH, PostH, Obs, H>(helper, rel, addend, place)?
-            }
+            R_RISCV_SET8 => Self::write_truncated::<u8, D, R, PreH, PostH, Obs, H, Memory>(
+                helper, rel, addend, place,
+            )?,
+            R_RISCV_SET16 => Self::write_truncated::<u16, D, R, PreH, PostH, Obs, H, Memory>(
+                helper, rel, addend, place,
+            )?,
+            R_RISCV_SET32 => Self::write_truncated::<u32, D, R, PreH, PostH, Obs, H, Memory>(
+                helper, rel, addend, place,
+            )?,
             R_RISCV_RVC_BRANCH => {
                 let off = branch_offset(helper, addend, place, rel, 256)?;
                 unsafe {
-                    segments.update_object_value::<u16>(place, |insn| {
+                    helper.memory().update_value::<u16>(place, |insn| {
                         Self::encode_imm(insn as u32, off, ImmType::CB) as u16
                     })?
                 };
@@ -399,7 +411,7 @@ impl RiscV64Arch {
             R_RISCV_RVC_JUMP => {
                 let off = branch_offset(helper, addend, place, rel, 2048)?;
                 unsafe {
-                    segments.update_object_value::<u16>(place, |insn| {
+                    helper.memory().update_value::<u16>(place, |insn| {
                         Self::encode_imm(insn as u32, off, ImmType::CJ) as u16
                     })?
                 };
@@ -455,9 +467,9 @@ impl RiscV64Arch {
         }
     }
 
-    fn resolve_pcrel_lo12<D, R, PreH, PostH, Obs, H>(
+    fn resolve_pcrel_lo12<D, R, PreH, PostH, Obs, H, Memory>(
         state: &RiscV64ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         pltgot: &mut PltGotSection,
     ) -> Result<i64>
@@ -468,6 +480,7 @@ impl RiscV64Arch {
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
+        Memory: ImageMemory,
     {
         let Some(auipc_addr) = helper.find_symbol(rel)? else {
             return Err(reloc_error::<Self, _, R, H>(
@@ -515,36 +528,33 @@ impl RiscV64Arch {
         Ok(off - (hi20 << 12))
     }
 
-    fn write_auipc_pair<R: RegionAccess>(
-        segments: &ElfSegments<R>,
-        place: VmAddr,
-        off: i64,
-    ) -> Result<()> {
+    fn write_auipc_pair<Memory>(segments: &Memory, place: VmAddr, off: i64) -> Result<()>
+    where
+        Memory: ImageMemory,
+    {
         let hi20 = (off + 0x800) >> 12;
         let lo12 = off & 0xfff;
         unsafe {
-            segments.update_object_value::<u32>(place, |insn| {
-                Self::encode_imm(insn, hi20, ImmType::U)
-            })?;
-            segments.update_object_value::<u32>(place.wrapping_add(VmOffset::new(4)), |insn| {
+            segments.update_value::<u32>(place, |insn| Self::encode_imm(insn, hi20, ImmType::U))?;
+            segments.update_value::<u32>(place.wrapping_add(VmOffset::new(4)), |insn| {
                 Self::encode_imm(insn, lo12, ImmType::I)
             })?;
         }
         Ok(())
     }
 
-    fn apply_wrapping_arith<T, R>(
-        segments: &ElfSegments<R>,
+    fn apply_wrapping_arith<T, Memory>(
+        segments: &Memory,
         place: VmAddr,
         value: usize,
         is_add: bool,
     ) -> Result<()>
     where
         T: WrappingRelocWord + crate::ByteRepr,
-        R: RegionAccess,
+        Memory: ImageMemory,
     {
         unsafe {
-            segments.update_object_value::<T>(place, |old| {
+            segments.update_value::<T>(place, |old| {
                 let rhs = T::trunc_from_usize(value);
                 if is_add {
                     old.wrapping_add(rhs)
@@ -556,8 +566,8 @@ impl RiscV64Arch {
         Ok(())
     }
 
-    fn write_truncated<T, D, R, PreH, PostH, Obs, H>(
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H>,
+    fn write_truncated<T, D, R, PreH, PostH, Obs, H, Memory>(
+        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         addend: isize,
         place: VmAddr,
@@ -570,6 +580,7 @@ impl RiscV64Arch {
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
+        Memory: ImageMemory,
     {
         let Some(sym) = helper.find_symbol(rel)? else {
             return Err(reloc_error::<Self, _, R, H>(
@@ -579,9 +590,9 @@ impl RiscV64Arch {
             ));
         };
         unsafe {
-            helper.core.segments().write_object_value(
+            helper.memory().write_value(
                 place,
-                RelocValue::new(T::trunc_from_usize(sym.wrapping_add_signed(addend).get())),
+                T::trunc_from_usize(sym.wrapping_add_signed(addend).get()),
             )?
         };
         Ok(())
@@ -651,8 +662,8 @@ fn signed_offset(target: VmAddr, addend: isize, place: VmAddr) -> i64 {
     (target.get() as i128 + addend as i128 - place.get() as i128) as i64
 }
 
-fn branch_offset<D, R, PreH, PostH, Obs, H>(
-    helper: &mut RelocHelper<'_, D, RiscV64Arch, R, PreH, PostH, Obs, H>,
+fn branch_offset<D, R, PreH, PostH, Obs, H, Memory>(
+    helper: &mut RelocHelper<'_, D, RiscV64Arch, R, PreH, PostH, Obs, H, Memory>,
     addend: isize,
     place: VmAddr,
     rel: &ElfRelType<RiscV64Arch>,
@@ -665,6 +676,7 @@ where
     PreH: RelocationHandler<RiscV64Arch> + ?Sized,
     PostH: RelocationHandler<RiscV64Arch> + ?Sized,
     Obs: RelocationObserver<RiscV64Arch> + ?Sized,
+    Memory: ImageMemory,
 {
     let Some(sym) = helper.find_symbol(rel)? else {
         return Err(reloc_error::<RiscV64Arch, _, R, H>(

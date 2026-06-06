@@ -296,7 +296,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         Obs: RelocationObserver<Arch> + ?Sized,
     {
         self.module.set_init();
-        let mut event = LifecycleEvent::with_executor(
+        let mut event = LifecycleEvent::<Arch, R>::with_executor(
             LifecyclePhase::Init,
             self.name(),
             init,

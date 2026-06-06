@@ -7,5 +7,5 @@ mod symbol;
 
 pub(crate) use builder::ObjectBuilder;
 pub use hash::CustomHash;
-pub(crate) use layout::PltGotSection;
+pub(crate) use layout::{ObjectSegmentView, PltGotSection};
 pub(crate) use link::ObjectRelocation;

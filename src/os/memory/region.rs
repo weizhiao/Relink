@@ -65,32 +65,6 @@ impl<R: RegionAccess> MappedRegion<R> {
         unsafe { self.0.read_bytes(offset, dst) }
     }
 
-    /// Reads one typed value from the region without checking bounds.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region
-    /// and `offset` is aligned for `T`.
-    #[inline]
-    pub(crate) unsafe fn read_value<T: ByteRepr>(&self, offset: usize) -> Result<T> {
-        unsafe { self.0.read_value(offset) }
-    }
-
-    /// Reads one typed value from the region without requiring alignment.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region.
-    #[inline]
-    #[cfg(feature = "object")]
-    pub(crate) unsafe fn read_unaligned_value<T: ByteRepr>(&self, offset: usize) -> Result<T> {
-        unsafe { self.0.read_unaligned_value(offset) }
-    }
-
     /// Writes bytes into the region without checking bounds.
     ///
     /// The returned error represents backend access failure; it is not a
@@ -101,36 +75,6 @@ impl<R: RegionAccess> MappedRegion<R> {
     #[inline]
     pub(crate) unsafe fn write_bytes(&self, offset: usize, src: &[u8]) -> Result<()> {
         unsafe { self.0.write_bytes(offset, src) }
-    }
-
-    /// Writes one typed value into the region without checking bounds.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region
-    /// and `offset` is aligned for `T`.
-    #[inline]
-    pub(crate) unsafe fn write_value<T: ByteRepr>(&self, offset: usize, value: T) -> Result<()> {
-        unsafe { self.0.write_value(offset, value) }
-    }
-
-    /// Writes one typed value into the region without requiring alignment.
-    ///
-    /// The returned error represents backend access failure; it is not a
-    /// substitute for range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `offset..offset + size_of::<T>()` is inside this region.
-    #[inline]
-    #[cfg(feature = "object")]
-    pub(crate) unsafe fn write_unaligned_value<T: ByteRepr>(
-        &self,
-        offset: usize,
-        value: T,
-    ) -> Result<()> {
-        unsafe { self.0.write_unaligned_value(offset, value) }
     }
 
     /// Fills bytes in the region without checking bounds.

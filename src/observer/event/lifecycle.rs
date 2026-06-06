@@ -2,7 +2,10 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::Lifecycle,
-    os::{CodeContext, CodeExecutor, HostRegion, NativeCodeExecutor, RegionAccess, VmAddr},
+    os::{
+        CodeContext, CodeExecutor, HostRegion, ImageMemory, NativeCodeExecutor, RegionAccess,
+        VmAddr,
+    },
     relocation::RelocationArch,
     segment::ElfSegments,
 };
@@ -95,7 +98,7 @@ pub struct LifecycleEvent<'a, Arch: RelocationArch = NativeArch, R: RegionAccess
     phase: LifecyclePhase,
     name: &'a str,
     lifecycle: Lifecycle,
-    segments: &'a ElfSegments<R>,
+    memory: &'a dyn ImageMemory,
     executor: CodeExecutorBox<Arch, R>,
 }
 
@@ -105,14 +108,14 @@ impl<'a, Arch: RelocationArch, R: RegionAccess> LifecycleEvent<'a, Arch, R> {
         phase: LifecyclePhase,
         name: &'a str,
         lifecycle: &'a Lifecycle,
-        segments: &'a ElfSegments<R>,
+        memory: &'a dyn ImageMemory,
         executor: CodeExecutorBox<Arch, R>,
     ) -> Self {
         Self {
             phase,
             name,
             lifecycle: lifecycle.clone(),
-            segments,
+            memory,
             executor,
         }
     }
@@ -132,7 +135,7 @@ impl<'a, Arch: RelocationArch, R: RegionAccess> LifecycleEvent<'a, Arch, R> {
     /// Returns the load base used by this image.
     #[inline]
     pub fn base(&self) -> VmAddr {
-        self.segments.base()
+        self.memory.base()
     }
 
     /// Returns the lifecycle address table for this event.
@@ -158,7 +161,7 @@ impl<'a, Arch: RelocationArch, R: RegionAccess> LifecycleEvent<'a, Arch, R> {
 
     #[inline]
     pub(crate) fn run(&mut self) -> Result<()> {
-        let ctx = CodeContext::<Arch, R>::new(self.name, self.segments);
+        let ctx = CodeContext::<Arch, R>::new(self.name, self.memory);
         for addr in self.lifecycle.func_addrs() {
             self.executor.call_void(ctx, addr)?;
         }

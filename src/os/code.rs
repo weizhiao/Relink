@@ -1,17 +1,16 @@
-use super::{HostRegion, RegionAccess, VmAddr};
+use super::{HostRegion, ImageMemory, RegionAccess, VmAddr};
 use crate::{
     CodeError, MmapError, Result,
     arch::NativeArch,
     relocation::{RelocationArch, resolve_ifunc},
-    segment::ElfSegments,
 };
 use core::marker::PhantomData;
 
 /// Runtime context for executing code addresses owned by one mapped image.
 pub struct CodeContext<'a, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
     name: &'a str,
-    segments: &'a ElfSegments<R>,
-    _marker: PhantomData<fn() -> Arch>,
+    memory: &'a dyn ImageMemory,
+    _marker: PhantomData<fn() -> (Arch, R)>,
 }
 
 impl<Arch: RelocationArch, R: RegionAccess> Clone for CodeContext<'_, Arch, R> {
@@ -25,10 +24,10 @@ impl<Arch: RelocationArch, R: RegionAccess> Copy for CodeContext<'_, Arch, R> {}
 
 impl<'a, Arch: RelocationArch, R: RegionAccess> CodeContext<'a, Arch, R> {
     #[inline]
-    pub(crate) const fn new(name: &'a str, segments: &'a ElfSegments<R>) -> Self {
+    pub(crate) fn new(name: &'a str, memory: &'a dyn ImageMemory) -> Self {
         Self {
             name,
-            segments,
+            memory,
             _marker: PhantomData,
         }
     }
@@ -42,19 +41,13 @@ impl<'a, Arch: RelocationArch, R: RegionAccess> CodeContext<'a, Arch, R> {
     /// Returns the load base used by this image.
     #[inline]
     pub fn base(&self) -> VmAddr {
-        self.segments.base()
-    }
-
-    /// Returns the mapped memory backing this image.
-    #[inline]
-    pub const fn segments(&self) -> &'a ElfSegments<R> {
-        self.segments
+        self.memory.base()
     }
 
     /// Translates an image VM address into a host-accessible pointer.
     #[inline]
     pub fn host_ptr(&self, addr: VmAddr) -> Result<core::ptr::NonNull<u8>> {
-        self.segments
+        self.memory
             .host_ptr(addr)
             .ok_or(MmapError::HostPointerUnavailable.into())
     }

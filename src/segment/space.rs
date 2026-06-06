@@ -1,10 +1,12 @@
 use crate::{
     ByteRepr, Result,
-    os::{HostRegion, MappedRegion, MappedView, ProtFlags, RegionAccess, VmAddr, VmOffset},
-    relocation::RelocValue,
+    os::{
+        HostRegion, ImageMemory, MappedRegion, MappedView, ProtFlags, RegionAccess, VmAddr,
+        VmOffset,
+    },
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{fmt::Debug, mem::size_of, ptr::NonNull};
+use core::{fmt::Debug, ptr::NonNull};
 
 #[derive(Clone, Copy)]
 struct MappedRange {
@@ -282,80 +284,31 @@ impl<R: RegionAccess> ElfSegments<R> {
         unsafe { self.region.mprotect(self.region_offset(addr), len, prot) }
     }
 
-    /// Writes a typed relocation value without checked range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
-    /// writable mapped memory owned by this image.
-    #[inline]
-    pub(crate) unsafe fn write_value<T: ByteRepr>(
-        &self,
-        addr: VmAddr,
-        val: RelocValue<T>,
-    ) -> Result<()> {
-        let value = val.into_inner();
-        unsafe { self.region.write_value(self.region_offset(addr), value) }
-    }
-
-    /// Updates a typed relocation value without checked range validation.
-    ///
-    /// # Safety
-    /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
-    /// readable and writable mapped memory owned by this image.
-    #[inline]
-    pub(crate) unsafe fn update_value<T: ByteRepr + Copy>(
-        &self,
-        addr: VmAddr,
-        update: impl FnOnce(T) -> T,
-    ) -> Result<()> {
-        if size_of::<T>() == 0 {
-            return Ok(());
-        }
-
-        let region_offset = self.region_offset(addr);
-        let value = unsafe { self.region.read_value(region_offset)? };
-        let value = update(value);
-        unsafe { self.region.write_value(region_offset, value) }
-    }
-
-    #[cfg(feature = "object")]
-    #[inline]
-    pub(crate) unsafe fn write_object_value<T>(
-        &self,
-        addr: VmAddr,
-        val: RelocValue<T>,
-    ) -> Result<()>
-    where
-        T: ByteRepr,
-    {
-        let value = val.into_inner();
-        unsafe {
-            self.region
-                .write_unaligned_value(self.region_offset(addr), value)
-        }
-    }
-
-    #[cfg(feature = "object")]
-    #[inline]
-    pub(crate) unsafe fn update_object_value<T>(
-        &self,
-        addr: VmAddr,
-        update: impl FnOnce(T) -> T,
-    ) -> Result<()>
-    where
-        T: ByteRepr + Copy,
-    {
-        let value = unsafe { self.region.read_unaligned_value(self.region_offset(addr))? };
-        let value = update(value);
-        unsafe {
-            self.region
-                .write_unaligned_value(self.region_offset(addr), value)
-        }
-    }
-
     /// Returns the base address of the mapped memory as a raw integer.
     #[inline]
     pub fn base(&self) -> VmAddr {
         self.base
+    }
+}
+
+impl<R: RegionAccess> ImageMemory for ElfSegments<R> {
+    #[inline]
+    fn base(&self) -> VmAddr {
+        self.base()
+    }
+
+    #[inline]
+    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
+        self.host_ptr(addr)
+    }
+
+    #[inline]
+    fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
+        self.read_bytes(addr, dst)
+    }
+
+    #[inline]
+    fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
+        self.write_bytes(addr, src)
     }
 }

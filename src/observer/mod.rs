@@ -8,4 +8,6 @@ pub use event::{
     TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
 };
 pub(crate) use event::{Finalizer, default_lifecycle_executor};
+#[cfg(feature = "object")]
+pub use event::{SectionGroup, SectionLayoutEvent, SectionLifetime};
 pub use traits::{LinkObserver, LoadObserver, RelocationObserver};

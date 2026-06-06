@@ -1,3 +1,5 @@
+#[cfg(feature = "object")]
+use super::SectionLayoutEvent;
 use super::{
     DtDebugEntry, DynamicLoadedEvent, IfuncBindingEvent, LifecycleEvent, LinkActivity,
     ModuleRelocatedEvent, ObjectMetadataEvent, ProgramHeaderEvent, ResolveDependencyEvent,
@@ -31,6 +33,16 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
     fn on_object_metadata(
         &mut self,
         _event: ObjectMetadataEvent<'_, '_, D, Arch::Layout>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called before relocatable-object section addresses are assigned.
+    #[cfg(feature = "object")]
+    #[inline]
+    fn on_section_layout(
+        &mut self,
+        _event: &mut SectionLayoutEvent<'_, '_, Arch::Layout>,
     ) -> Result<()> {
         Ok(())
     }
@@ -172,6 +184,15 @@ where
         (**self).on_object_metadata(event)
     }
 
+    #[cfg(feature = "object")]
+    #[inline]
+    fn on_section_layout(
+        &mut self,
+        event: &mut SectionLayoutEvent<'_, '_, Arch::Layout>,
+    ) -> Result<()> {
+        (**self).on_section_layout(event)
+    }
+
     #[inline]
     fn on_dynamic_loaded<R: RegionAccess>(
         &mut self,
@@ -263,6 +284,15 @@ where
         event: ObjectMetadataEvent<'_, '_, D, Arch::Layout>,
     ) -> Result<()> {
         (**self).on_object_metadata(event)
+    }
+
+    #[cfg(feature = "object")]
+    #[inline]
+    fn on_section_layout(
+        &mut self,
+        event: &mut SectionLayoutEvent<'_, '_, Arch::Layout>,
+    ) -> Result<()> {
+        (**self).on_section_layout(event)
     }
 
     #[inline]

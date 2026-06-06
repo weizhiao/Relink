@@ -5,9 +5,10 @@ use crate::{
     image::{ElfCore, Module, ModuleScope},
     logging,
     observer::{IfuncBindingEvent, RelocationObserver, SymbolBindingEvent},
-    os::{CodeContext, RegionAccess, VmAddr, VmOffset},
+    os::{CodeContext, ImageMemory, RegionAccess, VmAddr, VmOffset},
     relocate_context_error,
     relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
+    segment::ElfSegments,
     tls::{TlsDescArgs, lookup_tls_get_addr},
 };
 use core::marker::PhantomData;
@@ -22,18 +23,20 @@ pub(crate) struct RelocHelper<
     PostH: ?Sized,
     Obs: ?Sized,
     H = HashTable<<Arch as RelocationArch>::Layout>,
+    Memory = &'find ElfSegments<R>,
 > {
     pub(crate) core: &'find ElfCore<D, Arch, R, H>,
+    memory: Memory,
     pub(crate) scope: ModuleScope<Arch>,
     pub(crate) pre_handler: &'find PreH,
     pub(crate) post_handler: &'find PostH,
     pub(crate) observer: &'find mut Obs,
-    #[allow(dead_code)]
     pub(crate) tls_get_addr: VmAddr,
     pub(crate) tls_desc_args: TlsDescArgs,
 }
 
-impl<'find, D, Arch, R, PreH, PostH, Obs, H> RelocHelper<'find, D, Arch, R, PreH, PostH, Obs, H>
+impl<'find, D, Arch, R, PreH, PostH, Obs, H, Memory>
+    RelocHelper<'find, D, Arch, R, PreH, PostH, Obs, H, Memory>
 where
     D: 'static,
     Arch: RelocationArch,
@@ -42,9 +45,11 @@ where
     PreH: RelocationHandler<Arch> + ?Sized,
     PostH: RelocationHandler<Arch> + ?Sized,
     Obs: RelocationObserver<Arch> + ?Sized,
+    Memory: ImageMemory,
 {
     pub(crate) fn new(
         core: &'find ElfCore<D, Arch, R, H>,
+        memory: Memory,
         scope: ModuleScope<Arch>,
         pre_handler: &'find PreH,
         post_handler: &'find PostH,
@@ -53,6 +58,7 @@ where
     ) -> Self {
         Self {
             core,
+            memory,
             scope,
             pre_handler,
             post_handler,
@@ -60,6 +66,12 @@ where
             tls_get_addr,
             tls_desc_args: TlsDescArgs::default(),
         }
+    }
+
+    #[inline]
+    #[cfg_attr(not(feature = "object"), allow(dead_code))]
+    pub(crate) fn memory(&self) -> &Memory {
+        &self.memory
     }
 
     #[inline]
@@ -98,7 +110,7 @@ where
     ) -> Result<VmAddr> {
         let mut event = IfuncBindingEvent::new(self.core, rel, resolver);
         self.observer.on_ifunc_binding(&mut event)?;
-        let ctx = CodeContext::<Arch, R>::new(self.core.name(), self.core.segments());
+        let ctx = CodeContext::<Arch, R>::new(self.core.name(), &self.memory);
         event.resolve(ctx)
     }
 }

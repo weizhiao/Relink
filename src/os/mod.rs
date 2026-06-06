@@ -7,7 +7,7 @@
 
 pub use code::{CodeContext, CodeExecutor, NativeCodeExecutor};
 pub use defs::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
-pub use memory::{HostRegion, MappedRegion, RegionAccess, VmAddr, VmOffset};
+pub use memory::{HostRegion, ImageMemory, MappedRegion, RegionAccess, VmAddr, VmOffset};
 pub(crate) use memory::{MappedView, align_up, rounddown, roundup};
 pub use platform::DefaultMmap;
 pub(crate) use platform::*;

@@ -79,6 +79,7 @@ fn object_relocations_match() {
         .scope([host_symbols.source("__host")])
         .relocate()
         .expect("relocation failed");
+    assert!(loaded_object.is_init());
 
     let data_base =
         unsafe { loaded_object.get::<i32>(LOCAL_VAR_NAME).unwrap().into_raw() } as usize;

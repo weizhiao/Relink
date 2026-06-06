@@ -5,6 +5,7 @@
 //! contain code and data that need to be relocated before they can be executed.
 
 use crate::object::{CustomHash, ObjectBuilder, ObjectRelocation, PltGotSection};
+use crate::segment::ElfSegments;
 use crate::{
     Result,
     elf::Lifecycle,
@@ -42,7 +43,11 @@ pub struct RawObject<
     pub(crate) pltgot: PltGotSection,
 
     /// Memory protection function.
-    pub(crate) mprotect: Box<dyn Fn(&crate::segment::ElfSegments<R>) -> Result<()>>,
+    pub(crate) mprotect:
+        Box<dyn for<'segments> Fn(&crate::object::ObjectSegmentView<'segments, R>) -> Result<()>>,
+
+    /// Initialization-only mapped memory.
+    pub(crate) init_segments: Option<ElfSegments<R>>,
 
     /// Initialization lifecycle.
     pub(crate) init: Lifecycle,
@@ -58,6 +63,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Deref for RawObjec
 
 impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch, R> {
     pub(crate) fn from_builder<T: TlsResolver>(builder: ObjectBuilder<T, D, Arch, R>) -> Self {
+        let (segments, init_segments) = builder.segments.into_parts();
         let inner = CoreInner {
             is_init: AtomicBool::new(false),
             path: builder.path,
@@ -71,7 +77,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
                 VmAddr::from_ptr(T::tls_get_addr as *const ()),
                 T::unregister,
             ),
-            segments: builder.segments,
+            segments,
         };
 
         Self {
@@ -81,6 +87,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
             pltgot: builder.pltgot,
             relocation: builder.relocation,
             mprotect: builder.mprotect,
+            init_segments,
             init: builder.init,
         }
     }

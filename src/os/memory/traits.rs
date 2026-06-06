@@ -133,3 +133,86 @@ pub trait RegionAccess: Send + Sync + 'static {
     /// The caller must ensure `offset..offset + len` is inside this region.
     unsafe fn mprotect(&self, offset: usize, len: usize, prot: ProtFlags) -> Result<()>;
 }
+
+/// Address-space view for an image mapped at VM addresses.
+pub trait ImageMemory: Send + Sync {
+    /// Returns the load base used by this image.
+    fn base(&self) -> VmAddr;
+
+    /// Translates an image VM address into a host-accessible pointer.
+    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>>;
+
+    /// Reads bytes from an image VM address.
+    fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()>;
+
+    /// Writes bytes to an image VM address.
+    fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()>;
+
+    /// Writes a typed value to an image VM address.
+    ///
+    /// # Safety
+    /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
+    /// writable image memory.
+    #[inline]
+    unsafe fn write_value<T: ByteRepr>(&self, addr: VmAddr, value: T) -> Result<()>
+    where
+        Self: Sized,
+    {
+        let bytes = unsafe {
+            core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
+        };
+        self.write_bytes(addr, bytes)
+    }
+
+    /// Reads, updates, and writes a typed value.
+    ///
+    /// # Safety
+    /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
+    /// readable and writable image memory.
+    #[inline]
+    unsafe fn update_value<T: ByteRepr + Copy>(
+        &self,
+        addr: VmAddr,
+        update: impl FnOnce(T) -> T,
+    ) -> Result<()>
+    where
+        Self: Sized,
+    {
+        if size_of::<T>() == 0 {
+            return Ok(());
+        }
+
+        let mut value = MaybeUninit::<T>::uninit();
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
+        };
+        self.read_bytes(addr, bytes)?;
+        let value = update(unsafe { value.assume_init() });
+        unsafe { self.write_value(addr, value) }
+    }
+}
+
+impl<M> ImageMemory for &M
+where
+    M: ImageMemory + ?Sized,
+{
+    #[inline]
+    fn base(&self) -> VmAddr {
+        (**self).base()
+    }
+
+    #[inline]
+    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
+        (**self).host_ptr(addr)
+    }
+
+    #[inline]
+    fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
+        (**self).read_bytes(addr, dst)
+    }
+
+    #[inline]
+    fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
+        (**self).write_bytes(addr, src)
+    }
+}

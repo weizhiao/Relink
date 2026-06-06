@@ -17,8 +17,8 @@ mod enabled {
         observer::{
             RelocationObserver, TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
         },
-        os::{RegionAccess, VmAddr, VmOffset},
-        relocation::{RelocHelper, RelocValue, RelocationArch, RelocationHandler},
+        os::{ImageMemory, RegionAccess, VmAddr, VmOffset},
+        relocation::{RelocHelper, RelocationArch, RelocationHandler},
         segment::ElfSegments,
     };
     use alloc::boxed::Box;
@@ -43,9 +43,10 @@ mod enabled {
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
         unsafe {
-            segments.write_value(
+            ImageMemory::write_value(
+                segments,
                 addr,
-                RelocValue::new(<Arch::Layout as ElfLayout>::Word::from_usize(value)),
+                <Arch::Layout as ElfLayout>::Word::from_usize(value),
             )
         }
     }
