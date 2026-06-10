@@ -1,9 +1,9 @@
+use super::ObjectSections;
 use crate::{
     AlignedBytes, MmapError, ParseShdrError, Result,
     arch::object::{PLT_ENTRY, PLT_ENTRY_SIZE},
     elf::{
-        ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionId, ElfSectionType,
-        ElfSections, ElfShdr,
+        ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionId, ElfSectionType, ElfShdr,
     },
     input::{ElfReader, ElfReaderExt},
     observer::{LoadObserver, SectionLayoutEvent},
@@ -51,13 +51,24 @@ impl<R: RegionAccess> ObjectSegments<R> {
     }
 
     #[inline]
-    pub(crate) fn core(&self) -> &ElfSegments<R> {
-        &self.core
+    pub(crate) fn init(&self) -> Option<&ElfSegments<R>> {
+        self.init.as_ref()
     }
 
     #[inline]
-    pub(crate) fn init(&self) -> Option<&ElfSegments<R>> {
-        self.init.as_ref()
+    pub(crate) fn view(&self) -> ObjectSegmentView<'_, R> {
+        ObjectSegmentView::new(&self.core, self.init.as_ref())
+    }
+
+    #[inline]
+    pub(crate) fn base_for(&self, lifetime: SectionLifetime) -> VmAddr {
+        match lifetime {
+            SectionLifetime::Core => self.core.base(),
+            SectionLifetime::Init => self
+                .init()
+                .map(ElfSegments::base)
+                .unwrap_or_else(|| self.core.base()),
+        }
     }
 
     #[inline]
@@ -121,9 +132,20 @@ impl<R: RegionAccess> ImageMemory for ObjectSegmentView<'_, R> {
 
     #[inline]
     fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        self.core
-            .host_ptr(addr)
-            .or_else(|| self.init.and_then(|init| init.host_ptr(addr)))
+        self.host_ptr_range(addr, 1)
+    }
+
+    #[inline]
+    fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>> {
+        if self.core.contains_range(addr, len) {
+            return self.core.host_ptr_range(addr, len);
+        }
+        if let Some(init) = self.init
+            && init.contains_range(addr, len)
+        {
+            return init.host_ptr_range(addr, len);
+        }
+        None
     }
 
     #[inline]
@@ -327,7 +349,7 @@ fn default_section_group(flags: ElfSectionFlags) -> SectionGroup {
 }
 
 fn create_section_plan<L: ElfLayout>(
-    sections: &ElfSections<'_, L>,
+    sections: &ObjectSections<L>,
     group_overrides: SectionGroups,
     placement_overrides: Vec<Option<SectionPlacement>>,
 ) -> SectionLayoutPlan {
@@ -368,7 +390,7 @@ impl<L: ElfLayout> PltGotShdr<L> {
     }
 
     #[inline]
-    fn addr(&self, sections: &ElfSections<'_, L>) -> VmAddr {
+    fn addr(&self, sections: &ObjectSections<L>) -> VmAddr {
         let addr = match self {
             Self::Existing(id) => sections.section(*id).sh_addr(),
             Self::Synthetic(shdr) => shdr.sh_addr(),
@@ -412,7 +434,7 @@ impl<L: ElfLayout> PltGotShdr<L> {
 }
 
 fn prepare_pltgot_shdrs<L: ElfLayout>(
-    sections: &mut ElfSections<'_, L>,
+    sections: &mut ObjectSections<L>,
     got_cnt: usize,
     plt_cnt: usize,
 ) -> PltGotShdrs<L> {
@@ -545,7 +567,7 @@ impl SegmentBuilder for SectionSegmentSet {
 
 impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
     pub(crate) fn new<D, Obs>(
-        sections: &mut ElfSections<'_, Arch::Layout>,
+        sections: &mut ObjectSections<Arch::Layout>,
         object: &impl ElfReader,
         page_size: usize,
         observer: &mut Obs,
@@ -643,6 +665,11 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
         self.pltgot.take().expect("PLTGOT already taken")
     }
 
+    #[inline]
+    pub(crate) fn section_lifetime(&self, id: ElfSectionId) -> Option<SectionLifetime> {
+        self.section_lifetimes.get(id.index()).copied()
+    }
+
     pub(crate) fn load_segments<M>(
         &mut self,
         mapper: &M,
@@ -671,38 +698,25 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
         Ok(())
     }
 
-    #[inline]
-    fn base_for_lifetime<R>(lifetime: SectionLifetime, segments: &ObjectSegments<R>) -> VmAddr
-    where
-        R: RegionAccess,
-    {
-        match lifetime {
-            SectionLifetime::Core => segments.core().base(),
-            SectionLifetime::Init => segments
-                .init()
-                .map(ElfSegments::base)
-                .unwrap_or_else(|| segments.core().base()),
-        }
-    }
-
     pub(crate) fn rebase_loaded_sections<R>(
-        &self,
+        &mut self,
         shdrs: &mut [ElfShdr<Arch::Layout>],
-        pltgot: &mut PltGotSection,
         segments: &ObjectSegments<R>,
     ) where
         R: RegionAccess,
     {
         for (index, shdr) in shdrs.iter_mut().enumerate() {
-            let base = Self::base_for_lifetime(self.section_lifetimes[index], segments);
+            let base = segments.base_for(self.section_lifetimes[index]);
             shdr.set_sh_addr((base + VmOffset::new(shdr.sh_addr())).get());
         }
 
-        pltgot.rebase_to(
-            Self::base_for_lifetime(self.pltgot_lifetimes.got, segments),
-            Self::base_for_lifetime(self.pltgot_lifetimes.got_plt, segments),
-            Self::base_for_lifetime(self.pltgot_lifetimes.plt, segments),
-        );
+        if let Some(pltgot) = &mut self.pltgot {
+            pltgot.rebase_to(
+                segments.base_for(self.pltgot_lifetimes.got),
+                segments.base_for(self.pltgot_lifetimes.got_plt),
+                segments.base_for(self.pltgot_lifetimes.plt),
+            );
+        }
     }
 }
 
@@ -781,7 +795,8 @@ impl PltGotSection {
             .iter()
             .filter(|s| matches!(s.section_type(), ElfSectionType::REL | ElfSectionType::RELA))
         {
-            let size = shdr.sh_size();
+            let entry_size = size_of::<ElfRelType<Arch>>();
+            let size = shdr.sh_size() / entry_size * entry_size;
             if size == 0 {
                 continue;
             }

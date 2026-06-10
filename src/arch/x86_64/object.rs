@@ -1,8 +1,11 @@
 use crate::{
     RelocReason,
     arch::x86_64::relocation::X86_64Arch,
-    elf::ElfRelType,
-    object::layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
+    elf::{ElfRelType, ElfShdr},
+    object::{
+        layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
+        object_relocation_addend,
+    },
     os::{ImageMemory, RegionAccess, VmAddr},
     relocation::{
         RelocHelper, RelocValue, RelocationHandler, RelocationValueProvider, reloc_error,
@@ -68,6 +71,7 @@ impl X86_64Arch {
     pub(crate) fn relocate_object_impl<D, R, PreH, PostH, Obs, H, Memory>(
         helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
+        target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,
     ) -> crate::Result<()>
     where
@@ -82,9 +86,8 @@ impl X86_64Arch {
     {
         let r_type = rel.r_type();
         let core = helper.core;
-        let base = core.base();
-        let append = rel.r_addend(base);
-        let place = base + rel.r_offset();
+        let append = object_relocation_addend::<Self, _>(helper.memory(), target, rel)?;
+        let place = VmAddr::new(target.sh_addr()) + rel.r_offset();
         let unknown_symbol = || reloc_error(rel, crate::RelocReason::UnknownSymbol, core);
         let value_error = |reason| reloc_error(rel, reason, core);
         let relocation_target_value = |target| {
@@ -101,21 +104,15 @@ impl X86_64Arch {
         match r_type.raw() {
             R_X86_64_NONE => {}
             R_X86_64_64 => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 write_relocation_target(helper.memory(), sym.get())?;
             }
             R_X86_64_PC32 => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 write_relocation_target(helper.memory(), sym.get())?;
             }
             R_X86_64_PLT32 => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 match relocation_target_value(sym.get()) {
                     Ok(value) => Self::write_object_value(helper.memory(), place, value)?,
                     Err(RelocReason::IntConversionOutOfRange) => {
@@ -144,9 +141,7 @@ impl X86_64Arch {
                 }
             }
             R_X86_64_GOTPCREL => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 let key = ObjectRelocKey::new::<Self>(rel);
                 let got_entry = pltgot.add_got_entry(key);
                 let got_entry_addr = match got_entry {
@@ -159,15 +154,11 @@ impl X86_64Arch {
                 write_relocation_target(helper.memory(), got_entry_addr.get())?;
             }
             R_X86_64_32 => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 write_relocation_target(helper.memory(), sym.get())?;
             }
             R_X86_64_32S => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 write_relocation_target(helper.memory(), sym.get())?;
             }
             _ => return Err(unknown_symbol()),

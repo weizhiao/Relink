@@ -211,13 +211,50 @@ impl ElfStringTable {
     }
 }
 
+pub(crate) enum SymbolStorage<L: ElfLayout = NativeElfLayout> {
+    Borrowed(&'static [ElfSymbol<L>]),
+    #[cfg(feature = "object")]
+    Mutable(&'static mut [ElfSymbol<L>]),
+}
+
+impl<L: ElfLayout> SymbolStorage<L> {
+    #[inline]
+    pub(crate) const fn borrowed(symbols: &'static [ElfSymbol<L>]) -> Self {
+        Self::Borrowed(symbols)
+    }
+
+    #[inline]
+    #[cfg(feature = "object")]
+    pub(crate) fn mutable(symbols: &'static mut [ElfSymbol<L>]) -> Self {
+        Self::Mutable(symbols)
+    }
+
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[ElfSymbol<L>] {
+        match self {
+            Self::Borrowed(symbols) => symbols,
+            #[cfg(feature = "object")]
+            Self::Mutable(symbols) => symbols,
+        }
+    }
+
+    #[inline]
+    #[cfg(feature = "object")]
+    pub(crate) fn as_mut_slice(&mut self) -> Option<&mut [ElfSymbol<L>]> {
+        match self {
+            Self::Borrowed(_) => None,
+            Self::Mutable(symbols) => Some(symbols),
+        }
+    }
+}
+
 /// Symbol table of an ELF file.
 pub struct SymbolTable<L: ElfLayout = NativeElfLayout, H = HashTable<L>> {
     /// Hash table for efficient symbol lookup.
     pub(crate) hashtab: H,
 
     /// Symbol table entries.
-    pub(crate) symbols: &'static [ElfSymbol<L>],
+    pub(crate) symbols: SymbolStorage<L>,
 
     /// String table for symbol names.
     pub(crate) strtab: ElfStringTable,
@@ -231,7 +268,7 @@ impl<L: ElfLayout, H: Debug> Debug for SymbolTable<L, H> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SymbolTable")
             .field("hashtab", &self.hashtab)
-            .field("symbol_count", &self.symbols.len())
+            .field("symbol_count", &self.symbols.as_slice().len())
             .finish()
     }
 }
@@ -347,7 +384,7 @@ impl<L: ElfLayout> SymbolTable<L, HashTable<L>> {
 
         Ok(SymbolTable {
             hashtab,
-            symbols,
+            symbols: SymbolStorage::borrowed(symbols),
             strtab,
             #[cfg(feature = "version")]
             version,
@@ -356,9 +393,21 @@ impl<L: ElfLayout> SymbolTable<L, HashTable<L>> {
 }
 
 impl<L: ElfLayout, H> SymbolTable<L, H> {
+    /// Returns all symbol table entries.
+    #[inline]
+    pub(crate) fn symbols(&self) -> &[ElfSymbol<L>] {
+        self.symbols.as_slice()
+    }
+
     /// Returns a reference to the string table.
     pub(crate) fn strtab(&self) -> &ElfStringTable {
         &self.strtab
+    }
+
+    /// Returns a mutable view of the symbol table entries.
+    #[cfg(feature = "object")]
+    pub(crate) fn symbols_mut(&mut self) -> Option<&mut [ElfSymbol<L>]> {
+        self.symbols.as_mut_slice()
     }
 
     /// Returns the symbol and its information for the given index.
@@ -368,7 +417,7 @@ impl<L: ElfLayout, H> SymbolTable<L, H> {
     ) -> (&'symtab ElfSymbol<L>, SymbolInfo<'symtab>) {
         // Get the symbol at the specified index
         let symbol = self
-            .symbols
+            .symbols()
             .get(idx)
             .expect("ELF symbol index is out of bounds");
 

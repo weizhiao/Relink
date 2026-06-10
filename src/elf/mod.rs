@@ -23,8 +23,9 @@ pub mod write;
 pub(crate) use defs::*;
 pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab, LifecycleSpec, parse_dynamic_entries};
 pub(crate) use phdr::ElfPhdrs;
-pub(crate) use shdr::ElfSections;
 pub(crate) use symbol::ElfStringTable;
+#[cfg(feature = "object")]
+pub(crate) use symbol::SymbolStorage;
 
 // Public API exports
 pub use defs::{

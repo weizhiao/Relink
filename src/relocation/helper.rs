@@ -69,7 +69,6 @@ where
     }
 
     #[inline]
-    #[cfg_attr(not(feature = "object"), allow(dead_code))]
     pub(crate) fn memory(&self) -> &Memory {
         &self.memory
     }
@@ -90,10 +89,18 @@ where
     pub(crate) fn find_symbol(&mut self, rel: &ElfRelType<Arch>) -> Result<Option<VmAddr>> {
         let (dynsym, syminfo) = self.core.symtab().symbol_idx(rel.r_symbol());
         let resolved =
-            find_symbol_addr(self.core, &self.scope, dynsym, &syminfo, self.tls_get_addr);
-        let mut event = SymbolBindingEvent::new(self.core, rel, dynsym, syminfo.name(), resolved);
+            resolve_symbol_addr(self.core, &self.scope, dynsym, &syminfo, self.tls_get_addr);
+        let mut event =
+            SymbolBindingEvent::new(self.core, Some(rel), dynsym, syminfo.name(), resolved);
         self.observer.on_symbol_binding(&mut event)?;
         Ok(event.into_resolved_addr())
+    }
+
+    #[inline]
+    #[cfg(feature = "object")]
+    pub(crate) fn symbol_addr(&self, r_sym: usize) -> VmAddr {
+        let (symbol, _) = self.core.symtab().symbol_idx(r_sym);
+        self.core.base() + VmOffset::new(symbol.st_value())
     }
 
     #[inline]
@@ -240,10 +247,8 @@ where
 }
 
 /// Finds the address of a symbol using the configured lookup scope.
-///
-/// Returns the resolved address.
 #[inline]
-fn find_symbol_addr<D, Arch, R, H>(
+pub(crate) fn resolve_symbol_addr<D, Arch, R, H>(
     core: &ElfCore<D, Arch, R, H>,
     scope: &ModuleScope<Arch>,
     dynsym: &ElfSymbol<Arch::Layout>,

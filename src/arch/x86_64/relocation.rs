@@ -81,6 +81,7 @@ impl ObjectRelocationArch for X86_64Arch {
         _state: &mut Self::ObjectRelocationState,
         helper: &mut crate::relocation::RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         rel: &crate::elf::ElfRelType<Self>,
+        target: &crate::elf::ElfShdr<Self::Layout>,
         pltgot: &mut crate::object::layout::PltGotSection,
     ) -> Result<()>
     where
@@ -92,7 +93,7 @@ impl ObjectRelocationArch for X86_64Arch {
         Obs: crate::observer::RelocationObserver<Self> + ?Sized,
         Memory: crate::os::ImageMemory,
     {
-        Self::relocate_object_impl(helper, rel, pltgot)
+        Self::relocate_object_impl(helper, rel, target, pltgot)
     }
 
     #[inline]

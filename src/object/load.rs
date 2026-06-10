@@ -1,6 +1,7 @@
+use super::ObjectSections;
 use crate::{
-    ParseShdrError, Result,
-    elf::{ElfHeader, ElfLayout, ElfSectionType, ElfSections, ElfShdr},
+    ParseShdrError, RelocationError, Result,
+    elf::{ElfHeader, ElfLayout, ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr},
     image::RawObject,
     input::{ElfReader, ElfReaderExt, IntoElfReader},
     loader::{ExpectedElf, Loader},
@@ -45,13 +46,11 @@ where
         object: impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
     ) -> Result<RawObject<D, Arch, M::Region>> {
-        let shdrs = self
-            .buf
-            .prepare_shdrs_mut(&ehdr, &object)?
-            .ok_or(ParseShdrError::MissingSectionHeaders)?;
-        validate_object_shdrs(&ehdr, shdrs, &object)?;
-        let shstrtab = read_section_name_table(&ehdr, shdrs, &object)?;
-        let mut sections = ElfSections::new(shdrs, shstrtab);
+        let shdrs =
+            read_object_shdrs(&ehdr, &object)?.ok_or(ParseShdrError::MissingSectionHeaders)?;
+        validate_object_shdrs::<Arch>(&ehdr, &shdrs, &object)?;
+        let shstrtab = read_section_name_table(&ehdr, &shdrs, &object)?;
+        let mut sections = ObjectSections::new(shdrs, shstrtab);
         let mut user_data = D::default();
         self.inner
             .observer
@@ -77,6 +76,16 @@ where
     }
 }
 
+fn read_object_shdrs<L: ElfLayout>(
+    ehdr: &ElfHeader<L>,
+    object: &impl ElfReader,
+) -> Result<Option<alloc::vec::Vec<ElfShdr<L>>>> {
+    let Some((start, _size)) = ehdr.checked_shdr_layout(object.len())? else {
+        return Ok(None);
+    };
+    object.read_to_vec(start, ehdr.e_shnum()).map(Some)
+}
+
 fn read_section_name_table<L: ElfLayout>(
     ehdr: &ElfHeader<L>,
     shdrs: &[ElfShdr<L>],
@@ -88,11 +97,14 @@ fn read_section_name_table<L: ElfLayout>(
     object.read_to_vec(shstrtab.sh_offset(), shstrtab.sh_size())
 }
 
-fn validate_object_shdrs<L: ElfLayout>(
-    ehdr: &ElfHeader<L>,
-    shdrs: &[ElfShdr<L>],
+fn validate_object_shdrs<Arch>(
+    ehdr: &ElfHeader<Arch::Layout>,
+    shdrs: &[ElfShdr<Arch::Layout>],
     object: &impl ElfReader,
-) -> Result<()> {
+) -> Result<()>
+where
+    Arch: ObjectRelocationArch,
+{
     let first = shdrs.first().ok_or(ParseShdrError::MissingSectionHeaders)?;
     if first.section_type() != ElfSectionType::NULL || first.sh_size() != 0 {
         return Err(
@@ -100,6 +112,7 @@ fn validate_object_shdrs<L: ElfLayout>(
         );
     }
 
+    let mut has_symtab = false;
     let shstrtab = shdrs
         .get(ehdr.e_shstrndx())
         .ok_or_else(|| ParseShdrError::malformed("e_shstrndx is out of range"))?;
@@ -108,6 +121,14 @@ fn validate_object_shdrs<L: ElfLayout>(
         return Err(ParseShdrError::malformed("section name string table is empty").into());
     }
     for shdr in shdrs.iter() {
+        match shdr.section_type() {
+            ElfSectionType::SYMTAB => has_symtab = true,
+            ElfSectionType::REL | ElfSectionType::RELA => {
+                validate_relocation_shdr::<Arch>(shdr, shdrs)?
+            }
+            _ => {}
+        }
+
         if shdr.sh_name() as usize >= shstrtab_size {
             return Err(ParseShdrError::malformed(
                 "section name offset exceeds section name string table",
@@ -142,21 +163,48 @@ fn validate_object_shdrs<L: ElfLayout>(
         );
     }
 
+    if !has_symtab {
+        return Err(RelocationError::MissingSymbolTable.into());
+    }
+
+    Ok(())
+}
+
+fn validate_relocation_shdr<Arch>(
+    shdr: &ElfShdr<Arch::Layout>,
+    shdrs: &[ElfShdr<Arch::Layout>],
+) -> Result<()>
+where
+    Arch: ObjectRelocationArch,
+{
+    debug_assert!(matches!(
+        shdr.section_type(),
+        ElfSectionType::REL | ElfSectionType::RELA
+    ));
+
+    if shdr.section_type() != <ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::SECTION_TYPE {
+        return Err(ParseShdrError::malformed(
+            "relocation section type does not match target architecture",
+        )
+        .into());
+    }
+
+    shdrs
+        .get(shdr.sh_info() as usize)
+        .ok_or_else(|| ParseShdrError::malformed("relocation target section is out of range"))?;
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::elf::{ElfHeader, ElfShdr, ElfSymbol};
     use crate::{
         Loader, Result,
         elf::{ElfEhdr, ElfLayout, ElfSectionFlags, ElfSectionId, ElfSectionType, NativeElfLayout},
         input::{ElfBinary, ElfReader, Path},
         observer::{LoadObserver, ObjectMetadataEvent},
         relocation::RelocationArch,
-    };
-    use crate::{
-        elf::{ElfHeader, ElfShdr},
-        loader::ElfBuf,
     };
     use alloc::vec::Vec;
     use core::mem::size_of;
@@ -183,7 +231,7 @@ mod tests {
     impl LoadObserver<ObjectData> for ObjectObserver {
         fn on_object_metadata(
             &mut self,
-            mut event: ObjectMetadataEvent<'_, '_, ObjectData, NativeElfLayout>,
+            mut event: ObjectMetadataEvent<'_, ObjectData, NativeElfLayout>,
         ) -> Result<()> {
             let shstrtab = event.find_section(".shstrtab");
             event.user_data_mut().shstrtab = shstrtab;
@@ -317,14 +365,92 @@ mod tests {
         bytes
     }
 
+    fn make_metadata_object() -> Vec<u8> {
+        const SYMTAB_NAME: u32 = 1;
+        const STRTAB_NAME: u32 = 9;
+        const SHSTRTAB_NAME: u32 = 17;
+
+        let ehdr_size = <NativeElfLayout as ElfLayout>::EHDR_SIZE;
+        let shdr_size = size_of::<ElfShdr>();
+        let sym_size = size_of::<ElfSymbol>();
+        let strtab = b"\0";
+        let shstrtab = b"\0.symtab\0.strtab\0.shstrtab\0";
+        let symtab_offset = ehdr_size + shdr_size * 4;
+        let strtab_offset = symtab_offset + sym_size;
+        let shstrtab_offset = strtab_offset + strtab.len();
+        let mut bytes = alloc::vec![0u8; shstrtab_offset + shstrtab.len()];
+
+        let mut ehdr = make_raw_object_header(shdr_size, 4);
+        ehdr.e_shstrndx = 3;
+        write_value(&mut bytes, 0, &ehdr);
+
+        let null_shdr: ElfShdr<NativeElfLayout> = ElfShdr::new(
+            0,
+            ElfSectionType::NULL,
+            ElfSectionFlags::empty(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        let symtab_shdr: ElfShdr<NativeElfLayout> = ElfShdr::new(
+            SYMTAB_NAME,
+            ElfSectionType::SYMTAB,
+            ElfSectionFlags::empty(),
+            0,
+            symtab_offset,
+            sym_size,
+            2,
+            1,
+            size_of::<usize>(),
+            sym_size,
+        );
+        let strtab_shdr: ElfShdr<NativeElfLayout> = ElfShdr::new(
+            STRTAB_NAME,
+            ElfSectionType::STRTAB,
+            ElfSectionFlags::empty(),
+            0,
+            strtab_offset,
+            strtab.len(),
+            0,
+            0,
+            1,
+            0,
+        );
+        let shstrtab_shdr: ElfShdr<NativeElfLayout> = ElfShdr::new(
+            SHSTRTAB_NAME,
+            ElfSectionType::STRTAB,
+            ElfSectionFlags::empty(),
+            0,
+            shstrtab_offset,
+            shstrtab.len(),
+            0,
+            0,
+            1,
+            0,
+        );
+        let null_sym: ElfSymbol<NativeElfLayout> = unsafe { core::mem::zeroed() };
+
+        write_value(&mut bytes, ehdr_size, &null_shdr);
+        write_value(&mut bytes, ehdr_size + shdr_size, &symtab_shdr);
+        write_value(&mut bytes, ehdr_size + shdr_size * 2, &strtab_shdr);
+        write_value(&mut bytes, ehdr_size + shdr_size * 3, &shstrtab_shdr);
+        write_value(&mut bytes, symtab_offset, &null_sym);
+        write_bytes(&mut bytes, strtab_offset, strtab);
+        write_bytes(&mut bytes, shstrtab_offset, shstrtab);
+
+        bytes
+    }
+
     #[test]
     fn prepare_shdrs_rejects_entry_size_mismatch() {
-        let mut elf_buf = ElfBuf::new();
         let header = make_object_header(size_of::<ElfShdr>() + 8, 1);
-        let mut reader = TestReader::zeroed(512);
+        let reader = TestReader::zeroed(512);
 
-        let err = elf_buf
-            .prepare_shdrs_mut(&header, &mut reader)
+        let err = super::read_object_shdrs(&header, &reader)
             .expect_err("shdr entry size mismatch should fail");
         assert!(matches!(
             err,
@@ -334,13 +460,11 @@ mod tests {
 
     #[test]
     fn prepare_shdrs_rejects_table_past_object_len() {
-        let mut elf_buf = ElfBuf::new();
         let header = make_object_header(size_of::<ElfShdr>(), 2);
-        let mut reader =
+        let reader =
             TestReader::zeroed(<NativeElfLayout as ElfLayout>::EHDR_SIZE + size_of::<ElfShdr>());
 
-        let err = elf_buf
-            .prepare_shdrs_mut(&header, &mut reader)
+        let err = super::read_object_shdrs(&header, &reader)
             .expect_err("shdr table past object length should fail");
         assert!(matches!(
             err,
@@ -446,16 +570,15 @@ mod tests {
             .with_data::<ObjectData>()
             .with_observer(&mut observer);
 
-        let result = loader.load_object(ElfBinary::owned(
-            "metadata.o",
-            make_two_section_object(b"\0.shstrtab\0", 1),
-        ));
-        assert!(result.is_err());
+        let _ = loader.load_object(ElfBinary::owned("metadata.o", make_metadata_object()));
         drop(loader);
 
-        assert_eq!(observer.found_shstrtab, Some(ElfSectionId::new(1)));
+        assert_eq!(observer.found_shstrtab, Some(ElfSectionId::new(3)));
         assert!(observer.shstrtab_name_seen);
-        assert_eq!(observer.shstrtab_len, b"\0.shstrtab\0".len());
+        assert_eq!(
+            observer.shstrtab_len,
+            b"\0.symtab\0.strtab\0.shstrtab\0".len()
+        );
         assert!(observer.borrowed_shstrtab);
         assert!(observer.renamed_shstrtab);
     }

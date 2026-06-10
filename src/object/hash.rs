@@ -1,8 +1,8 @@
 //! Custom ELF hash table implementation for relocatable objects.
 
 use crate::elf::{
-    ElfHashTable, ElfLayout, ElfShdr, ElfStringTable, ElfSymbol, ElfSymbolType, PreCompute,
-    SymbolInfo, SymbolTable,
+    ElfHashTable, ElfLayout, ElfStringTable, ElfSymbol, ElfSymbolType, PreCompute, SymbolInfo,
+    SymbolTable,
 };
 use core::hash::{Hash, Hasher};
 use foldhash::{SharedSeed, fast::FoldHasher};
@@ -20,18 +20,27 @@ pub struct CustomHash {
 }
 
 impl CustomHash {
+    #[inline]
+    pub(crate) fn empty() -> Self {
+        Self {
+            map: RawHashTable::new(),
+        }
+    }
+
     pub(crate) fn hash(name: &[u8]) -> u64 {
         let mut hasher = HASHER.clone();
         name.hash(&mut hasher);
         hasher.finish()
     }
 
-    pub(crate) fn from_shdr<L: ElfLayout>(symtab: &ElfShdr<L>, strtab: &ElfStringTable) -> Self {
-        let symbols: &mut [ElfSymbol<L>] = symtab.content_mut();
+    pub(crate) fn from_symbols<L: ElfLayout>(
+        symbols: &[ElfSymbol<L>],
+        strtab: &ElfStringTable,
+    ) -> Self {
         let mut map = RawHashTable::with_capacity(symbols.len());
 
-        for (idx, symbol) in symbols.iter_mut().enumerate() {
-            if symbol.symbol_type() == ElfSymbolType::FILE {
+        for (idx, symbol) in symbols.iter().enumerate() {
+            if symbol.symbol_type() == ElfSymbolType::FILE || symbol.is_undef() {
                 continue;
             }
 

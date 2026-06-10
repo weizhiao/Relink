@@ -75,7 +75,7 @@ pub struct SymbolBindingEvent<
     H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
     core: &'a ElfCore<D, Arch, R, H>,
-    rel: &'a ElfRelType<Arch>,
+    rel: Option<&'a ElfRelType<Arch>>,
     symbol: &'a ElfSymbol<Arch::Layout>,
     symbol_name: &'a str,
     resolved: Option<VmAddr>,
@@ -87,7 +87,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
     #[inline]
     pub(crate) const fn new(
         core: &'a ElfCore<D, Arch, R, H>,
-        rel: &'a ElfRelType<Arch>,
+        rel: Option<&'a ElfRelType<Arch>>,
         symbol: &'a ElfSymbol<Arch::Layout>,
         symbol_name: &'a str,
         resolved: Option<VmAddr>,
@@ -107,9 +107,10 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
         self.core
     }
 
-    /// Returns the relocation entry that requested this binding.
+    /// Returns the relocation entry that requested this binding, when the
+    /// binding is tied to one concrete relocation.
     #[inline]
-    pub const fn rel(&self) -> &ElfRelType<Arch> {
+    pub const fn rel(&self) -> Option<&ElfRelType<Arch>> {
         self.rel
     }
 

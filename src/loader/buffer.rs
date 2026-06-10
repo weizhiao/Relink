@@ -1,9 +1,8 @@
 use crate::{
-    AlignedBytes, IoError, ReadBoundsError, Result,
+    AlignedBytes, Result,
     elf::{Elf32Layout, Elf64Layout, ElfHeader, ElfLayout, ElfMachine, ElfPhdr, ElfShdr},
     input::{ElfReader, ElfReaderExt},
 };
-use alloc::boxed::Box;
 use core::mem::{MaybeUninit, align_of, size_of};
 
 pub(crate) struct ElfBuf {
@@ -57,30 +56,6 @@ impl ElfBuf {
         };
 
         object.with_bytes::<ElfShdr<L>, _, _>(start, size, &mut self.buf, |shdrs| Ok(Some(shdrs)))
-    }
-
-    #[cfg_attr(not(feature = "object"), allow(dead_code))]
-    pub(crate) fn prepare_shdrs_mut<L: ElfLayout>(
-        &mut self,
-        ehdr: &ElfHeader<L>,
-        object: &impl ElfReader,
-    ) -> Result<Option<&mut [ElfShdr<L>]>> {
-        let Some((start, size)) = ehdr.checked_shdr_layout(object.len())? else {
-            return Ok(None);
-        };
-
-        self.buf.resize(size).ok_or_else(|| {
-            IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(start, size, object.len())))
-        })?;
-        object.read(self.buf.as_bytes_mut(), start)?;
-
-        let shdrs = self.buf.try_cast_slice_mut::<ElfShdr<L>>().ok_or_else(|| {
-            IoError::ReadBufferNotAligned {
-                align: align_of::<ElfShdr<L>>(),
-            }
-        })?;
-
-        Ok(Some(shdrs))
     }
 }
 

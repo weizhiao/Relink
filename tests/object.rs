@@ -38,10 +38,7 @@ fn assert_data_section(reloc: &RelocationInfo) {
 fn object_relocations_match() {
     use gen_elf::{Arch, ObjectWriter, RelocEntry, SymbolDesc};
     use support::{
-        host_symbols::{
-            EXTERNAL_FUNC_NAME, EXTERNAL_TLS_NAME, EXTERNAL_VAR_NAME, LOCAL_VAR_NAME,
-            TestHostSymbols,
-        },
+        host_symbols::{EXTERNAL_FUNC_NAME, EXTERNAL_VAR_NAME, LOCAL_VAR_NAME, TestHostSymbols},
         memory::{read_i32, read_u64},
     };
 
@@ -52,7 +49,6 @@ fn object_relocations_match() {
         SymbolDesc::global_object(LOCAL_VAR_NAME, &[0u8; 0x100]),
         SymbolDesc::undefined_func(EXTERNAL_FUNC_NAME),
         SymbolDesc::undefined_object(EXTERNAL_VAR_NAME),
-        SymbolDesc::undefined_object(EXTERNAL_TLS_NAME),
     ];
 
     let relocs = vec![
@@ -182,4 +178,70 @@ fn object_addends_apply() {
     let actual = read_u64((data_base + relocation.offset as usize) as *const u8) as usize;
     let expected = host_symbols.addresses[EXTERNAL_VAR_NAME] + relocation.addend as usize;
     assert_eq!(actual, expected, "R_X86_64_64 addend mismatch");
+}
+
+#[cfg(all(feature = "object", target_arch = "x86_64"))]
+#[test]
+fn object_symtab_can_live_in_init_memory() {
+    use elf_loader::{
+        Result,
+        elf::{ElfSectionId, ElfSectionType},
+        observer::{LoadObserver, SectionGroup, SectionLayoutEvent, SectionLifetime},
+        os::ProtFlags,
+    };
+    use gen_elf::{Arch, ObjectWriter, RelocEntry, SymbolDesc};
+    use support::host_symbols::{EXTERNAL_VAR_NAME, LOCAL_VAR_NAME, TestHostSymbols};
+
+    struct InitSymtabObserver;
+
+    impl LoadObserver for InitSymtabObserver {
+        fn on_section_layout(&mut self, event: &mut SectionLayoutEvent<'_>) -> Result<()> {
+            let init_meta = SectionGroup::new(10);
+            event.define_group(init_meta, ProtFlags::PROT_READ, 10, SectionLifetime::Init);
+
+            let ids = event.section_ids().collect::<Vec<_>>();
+            for id in ids {
+                if event.section(id).section_type() != ElfSectionType::SYMTAB {
+                    continue;
+                }
+
+                event.place(id, init_meta);
+                event.place(
+                    ElfSectionId::new(event.section(id).sh_link() as usize),
+                    init_meta,
+                );
+            }
+
+            Ok(())
+        }
+    }
+
+    let object_file = ObjectWriter::new(Arch::current())
+        .write(
+            &[
+                SymbolDesc::global_object(LOCAL_VAR_NAME, &[0u8; 0x40]),
+                SymbolDesc::undefined_object(EXTERNAL_VAR_NAME),
+            ],
+            &[RelocEntry::with_name(EXTERNAL_VAR_NAME, 1)],
+        )
+        .expect("failed to generate object with init metadata");
+    let host_symbols = TestHostSymbols::new();
+
+    let loaded_object = elf_loader::Loader::new()
+        .with_observer(InitSymtabObserver)
+        .load_object(elf_loader::input::ElfBinary::new(
+            "test_static_init_symtab.o",
+            &object_file.data,
+        ))
+        .expect("failed to load object")
+        .relocator()
+        .scope([host_symbols.source("__host")])
+        .relocate()
+        .expect("relocation failed");
+
+    assert!(loaded_object.is_init());
+    assert!(
+        unsafe { loaded_object.get::<i32>(LOCAL_VAR_NAME) }.is_none(),
+        "runtime object symbol table should be discarded after init metadata is released"
+    );
 }

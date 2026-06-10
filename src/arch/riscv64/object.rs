@@ -1,8 +1,11 @@
 use crate::{
     RelocReason, Result,
     arch::riscv64::relocation::RiscV64Arch,
-    elf::{ElfHashTable, ElfRelType, ElfRelocationType},
-    object::layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
+    elf::{ElfHashTable, ElfRelType, ElfRelocationType, ElfShdr},
+    object::{
+        layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
+        object_relocation_addend, object_relocation_entries, object_relocation_sections,
+    },
     observer::RelocationObserver,
     os::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     relocation::{ObjectRelocationArch, RelocHelper, RelocationHandler, reloc_error},
@@ -85,7 +88,7 @@ impl ObjectRelocationArch for RiscV64Arch {
     fn prepare_object_relocation<D, R, PreH, PostH, Obs, H, Memory>(
         state: &mut Self::ObjectRelocationState,
         helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
-        sections: &[&'static [ElfRelType<Self>]],
+        shdrs: &[ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>],
     ) -> Result<()>
     where
         D: 'static,
@@ -96,7 +99,7 @@ impl ObjectRelocationArch for RiscV64Arch {
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
-        Self::prepare_object_relocation_impl(state, helper, sections)
+        Self::prepare_object_relocation_impl(state, helper, shdrs)
     }
 
     #[allow(private_bounds)]
@@ -105,6 +108,7 @@ impl ObjectRelocationArch for RiscV64Arch {
         state: &mut Self::ObjectRelocationState,
         helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
+        target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,
     ) -> Result<()>
     where
@@ -116,7 +120,7 @@ impl ObjectRelocationArch for RiscV64Arch {
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
-        Self::relocate_object_impl(state, helper, rel, pltgot)
+        Self::relocate_object_impl(state, helper, rel, target, pltgot)
     }
 
     #[inline]
@@ -134,7 +138,7 @@ impl RiscV64Arch {
     pub(crate) fn prepare_object_relocation_impl<D, R, PreH, PostH, Obs, H, Memory>(
         state: &mut RiscV64ObjectRelocationState,
         helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
-        sections: &[&'static [ElfRelType<Self>]],
+        shdrs: &[ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>],
     ) -> Result<()>
     where
         D: 'static,
@@ -145,20 +149,20 @@ impl RiscV64Arch {
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
-        let base = helper.core.base();
         state.hi20_cache.clear();
 
-        for reloc_section in sections {
-            for rel in *reloc_section {
+        for (target, relocation_shdr) in object_relocation_sections::<Self>(shdrs) {
+            let rels = object_relocation_entries::<Self, _>(helper.memory(), relocation_shdr)?;
+            for rel in rels {
                 let r_type = rel.r_type().raw();
                 if r_type == R_RISCV_PCREL_HI20 || r_type == R_RISCV_GOT_HI20 {
                     let addend = if r_type == R_RISCV_GOT_HI20 {
                         0
                     } else {
-                        rel.r_addend(base)
+                        object_relocation_addend::<Self, _>(helper.memory(), target, rel)?
                     };
                     state.hi20_cache.insert(
-                        base.wrapping_add(rel.r_offset()),
+                        VmAddr::new(target.sh_addr()) + rel.r_offset(),
                         Hi20Relocation {
                             symbol: rel.r_symbol(),
                             addend,
@@ -178,6 +182,7 @@ impl RiscV64Arch {
         state: &mut RiscV64ObjectRelocationState,
         helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
+        target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,
     ) -> Result<()>
     where
@@ -190,20 +195,14 @@ impl RiscV64Arch {
         Memory: ImageMemory,
     {
         let r_type = rel.r_type().raw();
-        let core = helper.core;
-        let base = core.base();
-        let addend = rel.r_addend(base);
-        let place = base.wrapping_add(rel.r_offset());
-        let unknown_symbol =
-            || reloc_error::<Self, _, R, H>(rel, RelocReason::UnknownSymbol, helper.core);
+        let addend = object_relocation_addend::<Self, _>(helper.memory(), target, rel)?;
+        let place = VmAddr::new(target.sh_addr()) + rel.r_offset();
         let value_error = |reason| reloc_error::<Self, _, R, H>(rel, reason, helper.core);
 
         match r_type {
             R_RISCV_NONE | R_RISCV_RELAX => {}
             R_RISCV_64 => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 unsafe {
                     helper
                         .memory()
@@ -211,17 +210,13 @@ impl RiscV64Arch {
                 };
             }
             R_RISCV_32 => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 let value = u32::try_from(sym.wrapping_add_signed(addend).get())
                     .map_err(|_| value_error(RelocReason::IntConversionOutOfRange))?;
                 unsafe { helper.memory().write_value(place, value)? };
             }
             R_RISCV_32_PCREL => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 let value = i32::try_from(
                     sym.wrapping_add_signed(addend).get() as i128 - place.get() as i128,
                 )
@@ -245,9 +240,7 @@ impl RiscV64Arch {
                 };
             }
             R_RISCV_CALL | R_RISCV_CALL_PLT => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 let mut target = sym;
                 let direct_off = signed_offset(target, addend, place);
                 if r_type == R_RISCV_CALL_PLT
@@ -267,9 +260,7 @@ impl RiscV64Arch {
                 if addend != 0 {
                     return Err(value_error(RelocReason::Unsupported));
                 }
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 let key = ObjectRelocKey::new::<Self>(rel);
                 let got_addr = Self::ensure_got_entry(pltgot, key, sym);
                 let hi20 = (got_addr.get() as i64 - place.get() as i64 + 0x800) >> 12;
@@ -280,9 +271,7 @@ impl RiscV64Arch {
                 };
             }
             R_RISCV_PCREL_HI20 => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 let off = signed_offset(sym, addend, place);
                 let hi20 = (off + 0x800) >> 12;
                 unsafe {
@@ -292,7 +281,7 @@ impl RiscV64Arch {
                 };
             }
             R_RISCV_PCREL_LO12_I | R_RISCV_PCREL_LO12_S => {
-                let lo12 = Self::resolve_pcrel_lo12(state, helper, rel, pltgot)?;
+                let lo12 = Self::resolve_pcrel_lo12(state, helper, rel, target, pltgot)?;
                 let imm_type = if r_type == R_RISCV_PCREL_LO12_I {
                     ImmType::I
                 } else {
@@ -305,9 +294,7 @@ impl RiscV64Arch {
                 };
             }
             R_RISCV_HI20 => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 let hi20 = (sym.wrapping_add_signed(addend).get() as i64 + 0x800) >> 12;
                 unsafe {
                     helper.memory().update_value::<u32>(place, |insn| {
@@ -316,9 +303,7 @@ impl RiscV64Arch {
                 };
             }
             R_RISCV_LO12_I | R_RISCV_LO12_S => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 let lo12 = sym.wrapping_add_signed(addend).get() as i64 & 0xfff;
                 let imm_type = if r_type == R_RISCV_LO12_I {
                     ImmType::I
@@ -333,9 +318,7 @@ impl RiscV64Arch {
             }
             R_RISCV_ADD8 | R_RISCV_ADD16 | R_RISCV_ADD32 | R_RISCV_ADD64 | R_RISCV_SUB8
             | R_RISCV_SUB16 | R_RISCV_SUB32 | R_RISCV_SUB64 => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 let value = sym.wrapping_add_signed(addend).get();
                 let is_add = matches!(
                     r_type,
@@ -370,9 +353,7 @@ impl RiscV64Arch {
                 }
             }
             R_RISCV_SUB6 => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 let value = sym.wrapping_add_signed(addend).get() as u8;
                 unsafe {
                     helper.memory().update_value::<u8>(place, |old| {
@@ -381,9 +362,7 @@ impl RiscV64Arch {
                 };
             }
             R_RISCV_SET6 => {
-                let Some(sym) = helper.find_symbol(rel)? else {
-                    return Err(unknown_symbol());
-                };
+                let sym = helper.symbol_addr(rel.r_symbol());
                 let value = sym.wrapping_add_signed(addend).get() as u8;
                 unsafe {
                     helper
@@ -471,6 +450,7 @@ impl RiscV64Arch {
         state: &RiscV64ObjectRelocationState,
         helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
+        target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,
     ) -> Result<i64>
     where
@@ -482,13 +462,7 @@ impl RiscV64Arch {
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
-        let Some(auipc_addr) = helper.find_symbol(rel)? else {
-            return Err(reloc_error::<Self, _, R, H>(
-                rel,
-                RelocReason::UnknownSymbol,
-                helper.core,
-            ));
-        };
+        let auipc_addr = helper.symbol_addr(rel.r_symbol());
         let Some(hi20) = state.hi20_cache.get(&auipc_addr).copied() else {
             return Err(reloc_error::<Self, _, R, H>(
                 rel,
@@ -498,29 +472,17 @@ impl RiscV64Arch {
         };
 
         let off = if hi20.r_type == R_RISCV_GOT_HI20 {
-            let Some(sym) = helper.find_symdef(hi20.symbol).map(|sym| sym.convert()) else {
-                return Err(reloc_error::<Self, _, R, H>(
-                    rel,
-                    RelocReason::UnknownSymbol,
-                    helper.core,
-                ));
-            };
+            let sym = helper.symbol_addr(hi20.symbol);
             let key = hi20
                 .got_key
                 .expect("R_RISCV_GOT_HI20 relocation must carry a GOT key");
             let got_addr = Self::ensure_got_entry(pltgot, key, sym);
             got_addr.get() as i64 - auipc_addr.get() as i64
         } else {
-            let Some(sym) = helper.find_symdef(hi20.symbol).map(|sym| sym.convert()) else {
-                return Err(reloc_error::<Self, _, R, H>(
-                    rel,
-                    RelocReason::UnknownSymbol,
-                    helper.core,
-                ));
-            };
-            let target = sym
-                .wrapping_add_signed(hi20.addend)
-                .wrapping_add_signed(rel.r_addend(helper.core.base()));
+            let sym = helper.symbol_addr(hi20.symbol);
+            let target = sym.wrapping_add_signed(hi20.addend).wrapping_add_signed(
+                object_relocation_addend::<Self, _>(helper.memory(), target, rel)?,
+            );
             target.get() as i64 - auipc_addr.get() as i64
         };
 
@@ -582,13 +544,7 @@ impl RiscV64Arch {
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
-        let Some(sym) = helper.find_symbol(rel)? else {
-            return Err(reloc_error::<Self, _, R, H>(
-                rel,
-                RelocReason::UnknownSymbol,
-                helper.core,
-            ));
-        };
+        let sym = helper.symbol_addr(rel.r_symbol());
         unsafe {
             helper.memory().write_value(
                 place,
@@ -678,13 +634,7 @@ where
     Obs: RelocationObserver<RiscV64Arch> + ?Sized,
     Memory: ImageMemory,
 {
-    let Some(sym) = helper.find_symbol(rel)? else {
-        return Err(reloc_error::<RiscV64Arch, _, R, H>(
-            rel,
-            RelocReason::UnknownSymbol,
-            helper.core,
-        ));
-    };
+    let sym = helper.symbol_addr(rel.r_symbol());
     let off = signed_offset(sym, addend, place);
     if off & 1 != 0 || off < -range || off >= range {
         return Err(reloc_error::<RiscV64Arch, _, R, H>(

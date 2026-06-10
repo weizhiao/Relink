@@ -4,11 +4,11 @@
 //! ELF files (also known as object files). These are typically `.o` files that
 //! contain code and data that need to be relocated before they can be executed.
 
-use crate::object::{CustomHash, ObjectBuilder, ObjectRelocation, PltGotSection};
+use crate::object::{CustomHash, ObjectBuilder, PltGotSection};
 use crate::segment::ElfSegments;
 use crate::{
     Result,
-    elf::Lifecycle,
+    elf::{ElfShdr, Lifecycle, SymbolTable},
     observer::RelocationObserver,
     os::{HostRegion, RegionAccess, VmAddr},
     relocation::{
@@ -18,7 +18,7 @@ use crate::{
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
 };
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
 use core::{borrow::Borrow, cell::OnceCell, fmt::Debug, ops::Deref};
 
 use super::{CoreInner, ElfCore, LoadedCore, ModuleHandle};
@@ -36,8 +36,8 @@ pub struct RawObject<
     /// Core component containing basic ELF information.
     pub(crate) core: ElfCore<D, Arch, R, CustomHash>,
 
-    /// Object relocation information.
-    pub(crate) relocation: ObjectRelocation<Arch>,
+    /// Rebased section headers retained for object relocation metadata.
+    pub(crate) shdrs: Vec<ElfShdr<Arch::Layout>>,
 
     /// PLT/GOT section information.
     pub(crate) pltgot: PltGotSection,
@@ -48,6 +48,9 @@ pub struct RawObject<
 
     /// Initialization-only mapped memory.
     pub(crate) init_segments: Option<ElfSegments<R>>,
+
+    /// Symbol table to install after initialization memory can be released.
+    pub(crate) post_init_symtab: Option<SymbolTable<Arch::Layout, CustomHash>>,
 
     /// Initialization lifecycle.
     pub(crate) init: Lifecycle,
@@ -84,10 +87,11 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
             core: ElfCore {
                 inner: Arc::new(inner),
             },
+            shdrs: builder.shdrs,
             pltgot: builder.pltgot,
-            relocation: builder.relocation,
             mprotect: builder.mprotect,
             init_segments,
+            post_init_symtab: builder.post_init_symtab,
             init: builder.init,
         }
     }

@@ -94,7 +94,7 @@ impl<R: RegionAccess> ElfSegments<R> {
     }
 
     #[inline]
-    fn contains_range(&self, addr: VmAddr, len: usize) -> bool {
+    pub(crate) fn contains_range(&self, addr: VmAddr, len: usize) -> bool {
         let Some(offset) = addr.checked_offset_from(self.base) else {
             return false;
         };
@@ -300,6 +300,11 @@ impl<R: RegionAccess> ImageMemory for ElfSegments<R> {
     #[inline]
     fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
         self.host_ptr(addr)
+    }
+
+    #[inline]
+    fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>> {
+        self.host_ptr_range(addr, len)
     }
 
     #[inline]

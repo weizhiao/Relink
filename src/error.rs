@@ -403,6 +403,7 @@ pub enum ParseShdrError {
 
 impl ParseShdrError {
     #[inline]
+    #[cfg_attr(not(feature = "object"), allow(dead_code))]
     pub(crate) const fn malformed(detail: &'static str) -> Self {
         Self::Malformed { detail }
     }

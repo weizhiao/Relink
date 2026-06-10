@@ -1,10 +1,10 @@
-#[cfg(feature = "object")]
-use super::SectionLayoutEvent;
 use super::{
     DtDebugEntry, DynamicLoadedEvent, IfuncBindingEvent, LifecycleEvent, LinkActivity,
-    ModuleRelocatedEvent, ObjectMetadataEvent, ProgramHeaderEvent, ResolveDependencyEvent,
-    ResolveRootEvent, StagedDynamic, SymbolBindingEvent, TlsDescBindingEvent,
+    ModuleRelocatedEvent, ProgramHeaderEvent, ResolveDependencyEvent, ResolveRootEvent,
+    StagedDynamic, SymbolBindingEvent, TlsDescBindingEvent,
 };
+#[cfg(feature = "object")]
+use super::{ObjectMetadataEvent, SectionLayoutEvent};
 use crate::{
     Result, arch::NativeArch, elf::ElfHashTable, os::RegionAccess, relocation::RelocationArch,
 };
@@ -29,10 +29,11 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
 
     /// Called after relocatable-object section headers have been validated,
     /// before section contents are mapped.
+    #[cfg(feature = "object")]
     #[inline]
     fn on_object_metadata(
         &mut self,
-        _event: ObjectMetadataEvent<'_, '_, D, Arch::Layout>,
+        _event: ObjectMetadataEvent<'_, D, Arch::Layout>,
     ) -> Result<()> {
         Ok(())
     }
@@ -42,7 +43,7 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
     #[inline]
     fn on_section_layout(
         &mut self,
-        _event: &mut SectionLayoutEvent<'_, '_, Arch::Layout>,
+        _event: &mut SectionLayoutEvent<'_, Arch::Layout>,
     ) -> Result<()> {
         Ok(())
     }
@@ -176,10 +177,11 @@ where
         (**self).on_dt_debug(entry)
     }
 
+    #[cfg(feature = "object")]
     #[inline]
     fn on_object_metadata(
         &mut self,
-        event: ObjectMetadataEvent<'_, '_, D, Arch::Layout>,
+        event: ObjectMetadataEvent<'_, D, Arch::Layout>,
     ) -> Result<()> {
         (**self).on_object_metadata(event)
     }
@@ -188,7 +190,7 @@ where
     #[inline]
     fn on_section_layout(
         &mut self,
-        event: &mut SectionLayoutEvent<'_, '_, Arch::Layout>,
+        event: &mut SectionLayoutEvent<'_, Arch::Layout>,
     ) -> Result<()> {
         (**self).on_section_layout(event)
     }
@@ -278,10 +280,11 @@ where
         (**self).on_dt_debug(entry)
     }
 
+    #[cfg(feature = "object")]
     #[inline]
     fn on_object_metadata(
         &mut self,
-        event: ObjectMetadataEvent<'_, '_, D, Arch::Layout>,
+        event: ObjectMetadataEvent<'_, D, Arch::Layout>,
     ) -> Result<()> {
         (**self).on_object_metadata(event)
     }
@@ -290,7 +293,7 @@ where
     #[inline]
     fn on_section_layout(
         &mut self,
-        event: &mut SectionLayoutEvent<'_, '_, Arch::Layout>,
+        event: &mut SectionLayoutEvent<'_, Arch::Layout>,
     ) -> Result<()> {
         (**self).on_section_layout(event)
     }

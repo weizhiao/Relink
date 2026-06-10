@@ -1,6 +1,8 @@
 #[cfg(feature = "object")]
 use super::{RelocHelper, reloc_error};
 use super::{RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
+#[cfg(feature = "object")]
+use crate::elf::ElfShdr;
 use crate::{
     ByteRepr, RelocReason, Result,
     arch::{ArchKind, NativeArch},
@@ -102,7 +104,7 @@ pub trait ObjectRelocationArch: RelocationArch {
     fn prepare_object_relocation<D, R, PreH, PostH, Obs, H, Memory>(
         _state: &mut Self::ObjectRelocationState,
         _helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
-        _sections: &[&'static [ElfRelType<Self>]],
+        _shdrs: &[ElfShdr<Self::Layout>],
     ) -> Result<()>
     where
         Self: Sized,
@@ -123,6 +125,7 @@ pub trait ObjectRelocationArch: RelocationArch {
         _state: &mut Self::ObjectRelocationState,
         helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
+        _target: &ElfShdr<Self::Layout>,
         _pltgot: &mut crate::object::layout::PltGotSection,
     ) -> Result<()>
     where

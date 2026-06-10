@@ -1,13 +1,11 @@
 use super::{
-    CustomHash, ObjectRelocation,
-    layout::{ObjectSegmentView, ObjectSegments, PltGotSection, SectionSegments},
+    CustomHash, ObjectSections,
+    layout::{ObjectSegmentView, ObjectSegments, PltGotSection, SectionLifetime, SectionSegments},
+    section_entries,
 };
 use crate::{
-    ParseShdrError, RelocationError, Result,
-    elf::{
-        ElfRelEntry, ElfRelType, ElfSectionType, ElfSections, ElfShdr, ElfSymbol, ElfSymbolType,
-        Lifecycle, SymbolTable,
-    },
+    RelocationError, Result,
+    elf::{ElfSectionId, ElfSectionType, ElfShdr, Lifecycle, SymbolTable},
     input::PathBuf,
     loader::LoaderInner,
     observer::LoadObserver,
@@ -16,7 +14,7 @@ use crate::{
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{marker::PhantomData, mem::size_of};
+use core::marker::PhantomData;
 
 /// Builder for creating relocatable ELF objects.
 pub(crate) struct ObjectBuilder<
@@ -26,10 +24,11 @@ pub(crate) struct ObjectBuilder<
     R: RegionAccess = HostRegion,
 > {
     pub(crate) path: PathBuf,
+    pub(crate) shdrs: Vec<ElfShdr<Arch::Layout>>,
     pub(crate) symtab: SymbolTable<Arch::Layout, CustomHash>,
+    pub(crate) post_init_symtab: Option<SymbolTable<Arch::Layout, CustomHash>>,
     pub(crate) init: Lifecycle,
     pub(crate) segments: ObjectSegments<R>,
-    pub(crate) relocation: ObjectRelocation<Arch>,
     pub(crate) mprotect: Box<dyn for<'segments> Fn(&ObjectSegmentView<'segments, R>) -> Result<()>>,
     pub(crate) pltgot: PltGotSection,
     pub(crate) tls_mod_id: Option<TlsModuleId>,
@@ -41,7 +40,6 @@ pub(crate) struct ObjectBuilder<
 
 struct ObjectSectionData<Arch: ObjectRelocationArch> {
     symtab: SymbolTable<Arch::Layout, CustomHash>,
-    relocation: ObjectRelocation<Arch>,
     init: Lifecycle,
 }
 
@@ -51,143 +49,90 @@ where
     Arch: ObjectRelocationArch,
     R: RegionAccess,
 {
-    #[inline]
-    pub(crate) fn validate_shdrs(shdrs: &[ElfShdr<Arch::Layout>]) -> Result<()> {
-        let mut has_symtab = false;
-
-        for shdr in shdrs {
-            match shdr.section_type() {
-                ElfSectionType::SYMTAB => has_symtab = true,
-                ElfSectionType::REL | ElfSectionType::RELA => Self::validate_relocation_shdr(shdr)?,
-                _ => {}
-            }
-        }
-
-        if !has_symtab {
-            return Err(RelocationError::MissingSymbolTable.into());
-        }
-
-        Ok(())
-    }
-
-    #[inline]
-    fn validate_relocation_shdr(shdr: &ElfShdr<Arch::Layout>) -> Result<()> {
-        debug_assert!(matches!(
-            shdr.section_type(),
-            ElfSectionType::REL | ElfSectionType::RELA
-        ));
-
-        if shdr.section_type() != <ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::SECTION_TYPE {
-            return Err(ParseShdrError::malformed(
-                "relocation section type does not match target architecture",
-            )
-            .into());
-        }
-
-        let expected = size_of::<ElfRelType<Arch>>();
-        let found = shdr.sh_entsize();
-        if found != expected {
-            return Err(ParseShdrError::malformed("relocation entry size mismatch").into());
-        }
-        if !shdr.sh_size().is_multiple_of(expected) {
-            return Err(ParseShdrError::malformed(
-                "relocation section size is not a multiple of entry size",
-            )
-            .into());
-        }
-
-        Ok(())
-    }
-
-    fn prepare_symbol_table(
-        symtab_shdr: &ElfShdr<Arch::Layout>,
-        shdrs: &[ElfShdr<Arch::Layout>],
-        base: VmAddr,
-    ) -> SymbolTable<Arch::Layout, CustomHash> {
-        let symbols: &mut [ElfSymbol<Arch::Layout>] = symtab_shdr.content_mut();
-        for symbol in symbols {
-            let section_index = symbol.st_shndx();
-            if symbol.symbol_type() == ElfSymbolType::FILE || section_index.is_undef() {
-                continue;
-            }
-            let section_base = shdrs[section_index.index()]
-                .sh_addr()
-                .wrapping_sub(base.get());
-            symbol.set_value(section_base.wrapping_add(symbol.st_value()));
-        }
-
-        SymbolTable::from_shdrs(symtab_shdr, shdrs)
-    }
-
-    fn prepare_relocation_section(
-        relocation_shdr: &ElfShdr<Arch::Layout>,
-        shdrs: &[ElfShdr<Arch::Layout>],
-        base: VmAddr,
-    ) -> &'static [ElfRelType<Arch>] {
-        let rels: &mut [ElfRelType<Arch>] = relocation_shdr.content_mut();
-        let section_base = VmAddr::new(shdrs[relocation_shdr.sh_info() as usize].sh_addr());
-        for rel in rels {
-            rel.set_offset((section_base + rel.r_offset()).wrapping_offset_from(base));
-        }
-
-        relocation_shdr.content()
-    }
-
-    fn prepare_init_array(init_array_shdr: &ElfShdr<Arch::Layout>) -> Lifecycle {
-        let array: &[usize] = init_array_shdr.content_mut();
+    fn prepare_init_array<Memory>(
+        init_array_shdr: &ElfShdr<Arch::Layout>,
+        memory: &Memory,
+    ) -> Result<Lifecycle>
+    where
+        Memory: crate::os::ImageMemory + ?Sized,
+    {
+        let array: &[usize] = section_entries(memory, init_array_shdr)?;
         let array = array.iter().copied().map(VmAddr::new).collect::<Box<[_]>>();
-        Lifecycle::new(None, Some(array))
+        Ok(Lifecycle::new(None, Some(array)))
     }
 
-    fn prepare_section_data(
+    fn prepare_section_data<Memory>(
         shdrs: &[ElfShdr<Arch::Layout>],
-        base: VmAddr,
-    ) -> Result<ObjectSectionData<Arch>> {
+        memory: &Memory,
+    ) -> Result<ObjectSectionData<Arch>>
+    where
+        Memory: crate::os::ImageMemory + ?Sized,
+    {
         let mut symtab = None;
-        let mut relocation = Vec::with_capacity(shdrs.len());
         let mut init = Lifecycle::new(None, None);
 
         for shdr in shdrs {
             match shdr.section_type() {
                 ElfSectionType::SYMTAB => {
-                    symtab = Some(Self::prepare_symbol_table(shdr, shdrs, base))
+                    symtab = Some(SymbolTable::from_shdrs(shdr, shdrs, memory)?)
                 }
-                ElfSectionType::RELA | ElfSectionType::REL => {
-                    relocation.push(Self::prepare_relocation_section(shdr, shdrs, base))
-                }
-                ElfSectionType::INIT_ARRAY => init = Self::prepare_init_array(shdr),
+                ElfSectionType::INIT_ARRAY => init = Self::prepare_init_array(shdr, memory)?,
                 _ => {}
             }
         }
 
         Ok(ObjectSectionData {
             symtab: symtab.ok_or(RelocationError::MissingSymbolTable)?,
-            relocation: ObjectRelocation::new(relocation),
             init,
         })
     }
 
+    fn post_init_symtab(
+        shdrs: &[ElfShdr<Arch::Layout>],
+        shdr_segments: &SectionSegments<Arch>,
+    ) -> Option<SymbolTable<Arch::Layout, CustomHash>> {
+        for (index, shdr) in shdrs.iter().enumerate() {
+            if shdr.section_type() != ElfSectionType::SYMTAB {
+                continue;
+            }
+
+            let symtab_id = ElfSectionId::new(index);
+            let strtab_id = ElfSectionId::new(shdr.sh_link() as usize);
+            if shdr_segments.section_lifetime(symtab_id) == Some(SectionLifetime::Init)
+                || shdr_segments.section_lifetime(strtab_id) == Some(SectionLifetime::Init)
+            {
+                return Some(SymbolTable::empty_object());
+            }
+        }
+
+        None
+    }
+
     pub(crate) fn new(
         path: PathBuf,
-        shdrs: &mut [ElfShdr<Arch::Layout>],
+        mut sections: ObjectSections<Arch::Layout>,
         segments: ObjectSegments<R>,
-        mprotect: Box<dyn for<'segments> Fn(&ObjectSegmentView<'segments, R>) -> Result<()>>,
-        pltgot: PltGotSection,
+        mut shdr_segments: SectionSegments<Arch>,
         user_data: D,
     ) -> Result<Self> {
-        let base = segments.core().base();
-        let ObjectSectionData {
-            symtab,
-            relocation,
-            init,
-        } = Self::prepare_section_data(shdrs, base)?;
+        let shdrs = sections.headers_mut();
+        let post_init_symtab = Self::post_init_symtab(shdrs, &shdr_segments);
+        let pltgot = shdr_segments.take_pltgot();
+        let ObjectSectionData { symtab, init } = {
+            let memory = segments.view();
+            Self::prepare_section_data(shdrs, &memory)?
+        };
+        let mprotect =
+            Box::new(move |segments: &ObjectSegmentView<'_, R>| shdr_segments.mprotect(segments));
+        let shdrs = sections.into_headers();
 
         Ok(Self {
             path,
+            shdrs,
             symtab,
+            post_init_symtab,
             segments,
             mprotect,
-            relocation,
             pltgot,
             init,
             tls_mod_id: None,
@@ -208,7 +153,7 @@ where
 {
     pub(crate) fn create_object_builder<Tls>(
         &mut self,
-        mut sections: ElfSections<'_, Arch::Layout>,
+        mut sections: ObjectSections<Arch::Layout>,
         object: impl crate::input::ElfReader,
         user_data: D,
     ) -> Result<ObjectBuilder<Tls, D, Arch, M::Region>>
@@ -217,7 +162,6 @@ where
     {
         let path = PathBuf::from(object.path());
         let page_size = self.page_size()?.bytes();
-        ObjectBuilder::<Tls, D, Arch, M::Region>::validate_shdrs(sections.headers())?;
         let mut shdr_segments = SectionSegments::<Arch>::new::<D, _>(
             &mut sections,
             &object,
@@ -226,19 +170,8 @@ where
         )?;
         let mapper = self.mapper();
         let segments = shdr_segments.load_segments(mapper, &object)?;
-        let mut pltgot = shdr_segments.take_pltgot();
-        shdr_segments.rebase_loaded_sections(sections.headers_mut(), &mut pltgot, &segments);
-        let mprotect = Box::new(move |segments: &ObjectSegmentView<'_, M::Region>| {
-            shdr_segments.mprotect(segments)
-        });
+        shdr_segments.rebase_loaded_sections(sections.headers_mut(), &segments);
 
-        ObjectBuilder::new(
-            path,
-            sections.headers_mut(),
-            segments,
-            mprotect,
-            pltgot,
-            user_data,
-        )
+        ObjectBuilder::new(path, sections, segments, shdr_segments, user_data)
     }
 }

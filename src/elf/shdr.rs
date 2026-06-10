@@ -2,70 +2,13 @@
 //!
 //! This module contains section-header views used while scanning ELF sections.
 
-use super::defs::{
-    ElfLayout, ElfSectionFlags, ElfSectionId, ElfSectionType, ElfShdrRaw, NativeElfLayout,
-};
-use alloc::vec::Vec;
-use core::ffi::CStr;
+use super::defs::{ElfLayout, ElfSectionFlags, ElfSectionType, ElfShdrRaw, NativeElfLayout};
 
 /// ELF section header describing sections of the ELF file.
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct ElfShdr<L: ElfLayout = NativeElfLayout> {
     shdr: L::Shdr,
-}
-
-/// Section headers paired with their section-name string table.
-pub(crate) struct ElfSections<'a, L: ElfLayout = NativeElfLayout> {
-    shdrs: &'a mut [ElfShdr<L>],
-    shstrtab: Vec<u8>,
-}
-
-impl<'a, L: ElfLayout> ElfSections<'a, L> {
-    #[inline]
-    pub(crate) fn new(shdrs: &'a mut [ElfShdr<L>], shstrtab: Vec<u8>) -> Self {
-        Self { shdrs, shstrtab }
-    }
-
-    #[inline]
-    pub(crate) fn headers(&self) -> &[ElfShdr<L>] {
-        self.shdrs
-    }
-
-    #[inline]
-    pub(crate) fn headers_mut(&mut self) -> &mut [ElfShdr<L>] {
-        self.shdrs
-    }
-
-    #[inline]
-    pub(crate) fn section(&self, id: ElfSectionId) -> &ElfShdr<L> {
-        &self.shdrs[id.index()]
-    }
-
-    #[inline]
-    pub(crate) fn section_mut(&mut self, id: ElfSectionId) -> &mut ElfShdr<L> {
-        &mut self.shdrs[id.index()]
-    }
-
-    #[inline]
-    pub(crate) fn name_table(&self) -> &[u8] {
-        &self.shstrtab
-    }
-
-    #[inline]
-    pub(crate) fn section_name(&self, id: ElfSectionId) -> &CStr {
-        let shdr = self.section(id);
-        let bytes = &self.shstrtab[shdr.sh_name() as usize..];
-        CStr::from_bytes_until_nul(bytes).expect("validated section name must be NUL-terminated")
-    }
-
-    #[inline]
-    pub(crate) fn find_section(&self, name: &str) -> Option<ElfSectionId> {
-        self.shdrs.iter().enumerate().find_map(|(index, _)| {
-            let id = ElfSectionId::new(index);
-            (self.section_name(id).to_bytes() == name.as_bytes()).then_some(id)
-        })
-    }
 }
 
 impl<L: ElfLayout> ElfShdr<L> {
@@ -233,50 +176,5 @@ impl<L: ElfLayout> ElfShdr<L> {
         shdr.set_sh_addralign(sh_addralign);
         shdr.set_sh_entsize(sh_entsize);
         Self { shdr }
-    }
-}
-
-impl<L: ElfLayout> ElfShdr<L> {
-    /// Returns a reference to the section content as a slice of the specified type.
-    ///
-    /// This method provides safe access to section data by interpreting the section
-    /// as a contiguous array of elements of type `T`. The section must contain a table
-    /// of fixed-size entries for this to be meaningful.
-    ///
-    /// # Safety
-    /// The caller must ensure that the section actually contains valid data of type `T`
-    /// and that the alignment and size constraints are met.
-    ///
-    /// # Panics
-    /// Panics in debug builds if the element size doesn't match the section's entry size,
-    /// if the section size is not divisible by the entry size, or if the address is not
-    /// properly aligned.
-    #[cfg(feature = "object")]
-    pub(crate) fn content<T>(&self) -> &'static [T] {
-        self.content_mut()
-    }
-
-    /// Returns a mutable reference to the section content as a slice of the specified type.
-    ///
-    /// This method provides mutable access to section data. Use with caution as it allows
-    /// modification of the underlying ELF data.
-    ///
-    /// # Safety
-    /// The caller must ensure that the section actually contains valid data of type `T`
-    /// and that the alignment and size constraints are met. Modifying section data may
-    /// corrupt the ELF file or cause runtime errors.
-    ///
-    /// # Panics
-    /// Panics in debug builds if the element size doesn't match the section's entry size,
-    /// if the section size is not divisible by the entry size, or if the address is not
-    /// properly aligned.
-    #[cfg(feature = "object")]
-    pub(crate) fn content_mut<T>(&self) -> &'static mut [T] {
-        let start = self.sh_addr();
-        let len = self.sh_size() / self.sh_entsize();
-        debug_assert!(core::mem::size_of::<T>() == self.sh_entsize());
-        debug_assert!(self.sh_size().is_multiple_of(self.sh_entsize()));
-        debug_assert!(self.sh_addr().is_multiple_of(self.sh_addralign()));
-        unsafe { core::slice::from_raw_parts_mut(start as *mut T, len) }
     }
 }

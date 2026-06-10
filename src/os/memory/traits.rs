@@ -142,11 +142,32 @@ pub trait ImageMemory: Send + Sync {
     /// Translates an image VM address into a host-accessible pointer.
     fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>>;
 
+    /// Translates an image VM address range into a host-accessible pointer.
+    fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>>;
+
     /// Reads bytes from an image VM address.
     fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()>;
 
     /// Writes bytes to an image VM address.
     fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()>;
+
+    /// Reads a typed value from an image VM address.
+    ///
+    /// # Safety
+    /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
+    /// readable image memory.
+    #[inline]
+    unsafe fn read_value<T: ByteRepr>(&self, addr: VmAddr) -> Result<T>
+    where
+        Self: Sized,
+    {
+        let mut value = MaybeUninit::<T>::uninit();
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
+        };
+        self.read_bytes(addr, bytes)?;
+        Ok(unsafe { value.assume_init() })
+    }
 
     /// Writes a typed value to an image VM address.
     ///
@@ -182,12 +203,7 @@ pub trait ImageMemory: Send + Sync {
             return Ok(());
         }
 
-        let mut value = MaybeUninit::<T>::uninit();
-        let bytes = unsafe {
-            core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
-        };
-        self.read_bytes(addr, bytes)?;
-        let value = update(unsafe { value.assume_init() });
+        let value = update(unsafe { self.read_value(addr)? });
         unsafe { self.write_value(addr, value) }
     }
 }
@@ -204,6 +220,11 @@ where
     #[inline]
     fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
         (**self).host_ptr(addr)
+    }
+
+    #[inline]
+    fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>> {
+        (**self).host_ptr_range(addr, len)
     }
 
     #[inline]

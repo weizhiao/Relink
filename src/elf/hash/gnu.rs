@@ -320,7 +320,7 @@ impl<L: ElfLayout> ElfHashTable<L> for ElfGnuHash<L> {
 
             // Check if this chain entry matches our hash (ignoring LSB)
             if hash | 1 == chain_hash | 1 {
-                let cur_symbol = table.symbols.get(cur_symbol_idx)?;
+                let cur_symbol = table.symbols().get(cur_symbol_idx)?;
                 let sym_name = table.strtab.get_str(cur_symbol.st_name());
 
                 // Check if this is the symbol we're looking for

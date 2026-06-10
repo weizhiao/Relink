@@ -186,7 +186,7 @@ impl<L: ElfLayout> ElfHashTable<L> for ElfHash {
 
             // Get the current symbol and its name
             let next_chain = *chains.get(chain_idx)? as usize;
-            let cur_symbol = table.symbols.get(chain_idx)?;
+            let cur_symbol = table.symbols().get(chain_idx)?;
             let sym_name = table.strtab.get_str(cur_symbol.st_name());
 
             // Check if this is the symbol we're looking for
