@@ -1,7 +1,8 @@
 use crate::{
     IoError, MmapError, Result,
     input::{ElfReader, Path, PathBuf},
-    os::{HostRegion, MadviseAdvice, MapFlags, MappedRegion, Mmap, PageSize, ProtFlags, VmAddr},
+    memory::{HostRegion, MappedRegion, VmAddr},
+    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{

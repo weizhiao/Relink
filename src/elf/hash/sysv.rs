@@ -8,7 +8,7 @@ use super::ElfHashTable;
 use crate::{
     ParseDynamicError, Result,
     elf::{ElfLayout, ElfSymbol, PreCompute, SymbolTable, symbol::SymbolInfo},
-    os::{MappedView, RegionAccess, VmAddr},
+    memory::{MappedView, RegionAccess, VmAddr},
     segment::ElfSegments,
 };
 use core::mem::size_of;

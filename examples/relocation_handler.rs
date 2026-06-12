@@ -5,7 +5,7 @@ use elf_loader::{
     Loader, Result,
     arch::NativeArch,
     elf::ElfHashTable,
-    os::RegionAccess,
+    memory::RegionAccess,
     relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
 };
 

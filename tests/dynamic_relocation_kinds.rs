@@ -1,7 +1,7 @@
 mod support;
 
 use elf_loader::{
-    Loader, arch::NativeArch, input::ElfBinary, os::VmOffset, relocation::RelocationArch,
+    Loader, arch::NativeArch, input::ElfBinary, memory::VmOffset, relocation::RelocationArch,
 };
 
 const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();

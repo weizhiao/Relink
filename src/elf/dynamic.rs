@@ -6,7 +6,7 @@ use crate::{
         ElfDynRaw, ElfDynamicTag, ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, ElfWord,
         Lifecycle, NativeElfLayout,
     },
-    os::{MappedView, RegionAccess, VmAddr, VmOffset},
+    memory::{MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::ElfSegments,
 };

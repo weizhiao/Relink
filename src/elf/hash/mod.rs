@@ -11,7 +11,7 @@
 use crate::elf::{
     ElfDynamic, ElfDynamicHashTab, ElfLayout, ElfSymbol, SymbolTable, symbol::SymbolInfo,
 };
-use crate::{Result, os::RegionAccess, segment::ElfSegments};
+use crate::{Result, memory::RegionAccess, segment::ElfSegments};
 use core::fmt::Debug;
 use gnu::ElfGnuHash;
 use sysv::ElfHash;

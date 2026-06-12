@@ -165,6 +165,7 @@ pub mod input;
 pub mod linker;
 pub mod loader;
 mod logging;
+pub mod memory;
 #[cfg(feature = "object")]
 mod object;
 #[cfg(feature = "object")]
@@ -172,6 +173,7 @@ pub use object::CustomHash;
 pub mod observer;
 pub mod os;
 pub mod relocation;
+pub mod runtime;
 mod segment;
 mod sync;
 pub mod tls;

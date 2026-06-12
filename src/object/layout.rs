@@ -6,10 +6,9 @@ use crate::{
         ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionId, ElfSectionType, ElfShdr,
     },
     input::{ElfReader, ElfReaderExt},
+    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset, rounddown, roundup},
     observer::{LoadObserver, SectionLayoutEvent},
-    os::{
-        ImageMemory, MapFlags, Mmap, ProtFlags, RegionAccess, VmAddr, VmOffset, rounddown, roundup,
-    },
+    os::{MapFlags, Mmap, ProtFlags},
     relocation::{ObjectRelocationArch, RelocationArch},
     segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder},
 };

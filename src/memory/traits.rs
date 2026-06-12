@@ -5,8 +5,10 @@ use core::{
 
 use crate::{
     ByteRepr, Result,
-    os::{MadviseAdvice, ProtFlags, VmAddr},
+    os::{MadviseAdvice, ProtFlags},
 };
+
+use super::VmAddr;
 
 /// Memory access backend for a mapped VM range.
 ///

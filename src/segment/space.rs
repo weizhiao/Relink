@@ -1,9 +1,7 @@
 use crate::{
     ByteRepr, Result,
-    os::{
-        HostRegion, ImageMemory, MappedRegion, MappedView, ProtFlags, RegionAccess, VmAddr,
-        VmOffset,
-    },
+    memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
+    os::ProtFlags,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt::Debug, ptr::NonNull};

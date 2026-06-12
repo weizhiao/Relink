@@ -4,8 +4,8 @@ use crate::{
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     image::{LoadedCore, RawDynamic},
     logging,
+    memory::{ImageMemory, MappedView, RegionAccess, VmOffset},
     observer::{Finalizer, LinkActivity, ModuleRelocatedEvent, RelocationObserver},
-    os::{ImageMemory, MappedView, RegionAccess, VmOffset},
     relocation::{
         BindingMode, RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, ResolvedBinding,
         likely, reloc_error, unlikely,
@@ -444,7 +444,7 @@ mod tests {
         ByteRepr, Error, ParseDynamicError,
         arch::NativeArch,
         elf::ElfRelType,
-        os::{MappedRegion, MappedView},
+        memory::{MappedRegion, MappedView},
     };
     use alloc::boxed::Box;
     use core::num::NonZeroUsize;

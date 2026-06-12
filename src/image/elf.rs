@@ -3,8 +3,8 @@ use crate::{
     arch::NativeArch,
     elf::ElfPhdr,
     input::Path,
+    memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
-    os::{HostRegion, RegionAccess, VmAddr},
     relocation::{
         ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
         Relocator,

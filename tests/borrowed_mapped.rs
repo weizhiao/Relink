@@ -6,8 +6,8 @@ use elf_loader::{
     elf::ElfProgramType,
     image::ScannedElf,
     input::ElfBinary,
+    memory::RegionAccess,
     observer::{DynamicLoadedEvent, LoadObserver},
-    os::RegionAccess,
 };
 use gen_elf::{Arch, ElfWriterConfig, SymbolDesc};
 use support::{generated_dylib::return_42_stub, test_dylib::write_test_dylib_with_config};

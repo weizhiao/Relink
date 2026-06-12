@@ -14,10 +14,10 @@ mod enabled {
         RelocReason, Result,
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
         elf::{ElfHashTable, ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
+        memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
         observer::{
             RelocationObserver, TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
         },
-        os::{ImageMemory, RegionAccess, VmAddr, VmOffset},
         relocation::{RelocHelper, RelocationArch, RelocationHandler},
         segment::ElfSegments,
     };
@@ -222,8 +222,8 @@ mod disabled {
     use crate::{
         RelocReason, Result,
         elf::{ElfRelEntry, ElfRelType},
+        memory::{RegionAccess, VmAddr},
         observer::RelocationObserver,
-        os::{RegionAccess, VmAddr},
         relocation::{RelocHelper, RelocationArch, RelocationHandler},
     };
 

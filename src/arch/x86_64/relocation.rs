@@ -86,12 +86,12 @@ impl ObjectRelocationArch for X86_64Arch {
     ) -> Result<()>
     where
         D: 'static,
-        R: crate::os::RegionAccess,
+        R: crate::memory::RegionAccess,
         H: crate::elf::ElfHashTable<Self::Layout> + 'static,
         PreH: crate::relocation::RelocationHandler<Self> + ?Sized,
         PostH: crate::relocation::RelocationHandler<Self> + ?Sized,
         Obs: crate::observer::RelocationObserver<Self> + ?Sized,
-        Memory: crate::os::ImageMemory,
+        Memory: crate::memory::ImageMemory,
     {
         Self::relocate_object_impl(helper, rel, target, pltgot)
     }

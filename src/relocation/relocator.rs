@@ -2,10 +2,10 @@ use crate::{
     Result,
     image::{ModuleHandle, ModuleScope},
     observer::RelocationObserver,
-    os::{CodeExecutor, NativeCodeExecutor},
     relocation::{
         BindingMode, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, SupportLazy,
     },
+    runtime::{CodeExecutor, NativeCodeExecutor},
     sync::Arc,
 };
 use alloc::boxed::Box;

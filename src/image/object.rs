@@ -9,8 +9,8 @@ use crate::segment::ElfSegments;
 use crate::{
     Result,
     elf::{ElfShdr, Lifecycle, SymbolTable},
+    memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
-    os::{HostRegion, RegionAccess, VmAddr},
     relocation::{
         ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
         Relocator,

@@ -9,7 +9,7 @@ use crate::{
     ParseDynamicError, Result,
     elf::{ElfLayout, ElfSymbol, ElfWord},
     elf::{PreCompute, SymbolTable, symbol::SymbolInfo},
-    os::{MappedView, RegionAccess, VmAddr, VmOffset},
+    memory::{MappedView, RegionAccess, VmAddr, VmOffset},
     segment::ElfSegments,
 };
 use core::mem::size_of;

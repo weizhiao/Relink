@@ -3,8 +3,9 @@ use crate::{
     arch::NativeArch,
     elf::{HashTable, Lifecycle},
     image::ElfCore,
-    os::{CodeContext, CodeExecutor, HostRegion, ImageMemory, RegionAccess},
+    memory::{HostRegion, ImageMemory, RegionAccess},
     relocation::RelocationArch,
+    runtime::{CodeContext, CodeExecutor},
     segment::ElfSegments,
     sync::Arc,
 };

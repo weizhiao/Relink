@@ -3,7 +3,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfSymbol, PreCompute, SymbolInfo},
-    os::{RegionAccess, VmAddr, VmOffset},
+    memory::{RegionAccess, VmAddr, VmOffset},
     relocation::RelocationArch,
     sync::Arc,
     tls::{TlsModuleId, TlsTpOffset},

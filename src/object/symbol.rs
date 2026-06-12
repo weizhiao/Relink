@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::elf::{ElfLayout, ElfShdr, ElfStringTable, SymbolStorage, SymbolTable};
+use crate::memory::{ImageMemory, MappedView};
 use crate::object::{CustomHash, section_bytes, section_entries_mut};
-use crate::os::{ImageMemory, MappedView};
 
 static EMPTY_STRTAB: [u8; 1] = [0];
 

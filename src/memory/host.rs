@@ -8,10 +8,10 @@ use alloc::boxed::Box;
 
 use crate::{
     ByteRepr, Result,
-    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags, VmAddr},
+    os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
 
-use super::{MappedRegion, RegionAccess};
+use super::{MappedRegion, RegionAccess, VmAddr};
 
 /// Host-addressable mmap region.
 pub struct HostRegion {

@@ -8,8 +8,8 @@ use crate::{
     elf::ElfPhdr,
     image::{ElfCore, LoadedCore, RawDynamic},
     input::Path,
+    memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
-    os::{HostRegion, RegionAccess, VmAddr},
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     tls::{TlsModuleId, TlsTpOffset},
 };

@@ -4,8 +4,8 @@ mod fixture_support;
 use elf_loader::{
     Loader, Result,
     arch::NativeArch,
+    memory::RegionAccess,
     observer::{LoadObserver, ProgramHeaderEvent},
-    os::RegionAccess,
     relocation::RelocationArch,
 };
 

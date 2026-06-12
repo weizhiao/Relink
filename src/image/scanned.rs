@@ -9,7 +9,7 @@ use crate::{
     },
     input::{ElfReader, ElfReaderExt, Path, PathBuf},
     loader::ScanBuilder,
-    os::MappedView,
+    memory::MappedView,
     relocation::RelocationArch,
 };
 use alloc::{boxed::Box, vec::Vec};

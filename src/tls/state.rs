@@ -1,7 +1,7 @@
 #[cfg(feature = "tls")]
 mod enabled {
     use super::super::defs::{TlsDescDynamicArg, TlsModuleId, TlsTpOffset};
-    use crate::os::VmAddr;
+    use crate::memory::VmAddr;
     use alloc::{boxed::Box, vec::Vec};
     use core::cell::OnceCell;
 
@@ -76,7 +76,7 @@ mod enabled {
 #[cfg(not(feature = "tls"))]
 mod disabled {
     use super::super::defs::{TlsModuleId, TlsTpOffset};
-    use crate::os::VmAddr;
+    use crate::memory::VmAddr;
 
     #[derive(Default)]
     pub(crate) struct TlsDescArgs;

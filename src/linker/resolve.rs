@@ -7,10 +7,11 @@ use super::{
 use crate::{
     LinkerError, Loader, Result,
     image::{RawDynamic, ScannedDynamic, ScannedElf},
+    memory::RegionAccess,
     observer::{
         LinkObserver, LoadObserver, ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
     },
-    os::{Mmap, RegionAccess},
+    os::Mmap,
     relocation::RelocationArch,
     tls::TlsResolver,
 };
@@ -37,7 +38,7 @@ pub(crate) type LoadResolveContext<
     Meta = (),
     V = (),
     Arch = crate::arch::NativeArch,
-    R = crate::os::HostRegion,
+    R = crate::memory::HostRegion,
 > = ResolveContext<'a, K, D, Meta, V, Arch, RawDynamic<D, Arch, R>>;
 
 pub(crate) type ScanResolveContext<'a, K, D, Meta = (), V = (), Arch = crate::arch::NativeArch> =

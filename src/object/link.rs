@@ -6,14 +6,15 @@ use crate::{
     },
     image::{ModuleScope, RawObject},
     logging,
+    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     object::ObjectSegmentView,
     object::section_entries,
     observer::{InitEvent, RelocationObserver, SymbolBindingEvent},
-    os::{CodeExecutor, ImageMemory, RegionAccess, VmAddr, VmOffset},
     relocate_context_error,
     relocation::{
         ObjectRelocationArch, RelocHelper, RelocateArgs, RelocationHandler, resolve_symbol_addr,
     },
+    runtime::CodeExecutor,
     sync::Arc,
 };
 

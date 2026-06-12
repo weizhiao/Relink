@@ -1,5 +1,5 @@
 use super::{request::DependencyOwner, storage::KeyId};
-use crate::{image::ModuleHandle, input::Path, os::RegionAccess, relocation::RelocationArch};
+use crate::{image::ModuleHandle, input::Path, memory::RegionAccess, relocation::RelocationArch};
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},

@@ -5,7 +5,7 @@ use crate::{
     elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol, HashTable, Lifecycle},
     image::ElfCore,
     input::Path,
-    os::{HostRegion, ImageMemory, RegionAccess, VmAddr},
+    memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     relocation::RelocationArch,
     segment::ElfSegments,
     tls::{TlsModuleId, TlsTpOffset},

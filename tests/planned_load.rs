@@ -13,8 +13,9 @@ use elf_loader::{
             MemoryClass, PassScopeMode, ReorderPass,
         },
     },
+    memory::{RegionAccess, VmAddr},
     observer::{LinkObserver, StagedDynamic},
-    os::{PageSize, RegionAccess, VmAddr},
+    os::PageSize,
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
 use std::{boxed::Box, cell::RefCell, rc::Rc, vec::Vec};

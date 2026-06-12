@@ -2,12 +2,12 @@ use crate::{
     RelocReason, Result,
     arch::riscv64::relocation::RiscV64Arch,
     elf::{ElfHashTable, ElfRelType, ElfRelocationType, ElfShdr},
+    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     object::{
         layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
         object_relocation_addend, object_relocation_entries, object_relocation_sections,
     },
     observer::RelocationObserver,
-    os::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     relocation::{ObjectRelocationArch, RelocHelper, RelocationHandler, reloc_error},
 };
 use elf::abi::*;

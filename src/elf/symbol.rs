@@ -11,7 +11,7 @@ use super::defs::{
 use crate::{
     ParseDynamicError, Result,
     elf::{ElfDynamic, ElfHashTable, HashTable, PreCompute},
-    os::{MappedView, RegionAccess},
+    memory::{MappedView, RegionAccess},
     segment::ElfSegments,
 };
 use core::ffi::CStr;

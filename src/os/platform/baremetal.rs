@@ -1,7 +1,8 @@
 use crate::{
     Result,
     input::{ElfReader, Path},
-    os::{HostRegion, MadviseAdvice, MapFlags, MappedRegion, Mmap, ProtFlags, VmAddr},
+    memory::{HostRegion, MappedRegion, VmAddr},
+    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
 };
 use alloc::alloc::{dealloc, handle_alloc_error};
 #[cfg(feature = "tls")]

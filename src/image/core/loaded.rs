@@ -8,7 +8,7 @@ use crate::{
     },
     image::{Module, ModuleHandle, ModuleScope},
     input::{Path, PathBuf},
-    os::{HostRegion, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
+    memory::{HostRegion, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymDef},
     segment::ElfSegments,
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},

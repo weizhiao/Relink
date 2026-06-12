@@ -1,5 +1,6 @@
-use super::{MadviseAdvice, MapFlags, MappedRegion, PageSize, ProtFlags, RegionAccess, VmAddr};
+use super::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
 use crate::Result;
+use crate::memory::{MappedRegion, RegionAccess, VmAddr};
 use alloc::sync::Arc;
 
 /// A trait for low-level memory mapping operations.

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use elf_loader::{image::LoadedCore, os::VmOffset};
+use elf_loader::{image::LoadedCore, memory::VmOffset};
 use gen_elf::{ElfWriteOutput, RelocationInfo};
 
 use crate::support::memory::read_native_word;

@@ -2,11 +2,11 @@ use crate::{
     RelocReason,
     arch::x86_64::relocation::X86_64Arch,
     elf::{ElfRelType, ElfShdr},
+    memory::{ImageMemory, RegionAccess, VmAddr},
     object::{
         layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
         object_relocation_addend,
     },
-    os::{ImageMemory, RegionAccess, VmAddr},
     relocation::{
         RelocHelper, RelocValue, RelocationHandler, RelocationValueProvider, reloc_error,
     },

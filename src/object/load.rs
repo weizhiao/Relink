@@ -6,8 +6,9 @@ use crate::{
     input::{ElfReader, ElfReaderExt, IntoElfReader},
     loader::{ExpectedElf, Loader},
     logging,
+    memory::VmOffset,
     observer::{LoadObserver, ObjectMetadataEvent},
-    os::{Mmap, VmOffset},
+    os::Mmap,
     relocation::ObjectRelocationArch,
     tls::TlsResolver,
 };

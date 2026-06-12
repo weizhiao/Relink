@@ -12,7 +12,7 @@ use elf_loader::{
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfRela},
     image::RawElf,
     input::ElfFile,
-    os::VmAddr,
+    memory::VmAddr,
     relocation::RelocationArch,
 };
 use linked_list_allocator::LockedHeap;

@@ -6,7 +6,7 @@ use std::{
     thread,
 };
 
-use elf_loader::{arch::NativeArch, os::VmOffset, relocation::RelocationArch};
+use elf_loader::{arch::NativeArch, memory::VmOffset, relocation::RelocationArch};
 
 const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
 const REL_GOT: u32 = <NativeArch as RelocationArch>::GOT.raw();

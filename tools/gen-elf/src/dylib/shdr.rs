@@ -578,17 +578,7 @@ impl ShdrManager {
         }
 
         // 6. PT_GNU_STACK marks the process stack as non-executable.
-        self.write_phdr(
-            &mut writer,
-            is_64,
-            PT_GNU_STACK,
-            PF_R | PF_W,
-            0,
-            0,
-            0,
-            0,
-            0,
-        )?;
+        self.write_phdr(&mut writer, is_64, PT_GNU_STACK, PF_R | PF_W, 0, 0, 0, 0, 0)?;
 
         Ok(())
     }

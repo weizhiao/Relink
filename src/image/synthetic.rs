@@ -6,7 +6,7 @@ use crate::{
     elf::{
         ElfLayout, ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType, PreCompute, SymbolInfo,
     },
-    os::{VmAddr, VmOffset},
+    memory::{VmAddr, VmOffset},
     relocation::RelocationArch,
 };
 use alloc::{collections::BTreeMap, string::String, vec::Vec};

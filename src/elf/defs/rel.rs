@@ -2,7 +2,7 @@
 
 use crate::{
     arch::NativeArch,
-    os::{VmAddr, VmOffset},
+    memory::{VmAddr, VmOffset},
     relocation::RelocationArch,
 };
 

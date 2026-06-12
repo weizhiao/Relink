@@ -1,7 +1,7 @@
-use super::{ImageMemory, VmAddr};
 use crate::{
     CodeError, MmapError, Result,
     arch::NativeArch,
+    memory::{ImageMemory, VmAddr},
     relocation::{RelocationArch, resolve_ifunc},
     sync::Arc,
 };

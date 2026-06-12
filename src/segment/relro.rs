@@ -1,7 +1,8 @@
 use crate::{
     Result,
     elf::{ElfLayout, ElfPhdr},
-    os::{ProtFlags, RegionAccess, VmAddr, VmOffset},
+    memory::{RegionAccess, VmAddr, VmOffset},
+    os::ProtFlags,
     segment::ElfSegments,
 };
 

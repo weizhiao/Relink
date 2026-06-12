@@ -1,3 +1,5 @@
+//! Virtual memory and mapped image abstractions.
+
 mod addr;
 mod host;
 mod region;

@@ -1,7 +1,8 @@
 use crate::input::{ElfReader, Path, PathBuf};
 use crate::{
     Error, IoError, MmapError, Result, logging,
-    os::{HostRegion, MadviseAdvice, MapFlags, MappedRegion, Mmap, ProtFlags, VmAddr},
+    memory::{HostRegion, MappedRegion, VmAddr},
+    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
 };
 use alloc::{boxed::Box, ffi::CString};
 use core::ffi::{c_int, c_void};

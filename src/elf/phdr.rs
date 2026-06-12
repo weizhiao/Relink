@@ -3,7 +3,7 @@
 //! This module contains program-header views and storage used while loading ELF segments.
 
 use super::defs::{ElfLayout, ElfPhdrRaw, ElfProgramFlags, ElfProgramType, NativeElfLayout};
-use crate::os::{MappedView, VmOffset};
+use crate::memory::{MappedView, VmOffset};
 use alloc::vec::Vec;
 
 /// ELF program header describing segments to be loaded into memory.
@@ -173,7 +173,7 @@ impl<L: ElfLayout> ElfPhdrs<L> {
 #[cfg(test)]
 mod tests {
     use super::{ElfPhdr, ElfProgramFlags, ElfProgramType};
-    use crate::os::VmOffset;
+    use crate::memory::VmOffset;
 
     #[test]
     fn owned_phdr_round_trips_and_mutates() {

@@ -5,7 +5,7 @@ mod enabled {
         RelocationError, Result,
         arch::{NativeArch, prepare_lazy_bind},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolInfo},
-        os::{ImageMemory, RegionAccess, VmAddr, VmOffset},
+        memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
         relocation::{
             BindingMode, ObjectRelocationArch, RelocationArch, SupportLazy, SymDef, unlikely,
         },
@@ -242,7 +242,7 @@ mod disabled {
     use crate::{
         elf::ElfRelType,
         image::{ModuleScope, RawDynamic},
-        os::{ImageMemory, RegionAccess, VmAddr},
+        memory::{ImageMemory, RegionAccess, VmAddr},
         relocation::{BindingMode, RelocationArch},
     };
 

@@ -8,11 +8,12 @@ use crate::{
     input::{Path, PathBuf},
     loader::ImageBuilder,
     logging,
+    memory::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     observer::{DtDebugEntry, InitEvent, LoadObserver, RelocationObserver},
-    os::{CodeExecutor, HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{
         DynamicRelocation, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
     },
+    runtime::CodeExecutor,
     segment::ELFRelro,
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };

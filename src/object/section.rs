@@ -3,7 +3,7 @@ use core::mem::{align_of, size_of};
 use crate::{
     ByteRepr, IoError, MmapError, Result,
     elf::{ElfLayout, ElfShdr},
-    os::{ImageMemory, VmAddr},
+    memory::{ImageMemory, VmAddr},
 };
 
 #[inline]

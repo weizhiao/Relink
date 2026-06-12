@@ -1,4 +1,4 @@
-use crate::os::VmAddr;
+use crate::memory::VmAddr;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 

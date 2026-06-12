@@ -6,7 +6,7 @@ use super::{
 #[cfg(feature = "object")]
 use super::{ObjectMetadataEvent, SectionLayoutEvent};
 use crate::{
-    Result, arch::NativeArch, elf::ElfHashTable, os::RegionAccess, relocation::RelocationArch,
+    Result, arch::NativeArch, elf::ElfHashTable, memory::RegionAccess, relocation::RelocationArch,
 };
 use alloc::boxed::Box;
 

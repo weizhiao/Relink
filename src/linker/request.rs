@@ -3,7 +3,7 @@ use crate::{
     arch::ArchKind,
     image::{ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     input::Path,
-    os::{HostRegion, RegionAccess},
+    memory::{HostRegion, RegionAccess},
     relocation::{BindingMode, RelocationArch},
 };
 use alloc::boxed::Box;

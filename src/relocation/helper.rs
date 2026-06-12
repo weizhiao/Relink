@@ -4,10 +4,11 @@ use crate::{
     elf::{ElfHashTable, ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, HashTable, SymbolInfo},
     image::{ElfCore, Module, ModuleScope},
     logging,
+    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     observer::{IfuncBindingEvent, RelocationObserver, SymbolBindingEvent},
-    os::{CodeContext, CodeExecutor, ImageMemory, RegionAccess, VmAddr, VmOffset},
     relocate_context_error,
     relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
+    runtime::{CodeContext, CodeExecutor},
     segment::ElfSegments,
     tls::{TlsDescArgs, lookup_tls_get_addr},
 };

@@ -1,13 +1,8 @@
 use core::ptr::NonNull;
 
-use crate::{
-    ByteRepr, Result,
-    os::{ProtFlags, VmAddr},
-    sync::Arc,
-    try_cast_bytes,
-};
+use crate::{ByteRepr, Result, os::ProtFlags, sync::Arc, try_cast_bytes};
 
-use super::{HostRegion, traits::RegionAccess};
+use super::{HostRegion, VmAddr, traits::RegionAccess};
 
 /// A mapped region returned by [`Mmap`](crate::os::Mmap), backed by any
 /// [`RegionAccess`] implementation.

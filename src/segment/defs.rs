@@ -1,4 +1,7 @@
-use crate::os::{MapFlags, ProtFlags, VmOffset};
+use crate::{
+    memory::VmOffset,
+    os::{MapFlags, ProtFlags},
+};
 use alloc::vec::Vec;
 
 /// Information about a file mapping within a segment

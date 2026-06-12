@@ -1,7 +1,8 @@
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType, NativeElfLayout},
-    os::{MapFlags, Mmap, ProtFlags, VmAddr, VmOffset, rounddown, roundup},
+    memory::{VmAddr, VmOffset, rounddown, roundup},
+    os::{MapFlags, Mmap, ProtFlags},
     segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder},
 };
 use alloc::vec::Vec;

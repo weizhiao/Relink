@@ -4,8 +4,8 @@ mod fixture_support;
 use elf_loader::{
     Loader, Result,
     arch::NativeArch,
+    memory::RegionAccess,
     observer::{DynamicLoadedEvent, LoadObserver},
-    os::RegionAccess,
 };
 
 #[allow(dead_code)]

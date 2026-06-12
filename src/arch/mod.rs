@@ -112,7 +112,7 @@ pub(crate) mod object;
 
 #[cfg(feature = "lazy-binding")]
 #[inline]
-pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: crate::os::VmAddr) {
+pub(crate) fn prepare_lazy_bind(got: *mut usize, dylib: crate::memory::VmAddr) {
     // 这是安全的，延迟绑定时库是存在的
     unsafe {
         got.add(DYLIB_OFFSET).write(dylib.get());

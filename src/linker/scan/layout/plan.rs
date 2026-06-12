@@ -11,7 +11,7 @@ use crate::{
     entity::{PrimaryMap, SecondaryMap},
     image::{ModuleCapability, ScannedDynamic},
     linker::scan::ModuleId,
-    os::align_up,
+    memory::align_up,
     relocation::RelocationArch,
 };
 

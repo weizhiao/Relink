@@ -3,7 +3,7 @@ use crate::{
     elf::{ElfLayout, ElfPhdr, NativeElfLayout},
     image::RawDynamic,
     input::Path,
-    os::{HostRegion, RegionAccess},
+    memory::{HostRegion, RegionAccess},
     relocation::RelocationArch,
     segment::ElfSegments,
 };

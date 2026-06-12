@@ -10,8 +10,9 @@ use crate::{
         ElfHashTable, ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType, HashTable,
     },
     image::{ElfCore, ModuleScope},
+    memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
-    os::{CodeExecutor, HostRegion, RegionAccess, VmAddr},
+    runtime::CodeExecutor,
     sync::Arc,
 };
 use alloc::boxed::Box;
@@ -113,7 +114,7 @@ pub trait ObjectRelocationArch: RelocationArch {
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
-        Memory: crate::os::ImageMemory,
+        Memory: crate::memory::ImageMemory,
     {
         Ok(())
     }
@@ -135,7 +136,7 @@ pub trait ObjectRelocationArch: RelocationArch {
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
-        Memory: crate::os::ImageMemory,
+        Memory: crate::memory::ImageMemory,
     {
         Err(reloc_error::<Self, _, R, H>(
             rel,
@@ -222,7 +223,7 @@ pub(crate) trait RelocationValueProvider {
 ///
 /// ```ignore
 /// use elf_loader::elf::ElfRelocationType;
-/// use elf_loader::os::RegionAccess;
+/// use elf_loader::memory::RegionAccess;
 /// use elf_loader::relocation::{HandleResult, RelocationContext, RelocationHandler};
 /// use elf_loader::Result;
 ///

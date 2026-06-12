@@ -8,8 +8,8 @@ use crate::{
     elf::{ElfSectionId, ElfSectionType, ElfShdr, Lifecycle, SymbolTable},
     input::PathBuf,
     loader::LoaderInner,
+    memory::{HostRegion, RegionAccess, VmAddr},
     observer::LoadObserver,
-    os::{HostRegion, RegionAccess, VmAddr},
     relocation::ObjectRelocationArch,
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
@@ -54,7 +54,7 @@ where
         memory: &Memory,
     ) -> Result<Lifecycle>
     where
-        Memory: crate::os::ImageMemory + ?Sized,
+        Memory: crate::memory::ImageMemory + ?Sized,
     {
         let array: &[usize] = section_entries(memory, init_array_shdr)?;
         let array = array.iter().copied().map(VmAddr::new).collect::<Box<[_]>>();
@@ -66,7 +66,7 @@ where
         memory: &Memory,
     ) -> Result<ObjectSectionData<Arch>>
     where
-        Memory: crate::os::ImageMemory + ?Sized,
+        Memory: crate::memory::ImageMemory + ?Sized,
     {
         let mut symtab = None;
         let mut init = Lifecycle::new(None, None);

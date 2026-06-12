@@ -7,7 +7,7 @@ use crate::{
         ElfDyn, ElfDynamicTag, ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfSectionId,
         ElfSymbol,
     },
-    os::{RegionAccess, VmAddr, VmOffset},
+    memory::{RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, RelocationValueProvider},
     try_cast_bytes, try_cast_bytes_mut,
 };

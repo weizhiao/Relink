@@ -15,8 +15,9 @@ use crate::{
     entity::SecondaryMap,
     image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     linker::session::ResolveSession,
+    memory::{RegionAccess, VmOffset},
     observer::{DynamicLoadedEvent, LinkObserver, LoadObserver, RelocationObserver, StagedDynamic},
-    os::{Mmap, RegionAccess, VmOffset},
+    os::Mmap,
     relocation::{RelocationArch, RelocationHandler, Relocator},
     tls::TlsResolver,
 };
@@ -34,7 +35,7 @@ use core::{fmt, mem, ops::Deref};
 pub struct LoadResult<
     D: 'static,
     Arch: RelocationArch = crate::arch::NativeArch,
-    R: RegionAccess = crate::os::HostRegion,
+    R: RegionAccess = crate::memory::HostRegion,
 > {
     root: LoadedCore<D, Arch, R>,
     committed: Box<[KeyId]>,

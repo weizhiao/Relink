@@ -1,6 +1,6 @@
 #[cfg(feature = "object")]
 use crate::RelocReason;
-use crate::os::VmAddr;
+use crate::memory::VmAddr;
 use core::ptr::NonNull;
 
 /// A wrapper type for raw values written into relocation slots.
