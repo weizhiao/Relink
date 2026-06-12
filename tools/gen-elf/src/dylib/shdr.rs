@@ -358,7 +358,7 @@ impl ShdrManager {
     }
 
     pub(crate) fn get_phnum(&self) -> u16 {
-        let mut count = 1; // PT_PHDR
+        let mut count = 2; // PT_PHDR + PT_GNU_STACK
         let mut has_rx = false;
         let mut has_r = false;
         let mut has_rw = false;
@@ -576,6 +576,19 @@ impl ShdrManager {
                 if is_64 { 8 } else { 4 },
             )?;
         }
+
+        // 6. PT_GNU_STACK marks the process stack as non-executable.
+        self.write_phdr(
+            &mut writer,
+            is_64,
+            PT_GNU_STACK,
+            PF_R | PF_W,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )?;
 
         Ok(())
     }

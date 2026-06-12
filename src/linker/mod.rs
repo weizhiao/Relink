@@ -25,7 +25,7 @@ pub use request::{
     RelocationPlanner, RelocationRequest, RootRequest, VisibleModules,
 };
 pub use resolver::{
-    CandidateRequest, KeyResolver, ResolvedKey, SearchDirProvider, SearchDirSource,
-    SearchPathResolver,
+    CandidateContext, CandidateRequest, FileNameKey, KeyResolver, KeyRule, PathKey, ResolvedKey,
+    ReuseResolver, SearchDirProvider, SearchPathEntry, SearchPathResolver,
 };
 pub use storage::KeyId;

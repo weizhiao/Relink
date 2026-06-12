@@ -97,11 +97,11 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
     }
 
     /// Creates a builder for relocating the relocatable file.
-    pub fn relocator(self) -> Relocator<Self, (), (), D, Arch>
+    pub fn relocator(self) -> Relocator<Self, (), (), Arch>
     where
         Self: Relocatable<D, Arch = Arch>,
     {
-        Relocator::new().with_object(self)
+        Relocator::<(), (), (), Arch>::new().with_object(self)
     }
 }
 
@@ -123,21 +123,14 @@ where
 
     fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
     {
-        let RelocateArgs {
-            scope,
-            pre_handler,
-            post_handler,
-            observer,
-            ..
-        } = args;
-        let inner = self.relocate_impl(scope, pre_handler, post_handler, observer)?;
+        let inner = self.relocate_impl(args)?;
         Ok(LoadedObject { inner })
     }
 }

@@ -8,11 +8,12 @@ use crate::{
     logging,
     object::ObjectSegmentView,
     object::section_entries,
-    observer::default_lifecycle_executor,
-    observer::{LifecycleEvent, LifecyclePhase, RelocationObserver, SymbolBindingEvent},
-    os::{ImageMemory, RegionAccess, VmAddr, VmOffset},
+    observer::{InitEvent, RelocationObserver, SymbolBindingEvent},
+    os::{CodeExecutor, ImageMemory, RegionAccess, VmAddr, VmOffset},
     relocate_context_error,
-    relocation::{ObjectRelocationArch, RelocHelper, RelocationHandler, resolve_symbol_addr},
+    relocation::{
+        ObjectRelocationArch, RelocHelper, RelocateArgs, RelocationHandler, resolve_symbol_addr,
+    },
     sync::Arc,
 };
 
@@ -73,10 +74,7 @@ where
 {
     pub(crate) fn relocate_impl<PreH, PostH, Obs>(
         mut self,
-        scope: ModuleScope<Arch>,
-        pre_handler: &PreH,
-        post_handler: &PostH,
-        observer: &mut Obs,
+        args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
     ) -> Result<crate::image::LoadedCore<D, Arch, R, crate::object::CustomHash>>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
@@ -84,67 +82,60 @@ where
         Obs: RelocationObserver<Arch> + ?Sized,
     {
         logging::debug!("Relocating object: {}", self.core.name());
+        let RelocateArgs {
+            scope,
+            executor,
+            pre_handler,
+            post_handler,
+            observer,
+            ..
+        } = args;
+
         self.simplify_symbols(&scope, observer)?;
 
-        let scope = {
-            let object_segments =
-                ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
-            let mut helper = RelocHelper::new(
-                &self.core,
-                object_segments,
-                scope,
-                pre_handler,
-                post_handler,
-                observer,
-                self.core.tls_get_addr(),
-            );
-            let shdrs = &self.shdrs;
-            let mut state = Arch::ObjectRelocationState::default();
-            Arch::prepare_object_relocation(&mut state, &mut helper, shdrs)?;
-            for (target, relocation_shdr) in object_relocation_sections::<Arch>(shdrs) {
-                let rels = object_relocation_entries::<Arch, _>(helper.memory(), relocation_shdr)?;
-                for rel in rels {
-                    if !helper.handle_pre(rel)?.is_unhandled() {
-                        continue;
-                    }
-                    match Arch::relocate_object(
-                        &mut state,
-                        &mut helper,
-                        rel,
-                        target,
-                        &mut self.pltgot,
-                    ) {
-                        Ok(()) => continue,
-                        Err(err) => {
-                            if helper.handle_post(rel)?.is_unhandled() {
-                                return Err(err);
-                            }
+        let object_segments =
+            ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
+        let mut helper = RelocHelper::new(
+            &self.core,
+            object_segments,
+            scope,
+            pre_handler,
+            post_handler,
+            observer,
+            executor.as_ref(),
+            self.core.tls_get_addr(),
+        );
+        let shdrs = &self.shdrs;
+        let mut state = Arch::ObjectRelocationState::default();
+        Arch::prepare_object_relocation(&mut state, &mut helper, shdrs)?;
+        for (target, relocation_shdr) in object_relocation_sections::<Arch>(shdrs) {
+            let rels = object_relocation_entries::<Arch, _>(helper.memory(), relocation_shdr)?;
+            for rel in rels {
+                if !helper.handle_pre(rel)?.is_unhandled() {
+                    continue;
+                }
+                match Arch::relocate_object(&mut state, &mut helper, rel, target, &mut self.pltgot)
+                {
+                    Ok(()) => continue,
+                    Err(err) => {
+                        if helper.handle_post(rel)?.is_unhandled() {
+                            return Err(err);
                         }
                     }
                 }
             }
+        }
 
-            let RelocHelper {
-                scope,
-                tls_desc_args,
-                ..
-            } = helper;
-            self.core.set_tls_desc_args(tls_desc_args);
+        let RelocHelper {
+            scope,
+            tls_desc_args,
+            ..
+        } = helper;
+        self.core.set_tls_desc_args(tls_desc_args);
 
-            (self.mprotect)(&object_segments)?;
+        (self.mprotect)(&object_segments)?;
 
-            logging::trace!("[{}] Executing init functions", self.core.name());
-            let mut event = LifecycleEvent::<Arch, R>::with_executor(
-                LifecyclePhase::Init,
-                self.core.name(),
-                &self.init,
-                &object_segments,
-                default_lifecycle_executor(),
-            );
-            observer.on_init(&mut event)?;
-            event.run()?;
-            scope
-        };
+        self.call_init(observer, object_segments, executor.as_ref())?;
         self.finish_init_metadata();
         drop(self.init_segments.take());
         self.core.set_init();
@@ -154,6 +145,23 @@ where
         Ok(crate::image::LoadedCore::from_relocated_core_deps(
             self.core, scope,
         ))
+    }
+
+    #[inline]
+    fn call_init<Obs>(
+        &self,
+        observer: &mut Obs,
+        segments: ObjectSegmentView<'_, R>,
+        executor: &dyn CodeExecutor<Arch>,
+    ) -> Result<()>
+    where
+        Obs: RelocationObserver<Arch> + ?Sized,
+    {
+        logging::trace!("[{}] Executing init functions", self.core.name());
+        let mut event = InitEvent::new(&self.core, &self.init);
+        observer.on_init(&mut event)?;
+        event.run_with(&segments, executor)?;
+        Ok(())
     }
 
     fn simplify_symbols<Obs>(&mut self, scope: &ModuleScope<Arch>, observer: &mut Obs) -> Result<()>

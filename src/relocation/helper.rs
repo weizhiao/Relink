@@ -5,7 +5,7 @@ use crate::{
     image::{ElfCore, Module, ModuleScope},
     logging,
     observer::{IfuncBindingEvent, RelocationObserver, SymbolBindingEvent},
-    os::{CodeContext, ImageMemory, RegionAccess, VmAddr, VmOffset},
+    os::{CodeContext, CodeExecutor, ImageMemory, RegionAccess, VmAddr, VmOffset},
     relocate_context_error,
     relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
     segment::ElfSegments,
@@ -31,6 +31,8 @@ pub(crate) struct RelocHelper<
     pub(crate) pre_handler: &'find PreH,
     pub(crate) post_handler: &'find PostH,
     pub(crate) observer: &'find mut Obs,
+    pub(crate) executor: &'find dyn CodeExecutor<Arch>,
+    #[allow(dead_code)]
     pub(crate) tls_get_addr: VmAddr,
     pub(crate) tls_desc_args: TlsDescArgs,
 }
@@ -54,6 +56,7 @@ where
         pre_handler: &'find PreH,
         post_handler: &'find PostH,
         observer: &'find mut Obs,
+        executor: &'find dyn CodeExecutor<Arch>,
         tls_get_addr: VmAddr,
     ) -> Self {
         Self {
@@ -63,6 +66,7 @@ where
             pre_handler,
             post_handler,
             observer,
+            executor,
             tls_get_addr,
             tls_desc_args: TlsDescArgs::default(),
         }
@@ -117,8 +121,11 @@ where
     ) -> Result<VmAddr> {
         let mut event = IfuncBindingEvent::new(self.core, rel, resolver);
         self.observer.on_ifunc_binding(&mut event)?;
-        let ctx = CodeContext::<Arch, R>::new(self.core.name(), &self.memory);
-        event.resolve(ctx)
+        let ctx = CodeContext::<Arch>::new(self.core.name(), &self.memory);
+        event
+            .into_resolved_addr()
+            .map(Ok)
+            .unwrap_or_else(|| self.executor.resolve_ifunc(ctx, resolver))
     }
 }
 

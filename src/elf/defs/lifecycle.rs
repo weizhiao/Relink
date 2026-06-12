@@ -43,4 +43,40 @@ impl Lifecycle {
     pub fn as_mut_slice(&mut self) -> &mut [VmAddr] {
         &mut self.funcs
     }
+
+    /// Appends a lifecycle function VM address.
+    #[inline]
+    pub fn push(&mut self, addr: VmAddr) {
+        self.funcs.push(addr);
+    }
+
+    /// Extends the lifecycle function list with additional VM addresses.
+    #[inline]
+    pub fn extend<I>(&mut self, addrs: I)
+    where
+        I: IntoIterator<Item = VmAddr>,
+    {
+        self.funcs.extend(addrs);
+    }
+
+    /// Retains only lifecycle functions accepted by the predicate.
+    #[inline]
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(VmAddr) -> bool,
+    {
+        self.funcs.retain(|addr| f(*addr));
+    }
+
+    /// Removes all lifecycle function VM addresses.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.funcs.clear();
+    }
+
+    /// Returns whether this lifecycle has no functions to run.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.funcs.is_empty()
+    }
 }

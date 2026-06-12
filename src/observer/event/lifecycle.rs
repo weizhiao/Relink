@@ -1,39 +1,28 @@
 use crate::{
     Result,
     arch::NativeArch,
-    elf::Lifecycle,
-    os::{
-        CodeContext, CodeExecutor, HostRegion, ImageMemory, NativeCodeExecutor, RegionAccess,
-        VmAddr,
-    },
+    elf::{HashTable, Lifecycle},
+    image::ElfCore,
+    os::{CodeContext, CodeExecutor, HostRegion, ImageMemory, RegionAccess},
     relocation::RelocationArch,
     segment::ElfSegments,
+    sync::Arc,
 };
 use alloc::boxed::Box;
 
-/// Lifecycle phase being prepared or executed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LifecyclePhase {
-    /// Initialization functions such as `.init` / `.init_array`.
-    Init,
-    /// Finalization functions such as `.fini` / `.fini_array`.
-    Fini,
-}
-
-pub(crate) type CodeExecutorBox<Arch = NativeArch, R = HostRegion> = Box<dyn CodeExecutor<Arch, R>>;
-pub(crate) type LifecycleHook<Arch = NativeArch, R = HostRegion> =
-    Box<dyn for<'event> Fn(&mut LifecycleEvent<'event, Arch, R>) -> Result<()> + Send + Sync>;
+pub(crate) type FiniHook =
+    Box<dyn for<'event> Fn(&mut FiniEvent<'event>) -> Result<()> + Send + Sync>;
 
 /// Finalization state retained until an image is unloaded.
-pub(crate) struct Finalizer<Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
+pub(crate) struct Finalizer<Arch: RelocationArch = NativeArch> {
     lifecycle: Lifecycle,
-    executor: CodeExecutorBox<Arch, R>,
-    hook: Option<LifecycleHook<Arch, R>>,
+    executor: Arc<dyn CodeExecutor<Arch>>,
+    hook: Option<FiniHook>,
 }
 
-impl<Arch: RelocationArch, R: RegionAccess> Finalizer<Arch, R> {
+impl<Arch: RelocationArch> Finalizer<Arch> {
     #[inline]
-    pub(crate) const fn new(lifecycle: Lifecycle, executor: CodeExecutorBox<Arch, R>) -> Self {
+    pub(crate) const fn new(lifecycle: Lifecycle, executor: Arc<dyn CodeExecutor<Arch>>) -> Self {
         Self {
             lifecycle,
             executor,
@@ -52,78 +41,48 @@ impl<Arch: RelocationArch, R: RegionAccess> Finalizer<Arch, R> {
     }
 
     #[inline]
-    pub(crate) fn set_executor<E>(&mut self, executor: E)
-    where
-        E: CodeExecutor<Arch, R>,
-    {
-        self.executor = Box::new(executor);
-    }
-
-    #[inline]
     pub(crate) fn set_hook<F>(&mut self, hook: F)
     where
-        F: for<'event> Fn(&mut LifecycleEvent<'event, Arch, R>) -> Result<()>
-            + Send
-            + Sync
-            + 'static,
+        F: for<'event> Fn(&mut FiniEvent<'event>) -> Result<()> + Send + Sync + 'static,
     {
         self.hook = Some(Box::new(hook));
     }
 
     #[inline]
-    pub(crate) fn run(
-        self,
-        phase: LifecyclePhase,
-        name: &str,
-        segments: &ElfSegments<R>,
-    ) -> Result<()> {
+    pub(crate) fn run<R: RegionAccess>(self, name: &str, segments: &ElfSegments<R>) -> Result<()> {
         let Self {
             lifecycle,
             executor,
             hook,
         } = self;
-        let mut event = LifecycleEvent::with_executor(phase, name, &lifecycle, segments, executor);
+        let mut event = FiniEvent::new(name, &lifecycle);
         if let Some(hook) = hook {
             hook(&mut event)?;
         }
-        event.run()
+        let ctx = CodeContext::<Arch>::new(name, segments);
+        for addr in event.lifecycle.func_addrs() {
+            executor.call_fini(ctx, addr)?;
+        }
+        Ok(())
     }
 }
 
-/// Event passed to lifecycle hooks before `.init` / `.fini` functions run.
+/// Event passed to finalization hooks before finalization functions run.
 ///
-/// The observer may inspect, filter, reorder, or replace the lifecycle function
+/// The hook may inspect, filter, reorder, or replace the finalization function
 /// address list before executing it.
-pub struct LifecycleEvent<'a, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
-    phase: LifecyclePhase,
+pub struct FiniEvent<'a> {
     name: &'a str,
     lifecycle: Lifecycle,
-    memory: &'a dyn ImageMemory,
-    executor: CodeExecutorBox<Arch, R>,
 }
 
-impl<'a, Arch: RelocationArch, R: RegionAccess> LifecycleEvent<'a, Arch, R> {
+impl<'a> FiniEvent<'a> {
     #[inline]
-    pub(crate) fn with_executor(
-        phase: LifecyclePhase,
-        name: &'a str,
-        lifecycle: &'a Lifecycle,
-        memory: &'a dyn ImageMemory,
-        executor: CodeExecutorBox<Arch, R>,
-    ) -> Self {
+    pub(crate) fn new(name: &'a str, lifecycle: &'a Lifecycle) -> Self {
         Self {
-            phase,
             name,
             lifecycle: lifecycle.clone(),
-            memory,
-            executor,
         }
-    }
-
-    /// Returns the lifecycle phase associated with this event.
-    #[inline]
-    pub const fn phase(&self) -> LifecyclePhase {
-        self.phase
     }
 
     /// Returns the module identity used for diagnostics.
@@ -132,10 +91,47 @@ impl<'a, Arch: RelocationArch, R: RegionAccess> LifecycleEvent<'a, Arch, R> {
         self.name
     }
 
-    /// Returns the load base used by this image.
+    /// Returns the lifecycle address table for this event.
     #[inline]
-    pub fn base(&self) -> VmAddr {
-        self.memory.base()
+    pub fn lifecycle(&self) -> &Lifecycle {
+        &self.lifecycle
+    }
+
+    /// Returns the mutable lifecycle address table for this event.
+    #[inline]
+    pub fn lifecycle_mut(&mut self) -> &mut Lifecycle {
+        &mut self.lifecycle
+    }
+}
+
+/// Event passed to relocation observers before initialization functions run.
+///
+/// The observer may inspect, filter, reorder, or replace the lifecycle function
+/// address list before executing it.
+pub struct InitEvent<
+    'a,
+    D: 'static = (),
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = HostRegion,
+    H = HashTable<<Arch as RelocationArch>::Layout>,
+> {
+    core: &'a ElfCore<D, Arch, R, H>,
+    lifecycle: Lifecycle,
+}
+
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H> InitEvent<'a, D, Arch, R, H> {
+    #[inline]
+    pub(crate) fn new(core: &'a ElfCore<D, Arch, R, H>, lifecycle: &'a Lifecycle) -> Self {
+        Self {
+            core,
+            lifecycle: lifecycle.clone(),
+        }
+    }
+
+    /// Returns the image core associated with this lifecycle event.
+    #[inline]
+    pub const fn core(&self) -> &'a ElfCore<D, Arch, R, H> {
+        self.core
     }
 
     /// Returns the lifecycle address table for this event.
@@ -150,27 +146,16 @@ impl<'a, Arch: RelocationArch, R: RegionAccess> LifecycleEvent<'a, Arch, R> {
         &mut self.lifecycle
     }
 
-    /// Replaces the code executor used to call each lifecycle function.
     #[inline]
-    pub fn set_executor<E>(&mut self, executor: E)
-    where
-        E: CodeExecutor<Arch, R>,
-    {
-        self.executor = Box::new(executor);
-    }
-
-    #[inline]
-    pub(crate) fn run(&mut self) -> Result<()> {
-        let ctx = CodeContext::<Arch, R>::new(self.name, self.memory);
+    pub(crate) fn run_with(
+        &self,
+        memory: &dyn ImageMemory,
+        executor: &dyn CodeExecutor<Arch>,
+    ) -> Result<()> {
+        let ctx = CodeContext::<Arch>::new(self.core.name(), memory);
         for addr in self.lifecycle.func_addrs() {
-            self.executor.call_void(ctx, addr)?;
+            executor.call_init(ctx, addr)?;
         }
         Ok(())
     }
-}
-
-#[inline]
-pub(crate) fn default_lifecycle_executor<Arch: RelocationArch, R: RegionAccess>()
--> CodeExecutorBox<Arch, R> {
-    Box::new(NativeCodeExecutor)
 }

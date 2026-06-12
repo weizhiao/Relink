@@ -8,11 +8,8 @@ use crate::{
     input::{Path, PathBuf},
     loader::ImageBuilder,
     logging,
-    observer::{
-        DtDebugEntry, LifecycleEvent, LifecyclePhase, LoadObserver, RelocationObserver,
-        default_lifecycle_executor,
-    },
-    os::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
+    observer::{DtDebugEntry, InitEvent, LoadObserver, RelocationObserver},
+    os::{CodeExecutor, HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{
         DynamicRelocation, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
     },
@@ -20,7 +17,7 @@ use crate::{
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{cell::OnceCell, marker::PhantomData, ptr::NonNull};
+use core::{cell::OnceCell, ptr::NonNull};
 
 use super::{ElfCore, LoadedCore, core::CoreInner};
 
@@ -135,8 +132,6 @@ where
     module: ElfCore<D, Arch, R>,
     /// Extra data needed for relocation
     extra: ElfExtraData<Arch>,
-    /// Target architecture marker used during relocation.
-    _arch: PhantomData<fn() -> Arch>,
 }
 
 impl<D, Arch: RelocationArch, R: RegionAccess> core::fmt::Debug for RawDynamic<D, Arch, R> {
@@ -291,20 +286,20 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     /// This method marks the ELF object as fully initialized and calls
     /// any registered initialization functions.
     #[inline]
-    pub(crate) fn call_init<Obs>(&self, observer: &mut Obs, init: &Lifecycle) -> Result<()>
+    pub(crate) fn call_init<Obs>(
+        &self,
+        observer: &mut Obs,
+        init: &Lifecycle,
+        executor: &dyn CodeExecutor<Arch>,
+    ) -> Result<()>
     where
         Obs: RelocationObserver<Arch> + ?Sized,
     {
         self.module.set_init();
-        let mut event = LifecycleEvent::<Arch, R>::with_executor(
-            LifecyclePhase::Init,
-            self.name(),
-            init,
-            self.module.segments(),
-            default_lifecycle_executor(),
-        );
+        let segments = self.module.segments();
+        let mut event = InitEvent::new(self.core_ref(), init);
         observer.on_init(&mut event)?;
-        event.run()?;
+        event.run_with(segments, executor)?;
         Ok(())
     }
 
@@ -471,13 +466,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                     segments,
                 }),
             },
-            _arch: PhantomData,
         })
     }
 
     /// Creates a relocation builder for this dynamic image.
-    pub fn relocator(self) -> Relocator<Self, (), (), D, Arch> {
-        Relocator::new().with_object(self)
+    pub fn relocator(self) -> Relocator<Self, (), (), Arch> {
+        Relocator::<(), (), (), Arch>::new().with_object(self)
     }
 }
 
@@ -534,7 +528,7 @@ where
 
     fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,

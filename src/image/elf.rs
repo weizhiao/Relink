@@ -67,11 +67,11 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawElf<D, Arch, R>
     /// let raw = loader.load("path/to/input.elf").unwrap();
     /// let relocated = raw.relocator().relocate().unwrap();
     /// ```
-    pub fn relocator(self) -> Relocator<Self, (), (), D, Arch>
+    pub fn relocator(self) -> Relocator<Self, (), (), Arch>
     where
         Self: Relocatable<D, Arch = Arch>,
     {
-        Relocator::new().with_object(self)
+        Relocator::<(), (), (), Arch>::new().with_object(self)
     }
 
     /// Returns the loader source path or caller-provided source identifier.
@@ -297,7 +297,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Relocatable<D>
 
     fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,

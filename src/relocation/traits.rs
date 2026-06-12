@@ -11,11 +11,10 @@ use crate::{
     },
     image::{ElfCore, ModuleScope},
     observer::RelocationObserver,
-    os::{HostRegion, RegionAccess, VmAddr},
+    os::{CodeExecutor, HostRegion, RegionAccess, VmAddr},
     sync::Arc,
 };
 use alloc::boxed::Box;
-use core::marker::PhantomData;
 
 /// Architecture-specific dynamic relocation numbering.
 ///
@@ -417,29 +416,23 @@ pub enum BindingMode {
 }
 
 /// Internal relocation configuration shared across raw image types.
-pub struct RelocateArgs<
-    'a,
-    D: 'static,
-    Arch: RelocationArch,
-    PreH: ?Sized,
-    PostH: ?Sized,
-    Obs: ?Sized,
-> {
+pub struct RelocateArgs<'a, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized, Obs: ?Sized> {
     pub(crate) scope: ModuleScope<Arch>,
     pub(crate) binding: BindingMode,
+    pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
     pub(crate) pre_handler: &'a PreH,
     pub(crate) post_handler: &'a PostH,
     pub(crate) observer: &'a mut Obs,
-    _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized, Obs: ?Sized>
-    RelocateArgs<'a, D, Arch, PreH, PostH, Obs>
+impl<'a, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized, Obs: ?Sized>
+    RelocateArgs<'a, Arch, PreH, PostH, Obs>
 {
     #[inline]
     pub(crate) fn new(
         scope: ModuleScope<Arch>,
         binding: BindingMode,
+        executor: Arc<dyn CodeExecutor<Arch>>,
         pre_handler: &'a PreH,
         post_handler: &'a PostH,
         observer: &'a mut Obs,
@@ -447,10 +440,10 @@ impl<'a, D: 'static, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized, Obs: ?Si
         Self {
             scope,
             binding,
+            executor,
             pre_handler,
             post_handler,
             observer,
-            _marker: PhantomData,
         }
     }
 }
@@ -478,7 +471,7 @@ pub trait Relocatable<D = ()>: Sized {
     /// Executes relocation using the implementor's target architecture.
     fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Self::Arch, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Self::Arch, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Self::Arch> + ?Sized,

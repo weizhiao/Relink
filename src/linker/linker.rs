@@ -25,7 +25,7 @@ use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
-use core::{fmt, marker::PhantomData, mem, ops::Deref};
+use core::{fmt, mem, ops::Deref};
 
 /// Result of a successful linker load operation.
 ///
@@ -102,7 +102,6 @@ where
 pub struct Linker<
     'a,
     K: Clone + Ord,
-    D: 'static,
     Arch: RelocationArch = crate::arch::NativeArch,
     L = Loader<(), (), (), Arch>,
     R = (),
@@ -116,15 +115,14 @@ pub struct Linker<
     loader: L,
     resolver: R,
     pipeline: LinkPipeline<'a, K, Arch>,
-    relocator: Relocator<(), PreH, PostH, (), Arch, RelocObs>,
+    relocator: Relocator<(), PreH, PostH, Arch, RelocObs>,
     planner: P,
     observer: O,
     visible_modules: V,
     scratch_relocation_order: Vec<KeyId>,
-    _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
-impl<'a, K> Linker<'a, K, ()>
+impl<'a, K> Linker<'a, K>
 where
     K: Clone + Ord,
 {
@@ -140,7 +138,6 @@ where
             observer: (),
             visible_modules: (),
             scratch_relocation_order: Vec::new(),
-            _marker: PhantomData,
         }
     }
 
@@ -155,7 +152,6 @@ where
     ) -> Linker<
         'a,
         K,
-        (),
         NewArch,
         Loader<(), (), (), NewArch>,
         (),
@@ -178,12 +174,11 @@ where
             observer: (),
             visible_modules: (),
             scratch_relocation_order: Vec::new(),
-            _marker: PhantomData,
         }
     }
 }
 
-impl<'a, K> Default for Linker<'a, K, ()>
+impl<'a, K> Default for Linker<'a, K>
 where
     K: Clone + Ord,
 {
@@ -193,18 +188,17 @@ where
     }
 }
 
-impl<'a, K, D, L, R, PreH, PostH, RelocObs, P, O, V, Arch>
-    Linker<'a, K, D, Arch, L, R, PreH, PostH, RelocObs, P, O, V>
+impl<'a, K, L, R, PreH, PostH, RelocObs, P, O, V, Arch>
+    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, V>
 where
     K: Clone + Ord,
-    D: 'static,
     Arch: RelocationArch,
 {
     /// Sets the key resolver used to resolve root keys and dependencies.
     pub fn resolver<NewR>(
         self,
         resolver: NewR,
-    ) -> Linker<'a, K, D, Arch, L, NewR, PreH, PostH, RelocObs, P, O, V> {
+    ) -> Linker<'a, K, Arch, L, NewR, PreH, PostH, RelocObs, P, O, V> {
         Linker {
             loader: self.loader,
             resolver,
@@ -214,7 +208,6 @@ where
             observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
-            _marker: self._marker,
         }
     }
 
@@ -222,9 +215,9 @@ where
     pub fn map_relocator<NewPreH, NewPostH, NewRelocObs>(
         self,
         configure: impl FnOnce(
-            Relocator<(), PreH, PostH, (), Arch, RelocObs>,
-        ) -> Relocator<(), NewPreH, NewPostH, (), Arch, NewRelocObs>,
-    ) -> Linker<'a, K, D, Arch, L, R, NewPreH, NewPostH, NewRelocObs, P, O, V> {
+            Relocator<(), PreH, PostH, Arch, RelocObs>,
+        ) -> Relocator<(), NewPreH, NewPostH, Arch, NewRelocObs>,
+    ) -> Linker<'a, K, Arch, L, R, NewPreH, NewPostH, NewRelocObs, P, O, V> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -234,7 +227,6 @@ where
             observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
-            _marker: self._marker,
         }
     }
 
@@ -242,7 +234,7 @@ where
     pub fn planner<NewP>(
         self,
         planner: NewP,
-    ) -> Linker<'a, K, D, Arch, L, R, PreH, PostH, RelocObs, NewP, O, V> {
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, NewP, O, V> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -252,7 +244,6 @@ where
             observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
-            _marker: self._marker,
         }
     }
 
@@ -260,7 +251,7 @@ where
     pub fn observer<NewO>(
         self,
         observer: NewO,
-    ) -> Linker<'a, K, D, Arch, L, R, PreH, PostH, RelocObs, P, NewO, V> {
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, NewO, V> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -270,7 +261,6 @@ where
             observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
-            _marker: self._marker,
         }
     }
 
@@ -278,7 +268,7 @@ where
     pub fn visible_modules<NewV>(
         self,
         visible_modules: NewV,
-    ) -> Linker<'a, K, D, Arch, L, R, PreH, PostH, RelocObs, P, O, NewV> {
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, NewV> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -288,7 +278,6 @@ where
             observer: self.observer,
             visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
-            _marker: self._marker,
         }
     }
 
@@ -303,7 +292,7 @@ where
 }
 
 impl<'a, K, D, Obs, Tls, Arch, M, R, PreH, PostH, RelocObs, P, O, V>
-    Linker<'a, K, D, Arch, Loader<Obs, D, Tls, Arch, M>, R, PreH, PostH, RelocObs, P, O, V>
+    Linker<'a, K, Arch, Loader<Obs, D, Tls, Arch, M>, R, PreH, PostH, RelocObs, P, O, V>
 where
     K: Clone + Ord,
     D: 'static,
@@ -319,7 +308,6 @@ where
     ) -> Linker<
         'a,
         K,
-        NewD,
         Arch,
         Loader<NewObs, NewD, NewTls, Arch, NewM>,
         R,
@@ -345,14 +333,13 @@ where
             observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
-            _marker: PhantomData,
         }
     }
 }
 
 #[allow(private_bounds)]
 impl<'a, K, D, Obs, Tls, Arch, M, Resolver, PreH, PostH, RelocObs, P, O, V>
-    Linker<'a, K, D, Arch, Loader<Obs, D, Tls, Arch, M>, Resolver, PreH, PostH, RelocObs, P, O, V>
+    Linker<'a, K, Arch, Loader<Obs, D, Tls, Arch, M>, Resolver, PreH, PostH, RelocObs, P, O, V>
 where
     K: Clone + Ord,
     D: Default + 'static,
@@ -720,7 +707,8 @@ where
 
         let committed = Self::commit_session(context, &mut session);
 
-        let root = visible_module(context, &self.visible_modules, root)
+        let root = context
+            .visible_module(&self.visible_modules, root)
             .and_then(|module| module.as_loaded::<D, M::Region, _>().cloned())
             .ok_or_else(|| LinkerError::context("load root missing after commit"))?;
         Ok(LoadResult::new(root, committed))
@@ -837,7 +825,8 @@ where
                         ModulePayload::Synthetic(module) => module.clone(),
                     }
                 } else {
-                    visible_module(context, visible_modules, *id)
+                    context
+                        .visible_module(visible_modules, *id)
                         .expect("scope key must resolve to a visible or pending module")
                 }
             })
@@ -952,27 +941,6 @@ where
     V: VisibleModules<K, Arch>,
 {
     context
-        .committed
-        .key_id(key)
-        .and_then(|id| visible_module(context, visible_modules, id))
-        .or_else(|| visible_modules.module(key))
+        .visible_module_by_key(visible_modules, key)
         .and_then(|module| module.as_loaded::<D, R, _>().cloned())
-}
-
-#[inline]
-fn visible_module<K, D, Meta, V, Arch>(
-    context: &LinkContext<K, D, Meta, Arch>,
-    visible_modules: &V,
-    id: KeyId,
-) -> Option<ModuleHandle<Arch>>
-where
-    K: Clone + Ord,
-    D: 'static,
-    Arch: RelocationArch,
-    V: VisibleModules<K, Arch>,
-{
-    context.committed.get(id).cloned().or_else(|| {
-        let key = context.committed.key(id)?;
-        visible_modules.module(key)
-    })
 }

@@ -2,11 +2,13 @@ use crate::{
     Result,
     image::{ModuleHandle, ModuleScope},
     observer::RelocationObserver,
+    os::{CodeExecutor, NativeCodeExecutor},
     relocation::{
         BindingMode, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, SupportLazy,
     },
+    sync::Arc,
 };
-use core::marker::PhantomData;
+use alloc::boxed::Box;
 
 /// A builder for configuring and executing relocation.
 ///
@@ -41,24 +43,17 @@ use core::marker::PhantomData;
 ///     Ok(())
 /// }
 /// ```
-pub struct Relocator<
-    T,
-    PreH,
-    PostH,
-    D: 'static = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
-    Obs = (),
-> {
+pub struct Relocator<T, PreH, PostH, Arch: RelocationArch = crate::arch::NativeArch, Obs = ()> {
     object: T,
     scope: ModuleScope<Arch>,
     pre_handler: PreH,
     post_handler: PostH,
     observer: Obs,
     binding: BindingMode,
-    _marker: PhantomData<fn() -> (D, Arch)>,
+    executor: Option<Arc<dyn CodeExecutor<Arch>>>,
 }
 
-impl<T, PreH, PostH, D: 'static, Arch, Obs> Clone for Relocator<T, PreH, PostH, D, Arch, Obs>
+impl<T, PreH, PostH, Arch, Obs> Clone for Relocator<T, PreH, PostH, Arch, Obs>
 where
     Arch: RelocationArch,
     T: Clone,
@@ -74,12 +69,12 @@ where
             post_handler: self.post_handler.clone(),
             observer: self.observer.clone(),
             binding: self.binding,
-            _marker: PhantomData,
+            executor: self.executor.clone(),
         }
     }
 }
 
-impl Relocator<(), (), (), ()> {
+impl<Arch: RelocationArch> Relocator<(), (), (), Arch> {
     /// Creates a new empty `Relocator` configuration.
     pub fn new() -> Self {
         Self {
@@ -89,14 +84,12 @@ impl Relocator<(), (), (), ()> {
             post_handler: (),
             observer: (),
             binding: BindingMode::Default,
-            _marker: PhantomData,
+            executor: None,
         }
     }
-}
 
-impl<Arch: RelocationArch> Relocator<(), (), (), (), Arch> {
     /// Switches an empty relocator configuration to a different target architecture.
-    pub fn for_arch<NewArch: RelocationArch>(self) -> Relocator<(), (), (), (), NewArch> {
+    pub fn for_arch<NewArch: RelocationArch>(self) -> Relocator<(), (), (), NewArch> {
         Relocator {
             object: self.object,
             scope: ModuleScope::empty(),
@@ -104,12 +97,12 @@ impl<Arch: RelocationArch> Relocator<(), (), (), (), Arch> {
             post_handler: self.post_handler,
             observer: self.observer,
             binding: self.binding,
-            _marker: PhantomData,
+            executor: None,
         }
     }
 }
 
-impl<T, PreH, PostH, D: 'static, Arch, Obs> Relocator<T, PreH, PostH, D, Arch, Obs>
+impl<T, PreH, PostH, Arch, Obs> Relocator<T, PreH, PostH, Arch, Obs>
 where
     Arch: RelocationArch,
     PreH: RelocationHandler<Arch>,
@@ -153,11 +146,7 @@ where
     }
 
     /// Attaches an object and selects the user-data type carried by that object.
-    pub fn with_object<U, NewD>(self, object: U) -> Relocator<U, PreH, PostH, NewD, U::Arch, Obs>
-    where
-        U: Relocatable<NewD>,
-        Obs: RelocationObserver<U::Arch>,
-    {
+    pub fn with_object<U>(self, object: U) -> Relocator<U, PreH, PostH, Arch, Obs> {
         Relocator {
             object,
             scope: ModuleScope::empty(),
@@ -165,7 +154,7 @@ where
             post_handler: self.post_handler,
             observer: self.observer,
             binding: self.binding,
-            _marker: PhantomData,
+            executor: self.executor,
         }
     }
 
@@ -173,10 +162,7 @@ where
     ///
     /// This is useful for intercepting selected relocations or providing
     /// custom behavior before the default implementation runs.
-    pub fn pre_handler<NewPreH>(
-        self,
-        handler: NewPreH,
-    ) -> Relocator<T, NewPreH, PostH, D, Arch, Obs>
+    pub fn pre_handler<NewPreH>(self, handler: NewPreH) -> Relocator<T, NewPreH, PostH, Arch, Obs>
     where
         NewPreH: RelocationHandler<Arch>,
     {
@@ -187,7 +173,7 @@ where
             post_handler: self.post_handler,
             observer: self.observer,
             binding: self.binding,
-            _marker: PhantomData,
+            executor: self.executor,
         }
     }
 
@@ -198,7 +184,7 @@ where
     pub fn post_handler<NewPostH>(
         self,
         handler: NewPostH,
-    ) -> Relocator<T, PreH, NewPostH, D, Arch, Obs>
+    ) -> Relocator<T, PreH, NewPostH, Arch, Obs>
     where
         NewPostH: RelocationHandler<Arch>,
     {
@@ -209,12 +195,12 @@ where
             post_handler: handler,
             observer: self.observer,
             binding: self.binding,
-            _marker: PhantomData,
+            executor: self.executor,
         }
     }
 
     /// Sets the runtime-linker observer used during relocation.
-    pub fn observer<NewObs>(self, observer: NewObs) -> Relocator<T, PreH, PostH, D, Arch, NewObs>
+    pub fn observer<NewObs>(self, observer: NewObs) -> Relocator<T, PreH, PostH, Arch, NewObs>
     where
         NewObs: RelocationObserver<Arch>,
     {
@@ -225,13 +211,22 @@ where
             post_handler: self.post_handler,
             observer,
             binding: self.binding,
-            _marker: PhantomData,
+            executor: self.executor,
         }
     }
 
     /// Overrides the relocation binding mode.
     pub fn binding(mut self, binding: BindingMode) -> Self {
         self.binding = binding;
+        self
+    }
+
+    /// Overrides the runtime-code executor used for init, fini and IFUNC.
+    pub fn executor<E>(mut self, executor: E) -> Self
+    where
+        E: CodeExecutor<Arch>,
+    {
+        self.executor = Some(Arc::from(Box::new(executor) as Box<dyn CodeExecutor<Arch>>));
         self
     }
 
@@ -242,9 +237,8 @@ where
     }
 }
 
-impl<T, PreH, PostH, D: 'static, Arch, Obs> Relocator<T, PreH, PostH, D, Arch, Obs>
+impl<T, PreH, PostH, Arch, Obs> Relocator<T, PreH, PostH, Arch, Obs>
 where
-    T: Relocatable<D, Arch = Arch>,
     Arch: RelocationArch,
     PreH: RelocationHandler<Arch>,
     PostH: RelocationHandler<Arch>,
@@ -260,10 +254,14 @@ where
     /// [`crate::arch::NativeArch`] (the default) and run target init arrays,
     /// IFUNC resolvers,
     /// lazy-binding trampolines, and TLS resolver stubs as usual;
-    /// cross-architecture images avoid host execution of target code; attach a
-    /// [`RelocationObserver`](crate::observer::RelocationObserver) that handles
-    /// binding and lifecycle events when guest runtime hooks must be executed.
-    pub fn relocate(self) -> Result<T::Output> {
+    /// cross-architecture images avoid host execution of target code; call
+    /// [`Relocator::executor`] before relocation when guest runtime hooks must
+    /// be executed.
+    pub fn relocate<D>(self) -> Result<<T as Relocatable<D>>::Output>
+    where
+        D: 'static,
+        T: Relocatable<D, Arch = Arch>,
+    {
         let Self {
             object,
             scope,
@@ -271,12 +269,16 @@ where
             post_handler,
             mut observer,
             binding,
-            _marker,
+            executor,
         } = self;
+        let executor: Arc<dyn CodeExecutor<Arch>> = executor.unwrap_or_else(|| {
+            Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>)
+        });
 
         object.relocate(RelocateArgs::new(
             scope,
             binding,
+            executor,
             &pre_handler,
             &post_handler,
             &mut observer,
@@ -284,7 +286,7 @@ where
     }
 }
 
-impl<T, PreH, PostH, D: 'static, Arch, Obs> Relocator<T, PreH, PostH, D, Arch, Obs>
+impl<T, PreH, PostH, Arch, Obs> Relocator<T, PreH, PostH, Arch, Obs>
 where
     T: SupportLazy,
     Arch: RelocationArch,

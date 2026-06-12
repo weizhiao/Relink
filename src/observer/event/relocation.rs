@@ -1,19 +1,15 @@
-use super::lifecycle::{Finalizer, LifecycleEvent};
+use super::lifecycle::{Finalizer, FiniEvent};
 use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol, HashTable, Lifecycle},
     image::ElfCore,
     input::Path,
-    os::{
-        CodeContext, CodeExecutor, HostRegion, ImageMemory, NativeCodeExecutor, RegionAccess,
-        VmAddr,
-    },
+    os::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     relocation::RelocationArch,
     segment::ElfSegments,
     tls::{TlsModuleId, TlsTpOffset},
 };
-use alloc::boxed::Box;
 use core::marker::PhantomData;
 
 /// Runtime linker state change notification.
@@ -165,7 +161,6 @@ pub struct IfuncBindingEvent<
     rel: &'a ElfRelType<Arch>,
     resolver: VmAddr,
     resolved: Option<VmAddr>,
-    executor: Option<Box<dyn CodeExecutor<Arch, R>>>,
 }
 
 impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
@@ -182,7 +177,6 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
             rel,
             resolver,
             resolved: None,
-            executor: None,
         }
     }
 
@@ -228,24 +222,9 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
         self.resolved = Some(addr);
     }
 
-    /// Replaces the executor used when no resolved address is provided.
     #[inline]
-    pub fn set_executor<E>(&mut self, executor: E)
-    where
-        E: CodeExecutor<Arch, R>,
-    {
-        self.executor = Some(Box::new(executor));
-    }
-
-    #[inline]
-    pub(crate) fn resolve(self, ctx: CodeContext<'_, Arch, R>) -> Result<VmAddr> {
-        if let Some(addr) = self.resolved {
-            Ok(addr)
-        } else if let Some(executor) = self.executor {
-            executor.resolve_ifunc(ctx, self.resolver)
-        } else {
-            NativeCodeExecutor.resolve_ifunc(ctx, self.resolver)
-        }
+    pub(crate) const fn into_resolved_addr(self) -> Option<VmAddr> {
+        self.resolved
     }
 }
 
@@ -426,7 +405,7 @@ pub struct ModuleRelocatedEvent<
 > {
     core: &'a ElfCore<D, Arch, R>,
     dynamic_addr: VmAddr,
-    finalizer: Option<Finalizer<Arch, R>>,
+    finalizer: Finalizer<Arch>,
 }
 
 impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleRelocatedEvent<'a, D, Arch, R> {
@@ -434,7 +413,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleRelocatedEvent
     pub(crate) const fn new(
         core: &'a ElfCore<D, Arch, R>,
         dynamic_addr: VmAddr,
-        finalizer: Option<Finalizer<Arch, R>>,
+        finalizer: Finalizer<Arch>,
     ) -> Self {
         Self {
             core,
@@ -476,49 +455,27 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleRelocatedEvent
     /// Returns the finalization lifecycle that will be run when the initialized
     /// image is dropped.
     #[inline]
-    pub fn fini(&self) -> Option<&Lifecycle> {
-        self.finalizer.as_ref().map(Finalizer::lifecycle)
+    pub fn fini(&self) -> &Lifecycle {
+        self.finalizer.lifecycle()
     }
 
     /// Returns mutable finalization lifecycle addresses.
     #[inline]
-    pub fn fini_mut(&mut self) -> Option<&mut Lifecycle> {
-        self.finalizer.as_mut().map(Finalizer::lifecycle_mut)
-    }
-
-    /// Replaces the executor used to run finalization functions.
-    #[inline]
-    pub fn set_fini_executor<E>(&mut self, executor: E)
-    where
-        E: CodeExecutor<Arch, R>,
-    {
-        if let Some(finalizer) = &mut self.finalizer {
-            finalizer.set_executor(executor);
-        }
+    pub fn fini_mut(&mut self) -> &mut Lifecycle {
+        self.finalizer.lifecycle_mut()
     }
 
     /// Installs a hook that runs immediately before finalization functions.
     #[inline]
     pub fn set_fini_hook<F>(&mut self, hook: F)
     where
-        F: for<'event> Fn(&mut LifecycleEvent<'event, Arch, R>) -> Result<()>
-            + Send
-            + Sync
-            + 'static,
+        F: for<'event> Fn(&mut FiniEvent<'event>) -> Result<()> + Send + Sync + 'static,
     {
-        if let Some(finalizer) = &mut self.finalizer {
-            finalizer.set_hook(hook);
-        }
-    }
-
-    /// Prevents finalization functions from being run when the image is dropped.
-    #[inline]
-    pub fn disable_fini(&mut self) {
-        self.finalizer = None;
+        self.finalizer.set_hook(hook);
     }
 
     #[inline]
-    pub(crate) fn into_finalizer(self) -> Option<Finalizer<Arch, R>> {
+    pub(crate) fn into_finalizer(self) -> Finalizer<Arch> {
         self.finalizer
     }
 }

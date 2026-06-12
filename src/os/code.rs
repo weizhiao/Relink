@@ -1,28 +1,29 @@
-use super::{HostRegion, ImageMemory, RegionAccess, VmAddr};
+use super::{ImageMemory, VmAddr};
 use crate::{
     CodeError, MmapError, Result,
     arch::NativeArch,
     relocation::{RelocationArch, resolve_ifunc},
+    sync::Arc,
 };
 use core::marker::PhantomData;
 
 /// Runtime context for executing code addresses owned by one mapped image.
-pub struct CodeContext<'a, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
+pub struct CodeContext<'a, Arch: RelocationArch = NativeArch> {
     name: &'a str,
     memory: &'a dyn ImageMemory,
-    _marker: PhantomData<fn() -> (Arch, R)>,
+    _marker: PhantomData<fn() -> Arch>,
 }
 
-impl<Arch: RelocationArch, R: RegionAccess> Clone for CodeContext<'_, Arch, R> {
+impl<Arch: RelocationArch> Clone for CodeContext<'_, Arch> {
     #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<Arch: RelocationArch, R: RegionAccess> Copy for CodeContext<'_, Arch, R> {}
+impl<Arch: RelocationArch> Copy for CodeContext<'_, Arch> {}
 
-impl<'a, Arch: RelocationArch, R: RegionAccess> CodeContext<'a, Arch, R> {
+impl<'a, Arch: RelocationArch> CodeContext<'a, Arch> {
     #[inline]
     pub(crate) fn new(name: &'a str, memory: &'a dyn ImageMemory) -> Self {
         Self {
@@ -58,15 +59,35 @@ impl<'a, Arch: RelocationArch, R: RegionAccess> CodeContext<'a, Arch, R> {
 /// Native hosts can call through host pointers. Remote process, guest,
 /// kernel-module, or bare-metal environments can provide their own executor
 /// that interprets VM addresses in their runtime.
-pub trait CodeExecutor<Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion>:
-    Send + Sync + 'static
-{
-    /// Executes a lifecycle-style function with no arguments and no return value.
-    fn call_void(&self, ctx: CodeContext<'_, Arch, R>, addr: VmAddr) -> Result<()>;
+pub trait CodeExecutor<Arch: RelocationArch = NativeArch>: Send + Sync + 'static {
+    /// Executes an initialization function.
+    fn call_init(&self, ctx: CodeContext<'_, Arch>, init: VmAddr) -> Result<()>;
+
+    /// Executes a finalization function.
+    fn call_fini(&self, ctx: CodeContext<'_, Arch>, fini: VmAddr) -> Result<()>;
 
     /// Executes an IFUNC resolver and returns the resolved implementation address.
-    fn resolve_ifunc(&self, _ctx: CodeContext<'_, Arch, R>, _resolver: VmAddr) -> Result<VmAddr> {
-        Err(CodeError::NativeUnsupported.into())
+    fn resolve_ifunc(&self, ctx: CodeContext<'_, Arch>, resolver: VmAddr) -> Result<VmAddr>;
+}
+
+impl<Arch, E> CodeExecutor<Arch> for Arc<E>
+where
+    Arch: RelocationArch,
+    E: CodeExecutor<Arch> + ?Sized,
+{
+    #[inline]
+    fn call_init(&self, ctx: CodeContext<'_, Arch>, init: VmAddr) -> Result<()> {
+        (**self).call_init(ctx, init)
+    }
+
+    #[inline]
+    fn call_fini(&self, ctx: CodeContext<'_, Arch>, fini: VmAddr) -> Result<()> {
+        (**self).call_fini(ctx, fini)
+    }
+
+    #[inline]
+    fn resolve_ifunc(&self, ctx: CodeContext<'_, Arch>, resolver: VmAddr) -> Result<VmAddr> {
+        (**self).resolve_ifunc(ctx, resolver)
     }
 }
 
@@ -85,9 +106,32 @@ impl NativeCodeExecutor {
     }
 }
 
-impl<Arch: RelocationArch, R: RegionAccess> CodeExecutor<Arch, R> for NativeCodeExecutor {
+impl<Arch: RelocationArch> CodeExecutor<Arch> for NativeCodeExecutor {
     #[inline]
-    fn call_void(&self, ctx: CodeContext<'_, Arch, R>, addr: VmAddr) -> Result<()> {
+    fn call_init(&self, ctx: CodeContext<'_, Arch>, init: VmAddr) -> Result<()> {
+        self.call_no_args(ctx, init)
+    }
+
+    #[inline]
+    fn call_fini(&self, ctx: CodeContext<'_, Arch>, fini: VmAddr) -> Result<()> {
+        self.call_no_args(ctx, fini)
+    }
+
+    #[inline]
+    fn resolve_ifunc(&self, ctx: CodeContext<'_, Arch>, resolver: VmAddr) -> Result<VmAddr> {
+        Self::ensure_supported::<Arch>()?;
+        let ptr = ctx.host_ptr(resolver)?;
+        Ok(unsafe { resolve_ifunc(ptr) })
+    }
+}
+
+impl NativeCodeExecutor {
+    #[inline]
+    fn call_no_args<Arch: RelocationArch>(
+        &self,
+        ctx: CodeContext<'_, Arch>,
+        addr: VmAddr,
+    ) -> Result<()> {
         Self::ensure_supported::<Arch>()?;
         let ptr = ctx.host_ptr(addr)?.as_ptr() as usize;
         #[cfg(not(windows))]
@@ -99,12 +143,5 @@ impl<Arch: RelocationArch, R: RegionAccess> CodeExecutor<Arch, R> for NativeCode
             core::mem::transmute::<usize, extern "sysv64" fn()>(ptr)()
         };
         Ok(())
-    }
-
-    #[inline]
-    fn resolve_ifunc(&self, ctx: CodeContext<'_, Arch, R>, resolver: VmAddr) -> Result<VmAddr> {
-        Self::ensure_supported::<Arch>()?;
-        let ptr = ctx.host_ptr(resolver)?;
-        Ok(unsafe { resolve_ifunc(ptr) })
     }
 }

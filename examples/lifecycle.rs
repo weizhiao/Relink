@@ -4,30 +4,25 @@ mod fixture_support;
 use elf_loader::{
     Loader, Result,
     arch::NativeArch,
-    observer::{LifecycleEvent, LifecyclePhase, RelocationObserver},
+    observer::{InitEvent, RelocationObserver},
     os::RegionAccess,
 };
 
 struct LifecycleLogger;
 
 impl RelocationObserver for LifecycleLogger {
-    fn on_init<R: RegionAccess>(
+    fn on_init<D: 'static, R: RegionAccess, H>(
         &mut self,
-        event: &mut LifecycleEvent<'_, NativeArch, R>,
+        event: &mut InitEvent<'_, D, NativeArch, R, H>,
     ) -> Result<()> {
-        let label = match event.phase() {
-            LifecyclePhase::Init => "Init",
-            LifecyclePhase::Fini => "Fini",
-        };
-
-        println!("{label} lifecycle hook called!");
+        println!("Init hook called!");
         let mut count = 0;
         for addr in event.lifecycle().func_addrs() {
             count += 1;
-            println!("{label} function at {addr}");
+            println!("Init function at {addr}");
         }
         if count != 0 {
-            println!("{label} lifecycle has {count} functions");
+            println!("Init lifecycle has {count} functions");
         }
 
         Ok(())

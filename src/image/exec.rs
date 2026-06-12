@@ -126,7 +126,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Relocatable<D> for RawEx
 
     fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
@@ -181,8 +181,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Debug for RawExec<D, Arch, R> {
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawExec<D, Arch, R> {
     /// Creates a relocation builder for this executable image.
-    pub fn relocator(self) -> Relocator<Self, (), (), D, Arch> {
-        Relocator::new().with_object(self)
+    pub fn relocator(self) -> Relocator<Self, (), (), Arch> {
+        Relocator::<(), (), (), Arch>::new().with_object(self)
     }
 
     /// Returns the loader source path or caller-provided source identifier.

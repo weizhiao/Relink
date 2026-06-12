@@ -4,10 +4,7 @@ use crate::{
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     image::{LoadedCore, RawDynamic},
     logging,
-    observer::{
-        Finalizer, LinkActivity, ModuleRelocatedEvent, RelocationObserver,
-        default_lifecycle_executor,
-    },
+    observer::{Finalizer, LinkActivity, ModuleRelocatedEvent, RelocationObserver},
     os::{ImageMemory, MappedView, RegionAccess, VmOffset},
     relocation::{
         BindingMode, RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, ResolvedBinding,
@@ -32,7 +29,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
     pub(crate) fn relocate_impl<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, D, Arch, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
     ) -> Result<LoadedCore<D, Arch, R>>
     where
         D: 'static,
@@ -46,6 +43,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         let RelocateArgs {
             scope,
             binding,
+            executor,
             pre_handler,
             post_handler,
             observer,
@@ -77,6 +75,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             pre_handler,
             post_handler,
             observer,
+            executor.as_ref(),
             tls_get_addr,
         );
 
@@ -95,7 +94,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         self.core_ref().set_tls_desc_args(tls_desc_args);
 
         let (init, fini) = self.resolve_lifecycle()?;
-        let finalizer = Some(Finalizer::new(fini, default_lifecycle_executor()));
+        let finalizer = Finalizer::new(fini, executor.clone());
 
         let dep_names = scope
             .iter()
@@ -111,13 +110,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         let mut module_event =
             ModuleRelocatedEvent::new(self.core_ref(), self.dynamic_addr(), finalizer);
         observer.on_module_relocated(&mut module_event)?;
-        if let Some(finalizer) = module_event.into_finalizer() {
-            self.core_ref().set_finalizer(finalizer);
-        }
+        self.core_ref().set_finalizer(module_event.into_finalizer());
         observer.on_activity(LinkActivity::Consistent)?;
 
         logging::debug!("Preparing initialization functions for {}", self.name());
-        self.call_init(observer, &init)?;
+        self.call_init(observer, &init, executor.as_ref())?;
 
         logging::info!("Relocation completed for {}", self.name());
 

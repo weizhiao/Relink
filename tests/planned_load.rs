@@ -91,7 +91,7 @@ impl KeyResolver<'static, &'static str> for ExistingRootResolver {
     ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
         let key = req.key();
         assert_eq!(*key, self.requested);
-        assert!(req.is_visible(&self.existing));
+        assert!(req.visible_key(&self.existing).is_some());
         Ok(ResolvedKey::existing(self.existing))
     }
 
@@ -178,7 +178,7 @@ impl KeyResolver<'static, &'static str> for VisibleDependencyResolver {
         req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
         assert_eq!(req.needed(), "dep");
-        assert!(req.is_visible(&"dep"));
+        assert!(req.visible_key(&"dep").is_some());
         Ok(ResolvedKey::existing("dep"))
     }
 }
@@ -210,10 +210,6 @@ impl KeyResolver<'static, &'static str> for SyntheticDependencyResolver {
 }
 
 impl VisibleModules<&'static str> for StaticVisibleModule {
-    fn contains_key(&self, key: &&'static str) -> bool {
-        *key == self.key
-    }
-
     fn direct_deps(&self, key: &&'static str) -> Option<Box<[&'static str]>> {
         (*key == self.key).then(|| self.direct_deps.clone())
     }

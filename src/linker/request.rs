@@ -103,13 +103,13 @@ impl<Arch: RelocationArch> DependencyOwner for ScannedDynamic<Arch> {
 /// A root module resolution request.
 pub struct RootRequest<'a, K: Clone> {
     key: &'a K,
-    is_visible: &'a dyn Fn(&K) -> bool,
+    visible_key: &'a dyn Fn(&K) -> Option<K>,
 }
 
 impl<'a, K: Clone> RootRequest<'a, K> {
     #[inline]
-    pub(crate) fn new(key: &'a K, is_visible: &'a dyn Fn(&K) -> bool) -> Self {
-        Self { key, is_visible }
+    pub(crate) fn new(key: &'a K, visible_key: &'a dyn Fn(&K) -> Option<K>) -> Self {
+        Self { key, visible_key }
     }
 
     /// Returns the root key requested by the caller.
@@ -118,10 +118,10 @@ impl<'a, K: Clone> RootRequest<'a, K> {
         self.key
     }
 
-    /// Returns whether `key` is visible for reuse in the current context.
+    /// Returns the actual key to reuse when `key` names a visible module.
     #[inline]
-    pub fn is_visible(&self, key: &K) -> bool {
-        (self.is_visible)(key)
+    pub fn visible_key(&self, key: &K) -> Option<K> {
+        (self.visible_key)(key)
     }
 }
 
@@ -130,7 +130,7 @@ pub struct DependencyRequest<'a, K: Clone> {
     owner_key: &'a K,
     owner: &'a dyn DependencyOwner,
     needed_index: usize,
-    is_visible: &'a dyn Fn(&K) -> bool,
+    visible_key: &'a dyn Fn(&K) -> Option<K>,
 }
 
 impl<'a, K: Clone> DependencyRequest<'a, K> {
@@ -139,13 +139,13 @@ impl<'a, K: Clone> DependencyRequest<'a, K> {
         owner_key: &'a K,
         owner: &'a dyn DependencyOwner,
         needed_index: usize,
-        is_visible: &'a dyn Fn(&K) -> bool,
+        visible_key: &'a dyn Fn(&K) -> Option<K>,
     ) -> Self {
         Self {
             owner_key,
             owner,
             needed_index,
-            is_visible,
+            visible_key,
         }
     }
 
@@ -205,10 +205,10 @@ impl<'a, K: Clone> DependencyRequest<'a, K> {
         self.owner.interp()
     }
 
-    /// Returns whether `key` is visible for reuse in the current context.
+    /// Returns the actual key to reuse when `key` names a visible module.
     #[inline]
-    pub fn is_visible(&self, key: &K) -> bool {
-        (self.is_visible)(key)
+    pub fn visible_key(&self, key: &K) -> Option<K> {
+        (self.visible_key)(key)
     }
 
     /// Creates the standard unresolved-dependency error for this edge.
@@ -225,9 +225,12 @@ impl<'a, K: Clone> DependencyRequest<'a, K> {
 /// Read-only modules that should be visible to a link operation without being
 /// committed into its local [`LinkContext`](super::LinkContext).
 pub trait VisibleModules<K: Clone, Arch: RelocationArch = crate::arch::NativeArch> {
-    /// Returns whether a visible module with `key` exists.
-    fn contains_key(&self, key: &K) -> bool {
-        self.module(key).is_some()
+    /// Returns the actual visible key represented by `key`, if any.
+    ///
+    /// Implementations may use this to canonicalize aliases before the linker
+    /// records a dependency edge.
+    fn visible_key(&self, key: &K) -> Option<K> {
+        self.module(key).is_some().then(|| key.clone())
     }
 
     /// Returns direct dependency keys for a visible module.
@@ -249,8 +252,8 @@ where
     V: VisibleModules<K, Arch> + ?Sized,
 {
     #[inline]
-    fn contains_key(&self, key: &K) -> bool {
-        (**self).contains_key(key)
+    fn visible_key(&self, key: &K) -> Option<K> {
+        (**self).visible_key(key)
     }
 
     #[inline]

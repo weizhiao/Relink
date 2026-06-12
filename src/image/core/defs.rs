@@ -3,7 +3,7 @@ use crate::{
     image::DynamicInfo,
     input::PathBuf,
     logging,
-    observer::{Finalizer, LifecyclePhase},
+    observer::Finalizer,
     os::{HostRegion, RegionAccess},
     relocation::RelocationArch,
     segment::ElfSegments,
@@ -30,7 +30,7 @@ pub(crate) struct CoreInner<
     pub(crate) symtab: SymbolTable<Arch::Layout, H>,
 
     /// Finalization behavior resolved during relocation.
-    pub(crate) finalizer: OnceCell<Finalizer<Arch, R>>,
+    pub(crate) finalizer: OnceCell<Finalizer<Arch>>,
 
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
@@ -62,7 +62,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Drop for CoreInner<D,
             && let Some(finalizer) = self.finalizer.take()
         {
             let name = self.name();
-            if let Err(err) = finalizer.run(LifecyclePhase::Fini, name, &self.segments) {
+            if let Err(err) = finalizer.run(name, &self.segments) {
                 logging::error!("finalization lifecycle failed for {}: {err}", name);
             }
         }

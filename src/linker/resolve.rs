@@ -73,12 +73,26 @@ where
         self.session.contains(id)
     }
 
+    /// Returns the canonical key reusable in this resolve graph.
+    ///
+    /// This is only a lookup. Callers that need to store a dependency edge must
+    /// intern the returned key themselves.
     #[inline]
-    fn contains_visible_or_pending(&self, key: &K) -> bool {
-        self.committed
+    fn reusable_key(&self, key: &K) -> Option<K> {
+        if self
+            .committed
             .key_id(key)
             .is_some_and(|id| self.session.contains(id) || self.committed.contains(id))
-            || self.visible_modules.contains_key(key)
+        {
+            return Some(key.clone());
+        }
+
+        self.visible_modules.visible_key(key)
+    }
+
+    #[inline]
+    fn contains_reusable_key(&self, key: &K) -> bool {
+        self.reusable_key(key).is_some()
     }
 
     fn intern_key(&mut self, key: K) -> KeyId {
@@ -134,7 +148,7 @@ where
         K: 'cfg,
         O: LinkObserver<Arch>,
     {
-        let is_visible = |key: &K| self.contains_visible_or_pending(key);
+        let visible_key = |key: &K| self.reusable_key(key);
         let req: DependencyRequest<'_, K> = {
             let owner = self
                 .owner(id)
@@ -142,7 +156,7 @@ where
             let owner_key = self
                 .key(id)
                 .expect("dependency owner id must resolve to an interned key");
-            DependencyRequest::new(owner_key, owner, needed_index, &is_visible)
+            DependencyRequest::new(owner_key, owner, needed_index, &visible_key)
         };
 
         observer.on_resolve_dependency(ResolveDependencyEvent::new(
@@ -168,8 +182,8 @@ where
         K: 'cfg,
         O: LinkObserver<Arch>,
     {
-        let is_visible = |key: &K| self.contains_visible_or_pending(key);
-        let req = RootRequest::new(key, &is_visible);
+        let visible_key = |key: &K| self.reusable_key(key);
+        let req = RootRequest::new(key, &visible_key);
         observer.on_resolve_root(ResolveRootEvent::new(key))?;
         resolver.load_root(&req)
     }
@@ -269,7 +283,7 @@ where
     {
         match resolved {
             ResolvedKey::Existing(key) => {
-                if self.contains_visible_or_pending(&key) {
+                if let Some(key) = self.reusable_key(&key) {
                     return Ok(self.intern_key(key));
                 }
                 Err(LinkerError::resolver(
@@ -279,7 +293,7 @@ where
             }
             ResolvedKey::Load { key, reader } => {
                 assert!(
-                    !self.contains_visible_or_pending(&key),
+                    !self.contains_reusable_key(&key),
                     "resolved reader produced an already-known key; use ResolvedKey::Existing to reuse a visible module"
                 );
                 let raw = loader.load_dynamic(reader)?;
@@ -289,7 +303,7 @@ where
                 Ok(id)
             }
             ResolvedKey::Synthetic { key, module, deps } => {
-                if self.contains_visible_or_pending(&key) {
+                if self.contains_reusable_key(&key) {
                     return Err(LinkerError::resolver(
                         "resolved synthetic module produced an already-known key",
                     )
@@ -357,13 +371,13 @@ where
     {
         match resolved {
             ResolvedKey::Existing(key) => {
-                if self.contains_visible_or_pending(&key) {
+                if let Some(key) = self.reusable_key(&key) {
                     return Ok(self.intern_key(key));
                 }
                 Err(LinkerError::resolver("scan resolver referenced an unknown visible key").into())
             }
             ResolvedKey::Load { key, reader } => {
-                if self.contains_visible_or_pending(&key) {
+                if self.contains_reusable_key(&key) {
                     return Err(LinkerError::resolver(
                         "scan resolver attached metadata to an already-known key; use Existing to reuse it",
                     )
@@ -377,7 +391,7 @@ where
                 Ok(id)
             }
             ResolvedKey::Synthetic { key, module, deps } => {
-                if self.contains_visible_or_pending(&key) {
+                if self.contains_reusable_key(&key) {
                     return Err(LinkerError::resolver(
                         "scan resolver produced an already-known synthetic key",
                     )

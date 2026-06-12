@@ -77,7 +77,7 @@ pub(crate) fn ensure_exec_a() -> PathBuf {
     exec_target_dir().join("exec_a")
 }
 
-pub(crate) fn search_path_resolver() -> SearchPathResolver {
+pub(crate) fn search_path_resolver<K>() -> SearchPathResolver<K> {
     let mut resolver = SearchPathResolver::new();
     resolver.push_search_dir_provider(|request, out| {
         if let Some(dirs) = request.runpath() {

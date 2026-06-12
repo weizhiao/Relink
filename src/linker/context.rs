@@ -1,4 +1,7 @@
-use super::storage::{CommittedStorage, KeyId};
+use super::{
+    request::VisibleModules,
+    storage::{CommittedStorage, KeyId},
+};
 use crate::{
     LinkerError, Result, arch::NativeArch, image::ModuleHandle, relocation::RelocationArch,
 };
@@ -87,6 +90,46 @@ where
     #[inline]
     pub fn get(&self, id: KeyId) -> Option<&ModuleHandle<Arch>> {
         self.committed.get(id)
+    }
+
+    /// Returns a module by this context's key id, falling back to an external
+    /// visible module set when the id only resolves to an interned key.
+    #[inline]
+    pub(crate) fn visible_module<V>(
+        &self,
+        visible_modules: &V,
+        id: KeyId,
+    ) -> Option<ModuleHandle<Arch>>
+    where
+        V: VisibleModules<K, Arch>,
+    {
+        self.committed.get(id).cloned().or_else(|| {
+            let key = self.committed.key(id)?;
+            visible_modules.module(key)
+        })
+    }
+
+    /// Returns a module by key, accepting aliases from an external visible
+    /// module set before falling back to the canonical visible module.
+    #[inline]
+    pub(crate) fn visible_module_by_key<V>(
+        &self,
+        visible_modules: &V,
+        key: &K,
+    ) -> Option<ModuleHandle<Arch>>
+    where
+        V: VisibleModules<K, Arch>,
+    {
+        self.committed
+            .key_id(key)
+            .and_then(|id| self.visible_module(visible_modules, id))
+            .or_else(|| {
+                let key = visible_modules.visible_key(key)?;
+                self.committed
+                    .key_id(&key)
+                    .and_then(|id| self.visible_module(visible_modules, id))
+                    .or_else(|| visible_modules.module(&key))
+            })
     }
 
     /// Returns direct dependency ids for a committed module.

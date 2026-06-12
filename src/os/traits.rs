@@ -1,5 +1,6 @@
 use super::{MadviseAdvice, MapFlags, MappedRegion, PageSize, ProtFlags, RegionAccess, VmAddr};
 use crate::Result;
+use alloc::sync::Arc;
 
 /// A trait for low-level memory mapping operations.
 ///
@@ -158,4 +159,71 @@ pub trait Mmap: Send + Sync + 'static {
     /// Changing permissions can affect running code. Ensure no code is executing in the region
     /// when removing execute permissions. `addr` must be page-aligned.
     unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()>;
+}
+
+impl<M> Mmap for Arc<M>
+where
+    M: Mmap + ?Sized,
+{
+    type Region = M::Region;
+
+    #[inline]
+    fn page_size(&self) -> PageSize {
+        (**self).page_size()
+    }
+
+    #[inline]
+    unsafe fn create_space(
+        &self,
+        addr: Option<VmAddr>,
+        len: usize,
+        prot: ProtFlags,
+        populate_later: bool,
+    ) -> Result<MappedRegion<Self::Region>> {
+        unsafe { (**self).create_space(addr, len, prot, populate_later) }
+    }
+
+    #[inline]
+    unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
+        unsafe { (**self).alias_space(addr, len) }
+    }
+
+    #[inline]
+    unsafe fn map_file_at(
+        &self,
+        addr: VmAddr,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+        offset: usize,
+        fd: isize,
+    ) -> Result<()> {
+        unsafe { (**self).map_file_at(addr, len, prot, flags, offset, fd) }
+    }
+
+    #[inline]
+    unsafe fn map_zero_at(
+        &self,
+        addr: VmAddr,
+        len: usize,
+        prot: ProtFlags,
+        flags: MapFlags,
+    ) -> Result<()> {
+        unsafe { (**self).map_zero_at(addr, len, prot, flags) }
+    }
+
+    #[inline]
+    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
+        unsafe { (**self).munmap(addr, len) }
+    }
+
+    #[inline]
+    unsafe fn madvise(&self, addr: VmAddr, len: usize, behavior: MadviseAdvice) -> Result<()> {
+        unsafe { (**self).madvise(addr, len, behavior) }
+    }
+
+    #[inline]
+    unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
+        unsafe { (**self).mprotect(addr, len, prot) }
+    }
 }

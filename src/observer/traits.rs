@@ -1,5 +1,5 @@
 use super::{
-    DtDebugEntry, DynamicLoadedEvent, IfuncBindingEvent, LifecycleEvent, LinkActivity,
+    DtDebugEntry, DynamicLoadedEvent, IfuncBindingEvent, InitEvent, LinkActivity,
     ModuleRelocatedEvent, ProgramHeaderEvent, ResolveDependencyEvent, ResolveRootEvent,
     StagedDynamic, SymbolBindingEvent, TlsDescBindingEvent,
 };
@@ -72,7 +72,10 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
 
     /// Called before initialization functions are executed.
     #[inline]
-    fn on_init<R: RegionAccess>(&mut self, _event: &mut LifecycleEvent<'_, Arch, R>) -> Result<()> {
+    fn on_init<D: 'static, R: RegionAccess, H>(
+        &mut self,
+        _event: &mut InitEvent<'_, D, Arch, R, H>,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -215,7 +218,10 @@ where
     }
 
     #[inline]
-    fn on_init<R: RegionAccess>(&mut self, event: &mut LifecycleEvent<'_, Arch, R>) -> Result<()> {
+    fn on_init<D: 'static, R: RegionAccess, H>(
+        &mut self,
+        event: &mut InitEvent<'_, D, Arch, R, H>,
+    ) -> Result<()> {
         (**self).on_init(event)
     }
 
@@ -372,7 +378,10 @@ where
     }
 
     #[inline]
-    fn on_init<R: RegionAccess>(&mut self, event: &mut LifecycleEvent<'_, Arch, R>) -> Result<()> {
+    fn on_init<D: 'static, R: RegionAccess, H>(
+        &mut self,
+        event: &mut InitEvent<'_, D, Arch, R, H>,
+    ) -> Result<()> {
         (**self).on_init(event)
     }
 
