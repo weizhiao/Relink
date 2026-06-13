@@ -565,15 +565,17 @@ impl SegmentBuilder for SectionSegmentSet {
 }
 
 impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
-    pub(crate) fn new<D, Obs>(
+    pub(crate) fn load<D, Obs, M>(
         sections: &mut ObjectSections<Arch::Layout>,
         object: &impl ElfReader,
         page_size: usize,
         observer: &mut Obs,
-    ) -> Result<Self>
+        mapper: &M,
+    ) -> Result<(Self, ObjectSegments<M::Region>)>
     where
         D: 'static,
         Obs: LoadObserver<D, Arch>,
+        M: Mmap + ?Sized,
     {
         let (got_cnt, plt_cnt) =
             PltGotSection::count_needed_entries::<Arch>(sections.headers(), object)?;
@@ -650,21 +652,25 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
             plt: pltgot_shdrs.plt.lifetime(&section_lifetimes),
         };
 
-        Ok(Self {
+        let mut section_segments = Self {
             core,
             init,
             section_lifetimes,
             pltgot_lifetimes,
             pltgot: Some(PltGotSection::new(got_base, got_plt_base, plt_base)),
             _arch: core::marker::PhantomData,
-        })
+        };
+
+        let segments = section_segments.load_segments(mapper, object)?;
+        section_segments.rebase_loaded_sections(sections.headers_mut(), &segments);
+        Ok((section_segments, segments))
     }
 
     pub(crate) fn take_pltgot(&mut self) -> PltGotSection {
         self.pltgot.take().expect("PLTGOT already taken")
     }
 
-    pub(crate) fn load_segments<M>(
+    fn load_segments<M>(
         &mut self,
         mapper: &M,
         object: &impl ElfReader,
@@ -692,7 +698,7 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
         Ok(())
     }
 
-    pub(crate) fn rebase_loaded_sections<R>(
+    fn rebase_loaded_sections<R>(
         &mut self,
         shdrs: &mut [ElfShdr<Arch::Layout>],
         segments: &ObjectSegments<R>,

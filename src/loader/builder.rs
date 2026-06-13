@@ -1,14 +1,11 @@
-use super::LoaderInner;
 use crate::{
     ParsePhdrError, Result,
     arch::NativeArch,
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
     input::{ElfReader, PathBuf},
     memory::{MappedView, RegionAccess, VmAddr},
-    observer::{LoadObserver, ProgramHeaderEvent},
-    os::Mmap,
     relocation::RelocationArch,
-    segment::{ELFRelro, ElfSegments, SegmentBuilder, program::ProgramSegments},
+    segment::{ELFRelro, ElfSegments},
     tls::{TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -20,20 +17,14 @@ use core::{marker::PhantomData, ptr::NonNull};
 /// and organize the various components of a relocated ELF file before
 /// building the final loaded image.
 pub(crate) struct ImageBuilder<
-    'obs,
-    Obs,
     Tls,
     D: 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = crate::memory::HostRegion,
 > where
-    Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
 {
-    /// Observer for loading and linking events.
-    pub(crate) observer: &'obs mut Obs,
-
     /// Loader source path or caller-provided source identifier.
     pub(crate) path: PathBuf,
 
@@ -98,9 +89,8 @@ impl<L: ElfLayout> ScanBuilder<L> {
     }
 }
 
-impl<'obs, Obs, Tls, D: 'static, Arch, R> ImageBuilder<'obs, Obs, Tls, D, Arch, R>
+impl<Tls, D: 'static, Arch, R> ImageBuilder<Tls, D, Arch, R>
 where
-    Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver,
     Arch: RelocationArch,
     R: RegionAccess,
@@ -108,12 +98,10 @@ where
     /// Create a new [`ImageBuilder`].
     ///
     /// # Arguments
-    /// * `observer` - Observer for loading and linking events
     /// * `segments` - Memory segments of the ELF file
     /// * `path` - Loader source path or caller-provided source identifier
     /// * `ehdr` - ELF header
     pub(crate) fn new(
-        observer: &'obs mut Obs,
         segments: ElfSegments<R>,
         path: PathBuf,
         ehdr: ElfHeader<Arch::Layout>,
@@ -122,7 +110,6 @@ where
         user_data: D,
     ) -> Self {
         Self {
-            observer,
             path,
             ehdr,
             relro: None,
@@ -141,9 +128,6 @@ where
 
     /// Parse a program header and extract relevant information.
     pub(crate) fn parse_phdr(&mut self, phdr: &ElfPhdr<Arch::Layout>) -> Result<()> {
-        let ctx = ProgramHeaderEvent::new(self.path.as_path(), phdr, &self.segments);
-        self.observer.on_program_header(ctx)?;
-
         match phdr.program_type() {
             ElfProgramType::DYNAMIC => {
                 self.dynamic_addr = Some(self.segments.base() + phdr.p_vaddr());
@@ -266,53 +250,5 @@ where
         }
 
         Ok(ElfPhdrs::Vec(Vec::from(phdrs)))
-    }
-}
-
-impl<Obs, D, Arch, M> LoaderInner<Obs, D, Arch, M>
-where
-    Obs: LoadObserver<D, Arch>,
-    D: 'static,
-    Arch: RelocationArch,
-    M: Mmap,
-{
-    pub(crate) fn create_builder<Tls>(
-        &mut self,
-        ehdr: ElfHeader<Arch::Layout>,
-        phdrs: &[ElfPhdr<Arch::Layout>],
-        object: &impl ElfReader,
-        user_data: D,
-    ) -> Result<ImageBuilder<'_, Obs, Tls, D, Arch, M::Region>>
-    where
-        Tls: TlsResolver,
-    {
-        let path = PathBuf::from(object.path());
-        let mapper = self.mapper();
-        let page_size = self.page_size()?.bytes();
-        let mut phdr_segments =
-            ProgramSegments::new(phdrs, ehdr.is_dylib(), object.as_fd().is_some(), page_size);
-        let segments = phdr_segments.load_segments(mapper, object)?;
-        phdr_segments.mprotect(&segments)?;
-
-        Ok(ImageBuilder::new(
-            &mut self.observer,
-            segments,
-            path,
-            ehdr,
-            self.force_static_tls,
-            page_size,
-            user_data,
-        ))
-    }
-
-    pub(crate) fn create_scan_builder(
-        &self,
-        ehdr: ElfHeader<Arch::Layout>,
-        phdrs: Box<[ElfPhdr<Arch::Layout>]>,
-        object: impl ElfReader + 'static,
-    ) -> ScanBuilder<Arch::Layout> {
-        let path = PathBuf::from(object.path());
-
-        ScanBuilder::new(path, ehdr, phdrs, Box::new(object))
     }
 }

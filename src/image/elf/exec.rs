@@ -12,7 +12,7 @@ use crate::{
     input::{Path, PathBuf},
     loader::ImageBuilder,
     memory::{HostRegion, RegionAccess, VmAddr},
-    observer::{LoadObserver, RelocationObserver},
+    observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     segment::ElfSegments,
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
@@ -384,12 +384,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedExec<D, Arch, R> {
 }
 
 impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
-    pub(crate) fn from_builder<'obs, Obs, Tls>(
-        mut builder: ImageBuilder<'obs, Obs, Tls, D, Arch, R>,
+    pub(crate) fn from_builder<Tls>(
+        mut builder: ImageBuilder<Tls, D, Arch, R>,
         phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where
-        Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
     {
         // Parse all program headers
@@ -424,13 +423,12 @@ impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawExec<D, Arch, R> {
-    pub(crate) fn from_builder<'obs, Obs, Tls>(
-        builder: ImageBuilder<'obs, Obs, Tls, D, Arch, R>,
+    pub(crate) fn from_builder<Tls>(
+        builder: ImageBuilder<Tls, D, Arch, R>,
         phdrs: &[ElfPhdr<Arch::Layout>],
         has_dynamic: bool,
     ) -> Result<Self>
     where
-        Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
     {
         if has_dynamic {

@@ -4,25 +4,26 @@ mod fixture_support;
 use elf_loader::{
     Loader, Result,
     arch::NativeArch,
-    memory::RegionAccess,
-    observer::{LoadObserver, ProgramHeaderEvent},
+    observer::{BeforeDynamicLoadEvent, LoadObserver},
     relocation::RelocationArch,
 };
 
 struct PrintObserver;
 
 impl LoadObserver for PrintObserver {
-    fn on_program_header<R: RegionAccess>(
+    fn on_before_dynamic_load(
         &mut self,
-        ctx: ProgramHeaderEvent<'_, <NativeArch as RelocationArch>::Layout, R>,
+        event: BeforeDynamicLoadEvent<'_, (), <NativeArch as RelocationArch>::Layout>,
     ) -> Result<()> {
-        println!("Loading segment for {}:", ctx.path());
-        println!("  Type: {:?}", ctx.phdr().program_type());
-        println!("  Offset: 0x{:x}", ctx.phdr().p_offset());
-        println!("  Vaddr: {}", ctx.phdr().p_vaddr());
-        println!("  Filesz: 0x{:x}", ctx.phdr().p_filesz());
-        println!("  Memsz: 0x{:x}", ctx.phdr().p_memsz());
-        println!("  Flags: {:?}", ctx.phdr().flags());
+        println!("Loading dynamic image for {}:", event.path());
+        for phdr in event.phdrs() {
+            println!("  Type: {:?}", phdr.program_type());
+            println!("    Offset: 0x{:x}", phdr.p_offset());
+            println!("    Vaddr: {}", phdr.p_vaddr());
+            println!("    Filesz: 0x{:x}", phdr.p_filesz());
+            println!("    Memsz: 0x{:x}", phdr.p_memsz());
+            println!("    Flags: {:?}", phdr.flags());
+        }
         Ok(())
     }
 }

@@ -124,7 +124,7 @@ where
     ///
     /// Dynamic images are created with `NewD::default()`. To fill or adjust
     /// that data after dynamic metadata has been parsed, implement
-    /// [`LoadObserver::on_dynamic_loaded`] on the configured load observer.
+    /// [`LoadObserver::on_after_dynamic_load`] on the configured load observer.
     pub fn with_data<NewD>(self) -> Loader<Obs, NewD, Tls, Arch, M>
     where
         NewD: Default + 'static,

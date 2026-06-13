@@ -7,7 +7,6 @@ use crate::{
     image::{RawDynamic, ScannedDynamic},
     input::PathBuf,
     memory::{HostRegion, RegionAccess, VmAddr, VmOffset},
-    observer::LoadObserver,
     os::Mmap,
     relocation::{RelocationArch, RelocationValueProvider},
     segment::ElfSegments,
@@ -224,17 +223,15 @@ impl<R: RegionAccess> MappedRuntimeMemory<R> {
     }
 }
 
-pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch, Obs, R>(
+pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch, R>(
     scanned: ScannedDynamic<Arch>,
     runtime: RuntimeModuleMemory<R>,
     force_static_tls: bool,
-    observer: &mut Obs,
 ) -> Result<RawDynamic<D, Arch, R>>
 where
     D: Default + 'static,
     Tls: TlsResolver,
     Arch: RelocationArch,
-    Obs: LoadObserver<D, Arch> + ?Sized,
     R: RegionAccess,
 {
     let original_phdrs = scanned.phdrs().to_vec();
@@ -308,21 +305,18 @@ where
         .unwrap_or_else(|| runtime.segments.base() + VmOffset::new(original_entry));
     let path = PathBuf::from(scanned.path());
 
-    RawDynamic::from_parts::<Tls, _>(
-        crate::image::RawDynamicParts {
-            path,
-            entry,
-            interp: None,
-            phdrs: ElfPhdrs::Vec(original_phdrs),
-            dynamic,
-            dynamic_addr,
-            eh_frame_hdr,
-            tls_info,
-            force_static_tls,
-            relro: None,
-            segments: runtime.segments,
-            user_data: D::default(),
-        },
-        observer,
-    )
+    RawDynamic::from_parts::<Tls>(crate::image::RawDynamicParts {
+        path,
+        entry,
+        interp: None,
+        phdrs: ElfPhdrs::Vec(original_phdrs),
+        dynamic,
+        dynamic_addr,
+        eh_frame_hdr,
+        tls_info,
+        force_static_tls,
+        relro: None,
+        segments: runtime.segments,
+        user_data: D::default(),
+    })
 }

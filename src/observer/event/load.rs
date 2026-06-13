@@ -1,31 +1,34 @@
 use crate::{
     arch::{ArchKind, NativeArch},
-    elf::{ElfLayout, ElfPhdr, NativeElfLayout},
+    elf::{ElfHeader, ElfLayout, ElfPhdr, NativeElfLayout},
     image::RawDynamic,
     input::Path,
     memory::{HostRegion, RegionAccess},
     relocation::RelocationArch,
-    segment::ElfSegments,
 };
 
-/// Program-header event emitted while an ELF image is being loaded.
-pub struct ProgramHeaderEvent<'a, L: ElfLayout = NativeElfLayout, R: RegionAccess = HostRegion> {
+/// Event emitted after dynamic-image program headers are available and before
+/// `PT_LOAD` segments are mapped.
+pub struct BeforeDynamicLoadEvent<'a, D: 'static, L: ElfLayout = NativeElfLayout> {
     path: &'a Path,
-    phdr: &'a ElfPhdr<L>,
-    segments: &'a ElfSegments<R>,
+    ehdr: &'a ElfHeader<L>,
+    phdrs: &'a [ElfPhdr<L>],
+    user_data: &'a mut D,
 }
 
-impl<'a, L: ElfLayout, R: RegionAccess> ProgramHeaderEvent<'a, L, R> {
+impl<'a, D: 'static, L: ElfLayout> BeforeDynamicLoadEvent<'a, D, L> {
     #[inline]
     pub(crate) const fn new(
         path: &'a Path,
-        phdr: &'a ElfPhdr<L>,
-        segments: &'a ElfSegments<R>,
+        ehdr: &'a ElfHeader<L>,
+        phdrs: &'a [ElfPhdr<L>],
+        user_data: &'a mut D,
     ) -> Self {
         Self {
             path,
-            phdr,
-            segments,
+            ehdr,
+            phdrs,
+            user_data,
         }
     }
 
@@ -35,21 +38,33 @@ impl<'a, L: ElfLayout, R: RegionAccess> ProgramHeaderEvent<'a, L, R> {
         self.path
     }
 
-    /// Returns the program header being processed.
+    /// Returns the parsed ELF header.
     #[inline]
-    pub const fn phdr(&self) -> &ElfPhdr<L> {
-        self.phdr
+    pub const fn ehdr(&self) -> &ElfHeader<L> {
+        self.ehdr
     }
 
-    /// Returns the ELF segments built for this image.
+    /// Returns the parsed program headers.
     #[inline]
-    pub const fn segments(&self) -> &ElfSegments<R> {
-        self.segments
+    pub const fn phdrs(&self) -> &[ElfPhdr<L>] {
+        self.phdrs
+    }
+
+    /// Returns immutable user data for this image.
+    #[inline]
+    pub const fn user_data(&self) -> &D {
+        self.user_data
+    }
+
+    /// Returns mutable user data for this image.
+    #[inline]
+    pub fn user_data_mut(&mut self) -> &mut D {
+        self.user_data
     }
 }
 
-/// A dynamic image that has been mapped and parsed, before relocation.
-pub struct DynamicLoadedEvent<
+/// Event emitted after a dynamic image has been mapped and parsed, before relocation.
+pub struct AfterDynamicLoadEvent<
     'a,
     D: 'static,
     Arch: RelocationArch = NativeArch,
@@ -58,7 +73,7 @@ pub struct DynamicLoadedEvent<
     raw: &'a mut RawDynamic<D, Arch, R>,
 }
 
-impl<'a, D: 'static, Arch, R> DynamicLoadedEvent<'a, D, Arch, R>
+impl<'a, D: 'static, Arch, R> AfterDynamicLoadEvent<'a, D, Arch, R>
 where
     Arch: RelocationArch,
     R: RegionAccess,

@@ -16,7 +16,9 @@ use crate::{
     image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     linker::session::ResolveSession,
     memory::{RegionAccess, VmOffset},
-    observer::{DynamicLoadedEvent, LinkObserver, LoadObserver, RelocationObserver, StagedDynamic},
+    observer::{
+        AfterDynamicLoadEvent, LinkObserver, LoadObserver, RelocationObserver, StagedDynamic,
+    },
     os::Mmap,
     relocation::{RelocationArch, RelocationHandler, Relocator},
     tls::TlsResolver,
@@ -628,16 +630,12 @@ where
             .take_module(module_id)?;
         let force_static_tls = self.loader.inner.force_static_tls();
 
-        let mut raw = build_arena_raw_dynamic::<D, Tls, Arch, _, M::Region>(
-            scanned,
-            runtime,
-            force_static_tls,
-            &mut self.loader.inner.observer,
-        )?;
+        let mut raw =
+            build_arena_raw_dynamic::<D, Tls, Arch, M::Region>(scanned, runtime, force_static_tls)?;
         self.loader
             .inner
             .observer
-            .on_dynamic_loaded(DynamicLoadedEvent::new(&mut raw))?;
+            .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut raw))?;
         Ok(raw)
     }
 

@@ -1,13 +1,13 @@
-use super::ObjectSections;
+use super::{ObjectBuilder, ObjectSections, layout::SectionSegments};
 use crate::{
     ParseShdrError, RelocationError, Result,
     elf::{ElfHeader, ElfLayout, ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr},
     image::RawObject,
-    input::{ElfReader, ElfReaderExt, IntoElfReader},
+    input::{ElfReader, ElfReaderExt, IntoElfReader, PathBuf},
     loader::{ExpectedElf, Loader},
     logging,
     memory::VmOffset,
-    observer::{LoadObserver, ObjectMetadataEvent},
+    observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent, LoadObserver},
     os::Mmap,
     relocation::ObjectRelocationArch,
     tls::TlsResolver,
@@ -55,16 +55,32 @@ where
         let mut user_data = D::default();
         self.inner
             .observer
-            .on_object_metadata(ObjectMetadataEvent::new(
+            .on_before_object_load(BeforeObjectLoadEvent::new(
                 &ehdr,
                 &mut sections,
                 &object,
                 &mut user_data,
             ))?;
-        let builder = self
-            .inner
-            .create_object_builder::<Tls>(sections, object, user_data)?;
-        let raw = RawObject::from_builder(builder);
+        let path = PathBuf::from(object.path());
+        let page_size = self.inner.page_size()?.bytes();
+        let (section_segments, segments) = SectionSegments::<Arch>::load::<D, _, _>(
+            &mut sections,
+            &object,
+            page_size,
+            &mut self.inner.observer,
+            &self.inner.mapper,
+        )?;
+        let builder = ObjectBuilder::<Tls, D, Arch, M::Region>::new(
+            path,
+            sections,
+            segments,
+            section_segments,
+            user_data,
+        )?;
+        let mut raw = RawObject::from_builder(builder);
+        self.inner
+            .observer
+            .on_after_object_load(AfterObjectLoadEvent::new(&mut raw))?;
 
         logging::info!(
             "Loaded object: {} at [{}-{}]",
@@ -204,7 +220,8 @@ mod tests {
         Loader, Result,
         elf::{ElfEhdr, ElfLayout, ElfSectionFlags, ElfSectionId, ElfSectionType, NativeElfLayout},
         input::{ElfBinary, ElfReader, Path},
-        observer::{LoadObserver, ObjectMetadataEvent},
+        memory::RegionAccess,
+        observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent, LoadObserver},
         relocation::RelocationArch,
     };
     use alloc::vec::Vec;
@@ -227,12 +244,14 @@ mod tests {
         shstrtab_len: usize,
         borrowed_shstrtab: bool,
         renamed_shstrtab: bool,
+        after_object_name_seen: bool,
+        after_object_mapped: bool,
     }
 
     impl LoadObserver<ObjectData> for ObjectObserver {
-        fn on_object_metadata(
+        fn on_before_object_load(
             &mut self,
-            mut event: ObjectMetadataEvent<'_, ObjectData, NativeElfLayout>,
+            mut event: BeforeObjectLoadEvent<'_, ObjectData, NativeElfLayout>,
         ) -> Result<()> {
             let shstrtab = event.find_section(".shstrtab");
             event.user_data_mut().shstrtab = shstrtab;
@@ -260,6 +279,15 @@ mod tests {
             self.renamed_shstrtab = shstrtab
                 .map(|index| event.section_name(index))
                 .is_some_and(|name| name.to_bytes().is_empty());
+            Ok(())
+        }
+
+        fn on_after_object_load<R: RegionAccess>(
+            &mut self,
+            event: AfterObjectLoadEvent<'_, ObjectData, crate::arch::NativeArch, R>,
+        ) -> Result<()> {
+            self.after_object_name_seen = event.raw().name() == "metadata.o";
+            self.after_object_mapped = event.raw().mapped_len() > 0;
             Ok(())
         }
     }
@@ -565,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn load_object_notifies_object_metadata_observer() {
+    fn load_object_notifies_object_load_observers() {
         let mut observer = ObjectObserver::default();
         let mut loader = Loader::new()
             .with_data::<ObjectData>()
@@ -582,5 +610,7 @@ mod tests {
         );
         assert!(observer.borrowed_shstrtab);
         assert!(observer.renamed_shstrtab);
+        assert!(observer.after_object_name_seen);
+        assert!(observer.after_object_mapped);
     }
 }

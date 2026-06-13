@@ -1,27 +1,29 @@
 use super::{
-    DtDebugEntry, DynamicLoadedEvent, DynamicRelocatedEvent, IfuncBindingEvent, InitEvent,
-    LinkActivity, ProgramHeaderEvent, ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
+    AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, IfuncBindingEvent,
+    InitEvent, LinkActivity, ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
     SymbolBindingEvent, TlsDescBindingEvent,
 };
 #[cfg(feature = "object")]
-use super::{ObjectMetadataEvent, ObjectRelocatedEvent, SectionLayoutEvent};
-use crate::{Result, arch::NativeArch, memory::RegionAccess, relocation::RelocationArch};
+use super::{
+    AfterObjectLoadEvent, BeforeObjectLoadEvent, ObjectRelocatedEvent, SectionLayoutEvent,
+};
+use crate::{
+    Result,
+    arch::NativeArch,
+    memory::RegionAccess,
+    relocation::{ObjectRelocationArch, RelocationArch},
+};
 use alloc::boxed::Box;
 
 /// Event hook for images as they are loaded.
 pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
-    /// Called as each program header is processed during loading.
+    /// Called after ELF program headers are available and before `PT_LOAD`
+    /// segments are mapped.
     #[inline]
-    fn on_program_header<R: RegionAccess>(
+    fn on_before_dynamic_load(
         &mut self,
-        _event: ProgramHeaderEvent<'_, Arch::Layout, R>,
+        _event: BeforeDynamicLoadEvent<'_, D, Arch::Layout>,
     ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Called when a mutable `DT_DEBUG` entry is available during dynamic parsing.
-    #[inline]
-    fn on_dt_debug<R: RegionAccess>(&mut self, _entry: DtDebugEntry<'_, Arch, R>) -> Result<()> {
         Ok(())
     }
 
@@ -29,9 +31,9 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
     /// before section contents are mapped.
     #[cfg(feature = "object")]
     #[inline]
-    fn on_object_metadata(
+    fn on_before_object_load(
         &mut self,
-        _event: ObjectMetadataEvent<'_, D, Arch::Layout>,
+        _event: BeforeObjectLoadEvent<'_, D, Arch::Layout>,
     ) -> Result<()> {
         Ok(())
     }
@@ -46,11 +48,24 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
         Ok(())
     }
 
+    /// Called after a relocatable object has been mapped and parsed, before relocation.
+    #[cfg(feature = "object")]
+    #[inline]
+    fn on_after_object_load<R: RegionAccess>(
+        &mut self,
+        _event: AfterObjectLoadEvent<'_, D, Arch, R>,
+    ) -> Result<()>
+    where
+        Arch: ObjectRelocationArch,
+    {
+        Ok(())
+    }
+
     /// Called after a dynamic image has been mapped and parsed, before relocation.
     #[inline]
-    fn on_dynamic_loaded<R: RegionAccess>(
+    fn on_after_dynamic_load<R: RegionAccess>(
         &mut self,
-        _event: DynamicLoadedEvent<'_, D, Arch, R>,
+        _event: AfterDynamicLoadEvent<'_, D, Arch, R>,
     ) -> Result<()> {
         Ok(())
     }
@@ -167,25 +182,20 @@ where
     O: LoadObserver<D, Arch> + ?Sized,
 {
     #[inline]
-    fn on_program_header<R: RegionAccess>(
+    fn on_before_dynamic_load(
         &mut self,
-        event: ProgramHeaderEvent<'_, Arch::Layout, R>,
+        event: BeforeDynamicLoadEvent<'_, D, Arch::Layout>,
     ) -> Result<()> {
-        (**self).on_program_header(event)
-    }
-
-    #[inline]
-    fn on_dt_debug<R: RegionAccess>(&mut self, entry: DtDebugEntry<'_, Arch, R>) -> Result<()> {
-        (**self).on_dt_debug(entry)
+        (**self).on_before_dynamic_load(event)
     }
 
     #[cfg(feature = "object")]
     #[inline]
-    fn on_object_metadata(
+    fn on_before_object_load(
         &mut self,
-        event: ObjectMetadataEvent<'_, D, Arch::Layout>,
+        event: BeforeObjectLoadEvent<'_, D, Arch::Layout>,
     ) -> Result<()> {
-        (**self).on_object_metadata(event)
+        (**self).on_before_object_load(event)
     }
 
     #[cfg(feature = "object")]
@@ -197,12 +207,24 @@ where
         (**self).on_section_layout(event)
     }
 
+    #[cfg(feature = "object")]
     #[inline]
-    fn on_dynamic_loaded<R: RegionAccess>(
+    fn on_after_object_load<R: RegionAccess>(
         &mut self,
-        event: DynamicLoadedEvent<'_, D, Arch, R>,
+        event: AfterObjectLoadEvent<'_, D, Arch, R>,
+    ) -> Result<()>
+    where
+        Arch: ObjectRelocationArch,
+    {
+        (**self).on_after_object_load(event)
+    }
+
+    #[inline]
+    fn on_after_dynamic_load<R: RegionAccess>(
+        &mut self,
+        event: AfterDynamicLoadEvent<'_, D, Arch, R>,
     ) -> Result<()> {
-        (**self).on_dynamic_loaded(event)
+        (**self).on_after_dynamic_load(event)
     }
 }
 
@@ -273,25 +295,20 @@ where
     O: LoadObserver<D, Arch> + ?Sized,
 {
     #[inline]
-    fn on_program_header<R: RegionAccess>(
+    fn on_before_dynamic_load(
         &mut self,
-        event: ProgramHeaderEvent<'_, Arch::Layout, R>,
+        event: BeforeDynamicLoadEvent<'_, D, Arch::Layout>,
     ) -> Result<()> {
-        (**self).on_program_header(event)
-    }
-
-    #[inline]
-    fn on_dt_debug<R: RegionAccess>(&mut self, entry: DtDebugEntry<'_, Arch, R>) -> Result<()> {
-        (**self).on_dt_debug(entry)
+        (**self).on_before_dynamic_load(event)
     }
 
     #[cfg(feature = "object")]
     #[inline]
-    fn on_object_metadata(
+    fn on_before_object_load(
         &mut self,
-        event: ObjectMetadataEvent<'_, D, Arch::Layout>,
+        event: BeforeObjectLoadEvent<'_, D, Arch::Layout>,
     ) -> Result<()> {
-        (**self).on_object_metadata(event)
+        (**self).on_before_object_load(event)
     }
 
     #[cfg(feature = "object")]
@@ -303,12 +320,24 @@ where
         (**self).on_section_layout(event)
     }
 
+    #[cfg(feature = "object")]
     #[inline]
-    fn on_dynamic_loaded<R: RegionAccess>(
+    fn on_after_object_load<R: RegionAccess>(
         &mut self,
-        event: DynamicLoadedEvent<'_, D, Arch, R>,
+        event: AfterObjectLoadEvent<'_, D, Arch, R>,
+    ) -> Result<()>
+    where
+        Arch: ObjectRelocationArch,
+    {
+        (**self).on_after_object_load(event)
+    }
+
+    #[inline]
+    fn on_after_dynamic_load<R: RegionAccess>(
+        &mut self,
+        event: AfterDynamicLoadEvent<'_, D, Arch, R>,
     ) -> Result<()> {
-        (**self).on_dynamic_loaded(event)
+        (**self).on_after_dynamic_load(event)
     }
 }
 

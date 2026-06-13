@@ -8,11 +8,13 @@ mod resolve;
 #[cfg(feature = "object")]
 pub use crate::object::layout::{SectionGroup, SectionLifetime};
 pub use lifecycle::{FiniEvent, InitEvent};
-pub use load::{DynamicLoadedEvent, ProgramHeaderEvent, StagedDynamic};
+pub use load::{AfterDynamicLoadEvent, BeforeDynamicLoadEvent, StagedDynamic};
 #[cfg(feature = "object")]
-pub use object::{ObjectMetadataEvent, ObjectRelocatedEvent, SectionLayoutEvent};
+pub use object::{
+    AfterObjectLoadEvent, BeforeObjectLoadEvent, ObjectRelocatedEvent, SectionLayoutEvent,
+};
 pub use relocation::{
-    DtDebugEntry, DynamicRelocatedEvent, IfuncBindingEvent, LinkActivity, SymbolBindingEvent,
+    DynamicRelocatedEvent, IfuncBindingEvent, LinkActivity, SymbolBindingEvent,
     TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
 };
 pub use resolve::{ResolveDependencyEvent, ResolveRootEvent};

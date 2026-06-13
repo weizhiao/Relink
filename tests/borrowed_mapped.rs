@@ -2,12 +2,10 @@ mod support;
 
 use elf_loader::{
     Loader,
-    arch::NativeArch,
     elf::ElfProgramType,
     image::ScannedElf,
     input::ElfBinary,
-    memory::RegionAccess,
-    observer::{DynamicLoadedEvent, LoadObserver},
+    observer::{BeforeDynamicLoadEvent, LoadObserver},
 };
 use gen_elf::{Arch, ElfWriterConfig, SymbolDesc};
 use support::{generated_dylib::return_42_stub, test_dylib::write_test_dylib_with_config};
@@ -20,13 +18,17 @@ struct ScanData {
 struct ScanObserver;
 
 impl LoadObserver<ScanData> for ScanObserver {
-    fn on_dynamic_loaded<R: RegionAccess>(
+    fn on_before_dynamic_load(
         &mut self,
-        mut event: DynamicLoadedEvent<'_, ScanData, NativeArch, R>,
+        mut event: BeforeDynamicLoadEvent<'_, ScanData>,
     ) -> elf_loader::Result<()> {
-        if let Some(data) = event.raw_mut().user_data_mut() {
-            data.value = 42;
-        }
+        assert!(
+            event
+                .phdrs()
+                .iter()
+                .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
+        );
+        event.user_data_mut().value = 42;
         Ok(())
     }
 }

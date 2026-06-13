@@ -48,6 +48,22 @@ impl<'phdr, L: ElfLayout> ProgramSegments<'phdr, L> {
             page_size,
         }
     }
+
+    pub(crate) fn load<M>(
+        phdrs: &'phdr [ElfPhdr<L>],
+        is_dylib: bool,
+        mapper: &M,
+        object: &impl crate::input::ElfReader,
+        page_size: usize,
+    ) -> Result<ElfSegments<M::Region>>
+    where
+        M: Mmap + ?Sized,
+    {
+        let mut segments = Self::new(phdrs, is_dylib, object.as_fd().is_some(), page_size);
+        let loaded = segments.load_segments(mapper, object)?;
+        segments.mprotect(&loaded)?;
+        Ok(loaded)
+    }
 }
 
 /// Memory layout requirements derived from LOAD program headers.

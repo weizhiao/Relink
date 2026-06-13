@@ -1,18 +1,21 @@
-use super::Loader;
+use super::{ImageBuilder, Loader, ScanBuilder};
 use crate::{
     ParseEhdrError, ParsePhdrError, Result,
     elf::{ElfDyn, ElfFileType, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, ElfShdr},
     image::{
-        RawDylib, RawDynamic, RawDynamicParts, RawElf, RawExec, ScannedDynamic,
-        ScannedDynamicLoadParts, ScannedElf, ScannedExec,
+        RawDylib, RawDynamic, RawDynamicParts, RawElf, RawExec, ScannedDynamic, ScannedElf,
+        ScannedExec,
     },
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
     memory::{RegionAccess, VmAddr, VmOffset},
-    observer::{DynamicLoadedEvent, LoadObserver},
+    observer::{AfterDynamicLoadEvent, BeforeDynamicLoadEvent, LoadObserver},
     os::Mmap,
     relocation::{ObjectRelocationArch, RelocationArch},
-    segment::{ELFRelro, ElfSegments, program::parse_segments},
+    segment::{
+        ELFRelro, ElfSegments,
+        program::{ProgramSegments, parse_segments},
+    },
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -98,7 +101,8 @@ where
         let phdrs = self.buf.prepare_phdrs(&ehdr, &object)?.unwrap_or_default();
         let has_dynamic = has_dynamic_phdr(phdrs);
         let phdrs = Box::from(phdrs);
-        let builder = self.inner.create_scan_builder(ehdr, phdrs, object);
+        let path = PathBuf::from(object.path());
+        let builder = ScanBuilder::new(path, ehdr, phdrs, Box::new(object));
 
         if has_dynamic {
             return ScannedDynamic::<Arch>::from_builder(builder).map(ScannedElf::Dynamic);
@@ -155,10 +159,7 @@ where
                 if is_pie {
                     Ok(RawElf::Exec(self.load_exec_from_ehdr(&object, ehdr)?))
                 } else {
-                    let mut dynamic = self.load_dynamic_from_ehdr(&object, ehdr)?;
-                    self.inner
-                        .observer
-                        .on_dynamic_loaded(DynamicLoadedEvent::new(&mut dynamic))?;
+                    let dynamic = self.load_dynamic_from_ehdr(&object, ehdr)?;
                     Ok(RawElf::Dylib(RawDylib::from_dynamic(dynamic)))
                 }
             }
@@ -199,18 +200,8 @@ where
     {
         let object = input.into_reader()?;
         let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Dylib)?;
-        let mut dynamic = self.load_dynamic_from_ehdr(&object, ehdr)?;
-        self.inner
-            .observer
-            .on_dynamic_loaded(DynamicLoadedEvent::new(&mut dynamic))?;
+        let dynamic = self.load_dynamic_from_ehdr(&object, ehdr)?;
         let dylib = RawDylib::from_dynamic(dynamic);
-
-        logging::info!(
-            "Loaded dylib: {} at [{}-{}]",
-            dylib.name(),
-            dylib.mapped_base(),
-            dylib.mapped_base() + VmOffset::new(dylib.mapped_len())
-        );
 
         Ok(dylib)
     }
@@ -229,10 +220,7 @@ where
         logging::debug!("Loading dynamic image: {}", object.path());
 
         let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Dynamic)?;
-        let mut image = self.load_dynamic_from_ehdr(&object, ehdr)?;
-        self.inner
-            .observer
-            .on_dynamic_loaded(DynamicLoadedEvent::new(&mut image))?;
+        let image = self.load_dynamic_from_ehdr(&object, ehdr)?;
 
         logging::info!(
             "Loaded dynamic image: {} at [{}-{}]",
@@ -254,10 +242,32 @@ where
             return Err(ParsePhdrError::MissingDynamicSection.into());
         }
 
-        let builder = self
-            .inner
-            .create_builder::<Tls>(ehdr, phdrs, object, D::default())?;
-        RawDynamic::from_builder(builder, phdrs)
+        let path = PathBuf::from(object.path());
+        let mut user_data = D::default();
+        self.inner
+            .observer
+            .on_before_dynamic_load(BeforeDynamicLoadEvent::new(
+                path.as_path(),
+                &ehdr,
+                phdrs,
+                &mut user_data,
+            ))?;
+        let page_size = self.inner.page_size()?.bytes();
+        let segments = ProgramSegments::load(
+            phdrs,
+            ehdr.is_dylib(),
+            self.inner.mapper(),
+            object,
+            page_size,
+        )?;
+        let force_static_tls = self.inner.force_static_tls();
+        let builder: ImageBuilder<Tls, D, Arch, M::Region> =
+            ImageBuilder::new(segments, path, ehdr, force_static_tls, page_size, user_data);
+        let mut image = RawDynamic::from_builder(builder, phdrs)?;
+        self.inner
+            .observer
+            .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
+        Ok(image)
     }
 
     /// Maps a previously scanned dynamic image without rereading its ELF header
@@ -269,10 +279,39 @@ where
         &mut self,
         scanned: ScannedDynamic<Arch>,
     ) -> Result<RawDynamic<D, Arch, M::Region>> {
-        let mut image = self.load_scanned_dynamic_raw_impl(scanned)?;
+        let crate::image::ScannedDynamicLoadParts {
+            ehdr,
+            phdrs,
+            reader,
+        } = scanned.into_load_parts();
+
+        logging::debug!("Loading scanned dynamic image: {}", reader.path());
+
+        let path = PathBuf::from(reader.path());
+        let mut user_data = D::default();
         self.inner
             .observer
-            .on_dynamic_loaded(DynamicLoadedEvent::new(&mut image))?;
+            .on_before_dynamic_load(BeforeDynamicLoadEvent::new(
+                path.as_path(),
+                &ehdr,
+                &phdrs,
+                &mut user_data,
+            ))?;
+        let page_size = self.inner.page_size()?.bytes();
+        let segments = ProgramSegments::load(
+            &phdrs,
+            ehdr.is_dylib(),
+            self.inner.mapper(),
+            &reader,
+            page_size,
+        )?;
+        let force_static_tls = self.inner.force_static_tls();
+        let builder: ImageBuilder<Tls, D, Arch, M::Region> =
+            ImageBuilder::new(segments, path, ehdr, force_static_tls, page_size, user_data);
+        let mut image = RawDynamic::from_builder(builder, &phdrs)?;
+        self.inner
+            .observer
+            .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
 
         logging::info!(
             "Loaded scanned dynamic image: {} at [{}-{}]",
@@ -282,24 +321,6 @@ where
         );
 
         Ok(image)
-    }
-
-    pub(crate) fn load_scanned_dynamic_raw_impl(
-        &mut self,
-        scanned: ScannedDynamic<Arch>,
-    ) -> Result<RawDynamic<D, Arch, M::Region>> {
-        let ScannedDynamicLoadParts {
-            ehdr,
-            phdrs,
-            reader,
-        } = scanned.into_load_parts();
-
-        logging::debug!("Loading scanned dynamic image: {}", reader.path());
-
-        let builder = self
-            .inner
-            .create_builder::<Tls>(ehdr, &phdrs, &reader, D::default())?;
-        RawDynamic::from_builder(builder, &phdrs)
     }
 
     /// Creates a raw dynamic image from an ELF object that is already mapped.
@@ -346,10 +367,10 @@ where
             D::default(),
             page_size,
         )?;
-        let mut image = RawDynamic::from_parts::<Tls, _>(parts, &mut self.inner.observer)?;
+        let mut image = RawDynamic::from_parts::<Tls>(parts)?;
         self.inner
             .observer
-            .on_dynamic_loaded(DynamicLoadedEvent::new(&mut image))?;
+            .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
 
         logging::info!(
             "Borrowed dynamic image: {} at [{}-{}]",
@@ -393,14 +414,34 @@ where
         let phdrs = self.buf.prepare_phdrs(&ehdr, object)?.unwrap_or_default();
         let has_dynamic = has_dynamic_phdr(phdrs);
 
-        let builder = self
-            .inner
-            .create_builder::<Tls>(ehdr, phdrs, object, D::default())?;
+        let path = PathBuf::from(object.path());
+        let mut user_data = D::default();
+        if has_dynamic {
+            self.inner
+                .observer
+                .on_before_dynamic_load(BeforeDynamicLoadEvent::new(
+                    path.as_path(),
+                    &ehdr,
+                    phdrs,
+                    &mut user_data,
+                ))?;
+        }
+        let page_size = self.inner.page_size()?.bytes();
+        let segments = ProgramSegments::load(
+            phdrs,
+            ehdr.is_dylib(),
+            self.inner.mapper(),
+            object,
+            page_size,
+        )?;
+        let force_static_tls = self.inner.force_static_tls();
+        let builder: ImageBuilder<Tls, D, Arch, M::Region> =
+            ImageBuilder::new(segments, path, ehdr, force_static_tls, page_size, user_data);
         let mut exec = RawExec::from_builder(builder, phdrs, has_dynamic)?;
         if let RawExec::Dynamic(dynamic) = &mut exec {
             self.inner
                 .observer
-                .on_dynamic_loaded(DynamicLoadedEvent::new(dynamic))?;
+                .on_after_dynamic_load(AfterDynamicLoadEvent::new(dynamic))?;
         }
 
         logging::debug!(

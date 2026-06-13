@@ -5,14 +5,14 @@ use crate::sync::{Arc, AtomicBool};
 use crate::{
     ParseDynamicError, ParsePhdrError, Result,
     elf::{
-        ElfDyn, ElfDynamic, ElfLayout, ElfPhdr, ElfPhdrs, ElfStringTable, ElfSymbol, HashTable,
-        Lifecycle, LifecycleSpec, SymbolTable,
+        ElfDyn, ElfDynamic, ElfDynamicTag, ElfLayout, ElfPhdr, ElfPhdrs, ElfStringTable, ElfSymbol,
+        HashTable, Lifecycle, LifecycleSpec, SymbolTable,
     },
     input::{Path, PathBuf},
     loader::ImageBuilder,
     logging,
-    memory::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
-    observer::{DtDebugEntry, InitEvent, LoadObserver, RelocationObserver},
+    memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr, VmOffset},
+    observer::{InitEvent, RelocationObserver},
     relocation::{
         DynamicRelocation, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
     },
@@ -152,6 +152,9 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
 
     /// Runtime address of the dynamic section.
     dynamic_addr: VmAddr,
+
+    /// Runtime address of the DT_DEBUG entry, when present.
+    dt_debug_addr: Option<VmAddr>,
 
     /// Initialization functions to resolve after relocation.
     init: LifecycleSpec,
@@ -421,6 +424,26 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         self.extra.dynamic_addr
     }
 
+    /// Returns the runtime address of the `DT_DEBUG` dynamic entry, when present.
+    #[inline]
+    pub fn dt_debug_addr(&self) -> Option<VmAddr> {
+        self.extra.dt_debug_addr
+    }
+
+    /// Writes the runtime address of an externally owned `r_debug` object into `DT_DEBUG`.
+    ///
+    /// Returns `Ok(true)` when this image has a `DT_DEBUG` entry and it was patched,
+    /// or `Ok(false)` when no `DT_DEBUG` entry exists.
+    #[inline]
+    pub fn write_dt_debug_addr(&self, addr: VmAddr) -> Result<bool> {
+        let Some(dt_debug_addr) = self.dt_debug_addr() else {
+            return Ok(false);
+        };
+        let entry = ElfDyn::<Arch::Layout>::new(ElfDynamicTag::DEBUG, addr.get());
+        unsafe { ImageMemory::write_value(self.module.segments(), dt_debug_addr, entry)? };
+        Ok(true)
+    }
+
     #[inline]
     pub(crate) fn symtab(&self) -> &SymbolTable<Arch::Layout> {
         &self.extra.symtab
@@ -434,13 +457,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
-    pub(crate) fn from_parts<Tls, Obs>(
-        parts: RawDynamicParts<D, Arch, R>,
-        observer: &mut Obs,
-    ) -> Result<Self>
+    pub(crate) fn from_parts<Tls>(parts: RawDynamicParts<D, Arch, R>) -> Result<Self>
     where
         Tls: TlsResolver,
-        Obs: LoadObserver<D, Arch> + ?Sized,
     {
         let RawDynamicParts {
             path,
@@ -458,9 +477,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         } = parts;
 
         let dynamic = ElfDynamic::<Arch>::new(dynamic, dynamic_addr, &segments)?;
-        if let Some(addr) = dynamic.dt_debug_addr {
-            observer.on_dt_debug(DtDebugEntry::new(addr, &segments))?;
-        }
 
         logging::trace!("[{}] Dynamic info: {:?}", path, dynamic);
 
@@ -508,6 +524,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                 lazy: cfg!(feature = "lazy-binding") && !dynamic.bind_now,
                 relro,
                 dynamic_addr,
+                dt_debug_addr: dynamic.dt_debug_addr,
                 relocation,
                 init: dynamic.init,
                 fini: dynamic.fini,
@@ -556,12 +573,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     /// Build a dynamic image from the intermediate loader state.
-    pub(crate) fn from_builder<'obs, Obs, Tls>(
-        mut builder: ImageBuilder<'obs, Obs, Tls, D, Arch, R>,
+    pub(crate) fn from_builder<Tls>(
+        mut builder: ImageBuilder<Tls, D, Arch, R>,
         phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where
-        Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
     {
         // Parse all program headers
@@ -591,7 +607,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             segments: builder.segments,
             user_data: builder.user_data,
         };
-        Self::from_parts::<Tls, _>(parts, builder.observer)
+        Self::from_parts::<Tls>(parts)
     }
 }
 

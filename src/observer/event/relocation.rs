@@ -2,15 +2,13 @@ use super::lifecycle::{Finalizer, FiniEvent};
 use crate::{
     Result,
     arch::NativeArch,
-    elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol, Lifecycle},
+    elf::{ElfRelType, ElfSymbol, Lifecycle},
     image::ElfCore,
     input::Path,
-    memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
+    memory::{HostRegion, RegionAccess, VmAddr},
     relocation::RelocationArch,
-    segment::ElfSegments,
     tls::{TlsModuleId, TlsTpOffset},
 };
-use core::marker::PhantomData;
 
 /// Runtime linker state change notification.
 ///
@@ -24,40 +22,6 @@ pub enum LinkActivity {
     Delete,
     /// The loaded module set is stable.
     Consistent,
-}
-
-/// A mutable `DT_DEBUG` dynamic entry discovered in an image.
-///
-/// The observer decides whether and how to patch it. This keeps debugger-facing
-/// state such as `r_debug` and `link_map` owned by the embedding runtime.
-pub struct DtDebugEntry<'a, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
-    addr: VmAddr,
-    segments: &'a ElfSegments<R>,
-    _marker: PhantomData<fn() -> Arch>,
-}
-
-impl<'a, Arch: RelocationArch, R: RegionAccess> DtDebugEntry<'a, Arch, R> {
-    #[inline]
-    pub(crate) const fn new(addr: VmAddr, segments: &'a ElfSegments<R>) -> Self {
-        Self {
-            addr,
-            segments,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Returns the runtime address of the `DT_DEBUG` dynamic entry.
-    #[inline]
-    pub const fn addr(&self) -> VmAddr {
-        self.addr
-    }
-
-    /// Writes the runtime address of an externally owned `r_debug` object.
-    #[inline]
-    pub fn write_r_debug_addr(&self, addr: VmAddr) -> Result<()> {
-        let entry = ElfDyn::<Arch::Layout>::new(ElfDynamicTag::DEBUG, addr.get());
-        unsafe { ImageMemory::write_value(self.segments, self.addr, entry) }
-    }
 }
 
 /// Ordinary symbol relocation binding event.

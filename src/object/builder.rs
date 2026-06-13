@@ -7,9 +7,7 @@ use crate::{
     RelocationError, Result,
     elf::{ElfSectionType, ElfShdr, Lifecycle},
     input::PathBuf,
-    loader::LoaderInner,
     memory::{HostRegion, RegionAccess, VmAddr},
-    observer::LoadObserver,
     relocation::ObjectRelocationArch,
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
@@ -117,37 +115,5 @@ where
             _marker_tls: PhantomData,
             _marker_arch: PhantomData,
         })
-    }
-}
-
-impl<Obs, D, Arch, M> LoaderInner<Obs, D, Arch, M>
-where
-    Obs: LoadObserver<D, Arch>,
-    D: Default + 'static,
-    Arch: crate::relocation::ObjectRelocationArch,
-    M: crate::os::Mmap,
-{
-    pub(crate) fn create_object_builder<Tls>(
-        &mut self,
-        mut sections: ObjectSections<Arch::Layout>,
-        object: impl crate::input::ElfReader,
-        user_data: D,
-    ) -> Result<ObjectBuilder<Tls, D, Arch, M::Region>>
-    where
-        Tls: TlsResolver,
-    {
-        let path = PathBuf::from(object.path());
-        let page_size = self.page_size()?.bytes();
-        let mut shdr_segments = SectionSegments::<Arch>::new::<D, _>(
-            &mut sections,
-            &object,
-            page_size,
-            &mut self.observer,
-        )?;
-        let mapper = self.mapper();
-        let segments = shdr_segments.load_segments(mapper, &object)?;
-        shdr_segments.rebase_loaded_sections(sections.headers_mut(), &segments);
-
-        ObjectBuilder::new(path, sections, segments, shdr_segments, user_data)
     }
 }

@@ -3,14 +3,14 @@ use crate::{
         ElfHeader, ElfLayout, ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout,
         SymbolTableView,
     },
-    image::{ElfCore, SymbolExports, exports_handle},
+    image::{ElfCore, RawObject, SymbolExports, exports_handle},
     input::{ElfReader, ElfReaderExt, Path},
     memory::{HostRegion, RegionAccess},
     object::{
         CustomHash, ObjectExports, ObjectSections,
         layout::{SectionGroup, SectionGroups, SectionLifetime, SectionPlacement},
     },
-    relocation::RelocationArch,
+    relocation::{ObjectRelocationArch, RelocationArch},
     sync::Arc,
 };
 use alloc::vec::Vec;
@@ -121,6 +121,40 @@ impl<'event, L: ElfLayout> SectionLayoutEvent<'event, L> {
     }
 }
 
+/// Relocatable-object event emitted after an object has been mapped and parsed,
+/// before relocation.
+pub struct AfterObjectLoadEvent<
+    'event,
+    D: 'static,
+    Arch: ObjectRelocationArch,
+    R: RegionAccess = HostRegion,
+> {
+    raw: &'event mut RawObject<D, Arch, R>,
+}
+
+impl<'event, D: 'static, Arch, R> AfterObjectLoadEvent<'event, D, Arch, R>
+where
+    Arch: ObjectRelocationArch,
+    R: RegionAccess,
+{
+    #[inline]
+    pub(crate) const fn new(raw: &'event mut RawObject<D, Arch, R>) -> Self {
+        Self { raw }
+    }
+
+    /// Returns the loaded relocatable object.
+    #[inline]
+    pub const fn raw(&self) -> &RawObject<D, Arch, R> {
+        self.raw
+    }
+
+    /// Returns the mutable loaded relocatable object.
+    #[inline]
+    pub fn raw_mut(&mut self) -> &mut RawObject<D, Arch, R> {
+        self.raw
+    }
+}
+
 /// Relocated-object event emitted after relocation and before memory protection
 /// and initialization.
 ///
@@ -203,16 +237,16 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess>
     }
 }
 
-/// Relocatable-object metadata observed after section-header validation and
+/// Event emitted after relocatable-object section headers are validated and
 /// before section contents are mapped.
-pub struct ObjectMetadataEvent<'event, D: 'static, L: ElfLayout = NativeElfLayout> {
+pub struct BeforeObjectLoadEvent<'event, D: 'static, L: ElfLayout = NativeElfLayout> {
     ehdr: &'event ElfHeader<L>,
     sections: &'event mut ObjectSections<L>,
     object: &'event dyn ElfReader,
     user_data: &'event mut D,
 }
 
-impl<'event, D: 'static, L: ElfLayout> ObjectMetadataEvent<'event, D, L> {
+impl<'event, D: 'static, L: ElfLayout> BeforeObjectLoadEvent<'event, D, L> {
     #[inline]
     pub(crate) fn new(
         ehdr: &'event ElfHeader<L>,

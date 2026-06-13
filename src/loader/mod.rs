@@ -21,4 +21,3 @@ pub(crate) use builder::{ImageBuilder, ScanBuilder};
 #[cfg(feature = "object")]
 pub(crate) use load::ExpectedElf;
 pub use loader::Loader;
-pub(crate) use loader::LoaderInner;

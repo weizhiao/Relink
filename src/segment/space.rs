@@ -169,12 +169,6 @@ impl<R: RegionAccess> ElfSegments<R> {
         Some((self.region.addr().get() as *mut _, self.region.len()))
     }
 
-    /// Returns whether no ranges are mapped.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.ranges.is_empty()
-    }
-
     /// Returns the lowest runtime address covered by this image's mapped ranges.
     #[inline]
     pub fn mapped_base(&self) -> VmAddr {
