@@ -20,7 +20,7 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 use core::{cell::OnceCell, ptr::NonNull};
 
-use super::{ElfCore, LoadedCore, core::CoreInner};
+use crate::image::{ElfCore, LoadedCore, core::CoreInner};
 
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch> {

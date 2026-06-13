@@ -21,7 +21,7 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 use core::{borrow::Borrow, cell::OnceCell, fmt::Debug, ops::Deref};
 
-use super::{CoreInner, ElfCore, LoadedCore, ModuleHandle};
+use crate::image::{ElfCore, LoadedCore, ModuleHandle, core::CoreInner};
 
 /// A relocatable ELF object.
 ///

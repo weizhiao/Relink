@@ -1,7 +1,14 @@
+mod dylib;
+mod dynamic;
+mod exec;
+#[cfg(feature = "object")]
+mod object;
+
 use crate::{
     Result,
     arch::NativeArch,
     elf::ElfPhdr,
+    image::LoadedCore,
     input::Path,
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
@@ -11,9 +18,15 @@ use crate::{
     },
 };
 
-use super::{LoadedCore, LoadedExec, RawDylib, RawExec};
+pub use dylib::RawDylib;
+pub(crate) use dynamic::DynamicInfo;
+#[cfg(feature = "lazy-binding")]
+pub(crate) use dynamic::LazyBindingInfo;
+pub use dynamic::RawDynamic;
+pub(crate) use dynamic::RawDynamicParts;
+pub use exec::{LoadedExec, RawExec, StaticExec};
 #[cfg(feature = "object")]
-use super::{LoadedObject, RawObject};
+pub use object::{LoadedObject, RawObject};
 
 /// A mapped but unrelocated ELF image.
 ///
