@@ -245,3 +245,57 @@ fn object_exports_survive_init_symtab_metadata() {
         "runtime object exports should survive init metadata release"
     );
 }
+
+#[cfg(all(feature = "object", target_arch = "x86_64"))]
+#[test]
+fn object_relocated_event_can_clear_default_exports() {
+    use elf_loader::{
+        Result,
+        arch::NativeArch,
+        memory::RegionAccess,
+        observer::{ObjectRelocatedEvent, RelocationObserver},
+    };
+    use gen_elf::{Arch, ObjectWriter, SymbolDesc};
+    use support::host_symbols::LOCAL_VAR_NAME;
+
+    struct ClearExports;
+
+    impl RelocationObserver for ClearExports {
+        fn on_object_relocated<D: 'static, R: RegionAccess>(
+            &mut self,
+            event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R>,
+        ) -> Result<()> {
+            let symtab = event.symtab();
+            assert!(
+                (0..symtab.symbols().len())
+                    .any(|idx| symtab.symbol_idx(idx).1.name() == LOCAL_VAR_NAME),
+                "relocated object symbol table should include the global object symbol"
+            );
+            event.clear_exports();
+            Ok(())
+        }
+    }
+
+    let object_file = ObjectWriter::new(Arch::current())
+        .write(
+            &[SymbolDesc::global_object(LOCAL_VAR_NAME, &[0u8; 0x40])],
+            &[],
+        )
+        .expect("failed to generate object");
+
+    let loaded_object = elf_loader::Loader::new()
+        .load_object(elf_loader::input::ElfBinary::new(
+            "test_static_clear_exports.o",
+            &object_file.data,
+        ))
+        .expect("failed to load object")
+        .relocator()
+        .observer(ClearExports)
+        .relocate()
+        .expect("relocation failed");
+
+    assert!(
+        unsafe { loaded_object.get::<i32>(LOCAL_VAR_NAME) }.is_none(),
+        "object export event should be able to replace the default exports"
+    );
+}

@@ -664,11 +664,6 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
         self.pltgot.take().expect("PLTGOT already taken")
     }
 
-    #[inline]
-    pub(crate) fn section_lifetime(&self, id: ElfSectionId) -> Option<SectionLifetime> {
-        self.section_lifetimes.get(id.index()).copied()
-    }
-
     pub(crate) fn load_segments<M>(
         &mut self,
         mapper: &M,

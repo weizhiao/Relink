@@ -388,7 +388,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> TlsDescBindingEvent<
 }
 
 /// Event emitted after a dynamic image has been relocated.
-pub struct ModuleRelocatedEvent<
+pub struct DynamicRelocatedEvent<
     'a,
     D: 'static,
     Arch: RelocationArch = NativeArch,
@@ -399,7 +399,7 @@ pub struct ModuleRelocatedEvent<
     finalizer: Finalizer<Arch>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> ModuleRelocatedEvent<'a, D, Arch, R> {
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> DynamicRelocatedEvent<'a, D, Arch, R> {
     #[inline]
     pub(crate) const fn new(
         core: &'a ElfCore<D, Arch, R>,

@@ -4,8 +4,6 @@ use crate::memory::{ImageMemory, MappedView};
 use crate::object::{CustomHash, section_bytes, section_entries_mut};
 use core::fmt::Debug;
 
-static EMPTY_STRTAB: [u8; 1] = [0];
-
 /// Relocation workspace for relocatable-object symbols.
 pub(crate) struct ObjectSymbolTable<L: ElfLayout> {
     hashtab: CustomHash,
@@ -23,14 +21,6 @@ impl<L: ElfLayout> Debug for ObjectSymbolTable<L> {
 }
 
 impl<L: ElfLayout> ObjectSymbolTable<L> {
-    pub(crate) fn empty_object() -> Self {
-        Self {
-            hashtab: CustomHash::empty(),
-            symbols: &mut [],
-            strtab: ElfStringTable::new(MappedView::from_slice(&EMPTY_STRTAB)),
-        }
-    }
-
     /// Creates a symbol table from section headers, typically used for relocatable objects.
     pub(crate) fn from_shdrs<Memory>(
         symtab: &ElfShdr<L>,

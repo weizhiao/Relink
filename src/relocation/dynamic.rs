@@ -5,7 +5,7 @@ use crate::{
     image::{LoadedCore, RawDynamic},
     logging,
     memory::{ImageMemory, MappedView, RegionAccess, VmOffset},
-    observer::{Finalizer, LinkActivity, ModuleRelocatedEvent, RelocationObserver},
+    observer::{DynamicRelocatedEvent, Finalizer, LinkActivity, RelocationObserver},
     relocation::{
         BindingMode, RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, ResolvedBinding,
         likely, reloc_error, unlikely,
@@ -108,10 +108,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
         self.apply_relro(&binding)?;
         self.install_lazy_lookup(binding, scope.clone())?;
-        let mut module_event =
-            ModuleRelocatedEvent::new(self.core_ref(), self.dynamic_addr(), finalizer);
-        observer.on_module_relocated(&mut module_event)?;
-        self.core_ref().set_finalizer(module_event.into_finalizer());
+        let mut dynamic_event =
+            DynamicRelocatedEvent::new(self.core_ref(), self.dynamic_addr(), finalizer);
+        observer.on_dynamic_relocated(&mut dynamic_event)?;
+        self.core_ref()
+            .set_finalizer(dynamic_event.into_finalizer());
         observer.on_activity(LinkActivity::Consistent)?;
 
         logging::debug!("Preparing initialization functions for {}", self.name());

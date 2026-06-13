@@ -19,11 +19,11 @@ use crate::{
 };
 
 pub use dylib::RawDylib;
+pub(crate) use dynamic::DynamicInfo;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use dynamic::LazyBindingInfo;
 pub use dynamic::RawDynamic;
 pub(crate) use dynamic::RawDynamicParts;
-pub(crate) use dynamic::{DynamicInfo, load_dynamic_symtab};
 pub use exec::{LoadedExec, RawExec, StaticExec};
 #[cfg(feature = "object")]
 pub use object::{LoadedObject, RawObject};

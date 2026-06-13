@@ -1,8 +1,8 @@
 use super::CoreInner;
 use crate::{
     Result,
-    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, PreCompute, SymbolInfo},
-    image::{DynamicInfo, Module, SymbolExports, exports_handle, load_dynamic_symtab},
+    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, PreCompute, SymbolInfo, SymbolTable},
+    image::{DynamicInfo, Module, SymbolExports, exports_handle},
     input::{Path, PathBuf},
     memory::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     observer::Finalizer,
@@ -258,7 +258,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     ) -> Result<Self> {
         segments.set_base(base);
         let dynamic = ElfDynamic::<Arch>::new(dynamic_entries, dynamic_addr, &segments)?;
-        let symtab = load_dynamic_symtab(&dynamic, &segments)?;
+        let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
         let exports = symtab.clone();
         #[cfg(feature = "lazy-binding")]
         let lazy_symtab = symtab.clone();

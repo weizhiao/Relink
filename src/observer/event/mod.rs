@@ -10,9 +10,9 @@ pub use crate::object::layout::{SectionGroup, SectionLifetime};
 pub use lifecycle::{FiniEvent, InitEvent};
 pub use load::{DynamicLoadedEvent, ProgramHeaderEvent, StagedDynamic};
 #[cfg(feature = "object")]
-pub use object::{ObjectMetadataEvent, SectionLayoutEvent};
+pub use object::{ObjectMetadataEvent, ObjectRelocatedEvent, SectionLayoutEvent};
 pub use relocation::{
-    DtDebugEntry, IfuncBindingEvent, LinkActivity, ModuleRelocatedEvent, SymbolBindingEvent,
+    DtDebugEntry, DynamicRelocatedEvent, IfuncBindingEvent, LinkActivity, SymbolBindingEvent,
     TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
 };
 pub use resolve::{ResolveDependencyEvent, ResolveRootEvent};

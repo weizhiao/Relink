@@ -1,10 +1,17 @@
 use crate::{
-    elf::{ElfHeader, ElfLayout, ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout},
+    elf::{
+        ElfHeader, ElfLayout, ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout,
+        SymbolTableView,
+    },
+    image::{ElfCore, SymbolExports, exports_handle},
     input::{ElfReader, ElfReaderExt, Path},
+    memory::{HostRegion, RegionAccess},
     object::{
-        ObjectSections,
+        CustomHash, ObjectExports, ObjectSections,
         layout::{SectionGroup, SectionGroups, SectionLifetime, SectionPlacement},
     },
+    relocation::RelocationArch,
+    sync::Arc,
 };
 use alloc::vec::Vec;
 use core::ffi::CStr;
@@ -111,6 +118,88 @@ impl<'event, L: ElfLayout> SectionLayoutEvent<'event, L> {
     #[inline]
     pub fn find_section(&self, name: &str) -> Option<ElfSectionId> {
         self.sections.find_section(name)
+    }
+}
+
+/// Relocated-object event emitted after relocation and before memory protection
+/// and initialization.
+///
+/// The event exposes relocated section headers and the object symbol table.
+/// Observers may install any [`SymbolExports`] implementation, including a
+/// backend derived from custom metadata such as kernel export tables. If no
+/// exports are installed, the object loader builds the default exports after
+/// observers return.
+pub struct ObjectRelocatedEvent<
+    'event,
+    D: 'static,
+    Arch: RelocationArch,
+    R: RegionAccess = HostRegion,
+> {
+    core: &'event ElfCore<D, Arch, R>,
+    shdrs: &'event [ElfShdr<Arch::Layout>],
+    symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
+    exports: Option<Arc<dyn SymbolExports<Arch>>>,
+}
+
+impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess>
+    ObjectRelocatedEvent<'event, D, Arch, R>
+{
+    #[inline]
+    pub(crate) fn new(
+        core: &'event ElfCore<D, Arch, R>,
+        shdrs: &'event [ElfShdr<Arch::Layout>],
+        symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
+    ) -> Self {
+        Self {
+            core,
+            shdrs,
+            symtab,
+            exports: None,
+        }
+    }
+
+    /// Returns the relocated object core.
+    #[inline]
+    pub const fn core(&self) -> &ElfCore<D, Arch, R> {
+        self.core
+    }
+
+    /// Returns relocated section headers in table order.
+    #[inline]
+    pub const fn sections(&self) -> &'event [ElfShdr<Arch::Layout>] {
+        self.shdrs
+    }
+
+    /// Returns one relocated section header by id.
+    #[inline]
+    pub fn section(&self, id: ElfSectionId) -> &ElfShdr<Arch::Layout> {
+        &self.shdrs[id.index()]
+    }
+
+    /// Returns the relocated object symbol table view.
+    #[inline]
+    pub const fn symtab(&self) -> SymbolTableView<'event, Arch::Layout, CustomHash> {
+        self.symtab
+    }
+
+    /// Replaces runtime exports with a custom backend.
+    #[inline]
+    pub fn set_exports<E>(&mut self, exports: E)
+    where
+        E: SymbolExports<Arch> + 'static,
+    {
+        self.exports = Some(exports_handle(exports));
+    }
+
+    /// Clears all runtime exports.
+    #[inline]
+    pub fn clear_exports(&mut self) {
+        self.set_exports(ObjectExports::<Arch::Layout>::empty());
+    }
+
+    #[inline]
+    pub(crate) fn into_exports(self) -> Option<Arc<dyn SymbolExports<Arch>>> {
+        self.exports
     }
 }
 

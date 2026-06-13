@@ -5,8 +5,8 @@ use crate::sync::{Arc, AtomicBool};
 use crate::{
     ParseDynamicError, ParsePhdrError, Result,
     elf::{
-        ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfStringTable, ElfSymbol, HashTable, Lifecycle,
-        LifecycleSpec, SymbolTable,
+        ElfDyn, ElfDynamic, ElfLayout, ElfPhdr, ElfPhdrs, ElfStringTable, ElfSymbol, HashTable,
+        Lifecycle, LifecycleSpec, SymbolTable,
     },
     input::{Path, PathBuf},
     loader::ImageBuilder,
@@ -25,60 +25,62 @@ use core::{cell::OnceCell, mem::size_of, ptr::NonNull};
 
 use crate::image::{ElfCore, LoadedCore, core::CoreInner, exports_handle};
 
-pub(crate) fn load_dynamic_symtab<Arch, R>(
-    dynamic: &ElfDynamic<Arch>,
-    segments: &ElfSegments<R>,
-) -> Result<SymbolTable<Arch::Layout>>
-where
-    Arch: RelocationArch,
-    R: RegionAccess,
-{
-    let hashtab = HashTable::from_dynamic(dynamic, segments)?;
-    let symbol_count = hashtab.count_syms();
+impl<L: ElfLayout> SymbolTable<L> {
+    pub(crate) fn from_dynamic<Arch, R>(
+        dynamic: &ElfDynamic<Arch>,
+        segments: &ElfSegments<R>,
+    ) -> Result<Self>
+    where
+        Arch: RelocationArch<Layout = L>,
+        R: RegionAccess,
+    {
+        let hashtab = HashTable::from_dynamic(dynamic, segments)?;
+        let symbol_count = hashtab.count_syms();
 
-    let symtab_off = dynamic
-        .symtab
-        .checked_offset_from(segments.base())
-        .ok_or(ParseDynamicError::AddressOverflow)?;
-    let symtab_size = symbol_count
-        .checked_mul(size_of::<ElfSymbol<Arch::Layout>>())
-        .ok_or(ParseDynamicError::AddressOverflow)?;
-    let symbols = segments
-        .read_view::<ElfSymbol<Arch::Layout>>(symtab_off, symtab_size)
-        .ok_or(ParseDynamicError::MalformedSymbolTable {
-            detail: "DT_SYMTAB symbol table size is malformed",
-        })?
-        .as_slice();
+        let symtab_off = dynamic
+            .symtab
+            .checked_offset_from(segments.base())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let symtab_size = symbol_count
+            .checked_mul(size_of::<ElfSymbol<L>>())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let symbols = segments
+            .read_view::<ElfSymbol<L>>(symtab_off, symtab_size)
+            .ok_or(ParseDynamicError::MalformedSymbolTable {
+                detail: "DT_SYMTAB symbol table size is malformed",
+            })?
+            .as_slice();
 
-    let strtab_size = dynamic
-        .strtab_size
-        .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_STRSZ" })?;
-    let strtab_off = dynamic
-        .strtab
-        .checked_offset_from(segments.base())
-        .ok_or(ParseDynamicError::AddressOverflow)?;
-    let strtab = segments
-        .read_view::<u8>(strtab_off, strtab_size.get())
-        .ok_or(ParseDynamicError::MalformedStringTable {
-            detail: "DT_STRTAB string table size is malformed",
-        })?;
-    let strtab = ElfStringTable::new(strtab);
+        let strtab_size = dynamic
+            .strtab_size
+            .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_STRSZ" })?;
+        let strtab_off = dynamic
+            .strtab
+            .checked_offset_from(segments.base())
+            .ok_or(ParseDynamicError::AddressOverflow)?;
+        let strtab = segments
+            .read_view::<u8>(strtab_off, strtab_size.get())
+            .ok_or(ParseDynamicError::MalformedStringTable {
+                detail: "DT_STRTAB string table size is malformed",
+            })?;
+        let strtab = ElfStringTable::new(strtab);
 
-    #[cfg(feature = "version")]
-    let version = crate::elf::version::ELFVersion::new(
-        dynamic.version_idx,
-        dynamic.verneed,
-        dynamic.verdef,
-        &strtab,
-    );
-
-    Ok(SymbolTable {
-        hashtab,
-        symbols,
-        strtab,
         #[cfg(feature = "version")]
-        version,
-    })
+        let version = crate::elf::version::ELFVersion::new(
+            dynamic.version_idx,
+            dynamic.verneed,
+            dynamic.verdef,
+            &strtab,
+        );
+
+        Ok(Self {
+            hashtab,
+            symbols,
+            strtab,
+            #[cfg(feature = "version")]
+            version,
+        })
+    }
 }
 
 #[cfg(feature = "lazy-binding")]
@@ -471,7 +473,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         )?;
 
         let static_tls = force_static_tls | dynamic.static_tls;
-        let symtab = load_dynamic_symtab(&dynamic, &segments)?;
+        let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
         let exports = symtab.clone();
         #[cfg(feature = "lazy-binding")]
         let lazy_symtab = symtab.clone();

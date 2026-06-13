@@ -1,11 +1,11 @@
 use super::{
     ObjectSections, ObjectSymbolTable,
-    layout::{ObjectSegmentView, ObjectSegments, PltGotSection, SectionLifetime, SectionSegments},
+    layout::{ObjectSegmentView, ObjectSegments, PltGotSection, SectionSegments},
     section_entries,
 };
 use crate::{
     RelocationError, Result,
-    elf::{ElfSectionId, ElfSectionType, ElfShdr, Lifecycle},
+    elf::{ElfSectionType, ElfShdr, Lifecycle},
     input::PathBuf,
     loader::LoaderInner,
     memory::{HostRegion, RegionAccess, VmAddr},
@@ -26,7 +26,6 @@ pub(crate) struct ObjectBuilder<
     pub(crate) path: PathBuf,
     pub(crate) shdrs: Vec<ElfShdr<Arch::Layout>>,
     pub(crate) symtab: ObjectSymbolTable<Arch::Layout>,
-    pub(crate) discard_symtab_after_init: bool,
     pub(crate) init: Lifecycle,
     pub(crate) segments: ObjectSegments<R>,
     pub(crate) mprotect: Box<dyn for<'segments> Fn(&ObjectSegmentView<'segments, R>) -> Result<()>>,
@@ -87,27 +86,6 @@ where
         })
     }
 
-    fn symtab_uses_init_memory(
-        shdrs: &[ElfShdr<Arch::Layout>],
-        shdr_segments: &SectionSegments<Arch>,
-    ) -> bool {
-        for (index, shdr) in shdrs.iter().enumerate() {
-            if shdr.section_type() != ElfSectionType::SYMTAB {
-                continue;
-            }
-
-            let symtab_id = ElfSectionId::new(index);
-            let strtab_id = ElfSectionId::new(shdr.sh_link() as usize);
-            if shdr_segments.section_lifetime(symtab_id) == Some(SectionLifetime::Init)
-                || shdr_segments.section_lifetime(strtab_id) == Some(SectionLifetime::Init)
-            {
-                return true;
-            }
-        }
-
-        false
-    }
-
     pub(crate) fn new(
         path: PathBuf,
         mut sections: ObjectSections<Arch::Layout>,
@@ -116,7 +94,6 @@ where
         user_data: D,
     ) -> Result<Self> {
         let shdrs = sections.headers_mut();
-        let discard_symtab_after_init = Self::symtab_uses_init_memory(shdrs, &shdr_segments);
         let pltgot = shdr_segments.take_pltgot();
         let ObjectSectionData { symtab, init } = {
             let memory = segments.view();
@@ -130,7 +107,6 @@ where
             path,
             shdrs,
             symtab,
-            discard_symtab_after_init,
             segments,
             mprotect,
             pltgot,

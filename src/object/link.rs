@@ -4,11 +4,11 @@ use crate::{
         ElfLayout, ElfRelEntry, ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr,
         ElfSymbol, ElfSymbolType, ElfWord,
     },
-    image::{ModuleScope, RawObject},
+    image::{ModuleScope, RawObject, SymbolExports, exports_handle},
     logging,
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     object::{ObjectExports, ObjectSegmentView, section_entries},
-    observer::{InitEvent, RelocationObserver, SymbolBindingEvent},
+    observer::{InitEvent, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
     relocation::{
         ObjectRelocationArch, RelocHelper, RelocateArgs, RelocationHandler, resolve_symbol_addr,
@@ -134,7 +134,11 @@ where
         } = helper;
         self.core.set_tls_desc_args(tls_desc_args);
 
-        let exports = self.build_exports();
+        let mut event = ObjectRelocatedEvent::new(&self.core, &self.shdrs, self.symtab.view());
+        observer.on_object_relocated(&mut event)?;
+        let exports = event
+            .into_exports()
+            .unwrap_or_else(|| exports_handle(self.default_exports()));
         self.install_exports(exports);
 
         let object_segments =
@@ -142,7 +146,6 @@ where
         (self.mprotect)(&object_segments)?;
 
         self.call_init(observer, object_segments, executor.as_ref())?;
-        self.finish_init_metadata();
         drop(self.init_segments.take());
         self.core.set_init();
 
@@ -205,7 +208,7 @@ where
                     VmAddr::new(self.shdrs[section_id.index()].sh_addr())
                         .wrapping_add(VmOffset::new(symbol.st_value()))
                 };
-                offset_from_base(addr, base)
+                addr.wrapping_offset_from(base).get()
             };
 
             let symbols = self.symtab.symbols_mut();
@@ -215,24 +218,23 @@ where
         Ok(())
     }
 
-    fn finish_init_metadata(&mut self) {
-        if !self.discard_symtab_after_init {
-            return;
-        }
-
-        self.symtab = crate::object::ObjectSymbolTable::empty_object();
-    }
-
-    fn install_exports(&mut self, exports: ObjectExports<Arch::Layout>) {
+    fn install_exports(&mut self, exports: Arc<dyn SymbolExports<Arch>>) {
         let inner = Arc::get_mut(&mut self.core.inner)
             .expect("raw object core must be uniquely owned before runtime exports are installed");
-        inner.exports = crate::image::exports_handle(exports);
+        inner.exports = exports;
     }
 
-    fn build_exports(&self) -> ObjectExports<Arch::Layout> {
-        ObjectExports::from_symtab(self.symtab.view(), |symbol| {
-            !self.symbol_uses_init_memory(symbol)
-        })
+    fn default_exports(&self) -> ObjectExports<Arch::Layout> {
+        let mut exports = ObjectExports::empty();
+        let symtab = self.symtab.view();
+        for idx in 0..symtab.symbols().len() {
+            let (symbol, info) = self.symtab.symbol_idx(idx);
+            if !is_default_object_export(symbol) || self.symbol_uses_init_memory(symbol) {
+                continue;
+            }
+            exports.insert(info.name(), symbol.clone());
+        }
+        exports
     }
 
     fn symbol_uses_init_memory(&self, symbol: &ElfSymbol<Arch::Layout>) -> bool {
@@ -254,8 +256,8 @@ where
 }
 
 #[inline]
-fn offset_from_base(addr: VmAddr, base: VmAddr) -> usize {
-    addr.wrapping_offset_from(base).get()
+fn is_default_object_export<L: ElfLayout>(symbol: &ElfSymbol<L>) -> bool {
+    !symbol.is_undef() && symbol.is_ok_bind() && symbol.is_ok_type()
 }
 
 #[cold]

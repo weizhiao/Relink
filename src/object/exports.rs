@@ -1,22 +1,24 @@
 use crate::{
-    elf::{ElfLayout, ElfSymbol, PreCompute, SymbolInfo, SymbolTableView},
+    elf::{ElfLayout, ElfSymbol, PreCompute, SymbolInfo},
     image::SymbolExports,
+    object::CustomHash,
     relocation::RelocationArch,
 };
-use alloc::string::String;
-use hashbrown::{HashMap, hash_map::Entry};
+use alloc::{string::String, vec::Vec};
 
 /// Runtime symbol exports for a relocated object.
 ///
 /// Unlike the relocation `.symtab`, this table owns symbol names and entries, so
 /// it can outlive init-only section metadata.
 pub(crate) struct ObjectExports<L: ElfLayout> {
-    symbols: HashMap<String, ElfSymbol<L>>,
+    hashtab: CustomHash<String>,
+    symbols: Vec<ElfSymbol<L>>,
 }
 
 impl<L: ElfLayout> Clone for ObjectExports<L> {
     fn clone(&self) -> Self {
         Self {
+            hashtab: self.hashtab.clone(),
             symbols: self.symbols.clone(),
         }
     }
@@ -25,48 +27,40 @@ impl<L: ElfLayout> Clone for ObjectExports<L> {
 impl<L: ElfLayout> ObjectExports<L> {
     #[inline]
     pub(crate) fn empty() -> Self {
-        Self {
-            symbols: HashMap::new(),
-        }
+        Self::with_capacity(0)
     }
 
-    pub(crate) fn from_symtab<H, F>(symtab: SymbolTableView<'_, L, H>, mut include: F) -> Self
-    where
-        F: FnMut(&ElfSymbol<L>) -> bool,
-    {
-        let mut exports = Self::empty();
-        for idx in 0..symtab.symbols().len() {
-            let (symbol, info) = symtab.symbol_idx(idx);
-            if symbol.is_undef() || !symbol.is_ok_bind() || !symbol.is_ok_type() || !include(symbol)
-            {
-                continue;
-            }
-
-            exports.insert(info.name(), symbol.clone());
+    #[inline]
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            hashtab: CustomHash::with_capacity(capacity),
+            symbols: Vec::with_capacity(capacity),
         }
-        exports
     }
 
     pub(crate) fn insert(&mut self, name: impl Into<String>, symbol: ElfSymbol<L>) {
-        match self.symbols.entry(name.into()) {
-            Entry::Occupied(mut entry) => {
-                if should_replace(entry.get(), &symbol) {
-                    entry.insert(symbol);
-                }
+        let name = name.into();
+        if let Some(idx) = self.hashtab.find_idx(&name) {
+            if should_replace(&self.symbols[idx], &symbol) {
+                self.symbols[idx] = symbol;
             }
-            Entry::Vacant(entry) => {
-                entry.insert(symbol);
-            }
+            return;
         }
+
+        let idx = self.symbols.len();
+        self.symbols.push(symbol);
+        self.hashtab.insert_unique(name, idx);
     }
 
     #[inline]
     pub(crate) fn lookup(
         &self,
         symbol: &SymbolInfo<'_>,
-        _precompute: &mut PreCompute,
+        precompute: &mut PreCompute,
     ) -> Option<&ElfSymbol<L>> {
-        self.symbols.get(symbol.name())
+        self.hashtab
+            .lookup_idx(symbol, precompute)
+            .map(|idx| &self.symbols[idx])
     }
 }
 

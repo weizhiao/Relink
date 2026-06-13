@@ -4,12 +4,12 @@
 //! ELF files (also known as object files). These are typically `.o` files that
 //! contain code and data that need to be relocated before they can be executed.
 
-use crate::object::{ObjectBuilder, ObjectSymbolTable, PltGotSection};
+use crate::object::{ObjectBuilder, ObjectExports, ObjectSymbolTable, PltGotSection};
 use crate::segment::ElfSegments;
 use crate::{
     Result,
     elf::{ElfShdr, Lifecycle},
-    image::{EmptyExports, exports_handle},
+    image::exports_handle,
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{
@@ -53,9 +53,6 @@ pub struct RawObject<
     /// Initialization-only mapped memory.
     pub(crate) init_segments: Option<ElfSegments<R>>,
 
-    /// Whether relocation-only symbol metadata must be discarded after init.
-    pub(crate) discard_symtab_after_init: bool,
-
     /// Initialization lifecycle.
     pub(crate) init: Lifecycle,
 }
@@ -74,7 +71,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
         let inner = CoreInner {
             is_init: AtomicBool::new(false),
             path: builder.path,
-            exports: exports_handle(EmptyExports::<Arch>::new()),
+            exports: exports_handle(ObjectExports::<Arch::Layout>::empty()),
             finalizer: OnceCell::new(),
             user_data: builder.user_data,
             dynamic_info: None,
@@ -96,7 +93,6 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
             pltgot: builder.pltgot,
             mprotect: builder.mprotect,
             init_segments,
-            discard_symtab_after_init: builder.discard_symtab_after_init,
             init: builder.init,
         }
     }

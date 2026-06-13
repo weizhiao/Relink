@@ -1,10 +1,10 @@
 use super::{
-    DtDebugEntry, DynamicLoadedEvent, IfuncBindingEvent, InitEvent, LinkActivity,
-    ModuleRelocatedEvent, ProgramHeaderEvent, ResolveDependencyEvent, ResolveRootEvent,
-    StagedDynamic, SymbolBindingEvent, TlsDescBindingEvent,
+    DtDebugEntry, DynamicLoadedEvent, DynamicRelocatedEvent, IfuncBindingEvent, InitEvent,
+    LinkActivity, ProgramHeaderEvent, ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
+    SymbolBindingEvent, TlsDescBindingEvent,
 };
 #[cfg(feature = "object")]
-use super::{ObjectMetadataEvent, SectionLayoutEvent};
+use super::{ObjectMetadataEvent, ObjectRelocatedEvent, SectionLayoutEvent};
 use crate::{Result, arch::NativeArch, memory::RegionAccess, relocation::RelocationArch};
 use alloc::boxed::Box;
 
@@ -104,14 +104,24 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
         Ok(())
     }
 
-    /// Called after a dynamic image has been relocated and registered.
+    /// Called after relocatable-object relocation and before memory protection and initialization.
+    #[cfg(feature = "object")]
+    #[inline]
+    fn on_object_relocated<D: 'static, R: RegionAccess>(
+        &mut self,
+        _event: &mut ObjectRelocatedEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called after a dynamic image has been relocated and before initialization.
     ///
     /// Implementations may adjust the retained finalizer before it is stored
     /// with the relocated image.
     #[inline]
-    fn on_module_relocated<D: 'static, R: RegionAccess>(
+    fn on_dynamic_relocated<D: 'static, R: RegionAccess>(
         &mut self,
-        _event: &mut ModuleRelocatedEvent<'_, D, Arch, R>,
+        _event: &mut DynamicRelocatedEvent<'_, D, Arch, R>,
     ) -> Result<()> {
         Ok(())
     }
@@ -238,12 +248,21 @@ where
         (**self).on_tlsdesc_binding(event)
     }
 
+    #[cfg(feature = "object")]
     #[inline]
-    fn on_module_relocated<D: 'static, R: RegionAccess>(
+    fn on_object_relocated<D: 'static, R: RegionAccess>(
         &mut self,
-        event: &mut ModuleRelocatedEvent<'_, D, Arch, R>,
+        event: &mut ObjectRelocatedEvent<'_, D, Arch, R>,
     ) -> Result<()> {
-        (**self).on_module_relocated(event)
+        (**self).on_object_relocated(event)
+    }
+
+    #[inline]
+    fn on_dynamic_relocated<D: 'static, R: RegionAccess>(
+        &mut self,
+        event: &mut DynamicRelocatedEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
+        (**self).on_dynamic_relocated(event)
     }
 }
 
@@ -389,11 +408,20 @@ where
         (**self).on_tlsdesc_binding(event)
     }
 
+    #[cfg(feature = "object")]
     #[inline]
-    fn on_module_relocated<D: 'static, R: RegionAccess>(
+    fn on_object_relocated<D: 'static, R: RegionAccess>(
         &mut self,
-        event: &mut ModuleRelocatedEvent<'_, D, Arch, R>,
+        event: &mut ObjectRelocatedEvent<'_, D, Arch, R>,
     ) -> Result<()> {
-        (**self).on_module_relocated(event)
+        (**self).on_object_relocated(event)
+    }
+
+    #[inline]
+    fn on_dynamic_relocated<D: 'static, R: RegionAccess>(
+        &mut self,
+        event: &mut DynamicRelocatedEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
+        (**self).on_dynamic_relocated(event)
     }
 }
