@@ -1,11 +1,11 @@
 use super::{
-    CustomHash, ObjectSections,
+    ObjectSections, ObjectSymbolTable,
     layout::{ObjectSegmentView, ObjectSegments, PltGotSection, SectionLifetime, SectionSegments},
     section_entries,
 };
 use crate::{
     RelocationError, Result,
-    elf::{ElfSectionId, ElfSectionType, ElfShdr, Lifecycle, SymbolTable},
+    elf::{ElfSectionId, ElfSectionType, ElfShdr, Lifecycle},
     input::PathBuf,
     loader::LoaderInner,
     memory::{HostRegion, RegionAccess, VmAddr},
@@ -25,8 +25,8 @@ pub(crate) struct ObjectBuilder<
 > {
     pub(crate) path: PathBuf,
     pub(crate) shdrs: Vec<ElfShdr<Arch::Layout>>,
-    pub(crate) symtab: SymbolTable<Arch::Layout, CustomHash>,
-    pub(crate) post_init_symtab: Option<SymbolTable<Arch::Layout, CustomHash>>,
+    pub(crate) symtab: ObjectSymbolTable<Arch::Layout>,
+    pub(crate) discard_symtab_after_init: bool,
     pub(crate) init: Lifecycle,
     pub(crate) segments: ObjectSegments<R>,
     pub(crate) mprotect: Box<dyn for<'segments> Fn(&ObjectSegmentView<'segments, R>) -> Result<()>>,
@@ -39,7 +39,7 @@ pub(crate) struct ObjectBuilder<
 }
 
 struct ObjectSectionData<Arch: ObjectRelocationArch> {
-    symtab: SymbolTable<Arch::Layout, CustomHash>,
+    symtab: ObjectSymbolTable<Arch::Layout>,
     init: Lifecycle,
 }
 
@@ -74,7 +74,7 @@ where
         for shdr in shdrs {
             match shdr.section_type() {
                 ElfSectionType::SYMTAB => {
-                    symtab = Some(SymbolTable::from_shdrs(shdr, shdrs, memory)?)
+                    symtab = Some(ObjectSymbolTable::from_shdrs(shdr, shdrs, memory)?)
                 }
                 ElfSectionType::INIT_ARRAY => init = Self::prepare_init_array(shdr, memory)?,
                 _ => {}
@@ -87,10 +87,10 @@ where
         })
     }
 
-    fn post_init_symtab(
+    fn symtab_uses_init_memory(
         shdrs: &[ElfShdr<Arch::Layout>],
         shdr_segments: &SectionSegments<Arch>,
-    ) -> Option<SymbolTable<Arch::Layout, CustomHash>> {
+    ) -> bool {
         for (index, shdr) in shdrs.iter().enumerate() {
             if shdr.section_type() != ElfSectionType::SYMTAB {
                 continue;
@@ -101,11 +101,11 @@ where
             if shdr_segments.section_lifetime(symtab_id) == Some(SectionLifetime::Init)
                 || shdr_segments.section_lifetime(strtab_id) == Some(SectionLifetime::Init)
             {
-                return Some(SymbolTable::empty_object());
+                return true;
             }
         }
 
-        None
+        false
     }
 
     pub(crate) fn new(
@@ -116,7 +116,7 @@ where
         user_data: D,
     ) -> Result<Self> {
         let shdrs = sections.headers_mut();
-        let post_init_symtab = Self::post_init_symtab(shdrs, &shdr_segments);
+        let discard_symtab_after_init = Self::symtab_uses_init_memory(shdrs, &shdr_segments);
         let pltgot = shdr_segments.take_pltgot();
         let ObjectSectionData { symtab, init } = {
             let memory = segments.view();
@@ -130,7 +130,7 @@ where
             path,
             shdrs,
             symtab,
-            post_init_symtab,
+            discard_symtab_after_init,
             segments,
             mprotect,
             pltgot,

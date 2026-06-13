@@ -4,9 +4,8 @@ mod fixture_support;
 use elf_loader::{
     Loader, Result,
     arch::NativeArch,
-    elf::ElfHashTable,
     memory::RegionAccess,
-    relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
+    relocation::{HandleResult, RelocationContext, RelocationHandler},
 };
 
 struct MyRelocHandler;
@@ -19,13 +18,10 @@ impl RelocationHandler for MyRelocHandler {
     fn handle<D: 'static, R: RegionAccess, H>(
         &self,
         ctx: &RelocationContext<'_, D, NativeArch, R, H>,
-    ) -> Result<HandleResult>
-    where
-        H: ElfHashTable<<NativeArch as RelocationArch>::Layout> + 'static,
-    {
-        let r_sym = ctx.rel().r_symbol();
-        let symtab = ctx.lib().symtab();
-        let (_, sym_info) = symtab.symbol_idx(r_sym);
+    ) -> Result<HandleResult> {
+        let Some((_, sym_info)) = ctx.relocation_symbol() else {
+            return Ok(HandleResult::Unhandled);
+        };
 
         if sym_info.name() == "print" {
             let target_addr = (ctx.lib().base() + ctx.rel().r_offset()).get() as *mut usize;

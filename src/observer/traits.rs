@@ -5,9 +5,7 @@ use super::{
 };
 #[cfg(feature = "object")]
 use super::{ObjectMetadataEvent, SectionLayoutEvent};
-use crate::{
-    Result, arch::NativeArch, elf::ElfHashTable, memory::RegionAccess, relocation::RelocationArch,
-};
+use crate::{Result, arch::NativeArch, memory::RegionAccess, relocation::RelocationArch};
 use alloc::boxed::Box;
 
 /// Event hook for images as they are loaded.
@@ -72,46 +70,37 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
 
     /// Called before initialization functions are executed.
     #[inline]
-    fn on_init<D: 'static, R: RegionAccess, H>(
+    fn on_init<D: 'static, R: RegionAccess>(
         &mut self,
-        _event: &mut InitEvent<'_, D, Arch, R, H>,
+        _event: &mut InitEvent<'_, D, Arch, R>,
     ) -> Result<()> {
         Ok(())
     }
 
     /// Called when a regular symbol relocation needs runtime binding.
     #[inline]
-    fn on_symbol_binding<D: 'static, R: RegionAccess, H>(
+    fn on_symbol_binding<D: 'static, R: RegionAccess>(
         &mut self,
-        _event: &mut SymbolBindingEvent<'_, D, Arch, R, H>,
-    ) -> Result<()>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static,
-    {
+        _event: &mut SymbolBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
         Ok(())
     }
 
     /// Called when an IFUNC resolver needs runtime binding.
     #[inline]
-    fn on_ifunc_binding<D: 'static, R: RegionAccess, H>(
+    fn on_ifunc_binding<D: 'static, R: RegionAccess>(
         &mut self,
-        _event: &mut IfuncBindingEvent<'_, D, Arch, R, H>,
-    ) -> Result<()>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static,
-    {
+        _event: &mut IfuncBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
         Ok(())
     }
 
     /// Called when a TLSDESC relocation needs runtime binding.
     #[inline]
-    fn on_tlsdesc_binding<D: 'static, R: RegionAccess, H>(
+    fn on_tlsdesc_binding<D: 'static, R: RegionAccess>(
         &mut self,
-        _event: &mut TlsDescBindingEvent<'_, D, Arch, R, H>,
-    ) -> Result<()>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static,
-    {
+        _event: &mut TlsDescBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -218,43 +207,34 @@ where
     }
 
     #[inline]
-    fn on_init<D: 'static, R: RegionAccess, H>(
+    fn on_init<D: 'static, R: RegionAccess>(
         &mut self,
-        event: &mut InitEvent<'_, D, Arch, R, H>,
+        event: &mut InitEvent<'_, D, Arch, R>,
     ) -> Result<()> {
         (**self).on_init(event)
     }
 
     #[inline]
-    fn on_symbol_binding<D: 'static, R: RegionAccess, H>(
+    fn on_symbol_binding<D: 'static, R: RegionAccess>(
         &mut self,
-        event: &mut SymbolBindingEvent<'_, D, Arch, R, H>,
-    ) -> Result<()>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static,
-    {
+        event: &mut SymbolBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
         (**self).on_symbol_binding(event)
     }
 
     #[inline]
-    fn on_ifunc_binding<D: 'static, R: RegionAccess, H>(
+    fn on_ifunc_binding<D: 'static, R: RegionAccess>(
         &mut self,
-        event: &mut IfuncBindingEvent<'_, D, Arch, R, H>,
-    ) -> Result<()>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static,
-    {
+        event: &mut IfuncBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
         (**self).on_ifunc_binding(event)
     }
 
     #[inline]
-    fn on_tlsdesc_binding<D: 'static, R: RegionAccess, H>(
+    fn on_tlsdesc_binding<D: 'static, R: RegionAccess>(
         &mut self,
-        event: &mut TlsDescBindingEvent<'_, D, Arch, R, H>,
-    ) -> Result<()>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static,
-    {
+        event: &mut TlsDescBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
         (**self).on_tlsdesc_binding(event)
     }
 
@@ -378,43 +358,34 @@ where
     }
 
     #[inline]
-    fn on_init<D: 'static, R: RegionAccess, H>(
+    fn on_init<D: 'static, R: RegionAccess>(
         &mut self,
-        event: &mut InitEvent<'_, D, Arch, R, H>,
+        event: &mut InitEvent<'_, D, Arch, R>,
     ) -> Result<()> {
         (**self).on_init(event)
     }
 
     #[inline]
-    fn on_symbol_binding<D: 'static, R: RegionAccess, H>(
+    fn on_symbol_binding<D: 'static, R: RegionAccess>(
         &mut self,
-        event: &mut SymbolBindingEvent<'_, D, Arch, R, H>,
-    ) -> Result<()>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static,
-    {
+        event: &mut SymbolBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
         (**self).on_symbol_binding(event)
     }
 
     #[inline]
-    fn on_ifunc_binding<D: 'static, R: RegionAccess, H>(
+    fn on_ifunc_binding<D: 'static, R: RegionAccess>(
         &mut self,
-        event: &mut IfuncBindingEvent<'_, D, Arch, R, H>,
-    ) -> Result<()>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static,
-    {
+        event: &mut IfuncBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
         (**self).on_ifunc_binding(event)
     }
 
     #[inline]
-    fn on_tlsdesc_binding<D: 'static, R: RegionAccess, H>(
+    fn on_tlsdesc_binding<D: 'static, R: RegionAccess>(
         &mut self,
-        event: &mut TlsDescBindingEvent<'_, D, Arch, R, H>,
-    ) -> Result<()>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static,
-    {
+        event: &mut TlsDescBindingEvent<'_, D, Arch, R>,
+    ) -> Result<()> {
         (**self).on_tlsdesc_binding(event)
     }
 

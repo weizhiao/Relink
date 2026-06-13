@@ -1,14 +1,13 @@
 use crate::{
     RelocReason, Result,
     elf::{
-        ElfHashTable, ElfLayout, ElfRelEntry, ElfRelType, ElfSectionId, ElfSectionType, ElfShdr,
-        ElfSymbolType, ElfWord,
+        ElfLayout, ElfRelEntry, ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr,
+        ElfSymbol, ElfSymbolType, ElfWord,
     },
     image::{ModuleScope, RawObject},
     logging,
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
-    object::ObjectSegmentView,
-    object::section_entries,
+    object::{ObjectExports, ObjectSegmentView, section_entries},
     observer::{InitEvent, RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
     relocation::{
@@ -76,7 +75,7 @@ where
     pub(crate) fn relocate_impl<PreH, PostH, Obs>(
         mut self,
         args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
-    ) -> Result<crate::image::LoadedCore<D, Arch, R, crate::object::CustomHash>>
+    ) -> Result<crate::image::LoadedCore<D, Arch, R>>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
@@ -94,11 +93,12 @@ where
 
         self.simplify_symbols(&scope, observer)?;
 
-        let object_segments =
+        let relocation_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
         let mut helper = RelocHelper::new(
             &self.core,
-            object_segments,
+            self.symtab.view(),
+            relocation_segments,
             scope,
             pre_handler,
             post_handler,
@@ -134,6 +134,11 @@ where
         } = helper;
         self.core.set_tls_desc_args(tls_desc_args);
 
+        let exports = self.build_exports();
+        self.install_exports(exports);
+
+        let object_segments =
+            ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
         (self.mprotect)(&object_segments)?;
 
         self.call_init(observer, object_segments, executor.as_ref())?;
@@ -171,11 +176,11 @@ where
     {
         let base = self.core.base();
         let tls_get_addr = self.core.tls_get_addr();
-        let symbol_count = self.core.symtab().symbols().len();
+        let symbol_count = self.symtab.symbols().len();
 
         for idx in 0..symbol_count {
             let value = {
-                let (symbol, syminfo) = self.core.symtab().symbol_idx(idx);
+                let (symbol, syminfo) = self.symtab.symbol_idx(idx);
                 if symbol.symbol_type() == ElfSymbolType::FILE {
                     continue;
                 }
@@ -203,12 +208,7 @@ where
                 offset_from_base(addr, base)
             };
 
-            let inner = Arc::get_mut(&mut self.core.inner)
-                .expect("raw object core must be uniquely owned before relocation");
-            let symbols = inner
-                .symtab
-                .symbols_mut()
-                .expect("relocatable object symbol table must be mutable");
+            let symbols = self.symtab.symbols_mut();
             symbols[idx].set_value(value);
         }
 
@@ -216,13 +216,40 @@ where
     }
 
     fn finish_init_metadata(&mut self) {
-        let Some(symtab) = self.post_init_symtab.take() else {
+        if !self.discard_symtab_after_init {
             return;
-        };
+        }
 
+        self.symtab = crate::object::ObjectSymbolTable::empty_object();
+    }
+
+    fn install_exports(&mut self, exports: ObjectExports<Arch::Layout>) {
         let inner = Arc::get_mut(&mut self.core.inner)
-            .expect("raw object core must be uniquely owned before initialization is finalized");
-        inner.symtab = symtab;
+            .expect("raw object core must be uniquely owned before runtime exports are installed");
+        inner.exports = crate::image::exports_handle(exports);
+    }
+
+    fn build_exports(&self) -> ObjectExports<Arch::Layout> {
+        ObjectExports::from_symtab(self.symtab.view(), |symbol| {
+            !self.symbol_uses_init_memory(symbol)
+        })
+    }
+
+    fn symbol_uses_init_memory(&self, symbol: &ElfSymbol<Arch::Layout>) -> bool {
+        let Some(init_segments) = self.init_segments.as_ref() else {
+            return false;
+        };
+        if matches!(
+            symbol.st_shndx(),
+            ElfSectionIndex::ABS | ElfSectionIndex::COMMON
+        ) {
+            return false;
+        }
+        let Some(section_id) = ElfSectionId::from_symbol_shndx(symbol.st_shndx()) else {
+            return false;
+        };
+        let section_addr = VmAddr::new(self.shdrs[section_id.index()].sh_addr());
+        init_segments.contains_addr(section_addr)
     }
 }
 
@@ -232,15 +259,14 @@ fn offset_from_base(addr: VmAddr, base: VmAddr) -> usize {
 }
 
 #[cold]
-fn unresolved_symbol_error<D, Arch, R, H>(
-    core: &crate::image::ElfCore<D, Arch, R, H>,
+fn unresolved_symbol_error<D, Arch, R>(
+    core: &crate::image::ElfCore<D, Arch, R>,
     name: &str,
 ) -> crate::Error
 where
     D: 'static,
     Arch: crate::relocation::RelocationArch,
     R: RegionAccess,
-    H: ElfHashTable<Arch::Layout> + 'static,
 {
     relocate_context_error(
         core.name(),

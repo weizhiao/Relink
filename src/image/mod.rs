@@ -10,20 +10,24 @@
 
 mod core;
 mod elf;
+mod exports;
 mod module;
 mod scanned;
 mod synthetic;
 
-#[cfg(any(feature = "object", feature = "lazy-binding"))]
+#[cfg(feature = "lazy-binding")]
 pub(crate) use core::CoreInner;
 pub use core::{ElfCore, ElfCoreRef, LoadedCore, LoadedDeps, Symbol};
-pub(crate) use elf::DynamicInfo;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use elf::LazyBindingInfo;
 pub(crate) use elf::RawDynamicParts;
+pub(crate) use elf::{DynamicInfo, load_dynamic_symtab};
 pub use elf::{LoadedElf, LoadedExec, RawDylib, RawDynamic, RawElf, RawExec, StaticExec};
 #[cfg(feature = "object")]
 pub use elf::{LoadedObject, RawObject};
+#[cfg(feature = "object")]
+pub(crate) use exports::EmptyExports;
+pub(crate) use exports::{SymbolExports, exports_handle};
 pub use module::{Module, ModuleHandle, ModuleScope};
 pub(crate) use scanned::ScannedDynamicLoadParts;
 pub use scanned::{

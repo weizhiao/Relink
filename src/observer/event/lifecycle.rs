@@ -1,7 +1,7 @@
 use crate::{
     Result,
     arch::NativeArch,
-    elf::{HashTable, Lifecycle},
+    elf::Lifecycle,
     image::ElfCore,
     memory::{HostRegion, ImageMemory, RegionAccess},
     relocation::RelocationArch,
@@ -114,15 +114,14 @@ pub struct InitEvent<
     D: 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
-    core: &'a ElfCore<D, Arch, R, H>,
+    core: &'a ElfCore<D, Arch, R>,
     lifecycle: Lifecycle,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H> InitEvent<'a, D, Arch, R, H> {
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> InitEvent<'a, D, Arch, R> {
     #[inline]
-    pub(crate) fn new(core: &'a ElfCore<D, Arch, R, H>, lifecycle: &'a Lifecycle) -> Self {
+    pub(crate) fn new(core: &'a ElfCore<D, Arch, R>, lifecycle: &'a Lifecycle) -> Self {
         Self {
             core,
             lifecycle: lifecycle.clone(),
@@ -131,7 +130,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H> InitEvent<'a, D, 
 
     /// Returns the image core associated with this lifecycle event.
     #[inline]
-    pub const fn core(&self) -> &'a ElfCore<D, Arch, R, H> {
+    pub const fn core(&self) -> &'a ElfCore<D, Arch, R> {
         self.core
     }
 

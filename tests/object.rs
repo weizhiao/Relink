@@ -182,7 +182,7 @@ fn object_addends_apply() {
 
 #[cfg(all(feature = "object", target_arch = "x86_64"))]
 #[test]
-fn object_symtab_can_live_in_init_memory() {
+fn object_exports_survive_init_symtab_metadata() {
     use elf_loader::{
         Result,
         elf::{ElfSectionId, ElfSectionType},
@@ -241,7 +241,7 @@ fn object_symtab_can_live_in_init_memory() {
 
     assert!(loaded_object.is_init());
     assert!(
-        unsafe { loaded_object.get::<i32>(LOCAL_VAR_NAME) }.is_none(),
-        "runtime object symbol table should be discarded after init metadata is released"
+        unsafe { loaded_object.get::<i32>(LOCAL_VAR_NAME) }.is_some(),
+        "runtime object exports should survive init metadata release"
     );
 }

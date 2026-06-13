@@ -9,7 +9,7 @@
 //! SYSV hash table (.hash) as it provides better performance and memory usage.
 
 use crate::elf::{
-    ElfDynamic, ElfDynamicHashTab, ElfLayout, ElfSymbol, SymbolTable, symbol::SymbolInfo,
+    ElfDynamic, ElfDynamicHashTab, ElfLayout, ElfSymbol, SymbolTableView, symbol::SymbolInfo,
 };
 use crate::{Result, memory::RegionAccess, segment::ElfSegments};
 use core::fmt::Debug;
@@ -18,8 +18,15 @@ use sysv::ElfHash;
 
 mod gnu;
 mod sysv;
-mod traits;
-pub use traits::ElfHashTable;
+
+pub trait SymbolHash<L: ElfLayout> {
+    fn lookup<'sym, H>(
+        &self,
+        table: SymbolTableView<'sym, L, H>,
+        symbol: &SymbolInfo,
+        precompute: &mut PreCompute,
+    ) -> Option<&'sym ElfSymbol<L>>;
+}
 
 /// Standard dynamic ELF symbol hash table.
 ///
@@ -34,6 +41,23 @@ enum HashTableKind<L: ElfLayout = crate::elf::NativeElfLayout> {
 
     /// Traditional SYSV hash table (.hash section).
     Sysv(ElfHash),
+}
+
+impl<L: ElfLayout> Clone for HashTable<L> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<L: ElfLayout> Clone for HashTableKind<L> {
+    #[inline]
+    fn clone(&self) -> Self {
+        match self {
+            Self::Gnu(hashtab) => Self::Gnu(hashtab.clone()),
+            Self::Sysv(hashtab) => Self::Sysv(hashtab.clone()),
+        }
+    }
 }
 
 impl<L: ElfLayout> Debug for HashTable<L> {
@@ -57,7 +81,6 @@ pub struct PreCompute {
     /// Traditional hash value (used for SYSV hash tables)
     hash: Option<u32>,
 
-    /// Custom hash value (reserved for future use)
     #[cfg(feature = "object")]
     pub(crate) custom: Option<u64>,
 }
@@ -87,20 +110,20 @@ impl<L: ElfLayout> HashTable<L> {
             ElfDynamicHashTab::Elf(addr) => HashTableKind::Sysv(ElfHash::parse(segments, addr)?),
         }))
     }
-}
 
-impl<L: ElfLayout> ElfHashTable<L> for HashTable<L> {
     #[inline]
-    fn count_syms(&self) -> usize {
+    pub fn count_syms(&self) -> usize {
         match &self.0 {
             HashTableKind::Gnu(hashtab) => hashtab.count_syms(),
-            HashTableKind::Sysv(hashtab) => <ElfHash as ElfHashTable<L>>::count_syms(hashtab),
+            HashTableKind::Sysv(hashtab) => hashtab.count_syms(),
         }
     }
+}
 
+impl<L: ElfLayout> SymbolHash<L> for HashTable<L> {
     fn lookup<'sym, H>(
         &self,
-        table: &'sym SymbolTable<L, H>,
+        table: SymbolTableView<'sym, L, H>,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
     ) -> Option<&'sym ElfSymbol<L>> {

@@ -11,9 +11,9 @@ use elf_loader::{
 struct LifecycleLogger;
 
 impl RelocationObserver for LifecycleLogger {
-    fn on_init<D: 'static, R: RegionAccess, H>(
+    fn on_init<D: 'static, R: RegionAccess>(
         &mut self,
-        event: &mut InitEvent<'_, D, NativeArch, R, H>,
+        event: &mut InitEvent<'_, D, NativeArch, R>,
     ) -> Result<()> {
         println!("Init hook called!");
         let mut count = 0;

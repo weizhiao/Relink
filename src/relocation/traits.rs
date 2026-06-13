@@ -7,7 +7,8 @@ use crate::{
     ByteRepr, RelocReason, Result,
     arch::{ArchKind, NativeArch},
     elf::{
-        ElfHashTable, ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType, HashTable,
+        ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType, ElfSymbol, HashTable,
+        SymbolInfo, SymbolTableView,
     },
     image::{ElfCore, ModuleScope},
     memory::{HostRegion, RegionAccess, VmAddr},
@@ -110,7 +111,6 @@ pub trait ObjectRelocationArch: RelocationArch {
         Self: Sized,
         D: 'static,
         R: RegionAccess,
-        H: ElfHashTable<Self::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -132,7 +132,6 @@ pub trait ObjectRelocationArch: RelocationArch {
         Self: Sized,
         D: 'static,
         R: RegionAccess,
-        H: ElfHashTable<Self::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -142,6 +141,7 @@ pub trait ObjectRelocationArch: RelocationArch {
             rel,
             RelocReason::Unsupported,
             helper.core,
+            helper.symbols(),
         ))
     }
 
@@ -234,8 +234,6 @@ pub(crate) trait RelocationValueProvider {
 ///         &self,
 ///         ctx: &RelocationContext<'_, D, elf_loader::arch::NativeArch, R, H>,
 ///     ) -> Result<HandleResult>
-///     where
-///         H: elf_loader::elf::ElfHashTable<elf_loader::elf::NativeElfLayout> + 'static,
 ///     {
 ///         let rel = ctx.rel();
 ///         // Handle specific relocation types
@@ -279,9 +277,7 @@ pub trait RelocationHandler<Arch: RelocationArch = NativeArch> {
     fn handle<D: 'static, R: RegionAccess, H>(
         &self,
         ctx: &RelocationContext<'_, D, Arch, R, H>,
-    ) -> Result<HandleResult>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static;
+    ) -> Result<HandleResult>;
 }
 
 /// Context passed to [`RelocationHandler::handle`].
@@ -296,22 +292,28 @@ pub struct RelocationContext<
     H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
     rel: &'a ElfRelType<Arch>,
-    lib: &'a ElfCore<D, Arch, R, H>,
+    lib: &'a ElfCore<D, Arch, R>,
+    symbols: SymbolTableView<'a, Arch::Layout, H>,
     scope: &'a ModuleScope<Arch>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H> RelocationContext<'a, D, Arch, R, H>
-where
-    H: ElfHashTable<Arch::Layout> + 'static,
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
+    RelocationContext<'a, D, Arch, R, H>
 {
     /// Construct a new `RelocationContext`.
     #[inline]
     pub(crate) fn new(
         rel: &'a ElfRelType<Arch>,
-        lib: &'a ElfCore<D, Arch, R, H>,
+        lib: &'a ElfCore<D, Arch, R>,
+        symbols: SymbolTableView<'a, Arch::Layout, H>,
         scope: &'a ModuleScope<Arch>,
     ) -> Self {
-        Self { rel, lib, scope }
+        Self {
+            rel,
+            lib,
+            symbols,
+            scope,
+        }
     }
 
     /// Access the relocation entry.
@@ -322,7 +324,7 @@ where
 
     /// Access the core component where the relocation appears.
     #[inline]
-    pub fn lib(&self) -> &ElfCore<D, Arch, R, H> {
+    pub fn lib(&self) -> &ElfCore<D, Arch, R> {
         self.lib
     }
 
@@ -332,11 +334,23 @@ where
         &self.scope
     }
 
+    /// Access a symbol table entry by index for this relocation context.
+    #[inline]
+    pub fn symbol(&self, r_sym: usize) -> (&'a ElfSymbol<Arch::Layout>, SymbolInfo<'a>) {
+        self.symbols.symbol_idx(r_sym)
+    }
+
+    /// Access the symbol referenced by the current relocation, if it has one.
+    #[inline]
+    pub fn relocation_symbol(&self) -> Option<(&'a ElfSymbol<Arch::Layout>, SymbolInfo<'a>)> {
+        let r_sym = self.rel.r_symbol();
+        (r_sym != 0).then(|| self.symbol(r_sym))
+    }
+
     /// Find symbol definition in the current scope
     #[inline]
     pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, D, Arch>> {
-        let symbol = self.lib.symtab();
-        let (sym, syminfo) = symbol.symbol_idx(r_sym);
+        let (sym, syminfo) = self.symbol(r_sym);
         find_symdef_impl(self.lib, self.scope, sym, &syminfo)
     }
 }
@@ -345,10 +359,7 @@ impl<Arch: RelocationArch> RelocationHandler<Arch> for () {
     fn handle<D: 'static, R: RegionAccess, H>(
         &self,
         _ctx: &RelocationContext<'_, D, Arch, R, H>,
-    ) -> Result<HandleResult>
-    where
-        H: ElfHashTable<Arch::Layout> + 'static,
-    {
+    ) -> Result<HandleResult> {
         Ok(HandleResult::Unhandled)
     }
 }
@@ -357,10 +368,7 @@ impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandle
     fn handle<D: 'static, R: RegionAccess, Hash>(
         &self,
         ctx: &RelocationContext<'_, D, Arch, R, Hash>,
-    ) -> Result<HandleResult>
-    where
-        Hash: ElfHashTable<Arch::Layout> + 'static,
-    {
+    ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
@@ -369,10 +377,7 @@ impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandle
     fn handle<D: 'static, R: RegionAccess, Hash>(
         &self,
         ctx: &RelocationContext<'_, D, Arch, R, Hash>,
-    ) -> Result<HandleResult>
-    where
-        Hash: ElfHashTable<Arch::Layout> + 'static,
-    {
+    ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
@@ -381,10 +386,7 @@ impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandle
     fn handle<D: 'static, R: RegionAccess, Hash>(
         &self,
         ctx: &RelocationContext<'_, D, Arch, R, Hash>,
-    ) -> Result<HandleResult>
-    where
-        Hash: ElfHashTable<Arch::Layout> + 'static,
-    {
+    ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
@@ -393,10 +395,7 @@ impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandle
     fn handle<D: 'static, R: RegionAccess, Hash>(
         &self,
         ctx: &RelocationContext<'_, D, Arch, R, Hash>,
-    ) -> Result<HandleResult>
-    where
-        Hash: ElfHashTable<Arch::Layout> + 'static,
-    {
+    ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }

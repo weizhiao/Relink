@@ -8,15 +8,13 @@
 use super::defs::{
     ElfLayout, ElfSectionIndex, ElfSymRaw, ElfSymbolBind, ElfSymbolType, NativeElfLayout,
 };
+use super::hash::SymbolHash;
 use crate::{
-    ParseDynamicError, Result,
-    elf::{ElfDynamic, ElfHashTable, HashTable, PreCompute},
-    memory::{MappedView, RegionAccess},
-    segment::ElfSegments,
+    elf::{HashTable, PreCompute},
+    memory::MappedView,
 };
 use core::ffi::CStr;
 use core::fmt::Debug;
-use core::mem::size_of;
 use elf::abi::{
     STB_GLOBAL, STB_GNU_UNIQUE, STB_WEAK, STT_COMMON, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE,
     STT_OBJECT, STT_TLS,
@@ -42,6 +40,21 @@ const OK_TYPES: usize = 1 << STT_NOTYPE
 /// regardless of whether the ELF file is 32-bit or 64-bit.
 pub struct ElfSymbol<L: ElfLayout = NativeElfLayout> {
     sym: L::Sym,
+}
+
+impl<L: ElfLayout> Clone for ElfSymbol<L> {
+    fn clone(&self) -> Self {
+        Self {
+            sym: L::Sym::from_fields(
+                self.st_name(),
+                self.st_value(),
+                self.st_size(),
+                self.sym.st_info(),
+                self.st_other(),
+                self.st_shndx().raw(),
+            ),
+        }
+    }
 }
 
 impl<L: ElfLayout> ElfSymbol<L> {
@@ -152,6 +165,15 @@ pub(crate) struct ElfStringTable {
     view: MappedView<u8>,
 }
 
+impl Clone for ElfStringTable {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            view: self.view.clone(),
+        }
+    }
+}
+
 impl ElfStringTable {
     /// Create a new string table wrapper from a mapped byte view.
     #[inline]
@@ -211,50 +233,31 @@ impl ElfStringTable {
     }
 }
 
-pub(crate) enum SymbolStorage<L: ElfLayout = NativeElfLayout> {
-    Borrowed(&'static [ElfSymbol<L>]),
-    #[cfg(feature = "object")]
-    Mutable(&'static mut [ElfSymbol<L>]),
+/// Read-only symbol table view shared by dynamic and relocatable symbol tables.
+pub struct SymbolTableView<'symtab, L: ElfLayout = NativeElfLayout, H = HashTable<L>> {
+    pub(crate) hashtab: &'symtab H,
+    pub(crate) symbols: &'symtab [ElfSymbol<L>],
+    pub(crate) strtab: &'symtab ElfStringTable,
+    #[cfg(feature = "version")]
+    pub(crate) version: Option<&'symtab super::version::ELFVersion>,
 }
 
-impl<L: ElfLayout> SymbolStorage<L> {
-    #[inline]
-    pub(crate) const fn borrowed(symbols: &'static [ElfSymbol<L>]) -> Self {
-        Self::Borrowed(symbols)
-    }
+impl<'symtab, L: ElfLayout, H> Copy for SymbolTableView<'symtab, L, H> {}
 
+impl<'symtab, L: ElfLayout, H> Clone for SymbolTableView<'symtab, L, H> {
     #[inline]
-    #[cfg(feature = "object")]
-    pub(crate) fn mutable(symbols: &'static mut [ElfSymbol<L>]) -> Self {
-        Self::Mutable(symbols)
-    }
-
-    #[inline]
-    pub(crate) fn as_slice(&self) -> &[ElfSymbol<L>] {
-        match self {
-            Self::Borrowed(symbols) => symbols,
-            #[cfg(feature = "object")]
-            Self::Mutable(symbols) => symbols,
-        }
-    }
-
-    #[inline]
-    #[cfg(feature = "object")]
-    pub(crate) fn as_mut_slice(&mut self) -> Option<&mut [ElfSymbol<L>]> {
-        match self {
-            Self::Borrowed(_) => None,
-            Self::Mutable(symbols) => Some(symbols),
-        }
+    fn clone(&self) -> Self {
+        *self
     }
 }
 
-/// Symbol table of an ELF file.
+/// Read-only dynamic symbol table of an ELF file.
 pub struct SymbolTable<L: ElfLayout = NativeElfLayout, H = HashTable<L>> {
     /// Hash table for efficient symbol lookup.
     pub(crate) hashtab: H,
 
     /// Symbol table entries.
-    pub(crate) symbols: SymbolStorage<L>,
+    pub(crate) symbols: &'static [ElfSymbol<L>],
 
     /// String table for symbol names.
     pub(crate) strtab: ElfStringTable,
@@ -268,8 +271,30 @@ impl<L: ElfLayout, H: Debug> Debug for SymbolTable<L, H> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SymbolTable")
             .field("hashtab", &self.hashtab)
-            .field("symbol_count", &self.symbols.as_slice().len())
+            .field("symbol_count", &self.symbols.len())
             .finish()
+    }
+}
+
+// Safety: dynamic symbol tables are immutable views over retained module mappings.
+// Version metadata may carry raw pointers into those mappings, but lookups only
+// read from them while the owning module keeps the mapping alive.
+unsafe impl<L: ElfLayout> Send for SymbolTable<L, HashTable<L>> {}
+
+// Safety: see the Send impl above; shared access performs immutable symbol and
+// version lookups only.
+unsafe impl<L: ElfLayout> Sync for SymbolTable<L, HashTable<L>> {}
+
+impl<L: ElfLayout, H: Clone> Clone for SymbolTable<L, H> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            hashtab: self.hashtab.clone(),
+            symbols: self.symbols,
+            strtab: self.strtab.clone(),
+            #[cfg(feature = "version")]
+            version: self.version.clone(),
+        }
     }
 }
 
@@ -331,93 +356,36 @@ impl<'symtab> SymbolInfo<'symtab> {
     }
 }
 
-impl<L: ElfLayout> SymbolTable<L, HashTable<L>> {
-    /// Creates a symbol table from ELF dynamic section information.
-    pub(crate) fn from_dynamic<Arch, R>(
-        dynamic: &ElfDynamic<Arch>,
-        segments: &ElfSegments<R>,
-    ) -> Result<Self>
-    where
-        Arch: crate::relocation::RelocationArch<Layout = L>,
-        R: RegionAccess,
-    {
-        // Create hash table from dynamic section information
-        let hashtab = HashTable::from_dynamic(dynamic, segments)?;
-        let symbol_count = hashtab.count_syms();
-
-        let symtab_off = dynamic
-            .symtab
-            .checked_offset_from(segments.base())
-            .ok_or(ParseDynamicError::AddressOverflow)?;
-        let symtab_size = symbol_count
-            .checked_mul(size_of::<ElfSymbol<L>>())
-            .ok_or(ParseDynamicError::AddressOverflow)?;
-        let symbols = segments
-            .read_view::<ElfSymbol<L>>(symtab_off, symtab_size)
-            .ok_or(ParseDynamicError::MalformedSymbolTable {
-                detail: "DT_SYMTAB symbol table size is malformed",
-            })?
-            .as_slice();
-
-        let strtab_size = dynamic
-            .strtab_size
-            .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_STRSZ" })?;
-        let strtab_off = dynamic
-            .strtab
-            .checked_offset_from(segments.base())
-            .ok_or(ParseDynamicError::AddressOverflow)?;
-        let strtab = segments
-            .read_view::<u8>(strtab_off, strtab_size.get())
-            .ok_or(ParseDynamicError::MalformedStringTable {
-                detail: "DT_STRTAB string table size is malformed",
-            })?;
-        let strtab = ElfStringTable::new(strtab);
-
-        // Create version information (when version feature is enabled)
-        #[cfg(feature = "version")]
-        let version = super::version::ELFVersion::new(
-            dynamic.version_idx,
-            dynamic.verneed,
-            dynamic.verdef,
-            &strtab,
-        );
-
-        Ok(SymbolTable {
-            hashtab,
-            symbols: SymbolStorage::borrowed(symbols),
-            strtab,
-            #[cfg(feature = "version")]
-            version,
-        })
-    }
-}
-
 impl<L: ElfLayout, H> SymbolTable<L, H> {
-    /// Returns all symbol table entries.
     #[inline]
-    pub(crate) fn symbols(&self) -> &[ElfSymbol<L>] {
-        self.symbols.as_slice()
+    pub fn view(&self) -> SymbolTableView<'_, L, H> {
+        SymbolTableView {
+            hashtab: &self.hashtab,
+            symbols: self.symbols,
+            strtab: &self.strtab,
+            #[cfg(feature = "version")]
+            version: self.version.as_ref(),
+        }
     }
 
     /// Returns a reference to the string table.
     pub(crate) fn strtab(&self) -> &ElfStringTable {
         &self.strtab
     }
+}
 
-    /// Returns a mutable view of the symbol table entries.
-    #[cfg(feature = "object")]
-    pub(crate) fn symbols_mut(&mut self) -> Option<&mut [ElfSymbol<L>]> {
-        self.symbols.as_mut_slice()
+impl<'symtab, L: ElfLayout, H> SymbolTableView<'symtab, L, H> {
+    /// Returns all symbol table entries.
+    #[inline]
+    pub fn symbols(&self) -> &'symtab [ElfSymbol<L>] {
+        self.symbols
     }
 
     /// Returns the symbol and its information for the given index.
-    pub fn symbol_idx<'symtab>(
-        &'symtab self,
-        idx: usize,
-    ) -> (&'symtab ElfSymbol<L>, SymbolInfo<'symtab>) {
+    pub fn symbol_idx(&self, idx: usize) -> (&'symtab ElfSymbol<L>, SymbolInfo<'symtab>) {
         // Get the symbol at the specified index
         let symbol = self
-            .symbols()
+            .symbols
             .get(idx)
             .expect("ELF symbol index is out of bounds");
 
@@ -440,17 +408,14 @@ impl<L: ElfLayout, H> SymbolTable<L, H> {
     }
 }
 
-impl<L: ElfLayout, H: ElfHashTable<L>> SymbolTable<L, H> {
-    /// Looks up a symbol by its name.
-    pub fn lookup_by_name(&self, name: impl AsRef<str>) -> Option<&ElfSymbol<L>> {
-        let info = SymbolInfo::from_str(name.as_ref(), None);
-        let mut precompute = info.precompute();
-        self.lookup(&info, &mut precompute)
-    }
-
+impl<'symtab, L: ElfLayout, H: SymbolHash<L>> SymbolTableView<'symtab, L, H> {
     /// Looks up a symbol in the symbol table using the hash table for efficiency.
-    fn lookup(&self, symbol: &SymbolInfo, precompute: &mut PreCompute) -> Option<&ElfSymbol<L>> {
-        self.hashtab.lookup(self, symbol, precompute)
+    fn lookup(
+        &self,
+        symbol: &SymbolInfo,
+        precompute: &mut PreCompute,
+    ) -> Option<&'symtab ElfSymbol<L>> {
+        self.hashtab.lookup(*self, symbol, precompute)
     }
 
     /// Looks up a symbol and filters based on relocation requirements.
@@ -459,7 +424,7 @@ impl<L: ElfLayout, H: ElfHashTable<L>> SymbolTable<L, H> {
         &self,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
-    ) -> Option<&ElfSymbol<L>> {
+    ) -> Option<&'symtab ElfSymbol<L>> {
         // Look up the symbol
         if let Some(sym) = self.lookup(symbol, precompute) {
             // Filter based on relocation requirements:
@@ -471,6 +436,15 @@ impl<L: ElfLayout, H: ElfHashTable<L>> SymbolTable<L, H> {
             }
         }
         None
+    }
+}
+
+impl<'symtab, L: ElfLayout> SymbolTableView<'symtab, L> {
+    /// Looks up a symbol by its name.
+    pub fn lookup_by_name(&self, name: impl AsRef<str>) -> Option<&'symtab ElfSymbol<L>> {
+        let info = SymbolInfo::from_str(name.as_ref(), None);
+        let mut precompute = info.precompute();
+        self.lookup(&info, &mut precompute)
     }
 
     /// Returns the number of symbols in the symbol table.

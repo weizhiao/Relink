@@ -1,4 +1,4 @@
-use crate::elf::{ElfStringTable, SymbolTable};
+use crate::elf::{ElfStringTable, SymbolTableView};
 use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 use elf::abi;
@@ -253,6 +253,7 @@ impl IntoIterator for &VerDefTable {
 }
 
 /// 保存着所有依赖的和定义的版本号
+#[derive(Clone)]
 struct Version {
     name: &'static str,
     hash: u32,
@@ -267,6 +268,7 @@ impl core::fmt::Debug for Version {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct ELFVersion {
     version_ids: VersionIndexTable,
     // 因为verdef和verneed的idx不重叠，因此我们可以使用数组将其存起来
@@ -413,9 +415,9 @@ impl<'a> SymbolVersion<'a> {
     }
 }
 
-impl<L: crate::elf::ElfLayout, H> SymbolTable<L, H> {
-    pub(crate) fn get_requirement(&self, sym_idx: usize) -> Option<SymbolVersion<'_>> {
-        if let Some(gnu_version) = &self.version {
+impl<'symtab, L: crate::elf::ElfLayout, H> SymbolTableView<'symtab, L, H> {
+    pub(crate) fn get_requirement(&self, sym_idx: usize) -> Option<SymbolVersion<'symtab>> {
+        if let Some(gnu_version) = self.version {
             let ver_ndx = gnu_version.version_ids.get(sym_idx);
             if ver_ndx.index() <= 1 {
                 return None;
@@ -433,7 +435,7 @@ impl<L: crate::elf::ElfLayout, H> SymbolTable<L, H> {
 
     pub(crate) fn check_match(&self, sym_idx: usize, version: Option<&SymbolVersion>) -> bool {
         if let Some(version) = version {
-            let gnu_version = self.version.as_ref().unwrap();
+            let gnu_version = self.version.unwrap();
             let ver_ndx = gnu_version.version_ids.get(sym_idx);
             let def_hidden = ver_ndx.is_hidden();
             let def_version = &gnu_version.versions[ver_ndx.index() as usize];

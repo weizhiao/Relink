@@ -2,7 +2,7 @@ use super::lifecycle::{Finalizer, FiniEvent};
 use crate::{
     Result,
     arch::NativeArch,
-    elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol, HashTable, Lifecycle},
+    elf::{ElfDyn, ElfDynamicTag, ElfRelType, ElfSymbol, Lifecycle},
     image::ElfCore,
     input::Path,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
@@ -68,21 +68,18 @@ pub struct SymbolBindingEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
-    core: &'a ElfCore<D, Arch, R, H>,
+    core: &'a ElfCore<D, Arch, R>,
     rel: Option<&'a ElfRelType<Arch>>,
     symbol: &'a ElfSymbol<Arch::Layout>,
     symbol_name: &'a str,
     resolved: Option<VmAddr>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
-    SymbolBindingEvent<'a, D, Arch, R, H>
-{
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> SymbolBindingEvent<'a, D, Arch, R> {
     #[inline]
     pub(crate) const fn new(
-        core: &'a ElfCore<D, Arch, R, H>,
+        core: &'a ElfCore<D, Arch, R>,
         rel: Option<&'a ElfRelType<Arch>>,
         symbol: &'a ElfSymbol<Arch::Layout>,
         symbol_name: &'a str,
@@ -99,7 +96,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
 
     /// Returns the image core associated with this binding.
     #[inline]
-    pub const fn core(&self) -> &ElfCore<D, Arch, R, H> {
+    pub const fn core(&self) -> &ElfCore<D, Arch, R> {
         self.core
     }
 
@@ -155,20 +152,17 @@ pub struct IfuncBindingEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
-    core: &'a ElfCore<D, Arch, R, H>,
+    core: &'a ElfCore<D, Arch, R>,
     rel: &'a ElfRelType<Arch>,
     resolver: VmAddr,
     resolved: Option<VmAddr>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
-    IfuncBindingEvent<'a, D, Arch, R, H>
-{
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> IfuncBindingEvent<'a, D, Arch, R> {
     #[inline]
     pub(crate) fn new(
-        core: &'a ElfCore<D, Arch, R, H>,
+        core: &'a ElfCore<D, Arch, R>,
         rel: &'a ElfRelType<Arch>,
         resolver: VmAddr,
     ) -> Self {
@@ -182,7 +176,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
 
     /// Returns the image core associated with this binding.
     #[inline]
-    pub const fn core(&self) -> &ElfCore<D, Arch, R, H> {
+    pub const fn core(&self) -> &ElfCore<D, Arch, R> {
         self.core
     }
 
@@ -321,21 +315,18 @@ pub struct TlsDescBindingEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
-    core: &'a ElfCore<D, Arch, R, H>,
+    core: &'a ElfCore<D, Arch, R>,
     rel: &'a ElfRelType<Arch>,
     request: TlsDescBindingRequest,
     value: Option<TlsDescBindingValue>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
-    TlsDescBindingEvent<'a, D, Arch, R, H>
-{
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> TlsDescBindingEvent<'a, D, Arch, R> {
     #[inline]
     #[cfg(feature = "tls")]
     pub(crate) const fn new(
-        core: &'a ElfCore<D, Arch, R, H>,
+        core: &'a ElfCore<D, Arch, R>,
         rel: &'a ElfRelType<Arch>,
         request: TlsDescBindingRequest,
     ) -> Self {
@@ -349,7 +340,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
 
     /// Returns the image core associated with this binding.
     #[inline]
-    pub const fn core(&self) -> &ElfCore<D, Arch, R, H> {
+    pub const fn core(&self) -> &ElfCore<D, Arch, R> {
         self.core
     }
 

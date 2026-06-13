@@ -4,11 +4,10 @@
 //! The GNU hash table provides better performance and memory efficiency compared
 //! to the traditional SYSV hash table.
 
-use super::ElfHashTable;
 use crate::{
     ParseDynamicError, Result,
     elf::{ElfLayout, ElfSymbol, ElfWord},
-    elf::{PreCompute, SymbolTable, symbol::SymbolInfo},
+    elf::{PreCompute, SymbolTableView, symbol::SymbolInfo},
     memory::{MappedView, RegionAccess, VmAddr, VmOffset},
     segment::ElfSegments,
 };
@@ -19,6 +18,7 @@ use core::mem::size_of;
 /// This structure represents the header of a GNU hash table, which contains
 /// metadata about the hash table structure and layout.
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct ElfGnuHeader {
     /// Number of bucket entries in the hash table
     nbucket: u32,
@@ -79,6 +79,18 @@ pub(crate) struct ElfGnuHash<L: ElfLayout> {
 
     /// Chain array
     chains: MappedView<u32>,
+}
+
+impl<L: ElfLayout> Clone for ElfGnuHash<L> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            header: self.header,
+            blooms: self.blooms.clone(),
+            buckets: self.buckets.clone(),
+            chains: self.chains.clone(),
+        }
+    }
 }
 
 impl<L: ElfLayout> ElfGnuHash<L> {
@@ -224,7 +236,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
     }
 }
 
-impl<L: ElfLayout> ElfHashTable<L> for ElfGnuHash<L> {
+impl<L: ElfLayout> ElfGnuHash<L> {
     /// Get the number of symbols in the hash table
     ///
     /// This method calculates the number of symbols by examining the bucket
@@ -232,7 +244,7 @@ impl<L: ElfLayout> ElfHashTable<L> for ElfGnuHash<L> {
     ///
     /// # Returns
     /// The number of symbols in the hash table
-    fn count_syms(&self) -> usize {
+    pub(crate) fn count_syms(&self) -> usize {
         let mut nsym = 0;
         let buckets = self.buckets.as_slice();
         let chains = self.chains.as_slice();
@@ -268,9 +280,9 @@ impl<L: ElfLayout> ElfHashTable<L> for ElfGnuHash<L> {
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol
     /// * `None` - If the symbol was not found
-    fn lookup<'sym, H>(
+    pub(crate) fn lookup<'sym, H>(
         &self,
-        table: &'sym SymbolTable<L, H>,
+        table: SymbolTableView<'sym, L, H>,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
     ) -> Option<&'sym ElfSymbol<L>> {

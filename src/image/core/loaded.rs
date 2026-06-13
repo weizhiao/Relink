@@ -2,10 +2,7 @@ use super::{ElfCore, ElfCoreRef, Symbol};
 use crate::{
     Result,
     arch::ArchKind,
-    elf::{
-        ElfDyn, ElfDynamicTag, ElfHashTable, ElfPhdr, ElfProgramType, ElfSymbol, HashTable,
-        PreCompute, SymbolInfo, SymbolTable,
-    },
+    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, PreCompute, SymbolInfo},
     image::{Module, ModuleHandle, ModuleScope},
     input::{Path, PathBuf},
     memory::{HostRegion, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
@@ -25,9 +22,8 @@ pub struct LoadedCore<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
-    pub(crate) core: ElfCore<D, Arch, R, H>,
+    pub(crate) core: ElfCore<D, Arch, R>,
     pub(crate) deps: ModuleScope<Arch>,
 }
 
@@ -99,10 +95,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ExactSizeIterator
 {
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Debug for LoadedCore<D, Arch, R, H>
-where
-    H: ElfHashTable<Arch::Layout> + 'static,
-{
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedCore<D, Arch, R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LoadedCore")
             .field("name", &self.core.name())
@@ -118,7 +111,7 @@ where
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Clone for LoadedCore<D, Arch, R, H> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedCore<D, Arch, R> {
     /// Clones the [`LoadedCore`], incrementing the reference count of its core and dependencies.
     fn clone(&self) -> Self {
         LoadedCore {
@@ -128,43 +121,36 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Clone for LoadedCore<
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> From<&LoadedCore<D, Arch, R, H>>
-    for LoadedCore<D, Arch, R, H>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedCore<D, Arch, R>>
+    for LoadedCore<D, Arch, R>
 {
     #[inline]
-    fn from(module: &LoadedCore<D, Arch, R, H>) -> Self {
+    fn from(module: &LoadedCore<D, Arch, R>) -> Self {
         module.clone()
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> From<LoadedCore<D, Arch, R, H>>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<LoadedCore<D, Arch, R>>
     for ModuleHandle<Arch>
-where
-    H: ElfHashTable<Arch::Layout> + 'static,
 {
     #[inline]
-    fn from(module: LoadedCore<D, Arch, R, H>) -> Self {
+    fn from(module: LoadedCore<D, Arch, R>) -> Self {
         Self::new(module)
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> From<&LoadedCore<D, Arch, R, H>>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedCore<D, Arch, R>>
     for ModuleHandle<Arch>
-where
-    H: ElfHashTable<Arch::Layout> + 'static,
 {
     #[inline]
-    fn from(module: &LoadedCore<D, Arch, R, H>) -> Self {
+    fn from(module: &LoadedCore<D, Arch, R>) -> Self {
         Self::new(module.clone())
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> LoadedCore<D, Arch, R, H>
-where
-    H: ElfHashTable<Arch::Layout> + 'static,
-{
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     #[inline]
-    pub(crate) fn from_relocated_core(core: ElfCore<D, Arch, R, H>) -> Self {
+    pub(crate) fn from_relocated_core(core: ElfCore<D, Arch, R>) -> Self {
         LoadedCore {
             core,
             deps: ModuleScope::empty(),
@@ -177,12 +163,12 @@ where
     ///
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
-    pub unsafe fn from_core(core: ElfCore<D, Arch, R, H>) -> Self {
+    pub unsafe fn from_core(core: ElfCore<D, Arch, R>) -> Self {
         Self::from_relocated_core(core)
     }
 
     #[inline]
-    pub(crate) fn from_relocated_core_deps<S>(core: ElfCore<D, Arch, R, H>, deps: S) -> Self
+    pub(crate) fn from_relocated_core_deps<S>(core: ElfCore<D, Arch, R>, deps: S) -> Self
     where
         S: Into<ModuleScope<Arch>>,
     {
@@ -315,8 +301,7 @@ where
         let syminfo = SymbolInfo::from_str(name, None);
         let mut precompute = syminfo.precompute();
         self.core
-            .symtab()
-            .lookup_filter(&syminfo, &mut precompute)
+            .lookup_export(&syminfo, &mut precompute)
             .map(|sym| Symbol {
                 ptr: SymDef::<D, Arch>::new(Some(sym), self)
                     .convert()
@@ -358,8 +343,7 @@ where
         let syminfo = SymbolInfo::from_str(name, Some(version));
         let mut precompute = syminfo.precompute();
         self.core
-            .symtab()
-            .lookup_filter(&syminfo, &mut precompute)
+            .lookup_export(&syminfo, &mut precompute)
             .map(|sym| Symbol {
                 ptr: SymDef::<D, Arch>::new(Some(sym), self)
                     .convert()
@@ -382,7 +366,7 @@ where
 
     /// Creates a weak reference to this ELF core.
     #[inline]
-    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R, H> {
+    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R> {
         self.core.downgrade()
     }
 
@@ -403,7 +387,7 @@ where
     /// # Safety
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
-    pub unsafe fn from_core_deps<S>(core: ElfCore<D, Arch, R, H>, deps: S) -> Self
+    pub unsafe fn from_core_deps<S>(core: ElfCore<D, Arch, R>, deps: S) -> Self
     where
         S: Into<ModuleScope<Arch>>,
     {
@@ -416,7 +400,7 @@ where
     /// Lifecycle information is lost, so the dependencies of the current
     /// loaded object can be dropped too early if this reference is used carelessly.
     #[inline]
-    pub unsafe fn core_ref(&self) -> &ElfCore<D, Arch, R, H> {
+    pub unsafe fn core_ref(&self) -> &ElfCore<D, Arch, R> {
         &self.core
     }
 }
@@ -566,19 +550,13 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
             deps: ModuleScope::empty(),
         })
     }
-
-    /// Gets the symbol table
-    pub fn symtab(&self) -> &SymbolTable<Arch::Layout> {
-        self.core.symtab()
-    }
 }
 
-impl<D, Arch, R, H> Module<Arch> for LoadedCore<D, Arch, R, H>
+impl<D, Arch, R> Module<Arch> for LoadedCore<D, Arch, R>
 where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    H: ElfHashTable<Arch::Layout> + 'static,
 {
     #[inline]
     fn as_any(&self) -> &dyn Any {
@@ -601,7 +579,7 @@ where
         symbol: &SymbolInfo<'_>,
         precompute: &mut PreCompute,
     ) -> Option<&'source ElfSymbol<Arch::Layout>> {
-        self.core.symtab().lookup_filter(symbol, precompute)
+        self.core.lookup_export(symbol, precompute)
     }
 
     #[inline]

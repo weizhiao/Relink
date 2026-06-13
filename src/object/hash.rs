@@ -1,8 +1,8 @@
 //! Custom ELF hash table implementation for relocatable objects.
 
 use crate::elf::{
-    ElfHashTable, ElfLayout, ElfStringTable, ElfSymbol, ElfSymbolType, PreCompute, SymbolInfo,
-    SymbolTable,
+    ElfLayout, ElfStringTable, ElfSymbol, ElfSymbolType, PreCompute, SymbolHash, SymbolInfo,
+    SymbolTableView,
 };
 use core::hash::{Hash, Hasher};
 use foldhash::{SharedSeed, fast::FoldHasher};
@@ -53,16 +53,17 @@ impl CustomHash {
 
         Self { map }
     }
-}
 
-impl<L: ElfLayout> ElfHashTable<L> for CustomHash {
-    fn count_syms(&self) -> usize {
+    #[inline]
+    pub(crate) fn count_syms(&self) -> usize {
         self.map.len()
     }
+}
 
+impl<L: ElfLayout> SymbolHash<L> for CustomHash {
     fn lookup<'sym, H>(
         &self,
-        table: &'sym SymbolTable<L, H>,
+        table: SymbolTableView<'sym, L, H>,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
     ) -> Option<&'sym ElfSymbol<L>> {

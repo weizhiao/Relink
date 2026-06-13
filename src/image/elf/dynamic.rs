@@ -3,8 +3,11 @@ use crate::arch::NativeArch;
 use crate::elf::ElfRelType;
 use crate::sync::{Arc, AtomicBool};
 use crate::{
-    ParsePhdrError, Result,
-    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, Lifecycle, LifecycleSpec, SymbolTable},
+    ParseDynamicError, ParsePhdrError, Result,
+    elf::{
+        ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfStringTable, ElfSymbol, HashTable, Lifecycle,
+        LifecycleSpec, SymbolTable,
+    },
     input::{Path, PathBuf},
     loader::ImageBuilder,
     logging,
@@ -14,26 +17,87 @@ use crate::{
         DynamicRelocation, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
     },
     runtime::CodeExecutor,
-    segment::ELFRelro,
+    segment::{ELFRelro, ElfSegments},
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{cell::OnceCell, ptr::NonNull};
+use core::{cell::OnceCell, mem::size_of, ptr::NonNull};
 
-use crate::image::{ElfCore, LoadedCore, core::CoreInner};
+use crate::image::{ElfCore, LoadedCore, core::CoreInner, exports_handle};
+
+pub(crate) fn load_dynamic_symtab<Arch, R>(
+    dynamic: &ElfDynamic<Arch>,
+    segments: &ElfSegments<R>,
+) -> Result<SymbolTable<Arch::Layout>>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+{
+    let hashtab = HashTable::from_dynamic(dynamic, segments)?;
+    let symbol_count = hashtab.count_syms();
+
+    let symtab_off = dynamic
+        .symtab
+        .checked_offset_from(segments.base())
+        .ok_or(ParseDynamicError::AddressOverflow)?;
+    let symtab_size = symbol_count
+        .checked_mul(size_of::<ElfSymbol<Arch::Layout>>())
+        .ok_or(ParseDynamicError::AddressOverflow)?;
+    let symbols = segments
+        .read_view::<ElfSymbol<Arch::Layout>>(symtab_off, symtab_size)
+        .ok_or(ParseDynamicError::MalformedSymbolTable {
+            detail: "DT_SYMTAB symbol table size is malformed",
+        })?
+        .as_slice();
+
+    let strtab_size = dynamic
+        .strtab_size
+        .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_STRSZ" })?;
+    let strtab_off = dynamic
+        .strtab
+        .checked_offset_from(segments.base())
+        .ok_or(ParseDynamicError::AddressOverflow)?;
+    let strtab = segments
+        .read_view::<u8>(strtab_off, strtab_size.get())
+        .ok_or(ParseDynamicError::MalformedStringTable {
+            detail: "DT_STRTAB string table size is malformed",
+        })?;
+    let strtab = ElfStringTable::new(strtab);
+
+    #[cfg(feature = "version")]
+    let version = crate::elf::version::ELFVersion::new(
+        dynamic.version_idx,
+        dynamic.verneed,
+        dynamic.verdef,
+        &strtab,
+    );
+
+    Ok(SymbolTable {
+        hashtab,
+        symbols,
+        strtab,
+        #[cfg(feature = "version")]
+        version,
+    })
+}
 
 #[cfg(feature = "lazy-binding")]
 pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) pltrel: MappedView<ElfRelType<Arch>>,
+    pub(crate) symtab: SymbolTable<Arch::Layout>,
     pub(crate) scope: OnceCell<crate::image::ModuleScope<Arch>>,
 }
 
 #[cfg(feature = "lazy-binding")]
 impl<Arch: RelocationArch> LazyBindingInfo<Arch> {
     #[inline]
-    pub(crate) fn new(pltrel: Option<MappedView<ElfRelType<Arch>>>) -> Self {
+    pub(crate) fn new(
+        pltrel: Option<MappedView<ElfRelType<Arch>>>,
+        symtab: SymbolTable<Arch::Layout>,
+    ) -> Self {
         Self {
             pltrel: pltrel.unwrap_or_else(MappedView::empty),
+            symtab,
             scope: OnceCell::new(),
         }
     }
@@ -101,6 +165,9 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
 
     /// List of needed library names from the dynamic section
     needed_libs: Box<[&'static str]>,
+
+    /// Relocation-only dynamic symbol table.
+    symtab: SymbolTable<Arch::Layout>,
 }
 
 impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
@@ -353,6 +420,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     }
 
     #[inline]
+    pub(crate) fn symtab(&self) -> &SymbolTable<Arch::Layout> {
+        &self.extra.symtab
+    }
+
+    #[inline]
     /// Gets a reference to the user data
     pub fn user_data(&self) -> &D {
         self.module.user_data()
@@ -399,7 +471,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         )?;
 
         let static_tls = force_static_tls | dynamic.static_tls;
-        let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
+        let symtab = load_dynamic_symtab(&dynamic, &segments)?;
+        let exports = symtab.clone();
+        #[cfg(feature = "lazy-binding")]
+        let lazy_symtab = symtab.clone();
         let needed_libs: Vec<&'static str> = dynamic
             .needed_libs
             .iter()
@@ -443,12 +518,13 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                 runpath: dynamic
                     .runpath_off
                     .map(|runpath_off| symtab.strtab().get_str(runpath_off.get())),
+                symtab,
             },
             module: ElfCore {
                 inner: Arc::new(CoreInner {
                     is_init: AtomicBool::new(false),
                     path,
-                    symtab,
+                    exports: exports_handle(exports),
                     finalizer: OnceCell::new(),
                     user_data,
                     dynamic_info: Some(Arc::new(DynamicInfo {
@@ -456,7 +532,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                         phdrs,
                         soname,
                         #[cfg(feature = "lazy-binding")]
-                        lazy: LazyBindingInfo::new(dynamic.pltrel.clone()),
+                        lazy: LazyBindingInfo::new(dynamic.pltrel.clone(), lazy_symtab),
                     })),
                     tls: CoreTlsState::new(
                         tls_mod_id,

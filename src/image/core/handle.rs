@@ -1,11 +1,8 @@
 use super::CoreInner;
 use crate::{
     Result,
-    elf::{
-        ElfDyn, ElfDynamic, ElfHashTable, ElfPhdr, ElfPhdrs, ElfSymbol, HashTable, PreCompute,
-        SymbolInfo, SymbolTable,
-    },
-    image::{DynamicInfo, Module},
+    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, PreCompute, SymbolInfo},
+    image::{DynamicInfo, Module, SymbolExports, exports_handle, load_dynamic_symtab},
     input::{Path, PathBuf},
     memory::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     observer::Finalizer,
@@ -27,39 +24,37 @@ pub struct ElfCoreRef<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
     /// Weak reference to the shared core allocation.
-    inner: Weak<CoreInner<D, Arch, R, H>>,
+    inner: Weak<CoreInner<D, Arch, R>>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> ElfCoreRef<D, Arch, R, H> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCoreRef<D, Arch, R> {
     /// Attempts to upgrade the weak pointer to an [`ElfCore`].
     ///
     /// # Returns
     /// * `Some(ElfCore)` - If the component is still alive and the upgrade is successful.
     /// * `None` - If the [`ElfCore`] has been dropped.
-    pub fn upgrade(&self) -> Option<ElfCore<D, Arch, R, H>> {
+    pub fn upgrade(&self) -> Option<ElfCore<D, Arch, R>> {
         self.inner.upgrade().map(|inner| ElfCore { inner })
     }
 }
 
 /// Shared core state for a loaded ELF image.
 ///
-/// `ElfCore` stores metadata, symbol tables, segments, TLS state, and lifecycle
+/// `ElfCore` stores metadata, runtime exports, segments, TLS state, and lifecycle
 /// handlers behind an [`Arc`]. Higher-level image wrappers delegate most common
 /// operations to this type.
 pub struct ElfCore<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
     /// Shared reference to the inner component data.
-    pub(crate) inner: Arc<CoreInner<D, Arch, R, H>>,
+    pub(crate) inner: Arc<CoreInner<D, Arch, R>>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Clone for ElfCore<D, Arch, R, H> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for ElfCore<D, Arch, R> {
     /// Clones the [`ElfCore`], incrementing the internal reference count.
     fn clone(&self) -> Self {
         ElfCore {
@@ -68,7 +63,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Clone for ElfCore<D, 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> ElfCore<D, Arch, R, H> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     /// Returns whether the ELF object has been initialized.
     #[inline]
     pub fn is_init(&self) -> bool {
@@ -83,7 +78,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> ElfCore<D, Arch, R, H
 
     /// Creates a weak reference to this ELF core.
     #[inline]
-    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R, H> {
+    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R> {
         ElfCoreRef {
             inner: Arc::downgrade(&self.inner),
         }
@@ -175,10 +170,18 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> ElfCore<D, Arch, R, H
         self.inner.segments.is_contiguous_mapping()
     }
 
-    /// Gets the symbol table
     #[inline]
-    pub fn symtab(&self) -> &SymbolTable<Arch::Layout, H> {
-        &self.inner.symtab
+    pub(crate) fn exports(&self) -> &dyn SymbolExports<Arch> {
+        &*self.inner.exports
+    }
+
+    #[inline]
+    pub(crate) fn lookup_export<'core>(
+        &'core self,
+        symbol: &SymbolInfo<'_>,
+        precompute: &mut PreCompute,
+    ) -> Option<&'core ElfSymbol<Arch::Layout>> {
+        self.exports().lookup(symbol, precompute)
     }
 
     /// Gets the EH frame header pointer
@@ -237,9 +240,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> ElfCore<D, Arch, R, H
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess>
-    ElfCore<D, Arch, R, HashTable<Arch::Layout>>
-{
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     /// Creates an ElfCore from raw components
     pub(super) unsafe fn from_raw(
         path: PathBuf,
@@ -257,7 +258,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess>
     ) -> Result<Self> {
         segments.set_base(base);
         let dynamic = ElfDynamic::<Arch>::new(dynamic_entries, dynamic_addr, &segments)?;
-        let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
+        let symtab = load_dynamic_symtab(&dynamic, &segments)?;
+        let exports = symtab.clone();
+        #[cfg(feature = "lazy-binding")]
+        let lazy_symtab = symtab.clone();
         let soname = dynamic
             .soname_off
             .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
@@ -265,13 +269,13 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess>
             inner: Arc::new(CoreInner {
                 path,
                 is_init: AtomicBool::new(true),
-                symtab,
+                exports: exports_handle(exports),
                 dynamic_info: Some(Arc::new(DynamicInfo {
                     eh_frame_hdr,
                     phdrs: ElfPhdrs::Vec(phdrs),
                     soname,
                     #[cfg(feature = "lazy-binding")]
-                    lazy: crate::image::LazyBindingInfo::new(dynamic.pltrel.clone()),
+                    lazy: crate::image::LazyBindingInfo::new(dynamic.pltrel.clone(), lazy_symtab),
                 })),
                 tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_get_addr, tls_unregister),
                 segments,
@@ -282,7 +286,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Debug for ElfCore<D, Arch, R, H> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for ElfCore<D, Arch, R> {
     /// Formats the ElfCore for debugging purposes.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfCore")
@@ -294,12 +298,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, H> Debug for ElfCore<D, 
     }
 }
 
-impl<D, Arch, R, H> Module<Arch> for ElfCore<D, Arch, R, H>
+impl<D, Arch, R> Module<Arch> for ElfCore<D, Arch, R>
 where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    H: ElfHashTable<Arch::Layout> + 'static,
 {
     #[inline]
     fn as_any(&self) -> &dyn Any {
@@ -317,7 +320,7 @@ where
         symbol: &SymbolInfo<'_>,
         precompute: &mut PreCompute,
     ) -> Option<&'source ElfSymbol<Arch::Layout>> {
-        self.symtab().lookup_filter(symbol, precompute)
+        self.lookup_export(symbol, precompute)
     }
 
     #[inline]

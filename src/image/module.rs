@@ -57,11 +57,10 @@ impl<Arch: RelocationArch> ModuleHandle<Arch> {
 
     /// Downcasts the retained module to a loaded ELF image.
     #[inline]
-    pub fn as_loaded<D, R, H>(&self) -> Option<&LoadedCore<D, Arch, R, H>>
+    pub fn as_loaded<D, R>(&self) -> Option<&LoadedCore<D, Arch, R>>
     where
         D: 'static,
         R: RegionAccess,
-        H: 'static,
     {
         self.downcast_ref()
     }

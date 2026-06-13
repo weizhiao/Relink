@@ -4,11 +4,12 @@
 //! ELF files (also known as object files). These are typically `.o` files that
 //! contain code and data that need to be relocated before they can be executed.
 
-use crate::object::{CustomHash, ObjectBuilder, PltGotSection};
+use crate::object::{ObjectBuilder, ObjectSymbolTable, PltGotSection};
 use crate::segment::ElfSegments;
 use crate::{
     Result,
-    elf::{ElfShdr, Lifecycle, SymbolTable},
+    elf::{ElfShdr, Lifecycle},
+    image::{EmptyExports, exports_handle},
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{
@@ -34,7 +35,10 @@ pub struct RawObject<
     R: RegionAccess = HostRegion,
 > {
     /// Core component containing basic ELF information.
-    pub(crate) core: ElfCore<D, Arch, R, CustomHash>,
+    pub(crate) core: ElfCore<D, Arch, R>,
+
+    /// Relocation-only object symbol table.
+    pub(crate) symtab: ObjectSymbolTable<Arch::Layout>,
 
     /// Rebased section headers retained for object relocation metadata.
     pub(crate) shdrs: Vec<ElfShdr<Arch::Layout>>,
@@ -49,15 +53,15 @@ pub struct RawObject<
     /// Initialization-only mapped memory.
     pub(crate) init_segments: Option<ElfSegments<R>>,
 
-    /// Symbol table to install after initialization memory can be released.
-    pub(crate) post_init_symtab: Option<SymbolTable<Arch::Layout, CustomHash>>,
+    /// Whether relocation-only symbol metadata must be discarded after init.
+    pub(crate) discard_symtab_after_init: bool,
 
     /// Initialization lifecycle.
     pub(crate) init: Lifecycle,
 }
 
 impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Deref for RawObject<D, Arch, R> {
-    type Target = ElfCore<D, Arch, R, CustomHash>;
+    type Target = ElfCore<D, Arch, R>;
 
     fn deref(&self) -> &Self::Target {
         &self.core
@@ -70,7 +74,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
         let inner = CoreInner {
             is_init: AtomicBool::new(false),
             path: builder.path,
-            symtab: builder.symtab,
+            exports: exports_handle(EmptyExports::<Arch>::new()),
             finalizer: OnceCell::new(),
             user_data: builder.user_data,
             dynamic_info: None,
@@ -87,11 +91,12 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
             core: ElfCore {
                 inner: Arc::new(inner),
             },
+            symtab: builder.symtab,
             shdrs: builder.shdrs,
             pltgot: builder.pltgot,
             mprotect: builder.mprotect,
             init_segments,
-            post_init_symtab: builder.post_init_symtab,
+            discard_symtab_after_init: builder.discard_symtab_after_init,
             init: builder.init,
         }
     }
@@ -141,7 +146,7 @@ pub struct LoadedObject<
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
 > {
-    pub(crate) inner: LoadedCore<D, Arch, R, CustomHash>,
+    pub(crate) inner: LoadedCore<D, Arch, R>,
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedObject<D, Arch, R> {
@@ -162,31 +167,31 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedObject<D
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Deref for LoadedObject<D, Arch, R> {
-    type Target = LoadedCore<D, Arch, R, CustomHash>;
+    type Target = LoadedCore<D, Arch, R>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Borrow<LoadedCore<D, Arch, R, CustomHash>>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Borrow<LoadedCore<D, Arch, R>>
     for LoadedObject<D, Arch, R>
 {
-    fn borrow(&self) -> &LoadedCore<D, Arch, R, CustomHash> {
+    fn borrow(&self) -> &LoadedCore<D, Arch, R> {
         &self.inner
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Borrow<LoadedCore<D, Arch, R, CustomHash>>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Borrow<LoadedCore<D, Arch, R>>
     for &LoadedObject<D, Arch, R>
 {
-    fn borrow(&self) -> &LoadedCore<D, Arch, R, CustomHash> {
+    fn borrow(&self) -> &LoadedCore<D, Arch, R> {
         &self.inner
     }
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<LoadedObject<D, Arch, R>>
-    for LoadedCore<D, Arch, R, CustomHash>
+    for LoadedCore<D, Arch, R>
 {
     #[inline]
     fn from(object: LoadedObject<D, Arch, R>) -> Self {
@@ -195,7 +200,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<LoadedObject<D, Arc
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedObject<D, Arch, R>>
-    for LoadedCore<D, Arch, R, CustomHash>
+    for LoadedCore<D, Arch, R>
 {
     #[inline]
     fn from(object: &LoadedObject<D, Arch, R>) -> Self {

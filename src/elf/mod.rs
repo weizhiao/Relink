@@ -16,16 +16,16 @@ mod phdr;
 mod shdr;
 mod symbol;
 #[cfg(feature = "version")]
-mod version;
+pub(crate) mod version;
 pub mod write;
 
 // Internal module re-exports for use within the crate
 pub(crate) use defs::*;
 pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab, LifecycleSpec, parse_dynamic_entries};
+#[cfg(feature = "object")]
+pub(crate) use hash::SymbolHash;
 pub(crate) use phdr::ElfPhdrs;
 pub(crate) use symbol::ElfStringTable;
-#[cfg(feature = "object")]
-pub(crate) use symbol::SymbolStorage;
 
 // Public API exports
 pub use defs::{
@@ -37,11 +37,11 @@ pub use defs::{
 pub use dynamic::ElfDyn;
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::ElfHeader;
+pub use hash::HashTable;
 pub use hash::PreCompute;
-pub use hash::{ElfHashTable, HashTable};
 pub use phdr::ElfPhdr;
 pub use shdr::ElfShdr;
-pub use symbol::{ElfSymbol, SymbolInfo, SymbolTable};
+pub use symbol::{ElfSymbol, SymbolInfo, SymbolTable, SymbolTableView};
 
 unsafe impl ByteRepr for defs::ElfEhdr {}
 unsafe impl<L: defs::ElfLayout> ByteRepr for dynamic::ElfDyn<L> {}

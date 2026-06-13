@@ -4,10 +4,9 @@
 //! While less efficient than the GNU hash table, it is still widely supported and
 //! used in many ELF implementations.
 
-use super::ElfHashTable;
 use crate::{
     ParseDynamicError, Result,
-    elf::{ElfLayout, ElfSymbol, PreCompute, SymbolTable, symbol::SymbolInfo},
+    elf::{ElfLayout, ElfSymbol, PreCompute, SymbolTableView, symbol::SymbolInfo},
     memory::{MappedView, RegionAccess, VmAddr},
     segment::ElfSegments,
 };
@@ -17,6 +16,7 @@ use core::mem::size_of;
 /// This structure represents the header of a SYSV hash table, which contains
 /// metadata about the hash table structure.
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct ElfHashHeader {
     /// Number of bucket entries in the hash table
     nbucket: u32,
@@ -40,6 +40,7 @@ impl ElfHashHeader {
 ///
 /// This structure represents a SYSV hash table, which uses a bucket/chain
 /// structure to organize symbols for efficient lookup.
+#[derive(Clone)]
 pub(crate) struct ElfHash {
     /// Hash table header containing metadata
     header: ElfHashHeader,
@@ -132,13 +133,13 @@ impl ElfHash {
     }
 }
 
-impl<L: ElfLayout> ElfHashTable<L> for ElfHash {
+impl ElfHash {
     /// Get the number of symbols in the hash table
     ///
     /// # Returns
     /// The number of symbols (chain entries) in the hash table
     #[inline]
-    fn count_syms(&self) -> usize {
+    pub(crate) fn count_syms(&self) -> usize {
         self.header.nchain as usize
     }
 
@@ -155,9 +156,9 @@ impl<L: ElfLayout> ElfHashTable<L> for ElfHash {
     /// # Returns
     /// * `Some(symbol)` - A reference to the found symbol
     /// * `None` - If the symbol was not found
-    fn lookup<'sym, H>(
+    pub(crate) fn lookup<'sym, L: ElfLayout, H>(
         &self,
-        table: &'sym SymbolTable<L, H>,
+        table: SymbolTableView<'sym, L, H>,
         symbol: &SymbolInfo,
         precompute: &mut PreCompute,
     ) -> Option<&'sym ElfSymbol<L>> {

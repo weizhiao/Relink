@@ -1,7 +1,7 @@
 use crate::{
     RelocReason, Result,
     arch::riscv64::relocation::RiscV64Arch,
-    elf::{ElfHashTable, ElfRelType, ElfRelocationType, ElfShdr},
+    elf::{ElfRelType, ElfRelocationType, ElfShdr},
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     object::{
         layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
@@ -93,7 +93,6 @@ impl ObjectRelocationArch for RiscV64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -114,7 +113,6 @@ impl ObjectRelocationArch for RiscV64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -143,7 +141,6 @@ impl RiscV64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -188,7 +185,6 @@ impl RiscV64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -197,7 +193,8 @@ impl RiscV64Arch {
         let r_type = rel.r_type().raw();
         let addend = object_relocation_addend::<Self, _>(helper.memory(), target, rel)?;
         let place = VmAddr::new(target.sh_addr()) + rel.r_offset();
-        let value_error = |reason| reloc_error::<Self, _, R, H>(rel, reason, helper.core);
+        let value_error =
+            |reason| reloc_error::<Self, _, R, H>(rel, reason, helper.core, helper.symbols());
 
         match r_type {
             R_RISCV_NONE | R_RISCV_RELAX => {}
@@ -456,7 +453,6 @@ impl RiscV64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -468,6 +464,7 @@ impl RiscV64Arch {
                 rel,
                 RelocReason::Unsupported,
                 helper.core,
+                helper.symbols(),
             ));
         };
 
@@ -538,7 +535,6 @@ impl RiscV64Arch {
         T: WrappingRelocWord + crate::ByteRepr,
         D: 'static,
         R: RegionAccess,
-        H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -628,7 +624,6 @@ fn branch_offset<D, R, PreH, PostH, Obs, H, Memory>(
 where
     D: 'static,
     R: RegionAccess,
-    H: ElfHashTable<<RiscV64Arch as crate::relocation::RelocationArch>::Layout> + 'static,
     PreH: RelocationHandler<RiscV64Arch> + ?Sized,
     PostH: RelocationHandler<RiscV64Arch> + ?Sized,
     Obs: RelocationObserver<RiscV64Arch> + ?Sized,
@@ -641,6 +636,7 @@ where
             rel,
             RelocReason::IntConversionOutOfRange,
             helper.core,
+            helper.symbols(),
         ));
     }
     Ok(off)

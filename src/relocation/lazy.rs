@@ -203,12 +203,13 @@ mod enabled {
             invalid_relocation(dylib.path.as_str(), rela_idx, rela);
         }
 
-        let sym_count = dylib.symtab.count_syms();
+        let symtab = dynamic_info.lazy.symtab.view();
+        let sym_count = symtab.count_syms();
         if unlikely(r_sym >= sym_count) {
             invalid_symbol_index(dylib.path.as_str(), r_sym, sym_count);
         }
 
-        let (_, syminfo) = dylib.symtab.symbol_idx(r_sym);
+        let (_, syminfo) = symtab.symbol_idx(r_sym);
 
         let Some(scope) = dynamic_info.lazy.scope.get() else {
             invalid_state(dylib.path.as_str(), "missing lazy lookup")

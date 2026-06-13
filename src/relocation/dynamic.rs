@@ -70,6 +70,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
         let mut helper = RelocHelper::new(
             self.core_ref(),
+            self.symtab().view(),
             self.core_ref().segments(),
             scope,
             pre_handler,
@@ -213,7 +214,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             }
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)?.is_unhandled() {
-                return Err(reloc_error(rel, failure_reason, core));
+                return Err(reloc_error(rel, failure_reason, core, self.symtab().view()));
             }
         }
         Ok(self)
@@ -332,9 +333,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                 failure_reason = RelocReason::UnknownSymbol;
             } else if r_type == Arch::COPY {
                 // Handle copy relocations (typically for global data)
+                let len = helper.symbols().symbol_idx(r_sym).0.st_size();
                 if let Some(symdef) = helper.find_symdef(r_sym) {
                     if let Some(sym) = symdef.symbol() {
-                        let len = core.symtab().symbol_idx(r_sym).0.st_size();
                         let mut src = Vec::new();
                         src.resize(len, 0);
                         symdef.read_bytes(VmOffset::new(sym.st_value()), &mut src)?;
@@ -364,7 +365,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)?.is_unhandled() {
-                return Err(reloc_error(rel, failure_reason, core));
+                return Err(reloc_error(rel, failure_reason, core, self.symtab().view()));
             }
         }
         Ok(self)

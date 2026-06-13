@@ -13,7 +13,7 @@ mod enabled {
     use crate::{
         RelocReason, Result,
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
-        elf::{ElfHashTable, ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
+        elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
         memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
         observer::{
             RelocationObserver, TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
@@ -56,7 +56,6 @@ mod enabled {
         D: 'static,
         Arch: RelocationArch,
         R: RegionAccess,
-        H: ElfHashTable<Arch::Layout> + 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
@@ -118,7 +117,6 @@ mod enabled {
         D: 'static,
         Arch: RelocationArch,
         R: RegionAccess,
-        H: ElfHashTable<Arch::Layout> + 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,

@@ -77,8 +77,6 @@ impl X86_64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        H: crate::elf::ElfHashTable<<X86_64Arch as crate::relocation::RelocationArch>::Layout>
-            + 'static,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: crate::observer::RelocationObserver<Self> + ?Sized,
@@ -88,8 +86,15 @@ impl X86_64Arch {
         let core = helper.core;
         let append = object_relocation_addend::<Self, _>(helper.memory(), target, rel)?;
         let place = VmAddr::new(target.sh_addr()) + rel.r_offset();
-        let unknown_symbol = || reloc_error(rel, crate::RelocReason::UnknownSymbol, core);
-        let value_error = |reason| reloc_error(rel, reason, core);
+        let unknown_symbol = || {
+            reloc_error(
+                rel,
+                crate::RelocReason::UnknownSymbol,
+                core,
+                helper.symbols(),
+            )
+        };
+        let value_error = |reason| reloc_error(rel, reason, core, helper.symbols());
         let relocation_target_value = |target| {
             Self::object_relocation_value(r_type.raw() as usize, target, append, place.get())
         };
