@@ -17,7 +17,7 @@ use crate::{
         DynamicRelocation, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
     },
     runtime::CodeExecutor,
-    segment::{ELFRelro, ElfSegments},
+    segment::{ElfSegments, MemoryProtection},
     tls::{CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -127,7 +127,7 @@ pub(crate) struct RawDynamicParts<
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) tls_info: Option<TlsInfo>,
     pub(crate) force_static_tls: bool,
-    pub(crate) relro: Option<ELFRelro>,
+    pub(crate) relro: Option<MemoryProtection>,
     pub(crate) segments: crate::segment::ElfSegments<R>,
     pub(crate) user_data: D,
 }
@@ -147,8 +147,8 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
     /// Dynamic relocation information (rela.dyn and rela.plt)
     relocation: DynamicRelocation<Arch>,
 
-    /// GNU_RELRO segment information for memory protection
-    relro: Option<ELFRelro>,
+    /// GNU_RELRO memory protection.
+    relro: Option<MemoryProtection>,
 
     /// Runtime address of the dynamic section.
     dynamic_addr: VmAddr,
@@ -376,12 +376,12 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         Ok(())
     }
 
-    /// Gets the GNU_RELRO segment information
+    /// Gets the GNU_RELRO memory protection.
     ///
     /// # Returns
-    /// An optional reference to the ELFRelro structure
+    /// An optional reference to the protection range.
     #[inline]
-    pub(crate) fn relro(&self) -> Option<&ELFRelro> {
+    pub(crate) fn relro(&self) -> Option<&MemoryProtection> {
         self.extra.relro.as_ref()
     }
 

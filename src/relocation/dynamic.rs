@@ -22,7 +22,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         }
 
         if let Some(relro) = self.relro() {
-            relro.relro(self.core_ref().segments())?;
+            relro.apply(self.core_ref().segments())?;
         }
         Ok(())
     }

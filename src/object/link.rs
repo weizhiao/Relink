@@ -4,11 +4,13 @@ use crate::{
         ElfLayout, ElfRelEntry, ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr,
         ElfSymbol, ElfSymbolType, ElfWord,
     },
-    image::{ModuleScope, RawObject, SymbolExports, exports_handle},
+    image::{LoadedCore, LoadedObject, ModuleScope, RawObject, SymbolExports, exports_handle},
     logging,
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     object::{ObjectExports, ObjectSegmentView, section_entries},
-    observer::{InitEvent, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent},
+    observer::{
+        Finalizer, InitEvent, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent,
+    },
     relocate_context_error,
     relocation::{
         ObjectRelocationArch, RelocHelper, RelocateArgs, RelocationHandler, resolve_symbol_addr,
@@ -19,33 +21,32 @@ use crate::{
 
 pub(crate) fn object_relocation_sections<Arch>(
     shdrs: &[ElfShdr<Arch::Layout>],
-) -> impl Iterator<Item = (&ElfShdr<Arch::Layout>, &ElfShdr<Arch::Layout>)> + '_
+) -> impl Iterator<
+    Item = (
+        ElfSectionId,
+        ElfSectionId,
+        &ElfShdr<Arch::Layout>,
+        &ElfShdr<Arch::Layout>,
+    ),
+> + '_
 where
     Arch: ObjectRelocationArch,
 {
     shdrs
         .iter()
+        .enumerate()
         .filter(|shdr| {
             matches!(
-                shdr.section_type(),
+                shdr.1.section_type(),
                 ElfSectionType::REL | ElfSectionType::RELA
             )
         })
-        .map(move |relocation_shdr| {
-            let target = &shdrs[relocation_shdr.sh_info() as usize];
-            (target, relocation_shdr)
+        .map(move |(relocation_index, relocation_shdr)| {
+            let target_id = ElfSectionId::new(relocation_shdr.sh_info() as usize);
+            let relocation_id = ElfSectionId::new(relocation_index);
+            let target = &shdrs[target_id.index()];
+            (target_id, relocation_id, target, relocation_shdr)
         })
-}
-
-pub(crate) fn object_relocation_entries<Arch, Memory>(
-    memory: &Memory,
-    shdr: &ElfShdr<Arch::Layout>,
-) -> Result<&'static [ElfRelType<Arch>]>
-where
-    Arch: ObjectRelocationArch,
-    Memory: ImageMemory + ?Sized,
-{
-    section_entries(memory, shdr)
 }
 
 #[inline]
@@ -75,7 +76,7 @@ where
     pub(crate) fn relocate_impl<PreH, PostH, Obs>(
         mut self,
         args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
-    ) -> Result<crate::image::LoadedCore<D, Arch, R>>
+    ) -> Result<LoadedObject<D, Arch, R>>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
@@ -106,11 +107,19 @@ where
             executor.as_ref(),
             self.core.tls_get_addr(),
         );
-        let shdrs = &self.shdrs;
+        let shdrs = self.sections.headers();
         let mut state = Arch::ObjectRelocationState::default();
         Arch::prepare_object_relocation(&mut state, &mut helper, shdrs)?;
-        for (target, relocation_shdr) in object_relocation_sections::<Arch>(shdrs) {
-            let rels = object_relocation_entries::<Arch, _>(helper.memory(), relocation_shdr)?;
+        for (target_id, relocation_id, target, relocation_shdr) in
+            object_relocation_sections::<Arch>(shdrs)
+        {
+            if !self.section_is_mapped(target_id) || !self.section_is_mapped(relocation_id) {
+                continue;
+            }
+            let rels = section_entries::<Arch::Layout, ElfRelType<Arch>, _>(
+                helper.memory(),
+                relocation_shdr,
+            )?;
             for rel in rels {
                 if !helper.handle_pre(rel)?.is_unhandled() {
                     continue;
@@ -134,26 +143,35 @@ where
         } = helper;
         self.core.set_tls_desc_args(tls_desc_args);
 
-        let mut event = ObjectRelocatedEvent::new(&self.core, &self.shdrs, self.symtab.view());
+        let finalizer = Finalizer::new(core::mem::take(&mut self.fini), executor.clone());
+        let event_segments =
+            ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
+        let mut event = ObjectRelocatedEvent::new(
+            &self.core,
+            &self.sections,
+            self.symtab.view(),
+            event_segments,
+            finalizer,
+        );
         observer.on_object_relocated(&mut event)?;
-        let exports = event
-            .into_exports()
-            .unwrap_or_else(|| exports_handle(self.default_exports()));
+        let (exports, finalizer) = event.into_parts();
+        let exports = exports.unwrap_or_else(|| exports_handle(self.default_exports()));
         self.install_exports(exports);
+        self.core.set_finalizer(finalizer);
 
         let object_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
-        (self.mprotect)(&object_segments)?;
+        self.section_segments.mprotect(&object_segments)?;
 
         self.call_init(observer, object_segments, executor.as_ref())?;
-        drop(self.init_segments.take());
-        self.core.set_init();
+        self.section_segments.mprotect_final(&object_segments)?;
 
         logging::info!("Relocation completed for {}", self.core.name());
 
-        Ok(crate::image::LoadedCore::from_relocated_core_deps(
-            self.core, scope,
-        ))
+        let core = self.core;
+        Ok(LoadedObject {
+            inner: LoadedCore::from_relocated_core_deps(core, scope),
+        })
     }
 
     #[inline]
@@ -170,6 +188,7 @@ where
         let mut event = InitEvent::new(&self.core, &self.init);
         observer.on_init(&mut event)?;
         event.run_with(&segments, executor)?;
+        self.core.set_init();
         Ok(())
     }
 
@@ -205,7 +224,7 @@ where
                     else {
                         continue;
                     };
-                    VmAddr::new(self.shdrs[section_id.index()].sh_addr())
+                    VmAddr::new(self.sections.section(section_id).sh_addr())
                         .wrapping_add(VmOffset::new(symbol.st_value()))
                 };
                 addr.wrapping_offset_from(base).get()
@@ -250,7 +269,7 @@ where
         let Some(section_id) = ElfSectionId::from_symbol_shndx(symbol.st_shndx()) else {
             return false;
         };
-        let section_addr = VmAddr::new(self.shdrs[section_id.index()].sh_addr());
+        let section_addr = VmAddr::new(self.sections.section(section_id).sh_addr());
         init_segments.contains_addr(section_addr)
     }
 }

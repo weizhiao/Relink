@@ -5,7 +5,7 @@ use crate::{
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     object::{
         layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
-        object_relocation_addend, object_relocation_entries, object_relocation_sections,
+        object_relocation_addend, object_relocation_sections, section_entries,
     },
     observer::RelocationObserver,
     relocation::{ObjectRelocationArch, RelocHelper, RelocationHandler, reloc_error},
@@ -148,8 +148,12 @@ impl RiscV64Arch {
     {
         state.hi20_cache.clear();
 
-        for (target, relocation_shdr) in object_relocation_sections::<Self>(shdrs) {
-            let rels = object_relocation_entries::<Self, _>(helper.memory(), relocation_shdr)?;
+        for (_, _, target, relocation_shdr) in object_relocation_sections::<Self>(shdrs) {
+            let rels = section_entries::<
+                <Self as crate::relocation::RelocationArch>::Layout,
+                ElfRelType<Self>,
+                _,
+            >(helper.memory(), relocation_shdr)?;
             for rel in rels {
                 let r_type = rel.r_type().raw();
                 if r_type == R_RISCV_PCREL_HI20 || r_type == R_RISCV_GOT_HI20 {

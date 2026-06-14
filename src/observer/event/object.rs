@@ -1,25 +1,26 @@
 use crate::{
     elf::{
-        ElfHeader, ElfLayout, ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout,
+        ElfHeader, ElfLayout, ElfSectionId, ElfSectionType, ElfShdr, Lifecycle, NativeElfLayout,
         SymbolTableView,
     },
     image::{ElfCore, RawObject, SymbolExports, exports_handle},
     input::{ElfReader, ElfReaderExt, Path},
-    memory::{HostRegion, RegionAccess},
+    memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     object::{
-        CustomHash, ObjectExports, ObjectSections,
-        layout::{SectionGroup, SectionGroups, SectionLifetime, SectionPlacement},
+        CustomHash, ObjectExports, ObjectSections, ObjectSegmentView,
+        layout::{SectionGroup, SectionPlacement},
     },
     relocation::{ObjectRelocationArch, RelocationArch},
     sync::Arc,
 };
 use alloc::vec::Vec;
-use core::ffi::CStr;
+use core::{ffi::CStr, ptr::NonNull};
+
+use super::lifecycle::{Finalizer, FiniEvent};
 
 /// Relocatable-object layout event emitted before section addresses are assigned.
 pub struct SectionLayoutEvent<'event, L: ElfLayout = NativeElfLayout> {
     sections: &'event mut ObjectSections<L>,
-    groups: SectionGroups,
     placements: Vec<Option<SectionPlacement>>,
 }
 
@@ -30,31 +31,19 @@ impl<'event, L: ElfLayout> SectionLayoutEvent<'event, L> {
         placements.resize(sections.headers().len(), None);
         Self {
             sections,
-            groups: SectionGroups::default(),
             placements,
         }
     }
 
     #[inline]
-    pub(crate) fn into_overrides(self) -> (SectionGroups, Vec<Option<SectionPlacement>>) {
-        (self.groups, self.placements)
+    pub(crate) fn into_placements(self) -> Vec<Option<SectionPlacement>> {
+        self.placements
     }
 
     /// Returns all section ids in table order.
     #[inline]
     pub fn section_ids(&self) -> impl Iterator<Item = ElfSectionId> + '_ {
         (0..self.sections.headers().len()).map(ElfSectionId::new)
-    }
-
-    /// Defines or replaces one layout group.
-    pub fn define_group(
-        &mut self,
-        group: SectionGroup,
-        prot: crate::os::ProtFlags,
-        order: usize,
-        lifetime: SectionLifetime,
-    ) {
-        self.groups.define(group, prot, order, lifetime);
     }
 
     /// Places `id` in `group`.
@@ -74,50 +63,14 @@ impl<'event, L: ElfLayout> SectionLayoutEvent<'event, L> {
     pub fn group(&self, id: ElfSectionId) -> Option<SectionGroup> {
         match self.placements[id.index()] {
             Some(SectionPlacement::Place(group)) => Some(group),
-            Some(SectionPlacement::Stage | SectionPlacement::Skip) | None => None,
+            Some(SectionPlacement::Skip) | None => None,
         }
     }
 
-    /// Returns the validated section headers.
+    /// Returns the validated object sections.
     #[inline]
-    pub fn sections(&self) -> &[ElfShdr<L>] {
-        self.sections.headers()
-    }
-
-    /// Returns mutable validated section headers.
-    #[inline]
-    pub fn sections_mut(&mut self) -> &mut [ElfShdr<L>] {
-        self.sections.headers_mut()
-    }
-
-    /// Returns one section header by id.
-    #[inline]
-    pub fn section(&self, id: ElfSectionId) -> &ElfShdr<L> {
-        self.sections.section(id)
-    }
-
-    /// Returns one mutable section header by id.
-    #[inline]
-    pub fn section_mut(&mut self, id: ElfSectionId) -> &mut ElfShdr<L> {
-        self.sections.section_mut(id)
-    }
-
-    /// Returns the raw section-name string table bytes.
-    #[inline]
-    pub fn section_name_table(&self) -> &[u8] {
-        self.sections.name_table()
-    }
-
-    /// Returns one validated section name as a NUL-terminated byte string.
-    #[inline]
-    pub fn section_name(&self, id: ElfSectionId) -> &CStr {
-        self.sections.section_name(id)
-    }
-
-    /// Finds the first section whose name equals `name`.
-    #[inline]
-    pub fn find_section(&self, name: &str) -> Option<ElfSectionId> {
-        self.sections.find_section(name)
+    pub fn sections(&self) -> &ObjectSections<L> {
+        self.sections
     }
 }
 
@@ -158,7 +111,8 @@ where
 /// Relocated-object event emitted after relocation and before memory protection
 /// and initialization.
 ///
-/// The event exposes relocated section headers and the object symbol table.
+/// The event exposes relocated section headers, object memory, and the object
+/// symbol table.
 /// Observers may install any [`SymbolExports`] implementation, including a
 /// backend derived from custom metadata such as kernel export tables. If no
 /// exports are installed, the object loader builds the default exports after
@@ -170,9 +124,11 @@ pub struct ObjectRelocatedEvent<
     R: RegionAccess = HostRegion,
 > {
     core: &'event ElfCore<D, Arch, R>,
-    shdrs: &'event [ElfShdr<Arch::Layout>],
+    sections: &'event ObjectSections<Arch::Layout>,
     symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
+    memory: ObjectSegmentView<'event, R>,
     exports: Option<Arc<dyn SymbolExports<Arch>>>,
+    finalizer: Finalizer<Arch>,
 }
 
 impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess>
@@ -181,14 +137,18 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess>
     #[inline]
     pub(crate) fn new(
         core: &'event ElfCore<D, Arch, R>,
-        shdrs: &'event [ElfShdr<Arch::Layout>],
+        sections: &'event ObjectSections<Arch::Layout>,
         symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
+        memory: ObjectSegmentView<'event, R>,
+        finalizer: Finalizer<Arch>,
     ) -> Self {
         Self {
             core,
-            shdrs,
+            sections,
             symtab,
+            memory,
             exports: None,
+            finalizer,
         }
     }
 
@@ -198,22 +158,57 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess>
         self.core
     }
 
-    /// Returns relocated section headers in table order.
+    /// Returns relocated object section metadata.
     #[inline]
-    pub const fn sections(&self) -> &'event [ElfShdr<Arch::Layout>] {
-        self.shdrs
+    pub const fn sections(&self) -> &'event ObjectSections<Arch::Layout> {
+        self.sections
     }
 
-    /// Returns one relocated section header by id.
+    /// Returns whether one section participates in the runtime object layout.
     #[inline]
-    pub fn section(&self, id: ElfSectionId) -> &ElfShdr<Arch::Layout> {
-        &self.shdrs[id.index()]
+    pub fn section_is_mapped(&self, id: ElfSectionId) -> bool {
+        self.sections.section_is_mapped(id)
     }
 
     /// Returns the relocated object symbol table view.
     #[inline]
     pub const fn symtab(&self) -> SymbolTableView<'event, Arch::Layout, CustomHash> {
         self.symtab
+    }
+
+    /// Returns relocated object memory.
+    #[inline]
+    pub const fn memory(&self) -> ObjectSegmentView<'event, R> {
+        self.memory
+    }
+
+    /// Returns the relocated VM address of one mapped section.
+    #[inline]
+    pub fn section_addr(&self, id: ElfSectionId) -> Option<VmAddr> {
+        self.section_is_mapped(id)
+            .then(|| VmAddr::new(self.sections.section(id).sh_addr()))
+    }
+
+    /// Returns the size of one section.
+    #[inline]
+    pub fn section_size(&self, id: ElfSectionId) -> usize {
+        self.sections.section(id).sh_size()
+    }
+
+    /// Translates the beginning of one relocated section into a host pointer.
+    #[inline]
+    pub fn section_host_ptr(&self, id: ElfSectionId) -> Option<NonNull<u8>> {
+        self.section_host_ptr_range(id, self.section_size(id))
+    }
+
+    /// Translates the beginning of one relocated section range into a host
+    /// pointer.
+    pub fn section_host_ptr_range(&self, id: ElfSectionId, len: usize) -> Option<NonNull<u8>> {
+        let addr = self.section_addr(id)?;
+        if len > self.section_size(id) {
+            return None;
+        }
+        self.memory.host_ptr_range(addr, len)
     }
 
     /// Replaces runtime exports with a custom backend.
@@ -231,9 +226,31 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess>
         self.set_exports(ObjectExports::<Arch::Layout>::empty());
     }
 
+    /// Returns the finalization lifecycle that will be run when the initialized
+    /// object is dropped.
     #[inline]
-    pub(crate) fn into_exports(self) -> Option<Arc<dyn SymbolExports<Arch>>> {
-        self.exports
+    pub fn fini(&self) -> &Lifecycle {
+        self.finalizer.lifecycle()
+    }
+
+    /// Returns mutable finalization lifecycle addresses.
+    #[inline]
+    pub fn fini_mut(&mut self) -> &mut Lifecycle {
+        self.finalizer.lifecycle_mut()
+    }
+
+    /// Installs a hook that runs immediately before finalization functions.
+    #[inline]
+    pub fn set_fini_hook<F>(&mut self, hook: F)
+    where
+        F: for<'fini> Fn(&mut FiniEvent<'fini>) -> crate::Result<()> + Send + Sync + 'static,
+    {
+        self.finalizer.set_hook(hook);
+    }
+
+    #[inline]
+    pub(crate) fn into_parts(self) -> (Option<Arc<dyn SymbolExports<Arch>>>, Finalizer<Arch>) {
+        (self.exports, self.finalizer)
     }
 }
 

@@ -5,14 +5,15 @@ use crate::{
     elf::{
         ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionId, ElfSectionType, ElfShdr,
     },
+    entity::{EntityRef, PrimaryMap},
     input::{ElfReader, ElfReaderExt},
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset, rounddown, roundup},
     observer::{LoadObserver, SectionLayoutEvent},
     os::{MapFlags, Mmap, ProtFlags},
     relocation::{ObjectRelocationArch, RelocationArch},
-    segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder},
+    segment::{ElfSegment, ElfSegments, FileMapInfo, MemoryProtection, SegmentBuilder},
 };
-use alloc::{boxed::Box, vec::Vec};
+use alloc::vec::Vec;
 use core::ptr::NonNull;
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
 
@@ -32,8 +33,6 @@ pub(crate) fn section_prot(sh_flags: ElfSectionFlags) -> ProtFlags {
 pub(crate) struct SectionSegments<Arch: ObjectRelocationArch = crate::arch::NativeArch> {
     core: SectionSegmentSet,
     init: SectionSegmentSet,
-    section_lifetimes: Box<[SectionLifetime]>,
-    pltgot_lifetimes: PltGotLifetimes,
     pltgot: Option<PltGotSection>,
     _arch: core::marker::PhantomData<Arch>,
 }
@@ -76,7 +75,8 @@ impl<R: RegionAccess> ObjectSegments<R> {
     }
 }
 
-pub(crate) struct ObjectSegmentView<'segments, R: RegionAccess> {
+/// Borrowed view over core and init-only object mappings.
+pub struct ObjectSegmentView<'segments, R: RegionAccess> {
     core: &'segments ElfSegments<R>,
     init: Option<&'segments ElfSegments<R>>,
 }
@@ -100,12 +100,12 @@ impl<'segments, R: RegionAccess> ObjectSegmentView<'segments, R> {
     }
 
     #[inline]
-    pub(crate) const fn core(&self) -> &'segments ElfSegments<R> {
+    pub const fn core(&self) -> &'segments ElfSegments<R> {
         self.core
     }
 
     #[inline]
-    pub(crate) const fn init(&self) -> Option<&'segments ElfSegments<R>> {
+    pub const fn init(&self) -> Option<&'segments ElfSegments<R>> {
         self.init
     }
 
@@ -158,23 +158,36 @@ impl<R: RegionAccess> ImageMemory for ObjectSegmentView<'_, R> {
     }
 }
 
-/// User-defined bucket used to place object sections during layout.
+/// Handle to a bucket used to place object sections during layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SectionGroup(u16);
+pub struct SectionGroup(usize);
 
 impl SectionGroup {
-    /// Creates a section layout group identifier.
-    #[inline]
-    pub const fn new(id: u16) -> Self {
-        Self(id)
-    }
-
     /// Returns the raw group identifier.
     #[inline]
-    pub const fn get(self) -> u16 {
+    pub const fn index(self) -> usize {
         self.0
     }
 }
+
+impl EntityRef for SectionGroup {
+    #[inline]
+    fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    #[inline]
+    fn index(self) -> usize {
+        self.0
+    }
+}
+
+const READ_SECTION_GROUP: SectionGroup = SectionGroup(0);
+const WRITE_SECTION_GROUP: SectionGroup = SectionGroup(1);
+const EXEC_SECTION_GROUP: SectionGroup = SectionGroup(2);
+const WRITE_EXEC_SECTION_GROUP: SectionGroup = SectionGroup(3);
+/// Loader-managed init-only group used for non-allocated staging metadata.
+pub(crate) const STAGING_SECTION_GROUP: SectionGroup = SectionGroup(4);
 
 /// Lifetime class for sections placed in a runtime layout group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -187,8 +200,8 @@ pub enum SectionLifetime {
 
 #[derive(Clone, Copy)]
 pub(crate) struct SectionGroupDef {
-    pub(crate) group: SectionGroup,
-    pub(crate) prot: ProtFlags,
+    pub(crate) init_prot: ProtFlags,
+    pub(crate) final_prot: ProtFlags,
     pub(crate) order: usize,
     pub(crate) lifetime: SectionLifetime,
 }
@@ -196,98 +209,101 @@ pub(crate) struct SectionGroupDef {
 impl SectionGroupDef {
     #[inline]
     pub(crate) const fn new(
-        group: SectionGroup,
-        prot: ProtFlags,
+        init_prot: ProtFlags,
+        final_prot: ProtFlags,
         order: usize,
         lifetime: SectionLifetime,
     ) -> Self {
         Self {
-            group,
-            prot,
+            init_prot,
+            final_prot,
             order,
             lifetime,
         }
     }
 }
 
-#[derive(Default)]
-pub(crate) struct SectionGroups {
-    defs: Vec<SectionGroupDef>,
+#[derive(Clone)]
+pub struct SectionGroups {
+    defs: PrimaryMap<SectionGroup, SectionGroupDef>,
 }
 
-impl SectionGroups {
+impl Default for SectionGroups {
     #[inline]
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
-        Self {
-            defs: Vec::with_capacity(capacity),
-        }
-    }
-
-    fn default_layout() -> Self {
-        let mut groups = Self::with_capacity(4);
-        groups.define(
-            SectionGroup::new(0),
-            ProtFlags::PROT_READ,
-            0,
-            SectionLifetime::Core,
+    fn default() -> Self {
+        let mut groups = Self {
+            defs: PrimaryMap::default(),
+        };
+        debug_assert_eq!(
+            groups.define(
+                ProtFlags::PROT_READ,
+                ProtFlags::PROT_READ,
+                0,
+                SectionLifetime::Core,
+            ),
+            READ_SECTION_GROUP
         );
-        groups.define(
-            SectionGroup::new(1),
-            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-            1,
-            SectionLifetime::Core,
+        debug_assert_eq!(
+            groups.define(
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+                1,
+                SectionLifetime::Core,
+            ),
+            WRITE_SECTION_GROUP
         );
-        groups.define(
-            SectionGroup::new(2),
-            ProtFlags::PROT_READ | ProtFlags::PROT_EXEC,
-            2,
-            SectionLifetime::Core,
+        debug_assert_eq!(
+            groups.define(
+                ProtFlags::PROT_READ | ProtFlags::PROT_EXEC,
+                ProtFlags::PROT_READ | ProtFlags::PROT_EXEC,
+                2,
+                SectionLifetime::Core,
+            ),
+            EXEC_SECTION_GROUP
         );
-        groups.define(
-            SectionGroup::new(3),
-            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
-            3,
-            SectionLifetime::Core,
+        debug_assert_eq!(
+            groups.define(
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE | ProtFlags::PROT_EXEC,
+                3,
+                SectionLifetime::Core,
+            ),
+            WRITE_EXEC_SECTION_GROUP
+        );
+        debug_assert_eq!(
+            groups.define(
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+                ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+                usize::MAX,
+                SectionLifetime::Init,
+            ),
+            STAGING_SECTION_GROUP
         );
         groups
     }
+}
 
+impl SectionGroups {
+    /// Defines one object section layout group and returns its handle.
     #[inline]
-    pub(crate) fn define(
+    pub fn define(
         &mut self,
-        group: SectionGroup,
-        prot: ProtFlags,
+        init_prot: ProtFlags,
+        final_prot: ProtFlags,
         order: usize,
         lifetime: SectionLifetime,
-    ) {
-        self.upsert(SectionGroupDef::new(group, prot, order, lifetime));
+    ) -> SectionGroup {
+        self.defs
+            .push(SectionGroupDef::new(init_prot, final_prot, order, lifetime))
     }
 
-    pub(crate) fn upsert(&mut self, new_group: SectionGroupDef) {
-        if let Some(group) = self
-            .defs
-            .iter_mut()
-            .find(|group| group.group == new_group.group)
-        {
-            *group = new_group;
-        } else {
-            self.defs.push(new_group);
-        }
-    }
-
-    pub(crate) fn merge(&mut self, overrides: Self) {
-        for group in overrides.defs {
-            self.upsert(group);
-        }
-    }
-
-    pub(crate) fn sorted_defs(&self) -> Vec<SectionGroupDef> {
-        let mut defs = self.defs.clone();
-        defs.sort_by_key(|def| {
+    pub(crate) fn sorted_defs(&self) -> Vec<(SectionGroup, SectionGroupDef)> {
+        let mut defs: Vec<_> = self.defs.iter().map(|(group, def)| (group, *def)).collect();
+        defs.sort_by_key(|(group, def)| {
             (
                 def.order,
                 matches!(def.lifetime, SectionLifetime::Init),
-                def.group.get(),
+                group.index(),
             )
         });
         defs
@@ -295,14 +311,13 @@ impl SectionGroups {
 
     #[inline]
     pub(crate) fn def(&self, group: SectionGroup) -> Option<SectionGroupDef> {
-        self.defs.iter().copied().find(|def| def.group == group)
+        self.defs.get(group).copied()
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum SectionPlacement {
     Place(SectionGroup),
-    Stage,
     Skip,
 }
 
@@ -329,33 +344,44 @@ impl SectionLayoutPlan {
     }
 
     #[inline]
-    pub(crate) fn group_def(&self, group: SectionGroup) -> Option<SectionGroupDef> {
-        self.groups.def(group)
+    fn placement_group_def(
+        &self,
+        id: ElfSectionId,
+    ) -> Result<Option<(SectionGroup, SectionGroupDef)>> {
+        match self.placement(id) {
+            SectionPlacement::Place(group) => self
+                .groups
+                .def(group)
+                .map(|def| (group, def))
+                .map(Some)
+                .ok_or_else(|| {
+                    ParseShdrError::malformed("section layout group is not defined").into()
+                }),
+            SectionPlacement::Skip => Ok(None),
+        }
     }
 }
 
-fn prot_to_idx(prot: ProtFlags) -> usize {
-    usize::from(prot.contains(ProtFlags::PROT_WRITE))
-        | (usize::from(prot.contains(ProtFlags::PROT_EXEC)) << 1)
-}
-
-fn flags_to_idx(flags: ElfSectionFlags) -> usize {
-    prot_to_idx(section_prot(flags))
-}
-
 fn default_section_group(flags: ElfSectionFlags) -> SectionGroup {
-    SectionGroup::new(flags_to_idx(flags) as u16)
+    let prot = section_prot(flags);
+    let index = usize::from(prot.contains(ProtFlags::PROT_WRITE))
+        | (usize::from(prot.contains(ProtFlags::PROT_EXEC)) << 1);
+    [
+        READ_SECTION_GROUP,
+        WRITE_SECTION_GROUP,
+        EXEC_SECTION_GROUP,
+        WRITE_EXEC_SECTION_GROUP,
+    ][index]
 }
 
 fn create_section_plan<L: ElfLayout>(
     sections: &ObjectSections<L>,
-    group_overrides: SectionGroups,
+    groups: &SectionGroups,
     placement_overrides: Vec<Option<SectionPlacement>>,
 ) -> SectionLayoutPlan {
     debug_assert_eq!(sections.headers().len(), placement_overrides.len());
 
-    let mut groups = SectionGroups::default_layout();
-    groups.merge(group_overrides);
+    let groups = groups.clone();
 
     let placements = sections
         .headers()
@@ -366,7 +392,7 @@ fn create_section_plan<L: ElfLayout>(
                 if shdr.flags().contains(ElfSectionFlags::ALLOC) {
                     SectionPlacement::Place(default_section_group(shdr.flags()))
                 } else {
-                    SectionPlacement::Stage
+                    SectionPlacement::Place(STAGING_SECTION_GROUP)
                 }
             })
         })
@@ -374,61 +400,33 @@ fn create_section_plan<L: ElfLayout>(
     SectionLayoutPlan::new(groups, placements)
 }
 
-enum PltGotShdr<L: ElfLayout> {
-    Existing(ElfSectionId),
-    Synthetic(ElfShdr<L>),
-}
-
-impl<L: ElfLayout> PltGotShdr<L> {
-    #[inline]
-    fn new(existing: Option<ElfSectionId>, synthetic: impl FnOnce() -> ElfShdr<L>) -> Self {
-        match existing {
-            Some(id) => Self::Existing(id),
-            None => Self::Synthetic(synthetic()),
-        }
-    }
-
-    #[inline]
-    fn addr(&self, sections: &ObjectSections<L>) -> VmAddr {
-        let addr = match self {
-            Self::Existing(id) => sections.section(*id).sh_addr(),
-            Self::Synthetic(shdr) => shdr.sh_addr(),
-        };
-        VmAddr::new(addr)
-    }
-}
-
-struct PltGotShdrs<L: ElfLayout> {
-    got: PltGotShdr<L>,
-    got_plt: PltGotShdr<L>,
-    plt: PltGotShdr<L>,
-}
-
 #[derive(Clone, Copy)]
-struct PltGotLifetimes {
-    got: SectionLifetime,
-    got_plt: SectionLifetime,
-    plt: SectionLifetime,
+struct PltGotShdrs {
+    got: Option<ElfSectionId>,
+    got_plt: Option<ElfSectionId>,
+    plt: Option<ElfSectionId>,
 }
 
-impl Default for PltGotLifetimes {
+impl PltGotShdrs {
     #[inline]
-    fn default() -> Self {
-        Self {
-            got: SectionLifetime::Core,
-            got_plt: SectionLifetime::Core,
-            plt: SectionLifetime::Core,
-        }
+    fn addr<L: ElfLayout>(id: Option<ElfSectionId>, sections: &ObjectSections<L>) -> VmAddr {
+        id.map(|id| VmAddr::new(sections.section(id).sh_addr()))
+            .unwrap_or_else(VmAddr::null)
     }
-}
 
-impl<L: ElfLayout> PltGotShdr<L> {
     #[inline]
-    fn lifetime(&self, section_lifetimes: &[SectionLifetime]) -> SectionLifetime {
-        match self {
-            Self::Existing(id) => section_lifetimes[id.index()],
-            Self::Synthetic(_) => SectionLifetime::Core,
-        }
+    fn got_addr<L: ElfLayout>(&self, sections: &ObjectSections<L>) -> VmAddr {
+        Self::addr(self.got, sections)
+    }
+
+    #[inline]
+    fn got_plt_addr<L: ElfLayout>(&self, sections: &ObjectSections<L>) -> VmAddr {
+        Self::addr(self.got_plt, sections)
+    }
+
+    #[inline]
+    fn plt_addr<L: ElfLayout>(&self, sections: &ObjectSections<L>) -> VmAddr {
+        Self::addr(self.plt, sections)
     }
 }
 
@@ -436,7 +434,7 @@ fn prepare_pltgot_shdrs<L: ElfLayout>(
     sections: &mut ObjectSections<L>,
     got_cnt: usize,
     plt_cnt: usize,
-) -> PltGotShdrs<L> {
+) -> PltGotShdrs {
     let mut got = None;
     let mut got_plt = None;
     let mut plt = None;
@@ -457,6 +455,8 @@ fn prepare_pltgot_shdrs<L: ElfLayout>(
             got_cnt,
             size_of::<usize>(),
         );
+    } else if got_cnt != 0 {
+        got = Some(sections.push_section(".got", PltGotSection::create_got_shdr(got_cnt)));
     }
     if let Some(id) = got_plt {
         configure_pltgot_shdr(
@@ -465,6 +465,9 @@ fn prepare_pltgot_shdrs<L: ElfLayout>(
             plt_cnt,
             size_of::<usize>(),
         );
+    } else if plt_cnt != 0 {
+        got_plt =
+            Some(sections.push_section(".got.plt", PltGotSection::create_got_plt_shdr(plt_cnt)));
     }
     if let Some(id) = plt {
         configure_pltgot_shdr(
@@ -474,13 +477,11 @@ fn prepare_pltgot_shdrs<L: ElfLayout>(
             PLT_ENTRY_SIZE,
         );
         sections.headers_mut()[id.index()].set_sh_addralign(size_of::<usize>());
+    } else if plt_cnt != 0 {
+        plt = Some(sections.push_section(".plt", PltGotSection::create_plt_shdr(plt_cnt)));
     }
 
-    PltGotShdrs {
-        got: PltGotShdr::new(got, || PltGotSection::create_got_shdr(got_cnt)),
-        got_plt: PltGotShdr::new(got_plt, || PltGotSection::create_got_plt_shdr(plt_cnt)),
-        plt: PltGotShdr::new(plt, || PltGotSection::create_plt_shdr(plt_cnt)),
-    }
+    PltGotShdrs { got, got_plt, plt }
 }
 
 fn configure_pltgot_shdr<L: ElfLayout>(
@@ -518,6 +519,7 @@ fn create_pltgot_shdr<L: ElfLayout>(
 #[derive(Default)]
 struct SectionSegmentSet {
     segments: Vec<ElfSegment>,
+    final_prots: Vec<ProtFlags>,
     total_size: usize,
 }
 
@@ -528,8 +530,28 @@ impl SectionSegmentSet {
     }
 
     #[inline]
-    fn push(&mut self, segment: ElfSegment) {
+    fn push(&mut self, segment: ElfSegment, final_prot: ProtFlags) {
         self.segments.push(segment);
+        self.final_prots.push(final_prot);
+    }
+
+    fn mprotect_final<R>(&self, segments: &ElfSegments<R>) -> Result<()>
+    where
+        R: RegionAccess,
+    {
+        for (segment, final_prot) in self.segments.iter().zip(self.final_prots.iter().copied()) {
+            if segment.prot.bits() == final_prot.bits() {
+                continue;
+            }
+            MemoryProtection::new(
+                segments.base() + segment.offset,
+                segment.len,
+                segment.page_size,
+                final_prot,
+            )
+            .apply(segments)?;
+        }
+        Ok(())
     }
 }
 
@@ -539,6 +561,14 @@ impl SegmentBuilder for SectionSegmentSet {
         M: Mmap + ?Sized,
     {
         let len = self.total_size;
+        if len == 0 {
+            let region = unsafe {
+                mapper.create_space(None, 1, ProtFlags::PROT_READ | ProtFlags::PROT_WRITE, false)
+            }?;
+            let base = region.addr();
+            return Ok(ElfSegments::from_ranges(region, base, Vec::new()));
+        }
+
         let region = unsafe {
             mapper.create_space(
                 None,
@@ -569,6 +599,7 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
         sections: &mut ObjectSections<Arch::Layout>,
         object: &impl ElfReader,
         page_size: usize,
+        groups: &SectionGroups,
         observer: &mut Obs,
         mapper: &M,
     ) -> Result<(Self, ObjectSegments<M::Region>)>
@@ -580,46 +611,19 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
         let (got_cnt, plt_cnt) =
             PltGotSection::count_needed_entries::<Arch>(sections.headers(), object)?;
 
-        let mut pltgot_shdrs = prepare_pltgot_shdrs(sections, got_cnt, plt_cnt);
+        let pltgot_shdrs = prepare_pltgot_shdrs(sections, got_cnt, plt_cnt);
         let mut event = SectionLayoutEvent::new(sections);
         observer.on_section_layout(&mut event)?;
-        let (group_overrides, placement_overrides) = event.into_overrides();
-        let plan = create_section_plan(sections, group_overrides, placement_overrides);
+        let placement_overrides = event.into_placements();
+        let plan = create_section_plan(sections, groups, placement_overrides);
         let mut units = create_section_units::<Arch::Layout>(&plan);
-        let mut staged = SectionUnit::new(
-            ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-            SectionLifetime::Core,
-        );
-        let mut section_lifetimes =
-            alloc::vec![SectionLifetime::Core; sections.headers().len()].into_boxed_slice();
 
         for (index, shdr) in sections.headers_mut().iter_mut().enumerate() {
             let id = ElfSectionId::new(index);
-            match plan.placement(ElfSectionId::new(index)) {
-                SectionPlacement::Place(group) => {
-                    let group_def = plan.group_def(group).ok_or_else(|| {
-                        ParseShdrError::malformed("section layout group is not defined")
-                    })?;
-                    section_lifetimes[id.index()] = group_def.lifetime;
-                    add_section_to_units(&mut units, group, shdr)?
-                }
-                SectionPlacement::Stage => {
-                    section_lifetimes[id.index()] = SectionLifetime::Core;
-                    staged.add_section(shdr);
-                }
-                SectionPlacement::Skip => {}
+            if let Some((group, _)) = plan.placement_group_def(id)? {
+                add_section_to_units(&mut units, group, shdr)?
             }
         }
-        if let PltGotShdr::Synthetic(shdr) = &mut pltgot_shdrs.got {
-            add_section_to_units(&mut units, default_section_group(shdr.flags()), shdr)?;
-        }
-        if let PltGotShdr::Synthetic(shdr) = &mut pltgot_shdrs.got_plt {
-            add_section_to_units(&mut units, default_section_group(shdr.flags()), shdr)?;
-        }
-        if let PltGotShdr::Synthetic(shdr) = &mut pltgot_shdrs.plt {
-            add_section_to_units(&mut units, default_section_group(shdr.flags()), shdr)?;
-        }
-
         let mut core = SectionSegmentSet::default();
         let mut init = SectionSegmentSet::default();
         let mut core_offset = 0;
@@ -629,40 +633,30 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
                 SectionLifetime::Core => (&mut core_offset, &mut core),
                 SectionLifetime::Init => (&mut init_offset, &mut init),
             };
-            if let Some((segment, _)) = unit.create_segment(offset, page_size) {
+            if let Some(segment) = unit.create_segment(offset, page_size) {
+                let final_prot = unit.final_prot;
                 *offset = roundup(*offset, page_size);
-                segment_set.push(segment);
+                segment_set.push(segment, final_prot);
             }
         }
-        if let Some((segment, _)) = staged.create_segment(&mut core_offset, page_size) {
-            core_offset = roundup(core_offset, page_size);
-            core.push(segment);
-        }
         drop(units);
-        drop(staged);
         core.total_size = core_offset;
         init.total_size = init_offset;
-
-        let got_base = pltgot_shdrs.got.addr(sections);
-        let got_plt_base = pltgot_shdrs.got_plt.addr(sections);
-        let plt_base = pltgot_shdrs.plt.addr(sections);
-        let pltgot_lifetimes = PltGotLifetimes {
-            got: pltgot_shdrs.got.lifetime(&section_lifetimes),
-            got_plt: pltgot_shdrs.got_plt.lifetime(&section_lifetimes),
-            plt: pltgot_shdrs.plt.lifetime(&section_lifetimes),
-        };
 
         let mut section_segments = Self {
             core,
             init,
-            section_lifetimes,
-            pltgot_lifetimes,
-            pltgot: Some(PltGotSection::new(got_base, got_plt_base, plt_base)),
+            pltgot: None,
             _arch: core::marker::PhantomData,
         };
-
         let segments = section_segments.load_segments(mapper, object)?;
-        section_segments.rebase_loaded_sections(sections.headers_mut(), &segments);
+        section_segments.rebase_loaded_sections(sections.headers_mut(), &plan, &segments)?;
+        section_segments.pltgot = Some(PltGotSection::new(
+            pltgot_shdrs.got_addr(sections),
+            pltgot_shdrs.got_plt_addr(sections),
+            pltgot_shdrs.plt_addr(sections),
+        ));
+        sections.set_layout_metadata(&plan.placements);
         Ok((section_segments, segments))
     }
 
@@ -698,25 +692,35 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
         Ok(())
     }
 
+    pub(crate) fn mprotect_final<R>(&self, segments: &ObjectSegmentView<'_, R>) -> Result<()>
+    where
+        R: RegionAccess,
+    {
+        self.core.mprotect_final(segments.core())?;
+        if let Some(init) = segments.init() {
+            self.init.mprotect_final(init)?;
+        }
+        Ok(())
+    }
+
     fn rebase_loaded_sections<R>(
         &mut self,
         shdrs: &mut [ElfShdr<Arch::Layout>],
+        plan: &SectionLayoutPlan,
         segments: &ObjectSegments<R>,
-    ) where
+    ) -> Result<()>
+    where
         R: RegionAccess,
     {
         for (index, shdr) in shdrs.iter_mut().enumerate() {
-            let base = segments.base_for(self.section_lifetimes[index]);
+            let Some((_, group_def)) = plan.placement_group_def(ElfSectionId::new(index))? else {
+                continue;
+            };
+            let base = segments.base_for(group_def.lifetime);
             shdr.set_sh_addr((base + VmOffset::new(shdr.sh_addr())).get());
         }
 
-        if let Some(pltgot) = &mut self.pltgot {
-            pltgot.rebase_to(
-                segments.base_for(self.pltgot_lifetimes.got),
-                segments.base_for(self.pltgot_lifetimes.got_plt),
-                segments.base_for(self.pltgot_lifetimes.plt),
-            );
-        }
+        Ok(())
     }
 }
 
@@ -864,12 +868,6 @@ impl PltGotSection {
         }
     }
 
-    pub(crate) fn rebase_to(&mut self, got_base: VmAddr, got_plt_base: VmAddr, plt_base: VmAddr) {
-        self.got_base = got_base + VmOffset::new(self.got_base.get());
-        self.got_plt_base = got_plt_base + VmOffset::new(self.got_plt_base.get());
-        self.plt_base = plt_base + VmOffset::new(self.plt_base.get());
-    }
-
     pub(crate) fn add_got_entry(&mut self, key: ObjectRelocKey) -> GotEntry<'_> {
         let base = self.got_base;
         let ent_size = size_of::<usize>();
@@ -927,16 +925,18 @@ impl PltGotSection {
 }
 
 struct SectionUnit<'shdr, L: ElfLayout> {
-    prot: ProtFlags,
+    init_prot: ProtFlags,
+    final_prot: ProtFlags,
     lifetime: SectionLifetime,
     content_sections: Vec<&'shdr mut ElfShdr<L>>,
     zero_sections: Vec<&'shdr mut ElfShdr<L>>,
 }
 
 impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
-    fn new(prot: ProtFlags, lifetime: SectionLifetime) -> Self {
+    fn new(init_prot: ProtFlags, final_prot: ProtFlags, lifetime: SectionLifetime) -> Self {
         Self {
-            prot,
+            init_prot,
+            final_prot,
             lifetime,
             content_sections: Vec::new(),
             zero_sections: Vec::new(),
@@ -951,11 +951,7 @@ impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
         }
     }
 
-    fn create_segment(
-        &mut self,
-        base_offset: &mut usize,
-        page_size: usize,
-    ) -> Option<(ElfSegment, SectionLifetime)> {
+    fn create_segment(&mut self, base_offset: &mut usize, page_size: usize) -> Option<ElfSegment> {
         self.content_sections
             .first()
             .or(self.zero_sections.first())?;
@@ -1011,21 +1007,18 @@ impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
         }
 
         *base_offset += total_size;
-        Some((
-            ElfSegment {
-                offset: VmOffset::new(segment_start),
-                prot: self.prot,
-                len: total_size,
-                page_size,
-                content_size,
-                zero_size: unaligned_total_size - content_size,
-                need_copy: false,
-                flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
-                map_info,
-                from_relocatable: true,
-            },
-            self.lifetime,
-        ))
+        Some(ElfSegment {
+            offset: VmOffset::new(segment_start),
+            prot: self.init_prot,
+            len: total_size,
+            page_size,
+            content_size,
+            zero_size: unaligned_total_size - content_size,
+            need_copy: false,
+            flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
+            map_info,
+            from_relocatable: true,
+        })
     }
 }
 
@@ -1035,7 +1028,12 @@ fn create_section_units<L: ElfLayout>(
     plan.groups()
         .sorted_defs()
         .into_iter()
-        .map(|def| (def.group, SectionUnit::new(def.prot, def.lifetime)))
+        .map(|(group, def)| {
+            (
+                group,
+                SectionUnit::new(def.init_prot, def.final_prot, def.lifetime),
+            )
+        })
         .collect()
 }
 

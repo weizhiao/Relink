@@ -504,7 +504,6 @@ fn scan_classifies_dynamic_and_static_exec() {
         panic!("PT_DYNAMIC image should scan as dynamic");
     };
     assert_eq!(dynamic.name(), "scanned.so");
-    assert!(dynamic.dynamic().bind_now());
 
     let static_output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[2])]);
     let static_bytes: &'static [u8] =

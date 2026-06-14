@@ -11,10 +11,10 @@ mod symbol;
 pub(crate) use builder::ObjectBuilder;
 pub(crate) use exports::ObjectExports;
 pub use hash::CustomHash;
-pub(crate) use layout::{ObjectSegmentView, PltGotSection};
-pub(crate) use link::{
-    object_relocation_addend, object_relocation_entries, object_relocation_sections,
-};
+pub use layout::SectionLifetime;
+pub use layout::{ObjectSegmentView, SectionGroups};
+pub(crate) use layout::{PltGotSection, SectionSegments};
+pub(crate) use link::{object_relocation_addend, object_relocation_sections};
 pub(crate) use section::{section_bytes, section_entries, section_entries_mut};
-pub(crate) use sections::ObjectSections;
+pub use sections::ObjectSections;
 pub(crate) use symbol::ObjectSymbolTable;

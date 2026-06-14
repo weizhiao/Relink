@@ -60,23 +60,6 @@ where
             .expect("checked module handle should resolve to a scanned dynamic module")
     }
 
-    /// Returns this module's scanned image mutably through `plan`.
-    #[inline]
-    pub fn scanned_mut<'borrow, K, Arch>(
-        self,
-        plan: &'borrow mut LinkPassPlan<'scope, K, S, Arch>,
-    ) -> &'borrow mut ScannedDynamic<Arch>
-    where
-        K: Clone + Ord,
-        Arch: RelocationArch,
-    {
-        plan.plan
-            .get_mut(self.id)
-            .expect("checked module handle should resolve to a planned module")
-            .dynamic_mut()
-            .expect("checked module handle should resolve to a scanned dynamic module")
-    }
-
     /// Iterates over visible direct dependency modules recorded for this module.
     #[inline]
     pub fn direct_deps<'borrow, K, Arch>(

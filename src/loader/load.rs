@@ -10,10 +10,10 @@ use crate::{
     logging,
     memory::{RegionAccess, VmAddr, VmOffset},
     observer::{AfterDynamicLoadEvent, BeforeDynamicLoadEvent, LoadObserver},
-    os::Mmap,
+    os::{Mmap, ProtFlags},
     relocation::{ObjectRelocationArch, RelocationArch},
     segment::{
-        ELFRelro, ElfSegments,
+        ElfSegments, MemoryProtection,
         program::{ProgramSegments, parse_segments},
     },
     tls::TlsResolver,
@@ -564,7 +564,12 @@ where
                 tls_info = Some(crate::tls::TlsInfo::new(phdr, image.as_slice()));
             }
             ElfProgramType::GNU_RELRO => {
-                relro = Some(ELFRelro::new(phdr, load_bias, page_size));
+                relro = Some(MemoryProtection::new(
+                    load_bias + phdr.p_vaddr(),
+                    phdr.p_memsz(),
+                    page_size,
+                    ProtFlags::PROT_READ,
+                ));
             }
             _ => {}
         }

@@ -6,7 +6,7 @@ mod relocation;
 mod resolve;
 
 #[cfg(feature = "object")]
-pub use crate::object::layout::{SectionGroup, SectionLifetime};
+pub use crate::object::layout::{SectionGroup, SectionGroups, SectionLifetime};
 pub use lifecycle::{FiniEvent, InitEvent};
 pub use load::{AfterDynamicLoadEvent, BeforeDynamicLoadEvent, StagedDynamic};
 #[cfg(feature = "object")]

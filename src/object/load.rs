@@ -67,6 +67,7 @@ where
             &mut sections,
             &object,
             page_size,
+            self.inner.object_groups.as_ref(),
             &mut self.inner.observer,
             &self.inner.mapper,
         )?;

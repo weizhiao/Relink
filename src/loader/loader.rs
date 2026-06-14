@@ -6,6 +6,8 @@ use crate::{
     relocation::RelocationArch,
     tls::TlsResolver,
 };
+#[cfg(feature = "object")]
+use crate::{object::SectionGroups, sync::Arc};
 use core::marker::PhantomData;
 
 /// Configurable ELF loader.
@@ -44,6 +46,8 @@ pub(crate) struct LoaderInner<Obs, D: 'static, Arch: RelocationArch, M: Mmap = D
     pub(crate) observer: Obs,
     pub(crate) page_size: Option<PageSize>,
     pub(crate) force_static_tls: bool,
+    #[cfg(feature = "object")]
+    pub(crate) object_groups: Arc<SectionGroups>,
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
@@ -99,6 +103,8 @@ impl Loader<(), (), (), NativeArch> {
                 observer: (),
                 page_size: None,
                 force_static_tls: false,
+                #[cfg(feature = "object")]
+                object_groups: Arc::new(SectionGroups::default()),
                 _marker: PhantomData,
             },
             _marker: PhantomData,
@@ -137,6 +143,8 @@ where
                 observer: self.inner.observer,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
+                #[cfg(feature = "object")]
+                object_groups: self.inner.object_groups,
                 _marker: PhantomData,
             },
             _marker: PhantomData,
@@ -156,6 +164,8 @@ where
                 observer,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
+                #[cfg(feature = "object")]
+                object_groups: self.inner.object_groups,
                 _marker: PhantomData,
             },
             _marker: PhantomData,
@@ -169,6 +179,13 @@ where
     /// mapping backend and with every loaded ELF's `PT_LOAD` alignment.
     pub fn with_page_size(mut self, page_size: PageSize) -> Self {
         self.inner.page_size = Some(page_size);
+        self
+    }
+
+    /// Sets object section layout groups for subsequent relocatable-object loads.
+    #[cfg(feature = "object")]
+    pub fn with_object_section_groups(mut self, groups: SectionGroups) -> Self {
+        self.inner.object_groups = Arc::new(groups);
         self
     }
 
@@ -239,6 +256,8 @@ where
                 observer: self.inner.observer,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
+                #[cfg(feature = "object")]
+                object_groups: self.inner.object_groups,
                 _marker: PhantomData,
             },
             _marker: PhantomData,
@@ -280,6 +299,8 @@ where
                 observer: self.inner.observer,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
+                #[cfg(feature = "object")]
+                object_groups: self.inner.object_groups,
                 _marker: PhantomData,
             },
             _marker: PhantomData,

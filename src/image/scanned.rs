@@ -14,10 +14,8 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt, mem::size_of, num::NonZeroUsize};
-use elf::abi::{DF_1_NOW, DF_BIND_NOW, DF_STATIC_TLS};
 
 struct DynamicScanParts {
-    dynamic: ScannedDynamicInfo,
     strtab: Box<[u8]>,
     needed_libs: Box<[usize]>,
     soname: Option<usize>,
@@ -69,12 +67,6 @@ impl DynamicScanParts {
         let runpath = parsed.runpath_off.map(|offset| offset.get());
 
         Ok(Self {
-            dynamic: ScannedDynamicInfo::new(
-                parsed.bind_now
-                    || parsed.flags & DF_BIND_NOW as usize != 0
-                    || parsed.flags_1 & DF_1_NOW as usize != 0,
-                parsed.flags & DF_STATIC_TLS as usize != 0,
-            ),
             strtab: strtab.into_boxed_slice(),
             needed_libs,
             soname,
@@ -149,35 +141,6 @@ impl ModuleCapability {
     }
 }
 
-/// Dynamic-library metadata collected before the object is mapped.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ScannedDynamicInfo {
-    bind_now: bool,
-    static_tls: bool,
-}
-
-impl ScannedDynamicInfo {
-    #[inline]
-    pub(crate) const fn new(bind_now: bool, static_tls: bool) -> Self {
-        Self {
-            bind_now,
-            static_tls,
-        }
-    }
-
-    /// Returns whether the object requests eager binding.
-    #[inline]
-    pub fn bind_now(&self) -> bool {
-        self.bind_now
-    }
-
-    /// Returns whether the object requests static TLS.
-    #[inline]
-    pub fn static_tls(&self) -> bool {
-        self.static_tls
-    }
-}
-
 /// A dynamic ELF image that has been parsed but not yet mapped into memory.
 pub struct ScannedDynamic<Arch: RelocationArch = NativeArch> {
     path: PathBuf,
@@ -193,7 +156,6 @@ pub struct ScannedDynamic<Arch: RelocationArch = NativeArch> {
     needed_libs: Box<[usize]>,
     capability: ModuleCapability,
     reader: Box<dyn ElfReader + 'static>,
-    dynamic: ScannedDynamicInfo,
 }
 
 /// A static executable that has been parsed but not yet mapped into memory.
@@ -422,8 +384,6 @@ impl<Arch: RelocationArch> fmt::Debug for ScannedDynamic<Arch> {
                     .map_or(0, |table| table.sections.len()),
             )
             .field("capability", &self.capability)
-            .field("bind_now", &self.dynamic.bind_now)
-            .field("static_tls", &self.dynamic.static_tls)
             .finish()
     }
 }
@@ -578,7 +538,6 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         } = builder;
         let interp = read_interp(reader.as_mut(), &phdrs)?;
         let DynamicScanParts {
-            dynamic,
             strtab,
             needed_libs,
             soname,
@@ -608,7 +567,6 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             needed_libs,
             capability,
             reader,
-            dynamic,
         })
     }
 
@@ -739,7 +697,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     }
 
     /// Captures one section's backing bytes.
-    pub(crate) fn section_data(&mut self, id: ElfSectionId) -> Result<Option<AlignedBytes>> {
+    pub(crate) fn section_data(&self, id: ElfSectionId) -> Result<Option<AlignedBytes>> {
         let Some(section) = self.section(id) else {
             return Ok(None);
         };
@@ -756,16 +714,10 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     }
 
     #[inline]
-    fn read_bytes(&mut self, offset: usize, len: usize) -> Result<AlignedBytes> {
+    fn read_bytes(&self, offset: usize, len: usize) -> Result<AlignedBytes> {
         let mut bytes = AlignedBytes::with_len(len).ok_or(ParseDynamicError::AddressOverflow)?;
         self.reader.read(bytes.as_mut(), offset)?;
         Ok(bytes)
-    }
-
-    /// Returns the dynamic binding and TLS policy flags discovered during scan.
-    #[inline]
-    pub fn dynamic(&self) -> &ScannedDynamicInfo {
-        &self.dynamic
     }
 
     pub(crate) fn into_load_parts(self) -> ScannedDynamicLoadParts<Arch> {
@@ -882,32 +834,6 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
     #[inline]
     pub fn alloc_sections(&self) -> impl Iterator<Item = ScannedSection<'_, Arch::Layout>> {
         self.sections().filter(|section| section.is_allocated())
-    }
-
-    /// Captures one section's backing bytes.
-    #[allow(dead_code)]
-    pub(crate) fn section_data(&mut self, id: ElfSectionId) -> Result<Option<AlignedBytes>> {
-        let Some(section) = self.section(id) else {
-            return Ok(None);
-        };
-
-        if section.is_nobits() {
-            return Ok(Some(
-                AlignedBytes::with_len(section.size()).expect("failed to allocate section bytes"),
-            ));
-        }
-
-        Ok(Some(
-            self.read_bytes(section.file_offset(), section.size())?,
-        ))
-    }
-
-    #[inline]
-    #[allow(dead_code)]
-    fn read_bytes(&mut self, offset: usize, len: usize) -> Result<AlignedBytes> {
-        let mut bytes = AlignedBytes::with_len(len).ok_or(ParseDynamicError::AddressOverflow)?;
-        self.reader.read(bytes.as_mut(), offset)?;
-        Ok(bytes)
     }
 }
 

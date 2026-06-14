@@ -4,8 +4,9 @@ use crate::{
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
     input::{ElfReader, PathBuf},
     memory::{MappedView, RegionAccess, VmAddr},
+    os::ProtFlags,
     relocation::RelocationArch,
-    segment::{ELFRelro, ElfSegments},
+    segment::{ElfSegments, MemoryProtection},
     tls::{TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -31,8 +32,8 @@ pub(crate) struct ImageBuilder<
     /// ELF header
     pub(crate) ehdr: ElfHeader<Arch::Layout>,
 
-    /// GNU_RELRO segment information
-    pub(crate) relro: Option<ELFRelro>,
+    /// GNU_RELRO memory protection.
+    pub(crate) relro: Option<MemoryProtection>,
 
     /// Dynamic section entries
     pub(crate) dynamic: Option<MappedView<ElfDyn<Arch::Layout>>>,
@@ -142,7 +143,12 @@ where
                 )
             }
             ElfProgramType::GNU_RELRO => {
-                self.relro = Some(ELFRelro::new(phdr, self.segments.base(), self.page_size))
+                self.relro = Some(MemoryProtection::new(
+                    self.segments.base() + phdr.p_vaddr(),
+                    phdr.p_memsz(),
+                    self.page_size,
+                    ProtFlags::PROT_READ,
+                ))
             }
             ElfProgramType::PHDR => {}
             ElfProgramType::INTERP => {

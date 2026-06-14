@@ -4,11 +4,13 @@
 //! ELF files (also known as object files). These are typically `.o` files that
 //! contain code and data that need to be relocated before they can be executed.
 
-use crate::object::{ObjectBuilder, ObjectExports, ObjectSymbolTable, PltGotSection};
+use crate::object::{
+    ObjectBuilder, ObjectExports, ObjectSections, ObjectSymbolTable, PltGotSection, SectionSegments,
+};
 use crate::segment::ElfSegments;
 use crate::{
     Result,
-    elf::{ElfShdr, Lifecycle},
+    elf::{ElfSectionId, Lifecycle},
     image::exports_handle,
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
@@ -19,7 +21,6 @@ use crate::{
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
 };
-use alloc::{boxed::Box, vec::Vec};
 use core::{borrow::Borrow, cell::OnceCell, fmt::Debug, ops::Deref};
 
 use crate::image::{ElfCore, LoadedCore, ModuleHandle, core::CoreInner};
@@ -40,21 +41,23 @@ pub struct RawObject<
     /// Relocation-only object symbol table.
     pub(crate) symtab: ObjectSymbolTable<Arch::Layout>,
 
-    /// Rebased section headers retained for object relocation metadata.
-    pub(crate) shdrs: Vec<ElfShdr<Arch::Layout>>,
+    /// Rebased section headers paired with their section-name string table.
+    pub(crate) sections: ObjectSections<Arch::Layout>,
 
     /// PLT/GOT section information.
     pub(crate) pltgot: PltGotSection,
 
-    /// Memory protection function.
-    pub(crate) mprotect:
-        Box<dyn for<'segments> Fn(&crate::object::ObjectSegmentView<'segments, R>) -> Result<()>>,
+    /// Section segment layout and protection metadata.
+    pub(crate) section_segments: SectionSegments<Arch>,
 
     /// Initialization-only mapped memory.
     pub(crate) init_segments: Option<ElfSegments<R>>,
 
     /// Initialization lifecycle.
     pub(crate) init: Lifecycle,
+
+    /// Finalization lifecycle.
+    pub(crate) fini: Lifecycle,
 }
 
 impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Deref for RawObject<D, Arch, R> {
@@ -66,8 +69,9 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Deref for RawObjec
 }
 
 impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch, R> {
-    pub(crate) fn from_builder<T: TlsResolver>(builder: ObjectBuilder<T, D, Arch, R>) -> Self {
+    pub(crate) fn from_builder<T: TlsResolver>(mut builder: ObjectBuilder<T, D, Arch, R>) -> Self {
         let (segments, init_segments) = builder.segments.into_parts();
+        let pltgot = builder.section_segments.take_pltgot();
         let inner = CoreInner {
             is_init: AtomicBool::new(false),
             path: builder.path,
@@ -89,11 +93,12 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
                 inner: Arc::new(inner),
             },
             symtab: builder.symtab,
-            shdrs: builder.shdrs,
-            pltgot: builder.pltgot,
-            mprotect: builder.mprotect,
+            sections: builder.sections,
+            pltgot,
+            section_segments: builder.section_segments,
             init_segments,
             init: builder.init,
+            fini: builder.fini,
         }
     }
 
@@ -104,6 +109,69 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
     {
         Relocator::<(), (), (), Arch>::new().with_object(self)
     }
+
+    /// Returns the retained object section metadata.
+    #[inline]
+    pub fn sections(&self) -> &ObjectSections<Arch::Layout> {
+        &self.sections
+    }
+
+    /// Returns the lowest runtime address covered by core or init-only object
+    /// mappings.
+    #[inline]
+    pub(crate) fn mapped_base(&self) -> VmAddr {
+        self.mapped_span()
+            .map(|(base, _)| base)
+            .unwrap_or_else(VmAddr::null)
+    }
+
+    /// Returns the length of the bounding span covered by core or init-only
+    /// object mappings.
+    #[inline]
+    pub fn mapped_len(&self) -> usize {
+        self.mapped_span().map(|(_, len)| len).unwrap_or(0)
+    }
+
+    fn mapped_span(&self) -> Option<(VmAddr, usize)> {
+        let mut start = None;
+        let mut end = None;
+
+        extend_mapped_span(
+            &mut start,
+            &mut end,
+            self.core.mapped_base(),
+            self.core.mapped_len(),
+        );
+        if let Some(init) = &self.init_segments {
+            extend_mapped_span(&mut start, &mut end, init.mapped_base(), init.mapped_len());
+        }
+
+        start
+            .zip(end)
+            .map(|(start, end)| (VmAddr::new(start), end - start))
+    }
+
+    #[inline]
+    pub(crate) fn section_is_mapped(&self, id: ElfSectionId) -> bool {
+        self.sections.section_is_mapped(id)
+    }
+}
+
+fn extend_mapped_span(
+    start: &mut Option<usize>,
+    end: &mut Option<usize>,
+    base: VmAddr,
+    len: usize,
+) {
+    if len == 0 {
+        return;
+    }
+    let base = base.get();
+    let limit = base
+        .checked_add(len)
+        .expect("object mapped span overflowed");
+    *start = Some(start.map_or(base, |current| current.min(base)));
+    *end = Some(end.map_or(limit, |current| current.max(limit)));
 }
 
 impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Debug for RawObject<D, Arch, R> {
@@ -131,8 +199,7 @@ where
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
     {
-        let inner = self.relocate_impl(args)?;
-        Ok(LoadedObject { inner })
+        self.relocate_impl(args)
     }
 }
 

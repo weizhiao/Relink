@@ -6,13 +6,11 @@
 
 mod defs;
 mod mapping;
-mod relro;
 mod space;
 
 pub(crate) mod program;
 
 pub use space::ElfSegments;
 
-pub(crate) use defs::{ElfSegment, FileMapInfo};
+pub(crate) use defs::{ElfSegment, FileMapInfo, MemoryProtection};
 pub(crate) use mapping::SegmentBuilder;
-pub(crate) use relro::ELFRelro;

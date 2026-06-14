@@ -75,14 +75,6 @@ where
     }
 
     #[inline]
-    pub(in crate::linker) fn dynamic_mut(&mut self) -> Option<&mut ScannedDynamic<Arch>> {
-        match &mut self.module {
-            ModulePayload::Dynamic(module) => Some(module),
-            ModulePayload::Synthetic(_) => None,
-        }
-    }
-
-    #[inline]
     pub fn direct_deps(&self) -> &[ModuleId] {
         &self.direct_deps
     }
@@ -249,14 +241,6 @@ where
         self.entries.get(id)
     }
 
-    #[inline]
-    pub(in crate::linker) fn get_mut(
-        &mut self,
-        id: ModuleId,
-    ) -> Option<&mut PlannedModule<K, Arch>> {
-        self.entries.get_mut(id)
-    }
-
     pub(crate) fn placement(&self, section: SectionId) -> Option<SectionPlacement> {
         self.memory_layout.placement(section)
     }
@@ -331,10 +315,10 @@ where
             LinkerError::section_data("section data requested for an unowned section")
         })?;
         let scanned_section = self.memory_layout.section(section).scanned_section();
-        let entry = self.entries.get_mut(id).ok_or_else(|| {
+        let entry = self.entries.get(id).ok_or_else(|| {
             LinkerError::section_data("section data requested for a missing planned module")
         })?;
-        let module = entry.dynamic_mut().ok_or_else(|| {
+        let module = entry.dynamic().ok_or_else(|| {
             LinkerError::section_data("section data requested for a synthetic module")
         })?;
         if !module.capability().has_section_data() {

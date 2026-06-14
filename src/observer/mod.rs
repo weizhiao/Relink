@@ -10,7 +10,7 @@ pub use event::{
 };
 #[cfg(feature = "object")]
 pub use event::{
-    AfterObjectLoadEvent, BeforeObjectLoadEvent, ObjectRelocatedEvent, SectionGroup,
+    AfterObjectLoadEvent, BeforeObjectLoadEvent, ObjectRelocatedEvent, SectionGroup, SectionGroups,
     SectionLayoutEvent, SectionLifetime,
 };
 pub use traits::{LinkObserver, LoadObserver, RelocationObserver};

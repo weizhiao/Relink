@@ -1,6 +1,8 @@
 use crate::{
-    memory::VmOffset,
+    Result,
+    memory::{RegionAccess, VmAddr, VmOffset},
     os::{MapFlags, ProtFlags},
+    segment::ElfSegments,
 };
 use alloc::vec::Vec;
 
@@ -16,6 +18,42 @@ pub(crate) struct FileMapInfo {
     pub(crate) filesz: usize,
     /// Offset within the file
     pub(crate) offset: usize,
+}
+
+/// A page-aligned memory protection change applied after mapping.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MemoryProtection {
+    /// Runtime address of the protected range.
+    addr: VmAddr,
+    /// Unrounded protected range length.
+    len: usize,
+    /// Page size used to round the protected range.
+    page_size: usize,
+    /// Protection flags to apply.
+    prot: ProtFlags,
+}
+
+impl MemoryProtection {
+    #[inline]
+    pub(crate) const fn new(addr: VmAddr, len: usize, page_size: usize, prot: ProtFlags) -> Self {
+        Self {
+            addr,
+            len,
+            page_size,
+            prot,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn apply<R: RegionAccess>(&self, segments: &ElfSegments<R>) -> Result<()> {
+        let start = self.addr.rounddown(self.page_size);
+        let end = (self.addr + VmOffset::new(self.len)).roundup(self.page_size);
+        let len = end
+            .checked_offset_from(start)
+            .expect("protection range end precedes its start")
+            .get();
+        segments.mprotect(start, len, self.prot)
+    }
 }
 
 /// An ELF segment in memory

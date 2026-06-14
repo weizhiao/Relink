@@ -167,7 +167,7 @@ pub mod loader;
 mod logging;
 pub mod memory;
 #[cfg(feature = "object")]
-mod object;
+pub mod object;
 #[cfg(feature = "object")]
 pub use object::CustomHash;
 pub mod observer;

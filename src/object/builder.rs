@@ -1,6 +1,6 @@
 use super::{
     ObjectSections, ObjectSymbolTable,
-    layout::{ObjectSegmentView, ObjectSegments, PltGotSection, SectionSegments},
+    layout::{ObjectSegments, SectionSegments},
     section_entries,
 };
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
     relocation::ObjectRelocationArch,
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
-use alloc::{boxed::Box, vec::Vec};
+use alloc::boxed::Box;
 use core::marker::PhantomData;
 
 /// Builder for creating relocatable ELF objects.
@@ -22,12 +22,12 @@ pub(crate) struct ObjectBuilder<
     R: RegionAccess = HostRegion,
 > {
     pub(crate) path: PathBuf,
-    pub(crate) shdrs: Vec<ElfShdr<Arch::Layout>>,
+    pub(crate) sections: ObjectSections<Arch::Layout>,
     pub(crate) symtab: ObjectSymbolTable<Arch::Layout>,
     pub(crate) init: Lifecycle,
+    pub(crate) fini: Lifecycle,
     pub(crate) segments: ObjectSegments<R>,
-    pub(crate) mprotect: Box<dyn for<'segments> Fn(&ObjectSegmentView<'segments, R>) -> Result<()>>,
-    pub(crate) pltgot: PltGotSection,
+    pub(crate) section_segments: SectionSegments<Arch>,
     pub(crate) tls_mod_id: Option<TlsModuleId>,
     pub(crate) tls_tp_offset: Option<TlsTpOffset>,
     pub(crate) user_data: D,
@@ -38,6 +38,7 @@ pub(crate) struct ObjectBuilder<
 struct ObjectSectionData<Arch: ObjectRelocationArch> {
     symtab: ObjectSymbolTable<Arch::Layout>,
     init: Lifecycle,
+    fini: Lifecycle,
 }
 
 impl<T, D, Arch, R> ObjectBuilder<T, D, Arch, R>
@@ -46,14 +47,14 @@ where
     Arch: ObjectRelocationArch,
     R: RegionAccess,
 {
-    fn prepare_init_array<Memory>(
-        init_array_shdr: &ElfShdr<Arch::Layout>,
+    fn prepare_lifecycle_array<Memory>(
+        lifecycle_array_shdr: &ElfShdr<Arch::Layout>,
         memory: &Memory,
     ) -> Result<Lifecycle>
     where
         Memory: crate::memory::ImageMemory + ?Sized,
     {
-        let array: &[usize] = section_entries(memory, init_array_shdr)?;
+        let array: &[usize] = section_entries(memory, lifecycle_array_shdr)?;
         let array = array.iter().copied().map(VmAddr::new).collect::<Box<[_]>>();
         Ok(Lifecycle::new(None, Some(array)))
     }
@@ -67,13 +68,15 @@ where
     {
         let mut symtab = None;
         let mut init = Lifecycle::new(None, None);
+        let mut fini = Lifecycle::new(None, None);
 
         for shdr in shdrs {
             match shdr.section_type() {
                 ElfSectionType::SYMTAB => {
                     symtab = Some(ObjectSymbolTable::from_shdrs(shdr, shdrs, memory)?)
                 }
-                ElfSectionType::INIT_ARRAY => init = Self::prepare_init_array(shdr, memory)?,
+                ElfSectionType::INIT_ARRAY => init = Self::prepare_lifecycle_array(shdr, memory)?,
+                ElfSectionType::FINI_ARRAY => fini = Self::prepare_lifecycle_array(shdr, memory)?,
                 _ => {}
             }
         }
@@ -81,34 +84,31 @@ where
         Ok(ObjectSectionData {
             symtab: symtab.ok_or(RelocationError::MissingSymbolTable)?,
             init,
+            fini,
         })
     }
 
     pub(crate) fn new(
         path: PathBuf,
-        mut sections: ObjectSections<Arch::Layout>,
+        sections: ObjectSections<Arch::Layout>,
         segments: ObjectSegments<R>,
-        mut shdr_segments: SectionSegments<Arch>,
+        section_segments: SectionSegments<Arch>,
         user_data: D,
     ) -> Result<Self> {
-        let shdrs = sections.headers_mut();
-        let pltgot = shdr_segments.take_pltgot();
-        let ObjectSectionData { symtab, init } = {
+        let shdrs = sections.headers();
+        let ObjectSectionData { symtab, init, fini } = {
             let memory = segments.view();
             Self::prepare_section_data(shdrs, &memory)?
         };
-        let mprotect =
-            Box::new(move |segments: &ObjectSegmentView<'_, R>| shdr_segments.mprotect(segments));
-        let shdrs = sections.into_headers();
 
         Ok(Self {
             path,
-            shdrs,
+            sections,
             symtab,
             segments,
-            mprotect,
-            pltgot,
+            section_segments,
             init,
+            fini,
             tls_mod_id: None,
             tls_tp_offset: None,
             user_data,
