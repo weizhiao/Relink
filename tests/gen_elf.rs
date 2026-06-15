@@ -9,6 +9,11 @@ use support::{
 };
 
 #[test]
+fn try_current_matches_current_arch() {
+    assert_eq!(Arch::try_current(), Some(Arch::current()));
+}
+
+#[test]
 fn plt_call_patches_got() {
     let arch = Arch::current();
     let generated_dylib = DylibWriter::new(arch)

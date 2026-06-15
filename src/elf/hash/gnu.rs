@@ -102,7 +102,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
         for byte in name {
             hash = hash.wrapping_mul(33).wrapping_add(u32::from(*byte));
         }
-        hash as u64
+        u64::from(hash)
     }
 
     /// Parse a GNU hash table from raw memory

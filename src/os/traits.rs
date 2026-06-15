@@ -83,6 +83,11 @@ pub trait Mmap: Send + Sync + 'static {
     ///
     /// The mapped range is owned by the surrounding space created with
     /// [`Mmap::create_space`].
+    ///
+    /// # Safety
+    /// `addr..addr + len` must be inside a region previously created by this
+    /// mapper. `fd` and `offset` must describe a valid readable file range for
+    /// the requested mapping.
     unsafe fn map_file_at(
         &self,
         addr: VmAddr,
@@ -97,6 +102,10 @@ pub trait Mmap: Send + Sync + 'static {
     ///
     /// The mapped range is owned by the surrounding space created with
     /// [`Mmap::create_space`].
+    ///
+    /// # Safety
+    /// `addr..addr + len` must be inside a region previously created by this
+    /// mapper and must not overlap incompatible existing mappings.
     unsafe fn map_zero_at(
         &self,
         addr: VmAddr,

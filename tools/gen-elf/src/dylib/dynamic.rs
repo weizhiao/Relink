@@ -39,13 +39,13 @@ impl DynamicMetadata {
         };
         instance.init_from_sections(sections);
         if let Some(offset) = soname_offset {
-            instance.insert_entry(DT_SONAME as i64, offset as u64);
+            instance.insert_entry(DT_SONAME, offset as u64);
         }
         for offset in needed_offsets {
-            instance.insert_entry(DT_NEEDED as i64, *offset as u64);
+            instance.insert_entry(DT_NEEDED, *offset as u64);
         }
         if bind_now {
-            instance.update_entry(DT_FLAGS as i64, DF_BIND_NOW as u64);
+            instance.update_entry(DT_FLAGS, DF_BIND_NOW as u64);
         }
         instance
     }
@@ -73,45 +73,36 @@ impl DynamicMetadata {
             let size = sec.header.size;
             match sec.header.shtype {
                 SectionKind::DynStr => {
-                    self.add_entry(DT_STRTAB as i64, vaddr);
-                    self.add_entry(DT_STRSZ as i64, size);
+                    self.add_entry(DT_STRTAB, vaddr);
+                    self.add_entry(DT_STRSZ, size);
                 }
                 SectionKind::DynSym => {
-                    self.add_entry(DT_SYMTAB as i64, vaddr);
-                    self.add_entry(
-                        DT_SYMENT as i64,
-                        if is_64 { SYM_SIZE_64 } else { SYM_SIZE_32 },
-                    );
+                    self.add_entry(DT_SYMTAB, vaddr);
+                    self.add_entry(DT_SYMENT, if is_64 { SYM_SIZE_64 } else { SYM_SIZE_32 });
                 }
                 SectionKind::Hash => {
-                    self.add_entry(DT_HASH as i64, vaddr);
+                    self.add_entry(DT_HASH, vaddr);
                 }
                 SectionKind::Got => {
-                    self.add_entry(DT_PLTGOT as i64, vaddr);
+                    self.add_entry(DT_PLTGOT, vaddr);
                 }
                 SectionKind::RelaDyn => {
-                    self.add_entry(DT_RELA as i64, vaddr);
-                    self.add_entry(DT_RELASZ as i64, size);
-                    self.add_entry(
-                        DT_RELAENT as i64,
-                        if is_64 { RELA_SIZE_64 } else { RELA_SIZE_32 },
-                    );
-                    self.add_entry(DT_RELACOUNT as i64, 0);
+                    self.add_entry(DT_RELA, vaddr);
+                    self.add_entry(DT_RELASZ, size);
+                    self.add_entry(DT_RELAENT, if is_64 { RELA_SIZE_64 } else { RELA_SIZE_32 });
+                    self.add_entry(DT_RELACOUNT, 0);
                 }
                 SectionKind::RelDyn => {
-                    self.add_entry(DT_REL as i64, vaddr);
-                    self.add_entry(DT_RELSZ as i64, size);
-                    self.add_entry(
-                        DT_RELENT as i64,
-                        if is_64 { REL_SIZE_64 } else { REL_SIZE_32 },
-                    );
-                    self.add_entry(DT_RELCOUNT as i64, 0);
+                    self.add_entry(DT_REL, vaddr);
+                    self.add_entry(DT_RELSZ, size);
+                    self.add_entry(DT_RELENT, if is_64 { REL_SIZE_64 } else { REL_SIZE_32 });
+                    self.add_entry(DT_RELCOUNT, 0);
                 }
                 SectionKind::RelaPlt | SectionKind::RelPlt => {
-                    self.add_entry(DT_JMPREL as i64, vaddr);
-                    self.add_entry(DT_PLTRELSZ as i64, size);
+                    self.add_entry(DT_JMPREL, vaddr);
+                    self.add_entry(DT_PLTRELSZ, size);
                     self.add_entry(
-                        DT_PLTREL as i64,
+                        DT_PLTREL,
                         if is_rela {
                             DT_RELA as u64
                         } else {
@@ -122,7 +113,7 @@ impl DynamicMetadata {
                 _ => {}
             }
         }
-        self.add_entry(DT_NULL as i64, 0);
+        self.add_entry(DT_NULL, 0);
     }
 
     pub(crate) fn add_entry(&mut self, tag: i64, value: u64) {
@@ -130,11 +121,7 @@ impl DynamicMetadata {
     }
 
     pub(crate) fn insert_entry(&mut self, tag: i64, value: u64) {
-        if let Some(pos) = self
-            .dyn_entries
-            .iter()
-            .position(|entry| entry.tag == DT_NULL as i64)
-        {
+        if let Some(pos) = self.null_entry_position() {
             self.dyn_entries.insert(pos, DynamicEntry { tag, value });
         } else {
             self.add_entry(tag, value);
@@ -145,17 +132,14 @@ impl DynamicMetadata {
         if let Some(entry) = self.dyn_entries.iter_mut().find(|e| e.tag == tag) {
             entry.value = value;
         } else {
-            // Insert before DT_NULL if it exists
-            if let Some(pos) = self
-                .dyn_entries
-                .iter()
-                .position(|e| e.tag == DT_NULL as i64)
-            {
-                self.dyn_entries.insert(pos, DynamicEntry { tag, value });
-            } else {
-                self.add_entry(tag, value);
-            }
+            self.insert_entry(tag, value);
         }
+    }
+
+    fn null_entry_position(&self) -> Option<usize> {
+        self.dyn_entries
+            .iter()
+            .position(|entry| entry.tag == DT_NULL)
     }
 
     pub(crate) fn patch_dynamic(
@@ -168,40 +152,34 @@ impl DynamicMetadata {
     ) -> Result<()> {
         let is_64 = self.arch.is_64();
         let is_rela = self.arch.is_rela();
-        self.update_entry(
-            DT_STRTAB as i64,
-            shdr_manager.get_vaddr(SectionKind::DynStr),
-        );
-        self.update_entry(
-            DT_SYMTAB as i64,
-            shdr_manager.get_vaddr(SectionKind::DynSym),
-        );
-        self.update_entry(DT_HASH as i64, shdr_manager.get_vaddr(SectionKind::Hash));
-        self.update_entry(DT_PLTGOT as i64, got_plt_vaddr);
+        self.update_entry(DT_STRTAB, shdr_manager.get_vaddr(SectionKind::DynStr));
+        self.update_entry(DT_SYMTAB, shdr_manager.get_vaddr(SectionKind::DynSym));
+        self.update_entry(DT_HASH, shdr_manager.get_vaddr(SectionKind::Hash));
+        self.update_entry(DT_PLTGOT, got_plt_vaddr);
         if is_rela {
             let rela_dyn_vaddr = shdr_manager.get_vaddr(SectionKind::RelaDyn);
             let rela_dyn_size = shdr_manager.get_size(SectionKind::RelaDyn);
-            self.update_entry(DT_RELA as i64, rela_dyn_vaddr);
-            self.update_entry(DT_RELASZ as i64, rela_dyn_size);
+            self.update_entry(DT_RELA, rela_dyn_vaddr);
+            self.update_entry(DT_RELASZ, rela_dyn_size);
 
             let rela_plt_vaddr = shdr_manager.get_vaddr(SectionKind::RelaPlt);
             let rela_plt_size = shdr_manager.get_size(SectionKind::RelaPlt);
-            self.update_entry(DT_JMPREL as i64, rela_plt_vaddr);
-            self.update_entry(DT_PLTRELSZ as i64, rela_plt_size);
-            self.update_entry(DT_RELACOUNT as i64, reloc.relative_count() as u64);
+            self.update_entry(DT_JMPREL, rela_plt_vaddr);
+            self.update_entry(DT_PLTRELSZ, rela_plt_size);
+            self.update_entry(DT_RELACOUNT, reloc.relative_count() as u64);
         } else {
             let rel_dyn_vaddr = shdr_manager.get_vaddr(SectionKind::RelDyn);
             let rel_dyn_size = shdr_manager.get_size(SectionKind::RelDyn);
-            self.update_entry(DT_REL as i64, rel_dyn_vaddr);
-            self.update_entry(DT_RELSZ as i64, rel_dyn_size);
+            self.update_entry(DT_REL, rel_dyn_vaddr);
+            self.update_entry(DT_RELSZ, rel_dyn_size);
 
             let rel_plt_vaddr = shdr_manager.get_vaddr(SectionKind::RelPlt);
             let rel_plt_size = shdr_manager.get_size(SectionKind::RelPlt);
-            self.update_entry(DT_JMPREL as i64, rel_plt_vaddr);
-            self.update_entry(DT_PLTRELSZ as i64, rel_plt_size);
-            self.update_entry(DT_RELCOUNT as i64, reloc.relative_count() as u64);
+            self.update_entry(DT_JMPREL, rel_plt_vaddr);
+            self.update_entry(DT_PLTRELSZ, rel_plt_size);
+            self.update_entry(DT_RELCOUNT, reloc.relative_count() as u64);
         }
-        let dyn_id = shdr_manager.get_data_id(SectionKind::Dynamic);
+        let dyn_id = shdr_manager.get_data_id(SectionKind::Dynamic)?;
         self.write_to_vec(allocator.get_mut(&dyn_id), is_64)?;
         Ok(())
     }

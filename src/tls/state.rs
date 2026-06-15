@@ -5,6 +5,9 @@ mod enabled {
     use alloc::{boxed::Box, vec::Vec};
     use core::cell::OnceCell;
 
+    /// Stores descriptor args behind stable allocations because relocated
+    /// TLSDESC entries keep raw pointers to individual args.
+    #[allow(clippy::vec_box)]
     #[derive(Default)]
     pub(crate) struct TlsDescArgs(Vec<Box<TlsDescDynamicArg>>);
 

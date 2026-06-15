@@ -126,7 +126,7 @@ where
         self.session
             .entries
             .get(&id)
-            .map(|entry| &entry.payload as &dyn DependencyOwner)
+            .map(|entry| entry.payload() as &dyn DependencyOwner)
     }
 
     fn set_direct_deps(&mut self, id: KeyId, direct_deps: Vec<KeyId>) {
@@ -151,9 +151,9 @@ where
     {
         let visible_key = |key: &K| self.reusable_key(key);
         let req: DependencyRequest<'_, K> = {
-            let owner = self
-                .owner(id)
-                .expect("missing dependency owner while building request");
+            let owner = self.owner(id).ok_or_else(|| {
+                LinkerError::resolver("dependency owner is missing while building request")
+            })?;
             let owner_key = self
                 .key(id)
                 .expect("dependency owner id must resolve to an interned key");
@@ -216,7 +216,9 @@ where
 
         let needed_len = self
             .owner(id)
-            .expect("missing dependency owner while resolving direct deps")
+            .ok_or_else(|| {
+                LinkerError::resolver("dependency owner is missing while resolving direct deps")
+            })?
             .needed_len();
         let mut direct_deps = Vec::with_capacity(needed_len);
         for idx in 0..needed_len {
@@ -293,10 +295,12 @@ where
                 .into())
             }
             ResolvedKey::Load { key, reader } => {
-                assert!(
-                    !self.contains_reusable_key(&key),
-                    "resolved reader produced an already-known key; use ResolvedKey::Existing to reuse a visible module"
-                );
+                if self.contains_reusable_key(&key) {
+                    return Err(LinkerError::resolver(
+                        "resolved reader produced an already-known key; use Existing to reuse it",
+                    )
+                    .into());
+                }
                 let raw = loader.load_dynamic(reader)?;
                 observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
                 let id = self.intern_key(key);

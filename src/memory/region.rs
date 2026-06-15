@@ -102,9 +102,7 @@ impl<R: RegionAccess> MappedRegion<R> {
             return Some(MappedView { slice: &[] });
         }
 
-        let Some(bytes) = (unsafe { self.borrow_bytes(offset, byte_len) }) else {
-            return None;
-        };
+        let bytes = (unsafe { self.borrow_bytes(offset, byte_len) })?;
 
         Some(MappedView {
             slice: try_cast_bytes(bytes)?,

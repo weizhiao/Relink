@@ -6,9 +6,9 @@ use crate::dylib::layout::ElfLayout;
 use crate::dylib::reloc::RelocMetaData;
 use crate::dylib::shdr::{SectionAllocator, ShdrManager};
 use crate::dylib::symtab::SymTabMetadata;
-use crate::dylib::text::CodeMetaData;
+use crate::dylib::text::{CodeMetaData, PatchTextArgs};
 use crate::dylib::tls::TlsMetaData;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use byteorder::{LittleEndian, WriteBytesExt};
 use object::elf::*;
 use std::path::Path;
@@ -245,7 +245,7 @@ impl DylibWriter {
             self.config.soname.as_deref(),
             &self.config.needed,
             &mut allocator,
-        );
+        )?;
         let mut reloc = RelocMetaData::new(self.arch, &final_relocs, &symtab, &mut allocator)?;
 
         let data = DataMetaData::new(&reloc, &symtab, &mut allocator);
@@ -333,32 +333,28 @@ impl DylibWriter {
         let got_plt_vaddr = shdr_manager.get_vaddr(SectionKind::GotPlt);
 
         // Update symbols
-        symtab.patch_symtab(plt_vaddr, text_vaddr, data_vaddr, &shdr_map, &mut allocator);
+        symtab.patch_symtab(plt_vaddr, text_vaddr, data_vaddr, &shdr_map, &mut allocator)?;
 
         // Update PLT and Text
         let resolver_val = self.config.ifunc_resolver_val.unwrap_or(plt_vaddr);
-        text.patch_text(
+        text.patch_text(PatchTextArgs {
             plt_vaddr,
             text_vaddr,
             got_plt_vaddr,
             resolver_val,
-            &symtab,
-            &reloc,
-            &shdr_manager,
-            &mut allocator,
-        );
+            symtab: &symtab,
+            reloc: &reloc,
+            shdr: &shdr_manager,
+            allocator: &mut allocator,
+        })?;
 
         // Update GOT and Relocations
         reloc.patch_all(&shdr_manager, &symtab, &mut allocator)?;
-        if let Some((section_id, _, size)) = retained_relocation {
-            if size != 0 {
-                let data_vaddr = shdr_manager.get_vaddr(SectionKind::Data);
-                Self::write_retained_relocation(
-                    self.arch,
-                    allocator.get_mut(&section_id),
-                    data_vaddr,
-                )?;
-            }
+        if let Some((section_id, _, size)) = retained_relocation
+            && size != 0
+        {
+            let data_vaddr = shdr_manager.get_vaddr(SectionKind::Data);
+            Self::write_retained_relocation(self.arch, allocator.get_mut(&section_id), data_vaddr)?;
         }
 
         // Update Dynamic
@@ -367,6 +363,10 @@ impl DylibWriter {
         // 7. Write final ELF
         let mut out_bytes = vec![];
         // Write EHDR
+        let shstrndx = shdr_map
+            .get(&SectionKind::ShStrTab)
+            .copied()
+            .context("generated ELF is missing .shstrtab section")? as u16;
         let ehdr = ElfHeader {
             ident: self.get_ident(),
             type_: ET_DYN,
@@ -381,7 +381,7 @@ impl DylibWriter {
             phnum: shdr_manager.get_phnum(),
             shentsize: (if is_64 { SHDR_SIZE_64 } else { SHDR_SIZE_32 }) as u16,
             shnum: (shdr_manager.get_shdr_count() + 1) as u16,
-            shstrndx: *shdr_map.get(&SectionKind::ShStrTab).unwrap() as u16,
+            shstrndx,
         };
         ehdr.write(&mut out_bytes, is_64)?;
 

@@ -6,7 +6,7 @@ use crate::{
 use core::mem::{MaybeUninit, align_of, size_of};
 
 pub(crate) struct ElfBuf {
-    pub(crate) buf: AlignedBytes,
+    buf: AlignedBytes,
 }
 
 impl ElfBuf {

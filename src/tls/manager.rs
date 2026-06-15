@@ -367,6 +367,13 @@ impl DefaultTlsResolver {
     }
 }
 
+impl Default for DefaultTlsResolver {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TlsResolver for DefaultTlsResolver {
     fn register(tls_info: &TlsInfo) -> Result<TlsModuleId> {
         let id = register_module(tls_info, None);
@@ -386,6 +393,9 @@ impl TlsResolver for DefaultTlsResolver {
         unregister_module(mod_id);
     }
 
+    // This is exposed to loaded code as a C ABI callback; callers must pass a
+    // valid `TlsIndex` pointer.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     extern "C" fn tls_get_addr(ti: *const TlsIndex) -> *mut u8 {
         let ti = unsafe { &*ti };
 

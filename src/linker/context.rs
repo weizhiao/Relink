@@ -245,7 +245,7 @@ where
                 .expect("load_order entries must resolve to committed modules");
             let direct_deps = other
                 .direct_deps(id)
-                .unwrap_or(&[])
+                .expect("load_order entries must resolve to committed dependencies")
                 .iter()
                 .map(|dep| {
                     other
@@ -269,10 +269,37 @@ where
     where
         M: Clone,
     {
-        let mut snapshot = Self::new();
-        snapshot
-            .extend(self)
-            .expect("link context snapshot must not fail");
-        snapshot
+        Self {
+            committed: self.committed.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LinkContext;
+    use crate::{arch::NativeArch, image::SyntheticModule};
+    use alloc::boxed::Box;
+
+    #[test]
+    fn snapshot_clones_committed_state_without_rebuilding() {
+        let mut context = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let root = context
+            .insert_with_meta("root", SyntheticModule::empty("root"), Box::new(["dep"]), 7)
+            .expect("failed to insert root module");
+        let dep = context
+            .key_id(&"dep")
+            .expect("dependency key should be interned");
+
+        let snapshot = context.snapshot();
+        context.remove(root);
+
+        assert!(!context.contains(root));
+        assert!(snapshot.contains(root));
+        assert!(!snapshot.contains(dep));
+        assert_eq!(snapshot.key(root), Some(&"root"));
+        assert_eq!(snapshot.key(dep), Some(&"dep"));
+        assert_eq!(snapshot.direct_deps(root), Some(&[dep][..]));
+        assert_eq!(snapshot.meta(root), Some(&7));
     }
 }

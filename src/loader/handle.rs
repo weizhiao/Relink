@@ -7,7 +7,16 @@ use crate::{
     tls::TlsResolver,
 };
 #[cfg(feature = "object")]
-use crate::{object::SectionGroups, sync::Arc};
+use crate::{
+    elf::ElfHeader,
+    image::RawObject,
+    input::ElfReader,
+    memory::RegionAccess,
+    object::{ObjectSections, SectionGroups},
+    observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent},
+    relocation::ObjectRelocationArch,
+    sync::Arc,
+};
 use core::marker::PhantomData;
 
 /// Configurable ELF loader.
@@ -36,18 +45,18 @@ where
     Arch: RelocationArch,
     M: Mmap,
 {
-    pub(crate) buf: super::ElfBuf,
-    pub(crate) inner: LoaderInner<Obs, D, Arch, M>,
+    pub(super) buf: super::ElfBuf,
+    pub(super) inner: LoaderInner<Obs, D, Arch, M>,
     _marker: PhantomData<(Tls, Arch)>,
 }
 
-pub(crate) struct LoaderInner<Obs, D: 'static, Arch: RelocationArch, M: Mmap = DefaultMmap> {
-    pub(crate) mapper: M,
-    pub(crate) observer: Obs,
-    pub(crate) page_size: Option<PageSize>,
-    pub(crate) force_static_tls: bool,
+pub(super) struct LoaderInner<Obs, D: 'static, Arch: RelocationArch, M: Mmap = DefaultMmap> {
+    mapper: M,
+    pub(super) observer: Obs,
+    page_size: Option<PageSize>,
+    force_static_tls: bool,
     #[cfg(feature = "object")]
-    pub(crate) object_groups: Arc<SectionGroups>,
+    object_groups: Arc<SectionGroups>,
     _marker: PhantomData<fn() -> (D, Arch)>,
 }
 
@@ -84,6 +93,15 @@ where
 
         Ok(page_size)
     }
+
+    #[cfg(feature = "object")]
+    pub(crate) fn object_load_context(&mut self) -> (Arc<SectionGroups>, &mut Obs, &M) {
+        (
+            Arc::clone(&self.object_groups),
+            &mut self.observer,
+            &self.mapper,
+        )
+    }
 }
 
 impl Loader<(), (), (), NativeArch> {
@@ -99,6 +117,8 @@ impl Loader<(), (), (), NativeArch> {
         Self {
             buf: super::ElfBuf::new(),
             inner: LoaderInner {
+                // `DefaultMmap` is a unit struct only for some cfg-selected backends.
+                #[allow(clippy::default_constructed_unit_structs)]
                 mapper: DefaultMmap::default(),
                 observer: (),
                 page_size: None,
@@ -109,6 +129,13 @@ impl Loader<(), (), (), NativeArch> {
             },
             _marker: PhantomData,
         }
+    }
+}
+
+impl Default for Loader<(), (), (), NativeArch> {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -123,6 +150,50 @@ where
     #[inline]
     pub(crate) fn mapper(&self) -> &M {
         self.inner.mapper()
+    }
+
+    #[inline]
+    pub(crate) fn force_static_tls(&self) -> bool {
+        self.inner.force_static_tls()
+    }
+
+    #[cfg(feature = "object")]
+    #[inline]
+    pub(crate) fn page_size(&self) -> Result<PageSize> {
+        self.inner.page_size()
+    }
+
+    #[cfg(feature = "object")]
+    pub(crate) fn notify_before_object_load(
+        &mut self,
+        ehdr: &ElfHeader<Arch::Layout>,
+        sections: &mut ObjectSections<Arch::Layout>,
+        object: &dyn ElfReader,
+        user_data: &mut D,
+    ) -> Result<()> {
+        self.inner
+            .observer
+            .on_before_object_load(BeforeObjectLoadEvent::new(
+                ehdr, sections, object, user_data,
+            ))
+    }
+
+    #[cfg(feature = "object")]
+    pub(crate) fn object_load_context(&mut self) -> (Arc<SectionGroups>, &mut Obs, &M) {
+        self.inner.object_load_context()
+    }
+
+    #[cfg(feature = "object")]
+    pub(crate) fn notify_after_object_load<R: RegionAccess>(
+        &mut self,
+        raw: &mut RawObject<D, Arch, R>,
+    ) -> Result<()>
+    where
+        Arch: ObjectRelocationArch,
+    {
+        self.inner
+            .observer
+            .on_after_object_load(AfterObjectLoadEvent::new(raw))
     }
 
     /// Consumes the current loader and returns a new one with the specified

@@ -1,5 +1,5 @@
 use super::{RuntimeModuleMemory, RuntimeOffset, RuntimeSectionMemory, SectionId};
-use crate::linker::scan::{DataAccess, LinkPlan, ModuleId};
+use crate::linker::scan::{DataAccess, LinkPlan, ModuleId, SectionDataAccessRef};
 use crate::{
     LinkerError, RelocReason, Result,
     aligned_bytes::ByteRepr,
@@ -8,10 +8,10 @@ use crate::{
         ElfSymbol,
     },
     memory::{RegionAccess, VmAddr, VmOffset},
-    relocation::{RelocationArch, RelocationValueProvider},
+    relocation::{RelocationArch, RelocationValueInput, RelocationValueProvider},
     try_cast_bytes, try_cast_bytes_mut,
 };
-use core::{cell::Cell, marker::PhantomData, mem::size_of};
+use core::{cell::Cell, marker::PhantomData, mem::size_of, ops::Range};
 
 #[derive(Clone, Copy)]
 struct RelocationSite {
@@ -33,6 +33,16 @@ struct RelocationEntryInfo {
     r_type: ElfRelocationType,
     offset: VmOffset,
     addend: RelocationAddend,
+}
+
+fn read_section_data(data: SectionDataAccessRef<'_>) -> Result<&[u8]> {
+    data.try_into_read()
+        .ok_or_else(|| LinkerError::section_data("section data access should be read-only").into())
+}
+
+fn write_section_data(data: SectionDataAccessRef<'_>) -> Result<&mut [u8]> {
+    data.try_into_write()
+        .ok_or_else(|| LinkerError::section_data("section data access should be writable").into())
 }
 
 #[derive(Clone, Copy)]
@@ -109,7 +119,9 @@ impl<R: RegionAccess> RuntimeModuleMemory<R> {
             .memory
             .runtime_offset
             .checked_add(section.offset)
-            .expect("arena-backed runtime offset should not overflow");
+            .ok_or_else(|| {
+                LinkerError::metadata_rewrite("arena-backed runtime offset overflowed")
+            })?;
         let addend = match entry_info.addend {
             RelocationAddend::Explicit(addend) => Some(addend),
             RelocationAddend::Implicit => addend_bytes
@@ -171,18 +183,22 @@ impl<R: RegionAccess> RuntimeModuleMemory<R> {
     }
 
     fn remap_relocation_addend(&self, site: RelocationSite) -> Result<(RuntimeOffset, isize)> {
-        let source_address = VmOffset::new(
-            usize::try_from(
-                site.addend
-                    .expect("allocated relocation should carry an addend"),
-            )
-            .expect("allocated relocation addend should be a source address"),
-        );
+        let addend = site.addend.ok_or_else(|| {
+            LinkerError::metadata_rewrite("allocated relocation should carry an addend")
+        })?;
+        let source_address = usize::try_from(addend).map(VmOffset::new).map_err(|_| {
+            LinkerError::metadata_rewrite("allocated relocation addend should be a source address")
+        })?;
         let runtime_offset = self
             .remap_source_to_runtime_offset(source_address)
-            .expect("allocated relocation addend should map into arena-backed memory");
-        let runtime_addend = isize::try_from(runtime_offset.get())
-            .expect("runtime relocation addend should fit in isize");
+            .ok_or_else(|| {
+                LinkerError::metadata_rewrite(
+                    "allocated relocation addend should map into arena-backed memory",
+                )
+            })?;
+        let runtime_addend = isize::try_from(runtime_offset.get()).map_err(|_| {
+            LinkerError::metadata_rewrite("runtime relocation addend should fit in isize")
+        })?;
 
         Ok((runtime_offset, runtime_addend))
     }
@@ -292,9 +308,9 @@ where
                 (target_section, DataAccess::Write),
             ],
             |[relocation_data, symbol_data, target_data]| {
-                let relocation_data = relocation_data.into_read();
-                let symbol_data = symbol_data.into_read();
-                let target_data = target_data.into_write();
+                let relocation_data = read_section_data(relocation_data)?;
+                let symbol_data = read_section_data(symbol_data)?;
+                let target_data = write_section_data(target_data)?;
                 let entries = cast_section_bytes::<ElfRelType<Arch>>(relocation_data)?;
                 let symbols = cast_section_bytes::<ElfSymbol<Arch::Layout>>(symbol_data)?;
 
@@ -349,9 +365,11 @@ where
                         let data = plan.section_data_mut(section)?;
                         let symbols =
                             cast_section_bytes_mut::<ElfSymbol<Arch::Layout>>(data.as_bytes_mut())?;
-                        let symbol = symbols
-                            .get_mut(index)
-                            .expect("symbol table entry index should remain valid");
+                        let symbol = symbols.get_mut(index).ok_or_else(|| {
+                            LinkerError::metadata_rewrite(
+                                "symbol table entry index is out of bounds",
+                            )
+                        })?;
                         symbol.set_value(value);
                         Ok(())
                     },
@@ -392,8 +410,8 @@ where
                                 (site.section, DataAccess::Write),
                             ],
                             |[relocation_data, site_data]| {
-                                let relocation_data = relocation_data.into_write();
-                                let site_data = site_data.into_write();
+                                let relocation_data = write_section_data(relocation_data)?;
+                                let site_data = write_section_data(site_data)?;
                                 site.addend = Some(implicit_relocation_addend::<Arch>(
                                     site_data,
                                     site.section_offset,
@@ -464,13 +482,13 @@ where
     ElfRelType<Arch>: ByteRepr,
 {
     let entries = cast_section_bytes_mut::<ElfRelType<Arch>>(data)?;
-    let rel = entries
-        .get_mut(index)
-        .expect("allocated relocation entry index should remain valid");
-    if !<ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::HAS_IMPLICIT_ADDEND {
-        if let Some(addend) = site.addend {
-            rel.set_addend(VmAddr::null(), addend);
-        }
+    let rel = entries.get_mut(index).ok_or_else(|| {
+        LinkerError::metadata_rewrite("allocated relocation entry index is out of bounds")
+    })?;
+    if !<ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::HAS_IMPLICIT_ADDEND
+        && let Some(addend) = site.addend
+    {
+        rel.set_addend(VmAddr::null(), addend);
     }
     rel.set_offset(VmOffset::new(site.place.get()));
     Ok(())
@@ -486,22 +504,22 @@ where
 {
     if <ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::HAS_IMPLICIT_ADDEND {
         let len = size_of::<<Arch::Layout as ElfLayout>::Word>();
-        let end = site
-            .section_offset
-            .checked_add(len)
-            .expect("allocated relocation addend range should not overflow");
-        let bytes = data
-            .get_mut(site.section_offset..end)
-            .expect("allocated relocation addend should fit in its target section");
+        let range = relocation_addend_range(
+            site.section_offset,
+            len,
+            "allocated relocation addend range overflowed",
+        )?;
+        let bytes = data.get_mut(range).ok_or_else(|| {
+            LinkerError::metadata_rewrite(
+                "allocated relocation addend should fit in its target section",
+            )
+        })?;
         match len {
             4 => bytes.copy_from_slice(&(addend.get() as u32).to_ne_bytes()),
             8 => bytes.copy_from_slice(&(addend.get() as u64).to_ne_bytes()),
             _ => unreachable!("unsupported ELF word size"),
         }
-    } else {
-        let _ = (data, site, addend);
     }
-
     Ok(())
 }
 
@@ -521,11 +539,9 @@ where
     Arch: RelocationArch,
 {
     let len = size_of::<<Arch::Layout as ElfLayout>::Word>();
-    let end = section_offset
-        .checked_add(len)
-        .expect("relocation addend range should not overflow");
+    let range = relocation_addend_range(section_offset, len, "relocation addend range overflowed")?;
     let bytes = bytes
-        .get(section_offset..end)
+        .get(range)
         .ok_or_else(|| LinkerError::metadata_rewrite("relocation addend range exceeds section"))?;
     Ok(match len {
         4 => {
@@ -540,6 +556,17 @@ where
         }
         _ => unreachable!("unsupported ELF word size"),
     })
+}
+
+fn relocation_addend_range(
+    section_offset: usize,
+    byte_len: usize,
+    overflow_message: &'static str,
+) -> Result<Range<usize>> {
+    let end = section_offset
+        .checked_add(byte_len)
+        .ok_or_else(|| LinkerError::metadata_rewrite(overflow_message))?;
+    Ok(section_offset..end)
 }
 
 fn cast_section_bytes<T: ByteRepr>(bytes: &[u8]) -> Result<&[T]> {
@@ -576,16 +603,18 @@ where
     let symbol = symbols.get(entry.r_symbol()).ok_or_else(|| {
         LinkerError::metadata_rewrite("retained relocation references a missing symbol table entry")
     })?;
-    let addend = site
-        .addend
-        .expect("retained relocation site should carry an addend");
+    let addend = site.addend.ok_or_else(|| {
+        LinkerError::metadata_rewrite("retained relocation site should carry an addend")
+    })?;
     let symbol_value =
         retained_relocation_target::<Arch, R>(runtime, target_bytes, entry, symbol, &site, addend)?;
     let section_bytes = Cell::new(Some(target_bytes));
     let write_bytes = |src: &[u8]| {
-        let section_bytes = section_bytes
-            .take()
-            .expect("relocation value provider called more than one write handler");
+        let section_bytes = section_bytes.take().ok_or_else(|| {
+            LinkerError::metadata_rewrite(
+                "relocation value provider called more than one write handler",
+            )
+        })?;
         let end = site.section_offset.checked_add(src.len()).ok_or_else(|| {
             LinkerError::metadata_rewrite("retained relocation write range overflowed")
         })?;
@@ -599,10 +628,12 @@ where
     };
 
     <Arch as RelocationValueProvider>::relocation_value(
-        entry.r_type().raw() as usize,
-        symbol_value,
-        addend,
-        site.place.get(),
+        RelocationValueInput {
+            relocation_type: entry.r_type().raw() as usize,
+            target: symbol_value,
+            addend,
+            place: site.place.get(),
+        },
         |_| Ok(()),
         |value| write_bytes(&value.get().to_ne_bytes()),
         |value| write_bytes(&value.into_inner().to_ne_bytes()),

@@ -16,6 +16,8 @@ pub struct ElfPhdr<L: ElfLayout = NativeElfLayout> {
 impl<L: ElfLayout> ElfPhdr<L> {
     /// Creates an owned ELF program header from native-sized field values.
     #[inline]
+    // Mirrors the ELF program-header field list.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         program_type: ElfProgramType,
         flags: ElfProgramFlags,

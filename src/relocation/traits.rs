@@ -183,35 +183,42 @@ pub(crate) trait RelocationValueProvider {
     }
 
     fn relocation_value<T>(
-        relocation_type: usize,
-        target: usize,
-        addend: isize,
-        place: usize,
+        input: RelocationValueInput,
         skip: impl FnOnce(RelocValue<()>) -> T,
         write_addr: impl FnOnce(VmAddr) -> T,
         write_word32: impl FnOnce(RelocValue<u32>) -> T,
         write_sword32: impl FnOnce(RelocValue<i32>) -> T,
     ) -> core::result::Result<T, RelocReason> {
-        let kind = Self::relocation_value_kind(relocation_type)?;
+        let kind = Self::relocation_value_kind(input.relocation_type)?;
         match kind {
             RelocationValueKind::None => Ok(skip(RelocValue::new(()))),
-            RelocationValueKind::Address(formula) => Ok(write_addr(VmAddr::new(
-                formula.compute(target, addend, place) as usize,
-            ))),
+            RelocationValueKind::Address(formula) => {
+                Ok(write_addr(VmAddr::new(
+                    formula.compute(input.target, input.addend, input.place) as usize,
+                )))
+            }
             RelocationValueKind::Word32(formula) => {
-                u32::try_from(formula.compute(target, addend, place))
+                u32::try_from(formula.compute(input.target, input.addend, input.place))
                     .map(RelocValue::new)
                     .map(write_word32)
                     .map_err(|_| RelocReason::IntConversionOutOfRange)
             }
             RelocationValueKind::SWord32(formula) => {
-                i32::try_from(formula.compute(target, addend, place))
+                i32::try_from(formula.compute(input.target, input.addend, input.place))
                     .map(RelocValue::new)
                     .map(write_sword32)
                     .map_err(|_| RelocReason::IntConversionOutOfRange)
             }
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RelocationValueInput {
+    pub(crate) relocation_type: usize,
+    pub(crate) target: usize,
+    pub(crate) addend: isize,
+    pub(crate) place: usize,
 }
 
 /// A trait for intercepting relocations during relocation.
@@ -331,7 +338,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
     /// Access the current resolution scope.
     #[inline]
     pub fn scope(&self) -> &ModuleScope<Arch> {
-        &self.scope
+        self.scope
     }
 
     /// Access a symbol table entry by index for this relocation context.

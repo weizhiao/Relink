@@ -399,16 +399,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         self.module.base()
     }
 
-    /// Gets the length of the bounding runtime span covered by mapped memory.
-    pub fn mapped_len(&self) -> usize {
-        self.module.mapped_len()
-    }
-
-    /// Gets the lowest runtime address covered by mapped memory.
-    pub(crate) fn mapped_base(&self) -> VmAddr {
-        self.module.mapped_base()
-    }
-
     /// Returns whether `addr` is inside one of this image's mapped slices.
     pub fn contains_addr(&self, addr: VmAddr) -> bool {
         self.module.contains_addr(addr)

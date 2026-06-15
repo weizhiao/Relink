@@ -154,7 +154,7 @@ impl crate::linker::scan::GotPltTarget for X86_64Arch {
 
         let mut encoded = [0u8; size_of::<i32>()];
         encoded.copy_from_slice(bytes);
-        let displacement = i32::from_ne_bytes(encoded) as i128;
+        let displacement = i128::from(i32::from_ne_bytes(encoded));
         let target = source_place as i128 + displacement - addend as i128;
         usize::try_from(target).map(Some).map_err(|_| {
             LinkerError::metadata_rewrite("retained relocation encoded target is out of range")

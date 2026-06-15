@@ -7,12 +7,9 @@ use super::{
 use super::{
     AfterObjectLoadEvent, BeforeObjectLoadEvent, ObjectRelocatedEvent, SectionLayoutEvent,
 };
-use crate::{
-    Result,
-    arch::NativeArch,
-    memory::RegionAccess,
-    relocation::{ObjectRelocationArch, RelocationArch},
-};
+#[cfg(feature = "object")]
+use crate::relocation::ObjectRelocationArch;
+use crate::{Result, arch::NativeArch, memory::RegionAccess, relocation::RelocationArch};
 use alloc::boxed::Box;
 
 /// Event hook for images as they are loaded.

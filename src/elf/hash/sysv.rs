@@ -68,7 +68,7 @@ impl ElfHash {
             }
             hash &= !g;
         }
-        hash as u64
+        u64::from(hash)
     }
 
     /// Parse a SYSV hash table from raw memory

@@ -198,7 +198,9 @@ pub struct CandidateContext<'a, LinkKey> {
     key: &'a LinkKey,
 }
 
+// Keep these impls manual so callback contexts remain copyable for any LinkKey.
 impl<LinkKey> Clone for CandidateContext<'_, LinkKey> {
+    #[inline]
     fn clone(&self) -> Self {
         *self
     }
@@ -313,7 +315,9 @@ pub struct SearchPathResolver<LinkKey = PathBuf, Rule = PathKey> {
     _rule: PhantomData<fn() -> Rule>,
 }
 
+// Keep this impl manual so cloning a resolver does not require LinkKey or Rule to be Clone.
 impl<LinkKey, Rule> Clone for SearchPathResolver<LinkKey, Rule> {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             entries: self.entries.clone(),
@@ -567,5 +571,20 @@ where
         }
 
         Err(req.unresolved())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NonCloneKey;
+    struct NonCloneRule;
+
+    #[test]
+    fn search_path_resolver_clone_does_not_require_key_or_rule_clone() {
+        fn assert_clone<T: Clone>() {}
+
+        assert_clone::<SearchPathResolver<NonCloneKey, NonCloneRule>>();
     }
 }

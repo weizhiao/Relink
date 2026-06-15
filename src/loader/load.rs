@@ -8,7 +8,7 @@ use crate::{
     },
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
-    memory::{RegionAccess, VmAddr, VmOffset},
+    memory::{RegionAccess, VmAddr},
     observer::{AfterDynamicLoadEvent, BeforeDynamicLoadEvent, LoadObserver},
     os::{Mmap, ProtFlags},
     relocation::{ObjectRelocationArch, RelocationArch},
@@ -27,6 +27,16 @@ where
     Arch: RelocationArch,
     M: Mmap,
 {
+    #[inline]
+    pub(crate) fn notify_after_dynamic_load(
+        &mut self,
+        image: &mut RawDynamic<D, Arch, M::Region>,
+    ) -> Result<()> {
+        self.inner
+            .observer
+            .on_after_dynamic_load(AfterDynamicLoadEvent::new(image))
+    }
+
     /// Reads the ELF header.
     ///
     /// The header's `e_machine` is required to equal `Arch::MACHINE`. To
@@ -221,13 +231,9 @@ where
 
         let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Dynamic)?;
         let image = self.load_dynamic_from_ehdr(&object, ehdr)?;
+        let base = image.base();
 
-        logging::info!(
-            "Loaded dynamic image: {} at [{}-{}]",
-            image.name(),
-            image.mapped_base(),
-            image.mapped_base() + VmOffset::new(image.mapped_len())
-        );
+        logging::info!("Loaded dynamic image: {} at {}", image.name(), base);
 
         Ok(image)
     }
@@ -264,9 +270,7 @@ where
         let builder: ImageBuilder<Tls, D, Arch, M::Region> =
             ImageBuilder::new(segments, path, ehdr, force_static_tls, page_size, user_data);
         let mut image = RawDynamic::from_builder(builder, phdrs)?;
-        self.inner
-            .observer
-            .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
+        self.notify_after_dynamic_load(&mut image)?;
         Ok(image)
     }
 
@@ -309,16 +313,10 @@ where
         let builder: ImageBuilder<Tls, D, Arch, M::Region> =
             ImageBuilder::new(segments, path, ehdr, force_static_tls, page_size, user_data);
         let mut image = RawDynamic::from_builder(builder, &phdrs)?;
-        self.inner
-            .observer
-            .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
+        self.notify_after_dynamic_load(&mut image)?;
+        let base = image.base();
 
-        logging::info!(
-            "Loaded scanned dynamic image: {} at [{}-{}]",
-            image.name(),
-            image.mapped_base(),
-            image.mapped_base() + VmOffset::new(image.mapped_len())
-        );
+        logging::info!("Loaded scanned dynamic image: {} at {}", image.name(), base);
 
         Ok(image)
     }
@@ -353,7 +351,11 @@ where
         let layout = parse_segments(&phdrs, true, page_size)?;
         let mapped_addr = load_bias + layout.min_vaddr;
         let segments = ElfSegments::new(
-            unsafe { self.mapper().alias_space(mapped_addr, layout.mapped_len)? },
+            unsafe {
+                self.inner
+                    .mapper()
+                    .alias_space(mapped_addr, layout.mapped_len)?
+            },
             load_bias,
             layout.min_vaddr,
         );
@@ -368,16 +370,10 @@ where
             page_size,
         )?;
         let mut image = RawDynamic::from_parts::<Tls>(parts)?;
-        self.inner
-            .observer
-            .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
+        self.notify_after_dynamic_load(&mut image)?;
+        let base = image.base();
 
-        logging::info!(
-            "Borrowed dynamic image: {} at [{}-{}]",
-            image.name(),
-            image.mapped_base(),
-            image.mapped_base() + VmOffset::new(image.mapped_len())
-        );
+        logging::info!("Borrowed dynamic image: {} at {}", image.name(), base);
 
         Ok(image)
     }
@@ -439,16 +435,14 @@ where
             ImageBuilder::new(segments, path, ehdr, force_static_tls, page_size, user_data);
         let mut exec = RawExec::from_builder(builder, phdrs, has_dynamic)?;
         if let RawExec::Dynamic(dynamic) = &mut exec {
-            self.inner
-                .observer
-                .on_after_dynamic_load(AfterDynamicLoadEvent::new(dynamic))?;
+            self.notify_after_dynamic_load(dynamic)?;
         }
+        let base = exec.base();
 
         logging::debug!(
-            "Load executable: {} at [{}-{}] ({})",
+            "Load executable: {} at {} ({})",
             exec.name(),
-            exec.mapped_base(),
-            exec.mapped_base() + VmOffset::new(exec.mapped_len()),
+            base,
             if has_dynamic { "dynamic" } else { "static" }
         );
 
@@ -505,6 +499,7 @@ impl ExpectedElf {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn borrowed_dynamic_parts<D, Arch, R>(
     path: PathBuf,
     load_bias: VmAddr,
@@ -703,7 +698,7 @@ mod tests {
         ehdr.e_ident[EI_VERSION] = EV_CURRENT;
         ehdr.e_type = ET_DYN as _;
         ehdr.e_machine = crate::arch::NativeArch::MACHINE.raw();
-        ehdr.e_version = EV_CURRENT as _;
+        ehdr.e_version = EV_CURRENT.into();
         ehdr.e_ehsize = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
         ehdr.e_phoff = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
         ehdr.e_phentsize = phentsize as _;
@@ -720,10 +715,10 @@ mod tests {
     fn prepare_phdrs_rejects_entry_size_mismatch() {
         let mut elf_buf = ElfBuf::new();
         let header = make_header(size_of::<ElfPhdr>() + 8, 1, 0, 0);
-        let mut reader = TestReader::zeroed(512);
+        let reader = TestReader::zeroed(512);
 
         let err = elf_buf
-            .prepare_phdrs(&header, &mut reader)
+            .prepare_phdrs(&header, &reader)
             .expect_err("phdr entry size mismatch should fail");
         assert!(matches!(
             err,
@@ -735,11 +730,11 @@ mod tests {
     fn prepare_phdrs_rejects_table_past_object_len() {
         let mut elf_buf = ElfBuf::new();
         let header = make_header(size_of::<ElfPhdr>(), 2, 0, 0);
-        let mut reader =
+        let reader =
             TestReader::zeroed(<NativeElfLayout as ElfLayout>::EHDR_SIZE + size_of::<ElfPhdr>());
 
         let err = elf_buf
-            .prepare_phdrs(&header, &mut reader)
+            .prepare_phdrs(&header, &reader)
             .expect_err("phdr table past object length should fail");
         assert!(matches!(
             err,

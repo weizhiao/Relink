@@ -102,6 +102,13 @@ impl<Arch: RelocationArch> Relocator<(), (), (), Arch> {
     }
 }
 
+impl<Arch: RelocationArch> Default for Relocator<(), (), (), Arch> {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T, PreH, PostH, Arch, Obs> Relocator<T, PreH, PostH, Arch, Obs>
 where
     Arch: RelocationArch,

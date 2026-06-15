@@ -24,9 +24,18 @@ use core::fmt::Debug;
 ///
 /// Static executables do not have `PT_DYNAMIC`, so they are ready to run after
 /// mapping and any static TLS setup performed by the loader.
-#[derive(Clone)]
 pub struct StaticExec<D, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
     inner: Arc<StaticExecInner<D, Arch, R>>,
+}
+
+// Keep this impl manual so cloning a static executable handle does not require D, Arch, or R to be Clone.
+impl<D, Arch: RelocationArch, R: RegionAccess> Clone for StaticExec<D, Arch, R> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 impl<D, Arch: RelocationArch, R: RegionAccess> Debug for StaticExec<D, Arch, R> {
@@ -80,15 +89,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
     /// Returns the runtime base address.
     pub fn base(&self) -> VmAddr {
         self.inner.segments.base()
-    }
-
-    pub(crate) fn mapped_base(&self) -> VmAddr {
-        self.inner.segments.mapped_base()
-    }
-
-    /// Returns the mapped memory length in bytes.
-    pub fn mapped_len(&self) -> usize {
-        self.inner.segments.mapped_len()
     }
 
     /// Returns whether `addr` lies inside this executable mapping.
@@ -159,6 +159,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Relocatable<D> for RawEx
 /// The optional `Arch` type parameter is forwarded to the underlying
 /// [`RawDynamic`] for dynamic executables. Static executables ignore it but
 /// still carry it so that downstream APIs can treat both variants uniformly.
+///
+/// The dynamic variant intentionally stays inline to avoid changing the public
+/// enum shape or adding an allocation to executable loading.
+#[allow(clippy::large_enum_variant)]
 pub enum RawExec<D, Arch = crate::arch::NativeArch, R: RegionAccess = HostRegion>
 where
     D: 'static,
@@ -249,22 +253,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawExec<D, Arch, R> {
         }
     }
 
-    /// Returns the length of the bounding runtime span covered by mapped slices.
-    pub fn mapped_len(&self) -> usize {
-        match self {
-            RawExec::Dynamic(image) => image.mapped_len(),
-            RawExec::Static(image) => image.mapped_len(),
-        }
-    }
-
-    /// Returns the lowest runtime address covered by this executable's mapped slices.
-    pub(crate) fn mapped_base(&self) -> VmAddr {
-        match self {
-            RawExec::Dynamic(image) => image.mapped_base(),
-            RawExec::Static(image) => image.mapped_base(),
-        }
-    }
-
     /// Returns whether `addr` is inside one of this executable's mapped slices.
     pub fn contains_addr(&self, addr: VmAddr) -> bool {
         match self {
@@ -286,7 +274,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawExec<D, Arch, R> {
 ///
 /// Dynamic executables retain access to their underlying [`LoadedCore`], while
 /// static executables expose a smaller set of metadata directly on this wrapper.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct LoadedExec<D: 'static, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
     /// Entry point of the executable.
     entry: VmAddr,
@@ -294,10 +282,31 @@ pub struct LoadedExec<D: 'static, Arch: RelocationArch = NativeArch, R: RegionAc
     inner: LoadedExecInner<D, Arch, R>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum LoadedExecInner<D: 'static, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
     Dynamic(LoadedCore<D, Arch, R>),
     Static(StaticExec<D, Arch, R>),
+}
+
+// Keep this impl manual so cloning a loaded executable does not require D, Arch, or R to be Clone.
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedExec<D, Arch, R> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            entry: self.entry,
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedExecInner<D, Arch, R> {
+    #[inline]
+    fn clone(&self) -> Self {
+        match self {
+            Self::Dynamic(module) => Self::Dynamic(module.clone()),
+            Self::Static(module) => Self::Static(module.clone()),
+        }
+    }
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedExec<D, Arch, R> {
@@ -322,14 +331,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedExec<D, Arch, R> {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => module.name(),
             LoadedExecInner::Static(static_image) => static_image.name(),
-        }
-    }
-
-    /// Returns the length of the bounding runtime span covered by mapped slices.
-    pub fn mapped_len(&self) -> usize {
-        match &self.inner {
-            LoadedExecInner::Dynamic(module) => module.mapped_len(),
-            LoadedExecInner::Static(static_image) => static_image.mapped_len(),
         }
     }
 
@@ -369,7 +370,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedExec<D, Arch, R> {
     /// Returns the TLS module id assigned to this executable, when registered.
     pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
         match &self.inner {
-            LoadedExecInner::Dynamic(module) => module.core.tls_mod_id(),
+            LoadedExecInner::Dynamic(module) => module.tls_mod_id(),
             LoadedExecInner::Static(static_image) => static_image.tls_mod_id(),
         }
     }
@@ -377,7 +378,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedExec<D, Arch, R> {
     /// Returns the static TLS thread-pointer offset, when assigned.
     pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         match &self.inner {
-            LoadedExecInner::Dynamic(module) => module.core.tls_tp_offset(),
+            LoadedExecInner::Dynamic(module) => module.tls_tp_offset(),
             LoadedExecInner::Static(static_image) => static_image.tls_tp_offset(),
         }
     }
@@ -436,5 +437,20 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawExec<D, Arch, R> {
         } else {
             Ok(Self::Static(StaticExec::from_builder(builder, phdrs)?))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NonCloneData;
+
+    #[test]
+    fn exec_handles_clone_without_user_data_clone() {
+        fn assert_clone<T: Clone>() {}
+
+        assert_clone::<StaticExec<NonCloneData>>();
+        assert_clone::<LoadedExec<NonCloneData>>();
     }
 }

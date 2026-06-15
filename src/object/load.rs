@@ -6,8 +6,7 @@ use crate::{
     input::{ElfReader, ElfReaderExt, IntoElfReader, PathBuf},
     loader::{ExpectedElf, Loader},
     logging,
-    memory::VmOffset,
-    observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent, LoadObserver},
+    observer::LoadObserver,
     os::Mmap,
     relocation::ObjectRelocationArch,
     tls::TlsResolver,
@@ -53,23 +52,17 @@ where
         let shstrtab = read_section_name_table(&ehdr, &shdrs, &object)?;
         let mut sections = ObjectSections::new(shdrs, shstrtab);
         let mut user_data = D::default();
-        self.inner
-            .observer
-            .on_before_object_load(BeforeObjectLoadEvent::new(
-                &ehdr,
-                &mut sections,
-                &object,
-                &mut user_data,
-            ))?;
+        self.notify_before_object_load(&ehdr, &mut sections, &object, &mut user_data)?;
         let path = PathBuf::from(object.path());
-        let page_size = self.inner.page_size()?.bytes();
+        let page_size = self.page_size()?.bytes();
+        let (object_groups, observer, mapper) = self.object_load_context();
         let (section_segments, segments) = SectionSegments::<Arch>::load::<D, _, _>(
             &mut sections,
             &object,
             page_size,
-            self.inner.object_groups.as_ref(),
-            &mut self.inner.observer,
-            &self.inner.mapper,
+            object_groups,
+            observer,
+            mapper,
         )?;
         let builder = ObjectBuilder::<Tls, D, Arch, M::Region>::new(
             path,
@@ -79,16 +72,10 @@ where
             user_data,
         )?;
         let mut raw = RawObject::from_builder(builder);
-        self.inner
-            .observer
-            .on_after_object_load(AfterObjectLoadEvent::new(&mut raw))?;
+        self.notify_after_object_load(&mut raw)?;
+        let base = raw.base();
 
-        logging::info!(
-            "Loaded object: {} at [{}-{}]",
-            raw.name(),
-            raw.mapped_base(),
-            raw.mapped_base() + VmOffset::new(raw.mapped_len())
-        );
+        logging::info!("Loaded object: {} at {}", raw.name(), base);
 
         Ok(raw)
     }
@@ -138,7 +125,7 @@ where
     if shstrtab_size == 0 {
         return Err(ParseShdrError::malformed("section name string table is empty").into());
     }
-    for shdr in shdrs.iter() {
+    for shdr in shdrs {
         match shdr.section_type() {
             ElfSectionType::SYMTAB => has_symtab = true,
             ElfSectionType::REL | ElfSectionType::RELA => {
@@ -156,7 +143,7 @@ where
     }
 
     let object_len = object.len();
-    for shdr in shdrs.iter() {
+    for shdr in shdrs {
         if shdr.sh_size() == 0 || shdr.section_type() == ElfSectionType::NOBITS {
             continue;
         }
@@ -288,7 +275,7 @@ mod tests {
             event: AfterObjectLoadEvent<'_, ObjectData, crate::arch::NativeArch, R>,
         ) -> Result<()> {
             self.after_object_name_seen = event.raw().name() == "metadata.o";
-            self.after_object_mapped = event.raw().mapped_len() > 0;
+            self.after_object_mapped = event.raw().contains_addr(event.raw().base());
             Ok(())
         }
     }
@@ -334,7 +321,7 @@ mod tests {
         ehdr.e_ident[EI_VERSION] = EV_CURRENT;
         ehdr.e_type = ET_REL as _;
         ehdr.e_machine = crate::arch::NativeArch::MACHINE.raw();
-        ehdr.e_version = EV_CURRENT as _;
+        ehdr.e_version = EV_CURRENT.into();
         ehdr.e_ehsize = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
         ehdr.e_shoff = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
         ehdr.e_shentsize = shentsize as _;

@@ -393,9 +393,7 @@ impl LifecycleSpec {
             .map(|offset| -> Result<_> {
                 let words = segments
                     .read_view::<L::Word>(VmOffset::new(offset.get()), self.array_byte_len)
-                    .ok_or_else(|| ParseDynamicError::MalformedLifecycleTable {
-                        detail: malformed,
-                    })?;
+                    .ok_or(ParseDynamicError::MalformedLifecycleTable { detail: malformed })?;
 
                 Ok(words
                     .as_slice()

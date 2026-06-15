@@ -183,20 +183,17 @@ impl MemoryLayoutPlan {
         self.module(module_id).section_id(id)
     }
 
-    fn arena_section_placements(
-        &self,
-        arena: ArenaId,
-    ) -> impl Iterator<Item = (SectionId, SectionPlacement)> + '_ {
-        self.sections.placements_in(arena)
-    }
-
     /// Returns the derived usage summary for one arena.
     pub(in crate::linker) fn usage(&self, id: ArenaId) -> ArenaUsage {
         let arena = self.arena(id);
         let mut section_count = 0usize;
         let mut used_len = 0usize;
 
-        for (_, placement) in self.arena_section_placements(id) {
+        for (_, placement) in self
+            .sections
+            .placements()
+            .filter(|(_, placement)| placement.arena() == id)
+        {
             section_count += 1;
             let section_end = placement
                 .offset()
@@ -214,25 +211,6 @@ impl MemoryLayoutPlan {
         align_up(self.usage(arena).used_len(), alignment)
     }
 
-    #[inline]
-    fn placement_for(
-        &self,
-        section: SectionId,
-        arena: ArenaId,
-        offset: usize,
-    ) -> Option<SectionPlacement> {
-        let metadata = self.section(section);
-        if !metadata.is_allocated() {
-            return None;
-        }
-        let memory_class = metadata.memory_class()?;
-        if memory_class != self.arena(arena).memory_class() {
-            return None;
-        }
-
-        Some(SectionPlacement::new(arena, offset, metadata.size()))
-    }
-
     /// Assigns one section to the next aligned offset in a physical arena.
     pub(in crate::linker) fn assign_next(&mut self, section: SectionId, arena: ArenaId) -> bool {
         let offset = self.next_offset(arena, self.section(section).alignment());
@@ -246,10 +224,18 @@ impl MemoryLayoutPlan {
         arena: ArenaId,
         offset: usize,
     ) -> bool {
-        let Some(placement) = self.placement_for(section, arena, offset) else {
+        let metadata = self.section(section);
+        if !metadata.is_allocated() {
+            return false;
+        }
+        let Some(memory_class) = metadata.memory_class() else {
             return false;
         };
+        if memory_class != self.arena(arena).memory_class() {
+            return false;
+        }
 
+        let placement = SectionPlacement::new(arena, offset, metadata.size());
         self.sections.set_placement(section, placement)
     }
 

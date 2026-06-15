@@ -15,33 +15,19 @@ pub(crate) struct ObjectExports<L: ElfLayout> {
     symbols: Vec<ElfSymbol<L>>,
 }
 
-impl<L: ElfLayout> Clone for ObjectExports<L> {
-    fn clone(&self) -> Self {
-        Self {
-            hashtab: self.hashtab.clone(),
-            symbols: self.symbols.clone(),
-        }
-    }
-}
-
 impl<L: ElfLayout> ObjectExports<L> {
     #[inline]
     pub(crate) fn empty() -> Self {
-        Self::with_capacity(0)
-    }
-
-    #[inline]
-    fn with_capacity(capacity: usize) -> Self {
         Self {
-            hashtab: CustomHash::with_capacity(capacity),
-            symbols: Vec::with_capacity(capacity),
+            hashtab: CustomHash::with_capacity(0),
+            symbols: Vec::new(),
         }
     }
 
     pub(crate) fn insert(&mut self, name: impl Into<String>, symbol: ElfSymbol<L>) {
         let name = name.into();
         if let Some(idx) = self.hashtab.find_idx(&name) {
-            if should_replace(&self.symbols[idx], &symbol) {
+            if self.symbols[idx].is_weak() && !symbol.is_weak() {
                 self.symbols[idx] = symbol;
             }
             return;
@@ -62,11 +48,6 @@ impl<L: ElfLayout> ObjectExports<L> {
             .lookup_idx(symbol, precompute)
             .map(|idx| &self.symbols[idx])
     }
-}
-
-#[inline]
-fn should_replace<L: ElfLayout>(existing: &ElfSymbol<L>, candidate: &ElfSymbol<L>) -> bool {
-    existing.is_weak() && !candidate.is_weak()
 }
 
 impl<Arch: RelocationArch> SymbolExports<Arch> for ObjectExports<Arch::Layout> {

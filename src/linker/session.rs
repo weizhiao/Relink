@@ -7,8 +7,8 @@ use alloc::{
 };
 
 pub(crate) struct GraphEntry<P> {
-    pub(crate) payload: P,
-    pub(crate) direct_deps: Option<Box<[KeyId]>>,
+    payload: P,
+    direct_deps: Option<Box<[KeyId]>>,
 }
 
 impl<P> GraphEntry<P> {
@@ -21,6 +21,19 @@ impl<P> GraphEntry<P> {
     }
 
     #[inline]
+    pub(crate) fn with_direct_deps(payload: P, direct_deps: Box<[KeyId]>) -> Self {
+        Self {
+            payload,
+            direct_deps: Some(direct_deps),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn payload(&self) -> &P {
+        &self.payload
+    }
+
+    #[inline]
     pub(crate) fn direct_deps(&self) -> Option<&[KeyId]> {
         self.direct_deps.as_deref()
     }
@@ -29,11 +42,16 @@ impl<P> GraphEntry<P> {
     pub(crate) fn set_direct_deps(&mut self, direct_deps: Vec<KeyId>) {
         self.direct_deps = Some(direct_deps.into_boxed_slice());
     }
+
+    #[inline]
+    pub(crate) fn into_parts(self) -> (P, Option<Box<[KeyId]>>) {
+        (self.payload, self.direct_deps)
+    }
 }
 
 pub(crate) struct ReadyCommit<D: 'static, Arch: RelocationArch> {
-    pub(crate) module: ModuleHandle<Arch>,
-    pub(crate) direct_deps: Box<[KeyId]>,
+    module: ModuleHandle<Arch>,
+    direct_deps: Box<[KeyId]>,
     _marker: core::marker::PhantomData<fn() -> D>,
 }
 
@@ -61,6 +79,11 @@ where
             direct_deps,
             _marker: core::marker::PhantomData,
         }
+    }
+
+    #[inline]
+    pub(crate) fn into_parts(self) -> (ModuleHandle<Arch>, Box<[KeyId]>) {
+        (self.module, self.direct_deps)
     }
 }
 
@@ -173,10 +196,7 @@ where
     ) {
         self.entries.insert(
             id,
-            GraphEntry {
-                payload: ModulePayload::Synthetic(module),
-                direct_deps: Some(direct_deps),
-            },
+            GraphEntry::with_direct_deps(ModulePayload::Synthetic(module), direct_deps),
         );
     }
 
@@ -189,17 +209,14 @@ where
     ) {
         self.entries.insert(
             id,
-            GraphEntry {
-                payload: ModulePayload::Dynamic(payload),
-                direct_deps: Some(direct_deps),
-            },
+            GraphEntry::with_direct_deps(ModulePayload::Dynamic(payload), direct_deps),
         );
     }
 }
 
 pub(crate) struct LoadSession<D: 'static, Arch: RelocationArch, R: RegionAccess> {
     pub(crate) resolve: ResolveSession<crate::image::RawDynamic<D, Arch, R>, Arch>,
-    pub(crate) ready_to_commit: BTreeMap<KeyId, ReadyCommit<D, Arch>>,
+    ready_to_commit: BTreeMap<KeyId, ReadyCommit<D, Arch>>,
 }
 
 impl<D: 'static, Arch, R> LoadSession<D, Arch, R>
@@ -240,6 +257,11 @@ where
             .ready_to_commit
             .insert(id, ReadyCommit::new(module.into(), direct_deps));
         debug_assert!(previous.is_none(), "ready commit entries must be unique");
+    }
+
+    #[inline]
+    pub(crate) fn take_ready_to_commit(&mut self) -> BTreeMap<KeyId, ReadyCommit<D, Arch>> {
+        core::mem::take(&mut self.ready_to_commit)
     }
 }
 

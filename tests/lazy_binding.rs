@@ -133,7 +133,7 @@ fn default_lazy_binding_uses_retained_scope_dependency() {
         .load_dylib(ElfBinary::new("scope_consumer.so", &consumer_output.data))
         .expect("failed to load scope consumer")
         .relocator()
-        .scope(&[provider.clone()])
+        .scope(std::slice::from_ref(&provider))
         .relocate()
         .expect("failed to relocate scope consumer");
 
@@ -170,7 +170,7 @@ fn default_lazy_binding_retains_scope_used_only_by_lazy_jump_slot() {
         ))
         .expect("failed to load scope consumer")
         .relocator()
-        .scope(&[provider.clone()])
+        .scope(std::slice::from_ref(&provider))
         .relocate()
         .expect("failed to relocate scope consumer");
 
@@ -206,7 +206,7 @@ fn bind_now_defaults_to_eager_resolution() {
         .load_dylib(ElfBinary::new("scope_consumer.so", &consumer_output.data))
         .expect("failed to load scope consumer")
         .relocator()
-        .scope(&[provider.clone()])
+        .scope(std::slice::from_ref(&provider))
         .relocate()
         .expect("failed to relocate scope consumer");
 

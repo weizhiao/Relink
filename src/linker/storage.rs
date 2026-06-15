@@ -23,6 +23,23 @@ pub(crate) struct CommittedStorage<
     load_order: Vec<KeyId>,
 }
 
+impl<K, D: 'static, M, Arch> Clone for CommittedStorage<K, D, M, Arch>
+where
+    K: Clone,
+    M: Clone,
+    Arch: RelocationArch,
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            key_ids: self.key_ids.clone(),
+            keys: self.keys.clone(),
+            entries: self.entries.clone(),
+            load_order: self.load_order.clone(),
+        }
+    }
+}
+
 impl<K, D: 'static, M, Arch> CommittedStorage<K, D, M, Arch>
 where
     Arch: RelocationArch,
@@ -165,4 +182,20 @@ struct StoredEntry<D: 'static, M = (), Arch: RelocationArch = crate::arch::Nativ
     direct_deps: Box<[KeyId]>,
     meta: M,
     _marker: core::marker::PhantomData<fn() -> D>,
+}
+
+impl<D: 'static, M, Arch> Clone for StoredEntry<D, M, Arch>
+where
+    M: Clone,
+    Arch: RelocationArch,
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            module: self.module.clone(),
+            direct_deps: self.direct_deps.clone(),
+            meta: self.meta.clone(),
+            _marker: core::marker::PhantomData,
+        }
+    }
 }

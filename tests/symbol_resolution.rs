@@ -139,8 +139,8 @@ fn extend_scope_keeps_existing_precedence() {
         .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
         .expect("failed to load consumer")
         .relocator()
-        .scope(&[first.clone()])
-        .extend_scope(&[second.clone()])
+        .scope(std::slice::from_ref(&first))
+        .extend_scope(std::slice::from_ref(&second))
         .relocate()
         .expect("failed to relocate consumer");
 

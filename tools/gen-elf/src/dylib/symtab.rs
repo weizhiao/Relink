@@ -1,10 +1,11 @@
-use crate::common::{SectionKind, SymbolDesc, SymbolScope, SymbolType};
+use crate::common::{ContentKind, SectionKind, SymbolDesc, SymbolScope, SymbolType};
 use crate::dylib::{
     StringTable,
     reloc::RelocMetaData,
     shdr::{Section, SectionAllocator, SectionHeader, SectionId, ShdrManager},
 };
 use crate::{Arch, RelocEntry, arch};
+use anyhow::{Context, Result};
 use byteorder::{LittleEndian, WriteBytesExt};
 use object::elf::*;
 use std::collections::HashMap;
@@ -86,7 +87,7 @@ impl SymTabMetadata {
         soname: Option<&str>,
         needed_libs: &[String],
         allocator: &mut SectionAllocator,
-    ) -> Self {
+    ) -> Result<Self> {
         let dynsym_id = allocator.allocate(0);
         let dynstr_id = allocator.allocate(0);
         let hash_id = allocator.allocate(0);
@@ -131,7 +132,7 @@ impl SymTabMetadata {
         // Add provided symbols
         symtab.add_symbols(symbols);
         symtab.add_plt_symbols(relocs);
-        symtab.add_tls_symbols(relocs);
+        symtab.add_tls_symbols(relocs)?;
         symtab.soname_offset = soname.map(|name| symtab.dynstr.add(name));
         symtab.needed_offsets = needed_libs
             .iter()
@@ -146,7 +147,7 @@ impl SymTabMetadata {
         // Create .dynsym section
         let dynsym = allocator.get_mut(&dynsym_id);
         for sym in &symtab.dynsym {
-            sym.write(dynsym, arch.is_64()).unwrap();
+            sym.write(dynsym, arch.is_64())?;
         }
         symtab.dynsym_size = dynsym.len() as u64;
 
@@ -155,7 +156,7 @@ impl SymTabMetadata {
         symtab.create_hashtable(hash_section);
         symtab.hash_size = hash_section.len() as u64;
 
-        symtab
+        Ok(symtab)
     }
 
     pub(crate) fn needed_offsets(&self) -> &[u32] {
@@ -198,29 +199,28 @@ impl SymTabMetadata {
 
         let (shdr_type, value) = if let Some(content) = &s.content {
             let off = match content.kind {
-                SectionKind::Text => {
+                ContentKind::Text => {
                     let off = self.text_offset;
                     self.text_offset += content.data.len() as u64;
                     off
                 }
-                SectionKind::Data => {
+                ContentKind::Data => {
                     let off = self.data_offset;
                     self.data_offset += content.data.len() as u64;
                     off
                 }
-                SectionKind::Tls => {
+                ContentKind::Tls => {
                     let off = self.tls_offset;
                     self.tls_offset += content.data.len() as u64;
                     off
                 }
-                SectionKind::Plt => {
+                ContentKind::Plt => {
                     let off = self.plt_offset;
                     self.plt_offset += content.data.len() as u64;
                     off
                 }
-                _ => todo!("Unsupported purpose in SymbolDesc content"),
             };
-            (content.kind, off)
+            (content.kind.section(), off)
         } else {
             // Undefined symbols
             let shdr_type = match s.sym_type {
@@ -247,59 +247,28 @@ impl SymTabMetadata {
     }
 
     pub(crate) fn get_text_content(&self) -> Vec<u8> {
-        let mut content = vec![];
-        // Sort symbols by value to ensure correct order in section
-        let text_syms: Vec<_> = self
-            .symbols
-            .iter()
-            .filter(|s| {
-                s.content
-                    .as_ref()
-                    .is_some_and(|c| matches!(c.kind, SectionKind::Text))
-            })
-            .collect();
-
-        // We need to find the corresponding Symbol in dynsym to get the value
-        // But since we are building the content, we can just use the order they were added
-        for s in text_syms {
-            if let Some(c) = &s.content {
-                content.extend_from_slice(&c.data);
-            }
-        }
-        content
+        self.content_for_section(ContentKind::Text)
     }
 
     pub(crate) fn get_plt_content(&self) -> Vec<u8> {
-        let mut content = vec![];
-        for s in &self.symbols {
-            if let Some(c) = &s.content {
-                if matches!(c.kind, SectionKind::Plt) {
-                    content.extend_from_slice(&c.data);
-                }
-            }
-        }
-        content
+        self.content_for_section(ContentKind::Plt)
     }
 
     pub(crate) fn get_data_content(&self) -> Vec<u8> {
-        let mut content = vec![];
-        for s in &self.symbols {
-            if let Some(c) = &s.content {
-                if matches!(c.kind, SectionKind::Data) {
-                    content.extend_from_slice(&c.data);
-                }
-            }
-        }
-        content
+        self.content_for_section(ContentKind::Data)
     }
 
     pub(crate) fn get_tls_content(&self) -> Vec<u8> {
+        self.content_for_section(ContentKind::Tls)
+    }
+
+    fn content_for_section(&self, kind: ContentKind) -> Vec<u8> {
         let mut content = vec![];
         for s in &self.symbols {
-            if let Some(c) = &s.content {
-                if matches!(c.kind, SectionKind::Tls) {
-                    content.extend_from_slice(&c.data);
-                }
+            if let Some(c) = &s.content
+                && c.kind == kind
+            {
+                content.extend_from_slice(&c.data);
             }
         }
         content
@@ -355,13 +324,13 @@ impl SymTabMetadata {
         // Add PLT[0]
         let plt0_code = arch::generate_plt0_code(arch);
         let plt0_desc = SymbolDesc::plt_func("PLT0", plt0_code);
-        self.add_single_symbol(plt0_desc);
-        self.plt0_idx = Some(self.dynsym.len() - 1);
+        let plt0_idx = self.add_single_symbol(plt0_desc);
+        self.plt0_idx = Some(plt0_idx);
 
-        let mut got_plt_idx = 3u64; // PLT GOT entries start at index 3 in .got.plt
-        let mut reloc_idx = 0u32; // PLT relocation index should be 0-based relative to JMPREL
-
-        for reloc in relocs.iter().filter(|r| r.r_type.is_plt_reloc(arch)) {
+        for (reloc_idx, reloc) in
+            (0u32..).zip(relocs.iter().filter(|r| r.r_type.is_plt_reloc(arch)))
+        {
+            let got_plt_idx = 3 + u64::from(reloc_idx);
             let func_name = reloc.symbol_name.as_str();
             let plt_sym_name = format!("{}@plt", func_name);
             let plt_code = arch::generate_plt_entry_code(arch, reloc_idx, self.plt_offset);
@@ -374,13 +343,10 @@ impl SymTabMetadata {
             let helper_desc = SymbolDesc::global_func(test_helper, &helper_code);
             let helper_idx = self.add_single_symbol(helper_desc);
             self.helper_index.insert(plt_idx, helper_idx);
-
-            got_plt_idx += 1;
-            reloc_idx += 1;
         }
     }
 
-    pub(crate) fn add_tls_symbols(&mut self, relocs: &[RelocEntry]) {
+    pub(crate) fn add_tls_symbols(&mut self, relocs: &[RelocEntry]) -> Result<()> {
         let arch = self.arch;
         // Add __tls_get_addr as undefined symbol if not present
         if self.get_sym_idx(TLS_GET_ADDR_NAME).is_none() {
@@ -393,7 +359,9 @@ impl SymTabMetadata {
             if tls_name.is_empty() {
                 continue;
             }
-            let tls_idx = self.get_sym_idx(tls_name).expect("TLS symbol must exist");
+            let tls_idx = self.get_sym_idx(tls_name).with_context(|| {
+                format!("TLS relocation references missing symbol {tls_name:?}")
+            })?;
 
             let test_helper = format!("{}{}", tls_name, TLS_HELPER_SUFFIX);
             if self.get_sym_idx(&test_helper).is_some() {
@@ -405,6 +373,7 @@ impl SymTabMetadata {
             let helper_idx = self.add_single_symbol(helper_desc);
             self.tls_helper_index.insert(tls_idx, helper_idx);
         }
+        Ok(())
     }
 
     pub(crate) fn update_symbol_values(
@@ -434,7 +403,12 @@ impl SymTabMetadata {
         }
     }
 
-    pub(crate) fn patch_plt(&self, plt_data: &mut [u8], plt_vaddr: u64, got_plt_vaddr: u64) {
+    pub(crate) fn patch_plt(
+        &self,
+        plt_data: &mut [u8],
+        plt_vaddr: u64,
+        got_plt_vaddr: u64,
+    ) -> Result<()> {
         // 1. Patch PLT0
         if let Some(plt0_idx) = self.plt0_idx {
             let plt0_sym = &self.dynsym[plt0_idx];
@@ -455,8 +429,9 @@ impl SymTabMetadata {
                 plt_sym.value,
                 target_got_vaddr,
                 got_plt_vaddr,
-            );
+            )?;
         }
+        Ok(())
     }
 
     pub(crate) fn patch_plt_testers(&self, text_data: &mut [u8], text_vaddr: u64, got_vaddr: u64) {
@@ -537,17 +512,18 @@ impl SymTabMetadata {
         data_vaddr: u64,
         shdr_map: &HashMap<SectionKind, usize>,
         allocator: &mut SectionAllocator,
-    ) {
+    ) -> Result<()> {
         self.update_symbol_values(plt_vaddr, text_vaddr, data_vaddr, shdr_map);
-        self.patch_dynsym(allocator);
+        self.patch_dynsym(allocator)
     }
 
-    pub(crate) fn patch_dynsym(&self, allocator: &mut SectionAllocator) {
+    pub(crate) fn patch_dynsym(&self, allocator: &mut SectionAllocator) -> Result<()> {
         let buf = allocator.get_mut(&self.dynsym_id);
         buf.clear();
         for sym in &self.dynsym {
-            sym.write(buf, self.arch.is_64()).unwrap();
+            sym.write(buf, self.arch.is_64())?;
         }
+        Ok(())
     }
 
     pub(crate) fn create_sections(&mut self, sections: &mut Vec<Section>) {

@@ -64,7 +64,6 @@ fn borrowed_dynamic_reuses_existing_mapping() {
     assert_eq!(borrowed.name(), "libowner.so");
     assert_eq!(borrowed.base(), owner.base());
     assert_eq!(borrowed.entry(), owner.entry());
-    assert_eq!(borrowed.mapped_len(), owner.mapped_len());
     assert!(borrowed.contains_addr(owner.base()));
     assert_eq!(borrowed.phdrs().len(), owner.phdrs().len());
     assert!(

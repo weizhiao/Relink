@@ -12,7 +12,7 @@ use crate::{
     },
     tls::{TlsRelocOutcome, handle_tls_reloc},
 };
-use alloc::vec::Vec;
+use alloc::vec;
 use core::num::NonZeroUsize;
 
 impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
@@ -49,8 +49,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             observer,
             ..
         } = args;
-        let observer = observer;
-
         let relocation = self.relocation();
         if relocation.is_empty() {
             logging::debug!("No relocations needed for {}", self.name());
@@ -186,7 +184,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
             // Handle jump slot relocations
             if likely(r_type == Arch::JUMP_SLOT) {
-                if binding.relocate_jump_slot::<Arch, R, _>(helper.memory(), base, rel)? {
+                if binding.relocate_jump_slot::<Arch, _>(helper.memory(), base, rel)? {
                     continue;
                 }
 
@@ -335,14 +333,13 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             } else if r_type == Arch::COPY {
                 // Handle copy relocations (typically for global data)
                 let len = helper.symbols().symbol_idx(r_sym).0.st_size();
-                if let Some(symdef) = helper.find_symdef(r_sym) {
-                    if let Some(sym) = symdef.symbol() {
-                        let mut src = Vec::new();
-                        src.resize(len, 0);
-                        symdef.read_bytes(VmOffset::new(sym.st_value()), &mut src)?;
-                        helper.memory().write_bytes(base + rel.r_offset(), &src)?;
-                        continue;
-                    }
+                if let Some(symdef) = helper.find_symdef(r_sym)
+                    && let Some(sym) = symdef.symbol()
+                {
+                    let mut src = vec![0; len];
+                    symdef.read_bytes(VmOffset::new(sym.st_value()), &mut src)?;
+                    helper.memory().write_bytes(base + rel.r_offset(), &src)?;
+                    continue;
                 }
                 failure_reason = RelocReason::UnknownSymbol;
             } else if r_type == Arch::IRELATIVE {

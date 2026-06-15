@@ -232,12 +232,12 @@ pub(crate) trait SegmentBuilder {
                 if addr > last_addr {
                     crate::os::virtual_free(last_addr, addr - last_addr)?;
                 }
-                let space_end = space
+                let mapped_span_end = space
                     .primary_region()
                     .map(|(memory, len)| memory as usize + len)
-                    .unwrap_or(space.mapped_base().get() + space.mapped_len());
-                if addr + len < space_end {
-                    crate::os::virtual_free(addr + len, space_end - (addr + len))?;
+                    .expect("Windows mapped spaces must own a primary region");
+                if addr + len < mapped_span_end {
+                    crate::os::virtual_free(addr + len, mapped_span_end - (addr + len))?;
                 }
                 last_addr = addr + len;
             }

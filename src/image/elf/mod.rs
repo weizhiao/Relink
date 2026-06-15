@@ -56,7 +56,7 @@ where
 ///
 /// This is the result of calling `.relocator().relocate()` on a [`RawElf`].
 /// Loaded images retain the dependencies that were actually used during relocation.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum LoadedElf<D: 'static, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
     /// A relocated dynamic library.
     Dylib(LoadedCore<D, Arch, R>),
@@ -67,6 +67,19 @@ pub enum LoadedElf<D: 'static, Arch: RelocationArch = NativeArch, R: RegionAcces
     /// A relocated object file.
     #[cfg(feature = "object")]
     Object(LoadedObject<D, Arch, R>),
+}
+
+// Keep this impl manual so cloning a loaded image wrapper does not require D, Arch, or R to be Clone.
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedElf<D, Arch, R> {
+    #[inline]
+    fn clone(&self) -> Self {
+        match self {
+            Self::Dylib(dylib) => Self::Dylib(dylib.clone()),
+            Self::Exec(exec) => Self::Exec(exec.clone()),
+            #[cfg(feature = "object")]
+            Self::Object(object) => Self::Object(object.clone()),
+        }
+    }
 }
 
 impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawElf<D, Arch, R> {
@@ -106,17 +119,6 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawElf<D, Arch, R>
             RawElf::Exec(exec) => exec.name(),
             #[cfg(feature = "object")]
             RawElf::Object(object) => object.name(),
-        }
-    }
-
-    /// Gets the length of the bounding runtime span covered by mapped memory.
-    #[inline]
-    pub fn mapped_len(&self) -> usize {
-        match self {
-            RawElf::Dylib(dylib) => dylib.mapped_len(),
-            RawElf::Exec(exec) => exec.mapped_len(),
-            #[cfg(feature = "object")]
-            RawElf::Object(object) => object.mapped_len(),
         }
     }
 
@@ -279,17 +281,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedElf<D, Arch, R> {
         }
     }
 
-    /// Gets the length of the bounding runtime span covered by mapped memory.
-    #[inline]
-    pub fn mapped_len(&self) -> usize {
-        match self {
-            LoadedElf::Dylib(dylib) => dylib.mapped_len(),
-            LoadedElf::Exec(exec) => exec.mapped_len(),
-            #[cfg(feature = "object")]
-            LoadedElf::Object(object) => object.mapped_len(),
-        }
-    }
-
     /// Returns whether `addr` is inside this image's mapped memory.
     #[inline]
     pub fn contains_addr(&self, addr: VmAddr) -> bool {
@@ -325,5 +316,19 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Relocatable<D>
                 Ok(LoadedElf::Object(Relocatable::relocate(relocatable, args)?))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NonCloneData;
+
+    #[test]
+    fn loaded_elf_clone_does_not_require_user_data_clone() {
+        fn assert_clone<T: Clone>() {}
+
+        assert_clone::<LoadedElf<NonCloneData>>();
     }
 }

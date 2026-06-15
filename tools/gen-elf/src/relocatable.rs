@@ -1,5 +1,5 @@
 use crate::common::{
-    RelocEntry, SectionKind, SymbolDesc, SymbolScope as CommonSymbolScope, SymbolType,
+    ContentKind, RelocEntry, SectionKind, SymbolDesc, SymbolScope as CommonSymbolScope, SymbolType,
 };
 use crate::{Arch, RelocationInfo};
 use anyhow::Result;
@@ -74,11 +74,10 @@ fn gen_static_elf(
         if let Some(content) = &sym_desc.content {
             let section_id = *section_map.entry(content.kind).or_insert_with(|| {
                 let (name, kind) = match content.kind {
-                    SectionKind::Text => (".text", ObjectSectionKind::Text),
-                    SectionKind::Data => (".data", ObjectSectionKind::Data),
-                    SectionKind::Plt => (".plt", ObjectSectionKind::Text),
-                    SectionKind::Tls => (".tdata", ObjectSectionKind::Tls),
-                    _ => (".data", ObjectSectionKind::Data),
+                    ContentKind::Text => (".text", ObjectSectionKind::Text),
+                    ContentKind::Data => (".data", ObjectSectionKind::Data),
+                    ContentKind::Plt => (".plt", ObjectSectionKind::Text),
+                    ContentKind::Tls => (".tdata", ObjectSectionKind::Tls),
                 };
                 obj.add_section(vec![], name.as_bytes().to_vec(), kind)
             });
@@ -135,8 +134,8 @@ fn gen_static_elf(
     // Let's assume for now they apply to the .text section if it exists, or .data.
 
     let target_section_id = section_map
-        .get(&SectionKind::Text)
-        .or_else(|| section_map.get(&SectionKind::Data))
+        .get(&ContentKind::Text)
+        .or_else(|| section_map.get(&ContentKind::Data))
         .copied();
 
     if let Some(section_id) = target_section_id {
@@ -155,7 +154,7 @@ fn gen_static_elf(
             // Each relocation is word_size bytes apart starting from offset 0x10
             let offset = 0x10 + (idx as u64 * word_size);
             relocations.push(RelocationInfo {
-                section: match section_map.get(&SectionKind::Text) {
+                section: match section_map.get(&ContentKind::Text) {
                     Some(id) if *id == section_id => SectionKind::Text,
                     _ => SectionKind::Data,
                 },

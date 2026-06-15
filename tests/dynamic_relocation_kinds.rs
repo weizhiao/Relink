@@ -39,7 +39,7 @@ fn copy_relocation_copies_bytes() {
         .load_dylib(ElfBinary::new("copy_consumer.so", &consumer_output.data))
         .expect("failed to load copy consumer")
         .relocator()
-        .scope(&[helper.clone()])
+        .scope(std::slice::from_ref(&helper))
         .relocate()
         .expect("failed to relocate copy consumer");
 
@@ -144,7 +144,7 @@ fn copy_relocations_keep_symbols_separate() {
         ))
         .expect("failed to load copy consumer")
         .relocator()
-        .scope(&[helper.clone()])
+        .scope(std::slice::from_ref(&helper))
         .relocate()
         .expect("failed to relocate copy consumer");
 

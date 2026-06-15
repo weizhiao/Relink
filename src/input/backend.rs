@@ -145,7 +145,7 @@ impl ElfReader for ElfFile {
 //
 // This allows users to pass a byte slice directly to loading functions
 // for in-memory ELF data.
-impl<'a> ElfReader for &'a [u8] {
+impl ElfReader for &[u8] {
     /// Returns a generic name for memory-based data.
     fn path(&self) -> &Path {
         Path::new("<memory>")

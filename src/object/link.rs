@@ -1,10 +1,10 @@
 use crate::{
-    RelocReason, Result,
+    LinkerError, RelocReason, Result,
     elf::{
         ElfLayout, ElfRelEntry, ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr,
         ElfSymbol, ElfSymbolType, ElfWord,
     },
-    image::{LoadedCore, LoadedObject, ModuleScope, RawObject, SymbolExports, exports_handle},
+    image::{LoadedCore, LoadedObject, ModuleScope, RawObject, exports_handle},
     logging,
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     object::{ObjectExports, ObjectSegmentView, section_entries},
@@ -16,7 +16,6 @@ use crate::{
         ObjectRelocationArch, RelocHelper, RelocateArgs, RelocationHandler, resolve_symbol_addr,
     },
     runtime::CodeExecutor,
-    sync::Arc,
 };
 
 pub(crate) fn object_relocation_sections<Arch>(
@@ -156,7 +155,12 @@ where
         observer.on_object_relocated(&mut event)?;
         let (exports, finalizer) = event.into_parts();
         let exports = exports.unwrap_or_else(|| exports_handle(self.default_exports()));
-        self.install_exports(exports);
+        let inner = crate::sync::Arc::get_mut(&mut self.core.inner).ok_or_else(|| {
+            LinkerError::context(
+                "raw object core was retained before runtime exports were installed",
+            )
+        })?;
+        inner.exports = exports;
         self.core.set_finalizer(finalizer);
 
         let object_segments =
@@ -237,18 +241,15 @@ where
         Ok(())
     }
 
-    fn install_exports(&mut self, exports: Arc<dyn SymbolExports<Arch>>) {
-        let inner = Arc::get_mut(&mut self.core.inner)
-            .expect("raw object core must be uniquely owned before runtime exports are installed");
-        inner.exports = exports;
-    }
-
     fn default_exports(&self) -> ObjectExports<Arch::Layout> {
         let mut exports = ObjectExports::empty();
-        let symtab = self.symtab.view();
-        for idx in 0..symtab.symbols().len() {
+        for idx in 0..self.symtab.symbols().len() {
             let (symbol, info) = self.symtab.symbol_idx(idx);
-            if !is_default_object_export(symbol) || self.symbol_uses_init_memory(symbol) {
+            if symbol.is_undef()
+                || !symbol.is_ok_bind()
+                || !symbol.is_ok_type()
+                || self.symbol_uses_init_memory(symbol)
+            {
                 continue;
             }
             exports.insert(info.name(), symbol.clone());
@@ -272,11 +273,6 @@ where
         let section_addr = VmAddr::new(self.sections.section(section_id).sh_addr());
         init_segments.contains_addr(section_addr)
     }
-}
-
-#[inline]
-fn is_default_object_export<L: ElfLayout>(symbol: &ElfSymbol<L>) -> bool {
-    !symbol.is_undef() && symbol.is_ok_bind() && symbol.is_ok_type()
 }
 
 #[cold]

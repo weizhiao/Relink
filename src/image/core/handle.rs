@@ -19,7 +19,6 @@ use core::{any::Any, cell::OnceCell, fmt::Debug, ptr::NonNull};
 /// `ElfCoreRef` holds a weak reference to the shared core allocation. It is useful
 /// when you want to avoid extending the lifetime of a loaded image unnecessarily
 /// or need to detect when the image has been dropped.
-#[derive(Clone)]
 pub struct ElfCoreRef<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
@@ -27,6 +26,16 @@ pub struct ElfCoreRef<
 > {
     /// Weak reference to the shared core allocation.
     inner: Weak<CoreInner<D, Arch, R>>,
+}
+
+// Keep this impl manual so cloning a weak core handle does not require D, Arch, or R to be Clone.
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for ElfCoreRef<D, Arch, R> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCoreRef<D, Arch, R> {
@@ -146,18 +155,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
         self.inner.segments.base()
     }
 
-    /// Gets the length of the bounding runtime span covered by mapped memory.
-    #[inline]
-    pub fn mapped_len(&self) -> usize {
-        self.inner.segments.mapped_len()
-    }
-
-    /// Returns the lowest runtime address covered by this image's mapped slices.
-    #[inline]
-    pub(crate) fn mapped_base(&self) -> VmAddr {
-        self.inner.segments.mapped_base()
-    }
-
     /// Returns whether `addr` is inside one of this image's mapped slices.
     #[inline]
     pub fn contains_addr(&self, addr: VmAddr) -> bool {
@@ -241,7 +238,14 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
-    /// Creates an ElfCore from raw components
+    /// Creates an `ElfCore` from raw components.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure these arguments describe a valid loaded dynamic ELF
+    /// image and that all borrowed mapped views remain valid for the core's
+    /// lifetime.
+    #[allow(clippy::too_many_arguments)]
     pub(super) unsafe fn from_raw(
         path: PathBuf,
         base: VmAddr,
@@ -275,7 +279,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
                     phdrs: ElfPhdrs::Vec(phdrs),
                     soname,
                     #[cfg(feature = "lazy-binding")]
-                    lazy: crate::image::LazyBindingInfo::new(dynamic.pltrel.clone(), lazy_symtab),
+                    lazy: crate::image::LazyBindingInfo::new(dynamic.pltrel, lazy_symtab),
                 })),
                 tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_get_addr, tls_unregister),
                 segments,
@@ -292,7 +296,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for ElfCore<D, Arc
         f.debug_struct("ElfCore")
             .field("path", &self.inner.path)
             .field("base", &format_args!("{}", self.base()))
-            .field("mapped_len", &self.mapped_len())
             .field("tls_mod_id", &self.tls_mod_id())
             .finish()
     }
@@ -346,5 +349,19 @@ where
     #[inline]
     fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
         ElfCore::tls_tp_offset(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NonCloneData;
+
+    #[test]
+    fn weak_core_ref_clone_does_not_require_user_data_clone() {
+        fn assert_clone<T: Clone>() {}
+
+        assert_clone::<ElfCoreRef<NonCloneData>>();
     }
 }

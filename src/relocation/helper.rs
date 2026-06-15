@@ -52,6 +52,7 @@ where
     Obs: RelocationObserver<Arch> + ?Sized,
     Memory: ImageMemory,
 {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         core: &'find ElfCore<D, Arch, R>,
         symbols: SymbolTableView<'find, Arch::Layout, H>,
@@ -286,7 +287,7 @@ where
         );
         return Some(VmAddr::from_ptr(addr));
     }
-    if let Some(res) = find_symdef_impl(core, scope, dynsym, &syminfo) {
+    if let Some(res) = find_symdef_impl(core, scope, dynsym, syminfo) {
         return Some(res.convert());
     }
     None

@@ -1,6 +1,6 @@
 use super::{layout::checked_add, writer::ByteWriter};
 use crate::{Result, custom_error};
-use alloc::vec::Vec;
+use alloc::vec;
 
 /// Computes the standard SYSV ELF hash for a symbol name.
 pub fn sysv_hash(name: &[u8]) -> u32 {
@@ -55,10 +55,8 @@ pub(super) fn write_sysv_hash_table<'a>(
     bucket_count: usize,
     names: impl IntoIterator<Item = &'a str>,
 ) {
-    let mut buckets = Vec::new();
-    buckets.resize(bucket_count, 0u32);
-    let mut chains = Vec::new();
-    chains.resize(symbol_count, 0u32);
+    let mut buckets = vec![0u32; bucket_count];
+    let mut chains = vec![0u32; symbol_count];
 
     for (idx, name) in names.into_iter().enumerate() {
         let sym_idx = idx + 1;

@@ -169,33 +169,6 @@ impl<R: RegionAccess> ElfSegments<R> {
         Some((self.region.addr().get() as *mut _, self.region.len()))
     }
 
-    /// Returns the lowest runtime address covered by this image's mapped ranges.
-    #[inline]
-    pub fn mapped_base(&self) -> VmAddr {
-        self.ranges
-            .first()
-            .copied()
-            .map(|range| self.range_base(range))
-            .unwrap_or_else(VmAddr::null)
-    }
-
-    /// Returns the length of the bounding runtime span covered by mapped ranges.
-    #[inline]
-    pub fn mapped_len(&self) -> usize {
-        let Some((first, last)) = self
-            .ranges
-            .first()
-            .copied()
-            .zip(self.ranges.last().copied())
-        else {
-            return 0;
-        };
-        last.end()
-            .checked_offset_from(first.offset)
-            .expect("ELF mapped range end precedes its start")
-            .get()
-    }
-
     /// Returns whether `addr` is inside one of this image's mapped ranges.
     #[inline]
     pub fn contains_addr(&self, addr: VmAddr) -> bool {

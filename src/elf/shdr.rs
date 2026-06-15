@@ -152,6 +152,8 @@ impl<L: ElfLayout> ElfShdr<L> {
     /// * `sh_addralign` - Address alignment constraint
     /// * `sh_entsize` - Size of each entry if section contains a table
     #[cfg(feature = "object")]
+    // Mirrors the ELF section-header field list.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         sh_name: u32,
         sh_type: ElfSectionType,

@@ -3,7 +3,7 @@ use crate::dylib::{
     DYN_SIZE_32, DYN_SIZE_64, HASH_SIZE, REL_SIZE_32, REL_SIZE_64, RELA_SIZE_32, RELA_SIZE_64,
     SYM_SIZE_32, SYM_SIZE_64, StringTable, layout::ElfLayout,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use byteorder::{LittleEndian, WriteBytesExt};
 use object::elf::*;
 use std::collections::HashMap;
@@ -16,6 +16,23 @@ pub(crate) struct SectionHeader {
     pub(crate) offset: u64,
     pub(crate) size: u64,
     pub(crate) addralign: u64,
+}
+
+struct PhdrFields {
+    p_type: u32,
+    p_flags: u32,
+    p_offset: u64,
+    p_vaddr: u64,
+    p_filesz: u64,
+    p_memsz: u64,
+    p_align: u64,
+}
+
+fn required_section_index(map: &HashMap<SectionKind, usize>, kind: SectionKind) -> Result<u32> {
+    map.get(&kind)
+        .copied()
+        .map(|idx| idx as u32)
+        .with_context(|| format!("required generated section {kind:?} is missing"))
 }
 
 impl SectionKind {
@@ -129,20 +146,20 @@ impl SectionKind {
         }
     }
 
-    fn link(&self, map: &HashMap<SectionKind, usize>) -> u32 {
+    fn link(&self, map: &HashMap<SectionKind, usize>) -> Result<u32> {
         match self {
-            SectionKind::DynSym => *map.get(&SectionKind::DynStr).unwrap() as u32,
+            SectionKind::DynSym => required_section_index(map, SectionKind::DynStr),
             SectionKind::RelaDyn
             | SectionKind::RelDyn
             | SectionKind::RetainedRelaData
-            | SectionKind::RetainedRelData => *map.get(&SectionKind::DynSym).unwrap() as u32,
+            | SectionKind::RetainedRelData => required_section_index(map, SectionKind::DynSym),
             SectionKind::RelaPlt | SectionKind::RelPlt => {
-                *map.get(&SectionKind::DynSym).unwrap() as u32
+                required_section_index(map, SectionKind::DynSym)
             }
-            SectionKind::Dynamic => *map.get(&SectionKind::DynStr).unwrap() as u32,
-            SectionKind::Hash => *map.get(&SectionKind::DynSym).unwrap() as u32,
-            SectionKind::Null => 0,
-            _ => 0,
+            SectionKind::Dynamic => required_section_index(map, SectionKind::DynStr),
+            SectionKind::Hash => required_section_index(map, SectionKind::DynSym),
+            SectionKind::Null => Ok(0),
+            _ => Ok(0),
         }
     }
 }
@@ -326,27 +343,21 @@ impl ShdrManager {
     }
 
     pub(crate) fn get_vaddr(&self, shtype: SectionKind) -> u64 {
-        self.shdrs
-            .iter()
-            .find(|s| s.header.shtype == shtype)
-            .map(|s| s.header.addr)
-            .unwrap_or(0)
+        self.section(shtype).map(|s| s.header.addr).unwrap_or(0)
     }
 
     pub(crate) fn get_size(&self, shtype: SectionKind) -> u64 {
-        self.shdrs
-            .iter()
-            .find(|s| s.header.shtype == shtype)
-            .map(|s| s.header.size)
-            .unwrap_or(0)
+        self.section(shtype).map(|s| s.header.size).unwrap_or(0)
     }
 
-    pub(crate) fn get_data_id(&self, shtype: SectionKind) -> SectionId {
-        self.shdrs
-            .iter()
-            .find(|s| s.header.shtype == shtype)
-            .map(|s| s.data)
-            .unwrap()
+    pub(crate) fn get_data_id(&self, shtype: SectionKind) -> Result<SectionId> {
+        self.section(shtype)
+            .map(|section| section.data)
+            .with_context(|| format!("generated section {shtype:?} has no data"))
+    }
+
+    fn section(&self, shtype: SectionKind) -> Option<&Section> {
+        self.shdrs.iter().find(|s| s.header.shtype == shtype)
     }
 
     pub(crate) fn get_shdr_count(&self) -> usize {
@@ -428,7 +439,7 @@ impl ShdrManager {
                 writer.write_u64::<LittleEndian>(h.addr)?;
                 writer.write_u64::<LittleEndian>(h.offset)?;
                 writer.write_u64::<LittleEndian>(h.size)?;
-                writer.write_u32::<LittleEndian>(h.shtype.link(&map))?;
+                writer.write_u32::<LittleEndian>(h.shtype.link(&map)?)?;
                 writer.write_u32::<LittleEndian>(h.shtype.info(&map))?;
                 writer.write_u64::<LittleEndian>(h.addralign)?;
                 writer.write_u64::<LittleEndian>(h.shtype.entsize(is_64))?;
@@ -439,7 +450,7 @@ impl ShdrManager {
                 writer.write_u32::<LittleEndian>(h.addr as u32)?;
                 writer.write_u32::<LittleEndian>(h.offset as u32)?;
                 writer.write_u32::<LittleEndian>(h.size as u32)?;
-                writer.write_u32::<LittleEndian>(h.shtype.link(&map))?;
+                writer.write_u32::<LittleEndian>(h.shtype.link(&map)?)?;
                 writer.write_u32::<LittleEndian>(h.shtype.info(&map))?;
                 writer.write_u32::<LittleEndian>(h.addralign as u32)?;
                 writer.write_u32::<LittleEndian>(h.shtype.entsize(is_64) as u32)?;
@@ -457,28 +468,30 @@ impl ShdrManager {
         let rx_secs = self
             .rx_secs
             .as_ref()
-            .expect("layout must be called before write_phdrs");
+            .context("layout must be called before write_phdrs")?;
         let r_secs = self
             .r_secs
             .as_ref()
-            .expect("layout must be called before write_phdrs");
+            .context("layout must be called before write_phdrs")?;
         let rw_secs = self
             .rw_secs
             .as_ref()
-            .expect("layout must be called before write_phdrs");
+            .context("layout must be called before write_phdrs")?;
 
         // 0. PT_PHDR
         let ph_size = (if is_64 { 56 } else { 32 }) * self.get_phnum() as u64;
-        self.write_phdr(
+        Self::write_phdr(
             &mut writer,
             is_64,
-            PT_PHDR,
-            PF_R,
-            if is_64 { 64 } else { 52 },
-            if is_64 { 64 } else { 52 },
-            ph_size,
-            ph_size,
-            8,
+            PhdrFields {
+                p_type: PT_PHDR,
+                p_flags: PF_R,
+                p_offset: if is_64 { 64 } else { 52 },
+                p_vaddr: if is_64 { 64 } else { 52 },
+                p_filesz: ph_size,
+                p_memsz: ph_size,
+                p_align: 8,
+            },
         )?;
 
         // 1. R Segment
@@ -488,16 +501,18 @@ impl ShdrManager {
             let p_vaddr = first.header.addr - first.header.offset;
             let p_filesz = (last.header.offset + last.header.size) - p_offset;
 
-            self.write_phdr(
+            Self::write_phdr(
                 &mut writer,
                 is_64,
-                PT_LOAD,
-                PF_R,
-                p_offset,
-                p_vaddr,
-                p_filesz,
-                p_filesz,
-                page_size,
+                PhdrFields {
+                    p_type: PT_LOAD,
+                    p_flags: PF_R,
+                    p_offset,
+                    p_vaddr,
+                    p_filesz,
+                    p_memsz: p_filesz,
+                    p_align: page_size,
+                },
             )?;
         }
 
@@ -507,16 +522,18 @@ impl ShdrManager {
             let p_vaddr = first.header.addr;
             let p_filesz = (last.header.offset + last.header.size) - p_offset;
 
-            self.write_phdr(
+            Self::write_phdr(
                 &mut writer,
                 is_64,
-                PT_LOAD,
-                PF_R | PF_X,
-                p_offset,
-                p_vaddr,
-                p_filesz,
-                p_filesz,
-                page_size,
+                PhdrFields {
+                    p_type: PT_LOAD,
+                    p_flags: PF_R | PF_X,
+                    p_offset,
+                    p_vaddr,
+                    p_filesz,
+                    p_memsz: p_filesz,
+                    p_align: page_size,
+                },
             )?;
         }
 
@@ -526,16 +543,18 @@ impl ShdrManager {
             let p_vaddr = first.header.addr;
             let p_filesz = (last.header.offset + last.header.size) - p_offset;
 
-            self.write_phdr(
+            Self::write_phdr(
                 &mut writer,
                 is_64,
-                PT_LOAD,
-                PF_R | PF_W,
-                p_offset,
-                p_vaddr,
-                p_filesz,
-                p_filesz,
-                page_size,
+                PhdrFields {
+                    p_type: PT_LOAD,
+                    p_flags: PF_R | PF_W,
+                    p_offset,
+                    p_vaddr,
+                    p_filesz,
+                    p_memsz: p_filesz,
+                    p_align: page_size,
+                },
             )?;
         }
 
@@ -545,16 +564,18 @@ impl ShdrManager {
             .iter()
             .find(|s| s.header.shtype == SectionKind::Dynamic)
         {
-            self.write_phdr(
+            Self::write_phdr(
                 &mut writer,
                 is_64,
-                PT_DYNAMIC,
-                PF_R | PF_W,
-                dyn_sec.header.offset,
-                dyn_sec.header.addr,
-                dyn_sec.header.size,
-                dyn_sec.header.size,
-                8,
+                PhdrFields {
+                    p_type: PT_DYNAMIC,
+                    p_flags: PF_R | PF_W,
+                    p_offset: dyn_sec.header.offset,
+                    p_vaddr: dyn_sec.header.addr,
+                    p_filesz: dyn_sec.header.size,
+                    p_memsz: dyn_sec.header.size,
+                    p_align: 8,
+                },
             )?;
         }
 
@@ -564,55 +585,58 @@ impl ShdrManager {
             .iter()
             .find(|s| s.header.shtype == SectionKind::Tls)
         {
-            self.write_phdr(
+            Self::write_phdr(
                 &mut writer,
                 is_64,
-                PT_TLS,
-                PF_R,
-                tls_sec.header.offset,
-                tls_sec.header.addr,
-                tls_sec.header.size,
-                tls_sec.header.size,
-                if is_64 { 8 } else { 4 },
+                PhdrFields {
+                    p_type: PT_TLS,
+                    p_flags: PF_R,
+                    p_offset: tls_sec.header.offset,
+                    p_vaddr: tls_sec.header.addr,
+                    p_filesz: tls_sec.header.size,
+                    p_memsz: tls_sec.header.size,
+                    p_align: if is_64 { 8 } else { 4 },
+                },
             )?;
         }
 
         // 6. PT_GNU_STACK marks the process stack as non-executable.
-        self.write_phdr(&mut writer, is_64, PT_GNU_STACK, PF_R | PF_W, 0, 0, 0, 0, 0)?;
+        Self::write_phdr(
+            &mut writer,
+            is_64,
+            PhdrFields {
+                p_type: PT_GNU_STACK,
+                p_flags: PF_R | PF_W,
+                p_offset: 0,
+                p_vaddr: 0,
+                p_filesz: 0,
+                p_memsz: 0,
+                p_align: 0,
+            },
+        )?;
 
         Ok(())
     }
 
-    fn write_phdr<W: std::io::Write>(
-        &self,
-        mut writer: W,
-        is_64: bool,
-        p_type: u32,
-        p_flags: u32,
-        p_offset: u64,
-        p_vaddr: u64,
-        p_filesz: u64,
-        p_memsz: u64,
-        p_align: u64,
-    ) -> Result<()> {
+    fn write_phdr<W: std::io::Write>(mut writer: W, is_64: bool, fields: PhdrFields) -> Result<()> {
         if is_64 {
-            writer.write_u32::<LittleEndian>(p_type)?;
-            writer.write_u32::<LittleEndian>(p_flags)?;
-            writer.write_u64::<LittleEndian>(p_offset)?;
-            writer.write_u64::<LittleEndian>(p_vaddr)?;
-            writer.write_u64::<LittleEndian>(p_vaddr)?; // p_paddr
-            writer.write_u64::<LittleEndian>(p_filesz)?;
-            writer.write_u64::<LittleEndian>(p_memsz)?;
-            writer.write_u64::<LittleEndian>(p_align)?;
+            writer.write_u32::<LittleEndian>(fields.p_type)?;
+            writer.write_u32::<LittleEndian>(fields.p_flags)?;
+            writer.write_u64::<LittleEndian>(fields.p_offset)?;
+            writer.write_u64::<LittleEndian>(fields.p_vaddr)?;
+            writer.write_u64::<LittleEndian>(fields.p_vaddr)?; // p_paddr
+            writer.write_u64::<LittleEndian>(fields.p_filesz)?;
+            writer.write_u64::<LittleEndian>(fields.p_memsz)?;
+            writer.write_u64::<LittleEndian>(fields.p_align)?;
         } else {
-            writer.write_u32::<LittleEndian>(p_type)?;
-            writer.write_u32::<LittleEndian>(p_offset as u32)?;
-            writer.write_u32::<LittleEndian>(p_vaddr as u32)?;
-            writer.write_u32::<LittleEndian>(p_vaddr as u32)?; // p_paddr
-            writer.write_u32::<LittleEndian>(p_filesz as u32)?;
-            writer.write_u32::<LittleEndian>(p_memsz as u32)?;
-            writer.write_u32::<LittleEndian>(p_flags)?;
-            writer.write_u32::<LittleEndian>(p_align as u32)?;
+            writer.write_u32::<LittleEndian>(fields.p_type)?;
+            writer.write_u32::<LittleEndian>(fields.p_offset as u32)?;
+            writer.write_u32::<LittleEndian>(fields.p_vaddr as u32)?;
+            writer.write_u32::<LittleEndian>(fields.p_vaddr as u32)?; // p_paddr
+            writer.write_u32::<LittleEndian>(fields.p_filesz as u32)?;
+            writer.write_u32::<LittleEndian>(fields.p_memsz as u32)?;
+            writer.write_u32::<LittleEndian>(fields.p_flags)?;
+            writer.write_u32::<LittleEndian>(fields.p_align as u32)?;
         }
         Ok(())
     }

@@ -171,9 +171,11 @@ impl<Arch: RelocationArch> ModuleScope<Arch> {
         I: IntoIterator<Item = R>,
         R: Into<ModuleHandle<Arch>>,
     {
-        let mut extended = Vec::with_capacity(self.modules.len());
+        let modules = modules.into_iter();
+        let additional = modules.size_hint().0;
+        let mut extended = Vec::with_capacity(self.modules.len().saturating_add(additional));
         extended.extend(self.modules.iter().cloned());
-        extended.extend(modules.into_iter().map(Into::into));
+        extended.extend(modules.map(Into::into));
         Self {
             modules: Arc::from(extended),
         }

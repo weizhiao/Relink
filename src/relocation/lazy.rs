@@ -60,7 +60,7 @@ mod enabled {
             Ok(())
         }
 
-        pub(crate) fn relocate_jump_slot<Arch, R, Memory>(
+        pub(crate) fn relocate_jump_slot<Arch, Memory>(
             &self,
             memory: &Memory,
             base: VmAddr,
@@ -68,7 +68,6 @@ mod enabled {
         ) -> Result<bool>
         where
             Arch: RelocationArch,
-            R: RegionAccess,
             Memory: ImageMemory,
             <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
         {
@@ -267,7 +266,7 @@ mod disabled {
             Ok(())
         }
 
-        pub(crate) fn relocate_jump_slot<Arch, R, Memory>(
+        pub(crate) fn relocate_jump_slot<Arch, Memory>(
             &self,
             _memory: &Memory,
             _base: VmAddr,
@@ -275,7 +274,6 @@ mod disabled {
         ) -> crate::Result<bool>
         where
             Arch: RelocationArch,
-            R: RegionAccess,
             Memory: ImageMemory,
         {
             Ok(false)

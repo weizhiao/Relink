@@ -130,12 +130,6 @@ where
         Arch::KIND
     }
 
-    /// Returns the mapped byte length of the staged module.
-    #[inline]
-    pub fn mapped_len(&self) -> usize {
-        self.raw.mapped_len()
-    }
-
     /// Returns the unrelocated dynamic image.
     #[inline]
     pub const fn raw(&self) -> &'a RawDynamic<D, Arch, R> {

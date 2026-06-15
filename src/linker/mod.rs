@@ -9,7 +9,7 @@
 //! memory blobs, package stores, or host-specific search rules.
 
 mod context;
-mod linker;
+mod driver;
 mod request;
 mod resolve;
 mod resolver;
@@ -19,7 +19,7 @@ mod storage;
 
 pub use crate::observer::StagedDynamic;
 pub use context::LinkContext;
-pub use linker::{Linker, LoadResult};
+pub use driver::{Linker, LoadResult};
 pub use request::{
     DefaultRelocationPlanner, DependencyOwner, DependencyRequest, RelocationInputs,
     RelocationPlanner, RelocationRequest, RootRequest, VisibleModules,

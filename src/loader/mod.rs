@@ -13,11 +13,11 @@
 
 mod buffer;
 mod builder;
+mod handle;
 mod load;
-mod loader;
 
 pub(crate) use buffer::ElfBuf;
 pub(crate) use builder::{ImageBuilder, ScanBuilder};
+pub use handle::Loader;
 #[cfg(feature = "object")]
 pub(crate) use load::ExpectedElf;
-pub use loader::Loader;

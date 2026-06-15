@@ -32,21 +32,21 @@ pub enum SectionDataAccessRef<'a> {
 }
 
 impl<'a> SectionDataAccessRef<'a> {
-    /// Returns read-only bytes or panics if the request was writable.
+    /// Returns read-only bytes when this is a read access.
     #[inline]
-    pub fn into_read(self) -> &'a [u8] {
+    pub fn try_into_read(self) -> Option<&'a [u8]> {
         match self {
-            Self::Read(data) => data,
-            Self::Write(_) => panic!("section data access should be read-only"),
+            Self::Read(data) => Some(data),
+            Self::Write(_) => None,
         }
     }
 
-    /// Returns writable bytes or panics if the request was read-only.
+    /// Returns writable bytes when this is a write access.
     #[inline]
-    pub fn into_write(self) -> &'a mut [u8] {
+    pub fn try_into_write(self) -> Option<&'a mut [u8]> {
         match self {
-            Self::Write(data) => data,
-            Self::Read(_) => panic!("section data access should be writable"),
+            Self::Write(data) => Some(data),
+            Self::Read(_) => None,
         }
     }
 }
@@ -537,16 +537,6 @@ impl SectionArena {
         self.sections.iter().filter_map(|(section, record)| {
             record.placement().map(|placement| (section, placement))
         })
-    }
-
-    /// Iterates over sections currently placed in `arena`.
-    #[inline]
-    pub(crate) fn placements_in(
-        &self,
-        arena: ArenaId,
-    ) -> impl Iterator<Item = (SectionId, SectionPlacement)> + '_ {
-        self.placements()
-            .filter(move |(_, placement)| placement.arena() == arena)
     }
 
     #[inline]

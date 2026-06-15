@@ -8,7 +8,8 @@ use crate::{
         object_relocation_addend,
     },
     relocation::{
-        RelocHelper, RelocValue, RelocationHandler, RelocationValueProvider, reloc_error,
+        RelocHelper, RelocValue, RelocationHandler, RelocationValueInput, RelocationValueProvider,
+        reloc_error,
     },
 };
 use elf::abi::*;
@@ -37,10 +38,12 @@ impl X86_64Arch {
         place: usize,
     ) -> core::result::Result<ObjectWrite, RelocReason> {
         <Self as RelocationValueProvider>::relocation_value(
-            r_type,
-            target,
-            append,
-            place,
+            RelocationValueInput {
+                relocation_type: r_type,
+                target,
+                addend: append,
+                place,
+            },
             |_| ObjectWrite::None,
             ObjectWrite::Addr,
             ObjectWrite::Word32,

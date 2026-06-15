@@ -140,17 +140,16 @@ mod enabled {
                         .get()
                         .wrapping_sub(Arch::TLS_DTV_OFFSET);
                     write_tls_word::<Arch, R>(segments, place, tls_val)?;
-                    return Ok(TlsRelocOutcome::Applied);
+                    Ok(TlsRelocOutcome::Applied)
+                } else {
+                    Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol))
                 }
-                return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
             }
             value if value == Arch::DTPMOD => {
                 let Some(mod_id) = (if r_sym == 0 {
                     Some(helper.core.tls_mod_id())
-                } else if let Some(symdef) = helper.find_symdef(r_sym) {
-                    Some(symdef.tls_mod_id())
                 } else {
-                    None
+                    helper.find_symdef(r_sym).map(|symdef| symdef.tls_mod_id())
                 }) else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                 };
@@ -158,7 +157,7 @@ mod enabled {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
                 };
                 write_tls_word::<Arch, R>(segments, place, mod_id.get())?;
-                return Ok(TlsRelocOutcome::Applied);
+                Ok(TlsRelocOutcome::Applied)
             }
             value if value == Arch::TPOFF => {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
@@ -170,11 +169,13 @@ mod enabled {
                             VmAddr::new((tp_offset.get() + sym.st_value() as isize) as usize)
                                 .wrapping_add_signed(r_addend);
                         write_tls_word::<Arch, R>(segments, place, tls_val.get())?;
-                        return Ok(TlsRelocOutcome::Applied);
+                        Ok(TlsRelocOutcome::Applied)
+                    } else {
+                        Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsTpOffset))
                     }
-                    return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsTpOffset));
+                } else {
+                    Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol))
                 }
-                return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
             }
             value if Arch::is_tlsdesc(value) => {
                 if let Some(symdef) = helper.find_symdef(r_sym) {
@@ -200,14 +201,13 @@ mod enabled {
                                 place + VmOffset::new(8),
                                 desc.arg(),
                             )?;
-                            return Ok(TlsRelocOutcome::Applied);
+                            Ok(TlsRelocOutcome::Applied)
                         }
-                        TlsDescResolution::Failed(reason) => {
-                            return Ok(TlsRelocOutcome::Failed(reason));
-                        }
+                        TlsDescResolution::Failed(reason) => Ok(TlsRelocOutcome::Failed(reason)),
                     }
+                } else {
+                    Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol))
                 }
-                return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
             }
             _ => unreachable!("handle_tls_reloc called with a non-TLS relocation"),
         }

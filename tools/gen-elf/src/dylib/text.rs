@@ -4,12 +4,24 @@ use crate::dylib::{
     shdr::{Section, SectionAllocator, SectionHeader, SectionId, ShdrManager},
     symtab::SymTabMetadata,
 };
+use anyhow::Result;
 
 pub(crate) struct CodeMetaData {
     text_id: SectionId,
     plt_id: SectionId,
     text_size: u64,
     plt_size: u64,
+}
+
+pub(crate) struct PatchTextArgs<'a> {
+    pub(crate) plt_vaddr: u64,
+    pub(crate) text_vaddr: u64,
+    pub(crate) got_plt_vaddr: u64,
+    pub(crate) resolver_val: u64,
+    pub(crate) symtab: &'a SymTabMetadata,
+    pub(crate) reloc: &'a RelocMetaData,
+    pub(crate) shdr: &'a ShdrManager,
+    pub(crate) allocator: &'a mut SectionAllocator,
 }
 
 impl CodeMetaData {
@@ -53,29 +65,29 @@ impl CodeMetaData {
         });
     }
 
-    pub(crate) fn patch_text(
-        &mut self,
-        plt_vaddr: u64,
-        text_vaddr: u64,
-        got_plt_vaddr: u64,
-        resolver_val: u64,
-        symtab: &SymTabMetadata,
-        reloc: &RelocMetaData,
-        shdr: &ShdrManager,
-        allocator: &mut SectionAllocator,
-    ) {
-        let text_data = allocator.get_mut(&self.text_id);
+    pub(crate) fn patch_text(&mut self, args: PatchTextArgs<'_>) -> Result<()> {
+        let text_data = args.allocator.get_mut(&self.text_id);
         // Update IFUNC resolver
-        symtab.patch_ifunc_resolver(text_data, text_vaddr, resolver_val);
+        args.symtab
+            .patch_ifunc_resolver(text_data, args.text_vaddr, args.resolver_val);
 
         // Update plt testers
-        symtab.patch_plt_testers(text_data, text_vaddr, got_plt_vaddr);
+        args.symtab
+            .patch_plt_testers(text_data, args.text_vaddr, args.got_plt_vaddr);
 
         // Update tls testers
-        symtab.patch_tls_testers(text_data, text_vaddr, reloc, shdr, got_plt_vaddr);
+        args.symtab.patch_tls_testers(
+            text_data,
+            args.text_vaddr,
+            args.reloc,
+            args.shdr,
+            args.got_plt_vaddr,
+        );
 
         // Update PLT entries
-        let plt_data = allocator.get_mut(&self.plt_id);
-        symtab.patch_plt(plt_data, plt_vaddr, got_plt_vaddr);
+        let plt_data = args.allocator.get_mut(&self.plt_id);
+        args.symtab
+            .patch_plt(plt_data, args.plt_vaddr, args.got_plt_vaddr)?;
+        Ok(())
     }
 }

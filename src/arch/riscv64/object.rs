@@ -245,14 +245,14 @@ impl RiscV64Arch {
                 let mut target = sym;
                 let direct_off = signed_offset(target, addend, place);
                 if r_type == R_RISCV_CALL_PLT
-                    && !(direct_off >= -(1i64 << 31) && direct_off < (1i64 << 31))
+                    && !(-(1i64 << 31)..(1i64 << 31)).contains(&direct_off)
                 {
                     let key = ObjectRelocKey::new::<Self>(rel);
-                    target = Self::ensure_plt_entry(pltgot, key, sym)?;
+                    target = Self::ensure_plt_entry(pltgot, key, sym);
                 }
 
                 let off = signed_offset(target, addend, place);
-                if !(off >= -(1i64 << 31) && off < (1i64 << 31)) {
+                if !(-(1i64 << 31)..(1i64 << 31)).contains(&off) {
                     return Err(value_error(RelocReason::IntConversionOutOfRange));
                 }
                 Self::write_auipc_pair(helper.memory(), place, off)?;
@@ -384,7 +384,7 @@ impl RiscV64Arch {
                 let off = branch_offset(helper, addend, place, rel, 256)?;
                 unsafe {
                     helper.memory().update_value::<u16>(place, |insn| {
-                        Self::encode_imm(insn as u32, off, ImmType::CB) as u16
+                        Self::encode_imm(u32::from(insn), off, ImmType::CB) as u16
                     })?
                 };
             }
@@ -392,7 +392,7 @@ impl RiscV64Arch {
                 let off = branch_offset(helper, addend, place, rel, 2048)?;
                 unsafe {
                     helper.memory().update_value::<u16>(place, |insn| {
-                        Self::encode_imm(insn as u32, off, ImmType::CJ) as u16
+                        Self::encode_imm(u32::from(insn), off, ImmType::CJ) as u16
                     })?
                 };
             }
@@ -421,13 +421,9 @@ impl RiscV64Arch {
         }
     }
 
-    fn ensure_plt_entry(
-        pltgot: &mut PltGotSection,
-        key: ObjectRelocKey,
-        sym: VmAddr,
-    ) -> Result<VmAddr> {
+    fn ensure_plt_entry(pltgot: &mut PltGotSection, key: ObjectRelocKey, sym: VmAddr) -> VmAddr {
         match pltgot.add_plt_entry(key) {
-            PltEntry::Occupied(addr) => Ok(addr),
+            PltEntry::Occupied(addr) => addr,
             PltEntry::Vacant { plt, mut got } => {
                 let plt_entry_addr = VmAddr::from_ptr(plt.as_ptr());
                 got.update(sym);
@@ -442,7 +438,7 @@ impl RiscV64Arch {
                     ptr.add(1)
                         .write_unaligned(Self::encode_imm(ld, got_lo12, ImmType::I));
                 }
-                Ok(plt_entry_addr)
+                plt_entry_addr
             }
         }
     }
@@ -584,12 +580,14 @@ impl RiscV64Arch {
                 let imm7_6 = ((val >> 6) & 0x3) as u16;
                 let imm2_1 = ((val >> 1) & 0x3) as u16;
                 let imm5 = ((val >> 5) & 0x1) as u16;
-                (((insn as u16) & 0xe383)
-                    | (imm8 << 12)
-                    | (imm4_3 << 10)
-                    | (imm7_6 << 5)
-                    | (imm2_1 << 3)
-                    | (imm5 << 2)) as u32
+                u32::from(
+                    ((insn as u16) & 0xe383)
+                        | (imm8 << 12)
+                        | (imm4_3 << 10)
+                        | (imm7_6 << 5)
+                        | (imm2_1 << 3)
+                        | (imm5 << 2),
+                )
             }
             ImmType::CJ => {
                 let imm11 = ((val >> 11) & 0x1) as u16;
@@ -600,15 +598,17 @@ impl RiscV64Arch {
                 let imm7 = ((val >> 7) & 0x1) as u16;
                 let imm3_1 = ((val >> 1) & 0x7) as u16;
                 let imm5 = ((val >> 5) & 0x1) as u16;
-                (((insn as u16) & 0xe003)
-                    | (imm11 << 12)
-                    | (imm4 << 11)
-                    | (imm9_8 << 9)
-                    | (imm10 << 8)
-                    | (imm6 << 7)
-                    | (imm7 << 6)
-                    | (imm3_1 << 3)
-                    | (imm5 << 2)) as u32
+                u32::from(
+                    ((insn as u16) & 0xe003)
+                        | (imm11 << 12)
+                        | (imm4 << 11)
+                        | (imm9_8 << 9)
+                        | (imm10 << 8)
+                        | (imm6 << 7)
+                        | (imm7 << 6)
+                        | (imm3_1 << 3)
+                        | (imm5 << 2),
+                )
             }
         }
     }

@@ -157,11 +157,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDylib<D, Arch, R> {
         self.inner.base()
     }
 
-    /// Returns the length of the bounding runtime span covered by mapped slices.
-    pub fn mapped_len(&self) -> usize {
-        self.inner.mapped_len()
-    }
-
     /// Returns whether `addr` is inside one of this object's mapped slices.
     pub fn contains_addr(&self, addr: VmAddr) -> bool {
         self.inner.contains_addr(addr)

@@ -182,6 +182,37 @@ fn object_addends_apply() {
 
 #[cfg(all(feature = "object", target_arch = "x86_64"))]
 #[test]
+fn retained_raw_object_core_rejects_relocation_without_panicking() {
+    use gen_elf::{Arch, ObjectWriter, SymbolDesc};
+    use support::host_symbols::LOCAL_VAR_NAME;
+
+    let object_file = ObjectWriter::new(Arch::current())
+        .write(
+            &[SymbolDesc::global_object(LOCAL_VAR_NAME, &[0u8; 0x40])],
+            &[],
+        )
+        .expect("failed to generate object");
+
+    let raw = elf_loader::Loader::new()
+        .load_object(elf_loader::input::ElfBinary::new(
+            "retained_core.o",
+            &object_file.data,
+        ))
+        .expect("failed to load object");
+    let _retained_core = (*raw).clone();
+
+    let err = raw
+        .relocator()
+        .relocate()
+        .expect_err("retained raw object core should reject relocation");
+    assert!(
+        err.to_string()
+            .contains("raw object core was retained before runtime exports were installed")
+    );
+}
+
+#[cfg(all(feature = "object", target_arch = "x86_64"))]
+#[test]
 fn object_exports_survive_init_symtab_metadata() {
     use elf_loader::{
         Result,

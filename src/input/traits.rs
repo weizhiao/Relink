@@ -60,10 +60,10 @@ pub(crate) trait ElfReaderExt: ElfReader {
         V: ByteRepr + 'a,
         S: ByteScratch + ?Sized,
     {
-        if let Some(bytes) = self.borrow_bytes(offset, len)? {
-            if let Some(values) = try_cast_bytes::<V>(bytes) {
-                return f(values);
-            }
+        if let Some(bytes) = self.borrow_bytes(offset, len)?
+            && let Some(values) = try_cast_bytes::<V>(bytes)
+        {
+            return f(values);
         }
 
         let Some(bytes) = scratch.resize_bytes(len) else {

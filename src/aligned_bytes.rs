@@ -18,6 +18,16 @@ pub(crate) struct AlignedBytes {
     len: usize,
 }
 
+impl Default for AlignedBytes {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            words: Vec::new(),
+            len: 0,
+        }
+    }
+}
+
 impl AlignedBytes {
     #[inline]
     fn required_words(byte_len: usize) -> Option<usize> {

@@ -8,7 +8,7 @@ use crate::{
         symtab::SymTabMetadata,
     },
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use byteorder::{LittleEndian, WriteBytesExt};
 
 pub(crate) struct RelocMetaData {
@@ -24,6 +24,12 @@ pub(crate) struct RelocMetaData {
     rel_plt_id: SectionId,
     got_id: SectionId,
     got_plt_id: SectionId,
+}
+
+fn required_sym_idx(symbols: &SymTabMetadata, name: &str) -> Result<usize> {
+    symbols
+        .get_sym_idx(name)
+        .with_context(|| format!("relocation references missing symbol {name:?}"))
 }
 
 impl RelocMetaData {
@@ -95,7 +101,7 @@ impl RelocMetaData {
         }
         // Process GOT relocations (relative to GOT)
         for r in got_relocs.into_iter() {
-            let sym_idx = symbols.get_sym_idx(&r.symbol_name).unwrap() as u64;
+            let sym_idx = required_sym_idx(symbols, &r.symbol_name)? as u64;
             relocs.push(Reloc::at_got(
                 got_slot_idx * word_size,
                 Some(r.symbol_name.clone()),
@@ -110,7 +116,7 @@ impl RelocMetaData {
         let mut current_copy_offset = symbols.get_data_content().len() as u64;
         let mut total_copy_size = 0;
         for r in copy_relocs {
-            let sym_idx = symbols.get_sym_idx(&r.symbol_name).unwrap();
+            let sym_idx = required_sym_idx(symbols, &r.symbol_name)?;
             let sym_size = symbols.get_sym_size(sym_idx);
 
             relocs.push(Reloc::at_data(
@@ -136,17 +142,15 @@ impl RelocMetaData {
             got_slot_idx += 1;
         }
 
-        let mut plt_slot_idx = 3;
         // Process PLT relocations (relative to GOTPLT)
-        for r in plt_relocs.into_iter() {
-            let sym_idx = symbols.get_sym_idx(&r.symbol_name).unwrap() as u64;
+        for (plt_slot_idx, r) in (3..).zip(plt_relocs) {
+            let sym_idx = required_sym_idx(symbols, &r.symbol_name)? as u64;
             relocs.push(Reloc::at_got_plt(
                 plt_slot_idx * word_size,
                 Some(r.symbol_name.clone()),
                 sym_idx,
                 r.r_type,
             ));
-            plt_slot_idx += 1;
         }
 
         let is_64 = arch.is_64();
@@ -268,7 +272,7 @@ impl RelocMetaData {
         let got_plt_vaddr = shdr_manager.get_vaddr(SectionKind::GotPlt);
         let dyn_vaddr = shdr_manager.get_vaddr(SectionKind::Dynamic);
 
-        self.patch_got(allocator, self.arch, dyn_vaddr, plt_vaddr);
+        self.patch_got(allocator, self.arch, dyn_vaddr, plt_vaddr)?;
         self.patch_reloc(
             got_vaddr,
             got_plt_vaddr,
@@ -304,7 +308,7 @@ impl RelocMetaData {
             if reloc.r_type.is_irelative_reloc(self.arch) {
                 reloc.addend = symbols
                     .get_sym_value_by_name(IFUNC_RESOLVER_NAME)
-                    .expect("IFUNC resolver symbol not found")
+                    .context("IFUNC resolver symbol not found")?
                     as i64;
             } else {
                 let sym_value = if reloc.sym_idx != 0 {
@@ -358,11 +362,9 @@ impl RelocMetaData {
                     let got = allocator.get_mut(&self.got_id);
                     let mut cursor = &mut got[offset..offset + (if is_64 { 8 } else { 4 })];
                     if is_64 {
-                        cursor.write_i64::<LittleEndian>(reloc.addend).unwrap();
+                        cursor.write_i64::<LittleEndian>(reloc.addend)?;
                     } else {
-                        cursor
-                            .write_i32::<LittleEndian>(reloc.addend as i32)
-                            .unwrap();
+                        cursor.write_i32::<LittleEndian>(reloc.addend as i32)?;
                     }
                 }
             }
@@ -379,7 +381,7 @@ impl RelocMetaData {
         arch: crate::Arch,
         dyn_vaddr: u64,
         plt_vaddr: u64,
-    ) {
+    ) -> Result<()> {
         let is_64 = arch.is_64();
         let word_size = if is_64 { 8 } else { 4 };
 
@@ -387,20 +389,20 @@ impl RelocMetaData {
         let got_data = allocator.get_mut(&self.got_id);
         if is_64 {
             let mut cursor = &mut got_data[0..8];
-            cursor.write_u64::<LittleEndian>(dyn_vaddr).unwrap();
+            cursor.write_u64::<LittleEndian>(dyn_vaddr)?;
         } else {
             let mut cursor = &mut got_data[0..4];
-            cursor.write_u32::<LittleEndian>(dyn_vaddr as u32).unwrap();
+            cursor.write_u32::<LittleEndian>(dyn_vaddr as u32)?;
         }
 
         // .got.plt[0] = .dynamic vaddr (standard for many archs)
         let got_plt_data = allocator.get_mut(&self.got_plt_id);
         if is_64 {
             let mut cursor = &mut got_plt_data[0..8];
-            cursor.write_u64::<LittleEndian>(dyn_vaddr).unwrap();
+            cursor.write_u64::<LittleEndian>(dyn_vaddr)?;
         } else {
             let mut cursor = &mut got_plt_data[0..4];
-            cursor.write_u32::<LittleEndian>(dyn_vaddr as u32).unwrap();
+            cursor.write_u32::<LittleEndian>(dyn_vaddr as u32)?;
         }
 
         // GOT entries for PLT in .got.plt
@@ -410,20 +412,18 @@ impl RelocMetaData {
 
         for (i, _) in self.plt_relocs().iter().enumerate() {
             let got_off = (3 + i) * word_size;
-            let initial_val =
-                crate::arch::get_got_plt_init_value(arch, plt_vaddr, current_plt_off as u64);
+            let initial_val = crate::arch::get_got_plt_init_value(arch, plt_vaddr, current_plt_off);
 
             if is_64 {
                 let mut cursor = &mut got_plt_data[got_off..got_off + 8];
-                cursor.write_u64::<LittleEndian>(initial_val).unwrap();
+                cursor.write_u64::<LittleEndian>(initial_val)?;
             } else {
                 let mut cursor = &mut got_plt_data[got_off..got_off + 4];
-                cursor
-                    .write_u32::<LittleEndian>(initial_val as u32)
-                    .unwrap();
+                cursor.write_u32::<LittleEndian>(initial_val as u32)?;
             }
             current_plt_off += plt_entry_size;
         }
+        Ok(())
     }
 
     pub(crate) fn create_sections(&self, sections: &mut Vec<Section>) -> Result<()> {

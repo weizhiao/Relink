@@ -68,6 +68,17 @@ pub(super) struct Writer<'a> {
     offset: usize,
 }
 
+pub(super) struct PhdrWrite {
+    pub(super) p_type: u32,
+    pub(super) p_flags: u32,
+    pub(super) p_offset: usize,
+    pub(super) p_vaddr: usize,
+    pub(super) p_paddr: usize,
+    pub(super) p_filesz: usize,
+    pub(super) p_memsz: usize,
+    pub(super) p_align: usize,
+}
+
 impl<'a> Writer<'a> {
     #[inline]
     pub(super) fn new(bytes: &'a mut [u8]) -> Self {
@@ -99,7 +110,7 @@ impl<'a> Writer<'a> {
         out.bytes(&ident);
         out.u16(ET_DYN as u16);
         out.u16(machine.raw());
-        out.u32(EV_CURRENT as u32);
+        out.u32(u32::from(EV_CURRENT));
         if is_64 {
             out.u64(0);
             out.u64(phoff as u64);
@@ -120,39 +131,28 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn write_phdr<L: ElfLayout>(
-        &mut self,
-        p_type: u32,
-        p_flags: u32,
-        p_offset: usize,
-        p_vaddr: usize,
-        p_paddr: usize,
-        p_filesz: usize,
-        p_memsz: usize,
-        p_align: usize,
-    ) -> Result<()> {
+    pub(super) fn write_phdr<L: ElfLayout>(&mut self, phdr: PhdrWrite) -> Result<()> {
         let is_64 = is_64::<L>();
         let size = if is_64 { 56 } else { 32 };
         let mut out = ByteWriter::new(&mut self.bytes[self.offset..]);
         if is_64 {
-            out.u32(p_type);
-            out.u32(p_flags);
-            out.u64(p_offset as u64);
-            out.u64(p_vaddr as u64);
-            out.u64(p_paddr as u64);
-            out.u64(p_filesz as u64);
-            out.u64(p_memsz as u64);
-            out.u64(p_align as u64);
+            out.u32(phdr.p_type);
+            out.u32(phdr.p_flags);
+            out.u64(phdr.p_offset as u64);
+            out.u64(phdr.p_vaddr as u64);
+            out.u64(phdr.p_paddr as u64);
+            out.u64(phdr.p_filesz as u64);
+            out.u64(phdr.p_memsz as u64);
+            out.u64(phdr.p_align as u64);
         } else {
-            out.u32(p_type);
-            out.u32(checked_u32(p_offset)?);
-            out.u32(checked_u32(p_vaddr)?);
-            out.u32(checked_u32(p_paddr)?);
-            out.u32(checked_u32(p_filesz)?);
-            out.u32(checked_u32(p_memsz)?);
-            out.u32(p_flags);
-            out.u32(checked_u32(p_align)?);
+            out.u32(phdr.p_type);
+            out.u32(checked_u32(phdr.p_offset)?);
+            out.u32(checked_u32(phdr.p_vaddr)?);
+            out.u32(checked_u32(phdr.p_paddr)?);
+            out.u32(checked_u32(phdr.p_filesz)?);
+            out.u32(checked_u32(phdr.p_memsz)?);
+            out.u32(phdr.p_flags);
+            out.u32(checked_u32(phdr.p_align)?);
         }
         self.offset += size;
         Ok(())

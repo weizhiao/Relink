@@ -8,7 +8,6 @@ use core::hash::{Hash, Hasher};
 use foldhash::{SharedSeed, fast::FoldHasher};
 use hashbrown::HashTable as RawHashTable;
 
-#[derive(Clone)]
 struct TableEntry<N> {
     name: N,
     idx: usize,
@@ -16,7 +15,6 @@ struct TableEntry<N> {
 
 const HASHER: FoldHasher<'static> = FoldHasher::with_seed(0, SharedSeed::global_fixed());
 
-#[derive(Clone)]
 pub struct CustomHash<N = &'static str> {
     map: RawHashTable<TableEntry<N>>,
 }

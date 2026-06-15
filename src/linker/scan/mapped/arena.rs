@@ -9,14 +9,12 @@ use crate::{
 };
 use alloc::vec::Vec;
 
-#[derive(Clone)]
 pub(crate) struct MappedArena {
     memory_class: MemoryClass,
     region_offset: usize,
     len: usize,
 }
 
-#[derive(Clone)]
 pub(crate) struct MappedArenaMap<R: RegionAccess = HostRegion> {
     region: MappedRegion<R>,
     arenas: SecondaryMap<ArenaId, MappedArena>,
@@ -76,7 +74,14 @@ impl<R: RegionAccess> MappedArenaMap<R> {
         };
 
         for (id, memory_class, region_offset, len) in arena_layouts {
-            arenas.insert(id, MappedArena::new(memory_class, region_offset, len));
+            arenas.arenas.insert(
+                id,
+                MappedArena {
+                    memory_class,
+                    region_offset,
+                    len,
+                },
+            );
         }
 
         Ok(Some(arenas))
@@ -97,7 +102,6 @@ impl<R: RegionAccess> MappedArenaMap<R> {
             let arena = self.get(placement.arena()).ok_or_else(|| {
                 LinkerError::mapped_arena("mapped section arenas referenced a missing arena")
             })?;
-            arena.check_range(placement.offset(), placement.size())?;
 
             let bytes = data.as_ref();
             if bytes.len() != placement.size() {
@@ -114,7 +118,7 @@ impl<R: RegionAccess> MappedArenaMap<R> {
     }
 
     pub(super) fn protect(&self) -> Result<()> {
-        let mut arenas = self.iter().collect::<Vec<_>>();
+        let mut arenas = self.arenas.iter().collect::<Vec<_>>();
         arenas.sort_by_key(|(_, arena)| arena.region_offset);
 
         let mut cursor = 0usize;
@@ -142,11 +146,6 @@ impl<R: RegionAccess> MappedArenaMap<R> {
     }
 
     #[inline]
-    fn insert(&mut self, id: ArenaId, arena: MappedArena) -> Option<MappedArena> {
-        self.arenas.insert(id, arena)
-    }
-
-    #[inline]
     pub(super) fn get(&self, id: ArenaId) -> Option<&MappedArena> {
         self.arenas.get(id)
     }
@@ -155,23 +154,9 @@ impl<R: RegionAccess> MappedArenaMap<R> {
     pub(super) fn region(&self) -> MappedRegion<R> {
         self.region.clone()
     }
-
-    #[inline]
-    fn iter(&self) -> impl Iterator<Item = (ArenaId, &MappedArena)> {
-        self.arenas.iter()
-    }
 }
 
 impl MappedArena {
-    #[inline]
-    fn new(memory_class: MemoryClass, region_offset: usize, len: usize) -> Self {
-        Self {
-            memory_class,
-            region_offset,
-            len,
-        }
-    }
-
     #[inline]
     pub(super) fn address<R: RegionAccess>(
         &self,
@@ -299,6 +284,8 @@ mod tests {
         assert!(plan.memory_layout_mut().assign(section, arena, 0));
         plan.set_materialization(root, Materialization::SectionRegions);
 
+        // `DefaultMmap` is a unit struct only for some cfg-selected backends.
+        #[allow(clippy::default_constructed_unit_structs)]
         let mapper = DefaultMmap::default();
         let mut mapped = MappedArenaMap::map_plan(&mapper, &plan).unwrap().unwrap();
         mapped.populate(&mut plan).unwrap();

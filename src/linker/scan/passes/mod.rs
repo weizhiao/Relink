@@ -227,9 +227,9 @@ where
                         "section data bytes do not match requested entry type",
                     )
                 })?;
-                let entry = entries
-                    .get(index)
-                    .expect("section data entry index should remain valid");
+                let entry = entries.get(index).ok_or_else(|| {
+                    LinkerError::section_data("section data entry index is out of bounds")
+                })?;
                 prepare(entry, &*self)?
             };
             if let Some(prepared) = prepared {

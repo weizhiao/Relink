@@ -142,7 +142,7 @@ impl LinkObserver for RecordingObserver {
         &mut self,
         event: StagedDynamic<'_, K, D, elf_loader::arch::NativeArch, R>,
     ) -> elf_loader::Result<()> {
-        assert!(event.mapped_len() > 0);
+        assert!(event.raw().contains_addr(event.raw().base()));
         self.events
             .borrow_mut()
             .push(event.raw().name().to_string());
@@ -574,7 +574,6 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
         .expect("failed to execute scan-first load");
 
     assert!(loaded.is_contiguous_mapping());
-    assert!(loaded.mapped_len() > 0);
     assert!(context.contains_key(&"root"));
 
     unsafe {
@@ -605,7 +604,6 @@ fn load_with_scan_legacy_path_loads_without_an_intermediate_plan() {
         .expect("failed to execute merged scan-and-load path");
 
     assert!(loaded.is_contiguous_mapping());
-    assert!(loaded.mapped_len() > 0);
     assert!(context.contains_key(&"root"));
 
     unsafe {
@@ -676,7 +674,6 @@ fn load_with_scan_reuses_existing_root_alias_without_planning() {
         .expect("failed to reuse existing scan root");
 
     assert_eq!(alias_loaded.base(), loaded.base());
-    assert_eq!(alias_loaded.mapped_len(), loaded.mapped_len());
     assert!(context.contains_key(&"canonical"));
     assert!(!context.contains_key(&"alias"));
 }
@@ -1071,7 +1068,6 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
         "opaque modules should not expose a usable section table",
     );
 
-    assert!(loaded.mapped_len() > 0);
     assert!(context.contains_key(&"root"));
 
     unsafe {
@@ -1102,7 +1098,7 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
         Ok(())
     };
 
-    let loaded = Linker::new()
+    let _loaded = Linker::new()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
             pipeline
@@ -1112,7 +1108,6 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
         .load_scan_first(&mut context, "root")
         .expect("scan-first load should downgrade unusable section tables");
 
-    assert!(loaded.mapped_len() > 0);
     assert_eq!(observed_capability, Some(ModuleCapability::Opaque));
 }
 
@@ -1170,11 +1165,6 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
     assert_eq!(
         observed_materialization,
         Some(Materialization::WholeDsoRegion),
-    );
-
-    assert!(
-        loaded.mapped_len() > 0,
-        "whole-DSO materialization should expose at least one mapped area",
     );
 
     unsafe {

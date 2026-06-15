@@ -23,8 +23,8 @@ pub struct LoadedCore<
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
 > {
-    pub(crate) core: ElfCore<D, Arch, R>,
-    pub(crate) deps: ModuleScope<Arch>,
+    core: ElfCore<D, Arch, R>,
+    deps: ModuleScope<Arch>,
 }
 
 /// Iterator over the loaded-library dependencies retained by a [`LoadedCore`].
@@ -207,12 +207,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         self.core.base()
     }
 
-    /// Gets the length of the bounding runtime span covered by mapped memory.
-    #[inline]
-    pub fn mapped_len(&self) -> usize {
-        self.core.mapped_len()
-    }
-
     /// Returns whether `addr` is inside one of this module's mapped slices.
     #[inline]
     pub fn contains_addr(&self, addr: VmAddr) -> bool {
@@ -302,11 +296,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         let mut precompute = syminfo.precompute();
         self.core
             .lookup_export(&syminfo, &mut precompute)
-            .map(|sym| Symbol {
-                ptr: SymDef::<D, Arch>::new(Some(sym), self)
-                    .convert()
-                    .as_mut_ptr(),
-                pd: PhantomData,
+            .map(|sym| {
+                Symbol::from_ptr(
+                    SymDef::<D, Arch>::new(Some(sym), self)
+                        .convert()
+                        .as_mut_ptr(),
+                )
             })
     }
 
@@ -344,11 +339,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         let mut precompute = syminfo.precompute();
         self.core
             .lookup_export(&syminfo, &mut precompute)
-            .map(|sym| Symbol {
-                ptr: SymDef::<D, Arch>::new(Some(sym), self)
-                    .convert()
-                    .as_mut_ptr(),
-                pd: PhantomData,
+            .map(|sym| {
+                Symbol::from_ptr(
+                    SymDef::<D, Arch>::new(Some(sym), self)
+                        .convert()
+                        .as_mut_ptr(),
+                )
             })
     }
 

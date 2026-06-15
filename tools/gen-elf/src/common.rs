@@ -43,13 +43,34 @@ pub enum SectionKind {
     Tls,
 }
 
+/// Section kinds that can carry generated symbol content.
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
+pub enum ContentKind {
+    Text,
+    Data,
+    Plt,
+    Tls,
+}
+
+impl ContentKind {
+    /// Returns the corresponding ELF section category.
+    pub fn section(self) -> SectionKind {
+        match self {
+            Self::Text => SectionKind::Text,
+            Self::Data => SectionKind::Data,
+            Self::Plt => SectionKind::Plt,
+            Self::Tls => SectionKind::Tls,
+        }
+    }
+}
+
 /// Content of an ELF section.
 #[derive(Debug, Clone)]
 pub struct Content {
     /// Raw bytes of the section.
     pub data: Vec<u8>,
     /// The kind of section this content belongs to.
-    pub kind: SectionKind,
+    pub kind: ContentKind,
 }
 
 /// Description of an ELF symbol to be generated.
@@ -76,7 +97,7 @@ impl SymbolDesc {
             scope: SymbolScope::Global,
             content: Some(Content {
                 data: code.to_vec(),
-                kind: SectionKind::Text,
+                kind: ContentKind::Text,
             }),
             size: Some(code.len() as u64),
         }
@@ -90,7 +111,7 @@ impl SymbolDesc {
             scope: SymbolScope::Global,
             content: Some(Content {
                 data: data.to_vec(),
-                kind: SectionKind::Data,
+                kind: ContentKind::Data,
             }),
             size: Some(data.len() as u64),
         }
@@ -126,7 +147,7 @@ impl SymbolDesc {
             scope: SymbolScope::Global,
             content: Some(Content {
                 data: data.to_vec(),
-                kind: SectionKind::Tls,
+                kind: ContentKind::Tls,
             }),
             size: Some(data.len() as u64),
         }
@@ -152,7 +173,7 @@ impl SymbolDesc {
             scope: SymbolScope::Global,
             content: Some(Content {
                 data: code,
-                kind: SectionKind::Plt,
+                kind: ContentKind::Plt,
             }),
             size: Some(size),
         }

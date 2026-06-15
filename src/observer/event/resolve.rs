@@ -32,6 +32,7 @@ pub struct ResolveDependencyEvent<'a, K> {
 
 impl<'a, K> ResolveDependencyEvent<'a, K> {
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) const fn new(
         owner_key: &'a K,
         owner_name: &'a str,

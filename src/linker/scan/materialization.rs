@@ -88,8 +88,12 @@ fn record_existing_section_placements<K>(
     K: Clone + Ord,
 {
     for module_id in modules.iter().copied() {
-        let alloc_sections = plan.module_layout(module_id).alloc_sections().to_vec();
-        for section_id in alloc_sections {
+        for section_id in plan
+            .module_layout(module_id)
+            .alloc_sections()
+            .iter()
+            .copied()
+        {
             if let Some(placement) = plan.placement(section_id) {
                 arena_state.register_existing_section(plan, module_id, section_id, placement);
             }
@@ -106,8 +110,9 @@ fn assign_missing_section_placements<K>(
     K: Clone + Ord,
 {
     for module_id in modules.iter().copied() {
-        let alloc_sections = plan.module_layout(module_id).alloc_sections().to_vec();
-        for section_id in alloc_sections {
+        let section_count = plan.module_layout(module_id).alloc_sections().len();
+        for index in 0..section_count {
+            let section_id = plan.module_layout(module_id).alloc_sections()[index];
             if plan.placement(section_id).is_none() {
                 arena_state.assign_fallback_section(plan, module_id, section_id, policy);
             }
@@ -118,7 +123,6 @@ fn assign_missing_section_placements<K>(
 struct ArenaState {
     shared_arenas: BTreeMap<MemoryClass, ArenaId>,
     private_arenas: BTreeMap<(ModuleId, MemoryClass), ArenaId>,
-    arena_offsets: BTreeMap<ArenaId, usize>,
 }
 
 impl ArenaState {
@@ -126,7 +130,6 @@ impl ArenaState {
         Self {
             shared_arenas: BTreeMap::new(),
             private_arenas: BTreeMap::new(),
-            arena_offsets: BTreeMap::new(),
         }
     }
 
@@ -145,10 +148,6 @@ impl ArenaState {
             .expect("fallback arena state found a non-alloc placed section");
         let arena = plan.memory_layout().arena(placement.arena());
 
-        self.update_arena_end(
-            placement.arena(),
-            placement.offset().saturating_add(placement.size()),
-        );
         match arena.sharing() {
             ArenaSharing::Shared => {
                 self.shared_arenas
@@ -172,14 +171,13 @@ impl ArenaState {
     ) where
         K: Clone + Ord,
     {
-        let (memory_class, alignment, size) = {
+        let (memory_class, alignment) = {
             let section = plan.section_metadata(section_id);
             (
                 section
                     .memory_class()
                     .expect("fallback arena assignment encountered a non-alloc section"),
                 section.alignment(),
-                section.size(),
             )
         };
         let arena_id = self.ensure_arena(
@@ -189,17 +187,12 @@ impl ArenaState {
             memory_class,
         );
         let offset = plan.memory_layout().next_offset(arena_id, alignment);
-        let next_offset = offset
-            .checked_add(size)
-            .expect("fallback arena assignment overflowed while placing a section");
 
         assert!(
             plan.memory_layout_mut()
                 .assign(section_id, arena_id, offset),
             "fallback arena assignment failed while placing a section"
         );
-
-        self.update_arena_end(arena_id, next_offset);
     }
 
     fn ensure_arena(
@@ -216,7 +209,6 @@ impl ArenaState {
                 }
 
                 if let Some(arena_id) = Self::find_shared_arena(layout, memory_class) {
-                    self.update_arena_end(arena_id, layout.usage(arena_id).used_len());
                     self.shared_arenas.insert(memory_class, arena_id);
                     return arena_id;
                 }
@@ -247,13 +239,6 @@ impl ArenaState {
             (arena.sharing() == ArenaSharing::Shared && arena.memory_class() == memory_class)
                 .then_some(arena_id)
         })
-    }
-
-    fn update_arena_end(&mut self, arena_id: ArenaId, end: usize) {
-        self.arena_offsets
-            .entry(arena_id)
-            .and_modify(|offset| *offset = (*offset).max(end))
-            .or_insert(end);
     }
 }
 

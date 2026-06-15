@@ -16,9 +16,7 @@ use crate::{
     image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     linker::session::ResolveSession,
     memory::{RegionAccess, VmOffset},
-    observer::{
-        AfterDynamicLoadEvent, LinkObserver, LoadObserver, RelocationObserver, StagedDynamic,
-    },
+    observer::{LinkObserver, LoadObserver, RelocationObserver, StagedDynamic},
     os::Mmap,
     relocation::{RelocationArch, RelocationHandler, Relocator},
     tls::TlsResolver,
@@ -29,6 +27,43 @@ use alloc::{
     vec::Vec,
 };
 use core::{fmt, mem, ops::Deref};
+
+type EmptyLinker<'a, K, Arch> =
+    Linker<'a, K, Arch, Loader<(), (), (), Arch>, (), (), (), (), DefaultRelocationPlanner, (), ()>;
+
+type LinkerLoader<Obs, D, Tls, Arch, M> = Loader<Obs, D, Tls, Arch, M>;
+
+type LoaderMappedLinker<
+    'a,
+    K,
+    Arch,
+    NewObs,
+    NewD,
+    NewTls,
+    NewM,
+    R,
+    PreH,
+    PostH,
+    RelocObs,
+    P,
+    O,
+    V,
+> = Linker<
+    'a,
+    K,
+    Arch,
+    Loader<NewObs, NewD, NewTls, Arch, NewM>,
+    R,
+    PreH,
+    PostH,
+    RelocObs,
+    P,
+    O,
+    V,
+>;
+
+type PendingDynamicGraph<D, Arch, R> =
+    BTreeMap<KeyId, GraphEntry<ModulePayload<RawDynamic<D, Arch, R>, Arch>>>;
 
 /// Result of a successful linker load operation.
 ///
@@ -150,21 +185,7 @@ where
     /// all modules committed through the resulting [`LinkContext`] use
     /// `NewArch`.
     #[inline]
-    pub fn for_arch<NewArch>(
-        self,
-    ) -> Linker<
-        'a,
-        K,
-        NewArch,
-        Loader<(), (), (), NewArch>,
-        (),
-        (),
-        (),
-        (),
-        DefaultRelocationPlanner,
-        (),
-        (),
-    >
+    pub fn for_arch<NewArch>(self) -> EmptyLinker<'a, K, NewArch>
     where
         NewArch: RelocationArch,
     {
@@ -305,14 +326,23 @@ where
     M: Mmap,
 {
     /// Reconfigures the underlying loader.
+    ///
+    /// The return type preserves the linker's typestate parameters after
+    /// replacing only the loader component.
+    #[allow(clippy::type_complexity)]
     pub fn map_loader<NewObs, NewD, NewTls, NewM>(
         self,
-        configure: impl FnOnce(Loader<Obs, D, Tls, Arch, M>) -> Loader<NewObs, NewD, NewTls, Arch, NewM>,
-    ) -> Linker<
+        configure: impl FnOnce(
+            LinkerLoader<Obs, D, Tls, Arch, M>,
+        ) -> LinkerLoader<NewObs, NewD, NewTls, Arch, NewM>,
+    ) -> LoaderMappedLinker<
         'a,
         K,
         Arch,
-        Loader<NewObs, NewD, NewTls, Arch, NewM>,
+        NewObs,
+        NewD,
+        NewTls,
+        NewM,
         R,
         PreH,
         PostH,
@@ -488,8 +518,8 @@ where
                         .key(id)
                         .expect("scan entry id must resolve to an interned key")
                         .clone();
-                    let direct_deps = entry
-                        .direct_deps
+                    let (payload, direct_deps) = entry.into_parts();
+                    let direct_deps = direct_deps
                         .expect("missing resolved dependencies while building scan plan")
                         .into_vec()
                         .into_iter()
@@ -501,7 +531,7 @@ where
                         })
                         .collect::<Vec<_>>()
                         .into_boxed_slice();
-                    (key, (entry.payload, direct_deps))
+                    (key, (payload, direct_deps))
                 })
                 .collect(),
         );
@@ -628,14 +658,11 @@ where
                 )
             })?
             .take_module(module_id)?;
-        let force_static_tls = self.loader.inner.force_static_tls();
+        let force_static_tls = self.loader.force_static_tls();
 
         let mut raw =
             build_arena_raw_dynamic::<D, Tls, Arch, M::Region>(scanned, runtime, force_static_tls)?;
-        self.loader
-            .inner
-            .observer
-            .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut raw))?;
+        self.loader.notify_after_dynamic_load(&mut raw)?;
         Ok(raw)
     }
 
@@ -730,14 +757,14 @@ where
                     .entries
                     .remove(&id)
                     .expect("missing pending module while relocating");
-                let direct_deps = entry
-                    .direct_deps
-                    .expect("missing resolved dependencies while relocating");
+                let (payload, direct_deps) = entry.into_parts();
+                let direct_deps =
+                    direct_deps.expect("missing resolved dependencies while relocating");
                 let key = context
                     .key(id)
                     .expect("pending module id must resolve to an interned key")
                     .clone();
-                match entry.payload {
+                match payload {
                     ModulePayload::Dynamic(raw) => {
                         let req = RelocationRequest::new(&key, raw, &scope);
                         let inputs = self.planner.plan(&req)?;
@@ -766,7 +793,7 @@ where
 
     fn build_relocation_order(
         root: KeyId,
-        pending: &BTreeMap<KeyId, GraphEntry<ModulePayload<RawDynamic<D, Arch, M::Region>, Arch>>>,
+        pending: &PendingDynamicGraph<D, Arch, M::Region>,
         order: &mut Vec<KeyId>,
     ) {
         order.clear();
@@ -793,8 +820,7 @@ where
 
             stack.push((id, true));
             let direct_deps = slot
-                .direct_deps
-                .as_deref()
+                .direct_deps()
                 .expect("missing resolved dependencies while building relocation order");
             for dep in direct_deps.iter().rev().copied() {
                 stack.push((dep, false));
@@ -816,7 +842,7 @@ where
             .iter()
             .map(|id| {
                 if let Some(entry) = session.resolve.entries.get(id) {
-                    match &entry.payload {
+                    match entry.payload() {
                         ModulePayload::Dynamic(raw) => {
                             let module = LoadedCore::from_relocated_core(raw.core());
                             ModuleHandle::from(module)
@@ -840,15 +866,16 @@ where
     where
         Meta: Default,
     {
-        let mut ready = mem::take(&mut session.ready_to_commit);
+        let mut ready = session.take_ready_to_commit();
         let mut committed = Vec::with_capacity(ready.len());
         for id in session.resolve.group_order.iter().copied() {
             let Some(entry) = ready.remove(&id) else {
                 continue;
             };
+            let (module, direct_deps) = entry.into_parts();
             context
                 .committed
-                .insert_new(id, entry.module, entry.direct_deps, Meta::default());
+                .insert_new(id, module, direct_deps, Meta::default());
             committed.push(id);
         }
         assert!(
@@ -912,12 +939,13 @@ where
         let metadata = plan.section(section_id);
         let data = plan
             .data(section_id)
-            .expect("missing section data for planned override");
-        assert_eq!(
-            data.len(),
-            metadata.size(),
-            "planned section override size does not match the loaded section"
-        );
+            .ok_or_else(|| LinkerError::section_data("planned override section data is missing"))?;
+        if data.len() != metadata.size() {
+            return Err(LinkerError::section_data(
+                "planned section override size does not match the loaded section",
+            )
+            .into());
+        }
         segments.write_bytes(
             segments.base() + VmOffset::new(metadata.source_address()),
             data.as_ref(),

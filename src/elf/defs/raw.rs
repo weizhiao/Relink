@@ -25,7 +25,7 @@ impl ElfWord for u32 {
 
     #[inline]
     fn to_u64(self) -> u64 {
-        self as u64
+        u64::from(self)
     }
 }
 
@@ -330,7 +330,7 @@ macro_rules! impl_shdr_raw {
 
             #[inline]
             fn sh_flags(&self) -> u64 {
-                self.sh_flags as u64
+                u64::from(self.sh_flags)
             }
 
             #[inline]
@@ -396,7 +396,7 @@ macro_rules! impl_dyn_raw {
 
             #[inline]
             fn d_tag(&self) -> i64 {
-                self.d_tag as i64
+                i64::from(self.d_tag)
             }
 
             #[inline]

@@ -6,7 +6,7 @@ use super::{
     },
     string_table::StringTable,
     types::{DsoExport, DsoExportLayout, DsoImage, DsoSymbolBind, DsoSymbolKind},
-    writer::Writer,
+    writer::{PhdrWrite, Writer},
 };
 use crate::{
     Result, custom_error,
@@ -16,7 +16,7 @@ use crate::{
     },
     relocation::RelocationArch,
 };
-use alloc::{string::String, vec::Vec};
+use alloc::{string::String, vec, vec::Vec};
 use core::marker::PhantomData;
 
 /// Builder for a minimal `ET_DYN` image with caller-provided exports.
@@ -146,32 +146,31 @@ impl<Arch: RelocationArch> DsoBuilder<Arch> {
 
         check_word_range::<Arch::Layout>(file_size)?;
 
-        let mut bytes = Vec::new();
-        bytes.resize(file_size, 0);
+        let mut bytes = vec![0; file_size];
 
         let mut out = Writer::new(&mut bytes);
         out.write_ehdr::<Arch::Layout>(Arch::MACHINE, ehdr_size, phdr_size, phnum, ehdr_size, 0)?;
         out.seek(ehdr_size);
-        out.write_phdr::<Arch::Layout>(
-            PT_LOAD,
-            PF_R | PF_X,
-            0,
-            0,
-            0,
-            file_size,
-            file_size,
-            self.page_size,
-        )?;
-        out.write_phdr::<Arch::Layout>(
-            PT_DYNAMIC,
-            PF_R,
-            dynamic_off,
-            dynamic_off,
-            dynamic_off,
-            dynamic_size,
-            dynamic_size,
-            word_size,
-        )?;
+        out.write_phdr::<Arch::Layout>(PhdrWrite {
+            p_type: PT_LOAD,
+            p_flags: PF_R | PF_X,
+            p_offset: 0,
+            p_vaddr: 0,
+            p_paddr: 0,
+            p_filesz: file_size,
+            p_memsz: file_size,
+            p_align: self.page_size,
+        })?;
+        out.write_phdr::<Arch::Layout>(PhdrWrite {
+            p_type: PT_DYNAMIC,
+            p_flags: PF_R,
+            p_offset: dynamic_off,
+            p_vaddr: dynamic_off,
+            p_paddr: dynamic_off,
+            p_filesz: dynamic_size,
+            p_memsz: dynamic_size,
+            p_align: word_size,
+        })?;
 
         bytes[dynstr_off..dynstr_off + dynstr.len()].copy_from_slice(dynstr.as_slice());
 

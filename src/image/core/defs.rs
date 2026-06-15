@@ -81,10 +81,10 @@ unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Send for CoreInne
 #[derive(Debug, Clone)]
 pub struct Symbol<'lib, T: 'lib> {
     /// Raw pointer to the symbol's memory location.
-    pub(crate) ptr: *mut (),
+    ptr: *mut (),
 
     /// Phantom data to bind the symbol's lifetime to the source library.
-    pub(crate) pd: PhantomData<&'lib T>,
+    pd: PhantomData<&'lib T>,
 }
 
 impl<'lib, T> Deref for Symbol<'lib, T> {
@@ -99,6 +99,14 @@ impl<'lib, T> Deref for Symbol<'lib, T> {
 }
 
 impl<'lib, T> Symbol<'lib, T> {
+    #[inline]
+    pub(crate) const fn from_ptr(ptr: *mut ()) -> Self {
+        Self {
+            ptr,
+            pd: PhantomData,
+        }
+    }
+
     /// Consumes the `Symbol` and returns its raw memory address.
     ///
     /// # Returns

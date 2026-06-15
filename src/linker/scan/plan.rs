@@ -24,6 +24,9 @@ pub struct PlannedModule<K, Arch: RelocationArch> {
     direct_deps: Box<[ModuleId]>,
 }
 
+type PlannedEntry<K, Arch> = (ModulePayload<ScannedDynamic<Arch>, Arch>, Box<[K]>);
+type PlannedEntries<K, Arch> = BTreeMap<K, PlannedEntry<K, Arch>>;
+
 fn resolve_direct_deps<K>(module_ids: &BTreeMap<K, ModuleId>, direct_deps: &[K]) -> Box<[ModuleId]>
 where
     K: Ord,
@@ -126,7 +129,7 @@ where
     pub(in crate::linker) fn new(
         root: K,
         group_order: Vec<K>,
-        mut entries: BTreeMap<K, (ModulePayload<ScannedDynamic<Arch>, Arch>, Box<[K]>)>,
+        mut entries: PlannedEntries<K, Arch>,
     ) -> Self {
         let group_keys = group_order;
         let mut module_ids = BTreeMap::new();
@@ -390,9 +393,9 @@ where
                         "section data bytes do not match requested entry type",
                     )
                 })?;
-                let entry = entries
-                    .get(index)
-                    .expect("section data entry index should remain valid");
+                let entry = entries.get(index).ok_or_else(|| {
+                    LinkerError::section_data("section data entry index is out of bounds")
+                })?;
                 prepare(entry, plan)?
             };
             if let Some(prepared) = prepared {

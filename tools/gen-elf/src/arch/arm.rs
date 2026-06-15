@@ -1,3 +1,5 @@
+use anyhow::{Context, Result};
+
 pub(crate) fn generate_plt0_code() -> Vec<u8> {
     let mut code = vec![0; 20];
 
@@ -49,7 +51,7 @@ pub(crate) fn patch_plt_entry(
     plt_entry_off: usize,
     plt_entry_vaddr: u64,
     target_got_vaddr: u64,
-) {
+) -> Result<()> {
     // 1. 计算总偏移量
     // 这里的基准是第一条指令执行时的 PC。
     // ARM 流水线中，执行第一条指令时，PC = plt_entry_vaddr + 8
@@ -79,8 +81,10 @@ pub(crate) fn patch_plt_entry(
         let high_part = residual & 0xFFF00000; // 这是一个粗略的假设
         let mid_part = residual - high_part;
 
-        let enc_h = encode_arm_imm(high_part).expect("Failed to encode high part of PLT offset");
-        let enc_m = encode_arm_imm(mid_part).expect("Failed to encode mid part of PLT offset");
+        let enc_h = encode_arm_imm(high_part)
+            .with_context(|| format!("failed to encode ARM PLT high immediate 0x{high_part:x}"))?;
+        let enc_m = encode_arm_imm(mid_part)
+            .with_context(|| format!("failed to encode ARM PLT middle immediate 0x{mid_part:x}"))?;
         (enc_h, enc_m)
     };
 
@@ -100,6 +104,7 @@ pub(crate) fn patch_plt_entry(
     // 0xe5bcf... 是 ldr pc, [ip, #...]!
     let insn3 = 0xe5bcf000 | low_12;
     plt_data[plt_entry_off + 8..plt_entry_off + 12].copy_from_slice(&insn3.to_le_bytes());
+    Ok(())
 }
 
 // 辅助函数：将 u32 编码为 ARM 立即数格式 (12位: 4位 rotate + 8位 imm)

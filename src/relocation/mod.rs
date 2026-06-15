@@ -28,7 +28,9 @@ pub(crate) use lazy::ResolvedBinding;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use lazy::dl_fixup;
 pub use traits::{ObjectRelocationArch, RelocationArch};
-pub(crate) use traits::{Relocatable, RelocateArgs, RelocationValueProvider, SupportLazy};
+pub(crate) use traits::{
+    Relocatable, RelocateArgs, RelocationValueInput, RelocationValueProvider, SupportLazy,
+};
 
 pub use relocator::Relocator;
 pub use traits::{BindingMode, HandleResult, RelocationContext, RelocationHandler};

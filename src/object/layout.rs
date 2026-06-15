@@ -12,6 +12,7 @@ use crate::{
     os::{MapFlags, Mmap, ProtFlags},
     relocation::{ObjectRelocationArch, RelocationArch},
     segment::{ElfSegment, ElfSegments, FileMapInfo, MemoryProtection, SegmentBuilder},
+    sync::Arc,
 };
 use alloc::vec::Vec;
 use core::ptr::NonNull;
@@ -81,6 +82,7 @@ pub struct ObjectSegmentView<'segments, R: RegionAccess> {
     init: Option<&'segments ElfSegments<R>>,
 }
 
+// Keep these impls manual so copying the borrowed view does not require R: Clone or R: Copy.
 impl<R: RegionAccess> Clone for ObjectSegmentView<'_, R> {
     #[inline]
     fn clone(&self) -> Self {
@@ -200,10 +202,10 @@ pub enum SectionLifetime {
 
 #[derive(Clone, Copy)]
 pub(crate) struct SectionGroupDef {
-    pub(crate) init_prot: ProtFlags,
-    pub(crate) final_prot: ProtFlags,
-    pub(crate) order: usize,
-    pub(crate) lifetime: SectionLifetime,
+    init_prot: ProtFlags,
+    final_prot: ProtFlags,
+    order: usize,
+    lifetime: SectionLifetime,
 }
 
 impl SectionGroupDef {
@@ -323,21 +325,11 @@ pub(crate) enum SectionPlacement {
 
 /// Final object section layout choices collected from [`SectionLayoutEvent`].
 pub(crate) struct SectionLayoutPlan {
-    groups: SectionGroups,
+    groups: Arc<SectionGroups>,
     placements: Vec<SectionPlacement>,
 }
 
 impl SectionLayoutPlan {
-    #[inline]
-    pub(crate) fn new(groups: SectionGroups, placements: Vec<SectionPlacement>) -> Self {
-        Self { groups, placements }
-    }
-
-    #[inline]
-    pub(crate) fn groups(&self) -> &SectionGroups {
-        &self.groups
-    }
-
     #[inline]
     pub(crate) fn placement(&self, id: ElfSectionId) -> SectionPlacement {
         self.placements[id.index()]
@@ -376,12 +368,10 @@ fn default_section_group(flags: ElfSectionFlags) -> SectionGroup {
 
 fn create_section_plan<L: ElfLayout>(
     sections: &ObjectSections<L>,
-    groups: &SectionGroups,
+    groups: Arc<SectionGroups>,
     placement_overrides: Vec<Option<SectionPlacement>>,
 ) -> SectionLayoutPlan {
     debug_assert_eq!(sections.headers().len(), placement_overrides.len());
-
-    let groups = groups.clone();
 
     let placements = sections
         .headers()
@@ -397,7 +387,7 @@ fn create_section_plan<L: ElfLayout>(
             })
         })
         .collect();
-    SectionLayoutPlan::new(groups, placements)
+    SectionLayoutPlan { groups, placements }
 }
 
 #[derive(Clone, Copy)]
@@ -599,7 +589,7 @@ impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
         sections: &mut ObjectSections<Arch::Layout>,
         object: &impl ElfReader,
         page_size: usize,
-        groups: &SectionGroups,
+        groups: Arc<SectionGroups>,
         observer: &mut Obs,
         mapper: &M,
     ) -> Result<(Self, ObjectSegments<M::Region>)>
@@ -792,8 +782,7 @@ impl PltGotSection {
     ) -> Result<(usize, usize)> {
         let mut got_set = HashSet::new();
         let mut got_plt_set = HashSet::new();
-        let mut scratch =
-            AlignedBytes::with_len(0).expect("failed to initialize relocation buffer");
+        let mut scratch = AlignedBytes::default();
 
         for shdr in shdrs
             .iter()
@@ -1025,7 +1014,7 @@ impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
 fn create_section_units<L: ElfLayout>(
     plan: &SectionLayoutPlan,
 ) -> Vec<(SectionGroup, SectionUnit<'_, L>)> {
-    plan.groups()
+    plan.groups
         .sorted_defs()
         .into_iter()
         .map(|(group, def)| {

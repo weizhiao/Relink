@@ -116,62 +116,10 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
         &self.sections
     }
 
-    /// Returns the lowest runtime address covered by core or init-only object
-    /// mappings.
-    #[inline]
-    pub(crate) fn mapped_base(&self) -> VmAddr {
-        self.mapped_span()
-            .map(|(base, _)| base)
-            .unwrap_or_else(VmAddr::null)
-    }
-
-    /// Returns the length of the bounding span covered by core or init-only
-    /// object mappings.
-    #[inline]
-    pub fn mapped_len(&self) -> usize {
-        self.mapped_span().map(|(_, len)| len).unwrap_or(0)
-    }
-
-    fn mapped_span(&self) -> Option<(VmAddr, usize)> {
-        let mut start = None;
-        let mut end = None;
-
-        extend_mapped_span(
-            &mut start,
-            &mut end,
-            self.core.mapped_base(),
-            self.core.mapped_len(),
-        );
-        if let Some(init) = &self.init_segments {
-            extend_mapped_span(&mut start, &mut end, init.mapped_base(), init.mapped_len());
-        }
-
-        start
-            .zip(end)
-            .map(|(start, end)| (VmAddr::new(start), end - start))
-    }
-
     #[inline]
     pub(crate) fn section_is_mapped(&self, id: ElfSectionId) -> bool {
         self.sections.section_is_mapped(id)
     }
-}
-
-fn extend_mapped_span(
-    start: &mut Option<usize>,
-    end: &mut Option<usize>,
-    base: VmAddr,
-    len: usize,
-) {
-    if len == 0 {
-        return;
-    }
-    let base = base.get();
-    let limit = base
-        .checked_add(len)
-        .expect("object mapped span overflowed");
-    *start = Some(start.map_or(base, |current| current.min(base)));
-    *end = Some(end.map_or(limit, |current| current.max(limit)));
 }
 
 impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Debug for RawObject<D, Arch, R> {

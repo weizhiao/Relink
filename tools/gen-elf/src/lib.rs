@@ -7,6 +7,8 @@ mod dylib;
 mod relocatable;
 
 pub use arch::Arch;
-pub use common::{RelocEntry, RelocType, SectionKind, SymbolDesc, SymbolScope, SymbolType};
+pub use common::{
+    ContentKind, RelocEntry, RelocType, SectionKind, SymbolDesc, SymbolScope, SymbolType,
+};
 pub use dylib::{DylibWriter, ElfWriteOutput, ElfWriterConfig, RelocationInfo};
 pub use relocatable::{ObjectElfOutput, ObjectWriter};

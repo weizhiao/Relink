@@ -1,4 +1,5 @@
 use crate::common::RelocType;
+use anyhow::Result;
 use object::Architecture;
 use object::elf::*;
 
@@ -23,22 +24,22 @@ pub enum Arch {
 }
 
 impl Arch {
-    /// Returns the architecture of the current host.
-    pub fn current() -> Self {
+    /// Returns the architecture of the current host when it is supported.
+    pub fn try_current() -> Option<Self> {
         #[cfg(target_arch = "x86_64")]
-        return Arch::X86_64;
+        return Some(Arch::X86_64);
         #[cfg(target_arch = "x86")]
-        return Arch::X86;
+        return Some(Arch::X86);
         #[cfg(target_arch = "aarch64")]
-        return Arch::Aarch64;
+        return Some(Arch::Aarch64);
         #[cfg(target_arch = "riscv64")]
-        return Arch::Riscv64;
+        return Some(Arch::Riscv64);
         #[cfg(target_arch = "riscv32")]
-        return Arch::Riscv32;
+        return Some(Arch::Riscv32);
         #[cfg(target_arch = "arm")]
-        return Arch::Arm;
+        return Some(Arch::Arm);
         #[cfg(target_arch = "loongarch64")]
-        return Arch::Loongarch64;
+        return Some(Arch::Loongarch64);
         #[cfg(not(any(
             target_arch = "x86_64",
             target_arch = "x86",
@@ -48,7 +49,15 @@ impl Arch {
             target_arch = "arm",
             target_arch = "loongarch64"
         )))]
-        panic!("Unsupported architecture");
+        return None;
+    }
+
+    /// Returns the architecture of the current host.
+    pub fn current() -> Self {
+        match Self::try_current() {
+            Some(arch) => arch,
+            None => panic!("Unsupported architecture"),
+        }
     }
 
     /// Returns true if the architecture is 64-bit.
@@ -536,28 +545,34 @@ pub fn patch_plt_entry(
     plt_entry_vaddr: u64,
     target_got_vaddr: u64,
     got_vaddr: u64,
-) {
+) -> Result<()> {
     match arch {
         Arch::X86_64 => {
-            x86_64::patch_plt_entry(plt_data, plt_entry_off, plt_entry_vaddr, target_got_vaddr)
+            x86_64::patch_plt_entry(plt_data, plt_entry_off, plt_entry_vaddr, target_got_vaddr);
         }
         Arch::X86 => x86::patch_plt_entry(plt_data, plt_entry_off, target_got_vaddr, got_vaddr),
         Arch::Aarch64 => {
-            aarch64::patch_plt_entry(plt_data, plt_entry_off, plt_entry_vaddr, target_got_vaddr)
+            aarch64::patch_plt_entry(plt_data, plt_entry_off, plt_entry_vaddr, target_got_vaddr);
         }
         Arch::Arm => {
-            arm::patch_plt_entry(plt_data, plt_entry_off, plt_entry_vaddr, target_got_vaddr)
+            arm::patch_plt_entry(plt_data, plt_entry_off, plt_entry_vaddr, target_got_vaddr)?;
         }
         Arch::Riscv64 => {
-            riscv64::patch_plt_entry(plt_data, plt_entry_off, plt_entry_vaddr, target_got_vaddr)
+            riscv64::patch_plt_entry(plt_data, plt_entry_off, plt_entry_vaddr, target_got_vaddr);
         }
         Arch::Riscv32 => {
-            riscv32::patch_plt_entry(plt_data, plt_entry_off, plt_entry_vaddr, target_got_vaddr)
+            riscv32::patch_plt_entry(plt_data, plt_entry_off, plt_entry_vaddr, target_got_vaddr);
         }
         Arch::Loongarch64 => {
-            loongarch64::patch_plt_entry(plt_data, plt_entry_off, plt_entry_vaddr, target_got_vaddr)
+            loongarch64::patch_plt_entry(
+                plt_data,
+                plt_entry_off,
+                plt_entry_vaddr,
+                target_got_vaddr,
+            );
         }
     }
+    Ok(())
 }
 
 pub fn get_got_plt_init_value(arch: Arch, plt_vaddr: u64, plt_entry_off: u64) -> u64 {
