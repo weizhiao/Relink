@@ -10,7 +10,7 @@ use crate::{
     relocation::RelocationArch,
 };
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
-use core::any::Any;
+use core::{any::Any, ptr::NonNull};
 
 /// One synthetic symbol exported by a [`SyntheticModule`].
 ///
@@ -184,6 +184,11 @@ where
         Err(custom_error(
             "synthetic modules do not expose readable image bytes",
         ))
+    }
+
+    #[inline]
+    fn host_ptr(&self, _addr: VmAddr) -> Option<NonNull<u8>> {
+        None
     }
 }
 

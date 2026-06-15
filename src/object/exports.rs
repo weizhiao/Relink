@@ -12,6 +12,7 @@ use alloc::{string::String, vec::Vec};
 /// it can outlive init-only section metadata.
 pub(crate) struct ObjectExports<L: ElfLayout> {
     hashtab: CustomHash<String>,
+    names: Vec<String>,
     symbols: Vec<ElfSymbol<L>>,
 }
 
@@ -20,6 +21,7 @@ impl<L: ElfLayout> ObjectExports<L> {
     pub(crate) fn empty() -> Self {
         Self {
             hashtab: CustomHash::with_capacity(0),
+            names: Vec::new(),
             symbols: Vec::new(),
         }
     }
@@ -34,31 +36,27 @@ impl<L: ElfLayout> ObjectExports<L> {
         }
 
         let idx = self.symbols.len();
+        self.names.push(name.clone());
         self.symbols.push(symbol);
         self.hashtab.insert_unique(name, idx);
-    }
-
-    #[inline]
-    pub(crate) fn symbols(&self) -> &[ElfSymbol<L>] {
-        &self.symbols
-    }
-
-    #[inline]
-    pub(crate) fn lookup(
-        &self,
-        symbol: &SymbolInfo<'_>,
-        precompute: &mut PreCompute,
-    ) -> Option<&ElfSymbol<L>> {
-        self.hashtab
-            .lookup_idx(symbol, precompute)
-            .map(|idx| &self.symbols[idx])
     }
 }
 
 impl<Arch: RelocationArch> SymbolExports<Arch> for ObjectExports<Arch::Layout> {
     #[inline]
     fn symbols(&self) -> &[ElfSymbol<Arch::Layout>] {
-        self.symbols()
+        &self.symbols
+    }
+
+    #[inline]
+    fn symbol_name<'exports>(
+        &'exports self,
+        symbol: &ElfSymbol<Arch::Layout>,
+    ) -> Option<&'exports str> {
+        self.symbols
+            .iter()
+            .position(|entry| core::ptr::eq(entry, symbol))
+            .map(|idx| self.names[idx].as_str())
     }
 
     #[inline]
@@ -67,7 +65,9 @@ impl<Arch: RelocationArch> SymbolExports<Arch> for ObjectExports<Arch::Layout> {
         symbol: &SymbolInfo<'_>,
         precompute: &mut PreCompute,
     ) -> Option<&'exports ElfSymbol<Arch::Layout>> {
-        self.lookup(symbol, precompute)
+        self.hashtab
+            .lookup_idx(symbol, precompute)
+            .map(|idx| &self.symbols[idx])
     }
 }
 
@@ -99,11 +99,21 @@ mod tests {
 
         let info = SymbolInfo::from_str("symbol", None);
         let mut precompute = info.precompute();
-        let resolved = exports
-            .lookup(&info, &mut precompute)
+        let resolved =
+            <ObjectExports<NativeElfLayout> as SymbolExports<crate::arch::NativeArch>>::lookup(
+                &exports,
+                &info,
+                &mut precompute,
+            )
             .expect("symbol should resolve");
 
         assert_eq!(resolved.st_value(), 0x2000);
+        assert_eq!(
+            <ObjectExports<NativeElfLayout> as SymbolExports<crate::arch::NativeArch>>::symbol_name(
+                &exports, resolved
+            ),
+            Some("symbol"),
+        );
         assert_eq!(
             <ObjectExports<NativeElfLayout> as SymbolExports<crate::arch::NativeArch>>::symbols(
                 &exports

@@ -18,6 +18,12 @@ pub trait SymbolExports<Arch: RelocationArch>: Send + Sync {
     /// Returns exported symbol entries when this backend can enumerate them.
     fn symbols(&self) -> &[ElfSymbol<Arch::Layout>];
 
+    /// Returns the name for a symbol entry from this export table.
+    fn symbol_name<'exports>(
+        &'exports self,
+        symbol: &ElfSymbol<Arch::Layout>,
+    ) -> Option<&'exports str>;
+
     fn lookup<'exports>(
         &'exports self,
         symbol: &SymbolInfo<'_>,
@@ -41,6 +47,14 @@ where
     #[inline]
     fn symbols(&self) -> &[ElfSymbol<Arch::Layout>] {
         self.view().symbols()
+    }
+
+    #[inline]
+    fn symbol_name<'exports>(
+        &'exports self,
+        symbol: &ElfSymbol<Arch::Layout>,
+    ) -> Option<&'exports str> {
+        Some(self.strtab().get_str(symbol.st_name()))
     }
 
     #[inline]
@@ -83,9 +97,7 @@ pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
     fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()>;
 
     /// Translates a module VM address into a host-accessible pointer.
-    fn host_ptr(&self, _addr: VmAddr) -> Option<NonNull<u8>> {
-        None
-    }
+    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>>;
 
     /// Returns the TLS module id, when this module owns TLS storage.
     fn tls_mod_id(&self) -> Option<TlsModuleId> {
