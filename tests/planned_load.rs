@@ -142,7 +142,7 @@ impl LinkObserver for RecordingObserver {
         &mut self,
         event: StagedDynamic<'_, K, D, elf_loader::arch::NativeArch, R>,
     ) -> elf_loader::Result<()> {
-        assert!(event.raw().contains_addr(event.raw().base()));
+        assert!(event.raw().segments().contains_addr(event.raw().base()));
         self.events
             .borrow_mut()
             .push(event.raw().name().to_string());
@@ -426,7 +426,7 @@ fn load_accepts_dynamic_exec_root() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.contains_addr(VmAddr::new(ptr as usize)));
+        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
     }
 }
@@ -457,7 +457,7 @@ fn load_dynamic_accepts_dynamic_exec_without_relaxing_load_dylib() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.contains_addr(VmAddr::new(ptr as usize)));
+        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
     }
 }
@@ -486,7 +486,7 @@ fn load_scanned_dynamic_accepts_dynamic_exec() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.contains_addr(VmAddr::new(ptr as usize)));
+        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[4, 3, 2, 1]);
     }
 }
@@ -573,7 +573,7 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
         .load_scan_first(&mut context, "root")
         .expect("failed to execute scan-first load");
 
-    assert!(loaded.is_contiguous_mapping());
+    assert!(loaded.segments().is_contiguous_mapping());
     assert!(context.contains_key(&"root"));
 
     unsafe {
@@ -581,7 +581,7 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.contains_addr(VmAddr::new(ptr as usize)));
+        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
     }
 }
@@ -603,7 +603,7 @@ fn load_with_scan_legacy_path_loads_without_an_intermediate_plan() {
         .load_scan_first(&mut context, "root")
         .expect("failed to execute merged scan-and-load path");
 
-    assert!(loaded.is_contiguous_mapping());
+    assert!(loaded.segments().is_contiguous_mapping());
     assert!(context.contains_key(&"root"));
 
     unsafe {
@@ -611,7 +611,7 @@ fn load_with_scan_legacy_path_loads_without_an_intermediate_plan() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.contains_addr(VmAddr::new(ptr as usize)));
+        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
     }
 }
@@ -640,7 +640,7 @@ fn load_scan_first_accepts_dynamic_exec_root() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.contains_addr(VmAddr::new(ptr as usize)));
+        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[5, 6, 7, 8]);
     }
 }
@@ -875,7 +875,7 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
         .expect("failed to execute arena-backed scan-first load");
 
     assert!(
-        !loaded.is_contiguous_mapping(),
+        !loaded.segments().is_contiguous_mapping(),
         "arena-backed load should expose a sparse mapped span",
     );
     assert!(context.contains_key(&"root"));
@@ -885,7 +885,7 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.contains_addr(VmAddr::new(ptr as usize)));
+        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
     }
 }
@@ -963,7 +963,7 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
     assert_eq!(observed_offset, Some(0));
     assert_eq!(observed_size, Some(8));
     assert!(
-        !loaded.is_contiguous_mapping(),
+        !loaded.segments().is_contiguous_mapping(),
         "arena-backed load should expose a sparse mapped span",
     );
     assert!(context.contains_key(&"root"));
@@ -973,7 +973,7 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.contains_addr(VmAddr::new(ptr as usize)));
+        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[4, 3, 2, 1]);
     }
 }
@@ -1017,7 +1017,7 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
         Some(ModuleCapability::SectionReorderable),
     );
     assert!(
-        !loaded.is_contiguous_mapping(),
+        !loaded.segments().is_contiguous_mapping(),
         "section-region default should materialize alloc sections into mapped arenas",
     );
 
@@ -1026,7 +1026,7 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.contains_addr(VmAddr::new(ptr as usize)));
+        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
     }
 }
@@ -1075,7 +1075,7 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.contains_addr(VmAddr::new(ptr as usize)));
+        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
     }
 }
@@ -1172,7 +1172,7 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.contains_addr(VmAddr::new(ptr as usize)));
+        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
     }
 }

@@ -15,6 +15,9 @@ use core::{any::Any, ptr::NonNull};
 /// Export backends may be backed by an ELF dynamic symbol table, an object export
 /// table, kernel export metadata, or a caller-provided synthetic table.
 pub trait SymbolExports<Arch: RelocationArch>: Send + Sync {
+    /// Returns exported symbol entries when this backend can enumerate them.
+    fn symbols(&self) -> &[ElfSymbol<Arch::Layout>];
+
     fn lookup<'exports>(
         &'exports self,
         symbol: &SymbolInfo<'_>,
@@ -35,6 +38,11 @@ impl<Arch> SymbolExports<Arch> for SymbolTable<Arch::Layout>
 where
     Arch: RelocationArch,
 {
+    #[inline]
+    fn symbols(&self) -> &[ElfSymbol<Arch::Layout>] {
+        self.view().symbols()
+    }
+
     #[inline]
     fn lookup<'exports>(
         &'exports self,

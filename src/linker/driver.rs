@@ -15,7 +15,7 @@ use crate::{
     entity::SecondaryMap,
     image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
     linker::session::ResolveSession,
-    memory::{RegionAccess, VmOffset},
+    memory::{ImageMemory, RegionAccess, VmOffset},
     observer::{LinkObserver, LoadObserver, RelocationObserver, StagedDynamic},
     os::Mmap,
     relocation::{RelocationArch, RelocationHandler, Relocator},
@@ -27,40 +27,6 @@ use alloc::{
     vec::Vec,
 };
 use core::{fmt, mem, ops::Deref};
-
-type EmptyLinker<'a, K, Arch> =
-    Linker<'a, K, Arch, Loader<(), (), (), Arch>, (), (), (), (), DefaultRelocationPlanner, (), ()>;
-
-type LinkerLoader<Obs, D, Tls, Arch, M> = Loader<Obs, D, Tls, Arch, M>;
-
-type LoaderMappedLinker<
-    'a,
-    K,
-    Arch,
-    NewObs,
-    NewD,
-    NewTls,
-    NewM,
-    R,
-    PreH,
-    PostH,
-    RelocObs,
-    P,
-    O,
-    V,
-> = Linker<
-    'a,
-    K,
-    Arch,
-    Loader<NewObs, NewD, NewTls, Arch, NewM>,
-    R,
-    PreH,
-    PostH,
-    RelocObs,
-    P,
-    O,
-    V,
->;
 
 type PendingDynamicGraph<D, Arch, R> =
     BTreeMap<KeyId, GraphEntry<ModulePayload<RawDynamic<D, Arch, R>, Arch>>>;
@@ -185,7 +151,22 @@ where
     /// all modules committed through the resulting [`LinkContext`] use
     /// `NewArch`.
     #[inline]
-    pub fn for_arch<NewArch>(self) -> EmptyLinker<'a, K, NewArch>
+    #[allow(clippy::type_complexity)]
+    pub fn for_arch<NewArch>(
+        self,
+    ) -> Linker<
+        'a,
+        K,
+        NewArch,
+        Loader<(), (), (), NewArch>,
+        (),
+        (),
+        (),
+        (),
+        DefaultRelocationPlanner,
+        (),
+        (),
+    >
     where
         NewArch: RelocationArch,
     {
@@ -332,17 +313,12 @@ where
     #[allow(clippy::type_complexity)]
     pub fn map_loader<NewObs, NewD, NewTls, NewM>(
         self,
-        configure: impl FnOnce(
-            LinkerLoader<Obs, D, Tls, Arch, M>,
-        ) -> LinkerLoader<NewObs, NewD, NewTls, Arch, NewM>,
-    ) -> LoaderMappedLinker<
+        configure: impl FnOnce(Loader<Obs, D, Tls, Arch, M>) -> Loader<NewObs, NewD, NewTls, Arch, NewM>,
+    ) -> Linker<
         'a,
         K,
         Arch,
-        NewObs,
-        NewD,
-        NewTls,
-        NewM,
+        Loader<NewObs, NewD, NewTls, Arch, NewM>,
         R,
         PreH,
         PostH,

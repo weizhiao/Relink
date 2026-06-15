@@ -15,6 +15,7 @@ mod scanned;
 mod synthetic;
 mod traits;
 
+pub use crate::segment::{ElfSegments, MappedRange};
 #[cfg(feature = "lazy-binding")]
 pub(crate) use core::CoreInner;
 pub use core::{ElfCore, ElfCoreRef, LoadedCore, LoadedDeps, Symbol};

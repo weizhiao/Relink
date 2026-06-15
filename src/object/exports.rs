@@ -39,6 +39,11 @@ impl<L: ElfLayout> ObjectExports<L> {
     }
 
     #[inline]
+    pub(crate) fn symbols(&self) -> &[ElfSymbol<L>] {
+        &self.symbols
+    }
+
+    #[inline]
     pub(crate) fn lookup(
         &self,
         symbol: &SymbolInfo<'_>,
@@ -51,6 +56,11 @@ impl<L: ElfLayout> ObjectExports<L> {
 }
 
 impl<Arch: RelocationArch> SymbolExports<Arch> for ObjectExports<Arch::Layout> {
+    #[inline]
+    fn symbols(&self) -> &[ElfSymbol<Arch::Layout>] {
+        self.symbols()
+    }
+
     #[inline]
     fn lookup<'exports>(
         &'exports self,
@@ -94,5 +104,12 @@ mod tests {
             .expect("symbol should resolve");
 
         assert_eq!(resolved.st_value(), 0x2000);
+        assert_eq!(
+            <ObjectExports<NativeElfLayout> as SymbolExports<crate::arch::NativeArch>>::symbols(
+                &exports
+            )
+            .len(),
+            1
+        );
     }
 }

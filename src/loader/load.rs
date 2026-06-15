@@ -8,7 +8,7 @@ use crate::{
     },
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
-    memory::{RegionAccess, VmAddr},
+    memory::{ImageMemory, RegionAccess, VmAddr},
     observer::{AfterDynamicLoadEvent, BeforeDynamicLoadEvent, LoadObserver},
     os::{Mmap, ProtFlags},
     relocation::{ObjectRelocationArch, RelocationArch},
@@ -542,7 +542,7 @@ where
             ElfProgramType::GNU_EH_FRAME => {
                 eh_frame_hdr = Some(
                     segments
-                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())
+                        .host_ptr_range(segments.base() + phdr.p_vaddr(), phdr.p_filesz())
                         .ok_or_else(|| {
                             ParsePhdrError::malformed(
                                 "PT_GNU_EH_FRAME is not directly readable from mapped segments",

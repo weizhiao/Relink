@@ -91,9 +91,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
         self.inner.segments.base()
     }
 
-    /// Returns whether `addr` lies inside this executable mapping.
-    pub fn contains_addr(&self, addr: VmAddr) -> bool {
-        self.inner.segments.contains_addr(addr)
+    /// Returns the mapped segments owned by this executable.
+    pub fn segments(&self) -> &ElfSegments<R> {
+        &self.inner.segments
     }
 }
 
@@ -256,8 +256,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawExec<D, Arch, R> {
     /// Returns whether `addr` is inside one of this executable's mapped slices.
     pub fn contains_addr(&self, addr: VmAddr) -> bool {
         match self {
-            RawExec::Dynamic(image) => image.contains_addr(addr),
-            RawExec::Static(image) => image.contains_addr(addr),
+            RawExec::Dynamic(image) => image.segments().contains_addr(addr),
+            RawExec::Static(image) => image.segments().contains_addr(addr),
         }
     }
 
@@ -337,8 +337,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedExec<D, Arch, R> {
     /// Returns whether `addr` is inside one of this executable's mapped slices.
     pub fn contains_addr(&self, addr: VmAddr) -> bool {
         match &self.inner {
-            LoadedExecInner::Dynamic(module) => module.contains_addr(addr),
-            LoadedExecInner::Static(static_image) => static_image.contains_addr(addr),
+            LoadedExecInner::Dynamic(module) => module.segments().contains_addr(addr),
+            LoadedExecInner::Static(static_image) => static_image.segments().contains_addr(addr),
         }
     }
 

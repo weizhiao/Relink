@@ -3,7 +3,7 @@ use crate::{
     arch::NativeArch,
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
     input::{ElfReader, PathBuf},
-    memory::{MappedView, RegionAccess, VmAddr},
+    memory::{ImageMemory, MappedView, RegionAccess, VmAddr},
     os::ProtFlags,
     relocation::RelocationArch,
     segment::{ElfSegments, MemoryProtection},
@@ -157,7 +157,7 @@ where
             ElfProgramType::GNU_EH_FRAME => {
                 self.eh_frame_hdr = Some(
                     self.segments
-                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())
+                        .host_ptr_range(self.segments.base() + phdr.p_vaddr(), phdr.p_filesz())
                         .ok_or_else(|| {
                             ParsePhdrError::malformed(
                                 "PT_GNU_EH_FRAME is not directly readable from mapped segments",

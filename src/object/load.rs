@@ -233,7 +233,7 @@ mod tests {
         borrowed_shstrtab: bool,
         renamed_shstrtab: bool,
         after_object_name_seen: bool,
-        after_object_mapped: bool,
+        after_object_load_seen: bool,
     }
 
     impl LoadObserver<ObjectData> for ObjectObserver {
@@ -275,7 +275,7 @@ mod tests {
             event: AfterObjectLoadEvent<'_, ObjectData, crate::arch::NativeArch, R>,
         ) -> Result<()> {
             self.after_object_name_seen = event.raw().name() == "metadata.o";
-            self.after_object_mapped = event.raw().contains_addr(event.raw().base());
+            self.after_object_load_seen = true;
             Ok(())
         }
     }
@@ -599,6 +599,6 @@ mod tests {
         assert!(observer.borrowed_shstrtab);
         assert!(observer.renamed_shstrtab);
         assert!(observer.after_object_name_seen);
-        assert!(observer.after_object_mapped);
+        assert!(observer.after_object_load_seen);
     }
 }

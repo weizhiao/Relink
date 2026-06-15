@@ -11,6 +11,7 @@ use crate::{
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
+    segment::ElfSegments,
     tls::{TlsModuleId, TlsTpOffset},
 };
 use core::fmt::Debug;
@@ -157,9 +158,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDylib<D, Arch, R> {
         self.inner.base()
     }
 
-    /// Returns whether `addr` is inside one of this object's mapped slices.
-    pub fn contains_addr(&self, addr: VmAddr) -> bool {
-        self.inner.contains_addr(addr)
+    /// Returns the mapped segments owned by this image.
+    pub fn segments(&self) -> &ElfSegments<R> {
+        self.inner.segments()
     }
 
     /// Returns the list of needed library names from the dynamic section.

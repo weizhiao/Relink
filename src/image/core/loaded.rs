@@ -5,7 +5,7 @@ use crate::{
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, PreCompute, SymbolInfo},
     image::{Module, ModuleHandle, ModuleScope},
     input::{Path, PathBuf},
-    memory::{HostRegion, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
+    memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymDef},
     segment::ElfSegments,
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
@@ -207,16 +207,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         self.core.base()
     }
 
-    /// Returns whether `addr` is inside one of this module's mapped slices.
+    /// Returns the mapped segments owned by this module.
     #[inline]
-    pub fn contains_addr(&self, addr: VmAddr) -> bool {
-        self.core.contains_addr(addr)
-    }
-
-    /// Returns whether the backing memory is one contiguous span with no gaps.
-    #[inline]
-    pub fn is_contiguous_mapping(&self) -> bool {
-        self.core.is_contiguous_mapping()
+    pub fn segments(&self) -> &ElfSegments<R> {
+        self.core.segments()
     }
 
     /// Gets the user-defined data associated with the ELF object
@@ -477,7 +471,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                 }
                 ElfProgramType::GNU_EH_FRAME => {
                     eh_frame_hdr = segments
-                        .borrowed_ptr::<u8>(phdr.p_vaddr(), phdr.p_filesz())
+                        .host_ptr_range(base + phdr.p_vaddr(), phdr.p_filesz())
                         .ok_or(crate::ParsePhdrError::malformed(
                             "PT_GNU_EH_FRAME is not directly readable from mapped segments",
                         ))

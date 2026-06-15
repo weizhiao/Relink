@@ -122,17 +122,6 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawElf<D, Arch, R>
         }
     }
 
-    /// Returns whether `addr` is inside this image's mapped memory.
-    #[inline]
-    pub fn contains_addr(&self, addr: VmAddr) -> bool {
-        match self {
-            RawElf::Dylib(dylib) => dylib.contains_addr(addr),
-            RawElf::Exec(exec) => exec.contains_addr(addr),
-            #[cfg(feature = "object")]
-            RawElf::Object(object) => object.contains_addr(addr),
-        }
-    }
-
     /// Returns the entry point of the ELF file.
     #[inline]
     pub fn entry(&self) -> usize {
@@ -285,10 +274,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedElf<D, Arch, R> {
     #[inline]
     pub fn contains_addr(&self, addr: VmAddr) -> bool {
         match self {
-            LoadedElf::Dylib(dylib) => dylib.contains_addr(addr),
+            LoadedElf::Dylib(dylib) => dylib.segments().contains_addr(addr),
             LoadedElf::Exec(exec) => exec.contains_addr(addr),
             #[cfg(feature = "object")]
-            LoadedElf::Object(object) => object.contains_addr(addr),
+            LoadedElf::Object(object) => object.segments().contains_addr(addr),
         }
     }
 }

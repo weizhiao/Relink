@@ -6,10 +6,13 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt::Debug, ptr::NonNull};
 
-#[derive(Clone, Copy)]
-struct MappedRange {
-    offset: VmOffset,
-    len: usize,
+/// A mapped module-relative range owned by an ELF image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MappedRange {
+    /// Range start, relative to the image base address.
+    pub offset: VmOffset,
+    /// Range length in bytes.
+    pub len: usize,
 }
 
 impl MappedRange {
@@ -46,14 +49,9 @@ pub struct ElfSegments<R: RegionAccess = HostRegion> {
 
 impl<R: RegionAccess> Debug for ElfSegments<R> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let ranges = self
-            .ranges
-            .iter()
-            .map(|range| (range.offset, range.len))
-            .collect::<Vec<_>>();
         f.debug_struct("ElfSegments")
             .field("base", &format_args!("{}", self.base()))
-            .field("ranges", &ranges)
+            .field("ranges", &self.ranges())
             .field("contiguous", &self.is_contiguous_mapping())
             .finish()
     }
@@ -178,6 +176,12 @@ impl<R: RegionAccess> ElfSegments<R> {
         })
     }
 
+    /// Returns the mapped module-relative ranges owned by this image.
+    #[inline]
+    pub fn ranges(&self) -> &[MappedRange] {
+        &self.ranges
+    }
+
     /// Returns whether the mapped memory is one contiguous span with no gaps.
     #[inline]
     pub fn is_contiguous_mapping(&self) -> bool {
@@ -196,45 +200,6 @@ impl<R: RegionAccess> ElfSegments<R> {
         }
         let region_offset = self.region_offset(addr);
         self.region.read_view(region_offset, byte_len)
-    }
-
-    #[inline]
-    pub(crate) fn borrowed_ptr<T: ByteRepr + 'static>(
-        &self,
-        offset: VmOffset,
-        byte_len: usize,
-    ) -> Option<NonNull<T>> {
-        self.read_view::<T>(offset, byte_len)
-            .and_then(|view| view.as_slice().first().map(NonNull::from))
-    }
-
-    /// Translates an image VM address into a host-accessible pointer.
-    ///
-    /// Returns `None` when the address is outside this image or the backing
-    /// mapping cannot be borrowed directly by the current process.
-    #[inline]
-    pub fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        debug_assert!(self.contains_range(addr, 1));
-        unsafe { self.region.host_ptr(self.region_offset(addr)) }
-    }
-
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>> {
-        debug_assert!(self.contains_range(addr, len));
-        unsafe { self.region.host_ptr(self.region_offset(addr)) }
-    }
-
-    #[inline]
-    pub(crate) fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
-        debug_assert!(self.contains_range(addr, dst.len()));
-        unsafe { self.region.read_bytes(self.region_offset(addr), dst) }
-    }
-
-    #[inline]
-    pub(crate) fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
-        debug_assert!(self.contains_range(addr, src.len()));
-        unsafe { self.region.write_bytes(self.region_offset(addr), src) }
     }
 
     #[inline]
@@ -264,21 +229,24 @@ impl<R: RegionAccess> ImageMemory for ElfSegments<R> {
 
     #[inline]
     fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        self.host_ptr(addr)
+        self.host_ptr_range(addr, 1)
     }
 
     #[inline]
     fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>> {
-        self.host_ptr_range(addr, len)
+        debug_assert!(self.contains_range(addr, len));
+        unsafe { self.region.host_ptr(self.region_offset(addr)) }
     }
 
     #[inline]
     fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
-        self.read_bytes(addr, dst)
+        debug_assert!(self.contains_range(addr, dst.len()));
+        unsafe { self.region.read_bytes(self.region_offset(addr), dst) }
     }
 
     #[inline]
     fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
-        self.write_bytes(addr, src)
+        debug_assert!(self.contains_range(addr, src.len()));
+        unsafe { self.region.write_bytes(self.region_offset(addr), src) }
     }
 }

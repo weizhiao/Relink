@@ -4,7 +4,7 @@ use crate::{
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, PreCompute, SymbolInfo, SymbolTable},
     image::{DynamicInfo, Module, SymbolExports, exports_handle},
     input::{Path, PathBuf},
-    memory::{HostRegion, MappedView, RegionAccess, VmAddr, VmOffset},
+    memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr, VmOffset},
     observer::Finalizer,
     relocation::RelocationArch,
     segment::ElfSegments,
@@ -140,6 +140,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
         self.inner.name()
     }
 
+    /// Gets the base address of the ELF object
+    #[inline]
+    pub fn base(&self) -> VmAddr {
+        self.inner.segments.base()
+    }
+
     /// Returns the DT_SONAME value when this core has dynamic metadata.
     #[inline]
     pub(crate) fn soname(&self) -> Option<&str> {
@@ -149,22 +155,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
             .and_then(|info| info.soname)
     }
 
-    /// Gets the base address of the ELF object
+    /// Returns the mapped segments owned by this image.
     #[inline]
-    pub fn base(&self) -> VmAddr {
-        self.inner.segments.base()
-    }
-
-    /// Returns whether `addr` is inside one of this image's mapped slices.
-    #[inline]
-    pub fn contains_addr(&self, addr: VmAddr) -> bool {
-        self.inner.segments.contains_addr(addr)
-    }
-
-    /// Returns whether the backing memory is one contiguous span with no gaps.
-    #[inline]
-    pub fn is_contiguous_mapping(&self) -> bool {
-        self.inner.segments.is_contiguous_mapping()
+    pub fn segments(&self) -> &ElfSegments<R> {
+        &self.inner.segments
     }
 
     #[inline]
@@ -188,22 +182,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
             .dynamic_info
             .as_ref()
             .and_then(|info| info.eh_frame_hdr)
-    }
-
-    /// Gets the segments
-    #[inline]
-    pub(crate) fn segments(&self) -> &ElfSegments<R> {
-        &self.inner.segments
-    }
-
-    #[inline]
-    pub(crate) fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()> {
-        self.segments().read_bytes(self.base() + offset, dst)
-    }
-
-    #[inline]
-    pub(crate) fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        self.segments().host_ptr(addr)
     }
 
     /// Gets the TLS module ID of the ELF object
@@ -333,12 +311,12 @@ where
 
     #[inline]
     fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()> {
-        ElfCore::read_bytes(self, offset, dst)
+        self.segments().read_bytes(self.base() + offset, dst)
     }
 
     #[inline]
     fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        ElfCore::host_ptr(self, addr)
+        self.segments().host_ptr(addr)
     }
 
     #[inline]

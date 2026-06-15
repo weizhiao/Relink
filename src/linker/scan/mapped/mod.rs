@@ -6,7 +6,7 @@ use crate::{
     entity::SecondaryMap,
     image::{RawDynamic, ScannedDynamic},
     input::PathBuf,
-    memory::{HostRegion, RegionAccess, VmAddr, VmOffset},
+    memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
     os::Mmap,
     relocation::{RelocationArch, RelocationValueProvider},
     segment::ElfSegments,
@@ -272,7 +272,10 @@ where
                 eh_frame_hdr = Some(
                     runtime
                         .segments
-                        .borrowed_ptr::<u8>(VmOffset::new(offset.get()), phdr.p_filesz())
+                        .host_ptr_range(
+                            runtime.segments.base() + VmOffset::new(offset.get()),
+                            phdr.p_filesz(),
+                        )
                         .ok_or_else(|| {
                             LinkerError::runtime_memory(
                                 "PT_GNU_EH_FRAME is not directly readable from mapped segments",

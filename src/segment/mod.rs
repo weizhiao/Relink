@@ -10,7 +10,7 @@ mod space;
 
 pub(crate) mod program;
 
-pub use space::ElfSegments;
+pub use space::{ElfSegments, MappedRange};
 
 pub(crate) use defs::{ElfSegment, FileMapInfo, MemoryProtection};
 pub(crate) use mapping::SegmentBuilder;

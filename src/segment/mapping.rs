@@ -1,5 +1,5 @@
 use crate::input::ElfReader;
-use crate::memory::{VmAddr, VmOffset};
+use crate::memory::{ImageMemory, VmAddr, VmOffset};
 use crate::os::{MapFlags, Mmap, ProtFlags};
 use crate::{Result, logging};
 

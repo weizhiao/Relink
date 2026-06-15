@@ -399,9 +399,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         self.module.base()
     }
 
-    /// Returns whether `addr` is inside one of this image's mapped slices.
-    pub fn contains_addr(&self, addr: VmAddr) -> bool {
-        self.module.contains_addr(addr)
+    /// Returns the mapped segments owned by this image.
+    pub fn segments(&self) -> &ElfSegments<R> {
+        self.module.segments()
     }
 
     /// Gets the list of needed library names from the dynamic section
