@@ -161,18 +161,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
         &self.inner.segments
     }
 
+    /// Returns the runtime symbol exports used by this image.
     #[inline]
-    pub(crate) fn exports(&self) -> &dyn SymbolExports<Arch> {
+    pub fn exports(&self) -> &dyn SymbolExports<Arch> {
         &*self.inner.exports
-    }
-
-    #[inline]
-    pub(crate) fn lookup_export<'core>(
-        &'core self,
-        symbol: &SymbolInfo<'_>,
-        precompute: &mut PreCompute,
-    ) -> Option<&'core ElfSymbol<Arch::Layout>> {
-        self.exports().lookup(symbol, precompute)
     }
 
     /// Gets the EH frame header pointer
@@ -301,7 +293,7 @@ where
         symbol: &SymbolInfo<'_>,
         precompute: &mut PreCompute,
     ) -> Option<&'source ElfSymbol<Arch::Layout>> {
-        self.lookup_export(symbol, precompute)
+        self.exports().lookup(symbol, precompute)
     }
 
     #[inline]

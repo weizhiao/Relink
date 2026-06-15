@@ -289,7 +289,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         let syminfo = SymbolInfo::from_str(name, None);
         let mut precompute = syminfo.precompute();
         self.core
-            .lookup_export(&syminfo, &mut precompute)
+            .exports()
+            .lookup(&syminfo, &mut precompute)
             .map(|sym| {
                 Symbol::from_ptr(
                     SymDef::<D, Arch>::new(Some(sym), self)
@@ -332,7 +333,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         let syminfo = SymbolInfo::from_str(name, Some(version));
         let mut precompute = syminfo.precompute();
         self.core
-            .lookup_export(&syminfo, &mut precompute)
+            .exports()
+            .lookup(&syminfo, &mut precompute)
             .map(|sym| {
                 Symbol::from_ptr(
                     SymDef::<D, Arch>::new(Some(sym), self)
@@ -569,7 +571,7 @@ where
         symbol: &SymbolInfo<'_>,
         precompute: &mut PreCompute,
     ) -> Option<&'source ElfSymbol<Arch::Layout>> {
-        self.core.lookup_export(symbol, precompute)
+        self.core.exports().lookup(symbol, precompute)
     }
 
     #[inline]
