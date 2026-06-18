@@ -6,7 +6,7 @@ use crate::{
     memory::{HostRegion, RegionAccess},
     relocation::{BindingMode, RelocationArch},
 };
-use alloc::boxed::Box;
+use alloc::{borrow::ToOwned, boxed::Box};
 
 /// Common metadata needed while resolving one dependency edge.
 pub trait DependencyOwner {
@@ -101,14 +101,14 @@ impl<Arch: RelocationArch> DependencyOwner for ScannedDynamic<Arch> {
 }
 
 /// A root module resolution request.
-pub struct RootRequest<'a, K: Clone> {
+pub struct RootRequest<'a, K: Clone, Q: ?Sized = K> {
     key: &'a K,
-    visible_key: &'a dyn Fn(&K) -> Option<K>,
+    visible_key: &'a dyn Fn(&Q) -> Option<K>,
 }
 
-impl<'a, K: Clone> RootRequest<'a, K> {
+impl<'a, K: Clone, Q: ?Sized> RootRequest<'a, K, Q> {
     #[inline]
-    pub(crate) fn new(key: &'a K, visible_key: &'a dyn Fn(&K) -> Option<K>) -> Self {
+    pub(crate) fn new(key: &'a K, visible_key: &'a dyn Fn(&Q) -> Option<K>) -> Self {
         Self { key, visible_key }
     }
 
@@ -120,26 +120,26 @@ impl<'a, K: Clone> RootRequest<'a, K> {
 
     /// Returns the actual key to reuse when `key` names a visible module.
     #[inline]
-    pub fn visible_key(&self, key: &K) -> Option<K> {
+    pub fn visible_key(&self, key: &Q) -> Option<K> {
         (self.visible_key)(key)
     }
 }
 
 /// A single dependency-resolution request.
-pub struct DependencyRequest<'a, K: Clone> {
+pub struct DependencyRequest<'a, K: Clone, Q: ?Sized = K> {
     owner_key: &'a K,
     owner: &'a dyn DependencyOwner,
     needed_index: usize,
-    visible_key: &'a dyn Fn(&K) -> Option<K>,
+    visible_key: &'a dyn Fn(&Q) -> Option<K>,
 }
 
-impl<'a, K: Clone> DependencyRequest<'a, K> {
+impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
     #[inline]
     pub(crate) fn new(
         owner_key: &'a K,
         owner: &'a dyn DependencyOwner,
         needed_index: usize,
-        visible_key: &'a dyn Fn(&K) -> Option<K>,
+        visible_key: &'a dyn Fn(&Q) -> Option<K>,
     ) -> Self {
         Self {
             owner_key,
@@ -207,7 +207,7 @@ impl<'a, K: Clone> DependencyRequest<'a, K> {
 
     /// Returns the actual key to reuse when `key` names a visible module.
     #[inline]
-    pub fn visible_key(&self, key: &K) -> Option<K> {
+    pub fn visible_key(&self, key: &Q) -> Option<K> {
         (self.visible_key)(key)
     }
 
@@ -224,45 +224,52 @@ impl<'a, K: Clone> DependencyRequest<'a, K> {
 
 /// Read-only modules that should be visible to a link operation without being
 /// committed into its local [`LinkContext`](super::LinkContext).
-pub trait VisibleModules<K: Clone, Arch: RelocationArch = crate::arch::NativeArch> {
+pub trait VisibleModules<K: Clone, Arch: RelocationArch = crate::arch::NativeArch, Q: ?Sized = K> {
     /// Returns the actual visible key represented by `key`, if any.
     ///
     /// Implementations may use this to canonicalize aliases before the linker
     /// records a dependency edge.
-    fn visible_key(&self, key: &K) -> Option<K> {
-        self.module(key).is_some().then(|| key.clone())
+    fn visible_key(&self, key: &Q) -> Option<K>
+    where
+        Q: ToOwned<Owned = K>,
+    {
+        self.module(key).is_some().then(|| key.to_owned())
     }
 
     /// Returns direct dependency keys for a visible module.
-    fn direct_deps(&self, _key: &K) -> Option<Box<[K]>> {
+    fn direct_deps(&self, _key: &Q) -> Option<Box<[K]>> {
         None
     }
 
     /// Returns a retained visible module by key.
-    fn module(&self, _key: &K) -> Option<ModuleHandle<Arch>> {
+    fn module(&self, _key: &Q) -> Option<ModuleHandle<Arch>> {
         None
     }
 }
 
-impl<K: Clone, Arch: RelocationArch> VisibleModules<K, Arch> for () {}
+impl<K: Clone, Arch: RelocationArch, Q: ?Sized> VisibleModules<K, Arch, Q> for () {}
 
-impl<K: Clone, Arch, V> VisibleModules<K, Arch> for &V
+impl<K: Clone, Arch, Q, V> VisibleModules<K, Arch, Q> for &V
 where
     Arch: RelocationArch,
-    V: VisibleModules<K, Arch> + ?Sized,
+    Q: ?Sized,
+    V: VisibleModules<K, Arch, Q> + ?Sized,
 {
     #[inline]
-    fn visible_key(&self, key: &K) -> Option<K> {
+    fn visible_key(&self, key: &Q) -> Option<K>
+    where
+        Q: ToOwned<Owned = K>,
+    {
         (**self).visible_key(key)
     }
 
     #[inline]
-    fn direct_deps(&self, key: &K) -> Option<Box<[K]>> {
+    fn direct_deps(&self, key: &Q) -> Option<Box<[K]>> {
         (**self).direct_deps(key)
     }
 
     #[inline]
-    fn module(&self, key: &K) -> Option<ModuleHandle<Arch>> {
+    fn module(&self, key: &Q) -> Option<ModuleHandle<Arch>> {
         (**self).module(key)
     }
 }

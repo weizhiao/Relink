@@ -63,13 +63,13 @@ impl<'cfg, K, Arch: RelocationArch> ResolvedKey<'cfg, K, Arch> {
 }
 
 /// Runtime key-resolution policy used by [`super::super::Linker`].
-pub trait KeyResolver<'cfg, K: Clone, Arch: RelocationArch = NativeArch> {
+pub trait KeyResolver<'cfg, K: Clone, Arch: RelocationArch = NativeArch, Q: ?Sized = K> {
     /// Resolves the root key passed to a linker load operation.
-    fn load_root(&mut self, req: &RootRequest<'_, K>) -> Result<ResolvedKey<'cfg, K, Arch>>;
+    fn load_root(&mut self, req: &RootRequest<'_, K, Q>) -> Result<ResolvedKey<'cfg, K, Arch>>;
 
     /// Resolves one `DT_NEEDED` dependency for an already scanned owner.
     fn resolve_dependency(
         &mut self,
-        req: &DependencyRequest<'_, K>,
+        req: &DependencyRequest<'_, K, Q>,
     ) -> Result<ResolvedKey<'cfg, K, Arch>>;
 }

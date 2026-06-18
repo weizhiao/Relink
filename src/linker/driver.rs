@@ -22,11 +22,12 @@ use crate::{
     tls::TlsResolver,
 };
 use alloc::{
+    borrow::ToOwned,
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
-use core::{fmt, mem, ops::Deref};
+use core::{borrow::Borrow, fmt, mem, ops::Deref};
 
 type PendingDynamicGraph<D, Arch, R> =
     BTreeMap<KeyId, GraphEntry<ModulePayload<RawDynamic<D, Arch, R>, Arch>>>;
@@ -362,24 +363,25 @@ where
     RelocObs: RelocationObserver<Arch> + Clone,
     P: RelocationPlanner<K, D, Arch, M::Region>,
     O: LinkObserver<Arch>,
-    V: VisibleModules<K, Arch>,
 {
     /// Loads one module into this linker's relocation domain.
-    pub fn load<'cfg, Meta>(
+    pub fn load<'cfg, Meta, Q>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         key: K,
     ) -> Result<LoadResult<D, Arch, M::Region>>
     where
-        K: 'cfg,
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
-        Resolver: KeyResolver<'cfg, K, Arch>,
+        Resolver: KeyResolver<'cfg, K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q>,
     {
-        if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
+        if let Some(loaded) = visible_loaded(context, &self.visible_modules, key.borrow()) {
             return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
         }
 
-        let prepared = self.prepare_runtime_load(
+        let prepared = self.prepare_runtime_load::<Meta, Q, _>(
             context,
             |context, visible_modules, session, loader, resolver, observer| {
                 let mut resolve_context = LoadResolveContext::new(
@@ -391,65 +393,73 @@ where
                 resolve_context.stage_resolved(resolved, loader, observer)
             },
         )?;
-        self.execute_prepared_load(context, prepared)
+        self.execute_prepared_load::<Meta, Q>(context, prepared)
     }
 
     /// Loads a pre-mapped root dynamic image and resolves its dependencies.
-    pub fn load_mapped_root<'cfg, Meta>(
+    pub fn load_mapped_root<'cfg, Meta, Q>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         key: K,
         raw: RawDynamic<D, Arch, M::Region>,
     ) -> Result<LoadResult<D, Arch, M::Region>>
     where
-        K: 'cfg,
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
-        Resolver: KeyResolver<'cfg, K, Arch>,
+        Resolver: KeyResolver<'cfg, K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q>,
     {
-        if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
+        if let Some(loaded) = visible_loaded(context, &self.visible_modules, key.borrow()) {
             return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
         }
 
-        let prepared =
-            self.prepare_runtime_load(context, move |context, _, session, _, _, observer| {
+        let prepared = self.prepare_runtime_load::<Meta, Q, _>(
+            context,
+            move |context, _, session, _, _, observer| {
                 observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
                 let id = context.committed.intern_key(key.clone());
                 session.resolve.insert_entry(id, raw);
                 Ok(id)
-            })?;
-        self.execute_prepared_load(context, prepared)
+            },
+        )?;
+        self.execute_prepared_load::<Meta, Q>(context, prepared)
     }
 
     /// Discovers, plans, and loads one module through the scan-first path.
-    pub fn load_scan_first<Meta>(
+    pub fn load_scan_first<Meta, Q>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         key: K,
     ) -> Result<LoadResult<D, Arch, M::Region>>
     where
-        K: 'static,
+        K: 'static + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
-        Resolver: KeyResolver<'static, K, Arch>,
+        Resolver: KeyResolver<'static, K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q>,
     {
-        if let Some(loaded) = visible_loaded(context, &self.visible_modules, &key) {
+        if let Some(loaded) = visible_loaded(context, &self.visible_modules, key.borrow()) {
             return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
         }
 
-        let prepared = match self.prepare_scan_load(context, &key)? {
+        let prepared = match self.prepare_scan_load::<Meta, Q>(context, &key)? {
             ScanDiscovery::Existing(root) => PreparedLoad::runtime(root, LoadSession::new()),
             ScanDiscovery::Plan(plan) => self.prepare_planned_load(context, plan)?,
         };
-        self.execute_prepared_load(context, prepared)
+        self.execute_prepared_load::<Meta, Q>(context, prepared)
     }
 
-    fn prepare_scan_load<Meta>(
+    fn prepare_scan_load<Meta, Q>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         key: &K,
     ) -> Result<ScanDiscovery<K, Arch>>
     where
-        K: 'static,
-        Resolver: KeyResolver<'static, K, Arch>,
+        K: 'static + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Resolver: KeyResolver<'static, K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q>,
     {
         let mut session = ResolveSession::new();
 
@@ -460,7 +470,7 @@ where
         if !resolve_context.contains_pending(root) {
             return Ok(ScanDiscovery::Existing(root));
         }
-        resolve_context.resolve_dependency_graph(
+        resolve_context.resolve_dependency_graph::<_, _, _, _, Q>(
             root,
             &mut self.loader,
             &mut self.resolver,
@@ -642,14 +652,16 @@ where
         Ok(raw)
     }
 
-    fn prepare_runtime_load<'cfg, Meta, Seed>(
+    fn prepare_runtime_load<'cfg, Meta, Q, Seed>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         seed_root: Seed,
     ) -> Result<PreparedLoad<D, Arch, M::Region>>
     where
-        K: 'cfg,
-        Resolver: KeyResolver<'cfg, K, Arch>,
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Resolver: KeyResolver<'cfg, K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q>,
         Seed: FnOnce(
             &mut LinkContext<K, D, Meta, Arch>,
             &V,
@@ -674,7 +686,7 @@ where
             &mut session.resolve,
         );
         if resolve_context.contains_pending(root) {
-            resolve_context.resolve_dependency_graph(
+            resolve_context.resolve_dependency_graph::<_, _, _, _, Q>(
                 root,
                 &mut self.loader,
                 &mut self.resolver,
@@ -685,13 +697,16 @@ where
         Ok(PreparedLoad::runtime(root, session))
     }
 
-    fn execute_prepared_load<Meta>(
+    fn execute_prepared_load<Meta, Q>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch>,
         prepared: PreparedLoad<D, Arch, M::Region>,
     ) -> Result<LoadResult<D, Arch, M::Region>>
     where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
+        V: VisibleModules<K, Arch, Q>,
     {
         let PreparedLoad {
             root,
@@ -700,7 +715,7 @@ where
         } = prepared;
 
         if !session.resolve.entries.is_empty() {
-            self.relocate_pending_modules(root, context, &mut session)?;
+            self.relocate_pending_modules::<Meta, Q>(root, context, &mut session)?;
         }
 
         if let Some(mapped_runtime) = mapped_runtime.as_ref() {
@@ -720,15 +735,20 @@ where
         Ok(LoadResult::new(root, committed))
     }
 
-    fn relocate_pending_modules<Meta>(
+    fn relocate_pending_modules<Meta, Q>(
         &mut self,
         root: KeyId,
         context: &LinkContext<K, D, Meta, Arch>,
         session: &mut LoadSession<D, Arch, M::Region>,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        K: Borrow<Q>,
+        Q: ?Sized,
+        V: VisibleModules<K, Arch, Q>,
+    {
         let mut order = mem::take(&mut self.scratch_relocation_order);
         Self::build_relocation_order(root, &session.resolve.entries, &mut order);
-        let scope = Self::build_group_scope(context, session, &self.visible_modules);
+        let scope = Self::build_group_scope::<Meta, Q>(context, session, &self.visible_modules);
 
         let result = (|| {
             for id in order.drain(..) {
@@ -808,13 +828,15 @@ where
         }
     }
 
-    fn build_group_scope<Meta>(
+    fn build_group_scope<Meta, Q>(
         context: &LinkContext<K, D, Meta, Arch>,
         session: &LoadSession<D, Arch, M::Region>,
         visible_modules: &V,
     ) -> ModuleScope<Arch>
     where
-        K: Ord,
+        K: Borrow<Q>,
+        Q: ?Sized,
+        V: VisibleModules<K, Arch, Q>,
     {
         let modules = session
             .resolve
@@ -935,17 +957,18 @@ where
 }
 
 #[inline]
-fn visible_loaded<K, D, Meta, V, Arch, R>(
+fn visible_loaded<K, D, Meta, V, Arch, R, Q>(
     context: &LinkContext<K, D, Meta, Arch>,
     visible_modules: &V,
-    key: &K,
+    key: &Q,
 ) -> Option<LoadedCore<D, Arch, R>>
 where
-    K: Clone + Ord,
+    K: Clone + Ord + Borrow<Q>,
+    Q: ToOwned<Owned = K> + Ord + ?Sized,
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    V: VisibleModules<K, Arch>,
+    V: VisibleModules<K, Arch, Q>,
 {
     context
         .visible_module_by_key(visible_modules, key)

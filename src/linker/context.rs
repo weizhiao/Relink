@@ -6,6 +6,7 @@ use crate::{
     LinkerError, Result, arch::NativeArch, image::ModuleHandle, relocation::RelocationArch,
 };
 use alloc::{
+    borrow::ToOwned,
     boxed::Box,
     collections::{BTreeSet, VecDeque},
     vec::Vec,
@@ -108,30 +109,34 @@ where
     /// Returns a module by this context's key id, falling back to an external
     /// visible module set when the id only resolves to an interned key.
     #[inline]
-    pub(crate) fn visible_module<V>(
+    pub(crate) fn visible_module<V, Q>(
         &self,
         visible_modules: &V,
         id: KeyId,
     ) -> Option<ModuleHandle<Arch>>
     where
-        V: VisibleModules<K, Arch>,
+        K: Borrow<Q>,
+        Q: ?Sized,
+        V: VisibleModules<K, Arch, Q>,
     {
         self.committed.get_by_key(id).cloned().or_else(|| {
             let key = self.committed.key(id)?;
-            visible_modules.module(key)
+            visible_modules.module(key.borrow())
         })
     }
 
     /// Returns a module by key, accepting aliases from an external visible
     /// module set before falling back to the canonical visible module.
     #[inline]
-    pub(crate) fn visible_module_by_key<V>(
+    pub(crate) fn visible_module_by_key<V, Q>(
         &self,
         visible_modules: &V,
-        key: &K,
+        key: &Q,
     ) -> Option<ModuleHandle<Arch>>
     where
-        V: VisibleModules<K, Arch>,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q>,
     {
         self.committed
             .key_id(key)
@@ -139,9 +144,9 @@ where
             .or_else(|| {
                 let key = visible_modules.visible_key(key)?;
                 self.committed
-                    .key_id(&key)
+                    .key_id::<K>(&key)
                     .and_then(|id| self.visible_module(visible_modules, id))
-                    .or_else(|| visible_modules.module(&key))
+                    .or_else(|| visible_modules.module(key.borrow()))
             })
     }
 
@@ -206,7 +211,11 @@ where
     }
 
     /// Adds an alternate key for an already committed module.
-    pub fn add_alias(&mut self, canonical: &K, alias: K) -> Result<ModuleId> {
+    pub fn add_alias<Q>(&mut self, canonical: &Q, alias: K) -> Result<ModuleId>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         let Some(canonical_key_id) = self.committed.key_id(canonical) else {
             return Err(LinkerError::context("canonical linked module key is unknown").into());
         };
@@ -216,7 +225,7 @@ where
 
         if self
             .committed
-            .key_id(&alias)
+            .key_id::<K>(&alias)
             .and_then(|id| self.committed.module_id(id))
             .is_some_and(|id| id != module_id)
         {
@@ -337,7 +346,7 @@ where
 mod tests {
     use super::LinkContext;
     use crate::{arch::NativeArch, image::SyntheticModule};
-    use alloc::boxed::Box;
+    use alloc::{boxed::Box, string::String};
 
     #[test]
     fn snapshot_clones_committed_state_without_rebuilding() {
@@ -363,33 +372,34 @@ mod tests {
 
     #[test]
     fn alias_resolves_preinterned_dependency_edges_without_rewriting() {
-        let mut context = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let mut context = LinkContext::<String, (), usize, NativeArch>::new();
         let root = context
             .insert_with_meta(
-                "root",
+                String::from("root"),
                 SyntheticModule::empty("root"),
-                Box::new(["alias"]),
+                Box::new([String::from("alias")]),
                 1,
             )
             .expect("failed to insert root module");
         let alias_id = context
-            .key_id(&"alias")
+            .key_id("alias")
             .expect("dependency key should be interned before aliasing");
 
         let canonical = context
             .insert_with_meta(
-                "canonical",
+                String::from("canonical"),
                 SyntheticModule::empty("canonical"),
                 Box::new([]),
                 2,
             )
             .expect("failed to insert canonical module");
-        context
-            .add_alias(&"canonical", "alias")
+        let resolved = context
+            .add_alias("canonical", String::from("alias"))
             .expect("failed to add alias");
 
+        assert_eq!(resolved, canonical);
         assert!(context.module_id(alias_id).is_some());
-        assert_eq!(context.key_id(&"alias"), Some(alias_id));
+        assert_eq!(context.key_id("alias"), Some(alias_id));
         assert_eq!(context.module_id(alias_id), Some(canonical));
         assert_eq!(context.direct_deps(root), Some(&[alias_id][..]));
         assert_eq!(

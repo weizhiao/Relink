@@ -15,7 +15,8 @@ use crate::{
     relocation::RelocationArch,
     tls::TlsResolver,
 };
-use alloc::vec::Vec;
+use alloc::{borrow::ToOwned, vec::Vec};
+use core::borrow::Borrow;
 
 pub(crate) struct ResolveContext<
     'a,
@@ -65,7 +66,6 @@ where
 impl<K, D: 'static, Meta, V, Arch, P> ResolveContext<'_, K, D, Meta, V, Arch, P>
 where
     K: Clone + Ord,
-    V: VisibleModules<K, Arch>,
     Arch: RelocationArch,
     P: DependencyOwner,
 {
@@ -79,20 +79,28 @@ where
     /// This is only a lookup. Callers that need to store a dependency edge must
     /// intern the returned key themselves.
     #[inline]
-    fn reusable_key(&self, key: &K) -> Option<K> {
-        if self
-            .committed
-            .key_id(key)
-            .is_some_and(|id| self.session.contains(id) || self.committed.contains(id))
-        {
-            return Some(key.clone());
+    fn reusable_key<Q>(&self, key: &Q) -> Option<K>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q>,
+    {
+        if let Some(id) = self.committed.key_id(key) {
+            if self.session.contains(id) || self.committed.contains(id) {
+                return self.committed.key(id).cloned();
+            }
         }
 
         self.visible_modules.visible_key(key)
     }
 
     #[inline]
-    fn contains_reusable_key(&self, key: &K) -> bool {
+    fn contains_reusable_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q>,
+    {
         self.reusable_key(key).is_some()
     }
 
@@ -104,7 +112,12 @@ where
         self.committed.key(id)
     }
 
-    fn known_direct_deps(&mut self, id: KeyId) -> Option<Vec<KeyId>> {
+    fn known_direct_deps<Q>(&mut self, id: KeyId) -> Option<Vec<KeyId>>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q>,
+    {
         if let Some(entry) = self.session.entries.get(&id) {
             return entry.direct_deps().map(<[KeyId]>::to_vec);
         }
@@ -113,13 +126,17 @@ where
             return Some(direct_deps.to_vec());
         }
 
-        let key = self.committed.key(id)?.clone();
-        self.visible_modules.direct_deps(&key).map(|deps| {
-            deps.into_vec()
+        let direct_deps = {
+            let key = self.committed.key(id)?;
+            self.visible_modules.direct_deps(key.borrow())?
+        };
+        Some(
+            direct_deps
+                .into_vec()
                 .into_iter()
                 .map(|key| self.intern_key(key))
-                .collect()
-        })
+                .collect(),
+        )
     }
 
     fn owner(&self, id: KeyId) -> Option<&dyn DependencyOwner> {
@@ -138,19 +155,21 @@ where
         entry.set_direct_deps(direct_deps);
     }
 
-    fn resolve_dependency_edge<'cfg, O>(
+    fn resolve_dependency_edge<'cfg, O, Q>(
         &self,
         id: KeyId,
         needed_index: usize,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q>,
         observer: &mut O,
     ) -> Result<ResolvedKey<'cfg, K, Arch>>
     where
-        K: 'cfg,
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q>,
         O: LinkObserver<Arch>,
     {
-        let visible_key = |key: &K| self.reusable_key(key);
-        let req: DependencyRequest<'_, K> = {
+        let visible_key = |key: &Q| self.reusable_key(key);
+        let req: DependencyRequest<'_, K, Q> = {
             let owner = self.owner(id).ok_or_else(|| {
                 LinkerError::resolver("dependency owner is missing while building request")
             })?;
@@ -173,32 +192,36 @@ where
         resolver.resolve_dependency(&req)
     }
 
-    pub(crate) fn resolve_root<'cfg, O>(
+    pub(crate) fn resolve_root<'cfg, O, Q>(
         &self,
         key: &K,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q>,
         observer: &mut O,
     ) -> Result<ResolvedKey<'cfg, K, Arch>>
     where
-        K: 'cfg,
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q>,
         O: LinkObserver<Arch>,
     {
-        let visible_key = |key: &K| self.reusable_key(key);
+        let visible_key = |key: &Q| self.reusable_key(key);
         let req = RootRequest::new(key, &visible_key);
         observer.on_resolve_root(ResolveRootEvent::new(key))?;
         resolver.load_root(&req)
     }
 
-    fn direct_deps_for<'cfg, Obs, Tls, O, F, M>(
+    fn direct_deps_for<'cfg, Obs, Tls, O, F, M, Q>(
         &mut self,
         id: KeyId,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q>,
         observer: &mut O,
         stage: &mut F,
     ) -> Result<Vec<KeyId>>
     where
-        K: 'cfg,
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q>,
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
         M: Mmap,
@@ -232,16 +255,18 @@ where
         Ok(direct_deps)
     }
 
-    fn resolve_dependency_graph_with<'cfg, Obs, Tls, O, F, M>(
+    fn resolve_dependency_graph_with<'cfg, Obs, Tls, O, F, M, Q>(
         &mut self,
         root: KeyId,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q>,
         observer: &mut O,
         mut stage: F,
     ) -> Result<()>
     where
-        K: 'cfg,
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q>,
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
         M: Mmap,
@@ -266,18 +291,19 @@ impl<K, D: 'static, Meta, V, Arch, R>
     ResolveContext<'_, K, D, Meta, V, Arch, RawDynamic<D, Arch, R>>
 where
     K: Clone + Ord,
-    V: VisibleModules<K, Arch>,
     Arch: RelocationArch,
     R: RegionAccess,
 {
-    pub(crate) fn stage_resolved<'cfg, Obs, Tls, O, M>(
+    pub(crate) fn stage_resolved<'cfg, Obs, Tls, O, M, Q>(
         &mut self,
         resolved: ResolvedKey<'cfg, K, Arch>,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
         observer: &mut O,
     ) -> Result<KeyId>
     where
-        K: 'cfg,
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q>,
         D: Default,
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
@@ -286,7 +312,7 @@ where
     {
         match resolved {
             ResolvedKey::Existing(key) => {
-                if let Some(key) = self.reusable_key(&key) {
+                if let Some(key) = self.reusable_key(key.borrow()) {
                     return Ok(self.intern_key(key));
                 }
                 Err(LinkerError::resolver(
@@ -295,7 +321,7 @@ where
                 .into())
             }
             ResolvedKey::Load { key, reader } => {
-                if self.contains_reusable_key(&key) {
+                if self.contains_reusable_key(key.borrow()) {
                     return Err(LinkerError::resolver(
                         "resolved reader produced an already-known key; use Existing to reuse it",
                     )
@@ -308,7 +334,7 @@ where
                 Ok(id)
             }
             ResolvedKey::Synthetic { key, module, deps } => {
-                if self.contains_reusable_key(&key) {
+                if self.contains_reusable_key(key.borrow()) {
                     return Err(LinkerError::resolver(
                         "resolved synthetic module produced an already-known key",
                     )
@@ -331,15 +357,17 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<'cfg, Obs, Tls, O, M>(
+    pub(crate) fn resolve_dependency_graph<'cfg, Obs, Tls, O, M, Q>(
         &mut self,
         root: KeyId,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q>,
         observer: &mut O,
     ) -> Result<()>
     where
-        K: 'cfg,
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q>,
         D: Default,
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
@@ -359,16 +387,17 @@ where
 impl<K, D: 'static, Meta, V, Arch> ResolveContext<'_, K, D, Meta, V, Arch, ScannedDynamic<Arch>>
 where
     K: Clone + Ord,
-    V: VisibleModules<K, Arch>,
     Arch: RelocationArch,
 {
-    pub(crate) fn stage_resolved<Obs, Tls, M>(
+    pub(crate) fn stage_resolved<Obs, Tls, M, Q>(
         &mut self,
         resolved: ResolvedKey<'static, K, Arch>,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
     ) -> Result<KeyId>
     where
-        K: 'static,
+        K: 'static + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q>,
         D: Default,
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
@@ -376,13 +405,13 @@ where
     {
         match resolved {
             ResolvedKey::Existing(key) => {
-                if let Some(key) = self.reusable_key(&key) {
+                if let Some(key) = self.reusable_key(key.borrow()) {
                     return Ok(self.intern_key(key));
                 }
                 Err(LinkerError::resolver("scan resolver referenced an unknown visible key").into())
             }
             ResolvedKey::Load { key, reader } => {
-                if self.contains_reusable_key(&key) {
+                if self.contains_reusable_key(key.borrow()) {
                     return Err(LinkerError::resolver(
                         "scan resolver attached metadata to an already-known key; use Existing to reuse it",
                     )
@@ -396,7 +425,7 @@ where
                 Ok(id)
             }
             ResolvedKey::Synthetic { key, module, deps } => {
-                if self.contains_reusable_key(&key) {
+                if self.contains_reusable_key(key.borrow()) {
                     return Err(LinkerError::resolver(
                         "scan resolver produced an already-known synthetic key",
                     )
@@ -419,15 +448,17 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<Obs, Tls, O, M>(
+    pub(crate) fn resolve_dependency_graph<Obs, Tls, O, M, Q>(
         &mut self,
         root: KeyId,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
-        resolver: &mut impl KeyResolver<'static, K, Arch>,
+        resolver: &mut impl KeyResolver<'static, K, Arch, Q>,
         observer: &mut O,
     ) -> Result<()>
     where
-        K: 'static,
+        K: 'static + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q>,
         D: Default,
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,

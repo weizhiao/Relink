@@ -211,6 +211,10 @@ impl KeyResolver<'static, &'static str> for SyntheticDependencyResolver {
 }
 
 impl VisibleModules<&'static str> for StaticVisibleModule {
+    fn visible_key(&self, key: &&'static str) -> Option<&'static str> {
+        (*key == self.key).then_some(self.key)
+    }
+
     fn direct_deps(&self, key: &&'static str) -> Option<Box<[&'static str]>> {
         (*key == self.key).then(|| self.direct_deps.clone())
     }
