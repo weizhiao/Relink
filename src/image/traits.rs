@@ -98,9 +98,6 @@ impl ModuleTls {
 /// Implementations may be backed by a loaded ELF image, a synthetic/virtual DSO,
 /// or any other module that can expose ELF-like symbol definitions.
 pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
-    /// Returns this module as [`Any`] for runtime type checks.
-    fn as_any(&self) -> &dyn Any;
-
     /// Returns the module name used for diagnostics.
     fn name(&self) -> &str;
 
@@ -121,11 +118,6 @@ where
     M: Module<Arch> + ?Sized + 'static,
     Arch: RelocationArch,
 {
-    #[inline]
-    fn as_any(&self) -> &dyn Any {
-        (**self).as_any()
-    }
-
     #[inline]
     fn name(&self) -> &str {
         (**self).name()

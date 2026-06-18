@@ -11,10 +11,10 @@ use crate::{
     tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::vec::Vec;
-use core::{any::Any, ffi::c_void, fmt::Debug, marker::PhantomData, ptr::NonNull};
+use core::{ffi::c_void, fmt::Debug, ptr::NonNull};
 use elf::abi::DF_STATIC_TLS;
 
-/// A fully loaded and relocated ELF module with retained dependencies.
+/// A fully loaded and relocated ELF module with a retained relocation lookup scope.
 ///
 /// This is the common loaded representation used by relocated dylibs, dynamic
 /// [`crate::image::LoadedExec`] values, and loaded object-file images.
@@ -24,75 +24,7 @@ pub struct LoadedCore<
     R: RegionAccess = HostRegion,
 > {
     core: ElfCore<D, Arch, R>,
-    deps: ModuleScope<Arch>,
-}
-
-/// Iterator over the loaded-library dependencies retained by a [`LoadedCore`].
-pub struct LoadedDeps<
-    'a,
-    D: 'static,
-    Arch: RelocationArch = crate::arch::NativeArch,
-    R: RegionAccess = HostRegion,
-> {
-    modules: &'a [ModuleHandle<Arch>],
-    next: usize,
-    remaining: usize,
-    _marker: PhantomData<fn() -> (D, R)>,
-}
-
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedDeps<'a, D, Arch, R> {
-    #[inline]
-    fn new(modules: &'a [ModuleHandle<Arch>]) -> Self {
-        let remaining = modules
-            .iter()
-            .filter(|module| module.as_any().is::<LoadedCore<D, Arch, R>>())
-            .count();
-        Self {
-            modules,
-            next: 0,
-            remaining,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Returns the number of loaded dependencies remaining in this iterator.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.remaining
-    }
-
-    /// Returns whether this iterator has no loaded dependencies remaining.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.remaining == 0
-    }
-}
-
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> Iterator
-    for LoadedDeps<'a, D, Arch, R>
-{
-    type Item = &'a LoadedCore<D, Arch, R>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(module) = self.modules.get(self.next) {
-            self.next += 1;
-            if let Some(dep) = module.as_any().downcast_ref::<LoadedCore<D, Arch, R>>() {
-                self.remaining -= 1;
-                return Some(dep);
-            }
-        }
-        None
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.remaining, Some(self.remaining))
-    }
-}
-
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ExactSizeIterator
-    for LoadedDeps<'_, D, Arch, R>
-{
+    scope: ModuleScope<Arch>,
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedCore<D, Arch, R> {
@@ -101,10 +33,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedCore<D, 
             .field("name", &self.core.name())
             .field("base", &format_args!("{}", self.core.base()))
             .field(
-                "deps",
+                "scope",
                 &self
-                    .deps()
-                    .map(|d| d.name())
+                    .scope()
+                    .iter()
+                    .map(|module| module.name())
                     .collect::<alloc::vec::Vec<_>>(),
             )
             .finish()
@@ -112,11 +45,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedCore<D, 
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedCore<D, Arch, R> {
-    /// Clones the [`LoadedCore`], incrementing the reference count of its core and dependencies.
+    /// Clones the [`LoadedCore`], incrementing the reference count of its core and retained scope.
     fn clone(&self) -> Self {
         LoadedCore {
             core: self.core.clone(),
-            deps: self.deps.clone(),
+            scope: self.scope.clone(),
         }
     }
 }
@@ -153,11 +86,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     pub(crate) fn from_relocated_core(core: ElfCore<D, Arch, R>) -> Self {
         LoadedCore {
             core,
-            deps: ModuleScope::empty(),
+            scope: ModuleScope::empty(),
         }
     }
 
-    /// Wraps an [`ElfCore`] into a [`LoadedCore`] with no dependencies.
+    /// Wraps an [`ElfCore`] into a [`LoadedCore`] with an empty retained scope.
     ///
     /// # Safety
     ///
@@ -168,19 +101,20 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     }
 
     #[inline]
-    pub(crate) fn from_relocated_core_deps<S>(core: ElfCore<D, Arch, R>, deps: S) -> Self
+    pub(crate) fn from_relocated_core_scope<S>(core: ElfCore<D, Arch, R>, scope: S) -> Self
     where
         S: Into<ModuleScope<Arch>>,
     {
         LoadedCore {
             core,
-            deps: deps.into(),
+            scope: scope.into(),
         }
     }
 
-    /// Returns an iterator over the loaded libraries this module depends on.
-    pub fn deps(&self) -> LoadedDeps<'_, D, Arch, R> {
-        LoadedDeps::new(self.deps.as_slice())
+    /// Returns the retained relocation lookup scope for this loaded module.
+    #[inline]
+    pub fn scope(&self) -> &[ModuleHandle<Arch>] {
+        self.scope.as_slice()
     }
 
     /// Returns the target architecture used by this loaded module.
@@ -374,22 +308,22 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         self.core.tls_tp_offset()
     }
 
-    /// Creates a [`LoadedCore`] from an [`ElfCore`] and its retained dependencies.
+    /// Creates a [`LoadedCore`] from an [`ElfCore`] and its retained relocation lookup scope.
     ///
     /// # Safety
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
-    pub unsafe fn from_core_deps<S>(core: ElfCore<D, Arch, R>, deps: S) -> Self
+    pub unsafe fn from_core_scope<S>(core: ElfCore<D, Arch, R>, scope: S) -> Self
     where
         S: Into<ModuleScope<Arch>>,
     {
-        Self::from_relocated_core_deps(core, deps)
+        Self::from_relocated_core_scope(core, scope)
     }
 
     /// Returns a reference to the underlying [`ElfCore`].
     ///
     /// # Safety
-    /// Lifecycle information is lost, so the dependencies of the current
+    /// Lifecycle information is lost, so the retained scope of the current
     /// loaded object can be dropped too early if this reference is used carelessly.
     #[inline]
     pub unsafe fn core_ref(&self) -> &ElfCore<D, Arch, R> {
@@ -539,7 +473,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                     user_data,
                 )
             }?,
-            deps: ModuleScope::empty(),
+            scope: ModuleScope::empty(),
         })
     }
 }
@@ -550,11 +484,6 @@ where
     Arch: RelocationArch,
     R: RegionAccess,
 {
-    #[inline]
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     #[inline]
     fn name(&self) -> &str {
         LoadedCore::name(self)

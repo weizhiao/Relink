@@ -113,7 +113,7 @@ fn call_scope_helper(image: &LoadedCore<()>) -> i32 {
 fn lazy_jump_slots_resolve() {
     let scenario = BindingFixture::new().load(BindingKind::Lazy);
 
-    scenario.assert_single_dependency();
+    scenario.assert_relocation_scope_entries();
     scenario.assert_non_plt_relocations();
     scenario.assert_relative_relocations();
     scenario.assert_lazy_jump_slots();
@@ -123,7 +123,7 @@ fn lazy_jump_slots_resolve() {
 
 #[cfg(feature = "lazy-binding")]
 #[test]
-fn default_lazy_binding_uses_retained_scope_dependency() {
+fn default_lazy_binding_uses_retained_scope_entry() {
     let mut loader = Loader::new();
     let provider_output = write_scope_provider();
     let provider = load_relocated_dylib(&mut loader, "libscope_provider.so", &provider_output);
@@ -150,9 +150,9 @@ fn default_lazy_binding_uses_retained_scope_dependency() {
         jump_slot_word(&relocated, &consumer_output),
         scoped_func_addr
     );
-    let deps = relocated.deps().collect::<Vec<_>>();
-    assert_eq!(deps.len(), 1, "expected one retained dependency");
-    assert_eq!(deps[0].name(), provider.name());
+    let scope = relocated.scope();
+    assert_eq!(scope.len(), 1, "expected one retained scope entry");
+    assert_eq!(scope[0].name(), provider.name());
 }
 
 #[cfg(feature = "lazy-binding")]
@@ -180,13 +180,13 @@ fn default_lazy_binding_retains_scope_used_only_by_lazy_jump_slot() {
         scoped_func_addr,
         "default lazy binding should leave the jump slot unresolved before the first call"
     );
-    let deps = relocated.deps().collect::<Vec<_>>();
+    let scope = relocated.scope();
     assert_eq!(
-        deps.len(),
+        scope.len(),
         1,
-        "lazy jump slot scope dependency should be retained before first call"
+        "lazy jump slot scope entry should be retained before first call"
     );
-    assert_eq!(deps[0].name(), provider.name());
+    assert_eq!(scope[0].name(), provider.name());
     assert_eq!(call_scope_helper(&relocated), 42);
     assert_eq!(
         jump_slot_word(&relocated, &consumer_output),
@@ -219,7 +219,7 @@ fn bind_now_defaults_to_eager_resolution() {
         "bind-now should resolve the jump slot during relocate()"
     );
     assert_eq!(call_scope_helper(&relocated), 42);
-    let deps = relocated.deps().collect::<Vec<_>>();
-    assert_eq!(deps.len(), 1, "expected one retained dependency");
-    assert_eq!(deps[0].name(), provider.name());
+    let scope = relocated.scope();
+    assert_eq!(scope.len(), 1, "expected one retained scope entry");
+    assert_eq!(scope[0].name(), provider.name());
 }

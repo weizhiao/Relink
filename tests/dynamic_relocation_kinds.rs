@@ -45,9 +45,9 @@ fn copy_relocation_copies_bytes() {
 
     let copy = relocation_for_symbol(&consumer_output, REL_COPY, COPY_SOURCE_NAME);
     assert_eq!(copy.section, SectionKind::Data);
-    let deps = relocated.deps().collect::<Vec<_>>();
-    assert_eq!(deps.len(), 1, "expected one retained dependency");
-    assert_eq!(deps[0].name(), helper.name());
+    let scope = relocated.scope();
+    assert_eq!(scope.len(), 1, "expected one retained scope entry");
+    assert_eq!(scope[0].name(), helper.name());
 
     unsafe {
         let src = helper
@@ -80,8 +80,8 @@ fn relative_relocation_uses_recorded_addend() {
         (relocated.base().get() as i64 + relative.addend) as u64
     );
     assert!(
-        relocated.deps().is_empty(),
-        "relative relocations should not retain dependencies"
+        relocated.scope().is_empty(),
+        "relative relocations should not retain scope entries"
     );
 }
 
@@ -108,8 +108,8 @@ fn irelative_relocation_uses_ifunc_resolver() {
         (relocated.base() + VmOffset::new(resolver_offset as usize)).get() as u64
     );
     assert!(
-        relocated.deps().is_empty(),
-        "irelative relocations should not retain dependencies"
+        relocated.scope().is_empty(),
+        "irelative relocations should not retain scope entries"
     );
 }
 
@@ -148,9 +148,9 @@ fn copy_relocations_keep_symbols_separate() {
         .relocate()
         .expect("failed to relocate copy consumer");
 
-    let deps = relocated.deps().collect::<Vec<_>>();
-    assert_eq!(deps.len(), 1, "expected one retained dependency");
-    assert_eq!(deps[0].name(), helper.name());
+    let scope = relocated.scope();
+    assert_eq!(scope.len(), 1, "expected one retained scope entry");
+    assert_eq!(scope[0].name(), helper.name());
 
     for (name, expected_bytes) in copy_sources {
         let relocation = relocation_for_symbol(&consumer_output, REL_COPY, name);
@@ -193,8 +193,8 @@ fn relative_relocations_apply_to_all_slots() {
         );
     }
     assert!(
-        relocated.deps().is_empty(),
-        "relative relocations should not retain dependencies"
+        relocated.scope().is_empty(),
+        "relative relocations should not retain scope entries"
     );
 }
 
@@ -227,7 +227,7 @@ fn irelative_relocations_apply_to_all_slots() {
         );
     }
     assert!(
-        relocated.deps().is_empty(),
-        "irelative relocations should not retain dependencies"
+        relocated.scope().is_empty(),
+        "irelative relocations should not retain scope entries"
     );
 }

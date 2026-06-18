@@ -11,4 +11,4 @@ mod loaded;
 pub(crate) use defs::CoreInner;
 pub use defs::Symbol;
 pub use handle::{ElfCore, ElfCoreRef};
-pub use loaded::{LoadedCore, LoadedDeps};
+pub use loaded::LoadedCore;

@@ -34,12 +34,15 @@ fn assert_close_f64(actual: f64, expected: f64, context: &str) {
 }
 
 impl BindingScenario {
-    pub(crate) fn assert_single_dependency(&self) {
+    pub(crate) fn assert_relocation_scope_entries(&self) {
+        let scope = self.loaded_dylib().scope();
         assert_eq!(
-            self.loaded_dylib().deps().len(),
-            1,
-            "expected one retained dependency"
+            scope.len(),
+            2,
+            "expected synthetic host and helper scope entries"
         );
+        assert_eq!(scope[0].name(), "__host");
+        assert_eq!(scope[1].name(), self.helper_dylib().name());
     }
 
     pub(crate) fn assert_plt_helpers_work(&self) {

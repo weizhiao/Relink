@@ -12,7 +12,7 @@ use crate::{
     tls::{CoreTlsState, TlsDescArgs, TlsModuleId, TlsTpOffset},
 };
 use alloc::vec::Vec;
-use core::{any::Any, cell::OnceCell, fmt::Debug, ptr::NonNull};
+use core::{cell::OnceCell, fmt::Debug, ptr::NonNull};
 
 /// A non-owning reference to an [`ElfCore`].
 ///
@@ -277,11 +277,6 @@ where
     Arch: RelocationArch,
     R: RegionAccess,
 {
-    #[inline]
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     #[inline]
     fn name(&self) -> &str {
         ElfCore::name(self)

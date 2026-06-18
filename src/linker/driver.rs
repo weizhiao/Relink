@@ -711,7 +711,11 @@ where
 
         let root = context
             .visible_module(&self.visible_modules, root)
-            .and_then(|module| module.as_loaded::<D, M::Region>().cloned())
+            .and_then(|module| {
+                module
+                    .downcast_ref::<LoadedCore<D, Arch, M::Region>>()
+                    .cloned()
+            })
             .ok_or_else(|| LinkerError::context("load root missing after commit"))?;
         Ok(LoadResult::new(root, committed))
     }
@@ -945,5 +949,5 @@ where
 {
     context
         .visible_module_by_key(visible_modules, key)
-        .and_then(|module| module.as_loaded::<D, R>().cloned())
+        .and_then(|module| module.downcast_ref::<LoadedCore<D, Arch, R>>().cloned())
 }

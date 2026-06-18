@@ -292,7 +292,7 @@ fn object_relocated_event_exposes_section_metadata() {
     use elf_loader::{
         Result,
         arch::NativeArch,
-        image::ModuleHandle,
+        image::{LoadedCore, ModuleHandle},
         memory::{HostRegion, RegionAccess},
         observer::{LoadObserver, ObjectRelocatedEvent, RelocationObserver, SectionLayoutEvent},
     };
@@ -367,7 +367,7 @@ fn object_relocated_event_exposes_section_metadata() {
 
     let handle: ModuleHandle = (&loaded_object).into();
     handle
-        .as_loaded::<(), HostRegion>()
+        .downcast_ref::<LoadedCore<(), NativeArch, HostRegion>>()
         .expect("ModuleHandle should retain loaded core");
 }
 

@@ -6,7 +6,7 @@ use support::binding::{BindingFixture, BindingKind};
 fn eager_binding_matches_fixture() {
     let scenario = BindingFixture::new().load(BindingKind::Eager);
 
-    scenario.assert_single_dependency();
+    scenario.assert_relocation_scope_entries();
     scenario.assert_non_plt_relocations();
     scenario.assert_relative_relocations();
     scenario.assert_eager_jump_slots();

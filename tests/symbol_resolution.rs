@@ -66,13 +66,14 @@ fn synthetic_module_beats_loaded_scope() {
         got_slot_word(&relocated, &consumer_output, EXTERNAL_VAR_NAME),
         host_symbols.addresses[EXTERNAL_VAR_NAME] as u64
     );
-    let deps = relocated.deps().collect::<Vec<_>>();
+    let scope = relocated.scope();
     assert_eq!(
-        deps.len(),
-        1,
-        "scope entries are retained even when a synthetic module resolves the symbol"
+        scope.len(),
+        2,
+        "all scope entries are retained even when a synthetic module resolves the symbol"
     );
-    assert_eq!(deps[0].name(), helper.name());
+    assert_eq!(scope[0].name(), "__host");
+    assert_eq!(scope[1].name(), helper.name());
 }
 
 #[test]
@@ -98,9 +99,10 @@ fn loaded_scope_beats_late_synthetic_module() {
         got_slot_word(&relocated, &consumer_output, EXTERNAL_VAR_NAME),
         symbol_address(&helper, EXTERNAL_VAR_NAME)
     );
-    let deps = relocated.deps().collect::<Vec<_>>();
-    assert_eq!(deps.len(), 1, "expected one retained dependency");
-    assert_eq!(deps[0].name(), helper.name());
+    let scope = relocated.scope();
+    assert_eq!(scope.len(), 2, "expected both scope entries to be retained");
+    assert_eq!(scope[0].name(), helper.name());
+    assert_eq!(scope[1].name(), "__host");
 }
 
 #[test]
@@ -121,8 +123,8 @@ fn synthetic_module_resolves_scope_miss() {
         host_symbols.addresses[EXTERNAL_VAR_NAME] as u64
     );
     assert!(
-        relocated.deps().is_empty(),
-        "synthetic modules should not appear as loaded dependencies"
+        relocated.scope().len() == 1,
+        "synthetic modules should be retained in the relocation scope"
     );
 }
 
@@ -148,12 +150,8 @@ fn extend_scope_keeps_existing_precedence() {
         got_slot_word(&relocated, &consumer_output, SHARED_VAR_NAME),
         symbol_address(&first, SHARED_VAR_NAME)
     );
-    let deps = relocated.deps().collect::<Vec<_>>();
-    assert_eq!(
-        deps.len(),
-        2,
-        "all scope entries should be retained as dependencies"
-    );
-    assert_eq!(deps[0].name(), first.name());
-    assert_eq!(deps[1].name(), second.name());
+    let scope = relocated.scope();
+    assert_eq!(scope.len(), 2, "all scope entries should be retained");
+    assert_eq!(scope[0].name(), first.name());
+    assert_eq!(scope[1].name(), second.name());
 }

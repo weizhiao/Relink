@@ -18,7 +18,7 @@ mod traits;
 pub use crate::segment::{ElfSegments, MappedRange};
 #[cfg(feature = "lazy-binding")]
 pub(crate) use core::CoreInner;
-pub use core::{ElfCore, ElfCoreRef, LoadedCore, LoadedDeps, Symbol};
+pub use core::{ElfCore, ElfCoreRef, LoadedCore, Symbol};
 pub(crate) use elf::DynamicInfo;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use elf::LazyBindingInfo;

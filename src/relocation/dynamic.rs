@@ -117,7 +117,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
         logging::info!("Relocation completed for {}", self.name());
 
-        Ok(LoadedCore::from_relocated_core_deps(
+        Ok(LoadedCore::from_relocated_core_scope(
             self.into_core(),
             scope,
         ))

@@ -8,7 +8,7 @@ use crate::{
     relocation::RelocationArch,
 };
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
-use core::{any::Any, ptr::NonNull};
+use core::ptr::NonNull;
 
 /// One synthetic symbol exported by a [`SyntheticModule`].
 ///
@@ -184,11 +184,6 @@ impl<Arch> Module<Arch> for SyntheticModule<Arch>
 where
     Arch: RelocationArch,
 {
-    #[inline]
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     #[inline]
     fn name(&self) -> &str {
         &self.name

@@ -397,7 +397,7 @@ fn load_scan_first_supports_synthetic_dependencies() {
         .get(dep_module_id)
         .expect("synthetic dependency committed");
     assert_eq!(dep_module.name(), "dep");
-    assert!(dep_module.as_any().is::<SyntheticModule>());
+    assert!(dep_module.downcast_ref::<SyntheticModule>().is_some());
 
     let direct_deps = context
         .direct_deps(root_id)

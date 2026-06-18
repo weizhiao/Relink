@@ -1,7 +1,7 @@
-use super::{LoadedCore, Module};
-use crate::{arch::NativeArch, memory::RegionAccess, relocation::RelocationArch, sync::Arc};
+use super::Module;
+use crate::{arch::NativeArch, relocation::RelocationArch, sync::Arc};
 use alloc::{boxed::Box, vec::Vec};
-use core::{ops::Deref, slice};
+use core::{any::Any, ops::Deref, slice};
 
 /// Shared ownership handle for one retained module.
 pub struct ModuleHandle<Arch: RelocationArch = NativeArch> {
@@ -43,18 +43,14 @@ impl<Arch: RelocationArch> ModuleHandle<Arch> {
 
     /// Downcasts the retained module to a concrete type.
     #[inline]
-    pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
-        self.as_any().downcast_ref()
-    }
-
-    /// Downcasts the retained module to a loaded ELF image.
-    #[inline]
-    pub fn as_loaded<D, R>(&self) -> Option<&LoadedCore<D, Arch, R>>
+    pub fn downcast_ref<T>(&self) -> Option<&T>
     where
-        D: 'static,
-        R: RegionAccess,
+        T: Module<Arch> + 'static,
     {
-        self.downcast_ref()
+        let module = self.as_dyn() as &dyn Any;
+        module
+            .downcast_ref::<T>()
+            .or_else(|| module.downcast_ref::<Arc<T>>().map(|module| &**module))
     }
 
     /// Consumes the handle and returns the shared module trait object.

@@ -174,7 +174,7 @@ where
 
         let core = self.core;
         Ok(LoadedObject {
-            inner: LoadedCore::from_relocated_core_deps(core, scope),
+            inner: LoadedCore::from_relocated_core_scope(core, scope),
         })
     }
 
