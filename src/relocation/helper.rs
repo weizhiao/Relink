@@ -170,7 +170,8 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
     /// For undefined weak symbols, returns null.
     pub(crate) fn convert(self) -> VmAddr {
         if likely(self.sym.is_some()) {
-            let base = self.source.base();
+            let memory = self.source.memory();
+            let base = memory.base();
             let sym = unsafe { self.sym.unwrap_unchecked() };
             let addr = base + VmOffset::new(sym.st_value());
             if likely(
@@ -178,7 +179,7 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
             ) {
                 addr
             } else {
-                let ptr = self.source.host_ptr(addr).expect(
+                let ptr = memory.host_ptr(addr).expect(
                     "IFUNC resolver address is not backed by host-accessible mapped memory",
                 );
                 unsafe { resolve_ifunc(ptr) }
@@ -201,19 +202,14 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
 
     #[inline]
     #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    pub(crate) fn tls_mod_id(&self) -> Option<crate::tls::TlsModuleId> {
-        self.source.tls_mod_id()
-    }
-
-    #[inline]
-    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    pub(crate) fn tls_tp_offset(&self) -> Option<crate::tls::TlsTpOffset> {
-        self.source.tls_tp_offset()
+    pub(crate) fn tls(&self) -> crate::image::ModuleTls {
+        self.source.tls()
     }
 
     #[inline]
     pub(crate) fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()> {
-        self.source.read_bytes(offset, dst)
+        let memory = self.source.memory();
+        memory.read_bytes(memory.base() + offset, dst)
     }
 }
 
@@ -309,15 +305,18 @@ where
         scope
             .iter()
             .find_map(|source| {
-                source.lookup_symbol(syminfo, &mut precompute).map(|sym| {
-                    logging::trace!(
-                        "binding file [{}] to [{}]: symbol [{}]",
-                        core.name(),
-                        source.name(),
-                        syminfo.name()
-                    );
-                    SymDef::new(Some(sym), &**source)
-                })
+                source
+                    .exports()
+                    .lookup(syminfo, &mut precompute)
+                    .map(|sym| {
+                        logging::trace!(
+                            "binding file [{}] to [{}]: symbol [{}]",
+                            core.name(),
+                            source.name(),
+                            syminfo.name()
+                        );
+                        SymDef::new(Some(sym), &**source)
+                    })
             })
             .or_else(|| find_weak(core, sym))
     }

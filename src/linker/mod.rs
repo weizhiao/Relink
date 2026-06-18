@@ -28,4 +28,4 @@ pub use resolver::{
     CandidateContext, CandidateRequest, FileNameKey, KeyResolver, KeyRule, PathKey, ResolvedKey,
     ReuseResolver, SearchDirProvider, SearchPathEntry, SearchPathResolver,
 };
-pub use storage::KeyId;
+pub use storage::{KeyId, ModuleId};

@@ -5,10 +5,10 @@ use super::{
     resolver::KeyResolver,
     scan::{
         GotPltTarget, LinkPipeline, LinkPlan, MappedRuntimeMemory, Materialization,
-        MemoryLayoutPlan, ModuleId, build_arena_raw_dynamic, normalize_plan,
+        MemoryLayoutPlan, ModuleId as PlanModuleId, build_arena_raw_dynamic, normalize_plan,
     },
     session::{GraphEntry, LoadSession, ModulePayload},
-    storage::KeyId,
+    storage::{KeyId, ModuleId as CommittedModuleId},
 };
 use crate::{
     LinkerError, Loader, Result,
@@ -33,15 +33,15 @@ type PendingDynamicGraph<D, Arch, R> =
 
 /// Result of a successful linker load operation.
 ///
-/// `committed` contains the newly committed modules' [`KeyId`] values in load
-/// order.
+/// `committed` contains the newly committed modules' [`ModuleId`](crate::linker::ModuleId)
+/// values in load order.
 pub struct LoadResult<
     D: 'static,
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = crate::memory::HostRegion,
 > {
     root: LoadedCore<D, Arch, R>,
-    committed: Box<[KeyId]>,
+    committed: Box<[CommittedModuleId]>,
 }
 
 impl<D: 'static, Arch, R> fmt::Debug for LoadResult<D, Arch, R>
@@ -63,7 +63,7 @@ where
     R: RegionAccess,
 {
     #[inline]
-    pub(crate) fn new(root: LoadedCore<D, Arch, R>, committed: Box<[KeyId]>) -> Self {
+    pub(crate) fn new(root: LoadedCore<D, Arch, R>, committed: Box<[CommittedModuleId]>) -> Self {
         Self { root, committed }
     }
 
@@ -75,7 +75,7 @@ where
 
     /// Returns module ids committed by this load operation in load order.
     #[inline]
-    pub fn committed(&self) -> &[KeyId] {
+    pub fn committed(&self) -> &[CommittedModuleId] {
         &self.committed
     }
 
@@ -592,7 +592,7 @@ where
     fn repair_planned_module(
         &mut self,
         runtime: &mut MappedRuntimeMemory<M::Region>,
-        module_id: ModuleId,
+        module_id: PlanModuleId,
         plan: &mut LinkPlan<K, Arch>,
     ) -> Result<()> {
         runtime.repair_module::<_, Arch>(module_id, plan)
@@ -602,7 +602,7 @@ where
         &mut self,
         plan: &MemoryLayoutPlan,
         mapped_runtime: &mut Option<MappedRuntimeMemory<M::Region>>,
-        module_id: ModuleId,
+        module_id: PlanModuleId,
         scanned: ScannedDynamic<Arch>,
     ) -> Result<RawDynamic<D, Arch, M::Region>> {
         match plan
@@ -623,7 +623,7 @@ where
     fn materialize_arena_raw(
         &mut self,
         mapped_runtime: &mut Option<MappedRuntimeMemory<M::Region>>,
-        module_id: ModuleId,
+        module_id: PlanModuleId,
         scanned: ScannedDynamic<Arch>,
     ) -> Result<RawDynamic<D, Arch, M::Region>> {
         let runtime = mapped_runtime
@@ -838,7 +838,7 @@ where
     fn commit_session<Meta>(
         context: &mut LinkContext<K, D, Meta, Arch>,
         session: &mut LoadSession<D, Arch, M::Region>,
-    ) -> Box<[KeyId]>
+    ) -> Box<[CommittedModuleId]>
     where
         Meta: Default,
     {
@@ -849,10 +849,10 @@ where
                 continue;
             };
             let (module, direct_deps) = entry.into_parts();
-            context
+            let module_id = context
                 .committed
                 .insert_new(id, module, direct_deps, Meta::default());
-            committed.push(id);
+            committed.push(module_id);
         }
         assert!(
             ready.is_empty(),
@@ -897,7 +897,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> PreparedLoad<D, Arch, R>
 
 fn apply_section_overrides<D, Arch, R>(
     raw: &mut RawDynamic<D, Arch, R>,
-    module_id: ModuleId,
+    module_id: PlanModuleId,
     plan: &MemoryLayoutPlan,
 ) -> Result<()>
 where

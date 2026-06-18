@@ -1,6 +1,6 @@
 use super::{
     request::VisibleModules,
-    storage::{CommittedStorage, KeyId},
+    storage::{CommittedStorage, KeyId, ModuleId},
 };
 use crate::{
     LinkerError, Result, arch::NativeArch, image::ModuleHandle, relocation::RelocationArch,
@@ -64,13 +64,13 @@ where
         self.committed.contains_key(key)
     }
 
-    /// Returns whether the context contains an entry with `id`.
+    /// Returns whether the context contains the committed module `id`.
     #[inline]
-    pub fn contains(&self, id: KeyId) -> bool {
-        self.committed.contains(id)
+    pub fn contains_module(&self, id: ModuleId) -> bool {
+        self.committed.contains_module(id)
     }
 
-    /// Returns the interned id for a committed key.
+    /// Returns the interned id for a known key.
     #[inline]
     pub fn key_id<Q>(&self, key: &Q) -> Option<KeyId>
     where
@@ -86,9 +86,22 @@ where
         self.committed.key(id)
     }
 
-    /// Returns the retained module handle associated with an interned id.
+    /// Returns the committed module id that `id` resolves to.
     #[inline]
-    pub fn get(&self, id: KeyId) -> Option<&ModuleHandle<Arch>> {
+    pub fn module_id(&self, id: KeyId) -> Option<ModuleId> {
+        self.committed.module_id(id)
+    }
+
+    /// Returns the representative key associated with a committed module id.
+    #[inline]
+    pub fn module_key(&self, id: ModuleId) -> Option<&K> {
+        let key_id = self.committed.entry_key_id(id)?;
+        self.committed.key(key_id)
+    }
+
+    /// Returns the retained module handle associated with a committed module id.
+    #[inline]
+    pub fn get(&self, id: ModuleId) -> Option<&ModuleHandle<Arch>> {
         self.committed.get(id)
     }
 
@@ -103,7 +116,7 @@ where
     where
         V: VisibleModules<K, Arch>,
     {
-        self.committed.get(id).cloned().or_else(|| {
+        self.committed.get_by_key(id).cloned().or_else(|| {
             let key = self.committed.key(id)?;
             visible_modules.module(key)
         })
@@ -132,32 +145,32 @@ where
             })
     }
 
-    /// Returns direct dependency ids for a committed module.
+    /// Returns direct dependency key ids for a committed module.
     #[inline]
-    pub fn direct_deps(&self, id: KeyId) -> Option<&[KeyId]> {
+    pub fn direct_deps(&self, id: ModuleId) -> Option<&[KeyId]> {
         self.committed.direct_deps(id)
     }
 
     /// Iterates committed modules in load order.
     #[inline]
-    pub fn load_order(&self) -> impl Iterator<Item = KeyId> + '_ {
+    pub fn load_order(&self) -> impl Iterator<Item = ModuleId> + '_ {
         self.committed.load_order()
     }
 
     /// Returns immutable user metadata for a committed module.
     #[inline]
-    pub fn meta(&self, id: KeyId) -> Option<&M> {
+    pub fn meta(&self, id: ModuleId) -> Option<&M> {
         self.committed.meta(id)
     }
 
     /// Returns mutable user metadata for a committed module.
     #[inline]
-    pub fn meta_mut(&mut self, id: KeyId) -> Option<&mut M> {
+    pub fn meta_mut(&mut self, id: ModuleId) -> Option<&mut M> {
         self.committed.meta_mut(id)
     }
 
     /// Inserts an already retained module with default metadata.
-    pub fn insert<R>(&mut self, key: K, module: R, direct_deps: Box<[K]>) -> Result<KeyId>
+    pub fn insert<R>(&mut self, key: K, module: R, direct_deps: Box<[K]>) -> Result<ModuleId>
     where
         M: Default,
         R: Into<ModuleHandle<Arch>>,
@@ -172,7 +185,7 @@ where
         module: R,
         direct_deps: Box<[K]>,
         meta: M,
-    ) -> Result<KeyId>
+    ) -> Result<ModuleId>
     where
         R: Into<ModuleHandle<Arch>>,
     {
@@ -192,16 +205,40 @@ where
             .insert_new(id, module.into(), direct_deps, meta))
     }
 
+    /// Adds an alternate key for an already committed module.
+    pub fn add_alias(&mut self, canonical: &K, alias: K) -> Result<ModuleId> {
+        let Some(canonical_key_id) = self.committed.key_id(canonical) else {
+            return Err(LinkerError::context("canonical linked module key is unknown").into());
+        };
+        let Some(module_id) = self.committed.module_id(canonical_key_id) else {
+            return Err(LinkerError::context("canonical linked module is not committed").into());
+        };
+
+        if self
+            .committed
+            .key_id(&alias)
+            .and_then(|id| self.committed.module_id(id))
+            .is_some_and(|id| id != module_id)
+        {
+            return Err(
+                LinkerError::context("alias linked module key is already committed").into(),
+            );
+        }
+
+        self.committed.add_alias(module_id, alias);
+        Ok(module_id)
+    }
+
     /// Removes a committed module and returns its handle, dependencies, and metadata.
     #[inline]
-    pub fn remove(&mut self, id: KeyId) -> Option<(ModuleHandle<Arch>, Box<[KeyId]>, M)> {
+    pub fn remove(&mut self, id: ModuleId) -> Option<(ModuleHandle<Arch>, Box<[KeyId]>, M)> {
         self.committed.remove(id)
     }
 
     /// Returns the breadth-first dependency scope rooted at `root`.
-    pub fn dependency_scope(&self, root: KeyId) -> Vec<KeyId> {
-        if !self.committed.contains(root) {
-            return Vec::new();
+    pub fn dependency_scope(&self, root: ModuleId) -> Result<Vec<ModuleId>> {
+        if !self.committed.contains_module(root) {
+            return Err(LinkerError::context("dependency scope root is not committed").into());
         }
 
         let mut scope = Vec::new();
@@ -212,18 +249,26 @@ where
 
         while let Some(id) = queue.pop_front() {
             let Some(direct_deps) = self.committed.direct_deps(id) else {
-                continue;
+                return Err(
+                    LinkerError::context("dependency scope module is not committed").into(),
+                );
             };
 
             scope.push(id);
             for dep in direct_deps.iter().copied() {
+                let Some(dep) = self.committed.module_id(dep) else {
+                    return Err(LinkerError::context(
+                        "dependency scope dependency is not committed",
+                    )
+                    .into());
+                };
                 if visited.insert(dep) {
                     queue.push_back(dep);
                 }
             }
         }
 
-        scope
+        Ok(scope)
     }
 
     /// Extends this context with modules from another context.
@@ -233,8 +278,8 @@ where
     {
         for id in other.load_order() {
             let key = other
-                .key(id)
-                .expect("load_order entries must resolve to interned keys");
+                .module_key(id)
+                .expect("load_order entries must resolve to module keys");
             if self.committed.contains_key(key) {
                 continue;
             }
@@ -260,6 +305,19 @@ where
                 .cloned()
                 .expect("load_order entries must resolve to committed metadata");
             self.insert_with_meta(key.clone(), module, direct_deps, meta)?;
+        }
+
+        for (alias_id, target_module) in other.committed.aliases() {
+            let alias = other
+                .key(alias_id)
+                .expect("alias id must resolve to an interned key");
+            let canonical = other
+                .module_key(target_module)
+                .expect("alias target id must resolve to a module key");
+            if self.committed.contains_key(alias) {
+                continue;
+            }
+            self.add_alias(canonical, alias.clone())?;
         }
         Ok(())
     }
@@ -294,12 +352,109 @@ mod tests {
         let snapshot = context.snapshot();
         context.remove(root);
 
-        assert!(!context.contains(root));
-        assert!(snapshot.contains(root));
-        assert!(!snapshot.contains(dep));
-        assert_eq!(snapshot.key(root), Some(&"root"));
+        assert!(!context.contains_module(root));
+        assert!(snapshot.contains_module(root));
+        assert!(snapshot.module_id(dep).is_none());
+        assert_eq!(snapshot.module_key(root), Some(&"root"));
         assert_eq!(snapshot.key(dep), Some(&"dep"));
         assert_eq!(snapshot.direct_deps(root), Some(&[dep][..]));
         assert_eq!(snapshot.meta(root), Some(&7));
+    }
+
+    #[test]
+    fn alias_resolves_preinterned_dependency_edges_without_rewriting() {
+        let mut context = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let root = context
+            .insert_with_meta(
+                "root",
+                SyntheticModule::empty("root"),
+                Box::new(["alias"]),
+                1,
+            )
+            .expect("failed to insert root module");
+        let alias_id = context
+            .key_id(&"alias")
+            .expect("dependency key should be interned before aliasing");
+
+        let canonical = context
+            .insert_with_meta(
+                "canonical",
+                SyntheticModule::empty("canonical"),
+                Box::new([]),
+                2,
+            )
+            .expect("failed to insert canonical module");
+        context
+            .add_alias(&"canonical", "alias")
+            .expect("failed to add alias");
+
+        assert!(context.module_id(alias_id).is_some());
+        assert_eq!(context.key_id(&"alias"), Some(alias_id));
+        assert_eq!(context.module_id(alias_id), Some(canonical));
+        assert_eq!(context.direct_deps(root), Some(&[alias_id][..]));
+        assert_eq!(
+            context
+                .dependency_scope(root)
+                .expect("dependency scope should resolve")
+                .as_slice(),
+            &[root, canonical]
+        );
+    }
+
+    #[test]
+    fn extend_preserves_aliases_without_rewriting_dependency_edges() {
+        let mut source = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let root = source
+            .insert_with_meta(
+                "root",
+                SyntheticModule::empty("root"),
+                Box::new(["alias"]),
+                1,
+            )
+            .expect("failed to insert root module");
+        let alias = source
+            .key_id(&"alias")
+            .expect("dependency key should be interned before aliasing");
+        let canonical = source
+            .insert_with_meta(
+                "canonical",
+                SyntheticModule::empty("canonical"),
+                Box::new([]),
+                2,
+            )
+            .expect("failed to insert canonical module");
+        source
+            .add_alias(&"canonical", "alias")
+            .expect("failed to add alias");
+
+        let mut target = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        target.extend(&source).expect("failed to extend context");
+        let target_root = target
+            .key_id(&"root")
+            .and_then(|id| target.module_id(id))
+            .expect("root module should be copied");
+        let target_alias = target.key_id(&"alias").expect("alias key should be copied");
+        let target_canonical = target
+            .key_id(&"canonical")
+            .and_then(|id| target.module_id(id))
+            .expect("canonical key should be copied");
+
+        assert_eq!(source.direct_deps(root), Some(&[alias][..]));
+        assert_eq!(
+            source
+                .dependency_scope(root)
+                .expect("source scope should resolve")
+                .as_slice(),
+            &[root, canonical]
+        );
+        assert_eq!(target.direct_deps(target_root), Some(&[target_alias][..]));
+        assert_eq!(target.module_id(target_alias), Some(target_canonical));
+        assert_eq!(
+            target
+                .dependency_scope(target_root)
+                .expect("target scope should resolve")
+                .as_slice(),
+            &[target_root, target_canonical]
+        );
     }
 }

@@ -109,7 +109,7 @@ where
             return entry.direct_deps().map(<[KeyId]>::to_vec);
         }
 
-        if let Some(direct_deps) = self.committed.direct_deps(id) {
+        if let Some(direct_deps) = self.committed.direct_deps_by_key(id) {
             return Some(direct_deps.to_vec());
         }
 

@@ -349,9 +349,12 @@ fn load_uses_configured_visible_modules_without_committing_them_locally() {
 
     assert_eq!(root.path().file_name(), "visible_root.so");
     assert!(context.contains_key(&"root"));
-    let root_id = context.key_id(&"root").unwrap();
+    let root_id = context
+        .key_id(&"root")
+        .and_then(|id| context.module_id(id))
+        .unwrap();
     let dep_id = context.key_id(&"dep").unwrap();
-    assert!(!context.contains(dep_id));
+    assert!(context.module_id(dep_id).is_none());
     let direct_deps = context
         .direct_deps(root_id)
         .unwrap()
@@ -384,14 +387,17 @@ fn load_scan_first_supports_synthetic_dependencies() {
     assert!(context.contains_key(&"root"));
     assert!(context.contains_key(&"dep"));
 
-    let root_id = context.key_id(&"root").unwrap();
+    let root_id = context
+        .key_id(&"root")
+        .and_then(|id| context.module_id(id))
+        .unwrap();
     let dep_id = context.key_id(&"dep").unwrap();
-    let dep_module = context.get(dep_id).expect("synthetic dependency committed");
+    let dep_module_id = context.module_id(dep_id).unwrap();
+    let dep_module = context
+        .get(dep_module_id)
+        .expect("synthetic dependency committed");
     assert_eq!(dep_module.name(), "dep");
-    assert!(
-        !dep_module.is_loaded(),
-        "synthetic dependency should be retained as a module handle, not a loaded ELF"
-    );
+    assert!(dep_module.as_any().is::<SyntheticModule>());
 
     let direct_deps = context
         .direct_deps(root_id)

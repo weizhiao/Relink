@@ -31,4 +31,4 @@ pub(crate) use scanned::ScannedDynamicLoadParts;
 pub use scanned::{ModuleCapability, ScannedDynamic, ScannedElf, ScannedExec, ScannedSection};
 pub use synthetic::{SyntheticModule, SyntheticSymbol};
 pub(crate) use traits::exports_handle;
-pub use traits::{Module, SymbolExports};
+pub use traits::{Module, ModuleTls, SymbolExports};

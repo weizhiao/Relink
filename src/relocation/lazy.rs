@@ -25,7 +25,7 @@ mod enabled {
     fn lookup_addr<Arch: RelocationArch>(source: &dyn Module<Arch>, name: &str) -> Option<VmAddr> {
         let syminfo = SymbolInfo::from_str(name, None);
         let mut precompute = syminfo.precompute();
-        let sym = source.lookup_symbol(&syminfo, &mut precompute)?;
+        let sym = source.exports().lookup(&syminfo, &mut precompute)?;
         Some(SymDef::<(), Arch>::new(Some(sym), source).convert())
     }
 

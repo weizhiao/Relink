@@ -4,7 +4,10 @@ use crate::{
     os::ProtFlags,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{fmt::Debug, ptr::NonNull};
+use core::{
+    fmt::{self, Debug, Display},
+    ptr::NonNull,
+};
 
 /// A mapped module-relative range owned by an ELF image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,12 +51,36 @@ pub struct ElfSegments<R: RegionAccess = HostRegion> {
 }
 
 impl<R: RegionAccess> Debug for ElfSegments<R> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ElfSegments")
-            .field("base", &format_args!("{}", self.base()))
-            .field("ranges", &self.ranges())
-            .field("contiguous", &self.is_contiguous_mapping())
-            .finish()
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Display::fmt(self, f)
+    }
+}
+
+impl<R: RegionAccess> Display for ElfSegments<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("base: ")?;
+        Display::fmt(&self.base(), f)?;
+        f.write_str(", ranges: [")?;
+        for (idx, range) in self.ranges.iter().copied().enumerate() {
+            if idx > 0 {
+                f.write_str(", ")?;
+            }
+
+            let start = self.range_base(range);
+            write!(f, "{}..", start)?;
+            if let Some(end_offset) = range.offset.checked_add(range.len) {
+                write!(
+                    f,
+                    "{} (+{} len 0x{:x})",
+                    self.base + end_offset,
+                    range.offset,
+                    range.len,
+                )?;
+            } else {
+                write!(f, "<overflow> (+{} len 0x{:x})", range.offset, range.len)?;
+            }
+        }
+        f.write_str("]")
     }
 }
 

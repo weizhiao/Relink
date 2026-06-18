@@ -2,7 +2,6 @@ use crate::{
     elf::{ElfLayout, ElfSymbol, PreCompute, SymbolInfo},
     image::SymbolExports,
     object::CustomHash,
-    relocation::RelocationArch,
 };
 use alloc::{string::String, vec::Vec};
 
@@ -42,17 +41,14 @@ impl<L: ElfLayout> ObjectExports<L> {
     }
 }
 
-impl<Arch: RelocationArch> SymbolExports<Arch> for ObjectExports<Arch::Layout> {
+impl<L: ElfLayout> SymbolExports<L> for ObjectExports<L> {
     #[inline]
-    fn symbols(&self) -> &[ElfSymbol<Arch::Layout>] {
+    fn symbols(&self) -> &[ElfSymbol<L>] {
         &self.symbols
     }
 
     #[inline]
-    fn symbol_name<'exports>(
-        &'exports self,
-        symbol: &ElfSymbol<Arch::Layout>,
-    ) -> Option<&'exports str> {
+    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports str> {
         self.symbols
             .iter()
             .position(|entry| core::ptr::eq(entry, symbol))
@@ -64,7 +60,7 @@ impl<Arch: RelocationArch> SymbolExports<Arch> for ObjectExports<Arch::Layout> {
         &'exports self,
         symbol: &SymbolInfo<'_>,
         precompute: &mut PreCompute,
-    ) -> Option<&'exports ElfSymbol<Arch::Layout>> {
+    ) -> Option<&'exports ElfSymbol<L>> {
         self.hashtab
             .lookup_idx(symbol, precompute)
             .map(|idx| &self.symbols[idx])
@@ -99,26 +95,23 @@ mod tests {
 
         let info = SymbolInfo::from_str("symbol", None);
         let mut precompute = info.precompute();
-        let resolved =
-            <ObjectExports<NativeElfLayout> as SymbolExports<crate::arch::NativeArch>>::lookup(
-                &exports,
-                &info,
-                &mut precompute,
-            )
-            .expect("symbol should resolve");
+        let resolved = <ObjectExports<NativeElfLayout> as SymbolExports<NativeElfLayout>>::lookup(
+            &exports,
+            &info,
+            &mut precompute,
+        )
+        .expect("symbol should resolve");
 
         assert_eq!(resolved.st_value(), 0x2000);
         assert_eq!(
-            <ObjectExports<NativeElfLayout> as SymbolExports<crate::arch::NativeArch>>::symbol_name(
+            <ObjectExports<NativeElfLayout> as SymbolExports<NativeElfLayout>>::symbol_name(
                 &exports, resolved
             ),
             Some("symbol"),
         );
         assert_eq!(
-            <ObjectExports<NativeElfLayout> as SymbolExports<crate::arch::NativeArch>>::symbols(
-                &exports
-            )
-            .len(),
+            <ObjectExports<NativeElfLayout> as SymbolExports<NativeElfLayout>>::symbols(&exports)
+                .len(),
             1
         );
     }

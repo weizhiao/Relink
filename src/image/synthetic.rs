@@ -1,12 +1,10 @@
-use super::{Module, ModuleHandle};
+use super::{Module, ModuleHandle, SymbolExports};
 use crate::{
     Result,
     arch::NativeArch,
     custom_error,
-    elf::{
-        ElfLayout, ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType, PreCompute, SymbolInfo,
-    },
-    memory::{VmAddr, VmOffset},
+    elf::{ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType, PreCompute, SymbolInfo},
+    memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
 };
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
@@ -70,9 +68,39 @@ impl SyntheticSymbol {
     }
 }
 
-struct SymbolEntry<L: ElfLayout> {
-    name: String,
-    symbol: ElfSymbol<L>,
+struct SyntheticMemory;
+
+static SYNTHETIC_MEMORY: SyntheticMemory = SyntheticMemory;
+
+impl ImageMemory for SyntheticMemory {
+    #[inline]
+    fn base(&self) -> VmAddr {
+        VmAddr::null()
+    }
+
+    #[inline]
+    fn host_ptr(&self, _addr: VmAddr) -> Option<NonNull<u8>> {
+        None
+    }
+
+    #[inline]
+    fn host_ptr_range(&self, _addr: VmAddr, _len: usize) -> Option<NonNull<u8>> {
+        None
+    }
+
+    #[inline]
+    fn read_bytes(&self, _addr: VmAddr, _dst: &mut [u8]) -> Result<()> {
+        Err(custom_error(
+            "synthetic modules do not expose readable image bytes",
+        ))
+    }
+
+    #[inline]
+    fn write_bytes(&self, _addr: VmAddr, _src: &[u8]) -> Result<()> {
+        Err(custom_error(
+            "synthetic modules do not expose writable image bytes",
+        ))
+    }
 }
 
 /// A [`Module`] backed by a synthetic table of absolute symbols.
@@ -82,7 +110,8 @@ struct SymbolEntry<L: ElfLayout> {
 /// symbol metadata.
 pub struct SyntheticModule<Arch: RelocationArch = NativeArch> {
     name: String,
-    symbols: Vec<SymbolEntry<Arch::Layout>>,
+    names: Vec<String>,
+    symbols: Vec<ElfSymbol<Arch::Layout>>,
     index: BTreeMap<String, usize>,
 }
 
@@ -103,6 +132,7 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     pub fn empty(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            names: Vec::new(),
             symbols: Vec::new(),
             index: BTreeMap::new(),
         }
@@ -110,23 +140,23 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
 
     /// Inserts or replaces one symbol.
     pub fn insert(&mut self, symbol: SyntheticSymbol) {
-        let entry = SymbolEntry {
-            name: symbol.name,
-            symbol: ElfSymbol::synthetic(
-                symbol.value,
-                symbol.size,
-                symbol.bind,
-                symbol.symbol_type,
-                ElfSectionIndex::ABS,
-            ),
-        };
+        let name = symbol.name;
+        let elf_symbol = ElfSymbol::synthetic(
+            symbol.value,
+            symbol.size,
+            symbol.bind,
+            symbol.symbol_type,
+            ElfSectionIndex::ABS,
+        );
 
-        if let Some(idx) = self.index.get(entry.name.as_str()).copied() {
-            self.symbols[idx] = entry;
+        if let Some(idx) = self.index.get(name.as_str()).copied() {
+            self.names[idx] = name;
+            self.symbols[idx] = elf_symbol;
         } else {
             let idx = self.symbols.len();
-            self.index.insert(entry.name.clone(), idx);
-            self.symbols.push(entry);
+            self.index.insert(name.clone(), idx);
+            self.names.push(name);
+            self.symbols.push(elf_symbol);
         }
     }
 
@@ -165,30 +195,44 @@ where
     }
 
     #[inline]
-    fn lookup_symbol<'source>(
-        &'source self,
+    fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
+        self
+    }
+
+    #[inline]
+    fn memory(&self) -> &dyn ImageMemory {
+        &SYNTHETIC_MEMORY
+    }
+}
+
+impl<Arch> SymbolExports<Arch::Layout> for SyntheticModule<Arch>
+where
+    Arch: RelocationArch,
+{
+    #[inline]
+    fn symbols(&self) -> &[ElfSymbol<Arch::Layout>] {
+        &self.symbols
+    }
+
+    #[inline]
+    fn symbol_name<'exports>(
+        &'exports self,
+        symbol: &ElfSymbol<Arch::Layout>,
+    ) -> Option<&'exports str> {
+        self.symbols
+            .iter()
+            .position(|entry| core::ptr::eq(entry, symbol))
+            .map(|idx| self.names[idx].as_str())
+    }
+
+    #[inline]
+    fn lookup<'exports>(
+        &'exports self,
         symbol: &SymbolInfo<'_>,
         _precompute: &mut PreCompute,
-    ) -> Option<&'source ElfSymbol<Arch::Layout>> {
+    ) -> Option<&'exports ElfSymbol<Arch::Layout>> {
         let idx = self.index.get(symbol.name()).copied()?;
-        Some(&self.symbols[idx].symbol)
-    }
-
-    #[inline]
-    fn base(&self) -> VmAddr {
-        VmAddr::null()
-    }
-
-    #[inline]
-    fn read_bytes(&self, _offset: VmOffset, _dst: &mut [u8]) -> Result<()> {
-        Err(custom_error(
-            "synthetic modules do not expose readable image bytes",
-        ))
-    }
-
-    #[inline]
-    fn host_ptr(&self, _addr: VmAddr) -> Option<NonNull<u8>> {
-        None
+        Some(&self.symbols[idx])
     }
 }
 
@@ -210,8 +254,10 @@ mod tests {
         let info = SymbolInfo::from_str("host_double", None);
         let mut precompute = info.precompute();
 
-        let symbol = scope.as_slice()[0]
-            .lookup_symbol(&info, &mut precompute)
+        let module = &scope.as_slice()[0];
+        let symbol = module
+            .exports()
+            .lookup(&info, &mut precompute)
             .expect("synthetic symbol should resolve");
 
         assert_eq!(symbol.st_value(), 0x1234);
@@ -219,5 +265,7 @@ mod tests {
         assert_eq!(symbol.bind(), ElfSymbolBind::GLOBAL);
         assert_eq!(symbol.symbol_type(), ElfSymbolType::FUNC);
         assert!(symbol.st_shndx().is_abs());
+        assert_eq!(module.exports().symbol_name(symbol), Some("host_double"));
+        assert_eq!(module.exports().symbols().len(), 1);
     }
 }

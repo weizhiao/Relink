@@ -1,10 +1,10 @@
 use super::CoreInner;
 use crate::{
     Result,
-    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, PreCompute, SymbolInfo, SymbolTable},
-    image::{DynamicInfo, Module, SymbolExports, exports_handle},
+    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
+    image::{DynamicInfo, Module, ModuleTls, SymbolExports, exports_handle},
     input::{Path, PathBuf},
-    memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr, VmOffset},
+    memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     observer::Finalizer,
     relocation::RelocationArch,
     segment::ElfSegments,
@@ -163,7 +163,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
 
     /// Returns the runtime symbol exports used by this image.
     #[inline]
-    pub fn exports(&self) -> &dyn SymbolExports<Arch> {
+    pub fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
         &*self.inner.exports
     }
 
@@ -288,37 +288,18 @@ where
     }
 
     #[inline]
-    fn lookup_symbol<'source>(
-        &'source self,
-        symbol: &SymbolInfo<'_>,
-        precompute: &mut PreCompute,
-    ) -> Option<&'source ElfSymbol<Arch::Layout>> {
-        self.exports().lookup(symbol, precompute)
+    fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
+        ElfCore::exports(self)
     }
 
     #[inline]
-    fn base(&self) -> VmAddr {
-        ElfCore::base(self)
+    fn memory(&self) -> &dyn ImageMemory {
+        self.segments()
     }
 
     #[inline]
-    fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()> {
-        self.segments().read_bytes(self.base() + offset, dst)
-    }
-
-    #[inline]
-    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        self.segments().host_ptr(addr)
-    }
-
-    #[inline]
-    fn tls_mod_id(&self) -> Option<TlsModuleId> {
-        ElfCore::tls_mod_id(self)
-    }
-
-    #[inline]
-    fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        ElfCore::tls_tp_offset(self)
+    fn tls(&self) -> ModuleTls {
+        ModuleTls::new(ElfCore::tls_mod_id(self), ElfCore::tls_tp_offset(self))
     }
 }
 

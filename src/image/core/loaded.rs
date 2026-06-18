@@ -2,8 +2,8 @@ use super::{ElfCore, ElfCoreRef, Symbol};
 use crate::{
     Result,
     arch::ArchKind,
-    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, PreCompute, SymbolInfo},
-    image::{Module, ModuleHandle, ModuleScope},
+    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, SymbolInfo},
+    image::{Module, ModuleHandle, ModuleScope, ModuleTls},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymDef},
@@ -556,46 +556,25 @@ where
     }
 
     #[inline]
-    fn is_loaded(&self) -> bool {
-        true
-    }
-
-    #[inline]
     fn name(&self) -> &str {
         LoadedCore::name(self)
     }
 
     #[inline]
-    fn lookup_symbol<'source>(
-        &'source self,
-        symbol: &SymbolInfo<'_>,
-        precompute: &mut PreCompute,
-    ) -> Option<&'source ElfSymbol<Arch::Layout>> {
-        self.core.exports().lookup(symbol, precompute)
+    fn exports(&self) -> &dyn crate::image::SymbolExports<Arch::Layout> {
+        self.core.exports()
     }
 
     #[inline]
-    fn base(&self) -> VmAddr {
-        self.core.base()
+    fn memory(&self) -> &dyn ImageMemory {
+        self.core.segments()
     }
 
     #[inline]
-    fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()> {
-        self.core.read_bytes(offset, dst)
-    }
-
-    #[inline]
-    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        self.core.host_ptr(addr)
-    }
-
-    #[inline]
-    fn tls_mod_id(&self) -> Option<TlsModuleId> {
-        LoadedCore::tls_mod_id(self)
-    }
-
-    #[inline]
-    fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        LoadedCore::tls_tp_offset(self)
+    fn tls(&self) -> ModuleTls {
+        ModuleTls::new(
+            LoadedCore::tls_mod_id(self),
+            LoadedCore::tls_tp_offset(self),
+        )
     }
 }

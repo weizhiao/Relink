@@ -25,7 +25,7 @@ pub(crate) struct CoreInner<
     pub(crate) path: PathBuf,
 
     /// Runtime exports used for module symbol lookup.
-    pub(crate) exports: Arc<dyn SymbolExports<Arch>>,
+    pub(crate) exports: Arc<dyn SymbolExports<Arch::Layout>>,
 
     /// Finalization behavior resolved during relocation.
     pub(crate) finalizer: OnceCell<Finalizer<Arch>>,

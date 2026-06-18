@@ -97,8 +97,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
         let dep_names = scope
             .iter()
-            .filter_map(|source| source.as_any().downcast_ref::<LoadedCore<D, Arch, R>>())
-            .map(|d| d.name())
+            .map(|source| source.name())
             .collect::<alloc::vec::Vec<_>>();
         if !dep_names.is_empty() {
             logging::debug!("[{}] Bound dependencies: {:?}", self.name(), dep_names);

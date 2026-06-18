@@ -18,6 +18,8 @@ use core::{ffi::CStr, ptr::NonNull};
 
 use super::lifecycle::{Finalizer, FiniEvent};
 
+type ObjectExportsHandle<L> = Option<Arc<dyn SymbolExports<L>>>;
+
 /// Relocatable-object layout event emitted before section addresses are assigned.
 pub struct SectionLayoutEvent<'event, L: ElfLayout = NativeElfLayout> {
     sections: &'event mut ObjectSections<L>,
@@ -127,7 +129,7 @@ pub struct ObjectRelocatedEvent<
     sections: &'event ObjectSections<Arch::Layout>,
     symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
     memory: ObjectSegmentView<'event, R>,
-    exports: Option<Arc<dyn SymbolExports<Arch>>>,
+    exports: ObjectExportsHandle<Arch::Layout>,
     finalizer: Finalizer<Arch>,
 }
 
@@ -215,7 +217,7 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess>
     #[inline]
     pub fn set_exports<E>(&mut self, exports: E)
     where
-        E: SymbolExports<Arch> + 'static,
+        E: SymbolExports<Arch::Layout> + 'static,
     {
         self.exports = Some(exports_handle(exports));
     }
@@ -249,7 +251,7 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess>
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (Option<Arc<dyn SymbolExports<Arch>>>, Finalizer<Arch>) {
+    pub(crate) fn into_parts(self) -> (ObjectExportsHandle<Arch::Layout>, Finalizer<Arch>) {
         (self.exports, self.finalizer)
     }
 }

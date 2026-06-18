@@ -1,59 +1,52 @@
 use crate::{
-    Result,
     arch::NativeArch,
-    elf::{ElfSymbol, PreCompute, SymbolInfo, SymbolTable},
-    memory::{VmAddr, VmOffset},
+    elf::{ElfLayout, ElfSymbol, PreCompute, SymbolInfo, SymbolTable},
+    memory::ImageMemory,
     relocation::RelocationArch,
     sync::Arc,
     tls::{TlsModuleId, TlsTpOffset},
 };
 use alloc::boxed::Box;
-use core::{any::Any, ptr::NonNull};
+use core::any::Any;
 
 /// Runtime symbol exports for a module.
 ///
 /// Export backends may be backed by an ELF dynamic symbol table, an object export
 /// table, kernel export metadata, or a caller-provided synthetic table.
-pub trait SymbolExports<Arch: RelocationArch>: Send + Sync {
+pub trait SymbolExports<L: ElfLayout>: Send + Sync {
     /// Returns exported symbol entries when this backend can enumerate them.
-    fn symbols(&self) -> &[ElfSymbol<Arch::Layout>];
+    fn symbols(&self) -> &[ElfSymbol<L>];
 
     /// Returns the name for a symbol entry from this export table.
-    fn symbol_name<'exports>(
-        &'exports self,
-        symbol: &ElfSymbol<Arch::Layout>,
-    ) -> Option<&'exports str>;
+    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports str>;
 
     fn lookup<'exports>(
         &'exports self,
         symbol: &SymbolInfo<'_>,
         precompute: &mut PreCompute,
-    ) -> Option<&'exports ElfSymbol<Arch::Layout>>;
+    ) -> Option<&'exports ElfSymbol<L>>;
 }
 
 #[inline]
-pub(crate) fn exports_handle<Arch, E>(exports: E) -> Arc<dyn SymbolExports<Arch>>
+pub(crate) fn exports_handle<L, E>(exports: E) -> Arc<dyn SymbolExports<L>>
 where
-    Arch: RelocationArch,
-    E: SymbolExports<Arch> + 'static,
+    L: ElfLayout,
+    E: SymbolExports<L> + 'static,
 {
-    Arc::from(Box::new(exports) as Box<dyn SymbolExports<Arch>>)
+    Arc::from(Box::new(exports) as Box<dyn SymbolExports<L>>)
 }
 
-impl<Arch> SymbolExports<Arch> for SymbolTable<Arch::Layout>
+impl<L> SymbolExports<L> for SymbolTable<L>
 where
-    Arch: RelocationArch,
+    L: ElfLayout,
 {
     #[inline]
-    fn symbols(&self) -> &[ElfSymbol<Arch::Layout>] {
+    fn symbols(&self) -> &[ElfSymbol<L>] {
         self.view().symbols()
     }
 
     #[inline]
-    fn symbol_name<'exports>(
-        &'exports self,
-        symbol: &ElfSymbol<Arch::Layout>,
-    ) -> Option<&'exports str> {
+    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports str> {
         Some(self.strtab().get_str(symbol.st_name()))
     }
 
@@ -62,8 +55,41 @@ where
         &'exports self,
         symbol: &SymbolInfo<'_>,
         precompute: &mut PreCompute,
-    ) -> Option<&'exports ElfSymbol<Arch::Layout>> {
+    ) -> Option<&'exports ElfSymbol<L>> {
         self.view().lookup_filter(symbol, precompute)
+    }
+}
+
+/// TLS metadata associated with a runtime module.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ModuleTls {
+    mod_id: Option<TlsModuleId>,
+    tp_offset: Option<TlsTpOffset>,
+}
+
+impl ModuleTls {
+    /// No TLS metadata is available for the module.
+    pub const NONE: Self = Self {
+        mod_id: None,
+        tp_offset: None,
+    };
+
+    /// Creates module TLS metadata from the registered dynamic and static TLS values.
+    #[inline]
+    pub const fn new(mod_id: Option<TlsModuleId>, tp_offset: Option<TlsTpOffset>) -> Self {
+        Self { mod_id, tp_offset }
+    }
+
+    /// Returns the registered TLS module id, when available.
+    #[inline]
+    pub const fn mod_id(self) -> Option<TlsModuleId> {
+        self.mod_id
+    }
+
+    /// Returns the static TLS thread-pointer offset, when available.
+    #[inline]
+    pub const fn tp_offset(self) -> Option<TlsTpOffset> {
+        self.tp_offset
     }
 }
 
@@ -75,38 +101,18 @@ pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
     /// Returns this module as [`Any`] for runtime type checks.
     fn as_any(&self) -> &dyn Any;
 
-    /// Returns whether this module is backed by a loaded image.
-    fn is_loaded(&self) -> bool {
-        false
-    }
-
     /// Returns the module name used for diagnostics.
     fn name(&self) -> &str;
 
-    /// Looks up a relocatable symbol definition.
-    fn lookup_symbol<'source>(
-        &'source self,
-        symbol: &SymbolInfo<'_>,
-        precompute: &mut PreCompute,
-    ) -> Option<&'source ElfSymbol<Arch::Layout>>;
+    /// Returns the runtime symbol exports for this module.
+    fn exports(&self) -> &dyn SymbolExports<Arch::Layout>;
 
-    /// Returns the runtime base address used with `st_value`.
-    fn base(&self) -> VmAddr;
+    /// Returns this module's runtime memory view.
+    fn memory(&self) -> &dyn ImageMemory;
 
-    /// Reads bytes from the module image for COPY relocations.
-    fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()>;
-
-    /// Translates a module VM address into a host-accessible pointer.
-    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>>;
-
-    /// Returns the TLS module id, when this module owns TLS storage.
-    fn tls_mod_id(&self) -> Option<TlsModuleId> {
-        None
-    }
-
-    /// Returns the static TLS thread-pointer offset, when available.
-    fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        None
+    /// Returns TLS metadata for this module.
+    fn tls(&self) -> ModuleTls {
+        ModuleTls::NONE
     }
 }
 
@@ -121,46 +127,22 @@ where
     }
 
     #[inline]
-    fn is_loaded(&self) -> bool {
-        (**self).is_loaded()
-    }
-
-    #[inline]
     fn name(&self) -> &str {
         (**self).name()
     }
 
     #[inline]
-    fn lookup_symbol<'source>(
-        &'source self,
-        symbol: &SymbolInfo<'_>,
-        precompute: &mut PreCompute,
-    ) -> Option<&'source ElfSymbol<Arch::Layout>> {
-        (**self).lookup_symbol(symbol, precompute)
+    fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
+        (**self).exports()
     }
 
     #[inline]
-    fn base(&self) -> VmAddr {
-        (**self).base()
+    fn memory(&self) -> &dyn ImageMemory {
+        (**self).memory()
     }
 
     #[inline]
-    fn read_bytes(&self, offset: VmOffset, dst: &mut [u8]) -> Result<()> {
-        (**self).read_bytes(offset, dst)
-    }
-
-    #[inline]
-    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        (**self).host_ptr(addr)
-    }
-
-    #[inline]
-    fn tls_mod_id(&self) -> Option<TlsModuleId> {
-        (**self).tls_mod_id()
-    }
-
-    #[inline]
-    fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        (**self).tls_tp_offset()
+    fn tls(&self) -> ModuleTls {
+        (**self).tls()
     }
 }

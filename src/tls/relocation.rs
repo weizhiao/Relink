@@ -14,6 +14,7 @@ mod enabled {
         RelocReason, Result,
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
+        image::ModuleTls,
         memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
         observer::{
             RelocationObserver, TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
@@ -146,14 +147,17 @@ mod enabled {
                 }
             }
             value if value == Arch::DTPMOD => {
-                let Some(mod_id) = (if r_sym == 0 {
-                    Some(helper.core.tls_mod_id())
+                let Some(tls) = (if r_sym == 0 {
+                    Some(ModuleTls::new(
+                        helper.core.tls_mod_id(),
+                        helper.core.tls_tp_offset(),
+                    ))
                 } else {
-                    helper.find_symdef(r_sym).map(|symdef| symdef.tls_mod_id())
+                    helper.find_symdef(r_sym).map(|symdef| symdef.tls())
                 }) else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                 };
-                let Some(mod_id) = mod_id else {
+                let Some(mod_id) = tls.mod_id() else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
                 };
                 write_tls_word::<Arch, R>(segments, place, mod_id.get())?;
@@ -164,7 +168,7 @@ mod enabled {
                     let Some(sym) = symdef.symbol() else {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                     };
-                    if let Some(tp_offset) = symdef.tls_tp_offset() {
+                    if let Some(tp_offset) = symdef.tls().tp_offset() {
                         let tls_val =
                             VmAddr::new((tp_offset.get() + sym.st_value() as isize) as usize)
                                 .wrapping_add_signed(r_addend);
@@ -183,8 +187,9 @@ mod enabled {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                     };
                     let sym_value = sym.st_value();
-                    let tls_mod_id = symdef.tls_mod_id();
-                    let tls_tp_offset = symdef.tls_tp_offset();
+                    let tls = symdef.tls();
+                    let tls_mod_id = tls.mod_id();
+                    let tls_tp_offset = tls.tp_offset();
                     let tls_get_addr = helper.tls_get_addr;
                     let request = TlsDescBindingRequest::new(
                         sym_value,

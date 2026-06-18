@@ -230,12 +230,7 @@ where
         logging::debug!("Loading dynamic image: {}", object.path());
 
         let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Dynamic)?;
-        let image = self.load_dynamic_from_ehdr(&object, ehdr)?;
-        let base = image.base();
-
-        logging::info!("Loaded dynamic image: {} at {}", image.name(), base);
-
-        Ok(image)
+        self.load_dynamic_from_ehdr(&object, ehdr)
     }
 
     fn load_dynamic_from_ehdr(
@@ -271,6 +266,11 @@ where
             ImageBuilder::new(segments, path, ehdr, force_static_tls, page_size, user_data);
         let mut image = RawDynamic::from_builder(builder, phdrs)?;
         self.notify_after_dynamic_load(&mut image)?;
+        logging::info!(
+            "Loaded dynamic image: {} ({})",
+            image.name(),
+            image.segments()
+        );
         Ok(image)
     }
 
@@ -314,9 +314,12 @@ where
             ImageBuilder::new(segments, path, ehdr, force_static_tls, page_size, user_data);
         let mut image = RawDynamic::from_builder(builder, &phdrs)?;
         self.notify_after_dynamic_load(&mut image)?;
-        let base = image.base();
 
-        logging::info!("Loaded scanned dynamic image: {} at {}", image.name(), base);
+        logging::info!(
+            "Loaded scanned dynamic image: {} ({})",
+            image.name(),
+            image.segments()
+        );
 
         Ok(image)
     }
@@ -371,9 +374,12 @@ where
         )?;
         let mut image = RawDynamic::from_parts::<Tls>(parts)?;
         self.notify_after_dynamic_load(&mut image)?;
-        let base = image.base();
 
-        logging::info!("Borrowed dynamic image: {} at {}", image.name(), base);
+        logging::info!(
+            "Borrowed dynamic image: {} ({})",
+            image.name(),
+            image.segments()
+        );
 
         Ok(image)
     }
