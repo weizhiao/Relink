@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ matrix.channel }}
@@ -60,7 +60,7 @@ jobs:
   test-linking:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ matrix.channel }}
@@ -86,7 +86,7 @@ jobs:
   test-mini-loader:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ matrix.channel }}
@@ -111,7 +111,7 @@ jobs:
   test-riscv64-object-relocation:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: nightly
@@ -129,7 +129,7 @@ jobs:
   test-windows-loader:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: stable
@@ -139,7 +139,7 @@ jobs:
   bench:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ matrix.channel }}
@@ -158,7 +158,7 @@ jobs:
   build-no-std:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: nightly
