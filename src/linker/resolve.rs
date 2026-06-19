@@ -85,10 +85,10 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         V: VisibleModules<K, Arch, Q>,
     {
-        if let Some(id) = self.committed.key_id(key) {
-            if self.session.contains(id) || self.committed.contains(id) {
-                return self.committed.key(id).cloned();
-            }
+        if let Some(id) = self.committed.key_id(key)
+            && (self.session.contains(id) || self.committed.contains(id))
+        {
+            return self.committed.key(id).cloned();
         }
 
         self.visible_modules.visible_key(key)

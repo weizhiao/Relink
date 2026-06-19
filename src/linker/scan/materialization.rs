@@ -8,31 +8,33 @@ use super::{
 use crate::{LinkerError, Result, image::ModuleCapability, relocation::RelocationArch};
 use alloc::{collections::BTreeMap, vec::Vec};
 
-pub(crate) fn normalize_plan<K, Arch>(plan: &mut LinkPlan<K, Arch>) -> Result<()>
+impl<K, Arch> LinkPlan<K, Arch>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
 {
-    plan.try_for_each_module(|plan, module_id| {
-        let mode = resolve_materialization_mode(&*plan, module_id)?;
-        plan.set_materialization(module_id, mode);
+    pub(in crate::linker) fn normalize(&mut self) -> Result<()> {
+        self.try_for_each_module(|plan, module_id| {
+            let mode = resolve_materialization_mode(&*plan, module_id)?;
+            plan.set_materialization(module_id, mode);
+            Ok(())
+        })?;
+
+        let modules = self
+            .modules_with_materialization(Materialization::SectionRegions)
+            .collect::<Vec<_>>();
+        if modules.is_empty() {
+            return Ok(());
+        }
+
+        let policy = PackingPolicy::shared_huge_pages();
+        let mut arena_state = ArenaState::new();
+
+        arena_state.record_placed(self, &modules);
+        arena_state.assign_unplaced(self, &modules, policy);
+
         Ok(())
-    })?;
-
-    let section_region_modules = plan
-        .modules_with_materialization(Materialization::SectionRegions)
-        .collect::<Vec<_>>();
-    if section_region_modules.is_empty() {
-        return Ok(());
     }
-
-    let policy = PackingPolicy::shared_huge_pages();
-    let mut arena_state = ArenaState::new();
-
-    record_existing_section_placements(plan, &mut arena_state, &section_region_modules);
-    assign_missing_section_placements(plan, &mut arena_state, &section_region_modules, policy);
-
-    Ok(())
 }
 
 fn resolve_materialization_mode<K>(
@@ -80,46 +82,6 @@ where
     }
 }
 
-fn record_existing_section_placements<K>(
-    plan: &LinkPlan<K, impl RelocationArch>,
-    arena_state: &mut ArenaState,
-    modules: &[ModuleId],
-) where
-    K: Clone + Ord,
-{
-    for module_id in modules.iter().copied() {
-        for section_id in plan
-            .module_layout(module_id)
-            .alloc_sections()
-            .iter()
-            .copied()
-        {
-            if let Some(placement) = plan.placement(section_id) {
-                arena_state.register_existing_section(plan, module_id, section_id, placement);
-            }
-        }
-    }
-}
-
-fn assign_missing_section_placements<K>(
-    plan: &mut LinkPlan<K, impl RelocationArch>,
-    arena_state: &mut ArenaState,
-    modules: &[ModuleId],
-    policy: PackingPolicy,
-) where
-    K: Clone + Ord,
-{
-    for module_id in modules.iter().copied() {
-        let section_count = plan.module_layout(module_id).alloc_sections().len();
-        for index in 0..section_count {
-            let section_id = plan.module_layout(module_id).alloc_sections()[index];
-            if plan.placement(section_id).is_none() {
-                arena_state.assign_fallback_section(plan, module_id, section_id, policy);
-            }
-        }
-    }
-}
-
 struct ArenaState {
     shared_arenas: BTreeMap<MemoryClass, ArenaId>,
     private_arenas: BTreeMap<(ModuleId, MemoryClass), ArenaId>,
@@ -133,14 +95,54 @@ impl ArenaState {
         }
     }
 
-    fn register_existing_section<K>(
+    fn record_placed<K, Arch>(&mut self, plan: &LinkPlan<K, Arch>, modules: &[ModuleId])
+    where
+        K: Clone + Ord,
+        Arch: RelocationArch,
+    {
+        for module_id in modules.iter().copied() {
+            for section_id in plan
+                .module_layout(module_id)
+                .alloc_sections()
+                .iter()
+                .copied()
+            {
+                if let Some(placement) = plan.placement(section_id) {
+                    self.register_existing_section(plan, module_id, section_id, placement);
+                }
+            }
+        }
+    }
+
+    fn assign_unplaced<K, Arch>(
         &mut self,
-        plan: &LinkPlan<K, impl RelocationArch>,
+        plan: &mut LinkPlan<K, Arch>,
+        modules: &[ModuleId],
+        policy: PackingPolicy,
+    ) where
+        K: Clone + Ord,
+        Arch: RelocationArch,
+    {
+        for module_id in modules.iter().copied() {
+            let section_count = plan.module_layout(module_id).alloc_sections().len();
+            for index in 0..section_count {
+                let section_id = plan.module_layout(module_id).alloc_sections()[index];
+                if plan.placement(section_id).is_none() {
+                    self.assign_fallback_section(plan, module_id, section_id, policy);
+                }
+            }
+        }
+    }
+
+    fn register_existing_section<K, Arch>(
+        &mut self,
+        plan: &LinkPlan<K, Arch>,
         module_id: ModuleId,
         section_id: SectionId,
         placement: SectionPlacement,
     ) where
         K: Clone + Ord,
+        Arch: RelocationArch,
     {
         let metadata = plan.section_metadata(section_id);
         let memory_class = metadata
@@ -162,14 +164,15 @@ impl ArenaState {
         }
     }
 
-    fn assign_fallback_section<K>(
+    fn assign_fallback_section<K, Arch>(
         &mut self,
-        plan: &mut LinkPlan<K, impl RelocationArch>,
+        plan: &mut LinkPlan<K, Arch>,
         module_id: ModuleId,
         section_id: SectionId,
         policy: PackingPolicy,
     ) where
         K: Clone + Ord,
+        Arch: RelocationArch,
     {
         let (memory_class, alignment) = {
             let section = plan.section_metadata(section_id);

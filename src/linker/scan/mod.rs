@@ -19,5 +19,4 @@ pub use passes::{
 pub(in crate::linker) use layout::{MemoryLayoutPlan, SectionId};
 pub(in crate::linker) use mapped::MappedRuntimeMemory;
 pub(crate) use mapped::{GotPltTarget, build_arena_raw_dynamic};
-pub(in crate::linker) use materialization::normalize_plan;
 pub(in crate::linker) use plan::{LinkPlan, ModuleId};

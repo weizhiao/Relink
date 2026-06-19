@@ -1,12 +1,12 @@
 use crate::{
     LinkerError, RelocReason, Result,
     elf::{
-        ElfLayout, ElfRelEntry, ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr,
-        ElfSymbol, ElfSymbolType, ElfWord,
+        ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr, ElfSymbol,
+        ElfSymbolType,
     },
     image::{LoadedCore, LoadedObject, ModuleScope, RawObject, exports_handle},
     logging,
-    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
+    memory::{RegionAccess, VmAddr, VmOffset},
     object::{ObjectExports, ObjectSegmentView, section_entries},
     observer::{
         Finalizer, InitEvent, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent,
@@ -46,25 +46,6 @@ where
             let target = &shdrs[target_id.index()];
             (target_id, relocation_id, target, relocation_shdr)
         })
-}
-
-#[inline]
-pub(crate) fn object_relocation_addend<Arch, Memory>(
-    memory: &Memory,
-    target: &ElfShdr<Arch::Layout>,
-    rel: &ElfRelType<Arch>,
-) -> Result<isize>
-where
-    Arch: ObjectRelocationArch,
-    Memory: ImageMemory,
-{
-    if !<ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::HAS_IMPLICIT_ADDEND {
-        return Ok(rel.r_addend(VmAddr::null()));
-    }
-
-    let place = VmAddr::new(target.sh_addr()) + rel.r_offset();
-    let word = unsafe { memory.read_value::<<Arch::Layout as ElfLayout>::Word>(place)? };
-    Ok(word.to_usize() as isize)
 }
 
 impl<D: 'static, Arch, R> RawObject<D, Arch, R>

@@ -151,6 +151,33 @@ impl<R: RegionAccess> RuntimeModuleMemory<R> {
     }
 }
 
+impl<R: RegionAccess> ImageMemory for RuntimeModuleMemory<R> {
+    #[inline]
+    fn base(&self) -> VmAddr {
+        self.segments.base()
+    }
+
+    #[inline]
+    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
+        self.segments.host_ptr(addr)
+    }
+
+    #[inline]
+    fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>> {
+        self.segments.host_ptr_range(addr, len)
+    }
+
+    #[inline]
+    fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
+        self.segments.read_bytes(addr, dst)
+    }
+
+    #[inline]
+    fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
+        self.segments.write_bytes(addr, src)
+    }
+}
+
 impl<R: RegionAccess> MappedRuntimeMemory<R> {
     pub(crate) fn map<K, Arch, M>(mapper: &M, plan: &LinkPlan<K, Arch>) -> Result<Option<Self>>
     where
@@ -167,23 +194,14 @@ impl<R: RegionAccess> MappedRuntimeMemory<R> {
         }))
     }
 
-    fn build_module(
-        &mut self,
-        id: ModuleId,
-        layout: &MemoryLayoutPlan,
-    ) -> Result<&RuntimeModuleMemory<R>> {
+    pub(crate) fn build_module(&mut self, id: ModuleId, layout: &MemoryLayoutPlan) -> Result<()> {
         let runtime = RuntimeModuleMemory::build(id, layout, &self.arenas)?;
         let res = self.modules.insert(id, runtime);
         debug_assert!(
             res.is_none(),
             "module runtime memory was built more than once"
         );
-        self.modules
-            .get(id)
-            .ok_or_else(|| {
-                LinkerError::runtime_memory("section-region module runtime memory was not cached")
-            })
-            .map_err(Into::into)
+        Ok(())
     }
 
     pub(crate) fn repair_module<K, Arch>(
@@ -196,7 +214,9 @@ impl<R: RegionAccess> MappedRuntimeMemory<R> {
         Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
         crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     {
-        let runtime = self.build_module(id, plan.memory_layout())?;
+        let runtime = self.modules.get(id).ok_or_else(|| {
+            LinkerError::runtime_memory("section-region module runtime memory was not cached")
+        })?;
         let mut rewriter = RuntimeMetadataRewriter::<_, Arch, R>::new(id, plan, runtime);
         rewriter.rewrite()
     }

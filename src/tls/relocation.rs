@@ -128,7 +128,7 @@ mod enabled {
         let segments = helper.core.segments();
         let base = segments.base();
         let place = base + rel.r_offset();
-        let r_addend = rel.r_addend(base);
+        let r_addend = rel.read_addend(segments, place)?;
 
         match r_type {
             value if value == Arch::DTPOFF => {

@@ -142,6 +142,68 @@ impl<Arch: RelocationArch> RelativeRel<Arch> {
     }
 }
 
+/// Applies `R_*_RELATIVE` entries from a regular `REL`/`RELA` relocation table.
+///
+/// The input slice is expected to contain only relative relocations, such as the
+/// prefix described by `DT_RELCOUNT`/`DT_RELACOUNT`.
+pub fn relocate_relative<Arch, Memory>(rel: &[ElfRelType<Arch>], memory: &Memory) -> Result<()>
+where
+    Arch: RelocationArch,
+    Memory: ImageMemory,
+    <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+{
+    let base = memory.base();
+    debug_assert!(rel.iter().all(|rel| rel.r_type() == Arch::RELATIVE));
+    for entry in rel {
+        debug_assert!(entry.r_type() == Arch::RELATIVE);
+        let place = base + entry.r_offset();
+        let addend = entry.read_addend(memory, place)?;
+        let value = base.wrapping_add_signed(addend);
+        let word = <Arch::Layout as ElfLayout>::Word::from_usize(value.get());
+        unsafe { memory.write_value(place, word)? };
+    }
+    Ok(())
+}
+
+/// Applies `RELR` compact relative relocation entries.
+pub fn relocate_relr<L, Memory>(relr: &[ElfRelr<L>], memory: &Memory) -> Result<()>
+where
+    L: ElfLayout,
+    Memory: ImageMemory,
+    L::Word: crate::ByteRepr,
+{
+    let base = memory.base();
+    let update_relative_word = |addr| unsafe {
+        memory.update_value::<_>(addr, |word: L::Word| {
+            L::Word::from_usize((base + VmOffset::new(word.to_usize())).get())
+        })
+    };
+
+    let word_size = core::mem::size_of::<L::Relr>();
+    let mut next_offset = 0usize;
+    for entry in relr {
+        let value = entry.value();
+
+        if (value & 1) == 0 {
+            next_offset = value.wrapping_add(word_size);
+            update_relative_word(base + VmOffset::new(value))?;
+            continue;
+        }
+
+        let mut bitmap = value >> 1;
+        let mut offset = next_offset;
+        while bitmap != 0 {
+            if (bitmap & 1) != 0 {
+                update_relative_word(base + VmOffset::new(offset))?;
+            }
+            bitmap >>= 1;
+            offset = offset.wrapping_add(word_size);
+        }
+        next_offset = next_offset.wrapping_add((<L::Relr as ElfWord>::BITS - 1) * word_size);
+    }
+    Ok(())
+}
+
 /// Holds parsed relocation information
 pub(crate) struct DynamicRelocation<Arch: RelocationArch = crate::arch::NativeArch> {
     /// Relative relocations (REL_RELATIVE)
@@ -194,7 +256,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                 }
                 failure_reason = RelocReason::UnknownSymbol;
             } else if unlikely(r_type == Arch::IRELATIVE) {
-                let r_addend = rel.r_addend(base);
+                let r_addend = rel.read_addend(helper.memory(), place)?;
                 let addr = base.wrapping_add_signed(r_addend);
                 let resolved = helper.resolve_ifunc(rel, addr)?;
                 let word = <Arch::Layout as ElfLayout>::Word::from_usize(resolved.get());
@@ -224,57 +286,16 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         Memory: ImageMemory,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
-        let core = self.core_ref();
         let reloc = self.relocation();
-        let base = core.base();
 
         match &reloc.relative {
             RelativeRel::Rel(rel) => {
                 let rel = rel.as_slice();
                 assert!(rel.is_empty() || rel[0].r_type() == Arch::RELATIVE);
-                // Apply all relative relocations: new_value = base_address + addend
-                for rel in rel {
-                    debug_assert!(rel.r_type() == Arch::RELATIVE);
-                    let r_addend = rel.r_addend(base);
-                    let value = base.wrapping_add_signed(r_addend);
-                    let word = <Arch::Layout as ElfLayout>::Word::from_usize(value.get());
-                    unsafe { memory.write_value(base + rel.r_offset(), word)? };
-                }
+                relocate_relative::<Arch, _>(rel, memory)?;
             }
             RelativeRel::Relr(relr) => {
-                let relr = relr.as_slice();
-                // Apply compact relative relocations (RELR format)
-                let mut reloc_offset = 0usize;
-                let update_relative_word = |addr| unsafe {
-                    memory.update_value::<_>(addr, |word: <Arch::Layout as ElfLayout>::Word| {
-                        <Arch::Layout as ElfLayout>::Word::from_usize(
-                            (base + VmOffset::new(word.to_usize())).get(),
-                        )
-                    })
-                };
-
-                for relr in relr {
-                    let value = relr.value();
-
-                    if (value & 1) == 0 {
-                        reloc_offset = value;
-                        update_relative_word(base + VmOffset::new(reloc_offset))?;
-                        reloc_offset += core::mem::size_of::<<Arch::Layout as ElfLayout>::Word>();
-                        continue;
-                    }
-
-                    let mut bitmap = value >> 1;
-                    let mut offset = reloc_offset;
-                    while bitmap != 0 {
-                        if (bitmap & 1) != 0 {
-                            update_relative_word(base + VmOffset::new(offset))?;
-                        }
-                        bitmap >>= 1;
-                        offset += core::mem::size_of::<<Arch::Layout as ElfLayout>::Word>();
-                    }
-                    reloc_offset += (<Arch::Layout as ElfLayout>::Word::BITS - 1)
-                        * core::mem::size_of::<<Arch::Layout as ElfLayout>::Word>();
-                }
+                relocate_relr::<Arch::Layout, _>(relr.as_slice(), memory)?;
             }
         }
         Ok(self)
@@ -322,7 +343,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             if r_type == Arch::GOT || r_type == Arch::SYMBOLIC {
                 // Handle GOT and symbolic relocations
                 if let Some(symbol) = helper.find_symbol(rel)? {
-                    let r_addend = rel.r_addend(base);
+                    let r_addend = rel.read_addend(helper.memory(), place)?;
                     let value = symbol.wrapping_add_signed(r_addend);
                     let word = <Arch::Layout as ElfLayout>::Word::from_usize(value.get());
                     unsafe { helper.memory().write_value(place, word)? };
@@ -342,7 +363,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                 }
                 failure_reason = RelocReason::UnknownSymbol;
             } else if r_type == Arch::IRELATIVE {
-                let r_addend = rel.r_addend(base);
+                let r_addend = rel.read_addend(helper.memory(), place)?;
                 let addr = base.wrapping_add_signed(r_addend);
                 let resolved = helper.resolve_ifunc(rel, addr)?;
                 let word = <Arch::Layout as ElfLayout>::Word::from_usize(resolved.get());

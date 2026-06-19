@@ -318,7 +318,7 @@ fn mark_as_static_exec(mut bytes: Vec<u8>) -> Vec<u8> {
 
 fn empty_relocation_plan(
     _req: &RelocationRequest<'_, &'static str, ()>,
-) -> Result<RelocationInputs<()>, elf_loader::Error> {
+) -> Result<RelocationInputs, elf_loader::Error> {
     Ok(RelocationInputs::new(Vec::<LoadedCore<()>>::new()))
 }
 

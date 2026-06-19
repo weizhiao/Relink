@@ -21,6 +21,7 @@ mod traits;
 
 pub(crate) use defs::{RelocValue, RelocationValueFormula, RelocationValueKind, resolve_ifunc};
 pub(crate) use dynamic::DynamicRelocation;
+pub use dynamic::{relocate_relative, relocate_relr};
 #[cfg(feature = "object")]
 pub(crate) use helper::resolve_symbol_addr;
 pub(crate) use helper::{RelocHelper, SymDef, find_symdef_impl, likely, reloc_error, unlikely};

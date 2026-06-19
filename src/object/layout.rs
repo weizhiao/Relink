@@ -4,6 +4,7 @@ use crate::{
     arch::object::{PLT_ENTRY, PLT_ENTRY_SIZE},
     elf::{
         ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionId, ElfSectionType, ElfShdr,
+        ElfWord,
     },
     entity::{EntityRef, PrimaryMap},
     input::{ElfReader, ElfReaderExt},
@@ -15,7 +16,10 @@ use crate::{
     sync::Arc,
 };
 use alloc::vec::Vec;
-use core::ptr::NonNull;
+use core::{
+    mem::{MaybeUninit, size_of},
+    ptr::NonNull,
+};
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
 
 /// Convert section flags to memory protection flags
@@ -761,18 +765,51 @@ pub(crate) struct ObjectRelocKey {
 
 impl ObjectRelocKey {
     #[inline]
-    pub(crate) fn new<Arch: RelocationArch>(rel: &ElfRelType<Arch>) -> Self {
-        let addend = if <ElfRelType<Arch> as ElfRelEntry<Arch::Layout>>::HAS_IMPLICIT_ADDEND {
-            0
-        } else {
-            rel.r_addend(VmAddr::null())
-        };
+    pub(crate) fn new<Arch: RelocationArch>(rel: &ElfRelType<Arch>, addend: isize) -> Self {
         Self {
             r_type: rel.r_type(),
             r_sym: rel.r_symbol(),
             addend,
         }
     }
+}
+
+#[inline]
+fn object_relocation_key_addend<Arch>(
+    object: &impl ElfReader,
+    target: &ElfShdr<Arch::Layout>,
+    rel: &ElfRelType<Arch>,
+) -> Result<isize>
+where
+    Arch: RelocationArch,
+{
+    if rel.as_rel().is_some() {
+        let offset = rel.r_offset().get();
+        let len = size_of::<<Arch::Layout as ElfLayout>::Word>();
+        let Some(end) = offset.checked_add(len) else {
+            return Err(ParseShdrError::malformed("REL relocation addend range overflows").into());
+        };
+        if end > target.sh_size() {
+            return Err(
+                ParseShdrError::malformed("REL relocation addend exceeds target section").into(),
+            );
+        }
+        if target.section_type() == ElfSectionType::NOBITS {
+            return Ok(0);
+        }
+
+        let file_offset = target.sh_offset().checked_add(offset).ok_or_else(|| {
+            ParseShdrError::malformed("REL relocation addend file offset overflows")
+        })?;
+        let mut word = MaybeUninit::<<Arch::Layout as ElfLayout>::Word>::uninit();
+        let bytes = unsafe { core::slice::from_raw_parts_mut(word.as_mut_ptr().cast::<u8>(), len) };
+        object.read(bytes, file_offset)?;
+        return Ok(unsafe { word.assume_init() }.to_usize() as isize);
+    }
+
+    rel.as_rela()
+        .map(|rel| rel.r_addend())
+        .ok_or_else(|| ParseShdrError::malformed("RELA relocation key addend is missing").into())
 }
 
 impl PltGotSection {
@@ -793,6 +830,9 @@ impl PltGotSection {
             if size == 0 {
                 continue;
             }
+            let target = shdrs.get(shdr.sh_info() as usize).ok_or_else(|| {
+                ParseShdrError::malformed("relocation target section is out of range")
+            })?;
 
             object.with_bytes::<ElfRelType<Arch>, _, _>(
                 shdr.sh_offset(),
@@ -801,12 +841,19 @@ impl PltGotSection {
                 |relocations| {
                     for rel_entry in relocations {
                         let r_type = rel_entry.r_type();
-                        let key = ObjectRelocKey::new::<Arch>(rel_entry);
+                        let needs_got = Arch::object_needs_got(r_type);
+                        let needs_plt = Arch::object_needs_plt(r_type);
+                        if !needs_got && !needs_plt {
+                            continue;
+                        }
+                        let addend =
+                            object_relocation_key_addend::<Arch>(object, target, rel_entry)?;
+                        let key = ObjectRelocKey::new::<Arch>(rel_entry, addend);
 
-                        if Arch::object_needs_got(r_type) {
+                        if needs_got {
                             got_set.insert(key);
                         }
-                        if Arch::object_needs_plt(r_type) {
+                        if needs_plt {
                             got_plt_set.insert(key);
                         }
                     }

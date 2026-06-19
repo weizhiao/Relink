@@ -1,8 +1,9 @@
 //! ELF relocation-entry wrappers.
 
 use crate::{
+    ByteRepr, Result,
     arch::NativeArch,
-    memory::{VmAddr, VmOffset},
+    memory::{ImageMemory, VmAddr, VmOffset},
     relocation::RelocationArch,
 };
 
@@ -53,22 +54,8 @@ impl<L: ElfLayout> ElfRela<L> {
 
     /// Returns the relocation addend.
     #[inline]
-    pub fn r_addend(&self, _base: VmAddr) -> isize {
+    pub fn r_addend(&self) -> isize {
         self.rela.r_addend()
-    }
-
-    /// Sets the relocation offset.
-    /// This is used internally when adjusting relocation entries during loading.
-    #[inline]
-    pub(crate) fn set_offset(&mut self, offset: VmOffset) {
-        self.rela.set_r_offset(offset.get());
-    }
-
-    /// Sets the relocation addend.
-    /// This is used internally when adjusting relocation entries during loading.
-    #[inline]
-    pub(crate) fn set_addend(&mut self, _base: VmAddr, addend: isize) {
-        self.rela.set_r_addend(addend);
     }
 }
 
@@ -96,47 +83,12 @@ impl<L: ElfLayout> ElfRel<L> {
     pub fn r_offset(&self) -> VmOffset {
         VmOffset::new(self.rel.r_offset())
     }
-
-    /// Returns the relocation addend.
-    ///
-    /// For REL entries, the addend is stored at the relocation offset.
-    ///
-    /// # Arguments
-    /// * `base` - The base address to add to the offset.
-    #[inline]
-    pub fn r_addend(&self, base: VmAddr) -> isize {
-        let ptr = (base + self.r_offset()).as_ptr::<L::Word>();
-        unsafe { ptr.read_unaligned().to_usize() as isize }
-    }
-
-    /// Sets the relocation offset.
-    /// This is used internally when adjusting relocation entries during loading.
-    #[inline]
-    pub(crate) fn set_offset(&mut self, offset: VmOffset) {
-        self.rel.set_r_offset(offset.get());
-    }
-
-    /// Sets the relocation addend.
-    ///
-    /// For REL entries, the addend is stored at the relocation offset.
-    ///
-    /// # Arguments
-    /// * `base` - The base address to add to the offset.
-    /// * `addend` - The new implicit addend value.
-    #[inline]
-    #[allow(dead_code)]
-    pub(crate) fn set_addend(&mut self, base: VmAddr, addend: isize) {
-        let ptr = (base + self.r_offset()).as_mut_ptr::<L::Word>();
-        unsafe { ptr.write_unaligned(L::Word::from_usize(addend as usize)) };
-    }
 }
 
 /// Common interface shared by ELF `REL` and `RELA` relocation entries.
 pub trait ElfRelEntry<L: ElfLayout = NativeElfLayout> {
     /// Section type used by this relocation entry format.
     const SECTION_TYPE: ElfSectionType;
-    /// Whether the addend is stored at the relocation target address.
-    const HAS_IMPLICIT_ADDEND: bool;
 
     /// Returns the relocation type number.
     fn r_type(&self) -> ElfRelocationType;
@@ -144,17 +96,26 @@ pub trait ElfRelEntry<L: ElfLayout = NativeElfLayout> {
     fn r_symbol(&self) -> usize;
     /// Returns the relocation target offset.
     fn r_offset(&self) -> VmOffset;
-    /// Returns the relocation addend, reading implicit addends relative to `base`.
-    fn r_addend(&self, base: VmAddr) -> isize;
+    /// Reads the relocation addend, loading implicit addends from the relocation place.
+    fn read_addend<Memory>(&self, memory: &Memory, place: VmAddr) -> Result<isize>
+    where
+        Memory: ImageMemory,
+        L::Word: ByteRepr;
+    /// Returns this entry as an explicit-addend relocation, when applicable.
+    fn as_rela(&self) -> Option<&ElfRela<L>>;
+    /// Returns this entry as an implicit-addend relocation, when applicable.
+    fn as_rel(&self) -> Option<&ElfRel<L>>;
     /// Updates the relocation target offset.
     fn set_offset(&mut self, offset: VmOffset);
-    /// Updates the relocation addend.
-    fn set_addend(&mut self, base: VmAddr, addend: isize);
+    /// Writes the relocation addend, storing implicit addends to the relocation place.
+    fn write_addend<Memory>(&mut self, memory: &Memory, place: VmAddr, addend: isize) -> Result<()>
+    where
+        Memory: ImageMemory,
+        L::Word: ByteRepr;
 }
 
 impl<L: ElfLayout> ElfRelEntry<L> for ElfRela<L> {
     const SECTION_TYPE: ElfSectionType = ElfSectionType::RELA;
-    const HAS_IMPLICIT_ADDEND: bool = false;
 
     #[inline]
     fn r_type(&self) -> ElfRelocationType {
@@ -172,24 +133,47 @@ impl<L: ElfLayout> ElfRelEntry<L> for ElfRela<L> {
     }
 
     #[inline]
-    fn r_addend(&self, base: VmAddr) -> isize {
-        self.r_addend(base)
+    fn read_addend<Memory>(&self, _memory: &Memory, _place: VmAddr) -> Result<isize>
+    where
+        Memory: ImageMemory,
+        L::Word: ByteRepr,
+    {
+        Ok(ElfRela::r_addend(self))
+    }
+
+    #[inline]
+    fn as_rela(&self) -> Option<&ElfRela<L>> {
+        Some(self)
+    }
+
+    #[inline]
+    fn as_rel(&self) -> Option<&ElfRel<L>> {
+        None
     }
 
     #[inline]
     fn set_offset(&mut self, offset: VmOffset) {
-        self.set_offset(offset);
+        self.rela.set_r_offset(offset.get());
     }
 
     #[inline]
-    fn set_addend(&mut self, base: VmAddr, addend: isize) {
-        self.set_addend(base, addend);
+    fn write_addend<Memory>(
+        &mut self,
+        _memory: &Memory,
+        _place: VmAddr,
+        addend: isize,
+    ) -> Result<()>
+    where
+        Memory: ImageMemory,
+        L::Word: ByteRepr,
+    {
+        self.rela.set_r_addend(addend);
+        Ok(())
     }
 }
 
 impl<L: ElfLayout> ElfRelEntry<L> for ElfRel<L> {
     const SECTION_TYPE: ElfSectionType = ElfSectionType::REL;
-    const HAS_IMPLICIT_ADDEND: bool = true;
 
     #[inline]
     fn r_type(&self) -> ElfRelocationType {
@@ -207,18 +191,38 @@ impl<L: ElfLayout> ElfRelEntry<L> for ElfRel<L> {
     }
 
     #[inline]
-    fn r_addend(&self, base: VmAddr) -> isize {
-        self.r_addend(base)
+    fn read_addend<Memory>(&self, memory: &Memory, place: VmAddr) -> Result<isize>
+    where
+        Memory: ImageMemory,
+        L::Word: ByteRepr,
+    {
+        let word = unsafe { memory.read_value::<L::Word>(place)? };
+        Ok(word.to_usize() as isize)
+    }
+
+    #[inline]
+    fn as_rela(&self) -> Option<&ElfRela<L>> {
+        None
+    }
+
+    #[inline]
+    fn as_rel(&self) -> Option<&ElfRel<L>> {
+        Some(self)
     }
 
     #[inline]
     fn set_offset(&mut self, offset: VmOffset) {
-        self.set_offset(offset);
+        self.rel.set_r_offset(offset.get());
     }
 
     #[inline]
-    fn set_addend(&mut self, base: VmAddr, addend: isize) {
-        self.set_addend(base, addend);
+    fn write_addend<Memory>(&mut self, memory: &Memory, place: VmAddr, addend: isize) -> Result<()>
+    where
+        Memory: ImageMemory,
+        L::Word: ByteRepr,
+    {
+        let word = L::Word::from_usize(addend as usize);
+        unsafe { memory.write_value(place, word) }
     }
 }
 

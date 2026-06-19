@@ -5,7 +5,7 @@ use super::{
     resolver::KeyResolver,
     scan::{
         GotPltTarget, LinkPipeline, LinkPlan, MappedRuntimeMemory, Materialization,
-        MemoryLayoutPlan, ModuleId as PlanModuleId, build_arena_raw_dynamic, normalize_plan,
+        MemoryLayoutPlan, ModuleId as PlanModuleId, build_arena_raw_dynamic,
     },
     session::{GraphEntry, LoadSession, ModulePayload},
     storage::{KeyId, ModuleId as CommittedModuleId},
@@ -583,29 +583,23 @@ where
         &mut self,
         plan: &mut LinkPlan<K, Arch>,
     ) -> Result<Option<MappedRuntimeMemory<M::Region>>> {
-        normalize_plan(plan)?;
+        plan.normalize()?;
         let mut mapped_runtime = MappedRuntimeMemory::map(self.loader.mapper(), plan)?;
 
         if let Some(runtime) = mapped_runtime.as_mut() {
-            let section_region_modules = plan
+            let modules = plan
                 .modules_with_materialization(Materialization::SectionRegions)
                 .collect::<Vec<_>>();
-            for module_id in section_region_modules {
-                self.repair_planned_module(runtime, module_id, plan)?;
+            for &module_id in &modules {
+                runtime.build_module(module_id, plan.memory_layout())?;
             }
             runtime.populate(plan)?;
+            for module_id in modules {
+                runtime.repair_module::<_, Arch>(module_id, plan)?;
+            }
         }
 
         Ok(mapped_runtime)
-    }
-
-    fn repair_planned_module(
-        &mut self,
-        runtime: &mut MappedRuntimeMemory<M::Region>,
-        module_id: PlanModuleId,
-        plan: &mut LinkPlan<K, Arch>,
-    ) -> Result<()> {
-        runtime.repair_module::<_, Arch>(module_id, plan)
     }
 
     fn materialize_planned_raw(

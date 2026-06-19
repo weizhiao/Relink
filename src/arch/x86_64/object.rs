@@ -1,12 +1,9 @@
 use crate::{
     RelocReason,
     arch::x86_64::relocation::X86_64Arch,
-    elf::{ElfRelType, ElfShdr},
+    elf::{ElfRelEntry, ElfRelType, ElfShdr},
     memory::{ImageMemory, RegionAccess, VmAddr},
-    object::{
-        layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
-        object_relocation_addend,
-    },
+    object::layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
     relocation::{
         RelocHelper, RelocValue, RelocationHandler, RelocationValueInput, RelocationValueProvider,
         reloc_error,
@@ -87,8 +84,8 @@ impl X86_64Arch {
     {
         let r_type = rel.r_type();
         let core = helper.core;
-        let append = object_relocation_addend::<Self, _>(helper.memory(), target, rel)?;
         let place = VmAddr::new(target.sh_addr()) + rel.r_offset();
+        let append = rel.read_addend(helper.memory(), place)?;
         let unknown_symbol = || {
             reloc_error(
                 rel,
@@ -124,7 +121,7 @@ impl X86_64Arch {
                 match relocation_target_value(sym.get()) {
                     Ok(value) => Self::write_object_value(helper.memory(), place, value)?,
                     Err(RelocReason::IntConversionOutOfRange) => {
-                        let key = ObjectRelocKey::new::<Self>(rel);
+                        let key = ObjectRelocKey::new::<Self>(rel, append);
                         let plt_entry = pltgot.add_plt_entry(key);
                         let plt_entry_addr = match plt_entry {
                             PltEntry::Occupied(plt_entry_addr) => plt_entry_addr,
@@ -150,7 +147,7 @@ impl X86_64Arch {
             }
             R_X86_64_GOTPCREL => {
                 let sym = helper.symbol_addr(rel.r_symbol());
-                let key = ObjectRelocKey::new::<Self>(rel);
+                let key = ObjectRelocKey::new::<Self>(rel, append);
                 let got_entry = pltgot.add_got_entry(key);
                 let got_entry_addr = match got_entry {
                     GotEntry::Occupied(got_entry_addr) => got_entry_addr,

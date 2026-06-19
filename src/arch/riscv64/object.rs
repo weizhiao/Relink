@@ -1,11 +1,11 @@
 use crate::{
     RelocReason, Result,
     arch::riscv64::relocation::RiscV64Arch,
-    elf::{ElfRelType, ElfRelocationType, ElfShdr},
+    elf::{ElfRelEntry, ElfRelType, ElfRelocationType, ElfShdr},
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     object::{
         layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
-        object_relocation_addend, object_relocation_sections, section_entries,
+        object_relocation_sections, section_entries,
     },
     observer::RelocationObserver,
     relocation::{ObjectRelocationArch, RelocHelper, RelocationHandler, reloc_error},
@@ -157,19 +157,20 @@ impl RiscV64Arch {
             for rel in rels {
                 let r_type = rel.r_type().raw();
                 if r_type == R_RISCV_PCREL_HI20 || r_type == R_RISCV_GOT_HI20 {
+                    let place = VmAddr::new(target.sh_addr()) + rel.r_offset();
                     let addend = if r_type == R_RISCV_GOT_HI20 {
                         0
                     } else {
-                        object_relocation_addend::<Self, _>(helper.memory(), target, rel)?
+                        rel.read_addend(helper.memory(), place)?
                     };
                     state.hi20_cache.insert(
-                        VmAddr::new(target.sh_addr()) + rel.r_offset(),
+                        place,
                         Hi20Relocation {
                             symbol: rel.r_symbol(),
                             addend,
                             r_type,
                             got_key: (r_type == R_RISCV_GOT_HI20)
-                                .then(|| ObjectRelocKey::new::<Self>(rel)),
+                                .then(|| ObjectRelocKey::new::<Self>(rel, addend)),
                         },
                     );
                 }
@@ -195,8 +196,8 @@ impl RiscV64Arch {
         Memory: ImageMemory,
     {
         let r_type = rel.r_type().raw();
-        let addend = object_relocation_addend::<Self, _>(helper.memory(), target, rel)?;
         let place = VmAddr::new(target.sh_addr()) + rel.r_offset();
+        let addend = rel.read_addend(helper.memory(), place)?;
         let value_error =
             |reason| reloc_error::<Self, _, R, H>(rel, reason, helper.core, helper.symbols());
 
@@ -247,7 +248,7 @@ impl RiscV64Arch {
                 if r_type == R_RISCV_CALL_PLT
                     && !(-(1i64 << 31)..(1i64 << 31)).contains(&direct_off)
                 {
-                    let key = ObjectRelocKey::new::<Self>(rel);
+                    let key = ObjectRelocKey::new::<Self>(rel, addend);
                     target = Self::ensure_plt_entry(pltgot, key, sym);
                 }
 
@@ -262,7 +263,7 @@ impl RiscV64Arch {
                     return Err(value_error(RelocReason::Unsupported));
                 }
                 let sym = helper.symbol_addr(rel.r_symbol());
-                let key = ObjectRelocKey::new::<Self>(rel);
+                let key = ObjectRelocKey::new::<Self>(rel, addend);
                 let got_addr = Self::ensure_got_entry(pltgot, key, sym);
                 let hi20 = (got_addr.get() as i64 - place.get() as i64 + 0x800) >> 12;
                 unsafe {
@@ -477,9 +478,10 @@ impl RiscV64Arch {
             got_addr.get() as i64 - auipc_addr.get() as i64
         } else {
             let sym = helper.symbol_addr(hi20.symbol);
-            let target = sym.wrapping_add_signed(hi20.addend).wrapping_add_signed(
-                object_relocation_addend::<Self, _>(helper.memory(), target, rel)?,
-            );
+            let place = VmAddr::new(target.sh_addr()) + rel.r_offset();
+            let target = sym
+                .wrapping_add_signed(hi20.addend)
+                .wrapping_add_signed(rel.read_addend(helper.memory(), place)?);
             target.get() as i64 - auipc_addr.get() as i64
         };
 

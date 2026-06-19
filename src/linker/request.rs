@@ -338,13 +338,12 @@ where
 }
 
 /// Per-module relocation inputs produced by the caller's runtime policy.
-pub struct RelocationInputs<D: 'static = (), Arch: RelocationArch = crate::arch::NativeArch> {
+pub struct RelocationInputs<Arch: RelocationArch = crate::arch::NativeArch> {
     scope: ModuleScope<Arch>,
-    _marker: core::marker::PhantomData<fn() -> D>,
     binding: BindingMode,
 }
 
-impl<D: 'static, Arch> RelocationInputs<D, Arch>
+impl<Arch> RelocationInputs<Arch>
 where
     Arch: RelocationArch,
 {
@@ -357,7 +356,6 @@ where
     {
         Self {
             scope: ModuleScope::new(scope),
-            _marker: core::marker::PhantomData,
             binding: BindingMode::Default,
         }
     }
@@ -367,7 +365,6 @@ where
     pub fn scope(scope: ModuleScope<Arch>) -> Self {
         Self {
             scope,
-            _marker: core::marker::PhantomData,
             binding: BindingMode::Default,
         }
     }
@@ -427,7 +424,7 @@ pub trait RelocationPlanner<
     fn plan(
         &mut self,
         req: &RelocationRequest<'_, K, D, Arch, R>,
-    ) -> Result<RelocationInputs<D, Arch>>;
+    ) -> Result<RelocationInputs<Arch>>;
 }
 
 /// Default relocation planner that uses the request-provided dependency scope.
@@ -443,7 +440,7 @@ where
     fn plan(
         &mut self,
         req: &RelocationRequest<'_, K, D, Arch, R>,
-    ) -> Result<RelocationInputs<D, Arch>> {
+    ) -> Result<RelocationInputs<Arch>> {
         Ok(RelocationInputs::scope(req.scope().clone()))
     }
 }
@@ -452,13 +449,13 @@ impl<K, D: 'static, Arch, R, F> RelocationPlanner<K, D, Arch, R> for F
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    F: for<'a> FnMut(&RelocationRequest<'a, K, D, Arch, R>) -> Result<RelocationInputs<D, Arch>>,
+    F: for<'a> FnMut(&RelocationRequest<'a, K, D, Arch, R>) -> Result<RelocationInputs<Arch>>,
 {
     #[inline]
     fn plan(
         &mut self,
         req: &RelocationRequest<'_, K, D, Arch, R>,
-    ) -> Result<RelocationInputs<D, Arch>> {
+    ) -> Result<RelocationInputs<Arch>> {
         self(req)
     }
 }

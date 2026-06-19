@@ -5,7 +5,6 @@ use super::{
 use crate::linker::session::ModulePayload;
 use crate::{
     AlignedBytes, LinkerError, Result,
-    aligned_bytes::ByteRepr,
     elf::ElfSectionId,
     entity::{PrimaryMap, entity_ref},
     image::{ModuleCapability, ScannedDynamic},
@@ -100,12 +99,6 @@ type LinkPlanParts<K, Arch> = (
     PrimaryMap<ModuleId, PlannedModule<K, Arch>>,
     MemoryLayoutPlan,
 );
-
-fn section_data_entries<T: ByteRepr>(data: &AlignedBytes) -> Result<&[T]> {
-    data.try_cast_slice::<T>().ok_or_else(|| {
-        LinkerError::section_data("section data bytes do not match requested entry type").into()
-    })
-}
 
 /// A global, pre-map link plan built from metadata discovery.
 ///
@@ -363,46 +356,6 @@ where
         self.memory_layout
             .with_disjoint_section_data(accesses, f)
             .ok_or_else(LinkerError::missing_section_data_access)?
-    }
-
-    pub(in crate::linker) fn for_each_section_data<T, P>(
-        &mut self,
-        section: SectionId,
-        mut prepare: impl FnMut(&T, &MemoryLayoutPlan) -> Result<Option<P>>,
-        mut apply: impl FnMut(&mut Self, usize, P) -> Result<()>,
-    ) -> Result<()>
-    where
-        T: ByteRepr,
-    {
-        self.materialize_section_data(section)?;
-        let entry_count = {
-            let plan = &self.memory_layout;
-            let data = plan
-                .data(section)
-                .ok_or_else(|| LinkerError::section_data("section data was not materialized"))?;
-            section_data_entries::<T>(data)?.len()
-        };
-        for index in 0..entry_count {
-            let prepared = {
-                let plan = &self.memory_layout;
-                let data = plan.data(section).ok_or_else(|| {
-                    LinkerError::section_data("section data was not materialized")
-                })?;
-                let entries = data.try_cast_slice::<T>().ok_or_else(|| {
-                    LinkerError::section_data(
-                        "section data bytes do not match requested entry type",
-                    )
-                })?;
-                let entry = entries.get(index).ok_or_else(|| {
-                    LinkerError::section_data("section data entry index is out of bounds")
-                })?;
-                prepare(entry, plan)?
-            };
-            if let Some(prepared) = prepared {
-                apply(self, index, prepared)?;
-            }
-        }
-        Ok(())
     }
 
     /// Returns one section's data, materializing it on demand when needed.

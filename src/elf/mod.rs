@@ -31,7 +31,7 @@ pub(crate) use symbol::ElfStringTable;
 pub use defs::{
     Elf32Layout, Elf32Sym, Elf64Layout, ElfClass, ElfDynamicTag, ElfFileType, ElfLayout,
     ElfMachine, ElfProgramFlags, ElfProgramType, ElfRel, ElfRelEntry, ElfRelType, ElfRela,
-    ElfRelocationType, ElfSectionFlags, ElfSectionId, ElfSectionIndex, ElfSectionType,
+    ElfRelocationType, ElfRelr, ElfSectionFlags, ElfSectionId, ElfSectionIndex, ElfSectionType,
     ElfSymbolBind, ElfSymbolType, Lifecycle, NativeElfLayout,
 };
 pub use dynamic::ElfDyn;
