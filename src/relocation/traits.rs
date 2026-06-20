@@ -432,29 +432,6 @@ pub struct RelocateArgs<'a, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized, O
     pub(crate) observer: &'a mut Obs,
 }
 
-impl<'a, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized, Obs: ?Sized>
-    RelocateArgs<'a, Arch, PreH, PostH, Obs>
-{
-    #[inline]
-    pub(crate) fn new(
-        scope: ModuleScope<Arch>,
-        binding: BindingMode,
-        executor: Arc<dyn CodeExecutor<Arch>>,
-        pre_handler: &'a PreH,
-        post_handler: &'a PostH,
-        observer: &'a mut Obs,
-    ) -> Self {
-        Self {
-            scope,
-            binding,
-            executor,
-            pre_handler,
-            post_handler,
-            observer,
-        }
-    }
-}
-
 /// A trait for raw image types that can undergo relocation.
 ///
 /// In normal use, callers do not invoke this trait directly. Instead, they load a raw

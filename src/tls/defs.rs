@@ -1,11 +1,13 @@
 use crate::{
+    Result, TlsError,
     elf::{ElfLayout, ElfPhdr, ElfProgramType},
-    sync::Arc,
+    sync::{Arc, Weak},
 };
-use alloc::boxed::Box;
+
+pub(crate) const TLS_GET_ADDR: &str = "__tls_get_addr";
 
 /// Information about a TLS segment from ELF headers.
-#[derive(Clone)]
+#[derive(Clone, Copy, Default)]
 pub struct TlsInfo {
     /// Virtual address of the TLS template in the ELF file.
     pub vaddr: usize,
@@ -15,21 +17,6 @@ pub struct TlsInfo {
     pub memsz: usize,
     /// Alignment requirement of the TLS block.
     pub align: usize,
-    /// The initial TLS data (template).
-    image: Arc<Box<[u8]>>,
-}
-
-impl Default for TlsInfo {
-    #[inline]
-    fn default() -> Self {
-        Self {
-            vaddr: 0,
-            filesz: 0,
-            memsz: 0,
-            align: 0,
-            image: Arc::new(Box::default()),
-        }
-    }
 }
 
 impl core::fmt::Debug for TlsInfo {
@@ -39,35 +26,101 @@ impl core::fmt::Debug for TlsInfo {
             .field("filesz", &self.filesz)
             .field("memsz", &self.memsz)
             .field("align", &self.align)
-            .field("image_len", &self.image().len())
             .finish()
     }
 }
 
 impl TlsInfo {
     /// Creates a new `TlsInfo` from an ELF program header.
-    pub fn new<L: ElfLayout>(phdr: &ElfPhdr<L>, image: impl Into<Box<[u8]>>) -> Self {
+    pub fn new<L: ElfLayout>(phdr: &ElfPhdr<L>) -> Self {
         assert_eq!(phdr.program_type(), ElfProgramType::TLS);
         Self {
             vaddr: phdr.p_vaddr().get(),
             filesz: phdr.p_filesz(),
             memsz: phdr.p_memsz(),
             align: phdr.p_align(),
-            image: Arc::new(image.into()),
         }
     }
 
-    /// Returns the initial TLS image.
+    /// Returns a borrowed TLS template for this metadata.
     #[inline]
-    pub fn image(&self) -> &[u8] {
-        self.image.as_ref().as_ref()
+    pub fn template<'a>(self, image: &'a [u8]) -> TlsTemplate<'a> {
+        debug_assert_eq!(image.len(), self.filesz);
+        TlsTemplate { info: self, image }
+    }
+}
+
+/// Borrowed TLS initialization template.
+///
+/// The bytes usually point into the loaded ELF image. Use [`TlsImageSource`]
+/// when the template must be accessed after the current callback returns.
+#[derive(Clone, Copy)]
+pub struct TlsTemplate<'a> {
+    /// TLS segment metadata associated with this template.
+    pub info: TlsInfo,
+    /// Initialized TLS bytes borrowed from the loaded image.
+    pub image: &'a [u8],
+}
+
+impl core::fmt::Debug for TlsTemplate<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TlsTemplate")
+            .field("info", &self.info)
+            .field("image_len", &self.image.len())
+            .finish()
+    }
+}
+
+/// A cloneable source for a relocated TLS initialization image.
+///
+/// The source may refer back to the loaded image instead of owning a copy of the
+/// template bytes. Users must consume the borrowed template inside
+/// [`with_template`](Self::with_template).
+#[derive(Clone)]
+pub struct TlsImageSource {
+    info: TlsInfo,
+    provider: Weak<dyn TlsImageProvider>,
+}
+
+impl core::fmt::Debug for TlsImageSource {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TlsImageSource")
+            .field("info", &self.info())
+            .finish()
+    }
+}
+
+impl TlsImageSource {
+    #[inline]
+    pub(crate) fn new(info: TlsInfo, provider: Weak<dyn TlsImageProvider>) -> Self {
+        Self { info, provider }
     }
 
     #[inline]
-    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    pub(crate) fn image_arc(&self) -> Arc<Box<[u8]>> {
-        self.image.clone()
+    pub fn info(&self) -> TlsInfo {
+        self.info
     }
+
+    #[inline]
+    pub fn with_template(&self, f: &mut dyn FnMut(TlsTemplate<'_>) -> Result<()>) -> Result<()> {
+        let Some(provider) = self.provider.upgrade() else {
+            return Err(TlsError::TemplateUnavailable.into());
+        };
+        provider.with_tls_template(f)
+    }
+}
+
+pub(crate) trait TlsImageProvider: Send + Sync {
+    fn with_tls_template(&self, f: &mut dyn FnMut(TlsTemplate<'_>) -> Result<()>) -> Result<()>;
+}
+
+pub(crate) fn tls_image_provider_handle<T>(provider: Arc<T>) -> Arc<dyn TlsImageProvider>
+where
+    T: TlsImageProvider + 'static,
+{
+    let ptr = Arc::into_raw(provider);
+    let ptr: *const dyn TlsImageProvider = ptr;
+    unsafe { Arc::from_raw(ptr) }
 }
 
 /// TLS module ID assigned by a [`TlsResolver`](crate::tls::TlsResolver).

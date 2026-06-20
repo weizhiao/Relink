@@ -97,7 +97,22 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawElf<D, Arch, R>
     where
         Self: Relocatable<D, Arch = Arch>,
     {
-        Relocator::<(), (), (), Arch>::new().with_object(self)
+        let relocator = Relocator::<(), (), (), Arch>::new();
+        match &self {
+            RawElf::Dylib(dylib) => relocator
+                .with_default_tls_get_addr(dylib.inner.default_tls_get_addr())
+                .with_object(self),
+            RawElf::Exec(exec) => match exec {
+                RawExec::Dynamic(image) => relocator
+                    .with_default_tls_get_addr(image.default_tls_get_addr())
+                    .with_object(self),
+                RawExec::Static(_) => relocator.with_object(self),
+            },
+            #[cfg(feature = "object")]
+            RawElf::Object(object) => relocator
+                .with_default_tls_get_addr(object.default_tls_get_addr())
+                .with_object(self),
+        }
     }
 
     /// Returns the loader source path or caller-provided source identifier.

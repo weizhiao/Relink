@@ -1,7 +1,14 @@
-use super::Module;
-use crate::{arch::NativeArch, relocation::RelocationArch, sync::Arc};
+use super::{
+    Module,
+    synthetic::{SyntheticModule, SyntheticSymbol},
+};
+use crate::{
+    arch::NativeArch, memory::VmAddr, relocation::RelocationArch, sync::Arc, tls::TLS_GET_ADDR,
+};
 use alloc::{boxed::Box, vec::Vec};
 use core::{any::Any, ops::Deref, slice};
+
+const BUILTIN_MODULE_NAME: &str = "__relink_builtin";
 
 /// Shared ownership handle for one retained module.
 pub struct ModuleHandle<Arch: RelocationArch = NativeArch> {
@@ -97,9 +104,87 @@ impl<Arch: RelocationArch> From<Arc<dyn Module<Arch>>> for ModuleHandle<Arch> {
 /// Ordered, retained modules used for relocation symbol lookup.
 ///
 /// Modules are searched in order and held alive by relocated outputs that keep
-/// this scope.
+/// this scope. The first entry is reserved for Relink's built-in synthetic
+/// module.
 pub struct ModuleScope<Arch: RelocationArch = NativeArch> {
     modules: Arc<[ModuleHandle<Arch>]>,
+}
+
+/// Mutable builder for a [`ModuleScope`].
+///
+/// Builders always start with an empty built-in synthetic module in the first
+/// slot, so callers only append or replace the user-visible lookup scope.
+pub struct ModuleScopeBuilder<Arch: RelocationArch = NativeArch> {
+    builtin: SyntheticModule<Arch>,
+    modules: Vec<ModuleHandle<Arch>>,
+}
+
+impl<Arch: RelocationArch> Clone for ModuleScopeBuilder<Arch> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            builtin: self.builtin.clone(),
+            modules: self.modules.clone(),
+        }
+    }
+}
+
+impl<Arch: RelocationArch> ModuleScopeBuilder<Arch> {
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            builtin: SyntheticModule::empty(BUILTIN_MODULE_NAME),
+            modules: Vec::with_capacity(1),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn builtin_mut(&mut self) -> &mut SyntheticModule<Arch> {
+        &mut self.builtin
+    }
+
+    pub(crate) fn seed_tls_get_addr(&mut self, addr: VmAddr) {
+        if Arch::SUPPORTS_NATIVE_RUNTIME && addr.get() != 0 {
+            self.builtin
+                .insert(SyntheticSymbol::function(TLS_GET_ADDR, addr.as_ptr()));
+        }
+    }
+
+    pub(crate) fn replace<I, R>(&mut self, modules: I)
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<ModuleHandle<Arch>>,
+    {
+        let modules = modules.into_iter();
+        let mut replaced = Vec::with_capacity(modules.size_hint().0.saturating_add(1));
+        replaced.extend(modules.map(Into::into));
+        self.modules = replaced;
+    }
+
+    pub fn extend<I, R>(&mut self, modules: I)
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<ModuleHandle<Arch>>,
+    {
+        self.modules.extend(modules.into_iter().map(Into::into));
+    }
+
+    #[inline]
+    pub fn into_scope(self) -> ModuleScope<Arch> {
+        let mut modules = self.modules;
+        modules.reserve(1);
+        modules.insert(0, ModuleHandle::new(self.builtin));
+        ModuleScope {
+            modules: Arc::from(modules),
+        }
+    }
+}
+
+impl<Arch: RelocationArch> Default for ModuleScopeBuilder<Arch> {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<Arch: RelocationArch> Clone for ModuleScope<Arch> {
@@ -112,31 +197,6 @@ impl<Arch: RelocationArch> Clone for ModuleScope<Arch> {
 }
 
 impl<Arch: RelocationArch> ModuleScope<Arch> {
-    /// Returns an empty lookup scope.
-    #[inline]
-    pub fn empty() -> Self {
-        Self {
-            modules: Arc::from(Vec::<ModuleHandle<Arch>>::new()),
-        }
-    }
-
-    /// Builds a lookup scope from an ordered sequence of modules.
-    pub fn new<I, R>(modules: I) -> Self
-    where
-        I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch>>,
-    {
-        Self {
-            modules: Arc::from(modules.into_iter().map(Into::into).collect::<Vec<_>>()),
-        }
-    }
-
-    /// Wraps an existing shared module slice.
-    #[inline]
-    pub fn from_shared(modules: Arc<[ModuleHandle<Arch>]>) -> Self {
-        Self { modules }
-    }
-
     /// Returns the modules in lookup order.
     #[inline]
     pub fn as_slice(&self) -> &[ModuleHandle<Arch>] {
@@ -159,37 +219,5 @@ impl<Arch: RelocationArch> ModuleScope<Arch> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.modules.is_empty()
-    }
-
-    /// Returns a new scope with additional modules appended after existing ones.
-    pub fn extend<I, R>(&self, modules: I) -> Self
-    where
-        I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch>>,
-    {
-        let modules = modules.into_iter();
-        let additional = modules.size_hint().0;
-        let mut extended = Vec::with_capacity(self.modules.len().saturating_add(additional));
-        extended.extend(self.modules.iter().cloned());
-        extended.extend(modules.map(Into::into));
-        Self {
-            modules: Arc::from(extended),
-        }
-    }
-}
-
-impl<Arch: RelocationArch> From<Arc<[ModuleHandle<Arch>]>> for ModuleScope<Arch> {
-    #[inline]
-    fn from(modules: Arc<[ModuleHandle<Arch>]>) -> Self {
-        Self::from_shared(modules)
-    }
-}
-
-impl<Arch: RelocationArch> From<Vec<ModuleHandle<Arch>>> for ModuleScope<Arch> {
-    #[inline]
-    fn from(modules: Vec<ModuleHandle<Arch>>) -> Self {
-        Self {
-            modules: Arc::from(modules),
-        }
     }
 }

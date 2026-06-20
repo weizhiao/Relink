@@ -181,6 +181,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDylib<D, Arch, R> {
 
     /// Creates a relocation builder for this shared object.
     pub fn relocator(self) -> Relocator<Self, (), (), Arch> {
-        Relocator::<(), (), (), Arch>::new().with_object(self)
+        let tls_get_addr = self.inner.default_tls_get_addr();
+        Relocator::<(), (), (), Arch>::new()
+            .with_default_tls_get_addr(tls_get_addr)
+            .with_object(self)
     }
 }

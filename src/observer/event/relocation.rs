@@ -193,7 +193,7 @@ pub struct TlsDescBindingRequest {
     addend: isize,
     module_id: Option<TlsModuleId>,
     tp_offset: Option<TlsTpOffset>,
-    tls_get_addr: VmAddr,
+    tls_get_addr: Option<VmAddr>,
 }
 
 impl TlsDescBindingRequest {
@@ -204,7 +204,7 @@ impl TlsDescBindingRequest {
         addend: isize,
         module_id: Option<TlsModuleId>,
         tp_offset: Option<TlsTpOffset>,
-        tls_get_addr: VmAddr,
+        tls_get_addr: Option<VmAddr>,
     ) -> Self {
         Self {
             symbol_value,
@@ -239,9 +239,9 @@ impl TlsDescBindingRequest {
         self.tp_offset
     }
 
-    /// Address of the loader-provided `__tls_get_addr` entry point.
+    /// Address of the loader-provided `__tls_get_addr` entry point for dynamic TLSDESC.
     #[inline]
-    pub const fn tls_get_addr(&self) -> VmAddr {
+    pub const fn tls_get_addr(&self) -> Option<VmAddr> {
         self.tls_get_addr
     }
 }

@@ -1,7 +1,7 @@
 use crate::{
     LinkerError, Result, UnresolvedDependency,
     arch::ArchKind,
-    image::{ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
+    image::{ModuleHandle, ModuleScope, ModuleScopeBuilder, RawDynamic, ScannedDynamic},
     input::Path,
     memory::{HostRegion, RegionAccess},
     relocation::{BindingMode, RelocationArch},
@@ -354,8 +354,10 @@ where
         I: IntoIterator<Item = R>,
         R: Into<ModuleHandle<Arch>>,
     {
+        let mut modules = ModuleScopeBuilder::new();
+        modules.extend(scope);
         Self {
-            scope: ModuleScope::new(scope),
+            scope: modules.into_scope(),
             binding: BindingMode::Default,
         }
     }
@@ -398,16 +400,6 @@ where
     #[inline]
     pub fn with_binding(mut self, binding: BindingMode) -> Self {
         self.binding = binding;
-        self
-    }
-
-    /// Appends modules after the existing lookup scope.
-    pub fn extend_scope<I, R>(mut self, scope: I) -> Self
-    where
-        I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch>>,
-    {
-        self.scope = self.scope.extend(scope);
         self
     }
 }

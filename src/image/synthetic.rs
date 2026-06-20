@@ -15,6 +15,7 @@ use core::ptr::NonNull;
 /// Synthetic symbols are useful for host callbacks, native bridge wrappers,
 /// and virtual replacement libraries where a symbol should resolve to a known
 /// runtime address without loading another ELF image.
+#[derive(Clone)]
 pub struct SyntheticSymbol {
     name: String,
     value: usize,
@@ -115,6 +116,18 @@ pub struct SyntheticModule<Arch: RelocationArch = NativeArch> {
     index: BTreeMap<String, usize>,
 }
 
+impl<Arch: RelocationArch> Clone for SyntheticModule<Arch> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            names: self.names.clone(),
+            symbols: self.symbols.clone(),
+            index: self.index.clone(),
+        }
+    }
+}
+
 impl<Arch: RelocationArch> SyntheticModule<Arch> {
     /// Creates a module from an ordered list of synthetic symbols.
     pub fn new<I>(name: impl Into<String>, symbols: I) -> Self
@@ -158,6 +171,12 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
             self.names.push(name);
             self.symbols.push(elf_symbol);
         }
+    }
+
+    /// Returns whether this module exports a synthetic symbol with `name`.
+    #[inline]
+    pub fn contains(&self, name: &str) -> bool {
+        self.index.contains_key(name)
     }
 
     /// Returns the number of synthetic symbols.
@@ -234,7 +253,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::ModuleScope;
+    use crate::image::ModuleScopeBuilder;
 
     #[test]
     fn synthetic_module_resolves_absolute_symbols_from_scope() {
@@ -245,11 +264,16 @@ mod tests {
                 0x1234usize as *const (),
             )],
         );
-        let scope = ModuleScope::new([module]);
+        let mut scope = ModuleScopeBuilder::new();
+        scope.extend([module]);
+        let scope = scope.into_scope();
         let info = SymbolInfo::from_str("host_double", None);
         let mut precompute = info.precompute();
 
-        let module = &scope.as_slice()[0];
+        let module = scope
+            .iter()
+            .find(|module| module.name() == "__bridge")
+            .expect("synthetic module should be retained in scope");
         let symbol = module
             .exports()
             .lookup(&info, &mut precompute)

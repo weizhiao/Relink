@@ -307,11 +307,11 @@ where
                 let offset = runtime
                     .remap_source_to_runtime_offset(phdr.p_vaddr())
                     .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_TLS"))?;
-                let image = runtime
+                runtime
                     .segments
                     .read_view::<u8>(VmOffset::new(offset.get()), phdr.p_filesz())
                     .ok_or_else(|| LinkerError::runtime_memory("PT_TLS image is malformed"))?;
-                tls_info = Some(TlsInfo::new(phdr, image.as_slice()));
+                tls_info = Some(TlsInfo::new(phdr));
             }
             _ => {}
         }

@@ -10,7 +10,6 @@ mod enabled {
             BindingMode, ObjectRelocationArch, RelocationArch, SupportLazy, SymDef, unlikely,
         },
         sync::Arc,
-        tls::lookup_tls_get_addr,
     };
     use core::ptr::NonNull;
 
@@ -213,13 +212,9 @@ mod enabled {
         let Some(scope) = dynamic_info.lazy.scope.get() else {
             invalid_state(dylib.path.as_str(), "missing lazy lookup")
         };
-        let symbol = lookup_tls_get_addr(syminfo.name(), dylib.tls.tls_get_addr())
-            .map(VmAddr::from_ptr)
-            .or_else(|| {
-                scope
-                    .iter()
-                    .find_map(|source| lookup_addr::<NativeArch>(&**source, syminfo.name()))
-            })
+        let symbol = scope
+            .iter()
+            .find_map(|source| lookup_addr::<NativeArch>(&**source, syminfo.name()))
             .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()));
 
         unsafe {

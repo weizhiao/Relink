@@ -13,7 +13,7 @@ mod enabled {
     use crate::{
         RelocReason, Result,
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
-        elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
+        elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolInfo},
         image::ModuleTls,
         memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
         observer::{
@@ -21,17 +21,13 @@ mod enabled {
         },
         relocation::{RelocHelper, RelocationArch, RelocationHandler},
         segment::ElfSegments,
+        tls::TLS_GET_ADDR,
     };
     use alloc::boxed::Box;
 
     pub(crate) enum TlsDescResolution {
         Resolved(TlsDescBindingValue),
         Failed(RelocReason),
-    }
-
-    #[inline]
-    pub(crate) fn lookup_tls_get_addr(name: &str, tls_get_addr: VmAddr) -> Option<*const ()> {
-        (name == "__tls_get_addr").then_some(tls_get_addr.as_ptr())
     }
 
     #[inline]
@@ -62,6 +58,18 @@ mod enabled {
         Obs: RelocationObserver<Arch> + ?Sized,
     {
         #[inline]
+        pub(crate) fn find_tls_get_addr(&self) -> Option<VmAddr> {
+            let info = SymbolInfo::from_str(TLS_GET_ADDR, None);
+            let mut precompute = info.precompute();
+            self.scope.iter().find_map(|source| {
+                source
+                    .exports()
+                    .lookup(&info, &mut precompute)
+                    .map(|sym| source.memory().base() + VmOffset::new(sym.st_value()))
+            })
+        }
+
+        #[inline]
         pub(crate) fn resolve_tlsdesc(
             &mut self,
             rel: &ElfRelType<Arch>,
@@ -89,9 +97,12 @@ mod enabled {
             }
 
             if let Some(module_id) = request.module_id() {
+                let Some(tls_get_addr) = request.tls_get_addr() else {
+                    return Ok(TlsDescResolution::Failed(RelocReason::UnknownSymbol));
+                };
                 let offset = VmAddr::new(sym_value).wrapping_add_signed(addend);
                 let dynamic_arg = Box::new(TlsDescDynamicArg {
-                    tls_get_addr: request.tls_get_addr().get(),
+                    tls_get_addr: tls_get_addr.get(),
                     ti: TlsIndex {
                         ti_module: module_id,
                         ti_offset: offset.get(),
@@ -190,7 +201,14 @@ mod enabled {
                     let tls = symdef.tls();
                     let tls_mod_id = tls.mod_id();
                     let tls_tp_offset = tls.tp_offset();
-                    let tls_get_addr = helper.tls_get_addr;
+                    let tls_get_addr = if tls_tp_offset.is_none() && tls_mod_id.is_some() {
+                        let Some(addr) = helper.find_tls_get_addr() else {
+                            return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
+                        };
+                        Some(addr)
+                    } else {
+                        None
+                    };
                     let request = TlsDescBindingRequest::new(
                         sym_value,
                         r_addend,
@@ -225,15 +243,10 @@ mod disabled {
     use crate::{
         RelocReason, Result,
         elf::{ElfRelEntry, ElfRelType},
-        memory::{RegionAccess, VmAddr},
+        memory::RegionAccess,
         observer::RelocationObserver,
         relocation::{RelocHelper, RelocationArch, RelocationHandler},
     };
-
-    #[inline]
-    pub(crate) fn lookup_tls_get_addr(_name: &str, _tls_get_addr: VmAddr) -> Option<*const ()> {
-        None
-    }
 
     #[inline]
     pub(crate) fn handle_tls_reloc<D, Arch, R, PreH, PostH, Obs>(
@@ -254,6 +267,6 @@ mod disabled {
 }
 
 #[cfg(not(feature = "tls"))]
-pub(crate) use disabled::{handle_tls_reloc, lookup_tls_get_addr};
+pub(crate) use disabled::handle_tls_reloc;
 #[cfg(feature = "tls")]
-pub(crate) use enabled::{handle_tls_reloc, lookup_tls_get_addr};
+pub(crate) use enabled::handle_tls_reloc;

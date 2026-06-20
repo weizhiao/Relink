@@ -19,7 +19,7 @@ use crate::{
         Relocator,
     },
     sync::{Arc, AtomicBool},
-    tls::{CoreTlsState, TlsResolver},
+    tls::{CoreTlsDescArgs, CoreTlsState, TlsResolver},
 };
 use core::{borrow::Borrow, cell::OnceCell, fmt::Debug, ops::Deref};
 
@@ -37,6 +37,9 @@ pub struct RawObject<
 > {
     /// Core component containing basic ELF information.
     pub(crate) core: ElfCore<D, Arch, R>,
+
+    /// Default `__tls_get_addr` entry point inserted into relocation scope.
+    tls_get_addr: VmAddr,
 
     /// Relocation-only object symbol table.
     pub(crate) symtab: ObjectSymbolTable<Arch::Layout>,
@@ -82,9 +85,12 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
             tls: CoreTlsState::new(
                 builder.tls_mod_id,
                 builder.tls_tp_offset,
-                VmAddr::from_ptr(T::tls_get_addr as *const ()),
+                None,
+                None,
                 T::unregister,
+                T::init_tls,
             ),
+            tls_desc_args: CoreTlsDescArgs::default(),
             segments,
         };
 
@@ -92,6 +98,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
             core: ElfCore {
                 inner: Arc::new(inner),
             },
+            tls_get_addr: VmAddr::from_ptr(T::tls_get_addr as *const ()),
             symtab: builder.symtab,
             sections: builder.sections,
             pltgot,
@@ -107,7 +114,15 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
     where
         Self: Relocatable<D, Arch = Arch>,
     {
-        Relocator::<(), (), (), Arch>::new().with_object(self)
+        let tls_get_addr = self.default_tls_get_addr();
+        Relocator::<(), (), (), Arch>::new()
+            .with_default_tls_get_addr(tls_get_addr)
+            .with_object(self)
+    }
+
+    #[inline]
+    pub(crate) fn default_tls_get_addr(&self) -> VmAddr {
+        self.tls_get_addr
     }
 
     /// Returns the retained object section metadata.

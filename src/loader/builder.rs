@@ -166,11 +166,10 @@ where
                 );
             }
             ElfProgramType::TLS => {
-                let tls_image = self
-                    .segments
+                self.segments
                     .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
                     .ok_or_else(|| ParsePhdrError::malformed("PT_TLS image is malformed"))?;
-                self.tls_info = Some(TlsInfo::new(phdr, tls_image.as_slice()));
+                self.tls_info = Some(TlsInfo::new(phdr));
             }
             _ => {}
         };

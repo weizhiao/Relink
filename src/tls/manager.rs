@@ -1,7 +1,7 @@
 use crate::{
     Result, TlsError, logging,
-    sync::{Arc, AtomicUsize, Ordering},
-    tls::{TlsIndex, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
+    sync::{AtomicUsize, Ordering},
+    tls::{TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsResolver, TlsTemplate, TlsTpOffset},
 };
 use alloc::{
     alloc::{alloc, dealloc, handle_alloc_error},
@@ -16,16 +16,15 @@ use spin::{Mutex, RwLock};
 struct ModuleSlot {
     /// The generation number when this slot was last updated (loaded or unloaded).
     generation: usize,
-    /// The TLS template. If None, the module at this ID has been unloaded.
-    template: Option<ModuleTlsTemplate>,
+    /// The TLS record. If None, the module at this ID has been unloaded.
+    record: Option<ModuleTlsRecord>,
 }
 
-/// Stores the static TLS template information for a loaded ELF module.
+/// Stores TLS metadata and, when needed, a source for the relocated template image.
 #[derive(Debug, Clone)]
-struct ModuleTlsTemplate {
-    image: Arc<Box<[u8]>>,
-    memsz: usize,
-    align: usize,
+struct ModuleTlsRecord {
+    info: TlsInfo,
+    source: Option<TlsImageSource>,
     tp_offset: Option<TlsTpOffset>,
 }
 
@@ -48,21 +47,20 @@ fn register_module(tls_info: &TlsInfo, tp_offset: Option<TlsTpOffset>) -> TlsMod
         .iter()
         .enumerate()
         .skip(1)
-        .find(|(_, slot)| slot.template.is_none())
+        .find(|(_, slot)| slot.record.is_none())
         .map(|(id, _)| id)
         .unwrap_or_else(|| NEXT_MODULE_ID.fetch_add(1, Ordering::SeqCst));
 
     if mod_id >= registry.len() {
         registry.resize_with(mod_id + 1, || ModuleSlot {
             generation: 0,
-            template: None,
+            record: None,
         });
     }
 
-    let template = ModuleTlsTemplate {
-        image: tls_info.image_arc(),
-        memsz: tls_info.memsz,
-        align: tls_info.align,
+    let record = ModuleTlsRecord {
+        info: *tls_info,
+        source: None,
         tp_offset,
     };
 
@@ -71,7 +69,7 @@ fn register_module(tls_info: &TlsInfo, tp_offset: Option<TlsTpOffset>) -> TlsMod
 
     registry[mod_id] = ModuleSlot {
         generation: new_gen,
-        template: Some(template),
+        record: Some(record),
     };
 
     logging::debug!(
@@ -97,17 +95,17 @@ fn unregister_module(mod_id: TlsModuleId) {
     // Mark as unloaded (None) and update generation
     registry[mod_id] = ModuleSlot {
         generation: new_gen,
-        template: None, // This signals threads to free their local copy
+        record: None, // This signals threads to free their local copy
     };
 
     logging::debug!("Unregistered TLS module: ID {}", mod_id);
 }
 
-fn get_module_template(mod_id: TlsModuleId) -> Option<ModuleTlsTemplate> {
+fn get_module_record(mod_id: TlsModuleId) -> Option<ModuleTlsRecord> {
     let registry = MODULE_REGISTRY.read();
     registry
         .get(mod_id.get())
-        .and_then(|slot| slot.template.clone())
+        .and_then(|slot| slot.record.clone())
 }
 
 // -----------------------------------------------------------------------------
@@ -160,8 +158,8 @@ impl ThreadDtv {
         let registry = MODULE_REGISTRY.read();
         let mut dtv = Vec::with_capacity(registry.len());
         for slot in registry.iter() {
-            let entry = slot.template.as_ref().and_then(|t| {
-                if let Some(offset) = t.tp_offset {
+            let entry = slot.record.as_ref().and_then(|record| {
+                if let Some(offset) = record.tp_offset {
                     // Safety: We assume that if `tp_offset` is set, the TLS block is
                     // accessible via `tp + offset`.
                     unsafe {
@@ -226,25 +224,39 @@ impl ThreadDtv {
             return Some(entry.ptr());
         }
 
-        // Need to allocate. Look up template from global registry.
-        let template = get_module_template(mod_id)?;
+        // Need to allocate. Look up TLS metadata from global registry.
+        let record = get_module_record(mod_id)?;
+        if let Some(offset) = record.tp_offset {
+            let tp = unsafe { crate::arch::get_thread_pointer() };
+            let ptr = unsafe { tp.offset(offset.get()) };
+            self.dtv[index] = Some(DtvEntry::Static { ptr });
+            return Some(ptr);
+        }
+        let source = record.source.as_ref()?;
 
         // Allocate memory
-        let layout = Layout::from_size_align(template.memsz, template.align).ok()?;
+        let layout = Layout::from_size_align(record.info.memsz, record.info.align).ok()?;
         let ptr = unsafe { alloc(layout) };
         if ptr.is_null() {
             handle_alloc_error(layout);
         }
 
         // Initialize memory (Copy image + Zero BSS)
-        unsafe {
-            let slice = core::slice::from_raw_parts_mut(ptr, template.memsz);
-            let image = template.image.as_ref().as_ref();
-            let image_len = image.len();
-            // Copy initialized data
-            slice[..image_len].copy_from_slice(image);
-            // Zero initialize remaining part (BSS)
-            slice[image_len..].fill(0);
+        let mut init = |tls: TlsTemplate<'_>| {
+            unsafe {
+                let slice = core::slice::from_raw_parts_mut(ptr, record.info.memsz);
+                let image = tls.image;
+                let image_len = image.len();
+                // Copy initialized data
+                slice[..image_len].copy_from_slice(image);
+                // Zero initialize remaining part (BSS)
+                slice[image_len..].fill(0);
+            }
+            Ok(())
+        };
+        if source.with_template(&mut init).is_err() {
+            unsafe { dealloc(ptr, layout) };
+            return None;
         }
 
         self.dtv[index] = Some(DtvEntry::Allocated { ptr, layout });
@@ -353,7 +365,7 @@ impl DefaultTlsResolver {
     /// This will automatically synchronize the thread's TLS state and allocate the
     /// TLS block if it hasn't been initialized yet.
     pub fn get_tls_data(mod_id: TlsModuleId) -> Option<&'static [u8]> {
-        let memsz = get_module_template(mod_id)?.memsz;
+        let memsz = get_module_record(mod_id)?.info.memsz;
         Self::get_ptr(mod_id).map(|ptr| unsafe { core::slice::from_raw_parts(ptr, memsz) })
     }
 
@@ -362,7 +374,7 @@ impl DefaultTlsResolver {
     /// This will automatically synchronize the thread's TLS state and allocate the
     /// TLS block if it hasn't been initialized yet.
     pub fn get_tls_data_mut(mod_id: TlsModuleId) -> Option<&'static mut [u8]> {
-        let memsz = get_module_template(mod_id)?.memsz;
+        let memsz = get_module_record(mod_id)?.info.memsz;
         Self::get_ptr(mod_id).map(|ptr| unsafe { core::slice::from_raw_parts_mut(ptr, memsz) })
     }
 }
@@ -387,6 +399,29 @@ impl TlsResolver for DefaultTlsResolver {
     fn add_static_tls(tls_info: &TlsInfo, offset: TlsTpOffset) -> Result<TlsModuleId> {
         let id = register_module(tls_info, Some(offset));
         Ok(id)
+    }
+
+    fn init_tls(
+        source: TlsImageSource,
+        mod_id: TlsModuleId,
+        offset: Option<TlsTpOffset>,
+    ) -> Result<()> {
+        let mut registry = MODULE_REGISTRY.write();
+        let Some(slot) = registry.get_mut(mod_id.get()) else {
+            return Err(TlsError::InvalidModuleId.into());
+        };
+        let Some(record) = slot.record.as_mut() else {
+            return Err(TlsError::InvalidModuleId.into());
+        };
+
+        let generation = GLOBAL_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        let info = source.info();
+        let source = if offset.is_some() { None } else { Some(source) };
+        slot.generation = generation;
+        record.info = info;
+        record.source = source;
+        record.tp_offset = offset;
+        Ok(())
     }
 
     fn unregister(mod_id: TlsModuleId) {

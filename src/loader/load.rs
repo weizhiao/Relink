@@ -557,12 +557,12 @@ where
                 );
             }
             ElfProgramType::TLS => {
-                let image = segments
+                segments
                     .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
                     .ok_or(crate::ParsePhdrError::malformed(
                         "PT_TLS image is malformed",
                     ))?;
-                tls_info = Some(crate::tls::TlsInfo::new(phdr, image.as_slice()));
+                tls_info = Some(crate::tls::TlsInfo::new(phdr));
             }
             ElfProgramType::GNU_RELRO => {
                 relro = Some(MemoryProtection::new(

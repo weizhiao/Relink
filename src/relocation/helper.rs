@@ -12,7 +12,7 @@ use crate::{
     relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
     runtime::{CodeContext, CodeExecutor},
     segment::ElfSegments,
-    tls::{TlsDescArgs, lookup_tls_get_addr},
+    tls::TlsDescArgs,
 };
 use core::marker::PhantomData;
 
@@ -36,8 +36,6 @@ pub(crate) struct RelocHelper<
     pub(crate) post_handler: &'find PostH,
     pub(crate) observer: &'find mut Obs,
     pub(crate) executor: &'find dyn CodeExecutor<Arch>,
-    #[allow(dead_code)]
-    pub(crate) tls_get_addr: VmAddr,
     pub(crate) tls_desc_args: TlsDescArgs,
 }
 
@@ -62,7 +60,6 @@ where
         post_handler: &'find PostH,
         observer: &'find mut Obs,
         executor: &'find dyn CodeExecutor<Arch>,
-        tls_get_addr: VmAddr,
     ) -> Self {
         Self {
             core,
@@ -73,7 +70,6 @@ where
             post_handler,
             observer,
             executor,
-            tls_get_addr,
             tls_desc_args: TlsDescArgs::default(),
         }
     }
@@ -103,8 +99,7 @@ where
     #[inline]
     pub(crate) fn find_symbol(&mut self, rel: &ElfRelType<Arch>) -> Result<Option<VmAddr>> {
         let (dynsym, syminfo) = self.symbols.symbol_idx(rel.r_symbol());
-        let resolved =
-            resolve_symbol_addr(self.core, &self.scope, dynsym, &syminfo, self.tls_get_addr);
+        let resolved = resolve_symbol_addr(self.core, &self.scope, dynsym, &syminfo);
         let mut event =
             SymbolBindingEvent::new(self.core, Some(rel), dynsym, syminfo.name(), resolved);
         self.observer.on_symbol_binding(&mut event)?;
@@ -266,23 +261,12 @@ pub(crate) fn resolve_symbol_addr<D, Arch, R>(
     scope: &ModuleScope<Arch>,
     dynsym: &ElfSymbol<Arch::Layout>,
     syminfo: &SymbolInfo<'_>,
-    tls_get_addr: VmAddr,
 ) -> Option<VmAddr>
 where
     Arch: RelocationArch,
     R: RegionAccess,
     D: 'static,
 {
-    if Arch::SUPPORTS_NATIVE_RUNTIME
-        && let Some(addr) = lookup_tls_get_addr(syminfo.name(), tls_get_addr)
-    {
-        logging::trace!(
-            "binding file [{}] to [tls_get_addr]: symbol [{}]",
-            core.name(),
-            syminfo.name()
-        );
-        return Some(VmAddr::from_ptr(addr));
-    }
     if let Some(res) = find_symdef_impl(core, scope, dynsym, syminfo) {
         return Some(res.convert());
     }

@@ -1,6 +1,6 @@
 use super::CoreInner;
 use crate::{
-    Result,
+    Result, TlsError,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
     image::{DynamicInfo, Module, ModuleTls, SymbolExports, exports_handle},
     input::{Path, PathBuf},
@@ -9,7 +9,10 @@ use crate::{
     relocation::RelocationArch,
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
-    tls::{CoreTlsState, TlsDescArgs, TlsModuleId, TlsTpOffset},
+    tls::{
+        CoreTlsDescArgs, CoreTlsState, TlsDescArgs, TlsImageProvider, TlsImageSource, TlsInfo,
+        TlsModuleId, TlsTemplate, TlsTpOffset, tls_image_provider_handle,
+    },
 };
 use alloc::vec::Vec;
 use core::{cell::OnceCell, fmt::Debug, ptr::NonNull};
@@ -46,6 +49,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCoreRef<D, Arch, R> {
     /// * `None` - If the [`ElfCore`] has been dropped.
     pub fn upgrade(&self) -> Option<ElfCore<D, Arch, R>> {
         self.inner.upgrade().map(|inner| ElfCore { inner })
+    }
+}
+
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess> TlsImageProvider for CoreInner<D, Arch, R> {
+    fn with_tls_template(&self, f: &mut dyn FnMut(TlsTemplate<'_>) -> Result<()>) -> Result<()> {
+        self.tls
+            .as_ref()
+            .ok_or(TlsError::TemplateUnavailable)?
+            .with_template(f)
     }
 }
 
@@ -179,23 +191,29 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     /// Gets the TLS module ID of the ELF object
     #[inline]
     pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
-        self.inner.tls.mod_id()
+        self.inner.tls.as_ref().and_then(CoreTlsState::mod_id)
     }
 
     /// Gets the TLS thread pointer offset of the ELF object
     #[inline]
     pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        self.inner.tls.tp_offset()
+        self.inner.tls.as_ref().and_then(CoreTlsState::tp_offset)
     }
 
-    #[inline]
-    pub(crate) fn tls_get_addr(&self) -> VmAddr {
-        self.inner.tls.tls_get_addr()
+    pub(crate) fn init_tls(&self) -> Result<()> {
+        let Some(tls) = self.inner.tls.as_ref() else {
+            return Ok(());
+        };
+        let Some(info) = tls.info() else {
+            return Ok(());
+        };
+        let provider = tls_image_provider_handle(self.inner.clone());
+        tls.init_tls(TlsImageSource::new(info, Arc::downgrade(&provider)))
     }
 
     /// Set the TLS descriptor arguments used by dynamic relocation.
     pub(crate) fn set_tls_desc_args(&self, args: TlsDescArgs) {
-        self.inner.tls.set_desc_args(args);
+        self.inner.tls_desc_args.set(args);
     }
 
     /// Sets the finalizer that will run when the initialized image is dropped.
@@ -226,8 +244,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
         mut segments: ElfSegments<R>,
         tls_mod_id: Option<TlsModuleId>,
         tls_tp_offset: Option<TlsTpOffset>,
-        tls_get_addr: VmAddr,
+        tls_info: Option<TlsInfo>,
+        tls_image: Option<MappedView<u8>>,
         tls_unregister: fn(TlsModuleId),
+        tls_init: fn(crate::tls::TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
         user_data: D,
     ) -> Result<Self> {
         segments.set_base(base);
@@ -251,7 +271,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
                     #[cfg(feature = "lazy-binding")]
                     lazy: crate::image::LazyBindingInfo::new(dynamic.pltrel, lazy_symtab),
                 })),
-                tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_get_addr, tls_unregister),
+                tls: CoreTlsState::new(
+                    tls_mod_id,
+                    tls_tp_offset,
+                    tls_info,
+                    tls_image,
+                    tls_unregister,
+                    tls_init,
+                ),
+                tls_desc_args: CoreTlsDescArgs::default(),
                 segments,
                 finalizer: OnceCell::new(),
                 user_data,

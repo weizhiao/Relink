@@ -3,7 +3,7 @@ use crate::{
     Result,
     arch::ArchKind,
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, SymbolInfo},
-    image::{Module, ModuleHandle, ModuleScope, ModuleTls},
+    image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, ModuleTls},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymDef},
@@ -86,7 +86,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     pub(crate) fn from_relocated_core(core: ElfCore<D, Arch, R>) -> Self {
         LoadedCore {
             core,
-            scope: ModuleScope::empty(),
+            scope: ModuleScopeBuilder::new().into_scope(),
         }
     }
 
@@ -101,20 +101,18 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     }
 
     #[inline]
-    pub(crate) fn from_relocated_core_scope<S>(core: ElfCore<D, Arch, R>, scope: S) -> Self
-    where
-        S: Into<ModuleScope<Arch>>,
-    {
-        LoadedCore {
-            core,
-            scope: scope.into(),
-        }
+    pub(crate) fn from_relocated_core_scope(
+        core: ElfCore<D, Arch, R>,
+        scope: ModuleScope<Arch>,
+    ) -> Self {
+        LoadedCore { core, scope }
     }
 
-    /// Returns the retained relocation lookup scope for this loaded module.
+    /// Returns the retained user-provided relocation lookup scope.
     #[inline]
     pub fn scope(&self) -> &[ModuleHandle<Arch>] {
-        self.scope.as_slice()
+        let scope = self.scope.as_slice();
+        if scope.is_empty() { scope } else { &scope[1..] }
     }
 
     /// Returns the target architecture used by this loaded module.
@@ -313,10 +311,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     /// # Safety
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
-    pub unsafe fn from_core_scope<S>(core: ElfCore<D, Arch, R>, scope: S) -> Self
-    where
-        S: Into<ModuleScope<Arch>>,
-    {
+    pub unsafe fn from_core_scope(core: ElfCore<D, Arch, R>, scope: ModuleScope<Arch>) -> Self {
         Self::from_relocated_core_scope(core, scope)
     }
 
@@ -392,6 +387,8 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
         let base = segments.base();
         let mut tls_mod_id = None;
         let mut actual_tls_tp_offset = tls_tp_offset;
+        let mut core_tls_info = None;
+        let mut core_tls_image = None;
 
         let mut dynamic = None;
         let mut dynamic_addr = None;
@@ -426,7 +423,9 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                 .ok_or(crate::ParsePhdrError::malformed(
                     "PT_TLS image is malformed",
                 ))?;
-            let info = TlsInfo::new(phdr, template.as_slice());
+            let info = TlsInfo::new(phdr);
+            core_tls_info = Some(info);
+            core_tls_image = Some(template);
 
             let mut static_tls = actual_tls_tp_offset.is_some();
             if !static_tls && let Some(dynamic_entries) = dynamic.as_ref() {
@@ -445,35 +444,40 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
 
             // The Tls::register will register the TLS module and return the ID.
             if static_tls {
-                if let Some(offset) = actual_tls_tp_offset {
-                    tls_mod_id = Some(Tls::add_static_tls(&info, offset)?);
+                let (mid, _offset) = if let Some(offset) = actual_tls_tp_offset {
+                    (Tls::add_static_tls(&info, offset)?, offset)
                 } else {
                     let (mid, offset) = Tls::register_static(&info)?;
-                    tls_mod_id = Some(mid);
                     actual_tls_tp_offset = Some(offset);
-                }
+                    (mid, offset)
+                };
+                tls_mod_id = Some(mid);
             } else {
                 tls_mod_id = Some(Tls::register(&info)?);
             }
         }
+        let core = unsafe {
+            ElfCore::from_raw(
+                path.into(),
+                base,
+                dynamic.ok_or(crate::ParsePhdrError::MissingDynamicSection)?,
+                dynamic_addr.ok_or(crate::ParsePhdrError::MissingDynamicSection)?,
+                phdrs,
+                eh_frame_hdr,
+                segments,
+                tls_mod_id,
+                actual_tls_tp_offset,
+                core_tls_info,
+                core_tls_image,
+                Tls::unregister,
+                Tls::init_tls,
+                user_data,
+            )
+        }?;
+        core.init_tls()?;
         Ok(Self {
-            core: unsafe {
-                ElfCore::from_raw(
-                    path.into(),
-                    base,
-                    dynamic.ok_or(crate::ParsePhdrError::MissingDynamicSection)?,
-                    dynamic_addr.ok_or(crate::ParsePhdrError::MissingDynamicSection)?,
-                    phdrs,
-                    eh_frame_hdr,
-                    segments,
-                    tls_mod_id,
-                    actual_tls_tp_offset,
-                    VmAddr::from_ptr(Tls::tls_get_addr as *const ()),
-                    Tls::unregister,
-                    user_data,
-                )
-            }?,
-            scope: ModuleScope::empty(),
+            core,
+            scope: ModuleScopeBuilder::new().into_scope(),
         })
     }
 }

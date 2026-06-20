@@ -739,6 +739,10 @@ pub enum TlsError {
     ResolverUnsupported,
     /// The current resolver does not support static TLS registration.
     StaticResolverUnsupported,
+    /// The TLS image source can no longer provide template bytes.
+    TemplateUnavailable,
+    /// The TLS module ID is not registered.
+    InvalidModuleId,
 }
 
 impl Display for TlsError {
@@ -746,6 +750,8 @@ impl Display for TlsError {
         match self {
             Self::ResolverUnsupported => f.write_str(TLS_DISABLED_MESSAGE),
             Self::StaticResolverUnsupported => f.write_str(STATIC_TLS_DISABLED_MESSAGE),
+            Self::TemplateUnavailable => f.write_str("TLS template image is no longer available"),
+            Self::InvalidModuleId => f.write_str("TLS module ID is not registered"),
         }
     }
 }

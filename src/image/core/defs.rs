@@ -7,7 +7,7 @@ use crate::{
     relocation::RelocationArch,
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering},
-    tls::CoreTlsState,
+    tls::{CoreTlsDescArgs, CoreTlsState},
 };
 use core::{cell::OnceCell, marker::PhantomData, ops::Deref};
 
@@ -33,8 +33,11 @@ pub(crate) struct CoreInner<
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
 
-    /// TLS runtime state for the loaded object.
-    pub(crate) tls: CoreTlsState,
+    /// TLS image state for the loaded object, when it owns a TLS module.
+    pub(crate) tls: Option<CoreTlsState>,
+
+    /// Backing storage for TLSDESC relocation arguments written into this image.
+    pub(crate) tls_desc_args: CoreTlsDescArgs,
 
     /// Memory segments
     pub(crate) segments: ElfSegments<R>,
@@ -64,7 +67,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Ar
                 logging::error!("finalization lifecycle failed for {}: {err}", name);
             }
         }
-        self.tls.cleanup();
+        if let Some(tls) = &self.tls {
+            tls.cleanup();
+        }
     }
 }
 

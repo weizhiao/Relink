@@ -59,8 +59,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         } else {
             BindingMode::Eager
         });
-        let tls_get_addr = self.tls_get_addr();
-
         if binding.is_lazy() {
             logging::debug!("Using lazy binding for {}", self.name());
         }
@@ -75,7 +73,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             post_handler,
             observer,
             executor.as_ref(),
-            tls_get_addr,
         );
 
         if !relocation.is_empty() {
@@ -110,6 +107,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         observer.on_dynamic_relocated(&mut dynamic_event)?;
         self.core_ref()
             .set_finalizer(dynamic_event.into_finalizer());
+        self.core_ref().init_tls()?;
         observer.on_activity(LinkActivity::Consistent)?;
 
         logging::debug!("Preparing initialization functions for {}", self.name());

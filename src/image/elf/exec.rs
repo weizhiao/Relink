@@ -11,11 +11,14 @@ use crate::{
     image::{LoadedCore, RawDynamic},
     input::{Path, PathBuf},
     loader::ImageBuilder,
-    memory::{HostRegion, RegionAccess, VmAddr},
+    memory::{HostRegion, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     segment::ElfSegments,
-    tls::{TlsModuleId, TlsResolver, TlsTpOffset},
+    tls::{
+        TlsImageProvider, TlsImageSource, TlsModuleId, TlsResolver, TlsTemplate, TlsTpOffset,
+        tls_image_provider_handle,
+    },
 };
 use alloc::vec::Vec;
 use core::fmt::Debug;
@@ -118,6 +121,19 @@ struct StaticExecInner<D, Arch: RelocationArch = NativeArch, R: RegionAccess = H
 
     /// TLS thread pointer offset
     tls_tp_offset: Option<TlsTpOffset>,
+
+    /// Keeps the static TLS image source alive while the executable is alive.
+    _tls_image: Option<Arc<StaticTlsImage>>,
+}
+
+struct StaticTlsImage {
+    template: TlsTemplate<'static>,
+}
+
+impl TlsImageProvider for StaticTlsImage {
+    fn with_tls_template(&self, f: &mut dyn FnMut(TlsTemplate<'_>) -> Result<()>) -> Result<()> {
+        f(self.template)
+    }
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Relocatable<D> for RawExec<D, Arch, R> {
@@ -186,7 +202,13 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Debug for RawExec<D, Arch, R> {
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawExec<D, Arch, R> {
     /// Creates a relocation builder for this executable image.
     pub fn relocator(self) -> Relocator<Self, (), (), Arch> {
-        Relocator::<(), (), (), Arch>::new().with_object(self)
+        let relocator = Relocator::<(), (), (), Arch>::new();
+        match &self {
+            RawExec::Dynamic(image) => relocator
+                .with_default_tls_get_addr(image.default_tls_get_addr())
+                .with_object(self),
+            RawExec::Static(_) => relocator.with_object(self),
+        }
     }
 
     /// Returns the loader source path or caller-provided source identifier.
@@ -396,7 +418,15 @@ impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
         builder.parse_phdrs(phdrs)?;
 
         let entry = VmAddr::new(builder.ehdr.e_entry());
+        let mut tls_image = None;
         let (tls_mod_id, tls_tp_offset) = if let Some(info) = &builder.tls_info {
+            let template = builder
+                .segments
+                .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)
+                .ok_or_else(|| crate::ParsePhdrError::malformed("PT_TLS image is malformed"))?;
+            tls_image = Some(Arc::new(StaticTlsImage {
+                template: (*info).template(template.as_slice()),
+            }));
             // Static executables always use static TLS if PT_TLS is present.
             let (mod_id, offset) = Tls::register_static(info)?;
             (Some(mod_id), Some(offset))
@@ -404,7 +434,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
             (None, None)
         };
 
-        let static_inner = StaticExecInner {
+        let inner = Arc::new(StaticExecInner {
             entry,
             path: builder.path,
             user_data: builder.user_data,
@@ -416,10 +446,21 @@ impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
             },
             tls_mod_id,
             tls_tp_offset,
-        };
-        Ok(StaticExec {
-            inner: Arc::new(static_inner),
-        })
+            _tls_image: tls_image.clone(),
+        });
+
+        if let (Some(mod_id), Some(offset), Some(image)) =
+            (tls_mod_id, tls_tp_offset, tls_image.as_ref())
+        {
+            let provider = tls_image_provider_handle(image.clone());
+            Tls::init_tls(
+                TlsImageSource::new(image.template.info, Arc::downgrade(&provider)),
+                mod_id,
+                Some(offset),
+            )?;
+        }
+
+        Ok(StaticExec { inner })
     }
 }
 

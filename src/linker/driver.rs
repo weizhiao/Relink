@@ -13,9 +13,11 @@ use super::{
 use crate::{
     LinkerError, Loader, Result,
     entity::SecondaryMap,
-    image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic, ScannedDynamic},
+    image::{
+        LoadedCore, ModuleHandle, ModuleScope, ModuleScopeBuilder, RawDynamic, ScannedDynamic,
+    },
     linker::session::ResolveSession,
-    memory::{ImageMemory, RegionAccess, VmOffset},
+    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     observer::{LinkObserver, LoadObserver, RelocationObserver, StagedDynamic},
     os::Mmap,
     relocation::{RelocationArch, RelocationHandler, Relocator},
@@ -852,7 +854,10 @@ where
                 }
             })
             .collect::<Vec<_>>();
-        ModuleScope::from(modules)
+        let mut scope = ModuleScopeBuilder::new();
+        scope.seed_tls_get_addr(VmAddr::from_ptr(Tls::tls_get_addr as *const ()));
+        scope.extend(modules);
+        scope.into_scope()
     }
 
     fn commit_session<Meta>(

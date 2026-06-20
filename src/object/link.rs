@@ -71,7 +71,6 @@ where
             observer,
             ..
         } = args;
-
         self.simplify_symbols(&scope, observer)?;
 
         let relocation_segments =
@@ -85,7 +84,6 @@ where
             post_handler,
             observer,
             executor.as_ref(),
-            self.core.tls_get_addr(),
         );
         let shdrs = self.sections.headers();
         let mut state = Arch::ObjectRelocationState::default();
@@ -182,7 +180,6 @@ where
         Obs: RelocationObserver<Arch> + ?Sized,
     {
         let base = self.core.base();
-        let tls_get_addr = self.core.tls_get_addr();
         let symbol_count = self.symtab.symbols().len();
 
         for idx in 0..symbol_count {
@@ -193,8 +190,7 @@ where
                 }
 
                 let addr = if symbol.is_undef() {
-                    let resolved =
-                        resolve_symbol_addr(&self.core, scope, symbol, &syminfo, tls_get_addr);
+                    let resolved = resolve_symbol_addr(&self.core, scope, symbol, &syminfo);
                     let mut event =
                         SymbolBindingEvent::new(&self.core, None, symbol, syminfo.name(), resolved);
                     observer.on_symbol_binding(&mut event)?;

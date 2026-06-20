@@ -1,4 +1,4 @@
-use super::{TlsIndex, TlsInfo, TlsModuleId, TlsTpOffset};
+use super::{TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTpOffset};
 use crate::{Result, TlsError};
 
 const TLS_GET_ADDR_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
@@ -33,6 +33,19 @@ pub trait TlsResolver {
     /// pointer is known.
     fn add_static_tls(tls_info: &TlsInfo, offset: TlsTpOffset) -> Result<TlsModuleId>;
 
+    /// Initializes a TLS module from a source that can provide the final
+    /// relocated template on demand.
+    ///
+    /// TLS layout may be assigned before dynamic relocations have been applied.
+    /// This hook is called once the template bytes are ready for future TLS block
+    /// initialization. Static resolvers may also copy the template into the current
+    /// thread's static TLS area.
+    fn init_tls(
+        source: TlsImageSource,
+        mod_id: TlsModuleId,
+        offset: Option<TlsTpOffset>,
+    ) -> Result<()>;
+
     /// Releases resources associated with the given module ID.
     fn unregister(mod_id: TlsModuleId);
 
@@ -52,6 +65,14 @@ impl TlsResolver for () {
     }
 
     fn add_static_tls(_tls_info: &TlsInfo, _offset: TlsTpOffset) -> Result<TlsModuleId> {
+        Err(TlsError::StaticResolverUnsupported.into())
+    }
+
+    fn init_tls(
+        _source: TlsImageSource,
+        _mod_id: TlsModuleId,
+        _offset: Option<TlsTpOffset>,
+    ) -> Result<()> {
         Err(TlsError::StaticResolverUnsupported.into())
     }
 
