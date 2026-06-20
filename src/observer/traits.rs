@@ -1,5 +1,5 @@
 use super::{
-    AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, InitEvent, LinkActivity,
+    AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, InitEvent,
     ResolveDependencyEvent, ResolveRootEvent, StagedDynamic, SymbolBindingEvent,
     TlsDescBindingEvent,
 };
@@ -76,12 +76,6 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
 /// module loading, or keep external debugger state without Relink owning those
 /// structures.
 pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
-    /// Called when the visible loaded-module set changes state.
-    #[inline]
-    fn on_activity(&mut self, _activity: LinkActivity) -> Result<()> {
-        Ok(())
-    }
-
     /// Called before initialization functions are executed.
     #[inline]
     fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver>(
@@ -223,11 +217,6 @@ where
     Arch: RelocationArch,
     O: RelocationObserver<Arch> + ?Sized,
 {
-    #[inline]
-    fn on_activity(&mut self, activity: LinkActivity) -> Result<()> {
-        (**self).on_activity(activity)
-    }
-
     #[inline]
     fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
@@ -382,11 +371,6 @@ where
     Arch: RelocationArch,
     O: RelocationObserver<Arch> + ?Sized,
 {
-    #[inline]
-    fn on_activity(&mut self, activity: LinkActivity) -> Result<()> {
-        (**self).on_activity(activity)
-    }
-
     #[inline]
     fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,

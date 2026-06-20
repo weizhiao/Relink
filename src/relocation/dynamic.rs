@@ -5,7 +5,7 @@ use crate::{
     image::{LoadedCore, RawDynamic},
     logging,
     memory::{ImageMemory, MappedView, RegionAccess, VmOffset},
-    observer::{DynamicRelocatedEvent, Finalizer, LinkActivity, RelocationObserver},
+    observer::{DynamicRelocatedEvent, Finalizer, RelocationObserver},
     relocation::{
         BindingMode, RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, ResolvedBinding,
         likely, reloc_error, unlikely,
@@ -63,8 +63,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDynamic<D, A
         if binding.is_lazy() {
             logging::debug!("Using lazy binding for {}", self.name());
         }
-        observer.on_activity(LinkActivity::Add)?;
-
         let mut helper = RelocHelper::new(
             self.core_ref(),
             self.symtab().view(),
@@ -109,7 +107,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDynamic<D, A
         self.core_ref()
             .set_finalizer(dynamic_event.into_finalizer());
         self.core_ref().init_tls()?;
-        observer.on_activity(LinkActivity::Consistent)?;
 
         logging::debug!("Preparing initialization functions for {}", self.name());
         self.call_init(observer, &init, executor.as_ref())?;
