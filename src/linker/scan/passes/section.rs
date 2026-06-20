@@ -4,6 +4,7 @@ use crate::{
     aligned_bytes::ByteRepr,
     linker::scan::{SectionId, SectionMetadata, SectionPlacement},
     relocation::RelocationArch,
+    tls::TlsResolver,
 };
 use core::marker::PhantomData;
 
@@ -36,10 +37,14 @@ where
 {
     /// Returns this section's owner module through `plan`.
     #[inline]
-    pub fn owner<K, Arch>(self, plan: &LinkPassPlan<'scope, K, S, Arch>) -> Module<'scope, S>
+    pub fn owner<K, Arch, Tls>(
+        self,
+        plan: &LinkPassPlan<'scope, K, S, Arch, Tls>,
+    ) -> Module<'scope, S>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         let owner = plan
             .plan
@@ -50,23 +55,28 @@ where
 
     /// Returns this section's metadata through `plan`.
     #[inline]
-    pub fn metadata<'borrow, K, Arch>(
+    pub fn metadata<'borrow, K, Arch, Tls>(
         self,
-        plan: &'borrow LinkPassPlan<'scope, K, S, Arch>,
+        plan: &'borrow LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> &'borrow SectionMetadata
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan.section_metadata(self.id)
     }
 
     /// Returns the section referenced by this section's `sh_link`, when present.
     #[inline]
-    pub fn linked_section<K, Arch>(self, plan: &LinkPassPlan<'scope, K, S, Arch>) -> Option<Self>
+    pub fn linked_section<K, Arch, Tls>(
+        self,
+        plan: &LinkPassPlan<'scope, K, S, Arch, Tls>,
+    ) -> Option<Self>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan
             .section_metadata(self.id)
@@ -76,10 +86,14 @@ where
 
     /// Returns the section referenced by this section's `sh_info`, when present.
     #[inline]
-    pub fn info_section<K, Arch>(self, plan: &LinkPassPlan<'scope, K, S, Arch>) -> Option<Self>
+    pub fn info_section<K, Arch, Tls>(
+        self,
+        plan: &LinkPassPlan<'scope, K, S, Arch, Tls>,
+    ) -> Option<Self>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan
             .section_metadata(self.id)
@@ -89,39 +103,42 @@ where
 
     /// Returns this section's data bytes through `plan`, materializing them on demand.
     #[inline]
-    pub fn data<'borrow, K, Arch>(
+    pub fn data<'borrow, K, Arch, Tls>(
         self,
-        plan: &'borrow mut LinkPassPlan<'scope, K, S, Arch>,
+        plan: &'borrow mut LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> Result<&'borrow [u8]>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         Ok(plan.plan.section_data(self.id)?.as_bytes())
     }
 
     /// Returns this section's mutable data bytes through `plan`, materializing them on demand.
     #[inline]
-    pub fn data_mut<'borrow, K, Arch>(
+    pub fn data_mut<'borrow, K, Arch, Tls>(
         self,
-        plan: &'borrow mut LinkPassPlan<'scope, K, S, Arch>,
+        plan: &'borrow mut LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> Result<&'borrow mut [u8]>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         Ok(plan.plan.section_data_mut(self.id)?.as_bytes_mut())
     }
 
     /// Returns this section's data as typed entries through `plan`.
     #[inline]
-    pub fn entries<'borrow, T, K, Arch>(
+    pub fn entries<'borrow, T, K, Arch, Tls>(
         self,
-        plan: &'borrow mut LinkPassPlan<'scope, K, S, Arch>,
+        plan: &'borrow mut LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> Result<&'borrow [T]>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
         T: ByteRepr,
     {
         plan.plan
@@ -135,13 +152,14 @@ where
 
     /// Returns this section's mutable data as typed entries through `plan`.
     #[inline]
-    pub fn entries_mut<'borrow, T, K, Arch>(
+    pub fn entries_mut<'borrow, T, K, Arch, Tls>(
         self,
-        plan: &'borrow mut LinkPassPlan<'scope, K, S, Arch>,
+        plan: &'borrow mut LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> Result<&'borrow mut [T]>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
         T: ByteRepr,
     {
         plan.plan
@@ -164,42 +182,45 @@ where
     /// section-region materialization so the resized section is packed from its
     /// updated metadata.
     #[inline]
-    pub fn resize<K, Arch>(
+    pub fn resize<K, Arch, Tls>(
         self,
-        plan: &mut LinkPassPlan<'scope, K, S, Arch>,
+        plan: &mut LinkPassPlan<'scope, K, S, Arch, Tls>,
         byte_len: usize,
     ) -> Result<()>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan.resize_section(self.id, byte_len)
     }
 
     /// Returns this section's arena placement through `plan`.
     #[inline]
-    pub fn placement<K, Arch>(
+    pub fn placement<K, Arch, Tls>(
         self,
-        plan: &LinkPassPlan<'scope, K, S, Arch>,
+        plan: &LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> Option<SectionPlacement>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan.placement(self.id)
     }
 
     /// Assigns this section to an arena through `plan`.
     #[inline]
-    pub fn assign<K, Arch>(
+    pub fn assign<K, Arch, Tls>(
         self,
-        plan: &mut LinkPassPlan<'scope, K, S, Arch>,
+        plan: &mut LinkPassPlan<'scope, K, S, Arch, Tls>,
         arena: Arena<'scope>,
         offset: usize,
     ) -> bool
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan
             .memory_layout_mut()
@@ -208,14 +229,15 @@ where
 
     /// Assigns this section to the next aligned arena offset through `plan`.
     #[inline]
-    pub fn assign_next<K, Arch>(
+    pub fn assign_next<K, Arch, Tls>(
         self,
-        plan: &mut LinkPassPlan<'scope, K, S, Arch>,
+        plan: &mut LinkPassPlan<'scope, K, S, Arch, Tls>,
         arena: Arena<'scope>,
     ) -> bool
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan
             .memory_layout_mut()
@@ -224,13 +246,14 @@ where
 
     /// Clears this section's arena assignment through `plan`.
     #[inline]
-    pub fn clear_placement<K, Arch>(
+    pub fn clear_placement<K, Arch, Tls>(
         self,
-        plan: &mut LinkPassPlan<'scope, K, S, Arch>,
+        plan: &mut LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> Option<SectionPlacement>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan.memory_layout_mut().clear_section(self.id)
     }

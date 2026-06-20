@@ -16,6 +16,7 @@ use elf_loader::{
     memory::{RegionAccess, VmAddr},
     observer::{LinkObserver, StagedDynamic},
     os::PageSize,
+    tls::TlsResolver,
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
 use std::{boxed::Box, cell::RefCell, rc::Rc, vec::Vec};
@@ -138,9 +139,9 @@ impl KeyResolver<'static, &'static str> for MultiBinaryResolver {
 }
 
 impl LinkObserver for RecordingObserver {
-    fn on_staged_dynamic<K, D: 'static, R: RegionAccess>(
+    fn on_staged_dynamic<K, D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: StagedDynamic<'_, K, D, elf_loader::arch::NativeArch, R>,
+        event: StagedDynamic<'_, K, D, elf_loader::arch::NativeArch, R, Tls>,
     ) -> elf_loader::Result<()> {
         assert!(event.raw().segments().contains_addr(event.raw().base()));
         self.events
@@ -151,9 +152,9 @@ impl LinkObserver for RecordingObserver {
 }
 
 impl LinkObserver for FailingObserver {
-    fn on_staged_dynamic<K, D: 'static, R: RegionAccess>(
+    fn on_staged_dynamic<K, D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        _event: StagedDynamic<'_, K, D, elf_loader::arch::NativeArch, R>,
+        _event: StagedDynamic<'_, K, D, elf_loader::arch::NativeArch, R, Tls>,
     ) -> elf_loader::Result<()> {
         Err(elf_loader::Error::Custom(CustomError::Message(
             "observer failed".into(),

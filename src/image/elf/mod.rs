@@ -16,14 +16,15 @@ use crate::{
         ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
         Relocator,
     },
+    tls::TlsResolver,
 };
 
 pub use dylib::RawDylib;
 pub(crate) use dynamic::DynamicInfo;
-#[cfg(feature = "lazy-binding")]
-pub(crate) use dynamic::LazyBindingInfo;
 pub use dynamic::RawDynamic;
 pub(crate) use dynamic::RawDynamicParts;
+#[cfg(feature = "lazy-binding")]
+pub(crate) use dynamic::{LazyBindingInfo, LazyBindingRuntime};
 pub use exec::{LoadedExec, RawExec, StaticExec};
 #[cfg(feature = "object")]
 pub use object::{LoadedObject, RawObject};
@@ -36,20 +37,24 @@ pub use object::{LoadedObject, RawObject};
 /// The optional `Arch` type parameter is forwarded to every variant, including
 /// relocatable objects, so a raw image always belongs to one relocation domain.
 #[derive(Debug)]
-pub enum RawElf<D, Arch = crate::arch::NativeArch, R: RegionAccess = HostRegion>
-where
+pub enum RawElf<
+    D,
+    Arch = crate::arch::NativeArch,
+    R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
+> where
     D: 'static,
     Arch: ObjectRelocationArch,
 {
     /// A dynamic library (shared object, typically `.so`).
-    Dylib(RawDylib<D, Arch, R>),
+    Dylib(RawDylib<D, Arch, R, Tls>),
 
     /// An executable file (typically a PIE or non-PIE executable).
-    Exec(RawExec<D, Arch, R>),
+    Exec(RawExec<D, Arch, R, Tls>),
 
     /// A relocatable object file (typically `.o`).
     #[cfg(feature = "object")]
-    Object(RawObject<D, Arch, R>),
+    Object(RawObject<D, Arch, R, Tls>),
 }
 
 /// A fully relocated and ready-to-use ELF module.
@@ -57,20 +62,27 @@ where
 /// This is the result of calling `.relocator().relocate()` on a [`RawElf`].
 /// Loaded images retain the dependencies that were actually used during relocation.
 #[derive(Debug)]
-pub enum LoadedElf<D: 'static, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
+pub enum LoadedElf<
+    D: 'static,
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
+> {
     /// A relocated dynamic library.
-    Dylib(LoadedCore<D, Arch, R>),
+    Dylib(LoadedCore<D, Arch, R, Tls>),
 
     /// A relocated executable.
-    Exec(LoadedExec<D, Arch, R>),
+    Exec(LoadedExec<D, Arch, R, Tls>),
 
     /// A relocated object file.
     #[cfg(feature = "object")]
-    Object(LoadedObject<D, Arch, R>),
+    Object(LoadedObject<D, Arch, R, Tls>),
 }
 
 // Keep this impl manual so cloning a loaded image wrapper does not require D, Arch, or R to be Clone.
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedElf<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
+    for LoadedElf<D, Arch, R, Tls>
+{
     #[inline]
     fn clone(&self) -> Self {
         match self {
@@ -82,7 +94,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedElf<D, A
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawElf<D, Arch, R> {
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver>
+    RawElf<D, Arch, R, Tls>
+{
     /// Creates a relocation builder for this raw image.
     ///
     /// # Examples
@@ -93,11 +107,11 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawElf<D, Arch, R>
     /// let raw = loader.load("path/to/input.elf").unwrap();
     /// let relocated = raw.relocator().relocate().unwrap();
     /// ```
-    pub fn relocator(self) -> Relocator<Self, (), (), Arch>
+    pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls>
     where
-        Self: Relocatable<D, Arch = Arch>,
+        Self: Relocatable<D, Arch = Arch, Tls = Tls>,
     {
-        Relocator::<(), (), (), Arch>::new().with_object(self)
+        Relocator::<(), (), (), Arch, (), Tls>::new().with_object(self)
     }
 
     /// Returns the loader source path or caller-provided source identifier.
@@ -167,14 +181,16 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawElf<D, Arch, R>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedElf<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    LoadedElf<D, Arch, R, Tls>
+{
     /// Converts this LoadedElf into the loaded core for a dylib if it is one.
     ///
     /// # Returns
     /// * `Some(dylib)` - If this is a Dylib variant
     /// * `None` - If this is an Exec variant
     #[inline]
-    pub fn into_dylib(self) -> Option<LoadedCore<D, Arch, R>> {
+    pub fn into_dylib(self) -> Option<LoadedCore<D, Arch, R, Tls>> {
         match self {
             LoadedElf::Dylib(dylib) => Some(dylib),
             _ => None,
@@ -187,7 +203,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedElf<D, Arch, R> {
     /// * `Some(exec)` - If this is an Exec variant
     /// * `None` - If this is a Dylib variant
     #[inline]
-    pub fn into_exec(self) -> Option<LoadedExec<D, Arch, R>> {
+    pub fn into_exec(self) -> Option<LoadedExec<D, Arch, R, Tls>> {
         match self {
             LoadedElf::Exec(exec) => Some(exec),
             _ => None,
@@ -201,7 +217,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedElf<D, Arch, R> {
     /// * `None` - If this is a Dylib or Exec variant
     #[cfg(feature = "object")]
     #[inline]
-    pub fn into_object(self) -> Option<LoadedObject<D, Arch, R>> {
+    pub fn into_object(self) -> Option<LoadedObject<D, Arch, R, Tls>> {
         match self {
             LoadedElf::Object(object) => Some(object),
             _ => None,
@@ -214,7 +230,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedElf<D, Arch, R> {
     /// * `Some(dylib)` - If this is a Dylib variant
     /// * `None` - If this is an Exec variant
     #[inline]
-    pub fn as_dylib(&self) -> Option<&LoadedCore<D, Arch, R>> {
+    pub fn as_dylib(&self) -> Option<&LoadedCore<D, Arch, R, Tls>> {
         match self {
             LoadedElf::Dylib(dylib) => Some(dylib),
             _ => None,
@@ -227,7 +243,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedElf<D, Arch, R> {
     /// * `Some(exec)` - If this is an Exec variant
     /// * `None` - If this is a Dylib variant
     #[inline]
-    pub fn as_exec(&self) -> Option<&LoadedExec<D, Arch, R>> {
+    pub fn as_exec(&self) -> Option<&LoadedExec<D, Arch, R, Tls>> {
         match self {
             LoadedElf::Exec(exec) => Some(exec),
             _ => None,
@@ -241,7 +257,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedElf<D, Arch, R> {
     /// * `None` - If this is a Dylib or Exec variant
     #[cfg(feature = "object")]
     #[inline]
-    pub fn as_object(&self) -> Option<&LoadedObject<D, Arch, R>> {
+    pub fn as_object(&self) -> Option<&LoadedObject<D, Arch, R, Tls>> {
         match self {
             LoadedElf::Object(object) => Some(object),
             _ => None,
@@ -282,15 +298,16 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedElf<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Relocatable<D>
-    for RawElf<D, Arch, R>
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver> Relocatable<D>
+    for RawElf<D, Arch, R, Tls>
 {
-    type Output = LoadedElf<D, Arch, R>;
+    type Output = LoadedElf<D, Arch, R, Tls>;
     type Arch = Arch;
+    type Tls = Tls;
 
     fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,

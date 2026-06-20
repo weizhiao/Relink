@@ -21,7 +21,7 @@ use crate::{
     tls::{CoreTlsDescArgs, CoreTlsState, TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{cell::OnceCell, mem::size_of, ptr::NonNull};
+use core::{cell::OnceCell, marker::PhantomData, mem::size_of, ptr::NonNull};
 
 use crate::image::{ElfCore, LoadedCore, ModuleTls, core::CoreInner, exports_handle};
 
@@ -84,14 +84,34 @@ impl<L: ElfLayout> SymbolTable<L> {
 }
 
 #[cfg(feature = "lazy-binding")]
-pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch> {
-    pub(crate) pltrel: MappedView<ElfRelType<Arch>>,
-    pub(crate) symtab: SymbolTable<Arch::Layout>,
-    pub(crate) scope: OnceCell<crate::image::ModuleScope<Arch>>,
+pub(crate) struct LazyBindingRuntime {
+    pub(crate) core: *const (),
+    pub(crate) fixup: unsafe fn(*const (), usize) -> usize,
 }
 
 #[cfg(feature = "lazy-binding")]
-impl<Arch: RelocationArch> LazyBindingInfo<Arch> {
+impl LazyBindingRuntime {
+    #[inline]
+    pub(crate) const fn new(core: *const (), fixup: unsafe fn(*const (), usize) -> usize) -> Self {
+        Self { core, fixup }
+    }
+
+    #[inline]
+    pub(crate) unsafe fn fixup(&self, rela_idx: usize) -> usize {
+        unsafe { (self.fixup)(self.core, rela_idx) }
+    }
+}
+
+#[cfg(feature = "lazy-binding")]
+pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch, Tls: TlsResolver = ()> {
+    pub(crate) pltrel: MappedView<ElfRelType<Arch>>,
+    pub(crate) symtab: SymbolTable<Arch::Layout>,
+    pub(crate) runtime: OnceCell<LazyBindingRuntime>,
+    pub(crate) scope: OnceCell<crate::image::ModuleScope<Arch, Tls>>,
+}
+
+#[cfg(feature = "lazy-binding")]
+impl<Arch: RelocationArch, Tls: TlsResolver> LazyBindingInfo<Arch, Tls> {
     #[inline]
     pub(crate) fn new(
         pltrel: Option<MappedView<ElfRelType<Arch>>>,
@@ -100,17 +120,19 @@ impl<Arch: RelocationArch> LazyBindingInfo<Arch> {
         Self {
             pltrel: pltrel.unwrap_or_else(MappedView::empty),
             symtab,
+            runtime: OnceCell::new(),
             scope: OnceCell::new(),
         }
     }
 }
 
-pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
+pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch, Tls: TlsResolver = ()> {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
     pub(crate) soname: Option<&'static str>,
     #[cfg(feature = "lazy-binding")]
-    pub(crate) lazy: LazyBindingInfo<Arch>,
+    pub(crate) lazy: LazyBindingInfo<Arch, Tls>,
+    pub(crate) _tls: PhantomData<fn() -> Tls>,
 }
 
 pub(crate) struct RawDynamicParts<
@@ -192,7 +214,7 @@ impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
 ///
 /// The optional `Arch` type parameter selects the target architecture used
 /// during [`Relocator::relocate`]. By default it is [`crate::arch::NativeArch`].
-pub struct RawDynamic<D, Arch = NativeArch, R: RegionAccess = HostRegion>
+pub struct RawDynamic<D, Arch = NativeArch, R: RegionAccess = HostRegion, Tls: TlsResolver = ()>
 where
     D: 'static,
     Arch: RelocationArch,
@@ -202,12 +224,14 @@ where
     /// PT_INTERP segment value (interpreter path).
     interp: Option<&'static str>,
     /// Core component containing the basic ELF object information
-    module: ElfCore<D, Arch, R>,
+    module: ElfCore<D, Arch, R, Tls>,
     /// Extra data needed for relocation
     extra: ElfExtraData<Arch>,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> core::fmt::Debug for RawDynamic<D, Arch, R> {
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> core::fmt::Debug
+    for RawDynamic<D, Arch, R, Tls>
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawDynamic")
             .field("entry", &format_args!("0x{:x}", self.entry.get()))
@@ -217,7 +241,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> core::fmt::Debug for RawDynamic<D
     }
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDynamic<D, Arch, R, Tls> {
     /// Gets the entry point of the ELF object.
     #[inline]
     pub fn entry(&self) -> usize {
@@ -236,19 +260,19 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
     /// Gets the core component reference of the ELF object.
     #[inline]
-    pub fn core_ref(&self) -> &ElfCore<D, Arch, R> {
+    pub fn core_ref(&self) -> &ElfCore<D, Arch, R, Tls> {
         &self.module
     }
 
     /// Gets the core component of the ELF object.
     #[inline]
-    pub fn core(&self) -> ElfCore<D, Arch, R> {
+    pub fn core(&self) -> ElfCore<D, Arch, R, Tls> {
         self.core_ref().clone()
     }
 
     /// Converts this object into its core component.
     #[inline]
-    pub fn into_core(self) -> ElfCore<D, Arch, R> {
+    pub fn into_core(self) -> ElfCore<D, Arch, R, Tls> {
         self.core()
     }
 
@@ -437,11 +461,10 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
-    pub(crate) fn from_parts<Tls>(parts: RawDynamicParts<D, Arch, R>) -> Result<Self>
-    where
-        Tls: TlsResolver,
-    {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    RawDynamic<D, Arch, R, Tls>
+{
+    pub(crate) fn from_parts(parts: RawDynamicParts<D, Arch, R>) -> Result<Self> {
         let RawDynamicParts {
             path,
             entry,
@@ -537,22 +560,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                     exports: exports_handle(exports),
                     finalizer: OnceCell::new(),
                     user_data,
-                    dynamic_info: Some(Arc::new(DynamicInfo {
+                    dynamic_info: Some(Arc::new(DynamicInfo::<Arch, Tls> {
                         eh_frame_hdr,
                         phdrs,
                         soname,
                         #[cfg(feature = "lazy-binding")]
                         lazy: LazyBindingInfo::new(dynamic.pltrel.clone(), lazy_symtab),
+                        _tls: PhantomData,
                     })),
-                    tls: CoreTlsState::new(
-                        tls_mod_id,
-                        tls_tp_offset,
-                        tls_info,
-                        tls_image,
-                        Tls::unregister,
-                        Tls::init_tls,
-                        Tls::tls_get_addr,
-                    ),
+                    tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_info, tls_image),
                     tls_desc_args: CoreTlsDescArgs::default(),
                     segments,
                 }),
@@ -561,20 +577,19 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     }
 
     /// Creates a relocation builder for this dynamic image.
-    pub fn relocator(self) -> Relocator<Self, (), (), Arch> {
-        Relocator::<(), (), (), Arch>::new().with_object(self)
+    pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls> {
+        Relocator::<(), (), (), Arch, (), Tls>::new().with_object(self)
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    RawDynamic<D, Arch, R, Tls>
+{
     /// Build a dynamic image from the intermediate loader state.
-    pub(crate) fn from_builder<Tls>(
+    pub(crate) fn from_builder(
         mut builder: ImageBuilder<Tls, D, Arch, R>,
         phdrs: &[ElfPhdr<Arch::Layout>],
-    ) -> Result<Self>
-    where
-        Tls: TlsResolver,
-    {
+    ) -> Result<Self> {
         // Parse all program headers
         builder.parse_phdrs(phdrs)?;
 
@@ -602,23 +617,25 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             segments: builder.segments,
             user_data: builder.user_data,
         };
-        Self::from_parts::<Tls>(parts)
+        Self::from_parts(parts)
     }
 }
 
-impl<D, Arch, R> Relocatable<D> for RawDynamic<D, Arch, R>
+impl<D, Arch, R, Tls> Relocatable<D> for RawDynamic<D, Arch, R, Tls>
 where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
     <Arch::Layout as crate::elf::ElfLayout>::Word: crate::ByteRepr,
 {
-    type Output = LoadedCore<D, Arch, R>;
+    type Output = LoadedCore<D, Arch, R, Tls>;
     type Arch = Arch;
+    type Tls = Tls;
 
     fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,

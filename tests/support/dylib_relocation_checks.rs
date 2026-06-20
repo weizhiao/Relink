@@ -1,6 +1,11 @@
 #![allow(dead_code)]
 
-use elf_loader::{image::LoadedCore, memory::VmOffset};
+use elf_loader::{
+    image::LoadedCore,
+    memory::{RegionAccess, VmOffset},
+    relocation::RelocationArch,
+    tls::TlsResolver,
+};
 use gen_elf::{ElfWriteOutput, RelocationInfo};
 
 use crate::support::memory::read_native_word;
@@ -34,7 +39,16 @@ pub(crate) fn anonymous_relocations(output: &ElfWriteOutput, r_type: u32) -> Vec
     relocations
 }
 
-pub(crate) fn slot_address(image: &LoadedCore<()>, relocation: &RelocationInfo) -> usize {
+pub(crate) fn slot_address<D, Arch, R, Tls>(
+    image: &LoadedCore<D, Arch, R, Tls>,
+    relocation: &RelocationInfo,
+) -> usize
+where
+    D: 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver,
+{
     (image.base()
         + VmOffset::new(
             relocation
@@ -45,6 +59,15 @@ pub(crate) fn slot_address(image: &LoadedCore<()>, relocation: &RelocationInfo) 
     .get()
 }
 
-pub(crate) fn slot_word(image: &LoadedCore<()>, relocation: &RelocationInfo) -> u64 {
+pub(crate) fn slot_word<D, Arch, R, Tls>(
+    image: &LoadedCore<D, Arch, R, Tls>,
+    relocation: &RelocationInfo,
+) -> u64
+where
+    D: 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver,
+{
     read_native_word(slot_address(image, relocation))
 }

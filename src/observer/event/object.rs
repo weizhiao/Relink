@@ -12,6 +12,7 @@ use crate::{
     },
     relocation::{ObjectRelocationArch, RelocationArch},
     sync::Arc,
+    tls::TlsResolver,
 };
 use alloc::vec::Vec;
 use core::{ffi::CStr, ptr::NonNull};
@@ -83,29 +84,31 @@ pub struct AfterObjectLoadEvent<
     D: 'static,
     Arch: ObjectRelocationArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
-    raw: &'event mut RawObject<D, Arch, R>,
+    raw: &'event mut RawObject<D, Arch, R, Tls>,
 }
 
-impl<'event, D: 'static, Arch, R> AfterObjectLoadEvent<'event, D, Arch, R>
+impl<'event, D: 'static, Arch, R, Tls> AfterObjectLoadEvent<'event, D, Arch, R, Tls>
 where
     Arch: ObjectRelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     #[inline]
-    pub(crate) const fn new(raw: &'event mut RawObject<D, Arch, R>) -> Self {
+    pub(crate) const fn new(raw: &'event mut RawObject<D, Arch, R, Tls>) -> Self {
         Self { raw }
     }
 
     /// Returns the loaded relocatable object.
     #[inline]
-    pub const fn raw(&self) -> &RawObject<D, Arch, R> {
+    pub const fn raw(&self) -> &RawObject<D, Arch, R, Tls> {
         self.raw
     }
 
     /// Returns the mutable loaded relocatable object.
     #[inline]
-    pub fn raw_mut(&mut self) -> &mut RawObject<D, Arch, R> {
+    pub fn raw_mut(&mut self) -> &mut RawObject<D, Arch, R, Tls> {
         self.raw
     }
 }
@@ -124,8 +127,9 @@ pub struct ObjectRelocatedEvent<
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
-    core: &'event ElfCore<D, Arch, R>,
+    core: &'event ElfCore<D, Arch, R, Tls>,
     sections: &'event ObjectSections<Arch::Layout>,
     symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
     memory: ObjectSegmentView<'event, R>,
@@ -133,12 +137,12 @@ pub struct ObjectRelocatedEvent<
     finalizer: Finalizer<Arch>,
 }
 
-impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess>
-    ObjectRelocatedEvent<'event, D, Arch, R>
+impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    ObjectRelocatedEvent<'event, D, Arch, R, Tls>
 {
     #[inline]
     pub(crate) fn new(
-        core: &'event ElfCore<D, Arch, R>,
+        core: &'event ElfCore<D, Arch, R, Tls>,
         sections: &'event ObjectSections<Arch::Layout>,
         symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
         memory: ObjectSegmentView<'event, R>,
@@ -156,7 +160,7 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess>
 
     /// Returns the relocated object core.
     #[inline]
-    pub const fn core(&self) -> &ElfCore<D, Arch, R> {
+    pub const fn core(&self) -> &ElfCore<D, Arch, R, Tls> {
         self.core
     }
 

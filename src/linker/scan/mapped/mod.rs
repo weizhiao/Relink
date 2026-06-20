@@ -179,10 +179,14 @@ impl<R: RegionAccess> ImageMemory for RuntimeModuleMemory<R> {
 }
 
 impl<R: RegionAccess> MappedRuntimeMemory<R> {
-    pub(crate) fn map<K, Arch, M>(mapper: &M, plan: &LinkPlan<K, Arch>) -> Result<Option<Self>>
+    pub(crate) fn map<K, Arch, Tls, M>(
+        mapper: &M,
+        plan: &LinkPlan<K, Arch, Tls>,
+    ) -> Result<Option<Self>>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
         M: Mmap<Region = R> + ?Sized,
     {
         let Some(arenas) = MappedArenaMap::map_plan(mapper, plan)? else {
@@ -204,27 +208,29 @@ impl<R: RegionAccess> MappedRuntimeMemory<R> {
         Ok(())
     }
 
-    pub(crate) fn repair_module<K, Arch>(
+    pub(crate) fn repair_module<K, Arch, Tls>(
         &mut self,
         id: ModuleId,
-        plan: &mut LinkPlan<K, Arch>,
+        plan: &mut LinkPlan<K, Arch, Tls>,
     ) -> Result<()>
     where
         K: Clone + Ord,
         Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
+        Tls: TlsResolver,
         crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     {
         let runtime = self.modules.get(id).ok_or_else(|| {
             LinkerError::runtime_memory("section-region module runtime memory was not cached")
         })?;
-        let mut rewriter = RuntimeMetadataRewriter::<_, Arch, R>::new(id, plan, runtime);
+        let mut rewriter = RuntimeMetadataRewriter::<_, Arch, R, Tls>::new(id, plan, runtime);
         rewriter.rewrite()
     }
 
-    pub(crate) fn populate<K, Arch>(&mut self, plan: &mut LinkPlan<K, Arch>) -> Result<()>
+    pub(crate) fn populate<K, Arch, Tls>(&mut self, plan: &mut LinkPlan<K, Arch, Tls>) -> Result<()>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         self.arenas.populate(plan)
     }
@@ -247,7 +253,7 @@ pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch, R>(
     scanned: ScannedDynamic<Arch>,
     runtime: RuntimeModuleMemory<R>,
     force_static_tls: bool,
-) -> Result<RawDynamic<D, Arch, R>>
+) -> Result<RawDynamic<D, Arch, R, Tls>>
 where
     D: Default + 'static,
     Tls: TlsResolver,
@@ -328,7 +334,7 @@ where
         .unwrap_or_else(|| runtime.segments.base() + VmOffset::new(original_entry));
     let path = PathBuf::from(scanned.path());
 
-    RawDynamic::from_parts::<Tls>(crate::image::RawDynamicParts {
+    RawDynamic::from_parts(crate::image::RawDynamicParts {
         path,
         entry,
         interp: None,

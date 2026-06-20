@@ -30,7 +30,7 @@ where
     #[inline]
     pub(crate) fn notify_after_dynamic_load(
         &mut self,
-        image: &mut RawDynamic<D, Arch, M::Region>,
+        image: &mut RawDynamic<D, Arch, M::Region, Tls>,
     ) -> Result<()> {
         self.inner
             .observer
@@ -135,7 +135,7 @@ where
     /// This is the most flexible entry point when the caller does not already know
     /// whether the input is a shared object, executable, or relocatable object.
     /// `ET_DYN` inputs are classified by inspecting the program headers.
-    pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D, Arch, M::Region>>
+    pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D, Arch, M::Region, Tls>>
     where
         D: 'static,
         Arch: ObjectRelocationArch,
@@ -204,7 +204,7 @@ where
     /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
     /// let lib = raw.relocator().relocate().unwrap();
     /// ```
-    pub fn load_dylib<'a, I>(&mut self, input: I) -> Result<RawDylib<D, Arch, M::Region>>
+    pub fn load_dylib<'a, I>(&mut self, input: I) -> Result<RawDylib<D, Arch, M::Region, Tls>>
     where
         I: IntoElfReader<'a>,
     {
@@ -222,7 +222,7 @@ where
     /// and `ET_EXEC` executables that carry a `PT_DYNAMIC` segment. The returned
     /// value is mapped but not yet relocated. Call `.relocator().relocate()` to
     /// resolve symbols and produce a ready-to-use loaded image.
-    pub fn load_dynamic<'a, I>(&mut self, input: I) -> Result<RawDynamic<D, Arch, M::Region>>
+    pub fn load_dynamic<'a, I>(&mut self, input: I) -> Result<RawDynamic<D, Arch, M::Region, Tls>>
     where
         I: IntoElfReader<'a>,
     {
@@ -237,7 +237,7 @@ where
         &mut self,
         object: &impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
-    ) -> Result<RawDynamic<D, Arch, M::Region>> {
+    ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         let phdrs = self.buf.prepare_phdrs(&ehdr, object)?.unwrap_or_default();
         if !has_dynamic_phdr(phdrs) {
             return Err(ParsePhdrError::MissingDynamicSection.into());
@@ -282,7 +282,7 @@ where
     pub fn load_scanned_dynamic(
         &mut self,
         scanned: ScannedDynamic<Arch>,
-    ) -> Result<RawDynamic<D, Arch, M::Region>> {
+    ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         let crate::image::ScannedDynamicLoadParts {
             ehdr,
             phdrs,
@@ -347,7 +347,7 @@ where
         load_bias: VmAddr,
         phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
         entry: usize,
-    ) -> Result<RawDynamic<D, Arch, M::Region>> {
+    ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         let path = path.into();
         let phdrs = phdrs.into();
         let page_size = self.inner.page_size()?.bytes();
@@ -372,7 +372,7 @@ where
             D::default(),
             page_size,
         )?;
-        let mut image = RawDynamic::from_parts::<Tls>(parts)?;
+        let mut image = RawDynamic::from_parts(parts)?;
         self.notify_after_dynamic_load(&mut image)?;
 
         logging::info!(
@@ -397,7 +397,7 @@ where
     /// let exec = loader.load_exec("path/to/program").unwrap();
     /// println!("entry = 0x{:x}", exec.entry());
     /// ```
-    pub fn load_exec<'a, I>(&mut self, input: I) -> Result<RawExec<D, Arch, M::Region>>
+    pub fn load_exec<'a, I>(&mut self, input: I) -> Result<RawExec<D, Arch, M::Region, Tls>>
     where
         I: IntoElfReader<'a>,
     {
@@ -412,7 +412,7 @@ where
         &mut self,
         object: &impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
-    ) -> Result<RawExec<D, Arch, M::Region>> {
+    ) -> Result<RawExec<D, Arch, M::Region, Tls>> {
         let phdrs = self.buf.prepare_phdrs(&ehdr, object)?.unwrap_or_default();
         let has_dynamic = has_dynamic_phdr(phdrs);
 

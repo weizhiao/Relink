@@ -15,6 +15,7 @@ use crate::{
     observer::RelocationObserver,
     runtime::CodeExecutor,
     sync::Arc,
+    tls::TlsResolver,
 };
 use alloc::boxed::Box;
 
@@ -102,15 +103,16 @@ pub trait ObjectRelocationArch: RelocationArch {
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn prepare_object_relocation<D, R, PreH, PostH, Obs, H, Memory>(
+    fn prepare_object_relocation<D, R, Tls, PreH, PostH, Obs, H, Memory>(
         _state: &mut Self::ObjectRelocationState,
-        _helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
+        _helper: &mut RelocHelper<'_, D, Self, R, Tls, PreH, PostH, Obs, H, Memory>,
         _shdrs: &[ElfShdr<Self::Layout>],
     ) -> Result<()>
     where
         Self: Sized,
         D: 'static,
         R: RegionAccess,
+        Tls: TlsResolver,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -121,9 +123,9 @@ pub trait ObjectRelocationArch: RelocationArch {
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, R, PreH, PostH, Obs, H, Memory>(
+    fn relocate_object<D, R, Tls, PreH, PostH, Obs, H, Memory>(
         _state: &mut Self::ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
+        helper: &mut RelocHelper<'_, D, Self, R, Tls, PreH, PostH, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         _target: &ElfShdr<Self::Layout>,
         _pltgot: &mut crate::object::layout::PltGotSection,
@@ -132,12 +134,13 @@ pub trait ObjectRelocationArch: RelocationArch {
         Self: Sized,
         D: 'static,
         R: RegionAccess,
+        Tls: TlsResolver,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: crate::memory::ImageMemory,
     {
-        Err(reloc_error::<Self, _, R, H>(
+        Err(reloc_error::<Self, _, R, Tls, H>(
             rel,
             RelocReason::Unsupported,
             helper.core,
@@ -281,9 +284,9 @@ pub trait RelocationHandler<Arch: RelocationArch = NativeArch> {
     /// * `Ok(HandleResult::Unhandled)` - Not handled, fall through to default behavior.
     /// * `Ok(HandleResult::Handled)` - Handled successfully.
     /// * `Err(e)` - The handler failed.
-    fn handle<D: 'static, R: RegionAccess, H>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, H>(
         &self,
-        ctx: &RelocationContext<'_, D, Arch, R, H>,
+        ctx: &RelocationContext<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult>;
 }
 
@@ -296,24 +299,25 @@ pub struct RelocationContext<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
     H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
     rel: &'a ElfRelType<Arch>,
-    lib: &'a ElfCore<D, Arch, R>,
+    lib: &'a ElfCore<D, Arch, R, Tls>,
     symbols: SymbolTableView<'a, Arch::Layout, H>,
-    scope: &'a ModuleScope<Arch>,
+    scope: &'a ModuleScope<Arch, Tls>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
-    RelocationContext<'a, D, Arch, R, H>
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver, H>
+    RelocationContext<'a, D, Arch, R, Tls, H>
 {
     /// Construct a new `RelocationContext`.
     #[inline]
     pub(crate) fn new(
         rel: &'a ElfRelType<Arch>,
-        lib: &'a ElfCore<D, Arch, R>,
+        lib: &'a ElfCore<D, Arch, R, Tls>,
         symbols: SymbolTableView<'a, Arch::Layout, H>,
-        scope: &'a ModuleScope<Arch>,
+        scope: &'a ModuleScope<Arch, Tls>,
     ) -> Self {
         Self {
             rel,
@@ -331,13 +335,13 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
 
     /// Access the core component where the relocation appears.
     #[inline]
-    pub fn lib(&self) -> &ElfCore<D, Arch, R> {
+    pub fn lib(&self) -> &ElfCore<D, Arch, R, Tls> {
         self.lib
     }
 
     /// Access the current resolution scope.
     #[inline]
-    pub fn scope(&self) -> &ModuleScope<Arch> {
+    pub fn scope(&self) -> &ModuleScope<Arch, Tls> {
         self.scope
     }
 
@@ -356,52 +360,52 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, H>
 
     /// Find symbol definition in the current scope
     #[inline]
-    pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, D, Arch>> {
+    pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, D, Arch, Tls>> {
         let (sym, syminfo) = self.symbol(r_sym);
         find_symdef_impl(self.lib, self.scope, sym, &syminfo)
     }
 }
 
 impl<Arch: RelocationArch> RelocationHandler<Arch> for () {
-    fn handle<D: 'static, R: RegionAccess, H>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, H>(
         &self,
-        _ctx: &RelocationContext<'_, D, Arch, R, H>,
+        _ctx: &RelocationContext<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
         Ok(HandleResult::Unhandled)
     }
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for &H {
-    fn handle<D: 'static, R: RegionAccess, Hash>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, Hash>(
         &self,
-        ctx: &RelocationContext<'_, D, Arch, R, Hash>,
+        ctx: &RelocationContext<'_, D, Arch, R, Tls, Hash>,
     ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for &mut H {
-    fn handle<D: 'static, R: RegionAccess, Hash>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, Hash>(
         &self,
-        ctx: &RelocationContext<'_, D, Arch, R, Hash>,
+        ctx: &RelocationContext<'_, D, Arch, R, Tls, Hash>,
     ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for Box<H> {
-    fn handle<D: 'static, R: RegionAccess, Hash>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, Hash>(
         &self,
-        ctx: &RelocationContext<'_, D, Arch, R, Hash>,
+        ctx: &RelocationContext<'_, D, Arch, R, Tls, Hash>,
     ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for Arc<H> {
-    fn handle<D: 'static, R: RegionAccess, Hash>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, Hash>(
         &self,
-        ctx: &RelocationContext<'_, D, Arch, R, Hash>,
+        ctx: &RelocationContext<'_, D, Arch, R, Tls, Hash>,
     ) -> Result<HandleResult> {
         (**self).handle(ctx)
     }
@@ -423,8 +427,15 @@ pub enum BindingMode {
 }
 
 /// Internal relocation configuration shared across raw image types.
-pub struct RelocateArgs<'a, Arch: RelocationArch, PreH: ?Sized, PostH: ?Sized, Obs: ?Sized> {
-    pub(crate) scope: ModuleScope<Arch>,
+pub struct RelocateArgs<
+    'a,
+    Arch: RelocationArch,
+    Tls: TlsResolver,
+    PreH: ?Sized,
+    PostH: ?Sized,
+    Obs: ?Sized,
+> {
+    pub(crate) scope: ModuleScope<Arch, Tls>,
     pub(crate) binding: BindingMode,
     pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
     pub(crate) pre_handler: &'a PreH,
@@ -452,10 +463,13 @@ pub trait Relocatable<D = ()>: Sized {
     /// Cross-architecture images use the architecture selected on the loader.
     type Arch: RelocationArch;
 
+    /// TLS resolver used by this image and every module in its relocation scope.
+    type Tls: TlsResolver;
+
     /// Executes relocation using the implementor's target architecture.
     fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, Self::Arch, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Self::Arch, Self::Tls, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Self::Arch> + ?Sized,

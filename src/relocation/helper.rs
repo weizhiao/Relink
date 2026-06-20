@@ -11,7 +11,7 @@ use crate::{
     relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
     runtime::{CodeContext, CodeExecutor},
     segment::ElfSegments,
-    tls::{TLS_GET_ADDR_SYMBOL, TlsDescArgs},
+    tls::{TLS_GET_ADDR_SYMBOL, TlsDescArgs, TlsResolver},
 };
 use core::marker::PhantomData;
 
@@ -21,16 +21,17 @@ pub(crate) struct RelocHelper<
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver + 'static,
     PreH: ?Sized,
     PostH: ?Sized,
     Obs: ?Sized,
     H = HashTable<<Arch as RelocationArch>::Layout>,
     Memory = &'find ElfSegments<R>,
 > {
-    pub(crate) core: &'find ElfCore<D, Arch, R>,
+    pub(crate) core: &'find ElfCore<D, Arch, R, Tls>,
     symbols: SymbolTableView<'find, Arch::Layout, H>,
     memory: Memory,
-    pub(crate) scope: ModuleScope<Arch>,
+    pub(crate) scope: ModuleScope<Arch, Tls>,
     pub(crate) pre_handler: &'find PreH,
     pub(crate) post_handler: &'find PostH,
     pub(crate) observer: &'find mut Obs,
@@ -38,12 +39,13 @@ pub(crate) struct RelocHelper<
     pub(crate) tls_desc_args: TlsDescArgs,
 }
 
-impl<'find, D, Arch, R, PreH, PostH, Obs, H, Memory>
-    RelocHelper<'find, D, Arch, R, PreH, PostH, Obs, H, Memory>
+impl<'find, D, Arch, R, Tls, PreH, PostH, Obs, H, Memory>
+    RelocHelper<'find, D, Arch, R, Tls, PreH, PostH, Obs, H, Memory>
 where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
     PreH: RelocationHandler<Arch> + ?Sized,
     PostH: RelocationHandler<Arch> + ?Sized,
     Obs: RelocationObserver<Arch> + ?Sized,
@@ -51,10 +53,10 @@ where
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        core: &'find ElfCore<D, Arch, R>,
+        core: &'find ElfCore<D, Arch, R, Tls>,
         symbols: SymbolTableView<'find, Arch::Layout, H>,
         memory: Memory,
-        scope: ModuleScope<Arch>,
+        scope: ModuleScope<Arch, Tls>,
         pre_handler: &'find PreH,
         post_handler: &'find PostH,
         observer: &'find mut Obs,
@@ -98,12 +100,13 @@ where
     #[inline]
     pub(crate) fn find_symbol(&mut self, rel: &ElfRelType<Arch>) -> Result<Option<VmAddr>> {
         let (dynsym, syminfo) = self.symbols.symbol_idx(rel.r_symbol());
-        let resolved =
-            if let Some(symdef) = find_symdef_impl(self.core, &self.scope, dynsym, &syminfo) {
-                Some(symdef.resolve_addr(self.executor)?)
-            } else {
-                self.find_runtime_symbol(dynsym, &syminfo)
-            };
+        let resolved = if let Some(addr) = self.find_runtime_symbol(&syminfo) {
+            Some(addr)
+        } else if let Some(symdef) = find_symdef_impl(self.core, &self.scope, dynsym, &syminfo) {
+            Some(symdef.resolve_addr(self.executor)?)
+        } else {
+            None
+        };
         let mut event =
             SymbolBindingEvent::new(self.core, Some(rel), dynsym, syminfo.name(), resolved);
         self.observer.on_symbol_binding(&mut event)?;
@@ -111,12 +114,8 @@ where
     }
 
     #[inline]
-    fn find_runtime_symbol(
-        &self,
-        dynsym: &ElfSymbol<Arch::Layout>,
-        syminfo: &SymbolInfo<'_>,
-    ) -> Option<VmAddr> {
-        if dynsym.is_undef() && syminfo.name() == TLS_GET_ADDR_SYMBOL {
+    fn find_runtime_symbol(&self, syminfo: &SymbolInfo<'_>) -> Option<VmAddr> {
+        if Tls::OVERRIDE_TLS_GET_ADDR && syminfo.name() == TLS_GET_ADDR_SYMBOL {
             self.core.tls_get_addr()
         } else {
             None
@@ -131,7 +130,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn find_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, D, Arch>> {
+    pub(crate) fn find_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, D, Arch, Tls>> {
         let (dynsym, syminfo) = self.symbols.symbol_idx(r_sym);
         find_symdef_impl(self.core, &self.scope, dynsym, &syminfo)
     }
@@ -141,17 +140,19 @@ where
 ///
 /// Contains the symbol information and the module where it was found.
 /// Used to compute the final address of a symbol.
-pub struct SymDef<'lib, D: 'static, Arch: RelocationArch> {
+pub struct SymDef<'lib, D: 'static, Arch: RelocationArch, Tls: TlsResolver = ()> {
     pub(crate) sym: Option<&'lib ElfSymbol<Arch::Layout>>,
-    pub(crate) source: &'lib dyn Module<Arch>,
+    pub(crate) source: &'lib dyn Module<Arch, Tls>,
     _marker: PhantomData<fn() -> D>,
 }
 
-impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
+impl<'lib, D: 'static, Arch: RelocationArch, Tls: TlsResolver + 'static>
+    SymDef<'lib, D, Arch, Tls>
+{
     #[inline]
     pub(crate) fn new(
         sym: Option<&'lib ElfSymbol<Arch::Layout>>,
-        source: &'lib dyn Module<Arch>,
+        source: &'lib dyn Module<Arch, Tls>,
     ) -> Self {
         Self {
             sym,
@@ -212,7 +213,7 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
     }
 
     #[inline]
-    pub fn source(&self) -> &'lib dyn Module<Arch> {
+    pub fn source(&self) -> &'lib dyn Module<Arch, Tls> {
         self.source
     }
 
@@ -233,15 +234,16 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
 ///
 /// The dynamic parts are stored structurally and formatted only in `Display`.
 #[cold]
-pub(crate) fn reloc_error<A, D, R, H>(
+pub(crate) fn reloc_error<A, D, R, Tls, H>(
     rel: &ElfRelType<A>,
     reason: RelocReason,
-    lib: &ElfCore<D, A, R>,
+    lib: &ElfCore<D, A, R, Tls>,
     symbols: SymbolTableView<'_, A::Layout, H>,
 ) -> Error
 where
     A: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     let r_type_str = A::rel_type_to_str(rel.r_type());
     let r_sym = rel.r_symbol();
@@ -257,10 +259,10 @@ where
     }
 }
 
-fn find_weak<'lib, D, Arch: RelocationArch, R: RegionAccess>(
-    lib: &'lib ElfCore<D, Arch, R>,
+fn find_weak<'lib, D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>(
+    lib: &'lib ElfCore<D, Arch, R, Tls>,
     dynsym: &'lib ElfSymbol<Arch::Layout>,
-) -> Option<SymDef<'lib, D, Arch>>
+) -> Option<SymDef<'lib, D, Arch, Tls>>
 where
     D: 'static,
 {
@@ -275,12 +277,18 @@ where
     }
 }
 
-pub(crate) fn find_symdef_impl<'lib, D, Arch: RelocationArch, R: RegionAccess>(
-    core: &'lib ElfCore<D, Arch, R>,
-    scope: &'lib ModuleScope<Arch>,
+pub(crate) fn find_symdef_impl<
+    'lib,
+    D,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver + 'static,
+>(
+    core: &'lib ElfCore<D, Arch, R, Tls>,
+    scope: &'lib ModuleScope<Arch, Tls>,
     sym: &'lib ElfSymbol<Arch::Layout>,
     syminfo: &SymbolInfo,
-) -> Option<SymDef<'lib, D, Arch>>
+) -> Option<SymDef<'lib, D, Arch, Tls>>
 where
     D: 'static,
 {

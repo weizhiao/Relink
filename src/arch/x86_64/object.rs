@@ -68,8 +68,8 @@ impl X86_64Arch {
         Ok(())
     }
 
-    pub(crate) fn relocate_object_impl<D, R, PreH, PostH, Obs, H, Memory>(
-        helper: &mut RelocHelper<'_, D, Self, R, PreH, PostH, Obs, H, Memory>,
+    pub(crate) fn relocate_object_impl<D, R, Tls, PreH, PostH, Obs, H, Memory>(
+        helper: &mut RelocHelper<'_, D, Self, R, Tls, PreH, PostH, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,
@@ -77,6 +77,7 @@ impl X86_64Arch {
     where
         D: 'static,
         R: RegionAccess,
+        Tls: crate::tls::TlsResolver,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: crate::observer::RelocationObserver<Self> + ?Sized,

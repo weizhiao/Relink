@@ -1,14 +1,14 @@
 use super::Module;
-use crate::{arch::NativeArch, relocation::RelocationArch, sync::Arc};
+use crate::{arch::NativeArch, relocation::RelocationArch, sync::Arc, tls::TlsResolver};
 use alloc::{boxed::Box, vec::Vec};
 use core::{any::Any, ops::Deref, slice};
 
 /// Shared ownership handle for one retained module.
-pub struct ModuleHandle<Arch: RelocationArch = NativeArch> {
-    module: Arc<dyn Module<Arch>>,
+pub struct ModuleHandle<Arch: RelocationArch = NativeArch, Tls: TlsResolver = ()> {
+    module: Arc<dyn Module<Arch, Tls>>,
 }
 
-impl<Arch: RelocationArch> Clone for ModuleHandle<Arch> {
+impl<Arch: RelocationArch, Tls: TlsResolver> Clone for ModuleHandle<Arch, Tls> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -17,27 +17,27 @@ impl<Arch: RelocationArch> Clone for ModuleHandle<Arch> {
     }
 }
 
-impl<Arch: RelocationArch> ModuleHandle<Arch> {
+impl<Arch: RelocationArch, Tls: TlsResolver + 'static> ModuleHandle<Arch, Tls> {
     /// Retains a module behind a shared trait-object handle.
     #[inline]
     pub fn new<M>(module: M) -> Self
     where
-        M: Module<Arch> + 'static,
+        M: Module<Arch, Tls> + 'static,
     {
         Self {
-            module: Arc::from(Box::new(module) as Box<dyn Module<Arch>>),
+            module: Arc::from(Box::new(module) as Box<dyn Module<Arch, Tls>>),
         }
     }
 
     /// Wraps an existing shared module trait object.
     #[inline]
-    pub fn from_shared(module: Arc<dyn Module<Arch>>) -> Self {
+    pub fn from_shared(module: Arc<dyn Module<Arch, Tls>>) -> Self {
         Self { module }
     }
 
     /// Returns the underlying dynamic module reference.
     #[inline]
-    pub fn as_dyn(&self) -> &(dyn Module<Arch> + 'static) {
+    pub fn as_dyn(&self) -> &(dyn Module<Arch, Tls> + 'static) {
         &*self.module
     }
 
@@ -45,7 +45,7 @@ impl<Arch: RelocationArch> ModuleHandle<Arch> {
     #[inline]
     pub fn downcast_ref<T>(&self) -> Option<&T>
     where
-        T: Module<Arch> + 'static,
+        T: Module<Arch, Tls> + 'static,
     {
         let module = self.as_dyn() as &dyn Any;
         module
@@ -55,13 +55,13 @@ impl<Arch: RelocationArch> ModuleHandle<Arch> {
 
     /// Consumes the handle and returns the shared module trait object.
     #[inline]
-    pub fn into_inner(self) -> Arc<dyn Module<Arch>> {
+    pub fn into_inner(self) -> Arc<dyn Module<Arch, Tls>> {
         self.module
     }
 }
 
-impl<Arch: RelocationArch> Deref for ModuleHandle<Arch> {
-    type Target = dyn Module<Arch>;
+impl<Arch: RelocationArch, Tls: TlsResolver + 'static> Deref for ModuleHandle<Arch, Tls> {
+    type Target = dyn Module<Arch, Tls>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -69,17 +69,20 @@ impl<Arch: RelocationArch> Deref for ModuleHandle<Arch> {
     }
 }
 
-impl<Arch: RelocationArch> AsRef<dyn Module<Arch>> for ModuleHandle<Arch> {
+impl<Arch: RelocationArch, Tls: TlsResolver + 'static> AsRef<dyn Module<Arch, Tls>>
+    for ModuleHandle<Arch, Tls>
+{
     #[inline]
-    fn as_ref(&self) -> &(dyn Module<Arch> + 'static) {
+    fn as_ref(&self) -> &(dyn Module<Arch, Tls> + 'static) {
         self.as_dyn()
     }
 }
 
-impl<M, Arch> From<Arc<M>> for ModuleHandle<Arch>
+impl<M, Arch, Tls> From<Arc<M>> for ModuleHandle<Arch, Tls>
 where
-    M: Module<Arch> + 'static,
+    M: Module<Arch, Tls> + 'static,
     Arch: RelocationArch,
+    Tls: TlsResolver + 'static,
 {
     #[inline]
     fn from(module: Arc<M>) -> Self {
@@ -87,9 +90,11 @@ where
     }
 }
 
-impl<Arch: RelocationArch> From<Arc<dyn Module<Arch>>> for ModuleHandle<Arch> {
+impl<Arch: RelocationArch, Tls: TlsResolver + 'static> From<Arc<dyn Module<Arch, Tls>>>
+    for ModuleHandle<Arch, Tls>
+{
     #[inline]
-    fn from(module: Arc<dyn Module<Arch>>) -> Self {
+    fn from(module: Arc<dyn Module<Arch, Tls>>) -> Self {
         Self::from_shared(module)
     }
 }
@@ -98,16 +103,16 @@ impl<Arch: RelocationArch> From<Arc<dyn Module<Arch>>> for ModuleHandle<Arch> {
 ///
 /// Modules are searched in order and held alive by relocated outputs that keep
 /// this scope.
-pub struct ModuleScope<Arch: RelocationArch = NativeArch> {
-    modules: Arc<[ModuleHandle<Arch>]>,
+pub struct ModuleScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver = ()> {
+    modules: Arc<[ModuleHandle<Arch, Tls>]>,
 }
 
 /// Mutable builder for a [`ModuleScope`].
-pub struct ModuleScopeBuilder<Arch: RelocationArch = NativeArch> {
-    modules: Vec<ModuleHandle<Arch>>,
+pub struct ModuleScopeBuilder<Arch: RelocationArch = NativeArch, Tls: TlsResolver = ()> {
+    modules: Vec<ModuleHandle<Arch, Tls>>,
 }
 
-impl<Arch: RelocationArch> Clone for ModuleScopeBuilder<Arch> {
+impl<Arch: RelocationArch, Tls: TlsResolver> Clone for ModuleScopeBuilder<Arch, Tls> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -116,7 +121,7 @@ impl<Arch: RelocationArch> Clone for ModuleScopeBuilder<Arch> {
     }
 }
 
-impl<Arch: RelocationArch> ModuleScopeBuilder<Arch> {
+impl<Arch: RelocationArch, Tls: TlsResolver> ModuleScopeBuilder<Arch, Tls> {
     #[inline]
     pub fn new() -> Self {
         Self {
@@ -127,7 +132,7 @@ impl<Arch: RelocationArch> ModuleScopeBuilder<Arch> {
     pub(crate) fn replace<I, R>(&mut self, modules: I)
     where
         I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch>>,
+        R: Into<ModuleHandle<Arch, Tls>>,
     {
         self.modules.clear();
         self.modules.extend(modules.into_iter().map(Into::into));
@@ -136,27 +141,27 @@ impl<Arch: RelocationArch> ModuleScopeBuilder<Arch> {
     pub fn extend<I, R>(&mut self, modules: I)
     where
         I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch>>,
+        R: Into<ModuleHandle<Arch, Tls>>,
     {
         self.modules.extend(modules.into_iter().map(Into::into));
     }
 
     #[inline]
-    pub fn into_scope(self) -> ModuleScope<Arch> {
+    pub fn into_scope(self) -> ModuleScope<Arch, Tls> {
         ModuleScope {
             modules: Arc::from(self.modules),
         }
     }
 }
 
-impl<Arch: RelocationArch> Default for ModuleScopeBuilder<Arch> {
+impl<Arch: RelocationArch, Tls: TlsResolver> Default for ModuleScopeBuilder<Arch, Tls> {
     #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<Arch: RelocationArch> Clone for ModuleScope<Arch> {
+impl<Arch: RelocationArch, Tls: TlsResolver> Clone for ModuleScope<Arch, Tls> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -165,16 +170,16 @@ impl<Arch: RelocationArch> Clone for ModuleScope<Arch> {
     }
 }
 
-impl<Arch: RelocationArch> ModuleScope<Arch> {
+impl<Arch: RelocationArch, Tls: TlsResolver> ModuleScope<Arch, Tls> {
     /// Returns the modules in lookup order.
     #[inline]
-    pub fn as_slice(&self) -> &[ModuleHandle<Arch>] {
+    pub fn as_slice(&self) -> &[ModuleHandle<Arch, Tls>] {
         &self.modules
     }
 
     /// Iterates over modules in lookup order.
     #[inline]
-    pub fn iter(&self) -> slice::Iter<'_, ModuleHandle<Arch>> {
+    pub fn iter(&self) -> slice::Iter<'_, ModuleHandle<Arch, Tls>> {
         self.modules.iter()
     }
 

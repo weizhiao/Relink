@@ -5,6 +5,7 @@ use crate::{
     input::Path,
     memory::{HostRegion, RegionAccess},
     relocation::RelocationArch,
+    tls::TlsResolver,
 };
 
 /// Event emitted after dynamic-image program headers are available and before
@@ -69,29 +70,31 @@ pub struct AfterDynamicLoadEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
-    raw: &'a mut RawDynamic<D, Arch, R>,
+    raw: &'a mut RawDynamic<D, Arch, R, Tls>,
 }
 
-impl<'a, D: 'static, Arch, R> AfterDynamicLoadEvent<'a, D, Arch, R>
+impl<'a, D: 'static, Arch, R, Tls> AfterDynamicLoadEvent<'a, D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     #[inline]
-    pub(crate) const fn new(raw: &'a mut RawDynamic<D, Arch, R>) -> Self {
+    pub(crate) const fn new(raw: &'a mut RawDynamic<D, Arch, R, Tls>) -> Self {
         Self { raw }
     }
 
     /// Returns the dynamic image.
     #[inline]
-    pub const fn raw(&self) -> &RawDynamic<D, Arch, R> {
+    pub const fn raw(&self) -> &RawDynamic<D, Arch, R, Tls> {
         self.raw
     }
 
     /// Returns the mutable dynamic image.
     #[inline]
-    pub fn raw_mut(&mut self) -> &mut RawDynamic<D, Arch, R> {
+    pub fn raw_mut(&mut self) -> &mut RawDynamic<D, Arch, R, Tls> {
         self.raw
     }
 }
@@ -103,18 +106,20 @@ pub struct StagedDynamic<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
     key: &'a K,
-    raw: &'a RawDynamic<D, Arch, R>,
+    raw: &'a RawDynamic<D, Arch, R, Tls>,
 }
 
-impl<'a, K, D: 'static, Arch, R> StagedDynamic<'a, K, D, Arch, R>
+impl<'a, K, D: 'static, Arch, R, Tls> StagedDynamic<'a, K, D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     #[inline]
-    pub(crate) const fn new(key: &'a K, raw: &'a RawDynamic<D, Arch, R>) -> Self {
+    pub(crate) const fn new(key: &'a K, raw: &'a RawDynamic<D, Arch, R, Tls>) -> Self {
         Self { key, raw }
     }
 
@@ -132,7 +137,7 @@ where
 
     /// Returns the unrelocated dynamic image.
     #[inline]
-    pub const fn raw(&self) -> &'a RawDynamic<D, Arch, R> {
+    pub const fn raw(&self) -> &'a RawDynamic<D, Arch, R, Tls> {
         self.raw
     }
 }

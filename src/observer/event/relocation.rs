@@ -7,7 +7,7 @@ use crate::{
     input::Path,
     memory::{HostRegion, RegionAccess, VmAddr},
     relocation::RelocationArch,
-    tls::{TlsModuleId, TlsTpOffset},
+    tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
 
 /// Runtime linker state change notification.
@@ -32,18 +32,21 @@ pub struct SymbolBindingEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
-    core: &'a ElfCore<D, Arch, R>,
+    core: &'a ElfCore<D, Arch, R, Tls>,
     rel: Option<&'a ElfRelType<Arch>>,
     symbol: &'a ElfSymbol<Arch::Layout>,
     symbol_name: &'a str,
     resolved: Option<VmAddr>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> SymbolBindingEvent<'a, D, Arch, R> {
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    SymbolBindingEvent<'a, D, Arch, R, Tls>
+{
     #[inline]
     pub(crate) const fn new(
-        core: &'a ElfCore<D, Arch, R>,
+        core: &'a ElfCore<D, Arch, R, Tls>,
         rel: Option<&'a ElfRelType<Arch>>,
         symbol: &'a ElfSymbol<Arch::Layout>,
         symbol_name: &'a str,
@@ -60,7 +63,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> SymbolBindingEvent<'
 
     /// Returns the image core associated with this binding.
     #[inline]
-    pub const fn core(&self) -> &ElfCore<D, Arch, R> {
+    pub const fn core(&self) -> &ElfCore<D, Arch, R, Tls> {
         self.core
     }
 
@@ -200,18 +203,21 @@ pub struct TlsDescBindingEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
-    core: &'a ElfCore<D, Arch, R>,
+    core: &'a ElfCore<D, Arch, R, Tls>,
     rel: &'a ElfRelType<Arch>,
     request: TlsDescBindingRequest,
     value: Option<TlsDescBindingValue>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> TlsDescBindingEvent<'a, D, Arch, R> {
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    TlsDescBindingEvent<'a, D, Arch, R, Tls>
+{
     #[inline]
     #[cfg(feature = "tls")]
     pub(crate) const fn new(
-        core: &'a ElfCore<D, Arch, R>,
+        core: &'a ElfCore<D, Arch, R, Tls>,
         rel: &'a ElfRelType<Arch>,
         request: TlsDescBindingRequest,
     ) -> Self {
@@ -225,7 +231,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> TlsDescBindingEvent<
 
     /// Returns the image core associated with this binding.
     #[inline]
-    pub const fn core(&self) -> &ElfCore<D, Arch, R> {
+    pub const fn core(&self) -> &ElfCore<D, Arch, R, Tls> {
         self.core
     }
 
@@ -278,16 +284,19 @@ pub struct DynamicRelocatedEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
-    core: &'a ElfCore<D, Arch, R>,
+    core: &'a ElfCore<D, Arch, R, Tls>,
     dynamic_addr: VmAddr,
     finalizer: Finalizer<Arch>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> DynamicRelocatedEvent<'a, D, Arch, R> {
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    DynamicRelocatedEvent<'a, D, Arch, R, Tls>
+{
     #[inline]
     pub(crate) const fn new(
-        core: &'a ElfCore<D, Arch, R>,
+        core: &'a ElfCore<D, Arch, R, Tls>,
         dynamic_addr: VmAddr,
         finalizer: Finalizer<Arch>,
     ) -> Self {
@@ -300,7 +309,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> DynamicRelocatedEven
 
     /// Returns the image core associated with this event.
     #[inline]
-    pub const fn core(&self) -> &ElfCore<D, Arch, R> {
+    pub const fn core(&self) -> &ElfCore<D, Arch, R, Tls> {
         self.core
     }
 

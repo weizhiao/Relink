@@ -34,9 +34,10 @@ pub struct RawObject<
     D: 'static = (),
     Arch: ObjectRelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
     /// Core component containing basic ELF information.
-    pub(crate) core: ElfCore<D, Arch, R>,
+    pub(crate) core: ElfCore<D, Arch, R, Tls>,
 
     /// Relocation-only object symbol table.
     pub(crate) symtab: ObjectSymbolTable<Arch::Layout>,
@@ -60,16 +61,20 @@ pub struct RawObject<
     pub(crate) fini: Lifecycle,
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Deref for RawObject<D, Arch, R> {
-    type Target = ElfCore<D, Arch, R>;
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver> Deref
+    for RawObject<D, Arch, R, Tls>
+{
+    type Target = ElfCore<D, Arch, R, Tls>;
 
     fn deref(&self) -> &Self::Target {
         &self.core
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch, R> {
-    pub(crate) fn from_builder<T: TlsResolver>(mut builder: ObjectBuilder<T, D, Arch, R>) -> Self {
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver>
+    RawObject<D, Arch, R, Tls>
+{
+    pub(crate) fn from_builder(mut builder: ObjectBuilder<Tls, D, Arch, R>) -> Self {
         let (segments, init_segments) = builder.segments.into_parts();
         let pltgot = builder.section_segments.take_pltgot();
         let inner = CoreInner {
@@ -79,15 +84,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
             finalizer: OnceCell::new(),
             user_data: builder.user_data,
             dynamic_info: None,
-            tls: CoreTlsState::new(
-                builder.tls_mod_id,
-                builder.tls_tp_offset,
-                None,
-                None,
-                T::unregister,
-                T::init_tls,
-                T::tls_get_addr,
-            ),
+            tls: CoreTlsState::new(builder.tls_mod_id, builder.tls_tp_offset, None, None),
             tls_desc_args: CoreTlsDescArgs::default(),
             segments,
         };
@@ -107,11 +104,11 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
     }
 
     /// Creates a builder for relocating the relocatable file.
-    pub fn relocator(self) -> Relocator<Self, (), (), Arch>
+    pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls>
     where
-        Self: Relocatable<D, Arch = Arch>,
+        Self: Relocatable<D, Arch = Arch, Tls = Tls>,
     {
-        Relocator::<(), (), (), Arch>::new().with_object(self)
+        Relocator::<(), (), (), Arch, (), Tls>::new().with_object(self)
     }
 
     /// Returns the retained object section metadata.
@@ -126,7 +123,9 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Debug for RawObject<D, Arch, R> {
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver> Debug
+    for RawObject<D, Arch, R, Tls>
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawObject")
             .field("core", &self.core)
@@ -134,17 +133,19 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> Debug for RawObjec
     }
 }
 
-impl<D: 'static, Arch, R> Relocatable<D> for RawObject<D, Arch, R>
+impl<D: 'static, Arch, R, Tls> Relocatable<D> for RawObject<D, Arch, R, Tls>
 where
     Arch: ObjectRelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
-    type Output = LoadedObject<D, Arch, R>;
+    type Output = LoadedObject<D, Arch, R, Tls>;
     type Arch = Arch;
+    type Tls = Tls;
 
     fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
@@ -160,11 +161,14 @@ pub struct LoadedObject<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
-    pub(crate) inner: LoadedCore<D, Arch, R>,
+    pub(crate) inner: LoadedCore<D, Arch, R, Tls>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedObject<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
+    for LoadedObject<D, Arch, R, Tls>
+{
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -173,7 +177,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedObject<D
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedObject<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Debug
+    for LoadedObject<D, Arch, R, Tls>
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LoadedObject")
             .field("inner", &self.inner)
@@ -181,62 +187,64 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedObject<D
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Deref for LoadedObject<D, Arch, R> {
-    type Target = LoadedCore<D, Arch, R>;
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Deref
+    for LoadedObject<D, Arch, R, Tls>
+{
+    type Target = LoadedCore<D, Arch, R, Tls>;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Borrow<LoadedCore<D, Arch, R>>
-    for LoadedObject<D, Arch, R>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    Borrow<LoadedCore<D, Arch, R, Tls>> for LoadedObject<D, Arch, R, Tls>
 {
-    fn borrow(&self) -> &LoadedCore<D, Arch, R> {
+    fn borrow(&self) -> &LoadedCore<D, Arch, R, Tls> {
         &self.inner
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Borrow<LoadedCore<D, Arch, R>>
-    for &LoadedObject<D, Arch, R>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    Borrow<LoadedCore<D, Arch, R, Tls>> for &LoadedObject<D, Arch, R, Tls>
 {
-    fn borrow(&self) -> &LoadedCore<D, Arch, R> {
+    fn borrow(&self) -> &LoadedCore<D, Arch, R, Tls> {
         &self.inner
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<LoadedObject<D, Arch, R>>
-    for LoadedCore<D, Arch, R>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    From<LoadedObject<D, Arch, R, Tls>> for LoadedCore<D, Arch, R, Tls>
 {
     #[inline]
-    fn from(object: LoadedObject<D, Arch, R>) -> Self {
+    fn from(object: LoadedObject<D, Arch, R, Tls>) -> Self {
         object.inner
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedObject<D, Arch, R>>
-    for LoadedCore<D, Arch, R>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    From<&LoadedObject<D, Arch, R, Tls>> for LoadedCore<D, Arch, R, Tls>
 {
     #[inline]
-    fn from(object: &LoadedObject<D, Arch, R>) -> Self {
+    fn from(object: &LoadedObject<D, Arch, R, Tls>) -> Self {
         object.inner.clone()
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<LoadedObject<D, Arch, R>>
-    for ModuleHandle<Arch>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>
+    From<LoadedObject<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
 {
     #[inline]
-    fn from(object: LoadedObject<D, Arch, R>) -> Self {
+    fn from(object: LoadedObject<D, Arch, R, Tls>) -> Self {
         Self::new(object.inner)
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedObject<D, Arch, R>>
-    for ModuleHandle<Arch>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>
+    From<&LoadedObject<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
 {
     #[inline]
-    fn from(object: &LoadedObject<D, Arch, R>) -> Self {
+    fn from(object: &LoadedObject<D, Arch, R, Tls>) -> Self {
         Self::new(object.inner.clone())
     }
 }

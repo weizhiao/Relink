@@ -6,6 +6,7 @@ use elf_loader::{
     arch::NativeArch,
     memory::RegionAccess,
     relocation::{HandleResult, RelocationContext, RelocationHandler},
+    tls::TlsResolver,
 };
 
 struct MyRelocHandler;
@@ -15,9 +16,9 @@ fn my_print(s: &str) {
 }
 
 impl RelocationHandler for MyRelocHandler {
-    fn handle<D: 'static, R: RegionAccess, H>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, H>(
         &self,
-        ctx: &RelocationContext<'_, D, NativeArch, R, H>,
+        ctx: &RelocationContext<'_, D, NativeArch, R, Tls, H>,
     ) -> Result<HandleResult> {
         let Some((_, sym_info)) = ctx.relocation_symbol() else {
             return Ok(HandleResult::Unhandled);

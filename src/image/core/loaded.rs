@@ -22,12 +22,15 @@ pub struct LoadedCore<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
-    core: ElfCore<D, Arch, R>,
-    scope: ModuleScope<Arch>,
+    core: ElfCore<D, Arch, R, Tls>,
+    scope: ModuleScope<Arch, Tls>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static> Debug
+    for LoadedCore<D, Arch, R, Tls>
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LoadedCore")
             .field("name", &self.core.name())
@@ -44,7 +47,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for LoadedCore<D, 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
+    for LoadedCore<D, Arch, R, Tls>
+{
     /// Clones the [`LoadedCore`], incrementing the reference count of its core and retained scope.
     fn clone(&self) -> Self {
         LoadedCore {
@@ -54,39 +59,41 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for LoadedCore<D, 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedCore<D, Arch, R>>
-    for LoadedCore<D, Arch, R>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    From<&LoadedCore<D, Arch, R, Tls>> for LoadedCore<D, Arch, R, Tls>
 {
     #[inline]
-    fn from(module: &LoadedCore<D, Arch, R>) -> Self {
+    fn from(module: &LoadedCore<D, Arch, R, Tls>) -> Self {
         module.clone()
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<LoadedCore<D, Arch, R>>
-    for ModuleHandle<Arch>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>
+    From<LoadedCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
 {
     #[inline]
-    fn from(module: LoadedCore<D, Arch, R>) -> Self {
+    fn from(module: LoadedCore<D, Arch, R, Tls>) -> Self {
         Self::new(module)
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> From<&LoadedCore<D, Arch, R>>
-    for ModuleHandle<Arch>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>
+    From<&LoadedCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
 {
     #[inline]
-    fn from(module: &LoadedCore<D, Arch, R>) -> Self {
+    fn from(module: &LoadedCore<D, Arch, R, Tls>) -> Self {
         Self::new(module.clone())
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>
+    LoadedCore<D, Arch, R, Tls>
+{
     #[inline]
-    pub(crate) fn from_relocated_core(core: ElfCore<D, Arch, R>) -> Self {
+    pub(crate) fn from_relocated_core(core: ElfCore<D, Arch, R, Tls>) -> Self {
         LoadedCore {
             core,
-            scope: ModuleScopeBuilder::new().into_scope(),
+            scope: ModuleScopeBuilder::<Arch, Tls>::new().into_scope(),
         }
     }
 
@@ -96,21 +103,21 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     ///
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
-    pub unsafe fn from_core(core: ElfCore<D, Arch, R>) -> Self {
+    pub unsafe fn from_core(core: ElfCore<D, Arch, R, Tls>) -> Self {
         Self::from_relocated_core(core)
     }
 
     #[inline]
     pub(crate) fn from_relocated_core_scope(
-        core: ElfCore<D, Arch, R>,
-        scope: ModuleScope<Arch>,
+        core: ElfCore<D, Arch, R, Tls>,
+        scope: ModuleScope<Arch, Tls>,
     ) -> Self {
         LoadedCore { core, scope }
     }
 
     /// Returns the retained user-provided relocation lookup scope.
     #[inline]
-    pub fn scope(&self) -> &[ModuleHandle<Arch>] {
+    pub fn scope(&self) -> &[ModuleHandle<Arch, Tls>] {
         self.scope.as_slice()
     }
 
@@ -179,7 +186,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         if sym.symbol_type() == ElfSymbolType::TLS {
             self.core.tls_addr(sym.st_value())
         } else {
-            Some(SymDef::<D, Arch>::new(Some(sym), self).addr())
+            Some(SymDef::<D, Arch, Tls>::new(Some(sym), self).addr())
         }
     }
 
@@ -288,7 +295,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
 
     /// Creates a weak reference to this ELF core.
     #[inline]
-    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R> {
+    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R, Tls> {
         self.core.downgrade()
     }
 
@@ -303,7 +310,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     /// # Safety
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
-    pub unsafe fn from_core_scope(core: ElfCore<D, Arch, R>, scope: ModuleScope<Arch>) -> Self {
+    pub unsafe fn from_core_scope(
+        core: ElfCore<D, Arch, R, Tls>,
+        scope: ModuleScope<Arch, Tls>,
+    ) -> Self {
         Self::from_relocated_core_scope(core, scope)
     }
 
@@ -313,12 +323,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     /// Lifecycle information is lost, so the retained scope of the current
     /// loaded object can be dropped too early if this reference is used carelessly.
     #[inline]
-    pub unsafe fn core_ref(&self) -> &ElfCore<D, Arch, R> {
+    pub unsafe fn core_ref(&self) -> &ElfCore<D, Arch, R, Tls> {
         &self.core
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
+impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver> LoadedCore<D, Arch, HostRegion, Tls> {
     fn read_dynamic_view(
         segments: &ElfSegments,
         base: VmAddr,
@@ -361,7 +371,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
     /// # Returns
     /// A new [`LoadedCore`] instance
     #[inline]
-    pub unsafe fn new_unchecked<Tls: TlsResolver>(
+    pub unsafe fn new_unchecked(
         path: impl Into<PathBuf>,
         phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
         memory: (*mut c_void, usize),
@@ -461,25 +471,23 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                 actual_tls_tp_offset,
                 core_tls_info,
                 core_tls_image,
-                Tls::unregister,
-                Tls::init_tls,
-                Tls::tls_get_addr,
                 user_data,
             )
         }?;
         core.init_tls()?;
         Ok(Self {
             core,
-            scope: ModuleScopeBuilder::new().into_scope(),
+            scope: ModuleScopeBuilder::<Arch, Tls>::new().into_scope(),
         })
     }
 }
 
-impl<D, Arch, R> Module<Arch> for LoadedCore<D, Arch, R>
+impl<D, Arch, R, Tls> Module<Arch, Tls> for LoadedCore<D, Arch, R, Tls>
 where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver + 'static,
 {
     #[inline]
     fn name(&self) -> &str {

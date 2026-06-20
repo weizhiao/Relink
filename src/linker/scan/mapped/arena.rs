@@ -6,6 +6,7 @@ use crate::{
     memory::{HostRegion, MappedRegion, RegionAccess, VmAddr, align_up},
     os::{Mmap, ProtFlags},
     relocation::RelocationArch,
+    tls::TlsResolver,
 };
 use alloc::vec::Vec;
 
@@ -21,10 +22,14 @@ pub(crate) struct MappedArenaMap<R: RegionAccess = HostRegion> {
 }
 
 impl<R: RegionAccess> MappedArenaMap<R> {
-    pub(super) fn map_plan<K, Arch, M>(mapper: &M, plan: &LinkPlan<K, Arch>) -> Result<Option<Self>>
+    pub(super) fn map_plan<K, Arch, Tls, M>(
+        mapper: &M,
+        plan: &LinkPlan<K, Arch, Tls>,
+    ) -> Result<Option<Self>>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
         M: Mmap<Region = R> + ?Sized,
     {
         if plan
@@ -87,10 +92,11 @@ impl<R: RegionAccess> MappedArenaMap<R> {
         Ok(Some(arenas))
     }
 
-    pub(super) fn populate<K, Arch>(&mut self, plan: &mut LinkPlan<K, Arch>) -> Result<()>
+    pub(super) fn populate<K, Arch, Tls>(&mut self, plan: &mut LinkPlan<K, Arch, Tls>) -> Result<()>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         let placed_sections = plan
             .memory_layout()

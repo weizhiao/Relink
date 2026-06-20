@@ -4,6 +4,7 @@ use crate::{
     image::{ModuleCapability, ScannedDynamic},
     linker::scan::{Materialization, ModuleId, ModuleLayout},
     relocation::RelocationArch,
+    tls::TlsResolver,
 };
 use core::marker::PhantomData;
 
@@ -30,13 +31,14 @@ where
 {
     /// Returns this module's canonical key through `plan`.
     #[inline]
-    pub fn key<'borrow, K, Arch>(
+    pub fn key<'borrow, K, Arch, Tls>(
         self,
-        plan: &'borrow LinkPassPlan<'scope, K, S, Arch>,
+        plan: &'borrow LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> &'borrow K
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan
             .module_key(self.id)
@@ -45,13 +47,14 @@ where
 
     /// Returns this module's scanned image through `plan`.
     #[inline]
-    pub fn scanned<'borrow, K, Arch>(
+    pub fn scanned<'borrow, K, Arch, Tls>(
         self,
-        plan: &'borrow LinkPassPlan<'scope, K, S, Arch>,
+        plan: &'borrow LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> &'borrow ScannedDynamic<Arch>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan
             .get(self.id)
@@ -62,13 +65,14 @@ where
 
     /// Iterates over visible direct dependency modules recorded for this module.
     #[inline]
-    pub fn direct_deps<'borrow, K, Arch>(
+    pub fn direct_deps<'borrow, K, Arch, Tls>(
         self,
-        plan: &'borrow LinkPassPlan<'scope, K, S, Arch>,
+        plan: &'borrow LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> impl Iterator<Item = Self> + 'borrow
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
         'scope: 'borrow,
     {
         plan.plan
@@ -82,10 +86,14 @@ where
 
     /// Returns this module's planning capability.
     #[inline]
-    pub fn capability<K, Arch>(self, plan: &LinkPassPlan<'scope, K, S, Arch>) -> ModuleCapability
+    pub fn capability<K, Arch, Tls>(
+        self,
+        plan: &LinkPassPlan<'scope, K, S, Arch, Tls>,
+    ) -> ModuleCapability
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan
             .module_capability(self.id)
@@ -94,27 +102,29 @@ where
 
     /// Returns this module's configured materialization mode.
     #[inline]
-    pub fn materialization<K, Arch>(
+    pub fn materialization<K, Arch, Tls>(
         self,
-        plan: &LinkPassPlan<'scope, K, S, Arch>,
+        plan: &LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> Option<Materialization>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan.materialization(self.id)
     }
 
     /// Selects this module's materialization mode through `plan`.
     #[inline]
-    pub fn set_materialization<K, Arch>(
+    pub fn set_materialization<K, Arch, Tls>(
         self,
-        plan: &mut LinkPassPlan<'scope, K, S, Arch>,
+        plan: &mut LinkPassPlan<'scope, K, S, Arch, Tls>,
         mode: Materialization,
     ) -> Option<Materialization>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan.set_materialization(self.id, mode)
     }
@@ -126,27 +136,29 @@ where
 {
     /// Returns this module's planned layout through `plan`.
     #[inline]
-    pub fn layout<'borrow, K, Arch>(
+    pub fn layout<'borrow, K, Arch, Tls>(
         self,
-        plan: &'borrow LinkPassPlan<'scope, K, S, Arch>,
+        plan: &'borrow LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> &'borrow ModuleLayout
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan.module_layout(self.id)
     }
 
     /// Returns one checked section handle for a scanned section in this module.
     #[inline]
-    pub fn section<K, Arch>(
+    pub fn section<K, Arch, Tls>(
         self,
-        plan: &LinkPassPlan<'scope, K, S, Arch>,
+        plan: &LinkPassPlan<'scope, K, S, Arch, Tls>,
         id: ElfSectionId,
     ) -> Option<Section<'scope, S>>
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         let section = plan.plan.module_section_id(self.id, id)?;
         plan.checked_section(section)

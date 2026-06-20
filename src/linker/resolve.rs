@@ -26,10 +26,11 @@ pub(crate) struct ResolveContext<
     V = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     P = (),
+    Tls: TlsResolver = (),
 > {
-    committed: &'a mut CommittedStorage<K, D, Meta, Arch>,
+    committed: &'a mut CommittedStorage<K, D, Meta, Arch, Tls>,
     visible_modules: &'a V,
-    session: &'a mut ResolveSession<P, Arch>,
+    session: &'a mut ResolveSession<P, Arch, Tls>,
 }
 
 pub(crate) type LoadResolveContext<
@@ -40,20 +41,30 @@ pub(crate) type LoadResolveContext<
     V = (),
     Arch = crate::arch::NativeArch,
     R = crate::memory::HostRegion,
-> = ResolveContext<'a, K, D, Meta, V, Arch, RawDynamic<D, Arch, R>>;
+    Tls = (),
+> = ResolveContext<'a, K, D, Meta, V, Arch, RawDynamic<D, Arch, R, Tls>, Tls>;
 
-pub(crate) type ScanResolveContext<'a, K, D, Meta = (), V = (), Arch = crate::arch::NativeArch> =
-    ResolveContext<'a, K, D, Meta, V, Arch, ScannedDynamic<Arch>>;
+pub(crate) type ScanResolveContext<
+    'a,
+    K,
+    D,
+    Meta = (),
+    V = (),
+    Arch = crate::arch::NativeArch,
+    Tls = (),
+> = ResolveContext<'a, K, D, Meta, V, Arch, ScannedDynamic<Arch>, Tls>;
 
-impl<'a, K: Clone, D: 'static, Meta, V, Arch, P> ResolveContext<'a, K, D, Meta, V, Arch, P>
+impl<'a, K: Clone, D: 'static, Meta, V, Arch, P, Tls>
+    ResolveContext<'a, K, D, Meta, V, Arch, P, Tls>
 where
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     #[inline]
     pub(crate) fn new(
-        committed: &'a mut CommittedStorage<K, D, Meta, Arch>,
+        committed: &'a mut CommittedStorage<K, D, Meta, Arch, Tls>,
         visible_modules: &'a V,
-        session: &'a mut ResolveSession<P, Arch>,
+        session: &'a mut ResolveSession<P, Arch, Tls>,
     ) -> Self {
         Self {
             committed,
@@ -63,11 +74,12 @@ where
     }
 }
 
-impl<K, D: 'static, Meta, V, Arch, P> ResolveContext<'_, K, D, Meta, V, Arch, P>
+impl<K, D: 'static, Meta, V, Arch, P, Tls> ResolveContext<'_, K, D, Meta, V, Arch, P, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
     P: DependencyOwner,
+    Tls: TlsResolver,
 {
     #[inline]
     pub(crate) fn contains_pending(&self, id: KeyId) -> bool {
@@ -83,7 +95,7 @@ where
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
     {
         if let Some(id) = self.committed.key_id(key)
             && (self.session.contains(id) || self.committed.contains(id))
@@ -99,7 +111,7 @@ where
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
     {
         self.reusable_key(key).is_some()
     }
@@ -116,7 +128,7 @@ where
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
     {
         if let Some(entry) = self.session.entries.get(&id) {
             return entry.direct_deps().map(<[KeyId]>::to_vec);
@@ -159,13 +171,13 @@ where
         &self,
         id: KeyId,
         needed_index: usize,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
         observer: &mut O,
-    ) -> Result<ResolvedKey<'cfg, K, Arch>>
+    ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
         O: LinkObserver<Arch>,
     {
         let visible_key = |key: &Q| self.reusable_key(key);
@@ -195,13 +207,13 @@ where
     pub(crate) fn resolve_root<'cfg, O, Q>(
         &self,
         key: &K,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
         observer: &mut O,
-    ) -> Result<ResolvedKey<'cfg, K, Arch>>
+    ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
         O: LinkObserver<Arch>,
     {
         let visible_key = |key: &Q| self.reusable_key(key);
@@ -210,25 +222,25 @@ where
         resolver.load_root(&req)
     }
 
-    fn direct_deps_for<'cfg, Obs, Tls, O, F, M, Q>(
+    fn direct_deps_for<'cfg, Obs, O, F, M, Q>(
         &mut self,
         id: KeyId,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
         observer: &mut O,
         stage: &mut F,
     ) -> Result<Vec<KeyId>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
         M: Mmap,
         O: LinkObserver<Arch>,
         F: FnMut(
             &mut Self,
-            ResolvedKey<'cfg, K, Arch>,
+            ResolvedKey<'cfg, K, Arch, Tls>,
             &mut Loader<Obs, D, Tls, Arch, M>,
             &mut O,
         ) -> Result<KeyId>,
@@ -255,25 +267,25 @@ where
         Ok(direct_deps)
     }
 
-    fn resolve_dependency_graph_with<'cfg, Obs, Tls, O, F, M, Q>(
+    fn resolve_dependency_graph_with<'cfg, Obs, O, F, M, Q>(
         &mut self,
         root: KeyId,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
         observer: &mut O,
         mut stage: F,
     ) -> Result<()>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
         M: Mmap,
         O: LinkObserver<Arch>,
         F: FnMut(
             &mut Self,
-            ResolvedKey<'cfg, K, Arch>,
+            ResolvedKey<'cfg, K, Arch, Tls>,
             &mut Loader<Obs, D, Tls, Arch, M>,
             &mut O,
         ) -> Result<KeyId>,
@@ -287,23 +299,24 @@ where
     }
 }
 
-impl<K, D: 'static, Meta, V, Arch, R>
-    ResolveContext<'_, K, D, Meta, V, Arch, RawDynamic<D, Arch, R>>
+impl<K, D: 'static, Meta, V, Arch, R, Tls>
+    ResolveContext<'_, K, D, Meta, V, Arch, RawDynamic<D, Arch, R, Tls>, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
-    pub(crate) fn stage_resolved<'cfg, Obs, Tls, O, M, Q>(
+    pub(crate) fn stage_resolved<'cfg, Obs, O, M, Q>(
         &mut self,
-        resolved: ResolvedKey<'cfg, K, Arch>,
+        resolved: ResolvedKey<'cfg, K, Arch, Tls>,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
         observer: &mut O,
     ) -> Result<KeyId>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
         D: Default,
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
@@ -357,17 +370,17 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<'cfg, Obs, Tls, O, M, Q>(
+    pub(crate) fn resolve_dependency_graph<'cfg, Obs, O, M, Q>(
         &mut self,
         root: KeyId,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q>,
+        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
         observer: &mut O,
     ) -> Result<()>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
         D: Default,
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
@@ -384,20 +397,22 @@ where
     }
 }
 
-impl<K, D: 'static, Meta, V, Arch> ResolveContext<'_, K, D, Meta, V, Arch, ScannedDynamic<Arch>>
+impl<K, D: 'static, Meta, V, Arch, Tls>
+    ResolveContext<'_, K, D, Meta, V, Arch, ScannedDynamic<Arch>, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
-    pub(crate) fn stage_resolved<Obs, Tls, M, Q>(
+    pub(crate) fn stage_resolved<Obs, M, Q>(
         &mut self,
-        resolved: ResolvedKey<'static, K, Arch>,
+        resolved: ResolvedKey<'static, K, Arch, Tls>,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
     ) -> Result<KeyId>
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
         D: Default,
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,
@@ -448,17 +463,17 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<Obs, Tls, O, M, Q>(
+    pub(crate) fn resolve_dependency_graph<Obs, O, M, Q>(
         &mut self,
         root: KeyId,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
-        resolver: &mut impl KeyResolver<'static, K, Arch, Q>,
+        resolver: &mut impl KeyResolver<'static, K, Arch, Q, Tls>,
         observer: &mut O,
     ) -> Result<()>
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
         D: Default,
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver,

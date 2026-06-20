@@ -6,6 +6,7 @@ use crate::{
     elf::{ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType, PreCompute, SymbolInfo},
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
+    tls::TlsResolver,
 };
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use core::ptr::NonNull;
@@ -192,16 +193,19 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     }
 }
 
-impl<Arch: RelocationArch> From<SyntheticModule<Arch>> for ModuleHandle<Arch> {
+impl<Arch: RelocationArch, Tls: TlsResolver + 'static> From<SyntheticModule<Arch>>
+    for ModuleHandle<Arch, Tls>
+{
     #[inline]
     fn from(module: SyntheticModule<Arch>) -> Self {
         Self::new(module)
     }
 }
 
-impl<Arch> Module<Arch> for SyntheticModule<Arch>
+impl<Arch, Tls> Module<Arch, Tls> for SyntheticModule<Arch>
 where
     Arch: RelocationArch,
+    Tls: TlsResolver + 'static,
 {
     #[inline]
     fn name(&self) -> &str {
@@ -264,7 +268,7 @@ mod tests {
                 0x1234usize as *const (),
             )],
         );
-        let mut scope = ModuleScopeBuilder::new();
+        let mut scope = ModuleScopeBuilder::<NativeArch>::new();
         scope.extend([module]);
         let scope = scope.into_scope();
         let info = SymbolInfo::from_str("host_double", None);

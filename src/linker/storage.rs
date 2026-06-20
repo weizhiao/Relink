@@ -2,6 +2,7 @@ use crate::{
     entity::{PrimaryMap, SecondaryMap, entity_ref},
     image::ModuleHandle,
     relocation::RelocationArch,
+    tls::TlsResolver,
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::borrow::Borrow;
@@ -21,19 +22,21 @@ pub(crate) struct CommittedStorage<
     D: 'static,
     M = (),
     Arch: RelocationArch = crate::arch::NativeArch,
+    Tls: TlsResolver = (),
 > {
     key_ids: BTreeMap<K, KeyId>,
     keys: PrimaryMap<KeyId, K>,
     key_modules: SecondaryMap<KeyId, ModuleId>,
-    entries: PrimaryMap<ModuleId, Option<StoredEntry<D, M, Arch>>>,
+    entries: PrimaryMap<ModuleId, Option<StoredEntry<D, M, Arch, Tls>>>,
     load_order: Vec<ModuleId>,
 }
 
-impl<K, D: 'static, M, Arch> Clone for CommittedStorage<K, D, M, Arch>
+impl<K, D: 'static, M, Arch, Tls> Clone for CommittedStorage<K, D, M, Arch, Tls>
 where
     K: Clone,
     M: Clone,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -47,9 +50,10 @@ where
     }
 }
 
-impl<K, D: 'static, M, Arch> CommittedStorage<K, D, M, Arch>
+impl<K, D: 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
 where
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     #[inline]
     pub(crate) fn new() -> Self {
@@ -63,10 +67,11 @@ where
     }
 }
 
-impl<K, D: 'static, M, Arch> CommittedStorage<K, D, M, Arch>
+impl<K, D: 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
 where
     K: Ord,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     #[inline]
     pub(crate) fn key(&self, id: KeyId) -> Option<&K> {
@@ -113,7 +118,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn get(&self, id: ModuleId) -> Option<&ModuleHandle<Arch>> {
+    pub(crate) fn get(&self, id: ModuleId) -> Option<&ModuleHandle<Arch, Tls>> {
         self.entries
             .get(id)
             .and_then(Option::as_ref)
@@ -159,7 +164,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn get_by_key(&self, id: KeyId) -> Option<&ModuleHandle<Arch>> {
+    pub(crate) fn get_by_key(&self, id: KeyId) -> Option<&ModuleHandle<Arch, Tls>> {
         let module_id = self.module_id(id)?;
         self.get(module_id)
     }
@@ -176,10 +181,11 @@ where
     }
 }
 
-impl<K, D: 'static, M, Arch> CommittedStorage<K, D, M, Arch>
+impl<K, D: 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     pub(crate) fn intern_key(&mut self, key: K) -> KeyId {
         if let Some(id) = self.key_id(&key) {
@@ -211,7 +217,7 @@ where
     pub(crate) fn insert_new(
         &mut self,
         id: KeyId,
-        module: ModuleHandle<Arch>,
+        module: ModuleHandle<Arch, Tls>,
         direct_deps: Box<[KeyId]>,
         meta: M,
     ) -> ModuleId {
@@ -236,7 +242,10 @@ where
     }
 
     #[inline]
-    pub(crate) fn remove(&mut self, id: ModuleId) -> Option<(ModuleHandle<Arch>, Box<[KeyId]>, M)> {
+    pub(crate) fn remove(
+        &mut self,
+        id: ModuleId,
+    ) -> Option<(ModuleHandle<Arch, Tls>, Box<[KeyId]>, M)> {
         let removed = self.entries.get_mut(id)?.take()?;
         let aliases = self
             .key_modules
@@ -253,18 +262,24 @@ where
     }
 }
 
-struct StoredEntry<D: 'static, M = (), Arch: RelocationArch = crate::arch::NativeArch> {
+struct StoredEntry<
+    D: 'static,
+    M = (),
+    Arch: RelocationArch = crate::arch::NativeArch,
+    Tls: TlsResolver = (),
+> {
     entry_key: KeyId,
-    module: ModuleHandle<Arch>,
+    module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[KeyId]>,
     meta: M,
     _marker: core::marker::PhantomData<fn() -> D>,
 }
 
-impl<D: 'static, M, Arch> Clone for StoredEntry<D, M, Arch>
+impl<D: 'static, M, Arch, Tls> Clone for StoredEntry<D, M, Arch, Tls>
 where
     M: Clone,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     #[inline]
     fn clone(&self) -> Self {

@@ -2,11 +2,14 @@
 
 use std::collections::HashMap;
 
+#[cfg(feature = "tls")]
+use elf_loader::tls::DefaultTlsResolver;
 use elf_loader::{
     Loader,
     arch::NativeArch,
     image::{LoadedCore, ModuleHandle},
     input::ElfBinary,
+    memory::HostRegion,
     relocation::RelocationArch,
 };
 
@@ -32,6 +35,13 @@ use crate::support::{
         EXTERNAL_TLS_NAME2, EXTERNAL_VAR_NAME, F64Pair, LOCAL_VAR_NAME, TestHostSymbols,
     },
 };
+
+#[cfg(feature = "tls")]
+type TestTlsResolver = DefaultTlsResolver;
+#[cfg(not(feature = "tls"))]
+type TestTlsResolver = ();
+
+type TestLoadedCore = LoadedCore<(), NativeArch, HostRegion, TestTlsResolver>;
 
 pub(super) const IFUNC_RESOLVER_OFFSET: u64 = 100;
 pub(super) const FLOAT_TOLERANCE: f64 = 0.0001;
@@ -186,8 +196,8 @@ impl BindingFixture {
 pub(crate) struct BindingScenario {
     binding: BindingKind,
     main_output: ElfWriteOutput,
-    helper_dylib: LoadedCore<()>,
-    loaded_dylib: LoadedCore<()>,
+    helper_dylib: TestLoadedCore,
+    loaded_dylib: TestLoadedCore,
     host_symbol_addresses: HashMap<&'static str, usize>,
 }
 
@@ -196,11 +206,11 @@ impl BindingScenario {
         self.binding
     }
 
-    pub(crate) fn loaded_dylib(&self) -> &LoadedCore<()> {
+    pub(crate) fn loaded_dylib(&self) -> &TestLoadedCore {
         &self.loaded_dylib
     }
 
-    pub(crate) fn helper_dylib(&self) -> &LoadedCore<()> {
+    pub(crate) fn helper_dylib(&self) -> &TestLoadedCore {
         &self.helper_dylib
     }
 

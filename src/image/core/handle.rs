@@ -10,12 +10,12 @@ use crate::{
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{
-        CoreTlsDescArgs, CoreTlsState, TlsDescArgs, TlsImageProvider, TlsImageSource, TlsIndex,
-        TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset, tls_image_provider_handle,
+        CoreTlsDescArgs, CoreTlsState, TlsDescArgs, TlsImageProvider, TlsImageSource, TlsInfo,
+        TlsModuleId, TlsResolver, TlsTemplate, TlsTpOffset, tls_image_provider_handle,
     },
 };
 use alloc::vec::Vec;
-use core::{cell::OnceCell, fmt::Debug, ptr::NonNull};
+use core::{cell::OnceCell, fmt::Debug, marker::PhantomData, ptr::NonNull};
 
 /// A non-owning reference to an [`ElfCore`].
 ///
@@ -26,13 +26,16 @@ pub struct ElfCoreRef<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
     /// Weak reference to the shared core allocation.
-    inner: Weak<CoreInner<D, Arch, R>>,
+    inner: Weak<CoreInner<D, Arch, R, Tls>>,
 }
 
 // Keep this impl manual so cloning a weak core handle does not require D, Arch, or R to be Clone.
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for ElfCoreRef<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
+    for ElfCoreRef<D, Arch, R, Tls>
+{
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -41,18 +44,22 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for ElfCoreRef<D, 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCoreRef<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    ElfCoreRef<D, Arch, R, Tls>
+{
     /// Attempts to upgrade the weak pointer to an [`ElfCore`].
     ///
     /// # Returns
     /// * `Some(ElfCore)` - If the component is still alive and the upgrade is successful.
     /// * `None` - If the [`ElfCore`] has been dropped.
-    pub fn upgrade(&self) -> Option<ElfCore<D, Arch, R>> {
+    pub fn upgrade(&self) -> Option<ElfCore<D, Arch, R, Tls>> {
         self.inner.upgrade().map(|inner| ElfCore { inner })
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> TlsImageProvider for CoreInner<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> TlsImageProvider
+    for CoreInner<D, Arch, R, Tls>
+{
     fn with_tls_template(&self, f: &mut dyn FnMut(TlsTemplate<'_>) -> Result<()>) -> Result<()> {
         if self.tls.info().is_none() {
             return Err(TlsError::TemplateUnavailable.into());
@@ -70,12 +77,15 @@ pub struct ElfCore<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
     /// Shared reference to the inner component data.
-    pub(crate) inner: Arc<CoreInner<D, Arch, R>>,
+    pub(crate) inner: Arc<CoreInner<D, Arch, R, Tls>>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for ElfCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
+    for ElfCore<D, Arch, R, Tls>
+{
     /// Clones the [`ElfCore`], incrementing the internal reference count.
     fn clone(&self) -> Self {
         ElfCore {
@@ -84,7 +94,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Clone for ElfCore<D, Arc
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>
+    ElfCore<D, Arch, R, Tls>
+{
     /// Returns whether the ELF object has been initialized.
     #[inline]
     pub fn is_init(&self) -> bool {
@@ -99,7 +111,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
 
     /// Creates a weak reference to this ELF core.
     #[inline]
-    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R> {
+    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R, Tls> {
         ElfCoreRef {
             inner: Arc::downgrade(&self.inner),
         }
@@ -191,11 +203,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     /// Returns TLS metadata associated with this image.
     #[inline]
     pub fn tls(&self) -> ModuleTls {
-        ModuleTls::new(
-            self.inner.tls.mod_id(),
-            self.inner.tls.tp_offset(),
-            self.tls_get_addr(),
-        )
+        ModuleTls::new(self.inner.tls.mod_id(), self.inner.tls.tp_offset())
     }
 
     pub(crate) fn init_tls(&self) -> Result<()> {
@@ -230,7 +238,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> ElfCore<D, Arch, R, Tls> {
     /// Creates an `ElfCore` from raw components.
     ///
     /// # Safety
@@ -251,9 +259,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
         tls_tp_offset: Option<TlsTpOffset>,
         tls_info: Option<TlsInfo>,
         tls_image: Option<MappedView<u8>>,
-        tls_unregister: fn(TlsModuleId),
-        tls_init: fn(crate::tls::TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
-        tls_get_addr: extern "C" fn(*const TlsIndex) -> *mut u8,
         user_data: D,
     ) -> Result<Self> {
         segments.set_base(base);
@@ -270,22 +275,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
                 path,
                 is_init: AtomicBool::new(true),
                 exports: exports_handle(exports),
-                dynamic_info: Some(Arc::new(DynamicInfo {
+                dynamic_info: Some(Arc::new(DynamicInfo::<Arch, Tls> {
                     eh_frame_hdr,
                     phdrs: ElfPhdrs::Vec(phdrs),
                     soname,
                     #[cfg(feature = "lazy-binding")]
                     lazy: crate::image::LazyBindingInfo::new(dynamic.pltrel, lazy_symtab),
+                    _tls: PhantomData,
                 })),
-                tls: CoreTlsState::new(
-                    tls_mod_id,
-                    tls_tp_offset,
-                    tls_info,
-                    tls_image,
-                    tls_unregister,
-                    tls_init,
-                    tls_get_addr,
-                ),
+                tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_info, tls_image),
                 tls_desc_args: CoreTlsDescArgs::default(),
                 segments,
                 finalizer: OnceCell::new(),
@@ -295,7 +293,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for ElfCore<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Debug
+    for ElfCore<D, Arch, R, Tls>
+{
     /// Formats the ElfCore for debugging purposes.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfCore")
@@ -306,11 +306,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for ElfCore<D, Arc
     }
 }
 
-impl<D, Arch, R> Module<Arch> for ElfCore<D, Arch, R>
+impl<D, Arch, R, Tls> Module<Arch, Tls> for ElfCore<D, Arch, R, Tls>
 where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver + 'static,
 {
     #[inline]
     fn name(&self) -> &str {

@@ -7,7 +7,7 @@ use crate::{
     relocation::RelocationArch,
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering},
-    tls::{CoreTlsDescArgs, CoreTlsState},
+    tls::{CoreTlsDescArgs, CoreTlsState, TlsResolver},
 };
 use core::{cell::OnceCell, marker::PhantomData, ops::Deref};
 
@@ -17,6 +17,7 @@ pub(crate) struct CoreInner<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
     /// Indicates whether the component has been initialized
     pub(crate) is_init: AtomicBool,
@@ -31,10 +32,10 @@ pub(crate) struct CoreInner<
     pub(crate) finalizer: OnceCell<Finalizer<Arch>>,
 
     /// Dynamic information
-    pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
+    pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch, Tls>>>,
 
     /// TLS runtime state for this loaded object.
-    pub(crate) tls: CoreTlsState,
+    pub(crate) tls: CoreTlsState<Tls>,
 
     /// Backing storage for TLSDESC relocation arguments written into this image.
     pub(crate) tls_desc_args: CoreTlsDescArgs,
@@ -46,7 +47,9 @@ pub(crate) struct CoreInner<
     pub(crate) user_data: D,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> CoreInner<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    CoreInner<D, Arch, R, Tls>
+{
     #[inline]
     pub(crate) fn name(&self) -> &str {
         self.dynamic_info
@@ -56,7 +59,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> CoreInner<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Drop
+    for CoreInner<D, Arch, R, Tls>
+{
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed)
@@ -72,9 +77,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Ar
 }
 
 // Safety: CoreInner can be shared between threads.
-unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Sync for CoreInner<D, Arch, R> {}
+unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Sync
+    for CoreInner<D, Arch, R, Tls>
+{
+}
 // Safety: CoreInner can be sent between threads.
-unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Send for CoreInner<D, Arch, R> {}
+unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Send
+    for CoreInner<D, Arch, R, Tls>
+{
+}
 
 /// A typed symbol retrieved from a loaded ELF module.
 ///

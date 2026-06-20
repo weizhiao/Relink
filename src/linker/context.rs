@@ -4,6 +4,7 @@ use super::{
 };
 use crate::{
     LinkerError, Result, arch::NativeArch, image::ModuleHandle, relocation::RelocationArch,
+    tls::TlsResolver,
 };
 use alloc::{
     borrow::ToOwned,
@@ -17,13 +18,20 @@ use core::borrow::Borrow;
 ///
 /// The context is a single relocation-domain module repository and committed
 /// dependency graph.
-pub struct LinkContext<K, D: 'static, M = (), Arch: RelocationArch = NativeArch> {
-    pub(super) committed: CommittedStorage<K, D, M, Arch>,
+pub struct LinkContext<
+    K,
+    D: 'static,
+    M = (),
+    Arch: RelocationArch = NativeArch,
+    Tls: TlsResolver = (),
+> {
+    pub(super) committed: CommittedStorage<K, D, M, Arch, Tls>,
 }
 
-impl<K, D: 'static, M, Arch> Default for LinkContext<K, D, M, Arch>
+impl<K, D: 'static, M, Arch, Tls> Default for LinkContext<K, D, M, Arch, Tls>
 where
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     #[inline]
     fn default() -> Self {
@@ -31,9 +39,10 @@ where
     }
 }
 
-impl<K, D: 'static, M, Arch> LinkContext<K, D, M, Arch>
+impl<K, D: 'static, M, Arch, Tls> LinkContext<K, D, M, Arch, Tls>
 where
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     /// Creates an empty link context.
     #[inline]
@@ -44,10 +53,11 @@ where
     }
 }
 
-impl<K, D: 'static, M, Arch> LinkContext<K, D, M, Arch>
+impl<K, D: 'static, M, Arch, Tls> LinkContext<K, D, M, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     /// Returns whether no modules have been committed.
     #[inline]
@@ -102,7 +112,7 @@ where
 
     /// Returns the retained module handle associated with a committed module id.
     #[inline]
-    pub fn get(&self, id: ModuleId) -> Option<&ModuleHandle<Arch>> {
+    pub fn get(&self, id: ModuleId) -> Option<&ModuleHandle<Arch, Tls>> {
         self.committed.get(id)
     }
 
@@ -113,11 +123,11 @@ where
         &self,
         visible_modules: &V,
         id: KeyId,
-    ) -> Option<ModuleHandle<Arch>>
+    ) -> Option<ModuleHandle<Arch, Tls>>
     where
         K: Borrow<Q>,
         Q: ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
     {
         self.committed.get_by_key(id).cloned().or_else(|| {
             let key = self.committed.key(id)?;
@@ -132,11 +142,11 @@ where
         &self,
         visible_modules: &V,
         key: &Q,
-    ) -> Option<ModuleHandle<Arch>>
+    ) -> Option<ModuleHandle<Arch, Tls>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
     {
         self.committed
             .key_id(key)
@@ -178,7 +188,7 @@ where
     pub fn insert<R>(&mut self, key: K, module: R, direct_deps: Box<[K]>) -> Result<ModuleId>
     where
         M: Default,
-        R: Into<ModuleHandle<Arch>>,
+        R: Into<ModuleHandle<Arch, Tls>>,
     {
         self.insert_with_meta(key, module, direct_deps, M::default())
     }
@@ -192,7 +202,7 @@ where
         meta: M,
     ) -> Result<ModuleId>
     where
-        R: Into<ModuleHandle<Arch>>,
+        R: Into<ModuleHandle<Arch, Tls>>,
     {
         if self.committed.contains_key(&key) {
             return Err(LinkerError::context("duplicate linked module key").into());
@@ -240,7 +250,7 @@ where
 
     /// Removes a committed module and returns its handle, dependencies, and metadata.
     #[inline]
-    pub fn remove(&mut self, id: ModuleId) -> Option<(ModuleHandle<Arch>, Box<[KeyId]>, M)> {
+    pub fn remove(&mut self, id: ModuleId) -> Option<(ModuleHandle<Arch, Tls>, Box<[KeyId]>, M)> {
         self.committed.remove(id)
     }
 
@@ -281,7 +291,7 @@ where
     }
 
     /// Extends this context with modules from another context.
-    pub fn extend(&mut self, other: &LinkContext<K, D, M, Arch>) -> Result<()>
+    pub fn extend(&mut self, other: &LinkContext<K, D, M, Arch, Tls>) -> Result<()>
     where
         M: Clone,
     {

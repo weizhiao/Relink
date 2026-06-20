@@ -20,6 +20,7 @@ mod enabled {
         },
         relocation::{RelocHelper, RelocationArch, RelocationHandler},
         segment::ElfSegments,
+        tls::TlsResolver,
     };
     use alloc::boxed::Box;
 
@@ -46,11 +47,13 @@ mod enabled {
         }
     }
 
-    impl<'find, D, Arch, R, PreH, PostH, Obs, H> RelocHelper<'find, D, Arch, R, PreH, PostH, Obs, H>
+    impl<'find, D, Arch, R, Tls, PreH, PostH, Obs, H>
+        RelocHelper<'find, D, Arch, R, Tls, PreH, PostH, Obs, H>
     where
         D: 'static,
         Arch: RelocationArch,
         R: RegionAccess,
+        Tls: TlsResolver,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
@@ -107,14 +110,15 @@ mod enabled {
         }
     }
 
-    pub(crate) fn handle_tls_reloc<D, Arch, R, PreH, PostH, Obs, H>(
-        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH, Obs, H>,
+    pub(crate) fn handle_tls_reloc<D, Arch, R, Tls, PreH, PostH, Obs, H>(
+        helper: &mut RelocHelper<'_, D, Arch, R, Tls, PreH, PostH, Obs, H>,
         rel: &ElfRelType<Arch>,
     ) -> Result<TlsRelocOutcome>
     where
         D: 'static,
         Arch: RelocationArch,
         R: RegionAccess,
+        Tls: TlsResolver,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
@@ -185,10 +189,7 @@ mod enabled {
                     let tls_mod_id = tls.mod_id();
                     let tls_tp_offset = tls.tp_offset();
                     let tls_get_addr = if tls_tp_offset.is_none() && tls_mod_id.is_some() {
-                        let Some(addr) = tls.tls_get_addr() else {
-                            return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
-                        };
-                        Some(addr)
+                        Some(VmAddr::from_ptr(Tls::tls_get_addr as *const ()))
                     } else {
                         None
                     };
@@ -229,17 +230,19 @@ mod disabled {
         memory::RegionAccess,
         observer::RelocationObserver,
         relocation::{RelocHelper, RelocationArch, RelocationHandler},
+        tls::TlsResolver,
     };
 
     #[inline]
-    pub(crate) fn handle_tls_reloc<D, Arch, R, PreH, PostH, Obs>(
-        _helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH, Obs>,
+    pub(crate) fn handle_tls_reloc<D, Arch, R, Tls, PreH, PostH, Obs>(
+        _helper: &mut RelocHelper<'_, D, Arch, R, Tls, PreH, PostH, Obs>,
         rel: &ElfRelType<Arch>,
     ) -> Result<TlsRelocOutcome>
     where
         D: 'static,
         Arch: RelocationArch,
         R: RegionAccess,
+        Tls: TlsResolver,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,

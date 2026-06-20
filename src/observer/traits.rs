@@ -9,7 +9,9 @@ use super::{
 };
 #[cfg(feature = "object")]
 use crate::relocation::ObjectRelocationArch;
-use crate::{Result, arch::NativeArch, memory::RegionAccess, relocation::RelocationArch};
+use crate::{
+    Result, arch::NativeArch, memory::RegionAccess, relocation::RelocationArch, tls::TlsResolver,
+};
 use alloc::boxed::Box;
 
 /// Event hook for images as they are loaded.
@@ -48,9 +50,9 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
     /// Called after a relocatable object has been mapped and parsed, before relocation.
     #[cfg(feature = "object")]
     #[inline]
-    fn on_after_object_load<R: RegionAccess>(
+    fn on_after_object_load<R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        _event: AfterObjectLoadEvent<'_, D, Arch, R>,
+        _event: AfterObjectLoadEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()>
     where
         Arch: ObjectRelocationArch,
@@ -60,9 +62,9 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
 
     /// Called after a dynamic image has been mapped and parsed, before relocation.
     #[inline]
-    fn on_after_dynamic_load<R: RegionAccess>(
+    fn on_after_dynamic_load<R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        _event: AfterDynamicLoadEvent<'_, D, Arch, R>,
+        _event: AfterDynamicLoadEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         Ok(())
     }
@@ -82,27 +84,27 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
 
     /// Called before initialization functions are executed.
     #[inline]
-    fn on_init<D: 'static, R: RegionAccess>(
+    fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        _event: &mut InitEvent<'_, D, Arch, R>,
+        _event: &mut InitEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         Ok(())
     }
 
     /// Called when a regular symbol relocation needs runtime binding.
     #[inline]
-    fn on_symbol_binding<D: 'static, R: RegionAccess>(
+    fn on_symbol_binding<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        _event: &mut SymbolBindingEvent<'_, D, Arch, R>,
+        _event: &mut SymbolBindingEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         Ok(())
     }
 
     /// Called when a TLSDESC relocation needs runtime binding.
     #[inline]
-    fn on_tlsdesc_binding<D: 'static, R: RegionAccess>(
+    fn on_tlsdesc_binding<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        _event: &mut TlsDescBindingEvent<'_, D, Arch, R>,
+        _event: &mut TlsDescBindingEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         Ok(())
     }
@@ -110,9 +112,9 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     /// Called after relocatable-object relocation and before memory protection and initialization.
     #[cfg(feature = "object")]
     #[inline]
-    fn on_object_relocated<D: 'static, R: RegionAccess>(
+    fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        _event: &mut ObjectRelocatedEvent<'_, D, Arch, R>,
+        _event: &mut ObjectRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         Ok(())
     }
@@ -122,9 +124,9 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     /// Implementations may adjust the retained finalizer before it is stored
     /// with the relocated image.
     #[inline]
-    fn on_dynamic_relocated<D: 'static, R: RegionAccess>(
+    fn on_dynamic_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        _event: &mut DynamicRelocatedEvent<'_, D, Arch, R>,
+        _event: &mut DynamicRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         Ok(())
     }
@@ -149,9 +151,9 @@ pub trait LinkObserver<Arch: RelocationArch = NativeArch> {
 
     /// Called when a dynamic image has been mapped and staged into the link session.
     #[inline]
-    fn on_staged_dynamic<K, D: 'static, R: RegionAccess>(
+    fn on_staged_dynamic<K, D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        _event: StagedDynamic<'_, K, D, Arch, R>,
+        _event: StagedDynamic<'_, K, D, Arch, R, Tls>,
     ) -> Result<()> {
         Ok(())
     }
@@ -197,9 +199,9 @@ where
 
     #[cfg(feature = "object")]
     #[inline]
-    fn on_after_object_load<R: RegionAccess>(
+    fn on_after_object_load<R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: AfterObjectLoadEvent<'_, D, Arch, R>,
+        event: AfterObjectLoadEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()>
     where
         Arch: ObjectRelocationArch,
@@ -208,9 +210,9 @@ where
     }
 
     #[inline]
-    fn on_after_dynamic_load<R: RegionAccess>(
+    fn on_after_dynamic_load<R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: AfterDynamicLoadEvent<'_, D, Arch, R>,
+        event: AfterDynamicLoadEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_after_dynamic_load(event)
     }
@@ -227,42 +229,42 @@ where
     }
 
     #[inline]
-    fn on_init<D: 'static, R: RegionAccess>(
+    fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: &mut InitEvent<'_, D, Arch, R>,
+        event: &mut InitEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_init(event)
     }
 
     #[inline]
-    fn on_symbol_binding<D: 'static, R: RegionAccess>(
+    fn on_symbol_binding<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: &mut SymbolBindingEvent<'_, D, Arch, R>,
+        event: &mut SymbolBindingEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_symbol_binding(event)
     }
 
     #[inline]
-    fn on_tlsdesc_binding<D: 'static, R: RegionAccess>(
+    fn on_tlsdesc_binding<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: &mut TlsDescBindingEvent<'_, D, Arch, R>,
+        event: &mut TlsDescBindingEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_tlsdesc_binding(event)
     }
 
     #[cfg(feature = "object")]
     #[inline]
-    fn on_object_relocated<D: 'static, R: RegionAccess>(
+    fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: &mut ObjectRelocatedEvent<'_, D, Arch, R>,
+        event: &mut ObjectRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_object_relocated(event)
     }
 
     #[inline]
-    fn on_dynamic_relocated<D: 'static, R: RegionAccess>(
+    fn on_dynamic_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: &mut DynamicRelocatedEvent<'_, D, Arch, R>,
+        event: &mut DynamicRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_dynamic_relocated(event)
     }
@@ -302,9 +304,9 @@ where
 
     #[cfg(feature = "object")]
     #[inline]
-    fn on_after_object_load<R: RegionAccess>(
+    fn on_after_object_load<R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: AfterObjectLoadEvent<'_, D, Arch, R>,
+        event: AfterObjectLoadEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()>
     where
         Arch: ObjectRelocationArch,
@@ -313,9 +315,9 @@ where
     }
 
     #[inline]
-    fn on_after_dynamic_load<R: RegionAccess>(
+    fn on_after_dynamic_load<R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: AfterDynamicLoadEvent<'_, D, Arch, R>,
+        event: AfterDynamicLoadEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_after_dynamic_load(event)
     }
@@ -340,9 +342,9 @@ where
     }
 
     #[inline]
-    fn on_staged_dynamic<K, D: 'static, R: RegionAccess>(
+    fn on_staged_dynamic<K, D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: StagedDynamic<'_, K, D, Arch, R>,
+        event: StagedDynamic<'_, K, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_staged_dynamic(event)
     }
@@ -367,9 +369,9 @@ where
     }
 
     #[inline]
-    fn on_staged_dynamic<K, D: 'static, R: RegionAccess>(
+    fn on_staged_dynamic<K, D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: StagedDynamic<'_, K, D, Arch, R>,
+        event: StagedDynamic<'_, K, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_staged_dynamic(event)
     }
@@ -386,42 +388,42 @@ where
     }
 
     #[inline]
-    fn on_init<D: 'static, R: RegionAccess>(
+    fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: &mut InitEvent<'_, D, Arch, R>,
+        event: &mut InitEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_init(event)
     }
 
     #[inline]
-    fn on_symbol_binding<D: 'static, R: RegionAccess>(
+    fn on_symbol_binding<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: &mut SymbolBindingEvent<'_, D, Arch, R>,
+        event: &mut SymbolBindingEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_symbol_binding(event)
     }
 
     #[inline]
-    fn on_tlsdesc_binding<D: 'static, R: RegionAccess>(
+    fn on_tlsdesc_binding<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: &mut TlsDescBindingEvent<'_, D, Arch, R>,
+        event: &mut TlsDescBindingEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_tlsdesc_binding(event)
     }
 
     #[cfg(feature = "object")]
     #[inline]
-    fn on_object_relocated<D: 'static, R: RegionAccess>(
+    fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: &mut ObjectRelocatedEvent<'_, D, Arch, R>,
+        event: &mut ObjectRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_object_relocated(event)
     }
 
     #[inline]
-    fn on_dynamic_relocated<D: 'static, R: RegionAccess>(
+    fn on_dynamic_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: &mut DynamicRelocatedEvent<'_, D, Arch, R>,
+        event: &mut DynamicRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_dynamic_relocated(event)
     }

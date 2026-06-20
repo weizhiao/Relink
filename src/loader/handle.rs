@@ -186,7 +186,7 @@ where
     #[cfg(feature = "object")]
     pub(crate) fn notify_after_object_load<R: RegionAccess>(
         &mut self,
-        raw: &mut RawObject<D, Arch, R>,
+        raw: &mut RawObject<D, Arch, R, Tls>,
     ) -> Result<()>
     where
         Arch: ObjectRelocationArch,

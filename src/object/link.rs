@@ -16,6 +16,7 @@ use crate::{
         ObjectRelocationArch, RelocHelper, RelocateArgs, RelocationHandler, find_symdef_impl,
     },
     runtime::CodeExecutor,
+    tls::TlsResolver,
 };
 
 pub(crate) fn object_relocation_sections<Arch>(
@@ -48,15 +49,16 @@ where
         })
 }
 
-impl<D: 'static, Arch, R> RawObject<D, Arch, R>
+impl<D: 'static, Arch, R, Tls> RawObject<D, Arch, R, Tls>
 where
     Arch: ObjectRelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     pub(crate) fn relocate_impl<PreH, PostH, Obs>(
         mut self,
-        args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
-    ) -> Result<LoadedObject<D, Arch, R>>
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
+    ) -> Result<LoadedObject<D, Arch, R, Tls>>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
@@ -177,7 +179,7 @@ where
 
     fn simplify_symbols<Obs>(
         &mut self,
-        scope: &ModuleScope<Arch>,
+        scope: &ModuleScope<Arch, Tls>,
         observer: &mut Obs,
         executor: &dyn CodeExecutor<Arch>,
     ) -> Result<()>
@@ -264,14 +266,15 @@ where
 }
 
 #[cold]
-fn unresolved_symbol_error<D, Arch, R>(
-    core: &crate::image::ElfCore<D, Arch, R>,
+fn unresolved_symbol_error<D, Arch, R, Tls>(
+    core: &crate::image::ElfCore<D, Arch, R, Tls>,
     name: &str,
 ) -> crate::Error
 where
     D: 'static,
     Arch: crate::relocation::RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     relocate_context_error(
         core.name(),

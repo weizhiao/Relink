@@ -1,9 +1,11 @@
 #[cfg(feature = "lazy-binding")]
 mod enabled {
-    use crate::image::{CoreInner, ModuleScope, RawDylib, RawDynamic, RawElf, RawExec};
+    use crate::image::{
+        CoreInner, LazyBindingRuntime, ModuleScope, RawDylib, RawDynamic, RawElf, RawExec,
+    };
     use crate::{
         RelocationError, Result,
-        arch::{NativeArch, prepare_lazy_bind},
+        arch::prepare_lazy_bind,
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolInfo},
         memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
         relocation::{
@@ -11,31 +13,54 @@ mod enabled {
         },
         runtime::NativeCodeExecutor,
         sync::Arc,
-        tls::TLS_GET_ADDR_SYMBOL,
+        tls::{TLS_GET_ADDR_SYMBOL, TlsResolver},
     };
     use core::ptr::NonNull;
 
-    impl<D: 'static, Arch: RelocationArch, R: RegionAccess> SupportLazy for RawDynamic<D, Arch, R> {}
+    impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> SupportLazy
+        for RawDynamic<D, Arch, R, Tls>
+    {
+    }
 
-    impl<D: 'static, Arch: RelocationArch, R: RegionAccess> SupportLazy for RawDylib<D, Arch, R> {}
+    impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> SupportLazy
+        for RawDylib<D, Arch, R, Tls>
+    {
+    }
 
-    impl<D: 'static, Arch: RelocationArch> SupportLazy for RawExec<D, Arch> {}
+    impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> SupportLazy
+        for RawExec<D, Arch, R, Tls>
+    {
+    }
 
-    impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> SupportLazy for RawElf<D, Arch, R> {}
+    impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver> SupportLazy
+        for RawElf<D, Arch, R, Tls>
+    {
+    }
 
-    fn lookup_addr(dylib: &CoreInner, scope: &ModuleScope, name: &str) -> Result<Option<VmAddr>> {
-        let syminfo = SymbolInfo::from_str(name, None);
+    fn lookup_addr<D, Arch, R, Tls>(
+        dylib: &CoreInner<D, Arch, R, Tls>,
+        scope: &ModuleScope<Arch, Tls>,
+        syminfo: &SymbolInfo<'_>,
+    ) -> Result<Option<VmAddr>>
+    where
+        D: 'static,
+        Arch: RelocationArch,
+        R: RegionAccess,
+        Tls: TlsResolver,
+    {
+        if Tls::OVERRIDE_TLS_GET_ADDR && syminfo.name() == TLS_GET_ADDR_SYMBOL {
+            return Ok(dylib.tls.tls_get_addr());
+        }
+
         let mut precompute = syminfo.precompute();
         for source in scope.iter() {
-            if let Some(sym) = source.exports().lookup(&syminfo, &mut precompute) {
-                return SymDef::<(), NativeArch>::new(Some(sym), &**source)
+            if let Some(sym) = source.exports().lookup(syminfo, &mut precompute) {
+                return SymDef::<D, Arch, Tls>::new(Some(sym), &**source)
                     .resolve_addr(&NativeCodeExecutor)
                     .map(Some);
             }
         }
-        Ok((name == TLS_GET_ADDR_SYMBOL)
-            .then(|| dylib.tls.tls_get_addr())
-            .flatten())
+        Ok(None)
     }
 
     pub(crate) enum ResolvedBinding {
@@ -49,9 +74,9 @@ mod enabled {
             matches!(self, Self::Lazy)
         }
 
-        pub(crate) fn prepare_plt<D, Arch: RelocationArch, R: RegionAccess>(
+        pub(crate) fn prepare_plt<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>(
             &self,
-            image: &RawDynamic<D, Arch, R>,
+            image: &RawDynamic<D, Arch, R, Tls>,
         ) -> Result<()>
         where
             D: 'static,
@@ -64,7 +89,35 @@ mod enabled {
 
                 let got = lazy_binding_got(image)?;
                 let core = image.core_ref();
-                prepare_lazy_bind(got.as_ptr(), VmAddr::from_ptr(Arc::as_ptr(&core.inner)));
+                let dynamic_info =
+                    core.inner
+                        .dynamic_info
+                        .as_ref()
+                        .ok_or(RelocationError::LazyBindingSetup {
+                            detail: "lazy binding requires dynamic metadata",
+                        })?;
+                if dynamic_info.lazy.runtime.get().is_none() {
+                    assert!(
+                        dynamic_info
+                            .lazy
+                            .runtime
+                            .set(LazyBindingRuntime::new(
+                                Arc::as_ptr(&core.inner).cast(),
+                                dl_fixup_typed::<D, Arch, R, Tls>,
+                            ))
+                            .is_ok(),
+                        "lazy binding runtime must be installed only once",
+                    );
+                }
+                let runtime =
+                    dynamic_info
+                        .lazy
+                        .runtime
+                        .get()
+                        .ok_or(RelocationError::LazyBindingSetup {
+                            detail: "lazy binding runtime was not installed",
+                        })?;
+                prepare_lazy_bind(got.as_ptr(), VmAddr::from_ptr(runtime));
             }
             Ok(())
         }
@@ -99,7 +152,7 @@ mod enabled {
         }
     }
 
-    impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
+    impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDynamic<D, Arch, R, Tls> {
         pub(crate) fn resolve_binding(&self, binding: BindingMode) -> ResolvedBinding {
             match binding {
                 BindingMode::Default => {
@@ -117,7 +170,7 @@ mod enabled {
         pub(crate) fn install_lazy_lookup(
             &self,
             binding: ResolvedBinding,
-            scope: ModuleScope<Arch>,
+            scope: ModuleScope<Arch, Tls>,
         ) -> Result<()>
         where
             D: 'static,
@@ -141,8 +194,8 @@ mod enabled {
         }
     }
 
-    fn lazy_binding_got<D, Arch: RelocationArch, R: RegionAccess>(
-        image: &RawDynamic<D, Arch, R>,
+    fn lazy_binding_got<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>(
+        image: &RawDynamic<D, Arch, R, Tls>,
     ) -> Result<NonNull<usize>>
     where
         D: 'static,
@@ -169,7 +222,11 @@ mod enabled {
 
     #[cold]
     #[inline(never)]
-    fn invalid_relocation(name: &str, rela_idx: usize, rel: &ElfRelType) -> ! {
+    fn invalid_relocation<Arch: RelocationArch>(
+        name: &str,
+        rela_idx: usize,
+        rel: &ElfRelType<Arch>,
+    ) -> ! {
         panic!(
             "lazy binding failed for {name}: invalid PLT relocation {rela_idx} (type {}, sym {})",
             rel.r_type(),
@@ -194,7 +251,14 @@ mod enabled {
         );
     }
 
-    pub(crate) unsafe extern "C" fn dl_fixup(dylib: &CoreInner, rela_idx: usize) -> usize {
+    unsafe fn dl_fixup_typed<D, Arch, R, Tls>(dylib: *const (), rela_idx: usize) -> usize
+    where
+        D: 'static,
+        Arch: RelocationArch,
+        R: RegionAccess,
+        Tls: TlsResolver,
+    {
+        let dylib = unsafe { &*dylib.cast::<CoreInner<D, Arch, R, Tls>>() };
         let Some(dynamic_info) = dylib.dynamic_info.as_ref() else {
             invalid_state(dylib.path.as_str(), "missing dynamic metadata")
         };
@@ -207,8 +271,8 @@ mod enabled {
         let r_sym = rela.r_symbol();
         let segments = &dylib.segments;
 
-        if unlikely(r_type != <NativeArch as RelocationArch>::JUMP_SLOT || r_sym == 0) {
-            invalid_relocation(dylib.path.as_str(), rela_idx, rela);
+        if unlikely(r_type != Arch::JUMP_SLOT || r_sym == 0) {
+            invalid_relocation::<Arch>(dylib.path.as_str(), rela_idx, rela);
         }
 
         let symtab = dynamic_info.lazy.symtab.view();
@@ -222,7 +286,7 @@ mod enabled {
         let Some(scope) = dynamic_info.lazy.scope.get() else {
             invalid_state(dylib.path.as_str(), "missing lazy lookup")
         };
-        let symbol = lookup_addr(dylib, scope, syminfo.name())
+        let symbol = lookup_addr::<D, Arch, R, Tls>(dylib, scope, &syminfo)
             .unwrap_or_else(|_| invalid_state(dylib.path.as_str(), "lazy IFUNC resolution failed"))
             .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()));
 
@@ -238,6 +302,13 @@ mod enabled {
             }
         };
         symbol.get()
+    }
+
+    pub(crate) unsafe extern "C" fn dl_fixup(
+        runtime: &LazyBindingRuntime,
+        rela_idx: usize,
+    ) -> usize {
+        unsafe { runtime.fixup(rela_idx) }
     }
 }
 
@@ -260,12 +331,13 @@ mod disabled {
             false
         }
 
-        pub(crate) fn prepare_plt<D, Arch: RelocationArch, R: RegionAccess>(
+        pub(crate) fn prepare_plt<D, Arch: RelocationArch, R: RegionAccess, Tls>(
             &self,
-            _image: &RawDynamic<D, Arch, R>,
+            _image: &RawDynamic<D, Arch, R, Tls>,
         ) -> crate::Result<()>
         where
             D: 'static,
+            Tls: crate::tls::TlsResolver,
         {
             Ok(())
         }
@@ -284,7 +356,9 @@ mod disabled {
         }
     }
 
-    impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
+    impl<D, Arch: RelocationArch, R: RegionAccess, Tls: crate::tls::TlsResolver>
+        RawDynamic<D, Arch, R, Tls>
+    {
         pub(crate) fn resolve_binding(&self, _binding: BindingMode) -> ResolvedBinding {
             ResolvedBinding::Eager
         }
@@ -292,7 +366,7 @@ mod disabled {
         pub(crate) fn install_lazy_lookup(
             &self,
             _binding: ResolvedBinding,
-            _scope: ModuleScope<Arch>,
+            _scope: ModuleScope<Arch, Tls>,
         ) -> crate::Result<()>
         where
             D: 'static,

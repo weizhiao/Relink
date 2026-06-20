@@ -9,6 +9,7 @@ use crate::{
     },
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, RelocationValueInput, RelocationValueProvider},
+    tls::TlsResolver,
     try_cast_bytes,
 };
 use alloc::{vec, vec::Vec};
@@ -252,28 +253,35 @@ impl<R: RegionAccess> RuntimeModuleMemory<R> {
     }
 }
 
-pub(crate) struct RuntimeMetadataRewriter<'a, K, Arch: RelocationArch, R: RegionAccess> {
+pub(crate) struct RuntimeMetadataRewriter<
+    'a,
+    K,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver = (),
+> {
     module_id: ModuleId,
-    plan: &'a mut LinkPlan<K, Arch>,
+    plan: &'a mut LinkPlan<K, Arch, Tls>,
     runtime: &'a RuntimeModuleMemory<R>,
 }
 
-struct RewriteContext<'a, K, Arch: RelocationArch, R: RegionAccess> {
-    plan: &'a LinkPlan<K, Arch>,
+struct RewriteContext<'a, K, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver = ()> {
+    plan: &'a LinkPlan<K, Arch, Tls>,
     module_id: ModuleId,
     runtime: &'a RuntimeModuleMemory<R>,
 }
 
-impl<'a, K, Arch, R> RuntimeMetadataRewriter<'a, K, Arch, R>
+impl<'a, K, Arch, R, Tls> RuntimeMetadataRewriter<'a, K, Arch, R, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     R: RegionAccess,
+    Tls: TlsResolver,
     ElfRelType<Arch>: ByteRepr,
 {
     pub(crate) fn new(
         module_id: ModuleId,
-        plan: &'a mut LinkPlan<K, Arch>,
+        plan: &'a mut LinkPlan<K, Arch, Tls>,
         runtime: &'a RuntimeModuleMemory<R>,
     ) -> Self {
         Self {
@@ -338,7 +346,7 @@ where
         };
 
         for entry in entries {
-            write_retained_relocation::<K, Arch, R>(&ctx, target_section, entry, symbols)?;
+            write_retained_relocation::<K, Arch, R, Tls>(&ctx, target_section, entry, symbols)?;
         }
 
         Ok(())
@@ -366,7 +374,7 @@ where
                 let mut symbol = self
                     .runtime
                     .read_section_entry::<ElfSymbol<Arch::Layout>>(section, index)?;
-                let value = remapped_symbol_value::<K, Arch, R>(&ctx, &symbol)?;
+                let value = remapped_symbol_value::<K, Arch, R, Tls>(&ctx, &symbol)?;
                 symbol.set_value(value);
                 ctx.runtime.write_section_entry(section, index, symbol)?;
             }
@@ -444,8 +452,8 @@ fn cast_section_bytes<T: ByteRepr>(bytes: &[u8]) -> Result<&[T]> {
     })
 }
 
-fn write_retained_relocation<K, Arch, R>(
-    ctx: &RewriteContext<'_, K, Arch, R>,
+fn write_retained_relocation<K, Arch, R, Tls>(
+    ctx: &RewriteContext<'_, K, Arch, R, Tls>,
     target_section: SectionId,
     entry: &ElfRelType<Arch>,
     symbols: &[ElfSymbol<Arch::Layout>],
@@ -454,6 +462,7 @@ where
     K: Clone + Ord,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     R: RegionAccess,
+    Tls: TlsResolver,
     <Arch::Layout as ElfLayout>::Word: ByteRepr,
 {
     let entry_info = RelocationEntryInfo::new::<Arch>(entry);
@@ -470,7 +479,7 @@ where
     })?;
     let place = ctx.runtime.base() + VmOffset::new(site.place.get());
     let addend = entry.read_addend(ctx.runtime, place)?;
-    let symbol_value = retained_relocation_target::<K, Arch, R>(
+    let symbol_value = retained_relocation_target::<K, Arch, R, Tls>(
         ctx,
         target_section,
         entry,
@@ -513,14 +522,15 @@ fn retained_relocation_value_error(reason: RelocReason) -> crate::Error {
     .into()
 }
 
-fn remapped_symbol_value<K, Arch, R>(
-    ctx: &RewriteContext<'_, K, Arch, R>,
+fn remapped_symbol_value<K, Arch, R, Tls>(
+    ctx: &RewriteContext<'_, K, Arch, R, Tls>,
     symbol: &ElfSymbol<Arch::Layout>,
 ) -> Result<usize>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     let symbol_section = match ElfSectionId::from_symbol_shndx(symbol.st_shndx()) {
         Some(scanned_section) => Some(
@@ -539,8 +549,8 @@ where
         .remap_symbol_value(symbol_section, symbol.st_value())
 }
 
-fn retained_relocation_target<K, Arch, R>(
-    ctx: &RewriteContext<'_, K, Arch, R>,
+fn retained_relocation_target<K, Arch, R, Tls>(
+    ctx: &RewriteContext<'_, K, Arch, R, Tls>,
     target_section: SectionId,
     entry: &ElfRelType<Arch>,
     symbol: &ElfSymbol<Arch::Layout>,
@@ -551,6 +561,7 @@ where
     K: Clone + Ord,
     Arch: RelocationArch + GotPltTarget,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     let target_bytes = ctx.runtime.read_section_bytes(target_section)?;
     if let Some(source_target) = <Arch as GotPltTarget>::got_plt_target(

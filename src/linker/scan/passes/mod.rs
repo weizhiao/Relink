@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     LinkerError, Result, aligned_bytes::ByteRepr, image::ModuleCapability,
-    relocation::RelocationArch,
+    relocation::RelocationArch, tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::marker::PhantomData;
@@ -95,22 +95,28 @@ impl ReorderAccess for ReorderPass {}
 ///
 /// Graph queries expose the canonical plan. Scope-sensitive APIs such as
 /// materialization updates and section-data access enforce `S`.
-pub struct LinkPassPlan<'a, K, S = AnyPass, Arch: RelocationArch = crate::arch::NativeArch>
-where
+pub struct LinkPassPlan<
+    'a,
+    K,
+    S = AnyPass,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    Tls: TlsResolver = (),
+> where
     S: PassScopeMode,
 {
-    plan: &'a mut LinkPlan<K, Arch>,
+    plan: &'a mut LinkPlan<K, Arch, Tls>,
     scope: PhantomData<fn() -> S>,
 }
 
-impl<'a, K, S, Arch> LinkPassPlan<'a, K, S, Arch>
+impl<'a, K, S, Arch, Tls> LinkPassPlan<'a, K, S, Arch, Tls>
 where
     K: Clone + Ord,
     S: PassScopeMode,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     #[inline]
-    fn new(plan: &'a mut LinkPlan<K, Arch>) -> Self {
+    fn new(plan: &'a mut LinkPlan<K, Arch, Tls>) -> Self {
         Self {
             plan,
             scope: PhantomData,
@@ -170,11 +176,12 @@ where
     }
 }
 
-impl<'a, K, S, Arch> LinkPassPlan<'a, K, S, Arch>
+impl<'a, K, S, Arch, Tls> LinkPassPlan<'a, K, S, Arch, Tls>
 where
     K: Clone + Ord,
     S: SectionDataAccess,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     #[inline]
     fn checked_section(&self, id: SectionId) -> Option<Section<'a, S>> {
@@ -253,11 +260,12 @@ where
     }
 }
 
-impl<'a, K, S, Arch> LinkPassPlan<'a, K, S, Arch>
+impl<'a, K, S, Arch, Tls> LinkPassPlan<'a, K, S, Arch, Tls>
 where
     K: Clone + Ord,
     S: ReorderAccess,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     /// Creates one arena for section-region materialization.
     #[inline]
@@ -276,28 +284,39 @@ where
 }
 
 /// A pass that inspects or rewrites a pre-map global link plan.
-pub trait LinkPass<K: Clone + Ord, S = AnyPass, Arch: RelocationArch = crate::arch::NativeArch>
-where
+pub trait LinkPass<
+    K: Clone + Ord,
+    S = AnyPass,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    Tls: TlsResolver = (),
+> where
     S: PassScopeMode,
 {
     /// Executes the pass over the current plan.
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, K, S, Arch>) -> Result<()>;
+    fn run(&mut self, plan: &mut LinkPassPlan<'_, K, S, Arch, Tls>) -> Result<()>;
 }
 
-type PipelinePass<'a, K, Arch> = Box<dyn FnMut(&mut LinkPlan<K, Arch>) -> Result<()> + 'a>;
+type PipelinePass<'a, K, Arch, Tls> =
+    Box<dyn FnMut(&mut LinkPlan<K, Arch, Tls>) -> Result<()> + 'a>;
 
 /// An ordered collection of [`LinkPass`]es.
 ///
 /// This is the pass manager used with a discovered link plan after metadata
 /// discovery finishes and before any module is mapped into memory.
-pub struct LinkPipeline<'a, K: Clone + Ord, Arch: RelocationArch = crate::arch::NativeArch> {
-    passes: Vec<PipelinePass<'a, K, Arch>>,
+pub struct LinkPipeline<
+    'a,
+    K: Clone + Ord,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    Tls: TlsResolver = (),
+> {
+    passes: Vec<PipelinePass<'a, K, Arch, Tls>>,
 }
 
-impl<'a, K, Arch> Default for LinkPipeline<'a, K, Arch>
+impl<'a, K, Arch, Tls> Default for LinkPipeline<'a, K, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     #[inline]
     fn default() -> Self {
@@ -305,10 +324,11 @@ where
     }
 }
 
-impl<'a, K, Arch> LinkPipeline<'a, K, Arch>
+impl<'a, K, Arch, Tls> LinkPipeline<'a, K, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     /// Creates an empty pipeline.
     #[inline]
@@ -321,17 +341,17 @@ where
     pub fn push<S, P>(&mut self, mut pass: P) -> &mut Self
     where
         S: PassScopeMode + 'a,
-        P: LinkPass<K, S, Arch> + 'a,
+        P: LinkPass<K, S, Arch, Tls> + 'a,
     {
         self.passes.push(Box::new(move |plan| {
-            let mut scoped = LinkPassPlan::<_, S, Arch>::new(plan);
+            let mut scoped = LinkPassPlan::<_, S, Arch, Tls>::new(plan);
             pass.run(&mut scoped)
         }));
         self
     }
 
     /// Runs the pipeline with caller-supplied query state.
-    pub(crate) fn run(&mut self, plan: &mut LinkPlan<K, Arch>) -> Result<()> {
+    pub(crate) fn run(&mut self, plan: &mut LinkPlan<K, Arch, Tls>) -> Result<()> {
         for pass in &mut self.passes {
             pass(plan)?;
         }

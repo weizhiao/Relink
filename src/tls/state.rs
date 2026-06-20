@@ -3,12 +3,13 @@ mod enabled {
     use super::super::defs::{
         TlsDescDynamicArg, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset,
     };
+    use super::super::traits::TlsResolver;
     use crate::{
         Result,
         memory::{MappedView, VmAddr},
     };
     use alloc::{boxed::Box, vec::Vec};
-    use core::cell::OnceCell;
+    use core::{cell::OnceCell, marker::PhantomData};
 
     /// Stores descriptor args behind stable allocations because relocated
     /// TLSDESC entries keep raw pointers to individual args.
@@ -48,46 +49,22 @@ mod enabled {
         }
     }
 
-    struct TlsBackend {
-        unregister: fn(TlsModuleId),
-        init_tls: fn(TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
-        tls_get_addr: extern "C" fn(*const TlsIndex) -> *mut u8,
-    }
-
-    impl TlsBackend {
-        #[inline]
-        const fn new(
-            unregister: fn(TlsModuleId),
-            init_tls: fn(TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
-            tls_get_addr: extern "C" fn(*const TlsIndex) -> *mut u8,
-        ) -> Self {
-            Self {
-                unregister,
-                init_tls,
-                tls_get_addr,
-            }
-        }
-    }
-
     /// TLS runtime state attached to a loaded ELF core.
     ///
     /// This keeps TLS-specific bookkeeping out of `CoreInner`, so TLS state can
     /// collapse to an empty implementation when the `tls` feature is disabled.
-    pub(crate) struct CoreTlsState {
+    pub(crate) struct CoreTlsState<Tls: TlsResolver = ()> {
         module: TlsModuleState,
         template: Option<TlsTemplate<'static>>,
-        backend: TlsBackend,
+        _marker: PhantomData<fn() -> Tls>,
     }
 
-    impl CoreTlsState {
+    impl<Tls: TlsResolver> CoreTlsState<Tls> {
         pub(crate) fn new(
             mod_id: Option<TlsModuleId>,
             tp_offset: Option<TlsTpOffset>,
             info: Option<TlsInfo>,
             image: Option<MappedView<u8>>,
-            unregister: fn(TlsModuleId),
-            init_tls: fn(TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
-            tls_get_addr: extern "C" fn(*const TlsIndex) -> *mut u8,
         ) -> Self {
             debug_assert_eq!(
                 info.is_some(),
@@ -104,7 +81,7 @@ mod enabled {
                 template: info
                     .zip(image)
                     .map(|(info, image)| info.template(image.as_slice())),
-                backend: TlsBackend::new(unregister, init_tls, tls_get_addr),
+                _marker: PhantomData,
             }
         }
 
@@ -121,7 +98,7 @@ mod enabled {
         #[inline]
         pub(crate) fn cleanup(&self) {
             if let Some(mod_id) = self.module.mod_id {
-                (self.backend.unregister)(mod_id);
+                Tls::unregister(mod_id);
             }
         }
 
@@ -148,7 +125,7 @@ mod enabled {
                 self.template.is_some(),
                 "TLS module state must have a template before initialization",
             );
-            (self.backend.init_tls)(source, mod_id, self.module.tp_offset)
+            Tls::init_tls(source, mod_id, self.module.tp_offset)
         }
 
         pub(crate) fn addr(&self, offset: usize) -> Option<VmAddr> {
@@ -156,21 +133,19 @@ mod enabled {
                 ti_module: self.module.mod_id?,
                 ti_offset: offset,
             };
-            Some(VmAddr::from_ptr((self.backend.tls_get_addr)(&ti)))
+            Some(VmAddr::from_ptr(Tls::tls_get_addr(&ti)))
         }
 
         #[inline]
         pub(crate) fn tls_get_addr(&self) -> Option<VmAddr> {
-            Some(VmAddr::from_ptr(self.backend.tls_get_addr as *const ()))
+            Some(VmAddr::from_ptr(Tls::tls_get_addr as *const ()))
         }
     }
 }
 
 #[cfg(not(feature = "tls"))]
 mod disabled {
-    use super::super::defs::{
-        TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset,
-    };
+    use super::super::defs::{TlsImageSource, TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset};
     use crate::{
         Result,
         memory::{MappedView, VmAddr},
@@ -190,19 +165,23 @@ mod disabled {
     ///
     /// This keeps TLS-specific bookkeeping out of `CoreInner`, so TLS state can
     /// collapse to an empty implementation when the `tls` feature is disabled.
-    pub(crate) struct CoreTlsState;
+    use super::super::traits::TlsResolver;
+    use core::marker::PhantomData;
 
-    impl CoreTlsState {
+    pub(crate) struct CoreTlsState<Tls: TlsResolver = ()> {
+        _marker: PhantomData<fn() -> Tls>,
+    }
+
+    impl<Tls: TlsResolver> CoreTlsState<Tls> {
         pub(crate) fn new(
             _mod_id: Option<TlsModuleId>,
             _tp_offset: Option<TlsTpOffset>,
             _info: Option<TlsInfo>,
             _image: Option<MappedView<u8>>,
-            _unregister: fn(TlsModuleId),
-            _init_tls: fn(TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
-            _tls_get_addr: extern "C" fn(*const TlsIndex) -> *mut u8,
         ) -> Self {
-            Self
+            Self {
+                _marker: PhantomData,
+            }
         }
 
         #[inline]

@@ -11,12 +11,12 @@ use crate::{
         likely, reloc_error, unlikely,
     },
     runtime::CodeContext,
-    tls::{TlsRelocOutcome, handle_tls_reloc},
+    tls::{TlsRelocOutcome, TlsResolver, handle_tls_reloc},
 };
 use alloc::vec;
 use core::num::NonZeroUsize;
 
-impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDynamic<D, Arch, R, Tls> {
     fn apply_relro(&self, binding: &ResolvedBinding) -> Result<()> {
         if binding.is_lazy() {
             return Ok(());
@@ -30,8 +30,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
     pub(crate) fn relocate_impl<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
-    ) -> Result<LoadedCore<D, Arch, R>>
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
+    ) -> Result<LoadedCore<D, Arch, R, Tls>>
     where
         D: 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
@@ -213,12 +213,12 @@ pub(crate) struct DynamicRelocation<Arch: RelocationArch = crate::arch::NativeAr
     dynrel: MappedView<ElfRelType<Arch>>,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDynamic<D, Arch, R, Tls> {
     /// Relocate PLT (Procedure Linkage Table) entries
     fn relocate_pltrel<PreH, PostH, Obs>(
         &self,
         binding: &ResolvedBinding,
-        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH, Obs>,
+        helper: &mut RelocHelper<'_, D, Arch, R, Tls, PreH, PostH, Obs>,
     ) -> Result<&Self>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
@@ -305,7 +305,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
     /// Perform dynamic relocations (non-PLT, non-relative)
     fn relocate_dynrel<PreH, PostH, Obs>(
         &self,
-        helper: &mut RelocHelper<'_, D, Arch, R, PreH, PostH, Obs>,
+        helper: &mut RelocHelper<'_, D, Arch, R, Tls, PreH, PostH, Obs>,
     ) -> Result<&Self>
     where
         PreH: RelocationHandler<Arch> + ?Sized,

@@ -6,14 +6,15 @@ use elf_loader::{
     arch::NativeArch,
     memory::RegionAccess,
     observer::{InitEvent, RelocationObserver},
+    tls::TlsResolver,
 };
 
 struct LifecycleLogger;
 
 impl RelocationObserver for LifecycleLogger {
-    fn on_init<D: 'static, R: RegionAccess>(
+    fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        event: &mut InitEvent<'_, D, NativeArch, R>,
+        event: &mut InitEvent<'_, D, NativeArch, R, Tls>,
     ) -> Result<()> {
         println!("Init hook called!");
         let mut count = 0;

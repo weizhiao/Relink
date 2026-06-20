@@ -295,6 +295,7 @@ fn object_relocated_event_exposes_section_metadata() {
         image::{LoadedCore, ModuleHandle},
         memory::{HostRegion, RegionAccess},
         observer::{LoadObserver, ObjectRelocatedEvent, RelocationObserver, SectionLayoutEvent},
+        tls::TlsResolver,
     };
     use gen_elf::{Arch, ObjectWriter, SymbolDesc};
     use support::host_symbols::LOCAL_VAR_NAME;
@@ -315,9 +316,9 @@ fn object_relocated_event_exposes_section_metadata() {
     struct MetadataObserver;
 
     impl RelocationObserver for MetadataObserver {
-        fn on_object_relocated<D: 'static, R: RegionAccess>(
+        fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver>(
             &mut self,
-            event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R>,
+            event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R, Tls>,
         ) -> Result<()> {
             let data = event
                 .sections()
@@ -379,6 +380,7 @@ fn object_relocated_event_can_clear_default_exports() {
         arch::NativeArch,
         memory::{ImageMemory, RegionAccess, VmOffset},
         observer::{ObjectRelocatedEvent, RelocationObserver},
+        tls::TlsResolver,
     };
     use gen_elf::{Arch, ObjectWriter, SymbolDesc};
     use support::host_symbols::LOCAL_VAR_NAME;
@@ -386,9 +388,9 @@ fn object_relocated_event_can_clear_default_exports() {
     struct ClearExports;
 
     impl RelocationObserver for ClearExports {
-        fn on_object_relocated<D: 'static, R: RegionAccess>(
+        fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver>(
             &mut self,
-            event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R>,
+            event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R, Tls>,
         ) -> Result<()> {
             let symtab = event.symtab();
             assert!(

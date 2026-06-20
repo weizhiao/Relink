@@ -20,9 +20,9 @@ pub use crate::segment::{ElfSegments, MappedRange};
 pub(crate) use core::CoreInner;
 pub use core::{ElfCore, ElfCoreRef, LoadedCore, Symbol};
 pub(crate) use elf::DynamicInfo;
-#[cfg(feature = "lazy-binding")]
-pub(crate) use elf::LazyBindingInfo;
 pub(crate) use elf::RawDynamicParts;
+#[cfg(feature = "lazy-binding")]
+pub(crate) use elf::{LazyBindingInfo, LazyBindingRuntime};
 pub use elf::{LoadedElf, LoadedExec, RawDylib, RawDynamic, RawElf, RawExec, StaticExec};
 #[cfg(feature = "object")]
 pub use elf::{LoadedObject, RawObject};

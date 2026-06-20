@@ -1,9 +1,13 @@
 use elf_loader::{
     Error, Loader,
-    image::RawDylib as ElfDylib,
+    arch::NativeArch,
+    image::RawDylib,
     input::{ElfBinary, ElfFile},
+    memory::HostRegion,
     tls::DefaultTlsResolver,
 };
+
+type ElfDylib<D = ()> = RawDylib<D, NativeArch, HostRegion, DefaultTlsResolver>;
 
 /// elf loader
 pub struct WinElfLoader {

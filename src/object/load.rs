@@ -30,7 +30,7 @@ where
     /// let bytes = &[]; // Relocatable ELF bytes
     /// let rel = loader.load_object(ElfBinary::new("liba.o", bytes)).unwrap();
     /// ```
-    pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject<D, Arch, M::Region>>
+    pub fn load_object<'a, I>(&mut self, input: I) -> Result<RawObject<D, Arch, M::Region, Tls>>
     where
         I: IntoElfReader<'a>,
     {
@@ -45,7 +45,7 @@ where
         &mut self,
         object: impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
-    ) -> Result<RawObject<D, Arch, M::Region>> {
+    ) -> Result<RawObject<D, Arch, M::Region, Tls>> {
         let shdrs =
             read_object_shdrs(&ehdr, &object)?.ok_or(ParseShdrError::MissingSectionHeaders)?;
         validate_object_shdrs::<Arch>(&ehdr, &shdrs, &object)?;
@@ -211,6 +211,7 @@ mod tests {
         memory::RegionAccess,
         observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent, LoadObserver},
         relocation::RelocationArch,
+        tls::TlsResolver,
     };
     use alloc::vec::Vec;
     use core::mem::size_of;
@@ -270,9 +271,9 @@ mod tests {
             Ok(())
         }
 
-        fn on_after_object_load<R: RegionAccess>(
+        fn on_after_object_load<R: RegionAccess, Tls: TlsResolver>(
             &mut self,
-            event: AfterObjectLoadEvent<'_, ObjectData, crate::arch::NativeArch, R>,
+            event: AfterObjectLoadEvent<'_, ObjectData, crate::arch::NativeArch, R, Tls>,
         ) -> Result<()> {
             self.after_object_name_seen = event.raw().name() == "metadata.o";
             self.after_object_load_seen = true;

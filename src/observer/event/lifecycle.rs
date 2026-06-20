@@ -8,6 +8,7 @@ use crate::{
     runtime::{CodeContext, CodeExecutor},
     segment::ElfSegments,
     sync::Arc,
+    tls::TlsResolver,
 };
 use alloc::boxed::Box;
 
@@ -114,14 +115,17 @@ pub struct InitEvent<
     D: 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
-    core: &'a ElfCore<D, Arch, R>,
+    core: &'a ElfCore<D, Arch, R, Tls>,
     lifecycle: Lifecycle,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> InitEvent<'a, D, Arch, R> {
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    InitEvent<'a, D, Arch, R, Tls>
+{
     #[inline]
-    pub(crate) fn new(core: &'a ElfCore<D, Arch, R>, lifecycle: &'a Lifecycle) -> Self {
+    pub(crate) fn new(core: &'a ElfCore<D, Arch, R, Tls>, lifecycle: &'a Lifecycle) -> Self {
         Self {
             core,
             lifecycle: lifecycle.clone(),
@@ -130,7 +134,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess> InitEvent<'a, D, Arc
 
     /// Returns the image core associated with this lifecycle event.
     #[inline]
-    pub const fn core(&self) -> &'a ElfCore<D, Arch, R> {
+    pub const fn core(&self) -> &'a ElfCore<D, Arch, R, Tls> {
         self.core
     }
 

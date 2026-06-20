@@ -2,6 +2,7 @@ use super::{LinkPassPlan, ReorderAccess};
 use crate::{
     linker::scan::{ArenaDescriptor, ArenaId, ArenaUsage},
     relocation::RelocationArch,
+    tls::TlsResolver,
 };
 use core::marker::PhantomData;
 
@@ -30,25 +31,27 @@ impl<'plan> Arena<'plan> {
 impl<'scope> Arena<'scope> {
     /// Returns this arena's descriptor through `plan`.
     #[inline]
-    pub fn descriptor<'borrow, K, S, Arch>(
+    pub fn descriptor<'borrow, K, S, Arch, Tls>(
         self,
-        plan: &'borrow LinkPassPlan<'scope, K, S, Arch>,
+        plan: &'borrow LinkPassPlan<'scope, K, S, Arch, Tls>,
     ) -> &'borrow ArenaDescriptor
     where
         K: Clone + Ord,
         S: ReorderAccess,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan.memory_layout().arena(self.id)
     }
 
     /// Returns this arena's derived usage summary through `plan`.
     #[inline]
-    pub fn usage<K, S, Arch>(self, plan: &LinkPassPlan<'scope, K, S, Arch>) -> ArenaUsage
+    pub fn usage<K, S, Arch, Tls>(self, plan: &LinkPassPlan<'scope, K, S, Arch, Tls>) -> ArenaUsage
     where
         K: Clone + Ord,
         S: ReorderAccess,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         plan.plan.memory_layout().usage(self.id)
     }

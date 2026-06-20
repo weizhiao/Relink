@@ -12,6 +12,7 @@ use crate::{
     observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     segment::ElfSegments,
+    tls::TlsResolver,
 };
 use core::fmt::Debug;
 
@@ -23,16 +24,22 @@ use core::fmt::Debug;
 ///
 /// The optional `Arch` type parameter selects the target architecture used by
 /// [`Relocator::relocate`]. By default it is [`crate::arch::NativeArch`].
-pub struct RawDylib<D, Arch = crate::arch::NativeArch, R: RegionAccess = HostRegion>
-where
+pub struct RawDylib<
+    D,
+    Arch = crate::arch::NativeArch,
+    R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
+> where
     D: 'static,
     Arch: RelocationArch,
 {
     /// The common part containing basic ELF object information.
-    pub(crate) inner: RawDynamic<D, Arch, R>,
+    pub(crate) inner: RawDynamic<D, Arch, R, Tls>,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> Debug for RawDylib<D, Arch, R> {
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Debug
+    for RawDylib<D, Arch, R, Tls>
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawDylib")
             .field("name", &self.inner.name())
@@ -41,13 +48,16 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Debug for RawDylib<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Relocatable<D> for RawDylib<D, Arch, R> {
-    type Output = LoadedCore<D, Arch, R>;
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Relocatable<D>
+    for RawDylib<D, Arch, R, Tls>
+{
+    type Output = LoadedCore<D, Arch, R, Tls>;
     type Arch = Arch;
+    type Tls = Tls;
 
     fn relocate<PreH, PostH, Obs>(
         self,
-        args: RelocateArgs<'_, Arch, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
@@ -58,16 +68,16 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Relocatable<D> for RawDy
     }
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> RawDylib<D, Arch, R> {
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDylib<D, Arch, R, Tls> {
     /// Creates a new `RawDylib` from a `RawDynamic`.
     #[inline]
-    pub fn from_dynamic(inner: RawDynamic<D, Arch, R>) -> Self {
+    pub fn from_dynamic(inner: RawDynamic<D, Arch, R, Tls>) -> Self {
         Self { inner }
     }
 
     /// Converts this `RawDylib` into a `RawDynamic`.
     #[inline]
-    pub fn into_dynamic(self) -> RawDynamic<D, Arch, R> {
+    pub fn into_dynamic(self) -> RawDynamic<D, Arch, R, Tls> {
         self.inner
     }
 
@@ -79,19 +89,19 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDylib<D, Arch, R> {
 
     /// Gets the core component reference of the ELF object.
     #[inline]
-    pub fn core_ref(&self) -> &ElfCore<D, Arch, R> {
+    pub fn core_ref(&self) -> &ElfCore<D, Arch, R, Tls> {
         self.inner.core_ref()
     }
 
     /// Gets the core component of the ELF object.
     #[inline]
-    pub fn core(&self) -> ElfCore<D, Arch, R> {
+    pub fn core(&self) -> ElfCore<D, Arch, R, Tls> {
         self.inner.core()
     }
 
     /// Converts this object into its core component.
     #[inline]
-    pub fn into_core(self) -> ElfCore<D, Arch, R> {
+    pub fn into_core(self) -> ElfCore<D, Arch, R, Tls> {
         self.inner.into_core()
     }
 
@@ -174,7 +184,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDylib<D, Arch, R> {
     }
 
     /// Creates a relocation builder for this shared object.
-    pub fn relocator(self) -> Relocator<Self, (), (), Arch> {
-        Relocator::<(), (), (), Arch>::new().with_object(self)
+    pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls> {
+        Relocator::<(), (), (), Arch, (), Tls>::new().with_object(self)
     }
 }

@@ -9,6 +9,7 @@ use crate::{
     entity::{PrimaryMap, entity_ref},
     image::{ModuleCapability, ScannedDynamic},
     relocation::RelocationArch,
+    tls::TlsResolver,
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
@@ -17,14 +18,14 @@ use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 pub(in crate::linker) struct ModuleId(usize);
 entity_ref!(ModuleId);
 
-pub struct PlannedModule<K, Arch: RelocationArch> {
+pub struct PlannedModule<K, Arch: RelocationArch, Tls: TlsResolver = ()> {
     key: K,
-    module: ModulePayload<ScannedDynamic<Arch>, Arch>,
+    module: ModulePayload<ScannedDynamic<Arch>, Arch, Tls>,
     direct_deps: Box<[ModuleId]>,
 }
 
-type PlannedEntry<K, Arch> = (ModulePayload<ScannedDynamic<Arch>, Arch>, Box<[K]>);
-type PlannedEntries<K, Arch> = BTreeMap<K, PlannedEntry<K, Arch>>;
+type PlannedEntry<K, Arch, Tls> = (ModulePayload<ScannedDynamic<Arch>, Arch, Tls>, Box<[K]>);
+type PlannedEntries<K, Arch, Tls> = BTreeMap<K, PlannedEntry<K, Arch, Tls>>;
 
 fn resolve_direct_deps<K>(module_ids: &BTreeMap<K, ModuleId>, direct_deps: &[K]) -> Box<[ModuleId]>
 where
@@ -41,14 +42,15 @@ where
         .into_boxed_slice()
 }
 
-impl<K, Arch> PlannedModule<K, Arch>
+impl<K, Arch, Tls> PlannedModule<K, Arch, Tls>
 where
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     #[inline]
     pub(in crate::linker) fn new(
         key: K,
-        module: ModulePayload<ScannedDynamic<Arch>, Arch>,
+        module: ModulePayload<ScannedDynamic<Arch>, Arch, Tls>,
         direct_deps: Box<[ModuleId]>,
     ) -> Self {
         Self {
@@ -86,17 +88,17 @@ where
         self,
     ) -> (
         K,
-        ModulePayload<ScannedDynamic<Arch>, Arch>,
+        ModulePayload<ScannedDynamic<Arch>, Arch, Tls>,
         Box<[ModuleId]>,
     ) {
         (self.key, self.module, self.direct_deps)
     }
 }
 
-type LinkPlanParts<K, Arch> = (
+type LinkPlanParts<K, Arch, Tls> = (
     ModuleId,
     Vec<ModuleId>,
-    PrimaryMap<ModuleId, PlannedModule<K, Arch>>,
+    PrimaryMap<ModuleId, PlannedModule<K, Arch, Tls>>,
     MemoryLayoutPlan,
 );
 
@@ -105,24 +107,26 @@ type LinkPlanParts<K, Arch> = (
 /// This plan owns the discovered logical module graph and accumulates later
 /// planning decisions such as physical memory-layout plans or future
 /// materialization policies.
-pub(crate) struct LinkPlan<K, Arch: RelocationArch = crate::arch::NativeArch> {
+pub(crate) struct LinkPlan<K, Arch: RelocationArch = crate::arch::NativeArch, Tls: TlsResolver = ()>
+{
     root: ModuleId,
     group_order: Vec<ModuleId>,
     module_ids: BTreeMap<K, ModuleId>,
-    entries: PrimaryMap<ModuleId, PlannedModule<K, Arch>>,
+    entries: PrimaryMap<ModuleId, PlannedModule<K, Arch, Tls>>,
     memory_layout: MemoryLayoutPlan,
 }
 
-impl<K, Arch> LinkPlan<K, Arch>
+impl<K, Arch, Tls> LinkPlan<K, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     #[inline]
     pub(in crate::linker) fn new(
         root: K,
         group_order: Vec<K>,
-        mut entries: PlannedEntries<K, Arch>,
+        mut entries: PlannedEntries<K, Arch, Tls>,
     ) -> Self {
         let group_keys = group_order;
         let mut module_ids = BTreeMap::new();
@@ -233,7 +237,7 @@ where
     }
 
     #[inline]
-    pub(in crate::linker) fn get(&self, id: ModuleId) -> Option<&PlannedModule<K, Arch>> {
+    pub(in crate::linker) fn get(&self, id: ModuleId) -> Option<&PlannedModule<K, Arch, Tls>> {
         self.entries.get(id)
     }
 
@@ -396,7 +400,7 @@ where
     }
 
     #[inline]
-    pub(in crate::linker) fn into_parts(self) -> LinkPlanParts<K, Arch> {
+    pub(in crate::linker) fn into_parts(self) -> LinkPlanParts<K, Arch, Tls> {
         (
             self.root,
             self.group_order,

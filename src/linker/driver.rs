@@ -29,10 +29,10 @@ use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
-use core::{borrow::Borrow, fmt, mem, ops::Deref};
+use core::{borrow::Borrow, fmt, marker::PhantomData, mem, ops::Deref};
 
-type PendingDynamicGraph<D, Arch, R> =
-    BTreeMap<KeyId, GraphEntry<ModulePayload<RawDynamic<D, Arch, R>, Arch>>>;
+type PendingDynamicGraph<D, Arch, R, Tls> =
+    BTreeMap<KeyId, GraphEntry<ModulePayload<RawDynamic<D, Arch, R, Tls>, Arch, Tls>>>;
 
 /// Result of a successful linker load operation.
 ///
@@ -42,15 +42,17 @@ pub struct LoadResult<
     D: 'static,
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = crate::memory::HostRegion,
+    Tls: TlsResolver = (),
 > {
-    root: LoadedCore<D, Arch, R>,
+    root: LoadedCore<D, Arch, R, Tls>,
     committed: Box<[CommittedModuleId]>,
 }
 
-impl<D: 'static, Arch, R> fmt::Debug for LoadResult<D, Arch, R>
+impl<D: 'static, Arch, R, Tls> fmt::Debug for LoadResult<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoadResult")
@@ -60,19 +62,23 @@ where
     }
 }
 
-impl<D: 'static, Arch, R> LoadResult<D, Arch, R>
+impl<D: 'static, Arch, R, Tls> LoadResult<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     #[inline]
-    pub(crate) fn new(root: LoadedCore<D, Arch, R>, committed: Box<[CommittedModuleId]>) -> Self {
+    pub(crate) fn new(
+        root: LoadedCore<D, Arch, R, Tls>,
+        committed: Box<[CommittedModuleId]>,
+    ) -> Self {
         Self { root, committed }
     }
 
     /// Returns the loaded root module.
     #[inline]
-    pub fn root(&self) -> &LoadedCore<D, Arch, R> {
+    pub fn root(&self) -> &LoadedCore<D, Arch, R, Tls> {
         &self.root
     }
 
@@ -84,17 +90,18 @@ where
 
     /// Consumes the result and returns the loaded root module.
     #[inline]
-    pub fn into_root(self) -> LoadedCore<D, Arch, R> {
+    pub fn into_root(self) -> LoadedCore<D, Arch, R, Tls> {
         self.root
     }
 }
 
-impl<D: 'static, Arch, R> Deref for LoadResult<D, Arch, R>
+impl<D: 'static, Arch, R, Tls> Deref for LoadResult<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
-    type Target = LoadedCore<D, Arch, R>;
+    type Target = LoadedCore<D, Arch, R, Tls>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -106,6 +113,25 @@ where
 ///
 /// `Linker` stores one relocation domain: all modules committed through one
 /// context use the same [`RelocationArch`].
+#[doc(hidden)]
+pub struct Stage0;
+
+#[doc(hidden)]
+pub struct Stage1;
+
+#[doc(hidden)]
+pub trait AdvanceStage {
+    type Next;
+}
+
+impl AdvanceStage for Stage0 {
+    type Next = Stage1;
+}
+
+impl AdvanceStage for Stage1 {
+    type Next = Stage1;
+}
+
 pub struct Linker<
     'a,
     K: Clone + Ord,
@@ -118,15 +144,18 @@ pub struct Linker<
     P = DefaultRelocationPlanner,
     O = (),
     V = (),
+    Tls: TlsResolver = (),
+    Stage = Stage0,
 > {
     loader: L,
     resolver: R,
-    pipeline: LinkPipeline<'a, K, Arch>,
-    relocator: Relocator<(), PreH, PostH, Arch, RelocObs>,
+    pipeline: LinkPipeline<'a, K, Arch, Tls>,
+    relocator: Relocator<(), PreH, PostH, Arch, RelocObs, Tls>,
     planner: P,
     observer: O,
     visible_modules: V,
     scratch_relocation_order: Vec<KeyId>,
+    stage: PhantomData<Stage>,
 }
 
 impl<'a, K> Linker<'a, K>
@@ -145,6 +174,7 @@ where
             observer: (),
             visible_modules: (),
             scratch_relocation_order: Vec::new(),
+            stage: PhantomData,
         }
     }
 
@@ -182,6 +212,7 @@ where
             observer: (),
             visible_modules: (),
             scratch_relocation_order: Vec::new(),
+            stage: PhantomData,
         }
     }
 }
@@ -196,17 +227,18 @@ where
     }
 }
 
-impl<'a, K, L, R, PreH, PostH, RelocObs, P, O, V, Arch>
-    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, V>
+impl<'a, K, L, R, PreH, PostH, RelocObs, P, O, V, Arch, Tls, Stage>
+    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, V, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     /// Sets the key resolver used to resolve root keys and dependencies.
     pub fn resolver<NewR>(
         self,
         resolver: NewR,
-    ) -> Linker<'a, K, Arch, L, NewR, PreH, PostH, RelocObs, P, O, V> {
+    ) -> Linker<'a, K, Arch, L, NewR, PreH, PostH, RelocObs, P, O, V, Tls, Stage> {
         Linker {
             loader: self.loader,
             resolver,
@@ -216,25 +248,7 @@ where
             observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
-        }
-    }
-
-    /// Reconfigures the relocator template used for loaded modules.
-    pub fn map_relocator<NewPreH, NewPostH, NewRelocObs>(
-        self,
-        configure: impl FnOnce(
-            Relocator<(), PreH, PostH, Arch, RelocObs>,
-        ) -> Relocator<(), NewPreH, NewPostH, Arch, NewRelocObs>,
-    ) -> Linker<'a, K, Arch, L, R, NewPreH, NewPostH, NewRelocObs, P, O, V> {
-        Linker {
-            loader: self.loader,
-            resolver: self.resolver,
-            pipeline: self.pipeline,
-            relocator: configure(self.relocator),
-            planner: self.planner,
-            observer: self.observer,
-            visible_modules: self.visible_modules,
-            scratch_relocation_order: self.scratch_relocation_order,
+            stage: self.stage,
         }
     }
 
@@ -242,7 +256,7 @@ where
     pub fn planner<NewP>(
         self,
         planner: NewP,
-    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, NewP, O, V> {
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, NewP, O, V, Tls, Stage> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -252,6 +266,7 @@ where
             observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
+            stage: self.stage,
         }
     }
 
@@ -259,7 +274,7 @@ where
     pub fn observer<NewO>(
         self,
         observer: NewO,
-    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, NewO, V> {
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, NewO, V, Tls, Stage> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -269,6 +284,7 @@ where
             observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
+            stage: self.stage,
         }
     }
 
@@ -276,7 +292,7 @@ where
     pub fn visible_modules<NewV>(
         self,
         visible_modules: NewV,
-    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, NewV> {
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, NewV, Tls, Stage> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -286,21 +302,70 @@ where
             observer: self.observer,
             visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
+            stage: self.stage,
         }
-    }
-
-    /// Reconfigures the scan-first pipeline.
-    pub fn map_pipeline(
-        mut self,
-        configure: impl FnOnce(LinkPipeline<'a, K, Arch>) -> LinkPipeline<'a, K, Arch>,
-    ) -> Self {
-        self.pipeline = configure(self.pipeline);
-        self
     }
 }
 
-impl<'a, K, D, Obs, Tls, Arch, M, R, PreH, PostH, RelocObs, P, O, V>
-    Linker<'a, K, Arch, Loader<Obs, D, Tls, Arch, M>, R, PreH, PostH, RelocObs, P, O, V>
+impl<'a, K, L, R, PreH, PostH, RelocObs, P, O, V, Arch, Tls, Stage>
+    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, V, Tls, Stage>
+where
+    K: Clone + Ord,
+    Arch: RelocationArch,
+    Tls: TlsResolver,
+    Stage: AdvanceStage,
+{
+    /// Reconfigures the scan-first pipeline.
+    pub fn map_pipeline(
+        mut self,
+        configure: impl FnOnce(LinkPipeline<'a, K, Arch, Tls>) -> LinkPipeline<'a, K, Arch, Tls>,
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, V, Tls, Stage::Next> {
+        self.pipeline = configure(self.pipeline);
+        Linker {
+            loader: self.loader,
+            resolver: self.resolver,
+            pipeline: self.pipeline,
+            relocator: self.relocator,
+            planner: self.planner,
+            observer: self.observer,
+            visible_modules: self.visible_modules,
+            scratch_relocation_order: self.scratch_relocation_order,
+            stage: PhantomData,
+        }
+    }
+}
+
+impl<'a, K, L, R, PreH, PostH, RelocObs, P, O, V, Arch, Tls, Stage>
+    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, V, Tls, Stage>
+where
+    K: Clone + Ord,
+    Arch: RelocationArch,
+    Tls: TlsResolver,
+    Stage: AdvanceStage,
+{
+    /// Reconfigures the relocator template used for loaded modules.
+    pub fn map_relocator<NewPreH, NewPostH, NewRelocObs>(
+        self,
+        configure: impl FnOnce(
+            Relocator<(), PreH, PostH, Arch, RelocObs, Tls>,
+        ) -> Relocator<(), NewPreH, NewPostH, Arch, NewRelocObs, Tls>,
+    ) -> Linker<'a, K, Arch, L, R, NewPreH, NewPostH, NewRelocObs, P, O, V, Tls, Stage::Next> {
+        Linker {
+            loader: self.loader,
+            resolver: self.resolver,
+            pipeline: self.pipeline,
+            relocator: configure(self.relocator),
+            planner: self.planner,
+            observer: self.observer,
+            visible_modules: self.visible_modules,
+            scratch_relocation_order: self.scratch_relocation_order,
+            stage: PhantomData,
+        }
+    }
+}
+
+impl<'a, K, D, Obs, Tls, Arch, M, R, P, O, V>
+    Linker<'a, K, Arch, Loader<Obs, D, Tls, Arch, M>, R, (), (), (), P, O, V, Tls, Stage0>
 where
     K: Clone + Ord,
     D: 'static,
@@ -311,8 +376,8 @@ where
 {
     /// Reconfigures the underlying loader.
     ///
-    /// The return type preserves the linker's typestate parameters after
-    /// replacing only the loader component.
+    /// This must run before configuring the relocator or scan-first pipeline,
+    /// because changing the loader can also change the TLS resolver type.
     #[allow(clippy::type_complexity)]
     pub fn map_loader<NewObs, NewD, NewTls, NewM>(
         self,
@@ -323,12 +388,14 @@ where
         Arch,
         Loader<NewObs, NewD, NewTls, Arch, NewM>,
         R,
-        PreH,
-        PostH,
-        RelocObs,
+        (),
+        (),
+        (),
         P,
         O,
         V,
+        NewTls,
+        Stage0,
     >
     where
         NewObs: LoadObserver<NewD, Arch>,
@@ -339,19 +406,34 @@ where
         Linker {
             loader: configure(self.loader),
             resolver: self.resolver,
-            pipeline: self.pipeline,
-            relocator: self.relocator,
+            pipeline: LinkPipeline::new(),
+            relocator: Relocator::new(),
             planner: self.planner,
             observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
+            stage: PhantomData,
         }
     }
 }
 
 #[allow(private_bounds)]
-impl<'a, K, D, Obs, Tls, Arch, M, Resolver, PreH, PostH, RelocObs, P, O, V>
-    Linker<'a, K, Arch, Loader<Obs, D, Tls, Arch, M>, Resolver, PreH, PostH, RelocObs, P, O, V>
+impl<'a, K, D, Obs, Tls, Arch, M, Resolver, PreH, PostH, RelocObs, P, O, V, Stage>
+    Linker<
+        'a,
+        K,
+        Arch,
+        Loader<Obs, D, Tls, Arch, M>,
+        Resolver,
+        PreH,
+        PostH,
+        RelocObs,
+        P,
+        O,
+        V,
+        Tls,
+        Stage,
+    >
 where
     K: Clone + Ord,
     D: Default + 'static,
@@ -363,21 +445,21 @@ where
     PreH: RelocationHandler<Arch> + Clone,
     PostH: RelocationHandler<Arch> + Clone,
     RelocObs: RelocationObserver<Arch> + Clone,
-    P: RelocationPlanner<K, D, Arch, M::Region>,
+    P: RelocationPlanner<K, D, Arch, M::Region, Tls>,
     O: LinkObserver<Arch>,
 {
     /// Loads one module into this linker's relocation domain.
     pub fn load<'cfg, Meta, Q>(
         &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch>,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         key: K,
-    ) -> Result<LoadResult<D, Arch, M::Region>>
+    ) -> Result<LoadResult<D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
-        Resolver: KeyResolver<'cfg, K, Arch, Q>,
-        V: VisibleModules<K, Arch, Q>,
+        Resolver: KeyResolver<'cfg, K, Arch, Q, Tls>,
+        V: VisibleModules<K, Arch, Q, Tls>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, key.borrow()) {
             return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
@@ -401,16 +483,16 @@ where
     /// Loads a pre-mapped root dynamic image and resolves its dependencies.
     pub fn load_mapped_root<'cfg, Meta, Q>(
         &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch>,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         key: K,
-        raw: RawDynamic<D, Arch, M::Region>,
-    ) -> Result<LoadResult<D, Arch, M::Region>>
+        raw: RawDynamic<D, Arch, M::Region, Tls>,
+    ) -> Result<LoadResult<D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
-        Resolver: KeyResolver<'cfg, K, Arch, Q>,
-        V: VisibleModules<K, Arch, Q>,
+        Resolver: KeyResolver<'cfg, K, Arch, Q, Tls>,
+        V: VisibleModules<K, Arch, Q, Tls>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, key.borrow()) {
             return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
@@ -431,15 +513,15 @@ where
     /// Discovers, plans, and loads one module through the scan-first path.
     pub fn load_scan_first<Meta, Q>(
         &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch>,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         key: K,
-    ) -> Result<LoadResult<D, Arch, M::Region>>
+    ) -> Result<LoadResult<D, Arch, M::Region, Tls>>
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
-        Resolver: KeyResolver<'static, K, Arch, Q>,
-        V: VisibleModules<K, Arch, Q>,
+        Resolver: KeyResolver<'static, K, Arch, Q, Tls>,
+        V: VisibleModules<K, Arch, Q, Tls>,
     {
         if let Some(loaded) = visible_loaded(context, &self.visible_modules, key.borrow()) {
             return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
@@ -454,14 +536,14 @@ where
 
     fn prepare_scan_load<Meta, Q>(
         &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch>,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         key: &K,
-    ) -> Result<ScanDiscovery<K, Arch>>
+    ) -> Result<ScanDiscovery<K, Arch, Tls>>
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<'static, K, Arch, Q>,
-        V: VisibleModules<K, Arch, Q>,
+        Resolver: KeyResolver<'static, K, Arch, Q, Tls>,
+        V: VisibleModules<K, Arch, Q, Tls>,
     {
         let mut session = ResolveSession::new();
 
@@ -472,7 +554,7 @@ where
         if !resolve_context.contains_pending(root) {
             return Ok(ScanDiscovery::Existing(root));
         }
-        resolve_context.resolve_dependency_graph::<_, _, _, _, Q>(
+        resolve_context.resolve_dependency_graph::<_, _, _, Q>(
             root,
             &mut self.loader,
             &mut self.resolver,
@@ -529,9 +611,9 @@ where
 
     fn prepare_planned_load<Meta>(
         &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch>,
-        mut plan: LinkPlan<K, Arch>,
-    ) -> Result<PreparedLoad<D, Arch, M::Region>> {
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        mut plan: LinkPlan<K, Arch, Tls>,
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
         let mut mapped_runtime = self.prepare_mapped_runtime(&mut plan)?;
 
         let (root, group_order, entries, memory_layout) = plan.into_parts();
@@ -583,7 +665,7 @@ where
 
     fn prepare_mapped_runtime(
         &mut self,
-        plan: &mut LinkPlan<K, Arch>,
+        plan: &mut LinkPlan<K, Arch, Tls>,
     ) -> Result<Option<MappedRuntimeMemory<M::Region>>> {
         plan.normalize()?;
         let mut mapped_runtime = MappedRuntimeMemory::map(self.loader.mapper(), plan)?;
@@ -597,7 +679,7 @@ where
             }
             runtime.populate(plan)?;
             for module_id in modules {
-                runtime.repair_module::<_, Arch>(module_id, plan)?;
+                runtime.repair_module(module_id, plan)?;
             }
         }
 
@@ -610,7 +692,7 @@ where
         mapped_runtime: &mut Option<MappedRuntimeMemory<M::Region>>,
         module_id: PlanModuleId,
         scanned: ScannedDynamic<Arch>,
-    ) -> Result<RawDynamic<D, Arch, M::Region>> {
+    ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         match plan
             .materialization(module_id)
             .unwrap_or(Materialization::WholeDsoRegion)
@@ -631,7 +713,7 @@ where
         mapped_runtime: &mut Option<MappedRuntimeMemory<M::Region>>,
         module_id: PlanModuleId,
         scanned: ScannedDynamic<Arch>,
-    ) -> Result<RawDynamic<D, Arch, M::Region>> {
+    ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         let runtime = mapped_runtime
             .as_mut()
             .ok_or_else(|| {
@@ -650,18 +732,18 @@ where
 
     fn prepare_runtime_load<'cfg, Meta, Q, Seed>(
         &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch>,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         seed_root: Seed,
-    ) -> Result<PreparedLoad<D, Arch, M::Region>>
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<'cfg, K, Arch, Q>,
-        V: VisibleModules<K, Arch, Q>,
+        Resolver: KeyResolver<'cfg, K, Arch, Q, Tls>,
+        V: VisibleModules<K, Arch, Q, Tls>,
         Seed: FnOnce(
-            &mut LinkContext<K, D, Meta, Arch>,
+            &mut LinkContext<K, D, Meta, Arch, Tls>,
             &V,
-            &mut LoadSession<D, Arch, M::Region>,
+            &mut LoadSession<D, Arch, M::Region, Tls>,
             &mut Loader<Obs, D, Tls, Arch, M>,
             &mut Resolver,
             &mut O,
@@ -682,7 +764,7 @@ where
             &mut session.resolve,
         );
         if resolve_context.contains_pending(root) {
-            resolve_context.resolve_dependency_graph::<_, _, _, _, Q>(
+            resolve_context.resolve_dependency_graph::<_, _, _, Q>(
                 root,
                 &mut self.loader,
                 &mut self.resolver,
@@ -695,14 +777,14 @@ where
 
     fn execute_prepared_load<Meta, Q>(
         &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch>,
-        prepared: PreparedLoad<D, Arch, M::Region>,
-    ) -> Result<LoadResult<D, Arch, M::Region>>
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        prepared: PreparedLoad<D, Arch, M::Region, Tls>,
+    ) -> Result<LoadResult<D, Arch, M::Region, Tls>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
     {
         let PreparedLoad {
             root,
@@ -724,7 +806,7 @@ where
             .visible_module(&self.visible_modules, root)
             .and_then(|module| {
                 module
-                    .downcast_ref::<LoadedCore<D, Arch, M::Region>>()
+                    .downcast_ref::<LoadedCore<D, Arch, M::Region, Tls>>()
                     .cloned()
             })
             .ok_or_else(|| LinkerError::context("load root missing after commit"))?;
@@ -734,13 +816,13 @@ where
     fn relocate_pending_modules<Meta, Q>(
         &mut self,
         root: KeyId,
-        context: &LinkContext<K, D, Meta, Arch>,
-        session: &mut LoadSession<D, Arch, M::Region>,
+        context: &LinkContext<K, D, Meta, Arch, Tls>,
+        session: &mut LoadSession<D, Arch, M::Region, Tls>,
     ) -> Result<()>
     where
         K: Borrow<Q>,
         Q: ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
     {
         let mut order = mem::take(&mut self.scratch_relocation_order);
         Self::build_relocation_order(root, &session.resolve.entries, &mut order);
@@ -789,7 +871,7 @@ where
 
     fn build_relocation_order(
         root: KeyId,
-        pending: &PendingDynamicGraph<D, Arch, M::Region>,
+        pending: &PendingDynamicGraph<D, Arch, M::Region, Tls>,
         order: &mut Vec<KeyId>,
     ) {
         order.clear();
@@ -825,14 +907,14 @@ where
     }
 
     fn build_group_scope<Meta, Q>(
-        context: &LinkContext<K, D, Meta, Arch>,
-        session: &LoadSession<D, Arch, M::Region>,
+        context: &LinkContext<K, D, Meta, Arch, Tls>,
+        session: &LoadSession<D, Arch, M::Region, Tls>,
         visible_modules: &V,
-    ) -> ModuleScope<Arch>
+    ) -> ModuleScope<Arch, Tls>
     where
         K: Borrow<Q>,
         Q: ?Sized,
-        V: VisibleModules<K, Arch, Q>,
+        V: VisibleModules<K, Arch, Q, Tls>,
     {
         let modules = session
             .resolve
@@ -860,8 +942,8 @@ where
     }
 
     fn commit_session<Meta>(
-        context: &mut LinkContext<K, D, Meta, Arch>,
-        session: &mut LoadSession<D, Arch, M::Region>,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        session: &mut LoadSession<D, Arch, M::Region, Tls>,
     ) -> Box<[CommittedModuleId]>
     where
         Meta: Default,
@@ -886,19 +968,21 @@ where
     }
 }
 
-struct PreparedLoad<D: 'static, Arch: RelocationArch, R: RegionAccess> {
+struct PreparedLoad<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver = ()> {
     root: KeyId,
-    session: LoadSession<D, Arch, R>,
+    session: LoadSession<D, Arch, R, Tls>,
     mapped_runtime: Option<MappedRuntimeMemory<R>>,
 }
 
-enum ScanDiscovery<K, Arch: RelocationArch> {
+enum ScanDiscovery<K, Arch: RelocationArch, Tls: TlsResolver = ()> {
     Existing(KeyId),
-    Plan(LinkPlan<K, Arch>),
+    Plan(LinkPlan<K, Arch, Tls>),
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> PreparedLoad<D, Arch, R> {
-    fn runtime(root: KeyId, session: LoadSession<D, Arch, R>) -> Self {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+    PreparedLoad<D, Arch, R, Tls>
+{
+    fn runtime(root: KeyId, session: LoadSession<D, Arch, R, Tls>) -> Self {
         Self {
             root,
             session,
@@ -908,7 +992,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> PreparedLoad<D, Arch, R>
 
     fn planned(
         root: KeyId,
-        session: LoadSession<D, Arch, R>,
+        session: LoadSession<D, Arch, R, Tls>,
         mapped_runtime: Option<MappedRuntimeMemory<R>>,
     ) -> Self {
         Self {
@@ -919,14 +1003,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> PreparedLoad<D, Arch, R>
     }
 }
 
-fn apply_section_overrides<D, Arch, R>(
-    raw: &mut RawDynamic<D, Arch, R>,
+fn apply_section_overrides<D, Arch, R, Tls>(
+    raw: &mut RawDynamic<D, Arch, R, Tls>,
     module_id: PlanModuleId,
     plan: &MemoryLayoutPlan,
 ) -> Result<()>
 where
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     let module = plan.module(module_id);
     let core = raw.core_ref();
@@ -955,20 +1040,25 @@ where
 }
 
 #[inline]
-fn visible_loaded<K, D, Meta, V, Arch, R, Q>(
-    context: &LinkContext<K, D, Meta, Arch>,
+fn visible_loaded<K, D, Meta, V, Arch, R, Q, Tls>(
+    context: &LinkContext<K, D, Meta, Arch, Tls>,
     visible_modules: &V,
     key: &Q,
-) -> Option<LoadedCore<D, Arch, R>>
+) -> Option<LoadedCore<D, Arch, R, Tls>>
 where
     K: Clone + Ord + Borrow<Q>,
     Q: ToOwned<Owned = K> + Ord + ?Sized,
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    V: VisibleModules<K, Arch, Q>,
+    Tls: TlsResolver,
+    V: VisibleModules<K, Arch, Q, Tls>,
 {
     context
         .visible_module_by_key(visible_modules, key)
-        .and_then(|module| module.downcast_ref::<LoadedCore<D, Arch, R>>().cloned())
+        .and_then(|module| {
+            module
+                .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
+                .cloned()
+        })
 }

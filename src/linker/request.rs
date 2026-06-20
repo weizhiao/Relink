@@ -5,6 +5,7 @@ use crate::{
     input::Path,
     memory::{HostRegion, RegionAccess},
     relocation::{BindingMode, RelocationArch},
+    tls::TlsResolver,
 };
 use alloc::{borrow::ToOwned, boxed::Box};
 
@@ -26,7 +27,9 @@ pub trait DependencyOwner {
     fn needed_lib(&self, index: usize) -> Option<&str>;
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> DependencyOwner for RawDynamic<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> DependencyOwner
+    for RawDynamic<D, Arch, R, Tls>
+{
     #[inline]
     fn path(&self) -> &Path {
         self.path()
@@ -224,7 +227,13 @@ impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
 
 /// Read-only modules that should be visible to a link operation without being
 /// committed into its local [`LinkContext`](super::LinkContext).
-pub trait VisibleModules<K: Clone, Arch: RelocationArch = crate::arch::NativeArch, Q: ?Sized = K> {
+pub trait VisibleModules<
+    K: Clone,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    Q: ?Sized = K,
+    Tls: TlsResolver = (),
+>
+{
     /// Returns the actual visible key represented by `key`, if any.
     ///
     /// Implementations may use this to canonicalize aliases before the linker
@@ -242,18 +251,22 @@ pub trait VisibleModules<K: Clone, Arch: RelocationArch = crate::arch::NativeArc
     }
 
     /// Returns a retained visible module by key.
-    fn module(&self, _key: &Q) -> Option<ModuleHandle<Arch>> {
+    fn module(&self, _key: &Q) -> Option<ModuleHandle<Arch, Tls>> {
         None
     }
 }
 
-impl<K: Clone, Arch: RelocationArch, Q: ?Sized> VisibleModules<K, Arch, Q> for () {}
+impl<K: Clone, Arch: RelocationArch, Q: ?Sized, Tls: TlsResolver> VisibleModules<K, Arch, Q, Tls>
+    for ()
+{
+}
 
-impl<K: Clone, Arch, Q, V> VisibleModules<K, Arch, Q> for &V
+impl<K: Clone, Arch, Q, Tls, V> VisibleModules<K, Arch, Q, Tls> for &V
 where
     Arch: RelocationArch,
     Q: ?Sized,
-    V: VisibleModules<K, Arch, Q> + ?Sized,
+    Tls: TlsResolver,
+    V: VisibleModules<K, Arch, Q, Tls> + ?Sized,
 {
     #[inline]
     fn visible_key(&self, key: &Q) -> Option<K>
@@ -269,7 +282,7 @@ where
     }
 
     #[inline]
-    fn module(&self, key: &Q) -> Option<ModuleHandle<Arch>> {
+    fn module(&self, key: &Q) -> Option<ModuleHandle<Arch, Tls>> {
         (**self).module(key)
     }
 }
@@ -281,23 +294,25 @@ pub struct RelocationRequest<
     D: 'static,
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 > {
     key: &'a K,
-    raw: RawDynamic<D, Arch, R>,
-    scope: &'a ModuleScope<Arch>,
+    raw: RawDynamic<D, Arch, R, Tls>,
+    scope: &'a ModuleScope<Arch, Tls>,
     _marker: core::marker::PhantomData<fn() -> D>,
 }
 
-impl<'a, K, D: 'static, Arch, R> RelocationRequest<'a, K, D, Arch, R>
+impl<'a, K, D: 'static, Arch, R, Tls> RelocationRequest<'a, K, D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     #[inline]
     pub(crate) fn new(
         key: &'a K,
-        raw: RawDynamic<D, Arch, R>,
-        scope: &'a ModuleScope<Arch>,
+        raw: RawDynamic<D, Arch, R, Tls>,
+        scope: &'a ModuleScope<Arch, Tls>,
     ) -> Self {
         Self {
             key,
@@ -321,38 +336,39 @@ where
 
     /// Returns the symbol lookup scope that will be retained by the relocated module.
     #[inline]
-    pub fn scope(&self) -> &ModuleScope<Arch> {
+    pub fn scope(&self) -> &ModuleScope<Arch, Tls> {
         self.scope
     }
 
     /// Returns the mapped dynamic image before relocation.
     #[inline]
-    pub fn raw(&self) -> &RawDynamic<D, Arch, R> {
+    pub fn raw(&self) -> &RawDynamic<D, Arch, R, Tls> {
         &self.raw
     }
 
     #[inline]
-    pub(crate) fn into_raw(self) -> RawDynamic<D, Arch, R> {
+    pub(crate) fn into_raw(self) -> RawDynamic<D, Arch, R, Tls> {
         self.raw
     }
 }
 
 /// Per-module relocation inputs produced by the caller's runtime policy.
-pub struct RelocationInputs<Arch: RelocationArch = crate::arch::NativeArch> {
-    scope: ModuleScope<Arch>,
+pub struct RelocationInputs<Arch: RelocationArch = crate::arch::NativeArch, Tls: TlsResolver = ()> {
+    scope: ModuleScope<Arch, Tls>,
     binding: BindingMode,
 }
 
-impl<Arch> RelocationInputs<Arch>
+impl<Arch, Tls> RelocationInputs<Arch, Tls>
 where
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     /// Creates relocation inputs from an ordered lookup scope.
     #[inline]
     pub fn new<I, R>(scope: I) -> Self
     where
         I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch>>,
+        R: Into<ModuleHandle<Arch, Tls>>,
     {
         let mut modules = ModuleScopeBuilder::new();
         modules.extend(scope);
@@ -364,7 +380,7 @@ where
 
     /// Creates relocation inputs from an existing module scope.
     #[inline]
-    pub fn scope(scope: ModuleScope<Arch>) -> Self {
+    pub fn scope(scope: ModuleScope<Arch, Tls>) -> Self {
         Self {
             scope,
             binding: BindingMode::Default,
@@ -372,7 +388,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (ModuleScope<Arch>, BindingMode) {
+    pub(crate) fn into_parts(self) -> (ModuleScope<Arch, Tls>, BindingMode) {
         (self.scope, self.binding)
     }
 
@@ -410,44 +426,49 @@ pub trait RelocationPlanner<
     D: 'static,
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
+    Tls: TlsResolver = (),
 >
 {
     /// Builds relocation inputs for one mapped module.
     fn plan(
         &mut self,
-        req: &RelocationRequest<'_, K, D, Arch, R>,
-    ) -> Result<RelocationInputs<Arch>>;
+        req: &RelocationRequest<'_, K, D, Arch, R, Tls>,
+    ) -> Result<RelocationInputs<Arch, Tls>>;
 }
 
 /// Default relocation planner that uses the request-provided dependency scope.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultRelocationPlanner;
 
-impl<K, D: 'static, Arch, R> RelocationPlanner<K, D, Arch, R> for DefaultRelocationPlanner
+impl<K, D: 'static, Arch, R, Tls> RelocationPlanner<K, D, Arch, R, Tls> for DefaultRelocationPlanner
 where
     Arch: RelocationArch,
     R: RegionAccess,
+    Tls: TlsResolver,
 {
     #[inline]
     fn plan(
         &mut self,
-        req: &RelocationRequest<'_, K, D, Arch, R>,
-    ) -> Result<RelocationInputs<Arch>> {
+        req: &RelocationRequest<'_, K, D, Arch, R, Tls>,
+    ) -> Result<RelocationInputs<Arch, Tls>> {
         Ok(RelocationInputs::scope(req.scope().clone()))
     }
 }
 
-impl<K, D: 'static, Arch, R, F> RelocationPlanner<K, D, Arch, R> for F
+impl<K, D: 'static, Arch, R, Tls, F> RelocationPlanner<K, D, Arch, R, Tls> for F
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    F: for<'a> FnMut(&RelocationRequest<'a, K, D, Arch, R>) -> Result<RelocationInputs<Arch>>,
+    Tls: TlsResolver,
+    F: for<'a> FnMut(
+        &RelocationRequest<'a, K, D, Arch, R, Tls>,
+    ) -> Result<RelocationInputs<Arch, Tls>>,
 {
     #[inline]
     fn plan(
         &mut self,
-        req: &RelocationRequest<'_, K, D, Arch, R>,
-    ) -> Result<RelocationInputs<Arch>> {
+        req: &RelocationRequest<'_, K, D, Arch, R, Tls>,
+    ) -> Result<RelocationInputs<Arch, Tls>> {
         self(req)
     }
 }

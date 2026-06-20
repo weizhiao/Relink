@@ -1,10 +1,10 @@
 use crate::{
     arch::NativeArch,
     elf::{ElfLayout, ElfSymbol, PreCompute, SymbolInfo, SymbolTable},
-    memory::{ImageMemory, VmAddr},
+    memory::ImageMemory,
     relocation::RelocationArch,
     sync::Arc,
-    tls::{TlsModuleId, TlsTpOffset},
+    tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::boxed::Box;
 use core::any::Any;
@@ -71,10 +71,7 @@ pub enum ModuleTls {
         tp_offset: TlsTpOffset,
     },
     /// The module uses dynamic TLS and resolves addresses through `__tls_get_addr`.
-    Dynamic {
-        mod_id: TlsModuleId,
-        tls_get_addr: VmAddr,
-    },
+    Dynamic { mod_id: TlsModuleId },
 }
 
 impl Default for ModuleTls {
@@ -90,17 +87,10 @@ impl ModuleTls {
 
     /// Creates module TLS metadata from the registered dynamic and static TLS values.
     #[inline]
-    pub const fn new(
-        mod_id: Option<TlsModuleId>,
-        tp_offset: Option<TlsTpOffset>,
-        tls_get_addr: Option<VmAddr>,
-    ) -> Self {
-        match (mod_id, tp_offset, tls_get_addr) {
-            (Some(mod_id), Some(tp_offset), _) => Self::Static { mod_id, tp_offset },
-            (Some(mod_id), None, Some(tls_get_addr)) => Self::Dynamic {
-                mod_id,
-                tls_get_addr,
-            },
+    pub const fn new(mod_id: Option<TlsModuleId>, tp_offset: Option<TlsTpOffset>) -> Self {
+        match (mod_id, tp_offset) {
+            (Some(mod_id), Some(tp_offset)) => Self::Static { mod_id, tp_offset },
+            (Some(mod_id), None) => Self::Dynamic { mod_id },
             _ => Self::None,
         }
     }
@@ -122,22 +112,15 @@ impl ModuleTls {
             Self::None | Self::Dynamic { .. } => None,
         }
     }
-
-    /// Returns the runtime `__tls_get_addr` entry point, when available.
-    #[inline]
-    pub const fn tls_get_addr(self) -> Option<VmAddr> {
-        match self {
-            Self::Dynamic { tls_get_addr, .. } => Some(tls_get_addr),
-            Self::None | Self::Static { .. } => None,
-        }
-    }
 }
 
 /// A runtime module that can satisfy symbol lookups during relocation.
 ///
 /// Implementations may be backed by a loaded ELF image, a synthetic/virtual DSO,
 /// or any other module that can expose ELF-like symbol definitions.
-pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
+pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver = ()>:
+    Any + Send + Sync
+{
     /// Returns the module name used for diagnostics.
     fn name(&self) -> &str;
 
@@ -153,10 +136,11 @@ pub trait Module<Arch: RelocationArch = NativeArch>: Any + Send + Sync {
     }
 }
 
-impl<M, Arch> Module<Arch> for Arc<M>
+impl<M, Arch, Tls> Module<Arch, Tls> for Arc<M>
 where
-    M: Module<Arch> + ?Sized + 'static,
+    M: Module<Arch, Tls> + ?Sized + 'static,
     Arch: RelocationArch,
+    Tls: TlsResolver + 'static,
 {
     #[inline]
     fn name(&self) -> &str {

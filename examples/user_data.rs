@@ -6,6 +6,7 @@ use elf_loader::{
     arch::NativeArch,
     memory::RegionAccess,
     observer::{AfterDynamicLoadEvent, LoadObserver},
+    tls::TlsResolver,
 };
 
 #[allow(dead_code)]
@@ -27,9 +28,9 @@ impl Default for MyContext {
 struct MyObserver;
 
 impl LoadObserver<MyContext> for MyObserver {
-    fn on_after_dynamic_load<R: RegionAccess>(
+    fn on_after_dynamic_load<R: RegionAccess, Tls: TlsResolver>(
         &mut self,
-        mut event: AfterDynamicLoadEvent<'_, MyContext, NativeArch, R>,
+        mut event: AfterDynamicLoadEvent<'_, MyContext, NativeArch, R, Tls>,
     ) -> Result<()> {
         println!("Initializing user data for: {}", event.raw().name());
         if let Some(context) = event.raw_mut().user_data_mut() {

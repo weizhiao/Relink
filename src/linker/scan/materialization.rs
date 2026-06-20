@@ -5,13 +5,16 @@ use super::{
     },
     plan::{LinkPlan, ModuleId},
 };
-use crate::{LinkerError, Result, image::ModuleCapability, relocation::RelocationArch};
+use crate::{
+    LinkerError, Result, image::ModuleCapability, relocation::RelocationArch, tls::TlsResolver,
+};
 use alloc::{collections::BTreeMap, vec::Vec};
 
-impl<K, Arch> LinkPlan<K, Arch>
+impl<K, Arch, Tls> LinkPlan<K, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     pub(in crate::linker) fn normalize(&mut self) -> Result<()> {
         self.try_for_each_module(|plan, module_id| {
@@ -37,12 +40,13 @@ where
     }
 }
 
-fn resolve_materialization_mode<K>(
-    plan: &LinkPlan<K, impl RelocationArch>,
+fn resolve_materialization_mode<K, Tls>(
+    plan: &LinkPlan<K, impl RelocationArch, Tls>,
     module_id: ModuleId,
 ) -> Result<Materialization>
 where
     K: Clone + Ord,
+    Tls: TlsResolver,
 {
     let capability = plan
         .module_capability(module_id)
@@ -95,10 +99,11 @@ impl ArenaState {
         }
     }
 
-    fn record_placed<K, Arch>(&mut self, plan: &LinkPlan<K, Arch>, modules: &[ModuleId])
+    fn record_placed<K, Arch, Tls>(&mut self, plan: &LinkPlan<K, Arch, Tls>, modules: &[ModuleId])
     where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         for module_id in modules.iter().copied() {
             for section_id in plan
@@ -114,14 +119,15 @@ impl ArenaState {
         }
     }
 
-    fn assign_unplaced<K, Arch>(
+    fn assign_unplaced<K, Arch, Tls>(
         &mut self,
-        plan: &mut LinkPlan<K, Arch>,
+        plan: &mut LinkPlan<K, Arch, Tls>,
         modules: &[ModuleId],
         policy: PackingPolicy,
     ) where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         for module_id in modules.iter().copied() {
             let section_count = plan.module_layout(module_id).alloc_sections().len();
@@ -134,15 +140,16 @@ impl ArenaState {
         }
     }
 
-    fn register_existing_section<K, Arch>(
+    fn register_existing_section<K, Arch, Tls>(
         &mut self,
-        plan: &LinkPlan<K, Arch>,
+        plan: &LinkPlan<K, Arch, Tls>,
         module_id: ModuleId,
         section_id: SectionId,
         placement: SectionPlacement,
     ) where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         let metadata = plan.section_metadata(section_id);
         let memory_class = metadata
@@ -164,15 +171,16 @@ impl ArenaState {
         }
     }
 
-    fn assign_fallback_section<K, Arch>(
+    fn assign_fallback_section<K, Arch, Tls>(
         &mut self,
-        plan: &mut LinkPlan<K, Arch>,
+        plan: &mut LinkPlan<K, Arch, Tls>,
         module_id: ModuleId,
         section_id: SectionId,
         policy: PackingPolicy,
     ) where
         K: Clone + Ord,
         Arch: RelocationArch,
+        Tls: TlsResolver,
     {
         let (memory_class, alignment) = {
             let section = plan.section_metadata(section_id);

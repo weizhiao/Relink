@@ -12,7 +12,10 @@ const TLS_GET_ADDR_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
 /// Implement this trait to provide custom TLS module IDs and thread pointer offsets.
 /// This is essential for supporting TLS in environments with custom thread management,
 /// such as operating system kernels or bare-metal systems.
-pub trait TlsResolver {
+pub trait TlsResolver: 'static {
+    /// Whether this resolver should override `__tls_get_addr` symbol bindings.
+    const OVERRIDE_TLS_GET_ADDR: bool = true;
+
     /// Registers a module with dynamic TLS and returns the allocated module ID.
     ///
     /// # Errors
@@ -56,6 +59,8 @@ pub trait TlsResolver {
 }
 
 impl TlsResolver for () {
+    const OVERRIDE_TLS_GET_ADDR: bool = false;
+
     fn register(_tls_info: &TlsInfo) -> Result<TlsModuleId> {
         Err(TlsError::ResolverUnsupported.into())
     }

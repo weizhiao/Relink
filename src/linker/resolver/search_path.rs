@@ -5,6 +5,7 @@ use crate::{
     linker::{DependencyRequest, RootRequest},
     relocation::RelocationArch,
     sync::Arc,
+    tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt, marker::PhantomData};
@@ -483,11 +484,11 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
     }
 
     #[inline]
-    fn resolved_key<'cfg, Arch: RelocationArch>(
+    fn resolved_key<'cfg, Arch: RelocationArch, Tls: TlsResolver>(
         key: LinkKey,
         file: ElfFile,
         visible_key: Option<LinkKey>,
-    ) -> ResolvedKey<'cfg, LinkKey, Arch> {
+    ) -> ResolvedKey<'cfg, LinkKey, Arch, Tls> {
         if let Some(key) = visible_key {
             ResolvedKey::existing(key)
         } else {
@@ -519,17 +520,18 @@ enum ResolvedCandidate<LinkKey> {
     Load { key: LinkKey, file: ElfFile },
 }
 
-impl<'cfg, LinkKey, Arch, Rule> KeyResolver<'cfg, LinkKey, Arch>
+impl<'cfg, LinkKey, Arch, Tls, Rule> KeyResolver<'cfg, LinkKey, Arch, LinkKey, Tls>
     for SearchPathResolver<LinkKey, Rule>
 where
     Rule: KeyRule<LinkKey>,
     LinkKey: Clone + AsRef<Path>,
     Arch: RelocationArch,
+    Tls: TlsResolver,
 {
     fn load_root(
         &mut self,
         req: &RootRequest<'_, LinkKey>,
-    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch>> {
+    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>> {
         let visible_key = |key: &LinkKey| req.visible_key(key);
         if let Some(resolved) =
             self.resolve_key(CandidateRequest::root(req.key().as_ref()), &visible_key)?
@@ -549,7 +551,7 @@ where
     fn resolve_dependency(
         &mut self,
         req: &DependencyRequest<'_, LinkKey>,
-    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch>> {
+    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>> {
         let origin = req.owner_path().parent();
         let needed = expand_origin(req.needed(), origin);
         let request = CandidateRequest::dependency(
