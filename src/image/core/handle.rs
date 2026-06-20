@@ -54,10 +54,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCoreRef<D, Arch, R> {
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> TlsImageProvider for CoreInner<D, Arch, R> {
     fn with_tls_template(&self, f: &mut dyn FnMut(TlsTemplate<'_>) -> Result<()>) -> Result<()> {
-        self.tls
-            .as_ref()
-            .ok_or(TlsError::TemplateUnavailable)?
-            .with_template(f)
+        if self.tls.info().is_none() {
+            return Err(TlsError::TemplateUnavailable.into());
+        }
+        self.tls.with_template(f)
     }
 }
 
@@ -192,29 +192,28 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
     #[inline]
     pub fn tls(&self) -> ModuleTls {
         ModuleTls::new(
-            self.inner.tls.as_ref().and_then(CoreTlsState::mod_id),
-            self.inner.tls.as_ref().and_then(CoreTlsState::tp_offset),
+            self.inner.tls.mod_id(),
+            self.inner.tls.tp_offset(),
             self.tls_get_addr(),
         )
     }
 
     pub(crate) fn init_tls(&self) -> Result<()> {
-        let Some(tls) = self.inner.tls.as_ref() else {
-            return Ok(());
-        };
-        let Some(info) = tls.info() else {
+        let Some(info) = self.inner.tls.info() else {
             return Ok(());
         };
         let provider = tls_image_provider_handle(self.inner.clone());
-        tls.init_tls(TlsImageSource::new(info, Arc::downgrade(&provider)))
+        self.inner
+            .tls
+            .init_tls(TlsImageSource::new(info, Arc::downgrade(&provider)))
     }
 
     pub(crate) fn tls_addr(&self, offset: usize) -> Option<VmAddr> {
-        self.inner.tls.as_ref()?.addr(offset)
+        self.inner.tls.addr(offset)
     }
 
     pub(crate) fn tls_get_addr(&self) -> Option<VmAddr> {
-        self.inner.tls.as_ref().map(CoreTlsState::tls_get_addr)
+        self.inner.tls.tls_get_addr()
     }
 
     /// Set the TLS descriptor arguments used by dynamic relocation.

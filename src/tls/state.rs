@@ -88,7 +88,7 @@ mod enabled {
             unregister: fn(TlsModuleId),
             init_tls: fn(TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
             tls_get_addr: extern "C" fn(*const TlsIndex) -> *mut u8,
-        ) -> Option<Self> {
+        ) -> Self {
             debug_assert_eq!(
                 info.is_some(),
                 image.is_some(),
@@ -98,17 +98,14 @@ mod enabled {
                 mod_id.is_some() || info.is_none(),
                 "TLS template state must not exist without a module ID",
             );
-            if mod_id.is_none() && info.is_none() {
-                return None;
-            }
 
-            Some(Self {
+            Self {
                 module: TlsModuleState::new(mod_id, tp_offset),
                 template: info
                     .zip(image)
                     .map(|(info, image)| info.template(image.as_slice())),
                 backend: TlsBackend::new(unregister, init_tls, tls_get_addr),
-            })
+            }
         }
 
         #[inline]
@@ -163,8 +160,8 @@ mod enabled {
         }
 
         #[inline]
-        pub(crate) fn tls_get_addr(&self) -> VmAddr {
-            VmAddr::from_ptr(self.backend.tls_get_addr as *const ())
+        pub(crate) fn tls_get_addr(&self) -> Option<VmAddr> {
+            Some(VmAddr::from_ptr(self.backend.tls_get_addr as *const ()))
         }
     }
 }
@@ -204,8 +201,8 @@ mod disabled {
             _unregister: fn(TlsModuleId),
             _init_tls: fn(TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
             _tls_get_addr: extern "C" fn(*const TlsIndex) -> *mut u8,
-        ) -> Option<Self> {
-            None
+        ) -> Self {
+            Self
         }
 
         #[inline]
@@ -242,8 +239,8 @@ mod disabled {
         }
 
         #[inline]
-        pub(crate) fn tls_get_addr(&self) -> VmAddr {
-            VmAddr::null()
+        pub(crate) fn tls_get_addr(&self) -> Option<VmAddr> {
+            None
         }
     }
 }

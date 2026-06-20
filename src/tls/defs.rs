@@ -4,6 +4,8 @@ use crate::{
     sync::{Arc, Weak},
 };
 
+pub(crate) const TLS_GET_ADDR_SYMBOL: &str = "__tls_get_addr";
+
 /// Information about a TLS segment from ELF headers.
 #[derive(Clone, Copy, Default)]
 pub struct TlsInfo {

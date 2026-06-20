@@ -33,8 +33,8 @@ pub(crate) struct CoreInner<
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
 
-    /// TLS image state for the loaded object, when it owns a TLS module.
-    pub(crate) tls: Option<CoreTlsState>,
+    /// TLS runtime state for this loaded object.
+    pub(crate) tls: CoreTlsState,
 
     /// Backing storage for TLSDESC relocation arguments written into this image.
     pub(crate) tls_desc_args: CoreTlsDescArgs,
@@ -67,9 +67,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Drop for CoreInner<D, Ar
                 logging::error!("finalization lifecycle failed for {}: {err}", name);
             }
         }
-        if let Some(tls) = &self.tls {
-            tls.cleanup();
-        }
+        self.tls.cleanup();
     }
 }
 

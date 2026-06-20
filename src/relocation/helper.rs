@@ -11,7 +11,7 @@ use crate::{
     relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
     runtime::{CodeContext, CodeExecutor},
     segment::ElfSegments,
-    tls::TlsDescArgs,
+    tls::{TLS_GET_ADDR_SYMBOL, TlsDescArgs},
 };
 use core::marker::PhantomData;
 
@@ -102,12 +102,25 @@ where
             if let Some(symdef) = find_symdef_impl(self.core, &self.scope, dynsym, &syminfo) {
                 Some(symdef.resolve_addr(self.executor)?)
             } else {
-                None
+                self.find_runtime_symbol(dynsym, &syminfo)
             };
         let mut event =
             SymbolBindingEvent::new(self.core, Some(rel), dynsym, syminfo.name(), resolved);
         self.observer.on_symbol_binding(&mut event)?;
         Ok(event.into_resolved_addr())
+    }
+
+    #[inline]
+    fn find_runtime_symbol(
+        &self,
+        dynsym: &ElfSymbol<Arch::Layout>,
+        syminfo: &SymbolInfo<'_>,
+    ) -> Option<VmAddr> {
+        if dynsym.is_undef() && syminfo.name() == TLS_GET_ADDR_SYMBOL {
+            self.core.tls_get_addr()
+        } else {
+            None
+        }
     }
 
     #[inline]
