@@ -6,13 +6,12 @@
 use crate::{
     Result,
     elf::ElfPhdr,
-    image::{ElfCore, LoadedCore, RawDynamic},
+    image::{ElfCore, LoadedCore, ModuleTls, RawDynamic},
     input::Path,
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
     segment::ElfSegments,
-    tls::{TlsModuleId, TlsTpOffset},
 };
 use core::fmt::Debug;
 
@@ -102,14 +101,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDylib<D, Arch, R> {
         self.inner.is_lazy()
     }
 
-    /// Returns the TLS module id assigned to this image, when registered.
-    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
-        self.inner.tls_mod_id()
-    }
-
-    /// Returns the static TLS thread-pointer offset, when assigned.
-    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        self.inner.tls_tp_offset()
+    /// Returns TLS metadata associated with this image.
+    pub fn tls(&self) -> ModuleTls {
+        self.inner.tls()
     }
 
     /// Returns the DT_RPATH value.
@@ -181,9 +175,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDylib<D, Arch, R> {
 
     /// Creates a relocation builder for this shared object.
     pub fn relocator(self) -> Relocator<Self, (), (), Arch> {
-        let tls_get_addr = self.inner.default_tls_get_addr();
-        Relocator::<(), (), (), Arch>::new()
-            .with_default_tls_get_addr(tls_get_addr)
-            .with_object(self)
+        Relocator::<(), (), (), Arch>::new().with_object(self)
     }
 }

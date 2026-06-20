@@ -1,14 +1,7 @@
-use super::{
-    Module,
-    synthetic::{SyntheticModule, SyntheticSymbol},
-};
-use crate::{
-    arch::NativeArch, memory::VmAddr, relocation::RelocationArch, sync::Arc, tls::TLS_GET_ADDR,
-};
+use super::Module;
+use crate::{arch::NativeArch, relocation::RelocationArch, sync::Arc};
 use alloc::{boxed::Box, vec::Vec};
 use core::{any::Any, ops::Deref, slice};
-
-const BUILTIN_MODULE_NAME: &str = "__relink_builtin";
 
 /// Shared ownership handle for one retained module.
 pub struct ModuleHandle<Arch: RelocationArch = NativeArch> {
@@ -104,18 +97,13 @@ impl<Arch: RelocationArch> From<Arc<dyn Module<Arch>>> for ModuleHandle<Arch> {
 /// Ordered, retained modules used for relocation symbol lookup.
 ///
 /// Modules are searched in order and held alive by relocated outputs that keep
-/// this scope. The first entry is reserved for Relink's built-in synthetic
-/// module.
+/// this scope.
 pub struct ModuleScope<Arch: RelocationArch = NativeArch> {
     modules: Arc<[ModuleHandle<Arch>]>,
 }
 
 /// Mutable builder for a [`ModuleScope`].
-///
-/// Builders always start with an empty built-in synthetic module in the first
-/// slot, so callers only append or replace the user-visible lookup scope.
 pub struct ModuleScopeBuilder<Arch: RelocationArch = NativeArch> {
-    builtin: SyntheticModule<Arch>,
     modules: Vec<ModuleHandle<Arch>>,
 }
 
@@ -123,7 +111,6 @@ impl<Arch: RelocationArch> Clone for ModuleScopeBuilder<Arch> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
-            builtin: self.builtin.clone(),
             modules: self.modules.clone(),
         }
     }
@@ -133,20 +120,7 @@ impl<Arch: RelocationArch> ModuleScopeBuilder<Arch> {
     #[inline]
     pub fn new() -> Self {
         Self {
-            builtin: SyntheticModule::empty(BUILTIN_MODULE_NAME),
-            modules: Vec::with_capacity(1),
-        }
-    }
-
-    #[inline]
-    pub(crate) fn builtin_mut(&mut self) -> &mut SyntheticModule<Arch> {
-        &mut self.builtin
-    }
-
-    pub(crate) fn seed_tls_get_addr(&mut self, addr: VmAddr) {
-        if Arch::SUPPORTS_NATIVE_RUNTIME && addr.get() != 0 {
-            self.builtin
-                .insert(SyntheticSymbol::function(TLS_GET_ADDR, addr.as_ptr()));
+            modules: Vec::new(),
         }
     }
 
@@ -155,10 +129,8 @@ impl<Arch: RelocationArch> ModuleScopeBuilder<Arch> {
         I: IntoIterator<Item = R>,
         R: Into<ModuleHandle<Arch>>,
     {
-        let modules = modules.into_iter();
-        let mut replaced = Vec::with_capacity(modules.size_hint().0.saturating_add(1));
-        replaced.extend(modules.map(Into::into));
-        self.modules = replaced;
+        self.modules.clear();
+        self.modules.extend(modules.into_iter().map(Into::into));
     }
 
     pub fn extend<I, R>(&mut self, modules: I)
@@ -171,11 +143,8 @@ impl<Arch: RelocationArch> ModuleScopeBuilder<Arch> {
 
     #[inline]
     pub fn into_scope(self) -> ModuleScope<Arch> {
-        let mut modules = self.modules;
-        modules.reserve(1);
-        modules.insert(0, ModuleHandle::new(self.builtin));
         ModuleScope {
-            modules: Arc::from(modules),
+            modules: Arc::from(self.modules),
         }
     }
 }

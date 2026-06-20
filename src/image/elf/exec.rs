@@ -8,7 +8,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::ElfPhdr,
-    image::{LoadedCore, RawDynamic},
+    image::{LoadedCore, ModuleTls, RawDynamic},
     input::{Path, PathBuf},
     loader::ImageBuilder,
     memory::{HostRegion, RegionAccess, VmAddr, VmOffset},
@@ -69,14 +69,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
         self.inner.entry
     }
 
-    /// Returns the TLS module id assigned to this image, when registered.
-    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
-        self.inner.tls_mod_id
-    }
-
-    /// Returns the static TLS thread-pointer offset, when assigned.
-    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        self.inner.tls_tp_offset
+    /// Returns TLS metadata associated with this image.
+    pub fn tls(&self) -> ModuleTls {
+        ModuleTls::new(self.inner.tls_mod_id, self.inner.tls_tp_offset, None)
     }
 
     /// Returns user data associated with the image.
@@ -202,13 +197,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Debug for RawExec<D, Arch, R> {
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawExec<D, Arch, R> {
     /// Creates a relocation builder for this executable image.
     pub fn relocator(self) -> Relocator<Self, (), (), Arch> {
-        let relocator = Relocator::<(), (), (), Arch>::new();
-        match &self {
-            RawExec::Dynamic(image) => relocator
-                .with_default_tls_get_addr(image.default_tls_get_addr())
-                .with_object(self),
-            RawExec::Static(_) => relocator.with_object(self),
-        }
+        Relocator::<(), (), (), Arch>::new().with_object(self)
     }
 
     /// Returns the loader source path or caller-provided source identifier.
@@ -235,19 +224,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawExec<D, Arch, R> {
         }
     }
 
-    /// Returns the TLS module id assigned to this executable, when registered.
-    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
+    /// Returns TLS metadata associated with this executable.
+    pub fn tls(&self) -> ModuleTls {
         match self {
-            RawExec::Dynamic(image) => image.tls_mod_id(),
-            RawExec::Static(image) => image.tls_mod_id(),
-        }
-    }
-
-    /// Returns the static TLS thread-pointer offset, when assigned.
-    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        match self {
-            RawExec::Dynamic(image) => image.tls_tp_offset(),
-            RawExec::Static(image) => image.tls_tp_offset(),
+            RawExec::Dynamic(image) => image.tls(),
+            RawExec::Static(image) => image.tls(),
         }
     }
 
@@ -389,19 +370,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedExec<D, Arch, R> {
         }
     }
 
-    /// Returns the TLS module id assigned to this executable, when registered.
-    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
+    /// Returns TLS metadata associated with this executable.
+    pub fn tls(&self) -> ModuleTls {
         match &self.inner {
-            LoadedExecInner::Dynamic(module) => module.tls_mod_id(),
-            LoadedExecInner::Static(static_image) => static_image.tls_mod_id(),
-        }
-    }
-
-    /// Returns the static TLS thread-pointer offset, when assigned.
-    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        match &self.inner {
-            LoadedExecInner::Dynamic(module) => module.tls_tp_offset(),
-            LoadedExecInner::Static(static_image) => static_image.tls_tp_offset(),
+            LoadedExecInner::Dynamic(module) => module.tls(),
+            LoadedExecInner::Static(static_image) => static_image.tls(),
         }
     }
 }

@@ -13,15 +13,13 @@ mod enabled {
     use crate::{
         RelocReason, Result,
         arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
-        elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolInfo},
-        image::ModuleTls,
+        elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
         memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
         observer::{
             RelocationObserver, TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
         },
         relocation::{RelocHelper, RelocationArch, RelocationHandler},
         segment::ElfSegments,
-        tls::TLS_GET_ADDR,
     };
     use alloc::boxed::Box;
 
@@ -57,18 +55,6 @@ mod enabled {
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
     {
-        #[inline]
-        pub(crate) fn find_tls_get_addr(&self) -> Option<VmAddr> {
-            let info = SymbolInfo::from_str(TLS_GET_ADDR, None);
-            let mut precompute = info.precompute();
-            self.scope.iter().find_map(|source| {
-                source
-                    .exports()
-                    .lookup(&info, &mut precompute)
-                    .map(|sym| source.memory().base() + VmOffset::new(sym.st_value()))
-            })
-        }
-
         #[inline]
         pub(crate) fn resolve_tlsdesc(
             &mut self,
@@ -159,10 +145,7 @@ mod enabled {
             }
             value if value == Arch::DTPMOD => {
                 let Some(tls) = (if r_sym == 0 {
-                    Some(ModuleTls::new(
-                        helper.core.tls_mod_id(),
-                        helper.core.tls_tp_offset(),
-                    ))
+                    Some(helper.core.tls())
                 } else {
                     helper.find_symdef(r_sym).map(|symdef| symdef.tls())
                 }) else {
@@ -202,7 +185,7 @@ mod enabled {
                     let tls_mod_id = tls.mod_id();
                     let tls_tp_offset = tls.tp_offset();
                     let tls_get_addr = if tls_tp_offset.is_none() && tls_mod_id.is_some() {
-                        let Some(addr) = helper.find_tls_get_addr() else {
+                        let Some(addr) = tls.tls_get_addr() else {
                             return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                         };
                         Some(addr)

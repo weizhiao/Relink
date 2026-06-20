@@ -12,7 +12,7 @@ use crate::{
     Result,
     elf::{ElfSectionId, Lifecycle},
     image::exports_handle,
-    memory::{HostRegion, RegionAccess, VmAddr},
+    memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
     relocation::{
         ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
@@ -37,9 +37,6 @@ pub struct RawObject<
 > {
     /// Core component containing basic ELF information.
     pub(crate) core: ElfCore<D, Arch, R>,
-
-    /// Default `__tls_get_addr` entry point inserted into relocation scope.
-    tls_get_addr: VmAddr,
 
     /// Relocation-only object symbol table.
     pub(crate) symtab: ObjectSymbolTable<Arch::Layout>,
@@ -89,6 +86,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
                 None,
                 T::unregister,
                 T::init_tls,
+                T::tls_get_addr,
             ),
             tls_desc_args: CoreTlsDescArgs::default(),
             segments,
@@ -98,7 +96,6 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
             core: ElfCore {
                 inner: Arc::new(inner),
             },
-            tls_get_addr: VmAddr::from_ptr(T::tls_get_addr as *const ()),
             symtab: builder.symtab,
             sections: builder.sections,
             pltgot,
@@ -114,15 +111,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> RawObject<D, Arch,
     where
         Self: Relocatable<D, Arch = Arch>,
     {
-        let tls_get_addr = self.default_tls_get_addr();
-        Relocator::<(), (), (), Arch>::new()
-            .with_default_tls_get_addr(tls_get_addr)
-            .with_object(self)
-    }
-
-    #[inline]
-    pub(crate) fn default_tls_get_addr(&self) -> VmAddr {
-        self.tls_get_addr
+        Relocator::<(), (), (), Arch>::new().with_object(self)
     }
 
     /// Returns the retained object section metadata.

@@ -17,7 +17,7 @@ use crate::{
         LoadedCore, ModuleHandle, ModuleScope, ModuleScopeBuilder, RawDynamic, ScannedDynamic,
     },
     linker::session::ResolveSession,
-    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
+    memory::{ImageMemory, RegionAccess, VmOffset},
     observer::{LinkObserver, LoadObserver, RelocationObserver, StagedDynamic},
     os::Mmap,
     relocation::{RelocationArch, RelocationHandler, Relocator},
@@ -855,7 +855,6 @@ where
             })
             .collect::<Vec<_>>();
         let mut scope = ModuleScopeBuilder::new();
-        scope.seed_tls_get_addr(VmAddr::from_ptr(Tls::tls_get_addr as *const ()));
         scope.extend(modules);
         scope.into_scope()
     }

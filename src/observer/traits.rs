@@ -1,7 +1,7 @@
 use super::{
-    AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, IfuncBindingEvent,
-    InitEvent, LinkActivity, ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
-    SymbolBindingEvent, TlsDescBindingEvent,
+    AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, InitEvent, LinkActivity,
+    ResolveDependencyEvent, ResolveRootEvent, StagedDynamic, SymbolBindingEvent,
+    TlsDescBindingEvent,
 };
 #[cfg(feature = "object")]
 use super::{
@@ -94,15 +94,6 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     fn on_symbol_binding<D: 'static, R: RegionAccess>(
         &mut self,
         _event: &mut SymbolBindingEvent<'_, D, Arch, R>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Called when an IFUNC resolver needs runtime binding.
-    #[inline]
-    fn on_ifunc_binding<D: 'static, R: RegionAccess>(
-        &mut self,
-        _event: &mut IfuncBindingEvent<'_, D, Arch, R>,
     ) -> Result<()> {
         Ok(())
     }
@@ -249,14 +240,6 @@ where
         event: &mut SymbolBindingEvent<'_, D, Arch, R>,
     ) -> Result<()> {
         (**self).on_symbol_binding(event)
-    }
-
-    #[inline]
-    fn on_ifunc_binding<D: 'static, R: RegionAccess>(
-        &mut self,
-        event: &mut IfuncBindingEvent<'_, D, Arch, R>,
-    ) -> Result<()> {
-        (**self).on_ifunc_binding(event)
     }
 
     #[inline]
@@ -416,14 +399,6 @@ where
         event: &mut SymbolBindingEvent<'_, D, Arch, R>,
     ) -> Result<()> {
         (**self).on_symbol_binding(event)
-    }
-
-    #[inline]
-    fn on_ifunc_binding<D: 'static, R: RegionAccess>(
-        &mut self,
-        event: &mut IfuncBindingEvent<'_, D, Arch, R>,
-    ) -> Result<()> {
-        (**self).on_ifunc_binding(event)
     }
 
     #[inline]

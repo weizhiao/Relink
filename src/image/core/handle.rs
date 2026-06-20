@@ -10,8 +10,8 @@ use crate::{
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{
-        CoreTlsDescArgs, CoreTlsState, TlsDescArgs, TlsImageProvider, TlsImageSource, TlsInfo,
-        TlsModuleId, TlsTemplate, TlsTpOffset, tls_image_provider_handle,
+        CoreTlsDescArgs, CoreTlsState, TlsDescArgs, TlsImageProvider, TlsImageSource, TlsIndex,
+        TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset, tls_image_provider_handle,
     },
 };
 use alloc::vec::Vec;
@@ -188,16 +188,14 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
             .and_then(|info| info.eh_frame_hdr)
     }
 
-    /// Gets the TLS module ID of the ELF object
+    /// Returns TLS metadata associated with this image.
     #[inline]
-    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
-        self.inner.tls.as_ref().and_then(CoreTlsState::mod_id)
-    }
-
-    /// Gets the TLS thread pointer offset of the ELF object
-    #[inline]
-    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        self.inner.tls.as_ref().and_then(CoreTlsState::tp_offset)
+    pub fn tls(&self) -> ModuleTls {
+        ModuleTls::new(
+            self.inner.tls.as_ref().and_then(CoreTlsState::mod_id),
+            self.inner.tls.as_ref().and_then(CoreTlsState::tp_offset),
+            self.tls_get_addr(),
+        )
     }
 
     pub(crate) fn init_tls(&self) -> Result<()> {
@@ -209,6 +207,14 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
         };
         let provider = tls_image_provider_handle(self.inner.clone());
         tls.init_tls(TlsImageSource::new(info, Arc::downgrade(&provider)))
+    }
+
+    pub(crate) fn tls_addr(&self, offset: usize) -> Option<VmAddr> {
+        self.inner.tls.as_ref()?.addr(offset)
+    }
+
+    pub(crate) fn tls_get_addr(&self) -> Option<VmAddr> {
+        self.inner.tls.as_ref().map(CoreTlsState::tls_get_addr)
     }
 
     /// Set the TLS descriptor arguments used by dynamic relocation.
@@ -248,6 +254,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
         tls_image: Option<MappedView<u8>>,
         tls_unregister: fn(TlsModuleId),
         tls_init: fn(crate::tls::TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
+        tls_get_addr: extern "C" fn(*const TlsIndex) -> *mut u8,
         user_data: D,
     ) -> Result<Self> {
         segments.set_base(base);
@@ -278,6 +285,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> ElfCore<D, Arch, R> {
                     tls_image,
                     tls_unregister,
                     tls_init,
+                    tls_get_addr,
                 ),
                 tls_desc_args: CoreTlsDescArgs::default(),
                 segments,
@@ -294,7 +302,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> Debug for ElfCore<D, Arc
         f.debug_struct("ElfCore")
             .field("path", &self.inner.path)
             .field("base", &format_args!("{}", self.base()))
-            .field("tls_mod_id", &self.tls_mod_id())
+            .field("tls", &self.tls())
             .finish()
     }
 }
@@ -322,7 +330,7 @@ where
 
     #[inline]
     fn tls(&self) -> ModuleTls {
-        ModuleTls::new(ElfCore::tls_mod_id(self), ElfCore::tls_tp_offset(self))
+        ElfCore::tls(self)
     }
 }
 

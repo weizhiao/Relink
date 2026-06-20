@@ -6,7 +6,7 @@ use std::{
     thread,
 };
 
-use elf_loader::{arch::NativeArch, memory::VmOffset, relocation::RelocationArch};
+use elf_loader::{arch::NativeArch, image::Module, memory::VmOffset, relocation::RelocationArch};
 
 const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
 const REL_GOT: u32 = <NativeArch as RelocationArch>::GOT.raw();
@@ -163,7 +163,8 @@ impl BindingScenario {
     pub(crate) fn assert_tls_relocations(&self) {
         let tls_mod_id = self
             .helper_dylib()
-            .tls_mod_id()
+            .tls()
+            .mod_id()
             .expect("missing TLS mod id")
             .get() as u64;
 
@@ -177,14 +178,13 @@ impl BindingScenario {
             );
 
             let dtpoff = self.relocation_for_symbol(REL_DTPOFF, symbol_name);
-            let tls_symbol = unsafe {
-                self.helper_dylib()
-                    .get::<()>(symbol_name)
-                    .unwrap_or_else(|| panic!("missing TLS symbol {symbol_name}"))
-                    .into_raw() as usize
-            };
-            let expected = (tls_symbol - self.helper_dylib().base().get()) as u64
-                + dtpoff.addend as u64
+            let exports = self.helper_dylib().exports();
+            let tls_symbol = exports
+                .symbols()
+                .iter()
+                .find(|symbol| exports.symbol_name(symbol) == Some(symbol_name))
+                .unwrap_or_else(|| panic!("missing TLS symbol {symbol_name}"));
+            let expected = tls_symbol.st_value() as u64 + dtpoff.addend as u64
                 - NativeArch::TLS_DTV_OFFSET as u64;
             assert_eq!(
                 self.slot_word(dtpoff),

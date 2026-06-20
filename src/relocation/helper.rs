@@ -1,4 +1,3 @@
-use super::resolve_ifunc;
 use crate::{
     Error, RelocReason, Result,
     elf::{
@@ -7,7 +6,7 @@ use crate::{
     image::{ElfCore, Module, ModuleScope},
     logging,
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
-    observer::{IfuncBindingEvent, RelocationObserver, SymbolBindingEvent},
+    observer::{RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
     relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
     runtime::{CodeContext, CodeExecutor},
@@ -99,7 +98,12 @@ where
     #[inline]
     pub(crate) fn find_symbol(&mut self, rel: &ElfRelType<Arch>) -> Result<Option<VmAddr>> {
         let (dynsym, syminfo) = self.symbols.symbol_idx(rel.r_symbol());
-        let resolved = resolve_symbol_addr(self.core, &self.scope, dynsym, &syminfo);
+        let resolved =
+            if let Some(symdef) = find_symdef_impl(self.core, &self.scope, dynsym, &syminfo) {
+                Some(symdef.resolve_addr(self.executor)?)
+            } else {
+                None
+            };
         let mut event =
             SymbolBindingEvent::new(self.core, Some(rel), dynsym, syminfo.name(), resolved);
         self.observer.on_symbol_binding(&mut event)?;
@@ -117,21 +121,6 @@ where
     pub(crate) fn find_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, D, Arch>> {
         let (dynsym, syminfo) = self.symbols.symbol_idx(r_sym);
         find_symdef_impl(self.core, &self.scope, dynsym, &syminfo)
-    }
-
-    #[inline]
-    pub(crate) fn resolve_ifunc(
-        &mut self,
-        rel: &ElfRelType<Arch>,
-        resolver: VmAddr,
-    ) -> Result<VmAddr> {
-        let mut event = IfuncBindingEvent::new(self.core, rel, resolver);
-        self.observer.on_ifunc_binding(&mut event)?;
-        let ctx = CodeContext::<Arch>::new(self.core.name(), &self.memory);
-        event
-            .into_resolved_addr()
-            .map(Ok)
-            .unwrap_or_else(|| self.executor.resolve_ifunc(ctx, resolver))
     }
 }
 
@@ -158,31 +147,50 @@ impl<'lib, D: 'static, Arch: RelocationArch> SymDef<'lib, D, Arch> {
         }
     }
 
-    /// Computes the real address of the symbol (base + st_value).
+    /// Computes the symbol address (base + st_value).
     ///
     /// For regular symbols, returns base + st_value.
-    /// For IFUNC symbols, calls the resolver function and returns its result.
+    /// For IFUNC symbols, returns the resolver address without executing it.
     /// For undefined weak symbols, returns null.
-    pub(crate) fn convert(self) -> VmAddr {
+    pub(crate) fn addr(&self) -> VmAddr {
         if likely(self.sym.is_some()) {
             let memory = self.source.memory();
             let base = memory.base();
             let sym = unsafe { self.sym.unwrap_unchecked() };
-            let addr = base + VmOffset::new(sym.st_value());
-            if likely(
-                sym.symbol_type() != ElfSymbolType::GNU_IFUNC || !Arch::SUPPORTS_NATIVE_RUNTIME,
-            ) {
-                addr
-            } else {
-                let ptr = memory.host_ptr(addr).expect(
-                    "IFUNC resolver address is not backed by host-accessible mapped memory",
-                );
-                unsafe { resolve_ifunc(ptr) }
-            }
+            base + VmOffset::new(sym.st_value())
         } else {
             // 未定义的弱符号返回null
             VmAddr::null()
         }
+    }
+
+    #[inline]
+    pub(crate) fn resolve_addr(&self, executor: &dyn CodeExecutor<Arch>) -> Result<VmAddr> {
+        let addr = self.addr();
+        if unlikely(self.is_ifunc()) {
+            self.resolve_ifunc_addr(executor, addr)
+        } else {
+            Ok(addr)
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn resolve_ifunc_addr(
+        &self,
+        executor: &dyn CodeExecutor<Arch>,
+        resolver: VmAddr,
+    ) -> Result<VmAddr> {
+        executor.resolve_ifunc(
+            CodeContext::<Arch>::new(self.source.name(), self.source.memory()),
+            resolver,
+        )
+    }
+
+    #[inline]
+    pub(crate) fn is_ifunc(&self) -> bool {
+        self.sym
+            .is_some_and(|sym| sym.symbol_type() == ElfSymbolType::GNU_IFUNC)
     }
 
     #[inline]
@@ -252,25 +260,6 @@ where
     } else {
         None
     }
-}
-
-/// Finds the address of a symbol using the configured lookup scope.
-#[inline]
-pub(crate) fn resolve_symbol_addr<D, Arch, R>(
-    core: &ElfCore<D, Arch, R>,
-    scope: &ModuleScope<Arch>,
-    dynsym: &ElfSymbol<Arch::Layout>,
-    syminfo: &SymbolInfo<'_>,
-) -> Option<VmAddr>
-where
-    Arch: RelocationArch,
-    R: RegionAccess,
-    D: 'static,
-{
-    if let Some(res) = find_symdef_impl(core, scope, dynsym, syminfo) {
-        return Some(res.convert());
-    }
-    None
 }
 
 pub(crate) fn find_symdef_impl<'lib, D, Arch: RelocationArch, R: RegionAccess>(

@@ -1,7 +1,6 @@
 use crate::{
     Result,
-    image::{ModuleHandle, ModuleScope, ModuleScopeBuilder, SyntheticSymbol},
-    memory::VmAddr,
+    image::{ModuleHandle, ModuleScope, ModuleScopeBuilder},
     observer::RelocationObserver,
     relocation::{
         BindingMode, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, SupportLazy,
@@ -172,18 +171,6 @@ where
         R: Into<ModuleHandle<Arch>>,
     {
         self.scope.extend(scope);
-        self
-    }
-
-    /// Adds or replaces one built-in synthetic symbol.
-    pub fn with_builtin_symbol(mut self, symbol: SyntheticSymbol) -> Self {
-        self.scope.builtin_mut().insert(symbol);
-        self
-    }
-
-    #[inline]
-    pub(crate) fn with_default_tls_get_addr(mut self, addr: VmAddr) -> Self {
-        self.scope.seed_tls_get_addr(addr);
         self
     }
 }

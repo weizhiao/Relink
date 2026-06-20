@@ -2,13 +2,13 @@ use super::{ElfCore, ElfCoreRef, Symbol};
 use crate::{
     Result,
     arch::ArchKind,
-    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, SymbolInfo},
+    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolType, SymbolInfo},
     image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, ModuleTls},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymDef},
     segment::ElfSegments,
-    tls::{TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
+    tls::{TlsInfo, TlsResolver, TlsTpOffset},
 };
 use alloc::vec::Vec;
 use core::{ffi::c_void, fmt::Debug, ptr::NonNull};
@@ -111,8 +111,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
     /// Returns the retained user-provided relocation lookup scope.
     #[inline]
     pub fn scope(&self) -> &[ModuleHandle<Arch>] {
-        let scope = self.scope.as_slice();
-        if scope.is_empty() { scope } else { &scope[1..] }
+        self.scope.as_slice()
     }
 
     /// Returns the target architecture used by this loaded module.
@@ -175,6 +174,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         self.core.eh_frame_hdr()
     }
 
+    #[inline]
+    fn lookup_addr(&self, sym: &ElfSymbol<Arch::Layout>) -> Option<VmAddr> {
+        if sym.symbol_type() == ElfSymbolType::TLS {
+            self.core.tls_addr(sym.st_value())
+        } else {
+            Some(SymDef::<D, Arch>::new(Some(sym), self).addr())
+        }
+    }
+
     /// Gets a pointer to a function or static variable by symbol name.
     ///
     /// The symbol is interpreted as-is; no mangling is done. This means
@@ -223,13 +231,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         self.core
             .exports()
             .lookup(&syminfo, &mut precompute)
-            .map(|sym| {
-                Symbol::from_ptr(
-                    SymDef::<D, Arch>::new(Some(sym), self)
-                        .convert()
-                        .as_mut_ptr(),
-                )
-            })
+            .and_then(|sym| self.lookup_addr(sym))
+            .map(|addr| Symbol::from_ptr(addr.as_mut_ptr()))
     }
 
     /// Load a versioned symbol from the ELF object.
@@ -267,13 +270,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         self.core
             .exports()
             .lookup(&syminfo, &mut precompute)
-            .map(|sym| {
-                Symbol::from_ptr(
-                    SymDef::<D, Arch>::new(Some(sym), self)
-                        .convert()
-                        .as_mut_ptr(),
-                )
-            })
+            .and_then(|sym| self.lookup_addr(sym))
+            .map(|addr| Symbol::from_ptr(addr.as_mut_ptr()))
     }
 
     /// Gets the number of strong references to the ELF object
@@ -294,16 +292,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> LoadedCore<D, Arch, R> {
         self.core.downgrade()
     }
 
-    /// Gets the TLS module ID of the ELF object
+    /// Returns TLS metadata associated with this image.
     #[inline]
-    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
-        self.core.tls_mod_id()
-    }
-
-    /// Gets the TLS thread pointer offset of the ELF object
-    #[inline]
-    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        self.core.tls_tp_offset()
+    pub fn tls(&self) -> ModuleTls {
+        self.core.tls()
     }
 
     /// Creates a [`LoadedCore`] from an [`ElfCore`] and its retained relocation lookup scope.
@@ -471,6 +463,7 @@ impl<D: 'static, Arch: RelocationArch> LoadedCore<D, Arch> {
                 core_tls_image,
                 Tls::unregister,
                 Tls::init_tls,
+                Tls::tls_get_addr,
                 user_data,
             )
         }?;
@@ -505,9 +498,6 @@ where
 
     #[inline]
     fn tls(&self) -> ModuleTls {
-        ModuleTls::new(
-            LoadedCore::tls_mod_id(self),
-            LoadedCore::tls_tp_offset(self),
-        )
+        LoadedCore::tls(self)
     }
 }

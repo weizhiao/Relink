@@ -10,6 +10,7 @@ use crate::{
         BindingMode, RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, ResolvedBinding,
         likely, reloc_error, unlikely,
     },
+    runtime::CodeContext,
     tls::{TlsRelocOutcome, handle_tls_reloc},
 };
 use alloc::vec;
@@ -256,7 +257,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             } else if unlikely(r_type == Arch::IRELATIVE) {
                 let r_addend = rel.read_addend(helper.memory(), place)?;
                 let addr = base.wrapping_add_signed(r_addend);
-                let resolved = helper.resolve_ifunc(rel, addr)?;
+                let resolved = helper
+                    .executor
+                    .resolve_ifunc(CodeContext::<Arch>::new(core.name(), helper.memory()), addr)?;
                 let word = <Arch::Layout as ElfLayout>::Word::from_usize(resolved.get());
                 unsafe { helper.memory().write_value(place, word)? };
                 continue;
@@ -363,7 +366,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
             } else if r_type == Arch::IRELATIVE {
                 let r_addend = rel.read_addend(helper.memory(), place)?;
                 let addr = base.wrapping_add_signed(r_addend);
-                let resolved = helper.resolve_ifunc(rel, addr)?;
+                let resolved = helper
+                    .executor
+                    .resolve_ifunc(CodeContext::<Arch>::new(core.name(), helper.memory()), addr)?;
                 let word = <Arch::Layout as ElfLayout>::Word::from_usize(resolved.get());
                 unsafe { helper.memory().write_value(place, word)? };
                 continue;

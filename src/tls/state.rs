@@ -1,9 +1,12 @@
 #[cfg(feature = "tls")]
 mod enabled {
     use super::super::defs::{
-        TlsDescDynamicArg, TlsImageSource, TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset,
+        TlsDescDynamicArg, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset,
     };
-    use crate::{Result, memory::MappedView};
+    use crate::{
+        Result,
+        memory::{MappedView, VmAddr},
+    };
     use alloc::{boxed::Box, vec::Vec};
     use core::cell::OnceCell;
 
@@ -48,6 +51,7 @@ mod enabled {
     struct TlsBackend {
         unregister: fn(TlsModuleId),
         init_tls: fn(TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
+        tls_get_addr: extern "C" fn(*const TlsIndex) -> *mut u8,
     }
 
     impl TlsBackend {
@@ -55,10 +59,12 @@ mod enabled {
         const fn new(
             unregister: fn(TlsModuleId),
             init_tls: fn(TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
+            tls_get_addr: extern "C" fn(*const TlsIndex) -> *mut u8,
         ) -> Self {
             Self {
                 unregister,
                 init_tls,
+                tls_get_addr,
             }
         }
     }
@@ -81,6 +87,7 @@ mod enabled {
             image: Option<MappedView<u8>>,
             unregister: fn(TlsModuleId),
             init_tls: fn(TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
+            tls_get_addr: extern "C" fn(*const TlsIndex) -> *mut u8,
         ) -> Option<Self> {
             debug_assert_eq!(
                 info.is_some(),
@@ -100,7 +107,7 @@ mod enabled {
                 template: info
                     .zip(image)
                     .map(|(info, image)| info.template(image.as_slice())),
-                backend: TlsBackend::new(unregister, init_tls),
+                backend: TlsBackend::new(unregister, init_tls, tls_get_addr),
             })
         }
 
@@ -146,13 +153,31 @@ mod enabled {
             );
             (self.backend.init_tls)(source, mod_id, self.module.tp_offset)
         }
+
+        pub(crate) fn addr(&self, offset: usize) -> Option<VmAddr> {
+            let ti = TlsIndex {
+                ti_module: self.module.mod_id?,
+                ti_offset: offset,
+            };
+            Some(VmAddr::from_ptr((self.backend.tls_get_addr)(&ti)))
+        }
+
+        #[inline]
+        pub(crate) fn tls_get_addr(&self) -> VmAddr {
+            VmAddr::from_ptr(self.backend.tls_get_addr as *const ())
+        }
     }
 }
 
 #[cfg(not(feature = "tls"))]
 mod disabled {
-    use super::super::defs::{TlsImageSource, TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset};
-    use crate::{Result, memory::MappedView};
+    use super::super::defs::{
+        TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset,
+    };
+    use crate::{
+        Result,
+        memory::{MappedView, VmAddr},
+    };
 
     #[derive(Default)]
     pub(crate) struct TlsDescArgs;
@@ -178,6 +203,7 @@ mod disabled {
             _image: Option<MappedView<u8>>,
             _unregister: fn(TlsModuleId),
             _init_tls: fn(TlsImageSource, TlsModuleId, Option<TlsTpOffset>) -> Result<()>,
+            _tls_get_addr: extern "C" fn(*const TlsIndex) -> *mut u8,
         ) -> Option<Self> {
             None
         }
@@ -209,6 +235,15 @@ mod disabled {
 
         pub(crate) fn init_tls(&self, _source: TlsImageSource) -> Result<()> {
             Ok(())
+        }
+
+        pub(crate) fn addr(&self, _offset: usize) -> Option<VmAddr> {
+            None
+        }
+
+        #[inline]
+        pub(crate) fn tls_get_addr(&self) -> VmAddr {
+            VmAddr::null()
         }
     }
 }

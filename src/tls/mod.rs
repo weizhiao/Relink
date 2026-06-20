@@ -12,7 +12,7 @@ mod relocation;
 mod state;
 mod traits;
 
-pub(crate) use defs::{TLS_GET_ADDR, TlsImageProvider, tls_image_provider_handle};
+pub(crate) use defs::{TlsImageProvider, tls_image_provider_handle};
 pub(crate) use state::{CoreTlsDescArgs, CoreTlsState, TlsDescArgs};
 
 pub use defs::{TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset};

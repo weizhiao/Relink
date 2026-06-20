@@ -9,6 +9,7 @@ mod enabled {
         relocation::{
             BindingMode, ObjectRelocationArch, RelocationArch, SupportLazy, SymDef, unlikely,
         },
+        runtime::NativeCodeExecutor,
         sync::Arc,
     };
     use core::ptr::NonNull;
@@ -21,11 +22,18 @@ mod enabled {
 
     impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess> SupportLazy for RawElf<D, Arch, R> {}
 
-    fn lookup_addr<Arch: RelocationArch>(source: &dyn Module<Arch>, name: &str) -> Option<VmAddr> {
+    fn lookup_addr<Arch: RelocationArch>(
+        source: &dyn Module<Arch>,
+        name: &str,
+    ) -> Result<Option<VmAddr>> {
         let syminfo = SymbolInfo::from_str(name, None);
         let mut precompute = syminfo.precompute();
-        let sym = source.exports().lookup(&syminfo, &mut precompute)?;
-        Some(SymDef::<(), Arch>::new(Some(sym), source).convert())
+        let Some(sym) = source.exports().lookup(&syminfo, &mut precompute) else {
+            return Ok(None);
+        };
+        SymDef::<(), Arch>::new(Some(sym), source)
+            .resolve_addr(&NativeCodeExecutor)
+            .map(Some)
     }
 
     pub(crate) enum ResolvedBinding {
@@ -212,10 +220,19 @@ mod enabled {
         let Some(scope) = dynamic_info.lazy.scope.get() else {
             invalid_state(dylib.path.as_str(), "missing lazy lookup")
         };
-        let symbol = scope
-            .iter()
-            .find_map(|source| lookup_addr::<NativeArch>(&**source, syminfo.name()))
-            .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()));
+        let mut symbol = None;
+        for source in scope.iter() {
+            match lookup_addr::<NativeArch>(&**source, syminfo.name()) {
+                Ok(Some(addr)) => {
+                    symbol = Some(addr);
+                    break;
+                }
+                Ok(None) => {}
+                Err(_) => invalid_state(dylib.path.as_str(), "lazy IFUNC resolution failed"),
+            }
+        }
+        let symbol =
+            symbol.unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()));
 
         unsafe {
             if ImageMemory::write_value(

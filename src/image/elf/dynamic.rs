@@ -18,12 +18,12 @@ use crate::{
     },
     runtime::CodeExecutor,
     segment::{ElfSegments, MemoryProtection},
-    tls::{CoreTlsDescArgs, CoreTlsState, TlsInfo, TlsModuleId, TlsResolver, TlsTpOffset},
+    tls::{CoreTlsDescArgs, CoreTlsState, TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{cell::OnceCell, mem::size_of, ptr::NonNull};
 
-use crate::image::{ElfCore, LoadedCore, core::CoreInner, exports_handle};
+use crate::image::{ElfCore, LoadedCore, ModuleTls, core::CoreInner, exports_handle};
 
 impl<L: ElfLayout> SymbolTable<L> {
     pub(crate) fn from_dynamic<Arch, R>(
@@ -203,8 +203,6 @@ where
     interp: Option<&'static str>,
     /// Core component containing the basic ELF object information
     module: ElfCore<D, Arch, R>,
-    /// Default `__tls_get_addr` entry point inserted into relocation scope.
-    tls_get_addr: VmAddr,
     /// Extra data needed for relocation
     extra: ElfExtraData<Arch>,
 }
@@ -231,19 +229,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         self.entry
     }
 
-    /// Returns the TLS module id assigned to this image, when registered.
-    pub fn tls_mod_id(&self) -> Option<TlsModuleId> {
-        self.module.tls_mod_id()
-    }
-
-    /// Gets the TLS thread pointer offset
-    pub fn tls_tp_offset(&self) -> Option<TlsTpOffset> {
-        self.module.tls_tp_offset()
-    }
-
-    #[inline]
-    pub(crate) fn default_tls_get_addr(&self) -> VmAddr {
-        self.tls_get_addr
+    /// Returns TLS metadata associated with this image.
+    pub fn tls(&self) -> ModuleTls {
+        self.module.tls()
     }
 
     /// Gets the core component reference of the ELF object.
@@ -523,7 +511,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
         Ok(RawDynamic {
             entry,
             interp,
-            tls_get_addr: VmAddr::from_ptr(Tls::tls_get_addr as *const ()),
             extra: ElfExtraData::<Arch> {
                 lazy: cfg!(feature = "lazy-binding") && !dynamic.bind_now,
                 relro,
@@ -564,6 +551,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
                         tls_image,
                         Tls::unregister,
                         Tls::init_tls,
+                        Tls::tls_get_addr,
                     ),
                     tls_desc_args: CoreTlsDescArgs::default(),
                     segments,
@@ -574,10 +562,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> RawDynamic<D, Arch, R> {
 
     /// Creates a relocation builder for this dynamic image.
     pub fn relocator(self) -> Relocator<Self, (), (), Arch> {
-        let tls_get_addr = self.default_tls_get_addr();
-        Relocator::<(), (), (), Arch>::new()
-            .with_default_tls_get_addr(tls_get_addr)
-            .with_object(self)
+        Relocator::<(), (), (), Arch>::new().with_object(self)
     }
 }
 

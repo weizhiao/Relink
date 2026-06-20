@@ -1,7 +1,7 @@
 use crate::{
     arch::NativeArch,
     elf::{ElfLayout, ElfSymbol, PreCompute, SymbolInfo, SymbolTable},
-    memory::ImageMemory,
+    memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
     sync::Arc,
     tls::{TlsModuleId, TlsTpOffset},
@@ -61,35 +61,75 @@ where
 }
 
 /// TLS metadata associated with a runtime module.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ModuleTls {
-    mod_id: Option<TlsModuleId>,
-    tp_offset: Option<TlsTpOffset>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModuleTls {
+    /// No TLS metadata is available for the module.
+    None,
+    /// The module has a static TLS block at a fixed thread-pointer offset.
+    Static {
+        mod_id: TlsModuleId,
+        tp_offset: TlsTpOffset,
+    },
+    /// The module uses dynamic TLS and resolves addresses through `__tls_get_addr`.
+    Dynamic {
+        mod_id: TlsModuleId,
+        tls_get_addr: VmAddr,
+    },
+}
+
+impl Default for ModuleTls {
+    #[inline]
+    fn default() -> Self {
+        Self::None
+    }
 }
 
 impl ModuleTls {
     /// No TLS metadata is available for the module.
-    pub const NONE: Self = Self {
-        mod_id: None,
-        tp_offset: None,
-    };
+    pub const NONE: Self = Self::None;
 
     /// Creates module TLS metadata from the registered dynamic and static TLS values.
     #[inline]
-    pub const fn new(mod_id: Option<TlsModuleId>, tp_offset: Option<TlsTpOffset>) -> Self {
-        Self { mod_id, tp_offset }
+    pub const fn new(
+        mod_id: Option<TlsModuleId>,
+        tp_offset: Option<TlsTpOffset>,
+        tls_get_addr: Option<VmAddr>,
+    ) -> Self {
+        match (mod_id, tp_offset, tls_get_addr) {
+            (Some(mod_id), Some(tp_offset), _) => Self::Static { mod_id, tp_offset },
+            (Some(mod_id), None, Some(tls_get_addr)) => Self::Dynamic {
+                mod_id,
+                tls_get_addr,
+            },
+            _ => Self::None,
+        }
     }
 
     /// Returns the registered TLS module id, when available.
     #[inline]
     pub const fn mod_id(self) -> Option<TlsModuleId> {
-        self.mod_id
+        match self {
+            Self::None => None,
+            Self::Static { mod_id, .. } | Self::Dynamic { mod_id, .. } => Some(mod_id),
+        }
     }
 
     /// Returns the static TLS thread-pointer offset, when available.
     #[inline]
     pub const fn tp_offset(self) -> Option<TlsTpOffset> {
-        self.tp_offset
+        match self {
+            Self::Static { tp_offset, .. } => Some(tp_offset),
+            Self::None | Self::Dynamic { .. } => None,
+        }
+    }
+
+    /// Returns the runtime `__tls_get_addr` entry point, when available.
+    #[inline]
+    pub const fn tls_get_addr(self) -> Option<VmAddr> {
+        match self {
+            Self::Dynamic { tls_get_addr, .. } => Some(tls_get_addr),
+            Self::None | Self::Static { .. } => None,
+        }
     }
 }
 

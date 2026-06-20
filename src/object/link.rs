@@ -13,7 +13,7 @@ use crate::{
     },
     relocate_context_error,
     relocation::{
-        ObjectRelocationArch, RelocHelper, RelocateArgs, RelocationHandler, resolve_symbol_addr,
+        ObjectRelocationArch, RelocHelper, RelocateArgs, RelocationHandler, find_symdef_impl,
     },
     runtime::CodeExecutor,
 };
@@ -71,7 +71,7 @@ where
             observer,
             ..
         } = args;
-        self.simplify_symbols(&scope, observer)?;
+        self.simplify_symbols(&scope, observer, executor.as_ref())?;
 
         let relocation_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
@@ -175,7 +175,12 @@ where
         Ok(())
     }
 
-    fn simplify_symbols<Obs>(&mut self, scope: &ModuleScope<Arch>, observer: &mut Obs) -> Result<()>
+    fn simplify_symbols<Obs>(
+        &mut self,
+        scope: &ModuleScope<Arch>,
+        observer: &mut Obs,
+        executor: &dyn CodeExecutor<Arch>,
+    ) -> Result<()>
     where
         Obs: RelocationObserver<Arch> + ?Sized,
     {
@@ -190,7 +195,13 @@ where
                 }
 
                 let addr = if symbol.is_undef() {
-                    let resolved = resolve_symbol_addr(&self.core, scope, symbol, &syminfo);
+                    let resolved = if let Some(symdef) =
+                        find_symdef_impl(&self.core, scope, symbol, &syminfo)
+                    {
+                        Some(symdef.resolve_addr(executor)?)
+                    } else {
+                        None
+                    };
                     let mut event =
                         SymbolBindingEvent::new(&self.core, None, symbol, syminfo.name(), resolved);
                     observer.on_symbol_binding(&mut event)?;
