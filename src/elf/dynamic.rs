@@ -1,6 +1,6 @@
 //! Parsing `.dynamic` section
 use crate::{
-    ParseDynamicError, Result,
+    ParseDynamicError, RelocTableError, Result,
     arch::NativeArch,
     elf::{
         ElfDynRaw, ElfDynamicTag, ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, ElfWord,
@@ -70,9 +70,12 @@ pub(crate) struct ParsedDynamic {
     pub(crate) pltrel_off: Option<NonZeroUsize>,
     pub(crate) rel_off: Option<NonZeroUsize>,
     pub(crate) rel_size: Option<NonZeroUsize>,
+    pub(crate) rel_entry_size: Option<usize>,
+    pub(crate) rela_entry_size: Option<usize>,
     pub(crate) rel_count: Option<NonZeroUsize>,
     pub(crate) relr_off: Option<NonZeroUsize>,
     pub(crate) relr_size: Option<NonZeroUsize>,
+    pub(crate) relr_entry_size: Option<usize>,
     pub(crate) init_off: Option<NonZeroUsize>,
     pub(crate) fini_off: Option<NonZeroUsize>,
     pub(crate) init_array_off: Option<NonZeroUsize>,
@@ -133,7 +136,10 @@ impl ParsedDynamic {
             ElfDynamicTag::RELASZ | ElfDynamicTag::RELSZ => {
                 self.rel_size = NonZeroUsize::new(value)
             }
+            ElfDynamicTag::RELAENT => self.rela_entry_size = Some(value),
+            ElfDynamicTag::RELENT => self.rel_entry_size = Some(value),
             ElfDynamicTag::RELRSZ => self.relr_size = NonZeroUsize::new(value),
+            ElfDynamicTag::RELRENT => self.relr_entry_size = Some(value),
             ElfDynamicTag::RELACOUNT | ElfDynamicTag::RELCOUNT => {
                 self.rel_count = NonZeroUsize::new(value)
             }
@@ -188,7 +194,9 @@ where
         dynamic_entries
             .as_slice()
             .first()
-            .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_NULL" })?;
+            .ok_or(ParseDynamicError::MissingRequiredTag {
+                tag: ElfDynamicTag::NULL,
+            })?;
         let parsed = parse_dynamic_entries(
             dynamic_entries
                 .as_slice()
@@ -233,7 +241,7 @@ where
             ElfDynamicHashTab::Elf(add_base(off)?)
         } else {
             return Err(ParseDynamicError::MissingRequiredTag {
-                tag: "DT_GNU_HASH or DT_HASH",
+                tag: ElfDynamicTag::GNU_HASH,
             }
             .into());
         };
@@ -247,8 +255,8 @@ where
                         VmOffset::new(pltrel_off.get()),
                         parsed.pltrel_size.map(|len| len.get()).unwrap_or(0),
                     )
-                    .ok_or(ParseDynamicError::MalformedRelocationTable {
-                        detail: "DT_JMPREL relocation table size is malformed",
+                    .ok_or(ParseDynamicError::InvalidRelocTable {
+                        reason: RelocTableError::JmpRelSize,
                     })?;
                 Ok(view)
             })
@@ -256,13 +264,48 @@ where
         let dynrel = parsed
             .rel_off
             .map(|rel_off| -> Result<_> {
+                if parsed.is_rela.unwrap_or(false) {
+                    let entry_size =
+                        parsed
+                            .rela_entry_size
+                            .ok_or(ParseDynamicError::MissingRequiredTag {
+                                tag: ElfDynamicTag::RELAENT,
+                            })?;
+                    let expected = size_of::<ElfRela<Arch::Layout>>();
+                    if entry_size != expected {
+                        return Err(ParseDynamicError::InvalidRelocTable {
+                            reason: RelocTableError::RelaEntrySize {
+                                expected,
+                                actual: entry_size,
+                            },
+                        }
+                        .into());
+                    }
+                } else {
+                    let entry_size =
+                        parsed
+                            .rel_entry_size
+                            .ok_or(ParseDynamicError::MissingRequiredTag {
+                                tag: ElfDynamicTag::RELENT,
+                            })?;
+                    let expected = size_of::<ElfRel<Arch::Layout>>();
+                    if entry_size != expected {
+                        return Err(ParseDynamicError::InvalidRelocTable {
+                            reason: RelocTableError::RelEntrySize {
+                                expected,
+                                actual: entry_size,
+                            },
+                        }
+                        .into());
+                    }
+                }
                 let view = segments
                     .read_view::<ElfRelType<Arch>>(
                         VmOffset::new(rel_off.get()),
                         parsed.rel_size.map(|len| len.get()).unwrap_or(0),
                     )
-                    .ok_or(ParseDynamicError::MalformedRelocationTable {
-                        detail: "DT_REL/DT_RELA relocation table size is malformed",
+                    .ok_or(ParseDynamicError::InvalidRelocTable {
+                        reason: RelocTableError::DynRelSize,
                     })?;
                 Ok(view)
             })
@@ -270,13 +313,29 @@ where
         let relr = parsed
             .relr_off
             .map(|relr_off| -> Result<_> {
+                let entry_size =
+                    parsed
+                        .relr_entry_size
+                        .ok_or(ParseDynamicError::MissingRequiredTag {
+                            tag: ElfDynamicTag::RELRENT,
+                        })?;
+                let expected = size_of::<ElfRelr<Arch::Layout>>();
+                if entry_size != expected {
+                    return Err(ParseDynamicError::InvalidRelocTable {
+                        reason: RelocTableError::RelrEntrySize {
+                            expected,
+                            actual: entry_size,
+                        },
+                    }
+                    .into());
+                }
                 let view = segments
                     .read_view::<ElfRelr<Arch::Layout>>(
                         VmOffset::new(relr_off.get()),
                         parsed.relr_size.map(|len| len.get()).unwrap_or(0),
                     )
-                    .ok_or(ParseDynamicError::MalformedRelocationTable {
-                        detail: "DT_RELR relocation table size is malformed",
+                    .ok_or(ParseDynamicError::InvalidRelocTable {
+                        reason: RelocTableError::RelrSize,
                     })?;
                 Ok(view)
             })
@@ -310,7 +369,7 @@ where
                     parsed
                         .verneed_num
                         .ok_or(ParseDynamicError::MissingRequiredTag {
-                            tag: "DT_VERNEEDNUM",
+                            tag: ElfDynamicTag::VERNEEDNUM,
                         })?,
                 ))
             })
@@ -323,7 +382,7 @@ where
                     parsed
                         .verdef_num
                         .ok_or(ParseDynamicError::MissingRequiredTag {
-                            tag: "DT_VERDEFNUM",
+                            tag: ElfDynamicTag::VERDEFNUM,
                         })?,
                 ))
             })
@@ -536,5 +595,19 @@ mod tests {
 
         assert!(parsed.symbolic);
         assert_eq!(parsed.flags & DF_SYMBOLIC as usize, DF_SYMBOLIC as usize);
+    }
+
+    #[test]
+    fn parses_relocation_entry_size_tags() {
+        let parsed = parse_dynamic_entries([
+            (ElfDynamicTag::RELAENT, 24),
+            (ElfDynamicTag::RELENT, 16),
+            (ElfDynamicTag::RELRENT, 8),
+            (ElfDynamicTag::NULL, 0),
+        ]);
+
+        assert_eq!(parsed.rela_entry_size, Some(24));
+        assert_eq!(parsed.rel_entry_size, Some(16));
+        assert_eq!(parsed.relr_entry_size, Some(8));
     }
 }

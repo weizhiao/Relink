@@ -4,8 +4,9 @@ use crate::{
     AlignedBytes, ParseDynamicError, ParsePhdrError, Result,
     arch::NativeArch,
     elf::{
-        ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, ElfSectionFlags, ElfSectionId,
-        ElfSectionType, ElfShdr, ElfStringTable, NativeElfLayout, parse_dynamic_entries,
+        ElfDyn, ElfDynamicTag, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, ElfSectionFlags,
+        ElfSectionId, ElfSectionType, ElfShdr, ElfStringTable, NativeElfLayout,
+        parse_dynamic_entries,
     },
     input::{ElfReader, ElfReaderExt, Path, PathBuf},
     loader::ScanBuilder,
@@ -52,7 +53,9 @@ impl DynamicScanParts {
         let strtab_file_off = vaddr_to_file_offset(strtab_vaddr.get(), phdrs)?;
         let strtab_size = parsed
             .strtab_size
-            .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_STRSZ" })?
+            .ok_or(ParseDynamicError::MissingRequiredTag {
+                tag: ElfDynamicTag::STRSZ,
+            })?
             .get();
         let strtab = object.read_to_vec(strtab_file_off, strtab_size)?;
 

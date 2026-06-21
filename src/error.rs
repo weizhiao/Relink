@@ -1,4 +1,4 @@
-use crate::elf::{ElfClass, ElfFileType, ElfMachine};
+use crate::elf::{ElfClass, ElfDynamicTag, ElfFileType, ElfMachine};
 use alloc::{borrow::Cow, boxed::Box};
 use core::fmt::{self, Display};
 
@@ -205,12 +205,65 @@ impl Display for MmapError {
     }
 }
 
+/// Structured relocation-table parsing error details.
+pub enum RelocTableError {
+    /// `DT_JMPREL` table size is malformed.
+    JmpRelSize,
+    /// `DT_REL`/`DT_RELA` table size is malformed.
+    DynRelSize,
+    /// `DT_RELR` table size is malformed.
+    RelrSize,
+    /// `DT_RELAENT` does not match the selected `ElfRela` layout.
+    RelaEntrySize {
+        /// Expected `ElfRela` entry size.
+        expected: usize,
+        /// Actual `DT_RELAENT` value.
+        actual: usize,
+    },
+    /// `DT_RELENT` does not match the selected `ElfRel` layout.
+    RelEntrySize {
+        /// Expected `ElfRel` entry size.
+        expected: usize,
+        /// Actual `DT_RELENT` value.
+        actual: usize,
+    },
+    /// `DT_RELRENT` does not match the selected `ElfRelr` layout.
+    RelrEntrySize {
+        /// Expected `ElfRelr` entry size.
+        expected: usize,
+        /// Actual `DT_RELRENT` value.
+        actual: usize,
+    },
+}
+
+impl Display for RelocTableError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::JmpRelSize => f.write_str("DT_JMPREL relocation table size is malformed"),
+            Self::DynRelSize => f.write_str("DT_REL/DT_RELA relocation table size is malformed"),
+            Self::RelrSize => f.write_str("DT_RELR relocation table size is malformed"),
+            Self::RelaEntrySize { expected, actual } => write!(
+                f,
+                "DT_RELAENT relocation entry size {actual} does not match ElfRela size {expected}"
+            ),
+            Self::RelEntrySize { expected, actual } => write!(
+                f,
+                "DT_RELENT relocation entry size {actual} does not match ElfRel size {expected}"
+            ),
+            Self::RelrEntrySize { expected, actual } => write!(
+                f,
+                "DT_RELRENT relocation entry size {actual} does not match ElfRelr size {expected}"
+            ),
+        }
+    }
+}
+
 /// Structured dynamic-section parsing error details.
 pub enum ParseDynamicError {
     /// `{tag}` is required by the ABI but missing from the dynamic section.
     MissingRequiredTag {
-        /// Name of the required dynamic tag.
-        tag: &'static str,
+        /// Required dynamic tag.
+        tag: ElfDynamicTag,
     },
     /// A dynamic-section address calculation overflowed.
     AddressOverflow,
@@ -235,10 +288,10 @@ pub enum ParseDynamicError {
         /// Number of dynamic relocation entries available after relative relocations.
         dynrel_tail_len: usize,
     },
-    /// A relocation table described by the dynamic section is malformed.
-    MalformedRelocationTable {
-        /// Static detail describing why the table is malformed.
-        detail: &'static str,
+    /// A relocation table described by the dynamic section is invalid.
+    InvalidRelocTable {
+        /// Structured reason why the relocation table is malformed.
+        reason: RelocTableError,
     },
     /// A required dynamic hash subtable is empty.
     EmptyHashTable {
@@ -296,7 +349,7 @@ impl Display for ParseDynamicError {
                 f,
                 "PLT relocation tail length {plt_len} exceeds remaining dynamic relocation length {dynrel_tail_len}"
             ),
-            Self::MalformedRelocationTable { detail } => f.write_str(detail),
+            Self::InvalidRelocTable { reason } => Display::fmt(reason, f),
             Self::EmptyHashTable { table } => write!(f, "{table} is empty"),
             Self::GnuHashBucketBeforeSymbolBias {
                 bucket_symbol,
@@ -908,6 +961,7 @@ macro_rules! debug_as_display {
 debug_as_display!(
     IoError,
     MmapError,
+    RelocTableError,
     ParseDynamicError,
     ParseEhdrError,
     ParseShdrError,

@@ -53,7 +53,9 @@ impl<L: ElfLayout> SymbolTable<L> {
 
         let strtab_size = dynamic
             .strtab_size
-            .ok_or(ParseDynamicError::MissingRequiredTag { tag: "DT_STRSZ" })?;
+            .ok_or(ParseDynamicError::MissingRequiredTag {
+                tag: ElfDynamicTag::STRSZ,
+            })?;
         let strtab_off = dynamic
             .strtab
             .checked_offset_from(segments.base())
