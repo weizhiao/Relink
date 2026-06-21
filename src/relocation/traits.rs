@@ -360,9 +360,9 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver, H>
 
     /// Find symbol definition in the current scope
     #[inline]
-    pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, D, Arch, Tls>> {
+    pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, Arch, Tls>> {
         let (sym, syminfo) = self.symbol(r_sym);
-        find_symdef_impl(self.lib, self.scope, sym, &syminfo)
+        find_symdef_impl(self.lib, self.scope, sym, &syminfo, self.lib.symbolic())
     }
 }
 

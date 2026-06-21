@@ -89,6 +89,7 @@ pub(crate) struct ParsedDynamic {
     pub(crate) runpath_off: Option<NonZeroUsize>,
     pub(crate) dt_debug_idx: Option<usize>,
     pub(crate) bind_now: bool,
+    pub(crate) symbolic: bool,
     pub(crate) flags: usize,
     pub(crate) flags_1: usize,
     pub(crate) is_rela: Option<bool>,
@@ -115,6 +116,7 @@ impl ParsedDynamic {
             ElfDynamicTag::HASH => self.elf_hash_off = Some(value),
             ElfDynamicTag::GNU_HASH => self.gnu_hash_off = Some(value),
             ElfDynamicTag::BIND_NOW => self.bind_now = true,
+            ElfDynamicTag::SYMBOLIC => self.symbolic = true,
             ElfDynamicTag::SONAME => self.soname_off = NonZeroUsize::new(value),
             ElfDynamicTag::SYMTAB => self.symtab_off = value,
             ElfDynamicTag::STRTAB => self.strtab_off = value,
@@ -338,6 +340,7 @@ where
             bind_now: parsed.bind_now
                 || parsed.flags & DF_BIND_NOW as usize != 0
                 || parsed.flags_1 & DF_1_NOW as usize != 0,
+            symbolic: parsed.symbolic || parsed.flags & DF_SYMBOLIC as usize != 0,
             static_tls: parsed.flags & DF_STATIC_TLS as usize != 0,
             got_plt: parsed
                 .got_off
@@ -430,6 +433,8 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     pub strtab_size: Option<NonZeroUsize>,
     /// Whether to bind symbols immediately.
     pub bind_now: bool,
+    /// Whether relocations in this object prefer definitions from itself.
+    pub symbolic: bool,
     /// Whether the object uses static thread-local storage.
     pub static_tls: bool,
     /// Global Offset Table address.
@@ -471,6 +476,7 @@ impl<Arch: RelocationArch> Debug for ElfDynamic<Arch> {
             .field("symtab", &format_args!("0x{:x}", self.symtab.get()))
             .field("strtab", &format_args!("0x{:x}", self.strtab.get()))
             .field("bind_now", &self.bind_now)
+            .field("symbolic", &self.symbolic)
             .field("static_tls", &self.static_tls)
             .field("got_plt", &self.got_plt)
             .field("needed_libs_count", &self.needed_libs.len())
@@ -494,6 +500,7 @@ impl<Arch: RelocationArch> Debug for ElfDynamic<Arch> {
 mod tests {
     use super::{ElfDyn, ElfDynamicTag, parse_dynamic_entries};
     use core::num::NonZeroUsize;
+    use elf::abi::DF_SYMBOLIC;
 
     #[test]
     fn owned_dyn_round_trips_and_mutates() {
@@ -517,5 +524,17 @@ mod tests {
 
         assert_eq!(parsed.soname_off, NonZeroUsize::new(0x24));
         assert!(parsed.bind_now);
+    }
+
+    #[test]
+    fn parses_symbolic_dynamic_flags() {
+        let parsed = parse_dynamic_entries([
+            (ElfDynamicTag::SYMBOLIC, 0),
+            (ElfDynamicTag::FLAGS, DF_SYMBOLIC as usize),
+            (ElfDynamicTag::NULL, 0),
+        ]);
+
+        assert!(parsed.symbolic);
+        assert_eq!(parsed.flags & DF_SYMBOLIC as usize, DF_SYMBOLIC as usize);
     }
 }

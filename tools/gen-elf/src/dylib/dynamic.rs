@@ -28,6 +28,7 @@ impl DynamicMetadata {
         sections: &[Section],
         allocator: &mut SectionAllocator,
         bind_now: bool,
+        symbolic: bool,
         soname_offset: Option<u32>,
         needed_offsets: &[u32],
     ) -> Self {
@@ -44,8 +45,15 @@ impl DynamicMetadata {
         for offset in needed_offsets {
             instance.insert_entry(DT_NEEDED, *offset as u64);
         }
+        let mut flags = 0;
         if bind_now {
-            instance.update_entry(DT_FLAGS, DF_BIND_NOW as u64);
+            flags |= DF_BIND_NOW as u64;
+        }
+        if symbolic {
+            flags |= DF_SYMBOLIC as u64;
+        }
+        if flags != 0 {
+            instance.update_entry(DT_FLAGS, flags);
         }
         instance
     }
