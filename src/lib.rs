@@ -160,6 +160,7 @@ pub mod arch;
 pub mod elf;
 mod entity;
 mod error;
+mod hint;
 pub mod image;
 pub mod input;
 pub mod linker;

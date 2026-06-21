@@ -2,13 +2,14 @@
 use crate::{
     ParseDynamicError, RelocReason, Result,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
+    hint::{likely, unlikely},
     image::{LoadedCore, RawDynamic},
     logging,
     memory::{ImageMemory, MappedView, RegionAccess, VmOffset},
     observer::{DynamicRelocatedEvent, Finalizer, RelocationObserver},
     relocation::{
         BindingMode, RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, ResolvedBinding,
-        likely, reloc_error, unlikely,
+        reloc_error,
     },
     runtime::CodeContext,
     tls::{TlsRelocOutcome, TlsResolver, handle_tls_reloc},

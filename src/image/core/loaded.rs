@@ -3,6 +3,7 @@ use crate::{
     Result,
     arch::ArchKind,
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolType, SymbolInfo},
+    hint::unlikely,
     image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, ModuleTls},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
@@ -183,7 +184,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'stat
 
     #[inline]
     fn lookup_addr(&self, sym: &ElfSymbol<Arch::Layout>) -> Option<VmAddr> {
-        if sym.symbol_type() == ElfSymbolType::TLS {
+        if unlikely(sym.symbol_type() == ElfSymbolType::TLS) {
             self.core.tls_addr(sym.st_value())
         } else {
             Some(SymDef::<Arch, Tls>::new(Some(sym), self).addr())

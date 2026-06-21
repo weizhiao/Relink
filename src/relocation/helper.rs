@@ -3,6 +3,7 @@ use crate::{
     elf::{
         ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, HashTable, SymbolInfo, SymbolTableView,
     },
+    hint::{likely, unlikely},
     image::{ElfCore, Module, ModuleScope},
     logging,
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
@@ -263,6 +264,7 @@ where
     }
 }
 
+#[cold]
 fn weak_undef<'lib, Arch, Tls, Source>(
     source: &'lib Source,
     sym: &'lib ElfSymbol<Arch::Layout>,
@@ -319,24 +321,4 @@ where
         scope_def().or_else(self_def)
     }
     .or_else(|| weak_undef(source, sym))
-}
-
-#[inline]
-#[cold]
-fn cold() {}
-
-#[inline]
-pub(crate) fn likely(b: bool) -> bool {
-    if !b {
-        cold()
-    }
-    b
-}
-
-#[inline]
-pub(crate) fn unlikely(b: bool) -> bool {
-    if b {
-        cold()
-    }
-    b
 }
