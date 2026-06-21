@@ -6,7 +6,12 @@ use std::{
     thread,
 };
 
-use elf_loader::{arch::NativeArch, image::Module, memory::VmOffset, relocation::RelocationArch};
+use elf_loader::{
+    arch::NativeArch,
+    image::Module,
+    memory::{VmAddr, VmOffset},
+    relocation::RelocationArch,
+};
 
 const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
 const REL_GOT: u32 = <NativeArch as RelocationArch>::GOT.raw();
@@ -184,8 +189,11 @@ impl BindingScenario {
                 .iter()
                 .find(|symbol| exports.symbol_name(symbol) == Some(symbol_name))
                 .unwrap_or_else(|| panic!("missing TLS symbol {symbol_name}"));
-            let expected = tls_symbol.st_value() as u64 + dtpoff.addend as u64
-                - NativeArch::TLS_DTV_OFFSET as u64;
+            let addend = isize::try_from(dtpoff.addend).expect("TLS addend should fit isize");
+            let expected = VmAddr::new(tls_symbol.st_value())
+                .wrapping_add_signed(addend)
+                .get()
+                .wrapping_sub(NativeArch::TLS_DTV_OFFSET) as u64;
             assert_eq!(
                 self.slot_word(dtpoff),
                 expected,

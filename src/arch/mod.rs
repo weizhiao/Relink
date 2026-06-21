@@ -70,6 +70,7 @@ impl core::fmt::Display for ArchKind {
 pub mod aarch64;
 pub mod arm;
 pub mod loongarch64;
+pub(crate) mod riscv;
 pub mod riscv32;
 pub mod riscv64;
 pub mod x86;

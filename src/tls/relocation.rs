@@ -89,12 +89,15 @@ mod enabled {
                 let Some(tls_get_addr) = request.tls_get_addr() else {
                     return Ok(TlsDescResolution::Failed(RelocReason::UnknownSymbol));
                 };
-                let offset = VmAddr::new(sym_value).wrapping_add_signed(addend);
+                let offset = VmAddr::new(sym_value)
+                    .wrapping_add_signed(addend)
+                    .get()
+                    .wrapping_sub(Arch::TLS_DTV_OFFSET);
                 let dynamic_arg = Box::new(TlsDescDynamicArg {
                     tls_get_addr: tls_get_addr.get(),
                     ti: TlsIndex {
                         ti_module: module_id,
-                        ti_offset: offset.get(),
+                        ti_offset: offset,
                     },
                 });
                 let arg_ptr = VmAddr::from_ptr(dynamic_arg.as_ref());

@@ -31,7 +31,7 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         sd a6,8*7(sp)
         sd a7,8*8(sp)
         ",
-        #[cfg(target_feature = "d")]
+        #[cfg(riscv_float_abi = "d")]
         "
         fsd fa0,8*9(sp)
         fsd fa1,8*10(sp)
@@ -42,7 +42,7 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         fsd fa6,8*15(sp)
         fsd fa7,8*16(sp)
         ",
-        #[cfg(all(target_feature = "f", not(target_feature = "d")))]
+        #[cfg(riscv_float_abi = "f")]
         "
         fsw fa0,8*9(sp)
         fsw fa1,8*10(sp)
@@ -71,7 +71,7 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         ld a6,8*7(sp)
         ld a7,8*8(sp)
         ",
-        #[cfg(target_feature = "d")]
+        #[cfg(riscv_float_abi = "d")]
         "
         fld fa0,8*9(sp)
         fld fa1,8*10(sp)
@@ -82,7 +82,7 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         fld fa6,8*15(sp)
         fld fa7,8*16(sp)
         ",
-        #[cfg(all(target_feature = "f", not(target_feature = "d")))]
+        #[cfg(riscv_float_abi = "f")]
         "
         flw fa0,8*9(sp)
         flw fa1,8*10(sp)

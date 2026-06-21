@@ -72,6 +72,12 @@ impl<L: ElfLayout> ElfHeader<L> {
         ElfMachine::new(self.ehdr.e_machine())
     }
 
+    /// Returns the processor-specific ELF header flags (`e_flags`).
+    #[inline]
+    pub fn e_flags(&self) -> u32 {
+        self.ehdr.e_flags()
+    }
+
     /// Returns the parsed ELF file type of this header.
     #[inline]
     pub fn file_type(&self) -> ElfFileType {

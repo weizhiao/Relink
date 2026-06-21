@@ -52,6 +52,7 @@ pub trait ElfEhdrRaw: 'static {
     fn e_ident(&self) -> &[u8; elf::abi::EI_NIDENT];
     fn e_type(&self) -> u16;
     fn e_machine(&self) -> u16;
+    fn e_flags(&self) -> u32;
     fn e_entry(&self) -> usize;
     fn e_phoff(&self) -> usize;
     fn e_shoff(&self) -> usize;
@@ -78,6 +79,11 @@ macro_rules! impl_ehdr_raw {
             #[inline]
             fn e_machine(&self) -> u16 {
                 self.e_machine
+            }
+
+            #[inline]
+            fn e_flags(&self) -> u32 {
+                self.e_flags
             }
 
             #[inline]

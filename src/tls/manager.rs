@@ -1,5 +1,8 @@
 use crate::{
-    Result, TlsError, logging,
+    Result, TlsError,
+    arch::NativeArch,
+    logging,
+    relocation::RelocationArch,
     sync::{AtomicUsize, Ordering},
     tls::{TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsResolver, TlsTemplate, TlsTpOffset},
 };
@@ -439,8 +442,8 @@ impl TlsResolver for DefaultTlsResolver {
             // get_or_allocate now handles synchronization internally.
             match dtv.get_or_allocate(ti.ti_module) {
                 Some(base_ptr) => {
-                    // Return address: Base of block + Offset
-                    unsafe { base_ptr.add(ti.ti_offset) }
+                    // Return address: Base of block + ABI TLS index offset.
+                    unsafe { base_ptr.add(ti.ti_offset.wrapping_add(NativeArch::TLS_DTV_OFFSET)) }
                 }
                 None => {
                     // If allocation fails (unknown module ID?), we panic for now.

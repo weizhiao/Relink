@@ -466,6 +466,15 @@ pub enum ParseEhdrError {
         /// Machine type found in the file header.
         found: ElfMachine,
     },
+    /// The target-specific ELF header flags are unsupported.
+    InvalidFlags {
+        /// Machine type whose `e_flags` were rejected.
+        machine: ElfMachine,
+        /// Raw `e_flags` value from the ELF header.
+        flags: u32,
+        /// Static detail describing why the flags are unsupported.
+        detail: &'static str,
+    },
     /// A shared object was required but the file type was different.
     ExpectedDylib {
         /// File type found in the ELF header.
@@ -501,6 +510,14 @@ impl Display for ParseEhdrError {
                 f,
                 "file arch mismatch: expected {}, found {}",
                 expected, found,
+            ),
+            Self::InvalidFlags {
+                machine,
+                flags,
+                detail,
+            } => write!(
+                f,
+                "invalid ELF header flags for {machine}: 0x{flags:x} ({detail})"
             ),
             Self::ExpectedDylib { found } => {
                 write!(f, "file type mismatch: expected ET_DYN, found {found}")

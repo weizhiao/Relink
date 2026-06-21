@@ -2,7 +2,8 @@
 
 use elf::abi::*;
 
-use crate::arch::ArchKind;
+use crate::Result;
+use crate::arch::{ArchKind, riscv};
 use crate::elf::{Elf32Layout, ElfMachine, ElfRela, ElfRelocationType};
 #[cfg(feature = "object")]
 use crate::relocation::ObjectRelocationArch;
@@ -31,9 +32,21 @@ impl RelocationArch for RiscV32Arch {
     const TPOFF: ElfRelocationType = ElfRelocationType::new(R_RISCV_TLS_TPREL32);
     // RISC-V does not define a TLSDESC relocation.
     const TLSDESC: Option<ElfRelocationType> = None;
+    const TLS_DTV_OFFSET: usize = 0x800;
 
     // `true` only when this ZST is the host's relocation backend.
     const SUPPORTS_NATIVE_RUNTIME: bool = cfg!(target_arch = "riscv32");
+
+    #[inline]
+    fn validate_e_flags(flags: u32) -> Result<()> {
+        if flags & EF_RISCV_RVE != 0 {
+            return riscv::invalid_flags(Self::MACHINE, flags, "RVE ABI is not supported");
+        }
+        if Self::SUPPORTS_NATIVE_RUNTIME {
+            riscv::validate_native_float_abi(Self::MACHINE, flags)?;
+        }
+        Ok(())
+    }
 
     #[inline]
     fn rel_type_to_str(r_type: ElfRelocationType) -> &'static str {

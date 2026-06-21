@@ -226,7 +226,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'stat
     }
 
     pub(crate) fn tls_addr(&self, offset: usize) -> Option<VmAddr> {
-        self.inner.tls.addr(offset)
+        self.inner
+            .tls
+            .addr(offset.wrapping_sub(Arch::TLS_DTV_OFFSET))
     }
 
     pub(crate) fn tls_get_addr(&self) -> Option<VmAddr> {

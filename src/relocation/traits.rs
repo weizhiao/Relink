@@ -73,6 +73,12 @@ pub trait RelocationArch: 'static {
     /// Cross-architecture implementations normally leave this as `false`.
     const SUPPORTS_NATIVE_RUNTIME: bool = false;
 
+    /// Validates architecture-specific ELF header flags.
+    #[inline]
+    fn validate_e_flags(_flags: u32) -> Result<()> {
+        Ok(())
+    }
+
     /// Returns whether `r_type` is this architecture's TLSDESC relocation.
     #[inline]
     fn is_tlsdesc(r_type: ElfRelocationType) -> bool {

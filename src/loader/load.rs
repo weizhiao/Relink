@@ -45,8 +45,11 @@ where
     /// [`Loader::for_arch`](super::Loader::for_arch) before calling
     /// `load_*`; the gate will then accept ELFs targeting `NewArch::MACHINE`.
     pub fn read_ehdr(&mut self, object: &impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
-        self.buf
-            .prepare_ehdr::<Arch::Layout>(object, Some(<Arch as RelocationArch>::MACHINE))
+        let ehdr = self
+            .buf
+            .prepare_ehdr::<Arch::Layout>(object, Some(<Arch as RelocationArch>::MACHINE))?;
+        Arch::validate_e_flags(ehdr.e_flags())?;
+        Ok(ehdr)
     }
 
     /// Reads the program header table.
