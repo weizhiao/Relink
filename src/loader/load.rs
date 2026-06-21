@@ -630,7 +630,7 @@ mod tests {
     };
     use alloc::vec::Vec;
     use core::mem::size_of;
-    use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, ET_DYN, EV_CURRENT};
+    use elf::abi::{EI_CLASS, EI_DATA, EI_VERSION, ELFMAGIC, ET_DYN, EV_CURRENT};
 
     struct TestReader {
         bytes: Vec<u8>,
@@ -704,6 +704,7 @@ mod tests {
         let mut ehdr = unsafe { core::mem::zeroed::<ElfEhdr>() };
         ehdr.e_ident[0..4].copy_from_slice(&ELFMAGIC);
         ehdr.e_ident[EI_CLASS] = <NativeElfLayout as ElfLayout>::E_CLASS;
+        ehdr.e_ident[EI_DATA] = <NativeElfLayout as ElfLayout>::DATA_ENCODING.raw();
         ehdr.e_ident[EI_VERSION] = EV_CURRENT;
         ehdr.e_type = ET_DYN as _;
         ehdr.e_machine = crate::arch::NativeArch::MACHINE.raw();

@@ -199,6 +199,57 @@ impl Display for ElfDynamicTag {
     }
 }
 
+/// Semantic wrapper for the ELF `EI_DATA` byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfDataEncoding(u8);
+
+impl ElfDataEncoding {
+    /// `ELFDATANONE`: invalid data encoding.
+    pub const NONE: Self = Self(ELFDATANONE);
+    /// `ELFDATA2LSB`: little-endian two's-complement data.
+    pub const LSB: Self = Self(ELFDATA2LSB);
+    /// `ELFDATA2MSB`: big-endian two's-complement data.
+    pub const MSB: Self = Self(ELFDATA2MSB);
+
+    /// Creates an ELF data encoding wrapper from a raw `EI_DATA` byte.
+    #[inline]
+    pub const fn new(raw: u8) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw `EI_DATA` byte.
+    #[inline]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for ElfDataEncoding {
+    #[inline]
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfDataEncoding> for u8 {
+    #[inline]
+    fn from(value: ElfDataEncoding) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfDataEncoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            ELFDATANONE => f.write_str("ELFDATANONE"),
+            ELFDATA2LSB => f.write_str("ELFDATA2LSB"),
+            ELFDATA2MSB => f.write_str("ELFDATA2MSB"),
+            raw => write!(f, "unknown ELF data encoding {raw}"),
+        }
+    }
+}
+
 /// Semantic wrapper for the ELF `p_type` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]

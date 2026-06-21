@@ -17,7 +17,7 @@ pub use raw::{Elf32Sym, ElfWord};
 pub(crate) use raw::{ElfDynRaw, ElfEhdrRaw, ElfPhdrRaw, ElfShdrRaw, ElfSymRaw};
 pub use rel::{ElfRel, ElfRelEntry, ElfRelType, ElfRela, ElfRelr};
 pub use types::{
-    ElfClass, ElfDynamicTag, ElfFileType, ElfMachine, ElfProgramFlags, ElfProgramType,
-    ElfRelocationType, ElfSectionFlags, ElfSectionId, ElfSectionIndex, ElfSectionType,
-    ElfSymbolBind, ElfSymbolType,
+    ElfClass, ElfDataEncoding, ElfDynamicTag, ElfFileType, ElfMachine, ElfProgramFlags,
+    ElfProgramType, ElfRelocationType, ElfSectionFlags, ElfSectionId, ElfSectionIndex,
+    ElfSectionType, ElfSymbolBind, ElfSymbolType,
 };

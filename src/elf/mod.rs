@@ -30,10 +30,10 @@ pub(crate) use symbol::ElfStringTable;
 
 // Public API exports
 pub use defs::{
-    Elf32Layout, Elf32Sym, Elf64Layout, ElfClass, ElfDynamicTag, ElfFileType, ElfLayout,
-    ElfMachine, ElfProgramFlags, ElfProgramType, ElfRel, ElfRelEntry, ElfRelType, ElfRela,
-    ElfRelocationType, ElfRelr, ElfSectionFlags, ElfSectionId, ElfSectionIndex, ElfSectionType,
-    ElfSymbolBind, ElfSymbolType, Lifecycle, NativeElfLayout,
+    Elf32Layout, Elf32Sym, Elf64Layout, ElfClass, ElfDataEncoding, ElfDynamicTag, ElfFileType,
+    ElfLayout, ElfMachine, ElfProgramFlags, ElfProgramType, ElfRel, ElfRelEntry, ElfRelType,
+    ElfRela, ElfRelocationType, ElfRelr, ElfSectionFlags, ElfSectionId, ElfSectionIndex,
+    ElfSectionType, ElfSymbolBind, ElfSymbolType, Lifecycle, NativeElfLayout,
 };
 pub use dynamic::ElfDyn;
 /// Core ELF data types for program headers, relocations, and symbols.

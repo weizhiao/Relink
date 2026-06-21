@@ -1,4 +1,4 @@
-use crate::elf::{ElfClass, ElfDynamicTag, ElfFileType, ElfMachine};
+use crate::elf::{ElfClass, ElfDataEncoding, ElfDynamicTag, ElfFileType, ElfMachine};
 use alloc::{borrow::Cow, boxed::Box};
 use core::fmt::{self, Display};
 
@@ -450,6 +450,13 @@ pub enum ParseEhdrError {
         /// ELF class found in the file header.
         found: ElfClass,
     },
+    /// `file endian mismatch: expected {expected}, found {found}`
+    FileEndianMismatch {
+        /// ELF data encoding expected by this build.
+        expected: ElfDataEncoding,
+        /// ELF data encoding found in the file header.
+        found: ElfDataEncoding,
+    },
     /// The ELF version is not `EV_CURRENT`.
     InvalidVersion,
     /// `file arch mismatch: expected {expected}, found {found}`
@@ -485,6 +492,10 @@ impl Display for ParseEhdrError {
             Self::FileClassMismatch { expected, found } => {
                 write!(f, "file class mismatch: expected {expected}, found {found}")
             }
+            Self::FileEndianMismatch { expected, found } => write!(
+                f,
+                "file endian mismatch: expected {expected}, found {found}"
+            ),
             Self::InvalidVersion => f.write_str("invalid ELF version"),
             Self::FileArchMismatch { expected, found } => write!(
                 f,

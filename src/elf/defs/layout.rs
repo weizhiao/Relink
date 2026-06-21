@@ -1,14 +1,23 @@
 //! ELF class layout selection.
 
-use super::raw::{
-    Elf32Sym, ElfDynRaw, ElfEhdrRaw, ElfPhdrRaw, ElfRelRaw, ElfRelaRaw, ElfShdrRaw, ElfSymRaw,
-    ElfWord,
+use super::{
+    raw::{
+        Elf32Sym, ElfDynRaw, ElfEhdrRaw, ElfPhdrRaw, ElfRelRaw, ElfRelaRaw, ElfShdrRaw, ElfSymRaw,
+        ElfWord,
+    },
+    types::ElfDataEncoding,
 };
 
 /// Groups the raw ELF types/constants selected for one ELF class.
 pub trait ElfLayout: 'static {
     /// ELF class value (`ELFCLASS32` or `ELFCLASS64`).
     const E_CLASS: u8;
+    /// ELF data encoding expected by this layout's raw field accessors.
+    const DATA_ENCODING: ElfDataEncoding = if cfg!(target_endian = "little") {
+        ElfDataEncoding::LSB
+    } else {
+        ElfDataEncoding::MSB
+    };
     /// Bit mask used to extract relocation type bits from `r_info`.
     const REL_MASK: usize;
     /// Bit shift used to extract relocation symbol bits from `r_info`.

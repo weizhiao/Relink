@@ -7,12 +7,13 @@
 use crate::{
     IoError, ParseEhdrError, ParsePhdrError, ParseShdrError, ReadBoundsError, Result,
     elf::{
-        ElfClass, ElfEhdrRaw, ElfFileType, ElfLayout, ElfMachine, ElfPhdr, ElfShdr, NativeElfLayout,
+        ElfClass, ElfDataEncoding, ElfEhdrRaw, ElfFileType, ElfLayout, ElfMachine, ElfPhdr,
+        ElfShdr, NativeElfLayout,
     },
 };
 use alloc::boxed::Box;
 use core::mem::size_of;
-use elf::abi::{EI_CLASS, EI_VERSION, ELFMAGIC, EV_CURRENT};
+use elf::abi::{EI_CLASS, EI_DATA, EI_VERSION, ELFMAGIC, EV_CURRENT};
 
 /// A wrapper around the ELF header structure
 ///
@@ -59,6 +60,12 @@ impl<L: ElfLayout> ElfHeader<L> {
         ElfClass::new(self.ehdr.e_ident()[EI_CLASS])
     }
 
+    /// Returns the parsed ELF data encoding (`EI_DATA`) byte.
+    #[inline]
+    pub fn data_encoding(&self) -> ElfDataEncoding {
+        ElfDataEncoding::new(self.ehdr.e_ident()[EI_DATA])
+    }
+
     /// Returns the parsed ELF machine type of this header.
     #[inline]
     pub fn machine(&self) -> ElfMachine {
@@ -95,6 +102,15 @@ impl<L: ElfLayout> ElfHeader<L> {
             return Err(ParseEhdrError::FileClassMismatch {
                 expected: ElfClass::new(L::E_CLASS),
                 found: class,
+            }
+            .into());
+        }
+
+        let data_encoding = self.data_encoding();
+        if data_encoding != L::DATA_ENCODING {
+            return Err(ParseEhdrError::FileEndianMismatch {
+                expected: L::DATA_ENCODING,
+                found: data_encoding,
             }
             .into());
         }
