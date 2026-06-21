@@ -366,6 +366,79 @@ impl Display for ParseDynamicError {
     }
 }
 
+/// Structured ELF note parsing error details.
+pub enum ParseNoteError {
+    /// The note alignment is not supported.
+    InvalidAlign {
+        /// Alignment value supplied by the note section or segment.
+        align: usize,
+    },
+    /// The note header is truncated.
+    Header {
+        /// Byte offset of the note header.
+        offset: usize,
+        /// Remaining bytes from `offset`.
+        remaining: usize,
+    },
+    /// The note name field is truncated.
+    Name {
+        /// Byte offset of the note header.
+        offset: usize,
+        /// Size declared by `n_namesz`.
+        size: usize,
+        /// Bytes remaining at the name field.
+        remaining: usize,
+    },
+    /// The note descriptor field is truncated.
+    Desc {
+        /// Byte offset of the note header.
+        offset: usize,
+        /// Size declared by `n_descsz`.
+        size: usize,
+        /// Bytes remaining at the descriptor field.
+        remaining: usize,
+    },
+    /// A note field offset calculation overflowed.
+    Overflow {
+        /// Byte offset of the note header.
+        offset: usize,
+    },
+}
+
+impl Display for ParseNoteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidAlign { align } => write!(f, "invalid ELF note alignment {align}"),
+            Self::Header { offset, remaining } => write!(
+                f,
+                "ELF note header at offset {offset} is truncated: {remaining} bytes remaining"
+            ),
+            Self::Name {
+                offset,
+                size,
+                remaining,
+            } => write!(
+                f,
+                "ELF note at offset {offset} has invalid name size {size}: {remaining} bytes remaining"
+            ),
+            Self::Desc {
+                offset,
+                size,
+                remaining,
+            } => write!(
+                f,
+                "ELF note at offset {offset} has invalid descriptor size {size}: {remaining} bytes remaining"
+            ),
+            Self::Overflow { offset } => {
+                write!(
+                    f,
+                    "ELF note at offset {offset} overflows address calculation"
+                )
+            }
+        }
+    }
+}
+
 /// Structured ELF header parsing error details.
 pub enum ParseEhdrError {
     /// The ELF magic bytes do not match `0x7fELF`.
@@ -834,6 +907,9 @@ pub enum Error {
     /// An error occurred while parsing program headers.
     ParsePhdr(ParsePhdrError),
 
+    /// An error occurred while parsing ELF notes.
+    ParseNote(ParseNoteError),
+
     /// An error occurred during linker resolution, planning, or materialization.
     Linker(LinkerError),
 
@@ -901,6 +977,12 @@ impl From<ParsePhdrError> for Error {
     }
 }
 
+impl From<ParseNoteError> for Error {
+    fn from(err: ParseNoteError) -> Self {
+        Self::ParseNote(err)
+    }
+}
+
 impl From<LinkerError> for Error {
     fn from(err: LinkerError) -> Self {
         Self::Linker(err)
@@ -935,6 +1017,7 @@ impl Display for Error {
             Self::ParseEhdr(err) => write!(f, "ELF header parsing error: {err}"),
             Self::ParseShdr(err) => write!(f, "Section header parsing error: {err}"),
             Self::ParsePhdr(err) => write!(f, "Program header parsing error: {err}"),
+            Self::ParseNote(err) => write!(f, "ELF note parsing error: {err}"),
             Self::Linker(err) => write!(f, "Linker error: {err}"),
             Self::Code(err) => write!(f, "Code execution error: {err}"),
             Self::Custom(err) => write!(f, "Custom error: {err}"),
@@ -966,6 +1049,7 @@ debug_as_display!(
     ParseEhdrError,
     ParseShdrError,
     ParsePhdrError,
+    ParseNoteError,
     RelocReason,
     RelocationFailure,
     RelocationError,

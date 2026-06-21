@@ -2,7 +2,7 @@ use crate::{
     arch::{ArchKind, NativeArch},
     elf::{ElfHeader, ElfLayout, ElfPhdr, NativeElfLayout},
     image::RawDynamic,
-    input::Path,
+    input::{ElfReader, Path},
     memory::{HostRegion, RegionAccess},
     relocation::RelocationArch,
     tls::TlsResolver,
@@ -12,6 +12,7 @@ use crate::{
 /// `PT_LOAD` segments are mapped.
 pub struct BeforeDynamicLoadEvent<'a, D: 'static, L: ElfLayout = NativeElfLayout> {
     path: &'a Path,
+    reader: &'a dyn ElfReader,
     ehdr: &'a ElfHeader<L>,
     phdrs: &'a [ElfPhdr<L>],
     user_data: &'a mut D,
@@ -21,12 +22,14 @@ impl<'a, D: 'static, L: ElfLayout> BeforeDynamicLoadEvent<'a, D, L> {
     #[inline]
     pub(crate) const fn new(
         path: &'a Path,
+        reader: &'a dyn ElfReader,
         ehdr: &'a ElfHeader<L>,
         phdrs: &'a [ElfPhdr<L>],
         user_data: &'a mut D,
     ) -> Self {
         Self {
             path,
+            reader,
             ehdr,
             phdrs,
             user_data,
@@ -37,6 +40,12 @@ impl<'a, D: 'static, L: ElfLayout> BeforeDynamicLoadEvent<'a, D, L> {
     #[inline]
     pub const fn path(&self) -> &Path {
         self.path
+    }
+
+    /// Returns the ELF reader for the source object.
+    #[inline]
+    pub const fn reader(&self) -> &dyn ElfReader {
+        self.reader
     }
 
     /// Returns the parsed ELF header.

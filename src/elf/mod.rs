@@ -12,6 +12,7 @@ mod defs;
 mod dynamic;
 mod ehdr;
 mod hash;
+mod note;
 mod phdr;
 mod shdr;
 mod symbol;
@@ -39,12 +40,14 @@ pub use dynamic::ElfDyn;
 pub use ehdr::ElfHeader;
 pub use hash::HashTable;
 pub use hash::PreCompute;
+pub use note::{ElfNhdr, ElfNote, ElfNotes};
 pub use phdr::ElfPhdr;
 pub use shdr::ElfShdr;
 pub use symbol::{ElfSymbol, SymbolInfo, SymbolTable, SymbolTableView};
 
 unsafe impl ByteRepr for defs::ElfEhdr {}
 unsafe impl<L: defs::ElfLayout> ByteRepr for dynamic::ElfDyn<L> {}
+unsafe impl ByteRepr for note::ElfNhdr {}
 unsafe impl<L: defs::ElfLayout> ByteRepr for phdr::ElfPhdr<L> {}
 unsafe impl<L: defs::ElfLayout> ByteRepr for shdr::ElfShdr<L> {}
 unsafe impl<L: defs::ElfLayout> ByteRepr for symbol::ElfSymbol<L> {}

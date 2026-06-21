@@ -223,6 +223,10 @@ impl ElfProgramType {
     pub const TLS: Self = Self(PT_TLS);
     /// `PT_GNU_EH_FRAME`: GNU exception-frame header segment.
     pub const GNU_EH_FRAME: Self = Self(PT_GNU_EH_FRAME);
+    /// `PT_GNU_PROPERTY`: GNU property note segment.
+    pub const GNU_PROPERTY: Self = Self(PT_GNU_PROPERTY);
+    /// `PT_GNU_STACK`: GNU stack permission segment.
+    pub const GNU_STACK: Self = Self(PT_GNU_STACK);
     /// `PT_GNU_RELRO`: GNU RELRO segment.
     pub const GNU_RELRO: Self = Self(PT_GNU_RELRO);
 
@@ -265,6 +269,8 @@ impl Display for ElfProgramType {
             PT_PHDR => f.write_str("PT_PHDR"),
             PT_TLS => f.write_str("PT_TLS"),
             PT_GNU_EH_FRAME => f.write_str("PT_GNU_EH_FRAME"),
+            PT_GNU_PROPERTY => f.write_str("PT_GNU_PROPERTY"),
+            PT_GNU_STACK => f.write_str("PT_GNU_STACK"),
             PT_GNU_RELRO => f.write_str("PT_GNU_RELRO"),
             raw => write!(f, "unknown ELF program type {raw}"),
         }

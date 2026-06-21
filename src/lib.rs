@@ -185,8 +185,8 @@ pub(crate) use error::*;
 pub use aligned_bytes::ByteRepr;
 pub use error::{
     CodeError, CustomError, Error, IoError, LinkerError, MmapError, ParseDynamicError,
-    ParseEhdrError, ParsePhdrError, ParseShdrError, RelocTableError, RelocationError,
-    RelocationFailure, TlsError,
+    ParseEhdrError, ParseNoteError, ParsePhdrError, ParseShdrError, RelocTableError,
+    RelocationError, RelocationFailure, TlsError,
 };
 pub use loader::Loader;
 

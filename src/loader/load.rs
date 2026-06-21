@@ -249,6 +249,7 @@ where
             .observer
             .on_before_dynamic_load(BeforeDynamicLoadEvent::new(
                 path.as_path(),
+                object,
                 &ehdr,
                 phdrs,
                 &mut user_data,
@@ -297,6 +298,7 @@ where
             .observer
             .on_before_dynamic_load(BeforeDynamicLoadEvent::new(
                 path.as_path(),
+                &reader,
                 &ehdr,
                 &phdrs,
                 &mut user_data,
@@ -423,6 +425,7 @@ where
                 .observer
                 .on_before_dynamic_load(BeforeDynamicLoadEvent::new(
                     path.as_path(),
+                    object,
                     &ehdr,
                     phdrs,
                     &mut user_data,

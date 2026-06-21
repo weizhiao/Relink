@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(phdr.p_memsz(), 5);
         assert_eq!(phdr.p_align(), 6);
 
-        phdr.set_program_type(ElfProgramType::DYNAMIC);
+        phdr.set_program_type(ElfProgramType::GNU_PROPERTY);
         phdr.set_flags(ElfProgramFlags::READ);
         phdr.set_p_offset(7);
         phdr.set_p_vaddr(VmOffset::new(8));
@@ -208,7 +208,7 @@ mod tests {
         phdr.set_p_memsz(11);
         phdr.set_p_align(12);
 
-        assert_eq!(phdr.program_type(), ElfProgramType::DYNAMIC);
+        assert_eq!(phdr.program_type(), ElfProgramType::GNU_PROPERTY);
         assert_eq!(phdr.flags(), ElfProgramFlags::READ);
         assert_eq!(phdr.p_offset(), 7);
         assert_eq!(phdr.p_vaddr(), VmOffset::new(8));
@@ -216,5 +216,8 @@ mod tests {
         assert_eq!(phdr.p_filesz(), 10);
         assert_eq!(phdr.p_memsz(), 11);
         assert_eq!(phdr.p_align(), 12);
+
+        phdr.set_program_type(ElfProgramType::GNU_STACK);
+        assert_eq!(phdr.program_type(), ElfProgramType::GNU_STACK);
     }
 }
