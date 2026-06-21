@@ -9,11 +9,11 @@ use elf_loader::{
 };
 
 const REL_GOT: u32 = <NativeArch as RelocationArch>::GOT.raw();
-use gen_elf::{Arch, ElfWriteOutput, RelocEntry, SymbolDesc};
+use gen_elf::{Arch, ElfWriteOutput, ElfWriterConfig, RelocEntry, SymbolDesc};
 use support::{
     dylib_relocation_checks::{relocation_for_symbol, slot_word},
     host_symbols::{EXTERNAL_VAR_NAME, TestHostSymbols},
-    test_dylib::{load_relocated_dylib, write_test_dylib},
+    test_dylib::{load_relocated_dylib, write_test_dylib, write_test_dylib_with_config},
 };
 
 const SHARED_VAR_NAME: &str = "shared_var";
@@ -27,6 +27,19 @@ fn write_got_consumer(symbol_name: &str) -> ElfWriteOutput {
     write_test_dylib(
         &[RelocEntry::glob_dat(symbol_name, arch)],
         &[SymbolDesc::undefined_object(symbol_name)],
+    )
+}
+
+fn write_defining_got_consumer(
+    config: ElfWriterConfig,
+    symbol_name: &str,
+    data: &[u8],
+) -> ElfWriteOutput {
+    let arch = Arch::current();
+    write_test_dylib_with_config(
+        config,
+        &[RelocEntry::glob_dat(symbol_name, arch)],
+        &[SymbolDesc::global_object(symbol_name, data)],
     )
 }
 
@@ -154,4 +167,56 @@ fn extend_scope_keeps_existing_precedence() {
     assert_eq!(scope.len(), 2, "all scope entries should be retained");
     assert_eq!(scope[0].name(), first.name());
     assert_eq!(scope[1].name(), second.name());
+}
+
+#[test]
+fn scope_definition_interposes_current_definition_by_default() {
+    let mut loader = Loader::new();
+    let helper_output = write_helper_dylib(SHARED_VAR_NAME, &[0x11, 0x22, 0x33, 0x44]);
+    let helper = load_relocated_dylib(&mut loader, "libscope.so", &helper_output);
+    let consumer_output = write_defining_got_consumer(
+        ElfWriterConfig::default().with_bind_now(true),
+        SHARED_VAR_NAME,
+        &[0x55, 0x66, 0x77, 0x88],
+    );
+
+    let relocated = loader
+        .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
+        .expect("failed to load consumer")
+        .relocator()
+        .scope(std::slice::from_ref(&helper))
+        .relocate()
+        .expect("failed to relocate consumer");
+
+    assert_eq!(
+        got_slot_word(&relocated, &consumer_output, SHARED_VAR_NAME),
+        symbol_address(&helper, SHARED_VAR_NAME)
+    );
+}
+
+#[test]
+fn df_symbolic_prefers_current_definition_over_scope() {
+    let mut loader = Loader::new();
+    let helper_output = write_helper_dylib(SHARED_VAR_NAME, &[0x11, 0x22, 0x33, 0x44]);
+    let helper = load_relocated_dylib(&mut loader, "libscope.so", &helper_output);
+    let consumer_output = write_defining_got_consumer(
+        ElfWriterConfig::default()
+            .with_bind_now(true)
+            .with_symbolic(true),
+        SHARED_VAR_NAME,
+        &[0x55, 0x66, 0x77, 0x88],
+    );
+
+    let relocated = loader
+        .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
+        .expect("failed to load consumer")
+        .relocator()
+        .scope(std::slice::from_ref(&helper))
+        .relocate()
+        .expect("failed to relocate consumer");
+
+    assert_eq!(
+        got_slot_word(&relocated, &consumer_output, SHARED_VAR_NAME),
+        symbol_address(&relocated, SHARED_VAR_NAME)
+    );
 }

@@ -69,6 +69,19 @@ fn write_scope_func_consumer(config: ElfWriterConfig) -> ElfWriteOutput {
 }
 
 #[cfg(feature = "lazy-binding")]
+fn write_defining_scope_func_consumer(config: ElfWriterConfig) -> ElfWriteOutput {
+    let arch = Arch::current();
+    write_test_dylib_with_config(
+        config,
+        &[RelocEntry::jump_slot(SCOPED_FUNC_NAME, arch)],
+        &[SymbolDesc::global_func(
+            SCOPED_FUNC_NAME,
+            &return_42_stub(arch),
+        )],
+    )
+}
+
+#[cfg(feature = "lazy-binding")]
 fn scope_symbol_address(image: &LoadedCore<()>, symbol_name: &str) -> u64 {
     unsafe {
         image
@@ -192,6 +205,33 @@ fn default_lazy_binding_retains_scope_used_only_by_lazy_jump_slot() {
         jump_slot_word(&relocated, &consumer_output),
         scoped_func_addr
     );
+}
+
+#[cfg(feature = "lazy-binding")]
+#[test]
+fn df_symbolic_lazy_jump_slot_prefers_current_definition() {
+    let mut loader = Loader::new();
+    let provider_output = write_scope_provider();
+    let provider = load_relocated_dylib(&mut loader, "libscope_provider.so", &provider_output);
+    let consumer_output =
+        write_defining_scope_func_consumer(ElfWriterConfig::default().with_symbolic(true));
+
+    let relocated = loader
+        .load_dylib(ElfBinary::new("scope_consumer.so", &consumer_output.data))
+        .expect("failed to load scope consumer")
+        .relocator()
+        .scope(std::slice::from_ref(&provider))
+        .relocate()
+        .expect("failed to relocate scope consumer");
+
+    let self_func_addr = scope_symbol_address(&relocated, SCOPED_FUNC_NAME);
+    assert_ne!(
+        jump_slot_word(&relocated, &consumer_output),
+        self_func_addr,
+        "default lazy binding should leave the jump slot unresolved before the first call"
+    );
+    assert_eq!(call_scope_helper(&relocated), 42);
+    assert_eq!(jump_slot_word(&relocated, &consumer_output), self_func_addr);
 }
 
 #[cfg(feature = "lazy-binding")]

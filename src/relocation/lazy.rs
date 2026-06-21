@@ -1,16 +1,15 @@
 #[cfg(feature = "lazy-binding")]
 mod enabled {
+    use super::super::helper::find_symdef_impl;
     use crate::image::{
         CoreInner, LazyBindingRuntime, ModuleScope, RawDylib, RawDynamic, RawElf, RawExec,
     };
     use crate::{
         RelocationError, Result,
         arch::prepare_lazy_bind,
-        elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolInfo},
+        elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
         memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
-        relocation::{
-            BindingMode, ObjectRelocationArch, RelocationArch, SupportLazy, SymDef, unlikely,
-        },
+        relocation::{BindingMode, ObjectRelocationArch, RelocationArch, SupportLazy, unlikely},
         runtime::NativeCodeExecutor,
         sync::Arc,
         tls::{TLS_GET_ADDR_SYMBOL, TlsResolver},
@@ -35,32 +34,6 @@ mod enabled {
     impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver> SupportLazy
         for RawElf<D, Arch, R, Tls>
     {
-    }
-
-    fn lookup_addr<D, Arch, R, Tls>(
-        dylib: &CoreInner<D, Arch, R, Tls>,
-        scope: &ModuleScope<Arch, Tls>,
-        syminfo: &SymbolInfo<'_>,
-    ) -> Result<Option<VmAddr>>
-    where
-        D: 'static,
-        Arch: RelocationArch,
-        R: RegionAccess,
-        Tls: TlsResolver,
-    {
-        if Tls::OVERRIDE_TLS_GET_ADDR && syminfo.name() == TLS_GET_ADDR_SYMBOL {
-            return Ok(dylib.tls.tls_get_addr());
-        }
-
-        let mut precompute = syminfo.precompute();
-        for source in scope.iter() {
-            if let Some(sym) = source.exports().lookup(syminfo, &mut precompute) {
-                return SymDef::<D, Arch, Tls>::new(Some(sym), &**source)
-                    .resolve_addr(&NativeCodeExecutor)
-                    .map(Some);
-            }
-        }
-        Ok(None)
     }
 
     pub(crate) enum ResolvedBinding {
@@ -281,14 +254,20 @@ mod enabled {
             invalid_symbol_index(dylib.path.as_str(), r_sym, sym_count);
         }
 
-        let (_, syminfo) = symtab.symbol_idx(r_sym);
+        let (sym, syminfo) = symtab.symbol_idx(r_sym);
 
         let Some(scope) = dynamic_info.lazy.scope.get() else {
             invalid_state(dylib.path.as_str(), "missing lazy lookup")
         };
-        let symbol = lookup_addr::<D, Arch, R, Tls>(dylib, scope, &syminfo)
-            .unwrap_or_else(|_| invalid_state(dylib.path.as_str(), "lazy IFUNC resolution failed"))
-            .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()));
+        let symbol = if Tls::OVERRIDE_TLS_GET_ADDR && syminfo.name() == TLS_GET_ADDR_SYMBOL {
+            Ok(dylib.tls.tls_get_addr())
+        } else {
+            find_symdef_impl(dylib, scope, sym, &syminfo, dynamic_info.symbolic)
+                .map(|symdef| symdef.resolve_addr(&NativeCodeExecutor))
+                .transpose()
+        }
+        .unwrap_or_else(|_| invalid_state(dylib.path.as_str(), "lazy IFUNC resolution failed"))
+        .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()));
 
         unsafe {
             if ImageMemory::write_value(

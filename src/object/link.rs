@@ -198,7 +198,7 @@ where
 
                 let addr = if symbol.is_undef() {
                     let resolved = if let Some(symdef) =
-                        find_symdef_impl(&self.core, scope, symbol, &syminfo)
+                        find_symdef_impl(&self.core, scope, symbol, &syminfo, self.core.symbolic())
                     {
                         Some(symdef.resolve_addr(executor)?)
                     } else {

@@ -130,6 +130,7 @@ pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch, Tls: TlsResolve
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
     pub(crate) soname: Option<&'static str>,
+    pub(crate) symbolic: bool,
     #[cfg(feature = "lazy-binding")]
     pub(crate) lazy: LazyBindingInfo<Arch, Tls>,
     pub(crate) _tls: PhantomData<fn() -> Tls>,
@@ -564,6 +565,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
                         eh_frame_hdr,
                         phdrs,
                         soname,
+                        symbolic: dynamic.symbolic,
                         #[cfg(feature = "lazy-binding")]
                         lazy: LazyBindingInfo::new(dynamic.pltrel.clone(), lazy_symtab),
                         _tls: PhantomData,

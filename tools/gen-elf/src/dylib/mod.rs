@@ -61,6 +61,8 @@ pub struct ElfWriterConfig {
     pub ifunc_resolver_val: Option<u64>,
     /// Whether the generated ELF should request eager binding by default.
     pub bind_now: bool,
+    /// Whether the generated ELF should prefer its own definitions during relocation.
+    pub symbolic: bool,
     /// Whether to emit one retained relocation section for the data section.
     pub emit_retained_relocations: bool,
     /// DT_SONAME entry to emit into the dynamic section.
@@ -76,6 +78,7 @@ impl Default for ElfWriterConfig {
             page_size: 0x1000,
             ifunc_resolver_val: None,
             bind_now: false,
+            symbolic: false,
             emit_retained_relocations: false,
             soname: None,
             needed: Vec::new(),
@@ -105,6 +108,12 @@ impl ElfWriterConfig {
     /// Set whether the generated ELF should request eager binding by default.
     pub fn with_bind_now(mut self, bind_now: bool) -> Self {
         self.bind_now = bind_now;
+        self
+    }
+
+    /// Set whether the generated ELF should prefer its own definitions during relocation.
+    pub fn with_symbolic(mut self, symbolic: bool) -> Self {
+        self.symbolic = symbolic;
         self
     }
 
@@ -303,6 +312,7 @@ impl DylibWriter {
             &sections,
             &mut allocator,
             self.config.bind_now,
+            self.config.symbolic,
             symtab.soname_offset(),
             symtab.needed_offsets(),
         );

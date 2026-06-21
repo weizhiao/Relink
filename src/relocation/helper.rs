@@ -13,7 +13,6 @@ use crate::{
     segment::ElfSegments,
     tls::{TLS_GET_ADDR_SYMBOL, TlsDescArgs, TlsResolver},
 };
-use core::marker::PhantomData;
 
 /// Internal context for managing relocation state and handlers.
 pub(crate) struct RelocHelper<
@@ -102,7 +101,13 @@ where
         let (dynsym, syminfo) = self.symbols.symbol_idx(rel.r_symbol());
         let resolved = if let Some(addr) = self.find_runtime_symbol(&syminfo) {
             Some(addr)
-        } else if let Some(symdef) = find_symdef_impl(self.core, &self.scope, dynsym, &syminfo) {
+        } else if let Some(symdef) = find_symdef_impl(
+            self.core,
+            &self.scope,
+            dynsym,
+            &syminfo,
+            self.core.symbolic(),
+        ) {
             Some(symdef.resolve_addr(self.executor)?)
         } else {
             None
@@ -130,9 +135,15 @@ where
     }
 
     #[inline]
-    pub(crate) fn find_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, D, Arch, Tls>> {
+    pub(crate) fn find_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, Arch, Tls>> {
         let (dynsym, syminfo) = self.symbols.symbol_idx(r_sym);
-        find_symdef_impl(self.core, &self.scope, dynsym, &syminfo)
+        find_symdef_impl(
+            self.core,
+            &self.scope,
+            dynsym,
+            &syminfo,
+            self.core.symbolic(),
+        )
     }
 }
 
@@ -140,25 +151,18 @@ where
 ///
 /// Contains the symbol information and the module where it was found.
 /// Used to compute the final address of a symbol.
-pub struct SymDef<'lib, D: 'static, Arch: RelocationArch, Tls: TlsResolver = ()> {
+pub struct SymDef<'lib, Arch: RelocationArch, Tls: TlsResolver = ()> {
     pub(crate) sym: Option<&'lib ElfSymbol<Arch::Layout>>,
     pub(crate) source: &'lib dyn Module<Arch, Tls>,
-    _marker: PhantomData<fn() -> D>,
 }
 
-impl<'lib, D: 'static, Arch: RelocationArch, Tls: TlsResolver + 'static>
-    SymDef<'lib, D, Arch, Tls>
-{
+impl<'lib, Arch: RelocationArch, Tls: TlsResolver + 'static> SymDef<'lib, Arch, Tls> {
     #[inline]
     pub(crate) fn new(
         sym: Option<&'lib ElfSymbol<Arch::Layout>>,
         source: &'lib dyn Module<Arch, Tls>,
     ) -> Self {
-        Self {
-            sym,
-            source,
-            _marker: PhantomData,
-        }
+        Self { sym, source }
     }
 
     /// Computes the symbol address (base + st_value).
@@ -259,61 +263,62 @@ where
     }
 }
 
-fn find_weak<'lib, D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>(
-    lib: &'lib ElfCore<D, Arch, R, Tls>,
-    dynsym: &'lib ElfSymbol<Arch::Layout>,
-) -> Option<SymDef<'lib, D, Arch, Tls>>
+fn weak_undef<'lib, Arch, Tls, Source>(
+    source: &'lib Source,
+    sym: &'lib ElfSymbol<Arch::Layout>,
+) -> Option<SymDef<'lib, Arch, Tls>>
 where
-    D: 'static,
+    Arch: RelocationArch,
+    Tls: TlsResolver + 'static,
+    Source: Module<Arch, Tls>,
 {
-    // 弱符号 + WEAK 用 0 填充rela offset
-    if dynsym.is_weak() && dynsym.is_undef() {
-        assert!(dynsym.st_value() == 0);
-        Some(SymDef::new(None, lib))
-    } else if dynsym.st_value() != 0 {
-        Some(SymDef::new(Some(dynsym), lib))
+    if sym.is_weak() && sym.is_undef() {
+        debug_assert_eq!(sym.st_value(), 0);
+        Some(SymDef::new(None, source))
     } else {
         None
     }
 }
 
-pub(crate) fn find_symdef_impl<
-    'lib,
-    D,
-    Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver + 'static,
->(
-    core: &'lib ElfCore<D, Arch, R, Tls>,
+pub(crate) fn find_symdef_impl<'lib, Arch: RelocationArch, Tls: TlsResolver + 'static, Source>(
+    source: &'lib Source,
     scope: &'lib ModuleScope<Arch, Tls>,
     sym: &'lib ElfSymbol<Arch::Layout>,
     syminfo: &SymbolInfo,
-) -> Option<SymDef<'lib, D, Arch, Tls>>
+    symbolic: bool,
+) -> Option<SymDef<'lib, Arch, Tls>>
 where
-    D: 'static,
+    Source: Module<Arch, Tls>,
 {
     if unlikely(sym.is_local()) {
-        Some(SymDef::new(Some(sym), core))
-    } else {
-        let mut precompute = syminfo.precompute();
-        scope
-            .iter()
-            .find_map(|source| {
-                source
-                    .exports()
-                    .lookup(syminfo, &mut precompute)
-                    .map(|sym| {
-                        logging::trace!(
-                            "binding file [{}] to [{}]: symbol [{}]",
-                            core.name(),
-                            source.name(),
-                            syminfo.name()
-                        );
-                        SymDef::new(Some(sym), &**source)
-                    })
-            })
-            .or_else(|| find_weak(core, sym))
+        return Some(SymDef::new(Some(sym), source));
     }
+
+    let self_def = || (!sym.is_undef()).then(|| SymDef::new(Some(sym), source));
+    let scope_def = || {
+        let mut precompute = syminfo.precompute();
+        scope.iter().find_map(|scope_source| {
+            scope_source
+                .exports()
+                .lookup(syminfo, &mut precompute)
+                .map(|sym| {
+                    logging::trace!(
+                        "binding file [{}] to [{}]: symbol [{}]",
+                        source.name(),
+                        scope_source.name(),
+                        syminfo.name()
+                    );
+                    SymDef::new(Some(sym), &**scope_source)
+                })
+        })
+    };
+
+    if symbolic {
+        self_def().or_else(scope_def)
+    } else {
+        scope_def().or_else(self_def)
+    }
+    .or_else(|| weak_undef(source, sym))
 }
 
 #[inline]

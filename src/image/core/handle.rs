@@ -179,6 +179,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'stat
             .and_then(|info| info.soname)
     }
 
+    /// Returns whether dynamic relocations in this image prefer definitions from itself.
+    #[inline]
+    pub(crate) fn symbolic(&self) -> bool {
+        self.inner
+            .dynamic_info
+            .as_ref()
+            .is_some_and(|info| info.symbolic)
+    }
+
     /// Returns the mapped segments owned by this image.
     #[inline]
     pub fn segments(&self) -> &ElfSegments<R> {
@@ -279,6 +288,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> ElfCor
                     eh_frame_hdr,
                     phdrs: ElfPhdrs::Vec(phdrs),
                     soname,
+                    symbolic: dynamic.symbolic,
                     #[cfg(feature = "lazy-binding")]
                     lazy: crate::image::LazyBindingInfo::new(dynamic.pltrel, lazy_symtab),
                     _tls: PhantomData,
@@ -331,6 +341,34 @@ where
     #[inline]
     fn tls(&self) -> ModuleTls {
         ElfCore::tls(self)
+    }
+}
+
+impl<D, Arch, R, Tls> Module<Arch, Tls> for CoreInner<D, Arch, R, Tls>
+where
+    D: 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver + 'static,
+{
+    #[inline]
+    fn name(&self) -> &str {
+        CoreInner::name(self)
+    }
+
+    #[inline]
+    fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
+        &*self.exports
+    }
+
+    #[inline]
+    fn memory(&self) -> &dyn ImageMemory {
+        &self.segments
+    }
+
+    #[inline]
+    fn tls(&self) -> ModuleTls {
+        ModuleTls::new(self.tls.mod_id(), self.tls.tp_offset())
     }
 }
 
