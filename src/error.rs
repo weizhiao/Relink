@@ -633,12 +633,8 @@ impl Display for ParsePhdrError {
 pub(crate) enum RelocReason {
     UnknownSymbol,
     Unsupported,
-    #[cfg(feature = "tls")]
     MissingTlsModuleId,
-    #[cfg(feature = "tls")]
     MissingTlsTpOffset,
-    #[cfg(not(feature = "tls"))]
-    TlsDisabled,
     IntConversionOutOfRange,
 }
 
@@ -647,12 +643,8 @@ impl Display for RelocReason {
         match self {
             Self::UnknownSymbol => f.write_str("unknown symbol"),
             Self::Unsupported => f.write_str("unsupported relocation"),
-            #[cfg(feature = "tls")]
             Self::MissingTlsModuleId => f.write_str("TLS module id is unavailable"),
-            #[cfg(feature = "tls")]
             Self::MissingTlsTpOffset => f.write_str("TLS thread-pointer offset is unavailable"),
-            #[cfg(not(feature = "tls"))]
-            Self::TlsDisabled => f.write_str("TLS relocation support is disabled"),
             Self::IntConversionOutOfRange => {
                 f.write_str("out of range integral type conversion attempted")
             }

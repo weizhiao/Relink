@@ -9,9 +9,10 @@ use crate::{
     observer::{DynamicRelocatedEvent, Finalizer, RelocationObserver},
     relocation::{
         BindingMode, RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, ResolvedBinding,
+        SymDef,
     },
     runtime::CodeContext,
-    tls::{TlsRelocOutcome, TlsResolver, handle_tls_reloc},
+    tls::{TlsRelocOutcome, TlsResolver},
 };
 use alloc::vec;
 use core::num::NonZeroUsize;
@@ -258,11 +259,10 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                 unsafe { helper.memory().write_value(place, word)? };
                 continue;
             } else if unlikely(Arch::is_tlsdesc(r_type)) {
-                // `handle_tls_reloc` performs its own SUPPORTS_NATIVE_RUNTIME
-                // gate for TLSDESC. If the built-in path cannot handle it,
-                // keep the specific TLS failure for the final error while
-                // still giving the post handler a chance.
-                match handle_tls_reloc(helper, rel)? {
+                // If the resolver cannot provide a TLSDESC binding, keep the
+                // specific TLS failure for the final error while still giving
+                // the post handler a chance.
+                match helper.handle_tls_reloc(rel)? {
                     TlsRelocOutcome::Applied => continue,
                     TlsRelocOutcome::Failed(reason) => failure_reason = reason,
                 }
@@ -351,9 +351,10 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                 // Handle copy relocations (typically for global data)
                 let symbol = helper.symbol_entry(rel);
                 let len = symbol.symbol().st_size();
-                if let Some(symdef) = helper.find_symdef(&symbol)
-                    && let Some(sym) = symdef.symbol()
-                    && let Some(source) = symdef.source()
+                if let Some(SymDef::Defined {
+                    symbol: sym,
+                    source,
+                }) = helper.find_symdef(&symbol)
                 {
                     let mut src = vec![0; len];
                     let memory = source.memory();
@@ -372,12 +373,10 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                 unsafe { helper.memory().write_value(place, word)? };
                 continue;
             } else if Arch::is_tls(r_type) {
-                // `handle_tls_reloc` is a pure data computation for
-                // DTPMOD/DTPOFF/TPOFF (safe under cross-arch loads) and
-                // gates TLSDESC on SUPPORTS_NATIVE_RUNTIME internally.
-                // Anything the built-in path cannot handle still gets a post
-                // handler chance before reporting the specific TLS reason.
-                match handle_tls_reloc(helper, rel)? {
+                // Resolver-provided TLS metadata is enough for DTPMOD/DTPOFF/TPOFF.
+                // TLSDESC uses resolver hooks so custom runtimes can supply
+                // target-visible descriptors without the built-in TLS manager.
+                match helper.handle_tls_reloc(rel)? {
                     TlsRelocOutcome::Applied => continue,
                     TlsRelocOutcome::Failed(reason) => failure_reason = reason,
                 }

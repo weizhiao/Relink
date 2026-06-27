@@ -20,5 +20,5 @@ pub use defs::{
 };
 #[cfg(feature = "tls")]
 pub use manager::DefaultTlsResolver;
-pub(crate) use relocation::{TlsRelocOutcome, handle_tls_reloc};
+pub(crate) use relocation::TlsRelocOutcome;
 pub use traits::TlsResolver;

@@ -214,7 +214,10 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
     #[inline]
     pub(crate) fn resolve_addr(&self, executor: &dyn CodeExecutor<Arch>) -> Result<VmAddr> {
         let addr = self.addr();
-        if unlikely(self.is_ifunc()) {
+        if unlikely(matches!(
+            self,
+            Self::Defined { symbol, .. } if symbol.symbol_type() == ElfSymbolType::GNU_IFUNC
+        )) {
             self.resolve_ifunc_addr(executor, addr)
         } else {
             Ok(addr)
@@ -235,36 +238,6 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
             CodeContext::<Arch>::new(source.name(), source.memory()),
             resolver,
         )
-    }
-
-    #[inline]
-    pub(crate) fn is_ifunc(&self) -> bool {
-        matches!(
-            self,
-            Self::Defined { symbol, .. } if symbol.symbol_type() == ElfSymbolType::GNU_IFUNC
-        )
-    }
-
-    #[inline]
-    pub fn symbol(&self) -> Option<&'lib ElfSymbol<Arch::Layout>> {
-        match self {
-            Self::Defined { symbol, .. } => Some(*symbol),
-            Self::WeakUndef => None,
-        }
-    }
-
-    #[inline]
-    pub fn source(&self) -> Option<&'lib dyn Module<Arch, Tls>> {
-        match self {
-            Self::Defined { source, .. } => Some(*source),
-            Self::WeakUndef => None,
-        }
-    }
-
-    #[inline]
-    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
-    pub(crate) fn is_weak_undef(&self) -> bool {
-        matches!(self, Self::WeakUndef)
     }
 }
 
