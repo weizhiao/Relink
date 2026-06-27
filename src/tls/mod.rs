@@ -15,7 +15,9 @@ mod traits;
 pub(crate) use defs::{TLS_GET_ADDR_SYMBOL, TlsImageProvider, tls_image_provider_handle};
 pub(crate) use state::CoreTlsState;
 
-pub use defs::{TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset};
+pub use defs::{
+    TlsDescValue, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset,
+};
 #[cfg(feature = "tls")]
 pub use manager::DefaultTlsResolver;
 pub(crate) use relocation::{TlsRelocOutcome, handle_tls_reloc};

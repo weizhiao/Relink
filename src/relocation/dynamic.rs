@@ -239,8 +239,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                     continue;
                 }
 
-                if let Some(symbol) = helper.find_symdef(rel)?.resolved_addr() {
-                    let word = <Arch::Layout as ElfLayout>::Word::from_usize(symbol.get());
+                let symbol = helper.symbol_entry(rel);
+                let symdef = helper.find_symdef(&symbol);
+                let addr = helper.resolve_symbol_addr(&symbol, symdef.as_ref())?;
+                if let Some(addr) = helper.bind_symbol_addr(rel, &symbol, addr)? {
+                    let word = <Arch::Layout as ElfLayout>::Word::from_usize(addr.get());
                     unsafe { helper.memory().write_value(place, word)? };
                     continue;
                 }
@@ -333,9 +336,12 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
 
             if r_type == Arch::GOT || r_type == Arch::SYMBOLIC {
                 // Handle GOT and symbolic relocations
-                if let Some(symbol) = helper.find_symdef(rel)?.resolved_addr() {
+                let symbol = helper.symbol_entry(rel);
+                let symdef = helper.find_symdef(&symbol);
+                let addr = helper.resolve_symbol_addr(&symbol, symdef.as_ref())?;
+                if let Some(addr) = helper.bind_symbol_addr(rel, &symbol, addr)? {
                     let r_addend = rel.read_addend(helper.memory(), place)?;
-                    let value = symbol.wrapping_add_signed(r_addend);
+                    let value = addr.wrapping_add_signed(r_addend);
                     let word = <Arch::Layout as ElfLayout>::Word::from_usize(value.get());
                     unsafe { helper.memory().write_value(place, word)? };
                     continue;
@@ -343,13 +349,15 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                 failure_reason = RelocReason::UnknownSymbol;
             } else if r_type == Arch::COPY {
                 // Handle copy relocations (typically for global data)
-                let symbol = helper.find_symdef(rel)?;
-                let len = symbol.requested_symbol().st_size();
-                if let Some(symdef) = symbol.symdef()
+                let symbol = helper.symbol_entry(rel);
+                let len = symbol.symbol().st_size();
+                if let Some(symdef) = helper.find_symdef(&symbol)
                     && let Some(sym) = symdef.symbol()
+                    && let Some(source) = symdef.source()
                 {
                     let mut src = vec![0; len];
-                    symdef.read_bytes(VmOffset::new(sym.st_value()), &mut src)?;
+                    let memory = source.memory();
+                    memory.read_bytes(memory.base() + VmOffset::new(sym.st_value()), &mut src)?;
                     helper.memory().write_bytes(base + rel.r_offset(), &src)?;
                     continue;
                 }

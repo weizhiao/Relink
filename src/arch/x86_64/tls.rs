@@ -12,6 +12,11 @@ pub(crate) extern "C" fn tlsdesc_resolver_static() {
 }
 
 #[unsafe(naked)]
+pub(crate) extern "C" fn tlsdesc_resolver_undefweak() {
+    core::arch::naked_asm!("mov rax, [rax + 8]", "sub rax, fs:0", "ret");
+}
+
+#[unsafe(naked)]
 pub(crate) extern "C" fn tlsdesc_resolver_dynamic() {
     core::arch::naked_asm!(
         "

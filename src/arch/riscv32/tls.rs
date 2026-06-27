@@ -11,6 +11,10 @@ pub(crate) extern "C" fn tlsdesc_resolver_static() {
     unimplemented!("TLSDESC is not supported on RISC-V 32 yet");
 }
 
+pub(crate) extern "C" fn tlsdesc_resolver_undefweak() {
+    unimplemented!("TLSDESC is not supported on RISC-V 32 yet");
+}
+
 pub(crate) extern "C" fn tlsdesc_resolver_dynamic() {
     unimplemented!("TLSDESC is not supported on RISC-V 32 yet");
 }

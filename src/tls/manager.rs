@@ -1,12 +1,16 @@
 use crate::{
     Result, TlsError,
-    arch::{NativeArch, tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
+    arch::{
+        NativeArch, tlsdesc_resolver_dynamic, tlsdesc_resolver_static, tlsdesc_resolver_undefweak,
+    },
     logging,
     memory::VmAddr,
-    observer::TlsDescValue,
     relocation::RelocationArch,
     sync::{AtomicUsize, Ordering},
-    tls::{TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsResolver, TlsTemplate, TlsTpOffset},
+    tls::{
+        TlsDescValue, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsResolver, TlsTemplate,
+        TlsTpOffset,
+    },
 };
 use alloc::{
     alloc::{alloc, dealloc, handle_alloc_error},
@@ -506,6 +510,14 @@ impl TlsResolver<NativeArch> for DefaultTlsResolver {
         Ok(TlsDescValue::new(
             VmAddr::from_ptr(tlsdesc_resolver_dynamic as *const ()),
             arg_ptr.get(),
+        ))
+    }
+
+    #[inline]
+    fn bind_undefweak_tlsdesc(addend: usize) -> Result<TlsDescValue> {
+        Ok(TlsDescValue::new(
+            VmAddr::from_ptr(tlsdesc_resolver_undefweak as *const ()),
+            addend,
         ))
     }
 }

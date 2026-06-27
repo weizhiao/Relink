@@ -42,8 +42,11 @@ mod enabled {
 
         match r_type {
             value if value == Arch::DTPOFF => {
-                let symbol = helper.find_symdef(rel)?;
-                if let Some(symdef) = symbol.symdef() {
+                let symbol = helper.symbol_entry(rel);
+                if let Some(symdef) = helper.find_symdef(&symbol) {
+                    if symdef.is_weak_undef() {
+                        return Ok(TlsRelocOutcome::Applied);
+                    }
                     let Some(sym) = symdef.symbol() else {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                     };
@@ -63,12 +66,20 @@ mod enabled {
                 }
             }
             value if value == Arch::DTPMOD => {
-                let Some(tls) = (if r_sym == 0 {
-                    Some(helper.core.tls())
+                let tls = if r_sym == 0 {
+                    helper.core.tls()
                 } else {
-                    helper.find_symdef(rel)?.symdef().map(|symdef| symdef.tls())
-                }) else {
-                    return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
+                    let symbol = helper.symbol_entry(rel);
+                    let Some(symdef) = helper.find_symdef(&symbol) else {
+                        return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
+                    };
+                    if symdef.is_weak_undef() {
+                        return Ok(TlsRelocOutcome::Applied);
+                    }
+                    let Some(source) = symdef.source() else {
+                        return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
+                    };
+                    source.tls()
                 };
                 let Some(mod_id) = tls.mod_id() else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
@@ -82,12 +93,19 @@ mod enabled {
                 Ok(TlsRelocOutcome::Applied)
             }
             value if value == Arch::TPOFF => {
-                let symbol = helper.find_symdef(rel)?;
-                if let Some(symdef) = symbol.symdef() {
+                let symbol = helper.symbol_entry(rel);
+                if let Some(symdef) = helper.find_symdef(&symbol) {
+                    if symdef.is_weak_undef() {
+                        return Ok(TlsRelocOutcome::Applied);
+                    }
                     let Some(sym) = symdef.symbol() else {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                     };
-                    if let Some(tp_offset) = symdef.tls().tp_offset() {
+                    let Some(source) = symdef.source() else {
+                        return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
+                    };
+                    let tls = source.tls();
+                    if let Some(tp_offset) = tls.tp_offset() {
                         let tls_val =
                             VmAddr::new((tp_offset.get() + sym.st_value() as isize) as usize)
                                 .wrapping_add_signed(r_addend);
@@ -106,28 +124,36 @@ mod enabled {
                 }
             }
             value if Arch::is_tlsdesc(value) => {
-                let symbol = helper.find_symdef(rel)?;
-                if let Some(symdef) = symbol.symdef() {
-                    let Some(sym) = symdef.symbol() else {
-                        return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
-                    };
-                    let sym_value = sym.st_value();
-                    let tls = symdef.tls();
-                    let desc = if let Some(tp_offset) = tls.tp_offset() {
-                        let tpoff = VmAddr::new((tp_offset.get() + sym_value as isize) as usize)
-                            .wrapping_add_signed(r_addend);
-                        Tls::bind_static_tlsdesc(tpoff.get())?
-                    } else if let Some(module_id) = tls.mod_id() {
-                        let offset = VmAddr::new(sym_value)
-                            .wrapping_add_signed(r_addend)
-                            .get()
-                            .wrapping_sub(Arch::TLS_DTV_OFFSET);
-                        Tls::bind_dynamic_tlsdesc(TlsIndex {
-                            ti_module: module_id,
-                            ti_offset: offset,
-                        })?
+                let symbol = helper.symbol_entry(rel);
+                if let Some(symdef) = helper.find_symdef(&symbol) {
+                    let desc = if symdef.is_weak_undef() {
+                        Tls::bind_undefweak_tlsdesc(r_addend as usize)?
                     } else {
-                        return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
+                        let Some(sym) = symdef.symbol() else {
+                            return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
+                        };
+                        let sym_value = sym.st_value();
+                        let Some(source) = symdef.source() else {
+                            return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
+                        };
+                        let tls = source.tls();
+                        if let Some(tp_offset) = tls.tp_offset() {
+                            let tpoff =
+                                VmAddr::new((tp_offset.get() + sym_value as isize) as usize)
+                                    .wrapping_add_signed(r_addend);
+                            Tls::bind_static_tlsdesc(tpoff.get())?
+                        } else if let Some(module_id) = tls.mod_id() {
+                            let offset = VmAddr::new(sym_value)
+                                .wrapping_add_signed(r_addend)
+                                .get()
+                                .wrapping_sub(Arch::TLS_DTV_OFFSET);
+                            Tls::bind_dynamic_tlsdesc(TlsIndex {
+                                ti_module: module_id,
+                                ti_offset: offset,
+                            })?
+                        } else {
+                            return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
+                        }
                     };
                     unsafe {
                         segments.write_value(

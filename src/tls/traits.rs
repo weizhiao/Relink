@@ -1,6 +1,4 @@
-use super::{TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTpOffset};
-#[cfg(feature = "tls")]
-use crate::observer::TlsDescValue;
+use super::{TlsDescValue, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTpOffset};
 use crate::{Result, TlsError, memory::VmAddr, relocation::RelocationArch};
 
 /// A trait for resolving TLS (Thread Local Storage) information.
@@ -62,16 +60,20 @@ pub trait TlsResolver<Arch: RelocationArch>: 'static {
     fn resolve_tls_addr(ti: TlsIndex) -> Result<VmAddr>;
 
     /// Returns the target-visible TLSDESC binding for a static TLS access.
-    #[cfg(feature = "tls")]
     #[inline]
     fn bind_static_tlsdesc(_tpoff: usize) -> Result<TlsDescValue> {
         Err(TlsError::ResolverUnsupported.into())
     }
 
     /// Returns the target-visible TLSDESC binding for a dynamic TLS access.
-    #[cfg(feature = "tls")]
     #[inline]
     fn bind_dynamic_tlsdesc(_ti: TlsIndex) -> Result<TlsDescValue> {
+        Err(TlsError::ResolverUnsupported.into())
+    }
+
+    /// Returns the target-visible TLSDESC binding for an undefined weak TLS symbol.
+    #[inline]
+    fn bind_undefweak_tlsdesc(_addend: usize) -> Result<TlsDescValue> {
         Err(TlsError::ResolverUnsupported.into())
     }
 }

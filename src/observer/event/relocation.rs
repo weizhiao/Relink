@@ -96,33 +96,6 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
     }
 }
 
-/// Two-word TLSDESC value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TlsDescValue {
-    resolver: VmAddr,
-    arg: usize,
-}
-
-impl TlsDescValue {
-    /// Creates a TLSDESC pair.
-    #[inline]
-    pub const fn new(resolver: VmAddr, arg: usize) -> Self {
-        Self { resolver, arg }
-    }
-
-    /// Resolver function pointer written to the first TLSDESC word.
-    #[inline]
-    pub const fn resolver(&self) -> VmAddr {
-        self.resolver
-    }
-
-    /// Resolver argument written to the second TLSDESC word.
-    #[inline]
-    pub const fn arg(&self) -> usize {
-        self.arg
-    }
-}
-
 /// Event emitted after a dynamic image has been relocated.
 pub struct DynamicRelocatedEvent<
     'a,

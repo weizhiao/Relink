@@ -187,7 +187,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         if unlikely(sym.symbol_type() == ElfSymbolType::TLS) {
             self.core.tls_addr(sym.st_value())
         } else {
-            Some(SymDef::<Arch, Tls>::new(Some(sym), self).addr())
+            Some(SymDef::<Arch, Tls>::defined(sym, self).addr())
         }
     }
 

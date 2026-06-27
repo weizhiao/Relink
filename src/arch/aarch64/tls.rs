@@ -13,6 +13,16 @@ pub(crate) extern "C" fn tlsdesc_resolver_static() {
 }
 
 #[unsafe(naked)]
+pub(crate) extern "C" fn tlsdesc_resolver_undefweak() {
+    core::arch::naked_asm!(
+        "ldr x0, [x0, #8]",
+        "mrs x1, tpidr_el0",
+        "sub x0, x0, x1",
+        "ret"
+    );
+}
+
+#[unsafe(naked)]
 pub(crate) extern "C" fn tlsdesc_resolver_dynamic() {
     core::arch::naked_asm!(
         "

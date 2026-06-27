@@ -14,6 +14,9 @@ mod tls;
 #[cfg(all(feature = "lazy-binding", target_arch = "loongarch64"))]
 pub(crate) use lazy::{DYLIB_OFFSET, RESOLVE_FUNCTION_OFFSET, dl_runtime_resolve};
 #[cfg(all(feature = "tls", target_arch = "loongarch64"))]
-pub(crate) use tls::{get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static};
+pub(crate) use tls::{
+    get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static,
+    tlsdesc_resolver_undefweak,
+};
 
 pub mod relocation;

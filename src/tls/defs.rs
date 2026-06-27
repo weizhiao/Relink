@@ -1,6 +1,7 @@
 use crate::{
     Result, TlsError,
     elf::{ElfLayout, ElfPhdr, ElfProgramType},
+    memory::VmAddr,
     sync::{Arc, Weak},
 };
 
@@ -121,6 +122,33 @@ where
     let ptr = Arc::into_raw(provider);
     let ptr: *const dyn TlsImageProvider = ptr;
     unsafe { Arc::from_raw(ptr) }
+}
+
+/// Two-word TLSDESC value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TlsDescValue {
+    resolver: VmAddr,
+    arg: usize,
+}
+
+impl TlsDescValue {
+    /// Creates a TLSDESC pair.
+    #[inline]
+    pub const fn new(resolver: VmAddr, arg: usize) -> Self {
+        Self { resolver, arg }
+    }
+
+    /// Resolver function pointer written to the first TLSDESC word.
+    #[inline]
+    pub const fn resolver(&self) -> VmAddr {
+        self.resolver
+    }
+
+    /// Resolver argument written to the second TLSDESC word.
+    #[inline]
+    pub const fn arg(&self) -> usize {
+        self.arg
+    }
 }
 
 /// TLS module ID assigned by a [`TlsResolver`](crate::tls::TlsResolver).
