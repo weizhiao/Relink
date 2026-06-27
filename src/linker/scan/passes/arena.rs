@@ -39,7 +39,7 @@ impl<'scope> Arena<'scope> {
         K: Clone + Ord,
         S: ReorderAccess,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan.memory_layout().arena(self.id)
     }
@@ -51,7 +51,7 @@ impl<'scope> Arena<'scope> {
         K: Clone + Ord,
         S: ReorderAccess,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan.memory_layout().usage(self.id)
     }

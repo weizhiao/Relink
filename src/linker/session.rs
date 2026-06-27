@@ -52,7 +52,7 @@ impl<P> GraphEntry<P> {
     }
 }
 
-pub(crate) struct ReadyCommit<D: 'static, Arch: RelocationArch, Tls: TlsResolver = ()> {
+pub(crate) struct ReadyCommit<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[KeyId]>,
     _marker: core::marker::PhantomData<fn() -> D>,
@@ -61,7 +61,7 @@ pub(crate) struct ReadyCommit<D: 'static, Arch: RelocationArch, Tls: TlsResolver
 impl<D: 'static, Arch, Tls> Clone for ReadyCommit<D, Arch, Tls>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -75,7 +75,7 @@ where
 impl<D: 'static, Arch, Tls> ReadyCommit<D, Arch, Tls>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     fn new(module: ModuleHandle<Arch, Tls>, direct_deps: Box<[KeyId]>) -> Self {
@@ -92,7 +92,7 @@ where
     }
 }
 
-pub(crate) enum ModulePayload<P, Arch: RelocationArch, Tls: TlsResolver = ()> {
+pub(crate) enum ModulePayload<P, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     Dynamic(P),
     Synthetic(ModuleHandle<Arch, Tls>),
 }
@@ -101,7 +101,7 @@ impl<P, Arch, Tls> DependencyOwner for ModulePayload<P, Arch, Tls>
 where
     P: DependencyOwner,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     fn path(&self) -> &Path {
@@ -160,7 +160,7 @@ where
     }
 }
 
-pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver = ()> {
+pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     pub(crate) entries: BTreeMap<KeyId, GraphEntry<ModulePayload<P, Arch, Tls>>>,
     pub(crate) group_order: Vec<KeyId>,
 }
@@ -168,7 +168,7 @@ pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver = ()>
 impl<P, Arch, Tls> ResolveSession<P, Arch, Tls>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new() -> Self {
@@ -182,7 +182,7 @@ where
 impl<P, Arch, Tls> ResolveSession<P, Arch, Tls>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn contains(&self, id: KeyId) -> bool {
@@ -226,7 +226,7 @@ pub(crate) struct LoadSession<
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     pub(crate) resolve: ResolveSession<crate::image::RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
     ready_to_commit: BTreeMap<KeyId, ReadyCommit<D, Arch, Tls>>,
@@ -236,7 +236,7 @@ impl<D: 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new() -> Self {
@@ -251,7 +251,7 @@ impl<D: 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn insert_resolved_pending(

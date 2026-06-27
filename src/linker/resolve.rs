@@ -26,7 +26,7 @@ pub(crate) struct ResolveContext<
     V = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     P = (),
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     committed: &'a mut CommittedStorage<K, D, Meta, Arch, Tls>,
     visible_modules: &'a V,
@@ -58,7 +58,7 @@ impl<'a, K: Clone, D: 'static, Meta, V, Arch, P, Tls>
     ResolveContext<'a, K, D, Meta, V, Arch, P, Tls>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new(
@@ -79,7 +79,7 @@ where
     K: Clone + Ord,
     Arch: RelocationArch,
     P: DependencyOwner,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn contains_pending(&self, id: KeyId) -> bool {
@@ -235,7 +235,7 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         V: VisibleModules<K, Arch, Q, Tls>,
         Obs: LoadObserver<D, Arch>,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         M: Mmap,
         O: LinkObserver<Arch>,
         F: FnMut(
@@ -280,7 +280,7 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         V: VisibleModules<K, Arch, Q, Tls>,
         Obs: LoadObserver<D, Arch>,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         M: Mmap,
         O: LinkObserver<Arch>,
         F: FnMut(
@@ -305,7 +305,7 @@ where
     K: Clone + Ord,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     pub(crate) fn stage_resolved<'cfg, Obs, O, M, Q>(
         &mut self,
@@ -319,7 +319,7 @@ where
         V: VisibleModules<K, Arch, Q, Tls>,
         D: Default,
         Obs: LoadObserver<D, Arch>,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
         O: LinkObserver<Arch>,
     {
@@ -383,7 +383,7 @@ where
         V: VisibleModules<K, Arch, Q, Tls>,
         D: Default,
         Obs: LoadObserver<D, Arch>,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
         O: LinkObserver<Arch>,
     {
@@ -402,7 +402,7 @@ impl<K, D: 'static, Meta, V, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     pub(crate) fn stage_resolved<Obs, M, Q>(
         &mut self,
@@ -415,7 +415,7 @@ where
         V: VisibleModules<K, Arch, Q, Tls>,
         D: Default,
         Obs: LoadObserver<D, Arch>,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         M: Mmap,
     {
         match resolved {
@@ -476,7 +476,7 @@ where
         V: VisibleModules<K, Arch, Q, Tls>,
         D: Default,
         Obs: LoadObserver<D, Arch>,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         M: Mmap,
         O: LinkObserver<Arch>,
     {

@@ -12,7 +12,7 @@ use elf_loader::{
 struct LifecycleLogger;
 
 impl RelocationObserver for LifecycleLogger {
-    fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver>(
+    fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
         &mut self,
         event: &mut InitEvent<'_, D, NativeArch, R, Tls>,
     ) -> Result<()> {

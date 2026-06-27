@@ -41,7 +41,7 @@ use core::marker::PhantomData;
 pub struct Loader<Obs = (), D: 'static = (), Tls = (), Arch = NativeArch, M = DefaultMmap>
 where
     Obs: LoadObserver<D, Arch>,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
 {
@@ -143,7 +143,7 @@ impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: 'static,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
 {
@@ -264,20 +264,8 @@ where
     #[cfg(feature = "tls")]
     pub fn with_tls_resolver<NewTls>(self) -> Loader<Obs, D, NewTls, Arch, M>
     where
-        NewTls: TlsResolver,
+        NewTls: TlsResolver<Arch>,
     {
-        Loader {
-            buf: self.buf,
-            inner: self.inner,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Consumes the current loader and returns a new one with the default TLS resolver.
-    #[cfg(feature = "tls")]
-    pub fn with_default_tls_resolver(
-        self,
-    ) -> Loader<Obs, D, crate::tls::DefaultTlsResolver, Arch, M> {
         Loader {
             buf: self.buf,
             inner: self.inner,
@@ -290,6 +278,26 @@ where
     pub fn with_static_tls(mut self, enabled: bool) -> Self {
         self.inner.force_static_tls = enabled;
         self
+    }
+}
+
+impl<Obs, D, Tls, M> Loader<Obs, D, Tls, NativeArch, M>
+where
+    Obs: LoadObserver<D, NativeArch>,
+    D: 'static,
+    Tls: TlsResolver<NativeArch>,
+    M: Mmap,
+{
+    /// Consumes the current loader and returns a new one with the default TLS resolver.
+    #[cfg(feature = "tls")]
+    pub fn with_default_tls_resolver(
+        self,
+    ) -> Loader<Obs, D, crate::tls::DefaultTlsResolver, NativeArch, M> {
+        Loader {
+            buf: self.buf,
+            inner: self.inner,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -311,7 +319,7 @@ where
 impl<Obs, Tls, Arch, M> Loader<Obs, (), Tls, Arch, M>
 where
     Obs: LoadObserver<(), Arch>,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
 {
@@ -361,6 +369,7 @@ where
     pub fn for_arch<NewArch>(self) -> Loader<Obs, (), Tls, NewArch, M>
     where
         NewArch: RelocationArch,
+        Tls: TlsResolver<NewArch>,
         Obs: LoadObserver<(), NewArch>,
     {
         Loader {

@@ -193,7 +193,7 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver + 'static> From<SyntheticModule<Arch>>
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> From<SyntheticModule<Arch>>
     for ModuleHandle<Arch, Tls>
 {
     #[inline]
@@ -205,7 +205,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver + 'static> From<SyntheticModule<Arch
 impl<Arch, Tls> Module<Arch, Tls> for SyntheticModule<Arch>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver + 'static,
+    Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
     fn name(&self) -> &str {

@@ -53,7 +53,7 @@ impl<D: 'static, Arch, R, Tls> RawObject<D, Arch, R, Tls>
 where
     Arch: ObjectRelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     pub(crate) fn relocate_impl<PreH, PostH, Obs>(
         mut self,
@@ -116,12 +116,7 @@ where
             }
         }
 
-        let RelocHelper {
-            scope,
-            tls_desc_args,
-            ..
-        } = helper;
-        self.core.set_tls_desc_args(tls_desc_args);
+        let RelocHelper { scope, .. } = helper;
 
         let finalizer = Finalizer::new(core::mem::take(&mut self.fini), executor.clone());
         let event_segments =
@@ -274,7 +269,7 @@ where
     D: 'static,
     Arch: crate::relocation::RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     relocate_context_error(
         core.name(),

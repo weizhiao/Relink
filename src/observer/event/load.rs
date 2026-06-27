@@ -79,7 +79,7 @@ pub struct AfterDynamicLoadEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     raw: &'a mut RawDynamic<D, Arch, R, Tls>,
 }
@@ -88,7 +88,7 @@ impl<'a, D: 'static, Arch, R, Tls> AfterDynamicLoadEvent<'a, D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) const fn new(raw: &'a mut RawDynamic<D, Arch, R, Tls>) -> Self {
@@ -115,7 +115,7 @@ pub struct StagedDynamic<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     key: &'a K,
     raw: &'a RawDynamic<D, Arch, R, Tls>,
@@ -125,7 +125,7 @@ impl<'a, K, D: 'static, Arch, R, Tls> StagedDynamic<'a, K, D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) const fn new(key: &'a K, raw: &'a RawDynamic<D, Arch, R, Tls>) -> Self {

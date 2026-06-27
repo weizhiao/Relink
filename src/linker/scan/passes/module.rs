@@ -38,7 +38,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan
             .module_key(self.id)
@@ -54,7 +54,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan
             .get(self.id)
@@ -72,7 +72,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         'scope: 'borrow,
     {
         plan.plan
@@ -93,7 +93,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan
             .module_capability(self.id)
@@ -109,7 +109,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan.materialization(self.id)
     }
@@ -124,7 +124,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan.set_materialization(self.id, mode)
     }
@@ -143,7 +143,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan.module_layout(self.id)
     }
@@ -158,7 +158,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         let section = plan.plan.module_section_id(self.id, id)?;
         plan.checked_section(section)

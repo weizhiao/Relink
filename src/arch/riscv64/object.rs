@@ -93,7 +93,7 @@ impl ObjectRelocationArch for RiscV64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        Tls: crate::tls::TlsResolver,
+        Tls: crate::tls::TlsResolver<Self>,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -114,7 +114,7 @@ impl ObjectRelocationArch for RiscV64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        Tls: crate::tls::TlsResolver,
+        Tls: crate::tls::TlsResolver<Self>,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -143,7 +143,7 @@ impl RiscV64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        Tls: crate::tls::TlsResolver,
+        Tls: crate::tls::TlsResolver<Self>,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -193,7 +193,7 @@ impl RiscV64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        Tls: crate::tls::TlsResolver,
+        Tls: crate::tls::TlsResolver<Self>,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -458,7 +458,7 @@ impl RiscV64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        Tls: crate::tls::TlsResolver,
+        Tls: crate::tls::TlsResolver<Self>,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -542,7 +542,7 @@ impl RiscV64Arch {
         T: WrappingRelocWord + crate::ByteRepr,
         D: 'static,
         R: RegionAccess,
-        Tls: crate::tls::TlsResolver,
+        Tls: crate::tls::TlsResolver<Self>,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -636,7 +636,7 @@ fn branch_offset<D, R, Tls, PreH, PostH, Obs, H, Memory>(
 where
     D: 'static,
     R: RegionAccess,
-    Tls: crate::tls::TlsResolver,
+    Tls: crate::tls::TlsResolver<RiscV64Arch>,
     PreH: RelocationHandler<RiscV64Arch> + ?Sized,
     PostH: RelocationHandler<RiscV64Arch> + ?Sized,
     Obs: RelocationObserver<RiscV64Arch> + ?Sized,

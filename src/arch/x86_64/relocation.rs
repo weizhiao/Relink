@@ -98,7 +98,7 @@ impl ObjectRelocationArch for X86_64Arch {
     where
         D: 'static,
         R: crate::memory::RegionAccess,
-        Tls: crate::tls::TlsResolver,
+        Tls: crate::tls::TlsResolver<Self>,
         PreH: crate::relocation::RelocationHandler<Self> + ?Sized,
         PostH: crate::relocation::RelocationHandler<Self> + ?Sized,
         Obs: crate::observer::RelocationObserver<Self> + ?Sized,

@@ -164,7 +164,7 @@ impl Display for ElfDynamicTag {
             DT_RELSZ => f.write_str("DT_RELSZ"),
             DT_RELENT => f.write_str("DT_RELENT"),
             DT_PLTREL => f.write_str("DT_PLTREL"),
-            elf::abi::DT_DEBUG => f.write_str("DT_DEBUG"),
+            DT_DEBUG => f.write_str("DT_DEBUG"),
             DT_SYMBOLIC => f.write_str("DT_SYMBOLIC"),
             DT_TEXTREL => f.write_str("DT_TEXTREL"),
             DT_BIND_NOW => f.write_str("DT_BIND_NOW"),

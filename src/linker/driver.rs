@@ -42,7 +42,7 @@ pub struct LoadResult<
     D: 'static,
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = crate::memory::HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     root: LoadedCore<D, Arch, R, Tls>,
     committed: Box<[CommittedModuleId]>,
@@ -52,7 +52,7 @@ impl<D: 'static, Arch, R, Tls> fmt::Debug for LoadResult<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoadResult")
@@ -66,7 +66,7 @@ impl<D: 'static, Arch, R, Tls> LoadResult<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new(
@@ -99,7 +99,7 @@ impl<D: 'static, Arch, R, Tls> Deref for LoadResult<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     type Target = LoadedCore<D, Arch, R, Tls>;
 
@@ -144,7 +144,7 @@ pub struct Linker<
     P = DefaultRelocationPlanner,
     O = (),
     V = (),
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
     Stage = Stage0,
 > {
     loader: L,
@@ -232,7 +232,7 @@ impl<'a, K, L, R, PreH, PostH, RelocObs, P, O, V, Arch, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     /// Sets the key resolver used to resolve root keys and dependencies.
     pub fn resolver<NewR>(
@@ -312,7 +312,7 @@ impl<'a, K, L, R, PreH, PostH, RelocObs, P, O, V, Arch, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Stage: AdvanceStage,
 {
     /// Reconfigures the scan-first pipeline.
@@ -340,7 +340,7 @@ impl<'a, K, L, R, PreH, PostH, RelocObs, P, O, V, Arch, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Stage: AdvanceStage,
 {
     /// Reconfigures the relocator template used for loaded modules.
@@ -370,7 +370,7 @@ where
     K: Clone + Ord,
     D: 'static,
     Obs: LoadObserver<D, Arch>,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
 {
@@ -400,7 +400,7 @@ where
     where
         NewObs: LoadObserver<NewD, Arch>,
         NewD: 'static,
-        NewTls: TlsResolver,
+        NewTls: TlsResolver<Arch>,
         NewM: Mmap,
     {
         Linker {
@@ -438,7 +438,7 @@ where
     K: Clone + Ord,
     D: Default + 'static,
     Obs: LoadObserver<D, Arch>,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Arch: RelocationArch + crate::relocation::RelocationValueProvider + GotPltTarget,
     M: Mmap,
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
@@ -968,18 +968,19 @@ where
     }
 }
 
-struct PreparedLoad<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver = ()> {
+struct PreparedLoad<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> = ()>
+{
     root: KeyId,
     session: LoadSession<D, Arch, R, Tls>,
     mapped_runtime: Option<MappedRuntimeMemory<R>>,
 }
 
-enum ScanDiscovery<K, Arch: RelocationArch, Tls: TlsResolver = ()> {
+enum ScanDiscovery<K, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     Existing(KeyId),
     Plan(LinkPlan<K, Arch, Tls>),
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     PreparedLoad<D, Arch, R, Tls>
 {
     fn runtime(root: KeyId, session: LoadSession<D, Arch, R, Tls>) -> Self {
@@ -1011,7 +1012,7 @@ fn apply_section_overrides<D, Arch, R, Tls>(
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     let module = plan.module(module_id);
     let core = raw.core_ref();
@@ -1051,7 +1052,7 @@ where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     V: VisibleModules<K, Arch, Q, Tls>,
 {
     context

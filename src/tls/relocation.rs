@@ -8,43 +8,20 @@ pub(crate) enum TlsRelocOutcome {
 
 #[cfg(feature = "tls")]
 mod enabled {
-    use super::super::defs::{TlsDescDynamicArg, TlsIndex};
+    use super::super::defs::TlsIndex;
     use super::TlsRelocOutcome;
     use crate::{
         RelocReason, Result,
-        arch::{tlsdesc_resolver_dynamic, tlsdesc_resolver_static},
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
         memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
-        observer::{
-            RelocationObserver, TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
-        },
+        observer::{RelocationObserver, TlsDescBindingRequest, TlsDescValue},
         relocation::{RelocHelper, RelocationArch, RelocationHandler},
-        segment::ElfSegments,
         tls::TlsResolver,
     };
-    use alloc::boxed::Box;
 
     pub(crate) enum TlsDescResolution {
-        Resolved(TlsDescBindingValue),
+        Resolved(TlsDescValue),
         Failed(RelocReason),
-    }
-
-    #[inline]
-    fn write_tls_word<Arch: RelocationArch, R: RegionAccess>(
-        segments: &ElfSegments<R>,
-        addr: VmAddr,
-        value: usize,
-    ) -> Result<()>
-    where
-        <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
-    {
-        unsafe {
-            ImageMemory::write_value(
-                segments,
-                addr,
-                <Arch::Layout as ElfLayout>::Word::from_usize(value),
-            )
-        }
     }
 
     impl<'find, D, Arch, R, Tls, PreH, PostH, Obs, H>
@@ -53,7 +30,7 @@ mod enabled {
         D: 'static,
         Arch: RelocationArch,
         R: RegionAccess,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
@@ -61,52 +38,30 @@ mod enabled {
         #[inline]
         pub(crate) fn resolve_tlsdesc(
             &mut self,
-            rel: &ElfRelType<Arch>,
             request: TlsDescBindingRequest,
         ) -> Result<TlsDescResolution> {
-            let mut event = TlsDescBindingEvent::new(self.core, rel, request);
-            self.observer.on_tlsdesc_binding(&mut event)?;
-            if let Some(value) = event.into_value() {
-                return Ok(TlsDescResolution::Resolved(value));
-            }
-            if !Arch::SUPPORTS_NATIVE_RUNTIME {
-                return Ok(TlsDescResolution::Failed(RelocReason::UnknownSymbol));
-            }
-
             let sym_value = request.symbol_value();
             let addend = request.addend();
 
             if let Some(tp_offset) = request.tp_offset() {
                 let tpoff = VmAddr::new((tp_offset.get() + sym_value as isize) as usize)
                     .wrapping_add_signed(addend);
-                return Ok(TlsDescResolution::Resolved(TlsDescBindingValue::new(
-                    VmAddr::from_ptr(tlsdesc_resolver_static as *const ()),
+                return Ok(TlsDescResolution::Resolved(Tls::bind_static_tlsdesc(
                     tpoff.get(),
-                )));
+                )?));
             }
 
             if let Some(module_id) = request.module_id() {
-                let Some(tls_get_addr) = request.tls_get_addr() else {
-                    return Ok(TlsDescResolution::Failed(RelocReason::UnknownSymbol));
-                };
                 let offset = VmAddr::new(sym_value)
                     .wrapping_add_signed(addend)
                     .get()
                     .wrapping_sub(Arch::TLS_DTV_OFFSET);
-                let dynamic_arg = Box::new(TlsDescDynamicArg {
-                    tls_get_addr: tls_get_addr.get(),
-                    ti: TlsIndex {
+                return Ok(TlsDescResolution::Resolved(Tls::bind_dynamic_tlsdesc(
+                    TlsIndex {
                         ti_module: module_id,
                         ti_offset: offset,
                     },
-                });
-                let arg_ptr = VmAddr::from_ptr(dynamic_arg.as_ref());
-                self.tls_desc_args.push(dynamic_arg);
-
-                return Ok(TlsDescResolution::Resolved(TlsDescBindingValue::new(
-                    VmAddr::from_ptr(tlsdesc_resolver_dynamic as *const ()),
-                    arg_ptr.get(),
-                )));
+                )?));
             }
 
             Ok(TlsDescResolution::Failed(RelocReason::MissingTlsModuleId))
@@ -121,7 +76,7 @@ mod enabled {
         D: 'static,
         Arch: RelocationArch,
         R: RegionAccess,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
@@ -144,7 +99,12 @@ mod enabled {
                         .wrapping_add_signed(r_addend)
                         .get()
                         .wrapping_sub(Arch::TLS_DTV_OFFSET);
-                    write_tls_word::<Arch, R>(segments, place, tls_val)?;
+                    unsafe {
+                        segments.write_value(
+                            place,
+                            <Arch::Layout as ElfLayout>::Word::from_usize(tls_val),
+                        )?;
+                    }
                     Ok(TlsRelocOutcome::Applied)
                 } else {
                     Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol))
@@ -161,7 +121,12 @@ mod enabled {
                 let Some(mod_id) = tls.mod_id() else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
                 };
-                write_tls_word::<Arch, R>(segments, place, mod_id.get())?;
+                unsafe {
+                    segments.write_value(
+                        place,
+                        <Arch::Layout as ElfLayout>::Word::from_usize(mod_id.get()),
+                    )?;
+                }
                 Ok(TlsRelocOutcome::Applied)
             }
             value if value == Arch::TPOFF => {
@@ -173,7 +138,12 @@ mod enabled {
                         let tls_val =
                             VmAddr::new((tp_offset.get() + sym.st_value() as isize) as usize)
                                 .wrapping_add_signed(r_addend);
-                        write_tls_word::<Arch, R>(segments, place, tls_val.get())?;
+                        unsafe {
+                            segments.write_value(
+                                place,
+                                <Arch::Layout as ElfLayout>::Word::from_usize(tls_val.get()),
+                            )?;
+                        }
                         Ok(TlsRelocOutcome::Applied)
                     } else {
                         Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsTpOffset))
@@ -191,26 +161,22 @@ mod enabled {
                     let tls = symdef.tls();
                     let tls_mod_id = tls.mod_id();
                     let tls_tp_offset = tls.tp_offset();
-                    let tls_get_addr = if tls_tp_offset.is_none() && tls_mod_id.is_some() {
-                        Some(VmAddr::from_ptr(Tls::tls_get_addr as *const ()))
-                    } else {
-                        None
-                    };
-                    let request = TlsDescBindingRequest::new(
-                        sym_value,
-                        r_addend,
-                        tls_mod_id,
-                        tls_tp_offset,
-                        tls_get_addr,
-                    );
-                    match helper.resolve_tlsdesc(rel, request)? {
+                    let request =
+                        TlsDescBindingRequest::new(sym_value, r_addend, tls_mod_id, tls_tp_offset);
+                    match helper.resolve_tlsdesc(request)? {
                         TlsDescResolution::Resolved(desc) => {
-                            write_tls_word::<Arch, R>(segments, place, desc.resolver().get())?;
-                            write_tls_word::<Arch, R>(
-                                segments,
-                                place + VmOffset::new(8),
-                                desc.arg(),
-                            )?;
+                            unsafe {
+                                segments.write_value(
+                                    place,
+                                    <Arch::Layout as ElfLayout>::Word::from_usize(
+                                        desc.resolver().get(),
+                                    ),
+                                )?;
+                                segments.write_value(
+                                    place + VmOffset::new(8),
+                                    <Arch::Layout as ElfLayout>::Word::from_usize(desc.arg()),
+                                )?;
+                            }
                             Ok(TlsRelocOutcome::Applied)
                         }
                         TlsDescResolution::Failed(reason) => Ok(TlsRelocOutcome::Failed(reason)),
@@ -245,7 +211,7 @@ mod disabled {
         D: 'static,
         Arch: RelocationArch,
         R: RegionAccess,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,

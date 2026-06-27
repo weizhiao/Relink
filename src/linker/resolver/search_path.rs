@@ -484,7 +484,7 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
     }
 
     #[inline]
-    fn resolved_key<'cfg, Arch: RelocationArch, Tls: TlsResolver>(
+    fn resolved_key<'cfg, Arch: RelocationArch, Tls: TlsResolver<Arch>>(
         key: LinkKey,
         file: ElfFile,
         visible_key: Option<LinkKey>,
@@ -526,7 +526,7 @@ where
     Rule: KeyRule<LinkKey>,
     LinkKey: Clone + AsRef<Path>,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     fn load_root(
         &mut self,

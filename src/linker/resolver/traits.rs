@@ -10,7 +10,7 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 
 /// A key-resolution result chosen by caller policy.
-pub enum ResolvedKey<'cfg, K, Arch: RelocationArch = NativeArch, Tls: TlsResolver = ()> {
+pub enum ResolvedKey<'cfg, K, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     /// Reuses a module that is already visible in the current link context.
     Existing(K),
     /// Loads a new module for the provided canonical key and target arch.
@@ -32,7 +32,7 @@ pub enum ResolvedKey<'cfg, K, Arch: RelocationArch = NativeArch, Tls: TlsResolve
     },
 }
 
-impl<'cfg, K, Arch: RelocationArch, Tls: TlsResolver> ResolvedKey<'cfg, K, Arch, Tls> {
+impl<'cfg, K, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedKey<'cfg, K, Arch, Tls> {
     /// Creates a result that reuses an already committed visible key.
     #[inline]
     pub fn existing(key: K) -> Self {
@@ -69,7 +69,7 @@ pub trait KeyResolver<
     K: Clone,
     Arch: RelocationArch = NativeArch,
     Q: ?Sized = K,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 >
 {
     /// Resolves the root key passed to a linker load operation.

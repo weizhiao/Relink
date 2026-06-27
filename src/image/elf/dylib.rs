@@ -28,7 +28,7 @@ pub struct RawDylib<
     D,
     Arch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > where
     D: 'static,
     Arch: RelocationArch,
@@ -37,7 +37,7 @@ pub struct RawDylib<
     pub(crate) inner: RawDynamic<D, Arch, R, Tls>,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Debug
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     for RawDylib<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -48,7 +48,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Debug
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Relocatable<D>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Relocatable<D>
     for RawDylib<D, Arch, R, Tls>
 {
     type Output = LoadedCore<D, Arch, R, Tls>;
@@ -68,7 +68,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Reloca
     }
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDylib<D, Arch, R, Tls> {
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDylib<D, Arch, R, Tls> {
     /// Creates a new `RawDylib` from a `RawDynamic`.
     #[inline]
     pub fn from_dynamic(inner: RawDynamic<D, Arch, R, Tls>) -> Self {

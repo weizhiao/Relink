@@ -16,7 +16,7 @@ fn my_print(s: &str) {
 }
 
 impl RelocationHandler for MyRelocHandler {
-    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, H>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>, H>(
         &self,
         ctx: &RelocationContext<'_, D, NativeArch, R, Tls, H>,
     ) -> Result<HandleResult> {

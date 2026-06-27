@@ -23,7 +23,7 @@ pub(crate) struct ImageBuilder<
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = crate::memory::HostRegion,
 > where
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
 {
     /// Loader source path or caller-provided source identifier.
@@ -92,7 +92,7 @@ impl<L: ElfLayout> ScanBuilder<L> {
 
 impl<Tls, D: 'static, Arch, R> ImageBuilder<Tls, D, Arch, R>
 where
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     R: RegionAccess,
 {

@@ -18,7 +18,7 @@ use crate::{
     },
     runtime::CodeExecutor,
     segment::{ElfSegments, MemoryProtection},
-    tls::{CoreTlsDescArgs, CoreTlsState, TlsInfo, TlsResolver},
+    tls::{CoreTlsState, TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{cell::OnceCell, marker::PhantomData, mem::size_of, ptr::NonNull};
@@ -105,7 +105,7 @@ impl LazyBindingRuntime {
 }
 
 #[cfg(feature = "lazy-binding")]
-pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch, Tls: TlsResolver = ()> {
+pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     pub(crate) pltrel: MappedView<ElfRelType<Arch>>,
     pub(crate) symtab: SymbolTable<Arch::Layout>,
     pub(crate) runtime: OnceCell<LazyBindingRuntime>,
@@ -113,7 +113,7 @@ pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch, Tls: TlsRes
 }
 
 #[cfg(feature = "lazy-binding")]
-impl<Arch: RelocationArch, Tls: TlsResolver> LazyBindingInfo<Arch, Tls> {
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LazyBindingInfo<Arch, Tls> {
     #[inline]
     pub(crate) fn new(
         pltrel: Option<MappedView<ElfRelType<Arch>>>,
@@ -128,7 +128,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver> LazyBindingInfo<Arch, Tls> {
     }
 }
 
-pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch, Tls: TlsResolver = ()> {
+pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
     pub(crate) soname: Option<&'static str>,
@@ -217,8 +217,12 @@ impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
 ///
 /// The optional `Arch` type parameter selects the target architecture used
 /// during [`Relocator::relocate`]. By default it is [`crate::arch::NativeArch`].
-pub struct RawDynamic<D, Arch = NativeArch, R: RegionAccess = HostRegion, Tls: TlsResolver = ()>
-where
+pub struct RawDynamic<
+    D,
+    Arch = NativeArch,
+    R: RegionAccess = HostRegion,
+    Tls: TlsResolver<Arch> = (),
+> where
     D: 'static,
     Arch: RelocationArch,
 {
@@ -232,7 +236,7 @@ where
     extra: ElfExtraData<Arch>,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> core::fmt::Debug
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> core::fmt::Debug
     for RawDynamic<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -244,7 +248,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> core::fmt::Debu
     }
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDynamic<D, Arch, R, Tls> {
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
     /// Gets the entry point of the ELF object.
     #[inline]
     pub fn entry(&self) -> usize {
@@ -464,7 +468,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDynamic<D, A
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawDynamic<D, Arch, R, Tls>
 {
     pub(crate) fn from_parts(parts: RawDynamicParts<D, Arch, R>) -> Result<Self> {
@@ -573,7 +577,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
                         _tls: PhantomData,
                     })),
                     tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_info, tls_image),
-                    tls_desc_args: CoreTlsDescArgs::default(),
                     segments,
                 }),
             },
@@ -586,7 +589,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawDynamic<D, Arch, R, Tls>
 {
     /// Build a dynamic image from the intermediate loader state.
@@ -630,7 +633,7 @@ where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     <Arch::Layout as crate::elf::ElfLayout>::Word: crate::ByteRepr,
 {
     type Output = LoadedCore<D, Arch, R, Tls>;

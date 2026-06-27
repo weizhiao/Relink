@@ -22,7 +22,7 @@ pub(crate) struct CommittedStorage<
     D: 'static,
     M = (),
     Arch: RelocationArch = crate::arch::NativeArch,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     key_ids: BTreeMap<K, KeyId>,
     keys: PrimaryMap<KeyId, K>,
@@ -36,7 +36,7 @@ where
     K: Clone,
     M: Clone,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     fn clone(&self) -> Self {
@@ -53,7 +53,7 @@ where
 impl<K, D: 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new() -> Self {
@@ -71,7 +71,7 @@ impl<K, D: 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
 where
     K: Ord,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn key(&self, id: KeyId) -> Option<&K> {
@@ -185,7 +185,7 @@ impl<K, D: 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     pub(crate) fn intern_key(&mut self, key: K) -> KeyId {
         if let Some(id) = self.key_id(&key) {
@@ -266,7 +266,7 @@ struct StoredEntry<
     D: 'static,
     M = (),
     Arch: RelocationArch = crate::arch::NativeArch,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     entry_key: KeyId,
     module: ModuleHandle<Arch, Tls>,
@@ -279,7 +279,7 @@ impl<D: 'static, M, Arch, Tls> Clone for StoredEntry<D, M, Arch, Tls>
 where
     M: Clone,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     fn clone(&self) -> Self {

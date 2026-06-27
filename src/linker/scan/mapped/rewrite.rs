@@ -258,14 +258,14 @@ pub(crate) struct RuntimeMetadataRewriter<
     K,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     module_id: ModuleId,
     plan: &'a mut LinkPlan<K, Arch, Tls>,
     runtime: &'a RuntimeModuleMemory<R>,
 }
 
-struct RewriteContext<'a, K, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver = ()> {
+struct RewriteContext<'a, K, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> = ()> {
     plan: &'a LinkPlan<K, Arch, Tls>,
     module_id: ModuleId,
     runtime: &'a RuntimeModuleMemory<R>,
@@ -276,7 +276,7 @@ where
     K: Clone + Ord,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     ElfRelType<Arch>: ByteRepr,
 {
     pub(crate) fn new(
@@ -462,7 +462,7 @@ where
     K: Clone + Ord,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     <Arch::Layout as ElfLayout>::Word: ByteRepr,
 {
     let entry_info = RelocationEntryInfo::new::<Arch>(entry);
@@ -530,7 +530,7 @@ where
     K: Clone + Ord,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     let symbol_section = match ElfSectionId::from_symbol_shndx(symbol.st_shndx()) {
         Some(scanned_section) => Some(
@@ -561,7 +561,7 @@ where
     K: Clone + Ord,
     Arch: RelocationArch + GotPltTarget,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     let target_bytes = ctx.runtime.read_section_bytes(target_section)?;
     if let Some(source_target) = <Arch as GotPltTarget>::got_plt_target(

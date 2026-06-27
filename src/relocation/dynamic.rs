@@ -17,7 +17,7 @@ use crate::{
 use alloc::vec;
 use core::num::NonZeroUsize;
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDynamic<D, Arch, R, Tls> {
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
     fn apply_relro(&self, binding: &ResolvedBinding) -> Result<()> {
         if binding.is_lazy() {
             return Ok(());
@@ -81,13 +81,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDynamic<D, A
                 .relocate_pltrel(&binding, &mut helper)?;
         }
 
-        let RelocHelper {
-            scope,
-            tls_desc_args,
-            ..
-        } = helper;
-        // Persist TLSDESC backing storage collected during relocation.
-        self.core_ref().set_tls_desc_args(tls_desc_args);
+        let RelocHelper { scope, .. } = helper;
 
         let (init, fini) = self.resolve_lifecycle()?;
         let finalizer = Finalizer::new(fini, executor.clone());
@@ -211,7 +205,7 @@ pub(crate) struct DynamicRelocation<Arch: RelocationArch = crate::arch::NativeAr
     dynrel: MappedView<ElfRelType<Arch>>,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDynamic<D, Arch, R, Tls> {
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
     /// Relocate PLT (Procedure Linkage Table) entries
     fn relocate_pltrel<PreH, PostH, Obs>(
         &self,

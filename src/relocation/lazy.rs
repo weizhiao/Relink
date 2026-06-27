@@ -17,23 +17,23 @@ mod enabled {
     };
     use core::ptr::NonNull;
 
-    impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> SupportLazy
+    impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
         for RawDynamic<D, Arch, R, Tls>
     {
     }
 
-    impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> SupportLazy
+    impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
         for RawDylib<D, Arch, R, Tls>
     {
     }
 
-    impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> SupportLazy
+    impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
         for RawExec<D, Arch, R, Tls>
     {
     }
 
-    impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver> SupportLazy
-        for RawElf<D, Arch, R, Tls>
+    impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+        SupportLazy for RawElf<D, Arch, R, Tls>
     {
     }
 
@@ -48,7 +48,12 @@ mod enabled {
             matches!(self, Self::Lazy)
         }
 
-        pub(crate) fn prepare_plt<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>(
+        pub(crate) fn prepare_plt<
+            D,
+            Arch: RelocationArch,
+            R: RegionAccess,
+            Tls: TlsResolver<Arch>,
+        >(
             &self,
             image: &RawDynamic<D, Arch, R, Tls>,
         ) -> Result<()>
@@ -126,7 +131,7 @@ mod enabled {
         }
     }
 
-    impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawDynamic<D, Arch, R, Tls> {
+    impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
         pub(crate) fn resolve_binding(&self, binding: BindingMode) -> ResolvedBinding {
             match binding {
                 BindingMode::Default => {
@@ -168,7 +173,7 @@ mod enabled {
         }
     }
 
-    fn lazy_binding_got<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>(
+    fn lazy_binding_got<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>(
         image: &RawDynamic<D, Arch, R, Tls>,
     ) -> Result<NonNull<usize>>
     where
@@ -230,7 +235,7 @@ mod enabled {
         D: 'static,
         Arch: RelocationArch,
         R: RegionAccess,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         let dylib = unsafe { &*dylib.cast::<CoreInner<D, Arch, R, Tls>>() };
         let Some(dynamic_info) = dylib.dynamic_info.as_ref() else {
@@ -261,14 +266,17 @@ mod enabled {
             invalid_state(dylib.path.as_str(), "missing lazy lookup")
         };
         let symbol = if Tls::OVERRIDE_TLS_GET_ADDR && syminfo.name() == TLS_GET_ADDR_SYMBOL {
-            Ok(dylib.tls.tls_get_addr())
+            Tls::bind_tls_get_addr()
+                .unwrap_or_else(|_| invalid_state(dylib.path.as_str(), "lazy TLS binding failed"))
         } else {
             find_symdef_impl(dylib, scope, sym, &syminfo, dynamic_info.symbolic)
                 .map(|symdef| symdef.resolve_addr(&NativeCodeExecutor))
                 .transpose()
-        }
-        .unwrap_or_else(|_| invalid_state(dylib.path.as_str(), "lazy IFUNC resolution failed"))
-        .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()));
+                .unwrap_or_else(|_| {
+                    invalid_state(dylib.path.as_str(), "lazy IFUNC resolution failed")
+                })
+                .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()))
+        };
 
         unsafe {
             if ImageMemory::write_value(
@@ -317,7 +325,7 @@ mod disabled {
         ) -> crate::Result<()>
         where
             D: 'static,
-            Tls: crate::tls::TlsResolver,
+            Tls: crate::tls::TlsResolver<Arch>,
         {
             Ok(())
         }
@@ -336,7 +344,7 @@ mod disabled {
         }
     }
 
-    impl<D, Arch: RelocationArch, R: RegionAccess, Tls: crate::tls::TlsResolver>
+    impl<D, Arch: RelocationArch, R: RegionAccess, Tls: crate::tls::TlsResolver<Arch>>
         RawDynamic<D, Arch, R, Tls>
     {
         pub(crate) fn resolve_binding(&self, _binding: BindingMode) -> ResolvedBinding {

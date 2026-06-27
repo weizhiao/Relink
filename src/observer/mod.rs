@@ -5,7 +5,7 @@ pub(crate) use event::Finalizer;
 pub use event::{
     AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, FiniEvent, InitEvent,
     ResolveDependencyEvent, ResolveRootEvent, StagedDynamic, SymbolBindingEvent,
-    TlsDescBindingEvent, TlsDescBindingRequest, TlsDescBindingValue,
+    TlsDescBindingRequest, TlsDescValue,
 };
 #[cfg(feature = "object")]
 pub use event::{

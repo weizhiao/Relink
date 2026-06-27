@@ -18,7 +18,7 @@ pub struct SymbolBindingEvent<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     core: &'a ElfCore<D, Arch, R, Tls>,
     rel: Option<&'a ElfRelType<Arch>>,
@@ -27,7 +27,7 @@ pub struct SymbolBindingEvent<
     resolved: Option<VmAddr>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     SymbolBindingEvent<'a, D, Arch, R, Tls>
 {
     #[inline]
@@ -103,7 +103,6 @@ pub struct TlsDescBindingRequest {
     addend: isize,
     module_id: Option<TlsModuleId>,
     tp_offset: Option<TlsTpOffset>,
-    tls_get_addr: Option<VmAddr>,
 }
 
 impl TlsDescBindingRequest {
@@ -114,14 +113,12 @@ impl TlsDescBindingRequest {
         addend: isize,
         module_id: Option<TlsModuleId>,
         tp_offset: Option<TlsTpOffset>,
-        tls_get_addr: Option<VmAddr>,
     ) -> Self {
         Self {
             symbol_value,
             addend,
             module_id,
             tp_offset,
-            tls_get_addr,
         }
     }
 
@@ -148,22 +145,16 @@ impl TlsDescBindingRequest {
     pub const fn tp_offset(&self) -> Option<TlsTpOffset> {
         self.tp_offset
     }
-
-    /// Address of the loader-provided `__tls_get_addr` entry point for dynamic TLSDESC.
-    #[inline]
-    pub const fn tls_get_addr(&self) -> Option<VmAddr> {
-        self.tls_get_addr
-    }
 }
 
-/// Two-word TLSDESC value produced by a binding observer.
+/// Two-word TLSDESC value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TlsDescBindingValue {
+pub struct TlsDescValue {
     resolver: VmAddr,
     arg: usize,
 }
 
-impl TlsDescBindingValue {
+impl TlsDescValue {
     /// Creates a TLSDESC pair.
     #[inline]
     pub const fn new(resolver: VmAddr, arg: usize) -> Self {
@@ -183,101 +174,20 @@ impl TlsDescBindingValue {
     }
 }
 
-/// TLSDESC relocation binding event.
-pub struct TlsDescBindingEvent<
-    'a,
-    D: 'static,
-    Arch: RelocationArch = NativeArch,
-    R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
-> {
-    core: &'a ElfCore<D, Arch, R, Tls>,
-    rel: &'a ElfRelType<Arch>,
-    request: TlsDescBindingRequest,
-    value: Option<TlsDescBindingValue>,
-}
-
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
-    TlsDescBindingEvent<'a, D, Arch, R, Tls>
-{
-    #[inline]
-    #[cfg(feature = "tls")]
-    pub(crate) const fn new(
-        core: &'a ElfCore<D, Arch, R, Tls>,
-        rel: &'a ElfRelType<Arch>,
-        request: TlsDescBindingRequest,
-    ) -> Self {
-        Self {
-            core,
-            rel,
-            request,
-            value: None,
-        }
-    }
-
-    /// Returns the image core associated with this binding.
-    #[inline]
-    pub const fn core(&self) -> &ElfCore<D, Arch, R, Tls> {
-        self.core
-    }
-
-    /// Returns the module identity used for diagnostics.
-    #[inline]
-    pub fn name(&self) -> &str {
-        self.core.name()
-    }
-
-    /// Returns the load base used by this image.
-    #[inline]
-    pub fn base(&self) -> VmAddr {
-        self.core.base()
-    }
-
-    /// Returns the relocation entry that requested this binding.
-    #[inline]
-    pub const fn rel(&self) -> &ElfRelType<Arch> {
-        self.rel
-    }
-
-    /// Returns the TLSDESC request payload.
-    #[inline]
-    pub const fn request(&self) -> TlsDescBindingRequest {
-        self.request
-    }
-
-    /// Returns the observer-provided TLSDESC value, if one was set.
-    #[inline]
-    pub const fn value(&self) -> Option<TlsDescBindingValue> {
-        self.value
-    }
-
-    /// Sets the TLSDESC value.
-    #[inline]
-    pub fn set_value(&mut self, value: TlsDescBindingValue) {
-        self.value = Some(value);
-    }
-
-    #[inline]
-    #[cfg(feature = "tls")]
-    pub(crate) const fn into_value(self) -> Option<TlsDescBindingValue> {
-        self.value
-    }
-}
-
 /// Event emitted after a dynamic image has been relocated.
 pub struct DynamicRelocatedEvent<
     'a,
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     core: &'a ElfCore<D, Arch, R, Tls>,
     dynamic_addr: VmAddr,
     finalizer: Finalizer<Arch>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     DynamicRelocatedEvent<'a, D, Arch, R, Tls>
 {
     #[inline]

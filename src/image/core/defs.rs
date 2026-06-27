@@ -7,7 +7,7 @@ use crate::{
     relocation::RelocationArch,
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering},
-    tls::{CoreTlsDescArgs, CoreTlsState, TlsResolver},
+    tls::{CoreTlsState, TlsResolver},
 };
 use core::{cell::OnceCell, marker::PhantomData, ops::Deref};
 
@@ -17,7 +17,7 @@ pub(crate) struct CoreInner<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     /// Indicates whether the component has been initialized
     pub(crate) is_init: AtomicBool,
@@ -35,10 +35,7 @@ pub(crate) struct CoreInner<
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch, Tls>>>,
 
     /// TLS runtime state for this loaded object.
-    pub(crate) tls: CoreTlsState<Tls>,
-
-    /// Backing storage for TLSDESC relocation arguments written into this image.
-    pub(crate) tls_desc_args: CoreTlsDescArgs,
+    pub(crate) tls: CoreTlsState<Arch, Tls>,
 
     /// Memory segments
     pub(crate) segments: ElfSegments<R>,
@@ -47,7 +44,7 @@ pub(crate) struct CoreInner<
     pub(crate) user_data: D,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     CoreInner<D, Arch, R, Tls>
 {
     #[inline]
@@ -59,7 +56,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Drop
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Drop
     for CoreInner<D, Arch, R, Tls>
 {
     /// Executes finalization functions when the component is dropped
@@ -77,12 +74,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Drop
 }
 
 // Safety: CoreInner can be shared between threads.
-unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Sync
+unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Sync
     for CoreInner<D, Arch, R, Tls>
 {
 }
 // Safety: CoreInner can be sent between threads.
-unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Send
+unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Send
     for CoreInner<D, Arch, R, Tls>
 {
 }

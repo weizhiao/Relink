@@ -41,7 +41,7 @@ pub enum RawElf<
     D,
     Arch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > where
     D: 'static,
     Arch: ObjectRelocationArch,
@@ -66,7 +66,7 @@ pub enum LoadedElf<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     /// A relocated dynamic library.
     Dylib(LoadedCore<D, Arch, R, Tls>),
@@ -80,7 +80,7 @@ pub enum LoadedElf<
 }
 
 // Keep this impl manual so cloning a loaded image wrapper does not require D, Arch, or R to be Clone.
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for LoadedElf<D, Arch, R, Tls>
 {
     #[inline]
@@ -94,7 +94,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawElf<D, Arch, R, Tls>
 {
     /// Creates a relocation builder for this raw image.
@@ -181,7 +181,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     LoadedElf<D, Arch, R, Tls>
 {
     /// Converts this LoadedElf into the loaded core for a dylib if it is one.
@@ -298,7 +298,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver> Relocatable<D>
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Relocatable<D>
     for RawElf<D, Arch, R, Tls>
 {
     type Output = LoadedElf<D, Arch, R, Tls>;

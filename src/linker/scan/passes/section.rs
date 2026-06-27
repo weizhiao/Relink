@@ -44,7 +44,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         let owner = plan
             .plan
@@ -62,7 +62,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan.section_metadata(self.id)
     }
@@ -76,7 +76,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan
             .section_metadata(self.id)
@@ -93,7 +93,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan
             .section_metadata(self.id)
@@ -110,7 +110,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         Ok(plan.plan.section_data(self.id)?.as_bytes())
     }
@@ -124,7 +124,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         Ok(plan.plan.section_data_mut(self.id)?.as_bytes_mut())
     }
@@ -138,7 +138,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         T: ByteRepr,
     {
         plan.plan
@@ -159,7 +159,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         T: ByteRepr,
     {
         plan.plan
@@ -190,7 +190,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan.resize_section(self.id, byte_len)
     }
@@ -204,7 +204,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan.placement(self.id)
     }
@@ -220,7 +220,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan
             .memory_layout_mut()
@@ -237,7 +237,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan
             .memory_layout_mut()
@@ -253,7 +253,7 @@ where
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         plan.plan.memory_layout_mut().clear_section(self.id)
     }

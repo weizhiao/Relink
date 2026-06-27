@@ -47,7 +47,7 @@ where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     (image.base()
         + VmOffset::new(
@@ -67,7 +67,7 @@ where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     read_native_word(slot_address(image, relocation))
 }

@@ -28,7 +28,7 @@ impl Default for MyContext {
 struct MyObserver;
 
 impl LoadObserver<MyContext> for MyObserver {
-    fn on_after_dynamic_load<R: RegionAccess, Tls: TlsResolver>(
+    fn on_after_dynamic_load<R: RegionAccess, Tls: TlsResolver<NativeArch>>(
         &mut self,
         mut event: AfterDynamicLoadEvent<'_, MyContext, NativeArch, R, Tls>,
     ) -> Result<()> {

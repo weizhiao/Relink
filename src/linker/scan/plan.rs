@@ -18,7 +18,7 @@ use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 pub(in crate::linker) struct ModuleId(usize);
 entity_ref!(ModuleId);
 
-pub struct PlannedModule<K, Arch: RelocationArch, Tls: TlsResolver = ()> {
+pub struct PlannedModule<K, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     key: K,
     module: ModulePayload<ScannedDynamic<Arch>, Arch, Tls>,
     direct_deps: Box<[ModuleId]>,
@@ -45,7 +45,7 @@ where
 impl<K, Arch, Tls> PlannedModule<K, Arch, Tls>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(in crate::linker) fn new(
@@ -107,8 +107,11 @@ type LinkPlanParts<K, Arch, Tls> = (
 /// This plan owns the discovered logical module graph and accumulates later
 /// planning decisions such as physical memory-layout plans or future
 /// materialization policies.
-pub(crate) struct LinkPlan<K, Arch: RelocationArch = crate::arch::NativeArch, Tls: TlsResolver = ()>
-{
+pub(crate) struct LinkPlan<
+    K,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    Tls: TlsResolver<Arch> = (),
+> {
     root: ModuleId,
     group_order: Vec<ModuleId>,
     module_ids: BTreeMap<K, ModuleId>,
@@ -120,7 +123,7 @@ impl<K, Arch, Tls> LinkPlan<K, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(in crate::linker) fn new(

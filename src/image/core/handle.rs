@@ -10,8 +10,8 @@ use crate::{
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{
-        CoreTlsDescArgs, CoreTlsState, TlsDescArgs, TlsImageProvider, TlsImageSource, TlsInfo,
-        TlsModuleId, TlsResolver, TlsTemplate, TlsTpOffset, tls_image_provider_handle,
+        CoreTlsState, TlsImageProvider, TlsImageSource, TlsInfo, TlsModuleId, TlsResolver,
+        TlsTemplate, TlsTpOffset, tls_image_provider_handle,
     },
 };
 use alloc::vec::Vec;
@@ -26,14 +26,14 @@ pub struct ElfCoreRef<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     /// Weak reference to the shared core allocation.
     inner: Weak<CoreInner<D, Arch, R, Tls>>,
 }
 
 // Keep this impl manual so cloning a weak core handle does not require D, Arch, or R to be Clone.
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for ElfCoreRef<D, Arch, R, Tls>
 {
     #[inline]
@@ -44,7 +44,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     ElfCoreRef<D, Arch, R, Tls>
 {
     /// Attempts to upgrade the weak pointer to an [`ElfCore`].
@@ -57,7 +57,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> TlsImageProvider
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> TlsImageProvider
     for CoreInner<D, Arch, R, Tls>
 {
     fn with_tls_template(&self, f: &mut dyn FnMut(TlsTemplate<'_>) -> Result<()>) -> Result<()> {
@@ -77,13 +77,13 @@ pub struct ElfCore<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     /// Shared reference to the inner component data.
     pub(crate) inner: Arc<CoreInner<D, Arch, R, Tls>>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for ElfCore<D, Arch, R, Tls>
 {
     /// Clones the [`ElfCore`], incrementing the internal reference count.
@@ -94,7 +94,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
     ElfCore<D, Arch, R, Tls>
 {
     /// Returns whether the ELF object has been initialized.
@@ -226,18 +226,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'stat
     }
 
     pub(crate) fn tls_addr(&self, offset: usize) -> Option<VmAddr> {
-        self.inner
-            .tls
-            .addr(offset.wrapping_sub(Arch::TLS_DTV_OFFSET))
-    }
-
-    pub(crate) fn tls_get_addr(&self) -> Option<VmAddr> {
-        self.inner.tls.tls_get_addr()
-    }
-
-    /// Set the TLS descriptor arguments used by dynamic relocation.
-    pub(crate) fn set_tls_desc_args(&self, args: TlsDescArgs) {
-        self.inner.tls_desc_args.set(args);
+        self.inner.tls.addr(offset)
     }
 
     /// Sets the finalizer that will run when the initialized image is dropped.
@@ -249,7 +238,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'stat
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> ElfCore<D, Arch, R, Tls> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    ElfCore<D, Arch, R, Tls>
+{
     /// Creates an `ElfCore` from raw components.
     ///
     /// # Safety
@@ -296,7 +287,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> ElfCor
                     _tls: PhantomData,
                 })),
                 tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_info, tls_image),
-                tls_desc_args: CoreTlsDescArgs::default(),
                 segments,
                 finalizer: OnceCell::new(),
                 user_data,
@@ -305,7 +295,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> ElfCor
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Debug
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     for ElfCore<D, Arch, R, Tls>
 {
     /// Formats the ElfCore for debugging purposes.
@@ -323,7 +313,7 @@ where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver + 'static,
+    Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
     fn name(&self) -> &str {
@@ -351,7 +341,7 @@ where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver + 'static,
+    Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
     fn name(&self) -> &str {

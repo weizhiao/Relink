@@ -118,7 +118,7 @@ pub trait ObjectRelocationArch: RelocationArch {
         Self: Sized,
         D: 'static,
         R: RegionAccess,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -140,7 +140,7 @@ pub trait ObjectRelocationArch: RelocationArch {
         Self: Sized,
         D: 'static,
         R: RegionAccess,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -290,7 +290,7 @@ pub trait RelocationHandler<Arch: RelocationArch = NativeArch> {
     /// * `Ok(HandleResult::Unhandled)` - Not handled, fall through to default behavior.
     /// * `Ok(HandleResult::Handled)` - Handled successfully.
     /// * `Err(e)` - The handler failed.
-    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, H>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &self,
         ctx: &RelocationContext<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult>;
@@ -305,7 +305,7 @@ pub struct RelocationContext<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
     H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
     rel: &'a ElfRelType<Arch>,
@@ -314,7 +314,7 @@ pub struct RelocationContext<
     scope: &'a ModuleScope<Arch, Tls>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver, H>
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>, H>
     RelocationContext<'a, D, Arch, R, Tls, H>
 {
     /// Construct a new `RelocationContext`.
@@ -373,7 +373,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver, H>
 }
 
 impl<Arch: RelocationArch> RelocationHandler<Arch> for () {
-    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, H>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &self,
         _ctx: &RelocationContext<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
@@ -382,7 +382,7 @@ impl<Arch: RelocationArch> RelocationHandler<Arch> for () {
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for &H {
-    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, Hash>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, Hash>(
         &self,
         ctx: &RelocationContext<'_, D, Arch, R, Tls, Hash>,
     ) -> Result<HandleResult> {
@@ -391,7 +391,7 @@ impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandle
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for &mut H {
-    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, Hash>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, Hash>(
         &self,
         ctx: &RelocationContext<'_, D, Arch, R, Tls, Hash>,
     ) -> Result<HandleResult> {
@@ -400,7 +400,7 @@ impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandle
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for Box<H> {
-    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, Hash>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, Hash>(
         &self,
         ctx: &RelocationContext<'_, D, Arch, R, Tls, Hash>,
     ) -> Result<HandleResult> {
@@ -409,7 +409,7 @@ impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandle
 }
 
 impl<Arch: RelocationArch, H: RelocationHandler<Arch> + ?Sized> RelocationHandler<Arch> for Arc<H> {
-    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver, Hash>(
+    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, Hash>(
         &self,
         ctx: &RelocationContext<'_, D, Arch, R, Tls, Hash>,
     ) -> Result<HandleResult> {
@@ -436,7 +436,7 @@ pub enum BindingMode {
 pub struct RelocateArgs<
     'a,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     PreH: ?Sized,
     PostH: ?Sized,
     Obs: ?Sized,
@@ -470,7 +470,7 @@ pub trait Relocatable<D = ()>: Sized {
     type Arch: RelocationArch;
 
     /// TLS resolver used by this image and every module in its relocation scope.
-    type Tls: TlsResolver;
+    type Tls: TlsResolver<Self::Arch>;
 
     /// Executes relocation using the implementor's target architecture.
     fn relocate<PreH, PostH, Obs>(

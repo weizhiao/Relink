@@ -51,7 +51,7 @@ pub struct Relocator<
     PostH,
     Arch: RelocationArch = crate::arch::NativeArch,
     Obs = (),
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
     ScopeState = ModuleScopeBuilder<Arch, Tls>,
 > {
     object: T,
@@ -68,7 +68,7 @@ impl<T, PreH, PostH, Arch, Obs, Tls, ScopeState> Clone
     for Relocator<T, PreH, PostH, Arch, Obs, Tls, ScopeState>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     T: Clone,
     PreH: Clone,
     PostH: Clone,
@@ -89,7 +89,7 @@ where
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver>
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>>
     Relocator<(), (), (), Arch, (), Tls, ModuleScopeBuilder<Arch, Tls>>
 {
     /// Creates a new empty `Relocator` configuration.
@@ -109,7 +109,10 @@ impl<Arch: RelocationArch, Tls: TlsResolver>
     /// Switches an empty relocator configuration to a different target architecture.
     pub fn for_arch<NewArch: RelocationArch>(
         self,
-    ) -> Relocator<(), (), (), NewArch, (), Tls, ModuleScopeBuilder<NewArch, Tls>> {
+    ) -> Relocator<(), (), (), NewArch, (), Tls, ModuleScopeBuilder<NewArch, Tls>>
+    where
+        Tls: TlsResolver<NewArch>,
+    {
         Relocator::<(), (), (), NewArch, (), Tls, ModuleScopeBuilder<NewArch, Tls>> {
             object: self.object,
             scope: ModuleScopeBuilder::new(),
@@ -134,7 +137,7 @@ impl<T, PreH, PostH, Arch, Obs, Tls>
     Relocator<T, PreH, PostH, Arch, Obs, Tls, ModuleScopeBuilder<Arch, Tls>>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     PreH: RelocationHandler<Arch>,
     PostH: RelocationHandler<Arch>,
     Obs: RelocationObserver<Arch>,
@@ -192,7 +195,7 @@ impl<T, PreH, PostH, Arch, Obs, Tls, ScopeState>
     Relocator<T, PreH, PostH, Arch, Obs, Tls, ScopeState>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     PreH: RelocationHandler<Arch>,
     PostH: RelocationHandler<Arch>,
     Obs: RelocationObserver<Arch>,
@@ -306,7 +309,7 @@ impl<T, PreH, PostH, Arch, Obs, Tls>
     Relocator<T, PreH, PostH, Arch, Obs, Tls, ModuleScopeBuilder<Arch, Tls>>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     PreH: RelocationHandler<Arch>,
     PostH: RelocationHandler<Arch>,
     Obs: RelocationObserver<Arch>,
@@ -358,7 +361,7 @@ impl<T, PreH, PostH, Arch, Obs, Tls>
     Relocator<T, PreH, PostH, Arch, Obs, Tls, ModuleScope<Arch, Tls>>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     PreH: RelocationHandler<Arch>,
     PostH: RelocationHandler<Arch>,
     Obs: RelocationObserver<Arch>,
@@ -411,7 +414,7 @@ impl<T, PreH, PostH, Arch, Obs, Tls, ScopeState>
 where
     T: SupportLazy,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     PreH: RelocationHandler<Arch>,
     PostH: RelocationHandler<Arch>,
     Obs: RelocationObserver<Arch>,

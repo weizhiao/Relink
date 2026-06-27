@@ -29,7 +29,7 @@ impl<R: RegionAccess> MappedArenaMap<R> {
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         M: Mmap<Region = R> + ?Sized,
     {
         if plan
@@ -96,7 +96,7 @@ impl<R: RegionAccess> MappedArenaMap<R> {
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         let placed_sections = plan
             .memory_layout()

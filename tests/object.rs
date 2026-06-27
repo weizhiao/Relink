@@ -316,7 +316,7 @@ fn object_relocated_event_exposes_section_metadata() {
     struct MetadataObserver;
 
     impl RelocationObserver for MetadataObserver {
-        fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver>(
+        fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
             &mut self,
             event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R, Tls>,
         ) -> Result<()> {
@@ -388,7 +388,7 @@ fn object_relocated_event_can_clear_default_exports() {
     struct ClearExports;
 
     impl RelocationObserver for ClearExports {
-        fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver>(
+        fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
             &mut self,
             event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R, Tls>,
         ) -> Result<()> {

@@ -131,7 +131,7 @@ impl TlsImageProvider for StaticTlsImage {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Relocatable<D>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Relocatable<D>
     for RawExec<D, Arch, R, Tls>
 {
     type Output = LoadedExec<D, Arch, R, Tls>;
@@ -181,7 +181,7 @@ pub enum RawExec<
     D,
     Arch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > where
     D: 'static,
     Arch: RelocationArch,
@@ -193,7 +193,7 @@ pub enum RawExec<
     Static(StaticExec<D, Arch, R>),
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Debug
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     for RawExec<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -203,7 +203,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Debug
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawExec<D, Arch, R, Tls> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    RawExec<D, Arch, R, Tls>
+{
     /// Creates a relocation builder for this executable image.
     pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls> {
         Relocator::<(), (), (), Arch, (), Tls>::new().with_object(self)
@@ -291,7 +293,7 @@ pub struct LoadedExec<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     /// Entry point of the executable.
     entry: VmAddr,
@@ -304,14 +306,14 @@ enum LoadedExecInner<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     Dynamic(LoadedCore<D, Arch, R, Tls>),
     Static(StaticExec<D, Arch, R>),
 }
 
 // Keep this impl manual so cloning a loaded executable does not require D, Arch, or R to be Clone.
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for LoadedExec<D, Arch, R, Tls>
 {
     #[inline]
@@ -323,7 +325,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for LoadedExecInner<D, Arch, R, Tls>
 {
     #[inline]
@@ -335,7 +337,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     LoadedExec<D, Arch, R, Tls>
 {
     /// Returns the entry point of the executable.
@@ -410,7 +412,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
         phdrs: &[ElfPhdr<Arch::Layout>],
     ) -> Result<Self>
     where
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         // Parse all program headers
         builder.parse_phdrs(phdrs)?;
@@ -462,7 +464,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> RawExec<D, Arch, R, Tls> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    RawExec<D, Arch, R, Tls>
+{
     pub(crate) fn from_builder(
         builder: ImageBuilder<Tls, D, Arch, R>,
         phdrs: &[ElfPhdr<Arch::Layout>],

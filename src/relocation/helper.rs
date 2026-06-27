@@ -12,7 +12,7 @@ use crate::{
     relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
     runtime::{CodeContext, CodeExecutor},
     segment::ElfSegments,
-    tls::{TLS_GET_ADDR_SYMBOL, TlsDescArgs, TlsResolver},
+    tls::{TLS_GET_ADDR_SYMBOL, TlsResolver},
 };
 
 /// Internal context for managing relocation state and handlers.
@@ -21,7 +21,7 @@ pub(crate) struct RelocHelper<
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver + 'static,
+    Tls: TlsResolver<Arch> + 'static,
     PreH: ?Sized,
     PostH: ?Sized,
     Obs: ?Sized,
@@ -36,7 +36,6 @@ pub(crate) struct RelocHelper<
     pub(crate) post_handler: &'find PostH,
     pub(crate) observer: &'find mut Obs,
     pub(crate) executor: &'find dyn CodeExecutor<Arch>,
-    pub(crate) tls_desc_args: TlsDescArgs,
 }
 
 impl<'find, D, Arch, R, Tls, PreH, PostH, Obs, H, Memory>
@@ -45,7 +44,7 @@ where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     PreH: RelocationHandler<Arch> + ?Sized,
     PostH: RelocationHandler<Arch> + ?Sized,
     Obs: RelocationObserver<Arch> + ?Sized,
@@ -71,7 +70,6 @@ where
             post_handler,
             observer,
             executor,
-            tls_desc_args: TlsDescArgs::default(),
         }
     }
 
@@ -100,7 +98,12 @@ where
     #[inline]
     pub(crate) fn find_symbol(&mut self, rel: &ElfRelType<Arch>) -> Result<Option<VmAddr>> {
         let (dynsym, syminfo) = self.symbols.symbol_idx(rel.r_symbol());
-        let resolved = if let Some(addr) = self.find_runtime_symbol(&syminfo) {
+        let runtime_addr = if Tls::OVERRIDE_TLS_GET_ADDR && syminfo.name() == TLS_GET_ADDR_SYMBOL {
+            Some(Tls::bind_tls_get_addr()?)
+        } else {
+            None
+        };
+        let resolved = if let Some(addr) = runtime_addr {
             Some(addr)
         } else if let Some(symdef) = find_symdef_impl(
             self.core,
@@ -117,15 +120,6 @@ where
             SymbolBindingEvent::new(self.core, Some(rel), dynsym, syminfo.name(), resolved);
         self.observer.on_symbol_binding(&mut event)?;
         Ok(event.into_resolved_addr())
-    }
-
-    #[inline]
-    fn find_runtime_symbol(&self, syminfo: &SymbolInfo<'_>) -> Option<VmAddr> {
-        if Tls::OVERRIDE_TLS_GET_ADDR && syminfo.name() == TLS_GET_ADDR_SYMBOL {
-            self.core.tls_get_addr()
-        } else {
-            None
-        }
     }
 
     #[inline]
@@ -152,12 +146,12 @@ where
 ///
 /// Contains the symbol information and the module where it was found.
 /// Used to compute the final address of a symbol.
-pub struct SymDef<'lib, Arch: RelocationArch, Tls: TlsResolver = ()> {
+pub struct SymDef<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     pub(crate) sym: Option<&'lib ElfSymbol<Arch::Layout>>,
     pub(crate) source: &'lib dyn Module<Arch, Tls>,
 }
 
-impl<'lib, Arch: RelocationArch, Tls: TlsResolver + 'static> SymDef<'lib, Arch, Tls> {
+impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, Arch, Tls> {
     #[inline]
     pub(crate) fn new(
         sym: Option<&'lib ElfSymbol<Arch::Layout>>,
@@ -248,7 +242,7 @@ pub(crate) fn reloc_error<A, D, R, Tls, H>(
 where
     A: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<A>,
 {
     let r_type_str = A::rel_type_to_str(rel.r_type());
     let r_sym = rel.r_symbol();
@@ -271,7 +265,7 @@ fn weak_undef<'lib, Arch, Tls, Source>(
 ) -> Option<SymDef<'lib, Arch, Tls>>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver + 'static,
+    Tls: TlsResolver<Arch> + 'static,
     Source: Module<Arch, Tls>,
 {
     if sym.is_weak() && sym.is_undef() {
@@ -282,7 +276,12 @@ where
     }
 }
 
-pub(crate) fn find_symdef_impl<'lib, Arch: RelocationArch, Tls: TlsResolver + 'static, Source>(
+pub(crate) fn find_symdef_impl<
+    'lib,
+    Arch: RelocationArch,
+    Tls: TlsResolver<Arch> + 'static,
+    Source,
+>(
     source: &'lib Source,
     scope: &'lib ModuleScope<Arch, Tls>,
     sym: &'lib ElfSymbol<Arch::Layout>,

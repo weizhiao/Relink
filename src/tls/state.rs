@@ -1,41 +1,15 @@
 #[cfg(feature = "tls")]
 mod enabled {
     use super::super::defs::{
-        TlsDescDynamicArg, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset,
+        TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTemplate, TlsTpOffset,
     };
     use super::super::traits::TlsResolver;
     use crate::{
         Result,
         memory::{MappedView, VmAddr},
+        relocation::RelocationArch,
     };
-    use alloc::{boxed::Box, vec::Vec};
-    use core::{cell::OnceCell, marker::PhantomData};
-
-    /// Stores descriptor args behind stable allocations because relocated
-    /// TLSDESC entries keep raw pointers to individual args.
-    #[allow(clippy::vec_box)]
-    #[derive(Default)]
-    pub(crate) struct TlsDescArgs(Vec<Box<TlsDescDynamicArg>>);
-
-    impl TlsDescArgs {
-        pub(crate) fn push(&mut self, arg: Box<TlsDescDynamicArg>) {
-            self.0.push(arg);
-        }
-    }
-
-    #[derive(Default)]
-    pub(crate) struct CoreTlsDescArgs {
-        args: OnceCell<Box<[Box<TlsDescDynamicArg>]>>,
-    }
-
-    impl CoreTlsDescArgs {
-        pub(crate) fn set(&self, args: TlsDescArgs) {
-            assert!(
-                self.args.set(args.0.into_boxed_slice()).is_ok(),
-                "TLS descriptor arguments must be set only once",
-            );
-        }
-    }
+    use core::marker::PhantomData;
 
     struct TlsModuleState {
         mod_id: Option<TlsModuleId>,
@@ -53,13 +27,13 @@ mod enabled {
     ///
     /// This keeps TLS-specific bookkeeping out of `CoreInner`, so TLS state can
     /// collapse to an empty implementation when the `tls` feature is disabled.
-    pub(crate) struct CoreTlsState<Tls: TlsResolver = ()> {
+    pub(crate) struct CoreTlsState<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
         module: TlsModuleState,
         template: Option<TlsTemplate<'static>>,
-        _marker: PhantomData<fn() -> Tls>,
+        _marker: PhantomData<fn() -> (Arch, Tls)>,
     }
 
-    impl<Tls: TlsResolver> CoreTlsState<Tls> {
+    impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> CoreTlsState<Arch, Tls> {
         pub(crate) fn new(
             mod_id: Option<TlsModuleId>,
             tp_offset: Option<TlsTpOffset>,
@@ -131,14 +105,9 @@ mod enabled {
         pub(crate) fn addr(&self, offset: usize) -> Option<VmAddr> {
             let ti = TlsIndex {
                 ti_module: self.module.mod_id?,
-                ti_offset: offset,
+                ti_offset: offset.wrapping_sub(Arch::TLS_DTV_OFFSET),
             };
-            Some(VmAddr::from_ptr(Tls::tls_get_addr(&ti)))
-        }
-
-        #[inline]
-        pub(crate) fn tls_get_addr(&self) -> Option<VmAddr> {
-            Some(VmAddr::from_ptr(Tls::tls_get_addr as *const ()))
+            Tls::resolve_tls_addr(ti).ok()
         }
     }
 }
@@ -149,17 +118,8 @@ mod disabled {
     use crate::{
         Result,
         memory::{MappedView, VmAddr},
+        relocation::RelocationArch,
     };
-
-    #[derive(Default)]
-    pub(crate) struct TlsDescArgs;
-
-    #[derive(Default)]
-    pub(crate) struct CoreTlsDescArgs;
-
-    impl CoreTlsDescArgs {
-        pub(crate) fn set(&self, _args: TlsDescArgs) {}
-    }
 
     /// TLS runtime state attached to a loaded ELF core.
     ///
@@ -168,11 +128,11 @@ mod disabled {
     use super::super::traits::TlsResolver;
     use core::marker::PhantomData;
 
-    pub(crate) struct CoreTlsState<Tls: TlsResolver = ()> {
-        _marker: PhantomData<fn() -> Tls>,
+    pub(crate) struct CoreTlsState<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+        _marker: PhantomData<fn() -> (Arch, Tls)>,
     }
 
-    impl<Tls: TlsResolver> CoreTlsState<Tls> {
+    impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> CoreTlsState<Arch, Tls> {
         pub(crate) fn new(
             _mod_id: Option<TlsModuleId>,
             _tp_offset: Option<TlsTpOffset>,
@@ -216,16 +176,11 @@ mod disabled {
         pub(crate) fn addr(&self, _offset: usize) -> Option<VmAddr> {
             None
         }
-
-        #[inline]
-        pub(crate) fn tls_get_addr(&self) -> Option<VmAddr> {
-            None
-        }
     }
 }
 
 #[cfg(feature = "tls")]
-pub(crate) use enabled::{CoreTlsDescArgs, CoreTlsState, TlsDescArgs};
+pub(crate) use enabled::CoreTlsState;
 
 #[cfg(not(feature = "tls"))]
-pub(crate) use disabled::{CoreTlsDescArgs, CoreTlsState, TlsDescArgs};
+pub(crate) use disabled::CoreTlsState;

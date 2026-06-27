@@ -195,16 +195,3 @@ pub struct TlsIndex {
     /// Offset inside the module's TLS block.
     pub ti_offset: usize,
 }
-
-/// Dynamic TLSDESC resolver argument.
-///
-/// This structure is used as the second word of a TLSDESC descriptor
-/// when dynamic resolution is required. It contains a pointer to the
-/// `tls_get_addr` function and the actual `TlsIndex` data.
-#[repr(C)]
-#[derive(Debug)]
-#[cfg_attr(not(feature = "tls"), allow(dead_code))]
-pub(crate) struct TlsDescDynamicArg {
-    pub tls_get_addr: usize,
-    pub ti: TlsIndex,
-}

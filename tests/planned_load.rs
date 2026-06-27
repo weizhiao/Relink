@@ -139,7 +139,12 @@ impl KeyResolver<'static, &'static str> for MultiBinaryResolver {
 }
 
 impl LinkObserver for RecordingObserver {
-    fn on_staged_dynamic<K, D: 'static, R: RegionAccess, Tls: TlsResolver>(
+    fn on_staged_dynamic<
+        K,
+        D: 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<elf_loader::arch::NativeArch>,
+    >(
         &mut self,
         event: StagedDynamic<'_, K, D, elf_loader::arch::NativeArch, R, Tls>,
     ) -> elf_loader::Result<()> {
@@ -152,7 +157,12 @@ impl LinkObserver for RecordingObserver {
 }
 
 impl LinkObserver for FailingObserver {
-    fn on_staged_dynamic<K, D: 'static, R: RegionAccess, Tls: TlsResolver>(
+    fn on_staged_dynamic<
+        K,
+        D: 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<elf_loader::arch::NativeArch>,
+    >(
         &mut self,
         _event: StagedDynamic<'_, K, D, elf_loader::arch::NativeArch, R, Tls>,
     ) -> elf_loader::Result<()> {

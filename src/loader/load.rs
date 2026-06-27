@@ -23,7 +23,7 @@ use alloc::{boxed::Box, vec::Vec};
 impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
 {
@@ -95,7 +95,7 @@ impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: 'static,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
 {
@@ -129,7 +129,7 @@ impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: Default + 'static,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
 {

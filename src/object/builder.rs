@@ -43,7 +43,7 @@ struct ObjectSectionData<Arch: ObjectRelocationArch> {
 
 impl<T, D, Arch, R> ObjectBuilder<T, D, Arch, R>
 where
-    T: TlsResolver,
+    T: TlsResolver<Arch>,
     Arch: ObjectRelocationArch,
     R: RegionAccess,
 {

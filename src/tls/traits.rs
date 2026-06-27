@@ -1,20 +1,16 @@
 use super::{TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTpOffset};
-use crate::{Result, TlsError};
-
-const TLS_GET_ADDR_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
-    "tls_get_addr called on unit TlsResolver which does not support TLS. Use `with_default_tls_resolver()` to enable TLS support."
-} else {
-    "tls_get_addr called without compiled-in TLS support. Enable the `tls` cargo feature."
-};
+#[cfg(feature = "tls")]
+use crate::observer::TlsDescValue;
+use crate::{Result, TlsError, memory::VmAddr, relocation::RelocationArch};
 
 /// A trait for resolving TLS (Thread Local Storage) information.
 ///
 /// Implement this trait to provide custom TLS module IDs and thread pointer offsets.
 /// This is essential for supporting TLS in environments with custom thread management,
 /// such as operating system kernels or bare-metal systems.
-pub trait TlsResolver: 'static {
+pub trait TlsResolver<Arch: RelocationArch>: 'static {
     /// Whether this resolver should override `__tls_get_addr` symbol bindings.
-    const OVERRIDE_TLS_GET_ADDR: bool = true;
+    const OVERRIDE_TLS_GET_ADDR: bool = false;
 
     /// Registers a module with dynamic TLS and returns the allocated module ID.
     ///
@@ -52,15 +48,35 @@ pub trait TlsResolver: 'static {
     /// Releases resources associated with the given module ID.
     fn unregister(mod_id: TlsModuleId);
 
-    /// Returns the address of a thread-local variable for the given index.
+    /// Returns the target-visible `__tls_get_addr` entry point.
     ///
-    /// This is typically called by architecture-specific TLS relocation handlers.
-    extern "C" fn tls_get_addr(ti: *const TlsIndex) -> *mut u8;
+    /// Native same-process resolvers can return a host function pointer. Remote
+    /// or guest runtimes should return an address inside the target runtime.
+    fn bind_tls_get_addr() -> Result<VmAddr>;
+
+    /// Resolves the current thread's host-visible address for a TLS variable.
+    ///
+    /// This is used by host APIs such as symbol lookup. Unlike
+    /// [`bind_tls_get_addr`](Self::bind_tls_get_addr), the returned address must
+    /// be meaningful to the caller in this process.
+    fn resolve_tls_addr(ti: TlsIndex) -> Result<VmAddr>;
+
+    /// Returns the target-visible TLSDESC binding for a static TLS access.
+    #[cfg(feature = "tls")]
+    #[inline]
+    fn bind_static_tlsdesc(_tpoff: usize) -> Result<TlsDescValue> {
+        Err(TlsError::ResolverUnsupported.into())
+    }
+
+    /// Returns the target-visible TLSDESC binding for a dynamic TLS access.
+    #[cfg(feature = "tls")]
+    #[inline]
+    fn bind_dynamic_tlsdesc(_ti: TlsIndex) -> Result<TlsDescValue> {
+        Err(TlsError::ResolverUnsupported.into())
+    }
 }
 
-impl TlsResolver for () {
-    const OVERRIDE_TLS_GET_ADDR: bool = false;
-
+impl<Arch: RelocationArch> TlsResolver<Arch> for () {
     fn register(_tls_info: &TlsInfo) -> Result<TlsModuleId> {
         Err(TlsError::ResolverUnsupported.into())
     }
@@ -85,7 +101,11 @@ impl TlsResolver for () {
         // No-op for unit resolver as it doesn't maintain any state
     }
 
-    extern "C" fn tls_get_addr(_ti: *const TlsIndex) -> *mut u8 {
-        panic!("{TLS_GET_ADDR_DISABLED_MESSAGE}");
+    fn bind_tls_get_addr() -> Result<VmAddr> {
+        Err(TlsError::ResolverUnsupported.into())
+    }
+
+    fn resolve_tls_addr(_ti: TlsIndex) -> Result<VmAddr> {
+        Err(TlsError::ResolverUnsupported.into())
     }
 }

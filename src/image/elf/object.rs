@@ -19,7 +19,7 @@ use crate::{
         Relocator,
     },
     sync::{Arc, AtomicBool},
-    tls::{CoreTlsDescArgs, CoreTlsState, TlsResolver},
+    tls::{CoreTlsState, TlsResolver},
 };
 use core::{borrow::Borrow, cell::OnceCell, fmt::Debug, ops::Deref};
 
@@ -34,7 +34,7 @@ pub struct RawObject<
     D: 'static = (),
     Arch: ObjectRelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     /// Core component containing basic ELF information.
     pub(crate) core: ElfCore<D, Arch, R, Tls>,
@@ -61,7 +61,7 @@ pub struct RawObject<
     pub(crate) fini: Lifecycle,
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver> Deref
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
     for RawObject<D, Arch, R, Tls>
 {
     type Target = ElfCore<D, Arch, R, Tls>;
@@ -71,7 +71,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver> 
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawObject<D, Arch, R, Tls>
 {
     pub(crate) fn from_builder(mut builder: ObjectBuilder<Tls, D, Arch, R>) -> Self {
@@ -85,7 +85,6 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver>
             user_data: builder.user_data,
             dynamic_info: None,
             tls: CoreTlsState::new(builder.tls_mod_id, builder.tls_tp_offset, None, None),
-            tls_desc_args: CoreTlsDescArgs::default(),
             segments,
         };
 
@@ -123,7 +122,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver>
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver> Debug
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     for RawObject<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -137,7 +136,7 @@ impl<D: 'static, Arch, R, Tls> Relocatable<D> for RawObject<D, Arch, R, Tls>
 where
     Arch: ObjectRelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     type Output = LoadedObject<D, Arch, R, Tls>;
     type Arch = Arch;
@@ -161,12 +160,12 @@ pub struct LoadedObject<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     pub(crate) inner: LoadedCore<D, Arch, R, Tls>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for LoadedObject<D, Arch, R, Tls>
 {
     #[inline]
@@ -177,7 +176,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Debug
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     for LoadedObject<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -187,7 +186,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Debug
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Deref
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
     for LoadedObject<D, Arch, R, Tls>
 {
     type Target = LoadedCore<D, Arch, R, Tls>;
@@ -197,7 +196,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Deref
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     Borrow<LoadedCore<D, Arch, R, Tls>> for LoadedObject<D, Arch, R, Tls>
 {
     fn borrow(&self) -> &LoadedCore<D, Arch, R, Tls> {
@@ -205,7 +204,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     Borrow<LoadedCore<D, Arch, R, Tls>> for &LoadedObject<D, Arch, R, Tls>
 {
     fn borrow(&self) -> &LoadedCore<D, Arch, R, Tls> {
@@ -213,7 +212,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     From<LoadedObject<D, Arch, R, Tls>> for LoadedCore<D, Arch, R, Tls>
 {
     #[inline]
@@ -222,7 +221,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     From<&LoadedObject<D, Arch, R, Tls>> for LoadedCore<D, Arch, R, Tls>
 {
     #[inline]
@@ -231,7 +230,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
     From<LoadedObject<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
 {
     #[inline]
@@ -240,7 +239,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'stat
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
     From<&LoadedObject<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
 {
     #[inline]

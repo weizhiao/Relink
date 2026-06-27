@@ -16,7 +16,7 @@ impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
 where
     Obs: LoadObserver<D, Arch>,
     D: Default + 'static,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Arch: ObjectRelocationArch,
     M: Mmap,
 {
@@ -271,7 +271,7 @@ mod tests {
             Ok(())
         }
 
-        fn on_after_object_load<R: RegionAccess, Tls: TlsResolver>(
+        fn on_after_object_load<R: RegionAccess, Tls: TlsResolver<Arch>>(
             &mut self,
             event: AfterObjectLoadEvent<'_, ObjectData, crate::arch::NativeArch, R, Tls>,
         ) -> Result<()> {

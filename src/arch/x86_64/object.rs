@@ -77,7 +77,7 @@ impl X86_64Arch {
     where
         D: 'static,
         R: RegionAccess,
-        Tls: crate::tls::TlsResolver,
+        Tls: crate::tls::TlsResolver<Self>,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: crate::observer::RelocationObserver<Self> + ?Sized,

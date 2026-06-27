@@ -84,7 +84,7 @@ pub struct AfterObjectLoadEvent<
     D: 'static,
     Arch: ObjectRelocationArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     raw: &'event mut RawObject<D, Arch, R, Tls>,
 }
@@ -93,7 +93,7 @@ impl<'event, D: 'static, Arch, R, Tls> AfterObjectLoadEvent<'event, D, Arch, R, 
 where
     Arch: ObjectRelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) const fn new(raw: &'event mut RawObject<D, Arch, R, Tls>) -> Self {
@@ -127,7 +127,7 @@ pub struct ObjectRelocatedEvent<
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     core: &'event ElfCore<D, Arch, R, Tls>,
     sections: &'event ObjectSections<Arch::Layout>,
@@ -137,7 +137,7 @@ pub struct ObjectRelocatedEvent<
     finalizer: Finalizer<Arch>,
 }
 
-impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     ObjectRelocatedEvent<'event, D, Arch, R, Tls>
 {
     #[inline]

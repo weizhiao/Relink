@@ -23,7 +23,7 @@ pub struct LinkContext<
     D: 'static,
     M = (),
     Arch: RelocationArch = NativeArch,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     pub(super) committed: CommittedStorage<K, D, M, Arch, Tls>,
 }
@@ -31,7 +31,7 @@ pub struct LinkContext<
 impl<K, D: 'static, M, Arch, Tls> Default for LinkContext<K, D, M, Arch, Tls>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     fn default() -> Self {
@@ -42,7 +42,7 @@ where
 impl<K, D: 'static, M, Arch, Tls> LinkContext<K, D, M, Arch, Tls>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     /// Creates an empty link context.
     #[inline]
@@ -57,7 +57,7 @@ impl<K, D: 'static, M, Arch, Tls> LinkContext<K, D, M, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     /// Returns whether no modules have been committed.
     #[inline]

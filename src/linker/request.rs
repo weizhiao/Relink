@@ -27,7 +27,7 @@ pub trait DependencyOwner {
     fn needed_lib(&self, index: usize) -> Option<&str>;
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> DependencyOwner
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> DependencyOwner
     for RawDynamic<D, Arch, R, Tls>
 {
     #[inline]
@@ -231,7 +231,7 @@ pub trait VisibleModules<
     K: Clone,
     Arch: RelocationArch = crate::arch::NativeArch,
     Q: ?Sized = K,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 >
 {
     /// Returns the actual visible key represented by `key`, if any.
@@ -256,8 +256,8 @@ pub trait VisibleModules<
     }
 }
 
-impl<K: Clone, Arch: RelocationArch, Q: ?Sized, Tls: TlsResolver> VisibleModules<K, Arch, Q, Tls>
-    for ()
+impl<K: Clone, Arch: RelocationArch, Q: ?Sized, Tls: TlsResolver<Arch>>
+    VisibleModules<K, Arch, Q, Tls> for ()
 {
 }
 
@@ -265,7 +265,7 @@ impl<K: Clone, Arch, Q, Tls, V> VisibleModules<K, Arch, Q, Tls> for &V
 where
     Arch: RelocationArch,
     Q: ?Sized,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     V: VisibleModules<K, Arch, Q, Tls> + ?Sized,
 {
     #[inline]
@@ -294,7 +294,7 @@ pub struct RelocationRequest<
     D: 'static,
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     key: &'a K,
     raw: RawDynamic<D, Arch, R, Tls>,
@@ -306,7 +306,7 @@ impl<'a, K, D: 'static, Arch, R, Tls> RelocationRequest<'a, K, D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new(
@@ -353,7 +353,10 @@ where
 }
 
 /// Per-module relocation inputs produced by the caller's runtime policy.
-pub struct RelocationInputs<Arch: RelocationArch = crate::arch::NativeArch, Tls: TlsResolver = ()> {
+pub struct RelocationInputs<
+    Arch: RelocationArch = crate::arch::NativeArch,
+    Tls: TlsResolver<Arch> = (),
+> {
     scope: ModuleScope<Arch, Tls>,
     binding: BindingMode,
 }
@@ -361,7 +364,7 @@ pub struct RelocationInputs<Arch: RelocationArch = crate::arch::NativeArch, Tls:
 impl<Arch, Tls> RelocationInputs<Arch, Tls>
 where
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     /// Creates relocation inputs from an ordered lookup scope.
     #[inline]
@@ -426,7 +429,7 @@ pub trait RelocationPlanner<
     D: 'static,
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 >
 {
     /// Builds relocation inputs for one mapped module.
@@ -444,7 +447,7 @@ impl<K, D: 'static, Arch, R, Tls> RelocationPlanner<K, D, Arch, R, Tls> for Defa
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     fn plan(
@@ -459,7 +462,7 @@ impl<K, D: 'static, Arch, R, Tls, F> RelocationPlanner<K, D, Arch, R, Tls> for F
 where
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     F: for<'a> FnMut(
         &RelocationRequest<'a, K, D, Arch, R, Tls>,
     ) -> Result<RelocationInputs<Arch, Tls>>,

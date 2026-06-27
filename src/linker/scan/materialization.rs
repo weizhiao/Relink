@@ -14,7 +14,7 @@ impl<K, Arch, Tls> LinkPlan<K, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     pub(in crate::linker) fn normalize(&mut self) -> Result<()> {
         self.try_for_each_module(|plan, module_id| {
@@ -40,13 +40,14 @@ where
     }
 }
 
-fn resolve_materialization_mode<K, Tls>(
-    plan: &LinkPlan<K, impl RelocationArch, Tls>,
+fn resolve_materialization_mode<K, Arch, Tls>(
+    plan: &LinkPlan<K, Arch, Tls>,
     module_id: ModuleId,
 ) -> Result<Materialization>
 where
     K: Clone + Ord,
-    Tls: TlsResolver,
+    Arch: RelocationArch,
+    Tls: TlsResolver<Arch>,
 {
     let capability = plan
         .module_capability(module_id)
@@ -103,7 +104,7 @@ impl ArenaState {
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         for module_id in modules.iter().copied() {
             for section_id in plan
@@ -127,7 +128,7 @@ impl ArenaState {
     ) where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         for module_id in modules.iter().copied() {
             let section_count = plan.module_layout(module_id).alloc_sections().len();
@@ -149,7 +150,7 @@ impl ArenaState {
     ) where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         let metadata = plan.section_metadata(section_id);
         let memory_class = metadata
@@ -180,7 +181,7 @@ impl ArenaState {
     ) where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         let (memory_class, alignment) = {
             let section = plan.section_metadata(section_id);

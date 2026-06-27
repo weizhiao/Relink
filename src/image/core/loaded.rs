@@ -23,13 +23,13 @@ pub struct LoadedCore<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     core: ElfCore<D, Arch, R, Tls>,
     scope: ModuleScope<Arch, Tls>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static> Debug
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static> Debug
     for LoadedCore<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -48,7 +48,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'stat
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for LoadedCore<D, Arch, R, Tls>
 {
     /// Clones the [`LoadedCore`], incrementing the reference count of its core and retained scope.
@@ -60,7 +60,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver> Clone
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     From<&LoadedCore<D, Arch, R, Tls>> for LoadedCore<D, Arch, R, Tls>
 {
     #[inline]
@@ -69,7 +69,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
     From<LoadedCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
 {
     #[inline]
@@ -78,7 +78,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'stat
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
     From<&LoadedCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
 {
     #[inline]
@@ -87,7 +87,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'stat
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'static>
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
     LoadedCore<D, Arch, R, Tls>
 {
     #[inline]
@@ -329,7 +329,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver + 'stat
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver> LoadedCore<D, Arch, HostRegion, Tls> {
+impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
+    LoadedCore<D, Arch, HostRegion, Tls>
+{
     fn read_dynamic_view(
         segments: &ElfSegments,
         base: VmAddr,
@@ -488,7 +490,7 @@ where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
-    Tls: TlsResolver + 'static,
+    Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
     fn name(&self) -> &str {

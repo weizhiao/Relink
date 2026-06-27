@@ -100,7 +100,7 @@ pub struct LinkPassPlan<
     K,
     S = AnyPass,
     Arch: RelocationArch = crate::arch::NativeArch,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > where
     S: PassScopeMode,
 {
@@ -113,7 +113,7 @@ where
     K: Clone + Ord,
     S: PassScopeMode,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     fn new(plan: &'a mut LinkPlan<K, Arch, Tls>) -> Self {
@@ -181,7 +181,7 @@ where
     K: Clone + Ord,
     S: SectionDataAccess,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     fn checked_section(&self, id: SectionId) -> Option<Section<'a, S>> {
@@ -265,7 +265,7 @@ where
     K: Clone + Ord,
     S: ReorderAccess,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     /// Creates one arena for section-region materialization.
     #[inline]
@@ -288,7 +288,7 @@ pub trait LinkPass<
     K: Clone + Ord,
     S = AnyPass,
     Arch: RelocationArch = crate::arch::NativeArch,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > where
     S: PassScopeMode,
 {
@@ -307,7 +307,7 @@ pub struct LinkPipeline<
     'a,
     K: Clone + Ord,
     Arch: RelocationArch = crate::arch::NativeArch,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     passes: Vec<PipelinePass<'a, K, Arch, Tls>>,
 }
@@ -316,7 +316,7 @@ impl<'a, K, Arch, Tls> Default for LinkPipeline<'a, K, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     #[inline]
     fn default() -> Self {
@@ -328,7 +328,7 @@ impl<'a, K, Arch, Tls> LinkPipeline<'a, K, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
 {
     /// Creates an empty pipeline.
     #[inline]

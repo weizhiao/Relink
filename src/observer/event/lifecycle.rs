@@ -115,13 +115,13 @@ pub struct InitEvent<
     D: 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
-    Tls: TlsResolver = (),
+    Tls: TlsResolver<Arch> = (),
 > {
     core: &'a ElfCore<D, Arch, R, Tls>,
     lifecycle: Lifecycle,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver>
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     InitEvent<'a, D, Arch, R, Tls>
 {
     #[inline]

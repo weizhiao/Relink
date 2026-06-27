@@ -14,8 +14,7 @@ pub use object::{
     AfterObjectLoadEvent, BeforeObjectLoadEvent, ObjectRelocatedEvent, SectionLayoutEvent,
 };
 pub use relocation::{
-    DynamicRelocatedEvent, SymbolBindingEvent, TlsDescBindingEvent, TlsDescBindingRequest,
-    TlsDescBindingValue,
+    DynamicRelocatedEvent, SymbolBindingEvent, TlsDescBindingRequest, TlsDescValue,
 };
 pub use resolve::{ResolveDependencyEvent, ResolveRootEvent};
 

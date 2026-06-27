@@ -186,7 +186,7 @@ impl<R: RegionAccess> MappedRuntimeMemory<R> {
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         M: Mmap<Region = R> + ?Sized,
     {
         let Some(arenas) = MappedArenaMap::map_plan(mapper, plan)? else {
@@ -216,7 +216,7 @@ impl<R: RegionAccess> MappedRuntimeMemory<R> {
     where
         K: Clone + Ord,
         Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
         crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     {
         let runtime = self.modules.get(id).ok_or_else(|| {
@@ -230,7 +230,7 @@ impl<R: RegionAccess> MappedRuntimeMemory<R> {
     where
         K: Clone + Ord,
         Arch: RelocationArch,
-        Tls: TlsResolver,
+        Tls: TlsResolver<Arch>,
     {
         self.arenas.populate(plan)
     }
@@ -256,7 +256,7 @@ pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch, R>(
 ) -> Result<RawDynamic<D, Arch, R, Tls>>
 where
     D: Default + 'static,
-    Tls: TlsResolver,
+    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     R: RegionAccess,
 {

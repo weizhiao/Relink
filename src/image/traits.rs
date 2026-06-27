@@ -118,7 +118,7 @@ impl ModuleTls {
 ///
 /// Implementations may be backed by a loaded ELF image, a synthetic/virtual DSO,
 /// or any other module that can expose ELF-like symbol definitions.
-pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver = ()>:
+pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>:
     Any + Send + Sync
 {
     /// Returns the module name used for diagnostics.
@@ -140,7 +140,7 @@ impl<M, Arch, Tls> Module<Arch, Tls> for Arc<M>
 where
     M: Module<Arch, Tls> + ?Sized + 'static,
     Arch: RelocationArch,
-    Tls: TlsResolver + 'static,
+    Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
     fn name(&self) -> &str {
