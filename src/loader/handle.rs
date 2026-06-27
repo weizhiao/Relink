@@ -261,7 +261,6 @@ where
     }
 
     /// Consumes the current loader and returns a new one with the specified TLS resolver.
-    #[cfg(feature = "tls")]
     pub fn with_tls_resolver<NewTls>(self) -> Loader<Obs, D, NewTls, Arch, M>
     where
         NewTls: TlsResolver<Arch>,
@@ -274,7 +273,6 @@ where
     }
 
     /// Sets whether to force static TLS for all loaded modules.
-    #[cfg(feature = "tls")]
     pub fn with_static_tls(mut self, enabled: bool) -> Self {
         self.inner.force_static_tls = enabled;
         self

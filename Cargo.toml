@@ -9,7 +9,7 @@ rust-version.workspace = true
 readme = "README.md"
 keywords = ["elf", "loader", "jit", "linker", "no-std"]
 categories = ["no-std", "os", "parsing", "embedded", "compilers"]
-description = "A no_std-friendly ELF loader, runtime linker, and JIT linker for Rust."
+description = "A no_std-friendly ELF loader and runtime linker for Rust."
 exclude = [".gitignore", "ci", "docs"]
 
 [package.metadata.docs.rs]
@@ -126,7 +126,7 @@ full = ["tls", "lazy-binding", "object", "libc"]
 use-syscall = ["dep:syscalls"]
 # Use the version information of symbols when resolving them.
 version = []
-# Enable TLS relocation handling and the built-in TLS resolver.
+# Enable the built-in same-process TLS resolver.
 tls = ["dep:spin"]
 # Enable lazy binding support.
 lazy-binding = []

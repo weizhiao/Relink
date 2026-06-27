@@ -1,4 +1,4 @@
-# Relink: Rust ELF Loader and Runtime/JIT Linker
+# Relink: Rust ELF Loader and Runtime Linker
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/weizhiao/elf_loader/main/docs/assets/logo.svg" width="560" alt="Relink logo">
@@ -24,50 +24,33 @@
 
 Relink is a Rust ELF loading and runtime linking library. It can load `.so` files, executables, and object files from disk or memory, then resolve dependencies, apply relocations, and look up symbols.
 
-When `dlopen` is too rigid, Relink lets you decide how dependencies are found, how symbols are searched, how memory is mapped, and whether to scan and adjust layout before loading.
-
 ## When To Use It
 
 - Load plugins, JIT artifacts, or hot-reload modules at runtime.
 - Control `DT_NEEDED` dependencies, symbol scopes, or relocation handling yourself.
 - Load ELF from memory, or plug in your own mmap or memory-management backend.
 - Scan dependencies and sections first, then reorder layout, pack hot code, use huge pages, or run custom handling.
+- Load relocatable ELF files such as `.o` / `.ko`.
 - Keep ELF loading available in `no_std`, kernels, embedded systems, or non-standard runtimes.
 
 ## What It Loads
 
 - Shared objects / dynamic libraries (`ET_DYN`)
 - Executables and PIE-style images (`ET_EXEC`, plus executable-style `ET_DYN`)
-- Relocatable object files (`ET_REL`) when the `object` feature is enabled
-- File-backed or in-memory inputs via `&str`, `String`, `&[u8]`, `Vec<u8>`, `ElfFile`, and `ElfBinary`
+- Relocatable object files (`ET_REL`, for example `.o` / `.ko`) when the `object` feature is enabled
 
-Use `Loader::load()` when you want automatic ELF type detection. Use `load_dylib()`, `load_exec()`, or `load_object()` when you want strict type checks.
-
-## Core Capabilities
-
-| Capability | What Relink provides |
-| --- | --- |
-| In-memory loading | Load ELF images from paths, memory buffers, or parsed inputs |
-| Custom linking policy | Decide how dependencies resolve, where symbols are searched, and how relocations are intercepted |
-| Isolated link contexts | Multiple `LinkContext`s keep independent loaded-module sets, dependency graphs, and symbol scopes |
-| Scan-first planning | Inspect dependencies and sections first, then decide how to map, reorder, or rewrite |
-| Pre-load layout optimization | With `--emit-relocs`, reorder sections, pack hot code, or run custom handling |
-| Replaceable mapping backend | Plug in your own mmap, page size, permissions, and memory access model |
-| Type-safe symbol access | Symbol handles are tied to the lifetime of their loaded image, reducing dangling-symbol risks |
-| Hybrid loading | Combine `.so`, executable images, and `.o` / `ET_REL` inputs in one flow |
-
-### Compared With `dlopen`
+## Compared With `dlopen`
 
 | Capability | Relink | `dlopen`-style loading |
 | --- | --- | --- |
-| In-memory loading | ✅ Paths / memory buffers / parsed ELF | ❌ |
-| `ET_REL` loading | ✅ Requires feature | ❌ |
-| Pre-link planning | ✅ Scan dependencies and sections first | ❌ |
-| Pre-load layout optimization | ✅ Section reordering / hot-code packing / custom handling | ❌ |
-| Mapping policy | ✅ Replaceable mmap backend, page size, and permission policy | ❌ |
-| Dependency and symbol policy | ✅ Dependency graph / scope / lookup / interception control | ❌ |
-| Context isolation | ✅ Multiple `LinkContext`s isolate dependency graphs and symbol scopes | ❌ |
-| Heterogeneous loading | ✅ Different ELF layouts / ABIs / target architectures | ❌ |
+| In-memory loading | ✅ Load from paths, byte buffers, or already parsed ELF inputs | ❌ |
+| `ET_REL` loading | ✅ Load and relocate `.o` / `.ko` / `ET_REL` files | ❌ |
+| Pre-link planning | ✅ Resolve dependencies and sections first, then decide how to map | ❌ |
+| Pre-load layout optimization | ✅ Adjust section layout before mapping for hot-code packing or custom reordering | ❌ |
+| Mapping policy | ✅ Replace mmap, page size, permissions, and memory-access backends | ❌ |
+| Dependency and symbol policy | ✅ Customize `DT_NEEDED` resolution, symbol scopes, and relocation interception | ❌ |
+| Context isolation | ✅ Multiple `LinkContext`s keep independent modules, dependency graphs, and symbol scopes | ❌ |
+| Remote / heterogeneous loading | ✅ Use custom memory access to load remote devices or heterogeneous target ELFs locally | ❌ |
 
 ## Quick Start
 
@@ -85,62 +68,33 @@ To enable the common advanced features in one bundle:
 elf_loader = { version = "0.15.1", features = ["full"] }
 ```
 
-### Load a Dynamic Library and Call a Symbol
+### Use Linker to Load Dependencies
 
 ```rust
 use elf_loader::{
-    image::{SyntheticModule, SyntheticSymbol},
-    Loader, Result,
+    Result,
+    input::PathBuf,
+    linker::{LinkContext, Linker, SearchPathResolver},
 };
 
-extern "C" fn host_double(value: i32) -> i32 {
-    value * 2
-}
-
 fn main() -> Result<()> {
-    let lib = Loader::new()
-        .load_dylib("path/to/plugin.so")?
-        .relocator()
-        .scope([SyntheticModule::new(
-            "__host",
-            [SyntheticSymbol::function("host_double", host_double as *const ())],
-        )])
-        .relocate()?;
+    let root = PathBuf::from("path/to/plugin.so");
+    let mut context: LinkContext<PathBuf, ()> = LinkContext::new();
+
+    let loaded = Linker::new()
+        .resolver(SearchPathResolver::new())
+        .load(&mut context, root)?;
 
     let run = unsafe {
-        lib.get::<extern "C" fn(i32) -> i32>("run")
+        loaded
+            .get::<extern "C" fn() -> i32>("run")
             .expect("symbol `run` not found")
     };
-    assert_eq!(run(21), 42);
+    let _ = run();
 
     Ok(())
 }
 ```
-
-## Loading Paths
-
-| Path | Entry point | Best for |
-| --- | --- | --- |
-| Direct loading | `Loader::load_dylib()` / `load_exec()` / `load_object()` | You already know which ELF to load |
-| Automatic dependency resolution | `Linker::load()` | Handle `DT_NEEDED`, dependency graphs, and symbol scopes |
-| Scan then load | `Linker::load_scan_first()` | Inspect dependencies and sections before mapping, then run layout passes |
-| Load `.o` | `Loader::load_object()` | Compose `.o` and `.so` inputs; requires the `object` feature |
-| Custom memory environment | `Loader::with_mmap(mapper)` / `with_page_size()` | Plug in your own mmap backend, page size, or permission policy |
-
-## Advanced Capability Index
-
-| Topic | Entry point / example |
-| --- | --- |
-| Load from memory | `ElfBinary::new(name, bytes)`, or direct `load_dylib(&bytes)` / `load_exec(&bytes)` |
-| Host symbols and scopes | `SyntheticModule`, `scope()`, `extend_scope()` |
-| Relocation interception | `pre_handler()`, `post_handler()`, see `cargo run --example relocation_handler` |
-| Lazy binding | `relocator().lazy()`, requires the `lazy-binding` feature |
-| Runtime dependency graphs | `KeyResolver`, `LinkContext`, `Linker::load()` |
-| Pre-map layout optimization | `Linker::load_scan_first()`, `map_pipeline()`, see `cargo run --example linker_scan_first` |
-| Relocatable objects | `cargo run --example load_object --features object` |
-| Lifecycle callbacks | `cargo run --example lifecycle` |
-
-For section reordering or hot-code packing before loading, the target ELF usually needs to keep relocation information, for example by passing `-Wl,--emit-relocs` to the linker.
 
 ## Benchmarks
 
@@ -171,7 +125,7 @@ Symbol lookup was measured after both loaders had already loaded the fixture cha
 | Feature | Default | Purpose |
 | --- | --- | --- |
 | `libc` | Yes | Use the libc backend on Unix-like platforms |
-| `tls` | Yes | Enable TLS relocation handling and the built-in TLS resolver |
+| `tls` | Yes | Enable the built-in same-process TLS resolver |
 | `lazy-binding` | No | Enable PLT/GOT lazy binding and lazy-fixup lookup configuration |
 | `object` | No | Enable relocatable object (`ET_REL`) loading and `Loader::load_object()` |
 | `version` | No | Enable version-aware symbol lookup such as `get_version()` |
@@ -183,27 +137,10 @@ Symbol lookup was measured after both loaders had already loaded the fixture cha
 Notes:
 
 - The default features are `tls` + `libc`.
-- Compiling with `tls` is not enough by itself for TLS-using modules. Start from `Loader::new().with_default_tls_resolver()` or provide your own TLS resolver when loading ELF objects that require TLS relocations.
+- `tls` only provides the default resolver; custom TLS resolvers do not need this feature.
 - `load_object()` is feature-gated. `cargo run --example load_object` will fail under the default feature set unless you add `--features object`.
 
-## Examples
-
-The [`examples/`](examples/) directory covers the main extension points:
-
-| Example | What it demonstrates | Command |
-| --- | --- | --- |
-| `load_dylib` | Load shared objects and resolve host symbols | `cargo run --example load_dylib` |
-| `linker_load` | Resolve `DT_NEEDED` dependencies with `Linker::load()` | `cargo run --example linker_load` |
-| `from_memory` | Load ELF data from a byte buffer | `cargo run --example from_memory` |
-| `load_exec` | Inspect executable entry and base addresses | `cargo run --example load_exec` |
-| `load_hook` | Observe segment loading with `with_observer()` | `cargo run --example load_hook` |
-| `linker_scan_first` | Discover `DT_NEEDED`, run scan-first passes, and configure pre-map layout | `cargo run --example linker_scan_first` |
-| `lifecycle` | Custom `.init` / `.fini` handling | `cargo run --example lifecycle` |
-| `user_data` | Initialize dynamic-image metadata | `cargo run --example user_data` |
-| `relocation_handler` | Intercept relocations with a custom handler | `cargo run --example relocation_handler` |
-| `load_object` | Load relocatable object files | `cargo run --example load_object --features object` |
-
-## Platform Notes
+## Platform Support
 
 | Instruction set | Dynamic libraries / executables | Pre-load layout optimization | `.o` / `ET_REL` |
 | --- | --- | --- | --- |
@@ -216,8 +153,6 @@ The [`examples/`](examples/) directory covers the main extension points:
 | `loongarch64` | ✅ | 🟡 | ⏳ |
 
 Legend: ✅ supported, 🟡 basic support, ⏳ pending. Complex section-reorder repair and `.o` / `ET_REL` support are currently centered on `x86_64` and `riscv64` relocation handling; contributions for the other architectures are welcome.
-
-Symbol lookup is name-based and does not perform Rust name mangling for you. Export C ABI symbols when you want stable runtime lookup names.
 
 ## Contributing
 
