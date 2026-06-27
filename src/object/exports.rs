@@ -1,6 +1,6 @@
 use crate::{
-    elf::{ElfLayout, ElfSymbol, PreCompute, SymbolInfo},
-    image::SymbolExports,
+    elf::{ElfLayout, ElfSymbol},
+    image::{SymbolExports, SymbolLookup},
     object::CustomHash,
 };
 use alloc::{string::String, vec::Vec};
@@ -58,11 +58,10 @@ impl<L: ElfLayout> SymbolExports<L> for ObjectExports<L> {
     #[inline]
     fn lookup<'exports>(
         &'exports self,
-        symbol: &SymbolInfo<'_>,
-        precompute: &mut PreCompute,
+        lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'exports ElfSymbol<L>> {
         self.hashtab
-            .lookup_idx(symbol, precompute)
+            .lookup_idx(lookup)
             .map(|idx| &self.symbols[idx])
     }
 }
@@ -93,12 +92,10 @@ mod tests {
         exports.insert("symbol", weak);
         exports.insert("symbol", strong);
 
-        let info = SymbolInfo::from_str("symbol", None);
-        let mut precompute = info.precompute();
+        let mut lookup = SymbolLookup::new("symbol");
         let resolved = <ObjectExports<NativeElfLayout> as SymbolExports<NativeElfLayout>>::lookup(
             &exports,
-            &info,
-            &mut precompute,
+            &mut lookup,
         )
         .expect("symbol should resolve");
 

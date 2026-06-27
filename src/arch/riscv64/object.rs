@@ -8,7 +8,7 @@ use crate::{
         object_relocation_sections, section_entries,
     },
     observer::RelocationObserver,
-    relocation::{ObjectRelocationArch, RelocHelper, RelocationHandler, reloc_error},
+    relocation::{ObjectRelocationArch, RelocHelper, RelocationHandler},
 };
 use elf::abi::*;
 use hashbrown::HashMap;
@@ -202,8 +202,6 @@ impl RiscV64Arch {
         let r_type = rel.r_type().raw();
         let place = VmAddr::new(target.sh_addr()) + rel.r_offset();
         let addend = rel.read_addend(helper.memory(), place)?;
-        let value_error =
-            |reason| reloc_error::<Self, _, R, Tls, H>(rel, reason, helper.core, helper.symbols());
 
         match r_type {
             R_RISCV_NONE | R_RISCV_RELAX => {}
@@ -218,7 +216,7 @@ impl RiscV64Arch {
             R_RISCV_32 => {
                 let sym = helper.symbol_addr(rel.r_symbol());
                 let value = u32::try_from(sym.wrapping_add_signed(addend).get())
-                    .map_err(|_| value_error(RelocReason::IntConversionOutOfRange))?;
+                    .map_err(|_| helper.reloc_error(rel, RelocReason::IntConversionOutOfRange))?;
                 unsafe { helper.memory().write_value(place, value)? };
             }
             R_RISCV_32_PCREL => {
@@ -226,7 +224,7 @@ impl RiscV64Arch {
                 let value = i32::try_from(
                     sym.wrapping_add_signed(addend).get() as i128 - place.get() as i128,
                 )
-                .map_err(|_| value_error(RelocReason::IntConversionOutOfRange))?;
+                .map_err(|_| helper.reloc_error(rel, RelocReason::IntConversionOutOfRange))?;
                 unsafe { helper.memory().write_value(place, value)? };
             }
             R_RISCV_BRANCH => {
@@ -258,13 +256,13 @@ impl RiscV64Arch {
 
                 let off = signed_offset(target, addend, place);
                 if !(-(1i64 << 31)..(1i64 << 31)).contains(&off) {
-                    return Err(value_error(RelocReason::IntConversionOutOfRange));
+                    return Err(helper.reloc_error(rel, RelocReason::IntConversionOutOfRange));
                 }
                 Self::write_auipc_pair(helper.memory(), place, off)?;
             }
             R_RISCV_GOT_HI20 => {
                 if addend != 0 {
-                    return Err(value_error(RelocReason::Unsupported));
+                    return Err(helper.reloc_error(rel, RelocReason::Unsupported));
                 }
                 let sym = helper.symbol_addr(rel.r_symbol());
                 let key = ObjectRelocKey::new::<Self>(rel, addend);
@@ -401,7 +399,7 @@ impl RiscV64Arch {
                     })?
                 };
             }
-            _ => return Err(value_error(RelocReason::Unsupported)),
+            _ => return Err(helper.reloc_error(rel, RelocReason::Unsupported)),
         }
 
         Ok(())
@@ -466,12 +464,7 @@ impl RiscV64Arch {
     {
         let auipc_addr = helper.symbol_addr(rel.r_symbol());
         let Some(hi20) = state.hi20_cache.get(&auipc_addr).copied() else {
-            return Err(reloc_error::<Self, _, R, Tls, H>(
-                rel,
-                RelocReason::Unsupported,
-                helper.core,
-                helper.symbols(),
-            ));
+            return Err(helper.reloc_error(rel, RelocReason::Unsupported));
         };
 
         let off = if hi20.r_type == R_RISCV_GOT_HI20 {
@@ -645,12 +638,7 @@ where
     let sym = helper.symbol_addr(rel.r_symbol());
     let off = signed_offset(sym, addend, place);
     if off & 1 != 0 || off < -range || off >= range {
-        return Err(reloc_error::<RiscV64Arch, _, R, Tls, H>(
-            rel,
-            RelocReason::IntConversionOutOfRange,
-            helper.core,
-            helper.symbols(),
-        ));
+        return Err(helper.reloc_error(rel, RelocReason::IntConversionOutOfRange));
     }
     Ok(off)
 }

@@ -2,9 +2,9 @@ use super::{ElfCore, ElfCoreRef, Symbol};
 use crate::{
     Result,
     arch::ArchKind,
-    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolType, SymbolInfo},
+    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolType},
     hint::unlikely,
-    image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, ModuleTls},
+    image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, ModuleTls, SymbolLookup},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymDef},
@@ -234,11 +234,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     /// * `None` - If the symbol is not found
     #[inline]
     pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
-        let syminfo = SymbolInfo::from_str(name, None);
-        let mut precompute = syminfo.precompute();
+        let mut lookup = SymbolLookup::new(name);
         self.core
             .exports()
-            .lookup(&syminfo, &mut precompute)
+            .lookup(&mut lookup)
             .and_then(|sym| self.lookup_addr(sym))
             .map(|addr| Symbol::from_ptr(addr.as_mut_ptr()))
     }
@@ -273,11 +272,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         name: &str,
         version: &str,
     ) -> Option<Symbol<'lib, T>> {
-        let syminfo = SymbolInfo::from_str(name, Some(version));
-        let mut precompute = syminfo.precompute();
+        let mut lookup = SymbolLookup::with_version(name, version);
         self.core
             .exports()
-            .lookup(&syminfo, &mut precompute)
+            .lookup(&mut lookup)
             .and_then(|sym| self.lookup_addr(sym))
             .map(|addr| Symbol::from_ptr(addr.as_mut_ptr()))
     }

@@ -22,7 +22,7 @@ mod traits;
 pub(crate) use defs::{RelocValue, RelocationValueFormula, RelocationValueKind, resolve_ifunc};
 pub(crate) use dynamic::DynamicRelocation;
 pub use dynamic::{relocate_relative, relocate_relr};
-pub(crate) use helper::{RelocHelper, SymDef, find_symdef_impl, reloc_error};
+pub(crate) use helper::{RelocHelper, SymDef, find_symdef_impl};
 pub(crate) use lazy::ResolvedBinding;
 #[cfg(feature = "lazy-binding")]
 pub(crate) use lazy::dl_fixup;

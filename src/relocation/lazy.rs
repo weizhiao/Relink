@@ -260,22 +260,26 @@ mod enabled {
             invalid_symbol_index(dylib.path.as_str(), r_sym, sym_count);
         }
 
-        let (sym, syminfo) = symtab.symbol_idx(r_sym);
+        let symbol_entry = symtab.symbol_idx(r_sym);
 
         let Some(scope) = dynamic_info.lazy.scope.get() else {
             invalid_state(dylib.path.as_str(), "missing lazy lookup")
         };
-        let symbol = if Tls::OVERRIDE_TLS_GET_ADDR && syminfo.name() == TLS_GET_ADDR_SYMBOL {
+        let symbol = if Tls::OVERRIDE_TLS_GET_ADDR && symbol_entry.name() == TLS_GET_ADDR_SYMBOL {
             Tls::bind_tls_get_addr()
                 .unwrap_or_else(|_| invalid_state(dylib.path.as_str(), "lazy TLS binding failed"))
         } else {
-            find_symdef_impl(dylib, scope, sym, &syminfo, dynamic_info.symbolic)
-                .map(|symdef| symdef.resolve_addr(&NativeCodeExecutor))
-                .transpose()
-                .unwrap_or_else(|_| {
-                    invalid_state(dylib.path.as_str(), "lazy IFUNC resolution failed")
-                })
-                .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), syminfo.name()))
+            find_symdef_impl(
+                dylib,
+                scope,
+                symbol_entry.symbol(),
+                symbol_entry.info(),
+                dynamic_info.symbolic,
+            )
+            .map(|symdef| symdef.resolve_addr(&NativeCodeExecutor))
+            .transpose()
+            .unwrap_or_else(|_| invalid_state(dylib.path.as_str(), "lazy IFUNC resolution failed"))
+            .unwrap_or_else(|| unresolved_symbol(dylib.path.as_str(), symbol_entry.name()))
         };
 
         unsafe {

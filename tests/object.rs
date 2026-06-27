@@ -395,14 +395,14 @@ fn object_relocated_event_can_clear_default_exports() {
             let symtab = event.symtab();
             assert!(
                 (0..symtab.symbols().len())
-                    .any(|idx| symtab.symbol_idx(idx).1.name() == LOCAL_VAR_NAME),
+                    .any(|idx| symtab.symbol_idx(idx).name() == LOCAL_VAR_NAME),
                 "relocated object symbol table should include the global object symbol"
             );
-            let (symbol, _) = (0..symtab.symbols().len())
+            let symbol = (0..symtab.symbols().len())
                 .map(|idx| symtab.symbol_idx(idx))
-                .find(|(_, info)| info.name() == LOCAL_VAR_NAME)
+                .find(|entry| entry.name() == LOCAL_VAR_NAME)
                 .expect("local var symbol should exist");
-            let addr = event.core().base() + VmOffset::new(symbol.st_value());
+            let addr = event.core().base() + VmOffset::new(symbol.symbol().st_value());
             let mut bytes = [0u8; 4];
             event.memory().read_bytes(addr, &mut bytes)?;
             assert_eq!(bytes, [0u8; 4]);

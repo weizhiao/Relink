@@ -186,24 +186,29 @@ where
 
         for idx in 0..symbol_count {
             let value = {
-                let (symbol, syminfo) = self.symtab.symbol_idx(idx);
+                let entry = self.symtab.symbol_idx(idx);
+                let symbol = entry.symbol();
                 if symbol.symbol_type() == ElfSymbolType::FILE {
                     continue;
                 }
 
                 let addr = if symbol.is_undef() {
-                    let resolved = if let Some(symdef) =
-                        find_symdef_impl(&self.core, scope, symbol, &syminfo, self.core.symbolic())
-                    {
+                    let resolved = if let Some(symdef) = find_symdef_impl(
+                        &self.core,
+                        scope,
+                        symbol,
+                        entry.info(),
+                        self.core.symbolic(),
+                    ) {
                         Some(symdef.resolve_addr(executor)?)
                     } else {
                         None
                     };
                     let mut event =
-                        SymbolBindingEvent::new(&self.core, None, symbol, syminfo.name(), resolved);
+                        SymbolBindingEvent::new(&self.core, None, symbol, entry.name(), resolved);
                     observer.on_symbol_binding(&mut event)?;
                     let Some(resolved) = event.into_resolved_addr() else {
-                        return Err(unresolved_symbol_error(&self.core, syminfo.name()));
+                        return Err(unresolved_symbol_error(&self.core, entry.name()));
                     };
                     resolved
                 } else if symbol.st_shndx().is_abs() {
@@ -229,7 +234,8 @@ where
     fn default_exports(&self) -> ObjectExports<Arch::Layout> {
         let mut exports = ObjectExports::empty();
         for idx in 0..self.symtab.symbols().len() {
-            let (symbol, info) = self.symtab.symbol_idx(idx);
+            let entry = self.symtab.symbol_idx(idx);
+            let symbol = entry.symbol();
             if symbol.is_undef()
                 || !symbol.is_ok_bind()
                 || !symbol.is_ok_type()
@@ -237,7 +243,7 @@ where
             {
                 continue;
             }
-            exports.insert(info.name(), symbol.clone());
+            exports.insert(entry.name(), symbol.clone());
         }
         exports
     }

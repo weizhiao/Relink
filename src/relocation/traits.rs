@@ -1,5 +1,5 @@
 #[cfg(feature = "object")]
-use super::{RelocHelper, reloc_error};
+use super::RelocHelper;
 use super::{RelocValue, RelocationValueKind, SymDef, find_symdef_impl};
 #[cfg(feature = "object")]
 use crate::elf::ElfShdr;
@@ -7,8 +7,8 @@ use crate::{
     ByteRepr, RelocReason, Result,
     arch::{ArchKind, NativeArch},
     elf::{
-        ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType, ElfSymbol, HashTable,
-        SymbolInfo, SymbolTableView,
+        ElfLayout, ElfMachine, ElfRelEntry, ElfRelType, ElfRelocationType, HashTable, SymbolEntry,
+        SymbolTableView,
     },
     image::{ElfCore, ModuleScope},
     memory::{HostRegion, RegionAccess, VmAddr},
@@ -118,7 +118,7 @@ pub trait ObjectRelocationArch: RelocationArch {
         Self: Sized,
         D: 'static,
         R: RegionAccess,
-        Tls: TlsResolver<Arch>,
+        Tls: TlsResolver<Self>,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -140,18 +140,13 @@ pub trait ObjectRelocationArch: RelocationArch {
         Self: Sized,
         D: 'static,
         R: RegionAccess,
-        Tls: TlsResolver<Arch>,
+        Tls: TlsResolver<Self>,
         PreH: RelocationHandler<Self> + ?Sized,
         PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: crate::memory::ImageMemory,
     {
-        Err(reloc_error::<Self, _, R, Tls, H>(
-            rel,
-            RelocReason::Unsupported,
-            helper.core,
-            helper.symbols(),
-        ))
+        Err(helper.reloc_error(rel, RelocReason::Unsupported))
     }
 
     /// Returns whether this object relocation reserves a regular GOT entry.
@@ -353,13 +348,13 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
 
     /// Access a symbol table entry by index for this relocation context.
     #[inline]
-    pub fn symbol(&self, r_sym: usize) -> (&'a ElfSymbol<Arch::Layout>, SymbolInfo<'a>) {
+    pub fn symbol(&self, r_sym: usize) -> SymbolEntry<'a, Arch::Layout> {
         self.symbols.symbol_idx(r_sym)
     }
 
     /// Access the symbol referenced by the current relocation, if it has one.
     #[inline]
-    pub fn relocation_symbol(&self) -> Option<(&'a ElfSymbol<Arch::Layout>, SymbolInfo<'a>)> {
+    pub fn relocation_symbol(&self) -> Option<SymbolEntry<'a, Arch::Layout>> {
         let r_sym = self.rel.r_symbol();
         (r_sym != 0).then(|| self.symbol(r_sym))
     }
@@ -367,8 +362,14 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
     /// Find symbol definition in the current scope
     #[inline]
     pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, Arch, Tls>> {
-        let (sym, syminfo) = self.symbol(r_sym);
-        find_symdef_impl(self.lib, self.scope, sym, &syminfo, self.lib.symbolic())
+        let symbol = self.symbol(r_sym);
+        find_symdef_impl(
+            self.lib,
+            self.scope,
+            symbol.symbol(),
+            symbol.info(),
+            self.lib.symbolic(),
+        )
     }
 }
 

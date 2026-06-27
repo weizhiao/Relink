@@ -6,7 +6,6 @@ use crate::{
     object::layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
     relocation::{
         RelocHelper, RelocValue, RelocationHandler, RelocationValueInput, RelocationValueProvider,
-        reloc_error,
     },
 };
 use elf::abi::*;
@@ -84,18 +83,9 @@ impl X86_64Arch {
         Memory: ImageMemory,
     {
         let r_type = rel.r_type();
-        let core = helper.core;
         let place = VmAddr::new(target.sh_addr()) + rel.r_offset();
         let append = rel.read_addend(helper.memory(), place)?;
-        let unknown_symbol = || {
-            reloc_error(
-                rel,
-                crate::RelocReason::UnknownSymbol,
-                core,
-                helper.symbols(),
-            )
-        };
-        let value_error = |reason| reloc_error(rel, reason, core, helper.symbols());
+        let value_error = |reason| helper.reloc_error(rel, reason);
         let relocation_target_value = |target| {
             Self::object_relocation_value(r_type.raw() as usize, target, append, place.get())
         };
@@ -167,7 +157,7 @@ impl X86_64Arch {
                 let sym = helper.symbol_addr(rel.r_symbol());
                 write_relocation_target(helper.memory(), sym.get())?;
             }
-            _ => return Err(unknown_symbol()),
+            _ => return Err(value_error(RelocReason::UnknownSymbol)),
         }
 
         Ok(())

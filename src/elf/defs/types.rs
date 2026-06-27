@@ -4,6 +4,10 @@ use bitflags::bitflags;
 use core::fmt::{self, Display};
 use elf::abi::*;
 
+use super::{
+    layout::{ElfLayout, NativeElfLayout},
+    raw::ElfSymRaw,
+};
 use crate::{arch::NativeArch, relocation::RelocationArch};
 
 /// This element holds the total size, in bytes, of the DT_RELR relocation table.
@@ -636,6 +640,142 @@ impl Display for ElfSectionIndex {
             SHN_XINDEX => f.write_str("SHN_XINDEX"),
             raw => write!(f, "ELF symbol section index {raw}"),
         }
+    }
+}
+
+/// Valid symbol binding types bitmask.
+/// This mask includes STB_GLOBAL, STB_WEAK, and STB_GNU_UNIQUE bindings.
+const OK_BINDS: usize = 1 << STB_GLOBAL | 1 << STB_WEAK | 1 << STB_GNU_UNIQUE;
+
+/// Valid symbol type bitmask.
+/// This mask includes STT_NOTYPE, STT_OBJECT, STT_FUNC, STT_COMMON, STT_TLS, and STT_GNU_IFUNC types.
+const OK_TYPES: usize = 1 << STT_NOTYPE
+    | 1 << STT_OBJECT
+    | 1 << STT_FUNC
+    | 1 << STT_COMMON
+    | 1 << STT_TLS
+    | 1 << STT_GNU_IFUNC;
+
+/// ELF symbol table entry.
+///
+/// This struct provides a unified interface for accessing ELF symbol information
+/// regardless of whether the ELF file is 32-bit or 64-bit.
+#[repr(transparent)]
+pub struct ElfSymbol<L: ElfLayout = NativeElfLayout> {
+    sym: L::Sym,
+}
+
+impl<L: ElfLayout> Clone for ElfSymbol<L> {
+    fn clone(&self) -> Self {
+        Self {
+            sym: L::Sym::from_fields(
+                self.st_name(),
+                self.st_value(),
+                self.st_size(),
+                self.sym.st_info(),
+                self.st_other(),
+                self.st_shndx().raw(),
+            ),
+        }
+    }
+}
+
+impl<L: ElfLayout> ElfSymbol<L> {
+    pub(crate) fn synthetic(
+        value: usize,
+        size: usize,
+        bind: ElfSymbolBind,
+        symbol_type: ElfSymbolType,
+        section_index: ElfSectionIndex,
+    ) -> Self {
+        let st_info = (bind.raw() << 4) | (symbol_type.raw() & 0xf);
+        Self {
+            sym: L::Sym::from_fields(0, value, size, st_info, 0, section_index.raw()),
+        }
+    }
+
+    /// Returns the symbol value.
+    #[inline]
+    pub fn st_value(&self) -> usize {
+        self.sym.st_value()
+    }
+
+    /// Returns the parsed ELF symbol binding.
+    #[inline]
+    pub fn bind(&self) -> ElfSymbolBind {
+        ElfSymbolBind::new(self.sym.st_info() >> 4)
+    }
+
+    /// Returns the parsed ELF symbol type.
+    #[inline]
+    pub fn symbol_type(&self) -> ElfSymbolType {
+        ElfSymbolType::new(self.sym.st_info() & 0xf)
+    }
+
+    /// Returns the section index.
+    #[inline]
+    pub fn st_shndx(&self) -> ElfSectionIndex {
+        ElfSectionIndex::new(self.sym.st_shndx())
+    }
+
+    /// Returns the symbol name index.
+    #[inline]
+    pub fn st_name(&self) -> usize {
+        self.sym.st_name()
+    }
+
+    /// Returns the symbol size.
+    #[inline]
+    pub fn st_size(&self) -> usize {
+        self.sym.st_size()
+    }
+
+    /// Returns the symbol visibility.
+    #[inline]
+    pub fn st_other(&self) -> u8 {
+        self.sym.st_other()
+    }
+
+    /// Returns true if the symbol is undefined (not defined in this object file).
+    /// Undefined symbols typically need to be resolved from other object files or libraries.
+    #[inline]
+    pub fn is_undef(&self) -> bool {
+        self.st_shndx().is_undef()
+    }
+
+    /// Returns true if the symbol has a valid binding type for relocation.
+    /// Valid bindings include global, weak, and GNU unique symbols.
+    #[inline]
+    pub fn is_ok_bind(&self) -> bool {
+        (1 << self.bind().raw()) & OK_BINDS != 0
+    }
+
+    /// Returns true if the symbol has a valid type for relocation.
+    /// Valid types include object, function, common, TLS, and GNU IFUNC symbols.
+    #[inline]
+    pub fn is_ok_type(&self) -> bool {
+        (1 << self.symbol_type().raw()) & OK_TYPES != 0
+    }
+
+    /// Returns true if the symbol has local binding.
+    /// Local symbols are only visible within the object file that defines them.
+    #[inline]
+    pub fn is_local(&self) -> bool {
+        self.bind() == ElfSymbolBind::LOCAL
+    }
+
+    /// Returns true if the symbol has weak binding.
+    /// Weak symbols can be overridden by global symbols with the same name.
+    #[inline]
+    pub fn is_weak(&self) -> bool {
+        self.bind() == ElfSymbolBind::WEAK
+    }
+
+    /// Sets the symbol value.
+    /// This is used internally when resolving symbol addresses during loading.
+    #[inline]
+    pub(crate) fn set_value(&mut self, value: usize) {
+        self.sym.set_st_value(value);
     }
 }
 

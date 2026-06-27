@@ -27,30 +27,30 @@ pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab, LifecycleSpec, parse_dyn
 pub(crate) use hash::SymbolHash;
 pub(crate) use phdr::ElfPhdrs;
 pub(crate) use symbol::ElfStringTable;
+pub(crate) use symbol::SymbolInfo;
 
 // Public API exports
 pub use defs::{
     Elf32Layout, Elf32Sym, Elf64Layout, ElfClass, ElfDataEncoding, ElfDynamicTag, ElfFileType,
     ElfLayout, ElfMachine, ElfProgramFlags, ElfProgramType, ElfRel, ElfRelEntry, ElfRelType,
     ElfRela, ElfRelocationType, ElfRelr, ElfSectionFlags, ElfSectionId, ElfSectionIndex,
-    ElfSectionType, ElfSymbolBind, ElfSymbolType, Lifecycle, NativeElfLayout,
+    ElfSectionType, ElfSymbol, ElfSymbolBind, ElfSymbolType, Lifecycle, NativeElfLayout,
 };
 pub use dynamic::ElfDyn;
 /// Core ELF data types for program headers, relocations, and symbols.
 pub use ehdr::ElfHeader;
 pub use hash::HashTable;
-pub use hash::PreCompute;
 pub use note::{ElfNhdr, ElfNote, ElfNotes};
 pub use phdr::ElfPhdr;
 pub use shdr::ElfShdr;
-pub use symbol::{ElfSymbol, SymbolInfo, SymbolTable, SymbolTableView};
+pub use symbol::{SymbolEntry, SymbolLookup, SymbolTable, SymbolTableView};
 
 unsafe impl ByteRepr for defs::ElfEhdr {}
 unsafe impl<L: defs::ElfLayout> ByteRepr for dynamic::ElfDyn<L> {}
 unsafe impl ByteRepr for note::ElfNhdr {}
 unsafe impl<L: defs::ElfLayout> ByteRepr for phdr::ElfPhdr<L> {}
 unsafe impl<L: defs::ElfLayout> ByteRepr for shdr::ElfShdr<L> {}
-unsafe impl<L: defs::ElfLayout> ByteRepr for symbol::ElfSymbol<L> {}
+unsafe impl<L: defs::ElfLayout> ByteRepr for defs::ElfSymbol<L> {}
 unsafe impl<L: defs::ElfLayout> ByteRepr for defs::ElfRelr<L> {}
 unsafe impl<L: defs::ElfLayout> ByteRepr for defs::ElfRela<L> {}
 unsafe impl<L: defs::ElfLayout> ByteRepr for defs::ElfRel<L> {}

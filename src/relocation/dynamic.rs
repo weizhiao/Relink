@@ -9,7 +9,6 @@ use crate::{
     observer::{DynamicRelocatedEvent, Finalizer, RelocationObserver},
     relocation::{
         BindingMode, RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, ResolvedBinding,
-        reloc_error,
     },
     runtime::CodeContext,
     tls::{TlsRelocOutcome, TlsResolver, handle_tls_reloc},
@@ -240,7 +239,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                     continue;
                 }
 
-                if let Some(symbol) = helper.find_symbol(rel)? {
+                if let Some(symbol) = helper.find_symdef(rel)?.resolved_addr() {
                     let word = <Arch::Layout as ElfLayout>::Word::from_usize(symbol.get());
                     unsafe { helper.memory().write_value(place, word)? };
                     continue;
@@ -267,7 +266,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
             }
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)?.is_unhandled() {
-                return Err(reloc_error(rel, failure_reason, core, self.symtab().view()));
+                return Err(helper.reloc_error(rel, failure_reason));
             }
         }
         Ok(self)
@@ -323,7 +322,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                 continue;
             }
             let r_type = rel.r_type();
-            let r_sym = rel.r_symbol();
             let place = base + rel.r_offset();
             let mut failure_reason = RelocReason::Unsupported;
 
@@ -335,7 +333,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
 
             if r_type == Arch::GOT || r_type == Arch::SYMBOLIC {
                 // Handle GOT and symbolic relocations
-                if let Some(symbol) = helper.find_symbol(rel)? {
+                if let Some(symbol) = helper.find_symdef(rel)?.resolved_addr() {
                     let r_addend = rel.read_addend(helper.memory(), place)?;
                     let value = symbol.wrapping_add_signed(r_addend);
                     let word = <Arch::Layout as ElfLayout>::Word::from_usize(value.get());
@@ -345,8 +343,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                 failure_reason = RelocReason::UnknownSymbol;
             } else if r_type == Arch::COPY {
                 // Handle copy relocations (typically for global data)
-                let len = helper.symbols().symbol_idx(r_sym).0.st_size();
-                if let Some(symdef) = helper.find_symdef(r_sym)
+                let symbol = helper.find_symdef(rel)?;
+                let len = symbol.requested_symbol().st_size();
+                if let Some(symdef) = symbol.symdef()
                     && let Some(sym) = symdef.symbol()
                 {
                     let mut src = vec![0; len];
@@ -378,7 +377,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
 
             // Handle unknown relocations with the provided handler
             if helper.handle_post(rel)?.is_unhandled() {
-                return Err(reloc_error(rel, failure_reason, core, self.symtab().view()));
+                return Err(helper.reloc_error(rel, failure_reason));
             }
         }
         Ok(self)

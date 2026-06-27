@@ -1,8 +1,7 @@
 //! Custom ELF hash table implementation for relocatable objects.
 
 use crate::elf::{
-    ElfLayout, ElfStringTable, ElfSymbol, ElfSymbolType, PreCompute, SymbolHash, SymbolInfo,
-    SymbolTableView,
+    ElfLayout, ElfStringTable, ElfSymbol, ElfSymbolType, SymbolHash, SymbolLookup, SymbolTableView,
 };
 use core::hash::{Hash, Hasher};
 use foldhash::{SharedSeed, fast::FoldHasher};
@@ -47,21 +46,9 @@ impl<N: AsRef<str>> CustomHash<N> {
     }
 
     #[inline]
-    pub(crate) fn lookup_idx(
-        &self,
-        symbol: &SymbolInfo,
-        precompute: &mut PreCompute,
-    ) -> Option<usize> {
-        let name = symbol.name();
-        let hash = if let Some(hash) = precompute.custom {
-            hash
-        } else {
-            let hash = Self::hash(name.as_bytes());
-            precompute.custom = Some(hash);
-            hash
-        };
-
-        self.find_idx_with_hash(name, hash)
+    pub(crate) fn lookup_idx(&self, lookup: &mut SymbolLookup<'_>) -> Option<usize> {
+        let hash = lookup.custom_hash(|name| Self::hash(name.as_bytes()));
+        self.find_idx_with_hash(lookup.name(), hash)
     }
 
     #[inline]
@@ -105,10 +92,9 @@ impl<L: ElfLayout> SymbolHash<L> for CustomHash {
     fn lookup<'sym, H>(
         &self,
         table: SymbolTableView<'sym, L, H>,
-        symbol: &SymbolInfo,
-        precompute: &mut PreCompute,
+        lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>> {
-        self.lookup_idx(symbol, precompute)
-            .map(|idx| table.symbol_idx(idx).0)
+        self.lookup_idx(lookup)
+            .map(|idx| table.symbol_idx(idx).symbol())
     }
 }

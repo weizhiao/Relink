@@ -13,9 +13,7 @@ pub use load::{AfterDynamicLoadEvent, BeforeDynamicLoadEvent, StagedDynamic};
 pub use object::{
     AfterObjectLoadEvent, BeforeObjectLoadEvent, ObjectRelocatedEvent, SectionLayoutEvent,
 };
-pub use relocation::{
-    DynamicRelocatedEvent, SymbolBindingEvent, TlsDescBindingRequest, TlsDescValue,
-};
+pub use relocation::{DynamicRelocatedEvent, SymbolBindingEvent, TlsDescValue};
 pub use resolve::{ResolveDependencyEvent, ResolveRootEvent};
 
 pub(crate) use lifecycle::Finalizer;

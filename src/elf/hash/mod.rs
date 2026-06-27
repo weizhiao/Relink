@@ -9,7 +9,7 @@
 //! SYSV hash table (.hash) as it provides better performance and memory usage.
 
 use crate::elf::{
-    ElfDynamic, ElfDynamicHashTab, ElfLayout, ElfSymbol, SymbolTableView, symbol::SymbolInfo,
+    ElfDynamic, ElfDynamicHashTab, ElfLayout, ElfSymbol, SymbolLookup, SymbolTableView,
 };
 use crate::{Result, memory::RegionAccess, segment::ElfSegments};
 use core::fmt::Debug;
@@ -23,8 +23,7 @@ pub trait SymbolHash<L: ElfLayout> {
     fn lookup<'sym, H>(
         &self,
         table: SymbolTableView<'sym, L, H>,
-        symbol: &SymbolInfo,
-        precompute: &mut PreCompute,
+        lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>>;
 }
 
@@ -74,15 +73,28 @@ impl<L: ElfLayout> Debug for HashTable<L> {
 /// This structure holds precomputed hash values and related data that can
 /// be used to speed up symbol lookups in hash tables. Precomputing these
 /// values avoids repeated calculations during the lookup process.
-pub struct PreCompute {
+pub(in crate::elf) struct PreCompute {
     /// GNU hash value for the symbol name
-    gnuhash: u32,
+    pub(in crate::elf) gnuhash: u32,
 
     /// Traditional hash value (used for SYSV hash tables)
-    hash: Option<u32>,
+    pub(in crate::elf) hash: Option<u32>,
 
     #[cfg(feature = "object")]
-    pub(crate) custom: Option<u64>,
+    pub(in crate::elf) custom: Option<u64>,
+}
+
+impl PreCompute {
+    #[inline]
+    pub(in crate::elf) fn new(name: &str) -> Self {
+        let gnuhash = ElfGnuHash::<crate::elf::NativeElfLayout>::hash(name.as_bytes()) as u32;
+        Self {
+            gnuhash,
+            hash: None,
+            #[cfg(feature = "object")]
+            custom: None,
+        }
+    }
 }
 
 impl<L: ElfLayout> HashTable<L> {
@@ -124,35 +136,11 @@ impl<L: ElfLayout> SymbolHash<L> for HashTable<L> {
     fn lookup<'sym, H>(
         &self,
         table: SymbolTableView<'sym, L, H>,
-        symbol: &SymbolInfo,
-        precompute: &mut PreCompute,
+        lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>> {
         match &self.0 {
-            HashTableKind::Gnu(hashtab) => hashtab.lookup(table, symbol, precompute),
-            HashTableKind::Sysv(hashtab) => hashtab.lookup(table, symbol, precompute),
-        }
-    }
-}
-
-impl SymbolInfo<'_> {
-    /// Precompute hash values for efficient symbol lookup.
-    ///
-    /// This method computes and stores various hash values and related data
-    /// that can be used to speed up symbol lookups in hash tables. These
-    /// precomputed values help avoid repeated calculations during the
-    /// lookup process.
-    ///
-    /// # Returns
-    /// A PreCompute structure containing the precomputed hash values.
-    #[inline]
-    pub fn precompute(&self) -> PreCompute {
-        let gnuhash =
-            ElfGnuHash::<crate::elf::NativeElfLayout>::hash(self.name().as_bytes()) as u32;
-        PreCompute {
-            gnuhash,
-            hash: None,
-            #[cfg(feature = "object")]
-            custom: None,
+            HashTableKind::Gnu(hashtab) => hashtab.lookup(table, lookup),
+            HashTableKind::Sysv(hashtab) => hashtab.lookup(table, lookup),
         }
     }
 }

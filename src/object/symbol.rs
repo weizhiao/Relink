@@ -68,7 +68,7 @@ impl<L: ElfLayout> ObjectSymbolTable<L> {
     pub(crate) fn symbol_idx<'symtab>(
         &'symtab self,
         idx: usize,
-    ) -> (&'symtab ElfSymbol<L>, crate::elf::SymbolInfo<'symtab>) {
+    ) -> crate::elf::SymbolEntry<'symtab, L> {
         self.view().symbol_idx(idx)
     }
 }

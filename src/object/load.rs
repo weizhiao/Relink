@@ -271,7 +271,7 @@ mod tests {
             Ok(())
         }
 
-        fn on_after_object_load<R: RegionAccess, Tls: TlsResolver<Arch>>(
+        fn on_after_object_load<R: RegionAccess, Tls: TlsResolver<crate::arch::NativeArch>>(
             &mut self,
             event: AfterObjectLoadEvent<'_, ObjectData, crate::arch::NativeArch, R, Tls>,
         ) -> Result<()> {

@@ -20,11 +20,11 @@ impl RelocationHandler for MyRelocHandler {
         &self,
         ctx: &RelocationContext<'_, D, NativeArch, R, Tls, H>,
     ) -> Result<HandleResult> {
-        let Some((_, sym_info)) = ctx.relocation_symbol() else {
+        let Some(symbol) = ctx.relocation_symbol() else {
             return Ok(HandleResult::Unhandled);
         };
 
-        if sym_info.name() == "print" {
+        if symbol.name() == "print" {
             let target_addr = (ctx.lib().base() + ctx.rel().r_offset()).get() as *mut usize;
             println!(
                 "Relocating 'print' for {} at {:p}",

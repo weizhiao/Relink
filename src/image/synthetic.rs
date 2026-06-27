@@ -1,9 +1,9 @@
-use super::{Module, ModuleHandle, SymbolExports};
+use super::{Module, ModuleHandle, SymbolExports, SymbolLookup};
 use crate::{
     Result,
     arch::NativeArch,
     custom_error,
-    elf::{ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType, PreCompute, SymbolInfo},
+    elf::{ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType},
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
     tls::TlsResolver,
@@ -246,10 +246,9 @@ where
     #[inline]
     fn lookup<'exports>(
         &'exports self,
-        symbol: &SymbolInfo<'_>,
-        _precompute: &mut PreCompute,
+        lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'exports ElfSymbol<Arch::Layout>> {
-        let idx = self.index.get(symbol.name()).copied()?;
+        let idx = self.index.get(lookup.name()).copied()?;
         Some(&self.symbols[idx])
     }
 }
@@ -271,8 +270,7 @@ mod tests {
         let mut scope = ModuleScopeBuilder::<NativeArch>::new();
         scope.extend([module]);
         let scope = scope.into_scope();
-        let info = SymbolInfo::from_str("host_double", None);
-        let mut precompute = info.precompute();
+        let mut lookup = SymbolLookup::new("host_double");
 
         let module = scope
             .iter()
@@ -280,7 +278,7 @@ mod tests {
             .expect("synthetic module should be retained in scope");
         let symbol = module
             .exports()
-            .lookup(&info, &mut precompute)
+            .lookup(&mut lookup)
             .expect("synthetic symbol should resolve");
 
         assert_eq!(symbol.st_value(), 0x1234);

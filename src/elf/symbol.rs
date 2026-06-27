@@ -5,157 +5,10 @@
 //! It serves as a bridge between the raw ELF data structures and the higher-level
 //! symbol resolution APIs.
 
-use super::defs::{
-    ElfLayout, ElfSectionIndex, ElfSymRaw, ElfSymbolBind, ElfSymbolType, NativeElfLayout,
-};
-use super::hash::SymbolHash;
-use crate::{
-    elf::{HashTable, PreCompute},
-    memory::MappedView,
-};
-use core::ffi::CStr;
-use core::fmt::Debug;
-use elf::abi::{
-    STB_GLOBAL, STB_GNU_UNIQUE, STB_WEAK, STT_COMMON, STT_FUNC, STT_GNU_IFUNC, STT_NOTYPE,
-    STT_OBJECT, STT_TLS,
-};
-
-/// Valid symbol binding types bitmask.
-/// This mask includes STB_GLOBAL, STB_WEAK, and STB_GNU_UNIQUE bindings.
-const OK_BINDS: usize = 1 << STB_GLOBAL | 1 << STB_WEAK | 1 << STB_GNU_UNIQUE;
-
-/// Valid symbol type bitmask.
-/// This mask includes STT_NOTYPE, STT_OBJECT, STT_FUNC, STT_COMMON, STT_TLS, and STT_GNU_IFUNC types.
-const OK_TYPES: usize = 1 << STT_NOTYPE
-    | 1 << STT_OBJECT
-    | 1 << STT_FUNC
-    | 1 << STT_COMMON
-    | 1 << STT_TLS
-    | 1 << STT_GNU_IFUNC;
-
-#[repr(transparent)]
-/// ELF symbol table entry.
-///
-/// This struct provides a unified interface for accessing ELF symbol information
-/// regardless of whether the ELF file is 32-bit or 64-bit.
-pub struct ElfSymbol<L: ElfLayout = NativeElfLayout> {
-    sym: L::Sym,
-}
-
-impl<L: ElfLayout> Clone for ElfSymbol<L> {
-    fn clone(&self) -> Self {
-        Self {
-            sym: L::Sym::from_fields(
-                self.st_name(),
-                self.st_value(),
-                self.st_size(),
-                self.sym.st_info(),
-                self.st_other(),
-                self.st_shndx().raw(),
-            ),
-        }
-    }
-}
-
-impl<L: ElfLayout> ElfSymbol<L> {
-    pub(crate) fn synthetic(
-        value: usize,
-        size: usize,
-        bind: ElfSymbolBind,
-        symbol_type: ElfSymbolType,
-        section_index: ElfSectionIndex,
-    ) -> Self {
-        let st_info = (bind.raw() << 4) | (symbol_type.raw() & 0xf);
-        Self {
-            sym: L::Sym::from_fields(0, value, size, st_info, 0, section_index.raw()),
-        }
-    }
-
-    /// Returns the symbol value.
-    #[inline]
-    pub fn st_value(&self) -> usize {
-        self.sym.st_value()
-    }
-
-    /// Returns the parsed ELF symbol binding.
-    #[inline]
-    pub fn bind(&self) -> ElfSymbolBind {
-        ElfSymbolBind::new(self.sym.st_info() >> 4)
-    }
-
-    /// Returns the parsed ELF symbol type.
-    #[inline]
-    pub fn symbol_type(&self) -> ElfSymbolType {
-        ElfSymbolType::new(self.sym.st_info() & 0xf)
-    }
-
-    /// Returns the section index.
-    #[inline]
-    pub fn st_shndx(&self) -> ElfSectionIndex {
-        ElfSectionIndex::new(self.sym.st_shndx())
-    }
-
-    /// Returns the symbol name index.
-    #[inline]
-    pub fn st_name(&self) -> usize {
-        self.sym.st_name()
-    }
-
-    /// Returns the symbol size.
-    #[inline]
-    pub fn st_size(&self) -> usize {
-        self.sym.st_size()
-    }
-
-    /// Returns the symbol visibility.
-    #[inline]
-    pub fn st_other(&self) -> u8 {
-        self.sym.st_other()
-    }
-
-    /// Returns true if the symbol is undefined (not defined in this object file).
-    /// Undefined symbols typically need to be resolved from other object files or libraries.
-    #[inline]
-    pub fn is_undef(&self) -> bool {
-        self.st_shndx().is_undef()
-    }
-
-    /// Returns true if the symbol has a valid binding type for relocation.
-    /// Valid bindings include global, weak, and GNU unique symbols.
-    #[inline]
-    pub fn is_ok_bind(&self) -> bool {
-        (1 << self.bind().raw()) & OK_BINDS != 0
-    }
-
-    /// Returns true if the symbol has a valid type for relocation.
-    /// Valid types include object, function, common, TLS, and GNU IFUNC symbols.
-    #[inline]
-    pub fn is_ok_type(&self) -> bool {
-        (1 << self.symbol_type().raw()) & OK_TYPES != 0
-    }
-
-    /// Returns true if the symbol has local binding.
-    /// Local symbols are only visible within the object file that defines them.
-    #[inline]
-    pub fn is_local(&self) -> bool {
-        self.bind() == ElfSymbolBind::LOCAL
-    }
-
-    /// Returns true if the symbol has weak binding.
-    /// Weak symbols can be overridden by global symbols with the same name.
-    #[inline]
-    pub fn is_weak(&self) -> bool {
-        self.bind() == ElfSymbolBind::WEAK
-    }
-
-    /// Sets the symbol value.
-    /// This is used internally when resolving symbol addresses during loading.
-    #[inline]
-    pub(crate) fn set_value(&mut self, value: usize) {
-        self.sym.set_st_value(value);
-    }
-}
-
+use super::defs::{ElfLayout, ElfSymbol, NativeElfLayout};
+use super::hash::{PreCompute, SymbolHash};
+use crate::{elf::HashTable, memory::MappedView};
+use core::{ffi::CStr, fmt::Debug};
 /// ELF string table wrapper
 ///
 /// This structure provides safe access to the ELF string table, which contains
@@ -299,12 +152,10 @@ impl<L: ElfLayout, H: Clone> Clone for SymbolTable<L, H> {
 }
 
 /// Information about a specific symbol.
-pub struct SymbolInfo<'symtab> {
+#[derive(Clone)]
+pub(crate) struct SymbolInfo<'symtab> {
     /// The symbol name.
     name: &'symtab str,
-
-    /// The symbol name as a C-style string.
-    cname: Option<&'symtab CStr>,
 
     /// Optional symbol version information.
     #[cfg(feature = "version")]
@@ -328,10 +179,9 @@ impl<'symtab> Debug for SymbolInfo<'symtab> {
 impl<'symtab> SymbolInfo<'symtab> {
     /// Creates a new `SymbolInfo` from a name and optional version.
     #[allow(unused_variables)]
-    pub fn from_str(name: &'symtab str, version: Option<&'symtab str>) -> Self {
+    pub(crate) fn from_str(name: &'symtab str, version: Option<&'symtab str>) -> Self {
         SymbolInfo {
             name,
-            cname: None,
             #[cfg(feature = "version")]
             version: version.map(super::version::SymbolVersion::new),
         }
@@ -339,20 +189,109 @@ impl<'symtab> SymbolInfo<'symtab> {
 
     /// Returns the name of the symbol.
     #[inline]
-    pub fn name(&self) -> &'symtab str {
+    pub(crate) fn name(&self) -> &'symtab str {
         self.name
-    }
-
-    /// Returns the C-style name of the symbol, if available.
-    #[inline]
-    pub fn cname(&self) -> Option<&'symtab CStr> {
-        self.cname
     }
 
     /// Returns the symbol version information.
     #[cfg(feature = "version")]
     pub(crate) fn version(&self) -> Option<&super::version::SymbolVersion<'symtab>> {
         self.version.as_ref()
+    }
+}
+
+/// Symbol lookup request plus reusable hash precomputation state.
+pub struct SymbolLookup<'symbol> {
+    info: SymbolInfo<'symbol>,
+    precompute: PreCompute,
+}
+
+impl<'symbol> SymbolLookup<'symbol> {
+    #[inline]
+    pub fn new(name: &'symbol str) -> Self {
+        Self::from_info(SymbolInfo::from_str(name, None))
+    }
+
+    #[cfg(feature = "version")]
+    #[inline]
+    pub fn with_version(name: &'symbol str, version: &'symbol str) -> Self {
+        Self::from_info(SymbolInfo::from_str(name, Some(version)))
+    }
+
+    #[inline]
+    pub(crate) fn from_info(info: SymbolInfo<'symbol>) -> Self {
+        let precompute = PreCompute::new(info.name());
+        Self { info, precompute }
+    }
+
+    #[inline]
+    pub fn name(&self) -> &'symbol str {
+        self.info.name()
+    }
+
+    #[inline]
+    pub(crate) fn gnu_hash(&self) -> u32 {
+        self.precompute.gnuhash
+    }
+
+    #[inline]
+    pub(crate) fn sysv_hash(&mut self, hash: impl FnOnce(&str) -> u32) -> u32 {
+        if let Some(hash) = self.precompute.hash {
+            hash
+        } else {
+            let hash = hash(self.name());
+            self.precompute.hash = Some(hash);
+            hash
+        }
+    }
+
+    #[inline]
+    #[cfg(feature = "object")]
+    pub(crate) fn custom_hash(&mut self, hash: impl FnOnce(&str) -> u64) -> u64 {
+        if let Some(hash) = self.precompute.custom {
+            hash
+        } else {
+            let hash = hash(self.name());
+            self.precompute.custom = Some(hash);
+            hash
+        }
+    }
+
+    #[inline]
+    #[cfg(feature = "version")]
+    pub(crate) fn version(&self) -> Option<&super::version::SymbolVersion<'symbol>> {
+        self.info.version()
+    }
+}
+
+/// Symbol table entry plus its lookup metadata.
+pub struct SymbolEntry<'symtab, L: ElfLayout> {
+    symbol: &'symtab ElfSymbol<L>,
+    info: SymbolInfo<'symtab>,
+}
+
+impl<'symtab, L: ElfLayout> SymbolEntry<'symtab, L> {
+    #[inline]
+    pub(crate) const fn new(symbol: &'symtab ElfSymbol<L>, info: SymbolInfo<'symtab>) -> Self {
+        Self { symbol, info }
+    }
+
+    /// Returns the raw ELF symbol table entry.
+    #[inline]
+    pub const fn symbol(&self) -> &'symtab ElfSymbol<L> {
+        self.symbol
+    }
+
+    /// Returns symbol name and version lookup metadata.
+    #[inline]
+    pub(crate) const fn info(&self) -> &SymbolInfo<'symtab> {
+        &self.info
+    }
+
+    /// Returns the symbol name.
+    #[inline]
+    pub fn name(&self) -> &'symtab str {
+        self.info.name()
     }
 }
 
@@ -381,8 +320,8 @@ impl<'symtab, L: ElfLayout, H> SymbolTableView<'symtab, L, H> {
         self.symbols
     }
 
-    /// Returns the symbol and its information for the given index.
-    pub fn symbol_idx(&self, idx: usize) -> (&'symtab ElfSymbol<L>, SymbolInfo<'symtab>) {
+    /// Returns the symbol table entry for the given index.
+    pub fn symbol_idx(&self, idx: usize) -> SymbolEntry<'symtab, L> {
         // Get the symbol at the specified index
         let symbol = self
             .symbols
@@ -396,11 +335,10 @@ impl<'symtab, L: ElfLayout, H> SymbolTableView<'symtab, L, H> {
         let name = ElfStringTable::convert_cstr(cname);
 
         // Create and return the symbol and its information
-        (
+        SymbolEntry::new(
             symbol,
             SymbolInfo {
                 name,
-                cname: Some(cname),
                 #[cfg(feature = "version")]
                 version: self.get_requirement(idx),
             },
@@ -410,23 +348,18 @@ impl<'symtab, L: ElfLayout, H> SymbolTableView<'symtab, L, H> {
 
 impl<'symtab, L: ElfLayout, H: SymbolHash<L>> SymbolTableView<'symtab, L, H> {
     /// Looks up a symbol in the symbol table using the hash table for efficiency.
-    fn lookup(
-        &self,
-        symbol: &SymbolInfo,
-        precompute: &mut PreCompute,
-    ) -> Option<&'symtab ElfSymbol<L>> {
-        self.hashtab.lookup(*self, symbol, precompute)
+    fn lookup(&self, lookup: &mut SymbolLookup<'_>) -> Option<&'symtab ElfSymbol<L>> {
+        self.hashtab.lookup(*self, lookup)
     }
 
     /// Looks up a symbol and filters based on relocation requirements.
     #[inline]
     pub(crate) fn lookup_filter(
         &self,
-        symbol: &SymbolInfo,
-        precompute: &mut PreCompute,
+        lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'symtab ElfSymbol<L>> {
         // Look up the symbol
-        if let Some(sym) = self.lookup(symbol, precompute) {
+        if let Some(sym) = self.lookup(lookup) {
             // Filter based on relocation requirements:
             // 1. Symbol must be defined (not undefined)
             // 2. Symbol must have acceptable binding
@@ -442,9 +375,9 @@ impl<'symtab, L: ElfLayout, H: SymbolHash<L>> SymbolTableView<'symtab, L, H> {
 impl<'symtab, L: ElfLayout> SymbolTableView<'symtab, L> {
     /// Looks up a symbol by its name.
     pub fn lookup_by_name(&self, name: impl AsRef<str>) -> Option<&'symtab ElfSymbol<L>> {
-        let info = SymbolInfo::from_str(name.as_ref(), None);
-        let mut precompute = info.precompute();
-        self.lookup(&info, &mut precompute)
+        let name = name.as_ref();
+        let mut lookup = SymbolLookup::new(name);
+        self.lookup(&mut lookup)
     }
 
     /// Returns the number of symbols in the symbol table.

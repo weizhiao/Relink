@@ -1,6 +1,6 @@
 use crate::{
     arch::NativeArch,
-    elf::{ElfLayout, ElfSymbol, PreCompute, SymbolInfo, SymbolTable},
+    elf::{ElfLayout, ElfSymbol, SymbolLookup, SymbolTable},
     memory::ImageMemory,
     relocation::RelocationArch,
     sync::Arc,
@@ -22,8 +22,7 @@ pub trait SymbolExports<L: ElfLayout>: Send + Sync {
 
     fn lookup<'exports>(
         &'exports self,
-        symbol: &SymbolInfo<'_>,
-        precompute: &mut PreCompute,
+        lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'exports ElfSymbol<L>>;
 }
 
@@ -53,10 +52,9 @@ where
     #[inline]
     fn lookup<'exports>(
         &'exports self,
-        symbol: &SymbolInfo<'_>,
-        precompute: &mut PreCompute,
+        lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'exports ElfSymbol<L>> {
-        self.view().lookup_filter(symbol, precompute)
+        self.view().lookup_filter(lookup)
     }
 }
 

@@ -4,7 +4,7 @@ use crate::{
         ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, HashTable, SymbolInfo, SymbolTableView,
     },
     hint::{likely, unlikely},
-    image::{ElfCore, Module, ModuleScope},
+    image::{ElfCore, Module, ModuleScope, SymbolLookup},
     logging,
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     observer::{RelocationObserver, SymbolBindingEvent},
@@ -79,11 +79,6 @@ where
     }
 
     #[inline]
-    pub(crate) fn symbols(&self) -> SymbolTableView<'find, Arch::Layout, H> {
-        self.symbols
-    }
-
-    #[inline]
     pub(crate) fn handle_pre(&mut self, rel: &ElfRelType<Arch>) -> Result<HandleResult> {
         let hctx = RelocationContext::new(rel, self.core, self.symbols, &self.scope);
         self.pre_handler.handle(&hctx)
@@ -95,50 +90,95 @@ where
         self.post_handler.handle(&hctx)
     }
 
-    #[inline]
-    pub(crate) fn find_symbol(&mut self, rel: &ElfRelType<Arch>) -> Result<Option<VmAddr>> {
-        let (dynsym, syminfo) = self.symbols.symbol_idx(rel.r_symbol());
-        let runtime_addr = if Tls::OVERRIDE_TLS_GET_ADDR && syminfo.name() == TLS_GET_ADDR_SYMBOL {
-            Some(Tls::bind_tls_get_addr()?)
+    #[cold]
+    pub(crate) fn reloc_error(&self, rel: &ElfRelType<Arch>, reason: RelocReason) -> Error {
+        let r_type_str = Arch::rel_type_to_str(rel.r_type());
+        let r_sym = rel.r_symbol();
+        if r_sym == 0 {
+            relocate_context_error(self.core.name(), r_type_str, None, reason)
         } else {
-            None
-        };
-        let resolved = if let Some(addr) = runtime_addr {
-            Some(addr)
-        } else if let Some(symdef) = find_symdef_impl(
-            self.core,
-            &self.scope,
-            dynsym,
-            &syminfo,
-            self.core.symbolic(),
-        ) {
-            Some(symdef.resolve_addr(self.executor)?)
-        } else {
-            None
-        };
-        let mut event =
-            SymbolBindingEvent::new(self.core, Some(rel), dynsym, syminfo.name(), resolved);
-        self.observer.on_symbol_binding(&mut event)?;
-        Ok(event.into_resolved_addr())
+            relocate_context_error(
+                self.core.name(),
+                r_type_str,
+                Some(self.symbols.symbol_idx(r_sym).name()),
+                reason,
+            )
+        }
     }
 
     #[inline]
     #[cfg(feature = "object")]
     pub(crate) fn symbol_addr(&self, r_sym: usize) -> VmAddr {
-        let (symbol, _) = self.symbols.symbol_idx(r_sym);
-        self.core.base() + VmOffset::new(symbol.st_value())
+        let symbol = self.symbols.symbol_idx(r_sym);
+        self.core.base() + VmOffset::new(symbol.symbol().st_value())
     }
 
     #[inline]
-    pub(crate) fn find_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, Arch, Tls>> {
-        let (dynsym, syminfo) = self.symbols.symbol_idx(r_sym);
-        find_symdef_impl(
+    pub(crate) fn find_symdef(
+        &mut self,
+        rel: &ElfRelType<Arch>,
+    ) -> Result<SymbolResolution<'_, Arch, Tls>> {
+        let symbol = self.symbols.symbol_idx(rel.r_symbol());
+        let runtime_addr = if Tls::OVERRIDE_TLS_GET_ADDR && symbol.name() == TLS_GET_ADDR_SYMBOL {
+            Some(Tls::bind_tls_get_addr()?)
+        } else {
+            None
+        };
+
+        let symdef = if runtime_addr.is_none() {
+            find_symdef_impl(
+                self.core,
+                &self.scope,
+                symbol.symbol(),
+                symbol.info(),
+                self.core.symbolic(),
+            )
+        } else {
+            None
+        };
+        let resolved = if let Some(addr) = runtime_addr {
+            Some(addr)
+        } else if let Some(symdef) = symdef.as_ref() {
+            Some(symdef.resolve_addr(self.executor)?)
+        } else {
+            None
+        };
+        let mut event = SymbolBindingEvent::new(
             self.core,
-            &self.scope,
-            dynsym,
-            &syminfo,
-            self.core.symbolic(),
-        )
+            Some(rel),
+            symbol.symbol(),
+            symbol.name(),
+            resolved,
+        );
+        self.observer.on_symbol_binding(&mut event)?;
+        Ok(SymbolResolution {
+            requested: symbol.symbol(),
+            symdef,
+            resolved_addr: event.into_resolved_addr(),
+        })
+    }
+}
+
+pub(crate) struct SymbolResolution<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+    requested: &'lib ElfSymbol<Arch::Layout>,
+    symdef: Option<SymDef<'lib, Arch, Tls>>,
+    resolved_addr: Option<VmAddr>,
+}
+
+impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolResolution<'lib, Arch, Tls> {
+    #[inline]
+    pub(crate) fn requested_symbol(&self) -> &'lib ElfSymbol<Arch::Layout> {
+        self.requested
+    }
+
+    #[inline]
+    pub(crate) fn symdef(&self) -> Option<&SymDef<'lib, Arch, Tls>> {
+        self.symdef.as_ref()
+    }
+
+    #[inline]
+    pub(crate) fn resolved_addr(&self) -> Option<VmAddr> {
+        self.resolved_addr
     }
 }
 
@@ -229,35 +269,6 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
     }
 }
 
-/// Creates a detailed relocation error.
-///
-/// The dynamic parts are stored structurally and formatted only in `Display`.
-#[cold]
-pub(crate) fn reloc_error<A, D, R, Tls, H>(
-    rel: &ElfRelType<A>,
-    reason: RelocReason,
-    lib: &ElfCore<D, A, R, Tls>,
-    symbols: SymbolTableView<'_, A::Layout, H>,
-) -> Error
-where
-    A: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<A>,
-{
-    let r_type_str = A::rel_type_to_str(rel.r_type());
-    let r_sym = rel.r_symbol();
-    if r_sym == 0 {
-        relocate_context_error(lib.name(), r_type_str, None, reason)
-    } else {
-        relocate_context_error(
-            lib.name(),
-            r_type_str,
-            Some(symbols.symbol_idx(r_sym).1.name()),
-            reason,
-        )
-    }
-}
-
 #[cold]
 fn weak_undef<'lib, Arch, Tls, Source>(
     source: &'lib Source,
@@ -297,20 +308,17 @@ where
 
     let self_def = || (!sym.is_undef()).then(|| SymDef::new(Some(sym), source));
     let scope_def = || {
-        let mut precompute = syminfo.precompute();
+        let mut lookup = SymbolLookup::from_info(syminfo.clone());
         scope.iter().find_map(|scope_source| {
-            scope_source
-                .exports()
-                .lookup(syminfo, &mut precompute)
-                .map(|sym| {
-                    logging::trace!(
-                        "binding file [{}] to [{}]: symbol [{}]",
-                        source.name(),
-                        scope_source.name(),
-                        syminfo.name()
-                    );
-                    SymDef::new(Some(sym), &**scope_source)
-                })
+            scope_source.exports().lookup(&mut lookup).map(|sym| {
+                logging::trace!(
+                    "binding file [{}] to [{}]: symbol [{}]",
+                    source.name(),
+                    scope_source.name(),
+                    syminfo.name()
+                );
+                SymDef::new(Some(sym), &**scope_source)
+            })
         })
     };
 

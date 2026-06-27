@@ -4,8 +4,7 @@ mod traits;
 pub(crate) use event::Finalizer;
 pub use event::{
     AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, FiniEvent, InitEvent,
-    ResolveDependencyEvent, ResolveRootEvent, StagedDynamic, SymbolBindingEvent,
-    TlsDescBindingRequest, TlsDescValue,
+    ResolveDependencyEvent, ResolveRootEvent, StagedDynamic, SymbolBindingEvent, TlsDescValue,
 };
 #[cfg(feature = "object")]
 pub use event::{

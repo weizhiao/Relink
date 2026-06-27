@@ -14,59 +14,10 @@ mod enabled {
         RelocReason, Result,
         elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
         memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
-        observer::{RelocationObserver, TlsDescBindingRequest, TlsDescValue},
+        observer::RelocationObserver,
         relocation::{RelocHelper, RelocationArch, RelocationHandler},
         tls::TlsResolver,
     };
-
-    pub(crate) enum TlsDescResolution {
-        Resolved(TlsDescValue),
-        Failed(RelocReason),
-    }
-
-    impl<'find, D, Arch, R, Tls, PreH, PostH, Obs, H>
-        RelocHelper<'find, D, Arch, R, Tls, PreH, PostH, Obs, H>
-    where
-        D: 'static,
-        Arch: RelocationArch,
-        R: RegionAccess,
-        Tls: TlsResolver<Arch>,
-        PreH: RelocationHandler<Arch> + ?Sized,
-        PostH: RelocationHandler<Arch> + ?Sized,
-        Obs: RelocationObserver<Arch> + ?Sized,
-    {
-        #[inline]
-        pub(crate) fn resolve_tlsdesc(
-            &mut self,
-            request: TlsDescBindingRequest,
-        ) -> Result<TlsDescResolution> {
-            let sym_value = request.symbol_value();
-            let addend = request.addend();
-
-            if let Some(tp_offset) = request.tp_offset() {
-                let tpoff = VmAddr::new((tp_offset.get() + sym_value as isize) as usize)
-                    .wrapping_add_signed(addend);
-                return Ok(TlsDescResolution::Resolved(Tls::bind_static_tlsdesc(
-                    tpoff.get(),
-                )?));
-            }
-
-            if let Some(module_id) = request.module_id() {
-                let offset = VmAddr::new(sym_value)
-                    .wrapping_add_signed(addend)
-                    .get()
-                    .wrapping_sub(Arch::TLS_DTV_OFFSET);
-                return Ok(TlsDescResolution::Resolved(Tls::bind_dynamic_tlsdesc(
-                    TlsIndex {
-                        ti_module: module_id,
-                        ti_offset: offset,
-                    },
-                )?));
-            }
-
-            Ok(TlsDescResolution::Failed(RelocReason::MissingTlsModuleId))
-        }
-    }
 
     pub(crate) fn handle_tls_reloc<D, Arch, R, Tls, PreH, PostH, Obs, H>(
         helper: &mut RelocHelper<'_, D, Arch, R, Tls, PreH, PostH, Obs, H>,
@@ -91,7 +42,8 @@ mod enabled {
 
         match r_type {
             value if value == Arch::DTPOFF => {
-                if let Some(symdef) = helper.find_symdef(r_sym) {
+                let symbol = helper.find_symdef(rel)?;
+                if let Some(symdef) = symbol.symdef() {
                     let Some(sym) = symdef.symbol() else {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                     };
@@ -114,7 +66,7 @@ mod enabled {
                 let Some(tls) = (if r_sym == 0 {
                     Some(helper.core.tls())
                 } else {
-                    helper.find_symdef(r_sym).map(|symdef| symdef.tls())
+                    helper.find_symdef(rel)?.symdef().map(|symdef| symdef.tls())
                 }) else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                 };
@@ -130,7 +82,8 @@ mod enabled {
                 Ok(TlsRelocOutcome::Applied)
             }
             value if value == Arch::TPOFF => {
-                if let Some(symdef) = helper.find_symdef(r_sym) {
+                let symbol = helper.find_symdef(rel)?;
+                if let Some(symdef) = symbol.symdef() {
                     let Some(sym) = symdef.symbol() else {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                     };
@@ -153,34 +106,40 @@ mod enabled {
                 }
             }
             value if Arch::is_tlsdesc(value) => {
-                if let Some(symdef) = helper.find_symdef(r_sym) {
+                let symbol = helper.find_symdef(rel)?;
+                if let Some(symdef) = symbol.symdef() {
                     let Some(sym) = symdef.symbol() else {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                     };
                     let sym_value = sym.st_value();
                     let tls = symdef.tls();
-                    let tls_mod_id = tls.mod_id();
-                    let tls_tp_offset = tls.tp_offset();
-                    let request =
-                        TlsDescBindingRequest::new(sym_value, r_addend, tls_mod_id, tls_tp_offset);
-                    match helper.resolve_tlsdesc(request)? {
-                        TlsDescResolution::Resolved(desc) => {
-                            unsafe {
-                                segments.write_value(
-                                    place,
-                                    <Arch::Layout as ElfLayout>::Word::from_usize(
-                                        desc.resolver().get(),
-                                    ),
-                                )?;
-                                segments.write_value(
-                                    place + VmOffset::new(8),
-                                    <Arch::Layout as ElfLayout>::Word::from_usize(desc.arg()),
-                                )?;
-                            }
-                            Ok(TlsRelocOutcome::Applied)
-                        }
-                        TlsDescResolution::Failed(reason) => Ok(TlsRelocOutcome::Failed(reason)),
+                    let desc = if let Some(tp_offset) = tls.tp_offset() {
+                        let tpoff = VmAddr::new((tp_offset.get() + sym_value as isize) as usize)
+                            .wrapping_add_signed(r_addend);
+                        Tls::bind_static_tlsdesc(tpoff.get())?
+                    } else if let Some(module_id) = tls.mod_id() {
+                        let offset = VmAddr::new(sym_value)
+                            .wrapping_add_signed(r_addend)
+                            .get()
+                            .wrapping_sub(Arch::TLS_DTV_OFFSET);
+                        Tls::bind_dynamic_tlsdesc(TlsIndex {
+                            ti_module: module_id,
+                            ti_offset: offset,
+                        })?
+                    } else {
+                        return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
+                    };
+                    unsafe {
+                        segments.write_value(
+                            place,
+                            <Arch::Layout as ElfLayout>::Word::from_usize(desc.resolver().get()),
+                        )?;
+                        segments.write_value(
+                            place + VmOffset::new(8),
+                            <Arch::Layout as ElfLayout>::Word::from_usize(desc.arg()),
+                        )?;
                     }
+                    Ok(TlsRelocOutcome::Applied)
                 } else {
                     Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol))
                 }

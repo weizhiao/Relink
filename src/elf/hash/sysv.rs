@@ -6,7 +6,7 @@
 
 use crate::{
     ParseDynamicError, Result,
-    elf::{ElfLayout, ElfSymbol, PreCompute, SymbolTableView, symbol::SymbolInfo},
+    elf::{ElfLayout, ElfSymbol, SymbolLookup, SymbolTableView},
     memory::{ImageMemory, MappedView, RegionAccess, VmAddr},
     segment::ElfSegments,
 };
@@ -159,17 +159,10 @@ impl ElfHash {
     pub(crate) fn lookup<'sym, L: ElfLayout, H>(
         &self,
         table: SymbolTableView<'sym, L, H>,
-        symbol: &SymbolInfo,
-        precompute: &mut PreCompute,
+        lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>> {
         // Get or compute the hash value for the symbol
-        let hash = if let Some(hash) = precompute.hash {
-            hash
-        } else {
-            let hash = Self::hash(symbol.name().as_bytes()) as u32;
-            precompute.hash = Some(hash);
-            hash
-        };
+        let hash = lookup.sysv_hash(|name| Self::hash(name.as_bytes()) as u32);
 
         let buckets = self.buckets.as_slice();
         let chains = self.chains.as_slice();
@@ -192,11 +185,11 @@ impl ElfHash {
 
             // Check if this is the symbol we're looking for
             #[cfg(feature = "version")]
-            if sym_name == symbol.name() && table.check_match(chain_idx, symbol.version()) {
+            if sym_name == lookup.name() && table.check_match(chain_idx, lookup.version()) {
                 return Some(cur_symbol);
             }
             #[cfg(not(feature = "version"))]
-            if sym_name == symbol.name() {
+            if sym_name == lookup.name() {
                 return Some(cur_symbol);
             }
 

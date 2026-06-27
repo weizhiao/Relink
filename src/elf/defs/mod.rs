@@ -14,10 +14,10 @@ pub(crate) use layout::ElfEhdr;
 pub use layout::{Elf32Layout, Elf64Layout, ElfLayout, NativeElfLayout};
 pub use lifecycle::Lifecycle;
 pub use raw::{Elf32Sym, ElfWord};
-pub(crate) use raw::{ElfDynRaw, ElfEhdrRaw, ElfPhdrRaw, ElfShdrRaw, ElfSymRaw};
+pub(crate) use raw::{ElfDynRaw, ElfEhdrRaw, ElfPhdrRaw, ElfShdrRaw};
 pub use rel::{ElfRel, ElfRelEntry, ElfRelType, ElfRela, ElfRelr};
 pub use types::{
     ElfClass, ElfDataEncoding, ElfDynamicTag, ElfFileType, ElfMachine, ElfProgramFlags,
     ElfProgramType, ElfRelocationType, ElfSectionFlags, ElfSectionId, ElfSectionIndex,
-    ElfSectionType, ElfSymbolBind, ElfSymbolType,
+    ElfSectionType, ElfSymbol, ElfSymbolBind, ElfSymbolType,
 };

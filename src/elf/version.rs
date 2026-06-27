@@ -360,6 +360,7 @@ impl ELFVersion {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct SymbolVersion<'a> {
     name: &'a str,
     hash: u32,

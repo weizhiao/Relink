@@ -7,7 +7,7 @@ use crate::{
     input::Path,
     memory::{HostRegion, RegionAccess, VmAddr},
     relocation::RelocationArch,
-    tls::{TlsModuleId, TlsResolver, TlsTpOffset},
+    tls::TlsResolver,
 };
 
 /// Ordinary symbol relocation binding event.
@@ -93,57 +93,6 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
     #[inline]
     pub(crate) const fn into_resolved_addr(self) -> Option<VmAddr> {
         self.resolved
-    }
-}
-
-/// Input data for a TLSDESC relocation binding.
-#[derive(Clone, Copy, Debug)]
-pub struct TlsDescBindingRequest {
-    symbol_value: usize,
-    addend: isize,
-    module_id: Option<TlsModuleId>,
-    tp_offset: Option<TlsTpOffset>,
-}
-
-impl TlsDescBindingRequest {
-    /// Creates a TLSDESC binding request.
-    #[inline]
-    pub const fn new(
-        symbol_value: usize,
-        addend: isize,
-        module_id: Option<TlsModuleId>,
-        tp_offset: Option<TlsTpOffset>,
-    ) -> Self {
-        Self {
-            symbol_value,
-            addend,
-            module_id,
-            tp_offset,
-        }
-    }
-
-    /// Symbol value from the TLS symbol referenced by the relocation.
-    #[inline]
-    pub const fn symbol_value(&self) -> usize {
-        self.symbol_value
-    }
-
-    /// Relocation addend.
-    #[inline]
-    pub const fn addend(&self) -> isize {
-        self.addend
-    }
-
-    /// Dynamic TLS module id when the symbol has one.
-    #[inline]
-    pub const fn module_id(&self) -> Option<TlsModuleId> {
-        self.module_id
-    }
-
-    /// Static TLS thread-pointer offset when available.
-    #[inline]
-    pub const fn tp_offset(&self) -> Option<TlsTpOffset> {
-        self.tp_offset
     }
 }
 
