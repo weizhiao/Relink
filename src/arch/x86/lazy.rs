@@ -1,6 +1,3 @@
-pub(crate) const DYLIB_OFFSET: usize = 1;
-pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
-
 #[unsafe(naked)]
 pub(crate) extern "C" fn dl_runtime_resolve() {
     core::arch::naked_asm!(
@@ -45,6 +42,6 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
     // 弹出解析后的地址并跳转
     ret
     ",
-        sym crate::relocation::dl_fixup,
+        sym crate::lazy::native::dl_fixup,
     )
 }

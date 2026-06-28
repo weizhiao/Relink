@@ -2,7 +2,7 @@ use crate::{
     RelocReason, Result,
     arch::riscv64::relocation::RiscV64Arch,
     elf::{ElfRelEntry, ElfRelType, ElfRelocationType, ElfShdr},
-    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
+    memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
     object::{
         layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
         object_relocation_sections, section_entries,

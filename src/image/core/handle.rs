@@ -2,7 +2,9 @@ use super::CoreInner;
 use crate::{
     Result, TlsError,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
-    image::{DynamicInfo, Module, ModuleTls, SymbolExports, exports_handle},
+    image::{
+        DynamicInfo, Module, ModuleHandle, ModuleScope, ModuleTls, SymbolExports, exports_handle,
+    },
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     observer::Finalizer,
@@ -14,8 +16,8 @@ use crate::{
         TlsTemplate, TlsTpOffset, tls_image_provider_handle,
     },
 };
-use alloc::vec::Vec;
-use core::{cell::OnceCell, fmt::Debug, marker::PhantomData, ptr::NonNull};
+use alloc::{boxed::Box, vec::Vec};
+use core::{cell::OnceCell, fmt::Debug, ptr::NonNull};
 
 /// A non-owning reference to an [`ElfCore`].
 ///
@@ -188,6 +190,29 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
             .is_some_and(|info| info.symbolic)
     }
 
+    /// Installs the retained relocation lookup scope for this core.
+    #[inline]
+    pub(crate) fn set_scope(&self, scope: ModuleScope<Arch, Tls>) {
+        assert!(
+            self.inner.scope.set(scope).is_ok(),
+            "relocation scope must be installed only once",
+        );
+    }
+
+    /// Returns the retained relocation lookup scope, when this core is loaded.
+    #[inline]
+    pub(crate) fn scope_ref(&self) -> Option<&ModuleScope<Arch, Tls>> {
+        self.inner.scope.get()
+    }
+
+    /// Returns the retained relocation lookup scope as a module slice.
+    #[inline]
+    pub fn scope(&self) -> &[ModuleHandle<Arch, Tls>] {
+        self.scope_ref()
+            .map(ModuleScope::as_slice)
+            .unwrap_or_default()
+    }
+
     /// Returns the mapped segments owned by this image.
     #[inline]
     pub fn segments(&self) -> &ElfSegments<R> {
@@ -267,31 +292,30 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
         let dynamic = ElfDynamic::<Arch>::new(dynamic_entries, dynamic_addr, &segments)?;
         let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
         let exports = symtab.clone();
-        #[cfg(feature = "lazy-binding")]
         let lazy_symtab = symtab.clone();
         let soname = dynamic
             .soname_off
             .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
-        Ok(Self {
-            inner: Arc::new(CoreInner {
-                path,
-                is_init: AtomicBool::new(true),
-                exports: exports_handle(exports),
-                dynamic_info: Some(Arc::new(DynamicInfo::<Arch, Tls> {
-                    eh_frame_hdr,
-                    phdrs: ElfPhdrs::Vec(phdrs),
-                    soname,
-                    symbolic: dynamic.symbolic,
-                    #[cfg(feature = "lazy-binding")]
-                    lazy: crate::image::LazyBindingInfo::new(dynamic.pltrel, lazy_symtab),
-                    _tls: PhantomData,
-                })),
-                tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_info, tls_image),
-                segments,
-                finalizer: OnceCell::new(),
-                user_data,
-            }),
-        })
+        let lazy_plt = crate::image::PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
+        let inner = Arc::new(CoreInner {
+            runtime: Box::new(crate::image::CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
+            path,
+            is_init: AtomicBool::new(true),
+            exports: exports_handle(exports),
+            dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
+                eh_frame_hdr,
+                phdrs: ElfPhdrs::Vec(phdrs),
+                soname,
+                symbolic: dynamic.symbolic,
+            })),
+            scope: OnceCell::new(),
+            tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_info, tls_image),
+            segments,
+            finalizer: OnceCell::new(),
+            user_data,
+        });
+        CoreInner::bind_runtime_owner(&inner);
+        Ok(Self { inner })
     }
 }
 

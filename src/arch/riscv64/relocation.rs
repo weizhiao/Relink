@@ -5,6 +5,7 @@ use elf::abi::*;
 use crate::Result;
 use crate::arch::{ArchKind, riscv};
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
+use crate::lazy::defs::LazyBindingSlots;
 use crate::relocation::RelocationArch;
 
 const EF_RISCV_RV64ILP32: u32 = 0x0020;
@@ -33,6 +34,7 @@ impl RelocationArch for RiscV64Arch {
     // RISC-V does not define a TLSDESC relocation.
     const TLSDESC: Option<ElfRelocationType> = None;
     const TLS_DTV_OFFSET: usize = 0x800;
+    const LAZY_BINDING_SLOTS: LazyBindingSlots = LazyBindingSlots::new(1, 0);
 
     // `true` only when this ZST is the host's relocation backend.
     const SUPPORTS_NATIVE_RUNTIME: bool = cfg!(target_arch = "riscv64");

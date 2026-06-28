@@ -4,6 +4,7 @@ use elf::abi::*;
 
 use crate::arch::ArchKind;
 use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
+use crate::lazy::defs::LazyBindingSlots;
 #[cfg(feature = "object")]
 use crate::relocation::ObjectRelocationArch;
 use crate::relocation::RelocationArch;
@@ -34,6 +35,7 @@ impl RelocationArch for ArmArch {
     const TPOFF: ElfRelocationType = ElfRelocationType::new(R_ARM_TLS_TPOFF32);
     // 32-bit ARM does not define a TLSDESC relocation.
     const TLSDESC: Option<ElfRelocationType> = None;
+    const LAZY_BINDING_SLOTS: LazyBindingSlots = LazyBindingSlots::new(1, 2);
 
     // `true` only when this ZST is the host's relocation backend.
     const SUPPORTS_NATIVE_RUNTIME: bool = cfg!(target_arch = "arm");

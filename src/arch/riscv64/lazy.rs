@@ -1,6 +1,3 @@
-pub(crate) const DYLIB_OFFSET: usize = 1;
-pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 0;
-
 /// Dynamic linker runtime resolver for RISC-V 64-bit PLT entries.
 ///
 /// This function is called when a PLT entry needs to resolve a symbol address
@@ -98,6 +95,6 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         // 执行真正的函数
         jr t1
         ",
-        sym crate::relocation::dl_fixup,
+        sym crate::lazy::native::dl_fixup,
     )
 }

@@ -116,7 +116,7 @@ name = "load_object"
 required-features = ["object"]
 
 [features]
-default = ["tls", "libc"]
+default = ["full"]
 
 # A feature that enables the libc backend for Linux and Android.
 libc = ["dep:libc"]

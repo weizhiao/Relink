@@ -1,10 +1,9 @@
 use crate::{
     Result,
     image::{ModuleHandle, ModuleScope, ModuleScopeBuilder},
+    lazy::traits::{LazyBinder, SupportLazy},
     observer::RelocationObserver,
-    relocation::{
-        BindingMode, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, SupportLazy,
-    },
+    relocation::{BindingMode, Relocatable, RelocateArgs, RelocationArch, RelocationHandler},
     runtime::{CodeExecutor, NativeCodeExecutor},
     sync::Arc,
     tls::TlsResolver,
@@ -61,6 +60,7 @@ pub struct Relocator<
     observer: Obs,
     binding: BindingMode,
     executor: Option<Arc<dyn CodeExecutor<Arch>>>,
+    lazy_binder: Arc<dyn LazyBinder<Arch>>,
     _tls: PhantomData<fn() -> Tls>,
 }
 
@@ -84,6 +84,7 @@ where
             observer: self.observer.clone(),
             binding: self.binding,
             executor: self.executor.clone(),
+            lazy_binder: self.lazy_binder.clone(),
             _tls: PhantomData,
         }
     }
@@ -102,6 +103,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>>
             observer: (),
             binding: BindingMode::Default,
             executor: None,
+            lazy_binder: Arc::from(Box::new(()) as Box<dyn LazyBinder<Arch>>),
             _tls: PhantomData,
         }
     }
@@ -121,6 +123,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>>
             observer: self.observer,
             binding: self.binding,
             executor: None,
+            lazy_binder: Arc::from(Box::new(()) as Box<dyn LazyBinder<NewArch>>),
             _tls: PhantomData,
         }
     }
@@ -172,6 +175,7 @@ where
             observer: self.observer,
             binding: self.binding,
             executor: self.executor,
+            lazy_binder: self.lazy_binder,
             _tls: PhantomData,
         }
     }
@@ -213,6 +217,7 @@ where
             observer: self.observer,
             binding: self.binding,
             executor: self.executor,
+            lazy_binder: self.lazy_binder,
             _tls: PhantomData,
         }
     }
@@ -236,6 +241,7 @@ where
             observer: self.observer,
             binding: self.binding,
             executor: self.executor,
+            lazy_binder: self.lazy_binder,
             _tls: PhantomData,
         }
     }
@@ -259,6 +265,7 @@ where
             observer: self.observer,
             binding: self.binding,
             executor: self.executor,
+            lazy_binder: self.lazy_binder,
             _tls: PhantomData,
         }
     }
@@ -279,6 +286,7 @@ where
             observer,
             binding: self.binding,
             executor: self.executor,
+            lazy_binder: self.lazy_binder,
             _tls: PhantomData,
         }
     }
@@ -340,6 +348,7 @@ where
             mut observer,
             binding,
             executor,
+            lazy_binder,
             ..
         } = self;
         let executor: Arc<dyn CodeExecutor<Arch>> = executor.unwrap_or_else(|| {
@@ -350,6 +359,7 @@ where
             scope: scope.into_scope(),
             binding,
             executor,
+            lazy_binder,
             pre_handler: &pre_handler,
             post_handler: &post_handler,
             observer: &mut observer,
@@ -392,6 +402,7 @@ where
             mut observer,
             binding,
             executor,
+            lazy_binder,
             ..
         } = self;
         let executor: Arc<dyn CodeExecutor<Arch>> = executor.unwrap_or_else(|| {
@@ -402,6 +413,7 @@ where
             scope,
             binding,
             executor,
+            lazy_binder,
             pre_handler: &pre_handler,
             post_handler: &post_handler,
             observer: &mut observer,
@@ -422,6 +434,15 @@ where
     /// Forces eager binding.
     pub fn eager(mut self) -> Self {
         self.binding = BindingMode::Eager;
+        self
+    }
+
+    /// Overrides the lazy PLT binder used to prepare runtime binding.
+    pub fn lazy_binder<B>(mut self, binder: B) -> Self
+    where
+        B: LazyBinder<Arch>,
+    {
+        self.lazy_binder = Arc::from(Box::new(binder) as Box<dyn LazyBinder<Arch>>);
         self
     }
 

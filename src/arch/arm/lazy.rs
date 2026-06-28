@@ -1,6 +1,3 @@
-pub(crate) const DYLIB_OFFSET: usize = 1;
-pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
-
 /// Dynamic linker runtime resolver for ARM PLT entries.
 ///
 /// This function is called when a PLT entry needs to resolve a symbol address
@@ -48,6 +45,6 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
  		pop {{r0, r1, r2, r3, r4, lr}}
         bx ip
         ",
-        fixup = sym crate::relocation::dl_fixup,
+        fixup = sym crate::lazy::native::dl_fixup,
     )
 }

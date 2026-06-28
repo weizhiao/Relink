@@ -693,12 +693,8 @@ impl Display for RelocationFailure {
 pub enum RelocationError {
     /// Detailed relocation context, formatted lazily in `Display`.
     Context(Box<RelocationFailure>),
-    #[cfg(feature = "lazy-binding")]
-    /// `lazy binding setup failed: {detail}`
-    LazyBindingSetup {
-        /// Static detail describing the lazy-binding setup failure.
-        detail: &'static str,
-    },
+    /// Lazy binding setup or runtime binding failed.
+    LazyBinding(LazyBindingError),
     /// `object file missing symbol table`
     MissingSymbolTable,
 }
@@ -707,11 +703,47 @@ impl Display for RelocationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Context(ctx) => Display::fmt(ctx, f),
-            #[cfg(feature = "lazy-binding")]
-            Self::LazyBindingSetup { detail } => {
-                write!(f, "lazy binding setup failed: {detail}")
+            Self::LazyBinding(err) => {
+                write!(f, "lazy binding failed: {err}")
             }
             Self::MissingSymbolTable => f.write_str("object file missing symbol table"),
+        }
+    }
+}
+
+/// Structured lazy binding failure details.
+pub enum LazyBindingError {
+    /// Lazy binding was requested without installing a binder.
+    MissingBinder,
+    /// Native same-process lazy binding is unavailable for the target architecture.
+    NativeUnsupported,
+    /// The image has no lazy PLT relocation metadata.
+    MissingPltMetadata,
+    /// The image has no GOT/PLTGOT entry to install lazy binding state.
+    MissingGotPlt,
+    /// The lazy binding GOT slot offset overflowed.
+    SlotOffsetOverflow,
+    /// The lazy relocation index does not exist.
+    RelocIndexOutOfRange,
+    /// The relocation is not a valid lazy PLT relocation.
+    InvalidPltReloc,
+    /// The relocation references a symbol table entry that does not exist.
+    SymbolIndexOutOfRange,
+}
+
+impl Display for LazyBindingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingBinder => f.write_str("missing lazy binder"),
+            Self::NativeUnsupported => {
+                f.write_str("native binding is not supported for this target architecture")
+            }
+            Self::MissingPltMetadata => f.write_str("missing lazy PLT metadata"),
+            Self::MissingGotPlt => f.write_str("missing GOT/PLTGOT entry"),
+            Self::SlotOffsetOverflow => f.write_str("GOT slot offset overflowed"),
+            Self::RelocIndexOutOfRange => f.write_str("relocation index is out of range"),
+            Self::InvalidPltReloc => f.write_str("invalid PLT relocation"),
+            Self::SymbolIndexOutOfRange => f.write_str("symbol index is out of range"),
         }
     }
 }
@@ -1073,6 +1105,7 @@ debug_as_display!(
     RelocReason,
     RelocationFailure,
     RelocationError,
+    LazyBindingError,
     CodeError,
     CustomError,
     UnresolvedDependency,

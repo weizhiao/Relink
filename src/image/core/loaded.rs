@@ -4,7 +4,7 @@ use crate::{
     arch::ArchKind,
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolType},
     hint::unlikely,
-    image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, ModuleTls, SymbolLookup},
+    image::{Module, ModuleHandle, ModuleScope, ModuleTls, SymbolLookup},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymDef},
@@ -26,7 +26,6 @@ pub struct LoadedCore<
     Tls: TlsResolver<Arch> = (),
 > {
     core: ElfCore<D, Arch, R, Tls>,
-    scope: ModuleScope<Arch, Tls>,
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static> Debug
@@ -55,7 +54,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     fn clone(&self) -> Self {
         LoadedCore {
             core: self.core.clone(),
-            scope: self.scope.clone(),
         }
     }
 }
@@ -90,36 +88,20 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
     LoadedCore<D, Arch, R, Tls>
 {
-    #[inline]
-    pub(crate) fn from_relocated_core(core: ElfCore<D, Arch, R, Tls>) -> Self {
-        LoadedCore {
-            core,
-            scope: ModuleScopeBuilder::<Arch, Tls>::new().into_scope(),
-        }
-    }
-
-    /// Wraps an [`ElfCore`] into a [`LoadedCore`] with an empty retained scope.
+    /// Wraps an [`ElfCore`] into a [`LoadedCore`].
     ///
     /// # Safety
     ///
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
     pub unsafe fn from_core(core: ElfCore<D, Arch, R, Tls>) -> Self {
-        Self::from_relocated_core(core)
-    }
-
-    #[inline]
-    pub(crate) fn from_relocated_core_scope(
-        core: ElfCore<D, Arch, R, Tls>,
-        scope: ModuleScope<Arch, Tls>,
-    ) -> Self {
-        LoadedCore { core, scope }
+        LoadedCore { core }
     }
 
     /// Returns the retained user-provided relocation lookup scope.
     #[inline]
     pub fn scope(&self) -> &[ModuleHandle<Arch, Tls>] {
-        self.scope.as_slice()
+        self.core.scope()
     }
 
     /// Returns the target architecture used by this loaded module.
@@ -313,14 +295,14 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         core: ElfCore<D, Arch, R, Tls>,
         scope: ModuleScope<Arch, Tls>,
     ) -> Self {
-        Self::from_relocated_core_scope(core, scope)
+        core.set_scope(scope);
+        unsafe { Self::from_core(core) }
     }
 
     /// Returns a reference to the underlying [`ElfCore`].
     ///
     /// # Safety
-    /// Lifecycle information is lost, so the retained scope of the current
-    /// loaded object can be dropped too early if this reference is used carelessly.
+    /// Lifecycle information is lost if this reference is used carelessly.
     #[inline]
     pub unsafe fn core_ref(&self) -> &ElfCore<D, Arch, R, Tls> {
         &self.core
@@ -476,10 +458,7 @@ impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
             )
         }?;
         core.init_tls()?;
-        Ok(Self {
-            core,
-            scope: ModuleScopeBuilder::<Arch, Tls>::new().into_scope(),
-        })
+        Ok(unsafe { Self::from_core(core) })
     }
 }
 

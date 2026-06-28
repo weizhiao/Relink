@@ -4,22 +4,21 @@ use crate::{
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     hint::{likely, unlikely},
     image::{LoadedCore, RawDynamic},
+    lazy::traits::LazyBinder,
     logging,
-    memory::{ImageMemory, MappedView, RegionAccess, VmOffset},
+    memory::{ImageMemory, ImageMemoryExt, MappedView, RegionAccess, VmOffset},
     observer::{DynamicRelocatedEvent, Finalizer, RelocationObserver},
-    relocation::{
-        BindingMode, RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, ResolvedBinding,
-        SymDef,
-    },
+    relocation::{RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, SymDef},
     runtime::CodeContext,
+    sync::Arc,
     tls::{TlsRelocOutcome, TlsResolver},
 };
 use alloc::vec;
 use core::num::NonZeroUsize;
 
 impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
-    fn apply_relro(&self, binding: &ResolvedBinding) -> Result<()> {
-        if binding.is_lazy() {
+    fn apply_relro(&self, lazy_binding: bool) -> Result<()> {
+        if lazy_binding {
             return Ok(());
         }
 
@@ -46,6 +45,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
             scope,
             binding,
             executor,
+            lazy_binder,
             pre_handler,
             post_handler,
             observer,
@@ -56,12 +56,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
             logging::debug!("No relocations needed for {}", self.name());
         }
 
-        let binding = self.resolve_binding(if Arch::SUPPORTS_NATIVE_RUNTIME {
-            binding
-        } else {
-            BindingMode::Eager
-        });
-        if binding.is_lazy() {
+        let lazy_binding = lazy_binder.resolve_binding(binding, self.is_lazy());
+        if lazy_binding {
             logging::debug!("Using lazy binding for {}", self.name());
         }
         let mut helper = RelocHelper::new(
@@ -78,7 +74,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         if !relocation.is_empty() {
             self.relocate_relative(helper.memory())?
                 .relocate_dynrel(&mut helper)?
-                .relocate_pltrel(&binding, &mut helper)?;
+                .relocate_pltrel(lazy_binding, &mut helper, lazy_binder.clone())?;
         }
 
         let RelocHelper { scope, .. } = helper;
@@ -94,8 +90,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
             logging::debug!("[{}] Bound dependencies: {:?}", self.name(), dep_names);
         }
 
-        self.apply_relro(&binding)?;
-        self.install_lazy_lookup(binding, scope.clone())?;
+        self.apply_relro(lazy_binding)?;
+        self.core_ref().set_scope(scope.clone());
         let mut dynamic_event =
             DynamicRelocatedEvent::new(self.core_ref(), self.dynamic_addr(), finalizer);
         observer.on_dynamic_relocated(&mut dynamic_event)?;
@@ -108,10 +104,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
 
         logging::info!("Relocation completed for {}", self.name());
 
-        Ok(LoadedCore::from_relocated_core_scope(
-            self.into_core(),
-            scope,
-        ))
+        Ok(unsafe { LoadedCore::from_core(self.into_core()) })
     }
 }
 
@@ -209,8 +202,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
     /// Relocate PLT (Procedure Linkage Table) entries
     fn relocate_pltrel<PreH, PostH, Obs>(
         &self,
-        binding: &ResolvedBinding,
+        lazy_binding: bool,
         helper: &mut RelocHelper<'_, D, Arch, R, Tls, PreH, PostH, Obs>,
+        lazy_binder: Arc<dyn LazyBinder<Arch>>,
     ) -> Result<&Self>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
@@ -221,8 +215,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         let core = self.core_ref();
         let base = core.base();
         let reloc = self.relocation();
-        debug_assert!(Arch::SUPPORTS_NATIVE_RUNTIME || !binding.is_lazy());
-        binding.prepare_plt(self)?;
+        lazy_binder.prepare_plt(lazy_binding, self)?;
 
         // Process PLT relocations
         let pltrel = reloc.pltrel.as_slice();
@@ -236,7 +229,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
 
             // Handle jump slot relocations
             if likely(r_type == Arch::JUMP_SLOT) {
-                if binding.relocate_jump_slot::<Arch, _>(helper.memory(), base, rel)? {
+                if lazy_binder.relocate_jump_slot(lazy_binding, helper.memory(), base, rel)? {
                     continue;
                 }
 
@@ -448,6 +441,11 @@ impl<Arch: RelocationArch> DynamicRelocation<Arch> {
                 dynrel,
             })
         }
+    }
+
+    #[inline]
+    pub(crate) fn pltrel(&self) -> &[ElfRelType<Arch>] {
+        self.pltrel.as_slice()
     }
 
     /// Check if there are no relocations to process

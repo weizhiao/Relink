@@ -3,7 +3,7 @@
 use crate::{
     ByteRepr, Result,
     arch::NativeArch,
-    memory::{ImageMemory, VmAddr, VmOffset},
+    memory::{ImageMemory, ImageMemoryExt, VmAddr, VmOffset},
     relocation::RelocationArch,
 };
 

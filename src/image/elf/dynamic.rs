@@ -1,7 +1,5 @@
 use crate::arch::NativeArch;
-#[cfg(feature = "lazy-binding")]
 use crate::elf::ElfRelType;
-use crate::sync::{Arc, AtomicBool};
 use crate::{
     ParseDynamicError, ParsePhdrError, Result,
     elf::{
@@ -9,19 +7,21 @@ use crate::{
         HashTable, Lifecycle, LifecycleSpec, SymbolTable,
     },
     input::{Path, PathBuf},
+    lazy::traits::SupportLazy,
     loader::ImageBuilder,
     logging,
-    memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr, VmOffset},
+    memory::{HostRegion, ImageMemoryExt, MappedView, RegionAccess, VmAddr, VmOffset},
     observer::{InitEvent, RelocationObserver},
     relocation::{
         DynamicRelocation, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
     },
     runtime::CodeExecutor,
     segment::{ElfSegments, MemoryProtection},
+    sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{cell::OnceCell, marker::PhantomData, mem::size_of, ptr::NonNull};
+use core::{cell::OnceCell, mem::size_of, ptr::NonNull};
 
 use crate::image::{ElfCore, LoadedCore, ModuleTls, core::CoreInner, exports_handle};
 
@@ -85,57 +85,29 @@ impl<L: ElfLayout> SymbolTable<L> {
     }
 }
 
-#[cfg(feature = "lazy-binding")]
-pub(crate) struct LazyBindingRuntime {
-    pub(crate) core: *const (),
-    pub(crate) fixup: unsafe fn(*const (), usize) -> usize,
+pub(crate) struct PltRelocInfo<Arch: RelocationArch = NativeArch> {
+    pub(crate) relocs: MappedView<ElfRelType<Arch>>,
+    pub(crate) symbols: SymbolTable<Arch::Layout>,
 }
 
-#[cfg(feature = "lazy-binding")]
-impl LazyBindingRuntime {
-    #[inline]
-    pub(crate) const fn new(core: *const (), fixup: unsafe fn(*const (), usize) -> usize) -> Self {
-        Self { core, fixup }
-    }
-
-    #[inline]
-    pub(crate) unsafe fn fixup(&self, rela_idx: usize) -> usize {
-        unsafe { (self.fixup)(self.core, rela_idx) }
-    }
-}
-
-#[cfg(feature = "lazy-binding")]
-pub(crate) struct LazyBindingInfo<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    pub(crate) pltrel: MappedView<ElfRelType<Arch>>,
-    pub(crate) symtab: SymbolTable<Arch::Layout>,
-    pub(crate) runtime: OnceCell<LazyBindingRuntime>,
-    pub(crate) scope: OnceCell<crate::image::ModuleScope<Arch, Tls>>,
-}
-
-#[cfg(feature = "lazy-binding")]
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LazyBindingInfo<Arch, Tls> {
+impl<Arch: RelocationArch> PltRelocInfo<Arch> {
     #[inline]
     pub(crate) fn new(
         pltrel: Option<MappedView<ElfRelType<Arch>>>,
         symtab: SymbolTable<Arch::Layout>,
     ) -> Self {
         Self {
-            pltrel: pltrel.unwrap_or_else(MappedView::empty),
-            symtab,
-            runtime: OnceCell::new(),
-            scope: OnceCell::new(),
+            relocs: pltrel.unwrap_or_else(MappedView::empty),
+            symbols: symtab,
         }
     }
 }
 
-pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
     pub(crate) soname: Option<&'static str>,
     pub(crate) symbolic: bool,
-    #[cfg(feature = "lazy-binding")]
-    pub(crate) lazy: LazyBindingInfo<Arch, Tls>,
-    pub(crate) _tls: PhantomData<fn() -> Tls>,
 }
 
 pub(crate) struct RawDynamicParts<
@@ -165,10 +137,6 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
     /// Indicates whether lazy binding is enabled for this object
     lazy: bool,
 
-    /// Pointer to the Global Offset Table (.got.plt section)
-    #[cfg(feature = "lazy-binding")]
-    got_plt: Option<NonNull<usize>>,
-
     /// Dynamic relocation information (rela.dyn and rela.plt)
     relocation: DynamicRelocation<Arch>,
 
@@ -180,6 +148,9 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
 
     /// Runtime address of the DT_DEBUG entry, when present.
     dt_debug_addr: Option<VmAddr>,
+
+    /// Runtime address of the DT_PLTGOT entry, when present.
+    got_plt: Option<VmAddr>,
 
     /// Initialization functions to resolve after relocation.
     init: LifecycleSpec,
@@ -248,6 +219,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> core::fmt
     }
 }
 
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
+    for RawDynamic<D, Arch, R, Tls>
+{
+}
+
 impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
     /// Gets the entry point of the ELF object.
     #[inline]
@@ -287,6 +263,12 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
     #[inline]
     pub fn is_lazy(&self) -> bool {
         self.extra.lazy
+    }
+
+    /// Returns the target-visible `DT_PLTGOT` address used by lazy binding.
+    #[inline]
+    pub(crate) fn got_plt(&self) -> Option<VmAddr> {
+        self.extra.got_plt
     }
 
     /// Gets the DT_RPATH value
@@ -342,16 +324,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         self.module
             .phdrs()
             .expect("raw dynamic image should always carry program headers")
-    }
-
-    /// Gets the Global Offset Table pointer
-    ///
-    /// # Returns
-    /// An optional NonNull pointer to the GOT
-    #[inline]
-    #[cfg(feature = "lazy-binding")]
-    pub(crate) fn got(&self) -> Option<NonNull<usize>> {
-        self.extra.got_plt
     }
 
     /// Gets the dynamic relocation information
@@ -452,7 +424,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
             return Ok(false);
         };
         let entry = ElfDyn::<Arch::Layout>::new(ElfDynamicTag::DEBUG, addr.get());
-        unsafe { ImageMemory::write_value(self.module.segments(), dt_debug_addr, entry)? };
+        unsafe { ImageMemoryExt::write_value(self.module.segments(), dt_debug_addr, entry)? };
         Ok(true)
     }
 
@@ -502,7 +474,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
         let static_tls = force_static_tls | dynamic.static_tls;
         let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
         let exports = symtab.clone();
-        #[cfg(feature = "lazy-binding")]
         let lazy_symtab = symtab.clone();
         let needed_libs: Vec<&'static str> = dynamic
             .needed_libs
@@ -537,20 +508,39 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
         } else {
             (None, None)
         };
+        let lazy_plt = PltRelocInfo::new(dynamic.pltrel.clone(), lazy_symtab);
+
+        let inner = Arc::new(CoreInner {
+            runtime: Box::new(crate::image::CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
+            is_init: AtomicBool::new(false),
+            path,
+            exports: exports_handle(exports),
+            finalizer: OnceCell::new(),
+            user_data,
+            dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
+                eh_frame_hdr,
+                phdrs,
+                soname,
+                symbolic: dynamic.symbolic,
+            })),
+            scope: OnceCell::new(),
+            tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_info, tls_image),
+            segments,
+        });
+        CoreInner::bind_runtime_owner(&inner);
 
         Ok(RawDynamic {
             entry,
             interp,
             extra: ElfExtraData::<Arch> {
-                lazy: cfg!(feature = "lazy-binding") && !dynamic.bind_now,
+                lazy: !dynamic.bind_now,
                 relro,
                 dynamic_addr,
                 dt_debug_addr: dynamic.dt_debug_addr,
+                got_plt: dynamic.got_plt,
                 relocation,
                 init: dynamic.init,
                 fini: dynamic.fini,
-                #[cfg(feature = "lazy-binding")]
-                got_plt: dynamic.got_plt,
                 rpath: dynamic
                     .rpath_off
                     .map(|rpath_off| symtab.strtab().get_str(rpath_off.get())),
@@ -560,26 +550,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
                     .map(|runpath_off| symtab.strtab().get_str(runpath_off.get())),
                 symtab,
             },
-            module: ElfCore {
-                inner: Arc::new(CoreInner {
-                    is_init: AtomicBool::new(false),
-                    path,
-                    exports: exports_handle(exports),
-                    finalizer: OnceCell::new(),
-                    user_data,
-                    dynamic_info: Some(Arc::new(DynamicInfo::<Arch, Tls> {
-                        eh_frame_hdr,
-                        phdrs,
-                        soname,
-                        symbolic: dynamic.symbolic,
-                        #[cfg(feature = "lazy-binding")]
-                        lazy: LazyBindingInfo::new(dynamic.pltrel.clone(), lazy_symtab),
-                        _tls: PhantomData,
-                    })),
-                    tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_info, tls_image),
-                    segments,
-                }),
-            },
+            module: ElfCore { inner },
         })
     }
 

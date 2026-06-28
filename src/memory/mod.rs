@@ -10,4 +10,4 @@ pub(crate) use addr::{align_up, rounddown, roundup};
 pub use host::HostRegion;
 pub use region::MappedRegion;
 pub(crate) use region::MappedView;
-pub use traits::{ImageMemory, RegionAccess};
+pub use traits::{ImageMemory, ImageMemoryExt, RegionAccess};

@@ -152,17 +152,20 @@ pub trait ImageMemory: Send + Sync {
 
     /// Writes bytes to an image VM address.
     fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()>;
+}
 
+/// Typed value helpers for image memory backends.
+///
+/// This is split from [`ImageMemory`] so the base trait stays object-safe while
+/// these generic helpers still work for `dyn ImageMemory`.
+pub trait ImageMemoryExt: ImageMemory {
     /// Reads a typed value from an image VM address.
     ///
     /// # Safety
     /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
     /// readable image memory.
     #[inline]
-    unsafe fn read_value<T: ByteRepr>(&self, addr: VmAddr) -> Result<T>
-    where
-        Self: Sized,
-    {
+    unsafe fn read_value<T: ByteRepr>(&self, addr: VmAddr) -> Result<T> {
         let mut value = MaybeUninit::<T>::uninit();
         let bytes = unsafe {
             core::slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), size_of::<T>())
@@ -177,10 +180,7 @@ pub trait ImageMemory: Send + Sync {
     /// The caller must ensure `addr..addr + size_of::<T>()` is backed by
     /// writable image memory.
     #[inline]
-    unsafe fn write_value<T: ByteRepr>(&self, addr: VmAddr, value: T) -> Result<()>
-    where
-        Self: Sized,
-    {
+    unsafe fn write_value<T: ByteRepr>(&self, addr: VmAddr, value: T) -> Result<()> {
         let bytes = unsafe {
             core::slice::from_raw_parts((&value as *const T).cast::<u8>(), size_of::<T>())
         };
@@ -197,10 +197,7 @@ pub trait ImageMemory: Send + Sync {
         &self,
         addr: VmAddr,
         update: impl FnOnce(T) -> T,
-    ) -> Result<()>
-    where
-        Self: Sized,
-    {
+    ) -> Result<()> {
         if size_of::<T>() == 0 {
             return Ok(());
         }
@@ -209,6 +206,8 @@ pub trait ImageMemory: Send + Sync {
         unsafe { self.write_value(addr, value) }
     }
 }
+
+impl<M: ImageMemory + ?Sized> ImageMemoryExt for M {}
 
 impl<M> ImageMemory for &M
 where

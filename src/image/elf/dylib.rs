@@ -8,6 +8,7 @@ use crate::{
     elf::ElfPhdr,
     image::{ElfCore, LoadedCore, ModuleTls, RawDynamic},
     input::Path,
+    lazy::traits::SupportLazy,
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
@@ -46,6 +47,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
             .field("needed_libs", &self.inner.needed_libs())
             .finish()
     }
+}
+
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
+    for RawDylib<D, Arch, R, Tls>
+{
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Relocatable<D>

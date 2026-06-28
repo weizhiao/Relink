@@ -10,6 +10,7 @@ use crate::{
     elf::ElfPhdr,
     image::LoadedCore,
     input::Path,
+    lazy::traits::SupportLazy,
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{
@@ -21,10 +22,9 @@ use crate::{
 
 pub use dylib::RawDylib;
 pub(crate) use dynamic::DynamicInfo;
+pub(crate) use dynamic::PltRelocInfo;
 pub use dynamic::RawDynamic;
 pub(crate) use dynamic::RawDynamicParts;
-#[cfg(feature = "lazy-binding")]
-pub(crate) use dynamic::{LazyBindingInfo, LazyBindingRuntime};
 pub use exec::{LoadedExec, RawExec, StaticExec};
 #[cfg(feature = "object")]
 pub use object::{LoadedObject, RawObject};
@@ -55,6 +55,11 @@ pub enum RawElf<
     /// A relocatable object file (typically `.o`).
     #[cfg(feature = "object")]
     Object(RawObject<D, Arch, R, Tls>),
+}
+
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
+    for RawElf<D, Arch, R, Tls>
+{
 }
 
 /// A fully relocated and ready-to-use ELF module.

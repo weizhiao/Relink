@@ -142,6 +142,7 @@ where
         let object_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
         self.section_segments.mprotect(&object_segments)?;
+        self.core.set_scope(scope);
 
         self.call_init(observer, object_segments, executor.as_ref())?;
         self.section_segments.mprotect_final(&object_segments)?;
@@ -150,7 +151,7 @@ where
 
         let core = self.core;
         Ok(LoadedObject {
-            inner: LoadedCore::from_relocated_core_scope(core, scope),
+            inner: unsafe { LoadedCore::from_core(core) },
         })
     }
 

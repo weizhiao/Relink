@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+#[cfg(feature = "lazy-binding")]
+use elf_loader::lazy::native::NativeLazyBinder;
 #[cfg(feature = "tls")]
 use elf_loader::tls::DefaultTlsResolver;
 use elf_loader::{
@@ -170,7 +172,10 @@ impl BindingFixture {
 
         #[cfg(feature = "lazy-binding")]
         let loaded_dylib = if binding.is_lazy() {
-            prepared_relocator.lazy().relocate()
+            prepared_relocator
+                .lazy_binder(NativeLazyBinder::new())
+                .lazy()
+                .relocate()
         } else {
             prepared_relocator.relocate()
         }

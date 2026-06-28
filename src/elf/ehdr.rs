@@ -222,7 +222,6 @@ impl<L: ElfLayout> ElfHeader<L> {
     /// This validates entry-size compatibility, overflow-prone arithmetic, and
     /// that the table stays within the object length.
     #[inline]
-    #[cfg_attr(not(feature = "object"), allow(dead_code))]
     pub(crate) fn checked_shdr_layout(&self, object_len: usize) -> Result<Option<(usize, usize)>> {
         if self.e_shentsize() != size_of::<ElfShdr<L>>() {
             return Err(ParseShdrError::InvalidEntrySize {

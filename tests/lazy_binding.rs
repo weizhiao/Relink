@@ -2,7 +2,8 @@ mod support;
 
 #[cfg(feature = "lazy-binding")]
 use elf_loader::{
-    Loader, arch::NativeArch, image::LoadedCore, input::ElfBinary, relocation::RelocationArch,
+    Loader, arch::NativeArch, image::LoadedCore, input::ElfBinary, lazy::native::NativeLazyBinder,
+    relocation::RelocationArch,
 };
 
 #[cfg(feature = "lazy-binding")]
@@ -147,6 +148,7 @@ fn default_lazy_binding_uses_retained_scope_entry() {
         .expect("failed to load scope consumer")
         .relocator()
         .scope(std::slice::from_ref(&provider))
+        .lazy_binder(NativeLazyBinder::new())
         .relocate()
         .expect("failed to relocate scope consumer");
 
@@ -184,6 +186,7 @@ fn default_lazy_binding_retains_scope_used_only_by_lazy_jump_slot() {
         .expect("failed to load scope consumer")
         .relocator()
         .scope(std::slice::from_ref(&provider))
+        .lazy_binder(NativeLazyBinder::new())
         .relocate()
         .expect("failed to relocate scope consumer");
 
@@ -221,6 +224,7 @@ fn df_symbolic_lazy_jump_slot_prefers_current_definition() {
         .expect("failed to load scope consumer")
         .relocator()
         .scope(std::slice::from_ref(&provider))
+        .lazy_binder(NativeLazyBinder::new())
         .relocate()
         .expect("failed to relocate scope consumer");
 

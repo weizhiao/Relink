@@ -21,6 +21,7 @@ use crate::{
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
 };
+use alloc::boxed::Box;
 use core::{borrow::Borrow, cell::OnceCell, fmt::Debug, ops::Deref};
 
 use crate::image::{ElfCore, LoadedCore, ModuleHandle, core::CoreInner};
@@ -78,20 +79,22 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<A
         let (segments, init_segments) = builder.segments.into_parts();
         let pltgot = builder.section_segments.take_pltgot();
         let inner = CoreInner {
+            runtime: Box::new(crate::image::CoreRuntime::new::<D, R, Tls>(None)),
             is_init: AtomicBool::new(false),
             path: builder.path,
             exports: exports_handle(ObjectExports::<Arch::Layout>::empty()),
             finalizer: OnceCell::new(),
             user_data: builder.user_data,
             dynamic_info: None,
+            scope: OnceCell::new(),
             tls: CoreTlsState::new(builder.tls_mod_id, builder.tls_tp_offset, None, None),
             segments,
         };
+        let inner = Arc::new(inner);
+        CoreInner::bind_runtime_owner(&inner);
 
         Self {
-            core: ElfCore {
-                inner: Arc::new(inner),
-            },
+            core: ElfCore { inner },
             symtab: builder.symtab,
             sections: builder.sections,
             pltgot,

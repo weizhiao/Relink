@@ -3,7 +3,7 @@ use crate::{
     RelocReason, Result,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSymbol, ElfWord},
     image::Module,
-    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
+    memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
     relocation::{RelocHelper, RelocationArch, RelocationHandler, SymDef},
     tls::TlsResolver,

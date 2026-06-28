@@ -163,6 +163,7 @@ mod error;
 mod hint;
 pub mod image;
 pub mod input;
+pub mod lazy;
 pub mod linker;
 pub mod loader;
 mod logging;
@@ -184,9 +185,9 @@ pub(crate) use error::*;
 
 pub use aligned_bytes::ByteRepr;
 pub use error::{
-    CodeError, CustomError, Error, IoError, LinkerError, MmapError, ParseDynamicError,
-    ParseEhdrError, ParseNoteError, ParsePhdrError, ParseShdrError, RelocTableError,
-    RelocationError, RelocationFailure, TlsError,
+    CodeError, CustomError, Error, IoError, LazyBindingError, LinkerError, MmapError,
+    ParseDynamicError, ParseEhdrError, ParseNoteError, ParsePhdrError, ParseShdrError,
+    RelocTableError, RelocationError, RelocationFailure, TlsError,
 };
 pub use loader::Loader;
 

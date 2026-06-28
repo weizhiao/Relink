@@ -1,6 +1,3 @@
-pub(crate) const DYLIB_OFFSET: usize = 1;
-pub(crate) const RESOLVE_FUNCTION_OFFSET: usize = 2;
-
 /// Dynamic linker runtime resolver for AArch64 PLT entries.
 ///
 /// This function is called when a PLT entry needs to resolve a symbol address
@@ -98,6 +95,6 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
     // 跳转到解析后的地址
     br x17
         ",
-        dl_fixup = sym crate::relocation::dl_fixup,
+        dl_fixup = sym crate::lazy::native::dl_fixup,
     )
 }

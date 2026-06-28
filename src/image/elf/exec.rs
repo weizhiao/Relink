@@ -10,6 +10,7 @@ use crate::{
     elf::ElfPhdr,
     image::{LoadedCore, ModuleTls, RawDynamic},
     input::{Path, PathBuf},
+    lazy::traits::SupportLazy,
     loader::ImageBuilder,
     memory::{HostRegion, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
@@ -201,6 +202,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
             .field("name", &self.name())
             .finish()
     }
+}
+
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
+    for RawExec<D, Arch, R, Tls>
+{
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>

@@ -12,7 +12,7 @@ use crate::{
 };
 use alloc::vec::Vec;
 use core::fmt::Debug;
-use core::{num::NonZeroUsize, ptr::NonNull};
+use core::num::NonZeroUsize;
 use elf::abi::*;
 
 /// ELF dynamic section entry.
@@ -401,11 +401,7 @@ where
                 || parsed.flags_1 & DF_1_NOW as usize != 0,
             symbolic: parsed.symbolic || parsed.flags & DF_SYMBOLIC as usize != 0,
             static_tls: parsed.flags & DF_STATIC_TLS as usize != 0,
-            got_plt: parsed
-                .got_off
-                .map(|off| add_base(off.get()))
-                .transpose()?
-                .map(|addr| unsafe { NonNull::new_unchecked(addr.as_mut_ptr::<usize>()) }),
+            got_plt: parsed.got_off.map(|off| add_base(off.get())).transpose()?,
             needed_libs: parsed.needed_libs,
             pltrel,
             dynrel,
@@ -497,7 +493,7 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     /// Whether the object uses static thread-local storage.
     pub static_tls: bool,
     /// Global Offset Table address.
-    pub got_plt: Option<NonNull<usize>>,
+    pub got_plt: Option<VmAddr>,
     /// Initialization lifecycle functions.
     pub init: LifecycleSpec,
     /// Finalization lifecycle functions.

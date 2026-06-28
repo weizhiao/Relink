@@ -17,13 +17,11 @@ mod traits;
 
 pub use crate::elf::SymbolLookup;
 pub use crate::segment::{ElfSegments, MappedRange};
-#[cfg(feature = "lazy-binding")]
-pub(crate) use core::CoreInner;
+pub(crate) use core::CoreRuntime;
 pub use core::{ElfCore, ElfCoreRef, LoadedCore, Symbol};
 pub(crate) use elf::DynamicInfo;
+pub(crate) use elf::PltRelocInfo;
 pub(crate) use elf::RawDynamicParts;
-#[cfg(feature = "lazy-binding")]
-pub(crate) use elf::{LazyBindingInfo, LazyBindingRuntime};
 pub use elf::{LoadedElf, LoadedExec, RawDylib, RawDynamic, RawElf, RawExec, StaticExec};
 #[cfg(feature = "object")]
 pub use elf::{LoadedObject, RawObject};

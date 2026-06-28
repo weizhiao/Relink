@@ -15,7 +15,6 @@
 mod defs;
 mod dynamic;
 mod helper;
-mod lazy;
 mod relocator;
 mod traits;
 
@@ -23,13 +22,8 @@ pub(crate) use defs::{RelocValue, RelocationValueFormula, RelocationValueKind, r
 pub(crate) use dynamic::DynamicRelocation;
 pub use dynamic::{relocate_relative, relocate_relr};
 pub(crate) use helper::{RelocHelper, SymDef, find_symdef_impl};
-pub(crate) use lazy::ResolvedBinding;
-#[cfg(feature = "lazy-binding")]
-pub(crate) use lazy::dl_fixup;
 pub use traits::{ObjectRelocationArch, RelocationArch};
-pub(crate) use traits::{
-    Relocatable, RelocateArgs, RelocationValueInput, RelocationValueProvider, SupportLazy,
-};
+pub(crate) use traits::{Relocatable, RelocateArgs, RelocationValueInput, RelocationValueProvider};
 
 pub use relocator::Relocator;
 pub use traits::{BindingMode, HandleResult, RelocationContext, RelocationHandler};

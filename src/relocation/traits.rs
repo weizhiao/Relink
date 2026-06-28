@@ -11,6 +11,7 @@ use crate::{
         SymbolTableView,
     },
     image::{ElfCore, ModuleScope},
+    lazy::{defs::LazyBindingSlots, traits::LazyBinder},
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     runtime::CodeExecutor,
@@ -64,6 +65,8 @@ pub trait RelocationArch: 'static {
     const TLSDESC: Option<ElfRelocationType> = None;
     /// DTV offset used by this architecture's TLS ABI.
     const TLS_DTV_OFFSET: usize = 0;
+    /// PLTGOT slots used by this architecture's lazy binding entry.
+    const LAZY_BINDING_SLOTS: LazyBindingSlots;
 
     /// Whether relocation may execute target code or install target runtime
     /// hooks directly in the current process.
@@ -445,6 +448,7 @@ pub struct RelocateArgs<
     pub(crate) scope: ModuleScope<Arch, Tls>,
     pub(crate) binding: BindingMode,
     pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
+    pub(crate) lazy_binder: Arc<dyn LazyBinder<Arch>>,
     pub(crate) pre_handler: &'a PreH,
     pub(crate) post_handler: &'a PostH,
     pub(crate) observer: &'a mut Obs,
@@ -483,8 +487,3 @@ pub trait Relocatable<D = ()>: Sized {
         PostH: RelocationHandler<Self::Arch> + ?Sized,
         Obs: RelocationObserver<Self::Arch> + ?Sized;
 }
-
-/// Marker trait for raw image types that support lazy-binding fixup hooks.
-pub trait SupportLazy {}
-
-impl SupportLazy for () {}

@@ -7,7 +7,7 @@ use crate::{
         ElfDyn, ElfDynamicTag, ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfSectionId,
         ElfSymbol,
     },
-    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
+    memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, RelocationValueInput, RelocationValueProvider},
     tls::TlsResolver,
     try_cast_bytes,

@@ -88,7 +88,16 @@ impl AlignedBytes {
 
     #[inline]
     pub(crate) fn try_cast_slice_mut<T: ByteRepr>(&mut self) -> Option<&mut [T]> {
-        try_cast_bytes_mut(self.as_bytes_mut())
+        if size_of::<T>() == 0 {
+            return None;
+        }
+
+        let (prefix, values, suffix) = unsafe { self.as_bytes_mut().align_to_mut::<T>() };
+        if prefix.is_empty() && suffix.is_empty() {
+            Some(values)
+        } else {
+            None
+        }
     }
 }
 
@@ -104,12 +113,6 @@ pub(crate) fn try_cast_bytes<T: ByteRepr>(bytes: &[u8]) -> Option<&[T]> {
     } else {
         None
     }
-}
-
-#[inline]
-pub(crate) fn try_cast_bytes_mut<T: ByteRepr>(bytes: &mut [u8]) -> Option<&mut [T]> {
-    let len = try_cast_bytes::<T>(bytes)?.len();
-    Some(unsafe { core::slice::from_raw_parts_mut(bytes.as_mut_ptr().cast::<T>(), len) })
 }
 
 impl PartialEq for AlignedBytes {

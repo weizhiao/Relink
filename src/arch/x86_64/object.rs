@@ -2,7 +2,7 @@ use crate::{
     RelocReason,
     arch::x86_64::relocation::X86_64Arch,
     elf::{ElfRelEntry, ElfRelType, ElfShdr},
-    memory::{ImageMemory, RegionAccess, VmAddr},
+    memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr},
     object::layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
     relocation::{
         RelocHelper, RelocValue, RelocationHandler, RelocationValueInput, RelocationValueProvider,

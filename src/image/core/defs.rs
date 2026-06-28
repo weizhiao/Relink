@@ -1,24 +1,137 @@
 use crate::{
-    image::{DynamicInfo, SymbolExports},
+    Result,
+    elf::SymbolEntry,
+    image::{DynamicInfo, ModuleScope, PltRelocInfo, SymbolExports},
     input::PathBuf,
     logging,
-    memory::{HostRegion, RegionAccess},
+    memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     observer::Finalizer,
-    relocation::RelocationArch,
+    relocation::{RelocationArch, find_symdef_impl},
+    runtime::NativeCodeExecutor,
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering},
-    tls::{CoreTlsState, TlsResolver},
+    tls::{CoreTlsState, TLS_GET_ADDR_SYMBOL, TlsResolver},
 };
-use core::{cell::OnceCell, marker::PhantomData, ops::Deref};
+use alloc::boxed::Box;
+use core::{any::Any, cell::OnceCell, marker::PhantomData, ops::Deref};
+
+/// Stable runtime header shared by all [`CoreInner`] instantiations.
+#[repr(C)]
+pub(crate) struct CoreRuntime<Arch: RelocationArch = crate::arch::NativeArch> {
+    core: OnceCell<VmAddr>,
+    lazy_plt: Option<PltRelocInfo<Arch>>,
+    /// Opaque lazy-binding runtime state retained for the module lifetime.
+    pub(crate) lazy_runtime: OnceCell<Box<dyn Any + Send + Sync>>,
+    module: for<'a> unsafe fn(&'a Self) -> &'a dyn CoreRuntimeModule<Arch>,
+}
+
+impl<Arch: RelocationArch> CoreRuntime<Arch> {
+    pub(crate) fn new<D, R, Tls>(lazy_plt: Option<PltRelocInfo<Arch>>) -> Self
+    where
+        D: 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<Arch>,
+    {
+        Self {
+            core: OnceCell::new(),
+            lazy_plt,
+            lazy_runtime: OnceCell::new(),
+            module: core_module::<D, Arch, R, Tls>,
+        }
+    }
+
+    #[inline]
+    fn bind_core(&self, core: VmAddr) {
+        assert!(
+            self.core.set(core).is_ok(),
+            "core runtime owner must be installed only once",
+        );
+    }
+
+    #[inline]
+    fn core(&self) -> VmAddr {
+        *self
+            .core
+            .get()
+            .expect("core runtime owner must be installed before use")
+    }
+
+    #[inline]
+    pub(crate) fn lazy_plt(&self) -> Option<&PltRelocInfo<Arch>> {
+        self.lazy_plt.as_ref()
+    }
+
+    #[inline]
+    pub(crate) fn module(&self) -> &dyn CoreRuntimeModule<Arch> {
+        unsafe { (self.module)(self) }
+    }
+}
+
+pub(crate) trait CoreRuntimeModule<Arch: RelocationArch>: Send + Sync {
+    fn memory(&self) -> &dyn ImageMemory;
+
+    fn lookup_symbol(&self, symbol: SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>>;
+}
+
+#[inline]
+unsafe fn core_inner<D, Arch, R, Tls>(runtime: &CoreRuntime<Arch>) -> &CoreInner<D, Arch, R, Tls>
+where
+    D: 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    unsafe { &*runtime.core().as_ptr::<CoreInner<D, Arch, R, Tls>>() }
+}
+
+unsafe fn core_module<D, Arch, R, Tls>(runtime: &CoreRuntime<Arch>) -> &dyn CoreRuntimeModule<Arch>
+where
+    D: 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    unsafe { core_inner::<D, Arch, R, Tls>(runtime) }
+}
+
+impl<D, Arch, R, Tls> CoreRuntimeModule<Arch> for CoreInner<D, Arch, R, Tls>
+where
+    D: 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    #[inline]
+    fn memory(&self) -> &dyn ImageMemory {
+        &self.segments
+    }
+
+    fn lookup_symbol(&self, symbol: SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>> {
+        if Tls::OVERRIDE_TLS_GET_ADDR && symbol.name() == TLS_GET_ADDR_SYMBOL {
+            return Tls::bind_tls_get_addr().map(Some);
+        }
+
+        let Some(scope) = self.scope.get() else {
+            return Ok(None);
+        };
+        let symbolic = self.dynamic_info.as_ref().is_some_and(|info| info.symbolic);
+        find_symdef_impl(self, scope, symbol.symbol(), symbol.info(), symbolic)
+            .map(|symdef| symdef.resolve_addr(&NativeCodeExecutor))
+            .transpose()
+    }
+}
 
 /// Inner structure for ElfCore
-#[repr(C)]
 pub(crate) struct CoreInner<
     D: 'static = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
+    /// Stable runtime state used by code paths that should not depend on this
+    /// struct's generic layout.
+    pub(crate) runtime: Box<CoreRuntime<Arch>>,
+
     /// Indicates whether the component has been initialized
     pub(crate) is_init: AtomicBool,
 
@@ -32,7 +145,10 @@ pub(crate) struct CoreInner<
     pub(crate) finalizer: OnceCell<Finalizer<Arch>>,
 
     /// Dynamic information
-    pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch, Tls>>>,
+    pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
+
+    /// Relocation lookup scope retained for the loaded module lifetime.
+    pub(crate) scope: OnceCell<ModuleScope<Arch, Tls>>,
 
     /// TLS runtime state for this loaded object.
     pub(crate) tls: CoreTlsState<Arch, Tls>,
@@ -53,6 +169,18 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
             .as_ref()
             .and_then(|info| info.soname)
             .unwrap_or_else(|| self.path.file_name())
+    }
+
+    #[inline]
+    pub(crate) const fn runtime(&self) -> &CoreRuntime<Arch> {
+        &self.runtime
+    }
+
+    #[inline]
+    pub(crate) fn bind_runtime_owner(inner: &Arc<Self>) {
+        inner
+            .runtime
+            .bind_core(VmAddr::from_ptr(Arc::as_ptr(inner)));
     }
 }
 
