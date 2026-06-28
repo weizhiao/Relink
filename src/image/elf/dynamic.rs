@@ -127,6 +127,7 @@ pub(crate) struct RawDynamicParts<
     pub(crate) relro: Option<MemoryProtection>,
     pub(crate) segments: crate::segment::ElfSegments<R>,
     pub(crate) user_data: D,
+    pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
 }
 
 /// Extra data associated with ELF objects during relocation
@@ -353,12 +354,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
     /// This method marks the ELF object as fully initialized and calls
     /// any registered initialization functions.
     #[inline]
-    pub(crate) fn call_init<Obs>(
-        &self,
-        observer: &mut Obs,
-        init: &Lifecycle,
-        executor: &dyn CodeExecutor<Arch>,
-    ) -> Result<()>
+    pub(crate) fn call_init<Obs>(&self, observer: &mut Obs, init: &Lifecycle) -> Result<()>
     where
         Obs: RelocationObserver<Arch> + ?Sized,
     {
@@ -366,7 +362,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         let segments = self.module.segments();
         let mut event = InitEvent::new(self.core_ref(), init);
         observer.on_init(&mut event)?;
-        event.run_with(segments, executor)?;
+        event.run_with(segments, self.module.executor())?;
         Ok(())
     }
 
@@ -457,6 +453,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
             relro,
             segments,
             user_data,
+            executor,
         } = parts;
 
         let dynamic = ElfDynamic::<Arch>::new(dynamic, dynamic_addr, &segments)?;
@@ -512,6 +509,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
 
         let inner = Arc::new(CoreInner {
             runtime: Box::new(crate::image::CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
+            executor,
             is_init: AtomicBool::new(false),
             path,
             exports: exports_handle(exports),
@@ -594,6 +592,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
             relro: builder.relro,
             segments: builder.segments,
             user_data: builder.user_data,
+            executor: builder.executor,
         };
         Self::from_parts(parts)
     }

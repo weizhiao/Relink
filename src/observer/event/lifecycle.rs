@@ -7,7 +7,6 @@ use crate::{
     relocation::RelocationArch,
     runtime::{CodeContext, CodeExecutor},
     segment::ElfSegments,
-    sync::Arc,
     tls::TlsResolver,
 };
 use alloc::boxed::Box;
@@ -16,18 +15,16 @@ pub(crate) type FiniHook =
     Box<dyn for<'event> Fn(&mut FiniEvent<'event>) -> Result<()> + Send + Sync>;
 
 /// Finalization state retained until an image is unloaded.
-pub(crate) struct Finalizer<Arch: RelocationArch = NativeArch> {
+pub(crate) struct Finalizer {
     lifecycle: Lifecycle,
-    executor: Arc<dyn CodeExecutor<Arch>>,
     hook: Option<FiniHook>,
 }
 
-impl<Arch: RelocationArch> Finalizer<Arch> {
+impl Finalizer {
     #[inline]
-    pub(crate) const fn new(lifecycle: Lifecycle, executor: Arc<dyn CodeExecutor<Arch>>) -> Self {
+    pub(crate) const fn new(lifecycle: Lifecycle) -> Self {
         Self {
             lifecycle,
-            executor,
             hook: None,
         }
     }
@@ -51,12 +48,13 @@ impl<Arch: RelocationArch> Finalizer<Arch> {
     }
 
     #[inline]
-    pub(crate) fn run<R: RegionAccess>(self, name: &str, segments: &ElfSegments<R>) -> Result<()> {
-        let Self {
-            lifecycle,
-            executor,
-            hook,
-        } = self;
+    pub(crate) fn run<Arch: RelocationArch, R: RegionAccess>(
+        self,
+        name: &str,
+        segments: &ElfSegments<R>,
+        executor: &dyn CodeExecutor<Arch>,
+    ) -> Result<()> {
+        let Self { lifecycle, hook } = self;
         let mut event = FiniEvent::new(name, &lifecycle);
         if let Some(hook) = hook {
             hook(&mut event)?;

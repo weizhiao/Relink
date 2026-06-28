@@ -80,6 +80,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<A
         let pltgot = builder.section_segments.take_pltgot();
         let inner = CoreInner {
             runtime: Box::new(crate::image::CoreRuntime::new::<D, R, Tls>(None)),
+            executor: builder.executor,
             is_init: AtomicBool::new(false),
             path: builder.path,
             exports: exports_handle(ObjectExports::<Arch::Layout>::empty()),

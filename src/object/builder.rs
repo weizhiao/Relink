@@ -9,6 +9,8 @@ use crate::{
     input::PathBuf,
     memory::{HostRegion, RegionAccess, VmAddr},
     relocation::ObjectRelocationArch,
+    runtime::CodeExecutor,
+    sync::Arc,
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
 };
 use alloc::boxed::Box;
@@ -31,6 +33,7 @@ pub(crate) struct ObjectBuilder<
     pub(crate) tls_mod_id: Option<TlsModuleId>,
     pub(crate) tls_tp_offset: Option<TlsTpOffset>,
     pub(crate) user_data: D,
+    pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
     _marker_tls: PhantomData<Tls>,
     _marker_arch: PhantomData<Arch>,
 }
@@ -94,6 +97,7 @@ where
         segments: ObjectSegments<R>,
         section_segments: SectionSegments<Arch>,
         user_data: D,
+        executor: Arc<dyn CodeExecutor<Arch>>,
     ) -> Result<Self> {
         let shdrs = sections.headers();
         let ObjectSectionData { symtab, init, fini } = {
@@ -112,6 +116,7 @@ where
             tls_mod_id: None,
             tls_tp_offset: None,
             user_data,
+            executor,
             _marker_tls: PhantomData,
             _marker_arch: PhantomData,
         })

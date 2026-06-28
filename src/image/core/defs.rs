@@ -1,13 +1,13 @@
 use crate::{
     Result,
     elf::SymbolEntry,
-    image::{DynamicInfo, ModuleScope, PltRelocInfo, SymbolExports},
+    image::{DynamicInfo, PltRelocInfo, SymbolExports, WeakModuleScope},
     input::PathBuf,
     logging,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     observer::Finalizer,
     relocation::{RelocationArch, find_symdef_impl},
-    runtime::NativeCodeExecutor,
+    runtime::CodeExecutor,
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering},
     tls::{CoreTlsState, TLS_GET_ADDR_SYMBOL, TlsResolver},
@@ -111,12 +111,13 @@ where
             return Tls::bind_tls_get_addr().map(Some);
         }
 
-        let Some(scope) = self.scope.get() else {
+        let Some(scope) = self.scope.get().and_then(WeakModuleScope::upgrade) else {
             return Ok(None);
         };
         let symbolic = self.dynamic_info.as_ref().is_some_and(|info| info.symbolic);
-        find_symdef_impl(self, scope, symbol.symbol(), symbol.info(), symbolic)
-            .map(|symdef| symdef.resolve_addr(&NativeCodeExecutor))
+        let executor = self.executor.as_ref();
+        find_symdef_impl(self, &scope, symbol.symbol(), symbol.info(), symbolic)
+            .map(|symdef| symdef.resolve_addr(executor))
             .transpose()
     }
 }
@@ -132,6 +133,9 @@ pub(crate) struct CoreInner<
     /// struct's generic layout.
     pub(crate) runtime: Box<CoreRuntime<Arch>>,
 
+    /// Executor retained for IFUNC and runtime-code resolution.
+    pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
+
     /// Indicates whether the component has been initialized
     pub(crate) is_init: AtomicBool,
 
@@ -142,13 +146,13 @@ pub(crate) struct CoreInner<
     pub(crate) exports: Arc<dyn SymbolExports<Arch::Layout>>,
 
     /// Finalization behavior resolved during relocation.
-    pub(crate) finalizer: OnceCell<Finalizer<Arch>>,
+    pub(crate) finalizer: OnceCell<Finalizer>,
 
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
 
     /// Relocation lookup scope retained for the loaded module lifetime.
-    pub(crate) scope: OnceCell<ModuleScope<Arch, Tls>>,
+    pub(crate) scope: OnceCell<WeakModuleScope<Arch, Tls>>,
 
     /// TLS runtime state for this loaded object.
     pub(crate) tls: CoreTlsState<Arch, Tls>,
@@ -193,7 +197,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
             && let Some(finalizer) = self.finalizer.take()
         {
             let name = self.name();
-            if let Err(err) = finalizer.run(name, &self.segments) {
+            if let Err(err) = finalizer.run(name, &self.segments, self.executor.as_ref()) {
                 logging::error!("finalization lifecycle failed for {}: {err}", name);
             }
         }

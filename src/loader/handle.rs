@@ -4,6 +4,8 @@ use crate::{
     observer::LoadObserver,
     os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
+    runtime::{CodeExecutor, NativeCodeExecutor},
+    sync::Arc,
     tls::TlsResolver,
 };
 #[cfg(feature = "object")]
@@ -15,9 +17,14 @@ use crate::{
     object::{ObjectSections, SectionGroups},
     observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent},
     relocation::ObjectRelocationArch,
-    sync::Arc,
 };
+use alloc::boxed::Box;
 use core::marker::PhantomData;
+
+#[inline]
+fn native_executor<Arch: RelocationArch>() -> Arc<dyn CodeExecutor<Arch>> {
+    Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>)
+}
 
 /// Configurable ELF loader.
 ///
@@ -53,6 +60,7 @@ where
 pub(super) struct LoaderInner<Obs, D: 'static, Arch: RelocationArch, M: Mmap = DefaultMmap> {
     mapper: M,
     pub(super) observer: Obs,
+    pub(super) executor: Arc<dyn CodeExecutor<Arch>>,
     page_size: Option<PageSize>,
     force_static_tls: bool,
     #[cfg(feature = "object")]
@@ -121,6 +129,7 @@ impl Loader<(), (), (), NativeArch> {
                 #[allow(clippy::default_constructed_unit_structs)]
                 mapper: DefaultMmap::default(),
                 observer: (),
+                executor: native_executor::<NativeArch>(),
                 page_size: None,
                 force_static_tls: false,
                 #[cfg(feature = "object")]
@@ -155,6 +164,11 @@ where
     #[inline]
     pub(crate) fn force_static_tls(&self) -> bool {
         self.inner.force_static_tls()
+    }
+
+    #[inline]
+    pub(crate) fn executor(&self) -> Arc<dyn CodeExecutor<Arch>> {
+        self.inner.executor.clone()
     }
 
     #[cfg(feature = "object")]
@@ -212,6 +226,7 @@ where
             inner: LoaderInner {
                 mapper: self.inner.mapper,
                 observer: self.inner.observer,
+                executor: self.inner.executor,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
                 #[cfg(feature = "object")]
@@ -233,6 +248,7 @@ where
             inner: LoaderInner {
                 mapper: self.inner.mapper,
                 observer,
+                executor: self.inner.executor,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
                 #[cfg(feature = "object")]
@@ -250,6 +266,15 @@ where
     /// mapping backend and with every loaded ELF's `PT_LOAD` alignment.
     pub fn with_page_size(mut self, page_size: PageSize) -> Self {
         self.inner.page_size = Some(page_size);
+        self
+    }
+
+    /// Overrides the runtime-code executor used for init, fini and IFUNC.
+    pub fn with_executor<E>(mut self, executor: E) -> Self
+    where
+        E: CodeExecutor<Arch>,
+    {
+        self.inner.executor = Arc::from(Box::new(executor) as Box<dyn CodeExecutor<Arch>>);
         self
     }
 
@@ -331,6 +356,7 @@ where
             inner: LoaderInner {
                 mapper,
                 observer: self.inner.observer,
+                executor: self.inner.executor,
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
                 #[cfg(feature = "object")]
@@ -375,6 +401,7 @@ where
             inner: LoaderInner {
                 mapper: self.inner.mapper,
                 observer: self.inner.observer,
+                executor: native_executor::<NewArch>(),
                 page_size: self.inner.page_size,
                 force_static_tls: self.inner.force_static_tls,
                 #[cfg(feature = "object")]

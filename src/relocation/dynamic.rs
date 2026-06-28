@@ -44,7 +44,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         let RelocateArgs {
             scope,
             binding,
-            executor,
             lazy_binder,
             pre_handler,
             post_handler,
@@ -68,7 +67,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
             pre_handler,
             post_handler,
             observer,
-            executor.as_ref(),
         );
 
         if !relocation.is_empty() {
@@ -80,7 +78,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         let RelocHelper { scope, .. } = helper;
 
         let (init, fini) = self.resolve_lifecycle()?;
-        let finalizer = Finalizer::new(fini, executor.clone());
+        let finalizer = Finalizer::new(fini);
 
         let dep_names = scope
             .iter()
@@ -91,7 +89,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         }
 
         self.apply_relro(lazy_binding)?;
-        self.core_ref().set_scope(scope.clone());
         let mut dynamic_event =
             DynamicRelocatedEvent::new(self.core_ref(), self.dynamic_addr(), finalizer);
         observer.on_dynamic_relocated(&mut dynamic_event)?;
@@ -100,11 +97,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         self.core_ref().init_tls()?;
 
         logging::debug!("Preparing initialization functions for {}", self.name());
-        self.call_init(observer, &init, executor.as_ref())?;
+        self.call_init(observer, &init)?;
 
         logging::info!("Relocation completed for {}", self.name());
 
-        Ok(unsafe { LoadedCore::from_core(self.into_core()) })
+        Ok(unsafe { LoadedCore::from_core_scope(self.into_core(), scope) })
     }
 }
 
@@ -246,7 +243,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                 let r_addend = rel.read_addend(helper.memory(), place)?;
                 let addr = base.wrapping_add_signed(r_addend);
                 let resolved = helper
-                    .executor
+                    .core
+                    .executor()
                     .resolve_ifunc(CodeContext::<Arch>::new(core.name(), helper.memory()), addr)?;
                 let word = <Arch::Layout as ElfLayout>::Word::from_usize(resolved.get());
                 unsafe { helper.memory().write_value(place, word)? };
@@ -360,7 +358,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                 let r_addend = rel.read_addend(helper.memory(), place)?;
                 let addr = base.wrapping_add_signed(r_addend);
                 let resolved = helper
-                    .executor
+                    .core
+                    .executor()
                     .resolve_ifunc(CodeContext::<Arch>::new(core.name(), helper.memory()), addr)?;
                 let word = <Arch::Layout as ElfLayout>::Word::from_usize(resolved.get());
                 unsafe { helper.memory().write_value(place, word)? };

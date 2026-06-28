@@ -36,7 +36,6 @@ pub(crate) struct RelocHelper<
     pub(crate) pre_handler: &'find PreH,
     pub(crate) post_handler: &'find PostH,
     pub(crate) observer: &'find mut Obs,
-    pub(crate) executor: &'find dyn CodeExecutor<Arch>,
 }
 
 impl<'find, D, Arch, R, Tls, PreH, PostH, Obs, H, Memory>
@@ -60,7 +59,6 @@ where
         pre_handler: &'find PreH,
         post_handler: &'find PostH,
         observer: &'find mut Obs,
-        executor: &'find dyn CodeExecutor<Arch>,
     ) -> Self {
         Self {
             core,
@@ -70,7 +68,6 @@ where
             pre_handler,
             post_handler,
             observer,
-            executor,
         }
     }
 
@@ -144,7 +141,7 @@ where
                 Some(Tls::bind_tls_get_addr()?)
             } else {
                 symdef
-                    .map(|symdef| symdef.resolve_addr(self.executor))
+                    .map(|symdef| symdef.resolve_addr(self.core.executor()))
                     .transpose()?
             },
         )

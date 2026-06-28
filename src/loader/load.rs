@@ -12,10 +12,12 @@ use crate::{
     observer::{AfterDynamicLoadEvent, BeforeDynamicLoadEvent, LoadObserver},
     os::{Mmap, ProtFlags},
     relocation::{ObjectRelocationArch, RelocationArch},
+    runtime::CodeExecutor,
     segment::{
         ElfSegments, MemoryProtection,
         program::{ProgramSegments, parse_segments},
     },
+    sync::Arc,
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -241,6 +243,7 @@ where
         object: &impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
     ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
+        let executor = self.executor();
         let phdrs = self.buf.prepare_phdrs(&ehdr, object)?.unwrap_or_default();
         if !has_dynamic_phdr(phdrs) {
             return Err(ParsePhdrError::MissingDynamicSection.into());
@@ -266,8 +269,15 @@ where
             page_size,
         )?;
         let force_static_tls = self.inner.force_static_tls();
-        let builder: ImageBuilder<Tls, D, Arch, M::Region> =
-            ImageBuilder::new(segments, path, ehdr, force_static_tls, page_size, user_data);
+        let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
+            segments,
+            path,
+            ehdr,
+            force_static_tls,
+            page_size,
+            user_data,
+            executor,
+        );
         let mut image = RawDynamic::from_builder(builder, phdrs)?;
         self.notify_after_dynamic_load(&mut image)?;
         logging::info!(
@@ -315,8 +325,15 @@ where
             page_size,
         )?;
         let force_static_tls = self.inner.force_static_tls();
-        let builder: ImageBuilder<Tls, D, Arch, M::Region> =
-            ImageBuilder::new(segments, path, ehdr, force_static_tls, page_size, user_data);
+        let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
+            segments,
+            path,
+            ehdr,
+            force_static_tls,
+            page_size,
+            user_data,
+            self.executor(),
+        );
         let mut image = RawDynamic::from_builder(builder, &phdrs)?;
         self.notify_after_dynamic_load(&mut image)?;
 
@@ -376,6 +393,7 @@ where
             self.inner.force_static_tls(),
             D::default(),
             page_size,
+            self.executor(),
         )?;
         let mut image = RawDynamic::from_parts(parts)?;
         self.notify_after_dynamic_load(&mut image)?;
@@ -418,6 +436,7 @@ where
         object: &impl ElfReader,
         ehdr: ElfHeader<Arch::Layout>,
     ) -> Result<RawExec<D, Arch, M::Region, Tls>> {
+        let executor = self.executor();
         let phdrs = self.buf.prepare_phdrs(&ehdr, object)?.unwrap_or_default();
         let has_dynamic = has_dynamic_phdr(phdrs);
 
@@ -443,8 +462,15 @@ where
             page_size,
         )?;
         let force_static_tls = self.inner.force_static_tls();
-        let builder: ImageBuilder<Tls, D, Arch, M::Region> =
-            ImageBuilder::new(segments, path, ehdr, force_static_tls, page_size, user_data);
+        let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
+            segments,
+            path,
+            ehdr,
+            force_static_tls,
+            page_size,
+            user_data,
+            executor,
+        );
         let mut exec = RawExec::from_builder(builder, phdrs, has_dynamic)?;
         if let RawExec::Dynamic(dynamic) = &mut exec {
             self.notify_after_dynamic_load(dynamic)?;
@@ -521,6 +547,7 @@ fn borrowed_dynamic_parts<D, Arch, R>(
     force_static_tls: bool,
     user_data: D,
     page_size: usize,
+    executor: Arc<dyn CodeExecutor<Arch>>,
 ) -> Result<RawDynamicParts<D, Arch, R>>
 where
     D: 'static,
@@ -597,6 +624,7 @@ where
         relro,
         segments,
         user_data,
+        executor,
     })
 }
 

@@ -2,13 +2,12 @@ use super::CoreInner;
 use crate::{
     Result, TlsError,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
-    image::{
-        DynamicInfo, Module, ModuleHandle, ModuleScope, ModuleTls, SymbolExports, exports_handle,
-    },
+    image::{DynamicInfo, Module, ModuleScope, ModuleTls, SymbolExports, exports_handle},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     observer::Finalizer,
     relocation::RelocationArch,
+    runtime::{CodeExecutor, NativeCodeExecutor},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{
@@ -192,25 +191,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
 
     /// Installs the retained relocation lookup scope for this core.
     #[inline]
-    pub(crate) fn set_scope(&self, scope: ModuleScope<Arch, Tls>) {
+    pub(crate) fn set_scope(&self, scope: &ModuleScope<Arch, Tls>) {
         assert!(
-            self.inner.scope.set(scope).is_ok(),
+            self.inner.scope.set(scope.downgrade()).is_ok(),
             "relocation scope must be installed only once",
         );
-    }
-
-    /// Returns the retained relocation lookup scope, when this core is loaded.
-    #[inline]
-    pub(crate) fn scope_ref(&self) -> Option<&ModuleScope<Arch, Tls>> {
-        self.inner.scope.get()
-    }
-
-    /// Returns the retained relocation lookup scope as a module slice.
-    #[inline]
-    pub fn scope(&self) -> &[ModuleHandle<Arch, Tls>] {
-        self.scope_ref()
-            .map(ModuleScope::as_slice)
-            .unwrap_or_default()
     }
 
     /// Returns the mapped segments owned by this image.
@@ -254,8 +239,13 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         self.inner.tls.addr(offset)
     }
 
+    #[inline]
+    pub(crate) fn executor(&self) -> &dyn CodeExecutor<Arch> {
+        self.inner.executor.as_ref()
+    }
+
     /// Sets the finalizer that will run when the initialized image is dropped.
-    pub(crate) fn set_finalizer(&self, finalizer: Finalizer<Arch>) {
+    pub(crate) fn set_finalizer(&self, finalizer: Finalizer) {
         assert!(
             self.inner.finalizer.set(finalizer).is_ok(),
             "finalizer must be set only once",
@@ -299,6 +289,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
         let lazy_plt = crate::image::PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
         let inner = Arc::new(CoreInner {
             runtime: Box::new(crate::image::CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
+            executor: Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>),
             path,
             is_init: AtomicBool::new(true),
             exports: exports_handle(exports),

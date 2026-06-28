@@ -134,7 +134,7 @@ pub struct ObjectRelocatedEvent<
     symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
     memory: ObjectSegmentView<'event, R>,
     exports: ObjectExportsHandle<Arch::Layout>,
-    finalizer: Finalizer<Arch>,
+    finalizer: Finalizer,
 }
 
 impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
@@ -146,7 +146,7 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver
         sections: &'event ObjectSections<Arch::Layout>,
         symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
         memory: ObjectSegmentView<'event, R>,
-        finalizer: Finalizer<Arch>,
+        finalizer: Finalizer,
     ) -> Self {
         Self {
             core,
@@ -255,7 +255,7 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (ObjectExportsHandle<Arch::Layout>, Finalizer<Arch>) {
+    pub(crate) fn into_parts(self) -> (ObjectExportsHandle<Arch::Layout>, Finalizer) {
         (self.exports, self.finalizer)
     }
 }

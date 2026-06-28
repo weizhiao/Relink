@@ -780,10 +780,10 @@ fn object_finalizer_runs_on_drop() {
     let object = object_with_fini_array(fini_addr);
 
     let loaded_object = elf_loader::Loader::new()
+        .with_executor(executor)
         .load_object(ElfBinary::new("test_static_fini.o", &object))
         .expect("failed to load object")
         .relocator()
-        .executor(executor)
         .relocate()
         .expect("relocation failed");
 

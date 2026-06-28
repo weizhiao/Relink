@@ -106,7 +106,7 @@ pub struct DynamicRelocatedEvent<
 > {
     core: &'a ElfCore<D, Arch, R, Tls>,
     dynamic_addr: VmAddr,
-    finalizer: Finalizer<Arch>,
+    finalizer: Finalizer,
 }
 
 impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
@@ -116,7 +116,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
     pub(crate) const fn new(
         core: &'a ElfCore<D, Arch, R, Tls>,
         dynamic_addr: VmAddr,
-        finalizer: Finalizer<Arch>,
+        finalizer: Finalizer,
     ) -> Self {
         Self {
             core,
@@ -178,7 +178,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
     }
 
     #[inline]
-    pub(crate) fn into_finalizer(self) -> Finalizer<Arch> {
+    pub(crate) fn into_finalizer(self) -> Finalizer {
         self.finalizer
     }
 }

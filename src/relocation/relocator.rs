@@ -4,7 +4,6 @@ use crate::{
     lazy::traits::{LazyBinder, SupportLazy},
     observer::RelocationObserver,
     relocation::{BindingMode, Relocatable, RelocateArgs, RelocationArch, RelocationHandler},
-    runtime::{CodeExecutor, NativeCodeExecutor},
     sync::Arc,
     tls::TlsResolver,
 };
@@ -59,7 +58,6 @@ pub struct Relocator<
     post_handler: PostH,
     observer: Obs,
     binding: BindingMode,
-    executor: Option<Arc<dyn CodeExecutor<Arch>>>,
     lazy_binder: Arc<dyn LazyBinder<Arch>>,
     _tls: PhantomData<fn() -> Tls>,
 }
@@ -83,7 +81,6 @@ where
             post_handler: self.post_handler.clone(),
             observer: self.observer.clone(),
             binding: self.binding,
-            executor: self.executor.clone(),
             lazy_binder: self.lazy_binder.clone(),
             _tls: PhantomData,
         }
@@ -102,7 +99,6 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>>
             post_handler: (),
             observer: (),
             binding: BindingMode::Default,
-            executor: None,
             lazy_binder: Arc::from(Box::new(()) as Box<dyn LazyBinder<Arch>>),
             _tls: PhantomData,
         }
@@ -122,7 +118,6 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>>
             post_handler: self.post_handler,
             observer: self.observer,
             binding: self.binding,
-            executor: None,
             lazy_binder: Arc::from(Box::new(()) as Box<dyn LazyBinder<NewArch>>),
             _tls: PhantomData,
         }
@@ -174,7 +169,6 @@ where
             post_handler: self.post_handler,
             observer: self.observer,
             binding: self.binding,
-            executor: self.executor,
             lazy_binder: self.lazy_binder,
             _tls: PhantomData,
         }
@@ -216,7 +210,6 @@ where
             post_handler: self.post_handler,
             observer: self.observer,
             binding: self.binding,
-            executor: self.executor,
             lazy_binder: self.lazy_binder,
             _tls: PhantomData,
         }
@@ -240,7 +233,6 @@ where
             post_handler: self.post_handler,
             observer: self.observer,
             binding: self.binding,
-            executor: self.executor,
             lazy_binder: self.lazy_binder,
             _tls: PhantomData,
         }
@@ -264,7 +256,6 @@ where
             post_handler: handler,
             observer: self.observer,
             binding: self.binding,
-            executor: self.executor,
             lazy_binder: self.lazy_binder,
             _tls: PhantomData,
         }
@@ -285,7 +276,6 @@ where
             post_handler: self.post_handler,
             observer,
             binding: self.binding,
-            executor: self.executor,
             lazy_binder: self.lazy_binder,
             _tls: PhantomData,
         }
@@ -294,15 +284,6 @@ where
     /// Overrides the relocation binding mode.
     pub fn binding(mut self, binding: BindingMode) -> Self {
         self.binding = binding;
-        self
-    }
-
-    /// Overrides the runtime-code executor used for init, fini and IFUNC.
-    pub fn executor<E>(mut self, executor: E) -> Self
-    where
-        E: CodeExecutor<Arch>,
-    {
-        self.executor = Some(Arc::from(Box::new(executor) as Box<dyn CodeExecutor<Arch>>));
         self
     }
 
@@ -332,9 +313,8 @@ where
     /// [`crate::arch::NativeArch`] (the default) and run target init arrays,
     /// IFUNC resolvers,
     /// lazy-binding trampolines, and TLS resolver stubs as usual;
-    /// cross-architecture images avoid host execution of target code; call
-    /// [`Relocator::executor`] before relocation when guest runtime hooks must
-    /// be executed.
+    /// cross-architecture images avoid host execution of target code; configure
+    /// the loader executor when guest runtime hooks must be executed.
     pub fn relocate<D>(self) -> Result<<T as Relocatable<D>>::Output>
     where
         D: 'static,
@@ -347,18 +327,13 @@ where
             post_handler,
             mut observer,
             binding,
-            executor,
             lazy_binder,
             ..
         } = self;
-        let executor: Arc<dyn CodeExecutor<Arch>> = executor.unwrap_or_else(|| {
-            Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>)
-        });
 
         object.relocate(RelocateArgs {
             scope: scope.into_scope(),
             binding,
-            executor,
             lazy_binder,
             pre_handler: &pre_handler,
             post_handler: &post_handler,
@@ -386,9 +361,8 @@ where
     /// [`crate::arch::NativeArch`] (the default) and run target init arrays,
     /// IFUNC resolvers,
     /// lazy-binding trampolines, and TLS resolver stubs as usual;
-    /// cross-architecture images avoid host execution of target code; call
-    /// [`Relocator::executor`] before relocation when guest runtime hooks must
-    /// be executed.
+    /// cross-architecture images avoid host execution of target code; configure
+    /// the loader executor when guest runtime hooks must be executed.
     pub fn relocate<D>(self) -> Result<<T as Relocatable<D>>::Output>
     where
         D: 'static,
@@ -401,18 +375,13 @@ where
             post_handler,
             mut observer,
             binding,
-            executor,
             lazy_binder,
             ..
         } = self;
-        let executor: Arc<dyn CodeExecutor<Arch>> = executor.unwrap_or_else(|| {
-            Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>)
-        });
 
         object.relocate(RelocateArgs {
             scope,
             binding,
-            executor,
             lazy_binder,
             pre_handler: &pre_handler,
             post_handler: &post_handler,

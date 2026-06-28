@@ -15,7 +15,6 @@ use crate::{
     relocation::{
         ObjectRelocationArch, RelocHelper, RelocateArgs, RelocationHandler, find_symdef_impl,
     },
-    runtime::CodeExecutor,
     tls::TlsResolver,
 };
 
@@ -67,13 +66,12 @@ where
         logging::debug!("Relocating object: {}", self.core.name());
         let RelocateArgs {
             scope,
-            executor,
             pre_handler,
             post_handler,
             observer,
             ..
         } = args;
-        self.simplify_symbols(&scope, observer, executor.as_ref())?;
+        self.simplify_symbols(&scope, observer)?;
 
         let relocation_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
@@ -85,7 +83,6 @@ where
             pre_handler,
             post_handler,
             observer,
-            executor.as_ref(),
         );
         let shdrs = self.sections.headers();
         let mut state = Arch::ObjectRelocationState::default();
@@ -118,7 +115,7 @@ where
 
         let RelocHelper { scope, .. } = helper;
 
-        let finalizer = Finalizer::new(core::mem::take(&mut self.fini), executor.clone());
+        let finalizer = Finalizer::new(core::mem::take(&mut self.fini));
         let event_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
         let mut event = ObjectRelocatedEvent::new(
@@ -142,33 +139,27 @@ where
         let object_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
         self.section_segments.mprotect(&object_segments)?;
-        self.core.set_scope(scope);
 
-        self.call_init(observer, object_segments, executor.as_ref())?;
+        self.call_init(observer, object_segments)?;
         self.section_segments.mprotect_final(&object_segments)?;
 
         logging::info!("Relocation completed for {}", self.core.name());
 
         let core = self.core;
         Ok(LoadedObject {
-            inner: unsafe { LoadedCore::from_core(core) },
+            inner: unsafe { LoadedCore::from_core_scope(core, scope) },
         })
     }
 
     #[inline]
-    fn call_init<Obs>(
-        &self,
-        observer: &mut Obs,
-        segments: ObjectSegmentView<'_, R>,
-        executor: &dyn CodeExecutor<Arch>,
-    ) -> Result<()>
+    fn call_init<Obs>(&self, observer: &mut Obs, segments: ObjectSegmentView<'_, R>) -> Result<()>
     where
         Obs: RelocationObserver<Arch> + ?Sized,
     {
         logging::trace!("[{}] Executing init functions", self.core.name());
         let mut event = InitEvent::new(&self.core, &self.init);
         observer.on_init(&mut event)?;
-        event.run_with(&segments, executor)?;
+        event.run_with(&segments, self.core.executor())?;
         self.core.set_init();
         Ok(())
     }
@@ -177,7 +168,6 @@ where
         &mut self,
         scope: &ModuleScope<Arch, Tls>,
         observer: &mut Obs,
-        executor: &dyn CodeExecutor<Arch>,
     ) -> Result<()>
     where
         Obs: RelocationObserver<Arch> + ?Sized,
@@ -201,7 +191,7 @@ where
                         entry.info(),
                         self.core.symbolic(),
                     ) {
-                        Some(symdef.resolve_addr(executor)?)
+                        Some(symdef.resolve_addr(self.core.executor())?)
                     } else {
                         None
                     };

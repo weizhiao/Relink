@@ -14,7 +14,6 @@ use crate::{
     lazy::{defs::LazyBindingSlots, traits::LazyBinder},
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
-    runtime::CodeExecutor,
     sync::Arc,
     tls::TlsResolver,
 };
@@ -447,7 +446,6 @@ pub struct RelocateArgs<
 > {
     pub(crate) scope: ModuleScope<Arch, Tls>,
     pub(crate) binding: BindingMode,
-    pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
     pub(crate) lazy_binder: Arc<dyn LazyBinder<Arch>>,
     pub(crate) pre_handler: &'a PreH,
     pub(crate) post_handler: &'a PostH,

@@ -4,7 +4,7 @@ use crate::{
     arch::ArchKind,
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolType},
     hint::unlikely,
-    image::{Module, ModuleHandle, ModuleScope, ModuleTls, SymbolLookup},
+    image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, ModuleTls, SymbolLookup},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymDef},
@@ -26,6 +26,7 @@ pub struct LoadedCore<
     Tls: TlsResolver<Arch> = (),
 > {
     core: ElfCore<D, Arch, R, Tls>,
+    scope: ModuleScope<Arch, Tls>,
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static> Debug
@@ -54,6 +55,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     fn clone(&self) -> Self {
         LoadedCore {
             core: self.core.clone(),
+            scope: self.scope.clone(),
         }
     }
 }
@@ -95,13 +97,16 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
     pub unsafe fn from_core(core: ElfCore<D, Arch, R, Tls>) -> Self {
-        LoadedCore { core }
+        LoadedCore {
+            core,
+            scope: ModuleScopeBuilder::new().into_scope(),
+        }
     }
 
     /// Returns the retained user-provided relocation lookup scope.
     #[inline]
     pub fn scope(&self) -> &[ModuleHandle<Arch, Tls>] {
-        self.core.scope()
+        self.scope.as_slice()
     }
 
     /// Returns the target architecture used by this loaded module.
@@ -165,11 +170,13 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     }
 
     #[inline]
-    fn lookup_addr(&self, sym: &ElfSymbol<Arch::Layout>) -> Option<VmAddr> {
+    fn lookup_addr(&self, sym: &ElfSymbol<Arch::Layout>) -> Result<Option<VmAddr>> {
         if unlikely(sym.symbol_type() == ElfSymbolType::TLS) {
-            self.core.tls_addr(sym.st_value())
+            Ok(self.core.tls_addr(sym.st_value()))
         } else {
-            Some(SymDef::<Arch, Tls>::defined(sym, self).addr())
+            SymDef::<Arch, Tls>::defined(sym, self)
+                .resolve_addr(self.core.executor())
+                .map(Some)
         }
     }
 
@@ -216,12 +223,20 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     /// * `None` - If the symbol is not found
     #[inline]
     pub unsafe fn get<'lib, T>(&'lib self, name: &str) -> Option<Symbol<'lib, T>> {
+        unsafe { self.try_get(name).ok().flatten() }
+    }
+
+    /// Tries to get a pointer to a function or static variable by symbol name.
+    ///
+    /// This resolves IFUNC symbols through the executor retained during relocation.
+    #[inline]
+    pub unsafe fn try_get<'lib, T>(&'lib self, name: &str) -> Result<Option<Symbol<'lib, T>>> {
         let mut lookup = SymbolLookup::new(name);
-        self.core
-            .exports()
-            .lookup(&mut lookup)
-            .and_then(|sym| self.lookup_addr(sym))
-            .map(|addr| Symbol::from_ptr(addr.as_mut_ptr()))
+        let Some(sym) = self.core.exports().lookup(&mut lookup) else {
+            return Ok(None);
+        };
+        self.lookup_addr(sym)
+            .map(|addr| addr.map(|addr| Symbol::from_ptr(addr.as_mut_ptr())))
     }
 
     /// Load a versioned symbol from the ELF object.
@@ -254,12 +269,25 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         name: &str,
         version: &str,
     ) -> Option<Symbol<'lib, T>> {
+        unsafe { self.try_get_version(name, version).ok().flatten() }
+    }
+
+    /// Tries to load a versioned symbol from the ELF object.
+    ///
+    /// This resolves IFUNC symbols through the executor retained during relocation.
+    #[cfg(feature = "version")]
+    #[inline]
+    pub unsafe fn try_get_version<'lib, T>(
+        &'lib self,
+        name: &str,
+        version: &str,
+    ) -> Result<Option<Symbol<'lib, T>>> {
         let mut lookup = SymbolLookup::with_version(name, version);
-        self.core
-            .exports()
-            .lookup(&mut lookup)
-            .and_then(|sym| self.lookup_addr(sym))
-            .map(|addr| Symbol::from_ptr(addr.as_mut_ptr()))
+        let Some(sym) = self.core.exports().lookup(&mut lookup) else {
+            return Ok(None);
+        };
+        self.lookup_addr(sym)
+            .map(|addr| addr.map(|addr| Symbol::from_ptr(addr.as_mut_ptr())))
     }
 
     /// Gets the number of strong references to the ELF object
@@ -295,8 +323,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         core: ElfCore<D, Arch, R, Tls>,
         scope: ModuleScope<Arch, Tls>,
     ) -> Self {
-        core.set_scope(scope);
-        unsafe { Self::from_core(core) }
+        core.set_scope(&scope);
+        Self { core, scope }
     }
 
     /// Returns a reference to the underlying [`ElfCore`].

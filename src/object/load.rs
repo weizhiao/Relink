@@ -70,6 +70,7 @@ where
             segments,
             section_segments,
             user_data,
+            self.executor(),
         )?;
         let mut raw = RawObject::from_builder(builder);
         self.notify_after_object_load(&mut raw)?;

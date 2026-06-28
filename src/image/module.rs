@@ -1,5 +1,10 @@
 use super::Module;
-use crate::{arch::NativeArch, relocation::RelocationArch, sync::Arc, tls::TlsResolver};
+use crate::{
+    arch::NativeArch,
+    relocation::RelocationArch,
+    sync::{Arc, Weak},
+    tls::TlsResolver,
+};
 use alloc::{boxed::Box, vec::Vec};
 use core::{any::Any, ops::Deref, slice};
 
@@ -107,6 +112,11 @@ pub struct ModuleScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch>
     modules: Arc<[ModuleHandle<Arch, Tls>]>,
 }
 
+/// Weak reference to a retained module scope.
+pub(crate) struct WeakModuleScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+    modules: Weak<[ModuleHandle<Arch, Tls>]>,
+}
+
 /// Mutable builder for a [`ModuleScope`].
 pub struct ModuleScopeBuilder<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     modules: Vec<ModuleHandle<Arch, Tls>>,
@@ -171,6 +181,13 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleScope<Arch, T
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScope<Arch, Tls> {
+    #[inline]
+    pub(crate) fn downgrade(&self) -> WeakModuleScope<Arch, Tls> {
+        WeakModuleScope {
+            modules: Arc::downgrade(&self.modules),
+        }
+    }
+
     /// Returns the modules in lookup order.
     #[inline]
     pub fn as_slice(&self) -> &[ModuleHandle<Arch, Tls>] {
@@ -193,5 +210,14 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScope<Arch, Tls> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.modules.is_empty()
+    }
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> WeakModuleScope<Arch, Tls> {
+    #[inline]
+    pub(crate) fn upgrade(&self) -> Option<ModuleScope<Arch, Tls>> {
+        self.modules
+            .upgrade()
+            .map(|modules| ModuleScope { modules })
     }
 }

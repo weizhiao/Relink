@@ -9,7 +9,9 @@ use crate::{
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
     os::Mmap,
     relocation::{RelocationArch, RelocationValueProvider},
+    runtime::{CodeExecutor, NativeCodeExecutor},
     segment::ElfSegments,
+    sync::Arc,
     tls::{TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -347,5 +349,6 @@ where
         relro: None,
         segments: runtime.segments,
         user_data: D::default(),
+        executor: Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>),
     })
 }
