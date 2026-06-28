@@ -1,23 +1,18 @@
 use super::{ImageBuilder, Loader, ScanBuilder};
 use crate::{
     ParseEhdrError, ParsePhdrError, Result,
-    elf::{ElfDyn, ElfFileType, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, ElfShdr},
-    image::{
-        RawDylib, RawDynamic, RawDynamicParts, RawElf, RawExec, ScannedDynamic, ScannedElf,
-        ScannedExec,
-    },
+    elf::{ElfFileType, ElfHeader, ElfPhdr, ElfProgramType, ElfShdr},
+    image::{RawDylib, RawDynamic, RawElf, RawExec, ScannedDynamic, ScannedElf, ScannedExec},
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
-    memory::{ImageMemory, RegionAccess, VmAddr},
+    memory::{VmAddr, VmOffset},
     observer::{AfterDynamicLoadEvent, BeforeDynamicLoadEvent, LoadObserver},
-    os::{Mmap, ProtFlags},
+    os::Mmap,
     relocation::{ObjectRelocationArch, RelocationArch},
-    runtime::CodeExecutor,
     segment::{
-        ElfSegments, MemoryProtection,
+        ElfSegments,
         program::{ProgramSegments, parse_segments},
     },
-    sync::Arc,
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -269,16 +264,18 @@ where
             page_size,
         )?;
         let force_static_tls = self.inner.force_static_tls();
+        let entry = image_entry::<Arch>(segments.base(), &ehdr);
         let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
             segments,
             path,
-            ehdr,
+            Some(ehdr),
+            entry,
             force_static_tls,
             page_size,
             user_data,
             executor,
         );
-        let mut image = RawDynamic::from_builder(builder, phdrs)?;
+        let mut image = builder.build_dynamic(phdrs)?;
         self.notify_after_dynamic_load(&mut image)?;
         logging::info!(
             "Loaded dynamic image: {} ({})",
@@ -325,16 +322,18 @@ where
             page_size,
         )?;
         let force_static_tls = self.inner.force_static_tls();
+        let entry = image_entry::<Arch>(segments.base(), &ehdr);
         let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
             segments,
             path,
-            ehdr,
+            Some(ehdr),
+            entry,
             force_static_tls,
             page_size,
             user_data,
             self.executor(),
         );
-        let mut image = RawDynamic::from_builder(builder, &phdrs)?;
+        let mut image = builder.build_dynamic(&phdrs)?;
         self.notify_after_dynamic_load(&mut image)?;
 
         logging::info!(
@@ -384,18 +383,17 @@ where
             load_bias,
             layout.min_vaddr,
         );
-        let parts = borrowed_dynamic_parts::<D, Arch, M::Region>(
-            path,
-            load_bias,
-            entry,
-            &phdrs,
+        let builder = ImageBuilder::<Tls, D, Arch, M::Region>::new(
             segments,
+            path,
+            None,
+            VmAddr::new(entry),
             self.inner.force_static_tls(),
-            D::default(),
             page_size,
+            D::default(),
             self.executor(),
-        )?;
-        let mut image = RawDynamic::from_parts(parts)?;
+        );
+        let mut image = builder.build_dynamic(&phdrs)?;
         self.notify_after_dynamic_load(&mut image)?;
 
         logging::info!(
@@ -462,16 +460,18 @@ where
             page_size,
         )?;
         let force_static_tls = self.inner.force_static_tls();
+        let entry = image_entry::<Arch>(segments.base(), &ehdr);
         let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
             segments,
             path,
-            ehdr,
+            Some(ehdr),
+            entry,
             force_static_tls,
             page_size,
             user_data,
             executor,
         );
-        let mut exec = RawExec::from_builder(builder, phdrs, has_dynamic)?;
+        let mut exec = builder.build_exec(phdrs, has_dynamic)?;
         if let RawExec::Dynamic(dynamic) = &mut exec {
             self.notify_after_dynamic_load(dynamic)?;
         }
@@ -493,6 +493,15 @@ fn has_dynamic_phdr<L: crate::elf::ElfLayout>(phdrs: &[ElfPhdr<L>]) -> bool {
     phdrs
         .iter()
         .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
+}
+
+#[inline]
+fn image_entry<Arch: RelocationArch>(base: VmAddr, ehdr: &ElfHeader<Arch::Layout>) -> VmAddr {
+    if ehdr.is_dylib() {
+        base + VmOffset::new(ehdr.e_entry())
+    } else {
+        VmAddr::new(ehdr.e_entry())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -535,118 +544,6 @@ impl ExpectedElf {
             Self::Relocatable => ParseEhdrError::ExpectedRelocatable { found },
         }
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn borrowed_dynamic_parts<D, Arch, R>(
-    path: PathBuf,
-    load_bias: VmAddr,
-    entry: usize,
-    phdrs: &[ElfPhdr<Arch::Layout>],
-    segments: ElfSegments<R>,
-    force_static_tls: bool,
-    user_data: D,
-    page_size: usize,
-    executor: Arc<dyn CodeExecutor<Arch>>,
-) -> Result<RawDynamicParts<D, Arch, R>>
-where
-    D: 'static,
-    Arch: RelocationArch,
-    R: RegionAccess,
-{
-    let mut dynamic = None;
-    let mut dynamic_addr = None;
-    let mut interp = None;
-    let mut eh_frame_hdr = None;
-    let mut tls_info = None;
-    let mut relro = None;
-
-    for phdr in phdrs {
-        match phdr.program_type() {
-            ElfProgramType::DYNAMIC => {
-                dynamic_addr = Some(load_bias + phdr.p_vaddr());
-                dynamic = Some(
-                    segments
-                        .read_view::<ElfDyn<Arch::Layout>>(phdr.p_vaddr(), phdr.p_filesz())
-                        .ok_or_else(|| {
-                            ParsePhdrError::malformed(
-                                "PT_DYNAMIC is not directly readable from mapped segments",
-                            )
-                        })?,
-                );
-            }
-            ElfProgramType::INTERP => {
-                interp = Some(read_borrowed_interp(&segments, phdr)?);
-            }
-            ElfProgramType::GNU_EH_FRAME => {
-                eh_frame_hdr = Some(
-                    segments
-                        .host_ptr_range(segments.base() + phdr.p_vaddr(), phdr.p_filesz())
-                        .ok_or_else(|| {
-                            ParsePhdrError::malformed(
-                                "PT_GNU_EH_FRAME is not directly readable from mapped segments",
-                            )
-                        })?,
-                );
-            }
-            ElfProgramType::TLS => {
-                segments
-                    .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
-                    .ok_or(crate::ParsePhdrError::malformed(
-                        "PT_TLS image is malformed",
-                    ))?;
-                tls_info = Some(crate::tls::TlsInfo::new(phdr));
-            }
-            ElfProgramType::GNU_RELRO => {
-                relro = Some(MemoryProtection::new(
-                    load_bias + phdr.p_vaddr(),
-                    phdr.p_memsz(),
-                    page_size,
-                    ProtFlags::PROT_READ,
-                ));
-            }
-            _ => {}
-        }
-    }
-
-    let dynamic = dynamic.ok_or(ParsePhdrError::MissingDynamicSection)?;
-    let dynamic_addr = dynamic_addr.ok_or(ParsePhdrError::MissingDynamicSection)?;
-    Ok(RawDynamicParts {
-        path,
-        entry: VmAddr::new(entry),
-        interp,
-        phdrs: ElfPhdrs::Vec(Vec::from(phdrs)),
-        dynamic,
-        dynamic_addr,
-        eh_frame_hdr,
-        tls_info,
-        force_static_tls,
-        relro,
-        segments,
-        user_data,
-        executor,
-    })
-}
-
-fn read_borrowed_interp<L, R>(segments: &ElfSegments<R>, phdr: &ElfPhdr<L>) -> Result<&'static str>
-where
-    L: ElfLayout,
-    R: RegionAccess,
-{
-    let view = segments
-        .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
-        .ok_or_else(|| {
-            ParsePhdrError::malformed("PT_INTERP is not directly readable from mapped segments")
-        })?;
-    let bytes = view.as_slice();
-    let Some(nul) = bytes.iter().position(|byte| *byte == 0) else {
-        return Err(ParsePhdrError::malformed("PT_INTERP is missing a NUL terminator").into());
-    };
-    if nul == 0 {
-        return Err(ParsePhdrError::malformed("PT_INTERP is empty").into());
-    }
-    core::str::from_utf8(&bytes[..nul])
-        .map_err(|_| ParsePhdrError::InvalidUtf8 { field: "PT_INTERP" }.into())
 }
 
 #[cfg(test)]

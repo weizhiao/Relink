@@ -6,7 +6,7 @@ use crate::{
         ElfDyn, ElfDynamic, ElfDynamicTag, ElfLayout, ElfPhdr, ElfPhdrs, ElfStringTable, ElfSymbol,
         HashTable, Lifecycle, LifecycleSpec, SymbolTable,
     },
-    input::{Path, PathBuf},
+    input::Path,
     lazy::traits::SupportLazy,
     loader::ImageBuilder,
     logging,
@@ -15,10 +15,9 @@ use crate::{
     relocation::{
         DynamicRelocation, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
     },
-    runtime::CodeExecutor,
     segment::{ElfSegments, MemoryProtection},
     sync::{Arc, AtomicBool},
-    tls::{CoreTlsState, TlsInfo, TlsResolver},
+    tls::{CoreTlsState, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{cell::OnceCell, mem::size_of, ptr::NonNull};
@@ -108,26 +107,6 @@ pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
     pub(crate) soname: Option<&'static str>,
     pub(crate) symbolic: bool,
-}
-
-pub(crate) struct RawDynamicParts<
-    D,
-    Arch: RelocationArch = NativeArch,
-    R: RegionAccess = HostRegion,
-> {
-    pub(crate) path: PathBuf,
-    pub(crate) entry: VmAddr,
-    pub(crate) interp: Option<&'static str>,
-    pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
-    pub(crate) dynamic: MappedView<ElfDyn<Arch::Layout>>,
-    pub(crate) dynamic_addr: VmAddr,
-    pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
-    pub(crate) tls_info: Option<TlsInfo>,
-    pub(crate) force_static_tls: bool,
-    pub(crate) relro: Option<MemoryProtection>,
-    pub(crate) segments: crate::segment::ElfSegments<R>,
-    pub(crate) user_data: D,
-    pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
 }
 
 /// Extra data associated with ELF objects during relocation
@@ -439,26 +418,31 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawDynamic<D, Arch, R, Tls>
 {
-    pub(crate) fn from_parts(parts: RawDynamicParts<D, Arch, R>) -> Result<Self> {
-        let RawDynamicParts {
-            path,
-            entry,
-            interp,
-            phdrs,
-            dynamic,
-            dynamic_addr,
-            eh_frame_hdr,
-            tls_info,
-            force_static_tls,
-            relro,
-            segments,
-            user_data,
-            executor,
-        } = parts;
+    /// Creates a relocation builder for this dynamic image.
+    pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls> {
+        Relocator::<(), (), (), Arch, (), Tls>::new().with_object(self)
+    }
+}
 
-        let dynamic = ElfDynamic::<Arch>::new(dynamic, dynamic_addr, &segments)?;
+impl<Tls, D: 'static, Arch: RelocationArch, R: RegionAccess> ImageBuilder<Tls, D, Arch, R>
+where
+    Tls: TlsResolver<Arch>,
+{
+    /// Build a dynamic image from the collected loader state.
+    pub(crate) fn build_dynamic(
+        mut self,
+        phdrs: &[ElfPhdr<Arch::Layout>],
+    ) -> Result<RawDynamic<D, Arch, R, Tls>> {
+        self.parse_phdrs(phdrs)?;
 
-        logging::trace!("[{}] Dynamic info: {:?}", path, dynamic);
+        let phdrs = self.create_phdrs(phdrs)?;
+        let dynamic = self.dynamic.ok_or(ParsePhdrError::MissingDynamicSection)?;
+        let dynamic_addr = self
+            .dynamic_addr
+            .ok_or(ParsePhdrError::MissingDynamicSection)?;
+        let dynamic = ElfDynamic::<Arch>::new(dynamic, dynamic_addr, &self.segments)?;
+
+        logging::trace!("[{}] Dynamic info: {:?}", self.path, dynamic);
 
         let relocation = DynamicRelocation::new(
             dynamic.pltrel.clone(),
@@ -468,8 +452,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
             dynamic.pltrel_is_dynrel_tail,
         )?;
 
-        let static_tls = force_static_tls | dynamic.static_tls;
-        let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
+        let static_tls = self.static_tls | dynamic.static_tls;
+        let symtab = SymbolTable::from_dynamic(&dynamic, &self.segments)?;
         let exports = symtab.clone();
         let lazy_symtab = symtab.clone();
         let needed_libs: Vec<&'static str> = dynamic
@@ -479,15 +463,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
             .collect();
 
         if !needed_libs.is_empty() {
-            logging::debug!("[{}] Dependencies: {:?}", path, needed_libs);
+            logging::debug!("[{}] Dependencies: {:?}", self.path, needed_libs);
         }
         let soname = dynamic
             .soname_off
             .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
 
-        let tls_image = if let Some(info) = &tls_info {
+        let tls_image = if let Some(info) = &self.tls_info {
             Some(
-                segments
+                self.segments
                     .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)
                     .ok_or_else(|| ParsePhdrError::malformed("PT_TLS image is malformed"))?,
             )
@@ -495,7 +479,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
             None
         };
 
-        let (tls_mod_id, tls_tp_offset) = if let Some(info) = &tls_info {
+        let (tls_mod_id, tls_tp_offset) = if let Some(info) = &self.tls_info {
             if static_tls {
                 let (mod_id, offset) = Tls::register_static(info)?;
                 (Some(mod_id), Some(offset))
@@ -509,30 +493,30 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
 
         let inner = Arc::new(CoreInner {
             runtime: Box::new(crate::image::CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
-            executor,
+            executor: self.executor,
             is_init: AtomicBool::new(false),
-            path,
+            path: self.path,
             exports: exports_handle(exports),
             finalizer: OnceCell::new(),
-            user_data,
+            user_data: self.user_data,
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
-                eh_frame_hdr,
+                eh_frame_hdr: self.eh_frame_hdr,
                 phdrs,
                 soname,
                 symbolic: dynamic.symbolic,
             })),
             scope: OnceCell::new(),
-            tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_info, tls_image),
-            segments,
+            tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, self.tls_info, tls_image),
+            segments: self.segments,
         });
         CoreInner::bind_runtime_owner(&inner);
 
         Ok(RawDynamic {
-            entry,
-            interp,
+            entry: self.entry,
+            interp: self.interp,
             extra: ElfExtraData::<Arch> {
                 lazy: !dynamic.bind_now,
-                relro,
+                relro: self.relro,
                 dynamic_addr,
                 dt_debug_addr: dynamic.dt_debug_addr,
                 got_plt: dynamic.got_plt,
@@ -550,51 +534,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
             },
             module: ElfCore { inner },
         })
-    }
-
-    /// Creates a relocation builder for this dynamic image.
-    pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls> {
-        Relocator::<(), (), (), Arch, (), Tls>::new().with_object(self)
-    }
-}
-
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    RawDynamic<D, Arch, R, Tls>
-{
-    /// Build a dynamic image from the intermediate loader state.
-    pub(crate) fn from_builder(
-        mut builder: ImageBuilder<Tls, D, Arch, R>,
-        phdrs: &[ElfPhdr<Arch::Layout>],
-    ) -> Result<Self> {
-        // Parse all program headers
-        builder.parse_phdrs(phdrs)?;
-
-        let phdrs = builder.create_phdrs(phdrs)?;
-        let dynamic = builder
-            .dynamic
-            .ok_or(ParsePhdrError::MissingDynamicSection)?;
-        let parts = RawDynamicParts {
-            path: builder.path,
-            entry: if builder.ehdr.is_dylib() {
-                builder.segments.base() + VmOffset::new(builder.ehdr.e_entry())
-            } else {
-                VmAddr::new(builder.ehdr.e_entry())
-            },
-            interp: builder.interp,
-            phdrs,
-            dynamic,
-            dynamic_addr: builder
-                .dynamic_addr
-                .ok_or(ParsePhdrError::MissingDynamicSection)?,
-            eh_frame_hdr: builder.eh_frame_hdr,
-            tls_info: builder.tls_info,
-            force_static_tls: builder.static_tls,
-            relro: builder.relro,
-            segments: builder.segments,
-            user_data: builder.user_data,
-            executor: builder.executor,
-        };
-        Self::from_parts(parts)
     }
 }
 

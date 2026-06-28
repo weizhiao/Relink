@@ -31,8 +31,11 @@ pub(crate) struct ImageBuilder<
     /// Loader source path or caller-provided source identifier.
     pub(crate) path: PathBuf,
 
-    /// ELF header
-    pub(crate) ehdr: ElfHeader<Arch::Layout>,
+    /// ELF header, when the loader owns the original ELF header metadata.
+    ehdr: Option<ElfHeader<Arch::Layout>>,
+
+    /// Runtime entry point.
+    pub(crate) entry: VmAddr,
 
     /// GNU_RELRO memory protection.
     pub(crate) relro: Option<MemoryProtection>,
@@ -68,7 +71,7 @@ pub(crate) struct ImageBuilder<
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
 
     /// Phantom data to maintain TLS type information.
-    _marker: PhantomData<(Tls, Arch)>,
+    _marker: PhantomData<fn() -> Tls>,
 }
 
 pub(crate) struct ScanBuilder<L: ElfLayout = NativeElfLayout> {
@@ -110,7 +113,8 @@ where
     pub(crate) fn new(
         segments: ElfSegments<R>,
         path: PathBuf,
-        ehdr: ElfHeader<Arch::Layout>,
+        ehdr: Option<ElfHeader<Arch::Layout>>,
+        entry: VmAddr,
         static_tls: bool,
         page_size: usize,
         user_data: D,
@@ -119,6 +123,7 @@ where
         Self {
             path,
             ehdr,
+            entry,
             relro: None,
             dynamic: None,
             dynamic_addr: None,
@@ -236,7 +241,10 @@ where
             }
         }
 
-        let Some((phdr_start, phdr_end)) = self.ehdr.phdr_range()? else {
+        let Some(ehdr) = &self.ehdr else {
+            return Ok(ElfPhdrs::Vec(Vec::from(phdrs)));
+        };
+        let Some((phdr_start, phdr_end)) = ehdr.phdr_range()? else {
             return Ok(ElfPhdrs::Vec(Vec::from(phdrs)));
         };
         let phdr_size = phdr_end - phdr_start;

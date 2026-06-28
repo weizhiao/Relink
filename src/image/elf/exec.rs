@@ -412,21 +412,20 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
-    pub(crate) fn from_builder<Tls>(
-        mut builder: ImageBuilder<Tls, D, Arch, R>,
+impl<Tls, D: 'static, Arch: RelocationArch, R: RegionAccess> ImageBuilder<Tls, D, Arch, R>
+where
+    Tls: TlsResolver<Arch>,
+{
+    pub(crate) fn build_static_exec(
+        mut self,
         phdrs: &[ElfPhdr<Arch::Layout>],
-    ) -> Result<Self>
-    where
-        Tls: TlsResolver<Arch>,
-    {
-        // Parse all program headers
-        builder.parse_phdrs(phdrs)?;
+    ) -> Result<StaticExec<D, Arch, R>> {
+        self.parse_phdrs(phdrs)?;
 
-        let entry = VmAddr::new(builder.ehdr.e_entry());
+        let entry = self.entry;
         let mut tls_image = None;
-        let (tls_mod_id, tls_tp_offset) = if let Some(info) = &builder.tls_info {
-            let template = builder
+        let (tls_mod_id, tls_tp_offset) = if let Some(info) = &self.tls_info {
+            let template = self
                 .segments
                 .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)
                 .ok_or_else(|| crate::ParsePhdrError::malformed("PT_TLS image is malformed"))?;
@@ -442,9 +441,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
 
         let inner = Arc::new(StaticExecInner {
             entry,
-            path: builder.path,
-            user_data: builder.user_data,
-            segments: builder.segments,
+            path: self.path,
+            user_data: self.user_data,
+            segments: self.segments,
             phdrs: if phdrs.is_empty() {
                 None
             } else {
@@ -468,20 +467,16 @@ impl<D, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
 
         Ok(StaticExec { inner })
     }
-}
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    RawExec<D, Arch, R, Tls>
-{
-    pub(crate) fn from_builder(
-        builder: ImageBuilder<Tls, D, Arch, R>,
+    pub(crate) fn build_exec(
+        self,
         phdrs: &[ElfPhdr<Arch::Layout>],
         has_dynamic: bool,
-    ) -> Result<Self> {
+    ) -> Result<RawExec<D, Arch, R, Tls>> {
         if has_dynamic {
-            Ok(Self::Dynamic(RawDynamic::from_builder(builder, phdrs)?))
+            Ok(RawExec::Dynamic(self.build_dynamic(phdrs)?))
         } else {
-            Ok(Self::Static(StaticExec::from_builder(builder, phdrs)?))
+            Ok(RawExec::Static(self.build_static_exec(phdrs)?))
         }
     }
 }

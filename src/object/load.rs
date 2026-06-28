@@ -72,7 +72,7 @@ where
             user_data,
             self.executor(),
         )?;
-        let mut raw = RawObject::from_builder(builder);
+        let mut raw = builder.build_object();
         self.notify_after_object_load(&mut raw)?;
         let base = raw.base();
 

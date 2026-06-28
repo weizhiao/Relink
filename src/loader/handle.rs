@@ -22,7 +22,7 @@ use alloc::boxed::Box;
 use core::marker::PhantomData;
 
 #[inline]
-fn native_executor<Arch: RelocationArch>() -> Arc<dyn CodeExecutor<Arch>> {
+pub(crate) fn native_executor<Arch: RelocationArch>() -> Arc<dyn CodeExecutor<Arch>> {
     Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>)
 }
 
@@ -54,7 +54,7 @@ where
 {
     pub(super) buf: super::ElfBuf,
     pub(super) inner: LoaderInner<Obs, D, Arch, M>,
-    _marker: PhantomData<(Tls, Arch)>,
+    _marker: PhantomData<fn() -> Tls>,
 }
 
 pub(super) struct LoaderInner<Obs, D: 'static, Arch: RelocationArch, M: Mmap = DefaultMmap> {
@@ -65,7 +65,7 @@ pub(super) struct LoaderInner<Obs, D: 'static, Arch: RelocationArch, M: Mmap = D
     force_static_tls: bool,
     #[cfg(feature = "object")]
     object_groups: Arc<SectionGroups>,
-    _marker: PhantomData<fn() -> (D, Arch)>,
+    _marker: PhantomData<fn() -> D>,
 }
 
 impl<Obs, D, Arch, M> LoaderInner<Obs, D, Arch, M>

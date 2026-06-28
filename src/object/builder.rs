@@ -34,8 +34,7 @@ pub(crate) struct ObjectBuilder<
     pub(crate) tls_tp_offset: Option<TlsTpOffset>,
     pub(crate) user_data: D,
     pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
-    _marker_tls: PhantomData<Tls>,
-    _marker_arch: PhantomData<Arch>,
+    _marker_tls: PhantomData<fn() -> Tls>,
 }
 
 struct ObjectSectionData<Arch: ObjectRelocationArch> {
@@ -118,7 +117,6 @@ where
             user_data,
             executor,
             _marker_tls: PhantomData,
-            _marker_arch: PhantomData,
         })
     }
 }

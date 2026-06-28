@@ -24,7 +24,6 @@ pub use dylib::RawDylib;
 pub(crate) use dynamic::DynamicInfo;
 pub(crate) use dynamic::PltRelocInfo;
 pub use dynamic::RawDynamic;
-pub(crate) use dynamic::RawDynamicParts;
 pub use exec::{LoadedExec, RawExec, StaticExec};
 #[cfg(feature = "object")]
 pub use object::{LoadedObject, RawObject};

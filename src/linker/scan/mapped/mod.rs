@@ -2,17 +2,16 @@ use super::layout::{MemoryLayoutPlan, SectionId};
 use super::plan::{LinkPlan, ModuleId};
 use crate::{
     LinkerError, Result,
-    elf::{ElfDyn, ElfPhdrs, ElfProgramType},
+    elf::{ElfPhdr, ElfProgramType},
     entity::SecondaryMap,
     image::{RawDynamic, ScannedDynamic},
     input::PathBuf,
+    loader::ImageBuilder,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
     os::Mmap,
     relocation::{RelocationArch, RelocationValueProvider},
-    runtime::{CodeExecutor, NativeCodeExecutor},
     segment::ElfSegments,
-    sync::Arc,
-    tls::{TlsInfo, TlsResolver},
+    tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::ptr::NonNull;
@@ -262,73 +261,8 @@ where
     Arch: RelocationArch,
     R: RegionAccess,
 {
-    let original_phdrs = scanned.phdrs().to_vec();
-    let mut dynamic = None;
-    let mut dynamic_addr = None;
-    let mut eh_frame_hdr: Option<NonNull<u8>> = None;
-    let mut tls_info: Option<TlsInfo> = None;
-
-    for phdr in &original_phdrs {
-        match phdr.program_type() {
-            ElfProgramType::DYNAMIC => {
-                let offset = runtime
-                    .remap_source_to_runtime_offset(phdr.p_vaddr())
-                    .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_DYNAMIC"))?;
-                let view = runtime
-                    .segments
-                    .read_view::<ElfDyn<Arch::Layout>>(VmOffset::new(offset.get()), phdr.p_filesz())
-                    .ok_or_else(|| {
-                        LinkerError::runtime_memory(
-                            "PT_DYNAMIC is not directly readable from mapped segments",
-                        )
-                    })?;
-                if view.is_empty() {
-                    return Err(LinkerError::runtime_memory(
-                        "PT_DYNAMIC is not directly readable from mapped segments",
-                    )
-                    .into());
-                }
-                dynamic_addr = Some(runtime.segments.base() + VmOffset::new(offset.get()));
-                dynamic = Some(view);
-            }
-            ElfProgramType::GNU_EH_FRAME => {
-                let offset = runtime
-                    .remap_source_to_runtime_offset(phdr.p_vaddr())
-                    .ok_or_else(|| {
-                        LinkerError::runtime_memory("failed to remap PT_GNU_EH_FRAME")
-                    })?;
-                eh_frame_hdr = Some(
-                    runtime
-                        .segments
-                        .host_ptr_range(
-                            runtime.segments.base() + VmOffset::new(offset.get()),
-                            phdr.p_filesz(),
-                        )
-                        .ok_or_else(|| {
-                            LinkerError::runtime_memory(
-                                "PT_GNU_EH_FRAME is not directly readable from mapped segments",
-                            )
-                        })?,
-                );
-            }
-            ElfProgramType::TLS => {
-                let offset = runtime
-                    .remap_source_to_runtime_offset(phdr.p_vaddr())
-                    .ok_or_else(|| LinkerError::runtime_memory("failed to remap PT_TLS"))?;
-                runtime
-                    .segments
-                    .read_view::<u8>(VmOffset::new(offset.get()), phdr.p_filesz())
-                    .ok_or_else(|| LinkerError::runtime_memory("PT_TLS image is malformed"))?;
-                tls_info = Some(TlsInfo::new(phdr));
-            }
-            _ => {}
-        }
-    }
-
-    let dynamic = dynamic
-        .ok_or_else(|| LinkerError::runtime_memory("arena-backed module is missing PT_DYNAMIC"))?;
-    let dynamic_addr = dynamic_addr
-        .ok_or_else(|| LinkerError::runtime_memory("arena-backed module is missing PT_DYNAMIC"))?;
+    let mut phdrs = scanned.phdrs().to_vec();
+    remap_runtime_phdrs::<Arch, R>(&runtime, &mut phdrs)?;
     let original_entry = scanned.ehdr().e_entry();
     let entry = runtime
         .remap_source_to_runtime_offset(VmOffset::new(original_entry))
@@ -336,19 +270,51 @@ where
         .unwrap_or_else(|| runtime.segments.base() + VmOffset::new(original_entry));
     let path = PathBuf::from(scanned.path());
 
-    RawDynamic::from_parts(crate::image::RawDynamicParts {
+    let builder = ImageBuilder::<Tls, D, Arch, R>::new(
+        runtime.segments,
         path,
+        None,
         entry,
-        interp: None,
-        phdrs: ElfPhdrs::Vec(original_phdrs),
-        dynamic,
-        dynamic_addr,
-        eh_frame_hdr,
-        tls_info,
         force_static_tls,
-        relro: None,
-        segments: runtime.segments,
-        user_data: D::default(),
-        executor: Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>),
-    })
+        1,
+        D::default(),
+        crate::loader::native_executor::<Arch>(),
+    );
+    builder.build_dynamic(&phdrs)
+}
+
+fn remap_runtime_phdrs<Arch, R>(
+    runtime: &RuntimeModuleMemory<R>,
+    phdrs: &mut [ElfPhdr<Arch::Layout>],
+) -> Result<()>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+{
+    for phdr in phdrs {
+        let p_type = phdr.program_type();
+        if p_type == ElfProgramType::GNU_RELRO {
+            phdr.set_program_type(ElfProgramType::NULL);
+            continue;
+        }
+
+        let Some(offset) = runtime.remap_source_to_runtime_offset(phdr.p_vaddr()) else {
+            if p_type == ElfProgramType::PHDR {
+                phdr.set_program_type(ElfProgramType::NULL);
+                continue;
+            }
+            if matches!(
+                p_type,
+                ElfProgramType::DYNAMIC
+                    | ElfProgramType::GNU_EH_FRAME
+                    | ElfProgramType::TLS
+                    | ElfProgramType::INTERP
+            ) {
+                return Err(LinkerError::runtime_memory("failed to remap program header").into());
+            }
+            continue;
+        };
+        phdr.set_p_vaddr(VmOffset::new(offset.get()));
+    }
+    Ok(())
 }

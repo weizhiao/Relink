@@ -72,40 +72,47 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<A
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    RawObject<D, Arch, R, Tls>
+impl<Tls, D: 'static, Arch, R> ObjectBuilder<Tls, D, Arch, R>
+where
+    Tls: TlsResolver<Arch>,
+    Arch: ObjectRelocationArch,
+    R: RegionAccess,
 {
-    pub(crate) fn from_builder(mut builder: ObjectBuilder<Tls, D, Arch, R>) -> Self {
-        let (segments, init_segments) = builder.segments.into_parts();
-        let pltgot = builder.section_segments.take_pltgot();
+    pub(crate) fn build_object(mut self) -> RawObject<D, Arch, R, Tls> {
+        let (segments, init_segments) = self.segments.into_parts();
+        let pltgot = self.section_segments.take_pltgot();
         let inner = CoreInner {
             runtime: Box::new(crate::image::CoreRuntime::new::<D, R, Tls>(None)),
-            executor: builder.executor,
+            executor: self.executor,
             is_init: AtomicBool::new(false),
-            path: builder.path,
+            path: self.path,
             exports: exports_handle(ObjectExports::<Arch::Layout>::empty()),
             finalizer: OnceCell::new(),
-            user_data: builder.user_data,
+            user_data: self.user_data,
             dynamic_info: None,
             scope: OnceCell::new(),
-            tls: CoreTlsState::new(builder.tls_mod_id, builder.tls_tp_offset, None, None),
+            tls: CoreTlsState::new(self.tls_mod_id, self.tls_tp_offset, None, None),
             segments,
         };
         let inner = Arc::new(inner);
         CoreInner::bind_runtime_owner(&inner);
 
-        Self {
+        RawObject {
             core: ElfCore { inner },
-            symtab: builder.symtab,
-            sections: builder.sections,
+            symtab: self.symtab,
+            sections: self.sections,
             pltgot,
-            section_segments: builder.section_segments,
+            section_segments: self.section_segments,
             init_segments,
-            init: builder.init,
-            fini: builder.fini,
+            init: self.init,
+            fini: self.fini,
         }
     }
+}
 
+impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    RawObject<D, Arch, R, Tls>
+{
     /// Creates a builder for relocating the relocatable file.
     pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls>
     where
