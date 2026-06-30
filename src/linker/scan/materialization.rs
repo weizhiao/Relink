@@ -17,7 +17,7 @@ where
     Tls: TlsResolver<Arch>,
 {
     pub(in crate::linker) fn normalize(&mut self) -> Result<()> {
-        self.try_for_each_module(|plan, module_id| {
+        self.try_for_each_dynamic(|plan, module_id| {
             let mode = resolve_materialization_mode(&*plan, module_id)?;
             plan.set_materialization(module_id, mode);
             Ok(())

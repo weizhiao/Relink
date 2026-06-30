@@ -59,8 +59,7 @@ where
         plan.plan
             .get(self.id)
             .expect("checked module handle should resolve to a planned module")
-            .dynamic()
-            .expect("checked module handle should resolve to a scanned dynamic module")
+            .scanned()
     }
 
     /// Iterates over visible direct dependency modules recorded for this module.

@@ -241,9 +241,8 @@ fn final_protection(class: MemoryClass) -> ProtFlags {
 mod tests {
     use super::super::super::{ArenaDescriptor, ArenaSharing, LinkPlan};
     use super::*;
-    use crate::linker::session::ModulePayload;
     use crate::os::{DefaultMmap, PageSize};
-    use crate::{image::ScannedElf, input::ElfBinary, loader::Loader};
+    use crate::{image::ScannedElf, input::ElfBinary, linker::storage::KeyId, loader::Loader};
     use alloc::{collections::BTreeMap, vec::Vec};
     use gen_elf::{Arch, DylibWriter, ElfWriterConfig, SymbolDesc};
 
@@ -264,14 +263,12 @@ mod tests {
             panic!("generated dylib should scan as dynamic");
         };
         let mut entries = BTreeMap::new();
+        let root_id = KeyId::new(0);
         entries.insert(
-            "root",
-            (
-                ModulePayload::Dynamic(scanned),
-                Vec::<&str>::new().into_boxed_slice(),
-            ),
+            root_id,
+            ("root", scanned, Vec::<KeyId>::new().into_boxed_slice()),
         );
-        let mut plan: LinkPlan<&str> = LinkPlan::new("root", Vec::from(["root"]), entries);
+        let mut plan: LinkPlan<&str> = LinkPlan::new(root_id, Vec::from([root_id]), entries);
         let root = plan.root_module();
         let section = plan
             .memory_layout()

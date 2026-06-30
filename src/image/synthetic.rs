@@ -16,7 +16,7 @@ use core::ptr::NonNull;
 /// Synthetic symbols are useful for host callbacks, native bridge wrappers,
 /// and virtual replacement libraries where a symbol should resolve to a known
 /// runtime address without loading another ELF image.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SyntheticSymbol {
     name: String,
     value: usize,

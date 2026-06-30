@@ -7,16 +7,14 @@ use super::{
         GotPltTarget, LinkPipeline, LinkPlan, MappedRuntimeMemory, Materialization,
         MemoryLayoutPlan, ModuleId as PlanModuleId, build_arena_raw_dynamic,
     },
-    session::{GraphEntry, LoadSession, ModulePayload},
+    session::{LoadSession, ResolveSession},
     storage::{KeyId, ModuleId as CommittedModuleId},
 };
 use crate::{
     LinkerError, Loader, Result,
-    entity::SecondaryMap,
     image::{
         LoadedCore, ModuleHandle, ModuleScope, ModuleScopeBuilder, RawDynamic, ScannedDynamic,
     },
-    linker::session::ResolveSession,
     memory::{ImageMemory, RegionAccess, VmOffset},
     observer::{LinkObserver, LoadObserver, RelocationObserver, StagedDynamic},
     os::Mmap,
@@ -31,9 +29,6 @@ use alloc::{
 };
 use core::{borrow::Borrow, fmt, marker::PhantomData, mem, ops::Deref};
 
-type PendingDynamicGraph<D, Arch, R, Tls> =
-    BTreeMap<KeyId, GraphEntry<ModulePayload<RawDynamic<D, Arch, R, Tls>, Arch, Tls>>>;
-
 /// Result of a successful linker load operation.
 ///
 /// `committed` contains the newly committed modules' [`ModuleId`](crate::linker::ModuleId)
@@ -44,6 +39,7 @@ pub struct LoadResult<
     R: RegionAccess = crate::memory::HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
+    root_id: Option<CommittedModuleId>,
     root: LoadedCore<D, Arch, R, Tls>,
     committed: Box<[CommittedModuleId]>,
 }
@@ -56,6 +52,7 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoadResult")
+            .field("root_id", &self.root_id)
             .field("root", &self.root.name())
             .field("committed", &self.committed)
             .finish()
@@ -70,10 +67,22 @@ where
 {
     #[inline]
     pub(crate) fn new(
+        root_id: Option<CommittedModuleId>,
         root: LoadedCore<D, Arch, R, Tls>,
         committed: Box<[CommittedModuleId]>,
     ) -> Self {
-        Self { root, committed }
+        Self {
+            root_id,
+            root,
+            committed,
+        }
+    }
+
+    /// Returns the committed module id for the loaded root, if the root belongs
+    /// to this link context.
+    #[inline]
+    pub fn root_id(&self) -> Option<CommittedModuleId> {
+        self.root_id
     }
 
     /// Returns the loaded root module.
@@ -461,8 +470,8 @@ where
         Resolver: KeyResolver<'cfg, K, Arch, Q, Tls>,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        if let Some(loaded) = visible_loaded(context, &self.visible_modules, key.borrow()) {
-            return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
+        if let Some(result) = visible_loaded(context, &self.visible_modules, key.borrow()) {
+            return Ok(result);
         }
 
         let prepared = self.prepare_runtime_load::<Meta, Q, _>(
@@ -471,7 +480,7 @@ where
                 let mut resolve_context = LoadResolveContext::new(
                     &mut context.committed,
                     visible_modules,
-                    &mut session.resolve,
+                    session.resolve_mut(),
                 );
                 let resolved = resolve_context.resolve_root(&key, resolver, observer)?;
                 resolve_context.stage_resolved(resolved, loader, observer)
@@ -494,8 +503,8 @@ where
         Resolver: KeyResolver<'cfg, K, Arch, Q, Tls>,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        if let Some(loaded) = visible_loaded(context, &self.visible_modules, key.borrow()) {
-            return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
+        if let Some(result) = visible_loaded(context, &self.visible_modules, key.borrow()) {
+            return Ok(result);
         }
 
         let prepared = self.prepare_runtime_load::<Meta, Q, _>(
@@ -503,7 +512,7 @@ where
             move |context, _, session, _, _, observer| {
                 observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
                 let id = context.committed.intern_key(key.clone());
-                session.resolve.insert_entry(id, raw);
+                session.insert_pending(id, raw);
                 Ok(id)
             },
         )?;
@@ -523,14 +532,11 @@ where
         Resolver: KeyResolver<'static, K, Arch, Q, Tls>,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        if let Some(loaded) = visible_loaded(context, &self.visible_modules, key.borrow()) {
-            return Ok(LoadResult::new(loaded, Vec::new().into_boxed_slice()));
+        if let Some(result) = visible_loaded(context, &self.visible_modules, key.borrow()) {
+            return Ok(result);
         }
 
-        let prepared = match self.prepare_scan_load::<Meta, Q>(context, &key)? {
-            ScanDiscovery::Existing(root) => PreparedLoad::runtime(root, LoadSession::new()),
-            ScanDiscovery::Plan(plan) => self.prepare_planned_load(context, plan)?,
-        };
+        let prepared = self.prepare_scan_load::<Meta, Q>(context, &key)?;
         self.execute_prepared_load::<Meta, Q>(context, prepared)
     }
 
@@ -538,7 +544,7 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         key: &K,
-    ) -> Result<ScanDiscovery<K, Arch, Tls>>
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -552,7 +558,7 @@ where
         let resolved = resolve_context.resolve_root(key, &mut self.resolver, &mut self.observer)?;
         let root = resolve_context.stage_resolved(resolved, &mut self.loader)?;
         if !resolve_context.contains_pending(root) {
-            return Ok(ScanDiscovery::Existing(root));
+            return Ok(PreparedLoad::runtime(root, LoadSession::new()));
         }
         resolve_context.resolve_dependency_graph::<_, _, _, Q>(
             root,
@@ -561,106 +567,64 @@ where
             &mut self.observer,
         )?;
 
-        let ResolveSession {
-            entries,
-            group_order,
-        } = session;
-        let root_key = context
-            .key(root)
-            .expect("scan root id must resolve to an interned key")
-            .clone();
-        let group_order = group_order
+        let dynamics = session.take_dynamics();
+        let dynamic_ids = dynamics.keys().copied().collect::<BTreeSet<_>>();
+        let entries: BTreeMap<_, _> = dynamics
             .into_iter()
-            .map(|id| {
-                context
+            .map(|(id, entry)| {
+                let key = context
                     .key(id)
-                    .expect("scan group id must resolve to an interned key")
-                    .clone()
+                    .expect("scan entry id must resolve to an interned key")
+                    .clone();
+                let (module, full_deps) = entry.into_parts();
+                let full_deps =
+                    full_deps.expect("missing resolved dependencies while building scan plan");
+                (id, (key, module, full_deps))
             })
-            .collect::<Vec<_>>();
-        let mut plan = LinkPlan::new(
-            root_key,
-            group_order,
-            entries
-                .into_iter()
-                .map(|(id, entry)| {
-                    let key = context
-                        .key(id)
-                        .expect("scan entry id must resolve to an interned key")
-                        .clone();
-                    let (payload, direct_deps) = entry.into_parts();
-                    let direct_deps = direct_deps
-                        .expect("missing resolved dependencies while building scan plan")
-                        .into_vec()
-                        .into_iter()
-                        .map(|dep| {
-                            context
-                                .key(dep)
-                                .expect("scan dependency id must resolve to an interned key")
-                                .clone()
-                        })
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice();
-                    (key, (payload, direct_deps))
-                })
-                .collect(),
-        );
-        self.pipeline.run(&mut plan)?;
-        Ok(ScanDiscovery::Plan(plan))
-    }
-
-    fn prepare_planned_load<Meta>(
-        &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
-        mut plan: LinkPlan<K, Arch, Tls>,
-    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
-        let mut mapped_runtime = self.prepare_mapped_runtime(&mut plan)?;
-
-        let (root, group_order, entries, memory_layout) = plan.into_parts();
-        let mut session = LoadSession::new();
-        let mut module_ids = SecondaryMap::default();
-        for (module_id, entry) in entries.iter() {
-            let id = context.committed.intern_key(entry.key().clone());
-            let _ = module_ids.insert(module_id, id);
-        }
-        session.resolve.group_order = group_order
-            .iter()
-            .map(|module_id| module_ids[*module_id])
             .collect();
-
-        for (module_id, entry) in entries {
-            let (key, module, dep_ids) = entry.into_parts();
-            let id = module_ids[module_id];
-            let direct_deps = dep_ids
+        let mut mapped_runtime = None;
+        let planned = if entries.is_empty() {
+            None
+        } else {
+            let plan_root = if dynamic_ids.contains(&root) {
+                root
+            } else {
+                session
+                    .group_order
+                    .iter()
+                    .copied()
+                    .find(|id| dynamic_ids.contains(id))
+                    .expect("dynamic id set must contain at least one group id")
+            };
+            let plan_group_order = session
+                .group_order
                 .iter()
-                .map(|dep_id| module_ids[*dep_id])
-                .collect::<Vec<_>>()
-                .into_boxed_slice();
-            match module {
-                ModulePayload::Dynamic(module) => {
-                    let raw = self.materialize_planned_raw(
-                        &memory_layout,
-                        &mut mapped_runtime,
-                        module_id,
-                        module,
-                    )?;
-                    self.observer
-                        .on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
-                    session.insert_resolved_pending(id, raw, direct_deps);
-                }
-                ModulePayload::Synthetic(module) => {
-                    session
-                        .resolve
-                        .insert_synthetic_entry(id, module, direct_deps);
-                }
+                .copied()
+                .filter(|id| dynamic_ids.contains(id))
+                .collect::<Vec<_>>();
+            let mut plan = LinkPlan::new(plan_root, plan_group_order, entries);
+            self.pipeline.run(&mut plan)?;
+            mapped_runtime = self.prepare_mapped_runtime(&mut plan)?;
+            let (_, _, entries, memory_layout) = plan.into_parts();
+            Some((entries, memory_layout))
+        };
+        let mut session = LoadSession::from_resolve(session);
+        if let Some((entries, memory_layout)) = planned {
+            for (module_id, entry) in entries {
+                let (id, key, module, direct_deps) = entry.into_parts();
+                let raw = self.materialize_planned_raw(
+                    &memory_layout,
+                    &mut mapped_runtime,
+                    module_id,
+                    module,
+                )?;
+                self.observer
+                    .on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
+                session.insert_resolved_pending(id, raw, direct_deps);
             }
         }
 
-        Ok(PreparedLoad::planned(
-            module_ids[root],
-            session,
-            mapped_runtime,
-        ))
+        Ok(PreparedLoad::planned(root, session, mapped_runtime))
     }
 
     fn prepare_mapped_runtime(
@@ -761,7 +725,7 @@ where
         let mut resolve_context = LoadResolveContext::new(
             &mut context.committed,
             &self.visible_modules,
-            &mut session.resolve,
+            session.resolve_mut(),
         );
         if resolve_context.contains_pending(root) {
             resolve_context.resolve_dependency_graph::<_, _, _, Q>(
@@ -792,7 +756,7 @@ where
             mapped_runtime,
         } = prepared;
 
-        if !session.resolve.entries.is_empty() {
+        if !session.pending_is_empty() {
             self.relocate_pending_modules::<Meta, Q>(root, context, &mut session)?;
         }
 
@@ -802,6 +766,7 @@ where
 
         let committed = Self::commit_session(context, &mut session);
 
+        let root_id = context.committed.module_id(root);
         let root = context
             .visible_module(&self.visible_modules, root)
             .and_then(|module| {
@@ -810,7 +775,7 @@ where
                     .cloned()
             })
             .ok_or_else(|| LinkerError::context("load root missing after commit"))?;
-        Ok(LoadResult::new(root, committed))
+        Ok(LoadResult::new(root_id, root, committed))
     }
 
     fn relocate_pending_modules<Meta, Q>(
@@ -825,42 +790,38 @@ where
         V: VisibleModules<K, Arch, Q, Tls>,
     {
         let mut order = mem::take(&mut self.scratch_relocation_order);
-        Self::build_relocation_order(root, &session.resolve.entries, &mut order);
+        Self::build_relocation_order(root, session, &mut order);
         let scope = Self::build_group_scope::<Meta, Q>(context, session, &self.visible_modules);
 
         let result = (|| {
             for id in order.drain(..) {
-                let entry = session
-                    .resolve
-                    .entries
-                    .remove(&id)
-                    .expect("missing pending module while relocating");
-                let (payload, direct_deps) = entry.into_parts();
-                let direct_deps =
-                    direct_deps.expect("missing resolved dependencies while relocating");
                 let key = context
                     .key(id)
                     .expect("pending module id must resolve to an interned key")
                     .clone();
-                match payload {
-                    ModulePayload::Dynamic(raw) => {
-                        let req = RelocationRequest::new(&key, raw, &scope);
-                        let inputs = self.planner.plan(&req)?;
-                        let raw = req.into_raw();
-                        let (scope, binding) = inputs.into_parts();
-                        let loaded = self
-                            .relocator
-                            .clone()
-                            .with_object(raw)
-                            .shared_scope(scope)
-                            .binding(binding)
-                            .relocate()?;
-                        session.push_ready(id, loaded, direct_deps);
-                    }
-                    ModulePayload::Synthetic(module) => {
-                        session.push_ready(id, module, direct_deps);
-                    }
-                }
+                let entry = session
+                    .take_pending_dynamic(id)
+                    .expect("missing pending dynamic module while relocating");
+                let (raw, direct_deps) = entry.into_parts();
+                let direct_deps =
+                    direct_deps.expect("missing resolved dependencies while relocating");
+                let req = RelocationRequest::new(&key, raw, &scope);
+                let inputs = self.planner.plan(&req)?;
+                let raw = req.into_raw();
+                let (scope, binding) = inputs.into_parts();
+                let loaded = self
+                    .relocator
+                    .clone()
+                    .with_object(raw)
+                    .shared_scope(scope)
+                    .binding(binding)
+                    .relocate()?;
+                session.push_ready(id, loaded, direct_deps);
+            }
+
+            for (id, entry) in session.take_pending_synthetics() {
+                let (module, direct_deps) = entry.into_parts();
+                session.push_ready(id, module, direct_deps);
             }
             Ok(())
         })();
@@ -871,20 +832,23 @@ where
 
     fn build_relocation_order(
         root: KeyId,
-        pending: &PendingDynamicGraph<D, Arch, M::Region, Tls>,
+        pending: &LoadSession<D, Arch, M::Region, Tls>,
         order: &mut Vec<KeyId>,
     ) {
         order.clear();
-        if order.capacity() < pending.len() {
-            order.reserve(pending.len() - order.capacity());
+        let dynamic_len = pending.pending_dynamic_len();
+        if order.capacity() < dynamic_len {
+            order.reserve(dynamic_len - order.capacity());
         }
         let mut visited = BTreeSet::new();
-        let mut stack = Vec::with_capacity(pending.len().saturating_mul(2));
+        let mut stack = Vec::with_capacity(pending.pending_len().saturating_mul(2));
         stack.push((root, false));
 
         while let Some((id, expanded)) = stack.pop() {
             if expanded {
-                order.push(id);
+                if pending.is_pending_dynamic(id) {
+                    order.push(id);
+                }
                 continue;
             }
 
@@ -892,14 +856,11 @@ where
                 continue;
             }
 
-            let Some(slot) = pending.get(&id) else {
+            let Some(direct_deps) = pending.pending_direct_deps(id) else {
                 continue;
             };
 
             stack.push((id, true));
-            let direct_deps = slot
-                .direct_deps()
-                .expect("missing resolved dependencies while building relocation order");
             for dep in direct_deps.iter().rev().copied() {
                 stack.push((dep, false));
             }
@@ -917,18 +878,14 @@ where
         V: VisibleModules<K, Arch, Q, Tls>,
     {
         let modules = session
-            .resolve
-            .group_order
+            .group_order()
             .iter()
             .map(|id| {
-                if let Some(entry) = session.resolve.entries.get(id) {
-                    match entry.payload() {
-                        ModulePayload::Dynamic(raw) => {
-                            let module = unsafe { LoadedCore::from_core(raw.core()) };
-                            ModuleHandle::from(module)
-                        }
-                        ModulePayload::Synthetic(module) => module.clone(),
-                    }
+                if let Some(raw) = session.pending_dynamic(*id) {
+                    let module = unsafe { LoadedCore::from_core(raw.core()) };
+                    ModuleHandle::from(module)
+                } else if let Some(module) = session.pending_synthetic(*id) {
+                    module.clone()
                 } else {
                     context
                         .visible_module(visible_modules, *id)
@@ -950,7 +907,7 @@ where
     {
         let mut ready = session.take_ready_to_commit();
         let mut committed = Vec::with_capacity(ready.len());
-        for id in session.resolve.group_order.iter().copied() {
+        for id in session.group_order().iter().copied() {
             let Some(entry) = ready.remove(&id) else {
                 continue;
             };
@@ -973,11 +930,6 @@ struct PreparedLoad<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsR
     root: KeyId,
     session: LoadSession<D, Arch, R, Tls>,
     mapped_runtime: Option<MappedRuntimeMemory<R>>,
-}
-
-enum ScanDiscovery<K, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
-    Existing(KeyId),
-    Plan(LinkPlan<K, Arch, Tls>),
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
@@ -1045,21 +997,40 @@ fn visible_loaded<K, D, Meta, V, Arch, R, Q, Tls>(
     context: &LinkContext<K, D, Meta, Arch, Tls>,
     visible_modules: &V,
     key: &Q,
-) -> Option<LoadedCore<D, Arch, R, Tls>>
+) -> Option<LoadResult<D, Arch, R, Tls>>
 where
     K: Clone + Ord + Borrow<Q>,
-    Q: ToOwned<Owned = K> + Ord + ?Sized,
+    Q: Ord + ?Sized,
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
     V: VisibleModules<K, Arch, Q, Tls>,
 {
-    context
-        .visible_module_by_key(visible_modules, key)
+    if let Some(key_id) = context.key_id(key) {
+        let root_id = context.module_id(key_id);
+        if let Some(loaded) = context
+            .visible_module(visible_modules, key_id)
+            .and_then(|module| {
+                module
+                    .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
+                    .cloned()
+            })
+        {
+            return Some(LoadResult::new(
+                root_id,
+                loaded,
+                Vec::new().into_boxed_slice(),
+            ));
+        }
+    }
+
+    visible_modules
+        .module(key)
         .and_then(|module| {
             module
                 .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
                 .cloned()
         })
+        .map(|loaded| LoadResult::new(None, loaded, Vec::new().into_boxed_slice()))
 }

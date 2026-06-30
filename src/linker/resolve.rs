@@ -1,7 +1,7 @@
 use super::{
     request::{DependencyOwner, DependencyRequest, RootRequest, VisibleModules},
     resolver::{KeyResolver, ResolvedKey},
-    session::{ResolveSession, extend_breadth_first},
+    session::{GraphEntry, ResolveSession, SyntheticEntry},
     storage::{CommittedStorage, KeyId},
 };
 use crate::{
@@ -15,8 +15,47 @@ use crate::{
     relocation::RelocationArch,
     tls::TlsResolver,
 };
-use alloc::{borrow::ToOwned, vec::Vec};
+use alloc::{borrow::ToOwned, collections::BTreeSet, vec::Vec};
 use core::borrow::Borrow;
+
+fn walk_breadth_first<K, E, F>(queue: &mut Vec<K>, mut visit: F) -> core::result::Result<(), E>
+where
+    K: Clone,
+    F: FnMut(&K, &mut Vec<K>) -> core::result::Result<(), E>,
+{
+    let mut cursor = 0;
+
+    while cursor < queue.len() {
+        let key = queue[cursor].clone();
+        cursor += 1;
+        visit(&key, queue)?;
+    }
+
+    Ok(())
+}
+
+fn extend_breadth_first<K, E, F>(
+    group_order: &mut Vec<K>,
+    root: K,
+    mut direct_deps: F,
+) -> core::result::Result<(), E>
+where
+    K: Clone + Ord,
+    F: FnMut(&K) -> core::result::Result<Vec<K>, E>,
+{
+    let mut visited = BTreeSet::new();
+    visited.insert(root.clone());
+    group_order.push(root);
+
+    walk_breadth_first(group_order, |key, queue| {
+        for dep_key in direct_deps(key)? {
+            if visited.insert(dep_key.clone()) {
+                queue.push(dep_key);
+            }
+        }
+        Ok(())
+    })
+}
 
 pub(crate) struct ResolveContext<
     'a,
@@ -83,7 +122,7 @@ where
 {
     #[inline]
     pub(crate) fn contains_pending(&self, id: KeyId) -> bool {
-        self.session.contains(id)
+        self.session.dynamics.contains_key(&id) || self.session.synthetics.contains_key(&id)
     }
 
     /// Returns the canonical key reusable in this resolve graph.
@@ -98,22 +137,32 @@ where
         V: VisibleModules<K, Arch, Q, Tls>,
     {
         if let Some(id) = self.committed.key_id(key)
-            && (self.session.contains(id) || self.committed.contains(id))
+            && ((self.session.dynamics.contains_key(&id)
+                || self.session.synthetics.contains_key(&id))
+                || self.committed.contains(id))
         {
             return self.committed.key(id).cloned();
         }
 
-        self.visible_modules.visible_key(key)
+        self.visible_modules.contains(key).then(|| key.to_owned())
     }
 
     #[inline]
     fn contains_reusable_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Q: Ord + ?Sized,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        self.reusable_key(key).is_some()
+        if let Some(id) = self.committed.key_id(key)
+            && ((self.session.dynamics.contains_key(&id)
+                || self.session.synthetics.contains_key(&id))
+                || self.committed.contains(id))
+        {
+            return true;
+        }
+
+        self.visible_modules.contains(key)
     }
 
     fn intern_key(&mut self, key: K) -> KeyId {
@@ -130,8 +179,11 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        if let Some(entry) = self.session.entries.get(&id) {
+        if let Some(entry) = self.session.dynamics.get(&id) {
             return entry.direct_deps().map(<[KeyId]>::to_vec);
+        }
+        if let Some(entry) = self.session.synthetics.get(&id) {
+            return Some(entry.direct_deps().to_vec());
         }
 
         if let Some(direct_deps) = self.committed.direct_deps_by_key(id) {
@@ -153,7 +205,7 @@ where
 
     fn owner(&self, id: KeyId) -> Option<&dyn DependencyOwner> {
         self.session
-            .entries
+            .dynamics
             .get(&id)
             .map(|entry| entry.payload() as &dyn DependencyOwner)
     }
@@ -161,7 +213,7 @@ where
     fn set_direct_deps(&mut self, id: KeyId, direct_deps: Vec<KeyId>) {
         let entry = self
             .session
-            .entries
+            .dynamics
             .get_mut(&id)
             .expect("session entry must exist for staged key");
         entry.set_direct_deps(direct_deps);
@@ -343,7 +395,7 @@ where
                 let raw = loader.load_dynamic(reader)?;
                 observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
                 let id = self.intern_key(key);
-                self.session.insert_entry(id, raw);
+                self.session.dynamics.insert(id, GraphEntry::new(raw));
                 Ok(id)
             }
             ResolvedKey::Synthetic { key, module, deps } => {
@@ -363,8 +415,10 @@ where
                 }
 
                 let id = self.intern_key(key);
-                self.session
-                    .insert_synthetic_entry(id, module, direct_deps.into_boxed_slice());
+                self.session.synthetics.insert(
+                    id,
+                    SyntheticEntry::new(module, direct_deps.into_boxed_slice()),
+                );
                 Ok(id)
             }
         }
@@ -436,7 +490,7 @@ where
                     return Err(crate::ParsePhdrError::MissingDynamicSection.into());
                 };
                 let id = self.intern_key(key);
-                self.session.insert_entry(id, module);
+                self.session.dynamics.insert(id, GraphEntry::new(module));
                 Ok(id)
             }
             ResolvedKey::Synthetic { key, module, deps } => {
@@ -456,8 +510,10 @@ where
                 }
 
                 let id = self.intern_key(key);
-                self.session
-                    .insert_synthetic_entry(id, module, direct_deps.into_boxed_slice());
+                self.session.synthetics.insert(
+                    id,
+                    SyntheticEntry::new(module, direct_deps.into_boxed_slice()),
+                );
                 Ok(id)
             }
         }
@@ -487,5 +543,32 @@ where
             observer,
             |ctx, resolved, loader, _| ctx.stage_resolved(resolved, loader),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::walk_breadth_first;
+    use alloc::{collections::BTreeMap, vec, vec::Vec};
+
+    #[test]
+    fn breadth_first_walk_visits_siblings_before_descendants() {
+        let graph = BTreeMap::from([
+            ("A", vec!["B", "C"]),
+            ("B", vec!["D"]),
+            ("C", Vec::new()),
+            ("D", Vec::new()),
+        ]);
+        let mut queue = vec!["A"];
+        let mut visited = Vec::new();
+
+        walk_breadth_first(&mut queue, |key, queue| {
+            visited.push(*key);
+            queue.extend(graph.get(key).into_iter().flatten().copied());
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+
+        assert_eq!(visited, vec!["A", "B", "C", "D"]);
     }
 }

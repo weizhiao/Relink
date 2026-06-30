@@ -7,7 +7,7 @@ use crate::{
     relocation::{BindingMode, RelocationArch},
     tls::TlsResolver,
 };
-use alloc::{borrow::ToOwned, boxed::Box};
+use alloc::boxed::Box;
 
 /// Common metadata needed while resolving one dependency edge.
 pub trait DependencyOwner {
@@ -234,15 +234,9 @@ pub trait VisibleModules<
     Tls: TlsResolver<Arch> = (),
 >
 {
-    /// Returns the actual visible key represented by `key`, if any.
-    ///
-    /// Implementations may use this to canonicalize aliases before the linker
-    /// records a dependency edge.
-    fn visible_key(&self, key: &Q) -> Option<K>
-    where
-        Q: ToOwned<Owned = K>,
-    {
-        self.module(key).is_some().then(|| key.to_owned())
+    /// Returns whether a module is visible by key.
+    fn contains(&self, key: &Q) -> bool {
+        self.module(key).is_some()
     }
 
     /// Returns direct dependency keys for a visible module.
@@ -269,11 +263,8 @@ where
     V: VisibleModules<K, Arch, Q, Tls> + ?Sized,
 {
     #[inline]
-    fn visible_key(&self, key: &Q) -> Option<K>
-    where
-        Q: ToOwned<Owned = K>,
-    {
-        (**self).visible_key(key)
+    fn contains(&self, key: &Q) -> bool {
+        (**self).contains(key)
     }
 
     #[inline]

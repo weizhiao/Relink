@@ -7,7 +7,6 @@ use crate::{
     tls::TlsResolver,
 };
 use alloc::{
-    borrow::ToOwned,
     boxed::Box,
     collections::{BTreeSet, VecDeque},
     vec::Vec,
@@ -135,31 +134,6 @@ where
         })
     }
 
-    /// Returns a module by key, accepting aliases from an external visible
-    /// module set before falling back to the canonical visible module.
-    #[inline]
-    pub(crate) fn visible_module_by_key<V, Q>(
-        &self,
-        visible_modules: &V,
-        key: &Q,
-    ) -> Option<ModuleHandle<Arch, Tls>>
-    where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
-    {
-        self.committed
-            .key_id(key)
-            .and_then(|id| self.visible_module(visible_modules, id))
-            .or_else(|| {
-                let key = visible_modules.visible_key(key)?;
-                self.committed
-                    .key_id::<K>(&key)
-                    .and_then(|id| self.visible_module(visible_modules, id))
-                    .or_else(|| visible_modules.module(key.borrow()))
-            })
-    }
-
     /// Returns direct dependency key ids for a committed module.
     #[inline]
     pub fn direct_deps(&self, id: ModuleId) -> Option<&[KeyId]> {
@@ -221,18 +195,10 @@ where
     }
 
     /// Adds an alternate key for an already committed module.
-    pub fn add_alias<Q>(&mut self, canonical: &Q, alias: K) -> Result<ModuleId>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        let Some(canonical_key_id) = self.committed.key_id(canonical) else {
-            return Err(LinkerError::context("canonical linked module key is unknown").into());
-        };
-        let Some(module_id) = self.committed.module_id(canonical_key_id) else {
-            return Err(LinkerError::context("canonical linked module is not committed").into());
-        };
-
+    pub fn add_alias(&mut self, module_id: ModuleId, alias: K) -> Result<()> {
+        if !self.committed.contains_module(module_id) {
+            return Err(LinkerError::context("alias target module is not committed").into());
+        }
         if self
             .committed
             .key_id::<K>(&alias)
@@ -245,7 +211,7 @@ where
         }
 
         self.committed.add_alias(module_id, alias);
-        Ok(module_id)
+        Ok(())
     }
 
     /// Removes a committed module and returns its handle, dependencies, and metadata.
@@ -336,7 +302,12 @@ where
             if self.committed.contains_key(alias) {
                 continue;
             }
-            self.add_alias(canonical, alias.clone())?;
+            let canonical_id = self
+                .committed
+                .key_id(canonical)
+                .and_then(|id| self.committed.module_id(id))
+                .expect("copied alias target must resolve to a committed module");
+            self.add_alias(canonical_id, alias.clone())?;
         }
         Ok(())
     }
@@ -403,11 +374,10 @@ mod tests {
                 2,
             )
             .expect("failed to insert canonical module");
-        let resolved = context
-            .add_alias("canonical", String::from("alias"))
+        context
+            .add_alias(canonical, String::from("alias"))
             .expect("failed to add alias");
 
-        assert_eq!(resolved, canonical);
         assert!(context.module_id(alias_id).is_some());
         assert_eq!(context.key_id("alias"), Some(alias_id));
         assert_eq!(context.module_id(alias_id), Some(canonical));
@@ -444,7 +414,7 @@ mod tests {
             )
             .expect("failed to insert canonical module");
         source
-            .add_alias(&"canonical", "alias")
+            .add_alias(canonical, "alias")
             .expect("failed to add alias");
 
         let mut target = LinkContext::<&'static str, (), usize, NativeArch>::new();

@@ -1,13 +1,8 @@
-use super::{request::DependencyOwner, storage::KeyId};
+use super::storage::KeyId;
 use crate::{
-    image::ModuleHandle, input::Path, memory::RegionAccess, relocation::RelocationArch,
-    tls::TlsResolver,
+    image::ModuleHandle, memory::RegionAccess, relocation::RelocationArch, tls::TlsResolver,
 };
-use alloc::{
-    boxed::Box,
-    collections::{BTreeMap, BTreeSet},
-    vec::Vec,
-};
+use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
 pub(crate) struct GraphEntry<P> {
     payload: P,
@@ -92,76 +87,43 @@ where
     }
 }
 
-pub(crate) enum ModulePayload<P, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
-    Dynamic(P),
-    Synthetic(ModuleHandle<Arch, Tls>),
+pub(crate) struct SyntheticEntry<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+    module: ModuleHandle<Arch, Tls>,
+    direct_deps: Box<[KeyId]>,
 }
 
-impl<P, Arch, Tls> DependencyOwner for ModulePayload<P, Arch, Tls>
+impl<Arch, Tls> SyntheticEntry<Arch, Tls>
 where
-    P: DependencyOwner,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    fn path(&self) -> &Path {
-        match self {
-            Self::Dynamic(module) => module.path(),
-            Self::Synthetic(module) => Path::new(module.name()),
+    pub(crate) fn new(module: ModuleHandle<Arch, Tls>, direct_deps: Box<[KeyId]>) -> Self {
+        Self {
+            module,
+            direct_deps,
         }
     }
 
     #[inline]
-    fn name(&self) -> &str {
-        match self {
-            Self::Dynamic(module) => module.name(),
-            Self::Synthetic(module) => module.name(),
-        }
+    pub(crate) fn module(&self) -> &ModuleHandle<Arch, Tls> {
+        &self.module
     }
 
     #[inline]
-    fn rpath(&self) -> Option<&str> {
-        match self {
-            Self::Dynamic(module) => module.rpath(),
-            Self::Synthetic(_) => None,
-        }
+    pub(crate) fn direct_deps(&self) -> &[KeyId] {
+        &self.direct_deps
     }
 
     #[inline]
-    fn runpath(&self) -> Option<&str> {
-        match self {
-            Self::Dynamic(module) => module.runpath(),
-            Self::Synthetic(_) => None,
-        }
-    }
-
-    #[inline]
-    fn interp(&self) -> Option<&str> {
-        match self {
-            Self::Dynamic(module) => module.interp(),
-            Self::Synthetic(_) => None,
-        }
-    }
-
-    #[inline]
-    fn needed_len(&self) -> usize {
-        match self {
-            Self::Dynamic(module) => module.needed_len(),
-            Self::Synthetic(_) => 0,
-        }
-    }
-
-    #[inline]
-    fn needed_lib(&self, index: usize) -> Option<&str> {
-        match self {
-            Self::Dynamic(module) => module.needed_lib(index),
-            Self::Synthetic(_) => None,
-        }
+    pub(crate) fn into_parts(self) -> (ModuleHandle<Arch, Tls>, Box<[KeyId]>) {
+        (self.module, self.direct_deps)
     }
 }
 
 pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
-    pub(crate) entries: BTreeMap<KeyId, GraphEntry<ModulePayload<P, Arch, Tls>>>,
+    pub(crate) dynamics: BTreeMap<KeyId, GraphEntry<P>>,
+    pub(crate) synthetics: BTreeMap<KeyId, SyntheticEntry<Arch, Tls>>,
     pub(crate) group_order: Vec<KeyId>,
 }
 
@@ -173,52 +135,15 @@ where
     #[inline]
     pub(crate) fn new() -> Self {
         Self {
-            entries: BTreeMap::new(),
+            dynamics: BTreeMap::new(),
+            synthetics: BTreeMap::new(),
             group_order: Vec::new(),
         }
     }
-}
-
-impl<P, Arch, Tls> ResolveSession<P, Arch, Tls>
-where
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
-{
-    #[inline]
-    pub(crate) fn contains(&self, id: KeyId) -> bool {
-        self.entries.contains_key(&id)
-    }
 
     #[inline]
-    pub(crate) fn insert_entry(&mut self, id: KeyId, payload: P) {
-        self.entries
-            .insert(id, GraphEntry::new(ModulePayload::Dynamic(payload)));
-    }
-
-    #[inline]
-    pub(crate) fn insert_synthetic_entry(
-        &mut self,
-        id: KeyId,
-        module: ModuleHandle<Arch, Tls>,
-        direct_deps: Box<[KeyId]>,
-    ) {
-        self.entries.insert(
-            id,
-            GraphEntry::with_direct_deps(ModulePayload::Synthetic(module), direct_deps),
-        );
-    }
-
-    #[inline]
-    pub(crate) fn insert_resolved_entry(
-        &mut self,
-        id: KeyId,
-        payload: P,
-        direct_deps: Box<[KeyId]>,
-    ) {
-        self.entries.insert(
-            id,
-            GraphEntry::with_direct_deps(ModulePayload::Dynamic(payload), direct_deps),
-        );
+    pub(crate) fn take_dynamics(&mut self) -> BTreeMap<KeyId, GraphEntry<P>> {
+        core::mem::take(&mut self.dynamics)
     }
 }
 
@@ -228,7 +153,7 @@ pub(crate) struct LoadSession<
     R: RegionAccess,
     Tls: TlsResolver<Arch> = (),
 > {
-    pub(crate) resolve: ResolveSession<crate::image::RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
+    resolve: ResolveSession<crate::image::RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
     ready_to_commit: BTreeMap<KeyId, ReadyCommit<D, Arch, Tls>>,
 }
 
@@ -245,6 +170,24 @@ where
             ready_to_commit: BTreeMap::new(),
         }
     }
+
+    #[inline]
+    pub(crate) fn from_resolve<P>(resolve: ResolveSession<P, Arch, Tls>) -> Self {
+        let ResolveSession {
+            dynamics,
+            synthetics,
+            group_order,
+        } = resolve;
+        debug_assert!(dynamics.is_empty());
+        Self {
+            resolve: ResolveSession {
+                dynamics: BTreeMap::new(),
+                synthetics,
+                group_order,
+            },
+            ready_to_commit: BTreeMap::new(),
+        }
+    }
 }
 
 impl<D: 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
@@ -254,13 +197,93 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
+    pub(crate) fn resolve_mut(
+        &mut self,
+    ) -> &mut ResolveSession<crate::image::RawDynamic<D, Arch, R, Tls>, Arch, Tls> {
+        &mut self.resolve
+    }
+
+    #[inline]
+    pub(crate) fn pending_is_empty(&self) -> bool {
+        self.resolve.dynamics.is_empty() && self.resolve.synthetics.is_empty()
+    }
+
+    #[inline]
+    pub(crate) fn group_order(&self) -> &[KeyId] {
+        &self.resolve.group_order
+    }
+
+    #[inline]
+    pub(crate) fn pending_len(&self) -> usize {
+        self.resolve.dynamics.len() + self.resolve.synthetics.len()
+    }
+
+    #[inline]
+    pub(crate) fn pending_dynamic_len(&self) -> usize {
+        self.resolve.dynamics.len()
+    }
+
+    #[inline]
+    pub(crate) fn is_pending_dynamic(&self, id: KeyId) -> bool {
+        self.resolve.dynamics.contains_key(&id)
+    }
+
+    #[inline]
+    pub(crate) fn pending_direct_deps(&self, id: KeyId) -> Option<&[KeyId]> {
+        if let Some(entry) = self.resolve.dynamics.get(&id) {
+            return entry.direct_deps();
+        }
+        self.resolve
+            .synthetics
+            .get(&id)
+            .map(SyntheticEntry::direct_deps)
+    }
+
+    #[inline]
+    pub(crate) fn pending_dynamic(
+        &self,
+        id: KeyId,
+    ) -> Option<&crate::image::RawDynamic<D, Arch, R, Tls>> {
+        self.resolve.dynamics.get(&id).map(GraphEntry::payload)
+    }
+
+    #[inline]
+    pub(crate) fn pending_synthetic(&self, id: KeyId) -> Option<&ModuleHandle<Arch, Tls>> {
+        self.resolve.synthetics.get(&id).map(SyntheticEntry::module)
+    }
+
+    #[inline]
+    pub(crate) fn insert_pending(
+        &mut self,
+        id: KeyId,
+        raw: crate::image::RawDynamic<D, Arch, R, Tls>,
+    ) {
+        self.resolve.dynamics.insert(id, GraphEntry::new(raw));
+    }
+
+    #[inline]
     pub(crate) fn insert_resolved_pending(
         &mut self,
         id: KeyId,
         raw: crate::image::RawDynamic<D, Arch, R, Tls>,
         direct_deps: Box<[KeyId]>,
     ) {
-        self.resolve.insert_resolved_entry(id, raw, direct_deps);
+        self.resolve
+            .dynamics
+            .insert(id, GraphEntry::with_direct_deps(raw, direct_deps));
+    }
+
+    #[inline]
+    pub(crate) fn take_pending_dynamic(
+        &mut self,
+        id: KeyId,
+    ) -> Option<GraphEntry<crate::image::RawDynamic<D, Arch, R, Tls>>> {
+        self.resolve.dynamics.remove(&id)
+    }
+
+    #[inline]
+    pub(crate) fn take_pending_synthetics(&mut self) -> BTreeMap<KeyId, SyntheticEntry<Arch, Tls>> {
+        core::mem::take(&mut self.resolve.synthetics)
     }
 
     #[inline]
@@ -277,74 +300,5 @@ where
     #[inline]
     pub(crate) fn take_ready_to_commit(&mut self) -> BTreeMap<KeyId, ReadyCommit<D, Arch, Tls>> {
         core::mem::take(&mut self.ready_to_commit)
-    }
-}
-
-pub(crate) fn walk_breadth_first<K, E, F>(
-    queue: &mut Vec<K>,
-    mut visit: F,
-) -> core::result::Result<(), E>
-where
-    K: Clone,
-    F: FnMut(&K, &mut Vec<K>) -> core::result::Result<(), E>,
-{
-    let mut cursor = 0;
-
-    while cursor < queue.len() {
-        let key = queue[cursor].clone();
-        cursor += 1;
-        visit(&key, queue)?;
-    }
-
-    Ok(())
-}
-
-pub(crate) fn extend_breadth_first<K, E, F>(
-    group_order: &mut Vec<K>,
-    root: K,
-    mut direct_deps: F,
-) -> core::result::Result<(), E>
-where
-    K: Clone + Ord,
-    F: FnMut(&K) -> core::result::Result<Vec<K>, E>,
-{
-    let mut visited = BTreeSet::new();
-    visited.insert(root.clone());
-    group_order.push(root);
-
-    walk_breadth_first(group_order, |key, queue| {
-        for dep_key in direct_deps(key)? {
-            if visited.insert(dep_key.clone()) {
-                queue.push(dep_key);
-            }
-        }
-        Ok(())
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::walk_breadth_first;
-    use alloc::{collections::BTreeMap, vec, vec::Vec};
-
-    #[test]
-    fn breadth_first_walk_visits_siblings_before_descendants() {
-        let graph = BTreeMap::from([
-            ("A", vec!["B", "C"]),
-            ("B", vec!["D"]),
-            ("C", Vec::new()),
-            ("D", Vec::new()),
-        ]);
-        let mut queue = vec!["A"];
-        let mut visited = Vec::new();
-
-        walk_breadth_first(&mut queue, |key, queue| {
-            visited.push(*key);
-            queue.extend(graph.get(key).into_iter().flatten().copied());
-            Ok::<_, ()>(())
-        })
-        .unwrap();
-
-        assert_eq!(visited, vec!["A", "B", "C", "D"]);
     }
 }
