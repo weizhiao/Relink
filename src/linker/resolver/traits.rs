@@ -20,14 +20,14 @@ pub enum ResolvedKey<'cfg, K, Arch: RelocationArch = NativeArch, Tls: TlsResolve
         /// Reader used to load the resolved ELF image.
         reader: Box<dyn ElfReader + 'cfg>,
     },
-    /// Provides a synthetic module and any dependencies it should place after
+    /// Provides a module handle and any dependencies it should place after
     /// itself in the resolved dependency graph.
-    Synthetic {
-        /// Canonical key that should identify the synthetic module.
+    Module {
+        /// Canonical key that should identify the module.
         key: K,
-        /// Synthetic or externally retained module exposed for symbol lookup.
+        /// Module exposed for symbol lookup.
         module: ModuleHandle<Arch, Tls>,
-        /// Dependencies resolved as part of this synthetic graph fragment.
+        /// Dependencies resolved as part of this graph fragment.
         deps: Vec<ResolvedKey<'cfg, K, Arch, Tls>>,
     },
 }
@@ -48,14 +48,14 @@ impl<'cfg, K, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedKey<'cfg, K,
         }
     }
 
-    /// Creates a result backed by a synthetic module.
+    /// Creates a result backed by a provided module handle.
     #[inline]
-    pub fn synthetic(
+    pub fn module(
         key: K,
         module: impl Into<ModuleHandle<Arch, Tls>>,
         deps: impl Into<Vec<ResolvedKey<'cfg, K, Arch, Tls>>>,
     ) -> Self {
-        Self::Synthetic {
+        Self::Module {
             key,
             module: module.into(),
             deps: deps.into(),

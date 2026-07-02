@@ -778,7 +778,7 @@ where
                 session.push_ready(id, loaded, direct_deps);
             }
 
-            for (id, entry) in session.take_pending_synthetics() {
+            for (id, entry) in session.take_pending_module_handles() {
                 let (module, direct_deps) = entry.into_parts();
                 session.push_ready(id, module, direct_deps);
             }
@@ -843,7 +843,7 @@ where
                 if let Some(raw) = session.pending_dynamic(*id) {
                     let module = unsafe { LoadedCore::from_core(raw.core()) };
                     ModuleHandle::from(module)
-                } else if let Some(module) = session.pending_synthetic(*id) {
+                } else if let Some(module) = session.pending_module_handle(*id) {
                     module.clone()
                 } else {
                     context

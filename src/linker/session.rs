@@ -84,12 +84,12 @@ where
     }
 }
 
-pub(crate) struct SyntheticEntry<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+pub(crate) struct ModuleEntry<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[KeyId]>,
 }
 
-impl<Arch, Tls> SyntheticEntry<Arch, Tls>
+impl<Arch, Tls> ModuleEntry<Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -120,7 +120,7 @@ where
 
 pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     pub(crate) dynamics: BTreeMap<KeyId, GraphEntry<P>>,
-    pub(crate) synthetics: BTreeMap<KeyId, SyntheticEntry<Arch, Tls>>,
+    pub(crate) module_handles: BTreeMap<KeyId, ModuleEntry<Arch, Tls>>,
     pub(crate) group_order: Vec<KeyId>,
 }
 
@@ -133,9 +133,14 @@ where
     pub(crate) fn new() -> Self {
         Self {
             dynamics: BTreeMap::new(),
-            synthetics: BTreeMap::new(),
+            module_handles: BTreeMap::new(),
             group_order: Vec::new(),
         }
+    }
+
+    #[inline]
+    pub(crate) fn contains_pending(&self, id: KeyId) -> bool {
+        self.dynamics.contains_key(&id) || self.module_handles.contains_key(&id)
     }
 
     #[inline]
@@ -172,14 +177,14 @@ where
     pub(crate) fn from_resolve<P>(resolve: ResolveSession<P, Arch, Tls>) -> Self {
         let ResolveSession {
             dynamics,
-            synthetics,
+            module_handles,
             group_order,
         } = resolve;
         debug_assert!(dynamics.is_empty());
         Self {
             resolve: ResolveSession {
                 dynamics: BTreeMap::new(),
-                synthetics,
+                module_handles,
                 group_order,
             },
             ready_to_commit: BTreeMap::new(),
@@ -202,7 +207,7 @@ where
 
     #[inline]
     pub(crate) fn pending_is_empty(&self) -> bool {
-        self.resolve.dynamics.is_empty() && self.resolve.synthetics.is_empty()
+        self.resolve.dynamics.is_empty() && self.resolve.module_handles.is_empty()
     }
 
     #[inline]
@@ -212,7 +217,7 @@ where
 
     #[inline]
     pub(crate) fn pending_len(&self) -> usize {
-        self.resolve.dynamics.len() + self.resolve.synthetics.len()
+        self.resolve.dynamics.len() + self.resolve.module_handles.len()
     }
 
     #[inline]
@@ -231,9 +236,9 @@ where
             return entry.direct_deps();
         }
         self.resolve
-            .synthetics
+            .module_handles
             .get(&id)
-            .map(SyntheticEntry::direct_deps)
+            .map(ModuleEntry::direct_deps)
     }
 
     #[inline]
@@ -245,8 +250,11 @@ where
     }
 
     #[inline]
-    pub(crate) fn pending_synthetic(&self, id: KeyId) -> Option<&ModuleHandle<Arch, Tls>> {
-        self.resolve.synthetics.get(&id).map(SyntheticEntry::module)
+    pub(crate) fn pending_module_handle(&self, id: KeyId) -> Option<&ModuleHandle<Arch, Tls>> {
+        self.resolve
+            .module_handles
+            .get(&id)
+            .map(ModuleEntry::module)
     }
 
     #[inline]
@@ -279,8 +287,10 @@ where
     }
 
     #[inline]
-    pub(crate) fn take_pending_synthetics(&mut self) -> BTreeMap<KeyId, SyntheticEntry<Arch, Tls>> {
-        core::mem::take(&mut self.resolve.synthetics)
+    pub(crate) fn take_pending_module_handles(
+        &mut self,
+    ) -> BTreeMap<KeyId, ModuleEntry<Arch, Tls>> {
+        core::mem::take(&mut self.resolve.module_handles)
     }
 
     #[inline]

@@ -426,7 +426,7 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
     fn resolve_key(
         &self,
         request: CandidateRequest<'_>,
-        visible_key: &dyn Fn(&LinkKey) -> Option<LinkKey>,
+        contains_key: &dyn Fn(&LinkKey) -> bool,
     ) -> Result<Option<ResolvedCandidate<LinkKey>>>
     where
         Rule: KeyRule<LinkKey>,
@@ -434,8 +434,8 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
     {
         let try_candidate = |candidate: &Path| -> Result<Option<ResolvedCandidate<LinkKey>>> {
             let key = Rule::key_for_candidate(candidate);
-            if let Some(existing) = visible_key(&key) {
-                return Ok(Some(ResolvedCandidate::Existing(existing)));
+            if contains_key(&key) {
+                return Ok(Some(ResolvedCandidate::Existing(key)));
             }
 
             let Some(file) = Self::open_elf(candidate)? else {
@@ -483,19 +483,6 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
         Ok(None)
     }
 
-    #[inline]
-    fn resolved_key<'cfg, Arch: RelocationArch, Tls: TlsResolver<Arch>>(
-        key: LinkKey,
-        file: ElfFile,
-        visible_key: Option<LinkKey>,
-    ) -> ResolvedKey<'cfg, LinkKey, Arch, Tls> {
-        if let Some(key) = visible_key {
-            ResolvedKey::existing(key)
-        } else {
-            ResolvedKey::load(key, file)
-        }
-    }
-
     /// Open `path` if it exists, returning `Ok(None)` for ordinary open
     /// failures and propagating parse/read errors for files that were found.
     fn open_elf(path: &Path) -> Result<Option<ElfFile>> {
@@ -532,16 +519,13 @@ where
         &mut self,
         req: &RootRequest<'_, LinkKey>,
     ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>> {
-        let visible_key = |key: &LinkKey| req.visible_key(key);
+        let contains_key = |key: &LinkKey| req.contains_key(key);
         if let Some(resolved) =
-            self.resolve_key(CandidateRequest::root(req.key().as_ref()), &visible_key)?
+            self.resolve_key(CandidateRequest::root(req.key().as_ref()), &contains_key)?
         {
             return Ok(match resolved {
                 ResolvedCandidate::Existing(key) => ResolvedKey::existing(key),
-                ResolvedCandidate::Load { key, file } => {
-                    let visible_key = req.visible_key(&key);
-                    Self::resolved_key(key, file, visible_key)
-                }
+                ResolvedCandidate::Load { key, file } => ResolvedKey::load(key, file),
             });
         }
 
@@ -561,14 +545,11 @@ where
             req.runpath(),
             req.rpath(),
         );
-        let visible_key = |key: &LinkKey| req.visible_key(key);
-        if let Some(resolved) = self.resolve_key(request, &visible_key)? {
+        let contains_key = |key: &LinkKey| req.contains_key(key);
+        if let Some(resolved) = self.resolve_key(request, &contains_key)? {
             return Ok(match resolved {
                 ResolvedCandidate::Existing(key) => ResolvedKey::existing(key),
-                ResolvedCandidate::Load { key, file } => {
-                    let visible_key = req.visible_key(&key);
-                    Self::resolved_key(key, file, visible_key)
-                }
+                ResolvedCandidate::Load { key, file } => ResolvedKey::load(key, file),
             });
         }
 

@@ -106,13 +106,13 @@ impl<Arch: RelocationArch> DependencyOwner for ScannedDynamic<Arch> {
 /// A root module resolution request.
 pub struct RootRequest<'a, K: Clone, Q: ?Sized = K> {
     key: &'a K,
-    visible_key: &'a dyn Fn(&Q) -> Option<K>,
+    contains_key: &'a dyn Fn(&Q) -> bool,
 }
 
 impl<'a, K: Clone, Q: ?Sized> RootRequest<'a, K, Q> {
     #[inline]
-    pub(crate) fn new(key: &'a K, visible_key: &'a dyn Fn(&Q) -> Option<K>) -> Self {
-        Self { key, visible_key }
+    pub(crate) fn new(key: &'a K, contains_key: &'a dyn Fn(&Q) -> bool) -> Self {
+        Self { key, contains_key }
     }
 
     /// Returns the root key requested by the caller.
@@ -121,10 +121,10 @@ impl<'a, K: Clone, Q: ?Sized> RootRequest<'a, K, Q> {
         self.key
     }
 
-    /// Returns the actual key to reuse when `key` names a visible module.
+    /// Returns whether `key` names a module reusable by this request.
     #[inline]
-    pub fn visible_key(&self, key: &Q) -> Option<K> {
-        (self.visible_key)(key)
+    pub fn contains_key(&self, key: &Q) -> bool {
+        (self.contains_key)(key)
     }
 }
 
@@ -133,7 +133,7 @@ pub struct DependencyRequest<'a, K: Clone, Q: ?Sized = K> {
     owner_key: &'a K,
     owner: &'a dyn DependencyOwner,
     needed_index: usize,
-    visible_key: &'a dyn Fn(&Q) -> Option<K>,
+    contains_key: &'a dyn Fn(&Q) -> bool,
 }
 
 impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
@@ -142,13 +142,13 @@ impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
         owner_key: &'a K,
         owner: &'a dyn DependencyOwner,
         needed_index: usize,
-        visible_key: &'a dyn Fn(&Q) -> Option<K>,
+        contains_key: &'a dyn Fn(&Q) -> bool,
     ) -> Self {
         Self {
             owner_key,
             owner,
             needed_index,
-            visible_key,
+            contains_key,
         }
     }
 
@@ -208,10 +208,10 @@ impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
         self.owner.interp()
     }
 
-    /// Returns the actual key to reuse when `key` names a visible module.
+    /// Returns whether `key` names a module reusable by this request.
     #[inline]
-    pub fn visible_key(&self, key: &Q) -> Option<K> {
-        (self.visible_key)(key)
+    pub fn contains_key(&self, key: &Q) -> bool {
+        (self.contains_key)(key)
     }
 
     /// Creates the standard unresolved-dependency error for this edge.
@@ -290,7 +290,6 @@ pub struct RelocationRequest<
     key: &'a K,
     raw: RawDynamic<D, Arch, R, Tls>,
     scope: &'a ModuleScope<Arch, Tls>,
-    _marker: core::marker::PhantomData<fn() -> D>,
 }
 
 impl<'a, K, D: 'static, Arch, R, Tls> RelocationRequest<'a, K, D, Arch, R, Tls>
@@ -305,12 +304,7 @@ where
         raw: RawDynamic<D, Arch, R, Tls>,
         scope: &'a ModuleScope<Arch, Tls>,
     ) -> Self {
-        Self {
-            key,
-            raw,
-            scope,
-            _marker: core::marker::PhantomData,
-        }
+        Self { key, raw, scope }
     }
 
     /// Returns the key of the module being relocated.

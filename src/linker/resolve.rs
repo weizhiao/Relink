@@ -1,7 +1,7 @@
 use super::{
     request::{DependencyOwner, DependencyRequest, RootRequest, VisibleModules},
     resolver::{KeyResolver, ResolvedKey},
-    session::{GraphEntry, ResolveSession, SyntheticEntry},
+    session::{GraphEntry, ModuleEntry, ResolveSession},
     storage::{CommittedStorage, KeyId},
 };
 use crate::{
@@ -120,42 +120,18 @@ where
 {
     #[inline]
     pub(crate) fn contains_pending(&self, id: KeyId) -> bool {
-        self.session.dynamics.contains_key(&id) || self.session.synthetics.contains_key(&id)
-    }
-
-    /// Returns the canonical key reusable in this resolve graph.
-    ///
-    /// This is only a lookup. Callers that need to store a dependency edge must
-    /// intern the returned key themselves.
-    #[inline]
-    fn reusable_key<Q>(&self, key: &Q) -> Option<K>
-    where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
-    {
-        if let Some(id) = self.committed.key_id(key)
-            && ((self.session.dynamics.contains_key(&id)
-                || self.session.synthetics.contains_key(&id))
-                || self.committed.contains(id))
-        {
-            return self.committed.key(id).cloned();
-        }
-
-        self.visible_modules.contains(key).then(|| key.to_owned())
+        self.session.contains_pending(id)
     }
 
     #[inline]
-    fn contains_reusable_key<Q>(&self, key: &Q) -> bool
+    fn contains_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
         if let Some(id) = self.committed.key_id(key)
-            && ((self.session.dynamics.contains_key(&id)
-                || self.session.synthetics.contains_key(&id))
-                || self.committed.contains(id))
+            && (self.session.contains_pending(id) || self.committed.contains(id))
         {
             return true;
         }
@@ -180,7 +156,7 @@ where
         if let Some(entry) = self.session.dynamics.get(&id) {
             return entry.direct_deps().map(<[KeyId]>::to_vec);
         }
-        if let Some(entry) = self.session.synthetics.get(&id) {
+        if let Some(entry) = self.session.module_handles.get(&id) {
             return Some(entry.direct_deps().to_vec());
         }
 
@@ -228,16 +204,14 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        let visible_key = |key: &Q| self.reusable_key(key);
-        let req: DependencyRequest<'_, K, Q> = {
-            let owner = self.owner(id).ok_or_else(|| {
-                LinkerError::resolver("dependency owner is missing while building request")
-            })?;
-            let owner_key = self
-                .key(id)
-                .expect("dependency owner id must resolve to an interned key");
-            DependencyRequest::new(owner_key, owner, needed_index, &visible_key)
-        };
+        let contains_key = |key: &Q| self.contains_key(key);
+        let owner = self.owner(id).ok_or_else(|| {
+            LinkerError::resolver("dependency owner is missing while building request")
+        })?;
+        let owner_key = self
+            .key(id)
+            .expect("dependency owner id must resolve to an interned key");
+        let req = DependencyRequest::new(owner_key, owner, needed_index, &contains_key);
         resolver.resolve_dependency(&req)
     }
 
@@ -251,8 +225,8 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        let visible_key = |key: &Q| self.reusable_key(key);
-        let req = RootRequest::new(key, &visible_key);
+        let contains_key = |key: &Q| self.contains_key(key);
+        let req = RootRequest::new(key, &contains_key);
         resolver.load_root(&req)
     }
 
@@ -351,7 +325,7 @@ where
     {
         match resolved {
             ResolvedKey::Existing(key) => {
-                if let Some(key) = self.reusable_key(key.borrow()) {
+                if self.contains_key(key.borrow()) {
                     return Ok(self.intern_key(key));
                 }
                 Err(LinkerError::resolver(
@@ -360,7 +334,7 @@ where
                 .into())
             }
             ResolvedKey::Load { key, reader } => {
-                if self.contains_reusable_key(key.borrow()) {
+                if self.contains_key(key.borrow()) {
                     return Err(LinkerError::resolver(
                         "resolved reader produced an already-known key; use Existing to reuse it",
                     )
@@ -371,10 +345,10 @@ where
                 self.session.dynamics.insert(id, GraphEntry::new(raw));
                 Ok(id)
             }
-            ResolvedKey::Synthetic { key, module, deps } => {
-                if self.contains_reusable_key(key.borrow()) {
+            ResolvedKey::Module { key, module, deps } => {
+                if self.contains_key(key.borrow()) {
                     return Err(LinkerError::resolver(
-                        "resolved synthetic module produced an already-known key",
+                        "resolved module handle produced an already-known key",
                     )
                     .into());
                 }
@@ -388,10 +362,9 @@ where
                 }
 
                 let id = self.intern_key(key);
-                self.session.synthetics.insert(
-                    id,
-                    SyntheticEntry::new(module, direct_deps.into_boxed_slice()),
-                );
+                self.session
+                    .module_handles
+                    .insert(id, ModuleEntry::new(module, direct_deps.into_boxed_slice()));
                 Ok(id)
             }
         }
@@ -441,13 +414,13 @@ where
     {
         match resolved {
             ResolvedKey::Existing(key) => {
-                if let Some(key) = self.reusable_key(key.borrow()) {
+                if self.contains_key(key.borrow()) {
                     return Ok(self.intern_key(key));
                 }
                 Err(LinkerError::resolver("scan resolver referenced an unknown visible key").into())
             }
             ResolvedKey::Load { key, reader } => {
-                if self.contains_reusable_key(key.borrow()) {
+                if self.contains_key(key.borrow()) {
                     return Err(LinkerError::resolver(
                         "scan resolver attached metadata to an already-known key; use Existing to reuse it",
                     )
@@ -460,10 +433,10 @@ where
                 self.session.dynamics.insert(id, GraphEntry::new(module));
                 Ok(id)
             }
-            ResolvedKey::Synthetic { key, module, deps } => {
-                if self.contains_reusable_key(key.borrow()) {
+            ResolvedKey::Module { key, module, deps } => {
+                if self.contains_key(key.borrow()) {
                     return Err(LinkerError::resolver(
-                        "scan resolver produced an already-known synthetic key",
+                        "scan resolver produced an already-known module key",
                     )
                     .into());
                 }
@@ -477,10 +450,9 @@ where
                 }
 
                 let id = self.intern_key(key);
-                self.session.synthetics.insert(
-                    id,
-                    SyntheticEntry::new(module, direct_deps.into_boxed_slice()),
-                );
+                self.session
+                    .module_handles
+                    .insert(id, ModuleEntry::new(module, direct_deps.into_boxed_slice()));
                 Ok(id)
             }
         }
