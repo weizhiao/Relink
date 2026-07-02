@@ -47,13 +47,12 @@ impl<P> GraphEntry<P> {
     }
 }
 
-pub(crate) struct ReadyCommit<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+pub(crate) struct ReadyCommit<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[KeyId]>,
-    _marker: core::marker::PhantomData<fn() -> D>,
 }
 
-impl<D: 'static, Arch, Tls> Clone for ReadyCommit<D, Arch, Tls>
+impl<Arch, Tls> Clone for ReadyCommit<Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -62,12 +61,11 @@ where
         Self {
             module: self.module.clone(),
             direct_deps: self.direct_deps.clone(),
-            _marker: core::marker::PhantomData,
         }
     }
 }
 
-impl<D: 'static, Arch, Tls> ReadyCommit<D, Arch, Tls>
+impl<Arch, Tls> ReadyCommit<Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -77,7 +75,6 @@ where
         Self {
             module,
             direct_deps,
-            _marker: core::marker::PhantomData,
         }
     }
 
@@ -154,7 +151,7 @@ pub(crate) struct LoadSession<
     Tls: TlsResolver<Arch> = (),
 > {
     resolve: ResolveSession<crate::image::RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
-    ready_to_commit: BTreeMap<KeyId, ReadyCommit<D, Arch, Tls>>,
+    ready_to_commit: BTreeMap<KeyId, ReadyCommit<Arch, Tls>>,
 }
 
 impl<D: 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
@@ -298,7 +295,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn take_ready_to_commit(&mut self) -> BTreeMap<KeyId, ReadyCommit<D, Arch, Tls>> {
+    pub(crate) fn take_ready_to_commit(&mut self) -> BTreeMap<KeyId, ReadyCommit<Arch, Tls>> {
         core::mem::take(&mut self.ready_to_commit)
     }
 }

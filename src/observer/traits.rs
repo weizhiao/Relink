@@ -1,6 +1,6 @@
 use super::{
     AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, InitEvent,
-    ResolveDependencyEvent, ResolveRootEvent, StagedDynamic, SymbolBindingEvent,
+    SymbolBindingEvent,
 };
 #[cfg(feature = "object")]
 use super::{
@@ -115,35 +115,6 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
         Ok(())
     }
 }
-
-/// Event hook for linker-level dependency and staging events.
-pub trait LinkObserver<Arch: RelocationArch = NativeArch> {
-    /// Called before the root key is passed to the configured resolver.
-    #[inline]
-    fn on_resolve_root<K: Clone>(&mut self, _event: ResolveRootEvent<'_, K>) -> Result<()> {
-        Ok(())
-    }
-
-    /// Called before one `DT_NEEDED` edge is passed to the configured resolver.
-    #[inline]
-    fn on_resolve_dependency<K: Clone>(
-        &mut self,
-        _event: ResolveDependencyEvent<'_, K>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Called when a dynamic image has been mapped and staged into the link session.
-    #[inline]
-    fn on_staged_dynamic<K, D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        _event: StagedDynamic<'_, K, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl<Arch: RelocationArch> LinkObserver<Arch> for () {}
 
 impl<D: 'static, Arch: RelocationArch> LoadObserver<D, Arch> for () {}
 
@@ -291,60 +262,6 @@ where
         event: AfterDynamicLoadEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_after_dynamic_load(event)
-    }
-}
-
-impl<Arch, O> LinkObserver<Arch> for &mut O
-where
-    Arch: RelocationArch,
-    O: LinkObserver<Arch> + ?Sized,
-{
-    #[inline]
-    fn on_resolve_root<K: Clone>(&mut self, event: ResolveRootEvent<'_, K>) -> Result<()> {
-        (**self).on_resolve_root(event)
-    }
-
-    #[inline]
-    fn on_resolve_dependency<K: Clone>(
-        &mut self,
-        event: ResolveDependencyEvent<'_, K>,
-    ) -> Result<()> {
-        (**self).on_resolve_dependency(event)
-    }
-
-    #[inline]
-    fn on_staged_dynamic<K, D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: StagedDynamic<'_, K, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        (**self).on_staged_dynamic(event)
-    }
-}
-
-impl<Arch, O> LinkObserver<Arch> for Box<O>
-where
-    Arch: RelocationArch,
-    O: LinkObserver<Arch> + ?Sized,
-{
-    #[inline]
-    fn on_resolve_root<K: Clone>(&mut self, event: ResolveRootEvent<'_, K>) -> Result<()> {
-        (**self).on_resolve_root(event)
-    }
-
-    #[inline]
-    fn on_resolve_dependency<K: Clone>(
-        &mut self,
-        event: ResolveDependencyEvent<'_, K>,
-    ) -> Result<()> {
-        (**self).on_resolve_dependency(event)
-    }
-
-    #[inline]
-    fn on_staged_dynamic<K, D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: StagedDynamic<'_, K, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        (**self).on_staged_dynamic(event)
     }
 }
 

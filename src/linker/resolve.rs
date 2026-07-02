@@ -8,9 +8,7 @@ use crate::{
     LinkerError, Loader, Result,
     image::{RawDynamic, ScannedDynamic, ScannedElf},
     memory::RegionAccess,
-    observer::{
-        LinkObserver, LoadObserver, ResolveDependencyEvent, ResolveRootEvent, StagedDynamic,
-    },
+    observer::LoadObserver,
     os::Mmap,
     relocation::RelocationArch,
     tls::TlsResolver,
@@ -219,18 +217,16 @@ where
         entry.set_direct_deps(direct_deps);
     }
 
-    fn resolve_dependency_edge<'cfg, O, Q>(
+    fn resolve_dependency_edge<'cfg, Q>(
         &self,
         id: KeyId,
         needed_index: usize,
         resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
-        observer: &mut O,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         V: VisibleModules<K, Arch, Q, Tls>,
-        O: LinkObserver<Arch>,
     {
         let visible_key = |key: &Q| self.reusable_key(key);
         let req: DependencyRequest<'_, K, Q> = {
@@ -242,44 +238,29 @@ where
                 .expect("dependency owner id must resolve to an interned key");
             DependencyRequest::new(owner_key, owner, needed_index, &visible_key)
         };
-
-        observer.on_resolve_dependency(ResolveDependencyEvent::new(
-            req.owner_key(),
-            req.owner_name(),
-            req.owner_path(),
-            req.needed(),
-            req.needed_index(),
-            req.rpath(),
-            req.runpath(),
-            req.interp(),
-        ))?;
         resolver.resolve_dependency(&req)
     }
 
-    pub(crate) fn resolve_root<'cfg, O, Q>(
+    pub(crate) fn resolve_root<'cfg, Q>(
         &self,
         key: &K,
         resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
-        observer: &mut O,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         V: VisibleModules<K, Arch, Q, Tls>,
-        O: LinkObserver<Arch>,
     {
         let visible_key = |key: &Q| self.reusable_key(key);
         let req = RootRequest::new(key, &visible_key);
-        observer.on_resolve_root(ResolveRootEvent::new(key))?;
         resolver.load_root(&req)
     }
 
-    fn direct_deps_for<'cfg, Obs, O, F, M, Q>(
+    fn direct_deps_for<'cfg, Obs, F, M, Q>(
         &mut self,
         id: KeyId,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
-        observer: &mut O,
         stage: &mut F,
     ) -> Result<Vec<KeyId>>
     where
@@ -289,12 +270,10 @@ where
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
-        O: LinkObserver<Arch>,
         F: FnMut(
             &mut Self,
             ResolvedKey<'cfg, K, Arch, Tls>,
             &mut Loader<Obs, D, Tls, Arch, M>,
-            &mut O,
         ) -> Result<KeyId>,
     {
         if let Some(direct_deps) = self.known_direct_deps(id) {
@@ -309,8 +288,8 @@ where
             .needed_len();
         let mut direct_deps = Vec::with_capacity(needed_len);
         for idx in 0..needed_len {
-            let resolved_key = self.resolve_dependency_edge(id, idx, resolver, observer)?;
-            let dep_id = stage(self, resolved_key, loader, observer)?;
+            let resolved_key = self.resolve_dependency_edge(id, idx, resolver)?;
+            let dep_id = stage(self, resolved_key, loader)?;
             if !direct_deps.contains(&dep_id) {
                 direct_deps.push(dep_id);
             }
@@ -319,12 +298,11 @@ where
         Ok(direct_deps)
     }
 
-    fn resolve_dependency_graph_with<'cfg, Obs, O, F, M, Q>(
+    fn resolve_dependency_graph_with<'cfg, Obs, F, M, Q>(
         &mut self,
         root: KeyId,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
-        observer: &mut O,
         mut stage: F,
     ) -> Result<()>
     where
@@ -334,17 +312,15 @@ where
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
-        O: LinkObserver<Arch>,
         F: FnMut(
             &mut Self,
             ResolvedKey<'cfg, K, Arch, Tls>,
             &mut Loader<Obs, D, Tls, Arch, M>,
-            &mut O,
         ) -> Result<KeyId>,
     {
         let mut group_order = Vec::new();
         extend_breadth_first(&mut group_order, root, |key| {
-            self.direct_deps_for(*key, loader, resolver, observer, &mut stage)
+            self.direct_deps_for(*key, loader, resolver, &mut stage)
         })?;
         self.session.group_order = group_order;
         Ok(())
@@ -359,11 +335,10 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn stage_resolved<'cfg, Obs, O, M, Q>(
+    pub(crate) fn stage_resolved<'cfg, Obs, M, Q>(
         &mut self,
         resolved: ResolvedKey<'cfg, K, Arch, Tls>,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
-        observer: &mut O,
     ) -> Result<KeyId>
     where
         K: 'cfg + Borrow<Q>,
@@ -373,7 +348,6 @@ where
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
-        O: LinkObserver<Arch>,
     {
         match resolved {
             ResolvedKey::Existing(key) => {
@@ -393,7 +367,6 @@ where
                     .into());
                 }
                 let raw = loader.load_dynamic(reader)?;
-                observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
                 let id = self.intern_key(key);
                 self.session.dynamics.insert(id, GraphEntry::new(raw));
                 Ok(id)
@@ -408,7 +381,7 @@ where
 
                 let mut direct_deps = Vec::with_capacity(deps.len());
                 for dep in deps {
-                    let dep_id = self.stage_resolved(dep, loader, observer)?;
+                    let dep_id = self.stage_resolved(dep, loader)?;
                     if !direct_deps.contains(&dep_id) {
                         direct_deps.push(dep_id);
                     }
@@ -424,12 +397,11 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<'cfg, Obs, O, M, Q>(
+    pub(crate) fn resolve_dependency_graph<'cfg, Obs, M, Q>(
         &mut self,
         root: KeyId,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
-        observer: &mut O,
     ) -> Result<()>
     where
         K: 'cfg + Borrow<Q>,
@@ -439,15 +411,10 @@ where
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
-        O: LinkObserver<Arch>,
     {
-        self.resolve_dependency_graph_with(
-            root,
-            loader,
-            resolver,
-            observer,
-            |ctx, resolved, loader, observer| ctx.stage_resolved(resolved, loader, observer),
-        )
+        self.resolve_dependency_graph_with(root, loader, resolver, |ctx, resolved, loader| {
+            ctx.stage_resolved(resolved, loader)
+        })
     }
 }
 
@@ -519,12 +486,11 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<Obs, O, M, Q>(
+    pub(crate) fn resolve_dependency_graph<Obs, M, Q>(
         &mut self,
         root: KeyId,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
         resolver: &mut impl KeyResolver<'static, K, Arch, Q, Tls>,
-        observer: &mut O,
     ) -> Result<()>
     where
         K: 'static + Borrow<Q>,
@@ -534,15 +500,10 @@ where
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
-        O: LinkObserver<Arch>,
     {
-        self.resolve_dependency_graph_with(
-            root,
-            loader,
-            resolver,
-            observer,
-            |ctx, resolved, loader, _| ctx.stage_resolved(resolved, loader),
-        )
+        self.resolve_dependency_graph_with(root, loader, resolver, |ctx, resolved, loader| {
+            ctx.stage_resolved(resolved, loader)
+        })
     }
 }
 

@@ -17,7 +17,6 @@ pub mod scan;
 mod session;
 mod storage;
 
-pub use crate::observer::StagedDynamic;
 pub use context::LinkContext;
 pub use driver::{Linker, LoadResult};
 pub use request::{

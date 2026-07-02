@@ -16,7 +16,7 @@ use crate::{
         LoadedCore, ModuleHandle, ModuleScope, ModuleScopeBuilder, RawDynamic, ScannedDynamic,
     },
     memory::{ImageMemory, RegionAccess, VmOffset},
-    observer::{LinkObserver, LoadObserver, RelocationObserver, StagedDynamic},
+    observer::{LoadObserver, RelocationObserver},
     os::Mmap,
     relocation::{RelocationArch, RelocationHandler, Relocator},
     tls::TlsResolver,
@@ -151,7 +151,6 @@ pub struct Linker<
     PostH = (),
     RelocObs = (),
     P = DefaultRelocationPlanner,
-    O = (),
     V = (),
     Tls: TlsResolver<Arch> = (),
     Stage = Stage0,
@@ -161,7 +160,6 @@ pub struct Linker<
     pipeline: LinkPipeline<'a, K, Arch, Tls>,
     relocator: Relocator<(), PreH, PostH, Arch, RelocObs, Tls>,
     planner: P,
-    observer: O,
     visible_modules: V,
     scratch_relocation_order: Vec<KeyId>,
     stage: PhantomData<Stage>,
@@ -180,7 +178,6 @@ where
             pipeline: LinkPipeline::new(),
             relocator: Relocator::new(),
             planner: DefaultRelocationPlanner,
-            observer: (),
             visible_modules: (),
             scratch_relocation_order: Vec::new(),
             stage: PhantomData,
@@ -207,7 +204,6 @@ where
         (),
         DefaultRelocationPlanner,
         (),
-        (),
     >
     where
         NewArch: RelocationArch,
@@ -218,7 +214,6 @@ where
             pipeline: LinkPipeline::new(),
             relocator: self.relocator.for_arch::<NewArch>(),
             planner: DefaultRelocationPlanner,
-            observer: (),
             visible_modules: (),
             scratch_relocation_order: Vec::new(),
             stage: PhantomData,
@@ -236,8 +231,8 @@ where
     }
 }
 
-impl<'a, K, L, R, PreH, PostH, RelocObs, P, O, V, Arch, Tls, Stage>
-    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, V, Tls, Stage>
+impl<'a, K, L, R, PreH, PostH, RelocObs, P, V, Arch, Tls, Stage>
+    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, V, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -247,14 +242,13 @@ where
     pub fn resolver<NewR>(
         self,
         resolver: NewR,
-    ) -> Linker<'a, K, Arch, L, NewR, PreH, PostH, RelocObs, P, O, V, Tls, Stage> {
+    ) -> Linker<'a, K, Arch, L, NewR, PreH, PostH, RelocObs, P, V, Tls, Stage> {
         Linker {
             loader: self.loader,
             resolver,
             pipeline: self.pipeline,
             relocator: self.relocator,
             planner: self.planner,
-            observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
             stage: self.stage,
@@ -265,32 +259,13 @@ where
     pub fn planner<NewP>(
         self,
         planner: NewP,
-    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, NewP, O, V, Tls, Stage> {
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, NewP, V, Tls, Stage> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
             pipeline: self.pipeline,
             relocator: self.relocator,
             planner,
-            observer: self.observer,
-            visible_modules: self.visible_modules,
-            scratch_relocation_order: self.scratch_relocation_order,
-            stage: self.stage,
-        }
-    }
-
-    /// Sets the observer used for linker-level dependency and staging events.
-    pub fn observer<NewO>(
-        self,
-        observer: NewO,
-    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, NewO, V, Tls, Stage> {
-        Linker {
-            loader: self.loader,
-            resolver: self.resolver,
-            pipeline: self.pipeline,
-            relocator: self.relocator,
-            planner: self.planner,
-            observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
             stage: self.stage,
@@ -301,14 +276,13 @@ where
     pub fn visible_modules<NewV>(
         self,
         visible_modules: NewV,
-    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, NewV, Tls, Stage> {
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, NewV, Tls, Stage> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
             pipeline: self.pipeline,
             relocator: self.relocator,
             planner: self.planner,
-            observer: self.observer,
             visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
             stage: self.stage,
@@ -316,8 +290,8 @@ where
     }
 }
 
-impl<'a, K, L, R, PreH, PostH, RelocObs, P, O, V, Arch, Tls, Stage>
-    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, V, Tls, Stage>
+impl<'a, K, L, R, PreH, PostH, RelocObs, P, V, Arch, Tls, Stage>
+    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, V, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -328,7 +302,7 @@ where
     pub fn map_pipeline(
         mut self,
         configure: impl FnOnce(LinkPipeline<'a, K, Arch, Tls>) -> LinkPipeline<'a, K, Arch, Tls>,
-    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, V, Tls, Stage::Next> {
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, V, Tls, Stage::Next> {
         self.pipeline = configure(self.pipeline);
         Linker {
             loader: self.loader,
@@ -336,7 +310,6 @@ where
             pipeline: self.pipeline,
             relocator: self.relocator,
             planner: self.planner,
-            observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
             stage: PhantomData,
@@ -344,8 +317,8 @@ where
     }
 }
 
-impl<'a, K, L, R, PreH, PostH, RelocObs, P, O, V, Arch, Tls, Stage>
-    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, O, V, Tls, Stage>
+impl<'a, K, L, R, PreH, PostH, RelocObs, P, V, Arch, Tls, Stage>
+    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, V, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -358,14 +331,13 @@ where
         configure: impl FnOnce(
             Relocator<(), PreH, PostH, Arch, RelocObs, Tls>,
         ) -> Relocator<(), NewPreH, NewPostH, Arch, NewRelocObs, Tls>,
-    ) -> Linker<'a, K, Arch, L, R, NewPreH, NewPostH, NewRelocObs, P, O, V, Tls, Stage::Next> {
+    ) -> Linker<'a, K, Arch, L, R, NewPreH, NewPostH, NewRelocObs, P, V, Tls, Stage::Next> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
             pipeline: self.pipeline,
             relocator: configure(self.relocator),
             planner: self.planner,
-            observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
             stage: PhantomData,
@@ -373,8 +345,8 @@ where
     }
 }
 
-impl<'a, K, D, Obs, Tls, Arch, M, R, P, O, V>
-    Linker<'a, K, Arch, Loader<Obs, D, Tls, Arch, M>, R, (), (), (), P, O, V, Tls, Stage0>
+impl<'a, K, D, Obs, Tls, Arch, M, R, P, V>
+    Linker<'a, K, Arch, Loader<Obs, D, Tls, Arch, M>, R, (), (), (), P, V, Tls, Stage0>
 where
     K: Clone + Ord,
     D: 'static,
@@ -401,7 +373,6 @@ where
         (),
         (),
         P,
-        O,
         V,
         NewTls,
         Stage0,
@@ -418,7 +389,6 @@ where
             pipeline: LinkPipeline::new(),
             relocator: Relocator::new(),
             planner: self.planner,
-            observer: self.observer,
             visible_modules: self.visible_modules,
             scratch_relocation_order: self.scratch_relocation_order,
             stage: PhantomData,
@@ -427,7 +397,7 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'a, K, D, Obs, Tls, Arch, M, Resolver, PreH, PostH, RelocObs, P, O, V, Stage>
+impl<'a, K, D, Obs, Tls, Arch, M, Resolver, PreH, PostH, RelocObs, P, V, Stage>
     Linker<
         'a,
         K,
@@ -438,7 +408,6 @@ impl<'a, K, D, Obs, Tls, Arch, M, Resolver, PreH, PostH, RelocObs, P, O, V, Stag
         PostH,
         RelocObs,
         P,
-        O,
         V,
         Tls,
         Stage,
@@ -455,7 +424,6 @@ where
     PostH: RelocationHandler<Arch> + Clone,
     RelocObs: RelocationObserver<Arch> + Clone,
     P: RelocationPlanner<K, D, Arch, M::Region, Tls>,
-    O: LinkObserver<Arch>,
 {
     /// Loads one module into this linker's relocation domain.
     pub fn load<'cfg, Meta, Q>(
@@ -474,19 +442,19 @@ where
             return Ok(result);
         }
 
-        let prepared = self.prepare_runtime_load::<Meta, Q, _>(
+        let prepared = self.prepare_direct_load::<Meta, Q, _>(
             context,
-            |context, visible_modules, session, loader, resolver, observer| {
+            |context, visible_modules, session, loader, resolver| {
                 let mut resolve_context = LoadResolveContext::new(
                     &mut context.committed,
                     visible_modules,
                     session.resolve_mut(),
                 );
-                let resolved = resolve_context.resolve_root(&key, resolver, observer)?;
-                resolve_context.stage_resolved(resolved, loader, observer)
+                let resolved = resolve_context.resolve_root(&key, resolver)?;
+                resolve_context.stage_resolved(resolved, loader)
             },
         )?;
-        self.execute_prepared_load::<Meta, Q>(context, prepared)
+        self.finish_prepared_load::<Meta, Q>(context, prepared)
     }
 
     /// Loads a pre-mapped root dynamic image and resolves its dependencies.
@@ -507,16 +475,13 @@ where
             return Ok(result);
         }
 
-        let prepared = self.prepare_runtime_load::<Meta, Q, _>(
-            context,
-            move |context, _, session, _, _, observer| {
-                observer.on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
+        let prepared =
+            self.prepare_direct_load::<Meta, Q, _>(context, move |context, _, session, _, _| {
                 let id = context.committed.intern_key(key.clone());
                 session.insert_pending(id, raw);
                 Ok(id)
-            },
-        )?;
-        self.execute_prepared_load::<Meta, Q>(context, prepared)
+            })?;
+        self.finish_prepared_load::<Meta, Q>(context, prepared)
     }
 
     /// Discovers, plans, and loads one module through the scan-first path.
@@ -537,7 +502,7 @@ where
         }
 
         let prepared = self.prepare_scan_load::<Meta, Q>(context, &key)?;
-        self.execute_prepared_load::<Meta, Q>(context, prepared)
+        self.finish_prepared_load::<Meta, Q>(context, prepared)
     }
 
     fn prepare_scan_load<Meta, Q>(
@@ -555,16 +520,15 @@ where
 
         let mut resolve_context =
             ScanResolveContext::new(&mut context.committed, &self.visible_modules, &mut session);
-        let resolved = resolve_context.resolve_root(key, &mut self.resolver, &mut self.observer)?;
+        let resolved = resolve_context.resolve_root(key, &mut self.resolver)?;
         let root = resolve_context.stage_resolved(resolved, &mut self.loader)?;
         if !resolve_context.contains_pending(root) {
             return Ok(PreparedLoad::runtime(root, LoadSession::new()));
         }
-        resolve_context.resolve_dependency_graph::<_, _, _, Q>(
+        resolve_context.resolve_dependency_graph::<_, _, Q>(
             root,
             &mut self.loader,
             &mut self.resolver,
-            &mut self.observer,
         )?;
 
         let dynamics = session.take_dynamics();
@@ -611,15 +575,13 @@ where
         let mut session = LoadSession::from_resolve(session);
         if let Some((entries, memory_layout)) = planned {
             for (module_id, entry) in entries {
-                let (id, key, module, direct_deps) = entry.into_parts();
+                let (id, _key, module, direct_deps) = entry.into_parts();
                 let raw = self.materialize_planned_raw(
                     &memory_layout,
                     &mut mapped_runtime,
                     module_id,
                     module,
                 )?;
-                self.observer
-                    .on_staged_dynamic(StagedDynamic::new(&key, &raw))?;
                 session.insert_resolved_pending(id, raw, direct_deps);
             }
         }
@@ -694,7 +656,7 @@ where
         Ok(raw)
     }
 
-    fn prepare_runtime_load<'cfg, Meta, Q, Seed>(
+    fn prepare_direct_load<'cfg, Meta, Q, Seed>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         seed_root: Seed,
@@ -710,7 +672,6 @@ where
             &mut LoadSession<D, Arch, M::Region, Tls>,
             &mut Loader<Obs, D, Tls, Arch, M>,
             &mut Resolver,
-            &mut O,
         ) -> Result<KeyId>,
     {
         let mut session = LoadSession::new();
@@ -720,7 +681,6 @@ where
             &mut session,
             &mut self.loader,
             &mut self.resolver,
-            &mut self.observer,
         )?;
         let mut resolve_context = LoadResolveContext::new(
             &mut context.committed,
@@ -728,18 +688,17 @@ where
             session.resolve_mut(),
         );
         if resolve_context.contains_pending(root) {
-            resolve_context.resolve_dependency_graph::<_, _, _, Q>(
+            resolve_context.resolve_dependency_graph::<_, _, Q>(
                 root,
                 &mut self.loader,
                 &mut self.resolver,
-                &mut self.observer,
             )?;
         }
 
         Ok(PreparedLoad::runtime(root, session))
     }
 
-    fn execute_prepared_load<Meta, Q>(
+    fn finish_prepared_load<Meta, Q>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         prepared: PreparedLoad<D, Arch, M::Region, Tls>,

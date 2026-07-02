@@ -28,8 +28,7 @@
 //!   actual [`Loader`], [`linker::KeyResolver`], [`linker::Linker`], and
 //!   [`linker::LinkContext`].
 //! - Deep customization. Inject host or bridge symbols with
-//!   [`image::SyntheticModule`], observe linker activity with
-//!   [`observer::LinkObserver`], and intercept relocations with handlers.
+//!   [`image::SyntheticModule`] and intercept relocations with handlers.
 //! - Optional advanced features. TLS relocation handling, lazy binding, relocatable object
 //!   loading, logging, and versioned symbol lookup are feature-gated.
 //!

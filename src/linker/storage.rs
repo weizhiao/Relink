@@ -27,8 +27,9 @@ pub(crate) struct CommittedStorage<
     key_ids: BTreeMap<K, KeyId>,
     keys: PrimaryMap<KeyId, K>,
     key_modules: SecondaryMap<KeyId, ModuleId>,
-    entries: PrimaryMap<ModuleId, Option<StoredEntry<D, M, Arch, Tls>>>,
+    entries: PrimaryMap<ModuleId, Option<StoredEntry<M, Arch, Tls>>>,
     load_order: Vec<ModuleId>,
+    marker: core::marker::PhantomData<fn() -> D>,
 }
 
 impl<K, D: 'static, M, Arch, Tls> Clone for CommittedStorage<K, D, M, Arch, Tls>
@@ -46,6 +47,7 @@ where
             key_modules: self.key_modules.clone(),
             entries: self.entries.clone(),
             load_order: self.load_order.clone(),
+            marker: core::marker::PhantomData,
         }
     }
 }
@@ -63,6 +65,7 @@ where
             key_modules: SecondaryMap::new(),
             entries: PrimaryMap::new(),
             load_order: Vec::new(),
+            marker: core::marker::PhantomData,
         }
     }
 }
@@ -234,7 +237,6 @@ where
             module,
             direct_deps,
             meta,
-            _marker: core::marker::PhantomData,
         }));
         self.key_modules.insert(id, module_id);
         self.load_order.push(module_id);
@@ -263,7 +265,6 @@ where
 }
 
 struct StoredEntry<
-    D: 'static,
     M = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     Tls: TlsResolver<Arch> = (),
@@ -272,10 +273,9 @@ struct StoredEntry<
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[KeyId]>,
     meta: M,
-    _marker: core::marker::PhantomData<fn() -> D>,
 }
 
-impl<D: 'static, M, Arch, Tls> Clone for StoredEntry<D, M, Arch, Tls>
+impl<M, Arch, Tls> Clone for StoredEntry<M, Arch, Tls>
 where
     M: Clone,
     Arch: RelocationArch,
@@ -288,7 +288,6 @@ where
             module: self.module.clone(),
             direct_deps: self.direct_deps.clone(),
             meta: self.meta.clone(),
-            _marker: core::marker::PhantomData,
         }
     }
 }

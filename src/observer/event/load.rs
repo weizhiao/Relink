@@ -1,5 +1,5 @@
 use crate::{
-    arch::{ArchKind, NativeArch},
+    arch::NativeArch,
     elf::{ElfHeader, ElfLayout, ElfPhdr, NativeElfLayout},
     image::RawDynamic,
     input::{ElfReader, Path},
@@ -104,49 +104,6 @@ where
     /// Returns the mutable dynamic image.
     #[inline]
     pub fn raw_mut(&mut self) -> &mut RawDynamic<D, Arch, R, Tls> {
-        self.raw
-    }
-}
-
-/// A mapped but unrelocated dynamic image observed during a link operation.
-pub struct StagedDynamic<
-    'a,
-    K,
-    D: 'static,
-    Arch: RelocationArch = NativeArch,
-    R: RegionAccess = HostRegion,
-    Tls: TlsResolver<Arch> = (),
-> {
-    key: &'a K,
-    raw: &'a RawDynamic<D, Arch, R, Tls>,
-}
-
-impl<'a, K, D: 'static, Arch, R, Tls> StagedDynamic<'a, K, D, Arch, R, Tls>
-where
-    Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch>,
-{
-    #[inline]
-    pub(crate) const fn new(key: &'a K, raw: &'a RawDynamic<D, Arch, R, Tls>) -> Self {
-        Self { key, raw }
-    }
-
-    /// Returns the key of the staged module.
-    #[inline]
-    pub const fn key(&self) -> &'a K {
-        self.key
-    }
-
-    /// Returns the architecture kind of the staged module.
-    #[inline]
-    pub const fn arch_kind(&self) -> ArchKind {
-        Arch::KIND
-    }
-
-    /// Returns the unrelocated dynamic image.
-    #[inline]
-    pub const fn raw(&self) -> &'a RawDynamic<D, Arch, R, Tls> {
         self.raw
     }
 }
