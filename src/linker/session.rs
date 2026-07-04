@@ -1,4 +1,4 @@
-use super::storage::KeyId;
+use super::storage::KeySlot;
 use crate::{
     image::ModuleHandle, memory::RegionAccess, relocation::RelocationArch, tls::TlsResolver,
 };
@@ -6,7 +6,7 @@ use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
 pub(crate) struct GraphEntry<P> {
     payload: P,
-    direct_deps: Option<Box<[KeyId]>>,
+    direct_deps: Option<Box<[KeySlot]>>,
 }
 
 impl<P> GraphEntry<P> {
@@ -19,7 +19,7 @@ impl<P> GraphEntry<P> {
     }
 
     #[inline]
-    pub(crate) fn with_direct_deps(payload: P, direct_deps: Box<[KeyId]>) -> Self {
+    pub(crate) fn with_direct_deps(payload: P, direct_deps: Box<[KeySlot]>) -> Self {
         Self {
             payload,
             direct_deps: Some(direct_deps),
@@ -32,24 +32,24 @@ impl<P> GraphEntry<P> {
     }
 
     #[inline]
-    pub(crate) fn direct_deps(&self) -> Option<&[KeyId]> {
+    pub(crate) fn direct_deps(&self) -> Option<&[KeySlot]> {
         self.direct_deps.as_deref()
     }
 
     #[inline]
-    pub(crate) fn set_direct_deps(&mut self, direct_deps: Vec<KeyId>) {
+    pub(crate) fn set_direct_deps(&mut self, direct_deps: Vec<KeySlot>) {
         self.direct_deps = Some(direct_deps.into_boxed_slice());
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (P, Option<Box<[KeyId]>>) {
+    pub(crate) fn into_parts(self) -> (P, Option<Box<[KeySlot]>>) {
         (self.payload, self.direct_deps)
     }
 }
 
 pub(crate) struct ReadyCommit<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     module: ModuleHandle<Arch, Tls>,
-    direct_deps: Box<[KeyId]>,
+    direct_deps: Box<[KeySlot]>,
 }
 
 impl<Arch, Tls> Clone for ReadyCommit<Arch, Tls>
@@ -71,7 +71,7 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    fn new(module: ModuleHandle<Arch, Tls>, direct_deps: Box<[KeyId]>) -> Self {
+    fn new(module: ModuleHandle<Arch, Tls>, direct_deps: Box<[KeySlot]>) -> Self {
         Self {
             module,
             direct_deps,
@@ -79,14 +79,14 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (ModuleHandle<Arch, Tls>, Box<[KeyId]>) {
+    pub(crate) fn into_parts(self) -> (ModuleHandle<Arch, Tls>, Box<[KeySlot]>) {
         (self.module, self.direct_deps)
     }
 }
 
 pub(crate) struct ModuleEntry<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     module: ModuleHandle<Arch, Tls>,
-    direct_deps: Box<[KeyId]>,
+    direct_deps: Box<[KeySlot]>,
 }
 
 impl<Arch, Tls> ModuleEntry<Arch, Tls>
@@ -95,7 +95,7 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn new(module: ModuleHandle<Arch, Tls>, direct_deps: Box<[KeyId]>) -> Self {
+    pub(crate) fn new(module: ModuleHandle<Arch, Tls>, direct_deps: Box<[KeySlot]>) -> Self {
         Self {
             module,
             direct_deps,
@@ -108,20 +108,20 @@ where
     }
 
     #[inline]
-    pub(crate) fn direct_deps(&self) -> &[KeyId] {
+    pub(crate) fn direct_deps(&self) -> &[KeySlot] {
         &self.direct_deps
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (ModuleHandle<Arch, Tls>, Box<[KeyId]>) {
+    pub(crate) fn into_parts(self) -> (ModuleHandle<Arch, Tls>, Box<[KeySlot]>) {
         (self.module, self.direct_deps)
     }
 }
 
 pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
-    pub(crate) dynamics: BTreeMap<KeyId, GraphEntry<P>>,
-    pub(crate) module_handles: BTreeMap<KeyId, ModuleEntry<Arch, Tls>>,
-    pub(crate) group_order: Vec<KeyId>,
+    pub(crate) dynamics: BTreeMap<KeySlot, GraphEntry<P>>,
+    pub(crate) module_handles: BTreeMap<KeySlot, ModuleEntry<Arch, Tls>>,
+    pub(crate) group_order: Vec<KeySlot>,
 }
 
 impl<P, Arch, Tls> ResolveSession<P, Arch, Tls>
@@ -139,12 +139,12 @@ where
     }
 
     #[inline]
-    pub(crate) fn contains_pending(&self, id: KeyId) -> bool {
-        self.dynamics.contains_key(&id) || self.module_handles.contains_key(&id)
+    pub(crate) fn contains_pending(&self, slot: KeySlot) -> bool {
+        self.dynamics.contains_key(&slot) || self.module_handles.contains_key(&slot)
     }
 
     #[inline]
-    pub(crate) fn take_dynamics(&mut self) -> BTreeMap<KeyId, GraphEntry<P>> {
+    pub(crate) fn take_dynamics(&mut self) -> BTreeMap<KeySlot, GraphEntry<P>> {
         core::mem::take(&mut self.dynamics)
     }
 }
@@ -156,7 +156,7 @@ pub(crate) struct LoadSession<
     Tls: TlsResolver<Arch> = (),
 > {
     resolve: ResolveSession<crate::image::RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
-    ready_to_commit: BTreeMap<KeyId, ReadyCommit<Arch, Tls>>,
+    ready_to_commit: BTreeMap<KeySlot, ReadyCommit<Arch, Tls>>,
 }
 
 impl<D: 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
@@ -211,7 +211,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn group_order(&self) -> &[KeyId] {
+    pub(crate) fn group_order(&self) -> &[KeySlot] {
         &self.resolve.group_order
     }
 
@@ -226,86 +226,86 @@ where
     }
 
     #[inline]
-    pub(crate) fn is_pending_dynamic(&self, id: KeyId) -> bool {
-        self.resolve.dynamics.contains_key(&id)
+    pub(crate) fn is_pending_dynamic(&self, slot: KeySlot) -> bool {
+        self.resolve.dynamics.contains_key(&slot)
     }
 
     #[inline]
-    pub(crate) fn pending_direct_deps(&self, id: KeyId) -> Option<&[KeyId]> {
-        if let Some(entry) = self.resolve.dynamics.get(&id) {
+    pub(crate) fn pending_direct_deps(&self, slot: KeySlot) -> Option<&[KeySlot]> {
+        if let Some(entry) = self.resolve.dynamics.get(&slot) {
             return entry.direct_deps();
         }
         self.resolve
             .module_handles
-            .get(&id)
+            .get(&slot)
             .map(ModuleEntry::direct_deps)
     }
 
     #[inline]
     pub(crate) fn pending_dynamic(
         &self,
-        id: KeyId,
+        slot: KeySlot,
     ) -> Option<&crate::image::RawDynamic<D, Arch, R, Tls>> {
-        self.resolve.dynamics.get(&id).map(GraphEntry::payload)
+        self.resolve.dynamics.get(&slot).map(GraphEntry::payload)
     }
 
     #[inline]
-    pub(crate) fn pending_module_handle(&self, id: KeyId) -> Option<&ModuleHandle<Arch, Tls>> {
+    pub(crate) fn pending_module_handle(&self, slot: KeySlot) -> Option<&ModuleHandle<Arch, Tls>> {
         self.resolve
             .module_handles
-            .get(&id)
+            .get(&slot)
             .map(ModuleEntry::module)
     }
 
     #[inline]
     pub(crate) fn insert_pending(
         &mut self,
-        id: KeyId,
+        slot: KeySlot,
         raw: crate::image::RawDynamic<D, Arch, R, Tls>,
     ) {
-        self.resolve.dynamics.insert(id, GraphEntry::new(raw));
+        self.resolve.dynamics.insert(slot, GraphEntry::new(raw));
     }
 
     #[inline]
     pub(crate) fn insert_resolved_pending(
         &mut self,
-        id: KeyId,
+        slot: KeySlot,
         raw: crate::image::RawDynamic<D, Arch, R, Tls>,
-        direct_deps: Box<[KeyId]>,
+        direct_deps: Box<[KeySlot]>,
     ) {
         self.resolve
             .dynamics
-            .insert(id, GraphEntry::with_direct_deps(raw, direct_deps));
+            .insert(slot, GraphEntry::with_direct_deps(raw, direct_deps));
     }
 
     #[inline]
     pub(crate) fn take_pending_dynamic(
         &mut self,
-        id: KeyId,
+        slot: KeySlot,
     ) -> Option<GraphEntry<crate::image::RawDynamic<D, Arch, R, Tls>>> {
-        self.resolve.dynamics.remove(&id)
+        self.resolve.dynamics.remove(&slot)
     }
 
     #[inline]
     pub(crate) fn take_pending_module_handles(
         &mut self,
-    ) -> BTreeMap<KeyId, ModuleEntry<Arch, Tls>> {
+    ) -> BTreeMap<KeySlot, ModuleEntry<Arch, Tls>> {
         core::mem::take(&mut self.resolve.module_handles)
     }
 
     #[inline]
-    pub(crate) fn push_ready<T>(&mut self, id: KeyId, module: T, direct_deps: Box<[KeyId]>)
+    pub(crate) fn push_ready<T>(&mut self, slot: KeySlot, module: T, direct_deps: Box<[KeySlot]>)
     where
         T: Into<ModuleHandle<Arch, Tls>>,
     {
         let previous = self
             .ready_to_commit
-            .insert(id, ReadyCommit::new(module.into(), direct_deps));
+            .insert(slot, ReadyCommit::new(module.into(), direct_deps));
         debug_assert!(previous.is_none(), "ready commit entries must be unique");
     }
 
     #[inline]
-    pub(crate) fn take_ready_to_commit(&mut self) -> BTreeMap<KeyId, ReadyCommit<Arch, Tls>> {
+    pub(crate) fn take_ready_to_commit(&mut self) -> BTreeMap<KeySlot, ReadyCommit<Arch, Tls>> {
         core::mem::take(&mut self.ready_to_commit)
     }
 }

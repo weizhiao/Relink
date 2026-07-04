@@ -8,7 +8,7 @@ use super::{
         MemoryLayoutPlan, ModuleId as PlanModuleId, build_arena_raw_dynamic,
     },
     session::{LoadSession, ResolveSession},
-    storage::{KeyId, ModuleId as CommittedModuleId},
+    storage::{KeySlot, ModuleId as CommittedModuleId},
 };
 use crate::{
     LinkerError, Loader, Result,
@@ -161,7 +161,7 @@ pub struct Linker<
     relocator: Relocator<(), PreH, PostH, Arch, RelocObs, Tls>,
     planner: P,
     visible_modules: V,
-    scratch_relocation_order: Vec<KeyId>,
+    scratch_relocation_order: Vec<KeySlot>,
     stage: PhantomData<Stage>,
 }
 
@@ -477,9 +477,9 @@ where
 
         let prepared =
             self.prepare_direct_load::<Meta, Q, _>(context, move |context, _, session, _, _| {
-                let id = context.committed.intern_key(key.clone());
-                session.insert_pending(id, raw);
-                Ok(id)
+                let slot = context.committed.intern_key(key.clone());
+                session.insert_pending(slot, raw);
+                Ok(slot)
             })?;
         self.finish_prepared_load::<Meta, Q>(context, prepared)
     }
@@ -536,16 +536,13 @@ where
         let entries: BTreeMap<_, _> = dynamics
             .into_iter()
             .map(|(id, entry)| {
-                let key = context
-                    .key(id)
-                    .expect("scan entry id must resolve to an interned key")
-                    .clone();
+                let key = context.committed.key(id).clone();
                 let (module, full_deps) = entry.into_parts();
                 let full_deps =
                     full_deps.expect("missing resolved dependencies while building scan plan");
-                (id, (key, module, full_deps))
+                Ok((id, (key, module, full_deps)))
             })
-            .collect();
+            .collect::<Result<_>>()?;
         let mut mapped_runtime = None;
         let planned = if entries.is_empty() {
             None
@@ -672,7 +669,7 @@ where
             &mut LoadSession<D, Arch, M::Region, Tls>,
             &mut Loader<Obs, D, Tls, Arch, M>,
             &mut Resolver,
-        ) -> Result<KeyId>,
+        ) -> Result<KeySlot>,
     {
         let mut session = LoadSession::new();
         let root = seed_root(
@@ -725,21 +722,23 @@ where
 
         let committed = Self::commit_session(context, &mut session);
 
-        let root_id = context.committed.module_id(root);
-        let root = context
-            .visible_module(&self.visible_modules, root)
+        let root_id = context
+            .committed
+            .module_for_key(root)
+            .map(|slot| context.committed.make_module_id(slot));
+        let root = visible_module(context, &self.visible_modules, root)
             .and_then(|module| {
                 module
                     .downcast_ref::<LoadedCore<D, Arch, M::Region, Tls>>()
                     .cloned()
             })
-            .ok_or_else(|| LinkerError::context("load root missing after commit"))?;
+            .ok_or(LinkerError::LoadRootMissingAfterCommit)?;
         Ok(LoadResult::new(root_id, root, committed))
     }
 
     fn relocate_pending_modules<Meta, Q>(
         &mut self,
-        root: KeyId,
+        root: KeySlot,
         context: &LinkContext<K, D, Meta, Arch, Tls>,
         session: &mut LoadSession<D, Arch, M::Region, Tls>,
     ) -> Result<()>
@@ -754,10 +753,7 @@ where
 
         let result = (|| {
             for id in order.drain(..) {
-                let key = context
-                    .key(id)
-                    .expect("pending module id must resolve to an interned key")
-                    .clone();
+                let key = context.committed.key(id).clone();
                 let entry = session
                     .take_pending_dynamic(id)
                     .expect("missing pending dynamic module while relocating");
@@ -790,9 +786,9 @@ where
     }
 
     fn build_relocation_order(
-        root: KeyId,
+        root: KeySlot,
         pending: &LoadSession<D, Arch, M::Region, Tls>,
-        order: &mut Vec<KeyId>,
+        order: &mut Vec<KeySlot>,
     ) {
         order.clear();
         let dynamic_len = pending.pending_dynamic_len();
@@ -846,8 +842,7 @@ where
                 } else if let Some(module) = session.pending_module_handle(*id) {
                     module.clone()
                 } else {
-                    context
-                        .visible_module(visible_modules, *id)
+                    visible_module(context, visible_modules, *id)
                         .expect("scope key must resolve to a visible or pending module")
                 }
             })
@@ -871,9 +866,13 @@ where
                 continue;
             };
             let (module, direct_deps) = entry.into_parts();
+            debug_assert!(
+                context.committed.module_for_key(id).is_none(),
+                "loader commit should not replace an already committed module"
+            );
             let module_id = context
                 .committed
-                .insert_new(id, module, direct_deps, Meta::default());
+                .insert(id, module, direct_deps, Meta::default());
             committed.push(module_id);
         }
         assert!(
@@ -886,7 +885,7 @@ where
 
 struct PreparedLoad<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> = ()>
 {
-    root: KeyId,
+    root: KeySlot,
     session: LoadSession<D, Arch, R, Tls>,
     mapped_runtime: Option<MappedRuntimeMemory<R>>,
 }
@@ -894,7 +893,7 @@ struct PreparedLoad<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsR
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     PreparedLoad<D, Arch, R, Tls>
 {
-    fn runtime(root: KeyId, session: LoadSession<D, Arch, R, Tls>) -> Self {
+    fn runtime(root: KeySlot, session: LoadSession<D, Arch, R, Tls>) -> Self {
         Self {
             root,
             session,
@@ -903,7 +902,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 
     fn planned(
-        root: KeyId,
+        root: KeySlot,
         session: LoadSession<D, Arch, R, Tls>,
         mapped_runtime: Option<MappedRuntimeMemory<R>>,
     ) -> Self {
@@ -966,30 +965,44 @@ where
     Tls: TlsResolver<Arch>,
     V: VisibleModules<K, Arch, Q, Tls>,
 {
-    if let Some(key_id) = context.key_id(key) {
-        let root_id = context.module_id(key_id);
-        if let Some(loaded) = context
-            .visible_module(visible_modules, key_id)
-            .and_then(|module| {
-                module
-                    .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
-                    .cloned()
-            })
-        {
-            return Some(LoadResult::new(
-                root_id,
-                loaded,
-                Vec::new().into_boxed_slice(),
-            ));
-        }
-    }
+    let (root_id, module) = if let Some(key_id) = context.key_id(key) {
+        let key_slot = context
+            .committed
+            .key_slot(key_id)
+            .expect("cached key id must belong to this context");
+        let root_id = context
+            .committed
+            .module_for_key(key_slot)
+            .map(|slot| context.committed.make_module_id(slot));
+        (root_id, visible_module(context, visible_modules, key_slot))
+    } else {
+        (None, None)
+    };
 
-    visible_modules
-        .module(key)
-        .and_then(|module| {
-            module
-                .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
-                .cloned()
-        })
-        .map(|loaded| LoadResult::new(None, loaded, Vec::new().into_boxed_slice()))
+    let module = module.or_else(|| visible_modules.module(key))?;
+    module
+        .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
+        .cloned()
+        .map(|loaded| LoadResult::new(root_id, loaded, Vec::new().into_boxed_slice()))
+}
+
+#[inline]
+fn visible_module<K, D, Meta, V, Arch, Q, Tls>(
+    context: &LinkContext<K, D, Meta, Arch, Tls>,
+    visible_modules: &V,
+    slot: KeySlot,
+) -> Option<ModuleHandle<Arch, Tls>>
+where
+    K: Clone + Ord + Borrow<Q>,
+    Q: ?Sized,
+    D: 'static,
+    Arch: RelocationArch,
+    Tls: TlsResolver<Arch>,
+    V: VisibleModules<K, Arch, Q, Tls>,
+{
+    if let Some(module) = context.committed.get_by_key(slot).cloned() {
+        return Some(module);
+    }
+    let key = context.committed.key(slot);
+    visible_modules.module(key.borrow())
 }

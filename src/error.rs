@@ -1,4 +1,7 @@
-use crate::elf::{ElfClass, ElfDataEncoding, ElfDynamicTag, ElfFileType, ElfMachine};
+use crate::{
+    elf::{ElfClass, ElfDataEncoding, ElfDynamicTag, ElfFileType, ElfMachine},
+    linker::{ContextId, KeyId, ModuleId},
+};
 use alloc::{borrow::Cow, boxed::Box};
 use core::fmt::{self, Display};
 
@@ -804,20 +807,77 @@ impl Display for UnresolvedDependency {
     }
 }
 
-/// Structured linker error details.
-pub enum LinkerError {
-    /// A dependency could not be resolved by the resolver callback.
-    UnresolvedDependency(Box<UnresolvedDependency>),
-    /// Committed linker context state rejected an operation.
-    Context {
-        /// Static detail describing the context failure.
-        detail: &'static str,
+/// Structured committed linker-context failure details.
+pub enum LinkContextError {
+    /// A key id from one [`crate::linker::LinkContext`] was used with another context.
+    KeyContextMismatch {
+        /// The key id that failed the context check.
+        id: KeyId,
+        /// The context that received the key id.
+        expected: ContextId,
     },
-    /// Resolver state was inconsistent with the current link context.
-    Resolver {
-        /// Static detail describing the resolver failure.
-        detail: &'static str,
+    /// A module id from one [`crate::linker::LinkContext`] was used with another context.
+    ModuleContextMismatch {
+        /// The module id that failed the context check.
+        id: ModuleId,
+        /// The context that received the module id.
+        expected: ContextId,
     },
+    /// A module id no longer resolves to committed state.
+    ModuleNotCommitted {
+        /// The module id that could not be resolved.
+        id: ModuleId,
+    },
+    /// A key id does not resolve to a committed module.
+    KeyNotCommitted {
+        /// The key id that did not resolve to a committed module.
+        id: KeyId,
+    },
+}
+
+impl Display for LinkContextError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::KeyContextMismatch { id, expected } => {
+                write!(f, "key id {} was used with link context {}", id, expected)
+            }
+            Self::ModuleContextMismatch { id, expected } => write!(
+                f,
+                "module id {} was used with link context {}",
+                id, expected
+            ),
+            Self::ModuleNotCommitted { id } => write!(f, "module id {} is not committed", id),
+            Self::KeyNotCommitted { id } => write!(f, "key id {} is not committed", id),
+        }
+    }
+}
+
+/// Structured resolver failure details.
+pub enum LinkResolverError {
+    /// The resolver returned `Existing`, but the key is not visible.
+    ExistingKeyNotVisible,
+    /// The resolver returned a new module source, but the key is already known.
+    NewKeyAlreadyKnown,
+    /// The root module could not be found by a resolver.
+    RootNotFound,
+}
+
+impl Display for LinkResolverError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ExistingKeyNotVisible => {
+                f.write_str("resolver referenced an unknown visible key")
+            }
+            Self::NewKeyAlreadyKnown => {
+                f.write_str("resolver produced an already-known key; use Existing to reuse it")
+            }
+            Self::RootNotFound => f.write_str("root module was not found by resolver"),
+        }
+    }
+}
+
+/// Structured scan/planned-load failure details.
+pub enum LinkScanError {
     /// A requested materialization mode is invalid for the module/layout.
     Materialization {
         /// Static detail describing the materialization failure.
@@ -845,54 +905,101 @@ pub enum LinkerError {
     },
 }
 
+impl Display for LinkScanError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Materialization { detail }
+            | Self::SectionData { detail }
+            | Self::MappedArena { detail }
+            | Self::RuntimeMemory { detail }
+            | Self::MetadataRewrite { detail } => f.write_str(detail),
+        }
+    }
+}
+
+/// Structured linker error details.
+pub enum LinkerError {
+    /// A dependency could not be resolved by the resolver callback.
+    UnresolvedDependency(Box<UnresolvedDependency>),
+    /// Committed linker context state rejected an operation.
+    Context {
+        /// Structured context failure reason.
+        reason: Box<LinkContextError>,
+    },
+    /// Resolver state was inconsistent with the current link context.
+    Resolver {
+        /// Structured resolver failure reason.
+        reason: LinkResolverError,
+    },
+    /// A load root was not present after commit.
+    LoadRootMissingAfterCommit,
+    /// Object exports were installed after the core had already been retained.
+    ObjectCoreRetainedBeforeExports,
+    /// Scan-first/planned-load state was inconsistent.
+    Scan {
+        /// Structured scan failure reason.
+        reason: Box<LinkScanError>,
+    },
+}
+
 impl LinkerError {
     #[inline]
-    pub(crate) const fn context(detail: &'static str) -> Self {
-        Self::Context { detail }
-    }
-
-    #[inline]
-    pub(crate) const fn resolver(detail: &'static str) -> Self {
-        Self::Resolver { detail }
-    }
-
-    #[inline]
-    pub(crate) const fn materialization(detail: &'static str) -> Self {
-        Self::Materialization { detail }
-    }
-
-    #[inline]
-    pub(crate) const fn section_data(detail: &'static str) -> Self {
-        Self::SectionData { detail }
-    }
-
-    #[inline]
-    pub(crate) const fn duplicate_section_data_access() -> Self {
-        Self::SectionData {
-            detail: "disjoint section data access referenced the same section more than once",
+    pub(crate) fn context(reason: LinkContextError) -> Self {
+        Self::Context {
+            reason: Box::new(reason),
         }
     }
 
     #[inline]
-    pub(crate) const fn missing_section_data_access() -> Self {
-        Self::SectionData {
-            detail: "disjoint section data access was not materialized",
+    pub(crate) fn resolver(reason: LinkResolverError) -> Self {
+        Self::Resolver { reason }
+    }
+
+    #[inline]
+    pub(crate) fn materialization(detail: &'static str) -> Self {
+        Self::Scan {
+            reason: Box::new(LinkScanError::Materialization { detail }),
         }
     }
 
     #[inline]
-    pub(crate) const fn mapped_arena(detail: &'static str) -> Self {
-        Self::MappedArena { detail }
+    pub(crate) fn section_data(detail: &'static str) -> Self {
+        Self::Scan {
+            reason: Box::new(LinkScanError::SectionData { detail }),
+        }
     }
 
     #[inline]
-    pub(crate) const fn runtime_memory(detail: &'static str) -> Self {
-        Self::RuntimeMemory { detail }
+    pub(crate) fn duplicate_section_data_access() -> Self {
+        Self::section_data(
+            "disjoint section data access referenced the same section more than once",
+        )
     }
 
     #[inline]
-    pub(crate) const fn metadata_rewrite(detail: &'static str) -> Self {
-        Self::MetadataRewrite { detail }
+    pub(crate) fn missing_section_data_access() -> Self {
+        Self::section_data("disjoint section data access was not materialized")
+    }
+
+    #[inline]
+    pub(crate) fn mapped_arena(detail: &'static str) -> Self {
+        Self::Scan {
+            reason: Box::new(LinkScanError::MappedArena { detail }),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn runtime_memory(detail: &'static str) -> Self {
+        Self::Scan {
+            reason: Box::new(LinkScanError::RuntimeMemory { detail }),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn metadata_rewrite(detail: &'static str) -> Self {
+        Self::Scan {
+            reason: Box::new(LinkScanError::MetadataRewrite { detail }),
+        }
     }
 }
 
@@ -900,13 +1007,13 @@ impl Display for LinkerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnresolvedDependency(err) => Display::fmt(err, f),
-            Self::Context { detail }
-            | Self::Resolver { detail }
-            | Self::Materialization { detail }
-            | Self::SectionData { detail }
-            | Self::MappedArena { detail }
-            | Self::RuntimeMemory { detail }
-            | Self::MetadataRewrite { detail } => f.write_str(detail),
+            Self::Context { reason } => Display::fmt(reason, f),
+            Self::Resolver { reason } => Display::fmt(reason, f),
+            Self::LoadRootMissingAfterCommit => f.write_str("load root missing after commit"),
+            Self::ObjectCoreRetainedBeforeExports => {
+                f.write_str("raw object core was retained before runtime exports were installed")
+            }
+            Self::Scan { reason } => Display::fmt(reason, f),
         }
     }
 }

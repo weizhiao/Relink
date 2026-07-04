@@ -128,11 +128,8 @@ where
         observer.on_object_relocated(&mut event)?;
         let (exports, finalizer) = event.into_parts();
         let exports = exports.unwrap_or_else(|| exports_handle(self.default_exports()));
-        let inner = crate::sync::Arc::get_mut(&mut self.core.inner).ok_or_else(|| {
-            LinkerError::context(
-                "raw object core was retained before runtime exports were installed",
-            )
-        })?;
+        let inner = crate::sync::Arc::get_mut(&mut self.core.inner)
+            .ok_or_else(|| LinkerError::ObjectCoreRetainedBeforeExports)?;
         inner.exports = exports;
         self.core.set_finalizer(finalizer);
 

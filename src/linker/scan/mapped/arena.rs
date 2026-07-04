@@ -242,8 +242,13 @@ mod tests {
     use super::super::super::{ArenaDescriptor, ArenaSharing, LinkPlan};
     use super::*;
     use crate::os::{DefaultMmap, PageSize};
-    use crate::{image::ScannedElf, input::ElfBinary, linker::storage::KeyId, loader::Loader};
-    use alloc::{collections::BTreeMap, vec::Vec};
+    use crate::{
+        image::{ScannedElf, SyntheticModule},
+        input::ElfBinary,
+        linker::LinkContext,
+        loader::Loader,
+    };
+    use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
     use gen_elf::{Arch, DylibWriter, ElfWriterConfig, SymbolDesc};
 
     #[test]
@@ -263,12 +268,14 @@ mod tests {
             panic!("generated dylib should scan as dynamic");
         };
         let mut entries = BTreeMap::new();
-        let root_id = KeyId::new(0);
-        entries.insert(
-            root_id,
-            ("root", scanned, Vec::<KeyId>::new().into_boxed_slice()),
-        );
-        let mut plan: LinkPlan<&str> = LinkPlan::new(root_id, Vec::from([root_id]), entries);
+        let mut context = LinkContext::<&str, ()>::new();
+        context
+            .insert("root", SyntheticModule::empty("root"), Box::new([]))
+            .unwrap();
+        let root_id = context.key_id(&"root").unwrap();
+        let root_slot = context.committed.key_slot(root_id).unwrap();
+        entries.insert(root_slot, ("root", scanned, Vec::new().into_boxed_slice()));
+        let mut plan: LinkPlan<&str> = LinkPlan::new(root_slot, Vec::from([root_slot]), entries);
         let root = plan.root_module();
         let section = plan
             .memory_layout()

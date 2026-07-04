@@ -1,6 +1,6 @@
 use super::{KeyResolver, ResolvedKey};
 use crate::{
-    Error, IoError, LinkerError, ParseEhdrError, Result,
+    Error, IoError, LinkResolverError, LinkerError, ParseEhdrError, Result,
     input::{ElfFile, ElfReader, Path, PathBuf},
     linker::{DependencyRequest, RootRequest},
     relocation::RelocationArch,
@@ -529,7 +529,7 @@ where
             });
         }
 
-        Err(LinkerError::resolver("root module was not found by SearchPathResolver").into())
+        Err(LinkerError::resolver(LinkResolverError::RootNotFound).into())
     }
 
     fn resolve_dependency(

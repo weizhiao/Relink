@@ -324,15 +324,14 @@ fn load_uses_configured_visible_modules_without_committing_them_locally() {
     assert!(context.contains_key(&"root"));
     let root_id = context
         .key_id(&"root")
-        .and_then(|id| context.module_id(id))
+        .and_then(|id| context.module_id(id).unwrap())
         .unwrap();
     let dep_id = context.key_id(&"dep").unwrap();
-    assert!(context.module_id(dep_id).is_none());
+    assert!(context.module_id(dep_id).unwrap().is_none());
     let direct_deps = context
         .direct_deps(root_id)
         .unwrap()
-        .iter()
-        .map(|id| *context.key(*id).unwrap())
+        .map(|id| *context.key(id).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(direct_deps, vec!["dep"]);
 }
@@ -362,10 +361,10 @@ fn load_scan_first_supports_synthetic_dependencies() {
 
     let root_id = context
         .key_id(&"root")
-        .and_then(|id| context.module_id(id))
+        .and_then(|id| context.module_id(id).unwrap())
         .unwrap();
     let dep_id = context.key_id(&"dep").unwrap();
-    let dep_module_id = context.module_id(dep_id).unwrap();
+    let dep_module_id = context.module_id(dep_id).unwrap().unwrap();
     let dep_module = context
         .get(dep_module_id)
         .expect("synthetic dependency committed");
@@ -375,8 +374,7 @@ fn load_scan_first_supports_synthetic_dependencies() {
     let direct_deps = context
         .direct_deps(root_id)
         .unwrap()
-        .iter()
-        .map(|id| *context.key(*id).unwrap())
+        .map(|id| *context.key(id).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(direct_deps, vec!["dep"]);
 }

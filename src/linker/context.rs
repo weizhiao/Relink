@@ -1,10 +1,7 @@
-use super::{
-    request::VisibleModules,
-    storage::{CommittedStorage, KeyId, ModuleId},
-};
+use super::storage::{CommittedStorage, ContextId, EntryState, KeyId, ModuleId};
 use crate::{
-    LinkerError, Result, arch::NativeArch, image::ModuleHandle, relocation::RelocationArch,
-    tls::TlsResolver,
+    LinkContextError, LinkerError, Result, arch::NativeArch, image::ModuleHandle,
+    relocation::RelocationArch, tls::TlsResolver,
 };
 use alloc::{
     boxed::Box,
@@ -12,6 +9,13 @@ use alloc::{
     vec::Vec,
 };
 use core::borrow::Borrow;
+
+#[inline]
+fn committed_module<T>(id: ModuleId, state: EntryState<T>) -> Result<T> {
+    state
+        .present()
+        .ok_or_else(|| LinkerError::context(LinkContextError::ModuleNotCommitted { id }).into())
+}
 
 /// A reusable local module repository and committed dependency graph.
 ///
@@ -47,8 +51,14 @@ where
     #[inline]
     pub fn new() -> Self {
         Self {
-            committed: CommittedStorage::new(),
+            committed: CommittedStorage::new(ContextId::fresh()),
         }
+    }
+
+    /// Returns this context's runtime identity.
+    #[inline]
+    pub fn context_id(&self) -> ContextId {
+        self.committed.context()
     }
 }
 
@@ -76,8 +86,10 @@ where
 
     /// Returns whether the context contains the committed module `id`.
     #[inline]
-    pub fn contains_module(&self, id: ModuleId) -> bool {
-        self.committed.contains_module(id)
+    pub fn contains_module(&self, id: ModuleId) -> Result<bool> {
+        Ok(self
+            .committed
+            .contains_module(self.committed.module_slot(id)?))
     }
 
     /// Returns the interned id for a known key.
@@ -87,75 +99,74 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        self.committed.key_id(key)
+        self.committed
+            .key_slot_for(key)
+            .map(|slot| self.committed.make_key_id(slot))
     }
 
     /// Returns the key associated with an interned id.
     #[inline]
-    pub fn key(&self, id: KeyId) -> Option<&K> {
-        self.committed.key(id)
+    pub fn key(&self, id: KeyId) -> Result<&K> {
+        let slot = self.committed.key_slot(id)?;
+        Ok(self.committed.key(slot))
     }
 
     /// Returns the committed module id that `id` resolves to.
     #[inline]
-    pub fn module_id(&self, id: KeyId) -> Option<ModuleId> {
-        self.committed.module_id(id)
+    pub fn module_id(&self, id: KeyId) -> Result<Option<ModuleId>> {
+        let slot = self.committed.key_slot(id)?;
+        Ok(self
+            .committed
+            .module_for_key(slot)
+            .map(|slot| self.committed.make_module_id(slot)))
     }
 
     /// Returns the representative key associated with a committed module id.
     #[inline]
-    pub fn module_key(&self, id: ModuleId) -> Option<&K> {
-        let key_id = self.committed.entry_key_id(id)?;
-        self.committed.key(key_id)
+    pub fn module_key(&self, id: ModuleId) -> Result<&K> {
+        let module_slot = self.committed.module_slot(id)?;
+        let module = committed_module(id, self.committed.module(module_slot))?;
+        Ok(self.committed.key(module.entry_key()))
     }
 
     /// Returns the retained module handle associated with a committed module id.
     #[inline]
-    pub fn get(&self, id: ModuleId) -> Option<&ModuleHandle<Arch, Tls>> {
-        self.committed.get(id)
-    }
-
-    /// Returns a module by this context's key id, falling back to an external
-    /// visible module set when the id only resolves to an interned key.
-    #[inline]
-    pub(crate) fn visible_module<V, Q>(
-        &self,
-        visible_modules: &V,
-        id: KeyId,
-    ) -> Option<ModuleHandle<Arch, Tls>>
-    where
-        K: Borrow<Q>,
-        Q: ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
-    {
-        self.committed.get_by_key(id).cloned().or_else(|| {
-            let key = self.committed.key(id)?;
-            visible_modules.module(key.borrow())
-        })
+    pub fn get(&self, id: ModuleId) -> Result<&ModuleHandle<Arch, Tls>> {
+        let slot = self.committed.module_slot(id)?;
+        Ok(committed_module(id, self.committed.module(slot))?.handle())
     }
 
     /// Returns direct dependency key ids for a committed module.
     #[inline]
-    pub fn direct_deps(&self, id: ModuleId) -> Option<&[KeyId]> {
-        self.committed.direct_deps(id)
+    pub fn direct_deps(&self, id: ModuleId) -> Result<impl Iterator<Item = KeyId> + '_> {
+        let slot = self.committed.module_slot(id)?;
+        Ok(committed_module(id, self.committed.module(slot))?
+            .direct_deps()
+            .iter()
+            .copied()
+            .map(|slot| self.committed.make_key_id(slot)))
     }
 
     /// Iterates committed modules in load order.
     #[inline]
     pub fn load_order(&self) -> impl Iterator<Item = ModuleId> + '_ {
-        self.committed.load_order()
+        self.committed
+            .load_order()
+            .map(|slot| self.committed.make_module_id(slot))
     }
 
     /// Returns immutable user metadata for a committed module.
     #[inline]
-    pub fn meta(&self, id: ModuleId) -> Option<&M> {
-        self.committed.meta(id)
+    pub fn meta(&self, id: ModuleId) -> Result<&M> {
+        let slot = self.committed.module_slot(id)?;
+        Ok(committed_module(id, self.committed.module(slot))?.meta())
     }
 
     /// Returns mutable user metadata for a committed module.
     #[inline]
-    pub fn meta_mut(&mut self, id: ModuleId) -> Option<&mut M> {
-        self.committed.meta_mut(id)
+    pub fn meta_mut(&mut self, id: ModuleId) -> Result<&mut M> {
+        let slot = self.committed.module_slot(id)?;
+        Ok(committed_module(id, self.committed.module_mut(slot))?.meta_mut())
     }
 
     /// Inserts an already retained module with default metadata.
@@ -167,7 +178,7 @@ where
         self.insert_with_meta(key, module, direct_deps, M::default())
     }
 
-    /// Inserts an already retained module with explicit metadata.
+    /// Inserts or replaces an already retained module with explicit metadata.
     pub fn insert_with_meta<R>(
         &mut self,
         key: K,
@@ -178,11 +189,7 @@ where
     where
         R: Into<ModuleHandle<Arch, Tls>>,
     {
-        if self.committed.contains_key(&key) {
-            return Err(LinkerError::context("duplicate linked module key").into());
-        }
-
-        let id = self.committed.intern_key(key);
+        let slot = self.committed.intern_key(key);
         let direct_deps = direct_deps
             .into_vec()
             .into_iter()
@@ -191,60 +198,67 @@ where
             .into_boxed_slice();
         Ok(self
             .committed
-            .insert_new(id, module.into(), direct_deps, meta))
+            .insert(slot, module.into(), direct_deps, meta))
     }
 
-    /// Adds an alternate key for an already committed module.
-    pub fn add_alias(&mut self, module_id: ModuleId, alias: K) -> Result<()> {
-        if !self.committed.contains_module(module_id) {
-            return Err(LinkerError::context("alias target module is not committed").into());
-        }
-        if self
-            .committed
-            .key_id::<K>(&alias)
-            .and_then(|id| self.committed.module_id(id))
-            .is_some_and(|id| id != module_id)
-        {
-            return Err(
-                LinkerError::context("alias linked module key is already committed").into(),
-            );
+    /// Adds or replaces an alternate key for an already committed module.
+    ///
+    /// Returns the previous committed module id when `alias` used to resolve to
+    /// a different module.
+    pub fn add_alias(&mut self, module_id: ModuleId, alias: K) -> Result<Option<ModuleId>> {
+        let module_slot = self.committed.module_slot(module_id)?;
+        if !self.committed.contains_module(module_slot) {
+            return Err(LinkerError::context(LinkContextError::ModuleNotCommitted {
+                id: module_id,
+            })
+            .into());
         }
 
-        self.committed.add_alias(module_id, alias);
-        Ok(())
+        Ok(self
+            .committed
+            .add_alias(module_slot, alias)
+            .map(|slot| self.committed.make_module_id(slot)))
     }
 
     /// Removes a committed module and returns its handle, dependencies, and metadata.
     #[inline]
-    pub fn remove(&mut self, id: ModuleId) -> Option<(ModuleHandle<Arch, Tls>, Box<[KeyId]>, M)> {
-        self.committed.remove(id)
+    pub fn remove(&mut self, id: ModuleId) -> Result<(ModuleHandle<Arch, Tls>, Box<[KeyId]>, M)> {
+        let slot = self.committed.module_slot(id)?;
+        let (module, direct_deps, meta) = committed_module(id, self.committed.remove(slot))?;
+        let direct_deps = direct_deps
+            .into_vec()
+            .into_iter()
+            .map(|slot| self.committed.make_key_id(slot))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Ok((module, direct_deps, meta))
     }
 
     /// Returns the breadth-first dependency scope rooted at `root`.
     pub fn dependency_scope(&self, root: ModuleId) -> Result<Vec<ModuleId>> {
-        if !self.committed.contains_module(root) {
-            return Err(LinkerError::context("dependency scope root is not committed").into());
+        let root_slot = self.committed.module_slot(root)?;
+        if !self.committed.contains_module(root_slot) {
+            return Err(
+                LinkerError::context(LinkContextError::ModuleNotCommitted { id: root }).into(),
+            );
         }
 
         let mut scope = Vec::new();
         let mut visited = BTreeSet::new();
         let mut queue = VecDeque::new();
-        visited.insert(root);
-        queue.push_back(root);
+        visited.insert(root_slot);
+        queue.push_back(root_slot);
 
-        while let Some(id) = queue.pop_front() {
-            let Some(direct_deps) = self.committed.direct_deps(id) else {
-                return Err(
-                    LinkerError::context("dependency scope module is not committed").into(),
-                );
-            };
+        while let Some(slot) = queue.pop_front() {
+            let id = self.committed.make_module_id(slot);
+            let module = committed_module(id, self.committed.module(slot))?;
 
             scope.push(id);
-            for dep in direct_deps.iter().copied() {
-                let Some(dep) = self.committed.module_id(dep) else {
-                    return Err(LinkerError::context(
-                        "dependency scope dependency is not committed",
-                    )
+            for dep in module.direct_deps().iter().copied() {
+                let Some(dep) = self.committed.module_for_key(dep) else {
+                    return Err(LinkerError::context(LinkContextError::KeyNotCommitted {
+                        id: self.committed.make_key_id(dep),
+                    })
                     .into());
                 };
                 if visited.insert(dep) {
@@ -261,53 +275,40 @@ where
     where
         M: Clone,
     {
-        for id in other.load_order() {
-            let key = other
-                .module_key(id)
-                .expect("load_order entries must resolve to module keys");
+        for slot in other.committed.load_order() {
+            let id = other.committed.make_module_id(slot);
+            let module = committed_module(id, other.committed.module(slot))?;
+            let key = other.committed.key(module.entry_key());
             if self.committed.contains_key(key) {
                 continue;
             }
 
-            let module = other
-                .get(id)
-                .cloned()
-                .expect("load_order entries must resolve to committed modules");
-            let direct_deps = other
-                .direct_deps(id)
-                .expect("load_order entries must resolve to committed dependencies")
+            let handle = module.handle().clone();
+            let direct_deps = module
+                .direct_deps()
                 .iter()
-                .map(|dep| {
-                    other
-                        .key(*dep)
-                        .expect("direct dependency ids must resolve to interned keys")
-                        .clone()
-                })
+                .map(|dep| other.committed.key(*dep).clone())
                 .collect::<Vec<_>>()
                 .into_boxed_slice();
-            let meta = other
-                .meta(id)
-                .cloned()
-                .expect("load_order entries must resolve to committed metadata");
-            self.insert_with_meta(key.clone(), module, direct_deps, meta)?;
+            let meta = module.meta().clone();
+            self.insert_with_meta(key.clone(), handle, direct_deps, meta)?;
         }
 
-        for (alias_id, target_module) in other.committed.aliases() {
-            let alias = other
-                .key(alias_id)
-                .expect("alias id must resolve to an interned key");
-            let canonical = other
-                .module_key(target_module)
-                .expect("alias target id must resolve to a module key");
+        for (alias_slot, target_slot) in other.committed.aliases() {
+            let alias = other.committed.key(alias_slot);
+            let target_id = other.committed.make_module_id(target_slot);
+            let canonical_slot =
+                committed_module(target_id, other.committed.module(target_slot))?.entry_key();
+            let canonical = other.committed.key(canonical_slot);
             if self.committed.contains_key(alias) {
                 continue;
             }
-            let canonical_id = self
+            let canonical_slot = self
                 .committed
-                .key_id(canonical)
-                .and_then(|id| self.committed.module_id(id))
+                .key_slot_for(canonical)
+                .and_then(|slot| self.committed.module_for_key(slot))
                 .expect("copied alias target must resolve to a committed module");
-            self.add_alias(canonical_id, alias.clone())?;
+            let _ = self.committed.add_alias(canonical_slot, alias.clone());
         }
         Ok(())
     }
@@ -326,8 +327,47 @@ where
 #[cfg(test)]
 mod tests {
     use super::LinkContext;
-    use crate::{arch::NativeArch, image::SyntheticModule};
-    use alloc::{boxed::Box, string::String};
+    use crate::{
+        arch::NativeArch,
+        image::SyntheticModule,
+        linker::{KeyId, ModuleId},
+    };
+    use alloc::{boxed::Box, string::String, vec::Vec};
+
+    fn direct_deps<K: Clone + Ord>(
+        context: &LinkContext<K, (), usize, NativeArch>,
+        id: ModuleId,
+    ) -> Vec<KeyId> {
+        context
+            .direct_deps(id)
+            .expect("direct deps should resolve")
+            .collect()
+    }
+
+    #[test]
+    fn ids_do_not_cross_contexts() {
+        let mut first = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let first_root = first
+            .insert_with_meta("root", SyntheticModule::empty("first"), Box::new([]), 1)
+            .expect("failed to insert first module");
+        let first_key = first.key_id(&"root").expect("root key should be interned");
+
+        let mut second = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let second_root = second
+            .insert_with_meta("root", SyntheticModule::empty("second"), Box::new([]), 2)
+            .expect("failed to insert second module");
+        let second_key = second.key_id(&"root").expect("root key should be interned");
+
+        assert_ne!(first.context_id(), second.context_id());
+        assert_ne!(first_root, second_root);
+        assert_ne!(first_key, second_key);
+        assert!(second.contains_module(first_root).is_err());
+        assert!(second.get(first_root).is_err());
+        assert!(second.key(first_key).is_err());
+        assert!(second.module_id(first_key).is_err());
+        assert!(second.dependency_scope(first_root).is_err());
+        assert!(second.contains_module(second_root).unwrap());
+    }
 
     #[test]
     fn snapshot_clones_committed_state_without_rebuilding() {
@@ -340,15 +380,17 @@ mod tests {
             .expect("dependency key should be interned");
 
         let snapshot = context.snapshot();
-        context.remove(root);
+        assert_eq!(context.context_id(), snapshot.context_id());
+        context.remove(root).unwrap();
 
-        assert!(!context.contains_module(root));
-        assert!(snapshot.contains_module(root));
-        assert!(snapshot.module_id(dep).is_none());
-        assert_eq!(snapshot.module_key(root), Some(&"root"));
-        assert_eq!(snapshot.key(dep), Some(&"dep"));
-        assert_eq!(snapshot.direct_deps(root), Some(&[dep][..]));
-        assert_eq!(snapshot.meta(root), Some(&7));
+        assert!(!context.contains_module(root).unwrap());
+        assert!(context.get(root).is_err());
+        assert!(snapshot.contains_module(root).unwrap());
+        assert!(snapshot.module_id(dep).unwrap().is_none());
+        assert_eq!(snapshot.module_key(root).unwrap(), &"root");
+        assert_eq!(snapshot.key(dep).unwrap(), &"dep");
+        assert_eq!(direct_deps(&snapshot, root), [dep]);
+        assert_eq!(snapshot.meta(root).unwrap(), &7);
     }
 
     #[test]
@@ -378,10 +420,10 @@ mod tests {
             .add_alias(canonical, String::from("alias"))
             .expect("failed to add alias");
 
-        assert!(context.module_id(alias_id).is_some());
+        assert!(context.module_id(alias_id).unwrap().is_some());
         assert_eq!(context.key_id("alias"), Some(alias_id));
-        assert_eq!(context.module_id(alias_id), Some(canonical));
-        assert_eq!(context.direct_deps(root), Some(&[alias_id][..]));
+        assert_eq!(context.module_id(alias_id).unwrap(), Some(canonical));
+        assert_eq!(direct_deps(&context, root), [alias_id]);
         assert_eq!(
             context
                 .dependency_scope(root)
@@ -389,6 +431,102 @@ mod tests {
                 .as_slice(),
             &[root, canonical]
         );
+    }
+
+    #[test]
+    fn add_alias_replaces_existing_target() {
+        let mut context = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let first = context
+            .insert_with_meta("first", SyntheticModule::empty("first"), Box::new([]), 1)
+            .expect("failed to insert first module");
+        let second = context
+            .insert_with_meta("second", SyntheticModule::empty("second"), Box::new([]), 2)
+            .expect("failed to insert second module");
+
+        assert_eq!(
+            context
+                .add_alias(first, "alias")
+                .expect("failed to add alias"),
+            None
+        );
+        let alias = context.key_id(&"alias").expect("alias key should exist");
+        assert_eq!(context.module_id(alias).unwrap(), Some(first));
+        assert_eq!(
+            context
+                .add_alias(second, "alias")
+                .expect("failed to replace alias"),
+            Some(first)
+        );
+        assert_eq!(context.module_id(alias).unwrap(), Some(second));
+        assert_eq!(
+            context
+                .add_alias(second, "alias")
+                .expect("failed to keep alias"),
+            None
+        );
+    }
+
+    #[test]
+    fn insert_with_meta_replaces_existing_key_in_place() {
+        let mut context = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let root = context
+            .insert_with_meta(
+                "root",
+                SyntheticModule::empty("old-root"),
+                Box::new(["old"]),
+                1,
+            )
+            .expect("failed to insert root module");
+        let root_key = context.key_id(&"root").expect("root key should exist");
+
+        let replaced = context
+            .insert_with_meta(
+                "root",
+                SyntheticModule::empty("new-root"),
+                Box::new(["new"]),
+                2,
+            )
+            .expect("failed to replace root module");
+        let new_dep = context
+            .key_id(&"new")
+            .expect("new dependency should be interned");
+
+        assert_eq!(replaced, root);
+        assert_eq!(context.key_id(&"root"), Some(root_key));
+        assert_eq!(context.module_id(root_key).unwrap(), Some(root));
+        assert_eq!(context.module_key(root).unwrap(), &"root");
+        assert_eq!(context.meta(root).unwrap(), &2);
+        assert_eq!(direct_deps(&context, root), [new_dep]);
+    }
+
+    #[test]
+    fn insert_with_meta_replaces_alias_target_in_place() {
+        let mut context = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let root = context
+            .insert_with_meta("root", SyntheticModule::empty("root"), Box::new([]), 1)
+            .expect("failed to insert root module");
+        context
+            .add_alias(root, "alias")
+            .expect("failed to add alias");
+        let alias = context.key_id(&"alias").expect("alias key should exist");
+
+        let replaced = context
+            .insert_with_meta(
+                "alias",
+                SyntheticModule::empty("alias"),
+                Box::new(["dep"]),
+                2,
+            )
+            .expect("failed to replace alias target");
+        let dep = context
+            .key_id(&"dep")
+            .expect("dependency should be interned");
+
+        assert_eq!(replaced, root);
+        assert_eq!(context.module_id(alias).unwrap(), Some(root));
+        assert_eq!(context.module_key(root).unwrap(), &"root");
+        assert_eq!(context.meta(root).unwrap(), &2);
+        assert_eq!(direct_deps(&context, root), [dep]);
     }
 
     #[test]
@@ -421,15 +559,15 @@ mod tests {
         target.extend(&source).expect("failed to extend context");
         let target_root = target
             .key_id(&"root")
-            .and_then(|id| target.module_id(id))
+            .and_then(|id| target.module_id(id).unwrap())
             .expect("root module should be copied");
         let target_alias = target.key_id(&"alias").expect("alias key should be copied");
         let target_canonical = target
             .key_id(&"canonical")
-            .and_then(|id| target.module_id(id))
+            .and_then(|id| target.module_id(id).unwrap())
             .expect("canonical key should be copied");
 
-        assert_eq!(source.direct_deps(root), Some(&[alias][..]));
+        assert_eq!(direct_deps(&source, root), [alias]);
         assert_eq!(
             source
                 .dependency_scope(root)
@@ -437,8 +575,11 @@ mod tests {
                 .as_slice(),
             &[root, canonical]
         );
-        assert_eq!(target.direct_deps(target_root), Some(&[target_alias][..]));
-        assert_eq!(target.module_id(target_alias), Some(target_canonical));
+        assert_eq!(direct_deps(&target, target_root), [target_alias]);
+        assert_eq!(
+            target.module_id(target_alias).unwrap(),
+            Some(target_canonical)
+        );
         assert_eq!(
             target
                 .dependency_scope(target_root)

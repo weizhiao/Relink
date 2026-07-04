@@ -7,7 +7,7 @@ use crate::{
     elf::ElfSectionId,
     entity::{PrimaryMap, entity_ref},
     image::{ModuleCapability, ScannedDynamic},
-    linker::storage::KeyId,
+    linker::storage::KeySlot,
     relocation::RelocationArch,
     tls::TlsResolver,
 };
@@ -20,20 +20,20 @@ pub(in crate::linker) struct ModuleId(usize);
 entity_ref!(ModuleId);
 
 pub struct PlannedModule<K, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
-    key_id: KeyId,
+    key_slot: KeySlot,
     key: K,
     module: ScannedDynamic<Arch>,
-    full_deps: Box<[KeyId]>,
+    full_deps: Box<[KeySlot]>,
     direct_deps: Box<[ModuleId]>,
     _marker: PhantomData<fn() -> Tls>,
 }
 
-type PlannedEntry<K, Arch> = (K, ScannedDynamic<Arch>, Box<[KeyId]>);
-type PlannedEntries<K, Arch> = BTreeMap<KeyId, PlannedEntry<K, Arch>>;
+type PlannedEntry<K, Arch> = (K, ScannedDynamic<Arch>, Box<[KeySlot]>);
+type PlannedEntries<K, Arch> = BTreeMap<KeySlot, PlannedEntry<K, Arch>>;
 
 fn resolve_direct_deps(
-    module_ids: &BTreeMap<KeyId, ModuleId>,
-    direct_deps: &[KeyId],
+    module_ids: &BTreeMap<KeySlot, ModuleId>,
+    direct_deps: &[KeySlot],
 ) -> Box<[ModuleId]> {
     direct_deps
         .iter()
@@ -49,14 +49,14 @@ where
 {
     #[inline]
     pub(in crate::linker) fn new(
-        key_id: KeyId,
+        key_slot: KeySlot,
         key: K,
         module: ScannedDynamic<Arch>,
-        full_deps: Box<[KeyId]>,
+        full_deps: Box<[KeySlot]>,
         direct_deps: Box<[ModuleId]>,
     ) -> Self {
         Self {
-            key_id,
+            key_slot,
             key,
             module,
             full_deps,
@@ -81,8 +81,8 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (KeyId, K, ScannedDynamic<Arch>, Box<[KeyId]>) {
-        (self.key_id, self.key, self.module, self.full_deps)
+    pub(crate) fn into_parts(self) -> (KeySlot, K, ScannedDynamic<Arch>, Box<[KeySlot]>) {
+        (self.key_slot, self.key, self.module, self.full_deps)
     }
 }
 
@@ -118,8 +118,8 @@ where
 {
     #[inline]
     pub(in crate::linker) fn new(
-        root: KeyId,
-        group_order: Vec<KeyId>,
+        root: KeySlot,
+        group_order: Vec<KeySlot>,
         mut entries: PlannedEntries<K, Arch>,
     ) -> Self {
         let group_ids = group_order;
@@ -127,17 +127,17 @@ where
         let mut planned_ids = BTreeMap::new();
         let mut group_order = Vec::with_capacity(group_ids.len());
         let mut pending_entries = PrimaryMap::default();
-        for key_id in group_ids {
+        for key_slot in group_ids {
             let (key, module, direct_deps) = entries
-                .remove(&key_id)
+                .remove(&key_slot)
                 .expect("scan plan group order referenced a missing discovered module");
-            let id = pending_entries.push((key_id, key.clone(), module, direct_deps));
+            let id = pending_entries.push((key_slot, key.clone(), module, direct_deps));
             let previous = module_ids.insert(key, id);
             assert!(
                 previous.is_none(),
                 "scan plan discovered duplicate module key"
             );
-            let previous = planned_ids.insert(key_id, id);
+            let previous = planned_ids.insert(key_slot, id);
             assert!(
                 previous.is_none(),
                 "scan plan discovered duplicate module id"
@@ -150,9 +150,9 @@ where
             .expect("scan plan root must exist in discovery order");
 
         let planned_entries =
-            pending_entries.map_values(|_, (key_id, key, module, direct_deps)| {
+            pending_entries.map_values(|_, (key_slot, key, module, direct_deps)| {
                 let plan_deps = resolve_direct_deps(&planned_ids, &direct_deps);
-                PlannedModule::new(key_id, key, module, direct_deps, plan_deps)
+                PlannedModule::new(key_slot, key, module, direct_deps, plan_deps)
             });
         assert!(
             entries.is_empty(),

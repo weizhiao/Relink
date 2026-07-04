@@ -2,10 +2,10 @@ use super::{
     request::{DependencyOwner, DependencyRequest, RootRequest, VisibleModules},
     resolver::{KeyResolver, ResolvedKey},
     session::{GraphEntry, ModuleEntry, ResolveSession},
-    storage::{CommittedStorage, KeyId},
+    storage::{CommittedStorage, KeySlot},
 };
 use crate::{
-    LinkerError, Loader, Result,
+    LinkResolverError, LinkerError, Loader, Result,
     image::{RawDynamic, ScannedDynamic, ScannedElf},
     memory::RegionAccess,
     observer::LoadObserver,
@@ -119,8 +119,8 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn contains_pending(&self, id: KeyId) -> bool {
-        self.session.contains_pending(id)
+    pub(crate) fn contains_pending(&self, slot: KeySlot) -> bool {
+        self.session.contains_pending(slot)
     }
 
     #[inline]
@@ -130,42 +130,48 @@ where
         Q: Ord + ?Sized,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        if let Some(id) = self.committed.key_id(key)
-            && (self.session.contains_pending(id) || self.committed.contains(id))
-        {
-            return true;
+        if let Some(slot) = self.committed.key_slot_for(key) {
+            if self.session.contains_pending(slot)
+                || self
+                    .committed
+                    .module_for_key(slot)
+                    .is_some_and(|slot| self.committed.contains_module(slot))
+            {
+                return true;
+            }
         }
 
         self.visible_modules.contains(key)
     }
 
-    fn intern_key(&mut self, key: K) -> KeyId {
+    fn intern_key(&mut self, key: K) -> KeySlot {
         self.committed.intern_key(key)
     }
 
-    fn key(&self, id: KeyId) -> Option<&K> {
-        self.committed.key(id)
+    fn key(&self, slot: KeySlot) -> &K {
+        self.committed.key(slot)
     }
 
-    fn known_direct_deps<Q>(&mut self, id: KeyId) -> Option<Vec<KeyId>>
+    fn known_direct_deps<Q>(&mut self, slot: KeySlot) -> Option<Vec<KeySlot>>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        if let Some(entry) = self.session.dynamics.get(&id) {
-            return entry.direct_deps().map(<[KeyId]>::to_vec);
+        if let Some(entry) = self.session.dynamics.get(&slot) {
+            return entry.direct_deps().map(<[KeySlot]>::to_vec);
         }
-        if let Some(entry) = self.session.module_handles.get(&id) {
+        if let Some(entry) = self.session.module_handles.get(&slot) {
             return Some(entry.direct_deps().to_vec());
         }
 
-        if let Some(direct_deps) = self.committed.direct_deps_by_key(id) {
-            return Some(direct_deps.to_vec());
+        if let Some(module_slot) = self.committed.module_for_key(slot) {
+            let module = self.committed.module(module_slot).present()?;
+            return Some(module.direct_deps().to_vec());
         }
 
         let direct_deps = {
-            let key = self.committed.key(id)?;
+            let key = self.committed.key(slot);
             self.visible_modules.direct_deps(key.borrow())?
         };
         Some(
@@ -177,25 +183,26 @@ where
         )
     }
 
-    fn owner(&self, id: KeyId) -> Option<&dyn DependencyOwner> {
+    fn owner(&self, slot: KeySlot) -> &dyn DependencyOwner {
         self.session
             .dynamics
-            .get(&id)
-            .map(|entry| entry.payload() as &dyn DependencyOwner)
+            .get(&slot)
+            .expect("dependency owner must be present for a staged dynamic module")
+            .payload() as &dyn DependencyOwner
     }
 
-    fn set_direct_deps(&mut self, id: KeyId, direct_deps: Vec<KeyId>) {
+    fn set_direct_deps(&mut self, slot: KeySlot, direct_deps: Vec<KeySlot>) {
         let entry = self
             .session
             .dynamics
-            .get_mut(&id)
+            .get_mut(&slot)
             .expect("session entry must exist for staged key");
         entry.set_direct_deps(direct_deps);
     }
 
     fn resolve_dependency_edge<'cfg, Q>(
         &self,
-        id: KeyId,
+        slot: KeySlot,
         needed_index: usize,
         resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
@@ -205,12 +212,8 @@ where
         V: VisibleModules<K, Arch, Q, Tls>,
     {
         let contains_key = |key: &Q| self.contains_key(key);
-        let owner = self.owner(id).ok_or_else(|| {
-            LinkerError::resolver("dependency owner is missing while building request")
-        })?;
-        let owner_key = self
-            .key(id)
-            .expect("dependency owner id must resolve to an interned key");
+        let owner = self.owner(slot);
+        let owner_key = self.key(slot);
         let req = DependencyRequest::new(owner_key, owner, needed_index, &contains_key);
         resolver.resolve_dependency(&req)
     }
@@ -232,11 +235,11 @@ where
 
     fn direct_deps_for<'cfg, Obs, F, M, Q>(
         &mut self,
-        id: KeyId,
+        slot: KeySlot,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
         stage: &mut F,
-    ) -> Result<Vec<KeyId>>
+    ) -> Result<Vec<KeySlot>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -248,33 +251,28 @@ where
             &mut Self,
             ResolvedKey<'cfg, K, Arch, Tls>,
             &mut Loader<Obs, D, Tls, Arch, M>,
-        ) -> Result<KeyId>,
+        ) -> Result<KeySlot>,
     {
-        if let Some(direct_deps) = self.known_direct_deps(id) {
+        if let Some(direct_deps) = self.known_direct_deps(slot) {
             return Ok(direct_deps);
         }
 
-        let needed_len = self
-            .owner(id)
-            .ok_or_else(|| {
-                LinkerError::resolver("dependency owner is missing while resolving direct deps")
-            })?
-            .needed_len();
+        let needed_len = self.owner(slot).needed_len();
         let mut direct_deps = Vec::with_capacity(needed_len);
         for idx in 0..needed_len {
-            let resolved_key = self.resolve_dependency_edge(id, idx, resolver)?;
+            let resolved_key = self.resolve_dependency_edge(slot, idx, resolver)?;
             let dep_id = stage(self, resolved_key, loader)?;
             if !direct_deps.contains(&dep_id) {
                 direct_deps.push(dep_id);
             }
         }
-        self.set_direct_deps(id, direct_deps.clone());
+        self.set_direct_deps(slot, direct_deps.clone());
         Ok(direct_deps)
     }
 
     fn resolve_dependency_graph_with<'cfg, Obs, F, M, Q>(
         &mut self,
-        root: KeyId,
+        root: KeySlot,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
         mut stage: F,
@@ -290,7 +288,7 @@ where
             &mut Self,
             ResolvedKey<'cfg, K, Arch, Tls>,
             &mut Loader<Obs, D, Tls, Arch, M>,
-        ) -> Result<KeyId>,
+        ) -> Result<KeySlot>,
     {
         let mut group_order = Vec::new();
         extend_breadth_first(&mut group_order, root, |key| {
@@ -313,7 +311,7 @@ where
         &mut self,
         resolved: ResolvedKey<'cfg, K, Arch, Tls>,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
-    ) -> Result<KeyId>
+    ) -> Result<KeySlot>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -328,29 +326,20 @@ where
                 if self.contains_key(key.borrow()) {
                     return Ok(self.intern_key(key));
                 }
-                Err(LinkerError::resolver(
-                    "resolved existing module is not visible in the current link context",
-                )
-                .into())
+                Err(LinkerError::resolver(LinkResolverError::ExistingKeyNotVisible).into())
             }
             ResolvedKey::Load { key, reader } => {
                 if self.contains_key(key.borrow()) {
-                    return Err(LinkerError::resolver(
-                        "resolved reader produced an already-known key; use Existing to reuse it",
-                    )
-                    .into());
+                    return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
                 let raw = loader.load_dynamic(reader)?;
-                let id = self.intern_key(key);
-                self.session.dynamics.insert(id, GraphEntry::new(raw));
-                Ok(id)
+                let slot = self.intern_key(key);
+                self.session.dynamics.insert(slot, GraphEntry::new(raw));
+                Ok(slot)
             }
             ResolvedKey::Module { key, module, deps } => {
                 if self.contains_key(key.borrow()) {
-                    return Err(LinkerError::resolver(
-                        "resolved module handle produced an already-known key",
-                    )
-                    .into());
+                    return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
 
                 let mut direct_deps = Vec::with_capacity(deps.len());
@@ -361,18 +350,19 @@ where
                     }
                 }
 
-                let id = self.intern_key(key);
-                self.session
-                    .module_handles
-                    .insert(id, ModuleEntry::new(module, direct_deps.into_boxed_slice()));
-                Ok(id)
+                let slot = self.intern_key(key);
+                self.session.module_handles.insert(
+                    slot,
+                    ModuleEntry::new(module, direct_deps.into_boxed_slice()),
+                );
+                Ok(slot)
             }
         }
     }
 
     pub(crate) fn resolve_dependency_graph<'cfg, Obs, M, Q>(
         &mut self,
-        root: KeyId,
+        root: KeySlot,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
     ) -> Result<()>
@@ -402,7 +392,7 @@ where
         &mut self,
         resolved: ResolvedKey<'static, K, Arch, Tls>,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
-    ) -> Result<KeyId>
+    ) -> Result<KeySlot>
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -417,28 +407,22 @@ where
                 if self.contains_key(key.borrow()) {
                     return Ok(self.intern_key(key));
                 }
-                Err(LinkerError::resolver("scan resolver referenced an unknown visible key").into())
+                Err(LinkerError::resolver(LinkResolverError::ExistingKeyNotVisible).into())
             }
             ResolvedKey::Load { key, reader } => {
                 if self.contains_key(key.borrow()) {
-                    return Err(LinkerError::resolver(
-                        "scan resolver attached metadata to an already-known key; use Existing to reuse it",
-                    )
-                    .into());
+                    return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
                 let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
                     return Err(crate::ParsePhdrError::MissingDynamicSection.into());
                 };
-                let id = self.intern_key(key);
-                self.session.dynamics.insert(id, GraphEntry::new(module));
-                Ok(id)
+                let slot = self.intern_key(key);
+                self.session.dynamics.insert(slot, GraphEntry::new(module));
+                Ok(slot)
             }
             ResolvedKey::Module { key, module, deps } => {
                 if self.contains_key(key.borrow()) {
-                    return Err(LinkerError::resolver(
-                        "scan resolver produced an already-known module key",
-                    )
-                    .into());
+                    return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
 
                 let mut direct_deps = Vec::with_capacity(deps.len());
@@ -449,18 +433,19 @@ where
                     }
                 }
 
-                let id = self.intern_key(key);
-                self.session
-                    .module_handles
-                    .insert(id, ModuleEntry::new(module, direct_deps.into_boxed_slice()));
-                Ok(id)
+                let slot = self.intern_key(key);
+                self.session.module_handles.insert(
+                    slot,
+                    ModuleEntry::new(module, direct_deps.into_boxed_slice()),
+                );
+                Ok(slot)
             }
         }
     }
 
     pub(crate) fn resolve_dependency_graph<Obs, M, Q>(
         &mut self,
-        root: KeyId,
+        root: KeySlot,
         loader: &mut Loader<Obs, D, Tls, Arch, M>,
         resolver: &mut impl KeyResolver<'static, K, Arch, Q, Tls>,
     ) -> Result<()>
