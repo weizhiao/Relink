@@ -1,5 +1,7 @@
 //! Runtime execution abstractions for mapped images.
 
-mod code;
+mod native;
+mod traits;
 
-pub use code::{CodeContext, CodeExecutor, NativeCodeExecutor};
+pub use native::NativeCodeExecutor;
+pub use traits::{CodeContext, CodeExecutor};

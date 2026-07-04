@@ -1,8 +1,8 @@
 use crate::{
-    CodeError, MmapError, Result,
+    MmapError, Result,
     arch::NativeArch,
     memory::{ImageMemory, VmAddr},
-    relocation::{RelocationArch, resolve_ifunc},
+    relocation::RelocationArch,
     sync::Arc,
 };
 use core::marker::PhantomData;
@@ -88,60 +88,5 @@ where
     #[inline]
     fn resolve_ifunc(&self, ctx: CodeContext<'_, Arch>, resolver: VmAddr) -> Result<VmAddr> {
         (**self).resolve_ifunc(ctx, resolver)
-    }
-}
-
-/// Code executor for images mapped into the current process.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NativeCodeExecutor;
-
-impl NativeCodeExecutor {
-    #[inline]
-    fn ensure_supported<Arch: RelocationArch>() -> Result<()> {
-        if Arch::SUPPORTS_NATIVE_RUNTIME {
-            Ok(())
-        } else {
-            Err(CodeError::NativeUnsupported.into())
-        }
-    }
-}
-
-impl<Arch: RelocationArch> CodeExecutor<Arch> for NativeCodeExecutor {
-    #[inline]
-    fn call_init(&self, ctx: CodeContext<'_, Arch>, init: VmAddr) -> Result<()> {
-        self.call_no_args(ctx, init)
-    }
-
-    #[inline]
-    fn call_fini(&self, ctx: CodeContext<'_, Arch>, fini: VmAddr) -> Result<()> {
-        self.call_no_args(ctx, fini)
-    }
-
-    #[inline]
-    fn resolve_ifunc(&self, ctx: CodeContext<'_, Arch>, resolver: VmAddr) -> Result<VmAddr> {
-        Self::ensure_supported::<Arch>()?;
-        let ptr = ctx.host_ptr(resolver)?;
-        Ok(unsafe { resolve_ifunc(ptr) })
-    }
-}
-
-impl NativeCodeExecutor {
-    #[inline]
-    fn call_no_args<Arch: RelocationArch>(
-        &self,
-        ctx: CodeContext<'_, Arch>,
-        addr: VmAddr,
-    ) -> Result<()> {
-        Self::ensure_supported::<Arch>()?;
-        let ptr = ctx.host_ptr(addr)?.as_ptr() as usize;
-        #[cfg(not(windows))]
-        unsafe {
-            core::mem::transmute::<usize, extern "C" fn()>(ptr)()
-        };
-        #[cfg(windows)]
-        unsafe {
-            core::mem::transmute::<usize, extern "sysv64" fn()>(ptr)()
-        };
-        Ok(())
     }
 }

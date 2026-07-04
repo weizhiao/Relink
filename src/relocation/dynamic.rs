@@ -80,12 +80,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         let (init, fini) = self.resolve_lifecycle()?;
         let finalizer = Finalizer::new(fini);
 
-        let dep_names = scope
-            .iter()
-            .map(|source| source.name())
-            .collect::<alloc::vec::Vec<_>>();
-        if !dep_names.is_empty() {
-            logging::debug!("[{}] Bound dependencies: {:?}", self.name(), dep_names);
+        if !scope.is_empty() {
+            logging::debug!("[{}] Bound dependencies: {:?}", self.name(), &scope);
         }
 
         self.apply_relro(lazy_binding)?;

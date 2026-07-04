@@ -6,7 +6,7 @@ use crate::{
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{any::Any, ops::Deref, slice};
+use core::{any::Any, fmt, ops::Deref, slice};
 
 /// Shared ownership handle for one retained module.
 pub struct ModuleHandle<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
@@ -177,6 +177,18 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleScope<Arch, T
         Self {
             modules: Arc::clone(&self.modules),
         }
+    }
+}
+
+impl<Arch, Tls> fmt::Debug for ModuleScope<Arch, Tls>
+where
+    Arch: RelocationArch,
+    Tls: TlsResolver<Arch>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.modules.iter().map(|module| module.name()))
+            .finish()
     }
 }
 
