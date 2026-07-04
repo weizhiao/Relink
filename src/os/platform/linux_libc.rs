@@ -4,7 +4,7 @@ use crate::{
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
-use alloc::{boxed::Box, ffi::CString};
+use alloc::ffi::CString;
 use core::ffi::c_void;
 #[cfg(feature = "tls")]
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -13,6 +13,12 @@ use libc::{_SC_PAGESIZE, O_RDONLY, SEEK_END, madvise, mmap, mprotect, munmap, pr
 #[inline]
 fn last_os_error_code() -> u32 {
     unsafe { *libc::__errno_location() as u32 }
+}
+
+#[inline]
+#[allow(dead_code)]
+pub(crate) fn getauxval(at: usize) -> usize {
+    unsafe { libc::getauxval(at as libc::c_ulong) as usize }
 }
 
 /// An implementation of Mmap trait
@@ -265,40 +271,31 @@ impl RawFile {
     }
 }
 
-fn pread_exact(fd: i32, mut bytes: &mut [u8], mut offset: usize) -> Result<()> {
-    loop {
-        if bytes.is_empty() {
-            return Ok(());
-        }
-        let bytes_to_read = bytes.len();
-        let ptr = bytes.as_mut_ptr() as *mut libc::c_void;
-        let result = unsafe { pread(fd, ptr, bytes_to_read, offset as _) };
-
-        if result < 0 {
-            return Err(IoError::ReadFailed {
-                code: last_os_error_code(),
-            }
-            .into());
-        } else if result == 0 {
-            return Err(IoError::FailedToFillBuffer.into());
-        }
-        let n = result as usize;
-        offset = offset
-            .checked_add(n)
-            .ok_or(IoError::ReadOutOfBounds(Box::new(
-                crate::ReadBoundsError::new(offset, bytes_to_read, usize::MAX),
-            )))?;
-        bytes = &mut bytes[n..];
-    }
-}
-
 impl ElfReader for RawFile {
     fn len(&self) -> usize {
         self.len
     }
 
     fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
-        pread_exact(self.fd as i32, buf, offset)
+        super::read_exact_at(buf, offset, |bytes, offset| {
+            let result = unsafe {
+                pread(
+                    self.fd as i32,
+                    bytes.as_mut_ptr() as *mut libc::c_void,
+                    bytes.len(),
+                    offset as _,
+                )
+            };
+
+            if result < 0 {
+                Err(IoError::ReadFailed {
+                    code: last_os_error_code(),
+                }
+                .into())
+            } else {
+                Ok(result as usize)
+            }
+        })
     }
 
     fn path(&self) -> &Path {

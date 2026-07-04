@@ -4,7 +4,7 @@ use crate::{
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
 };
-use alloc::{boxed::Box, ffi::CString};
+use alloc::ffi::CString;
 use core::ffi::{c_int, c_void};
 use syscalls::Sysno;
 
@@ -27,6 +27,41 @@ pub(crate) unsafe fn register_thread_destructor(
 #[cfg(feature = "tls")]
 pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
     core::ptr::null_mut()
+}
+
+#[inline]
+#[allow(dead_code)]
+pub(crate) fn getauxval(at: usize) -> usize {
+    try_getauxval(at).unwrap_or(0)
+}
+
+#[inline]
+fn try_getauxval(at: usize) -> Result<usize> {
+    const AT_NULL: usize = 0;
+    const AUXV_PATH: &str = "/proc/self/auxv";
+
+    let file = RawFile::from_path(Path::new(AUXV_PATH))?;
+    let mut bytes = [0u8; 4096];
+    let len = file.read_some(&mut bytes, 0)?;
+
+    let entry_len = core::mem::size_of::<usize>() * 2;
+    let mut offset = 0;
+    while offset + entry_len <= len {
+        let key = unsafe { (bytes.as_ptr().add(offset) as *const usize).read_unaligned() };
+        let value = unsafe {
+            (bytes.as_ptr().add(offset + core::mem::size_of::<usize>()) as *const usize)
+                .read_unaligned()
+        };
+        if key == AT_NULL {
+            break;
+        }
+        if key == at {
+            return Ok(value);
+        }
+        offset += entry_len;
+    }
+
+    Ok(0)
 }
 
 pub(crate) struct RawFile {
@@ -62,7 +97,7 @@ impl Mmap for DefaultMmap {
                     usize::MAX,
                     0
                 ),
-                |code| MmapError::MmapAnonymousFailed { code }.into(),
+                |code| Error::from(MmapError::MmapAnonymousFailed { code }),
             )? as *mut c_void
         };
         Ok(MappedRegion::local(ptr, len, *self))
@@ -96,7 +131,7 @@ impl Mmap for DefaultMmap {
                     fd as c_int,
                     offset
                 ),
-                |code| MmapError::MmapFailed { code }.into(),
+                |code| Error::from(MmapError::MmapFailed { code }),
             )?;
         }
         Ok(())
@@ -124,7 +159,7 @@ impl Mmap for DefaultMmap {
                     usize::MAX,
                     0
                 ),
-                |code| MmapError::MmapAnonymousFailed { code }.into(),
+                |code| Error::from(MmapError::MmapAnonymousFailed { code }),
             )?;
         }
         Ok(())
@@ -133,7 +168,7 @@ impl Mmap for DefaultMmap {
     unsafe fn munmap(&self, addr: VmAddr, len: usize) -> crate::Result<()> {
         from_ret(
             syscalls::raw_syscall!(Sysno::munmap, addr.as_mut_ptr::<c_void>(), len),
-            |code| MmapError::MunmapFailed { code }.into(),
+            |code| Error::from(MmapError::MunmapFailed { code }),
         )?;
         Ok(())
     }
@@ -147,7 +182,7 @@ impl Mmap for DefaultMmap {
                 len,
                 behavior as c_int
             ),
-            |code| MmapError::Madvise { code }.into(),
+            |code| Error::from(MmapError::Madvise { code }),
         )?;
         Ok(())
     }
@@ -160,25 +195,25 @@ impl Mmap for DefaultMmap {
                 len,
                 prot.bits()
             ),
-            |code| MmapError::Mprotect { code }.into(),
+            |code| Error::from(MmapError::Mprotect { code }),
         )?;
         Ok(())
     }
 }
 
-/// Converts a raw syscall return value to a result.
 #[inline(always)]
-fn from_ret<F>(value: usize, make_error: F) -> Result<usize>
+fn from_ret<E, F>(value: usize, make_error: F) -> core::result::Result<usize, E>
 where
-    F: FnOnce(u32) -> Error,
+    F: FnOnce(u32) -> E,
 {
     if value > -4096isize as usize {
         // Truncation of the error value is guaranteed to never occur due to
         // the above check. This is the same check that musl uses:
         // https://git.musl-libc.org/cgit/musl/tree/src/internal/syscall_ret.c?h=v1.1.15
-        return Err(make_error((-(value as isize)) as u32));
+        Err(make_error((-(value as isize)) as u32))
+    } else {
+        Ok(value)
     }
-    Ok(value)
 }
 
 #[inline]
@@ -271,9 +306,16 @@ impl RawFile {
         unsafe {
             from_ret(
                 syscalls::raw_syscall!(Sysno::lseek, fd, 0, SEEK_END),
-                |code| IoError::SeekFailed { code }.into(),
+                |code| Error::from(IoError::SeekFailed { code }),
             )
         }
+    }
+
+    fn read_some(&self, bytes: &mut [u8], offset: usize) -> Result<usize> {
+        from_ret(
+            unsafe { pread64(self.fd, bytes.as_mut_ptr(), bytes.len(), offset) },
+            |code| Error::from(IoError::ReadFailed { code }),
+        )
     }
 }
 
@@ -281,7 +323,7 @@ impl Drop for RawFile {
     fn drop(&mut self) {
         let res = unsafe {
             from_ret(syscalls::raw_syscall!(Sysno::close, self.fd), |_code| {
-                IoError::CloseFailed.into()
+                Error::from(IoError::CloseFailed)
             })
         };
         debug_assert!(res.is_ok(), "failed to close ELF file");
@@ -297,28 +339,7 @@ impl ElfReader for RawFile {
     }
 
     fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
-        let mut bytes = buf;
-        let mut offset = offset;
-        unsafe {
-            while !bytes.is_empty() {
-                let size = from_ret(
-                    pread64(self.fd, bytes.as_mut_ptr(), bytes.len(), offset),
-                    |code| IoError::ReadFailed { code }.into(),
-                )?;
-                if size == 0 {
-                    return Err(IoError::FailedToFillBuffer.into());
-                }
-                offset = offset.checked_add(size).ok_or_else(|| {
-                    IoError::ReadOutOfBounds(Box::new(crate::ReadBoundsError::new(
-                        offset,
-                        bytes.len(),
-                        usize::MAX,
-                    )))
-                })?;
-                bytes = &mut bytes[size..];
-            }
-        }
-        Ok(())
+        super::read_exact_at(buf, offset, |bytes, offset| self.read_some(bytes, offset))
     }
 
     fn path(&self) -> &Path {

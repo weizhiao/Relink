@@ -350,47 +350,31 @@ impl RawFile {
     }
 }
 
-fn win_read_exact_at(handle: HANDLE, mut bytes: &mut [u8], mut offset: usize) -> Result<()> {
-    loop {
-        if bytes.is_empty() {
-            return Ok(());
-        }
+fn win_read_at(handle: HANDLE, bytes: &mut [u8], offset: usize) -> Result<usize> {
+    let bytes_to_read = bytes.len().min(u32::MAX as usize) as u32;
+    let ptr = bytes.as_mut_ptr();
+    let mut read_count = 0u32;
+    let mut overlapped = OVERLAPPED::default();
+    overlapped.Anonymous.Anonymous = OVERLAPPED_0_0 {
+        Offset: offset as u32,
+        OffsetHigh: (offset >> 32) as u32,
+    };
 
-        let bytes_to_read = bytes.len().min(u32::MAX as usize) as u32;
-        let ptr = bytes.as_mut_ptr();
-        let mut read_count = 0u32;
-        let mut overlapped = OVERLAPPED::default();
-        overlapped.Anonymous.Anonymous = OVERLAPPED_0_0 {
-            Offset: offset as u32,
-            OffsetHigh: (offset >> 32) as u32,
-        };
+    let result = unsafe {
+        ReadFile(
+            handle,
+            ptr as *mut u8,
+            bytes_to_read,
+            &mut read_count,
+            &mut overlapped,
+        )
+    };
 
-        let result = unsafe {
-            ReadFile(
-                handle,
-                ptr as *mut u8,
-                bytes_to_read,
-                &mut read_count,
-                &mut overlapped,
-            )
-        };
-
-        if result == 0 {
-            let err_code = unsafe { GetLastError() };
-            return Err(IoError::ReadFailed { code: err_code }.into());
-        } else if read_count == 0 {
-            return Err(IoError::FailedToFillBuffer.into());
-        }
-
-        let n = read_count as usize;
-        offset = offset.checked_add(n).ok_or_else(|| {
-            IoError::ReadOutOfBounds(Box::new(crate::ReadBoundsError::new(
-                offset,
-                bytes.len(),
-                usize::MAX,
-            )))
-        })?;
-        bytes = &mut bytes[n..];
+    if result == 0 {
+        let err_code = unsafe { GetLastError() };
+        Err(IoError::ReadFailed { code: err_code }.into())
+    } else {
+        Ok(read_count as usize)
     }
 }
 
@@ -408,7 +392,9 @@ impl ElfReader for RawFile {
     }
 
     fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
-        win_read_exact_at(self.fd as HANDLE, buf, offset)
+        super::read_exact_at(buf, offset, |bytes, offset| {
+            win_read_at(self.fd as HANDLE, bytes, offset)
+        })
     }
 
     fn path(&self) -> &Path {
