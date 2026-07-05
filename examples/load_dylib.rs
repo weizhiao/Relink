@@ -6,6 +6,8 @@ use elf_loader::{
     image::{ModuleHandle, SyntheticModule, SyntheticSymbol},
 };
 
+const LOADER: Loader = Loader::new();
+
 fn host_symbols() -> ModuleHandle {
     fn print(s: &str) {
         println!("{}", s);
@@ -23,20 +25,19 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let fixtures = fixture_support::ensure_all();
-    let mut loader = Loader::new();
     let host = host_symbols();
-    let liba = loader
+    let liba = LOADER
         .load_dylib(fixtures.liba_str())?
         .relocator()
         .scope([host.clone()])
         .relocate()?;
-    let libb = loader
+    let libb = LOADER
         .load_dylib(fixtures.libb_str())?
         .relocator()
         .scope([host.clone()])
         .extend_scope([&liba])
         .relocate()?;
-    let libc = loader
+    let libc = LOADER
         .load_dylib(fixtures.libc_str())?
         .relocator()
         .scope([host])

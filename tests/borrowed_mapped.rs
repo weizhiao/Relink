@@ -44,12 +44,12 @@ fn borrowed_dynamic_reuses_existing_mapping() {
         &[SymbolDesc::global_func("answer", &return_42_stub(arch))],
     );
 
-    let mut owner_loader = Loader::new();
+    let owner_loader = Loader::new();
     let owner = owner_loader
         .load_dylib(ElfBinary::new("owner.so", &output.data))
         .expect("failed to map owner dylib");
 
-    let mut borrowed_loader = Loader::new();
+    let borrowed_loader = Loader::new();
     let borrowed = unsafe {
         borrowed_loader.load_mapped_dynamic(
             "borrowed-main",
@@ -94,10 +94,9 @@ fn scanned_dynamic_load_reuses_scanned_metadata() {
     );
     let bytes = output.data;
 
-    let mut loader = Loader::new()
-        .with_data::<ScanData>()
-        .with_observer(ScanObserver);
-    let ScannedElf::Dynamic(scanned) = loader
+    let loader = Loader::new().with_data::<ScanData>();
+    let mut run = loader.run().with_observer(ScanObserver);
+    let ScannedElf::Dynamic(scanned) = run
         .scan(ElfBinary::owned("scanned.so", bytes))
         .expect("failed to scan dylib")
     else {
@@ -105,7 +104,7 @@ fn scanned_dynamic_load_reuses_scanned_metadata() {
     };
     assert_eq!(scanned.soname(), Some("libscanned.so"));
 
-    let raw = loader
+    let raw = run
         .load_scanned_dynamic(scanned)
         .expect("failed to load scanned dynamic image");
 

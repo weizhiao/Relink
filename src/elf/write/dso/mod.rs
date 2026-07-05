@@ -36,7 +36,7 @@ mod tests {
         let image = builder.build().unwrap();
         let expected_addr = image.exports[0].value;
 
-        let mut loader = Loader::new().for_arch::<X86_64Arch>();
+        let loader = Loader::new().for_arch::<X86_64Arch>();
         let lib = loader
             .load_dylib(ElfBinary::owned("libvirtual.so", image.bytes))
             .unwrap()

@@ -156,6 +156,7 @@ compile_error!(
 
 mod aligned_bytes;
 pub mod arch;
+mod const_builder;
 pub mod elf;
 mod entity;
 mod error;
@@ -188,7 +189,7 @@ pub use error::{
     LinkScanError, LinkerError, MmapError, ParseDynamicError, ParseEhdrError, ParseNoteError,
     ParsePhdrError, ParseShdrError, RelocTableError, RelocationError, RelocationFailure, TlsError,
 };
-pub use loader::Loader;
+pub use loader::{Loader, LoaderRun};
 
 /// A type alias for `Result`s returned by `elf_loader` functions.
 ///

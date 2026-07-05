@@ -18,7 +18,7 @@ mod load;
 
 pub(crate) use buffer::ElfBuf;
 pub(crate) use builder::{ImageBuilder, ScanBuilder};
-pub use handle::Loader;
 pub(crate) use handle::native_executor;
+pub use handle::{Loader, LoaderRun};
 #[cfg(feature = "object")]
 pub(crate) use load::ExpectedElf;

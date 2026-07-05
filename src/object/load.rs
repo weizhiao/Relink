@@ -4,21 +4,23 @@ use crate::{
     elf::{ElfHeader, ElfLayout, ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr},
     image::RawObject,
     input::{ElfReader, ElfReaderExt, IntoElfReader, PathBuf},
-    loader::{ExpectedElf, Loader},
+    loader::{ExpectedElf, Loader, LoaderRun},
     logging,
-    observer::LoadObserver,
+    observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent, LoadObserver},
     os::Mmap,
     relocation::ObjectRelocationArch,
+    runtime::CodeExecutor,
     tls::TlsResolver,
 };
 
-impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
+impl<'run, Obs, D, Tls, Arch, M, Exec> LoaderRun<'run, Obs, D, Tls, Arch, M, Exec>
 where
     Obs: LoadObserver<D, Arch>,
     D: Default + 'static,
     Tls: TlsResolver<Arch>,
     Arch: ObjectRelocationArch,
     M: Mmap,
+    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Loads a relocatable object file into memory and prepares it for relocation.
     ///
@@ -52,10 +54,16 @@ where
         let shstrtab = read_section_name_table(&ehdr, &shdrs, &object)?;
         let mut sections = ObjectSections::new(shdrs, shstrtab);
         let mut user_data = D::default();
-        self.notify_before_object_load(&ehdr, &mut sections, &object, &mut user_data)?;
         let path = PathBuf::from(object.path());
-        let page_size = self.page_size()?.bytes();
+        let page_size = self.loader.page_size()?.bytes();
+        let executor = self.loader.executor();
         let (object_groups, observer, mapper) = self.object_load_context();
+        observer.on_before_object_load(BeforeObjectLoadEvent::new(
+            &ehdr,
+            &mut sections,
+            &object,
+            &mut user_data,
+        ))?;
         let (section_segments, segments) = SectionSegments::<Arch>::load::<D, _, _>(
             &mut sections,
             &object,
@@ -70,15 +78,34 @@ where
             segments,
             section_segments,
             user_data,
-            self.executor(),
+            executor,
         )?;
         let mut raw = builder.build_object();
-        self.notify_after_object_load(&mut raw)?;
+        observer.on_after_object_load(AfterObjectLoadEvent::new(&mut raw))?;
         let base = raw.base();
 
         logging::info!("Loaded object: {} at {}", raw.name(), base);
 
         Ok(raw)
+    }
+}
+
+impl<D, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
+where
+    (): LoadObserver<D, Arch>,
+    D: Default + 'static,
+    Tls: TlsResolver<Arch>,
+    Arch: ObjectRelocationArch,
+    M: Mmap,
+    Exec: CodeExecutor<Arch> + Clone,
+{
+    /// Loads a relocatable object file into memory and prepares it for relocation.
+    #[inline]
+    pub fn load_object<'a, I>(&self, input: I) -> Result<RawObject<D, Arch, M::Region, Tls>>
+    where
+        I: IntoElfReader<'a>,
+    {
+        self.run().load_object(input)
     }
 }
 
@@ -545,7 +572,7 @@ mod tests {
         write_value(&mut bytes, ehdr_size + shdr_size * 2, &shstrtab_shdr);
         write_bytes(&mut bytes, shstrtab_offset, shstrtab);
 
-        let mut loader = Loader::new();
+        let loader = Loader::new();
         let result = loader.load_object(ElfBinary::owned("bad.o", bytes));
         assert!(matches!(
             result,
@@ -557,7 +584,7 @@ mod tests {
 
     #[test]
     fn load_object_rejects_section_name_table_without_nul() {
-        let mut loader = Loader::new();
+        let loader = Loader::new();
         let result = loader.load_object(ElfBinary::owned(
             "bad.o",
             make_two_section_object(b"\0.shstrtab", 1),
@@ -572,7 +599,7 @@ mod tests {
 
     #[test]
     fn load_object_rejects_section_name_offset_past_table() {
-        let mut loader = Loader::new();
+        let loader = Loader::new();
         let result =
             loader.load_object(ElfBinary::owned("bad.o", make_two_section_object(b"\0", 1)));
         assert!(matches!(
@@ -586,12 +613,11 @@ mod tests {
     #[test]
     fn load_object_notifies_object_load_observers() {
         let mut observer = ObjectObserver::default();
-        let mut loader = Loader::new()
-            .with_data::<ObjectData>()
-            .with_observer(&mut observer);
+        let loader = Loader::new().with_data::<ObjectData>();
+        let mut run = loader.run().with_observer(&mut observer);
 
-        let _ = loader.load_object(ElfBinary::owned("metadata.o", make_metadata_object()));
-        drop(loader);
+        let _ = run.load_object(ElfBinary::owned("metadata.o", make_metadata_object()));
+        drop(run);
 
         assert_eq!(observer.found_shstrtab, Some(ElfSectionId::new(3)));
         assert!(observer.shstrtab_name_seen);

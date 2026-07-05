@@ -5,12 +5,13 @@ use super::{
     storage::{CommittedStorage, KeySlot},
 };
 use crate::{
-    LinkResolverError, LinkerError, Loader, Result,
+    LinkResolverError, LinkerError, LoaderRun, Result,
     image::{RawDynamic, ScannedDynamic, ScannedElf},
     memory::RegionAccess,
     observer::LoadObserver,
     os::Mmap,
     relocation::RelocationArch,
+    runtime::CodeExecutor,
     tls::TlsResolver,
 };
 use alloc::{borrow::ToOwned, collections::BTreeSet, vec::Vec};
@@ -233,10 +234,10 @@ where
         resolver.load_root(&req)
     }
 
-    fn direct_deps_for<'cfg, Obs, F, M, Q>(
+    fn direct_deps_for<'cfg, Obs, F, M, Exec, Q>(
         &mut self,
         slot: KeySlot,
-        loader: &mut Loader<Obs, D, Tls, Arch, M>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
         stage: &mut F,
     ) -> Result<Vec<KeySlot>>
@@ -247,10 +248,11 @@ where
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
+        Exec: CodeExecutor<Arch> + Clone,
         F: FnMut(
             &mut Self,
             ResolvedKey<'cfg, K, Arch, Tls>,
-            &mut Loader<Obs, D, Tls, Arch, M>,
+            &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         ) -> Result<KeySlot>,
     {
         if let Some(direct_deps) = self.known_direct_deps(slot) {
@@ -270,10 +272,10 @@ where
         Ok(direct_deps)
     }
 
-    fn resolve_dependency_graph_with<'cfg, Obs, F, M, Q>(
+    fn resolve_dependency_graph_with<'cfg, Obs, F, M, Exec, Q>(
         &mut self,
         root: KeySlot,
-        loader: &mut Loader<Obs, D, Tls, Arch, M>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
         mut stage: F,
     ) -> Result<()>
@@ -284,10 +286,11 @@ where
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
+        Exec: CodeExecutor<Arch> + Clone,
         F: FnMut(
             &mut Self,
             ResolvedKey<'cfg, K, Arch, Tls>,
-            &mut Loader<Obs, D, Tls, Arch, M>,
+            &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         ) -> Result<KeySlot>,
     {
         let mut group_order = Vec::new();
@@ -307,10 +310,10 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn stage_resolved<'cfg, Obs, M, Q>(
+    pub(crate) fn stage_resolved<'cfg, Obs, M, Exec, Q>(
         &mut self,
         resolved: ResolvedKey<'cfg, K, Arch, Tls>,
-        loader: &mut Loader<Obs, D, Tls, Arch, M>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
     ) -> Result<KeySlot>
     where
         K: 'cfg + Borrow<Q>,
@@ -320,6 +323,7 @@ where
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
+        Exec: CodeExecutor<Arch> + Clone,
     {
         match resolved {
             ResolvedKey::Existing(key) => {
@@ -360,10 +364,10 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<'cfg, Obs, M, Q>(
+    pub(crate) fn resolve_dependency_graph<'cfg, Obs, M, Exec, Q>(
         &mut self,
         root: KeySlot,
-        loader: &mut Loader<Obs, D, Tls, Arch, M>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
     ) -> Result<()>
     where
@@ -374,6 +378,7 @@ where
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
+        Exec: CodeExecutor<Arch> + Clone,
     {
         self.resolve_dependency_graph_with(root, loader, resolver, |ctx, resolved, loader| {
             ctx.stage_resolved(resolved, loader)
@@ -388,10 +393,10 @@ where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn stage_resolved<Obs, M, Q>(
+    pub(crate) fn stage_resolved<Obs, M, Exec, Q>(
         &mut self,
         resolved: ResolvedKey<'static, K, Arch, Tls>,
-        loader: &mut Loader<Obs, D, Tls, Arch, M>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
     ) -> Result<KeySlot>
     where
         K: 'static + Borrow<Q>,
@@ -401,6 +406,7 @@ where
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
+        Exec: CodeExecutor<Arch> + Clone,
     {
         match resolved {
             ResolvedKey::Existing(key) => {
@@ -443,10 +449,10 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<Obs, M, Q>(
+    pub(crate) fn resolve_dependency_graph<Obs, M, Exec, Q>(
         &mut self,
         root: KeySlot,
-        loader: &mut Loader<Obs, D, Tls, Arch, M>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         resolver: &mut impl KeyResolver<'static, K, Arch, Q, Tls>,
     ) -> Result<()>
     where
@@ -457,6 +463,7 @@ where
         Obs: LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
+        Exec: CodeExecutor<Arch> + Clone,
     {
         self.resolve_dependency_graph_with(root, loader, resolver, |ctx, resolved, loader| {
             ctx.stage_resolved(resolved, loader)

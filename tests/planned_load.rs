@@ -413,7 +413,7 @@ fn load_dynamic_accepts_dynamic_exec_without_relaxing_load_dylib() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[9, 8, 7, 6])]);
     let bytes: &'static [u8] = Box::leak(mark_dynamic_as_exec(output.data).into_boxed_slice());
 
-    let mut strict_loader = Loader::new();
+    let strict_loader = Loader::new();
     assert!(
         strict_loader
             .load_dylib(ElfBinary::new("dynamic_exec", bytes))
@@ -421,7 +421,7 @@ fn load_dynamic_accepts_dynamic_exec_without_relaxing_load_dylib() {
         "load_dylib should remain strict about ET_DYN"
     );
 
-    let mut dynamic_loader = Loader::new();
+    let dynamic_loader = Loader::new();
     let loaded = dynamic_loader
         .load_dynamic(ElfBinary::new("dynamic_exec", bytes))
         .expect("load_dynamic should accept dynamic ET_EXEC")
@@ -444,7 +444,7 @@ fn load_scanned_dynamic_accepts_dynamic_exec() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[4, 3, 2, 1])]);
     let bytes: &'static [u8] = Box::leak(mark_dynamic_as_exec(output.data).into_boxed_slice());
 
-    let mut loader = Loader::new();
+    let loader = Loader::new();
     let ScannedElf::Dynamic(scanned) = loader
         .scan(ElfBinary::new("scanned_dynamic_exec", bytes))
         .expect("scan should accept dynamic ET_EXEC")
@@ -472,7 +472,7 @@ fn load_scanned_dynamic_accepts_dynamic_exec() {
 fn scan_classifies_dynamic_and_static_exec() {
     let dynamic_output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1])]);
     let dynamic_bytes: &'static [u8] = Box::leak(dynamic_output.data.into_boxed_slice());
-    let mut loader = Loader::new();
+    let loader = Loader::new();
 
     let scanned_dynamic = loader
         .scan(ElfBinary::new("scanned.so", dynamic_bytes))

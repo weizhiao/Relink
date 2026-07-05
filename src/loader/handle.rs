@@ -1,6 +1,9 @@
+#[cfg(feature = "object")]
+use crate::object::SectionGroups;
 use crate::{
     MmapError, Result,
     arch::NativeArch,
+    const_builder::NoDrop,
     observer::LoadObserver,
     os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
@@ -8,18 +11,8 @@ use crate::{
     sync::Arc,
     tls::TlsResolver,
 };
-#[cfg(feature = "object")]
-use crate::{
-    elf::ElfHeader,
-    image::RawObject,
-    input::ElfReader,
-    memory::RegionAccess,
-    object::{ObjectSections, SectionGroups},
-    observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent},
-    relocation::ObjectRelocationArch,
-};
 use alloc::boxed::Box;
-use core::marker::PhantomData;
+use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 
 #[inline]
 pub(crate) fn native_executor<Arch: RelocationArch>() -> Arc<dyn CodeExecutor<Arch>> {
@@ -45,44 +38,224 @@ pub(crate) fn native_executor<Arch: RelocationArch>() -> Arc<dyn CodeExecutor<Ar
 /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
 /// let lib = raw.relocator().relocate().unwrap();
 /// ```
-pub struct Loader<Obs = (), D: 'static = (), Tls = (), Arch = NativeArch, M = DefaultMmap>
-where
+pub struct Loader<
+    D: 'static = (),
+    Tls = (),
+    Arch = NativeArch,
+    M = DefaultMmap,
+    Exec = NativeCodeExecutor,
+> where
+    Tls: TlsResolver<Arch>,
+    Arch: RelocationArch,
+    M: Mmap,
+{
+    mapper: M,
+    executor: Exec,
+    page_size: Option<PageSize>,
+    force_static_tls: bool,
+    _marker: PhantomData<fn() -> (D, Tls, Arch)>,
+}
+
+struct LoaderFields<M, Exec> {
+    mapper: NoDrop<M>,
+    executor: NoDrop<Exec>,
+    page_size: Option<PageSize>,
+    force_static_tls: bool,
+}
+
+impl<M, Exec> LoaderFields<M, Exec> {
+    #[inline]
+    const fn into_loader<D, Tls, Arch>(self) -> Loader<D, Tls, Arch, M, Exec>
+    where
+        D: 'static,
+        Tls: TlsResolver<Arch>,
+        Arch: RelocationArch,
+        M: Mmap,
+    {
+        let Self {
+            mapper,
+            executor,
+            page_size,
+            force_static_tls,
+        } = self;
+
+        Loader {
+            mapper: mapper.into_inner(),
+            executor: executor.into_inner(),
+            page_size,
+            force_static_tls,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline]
+    const fn with_executor<D, Tls, Arch, NewExec>(
+        self,
+        executor: NewExec,
+    ) -> Loader<D, Tls, Arch, M, NewExec>
+    where
+        D: 'static,
+        Tls: TlsResolver<Arch>,
+        Arch: RelocationArch,
+        M: Mmap,
+        Exec: Copy,
+    {
+        let Self {
+            mapper,
+            page_size,
+            force_static_tls,
+            ..
+        } = self;
+
+        Loader {
+            mapper: mapper.into_inner(),
+            executor,
+            page_size,
+            force_static_tls,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline]
+    const fn with_mapper<D, Tls, Arch, NewM>(self, mapper: NewM) -> Loader<D, Tls, Arch, NewM, Exec>
+    where
+        D: 'static,
+        Tls: TlsResolver<Arch>,
+        Arch: RelocationArch,
+        NewM: Mmap,
+        M: Copy,
+    {
+        let Self {
+            executor,
+            page_size,
+            force_static_tls,
+            ..
+        } = self;
+
+        Loader {
+            mapper,
+            executor: executor.into_inner(),
+            page_size,
+            force_static_tls,
+            _marker: PhantomData,
+        }
+    }
+}
+
+/// Per-run loader state.
+///
+/// A [`Loader`] owns reusable loading configuration. `LoaderRun` owns the
+/// scratch buffer used while reading ELF metadata for one sequence of loads.
+pub struct LoaderRun<
+    'a,
+    Obs = (),
+    D: 'static = (),
+    Tls = (),
+    Arch = NativeArch,
+    M = DefaultMmap,
+    Exec = NativeCodeExecutor,
+> where
     Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
 {
-    pub(super) buf: super::ElfBuf,
-    pub(super) inner: LoaderInner<Obs, D, Arch, M>,
-    _marker: PhantomData<fn() -> Tls>,
-}
-
-pub(super) struct LoaderInner<Obs, D: 'static, Arch: RelocationArch, M: Mmap = DefaultMmap> {
-    mapper: M,
+    pub(crate) loader: &'a Loader<D, Tls, Arch, M, Exec>,
     pub(super) observer: Obs,
-    pub(super) executor: Arc<dyn CodeExecutor<Arch>>,
-    page_size: Option<PageSize>,
-    force_static_tls: bool,
+    pub(super) buf: super::ElfBuf,
     #[cfg(feature = "object")]
     object_groups: Arc<SectionGroups>,
-    _marker: PhantomData<fn() -> D>,
 }
 
-impl<Obs, D, Arch, M> LoaderInner<Obs, D, Arch, M>
+impl Loader<(), (), NativeArch, DefaultMmap, NativeCodeExecutor> {
+    /// Creates a new [`Loader`] with the default mmap backend, no observer, no
+    /// custom user data, no TLS resolver, and the host target architecture
+    /// ([`NativeArch`]).
+    ///
+    /// To target a different ELF architecture (e.g. load an x86-64 shared
+    /// object on a RISC-V host), switch the target architecture with
+    /// [`for_arch::<NewArch>()`](Self::for_arch); the `e_machine` gate
+    /// then validates against `NewArch::MACHINE` automatically.
+    #[inline]
+    pub const fn new() -> Self {
+        Self {
+            mapper: DefaultMmap::new(),
+            executor: NativeCodeExecutor,
+            page_size: None,
+            force_static_tls: false,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl Default for Loader<(), (), NativeArch, DefaultMmap, NativeCodeExecutor> {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<D, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
 where
-    Obs: LoadObserver<D, Arch>,
     D: 'static,
+    Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
 {
     #[inline]
-    pub(crate) fn force_static_tls(&self) -> bool {
+    const fn into_fields(self) -> LoaderFields<M, Exec> {
+        let this = MaybeUninit::new(self);
+        let this = this.as_ptr();
+
+        // SAFETY: `this` points at the fully initialized `self` stored inside
+        // `MaybeUninit`, so every field read below is initialized and aligned.
+        // The original `Loader` is intentionally not dropped; every owned
+        // field that must survive is moved into `LoaderFields`. Helpers that
+        // discard an old field require that old field to be `Copy`.
+        unsafe {
+            LoaderFields {
+                mapper: NoDrop::read(ptr::addr_of!((*this).mapper)),
+                executor: NoDrop::read(ptr::addr_of!((*this).executor)),
+                page_size: ptr::read(ptr::addr_of!((*this).page_size)),
+                force_static_tls: ptr::read(ptr::addr_of!((*this).force_static_tls)),
+            }
+        }
+    }
+}
+
+impl<D, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
+where
+    D: 'static,
+    Tls: TlsResolver<Arch>,
+    Arch: RelocationArch,
+    M: Mmap,
+    Exec: CodeExecutor<Arch> + Clone,
+{
+    #[inline]
+    pub(crate) const fn mapper(&self) -> &M {
+        &self.mapper
+    }
+
+    #[inline]
+    pub(crate) const fn force_static_tls(&self) -> bool {
         self.force_static_tls
     }
 
     #[inline]
-    pub(crate) fn mapper(&self) -> &M {
-        &self.mapper
+    pub(crate) fn executor(&self) -> Arc<dyn CodeExecutor<Arch>> {
+        Arc::from(Box::new(self.executor.clone()) as Box<dyn CodeExecutor<Arch>>)
+    }
+
+    /// Starts a loader run with fresh ELF metadata scratch space.
+    #[inline]
+    pub fn run(&self) -> LoaderRun<'_, (), D, Tls, Arch, M, Exec> {
+        LoaderRun {
+            loader: self,
+            observer: (),
+            buf: super::ElfBuf::new(),
+            #[cfg(feature = "object")]
+            object_groups: Arc::new(SectionGroups::default()),
+        }
     }
 
     #[inline]
@@ -102,161 +275,17 @@ where
         Ok(page_size)
     }
 
-    #[cfg(feature = "object")]
-    pub(crate) fn object_load_context(&mut self) -> (Arc<SectionGroups>, &mut Obs, &M) {
-        (
-            Arc::clone(&self.object_groups),
-            &mut self.observer,
-            &self.mapper,
-        )
-    }
-}
-
-impl Loader<(), (), (), NativeArch> {
-    /// Creates a new [`Loader`] with the default mmap backend, no observer, no
-    /// custom user data, no TLS resolver, and the host target architecture
-    /// ([`NativeArch`]).
-    ///
-    /// To target a different ELF architecture (e.g. load an x86-64 shared
-    /// object on a RISC-V host), switch the target architecture with
-    /// [`for_arch::<NewArch>()`](Self::for_arch); the `e_machine` gate
-    /// then validates against `NewArch::MACHINE` automatically.
-    pub fn new() -> Self {
-        Self {
-            buf: super::ElfBuf::new(),
-            inner: LoaderInner {
-                // `DefaultMmap` is a unit struct only for some cfg-selected backends.
-                #[allow(clippy::default_constructed_unit_structs)]
-                mapper: DefaultMmap::default(),
-                observer: (),
-                executor: native_executor::<NativeArch>(),
-                page_size: None,
-                force_static_tls: false,
-                #[cfg(feature = "object")]
-                object_groups: Arc::new(SectionGroups::default()),
-                _marker: PhantomData,
-            },
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl Default for Loader<(), (), (), NativeArch> {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<Obs, D, Tls, Arch, M> Loader<Obs, D, Tls, Arch, M>
-where
-    Obs: LoadObserver<D, Arch>,
-    D: 'static,
-    Tls: TlsResolver<Arch>,
-    Arch: RelocationArch,
-    M: Mmap,
-{
-    #[inline]
-    pub(crate) fn mapper(&self) -> &M {
-        self.inner.mapper()
-    }
-
-    #[inline]
-    pub(crate) fn force_static_tls(&self) -> bool {
-        self.inner.force_static_tls()
-    }
-
-    #[inline]
-    pub(crate) fn executor(&self) -> Arc<dyn CodeExecutor<Arch>> {
-        self.inner.executor.clone()
-    }
-
-    #[cfg(feature = "object")]
-    #[inline]
-    pub(crate) fn page_size(&self) -> Result<PageSize> {
-        self.inner.page_size()
-    }
-
-    #[cfg(feature = "object")]
-    pub(crate) fn notify_before_object_load(
-        &mut self,
-        ehdr: &ElfHeader<Arch::Layout>,
-        sections: &mut ObjectSections<Arch::Layout>,
-        object: &dyn ElfReader,
-        user_data: &mut D,
-    ) -> Result<()> {
-        self.inner
-            .observer
-            .on_before_object_load(BeforeObjectLoadEvent::new(
-                ehdr, sections, object, user_data,
-            ))
-    }
-
-    #[cfg(feature = "object")]
-    pub(crate) fn object_load_context(&mut self) -> (Arc<SectionGroups>, &mut Obs, &M) {
-        self.inner.object_load_context()
-    }
-
-    #[cfg(feature = "object")]
-    pub(crate) fn notify_after_object_load<R: RegionAccess>(
-        &mut self,
-        raw: &mut RawObject<D, Arch, R, Tls>,
-    ) -> Result<()>
-    where
-        Arch: ObjectRelocationArch,
-    {
-        self.inner
-            .observer
-            .on_after_object_load(AfterObjectLoadEvent::new(raw))
-    }
-
     /// Consumes the current loader and returns a new one with the specified
     /// dynamic-image user data type.
     ///
     /// Dynamic images are created with `NewD::default()`. To fill or adjust
     /// that data after dynamic metadata has been parsed, implement
     /// [`LoadObserver::on_after_dynamic_load`] on the configured load observer.
-    pub fn with_data<NewD>(self) -> Loader<Obs, NewD, Tls, Arch, M>
+    pub const fn with_data<NewD>(self) -> Loader<NewD, Tls, Arch, M, Exec>
     where
         NewD: Default + 'static,
-        Obs: LoadObserver<NewD, Arch>,
     {
-        Loader {
-            buf: self.buf,
-            inner: LoaderInner {
-                mapper: self.inner.mapper,
-                observer: self.inner.observer,
-                executor: self.inner.executor,
-                page_size: self.inner.page_size,
-                force_static_tls: self.inner.force_static_tls,
-                #[cfg(feature = "object")]
-                object_groups: self.inner.object_groups,
-                _marker: PhantomData,
-            },
-            _marker: PhantomData,
-        }
-    }
-
-    /// Consumes the current loader and returns a new one with the specified
-    /// load observer.
-    pub fn with_observer<NewObs>(self, observer: NewObs) -> Loader<NewObs, D, Tls, Arch, M>
-    where
-        NewObs: LoadObserver<D, Arch>,
-    {
-        Loader {
-            buf: self.buf,
-            inner: LoaderInner {
-                mapper: self.inner.mapper,
-                observer,
-                executor: self.inner.executor,
-                page_size: self.inner.page_size,
-                force_static_tls: self.inner.force_static_tls,
-                #[cfg(feature = "object")]
-                object_groups: self.inner.object_groups,
-                _marker: PhantomData,
-            },
-            _marker: PhantomData,
-        }
+        self.into_fields().into_loader()
     }
 
     /// Overrides the base page size used for segment layout decisions.
@@ -264,63 +293,101 @@ where
     /// By default, the loader uses [`Mmap::page_size`]. An override is useful
     /// for special runtimes and tests, but it must remain compatible with the
     /// mapping backend and with every loaded ELF's `PT_LOAD` alignment.
-    pub fn with_page_size(mut self, page_size: PageSize) -> Self {
-        self.inner.page_size = Some(page_size);
+    pub const fn with_page_size(mut self, page_size: PageSize) -> Self {
+        self.page_size = Some(page_size);
         self
     }
 
     /// Overrides the runtime-code executor used for init, fini and IFUNC.
-    pub fn with_executor<E>(mut self, executor: E) -> Self
+    pub const fn with_executor<E>(self, executor: E) -> Loader<D, Tls, Arch, M, E>
     where
-        E: CodeExecutor<Arch>,
+        E: CodeExecutor<Arch> + Clone,
+        Exec: Copy,
     {
-        self.inner.executor = Arc::from(Box::new(executor) as Box<dyn CodeExecutor<Arch>>);
-        self
-    }
-
-    /// Sets object section layout groups for subsequent relocatable-object loads.
-    #[cfg(feature = "object")]
-    pub fn with_object_section_groups(mut self, groups: SectionGroups) -> Self {
-        self.inner.object_groups = Arc::new(groups);
-        self
+        self.into_fields().with_executor(executor)
     }
 
     /// Consumes the current loader and returns a new one with the specified TLS resolver.
-    pub fn with_tls_resolver<NewTls>(self) -> Loader<Obs, D, NewTls, Arch, M>
+    pub const fn with_tls_resolver<NewTls>(self) -> Loader<D, NewTls, Arch, M, Exec>
     where
         NewTls: TlsResolver<Arch>,
     {
-        Loader {
-            buf: self.buf,
-            inner: self.inner,
-            _marker: PhantomData,
-        }
+        self.into_fields().into_loader()
     }
 
     /// Sets whether to force static TLS for all loaded modules.
-    pub fn with_static_tls(mut self, enabled: bool) -> Self {
-        self.inner.force_static_tls = enabled;
+    pub const fn with_static_tls(mut self, enabled: bool) -> Self {
+        self.force_static_tls = enabled;
         self
     }
 }
 
-impl<Obs, D, Tls, M> Loader<Obs, D, Tls, NativeArch, M>
+impl<'a, Obs, D, Tls, Arch, M, Exec> LoaderRun<'a, Obs, D, Tls, Arch, M, Exec>
 where
-    Obs: LoadObserver<D, NativeArch>,
+    Obs: LoadObserver<D, Arch>,
+    D: 'static,
+    Tls: TlsResolver<Arch>,
+    Arch: RelocationArch,
+    M: Mmap,
+    Exec: CodeExecutor<Arch> + Clone,
+{
+    /// Replaces the observer used by this loader run.
+    #[inline]
+    pub fn with_observer<NewObs>(
+        self,
+        observer: NewObs,
+    ) -> LoaderRun<'a, NewObs, D, Tls, Arch, M, Exec>
+    where
+        NewObs: LoadObserver<D, Arch>,
+    {
+        LoaderRun {
+            loader: self.loader,
+            observer,
+            buf: self.buf,
+            #[cfg(feature = "object")]
+            object_groups: self.object_groups,
+        }
+    }
+}
+
+#[cfg(feature = "object")]
+impl<Obs, D, Tls, Arch, M, Exec> LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>
+where
+    Obs: LoadObserver<D, Arch>,
+    D: 'static,
+    Tls: TlsResolver<Arch>,
+    Arch: RelocationArch,
+    M: Mmap,
+    Exec: CodeExecutor<Arch> + Clone,
+{
+    pub(crate) fn object_load_context(&mut self) -> (Arc<SectionGroups>, &mut Obs, &M) {
+        (
+            Arc::clone(&self.object_groups),
+            &mut self.observer,
+            &self.loader.mapper,
+        )
+    }
+
+    /// Sets object section layout groups for this loader run.
+    pub fn with_object_section_groups(mut self, groups: SectionGroups) -> Self {
+        self.object_groups = Arc::new(groups);
+        self
+    }
+}
+
+impl<D, Tls, M, Exec> Loader<D, Tls, NativeArch, M, Exec>
+where
     D: 'static,
     Tls: TlsResolver<NativeArch>,
     M: Mmap,
+    Exec: CodeExecutor<NativeArch> + Clone,
 {
     /// Consumes the current loader and returns a new one with the default TLS resolver.
     #[cfg(feature = "tls")]
-    pub fn with_default_tls_resolver(
+    pub const fn with_default_tls_resolver(
         self,
-    ) -> Loader<Obs, D, crate::tls::DefaultTlsResolver, NativeArch, M> {
-        Loader {
-            buf: self.buf,
-            inner: self.inner,
-            _marker: PhantomData,
-        }
+    ) -> Loader<D, crate::tls::DefaultTlsResolver, NativeArch, M, Exec> {
+        self.into_fields().into_loader()
     }
 }
 
@@ -339,32 +406,20 @@ where
 ///     .for_arch::<X86_64Arch>()
 ///     .with_data::<()>();
 /// ```
-impl<Obs, Tls, Arch, M> Loader<Obs, (), Tls, Arch, M>
+impl<Tls, Arch, M, Exec> Loader<(), Tls, Arch, M, Exec>
 where
-    Obs: LoadObserver<(), Arch>,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
+    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Returns a new loader with a custom `Mmap` backend.
-    pub fn with_mmap<NewMmap>(self, mapper: NewMmap) -> Loader<Obs, (), Tls, Arch, NewMmap>
+    pub const fn with_mmap<NewMmap>(self, mapper: NewMmap) -> Loader<(), Tls, Arch, NewMmap, Exec>
     where
         NewMmap: Mmap,
+        M: Copy,
     {
-        Loader {
-            buf: self.buf,
-            inner: LoaderInner {
-                mapper,
-                observer: self.inner.observer,
-                executor: self.inner.executor,
-                page_size: self.inner.page_size,
-                force_static_tls: self.inner.force_static_tls,
-                #[cfg(feature = "object")]
-                object_groups: self.inner.object_groups,
-                _marker: PhantomData,
-            },
-            _marker: PhantomData,
-        }
+        self.into_fields().with_mapper(mapper)
     }
 
     /// Consumes the current loader and returns a new one whose target
@@ -390,25 +445,12 @@ where
     /// fixed.
     ///
     /// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
-    pub fn for_arch<NewArch>(self) -> Loader<Obs, (), Tls, NewArch, M>
+    pub const fn for_arch<NewArch>(self) -> Loader<(), Tls, NewArch, M, NativeCodeExecutor>
     where
         NewArch: RelocationArch,
         Tls: TlsResolver<NewArch>,
-        Obs: LoadObserver<(), NewArch>,
+        Exec: Copy,
     {
-        Loader {
-            buf: self.buf,
-            inner: LoaderInner {
-                mapper: self.inner.mapper,
-                observer: self.inner.observer,
-                executor: native_executor::<NewArch>(),
-                page_size: self.inner.page_size,
-                force_static_tls: self.inner.force_static_tls,
-                #[cfg(feature = "object")]
-                object_groups: self.inner.object_groups,
-                _marker: PhantomData,
-            },
-            _marker: PhantomData,
-        }
+        self.into_fields().with_executor(NativeCodeExecutor)
     }
 }

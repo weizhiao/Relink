@@ -12,6 +12,13 @@ use syscalls::Sysno;
 #[derive(Clone, Copy, Default)]
 pub struct DefaultMmap;
 
+impl DefaultMmap {
+    #[inline]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
 #[cfg(feature = "tls")]
 pub(crate) fn current_thread_id() -> usize {
     unsafe { syscalls::raw_syscall!(Sysno::gettid) }

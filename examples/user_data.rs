@@ -25,6 +25,8 @@ impl Default for MyContext {
     }
 }
 
+const LOADER: Loader<MyContext> = Loader::new().with_data::<MyContext>();
+
 struct MyObserver;
 
 impl LoadObserver<MyContext> for MyObserver {
@@ -45,12 +47,10 @@ fn main() -> Result<()> {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     env_logger::init();
 
-    let mut loader = Loader::new()
-        .with_data::<MyContext>()
-        .with_observer(MyObserver);
-
     let fixtures = fixture_support::ensure_all();
-    let lib = loader
+    let lib = LOADER
+        .run()
+        .with_observer(MyObserver)
         .load_dylib(fixtures.liba_str())?
         .relocator()
         .relocate()?;

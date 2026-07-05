@@ -11,14 +11,15 @@ use super::{
     storage::{KeySlot, ModuleId as CommittedModuleId},
 };
 use crate::{
-    LinkerError, Loader, Result,
+    LinkerError, Loader, LoaderRun, Result,
     image::{
         LoadedCore, ModuleHandle, ModuleScope, ModuleScopeBuilder, RawDynamic, ScannedDynamic,
     },
     memory::{ImageMemory, RegionAccess, VmOffset},
-    observer::{LoadObserver, RelocationObserver},
+    observer::RelocationObserver,
     os::Mmap,
     relocation::{RelocationArch, RelocationHandler, Relocator},
+    runtime::CodeExecutor,
     tls::TlsResolver,
 };
 use alloc::{
@@ -145,7 +146,7 @@ pub struct Linker<
     'a,
     K: Clone + Ord,
     Arch: RelocationArch = crate::arch::NativeArch,
-    L = Loader<(), (), (), Arch>,
+    L = Loader<(), (), Arch>,
     R = (),
     PreH = (),
     PostH = (),
@@ -193,18 +194,7 @@ where
     #[allow(clippy::type_complexity)]
     pub fn for_arch<NewArch>(
         self,
-    ) -> Linker<
-        'a,
-        K,
-        NewArch,
-        Loader<(), (), (), NewArch>,
-        (),
-        (),
-        (),
-        (),
-        DefaultRelocationPlanner,
-        (),
-    >
+    ) -> Linker<'a, K, NewArch, Loader<(), (), NewArch>, (), (), (), (), DefaultRelocationPlanner, ()>
     where
         NewArch: RelocationArch,
     {
@@ -345,29 +335,31 @@ where
     }
 }
 
-impl<'a, K, D, Obs, Tls, Arch, M, R, P, V>
-    Linker<'a, K, Arch, Loader<Obs, D, Tls, Arch, M>, R, (), (), (), P, V, Tls, Stage0>
+impl<'a, K, D, Tls, Arch, M, Exec, R, P, V>
+    Linker<'a, K, Arch, Loader<D, Tls, Arch, M, Exec>, R, (), (), (), P, V, Tls, Stage0>
 where
     K: Clone + Ord,
     D: 'static,
-    Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
+    Exec: CodeExecutor<Arch> + Clone,
 {
     /// Reconfigures the underlying loader.
     ///
     /// This must run before configuring the relocator or scan-first pipeline,
     /// because changing the loader can also change the TLS resolver type.
     #[allow(clippy::type_complexity)]
-    pub fn map_loader<NewObs, NewD, NewTls, NewM>(
+    pub fn map_loader<NewD, NewTls, NewM, NewExec>(
         self,
-        configure: impl FnOnce(Loader<Obs, D, Tls, Arch, M>) -> Loader<NewObs, NewD, NewTls, Arch, NewM>,
+        configure: impl FnOnce(
+            Loader<D, Tls, Arch, M, Exec>,
+        ) -> Loader<NewD, NewTls, Arch, NewM, NewExec>,
     ) -> Linker<
         'a,
         K,
         Arch,
-        Loader<NewObs, NewD, NewTls, Arch, NewM>,
+        Loader<NewD, NewTls, Arch, NewM, NewExec>,
         R,
         (),
         (),
@@ -378,10 +370,10 @@ where
         Stage0,
     >
     where
-        NewObs: LoadObserver<NewD, Arch>,
         NewD: 'static,
         NewTls: TlsResolver<Arch>,
         NewM: Mmap,
+        NewExec: CodeExecutor<Arch> + Clone,
     {
         Linker {
             loader: configure(self.loader),
@@ -397,12 +389,12 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'a, K, D, Obs, Tls, Arch, M, Resolver, PreH, PostH, RelocObs, P, V, Stage>
+impl<'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocObs, P, V, Stage>
     Linker<
         'a,
         K,
         Arch,
-        Loader<Obs, D, Tls, Arch, M>,
+        Loader<D, Tls, Arch, M, Exec>,
         Resolver,
         PreH,
         PostH,
@@ -415,10 +407,10 @@ impl<'a, K, D, Obs, Tls, Arch, M, Resolver, PreH, PostH, RelocObs, P, V, Stage>
 where
     K: Clone + Ord,
     D: Default + 'static,
-    Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch + crate::relocation::RelocationValueProvider + GotPltTarget,
     M: Mmap,
+    Exec: CodeExecutor<Arch> + Clone,
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     PreH: RelocationHandler<Arch> + Clone,
     PostH: RelocationHandler<Arch> + Clone,
@@ -518,16 +510,17 @@ where
     {
         let mut session = ResolveSession::new();
 
+        let mut loader = self.loader.run();
         let mut resolve_context =
             ScanResolveContext::new(&mut context.committed, &self.visible_modules, &mut session);
         let resolved = resolve_context.resolve_root(key, &mut self.resolver)?;
-        let root = resolve_context.stage_resolved(resolved, &mut self.loader)?;
+        let root = resolve_context.stage_resolved(resolved, &mut loader)?;
         if !resolve_context.contains_pending(root) {
             return Ok(PreparedLoad::runtime(root, LoadSession::new()));
         }
-        resolve_context.resolve_dependency_graph::<_, _, Q>(
+        resolve_context.resolve_dependency_graph::<_, _, _, Q>(
             root,
-            &mut self.loader,
+            &mut loader,
             &mut self.resolver,
         )?;
 
@@ -647,9 +640,8 @@ where
             .take_module(module_id)?;
         let force_static_tls = self.loader.force_static_tls();
 
-        let mut raw =
+        let raw =
             build_arena_raw_dynamic::<D, Tls, Arch, M::Region>(scanned, runtime, force_static_tls)?;
-        self.loader.notify_after_dynamic_load(&mut raw)?;
         Ok(raw)
     }
 
@@ -667,16 +659,17 @@ where
             &mut LinkContext<K, D, Meta, Arch, Tls>,
             &V,
             &mut LoadSession<D, Arch, M::Region, Tls>,
-            &mut Loader<Obs, D, Tls, Arch, M>,
+            &mut LoaderRun<'_, (), D, Tls, Arch, M, Exec>,
             &mut Resolver,
         ) -> Result<KeySlot>,
     {
         let mut session = LoadSession::new();
+        let mut loader = self.loader.run();
         let root = seed_root(
             context,
             &self.visible_modules,
             &mut session,
-            &mut self.loader,
+            &mut loader,
             &mut self.resolver,
         )?;
         let mut resolve_context = LoadResolveContext::new(
@@ -685,9 +678,9 @@ where
             session.resolve_mut(),
         );
         if resolve_context.contains_pending(root) {
-            resolve_context.resolve_dependency_graph::<_, _, Q>(
+            resolve_context.resolve_dependency_graph::<_, _, _, Q>(
                 root,
-                &mut self.loader,
+                &mut loader,
                 &mut self.resolver,
             )?;
         }

@@ -9,6 +9,8 @@ use elf_loader::{
     tls::TlsResolver,
 };
 
+const LOADER: Loader = Loader::new();
+
 struct LifecycleLogger;
 
 impl RelocationObserver for LifecycleLogger {
@@ -34,10 +36,8 @@ fn main() -> Result<()> {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     env_logger::init();
 
-    let mut loader = Loader::new();
-
     let fixtures = fixture_support::ensure_all();
-    let _lib = loader
+    let _lib = LOADER
         .load_dylib(fixtures.liba_str())?
         .relocator()
         .observer(LifecycleLogger)

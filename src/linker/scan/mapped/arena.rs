@@ -260,7 +260,7 @@ mod tests {
         .write(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])])
         .unwrap();
         let bytes = output.data;
-        let mut loader = Loader::new();
+        let loader = Loader::new();
         let ScannedElf::Dynamic(scanned) = loader
             .scan(ElfBinary::owned("arena-backed.so", bytes))
             .unwrap()

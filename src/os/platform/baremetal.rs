@@ -13,6 +13,13 @@ use core::{alloc::Layout, slice::from_raw_parts_mut};
 #[derive(Clone, Copy, Default)]
 pub struct DefaultMmap;
 
+impl DefaultMmap {
+    #[inline]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
 #[cfg(feature = "tls")]
 pub(crate) fn current_thread_id() -> usize {
     0

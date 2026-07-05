@@ -31,19 +31,13 @@ use windows_sys::Win32::{
     },
 };
 
-#[derive(Clone, Copy)]
-pub struct DefaultMmap {
-    page_size: PageSize,
-}
+#[derive(Clone, Copy, Default)]
+pub struct DefaultMmap;
 
-impl Default for DefaultMmap {
-    fn default() -> Self {
-        let mut info = MaybeUninit::<SYSTEM_INFO>::uninit();
-        let page_size = unsafe {
-            GetSystemInfo(info.as_mut_ptr());
-            PageSize::new(info.assume_init().dwPageSize as usize).unwrap_or_default()
-        };
-        Self { page_size }
+impl DefaultMmap {
+    #[inline]
+    pub const fn new() -> Self {
+        Self
     }
 }
 
@@ -111,7 +105,11 @@ impl Mmap for DefaultMmap {
 
     #[inline]
     fn page_size(&self) -> PageSize {
-        self.page_size
+        let mut info = MaybeUninit::<SYSTEM_INFO>::uninit();
+        unsafe {
+            GetSystemInfo(info.as_mut_ptr());
+            PageSize::new(info.assume_init().dwPageSize as usize).unwrap_or_default()
+        }
     }
 
     unsafe fn create_space(

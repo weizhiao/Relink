@@ -8,6 +8,8 @@ use elf_loader::{
     relocation::RelocationArch,
 };
 
+const LOADER: Loader = Loader::new();
+
 struct PrintObserver;
 
 impl LoadObserver for PrintObserver {
@@ -32,10 +34,10 @@ fn main() -> Result<()> {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     env_logger::init();
 
-    let mut loader = Loader::new().with_observer(PrintObserver);
-
     let fixtures = fixture_support::ensure_all();
-    let _lib = loader
+    let _lib = LOADER
+        .run()
+        .with_observer(PrintObserver)
         .load_dylib(fixtures.liba_str())?
         .relocator()
         .relocate()?;

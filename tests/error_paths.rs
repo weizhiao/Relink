@@ -6,7 +6,7 @@ use support::test_dylib::write_test_dylib;
 
 #[test]
 fn missing_path_fails() {
-    let mut loader = Loader::new();
+    let loader = Loader::new();
     let _error = loader
         .load_dylib("target/this_location_is_definitely_non existent:^~")
         .expect_err("loading a missing path should fail");

@@ -267,6 +267,7 @@ fn object_exports_survive_init_symtab_metadata() {
     );
 
     let loaded_object = elf_loader::Loader::new()
+        .run()
         .with_object_section_groups(groups)
         .with_observer(InitSymtabObserver { init_meta })
         .load_object(elf_loader::input::ElfBinary::new(
@@ -355,6 +356,7 @@ fn object_relocated_event_exposes_section_metadata() {
         .expect("failed to generate object");
 
     let loaded_object = elf_loader::Loader::new()
+        .run()
         .with_observer(SkipShstrtab)
         .load_object(elf_loader::input::ElfBinary::new(
             "test_static_metadata.o",
@@ -668,10 +670,11 @@ fn object_layout_group_applies_final_protection_after_init() {
     );
 
     let _loaded_object = elf_loader::Loader::new()
-        .with_object_section_groups(groups)
         .with_mmap(RecordingMmap {
             calls: Arc::clone(&calls),
         })
+        .run()
+        .with_object_section_groups(groups)
         .with_observer(ReadOnlyAfterInit { ro_after_init })
         .load_object(ElfBinary::new(
             "test_static_final_protection.o",
@@ -722,6 +725,7 @@ fn object_finalizer_runs_on_drop() {
     };
     use std::sync::{Arc, Mutex};
 
+    #[derive(Clone)]
     struct RecordingExecutor {
         fini_calls: Arc<Mutex<Vec<usize>>>,
     }

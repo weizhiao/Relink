@@ -9,6 +9,8 @@ use elf_loader::{
     tls::TlsResolver,
 };
 
+const LOADER: Loader = Loader::new();
+
 struct MyRelocHandler;
 
 fn my_print(s: &str) {
@@ -43,15 +45,14 @@ fn main() -> Result<()> {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     env_logger::init();
 
-    let mut loader = Loader::new();
     let fixtures = fixture_support::ensure_all();
 
-    let _liba = loader
+    let _liba = LOADER
         .load_dylib(fixtures.liba_str())?
         .relocator()
         .pre_handler(MyRelocHandler)
         .relocate()?;
-    let libb = loader
+    let libb = LOADER
         .load_dylib(fixtures.libb_str())?
         .relocator()
         .pre_handler(MyRelocHandler)

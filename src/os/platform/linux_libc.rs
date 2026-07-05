@@ -22,20 +22,13 @@ pub(crate) fn getauxval(at: usize) -> usize {
 }
 
 /// An implementation of Mmap trait
-#[derive(Clone, Copy)]
-pub struct DefaultMmap {
-    page_size: PageSize,
-}
+#[derive(Clone, Copy, Default)]
+pub struct DefaultMmap;
 
-impl Default for DefaultMmap {
-    fn default() -> Self {
-        let page_size = unsafe { sysconf(_SC_PAGESIZE) };
-        let page_size = if page_size <= 0 {
-            PageSize::Base
-        } else {
-            PageSize::new(page_size as usize).unwrap_or_default()
-        };
-        Self { page_size }
+impl DefaultMmap {
+    #[inline]
+    pub const fn new() -> Self {
+        Self
     }
 }
 
@@ -98,7 +91,12 @@ impl Mmap for DefaultMmap {
 
     #[inline]
     fn page_size(&self) -> PageSize {
-        self.page_size
+        let page_size = unsafe { sysconf(_SC_PAGESIZE) };
+        if page_size <= 0 {
+            PageSize::Base
+        } else {
+            PageSize::new(page_size as usize).unwrap_or_default()
+        }
     }
 
     unsafe fn create_space(

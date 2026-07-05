@@ -150,7 +150,7 @@ impl BindingFixture {
         let main_output = self.write_main_output(binding);
         let loader = Loader::new();
         #[cfg(feature = "tls")]
-        let mut loader = loader.with_default_tls_resolver();
+        let loader = loader.with_default_tls_resolver();
         #[cfg(not(feature = "tls"))]
         let mut loader = loader;
 
