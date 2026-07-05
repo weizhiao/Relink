@@ -20,8 +20,11 @@ pub use types::{DsoExport, DsoExportLayout, DsoImage, DsoSymbolBind, DsoSymbolKi
 mod tests {
     use super::{DsoBuilder, sysv_hash};
     use crate::{
-        Loader, arch::x86_64::relocation::X86_64Arch, input::ElfBinary, memory::VmOffset,
-        relocation::RelocationArch,
+        Loader,
+        arch::x86_64::relocation::X86_64Arch,
+        input::ElfBinary,
+        memory::VmOffset,
+        relocation::{RelocationArch, Relocator},
     };
 
     #[test]
@@ -37,10 +40,12 @@ mod tests {
         let expected_addr = image.exports[0].value;
 
         let loader = Loader::new().for_arch::<X86_64Arch>();
-        let lib = loader
-            .load_dylib(ElfBinary::owned("libvirtual.so", image.bytes))
-            .unwrap()
-            .relocator()
+        let lib = Relocator::new()
+            .run(
+                loader
+                    .load_dylib(ElfBinary::owned("libvirtual.so", image.bytes))
+                    .unwrap(),
+            )
             .relocate()
             .unwrap();
 

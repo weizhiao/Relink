@@ -1,10 +1,10 @@
+use super::run::LoaderRun;
 #[cfg(feature = "object")]
 use crate::object::SectionGroups;
 use crate::{
     MmapError, Result,
     arch::NativeArch,
     const_builder::NoDrop,
-    observer::LoadObserver,
     os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
     runtime::{CodeExecutor, NativeCodeExecutor},
@@ -24,7 +24,7 @@ pub(crate) fn native_executor<Arch: RelocationArch>() -> Arc<dyn CodeExecutor<Ar
 /// `Loader` maps ELF objects from files or memory and produces raw image types such as
 /// [`crate::image::RawElf`], [`crate::image::RawDynamic`], [`crate::image::RawDylib`],
 /// and [`crate::image::RawExec`].
-/// Those raw images can then be relocated by calling `.relocator().relocate()`.
+/// Those raw images can then be relocated with [`crate::relocation::Relocator`].
 ///
 /// Use the `with_*` builder methods to customize hooks, lifecycle handling,
 /// dynamic-image user data, memory mapping, and TLS behavior.
@@ -32,11 +32,11 @@ pub(crate) fn native_executor<Arch: RelocationArch>() -> Arc<dyn CodeExecutor<Ar
 /// # Examples
 ///
 /// ```no_run
-/// use elf_loader::Loader;
+/// use elf_loader::{Loader, relocation::Relocator};
 ///
 /// let mut loader = Loader::new();
 /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
-/// let lib = raw.relocator().relocate().unwrap();
+/// let lib = Relocator::new().run(raw).relocate().unwrap();
 /// ```
 pub struct Loader<
     D: 'static = (),
@@ -140,31 +140,6 @@ impl<M, Exec> LoaderFields<M, Exec> {
             _marker: PhantomData,
         }
     }
-}
-
-/// Per-run loader state.
-///
-/// A [`Loader`] owns reusable loading configuration. `LoaderRun` owns the
-/// scratch buffer used while reading ELF metadata for one sequence of loads.
-pub struct LoaderRun<
-    'a,
-    Obs = (),
-    D: 'static = (),
-    Tls = (),
-    Arch = NativeArch,
-    M = DefaultMmap,
-    Exec = NativeCodeExecutor,
-> where
-    Obs: LoadObserver<D, Arch>,
-    Tls: TlsResolver<Arch>,
-    Arch: RelocationArch,
-    M: Mmap,
-{
-    pub(crate) loader: &'a Loader<D, Tls, Arch, M, Exec>,
-    pub(super) observer: Obs,
-    pub(super) buf: super::ElfBuf,
-    #[cfg(feature = "object")]
-    object_groups: Arc<SectionGroups>,
 }
 
 impl Loader<(), (), NativeArch, DefaultMmap, NativeCodeExecutor> {
@@ -318,59 +293,6 @@ where
     /// Sets whether to force static TLS for all loaded modules.
     pub const fn with_static_tls(mut self, enabled: bool) -> Self {
         self.force_static_tls = enabled;
-        self
-    }
-}
-
-impl<'a, Obs, D, Tls, Arch, M, Exec> LoaderRun<'a, Obs, D, Tls, Arch, M, Exec>
-where
-    Obs: LoadObserver<D, Arch>,
-    D: 'static,
-    Tls: TlsResolver<Arch>,
-    Arch: RelocationArch,
-    M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
-{
-    /// Replaces the observer used by this loader run.
-    #[inline]
-    pub fn with_observer<NewObs>(
-        self,
-        observer: NewObs,
-    ) -> LoaderRun<'a, NewObs, D, Tls, Arch, M, Exec>
-    where
-        NewObs: LoadObserver<D, Arch>,
-    {
-        LoaderRun {
-            loader: self.loader,
-            observer,
-            buf: self.buf,
-            #[cfg(feature = "object")]
-            object_groups: self.object_groups,
-        }
-    }
-}
-
-#[cfg(feature = "object")]
-impl<Obs, D, Tls, Arch, M, Exec> LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>
-where
-    Obs: LoadObserver<D, Arch>,
-    D: 'static,
-    Tls: TlsResolver<Arch>,
-    Arch: RelocationArch,
-    M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
-{
-    pub(crate) fn object_load_context(&mut self) -> (Arc<SectionGroups>, &mut Obs, &M) {
-        (
-            Arc::clone(&self.object_groups),
-            &mut self.observer,
-            &self.loader.mapper,
-        )
-    }
-
-    /// Sets object section layout groups for this loader run.
-    pub fn with_object_section_groups(mut self, groups: SectionGroups) -> Self {
-        self.object_groups = Arc::new(groups);
         self
     }
 }

@@ -6,6 +6,7 @@ use elf_loader::{
     arch::NativeArch,
     memory::RegionAccess,
     observer::{AfterDynamicLoadEvent, LoadObserver},
+    relocation::Relocator,
     tls::TlsResolver,
 };
 
@@ -48,11 +49,13 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let fixtures = fixture_support::ensure_all();
-    let lib = LOADER
-        .run()
-        .with_observer(MyObserver)
-        .load_dylib(fixtures.liba_str())?
-        .relocator()
+    let lib = Relocator::new()
+        .run(
+            LOADER
+                .run()
+                .with_observer(MyObserver)
+                .load_dylib(fixtures.liba_str())?,
+        )
         .relocate()?;
 
     let context = lib.user_data();

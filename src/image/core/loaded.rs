@@ -191,11 +191,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     ///
     /// # Examples
     /// ```no_run
-    /// # use elf_loader::{input::ElfBinary, image::Symbol, Loader};
+    /// # use elf_loader::{input::ElfBinary, image::Symbol, Loader, relocation::Relocator};
     /// # let mut loader = Loader::new();
-    /// # let lib = loader
-    /// #     .load_dylib(ElfBinary::new("target/liba.so", &[]))
-    /// #        .unwrap().relocator().relocate().unwrap();
+    /// # let raw = loader.load_dylib(ElfBinary::new("target/liba.so", &[])).unwrap();
+    /// # let lib = Relocator::new().run(raw).relocate().unwrap();
     /// unsafe {
     ///     let awesome_function = lib.get::<unsafe extern "C" fn(f64) -> f64>("awesome_function").unwrap();
     ///     awesome_function(0.42);
@@ -204,11 +203,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     ///
     /// A static variable may also be loaded and inspected:
     /// ```no_run
-    /// # use elf_loader::{input::ElfBinary, image::Symbol, Loader};
+    /// # use elf_loader::{input::ElfBinary, image::Symbol, Loader, relocation::Relocator};
     /// # let mut loader = Loader::new();
-    /// # let lib = loader
-    /// #     .load_dylib(ElfBinary::new("target/liba.so", &[]))
-    /// #        .unwrap().relocator().relocate().unwrap();
+    /// # let raw = loader.load_dylib(ElfBinary::new("target/liba.so", &[])).unwrap();
+    /// # let lib = Relocator::new().run(raw).relocate().unwrap();
     /// unsafe {
     ///     let awesome_variable = lib.get::<*mut f64>("awesome_variable").unwrap();
     ///     **awesome_variable = 42.0;
@@ -247,11 +245,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     ///
     /// # Examples
     /// ```no_run
-    /// # use elf_loader::{Loader, input::ElfFile};
+    /// # use elf_loader::{Loader, input::ElfFile, relocation::Relocator};
     /// # let mut loader = Loader::new();
-    /// # let lib = loader
-    /// #     .load_dylib(ElfFile::from_path("target/liba.so").unwrap())
-    /// #        .unwrap().relocator().relocate().unwrap();;
+    /// # let raw = loader.load_dylib(ElfFile::from_path("target/liba.so").unwrap()).unwrap();
+    /// # let lib = Relocator::new().run(raw).relocate().unwrap();
     /// let symbol = unsafe { lib.get_version::<fn()>("function_name", "1.0").unwrap() };
     /// ```
     ///

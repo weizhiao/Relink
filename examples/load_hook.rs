@@ -5,7 +5,7 @@ use elf_loader::{
     Loader, Result,
     arch::NativeArch,
     observer::{BeforeDynamicLoadEvent, LoadObserver},
-    relocation::RelocationArch,
+    relocation::{RelocationArch, Relocator},
 };
 
 const LOADER: Loader = Loader::new();
@@ -35,11 +35,13 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let fixtures = fixture_support::ensure_all();
-    let _lib = LOADER
-        .run()
-        .with_observer(PrintObserver)
-        .load_dylib(fixtures.liba_str())?
-        .relocator()
+    let _lib = Relocator::new()
+        .run(
+            LOADER
+                .run()
+                .with_observer(PrintObserver)
+                .load_dylib(fixtures.liba_str())?,
+        )
         .relocate()?;
     println!("Loaded with segment hook.");
 

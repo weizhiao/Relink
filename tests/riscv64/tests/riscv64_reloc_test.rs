@@ -1,4 +1,4 @@
-use elf_loader::{Loader, Result};
+use elf_loader::{Loader, Result, relocation::Relocator};
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
@@ -27,38 +27,32 @@ fn main() -> Result<()> {
     let mut loader = Loader::new();
 
     // 加载所有测试模块
-    let test_calls = loader
-        .load_object(test_dir.join("test_call.o").to_str().unwrap())?
-        .relocator()
+    let test_calls = Relocator::new()
+        .run(loader.load_object(test_dir.join("test_call.o").to_str().unwrap())?)
         .relocate()?;
 
-    let test_globals = loader
-        .load_object(test_dir.join("test_globals.o").to_str().unwrap())?
-        .relocator()
+    let test_globals = Relocator::new()
+        .run(loader.load_object(test_dir.join("test_globals.o").to_str().unwrap())?)
         .scope([&test_calls])
         .relocate()?;
 
-    let test_branches = loader
-        .load_object(test_dir.join("test_branches.o").to_str().unwrap())?
-        .relocator()
+    let test_branches = Relocator::new()
+        .run(loader.load_object(test_dir.join("test_branches.o").to_str().unwrap())?)
         .scope([&test_calls, &test_globals])
         .relocate()?;
 
-    let test_hi_lo = loader
-        .load_object(test_dir.join("test_hi_lo.o").to_str().unwrap())?
-        .relocator()
+    let test_hi_lo = Relocator::new()
+        .run(loader.load_object(test_dir.join("test_hi_lo.o").to_str().unwrap())?)
         .scope([&test_calls, &test_globals, &test_branches])
         .relocate()?;
 
-    let test_pointers = loader
-        .load_object(test_dir.join("test_pointers.o").to_str().unwrap())?
-        .relocator()
+    let test_pointers = Relocator::new()
+        .run(loader.load_object(test_dir.join("test_pointers.o").to_str().unwrap())?)
         .scope([&test_calls, &test_globals, &test_branches, &test_hi_lo])
         .relocate()?;
 
-    let test_32bit = loader
-        .load_object(test_dir.join("test_32bit.o").to_str().unwrap())?
-        .relocator()
+    let test_32bit = Relocator::new()
+        .run(loader.load_object(test_dir.join("test_32bit.o").to_str().unwrap())?)
         .scope([
             &test_calls,
             &test_globals,
@@ -68,9 +62,8 @@ fn main() -> Result<()> {
         ])
         .relocate()?;
 
-    let test_main = loader
-        .load_object(test_dir.join("test_main.o").to_str().unwrap())?
-        .relocator()
+    let test_main = Relocator::new()
+        .run(loader.load_object(test_dir.join("test_main.o").to_str().unwrap())?)
         .scope([
             &test_calls,
             &test_globals,

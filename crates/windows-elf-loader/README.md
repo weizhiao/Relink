@@ -7,7 +7,7 @@ $ cargo run -r --example load
 ```
 ```rust
 use std::ffi::CStr;
-use elf_loader::image::{SyntheticSymbol, SyntheticModule};
+use elf_loader::{image::{SyntheticSymbol, SyntheticModule}, relocation::Relocator};
 use windows_elf_loader::WinElfLoader;
 
 fn main() {
@@ -22,10 +22,12 @@ fn main() {
     );
     let mut loader: WinElfLoader = WinElfLoader::new();
     // Load and relocate dynamic library liba.so
-    let liba = loader
-        .load_file(r".\crates\windows-elf-loader\example_dylib\liba.so")
-        .unwrap()
-        .relocator()
+    let liba = Relocator::new()
+        .run(
+            loader
+                .load_file(r".\crates\windows-elf-loader\example_dylib\liba.so")
+                .unwrap(),
+        )
         .scope([host])
         .relocate()
         .unwrap();

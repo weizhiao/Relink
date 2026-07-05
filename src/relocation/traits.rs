@@ -456,7 +456,7 @@ pub struct RelocateArgs<
 /// A trait for raw image types that can undergo relocation.
 ///
 /// In normal use, callers do not invoke this trait directly. Instead, they load a raw
-/// image with [`crate::Loader`] and then call `.relocator().relocate()`.
+/// image with [`crate::Loader`] and pass it to [`Relocator::run`].
 ///
 /// The target architecture is selected by the implementor through the `Arch`
 /// associated type, so [`Relocator::relocate`] can dispatch automatically

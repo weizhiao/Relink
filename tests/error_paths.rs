@@ -1,6 +1,6 @@
 mod support;
 
-use elf_loader::{Loader, input::ElfBinary};
+use elf_loader::{Loader, input::ElfBinary, relocation::Relocator};
 use gen_elf::{Arch, RelocEntry, SymbolDesc};
 use support::test_dylib::write_test_dylib;
 
@@ -20,10 +20,12 @@ fn unresolved_symbol_fails_bind_now_relocation() {
         &[SymbolDesc::undefined_func("missing_func")],
     );
 
-    let error = Loader::new()
-        .load_dylib(ElfBinary::new("missing.so", &output.data))
-        .expect("failed to load unresolved ELF")
-        .relocator()
+    let error = Relocator::new()
+        .run(
+            Loader::new()
+                .load_dylib(ElfBinary::new("missing.so", &output.data))
+                .expect("failed to load unresolved ELF"),
+        )
         .relocate()
         .expect_err("bind-now relocation should fail for an unresolved symbol");
 

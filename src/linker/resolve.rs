@@ -205,7 +205,7 @@ where
         &self,
         slot: KeySlot,
         needed_index: usize,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
+        resolver: &impl KeyResolver<K, Arch, Q, Tls>,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
@@ -222,7 +222,7 @@ where
     pub(crate) fn resolve_root<'cfg, Q>(
         &self,
         key: &K,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
+        resolver: &impl KeyResolver<K, Arch, Q, Tls>,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
@@ -238,7 +238,7 @@ where
         &mut self,
         slot: KeySlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
+        resolver: &impl KeyResolver<K, Arch, Q, Tls>,
         stage: &mut F,
     ) -> Result<Vec<KeySlot>>
     where
@@ -276,7 +276,7 @@ where
         &mut self,
         root: KeySlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
+        resolver: &impl KeyResolver<K, Arch, Q, Tls>,
         mut stage: F,
     ) -> Result<()>
     where
@@ -368,7 +368,7 @@ where
         &mut self,
         root: KeySlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
-        resolver: &mut impl KeyResolver<'cfg, K, Arch, Q, Tls>,
+        resolver: &impl KeyResolver<K, Arch, Q, Tls>,
     ) -> Result<()>
     where
         K: 'cfg + Borrow<Q>,
@@ -453,7 +453,7 @@ where
         &mut self,
         root: KeySlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
-        resolver: &mut impl KeyResolver<'static, K, Arch, Q, Tls>,
+        resolver: &impl KeyResolver<K, Arch, Q, Tls>,
     ) -> Result<()>
     where
         K: 'static + Borrow<Q>,

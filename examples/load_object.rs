@@ -4,6 +4,7 @@ mod fixture_support;
 use elf_loader::{
     Loader, Result,
     image::{ModuleHandle, SyntheticModule, SyntheticSymbol},
+    relocation::Relocator,
 };
 
 const LOADER: Loader = Loader::new();
@@ -24,19 +25,16 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let fixtures = fixture_support::ensure_all();
-    let a = LOADER
-        .load_object(fixtures.a_object_str())?
-        .relocator()
+    let a = Relocator::new()
+        .run(LOADER.load_object(fixtures.a_object_str())?)
         .scope([host_symbols()])
         .relocate()?;
-    let b = LOADER
-        .load_dylib(fixtures.libb_str())?
-        .relocator()
+    let b = Relocator::new()
+        .run(LOADER.load_dylib(fixtures.libb_str())?)
         .scope([ModuleHandle::from(host_symbols()), ModuleHandle::from(&a)])
         .relocate()?;
-    let c = LOADER
-        .load_object(fixtures.c_object_str())?
-        .relocator()
+    let c = Relocator::new()
+        .run(LOADER.load_object(fixtures.c_object_str())?)
         .scope([
             ModuleHandle::from(host_symbols()),
             ModuleHandle::from(&a),

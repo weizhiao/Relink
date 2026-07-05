@@ -332,7 +332,7 @@ where
 {
     /// Creates an empty pipeline.
     #[inline]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { passes: Vec::new() }
     }
 

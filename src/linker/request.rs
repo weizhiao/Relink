@@ -419,7 +419,7 @@ pub trait RelocationPlanner<
 {
     /// Builds relocation inputs for one mapped module.
     fn plan(
-        &mut self,
+        &self,
         req: &RelocationRequest<'_, K, D, Arch, R, Tls>,
     ) -> Result<RelocationInputs<Arch, Tls>>;
 }
@@ -436,7 +436,7 @@ where
 {
     #[inline]
     fn plan(
-        &mut self,
+        &self,
         req: &RelocationRequest<'_, K, D, Arch, R, Tls>,
     ) -> Result<RelocationInputs<Arch, Tls>> {
         Ok(RelocationInputs::scope(req.scope().clone()))
@@ -448,13 +448,13 @@ where
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
-    F: for<'a> FnMut(
+    F: for<'a> Fn(
         &RelocationRequest<'a, K, D, Arch, R, Tls>,
     ) -> Result<RelocationInputs<Arch, Tls>>,
 {
     #[inline]
     fn plan(
-        &mut self,
+        &self,
         req: &RelocationRequest<'_, K, D, Arch, R, Tls>,
     ) -> Result<RelocationInputs<Arch, Tls>> {
         self(req)

@@ -1,7 +1,7 @@
 #[path = "common/mod.rs"]
 mod fixture_support;
 
-use elf_loader::Loader;
+use elf_loader::{Loader, relocation::Relocator};
 use std::{fs::File, io::Read};
 
 const LOADER: Loader = Loader::new();
@@ -13,8 +13,10 @@ fn main() {
     let mut file = File::open(&fixtures.liba).unwrap();
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).unwrap();
-    let liba = LOADER.load_dylib(&bytes).unwrap();
-    let a = liba.relocator().relocate().unwrap();
+    let a = Relocator::new()
+        .run(LOADER.load_dylib(&bytes).unwrap())
+        .relocate()
+        .unwrap();
     let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
     println!("{}", f());
 }

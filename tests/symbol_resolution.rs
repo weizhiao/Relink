@@ -5,7 +5,7 @@ use elf_loader::{
     arch::NativeArch,
     image::{LoadedCore, ModuleHandle},
     input::ElfBinary,
-    relocation::RelocationArch,
+    relocation::{RelocationArch, Relocator},
 };
 
 const REL_GOT: u32 = <NativeArch as RelocationArch>::GOT.raw();
@@ -64,10 +64,12 @@ fn synthetic_module_beats_loaded_scope() {
     let consumer_output = write_got_consumer(EXTERNAL_VAR_NAME);
     let host_symbols = TestHostSymbols::new();
 
-    let relocated = loader
-        .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
-        .expect("failed to load consumer")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            loader
+                .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
+                .expect("failed to load consumer"),
+        )
         .scope([
             ModuleHandle::from(host_symbols.source("__host")),
             ModuleHandle::from(&helper),
@@ -97,10 +99,12 @@ fn loaded_scope_beats_late_synthetic_module() {
     let consumer_output = write_got_consumer(EXTERNAL_VAR_NAME);
     let host_symbols = TestHostSymbols::new();
 
-    let relocated = loader
-        .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
-        .expect("failed to load consumer")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            loader
+                .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
+                .expect("failed to load consumer"),
+        )
         .scope([
             ModuleHandle::from(&helper),
             ModuleHandle::from(host_symbols.source("__host")),
@@ -123,10 +127,12 @@ fn synthetic_module_resolves_scope_miss() {
     let consumer_output = write_got_consumer(EXTERNAL_VAR_NAME);
     let host_symbols = TestHostSymbols::new();
 
-    let relocated = Loader::new()
-        .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
-        .expect("failed to load consumer")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            Loader::new()
+                .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
+                .expect("failed to load consumer"),
+        )
         .scope([host_symbols.source("__host")])
         .relocate()
         .expect("failed to relocate consumer");
@@ -150,10 +156,12 @@ fn extend_scope_keeps_existing_precedence() {
     let second = load_relocated_dylib(&mut loader, "libsecond.so", &second_output);
     let consumer_output = write_got_consumer(SHARED_VAR_NAME);
 
-    let relocated = loader
-        .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
-        .expect("failed to load consumer")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            loader
+                .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
+                .expect("failed to load consumer"),
+        )
         .scope(std::slice::from_ref(&first))
         .extend_scope(std::slice::from_ref(&second))
         .relocate()
@@ -180,10 +188,12 @@ fn scope_definition_interposes_current_definition_by_default() {
         &[0x55, 0x66, 0x77, 0x88],
     );
 
-    let relocated = loader
-        .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
-        .expect("failed to load consumer")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            loader
+                .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
+                .expect("failed to load consumer"),
+        )
         .scope(std::slice::from_ref(&helper))
         .relocate()
         .expect("failed to relocate consumer");
@@ -207,10 +217,12 @@ fn df_symbolic_prefers_current_definition_over_scope() {
         &[0x55, 0x66, 0x77, 0x88],
     );
 
-    let relocated = loader
-        .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
-        .expect("failed to load consumer")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            loader
+                .load_dylib(ElfBinary::new("consumer.so", &consumer_output.data))
+                .expect("failed to load consumer"),
+        )
         .scope(std::slice::from_ref(&helper))
         .relocate()
         .expect("failed to relocate consumer");

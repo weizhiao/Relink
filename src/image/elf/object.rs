@@ -17,7 +17,6 @@ use crate::{
     observer::RelocationObserver,
     relocation::{
         ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
-        Relocator, RelocatorRun,
     },
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
@@ -114,14 +113,6 @@ where
 impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawObject<D, Arch, R, Tls>
 {
-    /// Creates a builder for relocating the relocatable file.
-    pub fn relocator(self) -> RelocatorRun<Self, (), (), Arch, (), Tls>
-    where
-        Self: Relocatable<D, Arch = Arch, Tls = Tls>,
-    {
-        Relocator::<(), (), Arch, (), Tls>::new().with_object(self)
-    }
-
     /// Returns the retained object section metadata.
     #[inline]
     pub fn sections(&self) -> &ObjectSections<Arch::Layout> {

@@ -1,8 +1,8 @@
 //! Relocation configuration, symbol scopes, and binding policy.
 //!
 //! Raw images returned by [`crate::Loader`] become executable through the relocation
-//! pipeline. In practice, most users configure that pipeline through the builder
-//! returned by `.relocator()`, then call `relocate()`.
+//! pipeline. In practice, most users configure that pipeline with [`Relocator`],
+//! pass the raw image to [`Relocator::run`], then call `relocate()`.
 //!
 //! This module exposes the main customization points used during relocation:
 //!
@@ -16,6 +16,7 @@ mod defs;
 mod dynamic;
 mod helper;
 mod relocator;
+mod run;
 mod traits;
 
 pub(crate) use defs::{RelocValue, RelocationValueFormula, RelocationValueKind};
@@ -25,5 +26,6 @@ pub(crate) use helper::{RelocHelper, SymDef, find_symdef_impl};
 pub use traits::{ObjectRelocationArch, RelocationArch};
 pub(crate) use traits::{Relocatable, RelocateArgs, RelocationValueInput, RelocationValueProvider};
 
-pub use relocator::{Relocator, RelocatorRun};
+pub use relocator::Relocator;
+pub use run::RelocatorRun;
 pub use traits::{BindingMode, HandleResult, RelocationContext, RelocationHandler};

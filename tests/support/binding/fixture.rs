@@ -12,7 +12,7 @@ use elf_loader::{
     image::{LoadedCore, ModuleHandle},
     input::ElfBinary,
     memory::HostRegion,
-    relocation::RelocationArch,
+    relocation::{RelocationArch, Relocator},
 };
 
 const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
@@ -154,10 +154,12 @@ impl BindingFixture {
         #[cfg(not(feature = "tls"))]
         let mut loader = loader;
 
-        let helper_dylib = loader
-            .load_dylib(ElfBinary::new("libhelper.so", &self.helper_output.data))
-            .expect("failed to load helper")
-            .relocator()
+        let helper_dylib = Relocator::new()
+            .run(
+                loader
+                    .load_dylib(ElfBinary::new("libhelper.so", &self.helper_output.data))
+                    .expect("failed to load helper"),
+            )
             .relocate()
             .expect("failed to relocate helper");
 
@@ -165,25 +167,36 @@ impl BindingFixture {
             .load_dylib(ElfBinary::new("test_dynamic.so", &main_output.data))
             .expect("failed to load dylib");
 
-        let prepared_relocator = pending_dylib.relocator().scope([
-            ModuleHandle::from(self.host_symbols.source("__host")),
-            ModuleHandle::from(&helper_dylib),
-        ]);
-
         #[cfg(feature = "lazy-binding")]
         let loaded_dylib = if binding.is_lazy() {
-            prepared_relocator
+            Relocator::new()
                 .lazy_binder(NativeLazyBinder::new())
+                .run(pending_dylib)
+                .scope([
+                    ModuleHandle::from(self.host_symbols.source("__host")),
+                    ModuleHandle::from(&helper_dylib),
+                ])
                 .lazy()
                 .relocate()
         } else {
-            prepared_relocator.relocate()
+            Relocator::new()
+                .run(pending_dylib)
+                .scope([
+                    ModuleHandle::from(self.host_symbols.source("__host")),
+                    ModuleHandle::from(&helper_dylib),
+                ])
+                .relocate()
         }
         .expect("failed to relocate dylib");
 
         #[cfg(not(feature = "lazy-binding"))]
         let loaded_dylib = {
-            prepared_relocator
+            Relocator::new()
+                .run(pending_dylib)
+                .scope([
+                    ModuleHandle::from(self.host_symbols.source("__host")),
+                    ModuleHandle::from(&helper_dylib),
+                ])
                 .relocate()
                 .expect("failed to relocate dylib")
         };

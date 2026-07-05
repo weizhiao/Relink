@@ -5,7 +5,7 @@ use elf_loader::{
     Loader, Result,
     arch::NativeArch,
     memory::RegionAccess,
-    relocation::{HandleResult, RelocationContext, RelocationHandler},
+    relocation::{HandleResult, RelocationContext, RelocationHandler, Relocator},
     tls::TlsResolver,
 };
 
@@ -47,15 +47,14 @@ fn main() -> Result<()> {
 
     let fixtures = fixture_support::ensure_all();
 
-    let _liba = LOADER
-        .load_dylib(fixtures.liba_str())?
-        .relocator()
+    let _liba = Relocator::new()
         .pre_handler(MyRelocHandler)
+        .run(LOADER.load_dylib(fixtures.liba_str())?)
         .relocate()?;
-    let libb = LOADER
-        .load_dylib(fixtures.libb_str())?
-        .relocator()
+
+    let libb = Relocator::new()
         .pre_handler(MyRelocHandler)
+        .run(LOADER.load_dylib(fixtures.libb_str())?)
         .scope([&_liba])
         .relocate()?;
 

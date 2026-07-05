@@ -1,4 +1,4 @@
-use elf_loader::{Loader, Result};
+use elf_loader::{Loader, Result, relocation::Relocator};
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
@@ -33,14 +33,12 @@ fn main() -> Result<()> {
 
     let mut loader = Loader::new();
 
-    let b = loader
-        .load_object(b_path.to_str().unwrap())?
-        .relocator()
+    let b = Relocator::new()
+        .run(loader.load_object(b_path.to_str().unwrap())?)
         .relocate()?;
 
-    let a = loader
-        .load_object(a_path.to_str().unwrap())?
-        .relocator()
+    let a = Relocator::new()
+        .run(loader.load_object(a_path.to_str().unwrap())?)
         .scope([&b])
         .relocate()?;
 

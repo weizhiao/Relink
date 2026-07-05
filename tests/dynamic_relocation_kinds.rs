@@ -1,7 +1,11 @@
 mod support;
 
 use elf_loader::{
-    Loader, arch::NativeArch, input::ElfBinary, memory::VmOffset, relocation::RelocationArch,
+    Loader,
+    arch::NativeArch,
+    input::ElfBinary,
+    memory::VmOffset,
+    relocation::{RelocationArch, Relocator},
 };
 
 const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
@@ -35,10 +39,12 @@ fn copy_relocation_copies_bytes() {
         &[SymbolDesc::undefined_object(COPY_SOURCE_NAME).with_size(6)],
     );
 
-    let relocated = loader
-        .load_dylib(ElfBinary::new("copy_consumer.so", &consumer_output.data))
-        .expect("failed to load copy consumer")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            loader
+                .load_dylib(ElfBinary::new("copy_consumer.so", &consumer_output.data))
+                .expect("failed to load copy consumer"),
+        )
         .scope(std::slice::from_ref(&helper))
         .relocate()
         .expect("failed to relocate copy consumer");
@@ -66,10 +72,12 @@ fn copy_relocation_copies_bytes() {
 fn relative_relocation_uses_recorded_addend() {
     let output = write_test_dylib(&[RelocEntry::relative(Arch::current())], &[]);
 
-    let relocated = Loader::new()
-        .load_dylib(ElfBinary::new("relative.so", &output.data))
-        .expect("failed to load relative test dylib")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            Loader::new()
+                .load_dylib(ElfBinary::new("relative.so", &output.data))
+                .expect("failed to load relative test dylib"),
+        )
         .relocate()
         .expect("failed to relocate relative test dylib");
 
@@ -94,10 +102,12 @@ fn irelative_relocation_uses_ifunc_resolver() {
         &[],
     );
 
-    let relocated = Loader::new()
-        .load_dylib(ElfBinary::new("irelative.so", &output.data))
-        .expect("failed to load irelative test dylib")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            Loader::new()
+                .load_dylib(ElfBinary::new("irelative.so", &output.data))
+                .expect("failed to load irelative test dylib"),
+        )
         .relocate()
         .expect("failed to relocate irelative test dylib");
 
@@ -137,13 +147,15 @@ fn copy_relocations_keep_symbols_separate() {
         .collect();
     let consumer_output = write_test_dylib(&consumer_relocations, &consumer_symbols);
 
-    let relocated = loader
-        .load_dylib(ElfBinary::new(
-            "copy_consumer_many.so",
-            &consumer_output.data,
-        ))
-        .expect("failed to load copy consumer")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            loader
+                .load_dylib(ElfBinary::new(
+                    "copy_consumer_many.so",
+                    &consumer_output.data,
+                ))
+                .expect("failed to load copy consumer"),
+        )
         .scope(std::slice::from_ref(&helper))
         .relocate()
         .expect("failed to relocate copy consumer");
@@ -176,10 +188,12 @@ fn relative_relocations_apply_to_all_slots() {
         &[],
     );
 
-    let relocated = Loader::new()
-        .load_dylib(ElfBinary::new("relative_many.so", &output.data))
-        .expect("failed to load relative test dylib")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            Loader::new()
+                .load_dylib(ElfBinary::new("relative_many.so", &output.data))
+                .expect("failed to load relative test dylib"),
+        )
         .relocate()
         .expect("failed to relocate relative test dylib");
 
@@ -210,10 +224,12 @@ fn irelative_relocations_apply_to_all_slots() {
         &[],
     );
 
-    let relocated = Loader::new()
-        .load_dylib(ElfBinary::new("irelative_many.so", &output.data))
-        .expect("failed to load irelative test dylib")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            Loader::new()
+                .load_dylib(ElfBinary::new("irelative_many.so", &output.data))
+                .expect("failed to load irelative test dylib"),
+        )
         .relocate()
         .expect("failed to relocate irelative test dylib");
 

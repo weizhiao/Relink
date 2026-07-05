@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use elf_loader::{Loader, image::LoadedCore, input::ElfBinary};
+use elf_loader::{Loader, image::LoadedCore, input::ElfBinary, relocation::Relocator};
 use gen_elf::{Arch, DylibWriter, ElfWriteOutput, ElfWriterConfig, RelocEntry, SymbolDesc};
 
 pub(crate) fn write_test_dylib(relocs: &[RelocEntry], symbols: &[SymbolDesc]) -> ElfWriteOutput {
@@ -26,10 +26,12 @@ pub(crate) fn load_relocated_dylib(
     name: &str,
     output: &ElfWriteOutput,
 ) -> LoadedCore<()> {
-    loader
-        .load_dylib(ElfBinary::new(name, &output.data))
-        .expect("failed to load test dylib")
-        .relocator()
+    Relocator::new()
+        .run(
+            loader
+                .load_dylib(ElfBinary::new(name, &output.data))
+                .expect("failed to load test dylib"),
+        )
         .relocate()
         .expect("failed to relocate test dylib")
 }

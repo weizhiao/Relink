@@ -1,6 +1,9 @@
 use std::ffi::CStr;
 
-use elf_loader::image::{ModuleHandle, SyntheticModule, SyntheticSymbol};
+use elf_loader::{
+    image::{ModuleHandle, SyntheticModule, SyntheticSymbol},
+    relocation::Relocator,
+};
 use windows_elf_loader::WinElfLoader;
 
 fn main() {
@@ -14,24 +17,30 @@ fn main() {
         [SyntheticSymbol::function("print", print as *const ())],
     ));
     let mut loader = WinElfLoader::new();
-    let liba = loader
-        .load_dylib("liba", include_bytes!("../example_dylib/liba.so"))
-        .unwrap()
-        .relocator()
+    let liba = Relocator::new()
+        .run(
+            loader
+                .load_dylib("liba", include_bytes!("../example_dylib/liba.so"))
+                .unwrap(),
+        )
         .scope([host.clone()])
         .relocate()
         .unwrap();
-    let libb = loader
-        .load_dylib("libb", include_bytes!("../example_dylib/libb.so"))
-        .unwrap()
-        .relocator()
+    let libb = Relocator::new()
+        .run(
+            loader
+                .load_dylib("libb", include_bytes!("../example_dylib/libb.so"))
+                .unwrap(),
+        )
         .scope([host.clone(), ModuleHandle::from(&liba)])
         .relocate()
         .unwrap();
-    let libc = loader
-        .load_dylib("libc", include_bytes!("../example_dylib/libc.so"))
-        .unwrap()
-        .relocator()
+    let libc = Relocator::new()
+        .run(
+            loader
+                .load_dylib("libc", include_bytes!("../example_dylib/libc.so"))
+                .unwrap(),
+        )
         .scope([host.clone(), ModuleHandle::from(&libb)])
         .relocate()
         .unwrap();

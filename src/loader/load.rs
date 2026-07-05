@@ -207,8 +207,9 @@ where
 
     /// Loads a shared object (`ET_DYN`) into memory and returns a raw dylib image.
     ///
-    /// The returned value is mapped but not yet relocated. Call `.relocator().relocate()`
-    /// to resolve symbols and produce a ready-to-use loaded image.
+    /// The returned value is mapped but not yet relocated. Pass it to
+    /// [`crate::relocation::Relocator::run`] to resolve symbols and produce a
+    /// ready-to-use loaded image.
     ///
     /// Any [`IntoElfReader`] input is accepted, including paths, byte slices,
     /// [`crate::input::ElfFile`], and [`crate::input::ElfBinary`].
@@ -218,19 +219,17 @@ where
     /// [`Loader::for_arch::<NewArch>()`](super::Loader::for_arch) before
     /// calling this method. The `e_machine` gate then validates against
     /// `NewArch::MACHINE`, and the returned [`RawDylib`] carries the chosen
-    /// `Arch`, so [`Relocator::relocate`] uses the matching relocation
+    /// `Arch`, so [`crate::relocation::Relocator::run`] uses the matching relocation
     /// numbering and skips host-side runtime hooks (IFUNC, TLSDESC, lazy
     /// binding, init arrays).
     ///
-    /// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
-    ///
     /// # Examples
     /// ```no_run
-    /// use elf_loader::Loader;
+    /// use elf_loader::{Loader, relocation::Relocator};
     ///
     /// let mut loader = Loader::new();
     /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
-    /// let lib = raw.relocator().relocate().unwrap();
+    /// let lib = Relocator::new().run(raw).relocate().unwrap();
     /// ```
     pub fn load_dylib<'a, I>(&mut self, input: I) -> Result<RawDylib<D, Arch, M::Region, Tls>>
     where
@@ -248,8 +247,9 @@ where
     ///
     /// Unlike [`Loader::load_dylib`], this accepts both `ET_DYN` shared objects
     /// and `ET_EXEC` executables that carry a `PT_DYNAMIC` segment. The returned
-    /// value is mapped but not yet relocated. Call `.relocator().relocate()` to
-    /// resolve symbols and produce a ready-to-use loaded image.
+    /// value is mapped but not yet relocated. Pass it to
+    /// [`crate::relocation::Relocator::run`] to resolve symbols and produce a
+    /// ready-to-use loaded image.
     pub fn load_dynamic<'a, I>(&mut self, input: I) -> Result<RawDynamic<D, Arch, M::Region, Tls>>
     where
         I: IntoElfReader<'a>,
@@ -437,7 +437,8 @@ where
     /// Loads an executable image into memory and returns a raw executable.
     ///
     /// Both static executables and dynamically-linked / PIE-style executables are supported.
-    /// Dynamic executables can later be relocated with `.relocator().relocate()`.
+    /// Dynamic executables can later be relocated with
+    /// [`crate::relocation::Relocator::run`].
     ///
     /// # Examples
     /// ```no_run

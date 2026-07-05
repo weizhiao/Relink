@@ -12,10 +12,7 @@ use crate::{
     logging,
     memory::{HostRegion, ImageMemoryExt, MappedView, RegionAccess, VmAddr, VmOffset},
     observer::{InitEvent, RelocationObserver},
-    relocation::{
-        DynamicRelocation, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
-        RelocatorRun,
-    },
+    relocation::{DynamicRelocation, Relocatable, RelocateArgs, RelocationArch, RelocationHandler},
     segment::{ElfSegments, MemoryProtection},
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
@@ -168,7 +165,8 @@ impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
 /// segment, including shared objects and dynamically linked executables.
 ///
 /// The optional `Arch` type parameter selects the target architecture used
-/// during [`Relocator::relocate`]. By default it is [`crate::arch::NativeArch`].
+/// during [`crate::relocation::Relocator::run`]. By default it is
+/// [`crate::arch::NativeArch`].
 pub struct RawDynamic<
     D,
     Arch = NativeArch,
@@ -413,15 +411,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
     /// Gets a reference to the user data
     pub fn user_data(&self) -> &D {
         self.module.user_data()
-    }
-}
-
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    RawDynamic<D, Arch, R, Tls>
-{
-    /// Creates a relocation builder for this dynamic image.
-    pub fn relocator(self) -> RelocatorRun<Self, (), (), Arch, (), Tls> {
-        Relocator::<(), (), Arch, (), Tls>::new().with_object(self)
     }
 }
 

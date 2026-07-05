@@ -38,6 +38,7 @@
 //! use elf_loader::{
 //!     Loader, Result,
 //!     image::{SyntheticSymbol, SyntheticModule},
+//!     relocation::Relocator,
 //! };
 //!
 //! extern "C" fn host_double(value: i32) -> i32 {
@@ -50,9 +51,8 @@
 //!         [SyntheticSymbol::function("host_double", host_double as *const ())],
 //!     );
 //!
-//!     let lib = Loader::new()
-//!         .load_dylib("path/to/plugin.so")?
-//!         .relocator()
+//!     let lib = Relocator::new()
+//!         .run(Loader::new().load_dylib("path/to/plugin.so")?)
 //!         .scope([host])
 //!         .relocate()?;
 //!

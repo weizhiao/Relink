@@ -15,7 +15,6 @@ use crate::{
     observer::RelocationObserver,
     relocation::{
         ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
-        Relocator, RelocatorRun,
     },
     tls::TlsResolver,
 };
@@ -63,7 +62,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<A
 
 /// A fully relocated and ready-to-use ELF module.
 ///
-/// This is the result of calling `.relocator().relocate()` on a [`RawElf`].
+/// This is the result of relocating a [`RawElf`] with [`crate::relocation::Relocator`].
 /// Loaded images retain the dependencies that were actually used during relocation.
 #[derive(Debug)]
 pub enum LoadedElf<
@@ -101,23 +100,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
 impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawElf<D, Arch, R, Tls>
 {
-    /// Creates a relocation builder for this raw image.
-    ///
-    /// # Examples
-    /// ```no_run
-    /// use elf_loader::Loader;
-    ///
-    /// let mut loader = Loader::new();
-    /// let raw = loader.load("path/to/input.elf").unwrap();
-    /// let relocated = raw.relocator().relocate().unwrap();
-    /// ```
-    pub fn relocator(self) -> RelocatorRun<Self, (), (), Arch, (), Tls>
-    where
-        Self: Relocatable<D, Arch = Arch, Tls = Tls>,
-    {
-        Relocator::<(), (), Arch, (), Tls>::new().with_object(self)
-    }
-
     /// Returns the loader source path or caller-provided source identifier.
     #[inline]
     pub fn path(&self) -> &Path {

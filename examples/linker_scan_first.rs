@@ -31,6 +31,7 @@ fn main() -> Result<()> {
 
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
+        .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(ConfigureRootSectionRegions);
             pipeline

@@ -11,9 +11,7 @@ use crate::{
     lazy::traits::{LazyBinder, SupportLazy},
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
-    relocation::{
-        Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator, RelocatorRun,
-    },
+    relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler},
     segment::ElfSegments,
     tls::TlsResolver,
 };
@@ -26,7 +24,7 @@ use core::fmt::Debug;
 /// relocation.
 ///
 /// The optional `Arch` type parameter selects the target architecture used by
-/// [`Relocator::relocate`]. By default it is [`crate::arch::NativeArch`].
+/// [`crate::relocation::Relocator::run`]. By default it is [`crate::arch::NativeArch`].
 pub struct RawDylib<
     D,
     Arch = crate::arch::NativeArch,
@@ -190,10 +188,5 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDylib<
     #[inline]
     pub fn user_data_mut(&mut self) -> Option<&mut D> {
         self.inner.user_data_mut()
-    }
-
-    /// Creates a relocation builder for this shared object.
-    pub fn relocator(self) -> RelocatorRun<Self, (), (), Arch, (), Tls> {
-        Relocator::<(), (), Arch, (), Tls>::new().with_object(self)
     }
 }

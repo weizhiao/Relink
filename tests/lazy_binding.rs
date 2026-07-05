@@ -2,8 +2,12 @@ mod support;
 
 #[cfg(feature = "lazy-binding")]
 use elf_loader::{
-    Loader, arch::NativeArch, image::LoadedCore, input::ElfBinary, lazy::native::NativeLazyBinder,
-    relocation::RelocationArch,
+    Loader,
+    arch::NativeArch,
+    image::LoadedCore,
+    input::ElfBinary,
+    lazy::native::NativeLazyBinder,
+    relocation::{RelocationArch, Relocator},
 };
 
 #[cfg(feature = "lazy-binding")]
@@ -143,12 +147,14 @@ fn default_lazy_binding_uses_retained_scope_entry() {
     let provider = load_relocated_dylib(&mut loader, "libscope_provider.so", &provider_output);
     let consumer_output = write_scope_consumer(ElfWriterConfig::default());
 
-    let relocated = loader
-        .load_dylib(ElfBinary::new("scope_consumer.so", &consumer_output.data))
-        .expect("failed to load scope consumer")
-        .relocator()
-        .scope(std::slice::from_ref(&provider))
+    let relocated = Relocator::new()
         .lazy_binder(NativeLazyBinder::new())
+        .run(
+            loader
+                .load_dylib(ElfBinary::new("scope_consumer.so", &consumer_output.data))
+                .expect("failed to load scope consumer"),
+        )
+        .scope(std::slice::from_ref(&provider))
         .relocate()
         .expect("failed to relocate scope consumer");
 
@@ -178,15 +184,17 @@ fn default_lazy_binding_retains_scope_used_only_by_lazy_jump_slot() {
     let provider = load_relocated_dylib(&mut loader, "libscope_provider.so", &provider_output);
     let consumer_output = write_scope_func_consumer(ElfWriterConfig::default());
 
-    let relocated = loader
-        .load_dylib(ElfBinary::new(
-            "scope_func_consumer.so",
-            &consumer_output.data,
-        ))
-        .expect("failed to load scope consumer")
-        .relocator()
-        .scope(std::slice::from_ref(&provider))
+    let relocated = Relocator::new()
         .lazy_binder(NativeLazyBinder::new())
+        .run(
+            loader
+                .load_dylib(ElfBinary::new(
+                    "scope_func_consumer.so",
+                    &consumer_output.data,
+                ))
+                .expect("failed to load scope consumer"),
+        )
+        .scope(std::slice::from_ref(&provider))
         .relocate()
         .expect("failed to relocate scope consumer");
 
@@ -219,12 +227,14 @@ fn df_symbolic_lazy_jump_slot_prefers_current_definition() {
     let consumer_output =
         write_defining_scope_func_consumer(ElfWriterConfig::default().with_symbolic(true));
 
-    let relocated = loader
-        .load_dylib(ElfBinary::new("scope_consumer.so", &consumer_output.data))
-        .expect("failed to load scope consumer")
-        .relocator()
-        .scope(std::slice::from_ref(&provider))
+    let relocated = Relocator::new()
         .lazy_binder(NativeLazyBinder::new())
+        .run(
+            loader
+                .load_dylib(ElfBinary::new("scope_consumer.so", &consumer_output.data))
+                .expect("failed to load scope consumer"),
+        )
+        .scope(std::slice::from_ref(&provider))
         .relocate()
         .expect("failed to relocate scope consumer");
 
@@ -246,10 +256,12 @@ fn bind_now_defaults_to_eager_resolution() {
     let provider = load_relocated_dylib(&mut loader, "libscope_provider.so", &provider_output);
     let consumer_output = write_scope_consumer(ElfWriterConfig::default().with_bind_now(true));
 
-    let relocated = loader
-        .load_dylib(ElfBinary::new("scope_consumer.so", &consumer_output.data))
-        .expect("failed to load scope consumer")
-        .relocator()
+    let relocated = Relocator::new()
+        .run(
+            loader
+                .load_dylib(ElfBinary::new("scope_consumer.so", &consumer_output.data))
+                .expect("failed to load scope consumer"),
+        )
         .scope(std::slice::from_ref(&provider))
         .relocate()
         .expect("failed to relocate scope consumer");

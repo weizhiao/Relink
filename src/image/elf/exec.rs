@@ -14,9 +14,7 @@ use crate::{
     loader::ImageBuilder,
     memory::{HostRegion, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
-    relocation::{
-        Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator, RelocatorRun,
-    },
+    relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler},
     segment::ElfSegments,
     tls::{
         TlsImageProvider, TlsImageSource, TlsModuleId, TlsResolver, TlsTemplate, TlsTpOffset,
@@ -215,11 +213,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawExec<D, Arch, R, Tls>
 {
-    /// Creates a relocation builder for this executable image.
-    pub fn relocator(self) -> RelocatorRun<Self, (), (), Arch, (), Tls> {
-        Relocator::<(), (), Arch, (), Tls>::new().with_object(self)
-    }
-
     /// Returns the loader source path or caller-provided source identifier.
     pub fn path(&self) -> &Path {
         match self {

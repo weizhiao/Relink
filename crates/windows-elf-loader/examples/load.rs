@@ -1,4 +1,7 @@
-use elf_loader::image::{SyntheticModule, SyntheticSymbol};
+use elf_loader::{
+    image::{SyntheticModule, SyntheticSymbol},
+    relocation::Relocator,
+};
 use std::ffi::CStr;
 use windows_elf_loader::WinElfLoader;
 
@@ -14,10 +17,12 @@ fn main() {
     );
     let mut loader: WinElfLoader = WinElfLoader::new();
     // Load and relocate dynamic library liba.so
-    let liba = loader
-        .load_file(r".\crates\windows-elf-loader\example_dylib\liba.so")
-        .unwrap()
-        .relocator()
+    let liba = Relocator::new()
+        .run(
+            loader
+                .load_file(r".\crates\windows-elf-loader\example_dylib\liba.so")
+                .unwrap(),
+        )
         .scope([host])
         .relocate()
         .unwrap();

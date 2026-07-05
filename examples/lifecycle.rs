@@ -6,6 +6,7 @@ use elf_loader::{
     arch::NativeArch,
     memory::RegionAccess,
     observer::{InitEvent, RelocationObserver},
+    relocation::Relocator,
     tls::TlsResolver,
 };
 
@@ -37,9 +38,8 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let fixtures = fixture_support::ensure_all();
-    let _lib = LOADER
-        .load_dylib(fixtures.liba_str())?
-        .relocator()
+    let _lib = Relocator::new()
+        .run(LOADER.load_dylib(fixtures.liba_str())?)
         .observer(LifecycleLogger)
         .relocate()?;
     println!("Library loaded and relocated.");

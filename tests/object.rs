@@ -1,6 +1,8 @@
 mod support;
 
 #[cfg(all(feature = "object", target_arch = "x86_64"))]
+use elf_loader::relocation::Relocator;
+#[cfg(all(feature = "object", target_arch = "x86_64"))]
 use gen_elf::{ObjectElfOutput, RelocationInfo, SectionKind};
 
 #[cfg(all(feature = "object", target_arch = "x86_64"))]
@@ -65,13 +67,15 @@ fn object_relocations_match() {
         .expect("failed to generate static ELF");
     let host_symbols = TestHostSymbols::new();
 
-    let loaded_object = elf_loader::Loader::new()
-        .load_object(elf_loader::input::ElfBinary::new(
-            "test_static.o",
-            &object_file.data,
-        ))
-        .expect("failed to load object")
-        .relocator()
+    let loaded_object = Relocator::new()
+        .run(
+            elf_loader::Loader::new()
+                .load_object(elf_loader::input::ElfBinary::new(
+                    "test_static.o",
+                    &object_file.data,
+                ))
+                .expect("failed to load object"),
+        )
         .scope([host_symbols.source("__host")])
         .relocate()
         .expect("relocation failed");
@@ -159,13 +163,15 @@ fn object_addends_apply() {
         .expect("failed to generate object with addend relocation");
     let host_symbols = TestHostSymbols::new();
 
-    let loaded_object = elf_loader::Loader::new()
-        .load_object(elf_loader::input::ElfBinary::new(
-            "test_static_addend.o",
-            &object_file.data,
-        ))
-        .expect("failed to load object")
-        .relocator()
+    let loaded_object = Relocator::new()
+        .run(
+            elf_loader::Loader::new()
+                .load_object(elf_loader::input::ElfBinary::new(
+                    "test_static_addend.o",
+                    &object_file.data,
+                ))
+                .expect("failed to load object"),
+        )
         .scope([host_symbols.source("__host")])
         .relocate()
         .expect("relocation failed");
@@ -201,8 +207,8 @@ fn retained_raw_object_core_rejects_relocation_without_panicking() {
         .expect("failed to load object");
     let _retained_core = (*raw).clone();
 
-    let err = raw
-        .relocator()
+    let err = Relocator::new()
+        .run(raw)
         .relocate()
         .expect_err("retained raw object core should reject relocation");
     assert!(
@@ -266,16 +272,18 @@ fn object_exports_survive_init_symtab_metadata() {
         SectionLifetime::Init,
     );
 
-    let loaded_object = elf_loader::Loader::new()
-        .run()
-        .with_object_section_groups(groups)
-        .with_observer(InitSymtabObserver { init_meta })
-        .load_object(elf_loader::input::ElfBinary::new(
-            "test_static_init_symtab.o",
-            &object_file.data,
-        ))
-        .expect("failed to load object")
-        .relocator()
+    let loaded_object = Relocator::new()
+        .run(
+            elf_loader::Loader::new()
+                .run()
+                .with_object_section_groups(groups)
+                .with_observer(InitSymtabObserver { init_meta })
+                .load_object(elf_loader::input::ElfBinary::new(
+                    "test_static_init_symtab.o",
+                    &object_file.data,
+                ))
+                .expect("failed to load object"),
+        )
         .scope([host_symbols.source("__host")])
         .relocate()
         .expect("relocation failed");
@@ -355,15 +363,17 @@ fn object_relocated_event_exposes_section_metadata() {
         )
         .expect("failed to generate object");
 
-    let loaded_object = elf_loader::Loader::new()
-        .run()
-        .with_observer(SkipShstrtab)
-        .load_object(elf_loader::input::ElfBinary::new(
-            "test_static_metadata.o",
-            &object_file.data,
-        ))
-        .expect("failed to load object")
-        .relocator()
+    let loaded_object = Relocator::new()
+        .run(
+            elf_loader::Loader::new()
+                .run()
+                .with_observer(SkipShstrtab)
+                .load_object(elf_loader::input::ElfBinary::new(
+                    "test_static_metadata.o",
+                    &object_file.data,
+                ))
+                .expect("failed to load object"),
+        )
         .observer(MetadataObserver)
         .relocate()
         .expect("relocation failed");
@@ -420,13 +430,15 @@ fn object_relocated_event_can_clear_default_exports() {
         )
         .expect("failed to generate object");
 
-    let loaded_object = elf_loader::Loader::new()
-        .load_object(elf_loader::input::ElfBinary::new(
-            "test_static_clear_exports.o",
-            &object_file.data,
-        ))
-        .expect("failed to load object")
-        .relocator()
+    let loaded_object = Relocator::new()
+        .run(
+            elf_loader::Loader::new()
+                .load_object(elf_loader::input::ElfBinary::new(
+                    "test_static_clear_exports.o",
+                    &object_file.data,
+                ))
+                .expect("failed to load object"),
+        )
         .observer(ClearExports)
         .relocate()
         .expect("relocation failed");
@@ -669,19 +681,21 @@ fn object_layout_group_applies_final_protection_after_init() {
         SectionLifetime::Core,
     );
 
-    let _loaded_object = elf_loader::Loader::new()
-        .with_mmap(RecordingMmap {
-            calls: Arc::clone(&calls),
-        })
-        .run()
-        .with_object_section_groups(groups)
-        .with_observer(ReadOnlyAfterInit { ro_after_init })
-        .load_object(ElfBinary::new(
-            "test_static_final_protection.o",
-            &object_file.data,
-        ))
-        .expect("failed to load object")
-        .relocator()
+    let _loaded_object = Relocator::new()
+        .run(
+            elf_loader::Loader::new()
+                .with_mmap(RecordingMmap {
+                    calls: Arc::clone(&calls),
+                })
+                .run()
+                .with_object_section_groups(groups)
+                .with_observer(ReadOnlyAfterInit { ro_after_init })
+                .load_object(ElfBinary::new(
+                    "test_static_final_protection.o",
+                    &object_file.data,
+                ))
+                .expect("failed to load object"),
+        )
         .relocate()
         .expect("relocation failed");
 
@@ -783,11 +797,13 @@ fn object_finalizer_runs_on_drop() {
     let fini_addr = 0x1234_5678usize;
     let object = object_with_fini_array(fini_addr);
 
-    let loaded_object = elf_loader::Loader::new()
-        .with_executor(executor)
-        .load_object(ElfBinary::new("test_static_fini.o", &object))
-        .expect("failed to load object")
-        .relocator()
+    let loaded_object = Relocator::new()
+        .run(
+            elf_loader::Loader::new()
+                .with_executor(executor)
+                .load_object(ElfBinary::new("test_static_fini.o", &object))
+                .expect("failed to load object"),
+        )
         .relocate()
         .expect("relocation failed");
 

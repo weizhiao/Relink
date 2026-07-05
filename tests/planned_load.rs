@@ -15,6 +15,7 @@ use elf_loader::{
     },
     memory::VmAddr,
     os::PageSize,
+    relocation::Relocator,
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
 use std::{boxed::Box, cell::RefCell, rc::Rc, vec::Vec};
@@ -57,11 +58,14 @@ struct StaticVisibleModule {
     direct_deps: Box<[&'static str]>,
 }
 
-impl KeyResolver<'static, &'static str> for SingleBinaryResolver {
-    fn load_root(
-        &mut self,
+impl KeyResolver<&'static str> for SingleBinaryResolver {
+    fn load_root<'cfg>(
+        &self,
         req: &RootRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
         let key = req.key();
         assert_eq!(*key, self.key);
         Ok(ResolvedKey::load(
@@ -70,29 +74,38 @@ impl KeyResolver<'static, &'static str> for SingleBinaryResolver {
         ))
     }
 
-    fn resolve_dependency(
-        &mut self,
+    fn resolve_dependency<'cfg>(
+        &self,
         req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
         Err(req.unresolved())
     }
 }
 
-impl KeyResolver<'static, &'static str> for ExistingRootResolver {
-    fn load_root(
-        &mut self,
+impl KeyResolver<&'static str> for ExistingRootResolver {
+    fn load_root<'cfg>(
+        &self,
         req: &RootRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
         let key = req.key();
         assert_eq!(*key, self.requested);
         assert!(req.contains_key(&self.existing));
         Ok(ResolvedKey::existing(self.existing))
     }
 
-    fn resolve_dependency(
-        &mut self,
+    fn resolve_dependency<'cfg>(
+        &self,
         _req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
         panic!("existing scan root should not resolve dependencies")
     }
 }
@@ -106,11 +119,14 @@ impl MultiBinaryResolver {
     }
 }
 
-impl KeyResolver<'static, &'static str> for MultiBinaryResolver {
-    fn load_root(
-        &mut self,
+impl KeyResolver<&'static str> for MultiBinaryResolver {
+    fn load_root<'cfg>(
+        &self,
         req: &RootRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
         let key = req.key();
         assert_eq!(*key, self.root);
         let module = self.module(key).expect("missing root module");
@@ -120,21 +136,27 @@ impl KeyResolver<'static, &'static str> for MultiBinaryResolver {
         ))
     }
 
-    fn resolve_dependency(
-        &mut self,
+    fn resolve_dependency<'cfg>(
+        &self,
         req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
         self.module(req.needed())
             .map(|module| ResolvedKey::load(module.key, ElfBinary::new(module.name, module.data)))
             .ok_or_else(|| req.unresolved())
     }
 }
 
-impl KeyResolver<'static, &'static str> for VisibleDependencyResolver {
-    fn load_root(
-        &mut self,
+impl KeyResolver<&'static str> for VisibleDependencyResolver {
+    fn load_root<'cfg>(
+        &self,
         req: &RootRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
         let key = req.key();
         assert_eq!(*key, "root");
         Ok(ResolvedKey::load(
@@ -143,21 +165,27 @@ impl KeyResolver<'static, &'static str> for VisibleDependencyResolver {
         ))
     }
 
-    fn resolve_dependency(
-        &mut self,
+    fn resolve_dependency<'cfg>(
+        &self,
         req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
         assert_eq!(req.needed(), "dep");
         assert!(req.contains_key(&"dep"));
         Ok(ResolvedKey::existing("dep"))
     }
 }
 
-impl KeyResolver<'static, &'static str> for SyntheticDependencyResolver {
-    fn load_root(
-        &mut self,
+impl KeyResolver<&'static str> for SyntheticDependencyResolver {
+    fn load_root<'cfg>(
+        &self,
         req: &RootRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
         let key = req.key();
         assert_eq!(*key, "root");
         Ok(ResolvedKey::load(
@@ -166,10 +194,13 @@ impl KeyResolver<'static, &'static str> for SyntheticDependencyResolver {
         ))
     }
 
-    fn resolve_dependency(
-        &mut self,
+    fn resolve_dependency<'cfg>(
+        &self,
         req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'static, &'static str>> {
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
         assert_eq!(req.needed(), "dep");
         Ok(ResolvedKey::module(
             "dep",
@@ -422,10 +453,12 @@ fn load_dynamic_accepts_dynamic_exec_without_relaxing_load_dylib() {
     );
 
     let dynamic_loader = Loader::new();
-    let loaded = dynamic_loader
-        .load_dynamic(ElfBinary::new("dynamic_exec", bytes))
-        .expect("load_dynamic should accept dynamic ET_EXEC")
-        .relocator()
+    let loaded = Relocator::new()
+        .run(
+            dynamic_loader
+                .load_dynamic(ElfBinary::new("dynamic_exec", bytes))
+                .expect("load_dynamic should accept dynamic ET_EXEC"),
+        )
         .relocate()
         .expect("failed to relocate dynamic ET_EXEC");
 
@@ -451,10 +484,12 @@ fn load_scanned_dynamic_accepts_dynamic_exec() {
     else {
         panic!("dynamic ET_EXEC should scan as dynamic");
     };
-    let loaded = loader
-        .load_scanned_dynamic(scanned)
-        .expect("load_scanned_dynamic should accept scanned dynamic ET_EXEC")
-        .relocator()
+    let loaded = Relocator::new()
+        .run(
+            loader
+                .load_scanned_dynamic(scanned)
+                .expect("load_scanned_dynamic should accept scanned dynamic ET_EXEC"),
+        )
         .relocate()
         .expect("failed to relocate scanned dynamic ET_EXEC");
 
@@ -541,12 +576,13 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
         };
 
     let loaded = Linker::new()
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
             pipeline
         })
-        .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "root")
         .expect("failed to execute scan-first load");
 
@@ -760,12 +796,13 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
         };
 
     let loaded = Linker::new()
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
             pipeline
         })
-        .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "root")
         .expect("failed to execute arena-backed scan-first load");
 
@@ -846,12 +883,13 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
         };
 
     let loaded = Linker::new()
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
             pipeline
         })
-        .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "root")
         .expect("failed to execute arena-backed scan-first load with assign_next");
 
@@ -898,12 +936,13 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
     };
 
     let loaded = Linker::new()
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
             pipeline
         })
-        .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "root")
         .expect("failed to load section-reorderable dylib through the default section-region path");
 
@@ -948,12 +987,13 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
     };
 
     let loaded = Linker::new()
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
             pipeline
         })
-        .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "root")
         .expect("failed to load opaque dylib through scan-first path");
 
@@ -994,12 +1034,13 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
     };
 
     let _loaded = Linker::new()
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
             pipeline
         })
-        .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "root")
         .expect("scan-first load should downgrade unusable section tables");
 
@@ -1043,12 +1084,13 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
         };
 
     let loaded = Linker::new()
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
             pipeline
         })
-        .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "root")
         .expect("failed to execute whole-DSO scan-first load");
 
@@ -1099,12 +1141,13 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
         };
 
     let err = Linker::new()
+        .resolver(resolver)
+        .planner(empty_relocation_plan)
+        .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
             pipeline
         })
-        .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "root")
         .expect_err("section-data modules must reject section-region placement");
     assert_eq!(observed_capability, Some(ModuleCapability::SectionData));

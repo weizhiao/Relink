@@ -507,7 +507,7 @@ enum ResolvedCandidate<LinkKey> {
     Load { key: LinkKey, file: ElfFile },
 }
 
-impl<'cfg, LinkKey, Arch, Tls, Rule> KeyResolver<'cfg, LinkKey, Arch, LinkKey, Tls>
+impl<LinkKey, Arch, Tls, Rule> KeyResolver<LinkKey, Arch, LinkKey, Tls>
     for SearchPathResolver<LinkKey, Rule>
 where
     Rule: KeyRule<LinkKey>,
@@ -515,10 +515,13 @@ where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    fn load_root(
-        &mut self,
+    fn load_root<'cfg>(
+        &self,
         req: &RootRequest<'_, LinkKey>,
-    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>> {
+    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>>
+    where
+        LinkKey: 'cfg,
+    {
         let contains_key = |key: &LinkKey| req.contains_key(key);
         if let Some(resolved) =
             self.resolve_key(CandidateRequest::root(req.key().as_ref()), &contains_key)?
@@ -532,10 +535,13 @@ where
         Err(LinkerError::resolver(LinkResolverError::RootNotFound).into())
     }
 
-    fn resolve_dependency(
-        &mut self,
+    fn resolve_dependency<'cfg>(
+        &self,
         req: &DependencyRequest<'_, LinkKey>,
-    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>> {
+    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>>
+    where
+        LinkKey: 'cfg,
+    {
         let origin = req.owner_path().parent();
         let needed = expand_origin(req.needed(), origin);
         let request = CandidateRequest::dependency(
