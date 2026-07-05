@@ -4,13 +4,12 @@ use crate::{
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     hint::{likely, unlikely},
     image::{LoadedCore, RawDynamic},
-    lazy::traits::LazyBinder,
+    lazy::traits::{LazyBinder, prepare_plt, relocate_jump_slot},
     logging,
     memory::{ImageMemory, ImageMemoryExt, MappedView, RegionAccess, VmOffset},
     observer::{DynamicRelocatedEvent, Finalizer, RelocationObserver},
     relocation::{RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, SymDef},
     runtime::CodeContext,
-    sync::Arc,
     tls::{TlsRelocOutcome, TlsResolver},
 };
 use alloc::vec;
@@ -28,15 +27,16 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         Ok(())
     }
 
-    pub(crate) fn relocate_impl<PreH, PostH, Obs>(
+    pub(crate) fn relocate_impl<PreH, PostH, Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs, Binder>,
     ) -> Result<LoadedCore<D, Arch, R, Tls>>
     where
         D: 'static,
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
+        Binder: LazyBinder<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
         logging::info!("Relocating dynamic library: {}", self.name());
@@ -72,7 +72,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         if !relocation.is_empty() {
             self.relocate_relative(helper.memory())?
                 .relocate_dynrel(&mut helper)?
-                .relocate_pltrel(lazy_binding, &mut helper, lazy_binder.clone())?;
+                .relocate_pltrel(lazy_binding, &mut helper, lazy_binder)?;
         }
 
         let RelocHelper { scope, .. } = helper;
@@ -193,22 +193,23 @@ pub(crate) struct DynamicRelocation<Arch: RelocationArch = crate::arch::NativeAr
 
 impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
     /// Relocate PLT (Procedure Linkage Table) entries
-    fn relocate_pltrel<PreH, PostH, Obs>(
+    fn relocate_pltrel<PreH, PostH, Obs, Binder>(
         &self,
         lazy_binding: bool,
         helper: &mut RelocHelper<'_, D, Arch, R, Tls, PreH, PostH, Obs>,
-        lazy_binder: Arc<dyn LazyBinder<Arch>>,
+        lazy_binder: &Binder,
     ) -> Result<&Self>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
+        Binder: LazyBinder<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
         let core = self.core_ref();
         let base = core.base();
         let reloc = self.relocation();
-        lazy_binder.prepare_plt(lazy_binding, self)?;
+        prepare_plt(lazy_binder, lazy_binding, self)?;
 
         // Process PLT relocations
         let pltrel = reloc.pltrel.as_slice();
@@ -222,7 +223,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
 
             // Handle jump slot relocations
             if likely(r_type == Arch::JUMP_SLOT) {
-                if lazy_binder.relocate_jump_slot(lazy_binding, helper.memory(), base, rel)? {
+                if relocate_jump_slot::<Arch, _>(lazy_binding, helper.memory(), base, rel)? {
                     continue;
                 }
 

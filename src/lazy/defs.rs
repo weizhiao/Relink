@@ -6,24 +6,24 @@ use crate::{
     relocation::RelocationArch,
 };
 use alloc::boxed::Box;
-use core::{any::Any, marker::PhantomData, ptr::NonNull};
+use core::{any::Any, ptr::NonNull};
 
 /// PLTGOT slots used by an architecture's lazy binding entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LazyBindingSlots {
-    runtime: usize,
+    context: usize,
     resolver: usize,
 }
 
 impl LazyBindingSlots {
     #[inline]
-    pub const fn new(runtime: usize, resolver: usize) -> Self {
-        Self { runtime, resolver }
+    pub const fn new(context: usize, resolver: usize) -> Self {
+        Self { context, resolver }
     }
 
     #[inline]
-    pub const fn runtime(self) -> usize {
-        self.runtime
+    pub const fn context(self) -> usize {
+        self.context
     }
 
     #[inline]
@@ -32,43 +32,43 @@ impl LazyBindingSlots {
     }
 }
 
-/// Runtime entries installed into an image's lazy PLT state.
+/// Entries installed into an image's lazy PLT state.
 pub struct LazyBindingEntries {
-    runtime: VmAddr,
+    context: VmAddr,
     resolver: VmAddr,
     state: Option<Box<dyn Any + Send + Sync>>,
 }
 
 impl LazyBindingEntries {
-    /// Creates a lazy runtime binding from target-visible runtime entries.
+    /// Creates lazy binding entries from target-visible context and resolver entries.
     #[inline]
-    pub fn new(runtime: VmAddr, resolver: VmAddr) -> Self {
+    pub fn new(context: VmAddr, resolver: VmAddr) -> Self {
         Self {
-            runtime,
+            context,
             resolver,
             state: None,
         }
     }
 
-    /// Creates a lazy runtime binding whose runtime entry points at owned host-side state.
+    /// Creates lazy binding entries whose context points at owned host-side state.
     pub fn with_state<T>(state: T, resolver: VmAddr) -> Self
     where
         T: Send + Sync + 'static,
     {
         let state = Box::new(state);
-        let runtime = VmAddr::from_ptr(state.as_ref());
+        let context = VmAddr::from_ptr(state.as_ref());
         let state = state as Box<dyn Any + Send + Sync>;
         Self {
-            runtime,
+            context,
             resolver,
             state: Some(state),
         }
     }
 
-    /// Returns the runtime entry written to the lazy PLT state.
+    /// Returns the context entry written to the lazy PLT state.
     #[inline]
-    pub const fn runtime(&self) -> VmAddr {
-        self.runtime
+    pub const fn context(&self) -> VmAddr {
+        self.context
     }
 
     /// Returns the resolver entry written to the lazy PLT state.
@@ -79,7 +79,7 @@ impl LazyBindingEntries {
 
     #[inline]
     pub(crate) fn into_parts(self) -> (VmAddr, VmAddr, Option<Box<dyn Any + Send + Sync>>) {
-        (self.runtime, self.resolver, self.state)
+        (self.context, self.resolver, self.state)
     }
 }
 
@@ -91,7 +91,6 @@ impl LazyBindingEntries {
 #[derive(Debug)]
 pub struct LazyRuntime<Arch: RelocationArch> {
     runtime: NonNull<CoreRuntime<Arch>>,
-    _arch: PhantomData<fn() -> Arch>,
 }
 
 impl<Arch: RelocationArch> Copy for LazyRuntime<Arch> {}
@@ -108,11 +107,10 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
     pub(crate) fn new(runtime: &CoreRuntime<Arch>) -> Self {
         Self {
             runtime: NonNull::from(runtime),
-            _arch: PhantomData,
         }
     }
 
-    /// Rebuilds a lazy runtime handle from the runtime entry passed to a resolver.
+    /// Rebuilds a lazy runtime handle from a context entry passed to a resolver.
     ///
     /// # Safety
     ///
@@ -122,8 +120,7 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
     pub unsafe fn from_runtime(runtime: VmAddr) -> Self {
         Self {
             runtime: NonNull::new(runtime.as_mut_ptr::<CoreRuntime<Arch>>())
-                .expect("lazy runtime entry must not be null"),
-            _arch: PhantomData,
+                .expect("lazy resolver context entry must not be null"),
         }
     }
 
@@ -137,7 +134,7 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
         self.core().lazy_plt()
     }
 
-    /// Returns the runtime entry passed back to a lazy binding resolver.
+    /// Returns the native resolver context entry for this runtime handle.
     #[inline]
     pub fn runtime(&self) -> VmAddr {
         VmAddr::from_ptr(self.runtime.as_ptr())
@@ -180,9 +177,9 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
     where
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {
-        let lazy_plt = self.lazy_plt().ok_or(RelocationError::LazyBinding(
-            LazyBindingError::MissingPltMetadata,
-        ))?;
+        let lazy_plt = self
+            .lazy_plt()
+            .expect("lazy PLT metadata must be installed before default lazy binding");
         let rel = lazy_plt
             .relocs
             .as_slice()

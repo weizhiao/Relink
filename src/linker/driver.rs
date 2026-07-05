@@ -15,6 +15,7 @@ use crate::{
     image::{
         LoadedCore, ModuleHandle, ModuleScope, ModuleScopeBuilder, RawDynamic, ScannedDynamic,
     },
+    lazy::traits::LazyBinder,
     memory::{ImageMemory, RegionAccess, VmOffset},
     observer::RelocationObserver,
     os::Mmap,
@@ -151,6 +152,7 @@ pub struct Linker<
     PreH = (),
     PostH = (),
     RelocObs = (),
+    RelocBinder = (),
     P = DefaultRelocationPlanner,
     V = (),
     Tls: TlsResolver<Arch> = (),
@@ -159,7 +161,7 @@ pub struct Linker<
     loader: L,
     resolver: R,
     pipeline: LinkPipeline<'a, K, Arch, Tls>,
-    relocator: Relocator<(), PreH, PostH, Arch, RelocObs, Tls>,
+    relocator: Relocator<PreH, PostH, Arch, RelocObs, Tls, RelocBinder>,
     planner: P,
     visible_modules: V,
     scratch_relocation_order: Vec<KeySlot>,
@@ -194,7 +196,19 @@ where
     #[allow(clippy::type_complexity)]
     pub fn for_arch<NewArch>(
         self,
-    ) -> Linker<'a, K, NewArch, Loader<(), (), NewArch>, (), (), (), (), DefaultRelocationPlanner, ()>
+    ) -> Linker<
+        'a,
+        K,
+        NewArch,
+        Loader<(), (), NewArch>,
+        (),
+        (),
+        (),
+        (),
+        (),
+        DefaultRelocationPlanner,
+        (),
+    >
     where
         NewArch: RelocationArch,
     {
@@ -221,8 +235,8 @@ where
     }
 }
 
-impl<'a, K, L, R, PreH, PostH, RelocObs, P, V, Arch, Tls, Stage>
-    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, V, Tls, Stage>
+impl<'a, K, L, R, PreH, PostH, RelocObs, RelocBinder, P, V, Arch, Tls, Stage>
+    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, RelocBinder, P, V, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -232,7 +246,7 @@ where
     pub fn resolver<NewR>(
         self,
         resolver: NewR,
-    ) -> Linker<'a, K, Arch, L, NewR, PreH, PostH, RelocObs, P, V, Tls, Stage> {
+    ) -> Linker<'a, K, Arch, L, NewR, PreH, PostH, RelocObs, RelocBinder, P, V, Tls, Stage> {
         Linker {
             loader: self.loader,
             resolver,
@@ -249,7 +263,7 @@ where
     pub fn planner<NewP>(
         self,
         planner: NewP,
-    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, NewP, V, Tls, Stage> {
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, RelocBinder, NewP, V, Tls, Stage> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -266,7 +280,7 @@ where
     pub fn visible_modules<NewV>(
         self,
         visible_modules: NewV,
-    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, NewV, Tls, Stage> {
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, RelocBinder, P, NewV, Tls, Stage> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -280,8 +294,8 @@ where
     }
 }
 
-impl<'a, K, L, R, PreH, PostH, RelocObs, P, V, Arch, Tls, Stage>
-    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, V, Tls, Stage>
+impl<'a, K, L, R, PreH, PostH, RelocObs, RelocBinder, P, V, Arch, Tls, Stage>
+    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, RelocBinder, P, V, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -292,7 +306,7 @@ where
     pub fn map_pipeline(
         mut self,
         configure: impl FnOnce(LinkPipeline<'a, K, Arch, Tls>) -> LinkPipeline<'a, K, Arch, Tls>,
-    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, V, Tls, Stage::Next> {
+    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, RelocBinder, P, V, Tls, Stage::Next> {
         self.pipeline = configure(self.pipeline);
         Linker {
             loader: self.loader,
@@ -307,8 +321,8 @@ where
     }
 }
 
-impl<'a, K, L, R, PreH, PostH, RelocObs, P, V, Arch, Tls, Stage>
-    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, P, V, Tls, Stage>
+impl<'a, K, L, R, PreH, PostH, RelocObs, RelocBinder, P, V, Arch, Tls, Stage>
+    Linker<'a, K, Arch, L, R, PreH, PostH, RelocObs, RelocBinder, P, V, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -316,12 +330,27 @@ where
     Stage: AdvanceStage,
 {
     /// Reconfigures the relocator template used for loaded modules.
-    pub fn map_relocator<NewPreH, NewPostH, NewRelocObs>(
+    pub fn map_relocator<NewPreH, NewPostH, NewRelocObs, NewRelocBinder>(
         self,
         configure: impl FnOnce(
-            Relocator<(), PreH, PostH, Arch, RelocObs, Tls>,
-        ) -> Relocator<(), NewPreH, NewPostH, Arch, NewRelocObs, Tls>,
-    ) -> Linker<'a, K, Arch, L, R, NewPreH, NewPostH, NewRelocObs, P, V, Tls, Stage::Next> {
+            Relocator<PreH, PostH, Arch, RelocObs, Tls, RelocBinder>,
+        )
+            -> Relocator<NewPreH, NewPostH, Arch, NewRelocObs, Tls, NewRelocBinder>,
+    ) -> Linker<
+        'a,
+        K,
+        Arch,
+        L,
+        R,
+        NewPreH,
+        NewPostH,
+        NewRelocObs,
+        NewRelocBinder,
+        P,
+        V,
+        Tls,
+        Stage::Next,
+    > {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -336,7 +365,7 @@ where
 }
 
 impl<'a, K, D, Tls, Arch, M, Exec, R, P, V>
-    Linker<'a, K, Arch, Loader<D, Tls, Arch, M, Exec>, R, (), (), (), P, V, Tls, Stage0>
+    Linker<'a, K, Arch, Loader<D, Tls, Arch, M, Exec>, R, (), (), (), (), P, V, Tls, Stage0>
 where
     K: Clone + Ord,
     D: 'static,
@@ -361,6 +390,7 @@ where
         Arch,
         Loader<NewD, NewTls, Arch, NewM, NewExec>,
         R,
+        (),
         (),
         (),
         (),
@@ -389,7 +419,7 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocObs, P, V, Stage>
+impl<'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocObs, RelocBinder, P, V, Stage>
     Linker<
         'a,
         K,
@@ -399,6 +429,7 @@ impl<'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocObs, P, V, Stage>
         PreH,
         PostH,
         RelocObs,
+        RelocBinder,
         P,
         V,
         Tls,
@@ -415,6 +446,7 @@ where
     PreH: RelocationHandler<Arch> + Clone,
     PostH: RelocationHandler<Arch> + Clone,
     RelocObs: RelocationObserver<Arch> + Clone,
+    RelocBinder: LazyBinder<Arch> + Clone,
     P: RelocationPlanner<K, D, Arch, M::Region, Tls>,
 {
     /// Loads one module into this linker's relocation domain.
@@ -759,8 +791,7 @@ where
                 let (scope, binding) = inputs.into_parts();
                 let loaded = self
                     .relocator
-                    .clone()
-                    .with_object(raw)
+                    .run(raw)
                     .shared_scope(scope)
                     .binding(binding)
                     .relocate()?;

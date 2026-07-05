@@ -5,6 +5,7 @@ use crate::{
         ElfSymbolType,
     },
     image::{LoadedCore, LoadedObject, ModuleScope, RawObject, exports_handle},
+    lazy::traits::LazyBinder,
     logging,
     memory::{RegionAccess, VmAddr, VmOffset},
     object::{ObjectExports, ObjectSegmentView, section_entries},
@@ -54,14 +55,15 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn relocate_impl<PreH, PostH, Obs>(
+    pub(crate) fn relocate_impl<PreH, PostH, Obs, Binder>(
         mut self,
-        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs, Binder>,
     ) -> Result<LoadedObject<D, Arch, R, Tls>>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
+        Binder: LazyBinder<Arch> + ?Sized,
     {
         logging::debug!("Relocating object: {}", self.core.name());
         let RelocateArgs {

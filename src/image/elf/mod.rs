@@ -10,12 +10,12 @@ use crate::{
     elf::ElfPhdr,
     image::LoadedCore,
     input::Path,
-    lazy::traits::SupportLazy,
+    lazy::traits::{LazyBinder, SupportLazy},
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{
         ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
-        Relocator,
+        Relocator, RelocatorRun,
     },
     tls::TlsResolver,
 };
@@ -111,11 +111,11 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<A
     /// let raw = loader.load("path/to/input.elf").unwrap();
     /// let relocated = raw.relocator().relocate().unwrap();
     /// ```
-    pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls>
+    pub fn relocator(self) -> RelocatorRun<Self, (), (), Arch, (), Tls>
     where
         Self: Relocatable<D, Arch = Arch, Tls = Tls>,
     {
-        Relocator::<(), (), (), Arch, (), Tls>::new().with_object(self)
+        Relocator::<(), (), Arch, (), Tls>::new().with_object(self)
     }
 
     /// Returns the loader source path or caller-provided source identifier.
@@ -309,14 +309,15 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<A
     type Arch = Arch;
     type Tls = Tls;
 
-    fn relocate<PreH, PostH, Obs>(
+    fn relocate<PreH, PostH, Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs, Binder>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
+        Binder: LazyBinder<Arch> + ?Sized,
     {
         match self {
             RawElf::Dylib(dylib) => Ok(LoadedElf::Dylib(Relocatable::relocate(dylib, args)?)),

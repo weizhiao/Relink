@@ -720,12 +720,8 @@ pub enum LazyBindingError {
     MissingBinder,
     /// Native same-process lazy binding is unavailable for the target architecture.
     NativeUnsupported,
-    /// The image has no lazy PLT relocation metadata.
-    MissingPltMetadata,
     /// The image has no GOT/PLTGOT entry to install lazy binding state.
     MissingGotPlt,
-    /// The lazy binding GOT slot offset overflowed.
-    SlotOffsetOverflow,
     /// The lazy relocation index does not exist.
     RelocIndexOutOfRange,
     /// The relocation is not a valid lazy PLT relocation.
@@ -741,9 +737,7 @@ impl Display for LazyBindingError {
             Self::NativeUnsupported => {
                 f.write_str("native binding is not supported for this target architecture")
             }
-            Self::MissingPltMetadata => f.write_str("missing lazy PLT metadata"),
             Self::MissingGotPlt => f.write_str("missing GOT/PLTGOT entry"),
-            Self::SlotOffsetOverflow => f.write_str("GOT slot offset overflowed"),
             Self::RelocIndexOutOfRange => f.write_str("relocation index is out of range"),
             Self::InvalidPltReloc => f.write_str("invalid PLT relocation"),
             Self::SymbolIndexOutOfRange => f.write_str("symbol index is out of range"),

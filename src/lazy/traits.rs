@@ -27,8 +27,8 @@ pub trait LazyBinder<Arch: RelocationArch>: Send + Sync + 'static {
         }
     }
 
-    /// Builds the runtime entries installed into this image's lazy PLT state.
-    fn prepare_entries(&self, runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries>;
+    /// Builds the values installed into this image's lazy binding slots.
+    fn prepare_slots(&self, runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries>;
 }
 
 impl<Arch: RelocationArch> LazyBinder<Arch> for () {
@@ -38,7 +38,7 @@ impl<Arch: RelocationArch> LazyBinder<Arch> for () {
     }
 
     #[inline]
-    fn prepare_entries(&self, _runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries> {
+    fn prepare_slots(&self, _runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries> {
         Err(RelocationError::LazyBinding(LazyBindingError::MissingBinder).into())
     }
 }
@@ -54,86 +54,80 @@ where
     }
 
     #[inline]
-    fn prepare_entries(&self, runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries> {
-        (**self).prepare_entries(runtime)
+    fn prepare_slots(&self, runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries> {
+        (**self).prepare_slots(runtime)
     }
 }
 
-impl<Arch: RelocationArch> dyn LazyBinder<Arch> {
-    pub(crate) fn prepare_plt<D, R, Tls>(
-        &self,
-        lazy: bool,
-        image: &RawDynamic<D, Arch, R, Tls>,
-    ) -> Result<()>
-    where
-        D: 'static,
-        R: RegionAccess,
-        Tls: TlsResolver<Arch>,
-    {
-        if lazy {
-            let pltrel = image.relocation().pltrel();
-            if pltrel.is_empty() {
-                return Ok(());
-            }
-
-            let runtime = LazyRuntime::<Arch>::new(image.core_ref().inner.runtime());
-            let entries = self.prepare_entries(runtime)?;
-            let (runtime_entry, resolver, state) = entries.into_parts();
-            if let Some(state) = state {
-                assert!(
-                    runtime.core().lazy_runtime.set(state).is_ok(),
-                    "lazy binding runtime must be installed only once",
-                );
-            }
-
-            let word_size = size_of::<<Arch::Layout as ElfLayout>::Word>();
-            let slots = Arch::LAZY_BINDING_SLOTS;
-            let got_plt = image.got_plt().ok_or(RelocationError::LazyBinding(
-                LazyBindingError::MissingGotPlt,
-            ))?;
-            let runtime_slot = got_plt
-                + VmOffset::new(slots.runtime().checked_mul(word_size).ok_or(
-                    RelocationError::LazyBinding(LazyBindingError::SlotOffsetOverflow),
-                )?);
-            let resolver_slot = got_plt
-                + VmOffset::new(slots.resolver().checked_mul(word_size).ok_or(
-                    RelocationError::LazyBinding(LazyBindingError::SlotOffsetOverflow),
-                )?);
-            let runtime_entry = <Arch::Layout as ElfLayout>::Word::from_usize(runtime_entry.get());
-            let resolver = <Arch::Layout as ElfLayout>::Word::from_usize(resolver.get());
-            unsafe {
-                runtime.memory().write_value(runtime_slot, runtime_entry)?;
-                runtime.memory().write_value(resolver_slot, resolver)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn relocate_jump_slot<Memory>(
-        &self,
-        lazy: bool,
-        memory: &Memory,
-        base: VmAddr,
-        rel: &ElfRelType<Arch>,
-    ) -> Result<bool>
-    where
-        Memory: ImageMemory,
-        <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
-    {
-        if !lazy {
-            return Ok(false);
+pub(crate) fn prepare_plt<Arch, Binder, D, R, Tls>(
+    binder: &Binder,
+    lazy: bool,
+    image: &RawDynamic<D, Arch, R, Tls>,
+) -> Result<()>
+where
+    Arch: RelocationArch,
+    Binder: LazyBinder<Arch> + ?Sized,
+    D: 'static,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    if lazy {
+        let pltrel = image.relocation().pltrel();
+        if pltrel.is_empty() {
+            return Ok(());
         }
 
+        let runtime = LazyRuntime::<Arch>::new(image.core_ref().inner.runtime());
+        let entries = binder.prepare_slots(runtime)?;
+        let (context_entry, resolver, state) = entries.into_parts();
+        if let Some(state) = state {
+            assert!(
+                runtime.core().lazy_runtime.set(state).is_ok(),
+                "lazy binding runtime must be installed only once",
+            );
+        }
+
+        let word_size = size_of::<<Arch::Layout as ElfLayout>::Word>();
+        let slots = Arch::LAZY_BINDING_SLOTS;
+        let got_plt = image.got_plt().ok_or(RelocationError::LazyBinding(
+            LazyBindingError::MissingGotPlt,
+        ))?;
+        let context_slot = got_plt + VmOffset::new(slots.context() * word_size);
+        let resolver_slot = got_plt + VmOffset::new(slots.resolver() * word_size);
+        let context_entry = <Arch::Layout as ElfLayout>::Word::from_usize(context_entry.get());
+        let resolver = <Arch::Layout as ElfLayout>::Word::from_usize(resolver.get());
         unsafe {
-            memory.update_value(
-                base + rel.r_offset(),
-                |word: <Arch::Layout as ElfLayout>::Word| {
-                    <Arch::Layout as ElfLayout>::Word::from_usize(
-                        (base + VmOffset::new(word.to_usize())).get(),
-                    )
-                },
-            )?
-        };
-        Ok(true)
+            runtime.memory().write_value(context_slot, context_entry)?;
+            runtime.memory().write_value(resolver_slot, resolver)?;
+        }
     }
+    Ok(())
+}
+
+pub(crate) fn relocate_jump_slot<Arch, Memory>(
+    lazy: bool,
+    memory: &Memory,
+    base: VmAddr,
+    rel: &ElfRelType<Arch>,
+) -> Result<bool>
+where
+    Arch: RelocationArch,
+    Memory: ImageMemory,
+    <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+{
+    if !lazy {
+        return Ok(false);
+    }
+
+    unsafe {
+        memory.update_value(
+            base + rel.r_offset(),
+            |word: <Arch::Layout as ElfLayout>::Word| {
+                <Arch::Layout as ElfLayout>::Word::from_usize(
+                    (base + VmOffset::new(word.to_usize())).get(),
+                )
+            },
+        )?
+    };
+    Ok(true)
 }

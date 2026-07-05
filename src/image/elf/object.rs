@@ -12,11 +12,12 @@ use crate::{
     Result,
     elf::{ElfSectionId, Lifecycle},
     image::exports_handle,
+    lazy::traits::LazyBinder,
     memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
     relocation::{
         ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
-        Relocator,
+        Relocator, RelocatorRun,
     },
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
@@ -114,11 +115,11 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<A
     RawObject<D, Arch, R, Tls>
 {
     /// Creates a builder for relocating the relocatable file.
-    pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls>
+    pub fn relocator(self) -> RelocatorRun<Self, (), (), Arch, (), Tls>
     where
         Self: Relocatable<D, Arch = Arch, Tls = Tls>,
     {
-        Relocator::<(), (), (), Arch, (), Tls>::new().with_object(self)
+        Relocator::<(), (), Arch, (), Tls>::new().with_object(self)
     }
 
     /// Returns the retained object section metadata.
@@ -153,14 +154,15 @@ where
     type Arch = Arch;
     type Tls = Tls;
 
-    fn relocate<PreH, PostH, Obs>(
+    fn relocate<PreH, PostH, Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs, Binder>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
+        Binder: LazyBinder<Arch> + ?Sized,
     {
         self.relocate_impl(args)
     }

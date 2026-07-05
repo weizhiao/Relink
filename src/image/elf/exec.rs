@@ -10,11 +10,13 @@ use crate::{
     elf::ElfPhdr,
     image::{LoadedCore, ModuleTls, RawDynamic},
     input::{Path, PathBuf},
-    lazy::traits::SupportLazy,
+    lazy::traits::{LazyBinder, SupportLazy},
     loader::ImageBuilder,
     memory::{HostRegion, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
-    relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
+    relocation::{
+        Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator, RelocatorRun,
+    },
     segment::ElfSegments,
     tls::{
         TlsImageProvider, TlsImageSource, TlsModuleId, TlsResolver, TlsTemplate, TlsTpOffset,
@@ -139,14 +141,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     type Arch = Arch;
     type Tls = Tls;
 
-    fn relocate<PreH, PostH, Obs>(
+    fn relocate<PreH, PostH, Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs, Binder>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
+        Binder: LazyBinder<Arch> + ?Sized,
     {
         match self {
             RawExec::Dynamic(image) => {
@@ -213,8 +216,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawExec<D, Arch, R, Tls>
 {
     /// Creates a relocation builder for this executable image.
-    pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls> {
-        Relocator::<(), (), (), Arch, (), Tls>::new().with_object(self)
+    pub fn relocator(self) -> RelocatorRun<Self, (), (), Arch, (), Tls> {
+        Relocator::<(), (), Arch, (), Tls>::new().with_object(self)
     }
 
     /// Returns the loader source path or caller-provided source identifier.

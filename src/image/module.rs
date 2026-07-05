@@ -133,7 +133,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleScopeBuilder<
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScopeBuilder<Arch, Tls> {
     #[inline]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             modules: Vec::new(),
         }

@@ -7,13 +7,14 @@ use crate::{
         HashTable, Lifecycle, LifecycleSpec, SymbolTable,
     },
     input::Path,
-    lazy::traits::SupportLazy,
+    lazy::traits::{LazyBinder, SupportLazy},
     loader::ImageBuilder,
     logging,
     memory::{HostRegion, ImageMemoryExt, MappedView, RegionAccess, VmAddr, VmOffset},
     observer::{InitEvent, RelocationObserver},
     relocation::{
         DynamicRelocation, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
+        RelocatorRun,
     },
     segment::{ElfSegments, MemoryProtection},
     sync::{Arc, AtomicBool},
@@ -419,8 +420,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawDynamic<D, Arch, R, Tls>
 {
     /// Creates a relocation builder for this dynamic image.
-    pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls> {
-        Relocator::<(), (), (), Arch, (), Tls>::new().with_object(self)
+    pub fn relocator(self) -> RelocatorRun<Self, (), (), Arch, (), Tls> {
+        Relocator::<(), (), Arch, (), Tls>::new().with_object(self)
     }
 }
 
@@ -549,15 +550,16 @@ where
     type Arch = Arch;
     type Tls = Tls;
 
-    fn relocate<PreH, PostH, Obs>(
+    fn relocate<PreH, PostH, Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs, Binder>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
+        Binder: LazyBinder<Arch> + ?Sized,
     {
-        self.relocate_impl::<_, _, _>(args)
+        self.relocate_impl::<_, _, _, _>(args)
     }
 }

@@ -48,7 +48,7 @@ where
     Arch: RelocationArch,
 {
     #[inline]
-    fn prepare_entries(&self, runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries> {
+    fn prepare_slots(&self, runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries> {
         if !Arch::SUPPORTS_NATIVE_RUNTIME {
             return Err(RelocationError::LazyBinding(LazyBindingError::NativeUnsupported).into());
         }

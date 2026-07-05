@@ -25,5 +25,5 @@ pub(crate) use helper::{RelocHelper, SymDef, find_symdef_impl};
 pub use traits::{ObjectRelocationArch, RelocationArch};
 pub(crate) use traits::{Relocatable, RelocateArgs, RelocationValueInput, RelocationValueProvider};
 
-pub use relocator::Relocator;
+pub use relocator::{Relocator, RelocatorRun};
 pub use traits::{BindingMode, HandleResult, RelocationContext, RelocationHandler};

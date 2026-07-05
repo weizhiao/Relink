@@ -8,10 +8,12 @@ use crate::{
     elf::ElfPhdr,
     image::{ElfCore, LoadedCore, ModuleTls, RawDynamic},
     input::Path,
-    lazy::traits::SupportLazy,
+    lazy::traits::{LazyBinder, SupportLazy},
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
-    relocation::{Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator},
+    relocation::{
+        Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator, RelocatorRun,
+    },
     segment::ElfSegments,
     tls::TlsResolver,
 };
@@ -61,14 +63,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     type Arch = Arch;
     type Tls = Tls;
 
-    fn relocate<PreH, PostH, Obs>(
+    fn relocate<PreH, PostH, Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs, Binder>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Arch> + ?Sized,
         PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
+        Binder: LazyBinder<Arch> + ?Sized,
     {
         Relocatable::relocate(self.inner, args)
     }
@@ -190,7 +193,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDylib<
     }
 
     /// Creates a relocation builder for this shared object.
-    pub fn relocator(self) -> Relocator<Self, (), (), Arch, (), Tls> {
-        Relocator::<(), (), (), Arch, (), Tls>::new().with_object(self)
+    pub fn relocator(self) -> RelocatorRun<Self, (), (), Arch, (), Tls> {
+        Relocator::<(), (), Arch, (), Tls>::new().with_object(self)
     }
 }

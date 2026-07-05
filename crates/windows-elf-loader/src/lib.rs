@@ -11,7 +11,7 @@ type ElfDylib<D = ()> = RawDylib<D, NativeArch, HostRegion, DefaultTlsResolver>;
 
 /// elf loader
 pub struct WinElfLoader {
-    loader: Loader<(), (), DefaultTlsResolver>,
+    loader: Loader<(), DefaultTlsResolver>,
 }
 
 impl WinElfLoader {

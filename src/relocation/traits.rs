@@ -443,10 +443,11 @@ pub struct RelocateArgs<
     PreH: ?Sized,
     PostH: ?Sized,
     Obs: ?Sized,
+    Binder: ?Sized,
 > {
     pub(crate) scope: ModuleScope<Arch, Tls>,
     pub(crate) binding: BindingMode,
-    pub(crate) lazy_binder: Arc<dyn LazyBinder<Arch>>,
+    pub(crate) lazy_binder: &'a Binder,
     pub(crate) pre_handler: &'a PreH,
     pub(crate) post_handler: &'a PostH,
     pub(crate) observer: &'a mut Obs,
@@ -476,12 +477,13 @@ pub trait Relocatable<D = ()>: Sized {
     type Tls: TlsResolver<Self::Arch>;
 
     /// Executes relocation using the implementor's target architecture.
-    fn relocate<PreH, PostH, Obs>(
+    fn relocate<PreH, PostH, Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Self::Arch, Self::Tls, PreH, PostH, Obs>,
+        args: RelocateArgs<'_, Self::Arch, Self::Tls, PreH, PostH, Obs, Binder>,
     ) -> Result<Self::Output>
     where
         PreH: RelocationHandler<Self::Arch> + ?Sized,
         PostH: RelocationHandler<Self::Arch> + ?Sized,
-        Obs: RelocationObserver<Self::Arch> + ?Sized;
+        Obs: RelocationObserver<Self::Arch> + ?Sized,
+        Binder: LazyBinder<Self::Arch> + ?Sized;
 }
