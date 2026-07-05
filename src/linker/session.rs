@@ -1,8 +1,15 @@
-use super::storage::KeySlot;
+use super::storage::{CommittedStorage, KeySlot, ModuleId};
 use crate::{
-    image::ModuleHandle, memory::RegionAccess, relocation::RelocationArch, tls::TlsResolver,
+    image::{LoadedCore, ModuleHandle, ModuleScope, ModuleScopeBuilder},
+    memory::RegionAccess,
+    relocation::RelocationArch,
+    tls::TlsResolver,
 };
-use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
 
 pub(crate) struct GraphEntry<P> {
     payload: P,
@@ -211,86 +218,11 @@ where
     }
 
     #[inline]
-    pub(crate) fn group_order(&self) -> &[KeySlot] {
-        &self.resolve.group_order
-    }
-
-    #[inline]
-    pub(crate) fn pending_len(&self) -> usize {
-        self.resolve.dynamics.len() + self.resolve.module_handles.len()
-    }
-
-    #[inline]
-    pub(crate) fn pending_dynamic_len(&self) -> usize {
-        self.resolve.dynamics.len()
-    }
-
-    #[inline]
-    pub(crate) fn is_pending_dynamic(&self, slot: KeySlot) -> bool {
-        self.resolve.dynamics.contains_key(&slot)
-    }
-
-    #[inline]
-    pub(crate) fn pending_direct_deps(&self, slot: KeySlot) -> Option<&[KeySlot]> {
-        if let Some(entry) = self.resolve.dynamics.get(&slot) {
-            return entry.direct_deps();
-        }
-        self.resolve
-            .module_handles
-            .get(&slot)
-            .map(ModuleEntry::direct_deps)
-    }
-
-    #[inline]
-    pub(crate) fn pending_dynamic(
-        &self,
-        slot: KeySlot,
-    ) -> Option<&crate::image::RawDynamic<D, Arch, R, Tls>> {
-        self.resolve.dynamics.get(&slot).map(GraphEntry::payload)
-    }
-
-    #[inline]
-    pub(crate) fn pending_module_handle(&self, slot: KeySlot) -> Option<&ModuleHandle<Arch, Tls>> {
-        self.resolve
-            .module_handles
-            .get(&slot)
-            .map(ModuleEntry::module)
-    }
-
-    #[inline]
-    pub(crate) fn insert_pending(
-        &mut self,
-        slot: KeySlot,
-        raw: crate::image::RawDynamic<D, Arch, R, Tls>,
-    ) {
-        self.resolve.dynamics.insert(slot, GraphEntry::new(raw));
-    }
-
-    #[inline]
-    pub(crate) fn insert_resolved_pending(
-        &mut self,
-        slot: KeySlot,
-        raw: crate::image::RawDynamic<D, Arch, R, Tls>,
-        direct_deps: Box<[KeySlot]>,
-    ) {
-        self.resolve
-            .dynamics
-            .insert(slot, GraphEntry::with_direct_deps(raw, direct_deps));
-    }
-
-    #[inline]
     pub(crate) fn take_pending_dynamic(
         &mut self,
         slot: KeySlot,
     ) -> Option<GraphEntry<crate::image::RawDynamic<D, Arch, R, Tls>>> {
         self.resolve.dynamics.remove(&slot)
-    }
-
-    #[inline]
-    pub(crate) fn take_pending_module_handles(
-        &mut self,
-    ) -> BTreeMap<KeySlot, ModuleEntry<Arch, Tls>> {
-        core::mem::take(&mut self.resolve.module_handles)
     }
 
     #[inline]
@@ -304,8 +236,118 @@ where
         debug_assert!(previous.is_none(), "ready commit entries must be unique");
     }
 
-    #[inline]
-    pub(crate) fn take_ready_to_commit(&mut self) -> BTreeMap<KeySlot, ReadyCommit<Arch, Tls>> {
-        core::mem::take(&mut self.ready_to_commit)
+    pub(crate) fn mark_module_handles_ready(&mut self) {
+        for (id, entry) in core::mem::take(&mut self.resolve.module_handles) {
+            let (module, direct_deps) = entry.into_parts();
+            self.push_ready(id, module, direct_deps);
+        }
+    }
+
+    pub(crate) fn loaded_root(&self, slot: KeySlot) -> Option<LoadedCore<D, Arch, R, Tls>> {
+        self.ready_to_commit
+            .get(&slot)?
+            .module
+            .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
+            .cloned()
+    }
+
+    pub(crate) fn build_relocation_order(&self, root: KeySlot, order: &mut Vec<KeySlot>) {
+        order.clear();
+        let dynamic_len = self.resolve.dynamics.len();
+        if order.capacity() < dynamic_len {
+            order.reserve(dynamic_len - order.capacity());
+        }
+
+        let mut visited = BTreeSet::new();
+        let pending_len = self.resolve.dynamics.len() + self.resolve.module_handles.len();
+        let mut stack = Vec::with_capacity(pending_len.saturating_mul(2));
+        stack.push((root, false));
+
+        while let Some((id, expanded)) = stack.pop() {
+            if expanded {
+                if self.resolve.dynamics.contains_key(&id) {
+                    order.push(id);
+                }
+                continue;
+            }
+
+            if !visited.insert(id) {
+                continue;
+            }
+
+            let direct_deps = self
+                .resolve
+                .dynamics
+                .get(&id)
+                .and_then(GraphEntry::direct_deps)
+                .or_else(|| {
+                    self.resolve
+                        .module_handles
+                        .get(&id)
+                        .map(ModuleEntry::direct_deps)
+                });
+            let Some(direct_deps) = direct_deps else {
+                continue;
+            };
+
+            stack.push((id, true));
+            for dep in direct_deps.iter().rev().copied() {
+                stack.push((dep, false));
+            }
+        }
+    }
+
+    pub(crate) fn build_scope(
+        &self,
+        mut visible_module: impl FnMut(KeySlot) -> ModuleHandle<Arch, Tls>,
+    ) -> ModuleScope<Arch, Tls> {
+        let modules = self
+            .resolve
+            .group_order
+            .iter()
+            .map(|id| {
+                if let Some(raw) = self.resolve.dynamics.get(id).map(GraphEntry::payload) {
+                    let module = unsafe { LoadedCore::from_core(raw.core()) };
+                    ModuleHandle::from(module)
+                } else if let Some(module) =
+                    self.resolve.module_handles.get(id).map(ModuleEntry::module)
+                {
+                    module.clone()
+                } else {
+                    visible_module(*id)
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut scope = ModuleScopeBuilder::new();
+        scope.extend(modules);
+        scope.into_scope()
+    }
+
+    pub(crate) fn commit_into<K, Meta>(
+        self,
+        committed: &mut CommittedStorage<K, D, Meta, Arch, Tls>,
+    ) -> Box<[ModuleId]>
+    where
+        K: Clone + Ord,
+        Meta: Default,
+    {
+        let Self {
+            resolve,
+            ready_to_commit,
+        } = self;
+        let mut ready = ready_to_commit;
+        let mut committed_ids = Vec::with_capacity(ready.len());
+        for id in resolve.group_order {
+            let Some(entry) = ready.remove(&id) else {
+                continue;
+            };
+            let (module, direct_deps) = entry.into_parts();
+            committed_ids.push(committed.insert(id, module, direct_deps, Meta::default()));
+        }
+        assert!(
+            ready.is_empty(),
+            "ready commit entries must all be present in group_order"
+        );
+        committed_ids.into_boxed_slice()
     }
 }

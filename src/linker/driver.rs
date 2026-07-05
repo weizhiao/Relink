@@ -1,6 +1,5 @@
 use super::{
-    request::DefaultRelocationPlanner, run::LinkerRun, scan::LinkPipeline,
-    storage::ModuleId as CommittedModuleId,
+    request::DefaultRelocationPlanner, run::LinkerRun, scan::LinkPipeline, storage::ModuleId,
 };
 use crate::{
     Loader,
@@ -25,9 +24,9 @@ pub struct LoadResult<
     R: RegionAccess = crate::memory::HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
-    root_id: Option<CommittedModuleId>,
+    root_id: Option<ModuleId>,
     root: LoadedCore<D, Arch, R, Tls>,
-    committed: Box<[CommittedModuleId]>,
+    committed: Box<[ModuleId]>,
 }
 
 impl<D: 'static, Arch, R, Tls> fmt::Debug for LoadResult<D, Arch, R, Tls>
@@ -53,9 +52,9 @@ where
 {
     #[inline]
     pub(crate) fn new(
-        root_id: Option<CommittedModuleId>,
+        root_id: Option<ModuleId>,
         root: LoadedCore<D, Arch, R, Tls>,
-        committed: Box<[CommittedModuleId]>,
+        committed: Box<[ModuleId]>,
     ) -> Self {
         Self {
             root_id,
@@ -67,7 +66,7 @@ where
     /// Returns the committed module id for the loaded root, if the root belongs
     /// to this link context.
     #[inline]
-    pub fn root_id(&self) -> Option<CommittedModuleId> {
+    pub fn root_id(&self) -> Option<ModuleId> {
         self.root_id
     }
 
@@ -79,7 +78,7 @@ where
 
     /// Returns module ids committed by this load operation in load order.
     #[inline]
-    pub fn committed(&self) -> &[CommittedModuleId] {
+    pub fn committed(&self) -> &[ModuleId] {
         &self.committed
     }
 
@@ -141,12 +140,37 @@ pub struct Linker<
     Tls: TlsResolver<Arch> = (),
     Stage = Stage0,
 > {
-    loader: L,
-    resolver: R,
-    relocator: Relocator<PreH, PostH, RelocBinder>,
-    planner: P,
-    visible_modules: V,
+    pub(super) loader: L,
+    pub(super) resolver: R,
+    pub(super) relocator: Relocator<PreH, PostH, RelocBinder>,
+    pub(super) planner: P,
+    pub(super) visible_modules: V,
     stage: PhantomData<(&'a (), K, Arch, Tls, Stage)>,
+}
+
+impl<'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage> Clone
+    for Linker<'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage>
+where
+    K: Clone + Ord,
+    Arch: RelocationArch,
+    L: Clone,
+    R: Clone,
+    Relocator<PreH, PostH, RelocBinder>: Clone,
+    P: Clone,
+    V: Clone,
+    Tls: TlsResolver<Arch>,
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            loader: self.loader.clone(),
+            resolver: self.resolver.clone(),
+            relocator: self.relocator.clone(),
+            planner: self.planner.clone(),
+            visible_modules: self.visible_modules.clone(),
+            stage: PhantomData,
+        }
+    }
 }
 
 struct LinkerFields<
@@ -372,14 +396,12 @@ where
 
     /// Starts a linker run with fresh scratch storage.
     #[inline]
-    pub fn run(&self) -> LinkerRun<'_, 'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, ()> {
+    pub fn run(
+        &self,
+    ) -> LinkerRun<'_, 'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage, ()> {
         LinkerRun {
-            loader: &self.loader,
-            resolver: &self.resolver,
+            linker: self,
             pipeline: LinkPipeline::new(),
-            relocator: &self.relocator,
-            planner: &self.planner,
-            visible_modules: &self.visible_modules,
             observer: (),
             scratch_relocation_order: Vec::new(),
         }

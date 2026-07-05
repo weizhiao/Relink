@@ -56,6 +56,26 @@ pub struct Loader<
     _marker: PhantomData<fn() -> (D, Tls, Arch)>,
 }
 
+impl<D, Tls, Arch, M, Exec> Clone for Loader<D, Tls, Arch, M, Exec>
+where
+    D: 'static,
+    Tls: TlsResolver<Arch>,
+    Arch: RelocationArch,
+    M: Mmap + Clone,
+    Exec: Clone,
+{
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            mapper: self.mapper.clone(),
+            executor: self.executor.clone(),
+            page_size: self.page_size,
+            force_static_tls: self.force_static_tls,
+            _marker: PhantomData,
+        }
+    }
+}
+
 struct LoaderFields<M, Exec> {
     mapper: NoDrop<M>,
     executor: NoDrop<Exec>,

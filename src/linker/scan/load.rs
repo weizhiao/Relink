@@ -1,0 +1,274 @@
+use super::{
+    GotPltTarget, LinkPlan, MappedRuntimeMemory, Materialization, MemoryLayoutPlan,
+    ModuleId as PlanModuleId, build_arena_raw_dynamic,
+};
+use crate::{
+    LinkerError, Loader, Result,
+    image::{RawDynamic, ScannedDynamic},
+    lazy::traits::LazyBinder,
+    linker::{
+        context::LinkContext,
+        driver::LoadResult,
+        request::{RelocationPlanner, VisibleModules},
+        resolve::ScanResolveContext,
+        resolver::KeyResolver,
+        run::{LinkerRun, PreparedLoad, visible_loaded},
+        session::{GraphEntry, LoadSession, ResolveSession},
+    },
+    memory::{ImageMemory, RegionAccess, VmOffset},
+    observer::RelocationObserver,
+    os::Mmap,
+    relocation::{RelocationArch, RelocationHandler},
+    runtime::CodeExecutor,
+    tls::TlsResolver,
+};
+use alloc::{
+    borrow::ToOwned,
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
+use core::borrow::Borrow;
+
+#[allow(private_bounds)]
+impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocBinder, P, V, Stage, RelocObs>
+    LinkerRun<
+        'run,
+        'a,
+        K,
+        Arch,
+        Loader<D, Tls, Arch, M, Exec>,
+        Resolver,
+        PreH,
+        PostH,
+        RelocBinder,
+        P,
+        V,
+        Tls,
+        Stage,
+        RelocObs,
+    >
+where
+    K: Clone + Ord,
+    D: Default + 'static,
+    Tls: TlsResolver<Arch>,
+    Arch: RelocationArch + crate::relocation::RelocationValueProvider + GotPltTarget,
+    M: Mmap,
+    Exec: CodeExecutor<Arch> + Clone,
+    crate::elf::ElfRelType<Arch>: crate::ByteRepr,
+    PreH: RelocationHandler<Arch> + Clone,
+    PostH: RelocationHandler<Arch> + Clone,
+    RelocObs: RelocationObserver<Arch>,
+    RelocBinder: LazyBinder<Arch> + Clone,
+    P: RelocationPlanner<K, D, Arch, M::Region, Tls>,
+{
+    /// Discovers, plans, and loads one module through the scan-first path.
+    pub fn load_scan_first<Meta, Q>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        key: K,
+    ) -> Result<LoadResult<D, Arch, M::Region, Tls>>
+    where
+        K: 'static + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Meta: Default,
+        Resolver: KeyResolver<K, Arch, Q, Tls>,
+        V: VisibleModules<K, Arch, Q, Tls>,
+    {
+        if let Some(result) = visible_loaded(context, &self.linker.visible_modules, key.borrow()) {
+            return Ok(result);
+        }
+
+        let prepared = self.prepare_scan_load::<Meta, Q>(context, &key)?;
+        self.finish_load::<Meta, Q>(context, prepared)
+    }
+
+    fn prepare_scan_load<Meta, Q>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        key: &K,
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
+    where
+        K: 'static + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Resolver: KeyResolver<K, Arch, Q, Tls>,
+        V: VisibleModules<K, Arch, Q, Tls>,
+    {
+        let mut session = ResolveSession::new();
+
+        let mut loader = self.linker.loader.run();
+        let mut resolve_context = ScanResolveContext::new(
+            &mut context.committed,
+            &self.linker.visible_modules,
+            &mut session,
+        );
+        let resolved = resolve_context.resolve_root(key, &self.linker.resolver)?;
+        let root = resolve_context.stage_resolved(resolved, &mut loader)?;
+        if !resolve_context.contains_pending(root) {
+            return Ok(PreparedLoad::direct(root, LoadSession::new()));
+        }
+        resolve_context.resolve_dependency_graph::<_, _, _, Q>(
+            root,
+            &mut loader,
+            &self.linker.resolver,
+        )?;
+
+        let dynamics = session.take_dynamics();
+        let dynamic_ids = dynamics.keys().copied().collect::<BTreeSet<_>>();
+        let entries: BTreeMap<_, _> = dynamics
+            .into_iter()
+            .map(|(id, entry)| {
+                let key = context.committed.key(id).clone();
+                let (module, full_deps) = entry.into_parts();
+                let full_deps =
+                    full_deps.expect("missing resolved dependencies while building scan plan");
+                Ok((id, (key, module, full_deps)))
+            })
+            .collect::<Result<_>>()?;
+        let mut mapped_runtime = None;
+        let planned = if entries.is_empty() {
+            None
+        } else {
+            let plan_root = if dynamic_ids.contains(&root) {
+                root
+            } else {
+                session
+                    .group_order
+                    .iter()
+                    .copied()
+                    .find(|id| dynamic_ids.contains(id))
+                    .expect("dynamic id set must contain at least one group id")
+            };
+            let plan_group_order = session
+                .group_order
+                .iter()
+                .copied()
+                .filter(|id| dynamic_ids.contains(id))
+                .collect::<Vec<_>>();
+            let mut plan = LinkPlan::new(plan_root, plan_group_order, entries);
+            self.pipeline.run(&mut plan)?;
+            mapped_runtime = self.prepare_mapped_runtime(&mut plan)?;
+            let (_, _, entries, memory_layout) = plan.into_parts();
+            Some((entries, memory_layout))
+        };
+        let mut session = LoadSession::from_resolve(session);
+        if let Some((entries, memory_layout)) = planned {
+            for (module_id, entry) in entries {
+                let (id, _key, module, direct_deps) = entry.into_parts();
+                let raw = self.materialize_planned_raw(
+                    &memory_layout,
+                    &mut mapped_runtime,
+                    module_id,
+                    module,
+                )?;
+                session
+                    .resolve_mut()
+                    .dynamics
+                    .insert(id, GraphEntry::with_direct_deps(raw, direct_deps));
+            }
+        }
+
+        Ok(PreparedLoad::planned(root, session, mapped_runtime))
+    }
+
+    fn prepare_mapped_runtime(
+        &mut self,
+        plan: &mut LinkPlan<K, Arch, Tls>,
+    ) -> Result<Option<MappedRuntimeMemory<M::Region>>> {
+        plan.normalize()?;
+        let mut mapped_runtime = MappedRuntimeMemory::map(self.linker.loader.mapper(), plan)?;
+
+        if let Some(runtime) = mapped_runtime.as_mut() {
+            let modules = plan
+                .modules_with_materialization(Materialization::SectionRegions)
+                .collect::<Vec<_>>();
+            for &module_id in &modules {
+                runtime.build_module(module_id, plan.memory_layout())?;
+            }
+            runtime.populate(plan)?;
+            for module_id in modules {
+                runtime.repair_module(module_id, plan)?;
+            }
+        }
+
+        Ok(mapped_runtime)
+    }
+
+    fn materialize_planned_raw(
+        &mut self,
+        plan: &MemoryLayoutPlan,
+        mapped_runtime: &mut Option<MappedRuntimeMemory<M::Region>>,
+        module_id: PlanModuleId,
+        scanned: ScannedDynamic<Arch>,
+    ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
+        match plan
+            .materialization(module_id)
+            .unwrap_or(Materialization::WholeDsoRegion)
+        {
+            Materialization::SectionRegions => {
+                self.materialize_arena_raw(mapped_runtime, module_id, scanned)
+            }
+            Materialization::WholeDsoRegion => {
+                let mut raw = self.linker.loader.load_scanned_dynamic(scanned)?;
+                apply_section_overrides(&mut raw, module_id, plan)?;
+                Ok(raw)
+            }
+        }
+    }
+
+    fn materialize_arena_raw(
+        &mut self,
+        mapped_runtime: &mut Option<MappedRuntimeMemory<M::Region>>,
+        module_id: PlanModuleId,
+        scanned: ScannedDynamic<Arch>,
+    ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
+        let runtime = mapped_runtime
+            .as_mut()
+            .ok_or_else(|| {
+                LinkerError::runtime_memory(
+                    "section-region planned load is missing mapped runtime memory",
+                )
+            })?
+            .take_module(module_id)?;
+        let force_static_tls = self.linker.loader.force_static_tls();
+
+        let raw =
+            build_arena_raw_dynamic::<D, Tls, Arch, M::Region>(scanned, runtime, force_static_tls)?;
+        Ok(raw)
+    }
+}
+
+fn apply_section_overrides<D, Arch, R, Tls>(
+    raw: &mut RawDynamic<D, Arch, R, Tls>,
+    module_id: PlanModuleId,
+    plan: &MemoryLayoutPlan,
+) -> Result<()>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    let module = plan.module(module_id);
+    let core = raw.core_ref();
+    let segments = core.segments();
+
+    for section_id in module.alloc_sections().iter().copied() {
+        if !plan.section_is_override(section_id) {
+            continue;
+        }
+        let metadata = plan.section(section_id);
+        let data = plan
+            .data(section_id)
+            .ok_or_else(|| LinkerError::section_data("planned override section data is missing"))?;
+        if data.len() != metadata.size() {
+            return Err(LinkerError::section_data(
+                "planned section override size does not match the loaded section",
+            )
+            .into());
+        }
+        segments.write_bytes(
+            segments.base() + VmOffset::new(metadata.source_address()),
+            data.as_ref(),
+        )?;
+    }
+    Ok(())
+}

@@ -925,8 +925,6 @@ pub enum LinkerError {
         /// Structured resolver failure reason.
         reason: LinkResolverError,
     },
-    /// A load root was not present after commit.
-    LoadRootMissingAfterCommit,
     /// Object exports were installed after the core had already been retained.
     ObjectCoreRetainedBeforeExports,
     /// Scan-first/planned-load state was inconsistent.
@@ -1003,7 +1001,6 @@ impl Display for LinkerError {
             Self::UnresolvedDependency(err) => Display::fmt(err, f),
             Self::Context { reason } => Display::fmt(reason, f),
             Self::Resolver { reason } => Display::fmt(reason, f),
-            Self::LoadRootMissingAfterCommit => f.write_str("load root missing after commit"),
             Self::ObjectCoreRetainedBeforeExports => {
                 f.write_str("raw object core was retained before runtime exports were installed")
             }

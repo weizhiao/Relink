@@ -1,6 +1,7 @@
 //! Scan-first planning, layout, and materialization support.
 
 pub(in crate::linker) mod layout;
+pub(in crate::linker) mod load;
 pub(in crate::linker) mod mapped;
 pub(in crate::linker) mod materialization;
 pub(in crate::linker) mod passes;
