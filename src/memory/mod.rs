@@ -1,13 +1,10 @@
 //! Virtual memory and mapped image abstractions.
 
-mod addr;
+mod defs;
 mod host;
-mod region;
 mod traits;
 
-pub use addr::{VmAddr, VmOffset};
-pub(crate) use addr::{align_up, rounddown, roundup};
+pub use defs::{MappedRegion, VmAddr, VmOffset};
+pub(crate) use defs::{MappedView, align_up, rounddown, roundup};
 pub use host::HostRegion;
-pub use region::MappedRegion;
-pub(crate) use region::MappedView;
 pub use traits::{ImageMemory, ImageMemoryExt, RegionAccess};

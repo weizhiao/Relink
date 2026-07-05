@@ -11,14 +11,12 @@
 //! - `with_data` for selecting dynamic-image user data
 //! - `with_*` builder methods for swapping the memory-mapping backend or TLS resolver
 
-mod buffer;
 mod builder;
+mod defs;
 mod handle;
 mod load;
 
-pub(crate) use buffer::ElfBuf;
 pub(crate) use builder::{ImageBuilder, ScanBuilder};
+pub(crate) use defs::{ElfBuf, ExpectedElf};
 pub(crate) use handle::native_executor;
 pub use handle::{Loader, LoaderRun};
-#[cfg(feature = "object")]
-pub(crate) use load::ExpectedElf;

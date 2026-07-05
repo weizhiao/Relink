@@ -1,6 +1,8 @@
 use crate::{
-    AlignedBytes, Result,
-    elf::{Elf32Layout, Elf64Layout, ElfHeader, ElfLayout, ElfMachine, ElfPhdr, ElfShdr},
+    AlignedBytes, ParseEhdrError, Result,
+    elf::{
+        Elf32Layout, Elf64Layout, ElfFileType, ElfHeader, ElfLayout, ElfMachine, ElfPhdr, ElfShdr,
+    },
     input::{ElfReader, ElfReaderExt},
 };
 use core::mem::{MaybeUninit, align_of, size_of};
@@ -69,3 +71,45 @@ const _: [(); 1] = [(); word_align_supports::<ElfShdr<Elf32Layout>>() as usize];
 const _: [(); 1] = [(); word_align_supports::<<Elf64Layout as ElfLayout>::Ehdr>() as usize];
 const _: [(); 1] = [(); word_align_supports::<ElfPhdr<Elf64Layout>>() as usize];
 const _: [(); 1] = [(); word_align_supports::<ElfShdr<Elf64Layout>>() as usize];
+
+#[derive(Clone, Copy)]
+pub(crate) enum ExpectedElf {
+    Dylib,
+    Dynamic,
+    Executable,
+    #[cfg(feature = "object")]
+    Relocatable,
+}
+
+impl ExpectedElf {
+    #[inline]
+    pub(crate) fn matches<L: crate::elf::ElfLayout>(self, ehdr: &ElfHeader<L>) -> bool {
+        match self {
+            Self::Dylib => ehdr.is_dylib(),
+            Self::Dynamic | Self::Executable => ehdr.is_executable(),
+            #[cfg(feature = "object")]
+            Self::Relocatable => ehdr.file_type() == ElfFileType::REL,
+        }
+    }
+
+    #[inline]
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Dylib => "dylib",
+            Self::Dynamic => "dynamic image",
+            Self::Executable => "executable",
+            #[cfg(feature = "object")]
+            Self::Relocatable => "relocatable object",
+        }
+    }
+
+    #[inline]
+    pub(crate) const fn error(self, found: ElfFileType) -> ParseEhdrError {
+        match self {
+            Self::Dylib => ParseEhdrError::ExpectedDylib { found },
+            Self::Dynamic | Self::Executable => ParseEhdrError::ExpectedExecutable { found },
+            #[cfg(feature = "object")]
+            Self::Relocatable => ParseEhdrError::ExpectedRelocatable { found },
+        }
+    }
+}

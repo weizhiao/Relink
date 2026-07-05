@@ -1,4 +1,4 @@
-use super::{ImageBuilder, Loader, LoaderRun, ScanBuilder};
+use super::{ExpectedElf, ImageBuilder, Loader, LoaderRun, ScanBuilder};
 use crate::{
     ParseEhdrError, ParsePhdrError, Result,
     elf::{ElfFileType, ElfHeader, ElfPhdr, ElfProgramType, ElfShdr},
@@ -601,48 +601,6 @@ fn image_entry<Arch: RelocationArch>(base: VmAddr, ehdr: &ElfHeader<Arch::Layout
         base + VmOffset::new(ehdr.e_entry())
     } else {
         VmAddr::new(ehdr.e_entry())
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum ExpectedElf {
-    Dylib,
-    Dynamic,
-    Executable,
-    #[cfg(feature = "object")]
-    Relocatable,
-}
-
-impl ExpectedElf {
-    #[inline]
-    fn matches<L: crate::elf::ElfLayout>(self, ehdr: &ElfHeader<L>) -> bool {
-        match self {
-            Self::Dylib => ehdr.is_dylib(),
-            Self::Dynamic | Self::Executable => ehdr.is_executable(),
-            #[cfg(feature = "object")]
-            Self::Relocatable => ehdr.file_type() == ElfFileType::REL,
-        }
-    }
-
-    #[inline]
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Dylib => "dylib",
-            Self::Dynamic => "dynamic image",
-            Self::Executable => "executable",
-            #[cfg(feature = "object")]
-            Self::Relocatable => "relocatable object",
-        }
-    }
-
-    #[inline]
-    const fn error(self, found: ElfFileType) -> ParseEhdrError {
-        match self {
-            Self::Dylib => ParseEhdrError::ExpectedDylib { found },
-            Self::Dynamic | Self::Executable => ParseEhdrError::ExpectedExecutable { found },
-            #[cfg(feature = "object")]
-            Self::Relocatable => ParseEhdrError::ExpectedRelocatable { found },
-        }
     }
 }
 
