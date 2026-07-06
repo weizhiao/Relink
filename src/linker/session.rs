@@ -1,4 +1,7 @@
-use super::storage::{CommittedStorage, KeySlot, ModuleId};
+use super::{
+    context::LinkContext,
+    storage::{CommittedStorage, KeySlot, ModuleId},
+};
 use crate::{
     image::{LoadedCore, ModuleHandle, ModuleScope, ModuleScopeBuilder},
     memory::RegionAccess,
@@ -84,11 +87,6 @@ where
             direct_deps,
         }
     }
-
-    #[inline]
-    pub(crate) fn into_parts(self) -> (ModuleHandle<Arch, Tls>, Box<[KeySlot]>) {
-        (self.module, self.direct_deps)
-    }
 }
 
 pub(crate) struct ModuleEntry<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
@@ -117,11 +115,6 @@ where
     #[inline]
     pub(crate) fn direct_deps(&self) -> &[KeySlot] {
         &self.direct_deps
-    }
-
-    #[inline]
-    pub(crate) fn into_parts(self) -> (ModuleHandle<Arch, Tls>, Box<[KeySlot]>) {
-        (self.module, self.direct_deps)
     }
 }
 
@@ -237,8 +230,14 @@ where
     }
 
     pub(crate) fn mark_module_handles_ready(&mut self) {
-        for (id, entry) in core::mem::take(&mut self.resolve.module_handles) {
-            let (module, direct_deps) = entry.into_parts();
+        for (
+            id,
+            ModuleEntry {
+                module,
+                direct_deps,
+            },
+        ) in core::mem::take(&mut self.resolve.module_handles)
+        {
             self.push_ready(id, module, direct_deps);
         }
     }
@@ -297,10 +296,13 @@ where
         }
     }
 
-    pub(crate) fn build_scope(
+    pub(crate) fn build_scope<K, Meta>(
         &self,
-        mut visible_module: impl FnMut(KeySlot) -> ModuleHandle<Arch, Tls>,
-    ) -> ModuleScope<Arch, Tls> {
+        context: &LinkContext<K, D, Meta, Arch, Tls>,
+    ) -> ModuleScope<Arch, Tls>
+    where
+        K: Ord,
+    {
         let modules = self
             .resolve
             .group_order
@@ -314,7 +316,11 @@ where
                 {
                     module.clone()
                 } else {
-                    visible_module(*id)
+                    context
+                        .committed
+                        .get_by_key(*id)
+                        .cloned()
+                        .expect("scope key must resolve to a committed module")
                 }
             })
             .collect::<Vec<_>>();
@@ -326,7 +332,7 @@ where
     pub(crate) fn commit_into<K, Meta>(
         self,
         committed: &mut CommittedStorage<K, D, Meta, Arch, Tls>,
-    ) -> Box<[ModuleId]>
+    ) -> crate::Result<Box<[ModuleId]>>
     where
         K: Clone + Ord,
         Meta: Default,
@@ -337,17 +343,26 @@ where
         } = self;
         let mut ready = ready_to_commit;
         let mut committed_ids = Vec::with_capacity(ready.len());
+        for id in resolve.group_order.iter().copied() {
+            if ready.contains_key(&id) {
+                committed.ensure_module_slot(id);
+            }
+        }
         for id in resolve.group_order {
             let Some(entry) = ready.remove(&id) else {
                 continue;
             };
-            let (module, direct_deps) = entry.into_parts();
+            let ReadyCommit {
+                module,
+                direct_deps,
+            } = entry;
+            let direct_deps = committed.resolve_dep_edges(direct_deps)?;
             committed_ids.push(committed.insert(id, module, direct_deps, Meta::default()));
         }
         assert!(
             ready.is_empty(),
             "ready commit entries must all be present in group_order"
         );
-        committed_ids.into_boxed_slice()
+        Ok(committed_ids.into_boxed_slice())
     }
 }

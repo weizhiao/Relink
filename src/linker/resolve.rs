@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     LinkResolverError, LinkerError, LoaderRun, Result,
-    image::{RawDynamic, ScannedDynamic, ScannedElf},
+    image::{ModuleHandle, RawDynamic, ScannedDynamic, ScannedElf},
     memory::RegionAccess,
     observer::LoadObserver,
     os::Mmap,
@@ -14,7 +14,7 @@ use crate::{
     runtime::CodeExecutor,
     tls::TlsResolver,
 };
-use alloc::{borrow::ToOwned, collections::BTreeSet, vec::Vec};
+use alloc::{borrow::ToOwned, boxed::Box, collections::BTreeSet, vec::Vec};
 use core::borrow::Borrow;
 
 fn walk_breadth_first<K, E, F>(queue: &mut Vec<K>, mut visit: F) -> core::result::Result<(), E>
@@ -145,6 +145,89 @@ where
         self.visible_modules.contains(key)
     }
 
+    fn pending_or_committed<Q>(&self, key: &Q) -> Option<KeySlot>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let slot = self.committed.key_slot_for(key)?;
+        (self.session.contains_pending(slot)
+            || self
+                .committed
+                .module_for_key(slot)
+                .is_some_and(|slot| self.committed.contains_module(slot)))
+        .then_some(slot)
+    }
+
+    fn stage_module_handle(
+        &mut self,
+        key: K,
+        module: ModuleHandle<Arch, Tls>,
+        direct_deps: Box<[KeySlot]>,
+    ) -> KeySlot {
+        let slot = self.intern_key(key);
+        self.session
+            .module_handles
+            .insert(slot, ModuleEntry::new(module, direct_deps));
+        slot
+    }
+
+    fn stage_existing_key<Q>(&mut self, key: K) -> Result<KeySlot>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+        V: VisibleModules<K, Arch, Q, Tls>,
+    {
+        if let Some(slot) = self.pending_or_committed(key.borrow()) {
+            return Ok(slot);
+        }
+
+        let visible_key = key.borrow();
+        let module = self
+            .visible_modules
+            .module(visible_key)
+            .ok_or_else(|| LinkerError::resolver(LinkResolverError::ExistingKeyNotVisible))?;
+        let (module, direct_deps) = module.into_parts();
+
+        let direct_dep_keys = direct_deps.into_vec();
+        let direct_deps = direct_dep_keys
+            .iter()
+            .cloned()
+            .map(|key| self.intern_key(key))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let slot = self.stage_module_handle(key, module, direct_deps);
+        for dep in direct_dep_keys {
+            self.stage_existing_key::<Q>(dep)?;
+        }
+        Ok(slot)
+    }
+
+    fn stage_module_deps<'cfg, Obs, F, M, Exec>(
+        &mut self,
+        deps: Vec<ResolvedKey<'cfg, K, Arch, Tls>>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        mut stage: F,
+    ) -> Result<Box<[KeySlot]>>
+    where
+        Obs: LoadObserver<D, Arch>,
+        M: Mmap,
+        F: FnMut(
+            &mut Self,
+            ResolvedKey<'cfg, K, Arch, Tls>,
+            &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        ) -> Result<KeySlot>,
+    {
+        let mut direct_deps = Vec::with_capacity(deps.len());
+        for dep in deps {
+            let dep_id = stage(self, dep, loader)?;
+            if !direct_deps.contains(&dep_id) {
+                direct_deps.push(dep_id);
+            }
+        }
+        Ok(direct_deps.into_boxed_slice())
+    }
+
     fn intern_key(&mut self, key: K) -> KeySlot {
         self.committed.intern_key(key)
     }
@@ -153,12 +236,7 @@ where
         self.committed.key(slot)
     }
 
-    fn known_direct_deps<Q>(&mut self, slot: KeySlot) -> Option<Vec<KeySlot>>
-    where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
-    {
+    fn known_direct_deps(&self, slot: KeySlot) -> Option<Vec<KeySlot>> {
         if let Some(entry) = self.session.dynamics.get(&slot) {
             return entry.direct_deps().map(<[KeySlot]>::to_vec);
         }
@@ -168,20 +246,10 @@ where
 
         if let Some(module_slot) = self.committed.module_for_key(slot) {
             let module = self.committed.module(module_slot).present()?;
-            return Some(module.direct_deps().to_vec());
+            return Some(module.direct_deps().iter().map(|edge| edge.key()).collect());
         }
 
-        let direct_deps = {
-            let key = self.committed.key(slot);
-            self.visible_modules.direct_deps(key.borrow())?
-        };
-        Some(
-            direct_deps
-                .into_vec()
-                .into_iter()
-                .map(|key| self.intern_key(key))
-                .collect(),
-        )
+        None
     }
 
     fn owner(&self, slot: KeySlot) -> &dyn DependencyOwner {
@@ -262,8 +330,8 @@ where
         let needed_len = self.owner(slot).needed_len();
         let mut direct_deps = Vec::with_capacity(needed_len);
         for idx in 0..needed_len {
-            let resolved_key = self.resolve_dependency_edge(slot, idx, resolver)?;
-            let dep_id = stage(self, resolved_key, loader)?;
+            let key = self.resolve_dependency_edge(slot, idx, resolver)?;
+            let dep_id = stage(self, key, loader)?;
             if !direct_deps.contains(&dep_id) {
                 direct_deps.push(dep_id);
             }
@@ -310,7 +378,7 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn stage_resolved<'cfg, Obs, M, Exec, Q>(
+    pub(crate) fn stage<'cfg, Obs, M, Exec, Q>(
         &mut self,
         resolved: ResolvedKey<'cfg, K, Arch, Tls>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
@@ -326,12 +394,7 @@ where
         Exec: CodeExecutor<Arch> + Clone,
     {
         match resolved {
-            ResolvedKey::Existing(key) => {
-                if self.contains_key(key.borrow()) {
-                    return Ok(self.intern_key(key));
-                }
-                Err(LinkerError::resolver(LinkResolverError::ExistingKeyNotVisible).into())
-            }
+            ResolvedKey::Existing(key) => self.stage_existing_key::<Q>(key),
             ResolvedKey::Load { key, reader } => {
                 if self.contains_key(key.borrow()) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
@@ -346,20 +409,10 @@ where
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
 
-                let mut direct_deps = Vec::with_capacity(deps.len());
-                for dep in deps {
-                    let dep_id = self.stage_resolved(dep, loader)?;
-                    if !direct_deps.contains(&dep_id) {
-                        direct_deps.push(dep_id);
-                    }
-                }
-
-                let slot = self.intern_key(key);
-                self.session.module_handles.insert(
-                    slot,
-                    ModuleEntry::new(module, direct_deps.into_boxed_slice()),
-                );
-                Ok(slot)
+                let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
+                    ctx.stage::<Obs, M, Exec, Q>(dep, loader)
+                })?;
+                Ok(self.stage_module_handle(key, module, direct_deps))
             }
         }
     }
@@ -381,7 +434,7 @@ where
         Exec: CodeExecutor<Arch> + Clone,
     {
         self.resolve_dependency_graph_with(root, loader, resolver, |ctx, resolved, loader| {
-            ctx.stage_resolved(resolved, loader)
+            ctx.stage(resolved, loader)
         })
     }
 }
@@ -393,7 +446,7 @@ where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn stage_resolved<Obs, M, Exec, Q>(
+    pub(crate) fn stage<Obs, M, Exec, Q>(
         &mut self,
         resolved: ResolvedKey<'static, K, Arch, Tls>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
@@ -409,12 +462,7 @@ where
         Exec: CodeExecutor<Arch> + Clone,
     {
         match resolved {
-            ResolvedKey::Existing(key) => {
-                if self.contains_key(key.borrow()) {
-                    return Ok(self.intern_key(key));
-                }
-                Err(LinkerError::resolver(LinkResolverError::ExistingKeyNotVisible).into())
-            }
+            ResolvedKey::Existing(key) => self.stage_existing_key::<Q>(key),
             ResolvedKey::Load { key, reader } => {
                 if self.contains_key(key.borrow()) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
@@ -431,20 +479,10 @@ where
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
 
-                let mut direct_deps = Vec::with_capacity(deps.len());
-                for dep in deps {
-                    let dep_id = self.stage_resolved(dep, loader)?;
-                    if !direct_deps.contains(&dep_id) {
-                        direct_deps.push(dep_id);
-                    }
-                }
-
-                let slot = self.intern_key(key);
-                self.session.module_handles.insert(
-                    slot,
-                    ModuleEntry::new(module, direct_deps.into_boxed_slice()),
-                );
-                Ok(slot)
+                let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
+                    ctx.stage::<Obs, M, Exec, Q>(dep, loader)
+                })?;
+                Ok(self.stage_module_handle(key, module, direct_deps))
             }
         }
     }
@@ -466,7 +504,7 @@ where
         Exec: CodeExecutor<Arch> + Clone,
     {
         self.resolve_dependency_graph_with(root, loader, resolver, |ctx, resolved, loader| {
-            ctx.stage_resolved(resolved, loader)
+            ctx.stage(resolved, loader)
         })
     }
 }

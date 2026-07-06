@@ -225,6 +225,46 @@ impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
     }
 }
 
+/// A read-only module visible to a link operation, plus its direct dependency
+/// keys.
+pub struct VisibleModule<
+    K,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    Tls: TlsResolver<Arch> = (),
+> {
+    module: ModuleHandle<Arch, Tls>,
+    direct_deps: Box<[K]>,
+}
+
+impl<K, Arch, Tls> VisibleModule<K, Arch, Tls>
+where
+    Arch: RelocationArch,
+    Tls: TlsResolver<Arch>,
+{
+    #[inline]
+    pub fn new(module: impl Into<ModuleHandle<Arch, Tls>>, direct_deps: Box<[K]>) -> Self {
+        Self {
+            module: module.into(),
+            direct_deps,
+        }
+    }
+
+    #[inline]
+    pub fn module(&self) -> &ModuleHandle<Arch, Tls> {
+        &self.module
+    }
+
+    #[inline]
+    pub fn direct_deps(&self) -> &[K] {
+        &self.direct_deps
+    }
+
+    #[inline]
+    pub fn into_parts(self) -> (ModuleHandle<Arch, Tls>, Box<[K]>) {
+        (self.module, self.direct_deps)
+    }
+}
+
 /// Read-only modules that should be visible to a link operation without being
 /// committed into its local [`LinkContext`](super::LinkContext).
 pub trait VisibleModules<
@@ -239,13 +279,8 @@ pub trait VisibleModules<
         self.module(key).is_some()
     }
 
-    /// Returns direct dependency keys for a visible module.
-    fn direct_deps(&self, _key: &Q) -> Option<Box<[K]>> {
-        None
-    }
-
-    /// Returns a retained visible module by key.
-    fn module(&self, _key: &Q) -> Option<ModuleHandle<Arch, Tls>> {
+    /// Returns a retained visible module and its direct dependency keys by key.
+    fn module(&self, _key: &Q) -> Option<VisibleModule<K, Arch, Tls>> {
         None
     }
 }
@@ -268,12 +303,7 @@ where
     }
 
     #[inline]
-    fn direct_deps(&self, key: &Q) -> Option<Box<[K]>> {
-        (**self).direct_deps(key)
-    }
-
-    #[inline]
-    fn module(&self, key: &Q) -> Option<ModuleHandle<Arch, Tls>> {
+    fn module(&self, key: &Q) -> Option<VisibleModule<K, Arch, Tls>> {
         (**self).module(key)
     }
 }

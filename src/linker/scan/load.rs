@@ -74,12 +74,12 @@ where
         Resolver: KeyResolver<K, Arch, Q, Tls>,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        if let Some(result) = visible_loaded(context, &self.linker.visible_modules, key.borrow()) {
+        if let Some(result) = visible_loaded(context, key.borrow()) {
             return Ok(result);
         }
 
         let prepared = self.prepare_scan_load::<Meta, Q>(context, &key)?;
-        self.finish_load::<Meta, Q>(context, prepared)
+        self.finish_load::<Meta>(context, prepared)
     }
 
     fn prepare_scan_load<Meta, Q>(
@@ -102,7 +102,7 @@ where
             &mut session,
         );
         let resolved = resolve_context.resolve_root(key, &self.linker.resolver)?;
-        let root = resolve_context.stage_resolved(resolved, &mut loader)?;
+        let root = resolve_context.stage(resolved, &mut loader)?;
         if !resolve_context.contains_pending(root) {
             return Ok(PreparedLoad::direct(root, LoadSession::new()));
         }

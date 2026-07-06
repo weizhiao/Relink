@@ -18,11 +18,11 @@ pub mod scan;
 mod session;
 mod storage;
 
-pub use context::LinkContext;
+pub use context::{DirectDeps, LinkContext};
 pub use driver::{Linker, LoadResult};
 pub use request::{
     DefaultRelocationPlanner, DependencyOwner, DependencyRequest, RelocationInputs,
-    RelocationPlanner, RelocationRequest, RootRequest, VisibleModules,
+    RelocationPlanner, RelocationRequest, RootRequest, VisibleModule, VisibleModules,
 };
 pub use resolver::{
     CandidateContext, CandidateRequest, FileNameKey, KeyResolver, KeyRule, PathKey, ResolvedKey,

@@ -24,7 +24,7 @@ pub struct LoadResult<
     R: RegionAccess = crate::memory::HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
-    root_id: Option<ModuleId>,
+    root_id: ModuleId,
     root: LoadedCore<D, Arch, R, Tls>,
     committed: Box<[ModuleId]>,
 }
@@ -52,7 +52,7 @@ where
 {
     #[inline]
     pub(crate) fn new(
-        root_id: Option<ModuleId>,
+        root_id: ModuleId,
         root: LoadedCore<D, Arch, R, Tls>,
         committed: Box<[ModuleId]>,
     ) -> Self {
@@ -63,10 +63,9 @@ where
         }
     }
 
-    /// Returns the committed module id for the loaded root, if the root belongs
-    /// to this link context.
+    /// Returns the committed module id for the loaded root.
     #[inline]
-    pub fn root_id(&self) -> Option<ModuleId> {
+    pub fn root_id(&self) -> ModuleId {
         self.root_id
     }
 

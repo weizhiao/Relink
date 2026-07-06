@@ -3,11 +3,11 @@ mod support;
 use elf_loader::{
     Loader,
     elf::{ElfFileType, ElfProgramType},
-    image::{LoadedCore, ModuleCapability, ModuleHandle, ScannedElf, SyntheticModule},
+    image::{LoadedCore, ModuleCapability, ScannedElf, SyntheticModule},
     input::ElfBinary,
     linker::{
         KeyResolver, LinkContext, Linker, RelocationInputs, RelocationRequest, ResolvedKey,
-        RootRequest, VisibleModules,
+        RootRequest, VisibleModule, VisibleModules,
         scan::{
             ArenaDescriptor, ArenaSharing, DataPass, LinkPass, LinkPassPlan, Materialization,
             MemoryClass, PassScopeMode, ReorderPass,
@@ -215,12 +215,9 @@ impl VisibleModules<&'static str> for StaticVisibleModule {
         *key == self.key
     }
 
-    fn direct_deps(&self, key: &&'static str) -> Option<Box<[&'static str]>> {
-        (*key == self.key).then(|| self.direct_deps.clone())
-    }
-
-    fn module(&self, key: &&'static str) -> Option<ModuleHandle> {
-        (*key == self.key).then(|| self.module.clone().into())
+    fn module(&self, key: &&'static str) -> Option<VisibleModule<&'static str>> {
+        (*key == self.key)
+            .then(|| VisibleModule::new(self.module.clone(), self.direct_deps.clone()))
     }
 }
 
@@ -323,7 +320,7 @@ fn empty_relocation_plan(
 }
 
 #[test]
-fn load_uses_configured_visible_modules_without_committing_them_locally() {
+fn load_commits_configured_visible_modules() {
     let dep_output = write_test_dylib(&[], &[]);
     let mut loader = Loader::new();
     let dep = load_relocated_dylib(&mut loader, "visible_dep.so", &dep_output);
@@ -358,13 +355,17 @@ fn load_uses_configured_visible_modules_without_committing_them_locally() {
         .and_then(|id| context.module_id(id).unwrap())
         .unwrap();
     let dep_id = context.key_id(&"dep").unwrap();
-    assert!(context.module_id(dep_id).unwrap().is_none());
+    let dep_module_id = context
+        .module_id(dep_id)
+        .unwrap()
+        .expect("visible dependency should be committed into the context");
+    assert_eq!(context.get(dep_module_id).unwrap().name(), "visible_dep.so");
     let direct_deps = context
         .direct_deps(root_id)
         .unwrap()
-        .map(|id| *context.key(id).unwrap())
+        .map(|(key, module)| (*context.key(key).unwrap(), module))
         .collect::<Vec<_>>();
-    assert_eq!(direct_deps, vec!["dep"]);
+    assert_eq!(direct_deps, vec![("dep", dep_module_id)]);
 }
 
 #[test]
@@ -405,9 +406,9 @@ fn load_scan_first_supports_synthetic_dependencies() {
     let direct_deps = context
         .direct_deps(root_id)
         .unwrap()
-        .map(|id| *context.key(id).unwrap())
+        .map(|(key, module)| (*context.key(key).unwrap(), module))
         .collect::<Vec<_>>();
-    assert_eq!(direct_deps, vec!["dep"]);
+    assert_eq!(direct_deps, vec![("dep", dep_module_id)]);
 }
 
 #[test]

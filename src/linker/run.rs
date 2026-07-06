@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     Loader, LoaderRun, Result,
-    image::{LoadedCore, ModuleHandle, RawDynamic},
+    image::{LoadedCore, RawDynamic},
     lazy::traits::LazyBinder,
     memory::RegionAccess,
     observer::{LoadObserver, RelocationObserver},
@@ -139,7 +139,7 @@ where
         Resolver: KeyResolver<K, Arch, Q, Tls>,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        if let Some(result) = visible_loaded(context, &self.linker.visible_modules, key.borrow()) {
+        if let Some(result) = visible_loaded(context, key.borrow()) {
             return Ok(result);
         }
 
@@ -152,7 +152,7 @@ where
             session.resolve_mut(),
         );
         let resolved = resolve_context.resolve_root(&key, &linker.resolver)?;
-        let root = resolve_context.stage_resolved(resolved, &mut loader)?;
+        let root = resolve_context.stage(resolved, &mut loader)?;
         let prepared = Self::prepare_direct_load::<Meta, Q>(
             context,
             &linker.visible_modules,
@@ -161,7 +161,7 @@ where
             session,
             &mut loader,
         )?;
-        self.finish_load::<Meta, Q>(context, prepared)
+        self.finish_load::<Meta>(context, prepared)
     }
 
     /// Loads a pre-mapped root dynamic image and resolves its dependencies.
@@ -178,7 +178,7 @@ where
         Resolver: KeyResolver<K, Arch, Q, Tls>,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        if let Some(result) = visible_loaded(context, &self.linker.visible_modules, key.borrow()) {
+        if let Some(result) = visible_loaded(context, key.borrow()) {
             return Ok(result);
         }
 
@@ -198,7 +198,7 @@ where
             session,
             &mut loader,
         )?;
-        self.finish_load::<Meta, Q>(context, prepared)
+        self.finish_load::<Meta>(context, prepared)
     }
 
     fn prepare_direct_load<'cfg, Meta, Q>(
@@ -227,16 +227,13 @@ where
         Ok(PreparedLoad::direct(root, session))
     }
 
-    pub(in crate::linker) fn finish_load<Meta, Q>(
+    pub(in crate::linker) fn finish_load<Meta>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         prepared: PreparedLoad<D, Arch, M::Region, Tls>,
     ) -> Result<LoadResult<D, Arch, M::Region, Tls>>
     where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
-        V: VisibleModules<K, Arch, Q, Tls>,
     {
         let PreparedLoad {
             root: root_slot,
@@ -245,19 +242,17 @@ where
         } = prepared;
 
         if !session.pending_is_empty() {
-            self.relocate_pending_modules::<Meta, Q>(root_slot, context, &mut session)?;
+            self.relocate_pending_modules(root_slot, context, &mut session)?;
         }
 
         let root = session
             .loaded_root(root_slot)
             .or_else(|| {
-                visible_module(context, &self.linker.visible_modules, root_slot).and_then(
-                    |module| {
-                        module
-                            .downcast_ref::<LoadedCore<D, Arch, M::Region, Tls>>()
-                            .cloned()
-                    },
-                )
+                context
+                    .committed
+                    .get_by_key(root_slot)
+                    .and_then(|module| module.downcast_ref::<LoadedCore<D, Arch, M::Region, Tls>>())
+                    .cloned()
             })
             .expect("load root must resolve to a loaded core before commit");
 
@@ -265,32 +260,25 @@ where
             mapped_runtime.protect()?;
         }
 
-        let committed = session.commit_into(&mut context.committed);
+        let committed = session.commit_into(&mut context.committed)?;
 
         let root_id = context
             .committed
             .module_for_key(root_slot)
-            .map(|slot| context.committed.make_module_id(slot));
+            .map(|slot| context.committed.make_module_id(slot))
+            .expect("committed load root must have a module id");
         Ok(LoadResult::new(root_id, root, committed))
     }
 
-    fn relocate_pending_modules<Meta, Q>(
+    fn relocate_pending_modules<Meta>(
         &mut self,
         root: KeySlot,
         context: &LinkContext<K, D, Meta, Arch, Tls>,
         session: &mut LoadSession<D, Arch, M::Region, Tls>,
-    ) -> Result<()>
-    where
-        K: Borrow<Q>,
-        Q: ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
-    {
+    ) -> Result<()> {
         let mut order = mem::take(&mut self.scratch_relocation_order);
         session.build_relocation_order(root, &mut order);
-        let scope = session.build_scope(|id| {
-            visible_module(context, &self.linker.visible_modules, id)
-                .expect("scope key must resolve to a visible or pending module")
-        });
+        let scope = session.build_scope(context);
 
         let result = (|| {
             for id in order.drain(..) {
@@ -440,9 +428,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
 }
 
 #[inline]
-pub(in crate::linker) fn visible_loaded<K, D, Meta, V, Arch, R, Q, Tls>(
+pub(in crate::linker) fn visible_loaded<K, D, Meta, Arch, R, Q, Tls>(
     context: &LinkContext<K, D, Meta, Arch, Tls>,
-    visible_modules: &V,
     key: &Q,
 ) -> Option<LoadResult<D, Arch, R, Tls>>
 where
@@ -452,46 +439,21 @@ where
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
-    V: VisibleModules<K, Arch, Q, Tls>,
 {
-    let (root_id, module) = if let Some(key_id) = context.key_id(key) {
-        let key_slot = context
-            .committed
-            .key_slot(key_id)
-            .expect("cached key id must belong to this context");
-        let root_id = context
-            .committed
-            .module_for_key(key_slot)
-            .map(|slot| context.committed.make_module_id(slot));
-        (root_id, visible_module(context, visible_modules, key_slot))
-    } else {
-        (None, None)
-    };
+    let key_id = context.key_id(key)?;
+    let key_slot = context
+        .committed
+        .key_slot(key_id)
+        .expect("cached key id must belong to this context");
+    let root_id = context
+        .committed
+        .module_for_key(key_slot)
+        .map(|slot| context.committed.make_module_id(slot))?;
 
-    let module = module.or_else(|| visible_modules.module(key))?;
-    module
+    context
+        .committed
+        .get_by_key(key_slot)?
         .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
         .cloned()
         .map(|loaded| LoadResult::new(root_id, loaded, Vec::new().into_boxed_slice()))
-}
-
-#[inline]
-fn visible_module<K, D, Meta, V, Arch, Q, Tls>(
-    context: &LinkContext<K, D, Meta, Arch, Tls>,
-    visible_modules: &V,
-    slot: KeySlot,
-) -> Option<ModuleHandle<Arch, Tls>>
-where
-    K: Clone + Ord + Borrow<Q>,
-    Q: ?Sized,
-    D: 'static,
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
-    V: VisibleModules<K, Arch, Q, Tls>,
-{
-    if let Some(module) = context.committed.get_by_key(slot).cloned() {
-        return Some(module);
-    }
-    let key = context.committed.key(slot);
-    visible_modules.module(key.borrow())
 }

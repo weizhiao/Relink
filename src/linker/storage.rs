@@ -51,7 +51,7 @@ pub struct KeyId {
 
 impl KeyId {
     #[inline]
-    const fn from_slot(context: ContextId, slot: KeySlot) -> Self {
+    pub(in crate::linker) const fn from_slot(context: ContextId, slot: KeySlot) -> Self {
         Self { context, slot }
     }
 }
@@ -72,7 +72,7 @@ pub struct ModuleId {
 
 impl ModuleId {
     #[inline]
-    const fn from_slot(context: ContextId, slot: ModuleSlot) -> Self {
+    pub(in crate::linker) const fn from_slot(context: ContextId, slot: ModuleSlot) -> Self {
         Self { context, slot }
     }
 }
@@ -106,6 +106,29 @@ impl<T> EntryState<T> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::linker) struct DepEdge {
+    key: KeySlot,
+    module: ModuleSlot,
+}
+
+impl DepEdge {
+    #[inline]
+    pub(in crate::linker) fn new(key: KeySlot, module: ModuleSlot) -> Self {
+        Self { key, module }
+    }
+
+    #[inline]
+    pub(in crate::linker) fn key(self) -> KeySlot {
+        self.key
+    }
+
+    #[inline]
+    pub(in crate::linker) fn module(self) -> ModuleSlot {
+        self.module
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::linker) struct CommittedModule<'a, M, Arch, Tls>
 where
@@ -131,7 +154,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn direct_deps(&self) -> &'a [KeySlot] {
+    pub(crate) fn direct_deps(&self) -> &'a [DepEdge] {
         &self.entry.direct_deps
     }
 
@@ -358,6 +381,23 @@ where
             .present()
             .map(|module| module.handle())
     }
+
+    pub(crate) fn resolve_dep_edges(&self, direct_deps: Box<[KeySlot]>) -> Result<Box<[DepEdge]>> {
+        direct_deps
+            .into_vec()
+            .into_iter()
+            .map(|key| {
+                let Some(module) = self.module_for_key(key) else {
+                    return Err(LinkerError::context(LinkContextError::KeyNotCommitted {
+                        id: self.make_key_id(key),
+                    })
+                    .into());
+                };
+                Ok(DepEdge::new(key, module))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(Vec::into_boxed_slice)
+    }
 }
 
 impl<K, D: 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
@@ -383,37 +423,35 @@ where
         previous.filter(|slot| *slot != module_slot)
     }
 
-    #[inline]
+    pub(crate) fn ensure_module_slot(&mut self, slot: KeySlot) -> ModuleSlot {
+        if let Some(module_slot) = self.key_modules.get(slot).copied() {
+            return module_slot;
+        }
+
+        let module_slot = self.entries.push(None);
+        self.key_modules.insert(slot, module_slot);
+        self.load_order.push(module_slot);
+        module_slot
+    }
+
     pub(crate) fn insert(
         &mut self,
         slot: KeySlot,
         module: ModuleHandle<Arch, Tls>,
-        direct_deps: Box<[KeySlot]>,
+        direct_deps: Box<[DepEdge]>,
         meta: M,
     ) -> ModuleId {
-        let module_slot = if let Some(module_slot) = self.key_modules.get(slot).copied() {
-            let entry_key = self.entries[module_slot]
-                .as_ref()
-                .expect("linked storage key must resolve to a committed module")
-                .entry_key;
-            self.entries[module_slot] = Some(StoredEntry {
-                entry_key,
-                module,
-                direct_deps,
-                meta,
-            });
-            module_slot
-        } else {
-            let module_slot = self.entries.push(Some(StoredEntry {
-                entry_key: slot,
-                module,
-                direct_deps,
-                meta,
-            }));
-            self.key_modules.insert(slot, module_slot);
-            self.load_order.push(module_slot);
-            module_slot
-        };
+        let module_slot = self.ensure_module_slot(slot);
+        let entry_key = self.entries[module_slot]
+            .as_ref()
+            .map(|entry| entry.entry_key)
+            .unwrap_or(slot);
+        self.entries[module_slot] = Some(StoredEntry {
+            entry_key,
+            module,
+            direct_deps,
+            meta,
+        });
         self.make_module_id(module_slot)
     }
 
@@ -421,7 +459,7 @@ where
     pub(crate) fn remove(
         &mut self,
         slot: ModuleSlot,
-    ) -> EntryState<(ModuleHandle<Arch, Tls>, Box<[KeySlot]>, M)> {
+    ) -> EntryState<(ModuleHandle<Arch, Tls>, Box<[DepEdge]>, M)> {
         let Some(entry) = self.entries.get_mut(slot) else {
             return EntryState::Absent;
         };
@@ -454,7 +492,7 @@ struct StoredEntry<
 > {
     entry_key: KeySlot,
     module: ModuleHandle<Arch, Tls>,
-    direct_deps: Box<[KeySlot]>,
+    direct_deps: Box<[DepEdge]>,
     meta: M,
 }
 
