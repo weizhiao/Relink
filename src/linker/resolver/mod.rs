@@ -4,7 +4,7 @@ mod search_path;
 mod traits;
 
 pub use search_path::{
-    CandidateContext, CandidateRequest, FileNameKey, KeyRule, PathKey, ReuseResolver,
-    SearchDirProvider, SearchPathEntry, SearchPathResolver,
+    CandidateContext, CandidateRequest, FileNameKey, KeyRule, PathKey, SearchDirProvider,
+    SearchPathEntry, SearchPathResolver,
 };
 pub use traits::{KeyResolver, ResolvedKey};

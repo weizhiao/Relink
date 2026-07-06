@@ -25,11 +25,6 @@ fn expand_origin(value: &str, origin: &Path) -> PathBuf {
 pub type SearchDirProvider =
     dyn for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()> + 'static;
 
-/// Callback used by [`SearchPathResolver`] to reuse already-linked modules
-/// while considering a filesystem candidate.
-pub type ReuseResolver<LinkKey> =
-    dyn for<'req> Fn(CandidateContext<'req, LinkKey>) -> Result<Option<LinkKey>> + 'static;
-
 /// One ordered search-path entry.
 #[derive(Clone)]
 pub enum SearchPathEntry {
@@ -312,8 +307,7 @@ where
 /// for them.
 pub struct SearchPathResolver<LinkKey = PathBuf, Rule = PathKey> {
     entries: Vec<SearchPathEntry>,
-    reuse_resolvers: Vec<Arc<ReuseResolver<LinkKey>>>,
-    _rule: PhantomData<fn() -> Rule>,
+    _marker: PhantomData<fn() -> (LinkKey, Rule)>,
 }
 
 // Keep this impl manual so cloning a resolver does not require LinkKey or Rule to be Clone.
@@ -322,8 +316,7 @@ impl<LinkKey, Rule> Clone for SearchPathResolver<LinkKey, Rule> {
     fn clone(&self) -> Self {
         Self {
             entries: self.entries.clone(),
-            reuse_resolvers: self.reuse_resolvers.clone(),
-            _rule: PhantomData,
+            _marker: PhantomData,
         }
     }
 }
@@ -338,14 +331,6 @@ impl<LinkKey, Rule> fmt::Debug for SearchPathResolver<LinkKey, Rule> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SearchPathResolver")
             .field("entries", &self.entries)
-            .field(
-                "reuse_resolvers",
-                &self
-                    .reuse_resolvers
-                    .iter()
-                    .map(|_| "Reuse(..)")
-                    .collect::<Vec<_>>(),
-            )
             .field("link_key", &core::any::type_name::<LinkKey>())
             .field("rule", &core::any::type_name::<Rule>())
             .finish()
@@ -365,8 +350,7 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
     fn empty() -> Self {
         Self {
             entries: Vec::new(),
-            reuse_resolvers: Vec::new(),
-            _rule: PhantomData,
+            _marker: PhantomData,
         }
     }
 
@@ -391,46 +375,22 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
         )))
     }
 
-    /// Appends a callback that can reuse an already-linked visible module
-    /// after the candidate has been opened and verified as an ELF file.
-    pub fn push_reuse_resolver<F>(&mut self, resolver: F) -> &mut Self
-    where
-        F: for<'req> Fn(CandidateContext<'req, LinkKey>) -> Result<Option<LinkKey>> + 'static,
-    {
-        self.reuse_resolvers
-            .push(Arc::from(Box::new(resolver) as Box<ReuseResolver<LinkKey>>));
-        self
-    }
-
     /// Returns the configured search-path entries in lookup order.
     #[inline]
     pub fn entries(&self) -> &[SearchPathEntry] {
         &self.entries
     }
 
-    fn resolve_reuse<'a>(
-        &self,
-        resolvers: &[Arc<ReuseResolver<LinkKey>>],
-        candidate: &'a Path,
-        key: &'a LinkKey,
-    ) -> Result<Option<LinkKey>> {
-        let context = CandidateContext::new(candidate, key);
-        for resolver in resolvers {
-            if let Some(existing) = resolver(context)? {
-                return Ok(Some(existing));
-            }
-        }
-        Ok(None)
-    }
-
-    fn resolve_key(
+    fn resolve_key<F>(
         &self,
         request: CandidateRequest<'_>,
         contains_key: &dyn Fn(&LinkKey) -> bool,
+        reuse: &F,
     ) -> Result<Option<ResolvedCandidate<LinkKey>>>
     where
         Rule: KeyRule<LinkKey>,
         LinkKey: AsRef<Path>,
+        F: for<'req> Fn(CandidateContext<'req, LinkKey>) -> Result<Option<LinkKey>> + ?Sized,
     {
         let try_candidate = |candidate: &Path| -> Result<Option<ResolvedCandidate<LinkKey>>> {
             let key = Rule::key_for_candidate(candidate);
@@ -442,7 +402,8 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
                 return Ok(None);
             };
 
-            if let Some(existing) = self.resolve_reuse(&self.reuse_resolvers, candidate, &key)? {
+            let context = CandidateContext::new(candidate, &key);
+            if let Some(existing) = reuse(context)? {
                 return Ok(Some(ResolvedCandidate::Existing(existing)));
             }
 
@@ -481,6 +442,77 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
         }
 
         Ok(None)
+    }
+
+    fn resolved_key<'cfg, Arch, Tls>(
+        resolved: ResolvedCandidate<LinkKey>,
+    ) -> ResolvedKey<'cfg, LinkKey, Arch, Tls>
+    where
+        LinkKey: 'cfg,
+        Arch: RelocationArch,
+        Tls: TlsResolver<Arch>,
+    {
+        match resolved {
+            ResolvedCandidate::Existing(key) => ResolvedKey::existing(key),
+            ResolvedCandidate::Load { key, file } => ResolvedKey::load(key, file),
+        }
+    }
+
+    /// Resolves a root key using the configured search policy plus a
+    /// per-operation reuse callback.
+    pub fn load_root_with<'cfg, Arch, Tls, F>(
+        &self,
+        req: &RootRequest<'_, LinkKey>,
+        reuse: &F,
+    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>>
+    where
+        Rule: KeyRule<LinkKey>,
+        LinkKey: Clone + AsRef<Path> + 'cfg,
+        Arch: RelocationArch,
+        Tls: TlsResolver<Arch>,
+        F: for<'req> Fn(CandidateContext<'req, LinkKey>) -> Result<Option<LinkKey>> + ?Sized,
+    {
+        let contains_key = |key: &LinkKey| req.contains_key(key);
+        if let Some(resolved) = self.resolve_key(
+            CandidateRequest::root(req.key().as_ref()),
+            &contains_key,
+            reuse,
+        )? {
+            return Ok(Self::resolved_key(resolved));
+        }
+
+        Err(LinkerError::resolver(LinkResolverError::RootNotFound).into())
+    }
+
+    /// Resolves a dependency using the configured search policy plus a
+    /// per-operation reuse callback.
+    pub fn resolve_dependency_with<'cfg, Arch, Tls, F>(
+        &self,
+        req: &DependencyRequest<'_, LinkKey>,
+        reuse: &F,
+    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>>
+    where
+        Rule: KeyRule<LinkKey>,
+        LinkKey: Clone + AsRef<Path> + 'cfg,
+        Arch: RelocationArch,
+        Tls: TlsResolver<Arch>,
+        F: for<'req> Fn(CandidateContext<'req, LinkKey>) -> Result<Option<LinkKey>> + ?Sized,
+    {
+        let origin = req.owner_path().parent();
+        let needed = expand_origin(req.needed(), origin);
+        let request = CandidateRequest::dependency(
+            needed.as_path(),
+            req.owner_name(),
+            req.owner_path(),
+            req.runpath(),
+            req.rpath(),
+        );
+        let contains_key = |key: &LinkKey| req.contains_key(key);
+        if let Some(resolved) = self.resolve_key(request, &contains_key, reuse)? {
+            return Ok(Self::resolved_key(resolved));
+        }
+
+        Err(req.unresolved())
     }
 
     /// Open `path` if it exists, returning `Ok(None)` for ordinary open
@@ -522,17 +554,8 @@ where
     where
         LinkKey: 'cfg,
     {
-        let contains_key = |key: &LinkKey| req.contains_key(key);
-        if let Some(resolved) =
-            self.resolve_key(CandidateRequest::root(req.key().as_ref()), &contains_key)?
-        {
-            return Ok(match resolved {
-                ResolvedCandidate::Existing(key) => ResolvedKey::existing(key),
-                ResolvedCandidate::Load { key, file } => ResolvedKey::load(key, file),
-            });
-        }
-
-        Err(LinkerError::resolver(LinkResolverError::RootNotFound).into())
+        let no_reuse = |_context: CandidateContext<'_, LinkKey>| Ok(None);
+        self.load_root_with::<Arch, Tls, _>(req, &no_reuse)
     }
 
     fn resolve_dependency<'cfg>(
@@ -542,24 +565,8 @@ where
     where
         LinkKey: 'cfg,
     {
-        let origin = req.owner_path().parent();
-        let needed = expand_origin(req.needed(), origin);
-        let request = CandidateRequest::dependency(
-            needed.as_path(),
-            req.owner_name(),
-            req.owner_path(),
-            req.runpath(),
-            req.rpath(),
-        );
-        let contains_key = |key: &LinkKey| req.contains_key(key);
-        if let Some(resolved) = self.resolve_key(request, &contains_key)? {
-            return Ok(match resolved {
-                ResolvedCandidate::Existing(key) => ResolvedKey::existing(key),
-                ResolvedCandidate::Load { key, file } => ResolvedKey::load(key, file),
-            });
-        }
-
-        Err(req.unresolved())
+        let no_reuse = |_context: CandidateContext<'_, LinkKey>| Ok(None);
+        self.resolve_dependency_with::<Arch, Tls, _>(req, &no_reuse)
     }
 }
 

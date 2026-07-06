@@ -13,7 +13,7 @@ use crate::{
     image::{LoadedCore, ModuleHandle, RawDynamic},
     lazy::traits::LazyBinder,
     memory::RegionAccess,
-    observer::RelocationObserver,
+    observer::{LoadObserver, RelocationObserver},
     os::Mmap,
     relocation::{RelocationArch, RelocationHandler},
     runtime::CodeExecutor,
@@ -40,29 +40,29 @@ pub struct LinkerRun<
     V,
     Tls: TlsResolver<Arch>,
     Stage,
-    RelocObs = (),
+    Obs = (),
 > {
     pub(super) linker: &'run Linker<'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage>,
     pub(super) pipeline: LinkPipeline<'a, K, Arch, Tls>,
-    pub(super) observer: RelocObs,
+    pub(super) observer: Obs,
     pub(super) scratch_relocation_order: Vec<KeySlot>,
 }
 
-impl<'run, 'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage, RelocObs>
-    LinkerRun<'run, 'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage, RelocObs>
+impl<'run, 'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage, Obs>
+    LinkerRun<'run, 'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage, Obs>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    /// Sets the relocation observer used by this linker run.
+    /// Sets the observer used by this linker run.
     #[inline]
-    pub fn with_observer<NewRelocObs>(
+    pub fn with_observer<NewObs>(
         self,
-        observer: NewRelocObs,
-    ) -> LinkerRun<'run, 'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage, NewRelocObs>
+        observer: NewObs,
+    ) -> LinkerRun<'run, 'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage, NewObs>
     where
-        NewRelocObs: RelocationObserver<Arch>,
+        NewObs: RelocationObserver<Arch>,
     {
         LinkerRun {
             linker: self.linker,
@@ -95,7 +95,7 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocBinder, P, V, Stage, RelocObs>
+impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocBinder, P, V, Stage, Obs>
     LinkerRun<
         'run,
         'a,
@@ -110,7 +110,7 @@ impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocBinder, P, 
         V,
         Tls,
         Stage,
-        RelocObs,
+        Obs,
     >
 where
     K: Clone + Ord,
@@ -122,7 +122,7 @@ where
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     PreH: RelocationHandler<Arch> + Clone,
     PostH: RelocationHandler<Arch> + Clone,
-    RelocObs: RelocationObserver<Arch>,
+    Obs: LoadObserver<D, Arch> + RelocationObserver<Arch>,
     RelocBinder: LazyBinder<Arch> + Clone,
     P: RelocationPlanner<K, D, Arch, M::Region, Tls>,
 {
@@ -143,16 +143,24 @@ where
             return Ok(result);
         }
 
+        let linker = self.linker;
         let mut session = LoadSession::new();
-        let mut loader = self.linker.loader.run();
+        let mut loader = linker.loader.run().with_observer(&mut self.observer);
         let mut resolve_context = LoadResolveContext::new(
             &mut context.committed,
-            &self.linker.visible_modules,
+            &linker.visible_modules,
             session.resolve_mut(),
         );
-        let resolved = resolve_context.resolve_root(&key, &self.linker.resolver)?;
+        let resolved = resolve_context.resolve_root(&key, &linker.resolver)?;
         let root = resolve_context.stage_resolved(resolved, &mut loader)?;
-        let prepared = self.prepare_direct_load::<Meta, Q>(context, root, session, &mut loader)?;
+        let prepared = Self::prepare_direct_load::<Meta, Q>(
+            context,
+            &linker.visible_modules,
+            &linker.resolver,
+            root,
+            session,
+            &mut loader,
+        )?;
         self.finish_load::<Meta, Q>(context, prepared)
     }
 
@@ -174,23 +182,32 @@ where
             return Ok(result);
         }
 
+        let linker = self.linker;
         let mut session = LoadSession::new();
         let root = context.committed.intern_key(key);
         session
             .resolve_mut()
             .dynamics
             .insert(root, GraphEntry::new(raw));
-        let mut loader = self.linker.loader.run();
-        let prepared = self.prepare_direct_load::<Meta, Q>(context, root, session, &mut loader)?;
+        let mut loader = linker.loader.run().with_observer(&mut self.observer);
+        let prepared = Self::prepare_direct_load::<Meta, Q>(
+            context,
+            &linker.visible_modules,
+            &linker.resolver,
+            root,
+            session,
+            &mut loader,
+        )?;
         self.finish_load::<Meta, Q>(context, prepared)
     }
 
     fn prepare_direct_load<'cfg, Meta, Q>(
-        &mut self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        visible_modules: &V,
+        resolver: &Resolver,
         root: KeySlot,
         mut session: LoadSession<D, Arch, M::Region, Tls>,
-        loader: &mut LoaderRun<'_, (), D, Tls, Arch, M, Exec>,
+        loader: &mut LoaderRun<'_, &mut Obs, D, Tls, Arch, M, Exec>,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
@@ -200,15 +217,11 @@ where
     {
         let mut resolve_context = LoadResolveContext::new(
             &mut context.committed,
-            &self.linker.visible_modules,
+            visible_modules,
             session.resolve_mut(),
         );
         if resolve_context.contains_pending(root) {
-            resolve_context.resolve_dependency_graph::<_, _, _, Q>(
-                root,
-                loader,
-                &self.linker.resolver,
-            )?;
+            resolve_context.resolve_dependency_graph::<_, _, _, Q>(root, loader, resolver)?;
         }
 
         Ok(PreparedLoad::direct(root, session))

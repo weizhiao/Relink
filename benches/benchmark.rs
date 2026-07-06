@@ -10,6 +10,7 @@ use elf_loader::{
         LinkContext, Linker,
         scan::{LinkPass, LinkPassPlan, Materialization, ReorderPass},
     },
+    relocation::Relocator,
 };
 use libloading::os::unix::{Library as UnixLibrary, RTLD_LAZY, RTLD_LOCAL, RTLD_NOW};
 use std::{fs, hint::black_box};
@@ -42,48 +43,62 @@ impl LinkPass<PathBuf, ReorderPass> for UseRootSectionRegions {
 }
 
 fn load_manual_file(fixtures: &fixture_support::FixturePaths) -> LoadedCore<()> {
-    let mut loader = Loader::new();
-    let liba = loader
-        .load_dylib(ElfFile::from_path(black_box(fixtures.liba_str())).unwrap())
-        .unwrap()
-        .relocator()
+    let loader = Loader::new();
+    let relocator = Relocator::new();
+    let liba = relocator
+        .run(
+            loader
+                .load_dylib(ElfFile::from_path(black_box(fixtures.liba_str())).unwrap())
+                .unwrap(),
+        )
         .relocate()
         .unwrap();
-    let libb = loader
-        .load_dylib(ElfFile::from_path(black_box(fixtures.libb_str())).unwrap())
-        .unwrap()
-        .relocator()
+    let libb = relocator
+        .run(
+            loader
+                .load_dylib(ElfFile::from_path(black_box(fixtures.libb_str())).unwrap())
+                .unwrap(),
+        )
         .scope([&liba])
         .relocate()
         .unwrap();
-    loader
-        .load_dylib(ElfFile::from_path(black_box(fixtures.libc_str())).unwrap())
-        .unwrap()
-        .relocator()
+    relocator
+        .run(
+            loader
+                .load_dylib(ElfFile::from_path(black_box(fixtures.libc_str())).unwrap())
+                .unwrap(),
+        )
         .scope([&liba, &libb])
         .relocate()
         .unwrap()
 }
 
 fn load_manual_memory(fixtures: &FixtureBytes) -> LoadedCore<()> {
-    let mut loader = Loader::new();
-    let liba = loader
-        .load_dylib(black_box(fixtures.liba.as_slice()))
-        .unwrap()
-        .relocator()
+    let loader = Loader::new();
+    let relocator = Relocator::new();
+    let liba = relocator
+        .run(
+            loader
+                .load_dylib(black_box(fixtures.liba.as_slice()))
+                .unwrap(),
+        )
         .relocate()
         .unwrap();
-    let libb = loader
-        .load_dylib(black_box(fixtures.libb.as_slice()))
-        .unwrap()
-        .relocator()
+    let libb = relocator
+        .run(
+            loader
+                .load_dylib(black_box(fixtures.libb.as_slice()))
+                .unwrap(),
+        )
         .scope([&liba])
         .relocate()
         .unwrap();
-    loader
-        .load_dylib(black_box(fixtures.libc.as_slice()))
-        .unwrap()
-        .relocator()
+    relocator
+        .run(
+            loader
+                .load_dylib(black_box(fixtures.libc.as_slice()))
+                .unwrap(),
+        )
         .scope([&liba, &libb])
         .relocate()
         .unwrap()
@@ -102,6 +117,7 @@ fn load_scan_first(root: PathBuf) {
     let mut context: LinkContext<PathBuf, ()> = LinkContext::new();
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
+        .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(UseRootSectionRegions);
             pipeline

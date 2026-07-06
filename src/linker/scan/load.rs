@@ -16,7 +16,7 @@ use crate::{
         session::{GraphEntry, LoadSession, ResolveSession},
     },
     memory::{ImageMemory, RegionAccess, VmOffset},
-    observer::RelocationObserver,
+    observer::{LoadObserver, RelocationObserver},
     os::Mmap,
     relocation::{RelocationArch, RelocationHandler},
     runtime::CodeExecutor,
@@ -30,7 +30,7 @@ use alloc::{
 use core::borrow::Borrow;
 
 #[allow(private_bounds)]
-impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocBinder, P, V, Stage, RelocObs>
+impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocBinder, P, V, Stage, Obs>
     LinkerRun<
         'run,
         'a,
@@ -45,7 +45,7 @@ impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocBinder, P, 
         V,
         Tls,
         Stage,
-        RelocObs,
+        Obs,
     >
 where
     K: Clone + Ord,
@@ -57,7 +57,7 @@ where
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     PreH: RelocationHandler<Arch> + Clone,
     PostH: RelocationHandler<Arch> + Clone,
-    RelocObs: RelocationObserver<Arch>,
+    Obs: LoadObserver<D, Arch> + RelocationObserver<Arch>,
     RelocBinder: LazyBinder<Arch> + Clone,
     P: RelocationPlanner<K, D, Arch, M::Region, Tls>,
 {
@@ -95,7 +95,7 @@ where
     {
         let mut session = ResolveSession::new();
 
-        let mut loader = self.linker.loader.run();
+        let mut loader = self.linker.loader.run().with_observer(&mut self.observer);
         let mut resolve_context = ScanResolveContext::new(
             &mut context.committed,
             &self.linker.visible_modules,

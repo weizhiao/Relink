@@ -26,7 +26,7 @@ pub use request::{
 };
 pub use resolver::{
     CandidateContext, CandidateRequest, FileNameKey, KeyResolver, KeyRule, PathKey, ResolvedKey,
-    ReuseResolver, SearchDirProvider, SearchPathEntry, SearchPathResolver,
+    SearchDirProvider, SearchPathEntry, SearchPathResolver,
 };
 pub use run::LinkerRun;
 pub use storage::{ContextId, KeyId, ModuleId};
