@@ -30,10 +30,10 @@ use alloc::{
 use core::borrow::Borrow;
 
 #[allow(private_bounds)]
-impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Stage, Obs>
+impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Obs>
     LinkerRun<
         'run,
-        'a,
+        'pipe,
         K,
         Arch,
         Loader<D, Tls, Arch, M, Exec>,
@@ -42,7 +42,6 @@ impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Stage, Obs
         P,
         V,
         Tls,
-        Stage,
         Obs,
     >
 where

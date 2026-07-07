@@ -106,27 +106,7 @@ where
 ///
 /// `Linker` stores one relocation domain: all modules committed through one
 /// context use the same [`RelocationArch`].
-#[doc(hidden)]
-pub struct Stage0;
-
-#[doc(hidden)]
-pub struct Stage1;
-
-#[doc(hidden)]
-pub trait AdvanceStage {
-    type Next;
-}
-
-impl AdvanceStage for Stage0 {
-    type Next = Stage1;
-}
-
-impl AdvanceStage for Stage1 {
-    type Next = Stage1;
-}
-
 pub struct Linker<
-    'a,
     K: Clone + Ord,
     Arch: RelocationArch = crate::arch::NativeArch,
     L = Loader<(), (), Arch>,
@@ -135,18 +115,16 @@ pub struct Linker<
     P = DefaultRelocationPlanner,
     V = (),
     Tls: TlsResolver<Arch> = (),
-    Stage = Stage0,
 > {
     pub(super) loader: L,
     pub(super) resolver: R,
     pub(super) relocator: Relocator<RelocBinder>,
     pub(super) planner: P,
     pub(super) visible_modules: V,
-    stage: PhantomData<(&'a (), K, Arch, Tls, Stage)>,
+    marker: PhantomData<(K, Arch, Tls)>,
 }
 
-impl<'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage> Clone
-    for Linker<'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage>
+impl<K, Arch, L, R, RelocBinder, P, V, Tls> Clone for Linker<K, Arch, L, R, RelocBinder, P, V, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -165,32 +143,20 @@ where
             relocator: self.relocator.clone(),
             planner: self.planner.clone(),
             visible_modules: self.visible_modules.clone(),
-            stage: PhantomData,
+            marker: PhantomData,
         }
     }
 }
 
-struct LinkerFields<
-    'a,
-    K: Clone + Ord,
-    Arch: RelocationArch,
-    L,
-    R,
-    RelocBinder,
-    P,
-    V,
-    Tls: TlsResolver<Arch>,
-    Stage,
-> {
+struct LinkerFields<L, R, RelocBinder, P, V> {
     loader: NoDrop<L>,
     resolver: NoDrop<R>,
     relocator: NoDrop<Relocator<RelocBinder>>,
     planner: NoDrop<P>,
     visible_modules: NoDrop<V>,
-    stage: PhantomData<(&'a (), K, Arch, Tls, Stage)>,
 }
 
-impl<'a, K> Linker<'a, K>
+impl<K> Linker<K>
 where
     K: Clone + Ord,
 {
@@ -203,42 +169,7 @@ where
             relocator: Relocator::new(),
             planner: DefaultRelocationPlanner,
             visible_modules: (),
-            stage: PhantomData,
-        }
-    }
-
-    /// Creates a linker from preconfigured loader and relocator templates.
-    #[inline]
-    #[allow(clippy::type_complexity)]
-    pub const fn from_parts<D, Tls, Arch, M, Exec, RelocBinder>(
-        loader: Loader<D, Tls, Arch, M, Exec>,
-        relocator: Relocator<RelocBinder>,
-    ) -> Linker<
-        'a,
-        K,
-        Arch,
-        Loader<D, Tls, Arch, M, Exec>,
-        (),
-        RelocBinder,
-        DefaultRelocationPlanner,
-        (),
-        Tls,
-        Stage0,
-    >
-    where
-        D: 'static,
-        Tls: TlsResolver<Arch>,
-        Arch: RelocationArch,
-        M: Mmap,
-        Exec: CodeExecutor<Arch> + Clone,
-    {
-        Linker {
-            loader,
-            resolver: (),
-            relocator,
-            planner: DefaultRelocationPlanner,
-            visible_modules: (),
-            stage: PhantomData,
+            marker: PhantomData,
         }
     }
 
@@ -251,7 +182,7 @@ where
     #[allow(clippy::type_complexity)]
     pub const fn for_arch<NewArch>(
         self,
-    ) -> Linker<'a, K, NewArch, Loader<(), (), NewArch>, (), (), DefaultRelocationPlanner, ()>
+    ) -> Linker<K, NewArch, Loader<(), (), NewArch>, (), (), DefaultRelocationPlanner, ()>
     where
         NewArch: RelocationArch,
     {
@@ -261,12 +192,12 @@ where
             relocator: self.relocator,
             planner: DefaultRelocationPlanner,
             visible_modules: (),
-            stage: PhantomData,
+            marker: PhantomData,
         }
     }
 }
 
-impl<'a, K> Default for Linker<'a, K>
+impl<K> Default for Linker<K>
 where
     K: Clone + Ord,
 {
@@ -276,15 +207,14 @@ where
     }
 }
 
-impl<'a, K, L, R, RelocBinder, P, V, Arch, Tls, Stage>
-    Linker<'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage>
+impl<K, L, R, RelocBinder, P, V, Arch, Tls> Linker<K, Arch, L, R, RelocBinder, P, V, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    const fn into_fields(self) -> LinkerFields<'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage> {
+    const fn into_fields(self) -> LinkerFields<L, R, RelocBinder, P, V> {
         let this = MaybeUninit::new(self);
         let this = this.as_ptr();
 
@@ -299,7 +229,6 @@ where
                 relocator: NoDrop::read(ptr::addr_of!((*this).relocator)),
                 planner: NoDrop::read(ptr::addr_of!((*this).planner)),
                 visible_modules: NoDrop::read(ptr::addr_of!((*this).visible_modules)),
-                stage: ptr::read(ptr::addr_of!((*this).stage)),
             }
         }
     }
@@ -308,7 +237,7 @@ where
     pub const fn resolver<NewR>(
         self,
         resolver: NewR,
-    ) -> Linker<'a, K, Arch, L, NewR, RelocBinder, P, V, Tls, Stage>
+    ) -> Linker<K, Arch, L, NewR, RelocBinder, P, V, Tls>
     where
         R: Copy,
     {
@@ -317,7 +246,6 @@ where
             relocator,
             planner,
             visible_modules,
-            stage,
             ..
         } = self.into_fields();
 
@@ -327,7 +255,7 @@ where
             relocator: relocator.into_inner(),
             planner: planner.into_inner(),
             visible_modules: visible_modules.into_inner(),
-            stage,
+            marker: PhantomData,
         }
     }
 
@@ -335,7 +263,7 @@ where
     pub const fn planner<NewP>(
         self,
         planner: NewP,
-    ) -> Linker<'a, K, Arch, L, R, RelocBinder, NewP, V, Tls, Stage>
+    ) -> Linker<K, Arch, L, R, RelocBinder, NewP, V, Tls>
     where
         P: Copy,
     {
@@ -344,7 +272,6 @@ where
             resolver,
             relocator,
             visible_modules,
-            stage,
             ..
         } = self.into_fields();
 
@@ -354,7 +281,7 @@ where
             relocator: relocator.into_inner(),
             planner,
             visible_modules: visible_modules.into_inner(),
-            stage,
+            marker: PhantomData,
         }
     }
 
@@ -362,7 +289,7 @@ where
     pub const fn visible_modules<NewV>(
         self,
         visible_modules: NewV,
-    ) -> Linker<'a, K, Arch, L, R, RelocBinder, P, NewV, Tls, Stage>
+    ) -> Linker<K, Arch, L, R, RelocBinder, P, NewV, Tls>
     where
         V: Copy,
     {
@@ -371,7 +298,6 @@ where
             resolver,
             relocator,
             planner,
-            stage,
             ..
         } = self.into_fields();
 
@@ -381,13 +307,54 @@ where
             relocator: relocator.into_inner(),
             planner: planner.into_inner(),
             visible_modules,
-            stage,
+            marker: PhantomData,
+        }
+    }
+
+    /// Sets the relocator template used for loaded modules.
+    pub const fn relocator<NewRelocBinder>(
+        self,
+        relocator: Relocator<NewRelocBinder>,
+    ) -> Linker<K, Arch, L, R, NewRelocBinder, P, V, Tls>
+    where
+        Relocator<RelocBinder>: Copy,
+    {
+        let LinkerFields {
+            loader,
+            resolver,
+            planner,
+            visible_modules,
+            ..
+        } = self.into_fields();
+
+        Linker {
+            loader: loader.into_inner(),
+            resolver: resolver.into_inner(),
+            relocator,
+            planner: planner.into_inner(),
+            visible_modules: visible_modules.into_inner(),
+            marker: PhantomData,
+        }
+    }
+
+    /// Reconfigures the relocator template used for loaded modules.
+    pub fn map_relocator<NewRelocBinder>(
+        self,
+        configure: impl FnOnce(Relocator<RelocBinder>) -> Relocator<NewRelocBinder>,
+    ) -> Linker<K, Arch, L, R, NewRelocBinder, P, V, Tls> {
+        Linker {
+            loader: self.loader,
+            resolver: self.resolver,
+            relocator: configure(self.relocator),
+            planner: self.planner,
+            visible_modules: self.visible_modules,
+            marker: PhantomData,
         }
     }
 
     /// Starts a linker run with fresh scratch storage.
     #[inline]
-    pub fn run(&self) -> LinkerRun<'_, 'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage, ()> {
+    pub fn run<'pipe>(&self) -> LinkerRun<'_, 'pipe, K, Arch, L, R, RelocBinder, P, V, Tls, ()> {
         LinkerRun {
             linker: self,
             pipeline: LinkPipeline::new(),
@@ -397,32 +364,8 @@ where
     }
 }
 
-impl<'a, K, L, R, RelocBinder, P, V, Arch, Tls, Stage>
-    Linker<'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage>
-where
-    K: Clone + Ord,
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
-    Stage: AdvanceStage,
-{
-    /// Reconfigures the relocator template used for loaded modules.
-    pub fn map_relocator<NewRelocBinder>(
-        self,
-        configure: impl FnOnce(Relocator<RelocBinder>) -> Relocator<NewRelocBinder>,
-    ) -> Linker<'a, K, Arch, L, R, NewRelocBinder, P, V, Tls, Stage::Next> {
-        Linker {
-            loader: self.loader,
-            resolver: self.resolver,
-            relocator: configure(self.relocator),
-            planner: self.planner,
-            visible_modules: self.visible_modules,
-            stage: PhantomData,
-        }
-    }
-}
-
-impl<'a, K, D, Tls, Arch, M, Exec, R, P, V>
-    Linker<'a, K, Arch, Loader<D, Tls, Arch, M, Exec>, R, (), P, V, Tls, Stage0>
+impl<K, D, Tls, Arch, M, Exec, R, P, V>
+    Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, R, (), P, V, Tls>
 where
     K: Clone + Ord,
     D: 'static,
@@ -431,6 +374,40 @@ where
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
 {
+    /// Sets the loader template used to load root modules and dependencies.
+    ///
+    /// This must run before configuring the relocator because changing the
+    /// loader can also change the TLS resolver type.
+    #[allow(clippy::type_complexity)]
+    pub const fn loader<NewD, NewTls, NewM, NewExec>(
+        self,
+        loader: Loader<NewD, NewTls, Arch, NewM, NewExec>,
+    ) -> Linker<K, Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), P, V, NewTls>
+    where
+        Loader<D, Tls, Arch, M, Exec>: Copy,
+        NewD: 'static,
+        NewTls: TlsResolver<Arch>,
+        NewM: Mmap,
+        NewExec: CodeExecutor<Arch> + Clone,
+    {
+        let LinkerFields {
+            relocator,
+            resolver,
+            planner,
+            visible_modules,
+            ..
+        } = self.into_fields();
+
+        Linker {
+            loader,
+            resolver: resolver.into_inner(),
+            relocator: relocator.into_inner(),
+            planner: planner.into_inner(),
+            visible_modules: visible_modules.into_inner(),
+            marker: PhantomData,
+        }
+    }
+
     /// Reconfigures the underlying loader.
     ///
     /// This must run before configuring the relocator because changing the
@@ -441,7 +418,7 @@ where
         configure: impl FnOnce(
             Loader<D, Tls, Arch, M, Exec>,
         ) -> Loader<NewD, NewTls, Arch, NewM, NewExec>,
-    ) -> Linker<'a, K, Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), P, V, NewTls, Stage0>
+    ) -> Linker<K, Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), P, V, NewTls>
     where
         NewD: 'static,
         NewTls: TlsResolver<Arch>,
@@ -451,10 +428,10 @@ where
         Linker {
             loader: configure(self.loader),
             resolver: self.resolver,
-            relocator: Relocator::new(),
+            relocator: self.relocator,
             planner: self.planner,
             visible_modules: self.visible_modules,
-            stage: PhantomData,
+            marker: PhantomData,
         }
     }
 }

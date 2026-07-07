@@ -14,11 +14,9 @@
 mod builder;
 mod defs;
 mod handle;
-mod load;
 mod run;
 
 pub(crate) use builder::{ImageBuilder, ScanBuilder};
 pub(crate) use defs::{ElfBuf, ExpectedElf};
 pub use handle::Loader;
-pub(crate) use handle::native_executor;
 pub use run::LoaderRun;

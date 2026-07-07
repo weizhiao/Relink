@@ -20,6 +20,8 @@ where
     }
 }
 
+impl<Binder> Copy for Relocator<Binder> where Binder: Copy {}
+
 impl Relocator<()> {
     /// Creates a new empty relocation configuration.
     #[inline]

@@ -28,7 +28,7 @@ use core::{borrow::Borrow, mem};
 /// used while resolving and relocating one sequence of loads.
 pub struct LinkerRun<
     'run,
-    'a,
+    'pipe,
     K: Clone + Ord,
     Arch: RelocationArch,
     L,
@@ -37,17 +37,16 @@ pub struct LinkerRun<
     P,
     V,
     Tls: TlsResolver<Arch>,
-    Stage,
     Obs = (),
 > {
-    pub(super) linker: &'run Linker<'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage>,
-    pub(super) pipeline: LinkPipeline<'a, K, Arch, Tls>,
+    pub(super) linker: &'run Linker<K, Arch, L, R, RelocBinder, P, V, Tls>,
+    pub(super) pipeline: LinkPipeline<'pipe, K, Arch, Tls>,
     pub(super) observer: Obs,
     pub(super) scratch_relocation_order: Vec<KeySlot>,
 }
 
-impl<'run, 'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage, Obs>
-    LinkerRun<'run, 'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage, Obs>
+impl<'run, 'pipe, K, Arch, L, R, RelocBinder, P, V, Tls, Obs>
+    LinkerRun<'run, 'pipe, K, Arch, L, R, RelocBinder, P, V, Tls, Obs>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -58,7 +57,7 @@ where
     pub fn with_observer<NewObs>(
         self,
         observer: NewObs,
-    ) -> LinkerRun<'run, 'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage, NewObs>
+    ) -> LinkerRun<'run, 'pipe, K, Arch, L, R, RelocBinder, P, V, Tls, NewObs>
     where
         NewObs: RelocationObserver<Arch>,
     {
@@ -74,7 +73,7 @@ where
     #[inline]
     pub fn map_pipeline(
         self,
-        configure: impl FnOnce(LinkPipeline<'a, K, Arch, Tls>) -> LinkPipeline<'a, K, Arch, Tls>,
+        configure: impl FnOnce(LinkPipeline<'pipe, K, Arch, Tls>) -> LinkPipeline<'pipe, K, Arch, Tls>,
     ) -> Self {
         let Self {
             linker,
@@ -93,10 +92,10 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Stage, Obs>
+impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Obs>
     LinkerRun<
         'run,
-        'a,
+        'pipe,
         K,
         Arch,
         Loader<D, Tls, Arch, M, Exec>,
@@ -105,7 +104,6 @@ impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Stage, Obs
         P,
         V,
         Tls,
-        Stage,
         Obs,
     >
 where
@@ -308,8 +306,8 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'a, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Stage>
-    Linker<'a, K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, P, V, Tls, Stage>
+impl<K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V>
+    Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, P, V, Tls>
 where
     K: Clone + Ord,
     D: Default + 'static,

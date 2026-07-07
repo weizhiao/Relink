@@ -10,7 +10,9 @@ use crate::{
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
     os::Mmap,
     relocation::{RelocationArch, RelocationValueProvider},
+    runtime::{CodeExecutor, NativeCodeExecutor},
     segment::ElfSegments,
+    sync::Arc,
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -278,7 +280,7 @@ where
         force_static_tls,
         1,
         D::default(),
-        crate::loader::native_executor::<Arch>(),
+        Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>),
     );
     builder.build_dynamic(&phdrs)
 }

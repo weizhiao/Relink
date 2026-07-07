@@ -14,11 +14,6 @@ use crate::{
 use alloc::boxed::Box;
 use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 
-#[inline]
-pub(crate) fn native_executor<Arch: RelocationArch>() -> Arc<dyn CodeExecutor<Arch>> {
-    Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>)
-}
-
 /// Configurable ELF loader.
 ///
 /// `Loader` maps ELF objects from files or memory and produces raw image types such as
@@ -74,6 +69,16 @@ where
             _marker: PhantomData,
         }
     }
+}
+
+impl<D, Tls, Arch, M, Exec> Copy for Loader<D, Tls, Arch, M, Exec>
+where
+    D: 'static,
+    Tls: TlsResolver<Arch>,
+    Arch: RelocationArch,
+    M: Mmap + Copy,
+    Exec: Copy,
+{
 }
 
 struct LoaderFields<M, Exec> {
