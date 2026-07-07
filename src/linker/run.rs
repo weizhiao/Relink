@@ -15,7 +15,7 @@ use crate::{
     memory::RegionAccess,
     observer::{LoadObserver, RelocationObserver},
     os::Mmap,
-    relocation::{RelocationArch, RelocationHandler},
+    relocation::RelocationArch,
     runtime::CodeExecutor,
     tls::TlsResolver,
 };
@@ -33,8 +33,6 @@ pub struct LinkerRun<
     Arch: RelocationArch,
     L,
     R,
-    PreH,
-    PostH,
     RelocBinder,
     P,
     V,
@@ -42,14 +40,14 @@ pub struct LinkerRun<
     Stage,
     Obs = (),
 > {
-    pub(super) linker: &'run Linker<'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage>,
+    pub(super) linker: &'run Linker<'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage>,
     pub(super) pipeline: LinkPipeline<'a, K, Arch, Tls>,
     pub(super) observer: Obs,
     pub(super) scratch_relocation_order: Vec<KeySlot>,
 }
 
-impl<'run, 'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage, Obs>
-    LinkerRun<'run, 'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage, Obs>
+impl<'run, 'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage, Obs>
+    LinkerRun<'run, 'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage, Obs>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -60,7 +58,7 @@ where
     pub fn with_observer<NewObs>(
         self,
         observer: NewObs,
-    ) -> LinkerRun<'run, 'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage, NewObs>
+    ) -> LinkerRun<'run, 'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage, NewObs>
     where
         NewObs: RelocationObserver<Arch>,
     {
@@ -95,7 +93,7 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocBinder, P, V, Stage, Obs>
+impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Stage, Obs>
     LinkerRun<
         'run,
         'a,
@@ -103,8 +101,6 @@ impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocBinder, P, 
         Arch,
         Loader<D, Tls, Arch, M, Exec>,
         Resolver,
-        PreH,
-        PostH,
         RelocBinder,
         P,
         V,
@@ -120,8 +116,6 @@ where
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
-    PreH: RelocationHandler<Arch> + Clone,
-    PostH: RelocationHandler<Arch> + Clone,
     Obs: LoadObserver<D, Arch> + RelocationObserver<Arch>,
     RelocBinder: LazyBinder<Arch> + Clone,
     P: RelocationPlanner<K, D, Arch, M::Region, Tls>,
@@ -314,21 +308,8 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocBinder, P, V, Stage>
-    Linker<
-        'a,
-        K,
-        Arch,
-        Loader<D, Tls, Arch, M, Exec>,
-        Resolver,
-        PreH,
-        PostH,
-        RelocBinder,
-        P,
-        V,
-        Tls,
-        Stage,
-    >
+impl<'a, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Stage>
+    Linker<'a, K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, P, V, Tls, Stage>
 where
     K: Clone + Ord,
     D: Default + 'static,
@@ -337,8 +318,6 @@ where
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
-    PreH: RelocationHandler<Arch> + Clone,
-    PostH: RelocationHandler<Arch> + Clone,
     RelocBinder: LazyBinder<Arch> + Clone,
     P: RelocationPlanner<K, D, Arch, M::Region, Tls>,
 {

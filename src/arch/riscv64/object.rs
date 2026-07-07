@@ -8,7 +8,7 @@ use crate::{
         object_relocation_sections, section_entries,
     },
     observer::RelocationObserver,
-    relocation::{ObjectRelocationArch, RelocHelper, RelocationHandler},
+    relocation::{ObjectRelocationArch, RelocHelper},
 };
 use elf::abi::*;
 use hashbrown::HashMap;
@@ -85,17 +85,15 @@ impl ObjectRelocationArch for RiscV64Arch {
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn prepare_object_relocation<D, R, Tls, PreH, PostH, Obs, H, Memory>(
+    fn prepare_object_relocation<D, R, Tls, Obs, H, Memory>(
         state: &mut Self::ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, Tls, PreH, PostH, Obs, H, Memory>,
+        helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         shdrs: &[ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>],
     ) -> Result<()>
     where
         D: 'static,
         R: RegionAccess,
         Tls: crate::tls::TlsResolver<Self>,
-        PreH: RelocationHandler<Self> + ?Sized,
-        PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
@@ -104,9 +102,9 @@ impl ObjectRelocationArch for RiscV64Arch {
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, R, Tls, PreH, PostH, Obs, H, Memory>(
+    fn relocate_object<D, R, Tls, Obs, H, Memory>(
         state: &mut Self::ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, Tls, PreH, PostH, Obs, H, Memory>,
+        helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,
@@ -115,8 +113,6 @@ impl ObjectRelocationArch for RiscV64Arch {
         D: 'static,
         R: RegionAccess,
         Tls: crate::tls::TlsResolver<Self>,
-        PreH: RelocationHandler<Self> + ?Sized,
-        PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
@@ -135,17 +131,15 @@ impl ObjectRelocationArch for RiscV64Arch {
 }
 
 impl RiscV64Arch {
-    pub(crate) fn prepare_object_relocation_impl<D, R, Tls, PreH, PostH, Obs, H, Memory>(
+    pub(crate) fn prepare_object_relocation_impl<D, R, Tls, Obs, H, Memory>(
         state: &mut RiscV64ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, Tls, PreH, PostH, Obs, H, Memory>,
+        helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         shdrs: &[ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>],
     ) -> Result<()>
     where
         D: 'static,
         R: RegionAccess,
         Tls: crate::tls::TlsResolver<Self>,
-        PreH: RelocationHandler<Self> + ?Sized,
-        PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
@@ -183,9 +177,9 @@ impl RiscV64Arch {
         Ok(())
     }
 
-    pub(crate) fn relocate_object_impl<D, R, Tls, PreH, PostH, Obs, H, Memory>(
+    pub(crate) fn relocate_object_impl<D, R, Tls, Obs, H, Memory>(
         state: &mut RiscV64ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, Tls, PreH, PostH, Obs, H, Memory>,
+        helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,
@@ -194,8 +188,6 @@ impl RiscV64Arch {
         D: 'static,
         R: RegionAccess,
         Tls: crate::tls::TlsResolver<Self>,
-        PreH: RelocationHandler<Self> + ?Sized,
-        PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
@@ -374,15 +366,15 @@ impl RiscV64Arch {
                         .update_value::<u8>(place, |old| (old & 0xc0) | (value & 0x3f))?
                 };
             }
-            R_RISCV_SET8 => Self::write_truncated::<u8, D, R, Tls, PreH, PostH, Obs, H, Memory>(
-                helper, rel, addend, place,
-            )?,
-            R_RISCV_SET16 => Self::write_truncated::<u16, D, R, Tls, PreH, PostH, Obs, H, Memory>(
-                helper, rel, addend, place,
-            )?,
-            R_RISCV_SET32 => Self::write_truncated::<u32, D, R, Tls, PreH, PostH, Obs, H, Memory>(
-                helper, rel, addend, place,
-            )?,
+            R_RISCV_SET8 => {
+                Self::write_truncated::<u8, D, R, Tls, Obs, H, Memory>(helper, rel, addend, place)?
+            }
+            R_RISCV_SET16 => {
+                Self::write_truncated::<u16, D, R, Tls, Obs, H, Memory>(helper, rel, addend, place)?
+            }
+            R_RISCV_SET32 => {
+                Self::write_truncated::<u32, D, R, Tls, Obs, H, Memory>(helper, rel, addend, place)?
+            }
             R_RISCV_RVC_BRANCH => {
                 let off = branch_offset(helper, addend, place, rel, 256)?;
                 unsafe {
@@ -446,9 +438,9 @@ impl RiscV64Arch {
         }
     }
 
-    fn resolve_pcrel_lo12<D, R, Tls, PreH, PostH, Obs, H, Memory>(
+    fn resolve_pcrel_lo12<D, R, Tls, Obs, H, Memory>(
         state: &RiscV64ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, Tls, PreH, PostH, Obs, H, Memory>,
+        helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,
@@ -457,8 +449,6 @@ impl RiscV64Arch {
         D: 'static,
         R: RegionAccess,
         Tls: crate::tls::TlsResolver<Self>,
-        PreH: RelocationHandler<Self> + ?Sized,
-        PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
@@ -525,8 +515,8 @@ impl RiscV64Arch {
         Ok(())
     }
 
-    fn write_truncated<T, D, R, Tls, PreH, PostH, Obs, H, Memory>(
-        helper: &mut RelocHelper<'_, D, Self, R, Tls, PreH, PostH, Obs, H, Memory>,
+    fn write_truncated<T, D, R, Tls, Obs, H, Memory>(
+        helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         addend: isize,
         place: VmAddr,
@@ -536,8 +526,6 @@ impl RiscV64Arch {
         D: 'static,
         R: RegionAccess,
         Tls: crate::tls::TlsResolver<Self>,
-        PreH: RelocationHandler<Self> + ?Sized,
-        PostH: RelocationHandler<Self> + ?Sized,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
@@ -619,8 +607,8 @@ fn signed_offset(target: VmAddr, addend: isize, place: VmAddr) -> i64 {
     (target.get() as i128 + addend as i128 - place.get() as i128) as i64
 }
 
-fn branch_offset<D, R, Tls, PreH, PostH, Obs, H, Memory>(
-    helper: &mut RelocHelper<'_, D, RiscV64Arch, R, Tls, PreH, PostH, Obs, H, Memory>,
+fn branch_offset<D, R, Tls, Obs, H, Memory>(
+    helper: &mut RelocHelper<'_, D, RiscV64Arch, R, Tls, Obs, H, Memory>,
     addend: isize,
     place: VmAddr,
     rel: &ElfRelType<RiscV64Arch>,
@@ -630,8 +618,6 @@ where
     D: 'static,
     R: RegionAccess,
     Tls: crate::tls::TlsResolver<RiscV64Arch>,
-    PreH: RelocationHandler<RiscV64Arch> + ?Sized,
-    PostH: RelocationHandler<RiscV64Arch> + ?Sized,
     Obs: RelocationObserver<RiscV64Arch> + ?Sized,
     Memory: ImageMemory,
 {

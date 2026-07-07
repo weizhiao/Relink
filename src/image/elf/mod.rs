@@ -13,9 +13,7 @@ use crate::{
     lazy::traits::{LazyBinder, SupportLazy},
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
-    relocation::{
-        ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch, RelocationHandler,
-    },
+    relocation::{ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch},
     tls::TlsResolver,
 };
 
@@ -291,13 +289,11 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<A
     type Arch = Arch;
     type Tls = Tls;
 
-    fn relocate<PreH, PostH, Obs, Binder>(
+    fn relocate<Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs, Binder>,
+        args: RelocateArgs<'_, Arch, Tls, Obs, Binder>,
     ) -> Result<Self::Output>
     where
-        PreH: RelocationHandler<Arch> + ?Sized,
-        PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
         Binder: LazyBinder<Arch> + ?Sized,
     {

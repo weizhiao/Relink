@@ -3,8 +3,8 @@ mod traits;
 
 pub(crate) use event::Finalizer;
 pub use event::{
-    AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, FiniEvent, InitEvent,
-    SymbolBindingEvent,
+    AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, FiniEvent, HandleResult,
+    InitEvent, RelocationEvent, SymbolBindingEvent,
 };
 #[cfg(feature = "object")]
 pub use event::{

@@ -131,8 +131,6 @@ pub struct Linker<
     Arch: RelocationArch = crate::arch::NativeArch,
     L = Loader<(), (), Arch>,
     R = (),
-    PreH = (),
-    PostH = (),
     RelocBinder = (),
     P = DefaultRelocationPlanner,
     V = (),
@@ -141,20 +139,20 @@ pub struct Linker<
 > {
     pub(super) loader: L,
     pub(super) resolver: R,
-    pub(super) relocator: Relocator<PreH, PostH, RelocBinder>,
+    pub(super) relocator: Relocator<RelocBinder>,
     pub(super) planner: P,
     pub(super) visible_modules: V,
     stage: PhantomData<(&'a (), K, Arch, Tls, Stage)>,
 }
 
-impl<'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage> Clone
-    for Linker<'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage>
+impl<'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage> Clone
+    for Linker<'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
     L: Clone,
     R: Clone,
-    Relocator<PreH, PostH, RelocBinder>: Clone,
+    Relocator<RelocBinder>: Clone,
     P: Clone,
     V: Clone,
     Tls: TlsResolver<Arch>,
@@ -178,8 +176,6 @@ struct LinkerFields<
     Arch: RelocationArch,
     L,
     R,
-    PreH,
-    PostH,
     RelocBinder,
     P,
     V,
@@ -188,7 +184,7 @@ struct LinkerFields<
 > {
     loader: NoDrop<L>,
     resolver: NoDrop<R>,
-    relocator: NoDrop<Relocator<PreH, PostH, RelocBinder>>,
+    relocator: NoDrop<Relocator<RelocBinder>>,
     planner: NoDrop<P>,
     visible_modules: NoDrop<V>,
     stage: PhantomData<(&'a (), K, Arch, Tls, Stage)>,
@@ -214,17 +210,15 @@ where
     /// Creates a linker from preconfigured loader and relocator templates.
     #[inline]
     #[allow(clippy::type_complexity)]
-    pub const fn from_parts<D, Tls, Arch, M, Exec, PreH, PostH, RelocBinder>(
+    pub const fn from_parts<D, Tls, Arch, M, Exec, RelocBinder>(
         loader: Loader<D, Tls, Arch, M, Exec>,
-        relocator: Relocator<PreH, PostH, RelocBinder>,
+        relocator: Relocator<RelocBinder>,
     ) -> Linker<
         'a,
         K,
         Arch,
         Loader<D, Tls, Arch, M, Exec>,
         (),
-        PreH,
-        PostH,
         RelocBinder,
         DefaultRelocationPlanner,
         (),
@@ -257,7 +251,7 @@ where
     #[allow(clippy::type_complexity)]
     pub const fn for_arch<NewArch>(
         self,
-    ) -> Linker<'a, K, NewArch, Loader<(), (), NewArch>, (), (), (), (), DefaultRelocationPlanner, ()>
+    ) -> Linker<'a, K, NewArch, Loader<(), (), NewArch>, (), (), DefaultRelocationPlanner, ()>
     where
         NewArch: RelocationArch,
     {
@@ -282,17 +276,15 @@ where
     }
 }
 
-impl<'a, K, L, R, PreH, PostH, RelocBinder, P, V, Arch, Tls, Stage>
-    Linker<'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage>
+impl<'a, K, L, R, RelocBinder, P, V, Arch, Tls, Stage>
+    Linker<'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    const fn into_fields(
-        self,
-    ) -> LinkerFields<'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage> {
+    const fn into_fields(self) -> LinkerFields<'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage> {
         let this = MaybeUninit::new(self);
         let this = this.as_ptr();
 
@@ -316,7 +308,7 @@ where
     pub const fn resolver<NewR>(
         self,
         resolver: NewR,
-    ) -> Linker<'a, K, Arch, L, NewR, PreH, PostH, RelocBinder, P, V, Tls, Stage>
+    ) -> Linker<'a, K, Arch, L, NewR, RelocBinder, P, V, Tls, Stage>
     where
         R: Copy,
     {
@@ -343,7 +335,7 @@ where
     pub const fn planner<NewP>(
         self,
         planner: NewP,
-    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocBinder, NewP, V, Tls, Stage>
+    ) -> Linker<'a, K, Arch, L, R, RelocBinder, NewP, V, Tls, Stage>
     where
         P: Copy,
     {
@@ -370,7 +362,7 @@ where
     pub const fn visible_modules<NewV>(
         self,
         visible_modules: NewV,
-    ) -> Linker<'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, NewV, Tls, Stage>
+    ) -> Linker<'a, K, Arch, L, R, RelocBinder, P, NewV, Tls, Stage>
     where
         V: Copy,
     {
@@ -395,9 +387,7 @@ where
 
     /// Starts a linker run with fresh scratch storage.
     #[inline]
-    pub fn run(
-        &self,
-    ) -> LinkerRun<'_, 'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage, ()> {
+    pub fn run(&self) -> LinkerRun<'_, 'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage, ()> {
         LinkerRun {
             linker: self,
             pipeline: LinkPipeline::new(),
@@ -407,8 +397,8 @@ where
     }
 }
 
-impl<'a, K, L, R, PreH, PostH, RelocBinder, P, V, Arch, Tls, Stage>
-    Linker<'a, K, Arch, L, R, PreH, PostH, RelocBinder, P, V, Tls, Stage>
+impl<'a, K, L, R, RelocBinder, P, V, Arch, Tls, Stage>
+    Linker<'a, K, Arch, L, R, RelocBinder, P, V, Tls, Stage>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -416,12 +406,10 @@ where
     Stage: AdvanceStage,
 {
     /// Reconfigures the relocator template used for loaded modules.
-    pub fn map_relocator<NewPreH, NewPostH, NewRelocBinder>(
+    pub fn map_relocator<NewRelocBinder>(
         self,
-        configure: impl FnOnce(
-            Relocator<PreH, PostH, RelocBinder>,
-        ) -> Relocator<NewPreH, NewPostH, NewRelocBinder>,
-    ) -> Linker<'a, K, Arch, L, R, NewPreH, NewPostH, NewRelocBinder, P, V, Tls, Stage::Next> {
+        configure: impl FnOnce(Relocator<RelocBinder>) -> Relocator<NewRelocBinder>,
+    ) -> Linker<'a, K, Arch, L, R, NewRelocBinder, P, V, Tls, Stage::Next> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -434,7 +422,7 @@ where
 }
 
 impl<'a, K, D, Tls, Arch, M, Exec, R, P, V>
-    Linker<'a, K, Arch, Loader<D, Tls, Arch, M, Exec>, R, (), (), (), P, V, Tls, Stage0>
+    Linker<'a, K, Arch, Loader<D, Tls, Arch, M, Exec>, R, (), P, V, Tls, Stage0>
 where
     K: Clone + Ord,
     D: 'static,
@@ -453,20 +441,7 @@ where
         configure: impl FnOnce(
             Loader<D, Tls, Arch, M, Exec>,
         ) -> Loader<NewD, NewTls, Arch, NewM, NewExec>,
-    ) -> Linker<
-        'a,
-        K,
-        Arch,
-        Loader<NewD, NewTls, Arch, NewM, NewExec>,
-        R,
-        (),
-        (),
-        (),
-        P,
-        V,
-        NewTls,
-        Stage0,
-    >
+    ) -> Linker<'a, K, Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), P, V, NewTls, Stage0>
     where
         NewD: 'static,
         NewTls: TlsResolver<Arch>,

@@ -2,13 +2,112 @@ use super::lifecycle::{Finalizer, FiniEvent};
 use crate::{
     Result,
     arch::NativeArch,
-    elf::{ElfRelType, ElfSymbol, Lifecycle},
-    image::ElfCore,
+    elf::{ElfRelEntry, ElfRelType, ElfSymbol, HashTable, Lifecycle, SymbolEntry, SymbolTableView},
+    image::{ElfCore, ModuleScope},
     input::Path,
     memory::{HostRegion, RegionAccess, VmAddr},
-    relocation::RelocationArch,
+    relocation::{RelocationArch, SymDef, find_symdef_impl},
     tls::TlsResolver,
 };
+
+/// Result of a relocation hook.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandleResult {
+    /// The handler did not process this relocation.
+    Unhandled,
+    /// The handler processed this relocation.
+    Handled,
+}
+
+impl HandleResult {
+    /// Returns whether the handler left the relocation for the default path.
+    #[inline]
+    pub const fn is_unhandled(self) -> bool {
+        matches!(self, Self::Unhandled)
+    }
+}
+
+/// Context passed to relocation observer hooks.
+///
+/// This struct provides access to the relocation entry, the module being relocated,
+/// and the current symbol resolution scope.
+pub struct RelocationEvent<
+    'a,
+    D: 'static,
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = HostRegion,
+    Tls: TlsResolver<Arch> = (),
+    H = HashTable<<Arch as RelocationArch>::Layout>,
+> {
+    rel: &'a ElfRelType<Arch>,
+    lib: &'a ElfCore<D, Arch, R, Tls>,
+    symbols: SymbolTableView<'a, Arch::Layout, H>,
+    scope: &'a ModuleScope<Arch, Tls>,
+}
+
+impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>, H>
+    RelocationEvent<'a, D, Arch, R, Tls, H>
+{
+    /// Construct a new `RelocationEvent`.
+    #[inline]
+    pub(crate) fn new(
+        rel: &'a ElfRelType<Arch>,
+        lib: &'a ElfCore<D, Arch, R, Tls>,
+        symbols: SymbolTableView<'a, Arch::Layout, H>,
+        scope: &'a ModuleScope<Arch, Tls>,
+    ) -> Self {
+        Self {
+            rel,
+            lib,
+            symbols,
+            scope,
+        }
+    }
+
+    /// Access the relocation entry.
+    #[inline]
+    pub fn rel(&self) -> &ElfRelType<Arch> {
+        self.rel
+    }
+
+    /// Access the core component where the relocation appears.
+    #[inline]
+    pub fn lib(&self) -> &ElfCore<D, Arch, R, Tls> {
+        self.lib
+    }
+
+    /// Access the current resolution scope.
+    #[inline]
+    pub fn scope(&self) -> &ModuleScope<Arch, Tls> {
+        self.scope
+    }
+
+    /// Access a symbol table entry by index for this relocation context.
+    #[inline]
+    pub fn symbol(&self, r_sym: usize) -> SymbolEntry<'a, Arch::Layout> {
+        self.symbols.symbol_idx(r_sym)
+    }
+
+    /// Access the symbol referenced by the current relocation, if it has one.
+    #[inline]
+    pub fn relocation_symbol(&self) -> Option<SymbolEntry<'a, Arch::Layout>> {
+        let r_sym = self.rel.r_symbol();
+        (r_sym != 0).then(|| self.symbol(r_sym))
+    }
+
+    /// Find symbol definition in the current scope.
+    #[inline]
+    pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, Arch, Tls>> {
+        let symbol = self.symbol(r_sym);
+        find_symdef_impl(
+            self.lib,
+            self.scope,
+            symbol.symbol(),
+            symbol.info(),
+            self.lib.symbolic(),
+        )
+    }
+}
 
 /// Ordinary symbol relocation binding event.
 ///

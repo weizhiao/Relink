@@ -5,7 +5,8 @@ use elf_loader::{
     Loader, Result,
     arch::NativeArch,
     memory::RegionAccess,
-    relocation::{HandleResult, RelocationContext, RelocationHandler, Relocator},
+    observer::RelocationObserver,
+    relocation::{HandleResult, RelocationEvent, Relocator},
     tls::TlsResolver,
 };
 
@@ -17,10 +18,10 @@ fn my_print(s: &str) {
     println!("Caught by MyRelocHandler: {}", s);
 }
 
-impl RelocationHandler for MyRelocHandler {
-    fn handle<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>, H>(
-        &self,
-        ctx: &RelocationContext<'_, D, NativeArch, R, Tls, H>,
+impl RelocationObserver for MyRelocHandler {
+    fn on_relocation_pre<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>, H>(
+        &mut self,
+        ctx: &RelocationEvent<'_, D, NativeArch, R, Tls, H>,
     ) -> Result<HandleResult> {
         let Some(symbol) = ctx.relocation_symbol() else {
             return Ok(HandleResult::Unhandled);
@@ -48,13 +49,13 @@ fn main() -> Result<()> {
     let fixtures = fixture_support::ensure_all();
 
     let _liba = Relocator::new()
-        .pre_handler(MyRelocHandler)
         .run(LOADER.load_dylib(fixtures.liba_str())?)
+        .observer(MyRelocHandler)
         .relocate()?;
 
     let libb = Relocator::new()
-        .pre_handler(MyRelocHandler)
         .run(LOADER.load_dylib(fixtures.libb_str())?)
+        .observer(MyRelocHandler)
         .scope([&_liba])
         .relocate()?;
 

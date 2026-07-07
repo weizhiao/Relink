@@ -10,7 +10,7 @@ use crate::{
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     observer::{RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
-    relocation::{HandleResult, RelocationArch, RelocationContext, RelocationHandler},
+    relocation::{HandleResult, RelocationArch, RelocationEvent},
     runtime::{CodeContext, CodeExecutor},
     segment::ElfSegments,
     tls::{TLS_GET_ADDR_SYMBOL, TlsResolver},
@@ -23,8 +23,6 @@ pub(crate) struct RelocHelper<
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> + 'static,
-    PreH: ?Sized,
-    PostH: ?Sized,
     Obs: ?Sized,
     H = HashTable<<Arch as RelocationArch>::Layout>,
     Memory = &'find ElfSegments<R>,
@@ -33,31 +31,23 @@ pub(crate) struct RelocHelper<
     symbols: SymbolTableView<'find, Arch::Layout, H>,
     memory: Memory,
     pub(crate) scope: ModuleScope<Arch, Tls>,
-    pub(crate) pre_handler: &'find PreH,
-    pub(crate) post_handler: &'find PostH,
     pub(crate) observer: &'find mut Obs,
 }
 
-impl<'find, D, Arch, R, Tls, PreH, PostH, Obs, H, Memory>
-    RelocHelper<'find, D, Arch, R, Tls, PreH, PostH, Obs, H, Memory>
+impl<'find, D, Arch, R, Tls, Obs, H, Memory> RelocHelper<'find, D, Arch, R, Tls, Obs, H, Memory>
 where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
-    PreH: RelocationHandler<Arch> + ?Sized,
-    PostH: RelocationHandler<Arch> + ?Sized,
     Obs: RelocationObserver<Arch> + ?Sized,
     Memory: ImageMemory,
 {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         core: &'find ElfCore<D, Arch, R, Tls>,
         symbols: SymbolTableView<'find, Arch::Layout, H>,
         memory: Memory,
         scope: ModuleScope<Arch, Tls>,
-        pre_handler: &'find PreH,
-        post_handler: &'find PostH,
         observer: &'find mut Obs,
     ) -> Self {
         Self {
@@ -65,8 +55,6 @@ where
             symbols,
             memory,
             scope,
-            pre_handler,
-            post_handler,
             observer,
         }
     }
@@ -78,14 +66,14 @@ where
 
     #[inline]
     pub(crate) fn handle_pre(&mut self, rel: &ElfRelType<Arch>) -> Result<HandleResult> {
-        let hctx = RelocationContext::new(rel, self.core, self.symbols, &self.scope);
-        self.pre_handler.handle(&hctx)
+        let hctx = RelocationEvent::new(rel, self.core, self.symbols, &self.scope);
+        self.observer.on_relocation_pre(&hctx)
     }
 
     #[inline]
     pub(crate) fn handle_post(&mut self, rel: &ElfRelType<Arch>) -> Result<HandleResult> {
-        let hctx = RelocationContext::new(rel, self.core, self.symbols, &self.scope);
-        self.post_handler.handle(&hctx)
+        let hctx = RelocationEvent::new(rel, self.core, self.symbols, &self.scope);
+        self.observer.on_relocation_post(&hctx)
     }
 
     #[cold]

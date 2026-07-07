@@ -18,7 +18,7 @@ use crate::{
     memory::{ImageMemory, RegionAccess, VmOffset},
     observer::{LoadObserver, RelocationObserver},
     os::Mmap,
-    relocation::{RelocationArch, RelocationHandler},
+    relocation::RelocationArch,
     runtime::CodeExecutor,
     tls::TlsResolver,
 };
@@ -30,7 +30,7 @@ use alloc::{
 use core::borrow::Borrow;
 
 #[allow(private_bounds)]
-impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocBinder, P, V, Stage, Obs>
+impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Stage, Obs>
     LinkerRun<
         'run,
         'a,
@@ -38,8 +38,6 @@ impl<'run, 'a, K, D, Tls, Arch, M, Exec, Resolver, PreH, PostH, RelocBinder, P, 
         Arch,
         Loader<D, Tls, Arch, M, Exec>,
         Resolver,
-        PreH,
-        PostH,
         RelocBinder,
         P,
         V,
@@ -55,8 +53,6 @@ where
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
-    PreH: RelocationHandler<Arch> + Clone,
-    PostH: RelocationHandler<Arch> + Clone,
     Obs: LoadObserver<D, Arch> + RelocationObserver<Arch>,
     RelocBinder: LazyBinder<Arch> + Clone,
     P: RelocationPlanner<K, D, Arch, M::Region, Tls>,

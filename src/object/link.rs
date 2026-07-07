@@ -13,9 +13,7 @@ use crate::{
         Finalizer, InitEvent, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent,
     },
     relocate_context_error,
-    relocation::{
-        ObjectRelocationArch, RelocHelper, RelocateArgs, RelocationHandler, find_symdef_impl,
-    },
+    relocation::{ObjectRelocationArch, RelocHelper, RelocateArgs, find_symdef_impl},
     tls::TlsResolver,
 };
 
@@ -55,23 +53,17 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn relocate_impl<PreH, PostH, Obs, Binder>(
+    pub(crate) fn relocate_impl<Obs, Binder>(
         mut self,
-        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs, Binder>,
+        args: RelocateArgs<'_, Arch, Tls, Obs, Binder>,
     ) -> Result<LoadedObject<D, Arch, R, Tls>>
     where
-        PreH: RelocationHandler<Arch> + ?Sized,
-        PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
         Binder: LazyBinder<Arch> + ?Sized,
     {
         logging::debug!("Relocating object: {}", self.core.name());
         let RelocateArgs {
-            scope,
-            pre_handler,
-            post_handler,
-            observer,
-            ..
+            scope, observer, ..
         } = args;
         self.simplify_symbols(&scope, observer)?;
 
@@ -82,8 +74,6 @@ where
             self.symtab.view(),
             relocation_segments,
             scope,
-            pre_handler,
-            post_handler,
             observer,
         );
         let shdrs = self.sections.headers();

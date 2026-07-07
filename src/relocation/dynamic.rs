@@ -8,7 +8,7 @@ use crate::{
     logging,
     memory::{ImageMemory, ImageMemoryExt, MappedView, RegionAccess, VmOffset},
     observer::{DynamicRelocatedEvent, Finalizer, RelocationObserver},
-    relocation::{RelocHelper, RelocateArgs, RelocationArch, RelocationHandler, SymDef},
+    relocation::{RelocHelper, RelocateArgs, RelocationArch, SymDef},
     runtime::CodeContext,
     tls::{TlsRelocOutcome, TlsResolver},
 };
@@ -27,14 +27,12 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         Ok(())
     }
 
-    pub(crate) fn relocate_impl<PreH, PostH, Obs, Binder>(
+    pub(crate) fn relocate_impl<Obs, Binder>(
         self,
-        args: RelocateArgs<'_, Arch, Tls, PreH, PostH, Obs, Binder>,
+        args: RelocateArgs<'_, Arch, Tls, Obs, Binder>,
     ) -> Result<LoadedCore<D, Arch, R, Tls>>
     where
         D: 'static,
-        PreH: RelocationHandler<Arch> + ?Sized,
-        PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
         Binder: LazyBinder<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
@@ -45,8 +43,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
             scope,
             binding,
             lazy_binder,
-            pre_handler,
-            post_handler,
             observer,
             ..
         } = args;
@@ -64,8 +60,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
             self.symtab().view(),
             self.core_ref().segments(),
             scope,
-            pre_handler,
-            post_handler,
             observer,
         );
 
@@ -193,15 +187,13 @@ pub(crate) struct DynamicRelocation<Arch: RelocationArch = crate::arch::NativeAr
 
 impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
     /// Relocate PLT (Procedure Linkage Table) entries
-    fn relocate_pltrel<PreH, PostH, Obs, Binder>(
+    fn relocate_pltrel<Obs, Binder>(
         &self,
         lazy_binding: bool,
-        helper: &mut RelocHelper<'_, D, Arch, R, Tls, PreH, PostH, Obs>,
+        helper: &mut RelocHelper<'_, D, Arch, R, Tls, Obs>,
         lazy_binder: &Binder,
     ) -> Result<&Self>
     where
-        PreH: RelocationHandler<Arch> + ?Sized,
-        PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
         Binder: LazyBinder<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
@@ -285,13 +277,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
     }
 
     /// Perform dynamic relocations (non-PLT, non-relative)
-    fn relocate_dynrel<PreH, PostH, Obs>(
+    fn relocate_dynrel<Obs>(
         &self,
-        helper: &mut RelocHelper<'_, D, Arch, R, Tls, PreH, PostH, Obs>,
+        helper: &mut RelocHelper<'_, D, Arch, R, Tls, Obs>,
     ) -> Result<&Self>
     where
-        PreH: RelocationHandler<Arch> + ?Sized,
-        PostH: RelocationHandler<Arch> + ?Sized,
         Obs: RelocationObserver<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
     {

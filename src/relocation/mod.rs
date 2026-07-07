@@ -7,9 +7,9 @@
 //! This module exposes the main customization points used during relocation:
 //!
 //! - [`crate::image::SyntheticModule`] for providing external symbol addresses
-//! - [`RelocationHandler`] for intercepting or overriding relocations
-//! - [`crate::observer::RelocationObserver`] for lifecycle and runtime binding hooks
-//! - [`RelocationContext`] for inspecting the current relocation and search scope
+//! - [`crate::observer::RelocationObserver`] for relocation, lifecycle, and
+//!   runtime binding hooks
+//! - [`RelocationEvent`] for inspecting the current relocation and search scope
 //! - binding policy and lazy-fixup support configured through `Relocator`
 
 mod defs;
@@ -26,6 +26,7 @@ pub(crate) use helper::{RelocHelper, SymDef, find_symdef_impl};
 pub use traits::{ObjectRelocationArch, RelocationArch};
 pub(crate) use traits::{Relocatable, RelocateArgs, RelocationValueInput, RelocationValueProvider};
 
+pub use crate::observer::{HandleResult, RelocationEvent};
 pub use relocator::Relocator;
 pub use run::RelocatorRun;
-pub use traits::{BindingMode, HandleResult, RelocationContext, RelocationHandler};
+pub use traits::BindingMode;

@@ -3,9 +3,7 @@ use crate::{
     image::{ModuleHandle, ModuleScope, ModuleScopeBuilder},
     lazy::traits::{LazyBinder, SupportLazy},
     observer::RelocationObserver,
-    relocation::{
-        BindingMode, Relocatable, RelocateArgs, RelocationArch, RelocationHandler, Relocator,
-    },
+    relocation::{BindingMode, Relocatable, RelocateArgs, RelocationArch, Relocator},
     tls::TlsResolver,
 };
 use core::marker::PhantomData;
@@ -17,8 +15,6 @@ use core::marker::PhantomData;
 pub struct RelocatorRun<
     'cfg,
     T,
-    PreH = (),
-    PostH = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     Obs = (),
     Tls: TlsResolver<Arch> = (),
@@ -29,17 +25,17 @@ pub struct RelocatorRun<
     scope: ScopeState,
     observer: Obs,
     binding: BindingMode,
-    relocator: &'cfg Relocator<PreH, PostH, Binder>,
+    relocator: &'cfg Relocator<Binder>,
     _target: PhantomData<fn() -> (Arch, Tls)>,
 }
 
-impl<PreH, PostH, Binder> Relocator<PreH, PostH, Binder> {
+impl<Binder> Relocator<Binder> {
     /// Starts a relocation run using this reusable configuration.
     #[inline]
     pub fn run<D, T, Arch, Tls>(
         &self,
         object: T,
-    ) -> RelocatorRun<'_, T, PreH, PostH, Arch, (), Tls, ModuleScopeBuilder<Arch, Tls>, Binder>
+    ) -> RelocatorRun<'_, T, Arch, (), Tls, ModuleScopeBuilder<Arch, Tls>, Binder>
     where
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
@@ -56,8 +52,8 @@ impl<PreH, PostH, Binder> Relocator<PreH, PostH, Binder> {
     }
 }
 
-impl<'cfg, T, PreH, PostH, Arch, Obs, Tls, ScopeState, Binder> Clone
-    for RelocatorRun<'cfg, T, PreH, PostH, Arch, Obs, Tls, ScopeState, Binder>
+impl<'cfg, T, Arch, Obs, Tls, ScopeState, Binder> Clone
+    for RelocatorRun<'cfg, T, Arch, Obs, Tls, ScopeState, Binder>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -78,8 +74,8 @@ where
     }
 }
 
-impl<'cfg, T, PreH, PostH, Arch, Obs, Tls, ScopeState, Binder>
-    RelocatorRun<'cfg, T, PreH, PostH, Arch, Obs, Tls, ScopeState, Binder>
+impl<'cfg, T, Arch, Obs, Tls, ScopeState, Binder>
+    RelocatorRun<'cfg, T, Arch, Obs, Tls, ScopeState, Binder>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -89,7 +85,7 @@ where
     pub fn observer<NewObs>(
         self,
         observer: NewObs,
-    ) -> RelocatorRun<'cfg, T, PreH, PostH, Arch, NewObs, Tls, ScopeState, Binder>
+    ) -> RelocatorRun<'cfg, T, Arch, NewObs, Tls, ScopeState, Binder>
     where
         NewObs: RelocationObserver<Arch>,
     {
@@ -125,8 +121,8 @@ where
     }
 }
 
-impl<'cfg, T, PreH, PostH, Arch, Obs, Tls, Binder>
-    RelocatorRun<'cfg, T, PreH, PostH, Arch, Obs, Tls, ModuleScopeBuilder<Arch, Tls>, Binder>
+impl<'cfg, T, Arch, Obs, Tls, Binder>
+    RelocatorRun<'cfg, T, Arch, Obs, Tls, ModuleScopeBuilder<Arch, Tls>, Binder>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -146,7 +142,7 @@ where
     pub fn shared_scope(
         self,
         scope: ModuleScope<Arch, Tls>,
-    ) -> RelocatorRun<'cfg, T, PreH, PostH, Arch, Obs, Tls, ModuleScope<Arch, Tls>, Binder> {
+    ) -> RelocatorRun<'cfg, T, Arch, Obs, Tls, ModuleScope<Arch, Tls>, Binder> {
         RelocatorRun {
             object: self.object,
             scope,
@@ -168,8 +164,8 @@ where
     }
 }
 
-impl<'cfg, T, PreH, PostH, Arch, Obs, Tls, ScopeState, Binder>
-    RelocatorRun<'cfg, T, PreH, PostH, Arch, Obs, Tls, ScopeState, Binder>
+impl<'cfg, T, Arch, Obs, Tls, ScopeState, Binder>
+    RelocatorRun<'cfg, T, Arch, Obs, Tls, ScopeState, Binder>
 where
     T: SupportLazy,
     Arch: RelocationArch,
@@ -191,13 +187,11 @@ where
     }
 }
 
-impl<'cfg, T, PreH, PostH, Arch, Obs, Tls, Binder>
-    RelocatorRun<'cfg, T, PreH, PostH, Arch, Obs, Tls, ModuleScopeBuilder<Arch, Tls>, Binder>
+impl<'cfg, T, Arch, Obs, Tls, Binder>
+    RelocatorRun<'cfg, T, Arch, Obs, Tls, ModuleScopeBuilder<Arch, Tls>, Binder>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
-    PreH: RelocationHandler<Arch>,
-    PostH: RelocationHandler<Arch>,
     Obs: RelocationObserver<Arch>,
     Binder: LazyBinder<Arch>,
 {
@@ -220,20 +214,16 @@ where
             scope: scope.into_scope(),
             binding,
             lazy_binder: &relocator.lazy_binder,
-            pre_handler: &relocator.pre_handler,
-            post_handler: &relocator.post_handler,
             observer: &mut observer,
         })
     }
 }
 
-impl<'cfg, T, PreH, PostH, Arch, Obs, Tls, Binder>
-    RelocatorRun<'cfg, T, PreH, PostH, Arch, Obs, Tls, ModuleScope<Arch, Tls>, Binder>
+impl<'cfg, T, Arch, Obs, Tls, Binder>
+    RelocatorRun<'cfg, T, Arch, Obs, Tls, ModuleScope<Arch, Tls>, Binder>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
-    PreH: RelocationHandler<Arch>,
-    PostH: RelocationHandler<Arch>,
     Obs: RelocationObserver<Arch>,
     Binder: LazyBinder<Arch>,
 {
@@ -256,8 +246,6 @@ where
             scope,
             binding,
             lazy_binder: &relocator.lazy_binder,
-            pre_handler: &relocator.pre_handler,
-            post_handler: &relocator.post_handler,
             observer: &mut observer,
         })
     }

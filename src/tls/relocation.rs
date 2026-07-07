@@ -5,7 +5,7 @@ use crate::{
     image::Module,
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
-    relocation::{RelocHelper, RelocationArch, RelocationHandler, SymDef},
+    relocation::{RelocHelper, RelocationArch, SymDef},
     tls::TlsResolver,
 };
 
@@ -19,15 +19,12 @@ struct TlsDefinedSymbol<'a, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'stat
     source: &'a dyn Module<Arch, Tls>,
 }
 
-impl<'find, D, Arch, R, Tls, PreH, PostH, Obs, H, Memory>
-    RelocHelper<'find, D, Arch, R, Tls, PreH, PostH, Obs, H, Memory>
+impl<'find, D, Arch, R, Tls, Obs, H, Memory> RelocHelper<'find, D, Arch, R, Tls, Obs, H, Memory>
 where
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
-    PreH: RelocationHandler<Arch> + ?Sized,
-    PostH: RelocationHandler<Arch> + ?Sized,
     Obs: RelocationObserver<Arch> + ?Sized,
     Memory: ImageMemory,
     <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,

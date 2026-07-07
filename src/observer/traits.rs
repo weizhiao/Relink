@@ -1,6 +1,6 @@
 use super::{
-    AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, InitEvent,
-    SymbolBindingEvent,
+    AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, HandleResult, InitEvent,
+    RelocationEvent, SymbolBindingEvent,
 };
 #[cfg(feature = "object")]
 use super::{
@@ -75,6 +75,24 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
 /// module loading, or keep external debugger state without Relink owning those
 /// structures.
 pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
+    /// Called before built-in relocation handling.
+    #[inline]
+    fn on_relocation_pre<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
+        &mut self,
+        _ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
+    ) -> Result<HandleResult> {
+        Ok(HandleResult::Unhandled)
+    }
+
+    /// Called after built-in relocation handling did not handle a relocation.
+    #[inline]
+    fn on_relocation_post<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
+        &mut self,
+        _ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
+    ) -> Result<HandleResult> {
+        Ok(HandleResult::Unhandled)
+    }
+
     /// Called before initialization functions are executed.
     #[inline]
     fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
@@ -179,6 +197,22 @@ where
     O: RelocationObserver<Arch> + ?Sized,
 {
     #[inline]
+    fn on_relocation_pre<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
+        &mut self,
+        ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
+    ) -> Result<HandleResult> {
+        (**self).on_relocation_pre(ctx)
+    }
+
+    #[inline]
+    fn on_relocation_post<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
+        &mut self,
+        ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
+    ) -> Result<HandleResult> {
+        (**self).on_relocation_post(ctx)
+    }
+
+    #[inline]
     fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
         event: &mut InitEvent<'_, D, Arch, R, Tls>,
@@ -270,6 +304,22 @@ where
     Arch: RelocationArch,
     O: RelocationObserver<Arch> + ?Sized,
 {
+    #[inline]
+    fn on_relocation_pre<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
+        &mut self,
+        ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
+    ) -> Result<HandleResult> {
+        (**self).on_relocation_pre(ctx)
+    }
+
+    #[inline]
+    fn on_relocation_post<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
+        &mut self,
+        ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
+    ) -> Result<HandleResult> {
+        (**self).on_relocation_post(ctx)
+    }
+
     #[inline]
     fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,

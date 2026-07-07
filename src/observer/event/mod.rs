@@ -12,6 +12,6 @@ pub use load::{AfterDynamicLoadEvent, BeforeDynamicLoadEvent};
 pub use object::{
     AfterObjectLoadEvent, BeforeObjectLoadEvent, ObjectRelocatedEvent, SectionLayoutEvent,
 };
-pub use relocation::{DynamicRelocatedEvent, SymbolBindingEvent};
+pub use relocation::{DynamicRelocatedEvent, HandleResult, RelocationEvent, SymbolBindingEvent};
 
 pub(crate) use lifecycle::Finalizer;
