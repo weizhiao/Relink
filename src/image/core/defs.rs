@@ -242,8 +242,13 @@ impl<'lib, T> Deref for Symbol<'lib, T> {
 }
 
 impl<'lib, T> Symbol<'lib, T> {
+    /// Creates a symbol handle from a raw runtime address.
+    ///
+    /// # Safety
+    /// The caller must ensure `ptr` points to a valid symbol of type `T`
+    /// and that the referenced code or data outlives `'lib`.
     #[inline]
-    pub(crate) const fn from_ptr(ptr: *mut ()) -> Self {
+    pub unsafe fn from_raw(ptr: *mut ()) -> Self {
         Self {
             ptr,
             pd: PhantomData,

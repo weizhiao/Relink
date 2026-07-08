@@ -682,15 +682,17 @@ impl<L: ElfLayout> Clone for ElfSymbol<L> {
 
 impl<L: ElfLayout> ElfSymbol<L> {
     pub(crate) fn synthetic(
+        name: usize,
         value: usize,
         size: usize,
         bind: ElfSymbolBind,
         symbol_type: ElfSymbolType,
+        other: u8,
         section_index: ElfSectionIndex,
     ) -> Self {
         let st_info = (bind.raw() << 4) | (symbol_type.raw() & 0xf);
         Self {
-            sym: L::Sym::from_fields(0, value, size, st_info, 0, section_index.raw()),
+            sym: L::Sym::from_fields(name, value, size, st_info, other, section_index.raw()),
         }
     }
 

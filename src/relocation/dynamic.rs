@@ -334,9 +334,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                     source,
                 }) = helper.find_symdef(&symbol)
                 {
+                    let symdef = SymDef::defined(sym, source);
                     let mut src = vec![0; len];
-                    let memory = source.memory();
-                    memory.read_bytes(memory.base() + VmOffset::new(sym.st_value()), &mut src)?;
+                    source.memory().read_bytes(symdef.addr(), &mut src)?;
                     helper.memory().write_bytes(base + rel.r_offset(), &src)?;
                     continue;
                 }

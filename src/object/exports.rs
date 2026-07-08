@@ -75,17 +75,21 @@ mod tests {
     fn strong_export_replaces_weak_export() {
         let mut exports = ObjectExports::<NativeElfLayout>::empty();
         let weak = ElfSymbol::synthetic(
+            0,
             0x1000,
             0,
             ElfSymbolBind::WEAK,
             ElfSymbolType::FUNC,
+            0,
             ElfSectionIndex::ABS,
         );
         let strong = ElfSymbol::synthetic(
+            0,
             0x2000,
             0,
             ElfSymbolBind::GLOBAL,
             ElfSymbolType::FUNC,
+            0,
             ElfSectionIndex::ABS,
         );
 

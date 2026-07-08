@@ -182,15 +182,18 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
 
     /// Computes the symbol address (base + st_value).
     ///
-    /// For regular symbols, returns base + st_value.
+    /// For regular symbols, returns base + st_value. For absolute symbols,
+    /// returns st_value unchanged.
     /// For IFUNC symbols, returns the resolver address without executing it.
     /// For undefined weak symbols, returns null.
     pub(crate) fn addr(&self) -> VmAddr {
         match self {
             Self::Defined { symbol, source } => {
-                let memory = source.memory();
-                let base = memory.base();
-                base + VmOffset::new(symbol.st_value())
+                if symbol.st_shndx().is_abs() {
+                    VmAddr::new(symbol.st_value())
+                } else {
+                    source.memory().base() + VmOffset::new(symbol.st_value())
+                }
             }
             Self::WeakUndef => VmAddr::null(),
         }

@@ -1,4 +1,4 @@
-use super::{Module, ModuleHandle, SymbolExports, SymbolLookup};
+use super::{Module, ModuleHandle, ModuleTls, SymbolExports, SymbolLookup};
 use crate::{
     Result,
     arch::NativeArch,
@@ -6,9 +6,10 @@ use crate::{
     elf::{ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType},
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
+    sync::Arc,
     tls::TlsResolver,
 };
-use alloc::{collections::BTreeMap, string::String, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 use core::ptr::NonNull;
 
 /// One synthetic symbol exported by a [`SyntheticModule`].
@@ -23,35 +24,61 @@ pub struct SyntheticSymbol {
     size: usize,
     bind: ElfSymbolBind,
     symbol_type: ElfSymbolType,
+    other: u8,
+    section_index: ElfSectionIndex,
 }
 
 impl SyntheticSymbol {
     /// Creates a function symbol backed by an absolute runtime address.
     #[inline]
     pub fn function(name: impl Into<String>, value: *const ()) -> Self {
-        Self::typed(name, value as usize, 0, ElfSymbolType::FUNC)
+        Self::from_fields(
+            name,
+            value as usize,
+            0,
+            ElfSymbolBind::GLOBAL,
+            ElfSymbolType::FUNC,
+            0,
+            ElfSectionIndex::ABS,
+        )
     }
 
     /// Creates an object symbol backed by an absolute runtime address.
     #[inline]
     pub fn object(name: impl Into<String>, value: *const (), size: usize) -> Self {
-        Self::typed(name, value as usize, size, ElfSymbolType::OBJECT)
+        Self::from_fields(
+            name,
+            value as usize,
+            size,
+            ElfSymbolBind::GLOBAL,
+            ElfSymbolType::OBJECT,
+            0,
+            ElfSectionIndex::ABS,
+        )
     }
 
-    /// Creates a synthetic symbol with explicit ELF symbol type.
+    /// Creates a synthetic symbol with explicit ELF symbol fields.
+    ///
+    /// The synthetic module fills `st_name` when the symbol is inserted, so the
+    /// caller controls every field except the internal name-table slot.
     #[inline]
-    pub fn typed(
+    pub fn from_fields(
         name: impl Into<String>,
         value: usize,
         size: usize,
+        bind: ElfSymbolBind,
         symbol_type: ElfSymbolType,
+        other: u8,
+        section_index: ElfSectionIndex,
     ) -> Self {
         Self {
             name: name.into(),
             value,
             size,
-            bind: ElfSymbolBind::GLOBAL,
+            bind,
             symbol_type,
+            other,
+            section_index,
         }
     }
 
@@ -68,40 +95,92 @@ impl SyntheticSymbol {
         self.size = size;
         self
     }
+
+    /// Sets the ELF `st_other` value.
+    #[inline]
+    pub fn with_other(mut self, other: u8) -> Self {
+        self.other = other;
+        self
+    }
+
+    /// Sets the ELF section index used by the synthetic symbol.
+    ///
+    /// Function and object symbols default to [`ElfSectionIndex::ABS`] because
+    /// they normally carry an already-resolved runtime address. TLS and
+    /// module-relative symbols can override this with their real section index.
+    #[inline]
+    pub fn with_section(mut self, section_index: ElfSectionIndex) -> Self {
+        self.section_index = section_index;
+        self
+    }
 }
 
-struct SyntheticMemory;
+#[derive(Clone)]
+enum SyntheticMemory {
+    Empty { base: VmAddr },
+    Backed(Arc<dyn ImageMemory>),
+}
 
-static SYNTHETIC_MEMORY: SyntheticMemory = SyntheticMemory;
+impl SyntheticMemory {
+    #[inline]
+    const fn empty(base: VmAddr) -> Self {
+        Self::Empty { base }
+    }
+
+    #[inline]
+    fn backed<M>(memory: M) -> Self
+    where
+        M: ImageMemory + 'static,
+    {
+        Self::Backed(Arc::from(Box::new(memory) as Box<dyn ImageMemory>))
+    }
+}
 
 impl ImageMemory for SyntheticMemory {
     #[inline]
     fn base(&self) -> VmAddr {
-        VmAddr::null()
+        match self {
+            Self::Empty { base } => *base,
+            Self::Backed(memory) => memory.base(),
+        }
     }
 
     #[inline]
-    fn host_ptr(&self, _addr: VmAddr) -> Option<NonNull<u8>> {
-        None
+    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
+        match self {
+            Self::Empty { .. } => None,
+            Self::Backed(memory) => memory.host_ptr(addr),
+        }
     }
 
     #[inline]
-    fn host_ptr_range(&self, _addr: VmAddr, _len: usize) -> Option<NonNull<u8>> {
-        None
+    fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>> {
+        match self {
+            Self::Empty { .. } => None,
+            Self::Backed(memory) => memory.host_ptr_range(addr, len),
+        }
     }
 
     #[inline]
-    fn read_bytes(&self, _addr: VmAddr, _dst: &mut [u8]) -> Result<()> {
-        Err(custom_error(
-            "synthetic modules do not expose readable image bytes",
-        ))
+    fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
+        match self {
+            Self::Empty { .. } if dst.is_empty() => Ok(()),
+            Self::Empty { .. } => Err(custom_error(
+                "synthetic modules do not expose readable image bytes",
+            )),
+            Self::Backed(memory) => memory.read_bytes(addr, dst),
+        }
     }
 
     #[inline]
-    fn write_bytes(&self, _addr: VmAddr, _src: &[u8]) -> Result<()> {
-        Err(custom_error(
-            "synthetic modules do not expose writable image bytes",
-        ))
+    fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
+        match self {
+            Self::Empty { .. } if src.is_empty() => Ok(()),
+            Self::Empty { .. } => Err(custom_error(
+                "synthetic modules do not expose writable image bytes",
+            )),
+            Self::Backed(memory) => memory.write_bytes(addr, src),
+        }
     }
 }
 
@@ -112,6 +191,8 @@ impl ImageMemory for SyntheticMemory {
 /// symbol metadata.
 pub struct SyntheticModule<Arch: RelocationArch = NativeArch> {
     name: String,
+    memory: SyntheticMemory,
+    tls: ModuleTls,
     names: Vec<String>,
     symbols: Vec<ElfSymbol<Arch::Layout>>,
     index: BTreeMap<String, usize>,
@@ -122,6 +203,8 @@ impl<Arch: RelocationArch> Clone for SyntheticModule<Arch> {
     fn clone(&self) -> Self {
         Self {
             name: self.name.clone(),
+            memory: self.memory.clone(),
+            tls: self.tls,
             names: self.names.clone(),
             symbols: self.symbols.clone(),
             index: self.index.clone(),
@@ -146,28 +229,61 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     pub fn empty(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            memory: SyntheticMemory::empty(VmAddr::null()),
+            tls: ModuleTls::NONE,
             names: Vec::new(),
             symbols: Vec::new(),
             index: BTreeMap::new(),
         }
     }
 
+    /// Uses a real image-memory backend for this synthetic module.
+    ///
+    /// This is required when synthetic symbols may be used as byte sources, such
+    /// as for COPY relocations against synthetic object symbols.
+    #[inline]
+    pub fn with_memory<M>(mut self, memory: M) -> Self
+    where
+        M: ImageMemory + 'static,
+    {
+        self.memory = SyntheticMemory::backed(memory);
+        self
+    }
+
+    /// Sets TLS metadata exposed by this synthetic module.
+    #[inline]
+    pub fn with_tls(mut self, tls: ModuleTls) -> Self {
+        self.tls = tls;
+        self
+    }
+
     /// Inserts or replaces one symbol.
     pub fn insert(&mut self, symbol: SyntheticSymbol) {
         let name = symbol.name;
-        let elf_symbol = ElfSymbol::synthetic(
-            symbol.value,
-            symbol.size,
-            symbol.bind,
-            symbol.symbol_type,
-            ElfSectionIndex::ABS,
-        );
 
         if let Some(idx) = self.index.get(name.as_str()).copied() {
+            let elf_symbol = ElfSymbol::synthetic(
+                idx,
+                symbol.value,
+                symbol.size,
+                symbol.bind,
+                symbol.symbol_type,
+                symbol.other,
+                symbol.section_index,
+            );
             self.names[idx] = name;
             self.symbols[idx] = elf_symbol;
         } else {
             let idx = self.symbols.len();
+            let elf_symbol = ElfSymbol::synthetic(
+                idx,
+                symbol.value,
+                symbol.size,
+                symbol.bind,
+                symbol.symbol_type,
+                symbol.other,
+                symbol.section_index,
+            );
             self.index.insert(name.clone(), idx);
             self.names.push(name);
             self.symbols.push(elf_symbol);
@@ -219,7 +335,12 @@ where
 
     #[inline]
     fn memory(&self) -> &dyn ImageMemory {
-        &SYNTHETIC_MEMORY
+        &self.memory
+    }
+
+    #[inline]
+    fn tls(&self) -> ModuleTls {
+        self.tls
     }
 }
 
@@ -237,10 +358,7 @@ where
         &'exports self,
         symbol: &ElfSymbol<Arch::Layout>,
     ) -> Option<&'exports str> {
-        self.symbols
-            .iter()
-            .position(|entry| core::ptr::eq(entry, symbol))
-            .map(|idx| self.names[idx].as_str())
+        self.names.get(symbol.st_name()).map(String::as_str)
     }
 
     #[inline]
@@ -256,7 +374,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::ModuleScopeBuilder;
+    use crate::{
+        image::ModuleScopeBuilder,
+        memory::{MappedRegion, VmOffset},
+        segment::ElfSegments,
+        tls::{TlsModuleId, TlsTpOffset},
+    };
 
     #[test]
     fn synthetic_module_resolves_absolute_symbols_from_scope() {
@@ -267,6 +390,11 @@ mod tests {
                 0x1234usize as *const (),
             )],
         );
+        assert_eq!(
+            <SyntheticModule<NativeArch> as Module<NativeArch, ()>>::memory(&module).base(),
+            VmAddr::null()
+        );
+
         let mut scope = ModuleScopeBuilder::<NativeArch>::new();
         scope.extend([module]);
         let scope = scope.into_scope();
@@ -276,6 +404,7 @@ mod tests {
             .iter()
             .find(|module| module.name() == "__bridge")
             .expect("synthetic module should be retained in scope");
+        assert_eq!(module.memory().base(), VmAddr::null());
         let symbol = module
             .exports()
             .lookup(&mut lookup)
@@ -288,5 +417,74 @@ mod tests {
         assert!(symbol.st_shndx().is_abs());
         assert_eq!(module.exports().symbol_name(symbol), Some("host_double"));
         assert_eq!(module.exports().symbols().len(), 1);
+    }
+
+    #[test]
+    fn synthetic_symbol_can_use_non_absolute_section() {
+        let module = SyntheticModule::<NativeArch>::new(
+            "__tls",
+            [SyntheticSymbol::from_fields(
+                "tls_slot",
+                0x20,
+                8,
+                ElfSymbolBind::WEAK,
+                ElfSymbolType::TLS,
+                3,
+                ElfSectionIndex::new(1),
+            )],
+        );
+        let mut scope = ModuleScopeBuilder::<NativeArch>::new();
+        scope.extend([module]);
+        let scope = scope.into_scope();
+        let mut lookup = SymbolLookup::new("tls_slot");
+
+        let module = scope
+            .iter()
+            .find(|module| module.name() == "__tls")
+            .expect("synthetic module should be retained in scope");
+        let symbol = module
+            .exports()
+            .lookup(&mut lookup)
+            .expect("synthetic TLS symbol should resolve");
+
+        assert_eq!(symbol.st_value(), 0x20);
+        assert_eq!(symbol.st_size(), 8);
+        assert_eq!(symbol.bind(), ElfSymbolBind::WEAK);
+        assert_eq!(symbol.symbol_type(), ElfSymbolType::TLS);
+        assert_eq!(symbol.st_other(), 3);
+        assert_eq!(symbol.st_shndx(), ElfSectionIndex::new(1));
+    }
+
+    #[test]
+    fn synthetic_module_can_carry_tls_metadata() {
+        let tls = ModuleTls::Static {
+            mod_id: TlsModuleId::new(7),
+            tp_offset: TlsTpOffset::new(-0x80),
+        };
+        let module = SyntheticModule::<NativeArch>::empty("__tls").with_tls(tls);
+
+        assert_eq!(
+            <SyntheticModule<NativeArch> as Module<NativeArch, ()>>::tls(&module),
+            tls
+        );
+    }
+
+    #[test]
+    fn synthetic_module_can_delegate_image_memory() {
+        let bytes = Box::leak(Box::new([1u8, 2, 3, 4]));
+        let region =
+            MappedRegion::local_alias_no_unmap(bytes.as_ptr().cast_mut().cast(), bytes.len());
+        let base = VmAddr::from_ptr(bytes.as_ptr());
+        let memory = ElfSegments::new(region, base, VmOffset::new(0));
+        let module = SyntheticModule::<NativeArch>::empty("__data").with_memory(memory);
+        let memory = <SyntheticModule<NativeArch> as Module<NativeArch, ()>>::memory(&module);
+        let mut out = [0u8; 2];
+
+        memory
+            .read_bytes(base + VmOffset::new(1), &mut out)
+            .expect("synthetic module should delegate readable image memory");
+
+        assert_eq!(memory.base(), base);
+        assert_eq!(out, [2, 3]);
     }
 }

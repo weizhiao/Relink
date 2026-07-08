@@ -234,7 +234,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
             return Ok(None);
         };
         self.lookup_addr(sym)
-            .map(|addr| addr.map(|addr| Symbol::from_ptr(addr.as_mut_ptr())))
+            .map(|addr| addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
     }
 
     /// Load a versioned symbol from the ELF object.
@@ -284,7 +284,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
             return Ok(None);
         };
         self.lookup_addr(sym)
-            .map(|addr| addr.map(|addr| Symbol::from_ptr(addr.as_mut_ptr())))
+            .map(|addr| addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
     }
 
     /// Gets the number of strong references to the ELF object
