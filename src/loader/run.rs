@@ -12,7 +12,7 @@ use crate::{
     memory::{VmAddr, VmOffset},
     observer::{AfterDynamicLoadEvent, BeforeDynamicLoadEvent, LoadObserver},
     os::{DefaultMmap, Mmap},
-    relocation::{ObjectRelocationArch, RelocationArch},
+    relocation::{ObjectArch, RelocationArch},
     runtime::{CodeExecutor, NativeCodeExecutor},
     segment::{
         ElfSegments,
@@ -216,7 +216,7 @@ where
     pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D, Arch, M::Region, Tls>>
     where
         D: 'static,
-        Arch: ObjectRelocationArch,
+        Arch: ObjectArch,
         I: IntoElfReader<'a>,
     {
         let object = input.into_reader()?;
@@ -631,7 +631,7 @@ where
     #[inline]
     pub fn load<'a, I>(&self, input: I) -> Result<RawElf<D, Arch, M::Region, Tls>>
     where
-        Arch: ObjectRelocationArch,
+        Arch: ObjectArch,
         I: IntoElfReader<'a>,
     {
         self.run().load(input)

@@ -23,7 +23,7 @@ pub(crate) use defs::{RelocValue, RelocationValueFormula, RelocationValueKind};
 pub(crate) use dynamic::DynamicRelocation;
 pub use dynamic::{relocate_relative, relocate_relr};
 pub(crate) use helper::{RelocHelper, SymDef, find_symdef_impl};
-pub use traits::{ObjectRelocationArch, RelocationArch};
+pub use traits::{ObjectArch, RelocationArch};
 pub(crate) use traits::{Relocatable, RelocateArgs, RelocationValueInput, RelocationValueProvider};
 
 pub use crate::observer::{HandleResult, RelocationEvent};

@@ -6,7 +6,7 @@ use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::lazy::defs::LazyBindingSlots;
 #[cfg(feature = "object")]
-use crate::relocation::ObjectRelocationArch;
+use crate::relocation::ObjectArch;
 use crate::relocation::RelocationArch;
 
 const R_LARCH_64: u32 = 2;
@@ -62,8 +62,8 @@ impl RelocationArch for LoongArch64Arch {
 }
 
 #[cfg(feature = "object")]
-impl ObjectRelocationArch for LoongArch64Arch {
-    type ObjectRelocationState = ();
+impl ObjectArch for LoongArch64Arch {
+    type State = ();
 }
 
 impl crate::relocation::RelocationValueProvider for LoongArch64Arch {}

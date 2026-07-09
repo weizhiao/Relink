@@ -7,7 +7,7 @@ use crate::arch::{ArchKind, riscv};
 use crate::elf::{Elf32Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::lazy::defs::LazyBindingSlots;
 #[cfg(feature = "object")]
-use crate::relocation::ObjectRelocationArch;
+use crate::relocation::ObjectArch;
 use crate::relocation::RelocationArch;
 
 /// RISC-V 32-bit architecture marker.
@@ -65,8 +65,8 @@ impl RelocationArch for RiscV32Arch {
 }
 
 #[cfg(feature = "object")]
-impl ObjectRelocationArch for RiscV32Arch {
-    type ObjectRelocationState = ();
+impl ObjectArch for RiscV32Arch {
+    type State = ();
 }
 
 impl crate::relocation::RelocationValueProvider for RiscV32Arch {}

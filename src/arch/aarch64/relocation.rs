@@ -9,7 +9,7 @@ use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::lazy::defs::LazyBindingSlots;
 #[cfg(feature = "object")]
-use crate::relocation::ObjectRelocationArch;
+use crate::relocation::ObjectArch;
 use crate::relocation::RelocationArch;
 
 /// AArch64 (ARM64) architecture marker.
@@ -59,8 +59,8 @@ impl RelocationArch for AArch64Arch {
 }
 
 #[cfg(feature = "object")]
-impl ObjectRelocationArch for AArch64Arch {
-    type ObjectRelocationState = ();
+impl ObjectArch for AArch64Arch {
+    type State = ();
 }
 
 impl crate::relocation::RelocationValueProvider for AArch64Arch {}

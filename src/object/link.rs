@@ -13,7 +13,7 @@ use crate::{
         Finalizer, InitEvent, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent,
     },
     relocate_context_error,
-    relocation::{ObjectRelocationArch, RelocHelper, RelocateArgs, find_symdef_impl},
+    relocation::{ObjectArch, RelocHelper, RelocateArgs, find_symdef_impl},
     tls::TlsResolver,
 };
 
@@ -28,7 +28,7 @@ pub(crate) fn object_relocation_sections<Arch>(
     ),
 > + '_
 where
-    Arch: ObjectRelocationArch,
+    Arch: ObjectArch,
 {
     shdrs
         .iter()
@@ -49,7 +49,7 @@ where
 
 impl<D: 'static, Arch, R, Tls> RawObject<D, Arch, R, Tls>
 where
-    Arch: ObjectRelocationArch,
+    Arch: ObjectArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
@@ -77,8 +77,8 @@ where
             observer,
         );
         let shdrs = self.sections.headers();
-        let mut state = Arch::ObjectRelocationState::default();
-        Arch::prepare_object_relocation(&mut state, &mut helper, shdrs)?;
+        let mut state = Arch::State::default();
+        Arch::prepare_relocation(&mut state, &mut helper, shdrs)?;
         for (target_id, relocation_id, target, relocation_shdr) in
             object_relocation_sections::<Arch>(shdrs)
         {
@@ -93,8 +93,7 @@ where
                 if !helper.handle_pre(rel)?.is_unhandled() {
                     continue;
                 }
-                match Arch::relocate_object(&mut state, &mut helper, rel, target, &mut self.pltgot)
-                {
+                match Arch::relocate(&mut state, &mut helper, rel, target, &mut self.pltgot) {
                     Ok(()) => continue,
                     Err(err) => {
                         if helper.handle_post(rel)?.is_unhandled() {

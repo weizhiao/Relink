@@ -1,10 +1,13 @@
 use crate::{
-    RelocReason,
+    RelocReason, Result,
     arch::x86_64::relocation::X86_64Arch,
-    elf::{ElfRelEntry, ElfRelType, ElfShdr},
+    elf::{ElfRelEntry, ElfRelType, ElfRelocationType, ElfShdr},
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr},
     object::layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
-    relocation::{RelocHelper, RelocValue, RelocationValueInput, RelocationValueProvider},
+    observer::RelocationObserver,
+    relocation::{
+        ObjectArch, RelocHelper, RelocValue, RelocationValueInput, RelocationValueProvider,
+    },
 };
 use elf::abi::*;
 
@@ -23,59 +26,23 @@ enum ObjectWrite {
     SWord32(RelocValue<i32>),
 }
 
-impl X86_64Arch {
-    #[inline]
-    fn object_relocation_value(
-        r_type: usize,
-        target: usize,
-        append: isize,
-        place: usize,
-    ) -> core::result::Result<ObjectWrite, RelocReason> {
-        <Self as RelocationValueProvider>::relocation_value(
-            RelocationValueInput {
-                relocation_type: r_type,
-                target,
-                addend: append,
-                place,
-            },
-            |_| ObjectWrite::None,
-            ObjectWrite::Addr,
-            ObjectWrite::Word32,
-            ObjectWrite::SWord32,
-        )
-    }
+impl ObjectArch for X86_64Arch {
+    type State = ();
 
-    #[inline]
-    fn write_object_value<Memory>(
-        memory: &Memory,
-        place: VmAddr,
-        value: ObjectWrite,
-    ) -> crate::Result<()>
-    where
-        Memory: ImageMemory,
-    {
-        unsafe {
-            match value {
-                ObjectWrite::None => {}
-                ObjectWrite::Addr(value) => memory.write_value(place, value.get())?,
-                ObjectWrite::Word32(value) => memory.write_value(place, value.into_inner())?,
-                ObjectWrite::SWord32(value) => memory.write_value(place, value.into_inner())?,
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn relocate_object_impl<D, R, Tls, Obs, H, Memory>(
+    #[allow(private_bounds)]
+    #[allow(private_interfaces)]
+    fn relocate<D, R, Tls, Obs, H, Memory>(
+        _state: &mut Self::State,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,
-    ) -> crate::Result<()>
+    ) -> Result<()>
     where
         D: 'static,
         R: RegionAccess,
         Tls: crate::tls::TlsResolver<Self>,
-        Obs: crate::observer::RelocationObserver<Self> + ?Sized,
+        Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
         let r_type = rel.r_type();
@@ -85,7 +52,7 @@ impl X86_64Arch {
         let relocation_target_value = |target| {
             Self::object_relocation_value(r_type.raw() as usize, target, append, place.get())
         };
-        let write_relocation_target = |memory: &Memory, target| -> crate::Result<()> {
+        let write_relocation_target = |memory: &Memory, target| -> Result<()> {
             Self::write_object_value(
                 memory,
                 place,
@@ -159,11 +126,56 @@ impl X86_64Arch {
         Ok(())
     }
 
-    pub(crate) fn object_needs_got_impl(r_type: crate::elf::ElfRelocationType) -> bool {
+    #[inline]
+    fn needs_got(r_type: ElfRelocationType) -> bool {
         r_type.raw() == R_X86_64_GOTPCREL
     }
 
-    pub(crate) fn object_needs_plt_impl(r_type: crate::elf::ElfRelocationType) -> bool {
+    #[inline]
+    fn needs_plt(r_type: ElfRelocationType) -> bool {
         r_type.raw() == R_X86_64_PLT32
+    }
+}
+
+impl X86_64Arch {
+    #[inline]
+    fn object_relocation_value(
+        r_type: usize,
+        target: usize,
+        append: isize,
+        place: usize,
+    ) -> core::result::Result<ObjectWrite, RelocReason> {
+        <Self as RelocationValueProvider>::relocation_value(
+            RelocationValueInput {
+                relocation_type: r_type,
+                target,
+                addend: append,
+                place,
+            },
+            |_| ObjectWrite::None,
+            ObjectWrite::Addr,
+            ObjectWrite::Word32,
+            ObjectWrite::SWord32,
+        )
+    }
+
+    #[inline]
+    fn write_object_value<Memory>(
+        memory: &Memory,
+        place: VmAddr,
+        value: ObjectWrite,
+    ) -> crate::Result<()>
+    where
+        Memory: ImageMemory,
+    {
+        unsafe {
+            match value {
+                ObjectWrite::None => {}
+                ObjectWrite::Addr(value) => memory.write_value(place, value.get())?,
+                ObjectWrite::Word32(value) => memory.write_value(place, value.into_inner())?,
+                ObjectWrite::SWord32(value) => memory.write_value(place, value.into_inner())?,
+            }
+        }
+        Ok(())
     }
 }

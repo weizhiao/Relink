@@ -6,7 +6,7 @@ use crate::arch::ArchKind;
 use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
 use crate::lazy::defs::LazyBindingSlots;
 #[cfg(feature = "object")]
-use crate::relocation::ObjectRelocationArch;
+use crate::relocation::ObjectArch;
 use crate::relocation::RelocationArch;
 
 // Place all architecture-specific trait impls on the single `ArmArch` ZST
@@ -56,8 +56,8 @@ impl RelocationArch for ArmArch {
 }
 
 #[cfg(feature = "object")]
-impl ObjectRelocationArch for ArmArch {
-    type ObjectRelocationState = ();
+impl ObjectArch for ArmArch {
+    type State = ();
 }
 
 impl crate::relocation::RelocationValueProvider for ArmArch {}

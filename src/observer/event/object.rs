@@ -10,7 +10,7 @@ use crate::{
         CustomHash, ObjectExports, ObjectSections, ObjectSegmentView,
         layout::{SectionGroup, SectionPlacement},
     },
-    relocation::{ObjectRelocationArch, RelocationArch},
+    relocation::{ObjectArch, RelocationArch},
     sync::Arc,
     tls::TlsResolver,
 };
@@ -82,7 +82,7 @@ impl<'event, L: ElfLayout> SectionLayoutEvent<'event, L> {
 pub struct AfterObjectLoadEvent<
     'event,
     D: 'static,
-    Arch: ObjectRelocationArch,
+    Arch: ObjectArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
@@ -91,7 +91,7 @@ pub struct AfterObjectLoadEvent<
 
 impl<'event, D: 'static, Arch, R, Tls> AfterObjectLoadEvent<'event, D, Arch, R, Tls>
 where
-    Arch: ObjectRelocationArch,
+    Arch: ObjectArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {

@@ -8,7 +8,7 @@ use crate::{
         object_relocation_sections, section_entries,
     },
     observer::RelocationObserver,
-    relocation::{ObjectRelocationArch, RelocHelper},
+    relocation::{ObjectArch, RelocHelper},
 };
 use elf::abi::*;
 use hashbrown::HashMap;
@@ -76,63 +76,17 @@ struct Hi20Relocation {
 
 #[derive(Default)]
 #[doc(hidden)]
-pub struct RiscV64ObjectRelocationState {
+pub struct ObjectState {
     hi20_cache: HashMap<VmAddr, Hi20Relocation>,
 }
 
-impl ObjectRelocationArch for RiscV64Arch {
-    type ObjectRelocationState = RiscV64ObjectRelocationState;
+impl ObjectArch for RiscV64Arch {
+    type State = ObjectState;
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn prepare_object_relocation<D, R, Tls, Obs, H, Memory>(
-        state: &mut Self::ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
-        shdrs: &[ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>],
-    ) -> Result<()>
-    where
-        D: 'static,
-        R: RegionAccess,
-        Tls: crate::tls::TlsResolver<Self>,
-        Obs: RelocationObserver<Self> + ?Sized,
-        Memory: ImageMemory,
-    {
-        Self::prepare_object_relocation_impl(state, helper, shdrs)
-    }
-
-    #[allow(private_bounds)]
-    #[allow(private_interfaces)]
-    fn relocate_object<D, R, Tls, Obs, H, Memory>(
-        state: &mut Self::ObjectRelocationState,
-        helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
-        rel: &ElfRelType<Self>,
-        target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
-        pltgot: &mut PltGotSection,
-    ) -> Result<()>
-    where
-        D: 'static,
-        R: RegionAccess,
-        Tls: crate::tls::TlsResolver<Self>,
-        Obs: RelocationObserver<Self> + ?Sized,
-        Memory: ImageMemory,
-    {
-        Self::relocate_object_impl(state, helper, rel, target, pltgot)
-    }
-
-    #[inline]
-    fn object_needs_got(r_type: ElfRelocationType) -> bool {
-        Self::object_needs_got_impl(r_type)
-    }
-
-    #[inline]
-    fn object_needs_plt(r_type: ElfRelocationType) -> bool {
-        Self::object_needs_plt_impl(r_type)
-    }
-}
-
-impl RiscV64Arch {
-    pub(crate) fn prepare_object_relocation_impl<D, R, Tls, Obs, H, Memory>(
-        state: &mut RiscV64ObjectRelocationState,
+    fn prepare_relocation<D, R, Tls, Obs, H, Memory>(
+        state: &mut Self::State,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         shdrs: &[ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>],
     ) -> Result<()>
@@ -177,8 +131,10 @@ impl RiscV64Arch {
         Ok(())
     }
 
-    pub(crate) fn relocate_object_impl<D, R, Tls, Obs, H, Memory>(
-        state: &mut RiscV64ObjectRelocationState,
+    #[allow(private_bounds)]
+    #[allow(private_interfaces)]
+    fn relocate<D, R, Tls, Obs, H, Memory>(
+        state: &mut Self::State,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
@@ -397,14 +353,18 @@ impl RiscV64Arch {
         Ok(())
     }
 
-    pub(crate) fn object_needs_got_impl(r_type: ElfRelocationType) -> bool {
+    #[inline]
+    fn needs_got(r_type: ElfRelocationType) -> bool {
         r_type.raw() == R_RISCV_GOT_HI20
     }
 
-    pub(crate) fn object_needs_plt_impl(r_type: ElfRelocationType) -> bool {
+    #[inline]
+    fn needs_plt(r_type: ElfRelocationType) -> bool {
         r_type.raw() == R_RISCV_CALL_PLT
     }
+}
 
+impl RiscV64Arch {
     #[inline]
     fn ensure_got_entry(pltgot: &mut PltGotSection, key: ObjectRelocKey, sym: VmAddr) -> VmAddr {
         match pltgot.add_got_entry(key) {
@@ -439,7 +399,7 @@ impl RiscV64Arch {
     }
 
     fn resolve_pcrel_lo12<D, R, Tls, Obs, H, Memory>(
-        state: &RiscV64ObjectRelocationState,
+        state: &ObjectState,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,

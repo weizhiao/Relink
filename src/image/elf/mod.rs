@@ -13,7 +13,7 @@ use crate::{
     lazy::traits::{LazyBinder, SupportLazy},
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
-    relocation::{ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch},
+    relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},
     tls::TlsResolver,
 };
 
@@ -40,7 +40,7 @@ pub enum RawElf<
     Tls: TlsResolver<Arch> = (),
 > where
     D: 'static,
-    Arch: ObjectRelocationArch,
+    Arch: ObjectArch,
 {
     /// A dynamic library (shared object, typically `.so`).
     Dylib(RawDylib<D, Arch, R, Tls>),
@@ -53,7 +53,7 @@ pub enum RawElf<
     Object(RawObject<D, Arch, R, Tls>),
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
+impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
     for RawElf<D, Arch, R, Tls>
 {
 }
@@ -95,7 +95,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawElf<D, Arch, R, Tls>
 {
     /// Returns the loader source path or caller-provided source identifier.
@@ -282,7 +282,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Relocatable<D>
+impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Relocatable<D>
     for RawElf<D, Arch, R, Tls>
 {
     type Output = LoadedElf<D, Arch, R, Tls>;

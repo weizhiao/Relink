@@ -10,8 +10,6 @@ use elf::abi::*;
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::lazy::defs::LazyBindingSlots;
-#[cfg(feature = "object")]
-use crate::relocation::ObjectRelocationArch;
 use crate::relocation::{
     RelocationArch, RelocationValueFormula, RelocationValueKind, RelocationValueProvider,
 };
@@ -70,40 +68,6 @@ impl RelocationArch for X86_64Arch {
             R_X86_64_DTPOFF64 => "R_X86_64_DTPOFF64",
             _ => "UNKNOWN",
         }
-    }
-}
-
-#[cfg(feature = "object")]
-impl ObjectRelocationArch for X86_64Arch {
-    type ObjectRelocationState = ();
-
-    #[allow(private_bounds)]
-    #[allow(private_interfaces)]
-    fn relocate_object<D, R, Tls, Obs, H, Memory>(
-        _state: &mut Self::ObjectRelocationState,
-        helper: &mut crate::relocation::RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
-        rel: &crate::elf::ElfRelType<Self>,
-        target: &crate::elf::ElfShdr<Self::Layout>,
-        pltgot: &mut crate::object::layout::PltGotSection,
-    ) -> Result<()>
-    where
-        D: 'static,
-        R: crate::memory::RegionAccess,
-        Tls: crate::tls::TlsResolver<Self>,
-        Obs: crate::observer::RelocationObserver<Self> + ?Sized,
-        Memory: crate::memory::ImageMemory,
-    {
-        Self::relocate_object_impl(helper, rel, target, pltgot)
-    }
-
-    #[inline]
-    fn object_needs_got(r_type: ElfRelocationType) -> bool {
-        Self::object_needs_got_impl(r_type)
-    }
-
-    #[inline]
-    fn object_needs_plt(r_type: ElfRelocationType) -> bool {
-        Self::object_needs_plt_impl(r_type)
     }
 }
 

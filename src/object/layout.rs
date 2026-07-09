@@ -11,7 +11,7 @@ use crate::{
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset, rounddown, roundup},
     observer::{LoadObserver, SectionLayoutEvent},
     os::{MapFlags, Mmap, ProtFlags},
-    relocation::{ObjectRelocationArch, RelocationArch},
+    relocation::{ObjectArch, RelocationArch},
     segment::{ElfSegment, ElfSegments, FileMapInfo, MemoryProtection, SegmentBuilder},
     sync::Arc,
 };
@@ -35,7 +35,7 @@ pub(crate) fn section_prot(sh_flags: ElfSectionFlags) -> ProtFlags {
 }
 
 /// Manages segments created from ELF section headers
-pub(crate) struct SectionSegments<Arch: ObjectRelocationArch = crate::arch::NativeArch> {
+pub(crate) struct SectionSegments<Arch: ObjectArch = crate::arch::NativeArch> {
     core: SectionSegmentSet,
     init: SectionSegmentSet,
     pltgot: Option<PltGotSection>,
@@ -588,7 +588,7 @@ impl SegmentBuilder for SectionSegmentSet {
     }
 }
 
-impl<Arch: ObjectRelocationArch> SectionSegments<Arch> {
+impl<Arch: ObjectArch> SectionSegments<Arch> {
     pub(crate) fn load<D, Obs, M>(
         sections: &mut ObjectSections<Arch::Layout>,
         object: &impl ElfReader,
@@ -813,7 +813,7 @@ where
 }
 
 impl PltGotSection {
-    fn count_needed_entries<Arch: ObjectRelocationArch>(
+    fn count_needed_entries<Arch: ObjectArch>(
         shdrs: &[ElfShdr<Arch::Layout>],
         object: &impl ElfReader,
     ) -> Result<(usize, usize)> {
@@ -841,8 +841,8 @@ impl PltGotSection {
                 |relocations| {
                     for rel_entry in relocations {
                         let r_type = rel_entry.r_type();
-                        let needs_got = Arch::object_needs_got(r_type);
-                        let needs_plt = Arch::object_needs_plt(r_type);
+                        let needs_got = Arch::needs_got(r_type);
+                        let needs_plt = Arch::needs_plt(r_type);
                         if !needs_got && !needs_plt {
                             continue;
                         }

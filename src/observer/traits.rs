@@ -7,7 +7,7 @@ use super::{
     AfterObjectLoadEvent, BeforeObjectLoadEvent, ObjectRelocatedEvent, SectionLayoutEvent,
 };
 #[cfg(feature = "object")]
-use crate::relocation::ObjectRelocationArch;
+use crate::relocation::ObjectArch;
 use crate::{
     Result, arch::NativeArch, memory::RegionAccess, relocation::RelocationArch, tls::TlsResolver,
 };
@@ -54,7 +54,7 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
         _event: AfterObjectLoadEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()>
     where
-        Arch: ObjectRelocationArch,
+        Arch: ObjectArch,
     {
         Ok(())
     }
@@ -177,7 +177,7 @@ where
         event: AfterObjectLoadEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()>
     where
-        Arch: ObjectRelocationArch,
+        Arch: ObjectArch,
     {
         (**self).on_after_object_load(event)
     }
@@ -285,7 +285,7 @@ where
         event: AfterObjectLoadEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()>
     where
-        Arch: ObjectRelocationArch,
+        Arch: ObjectArch,
     {
         (**self).on_after_object_load(event)
     }

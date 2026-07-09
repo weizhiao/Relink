@@ -8,7 +8,7 @@ use crate::{
     elf::{ElfSectionType, ElfShdr, Lifecycle},
     input::PathBuf,
     memory::{HostRegion, RegionAccess, VmAddr},
-    relocation::ObjectRelocationArch,
+    relocation::ObjectArch,
     runtime::CodeExecutor,
     sync::Arc,
     tls::{TlsModuleId, TlsResolver, TlsTpOffset},
@@ -20,7 +20,7 @@ use core::marker::PhantomData;
 pub(crate) struct ObjectBuilder<
     Tls,
     D = (),
-    Arch: ObjectRelocationArch = crate::arch::NativeArch,
+    Arch: ObjectArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
 > {
     pub(crate) path: PathBuf,
@@ -37,7 +37,7 @@ pub(crate) struct ObjectBuilder<
     _marker_tls: PhantomData<fn() -> Tls>,
 }
 
-struct ObjectSectionData<Arch: ObjectRelocationArch> {
+struct ObjectSectionData<Arch: ObjectArch> {
     symtab: ObjectSymbolTable<Arch::Layout>,
     init: Lifecycle,
     fini: Lifecycle,
@@ -46,7 +46,7 @@ struct ObjectSectionData<Arch: ObjectRelocationArch> {
 impl<T, D, Arch, R> ObjectBuilder<T, D, Arch, R>
 where
     T: TlsResolver<Arch>,
-    Arch: ObjectRelocationArch,
+    Arch: ObjectArch,
     R: RegionAccess,
 {
     fn prepare_lifecycle_array<Memory>(

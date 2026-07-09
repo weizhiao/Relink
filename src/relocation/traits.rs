@@ -103,13 +103,13 @@ pub trait RelocationArch: 'static {
 /// Object-file (`ET_REL`) relocation support layered on top of [`RelocationArch`].
 #[cfg(feature = "object")]
 #[doc(hidden)]
-pub trait ObjectRelocationArch: RelocationArch {
-    type ObjectRelocationState: Default;
+pub trait ObjectArch: RelocationArch {
+    type State: Default;
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn prepare_object_relocation<D, R, Tls, Obs, H, Memory>(
-        _state: &mut Self::ObjectRelocationState,
+    fn prepare_relocation<D, R, Tls, Obs, H, Memory>(
+        _state: &mut Self::State,
         _helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         _shdrs: &[ElfShdr<Self::Layout>],
     ) -> Result<()>
@@ -126,8 +126,8 @@ pub trait ObjectRelocationArch: RelocationArch {
 
     #[allow(private_bounds)]
     #[allow(private_interfaces)]
-    fn relocate_object<D, R, Tls, Obs, H, Memory>(
-        _state: &mut Self::ObjectRelocationState,
+    fn relocate<D, R, Tls, Obs, H, Memory>(
+        _state: &mut Self::State,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         _target: &ElfShdr<Self::Layout>,
@@ -146,10 +146,10 @@ pub trait ObjectRelocationArch: RelocationArch {
 
     /// Returns whether this object relocation reserves a regular GOT entry.
     ///
-    /// PLT relocations should report through [`Self::object_needs_plt`]; that
-    /// reservation includes the associated GOT.PLT slot.
+    /// PLT relocations should report through [`Self::needs_plt`]; that reservation
+    /// includes the associated GOT.PLT slot.
     #[inline]
-    fn object_needs_got(_r_type: ElfRelocationType) -> bool
+    fn needs_got(_r_type: ElfRelocationType) -> bool
     where
         Self: Sized,
     {
@@ -159,7 +159,7 @@ pub trait ObjectRelocationArch: RelocationArch {
     /// Returns whether this object relocation reserves a PLT entry and its
     /// associated GOT.PLT slot.
     #[inline]
-    fn object_needs_plt(_r_type: ElfRelocationType) -> bool
+    fn needs_plt(_r_type: ElfRelocationType) -> bool
     where
         Self: Sized,
     {
@@ -169,10 +169,10 @@ pub trait ObjectRelocationArch: RelocationArch {
 
 #[cfg(not(feature = "object"))]
 #[doc(hidden)]
-pub trait ObjectRelocationArch: RelocationArch {}
+pub trait ObjectArch: RelocationArch {}
 
 #[cfg(not(feature = "object"))]
-impl<T: RelocationArch> ObjectRelocationArch for T {}
+impl<T: RelocationArch> ObjectArch for T {}
 
 pub(crate) trait RelocationValueProvider {
     fn relocation_value_kind(

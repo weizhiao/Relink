@@ -15,7 +15,7 @@ use crate::{
     lazy::traits::LazyBinder,
     memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
-    relocation::{ObjectRelocationArch, Relocatable, RelocateArgs, RelocationArch},
+    relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
 };
@@ -31,7 +31,7 @@ use crate::image::{ElfCore, LoadedCore, ModuleHandle, core::CoreInner};
 /// all the necessary information to perform the relocation process.
 pub struct RawObject<
     D: 'static = (),
-    Arch: ObjectRelocationArch = crate::arch::NativeArch,
+    Arch: ObjectArch = crate::arch::NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
@@ -60,7 +60,7 @@ pub struct RawObject<
     pub(crate) fini: Lifecycle,
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
+impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
     for RawObject<D, Arch, R, Tls>
 {
     type Target = ElfCore<D, Arch, R, Tls>;
@@ -73,7 +73,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<A
 impl<Tls, D: 'static, Arch, R> ObjectBuilder<Tls, D, Arch, R>
 where
     Tls: TlsResolver<Arch>,
-    Arch: ObjectRelocationArch,
+    Arch: ObjectArch,
     R: RegionAccess,
 {
     pub(crate) fn build_object(mut self) -> RawObject<D, Arch, R, Tls> {
@@ -108,7 +108,7 @@ where
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawObject<D, Arch, R, Tls>
 {
     /// Returns the retained object section metadata.
@@ -123,7 +123,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<A
     }
 }
 
-impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
+impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     for RawObject<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -135,7 +135,7 @@ impl<D: 'static, Arch: ObjectRelocationArch, R: RegionAccess, Tls: TlsResolver<A
 
 impl<D: 'static, Arch, R, Tls> Relocatable<D> for RawObject<D, Arch, R, Tls>
 where
-    Arch: ObjectRelocationArch,
+    Arch: ObjectArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {

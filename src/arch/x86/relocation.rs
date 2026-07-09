@@ -6,7 +6,7 @@ use crate::arch::ArchKind;
 use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
 use crate::lazy::defs::LazyBindingSlots;
 #[cfg(feature = "object")]
-use crate::relocation::ObjectRelocationArch;
+use crate::relocation::ObjectArch;
 use crate::relocation::RelocationArch;
 
 const R_386_32: u32 = 1;
@@ -65,8 +65,8 @@ impl RelocationArch for X86Arch {
 }
 
 #[cfg(feature = "object")]
-impl ObjectRelocationArch for X86Arch {
-    type ObjectRelocationState = ();
+impl ObjectArch for X86Arch {
+    type State = ();
 }
 
 impl crate::relocation::RelocationValueProvider for X86Arch {}

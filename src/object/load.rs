@@ -8,7 +8,7 @@ use crate::{
     logging,
     observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent, LoadObserver},
     os::Mmap,
-    relocation::ObjectRelocationArch,
+    relocation::ObjectArch,
     runtime::CodeExecutor,
     tls::TlsResolver,
 };
@@ -18,7 +18,7 @@ where
     Obs: LoadObserver<D, Arch>,
     D: Default + 'static,
     Tls: TlsResolver<Arch>,
-    Arch: ObjectRelocationArch,
+    Arch: ObjectArch,
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
 {
@@ -95,7 +95,7 @@ where
     (): LoadObserver<D, Arch>,
     D: Default + 'static,
     Tls: TlsResolver<Arch>,
-    Arch: ObjectRelocationArch,
+    Arch: ObjectArch,
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
 {
@@ -136,7 +136,7 @@ fn validate_object_shdrs<Arch>(
     object: &impl ElfReader,
 ) -> Result<()>
 where
-    Arch: ObjectRelocationArch,
+    Arch: ObjectArch,
 {
     let first = shdrs.first().ok_or(ParseShdrError::MissingSectionHeaders)?;
     if first.section_type() != ElfSectionType::NULL || first.sh_size() != 0 {
@@ -208,7 +208,7 @@ fn validate_relocation_shdr<Arch>(
     shdrs: &[ElfShdr<Arch::Layout>],
 ) -> Result<()>
 where
-    Arch: ObjectRelocationArch,
+    Arch: ObjectArch,
 {
     debug_assert!(matches!(
         shdr.section_type(),
