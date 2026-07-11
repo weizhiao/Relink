@@ -1,3 +1,5 @@
+//! Relocatable-object loading, layout, and export helpers.
+
 mod builder;
 mod exports;
 mod hash;

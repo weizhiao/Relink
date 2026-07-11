@@ -7,7 +7,7 @@ use crate::{
         HashTable, Lifecycle, LifecycleSpec, SymbolTable,
     },
     input::Path,
-    lazy::traits::{LazyBinder, SupportLazy},
+    lazy::{LazyBinder, SupportLazy},
     loader::ImageBuilder,
     logging,
     memory::{HostRegion, ImageMemoryExt, MappedView, RegionAccess, VmAddr, VmOffset},

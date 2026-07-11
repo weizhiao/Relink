@@ -96,10 +96,44 @@ where
     }
 }
 
-/// Configurable front-end for runtime dependency discovery and relocation.
+/// Reusable front-end for dependency discovery, loading, and relocation.
 ///
-/// `Linker` stores one relocation domain: all modules committed through one
-/// context use the same [`RelocationArch`].
+/// `Linker` combines a [`Loader`](crate::Loader), dependency resolver,
+/// relocation planner, visible-module set, and [`Relocator`](crate::Relocator).
+/// It is the high-level path for loading a root image plus its `DT_NEEDED`
+/// dependency graph into a [`LinkContext`](crate::LinkContext).
+///
+/// The linker is configuration; committed modules live in the context passed to
+/// [`Linker::load`]. This lets the same linker value be reused with independent
+/// contexts while keeping each context's module ids and dependency graph isolated.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use elf_loader::{
+///     LinkContext, Linker, Result,
+///     input::PathBuf,
+///     linker::SearchPathResolver,
+/// };
+///
+/// fn main() -> Result<()> {
+///     let mut resolver = SearchPathResolver::<PathBuf>::new();
+///     resolver.push_fixed_dir("plugins");
+///
+///     let linker = Linker::<PathBuf>::new().resolver(resolver);
+///     let mut context: LinkContext<PathBuf, ()> = LinkContext::new();
+///
+///     let mut run = linker.run();
+///     let loaded = run.load(&mut context, PathBuf::from("libplugin.so"))?;
+///     let entry = unsafe {
+///         loaded
+///             .get::<extern "C" fn()>("plugin_entry")
+///             .expect("symbol `plugin_entry` not found")
+///     };
+///     entry();
+///     Ok(())
+/// }
+/// ```
 pub struct Linker<
     K: Clone + Ord,
     Arch: RelocationArch = crate::arch::NativeArch,
@@ -170,7 +204,7 @@ where
     /// Switch the linker's relocation domain before a loader is attached.
     ///
     /// This mirrors [`Loader::for_arch`] for the dependency-linking front-end:
-    /// all modules committed through the resulting [`LinkContext`] use
+    /// all modules committed through the resulting [`crate::LinkContext`] use
     /// `NewArch`.
     #[inline]
     #[allow(clippy::type_complexity)]

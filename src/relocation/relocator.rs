@@ -1,9 +1,45 @@
-/// Reusable relocation configuration.
+/// Reusable configuration for relocating one raw image at a time.
 ///
-/// A `Relocator` stores the stable parts of relocation policy: lazy binder.
-/// Attach a raw image with
-/// [`Relocator::run`] to create a [`RelocatorRun`] that owns per-run state such
-/// as the object, observer, and symbol scope.
+/// A `Relocator` stores the stable relocation policy, currently the lazy PLT
+/// binder. Attach a raw image with [`Relocator::run`] to create a
+/// [`RelocatorRun`](crate::RelocatorRun); the run then owns per-image state such
+/// as the raw object, observer, and symbol scope.
+///
+/// Use `Relocator` directly when the caller already knows which modules should
+/// be visible. Use [`Linker`](crate::Linker) when dependencies should be
+/// discovered from `DT_NEEDED` entries before relocation.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use elf_loader::{
+///     Loader, Relocator, Result,
+///     image::{SyntheticModule, SyntheticSymbol},
+/// };
+///
+/// extern "C" fn host_log(_value: i32) {}
+///
+/// fn main() -> Result<()> {
+///     let host = SyntheticModule::new(
+///         "__host",
+///         [SyntheticSymbol::function("host_log", host_log as *const ())],
+///     );
+///
+///     let raw = Loader::new().load_dylib("plugin.so")?;
+///     let loaded = Relocator::new()
+///         .run(raw)
+///         .scope([host])
+///         .relocate()?;
+///
+///     let run = unsafe {
+///         loaded
+///             .get::<extern "C" fn()>("run")
+///             .expect("symbol `run` not found")
+///     };
+///     run();
+///     Ok(())
+/// }
+/// ```
 pub struct Relocator<Binder = ()> {
     pub(super) lazy_binder: Binder,
 }

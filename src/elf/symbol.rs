@@ -207,12 +207,14 @@ pub struct SymbolLookup<'symbol> {
 }
 
 impl<'symbol> SymbolLookup<'symbol> {
+    /// Creates a lookup request for an unversioned symbol name.
     #[inline]
     pub fn new(name: &'symbol str) -> Self {
         Self::from_info(SymbolInfo::from_str(name, None))
     }
 
     #[cfg(feature = "version")]
+    /// Creates a lookup request for a symbol name constrained to one version.
     #[inline]
     pub fn with_version(name: &'symbol str, version: &'symbol str) -> Self {
         Self::from_info(SymbolInfo::from_str(name, Some(version)))
@@ -224,6 +226,7 @@ impl<'symbol> SymbolLookup<'symbol> {
         Self { info, precompute }
     }
 
+    /// Returns the requested symbol name.
     #[inline]
     pub fn name(&self) -> &'symbol str {
         self.info.name()
@@ -296,6 +299,7 @@ impl<'symtab, L: ElfLayout> SymbolEntry<'symtab, L> {
 }
 
 impl<L: ElfLayout, H> SymbolTable<L, H> {
+    /// Borrows this symbol table as a lookup view.
     #[inline]
     pub fn view(&self) -> SymbolTableView<'_, L, H> {
         SymbolTableView {

@@ -21,11 +21,12 @@ pub(crate) fn getauxval(at: usize) -> usize {
     unsafe { libc::getauxval(at as libc::c_ulong) as usize }
 }
 
-/// An implementation of Mmap trait
+/// Default libc-backed mapping backend for Linux builds.
 #[derive(Clone, Copy, Default)]
 pub struct DefaultMmap;
 
 impl DefaultMmap {
+    /// Creates the default libc-backed mmap implementation.
     #[inline]
     pub const fn new() -> Self {
         Self

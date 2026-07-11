@@ -1,3 +1,5 @@
+//! Data structures shared by lazy binders and the runtime resolver.
+
 use crate::{
     LazyBindingError, RelocationError, Result,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolEntry},
@@ -16,16 +18,19 @@ pub struct LazyBindingSlots {
 }
 
 impl LazyBindingSlots {
+    /// Creates a pair of GOT/PLT slot indexes used by a lazy binding ABI.
     #[inline]
     pub const fn new(context: usize, resolver: usize) -> Self {
         Self { context, resolver }
     }
 
+    /// Returns the slot index that receives binder context.
     #[inline]
     pub const fn context(self) -> usize {
         self.context
     }
 
+    /// Returns the slot index that receives the resolver entry point.
     #[inline]
     pub const fn resolver(self) -> usize {
         self.resolver

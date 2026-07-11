@@ -39,16 +39,19 @@ impl DirectDeps {
         Self { context, edges }
     }
 
+    /// Returns true when no direct dependency edges were removed.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.edges.is_empty()
     }
 
+    /// Returns the number of direct dependency edges.
     #[inline]
     pub fn len(&self) -> usize {
         self.edges.len()
     }
 
+    /// Iterates over removed dependency key/module pairs.
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = (KeyId, ModuleId)> + '_ {
         let context = self.context;
@@ -58,6 +61,7 @@ impl DirectDeps {
             .map(move |edge| dep_ids(context, edge))
     }
 
+    /// Consumes the collection and yields removed dependency key/module pairs.
     #[inline]
     pub fn into_iter(self) -> impl Iterator<Item = (KeyId, ModuleId)> {
         let context = self.context;
@@ -125,10 +129,15 @@ where
     Ok(())
 }
 
-/// A reusable local module repository and committed dependency graph.
+/// Local repository of committed modules and their dependency graph.
 ///
-/// The context is a single relocation-domain module repository and committed
-/// dependency graph.
+/// `LinkContext` is the mutable state paired with [`Linker`](crate::Linker).
+/// It owns module ids, loaded module handles, aliases, and direct dependency
+/// edges produced by successful linker loads.
+///
+/// Keep one context per target runtime/address space. Module ids and key ids are
+/// branded with a context identity so ids from different contexts cannot be
+/// mixed accidentally.
 pub struct LinkContext<
     K,
     D: 'static,

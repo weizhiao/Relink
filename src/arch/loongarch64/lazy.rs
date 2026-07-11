@@ -55,6 +55,6 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
 
         jr      $t2
     ",
-        sym crate::lazy::native::dl_fixup,
+        sym crate::lazy::dl_fixup,
     )
 }

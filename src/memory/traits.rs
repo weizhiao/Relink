@@ -21,6 +21,7 @@ pub trait RegionAccess: Send + Sync + 'static {
     /// Length of this region in bytes.
     fn len(&self) -> usize;
 
+    /// Returns true when this region contains no bytes.
     #[inline]
     fn is_empty(&self) -> bool {
         self.len() == 0

@@ -9,11 +9,12 @@ use alloc::alloc::{dealloc, handle_alloc_error};
 use core::ffi::c_void;
 use core::{alloc::Layout, slice::from_raw_parts_mut};
 
-/// An implementation of Mmap trait
+/// Default allocator-backed mapping backend for bare-metal builds.
 #[derive(Clone, Copy, Default)]
 pub struct DefaultMmap;
 
 impl DefaultMmap {
+    /// Creates the default bare-metal mapping backend.
     #[inline]
     pub const fn new() -> Self {
         Self

@@ -8,7 +8,7 @@ use crate::{
     elf::ElfPhdr,
     image::{ElfCore, LoadedCore, ModuleTls, RawDynamic},
     input::Path,
-    lazy::traits::{LazyBinder, SupportLazy},
+    lazy::{LazyBinder, SupportLazy},
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch},

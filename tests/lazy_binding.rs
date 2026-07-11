@@ -6,7 +6,7 @@ use elf_loader::{
     arch::NativeArch,
     image::LoadedCore,
     input::ElfBinary,
-    lazy::native::NativeLazyBinder,
+    lazy::NativeLazyBinder,
     relocation::{RelocationArch, Relocator},
 };
 

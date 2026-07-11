@@ -123,6 +123,7 @@ impl<L: ElfLayout> HashTable<L> {
         }))
     }
 
+    /// Returns the number of symbols covered by the parsed hash table.
     #[inline]
     pub fn count_syms(&self) -> usize {
         match &self.0 {

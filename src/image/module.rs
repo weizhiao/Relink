@@ -132,6 +132,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleScopeBuilder<
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScopeBuilder<Arch, Tls> {
+    /// Creates an empty module-scope builder.
     #[inline]
     pub const fn new() -> Self {
         Self {
@@ -148,6 +149,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScopeBuilder<Arch, Tls>
         self.modules.extend(modules.into_iter().map(Into::into));
     }
 
+    /// Appends modules to the scope being built.
     pub fn extend<I, R>(&mut self, modules: I)
     where
         I: IntoIterator<Item = R>,
@@ -156,6 +158,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScopeBuilder<Arch, Tls>
         self.modules.extend(modules.into_iter().map(Into::into));
     }
 
+    /// Finishes the builder and returns an immutable module scope.
     #[inline]
     pub fn into_scope(self) -> ModuleScope<Arch, Tls> {
         ModuleScope {

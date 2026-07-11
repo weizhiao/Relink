@@ -20,6 +20,7 @@ pub trait SymbolExports<L: ElfLayout>: Send + Sync {
     /// Returns the name for a symbol entry from this export table.
     fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports str>;
 
+    /// Looks up one exported symbol by name and optional version.
     fn lookup<'exports>(
         &'exports self,
         lookup: &mut SymbolLookup<'_>,
@@ -65,11 +66,16 @@ pub enum ModuleTls {
     None,
     /// The module has a static TLS block at a fixed thread-pointer offset.
     Static {
+        /// Runtime TLS module identifier.
         mod_id: TlsModuleId,
+        /// Offset of this module's static TLS block relative to the thread pointer.
         tp_offset: TlsTpOffset,
     },
     /// The module uses dynamic TLS and resolves addresses through `__tls_get_addr`.
-    Dynamic { mod_id: TlsModuleId },
+    Dynamic {
+        /// Runtime TLS module identifier.
+        mod_id: TlsModuleId,
+    },
 }
 
 impl Default for ModuleTls {

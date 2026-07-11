@@ -19,15 +19,16 @@
 </p>
 
 <p align="center">
-  <strong>Load, link, and rewrite ELF in Rust and no_std environments.</strong>
+  <strong>Load, link, and rewrite ELF in no_std environments.</strong>
 </p>
 
-Relink is a Rust ELF loading and runtime linking library. It can load `.so` files, executables, and object files from disk or memory, then resolve dependencies, apply relocations, and look up symbols.
+Relink is a highly customizable, high-performance Rust ELF loading and runtime linking library. It can load `.so` files, executables, and object files from disk or memory, then resolve dependencies, apply relocations, and look up symbols. It also exposes observer hooks for load, relocation, symbol binding, and lifecycle events.
 
 ## When To Use It
 
 - Load plugins, JIT artifacts, or hot-reload modules at runtime.
 - Control `DT_NEEDED` dependencies, symbol scopes, or relocation handling yourself.
+- Track or customize load, relocation, symbol binding, and init/fini flow through observer hooks.
 - Load ELF from memory, or plug in your own mmap or memory-management backend.
 - Scan dependencies and sections first, then reorder layout, pack hot code, use huge pages, or run custom handling.
 - Load relocatable ELF files such as `.o` / `.ko`.
@@ -37,7 +38,7 @@ Relink is a Rust ELF loading and runtime linking library. It can load `.so` file
 
 - Shared objects / dynamic libraries (`ET_DYN`)
 - Executables and PIE-style images (`ET_EXEC`, plus executable-style `ET_DYN`)
-- Relocatable object files (`ET_REL`, for example `.o` / `.ko`) when the `object` feature is enabled
+- Relocatable object files (`ET_REL`, for example `.o` / `.ko`)
 
 ## Compared With `dlopen`
 
@@ -49,23 +50,25 @@ Relink is a Rust ELF loading and runtime linking library. It can load `.so` file
 | Pre-load layout optimization | ✅ Adjust section layout before mapping for hot-code packing or custom reordering | ❌ |
 | Mapping policy | ✅ Replace mmap, page size, permissions, and memory-access backends | ❌ |
 | Dependency and symbol policy | ✅ Customize `DT_NEEDED` resolution, symbol scopes, and relocation interception | ❌ |
+| Observer events | ✅ Hook load, symbol binding, relocation, and related stages | ❌ |
 | Context isolation | ✅ Multiple `LinkContext`s keep independent modules, dependency graphs, and symbol scopes | ❌ |
 | Remote / heterogeneous loading | ✅ Use custom memory access to load remote devices or heterogeneous target ELFs locally | ❌ |
 
 ## Quick Start
 
-The default feature set is suitable for loading dynamic libraries, executables, and handling TLS:
+The default feature set is `full`, which is suitable for loading dynamic libraries, executables,
+relocatable objects, TLS, and lazy binding:
 
 ```toml
 [dependencies]
 elf_loader = "0.15.1"
 ```
 
-To enable the common advanced features in one bundle:
+For a smaller build, disable default features and opt in only to what you need:
 
 ```toml
 [dependencies]
-elf_loader = { version = "0.15.1", features = ["full"] }
+elf_loader = { version = "0.15.1", default-features = false, features = ["libc"] }
 ```
 
 ### Use Linker to Load Dependencies
@@ -128,33 +131,33 @@ Symbol lookup was measured after both loaders had already loaded the fixture cha
 | --- | --- | --- |
 | `libc` | Yes | Use the libc backend on Unix-like platforms |
 | `tls` | Yes | Enable the built-in same-process TLS resolver |
-| `lazy-binding` | No | Enable PLT/GOT lazy binding and lazy-fixup lookup configuration |
-| `object` | No | Enable relocatable object (`ET_REL`) loading and `Loader::load_object()` |
+| `lazy-binding` | Yes | Enable PLT/GOT lazy binding and lazy-fixup lookup configuration |
+| `object` | Yes | Enable relocatable object (`ET_REL`) loading and `Loader::load_object()` |
 | `version` | No | Enable version-aware symbol lookup such as `get_version()` |
 | `log` | No | Enable `log` integration for loader and relocation diagnostics |
 | `portable-atomic` | No | Support targets without native pointer-sized atomics |
 | `use-syscall` | No | Use the Linux syscall backend instead of libc |
-| `full` | No | Convenience bundle: `tls`, `lazy-binding`, `object`, `libc` |
+| `full` | Yes | Convenience bundle: `tls`, `lazy-binding`, `object`, `libc` |
 
 Notes:
 
-- The default features are `tls` + `libc`.
+- The default feature set is `full`, equivalent to `tls` + `lazy-binding` + `object` + `libc`.
 - `tls` only provides the default resolver; custom TLS resolvers do not need this feature.
-- `load_object()` is feature-gated. `cargo run --example load_object` will fail under the default feature set unless you add `--features object`.
+- `load_object()` is still controlled by the `object` feature. Default builds include it; with `--no-default-features`, enable it explicitly.
 
 ## Platform Support
 
 | Instruction set | Dynamic libraries / executables | Pre-load layout optimization | `.o` / `ET_REL` |
 | --- | --- | --- | --- |
 | `x86_64` | ✅ | ✅ | ✅ |
-| `x86` | ✅ | 🟡 | ⏳ |
-| `aarch64` | ✅ | 🟡 | ⏳ |
-| `arm` | ✅ | 🟡 | ⏳ |
-| `riscv64` | ✅ | 🟡 | ✅ |
-| `riscv32` | ✅ | 🟡 | ⏳ |
-| `loongarch64` | ✅ | 🟡 | ⏳ |
+| `x86` | ✅ | 🔧 | 🚧 |
+| `aarch64` | ✅ | 🔧 | 🚧 |
+| `arm` | ✅ | 🔧 | 🚧 |
+| `riscv64` | ✅ | 🔧 | ✅ |
+| `riscv32` | ✅ | 🔧 | 🚧 |
+| `loongarch64` | ✅ | 🔧 | 🚧 |
 
-Legend: ✅ supported, 🟡 basic support, ⏳ pending. Complex section-reorder repair and `.o` / `ET_REL` support are currently centered on `x86_64` and `riscv64` relocation handling; contributions for the other architectures are welcome.
+Legend: ✅ supported, 🔧 basic support, 🚧 pending. Complex section-reorder repair and `.o` / `ET_REL` support are currently centered on `x86_64` and `riscv64` relocation handling; contributions for the other architectures are welcome.
 
 ## Contributing
 

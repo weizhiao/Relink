@@ -1,3 +1,5 @@
+//! Traits implemented by custom lazy PLT binders.
+
 use super::defs::{LazyBindingEntries, LazyRuntime};
 use crate::{
     LazyBindingError, RelocationError, Result,
@@ -16,6 +18,40 @@ pub trait SupportLazy {}
 impl SupportLazy for () {}
 
 /// Supplies lazy PLT runtime entries for a mapped image.
+///
+/// Implement this trait when the default same-process lazy binder is not the
+/// right execution model, for example when the loaded image runs in a remote VM
+/// or on a different architecture. The binder receives a [`LazyRuntime`] handle
+/// for the mapped image and returns the target-visible values written to the
+/// lazy binding slots.
+///
+/// # Example
+///
+/// ```
+/// use elf_loader::{
+///     Relocator, Result,
+///     lazy::{LazyBinder, LazyBindingEntries, LazyRuntime},
+///     memory::VmAddr,
+///     relocation::RelocationArch,
+/// };
+///
+/// #[derive(Clone, Copy)]
+/// struct RemoteLazyBinder {
+///     context: VmAddr,
+///     resolver: VmAddr,
+/// }
+///
+/// impl<Arch: RelocationArch> LazyBinder<Arch> for RemoteLazyBinder {
+///     fn prepare_slots(&self, _runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries> {
+///         Ok(LazyBindingEntries::new(self.context, self.resolver))
+///     }
+/// }
+///
+/// let relocator = Relocator::new().lazy_binder(RemoteLazyBinder {
+///     context: VmAddr::new(0x1000),
+///     resolver: VmAddr::new(0x2000),
+/// });
+/// ```
 pub trait LazyBinder<Arch: RelocationArch>: Send + Sync + 'static {
     /// Resolves the requested binding mode into whether PLT entries should bind lazily.
     #[inline]

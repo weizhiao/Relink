@@ -95,6 +95,6 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         // 执行真正的函数
         jr t1
         ",
-        sym crate::lazy::native::dl_fixup,
+        sym crate::lazy::dl_fixup,
     )
 }

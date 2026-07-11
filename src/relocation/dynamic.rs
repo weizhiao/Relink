@@ -4,7 +4,7 @@ use crate::{
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     hint::{likely, unlikely},
     image::{LoadedCore, RawDynamic},
-    lazy::traits::{LazyBinder, prepare_plt, relocate_jump_slot},
+    lazy::{LazyBinder, prepare_plt, relocate_jump_slot},
     logging,
     memory::{ImageMemory, ImageMemoryExt, MappedView, RegionAccess, VmOffset},
     observer::{DynamicRelocatedEvent, Finalizer, RelocationObserver},

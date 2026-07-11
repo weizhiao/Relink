@@ -105,11 +105,13 @@ impl<'segments, R: RegionAccess> ObjectSegmentView<'segments, R> {
         Self { core, init }
     }
 
+    /// Returns the persistent core segment mapping for the object.
     #[inline]
     pub const fn core(&self) -> &'segments ElfSegments<R> {
         self.core
     }
 
+    /// Returns the optional init-only segment mapping for the object.
     #[inline]
     pub const fn init(&self) -> Option<&'segments ElfSegments<R>> {
         self.init
@@ -229,6 +231,7 @@ impl SectionGroupDef {
     }
 }
 
+/// Configurable section layout groups used while loading relocatable objects.
 #[derive(Clone)]
 pub struct SectionGroups {
     defs: PrimaryMap<SectionGroup, SectionGroupDef>,

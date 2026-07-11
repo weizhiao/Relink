@@ -241,6 +241,7 @@ where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
+    /// Creates a visible module with the keys of its direct dependencies.
     #[inline]
     pub fn new(module: impl Into<ModuleHandle<Arch, Tls>>, direct_deps: Box<[K]>) -> Self {
         Self {
@@ -249,16 +250,19 @@ where
         }
     }
 
+    /// Returns the module handle made visible to the link operation.
     #[inline]
     pub fn module(&self) -> &ModuleHandle<Arch, Tls> {
         &self.module
     }
 
+    /// Returns the direct dependency keys associated with this visible module.
     #[inline]
     pub fn direct_deps(&self) -> &[K] {
         &self.direct_deps
     }
 
+    /// Consumes this value into the module handle and direct dependency keys.
     #[inline]
     pub fn into_parts(self) -> (ModuleHandle<Arch, Tls>, Box<[K]>) {
         (self.module, self.direct_deps)

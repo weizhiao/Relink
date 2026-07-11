@@ -79,6 +79,6 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
     // Jump to the resolved function
     jmp rax
     ",
-        sym crate::lazy::native::dl_fixup,
+        sym crate::lazy::dl_fixup,
     )
 }

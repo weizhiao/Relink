@@ -97,11 +97,13 @@ impl TlsImageSource {
         Self { info, provider }
     }
 
+    /// Returns the TLS layout metadata for this image.
     #[inline]
     pub fn info(&self) -> TlsInfo {
         self.info
     }
 
+    /// Borrows the TLS initialization template while the backing image is alive.
     #[inline]
     pub fn with_template(&self, f: &mut dyn FnMut(TlsTemplate<'_>) -> Result<()>) -> Result<()> {
         let Some(provider) = self.provider.upgrade() else {

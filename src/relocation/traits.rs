@@ -8,7 +8,7 @@ use crate::{
     arch::ArchKind,
     elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelocationType},
     image::ModuleScope,
-    lazy::{defs::LazyBindingSlots, traits::LazyBinder},
+    lazy::{LazyBinder, LazyBindingSlots},
     memory::VmAddr,
     observer::RelocationObserver,
     tls::TlsResolver,

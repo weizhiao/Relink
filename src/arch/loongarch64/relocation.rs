@@ -4,7 +4,7 @@ use elf::abi::EM_LOONGARCH;
 
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
-use crate::lazy::defs::LazyBindingSlots;
+use crate::lazy::LazyBindingSlots;
 #[cfg(feature = "object")]
 use crate::relocation::ObjectArch;
 use crate::relocation::RelocationArch;

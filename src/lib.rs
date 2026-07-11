@@ -97,10 +97,47 @@
 //! }
 //! ```
 //!
+//! ## Observer Hooks
+//!
+//! Observers are attached to a single loader or linker run, so reusable
+//! [`Loader`] and [`Linker`] configuration can stay immutable while each run
+//! decides which events to inspect or override.
+//!
+//! ```rust,no_run
+//! use elf_loader::{
+//!     Loader, Result,
+//!     arch::NativeArch,
+//!     observer::{BeforeLoadEvent, LoadObserver},
+//!     relocation::RelocationArch,
+//! };
+//!
+//! struct TraceLoads;
+//!
+//! impl LoadObserver for TraceLoads {
+//!     fn on_before_load(
+//!         &mut self,
+//!         event: BeforeLoadEvent<'_, (), <NativeArch as RelocationArch>::Layout>,
+//!     ) -> Result<()> {
+//!         let _path = event.path();
+//!         let _is_dynamic = event.is_dynamic();
+//!         Ok(())
+//!     }
+//! }
+//!
+//! fn main() -> Result<()> {
+//!     let _raw = Loader::new()
+//!         .run()
+//!         .with_observer(TraceLoads)
+//!         .load_dylib("path/to/lib.so")?;
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
 //! ## Feature Flags
 //!
 //! - `tls` (default): enables TLS relocation handling. For TLS-using modules, start from
-//!   [`Loader::with_default_tls_resolver`] or provide a custom TLS resolver.
+//!   `Loader::with_default_tls_resolver` or provide a custom TLS resolver.
 //! - `lazy-binding`: enables `Relocator::lazy` and PLT/GOT lazy binding.
 //! - `object`: enables `Loader::load_object` and relocatable object (`ET_REL`) loading.
 //! - `version`: enables version-aware symbol lookup via `ElfCore::get_version`.
@@ -109,12 +146,12 @@
 //!
 //! ## More
 //!
-//! - The [`examples`](https://github.com/weizhiao/elf_loader/tree/main/examples) directory
-//!   covers loading from memory, `Linker::load`, scan-first linking, lifecycle hooks,
-//!   relocation handlers, and object loading.
+//! - The [`examples`](https://github.com/weizhiao/Relink/tree/main/examples) directory
+//!   covers loading from memory, `Linker::load`, scan-first linking, observer hooks,
+//!   and object loading.
 //! - The crate currently targets `x86_64`, `x86`, `aarch64`, `arm`, `riscv64`, `riscv32`,
 //!   and `loongarch64`.
-//! - Relocatable object support is currently centered on `x86_64`.
+//! - Relocatable object support is currently centered on `x86_64` and `riscv64`.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![no_std]
 #![warn(

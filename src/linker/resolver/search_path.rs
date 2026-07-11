@@ -61,6 +61,7 @@ impl fmt::Debug for SearchPathEntry {
     }
 }
 
+/// Search request used to build filesystem candidates for a root or dependency.
 #[derive(Clone, Copy)]
 pub enum CandidateRequest<'a> {
     /// Resolving the root key passed to [`KeyResolver::load_root`].

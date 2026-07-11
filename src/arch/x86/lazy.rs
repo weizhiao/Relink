@@ -42,6 +42,6 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
     // 弹出解析后的地址并跳转
     ret
     ",
-        sym crate::lazy::native::dl_fixup,
+        sym crate::lazy::dl_fixup,
     )
 }

@@ -1,7 +1,7 @@
 use crate::{
     Relocator, Result,
     image::{ModuleHandle, ModuleScope, ModuleScopeBuilder},
-    lazy::traits::{LazyBinder, SupportLazy},
+    lazy::{LazyBinder, SupportLazy},
     observer::RelocationObserver,
     relocation::{BindingMode, Relocatable, RelocateArgs, RelocationArch},
     tls::TlsResolver,

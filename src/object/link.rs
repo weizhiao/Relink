@@ -5,7 +5,7 @@ use crate::{
         ElfSymbolType,
     },
     image::{LoadedCore, LoadedObject, ModuleScope, RawObject, exports_handle},
-    lazy::traits::LazyBinder,
+    lazy::LazyBinder,
     logging,
     memory::{RegionAccess, VmAddr, VmOffset},
     object::{ObjectExports, ObjectSegmentView, section_entries},

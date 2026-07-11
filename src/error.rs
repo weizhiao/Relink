@@ -1,21 +1,11 @@
+//! Error types returned by Relink APIs.
+
 use crate::{
     elf::{ElfClass, ElfDataEncoding, ElfDynamicTag, ElfFileType, ElfMachine},
     linker::{ContextId, KeyId, ModuleId},
 };
 use alloc::{borrow::Cow, boxed::Box};
 use core::fmt::{self, Display};
-
-const TLS_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
-    "TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support."
-} else {
-    "TLS support is not compiled into this build. Enable the `tls` cargo feature."
-};
-
-const STATIC_TLS_DISABLED_MESSAGE: &str = if cfg!(feature = "tls") {
-    "Static TLS is not supported by this resolver. Use `with_default_tls_resolver()` to enable TLS support."
-} else {
-    "TLS support is not compiled into this build. Enable the `tls` cargo feature."
-};
 
 /// Structured I/O error details.
 pub enum IoError {
@@ -765,12 +755,48 @@ impl Display for CodeError {
 pub enum CustomError {
     /// A plain message supplied by the caller.
     Message(Cow<'static, str>),
+    /// A user error object preserved for display, source chaining, and downcasting.
+    Boxed(Box<dyn core::error::Error + Send + Sync + 'static>),
+}
+
+impl CustomError {
+    /// Creates a custom error from a user-facing message.
+    #[inline]
+    pub fn message(msg: impl Into<Cow<'static, str>>) -> Self {
+        Self::Message(msg.into())
+    }
+
+    /// Wraps a user error object without losing its concrete type.
+    #[inline]
+    pub fn boxed(error: impl core::error::Error + Send + Sync + 'static) -> Self {
+        Self::Boxed(Box::new(error))
+    }
+
+    /// Attempts to borrow the boxed user error as a concrete type.
+    #[inline]
+    pub fn downcast_ref<T: core::error::Error + 'static>(&self) -> Option<&T> {
+        match self {
+            Self::Message(_) => None,
+            Self::Boxed(error) => error.downcast_ref::<T>(),
+        }
+    }
 }
 
 impl Display for CustomError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Message(msg) => f.write_str(msg),
+            Self::Boxed(error) => Display::fmt(error, f),
+        }
+    }
+}
+
+impl core::error::Error for CustomError {
+    #[inline]
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Message(_) => None,
+            Self::Boxed(error) => Some(&**error),
         }
     }
 }
@@ -1024,8 +1050,12 @@ pub enum TlsError {
 impl Display for TlsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ResolverUnsupported => f.write_str(TLS_DISABLED_MESSAGE),
-            Self::StaticResolverUnsupported => f.write_str(STATIC_TLS_DISABLED_MESSAGE),
+            Self::ResolverUnsupported => {
+                f.write_str("TLS operation is not supported by the configured resolver")
+            }
+            Self::StaticResolverUnsupported => {
+                f.write_str("static TLS is not supported by the configured resolver")
+            }
             Self::TemplateUnavailable => f.write_str("TLS template image is no longer available"),
             Self::InvalidModuleId => f.write_str("TLS module ID is not registered"),
         }
@@ -1176,7 +1206,15 @@ impl Display for Error {
     }
 }
 
-impl core::error::Error for Error {}
+impl core::error::Error for Error {
+    #[inline]
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Custom(error) => core::error::Error::source(error),
+            _ => None,
+        }
+    }
+}
 
 macro_rules! debug_as_display {
     ($($ty:ty),* $(,)?) => {
@@ -1227,8 +1265,8 @@ pub(crate) fn relocate_context_error(
 
 #[cold]
 #[inline(never)]
-pub fn custom_error(msg: impl Into<Cow<'static, str>>) -> Error {
-    Error::Custom(CustomError::Message(msg.into()))
+pub(crate) fn custom_error(msg: impl Into<Cow<'static, str>>) -> Error {
+    Error::Custom(CustomError::message(msg))
 }
 
 #[cfg(test)]
@@ -1253,5 +1291,31 @@ mod tests {
 
         let err = Error::from(parse_err);
         assert_eq!(format!("{err:?}"), err.to_string());
+    }
+
+    #[test]
+    fn custom_boxed_error_preserves_source() {
+        #[derive(Debug)]
+        struct UserError(u32);
+
+        impl Display for UserError {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "user error {}", self.0)
+            }
+        }
+
+        impl core::error::Error for UserError {}
+
+        let err = Error::Custom(CustomError::boxed(UserError(7)));
+        assert_eq!(err.to_string(), "Custom error: user error 7");
+
+        let source = core::error::Error::source(&err).expect("custom source should be preserved");
+        assert_eq!(source.to_string(), "user error 7");
+        assert_eq!(source.downcast_ref::<UserError>().unwrap().0, 7);
+
+        let Error::Custom(custom) = &err else {
+            panic!("expected custom error");
+        };
+        assert_eq!(custom.downcast_ref::<UserError>().unwrap().0, 7);
     }
 }

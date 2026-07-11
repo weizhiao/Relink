@@ -22,6 +22,7 @@ pub struct HostRegion {
 }
 
 impl MappedRegion<HostRegion> {
+    /// Creates a host-backed mapped region that unmaps through `control` on drop.
     #[inline]
     pub fn local<M>(host_ptr: *mut c_void, len: usize, control: M) -> Self
     where
@@ -35,6 +36,7 @@ impl MappedRegion<HostRegion> {
         ))
     }
 
+    /// Creates a host-backed mapped region alias that does not unmap on drop.
     #[inline]
     pub fn local_alias<M>(host_ptr: *mut c_void, len: usize, control: M) -> Self
     where

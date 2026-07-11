@@ -11,7 +11,7 @@ use super::{
 use crate::{
     Loader, LoaderRun, Result,
     image::{LoadedCore, RawDynamic},
-    lazy::traits::LazyBinder,
+    lazy::LazyBinder,
     memory::RegionAccess,
     observer::{LoadObserver, RelocationObserver},
     os::Mmap,

@@ -95,6 +95,6 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
     // 跳转到解析后的地址
     br x17
         ",
-        dl_fixup = sym crate::lazy::native::dl_fixup,
+        dl_fixup = sym crate::lazy::dl_fixup,
     )
 }

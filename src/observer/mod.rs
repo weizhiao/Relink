@@ -1,3 +1,5 @@
+//! Observer traits and event payloads for load and relocation hooks.
+
 mod event;
 mod traits;
 

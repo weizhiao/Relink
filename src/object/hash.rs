@@ -14,6 +14,7 @@ struct TableEntry<N> {
 
 const HASHER: FoldHasher<'static> = FoldHasher::with_seed(0, SharedSeed::global_fixed());
 
+/// Hash table used for symbol lookup in Relink-generated object exports.
 pub struct CustomHash<N = &'static str> {
     map: RawHashTable<TableEntry<N>>,
 }

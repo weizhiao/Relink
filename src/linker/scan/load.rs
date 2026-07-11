@@ -5,7 +5,7 @@ use super::{
 use crate::{
     LinkerError, Loader, Result,
     image::{RawDynamic, ScannedDynamic},
-    lazy::traits::LazyBinder,
+    lazy::LazyBinder,
     linker::{
         context::LinkContext,
         driver::LoadResult,

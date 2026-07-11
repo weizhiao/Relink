@@ -8,11 +8,12 @@ use alloc::ffi::CString;
 use core::ffi::{c_int, c_void};
 use syscalls::Sysno;
 
-/// An implementation of Mmap trait
+/// Default raw-syscall mapping backend for Linux `use-syscall` builds.
 #[derive(Clone, Copy, Default)]
 pub struct DefaultMmap;
 
 impl DefaultMmap {
+    /// Creates the default raw-syscall mapping backend.
     #[inline]
     pub const fn new() -> Self {
         Self

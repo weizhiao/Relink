@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 #[cfg(feature = "lazy-binding")]
-use elf_loader::lazy::native::NativeLazyBinder;
+use elf_loader::lazy::NativeLazyBinder;
 #[cfg(feature = "tls")]
 use elf_loader::tls::DefaultTlsResolver;
 use elf_loader::{

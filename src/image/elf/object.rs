@@ -12,7 +12,7 @@ use crate::{
     Result,
     elf::{ElfSectionId, Lifecycle},
     image::exports_handle,
-    lazy::traits::LazyBinder,
+    lazy::LazyBinder,
     memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
     relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},

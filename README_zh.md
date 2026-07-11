@@ -19,15 +19,16 @@
 </p>
 
 <p align="center">
-  <strong>在 Rust / no_std 环境中加载、链接和改写 ELF。</strong>
+  <strong>在 no_std 环境中加载、链接和改写 ELF。</strong>
 </p>
 
-Relink 是一个 Rust ELF 加载与运行时链接库。它可以从文件或内存加载 `.so`、可执行文件和目标文件，并完成依赖解析、重定位和符号查找。
+Relink 是一个高可定制、高性能的 Rust ELF 加载与运行时链接库。它可以从文件或内存加载 `.so`、可执行文件和目标文件，并完成依赖解析、重定位和符号查找；同时提供 observer 机制，用于观察或定制加载、重定位、符号绑定与生命周期事件。
 
 ## 什么时候用
 
 - 运行时加载插件、JIT 产物或热更新模块。
 - 需要自己控制 `DT_NEEDED` 依赖、符号作用域或重定位处理。
+- 需要通过 observer 机制跟踪或改写加载、重定位、符号绑定与 init/fini 流程。
 - 需要从内存加载 ELF，或接入自己的 mmap / 内存管理后端。
 - 需要先扫描依赖和 section，再做布局重排、热路径代码聚集、大页映射或自定义处理。
 - 需要加载 `.o` / `.ko` 这类可重定位 ELF。
@@ -37,7 +38,7 @@ Relink 是一个 Rust ELF 加载与运行时链接库。它可以从文件或内
 
 - 共享对象 / 动态库（`ET_DYN`）
 - 可执行文件与 PIE 风格镜像（`ET_EXEC`，以及按可执行文件处理的 `ET_DYN`）
-- 开启 `object` feature 后的可重定位目标文件（`ET_REL`，例如 `.o` / `.ko`）
+- 可重定位目标文件（`ET_REL`，例如 `.o` / `.ko`）
 
 ## 和 `dlopen` 相比
 
@@ -49,23 +50,24 @@ Relink 是一个 Rust ELF 加载与运行时链接库。它可以从文件或内
 | 加载前布局优化 | ✅ 可在映射前调整 section 布局，用于热路径聚集或自定义重排 | ❌ |
 | 映射策略 | ✅ 可替换 mmap、页大小、权限和内存访问后端 | ❌ |
 | 依赖与符号策略 | ✅ 可自定义 `DT_NEEDED` 解析、符号 scope 和重定位拦截 | ❌ |
+| Observer 事件 | ✅ 可在加载、符号绑定、重定位等阶段插入 hook | ❌ |
 | 上下文隔离 | ✅ 多个 `LinkContext` 独立保存模块、依赖图和符号作用域 | ❌ |
 | 远程 / 异构加载 | ✅ 可用自定义内存访问在本地装载远程设备或异构目标 ELF | ❌ |
 
 ## 快速开始
 
-默认 feature 集合适合直接加载动态库、可执行文件和处理 TLS：
+默认 feature 集合是 `full`，适合直接加载动态库、可执行文件、可重定位目标文件、TLS 和 lazy binding：
 
 ```toml
 [dependencies]
 elf_loader = "0.15.1"
 ```
 
-如果你希望一次打开常见高级能力，可以启用 `full`：
+如果你需要更小的构建，可以关闭默认 feature 后按需选择：
 
 ```toml
 [dependencies]
-elf_loader = { version = "0.15.1", features = ["full"] }
+elf_loader = { version = "0.15.1", default-features = false, features = ["libc"] }
 ```
 
 ### 使用 Linker 加载依赖
@@ -128,33 +130,33 @@ fn main() -> Result<()> {
 | --- | --- | --- |
 | `libc` | 是 | 在 Unix-like 平台使用 libc 后端 |
 | `tls` | 是 | 启用内置同进程 TLS resolver |
-| `lazy-binding` | 否 | 启用 PLT/GOT lazy binding 和 lazy fixup 查找配置 |
-| `object` | 否 | 启用可重定位目标文件（`ET_REL`）加载和 `Loader::load_object()` |
+| `lazy-binding` | 是 | 启用 PLT/GOT lazy binding 和 lazy fixup 查找配置 |
+| `object` | 是 | 启用可重定位目标文件（`ET_REL`）加载和 `Loader::load_object()` |
 | `version` | 否 | 启用带符号版本的查找，例如 `get_version()` |
 | `log` | 否 | 启用基于 `log` 的加载与重定位诊断输出 |
 | `portable-atomic` | 否 | 为不支持原生指针宽度原子操作的目标提供支持 |
 | `use-syscall` | 否 | 在 Linux 上使用 syscall 后端，而不是 libc |
-| `full` | 否 | 便捷组合：`tls`、`lazy-binding`、`object`、`libc` |
+| `full` | 是 | 便捷组合：`tls`、`lazy-binding`、`object`、`libc` |
 
 说明：
 
-- 默认 feature 是 `tls` + `libc`。
+- 默认 feature 是 `full`，等价于 `tls` + `lazy-binding` + `object` + `libc`。
 - `tls` 只提供默认 resolver；使用自定义 TLS resolver 时，不需要开启这个 feature。
-- `load_object()` 是 feature-gated 的。默认 feature 下直接运行 `cargo run --example load_object` 会失败，需要加上 `--features object`。
+- `load_object()` 仍由 `object` feature 控制；默认构建已包含该 feature，`--no-default-features` 时需要显式开启。
 
 ## 平台支持
 
 | 指令集 | 动态库 / 可执行文件 | 加载前布局优化 | `.o` / `ET_REL` |
 | --- | --- | --- | --- |
 | `x86_64` | ✅ | ✅ | ✅ |
-| `x86` | ✅ | 🟡 | ⏳ |
-| `aarch64` | ✅ | 🟡 | ⏳ |
-| `arm` | ✅ | 🟡 | ⏳ |
-| `riscv64` | ✅ | 🟡 | ✅ |
-| `riscv32` | ✅ | 🟡 | ⏳ |
-| `loongarch64` | ✅ | 🟡 | ⏳ |
+| `x86` | ✅ | 🔧 | 🚧 |
+| `aarch64` | ✅ | 🔧 | 🚧 |
+| `arm` | ✅ | 🔧 | 🚧 |
+| `riscv64` | ✅ | 🔧 | ✅ |
+| `riscv32` | ✅ | 🔧 | 🚧 |
+| `loongarch64` | ✅ | 🔧 | 🚧 |
 
-符号：✅ 支持，🟡 基础支持，⏳ 待实现。复杂 section 重排修复和 `.o` / `ET_REL` 目前主要围绕 `x86_64` 与 `riscv64` 的重定位实现展开；其他架构欢迎补齐。
+符号：✅ 支持，🔧 基础支持，🚧 待补齐。复杂 section 重排修复和 `.o` / `ET_REL` 目前主要围绕 `x86_64` 与 `riscv64` 的重定位实现展开；其他架构欢迎补齐。
 
 ## 参与贡献
 

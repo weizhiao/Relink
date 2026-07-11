@@ -42,7 +42,7 @@ fn unresolved_symbol_fails_bind_now_relocation() {
 
 #[cfg(not(feature = "tls"))]
 #[test]
-fn tls_image_requires_feature() {
+fn tls_image_requires_resolver_without_default_feature() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_tls("tls_value", &[1, 2, 3, 4])]);
 
     let error = Loader::new()
@@ -51,7 +51,7 @@ fn tls_image_requires_feature() {
 
     let message = error.to_string();
     assert!(
-        message.contains("TLS support is not compiled into this build"),
+        message.contains("TLS operation is not supported by the configured resolver"),
         "unexpected error: {message}"
     );
 }
@@ -67,7 +67,7 @@ fn tls_image_requires_resolver() {
 
     let message = error.to_string();
     assert!(
-        message.contains("with_default_tls_resolver()"),
+        message.contains("TLS operation is not supported by the configured resolver"),
         "unexpected error: {message}"
     );
 }

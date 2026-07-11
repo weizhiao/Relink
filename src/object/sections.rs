@@ -21,6 +21,7 @@ impl<L: ElfLayout> ObjectSections<L> {
         }
     }
 
+    /// Returns all object section headers.
     #[inline]
     pub fn headers(&self) -> &[ElfShdr<L>] {
         &self.shdrs
@@ -31,6 +32,7 @@ impl<L: ElfLayout> ObjectSections<L> {
         &mut self.shdrs
     }
 
+    /// Returns one section header by section id.
     #[inline]
     pub fn section(&self, id: ElfSectionId) -> &ElfShdr<L> {
         &self.shdrs[id.index()]
@@ -75,11 +77,13 @@ impl<L: ElfLayout> ObjectSections<L> {
             .unwrap_or(false)
     }
 
+    /// Returns the raw section-name string table.
     #[inline]
     pub fn name_table(&self) -> &[u8] {
         &self.shstrtab
     }
 
+    /// Returns the NUL-terminated name for one section.
     #[inline]
     pub fn section_name(&self, id: ElfSectionId) -> &CStr {
         let shdr = self.section(id);
@@ -87,6 +91,7 @@ impl<L: ElfLayout> ObjectSections<L> {
         CStr::from_bytes_until_nul(bytes).expect("validated section name must be NUL-terminated")
     }
 
+    /// Finds a section by exact UTF-8 name.
     #[inline]
     pub fn find_section(&self, name: &str) -> Option<ElfSectionId> {
         self.shdrs.iter().enumerate().find_map(|(index, _)| {

@@ -5,7 +5,7 @@ use elf::abi::*;
 use crate::Result;
 use crate::arch::{ArchKind, riscv};
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
-use crate::lazy::defs::LazyBindingSlots;
+use crate::lazy::LazyBindingSlots;
 use crate::relocation::RelocationArch;
 
 const EF_RISCV_RV64ILP32: u32 = 0x0020;

@@ -50,21 +50,25 @@ pub struct VmAddr(usize);
 pub struct VmOffset(usize);
 
 impl VmOffset {
+    /// Creates a VM offset from a raw byte count.
     #[inline]
     pub const fn new(offset: usize) -> Self {
         Self(offset)
     }
 
+    /// Returns this offset as a raw byte count.
     #[inline]
     pub const fn get(self) -> usize {
         self.0
     }
 
+    /// Adds a byte count, returning `None` on overflow.
     #[inline]
     pub fn checked_add(self, bytes: usize) -> Option<Self> {
         self.0.checked_add(bytes).map(Self)
     }
 
+    /// Computes `self - base`, returning `None` if `self` is before `base`.
     #[inline]
     pub fn checked_offset_from(self, base: Self) -> Option<Self> {
         self.0.checked_sub(base.0).map(Self)
@@ -79,31 +83,37 @@ impl core::fmt::Display for VmOffset {
 }
 
 impl VmAddr {
+    /// Creates a VM address from a raw integer value.
     #[inline]
     pub const fn new(addr: usize) -> Self {
         Self(addr)
     }
 
+    /// Returns this address as a raw integer value.
     #[inline]
     pub const fn get(self) -> usize {
         self.0
     }
 
+    /// Converts a pointer value into a VM address.
     #[inline]
     pub fn from_ptr<T>(ptr: *const T) -> Self {
         Self(ptr as usize)
     }
 
+    /// Returns the null VM address.
     #[inline]
     pub const fn null() -> Self {
         Self(0)
     }
 
+    /// Converts this VM address to a const pointer.
     #[inline]
     pub const fn as_ptr<T>(self) -> *const T {
         self.0 as *const T
     }
 
+    /// Converts this VM address to a mutable pointer.
     #[inline]
     pub const fn as_mut_ptr<T>(self) -> *mut T {
         self.0 as *mut T
@@ -126,31 +136,37 @@ impl VmAddr {
         Self(rounddown(self.0, align))
     }
 
+    /// Adds an offset, returning `None` on overflow.
     #[inline]
     pub fn checked_add(self, offset: VmOffset) -> Option<Self> {
         self.0.checked_add(offset.0).map(Self)
     }
 
+    /// Computes `self - base`, returning `None` if `self` is before `base`.
     #[inline]
     pub fn checked_offset_from(self, base: Self) -> Option<VmOffset> {
         self.0.checked_sub(base.0).map(VmOffset)
     }
 
+    /// Adds an offset with wrapping arithmetic.
     #[inline]
     pub fn wrapping_add(self, offset: VmOffset) -> Self {
         Self(self.0.wrapping_add(offset.0))
     }
 
+    /// Subtracts an offset with wrapping arithmetic.
     #[inline]
     pub fn wrapping_sub(self, offset: VmOffset) -> Self {
         Self(self.0.wrapping_sub(offset.0))
     }
 
+    /// Computes `self - base` with wrapping arithmetic.
     #[inline]
     pub const fn wrapping_offset_from(self, base: Self) -> VmOffset {
         VmOffset(self.0.wrapping_sub(base.0))
     }
 
+    /// Adds a signed offset with wrapping arithmetic.
     #[inline]
     pub const fn wrapping_add_signed(self, rhs: isize) -> Self {
         Self(self.0.wrapping_add_signed(rhs))
@@ -206,21 +222,25 @@ impl<T: 'static> Clone for MappedView<T> {
 }
 
 impl<R: RegionAccess> MappedRegion<R> {
+    /// Wraps a region access backend in a shared mapped-region handle.
     #[inline]
     pub fn new(region: R) -> Self {
         Self(Arc::new(region))
     }
 
+    /// Returns the base VM address of the mapped region.
     #[inline]
     pub fn addr(&self) -> VmAddr {
         self.0.addr()
     }
 
+    /// Returns the mapped region length in bytes.
     #[inline]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    /// Returns true when this region contains no bytes.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()

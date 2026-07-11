@@ -14,15 +14,25 @@ use crate::{
 use alloc::boxed::Box;
 use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 
-/// Configurable ELF loader.
+/// Reusable configuration for reading and mapping ELF images.
 ///
 /// `Loader` maps ELF objects from files or memory and produces raw image types such as
 /// [`crate::image::RawElf`], [`crate::image::RawDynamic`], [`crate::image::RawDylib`],
 /// and [`crate::image::RawExec`].
 /// Those raw images can then be relocated with [`crate::Relocator`].
 ///
-/// Use the `with_*` builder methods to customize hooks, lifecycle handling,
-/// dynamic-image user data, memory mapping, and TLS behavior.
+/// A loader contains only stable configuration: target architecture, mapping
+/// backend, user-data type, executor, and TLS resolver. Per-load scratch state
+/// and observers live in [`LoaderRun`], so a configured loader can be reused
+/// across many inputs.
+///
+/// Start with [`Loader::new`], call configuration methods such as
+/// [`for_arch`](Self::for_arch) or `with_default_tls_resolver`, then call a
+/// `load_*` method. Attach per-run observers with
+/// [`LoaderRun::with_observer`]. Use
+/// [`Relocator`](crate::Relocator) for explicit symbol scopes and final
+/// relocation, or [`Linker`](crate::Linker) when `DT_NEEDED` dependencies should
+/// be resolved automatically.
 ///
 /// # Examples
 ///
@@ -280,7 +290,8 @@ where
     ///
     /// Dynamic images are created with `NewD::default()`. To fill or adjust
     /// that data after dynamic metadata has been parsed, implement
-    /// [`LoadObserver::on_after_dynamic_load`] on the configured load observer.
+    /// [`LoadObserver::on_after_dynamic_load`](crate::observer::LoadObserver::on_after_dynamic_load)
+    /// on the configured load observer.
     pub const fn with_data<NewD>(self) -> Loader<NewD, Tls, Arch, M, Exec>
     where
         NewD: Default + 'static,
@@ -377,8 +388,9 @@ where
     /// [`X86_64Arch`](crate::arch::x86_64::relocation::X86_64Arch)) makes
     /// every subsequent `load_*` call validate the ELF `e_machine` against
     /// `NewArch::MACHINE` instead of the host's, and stamps the resulting
-    /// raw images with `NewArch` so [`Relocator::relocate`] uses the matching
-    /// relocation numbering.
+    /// raw images with `NewArch` so [`Relocator::run`](crate::Relocator::run)
+    /// and [`RelocatorRun::relocate`](crate::RelocatorRun::relocate) use the
+    /// matching relocation numbering.
     ///
     /// Non-host architectures do not execute guest
     /// IFUNC resolvers, TLSDESC stubs, lazy-binding trampolines, and init
@@ -391,7 +403,7 @@ where
     /// first and then attach the user-data type once the target architecture is
     /// fixed.
     ///
-    /// [`Relocator::relocate`]: crate::Relocator::relocate
+    /// [`RelocatorRun::relocate`]: crate::RelocatorRun::relocate
     pub const fn for_arch<NewArch>(self) -> Loader<(), Tls, NewArch, M, NativeCodeExecutor>
     where
         NewArch: RelocationArch,

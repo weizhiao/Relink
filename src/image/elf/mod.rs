@@ -10,7 +10,7 @@ use crate::{
     elf::ElfPhdr,
     image::LoadedCore,
     input::Path,
-    lazy::traits::{LazyBinder, SupportLazy},
+    lazy::{LazyBinder, SupportLazy},
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},

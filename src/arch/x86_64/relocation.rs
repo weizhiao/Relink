@@ -9,7 +9,7 @@ use elf::abi::*;
 
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
-use crate::lazy::defs::LazyBindingSlots;
+use crate::lazy::LazyBindingSlots;
 use crate::relocation::{
     RelocationArch, RelocationValueFormula, RelocationValueKind, RelocationValueProvider,
 };

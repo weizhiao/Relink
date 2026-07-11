@@ -1,3 +1,5 @@
+//! Same-process native lazy binder implementation.
+
 use super::{
     defs::{LazyBindingEntries, LazyRuntime},
     traits::LazyBinder,
@@ -37,6 +39,7 @@ where
 pub struct NativeLazyBinder;
 
 impl NativeLazyBinder {
+    /// Creates a native same-process lazy binder.
     #[inline]
     pub const fn new() -> Self {
         Self
