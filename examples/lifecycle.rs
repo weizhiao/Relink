@@ -2,11 +2,10 @@
 mod fixture_support;
 
 use elf_loader::{
-    Loader, Result,
+    Loader, Relocator, Result,
     arch::NativeArch,
     memory::RegionAccess,
     observer::{InitEvent, RelocationObserver},
-    relocation::Relocator,
     tls::TlsResolver,
 };
 

@@ -165,7 +165,7 @@ impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
 /// segment, including shared objects and dynamically linked executables.
 ///
 /// The optional `Arch` type parameter selects the target architecture used
-/// during [`crate::relocation::Relocator::run`]. By default it is
+/// during [`crate::Relocator::run`]. By default it is
 /// [`crate::arch::NativeArch`].
 pub struct RawDynamic<
     D,

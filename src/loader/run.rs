@@ -233,7 +233,7 @@ where
     /// Loads a shared object (`ET_DYN`) into memory and returns a raw dylib image.
     ///
     /// The returned value is mapped but not yet relocated. Pass it to
-    /// [`crate::relocation::Relocator::run`] to resolve symbols and produce a
+    /// [`crate::Relocator::run`] to resolve symbols and produce a
     /// ready-to-use loaded image.
     ///
     /// Any [`IntoElfReader`] input is accepted, including paths, byte slices,
@@ -244,13 +244,13 @@ where
     /// [`Loader::for_arch::<NewArch>()`](super::Loader::for_arch) before
     /// calling this method. The `e_machine` gate then validates against
     /// `NewArch::MACHINE`, and the returned [`RawDylib`] carries the chosen
-    /// `Arch`, so [`crate::relocation::Relocator::run`] uses the matching relocation
+    /// `Arch`, so [`crate::Relocator::run`] uses the matching relocation
     /// numbering and skips host-side runtime hooks (IFUNC, TLSDESC, lazy
     /// binding, init arrays).
     ///
     /// # Examples
     /// ```no_run
-    /// use elf_loader::{Loader, relocation::Relocator};
+    /// use elf_loader::{Loader, Relocator};
     ///
     /// let mut loader = Loader::new();
     /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
@@ -273,7 +273,7 @@ where
     /// Unlike [`Loader::load_dylib`], this accepts both `ET_DYN` shared objects
     /// and `ET_EXEC` executables that carry a `PT_DYNAMIC` segment. The returned
     /// value is mapped but not yet relocated. Pass it to
-    /// [`crate::relocation::Relocator::run`] to resolve symbols and produce a
+    /// [`crate::Relocator::run`] to resolve symbols and produce a
     /// ready-to-use loaded image.
     pub fn load_dynamic<'a, I>(&mut self, input: I) -> Result<RawDynamic<D, Arch, M::Region, Tls>>
     where
@@ -457,7 +457,7 @@ where
     ///
     /// Both static executables and dynamically-linked / PIE-style executables are supported.
     /// Dynamic executables can later be relocated with
-    /// [`crate::relocation::Relocator::run`].
+    /// [`crate::Relocator::run`].
     ///
     /// # Examples
     /// ```no_run

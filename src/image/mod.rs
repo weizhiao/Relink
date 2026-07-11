@@ -4,7 +4,7 @@
 //! and [`RawExec`].
 //! Those raw values are mapped into memory but not yet relocated.
 //!
-//! After passing a raw image to [`crate::relocation::Relocator::run`] and calling
+//! After passing a raw image to [`crate::Relocator::run`] and calling
 //! `relocate()`, you get loaded image types such as [`LoadedElf`], [`LoadedExec`],
 //! and [`LoadedCore`], which expose symbol lookup, metadata, and dependency
 //! retention.

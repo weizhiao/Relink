@@ -191,7 +191,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     ///
     /// # Examples
     /// ```no_run
-    /// # use elf_loader::{input::ElfBinary, image::Symbol, Loader, relocation::Relocator};
+    /// # use elf_loader::{input::ElfBinary, image::Symbol, Loader, Relocator};
     /// # let mut loader = Loader::new();
     /// # let raw = loader.load_dylib(ElfBinary::new("target/liba.so", &[])).unwrap();
     /// # let lib = Relocator::new().run(raw).relocate().unwrap();
@@ -203,7 +203,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     ///
     /// A static variable may also be loaded and inspected:
     /// ```no_run
-    /// # use elf_loader::{input::ElfBinary, image::Symbol, Loader, relocation::Relocator};
+    /// # use elf_loader::{input::ElfBinary, image::Symbol, Loader, Relocator};
     /// # let mut loader = Loader::new();
     /// # let raw = loader.load_dylib(ElfBinary::new("target/liba.so", &[])).unwrap();
     /// # let lib = Relocator::new().run(raw).relocate().unwrap();
@@ -245,7 +245,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     ///
     /// # Examples
     /// ```no_run
-    /// # use elf_loader::{Loader, input::ElfFile, relocation::Relocator};
+    /// # use elf_loader::{Loader, Relocator, input::ElfFile};
     /// # let mut loader = Loader::new();
     /// # let raw = loader.load_dylib(ElfFile::from_path("target/liba.so").unwrap()).unwrap();
     /// # let lib = Relocator::new().run(raw).relocate().unwrap();

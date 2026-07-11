@@ -24,7 +24,7 @@ use core::fmt::Debug;
 /// relocation.
 ///
 /// The optional `Arch` type parameter selects the target architecture used by
-/// [`crate::relocation::Relocator::run`]. By default it is [`crate::arch::NativeArch`].
+/// [`crate::Relocator::run`]. By default it is [`crate::arch::NativeArch`].
 pub struct RawDylib<
     D,
     Arch = crate::arch::NativeArch,

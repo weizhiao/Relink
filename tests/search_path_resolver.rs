@@ -6,8 +6,9 @@ mod fixture_support;
 use std::{fs, path::PathBuf as StdPathBuf};
 
 use elf_loader::{
+    LinkContext, Linker,
     input::{Path as ElfPath, PathBuf},
-    linker::{CandidateRequest, LinkContext, Linker, SearchPathResolver},
+    linker::{CandidateRequest, SearchPathResolver},
 };
 
 #[test]

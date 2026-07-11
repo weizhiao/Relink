@@ -2,13 +2,10 @@
 mod fixture_support;
 
 use elf_loader::{
-    Result,
+    LinkContext, Linker, Result,
     image::ModuleCapability,
     input::PathBuf,
-    linker::{
-        LinkContext, Linker,
-        scan::{LinkPass, LinkPassPlan, Materialization, ReorderPass},
-    },
+    linker::scan::{LinkPass, LinkPassPlan, Materialization, ReorderPass},
 };
 
 struct ConfigureRootSectionRegions;

@@ -25,8 +25,7 @@
 //! - Hybrid linking. Compose `.so`, `.o`, and synthetic modules at runtime with `scope()` and
 //!   `extend_scope()`.
 //! - Explicit dependency loading. Build your own dependency policy with an
-//!   actual [`Loader`], [`linker::KeyResolver`], [`linker::Linker`], and
-//!   [`linker::LinkContext`].
+//!   actual [`Loader`], [`linker::KeyResolver`], [`Linker`], and [`LinkContext`].
 //! - Deep customization. Inject host or bridge symbols with
 //!   [`image::SyntheticModule`] and intercept relocations with handlers.
 //! - Optional advanced features. TLS relocation handling, lazy binding, relocatable object
@@ -36,9 +35,8 @@
 //!
 //! ```rust,no_run
 //! use elf_loader::{
-//!     Loader, Result,
+//!     Loader, Relocator, Result,
 //!     image::{SyntheticSymbol, SyntheticModule},
-//!     relocation::Relocator,
 //! };
 //!
 //! extern "C" fn host_double(value: i32) -> i32 {
@@ -65,9 +63,9 @@
 //! }
 //! ```
 //!
-//! ## Loading Dependencies With [`linker::Linker`]
+//! ## Loading Dependencies With [`Linker`]
 //!
-//! Use [`linker::Linker::load`] when you want a reusable [`linker::LinkContext`]
+//! Use [`Linker::load`] when you want a reusable [`LinkContext`]
 //! and resolver-driven `DT_NEEDED` dependency loading. The built-in
 //! [`linker::SearchPathResolver`] covers the common filesystem search-path case;
 //! implement [`linker::KeyResolver`] when dependencies come from memory,
@@ -75,9 +73,9 @@
 //!
 //! ```rust,no_run
 //! use elf_loader::{
-//!     Result,
+//!     LinkContext, Linker, Result,
 //!     input::PathBuf,
-//!     linker::{LinkContext, Linker, SearchPathResolver},
+//!     linker::SearchPathResolver,
 //! };
 //!
 //! fn main() -> Result<()> {
@@ -159,7 +157,7 @@ pub mod arch;
 mod const_builder;
 pub mod elf;
 mod entity;
-mod error;
+pub mod error;
 mod hint;
 pub mod image;
 pub mod input;
@@ -170,8 +168,6 @@ mod logging;
 pub mod memory;
 #[cfg(feature = "object")]
 pub mod object;
-#[cfg(feature = "object")]
-pub use object::CustomHash;
 pub mod observer;
 pub mod os;
 pub mod relocation;
@@ -184,12 +180,10 @@ pub(crate) use aligned_bytes::{AlignedBytes, try_cast_bytes};
 pub(crate) use error::*;
 
 pub use aligned_bytes::ByteRepr;
-pub use error::{
-    CodeError, CustomError, Error, IoError, LazyBindingError, LinkContextError, LinkResolverError,
-    LinkScanError, LinkerError, MmapError, ParseDynamicError, ParseEhdrError, ParseNoteError,
-    ParsePhdrError, ParseShdrError, RelocTableError, RelocationError, RelocationFailure, TlsError,
-};
+pub use error::Error;
+pub use linker::{LinkContext, Linker, LinkerRun};
 pub use loader::{Loader, LoaderRun};
+pub use relocation::{Relocator, RelocatorRun};
 
 /// A type alias for `Result`s returned by `elf_loader` functions.
 ///

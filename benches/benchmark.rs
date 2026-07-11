@@ -3,14 +3,10 @@ mod fixture_support;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use elf_loader::{
-    Loader, Result,
+    LinkContext, Linker, Loader, Relocator, Result,
     image::{LoadedCore, ModuleCapability},
     input::{ElfFile, PathBuf},
-    linker::{
-        LinkContext, Linker,
-        scan::{LinkPass, LinkPassPlan, Materialization, ReorderPass},
-    },
-    relocation::Relocator,
+    linker::scan::{LinkPass, LinkPassPlan, Materialization, ReorderPass},
 };
 use libloading::os::unix::{Library as UnixLibrary, RTLD_LAZY, RTLD_LOCAL, RTLD_NOW};
 use std::{fs, hint::black_box};

@@ -803,14 +803,14 @@ impl Display for UnresolvedDependency {
 
 /// Structured committed linker-context failure details.
 pub enum LinkContextError {
-    /// A key id from one [`crate::linker::LinkContext`] was used with another context.
+    /// A key id from one [`crate::LinkContext`] was used with another context.
     KeyContextMismatch {
         /// The key id that failed the context check.
         id: KeyId,
         /// The context that received the key id.
         expected: ContextId,
     },
-    /// A module id from one [`crate::linker::LinkContext`] was used with another context.
+    /// A module id from one [`crate::LinkContext`] was used with another context.
     ModuleContextMismatch {
         /// The module id that failed the context check.
         id: ModuleId,

@@ -3,11 +3,11 @@ use super::{
     layout::{SectionGroups, SectionSegments},
 };
 use crate::{
-    ParseShdrError, RelocationError, Result,
+    Loader, LoaderRun, ParseShdrError, RelocationError, Result,
     elf::{ElfHeader, ElfLayout, ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr},
     image::RawObject,
     input::{ElfReader, ElfReaderExt, IntoElfReader, PathBuf},
-    loader::{ExpectedElf, Loader, LoaderRun},
+    loader::ExpectedElf,
     logging,
     observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent, LoadObserver},
     os::Mmap,

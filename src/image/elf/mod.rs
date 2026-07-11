@@ -60,7 +60,7 @@ impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Supp
 
 /// A fully relocated and ready-to-use ELF module.
 ///
-/// This is the result of relocating a [`RawElf`] with [`crate::relocation::Relocator`].
+/// This is the result of relocating a [`RawElf`] with [`crate::Relocator`].
 /// Loaded images retain the dependencies that were actually used during relocation.
 #[derive(Debug)]
 pub enum LoadedElf<

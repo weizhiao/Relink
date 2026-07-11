@@ -293,7 +293,7 @@ where
     }
 }
 
-/// Filesystem-backed dependency resolver for [`Linker`](crate::linker::Linker).
+/// Filesystem-backed dependency resolver for [`Linker`](crate::Linker).
 ///
 /// `SearchPathResolver` is an opt-in convenience resolver for callers whose
 /// linker keys can be viewed as loader paths and constructed from resolved

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use elf_loader::{Loader, image::LoadedCore, input::ElfBinary, relocation::Relocator};
+use elf_loader::{Loader, Relocator, image::LoadedCore, input::ElfBinary};
 use gen_elf::{Arch, DylibWriter, ElfWriteOutput, ElfWriterConfig, RelocEntry, SymbolDesc};
 
 pub(crate) fn write_test_dylib(relocs: &[RelocEntry], symbols: &[SymbolDesc]) -> ElfWriteOutput {

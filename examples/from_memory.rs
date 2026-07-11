@@ -1,7 +1,7 @@
 #[path = "common/mod.rs"]
 mod fixture_support;
 
-use elf_loader::{Loader, relocation::Relocator};
+use elf_loader::{Loader, Relocator};
 use std::{fs::File, io::Read};
 
 const LOADER: Loader = Loader::new();

@@ -2,9 +2,8 @@
 mod fixture_support;
 
 use elf_loader::{
-    Loader, Result,
+    Loader, Relocator, Result,
     image::{ModuleHandle, SyntheticModule, SyntheticSymbol},
-    relocation::Relocator,
 };
 
 const LOADER: Loader = Loader::new();

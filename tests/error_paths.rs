@@ -1,6 +1,6 @@
 mod support;
 
-use elf_loader::{Loader, input::ElfBinary, relocation::Relocator};
+use elf_loader::{Loader, Relocator, input::ElfBinary};
 use gen_elf::{Arch, RelocEntry, SymbolDesc};
 use support::test_dylib::write_test_dylib;
 

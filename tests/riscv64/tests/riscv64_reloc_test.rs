@@ -1,4 +1,4 @@
-use elf_loader::{Loader, Result, relocation::Relocator};
+use elf_loader::{Loader, Relocator, Result};
 use std::path::PathBuf;
 
 fn main() -> Result<()> {

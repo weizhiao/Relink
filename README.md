@@ -72,9 +72,9 @@ elf_loader = { version = "0.15.1", features = ["full"] }
 
 ```rust
 use elf_loader::{
-    Result,
+    LinkContext, Linker, Result,
     input::PathBuf,
-    linker::{LinkContext, Linker, SearchPathResolver},
+    linker::SearchPathResolver,
 };
 
 const LINKER: Linker<'static, PathBuf> = Linker::new();

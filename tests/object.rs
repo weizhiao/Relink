@@ -1,7 +1,7 @@
 mod support;
 
 #[cfg(all(feature = "object", target_arch = "x86_64"))]
-use elf_loader::relocation::Relocator;
+use elf_loader::Relocator;
 #[cfg(all(feature = "object", target_arch = "x86_64"))]
 use gen_elf::{ObjectElfOutput, RelocationInfo, SectionKind};
 

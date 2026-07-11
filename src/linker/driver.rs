@@ -2,14 +2,8 @@ use super::{
     request::DefaultRelocationPlanner, run::LinkerRun, scan::LinkPipeline, storage::ModuleId,
 };
 use crate::{
-    Loader,
-    const_builder::NoDrop,
-    image::LoadedCore,
-    memory::RegionAccess,
-    os::Mmap,
-    relocation::{RelocationArch, Relocator},
-    runtime::CodeExecutor,
-    tls::TlsResolver,
+    Loader, Relocator, const_builder::NoDrop, image::LoadedCore, memory::RegionAccess, os::Mmap,
+    relocation::RelocationArch, runtime::CodeExecutor, tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt, marker::PhantomData, mem::MaybeUninit, ops::Deref, ptr};

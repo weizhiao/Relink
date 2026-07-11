@@ -258,7 +258,7 @@ pub struct RelocateArgs<
 /// associated type, so [`Relocator::relocate`] can dispatch automatically
 /// without callers having to specify a turbofish.
 ///
-/// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
+/// [`Relocator::relocate`]: crate::Relocator::relocate
 pub trait Relocatable<D = ()>: Sized {
     /// The type of the relocated object.
     type Output;

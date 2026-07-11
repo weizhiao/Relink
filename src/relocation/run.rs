@@ -1,9 +1,9 @@
 use crate::{
-    Result,
+    Relocator, Result,
     image::{ModuleHandle, ModuleScope, ModuleScopeBuilder},
     lazy::traits::{LazyBinder, SupportLazy},
     observer::RelocationObserver,
-    relocation::{BindingMode, Relocatable, RelocateArgs, RelocationArch, Relocator},
+    relocation::{BindingMode, Relocatable, RelocateArgs, RelocationArch},
     tls::TlsResolver,
 };
 use core::marker::PhantomData;

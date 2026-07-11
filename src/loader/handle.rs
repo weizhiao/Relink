@@ -19,7 +19,7 @@ use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 /// `Loader` maps ELF objects from files or memory and produces raw image types such as
 /// [`crate::image::RawElf`], [`crate::image::RawDynamic`], [`crate::image::RawDylib`],
 /// and [`crate::image::RawExec`].
-/// Those raw images can then be relocated with [`crate::relocation::Relocator`].
+/// Those raw images can then be relocated with [`crate::Relocator`].
 ///
 /// Use the `with_*` builder methods to customize hooks, lifecycle handling,
 /// dynamic-image user data, memory mapping, and TLS behavior.
@@ -27,7 +27,7 @@ use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 /// # Examples
 ///
 /// ```no_run
-/// use elf_loader::{Loader, relocation::Relocator};
+/// use elf_loader::{Loader, Relocator};
 ///
 /// let mut loader = Loader::new();
 /// let raw = loader.load_dylib("path/to/liba.so").unwrap();
@@ -391,7 +391,7 @@ where
     /// first and then attach the user-data type once the target architecture is
     /// fixed.
     ///
-    /// [`Relocator::relocate`]: crate::relocation::Relocator::relocate
+    /// [`Relocator::relocate`]: crate::Relocator::relocate
     pub const fn for_arch<NewArch>(self) -> Loader<(), Tls, NewArch, M, NativeCodeExecutor>
     where
         NewArch: RelocationArch,

@@ -1,13 +1,13 @@
 mod support;
 
 use elf_loader::{
-    Loader,
+    LinkContext, Linker, Loader, Relocator,
     elf::{ElfFileType, ElfProgramType},
     image::{LoadedCore, ModuleCapability, ScannedElf, SyntheticModule},
     input::ElfBinary,
     linker::{
-        KeyResolver, LinkContext, Linker, RelocationInputs, RelocationRequest, ResolvedKey,
-        RootRequest, VisibleModule, VisibleModules,
+        KeyResolver, RelocationInputs, RelocationRequest, ResolvedKey, RootRequest, VisibleModule,
+        VisibleModules,
         scan::{
             ArenaDescriptor, ArenaSharing, DataPass, LinkPass, LinkPassPlan, Materialization,
             MemoryClass, PassScopeMode, ReorderPass,
@@ -15,7 +15,6 @@ use elf_loader::{
     },
     memory::VmAddr,
     os::PageSize,
-    relocation::Relocator,
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
 use std::{boxed::Box, cell::RefCell, rc::Rc, vec::Vec};
