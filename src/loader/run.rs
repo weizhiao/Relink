@@ -10,7 +10,7 @@ use crate::{
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
     memory::{VmAddr, VmOffset},
-    observer::{AfterDynamicLoadEvent, BeforeDynamicLoadEvent, LoadObserver},
+    observer::{AfterDynamicLoadEvent, BeforeLoadEvent, LoadObserver},
     os::{DefaultMmap, Mmap},
     relocation::{ObjectArch, RelocationArch},
     runtime::{CodeExecutor, NativeCodeExecutor},
@@ -43,10 +43,10 @@ pub struct LoaderRun<
     M: Mmap,
 {
     pub(crate) loader: &'a Loader<D, Tls, Arch, M, Exec>,
-    pub(super) observer: Obs,
+    pub(crate) observer: Obs,
     pub(super) buf: ElfBuf,
     #[cfg(feature = "object")]
-    pub(super) object_groups: Arc<SectionGroups>,
+    pub(crate) object_groups: Arc<SectionGroups>,
 }
 
 impl<'a, Obs, D, Tls, Arch, M, Exec> LoaderRun<'a, Obs, D, Tls, Arch, M, Exec>
@@ -74,31 +74,6 @@ where
             #[cfg(feature = "object")]
             object_groups: self.object_groups,
         }
-    }
-}
-
-#[cfg(feature = "object")]
-impl<Obs, D, Tls, Arch, M, Exec> LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>
-where
-    Obs: LoadObserver<D, Arch>,
-    D: 'static,
-    Tls: TlsResolver<Arch>,
-    Arch: RelocationArch,
-    M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
-{
-    pub(crate) fn object_load_context(&mut self) -> (Arc<SectionGroups>, &mut Obs, &M) {
-        (
-            Arc::clone(&self.object_groups),
-            &mut self.observer,
-            self.loader.mapper(),
-        )
-    }
-
-    /// Sets object section layout groups for this loader run.
-    pub fn with_object_section_groups(mut self, groups: SectionGroups) -> Self {
-        self.object_groups = Arc::new(groups);
-        self
     }
 }
 
@@ -318,20 +293,15 @@ where
     ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         let executor = self.loader.executor();
         let phdrs = self.buf.prepare_phdrs(&ehdr, object)?.unwrap_or_default();
-        if !has_dynamic_phdr(phdrs) {
+        let path = PathBuf::from(object.path());
+        let mut user_data = D::default();
+        let event = BeforeLoadEvent::new(path.as_path(), object, &ehdr, phdrs, &mut user_data);
+        let has_dynamic = event.is_dynamic();
+        self.observer.on_before_load(event)?;
+        if !has_dynamic {
             return Err(ParsePhdrError::MissingDynamicSection.into());
         }
 
-        let path = PathBuf::from(object.path());
-        let mut user_data = D::default();
-        self.observer
-            .on_before_dynamic_load(BeforeDynamicLoadEvent::new(
-                path.as_path(),
-                object,
-                &ehdr,
-                phdrs,
-                &mut user_data,
-            ))?;
         let page_size = self.loader.page_size()?.bytes();
         let segments = ProgramSegments::load(
             phdrs,
@@ -382,14 +352,13 @@ where
 
         let path = PathBuf::from(reader.path());
         let mut user_data = D::default();
-        self.observer
-            .on_before_dynamic_load(BeforeDynamicLoadEvent::new(
-                path.as_path(),
-                &reader,
-                &ehdr,
-                &phdrs,
-                &mut user_data,
-            ))?;
+        self.observer.on_before_load(BeforeLoadEvent::new(
+            path.as_path(),
+            &reader,
+            &ehdr,
+            &phdrs,
+            &mut user_data,
+        ))?;
         let page_size = self.loader.page_size()?.bytes();
         let segments = ProgramSegments::load(
             &phdrs,
@@ -516,20 +485,12 @@ where
     ) -> Result<RawExec<D, Arch, M::Region, Tls>> {
         let executor = self.loader.executor();
         let phdrs = self.buf.prepare_phdrs(&ehdr, object)?.unwrap_or_default();
-        let has_dynamic = has_dynamic_phdr(phdrs);
 
         let path = PathBuf::from(object.path());
         let mut user_data = D::default();
-        if has_dynamic {
-            self.observer
-                .on_before_dynamic_load(BeforeDynamicLoadEvent::new(
-                    path.as_path(),
-                    object,
-                    &ehdr,
-                    phdrs,
-                    &mut user_data,
-                ))?;
-        }
+        let event = BeforeLoadEvent::new(path.as_path(), object, &ehdr, phdrs, &mut user_data);
+        let has_dynamic = event.is_dynamic();
+        self.observer.on_before_load(event)?;
         let page_size = self.loader.page_size()?.bytes();
         let segments = ProgramSegments::load(
             phdrs,

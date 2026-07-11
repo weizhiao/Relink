@@ -1,5 +1,5 @@
 use super::{
-    AfterDynamicLoadEvent, BeforeDynamicLoadEvent, DynamicRelocatedEvent, HandleResult, InitEvent,
+    AfterDynamicLoadEvent, BeforeLoadEvent, DynamicRelocatedEvent, HandleResult, InitEvent,
     RelocationEvent, SymbolBindingEvent,
 };
 #[cfg(feature = "object")]
@@ -18,10 +18,7 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
     /// Called after ELF program headers are available and before `PT_LOAD`
     /// segments are mapped.
     #[inline]
-    fn on_before_dynamic_load(
-        &mut self,
-        _event: BeforeDynamicLoadEvent<'_, D, Arch::Layout>,
-    ) -> Result<()> {
+    fn on_before_load(&mut self, _event: BeforeLoadEvent<'_, D, Arch::Layout>) -> Result<()> {
         Ok(())
     }
 
@@ -145,11 +142,8 @@ where
     O: LoadObserver<D, Arch> + ?Sized,
 {
     #[inline]
-    fn on_before_dynamic_load(
-        &mut self,
-        event: BeforeDynamicLoadEvent<'_, D, Arch::Layout>,
-    ) -> Result<()> {
-        (**self).on_before_dynamic_load(event)
+    fn on_before_load(&mut self, event: BeforeLoadEvent<'_, D, Arch::Layout>) -> Result<()> {
+        (**self).on_before_load(event)
     }
 
     #[cfg(feature = "object")]
@@ -253,11 +247,8 @@ where
     O: LoadObserver<D, Arch> + ?Sized,
 {
     #[inline]
-    fn on_before_dynamic_load(
-        &mut self,
-        event: BeforeDynamicLoadEvent<'_, D, Arch::Layout>,
-    ) -> Result<()> {
-        (**self).on_before_dynamic_load(event)
+    fn on_before_load(&mut self, event: BeforeLoadEvent<'_, D, Arch::Layout>) -> Result<()> {
+        (**self).on_before_load(event)
     }
 
     #[cfg(feature = "object")]

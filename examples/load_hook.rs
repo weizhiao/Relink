@@ -4,7 +4,7 @@ mod fixture_support;
 use elf_loader::{
     Loader, Result,
     arch::NativeArch,
-    observer::{BeforeDynamicLoadEvent, LoadObserver},
+    observer::{BeforeLoadEvent, LoadObserver},
     relocation::{RelocationArch, Relocator},
 };
 
@@ -13,9 +13,9 @@ const LOADER: Loader = Loader::new();
 struct PrintObserver;
 
 impl LoadObserver for PrintObserver {
-    fn on_before_dynamic_load(
+    fn on_before_load(
         &mut self,
-        event: BeforeDynamicLoadEvent<'_, (), <NativeArch as RelocationArch>::Layout>,
+        event: BeforeLoadEvent<'_, (), <NativeArch as RelocationArch>::Layout>,
     ) -> Result<()> {
         println!("Loading dynamic image for {}:", event.path());
         for phdr in event.phdrs() {

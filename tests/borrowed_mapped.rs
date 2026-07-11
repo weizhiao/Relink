@@ -5,7 +5,7 @@ use elf_loader::{
     elf::ElfProgramType,
     image::ScannedElf,
     input::ElfBinary,
-    observer::{BeforeDynamicLoadEvent, LoadObserver},
+    observer::{BeforeLoadEvent, LoadObserver},
 };
 use gen_elf::{Arch, ElfWriterConfig, SymbolDesc};
 use support::{generated_dylib::return_42_stub, test_dylib::write_test_dylib_with_config};
@@ -18,9 +18,9 @@ struct ScanData {
 struct ScanObserver;
 
 impl LoadObserver<ScanData> for ScanObserver {
-    fn on_before_dynamic_load(
+    fn on_before_load(
         &mut self,
-        mut event: BeforeDynamicLoadEvent<'_, ScanData>,
+        mut event: BeforeLoadEvent<'_, ScanData>,
     ) -> elf_loader::Result<()> {
         assert!(
             event

@@ -1,6 +1,6 @@
 use crate::{
     arch::NativeArch,
-    elf::{ElfHeader, ElfLayout, ElfPhdr, NativeElfLayout},
+    elf::{ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, NativeElfLayout},
     image::RawDynamic,
     input::{ElfReader, Path},
     memory::{HostRegion, RegionAccess},
@@ -8,9 +8,9 @@ use crate::{
     tls::TlsResolver,
 };
 
-/// Event emitted after dynamic-image program headers are available and before
-/// `PT_LOAD` segments are mapped.
-pub struct BeforeDynamicLoadEvent<'a, D: 'static, L: ElfLayout = NativeElfLayout> {
+/// Event emitted after ELF program headers are available and before `PT_LOAD`
+/// segments are mapped.
+pub struct BeforeLoadEvent<'a, D: 'static, L: ElfLayout = NativeElfLayout> {
     path: &'a Path,
     reader: &'a dyn ElfReader,
     ehdr: &'a ElfHeader<L>,
@@ -18,7 +18,7 @@ pub struct BeforeDynamicLoadEvent<'a, D: 'static, L: ElfLayout = NativeElfLayout
     user_data: &'a mut D,
 }
 
-impl<'a, D: 'static, L: ElfLayout> BeforeDynamicLoadEvent<'a, D, L> {
+impl<'a, D: 'static, L: ElfLayout> BeforeLoadEvent<'a, D, L> {
     #[inline]
     pub(crate) const fn new(
         path: &'a Path,
@@ -58,6 +58,14 @@ impl<'a, D: 'static, L: ElfLayout> BeforeDynamicLoadEvent<'a, D, L> {
     #[inline]
     pub const fn phdrs(&self) -> &[ElfPhdr<L>] {
         self.phdrs
+    }
+
+    /// Returns whether the program headers contain `PT_DYNAMIC`.
+    #[inline]
+    pub fn is_dynamic(&self) -> bool {
+        self.phdrs
+            .iter()
+            .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
     }
 
     /// Returns immutable user data for this image.

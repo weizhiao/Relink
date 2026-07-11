@@ -1,4 +1,7 @@
-use super::{ObjectBuilder, ObjectSections, layout::SectionSegments};
+use super::{
+    ObjectBuilder, ObjectSections,
+    layout::{SectionGroups, SectionSegments},
+};
 use crate::{
     ParseShdrError, RelocationError, Result,
     elf::{ElfHeader, ElfLayout, ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr},
@@ -10,8 +13,25 @@ use crate::{
     os::Mmap,
     relocation::ObjectArch,
     runtime::CodeExecutor,
+    sync::Arc,
     tls::TlsResolver,
 };
+
+impl<Obs, D, Tls, Arch, M, Exec> LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>
+where
+    Obs: LoadObserver<D, Arch>,
+    D: 'static,
+    Tls: TlsResolver<Arch>,
+    Arch: ObjectArch,
+    M: Mmap,
+    Exec: CodeExecutor<Arch> + Clone,
+{
+    /// Sets object section layout groups for this loader run.
+    pub fn with_object_section_groups(mut self, groups: SectionGroups) -> Self {
+        self.object_groups = Arc::new(groups);
+        self
+    }
+}
 
 impl<'run, Obs, D, Tls, Arch, M, Exec> LoaderRun<'run, Obs, D, Tls, Arch, M, Exec>
 where
@@ -57,7 +77,9 @@ where
         let path = PathBuf::from(object.path());
         let page_size = self.loader.page_size()?.bytes();
         let executor = self.loader.executor();
-        let (object_groups, observer, mapper) = self.object_load_context();
+        let object_groups = Arc::clone(&self.object_groups);
+        let observer = &mut self.observer;
+        let mapper = self.loader.mapper();
         observer.on_before_object_load(BeforeObjectLoadEvent::new(
             &ehdr,
             &mut sections,
