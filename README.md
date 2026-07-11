@@ -61,14 +61,14 @@ relocatable objects, TLS, and lazy binding:
 
 ```toml
 [dependencies]
-elf_loader = "0.15.1"
+elf_loader = "0.16.0"
 ```
 
 For a smaller build, disable default features and opt in only to what you need:
 
 ```toml
 [dependencies]
-elf_loader = { version = "0.15.1", default-features = false, features = ["libc"] }
+elf_loader = { version = "0.16.0", default-features = false, features = ["libc"] }
 ```
 
 ### Use Linker to Load Dependencies

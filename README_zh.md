@@ -60,14 +60,14 @@ Relink 是一个高可定制、高性能的 Rust ELF 加载与运行时链接库
 
 ```toml
 [dependencies]
-elf_loader = "0.15.1"
+elf_loader = "0.16.0"
 ```
 
 如果你需要更小的构建，可以关闭默认 feature 后按需选择：
 
 ```toml
 [dependencies]
-elf_loader = { version = "0.15.1", default-features = false, features = ["libc"] }
+elf_loader = { version = "0.16.0", default-features = false, features = ["libc"] }
 ```
 
 ### 使用 Linker 加载依赖
