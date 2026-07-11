@@ -115,73 +115,65 @@ impl SyntheticSymbol {
     }
 }
 
-#[derive(Clone)]
-enum SyntheticMemory {
-    Empty { base: VmAddr },
-    Backed(Arc<dyn ImageMemory>),
+#[derive(Clone, Copy)]
+struct UnmappedImageMemory {
+    base: VmAddr,
 }
 
-impl SyntheticMemory {
+impl Default for UnmappedImageMemory {
     #[inline]
-    const fn empty(base: VmAddr) -> Self {
-        Self::Empty { base }
-    }
-
-    #[inline]
-    fn backed<M>(memory: M) -> Self
-    where
-        M: ImageMemory + 'static,
-    {
-        Self::Backed(Arc::from(Box::new(memory) as Box<dyn ImageMemory>))
+    fn default() -> Self {
+        Self {
+            base: VmAddr::null(),
+        }
     }
 }
 
-impl ImageMemory for SyntheticMemory {
+impl ImageMemory for UnmappedImageMemory {
     #[inline]
     fn base(&self) -> VmAddr {
-        match self {
-            Self::Empty { base } => *base,
-            Self::Backed(memory) => memory.base(),
-        }
+        self.base
     }
 
     #[inline]
-    fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
-        match self {
-            Self::Empty { .. } => None,
-            Self::Backed(memory) => memory.host_ptr(addr),
-        }
+    fn host_ptr(&self, _addr: VmAddr) -> Option<NonNull<u8>> {
+        None
     }
 
     #[inline]
-    fn host_ptr_range(&self, addr: VmAddr, len: usize) -> Option<NonNull<u8>> {
-        match self {
-            Self::Empty { .. } => None,
-            Self::Backed(memory) => memory.host_ptr_range(addr, len),
-        }
+    fn host_ptr_range(&self, _addr: VmAddr, _len: usize) -> Option<NonNull<u8>> {
+        None
     }
 
     #[inline]
-    fn read_bytes(&self, addr: VmAddr, dst: &mut [u8]) -> Result<()> {
-        match self {
-            Self::Empty { .. } if dst.is_empty() => Ok(()),
-            Self::Empty { .. } => Err(custom_error(
-                "synthetic modules do not expose readable image bytes",
-            )),
-            Self::Backed(memory) => memory.read_bytes(addr, dst),
+    fn read_bytes(&self, _addr: VmAddr, dst: &mut [u8]) -> Result<()> {
+        if dst.is_empty() {
+            return Ok(());
         }
+
+        Err(custom_error(
+            "synthetic modules do not expose readable image bytes",
+        ))
     }
 
     #[inline]
-    fn write_bytes(&self, addr: VmAddr, src: &[u8]) -> Result<()> {
-        match self {
-            Self::Empty { .. } if src.is_empty() => Ok(()),
-            Self::Empty { .. } => Err(custom_error(
-                "synthetic modules do not expose writable image bytes",
-            )),
-            Self::Backed(memory) => memory.write_bytes(addr, src),
+    fn write_bytes(&self, _addr: VmAddr, src: &[u8]) -> Result<()> {
+        if src.is_empty() {
+            return Ok(());
         }
+
+        Err(custom_error(
+            "synthetic modules do not expose writable image bytes",
+        ))
     }
+}
+
+#[inline]
+fn image_memory<M>(memory: M) -> Arc<dyn ImageMemory>
+where
+    M: ImageMemory + 'static,
+{
+    Arc::from(Box::new(memory) as Box<dyn ImageMemory>)
 }
 
 /// A [`Module`] backed by a synthetic table of absolute symbols.
@@ -189,22 +181,24 @@ impl ImageMemory for SyntheticMemory {
 /// The module owns stable synthetic ELF symbols, so it can be retained in a
 /// [`ModuleScope`](crate::image::ModuleScope) without borrowing callback-owned
 /// symbol metadata.
-pub struct SyntheticModule<Arch: RelocationArch = NativeArch> {
+pub struct SyntheticModule<Arch: RelocationArch = NativeArch, D = ()> {
     name: String,
-    memory: SyntheticMemory,
+    memory: Arc<dyn ImageMemory>,
     tls: ModuleTls,
+    user_data: D,
     names: Vec<String>,
     symbols: Vec<ElfSymbol<Arch::Layout>>,
     index: BTreeMap<String, usize>,
 }
 
-impl<Arch: RelocationArch> Clone for SyntheticModule<Arch> {
+impl<Arch: RelocationArch, D: Clone> Clone for SyntheticModule<Arch, D> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
             name: self.name.clone(),
             memory: self.memory.clone(),
             tls: self.tls,
+            user_data: self.user_data.clone(),
             names: self.names.clone(),
             symbols: self.symbols.clone(),
             index: self.index.clone(),
@@ -229,12 +223,41 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     pub fn empty(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            memory: SyntheticMemory::empty(VmAddr::null()),
+            memory: image_memory(UnmappedImageMemory::default()),
             tls: ModuleTls::NONE,
+            user_data: (),
             names: Vec::new(),
             symbols: Vec::new(),
             index: BTreeMap::new(),
         }
+    }
+}
+
+impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
+    /// Replaces the user data associated with this synthetic module.
+    #[inline]
+    pub fn with_user_data<NewD>(self, user_data: NewD) -> SyntheticModule<Arch, NewD> {
+        SyntheticModule {
+            name: self.name,
+            memory: self.memory,
+            tls: self.tls,
+            user_data,
+            names: self.names,
+            symbols: self.symbols,
+            index: self.index,
+        }
+    }
+
+    /// Returns immutable user data for this synthetic module.
+    #[inline]
+    pub const fn user_data(&self) -> &D {
+        &self.user_data
+    }
+
+    /// Returns mutable user data for this synthetic module.
+    #[inline]
+    pub fn user_data_mut(&mut self) -> &mut D {
+        &mut self.user_data
     }
 
     /// Uses a real image-memory backend for this synthetic module.
@@ -246,7 +269,7 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     where
         M: ImageMemory + 'static,
     {
-        self.memory = SyntheticMemory::backed(memory);
+        self.memory = image_memory(memory);
         self
     }
 
@@ -309,18 +332,22 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> From<SyntheticModule<Arch>>
-    for ModuleHandle<Arch, Tls>
+impl<Arch, D, Tls> From<SyntheticModule<Arch, D>> for ModuleHandle<Arch, Tls>
+where
+    Arch: RelocationArch,
+    D: Send + Sync + 'static,
+    Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
-    fn from(module: SyntheticModule<Arch>) -> Self {
+    fn from(module: SyntheticModule<Arch, D>) -> Self {
         Self::new(module)
     }
 }
 
-impl<Arch, Tls> Module<Arch, Tls> for SyntheticModule<Arch>
+impl<Arch, D, Tls> Module<Arch, Tls> for SyntheticModule<Arch, D>
 where
     Arch: RelocationArch,
+    D: Send + Sync + 'static,
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
@@ -335,7 +362,7 @@ where
 
     #[inline]
     fn memory(&self) -> &dyn ImageMemory {
-        &self.memory
+        &*self.memory
     }
 
     #[inline]
@@ -344,9 +371,10 @@ where
     }
 }
 
-impl<Arch> SymbolExports<Arch::Layout> for SyntheticModule<Arch>
+impl<Arch, D> SymbolExports<Arch::Layout> for SyntheticModule<Arch, D>
 where
     Arch: RelocationArch,
+    D: Send + Sync,
 {
     #[inline]
     fn symbols(&self) -> &[ElfSymbol<Arch::Layout>] {
@@ -467,6 +495,21 @@ mod tests {
             <SyntheticModule<NativeArch> as Module<NativeArch, ()>>::tls(&module),
             tls
         );
+    }
+
+    #[test]
+    fn synthetic_module_can_carry_user_data() {
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        struct SyntheticData {
+            tag: usize,
+        }
+
+        let mut module =
+            SyntheticModule::<NativeArch>::empty("__meta").with_user_data(SyntheticData { tag: 7 });
+
+        assert_eq!(module.user_data().tag, 7);
+        module.user_data_mut().tag = 11;
+        assert_eq!(module.clone().user_data(), &SyntheticData { tag: 11 });
     }
 
     #[test]
