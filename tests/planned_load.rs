@@ -120,7 +120,7 @@ impl RelocationObserver for InitRecorder {
     ) -> elf_loader::Result<()> {
         let calls = Arc::clone(&self.calls);
         let fail = self.fail;
-        event.set_init_hook(move |event| {
+        event.lifecycle_mut().set_init_hook(move |event| {
             calls.lock().unwrap().push(event.name().to_string());
             event.lifecycle_mut().clear();
             if fail {

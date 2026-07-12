@@ -1,6 +1,6 @@
 use crate::{
     elf::{
-        ElfHeader, ElfLayout, ElfSectionId, ElfSectionType, ElfShdr, Lifecycle, NativeElfLayout,
+        ElfHeader, ElfLayout, ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout,
         SymbolTableView,
     },
     image::{ElfCore, RawObject, SymbolExports, exports_handle},
@@ -17,7 +17,7 @@ use crate::{
 use alloc::vec::Vec;
 use core::{ffi::CStr, ptr::NonNull};
 
-use super::lifecycle::{LifecycleEvent, LifecycleHandlers, LifecycleRunner};
+use super::lifecycle::{LifecycleHandlers, LifecycleRunner};
 
 type ObjectExportsHandle<L> = Option<Arc<dyn SymbolExports<L>>>;
 
@@ -233,47 +233,10 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver
         self.set_exports(ObjectExports::<Arch::Layout>::empty());
     }
 
-    /// Returns the initialization lifecycle.
+    /// Returns mutable lifecycle setup for initialization and finalization.
     #[inline]
-    pub fn init(&self) -> &Lifecycle {
-        self.lifecycle.initializer().lifecycle()
-    }
-
-    /// Returns mutable initialization lifecycle addresses.
-    #[inline]
-    pub fn init_mut(&mut self) -> &mut Lifecycle {
-        self.lifecycle.initializer_mut().lifecycle_mut()
-    }
-
-    /// Installs a hook that runs immediately before initialization functions.
-    #[inline]
-    pub fn set_init_hook<F>(&mut self, hook: F)
-    where
-        F: for<'hook> Fn(&mut LifecycleEvent<'hook>) -> crate::Result<()> + Send + Sync + 'static,
-    {
-        self.lifecycle.initializer_mut().set_hook(hook);
-    }
-
-    /// Returns the finalization lifecycle that will be run when the initialized
-    /// object is dropped.
-    #[inline]
-    pub fn fini(&self) -> &Lifecycle {
-        self.lifecycle.finalizer().lifecycle()
-    }
-
-    /// Returns mutable finalization lifecycle addresses.
-    #[inline]
-    pub fn fini_mut(&mut self) -> &mut Lifecycle {
-        self.lifecycle.finalizer_mut().lifecycle_mut()
-    }
-
-    /// Installs a hook that runs immediately before finalization functions.
-    #[inline]
-    pub fn set_fini_hook<F>(&mut self, hook: F)
-    where
-        F: for<'hook> Fn(&mut LifecycleEvent<'hook>) -> crate::Result<()> + Send + Sync + 'static,
-    {
-        self.lifecycle.finalizer_mut().set_hook(hook);
+    pub fn lifecycle_mut(&mut self) -> &mut LifecycleHandlers {
+        &mut self.lifecycle
     }
 
     #[inline]

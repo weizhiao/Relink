@@ -1,8 +1,7 @@
-use super::lifecycle::{LifecycleEvent, LifecycleHandlers, LifecycleRunner};
+use super::lifecycle::{LifecycleHandlers, LifecycleRunner};
 use crate::{
-    Result,
     arch::NativeArch,
-    elf::{ElfRelEntry, ElfRelType, ElfSymbol, HashTable, Lifecycle, SymbolEntry, SymbolTableView},
+    elf::{ElfRelEntry, ElfRelType, ElfSymbol, HashTable, SymbolEntry, SymbolTableView},
     image::{ElfCore, ModuleScope},
     input::Path,
     memory::{HostRegion, RegionAccess, VmAddr},
@@ -255,47 +254,10 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
         self.dynamic_addr
     }
 
-    /// Returns the initialization lifecycle that will run after commit.
+    /// Returns mutable lifecycle setup for initialization and finalization.
     #[inline]
-    pub fn init(&self) -> &Lifecycle {
-        self.lifecycle.initializer().lifecycle()
-    }
-
-    /// Returns mutable initialization lifecycle addresses.
-    #[inline]
-    pub fn init_mut(&mut self) -> &mut Lifecycle {
-        self.lifecycle.initializer_mut().lifecycle_mut()
-    }
-
-    /// Installs a hook that runs immediately before initialization functions.
-    #[inline]
-    pub fn set_init_hook<F>(&mut self, hook: F)
-    where
-        F: for<'event> Fn(&mut LifecycleEvent<'event>) -> Result<()> + Send + Sync + 'static,
-    {
-        self.lifecycle.initializer_mut().set_hook(hook);
-    }
-
-    /// Returns the finalization lifecycle that will be run when the initialized
-    /// image is dropped.
-    #[inline]
-    pub fn fini(&self) -> &Lifecycle {
-        self.lifecycle.finalizer().lifecycle()
-    }
-
-    /// Returns mutable finalization lifecycle addresses.
-    #[inline]
-    pub fn fini_mut(&mut self) -> &mut Lifecycle {
-        self.lifecycle.finalizer_mut().lifecycle_mut()
-    }
-
-    /// Installs a hook that runs immediately before finalization functions.
-    #[inline]
-    pub fn set_fini_hook<F>(&mut self, hook: F)
-    where
-        F: for<'event> Fn(&mut LifecycleEvent<'event>) -> Result<()> + Send + Sync + 'static,
-    {
-        self.lifecycle.finalizer_mut().set_hook(hook);
+    pub fn lifecycle_mut(&mut self) -> &mut LifecycleHandlers {
+        &mut self.lifecycle
     }
 
     #[inline]

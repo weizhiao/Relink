@@ -4,11 +4,46 @@ use crate::{
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
     runtime::CodeContext,
+    sync::{AtomicBool, Ordering},
 };
 use alloc::boxed::Box;
+use core::cell::UnsafeCell;
 
-pub(crate) type LifecycleHook =
-    Box<dyn for<'event> Fn(&mut LifecycleEvent<'event>) -> Result<()> + Send + Sync>;
+type LifecycleHookFn =
+    Box<dyn for<'event> FnOnce(&mut LifecycleEvent<'event>) -> Result<()> + Send>;
+
+struct LifecycleHook {
+    called: AtomicBool,
+    hook: UnsafeCell<Option<LifecycleHookFn>>,
+}
+
+impl LifecycleHook {
+    #[inline]
+    fn new(hook: LifecycleHookFn) -> Self {
+        Self {
+            called: AtomicBool::new(false),
+            hook: UnsafeCell::new(Some(hook)),
+        }
+    }
+
+    fn run(&self, event: &mut LifecycleEvent<'_>) -> Result<()> {
+        if self.called.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+
+        // Safety: the atomic flag above guarantees that only one caller can
+        // take the hook. Later callers return before touching the cell.
+        let hook = unsafe { (&mut *self.hook.get()).take() };
+        if let Some(hook) = hook {
+            hook(event)?;
+        }
+        Ok(())
+    }
+}
+
+// Safety: access to the interior hook is guarded by `called`, so shared
+// references cannot take or invoke the one-shot hook more than once.
+unsafe impl Sync for LifecycleHook {}
 
 /// Lifecycle behavior retained after relocation.
 pub(crate) struct LifecycleRunner {
@@ -17,7 +52,7 @@ pub(crate) struct LifecycleRunner {
 }
 
 /// Initialization and finalization behavior retained by one loaded image.
-pub(crate) struct LifecycleHandlers {
+pub struct LifecycleHandlers {
     initializer: LifecycleRunner,
     finalizer: LifecycleRunner,
 }
@@ -55,6 +90,47 @@ impl LifecycleHandlers {
     pub(crate) fn into_finalizer(self) -> LifecycleRunner {
         self.finalizer
     }
+    /// Returns the initialization lifecycle.
+    #[inline]
+    pub fn init(&self) -> &Lifecycle {
+        self.initializer().lifecycle()
+    }
+
+    /// Returns mutable initialization lifecycle addresses.
+    #[inline]
+    pub fn init_mut(&mut self) -> &mut Lifecycle {
+        self.initializer_mut().lifecycle_mut()
+    }
+
+    /// Installs a hook that runs immediately before initialization functions.
+    #[inline]
+    pub fn set_init_hook<F>(&mut self, hook: F)
+    where
+        F: for<'hook> FnOnce(&mut LifecycleEvent<'hook>) -> Result<()> + Send + 'static,
+    {
+        self.initializer_mut().set_hook(hook);
+    }
+
+    /// Returns the finalization lifecycle.
+    #[inline]
+    pub fn fini(&self) -> &Lifecycle {
+        self.finalizer().lifecycle()
+    }
+
+    /// Returns mutable finalization lifecycle addresses.
+    #[inline]
+    pub fn fini_mut(&mut self) -> &mut Lifecycle {
+        self.finalizer_mut().lifecycle_mut()
+    }
+
+    /// Installs a hook that runs immediately before finalization functions.
+    #[inline]
+    pub fn set_fini_hook<F>(&mut self, hook: F)
+    where
+        F: for<'hook> FnOnce(&mut LifecycleEvent<'hook>) -> Result<()> + Send + 'static,
+    {
+        self.finalizer_mut().set_hook(hook);
+    }
 }
 
 impl LifecycleRunner {
@@ -79,23 +155,23 @@ impl LifecycleRunner {
     #[inline]
     pub(crate) fn set_hook<F>(&mut self, hook: F)
     where
-        F: for<'event> Fn(&mut LifecycleEvent<'event>) -> Result<()> + Send + Sync + 'static,
+        F: for<'event> FnOnce(&mut LifecycleEvent<'event>) -> Result<()> + Send + 'static,
     {
-        self.hook = Some(Box::new(hook));
+        self.hook = Some(LifecycleHook::new(Box::new(hook)));
     }
 
     #[cfg(feature = "object")]
     pub(crate) fn append_hook<F>(&mut self, hook: F)
     where
-        F: for<'event> Fn(&mut LifecycleEvent<'event>) -> Result<()> + Send + Sync + 'static,
+        F: for<'event> FnOnce(&mut LifecycleEvent<'event>) -> Result<()> + Send + 'static,
     {
         let previous = self.hook.take();
-        self.hook = Some(Box::new(move |event| {
-            if let Some(previous) = previous.as_ref() {
-                previous(event)?;
+        self.hook = Some(LifecycleHook::new(Box::new(move |event| {
+            if let Some(previous) = previous {
+                previous.run(event)?;
             }
             hook(event)
-        }));
+        })));
     }
 
     pub(crate) fn run<Arch, F>(&self, name: &str, memory: &dyn ImageMemory, call: F) -> Result<()>
@@ -105,7 +181,7 @@ impl LifecycleRunner {
     {
         let mut event = LifecycleEvent::new(name, &self.lifecycle);
         if let Some(hook) = self.hook.as_ref() {
-            hook(&mut event)?;
+            hook.run(&mut event)?;
         }
         let ctx = CodeContext::<Arch>::new(name, memory);
         for addr in event.lifecycle.func_addrs() {

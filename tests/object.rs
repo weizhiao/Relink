@@ -837,7 +837,7 @@ fn object_relocator_can_defer_initialization() {
             &mut self,
             event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R, Tls>,
         ) -> Result<()> {
-            event.init_mut().push(self.0);
+            event.lifecycle_mut().init_mut().push(self.0);
             Ok(())
         }
     }

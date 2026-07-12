@@ -136,12 +136,7 @@ where
             ..
         } = self;
         let core_ref = core.downgrade();
-        let init_state = spin::Mutex::new(Some((section_segments, init_segments)));
         lifecycle.initializer_mut().append_hook(move |event| {
-            let (section_segments, init_segments) = init_state
-                .lock()
-                .take()
-                .expect("object initialization must run only once");
             let core = core_ref
                 .upgrade()
                 .expect("object core must remain alive during initialization");

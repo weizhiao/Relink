@@ -18,7 +18,7 @@ impl RelocationObserver for LifecycleLogger {
         &mut self,
         event: &mut DynamicRelocatedEvent<'_, D, NativeArch, R, Tls>,
     ) -> Result<()> {
-        event.set_init_hook(|event| {
+        event.lifecycle_mut().set_init_hook(|event| {
             println!("Init hook called for {}!", event.name());
             let mut count = 0;
             for addr in event.lifecycle().func_addrs() {
