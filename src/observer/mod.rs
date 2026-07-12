@@ -13,4 +13,4 @@ pub use event::{
     AfterObjectLoadEvent, BeforeObjectLoadEvent, ObjectRelocatedEvent, SectionGroup, SectionGroups,
     SectionLayoutEvent, SectionLifetime,
 };
-pub use traits::{LinkerObserver, LoadObserver, RelocationObserver};
+pub use traits::{LinkerObserver, LoadObserver, RelocationObserver, VisibleModule};

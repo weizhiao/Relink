@@ -1,6 +1,6 @@
 use crate::{
     LinkerError, UnresolvedDependency,
-    image::{ModuleHandle, RawDynamic, ScannedDynamic},
+    image::{RawDynamic, ScannedDynamic},
     input::Path,
     memory::RegionAccess,
     relocation::RelocationArch,
@@ -221,92 +221,5 @@ impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
             self.needed(),
         )))
         .into()
-    }
-}
-
-/// A read-only module visible to a link operation, plus its direct dependency
-/// keys.
-pub struct VisibleModule<
-    K,
-    Arch: RelocationArch = crate::arch::NativeArch,
-    Tls: TlsResolver<Arch> = (),
-> {
-    module: ModuleHandle<Arch, Tls>,
-    direct_deps: Box<[K]>,
-}
-
-impl<K, Arch, Tls> VisibleModule<K, Arch, Tls>
-where
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
-{
-    /// Creates a visible module with the keys of its direct dependencies.
-    #[inline]
-    pub fn new(module: impl Into<ModuleHandle<Arch, Tls>>, direct_deps: Box<[K]>) -> Self {
-        Self {
-            module: module.into(),
-            direct_deps,
-        }
-    }
-
-    /// Returns the module handle made visible to the link operation.
-    #[inline]
-    pub fn module(&self) -> &ModuleHandle<Arch, Tls> {
-        &self.module
-    }
-
-    /// Returns the direct dependency keys associated with this visible module.
-    #[inline]
-    pub fn direct_deps(&self) -> &[K] {
-        &self.direct_deps
-    }
-
-    /// Consumes this value into the module handle and direct dependency keys.
-    #[inline]
-    pub fn into_parts(self) -> (ModuleHandle<Arch, Tls>, Box<[K]>) {
-        (self.module, self.direct_deps)
-    }
-}
-
-/// Read-only modules that should be visible to a link operation without being
-/// committed into its local [`LinkContext`](super::LinkContext).
-pub trait VisibleModules<
-    K: Clone,
-    Arch: RelocationArch = crate::arch::NativeArch,
-    Q: ?Sized = K,
-    Tls: TlsResolver<Arch> = (),
->
-{
-    /// Returns whether a module is visible by key.
-    fn contains(&self, key: &Q) -> bool {
-        self.module(key).is_some()
-    }
-
-    /// Returns a retained visible module and its direct dependency keys by key.
-    fn module(&self, _key: &Q) -> Option<VisibleModule<K, Arch, Tls>> {
-        None
-    }
-}
-
-impl<K: Clone, Arch: RelocationArch, Q: ?Sized, Tls: TlsResolver<Arch>>
-    VisibleModules<K, Arch, Q, Tls> for ()
-{
-}
-
-impl<K: Clone, Arch, Q, Tls, V> VisibleModules<K, Arch, Q, Tls> for &V
-where
-    Arch: RelocationArch,
-    Q: ?Sized,
-    Tls: TlsResolver<Arch>,
-    V: VisibleModules<K, Arch, Q, Tls> + ?Sized,
-{
-    #[inline]
-    fn contains(&self, key: &Q) -> bool {
-        (**self).contains(key)
-    }
-
-    #[inline]
-    fn module(&self, key: &Q) -> Option<VisibleModule<K, Arch, Tls>> {
-        (**self).module(key)
     }
 }

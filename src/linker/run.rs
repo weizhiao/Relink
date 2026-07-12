@@ -1,7 +1,6 @@
 use super::{
     context::LinkContext,
     driver::{Linker, LoadResult},
-    request::VisibleModules,
     resolve::LoadResolveContext,
     resolver::KeyResolver,
     scan::{GotPltTarget, LinkPipeline, MappedRuntimeMemory},
@@ -36,18 +35,17 @@ pub struct LinkerRun<
     L,
     R,
     RelocBinder,
-    V,
     Tls: TlsResolver<Arch>,
     Obs = (),
 > {
-    pub(super) linker: &'run Linker<K, Arch, L, R, RelocBinder, V, Tls>,
+    pub(super) linker: &'run Linker<K, Arch, L, R, RelocBinder, Tls>,
     pub(super) pipeline: LinkPipeline<'pipe, K, Arch, Tls>,
     pub(super) observer: Obs,
     pub(super) scratch_relocation_order: Vec<KeySlot>,
 }
 
-impl<'run, 'pipe, K, Arch, L, R, RelocBinder, V, Tls, Obs>
-    LinkerRun<'run, 'pipe, K, Arch, L, R, RelocBinder, V, Tls, Obs>
+impl<'run, 'pipe, K, Arch, L, R, RelocBinder, Tls, Obs>
+    LinkerRun<'run, 'pipe, K, Arch, L, R, RelocBinder, Tls, Obs>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -58,7 +56,7 @@ where
     pub fn with_observer<NewObs>(
         self,
         observer: NewObs,
-    ) -> LinkerRun<'run, 'pipe, K, Arch, L, R, RelocBinder, V, Tls, NewObs>
+    ) -> LinkerRun<'run, 'pipe, K, Arch, L, R, RelocBinder, Tls, NewObs>
     where
         NewObs: RelocationObserver<Arch>,
     {
@@ -93,19 +91,8 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, V, Obs>
-    LinkerRun<
-        'run,
-        'pipe,
-        K,
-        Arch,
-        Loader<D, Tls, Arch, M, Exec>,
-        Resolver,
-        RelocBinder,
-        V,
-        Tls,
-        Obs,
-    >
+impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, Obs>
+    LinkerRun<'run, 'pipe, K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls, Obs>
 where
     K: Clone + Ord,
     D: Default + 'static,
@@ -130,7 +117,6 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
-        V: VisibleModules<K, Arch, Q, Tls>,
     {
         let prepared = self.prepare_load::<Meta, Q>(context, key)?;
         let relocated = self.relocate(prepared)?;
@@ -151,7 +137,6 @@ where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
-        V: VisibleModules<K, Arch, Q, Tls>,
     {
         if let Some(prepared) = PreparedLoad::visible(context, key.borrow()) {
             return Ok(prepared);
@@ -160,21 +145,15 @@ where
         let linker = self.linker;
         let mut session = LoadSession::new();
         let mut loader = linker.loader.run().with_observer(&mut self.observer);
-        let mut resolve_context = LoadResolveContext::new(
-            &mut context.committed,
-            &linker.visible_modules,
-            session.resolve_mut(),
-        );
-        let resolved = resolve_context.resolve_root(&key, &linker.resolver)?;
-        let root = resolve_context.stage(resolved, &mut loader)?;
-        Self::prepare_direct_load::<Meta, Q>(
-            context,
-            &linker.visible_modules,
+        let mut resolve_context =
+            LoadResolveContext::new(&mut context.committed, session.resolve_mut());
+        let resolved = resolve_context.resolve_root::<_, M::Region, _>(
+            &key,
             &linker.resolver,
-            root,
-            session,
-            &mut loader,
-        )
+            &loader.observer,
+        )?;
+        let root = resolve_context.stage(resolved, &mut loader)?;
+        Self::prepare_direct_load::<Meta, Q>(context, &linker.resolver, root, session, &mut loader)
     }
 
     /// Loads, commits, and initializes a pre-mapped root dynamic image.
@@ -189,7 +168,6 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
-        V: VisibleModules<K, Arch, Q, Tls>,
     {
         let prepared = self.prepare_mapped_root::<Meta, Q>(context, key, raw)?;
         let relocated = self.relocate(prepared)?;
@@ -211,7 +189,6 @@ where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
-        V: VisibleModules<K, Arch, Q, Tls>,
     {
         if let Some(prepared) = PreparedLoad::visible(context, key.borrow()) {
             return Ok(prepared);
@@ -225,19 +202,11 @@ where
             .dynamics
             .insert(root, GraphEntry::new(raw));
         let mut loader = linker.loader.run().with_observer(&mut self.observer);
-        Self::prepare_direct_load::<Meta, Q>(
-            context,
-            &linker.visible_modules,
-            &linker.resolver,
-            root,
-            session,
-            &mut loader,
-        )
+        Self::prepare_direct_load::<Meta, Q>(context, &linker.resolver, root, session, &mut loader)
     }
 
     fn prepare_direct_load<'cfg, Meta, Q>(
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
-        visible_modules: &V,
         resolver: &Resolver,
         root: KeySlot,
         mut session: LoadSession<D, Arch, M::Region, Tls>,
@@ -247,13 +216,9 @@ where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
-        V: VisibleModules<K, Arch, Q, Tls>,
     {
-        let mut resolve_context = LoadResolveContext::new(
-            &mut context.committed,
-            visible_modules,
-            session.resolve_mut(),
-        );
+        let mut resolve_context =
+            LoadResolveContext::new(&mut context.committed, session.resolve_mut());
         if resolve_context.contains_pending(root) {
             resolve_context.resolve_dependency_graph::<_, _, _, Q>(root, loader, resolver)?;
         }
@@ -404,8 +369,8 @@ where
 }
 
 #[allow(private_bounds)]
-impl<K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, V>
-    Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, V, Tls>
+impl<K, D, Tls, Arch, M, Exec, Resolver, RelocBinder>
+    Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls>
 where
     K: Clone + Ord,
     D: Default + 'static,
@@ -427,7 +392,6 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
-        V: VisibleModules<K, Arch, Q, Tls>,
     {
         self.run().load::<Meta, Q>(context, key)
     }
@@ -444,7 +408,6 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
-        V: VisibleModules<K, Arch, Q, Tls>,
     {
         self.run().load_mapped_root::<Meta, Q>(context, key, raw)
     }
@@ -460,7 +423,6 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
-        V: VisibleModules<K, Arch, Q, Tls>,
     {
         self.run().load_scan_first::<Meta, Q>(context, key)
     }

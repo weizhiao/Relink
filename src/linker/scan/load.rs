@@ -9,7 +9,6 @@ use crate::{
     linker::{
         context::LinkContext,
         driver::LoadResult,
-        request::VisibleModules,
         resolve::ScanResolveContext,
         resolver::KeyResolver,
         run::{LinkerRun, PreparedLoad, visible_loaded},
@@ -30,19 +29,8 @@ use alloc::{
 use core::borrow::Borrow;
 
 #[allow(private_bounds)]
-impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, V, Obs>
-    LinkerRun<
-        'run,
-        'pipe,
-        K,
-        Arch,
-        Loader<D, Tls, Arch, M, Exec>,
-        Resolver,
-        RelocBinder,
-        V,
-        Tls,
-        Obs,
-    >
+impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, Obs>
+    LinkerRun<'run, 'pipe, K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls, Obs>
 where
     K: Clone + Ord,
     D: Default + 'static,
@@ -67,7 +55,6 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Meta: Default,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
-        V: VisibleModules<K, Arch, Q, Tls>,
     {
         if let Some(result) = visible_loaded(context, key.borrow()) {
             return Ok(result);
@@ -92,17 +79,16 @@ where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
-        V: VisibleModules<K, Arch, Q, Tls>,
     {
         let mut session = ResolveSession::new();
 
         let mut loader = self.linker.loader.run().with_observer(&mut self.observer);
-        let mut resolve_context = ScanResolveContext::new(
-            &mut context.committed,
-            &self.linker.visible_modules,
-            &mut session,
-        );
-        let resolved = resolve_context.resolve_root(key, &self.linker.resolver)?;
+        let mut resolve_context = ScanResolveContext::new(&mut context.committed, &mut session);
+        let resolved = resolve_context.resolve_root::<Q, M::Region, _>(
+            key,
+            &self.linker.resolver,
+            &loader.observer,
+        )?;
         let root = resolve_context.stage(resolved, &mut loader)?;
         if !resolve_context.contains_pending(root) {
             return Ok(PreparedLoad::new(root, LoadSession::new(), None, context));

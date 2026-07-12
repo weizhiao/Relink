@@ -96,8 +96,8 @@ where
 
 /// Reusable front-end for dependency discovery, loading, and relocation.
 ///
-/// `Linker` combines a [`Loader`](crate::Loader), dependency resolver,
-/// visible-module set, and [`Relocator`](crate::Relocator).
+/// `Linker` combines a [`Loader`](crate::Loader), dependency resolver, and
+/// [`Relocator`](crate::Relocator).
 /// It is the high-level path for loading a root image plus its `DT_NEEDED`
 /// dependency graph into a [`LinkContext`](crate::LinkContext).
 ///
@@ -138,24 +138,21 @@ pub struct Linker<
     L = Loader<(), (), Arch>,
     R = (),
     RelocBinder = (),
-    V = (),
     Tls: TlsResolver<Arch> = (),
 > {
     pub(super) loader: L,
     pub(super) resolver: R,
     pub(super) relocator: Relocator<RelocBinder>,
-    pub(super) visible_modules: V,
     marker: PhantomData<(K, Arch, Tls)>,
 }
 
-impl<K, Arch, L, R, RelocBinder, V, Tls> Clone for Linker<K, Arch, L, R, RelocBinder, V, Tls>
+impl<K, Arch, L, R, RelocBinder, Tls> Clone for Linker<K, Arch, L, R, RelocBinder, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
     L: Clone,
     R: Clone,
     Relocator<RelocBinder>: Clone,
-    V: Clone,
     Tls: TlsResolver<Arch>,
 {
     #[inline]
@@ -164,17 +161,15 @@ where
             loader: self.loader.clone(),
             resolver: self.resolver.clone(),
             relocator: self.relocator.clone(),
-            visible_modules: self.visible_modules.clone(),
             marker: PhantomData,
         }
     }
 }
 
-struct LinkerFields<L, R, RelocBinder, V> {
+struct LinkerFields<L, R, RelocBinder> {
     loader: NoDrop<L>,
     resolver: NoDrop<R>,
     relocator: NoDrop<Relocator<RelocBinder>>,
-    visible_modules: NoDrop<V>,
 }
 
 impl<K> Linker<K>
@@ -188,7 +183,6 @@ where
             loader: Loader::new(),
             resolver: (),
             relocator: Relocator::new().defer_init(),
-            visible_modules: (),
             marker: PhantomData,
         }
     }
@@ -200,7 +194,7 @@ where
     /// `NewArch`.
     #[inline]
     #[allow(clippy::type_complexity)]
-    pub const fn for_arch<NewArch>(self) -> Linker<K, NewArch, Loader<(), (), NewArch>, (), (), ()>
+    pub const fn for_arch<NewArch>(self) -> Linker<K, NewArch, Loader<(), (), NewArch>, (), ()>
     where
         NewArch: RelocationArch,
     {
@@ -208,7 +202,6 @@ where
             loader: self.loader.for_arch::<NewArch>(),
             resolver: (),
             relocator: self.relocator,
-            visible_modules: (),
             marker: PhantomData,
         }
     }
@@ -224,14 +217,14 @@ where
     }
 }
 
-impl<K, L, R, RelocBinder, V, Arch, Tls> Linker<K, Arch, L, R, RelocBinder, V, Tls>
+impl<K, L, R, RelocBinder, Arch, Tls> Linker<K, Arch, L, R, RelocBinder, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    const fn into_fields(self) -> LinkerFields<L, R, RelocBinder, V> {
+    const fn into_fields(self) -> LinkerFields<L, R, RelocBinder> {
         let this = MaybeUninit::new(self);
         let this = this.as_ptr();
 
@@ -244,55 +237,23 @@ where
                 loader: NoDrop::read(ptr::addr_of!((*this).loader)),
                 resolver: NoDrop::read(ptr::addr_of!((*this).resolver)),
                 relocator: NoDrop::read(ptr::addr_of!((*this).relocator)),
-                visible_modules: NoDrop::read(ptr::addr_of!((*this).visible_modules)),
             }
         }
     }
 
     /// Sets the key resolver used to resolve root keys and dependencies.
-    pub const fn resolver<NewR>(
-        self,
-        resolver: NewR,
-    ) -> Linker<K, Arch, L, NewR, RelocBinder, V, Tls>
+    pub const fn resolver<NewR>(self, resolver: NewR) -> Linker<K, Arch, L, NewR, RelocBinder, Tls>
     where
         R: Copy,
     {
         let LinkerFields {
-            loader,
-            relocator,
-            visible_modules,
-            ..
+            loader, relocator, ..
         } = self.into_fields();
 
         Linker {
             loader: loader.into_inner(),
             resolver,
             relocator: relocator.into_inner(),
-            visible_modules: visible_modules.into_inner(),
-            marker: PhantomData,
-        }
-    }
-
-    /// Sets additional modules that are visible for reuse or lookup.
-    pub const fn visible_modules<NewV>(
-        self,
-        visible_modules: NewV,
-    ) -> Linker<K, Arch, L, R, RelocBinder, NewV, Tls>
-    where
-        V: Copy,
-    {
-        let LinkerFields {
-            loader,
-            resolver,
-            relocator,
-            ..
-        } = self.into_fields();
-
-        Linker {
-            loader: loader.into_inner(),
-            resolver: resolver.into_inner(),
-            relocator: relocator.into_inner(),
-            visible_modules,
             marker: PhantomData,
         }
     }
@@ -303,22 +264,18 @@ where
     pub const fn relocator<NewRelocBinder>(
         self,
         relocator: Relocator<NewRelocBinder>,
-    ) -> Linker<K, Arch, L, R, NewRelocBinder, V, Tls>
+    ) -> Linker<K, Arch, L, R, NewRelocBinder, Tls>
     where
         Relocator<RelocBinder>: Copy,
     {
         let LinkerFields {
-            loader,
-            resolver,
-            visible_modules,
-            ..
+            loader, resolver, ..
         } = self.into_fields();
 
         Linker {
             loader: loader.into_inner(),
             resolver: resolver.into_inner(),
             relocator: relocator.defer_init(),
-            visible_modules: visible_modules.into_inner(),
             marker: PhantomData,
         }
     }
@@ -329,19 +286,18 @@ where
     pub fn map_relocator<NewRelocBinder>(
         self,
         configure: impl FnOnce(Relocator<RelocBinder>) -> Relocator<NewRelocBinder>,
-    ) -> Linker<K, Arch, L, R, NewRelocBinder, V, Tls> {
+    ) -> Linker<K, Arch, L, R, NewRelocBinder, Tls> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
             relocator: configure(self.relocator).defer_init(),
-            visible_modules: self.visible_modules,
             marker: PhantomData,
         }
     }
 
     /// Starts a linker run with fresh scratch storage.
     #[inline]
-    pub fn run<'pipe>(&self) -> LinkerRun<'_, 'pipe, K, Arch, L, R, RelocBinder, V, Tls, ()> {
+    pub fn run<'pipe>(&self) -> LinkerRun<'_, 'pipe, K, Arch, L, R, RelocBinder, Tls, ()> {
         LinkerRun {
             linker: self,
             pipeline: LinkPipeline::new(),
@@ -351,7 +307,7 @@ where
     }
 }
 
-impl<K, D, Tls, Arch, M, Exec, R, V> Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, R, (), V, Tls>
+impl<K, D, Tls, Arch, M, Exec, R> Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, R, (), Tls>
 where
     K: Clone + Ord,
     D: 'static,
@@ -368,7 +324,7 @@ where
     pub const fn loader<NewD, NewTls, NewM, NewExec>(
         self,
         loader: Loader<NewD, NewTls, Arch, NewM, NewExec>,
-    ) -> Linker<K, Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), V, NewTls>
+    ) -> Linker<K, Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), NewTls>
     where
         Loader<D, Tls, Arch, M, Exec>: Copy,
         NewD: 'static,
@@ -379,7 +335,6 @@ where
         let LinkerFields {
             relocator,
             resolver,
-            visible_modules,
             ..
         } = self.into_fields();
 
@@ -387,7 +342,6 @@ where
             loader,
             resolver: resolver.into_inner(),
             relocator: relocator.into_inner(),
-            visible_modules: visible_modules.into_inner(),
             marker: PhantomData,
         }
     }
@@ -402,7 +356,7 @@ where
         configure: impl FnOnce(
             Loader<D, Tls, Arch, M, Exec>,
         ) -> Loader<NewD, NewTls, Arch, NewM, NewExec>,
-    ) -> Linker<K, Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), V, NewTls>
+    ) -> Linker<K, Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), NewTls>
     where
         NewD: 'static,
         NewTls: TlsResolver<Arch>,
@@ -413,7 +367,6 @@ where
             loader: configure(self.loader),
             resolver: self.resolver,
             relocator: self.relocator,
-            visible_modules: self.visible_modules,
             marker: PhantomData,
         }
     }

@@ -7,7 +7,7 @@ use elf_loader::{
     image::{LoadedCore, ModuleCapability, ScannedElf, SyntheticModule},
     input::ElfBinary,
     linker::{
-        KeyResolver, ResolvedKey, RootRequest, VisibleModule, VisibleModules,
+        KeyResolver, ResolvedKey, RootRequest, VisibleModule,
         scan::{
             ArenaDescriptor, ArenaSharing, DataPass, LinkPass, LinkPassPlan, Materialization,
             MemoryClass, PassScopeMode, ReorderPass,
@@ -284,13 +284,24 @@ impl KeyResolver<&'static str> for SyntheticDependencyResolver {
     }
 }
 
-impl VisibleModules<&'static str> for StaticVisibleModule {
-    fn contains(&self, key: &&'static str) -> bool {
-        *key == self.key
+impl LoadObserver for StaticVisibleModule {}
+impl RelocationObserver for StaticVisibleModule {}
+
+impl LinkerObserver<&'static str, ()> for StaticVisibleModule {
+    fn contains_visible<Q>(&self, key: &Q) -> bool
+    where
+        &'static str: std::borrow::Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        <&'static str as std::borrow::Borrow<Q>>::borrow(&self.key) == key
     }
 
-    fn module(&self, key: &&'static str) -> Option<VisibleModule<&'static str>> {
-        (*key == self.key)
+    fn visible_module<Q>(&self, key: &Q) -> Option<VisibleModule<&'static str>>
+    where
+        &'static str: std::borrow::Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        (<&'static str as std::borrow::Borrow<Q>>::borrow(&self.key) == key)
             .then(|| VisibleModule::new(self.module.clone(), self.direct_deps.clone()))
     }
 }
@@ -409,9 +420,10 @@ fn load_commits_configured_visible_modules() {
     let resolver = VisibleDependencyResolver { root_data };
     let mut context = LinkContext::<&'static str, ()>::new();
 
-    let root = Linker::new()
-        .visible_modules(visible)
-        .resolver(resolver)
+    let linker = Linker::new().resolver(resolver);
+    let root = linker
+        .run()
+        .with_observer(visible)
         .load(&mut context, "root")
         .expect("load should resolve dependency through visible overlay");
 

@@ -1,6 +1,5 @@
 use super::{
-    request::{DependencyOwner, DependencyRequest, RootRequest, VisibleModules},
-    resolver::{KeyResolver, ResolvedKey},
+    resolver::{DependencyOwner, DependencyRequest, KeyResolver, ResolvedKey, RootRequest},
     session::{GraphEntry, ModuleEntry, ResolveSession},
     storage::{CommittedStorage, KeySlot},
 };
@@ -8,7 +7,7 @@ use crate::{
     LinkResolverError, LinkerError, LoaderRun, Result,
     image::{ModuleHandle, RawDynamic, ScannedDynamic, ScannedElf},
     memory::RegionAccess,
-    observer::LoadObserver,
+    observer::{LinkerObserver, LoadObserver},
     os::Mmap,
     relocation::RelocationArch,
     runtime::CodeExecutor,
@@ -61,13 +60,11 @@ pub(crate) struct ResolveContext<
     K: Clone,
     D: 'static,
     Meta = (),
-    V = (),
     Arch: RelocationArch = crate::arch::NativeArch,
     P = (),
     Tls: TlsResolver<Arch> = (),
 > {
     committed: &'a mut CommittedStorage<K, D, Meta, Arch, Tls>,
-    visible_modules: &'a V,
     session: &'a mut ResolveSession<P, Arch, Tls>,
 }
 
@@ -76,24 +73,15 @@ pub(crate) type LoadResolveContext<
     K,
     D,
     Meta = (),
-    V = (),
     Arch = crate::arch::NativeArch,
     R = crate::memory::HostRegion,
     Tls = (),
-> = ResolveContext<'a, K, D, Meta, V, Arch, RawDynamic<D, Arch, R, Tls>, Tls>;
+> = ResolveContext<'a, K, D, Meta, Arch, RawDynamic<D, Arch, R, Tls>, Tls>;
 
-pub(crate) type ScanResolveContext<
-    'a,
-    K,
-    D,
-    Meta = (),
-    V = (),
-    Arch = crate::arch::NativeArch,
-    Tls = (),
-> = ResolveContext<'a, K, D, Meta, V, Arch, ScannedDynamic<Arch>, Tls>;
+pub(crate) type ScanResolveContext<'a, K, D, Meta = (), Arch = crate::arch::NativeArch, Tls = ()> =
+    ResolveContext<'a, K, D, Meta, Arch, ScannedDynamic<Arch>, Tls>;
 
-impl<'a, K: Clone, D: 'static, Meta, V, Arch, P, Tls>
-    ResolveContext<'a, K, D, Meta, V, Arch, P, Tls>
+impl<'a, K: Clone, D: 'static, Meta, Arch, P, Tls> ResolveContext<'a, K, D, Meta, Arch, P, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -101,18 +89,13 @@ where
     #[inline]
     pub(crate) fn new(
         committed: &'a mut CommittedStorage<K, D, Meta, Arch, Tls>,
-        visible_modules: &'a V,
         session: &'a mut ResolveSession<P, Arch, Tls>,
     ) -> Self {
-        Self {
-            committed,
-            visible_modules,
-            session,
-        }
+        Self { committed, session }
     }
 }
 
-impl<K, D: 'static, Meta, V, Arch, P, Tls> ResolveContext<'_, K, D, Meta, V, Arch, P, Tls>
+impl<K, D: 'static, Meta, Arch, P, Tls> ResolveContext<'_, K, D, Meta, Arch, P, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -125,11 +108,12 @@ where
     }
 
     #[inline]
-    fn contains_key<Q>(&self, key: &Q) -> bool
+    fn contains_key<Q, R, Obs>(&self, key: &Q, observer: &Obs) -> bool
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
+        R: RegionAccess,
+        Obs: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
     {
         if let Some(slot) = self.committed.key_slot_for(key) {
             if self.session.contains_pending(slot)
@@ -142,7 +126,7 @@ where
             }
         }
 
-        self.visible_modules.contains(key)
+        observer.contains_visible(key)
     }
 
     fn pending_or_committed<Q>(&self, key: &Q) -> Option<KeySlot>
@@ -172,20 +156,20 @@ where
         slot
     }
 
-    fn stage_existing_key<Q>(&mut self, key: K) -> Result<KeySlot>
+    fn stage_existing_key<Q, R, Obs>(&mut self, key: K, observer: &Obs) -> Result<KeySlot>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
+        R: RegionAccess,
+        Obs: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
     {
         if let Some(slot) = self.pending_or_committed(key.borrow()) {
             return Ok(slot);
         }
 
         let visible_key = key.borrow();
-        let module = self
-            .visible_modules
-            .module(visible_key)
+        let module = observer
+            .visible_module(visible_key)
             .ok_or_else(|| LinkerError::resolver(LinkResolverError::ExistingKeyNotVisible))?;
         let (module, direct_deps) = module.into_parts();
 
@@ -198,7 +182,7 @@ where
             .into_boxed_slice();
         let slot = self.stage_module_handle(key, module, direct_deps);
         for dep in direct_dep_keys {
-            self.stage_existing_key::<Q>(dep)?;
+            self.stage_existing_key::<Q, R, Obs>(dep, observer)?;
         }
         Ok(slot)
     }
@@ -269,35 +253,39 @@ where
         entry.set_direct_deps(direct_deps);
     }
 
-    fn resolve_dependency_edge<'cfg, Q>(
+    fn resolve_dependency_edge<'cfg, Q, R, Obs>(
         &self,
         slot: KeySlot,
         needed_index: usize,
         resolver: &impl KeyResolver<K, Arch, Q, Tls>,
+        observer: &Obs,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
+        R: RegionAccess,
+        Obs: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
     {
-        let contains_key = |key: &Q| self.contains_key(key);
+        let contains_key = |key: &Q| self.contains_key::<Q, R, Obs>(key, observer);
         let owner = self.owner(slot);
         let owner_key = self.key(slot);
         let req = DependencyRequest::new(owner_key, owner, needed_index, &contains_key);
         resolver.resolve_dependency(&req)
     }
 
-    pub(crate) fn resolve_root<'cfg, Q>(
+    pub(crate) fn resolve_root<'cfg, Q, R, Obs>(
         &self,
         key: &K,
         resolver: &impl KeyResolver<K, Arch, Q, Tls>,
+        observer: &Obs,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
+        R: RegionAccess,
+        Obs: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
     {
-        let contains_key = |key: &Q| self.contains_key(key);
+        let contains_key = |key: &Q| self.contains_key::<Q, R, Obs>(key, observer);
         let req = RootRequest::new(key, &contains_key);
         resolver.load_root(&req)
     }
@@ -312,8 +300,7 @@ where
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
-        Obs: LoadObserver<D, Arch>,
+        Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
@@ -330,7 +317,12 @@ where
         let needed_len = self.owner(slot).needed_len();
         let mut direct_deps = Vec::with_capacity(needed_len);
         for idx in 0..needed_len {
-            let key = self.resolve_dependency_edge(slot, idx, resolver)?;
+            let key = self.resolve_dependency_edge::<Q, M::Region, Obs>(
+                slot,
+                idx,
+                resolver,
+                &loader.observer,
+            )?;
             let dep_id = stage(self, key, loader)?;
             if !direct_deps.contains(&dep_id) {
                 direct_deps.push(dep_id);
@@ -350,8 +342,7 @@ where
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
-        Obs: LoadObserver<D, Arch>,
+        Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
@@ -370,8 +361,8 @@ where
     }
 }
 
-impl<K, D: 'static, Meta, V, Arch, R, Tls>
-    ResolveContext<'_, K, D, Meta, V, Arch, RawDynamic<D, Arch, R, Tls>, Tls>
+impl<K, D: 'static, Meta, Arch, R, Tls>
+    ResolveContext<'_, K, D, Meta, Arch, RawDynamic<D, Arch, R, Tls>, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -386,17 +377,18 @@ where
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
         D: Default,
-        Obs: LoadObserver<D, Arch>,
+        Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
         Exec: CodeExecutor<Arch> + Clone,
     {
         match resolved {
-            ResolvedKey::Existing(key) => self.stage_existing_key::<Q>(key),
+            ResolvedKey::Existing(key) => {
+                self.stage_existing_key::<Q, M::Region, Obs>(key, &loader.observer)
+            }
             ResolvedKey::Load { key, reader } => {
-                if self.contains_key(key.borrow()) {
+                if self.contains_key::<Q, M::Region, Obs>(key.borrow(), &loader.observer) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
                 let raw = loader.load_dynamic(reader)?;
@@ -405,7 +397,7 @@ where
                 Ok(slot)
             }
             ResolvedKey::Module { key, module, deps } => {
-                if self.contains_key(key.borrow()) {
+                if self.contains_key::<Q, M::Region, Obs>(key.borrow(), &loader.observer) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
 
@@ -426,9 +418,8 @@ where
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
         D: Default,
-        Obs: LoadObserver<D, Arch>,
+        Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
         Exec: CodeExecutor<Arch> + Clone,
@@ -439,8 +430,7 @@ where
     }
 }
 
-impl<K, D: 'static, Meta, V, Arch, Tls>
-    ResolveContext<'_, K, D, Meta, V, Arch, ScannedDynamic<Arch>, Tls>
+impl<K, D: 'static, Meta, Arch, Tls> ResolveContext<'_, K, D, Meta, Arch, ScannedDynamic<Arch>, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -454,17 +444,18 @@ where
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
         D: Default,
-        Obs: LoadObserver<D, Arch>,
+        Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
     {
         match resolved {
-            ResolvedKey::Existing(key) => self.stage_existing_key::<Q>(key),
+            ResolvedKey::Existing(key) => {
+                self.stage_existing_key::<Q, M::Region, Obs>(key, &loader.observer)
+            }
             ResolvedKey::Load { key, reader } => {
-                if self.contains_key(key.borrow()) {
+                if self.contains_key::<Q, M::Region, Obs>(key.borrow(), &loader.observer) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
                 let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
@@ -475,7 +466,7 @@ where
                 Ok(slot)
             }
             ResolvedKey::Module { key, module, deps } => {
-                if self.contains_key(key.borrow()) {
+                if self.contains_key::<Q, M::Region, Obs>(key.borrow(), &loader.observer) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
 
@@ -496,9 +487,8 @@ where
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        V: VisibleModules<K, Arch, Q, Tls>,
         D: Default,
-        Obs: LoadObserver<D, Arch>,
+        Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,

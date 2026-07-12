@@ -10,7 +10,6 @@
 
 mod context;
 mod driver;
-mod request;
 mod resolve;
 mod resolver;
 mod run;
@@ -18,12 +17,13 @@ pub mod scan;
 mod session;
 mod storage;
 
+pub use crate::observer::VisibleModule;
 pub use context::{DirectDeps, LinkContext};
 pub use driver::{Linker, LoadResult};
-pub use request::{DependencyOwner, DependencyRequest, RootRequest, VisibleModule, VisibleModules};
 pub use resolver::{
-    CandidateContext, CandidateRequest, FileNameKey, KeyResolver, KeyRule, PathKey, ResolvedKey,
-    SearchDirProvider, SearchPathEntry, SearchPathResolver,
+    CandidateContext, CandidateRequest, DependencyOwner, DependencyRequest, FileNameKey,
+    KeyResolver, KeyRule, PathKey, ResolvedKey, RootRequest, SearchDirProvider, SearchPathEntry,
+    SearchPathResolver,
 };
 pub use run::{CommittedLoad, FailedLoad, LinkerRun, PreparedLoad, RelocatedLoad};
 pub use storage::{ContextId, KeyId, ModuleId};

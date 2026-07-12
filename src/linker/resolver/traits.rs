@@ -1,10 +1,6 @@
+use super::{DependencyRequest, RootRequest};
 use crate::{
-    Result,
-    arch::NativeArch,
-    image::ModuleHandle,
-    input::ElfReader,
-    linker::{DependencyRequest, RootRequest},
-    relocation::RelocationArch,
+    Result, arch::NativeArch, image::ModuleHandle, input::ElfReader, relocation::RelocationArch,
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
