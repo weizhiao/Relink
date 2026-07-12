@@ -157,6 +157,15 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         self.core.is_init()
     }
 
+    /// Executes this module's initialization functions at most once.
+    ///
+    /// The initialized state is set before retained hooks or target code run so
+    /// recursive initialization observes this module as already in progress.
+    #[inline]
+    pub fn initialize(&self) -> Result<()> {
+        self.core.initialize()
+    }
+
     /// Returns the program headers of the ELF object.
     #[inline]
     pub fn phdrs(&self) -> Option<&[ElfPhdr<Arch::Layout>]> {

@@ -20,13 +20,10 @@ mod storage;
 
 pub use context::{DirectDeps, LinkContext};
 pub use driver::{Linker, LoadResult};
-pub use request::{
-    DefaultRelocationPlanner, DependencyOwner, DependencyRequest, RelocationInputs,
-    RelocationPlanner, RelocationRequest, RootRequest, VisibleModule, VisibleModules,
-};
+pub use request::{DependencyOwner, DependencyRequest, RootRequest, VisibleModule, VisibleModules};
 pub use resolver::{
     CandidateContext, CandidateRequest, FileNameKey, KeyResolver, KeyRule, PathKey, ResolvedKey,
     SearchDirProvider, SearchPathEntry, SearchPathResolver,
 };
-pub use run::LinkerRun;
+pub use run::{CommittedLoad, FailedLoad, LinkerRun, PreparedLoad, RelocatedLoad};
 pub use storage::{ContextId, KeyId, ModuleId};

@@ -2,22 +2,33 @@ mod support;
 
 use elf_loader::{
     LinkContext, Linker, Loader, Relocator,
+    arch::NativeArch,
     elf::{ElfFileType, ElfProgramType},
     image::{LoadedCore, ModuleCapability, ScannedElf, SyntheticModule},
     input::ElfBinary,
     linker::{
-        KeyResolver, RelocationInputs, RelocationRequest, ResolvedKey, RootRequest, VisibleModule,
-        VisibleModules,
+        KeyResolver, ResolvedKey, RootRequest, VisibleModule, VisibleModules,
         scan::{
             ArenaDescriptor, ArenaSharing, DataPass, LinkPass, LinkPassPlan, Materialization,
             MemoryClass, PassScopeMode, ReorderPass,
         },
     },
-    memory::VmAddr,
+    memory::{RegionAccess, VmAddr},
+    observer::{
+        DynamicRelocatedEvent, LinkerObserver, LinkerRelocationEvent, LoadObserver,
+        RelocationObserver,
+    },
     os::PageSize,
+    tls::TlsResolver,
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
-use std::{boxed::Box, cell::RefCell, rc::Rc, vec::Vec};
+use std::{
+    boxed::Box,
+    cell::RefCell,
+    rc::Rc,
+    sync::{Arc, Mutex},
+    vec::Vec,
+};
 use support::test_dylib::{load_relocated_dylib, write_test_dylib, write_test_dylib_with_config};
 
 struct SingleBinaryResolver {
@@ -55,6 +66,70 @@ struct StaticVisibleModule {
     key: &'static str,
     module: LoadedCore<()>,
     direct_deps: Box<[&'static str]>,
+}
+
+struct InitRecorder {
+    calls: Arc<Mutex<Vec<String>>>,
+    reverse: bool,
+    fail: bool,
+}
+
+impl InitRecorder {
+    fn new(calls: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            calls,
+            reverse: false,
+            fail: false,
+        }
+    }
+
+    fn reversed(calls: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            calls,
+            reverse: true,
+            fail: false,
+        }
+    }
+
+    fn failing(calls: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            calls,
+            reverse: false,
+            fail: true,
+        }
+    }
+}
+
+impl LoadObserver for InitRecorder {}
+impl LinkerObserver<&'static str, ()> for InitRecorder {
+    fn on_init(
+        &mut self,
+        event: &mut elf_loader::observer::LinkerInitEvent<'_, &'static str, ()>,
+    ) -> elf_loader::Result<()> {
+        if self.reverse {
+            event.modules_mut().reverse();
+        }
+        Ok(())
+    }
+}
+
+impl RelocationObserver for InitRecorder {
+    fn on_dynamic_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
+        &mut self,
+        event: &mut DynamicRelocatedEvent<'_, D, NativeArch, R, Tls>,
+    ) -> elf_loader::Result<()> {
+        let calls = Arc::clone(&self.calls);
+        let fail = self.fail;
+        event.set_init_hook(move |event| {
+            calls.lock().unwrap().push(event.name().to_string());
+            event.lifecycle_mut().clear();
+            if fail {
+                return Err(elf_loader::error::CustomError::message("initializer failed").into());
+            }
+            Ok(())
+        });
+        Ok(())
+    }
 }
 
 impl KeyResolver<&'static str> for SingleBinaryResolver {
@@ -312,12 +387,6 @@ fn mark_as_static_exec(mut bytes: Vec<u8>) -> Vec<u8> {
     panic!("generated test image should contain PT_DYNAMIC");
 }
 
-fn empty_relocation_plan(
-    _req: &RelocationRequest<'_, &'static str, ()>,
-) -> Result<RelocationInputs, elf_loader::Error> {
-    Ok(RelocationInputs::new(Vec::<LoadedCore<()>>::new()))
-}
-
 #[test]
 fn load_commits_configured_visible_modules() {
     let dep_output = write_test_dylib(&[], &[]);
@@ -343,7 +412,6 @@ fn load_commits_configured_visible_modules() {
     let root = Linker::new()
         .visible_modules(visible)
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load(&mut context, "root")
         .expect("load should resolve dependency through visible overlay");
 
@@ -382,7 +450,6 @@ fn load_scan_first_supports_synthetic_dependencies() {
 
     let root = Linker::new()
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "root")
         .expect("scan-first load should accept a synthetic dependency");
 
@@ -424,7 +491,6 @@ fn load_accepts_dynamic_exec_root() {
 
     let loaded = Linker::new()
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load(&mut context, "root")
         .expect("legacy linker load should accept dynamic ET_EXEC roots");
 
@@ -577,7 +643,6 @@ fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span(
 
     let loaded = Linker::new()
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -612,7 +677,6 @@ fn load_with_scan_legacy_path_loads_without_an_intermediate_plan() {
     };
     let loaded = Linker::new()
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "root")
         .expect("failed to execute merged scan-and-load path");
 
@@ -643,7 +707,6 @@ fn load_scan_first_accepts_dynamic_exec_root() {
 
     let loaded = Linker::new()
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "root")
         .expect("scan-first linker load should accept dynamic ET_EXEC roots");
 
@@ -672,7 +735,6 @@ fn load_with_scan_reuses_existing_root_alias_without_planning() {
     };
     let loaded = Linker::new()
         .resolver(load_resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "canonical")
         .expect("failed to load canonical scan root");
 
@@ -682,7 +744,6 @@ fn load_with_scan_reuses_existing_root_alias_without_planning() {
     };
     let alias_loaded = Linker::new()
         .resolver(alias_resolver)
-        .planner(empty_relocation_plan)
         .load_scan_first(&mut context, "alias")
         .expect("failed to reuse existing scan root");
 
@@ -720,28 +781,228 @@ fn load_relocates_runtime_dependency_before_root() {
             },
         ],
     };
-    let planner = {
-        let planned = Rc::clone(&planned);
-        move |req: &RelocationRequest<'_, &'static str, ()>| {
-            planned.borrow_mut().push((*req.key()).to_string());
-            Ok(RelocationInputs::new(Vec::<LoadedCore<()>>::new()))
+    struct PlanningObserver(Rc<RefCell<Vec<String>>>);
+
+    impl LoadObserver for PlanningObserver {}
+    impl RelocationObserver for PlanningObserver {}
+    impl LinkerObserver<&'static str, ()> for PlanningObserver {
+        fn on_relocation(
+            &mut self,
+            event: &mut LinkerRelocationEvent<()>,
+        ) -> elf_loader::Result<()> {
+            self.0.borrow_mut().push(event.raw().name().to_string());
+            event.set_scope(elf_loader::image::ModuleScopeBuilder::new().into_scope());
+            Ok(())
         }
-    };
+    }
 
     let mut context = LinkContext::<&'static str, ()>::new();
-    Linker::new()
-        .resolver(resolver)
-        .planner(planner)
+    let linker = Linker::new().resolver(resolver);
+    linker
+        .run()
+        .with_observer(PlanningObserver(Rc::clone(&planned)))
         .load(&mut context, "root")
         .expect("failed to load root with dependency");
 
     assert_eq!(
         *planned.borrow(),
-        vec!["dep".to_string(), "root".to_string()],
+        vec!["dep.so".to_string(), "root.so".to_string()],
         "relocation should still run in dependency-first order"
     );
     assert!(context.contains_key(&"root"));
     assert!(context.contains_key(&"dep"));
+}
+
+#[test]
+fn phased_load_commits_before_dependency_ordered_initialization() {
+    let dep_output = write_test_dylib(&[], &[]);
+    let root_output = write_test_dylib_with_config(
+        ElfWriterConfig::default()
+            .with_bind_now(true)
+            .with_needed_lib("dep"),
+        &[],
+        &[],
+    );
+    let dep_data: &'static [u8] = Box::leak(dep_output.data.into_boxed_slice());
+    let root_data: &'static [u8] = Box::leak(root_output.data.into_boxed_slice());
+    let resolver = MultiBinaryResolver {
+        root: "root",
+        modules: vec![
+            BinaryModule {
+                key: "root",
+                name: "phased_root.so",
+                data: root_data,
+            },
+            BinaryModule {
+                key: "dep",
+                name: "phased_dep.so",
+                data: dep_data,
+            },
+        ],
+    };
+    let linker = Linker::new().resolver(resolver);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut run = linker
+        .run()
+        .with_observer(InitRecorder::new(Arc::clone(&calls)));
+    let mut context = LinkContext::<&'static str, ()>::new();
+
+    let prepared = run
+        .prepare_load(&mut context, "root")
+        .expect("prepare should resolve the module group");
+    assert!(!context.contains_key(&"root"));
+    assert!(!context.contains_key(&"dep"));
+
+    let relocated = run
+        .relocate(prepared)
+        .expect("relocation should succeed without a context borrow");
+    assert!(!context.contains_key(&"root"));
+    assert!(!context.contains_key(&"dep"));
+
+    let committed = run
+        .commit(&mut context, relocated)
+        .expect("commit should publish the relocated group");
+    assert!(context.contains_key(&"root"));
+    assert!(context.contains_key(&"dep"));
+    assert!(!committed.root().is_init());
+
+    let result = run
+        .initialize(committed)
+        .expect("initialization should succeed");
+    assert_eq!(
+        calls.lock().unwrap().as_slice(),
+        &["phased_dep.so".to_string(), "phased_root.so".to_string()]
+    );
+    assert!(result.root().is_init());
+
+    assert_eq!(calls.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn linker_observer_can_reorder_initialization() {
+    let dep_output = write_test_dylib(&[], &[]);
+    let root_output = write_test_dylib_with_config(
+        ElfWriterConfig::default()
+            .with_bind_now(true)
+            .with_needed_lib("dep"),
+        &[],
+        &[],
+    );
+    let dep_data: &'static [u8] = Box::leak(dep_output.data.into_boxed_slice());
+    let root_data: &'static [u8] = Box::leak(root_output.data.into_boxed_slice());
+    let resolver = MultiBinaryResolver {
+        root: "root",
+        modules: vec![
+            BinaryModule {
+                key: "root",
+                name: "reordered_root.so",
+                data: root_data,
+            },
+            BinaryModule {
+                key: "dep",
+                name: "reordered_dep.so",
+                data: dep_data,
+            },
+        ],
+    };
+    let linker = Linker::new().resolver(resolver);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut context = LinkContext::<&'static str, ()>::new();
+
+    linker
+        .run()
+        .with_observer(InitRecorder::reversed(Arc::clone(&calls)))
+        .load(&mut context, "root")
+        .expect("load with reordered initialization should succeed");
+
+    assert_eq!(
+        calls.lock().unwrap().as_slice(),
+        &[
+            "reordered_root.so".to_string(),
+            "reordered_dep.so".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn relocator_configuration_can_defer_dynamic_initialization() {
+    let output = write_test_dylib(&[], &[]);
+    let raw = Loader::new()
+        .load_dylib(ElfBinary::new("deferred.so", &output.data))
+        .expect("dynamic image should load");
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let loaded = Relocator::new()
+        .defer_init()
+        .run(raw)
+        .observer(InitRecorder::new(Arc::clone(&calls)))
+        .relocate()
+        .expect("dynamic image should relocate without initialization");
+
+    assert!(!loaded.is_init());
+    assert!(calls.lock().unwrap().is_empty());
+
+    loaded
+        .initialize()
+        .expect("deferred initialization should succeed");
+    assert!(loaded.is_init());
+    assert_eq!(
+        calls.lock().unwrap().as_slice(),
+        &["deferred.so".to_string()]
+    );
+}
+
+#[test]
+fn phased_load_rejects_a_different_commit_context() {
+    let output = write_test_dylib(&[], &[]);
+    let data: &'static [u8] = Box::leak(output.data.into_boxed_slice());
+    let linker = Linker::new().resolver(SingleBinaryResolver {
+        key: "root",
+        name: "context_bound.so",
+        data,
+    });
+    let mut run = linker.run();
+    let mut prepared_context = LinkContext::<&'static str, ()>::new();
+    let prepared = run
+        .prepare_load(&mut prepared_context, "root")
+        .expect("prepare should succeed");
+    let relocated = run.relocate(prepared).expect("relocation should succeed");
+    let mut other_context = LinkContext::<&'static str, ()>::new();
+
+    let err = run
+        .commit(&mut other_context, relocated)
+        .expect_err("commit must reject another context");
+    assert!(err.to_string().contains("different") || err.to_string().contains("prepared for"));
+    assert!(!other_context.contains_key(&"root"));
+}
+
+#[test]
+fn failed_initialization_can_be_rolled_back_after_reacquiring_context() {
+    let output = write_test_dylib(&[], &[]);
+    let data: &'static [u8] = Box::leak(output.data.into_boxed_slice());
+    let linker = Linker::new().resolver(SingleBinaryResolver {
+        key: "root",
+        name: "failing_init.so",
+        data,
+    });
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut run = linker
+        .run()
+        .with_observer(InitRecorder::failing(Arc::clone(&calls)));
+    let mut context = LinkContext::<&'static str, ()>::new();
+    let prepared = run.prepare_load(&mut context, "root").unwrap();
+    let relocated = run.relocate(prepared).unwrap();
+    let committed = run.commit(&mut context, relocated).unwrap();
+
+    let failed = run
+        .initialize(committed)
+        .expect_err("initializer should fail");
+    assert!(context.contains_key(&"root"));
+    assert!(failed.error().to_string().contains("initializer failed"));
+
+    let error = run.rollback(&mut context, failed);
+    assert!(error.to_string().contains("initializer failed"));
+    assert!(!context.contains_key(&"root"));
+    assert_eq!(calls.lock().unwrap().as_slice(), &["failing_init.so"]);
 }
 
 #[test]
@@ -797,7 +1058,6 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
 
     let loaded = Linker::new()
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -884,7 +1144,6 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
 
     let loaded = Linker::new()
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -937,7 +1196,6 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
 
     let loaded = Linker::new()
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -988,7 +1246,6 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
 
     let loaded = Linker::new()
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -1035,7 +1292,6 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
 
     let _loaded = Linker::new()
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -1085,7 +1341,6 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
 
     let loaded = Linker::new()
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));
@@ -1142,7 +1397,6 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
 
     let err = Linker::new()
         .resolver(resolver)
-        .planner(empty_relocation_plan)
         .run()
         .map_pipeline(|mut pipeline| {
             pipeline.push(TestPass(configure));

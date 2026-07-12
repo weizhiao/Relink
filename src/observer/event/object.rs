@@ -17,7 +17,7 @@ use crate::{
 use alloc::vec::Vec;
 use core::{ffi::CStr, ptr::NonNull};
 
-use super::lifecycle::{Finalizer, FiniEvent};
+use super::lifecycle::{LifecycleEvent, LifecycleHandlers, LifecycleRunner};
 
 type ObjectExportsHandle<L> = Option<Arc<dyn SymbolExports<L>>>;
 
@@ -134,7 +134,7 @@ pub struct ObjectRelocatedEvent<
     symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
     memory: ObjectSegmentView<'event, R>,
     exports: ObjectExportsHandle<Arch::Layout>,
-    finalizer: Finalizer,
+    lifecycle: LifecycleHandlers,
 }
 
 impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
@@ -146,7 +146,8 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver
         sections: &'event ObjectSections<Arch::Layout>,
         symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
         memory: ObjectSegmentView<'event, R>,
-        finalizer: Finalizer,
+        initializer: LifecycleRunner,
+        finalizer: LifecycleRunner,
     ) -> Self {
         Self {
             core,
@@ -154,7 +155,7 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver
             symtab,
             memory,
             exports: None,
-            finalizer,
+            lifecycle: LifecycleHandlers::new(initializer, finalizer),
         }
     }
 
@@ -232,31 +233,52 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver
         self.set_exports(ObjectExports::<Arch::Layout>::empty());
     }
 
+    /// Returns the initialization lifecycle.
+    #[inline]
+    pub fn init(&self) -> &Lifecycle {
+        self.lifecycle.initializer().lifecycle()
+    }
+
+    /// Returns mutable initialization lifecycle addresses.
+    #[inline]
+    pub fn init_mut(&mut self) -> &mut Lifecycle {
+        self.lifecycle.initializer_mut().lifecycle_mut()
+    }
+
+    /// Installs a hook that runs immediately before initialization functions.
+    #[inline]
+    pub fn set_init_hook<F>(&mut self, hook: F)
+    where
+        F: for<'hook> Fn(&mut LifecycleEvent<'hook>) -> crate::Result<()> + Send + Sync + 'static,
+    {
+        self.lifecycle.initializer_mut().set_hook(hook);
+    }
+
     /// Returns the finalization lifecycle that will be run when the initialized
     /// object is dropped.
     #[inline]
     pub fn fini(&self) -> &Lifecycle {
-        self.finalizer.lifecycle()
+        self.lifecycle.finalizer().lifecycle()
     }
 
     /// Returns mutable finalization lifecycle addresses.
     #[inline]
     pub fn fini_mut(&mut self) -> &mut Lifecycle {
-        self.finalizer.lifecycle_mut()
+        self.lifecycle.finalizer_mut().lifecycle_mut()
     }
 
     /// Installs a hook that runs immediately before finalization functions.
     #[inline]
     pub fn set_fini_hook<F>(&mut self, hook: F)
     where
-        F: for<'fini> Fn(&mut FiniEvent<'fini>) -> crate::Result<()> + Send + Sync + 'static,
+        F: for<'hook> Fn(&mut LifecycleEvent<'hook>) -> crate::Result<()> + Send + Sync + 'static,
     {
-        self.finalizer.set_hook(hook);
+        self.lifecycle.finalizer_mut().set_hook(hook);
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (ObjectExportsHandle<Arch::Layout>, Finalizer) {
-        (self.exports, self.finalizer)
+    pub(crate) fn into_parts(self) -> (ObjectExportsHandle<Arch::Layout>, LifecycleHandlers) {
+        (self.exports, self.lifecycle)
     }
 }
 

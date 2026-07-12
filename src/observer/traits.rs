@@ -1,6 +1,6 @@
 use super::{
-    AfterDynamicLoadEvent, BeforeLoadEvent, DynamicRelocatedEvent, HandleResult, InitEvent,
-    RelocationEvent, SymbolBindingEvent,
+    AfterDynamicLoadEvent, BeforeLoadEvent, DynamicRelocatedEvent, HandleResult, LinkerInitEvent,
+    LinkerRelocationEvent, RelocationEvent, SymbolBindingEvent,
 };
 #[cfg(feature = "object")]
 use super::{
@@ -9,7 +9,11 @@ use super::{
 #[cfg(feature = "object")]
 use crate::relocation::ObjectArch;
 use crate::{
-    Result, arch::NativeArch, memory::RegionAccess, relocation::RelocationArch, tls::TlsResolver,
+    Result,
+    arch::NativeArch,
+    memory::{HostRegion, RegionAccess},
+    relocation::RelocationArch,
+    tls::TlsResolver,
 };
 use alloc::boxed::Box;
 
@@ -90,15 +94,6 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
         Ok(HandleResult::Unhandled)
     }
 
-    /// Called before initialization functions are executed.
-    #[inline]
-    fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        _event: &mut InitEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
     /// Called when a regular symbol relocation needs runtime binding.
     #[inline]
     fn on_symbol_binding<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
@@ -120,8 +115,8 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
 
     /// Called after a dynamic image has been relocated and before initialization.
     ///
-    /// Implementations may adjust the retained finalizer before it is stored
-    /// with the relocated image.
+    /// Implementations may adjust lifecycle tables or install retained
+    /// initialization and finalization hooks before they are stored.
     #[inline]
     fn on_dynamic_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
@@ -131,9 +126,39 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     }
 }
 
+/// Group-level policy hooks for dependency linking.
+pub trait LinkerObserver<
+    K,
+    D: 'static,
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = HostRegion,
+    Tls: TlsResolver<Arch> = (),
+>
+{
+    /// Adjusts the scope and binding mode for one module before relocation.
+    #[inline]
+    fn on_relocation(&mut self, _event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Adjusts the constructor plan after relocation and before commit.
+    #[inline]
+    fn on_init(&mut self, _event: &mut LinkerInitEvent<'_, K, D, Arch, R, Tls>) -> Result<()> {
+        Ok(())
+    }
+}
+
 impl<D: 'static, Arch: RelocationArch> LoadObserver<D, Arch> for () {}
 
 impl<Arch: RelocationArch> RelocationObserver<Arch> for () {}
+
+impl<K, D: 'static, Arch, R, Tls> LinkerObserver<K, D, Arch, R, Tls> for ()
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+}
 
 impl<D, Arch, O> LoadObserver<D, Arch> for &mut O
 where
@@ -207,14 +232,6 @@ where
     }
 
     #[inline]
-    fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: &mut InitEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        (**self).on_init(event)
-    }
-
-    #[inline]
     fn on_symbol_binding<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
         event: &mut SymbolBindingEvent<'_, D, Arch, R, Tls>,
@@ -237,6 +254,24 @@ where
         event: &mut DynamicRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_dynamic_relocated(event)
+    }
+}
+
+impl<K, D: 'static, Arch, R, Tls, O> LinkerObserver<K, D, Arch, R, Tls> for &mut O
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+    O: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
+{
+    #[inline]
+    fn on_relocation(&mut self, event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
+        (**self).on_relocation(event)
+    }
+
+    #[inline]
+    fn on_init(&mut self, event: &mut LinkerInitEvent<'_, K, D, Arch, R, Tls>) -> Result<()> {
+        (**self).on_init(event)
     }
 }
 
@@ -312,14 +347,6 @@ where
     }
 
     #[inline]
-    fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
-        &mut self,
-        event: &mut InitEvent<'_, D, Arch, R, Tls>,
-    ) -> Result<()> {
-        (**self).on_init(event)
-    }
-
-    #[inline]
     fn on_symbol_binding<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
         event: &mut SymbolBindingEvent<'_, D, Arch, R, Tls>,
@@ -342,5 +369,23 @@ where
         event: &mut DynamicRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
         (**self).on_dynamic_relocated(event)
+    }
+}
+
+impl<K, D: 'static, Arch, R, Tls, O> LinkerObserver<K, D, Arch, R, Tls> for Box<O>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+    O: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
+{
+    #[inline]
+    fn on_relocation(&mut self, event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
+        (**self).on_relocation(event)
+    }
+
+    #[inline]
+    fn on_init(&mut self, event: &mut LinkerInitEvent<'_, K, D, Arch, R, Tls>) -> Result<()> {
+        (**self).on_init(event)
     }
 }

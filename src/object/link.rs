@@ -9,9 +9,7 @@ use crate::{
     logging,
     memory::{RegionAccess, VmAddr, VmOffset},
     object::{ObjectExports, ObjectSegmentView, section_entries},
-    observer::{
-        Finalizer, InitEvent, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent,
-    },
+    observer::{LifecycleRunner, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
     relocation::{ObjectArch, RelocHelper, RelocateArgs, find_symdef_impl},
     tls::TlsResolver,
@@ -63,7 +61,10 @@ where
     {
         logging::debug!("Relocating object: {}", self.core.name());
         let RelocateArgs {
-            scope, observer, ..
+            scope,
+            run_init,
+            observer,
+            ..
         } = args;
         self.simplify_symbols(&scope, observer)?;
 
@@ -106,7 +107,8 @@ where
 
         let RelocHelper { scope, .. } = helper;
 
-        let finalizer = Finalizer::new(core::mem::take(&mut self.fini));
+        let initializer = LifecycleRunner::new(core::mem::take(&mut self.init));
+        let finalizer = LifecycleRunner::new(core::mem::take(&mut self.fini));
         let event_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
         let mut event = ObjectRelocatedEvent::new(
@@ -114,42 +116,56 @@ where
             &self.sections,
             self.symtab.view(),
             event_segments,
+            initializer,
             finalizer,
         );
         observer.on_object_relocated(&mut event)?;
-        let (exports, finalizer) = event.into_parts();
+        let (exports, mut lifecycle) = event.into_parts();
         let exports = exports.unwrap_or_else(|| exports_handle(self.default_exports()));
         let inner = crate::sync::Arc::get_mut(&mut self.core.inner)
             .ok_or_else(|| LinkerError::ObjectCoreRetainedBeforeExports)?;
         inner.exports = exports;
-        self.core.set_finalizer(finalizer);
-
         let object_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
         self.section_segments.mprotect(&object_segments)?;
 
-        self.call_init(observer, object_segments)?;
-        self.section_segments.mprotect_final(&object_segments)?;
+        let RawObject {
+            core,
+            section_segments,
+            init_segments,
+            ..
+        } = self;
+        let core_ref = core.downgrade();
+        let init_state = spin::Mutex::new(Some((section_segments, init_segments)));
+        lifecycle.initializer_mut().append_hook(move |event| {
+            let (section_segments, init_segments) = init_state
+                .lock()
+                .take()
+                .expect("object initialization must run only once");
+            let core = core_ref
+                .upgrade()
+                .expect("object core must remain alive during initialization");
+            let memory = ObjectSegmentView::new(core.segments(), init_segments.as_ref());
+            let ctx = crate::runtime::CodeContext::<Arch>::new(core.name(), &memory);
+            for addr in event.lifecycle().func_addrs() {
+                core.executor().call_init(ctx, addr)?;
+            }
+            section_segments.mprotect_final(&memory)?;
+            event.lifecycle_mut().clear();
+            Ok(())
+        });
+        core.set_lifecycle(lifecycle);
 
-        logging::info!("Relocation completed for {}", self.core.name());
+        if run_init {
+            logging::trace!("[{}] Executing init functions", core.name());
+            core.initialize()?;
+        }
 
-        let core = self.core;
+        logging::info!("Relocation completed for {}", core.name());
+
         Ok(LoadedObject {
             inner: unsafe { LoadedCore::from_core_scope(core, scope) },
         })
-    }
-
-    #[inline]
-    fn call_init<Obs>(&self, observer: &mut Obs, segments: ObjectSegmentView<'_, R>) -> Result<()>
-    where
-        Obs: RelocationObserver<Arch> + ?Sized,
-    {
-        logging::trace!("[{}] Executing init functions", self.core.name());
-        let mut event = InitEvent::new(&self.core, &self.init);
-        observer.on_init(&mut event)?;
-        event.run_with(&segments, self.core.executor())?;
-        self.core.set_init();
-        Ok(())
     }
 
     fn simplify_symbols<Obs>(

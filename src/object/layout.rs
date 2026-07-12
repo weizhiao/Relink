@@ -39,7 +39,7 @@ pub(crate) struct SectionSegments<Arch: ObjectArch = crate::arch::NativeArch> {
     core: SectionSegmentSet,
     init: SectionSegmentSet,
     pltgot: Option<PltGotSection>,
-    _arch: core::marker::PhantomData<Arch>,
+    _arch: core::marker::PhantomData<fn() -> Arch>,
 }
 
 pub(crate) struct ObjectSegments<R: RegionAccess> {

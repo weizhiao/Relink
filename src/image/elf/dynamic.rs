@@ -11,7 +11,7 @@ use crate::{
     loader::ImageBuilder,
     logging,
     memory::{HostRegion, ImageMemoryExt, MappedView, RegionAccess, VmAddr, VmOffset},
-    observer::{InitEvent, RelocationObserver},
+    observer::RelocationObserver,
     relocation::{DynamicRelocation, Relocatable, RelocateArgs, RelocationArch},
     segment::{ElfSegments, MemoryProtection},
     sync::{Arc, AtomicBool},
@@ -327,23 +327,6 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         Ok((init, fini))
     }
 
-    /// Marks the ELF object as finished and calls the initialization function
-    ///
-    /// This method marks the ELF object as fully initialized and calls
-    /// any registered initialization functions.
-    #[inline]
-    pub(crate) fn call_init<Obs>(&self, observer: &mut Obs, init: &Lifecycle) -> Result<()>
-    where
-        Obs: RelocationObserver<Arch> + ?Sized,
-    {
-        self.module.set_init();
-        let segments = self.module.segments();
-        let mut event = InitEvent::new(self.core_ref(), init);
-        observer.on_init(&mut event)?;
-        event.run_with(segments, self.module.executor())?;
-        Ok(())
-    }
-
     /// Gets the GNU_RELRO memory protection.
     ///
     /// # Returns
@@ -485,9 +468,9 @@ where
             runtime: Box::new(crate::image::CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: self.executor,
             is_init: AtomicBool::new(false),
+            lifecycle: OnceCell::new(),
             path: self.path,
             exports: exports_handle(exports),
-            finalizer: OnceCell::new(),
             user_data: self.user_data,
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
                 eh_frame_hdr: self.eh_frame_hdr,

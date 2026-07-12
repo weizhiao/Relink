@@ -213,6 +213,7 @@ where
         object.relocate(RelocateArgs {
             scope: scope.into_scope(),
             binding,
+            run_init: relocator.run_init,
             lazy_binder: &relocator.lazy_binder,
             observer: &mut observer,
         })
@@ -245,6 +246,7 @@ where
         object.relocate(RelocateArgs {
             scope,
             binding,
+            run_init: relocator.run_init,
             lazy_binder: &relocator.lazy_binder,
             observer: &mut observer,
         })

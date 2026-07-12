@@ -5,7 +5,7 @@ use crate::{
     image::{DynamicInfo, Module, ModuleScope, ModuleTls, SymbolExports, exports_handle},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
-    observer::Finalizer,
+    observer::LifecycleHandlers,
     relocation::RelocationArch,
     runtime::{CodeExecutor, NativeCodeExecutor},
     segment::ElfSegments,
@@ -101,13 +101,34 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     /// Returns whether the ELF object has been initialized.
     #[inline]
     pub fn is_init(&self) -> bool {
-        self.inner.is_init.load(Ordering::Relaxed)
+        self.inner.is_init.load(Ordering::Acquire)
     }
 
-    /// Marks the component as initialized
+    /// Installs lifecycle behavior resolved during relocation.
     #[inline]
-    pub(crate) fn set_init(&self) {
-        self.inner.is_init.store(true, Ordering::Relaxed);
+    pub(crate) fn set_lifecycle(&self, lifecycle: LifecycleHandlers) {
+        assert!(
+            self.inner.lifecycle.set(lifecycle).is_ok(),
+            "lifecycle must be set only once",
+        );
+    }
+
+    /// Executes this image's initialization functions at most once.
+    pub(crate) fn initialize(&self) -> Result<()> {
+        if self.inner.is_init.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+
+        let initializer = self
+            .inner
+            .lifecycle
+            .get()
+            .expect("lifecycle must be installed before initialization")
+            .initializer();
+        let executor = self.executor();
+        initializer.run(self.name(), self.segments(), |ctx, addr| {
+            executor.call_init(ctx, addr)
+        })
     }
 
     /// Creates a weak reference to this ELF core.
@@ -243,14 +264,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     pub(crate) fn executor(&self) -> &dyn CodeExecutor<Arch> {
         self.inner.executor.as_ref()
     }
-
-    /// Sets the finalizer that will run when the initialized image is dropped.
-    pub(crate) fn set_finalizer(&self, finalizer: Finalizer) {
-        assert!(
-            self.inner.finalizer.set(finalizer).is_ok(),
-            "finalizer must be set only once",
-        );
-    }
 }
 
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
@@ -292,6 +305,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
             executor: Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>),
             path,
             is_init: AtomicBool::new(true),
+            lifecycle: OnceCell::new(),
             exports: exports_handle(exports),
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
                 eh_frame_hdr,
@@ -302,7 +316,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
             scope: OnceCell::new(),
             tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_info, tls_image),
             segments,
-            finalizer: OnceCell::new(),
             user_data,
         });
         CoreInner::bind_runtime_owner(&inner);

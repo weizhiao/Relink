@@ -9,14 +9,14 @@ use crate::{
     linker::{
         context::LinkContext,
         driver::LoadResult,
-        request::{RelocationPlanner, VisibleModules},
+        request::VisibleModules,
         resolve::ScanResolveContext,
         resolver::KeyResolver,
         run::{LinkerRun, PreparedLoad, visible_loaded},
         session::{GraphEntry, LoadSession, ResolveSession},
     },
     memory::{ImageMemory, RegionAccess, VmOffset},
-    observer::{LoadObserver, RelocationObserver},
+    observer::{LinkerObserver, LoadObserver, RelocationObserver},
     os::Mmap,
     relocation::RelocationArch,
     runtime::CodeExecutor,
@@ -30,7 +30,7 @@ use alloc::{
 use core::borrow::Borrow;
 
 #[allow(private_bounds)]
-impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Obs>
+impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, V, Obs>
     LinkerRun<
         'run,
         'pipe,
@@ -39,7 +39,6 @@ impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Obs>
         Loader<D, Tls, Arch, M, Exec>,
         Resolver,
         RelocBinder,
-        P,
         V,
         Tls,
         Obs,
@@ -52,9 +51,10 @@ where
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
-    Obs: LoadObserver<D, Arch> + RelocationObserver<Arch>,
+    Obs: LinkerObserver<K, D, Arch, M::Region, Tls>
+        + LoadObserver<D, Arch>
+        + RelocationObserver<Arch>,
     RelocBinder: LazyBinder<Arch> + Clone,
-    P: RelocationPlanner<K, D, Arch, M::Region, Tls>,
 {
     /// Discovers, plans, and loads one module through the scan-first path.
     pub fn load_scan_first<Meta, Q>(
@@ -74,14 +74,20 @@ where
         }
 
         let prepared = self.prepare_scan_load::<Meta, Q>(context, &key)?;
-        self.finish_load::<Meta>(context, prepared)
+        let relocated = self.relocate(prepared)?;
+        let committed = self.commit(context, relocated)?;
+        match self.initialize(committed) {
+            Ok(result) => Ok(result),
+            Err(failed) => Err(self.rollback(context, failed)),
+        }
     }
 
-    fn prepare_scan_load<Meta, Q>(
+    /// Resolves and maps a scan-first module group without relocating it.
+    pub fn prepare_scan_load<Meta, Q>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         key: &K,
-    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
+    ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -99,7 +105,7 @@ where
         let resolved = resolve_context.resolve_root(key, &self.linker.resolver)?;
         let root = resolve_context.stage(resolved, &mut loader)?;
         if !resolve_context.contains_pending(root) {
-            return Ok(PreparedLoad::direct(root, LoadSession::new()));
+            return Ok(PreparedLoad::new(root, LoadSession::new(), None, context));
         }
         resolve_context.resolve_dependency_graph::<_, _, _, Q>(
             root,
@@ -162,7 +168,7 @@ where
             }
         }
 
-        Ok(PreparedLoad::planned(root, session, mapped_runtime))
+        Ok(PreparedLoad::new(root, session, mapped_runtime, context))
     }
 
     fn prepare_mapped_runtime(

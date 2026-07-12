@@ -5,7 +5,7 @@ use crate::{
     input::PathBuf,
     logging,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
-    observer::Finalizer,
+    observer::LifecycleHandlers,
     relocation::{RelocationArch, find_symdef_impl},
     runtime::CodeExecutor,
     segment::ElfSegments,
@@ -136,17 +136,17 @@ pub(crate) struct CoreInner<
     /// Executor retained for IFUNC and runtime-code resolution.
     pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
 
-    /// Indicates whether the component has been initialized
+    /// Indicates whether initialization has started.
     pub(crate) is_init: AtomicBool,
+
+    /// Initialization and finalization behavior resolved during relocation.
+    pub(crate) lifecycle: OnceCell<LifecycleHandlers>,
 
     /// Loader source path or caller-provided source identifier.
     pub(crate) path: PathBuf,
 
     /// Runtime exports used for module symbol lookup.
     pub(crate) exports: Arc<dyn SymbolExports<Arch::Layout>>,
-
-    /// Finalization behavior resolved during relocation.
-    pub(crate) finalizer: OnceCell<Finalizer>,
 
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
@@ -194,10 +194,14 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
         if self.is_init.load(Ordering::Relaxed)
-            && let Some(finalizer) = self.finalizer.take()
+            && let Some(lifecycle) = self.lifecycle.take()
         {
             let name = self.name();
-            if let Err(err) = finalizer.run(name, &self.segments, self.executor.as_ref()) {
+            let finalizer = lifecycle.into_finalizer();
+            let executor = self.executor.as_ref();
+            if let Err(err) = finalizer.run(name, &self.segments, |ctx, addr| {
+                executor.call_fini(ctx, addr)
+            }) {
                 logging::error!("finalization lifecycle failed for {}: {err}", name);
             }
         }

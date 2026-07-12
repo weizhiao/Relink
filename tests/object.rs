@@ -814,3 +814,80 @@ fn object_finalizer_runs_on_drop() {
     drop(loaded_object);
     assert_eq!(&*fini_calls.lock().unwrap(), &[fini_addr]);
 }
+
+#[cfg(all(feature = "object", target_arch = "x86_64"))]
+#[test]
+fn object_relocator_can_defer_initialization() {
+    use elf_loader::{
+        Result,
+        arch::NativeArch,
+        input::ElfBinary,
+        memory::{RegionAccess, VmAddr},
+        observer::{ObjectRelocatedEvent, RelocationObserver},
+        runtime::{CodeContext, CodeExecutor},
+        tls::TlsResolver,
+    };
+    use gen_elf::{Arch, ObjectWriter, SymbolDesc};
+    use std::sync::{Arc, Mutex};
+
+    struct InitObserver(VmAddr);
+
+    impl RelocationObserver for InitObserver {
+        fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
+            &mut self,
+            event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R, Tls>,
+        ) -> Result<()> {
+            event.init_mut().push(self.0);
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct RecordingExecutor(Arc<Mutex<Vec<usize>>>);
+
+    impl CodeExecutor<NativeArch> for RecordingExecutor {
+        fn call_init(&self, _ctx: CodeContext<'_, NativeArch>, init: VmAddr) -> Result<()> {
+            self.0.lock().unwrap().push(init.get());
+            Ok(())
+        }
+
+        fn call_fini(&self, _ctx: CodeContext<'_, NativeArch>, _fini: VmAddr) -> Result<()> {
+            Ok(())
+        }
+
+        fn resolve_ifunc(
+            &self,
+            _ctx: CodeContext<'_, NativeArch>,
+            resolver: VmAddr,
+        ) -> Result<VmAddr> {
+            Ok(resolver)
+        }
+    }
+
+    let object = ObjectWriter::new(Arch::current())
+        .write(&[SymbolDesc::global_object("keep", &[0; 8])], &[])
+        .expect("failed to generate object");
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let init_addr = VmAddr::new(0x1234_5678);
+    let loaded = Relocator::new()
+        .defer_init()
+        .run(
+            elf_loader::Loader::new()
+                .with_executor(RecordingExecutor(Arc::clone(&calls)))
+                .load_object(ElfBinary::new("deferred.o", &object.data))
+                .expect("failed to load object"),
+        )
+        .observer(InitObserver(init_addr))
+        .relocate()
+        .expect("failed to relocate object");
+
+    assert!(!loaded.is_init());
+    assert!(calls.lock().unwrap().is_empty());
+
+    loaded.initialize().expect("initialization should succeed");
+    loaded
+        .initialize()
+        .expect("repeated initialization should be a no-op");
+    assert!(loaded.is_init());
+    assert_eq!(&*calls.lock().unwrap(), &[init_addr.get()]);
+}

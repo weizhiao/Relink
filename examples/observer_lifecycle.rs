@@ -5,7 +5,7 @@ use elf_loader::{
     Loader, Relocator, Result,
     arch::NativeArch,
     memory::RegionAccess,
-    observer::{InitEvent, RelocationObserver},
+    observer::{DynamicRelocatedEvent, RelocationObserver},
     tls::TlsResolver,
 };
 
@@ -14,20 +14,23 @@ const LOADER: Loader = Loader::new();
 struct LifecycleLogger;
 
 impl RelocationObserver for LifecycleLogger {
-    fn on_init<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
+    fn on_dynamic_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
         &mut self,
-        event: &mut InitEvent<'_, D, NativeArch, R, Tls>,
+        event: &mut DynamicRelocatedEvent<'_, D, NativeArch, R, Tls>,
     ) -> Result<()> {
-        println!("Init hook called!");
-        let mut count = 0;
-        for addr in event.lifecycle().func_addrs() {
-            count += 1;
-            println!("Init function at {addr}");
-        }
-        if count != 0 {
-            println!("Init lifecycle has {count} functions");
-        }
+        event.set_init_hook(|event| {
+            println!("Init hook called for {}!", event.name());
+            let mut count = 0;
+            for addr in event.lifecycle().func_addrs() {
+                count += 1;
+                println!("Init function at {addr}");
+            }
+            if count != 0 {
+                println!("Init lifecycle has {count} functions");
+            }
 
+            Ok(())
+        });
         Ok(())
     }
 }

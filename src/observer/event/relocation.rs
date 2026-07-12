@@ -1,4 +1,4 @@
-use super::lifecycle::{Finalizer, FiniEvent};
+use super::lifecycle::{LifecycleEvent, LifecycleHandlers, LifecycleRunner};
 use crate::{
     Result,
     arch::NativeArch,
@@ -205,7 +205,7 @@ pub struct DynamicRelocatedEvent<
 > {
     core: &'a ElfCore<D, Arch, R, Tls>,
     dynamic_addr: VmAddr,
-    finalizer: Finalizer,
+    lifecycle: LifecycleHandlers,
 }
 
 impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
@@ -215,12 +215,13 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
     pub(crate) const fn new(
         core: &'a ElfCore<D, Arch, R, Tls>,
         dynamic_addr: VmAddr,
-        finalizer: Finalizer,
+        initializer: LifecycleRunner,
+        finalizer: LifecycleRunner,
     ) -> Self {
         Self {
             core,
             dynamic_addr,
-            finalizer,
+            lifecycle: LifecycleHandlers::new(initializer, finalizer),
         }
     }
 
@@ -254,30 +255,51 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
         self.dynamic_addr
     }
 
+    /// Returns the initialization lifecycle that will run after commit.
+    #[inline]
+    pub fn init(&self) -> &Lifecycle {
+        self.lifecycle.initializer().lifecycle()
+    }
+
+    /// Returns mutable initialization lifecycle addresses.
+    #[inline]
+    pub fn init_mut(&mut self) -> &mut Lifecycle {
+        self.lifecycle.initializer_mut().lifecycle_mut()
+    }
+
+    /// Installs a hook that runs immediately before initialization functions.
+    #[inline]
+    pub fn set_init_hook<F>(&mut self, hook: F)
+    where
+        F: for<'event> Fn(&mut LifecycleEvent<'event>) -> Result<()> + Send + Sync + 'static,
+    {
+        self.lifecycle.initializer_mut().set_hook(hook);
+    }
+
     /// Returns the finalization lifecycle that will be run when the initialized
     /// image is dropped.
     #[inline]
     pub fn fini(&self) -> &Lifecycle {
-        self.finalizer.lifecycle()
+        self.lifecycle.finalizer().lifecycle()
     }
 
     /// Returns mutable finalization lifecycle addresses.
     #[inline]
     pub fn fini_mut(&mut self) -> &mut Lifecycle {
-        self.finalizer.lifecycle_mut()
+        self.lifecycle.finalizer_mut().lifecycle_mut()
     }
 
     /// Installs a hook that runs immediately before finalization functions.
     #[inline]
     pub fn set_fini_hook<F>(&mut self, hook: F)
     where
-        F: for<'event> Fn(&mut FiniEvent<'event>) -> Result<()> + Send + Sync + 'static,
+        F: for<'event> Fn(&mut LifecycleEvent<'event>) -> Result<()> + Send + Sync + 'static,
     {
-        self.finalizer.set_hook(hook);
+        self.lifecycle.finalizer_mut().set_hook(hook);
     }
 
     #[inline]
-    pub(crate) fn into_finalizer(self) -> Finalizer {
-        self.finalizer
+    pub(crate) fn into_lifecycle(self) -> LifecycleHandlers {
+        self.lifecycle
     }
 }

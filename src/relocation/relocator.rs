@@ -1,7 +1,7 @@
 /// Reusable configuration for relocating one raw image at a time.
 ///
-/// A `Relocator` stores the stable relocation policy, currently the lazy PLT
-/// binder. Attach a raw image with [`Relocator::run`] to create a
+/// A `Relocator` stores the stable relocation policy, including the lazy PLT
+/// binder and image initialization mode. Attach a raw image with [`Relocator::run`] to create a
 /// [`RelocatorRun`](crate::RelocatorRun); the run then owns per-image state such
 /// as the raw object, observer, and symbol scope.
 ///
@@ -42,6 +42,7 @@
 /// ```
 pub struct Relocator<Binder = ()> {
     pub(super) lazy_binder: Binder,
+    pub(super) run_init: bool,
 }
 
 impl<Binder> Clone for Relocator<Binder>
@@ -52,6 +53,7 @@ where
     fn clone(&self) -> Self {
         Self {
             lazy_binder: self.lazy_binder.clone(),
+            run_init: self.run_init,
         }
     }
 }
@@ -62,7 +64,10 @@ impl Relocator<()> {
     /// Creates a new empty relocation configuration.
     #[inline]
     pub const fn new() -> Self {
-        Self { lazy_binder: () }
+        Self {
+            lazy_binder: (),
+            run_init: true,
+        }
     }
 }
 
@@ -82,6 +87,17 @@ impl<Binder> Relocator<Binder> {
         let _ = self.lazy_binder;
         Relocator {
             lazy_binder: binder,
+            run_init: self.run_init,
         }
+    }
+
+    /// Leaves image constructors pending after relocation.
+    ///
+    /// This is useful when an image must be published in an external registry
+    /// before its constructors execute.
+    #[inline]
+    pub const fn defer_init(mut self) -> Self {
+        self.run_init = false;
+        self
     }
 }

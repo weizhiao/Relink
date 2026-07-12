@@ -157,6 +157,11 @@ pub(crate) struct LoadSession<
 > {
     resolve: ResolveSession<crate::image::RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
     ready_to_commit: BTreeMap<KeySlot, ReadyCommit<Arch, Tls>>,
+    init_order: Vec<KeySlot>,
+}
+
+pub(crate) struct SessionCommit {
+    pub(crate) ids: Box<[ModuleId]>,
 }
 
 impl<D: 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
@@ -170,6 +175,7 @@ where
         Self {
             resolve: ResolveSession::new(),
             ready_to_commit: BTreeMap::new(),
+            init_order: Vec::new(),
         }
     }
 
@@ -188,6 +194,7 @@ where
                 group_order,
             },
             ready_to_commit: BTreeMap::new(),
+            init_order: Vec::new(),
         }
     }
 }
@@ -229,6 +236,17 @@ where
         debug_assert!(previous.is_none(), "ready commit entries must be unique");
     }
 
+    #[inline]
+    pub(crate) fn push_relocated(
+        &mut self,
+        slot: KeySlot,
+        module: LoadedCore<D, Arch, R, Tls>,
+        direct_deps: Box<[KeySlot]>,
+    ) {
+        self.init_order.push(slot);
+        self.push_ready(slot, module, direct_deps);
+    }
+
     pub(crate) fn mark_module_handles_ready(&mut self) {
         for (
             id,
@@ -248,6 +266,19 @@ where
             .module
             .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
             .cloned()
+    }
+
+    pub(crate) fn init_order(&self) -> Vec<LoadedCore<D, Arch, R, Tls>> {
+        self.init_order
+            .iter()
+            .filter_map(|id| {
+                self.ready_to_commit
+                    .get(id)?
+                    .module
+                    .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
+                    .cloned()
+            })
+            .collect()
     }
 
     pub(crate) fn build_relocation_order(&self, root: KeySlot, order: &mut Vec<KeySlot>) {
@@ -332,7 +363,7 @@ where
     pub(crate) fn commit_into<K, Meta>(
         self,
         committed: &mut CommittedStorage<K, D, Meta, Arch, Tls>,
-    ) -> crate::Result<Box<[ModuleId]>>
+    ) -> crate::Result<SessionCommit>
     where
         K: Clone + Ord,
         Meta: Default,
@@ -340,6 +371,7 @@ where
         let Self {
             resolve,
             ready_to_commit,
+            init_order: _,
         } = self;
         let mut ready = ready_to_commit;
         let mut committed_ids = Vec::with_capacity(ready.len());
@@ -363,6 +395,8 @@ where
             ready.is_empty(),
             "ready commit entries must all be present in group_order"
         );
-        Ok(committed_ids.into_boxed_slice())
+        Ok(SessionCommit {
+            ids: committed_ids.into_boxed_slice(),
+        })
     }
 }

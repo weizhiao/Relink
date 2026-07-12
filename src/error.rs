@@ -829,6 +829,13 @@ impl Display for UnresolvedDependency {
 
 /// Structured committed linker-context failure details.
 pub enum LinkContextError {
+    /// A prepared load was committed into a different context.
+    CommitContextMismatch {
+        /// Context used while preparing the load.
+        prepared: ContextId,
+        /// Context supplied for commit.
+        actual: ContextId,
+    },
     /// A key id from one [`crate::LinkContext`] was used with another context.
     KeyContextMismatch {
         /// The key id that failed the context check.
@@ -858,6 +865,11 @@ pub enum LinkContextError {
 impl Display for LinkContextError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CommitContextMismatch { prepared, actual } => write!(
+                f,
+                "load prepared for link context {} was committed into context {}",
+                prepared, actual
+            ),
             Self::KeyContextMismatch { id, expected } => {
                 write!(f, "key id {} was used with link context {}", id, expected)
             }

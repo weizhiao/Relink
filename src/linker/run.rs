@@ -1,26 +1,28 @@
 use super::{
     context::LinkContext,
     driver::{Linker, LoadResult},
-    request::{RelocationPlanner, RelocationRequest, VisibleModules},
+    request::VisibleModules,
     resolve::LoadResolveContext,
     resolver::KeyResolver,
     scan::{GotPltTarget, LinkPipeline, MappedRuntimeMemory},
     session::{GraphEntry, LoadSession},
-    storage::KeySlot,
+    storage::{ContextId, KeySlot, ModuleId},
 };
 use crate::{
-    Loader, LoaderRun, Result,
-    image::{LoadedCore, RawDynamic},
+    Error, LinkContextError, LinkerError, Loader, LoaderRun, Result,
+    image::{LoadedCore, ModuleScope, RawDynamic},
     lazy::LazyBinder,
     memory::RegionAccess,
-    observer::{LoadObserver, RelocationObserver},
+    observer::{
+        LinkerInitEvent, LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver,
+    },
     os::Mmap,
     relocation::RelocationArch,
     runtime::CodeExecutor,
     tls::TlsResolver,
 };
-use alloc::{borrow::ToOwned, vec::Vec};
-use core::{borrow::Borrow, mem};
+use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
+use core::{borrow::Borrow, fmt, marker::PhantomData, mem, ops::Deref};
 
 /// Per-run linker state.
 ///
@@ -34,19 +36,18 @@ pub struct LinkerRun<
     L,
     R,
     RelocBinder,
-    P,
     V,
     Tls: TlsResolver<Arch>,
     Obs = (),
 > {
-    pub(super) linker: &'run Linker<K, Arch, L, R, RelocBinder, P, V, Tls>,
+    pub(super) linker: &'run Linker<K, Arch, L, R, RelocBinder, V, Tls>,
     pub(super) pipeline: LinkPipeline<'pipe, K, Arch, Tls>,
     pub(super) observer: Obs,
     pub(super) scratch_relocation_order: Vec<KeySlot>,
 }
 
-impl<'run, 'pipe, K, Arch, L, R, RelocBinder, P, V, Tls, Obs>
-    LinkerRun<'run, 'pipe, K, Arch, L, R, RelocBinder, P, V, Tls, Obs>
+impl<'run, 'pipe, K, Arch, L, R, RelocBinder, V, Tls, Obs>
+    LinkerRun<'run, 'pipe, K, Arch, L, R, RelocBinder, V, Tls, Obs>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -57,7 +58,7 @@ where
     pub fn with_observer<NewObs>(
         self,
         observer: NewObs,
-    ) -> LinkerRun<'run, 'pipe, K, Arch, L, R, RelocBinder, P, V, Tls, NewObs>
+    ) -> LinkerRun<'run, 'pipe, K, Arch, L, R, RelocBinder, V, Tls, NewObs>
     where
         NewObs: RelocationObserver<Arch>,
     {
@@ -92,7 +93,7 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Obs>
+impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, V, Obs>
     LinkerRun<
         'run,
         'pipe,
@@ -101,7 +102,6 @@ impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V, Obs>
         Loader<D, Tls, Arch, M, Exec>,
         Resolver,
         RelocBinder,
-        P,
         V,
         Tls,
         Obs,
@@ -114,11 +114,12 @@ where
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
-    Obs: LoadObserver<D, Arch> + RelocationObserver<Arch>,
+    Obs: LinkerObserver<K, D, Arch, M::Region, Tls>
+        + LoadObserver<D, Arch>
+        + RelocationObserver<Arch>,
     RelocBinder: LazyBinder<Arch> + Clone,
-    P: RelocationPlanner<K, D, Arch, M::Region, Tls>,
 {
-    /// Loads one module into this linker's relocation domain.
+    /// Loads, commits, and initializes one module and its dependency group.
     pub fn load<'cfg, Meta, Q>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
@@ -131,8 +132,29 @@ where
         Resolver: KeyResolver<K, Arch, Q, Tls>,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        if let Some(result) = visible_loaded(context, key.borrow()) {
-            return Ok(result);
+        let prepared = self.prepare_load::<Meta, Q>(context, key)?;
+        let relocated = self.relocate(prepared)?;
+        let committed = self.commit(context, relocated)?;
+        match self.initialize(committed) {
+            Ok(result) => Ok(result),
+            Err(failed) => Err(self.rollback(context, failed)),
+        }
+    }
+
+    /// Resolves and maps one module group without executing target code.
+    pub fn prepare_load<'cfg, Meta, Q>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        key: K,
+    ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
+    where
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Resolver: KeyResolver<K, Arch, Q, Tls>,
+        V: VisibleModules<K, Arch, Q, Tls>,
+    {
+        if let Some(prepared) = PreparedLoad::visible(context, key.borrow()) {
+            return Ok(prepared);
         }
 
         let linker = self.linker;
@@ -145,18 +167,17 @@ where
         );
         let resolved = resolve_context.resolve_root(&key, &linker.resolver)?;
         let root = resolve_context.stage(resolved, &mut loader)?;
-        let prepared = Self::prepare_direct_load::<Meta, Q>(
+        Self::prepare_direct_load::<Meta, Q>(
             context,
             &linker.visible_modules,
             &linker.resolver,
             root,
             session,
             &mut loader,
-        )?;
-        self.finish_load::<Meta>(context, prepared)
+        )
     }
 
-    /// Loads a pre-mapped root dynamic image and resolves its dependencies.
+    /// Loads, commits, and initializes a pre-mapped root dynamic image.
     pub fn load_mapped_root<'cfg, Meta, Q>(
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
@@ -170,8 +191,30 @@ where
         Resolver: KeyResolver<K, Arch, Q, Tls>,
         V: VisibleModules<K, Arch, Q, Tls>,
     {
-        if let Some(result) = visible_loaded(context, key.borrow()) {
-            return Ok(result);
+        let prepared = self.prepare_mapped_root::<Meta, Q>(context, key, raw)?;
+        let relocated = self.relocate(prepared)?;
+        let committed = self.commit(context, relocated)?;
+        match self.initialize(committed) {
+            Ok(result) => Ok(result),
+            Err(failed) => Err(self.rollback(context, failed)),
+        }
+    }
+
+    /// Resolves dependencies for a pre-mapped root without relocating it.
+    pub fn prepare_mapped_root<'cfg, Meta, Q>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        key: K,
+        raw: RawDynamic<D, Arch, M::Region, Tls>,
+    ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
+    where
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Resolver: KeyResolver<K, Arch, Q, Tls>,
+        V: VisibleModules<K, Arch, Q, Tls>,
+    {
+        if let Some(prepared) = PreparedLoad::visible(context, key.borrow()) {
+            return Ok(prepared);
         }
 
         let linker = self.linker;
@@ -182,15 +225,14 @@ where
             .dynamics
             .insert(root, GraphEntry::new(raw));
         let mut loader = linker.loader.run().with_observer(&mut self.observer);
-        let prepared = Self::prepare_direct_load::<Meta, Q>(
+        Self::prepare_direct_load::<Meta, Q>(
             context,
             &linker.visible_modules,
             &linker.resolver,
             root,
             session,
             &mut loader,
-        )?;
-        self.finish_load::<Meta>(context, prepared)
+        )
     }
 
     fn prepare_direct_load<'cfg, Meta, Q>(
@@ -200,7 +242,7 @@ where
         root: KeySlot,
         mut session: LoadSession<D, Arch, M::Region, Tls>,
         loader: &mut LoaderRun<'_, &mut Obs, D, Tls, Arch, M, Exec>,
-    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
+    ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -216,75 +258,131 @@ where
             resolve_context.resolve_dependency_graph::<_, _, _, Q>(root, loader, resolver)?;
         }
 
-        Ok(PreparedLoad::direct(root, session))
+        Ok(PreparedLoad::new(root, session, None, context))
     }
 
-    pub(in crate::linker) fn finish_load<Meta>(
+    /// Relocates a prepared module group without borrowing its link context.
+    pub fn relocate(
         &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
-        prepared: PreparedLoad<D, Arch, M::Region, Tls>,
-    ) -> Result<LoadResult<D, Arch, M::Region, Tls>>
-    where
-        Meta: Default,
-    {
+        prepared: PreparedLoad<K, D, Arch, M::Region, Tls>,
+    ) -> Result<RelocatedLoad<K, D, Arch, M::Region, Tls>> {
         let PreparedLoad {
+            context,
             root: root_slot,
+            existing_root,
             mut session,
+            scope,
+            root_key,
             mapped_runtime,
         } = prepared;
 
         if !session.pending_is_empty() {
-            self.relocate_pending_modules(root_slot, context, &mut session)?;
+            self.relocate_pending_modules(root_slot, &scope, &mut session)?;
         }
 
         let root = session
             .loaded_root(root_slot)
-            .or_else(|| {
-                context
-                    .committed
-                    .get_by_key(root_slot)
-                    .and_then(|module| module.downcast_ref::<LoadedCore<D, Arch, M::Region, Tls>>())
-                    .cloned()
-            })
+            .or(existing_root)
             .expect("load root must resolve to a loaded core before commit");
 
         if let Some(mapped_runtime) = mapped_runtime.as_ref() {
             mapped_runtime.protect()?;
         }
 
-        let committed = session.commit_into(&mut context.committed)?;
+        let mut init_order = session.init_order();
+        self.observer
+            .on_init(&mut LinkerInitEvent::new(&root_key, &root, &mut init_order))?;
 
-        let root_id = context
-            .committed
-            .module_for_key(root_slot)
-            .map(|slot| context.committed.make_module_id(slot))
-            .expect("committed load root must have a module id");
-        Ok(LoadResult::new(root_id, root, committed))
+        Ok(RelocatedLoad {
+            context,
+            root: root_slot,
+            root_module: root,
+            session,
+            init_order: init_order.into_boxed_slice(),
+            marker: PhantomData,
+        })
     }
 
-    fn relocate_pending_modules<Meta>(
+    /// Commits a relocated module group into the context used for preparation.
+    pub fn commit<Meta>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        relocated: RelocatedLoad<K, D, Arch, M::Region, Tls>,
+    ) -> Result<CommittedLoad<D, Arch, M::Region, Tls>>
+    where
+        Meta: Default,
+    {
+        if context.context_id() != relocated.context {
+            return Err(
+                LinkerError::context(LinkContextError::CommitContextMismatch {
+                    prepared: relocated.context,
+                    actual: context.context_id(),
+                })
+                .into(),
+            );
+        }
+
+        let committed = relocated.session.commit_into(&mut context.committed)?;
+        let root_id = context
+            .committed
+            .module_for_key(relocated.root)
+            .map(|slot| context.committed.make_module_id(slot))
+            .expect("committed load root must have a module id");
+        Ok(CommittedLoad::new(
+            root_id,
+            relocated.root_module,
+            committed.ids,
+            relocated.init_order,
+        ))
+    }
+
+    /// Initializes a committed module group in dependency order.
+    #[inline]
+    pub fn initialize(
+        &mut self,
+        committed: CommittedLoad<D, Arch, M::Region, Tls>,
+    ) -> core::result::Result<
+        LoadResult<D, Arch, M::Region, Tls>,
+        FailedLoad<D, Arch, M::Region, Tls>,
+    > {
+        committed.initialize()
+    }
+
+    /// Rolls back a committed module group after initialization failure.
+    pub fn rollback<Meta>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        failed: FailedLoad<D, Arch, M::Region, Tls>,
+    ) -> crate::Error {
+        let (error, committed) = failed.into_parts();
+        for id in committed.into_vec().into_iter().rev() {
+            context
+                .remove(id)
+                .expect("failed load must remain removable from its commit context");
+        }
+        error
+    }
+
+    fn relocate_pending_modules(
         &mut self,
         root: KeySlot,
-        context: &LinkContext<K, D, Meta, Arch, Tls>,
+        scope: &ModuleScope<Arch, Tls>,
         session: &mut LoadSession<D, Arch, M::Region, Tls>,
     ) -> Result<()> {
         let mut order = mem::take(&mut self.scratch_relocation_order);
         session.build_relocation_order(root, &mut order);
-        let scope = session.build_scope(context);
 
         let result = (|| {
             for id in order.drain(..) {
-                let key = context.committed.key(id).clone();
                 let entry = session
                     .take_pending_dynamic(id)
                     .expect("missing pending dynamic module while relocating");
                 let (raw, direct_deps) = entry.into_parts();
                 let direct_deps =
                     direct_deps.expect("missing resolved dependencies while relocating");
-                let req = RelocationRequest::new(&key, raw, &scope);
-                let inputs = self.linker.planner.plan(&req)?;
-                let raw = req.into_raw();
-                let (scope, binding) = inputs.into_parts();
+                let mut event = LinkerRelocationEvent::new(raw, scope);
+                self.observer.on_relocation(&mut event)?;
+                let (raw, scope, binding) = event.into_parts();
                 let loaded = self
                     .linker
                     .relocator
@@ -293,7 +391,7 @@ where
                     .binding(binding)
                     .observer(&mut self.observer)
                     .relocate()?;
-                session.push_ready(id, loaded, direct_deps);
+                session.push_relocated(id, loaded, direct_deps);
             }
 
             session.mark_module_handles_ready();
@@ -306,8 +404,8 @@ where
 }
 
 #[allow(private_bounds)]
-impl<K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, P, V>
-    Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, P, V, Tls>
+impl<K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, V>
+    Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, V, Tls>
 where
     K: Clone + Ord,
     D: Default + 'static,
@@ -317,7 +415,6 @@ where
     Exec: CodeExecutor<Arch> + Clone,
     crate::elf::ElfRelType<Arch>: crate::ByteRepr,
     RelocBinder: LazyBinder<Arch> + Clone,
-    P: RelocationPlanner<K, D, Arch, M::Region, Tls>,
 {
     /// Loads one module into this linker's relocation domain.
     pub fn load<'cfg, Meta, Q>(
@@ -369,38 +466,228 @@ where
     }
 }
 
-pub(in crate::linker) struct PreparedLoad<
+/// A resolved and mapped load transaction that has not executed relocation.
+#[must_use = "a prepared load must be relocated or dropped"]
+pub struct PreparedLoad<
+    K,
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> = (),
 > {
+    context: ContextId,
     root: KeySlot,
+    existing_root: Option<LoadedCore<D, Arch, R, Tls>>,
     session: LoadSession<D, Arch, R, Tls>,
+    scope: ModuleScope<Arch, Tls>,
+    root_key: K,
     mapped_runtime: Option<MappedRuntimeMemory<R>>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    PreparedLoad<D, Arch, R, Tls>
+impl<K, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    PreparedLoad<K, D, Arch, R, Tls>
+where
+    K: Clone + Ord,
 {
-    pub(in crate::linker) fn direct(root: KeySlot, session: LoadSession<D, Arch, R, Tls>) -> Self {
-        Self {
-            root,
-            session,
-            mapped_runtime: None,
-        }
+    fn visible<Meta, Q>(context: &LinkContext<K, D, Meta, Arch, Tls>, key: &Q) -> Option<Self>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let (root, _): (KeySlot, LoadedCore<D, Arch, R, Tls>) = visible_root(context, key)?;
+        Some(Self::new(root, LoadSession::new(), None, context))
     }
 
-    pub(in crate::linker) fn planned(
+    pub(in crate::linker) fn new<Meta>(
         root: KeySlot,
         session: LoadSession<D, Arch, R, Tls>,
         mapped_runtime: Option<MappedRuntimeMemory<R>>,
+        context: &LinkContext<K, D, Meta, Arch, Tls>,
     ) -> Self {
+        let existing_root = context
+            .committed
+            .get_by_key(root)
+            .and_then(|module| module.downcast_ref::<LoadedCore<D, Arch, R, Tls>>())
+            .cloned();
+        let scope = session.build_scope(context);
+        let root_key = context.committed.key(root).clone();
         Self {
+            context: context.context_id(),
             root,
+            existing_root,
             session,
+            scope,
+            root_key,
             mapped_runtime,
         }
+    }
+}
+
+/// A relocated load transaction ready to commit into its original context.
+#[must_use = "a relocated load must be committed or dropped"]
+pub struct RelocatedLoad<
+    K,
+    D: 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch> = (),
+> {
+    context: ContextId,
+    root: KeySlot,
+    root_module: LoadedCore<D, Arch, R, Tls>,
+    session: LoadSession<D, Arch, R, Tls>,
+    init_order: Box<[LoadedCore<D, Arch, R, Tls>]>,
+    marker: PhantomData<fn() -> K>,
+}
+
+/// A committed module group whose initializers have not completed yet.
+#[must_use = "a committed load must be initialized"]
+pub struct CommittedLoad<
+    D: 'static,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = crate::memory::HostRegion,
+    Tls: TlsResolver<Arch> = (),
+> {
+    root_id: ModuleId,
+    root: LoadedCore<D, Arch, R, Tls>,
+    committed: Box<[ModuleId]>,
+    init_order: Box<[LoadedCore<D, Arch, R, Tls>]>,
+}
+
+impl<D: 'static, Arch, R, Tls> fmt::Debug for CommittedLoad<D, Arch, R, Tls>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CommittedLoad")
+            .field("root_id", &self.root_id)
+            .field("root", &self.root.name())
+            .field("committed", &self.committed)
+            .field("pending_initializers", &self.init_order.len())
+            .finish()
+    }
+}
+
+impl<D: 'static, Arch, R, Tls> CommittedLoad<D, Arch, R, Tls>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    #[inline]
+    fn new(
+        root_id: ModuleId,
+        root: LoadedCore<D, Arch, R, Tls>,
+        committed: Box<[ModuleId]>,
+        init_order: Box<[LoadedCore<D, Arch, R, Tls>]>,
+    ) -> Self {
+        Self {
+            root_id,
+            root,
+            committed,
+            init_order,
+        }
+    }
+
+    /// Returns the committed module id for the loaded root.
+    #[inline]
+    pub fn root_id(&self) -> ModuleId {
+        self.root_id
+    }
+
+    /// Returns the loaded root module.
+    #[inline]
+    pub fn root(&self) -> &LoadedCore<D, Arch, R, Tls> {
+        &self.root
+    }
+
+    /// Returns module ids committed by this load operation in load order.
+    #[inline]
+    pub fn committed(&self) -> &[ModuleId] {
+        &self.committed
+    }
+
+    fn initialize(
+        self,
+    ) -> core::result::Result<LoadResult<D, Arch, R, Tls>, FailedLoad<D, Arch, R, Tls>> {
+        let result = self.init_order.iter().try_for_each(LoadedCore::initialize);
+        if let Err(error) = result {
+            return Err(FailedLoad { error, load: self });
+        }
+        Ok(LoadResult::new(self.root_id, self.root, self.committed))
+    }
+}
+
+impl<D: 'static, Arch, R, Tls> Deref for CommittedLoad<D, Arch, R, Tls>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    type Target = LoadedCore<D, Arch, R, Tls>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.root
+    }
+}
+
+/// A committed load whose initialization failed and can be rolled back.
+#[must_use = "a failed load must be rolled back or converted into its error"]
+pub struct FailedLoad<
+    D: 'static,
+    Arch: RelocationArch = crate::arch::NativeArch,
+    R: RegionAccess = crate::memory::HostRegion,
+    Tls: TlsResolver<Arch> = (),
+> {
+    error: Error,
+    load: CommittedLoad<D, Arch, R, Tls>,
+}
+
+impl<D: 'static, Arch, R, Tls> fmt::Debug for FailedLoad<D, Arch, R, Tls>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FailedLoad")
+            .field("error", &self.error)
+            .field("root_id", &self.load.root_id)
+            .field("committed", &self.load.committed)
+            .finish()
+    }
+}
+
+impl<D: 'static, Arch, R, Tls> FailedLoad<D, Arch, R, Tls>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    /// Returns the initialization error.
+    #[inline]
+    pub fn error(&self) -> &Error {
+        &self.error
+    }
+
+    /// Returns module ids committed by the failed load in load order.
+    #[inline]
+    pub fn committed(&self) -> &[ModuleId] {
+        &self.load.committed
+    }
+
+    #[inline]
+    fn into_parts(self) -> (Error, Box<[ModuleId]>) {
+        (self.error, self.load.committed)
+    }
+
+    /// Consumes the failed load and returns its initialization error.
+    #[inline]
+    pub fn into_error(self) -> Error {
+        self.error
     }
 }
 
@@ -417,20 +704,41 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    let key_id = context.key_id(key)?;
-    let key_slot = context
-        .committed
-        .key_slot(key_id)
-        .expect("cached key id must belong to this context");
+    let (key_slot, loaded) = visible_root(context, key)?;
     let root_id = context
         .committed
         .module_for_key(key_slot)
         .map(|slot| context.committed.make_module_id(slot))?;
 
-    context
+    Some(LoadResult::new(
+        root_id,
+        loaded,
+        Vec::new().into_boxed_slice(),
+    ))
+}
+
+#[inline]
+fn visible_root<K, D, Meta, Arch, R, Q, Tls>(
+    context: &LinkContext<K, D, Meta, Arch, Tls>,
+    key: &Q,
+) -> Option<(KeySlot, LoadedCore<D, Arch, R, Tls>)>
+where
+    K: Clone + Ord + Borrow<Q>,
+    Q: Ord + ?Sized,
+    D: 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    let key_id = context.key_id(key)?;
+    let key_slot = context
+        .committed
+        .key_slot(key_id)
+        .expect("cached key id must belong to this context");
+    let loaded = context
         .committed
         .get_by_key(key_slot)?
-        .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
-        .cloned()
-        .map(|loaded| LoadResult::new(root_id, loaded, Vec::new().into_boxed_slice()))
+        .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()?
+        .clone();
+    Some((key_slot, loaded))
 }

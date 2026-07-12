@@ -245,6 +245,7 @@ pub struct RelocateArgs<
 > {
     pub(crate) scope: ModuleScope<Arch, Tls>,
     pub(crate) binding: BindingMode,
+    pub(crate) run_init: bool,
     pub(crate) lazy_binder: &'a Binder,
     pub(crate) observer: &'a mut Obs,
 }

@@ -7,7 +7,7 @@ use crate::{
     lazy::{LazyBinder, prepare_plt, relocate_jump_slot},
     logging,
     memory::{ImageMemory, ImageMemoryExt, MappedView, RegionAccess, VmOffset},
-    observer::{DynamicRelocatedEvent, Finalizer, RelocationObserver},
+    observer::{DynamicRelocatedEvent, LifecycleRunner, RelocationObserver},
     relocation::{RelocHelper, RelocateArgs, RelocationArch, SymDef},
     runtime::CodeContext,
     tls::{TlsRelocOutcome, TlsResolver},
@@ -42,6 +42,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         let RelocateArgs {
             scope,
             binding,
+            run_init,
             lazy_binder,
             observer,
             ..
@@ -72,22 +73,29 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         let RelocHelper { scope, .. } = helper;
 
         let (init, fini) = self.resolve_lifecycle()?;
-        let finalizer = Finalizer::new(fini);
+        let initializer = LifecycleRunner::new(init);
+        let finalizer = LifecycleRunner::new(fini);
 
         if !scope.is_empty() {
             logging::debug!("[{}] Bound dependencies: {:?}", self.name(), &scope);
         }
 
         self.apply_relro(lazy_binding)?;
-        let mut dynamic_event =
-            DynamicRelocatedEvent::new(self.core_ref(), self.dynamic_addr(), finalizer);
+        let mut dynamic_event = DynamicRelocatedEvent::new(
+            self.core_ref(),
+            self.dynamic_addr(),
+            initializer,
+            finalizer,
+        );
         observer.on_dynamic_relocated(&mut dynamic_event)?;
         self.core_ref()
-            .set_finalizer(dynamic_event.into_finalizer());
+            .set_lifecycle(dynamic_event.into_lifecycle());
         self.core_ref().init_tls()?;
 
         logging::debug!("Preparing initialization functions for {}", self.name());
-        self.call_init(observer, &init)?;
+        if run_init {
+            self.core_ref().initialize()?;
+        }
 
         logging::info!("Relocation completed for {}", self.name());
 
