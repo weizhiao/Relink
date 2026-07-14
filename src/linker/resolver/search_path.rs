@@ -22,8 +22,10 @@ fn expand_origin(value: &str, origin: &Path) -> PathBuf {
 ///
 /// Implementations append directories to `out` in the order they should be
 /// searched for `request.requested()`.
-pub type SearchDirProvider =
-    dyn for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()> + 'static;
+pub type SearchDirProvider = dyn for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()>
+    + Send
+    + Sync
+    + 'static;
 
 /// One ordered search-path entry.
 #[derive(Clone)]
@@ -46,7 +48,10 @@ impl SearchPathEntry {
     #[inline]
     pub fn dynamic<F>(resolver: F) -> Self
     where
-        F: for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()> + 'static,
+        F: for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()>
+            + Send
+            + Sync
+            + 'static,
     {
         Self::Dynamic(Arc::from(Box::new(resolver) as Box<SearchDirProvider>))
     }
@@ -369,7 +374,10 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
     /// Appends a callback that can provide search directories per request.
     pub fn push_search_dir_provider<F>(&mut self, provider: F) -> &mut Self
     where
-        F: for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()> + 'static,
+        F: for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()>
+            + Send
+            + Sync
+            + 'static,
     {
         self.push_entry(SearchPathEntry::Dynamic(Arc::from(
             Box::new(provider) as Box<SearchDirProvider>

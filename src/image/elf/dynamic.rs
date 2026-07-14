@@ -69,8 +69,10 @@ impl<L: ElfLayout> SymbolTable<L> {
             dynamic.version_idx,
             dynamic.verneed,
             dynamic.verdef,
+            symbols.len(),
             &strtab,
-        );
+            segments,
+        )?;
 
         Ok(Self {
             hashtab,

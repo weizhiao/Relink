@@ -129,9 +129,9 @@ impl<L: ElfLayout, H: Debug> Debug for SymbolTable<L, H> {
     }
 }
 
-// Safety: dynamic symbol tables are immutable views over retained module mappings.
-// Version metadata may carry raw pointers into those mappings, but lookups only
-// read from them while the owning module keeps the mapping alive.
+// Safety: dynamic symbol and version tables are immutable views over retained
+// module mappings. Lookups only read them while the owning module keeps the
+// mapping alive.
 unsafe impl<L: ElfLayout> Send for SymbolTable<L, HashTable<L>> {}
 
 // Safety: see the Send impl above; shared access performs immutable symbol and
@@ -230,6 +230,20 @@ impl<'symbol> SymbolLookup<'symbol> {
     #[inline]
     pub fn name(&self) -> &'symbol str {
         self.info.name()
+    }
+
+    /// Returns the requested GNU symbol version, when versioned lookup is
+    /// enabled and the request carries one.
+    #[inline]
+    pub(crate) fn version_name(&self) -> Option<&str> {
+        #[cfg(feature = "version")]
+        {
+            self.info.version().map(|version| version.name())
+        }
+        #[cfg(not(feature = "version"))]
+        {
+            None
+        }
     }
 
     #[inline]

@@ -313,6 +313,11 @@ pub enum ParseDynamicError {
         /// Static detail describing why the table is malformed.
         detail: &'static str,
     },
+    /// GNU symbol-version tables described by the dynamic section are malformed.
+    MalformedVersionTable {
+        /// Static detail describing why the tables are malformed.
+        detail: &'static str,
+    },
     /// A lifecycle function table described by the dynamic section is malformed.
     MalformedLifecycleTable {
         /// Static detail describing why the table is malformed.
@@ -354,6 +359,7 @@ impl Display for ParseDynamicError {
             Self::MalformedHashTable { detail } => f.write_str(detail),
             Self::MalformedSymbolTable { detail } => f.write_str(detail),
             Self::MalformedStringTable { detail } => f.write_str(detail),
+            Self::MalformedVersionTable { detail } => f.write_str(detail),
             Self::MalformedLifecycleTable { detail } => f.write_str(detail),
         }
     }

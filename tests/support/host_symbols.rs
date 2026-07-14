@@ -67,7 +67,7 @@ impl TestHostSymbols {
                 }
                 _ => SyntheticSymbol::object(symbol_name, address as *const (), 0),
             };
-            source.insert(symbol);
+            let _ = source.insert(symbol);
         }
         source
     }

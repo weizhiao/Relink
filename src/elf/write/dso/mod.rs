@@ -12,8 +12,8 @@ mod string_table;
 mod types;
 mod writer;
 
+pub use crate::elf::hash::sysv_hash;
 pub use builder::DsoBuilder;
-pub use hash::sysv_hash;
 pub use types::{DsoExport, DsoExportLayout, DsoImage, DsoSymbolBind, DsoSymbolKind};
 
 #[cfg(test)]

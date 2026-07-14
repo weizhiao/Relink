@@ -84,9 +84,7 @@ pub(crate) struct ParsedDynamic {
     pub(crate) fini_array_size: Option<NonZeroUsize>,
     pub(crate) version_ids_off: Option<NonZeroUsize>,
     pub(crate) verneed_off: Option<NonZeroUsize>,
-    pub(crate) verneed_num: Option<NonZeroUsize>,
     pub(crate) verdef_off: Option<NonZeroUsize>,
-    pub(crate) verdef_num: Option<NonZeroUsize>,
     pub(crate) soname_off: Option<NonZeroUsize>,
     pub(crate) rpath_off: Option<NonZeroUsize>,
     pub(crate) runpath_off: Option<NonZeroUsize>,
@@ -151,9 +149,7 @@ impl ParsedDynamic {
             ElfDynamicTag::FINI_ARRAYSZ => self.fini_array_size = NonZeroUsize::new(value),
             ElfDynamicTag::VERSYM => self.version_ids_off = NonZeroUsize::new(value),
             ElfDynamicTag::VERNEED => self.verneed_off = NonZeroUsize::new(value),
-            ElfDynamicTag::VERNEEDNUM => self.verneed_num = NonZeroUsize::new(value),
             ElfDynamicTag::VERDEF => self.verdef_off = NonZeroUsize::new(value),
-            ElfDynamicTag::VERDEFNUM => self.verdef_num = NonZeroUsize::new(value),
             ElfDynamicTag::RPATH => self.rpath_off = NonZeroUsize::new(value),
             ElfDynamicTag::RUNPATH => self.runpath_off = NonZeroUsize::new(value),
             ElfDynamicTag::STRSZ => self.strtab_size = NonZeroUsize::new(value),
@@ -361,32 +357,8 @@ where
         let fini_array_size = parsed.fini_array_size.map(|len| len.get()).unwrap_or(0);
 
         // Extract versioning information
-        let verneed = parsed
-            .verneed_off
-            .map(|verneed_off| -> Result<_> {
-                Ok((
-                    add_base_nonzero(verneed_off)?,
-                    parsed
-                        .verneed_num
-                        .ok_or(ParseDynamicError::MissingRequiredTag {
-                            tag: ElfDynamicTag::VERNEEDNUM,
-                        })?,
-                ))
-            })
-            .transpose()?;
-        let verdef = parsed
-            .verdef_off
-            .map(|verdef_off| -> Result<_> {
-                Ok((
-                    add_base_nonzero(verdef_off)?,
-                    parsed
-                        .verdef_num
-                        .ok_or(ParseDynamicError::MissingRequiredTag {
-                            tag: ElfDynamicTag::VERDEFNUM,
-                        })?,
-                ))
-            })
-            .transpose()?;
+        let verneed = parsed.verneed_off.map(add_base_nonzero).transpose()?;
+        let verdef = parsed.verdef_off.map(add_base_nonzero).transpose()?;
         let version_idx = parsed.version_ids_off.map(add_base_nonzero).transpose()?;
 
         Ok(ElfDynamic {
@@ -513,9 +485,9 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     /// Symbol version index.
     pub version_idx: Option<NonZeroUsize>,
     /// Version needed information.
-    pub verneed: Option<(NonZeroUsize, NonZeroUsize)>,
+    pub verneed: Option<NonZeroUsize>,
     /// Version definition information.
-    pub verdef: Option<(NonZeroUsize, NonZeroUsize)>,
+    pub verdef: Option<NonZeroUsize>,
     /// Shared-object name.
     pub soname_off: Option<NonZeroUsize>,
     /// Runtime library search path.

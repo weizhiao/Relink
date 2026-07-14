@@ -1,22 +1,6 @@
 use super::{layout::checked_add, writer::ByteWriter};
-use crate::{Result, custom_error};
+use crate::{Result, custom_error, elf::hash::sysv_hash};
 use alloc::vec;
-
-/// Computes the standard SYSV ELF hash for a symbol name.
-pub fn sysv_hash(name: &[u8]) -> u32 {
-    let mut hash = 0u32;
-
-    for byte in name {
-        hash = (hash << 4).wrapping_add(u32::from(*byte));
-        let g = hash & 0xf0000000;
-        if g != 0 {
-            hash ^= g >> 24;
-        }
-        hash &= !g;
-    }
-
-    hash
-}
 
 #[inline]
 pub(super) fn dynsym_bucket_count(symbol_count: usize) -> usize {

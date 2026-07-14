@@ -3,7 +3,7 @@ use crate::{
     Result,
     arch::NativeArch,
     custom_error,
-    elf::{ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType},
+    elf::{ElfLayout, ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType},
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
     sync::Arc,
@@ -20,12 +20,46 @@ use core::ptr::NonNull;
 #[derive(Clone, Debug)]
 pub struct SyntheticSymbol {
     name: String,
+    version: Option<SymbolVersion>,
     value: usize,
     size: usize,
     bind: ElfSymbolBind,
     symbol_type: ElfSymbolType,
     other: u8,
     section_index: ElfSectionIndex,
+}
+
+/// GNU symbol-version metadata for a [`SyntheticSymbol`].
+#[derive(Clone, Debug)]
+pub struct SymbolVersion {
+    name: String,
+    default: bool,
+}
+
+impl SymbolVersion {
+    /// Creates symbol-version metadata.
+    ///
+    /// A default version corresponds to GNU `name@@version`; a non-default
+    /// version corresponds to `name@version`.
+    #[inline]
+    pub fn new(name: impl Into<String>, default: bool) -> Self {
+        Self {
+            name: name.into(),
+            default,
+        }
+    }
+
+    /// Returns the version name.
+    #[inline]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns whether this version satisfies an unversioned lookup.
+    #[inline]
+    pub const fn is_default(&self) -> bool {
+        self.default
+    }
 }
 
 impl SyntheticSymbol {
@@ -40,6 +74,7 @@ impl SyntheticSymbol {
             ElfSymbolType::FUNC,
             0,
             ElfSectionIndex::ABS,
+            None,
         )
     }
 
@@ -54,13 +89,15 @@ impl SyntheticSymbol {
             ElfSymbolType::OBJECT,
             0,
             ElfSectionIndex::ABS,
+            None,
         )
     }
 
     /// Creates a synthetic symbol with explicit ELF symbol fields.
     ///
     /// The synthetic module fills `st_name` when the symbol is inserted, so the
-    /// caller controls every field except the internal name-table slot.
+    /// caller controls every field except the internal name-table slot. Pass
+    /// [`SymbolVersion`] to attach GNU symbol-version metadata.
     #[inline]
     pub fn from_fields(
         name: impl Into<String>,
@@ -70,9 +107,11 @@ impl SyntheticSymbol {
         symbol_type: ElfSymbolType,
         other: u8,
         section_index: ElfSectionIndex,
+        version: Option<SymbolVersion>,
     ) -> Self {
         Self {
             name: name.into(),
+            version,
             value,
             size,
             bind,
@@ -80,6 +119,40 @@ impl SyntheticSymbol {
             other,
             section_index,
         }
+    }
+
+    /// Creates a synthetic symbol from an ELF symbol-table entry.
+    ///
+    /// `name` must be supplied separately because [`ElfSymbol::st_name`] is an
+    /// index into the source image's string table. GNU version metadata likewise
+    /// lives outside the ELF symbol-table entry.
+    #[inline]
+    pub fn from_elf<L: ElfLayout>(
+        name: impl Into<String>,
+        symbol: &ElfSymbol<L>,
+        version: Option<SymbolVersion>,
+    ) -> Self {
+        Self::from_fields(
+            name,
+            symbol.st_value(),
+            symbol.st_size(),
+            symbol.bind(),
+            symbol.symbol_type(),
+            symbol.st_other(),
+            symbol.st_shndx(),
+            version,
+        )
+    }
+
+    /// Exports this symbol with `version`.
+    ///
+    /// A default definition corresponds to GNU `name@@version` and may satisfy
+    /// an unversioned lookup. A non-default definition corresponds to
+    /// `name@version` and is available only to an exact versioned lookup.
+    #[inline]
+    pub fn with_version(mut self, version: impl Into<String>, default: bool) -> Self {
+        self.version = Some(SymbolVersion::new(version, default));
+        self
     }
 
     /// Sets the ELF symbol binding used by the synthetic symbol.
@@ -188,7 +261,13 @@ pub struct SyntheticModule<Arch: RelocationArch = NativeArch, D = ()> {
     user_data: D,
     names: Vec<String>,
     symbols: Vec<ElfSymbol<Arch::Layout>>,
-    index: BTreeMap<String, usize>,
+    index: BTreeMap<String, SymbolIndex>,
+}
+
+#[derive(Clone, Default)]
+struct SymbolIndex {
+    default: Option<usize>,
+    versions: Vec<(SymbolVersion, usize)>,
 }
 
 impl<Arch: RelocationArch, D: Clone> Clone for SyntheticModule<Arch, D> {
@@ -214,7 +293,7 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     {
         let mut module = Self::empty(name);
         for symbol in symbols {
-            module.insert(symbol);
+            let _ = module.insert(symbol);
         }
         module
     }
@@ -280,11 +359,24 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
         self
     }
 
-    /// Inserts or replaces one symbol.
-    pub fn insert(&mut self, symbol: SyntheticSymbol) {
+    /// Inserts one symbol, returning the definition it replaced.
+    pub fn insert(&mut self, symbol: SyntheticSymbol) -> Option<SyntheticSymbol> {
         let name = symbol.name;
+        let version = symbol.version;
+        let entry = self.index.entry(name.clone()).or_default();
+        let existing = match version.as_ref() {
+            Some(version) => entry.versions.iter().find_map(|(entry, index)| {
+                (entry.name == version.name).then(|| (*index, Some(entry.clone())))
+            }),
+            None => entry.default.map(|index| {
+                let version = entry.versions.iter().find_map(|(version, version_index)| {
+                    (*version_index == index && version.default).then(|| version.clone())
+                });
+                (index, version)
+            }),
+        };
 
-        if let Some(idx) = self.index.get(name.as_str()).copied() {
+        let (idx, previous) = if let Some((idx, previous_version)) = existing {
             let elf_symbol = ElfSymbol::synthetic(
                 idx,
                 symbol.value,
@@ -294,8 +386,11 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
                 symbol.other,
                 symbol.section_index,
             );
-            self.names[idx] = name;
-            self.symbols[idx] = elf_symbol;
+            let previous_name = core::mem::replace(&mut self.names[idx], name);
+            let previous_symbol = core::mem::replace(&mut self.symbols[idx], elf_symbol);
+            let previous =
+                SyntheticSymbol::from_elf(previous_name, &previous_symbol, previous_version);
+            (idx, Some(previous))
         } else {
             let idx = self.symbols.len();
             let elf_symbol = ElfSymbol::synthetic(
@@ -307,10 +402,42 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
                 symbol.other,
                 symbol.section_index,
             );
-            self.index.insert(name.clone(), idx);
             self.names.push(name);
             self.symbols.push(elf_symbol);
+            (idx, None)
+        };
+
+        match version {
+            Some(version) => {
+                let was_default = entry
+                    .versions
+                    .iter()
+                    .position(|(entry, _)| entry.name == version.name)
+                    .map(|position| entry.versions.remove(position).0.default)
+                    .unwrap_or(false);
+                if version.default {
+                    for (entry, _) in &mut entry.versions {
+                        entry.default = false;
+                    }
+                    entry.default = Some(idx);
+                } else if was_default && entry.default == Some(idx) {
+                    entry.default = None;
+                }
+                entry.versions.push((version, idx));
+            }
+            None => {
+                if let Some(position) = entry
+                    .versions
+                    .iter()
+                    .position(|(version, version_index)| *version_index == idx && version.default)
+                {
+                    entry.versions.remove(position);
+                }
+                entry.default = Some(idx);
+            }
         }
+
+        previous
     }
 
     /// Returns whether this module exports a synthetic symbol with `name`.
@@ -394,7 +521,14 @@ where
         &'exports self,
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'exports ElfSymbol<Arch::Layout>> {
-        let idx = self.index.get(lookup.name()).copied()?;
+        let entry = self.index.get(lookup.name())?;
+        let idx = match lookup.version_name() {
+            Some(version) => entry
+                .versions
+                .iter()
+                .find_map(|(entry, index)| (entry.name == version).then_some(*index))?,
+            None => entry.default?,
+        };
         Some(&self.symbols[idx])
     }
 }
@@ -447,6 +581,71 @@ mod tests {
         assert_eq!(module.exports().symbols().len(), 1);
     }
 
+    #[cfg(feature = "version")]
+    #[test]
+    fn synthetic_module_uses_one_default_symbol() {
+        let mut module = SyntheticModule::<NativeArch>::new(
+            "__versions",
+            [SyntheticSymbol::function("entry", 0x1000usize as *const ())],
+        );
+        assert!(
+            module
+                .insert(SyntheticSymbol::from_fields(
+                    "entry",
+                    0x2000,
+                    0,
+                    ElfSymbolBind::GLOBAL,
+                    ElfSymbolType::FUNC,
+                    0,
+                    ElfSectionIndex::ABS,
+                    Some(SymbolVersion::new("VER_1", false)),
+                ))
+                .is_none()
+        );
+
+        let mut lookup = SymbolLookup::new("entry");
+        assert_eq!(module.lookup(&mut lookup).unwrap().st_value(), 0x1000);
+
+        let mut lookup = SymbolLookup::with_version("entry", "VER_1");
+        assert_eq!(module.lookup(&mut lookup).unwrap().st_value(), 0x2000);
+
+        assert!(
+            module
+                .insert(
+                    SyntheticSymbol::function("entry", 0x3000usize as *const ())
+                        .with_version("VER_2", true),
+                )
+                .is_none()
+        );
+
+        let mut lookup = SymbolLookup::new("entry");
+        assert_eq!(module.lookup(&mut lookup).unwrap().st_value(), 0x3000);
+
+        let mut lookup = SymbolLookup::with_version("entry", "VER_2");
+        assert_eq!(module.lookup(&mut lookup).unwrap().st_value(), 0x3000);
+
+        let previous = module
+            .insert(
+                SyntheticSymbol::function("entry", 0x4000usize as *const ())
+                    .with_version("VER_2", true),
+            )
+            .unwrap();
+        assert_eq!(previous.value, 0x3000);
+        assert_eq!(previous.version.unwrap().name(), "VER_2");
+
+        let previous = module
+            .insert(SyntheticSymbol::function("entry", 0x5000usize as *const ()))
+            .unwrap();
+        assert_eq!(previous.value, 0x4000);
+        assert_eq!(previous.version.unwrap().name(), "VER_2");
+
+        let mut lookup = SymbolLookup::new("entry");
+        assert_eq!(module.lookup(&mut lookup).unwrap().st_value(), 0x5000);
+
+        let mut lookup = SymbolLookup::with_version("entry", "VER_2");
+        assert!(module.lookup(&mut lookup).is_none());
+    }
+
     #[test]
     fn synthetic_symbol_can_use_non_absolute_section() {
         let module = SyntheticModule::<NativeArch>::new(
@@ -459,6 +658,7 @@ mod tests {
                 ElfSymbolType::TLS,
                 3,
                 ElfSectionIndex::new(1),
+                None,
             )],
         );
         let mut scope = ModuleScopeBuilder::<NativeArch>::new();

@@ -19,6 +19,21 @@ use sysv::ElfHash;
 mod gnu;
 mod sysv;
 
+/// Computes the standard SYSV ELF hash used by symbol and version tables.
+#[inline]
+pub fn sysv_hash(name: &[u8]) -> u32 {
+    let mut hash = 0u32;
+    for &byte in name {
+        hash = (hash << 4) + u32::from(byte);
+        let high = hash & 0xf0000000;
+        if high != 0 {
+            hash ^= high >> 24;
+        }
+        hash &= !high;
+    }
+    hash
+}
+
 pub trait SymbolHash<L: ElfLayout> {
     fn lookup<'sym, H>(
         &self,

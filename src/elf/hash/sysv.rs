@@ -11,6 +11,8 @@ use crate::{
     segment::ElfSegments,
 };
 use core::mem::size_of;
+
+use super::sysv_hash;
 /// Header structure for SYSV ELF hash tables
 ///
 /// This structure represents the header of a SYSV hash table, which contains
@@ -53,24 +55,6 @@ pub(crate) struct ElfHash {
 }
 
 impl ElfHash {
-    /// Compute the SYSV hash value for a symbol name.
-    #[inline]
-    pub(crate) fn hash(name: &[u8]) -> u64 {
-        let mut hash = 0u32;
-        #[allow(unused_assignments)]
-        let mut g = 0u32;
-
-        for byte in name {
-            hash = (hash << 4) + u32::from(*byte);
-            g = hash & 0xf0000000;
-            if g != 0 {
-                hash ^= g >> 24;
-            }
-            hash &= !g;
-        }
-        u64::from(hash)
-    }
-
     /// Parse a SYSV hash table from raw memory
     ///
     /// This method creates an ElfHash instance by parsing the hash table data
@@ -162,7 +146,7 @@ impl ElfHash {
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>> {
         // Get or compute the hash value for the symbol
-        let hash = lookup.sysv_hash(|name| Self::hash(name.as_bytes()) as u32);
+        let hash = lookup.sysv_hash(|name| sysv_hash(name.as_bytes()));
 
         let buckets = self.buckets.as_slice();
         let chains = self.chains.as_slice();
