@@ -3,13 +3,12 @@ use crate::{
     arch::{
         NativeArch, tlsdesc_resolver_dynamic, tlsdesc_resolver_static, tlsdesc_resolver_undefweak,
     },
-    logging,
     memory::VmAddr,
     relocation::RelocationArch,
     sync::{AtomicUsize, Ordering},
     tls::{
-        TlsDescValue, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsResolver, TlsTemplate,
-        TlsTpOffset,
+        ModuleTls, TlsDescValue, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsModuleSnapshot,
+        TlsRegistry, TlsRequest, TlsResolver, TlsStorage,
     },
 };
 use alloc::{
@@ -29,110 +28,36 @@ struct TlsDescDynamicArg {
     ti: TlsIndex,
 }
 
-#[derive(Debug)]
-struct ModuleSlot {
-    /// The generation number when this slot was last updated (loaded or unloaded).
-    generation: usize,
-    /// The TLS record. If None, the module at this ID has been unloaded.
-    record: Option<ModuleTlsRecord>,
-}
-
-/// Stores TLS metadata, the relocated template image, and native TLSDESC args.
-#[derive(Debug)]
-struct ModuleTlsRecord {
-    info: TlsInfo,
-    source: Option<TlsImageSource>,
-    tp_offset: Option<TlsTpOffset>,
+#[derive(Debug, Default)]
+struct ModuleData {
     #[allow(clippy::vec_box)]
     tls_desc_args: Vec<Box<TlsDescDynamicArg>>,
 }
 
-/// Cloneable TLS metadata snapshot used outside the registry lock.
-#[derive(Debug, Clone)]
-struct ModuleTlsSnapshot {
-    info: TlsInfo,
-    source: Option<TlsImageSource>,
-    tp_offset: Option<TlsTpOffset>,
-}
-
 /// Global registry for all loaded modules' TLS metadata.
 /// This allows any thread to look up how to initialize TLS for a specific module ID.
-static MODULE_REGISTRY: RwLock<Vec<ModuleSlot>> = RwLock::new(Vec::new());
+static MODULE_REGISTRY: RwLock<TlsRegistry<ModuleData>> = RwLock::new(TlsRegistry::new());
 
 #[inline]
-fn with_module_registry<T>(f: impl FnOnce(&[ModuleSlot]) -> T) -> T {
+fn with_registry<T>(f: impl FnOnce(&TlsRegistry<ModuleData>) -> T) -> T {
     let registry = MODULE_REGISTRY.read();
-    f(registry.as_slice())
+    f(&registry)
 }
 
 #[inline]
-fn with_module_registry_mut<T>(f: impl FnOnce(&mut Vec<ModuleSlot>) -> T) -> T {
+fn with_registry_mut<T>(f: impl FnOnce(&mut TlsRegistry<ModuleData>) -> T) -> T {
     let mut registry = MODULE_REGISTRY.write();
-    f(&mut registry)
+    let result = f(&mut registry);
+    GLOBAL_GENERATION.store(registry.generation(), Ordering::Release);
+    result
 }
-
-/// Atomic counter for generating unique module IDs.
-static NEXT_MODULE_ID: AtomicUsize = AtomicUsize::new(1);
 
 /// Global generation counter. Incremented whenever a new module is loaded.
 /// DTVs use this to detect if they are stale and need updating.
 static GLOBAL_GENERATION: AtomicUsize = AtomicUsize::new(0);
 
-fn register_module(tls_info: &TlsInfo, tp_offset: Option<TlsTpOffset>) -> TlsModuleId {
-    with_module_registry_mut(|registry| {
-        // Try to find a free slot (excluding index 0 as it's typically unused/reserved)
-        let mod_id = registry
-            .iter()
-            .enumerate()
-            .skip(1)
-            .find(|(_, slot)| slot.record.is_none())
-            .map(|(id, _)| id)
-            .unwrap_or_else(|| NEXT_MODULE_ID.fetch_add(1, Ordering::SeqCst));
-
-        if mod_id >= registry.len() {
-            registry.resize_with(mod_id + 1, || ModuleSlot {
-                generation: 0,
-                record: None,
-            });
-        }
-
-        let record = ModuleTlsRecord {
-            info: *tls_info,
-            source: None,
-            tp_offset,
-            tls_desc_args: Vec::new(),
-        };
-
-        // Increment global generation
-        let new_gen = GLOBAL_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-
-        registry[mod_id] = ModuleSlot {
-            generation: new_gen,
-            record: Some(record),
-        };
-
-        logging::debug!(
-            "Registered TLS module: ID {}, memsz {}, align {}, tp_offset {:?}",
-            mod_id,
-            tls_info.memsz,
-            tls_info.align,
-            tp_offset
-        );
-
-        TlsModuleId::new(mod_id)
-    })
-}
-
-fn get_module_record(mod_id: TlsModuleId) -> Option<ModuleTlsSnapshot> {
-    with_module_registry(|registry| {
-        registry.get(mod_id.get()).and_then(|slot| {
-            slot.record.as_ref().map(|record| ModuleTlsSnapshot {
-                info: record.info,
-                source: record.source.clone(),
-                tp_offset: record.tp_offset,
-            })
-        })
-    })
+fn get_module_record(mod_id: TlsModuleId) -> Option<TlsModuleSnapshot> {
+    with_registry(|registry| registry.module(mod_id))
 }
 
 // -----------------------------------------------------------------------------
@@ -182,54 +107,55 @@ struct ThreadDtv {
 
 impl ThreadDtv {
     fn new() -> Self {
-        with_module_registry(|registry| {
-            let mut dtv = Vec::with_capacity(registry.len());
-            for slot in registry.iter() {
-                let entry = slot.record.as_ref().and_then(|record| {
-                    if let Some(offset) = record.tp_offset {
-                        // Safety: We assume that if `tp_offset` is set, the TLS block is
-                        // accessible via `tp + offset`.
-                        unsafe {
-                            let tp = crate::arch::get_thread_pointer();
-                            Some(DtvEntry::Static {
-                                ptr: tp.offset(offset.get()),
-                            })
-                        }
-                    } else {
-                        None
+        let snapshot = with_registry(TlsRegistry::snapshot);
+        let mut dtv = Vec::with_capacity(snapshot.slots.len());
+        for slot in snapshot.slots {
+            let entry = slot.module.and_then(|module| {
+                if let TlsStorage::Static(offset) = module.storage {
+                    // Safety: We assume that if `tp_offset` is set, the TLS block is
+                    // accessible via `tp + offset`.
+                    unsafe {
+                        let tp = crate::arch::get_thread_pointer();
+                        Some(DtvEntry::Static {
+                            ptr: tp.offset(offset.get()),
+                        })
                     }
-                });
-                dtv.push(entry);
-            }
-            Self {
-                generation: GLOBAL_GENERATION.load(Ordering::Acquire),
-                dtv,
-            }
-        })
+                } else {
+                    None
+                }
+            });
+            dtv.push(entry);
+        }
+        Self {
+            generation: snapshot.generation,
+            dtv,
+        }
     }
 
     /// Synchronize the DTV with the global registry.
     /// Frees memory for modules that have been unloaded or replaced since the last check.
-    fn synchronize(&mut self, global_gen: usize) {
-        with_module_registry(|registry| {
-            // We only need to check entries that exist in our DTV.
-            let check_len = core::cmp::min(self.dtv.len(), registry.len());
+    fn synchronize(&mut self) {
+        let Some(snapshot) = with_registry(|registry| registry.snapshot_since(self.generation))
+        else {
+            return;
+        };
+        // We only need to check entries that exist in our DTV.
+        let check_len = core::cmp::min(self.dtv.len(), snapshot.slots.len());
 
-            for (mod_id, slot_val) in self.dtv.iter_mut().enumerate().take(check_len) {
-                let registry_slot = &registry[mod_id];
+        for (mod_id, slot_val) in self.dtv.iter_mut().enumerate().take(check_len) {
+            let registry_slot = &snapshot.slots[mod_id];
 
-                // If the slot in global registry has a newer generation than what we last saw...
-                if registry_slot.generation > self.generation {
-                    // ...it means the module at this ID was either unloaded or replaced.
-                    // In either case, our current copy (if any) is stale/zombie.
-                    // Setting to None will automatically trigger Drop for the old DtvEntry.
-                    *slot_val = None;
-                }
+            // If the slot in global registry has a newer generation than what we last saw...
+            if registry_slot.generation > self.generation {
+                // ...it means the module at this ID was either unloaded or replaced.
+                // In either case, our current copy (if any) is stale/zombie.
+                // Setting to None will automatically trigger Drop for the old DtvEntry.
+                *slot_val = None;
             }
-        });
+        }
 
         // Update our local generation to match global
-        self.generation = global_gen;
+        self.generation = snapshot.generation;
     }
 
     /// Retrieve the pointer for a specific module, allocating if necessary.
@@ -239,7 +165,7 @@ impl ThreadDtv {
         // Sync with global generation first to cleanup stale modules
         let global_gen = GLOBAL_GENERATION.load(Ordering::Acquire);
         if self.generation < global_gen {
-            self.synchronize(global_gen);
+            self.synchronize();
         }
 
         // Ensure DTV is large enough
@@ -254,7 +180,7 @@ impl ThreadDtv {
 
         // Need to allocate. Look up TLS metadata from global registry.
         let record = get_module_record(mod_id)?;
-        if let Some(offset) = record.tp_offset {
+        if let TlsStorage::Static(offset) = record.storage {
             let tp = unsafe { crate::arch::get_thread_pointer() };
             let ptr = unsafe { tp.offset(offset.get()) };
             self.dtv[index] = Some(DtvEntry::Static { ptr });
@@ -270,10 +196,12 @@ impl ThreadDtv {
         }
 
         // Initialize memory (Copy image + Zero BSS)
-        let mut init = |tls: TlsTemplate<'_>| {
+        let mut init = |image: &[u8]| {
+            if image.len() != record.info.filesz {
+                return Err(TlsError::ModuleMismatch.into());
+            }
             unsafe {
                 let slice = core::slice::from_raw_parts_mut(ptr, record.info.memsz);
-                let image = tls.image;
                 let image_len = image.len();
                 // Copy initialized data
                 slice[..image_len].copy_from_slice(image);
@@ -282,7 +210,7 @@ impl ThreadDtv {
             }
             Ok(())
         };
-        if source.with_template(&mut init).is_err() {
+        if source.with_image(&mut init).is_err() {
             unsafe { dealloc(ptr, layout) };
             return None;
         }
@@ -299,7 +227,7 @@ impl ThreadDtv {
         // If our DTV is stale, we check if this specific module has been updated.
         let global_gen = GLOBAL_GENERATION.load(Ordering::Acquire);
         if self.generation < global_gen {
-            match with_module_registry(|registry| registry.get(index).map(|slot| slot.generation)) {
+            match with_registry(|registry| registry.slot_generation(mod_id)) {
                 Some(generation) if generation <= self.generation => {
                     // This module hasn't been changed since our last sync,
                     // so the pointer in our DTV is still valid.
@@ -418,57 +346,21 @@ impl Default for DefaultTlsResolver {
 impl TlsResolver<NativeArch> for DefaultTlsResolver {
     const OVERRIDE_TLS_GET_ADDR: bool = true;
 
-    fn register(tls_info: &TlsInfo) -> Result<TlsModuleId> {
-        let id = register_module(tls_info, None);
-        Ok(id)
+    fn register(info: TlsInfo, request: TlsRequest) -> Result<ModuleTls> {
+        let storage = match request {
+            TlsRequest::Dynamic => TlsStorage::Dynamic,
+            TlsRequest::Static(Some(offset)) => TlsStorage::Static(offset),
+            TlsRequest::Static(None) => return Err(TlsError::StaticResolverUnsupported.into()),
+        };
+        with_registry_mut(|registry| registry.register(info, storage, ModuleData::default()))
     }
 
-    fn register_static(_tls_info: &TlsInfo) -> Result<(TlsModuleId, TlsTpOffset)> {
-        Err(TlsError::StaticResolverUnsupported.into())
-    }
-
-    fn add_static_tls(tls_info: &TlsInfo, offset: TlsTpOffset) -> Result<TlsModuleId> {
-        let id = register_module(tls_info, Some(offset));
-        Ok(id)
-    }
-
-    fn init_tls(
-        source: TlsImageSource,
-        mod_id: TlsModuleId,
-        offset: Option<TlsTpOffset>,
-    ) -> Result<()> {
-        with_module_registry_mut(|registry| {
-            let Some(slot) = registry.get_mut(mod_id.get()) else {
-                return Err(TlsError::InvalidModuleId.into());
-            };
-            let Some(record) = slot.record.as_mut() else {
-                return Err(TlsError::InvalidModuleId.into());
-            };
-
-            let generation = GLOBAL_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-            let info = source.info();
-            let source = if offset.is_some() { None } else { Some(source) };
-            slot.generation = generation;
-            record.info = info;
-            record.source = source;
-            record.tp_offset = offset;
-            Ok(())
-        })
+    fn init_tls(source: TlsImageSource, mod_id: TlsModuleId) -> Result<()> {
+        with_registry_mut(|registry| registry.init(source, mod_id))
     }
 
     fn unregister(mod_id: TlsModuleId) {
-        let mod_id = mod_id.get();
-        with_module_registry_mut(|registry| {
-            assert!(mod_id < registry.len(), "Invalid module ID");
-            let generation = GLOBAL_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-
-            registry[mod_id] = ModuleSlot {
-                generation,
-                record: None,
-            };
-        });
-
-        logging::debug!("Unregistered TLS module: ID {}", mod_id);
+        with_registry_mut(|registry| registry.unregister(mod_id));
     }
 
     #[inline]
@@ -496,14 +388,11 @@ impl TlsResolver<NativeArch> for DefaultTlsResolver {
             ti,
         });
         let arg_ptr = VmAddr::from_ptr(arg.as_ref());
-        with_module_registry_mut(|registry| {
-            let Some(record) = registry
-                .get_mut(ti.ti_module.get())
-                .and_then(|slot| slot.record.as_mut())
-            else {
-                return Err(TlsError::InvalidModuleId.into());
-            };
-            record.tls_desc_args.push(arg);
+        with_registry_mut(|registry| {
+            let data = registry
+                .data_mut(ti.ti_module)
+                .ok_or(TlsError::InvalidModuleId)?;
+            data.tls_desc_args.push(arg);
             Ok::<_, crate::Error>(())
         })?;
 

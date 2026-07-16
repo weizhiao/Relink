@@ -6,14 +6,14 @@
 use crate::{
     Result,
     elf::ElfPhdr,
-    image::{ElfCore, LoadedCore, ModuleTls, RawDynamic},
+    image::{ElfCore, LoadedCore, RawDynamic},
     input::Path,
     lazy::{LazyBinder, SupportLazy},
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch},
     segment::ElfSegments,
-    tls::TlsResolver,
+    tls::{ModuleTls, TlsResolver},
 };
 use core::fmt::Debug;
 

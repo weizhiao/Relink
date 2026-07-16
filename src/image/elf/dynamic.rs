@@ -15,12 +15,12 @@ use crate::{
     relocation::{DynamicRelocation, Relocatable, RelocateArgs, RelocationArch},
     segment::{ElfSegments, MemoryProtection},
     sync::{Arc, AtomicBool},
-    tls::{CoreTlsState, TlsResolver},
+    tls::{CoreTlsState, ModuleTls, TlsRequest, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{cell::OnceCell, mem::size_of, ptr::NonNull};
 
-use crate::image::{ElfCore, LoadedCore, ModuleTls, core::CoreInner, exports_handle};
+use crate::image::{ElfCore, LoadedCore, core::CoreInner, exports_handle};
 
 impl<L: ElfLayout> SymbolTable<L> {
     pub(crate) fn from_dynamic<Arch, R>(
@@ -444,25 +444,19 @@ where
             .soname_off
             .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
 
-        let tls_image = if let Some(info) = &self.tls_info {
-            Some(
-                self.segments
-                    .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)
-                    .ok_or_else(|| ParsePhdrError::malformed("PT_TLS image is malformed"))?,
-            )
-        } else {
-            None
-        };
-
-        let (tls_mod_id, tls_tp_offset) = if let Some(info) = &self.tls_info {
-            if static_tls {
-                let (mod_id, offset) = Tls::register_static(info)?;
-                (Some(mod_id), Some(offset))
+        let tls = if let Some(info) = &self.tls_info {
+            let image = self
+                .segments
+                .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)
+                .ok_or_else(|| ParsePhdrError::malformed("PT_TLS image is malformed"))?;
+            let request = if static_tls {
+                TlsRequest::Static(None)
             } else {
-                (Some(Tls::register(info)?), None)
-            }
+                TlsRequest::Dynamic
+            };
+            CoreTlsState::present(Tls::register(*info, request)?, image)
         } else {
-            (None, None)
+            CoreTlsState::none()
         };
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel.clone(), lazy_symtab);
 
@@ -481,7 +475,7 @@ where
                 symbolic: dynamic.symbolic,
             })),
             scope: OnceCell::new(),
-            tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, self.tls_info, tls_image),
+            tls,
             segments: self.segments,
         });
         CoreInner::bind_runtime_owner(&inner);

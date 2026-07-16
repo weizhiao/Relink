@@ -89,7 +89,7 @@ where
             user_data: self.user_data,
             dynamic_info: None,
             scope: OnceCell::new(),
-            tls: CoreTlsState::new(self.tls_mod_id, self.tls_tp_offset, None, None),
+            tls: CoreTlsState::none(),
             segments,
         };
         let inner = Arc::new(inner);

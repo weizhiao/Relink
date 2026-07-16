@@ -11,7 +11,7 @@ use crate::{
     relocation::ObjectArch,
     runtime::CodeExecutor,
     sync::Arc,
-    tls::{TlsModuleId, TlsResolver, TlsTpOffset},
+    tls::TlsResolver,
 };
 use alloc::boxed::Box;
 use core::marker::PhantomData;
@@ -30,8 +30,6 @@ pub(crate) struct ObjectBuilder<
     pub(crate) fini: Lifecycle,
     pub(crate) segments: ObjectSegments<R>,
     pub(crate) section_segments: SectionSegments<Arch>,
-    pub(crate) tls_mod_id: Option<TlsModuleId>,
-    pub(crate) tls_tp_offset: Option<TlsTpOffset>,
     pub(crate) user_data: D,
     pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
     _marker_tls: PhantomData<fn() -> Tls>,
@@ -112,8 +110,6 @@ where
             section_segments,
             init,
             fini,
-            tls_mod_id: None,
-            tls_tp_offset: None,
             user_data,
             executor,
             _marker_tls: PhantomData,

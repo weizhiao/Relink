@@ -117,7 +117,7 @@ jobs:
         toolchain: nightly
         components: rust-src
     - name: Install cross
-      run: cargo install --locked cross --git https://github.com/cross-rs/cross
+      run: cargo +stable install --locked cross --git https://github.com/cross-rs/cross
     - name: Run RISC-V object relocation tests
       env:
         RUSTFLAGS: -C target-cpu=generic-rv64 -C target-feature=+m,+a,+f,+d,+c,+crt-static

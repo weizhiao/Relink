@@ -4,7 +4,7 @@ use crate::{
     memory::ImageMemory,
     relocation::RelocationArch,
     sync::Arc,
-    tls::{TlsModuleId, TlsResolver, TlsTpOffset},
+    tls::{ModuleTls, TlsResolver},
 };
 use alloc::boxed::Box;
 use core::any::Any;
@@ -56,65 +56,6 @@ where
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'exports ElfSymbol<L>> {
         self.view().lookup_filter(lookup)
-    }
-}
-
-/// TLS metadata associated with a runtime module.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ModuleTls {
-    /// No TLS metadata is available for the module.
-    None,
-    /// The module has a static TLS block at a fixed thread-pointer offset.
-    Static {
-        /// Runtime TLS module identifier.
-        mod_id: TlsModuleId,
-        /// Offset of this module's static TLS block relative to the thread pointer.
-        tp_offset: TlsTpOffset,
-    },
-    /// The module uses dynamic TLS and resolves addresses through `__tls_get_addr`.
-    Dynamic {
-        /// Runtime TLS module identifier.
-        mod_id: TlsModuleId,
-    },
-}
-
-impl Default for ModuleTls {
-    #[inline]
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-impl ModuleTls {
-    /// No TLS metadata is available for the module.
-    pub const NONE: Self = Self::None;
-
-    /// Creates module TLS metadata from the registered dynamic and static TLS values.
-    #[inline]
-    pub const fn new(mod_id: Option<TlsModuleId>, tp_offset: Option<TlsTpOffset>) -> Self {
-        match (mod_id, tp_offset) {
-            (Some(mod_id), Some(tp_offset)) => Self::Static { mod_id, tp_offset },
-            (Some(mod_id), None) => Self::Dynamic { mod_id },
-            _ => Self::None,
-        }
-    }
-
-    /// Returns the registered TLS module id, when available.
-    #[inline]
-    pub const fn mod_id(self) -> Option<TlsModuleId> {
-        match self {
-            Self::None => None,
-            Self::Static { mod_id, .. } | Self::Dynamic { mod_id, .. } => Some(mod_id),
-        }
-    }
-
-    /// Returns the static TLS thread-pointer offset, when available.
-    #[inline]
-    pub const fn tp_offset(self) -> Option<TlsTpOffset> {
-        match self {
-            Self::Static { tp_offset, .. } => Some(tp_offset),
-            Self::None | Self::Dynamic { .. } => None,
-        }
     }
 }
 

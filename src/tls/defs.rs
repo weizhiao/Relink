@@ -8,7 +8,7 @@ use crate::{
 pub(crate) const TLS_GET_ADDR_SYMBOL: &str = "__tls_get_addr";
 
 /// Information about a TLS segment from ELF headers.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
 pub struct TlsInfo {
     /// Virtual address of the TLS template in the ELF file.
     pub vaddr: usize,
@@ -42,79 +42,42 @@ impl TlsInfo {
             align: phdr.p_align(),
         }
     }
-
-    /// Returns a borrowed TLS template for this metadata.
-    #[inline]
-    pub fn template<'a>(self, image: &'a [u8]) -> TlsTemplate<'a> {
-        debug_assert_eq!(image.len(), self.filesz);
-        TlsTemplate { info: self, image }
-    }
-}
-
-/// Borrowed TLS initialization template.
-///
-/// The bytes usually point into the loaded ELF image. Use [`TlsImageSource`]
-/// when the template must be accessed after the current callback returns.
-#[derive(Clone, Copy)]
-pub struct TlsTemplate<'a> {
-    /// TLS segment metadata associated with this template.
-    pub info: TlsInfo,
-    /// Initialized TLS bytes borrowed from the loaded image.
-    pub image: &'a [u8],
-}
-
-impl core::fmt::Debug for TlsTemplate<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("TlsTemplate")
-            .field("info", &self.info)
-            .field("image_len", &self.image.len())
-            .finish()
-    }
 }
 
 /// A cloneable source for a relocated TLS initialization image.
 ///
 /// The source may refer back to the loaded image instead of owning a copy of the
-/// template bytes. Users must consume the borrowed template inside
-/// [`with_template`](Self::with_template).
+/// image bytes. Users must consume the borrowed image inside
+/// [`with_image`](Self::with_image).
 #[derive(Clone)]
 pub struct TlsImageSource {
-    info: TlsInfo,
     provider: Weak<dyn TlsImageProvider>,
 }
 
 impl core::fmt::Debug for TlsImageSource {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("TlsImageSource")
-            .field("info", &self.info())
-            .finish()
+        f.debug_struct("TlsImageSource").finish_non_exhaustive()
     }
 }
 
 impl TlsImageSource {
     #[inline]
-    pub(crate) fn new(info: TlsInfo, provider: Weak<dyn TlsImageProvider>) -> Self {
-        Self { info, provider }
+    pub(crate) fn new(provider: Weak<dyn TlsImageProvider>) -> Self {
+        Self { provider }
     }
 
-    /// Returns the TLS layout metadata for this image.
+    /// Borrows the TLS initialization image while the backing image is alive.
     #[inline]
-    pub fn info(&self) -> TlsInfo {
-        self.info
-    }
-
-    /// Borrows the TLS initialization template while the backing image is alive.
-    #[inline]
-    pub fn with_template(&self, f: &mut dyn FnMut(TlsTemplate<'_>) -> Result<()>) -> Result<()> {
+    pub fn with_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
         let Some(provider) = self.provider.upgrade() else {
             return Err(TlsError::TemplateUnavailable.into());
         };
-        provider.with_tls_template(f)
+        provider.with_tls_image(f)
     }
 }
 
 pub(crate) trait TlsImageProvider: Send + Sync {
-    fn with_tls_template(&self, f: &mut dyn FnMut(TlsTemplate<'_>) -> Result<()>) -> Result<()>;
+    fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()>;
 }
 
 pub(crate) fn tls_image_provider_handle<T>(provider: Arc<T>) -> Arc<dyn TlsImageProvider>
@@ -213,6 +176,64 @@ impl core::fmt::Display for TlsTpOffset {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.0.fmt(f)
     }
+}
+
+/// TLS metadata associated with a runtime module.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModuleTls {
+    /// No TLS metadata is available for the module.
+    None,
+    /// The module has a static TLS block at a fixed thread-pointer offset.
+    Static {
+        /// Runtime TLS module identifier.
+        mod_id: TlsModuleId,
+        /// Offset of this module's static TLS block relative to the thread pointer.
+        tp_offset: TlsTpOffset,
+    },
+    /// The module uses dynamic TLS and resolves addresses through `__tls_get_addr`.
+    Dynamic {
+        /// Runtime TLS module identifier.
+        mod_id: TlsModuleId,
+    },
+}
+
+impl Default for ModuleTls {
+    #[inline]
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl ModuleTls {
+    /// No TLS metadata is available for the module.
+    pub const NONE: Self = Self::None;
+
+    /// Returns the registered TLS module id, when available.
+    #[inline]
+    pub const fn mod_id(self) -> Option<TlsModuleId> {
+        match self {
+            Self::None => None,
+            Self::Static { mod_id, .. } | Self::Dynamic { mod_id, .. } => Some(mod_id),
+        }
+    }
+
+    /// Returns the static TLS thread-pointer offset, when available.
+    #[inline]
+    pub const fn tp_offset(self) -> Option<TlsTpOffset> {
+        match self {
+            Self::Static { tp_offset, .. } => Some(tp_offset),
+            Self::None | Self::Dynamic { .. } => None,
+        }
+    }
+}
+
+/// Requested TLS placement for a module registration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TlsRequest {
+    /// Dynamic TLS is allowed. The resolver may still choose static storage.
+    Dynamic,
+    /// Static TLS is required. An existing thread-pointer offset may be supplied.
+    Static(Option<TlsTpOffset>),
 }
 
 /// The TLS Index structure passed to `__tls_get_addr`.

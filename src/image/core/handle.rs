@@ -2,7 +2,7 @@ use super::CoreInner;
 use crate::{
     Result, TlsError,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
-    image::{DynamicInfo, Module, ModuleScope, ModuleTls, SymbolExports, exports_handle},
+    image::{DynamicInfo, Module, ModuleScope, SymbolExports, exports_handle},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
@@ -11,8 +11,8 @@ use crate::{
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{
-        CoreTlsState, TlsImageProvider, TlsImageSource, TlsInfo, TlsModuleId, TlsResolver,
-        TlsTemplate, TlsTpOffset, tls_image_provider_handle,
+        CoreTlsState, ModuleTls, TlsImageProvider, TlsImageSource, TlsResolver,
+        tls_image_provider_handle,
     },
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -61,11 +61,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
 impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> TlsImageProvider
     for CoreInner<D, Arch, R, Tls>
 {
-    fn with_tls_template(&self, f: &mut dyn FnMut(TlsTemplate<'_>) -> Result<()>) -> Result<()> {
-        if self.tls.info().is_none() {
+    fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+        if !self.tls.has_image() {
             return Err(TlsError::TemplateUnavailable.into());
         }
-        self.tls.with_template(f)
+        self.tls.with_image(f)
     }
 }
 
@@ -243,17 +243,17 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     /// Returns TLS metadata associated with this image.
     #[inline]
     pub fn tls(&self) -> ModuleTls {
-        ModuleTls::new(self.inner.tls.mod_id(), self.inner.tls.tp_offset())
+        self.inner.tls.module()
     }
 
     pub(crate) fn init_tls(&self) -> Result<()> {
-        let Some(info) = self.inner.tls.info() else {
+        if !self.inner.tls.has_image() {
             return Ok(());
-        };
+        }
         let provider = tls_image_provider_handle(self.inner.clone());
         self.inner
             .tls
-            .init_tls(TlsImageSource::new(info, Arc::downgrade(&provider)))
+            .init_tls(TlsImageSource::new(Arc::downgrade(&provider)))
     }
 
     pub(crate) fn tls_addr(&self, offset: usize) -> Option<VmAddr> {
@@ -285,10 +285,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
         phdrs: Vec<ElfPhdr<Arch::Layout>>,
         eh_frame_hdr: Option<NonNull<u8>>,
         mut segments: ElfSegments<R>,
-        tls_mod_id: Option<TlsModuleId>,
-        tls_tp_offset: Option<TlsTpOffset>,
-        tls_info: Option<TlsInfo>,
-        tls_image: Option<MappedView<u8>>,
+        tls: CoreTlsState<Arch, Tls>,
         user_data: D,
     ) -> Result<Self> {
         segments.set_base(base);
@@ -314,7 +311,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
                 symbolic: dynamic.symbolic,
             })),
             scope: OnceCell::new(),
-            tls: CoreTlsState::new(tls_mod_id, tls_tp_offset, tls_info, tls_image),
+            tls,
             segments,
             user_data,
         });
@@ -388,7 +385,7 @@ where
 
     #[inline]
     fn tls(&self) -> ModuleTls {
-        ModuleTls::new(self.tls.mod_id(), self.tls.tp_offset())
+        self.tls.module()
     }
 }
 

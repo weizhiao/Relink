@@ -147,7 +147,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
 
     /// Returns the image core associated with this binding.
     #[inline]
-    pub const fn core(&self) -> &ElfCore<D, Arch, R, Tls> {
+    pub const fn core(&self) -> &'a ElfCore<D, Arch, R, Tls> {
         self.core
     }
 

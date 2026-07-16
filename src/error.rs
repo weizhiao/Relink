@@ -1063,6 +1063,10 @@ pub enum TlsError {
     TemplateUnavailable,
     /// The TLS module ID is not registered.
     InvalidModuleId,
+    /// The TLS segment metadata is invalid.
+    InvalidInfo,
+    /// The supplied module metadata does not match the registered module.
+    ModuleMismatch,
 }
 
 impl Display for TlsError {
@@ -1076,6 +1080,10 @@ impl Display for TlsError {
             }
             Self::TemplateUnavailable => f.write_str("TLS template image is no longer available"),
             Self::InvalidModuleId => f.write_str("TLS module ID is not registered"),
+            Self::InvalidInfo => f.write_str("TLS segment metadata is invalid"),
+            Self::ModuleMismatch => {
+                f.write_str("TLS module metadata does not match the registered module")
+            }
         }
     }
 }

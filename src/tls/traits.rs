@@ -1,4 +1,4 @@
-use super::{TlsDescValue, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsTpOffset};
+use super::{ModuleTls, TlsDescValue, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsRequest};
 use crate::{Result, TlsError, memory::VmAddr, relocation::RelocationArch};
 
 /// A trait for resolving TLS (Thread Local Storage) information.
@@ -10,25 +10,12 @@ pub trait TlsResolver<Arch: RelocationArch>: 'static {
     /// Whether this resolver should override `__tls_get_addr` symbol bindings.
     const OVERRIDE_TLS_GET_ADDR: bool = false;
 
-    /// Registers a module with dynamic TLS and returns the allocated module ID.
+    /// Registers a TLS module using the requested placement.
     ///
     /// # Errors
     ///
-    /// Returns an error if the module ID cannot be allocated.
-    fn register(tls_info: &TlsInfo) -> Result<TlsModuleId>;
-
-    /// Registers a module with static TLS, returning the module ID and its thread pointer offset.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if space cannot be allocated in the static TLS area.
-    fn register_static(tls_info: &TlsInfo) -> Result<(TlsModuleId, TlsTpOffset)>;
-
-    /// Records an existing static TLS module and returns its allocated module ID.
-    ///
-    /// This is used when the TLS block is already set up and its offset from the thread
-    /// pointer is known.
-    fn add_static_tls(tls_info: &TlsInfo, offset: TlsTpOffset) -> Result<TlsModuleId>;
+    /// Returns an error if the requested placement cannot be satisfied.
+    fn register(info: TlsInfo, request: TlsRequest) -> Result<ModuleTls>;
 
     /// Initializes a TLS module from a source that can provide the final
     /// relocated template on demand.
@@ -37,11 +24,7 @@ pub trait TlsResolver<Arch: RelocationArch>: 'static {
     /// This hook is called once the template bytes are ready for future TLS block
     /// initialization. Static resolvers may also copy the template into the current
     /// thread's static TLS area.
-    fn init_tls(
-        source: TlsImageSource,
-        mod_id: TlsModuleId,
-        offset: Option<TlsTpOffset>,
-    ) -> Result<()>;
+    fn init_tls(source: TlsImageSource, mod_id: TlsModuleId) -> Result<()>;
 
     /// Releases resources associated with the given module ID.
     fn unregister(mod_id: TlsModuleId);
@@ -79,23 +62,11 @@ pub trait TlsResolver<Arch: RelocationArch>: 'static {
 }
 
 impl<Arch: RelocationArch> TlsResolver<Arch> for () {
-    fn register(_tls_info: &TlsInfo) -> Result<TlsModuleId> {
+    fn register(_info: TlsInfo, _request: TlsRequest) -> Result<ModuleTls> {
         Err(TlsError::ResolverUnsupported.into())
     }
 
-    fn register_static(_tls_info: &TlsInfo) -> Result<(TlsModuleId, TlsTpOffset)> {
-        Err(TlsError::StaticResolverUnsupported.into())
-    }
-
-    fn add_static_tls(_tls_info: &TlsInfo, _offset: TlsTpOffset) -> Result<TlsModuleId> {
-        Err(TlsError::StaticResolverUnsupported.into())
-    }
-
-    fn init_tls(
-        _source: TlsImageSource,
-        _mod_id: TlsModuleId,
-        _offset: Option<TlsTpOffset>,
-    ) -> Result<()> {
+    fn init_tls(_source: TlsImageSource, _mod_id: TlsModuleId) -> Result<()> {
         Err(TlsError::StaticResolverUnsupported.into())
     }
 

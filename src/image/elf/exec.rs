@@ -8,7 +8,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::ElfPhdr,
-    image::{LoadedCore, ModuleTls, RawDynamic},
+    image::{LoadedCore, RawDynamic},
     input::{Path, PathBuf},
     lazy::{LazyBinder, SupportLazy},
     loader::ImageBuilder,
@@ -17,7 +17,7 @@ use crate::{
     relocation::{Relocatable, RelocateArgs, RelocationArch},
     segment::ElfSegments,
     tls::{
-        TlsImageProvider, TlsImageSource, TlsModuleId, TlsResolver, TlsTemplate, TlsTpOffset,
+        ModuleTls, TlsImageProvider, TlsImageSource, TlsRequest, TlsResolver,
         tls_image_provider_handle,
     },
 };
@@ -72,7 +72,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
 
     /// Returns TLS metadata associated with this image.
     pub fn tls(&self) -> ModuleTls {
-        ModuleTls::new(self.inner.tls_mod_id, self.inner.tls_tp_offset)
+        self.inner.tls
     }
 
     /// Returns user data associated with the image.
@@ -112,23 +112,20 @@ struct StaticExecInner<D, Arch: RelocationArch = NativeArch, R: RegionAccess = H
     /// Program headers
     phdrs: Option<Vec<ElfPhdr<Arch::Layout>>>,
 
-    /// TLS module ID
-    tls_mod_id: Option<TlsModuleId>,
-
-    /// TLS thread pointer offset
-    tls_tp_offset: Option<TlsTpOffset>,
+    /// TLS module placement.
+    tls: ModuleTls,
 
     /// Keeps the static TLS image source alive while the executable is alive.
     _tls_image: Option<Arc<StaticTlsImage>>,
 }
 
 struct StaticTlsImage {
-    template: TlsTemplate<'static>,
+    image: &'static [u8],
 }
 
 impl TlsImageProvider for StaticTlsImage {
-    fn with_tls_template(&self, f: &mut dyn FnMut(TlsTemplate<'_>) -> Result<()>) -> Result<()> {
-        f(self.template)
+    fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+        f(self.image)
     }
 }
 
@@ -418,19 +415,18 @@ where
 
         let entry = self.entry;
         let mut tls_image = None;
-        let (tls_mod_id, tls_tp_offset) = if let Some(info) = &self.tls_info {
-            let template = self
+        let module_tls = if let Some(info) = &self.tls_info {
+            let image = self
                 .segments
                 .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)
                 .ok_or_else(|| crate::ParsePhdrError::malformed("PT_TLS image is malformed"))?;
             tls_image = Some(Arc::new(StaticTlsImage {
-                template: (*info).template(template.as_slice()),
+                image: image.as_slice(),
             }));
             // Static executables always use static TLS if PT_TLS is present.
-            let (mod_id, offset) = Tls::register_static(info)?;
-            (Some(mod_id), Some(offset))
+            Tls::register(*info, TlsRequest::Static(None))?
         } else {
-            (None, None)
+            ModuleTls::NONE
         };
 
         let inner = Arc::new(StaticExecInner {
@@ -443,20 +439,16 @@ where
             } else {
                 Some(phdrs.to_vec())
             },
-            tls_mod_id,
-            tls_tp_offset,
+            tls: module_tls,
             _tls_image: tls_image.clone(),
         });
 
-        if let (Some(mod_id), Some(offset), Some(image)) =
-            (tls_mod_id, tls_tp_offset, tls_image.as_ref())
-        {
+        if let Some(image) = tls_image.as_ref() {
             let provider = tls_image_provider_handle(image.clone());
-            Tls::init_tls(
-                TlsImageSource::new(image.template.info, Arc::downgrade(&provider)),
-                mod_id,
-                Some(offset),
-            )?;
+            let mod_id = module_tls
+                .mod_id()
+                .expect("static TLS image must have a registered module ID");
+            Tls::init_tls(TlsImageSource::new(Arc::downgrade(&provider)), mod_id)?;
         }
 
         Ok(StaticExec { inner })

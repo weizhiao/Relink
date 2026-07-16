@@ -4,12 +4,12 @@ use crate::{
     arch::ArchKind,
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolType},
     hint::unlikely,
-    image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, ModuleTls, SymbolLookup},
+    image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, SymbolLookup},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymDef},
     segment::ElfSegments,
-    tls::{TlsInfo, TlsResolver, TlsTpOffset},
+    tls::{CoreTlsState, ModuleTls, TlsInfo, TlsRequest, TlsResolver, TlsTpOffset},
 };
 use alloc::vec::Vec;
 use core::{ffi::c_void, fmt::Debug, ptr::NonNull};
@@ -404,11 +404,6 @@ impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
             VmOffset::new(0),
         );
         let base = segments.base();
-        let mut tls_mod_id = None;
-        let mut actual_tls_tp_offset = tls_tp_offset;
-        let mut core_tls_info = None;
-        let mut core_tls_image = None;
-
         let mut dynamic = None;
         let mut dynamic_addr = None;
         let mut eh_frame_hdr = None;
@@ -436,17 +431,15 @@ impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
             }
         }
 
-        if let Some(phdr) = tls_phdr {
+        let tls = if let Some(phdr) = tls_phdr {
             let template = segments
                 .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
                 .ok_or(crate::ParsePhdrError::malformed(
                     "PT_TLS image is malformed",
                 ))?;
             let info = TlsInfo::new(phdr);
-            core_tls_info = Some(info);
-            core_tls_image = Some(template);
 
-            let mut static_tls = actual_tls_tp_offset.is_some();
+            let mut static_tls = tls_tp_offset.is_some();
             if !static_tls && let Some(dynamic_entries) = dynamic.as_ref() {
                 for dynamic in dynamic_entries.as_slice() {
                     let tag = dynamic.tag();
@@ -461,20 +454,17 @@ impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
                 }
             }
 
-            // The Tls::register will register the TLS module and return the ID.
-            if static_tls {
-                let (mid, _offset) = if let Some(offset) = actual_tls_tp_offset {
-                    (Tls::add_static_tls(&info, offset)?, offset)
-                } else {
-                    let (mid, offset) = Tls::register_static(&info)?;
-                    actual_tls_tp_offset = Some(offset);
-                    (mid, offset)
-                };
-                tls_mod_id = Some(mid);
+            let request = if let Some(offset) = tls_tp_offset {
+                TlsRequest::Static(Some(offset))
+            } else if static_tls {
+                TlsRequest::Static(None)
             } else {
-                tls_mod_id = Some(Tls::register(&info)?);
-            }
-        }
+                TlsRequest::Dynamic
+            };
+            CoreTlsState::present(Tls::register(info, request)?, template)
+        } else {
+            CoreTlsState::none()
+        };
         let core = unsafe {
             ElfCore::from_raw(
                 path.into(),
@@ -484,10 +474,7 @@ impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
                 phdrs,
                 eh_frame_hdr,
                 segments,
-                tls_mod_id,
-                actual_tls_tp_offset,
-                core_tls_info,
-                core_tls_image,
+                tls,
                 user_data,
             )
         }?;

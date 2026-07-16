@@ -1,4 +1,4 @@
-use super::{Module, ModuleHandle, ModuleTls, SymbolExports, SymbolLookup};
+use super::{Module, ModuleHandle, SymbolExports, SymbolLookup};
 use crate::{
     Result,
     arch::NativeArch,
@@ -7,7 +7,7 @@ use crate::{
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
     sync::Arc,
-    tls::TlsResolver,
+    tls::{ModuleTls, TlsResolver},
 };
 use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 use core::ptr::NonNull;
