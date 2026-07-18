@@ -1,6 +1,6 @@
 use crate::{
     ByteRepr, ParseDynamicError, Result,
-    elf::{ElfStringTable, SymbolTableView, hash::sysv_hash},
+    elf::{ElfLayout, ElfStringTable, SymbolTableView, hash::sysv_hash},
     memory::{ImageMemoryExt, MappedView, RegionAccess, VmAddr, VmOffset},
     segment::ElfSegments,
 };
@@ -326,7 +326,7 @@ impl<'a> SymbolVersion<'a> {
     }
 }
 
-impl<'symtab, L: crate::elf::ElfLayout, H> SymbolTableView<'symtab, L, H> {
+impl<'symtab, L: ElfLayout, H> SymbolTableView<'symtab, L, H> {
     pub(crate) fn get_requirement(&self, sym_idx: usize) -> Option<SymbolVersion<'symtab>> {
         let gnu_version = self.version?;
         let version_index = gnu_version.version_ids.get(sym_idx)?;

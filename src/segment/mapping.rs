@@ -1,5 +1,5 @@
 use crate::input::ElfReader;
-use crate::memory::{ImageMemory, VmAddr, VmOffset};
+use crate::memory::{ImageMemory, RegionAccess, VmAddr, VmOffset};
 use crate::os::{MapFlags, Mmap, ProtFlags};
 use crate::{Result, logging};
 
@@ -100,7 +100,7 @@ impl ElfSegment {
     /// * `Err(Error)` - If protection change fails
     fn mprotect<R>(&self, space: &ElfSegments<R>) -> Result<()>
     where
-        R: crate::memory::RegionAccess,
+        R: RegionAccess,
     {
         if self.need_copy || self.from_relocatable {
             let len = self.len;
@@ -257,7 +257,7 @@ pub(crate) trait SegmentBuilder {
     /// * `Err(Error)` - If protection changes fail
     fn mprotect<R>(&self, space: &ElfSegments<R>) -> Result<()>
     where
-        R: crate::memory::RegionAccess,
+        R: RegionAccess,
     {
         let segments = self.segments();
         for segment in segments {

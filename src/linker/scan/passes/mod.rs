@@ -6,7 +6,7 @@ use super::{
     plan::{LinkPlan, ModuleId},
 };
 use crate::{
-    LinkerError, Result, aligned_bytes::ByteRepr, image::ModuleCapability,
+    LinkerError, Result, aligned_bytes::ByteRepr, arch::NativeArch, image::ModuleCapability,
     relocation::RelocationArch, tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -99,7 +99,7 @@ pub struct LinkPassPlan<
     'a,
     K,
     S = AnyPass,
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     Tls: TlsResolver<Arch> = (),
 > where
     S: PassScopeMode,
@@ -287,7 +287,7 @@ where
 pub trait LinkPass<
     K: Clone + Ord,
     S = AnyPass,
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     Tls: TlsResolver<Arch> = (),
 > where
     S: PassScopeMode,
@@ -306,7 +306,7 @@ type PipelinePass<'a, K, Arch, Tls> =
 pub struct LinkPipeline<
     'a,
     K: Clone + Ord,
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     Tls: TlsResolver<Arch> = (),
 > {
     passes: Vec<PipelinePass<'a, K, Arch, Tls>>,

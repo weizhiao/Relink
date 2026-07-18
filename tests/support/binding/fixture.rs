@@ -151,8 +151,6 @@ impl BindingFixture {
         let loader = Loader::new();
         #[cfg(feature = "tls")]
         let loader = loader.with_default_tls_resolver();
-        #[cfg(not(feature = "tls"))]
-        let mut loader = loader;
 
         let helper_dylib = Relocator::new()
             .run(

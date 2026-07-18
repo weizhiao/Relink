@@ -8,15 +8,17 @@ use super::{
     storage::{ContextId, KeySlot, ModuleId},
 };
 use crate::{
-    Error, LinkContextError, LinkerError, Loader, LoaderRun, Result,
+    ByteRepr, Error, LinkContextError, LinkerError, Loader, LoaderRun, Result,
+    arch::NativeArch,
+    elf::ElfRelType,
     image::{LoadedCore, ModuleScope, RawDynamic},
     lazy::LazyBinder,
-    memory::RegionAccess,
+    memory::{HostRegion, RegionAccess},
     observer::{
         LinkerInitEvent, LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver,
     },
     os::Mmap,
-    relocation::RelocationArch,
+    relocation::{RelocationArch, RelocationValueProvider},
     runtime::CodeExecutor,
     tls::TlsResolver,
 };
@@ -97,10 +99,10 @@ where
     K: Clone + Ord,
     D: Default + 'static,
     Tls: TlsResolver<Arch>,
-    Arch: RelocationArch + crate::relocation::RelocationValueProvider + GotPltTarget,
+    Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
-    crate::elf::ElfRelType<Arch>: crate::ByteRepr,
+    ElfRelType<Arch>: ByteRepr,
     Obs: LinkerObserver<K, D, Arch, M::Region, Tls>
         + LoadObserver<D, Arch>
         + RelocationObserver<Arch>,
@@ -138,7 +140,10 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
     {
-        if let Some(prepared) = PreparedLoad::visible(context, key.borrow()) {
+        context
+            .committed
+            .ensure_domain(self.linker.loader.domain_id())?;
+        if let Some(prepared) = PreparedLoad::visible(context, key.borrow())? {
             return Ok(prepared);
         }
 
@@ -190,7 +195,13 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
     {
-        if let Some(prepared) = PreparedLoad::visible(context, key.borrow()) {
+        context
+            .committed
+            .ensure_domain(self.linker.loader.domain_id())?;
+        context
+            .committed
+            .ensure_domain(raw.core_ref().domain_id())?;
+        if let Some(prepared) = PreparedLoad::visible(context, key.borrow())? {
             return Ok(prepared);
         }
 
@@ -223,7 +234,7 @@ where
             resolve_context.resolve_dependency_graph::<_, _, _, Q>(root, loader, resolver)?;
         }
 
-        Ok(PreparedLoad::new(root, session, None, context))
+        PreparedLoad::new(root, session, None, context)
     }
 
     /// Relocates a prepared module group without borrowing its link context.
@@ -318,7 +329,7 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         failed: FailedLoad<D, Arch, M::Region, Tls>,
-    ) -> crate::Error {
+    ) -> Error {
         let (error, committed) = failed.into_parts();
         for id in committed.into_vec().into_iter().rev() {
             context
@@ -375,10 +386,10 @@ where
     K: Clone + Ord,
     D: Default + 'static,
     Tls: TlsResolver<Arch>,
-    Arch: RelocationArch + crate::relocation::RelocationValueProvider + GotPltTarget,
+    Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
-    crate::elf::ElfRelType<Arch>: crate::ByteRepr,
+    ElfRelType<Arch>: ByteRepr,
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Loads one module into this linker's relocation domain.
@@ -451,13 +462,20 @@ impl<K, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch
 where
     K: Clone + Ord,
 {
-    fn visible<Meta, Q>(context: &LinkContext<K, D, Meta, Arch, Tls>, key: &Q) -> Option<Self>
+    fn visible<Meta, Q>(
+        context: &LinkContext<K, D, Meta, Arch, Tls>,
+        key: &Q,
+    ) -> Result<Option<Self>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let (root, _): (KeySlot, LoadedCore<D, Arch, R, Tls>) = visible_root(context, key)?;
-        Some(Self::new(root, LoadSession::new(), None, context))
+        let Some((root, _)): Option<(KeySlot, LoadedCore<D, Arch, R, Tls>)> =
+            visible_root(context, key)
+        else {
+            return Ok(None);
+        };
+        Self::new(root, LoadSession::new(), None, context).map(Some)
     }
 
     pub(in crate::linker) fn new<Meta>(
@@ -465,15 +483,15 @@ where
         session: LoadSession<D, Arch, R, Tls>,
         mapped_runtime: Option<MappedRuntimeMemory<R>>,
         context: &LinkContext<K, D, Meta, Arch, Tls>,
-    ) -> Self {
+    ) -> Result<Self> {
         let existing_root = context
             .committed
             .get_by_key(root)
             .and_then(|module| module.downcast_ref::<LoadedCore<D, Arch, R, Tls>>())
             .cloned();
-        let scope = session.build_scope(context);
+        let scope = session.build_scope(context)?;
         let root_key = context.committed.key(root).clone();
-        Self {
+        Ok(Self {
             context: context.context_id(),
             root,
             existing_root,
@@ -481,7 +499,7 @@ where
             scope,
             root_key,
             mapped_runtime,
-        }
+        })
     }
 }
 
@@ -506,8 +524,8 @@ pub struct RelocatedLoad<
 #[must_use = "a committed load must be initialized"]
 pub struct CommittedLoad<
     D: 'static,
-    Arch: RelocationArch = crate::arch::NativeArch,
-    R: RegionAccess = crate::memory::HostRegion,
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
     root_id: ModuleId,
@@ -600,8 +618,8 @@ where
 #[must_use = "a failed load must be rolled back or converted into its error"]
 pub struct FailedLoad<
     D: 'static,
-    Arch: RelocationArch = crate::arch::NativeArch,
-    R: RegionAccess = crate::memory::HostRegion,
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
     error: Error,

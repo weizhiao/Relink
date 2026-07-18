@@ -5,8 +5,11 @@ use crate::sync::Arc;
 use crate::{
     ParseEhdrError, ParsePhdrError, Result,
     arch::NativeArch,
-    elf::{ElfFileType, ElfHeader, ElfPhdr, ElfProgramType, ElfShdr},
-    image::{RawDylib, RawDynamic, RawElf, RawExec, ScannedDynamic, ScannedElf, ScannedExec},
+    elf::{ElfFileType, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, ElfShdr},
+    image::{
+        RawDylib, RawDynamic, RawElf, RawExec, ScannedDynamic, ScannedDynamicLoadParts, ScannedElf,
+        ScannedExec,
+    },
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
     memory::{VmAddr, VmOffset},
@@ -321,6 +324,8 @@ where
             page_size,
             user_data,
             executor,
+            self.loader.domain_id(),
+            self.loader.tls_resolver(),
         );
         let mut image = builder.build_dynamic(phdrs)?;
         self.observer
@@ -342,7 +347,7 @@ where
         &mut self,
         scanned: ScannedDynamic<Arch>,
     ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
-        let crate::image::ScannedDynamicLoadParts {
+        let ScannedDynamicLoadParts {
             ehdr,
             phdrs,
             reader,
@@ -378,6 +383,8 @@ where
             page_size,
             user_data,
             self.loader.executor(),
+            self.loader.domain_id(),
+            self.loader.tls_resolver(),
         );
         let mut image = builder.build_dynamic(&phdrs)?;
         self.observer
@@ -439,6 +446,8 @@ where
             page_size,
             D::default(),
             self.loader.executor(),
+            self.loader.domain_id(),
+            self.loader.tls_resolver(),
         );
         let mut image = builder.build_dynamic(&phdrs)?;
         self.observer
@@ -510,6 +519,8 @@ where
             page_size,
             user_data,
             executor,
+            self.loader.domain_id(),
+            self.loader.tls_resolver(),
         );
         let mut exec = builder.build_exec(phdrs, has_dynamic)?;
         if let RawExec::Dynamic(dynamic) = &mut exec {
@@ -530,7 +541,7 @@ where
 }
 
 #[inline]
-fn has_dynamic_phdr<L: crate::elf::ElfLayout>(phdrs: &[ElfPhdr<L>]) -> bool {
+fn has_dynamic_phdr<L: ElfLayout>(phdrs: &[ElfPhdr<L>]) -> bool {
     phdrs
         .iter()
         .any(|phdr| phdr.program_type() == ElfProgramType::DYNAMIC)
@@ -654,7 +665,8 @@ where
 mod tests {
     use super::{ElfHeader, ElfPhdr};
     use crate::{
-        Result,
+        Error, IoError, ParsePhdrError, Result,
+        arch::NativeArch,
         elf::{ElfEhdr, ElfLayout, NativeElfLayout},
         input::{ElfReader, Path},
         loader::ElfBuf,
@@ -739,7 +751,7 @@ mod tests {
         ehdr.e_ident[EI_DATA] = <NativeElfLayout as ElfLayout>::DATA_ENCODING.raw();
         ehdr.e_ident[EI_VERSION] = EV_CURRENT;
         ehdr.e_type = ET_DYN as _;
-        ehdr.e_machine = crate::arch::NativeArch::MACHINE.raw();
+        ehdr.e_machine = NativeArch::MACHINE.raw();
         ehdr.e_version = EV_CURRENT.into();
         ehdr.e_ehsize = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
         ehdr.e_phoff = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
@@ -749,7 +761,7 @@ mod tests {
         ehdr.e_shentsize = shentsize as _;
         ehdr.e_shnum = shnum as _;
 
-        ElfHeader::from_raw(ehdr, Some(crate::arch::NativeArch::MACHINE))
+        ElfHeader::from_raw(ehdr, Some(NativeArch::MACHINE))
             .expect("failed to parse crafted header")
     }
 
@@ -764,7 +776,7 @@ mod tests {
             .expect_err("phdr entry size mismatch should fail");
         assert!(matches!(
             err,
-            crate::Error::ParsePhdr(crate::ParsePhdrError::InvalidEntrySize { .. })
+            Error::ParsePhdr(ParsePhdrError::InvalidEntrySize { .. })
         ));
     }
 
@@ -778,10 +790,7 @@ mod tests {
         let err = elf_buf
             .prepare_phdrs(&header, &reader)
             .expect_err("phdr table past object length should fail");
-        assert!(matches!(
-            err,
-            crate::Error::Io(crate::IoError::ReadOutOfBounds(_))
-        ));
+        assert!(matches!(err, Error::Io(IoError::ReadOutOfBounds(_))));
     }
 
     #[test]

@@ -5,7 +5,7 @@
 
 use crate::sync::Arc;
 use crate::{
-    Result,
+    ParsePhdrError, Result,
     arch::NativeArch,
     elf::ElfPhdr,
     image::{LoadedCore, RawDynamic},
@@ -15,6 +15,7 @@ use crate::{
     memory::{HostRegion, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch},
+    runtime::DomainId,
     segment::ElfSegments,
     tls::{
         ModuleTls, TlsImageProvider, TlsImageSource, TlsRequest, TlsResolver,
@@ -28,12 +29,19 @@ use core::fmt::Debug;
 ///
 /// Static executables do not have `PT_DYNAMIC`, so they are ready to run after
 /// mapping and any static TLS setup performed by the loader.
-pub struct StaticExec<D, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
-    inner: Arc<StaticExecInner<D, Arch, R>>,
+pub struct StaticExec<
+    D,
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = HostRegion,
+    Tls: TlsResolver<Arch> = (),
+> {
+    inner: Arc<StaticExecInner<D, Arch, R, Tls>>,
 }
 
 // Keep this impl manual so cloning a static executable handle does not require D, Arch, or R to be Clone.
-impl<D, Arch: RelocationArch, R: RegionAccess> Clone for StaticExec<D, Arch, R> {
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
+    for StaticExec<D, Arch, R, Tls>
+{
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -42,7 +50,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Clone for StaticExec<D, Arch, R> 
     }
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess> Debug for StaticExec<D, Arch, R> {
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
+    for StaticExec<D, Arch, R, Tls>
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("StaticExec")
             .field("path", &self.inner.path)
@@ -50,7 +60,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess> Debug for StaticExec<D, Arch, R> 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    StaticExec<D, Arch, R, Tls>
+{
     /// Returns the source path or caller-provided path identifier.
     pub fn path(&self) -> &Path {
         self.inner.path.as_path()
@@ -70,8 +82,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
         self.inner.entry
     }
 
-    /// Returns TLS metadata associated with this image.
-    pub fn tls(&self) -> ModuleTls {
+    /// Returns TLS metadata when this image owns a TLS block.
+    pub fn tls(&self) -> Option<ModuleTls> {
         self.inner.tls
     }
 
@@ -96,7 +108,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess> StaticExec<D, Arch, R> {
     }
 }
 
-struct StaticExecInner<D, Arch: RelocationArch = NativeArch, R: RegionAccess = HostRegion> {
+struct StaticExecInner<
+    D,
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = HostRegion,
+    Tls: TlsResolver<Arch> = (),
+> {
     /// Loader source path or caller-provided source identifier.
     path: PathBuf,
 
@@ -113,10 +130,26 @@ struct StaticExecInner<D, Arch: RelocationArch = NativeArch, R: RegionAccess = H
     phdrs: Option<Vec<ElfPhdr<Arch::Layout>>>,
 
     /// TLS module placement.
-    tls: ModuleTls,
+    tls: Option<ModuleTls>,
+
+    /// Resolver that owns the TLS registration.
+    tls_resolver: Tls,
+
+    /// Runtime domain in which this executable was loaded.
+    domain: DomainId,
 
     /// Keeps the static TLS image source alive while the executable is alive.
     _tls_image: Option<Arc<StaticTlsImage>>,
+}
+
+impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Drop
+    for StaticExecInner<D, Arch, R, Tls>
+{
+    fn drop(&mut self) {
+        if let Some(tls) = self.tls {
+            self.tls_resolver.unregister(tls.mod_id());
+        }
+    }
 }
 
 struct StaticTlsImage {
@@ -135,6 +168,13 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     type Output = LoadedExec<D, Arch, R, Tls>;
     type Arch = Arch;
     type Tls = Tls;
+
+    fn domain_id(&self) -> DomainId {
+        match self {
+            Self::Dynamic(image) => image.core_ref().domain_id(),
+            Self::Static(image) => image.inner.domain,
+        }
+    }
 
     fn relocate<Obs, Binder>(
         self,
@@ -174,12 +214,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
 /// The dynamic variant intentionally stays inline to avoid changing the public
 /// enum shape or adding an allocation to executable loading.
 #[allow(clippy::large_enum_variant)]
-pub enum RawExec<
-    D,
-    Arch = crate::arch::NativeArch,
-    R: RegionAccess = HostRegion,
-    Tls: TlsResolver<Arch> = (),
-> where
+pub enum RawExec<D, Arch = NativeArch, R: RegionAccess = HostRegion, Tls: TlsResolver<Arch> = ()>
+where
     D: 'static,
     Arch: RelocationArch,
 {
@@ -187,7 +223,7 @@ pub enum RawExec<
     Dynamic(RawDynamic<D, Arch, R, Tls>),
 
     /// A statically linked executable without `PT_DYNAMIC`.
-    Static(StaticExec<D, Arch, R>),
+    Static(StaticExec<D, Arch, R, Tls>),
 }
 
 impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
@@ -232,8 +268,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
         }
     }
 
-    /// Returns TLS metadata associated with this executable.
-    pub fn tls(&self) -> ModuleTls {
+    /// Returns TLS metadata when this executable owns a TLS block.
+    pub fn tls(&self) -> Option<ModuleTls> {
         match self {
             RawExec::Dynamic(image) => image.tls(),
             RawExec::Static(image) => image.tls(),
@@ -306,7 +342,7 @@ enum LoadedExecInner<
     Tls: TlsResolver<Arch> = (),
 > {
     Dynamic(LoadedCore<D, Arch, R, Tls>),
-    Static(StaticExec<D, Arch, R>),
+    Static(StaticExec<D, Arch, R, Tls>),
 }
 
 // Keep this impl manual so cloning a loaded executable does not require D, Arch, or R to be Clone.
@@ -394,8 +430,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
         }
     }
 
-    /// Returns TLS metadata associated with this executable.
-    pub fn tls(&self) -> ModuleTls {
+    /// Returns TLS metadata when this executable owns a TLS block.
+    pub fn tls(&self) -> Option<ModuleTls> {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => module.tls(),
             LoadedExecInner::Static(static_image) => static_image.tls(),
@@ -410,7 +446,7 @@ where
     pub(crate) fn build_static_exec(
         mut self,
         phdrs: &[ElfPhdr<Arch::Layout>],
-    ) -> Result<StaticExec<D, Arch, R>> {
+    ) -> Result<StaticExec<D, Arch, R, Tls>> {
         self.parse_phdrs(phdrs)?;
 
         let entry = self.entry;
@@ -419,14 +455,17 @@ where
             let image = self
                 .segments
                 .read_view::<u8>(VmOffset::new(info.vaddr), info.filesz)
-                .ok_or_else(|| crate::ParsePhdrError::malformed("PT_TLS image is malformed"))?;
+                .ok_or_else(|| ParsePhdrError::malformed("PT_TLS image is malformed"))?;
             tls_image = Some(Arc::new(StaticTlsImage {
                 image: image.as_slice(),
             }));
             // Static executables always use static TLS if PT_TLS is present.
-            Tls::register(*info, TlsRequest::Static(None))?
+            Some(
+                self.tls_resolver
+                    .register(*info, TlsRequest::Static(None))?,
+            )
         } else {
-            ModuleTls::NONE
+            None
         };
 
         let inner = Arc::new(StaticExecInner {
@@ -440,15 +479,18 @@ where
                 Some(phdrs.to_vec())
             },
             tls: module_tls,
+            tls_resolver: self.tls_resolver.clone(),
+            domain: self.domain,
             _tls_image: tls_image.clone(),
         });
 
         if let Some(image) = tls_image.as_ref() {
             let provider = tls_image_provider_handle(image.clone());
             let mod_id = module_tls
-                .mod_id()
-                .expect("static TLS image must have a registered module ID");
-            Tls::init_tls(TlsImageSource::new(Arc::downgrade(&provider)), mod_id)?;
+                .expect("static TLS image must have registered module metadata")
+                .mod_id();
+            self.tls_resolver
+                .publish(TlsImageSource::new(Arc::downgrade(&provider)), mod_id)?;
         }
 
         Ok(StaticExec { inner })

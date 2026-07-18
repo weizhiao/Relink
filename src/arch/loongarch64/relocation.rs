@@ -5,9 +5,10 @@ use elf::abi::EM_LOONGARCH;
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::lazy::LazyBindingSlots;
+use crate::linker::scan::GotPltTarget;
 #[cfg(feature = "object")]
 use crate::relocation::ObjectArch;
-use crate::relocation::RelocationArch;
+use crate::relocation::{RelocationArch, RelocationValueProvider};
 
 const R_LARCH_64: u32 = 2;
 const R_LARCH_RELATIVE: u32 = 3;
@@ -66,5 +67,5 @@ impl ObjectArch for LoongArch64Arch {
     type State = ();
 }
 
-impl crate::relocation::RelocationValueProvider for LoongArch64Arch {}
-impl crate::linker::scan::GotPltTarget for LoongArch64Arch {}
+impl RelocationValueProvider for LoongArch64Arch {}
+impl GotPltTarget for LoongArch64Arch {}

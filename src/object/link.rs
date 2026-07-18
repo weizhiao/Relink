@@ -1,17 +1,19 @@
 use crate::{
-    LinkerError, RelocReason, Result,
+    Error, LinkerError, RelocReason, Result,
     elf::{
         ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr, ElfSymbol,
         ElfSymbolType,
     },
-    image::{LoadedCore, LoadedObject, ModuleScope, RawObject, exports_handle},
+    image::{ElfCore, LoadedCore, LoadedObject, ModuleScope, RawObject, exports_handle},
     lazy::LazyBinder,
     logging,
     memory::{RegionAccess, VmAddr, VmOffset},
     object::{ObjectExports, ObjectSegmentView, section_entries},
     observer::{LifecycleRunner, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
-    relocation::{ObjectArch, RelocHelper, RelocateArgs, find_symdef_impl},
+    relocation::{ObjectArch, RelocHelper, RelocateArgs, RelocationArch, find_symdef_impl},
+    runtime::CodeContext,
+    sync::Arc,
     tls::TlsResolver,
 };
 
@@ -66,6 +68,7 @@ where
             observer,
             ..
         } = args;
+        scope.ensure_domain(self.core.domain_id())?;
         self.simplify_symbols(&scope, observer)?;
 
         let relocation_segments =
@@ -122,7 +125,7 @@ where
         observer.on_object_relocated(&mut event)?;
         let (exports, mut lifecycle) = event.into_parts();
         let exports = exports.unwrap_or_else(|| exports_handle(self.default_exports()));
-        let inner = crate::sync::Arc::get_mut(&mut self.core.inner)
+        let inner = Arc::get_mut(&mut self.core.inner)
             .ok_or_else(|| LinkerError::ObjectCoreRetainedBeforeExports)?;
         inner.exports = exports;
         let object_segments =
@@ -141,9 +144,9 @@ where
                 .upgrade()
                 .expect("object core must remain alive during initialization");
             let memory = ObjectSegmentView::new(core.segments(), init_segments.as_ref());
-            let ctx = crate::runtime::CodeContext::<Arch>::new(core.name(), &memory);
+            let ctx = CodeContext::<Arch>::new(core.name(), &memory);
             for addr in event.lifecycle().func_addrs() {
-                core.executor().call_init(ctx, addr)?;
+                core.executor().call_lifecycle(ctx, addr)?;
             }
             section_segments.mprotect_final(&memory)?;
             event.lifecycle_mut().clear();
@@ -257,13 +260,10 @@ where
 }
 
 #[cold]
-fn unresolved_symbol_error<D, Arch, R, Tls>(
-    core: &crate::image::ElfCore<D, Arch, R, Tls>,
-    name: &str,
-) -> crate::Error
+fn unresolved_symbol_error<D, Arch, R, Tls>(core: &ElfCore<D, Arch, R, Tls>, name: &str) -> Error
 where
     D: 'static,
-    Arch: crate::relocation::RelocationArch,
+    Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {

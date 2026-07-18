@@ -3,6 +3,7 @@ use crate::{
     elf::{ElfLayout, ElfSymbol, SymbolLookup, SymbolTable},
     memory::ImageMemory,
     relocation::RelocationArch,
+    runtime::DomainId,
     sync::Arc,
     tls::{ModuleTls, TlsResolver},
 };
@@ -75,10 +76,13 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
     /// Returns this module's runtime memory view.
     fn memory(&self) -> &dyn ImageMemory;
 
-    /// Returns TLS metadata for this module.
-    fn tls(&self) -> ModuleTls {
-        ModuleTls::NONE
+    /// Returns TLS metadata when this module owns a TLS block.
+    fn tls(&self) -> Option<ModuleTls> {
+        None
     }
+
+    /// Returns the runtime domain in which this module's addresses are meaningful.
+    fn domain_id(&self) -> DomainId;
 }
 
 impl<M, Arch, Tls> Module<Arch, Tls> for Arc<M>
@@ -103,7 +107,12 @@ where
     }
 
     #[inline]
-    fn tls(&self) -> ModuleTls {
+    fn tls(&self) -> Option<ModuleTls> {
         (**self).tls()
+    }
+
+    #[inline]
+    fn domain_id(&self) -> DomainId {
+        (**self).domain_id()
     }
 }

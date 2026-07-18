@@ -9,12 +9,13 @@ use elf_loader::{
     LinkContext, Linker,
     input::{Path as ElfPath, PathBuf},
     linker::{CandidateRequest, SearchPathResolver},
+    runtime::DomainId,
 };
 
 #[test]
 fn loads_fixture_chain() {
     let fixtures = fixture_support::ensure_all();
-    let mut context = LinkContext::<PathBuf, ()>::new();
+    let mut context = LinkContext::<PathBuf, ()>::new(DomainId::PROCESS);
 
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
@@ -28,7 +29,7 @@ fn loads_fixture_chain() {
 #[test]
 fn supports_string_keys() {
     let fixtures = fixture_support::ensure_all();
-    let mut context = LinkContext::<String, ()>::new();
+    let mut context = LinkContext::<String, ()>::new(DomainId::PROCESS);
 
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
@@ -43,7 +44,7 @@ fn supports_string_keys() {
 #[cfg(target_arch = "x86_64")]
 fn scan_first_loads_fixture_chain() {
     let fixtures = fixture_support::ensure_all();
-    let mut context = LinkContext::<PathBuf, ()>::new();
+    let mut context = LinkContext::<PathBuf, ()>::new(DomainId::PROCESS);
 
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
@@ -79,7 +80,7 @@ fn dynamic_dirs_share_search_order_with_static_dirs() {
     });
     resolver.push_fixed_dir(static_dir);
 
-    let mut context = LinkContext::<PathBuf, ()>::new();
+    let mut context = LinkContext::<PathBuf, ()>::new(DomainId::PROCESS);
     let loaded = Linker::new()
         .resolver(resolver)
         .load(&mut context, PathBuf::from("libpick.so"))

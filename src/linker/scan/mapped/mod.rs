@@ -1,8 +1,8 @@
 use super::layout::{MemoryLayoutPlan, SectionId};
 use super::plan::{LinkPlan, ModuleId};
 use crate::{
-    LinkerError, Result,
-    elf::{ElfPhdr, ElfProgramType},
+    ByteRepr, LinkerError, Result,
+    elf::{ElfPhdr, ElfProgramType, ElfRelType},
     entity::SecondaryMap,
     image::{RawDynamic, ScannedDynamic},
     input::PathBuf,
@@ -10,7 +10,7 @@ use crate::{
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
     os::Mmap,
     relocation::{RelocationArch, RelocationValueProvider},
-    runtime::{CodeExecutor, NativeCodeExecutor},
+    runtime::{CodeExecutor, DomainId, NativeCodeExecutor},
     segment::ElfSegments,
     sync::Arc,
     tls::TlsResolver,
@@ -220,7 +220,7 @@ impl<R: RegionAccess> MappedRuntimeMemory<R> {
         K: Clone + Ord,
         Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
         Tls: TlsResolver<Arch>,
-        crate::elf::ElfRelType<Arch>: crate::ByteRepr,
+        ElfRelType<Arch>: ByteRepr,
     {
         let runtime = self.modules.get(id).ok_or_else(|| {
             LinkerError::runtime_memory("section-region module runtime memory was not cached")
@@ -256,6 +256,8 @@ pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch, R>(
     scanned: ScannedDynamic<Arch>,
     runtime: RuntimeModuleMemory<R>,
     force_static_tls: bool,
+    domain: DomainId,
+    tls_resolver: Tls,
 ) -> Result<RawDynamic<D, Arch, R, Tls>>
 where
     D: Default + 'static,
@@ -281,6 +283,8 @@ where
         1,
         D::default(),
         Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>),
+        domain,
+        tls_resolver,
     );
     builder.build_dynamic(&phdrs)
 }

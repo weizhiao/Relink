@@ -2,91 +2,85 @@ use super::{
     defs::{ModuleTls, TlsImageSource, TlsIndex},
     traits::TlsResolver,
 };
-use crate::{
-    Result,
-    memory::{MappedView, VmAddr},
-    relocation::RelocationArch,
-};
+use crate::{Result, TlsError, memory::MappedView, relocation::RelocationArch};
 use core::marker::PhantomData;
 
 /// TLS runtime state attached to a loaded ELF core.
 ///
 /// This stores resolver-provided TLS metadata independently of the built-in TLS
 /// manager. The `tls` feature only controls the default same-process resolver.
-pub(crate) enum CoreTlsState<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
-    None(PhantomData<fn() -> (Arch, Tls)>),
-    Present {
-        module: ModuleTls,
-        image: &'static [u8],
-        marker: PhantomData<fn() -> (Arch, Tls)>,
-    },
+pub(crate) struct CoreTlsState<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+    resolver: Tls,
+    registration: Option<TlsRegistration>,
+    arch: PhantomData<fn() -> Arch>,
+}
+
+struct TlsRegistration {
+    module: ModuleTls,
+    image: &'static [u8],
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> CoreTlsState<Arch, Tls> {
     #[inline]
-    pub(crate) const fn none() -> Self {
-        Self::None(PhantomData)
+    pub(crate) fn without_module(resolver: Tls) -> Self {
+        Self {
+            resolver,
+            registration: None,
+            arch: PhantomData,
+        }
     }
 
-    pub(crate) fn present(module: ModuleTls, image: MappedView<u8>) -> Self {
-        assert!(
-            module.mod_id().is_some(),
-            "present TLS state must have a module ID"
-        );
-        Self::Present {
-            module,
-            image: image.as_slice(),
-            marker: PhantomData,
+    pub(crate) fn with_module(resolver: Tls, module: ModuleTls, image: MappedView<u8>) -> Self {
+        Self {
+            resolver,
+            registration: Some(TlsRegistration {
+                module,
+                image: image.as_slice(),
+            }),
+            arch: PhantomData,
         }
     }
 
     #[inline]
-    pub(crate) fn module(&self) -> ModuleTls {
-        match self {
-            Self::None(_) => ModuleTls::NONE,
-            Self::Present { module, .. } => *module,
-        }
+    pub(crate) fn resolver(&self) -> &Tls {
+        &self.resolver
     }
 
     #[inline]
-    pub(crate) fn cleanup(&self) {
-        if let Self::Present { module, .. } = self
-            && let Some(mod_id) = module.mod_id()
-        {
-            Tls::unregister(mod_id);
-        }
-    }
-
-    #[inline]
-    pub(crate) fn has_image(&self) -> bool {
-        matches!(self, Self::Present { .. })
+    pub(crate) fn module(&self) -> Option<ModuleTls> {
+        self.registration
+            .as_ref()
+            .map(|registration| registration.module)
     }
 
     pub(crate) fn with_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
-        let Self::Present { image, .. } = self else {
-            panic!("TLS image provider must have an image");
-        };
-        f(image)
+        let registration = self
+            .registration
+            .as_ref()
+            .ok_or(TlsError::TemplateUnavailable)?;
+        f(registration.image)
     }
 
-    pub(crate) fn init_tls(&self, source: TlsImageSource) -> Result<()> {
-        let Self::Present { module, .. } = self else {
+    pub(crate) fn publish(&self, source: TlsImageSource) -> Result<()> {
+        let Some(registration) = &self.registration else {
             return Ok(());
         };
-        let mod_id = module
-            .mod_id()
-            .expect("present TLS state must have a module ID");
-        Tls::init_tls(source, mod_id)
+        self.resolver.publish(source, registration.module.mod_id())
     }
 
-    pub(crate) fn addr(&self, offset: usize) -> Option<VmAddr> {
-        let Self::Present { module, .. } = self else {
-            return None;
-        };
-        let ti = TlsIndex {
-            ti_module: module.mod_id()?,
+    pub(crate) fn index(&self, offset: usize) -> Option<TlsIndex> {
+        let registration = self.registration.as_ref()?;
+        Some(TlsIndex {
+            ti_module: registration.module.mod_id(),
             ti_offset: offset.wrapping_sub(Arch::TLS_DTV_OFFSET),
-        };
-        Tls::resolve_tls_addr(ti).ok()
+        })
+    }
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Drop for CoreTlsState<Arch, Tls> {
+    fn drop(&mut self) {
+        if let Some(registration) = &self.registration {
+            self.resolver.unregister(registration.module.mod_id());
+        }
     }
 }

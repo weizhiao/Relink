@@ -9,9 +9,10 @@
 //! SYSV hash table (.hash) as it provides better performance and memory usage.
 
 use crate::elf::{
-    ElfDynamic, ElfDynamicHashTab, ElfLayout, ElfSymbol, SymbolLookup, SymbolTableView,
+    ElfDynamic, ElfDynamicHashTab, ElfLayout, ElfSymbol, NativeElfLayout, SymbolLookup,
+    SymbolTableView,
 };
-use crate::{Result, memory::RegionAccess, segment::ElfSegments};
+use crate::{Result, memory::RegionAccess, relocation::RelocationArch, segment::ElfSegments};
 use core::fmt::Debug;
 use gnu::ElfGnuHash;
 use sysv::ElfHash;
@@ -47,9 +48,9 @@ pub trait SymbolHash<L: ElfLayout> {
 /// Dynamic ELF files may carry either a GNU hash table or the traditional SYSV
 /// hash table. Both represent the same role in this loader, so the distinction
 /// is kept inside this implementation detail.
-pub struct HashTable<L: ElfLayout = crate::elf::NativeElfLayout>(HashTableKind<L>);
+pub struct HashTable<L: ElfLayout = NativeElfLayout>(HashTableKind<L>);
 
-enum HashTableKind<L: ElfLayout = crate::elf::NativeElfLayout> {
+enum HashTableKind<L: ElfLayout = NativeElfLayout> {
     /// GNU hash table (.gnu.hash section).
     Gnu(ElfGnuHash<L>),
 
@@ -102,7 +103,7 @@ pub(in crate::elf) struct PreCompute {
 impl PreCompute {
     #[inline]
     pub(in crate::elf) fn new(name: &str) -> Self {
-        let gnuhash = ElfGnuHash::<crate::elf::NativeElfLayout>::hash(name.as_bytes()) as u32;
+        let gnuhash = ElfGnuHash::<NativeElfLayout>::hash(name.as_bytes()) as u32;
         Self {
             gnuhash,
             hash: None,
@@ -129,7 +130,7 @@ impl<L: ElfLayout> HashTable<L> {
         segments: &ElfSegments<R>,
     ) -> Result<Self>
     where
-        Arch: crate::relocation::RelocationArch<Layout = L>,
+        Arch: RelocationArch<Layout = L>,
         R: RegionAccess,
     {
         Ok(Self(match dynamic.hashtab {

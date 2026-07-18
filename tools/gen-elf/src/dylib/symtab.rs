@@ -170,7 +170,7 @@ impl SymTabMetadata {
     fn add_symbols(&mut self, symbols: &[SymbolDesc]) {
         // Add IFUNC resolver symbol early so it can be used by relocations
         let resolver_name = IFUNC_RESOLVER_NAME;
-        let resolver_code = crate::arch::get_ifunc_resolver_code(self.arch);
+        let resolver_code = arch::get_ifunc_resolver_code(self.arch);
         let resolver_desc = SymbolDesc::global_func(resolver_name, &resolver_code);
         self.add_single_symbol(resolver_desc);
 
@@ -339,7 +339,7 @@ impl SymTabMetadata {
             self.plt_entries.push((plt_idx, got_plt_idx));
 
             let test_helper = format!("{}{}", func_name, HELPER_SUFFIX);
-            let helper_code = crate::arch::generate_helper_code(self.arch);
+            let helper_code = arch::generate_helper_code(self.arch);
             let helper_desc = SymbolDesc::global_func(test_helper, &helper_code);
             let helper_idx = self.add_single_symbol(helper_desc);
             self.helper_index.insert(plt_idx, helper_idx);
@@ -368,7 +368,7 @@ impl SymTabMetadata {
                 continue;
             }
 
-            let helper_code = crate::arch::generate_tls_helper_code(self.arch);
+            let helper_code = arch::generate_tls_helper_code(self.arch);
             let helper_desc = SymbolDesc::global_func(test_helper, &helper_code);
             let helper_idx = self.add_single_symbol(helper_desc);
             self.tls_helper_index.insert(tls_idx, helper_idx);
@@ -413,7 +413,7 @@ impl SymTabMetadata {
         if let Some(plt0_idx) = self.plt0_idx {
             let plt0_sym = &self.dynsym[plt0_idx];
             let plt0_off = (plt0_sym.value - plt_vaddr) as usize;
-            crate::arch::patch_plt0(self.arch, plt_data, plt0_off, plt0_sym.value, got_plt_vaddr);
+            arch::patch_plt0(self.arch, plt_data, plt0_off, plt0_sym.value, got_plt_vaddr);
         }
 
         // 2. Patch PLT entries
@@ -422,7 +422,7 @@ impl SymTabMetadata {
             let plt_sym = &self.dynsym[*plt_idx];
             let plt_off = (plt_sym.value - plt_vaddr) as usize;
             let target_got_vaddr = got_plt_vaddr + (got_idx * word_size);
-            crate::arch::patch_plt_entry(
+            arch::patch_plt_entry(
                 self.arch,
                 plt_data,
                 plt_off,
@@ -441,7 +441,7 @@ impl SymTabMetadata {
             let helper_text_off = (helper_sym.value - text_vaddr) as usize;
             let target_plt_vaddr = plt_sym.value;
 
-            crate::arch::patch_plt_testers(
+            arch::patch_plt_testers(
                 self.arch,
                 text_data,
                 helper_text_off,
@@ -472,7 +472,7 @@ impl SymTabMetadata {
             let helper_text_off = (helper_sym.value - text_vaddr) as usize;
 
             if let Some(reloc_vaddr) = reloc.find_tls_reloc_vaddr(tls_idx as u64, shdr) {
-                crate::arch::patch_tls_tester(
+                arch::patch_tls_tester(
                     self.arch,
                     text_data,
                     helper_text_off,
@@ -495,7 +495,7 @@ impl SymTabMetadata {
         if let Some(&resolver_idx) = self.sym_index.get(resolver_name) {
             let resolver_sym = &self.dynsym[resolver_idx];
             let resolver_text_off = (resolver_sym.value - text_vaddr) as usize;
-            crate::arch::patch_ifunc_resolver(
+            arch::patch_ifunc_resolver(
                 self.arch,
                 text_data,
                 resolver_text_off,

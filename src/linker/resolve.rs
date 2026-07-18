@@ -4,9 +4,10 @@ use super::{
     storage::{CommittedStorage, KeySlot},
 };
 use crate::{
-    LinkResolverError, LinkerError, LoaderRun, Result,
+    LinkResolverError, LinkerError, LoaderRun, ParsePhdrError, Result,
+    arch::NativeArch,
     image::{ModuleHandle, RawDynamic, ScannedDynamic, ScannedElf},
-    memory::RegionAccess,
+    memory::{HostRegion, RegionAccess},
     observer::{LinkerObserver, LoadObserver},
     os::Mmap,
     relocation::RelocationArch,
@@ -60,7 +61,7 @@ pub(crate) struct ResolveContext<
     K: Clone,
     D: 'static,
     Meta = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     P = (),
     Tls: TlsResolver<Arch> = (),
 > {
@@ -73,12 +74,12 @@ pub(crate) type LoadResolveContext<
     K,
     D,
     Meta = (),
-    Arch = crate::arch::NativeArch,
-    R = crate::memory::HostRegion,
+    Arch = NativeArch,
+    R = HostRegion,
     Tls = (),
 > = ResolveContext<'a, K, D, Meta, Arch, RawDynamic<D, Arch, R, Tls>, Tls>;
 
-pub(crate) type ScanResolveContext<'a, K, D, Meta = (), Arch = crate::arch::NativeArch, Tls = ()> =
+pub(crate) type ScanResolveContext<'a, K, D, Meta = (), Arch = NativeArch, Tls = ()> =
     ResolveContext<'a, K, D, Meta, Arch, ScannedDynamic<Arch>, Tls>;
 
 impl<'a, K: Clone, D: 'static, Meta, Arch, P, Tls> ResolveContext<'a, K, D, Meta, Arch, P, Tls>
@@ -148,12 +149,13 @@ where
         key: K,
         module: ModuleHandle<Arch, Tls>,
         direct_deps: Box<[KeySlot]>,
-    ) -> KeySlot {
+    ) -> Result<KeySlot> {
+        self.committed.ensure_domain(module.domain_id())?;
         let slot = self.intern_key(key);
         self.session
             .module_handles
             .insert(slot, ModuleEntry::new(module, direct_deps));
-        slot
+        Ok(slot)
     }
 
     fn stage_existing_key<Q, R, Obs>(&mut self, key: K, observer: &Obs) -> Result<KeySlot>
@@ -180,7 +182,7 @@ where
             .map(|key| self.intern_key(key))
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let slot = self.stage_module_handle(key, module, direct_deps);
+        let slot = self.stage_module_handle(key, module, direct_deps)?;
         for dep in direct_dep_keys {
             self.stage_existing_key::<Q, R, Obs>(dep, observer)?;
         }
@@ -404,7 +406,7 @@ where
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
                     ctx.stage::<Obs, M, Exec, Q>(dep, loader)
                 })?;
-                Ok(self.stage_module_handle(key, module, direct_deps))
+                self.stage_module_handle(key, module, direct_deps)
             }
         }
     }
@@ -459,7 +461,7 @@ where
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
                 let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
-                    return Err(crate::ParsePhdrError::MissingDynamicSection.into());
+                    return Err(ParsePhdrError::MissingDynamicSection.into());
                 };
                 let slot = self.intern_key(key);
                 self.session.dynamics.insert(slot, GraphEntry::new(module));
@@ -473,7 +475,7 @@ where
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
                     ctx.stage::<Obs, M, Exec, Q>(dep, loader)
                 })?;
-                Ok(self.stage_module_handle(key, module, direct_deps))
+                self.stage_module_handle(key, module, direct_deps)
             }
         }
     }

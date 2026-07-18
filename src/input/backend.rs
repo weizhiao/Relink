@@ -1,16 +1,14 @@
 use super::{ElfReader, IntoElfReader, Path, PathBuf};
-use crate::{Result, logging, os::RawFile};
+use crate::{IoError, ReadBoundsError, Result, logging, os::RawFile};
 use alloc::{borrow::Cow, boxed::Box, string::String, vec::Vec};
 use core::ops::Range;
 
 fn checked_read_range(offset: usize, len: usize, available: usize) -> Result<Range<usize>> {
     let Some(end) = offset.checked_add(len).filter(|&end| end <= available) else {
-        return Err(
-            crate::IoError::ReadOutOfBounds(Box::new(crate::ReadBoundsError::new(
-                offset, len, available,
-            )))
-            .into(),
-        );
+        return Err(IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(
+            offset, len, available,
+        )))
+        .into());
     };
     Ok(offset..end)
 }
@@ -68,7 +66,7 @@ impl<'bytes> ElfReader for ElfBinary<'bytes> {
     }
 
     /// Reads data from the memory-based ELF object.
-    fn read(&self, buf: &mut [u8], offset: usize) -> crate::Result<()> {
+    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
         let bytes = self.bytes.as_ref();
         let range = checked_read_range(offset, buf.len(), bytes.len())?;
         buf.copy_from_slice(&bytes[range]);

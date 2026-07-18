@@ -1,7 +1,7 @@
 use crate::common::{RelocEntry, RelocType, SectionKind};
-use crate::dylib::symtab::IFUNC_RESOLVER_NAME;
+use crate::dylib::symtab::{IFUNC_RESOLVER_NAME, TLS_GET_ADDR_NAME};
 use crate::{
-    Arch,
+    Arch, arch,
     dylib::{
         RelocationInfo,
         shdr::{Section, SectionAllocator, SectionHeader, SectionId, ShdrManager},
@@ -36,14 +36,9 @@ impl RelocMetaData {
     pub(crate) fn preprocess(arch: Arch, raw: &[RelocEntry]) -> Vec<RelocEntry> {
         let mut relocs = raw.to_vec();
         if relocs.iter().any(|r| r.r_type.is_tls_reloc(arch))
-            && !relocs
-                .iter()
-                .any(|r| r.symbol_name == crate::dylib::symtab::TLS_GET_ADDR_NAME)
+            && !relocs.iter().any(|r| r.symbol_name == TLS_GET_ADDR_NAME)
         {
-            relocs.push(RelocEntry::jump_slot(
-                crate::dylib::symtab::TLS_GET_ADDR_NAME,
-                arch,
-            ));
+            relocs.push(RelocEntry::jump_slot(TLS_GET_ADDR_NAME, arch));
         }
         relocs
     }
@@ -316,7 +311,7 @@ impl RelocMetaData {
                 } else {
                     0
                 };
-                reloc.addend = crate::arch::calculate_addend(
+                reloc.addend = arch::calculate_addend(
                     self.arch,
                     reloc.r_type,
                     reloc.slot_offset,
@@ -329,11 +324,10 @@ impl RelocMetaData {
 
             if is_plt {
                 let plt_idx = i - plt_start;
-                let plt0_size = crate::arch::get_plt0_size(self.arch);
-                let plt_entry_size = crate::arch::get_plt_entry_size(self.arch);
+                let plt0_size = arch::get_plt0_size(self.arch);
+                let plt_entry_size = arch::get_plt_entry_size(self.arch);
                 let plt_entry_off = plt0_size + plt_idx as u64 * plt_entry_size;
-                let initial_val =
-                    crate::arch::get_got_plt_init_value(self.arch, plt_vaddr, plt_entry_off);
+                let initial_val = arch::get_got_plt_init_value(self.arch, plt_vaddr, plt_entry_off);
                 let offset = reloc.slot_offset as usize;
                 let got = allocator.get_mut(&self.got_plt_id);
                 let mut cursor = &mut got[offset..offset + (if is_64 { 8 } else { 4 })];
@@ -378,7 +372,7 @@ impl RelocMetaData {
     fn patch_got(
         &self,
         allocator: &mut SectionAllocator,
-        arch: crate::Arch,
+        arch: Arch,
         dyn_vaddr: u64,
         plt_vaddr: u64,
     ) -> Result<()> {
@@ -406,13 +400,13 @@ impl RelocMetaData {
         }
 
         // GOT entries for PLT in .got.plt
-        let plt0_size = crate::arch::get_plt0_size(arch);
-        let plt_entry_size = crate::arch::get_plt_entry_size(arch);
+        let plt0_size = arch::get_plt0_size(arch);
+        let plt_entry_size = arch::get_plt_entry_size(arch);
         let mut current_plt_off = plt0_size;
 
         for (i, _) in self.plt_relocs().iter().enumerate() {
             let got_off = (3 + i) * word_size;
-            let initial_val = crate::arch::get_got_plt_init_value(arch, plt_vaddr, current_plt_off);
+            let initial_val = arch::get_got_plt_init_value(arch, plt_vaddr, current_plt_off);
 
             if is_64 {
                 let mut cursor = &mut got_plt_data[got_off..got_off + 8];

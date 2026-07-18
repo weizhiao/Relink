@@ -101,6 +101,8 @@ where
             section_segments,
             user_data,
             executor,
+            self.loader.domain_id(),
+            self.loader.tls_resolver(),
         )?;
         let mut raw = builder.build_object();
         observer.on_after_object_load(AfterObjectLoadEvent::new(&mut raw))?;
@@ -255,7 +257,8 @@ where
 mod tests {
     use crate::elf::{ElfHeader, ElfShdr, ElfSymbol};
     use crate::{
-        Loader, Result,
+        Error, IoError, Loader, ParseShdrError, Result,
+        arch::NativeArch,
         elf::{ElfEhdr, ElfLayout, ElfSectionFlags, ElfSectionId, ElfSectionType, NativeElfLayout},
         input::{ElfBinary, ElfReader, Path},
         memory::RegionAccess,
@@ -321,9 +324,9 @@ mod tests {
             Ok(())
         }
 
-        fn on_after_object_load<R: RegionAccess, Tls: TlsResolver<crate::arch::NativeArch>>(
+        fn on_after_object_load<R: RegionAccess, Tls: TlsResolver<NativeArch>>(
             &mut self,
-            event: AfterObjectLoadEvent<'_, ObjectData, crate::arch::NativeArch, R, Tls>,
+            event: AfterObjectLoadEvent<'_, ObjectData, NativeArch, R, Tls>,
         ) -> Result<()> {
             self.after_object_name_seen = event.raw().name() == "metadata.o";
             self.after_object_load_seen = true;
@@ -361,7 +364,7 @@ mod tests {
     fn make_object_header(shentsize: usize, shnum: usize) -> ElfHeader {
         let ehdr = make_raw_object_header(shentsize, shnum);
 
-        ElfHeader::from_raw(ehdr, Some(crate::arch::NativeArch::MACHINE))
+        ElfHeader::from_raw(ehdr, Some(NativeArch::MACHINE))
             .expect("failed to parse crafted object header")
     }
 
@@ -372,7 +375,7 @@ mod tests {
         ehdr.e_ident[EI_DATA] = <NativeElfLayout as ElfLayout>::DATA_ENCODING.raw();
         ehdr.e_ident[EI_VERSION] = EV_CURRENT;
         ehdr.e_type = ET_REL as _;
-        ehdr.e_machine = crate::arch::NativeArch::MACHINE.raw();
+        ehdr.e_machine = NativeArch::MACHINE.raw();
         ehdr.e_version = EV_CURRENT.into();
         ehdr.e_ehsize = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
         ehdr.e_shoff = <NativeElfLayout as ElfLayout>::EHDR_SIZE as _;
@@ -523,7 +526,7 @@ mod tests {
             .expect_err("shdr entry size mismatch should fail");
         assert!(matches!(
             err,
-            crate::Error::ParseShdr(crate::ParseShdrError::InvalidEntrySize { .. })
+            Error::ParseShdr(ParseShdrError::InvalidEntrySize { .. })
         ));
     }
 
@@ -535,10 +538,7 @@ mod tests {
 
         let err = super::read_object_shdrs(&header, &reader)
             .expect_err("shdr table past object length should fail");
-        assert!(matches!(
-            err,
-            crate::Error::Io(crate::IoError::ReadOutOfBounds(_))
-        ));
+        assert!(matches!(err, Error::Io(IoError::ReadOutOfBounds(_))));
     }
 
     #[test]
@@ -598,9 +598,7 @@ mod tests {
         let result = loader.load_object(ElfBinary::owned("bad.o", bytes));
         assert!(matches!(
             result,
-            Err(crate::Error::ParseShdr(
-                crate::ParseShdrError::Malformed { .. }
-            ))
+            Err(Error::ParseShdr(ParseShdrError::Malformed { .. }))
         ));
     }
 
@@ -613,9 +611,7 @@ mod tests {
         ));
         assert!(matches!(
             result,
-            Err(crate::Error::ParseShdr(
-                crate::ParseShdrError::Malformed { .. }
-            ))
+            Err(Error::ParseShdr(ParseShdrError::Malformed { .. }))
         ));
     }
 
@@ -626,9 +622,7 @@ mod tests {
             loader.load_object(ElfBinary::owned("bad.o", make_two_section_object(b"\0", 1)));
         assert!(matches!(
             result,
-            Err(crate::Error::ParseShdr(
-                crate::ParseShdrError::Malformed { .. }
-            ))
+            Err(Error::ParseShdr(ParseShdrError::Malformed { .. }))
         ));
     }
 

@@ -6,6 +6,7 @@ use elf_loader::{
     image::ModuleCapability,
     input::PathBuf,
     linker::scan::{LinkPass, LinkPassPlan, Materialization, ReorderPass},
+    runtime::DomainId,
 };
 
 struct ConfigureRootSectionRegions;
@@ -24,7 +25,7 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let fixtures = fixture_support::ensure_all();
-    let mut context: LinkContext<PathBuf, ()> = LinkContext::new();
+    let mut context: LinkContext<PathBuf, ()> = LinkContext::new(DomainId::PROCESS);
 
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())

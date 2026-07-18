@@ -1,5 +1,6 @@
 use crate::{
     Result,
+    arch::NativeArch,
     elf::SymbolEntry,
     image::{DynamicInfo, PltRelocInfo, SymbolExports, WeakModuleScope},
     input::PathBuf,
@@ -7,7 +8,7 @@ use crate::{
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
     relocation::{RelocationArch, find_symdef_impl},
-    runtime::CodeExecutor,
+    runtime::{CodeExecutor, DomainId},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering},
     tls::{CoreTlsState, TLS_GET_ADDR_SYMBOL, TlsResolver},
@@ -17,7 +18,7 @@ use core::{any::Any, cell::OnceCell, marker::PhantomData, ops::Deref};
 
 /// Stable runtime header shared by all [`CoreInner`] instantiations.
 #[repr(C)]
-pub(crate) struct CoreRuntime<Arch: RelocationArch = crate::arch::NativeArch> {
+pub(crate) struct CoreRuntime<Arch: RelocationArch = NativeArch> {
     core: OnceCell<VmAddr>,
     lazy_plt: Option<PltRelocInfo<Arch>>,
     /// Opaque lazy-binding runtime state retained for the module lifetime.
@@ -108,7 +109,7 @@ where
 
     fn lookup_symbol(&self, symbol: SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>> {
         if Tls::OVERRIDE_TLS_GET_ADDR && symbol.name() == TLS_GET_ADDR_SYMBOL {
-            return Tls::bind_tls_get_addr().map(Some);
+            return self.tls.resolver().bind_tls_get_addr().map(Some);
         }
 
         let Some(scope) = self.scope.get().and_then(WeakModuleScope::upgrade) else {
@@ -125,7 +126,7 @@ where
 /// Inner structure for ElfCore
 pub(crate) struct CoreInner<
     D: 'static = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
@@ -135,6 +136,9 @@ pub(crate) struct CoreInner<
 
     /// Executor retained for IFUNC and runtime-code resolution.
     pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
+
+    /// Runtime domain in which this image's addresses are meaningful.
+    pub(crate) domain: DomainId,
 
     /// Indicates whether initialization has started.
     pub(crate) is_init: AtomicBool,
@@ -200,12 +204,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
             let finalizer = lifecycle.into_finalizer();
             let executor = self.executor.as_ref();
             if let Err(err) = finalizer.run(name, &self.segments, |ctx, addr| {
-                executor.call_fini(ctx, addr)
+                executor.call_lifecycle(ctx, addr)
             }) {
                 logging::error!("finalization lifecycle failed for {}: {err}", name);
             }
         }
-        self.tls.cleanup();
     }
 }
 

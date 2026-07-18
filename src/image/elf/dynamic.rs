@@ -1,7 +1,9 @@
 use crate::arch::NativeArch;
 use crate::elf::ElfRelType;
+#[cfg(feature = "version")]
+use crate::elf::version::ELFVersion;
 use crate::{
-    ParseDynamicError, ParsePhdrError, Result,
+    ByteRepr, ParseDynamicError, ParsePhdrError, Result,
     elf::{
         ElfDyn, ElfDynamic, ElfDynamicTag, ElfLayout, ElfPhdr, ElfPhdrs, ElfStringTable, ElfSymbol,
         HashTable, Lifecycle, LifecycleSpec, SymbolTable,
@@ -13,6 +15,7 @@ use crate::{
     memory::{HostRegion, ImageMemoryExt, MappedView, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
     relocation::{DynamicRelocation, Relocatable, RelocateArgs, RelocationArch},
+    runtime::DomainId,
     segment::{ElfSegments, MemoryProtection},
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, ModuleTls, TlsRequest, TlsResolver},
@@ -20,7 +23,7 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 use core::{cell::OnceCell, mem::size_of, ptr::NonNull};
 
-use crate::image::{ElfCore, LoadedCore, core::CoreInner, exports_handle};
+use crate::image::{CoreRuntime, ElfCore, LoadedCore, core::CoreInner, exports_handle};
 
 impl<L: ElfLayout> SymbolTable<L> {
     pub(crate) fn from_dynamic<Arch, R>(
@@ -65,7 +68,7 @@ impl<L: ElfLayout> SymbolTable<L> {
         let strtab = ElfStringTable::new(strtab);
 
         #[cfg(feature = "version")]
-        let version = crate::elf::version::ELFVersion::new(
+        let version = ELFVersion::new(
             dynamic.version_idx,
             dynamic.verneed,
             dynamic.verdef,
@@ -217,8 +220,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         self.entry
     }
 
-    /// Returns TLS metadata associated with this image.
-    pub fn tls(&self) -> ModuleTls {
+    /// Returns TLS metadata when this image owns a TLS block.
+    pub fn tls(&self) -> Option<ModuleTls> {
         self.module.tls()
     }
 
@@ -454,15 +457,20 @@ where
             } else {
                 TlsRequest::Dynamic
             };
-            CoreTlsState::present(Tls::register(*info, request)?, image)
+            CoreTlsState::with_module(
+                self.tls_resolver.clone(),
+                self.tls_resolver.register(*info, request)?,
+                image,
+            )
         } else {
-            CoreTlsState::none()
+            CoreTlsState::without_module(self.tls_resolver.clone())
         };
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel.clone(), lazy_symtab);
 
         let inner = Arc::new(CoreInner {
-            runtime: Box::new(crate::image::CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
+            runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: self.executor,
+            domain: self.domain,
             is_init: AtomicBool::new(false),
             lifecycle: OnceCell::new(),
             path: self.path,
@@ -512,11 +520,16 @@ where
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
-    <Arch::Layout as crate::elf::ElfLayout>::Word: crate::ByteRepr,
+    <Arch::Layout as ElfLayout>::Word: ByteRepr,
 {
     type Output = LoadedCore<D, Arch, R, Tls>;
     type Arch = Arch;
     type Tls = Tls;
+
+    #[inline]
+    fn domain_id(&self) -> DomainId {
+        self.core_ref().domain_id()
+    }
 
     fn relocate<Obs, Binder>(
         self,

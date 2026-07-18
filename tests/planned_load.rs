@@ -19,6 +19,7 @@ use elf_loader::{
         RelocationObserver,
     },
     os::PageSize,
+    runtime::DomainId,
     tls::TlsResolver,
 };
 use gen_elf::{ElfWriterConfig, SymbolDesc};
@@ -418,7 +419,7 @@ fn load_commits_configured_visible_modules() {
     );
     let root_data: &'static [u8] = Box::leak(root_output.data.into_boxed_slice());
     let resolver = VisibleDependencyResolver { root_data };
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
 
     let linker = Linker::new().resolver(resolver);
     let root = linker
@@ -458,7 +459,7 @@ fn load_scan_first_supports_synthetic_dependencies() {
     );
     let root_data: &'static [u8] = Box::leak(root_output.data.into_boxed_slice());
     let resolver = SyntheticDependencyResolver { root_data };
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
 
     let root = Linker::new()
         .resolver(resolver)
@@ -494,7 +495,7 @@ fn load_accepts_dynamic_exec_root() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
     let bytes: &'static [u8] = Box::leak(mark_dynamic_as_exec(output.data).into_boxed_slice());
 
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "dynamic_exec",
@@ -625,92 +626,11 @@ where
 }
 
 #[test]
-fn load_with_scan_legacy_path_applies_section_overrides_and_exposes_mapped_span() {
-    let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
-    let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
-
-    let mut context = LinkContext::<&'static str, ()>::new();
-    let resolver = SingleBinaryResolver {
-        key: "root",
-        name: "planned_root.so",
-        data: bytes,
-    };
-    let configure =
-        |plan: &mut LinkPassPlan<'_, &'static str, DataPass>| -> elf_loader::Result<()> {
-            let root = plan.root().expect("root module should be visible");
-            let data_section = root
-                .scanned(plan)
-                .alloc_sections()
-                .find(|section| section.name() == ".data")
-                .expect("generated test dylib should contain a .data section")
-                .id();
-            let layout_section = root
-                .section(plan, data_section)
-                .expect("missing planned .data section");
-            layout_section
-                .data_mut(plan)?
-                .copy_from_slice(&[9, 8, 7, 6]);
-            Ok(())
-        };
-
-    let loaded = Linker::new()
-        .resolver(resolver)
-        .run()
-        .map_pipeline(|mut pipeline| {
-            pipeline.push(TestPass(configure));
-            pipeline
-        })
-        .load_scan_first(&mut context, "root")
-        .expect("failed to execute scan-first load");
-
-    assert!(loaded.segments().is_contiguous_mapping());
-    assert!(context.contains_key(&"root"));
-
-    unsafe {
-        let ptr = loaded
-            .get::<u8>("value")
-            .expect("missing exported object symbol")
-            .into_raw() as *const u8;
-        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
-        assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
-    }
-}
-
-#[test]
-fn load_with_scan_legacy_path_loads_without_an_intermediate_plan() {
-    let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
-    let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
-
-    let mut context = LinkContext::<&'static str, ()>::new();
-    let resolver = SingleBinaryResolver {
-        key: "root",
-        name: "merged_root.so",
-        data: bytes,
-    };
-    let loaded = Linker::new()
-        .resolver(resolver)
-        .load_scan_first(&mut context, "root")
-        .expect("failed to execute merged scan-and-load path");
-
-    assert!(loaded.segments().is_contiguous_mapping());
-    assert!(context.contains_key(&"root"));
-
-    unsafe {
-        let ptr = loaded
-            .get::<u8>("value")
-            .expect("missing exported object symbol")
-            .into_raw() as *const u8;
-        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
-        assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
-    }
-}
-
-#[test]
 fn load_scan_first_accepts_dynamic_exec_root() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[5, 6, 7, 8])]);
     let bytes: &'static [u8] = Box::leak(mark_dynamic_as_exec(output.data).into_boxed_slice());
 
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "scanned_dynamic_exec",
@@ -738,7 +658,7 @@ fn load_with_scan_reuses_existing_root_alias_without_planning() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[5, 6, 7, 8])]);
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
 
     let load_resolver = SingleBinaryResolver {
         key: "canonical",
@@ -803,12 +723,15 @@ fn load_relocates_runtime_dependency_before_root() {
             event: &mut LinkerRelocationEvent<()>,
         ) -> elf_loader::Result<()> {
             self.0.borrow_mut().push(event.raw().name().to_string());
-            event.set_scope(elf_loader::image::ModuleScopeBuilder::new().into_scope());
+            event.set_scope(
+                elf_loader::image::ModuleScopeBuilder::new(event.raw().core_ref().domain_id())
+                    .into_scope()?,
+            );
             Ok(())
         }
     }
 
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let linker = Linker::new().resolver(resolver);
     linker
         .run()
@@ -857,7 +780,7 @@ fn phased_load_commits_before_dependency_ordered_initialization() {
     let mut run = linker
         .run()
         .with_observer(InitRecorder::new(Arc::clone(&calls)));
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
 
     let prepared = run
         .prepare_load(&mut context, "root")
@@ -919,7 +842,7 @@ fn linker_observer_can_reorder_initialization() {
     };
     let linker = Linker::new().resolver(resolver);
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
 
     linker
         .run()
@@ -973,12 +896,12 @@ fn phased_load_rejects_a_different_commit_context() {
         data,
     });
     let mut run = linker.run();
-    let mut prepared_context = LinkContext::<&'static str, ()>::new();
+    let mut prepared_context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let prepared = run
         .prepare_load(&mut prepared_context, "root")
         .expect("prepare should succeed");
     let relocated = run.relocate(prepared).expect("relocation should succeed");
-    let mut other_context = LinkContext::<&'static str, ()>::new();
+    let mut other_context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
 
     let err = run
         .commit(&mut other_context, relocated)
@@ -1000,7 +923,7 @@ fn failed_initialization_can_be_rolled_back_after_reacquiring_context() {
     let mut run = linker
         .run()
         .with_observer(InitRecorder::failing(Arc::clone(&calls)));
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let prepared = run.prepare_load(&mut context, "root").unwrap();
     let relocated = run.relocate(prepared).unwrap();
     let committed = run.commit(&mut context, relocated).unwrap();
@@ -1028,7 +951,7 @@ fn load_with_scan_arena_backed_path_materializes_section_bytes_into_runtime_memo
     );
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "arena_root.so",
@@ -1105,7 +1028,7 @@ fn load_with_scan_arena_backed_path_supports_assign_next() {
     );
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "arena_assign_next_root.so",
@@ -1193,7 +1116,7 @@ fn load_with_scan_defaults_section_reorderable_modules_to_section_regions() {
     );
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "default_section_regions_root.so",
@@ -1240,7 +1163,7 @@ fn load_with_scan_handles_missing_section_headers_as_opaque_module() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
     let bytes: &'static [u8] = Box::leak(strip_section_headers(output.data).into_boxed_slice());
 
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "opaque_root.so",
@@ -1289,7 +1212,7 @@ fn load_with_scan_downgrades_unusable_section_table_to_opaque() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
     let bytes: &'static [u8] = Box::leak(break_section_name_table(output.data).into_boxed_slice());
 
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "broken_shstr_root.so",
@@ -1320,7 +1243,7 @@ fn load_with_scan_supports_whole_dso_regions_and_section_overrides_for_section_d
     let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "whole_region_root.so",
@@ -1386,7 +1309,7 @@ fn load_with_scan_rejects_section_regions_for_section_data_modules() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_object("value", &[1, 2, 3, 4])]);
     let bytes: &'static [u8] = Box::leak(output.data.clone().into_boxed_slice());
 
-    let mut context = LinkContext::<&'static str, ()>::new();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "illegal_section_region_root.so",

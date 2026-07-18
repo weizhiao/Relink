@@ -3,6 +3,8 @@
 use crate::{
     elf::{ElfClass, ElfDataEncoding, ElfDynamicTag, ElfFileType, ElfMachine},
     linker::{ContextId, KeyId, ModuleId},
+    runtime::DomainId,
+    tls::TlsModuleId,
 };
 use alloc::{borrow::Cow, boxed::Box};
 use core::fmt::{self, Display};
@@ -1055,14 +1057,15 @@ impl Display for LinkerError {
 
 /// Structured TLS error details.
 pub enum TlsError {
-    /// The current resolver does not support dynamic TLS.
+    /// The current resolver does not support the requested TLS operation.
     ResolverUnsupported,
-    /// The current resolver does not support static TLS registration.
-    StaticResolverUnsupported,
     /// The TLS image source can no longer provide template bytes.
     TemplateUnavailable,
     /// The TLS module ID is not registered.
-    InvalidModuleId,
+    InvalidModuleId {
+        /// Module ID that could not be found.
+        mod_id: TlsModuleId,
+    },
     /// The TLS segment metadata is invalid.
     InvalidInfo,
     /// The supplied module metadata does not match the registered module.
@@ -1075,11 +1078,10 @@ impl Display for TlsError {
             Self::ResolverUnsupported => {
                 f.write_str("TLS operation is not supported by the configured resolver")
             }
-            Self::StaticResolverUnsupported => {
-                f.write_str("static TLS is not supported by the configured resolver")
-            }
             Self::TemplateUnavailable => f.write_str("TLS template image is no longer available"),
-            Self::InvalidModuleId => f.write_str("TLS module ID is not registered"),
+            Self::InvalidModuleId { mod_id } => {
+                write!(f, "TLS module ID {mod_id} is not registered")
+            }
             Self::InvalidInfo => f.write_str("TLS segment metadata is invalid"),
             Self::ModuleMismatch => {
                 f.write_str("TLS module metadata does not match the registered module")
@@ -1092,6 +1094,14 @@ impl Display for TlsError {
 /// These errors represent various failure conditions that can occur during
 /// ELF file loading, parsing, and relocation operations.
 pub enum Error {
+    /// Modules from incompatible runtime domains were combined.
+    DomainMismatch {
+        /// Runtime domain already selected for the operation.
+        expected: DomainId,
+        /// Runtime domain supplied by the incompatible module or loader.
+        actual: DomainId,
+    },
+
     /// An error occurred while opening, reading, or writing ELF files.
     Io(IoError),
 
@@ -1216,6 +1226,10 @@ impl From<TlsError> for Error {
 impl Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DomainMismatch { expected, actual } => write!(
+                f,
+                "runtime domain {actual} cannot be linked into runtime domain {expected}"
+            ),
             Self::Io(err) => write!(f, "I/O error: {err}"),
             Self::Mmap(err) => write!(f, "Memory mapping error: {err}"),
             Self::Relocation(err) => write!(f, "Relocation error: {err}"),

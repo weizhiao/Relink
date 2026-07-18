@@ -245,42 +245,43 @@ impl RelocEntry {
     }
 
     /// Create a JUMP_SLOT relocation for the given architecture.
-    pub fn jump_slot(symbol_name: impl Into<String>, arch: crate::Arch) -> Self {
+    pub fn jump_slot(symbol_name: impl Into<String>, arch: Arch) -> Self {
         Self::with_name(symbol_name, arch.jump_slot_reloc())
     }
 
     /// Create a GLOB_DAT relocation for the given architecture.
-    pub fn glob_dat(symbol_name: impl Into<String>, arch: crate::Arch) -> Self {
+    pub fn glob_dat(symbol_name: impl Into<String>, arch: Arch) -> Self {
         Self::with_name(symbol_name, arch.glob_dat_reloc())
     }
 
     /// Create a RELATIVE relocation for the given architecture.
-    pub fn relative(arch: crate::Arch) -> Self {
+    pub fn relative(arch: Arch) -> Self {
         Self::new(arch.relative_reloc())
     }
 
     /// Create an IRELATIVE relocation for the given architecture.
-    pub fn irelative(arch: crate::Arch) -> Self {
+    pub fn irelative(arch: Arch) -> Self {
         Self::new(arch.irelative_reloc())
     }
 
     /// Create a COPY relocation for the given architecture.
-    pub fn copy(symbol_name: impl Into<String>, arch: crate::Arch) -> Self {
+    pub fn copy(symbol_name: impl Into<String>, arch: Arch) -> Self {
         Self::with_name(symbol_name, arch.copy_reloc())
     }
 
     /// Create a DTPOFF relocation for the given architecture.
-    pub fn dtpoff(symbol_name: impl Into<String>, arch: crate::Arch) -> Self {
+    pub fn dtpoff(symbol_name: impl Into<String>, arch: Arch) -> Self {
         Self::with_name(symbol_name, arch.dtpoff_reloc())
     }
 
     /// Create a DTPMOD relocation for the given architecture.
-    pub fn dtpmod(symbol_name: impl Into<String>, arch: crate::Arch) -> Self {
+    pub fn dtpmod(symbol_name: impl Into<String>, arch: Arch) -> Self {
         Self::with_name(symbol_name, arch.dtpmod_reloc())
     }
 
     /// Create an absolute relocation for the given architecture.
-    pub fn abs(symbol_name: impl Into<String>, arch: crate::Arch) -> Self {
+    pub fn abs(symbol_name: impl Into<String>, arch: Arch) -> Self {
         Self::with_name(symbol_name, arch.abs_reloc())
     }
 }
+use crate::Arch;

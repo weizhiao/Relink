@@ -4,6 +4,7 @@ use super::{
 };
 use crate::{
     AlignedBytes, LinkerError, Result,
+    arch::NativeArch,
     elf::ElfSectionId,
     entity::{PrimaryMap, entity_ref},
     image::{ModuleCapability, ScannedDynamic},
@@ -98,11 +99,7 @@ type LinkPlanParts<K, Arch, Tls> = (
 /// This plan owns the discovered logical module graph and accumulates later
 /// planning decisions such as physical memory-layout plans or future
 /// materialization policies.
-pub(crate) struct LinkPlan<
-    K,
-    Arch: RelocationArch = crate::arch::NativeArch,
-    Tls: TlsResolver<Arch> = (),
-> {
+pub(crate) struct LinkPlan<K, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     root: ModuleId,
     group_order: Vec<ModuleId>,
     module_ids: BTreeMap<K, ModuleId>,

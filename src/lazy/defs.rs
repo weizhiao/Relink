@@ -1,9 +1,9 @@
 //! Data structures shared by lazy binders and the runtime resolver.
 
 use crate::{
-    LazyBindingError, RelocationError, Result,
-    elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolEntry},
-    image::CoreRuntime,
+    ByteRepr, LazyBindingError, RelocationError, Result,
+    elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfWord, SymbolEntry},
+    image::{CoreRuntime, PltRelocInfo},
     memory::{ImageMemory, ImageMemoryExt, VmAddr},
     relocation::RelocationArch,
 };
@@ -135,7 +135,7 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
     }
 
     #[inline]
-    pub(crate) fn lazy_plt(&self) -> Option<&crate::image::PltRelocInfo<Arch>> {
+    pub(crate) fn lazy_plt(&self) -> Option<&PltRelocInfo<Arch>> {
         self.core().lazy_plt()
     }
 
@@ -171,7 +171,7 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
     /// Writes a resolved address into the relocation's jump slot.
     pub fn write_jump_slot(&self, reloc: &LazyPltReloc<'_, Arch>, value: VmAddr) -> Result<()>
     where
-        <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+        <Arch::Layout as ElfLayout>::Word: ByteRepr,
     {
         let word = <Arch::Layout as ElfLayout>::Word::from_usize(value.get());
         unsafe { self.memory().write_value(reloc.place(), word) }
@@ -180,7 +180,7 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
     /// Performs Relink's default lazy binding flow and writes the jump slot.
     pub fn resolve_default(&self, rela_idx: usize) -> Result<Option<VmAddr>>
     where
-        <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+        <Arch::Layout as ElfLayout>::Word: ByteRepr,
     {
         let lazy_plt = self
             .lazy_plt()
@@ -235,7 +235,7 @@ impl<'a, Arch: RelocationArch> LazyPltReloc<'a, Arch> {
 
     /// Returns the relocation type.
     #[inline]
-    pub fn r_type(&self) -> crate::elf::ElfRelocationType {
+    pub fn r_type(&self) -> ElfRelocationType {
         self.rel.r_type()
     }
 

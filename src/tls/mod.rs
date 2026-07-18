@@ -11,14 +11,15 @@ mod manager;
 mod registry;
 mod relocation;
 mod state;
+mod thread;
 mod traits;
 
 pub(crate) use defs::{TLS_GET_ADDR_SYMBOL, TlsImageProvider, tls_image_provider_handle};
 pub(crate) use state::CoreTlsState;
 
 pub use defs::{
-    ModuleTls, TlsDescValue, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId, TlsRequest,
-    TlsTpOffset,
+    ModuleTls, TlsDescBinding, TlsDescRequest, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId,
+    TlsRequest, TlsTpOffset,
 };
 #[cfg(feature = "tls")]
 pub use manager::DefaultTlsResolver;
@@ -26,4 +27,5 @@ pub use registry::{
     TlsModuleSnapshot, TlsRegistry, TlsRegistrySnapshot, TlsSlotSnapshot, TlsStorage,
 };
 pub(crate) use relocation::TlsRelocOutcome;
+pub use thread::ThreadDtv;
 pub use traits::TlsResolver;

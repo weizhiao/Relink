@@ -3,7 +3,8 @@ use super::{
     storage::{CommittedStorage, KeySlot, ModuleId},
 };
 use crate::{
-    image::{LoadedCore, ModuleHandle, ModuleScope, ModuleScopeBuilder},
+    Result,
+    image::{LoadedCore, ModuleHandle, ModuleScope, ModuleScopeBuilder, RawDynamic},
     memory::RegionAccess,
     relocation::RelocationArch,
     tls::TlsResolver,
@@ -155,7 +156,7 @@ pub(crate) struct LoadSession<
     R: RegionAccess,
     Tls: TlsResolver<Arch> = (),
 > {
-    resolve: ResolveSession<crate::image::RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
+    resolve: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
     ready_to_commit: BTreeMap<KeySlot, ReadyCommit<Arch, Tls>>,
     init_order: Vec<KeySlot>,
 }
@@ -208,7 +209,7 @@ where
     #[inline]
     pub(crate) fn resolve_mut(
         &mut self,
-    ) -> &mut ResolveSession<crate::image::RawDynamic<D, Arch, R, Tls>, Arch, Tls> {
+    ) -> &mut ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls> {
         &mut self.resolve
     }
 
@@ -221,7 +222,7 @@ where
     pub(crate) fn take_pending_dynamic(
         &mut self,
         slot: KeySlot,
-    ) -> Option<GraphEntry<crate::image::RawDynamic<D, Arch, R, Tls>>> {
+    ) -> Option<GraphEntry<RawDynamic<D, Arch, R, Tls>>> {
         self.resolve.dynamics.remove(&slot)
     }
 
@@ -330,7 +331,7 @@ where
     pub(crate) fn build_scope<K, Meta>(
         &self,
         context: &LinkContext<K, D, Meta, Arch, Tls>,
-    ) -> ModuleScope<Arch, Tls>
+    ) -> Result<ModuleScope<Arch, Tls>>
     where
         K: Ord,
     {
@@ -355,7 +356,7 @@ where
                 }
             })
             .collect::<Vec<_>>();
-        let mut scope = ModuleScopeBuilder::new();
+        let mut scope = ModuleScopeBuilder::new(context.domain_id());
         scope.extend(modules);
         scope.into_scope()
     }
@@ -363,7 +364,7 @@ where
     pub(crate) fn commit_into<K, Meta>(
         self,
         committed: &mut CommittedStorage<K, D, Meta, Arch, Tls>,
-    ) -> crate::Result<SessionCommit>
+    ) -> Result<SessionCommit>
     where
         K: Clone + Ord,
         Meta: Default,

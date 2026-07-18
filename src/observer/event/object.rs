@@ -1,4 +1,5 @@
 use crate::{
+    Result,
     elf::{
         ElfHeader, ElfLayout, ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout,
         SymbolTableView,
@@ -329,7 +330,7 @@ impl<'event, D: 'static, L: ElfLayout> BeforeObjectLoadEvent<'event, D, L> {
     ///
     /// Returns `Ok(None)` when the reader cannot provide a borrowed view.
     /// `SHT_NOBITS` and zero-sized sections return `Ok(Some(&[]))`.
-    pub fn borrow_section_bytes(&self, id: ElfSectionId) -> crate::Result<Option<&[u8]>> {
+    pub fn borrow_section_bytes(&self, id: ElfSectionId) -> Result<Option<&[u8]>> {
         let Some((offset, len)) = self.section_content_range(id) else {
             return Ok(Some(&[]));
         };
@@ -344,8 +345,8 @@ impl<'event, D: 'static, L: ElfLayout> BeforeObjectLoadEvent<'event, D, L> {
         &mut self,
         id: ElfSectionId,
         scratch: &mut Vec<u8>,
-        f: impl FnOnce(&[u8]) -> crate::Result<T>,
-    ) -> crate::Result<T> {
+        f: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<T> {
         let Some((offset, len)) = self.section_content_range(id) else {
             return f(&[]);
         };

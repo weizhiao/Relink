@@ -6,8 +6,10 @@ use crate::{
     object::layout::{GotEntry, ObjectRelocKey, PltEntry, PltGotSection},
     observer::RelocationObserver,
     relocation::{
-        ObjectArch, RelocHelper, RelocValue, RelocationValueInput, RelocationValueProvider,
+        ObjectArch, RelocHelper, RelocValue, RelocationArch, RelocationValueInput,
+        RelocationValueProvider,
     },
+    tls::TlsResolver,
 };
 use elf::abi::*;
 
@@ -35,13 +37,13 @@ impl ObjectArch for X86_64Arch {
         _state: &mut Self::State,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
-        target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
+        target: &ElfShdr<<Self as RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,
     ) -> Result<()>
     where
         D: 'static,
         R: RegionAccess,
-        Tls: crate::tls::TlsResolver<Self>,
+        Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
@@ -160,11 +162,7 @@ impl X86_64Arch {
     }
 
     #[inline]
-    fn write_object_value<Memory>(
-        memory: &Memory,
-        place: VmAddr,
-        value: ObjectWrite,
-    ) -> crate::Result<()>
+    fn write_object_value<Memory>(memory: &Memory, place: VmAddr, value: ObjectWrite) -> Result<()>
     where
         Memory: ImageMemory,
     {

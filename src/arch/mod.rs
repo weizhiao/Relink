@@ -23,7 +23,7 @@
 // when built for a single host, the items in non-native submodules look
 // dead but are intentionally kept available.
 
-use crate::elf::ElfMachine;
+use crate::{elf::ElfMachine, relocation::RelocationArch};
 use elf::abi::{
     ELFCLASS32, ELFCLASS64, ELFDATA2LSB, ELFDATA2MSB, EM_386, EM_AARCH64, EM_ARM, EM_LOONGARCH,
     EM_RISCV, EM_X86_64,
@@ -55,7 +55,7 @@ impl ArchKind {
     /// Returns the architecture kind for the current compilation target.
     #[inline]
     pub const fn native() -> Self {
-        <NativeArch as crate::relocation::RelocationArch>::KIND
+        <NativeArch as RelocationArch>::KIND
     }
 
     /// Returns whether this architecture is the current compilation target.

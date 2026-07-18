@@ -26,8 +26,8 @@ impl TlsStorage {
 pub struct TlsModuleSnapshot {
     /// TLS segment metadata.
     pub info: TlsInfo,
-    /// Selected static or dynamic storage.
-    pub storage: TlsStorage,
+    /// Registered runtime TLS metadata.
+    pub tls: ModuleTls,
     /// Relocated initialization image, when initialization has completed.
     pub source: Option<TlsImageSource>,
 }
@@ -53,7 +53,7 @@ pub struct TlsRegistrySnapshot {
 #[derive(Debug)]
 struct TlsModuleRecord<D> {
     info: TlsInfo,
-    storage: TlsStorage,
+    tls: ModuleTls,
     source: Option<TlsImageSource>,
     data: D,
 }
@@ -62,7 +62,7 @@ impl<D> TlsModuleRecord<D> {
     fn snapshot(&self) -> TlsModuleSnapshot {
         TlsModuleSnapshot {
             info: self.info,
-            storage: self.storage,
+            tls: self.tls,
             source: self.source.clone(),
         }
     }
@@ -101,9 +101,7 @@ impl<D> TlsRegistry<D> {
 
     /// Registers one module and returns its runtime TLS metadata.
     pub fn register(&mut self, info: TlsInfo, storage: TlsStorage, data: D) -> Result<ModuleTls> {
-        if !info.align.max(1).is_power_of_two() || info.filesz > info.memsz {
-            return Err(TlsError::InvalidInfo.into());
-        }
+        info.validate()?;
         if self.slots.is_empty() {
             self.slots.push(TlsSlot {
                 generation: 0,
@@ -119,11 +117,12 @@ impl<D> TlsRegistry<D> {
             .find(|(_, slot)| slot.module.is_none())
             .map(|(index, _)| index)
             .unwrap_or(self.slots.len());
+        let module = storage.module(TlsModuleId::new(index));
         let slot = TlsSlot {
             generation: self.generation,
             module: Some(TlsModuleRecord {
                 info,
-                storage,
+                tls: module,
                 source: None,
                 data,
             }),
@@ -133,15 +132,15 @@ impl<D> TlsRegistry<D> {
         } else {
             self.slots[index] = slot;
         }
-        Ok(storage.module(TlsModuleId::new(index)))
+        Ok(module)
     }
 
-    /// Stores the relocated initialization image for a registered module.
-    pub fn init(&mut self, source: TlsImageSource, mod_id: TlsModuleId) -> Result<()> {
+    /// Publishes the relocated initialization image for a registered module.
+    pub fn publish(&mut self, source: TlsImageSource, mod_id: TlsModuleId) -> Result<()> {
         self.slots
             .get(mod_id.get())
             .and_then(|slot| slot.module.as_ref())
-            .ok_or(TlsError::InvalidModuleId)?;
+            .ok_or(TlsError::InvalidModuleId { mod_id })?;
         self.generation += 1;
         let slot = &mut self.slots[mod_id.get()];
         let record = slot
@@ -176,10 +175,22 @@ impl<D> TlsRegistry<D> {
             .map(TlsModuleRecord::snapshot)
     }
 
-    /// Returns the generation in which a module slot was last changed.
-    #[inline]
-    pub fn slot_generation(&self, mod_id: TlsModuleId) -> Option<usize> {
-        self.slots.get(mod_id.get()).map(|slot| slot.generation)
+    /// Returns the TLS segment metadata for one module.
+    pub fn info(&self, mod_id: TlsModuleId) -> Option<TlsInfo> {
+        self.slots
+            .get(mod_id.get())?
+            .module
+            .as_ref()
+            .map(|module| module.info)
+    }
+
+    /// Returns resolver-specific state for one module.
+    pub fn data(&self, mod_id: TlsModuleId) -> Option<&D> {
+        self.slots
+            .get(mod_id.get())?
+            .module
+            .as_ref()
+            .map(|module| &module.data)
     }
 
     /// Returns resolver-specific state for one module.
@@ -239,7 +250,7 @@ mod tests {
     fn unregister_changes_generation_and_reuses_slot() {
         let mut registry = TlsRegistry::new();
         let first = registry.register(info(), TlsStorage::Dynamic, ()).unwrap();
-        let first_id = first.mod_id().unwrap();
+        let first_id = first.mod_id();
         assert_eq!(first_id.get(), 1);
 
         let generation = registry.generation();
@@ -252,7 +263,7 @@ mod tests {
         let second = registry
             .register(info(), TlsStorage::Static(offset), ())
             .unwrap();
-        assert_eq!(second.mod_id(), Some(first_id));
+        assert_eq!(second.mod_id(), first_id);
         assert_eq!(second.tp_offset(), Some(offset));
     }
 

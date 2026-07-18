@@ -730,6 +730,7 @@ fn object_finalizer_runs_on_drop() {
         input::ElfBinary,
         memory::VmAddr,
         runtime::{CodeContext, CodeExecutor},
+        tls::TlsIndex,
     };
     use object::{
         Architecture, BinaryFormat, Endianness, SectionFlags, SectionKind, SymbolFlags, SymbolKind,
@@ -745,12 +746,12 @@ fn object_finalizer_runs_on_drop() {
     }
 
     impl CodeExecutor<NativeArch> for RecordingExecutor {
-        fn call_init(&self, _ctx: CodeContext<'_, NativeArch>, _init: VmAddr) -> Result<()> {
-            Ok(())
-        }
-
-        fn call_fini(&self, _ctx: CodeContext<'_, NativeArch>, fini: VmAddr) -> Result<()> {
-            self.fini_calls.lock().unwrap().push(fini.get());
+        fn call_lifecycle(
+            &self,
+            _ctx: CodeContext<'_, NativeArch>,
+            function: VmAddr,
+        ) -> Result<()> {
+            self.fini_calls.lock().unwrap().push(function.get());
             Ok(())
         }
 
@@ -758,6 +759,15 @@ fn object_finalizer_runs_on_drop() {
             &self,
             _ctx: CodeContext<'_, NativeArch>,
             resolver: VmAddr,
+        ) -> Result<VmAddr> {
+            Ok(resolver)
+        }
+
+        fn resolve_tls(
+            &self,
+            _ctx: CodeContext<'_, NativeArch>,
+            resolver: VmAddr,
+            _index: TlsIndex,
         ) -> Result<VmAddr> {
             Ok(resolver)
         }
@@ -825,7 +835,7 @@ fn object_relocator_can_defer_initialization() {
         memory::{RegionAccess, VmAddr},
         observer::{ObjectRelocatedEvent, RelocationObserver},
         runtime::{CodeContext, CodeExecutor},
-        tls::TlsResolver,
+        tls::{TlsIndex, TlsResolver},
     };
     use gen_elf::{Arch, ObjectWriter, SymbolDesc};
     use std::sync::{Arc, Mutex};
@@ -846,12 +856,12 @@ fn object_relocator_can_defer_initialization() {
     struct RecordingExecutor(Arc<Mutex<Vec<usize>>>);
 
     impl CodeExecutor<NativeArch> for RecordingExecutor {
-        fn call_init(&self, _ctx: CodeContext<'_, NativeArch>, init: VmAddr) -> Result<()> {
-            self.0.lock().unwrap().push(init.get());
-            Ok(())
-        }
-
-        fn call_fini(&self, _ctx: CodeContext<'_, NativeArch>, _fini: VmAddr) -> Result<()> {
+        fn call_lifecycle(
+            &self,
+            _ctx: CodeContext<'_, NativeArch>,
+            function: VmAddr,
+        ) -> Result<()> {
+            self.0.lock().unwrap().push(function.get());
             Ok(())
         }
 
@@ -859,6 +869,15 @@ fn object_relocator_can_defer_initialization() {
             &self,
             _ctx: CodeContext<'_, NativeArch>,
             resolver: VmAddr,
+        ) -> Result<VmAddr> {
+            Ok(resolver)
+        }
+
+        fn resolve_tls(
+            &self,
+            _ctx: CodeContext<'_, NativeArch>,
+            resolver: VmAddr,
+            _index: TlsIndex,
         ) -> Result<VmAddr> {
             Ok(resolver)
         }

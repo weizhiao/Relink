@@ -258,31 +258,19 @@ mod tests {
     }
 
     #[test]
-    fn parses_single_note() {
-        let mut bytes = Vec::new();
-        append_note(&mut bytes, 4, b"GNU\0", &[1, 2, 3, 4], 3);
-
-        let mut notes = ElfNotes::new(&bytes);
-        let note = notes.next().unwrap().unwrap();
-        assert_eq!(note.header(), ElfNhdr::new(4, 4, 3));
-        assert_eq!(note.n_namesz(), 4);
-        assert_eq!(note.n_descsz(), 4);
-        assert_eq!(note.n_type(), 3);
-        assert_eq!(note.name_bytes(), b"GNU\0");
-        assert_eq!(note.name(), b"GNU");
-        assert_eq!(note.desc(), &[1, 2, 3, 4]);
-        assert!(notes.next().is_none());
-    }
-
-    #[test]
     fn parses_multiple_notes_with_padding() {
         let mut bytes = Vec::new();
-        append_note(&mut bytes, 4, b"A\0", &[1, 2, 3], 1);
+        append_note(&mut bytes, 4, b"GNU\0", &[1, 2, 3], 1);
         append_note(&mut bytes, 4, b"BC\0", &[4], 2);
 
         let mut notes = ElfNotes::new(&bytes);
         let first = notes.next().unwrap().unwrap();
-        assert_eq!(first.name(), b"A");
+        assert_eq!(first.header(), ElfNhdr::new(4, 3, 1));
+        assert_eq!(first.n_namesz(), 4);
+        assert_eq!(first.n_descsz(), 3);
+        assert_eq!(first.n_type(), 1);
+        assert_eq!(first.name_bytes(), b"GNU\0");
+        assert_eq!(first.name(), b"GNU");
         assert_eq!(first.desc(), &[1, 2, 3]);
 
         let second = notes.next().unwrap().unwrap();

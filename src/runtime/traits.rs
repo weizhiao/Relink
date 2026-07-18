@@ -4,6 +4,7 @@ use crate::{
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
     sync::Arc,
+    tls::TlsIndex,
 };
 use core::marker::PhantomData;
 
@@ -60,14 +61,19 @@ impl<'a, Arch: RelocationArch> CodeContext<'a, Arch> {
 /// kernel-module, or bare-metal environments can provide their own executor
 /// that interprets VM addresses in their runtime.
 pub trait CodeExecutor<Arch: RelocationArch = NativeArch>: Send + Sync + 'static {
-    /// Executes an initialization function.
-    fn call_init(&self, ctx: CodeContext<'_, Arch>, init: VmAddr) -> Result<()>;
-
-    /// Executes a finalization function.
-    fn call_fini(&self, ctx: CodeContext<'_, Arch>, fini: VmAddr) -> Result<()>;
+    /// Executes an initialization or finalization function.
+    fn call_lifecycle(&self, ctx: CodeContext<'_, Arch>, function: VmAddr) -> Result<()>;
 
     /// Executes an IFUNC resolver and returns the resolved implementation address.
     fn resolve_ifunc(&self, ctx: CodeContext<'_, Arch>, resolver: VmAddr) -> Result<VmAddr>;
+
+    /// Resolves a TLS address through the target runtime's `__tls_get_addr` entry point.
+    fn resolve_tls(
+        &self,
+        ctx: CodeContext<'_, Arch>,
+        resolver: VmAddr,
+        index: TlsIndex,
+    ) -> Result<VmAddr>;
 }
 
 impl<Arch, E> CodeExecutor<Arch> for Arc<E>
@@ -76,17 +82,22 @@ where
     E: CodeExecutor<Arch> + ?Sized,
 {
     #[inline]
-    fn call_init(&self, ctx: CodeContext<'_, Arch>, init: VmAddr) -> Result<()> {
-        (**self).call_init(ctx, init)
-    }
-
-    #[inline]
-    fn call_fini(&self, ctx: CodeContext<'_, Arch>, fini: VmAddr) -> Result<()> {
-        (**self).call_fini(ctx, fini)
+    fn call_lifecycle(&self, ctx: CodeContext<'_, Arch>, function: VmAddr) -> Result<()> {
+        (**self).call_lifecycle(ctx, function)
     }
 
     #[inline]
     fn resolve_ifunc(&self, ctx: CodeContext<'_, Arch>, resolver: VmAddr) -> Result<VmAddr> {
         (**self).resolve_ifunc(ctx, resolver)
+    }
+
+    #[inline]
+    fn resolve_tls(
+        &self,
+        ctx: CodeContext<'_, Arch>,
+        resolver: VmAddr,
+        index: TlsIndex,
+    ) -> Result<VmAddr> {
+        (**self).resolve_tls(ctx, resolver, index)
     }
 }

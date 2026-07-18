@@ -47,7 +47,7 @@ impl Mmap for DefaultMmap {
         len: usize,
         _prot: ProtFlags,
         _populate_later: bool,
-    ) -> crate::Result<MappedRegion<Self::Region>> {
+    ) -> Result<MappedRegion<Self::Region>> {
         if let Some(addr) = addr {
             let ptr = addr.as_mut_ptr::<u8>();
             Ok(MappedRegion::local_alias(ptr as _, len, *self))
@@ -76,7 +76,7 @@ impl Mmap for DefaultMmap {
         _flags: MapFlags,
         _offset: usize,
         _fd: isize,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -86,14 +86,14 @@ impl Mmap for DefaultMmap {
         len: usize,
         _prot: ProtFlags,
         _flags: MapFlags,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         let ptr = addr.as_mut_ptr::<u8>();
         let dest = unsafe { from_raw_parts_mut(ptr, len) };
         dest.fill(0);
         Ok(())
     }
 
-    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> crate::Result<()> {
+    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
         unsafe {
             dealloc(
                 addr.as_mut_ptr(),
@@ -103,16 +103,11 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn madvise(
-        &self,
-        _addr: VmAddr,
-        _len: usize,
-        _behavior: MadviseAdvice,
-    ) -> crate::Result<()> {
+    unsafe fn madvise(&self, _addr: VmAddr, _len: usize, _behavior: MadviseAdvice) -> Result<()> {
         Ok(())
     }
 
-    unsafe fn mprotect(&self, _addr: VmAddr, _len: usize, _prot: ProtFlags) -> crate::Result<()> {
+    unsafe fn mprotect(&self, _addr: VmAddr, _len: usize, _prot: ProtFlags) -> Result<()> {
         Ok(())
     }
 }

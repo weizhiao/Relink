@@ -5,9 +5,10 @@ use elf::abi::*;
 use crate::arch::ArchKind;
 use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
 use crate::lazy::LazyBindingSlots;
+use crate::linker::scan::GotPltTarget;
 #[cfg(feature = "object")]
 use crate::relocation::ObjectArch;
-use crate::relocation::RelocationArch;
+use crate::relocation::{RelocationArch, RelocationValueProvider};
 
 // Place all architecture-specific trait impls on the single `ArmArch` ZST
 // below. See `aarch64/relocation.rs` for the full rationale.
@@ -60,5 +61,5 @@ impl ObjectArch for ArmArch {
     type State = ();
 }
 
-impl crate::relocation::RelocationValueProvider for ArmArch {}
-impl crate::linker::scan::GotPltTarget for ArmArch {}
+impl RelocationValueProvider for ArmArch {}
+impl GotPltTarget for ArmArch {}

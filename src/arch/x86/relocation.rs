@@ -5,9 +5,10 @@ use elf::abi::EM_386;
 use crate::arch::ArchKind;
 use crate::elf::{Elf32Layout, ElfMachine, ElfRel, ElfRelocationType};
 use crate::lazy::LazyBindingSlots;
+use crate::linker::scan::GotPltTarget;
 #[cfg(feature = "object")]
 use crate::relocation::ObjectArch;
-use crate::relocation::RelocationArch;
+use crate::relocation::{RelocationArch, RelocationValueProvider};
 
 const R_386_32: u32 = 1;
 const R_386_COPY: u32 = 5;
@@ -69,5 +70,5 @@ impl ObjectArch for X86Arch {
     type State = ();
 }
 
-impl crate::relocation::RelocationValueProvider for X86Arch {}
-impl crate::linker::scan::GotPltTarget for X86Arch {}
+impl RelocationValueProvider for X86Arch {}
+impl GotPltTarget for X86Arch {}

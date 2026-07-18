@@ -1,5 +1,5 @@
 use super::traits::{CodeContext, CodeExecutor};
-use crate::{CodeError, Result, memory::VmAddr, relocation::RelocationArch};
+use crate::{CodeError, Result, memory::VmAddr, relocation::RelocationArch, tls::TlsIndex};
 use core::ptr::NonNull;
 
 #[cfg(all(windows, target_arch = "x86_64"))]
@@ -7,6 +7,22 @@ use core::ptr::NonNull;
 unsafe fn call_native_no_args(ptr: NonNull<u8>) {
     let func: extern "sysv64" fn() = unsafe { core::mem::transmute(ptr.as_ptr() as usize) };
     func()
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+#[inline(always)]
+unsafe fn resolve_native_tls(resolver: VmAddr, index: &TlsIndex) -> VmAddr {
+    let func: extern "sysv64" fn(*const TlsIndex) -> *mut u8 =
+        unsafe { core::mem::transmute(resolver.get()) };
+    VmAddr::from_ptr(func(index))
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+#[inline(always)]
+unsafe fn resolve_native_tls(resolver: VmAddr, index: &TlsIndex) -> VmAddr {
+    let func: extern "C" fn(*const TlsIndex) -> *mut u8 =
+        unsafe { core::mem::transmute(resolver.get()) };
+    VmAddr::from_ptr(func(index))
 }
 
 #[cfg(not(all(windows, target_arch = "x86_64")))]
@@ -184,29 +200,15 @@ impl NativeCodeExecutor {
             Err(CodeError::NativeUnsupported.into())
         }
     }
-
-    #[inline]
-    fn call_no_args<Arch: RelocationArch>(
-        &self,
-        ctx: CodeContext<'_, Arch>,
-        addr: VmAddr,
-    ) -> Result<()> {
-        Self::ensure_supported::<Arch>()?;
-        let ptr = ctx.host_ptr(addr)?;
-        unsafe { call_native_no_args(ptr) };
-        Ok(())
-    }
 }
 
 impl<Arch: RelocationArch> CodeExecutor<Arch> for NativeCodeExecutor {
     #[inline]
-    fn call_init(&self, ctx: CodeContext<'_, Arch>, init: VmAddr) -> Result<()> {
-        self.call_no_args(ctx, init)
-    }
-
-    #[inline]
-    fn call_fini(&self, ctx: CodeContext<'_, Arch>, fini: VmAddr) -> Result<()> {
-        self.call_no_args(ctx, fini)
+    fn call_lifecycle(&self, ctx: CodeContext<'_, Arch>, function: VmAddr) -> Result<()> {
+        Self::ensure_supported::<Arch>()?;
+        let ptr = ctx.host_ptr(function)?;
+        unsafe { call_native_no_args(ptr) };
+        Ok(())
     }
 
     #[inline]
@@ -215,5 +217,17 @@ impl<Arch: RelocationArch> CodeExecutor<Arch> for NativeCodeExecutor {
         let ptr = ctx.host_ptr(resolver)?;
         debug_assert!(Arch::SUPPORTS_NATIVE_RUNTIME);
         unsafe { resolve_native_ifunc(ptr) }
+    }
+
+    #[inline]
+    fn resolve_tls(
+        &self,
+        _ctx: CodeContext<'_, Arch>,
+        resolver: VmAddr,
+        index: TlsIndex,
+    ) -> Result<VmAddr> {
+        Self::ensure_supported::<Arch>()?;
+        debug_assert!(Arch::SUPPORTS_NATIVE_RUNTIME);
+        Ok(unsafe { resolve_native_tls(resolver, &index) })
     }
 }

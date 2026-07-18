@@ -1,6 +1,7 @@
 use crate::{
     ParsePhdrError, Result,
     elf::{ElfLayout, ElfPhdr, ElfProgramFlags, ElfProgramType, NativeElfLayout},
+    input::ElfReader,
     memory::{VmAddr, VmOffset, rounddown, roundup},
     os::{MapFlags, Mmap, ProtFlags},
     segment::{ElfSegment, ElfSegments, FileMapInfo, SegmentBuilder},
@@ -53,7 +54,7 @@ impl<'phdr, L: ElfLayout> ProgramSegments<'phdr, L> {
         phdrs: &'phdr [ElfPhdr<L>],
         is_dylib: bool,
         mapper: &M,
-        object: &impl crate::input::ElfReader,
+        object: &impl ElfReader,
         page_size: usize,
     ) -> Result<ElfSegments<M::Region>>
     where

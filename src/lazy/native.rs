@@ -5,7 +5,10 @@ use super::{
     traits::LazyBinder,
 };
 use crate::{
-    Error, LazyBindingError, RelocationError, Result, arch::NativeArch, memory::VmAddr,
+    ByteRepr, Error, LazyBindingError, RelocationError, Result,
+    arch::{NativeArch, dl_runtime_resolve},
+    elf::ElfLayout,
+    memory::VmAddr,
     relocation::RelocationArch,
 };
 
@@ -24,7 +27,7 @@ fn resolve_error(error: Error) -> ! {
 unsafe fn resolve<Arch>(runtime: VmAddr, rela_idx: usize) -> usize
 where
     Arch: RelocationArch,
-    <Arch::Layout as crate::elf::ElfLayout>::Word: crate::ByteRepr,
+    <Arch::Layout as ElfLayout>::Word: ByteRepr,
 {
     let runtime = unsafe { LazyRuntime::<Arch>::from_runtime(runtime) };
     match runtime.resolve_default(rela_idx) {
@@ -58,7 +61,7 @@ where
 
         Ok(LazyBindingEntries::new(
             runtime.runtime(),
-            VmAddr::from_ptr(crate::arch::dl_runtime_resolve as *const ()),
+            VmAddr::from_ptr(dl_runtime_resolve as *const ()),
         ))
     }
 }

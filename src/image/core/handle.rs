@@ -1,13 +1,16 @@
 use super::CoreInner;
 use crate::{
-    Result, TlsError,
+    Result,
+    arch::NativeArch,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
-    image::{DynamicInfo, Module, ModuleScope, SymbolExports, exports_handle},
+    image::{
+        CoreRuntime, DynamicInfo, Module, ModuleScope, PltRelocInfo, SymbolExports, exports_handle,
+    },
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
     relocation::RelocationArch,
-    runtime::{CodeExecutor, NativeCodeExecutor},
+    runtime::{CodeContext, CodeExecutor, DomainId, NativeCodeExecutor},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{
@@ -25,7 +28,7 @@ use core::{cell::OnceCell, fmt::Debug, ptr::NonNull};
 /// or need to detect when the image has been dropped.
 pub struct ElfCoreRef<
     D: 'static = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
@@ -62,9 +65,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     for CoreInner<D, Arch, R, Tls>
 {
     fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
-        if !self.tls.has_image() {
-            return Err(TlsError::TemplateUnavailable.into());
-        }
         self.tls.with_image(f)
     }
 }
@@ -76,7 +76,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
 /// operations to this type.
 pub struct ElfCore<
     D: 'static = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
@@ -127,7 +127,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
             .initializer();
         let executor = self.executor();
         initializer.run(self.name(), self.segments(), |ctx, addr| {
-            executor.call_init(ctx, addr)
+            executor.call_lifecycle(ctx, addr)
         })
     }
 
@@ -240,24 +240,46 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
             .and_then(|info| info.eh_frame_hdr)
     }
 
-    /// Returns TLS metadata associated with this image.
+    /// Returns TLS metadata when this image owns a TLS block.
     #[inline]
-    pub fn tls(&self) -> ModuleTls {
+    pub fn tls(&self) -> Option<ModuleTls> {
         self.inner.tls.module()
     }
 
-    pub(crate) fn init_tls(&self) -> Result<()> {
-        if !self.inner.tls.has_image() {
+    #[inline]
+    pub(crate) fn tls_resolver(&self) -> &Tls {
+        self.inner.tls.resolver()
+    }
+
+    /// Returns the runtime domain in which this image was loaded.
+    #[inline]
+    pub fn domain_id(&self) -> DomainId {
+        self.inner.domain
+    }
+
+    pub(crate) fn publish_tls(&self) -> Result<()> {
+        if self.inner.tls.module().is_none() {
             return Ok(());
         }
         let provider = tls_image_provider_handle(self.inner.clone());
         self.inner
             .tls
-            .init_tls(TlsImageSource::new(Arc::downgrade(&provider)))
+            .publish(TlsImageSource::new(Arc::downgrade(&provider)))
     }
 
-    pub(crate) fn tls_addr(&self, offset: usize) -> Option<VmAddr> {
-        self.inner.tls.addr(offset)
+    pub(crate) fn tls_addr(&self, offset: usize) -> Result<Option<VmAddr>> {
+        let Some(index) = self.inner.tls.index(offset) else {
+            return Ok(None);
+        };
+        let resolver = self.inner.tls.resolver().bind_tls_get_addr()?;
+        self.inner
+            .executor
+            .resolve_tls(
+                CodeContext::new(self.name(), &self.inner.segments),
+                resolver,
+                index,
+            )
+            .map(Some)
     }
 
     #[inline]
@@ -296,10 +318,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
         let soname = dynamic
             .soname_off
             .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
-        let lazy_plt = crate::image::PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
+        let lazy_plt = PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
         let inner = Arc::new(CoreInner {
-            runtime: Box::new(crate::image::CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
+            runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>),
+            domain: DomainId::PROCESS,
             path,
             is_init: AtomicBool::new(true),
             lifecycle: OnceCell::new(),
@@ -356,8 +379,13 @@ where
     }
 
     #[inline]
-    fn tls(&self) -> ModuleTls {
+    fn tls(&self) -> Option<ModuleTls> {
         ElfCore::tls(self)
+    }
+
+    #[inline]
+    fn domain_id(&self) -> DomainId {
+        ElfCore::domain_id(self)
     }
 }
 
@@ -384,8 +412,13 @@ where
     }
 
     #[inline]
-    fn tls(&self) -> ModuleTls {
+    fn tls(&self) -> Option<ModuleTls> {
         self.tls.module()
+    }
+
+    #[inline]
+    fn domain_id(&self) -> DomainId {
+        self.domain
     }
 }
 

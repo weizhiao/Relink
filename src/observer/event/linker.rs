@@ -1,4 +1,5 @@
 use crate::{
+    arch::NativeArch,
     image::{LoadedCore, ModuleScope, RawDynamic},
     memory::{HostRegion, RegionAccess},
     relocation::{BindingMode, RelocationArch},
@@ -9,7 +10,7 @@ use alloc::vec::Vec;
 /// Mutable event for one module's relocation policy.
 pub struct LinkerRelocationEvent<
     D: 'static,
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
@@ -75,7 +76,7 @@ pub struct LinkerInitEvent<
     'event,
     K,
     D: 'static,
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {

@@ -5,22 +5,22 @@ use super::{
 };
 use crate::{
     RelocationError, Result,
+    arch::NativeArch,
     elf::{ElfSectionType, ElfShdr, Lifecycle},
     input::PathBuf,
-    memory::{HostRegion, RegionAccess, VmAddr},
+    memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     relocation::ObjectArch,
-    runtime::CodeExecutor,
+    runtime::{CodeExecutor, DomainId},
     sync::Arc,
     tls::TlsResolver,
 };
 use alloc::boxed::Box;
-use core::marker::PhantomData;
 
 /// Builder for creating relocatable ELF objects.
 pub(crate) struct ObjectBuilder<
     Tls,
     D = (),
-    Arch: ObjectArch = crate::arch::NativeArch,
+    Arch: ObjectArch = NativeArch,
     R: RegionAccess = HostRegion,
 > {
     pub(crate) path: PathBuf,
@@ -32,7 +32,8 @@ pub(crate) struct ObjectBuilder<
     pub(crate) section_segments: SectionSegments<Arch>,
     pub(crate) user_data: D,
     pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
-    _marker_tls: PhantomData<fn() -> Tls>,
+    pub(crate) domain: DomainId,
+    pub(crate) tls_resolver: Tls,
 }
 
 struct ObjectSectionData<Arch: ObjectArch> {
@@ -52,7 +53,7 @@ where
         memory: &Memory,
     ) -> Result<Lifecycle>
     where
-        Memory: crate::memory::ImageMemory + ?Sized,
+        Memory: ImageMemory + ?Sized,
     {
         let array: &[usize] = section_entries(memory, lifecycle_array_shdr)?;
         let array = array.iter().copied().map(VmAddr::new).collect::<Box<[_]>>();
@@ -64,7 +65,7 @@ where
         memory: &Memory,
     ) -> Result<ObjectSectionData<Arch>>
     where
-        Memory: crate::memory::ImageMemory + ?Sized,
+        Memory: ImageMemory + ?Sized,
     {
         let mut symtab = None;
         let mut init = Lifecycle::new(None, None);
@@ -95,6 +96,8 @@ where
         section_segments: SectionSegments<Arch>,
         user_data: D,
         executor: Arc<dyn CodeExecutor<Arch>>,
+        domain: DomainId,
+        tls_resolver: T,
     ) -> Result<Self> {
         let shdrs = sections.headers();
         let ObjectSectionData { symtab, init, fini } = {
@@ -112,7 +115,8 @@ where
             fini,
             user_data,
             executor,
-            _marker_tls: PhantomData,
+            domain,
+            tls_resolver,
         })
     }
 }

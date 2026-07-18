@@ -10,6 +10,7 @@ use elf::abi::*;
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
 use crate::lazy::LazyBindingSlots;
+use crate::linker::scan::GotPltTarget;
 use crate::relocation::{
     RelocationArch, RelocationValueFormula, RelocationValueKind, RelocationValueProvider,
 };
@@ -89,7 +90,7 @@ impl RelocationValueProvider for X86_64Arch {
     }
 }
 
-impl crate::linker::scan::GotPltTarget for X86_64Arch {
+impl GotPltTarget for X86_64Arch {
     fn got_plt_target(
         target_bytes: &[u8],
         relocation_type: ElfRelocationType,

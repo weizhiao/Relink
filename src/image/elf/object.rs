@@ -10,12 +10,14 @@ use crate::object::{
 use crate::segment::ElfSegments;
 use crate::{
     Result,
+    arch::NativeArch,
     elf::{ElfSectionId, Lifecycle},
-    image::exports_handle,
+    image::{CoreRuntime, exports_handle},
     lazy::LazyBinder,
     memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
     relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},
+    runtime::DomainId,
     sync::{Arc, AtomicBool},
     tls::{CoreTlsState, TlsResolver},
 };
@@ -31,7 +33,7 @@ use crate::image::{ElfCore, LoadedCore, ModuleHandle, core::CoreInner};
 /// all the necessary information to perform the relocation process.
 pub struct RawObject<
     D: 'static = (),
-    Arch: ObjectArch = crate::arch::NativeArch,
+    Arch: ObjectArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
@@ -80,8 +82,9 @@ where
         let (segments, init_segments) = self.segments.into_parts();
         let pltgot = self.section_segments.take_pltgot();
         let inner = CoreInner {
-            runtime: Box::new(crate::image::CoreRuntime::new::<D, R, Tls>(None)),
+            runtime: Box::new(CoreRuntime::new::<D, R, Tls>(None)),
             executor: self.executor,
+            domain: self.domain,
             is_init: AtomicBool::new(false),
             lifecycle: OnceCell::new(),
             path: self.path,
@@ -89,7 +92,7 @@ where
             user_data: self.user_data,
             dynamic_info: None,
             scope: OnceCell::new(),
-            tls: CoreTlsState::none(),
+            tls: CoreTlsState::without_module(self.tls_resolver),
             segments,
         };
         let inner = Arc::new(inner);
@@ -143,6 +146,11 @@ where
     type Arch = Arch;
     type Tls = Tls;
 
+    #[inline]
+    fn domain_id(&self) -> DomainId {
+        self.core.domain_id()
+    }
+
     fn relocate<Obs, Binder>(
         self,
         args: RelocateArgs<'_, Arch, Tls, Obs, Binder>,
@@ -158,7 +166,7 @@ where
 /// A relocated object file.
 pub struct LoadedObject<
     D: 'static = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {

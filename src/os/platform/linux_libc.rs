@@ -106,7 +106,7 @@ impl Mmap for DefaultMmap {
         len: usize,
         prot: ProtFlags,
         _populate_later: bool,
-    ) -> crate::Result<MappedRegion<Self::Region>> {
+    ) -> Result<MappedRegion<Self::Region>> {
         let ptr = unsafe {
             mmap(
                 addr.map_or(core::ptr::null_mut(), VmAddr::as_mut_ptr),
@@ -138,7 +138,7 @@ impl Mmap for DefaultMmap {
         flags: MapFlags,
         offset: usize,
         fd: isize,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         let ptr = unsafe {
             mmap(
                 addr.as_mut_ptr(),
@@ -164,7 +164,7 @@ impl Mmap for DefaultMmap {
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         let ptr = unsafe {
             mmap(
                 addr.as_mut_ptr(),
@@ -184,7 +184,7 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> crate::Result<()> {
+    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
         let res = unsafe { munmap(addr.as_mut_ptr(), len) };
         if res != 0 {
             return Err(MmapError::MunmapFailed {
@@ -195,12 +195,7 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn madvise(
-        &self,
-        addr: VmAddr,
-        len: usize,
-        behavior: MadviseAdvice,
-    ) -> crate::Result<()> {
+    unsafe fn madvise(&self, addr: VmAddr, len: usize, behavior: MadviseAdvice) -> Result<()> {
         let res = unsafe { madvise(addr.as_mut_ptr(), len, behavior as _) };
         if res != 0 {
             return Err(MmapError::Madvise {
@@ -211,7 +206,7 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> crate::Result<()> {
+    unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
         let res = unsafe { mprotect(addr.as_mut_ptr(), len, prot.bits()) };
         if res != 0 {
             return Err(MmapError::Mprotect {

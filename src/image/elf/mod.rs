@@ -14,6 +14,7 @@ use crate::{
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},
+    runtime::DomainId,
     tls::TlsResolver,
 };
 
@@ -33,12 +34,8 @@ pub use object::{LoadedObject, RawObject};
 /// The optional `Arch` type parameter is forwarded to every variant, including
 /// relocatable objects, so a raw image always belongs to one relocation domain.
 #[derive(Debug)]
-pub enum RawElf<
-    D,
-    Arch = crate::arch::NativeArch,
-    R: RegionAccess = HostRegion,
-    Tls: TlsResolver<Arch> = (),
-> where
+pub enum RawElf<D, Arch = NativeArch, R: RegionAccess = HostRegion, Tls: TlsResolver<Arch> = ()>
+where
     D: 'static,
     Arch: ObjectArch,
 {
@@ -288,6 +285,15 @@ impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Relo
     type Output = LoadedElf<D, Arch, R, Tls>;
     type Arch = Arch;
     type Tls = Tls;
+
+    fn domain_id(&self) -> DomainId {
+        match self {
+            Self::Dylib(dylib) => Relocatable::domain_id(dylib),
+            Self::Exec(exec) => Relocatable::domain_id(exec),
+            #[cfg(feature = "object")]
+            Self::Object(object) => Relocatable::domain_id(object),
+        }
+    }
 
     fn relocate<Obs, Binder>(
         self,

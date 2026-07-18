@@ -8,7 +8,7 @@ use super::{
     layout::{ElfLayout, NativeElfLayout},
     raw::ElfSymRaw,
 };
-use crate::{arch::NativeArch, relocation::RelocationArch};
+use crate::{arch::NativeArch, entity::EntityRef, relocation::RelocationArch};
 
 /// This element holds the total size, in bytes, of the DT_RELR relocation table.
 pub const DT_RELRSZ: i64 = 35;
@@ -811,7 +811,7 @@ impl ElfSectionId {
     }
 }
 
-impl crate::entity::EntityRef for ElfSectionId {
+impl EntityRef for ElfSectionId {
     #[inline]
     fn new(index: usize) -> Self {
         Self(index)

@@ -129,11 +129,7 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
 }
 
 /// A module made visible to one linker run, plus the keys of its direct dependencies.
-pub struct VisibleModule<
-    K,
-    Arch: RelocationArch = crate::arch::NativeArch,
-    Tls: TlsResolver<Arch> = (),
-> {
+pub struct VisibleModule<K, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[K]>,
 }

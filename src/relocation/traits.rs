@@ -11,10 +11,15 @@ use crate::{
     lazy::{LazyBinder, LazyBindingSlots},
     memory::VmAddr,
     observer::RelocationObserver,
+    runtime::DomainId,
     tls::TlsResolver,
 };
 #[cfg(feature = "object")]
-use crate::{elf::ElfRelType, memory::RegionAccess};
+use crate::{
+    elf::ElfRelType,
+    memory::{ImageMemory, RegionAccess},
+    object::layout::PltGotSection,
+};
 
 /// Architecture-specific dynamic relocation numbering.
 ///
@@ -119,7 +124,7 @@ pub trait ObjectArch: RelocationArch {
         R: RegionAccess,
         Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,
-        Memory: crate::memory::ImageMemory,
+        Memory: ImageMemory,
     {
         Ok(())
     }
@@ -131,7 +136,7 @@ pub trait ObjectArch: RelocationArch {
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
         _target: &ElfShdr<Self::Layout>,
-        _pltgot: &mut crate::object::layout::PltGotSection,
+        _pltgot: &mut PltGotSection,
     ) -> Result<()>
     where
         Self: Sized,
@@ -139,7 +144,7 @@ pub trait ObjectArch: RelocationArch {
         R: RegionAccess,
         Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,
-        Memory: crate::memory::ImageMemory,
+        Memory: ImageMemory,
     {
         Err(helper.reloc_error(rel, RelocReason::Unsupported))
     }
@@ -272,6 +277,9 @@ pub trait Relocatable<D = ()>: Sized {
 
     /// TLS resolver used by this image and every module in its relocation scope.
     type Tls: TlsResolver<Self::Arch>;
+
+    /// Returns the runtime domain in which this image was loaded.
+    fn domain_id(&self) -> DomainId;
 
     /// Executes relocation using the implementor's target architecture.
     fn relocate<Obs, Binder>(

@@ -1,10 +1,13 @@
 use super::ObjectSections;
 use crate::{
     AlignedBytes, MmapError, ParseShdrError, Result,
-    arch::object::{PLT_ENTRY, PLT_ENTRY_SIZE},
+    arch::{
+        NativeArch,
+        object::{PLT_ENTRY, PLT_ENTRY_SIZE},
+    },
     elf::{
-        ElfLayout, ElfRelEntry, ElfRelType, ElfSectionFlags, ElfSectionId, ElfSectionType, ElfShdr,
-        ElfWord,
+        ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfSectionFlags, ElfSectionId,
+        ElfSectionType, ElfShdr, ElfWord,
     },
     entity::{EntityRef, PrimaryMap},
     input::{ElfReader, ElfReaderExt},
@@ -35,7 +38,7 @@ pub(crate) fn section_prot(sh_flags: ElfSectionFlags) -> ProtFlags {
 }
 
 /// Manages segments created from ELF section headers
-pub(crate) struct SectionSegments<Arch: ObjectArch = crate::arch::NativeArch> {
+pub(crate) struct SectionSegments<Arch: ObjectArch = NativeArch> {
     core: SectionSegmentSet,
     init: SectionSegmentSet,
     pltgot: Option<PltGotSection>,
@@ -761,7 +764,7 @@ pub(crate) enum PltEntry<'plt> {
 /// Relocation identity used to deduplicate object GOT/PLT entries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ObjectRelocKey {
-    r_type: crate::elf::ElfRelocationType,
+    r_type: ElfRelocationType,
     r_sym: usize,
     addend: isize,
 }

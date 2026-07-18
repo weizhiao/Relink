@@ -1,4 +1,6 @@
 use crate::input::{ElfReader, Path, PathBuf};
+#[cfg(target_pointer_width = "32")]
+use crate::os::PageSize;
 use crate::{
     Error, IoError, MmapError, Result, logging,
     memory::{HostRegion, MappedRegion, VmAddr},
@@ -87,7 +89,7 @@ impl Mmap for DefaultMmap {
         len: usize,
         prot: ProtFlags,
         _populate_later: bool,
-    ) -> crate::Result<MappedRegion<Self::Region>> {
+    ) -> Result<MappedRegion<Self::Region>> {
         let ptr = unsafe {
             #[cfg(target_pointer_width = "32")]
             let syscall = Sysno::mmap2;
@@ -123,10 +125,10 @@ impl Mmap for DefaultMmap {
         flags: MapFlags,
         offset: usize,
         fd: isize,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         unsafe {
             #[cfg(target_pointer_width = "32")]
-            let (syscall, offset) = (Sysno::mmap2, offset / crate::os::PageSize::BASE_BYTES);
+            let (syscall, offset) = (Sysno::mmap2, offset / PageSize::BASE_BYTES);
             #[cfg(not(target_pointer_width = "32"))]
             let syscall = Sysno::mmap;
             from_ret(
@@ -151,7 +153,7 @@ impl Mmap for DefaultMmap {
         len: usize,
         prot: ProtFlags,
         flags: MapFlags,
-    ) -> crate::Result<()> {
+    ) -> Result<()> {
         unsafe {
             #[cfg(target_pointer_width = "32")]
             let syscall = Sysno::mmap2;
@@ -173,7 +175,7 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> crate::Result<()> {
+    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
         from_ret(
             syscalls::raw_syscall!(Sysno::munmap, addr.as_mut_ptr::<c_void>(), len),
             |code| Error::from(MmapError::MunmapFailed { code }),
@@ -195,7 +197,7 @@ impl Mmap for DefaultMmap {
         Ok(())
     }
 
-    unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> crate::Result<()> {
+    unsafe fn mprotect(&self, addr: VmAddr, len: usize, prot: ProtFlags) -> Result<()> {
         from_ret(
             syscalls::raw_syscall!(
                 Sysno::mprotect,

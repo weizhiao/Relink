@@ -2,7 +2,7 @@
 
 use super::defs::{LazyBindingEntries, LazyRuntime};
 use crate::{
-    LazyBindingError, RelocationError, Result,
+    ByteRepr, LazyBindingError, RelocationError, Result,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
     image::RawDynamic,
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
@@ -149,7 +149,7 @@ pub(crate) fn relocate_jump_slot<Arch, Memory>(
 where
     Arch: RelocationArch,
     Memory: ImageMemory,
-    <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+    <Arch::Layout as ElfLayout>::Word: ByteRepr,
 {
     if !lazy {
         return Ok(false);

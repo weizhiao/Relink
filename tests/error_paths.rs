@@ -40,29 +40,12 @@ fn unresolved_symbol_fails_bind_now_relocation() {
     );
 }
 
-#[cfg(not(feature = "tls"))]
-#[test]
-fn tls_image_requires_resolver_without_default_feature() {
-    let output = write_test_dylib(&[], &[SymbolDesc::global_tls("tls_value", &[1, 2, 3, 4])]);
-
-    let error = Loader::new()
-        .load_dylib(ElfBinary::new("tls_disabled.so", &output.data))
-        .expect_err("TLS image should fail to load without the `tls` feature");
-
-    let message = error.to_string();
-    assert!(
-        message.contains("TLS operation is not supported by the configured resolver"),
-        "unexpected error: {message}"
-    );
-}
-
-#[cfg(feature = "tls")]
 #[test]
 fn tls_image_requires_resolver() {
     let output = write_test_dylib(&[], &[SymbolDesc::global_tls("tls_value", &[1, 2, 3, 4])]);
 
     let error = Loader::new()
-        .load_dylib(ElfBinary::new("tls_requires_resolver.so", &output.data))
+        .load_dylib(ElfBinary::new("tls_without_resolver.so", &output.data))
         .expect_err("TLS image should fail to load without a TLS resolver");
 
     let message = error.to_string();

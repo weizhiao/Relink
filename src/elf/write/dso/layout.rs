@@ -1,4 +1,7 @@
-use crate::{Result, custom_error, elf::ElfLayout};
+use crate::{
+    Result, custom_error,
+    elf::{ElfLayout, abi::ELFCLASS64},
+};
 use core::mem::size_of;
 
 pub(super) const DEFAULT_PAGE_SIZE: usize = 0x1000;
@@ -7,7 +10,7 @@ pub(super) const TEXT_SECTION_INDEX: u16 = 1;
 
 #[inline]
 pub(super) const fn is_64<L: ElfLayout>() -> bool {
-    L::E_CLASS == crate::elf::abi::ELFCLASS64
+    L::E_CLASS == ELFCLASS64
 }
 
 #[inline]

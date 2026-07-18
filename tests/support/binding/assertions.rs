@@ -169,8 +169,8 @@ impl BindingScenario {
         let tls_mod_id = self
             .helper_dylib()
             .tls()
+            .expect("missing TLS module")
             .mod_id()
-            .expect("missing TLS mod id")
             .get() as u64;
 
         for symbol_name in [EXTERNAL_TLS_NAME, EXTERNAL_TLS_NAME2] {

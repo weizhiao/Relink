@@ -3,7 +3,8 @@ use super::{
     ModuleId as PlanModuleId, build_arena_raw_dynamic,
 };
 use crate::{
-    LinkerError, Loader, Result,
+    ByteRepr, LinkerError, Loader, Result,
+    elf::ElfRelType,
     image::{RawDynamic, ScannedDynamic},
     lazy::LazyBinder,
     linker::{
@@ -17,7 +18,7 @@ use crate::{
     memory::{ImageMemory, RegionAccess, VmOffset},
     observer::{LinkerObserver, LoadObserver, RelocationObserver},
     os::Mmap,
-    relocation::RelocationArch,
+    relocation::{RelocationArch, RelocationValueProvider},
     runtime::CodeExecutor,
     tls::TlsResolver,
 };
@@ -35,10 +36,10 @@ where
     K: Clone + Ord,
     D: Default + 'static,
     Tls: TlsResolver<Arch>,
-    Arch: RelocationArch + crate::relocation::RelocationValueProvider + GotPltTarget,
+    Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
-    crate::elf::ElfRelType<Arch>: crate::ByteRepr,
+    ElfRelType<Arch>: ByteRepr,
     Obs: LinkerObserver<K, D, Arch, M::Region, Tls>
         + LoadObserver<D, Arch>
         + RelocationObserver<Arch>,
@@ -80,6 +81,9 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
     {
+        context
+            .committed
+            .ensure_domain(self.linker.loader.domain_id())?;
         let mut session = ResolveSession::new();
 
         let mut loader = self.linker.loader.run().with_observer(&mut self.observer);
@@ -91,7 +95,7 @@ where
         )?;
         let root = resolve_context.stage(resolved, &mut loader)?;
         if !resolve_context.contains_pending(root) {
-            return Ok(PreparedLoad::new(root, LoadSession::new(), None, context));
+            return PreparedLoad::new(root, LoadSession::new(), None, context);
         }
         resolve_context.resolve_dependency_graph::<_, _, _, Q>(
             root,
@@ -154,7 +158,7 @@ where
             }
         }
 
-        Ok(PreparedLoad::new(root, session, mapped_runtime, context))
+        PreparedLoad::new(root, session, mapped_runtime, context)
     }
 
     fn prepare_mapped_runtime(
@@ -218,8 +222,13 @@ where
             .take_module(module_id)?;
         let force_static_tls = self.linker.loader.force_static_tls();
 
-        let raw =
-            build_arena_raw_dynamic::<D, Tls, Arch, M::Region>(scanned, runtime, force_static_tls)?;
+        let raw = build_arena_raw_dynamic::<D, Tls, Arch, M::Region>(
+            scanned,
+            runtime,
+            force_static_tls,
+            self.linker.loader.domain_id(),
+            self.linker.loader.tls_resolver(),
+        )?;
         Ok(raw)
     }
 }

@@ -1,5 +1,5 @@
 use crate::{
-    LinkerError, UnresolvedDependency,
+    Error, LinkerError, UnresolvedDependency,
     image::{RawDynamic, ScannedDynamic},
     input::Path,
     memory::RegionAccess,
@@ -215,7 +215,7 @@ impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
 
     /// Creates the standard unresolved-dependency error for this edge.
     #[inline]
-    pub fn unresolved(&self) -> crate::Error {
+    pub fn unresolved(&self) -> Error {
         LinkerError::UnresolvedDependency(Box::new(UnresolvedDependency::new(
             self.owner_name(),
             self.needed(),

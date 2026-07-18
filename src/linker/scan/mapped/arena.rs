@@ -247,6 +247,7 @@ mod tests {
         input::ElfBinary,
         linker::LinkContext,
         loader::Loader,
+        runtime::DomainId,
     };
     use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
     use gen_elf::{Arch, DylibWriter, ElfWriterConfig, SymbolDesc};
@@ -268,7 +269,7 @@ mod tests {
             panic!("generated dylib should scan as dynamic");
         };
         let mut entries = BTreeMap::new();
-        let mut context = LinkContext::<&str, ()>::new();
+        let mut context = LinkContext::<&str, ()>::new(DomainId::PROCESS);
         context
             .insert("root", SyntheticModule::empty("root"), Box::new([]))
             .unwrap();

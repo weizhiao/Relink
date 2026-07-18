@@ -4,7 +4,7 @@ use crate::dylib::data::DataMetaData;
 use crate::dylib::dynamic::DynamicMetadata;
 use crate::dylib::layout::ElfLayout;
 use crate::dylib::reloc::RelocMetaData;
-use crate::dylib::shdr::{SectionAllocator, ShdrManager};
+use crate::dylib::shdr::{Section, SectionAllocator, SectionHeader, ShdrManager};
 use crate::dylib::symtab::SymTabMetadata;
 use crate::dylib::text::{CodeMetaData, PatchTextArgs};
 use crate::dylib::tls::TlsMetaData;
@@ -293,8 +293,8 @@ impl DylibWriter {
         symtab.create_sections(&mut sections);
         reloc.create_sections(&mut sections)?;
         if let Some((section_id, section_kind, size)) = retained_relocation {
-            sections.push(crate::dylib::shdr::Section {
-                header: crate::dylib::shdr::SectionHeader {
+            sections.push(Section {
+                header: SectionHeader {
                     name_off: 0,
                     shtype: section_kind,
                     addr: 0,

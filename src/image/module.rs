@@ -1,7 +1,9 @@
 use super::Module;
 use crate::{
+    Result,
     arch::NativeArch,
     relocation::RelocationArch,
+    runtime::DomainId,
     sync::{Arc, Weak},
     tls::TlsResolver,
 };
@@ -120,6 +122,7 @@ pub(crate) struct WeakModuleScope<Arch: RelocationArch = NativeArch, Tls: TlsRes
 /// Mutable builder for a [`ModuleScope`].
 pub struct ModuleScopeBuilder<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     modules: Vec<ModuleHandle<Arch, Tls>>,
+    domain: DomainId,
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleScopeBuilder<Arch, Tls> {
@@ -127,16 +130,18 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleScopeBuilder<
     fn clone(&self) -> Self {
         Self {
             modules: self.modules.clone(),
+            domain: self.domain,
         }
     }
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScopeBuilder<Arch, Tls> {
-    /// Creates an empty module-scope builder.
+    /// Creates an empty module-scope builder for `domain`.
     #[inline]
-    pub const fn new() -> Self {
+    pub const fn new(domain: DomainId) -> Self {
         Self {
             modules: Vec::new(),
+            domain,
         }
     }
 
@@ -159,18 +164,17 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScopeBuilder<Arch, Tls>
     }
 
     /// Finishes the builder and returns an immutable module scope.
-    #[inline]
-    pub fn into_scope(self) -> ModuleScope<Arch, Tls> {
-        ModuleScope {
-            modules: Arc::from(self.modules),
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the modules belong to incompatible runtime domains.
+    pub fn into_scope(self) -> Result<ModuleScope<Arch, Tls>> {
+        for module in &self.modules {
+            self.domain.ensure(module.domain_id())?;
         }
-    }
-}
-
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Default for ModuleScopeBuilder<Arch, Tls> {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
+        Ok(ModuleScope {
+            modules: Arc::from(self.modules),
+        })
     }
 }
 
@@ -196,6 +200,13 @@ where
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScope<Arch, Tls> {
+    pub(crate) fn ensure_domain(&self, expected: DomainId) -> Result<()> {
+        match self.modules.first() {
+            Some(module) => expected.ensure(module.domain_id()),
+            None => Ok(()),
+        }
+    }
+
     #[inline]
     pub(crate) fn downgrade(&self) -> WeakModuleScope<Arch, Tls> {
         WeakModuleScope {

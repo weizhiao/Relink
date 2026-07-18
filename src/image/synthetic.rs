@@ -6,6 +6,7 @@ use crate::{
     elf::{ElfLayout, ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType},
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
+    runtime::DomainId,
     sync::Arc,
     tls::{ModuleTls, TlsResolver},
 };
@@ -89,6 +90,21 @@ impl SyntheticSymbol {
             ElfSymbolType::OBJECT,
             0,
             ElfSectionIndex::ABS,
+            None,
+        )
+    }
+
+    /// Creates a TLS symbol whose value is an offset in this module's TLS block.
+    #[inline]
+    pub fn tls(name: impl Into<String>, offset: usize, size: usize) -> Self {
+        Self::from_fields(
+            name,
+            offset,
+            size,
+            ElfSymbolBind::GLOBAL,
+            ElfSymbolType::TLS,
+            0,
+            ElfSectionIndex::new(1),
             None,
         )
     }
@@ -257,7 +273,8 @@ where
 pub struct SyntheticModule<Arch: RelocationArch = NativeArch, D = ()> {
     name: String,
     memory: Arc<dyn ImageMemory>,
-    tls: ModuleTls,
+    tls: Option<ModuleTls>,
+    domain: DomainId,
     user_data: D,
     names: Vec<String>,
     symbols: Vec<ElfSymbol<Arch::Layout>>,
@@ -277,6 +294,7 @@ impl<Arch: RelocationArch, D: Clone> Clone for SyntheticModule<Arch, D> {
             name: self.name.clone(),
             memory: self.memory.clone(),
             tls: self.tls,
+            domain: self.domain,
             user_data: self.user_data.clone(),
             names: self.names.clone(),
             symbols: self.symbols.clone(),
@@ -303,7 +321,8 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
         Self {
             name: name.into(),
             memory: image_memory(UnmappedImageMemory::default()),
-            tls: ModuleTls::NONE,
+            tls: None,
+            domain: DomainId::PROCESS,
             user_data: (),
             names: Vec::new(),
             symbols: Vec::new(),
@@ -320,6 +339,7 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
             name: self.name,
             memory: self.memory,
             tls: self.tls,
+            domain: self.domain,
             user_data,
             names: self.names,
             symbols: self.symbols,
@@ -355,7 +375,14 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
     /// Sets TLS metadata exposed by this synthetic module.
     #[inline]
     pub fn with_tls(mut self, tls: ModuleTls) -> Self {
-        self.tls = tls;
+        self.tls = Some(tls);
+        self
+    }
+
+    /// Binds this synthetic module to one runtime domain.
+    #[inline]
+    pub fn with_domain(mut self, domain: DomainId) -> Self {
+        self.domain = domain;
         self
     }
 
@@ -493,8 +520,13 @@ where
     }
 
     #[inline]
-    fn tls(&self) -> ModuleTls {
+    fn tls(&self) -> Option<ModuleTls> {
         self.tls
+    }
+
+    #[inline]
+    fn domain_id(&self) -> DomainId {
+        self.domain
     }
 }
 
@@ -557,9 +589,9 @@ mod tests {
             VmAddr::null()
         );
 
-        let mut scope = ModuleScopeBuilder::<NativeArch>::new();
+        let mut scope = ModuleScopeBuilder::<NativeArch>::new(DomainId::PROCESS);
         scope.extend([module]);
-        let scope = scope.into_scope();
+        let scope = scope.into_scope().unwrap();
         let mut lookup = SymbolLookup::new("host_double");
 
         let module = scope
@@ -661,9 +693,9 @@ mod tests {
                 None,
             )],
         );
-        let mut scope = ModuleScopeBuilder::<NativeArch>::new();
+        let mut scope = ModuleScopeBuilder::<NativeArch>::new(DomainId::PROCESS);
         scope.extend([module]);
-        let scope = scope.into_scope();
+        let scope = scope.into_scope().unwrap();
         let mut lookup = SymbolLookup::new("tls_slot");
 
         let module = scope
@@ -693,7 +725,7 @@ mod tests {
 
         assert_eq!(
             <SyntheticModule<NativeArch> as Module<NativeArch, ()>>::tls(&module),
-            tls
+            Some(tls)
         );
     }
 

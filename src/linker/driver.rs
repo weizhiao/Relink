@@ -1,7 +1,14 @@
 use super::{run::LinkerRun, scan::LinkPipeline, storage::ModuleId};
 use crate::{
-    Loader, Relocator, const_builder::NoDrop, image::LoadedCore, memory::RegionAccess, os::Mmap,
-    relocation::RelocationArch, runtime::CodeExecutor, tls::TlsResolver,
+    Loader, Relocator,
+    arch::NativeArch,
+    const_builder::NoDrop,
+    image::LoadedCore,
+    memory::{HostRegion, RegionAccess},
+    os::Mmap,
+    relocation::RelocationArch,
+    runtime::CodeExecutor,
+    tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt, marker::PhantomData, mem::MaybeUninit, ops::Deref, ptr};
@@ -12,8 +19,8 @@ use core::{fmt, marker::PhantomData, mem::MaybeUninit, ops::Deref, ptr};
 /// values in load order.
 pub struct LoadResult<
     D: 'static,
-    Arch: RelocationArch = crate::arch::NativeArch,
-    R: RegionAccess = crate::memory::HostRegion,
+    Arch: RelocationArch = NativeArch,
+    R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
     root_id: ModuleId,
@@ -112,6 +119,7 @@ where
 ///     LinkContext, Linker, Result,
 ///     input::PathBuf,
 ///     linker::SearchPathResolver,
+///     runtime::DomainId,
 /// };
 ///
 /// fn main() -> Result<()> {
@@ -119,7 +127,7 @@ where
 ///     resolver.push_fixed_dir("plugins");
 ///
 ///     let linker = Linker::<PathBuf>::new().resolver(resolver);
-///     let mut context: LinkContext<PathBuf, ()> = LinkContext::new();
+///     let mut context: LinkContext<PathBuf, ()> = LinkContext::new(DomainId::PROCESS);
 ///
 ///     let mut run = linker.run();
 ///     let loaded = run.load(&mut context, PathBuf::from("libplugin.so"))?;
@@ -134,7 +142,7 @@ where
 /// ```
 pub struct Linker<
     K: Clone + Ord,
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     L = Loader<(), (), Arch>,
     R = (),
     RelocBinder = (),

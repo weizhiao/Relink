@@ -1,13 +1,15 @@
 use super::run::LoaderRun;
 #[cfg(feature = "object")]
 use crate::object::SectionGroups;
+#[cfg(feature = "tls")]
+use crate::tls::DefaultTlsResolver;
 use crate::{
     MmapError, Result,
     arch::NativeArch,
     const_builder::NoDrop,
     os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
-    runtime::{CodeExecutor, NativeCodeExecutor},
+    runtime::{CodeExecutor, DomainId, NativeCodeExecutor},
     sync::Arc,
     tls::TlsResolver,
 };
@@ -56,9 +58,145 @@ pub struct Loader<
 {
     mapper: M,
     executor: Exec,
+    tls_resolver: Tls,
+    domain: DomainId,
     page_size: Option<PageSize>,
     force_static_tls: bool,
     _marker: PhantomData<fn() -> (D, Tls, Arch)>,
+}
+
+impl<D, Tls, Arch, M, Exec> Copy for Loader<D, Tls, Arch, M, Exec>
+where
+    D: 'static,
+    Tls: TlsResolver<Arch> + Copy,
+    Arch: RelocationArch,
+    M: Mmap + Copy,
+    Exec: Copy,
+{
+}
+
+struct LoaderFields<Tls, M, Exec> {
+    mapper: NoDrop<M>,
+    executor: NoDrop<Exec>,
+    tls_resolver: NoDrop<Tls>,
+    domain: DomainId,
+    page_size: Option<PageSize>,
+    force_static_tls: bool,
+}
+
+impl<Tls, M, Exec> LoaderFields<Tls, M, Exec> {
+    #[inline]
+    const fn into_loader<D, Arch>(self) -> Loader<D, Tls, Arch, M, Exec>
+    where
+        D: 'static,
+        Tls: TlsResolver<Arch>,
+        Arch: RelocationArch,
+        M: Mmap,
+    {
+        let Self {
+            mapper,
+            executor,
+            tls_resolver,
+            domain,
+            page_size,
+            force_static_tls,
+        } = self;
+        Loader {
+            mapper: mapper.into_inner(),
+            executor: executor.into_inner(),
+            tls_resolver: tls_resolver.into_inner(),
+            domain,
+            page_size,
+            force_static_tls,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline]
+    const fn with_executor<D, Arch, NewExec>(
+        self,
+        executor: NewExec,
+    ) -> Loader<D, Tls, Arch, M, NewExec>
+    where
+        D: 'static,
+        Tls: TlsResolver<Arch>,
+        Arch: RelocationArch,
+        M: Mmap,
+        Exec: Copy,
+    {
+        let Self {
+            mapper,
+            tls_resolver,
+            domain,
+            page_size,
+            force_static_tls,
+            ..
+        } = self;
+        Loader {
+            mapper: mapper.into_inner(),
+            executor,
+            tls_resolver: tls_resolver.into_inner(),
+            domain,
+            page_size,
+            force_static_tls,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline]
+    const fn with_mapper<D, Arch, NewM>(self, mapper: NewM) -> Loader<D, Tls, Arch, NewM, Exec>
+    where
+        D: 'static,
+        Tls: TlsResolver<Arch>,
+        Arch: RelocationArch,
+        NewM: Mmap,
+        M: Copy,
+    {
+        let Self {
+            executor,
+            tls_resolver,
+            domain,
+            page_size,
+            force_static_tls,
+            ..
+        } = self;
+        Loader {
+            mapper,
+            executor: executor.into_inner(),
+            tls_resolver: tls_resolver.into_inner(),
+            domain,
+            page_size,
+            force_static_tls,
+            _marker: PhantomData,
+        }
+    }
+
+    #[cfg(feature = "tls")]
+    #[inline]
+    const fn with_default_tls<D>(self) -> Loader<D, DefaultTlsResolver, NativeArch, M, Exec>
+    where
+        D: 'static,
+        Tls: TlsResolver<NativeArch> + Copy,
+        M: Mmap,
+    {
+        let Self {
+            mapper,
+            executor,
+            domain,
+            page_size,
+            force_static_tls,
+            ..
+        } = self;
+        Loader {
+            mapper: mapper.into_inner(),
+            executor: executor.into_inner(),
+            tls_resolver: DefaultTlsResolver::new(),
+            domain,
+            page_size,
+            force_static_tls,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<D, Tls, Arch, M, Exec> Clone for Loader<D, Tls, Arch, M, Exec>
@@ -74,104 +212,10 @@ where
         Self {
             mapper: self.mapper.clone(),
             executor: self.executor.clone(),
+            tls_resolver: self.tls_resolver.clone(),
+            domain: self.domain,
             page_size: self.page_size,
             force_static_tls: self.force_static_tls,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<D, Tls, Arch, M, Exec> Copy for Loader<D, Tls, Arch, M, Exec>
-where
-    D: 'static,
-    Tls: TlsResolver<Arch>,
-    Arch: RelocationArch,
-    M: Mmap + Copy,
-    Exec: Copy,
-{
-}
-
-struct LoaderFields<M, Exec> {
-    mapper: NoDrop<M>,
-    executor: NoDrop<Exec>,
-    page_size: Option<PageSize>,
-    force_static_tls: bool,
-}
-
-impl<M, Exec> LoaderFields<M, Exec> {
-    #[inline]
-    const fn into_loader<D, Tls, Arch>(self) -> Loader<D, Tls, Arch, M, Exec>
-    where
-        D: 'static,
-        Tls: TlsResolver<Arch>,
-        Arch: RelocationArch,
-        M: Mmap,
-    {
-        let Self {
-            mapper,
-            executor,
-            page_size,
-            force_static_tls,
-        } = self;
-
-        Loader {
-            mapper: mapper.into_inner(),
-            executor: executor.into_inner(),
-            page_size,
-            force_static_tls,
-            _marker: PhantomData,
-        }
-    }
-
-    #[inline]
-    const fn with_executor<D, Tls, Arch, NewExec>(
-        self,
-        executor: NewExec,
-    ) -> Loader<D, Tls, Arch, M, NewExec>
-    where
-        D: 'static,
-        Tls: TlsResolver<Arch>,
-        Arch: RelocationArch,
-        M: Mmap,
-        Exec: Copy,
-    {
-        let Self {
-            mapper,
-            page_size,
-            force_static_tls,
-            ..
-        } = self;
-
-        Loader {
-            mapper: mapper.into_inner(),
-            executor,
-            page_size,
-            force_static_tls,
-            _marker: PhantomData,
-        }
-    }
-
-    #[inline]
-    const fn with_mapper<D, Tls, Arch, NewM>(self, mapper: NewM) -> Loader<D, Tls, Arch, NewM, Exec>
-    where
-        D: 'static,
-        Tls: TlsResolver<Arch>,
-        Arch: RelocationArch,
-        NewM: Mmap,
-        M: Copy,
-    {
-        let Self {
-            executor,
-            page_size,
-            force_static_tls,
-            ..
-        } = self;
-
-        Loader {
-            mapper,
-            executor: executor.into_inner(),
-            page_size,
-            force_static_tls,
             _marker: PhantomData,
         }
     }
@@ -191,6 +235,8 @@ impl Loader<(), (), NativeArch, DefaultMmap, NativeCodeExecutor> {
         Self {
             mapper: DefaultMmap::new(),
             executor: NativeCodeExecutor,
+            tls_resolver: (),
+            domain: DomainId::PROCESS,
             page_size: None,
             force_static_tls: false,
             _marker: PhantomData,
@@ -213,23 +259,29 @@ where
     M: Mmap,
 {
     #[inline]
-    const fn into_fields(self) -> LoaderFields<M, Exec> {
+    const fn into_fields(self) -> LoaderFields<Tls, M, Exec> {
         let this = MaybeUninit::new(self);
         let this = this.as_ptr();
-
-        // SAFETY: `this` points at the fully initialized `self` stored inside
-        // `MaybeUninit`, so every field read below is initialized and aligned.
-        // The original `Loader` is intentionally not dropped; every owned
-        // field that must survive is moved into `LoaderFields`. Helpers that
-        // discard an old field require that old field to be `Copy`.
         unsafe {
             LoaderFields {
                 mapper: NoDrop::read(ptr::addr_of!((*this).mapper)),
                 executor: NoDrop::read(ptr::addr_of!((*this).executor)),
+                tls_resolver: NoDrop::read(ptr::addr_of!((*this).tls_resolver)),
+                domain: ptr::read(ptr::addr_of!((*this).domain)),
                 page_size: ptr::read(ptr::addr_of!((*this).page_size)),
                 force_static_tls: ptr::read(ptr::addr_of!((*this).force_static_tls)),
             }
         }
+    }
+
+    #[inline]
+    pub(crate) fn tls_resolver(&self) -> Tls {
+        self.tls_resolver.clone()
+    }
+
+    #[inline]
+    pub const fn domain_id(&self) -> DomainId {
+        self.domain
     }
 }
 
@@ -309,6 +361,16 @@ where
         self
     }
 
+    /// Assigns the runtime domain used by every image produced by this loader.
+    ///
+    /// Use a distinct domain for each remote process, guest, device, or otherwise
+    /// incompatible target address space.
+    #[inline]
+    pub const fn with_domain(mut self, domain: DomainId) -> Self {
+        self.domain = domain;
+        self
+    }
+
     /// Overrides the runtime-code executor used for init, fini and IFUNC.
     pub const fn with_executor<E>(self, executor: E) -> Loader<D, Tls, Arch, M, E>
     where
@@ -319,11 +381,32 @@ where
     }
 
     /// Consumes the current loader and returns a new one with the specified TLS resolver.
-    pub const fn with_tls_resolver<NewTls>(self) -> Loader<D, NewTls, Arch, M, Exec>
+    /// The resolver instance is shared by the loader and all modules it creates.
+    pub const fn with_tls_resolver<NewTls>(
+        self,
+        resolver: NewTls,
+    ) -> Loader<D, NewTls, Arch, M, Exec>
     where
         NewTls: TlsResolver<Arch>,
+        Tls: Copy,
     {
-        self.into_fields().into_loader()
+        let LoaderFields {
+            mapper,
+            executor,
+            domain,
+            page_size,
+            force_static_tls,
+            ..
+        } = self.into_fields();
+        Loader {
+            mapper: mapper.into_inner(),
+            executor: executor.into_inner(),
+            tls_resolver: resolver,
+            domain,
+            page_size,
+            force_static_tls,
+            _marker: PhantomData,
+        }
     }
 
     /// Sets whether to force static TLS for all loaded modules.
@@ -336,7 +419,7 @@ where
 impl<D, Tls, M, Exec> Loader<D, Tls, NativeArch, M, Exec>
 where
     D: 'static,
-    Tls: TlsResolver<NativeArch>,
+    Tls: TlsResolver<NativeArch> + Copy,
     M: Mmap,
     Exec: CodeExecutor<NativeArch> + Clone,
 {
@@ -344,8 +427,8 @@ where
     #[cfg(feature = "tls")]
     pub const fn with_default_tls_resolver(
         self,
-    ) -> Loader<D, crate::tls::DefaultTlsResolver, NativeArch, M, Exec> {
-        self.into_fields().into_loader()
+    ) -> Loader<D, DefaultTlsResolver, NativeArch, M, Exec> {
+        self.into_fields().with_default_tls()
     }
 }
 
@@ -411,5 +494,19 @@ where
         Exec: Copy,
     {
         self.into_fields().with_executor(NativeCodeExecutor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Loader;
+    use crate::runtime::DomainId;
+
+    #[test]
+    fn builder_preserves_runtime_domain() {
+        let domain = DomainId::new();
+        let loader = Loader::new().with_domain(domain).with_data::<()>();
+
+        assert_eq!(loader.domain_id(), domain);
     }
 }

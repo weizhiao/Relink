@@ -3,16 +3,16 @@ use crate::{
     arch::NativeArch,
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
     input::{ElfReader, PathBuf},
-    memory::{ImageMemory, MappedView, RegionAccess, VmAddr},
+    memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     os::ProtFlags,
     relocation::RelocationArch,
-    runtime::CodeExecutor,
+    runtime::{CodeExecutor, DomainId},
     segment::{ElfSegments, MemoryProtection},
     sync::Arc,
     tls::{TlsInfo, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{marker::PhantomData, ptr::NonNull};
+use core::ptr::NonNull;
 
 /// Builder for creating relocated ELF objects
 ///
@@ -23,7 +23,7 @@ pub(crate) struct ImageBuilder<
     Tls,
     D: 'static = (),
     Arch: RelocationArch = NativeArch,
-    R: RegionAccess = crate::memory::HostRegion,
+    R: RegionAccess = HostRegion,
 > where
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
@@ -61,6 +61,12 @@ pub(crate) struct ImageBuilder<
     /// Runtime-code executor used by loaded dynamic cores.
     pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
 
+    /// Runtime domain shared by all addresses in this image.
+    pub(crate) domain: DomainId,
+
+    /// TLS resolver shared by every module loaded from this loader.
+    pub(crate) tls_resolver: Tls,
+
     /// Memory segments
     pub(crate) segments: ElfSegments<R>,
 
@@ -69,9 +75,6 @@ pub(crate) struct ImageBuilder<
 
     /// Pointer to the .eh_frame_hdr section (PT_GNU_EH_FRAME)
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
-
-    /// Phantom data to maintain TLS type information.
-    _marker: PhantomData<fn() -> Tls>,
 }
 
 pub(crate) struct ScanBuilder<L: ElfLayout = NativeElfLayout> {
@@ -119,6 +122,8 @@ where
         page_size: usize,
         user_data: D,
         executor: Arc<dyn CodeExecutor<Arch>>,
+        domain: DomainId,
+        tls_resolver: Tls,
     ) -> Self {
         Self {
             path,
@@ -133,9 +138,10 @@ where
             segments,
             user_data,
             executor,
+            domain,
+            tls_resolver,
             interp: None,
             eh_frame_hdr: None,
-            _marker: PhantomData,
         }
     }
 

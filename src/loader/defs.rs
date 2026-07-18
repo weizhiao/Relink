@@ -83,7 +83,7 @@ pub(crate) enum ExpectedElf {
 
 impl ExpectedElf {
     #[inline]
-    pub(crate) fn matches<L: crate::elf::ElfLayout>(self, ehdr: &ElfHeader<L>) -> bool {
+    pub(crate) fn matches<L: ElfLayout>(self, ehdr: &ElfHeader<L>) -> bool {
         match self {
             Self::Dylib => ehdr.is_dylib(),
             Self::Dynamic | Self::Executable => ehdr.is_executable(),

@@ -1,8 +1,10 @@
 use crate::{
     LinkContextError, LinkerError, Result,
+    arch::NativeArch,
     entity::{PrimaryMap, SecondaryMap, entity_ref},
     image::ModuleHandle,
     relocation::RelocationArch,
+    runtime::DomainId,
     sync::{AtomicUsize, Ordering},
     tls::TlsResolver,
 };
@@ -187,10 +189,11 @@ pub(crate) struct CommittedStorage<
     K,
     D: 'static,
     M = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     Tls: TlsResolver<Arch> = (),
 > {
     context: ContextId,
+    domain: DomainId,
     key_slots: BTreeMap<K, KeySlot>,
     keys: PrimaryMap<KeySlot, K>,
     key_modules: SecondaryMap<KeySlot, ModuleSlot>,
@@ -211,6 +214,7 @@ where
         Self {
             key_slots: self.key_slots.clone(),
             context: self.context,
+            domain: self.domain,
             keys: self.keys.clone(),
             key_modules: self.key_modules.clone(),
             entries: self.entries.clone(),
@@ -226,9 +230,10 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn new(context: ContextId) -> Self {
+    pub(crate) fn new(context: ContextId, domain: DomainId) -> Self {
         Self {
             context,
+            domain,
             key_slots: BTreeMap::new(),
             keys: PrimaryMap::new(),
             key_modules: SecondaryMap::new(),
@@ -241,6 +246,15 @@ where
     #[inline]
     pub(crate) const fn context(&self) -> ContextId {
         self.context
+    }
+
+    #[inline]
+    pub(crate) const fn domain(&self) -> DomainId {
+        self.domain
+    }
+
+    pub(crate) fn ensure_domain(&self, domain: DomainId) -> Result<()> {
+        self.domain.ensure(domain)
     }
 
     #[inline]
@@ -374,9 +388,7 @@ where
 
     #[inline]
     pub(crate) fn get_by_key(&self, slot: KeySlot) -> Option<&ModuleHandle<Arch, Tls>> {
-        let Some(module_slot) = self.module_for_key(slot) else {
-            return None;
-        };
+        let module_slot = self.module_for_key(slot)?;
         self.module(module_slot)
             .present()
             .map(|module| module.handle())
@@ -485,11 +497,7 @@ where
     }
 }
 
-struct StoredEntry<
-    M = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
-    Tls: TlsResolver<Arch> = (),
-> {
+struct StoredEntry<M = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     entry_key: KeySlot,
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[DepEdge]>,

@@ -126,7 +126,7 @@ where
     ) -> Result<Option<VmAddr>> {
         Ok(
             if Tls::OVERRIDE_TLS_GET_ADDR && symbol.name() == TLS_GET_ADDR_SYMBOL {
-                Some(Tls::bind_tls_get_addr()?)
+                Some(self.core.tls_resolver().bind_tls_get_addr()?)
             } else {
                 symdef
                     .map(|symdef| symdef.resolve_addr(self.core.executor()))

@@ -1,13 +1,14 @@
 use super::{ElfCore, ElfCoreRef, Symbol};
 use crate::{
-    Result,
-    arch::ArchKind,
+    ParsePhdrError, Result,
+    arch::{ArchKind, NativeArch},
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolType},
     hint::unlikely,
-    image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, SymbolLookup},
+    image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, SymbolExports, SymbolLookup},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymDef},
+    runtime::DomainId,
     segment::ElfSegments,
     tls::{CoreTlsState, ModuleTls, TlsInfo, TlsRequest, TlsResolver, TlsTpOffset},
 };
@@ -21,7 +22,7 @@ use elf::abi::DF_STATIC_TLS;
 /// [`crate::image::LoadedExec`] values, and loaded object-file images.
 pub struct LoadedCore<
     D: 'static = (),
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
@@ -97,9 +98,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     /// The caller must ensure the ELF object has been properly relocated.
     #[inline]
     pub unsafe fn from_core(core: ElfCore<D, Arch, R, Tls>) -> Self {
+        let domain = core.domain_id();
         LoadedCore {
             core,
-            scope: ModuleScopeBuilder::new().into_scope(),
+            scope: ModuleScopeBuilder::new(domain)
+                .into_scope()
+                .expect("empty module scope must be valid"),
         }
     }
 
@@ -181,7 +185,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     #[inline]
     fn lookup_addr(&self, sym: &ElfSymbol<Arch::Layout>) -> Result<Option<VmAddr>> {
         if unlikely(sym.symbol_type() == ElfSymbolType::TLS) {
-            Ok(self.core.tls_addr(sym.st_value()))
+            self.core.tls_addr(sym.st_value())
         } else {
             SymDef::<Arch, Tls>::defined(sym, self)
                 .resolve_addr(self.core.executor())
@@ -314,9 +318,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         self.core.downgrade()
     }
 
-    /// Returns TLS metadata associated with this image.
+    /// Returns TLS metadata when this image owns a TLS block.
     #[inline]
-    pub fn tls(&self) -> ModuleTls {
+    pub fn tls(&self) -> Option<ModuleTls> {
         self.core.tls()
     }
 
@@ -364,9 +368,9 @@ impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
         let region = MappedRegion::local_alias_no_unmap(addr.as_mut_ptr::<c_void>(), byte_len);
         let view = region
             .read_view::<ElfDyn<Arch::Layout>>(0, byte_len)
-            .ok_or(crate::ParsePhdrError::malformed(malformed))?;
+            .ok_or(ParsePhdrError::malformed(malformed))?;
         if view.is_empty() {
-            return Err(crate::ParsePhdrError::malformed(malformed).into());
+            return Err(ParsePhdrError::malformed(malformed).into());
         }
         Ok(view)
     }
@@ -393,6 +397,7 @@ impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
         phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
         memory: (*mut c_void, usize),
         munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
+        tls_resolver: Tls,
         tls_tp_offset: Option<TlsTpOffset>,
         user_data: D,
     ) -> Result<Self> {
@@ -419,7 +424,7 @@ impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
                 ElfProgramType::GNU_EH_FRAME => {
                     eh_frame_hdr = segments
                         .host_ptr_range(base + phdr.p_vaddr(), phdr.p_filesz())
-                        .ok_or(crate::ParsePhdrError::malformed(
+                        .ok_or(ParsePhdrError::malformed(
                             "PT_GNU_EH_FRAME is not directly readable from mapped segments",
                         ))
                         .map(Some)?;
@@ -434,9 +439,7 @@ impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
         let tls = if let Some(phdr) = tls_phdr {
             let template = segments
                 .read_view::<u8>(phdr.p_vaddr(), phdr.p_filesz())
-                .ok_or(crate::ParsePhdrError::malformed(
-                    "PT_TLS image is malformed",
-                ))?;
+                .ok_or(ParsePhdrError::malformed("PT_TLS image is malformed"))?;
             let info = TlsInfo::new(phdr);
 
             let mut static_tls = tls_tp_offset.is_some();
@@ -461,16 +464,20 @@ impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
             } else {
                 TlsRequest::Dynamic
             };
-            CoreTlsState::present(Tls::register(info, request)?, template)
+            CoreTlsState::with_module(
+                tls_resolver.clone(),
+                tls_resolver.register(info, request)?,
+                template,
+            )
         } else {
-            CoreTlsState::none()
+            CoreTlsState::without_module(tls_resolver)
         };
         let core = unsafe {
             ElfCore::from_raw(
                 path.into(),
                 base,
-                dynamic.ok_or(crate::ParsePhdrError::MissingDynamicSection)?,
-                dynamic_addr.ok_or(crate::ParsePhdrError::MissingDynamicSection)?,
+                dynamic.ok_or(ParsePhdrError::MissingDynamicSection)?,
+                dynamic_addr.ok_or(ParsePhdrError::MissingDynamicSection)?,
                 phdrs,
                 eh_frame_hdr,
                 segments,
@@ -478,7 +485,7 @@ impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
                 user_data,
             )
         }?;
-        core.init_tls()?;
+        core.publish_tls()?;
         Ok(unsafe { Self::from_core(core) })
     }
 }
@@ -496,7 +503,7 @@ where
     }
 
     #[inline]
-    fn exports(&self) -> &dyn crate::image::SymbolExports<Arch::Layout> {
+    fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
         self.core.exports()
     }
 
@@ -506,7 +513,12 @@ where
     }
 
     #[inline]
-    fn tls(&self) -> ModuleTls {
+    fn tls(&self) -> Option<ModuleTls> {
         LoadedCore::tls(self)
+    }
+
+    #[inline]
+    fn domain_id(&self) -> DomainId {
+        self.core.domain_id()
     }
 }

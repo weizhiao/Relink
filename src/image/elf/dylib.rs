@@ -5,6 +5,7 @@
 
 use crate::{
     Result,
+    arch::NativeArch,
     elf::ElfPhdr,
     image::{ElfCore, LoadedCore, RawDynamic},
     input::Path,
@@ -12,6 +13,7 @@ use crate::{
     memory::{HostRegion, RegionAccess, VmAddr},
     observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch},
+    runtime::DomainId,
     segment::ElfSegments,
     tls::{ModuleTls, TlsResolver},
 };
@@ -25,12 +27,8 @@ use core::fmt::Debug;
 ///
 /// The optional `Arch` type parameter selects the target architecture used by
 /// [`crate::Relocator::run`]. By default it is [`crate::arch::NativeArch`].
-pub struct RawDylib<
-    D,
-    Arch = crate::arch::NativeArch,
-    R: RegionAccess = HostRegion,
-    Tls: TlsResolver<Arch> = (),
-> where
+pub struct RawDylib<D, Arch = NativeArch, R: RegionAccess = HostRegion, Tls: TlsResolver<Arch> = ()>
+where
     D: 'static,
     Arch: RelocationArch,
 {
@@ -60,6 +58,11 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     type Output = LoadedCore<D, Arch, R, Tls>;
     type Arch = Arch;
     type Tls = Tls;
+
+    #[inline]
+    fn domain_id(&self) -> DomainId {
+        self.inner.core_ref().domain_id()
+    }
 
     fn relocate<Obs, Binder>(
         self,
@@ -116,8 +119,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDylib<
         self.inner.is_lazy()
     }
 
-    /// Returns TLS metadata associated with this image.
-    pub fn tls(&self) -> ModuleTls {
+    /// Returns TLS metadata when this image owns a TLS block.
+    pub fn tls(&self) -> Option<ModuleTls> {
         self.inner.tls()
     }
 

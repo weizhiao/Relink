@@ -1,6 +1,7 @@
 //! Relocation of elf objects
 use crate::{
-    ParseDynamicError, RelocReason, Result,
+    ByteRepr, ParseDynamicError, RelocReason, Result,
+    arch::NativeArch,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     hint::{likely, unlikely},
     image::{LoadedCore, RawDynamic},
@@ -35,7 +36,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         D: 'static,
         Obs: RelocationObserver<Arch> + ?Sized,
         Binder: LazyBinder<Arch> + ?Sized,
-        <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+        <Arch::Layout as ElfLayout>::Word: ByteRepr,
     {
         logging::info!("Relocating dynamic library: {}", self.name());
 
@@ -47,6 +48,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
             observer,
             ..
         } = args;
+        scope.ensure_domain(self.core_ref().domain_id())?;
         let relocation = self.relocation();
         if relocation.is_empty() {
             logging::debug!("No relocations needed for {}", self.name());
@@ -90,7 +92,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         observer.on_dynamic_relocated(&mut dynamic_event)?;
         self.core_ref()
             .set_lifecycle(dynamic_event.into_lifecycle());
-        self.core_ref().init_tls()?;
+        self.core_ref().publish_tls()?;
 
         logging::debug!("Preparing initialization functions for {}", self.name());
         if run_init {
@@ -129,7 +131,7 @@ pub fn relocate_relative<Arch, Memory>(rel: &[ElfRelType<Arch>], memory: &Memory
 where
     Arch: RelocationArch,
     Memory: ImageMemory,
-    <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+    <Arch::Layout as ElfLayout>::Word: ByteRepr,
 {
     let base = memory.base();
     debug_assert!(rel.iter().all(|rel| rel.r_type() == Arch::RELATIVE));
@@ -149,7 +151,7 @@ pub fn relocate_relr<L, Memory>(relr: &[ElfRelr<L>], memory: &Memory) -> Result<
 where
     L: ElfLayout,
     Memory: ImageMemory,
-    L::Word: crate::ByteRepr,
+    L::Word: ByteRepr,
 {
     let base = memory.base();
     let update_relative_word = |addr| unsafe {
@@ -184,7 +186,7 @@ where
 }
 
 /// Holds parsed relocation information
-pub(crate) struct DynamicRelocation<Arch: RelocationArch = crate::arch::NativeArch> {
+pub(crate) struct DynamicRelocation<Arch: RelocationArch = NativeArch> {
     /// Relative relocations (REL_RELATIVE)
     relative: RelativeRel<Arch>,
     /// PLT relocations
@@ -204,7 +206,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
     where
         Obs: RelocationObserver<Arch> + ?Sized,
         Binder: LazyBinder<Arch> + ?Sized,
-        <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+        <Arch::Layout as ElfLayout>::Word: ByteRepr,
     {
         let core = self.core_ref();
         let base = core.base();
@@ -267,7 +269,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
     fn relocate_relative<Memory>(&self, memory: &Memory) -> Result<&Self>
     where
         Memory: ImageMemory,
-        <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+        <Arch::Layout as ElfLayout>::Word: ByteRepr,
     {
         let reloc = self.relocation();
 
@@ -291,7 +293,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
     ) -> Result<&Self>
     where
         Obs: RelocationObserver<Arch> + ?Sized,
-        <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+        <Arch::Layout as ElfLayout>::Word: ByteRepr,
     {
         /*
             Relocation formula components:

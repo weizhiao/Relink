@@ -3,7 +3,7 @@ use super::storage::{
 };
 use crate::{
     LinkContextError, LinkerError, Result, arch::NativeArch, image::ModuleHandle,
-    relocation::RelocationArch, tls::TlsResolver,
+    relocation::RelocationArch, runtime::DomainId, tls::TlsResolver,
 };
 use alloc::{
     boxed::Box,
@@ -33,6 +33,38 @@ pub struct DirectDeps {
     edges: Box<[DepEdge]>,
 }
 
+/// Consuming iterator over dependency key/module pairs.
+pub struct DirectDepsIntoIter {
+    context: ContextId,
+    edges: alloc::vec::IntoIter<DepEdge>,
+}
+
+impl Iterator for DirectDepsIntoIter {
+    type Item = (KeyId, ModuleId);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.edges.next().map(|edge| dep_ids(self.context, edge))
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.edges.size_hint()
+    }
+}
+
+impl DoubleEndedIterator for DirectDepsIntoIter {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.edges
+            .next_back()
+            .map(|edge| dep_ids(self.context, edge))
+    }
+}
+
+impl ExactSizeIterator for DirectDepsIntoIter {}
+impl core::iter::FusedIterator for DirectDepsIntoIter {}
+
 impl DirectDeps {
     #[inline]
     fn new(context: ContextId, edges: Box<[DepEdge]>) -> Self {
@@ -60,15 +92,19 @@ impl DirectDeps {
             .copied()
             .map(move |edge| dep_ids(context, edge))
     }
+}
+
+impl IntoIterator for DirectDeps {
+    type Item = (KeyId, ModuleId);
+    type IntoIter = DirectDepsIntoIter;
 
     /// Consumes the collection and yields removed dependency key/module pairs.
     #[inline]
-    pub fn into_iter(self) -> impl Iterator<Item = (KeyId, ModuleId)> {
-        let context = self.context;
-        self.edges
-            .into_vec()
-            .into_iter()
-            .map(move |edge| dep_ids(context, edge))
+    fn into_iter(self) -> Self::IntoIter {
+        DirectDepsIntoIter {
+            context: self.context,
+            edges: self.edges.into_vec().into_iter(),
+        }
     }
 }
 
@@ -140,7 +176,7 @@ where
 /// mixed accidentally.
 pub struct LinkContext<
     K,
-    D: 'static,
+    D: 'static = (),
     M = (),
     Arch: RelocationArch = NativeArch,
     Tls: TlsResolver<Arch> = (),
@@ -148,27 +184,16 @@ pub struct LinkContext<
     pub(super) committed: CommittedStorage<K, D, M, Arch, Tls>,
 }
 
-impl<K, D: 'static, M, Arch, Tls> Default for LinkContext<K, D, M, Arch, Tls>
-where
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
-{
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<K, D: 'static, M, Arch, Tls> LinkContext<K, D, M, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    /// Creates an empty link context.
+    /// Creates an empty link context for `domain`.
     #[inline]
-    pub fn new() -> Self {
+    pub fn new(domain: DomainId) -> Self {
         Self {
-            committed: CommittedStorage::new(ContextId::fresh()),
+            committed: CommittedStorage::new(ContextId::fresh(), domain),
         }
     }
 
@@ -176,6 +201,12 @@ where
     #[inline]
     pub fn context_id(&self) -> ContextId {
         self.committed.context()
+    }
+
+    /// Returns this context's runtime domain.
+    #[inline]
+    pub fn domain_id(&self) -> DomainId {
+        self.committed.domain()
     }
 }
 
@@ -310,6 +341,8 @@ where
     where
         R: Into<ModuleHandle<Arch, Tls>>,
     {
+        let module = module.into();
+        self.committed.ensure_domain(module.domain_id())?;
         let slot = self.committed.intern_key(key);
         let direct_deps = direct_deps
             .into_vec()
@@ -318,9 +351,7 @@ where
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let direct_deps = self.committed.resolve_dep_edges(direct_deps)?;
-        Ok(self
-            .committed
-            .insert(slot, module.into(), direct_deps, meta))
+        Ok(self.committed.insert(slot, module, direct_deps, meta))
     }
 
     /// Adds or replaces an alternate key for an already committed module.
@@ -392,6 +423,7 @@ where
     where
         M: Clone,
     {
+        self.committed.ensure_domain(other.committed.domain())?;
         let mut copied = BTreeSet::new();
         for slot in other.committed.load_order() {
             copy_committed_module(self, other, slot, &mut copied)?;
@@ -431,11 +463,71 @@ where
 mod tests {
     use super::LinkContext;
     use crate::{
+        Error,
         arch::NativeArch,
-        image::SyntheticModule,
+        image::{ModuleScopeBuilder, SyntheticModule},
         linker::{KeyId, ModuleId},
+        runtime::DomainId,
     };
     use alloc::{boxed::Box, string::String, vec::Vec};
+
+    fn domain_module(name: &'static str, domain: DomainId) -> SyntheticModule<NativeArch> {
+        SyntheticModule::empty(name).with_domain(domain)
+    }
+
+    #[test]
+    fn context_rejects_modules_from_another_domain() {
+        let first = DomainId::new();
+        let second = DomainId::new();
+        let mut context = LinkContext::<&'static str, (), (), NativeArch>::new(first);
+
+        context
+            .insert("first", domain_module("first", first), Box::new([]))
+            .unwrap();
+        let error = context
+            .insert("second", domain_module("second", second), Box::new([]))
+            .unwrap_err();
+
+        assert_eq!(context.domain_id(), first);
+        assert!(matches!(
+            error,
+            Error::DomainMismatch { expected, actual }
+                if expected == first && actual == second
+        ));
+    }
+
+    #[test]
+    fn relocation_scope_rejects_modules_from_another_domain() {
+        let expected = DomainId::new();
+        let other = DomainId::new();
+        let mut scope = ModuleScopeBuilder::<NativeArch>::new(expected);
+        scope.extend([domain_module("other", other)]);
+
+        let error = scope.into_scope().unwrap_err();
+        assert!(matches!(
+            error,
+            Error::DomainMismatch { expected: found, actual }
+                if found == expected && actual == other
+        ));
+    }
+
+    #[test]
+    fn module_scope_rejects_mixed_domains() {
+        let first = DomainId::new();
+        let second = DomainId::new();
+        let mut scope = ModuleScopeBuilder::<NativeArch>::new(first);
+        scope.extend([
+            domain_module("first", first),
+            domain_module("second", second),
+        ]);
+
+        let error = scope.into_scope().unwrap_err();
+        assert!(matches!(
+            error,
+            Error::DomainMismatch { expected, actual }
+                if expected == first && actual == second
+        ));
+    }
 
     fn direct_deps<K: Clone + Ord>(
         context: &LinkContext<K, (), usize, NativeArch>,
@@ -449,13 +541,13 @@ mod tests {
 
     #[test]
     fn ids_do_not_cross_contexts() {
-        let mut first = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let mut first = LinkContext::<&'static str, (), usize, NativeArch>::new(DomainId::PROCESS);
         let first_root = first
             .insert_with_meta("root", SyntheticModule::empty("first"), Box::new([]), 1)
             .expect("failed to insert first module");
         let first_key = first.key_id(&"root").expect("root key should be interned");
 
-        let mut second = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let mut second = LinkContext::<&'static str, (), usize, NativeArch>::new(DomainId::PROCESS);
         let second_root = second
             .insert_with_meta("root", SyntheticModule::empty("second"), Box::new([]), 2)
             .expect("failed to insert second module");
@@ -474,7 +566,8 @@ mod tests {
 
     #[test]
     fn snapshot_clones_committed_state_without_rebuilding() {
-        let mut context = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let mut context =
+            LinkContext::<&'static str, (), usize, NativeArch>::new(DomainId::PROCESS);
         let dep_module = context
             .insert_with_meta("dep", SyntheticModule::empty("dep"), Box::new([]), 3)
             .expect("failed to insert dependency module");
@@ -487,10 +580,14 @@ mod tests {
 
         let snapshot = context.snapshot();
         assert_eq!(context.context_id(), snapshot.context_id());
-        context.remove(root).unwrap();
+        let (_, removed_deps, _) = context.remove(root).unwrap();
 
         assert!(!context.contains_module(root).unwrap());
         assert!(context.get(root).is_err());
+        assert_eq!(
+            removed_deps.into_iter().collect::<Vec<_>>(),
+            [(dep, dep_module)]
+        );
         assert!(snapshot.contains_module(root).unwrap());
         assert_eq!(snapshot.module_id(dep).unwrap(), Some(dep_module));
         assert_eq!(snapshot.module_key(root).unwrap(), &"root");
@@ -501,7 +598,7 @@ mod tests {
 
     #[test]
     fn dependency_edges_keep_their_bound_module_when_alias_changes() {
-        let mut context = LinkContext::<String, (), usize, NativeArch>::new();
+        let mut context = LinkContext::<String, (), usize, NativeArch>::new(DomainId::PROCESS);
         let canonical = context
             .insert_with_meta(
                 String::from("canonical"),
@@ -551,7 +648,8 @@ mod tests {
 
     #[test]
     fn add_alias_replaces_existing_target() {
-        let mut context = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let mut context =
+            LinkContext::<&'static str, (), usize, NativeArch>::new(DomainId::PROCESS);
         let first = context
             .insert_with_meta("first", SyntheticModule::empty("first"), Box::new([]), 1)
             .expect("failed to insert first module");
@@ -584,7 +682,8 @@ mod tests {
 
     #[test]
     fn insert_with_meta_replaces_existing_key_in_place() {
-        let mut context = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let mut context =
+            LinkContext::<&'static str, (), usize, NativeArch>::new(DomainId::PROCESS);
         context
             .insert_with_meta("old", SyntheticModule::empty("old"), Box::new([]), 0)
             .expect("failed to insert old dependency");
@@ -623,7 +722,8 @@ mod tests {
 
     #[test]
     fn insert_with_meta_replaces_alias_target_in_place() {
-        let mut context = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let mut context =
+            LinkContext::<&'static str, (), usize, NativeArch>::new(DomainId::PROCESS);
         let root = context
             .insert_with_meta("root", SyntheticModule::empty("root"), Box::new([]), 1)
             .expect("failed to insert root module");
@@ -656,7 +756,7 @@ mod tests {
 
     #[test]
     fn extend_preserves_bound_dependency_modules() {
-        let mut source = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let mut source = LinkContext::<&'static str, (), usize, NativeArch>::new(DomainId::PROCESS);
         let canonical = source
             .insert_with_meta(
                 "canonical",
@@ -691,7 +791,7 @@ mod tests {
             .add_alias(replacement, "alias")
             .expect("failed to replace alias");
 
-        let mut target = LinkContext::<&'static str, (), usize, NativeArch>::new();
+        let mut target = LinkContext::<&'static str, (), usize, NativeArch>::new(DomainId::PROCESS);
         target.extend(&source).expect("failed to extend context");
         let target_root = target
             .key_id(&"root")

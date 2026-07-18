@@ -1,5 +1,5 @@
 use crate::{
-    RelocReason, Result,
+    ByteRepr, RelocReason, Result,
     arch::riscv64::relocation::RiscV64Arch,
     elf::{ElfRelEntry, ElfRelType, ElfRelocationType, ElfShdr},
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
@@ -8,7 +8,8 @@ use crate::{
         object_relocation_sections, section_entries,
     },
     observer::RelocationObserver,
-    relocation::{ObjectArch, RelocHelper},
+    relocation::{ObjectArch, RelocHelper, RelocationArch},
+    tls::TlsResolver,
 };
 use elf::abi::*;
 use hashbrown::HashMap;
@@ -88,23 +89,22 @@ impl ObjectArch for RiscV64Arch {
     fn prepare_relocation<D, R, Tls, Obs, H, Memory>(
         state: &mut Self::State,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
-        shdrs: &[ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>],
+        shdrs: &[ElfShdr<<Self as RelocationArch>::Layout>],
     ) -> Result<()>
     where
         D: 'static,
         R: RegionAccess,
-        Tls: crate::tls::TlsResolver<Self>,
+        Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
         state.hi20_cache.clear();
 
         for (_, _, target, relocation_shdr) in object_relocation_sections::<Self>(shdrs) {
-            let rels = section_entries::<
-                <Self as crate::relocation::RelocationArch>::Layout,
-                ElfRelType<Self>,
-                _,
-            >(helper.memory(), relocation_shdr)?;
+            let rels = section_entries::<<Self as RelocationArch>::Layout, ElfRelType<Self>, _>(
+                helper.memory(),
+                relocation_shdr,
+            )?;
             for rel in rels {
                 let r_type = rel.r_type().raw();
                 if r_type == R_RISCV_PCREL_HI20 || r_type == R_RISCV_GOT_HI20 {
@@ -137,13 +137,13 @@ impl ObjectArch for RiscV64Arch {
         state: &mut Self::State,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
-        target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
+        target: &ElfShdr<<Self as RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,
     ) -> Result<()>
     where
         D: 'static,
         R: RegionAccess,
-        Tls: crate::tls::TlsResolver<Self>,
+        Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
@@ -402,13 +402,13 @@ impl RiscV64Arch {
         state: &ObjectState,
         helper: &mut RelocHelper<'_, D, Self, R, Tls, Obs, H, Memory>,
         rel: &ElfRelType<Self>,
-        target: &ElfShdr<<Self as crate::relocation::RelocationArch>::Layout>,
+        target: &ElfShdr<<Self as RelocationArch>::Layout>,
         pltgot: &mut PltGotSection,
     ) -> Result<i64>
     where
         D: 'static,
         R: RegionAccess,
-        Tls: crate::tls::TlsResolver<Self>,
+        Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
@@ -459,7 +459,7 @@ impl RiscV64Arch {
         is_add: bool,
     ) -> Result<()>
     where
-        T: WrappingRelocWord + crate::ByteRepr,
+        T: WrappingRelocWord + ByteRepr,
         Memory: ImageMemory,
     {
         unsafe {
@@ -482,10 +482,10 @@ impl RiscV64Arch {
         place: VmAddr,
     ) -> Result<()>
     where
-        T: WrappingRelocWord + crate::ByteRepr,
+        T: WrappingRelocWord + ByteRepr,
         D: 'static,
         R: RegionAccess,
-        Tls: crate::tls::TlsResolver<Self>,
+        Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,
         Memory: ImageMemory,
     {
@@ -577,7 +577,7 @@ fn branch_offset<D, R, Tls, Obs, H, Memory>(
 where
     D: 'static,
     R: RegionAccess,
-    Tls: crate::tls::TlsResolver<RiscV64Arch>,
+    Tls: TlsResolver<RiscV64Arch>,
     Obs: RelocationObserver<RiscV64Arch> + ?Sized,
     Memory: ImageMemory,
 {

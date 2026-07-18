@@ -18,7 +18,7 @@ mod session;
 mod storage;
 
 pub use crate::observer::VisibleModule;
-pub use context::{DirectDeps, LinkContext};
+pub use context::{DirectDeps, DirectDepsIntoIter, LinkContext};
 pub use driver::{Linker, LoadResult};
 pub use resolver::{
     CandidateContext, CandidateRequest, DependencyOwner, DependencyRequest, FileNameKey,

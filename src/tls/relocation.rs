@@ -1,6 +1,6 @@
-use super::defs::TlsIndex;
+use super::defs::{ModuleTls, TlsDescRequest};
 use crate::{
-    RelocReason, Result,
+    ByteRepr, RelocReason, Result,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSymbol, ElfWord},
     image::Module,
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
@@ -27,7 +27,7 @@ where
     Tls: TlsResolver<Arch>,
     Obs: RelocationObserver<Arch> + ?Sized,
     Memory: ImageMemory,
-    <Arch::Layout as ElfLayout>::Word: crate::ByteRepr,
+    <Arch::Layout as ElfLayout>::Word: ByteRepr,
 {
     #[inline]
     fn defined_tls_symbol(
@@ -78,9 +78,10 @@ where
                     };
                     defined.source.tls()
                 };
-                let Some(mod_id) = tls.mod_id() else {
+                let Some(tls) = tls else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
                 };
+                let mod_id = tls.mod_id();
                 unsafe {
                     memory.write_value(
                         place,
@@ -94,8 +95,7 @@ where
                     Ok(defined) => defined,
                     Err(outcome) => return Ok(outcome),
                 };
-                let tls = defined.source.tls();
-                let Some(tp_offset) = tls.tp_offset() else {
+                let Some(tp_offset) = defined.source.tls().and_then(ModuleTls::tp_offset) else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsTpOffset));
                 };
                 let tls_val =
@@ -111,8 +111,10 @@ where
             }
             value if Arch::is_tlsdesc(value) => {
                 let symbol = self.symbol_entry(rel);
-                let desc = match self.find_symdef(&symbol) {
-                    Some(SymDef::WeakUndef) => Tls::bind_undefweak_tlsdesc(r_addend as usize)?,
+                let request = match self.find_symdef(&symbol) {
+                    Some(SymDef::WeakUndef) => TlsDescRequest::UndefinedWeak {
+                        addend: r_addend as usize,
+                    },
                     None => {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                     }
@@ -120,26 +122,18 @@ where
                         symbol: sym,
                         source,
                     }) => {
-                        let tls = source.tls();
-                        if let Some(tp_offset) = tls.tp_offset() {
-                            let tpoff =
-                                VmAddr::new((tp_offset.get() + sym.st_value() as isize) as usize)
-                                    .wrapping_add_signed(r_addend);
-                            Tls::bind_static_tlsdesc(tpoff.get())?
-                        } else if let Some(module_id) = tls.mod_id() {
-                            let offset = VmAddr::new(sym.st_value())
-                                .wrapping_add_signed(r_addend)
-                                .get()
-                                .wrapping_sub(Arch::TLS_DTV_OFFSET);
-                            Tls::bind_dynamic_tlsdesc(TlsIndex {
-                                ti_module: module_id,
-                                ti_offset: offset,
-                            })?
-                        } else {
+                        let Some(tls) = source.tls() else {
                             return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
+                        };
+                        TlsDescRequest::Defined {
+                            module: tls,
+                            offset: VmAddr::new(sym.st_value())
+                                .wrapping_add_signed(r_addend)
+                                .get(),
                         }
                     }
                 };
+                let desc = self.core.tls_resolver().bind_tlsdesc(request)?;
                 unsafe {
                     memory.write_value(
                         place,

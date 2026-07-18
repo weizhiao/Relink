@@ -42,6 +42,14 @@ impl TlsInfo {
             align: phdr.p_align(),
         }
     }
+
+    /// Validates the TLS image size and alignment requirements.
+    pub fn validate(&self) -> Result<()> {
+        if !self.align.max(1).is_power_of_two() || self.filesz > self.memsz {
+            return Err(TlsError::InvalidInfo.into());
+        }
+        Ok(())
+    }
 }
 
 /// A cloneable source for a relocated TLS initialization image.
@@ -89,14 +97,14 @@ where
     unsafe { Arc::from_raw(ptr) }
 }
 
-/// Two-word TLSDESC value.
+/// Two-word TLSDESC binding written into a loaded image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TlsDescValue {
+pub struct TlsDescBinding {
     resolver: VmAddr,
     arg: usize,
 }
 
-impl TlsDescValue {
+impl TlsDescBinding {
     /// Creates a TLSDESC pair.
     #[inline]
     pub const fn new(resolver: VmAddr, arg: usize) -> Self {
@@ -181,8 +189,6 @@ impl core::fmt::Display for TlsTpOffset {
 /// TLS metadata associated with a runtime module.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModuleTls {
-    /// No TLS metadata is available for the module.
-    None,
     /// The module has a static TLS block at a fixed thread-pointer offset.
     Static {
         /// Runtime TLS module identifier.
@@ -197,23 +203,12 @@ pub enum ModuleTls {
     },
 }
 
-impl Default for ModuleTls {
-    #[inline]
-    fn default() -> Self {
-        Self::None
-    }
-}
-
 impl ModuleTls {
-    /// No TLS metadata is available for the module.
-    pub const NONE: Self = Self::None;
-
-    /// Returns the registered TLS module id, when available.
+    /// Returns the registered TLS module ID.
     #[inline]
-    pub const fn mod_id(self) -> Option<TlsModuleId> {
+    pub const fn mod_id(self) -> TlsModuleId {
         match self {
-            Self::None => None,
-            Self::Static { mod_id, .. } | Self::Dynamic { mod_id, .. } => Some(mod_id),
+            Self::Static { mod_id, .. } | Self::Dynamic { mod_id, .. } => mod_id,
         }
     }
 
@@ -222,9 +217,26 @@ impl ModuleTls {
     pub const fn tp_offset(self) -> Option<TlsTpOffset> {
         match self {
             Self::Static { tp_offset, .. } => Some(tp_offset),
-            Self::None | Self::Dynamic { .. } => None,
+            Self::Dynamic { .. } => None,
         }
     }
+}
+
+/// Request for a target-visible TLSDESC binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TlsDescRequest {
+    /// A defined TLS symbol at `offset` within its module's TLS block.
+    Defined {
+        /// Runtime TLS module metadata.
+        module: ModuleTls,
+        /// Symbol offset including the relocation addend.
+        offset: usize,
+    },
+    /// An undefined weak TLS symbol.
+    UndefinedWeak {
+        /// Relocation addend preserved in the descriptor argument.
+        addend: usize,
+    },
 }
 
 /// Requested TLS placement for a module registration.

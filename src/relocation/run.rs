@@ -1,5 +1,6 @@
 use crate::{
     Relocator, Result,
+    arch::NativeArch,
     image::{ModuleHandle, ModuleScope, ModuleScopeBuilder},
     lazy::{LazyBinder, SupportLazy},
     observer::RelocationObserver,
@@ -15,7 +16,7 @@ use core::marker::PhantomData;
 pub struct RelocatorRun<
     'cfg,
     T,
-    Arch: RelocationArch = crate::arch::NativeArch,
+    Arch: RelocationArch = NativeArch,
     Obs = (),
     Tls: TlsResolver<Arch> = (),
     ScopeState = ModuleScopeBuilder<Arch, Tls>,
@@ -41,9 +42,10 @@ impl<Binder> Relocator<Binder> {
         Tls: TlsResolver<Arch>,
         T: Relocatable<D, Arch = Arch, Tls = Tls>,
     {
+        let domain = object.domain_id();
         RelocatorRun {
             object,
-            scope: ModuleScopeBuilder::new(),
+            scope: ModuleScopeBuilder::new(domain),
             observer: (),
             binding: BindingMode::Default,
             relocator: self,
@@ -211,7 +213,7 @@ where
         } = self;
 
         object.relocate(RelocateArgs {
-            scope: scope.into_scope(),
+            scope: scope.into_scope()?,
             binding,
             run_init: relocator.run_init,
             lazy_binder: &relocator.lazy_binder,
