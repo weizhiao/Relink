@@ -5,7 +5,7 @@ use crate::{
     image::{ElfCore, ModuleScope},
     input::Path,
     memory::{HostRegion, RegionAccess, VmAddr},
-    relocation::{RelocationArch, SymDef, find_symdef_impl},
+    relocation::{RelocationArch, SymDef, SymbolResolver},
     tls::TlsResolver,
 };
 
@@ -39,9 +39,8 @@ pub struct RelocationEvent<
     H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
     rel: &'a ElfRelType<Arch>,
-    lib: &'a ElfCore<D, Arch, R, Tls>,
+    resolver: &'a SymbolResolver<'a, ElfCore<D, Arch, R, Tls>, Arch, Tls>,
     symbols: SymbolTableView<'a, Arch::Layout, H>,
-    scope: &'a ModuleScope<Arch, Tls>,
 }
 
 impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>, H>
@@ -51,15 +50,13 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
     #[inline]
     pub(crate) fn new(
         rel: &'a ElfRelType<Arch>,
-        lib: &'a ElfCore<D, Arch, R, Tls>,
+        resolver: &'a SymbolResolver<'a, ElfCore<D, Arch, R, Tls>, Arch, Tls>,
         symbols: SymbolTableView<'a, Arch::Layout, H>,
-        scope: &'a ModuleScope<Arch, Tls>,
     ) -> Self {
         Self {
             rel,
-            lib,
+            resolver,
             symbols,
-            scope,
         }
     }
 
@@ -72,13 +69,13 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
     /// Access the core component where the relocation appears.
     #[inline]
     pub fn lib(&self) -> &ElfCore<D, Arch, R, Tls> {
-        self.lib
+        self.resolver.source()
     }
 
     /// Access the current resolution scope.
     #[inline]
     pub fn scope(&self) -> &ModuleScope<Arch, Tls> {
-        self.scope
+        self.resolver.scope()
     }
 
     /// Access a symbol table entry by index for this relocation context.
@@ -98,13 +95,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
     #[inline]
     pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, Arch, Tls>> {
         let symbol = self.symbol(r_sym);
-        find_symdef_impl(
-            self.lib,
-            self.scope,
-            symbol.symbol(),
-            symbol.info(),
-            self.lib.symbolic(),
-        )
+        self.resolver.find(&symbol)
     }
 }
 

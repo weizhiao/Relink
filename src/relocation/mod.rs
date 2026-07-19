@@ -17,12 +17,14 @@ mod dynamic;
 mod helper;
 mod relocator;
 mod run;
+mod symbol;
 mod traits;
 
 pub(crate) use defs::{RelocValue, RelocationValueFormula, RelocationValueKind};
 pub(crate) use dynamic::DynamicRelocation;
 pub use dynamic::{relocate_relative, relocate_relr};
-pub(crate) use helper::{RelocHelper, SymDef, find_symdef_impl};
+pub(crate) use helper::RelocHelper;
+pub(crate) use symbol::{SymDef, SymbolResolver};
 pub use traits::{ObjectArch, RelocationArch};
 pub(crate) use traits::{Relocatable, RelocateArgs, RelocationValueInput, RelocationValueProvider};
 

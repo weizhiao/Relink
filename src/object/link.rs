@@ -4,14 +4,16 @@ use crate::{
         ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr, ElfSymbol,
         ElfSymbolType,
     },
-    image::{ElfCore, LoadedCore, LoadedObject, ModuleScope, RawObject, exports_handle},
+    image::{ElfCore, LoadedCore, LoadedObject, RawObject, exports_handle},
     lazy::LazyBinder,
     logging,
     memory::{RegionAccess, VmAddr, VmOffset},
-    object::{ObjectExports, ObjectSegmentView, section_entries},
+    object::{
+        ObjectExports, ObjectSections, ObjectSegmentView, ObjectSymbolTable, section_entries,
+    },
     observer::{LifecycleRunner, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
-    relocation::{ObjectArch, RelocHelper, RelocateArgs, RelocationArch, find_symdef_impl},
+    relocation::{ObjectArch, RelocHelper, RelocateArgs, RelocationArch, SymbolResolver},
     runtime::CodeContext,
     sync::Arc,
     tls::TlsResolver,
@@ -69,17 +71,19 @@ where
             ..
         } = args;
         scope.ensure_domain(self.core.domain_id())?;
-        self.simplify_symbols(&scope, observer)?;
+        let resolver = SymbolResolver::new(&self.core, scope, self.core.symbolic());
+        Self::simplify_symbols(
+            &self.core,
+            &self.sections,
+            &mut self.symtab,
+            &resolver,
+            observer,
+        )?;
 
         let relocation_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
-        let mut helper = RelocHelper::new(
-            &self.core,
-            self.symtab.view(),
-            relocation_segments,
-            scope,
-            observer,
-        );
+        let mut helper =
+            RelocHelper::new(resolver, self.symtab.view(), relocation_segments, observer);
         let shdrs = self.sections.headers();
         let mut state = Arch::State::default();
         Arch::prepare_relocation(&mut state, &mut helper, shdrs)?;
@@ -108,7 +112,7 @@ where
             }
         }
 
-        let RelocHelper { scope, .. } = helper;
+        let scope = helper.into_scope();
 
         let initializer = LifecycleRunner::new(core::mem::take(&mut self.init));
         let finalizer = LifecycleRunner::new(core::mem::take(&mut self.fini));
@@ -167,42 +171,38 @@ where
     }
 
     fn simplify_symbols<Obs>(
-        &mut self,
-        scope: &ModuleScope<Arch, Tls>,
+        core: &ElfCore<D, Arch, R, Tls>,
+        sections: &ObjectSections<Arch::Layout>,
+        symtab: &mut ObjectSymbolTable<Arch::Layout>,
+        resolver: &SymbolResolver<'_, ElfCore<D, Arch, R, Tls>, Arch, Tls>,
         observer: &mut Obs,
     ) -> Result<()>
     where
         Obs: RelocationObserver<Arch> + ?Sized,
     {
-        let base = self.core.base();
-        let symbol_count = self.symtab.symbols().len();
+        let base = core.base();
+        let symbol_count = symtab.symbols().len();
 
         // The mandatory null symbol stays zero and never participates in lookup.
         for idx in 1..symbol_count {
             let value = {
-                let entry = self.symtab.symbol_idx(idx);
+                let entry = symtab.symbol_idx(idx);
                 let symbol = entry.symbol();
                 if symbol.symbol_type() == ElfSymbolType::FILE {
                     continue;
                 }
 
                 let addr = if symbol.is_undef() {
-                    let resolved = if let Some(symdef) = find_symdef_impl(
-                        &self.core,
-                        scope,
-                        symbol,
-                        entry.info(),
-                        self.core.symbolic(),
-                    ) {
-                        Some(symdef.resolve_addr(self.core.executor())?)
+                    let resolved = if let Some(symdef) = resolver.find(&entry) {
+                        Some(symdef.resolve_addr(core.executor())?)
                     } else {
                         None
                     };
                     let mut event =
-                        SymbolBindingEvent::new(&self.core, None, symbol, entry.name(), resolved);
+                        SymbolBindingEvent::new(core, None, symbol, entry.name(), resolved);
                     observer.on_symbol_binding(&mut event)?;
                     let Some(resolved) = event.into_resolved_addr() else {
-                        return Err(unresolved_symbol_error(&self.core, entry.name()));
+                        return Err(unresolved_symbol_error(core, entry.name()));
                     };
                     resolved
                 } else if symbol.st_shndx().is_abs() {
@@ -212,13 +212,13 @@ where
                     else {
                         continue;
                     };
-                    VmAddr::new(self.sections.section(section_id).sh_addr())
+                    VmAddr::new(sections.section(section_id).sh_addr())
                         .wrapping_add(VmOffset::new(symbol.st_value()))
                 };
                 addr.wrapping_offset_from(base).get()
             };
 
-            let symbols = self.symtab.symbols_mut();
+            let symbols = symtab.symbols_mut();
             symbols[idx].set_value(value);
         }
 

@@ -9,7 +9,7 @@ use crate::{
     logging,
     memory::{ImageMemory, ImageMemoryExt, MappedView, RegionAccess, VmOffset},
     observer::{DynamicRelocatedEvent, LifecycleRunner, RelocationObserver},
-    relocation::{RelocHelper, RelocateArgs, RelocationArch, SymDef},
+    relocation::{RelocHelper, RelocateArgs, RelocationArch, SymDef, SymbolResolver},
     runtime::CodeContext,
     tls::{TlsRelocOutcome, TlsResolver},
 };
@@ -58,11 +58,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         if lazy_binding {
             logging::debug!("Using lazy binding for {}", self.name());
         }
+        let resolver = SymbolResolver::new(self.core_ref(), scope, self.core_ref().symbolic());
         let mut helper = RelocHelper::new(
-            self.core_ref(),
+            resolver,
             self.symtab().view(),
             self.core_ref().segments(),
-            scope,
             observer,
         );
 
@@ -72,7 +72,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                 .relocate_pltrel(lazy_binding, &mut helper, lazy_binder)?;
         }
 
-        let RelocHelper { scope, .. } = helper;
+        let scope = helper.into_scope();
 
         let (init, fini) = self.resolve_lifecycle()?;
         let initializer = LifecycleRunner::new(init);

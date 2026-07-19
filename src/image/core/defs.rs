@@ -7,7 +7,7 @@ use crate::{
     logging,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
-    relocation::{RelocationArch, find_symdef_impl},
+    relocation::{RelocationArch, SymbolResolver},
     runtime::{CodeExecutor, DomainId},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering},
@@ -117,7 +117,8 @@ where
         };
         let symbolic = self.dynamic_info.as_ref().is_some_and(|info| info.symbolic);
         let executor = self.executor.as_ref();
-        find_symdef_impl(self, &scope, symbol.symbol(), symbol.info(), symbolic)
+        SymbolResolver::new(self, scope, symbolic)
+            .find(&symbol)
             .map(|symdef| symdef.resolve_addr(executor))
             .transpose()
     }

@@ -27,6 +27,7 @@ pub(crate) use dynamic::{ElfDynamic, ElfDynamicHashTab, LifecycleSpec, parse_dyn
 pub(crate) use hash::SymbolHash;
 pub(crate) use phdr::ElfPhdrs;
 pub(crate) use symbol::ElfStringTable;
+#[cfg(test)]
 pub(crate) use symbol::SymbolInfo;
 
 // Public API exports

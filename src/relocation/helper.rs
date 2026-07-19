@@ -1,17 +1,12 @@
 use crate::{
     Error, RelocReason, Result,
-    elf::{
-        ElfRelEntry, ElfRelType, ElfSymbol, ElfSymbolType, HashTable, SymbolEntry, SymbolInfo,
-        SymbolTableView,
-    },
+    elf::{ElfRelEntry, ElfRelType, HashTable, SymbolEntry, SymbolTableView},
     hint::unlikely,
-    image::{ElfCore, Module, ModuleScope, SymbolLookup},
-    logging,
+    image::{ElfCore, ModuleScope},
     memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
     observer::{RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
-    relocation::{HandleResult, RelocationArch, RelocationEvent},
-    runtime::{CodeContext, CodeExecutor},
+    relocation::{HandleResult, RelocationArch, RelocationEvent, SymDef, SymbolResolver},
     segment::ElfSegments,
     tls::{TLS_GET_ADDR_SYMBOL, TlsResolver},
 };
@@ -28,9 +23,9 @@ pub(crate) struct RelocHelper<
     Memory = &'find ElfSegments<R>,
 > {
     pub(crate) core: &'find ElfCore<D, Arch, R, Tls>,
+    resolver: SymbolResolver<'find, ElfCore<D, Arch, R, Tls>, Arch, Tls>,
     symbols: SymbolTableView<'find, Arch::Layout, H>,
     memory: Memory,
-    pub(crate) scope: ModuleScope<Arch, Tls>,
     pub(crate) observer: &'find mut Obs,
 }
 
@@ -44,19 +39,24 @@ where
     Memory: ImageMemory,
 {
     pub(crate) fn new(
-        core: &'find ElfCore<D, Arch, R, Tls>,
+        resolver: SymbolResolver<'find, ElfCore<D, Arch, R, Tls>, Arch, Tls>,
         symbols: SymbolTableView<'find, Arch::Layout, H>,
         memory: Memory,
-        scope: ModuleScope<Arch, Tls>,
         observer: &'find mut Obs,
     ) -> Self {
+        let core = resolver.source();
         Self {
             core,
+            resolver,
             symbols,
             memory,
-            scope,
             observer,
         }
+    }
+
+    #[inline]
+    pub(crate) fn into_scope(self) -> ModuleScope<Arch, Tls> {
+        self.resolver.into_scope()
     }
 
     #[inline]
@@ -66,13 +66,13 @@ where
 
     #[inline]
     pub(crate) fn handle_pre(&mut self, rel: &ElfRelType<Arch>) -> Result<HandleResult> {
-        let hctx = RelocationEvent::new(rel, self.core, self.symbols, &self.scope);
+        let hctx = RelocationEvent::new(rel, &self.resolver, self.symbols);
         self.observer.on_relocation_pre(&hctx)
     }
 
     #[inline]
     pub(crate) fn handle_post(&mut self, rel: &ElfRelType<Arch>) -> Result<HandleResult> {
-        let hctx = RelocationEvent::new(rel, self.core, self.symbols, &self.scope);
+        let hctx = RelocationEvent::new(rel, &self.resolver, self.symbols);
         self.observer.on_relocation_post(&hctx)
     }
 
@@ -112,13 +112,7 @@ where
         &'a self,
         symbol: &SymbolEntry<'a, Arch::Layout>,
     ) -> Option<SymDef<'a, Arch, Tls>> {
-        find_symdef_impl(
-            self.core,
-            &self.scope,
-            symbol.symbol(),
-            symbol.info(),
-            self.core.symbolic(),
-        )
+        self.resolver.find(symbol)
     }
 
     #[inline]
@@ -154,233 +148,5 @@ where
         );
         self.observer.on_symbol_binding(&mut event)?;
         Ok(event.into_resolved_addr())
-    }
-}
-
-/// A symbol definition found during relocation.
-///
-/// Contains the symbol information and the module where it was found.
-/// Used to compute the final address of a symbol.
-pub enum SymDef<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
-    Defined {
-        symbol: &'lib ElfSymbol<Arch::Layout>,
-        source: &'lib dyn Module<Arch, Tls>,
-    },
-    WeakUndef,
-}
-
-impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, Arch, Tls> {
-    #[inline]
-    pub(crate) fn defined(
-        symbol: &'lib ElfSymbol<Arch::Layout>,
-        source: &'lib dyn Module<Arch, Tls>,
-    ) -> Self {
-        Self::Defined { symbol, source }
-    }
-
-    #[inline]
-    pub(crate) fn weak_undef() -> Self {
-        Self::WeakUndef
-    }
-
-    /// Computes the symbol address (base + st_value).
-    ///
-    /// For regular symbols, returns base + st_value. For absolute symbols,
-    /// returns st_value unchanged.
-    /// For IFUNC symbols, returns the resolver address without executing it.
-    /// For undefined weak symbols, returns null.
-    pub(crate) fn addr(&self) -> VmAddr {
-        match self {
-            Self::Defined { symbol, source } => {
-                if symbol.st_shndx().is_abs() {
-                    VmAddr::new(symbol.st_value())
-                } else {
-                    source.memory().base() + VmOffset::new(symbol.st_value())
-                }
-            }
-            Self::WeakUndef => VmAddr::null(),
-        }
-    }
-
-    #[inline]
-    pub(crate) fn resolve_addr(&self, executor: &dyn CodeExecutor<Arch>) -> Result<VmAddr> {
-        let addr = self.addr();
-        if unlikely(matches!(
-            self,
-            Self::Defined { symbol, .. } if symbol.symbol_type() == ElfSymbolType::GNU_IFUNC
-        )) {
-            self.resolve_ifunc_addr(executor, addr)
-        } else {
-            Ok(addr)
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn resolve_ifunc_addr(
-        &self,
-        executor: &dyn CodeExecutor<Arch>,
-        resolver: VmAddr,
-    ) -> Result<VmAddr> {
-        let Self::Defined { source, .. } = self else {
-            unreachable!("undefined weak symbols cannot be IFUNC resolvers")
-        };
-        executor.resolve_ifunc(
-            CodeContext::<Arch>::new(source.name(), source.memory()),
-            resolver,
-        )
-    }
-}
-
-#[cold]
-fn weak_undef<'lib, Arch, Tls>(
-    sym: &'lib ElfSymbol<Arch::Layout>,
-) -> Option<SymDef<'lib, Arch, Tls>>
-where
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch> + 'static,
-{
-    if sym.is_weak() && sym.is_undef() {
-        debug_assert_eq!(sym.st_value(), 0);
-        Some(SymDef::weak_undef())
-    } else {
-        None
-    }
-}
-
-pub(crate) fn find_symdef_impl<
-    'lib,
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch> + 'static,
-    Source,
->(
-    source: &'lib Source,
-    scope: &'lib ModuleScope<Arch, Tls>,
-    sym: &'lib ElfSymbol<Arch::Layout>,
-    syminfo: &SymbolInfo,
-    symbolic: bool,
-) -> Option<SymDef<'lib, Arch, Tls>>
-where
-    Source: Module<Arch, Tls>,
-{
-    let self_def = || (!sym.is_undef()).then(|| SymDef::defined(sym, source));
-    if unlikely(sym.binds_local()) {
-        return self_def().or_else(|| weak_undef(sym));
-    }
-
-    let scope_def = || {
-        let mut lookup = SymbolLookup::from_info(syminfo.clone());
-        scope.iter().find_map(|scope_source| {
-            scope_source
-                .exports()
-                .lookup(&mut lookup)
-                .filter(|sym| sym.is_exported())
-                .map(|sym| {
-                    logging::trace!(
-                        "binding file [{}] to [{}]: symbol [{}]",
-                        source.name(),
-                        scope_source.name(),
-                        syminfo.name()
-                    );
-                    SymDef::defined(sym, &**scope_source)
-                })
-        })
-    };
-
-    if symbolic {
-        self_def().or_else(scope_def)
-    } else {
-        scope_def().or_else(self_def)
-    }
-    .or_else(|| weak_undef(sym))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::find_symdef_impl;
-    use crate::{
-        arch::NativeArch,
-        elf::{
-            ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType, ElfSymbolVisibility,
-            SymbolInfo,
-        },
-        image::{ModuleScope, ModuleScopeBuilder, SymbolExports, SyntheticModule, SyntheticSymbol},
-        memory::VmAddr,
-        runtime::DomainId,
-    };
-
-    fn symbol(module: &SyntheticModule<NativeArch>) -> &ElfSymbol {
-        SymbolExports::symbols(module)
-            .first()
-            .expect("test module must contain a symbol")
-    }
-
-    fn scope(modules: impl IntoIterator<Item = SyntheticModule<NativeArch>>) -> ModuleScope {
-        let mut scope = ModuleScopeBuilder::new(DomainId::PROCESS);
-        scope.extend(modules);
-        scope.into_scope().expect("test scope must be valid")
-    }
-
-    #[test]
-    fn symbol_visibility_controls_scope_lookup() {
-        let source = SyntheticModule::new(
-            "source",
-            [SyntheticSymbol::function("value", 0x100usize as *const ())
-                .with_other(ElfSymbolVisibility::PROTECTED.raw())],
-        );
-        let external = SyntheticModule::new(
-            "external",
-            [SyntheticSymbol::function("value", 0x200usize as *const ())],
-        );
-        let info = SymbolInfo::from_str("value", None);
-        let external_scope = scope([external]);
-        let def = find_symdef_impl(&source, &external_scope, symbol(&source), &info, false)
-            .expect("protected definition must resolve locally");
-        assert_eq!(def.addr(), VmAddr::new(0x100));
-
-        let source = SyntheticModule::new(
-            "source",
-            [SyntheticSymbol::from_fields(
-                "value",
-                0,
-                0,
-                ElfSymbolBind::GLOBAL,
-                ElfSymbolType::NOTYPE,
-                ElfSymbolVisibility::DEFAULT.raw(),
-                ElfSectionIndex::UNDEF,
-                None,
-            )],
-        );
-        let hidden = SyntheticModule::new(
-            "hidden",
-            [SyntheticSymbol::function("value", 0x200usize as *const ())
-                .with_other(ElfSymbolVisibility::HIDDEN.raw())],
-        );
-        let visible = SyntheticModule::new(
-            "visible",
-            [SyntheticSymbol::function("value", 0x300usize as *const ())],
-        );
-        let scope = scope([hidden, visible]);
-        let def = find_symdef_impl(&source, &scope, symbol(&source), &info, false)
-            .expect("lookup must continue past a hidden definition");
-        assert_eq!(def.addr(), VmAddr::new(0x300));
-
-        let hidden_ref = SyntheticModule::new(
-            "source",
-            [SyntheticSymbol::from_fields(
-                "value",
-                0,
-                0,
-                ElfSymbolBind::GLOBAL,
-                ElfSymbolType::NOTYPE,
-                ElfSymbolVisibility::HIDDEN.raw(),
-                ElfSectionIndex::UNDEF,
-                None,
-            )],
-        );
-        assert!(
-            find_symdef_impl(&hidden_ref, &scope, symbol(&hidden_ref), &info, false).is_none(),
-            "hidden undefined reference must not resolve outside its module"
-        );
     }
 }
