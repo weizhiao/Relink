@@ -6,12 +6,52 @@ use crate::{
     memory::{ImageMemory, ImageMemoryExt, VmAddr, VmOffset},
     relocation::RelocationArch,
 };
+use core::fmt::{self, Display};
 
 use super::{
     layout::{ElfLayout, NativeElfLayout},
     raw::{ElfRelRaw, ElfRelaRaw, ElfWord},
-    types::{ElfRelocationType, ElfSectionType},
+    shdr::ElfSectionType,
 };
+
+/// Semantic wrapper for the ELF relocation type encoded in `r_info`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfRelocationType(u32);
+
+impl ElfRelocationType {
+    /// Creates a relocation type wrapper from a raw relocation number.
+    #[inline]
+    pub const fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw relocation number.
+    #[inline]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for ElfRelocationType {
+    #[inline]
+    fn from(value: u32) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfRelocationType> for u32 {
+    #[inline]
+    fn from(value: ElfRelocationType) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfRelocationType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(<NativeArch as RelocationArch>::rel_type_to_str(*self))
+    }
+}
 
 /// ELF RELR relocation entry.
 #[repr(transparent)]

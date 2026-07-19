@@ -1,19 +1,207 @@
 //! Parsing `.dynamic` section
+use super::raw::ElfDynRaw;
 use crate::{
     ParseDynamicError, RelocTableError, Result,
     arch::NativeArch,
-    elf::{
-        ElfDynRaw, ElfDynamicTag, ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, ElfWord,
-        Lifecycle, NativeElfLayout,
-    },
+    elf::{ElfLayout, ElfRel, ElfRelType, ElfRela, ElfRelr, ElfWord, Lifecycle, NativeElfLayout},
     memory::{MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::RelocationArch,
     segment::ElfSegments,
 };
 use alloc::vec::Vec;
-use core::fmt::Debug;
+use core::fmt::{self, Debug, Display};
 use core::num::NonZeroUsize;
 use elf::abi::*;
+
+/// This element holds the total size, in bytes, of the DT_RELR relocation table.
+pub const DT_RELRSZ: i64 = 35;
+/// This element is similar to DT_RELA, except its table has implicit addends and info.
+pub const DT_RELR: i64 = 36;
+/// This element holds the size, in bytes, of the DT_RELR relocation entry.
+pub const DT_RELRENT: i64 = 37;
+
+/// Semantic wrapper for the ELF `d_tag` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfDynamicTag(i64);
+
+impl ElfDynamicTag {
+    /// `DT_NULL`: terminates the dynamic array.
+    pub const NULL: Self = Self(DT_NULL);
+    /// `DT_NEEDED`: string-table offset naming a needed shared object.
+    pub const NEEDED: Self = Self(DT_NEEDED);
+    /// `DT_PLTRELSZ`: size of the PLT relocation table.
+    pub const PLTRELSZ: Self = Self(DT_PLTRELSZ);
+    /// `DT_PLTGOT`: address of the PLT/GOT area.
+    pub const PLTGOT: Self = Self(DT_PLTGOT);
+    /// `DT_HASH`: address of the System V hash table.
+    pub const HASH: Self = Self(DT_HASH);
+    /// `DT_STRTAB`: address of the dynamic string table.
+    pub const STRTAB: Self = Self(DT_STRTAB);
+    /// `DT_SYMTAB`: address of the dynamic symbol table.
+    pub const SYMTAB: Self = Self(DT_SYMTAB);
+    /// `DT_RELA`: address of explicit-addend relocations.
+    pub const RELA: Self = Self(DT_RELA);
+    /// `DT_RELASZ`: size of the `DT_RELA` table.
+    pub const RELASZ: Self = Self(DT_RELASZ);
+    /// `DT_RELAENT`: size of one `DT_RELA` entry.
+    pub const RELAENT: Self = Self(DT_RELAENT);
+    /// `DT_SYMENT`: size of one dynamic symbol entry.
+    pub const SYMENT: Self = Self(DT_SYMENT);
+    /// `DT_REL`: address of implicit-addend relocations.
+    pub const REL: Self = Self(DT_REL);
+    /// `DT_RELSZ`: size of the `DT_REL` table.
+    pub const RELSZ: Self = Self(DT_RELSZ);
+    /// `DT_RELENT`: size of one `DT_REL` entry.
+    pub const RELENT: Self = Self(DT_RELENT);
+    /// `DT_PLTREL`: relocation entry format used by the PLT table.
+    pub const PLTREL: Self = Self(DT_PLTREL);
+    /// `DT_DEBUG`: runtime linker debug hook.
+    pub const DEBUG: Self = Self(DT_DEBUG);
+    /// `DT_SONAME`: string-table offset naming this shared object.
+    pub const SONAME: Self = Self(DT_SONAME);
+    /// `DT_SYMBOLIC`: legacy symbolic binding marker.
+    pub const SYMBOLIC: Self = Self(DT_SYMBOLIC);
+    /// `DT_TEXTREL`: text relocations are present.
+    pub const TEXTREL: Self = Self(DT_TEXTREL);
+    /// `DT_BIND_NOW`: eager binding is requested.
+    pub const BIND_NOW: Self = Self(DT_BIND_NOW);
+    /// `DT_JMPREL`: address of PLT relocations.
+    pub const JMPREL: Self = Self(DT_JMPREL);
+    /// `DT_INIT`: initialization function address.
+    pub const INIT: Self = Self(DT_INIT);
+    /// `DT_FINI`: finalization function address.
+    pub const FINI: Self = Self(DT_FINI);
+    /// `DT_INIT_ARRAY`: initialization function array address.
+    pub const INIT_ARRAY: Self = Self(DT_INIT_ARRAY);
+    /// `DT_INIT_ARRAYSZ`: size of the initialization function array.
+    pub const INIT_ARRAYSZ: Self = Self(DT_INIT_ARRAYSZ);
+    /// `DT_FINI_ARRAY`: finalization function array address.
+    pub const FINI_ARRAY: Self = Self(DT_FINI_ARRAY);
+    /// `DT_FINI_ARRAYSZ`: size of the finalization function array.
+    pub const FINI_ARRAYSZ: Self = Self(DT_FINI_ARRAYSZ);
+    /// `DT_RPATH`: legacy runtime search path.
+    pub const RPATH: Self = Self(DT_RPATH);
+    /// `DT_RUNPATH`: runtime search path.
+    pub const RUNPATH: Self = Self(DT_RUNPATH);
+    /// `DT_FLAGS`: dynamic flags.
+    pub const FLAGS: Self = Self(DT_FLAGS);
+    /// `DT_FLAGS_1`: extended dynamic flags.
+    pub const FLAGS_1: Self = Self(DT_FLAGS_1);
+    /// `DT_STRSZ`: dynamic string-table size.
+    pub const STRSZ: Self = Self(DT_STRSZ);
+    /// `DT_PREINIT_ARRAY`: pre-initialization function array address.
+    pub const PREINIT_ARRAY: Self = Self(DT_PREINIT_ARRAY);
+    /// `DT_PREINIT_ARRAYSZ`: size of the pre-initialization function array.
+    pub const PREINIT_ARRAYSZ: Self = Self(DT_PREINIT_ARRAYSZ);
+    /// `DT_SYMTAB_SHNDX`: extended symbol section-index table.
+    pub const SYMTAB_SHNDX: Self = Self(DT_SYMTAB_SHNDX);
+    /// `DT_GNU_HASH`: GNU hash table address.
+    pub const GNU_HASH: Self = Self(DT_GNU_HASH);
+    /// `DT_GNU_LIBLIST`: GNU prelink library list.
+    pub const GNU_LIBLIST: Self = Self(DT_GNU_LIBLIST);
+    /// `DT_VERSYM`: symbol version index table.
+    pub const VERSYM: Self = Self(DT_VERSYM);
+    /// `DT_VERDEF`: version definition table.
+    pub const VERDEF: Self = Self(DT_VERDEF);
+    /// `DT_VERDEFNUM`: number of version definitions.
+    pub const VERDEFNUM: Self = Self(DT_VERDEFNUM);
+    /// `DT_VERNEED`: version dependency table.
+    pub const VERNEED: Self = Self(DT_VERNEED);
+    /// `DT_VERNEEDNUM`: number of version dependency entries.
+    pub const VERNEEDNUM: Self = Self(DT_VERNEEDNUM);
+    /// `DT_RELACOUNT`: number of leading relative `RELA` relocations.
+    pub const RELACOUNT: Self = Self(DT_RELACOUNT);
+    /// `DT_RELCOUNT`: number of leading relative `REL` relocations.
+    pub const RELCOUNT: Self = Self(DT_RELCOUNT);
+    /// `DT_RELR`: address of compact RELR relocations.
+    pub const RELR: Self = Self(DT_RELR);
+    /// `DT_RELRSZ`: size of the RELR table.
+    pub const RELRSZ: Self = Self(DT_RELRSZ);
+    /// `DT_RELRENT`: size of one RELR entry.
+    pub const RELRENT: Self = Self(DT_RELRENT);
+
+    /// Creates a dynamic tag wrapper from a raw `d_tag` value.
+    #[inline]
+    pub const fn new(raw: i64) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw `d_tag` value.
+    #[inline]
+    pub const fn raw(self) -> i64 {
+        self.0
+    }
+}
+
+impl From<i64> for ElfDynamicTag {
+    #[inline]
+    fn from(value: i64) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfDynamicTag> for i64 {
+    #[inline]
+    fn from(value: ElfDynamicTag) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfDynamicTag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            DT_NULL => f.write_str("DT_NULL"),
+            DT_NEEDED => f.write_str("DT_NEEDED"),
+            DT_PLTRELSZ => f.write_str("DT_PLTRELSZ"),
+            DT_PLTGOT => f.write_str("DT_PLTGOT"),
+            DT_HASH => f.write_str("DT_HASH"),
+            DT_STRTAB => f.write_str("DT_STRTAB"),
+            DT_SYMTAB => f.write_str("DT_SYMTAB"),
+            DT_RELA => f.write_str("DT_RELA"),
+            DT_RELASZ => f.write_str("DT_RELASZ"),
+            DT_RELAENT => f.write_str("DT_RELAENT"),
+            DT_STRSZ => f.write_str("DT_STRSZ"),
+            DT_SYMENT => f.write_str("DT_SYMENT"),
+            DT_SONAME => f.write_str("DT_SONAME"),
+            DT_REL => f.write_str("DT_REL"),
+            DT_RELSZ => f.write_str("DT_RELSZ"),
+            DT_RELENT => f.write_str("DT_RELENT"),
+            DT_PLTREL => f.write_str("DT_PLTREL"),
+            DT_DEBUG => f.write_str("DT_DEBUG"),
+            DT_SYMBOLIC => f.write_str("DT_SYMBOLIC"),
+            DT_TEXTREL => f.write_str("DT_TEXTREL"),
+            DT_BIND_NOW => f.write_str("DT_BIND_NOW"),
+            DT_JMPREL => f.write_str("DT_JMPREL"),
+            DT_INIT => f.write_str("DT_INIT"),
+            DT_FINI => f.write_str("DT_FINI"),
+            DT_INIT_ARRAY => f.write_str("DT_INIT_ARRAY"),
+            DT_INIT_ARRAYSZ => f.write_str("DT_INIT_ARRAYSZ"),
+            DT_FINI_ARRAY => f.write_str("DT_FINI_ARRAY"),
+            DT_FINI_ARRAYSZ => f.write_str("DT_FINI_ARRAYSZ"),
+            DT_RPATH => f.write_str("DT_RPATH"),
+            DT_RUNPATH => f.write_str("DT_RUNPATH"),
+            DT_FLAGS => f.write_str("DT_FLAGS"),
+            DT_FLAGS_1 => f.write_str("DT_FLAGS_1"),
+            DT_PREINIT_ARRAY => f.write_str("DT_PREINIT_ARRAY"),
+            DT_PREINIT_ARRAYSZ => f.write_str("DT_PREINIT_ARRAYSZ"),
+            DT_SYMTAB_SHNDX => f.write_str("DT_SYMTAB_SHNDX"),
+            DT_GNU_HASH => f.write_str("DT_GNU_HASH"),
+            DT_GNU_LIBLIST => f.write_str("DT_GNU_LIBLIST"),
+            DT_VERSYM => f.write_str("DT_VERSYM"),
+            DT_VERDEF => f.write_str("DT_VERDEF"),
+            DT_VERDEFNUM => f.write_str("DT_VERDEFNUM"),
+            DT_VERNEED => f.write_str("DT_VERNEED"),
+            DT_VERNEEDNUM => f.write_str("DT_VERNEEDNUM"),
+            DT_RELACOUNT => f.write_str("DT_RELACOUNT"),
+            DT_RELCOUNT => f.write_str("DT_RELCOUNT"),
+            DT_RELR => f.write_str("DT_RELR"),
+            DT_RELRSZ => f.write_str("DT_RELRSZ"),
+            DT_RELRENT => f.write_str("DT_RELRENT"),
+            raw => write!(f, "unknown ELF dynamic tag {raw}"),
+        }
+    }
+}
 
 /// ELF dynamic section entry.
 #[derive(Debug)]

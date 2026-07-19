@@ -1,3 +1,5 @@
+//! ELF initialization and finalization metadata.
+
 use crate::memory::VmAddr;
 use alloc::boxed::Box;
 use alloc::vec::Vec;

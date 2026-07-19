@@ -1,4 +1,4 @@
-//! Raw ELF32/ELF64 access traits used by layout-generic wrappers.
+//! Raw ELF32/ELF64 field access used by layout-generic wrappers.
 
 use crate::ByteRepr;
 

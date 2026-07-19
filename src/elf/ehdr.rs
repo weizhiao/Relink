@@ -4,16 +4,165 @@
 //! which contain essential metadata about ELF files such as architecture,
 //! file type, and section/program header information.
 
+use super::raw::ElfEhdrRaw;
 use crate::{
     IoError, ParseEhdrError, ParsePhdrError, ParseShdrError, ReadBoundsError, Result,
-    elf::{
-        ElfClass, ElfDataEncoding, ElfEhdrRaw, ElfFileType, ElfLayout, ElfMachine, ElfPhdr,
-        ElfShdr, NativeElfLayout,
-    },
+    elf::{ElfDataEncoding, ElfLayout, ElfPhdr, ElfShdr, NativeElfLayout},
 };
 use alloc::boxed::Box;
-use core::mem::size_of;
-use elf::abi::{EI_CLASS, EI_DATA, EI_VERSION, ELFMAGIC, EV_CURRENT};
+use core::{
+    fmt::{self, Display},
+    mem::size_of,
+};
+use elf::abi::*;
+
+/// Semantic wrapper for the ELF `EI_CLASS` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfClass(u8);
+
+impl ElfClass {
+    /// Creates an ELF class wrapper from a raw `EI_CLASS` value.
+    #[inline]
+    pub const fn new(raw: u8) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw `EI_CLASS` value.
+    #[inline]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for ElfClass {
+    #[inline]
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfClass> for u8 {
+    #[inline]
+    fn from(value: ElfClass) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            ELFCLASSNONE => f.write_str("ELFCLASSNONE"),
+            ELFCLASS32 => f.write_str("ELF32"),
+            ELFCLASS64 => f.write_str("ELF64"),
+            raw => write!(f, "unknown ELF class {raw}"),
+        }
+    }
+}
+
+/// Semantic wrapper for the ELF `e_machine` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfMachine(u16);
+
+impl ElfMachine {
+    /// Creates a machine wrapper from a raw `e_machine` value.
+    #[inline]
+    pub const fn new(raw: u16) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw `e_machine` value.
+    #[inline]
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+}
+
+impl From<u16> for ElfMachine {
+    #[inline]
+    fn from(value: u16) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfMachine> for u16 {
+    #[inline]
+    fn from(value: ElfMachine) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfMachine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            EM_X86_64 => f.write_str("x86_64"),
+            EM_AARCH64 => f.write_str("AArch64"),
+            EM_RISCV => f.write_str("RISC-V"),
+            EM_386 => f.write_str("x86"),
+            EM_ARM => f.write_str("ARM"),
+            258 => f.write_str("LoongArch"),
+            raw => write!(f, "unknown ELF machine {raw}"),
+        }
+    }
+}
+
+/// Semantic wrapper for the ELF `e_type` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfFileType(u16);
+
+impl ElfFileType {
+    /// `ET_NONE`: no file type.
+    pub const NONE: Self = Self(ET_NONE);
+    /// `ET_REL`: relocatable object file.
+    pub const REL: Self = Self(ET_REL);
+    /// `ET_EXEC`: executable file.
+    pub const EXEC: Self = Self(ET_EXEC);
+    /// `ET_DYN`: shared object or PIE-style image.
+    pub const DYN: Self = Self(ET_DYN);
+    /// `ET_CORE`: core dump file.
+    pub const CORE: Self = Self(ET_CORE);
+
+    /// Creates a file type wrapper from a raw `e_type` value.
+    #[inline]
+    pub const fn new(raw: u16) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw `e_type` value.
+    #[inline]
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+}
+
+impl From<u16> for ElfFileType {
+    #[inline]
+    fn from(value: u16) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfFileType> for u16 {
+    #[inline]
+    fn from(value: ElfFileType) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfFileType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            ET_NONE => f.write_str("ET_NONE"),
+            ET_REL => f.write_str("ET_REL"),
+            ET_EXEC => f.write_str("ET_EXEC"),
+            ET_DYN => f.write_str("ET_DYN"),
+            ET_CORE => f.write_str("ET_CORE"),
+            raw => write!(f, "unknown ELF file type {raw}"),
+        }
+    }
+}
 
 /// A wrapper around the ELF header structure
 ///

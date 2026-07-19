@@ -5,10 +5,396 @@
 //! It serves as a bridge between the raw ELF data structures and the higher-level
 //! symbol resolution APIs.
 
-use super::defs::{ElfLayout, ElfSymbol, NativeElfLayout};
 use super::hash::{PreCompute, SymbolHash};
+use super::{
+    layout::{ElfLayout, NativeElfLayout},
+    raw::ElfSymRaw,
+};
 use crate::{elf::HashTable, memory::MappedView};
-use core::{ffi::CStr, fmt::Debug};
+use core::{
+    ffi::CStr,
+    fmt::{self, Debug, Display},
+};
+use elf::abi::*;
+
+/// Semantic wrapper for the ELF symbol binding field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfSymbolBind(u8);
+
+impl ElfSymbolBind {
+    /// `STB_LOCAL`: symbol is local to the object.
+    pub const LOCAL: Self = Self(STB_LOCAL);
+    /// `STB_GLOBAL`: symbol participates in global lookup.
+    pub const GLOBAL: Self = Self(STB_GLOBAL);
+    /// `STB_WEAK`: symbol has weak binding.
+    pub const WEAK: Self = Self(STB_WEAK);
+    /// `STB_GNU_UNIQUE`: GNU unique symbol binding.
+    pub const GNU_UNIQUE: Self = Self(STB_GNU_UNIQUE);
+
+    /// Creates a symbol binding wrapper from a raw `st_info` binding value.
+    #[inline]
+    pub const fn new(raw: u8) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw binding value.
+    #[inline]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for ElfSymbolBind {
+    #[inline]
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfSymbolBind> for u8 {
+    #[inline]
+    fn from(value: ElfSymbolBind) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfSymbolBind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            STB_LOCAL => f.write_str("STB_LOCAL"),
+            STB_GLOBAL => f.write_str("STB_GLOBAL"),
+            STB_WEAK => f.write_str("STB_WEAK"),
+            STB_GNU_UNIQUE => f.write_str("STB_GNU_UNIQUE"),
+            raw => write!(f, "unknown ELF symbol bind {raw}"),
+        }
+    }
+}
+
+/// Semantic wrapper for the ELF symbol type field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfSymbolType(u8);
+
+impl ElfSymbolType {
+    /// `STT_NOTYPE`: symbol has no specified type.
+    pub const NOTYPE: Self = Self(STT_NOTYPE);
+    /// `STT_OBJECT`: data object symbol.
+    pub const OBJECT: Self = Self(STT_OBJECT);
+    /// `STT_FUNC`: function symbol.
+    pub const FUNC: Self = Self(STT_FUNC);
+    /// `STT_SECTION`: section symbol.
+    pub const SECTION: Self = Self(STT_SECTION);
+    /// `STT_FILE`: source file symbol.
+    pub const FILE: Self = Self(STT_FILE);
+    /// `STT_COMMON`: common block symbol.
+    pub const COMMON: Self = Self(STT_COMMON);
+    /// `STT_TLS`: thread-local storage symbol.
+    pub const TLS: Self = Self(STT_TLS);
+    /// `STT_GNU_IFUNC`: GNU indirect function symbol.
+    pub const GNU_IFUNC: Self = Self(STT_GNU_IFUNC);
+
+    /// Creates a symbol type wrapper from a raw `st_info` type value.
+    #[inline]
+    pub const fn new(raw: u8) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw symbol type value.
+    #[inline]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for ElfSymbolType {
+    #[inline]
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfSymbolType> for u8 {
+    #[inline]
+    fn from(value: ElfSymbolType) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfSymbolType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            STT_NOTYPE => f.write_str("STT_NOTYPE"),
+            STT_OBJECT => f.write_str("STT_OBJECT"),
+            STT_FUNC => f.write_str("STT_FUNC"),
+            STT_SECTION => f.write_str("STT_SECTION"),
+            STT_FILE => f.write_str("STT_FILE"),
+            STT_COMMON => f.write_str("STT_COMMON"),
+            STT_TLS => f.write_str("STT_TLS"),
+            STT_GNU_IFUNC => f.write_str("STT_GNU_IFUNC"),
+            raw => write!(f, "unknown ELF symbol type {raw}"),
+        }
+    }
+}
+
+/// Semantic wrapper for the visibility encoded in the ELF symbol `st_other` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfSymbolVisibility(u8);
+
+impl ElfSymbolVisibility {
+    /// `STV_DEFAULT`: symbol visibility follows its binding.
+    pub const DEFAULT: Self = Self(STV_DEFAULT);
+    /// `STV_INTERNAL`: symbol is hidden with processor-specific internal semantics.
+    pub const INTERNAL: Self = Self(STV_INTERNAL);
+    /// `STV_HIDDEN`: symbol is not visible outside its defining object.
+    pub const HIDDEN: Self = Self(STV_HIDDEN);
+    /// `STV_PROTECTED`: symbol is visible but cannot be preempted within its defining object.
+    pub const PROTECTED: Self = Self(STV_PROTECTED);
+
+    /// Extracts symbol visibility from a raw `st_other` value.
+    #[inline]
+    pub const fn new(st_other: u8) -> Self {
+        Self(st_other & 0x3)
+    }
+
+    /// Returns the raw visibility value.
+    #[inline]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for ElfSymbolVisibility {
+    #[inline]
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfSymbolVisibility> for u8 {
+    #[inline]
+    fn from(value: ElfSymbolVisibility) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfSymbolVisibility {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            STV_DEFAULT => f.write_str("STV_DEFAULT"),
+            STV_INTERNAL => f.write_str("STV_INTERNAL"),
+            STV_HIDDEN => f.write_str("STV_HIDDEN"),
+            STV_PROTECTED => f.write_str("STV_PROTECTED"),
+            raw => write!(f, "unknown ELF symbol visibility {raw}"),
+        }
+    }
+}
+
+/// Semantic wrapper for the ELF symbol `st_shndx` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfSectionIndex(u16);
+
+impl ElfSectionIndex {
+    /// `SHN_UNDEF`: undefined symbol section index.
+    pub const UNDEF: Self = Self(SHN_UNDEF);
+    /// `SHN_ABS`: absolute symbol section index.
+    pub const ABS: Self = Self(SHN_ABS);
+    /// `SHN_COMMON`: common symbol section index.
+    pub const COMMON: Self = Self(SHN_COMMON);
+    /// `SHN_XINDEX`: extended section index marker.
+    pub const XINDEX: Self = Self(SHN_XINDEX);
+
+    /// Creates a section-index wrapper from a raw `st_shndx` value.
+    #[inline]
+    pub const fn new(raw: u16) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the raw `st_shndx` value.
+    #[inline]
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+
+    /// Returns the section index as `usize`.
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// Returns whether this is `SHN_UNDEF`.
+    #[inline]
+    pub const fn is_undef(self) -> bool {
+        self.0 == SHN_UNDEF
+    }
+
+    /// Returns whether this is `SHN_ABS`.
+    #[inline]
+    pub const fn is_abs(self) -> bool {
+        self.0 == SHN_ABS
+    }
+
+    /// Returns whether this is `SHN_COMMON`.
+    #[inline]
+    pub const fn is_common(self) -> bool {
+        self.0 == SHN_COMMON
+    }
+
+    /// Returns whether this is `SHN_XINDEX`.
+    #[inline]
+    pub const fn is_xindex(self) -> bool {
+        self.0 == SHN_XINDEX
+    }
+}
+
+impl Display for ElfSectionIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            SHN_UNDEF => f.write_str("SHN_UNDEF"),
+            SHN_ABS => f.write_str("SHN_ABS"),
+            SHN_COMMON => f.write_str("SHN_COMMON"),
+            SHN_XINDEX => f.write_str("SHN_XINDEX"),
+            raw => write!(f, "ELF symbol section index {raw}"),
+        }
+    }
+}
+
+const OK_BINDS: usize = 1 << STB_GLOBAL | 1 << STB_WEAK | 1 << STB_GNU_UNIQUE;
+
+const OK_TYPES: usize = 1 << STT_NOTYPE
+    | 1 << STT_OBJECT
+    | 1 << STT_FUNC
+    | 1 << STT_COMMON
+    | 1 << STT_TLS
+    | 1 << STT_GNU_IFUNC;
+
+/// ELF symbol table entry.
+///
+/// This struct provides a unified interface for accessing ELF symbol information
+/// regardless of whether the ELF file is 32-bit or 64-bit.
+#[repr(transparent)]
+pub struct ElfSymbol<L: ElfLayout = NativeElfLayout> {
+    sym: L::Sym,
+}
+
+impl<L: ElfLayout> Clone for ElfSymbol<L> {
+    fn clone(&self) -> Self {
+        Self {
+            sym: L::Sym::from_fields(
+                self.st_name(),
+                self.st_value(),
+                self.st_size(),
+                self.sym.st_info(),
+                self.st_other(),
+                self.st_shndx().raw(),
+            ),
+        }
+    }
+}
+
+impl<L: ElfLayout> ElfSymbol<L> {
+    pub(crate) fn synthetic(
+        name: usize,
+        value: usize,
+        size: usize,
+        bind: ElfSymbolBind,
+        symbol_type: ElfSymbolType,
+        other: u8,
+        section_index: ElfSectionIndex,
+    ) -> Self {
+        let st_info = (bind.raw() << 4) | (symbol_type.raw() & 0xf);
+        Self {
+            sym: L::Sym::from_fields(name, value, size, st_info, other, section_index.raw()),
+        }
+    }
+
+    /// Returns the symbol value.
+    #[inline]
+    pub fn st_value(&self) -> usize {
+        self.sym.st_value()
+    }
+
+    /// Returns the parsed ELF symbol binding.
+    #[inline]
+    pub fn bind(&self) -> ElfSymbolBind {
+        ElfSymbolBind::new(self.sym.st_info() >> 4)
+    }
+
+    /// Returns the parsed ELF symbol type.
+    #[inline]
+    pub fn symbol_type(&self) -> ElfSymbolType {
+        ElfSymbolType::new(self.sym.st_info() & 0xf)
+    }
+
+    /// Returns the section index.
+    #[inline]
+    pub fn st_shndx(&self) -> ElfSectionIndex {
+        ElfSectionIndex::new(self.sym.st_shndx())
+    }
+
+    /// Returns the symbol name index.
+    #[inline]
+    pub fn st_name(&self) -> usize {
+        self.sym.st_name()
+    }
+
+    /// Returns the symbol size.
+    #[inline]
+    pub fn st_size(&self) -> usize {
+        self.sym.st_size()
+    }
+
+    /// Returns the symbol visibility encoded in `st_other`.
+    #[inline]
+    pub fn visibility(&self) -> ElfSymbolVisibility {
+        ElfSymbolVisibility::new(self.sym.st_other())
+    }
+
+    /// Returns the raw ELF `st_other` field, including non-visibility bits.
+    #[inline]
+    pub fn st_other(&self) -> u8 {
+        self.sym.st_other()
+    }
+
+    /// Returns true if the symbol is undefined (not defined in this object file).
+    #[inline]
+    pub fn is_undef(&self) -> bool {
+        self.st_shndx().is_undef()
+    }
+
+    /// Returns whether this symbol can define a normal cross-module lookup.
+    #[inline]
+    pub fn is_exported(&self) -> bool {
+        !self.is_undef()
+            && (1 << self.bind().raw()) & OK_BINDS != 0
+            && (1 << self.symbol_type().raw()) & OK_TYPES != 0
+            && matches!(
+                self.visibility(),
+                ElfSymbolVisibility::DEFAULT | ElfSymbolVisibility::PROTECTED
+            )
+    }
+
+    /// Returns whether references to this symbol must bind within its component.
+    #[inline]
+    pub fn binds_local(&self) -> bool {
+        self.bind() == ElfSymbolBind::LOCAL || self.visibility() != ElfSymbolVisibility::DEFAULT
+    }
+
+    /// Returns true if the symbol has weak binding.
+    #[inline]
+    pub fn is_weak(&self) -> bool {
+        self.bind() == ElfSymbolBind::WEAK
+    }
+
+    /// Sets the symbol value.
+    #[inline]
+    pub(crate) fn set_value(&mut self, value: usize) {
+        self.sym.set_st_value(value);
+    }
+}
+
 /// ELF string table wrapper
 ///
 /// This structure provides safe access to the ELF string table, which contains
