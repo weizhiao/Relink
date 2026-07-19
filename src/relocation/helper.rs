@@ -80,7 +80,7 @@ where
     pub(crate) fn reloc_error(&self, rel: &ElfRelType<Arch>, reason: RelocReason) -> Error {
         let r_type_str = Arch::rel_type_to_str(rel.r_type());
         let r_sym = rel.r_symbol();
-        if r_sym == 0 {
+        if unlikely(r_sym == 0) {
             relocate_context_error(self.core.name(), r_type_str, None, reason)
         } else {
             relocate_context_error(
@@ -95,6 +95,9 @@ where
     #[inline]
     #[cfg(feature = "object")]
     pub(crate) fn symbol_addr(&self, r_sym: usize) -> VmAddr {
+        if r_sym == 0 {
+            return VmAddr::null();
+        }
         let symbol = self.symbols.symbol_idx(r_sym);
         self.core.base() + VmOffset::new(symbol.symbol().st_value())
     }
@@ -260,23 +263,27 @@ pub(crate) fn find_symdef_impl<
 where
     Source: Module<Arch, Tls>,
 {
-    if unlikely(sym.is_local()) {
-        return Some(SymDef::defined(sym, source));
+    let self_def = || (!sym.is_undef()).then(|| SymDef::defined(sym, source));
+    if unlikely(sym.binds_local()) {
+        return self_def().or_else(|| weak_undef(sym));
     }
 
-    let self_def = || (!sym.is_undef()).then(|| SymDef::defined(sym, source));
     let scope_def = || {
         let mut lookup = SymbolLookup::from_info(syminfo.clone());
         scope.iter().find_map(|scope_source| {
-            scope_source.exports().lookup(&mut lookup).map(|sym| {
-                logging::trace!(
-                    "binding file [{}] to [{}]: symbol [{}]",
-                    source.name(),
-                    scope_source.name(),
-                    syminfo.name()
-                );
-                SymDef::defined(sym, &**scope_source)
-            })
+            scope_source
+                .exports()
+                .lookup(&mut lookup)
+                .filter(|sym| sym.is_exported())
+                .map(|sym| {
+                    logging::trace!(
+                        "binding file [{}] to [{}]: symbol [{}]",
+                        source.name(),
+                        scope_source.name(),
+                        syminfo.name()
+                    );
+                    SymDef::defined(sym, &**scope_source)
+                })
         })
     };
 
@@ -286,4 +293,94 @@ where
         scope_def().or_else(self_def)
     }
     .or_else(|| weak_undef(sym))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_symdef_impl;
+    use crate::{
+        arch::NativeArch,
+        elf::{
+            ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType, ElfSymbolVisibility,
+            SymbolInfo,
+        },
+        image::{ModuleScope, ModuleScopeBuilder, SymbolExports, SyntheticModule, SyntheticSymbol},
+        memory::VmAddr,
+        runtime::DomainId,
+    };
+
+    fn symbol(module: &SyntheticModule<NativeArch>) -> &ElfSymbol {
+        SymbolExports::symbols(module)
+            .first()
+            .expect("test module must contain a symbol")
+    }
+
+    fn scope(modules: impl IntoIterator<Item = SyntheticModule<NativeArch>>) -> ModuleScope {
+        let mut scope = ModuleScopeBuilder::new(DomainId::PROCESS);
+        scope.extend(modules);
+        scope.into_scope().expect("test scope must be valid")
+    }
+
+    #[test]
+    fn symbol_visibility_controls_scope_lookup() {
+        let source = SyntheticModule::new(
+            "source",
+            [SyntheticSymbol::function("value", 0x100usize as *const ())
+                .with_other(ElfSymbolVisibility::PROTECTED.raw())],
+        );
+        let external = SyntheticModule::new(
+            "external",
+            [SyntheticSymbol::function("value", 0x200usize as *const ())],
+        );
+        let info = SymbolInfo::from_str("value", None);
+        let external_scope = scope([external]);
+        let def = find_symdef_impl(&source, &external_scope, symbol(&source), &info, false)
+            .expect("protected definition must resolve locally");
+        assert_eq!(def.addr(), VmAddr::new(0x100));
+
+        let source = SyntheticModule::new(
+            "source",
+            [SyntheticSymbol::from_fields(
+                "value",
+                0,
+                0,
+                ElfSymbolBind::GLOBAL,
+                ElfSymbolType::NOTYPE,
+                ElfSymbolVisibility::DEFAULT.raw(),
+                ElfSectionIndex::UNDEF,
+                None,
+            )],
+        );
+        let hidden = SyntheticModule::new(
+            "hidden",
+            [SyntheticSymbol::function("value", 0x200usize as *const ())
+                .with_other(ElfSymbolVisibility::HIDDEN.raw())],
+        );
+        let visible = SyntheticModule::new(
+            "visible",
+            [SyntheticSymbol::function("value", 0x300usize as *const ())],
+        );
+        let scope = scope([hidden, visible]);
+        let def = find_symdef_impl(&source, &scope, symbol(&source), &info, false)
+            .expect("lookup must continue past a hidden definition");
+        assert_eq!(def.addr(), VmAddr::new(0x300));
+
+        let hidden_ref = SyntheticModule::new(
+            "source",
+            [SyntheticSymbol::from_fields(
+                "value",
+                0,
+                0,
+                ElfSymbolBind::GLOBAL,
+                ElfSymbolType::NOTYPE,
+                ElfSymbolVisibility::HIDDEN.raw(),
+                ElfSectionIndex::UNDEF,
+                None,
+            )],
+        );
+        assert!(
+            find_symdef_impl(&hidden_ref, &scope, symbol(&hidden_ref), &info, false).is_none(),
+            "hidden undefined reference must not resolve outside its module"
+        );
+    }
 }

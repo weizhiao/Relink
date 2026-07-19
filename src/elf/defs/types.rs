@@ -573,6 +573,60 @@ impl Display for ElfSymbolType {
     }
 }
 
+/// Semantic wrapper for the visibility encoded in the ELF symbol `st_other` field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ElfSymbolVisibility(u8);
+
+impl ElfSymbolVisibility {
+    /// `STV_DEFAULT`: symbol visibility follows its binding.
+    pub const DEFAULT: Self = Self(STV_DEFAULT);
+    /// `STV_INTERNAL`: symbol is hidden with processor-specific internal semantics.
+    pub const INTERNAL: Self = Self(STV_INTERNAL);
+    /// `STV_HIDDEN`: symbol is not visible outside its defining object.
+    pub const HIDDEN: Self = Self(STV_HIDDEN);
+    /// `STV_PROTECTED`: symbol is visible but cannot be preempted within its defining object.
+    pub const PROTECTED: Self = Self(STV_PROTECTED);
+
+    /// Extracts symbol visibility from a raw `st_other` value.
+    #[inline]
+    pub const fn new(st_other: u8) -> Self {
+        Self(st_other & 0x3)
+    }
+
+    /// Returns the raw visibility value.
+    #[inline]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+impl From<u8> for ElfSymbolVisibility {
+    #[inline]
+    fn from(value: u8) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<ElfSymbolVisibility> for u8 {
+    #[inline]
+    fn from(value: ElfSymbolVisibility) -> Self {
+        value.raw()
+    }
+}
+
+impl Display for ElfSymbolVisibility {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            STV_DEFAULT => f.write_str("STV_DEFAULT"),
+            STV_INTERNAL => f.write_str("STV_INTERNAL"),
+            STV_HIDDEN => f.write_str("STV_HIDDEN"),
+            STV_PROTECTED => f.write_str("STV_PROTECTED"),
+            raw => write!(f, "unknown ELF symbol visibility {raw}"),
+        }
+    }
+}
+
 /// Semantic wrapper for the ELF symbol `st_shndx` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -732,7 +786,13 @@ impl<L: ElfLayout> ElfSymbol<L> {
         self.sym.st_size()
     }
 
-    /// Returns the symbol visibility.
+    /// Returns the symbol visibility encoded in `st_other`.
+    #[inline]
+    pub fn visibility(&self) -> ElfSymbolVisibility {
+        ElfSymbolVisibility::new(self.sym.st_other())
+    }
+
+    /// Returns the raw ELF `st_other` field, including non-visibility bits.
     #[inline]
     pub fn st_other(&self) -> u8 {
         self.sym.st_other()
@@ -745,25 +805,29 @@ impl<L: ElfLayout> ElfSymbol<L> {
         self.st_shndx().is_undef()
     }
 
-    /// Returns true if the symbol has a valid binding type for relocation.
-    /// Valid bindings include global, weak, and GNU unique symbols.
+    /// Returns whether this symbol can define a normal cross-module lookup.
+    ///
+    /// The symbol must be defined, have a globally searchable binding and type,
+    /// and use default or protected visibility. Hidden and internal definitions
+    /// are intentionally excluded.
     #[inline]
-    pub fn is_ok_bind(&self) -> bool {
-        (1 << self.bind().raw()) & OK_BINDS != 0
+    pub fn is_exported(&self) -> bool {
+        !self.is_undef()
+            && (1 << self.bind().raw()) & OK_BINDS != 0
+            && (1 << self.symbol_type().raw()) & OK_TYPES != 0
+            && matches!(
+                self.visibility(),
+                ElfSymbolVisibility::DEFAULT | ElfSymbolVisibility::PROTECTED
+            )
     }
 
-    /// Returns true if the symbol has a valid type for relocation.
-    /// Valid types include object, function, common, TLS, and GNU IFUNC symbols.
+    /// Returns whether references to this symbol must bind within its component.
+    ///
+    /// Local symbols and symbols with non-default visibility do not participate
+    /// in ordinary cross-module preemption.
     #[inline]
-    pub fn is_ok_type(&self) -> bool {
-        (1 << self.symbol_type().raw()) & OK_TYPES != 0
-    }
-
-    /// Returns true if the symbol has local binding.
-    /// Local symbols are only visible within the object file that defines them.
-    #[inline]
-    pub fn is_local(&self) -> bool {
-        self.bind() == ElfSymbolBind::LOCAL
+    pub fn binds_local(&self) -> bool {
+        self.bind() == ElfSymbolBind::LOCAL || self.visibility() != ElfSymbolVisibility::DEFAULT
     }
 
     /// Returns true if the symbol has weak binding.

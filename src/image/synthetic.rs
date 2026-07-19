@@ -569,6 +569,7 @@ where
 mod tests {
     use super::*;
     use crate::{
+        elf::ElfSymbolVisibility,
         image::ModuleScopeBuilder,
         memory::{MappedRegion, VmOffset},
         segment::ElfSegments,
@@ -712,6 +713,7 @@ mod tests {
         assert_eq!(symbol.bind(), ElfSymbolBind::WEAK);
         assert_eq!(symbol.symbol_type(), ElfSymbolType::TLS);
         assert_eq!(symbol.st_other(), 3);
+        assert_eq!(symbol.visibility(), ElfSymbolVisibility::PROTECTED);
         assert_eq!(symbol.st_shndx(), ElfSectionIndex::new(1));
     }
 

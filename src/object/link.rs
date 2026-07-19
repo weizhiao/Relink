@@ -177,7 +177,8 @@ where
         let base = self.core.base();
         let symbol_count = self.symtab.symbols().len();
 
-        for idx in 0..symbol_count {
+        // The mandatory null symbol stays zero and never participates in lookup.
+        for idx in 1..symbol_count {
             let value = {
                 let entry = self.symtab.symbol_idx(idx);
                 let symbol = entry.symbol();
@@ -229,11 +230,7 @@ where
         for idx in 0..self.symtab.symbols().len() {
             let entry = self.symtab.symbol_idx(idx);
             let symbol = entry.symbol();
-            if symbol.is_undef()
-                || !symbol.is_ok_bind()
-                || !symbol.is_ok_type()
-                || self.symbol_uses_init_memory(symbol)
-            {
+            if !symbol.is_exported() || self.symbol_uses_init_memory(symbol) {
                 continue;
             }
             exports.insert(entry.name(), symbol.clone());

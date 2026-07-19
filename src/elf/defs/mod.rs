@@ -19,5 +19,5 @@ pub use rel::{ElfRel, ElfRelEntry, ElfRelType, ElfRela, ElfRelr};
 pub use types::{
     ElfClass, ElfDataEncoding, ElfDynamicTag, ElfFileType, ElfMachine, ElfProgramFlags,
     ElfProgramType, ElfRelocationType, ElfSectionFlags, ElfSectionId, ElfSectionIndex,
-    ElfSectionType, ElfSymbol, ElfSymbolBind, ElfSymbolType,
+    ElfSectionType, ElfSymbol, ElfSymbolBind, ElfSymbolType, ElfSymbolVisibility,
 };

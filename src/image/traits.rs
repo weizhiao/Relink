@@ -56,7 +56,7 @@ where
         &'exports self,
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'exports ElfSymbol<L>> {
-        self.view().lookup_filter(lookup)
+        self.view().lookup(lookup)
     }
 }
 

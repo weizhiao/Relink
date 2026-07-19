@@ -366,27 +366,8 @@ impl<'symtab, L: ElfLayout, H> SymbolTableView<'symtab, L, H> {
 
 impl<'symtab, L: ElfLayout, H: SymbolHash<L>> SymbolTableView<'symtab, L, H> {
     /// Looks up a symbol in the symbol table using the hash table for efficiency.
-    fn lookup(&self, lookup: &mut SymbolLookup<'_>) -> Option<&'symtab ElfSymbol<L>> {
+    pub(crate) fn lookup(&self, lookup: &mut SymbolLookup<'_>) -> Option<&'symtab ElfSymbol<L>> {
         self.hashtab.lookup(*self, lookup)
-    }
-
-    /// Looks up a symbol and filters based on relocation requirements.
-    #[inline]
-    pub(crate) fn lookup_filter(
-        &self,
-        lookup: &mut SymbolLookup<'_>,
-    ) -> Option<&'symtab ElfSymbol<L>> {
-        // Look up the symbol
-        if let Some(sym) = self.lookup(lookup) {
-            // Filter based on relocation requirements:
-            // 1. Symbol must be defined (not undefined)
-            // 2. Symbol must have acceptable binding
-            // 3. Symbol must have acceptable type
-            if !sym.is_undef() && sym.is_ok_bind() && sym.is_ok_type() {
-                return Some(sym);
-            }
-        }
-        None
     }
 }
 

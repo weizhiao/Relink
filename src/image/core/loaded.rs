@@ -184,6 +184,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
 
     #[inline]
     fn lookup_addr(&self, sym: &ElfSymbol<Arch::Layout>) -> Result<Option<VmAddr>> {
+        if !sym.is_exported() {
+            return Ok(None);
+        }
         if unlikely(sym.symbol_type() == ElfSymbolType::TLS) {
             self.core.tls_addr(sym.st_value())
         } else {
