@@ -2,8 +2,13 @@ use super::storage::{
     CommittedStorage, ContextId, DepEdge, EntryState, KeyId, ModuleId, ModuleSlot,
 };
 use crate::{
-    LinkContextError, LinkerError, Result, arch::NativeArch, image::ModuleHandle,
-    relocation::RelocationArch, runtime::DomainId, tls::TlsResolver,
+    LinkContextError, LinkerError, Result,
+    arch::NativeArch,
+    image::ModuleHandle,
+    relocation::{RelocationArch, SymbolRegistry},
+    runtime::DomainId,
+    sync::Arc,
+    tls::TlsResolver,
 };
 use alloc::{
     boxed::Box,
@@ -171,9 +176,10 @@ where
 /// It owns module ids, loaded module handles, aliases, and direct dependency
 /// edges produced by successful linker loads.
 ///
-/// Keep one context per target runtime/address space. Module ids and key ids are
-/// branded with a context identity so ids from different contexts cannot be
-/// mixed accidentally.
+/// Each context is one symbol namespace. Multiple contexts may target the same
+/// runtime domain while retaining independent module graphs and GNU unique
+/// symbol definitions. Module ids and key ids are branded with the namespace's
+/// context identity so ids from different contexts cannot be mixed accidentally.
 pub struct LinkContext<
     K,
     D: 'static = (),
@@ -182,6 +188,7 @@ pub struct LinkContext<
     Tls: TlsResolver<Arch> = (),
 > {
     pub(super) committed: CommittedStorage<K, D, M, Arch, Tls>,
+    pub(super) symbols: Arc<SymbolRegistry<Arch, Tls>>,
 }
 
 impl<K, D: 'static, M, Arch, Tls> LinkContext<K, D, M, Arch, Tls>
@@ -194,10 +201,11 @@ where
     pub fn new(domain: DomainId) -> Self {
         Self {
             committed: CommittedStorage::new(ContextId::fresh(), domain),
+            symbols: Arc::new(SymbolRegistry::new()),
         }
     }
 
-    /// Returns this context's runtime identity.
+    /// Returns this context's symbol-namespace identity.
     #[inline]
     pub fn context_id(&self) -> ContextId {
         self.committed.context()
@@ -455,6 +463,7 @@ where
     {
         Self {
             committed: self.committed.clone(),
+            symbols: Arc::clone(&self.symbols),
         }
     }
 }
@@ -468,6 +477,7 @@ mod tests {
         image::{ModuleScopeBuilder, SyntheticModule},
         linker::{KeyId, ModuleId},
         runtime::DomainId,
+        sync::Arc,
     };
     use alloc::{boxed::Box, string::String, vec::Vec};
 
@@ -554,6 +564,7 @@ mod tests {
         let second_key = second.key_id(&"root").expect("root key should be interned");
 
         assert_ne!(first.context_id(), second.context_id());
+        assert!(!Arc::ptr_eq(&first.symbols, &second.symbols));
         assert_ne!(first_root, second_root);
         assert_ne!(first_key, second_key);
         assert!(second.contains_module(first_root).is_err());
@@ -580,6 +591,7 @@ mod tests {
 
         let snapshot = context.snapshot();
         assert_eq!(context.context_id(), snapshot.context_id());
+        assert!(Arc::ptr_eq(&context.symbols, &snapshot.symbols));
         let (_, removed_deps, _) = context.remove(root).unwrap();
 
         assert!(!context.contains_module(root).unwrap());

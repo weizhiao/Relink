@@ -11,7 +11,9 @@ use crate::{
     lazy::{LazyBinder, LazyBindingSlots},
     memory::VmAddr,
     observer::RelocationObserver,
+    relocation::SymbolRegistry,
     runtime::DomainId,
+    sync::Arc,
     tls::TlsResolver,
 };
 #[cfg(feature = "object")]
@@ -249,6 +251,7 @@ pub struct RelocateArgs<
     Binder: ?Sized,
 > {
     pub(crate) scope: ModuleScope<Arch, Tls>,
+    pub(crate) symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
     pub(crate) binding: BindingMode,
     pub(crate) run_init: bool,
     pub(crate) lazy_binder: &'a Binder,

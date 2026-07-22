@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-#[cfg(feature = "tls")]
 use std::{
     sync::{Arc, Barrier},
     thread,
@@ -19,9 +18,7 @@ const REL_IRELATIVE: u32 = <NativeArch as RelocationArch>::IRELATIVE.raw();
 const REL_JUMP_SLOT: u32 = <NativeArch as RelocationArch>::JUMP_SLOT.raw();
 const REL_RELATIVE: u32 = <NativeArch as RelocationArch>::RELATIVE.raw();
 const REL_SYMBOLIC: u32 = <NativeArch as RelocationArch>::SYMBOLIC.raw();
-#[cfg(feature = "tls")]
 const REL_DTPMOD: u32 = <NativeArch as RelocationArch>::DTPMOD.raw();
-#[cfg(feature = "tls")]
 const REL_DTPOFF: u32 = <NativeArch as RelocationArch>::DTPOFF.raw();
 use gen_elf::SectionKind;
 
@@ -164,7 +161,6 @@ impl BindingScenario {
         }
     }
 
-    #[cfg(feature = "tls")]
     pub(crate) fn assert_tls_relocations(&self) {
         let tls_mod_id = self
             .helper_dylib()
@@ -221,7 +217,6 @@ impl BindingScenario {
         );
     }
 
-    #[cfg(feature = "tls")]
     pub(crate) fn assert_tls_values_are_thread_local(&self) {
         let first_tls_helper = self.tls_helper(EXTERNAL_TLS_NAME);
         let second_tls_helper = self.tls_helper(EXTERNAL_TLS_NAME2);

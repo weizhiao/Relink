@@ -9,7 +9,7 @@ use crate::{
     logging,
     memory::{ImageMemory, ImageMemoryExt, MappedView, RegionAccess, VmOffset},
     observer::{DynamicRelocatedEvent, LifecycleRunner, RelocationObserver},
-    relocation::{RelocHelper, RelocateArgs, RelocationArch, SymDef, SymbolResolver},
+    relocation::{RelocHelper, RelocateArgs, RelocationArch, SymbolResolver},
     runtime::CodeContext,
     tls::{TlsRelocOutcome, TlsResolver},
 };
@@ -42,6 +42,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
 
         let RelocateArgs {
             scope,
+            symbols,
             binding,
             run_init,
             lazy_binder,
@@ -58,7 +59,12 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         if lazy_binding {
             logging::debug!("Using lazy binding for {}", self.name());
         }
-        let resolver = SymbolResolver::new(self.core_ref(), scope, self.core_ref().symbolic());
+        let resolver = SymbolResolver::new(
+            self.core_ref(),
+            scope,
+            symbols.as_deref(),
+            self.core_ref().symbolic(),
+        );
         let mut helper = RelocHelper::new(
             resolver,
             self.symtab().view(),
@@ -101,7 +107,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
 
         logging::info!("Relocation completed for {}", self.name());
 
-        Ok(unsafe { LoadedCore::from_core_scope(self.into_core(), scope) })
+        Ok(unsafe { LoadedCore::from_core_scope_registry(self.into_core(), scope, symbols) })
     }
 }
 
@@ -339,12 +345,9 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                 // Handle copy relocations (typically for global data)
                 let symbol = helper.symbol_entry(rel);
                 let len = symbol.symbol().st_size();
-                if let Some(SymDef::Defined {
-                    symbol: sym,
-                    source,
-                }) = helper.find_symdef(&symbol)
+                if let Some(symdef) = helper.find_copy_symdef(&symbol)
+                    && let Some((_, source)) = symdef.parts()
                 {
-                    let symdef = SymDef::defined(sym, source);
                     let mut src = vec![0; len];
                     source.memory().read_bytes(symdef.addr(), &mut src)?;
                     helper.memory().write_bytes(base + rel.r_offset(), &src)?;

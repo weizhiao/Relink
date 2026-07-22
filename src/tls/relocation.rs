@@ -1,8 +1,7 @@
 use super::defs::{ModuleTls, TlsDescRequest};
 use crate::{
     ByteRepr, RelocReason, Result,
-    elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfSymbol, ElfWord},
-    image::Module,
+    elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
     relocation::{RelocHelper, RelocationArch, SymDef},
@@ -12,11 +11,6 @@ use crate::{
 pub(crate) enum TlsRelocOutcome {
     Applied,
     Failed(RelocReason),
-}
-
-struct TlsDefinedSymbol<'a, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> {
-    symbol: &'a ElfSymbol<Arch::Layout>,
-    source: &'a dyn Module<Arch, Tls>,
 }
 
 impl<'find, D, Arch, R, Tls, Obs, H, Memory> RelocHelper<'find, D, Arch, R, Tls, Obs, H, Memory>
@@ -33,12 +27,15 @@ where
     fn defined_tls_symbol(
         &self,
         rel: &ElfRelType<Arch>,
-    ) -> core::result::Result<TlsDefinedSymbol<'_, Arch, Tls>, TlsRelocOutcome> {
+    ) -> core::result::Result<SymDef<'_, Arch, Tls>, TlsRelocOutcome> {
         let symbol = self.symbol_entry(rel);
-        match self.find_symdef(&symbol) {
-            Some(SymDef::Defined { symbol, source }) => Ok(TlsDefinedSymbol { symbol, source }),
-            Some(SymDef::WeakUndef) => Err(TlsRelocOutcome::Applied),
-            None => Err(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol)),
+        let Some(symdef) = self.find_symdef(&symbol) else {
+            return Err(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
+        };
+        if symdef.is_weak_undef() {
+            Err(TlsRelocOutcome::Applied)
+        } else {
+            Ok(symdef)
         }
     }
 
@@ -52,11 +49,14 @@ where
 
         match r_type {
             value if value == Arch::DTPOFF => {
-                let defined = match self.defined_tls_symbol(rel) {
-                    Ok(defined) => defined,
+                let symdef = match self.defined_tls_symbol(rel) {
+                    Ok(symdef) => symdef,
                     Err(outcome) => return Ok(outcome),
                 };
-                let tls_val = VmAddr::new(defined.symbol.st_value())
+                let (symbol, _) = symdef
+                    .parts()
+                    .expect("defined TLS symbol must retain its provider");
+                let tls_val = VmAddr::new(symbol.st_value())
                     .wrapping_add_signed(r_addend)
                     .get()
                     .wrapping_sub(Arch::TLS_DTV_OFFSET);
@@ -72,11 +72,15 @@ where
                 let tls = if r_sym == 0 {
                     self.core.tls()
                 } else {
-                    let defined = match self.defined_tls_symbol(rel) {
-                        Ok(defined) => defined,
+                    let symdef = match self.defined_tls_symbol(rel) {
+                        Ok(symdef) => symdef,
                         Err(outcome) => return Ok(outcome),
                     };
-                    defined.source.tls()
+                    symdef
+                        .parts()
+                        .expect("defined TLS symbol must retain its provider")
+                        .1
+                        .tls()
                 };
                 let Some(tls) = tls else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
@@ -91,16 +95,18 @@ where
                 Ok(TlsRelocOutcome::Applied)
             }
             value if value == Arch::TPOFF => {
-                let defined = match self.defined_tls_symbol(rel) {
-                    Ok(defined) => defined,
+                let symdef = match self.defined_tls_symbol(rel) {
+                    Ok(symdef) => symdef,
                     Err(outcome) => return Ok(outcome),
                 };
-                let Some(tp_offset) = defined.source.tls().and_then(ModuleTls::tp_offset) else {
+                let (symbol, source) = symdef
+                    .parts()
+                    .expect("defined TLS symbol must retain its provider");
+                let Some(tp_offset) = source.tls().and_then(ModuleTls::tp_offset) else {
                     return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsTpOffset));
                 };
-                let tls_val =
-                    VmAddr::new((tp_offset.get() + defined.symbol.st_value() as isize) as usize)
-                        .wrapping_add_signed(r_addend);
+                let tls_val = VmAddr::new((tp_offset.get() + symbol.st_value() as isize) as usize)
+                    .wrapping_add_signed(r_addend);
                 unsafe {
                     memory.write_value(
                         place,
@@ -112,16 +118,16 @@ where
             value if Arch::is_tlsdesc(value) => {
                 let symbol = self.symbol_entry(rel);
                 let request = match self.find_symdef(&symbol) {
-                    Some(SymDef::WeakUndef) => TlsDescRequest::UndefinedWeak {
-                        addend: r_addend as usize,
-                    },
                     None => {
                         return Ok(TlsRelocOutcome::Failed(RelocReason::UnknownSymbol));
                     }
-                    Some(SymDef::Defined {
-                        symbol: sym,
-                        source,
-                    }) => {
+                    Some(symdef) if symdef.is_weak_undef() => TlsDescRequest::UndefinedWeak {
+                        addend: r_addend as usize,
+                    },
+                    Some(symdef) => {
+                        let (sym, source) = symdef
+                            .parts()
+                            .expect("defined TLS symbol must retain its provider");
                         let Some(tls) = source.tls() else {
                             return Ok(TlsRelocOutcome::Failed(RelocReason::MissingTlsModuleId));
                         };

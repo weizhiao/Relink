@@ -7,8 +7,8 @@ use core::marker::PhantomData;
 
 /// TLS runtime state attached to a loaded ELF core.
 ///
-/// This stores resolver-provided TLS metadata independently of the built-in TLS
-/// manager. The `tls` feature only controls the default same-process resolver.
+/// This stores resolver-provided TLS metadata independently of the built-in
+/// same-process TLS manager.
 pub(crate) struct CoreTlsState<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     resolver: Tls,
     registration: Option<TlsRegistration>,

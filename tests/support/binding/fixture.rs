@@ -4,7 +4,6 @@ use std::collections::HashMap;
 
 #[cfg(feature = "lazy-binding")]
 use elf_loader::lazy::NativeLazyBinder;
-#[cfg(feature = "tls")]
 use elf_loader::tls::DefaultTlsResolver;
 use elf_loader::{
     Loader,
@@ -21,9 +20,7 @@ const REL_IRELATIVE: u32 = <NativeArch as RelocationArch>::IRELATIVE.raw();
 const REL_JUMP_SLOT: u32 = <NativeArch as RelocationArch>::JUMP_SLOT.raw();
 const REL_RELATIVE: u32 = <NativeArch as RelocationArch>::RELATIVE.raw();
 const REL_SYMBOLIC: u32 = <NativeArch as RelocationArch>::SYMBOLIC.raw();
-#[cfg(feature = "tls")]
 const REL_DTPMOD: u32 = <NativeArch as RelocationArch>::DTPMOD.raw();
-#[cfg(feature = "tls")]
 const REL_DTPOFF: u32 = <NativeArch as RelocationArch>::DTPOFF.raw();
 use gen_elf::{
     Arch, DylibWriter, ElfWriteOutput, ElfWriterConfig, RelocEntry, RelocationInfo, SymbolDesc,
@@ -38,10 +35,7 @@ use crate::support::{
     },
 };
 
-#[cfg(feature = "tls")]
 type TestTlsResolver = DefaultTlsResolver;
-#[cfg(not(feature = "tls"))]
-type TestTlsResolver = ();
 
 type TestLoadedCore = LoadedCore<(), NativeArch, HostRegion, TestTlsResolver>;
 
@@ -67,7 +61,6 @@ type HostExternalFn = extern "C" fn(
     f64,
 ) -> f64;
 
-#[cfg(feature = "tls")]
 type TlsHelperFn = extern "C" fn() -> *mut u32;
 
 fn dynamic_relocation_entries() -> Vec<RelocEntry> {
@@ -80,14 +73,15 @@ fn dynamic_relocation_entries() -> Vec<RelocEntry> {
         RelocEntry::new(REL_RELATIVE),
         RelocEntry::new(REL_IRELATIVE),
     ];
-    #[cfg(feature = "tls")]
-    let relocations = relocations.into_iter().chain([
-        RelocEntry::with_name(EXTERNAL_TLS_NAME, REL_DTPMOD),
-        RelocEntry::with_name(EXTERNAL_TLS_NAME, REL_DTPOFF),
-        RelocEntry::with_name(EXTERNAL_TLS_NAME2, REL_DTPMOD),
-        RelocEntry::with_name(EXTERNAL_TLS_NAME2, REL_DTPOFF),
-    ]);
-    relocations.into_iter().collect()
+    relocations
+        .into_iter()
+        .chain([
+            RelocEntry::with_name(EXTERNAL_TLS_NAME, REL_DTPMOD),
+            RelocEntry::with_name(EXTERNAL_TLS_NAME, REL_DTPOFF),
+            RelocEntry::with_name(EXTERNAL_TLS_NAME2, REL_DTPMOD),
+            RelocEntry::with_name(EXTERNAL_TLS_NAME2, REL_DTPOFF),
+        ])
+        .collect()
 }
 
 pub(crate) struct BindingFixture {
@@ -100,16 +94,14 @@ impl BindingFixture {
         let arch = Arch::current();
         let config = ElfWriterConfig::default().with_ifunc_resolver_val(IFUNC_RESOLVER_OFFSET);
 
-        let helper_symbols = vec![SymbolDesc::global_object(
-            COPY_VAR_NAME,
-            &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
-        )];
-        #[cfg(feature = "tls")]
-        let helper_symbols = helper_symbols.into_iter().chain([
+        let helper_symbols = vec![
+            SymbolDesc::global_object(
+                COPY_VAR_NAME,
+                &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
+            ),
             SymbolDesc::global_tls(EXTERNAL_TLS_NAME, &[0xAA, 0xBB, 0xCC, 0xDD]),
             SymbolDesc::global_tls(EXTERNAL_TLS_NAME2, &[0x11, 0x22, 0x33, 0x44]),
-        ]);
-        let helper_symbols: Vec<_> = helper_symbols.into_iter().collect();
+        ];
 
         let helper_output = DylibWriter::with_config(arch, config.clone())
             .write(&[], &helper_symbols)
@@ -133,13 +125,9 @@ impl BindingFixture {
             SymbolDesc::undefined_func(EXTERNAL_FUNC_NAME2),
             SymbolDesc::undefined_object(EXTERNAL_VAR_NAME),
             SymbolDesc::undefined_object(COPY_VAR_NAME).with_size(8),
-        ];
-        #[cfg(feature = "tls")]
-        let main_symbols = main_symbols.into_iter().chain([
             SymbolDesc::undefined_tls(EXTERNAL_TLS_NAME),
             SymbolDesc::undefined_tls(EXTERNAL_TLS_NAME2),
-        ]);
-        let main_symbols: Vec<_> = main_symbols.into_iter().collect();
+        ];
 
         DylibWriter::with_config(arch, config)
             .write(&dynamic_relocation_entries(), &main_symbols)
@@ -148,9 +136,7 @@ impl BindingFixture {
 
     pub(crate) fn load(self, binding: BindingKind) -> BindingScenario {
         let main_output = self.write_main_output(binding);
-        let loader = Loader::new();
-        #[cfg(feature = "tls")]
-        let loader = loader.with_default_tls_resolver();
+        let loader = Loader::new().with_default_tls_resolver();
 
         let helper_dylib = Relocator::new()
             .run(
@@ -287,7 +273,6 @@ impl BindingScenario {
         )
     }
 
-    #[cfg(feature = "tls")]
     pub(crate) fn tls_helper(&self, symbol_name: &str) -> TlsHelperFn {
         let helper_name = format!("{symbol_name}@tls_helper");
         unsafe {

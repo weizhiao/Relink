@@ -14,7 +14,7 @@ use core::{
     fmt::{self, Display},
 };
 
-/// Runtime identity of a [`LinkContext`](super::LinkContext).
+/// Symbol-namespace identity of a [`LinkContext`](super::LinkContext).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ContextId(usize);
 

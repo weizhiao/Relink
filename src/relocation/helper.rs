@@ -1,9 +1,11 @@
+#[cfg(feature = "object")]
+use crate::memory::VmOffset;
 use crate::{
     Error, RelocReason, Result,
     elf::{ElfRelEntry, ElfRelType, HashTable, SymbolEntry, SymbolTableView},
     hint::unlikely,
     image::{ElfCore, ModuleScope},
-    memory::{ImageMemory, RegionAccess, VmAddr, VmOffset},
+    memory::{ImageMemory, RegionAccess, VmAddr},
     observer::{RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
     relocation::{HandleResult, RelocationArch, RelocationEvent, SymDef, SymbolResolver},
@@ -116,6 +118,14 @@ where
     }
 
     #[inline]
+    pub(crate) fn find_copy_symdef<'a>(
+        &'a self,
+        symbol: &SymbolEntry<'a, Arch::Layout>,
+    ) -> Option<SymDef<'a, Arch, Tls>> {
+        self.resolver.find_copy(symbol)
+    }
+
+    #[inline]
     pub(crate) fn resolve_symbol_addr(
         &self,
         symbol: &SymbolEntry<'_, Arch::Layout>,
@@ -126,7 +136,7 @@ where
                 Some(self.core.tls_resolver().bind_tls_get_addr()?)
             } else {
                 symdef
-                    .map(|symdef| symdef.resolve_addr(self.core.executor()))
+                    .map(|symdef| symdef.resolve(self.core.executor()))
                     .transpose()?
             },
         )

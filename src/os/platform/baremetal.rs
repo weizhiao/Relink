@@ -5,7 +5,6 @@ use crate::{
     os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
 };
 use alloc::alloc::{dealloc, handle_alloc_error};
-#[cfg(feature = "tls")]
 use core::ffi::c_void;
 use core::{alloc::Layout, slice::from_raw_parts_mut};
 
@@ -21,19 +20,16 @@ impl DefaultMmap {
     }
 }
 
-#[cfg(feature = "tls")]
 pub(crate) fn current_thread_id() -> usize {
     0
 }
 
-#[cfg(feature = "tls")]
 pub(crate) unsafe fn register_thread_destructor(
     _destructor: unsafe extern "C" fn(*mut c_void),
     _value: *mut c_void,
 ) {
 }
 
-#[cfg(feature = "tls")]
 pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
     core::ptr::null_mut()
 }

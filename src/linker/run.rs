@@ -18,8 +18,9 @@ use crate::{
         LinkerInitEvent, LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver,
     },
     os::Mmap,
-    relocation::{RelocationArch, RelocationValueProvider},
+    relocation::{RelocationArch, RelocationValueProvider, SymbolRegistry},
     runtime::CodeExecutor,
+    sync::Arc,
     tls::TlsResolver,
 };
 use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
@@ -248,12 +249,13 @@ where
             existing_root,
             mut session,
             scope,
+            symbols,
             root_key,
             mapped_runtime,
         } = prepared;
 
         if !session.pending_is_empty() {
-            self.relocate_pending_modules(root_slot, &scope, &mut session)?;
+            self.relocate_pending_modules(root_slot, &scope, &symbols, &mut session)?;
         }
 
         let root = session
@@ -343,6 +345,7 @@ where
         &mut self,
         root: KeySlot,
         scope: &ModuleScope<Arch, Tls>,
+        symbols: &Arc<SymbolRegistry<Arch, Tls>>,
         session: &mut LoadSession<D, Arch, M::Region, Tls>,
     ) -> Result<()> {
         let mut order = mem::take(&mut self.scratch_relocation_order);
@@ -364,6 +367,7 @@ where
                     .relocator
                     .run(raw)
                     .shared_scope(scope)
+                    .symbol_registry(Arc::clone(symbols))
                     .binding(binding)
                     .observer(&mut self.observer)
                     .relocate()?;
@@ -453,6 +457,7 @@ pub struct PreparedLoad<
     existing_root: Option<LoadedCore<D, Arch, R, Tls>>,
     session: LoadSession<D, Arch, R, Tls>,
     scope: ModuleScope<Arch, Tls>,
+    symbols: Arc<SymbolRegistry<Arch, Tls>>,
     root_key: K,
     mapped_runtime: Option<MappedRuntimeMemory<R>>,
 }
@@ -497,6 +502,7 @@ where
             existing_root,
             session,
             scope,
+            symbols: Arc::clone(&context.symbols),
             root_key,
             mapped_runtime,
         })

@@ -483,6 +483,7 @@ where
                 symbolic: dynamic.symbolic,
             })),
             scope: OnceCell::new(),
+            symbols: OnceCell::new(),
             tls,
             segments: self.segments,
         });

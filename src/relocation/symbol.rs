@@ -1,14 +1,85 @@
 use super::traits::RelocationArch;
 use crate::{
     Result,
-    elf::{ElfSymbol, ElfSymbolType, SymbolEntry},
+    elf::{ElfSymbol, ElfSymbolBind, ElfSymbolType, SymbolEntry},
     hint::unlikely,
-    image::{Module, ModuleScope, SymbolLookup},
+    image::{Module, ModuleHandle, ModuleScope, SymbolLookup},
     logging,
     memory::{VmAddr, VmOffset},
     runtime::{CodeContext, CodeExecutor},
+    sync::Arc,
     tls::TlsResolver,
 };
+use alloc::{boxed::Box, collections::BTreeMap};
+use core::ptr;
+use spin::Mutex;
+
+struct UniqueDef<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+    symbol: Arc<ElfSymbol<Arch::Layout>>,
+    source: ModuleHandle<Arch, Tls>,
+}
+
+/// GNU unique symbol state shared by one linker context.
+pub(crate) struct SymbolRegistry<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+    unique: Mutex<BTreeMap<Box<str>, UniqueDef<Arch, Tls>>>,
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolRegistry<Arch, Tls> {
+    #[inline]
+    pub(crate) const fn new() -> Self {
+        Self {
+            unique: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    fn resolve_unique<'lib>(
+        &self,
+        name: &str,
+        symbol: &ElfSymbol<Arch::Layout>,
+        source: &ModuleHandle<Arch, Tls>,
+    ) -> SymDef<'lib, Arch, Tls> {
+        let mut defs = self.unique.lock();
+        if let Some(definition) = defs.get(name) {
+            return SymDef::Unique {
+                symbol: Arc::clone(&definition.symbol),
+                source: definition.source.clone(),
+            };
+        }
+
+        let symbol = Arc::new(symbol.clone());
+        defs.insert(
+            Box::from(name),
+            UniqueDef {
+                symbol: Arc::clone(&symbol),
+                source: source.clone(),
+            },
+        );
+        SymDef::Unique {
+            symbol,
+            source: source.clone(),
+        }
+    }
+
+    fn register_copy(
+        &self,
+        name: &str,
+        symbol: &ElfSymbol<Arch::Layout>,
+        source: &ModuleHandle<Arch, Tls>,
+    ) {
+        let mut defs = self.unique.lock();
+        if defs.contains_key(name) {
+            return;
+        }
+
+        defs.insert(
+            Box::from(name),
+            UniqueDef {
+                symbol: Arc::new(symbol.clone()),
+                source: source.clone(),
+            },
+        );
+    }
+}
 
 /// A symbol definition found during relocation.
 ///
@@ -18,6 +89,10 @@ pub enum SymDef<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     Defined {
         symbol: &'lib ElfSymbol<Arch::Layout>,
         source: &'lib dyn Module<Arch, Tls>,
+    },
+    Unique {
+        symbol: Arc<ElfSymbol<Arch::Layout>>,
+        source: ModuleHandle<Arch, Tls>,
     },
     WeakUndef,
 }
@@ -32,8 +107,17 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
     }
 
     #[inline]
-    fn weak_undef() -> Self {
-        Self::WeakUndef
+    pub(crate) fn parts(&self) -> Option<(&ElfSymbol<Arch::Layout>, &dyn Module<Arch, Tls>)> {
+        match self {
+            Self::Defined { symbol, source } => Some((symbol, *source)),
+            Self::Unique { symbol, source } => Some((symbol, source.as_dyn())),
+            Self::WeakUndef => None,
+        }
+    }
+
+    #[inline]
+    pub(crate) const fn is_weak_undef(&self) -> bool {
+        matches!(self, Self::WeakUndef)
     }
 
     /// Computes the symbol address (base + st_value).
@@ -43,26 +127,29 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
     /// For IFUNC symbols, returns the resolver address without executing it.
     /// For undefined weak symbols, returns null.
     pub(crate) fn addr(&self) -> VmAddr {
-        match self {
-            Self::Defined { symbol, source } => {
-                if symbol.st_shndx().is_abs() {
-                    VmAddr::new(symbol.st_value())
-                } else {
-                    source.memory().base() + VmOffset::new(symbol.st_value())
-                }
-            }
-            Self::WeakUndef => VmAddr::null(),
+        let Some((symbol, source)) = self.parts() else {
+            return VmAddr::null();
+        };
+        Self::defined_addr(symbol, source)
+    }
+
+    #[inline]
+    fn defined_addr(symbol: &ElfSymbol<Arch::Layout>, source: &dyn Module<Arch, Tls>) -> VmAddr {
+        if symbol.st_shndx().is_abs() {
+            VmAddr::new(symbol.st_value())
+        } else {
+            source.memory().base() + VmOffset::new(symbol.st_value())
         }
     }
 
     #[inline]
-    pub(crate) fn resolve_addr(&self, executor: &dyn CodeExecutor<Arch>) -> Result<VmAddr> {
-        let addr = self.addr();
-        if unlikely(matches!(
-            self,
-            Self::Defined { symbol, .. } if symbol.symbol_type() == ElfSymbolType::GNU_IFUNC
-        )) {
-            self.resolve_ifunc_addr(executor, addr)
+    pub(crate) fn resolve(&self, executor: &dyn CodeExecutor<Arch>) -> Result<VmAddr> {
+        let Some((symbol, source)) = self.parts() else {
+            return Ok(VmAddr::null());
+        };
+        let addr = Self::defined_addr(symbol, source);
+        if unlikely(symbol.symbol_type() == ElfSymbolType::GNU_IFUNC) {
+            Self::resolve_ifunc(executor, source, addr)
         } else {
             Ok(addr)
         }
@@ -70,14 +157,11 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
 
     #[cold]
     #[inline(never)]
-    fn resolve_ifunc_addr(
-        &self,
+    fn resolve_ifunc(
         executor: &dyn CodeExecutor<Arch>,
+        source: &dyn Module<Arch, Tls>,
         resolver: VmAddr,
     ) -> Result<VmAddr> {
-        let Self::Defined { source, .. } = self else {
-            unreachable!("undefined weak symbols cannot be IFUNC resolvers")
-        };
         executor.resolve_ifunc(
             CodeContext::<Arch>::new(source.name(), source.memory()),
             resolver,
@@ -88,6 +172,7 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
 pub(crate) struct SymbolResolver<'lib, Source, Arch: RelocationArch, Tls: TlsResolver<Arch>> {
     source: &'lib Source,
     scope: ModuleScope<Arch, Tls>,
+    registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
     symbolic: bool,
 }
 
@@ -98,14 +183,16 @@ where
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         source: &'lib Source,
         scope: ModuleScope<Arch, Tls>,
+        registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
         symbolic: bool,
     ) -> Self {
         Self {
             source,
             scope,
+            registry,
             symbolic,
         }
     }
@@ -125,48 +212,135 @@ where
         self.scope
     }
 
+    #[cold]
+    #[inline(never)]
+    fn source_handle(&self) -> Option<&ModuleHandle<Arch, Tls>> {
+        self.scope.iter().find(|module| self.is_source(module))
+    }
+
+    #[inline]
+    fn is_source(&self, module: &ModuleHandle<Arch, Tls>) -> bool {
+        ptr::eq(module.memory(), self.source.memory())
+    }
+
+    fn lookup<'find>(
+        &'find self,
+        entry: &SymbolEntry<'find, Arch::Layout>,
+        lookup: &mut SymbolLookup<'_>,
+        source: &'find ModuleHandle<Arch, Tls>,
+    ) -> Option<&'find ElfSymbol<Arch::Layout>> {
+        let symbol = source
+            .exports()
+            .lookup(lookup)
+            .filter(|symbol| symbol.is_exported())?;
+        logging::trace!(
+            "binding file [{}] to [{}]: symbol [{}]",
+            self.source.name(),
+            source.name(),
+            entry.name()
+        );
+        Some(symbol)
+    }
+
+    fn find_in_scope<'find>(
+        &'find self,
+        entry: &SymbolEntry<'find, Arch::Layout>,
+    ) -> Option<SymDef<'find, Arch, Tls>> {
+        let mut lookup = SymbolLookup::from_info(entry.info().clone());
+        self.scope.iter().find_map(|source| {
+            let symbol = self.lookup(entry, &mut lookup, source)?;
+            Some(self.bind(entry.name(), symbol, &**source, Some(source)))
+        })
+    }
+
+    fn find_def<'find>(
+        &'find self,
+        entry: &SymbolEntry<'find, Arch::Layout>,
+    ) -> Option<SymDef<'find, Arch, Tls>> {
+        let sym = entry.symbol();
+        let self_def =
+            || (!sym.is_undef()).then(|| self.bind(entry.name(), sym, self.source, None));
+        if unlikely(sym.binds_local()) {
+            return self_def();
+        }
+
+        if self.symbolic {
+            self_def().or_else(|| self.find_in_scope(entry))
+        } else {
+            self.find_in_scope(entry).or_else(self_def)
+        }
+    }
+
+    fn bind<'find>(
+        &self,
+        name: &str,
+        symbol: &'find ElfSymbol<Arch::Layout>,
+        source: &'find dyn Module<Arch, Tls>,
+        handle: Option<&'find ModuleHandle<Arch, Tls>>,
+    ) -> SymDef<'find, Arch, Tls> {
+        if unlikely(symbol.bind() == ElfSymbolBind::GNU_UNIQUE) {
+            self.bind_unique(name, symbol, source, handle)
+        } else {
+            SymDef::defined(symbol, source)
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn bind_unique<'find>(
+        &self,
+        name: &str,
+        symbol: &'find ElfSymbol<Arch::Layout>,
+        source: &'find dyn Module<Arch, Tls>,
+        handle: Option<&'find ModuleHandle<Arch, Tls>>,
+    ) -> SymDef<'find, Arch, Tls> {
+        let Some(registry) = &self.registry else {
+            return SymDef::defined(symbol, source);
+        };
+        let Some(handle) = handle.or_else(|| self.source_handle()) else {
+            debug_assert!(false, "linker scope must retain its relocation source");
+            return SymDef::defined(symbol, source);
+        };
+        registry.resolve_unique(name, symbol, handle)
+    }
+
     pub(crate) fn find<'find>(
         &'find self,
         entry: &SymbolEntry<'find, Arch::Layout>,
     ) -> Option<SymDef<'find, Arch, Tls>> {
         let sym = entry.symbol();
-        let self_def = || (!sym.is_undef()).then(|| SymDef::defined(sym, self.source));
-        if unlikely(sym.binds_local()) {
-            return self_def().or_else(|| Self::weak_undef(sym));
-        }
+        self.find_def(entry).or_else(|| Self::weak_undef(sym))
+    }
 
-        let scope_def = || {
-            let mut lookup = SymbolLookup::from_info(entry.info().clone());
-            self.scope.iter().find_map(|scope_source| {
-                scope_source
-                    .exports()
-                    .lookup(&mut lookup)
-                    .filter(|sym| sym.is_exported())
-                    .map(|sym| {
-                        logging::trace!(
-                            "binding file [{}] to [{}]: symbol [{}]",
-                            self.source.name(),
-                            scope_source.name(),
-                            entry.name()
-                        );
-                        SymDef::defined(sym, &**scope_source)
-                    })
-            })
-        };
-
-        if self.symbolic {
-            self_def().or_else(scope_def)
-        } else {
-            scope_def().or_else(self_def)
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn find_copy<'find>(
+        &'find self,
+        entry: &SymbolEntry<'find, Arch::Layout>,
+    ) -> Option<SymDef<'find, Arch, Tls>> {
+        let mut lookup = SymbolLookup::from_info(entry.info().clone());
+        let (symbol, source) = self
+            .scope
+            .iter()
+            .filter(|source| !self.is_source(source))
+            .find_map(|source| {
+                self.lookup(entry, &mut lookup, source)
+                    .map(|symbol| (symbol, source))
+            })?;
+        if symbol.bind() == ElfSymbolBind::GNU_UNIQUE
+            && let Some(registry) = &self.registry
+            && let Some(destination) = self.source_handle()
+        {
+            registry.register_copy(entry.name(), entry.symbol(), destination);
         }
-        .or_else(|| Self::weak_undef(sym))
+        Some(SymDef::defined(symbol, &**source))
     }
 
     #[cold]
     fn weak_undef<'find>(sym: &'find ElfSymbol<Arch::Layout>) -> Option<SymDef<'find, Arch, Tls>> {
         if sym.is_weak() && sym.is_undef() {
             debug_assert_eq!(sym.st_value(), 0);
-            Some(SymDef::weak_undef())
+            Some(SymDef::WeakUndef)
         } else {
             None
         }
@@ -175,7 +349,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::SymbolResolver;
+    use super::{SymbolRegistry, SymbolResolver};
     use crate::{
         arch::NativeArch,
         elf::{
@@ -212,7 +386,7 @@ mod tests {
             [SyntheticSymbol::function("value", 0x200usize as *const ())],
         );
         let external_scope = scope([external]);
-        let resolver = SymbolResolver::new(&source, external_scope, false);
+        let resolver = SymbolResolver::new(&source, external_scope, None, false);
         let def = resolver
             .find(&symbol(&source))
             .expect("protected definition must resolve locally");
@@ -241,7 +415,7 @@ mod tests {
             [SyntheticSymbol::function("value", 0x300usize as *const ())],
         );
         let scope = scope([hidden, visible]);
-        let resolver = SymbolResolver::new(&source, scope.clone(), false);
+        let resolver = SymbolResolver::new(&source, scope.clone(), None, false);
         let def = resolver
             .find(&symbol(&source))
             .expect("lookup must continue past a hidden definition");
@@ -261,10 +435,77 @@ mod tests {
             )],
         );
         assert!(
-            SymbolResolver::new(&hidden_ref, scope, false)
+            SymbolResolver::new(&hidden_ref, scope, None, false)
                 .find(&symbol(&hidden_ref))
                 .is_none(),
             "hidden undefined reference must not resolve outside its module"
+        );
+    }
+
+    #[test]
+    fn gnu_unique_is_canonical_within_one_registry() {
+        let source = SyntheticModule::new(
+            "source",
+            [SyntheticSymbol::from_fields(
+                "value",
+                0,
+                0,
+                ElfSymbolBind::GLOBAL,
+                ElfSymbolType::NOTYPE,
+                ElfSymbolVisibility::DEFAULT.raw(),
+                ElfSectionIndex::UNDEF,
+                None,
+            )],
+        );
+        let unique = |name, value| {
+            SyntheticModule::new(
+                name,
+                [SyntheticSymbol::from_fields(
+                    "value",
+                    value,
+                    0,
+                    ElfSymbolBind::GNU_UNIQUE,
+                    ElfSymbolType::OBJECT,
+                    ElfSymbolVisibility::DEFAULT.raw(),
+                    ElfSectionIndex::ABS,
+                    None,
+                )],
+            )
+        };
+
+        let registry = SymbolRegistry::new();
+        let first = SymbolResolver::new(
+            &source,
+            scope([unique("first", 0x100)]),
+            Some(&registry),
+            false,
+        );
+        assert_eq!(
+            first.find(&symbol(&source)).unwrap().addr(),
+            VmAddr::new(0x100)
+        );
+
+        let second = SymbolResolver::new(
+            &source,
+            scope([unique("second", 0x200)]),
+            Some(&registry),
+            false,
+        );
+        assert_eq!(
+            second.find(&symbol(&source)).unwrap().addr(),
+            VmAddr::new(0x100)
+        );
+
+        let other_registry = SymbolRegistry::new();
+        let other = SymbolResolver::new(
+            &source,
+            scope([unique("other", 0x300)]),
+            Some(&other_registry),
+            false,
+        );
+        assert_eq!(
+            other.find(&symbol(&source)).unwrap().addr(),
+            VmAddr::new(0x300)
         );
     }
 }

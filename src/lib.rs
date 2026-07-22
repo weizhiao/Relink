@@ -28,8 +28,8 @@
 //!   actual [`Loader`], [`linker::KeyResolver`], [`Linker`], and [`LinkContext`].
 //! - Deep customization. Inject host or bridge symbols with
 //!   [`image::SyntheticModule`] and intercept relocations with handlers.
-//! - Optional advanced features. TLS relocation handling, lazy binding, relocatable object
-//!   loading, logging, and versioned symbol lookup are feature-gated.
+//! - Optional advanced features. Lazy binding, relocatable object loading, logging, and
+//!   versioned symbol lookup are feature-gated; TLS supports both the built-in and custom resolvers.
 //!
 //! ## Example
 //!
@@ -137,7 +137,7 @@
 //!
 //! ## Feature Flags
 //!
-//! - `tls` (default): enables TLS relocation handling. For TLS-using modules, start from
+//! - TLS relocation handling is always available. For TLS-using modules, start from
 //!   `Loader::with_default_tls_resolver` or provide a custom TLS resolver.
 //! - `lazy-binding`: enables `Relocator::lazy` and PLT/GOT lazy binding.
 //! - `object`: enables `Loader::load_object` and relocatable object (`ET_REL`) loading.

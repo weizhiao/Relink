@@ -66,12 +66,14 @@ where
         logging::debug!("Relocating object: {}", self.core.name());
         let RelocateArgs {
             scope,
+            symbols,
             run_init,
             observer,
             ..
         } = args;
         scope.ensure_domain(self.core.domain_id())?;
-        let resolver = SymbolResolver::new(&self.core, scope, self.core.symbolic());
+        let resolver =
+            SymbolResolver::new(&self.core, scope, symbols.as_deref(), self.core.symbolic());
         Self::simplify_symbols(
             &self.core,
             &self.sections,
@@ -166,7 +168,7 @@ where
         logging::info!("Relocation completed for {}", core.name());
 
         Ok(LoadedObject {
-            inner: unsafe { LoadedCore::from_core_scope(core, scope) },
+            inner: unsafe { LoadedCore::from_core_scope_registry(core, scope, symbols) },
         })
     }
 
@@ -194,7 +196,7 @@ where
 
                 let addr = if symbol.is_undef() {
                     let resolved = if let Some(symdef) = resolver.find(&entry) {
-                        Some(symdef.resolve_addr(core.executor())?)
+                        Some(symdef.resolve(core.executor())?)
                     } else {
                         None
                     };

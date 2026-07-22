@@ -27,29 +27,20 @@ jobs:
       matrix:
         target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu, loongarch64-unknown-linux-gnu]
         channel: [ stable ]
-        features: [ "use-syscall", "use-syscall,tls", "use-syscall,lazy-binding", "use-syscall,lazy-binding,tls" ]
+        features: [ "use-syscall", "use-syscall,lazy-binding" ]
         include:
           - target: x86_64-unknown-linux-gnu
             channel: 1.93.0
             features: "use-syscall"
           - target: x86_64-unknown-linux-gnu
             channel: 1.93.0
-            features: "use-syscall,tls"
-          - target: x86_64-unknown-linux-gnu
-            channel: 1.93.0
             features: "use-syscall,lazy-binding"
-          - target: x86_64-unknown-linux-gnu
-            channel: 1.93.0
-            features: "use-syscall,lazy-binding,tls"
           - target: x86_64-unknown-linux-gnu
             channel: stable
             features: "libc"
           - target: x86_64-unknown-linux-gnu
             channel: stable
-            features: "libc,tls"
-          - target: x86_64-unknown-linux-gnu
-            channel: stable
-            features: "libc,lazy-binding,tls"
+            features: "libc,lazy-binding"
           - target: x86_64-unknown-linux-gnu
             channel: stable
             features: "libc,version"
@@ -74,14 +65,14 @@ jobs:
       matrix:
         target: [ x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu, loongarch64-unknown-linux-gnu, i586-unknown-linux-gnu, arm-unknown-linux-gnueabihf]
         channel: [ stable ]
-        features: [ "use-syscall", "use-syscall,tls", "use-syscall,lazy-binding,tls" ]
+        features: [ "use-syscall", "use-syscall,lazy-binding" ]
         include:
           - target: x86_64-unknown-linux-gnu
             channel: stable
             features: "use-syscall,object"
           - target: x86_64-unknown-linux-gnu
             channel: stable
-            features: "libc,tls"
+            features: "libc"
 
   test-mini-loader:
     runs-on: ubuntu-latest

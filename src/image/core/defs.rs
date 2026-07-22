@@ -7,10 +7,10 @@ use crate::{
     logging,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
-    relocation::{RelocationArch, SymbolResolver},
+    relocation::{RelocationArch, SymbolRegistry, SymbolResolver},
     runtime::{CodeExecutor, DomainId},
     segment::ElfSegments,
-    sync::{Arc, AtomicBool, Ordering},
+    sync::{Arc, AtomicBool, Ordering, Weak},
     tls::{CoreTlsState, TLS_GET_ADDR_SYMBOL, TlsResolver},
 };
 use alloc::boxed::Box;
@@ -117,9 +117,10 @@ where
         };
         let symbolic = self.dynamic_info.as_ref().is_some_and(|info| info.symbolic);
         let executor = self.executor.as_ref();
-        SymbolResolver::new(self, scope, symbolic)
+        let symbols = self.symbols.get().and_then(Weak::upgrade);
+        SymbolResolver::new(self, scope, symbols.as_deref(), symbolic)
             .find(&symbol)
-            .map(|symdef| symdef.resolve_addr(executor))
+            .map(|symdef| symdef.resolve(executor))
             .transpose()
     }
 }
@@ -158,6 +159,9 @@ pub(crate) struct CoreInner<
 
     /// Relocation lookup scope retained for the loaded module lifetime.
     pub(crate) scope: OnceCell<WeakModuleScope<Arch, Tls>>,
+
+    /// Namespace symbol state used by deferred lookup.
+    pub(crate) symbols: OnceCell<Weak<SymbolRegistry<Arch, Tls>>>,
 
     /// TLS runtime state for this loaded object.
     pub(crate) tls: CoreTlsState<Arch, Tls>,

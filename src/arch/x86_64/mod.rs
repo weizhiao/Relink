@@ -12,12 +12,12 @@
 mod lazy;
 #[cfg(feature = "object")]
 pub(crate) mod object;
-#[cfg(all(feature = "tls", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 mod tls;
 
 #[cfg(all(feature = "lazy-binding", target_arch = "x86_64"))]
 pub(crate) use lazy::dl_runtime_resolve;
-#[cfg(all(feature = "tls", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub(crate) use tls::{
     get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static,
     tlsdesc_resolver_undefweak,

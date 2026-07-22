@@ -9,7 +9,7 @@ use crate::{
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
-    relocation::RelocationArch,
+    relocation::{RelocationArch, SymbolRegistry},
     runtime::{CodeContext, CodeExecutor, DomainId, NativeCodeExecutor},
     segment::ElfSegments,
     sync::{Arc, AtomicBool, Ordering, Weak},
@@ -219,6 +219,14 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         );
     }
 
+    #[inline]
+    pub(crate) fn set_symbol_registry(&self, symbols: &Arc<SymbolRegistry<Arch, Tls>>) {
+        assert!(
+            self.inner.symbols.set(Arc::downgrade(symbols)).is_ok(),
+            "symbol registry must be installed only once",
+        );
+    }
+
     /// Returns the mapped segments owned by this image.
     #[inline]
     pub fn segments(&self) -> &ElfSegments<R> {
@@ -334,6 +342,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
                 symbolic: dynamic.symbolic,
             })),
             scope: OnceCell::new(),
+            symbols: OnceCell::new(),
             tls,
             segments,
             user_data,

@@ -131,19 +131,18 @@ Symbol lookup was measured after both loaders had already loaded the fixture cha
 | Feature | Default | Purpose |
 | --- | --- | --- |
 | `libc` | Yes | Use the libc backend on Unix-like platforms |
-| `tls` | Yes | Enable the built-in same-process TLS resolver |
 | `lazy-binding` | Yes | Enable PLT/GOT lazy binding and lazy-fixup lookup configuration |
 | `object` | Yes | Enable relocatable object (`ET_REL`) loading and `Loader::load_object()` |
 | `version` | No | Enable version-aware symbol lookup such as `get_version()` |
 | `log` | No | Enable `log` integration for loader and relocation diagnostics |
 | `portable-atomic` | No | Support targets without native pointer-sized atomics |
 | `use-syscall` | No | Use the Linux syscall backend instead of libc |
-| `full` | Yes | Convenience bundle: `tls`, `lazy-binding`, `object`, `libc` |
+| `full` | Yes | Convenience bundle: `lazy-binding`, `object`, `libc` |
 
 Notes:
 
-- The default feature set is `full`, equivalent to `tls` + `lazy-binding` + `object` + `libc`.
-- `tls` only provides the default resolver; custom TLS resolvers do not need this feature.
+- TLS relocation and `DefaultTlsResolver` are always available; custom runtimes can provide their own resolver.
+- The default feature set is `full`, equivalent to `lazy-binding` + `object` + `libc`.
 - `load_object()` is still controlled by the `object` feature. Default builds include it; with `--no-default-features`, enable it explicitly.
 
 ## Platform Support

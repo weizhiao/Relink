@@ -130,19 +130,18 @@ fn main() -> Result<()> {
 | Feature | 默认 | 作用 |
 | --- | --- | --- |
 | `libc` | 是 | 在 Unix-like 平台使用 libc 后端 |
-| `tls` | 是 | 启用内置同进程 TLS resolver |
 | `lazy-binding` | 是 | 启用 PLT/GOT lazy binding 和 lazy fixup 查找配置 |
 | `object` | 是 | 启用可重定位目标文件（`ET_REL`）加载和 `Loader::load_object()` |
 | `version` | 否 | 启用带符号版本的查找，例如 `get_version()` |
 | `log` | 否 | 启用基于 `log` 的加载与重定位诊断输出 |
 | `portable-atomic` | 否 | 为不支持原生指针宽度原子操作的目标提供支持 |
 | `use-syscall` | 否 | 在 Linux 上使用 syscall 后端，而不是 libc |
-| `full` | 是 | 便捷组合：`tls`、`lazy-binding`、`object`、`libc` |
+| `full` | 是 | 便捷组合：`lazy-binding`、`object`、`libc` |
 
 说明：
 
-- 默认 feature 是 `full`，等价于 `tls` + `lazy-binding` + `object` + `libc`。
-- `tls` 只提供默认 resolver；使用自定义 TLS resolver 时，不需要开启这个 feature。
+- TLS 重定位和 `DefaultTlsResolver` 始终可用；自定义 runtime 仍可提供自己的 resolver。
+- 默认 feature 是 `full`，等价于 `lazy-binding` + `object` + `libc`。
 - `load_object()` 仍由 `object` feature 控制；默认构建已包含该 feature，`--no-default-features` 时需要显式开启。
 
 ## 平台支持

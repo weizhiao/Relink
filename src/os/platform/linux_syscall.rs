@@ -22,19 +22,16 @@ impl DefaultMmap {
     }
 }
 
-#[cfg(feature = "tls")]
 pub(crate) fn current_thread_id() -> usize {
     unsafe { syscalls::raw_syscall!(Sysno::gettid) }
 }
 
-#[cfg(feature = "tls")]
 pub(crate) unsafe fn register_thread_destructor(
     _destructor: unsafe extern "C" fn(*mut c_void),
     _value: *mut c_void,
 ) {
 }
 
-#[cfg(feature = "tls")]
 pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
     core::ptr::null_mut()
 }

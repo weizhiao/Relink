@@ -7,9 +7,10 @@ use crate::{
     image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, SymbolExports, SymbolLookup},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
-    relocation::{RelocationArch, SymDef},
+    relocation::{RelocationArch, SymDef, SymbolRegistry},
     runtime::DomainId,
     segment::ElfSegments,
+    sync::Arc,
     tls::{CoreTlsState, ModuleTls, TlsInfo, TlsRequest, TlsResolver, TlsTpOffset},
 };
 use alloc::vec::Vec;
@@ -191,7 +192,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
             self.core.tls_addr(sym.st_value())
         } else {
             SymDef::<Arch, Tls>::defined(sym, self)
-                .resolve_addr(self.core.executor())
+                .resolve(self.core.executor())
                 .map(Some)
         }
     }
@@ -336,7 +337,18 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         core: ElfCore<D, Arch, R, Tls>,
         scope: ModuleScope<Arch, Tls>,
     ) -> Self {
+        unsafe { Self::from_core_scope_registry(core, scope, None) }
+    }
+
+    pub(crate) unsafe fn from_core_scope_registry(
+        core: ElfCore<D, Arch, R, Tls>,
+        scope: ModuleScope<Arch, Tls>,
+        symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
+    ) -> Self {
         core.set_scope(&scope);
+        if let Some(symbols) = &symbols {
+            core.set_symbol_registry(symbols);
+        }
         Self { core, scope }
     }
 

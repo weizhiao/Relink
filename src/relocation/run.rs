@@ -4,7 +4,8 @@ use crate::{
     image::{ModuleHandle, ModuleScope, ModuleScopeBuilder},
     lazy::{LazyBinder, SupportLazy},
     observer::RelocationObserver,
-    relocation::{BindingMode, Relocatable, RelocateArgs, RelocationArch},
+    relocation::{BindingMode, Relocatable, RelocateArgs, RelocationArch, SymbolRegistry},
+    sync::Arc,
     tls::TlsResolver,
 };
 use core::marker::PhantomData;
@@ -26,6 +27,7 @@ pub struct RelocatorRun<
     scope: ScopeState,
     observer: Obs,
     binding: BindingMode,
+    symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
     relocator: &'cfg Relocator<Binder>,
     _target: PhantomData<fn() -> (Arch, Tls)>,
 }
@@ -48,6 +50,7 @@ impl<Binder> Relocator<Binder> {
             scope: ModuleScopeBuilder::new(domain),
             observer: (),
             binding: BindingMode::Default,
+            symbols: None,
             relocator: self,
             _target: PhantomData,
         }
@@ -70,6 +73,7 @@ where
             scope: self.scope.clone(),
             observer: self.observer.clone(),
             binding: self.binding,
+            symbols: self.symbols.clone(),
             relocator: self.relocator,
             _target: PhantomData,
         }
@@ -95,6 +99,7 @@ where
             object,
             scope,
             binding,
+            symbols,
             relocator,
             ..
         } = self;
@@ -104,6 +109,7 @@ where
             scope,
             observer,
             binding,
+            symbols,
             relocator,
             _target: PhantomData,
         }
@@ -120,6 +126,12 @@ where
     #[inline]
     pub fn set_binding(&mut self, binding: BindingMode) {
         self.binding = binding;
+    }
+
+    #[inline]
+    pub(crate) fn symbol_registry(mut self, symbols: Arc<SymbolRegistry<Arch, Tls>>) -> Self {
+        self.symbols = Some(symbols);
+        self
     }
 }
 
@@ -150,6 +162,7 @@ where
             scope,
             observer: self.observer,
             binding: self.binding,
+            symbols: self.symbols,
             relocator: self.relocator,
             _target: PhantomData,
         }
@@ -208,12 +221,14 @@ where
             scope,
             mut observer,
             binding,
+            symbols,
             relocator,
             ..
         } = self;
 
         object.relocate(RelocateArgs {
             scope: scope.into_scope()?,
+            symbols,
             binding,
             run_init: relocator.run_init,
             lazy_binder: &relocator.lazy_binder,
@@ -241,12 +256,14 @@ where
             scope,
             mut observer,
             binding,
+            symbols,
             relocator,
             ..
         } = self;
 
         object.relocate(RelocateArgs {
             scope,
+            symbols,
             binding,
             run_init: relocator.run_init,
             lazy_binder: &relocator.lazy_binder,

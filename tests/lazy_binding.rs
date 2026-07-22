@@ -135,7 +135,6 @@ fn lazy_jump_slots_resolve() {
     scenario.assert_non_plt_relocations();
     scenario.assert_relative_relocations();
     scenario.assert_lazy_jump_slots();
-    #[cfg(feature = "tls")]
     scenario.assert_tls_relocations();
 }
 

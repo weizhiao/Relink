@@ -2,11 +2,9 @@
 //!
 //! This module provides support for both static and dynamic TLS models.
 //! It includes the `TlsResolver<Arch>` trait for integrating with the environment's
-//! thread management system and, when the `tls` feature is enabled, a default
-//! implementation for standard setups.
+//! thread management system and a default implementation for same-process setups.
 
 mod defs;
-#[cfg(feature = "tls")]
 mod manager;
 mod registry;
 mod relocation;
@@ -21,7 +19,6 @@ pub use defs::{
     ModuleTls, TlsDescBinding, TlsDescRequest, TlsImageSource, TlsIndex, TlsInfo, TlsModuleId,
     TlsRequest, TlsTpOffset,
 };
-#[cfg(feature = "tls")]
 pub use manager::DefaultTlsResolver;
 pub use registry::{
     TlsModuleSnapshot, TlsRegistry, TlsRegistrySnapshot, TlsSlotSnapshot, TlsStorage,

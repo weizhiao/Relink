@@ -1,7 +1,6 @@
 use super::run::LoaderRun;
 #[cfg(feature = "object")]
 use crate::object::SectionGroups;
-#[cfg(feature = "tls")]
 use crate::tls::DefaultTlsResolver;
 use crate::{
     MmapError, Result,
@@ -171,7 +170,6 @@ impl<Tls, M, Exec> LoaderFields<Tls, M, Exec> {
         }
     }
 
-    #[cfg(feature = "tls")]
     #[inline]
     const fn with_default_tls<D>(self) -> Loader<D, DefaultTlsResolver, NativeArch, M, Exec>
     where
@@ -424,7 +422,6 @@ where
     Exec: CodeExecutor<NativeArch> + Clone,
 {
     /// Consumes the current loader and returns a new one with the default TLS resolver.
-    #[cfg(feature = "tls")]
     pub const fn with_default_tls_resolver(
         self,
     ) -> Loader<D, DefaultTlsResolver, NativeArch, M, Exec> {

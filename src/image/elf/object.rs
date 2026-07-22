@@ -92,6 +92,7 @@ where
             user_data: self.user_data,
             dynamic_info: None,
             scope: OnceCell::new(),
+            symbols: OnceCell::new(),
             tls: CoreTlsState::without_module(self.tls_resolver),
             segments,
         };

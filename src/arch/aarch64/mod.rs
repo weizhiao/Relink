@@ -9,12 +9,12 @@
 // platform-specific submodules on `target_arch`.
 #[cfg(all(feature = "lazy-binding", target_arch = "aarch64"))]
 mod lazy;
-#[cfg(all(feature = "tls", target_arch = "aarch64"))]
+#[cfg(target_arch = "aarch64")]
 mod tls;
 
 #[cfg(all(feature = "lazy-binding", target_arch = "aarch64"))]
 pub(crate) use lazy::dl_runtime_resolve;
-#[cfg(all(feature = "tls", target_arch = "aarch64"))]
+#[cfg(target_arch = "aarch64")]
 pub(crate) use tls::{
     get_thread_pointer, tlsdesc_resolver_dynamic, tlsdesc_resolver_static,
     tlsdesc_resolver_undefweak,

@@ -84,7 +84,6 @@ features = ["alloc"]
 version = "0.10"
 default-features = false
 features = ["mutex", "rwlock", "spin_mutex"]
-optional = true
 
 [dependencies.hashbrown]
 version = "0.16.0"
@@ -121,13 +120,11 @@ default = ["full"]
 # A feature that enables the libc backend for Linux and Android.
 libc = ["dep:libc"]
 # A feature that enables all features.
-full = ["tls", "lazy-binding", "object", "libc"]
+full = ["lazy-binding", "object", "libc"]
 # Use linux syscalls
 use-syscall = ["dep:syscalls"]
 # Use the version information of symbols when resolving them.
 version = []
-# Enable the built-in same-process TLS resolver.
-tls = ["dep:spin"]
 # Enable lazy binding support.
 lazy-binding = []
 # Enable relocatable object (`.o`) loading and lookup support.
