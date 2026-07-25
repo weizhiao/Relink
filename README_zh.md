@@ -155,8 +155,11 @@ fn main() -> Result<()> {
 | `riscv64` | ✅ | 🔧 | ✅ |
 | `riscv32` | ✅ | 🔧 | 🚧 |
 | `loongarch64` | ✅ | 🔧 | 🚧 |
+| `xtensa` | 🔧 | 🚧 | 🚧 |
 
 符号：✅ 支持，🔧 基础支持，🚧 待补齐。复杂 section 重排修复和 `.o` / `ET_REL` 目前主要围绕 `x86_64` 与 `riscv64` 的重定位实现展开；其他架构欢迎补齐。
+
+Xtensa 目前支持动态重定位，但尚不支持 lazy binding 和 TLS 相关重定位。
 
 ## 参与贡献
 

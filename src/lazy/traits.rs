@@ -1,6 +1,6 @@
 //! Traits implemented by custom lazy PLT binders.
 
-use super::defs::{LazyBindingEntries, LazyRuntime};
+use super::defs::{LazyPlacement, LazyRuntime, LazySetup};
 use crate::{
     ByteRepr, LazyBindingError, RelocationError, Result,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
@@ -22,15 +22,15 @@ impl SupportLazy for () {}
 /// Implement this trait when the default same-process lazy binder is not the
 /// right execution model, for example when the loaded image runs in a remote VM
 /// or on a different architecture. The binder receives a [`LazyRuntime`] handle
-/// for the mapped image and returns the target-visible values written to the
-/// lazy binding slots.
+/// for the mapped image and returns the target-visible values and retained state
+/// needed by the architecture's lazy-binding placement.
 ///
 /// # Example
 ///
 /// ```
 /// use elf_loader::{
 ///     Relocator, Result,
-///     lazy::{LazyBinder, LazyBindingEntries, LazyRuntime},
+///     lazy::{LazyBinder, LazyRuntime, LazySetup},
 ///     memory::VmAddr,
 ///     relocation::RelocationArch,
 /// };
@@ -42,8 +42,8 @@ impl SupportLazy for () {}
 /// }
 ///
 /// impl<Arch: RelocationArch> LazyBinder<Arch> for RemoteLazyBinder {
-///     fn prepare_slots(&self, _runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries> {
-///         Ok(LazyBindingEntries::new(self.context, self.resolver))
+///     fn prepare_slots(&self, _runtime: LazyRuntime<Arch>) -> Result<LazySetup> {
+///         Ok(LazySetup::new(self.context, self.resolver))
 ///     }
 /// }
 ///
@@ -64,7 +64,7 @@ pub trait LazyBinder<Arch: RelocationArch>: Send + Sync + 'static {
     }
 
     /// Builds the values installed into this image's lazy binding slots.
-    fn prepare_slots(&self, runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries>;
+    fn prepare_slots(&self, runtime: LazyRuntime<Arch>) -> Result<LazySetup>;
 }
 
 impl<Arch: RelocationArch> LazyBinder<Arch> for () {
@@ -74,7 +74,7 @@ impl<Arch: RelocationArch> LazyBinder<Arch> for () {
     }
 
     #[inline]
-    fn prepare_slots(&self, _runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries> {
+    fn prepare_slots(&self, _runtime: LazyRuntime<Arch>) -> Result<LazySetup> {
         Err(RelocationError::LazyBinding(LazyBindingError::MissingBinder).into())
     }
 }
@@ -90,7 +90,7 @@ where
     }
 
     #[inline]
-    fn prepare_slots(&self, runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries> {
+    fn prepare_slots(&self, runtime: LazyRuntime<Arch>) -> Result<LazySetup> {
         (**self).prepare_slots(runtime)
     }
 }
@@ -107,36 +107,34 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    if lazy {
-        let pltrel = image.relocation().pltrel();
-        if pltrel.is_empty() {
-            return Ok(());
-        }
+    if !lazy || image.relocation().pltrel().is_empty() {
+        return Ok(());
+    }
 
-        let runtime = LazyRuntime::<Arch>::new(image.core_ref().inner.runtime());
-        let entries = binder.prepare_slots(runtime)?;
-        let (context_entry, resolver, state) = entries.into_parts();
-        if let Some(state) = state {
-            assert!(
-                runtime.core().lazy_runtime.set(state).is_ok(),
-                "lazy binding runtime must be installed only once",
-            );
-        }
+    let placement = Arch::LAZY_BINDING;
+    if placement == LazyPlacement::Unsupported {
+        return Err(RelocationError::LazyBinding(LazyBindingError::Unsupported).into());
+    }
 
+    let runtime = LazyRuntime::<Arch>::new(image.core_ref().inner.runtime());
+    let setup = binder.prepare_slots(runtime)?;
+
+    if let LazyPlacement::Slots(slots) = placement {
+        let values = setup.values();
         let word_size = size_of::<<Arch::Layout as ElfLayout>::Word>();
-        let slots = Arch::LAZY_BINDING_SLOTS;
         let got_plt = image.got_plt().ok_or(RelocationError::LazyBinding(
             LazyBindingError::MissingGotPlt,
         ))?;
         let context_slot = got_plt + VmOffset::new(slots.context() * word_size);
         let resolver_slot = got_plt + VmOffset::new(slots.resolver() * word_size);
-        let context_entry = <Arch::Layout as ElfLayout>::Word::from_usize(context_entry.get());
-        let resolver = <Arch::Layout as ElfLayout>::Word::from_usize(resolver.get());
+        let context = <Arch::Layout as ElfLayout>::Word::from_usize(values.context().get());
+        let resolver = <Arch::Layout as ElfLayout>::Word::from_usize(values.resolver().get());
         unsafe {
-            runtime.memory().write_value(context_slot, context_entry)?;
+            runtime.memory().write_value(context_slot, context)?;
             runtime.memory().write_value(resolver_slot, resolver)?;
         }
     }
+    runtime.core().set_lazy(setup);
     Ok(())
 }
 

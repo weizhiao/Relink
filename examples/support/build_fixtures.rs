@@ -1,4 +1,4 @@
-#[path = "common/mod.rs"]
+#[path = "mod.rs"]
 mod fixture_support;
 
 fn main() {

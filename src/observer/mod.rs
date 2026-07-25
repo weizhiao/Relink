@@ -3,9 +3,10 @@
 mod event;
 mod traits;
 
+pub use crate::relocation::HandleResult;
 pub(crate) use event::LifecycleRunner;
 pub use event::{
-    AfterDynamicLoadEvent, BeforeLoadEvent, DynamicRelocatedEvent, HandleResult, LifecycleEvent,
+    AfterDynamicLoadEvent, BeforeLoadEvent, DynamicRelocatedEvent, LifecycleEvent,
     LifecycleHandlers, LinkerInitEvent, LinkerRelocationEvent, RelocationEvent, SymbolBindingEvent,
 };
 #[cfg(feature = "object")]

@@ -68,14 +68,33 @@ where
 
     #[inline]
     pub(crate) fn handle_pre(&mut self, rel: &ElfRelType<Arch>) -> Result<HandleResult> {
-        let hctx = RelocationEvent::new(rel, &self.resolver, self.symbols);
-        self.observer.on_relocation_pre(&hctx)
+        let event = RelocationEvent::new(rel, &self.resolver, self.symbols);
+        self.observer.on_relocation_pre(&event)
+    }
+
+    #[cfg(feature = "object")]
+    #[inline]
+    pub(crate) fn handle_post(&mut self, rel: &ElfRelType<Arch>) -> Result<HandleResult> {
+        let event = RelocationEvent::new(rel, &self.resolver, self.symbols);
+        self.observer.on_relocation_post(&event)
     }
 
     #[inline]
-    pub(crate) fn handle_post(&mut self, rel: &ElfRelType<Arch>) -> Result<HandleResult> {
-        let hctx = RelocationEvent::new(rel, &self.resolver, self.symbols);
-        self.observer.on_relocation_post(&hctx)
+    pub(crate) fn handle_fallback(
+        &mut self,
+        rel: &ElfRelType<Arch>,
+        reason: RelocReason,
+    ) -> Result<()> {
+        let event = RelocationEvent::new(rel, &self.resolver, self.symbols);
+        if matches!(reason, RelocReason::Unsupported)
+            && !Arch::relocate_custom(&event)?.is_unhandled()
+        {
+            return Ok(());
+        }
+        if self.observer.on_relocation_post(&event)?.is_unhandled() {
+            return Err(self.reloc_error(rel, reason));
+        }
+        Ok(())
     }
 
     #[cold]

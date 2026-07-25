@@ -156,8 +156,12 @@ Notes:
 | `riscv64` | ✅ | 🔧 | ✅ |
 | `riscv32` | ✅ | 🔧 | 🚧 |
 | `loongarch64` | ✅ | 🔧 | 🚧 |
+| `xtensa` | 🔧 | 🚧 | 🚧 |
 
 Legend: ✅ supported, 🔧 basic support, 🚧 pending. Complex section-reorder repair and `.o` / `ET_REL` support are currently centered on `x86_64` and `riscv64` relocation handling; contributions for the other architectures are welcome.
+
+Xtensa currently supports dynamic relocation, but not lazy binding or TLS
+relocations.
 
 ## Contributing
 

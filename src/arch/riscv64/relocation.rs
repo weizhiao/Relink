@@ -5,7 +5,7 @@ use elf::abi::*;
 use crate::Result;
 use crate::arch::{ArchKind, riscv};
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
-use crate::lazy::LazyBindingSlots;
+use crate::lazy::{LazyPlacement, LazySlots};
 use crate::linker::scan::GotPltTarget;
 use crate::relocation::{RelocationArch, RelocationValueProvider};
 
@@ -26,16 +26,16 @@ impl RelocationArch for RiscV64Arch {
     const GOT: ElfRelocationType = ElfRelocationType::new(R_RISCV_64);
     const SYMBOLIC: ElfRelocationType = ElfRelocationType::new(R_RISCV_64);
     const JUMP_SLOT: ElfRelocationType = ElfRelocationType::new(R_RISCV_JUMP_SLOT);
-    const IRELATIVE: ElfRelocationType = ElfRelocationType::new(R_RISCV_IRELATIVE);
-    const COPY: ElfRelocationType = ElfRelocationType::new(R_RISCV_COPY);
+    const IRELATIVE: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_RISCV_IRELATIVE));
+    const COPY: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_RISCV_COPY));
 
-    const DTPMOD: ElfRelocationType = ElfRelocationType::new(R_RISCV_TLS_DTPMOD64);
+    const DTPMOD: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_RISCV_TLS_DTPMOD64));
     const DTPOFF: ElfRelocationType = ElfRelocationType::new(R_RISCV_TLS_DTPREL64);
     const TPOFF: ElfRelocationType = ElfRelocationType::new(R_RISCV_TLS_TPREL64);
     // RISC-V does not define a TLSDESC relocation.
     const TLSDESC: Option<ElfRelocationType> = None;
     const TLS_DTV_OFFSET: usize = 0x800;
-    const LAZY_BINDING_SLOTS: LazyBindingSlots = LazyBindingSlots::new(1, 0);
+    const LAZY_BINDING: LazyPlacement = LazyPlacement::Slots(LazySlots::new(1, 0));
 
     // `true` only when this ZST is the host's relocation backend.
     const SUPPORTS_NATIVE_RUNTIME: bool = cfg!(target_arch = "riscv64");

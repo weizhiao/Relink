@@ -1,24 +1,8 @@
 use crate::{
-    Result,
+    IoError, Result,
     input::{ElfReader, Path},
-    memory::{HostRegion, MappedRegion, VmAddr},
-    os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
 };
-use alloc::alloc::{dealloc, handle_alloc_error};
 use core::ffi::c_void;
-use core::{alloc::Layout, slice::from_raw_parts_mut};
-
-/// Default allocator-backed mapping backend for bare-metal builds.
-#[derive(Clone, Copy, Default)]
-pub struct DefaultMmap;
-
-impl DefaultMmap {
-    /// Creates the default bare-metal mapping backend.
-    #[inline]
-    pub const fn new() -> Self {
-        Self
-    }
-}
 
 pub(crate) fn current_thread_id() -> usize {
     0
@@ -34,106 +18,32 @@ pub(crate) unsafe fn get_thread_local_ptr() -> *mut c_void {
     core::ptr::null_mut()
 }
 
-impl Mmap for DefaultMmap {
-    type Region = HostRegion;
-
-    unsafe fn create_space(
-        &self,
-        addr: Option<VmAddr>,
-        len: usize,
-        _prot: ProtFlags,
-        _populate_later: bool,
-    ) -> Result<MappedRegion<Self::Region>> {
-        if let Some(addr) = addr {
-            let ptr = addr.as_mut_ptr::<u8>();
-            Ok(MappedRegion::local_alias(ptr as _, len, *self))
-        } else {
-            let layout =
-                unsafe { Layout::from_size_align_unchecked(len, self.page_size().bytes()) };
-            let memory = unsafe { alloc::alloc::alloc(layout) };
-            if memory.is_null() {
-                handle_alloc_error(layout);
-            }
-            // use this set prot to test no_mmap
-            //libc::mprotect(memory as _, len, crate::mmap::ProtFlags::all().bits());
-            Ok(MappedRegion::local(memory as _, len, *self))
-        }
-    }
-
-    unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
-        Ok(MappedRegion::local_alias(addr.as_mut_ptr(), len, *self))
-    }
-
-    unsafe fn map_file_at(
-        &self,
-        _addr: VmAddr,
-        _len: usize,
-        _prot: ProtFlags,
-        _flags: MapFlags,
-        _offset: usize,
-        _fd: isize,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    unsafe fn map_zero_at(
-        &self,
-        addr: VmAddr,
-        len: usize,
-        _prot: ProtFlags,
-        _flags: MapFlags,
-    ) -> Result<()> {
-        let ptr = addr.as_mut_ptr::<u8>();
-        let dest = unsafe { from_raw_parts_mut(ptr, len) };
-        dest.fill(0);
-        Ok(())
-    }
-
-    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
-        unsafe {
-            dealloc(
-                addr.as_mut_ptr(),
-                Layout::from_size_align_unchecked(len, self.page_size().bytes()),
-            )
-        };
-        Ok(())
-    }
-
-    unsafe fn madvise(&self, _addr: VmAddr, _len: usize, _behavior: MadviseAdvice) -> Result<()> {
-        Ok(())
-    }
-
-    unsafe fn mprotect(&self, _addr: VmAddr, _len: usize, _prot: ProtFlags) -> Result<()> {
-        Ok(())
-    }
-}
-
-pub(crate) struct RawFile;
+pub(crate) enum RawFile {}
 
 impl RawFile {
     pub(crate) fn from_path(_path: &Path) -> Result<Self> {
-        unimplemented!()
+        Err(IoError::FileAccessUnsupported.into())
     }
 
     pub(crate) fn from_owned_fd(_path: &Path, _raw_fd: i32) -> Result<Self> {
-        todo!()
+        Err(IoError::FileAccessUnsupported.into())
     }
 }
 
 impl ElfReader for RawFile {
     fn path(&self) -> &Path {
-        todo!()
+        match *self {}
     }
 
     fn len(&self) -> usize {
-        todo!()
+        match *self {}
     }
 
     fn read(&self, _buf: &mut [u8], _offset: usize) -> Result<()> {
-        todo!()
+        match *self {}
     }
 
     fn as_fd(&self) -> Option<isize> {
-        todo!()
+        match *self {}
     }
 }

@@ -28,7 +28,8 @@ pub(crate) use symbol::{SymDef, SymbolRegistry, SymbolResolver};
 pub use traits::{ObjectArch, RelocationArch};
 pub(crate) use traits::{Relocatable, RelocateArgs, RelocationValueInput, RelocationValueProvider};
 
-pub use crate::observer::{HandleResult, RelocationEvent};
+pub use crate::observer::RelocationEvent;
+pub use defs::HandleResult;
 pub use relocator::Relocator;
 pub use run::RelocatorRun;
 pub use traits::BindingMode;

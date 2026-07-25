@@ -7,7 +7,7 @@ use elf::abi::*;
 
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
-use crate::lazy::LazyBindingSlots;
+use crate::lazy::{LazyPlacement, LazySlots};
 use crate::linker::scan::GotPltTarget;
 #[cfg(feature = "object")]
 use crate::relocation::ObjectArch;
@@ -28,14 +28,14 @@ impl RelocationArch for AArch64Arch {
     const GOT: ElfRelocationType = ElfRelocationType::new(R_AARCH64_GLOB_DAT);
     const SYMBOLIC: ElfRelocationType = ElfRelocationType::new(R_AARCH64_ABS64);
     const JUMP_SLOT: ElfRelocationType = ElfRelocationType::new(R_AARCH64_JUMP_SLOT);
-    const IRELATIVE: ElfRelocationType = ElfRelocationType::new(R_AARCH64_IRELATIVE);
-    const COPY: ElfRelocationType = ElfRelocationType::new(R_AARCH64_COPY);
+    const IRELATIVE: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_AARCH64_IRELATIVE));
+    const COPY: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_AARCH64_COPY));
 
-    const DTPMOD: ElfRelocationType = ElfRelocationType::new(R_AARCH64_TLS_DTPMOD);
+    const DTPMOD: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_AARCH64_TLS_DTPMOD));
     const DTPOFF: ElfRelocationType = ElfRelocationType::new(R_AARCH64_TLS_DTPREL);
     const TPOFF: ElfRelocationType = ElfRelocationType::new(R_AARCH64_TLS_TPREL);
     const TLSDESC: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_AARCH64_TLSDESC));
-    const LAZY_BINDING_SLOTS: LazyBindingSlots = LazyBindingSlots::new(1, 2);
+    const LAZY_BINDING: LazyPlacement = LazyPlacement::Slots(LazySlots::new(1, 2));
 
     // `true` only when this ZST is the host's relocation backend.
     // Cross-arch use on a different host keeps it `false` because the

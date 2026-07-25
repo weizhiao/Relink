@@ -286,7 +286,7 @@ fn default_rust_fixture_target() -> Option<&'static str> {
 }
 
 fn fixture_dir() -> PathBuf {
-    manifest_dir().join("examples/fixtures")
+    manifest_dir().join("examples/support/fixtures")
 }
 
 fn manifest_dir() -> PathBuf {

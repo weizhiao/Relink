@@ -11,6 +11,8 @@ use core::fmt::{self, Display};
 
 /// Structured I/O error details.
 pub enum IoError {
+    /// File-backed input is unavailable on the selected platform.
+    FileAccessUnsupported,
     /// The provided path contains an interior NUL byte.
     NullByteInPath,
     /// `open failed for {path} with error: {code}`
@@ -69,6 +71,9 @@ impl ReadBoundsError {
 impl Display for IoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::FileAccessUnsupported => {
+                f.write_str("file access is unsupported on this platform")
+            }
             Self::NullByteInPath => f.write_str("path contains an interior NUL byte"),
             Self::OpenFailed { path, code } => {
                 write!(f, "open failed for {path} with error: {code}")
@@ -716,8 +721,8 @@ impl Display for RelocationError {
 pub enum LazyBindingError {
     /// Lazy binding was requested without installing a binder.
     MissingBinder,
-    /// Native same-process lazy binding is unavailable for the target architecture.
-    NativeUnsupported,
+    /// The target architecture does not support the requested lazy binding operation.
+    Unsupported,
     /// The image has no GOT/PLTGOT entry to install lazy binding state.
     MissingGotPlt,
     /// The lazy relocation index does not exist.
@@ -732,8 +737,8 @@ impl Display for LazyBindingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingBinder => f.write_str("missing lazy binder"),
-            Self::NativeUnsupported => {
-                f.write_str("native binding is not supported for this target architecture")
+            Self::Unsupported => {
+                f.write_str("lazy binding operation is not supported for this target architecture")
             }
             Self::MissingGotPlt => f.write_str("missing GOT/PLTGOT entry"),
             Self::RelocIndexOutOfRange => f.write_str("relocation index is out of range"),

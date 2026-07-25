@@ -42,26 +42,21 @@ cfg_if::cfg_if! {
         pub use windows::DefaultMmap;
         pub(crate) use windows::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
         pub(crate) use windows::{RawFile, virtual_free};
-    } else if #[cfg(feature = "use-syscall")] {
-        mod linux_syscall;
+    } else if #[cfg(any(
+        feature = "use-syscall",
+        all(any(target_os = "linux", target_os = "android"), feature = "libc"),
+    ))] {
+        mod linux;
 
-        pub use linux_syscall::DefaultMmap;
-        pub(crate) use linux_syscall::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
+        pub use linux::DefaultMmap;
+        pub(crate) use linux::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
         #[allow(unused_imports)]
-        pub(crate) use linux_syscall::getauxval;
-        pub(crate) use linux_syscall::RawFile;
-    } else if #[cfg(all(any(target_os = "linux", target_os = "android"), feature = "libc"))] {
-        mod linux_libc;
-
-        pub use linux_libc::DefaultMmap;
-        pub(crate) use linux_libc::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
-        #[allow(unused_imports)]
-        pub(crate) use linux_libc::getauxval;
-        pub(crate) use linux_libc::RawFile;
+        pub(crate) use linux::getauxval;
+        pub(crate) use linux::RawFile;
     } else {
         mod baremetal;
 
-        pub use baremetal::DefaultMmap;
+        pub use super::mmap::AllocMmap as DefaultMmap;
         pub(crate) use baremetal::{current_thread_id, get_thread_local_ptr, register_thread_destructor};
         pub(crate) use baremetal::RawFile;
     }

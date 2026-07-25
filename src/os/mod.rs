@@ -5,10 +5,12 @@
 //! different operating systems and bare-metal environments.
 
 pub use defs::{MadviseAdvice, MapFlags, PageSize, ProtFlags};
+pub use mmap::{AllocMmap, FixedMmap};
 pub use platform::DefaultMmap;
 pub(crate) use platform::*;
 pub use traits::Mmap;
 
 mod defs;
+mod mmap;
 mod platform;
 mod traits;

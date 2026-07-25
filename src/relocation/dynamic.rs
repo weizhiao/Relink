@@ -17,8 +17,8 @@ use alloc::vec;
 use core::num::NonZeroUsize;
 
 impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
-    fn apply_relro(&self, lazy_binding: bool) -> Result<()> {
-        if lazy_binding {
+    fn apply_relro(&self, lazy: bool) -> Result<()> {
+        if lazy {
             return Ok(());
         }
 
@@ -55,10 +55,11 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
             logging::debug!("No relocations needed for {}", self.name());
         }
 
-        let lazy_binding = lazy_binder.resolve_binding(binding, self.is_lazy());
-        if lazy_binding {
+        let lazy = lazy_binder.resolve_binding(binding, self.is_lazy());
+        if lazy {
             logging::debug!("Using lazy binding for {}", self.name());
         }
+        prepare_plt(lazy_binder, lazy, &self)?;
         let resolver = SymbolResolver::new(
             self.core_ref(),
             scope,
@@ -75,7 +76,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         if !relocation.is_empty() {
             self.relocate_relative(helper.memory())?
                 .relocate_dynrel(&mut helper)?
-                .relocate_pltrel(lazy_binding, &mut helper, lazy_binder)?;
+                .relocate_pltrel(lazy, &mut helper)?;
         }
 
         let scope = helper.into_scope();
@@ -88,7 +89,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
             logging::debug!("[{}] Bound dependencies: {:?}", self.name(), &scope);
         }
 
-        self.apply_relro(lazy_binding)?;
+        self.apply_relro(lazy)?;
         let mut dynamic_event = DynamicRelocatedEvent::new(
             self.core_ref(),
             self.dynamic_addr(),
@@ -139,15 +140,10 @@ where
     Memory: ImageMemory,
     <Arch::Layout as ElfLayout>::Word: ByteRepr,
 {
-    let base = memory.base();
     debug_assert!(rel.iter().all(|rel| rel.r_type() == Arch::RELATIVE));
     for entry in rel {
         debug_assert!(entry.r_type() == Arch::RELATIVE);
-        let place = base + entry.r_offset();
-        let addend = entry.read_addend(memory, place)?;
-        let value = base.wrapping_add_signed(addend);
-        let word = <Arch::Layout as ElfLayout>::Word::from_usize(value.get());
-        unsafe { memory.write_value(place, word)? };
+        Arch::apply_relative(entry, memory)?;
     }
     Ok(())
 }
@@ -203,21 +199,18 @@ pub(crate) struct DynamicRelocation<Arch: RelocationArch = NativeArch> {
 
 impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
     /// Relocate PLT (Procedure Linkage Table) entries
-    fn relocate_pltrel<Obs, Binder>(
+    fn relocate_pltrel<Obs>(
         &self,
-        lazy_binding: bool,
+        lazy: bool,
         helper: &mut RelocHelper<'_, D, Arch, R, Tls, Obs>,
-        lazy_binder: &Binder,
     ) -> Result<&Self>
     where
         Obs: RelocationObserver<Arch> + ?Sized,
-        Binder: LazyBinder<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: ByteRepr,
     {
         let core = self.core_ref();
         let base = core.base();
         let reloc = self.relocation();
-        prepare_plt(lazy_binder, lazy_binding, self)?;
 
         // Process PLT relocations
         let pltrel = reloc.pltrel.as_slice();
@@ -231,7 +224,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
 
             // Handle jump slot relocations
             if likely(r_type == Arch::JUMP_SLOT) {
-                if relocate_jump_slot::<Arch, _>(lazy_binding, helper.memory(), base, rel)? {
+                if relocate_jump_slot::<Arch, _>(lazy, helper.memory(), base, rel)? {
                     continue;
                 }
 
@@ -244,7 +237,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                     continue;
                 }
                 failure_reason = RelocReason::UnknownSymbol;
-            } else if unlikely(r_type == Arch::IRELATIVE) {
+            } else if unlikely(Arch::IRELATIVE == Some(r_type)) {
                 let r_addend = rel.read_addend(helper.memory(), place)?;
                 let addr = base.wrapping_add_signed(r_addend);
                 let resolved = helper
@@ -254,7 +247,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                 let word = <Arch::Layout as ElfLayout>::Word::from_usize(resolved.get());
                 unsafe { helper.memory().write_value(place, word)? };
                 continue;
-            } else if unlikely(Arch::is_tlsdesc(r_type)) {
+            } else if unlikely(Arch::TLSDESC == Some(r_type)) {
                 // If the resolver cannot provide a TLSDESC binding, keep the
                 // specific TLS failure for the final error while still giving
                 // the post handler a chance.
@@ -263,10 +256,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                     TlsRelocOutcome::Failed(reason) => failure_reason = reason,
                 }
             }
-            // Handle unknown relocations with the provided handler
-            if helper.handle_post(rel)?.is_unhandled() {
-                return Err(helper.reloc_error(rel, failure_reason));
-            }
+
+            helper.handle_fallback(rel, failure_reason)?;
         }
         Ok(self)
     }
@@ -341,7 +332,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                     continue;
                 }
                 failure_reason = RelocReason::UnknownSymbol;
-            } else if r_type == Arch::COPY {
+            } else if Arch::COPY == Some(r_type) {
                 // Handle copy relocations (typically for global data)
                 let symbol = helper.symbol_entry(rel);
                 let len = symbol.symbol().st_size();
@@ -354,7 +345,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                     continue;
                 }
                 failure_reason = RelocReason::UnknownSymbol;
-            } else if r_type == Arch::IRELATIVE {
+            } else if Arch::IRELATIVE == Some(r_type) {
                 let r_addend = rel.read_addend(helper.memory(), place)?;
                 let addr = base.wrapping_add_signed(r_addend);
                 let resolved = helper
@@ -374,10 +365,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
                 }
             }
 
-            // Handle unknown relocations with the provided handler
-            if helper.handle_post(rel)?.is_unhandled() {
-                return Err(helper.reloc_error(rel, failure_reason));
-            }
+            helper.handle_fallback(rel, failure_reason)?;
         }
         Ok(self)
     }

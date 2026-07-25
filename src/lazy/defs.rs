@@ -3,7 +3,7 @@
 use crate::{
     ByteRepr, LazyBindingError, RelocationError, Result,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfWord, SymbolEntry},
-    image::{CoreRuntime, PltRelocInfo},
+    image::CoreRuntime,
     memory::{ImageMemory, ImageMemoryExt, VmAddr},
     relocation::RelocationArch,
 };
@@ -12,12 +12,12 @@ use core::{any::Any, ptr::NonNull};
 
 /// PLTGOT slots used by an architecture's lazy binding entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LazyBindingSlots {
+pub struct LazySlots {
     context: usize,
     resolver: usize,
 }
 
-impl LazyBindingSlots {
+impl LazySlots {
     /// Creates a pair of GOT/PLT slot indexes used by a lazy binding ABI.
     #[inline]
     pub const fn new(context: usize, resolver: usize) -> Self {
@@ -37,25 +37,55 @@ impl LazyBindingSlots {
     }
 }
 
-/// Entries installed into an image's lazy PLT state.
-pub struct LazyBindingEntries {
-    context: VmAddr,
-    resolver: VmAddr,
-    state: Option<Box<dyn Any + Send + Sync>>,
+/// Selects how an architecture installs lazy-binding runtime entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LazyPlacement {
+    /// Lazy binding is not implemented for this architecture.
+    Unsupported,
+    /// The context and resolver use fixed indexes relative to `DT_PLTGOT`.
+    Slots(LazySlots),
+    /// The architecture installs entries through its custom relocation handler.
+    Custom,
 }
 
-impl LazyBindingEntries {
-    /// Creates lazy binding entries from target-visible context and resolver entries.
+/// Target-visible values supplied by a lazy binder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LazyValues {
+    context: VmAddr,
+    resolver: VmAddr,
+}
+
+impl LazyValues {
+    /// Returns the binder context value.
     #[inline]
-    pub fn new(context: VmAddr, resolver: VmAddr) -> Self {
+    pub const fn context(self) -> VmAddr {
+        self.context
+    }
+
+    /// Returns the resolver entry point.
+    #[inline]
+    pub const fn resolver(self) -> VmAddr {
+        self.resolver
+    }
+}
+
+/// Values and retained state prepared for an image's lazy PLT runtime.
+pub struct LazySetup {
+    values: LazyValues,
+    _state: Option<Box<dyn Any + Send + Sync>>,
+}
+
+impl LazySetup {
+    /// Creates a setup from target-visible context and resolver values.
+    #[inline]
+    pub const fn new(context: VmAddr, resolver: VmAddr) -> Self {
         Self {
-            context,
-            resolver,
-            state: None,
+            values: LazyValues { context, resolver },
+            _state: None,
         }
     }
 
-    /// Creates lazy binding entries whose context points at owned host-side state.
+    /// Creates a setup whose context points at retained host-side state.
     pub fn with_state<T>(state: T, resolver: VmAddr) -> Self
     where
         T: Send + Sync + 'static,
@@ -64,27 +94,14 @@ impl LazyBindingEntries {
         let context = VmAddr::from_ptr(state.as_ref());
         let state = state as Box<dyn Any + Send + Sync>;
         Self {
-            context,
-            resolver,
-            state: Some(state),
+            values: LazyValues { context, resolver },
+            _state: Some(state),
         }
     }
 
-    /// Returns the context entry written to the lazy PLT state.
     #[inline]
-    pub const fn context(&self) -> VmAddr {
-        self.context
-    }
-
-    /// Returns the resolver entry written to the lazy PLT state.
-    #[inline]
-    pub const fn resolver(&self) -> VmAddr {
-        self.resolver
-    }
-
-    #[inline]
-    pub(crate) fn into_parts(self) -> (VmAddr, VmAddr, Option<Box<dyn Any + Send + Sync>>) {
-        (self.context, self.resolver, self.state)
+    pub(crate) const fn values(&self) -> LazyValues {
+        self.values
     }
 }
 
@@ -134,11 +151,6 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
         unsafe { self.runtime.as_ref() }
     }
 
-    #[inline]
-    pub(crate) fn lazy_plt(&self) -> Option<&PltRelocInfo<Arch>> {
-        self.core().lazy_plt()
-    }
-
     /// Returns the native resolver context entry for this runtime handle.
     #[inline]
     pub fn runtime(&self) -> VmAddr {
@@ -154,7 +166,7 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
     /// Returns one PLT relocation by lazy relocation index.
     #[inline]
     pub fn plt_relocation(&self, rela_idx: usize) -> Option<LazyPltReloc<'_, Arch>> {
-        let rel = self.lazy_plt()?.relocs.as_slice().get(rela_idx)?;
+        let rel = self.core().lazy_plt()?.relocs.as_slice().get(rela_idx)?;
         Some(LazyPltReloc {
             runtime: *self,
             index: rela_idx,
@@ -182,23 +194,13 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
     where
         <Arch::Layout as ElfLayout>::Word: ByteRepr,
     {
-        let lazy_plt = self
-            .lazy_plt()
-            .expect("lazy PLT metadata must be installed before default lazy binding");
-        let rel = lazy_plt
-            .relocs
-            .as_slice()
-            .get(rela_idx)
+        let reloc = self
+            .plt_relocation(rela_idx)
             .ok_or(RelocationError::LazyBinding(
                 LazyBindingError::RelocIndexOutOfRange,
             ))?;
-        let reloc = LazyPltReloc {
-            runtime: *self,
-            index: rela_idx,
-            rel,
-        };
 
-        if reloc.r_type() != Arch::JUMP_SLOT || reloc.symbol_index() == 0 {
+        if !reloc.is_jump_slot() || reloc.symbol_index() == 0 {
             return Err(RelocationError::LazyBinding(LazyBindingError::InvalidPltReloc).into());
         }
 
@@ -260,7 +262,7 @@ impl<'a, Arch: RelocationArch> LazyPltReloc<'a, Arch> {
     /// Returns the referenced symbol entry, if the symbol index is valid.
     #[inline]
     pub fn symbol(&self) -> Option<SymbolEntry<'_, Arch::Layout>> {
-        let symtab = self.runtime.lazy_plt()?.symbols.view();
+        let symtab = self.runtime.core().lazy_plt()?.symbols.view();
         (self.symbol_index() < symtab.count_syms()).then(|| symtab.symbol_idx(self.symbol_index()))
     }
 

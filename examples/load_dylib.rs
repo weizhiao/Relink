@@ -1,4 +1,4 @@
-#[path = "common/mod.rs"]
+#[path = "support/mod.rs"]
 mod fixture_support;
 
 use elf_loader::{

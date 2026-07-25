@@ -4,6 +4,7 @@ use crate::{
     elf::SymbolEntry,
     image::{DynamicInfo, PltRelocInfo, SymbolExports, WeakModuleScope},
     input::PathBuf,
+    lazy::{LazySetup, LazyValues},
     logging,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
@@ -14,15 +15,15 @@ use crate::{
     tls::{CoreTlsState, TLS_GET_ADDR_SYMBOL, TlsResolver},
 };
 use alloc::boxed::Box;
-use core::{any::Any, cell::OnceCell, marker::PhantomData, ops::Deref};
+use core::{cell::OnceCell, marker::PhantomData, ops::Deref};
 
 /// Stable runtime header shared by all [`CoreInner`] instantiations.
 #[repr(C)]
 pub(crate) struct CoreRuntime<Arch: RelocationArch = NativeArch> {
     core: OnceCell<VmAddr>,
     lazy_plt: Option<PltRelocInfo<Arch>>,
-    /// Opaque lazy-binding runtime state retained for the module lifetime.
-    pub(crate) lazy_runtime: OnceCell<Box<dyn Any + Send + Sync>>,
+    /// Lazy-binding values and state retained for the module lifetime.
+    lazy: OnceCell<LazySetup>,
     module: for<'a> unsafe fn(&'a Self) -> &'a dyn CoreRuntimeModule<Arch>,
 }
 
@@ -36,7 +37,7 @@ impl<Arch: RelocationArch> CoreRuntime<Arch> {
         Self {
             core: OnceCell::new(),
             lazy_plt,
-            lazy_runtime: OnceCell::new(),
+            lazy: OnceCell::new(),
             module: core_module::<D, Arch, R, Tls>,
         }
     }
@@ -60,6 +61,19 @@ impl<Arch: RelocationArch> CoreRuntime<Arch> {
     #[inline]
     pub(crate) fn lazy_plt(&self) -> Option<&PltRelocInfo<Arch>> {
         self.lazy_plt.as_ref()
+    }
+
+    #[inline]
+    pub(crate) fn set_lazy(&self, setup: LazySetup) {
+        assert!(
+            self.lazy.set(setup).is_ok(),
+            "lazy binding setup must be installed only once",
+        );
+    }
+
+    #[inline]
+    pub(crate) fn lazy_values(&self) -> Option<LazyValues> {
+        self.lazy.get().map(LazySetup::values)
     }
 
     #[inline]

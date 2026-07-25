@@ -8,8 +8,8 @@ use elf_loader::{
     relocation::{RelocationArch, Relocator},
 };
 
-const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
-const REL_IRELATIVE: u32 = <NativeArch as RelocationArch>::IRELATIVE.raw();
+const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.unwrap().raw();
+const REL_IRELATIVE: u32 = <NativeArch as RelocationArch>::IRELATIVE.unwrap().raw();
 const REL_RELATIVE: u32 = <NativeArch as RelocationArch>::RELATIVE.raw();
 use gen_elf::{Arch, ElfWriterConfig, RelocEntry, SectionKind, SymbolDesc};
 use support::{

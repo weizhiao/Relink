@@ -9,7 +9,7 @@ use elf::abi::*;
 
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
-use crate::lazy::LazyBindingSlots;
+use crate::lazy::{LazyPlacement, LazySlots};
 use crate::linker::scan::GotPltTarget;
 use crate::relocation::{
     RelocationArch, RelocationValueFormula, RelocationValueKind, RelocationValueProvider,
@@ -31,14 +31,14 @@ impl RelocationArch for X86_64Arch {
     const GOT: ElfRelocationType = ElfRelocationType::new(R_X86_64_GLOB_DAT);
     const SYMBOLIC: ElfRelocationType = ElfRelocationType::new(R_X86_64_64);
     const JUMP_SLOT: ElfRelocationType = ElfRelocationType::new(R_X86_64_JUMP_SLOT);
-    const IRELATIVE: ElfRelocationType = ElfRelocationType::new(R_X86_64_IRELATIVE);
-    const COPY: ElfRelocationType = ElfRelocationType::new(R_X86_64_COPY);
+    const IRELATIVE: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_X86_64_IRELATIVE));
+    const COPY: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_X86_64_COPY));
 
-    const DTPMOD: ElfRelocationType = ElfRelocationType::new(R_X86_64_DTPMOD64);
+    const DTPMOD: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_X86_64_DTPMOD64));
     const DTPOFF: ElfRelocationType = ElfRelocationType::new(R_X86_64_DTPOFF64);
     const TPOFF: ElfRelocationType = ElfRelocationType::new(R_X86_64_TPOFF64);
     const TLSDESC: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_X86_64_TLSDESC));
-    const LAZY_BINDING_SLOTS: LazyBindingSlots = LazyBindingSlots::new(1, 2);
+    const LAZY_BINDING: LazyPlacement = LazyPlacement::Slots(LazySlots::new(1, 2));
 
     // `true` only when this ZST is the host's relocation backend (i.e. the
     // crate is compiled for x86_64). When used as a cross-arch backend on

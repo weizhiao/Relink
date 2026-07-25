@@ -1,7 +1,7 @@
 //! Same-process native lazy binder implementation.
 
 use super::{
-    defs::{LazyBindingEntries, LazyRuntime},
+    defs::{LazyRuntime, LazySetup},
     traits::LazyBinder,
 };
 use crate::{
@@ -54,12 +54,12 @@ where
     Arch: RelocationArch,
 {
     #[inline]
-    fn prepare_slots(&self, runtime: LazyRuntime<Arch>) -> Result<LazyBindingEntries> {
+    fn prepare_slots(&self, runtime: LazyRuntime<Arch>) -> Result<LazySetup> {
         if !Arch::SUPPORTS_NATIVE_RUNTIME {
-            return Err(RelocationError::LazyBinding(LazyBindingError::NativeUnsupported).into());
+            return Err(RelocationError::LazyBinding(LazyBindingError::Unsupported).into());
         }
 
-        Ok(LazyBindingEntries::new(
+        Ok(LazySetup::new(
             runtime.runtime(),
             VmAddr::from_ptr(dl_runtime_resolve as *const ()),
         ))

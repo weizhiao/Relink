@@ -4,27 +4,11 @@ use crate::{
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, HashTable, SymbolEntry, SymbolTableView},
     image::{ElfCore, ModuleScope},
     input::Path,
+    lazy::LazyValues,
     memory::{HostRegion, RegionAccess, VmAddr},
     relocation::{RelocationArch, SymDef, SymbolResolver},
     tls::TlsResolver,
 };
-
-/// Result of a relocation hook.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HandleResult {
-    /// The handler did not process this relocation.
-    Unhandled,
-    /// The handler processed this relocation.
-    Handled,
-}
-
-impl HandleResult {
-    /// Returns whether the handler left the relocation for the default path.
-    #[inline]
-    pub const fn is_unhandled(self) -> bool {
-        matches!(self, Self::Unhandled)
-    }
-}
 
 /// Context passed to relocation observer hooks.
 ///
@@ -48,7 +32,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
 {
     /// Construct a new `RelocationEvent`.
     #[inline]
-    pub(crate) fn new(
+    pub(crate) const fn new(
         rel: &'a ElfRelType<Arch>,
         resolver: &'a SymbolResolver<'a, ElfCore<D, Arch, R, Tls>, Arch, Tls>,
         symbols: SymbolTableView<'a, Arch::Layout, H>,
@@ -78,6 +62,12 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
         self.resolver.scope()
     }
 
+    /// Returns values supplied by the lazy binder, when active.
+    #[inline]
+    pub fn lazy(&self) -> Option<LazyValues> {
+        self.lib().inner.runtime().lazy_values()
+    }
+
     /// Access a symbol table entry by index for this relocation context.
     #[inline]
     pub fn symbol(&self, r_sym: usize) -> SymbolEntry<'a, Arch::Layout> {
@@ -94,8 +84,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
     /// Find symbol definition in the current scope.
     #[inline]
     pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, Arch, Tls>> {
-        let symbol = self.symbol(r_sym);
-        self.resolver.find(&symbol)
+        self.resolver.find(&self.symbol(r_sym))
     }
 }
 

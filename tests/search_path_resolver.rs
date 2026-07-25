@@ -1,6 +1,6 @@
 #![cfg(not(windows))]
 
-#[path = "../examples/common/mod.rs"]
+#[path = "../examples/support/mod.rs"]
 mod fixture_support;
 
 use std::{fs, path::PathBuf as StdPathBuf};

@@ -406,7 +406,8 @@ where
                 rel.set_offset(VmOffset::new(site.place.get()));
                 let place = runtime.base() + rel.r_offset();
                 let mut addend = rel.read_addend(runtime, place)?;
-                if entry_info.r_type == Arch::RELATIVE || entry_info.r_type == Arch::IRELATIVE {
+                if entry_info.r_type == Arch::RELATIVE || Arch::IRELATIVE == Some(entry_info.r_type)
+                {
                     addend = runtime.remap_relocation_addend(addend)?.1;
                 }
 

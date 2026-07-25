@@ -12,13 +12,13 @@ use elf_loader::{
     relocation::RelocationArch,
 };
 
-const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.raw();
+const REL_COPY: u32 = <NativeArch as RelocationArch>::COPY.unwrap().raw();
 const REL_GOT: u32 = <NativeArch as RelocationArch>::GOT.raw();
-const REL_IRELATIVE: u32 = <NativeArch as RelocationArch>::IRELATIVE.raw();
+const REL_IRELATIVE: u32 = <NativeArch as RelocationArch>::IRELATIVE.unwrap().raw();
 const REL_JUMP_SLOT: u32 = <NativeArch as RelocationArch>::JUMP_SLOT.raw();
 const REL_RELATIVE: u32 = <NativeArch as RelocationArch>::RELATIVE.raw();
 const REL_SYMBOLIC: u32 = <NativeArch as RelocationArch>::SYMBOLIC.raw();
-const REL_DTPMOD: u32 = <NativeArch as RelocationArch>::DTPMOD.raw();
+const REL_DTPMOD: u32 = <NativeArch as RelocationArch>::DTPMOD.unwrap().raw();
 const REL_DTPOFF: u32 = <NativeArch as RelocationArch>::DTPOFF.raw();
 use gen_elf::SectionKind;
 

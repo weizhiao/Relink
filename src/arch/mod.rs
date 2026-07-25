@@ -26,7 +26,7 @@
 use crate::{elf::ElfMachine, relocation::RelocationArch};
 use elf::abi::{
     ELFCLASS32, ELFCLASS64, ELFDATA2LSB, ELFDATA2MSB, EM_386, EM_AARCH64, EM_ARM, EM_LOONGARCH,
-    EM_RISCV, EM_X86_64,
+    EM_RISCV, EM_X86_64, EM_XTENSA,
 };
 
 /// Runtime tag for a supported target architecture.
@@ -49,6 +49,8 @@ pub enum ArchKind {
     X86,
     /// 32-bit ARM (`EM_ARM`).
     Arm,
+    /// 32-bit Xtensa (`EM_XTENSA`).
+    Xtensa,
 }
 
 impl ArchKind {
@@ -74,6 +76,7 @@ impl ArchKind {
             Self::LoongArch64 => ElfMachine::new(EM_LOONGARCH),
             Self::X86 => ElfMachine::new(EM_386),
             Self::Arm => ElfMachine::new(EM_ARM),
+            Self::Xtensa => ElfMachine::new(EM_XTENSA),
         }
     }
 
@@ -93,6 +96,7 @@ impl ArchKind {
             (EM_LOONGARCH, ELFCLASS64) => Some(Self::LoongArch64),
             (EM_386, ELFCLASS32) => Some(Self::X86),
             (EM_ARM, ELFCLASS32) => Some(Self::Arm),
+            (EM_XTENSA, ELFCLASS32) => Some(Self::Xtensa),
             _ => None,
         }
     }
@@ -125,6 +129,7 @@ impl core::fmt::Display for ArchKind {
             Self::LoongArch64 => f.write_str("loongarch64"),
             Self::X86 => f.write_str("x86"),
             Self::Arm => f.write_str("arm"),
+            Self::Xtensa => f.write_str("xtensa"),
         }
     }
 }
@@ -137,6 +142,7 @@ pub mod riscv32;
 pub mod riscv64;
 pub mod x86;
 pub mod x86_64;
+pub mod xtensa;
 
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")]{
@@ -167,6 +173,9 @@ cfg_if::cfg_if! {
     }else if #[cfg(target_arch = "arm")]{
         pub use arm::*;
         pub use arm::relocation::ArmArch as NativeArch;
+    }else if #[cfg(target_arch = "xtensa")]{
+        pub use xtensa::*;
+        pub use xtensa::relocation::XtensaArch as NativeArch;
     }
 }
 

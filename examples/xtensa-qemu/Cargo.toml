@@ -1,0 +1,31 @@
+[package]
+name = "xtensa-qemu"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+elf_loader = { path = "../..", default-features = false }
+esp-alloc = { version = "0.10.0", features = ["esp32"] }
+esp-backtrace = { version = "0.19.0", features = [
+    "esp32",
+    "panic-handler",
+    "println",
+] }
+esp-hal = { version = "1.1.1", features = ["esp32"] }
+esp-println = { version = "0.17.0", default-features = false, features = [
+    "esp32",
+    "uart",
+] }
+
+[profile.dev]
+opt-level = "s"
+panic = "abort"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = "s"
+panic = "abort"

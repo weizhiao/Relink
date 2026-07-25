@@ -9,7 +9,7 @@ mod defs;
 mod native;
 mod traits;
 
-pub use defs::{LazyBindingEntries, LazyBindingSlots, LazyPltReloc, LazyRuntime};
+pub use defs::{LazyPlacement, LazyPltReloc, LazyRuntime, LazySetup, LazySlots, LazyValues};
 #[cfg(feature = "lazy-binding")]
 pub use native::NativeLazyBinder;
 #[cfg(feature = "lazy-binding")]

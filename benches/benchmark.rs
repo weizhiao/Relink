@@ -1,4 +1,4 @@
-#[path = "../examples/common/mod.rs"]
+#[path = "../examples/support/mod.rs"]
 mod fixture_support;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};

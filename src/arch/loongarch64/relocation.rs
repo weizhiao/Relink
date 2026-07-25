@@ -4,7 +4,7 @@ use elf::abi::EM_LOONGARCH;
 
 use crate::arch::ArchKind;
 use crate::elf::{Elf64Layout, ElfMachine, ElfRela, ElfRelocationType};
-use crate::lazy::LazyBindingSlots;
+use crate::lazy::{LazyPlacement, LazySlots};
 use crate::linker::scan::GotPltTarget;
 #[cfg(feature = "object")]
 use crate::relocation::ObjectArch;
@@ -34,15 +34,15 @@ impl RelocationArch for LoongArch64Arch {
     const GOT: ElfRelocationType = ElfRelocationType::new(R_LARCH_64);
     const SYMBOLIC: ElfRelocationType = ElfRelocationType::new(R_LARCH_64);
     const JUMP_SLOT: ElfRelocationType = ElfRelocationType::new(R_LARCH_JUMP_SLOT);
-    const IRELATIVE: ElfRelocationType = ElfRelocationType::new(R_LARCH_IRELATIVE);
-    const COPY: ElfRelocationType = ElfRelocationType::new(R_LARCH_COPY);
+    const IRELATIVE: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_LARCH_IRELATIVE));
+    const COPY: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_LARCH_COPY));
 
-    const DTPMOD: ElfRelocationType = ElfRelocationType::new(R_LARCH_TLS_DTPMOD64);
+    const DTPMOD: Option<ElfRelocationType> = Some(ElfRelocationType::new(R_LARCH_TLS_DTPMOD64));
     const DTPOFF: ElfRelocationType = ElfRelocationType::new(R_LARCH_TLS_DTPREL64);
     const TPOFF: ElfRelocationType = ElfRelocationType::new(R_LARCH_TLS_TPREL64);
     // LoongArch 64-bit does not define a TLSDESC relocation.
     const TLSDESC: Option<ElfRelocationType> = None;
-    const LAZY_BINDING_SLOTS: LazyBindingSlots = LazyBindingSlots::new(1, 0);
+    const LAZY_BINDING: LazyPlacement = LazyPlacement::Slots(LazySlots::new(1, 0));
 
     // `true` only when this ZST is the host's relocation backend.
     const SUPPORTS_NATIVE_RUNTIME: bool = cfg!(target_arch = "loongarch64");

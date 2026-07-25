@@ -152,6 +152,9 @@
 //!   and object loading.
 //! - The crate currently targets `x86_64`, `x86`, `aarch64`, `arm`, `riscv64`, `riscv32`,
 //!   and `loongarch64`.
+//! - Little-endian Xtensa ELF32 images have basic cross-architecture dynamic
+//!   relocation and custom-binder lazy binding support; native runtime hooks and
+//!   full TLS support are pending.
 //! - Relocatable object support is currently centered on `x86_64` and `riscv64`.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![no_std]
@@ -185,9 +188,10 @@ extern crate alloc;
     target_arch = "loongarch64",
     target_arch = "x86",
     target_arch = "arm",
+    target_arch = "xtensa",
 )))]
 compile_error!(
-    "Unsupported target architecture. Supported architectures: x86_64, aarch64, riscv64, riscv32, loongarch64, x86, arm"
+    "Unsupported target architecture. Supported architectures: x86_64, aarch64, riscv64, riscv32, loongarch64, x86, arm, xtensa"
 );
 
 mod aligned_bytes;

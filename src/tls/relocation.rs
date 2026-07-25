@@ -48,7 +48,7 @@ where
         let r_addend = rel.read_addend(memory, place)?;
 
         match r_type {
-            value if value == Arch::DTPOFF => {
+            value if Arch::DTPOFF == value => {
                 let symdef = match self.defined_tls_symbol(rel) {
                     Ok(symdef) => symdef,
                     Err(outcome) => return Ok(outcome),
@@ -68,7 +68,7 @@ where
                 }
                 Ok(TlsRelocOutcome::Applied)
             }
-            value if value == Arch::DTPMOD => {
+            value if Arch::DTPMOD == Some(value) => {
                 let tls = if r_sym == 0 {
                     self.core.tls()
                 } else {
@@ -94,7 +94,7 @@ where
                 }
                 Ok(TlsRelocOutcome::Applied)
             }
-            value if value == Arch::TPOFF => {
+            value if Arch::TPOFF == value => {
                 let symdef = match self.defined_tls_symbol(rel) {
                     Ok(symdef) => symdef,
                     Err(outcome) => return Ok(outcome),
@@ -115,7 +115,7 @@ where
                 }
                 Ok(TlsRelocOutcome::Applied)
             }
-            value if Arch::is_tlsdesc(value) => {
+            value if Arch::TLSDESC == Some(value) => {
                 let symbol = self.symbol_entry(rel);
                 let request = match self.find_symdef(&symbol) {
                     None => {

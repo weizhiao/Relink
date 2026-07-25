@@ -30,6 +30,7 @@ members = [
 	"tools/gen-elf",
 	"tests/riscv64",
 ]
+exclude = ["examples/xtensa-qemu"]
 
 [workspace.dependencies]
 syscalls = { version = "0.8.1", default-features = false }
@@ -113,6 +114,10 @@ harness = false
 [[example]]
 name = "load_object"
 required-features = ["object"]
+
+[[example]]
+name = "build_fixtures"
+path = "examples/support/build_fixtures.rs"
 
 [features]
 default = ["full"]

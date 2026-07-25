@@ -1,26 +1,22 @@
 #[cfg(feature = "object")]
 use super::RelocHelper;
-use super::{RelocValue, RelocationValueKind};
+use super::{HandleResult, RelocValue, RelocationValueKind};
 #[cfg(feature = "object")]
-use crate::elf::ElfShdr;
+use crate::elf::{ElfRelType, ElfShdr};
+#[cfg(feature = "object")]
+use crate::object::layout::PltGotSection;
 use crate::{
     ByteRepr, RelocReason, Result,
     arch::ArchKind,
-    elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelocationType},
+    elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelocationType, ElfWord},
     image::ModuleScope,
-    lazy::{LazyBinder, LazyBindingSlots},
-    memory::VmAddr,
-    observer::RelocationObserver,
+    lazy::{LazyBinder, LazyPlacement},
+    memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr},
+    observer::{RelocationEvent, RelocationObserver},
     relocation::SymbolRegistry,
     runtime::DomainId,
     sync::Arc,
     tls::TlsResolver,
-};
-#[cfg(feature = "object")]
-use crate::{
-    elf::ElfRelType,
-    memory::{ImageMemory, RegionAccess},
-    object::layout::PltGotSection,
 };
 
 /// Architecture-specific dynamic relocation numbering.
@@ -53,13 +49,13 @@ pub trait RelocationArch: 'static {
     const SYMBOLIC: ElfRelocationType;
     /// PLT jump-slot relocation type.
     const JUMP_SLOT: ElfRelocationType;
-    /// IFUNC relative relocation type.
-    const IRELATIVE: ElfRelocationType;
-    /// COPY relocation type.
-    const COPY: ElfRelocationType;
+    /// IFUNC relative relocation type, if the architecture defines one.
+    const IRELATIVE: Option<ElfRelocationType>;
+    /// COPY relocation type, if the architecture defines one.
+    const COPY: Option<ElfRelocationType>;
 
-    /// TLS module-id relocation type.
-    const DTPMOD: ElfRelocationType;
+    /// TLS module-id relocation type, if the architecture defines one.
+    const DTPMOD: Option<ElfRelocationType>;
     /// TLS dynamic offset relocation type.
     const DTPOFF: ElfRelocationType;
     /// TLS static thread-pointer offset relocation type.
@@ -68,8 +64,8 @@ pub trait RelocationArch: 'static {
     const TLSDESC: Option<ElfRelocationType> = None;
     /// DTV offset used by this architecture's TLS ABI.
     const TLS_DTV_OFFSET: usize = 0;
-    /// PLTGOT slots used by this architecture's lazy binding entry.
-    const LAZY_BINDING_SLOTS: LazyBindingSlots;
+    /// How this architecture installs lazy-binding runtime entries.
+    const LAZY_BINDING: LazyPlacement;
 
     /// Whether relocation may execute target code or install target runtime
     /// hooks directly in the current process.
@@ -85,19 +81,50 @@ pub trait RelocationArch: 'static {
         Ok(())
     }
 
-    /// Returns whether `r_type` is this architecture's TLSDESC relocation.
+    /// Applies one relative dynamic relocation.
+    ///
+    /// Architectures may override this when their relative relocation keeps
+    /// the addend somewhere other than the relocation entry.
     #[inline]
-    fn is_tlsdesc(r_type: ElfRelocationType) -> bool {
-        Self::TLSDESC.is_some_and(|tlsdesc| r_type == tlsdesc)
+    fn apply_relative<Memory>(rel: &Self::Relocation, memory: &Memory) -> Result<()>
+    where
+        Self: Sized,
+        Memory: ImageMemory,
+        <Self::Layout as ElfLayout>::Word: ByteRepr,
+    {
+        let base = memory.base();
+        let place = base + rel.r_offset();
+        let addend = rel.read_addend(memory, place)?;
+        let value = base.wrapping_add_signed(addend);
+        let word = <Self::Layout as ElfLayout>::Word::from_usize(value.get());
+        unsafe { memory.write_value(place, word) }
     }
 
     /// Returns whether `r_type` is one of this architecture's TLS relocations.
     #[inline]
     fn is_tls(r_type: ElfRelocationType) -> bool {
-        r_type == Self::DTPMOD
-            || r_type == Self::DTPOFF
-            || r_type == Self::TPOFF
-            || Self::is_tlsdesc(r_type)
+        Self::DTPMOD == Some(r_type)
+            || Self::DTPOFF == r_type
+            || Self::TPOFF == r_type
+            || Self::TLSDESC == Some(r_type)
+    }
+
+    /// Handles a dynamic relocation not covered by the common relocation classes.
+    ///
+    /// This hook applies to both regular and PLT relocation tables and runs
+    /// before the observer post-hook. Return [`HandleResult::Unhandled`] to
+    /// leave the relocation to the observer.
+    #[inline]
+    fn relocate_custom<D, R, Tls, H>(
+        _event: &RelocationEvent<'_, D, Self, R, Tls, H>,
+    ) -> Result<HandleResult>
+    where
+        Self: Sized,
+        D: 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<Self>,
+    {
+        Ok(HandleResult::Unhandled)
     }
 
     /// Returns a diagnostic name for a relocation type.
