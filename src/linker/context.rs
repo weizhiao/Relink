@@ -507,21 +507,6 @@ mod tests {
     }
 
     #[test]
-    fn relocation_scope_rejects_modules_from_another_domain() {
-        let expected = DomainId::new();
-        let other = DomainId::new();
-        let mut scope = ModuleScopeBuilder::<NativeArch>::new(expected);
-        scope.extend([domain_module("other", other)]);
-
-        let error = scope.into_scope().unwrap_err();
-        assert!(matches!(
-            error,
-            Error::DomainMismatch { expected: found, actual }
-                if found == expected && actual == other
-        ));
-    }
-
-    #[test]
     fn module_scope_rejects_mixed_domains() {
         let first = DomainId::new();
         let second = DomainId::new();

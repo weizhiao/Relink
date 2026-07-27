@@ -10,13 +10,13 @@ fn main() {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     env_logger::init();
     let fixtures = fixture_support::ensure_all();
-    let mut file = File::open(&fixtures.liba).unwrap();
+    let mut file = File::open(&fixtures.base).unwrap();
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).unwrap();
-    let a = Relocator::new()
+    let base = Relocator::new()
         .run(LOADER.load_dylib(&bytes).unwrap())
         .relocate()
         .unwrap();
-    let f = unsafe { a.get::<fn() -> i32>("a").unwrap() };
+    let f = unsafe { base.get::<extern "C" fn() -> i32>("base_value").unwrap() };
     println!("{}", f());
 }

@@ -39,7 +39,7 @@ fi
 cargo clean
 
 if [ "${MINI_LOADER}" = "1" ]; then
-	cargo run --example build_fixtures -- exec-a
+	cargo run --example build_fixtures -- native-exec
 	"${CARGO}" build --target="${TARGET}"
 	"${CARGO}" ${OP} --target="${TARGET}" ${ARGS}
 else

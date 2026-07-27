@@ -718,32 +718,27 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_module_can_carry_tls_metadata() {
-        let tls = ModuleTls::Static {
-            mod_id: TlsModuleId::new(7),
-            tp_offset: TlsTpOffset::new(-0x80),
-        };
-        let module = SyntheticModule::<NativeArch>::empty("__tls").with_tls(tls);
-
-        assert_eq!(
-            <SyntheticModule<NativeArch> as Module<NativeArch, ()>>::tls(&module),
-            Some(tls)
-        );
-    }
-
-    #[test]
-    fn synthetic_module_can_carry_user_data() {
+    fn synthetic_module_carries_metadata() {
         #[derive(Clone, Debug, PartialEq, Eq)]
         struct SyntheticData {
             tag: usize,
         }
 
-        let mut module =
-            SyntheticModule::<NativeArch>::empty("__meta").with_user_data(SyntheticData { tag: 7 });
+        let tls = ModuleTls::Static {
+            mod_id: TlsModuleId::new(7),
+            tp_offset: TlsTpOffset::new(-0x80),
+        };
+        let mut module = SyntheticModule::<NativeArch>::empty("__tls")
+            .with_tls(tls)
+            .with_user_data(SyntheticData { tag: 7 });
 
+        assert_eq!(
+            <SyntheticModule<NativeArch, SyntheticData> as Module<NativeArch, ()>>::tls(&module),
+            Some(tls)
+        );
         assert_eq!(module.user_data().tag, 7);
         module.user_data_mut().tag = 11;
-        assert_eq!(module.clone().user_data(), &SyntheticData { tag: 11 });
+        assert_eq!(module.user_data(), &SyntheticData { tag: 11 });
     }
 
     #[test]

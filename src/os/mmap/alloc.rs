@@ -32,7 +32,7 @@ impl Mmap for AllocMmap {
         _prot: ProtFlags,
         _populate_later: bool,
     ) -> Result<MappedRegion<Self::Region>> {
-        if let Some(addr) = addr {
+        if let Some(addr) = addr.filter(|addr| *addr != VmAddr::null()) {
             return Ok(MappedRegion::local_alias(
                 addr.as_mut_ptr::<u8>().cast(),
                 len,
@@ -95,5 +95,27 @@ impl Mmap for AllocMmap {
 
     unsafe fn mprotect(&self, _addr: VmAddr, _len: usize, _prot: ProtFlags) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn null_hint_allocates_memory() {
+        let mapper = AllocMmap::new();
+        let region = unsafe {
+            mapper
+                .create_space(
+                    Some(VmAddr::null()),
+                    mapper.page_size().bytes(),
+                    ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
+                    false,
+                )
+                .unwrap()
+        };
+
+        assert_ne!(region.addr(), VmAddr::null());
     }
 }

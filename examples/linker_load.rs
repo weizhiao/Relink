@@ -9,13 +9,13 @@ fn main() -> Result<()> {
 
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
-        .load(&mut context, PathBuf::from(fixtures.libc_str()))?;
+        .load(&mut context, PathBuf::from(fixtures.leaf_str()))?;
 
-    let c = unsafe { loaded.get::<fn() -> i32>("c").unwrap() };
-    let value = c();
+    let leaf_value = unsafe { loaded.get::<extern "C" fn() -> i32>("leaf_value").unwrap() };
+    let value = leaf_value();
     assert_eq!(value, 3);
     println!(
-        "loaded {} with {} committed modules; c() = {}",
+        "loaded {} with {} committed modules; leaf_value() = {}",
         loaded.name(),
         loaded.committed().len(),
         value

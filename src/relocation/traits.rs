@@ -75,6 +75,10 @@ pub trait RelocationArch: 'static {
     /// Cross-architecture implementations normally leave this as `false`.
     const SUPPORTS_NATIVE_RUNTIME: bool = false;
 
+    /// Whether scan-first linking can repair retained relocations after
+    /// section-level reordering for this architecture.
+    const SUPPORTS_SECTION_REORDER: bool = false;
+
     /// Validates architecture-specific ELF header flags.
     #[inline]
     fn validate_e_flags(_flags: u32) -> Result<()> {

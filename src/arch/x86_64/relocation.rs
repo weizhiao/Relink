@@ -46,6 +46,7 @@ impl RelocationArch for X86_64Arch {
     // resolver stubs, lazy-binding trampolines, init arrays) are not
     // physically executable here, so this stays `false`.
     const SUPPORTS_NATIVE_RUNTIME: bool = cfg!(target_arch = "x86_64");
+    const SUPPORTS_SECTION_REORDER: bool = true;
 
     #[inline]
     fn rel_type_to_str(r_type: ElfRelocationType) -> &'static str {

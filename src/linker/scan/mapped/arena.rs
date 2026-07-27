@@ -241,7 +241,7 @@ fn final_protection(class: MemoryClass) -> ProtFlags {
 mod tests {
     use super::super::super::{ArenaDescriptor, ArenaSharing, LinkPlan};
     use super::*;
-    use crate::os::{DefaultMmap, PageSize};
+    use crate::os::{AllocMmap, PageSize};
     use crate::{
         image::{ScannedElf, SyntheticModule},
         input::ElfBinary,
@@ -295,9 +295,7 @@ mod tests {
         assert!(plan.memory_layout_mut().assign(section, arena, 0));
         plan.set_materialization(root, Materialization::SectionRegions);
 
-        // `DefaultMmap` is a unit struct only for some cfg-selected backends.
-        #[allow(clippy::default_constructed_unit_structs)]
-        let mapper = DefaultMmap::default();
+        let mapper = AllocMmap::new();
         let mut mapped = MappedArenaMap::map_plan(&mapper, &plan).unwrap().unwrap();
         mapped.populate(&mut plan).unwrap();
 

@@ -103,7 +103,7 @@ fn main() -> Result<()> {
 
 ## 基准测试
 
-下表是 GitHub Actions 上的一次性能快照，只适合作为当前测试集的参考。完整环境见 [actions/runs/25632675040/job/75239090388](https://github.com/weizhiao/Relink/actions/runs/25632675040/job/75239090388)。fixture 是仓库内的 `libc -> libb -> liba` 测试链，不是系统 C library。
+下表是 GitHub Actions 上的一次性能快照，只适合作为当前测试集的参考。完整环境见 [actions/runs/25632675040/job/75239090388](https://github.com/weizhiao/Relink/actions/runs/25632675040/job/75239090388)。fixture 是仓库内的 `leaf -> middle -> base` 测试链。
 
 加载耗时越低越好。`scan_first` 包含依赖扫描和 section 规划成本，因此不是和 `dlopen` 完全同质的直接替换。
 

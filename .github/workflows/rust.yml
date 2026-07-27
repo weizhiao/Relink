@@ -88,7 +88,7 @@ jobs:
     - env:
         TARGET: ${{ matrix.target }}
         CHANNEL: ${{ matrix.channel }}
-        ARGS: "target/exec_a"
+        ARGS: "target/native_exec"
         OP: run -r -p mini-loader -Zbuild-std=core,alloc,panic_abort
         MINI_LOADER: 1
       run: |
@@ -115,7 +115,11 @@ jobs:
         CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=generic-rv64 -C target-feature=+m,+a,+f,+d,+c,+crt-static
         CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
         CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_AR: riscv64-linux-gnu-ar
-      run: cross test --manifest-path tests/riscv64/Cargo.toml -Z build-std=std,panic_unwind --target riscv64gc-unknown-linux-gnu -- --nocapture
+      run: >
+        cross test -p elf_loader -Z build-std=std,panic_unwind
+        --target riscv64gc-unknown-linux-gnu
+        --no-default-features --features object,use-syscall
+        --test relocator riscv64:: -- --nocapture
 
   test-xtensa-qemu:
     runs-on: ubuntu-latest

@@ -104,7 +104,7 @@ fn main() -> Result<()> {
 
 ## Benchmarks
 
-The table below is a GitHub Actions performance snapshot. Use it only as a reference for the current test suite. Full environment details are in [actions/runs/25632675040/job/75239090388](https://github.com/weizhiao/Relink/actions/runs/25632675040/job/75239090388). The fixture is the repository's `libc -> libb -> liba` test chain, not the system C library.
+The table below is a GitHub Actions performance snapshot. Use it only as a reference for the current test suite. Full environment details are in [actions/runs/25632675040/job/75239090388](https://github.com/weizhiao/Relink/actions/runs/25632675040/job/75239090388). The fixture is the repository's `leaf -> middle -> base` test chain.
 
 Lower is better for loading. `scan_first` includes dependency scanning and section planning, so it is not a direct `dlopen` replacement.
 

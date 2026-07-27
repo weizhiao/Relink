@@ -34,13 +34,13 @@ fn main() -> Result<()> {
             pipeline.push(ConfigureRootSectionRegions);
             pipeline
         })
-        .load_scan_first(&mut context, PathBuf::from(fixtures.libc_str()))?;
+        .load_scan_first(&mut context, PathBuf::from(fixtures.leaf_str()))?;
 
-    let c = unsafe { loaded.get::<fn() -> i32>("c").unwrap() };
-    let value = c();
+    let leaf_value = unsafe { loaded.get::<extern "C" fn() -> i32>("leaf_value").unwrap() };
+    let value = leaf_value();
     assert_eq!(value, 3);
     println!(
-        "scan-first loaded {} with {} committed modules; c() = {}",
+        "scan-first loaded {} with {} committed modules; leaf_value() = {}",
         loaded.name(),
         loaded.committed().len(),
         value

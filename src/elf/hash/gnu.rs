@@ -244,6 +244,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
     /// # Returns
     /// The number of symbols in the hash table
     pub(crate) fn count_syms(&self) -> usize {
+        let symbias = self.header.symbias as usize;
         let mut nsym = 0;
         let buckets = self.buckets.as_slice();
         let chains = self.chains.as_slice();
@@ -262,8 +263,12 @@ impl<L: ElfLayout> ElfGnuHash<L> {
             }
         }
 
-        // Return the count (nsym + 1 to include the last symbol)
-        nsym + 1
+        if nsym == 0 {
+            symbias
+        } else {
+            // Include the last symbol referenced by the chain.
+            nsym + 1
+        }
     }
 
     /// Look up a symbol in the GNU hash table

@@ -13,17 +13,17 @@ use libloading::os::unix::{Library as UnixLibrary, RTLD_LAZY, RTLD_LOCAL, RTLD_N
 use std::{fs, hint::black_box};
 
 struct FixtureBytes {
-    liba: Vec<u8>,
-    libb: Vec<u8>,
-    libc: Vec<u8>,
+    base: Vec<u8>,
+    middle: Vec<u8>,
+    leaf: Vec<u8>,
 }
 
 impl FixtureBytes {
     fn new(fixtures: &fixture_support::FixturePaths) -> Self {
         Self {
-            liba: fs::read(&fixtures.liba).expect("failed to read liba fixture"),
-            libb: fs::read(&fixtures.libb).expect("failed to read libb fixture"),
-            libc: fs::read(&fixtures.libc).expect("failed to read libc fixture"),
+            base: fs::read(&fixtures.base).expect("failed to read base fixture"),
+            middle: fs::read(&fixtures.middle).expect("failed to read middle fixture"),
+            leaf: fs::read(&fixtures.leaf).expect("failed to read leaf fixture"),
         }
     }
 }
@@ -42,30 +42,30 @@ impl LinkPass<PathBuf, ReorderPass> for UseRootSectionRegions {
 fn load_manual_file(fixtures: &fixture_support::FixturePaths) -> LoadedCore<()> {
     let loader = Loader::new();
     let relocator = Relocator::new();
-    let liba = relocator
+    let base = relocator
         .run(
             loader
-                .load_dylib(ElfFile::from_path(black_box(fixtures.liba_str())).unwrap())
+                .load_dylib(ElfFile::from_path(black_box(fixtures.base_str())).unwrap())
                 .unwrap(),
         )
         .relocate()
         .unwrap();
-    let libb = relocator
+    let middle = relocator
         .run(
             loader
-                .load_dylib(ElfFile::from_path(black_box(fixtures.libb_str())).unwrap())
+                .load_dylib(ElfFile::from_path(black_box(fixtures.middle_str())).unwrap())
                 .unwrap(),
         )
-        .scope([&liba])
+        .scope([&base])
         .relocate()
         .unwrap();
     relocator
         .run(
             loader
-                .load_dylib(ElfFile::from_path(black_box(fixtures.libc_str())).unwrap())
+                .load_dylib(ElfFile::from_path(black_box(fixtures.leaf_str())).unwrap())
                 .unwrap(),
         )
-        .scope([&liba, &libb])
+        .scope([&base, &middle])
         .relocate()
         .unwrap()
 }
@@ -73,30 +73,30 @@ fn load_manual_file(fixtures: &fixture_support::FixturePaths) -> LoadedCore<()> 
 fn load_manual_memory(fixtures: &FixtureBytes) -> LoadedCore<()> {
     let loader = Loader::new();
     let relocator = Relocator::new();
-    let liba = relocator
+    let base = relocator
         .run(
             loader
-                .load_dylib(black_box(fixtures.liba.as_slice()))
+                .load_dylib(black_box(fixtures.base.as_slice()))
                 .unwrap(),
         )
         .relocate()
         .unwrap();
-    let libb = relocator
+    let middle = relocator
         .run(
             loader
-                .load_dylib(black_box(fixtures.libb.as_slice()))
+                .load_dylib(black_box(fixtures.middle.as_slice()))
                 .unwrap(),
         )
-        .scope([&liba])
+        .scope([&base])
         .relocate()
         .unwrap();
     relocator
         .run(
             loader
-                .load_dylib(black_box(fixtures.libc.as_slice()))
+                .load_dylib(black_box(fixtures.leaf.as_slice()))
                 .unwrap(),
         )
-        .scope([&liba, &libb])
+        .scope([&base, &middle])
         .relocate()
         .unwrap()
 }
@@ -124,8 +124,8 @@ fn load_scan_first(root: PathBuf) {
     black_box(loaded);
 }
 
-fn dlopen_libc(fixtures: &fixture_support::FixturePaths, flags: i32) {
-    let library = unsafe { UnixLibrary::open(Some(black_box(&fixtures.libc)), flags).unwrap() };
+fn dlopen_leaf(fixtures: &fixture_support::FixturePaths, flags: i32) {
+    let library = unsafe { UnixLibrary::open(Some(black_box(&fixtures.leaf)), flags).unwrap() };
     black_box(library);
 }
 
@@ -142,57 +142,64 @@ fn bench_load(c: &mut Criterion) {
     });
     group.bench_function("linker/runtime", |b| {
         b.iter_batched(
-            || PathBuf::from(fixtures.libc_str()),
+            || PathBuf::from(fixtures.leaf_str()),
             load_linker,
             BatchSize::SmallInput,
         );
     });
     group.bench_function("linker/scan_first", |b| {
         b.iter_batched(
-            || PathBuf::from(fixtures.libc_str()),
+            || PathBuf::from(fixtures.leaf_str()),
             load_scan_first,
             BatchSize::SmallInput,
         );
     });
     group.bench_function("libloading/lazy", |b| {
-        b.iter(|| dlopen_libc(&fixtures, RTLD_LAZY | RTLD_LOCAL));
+        b.iter(|| dlopen_leaf(&fixtures, RTLD_LAZY | RTLD_LOCAL));
     });
     group.bench_function("libloading/now", |b| {
-        b.iter(|| dlopen_libc(&fixtures, RTLD_NOW | RTLD_LOCAL));
+        b.iter(|| dlopen_leaf(&fixtures, RTLD_NOW | RTLD_LOCAL));
     });
     group.finish();
 }
 
 fn bench_symbol(c: &mut Criterion) {
     let fixtures = fixture_support::ensure_all();
-    let libc = load_manual_file(&fixtures);
-    let dlopen_libc =
-        unsafe { UnixLibrary::open(Some(&fixtures.libc), RTLD_NOW | RTLD_LOCAL).unwrap() };
+    let leaf = load_manual_file(&fixtures);
+    let dlopen_leaf =
+        unsafe { UnixLibrary::open(Some(&fixtures.leaf), RTLD_NOW | RTLD_LOCAL).unwrap() };
 
     let mut group = c.benchmark_group("symbol");
     group.bench_function("elf_loader/hit", |b| {
         b.iter(|| unsafe {
-            black_box(libc.get::<fn() -> i32>(black_box("c")).unwrap());
+            black_box(
+                leaf.get::<extern "C" fn() -> i32>(black_box("leaf_value"))
+                    .unwrap(),
+            );
         });
     });
     group.bench_function("elf_loader/miss", |b| {
         b.iter(|| unsafe {
             black_box(
-                libc.get::<fn() -> i32>(black_box("missing_symbol"))
+                leaf.get::<extern "C" fn() -> i32>(black_box("missing_symbol"))
                     .is_none(),
             );
         });
     });
     group.bench_function("libloading/hit", |b| {
         b.iter(|| unsafe {
-            black_box(dlopen_libc.get::<fn() -> i32>(black_box(b"c")).unwrap());
+            black_box(
+                dlopen_leaf
+                    .get::<extern "C" fn() -> i32>(black_box(b"leaf_value"))
+                    .unwrap(),
+            );
         });
     });
     group.bench_function("libloading/miss", |b| {
         b.iter(|| unsafe {
             black_box(
-                dlopen_libc
-                    .get::<fn() -> i32>(black_box(b"missing_symbol"))
+                dlopen_leaf
+                    .get::<extern "C" fn() -> i32>(black_box(b"missing_symbol"))
                     .is_err(),
             );
         });

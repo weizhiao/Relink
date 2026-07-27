@@ -9,7 +9,7 @@ fn main() -> Result<()> {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     env_logger::init();
 
-    let exec_path = fixture_support::ensure_exec_a();
+    let exec_path = fixture_support::ensure_native_exec();
 
     let exec = LOADER.load_exec(
         exec_path

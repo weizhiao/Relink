@@ -78,12 +78,20 @@ fn main() -> Result<()> {
         .loader(LOADER)
         .resolver(fixture_support::search_path_resolver());
     let mut context: LinkContext<PathBuf, UserData> = LinkContext::new(DomainId::PROCESS);
-    let libb = linker
+    let middle = linker
         .run()
         .with_observer(Observer)
-        .load(&mut context, PathBuf::from(fixtures.libb_str()))?;
+        .load(&mut context, PathBuf::from(fixtures.middle_str()))?;
 
-    let b = unsafe { libb.get::<fn() -> i32>("b").expect("missing b") };
-    println!("b() = {}, user data = {:?}", b(), libb.user_data());
+    let middle_value = unsafe {
+        middle
+            .get::<extern "C" fn() -> i32>("middle_value")
+            .expect("missing middle_value")
+    };
+    println!(
+        "middle_value() = {}, user data = {:?}",
+        middle_value(),
+        middle.user_data()
+    );
     Ok(())
 }

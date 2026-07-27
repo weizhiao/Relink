@@ -302,13 +302,6 @@ mod tests {
         assert_eq!(first, TestId(0));
         assert_eq!(second, TestId(1));
         assert_eq!(arena.get(second), Some(&11));
-    }
-
-    #[test]
-    fn primary_map_supports_index_syntax() {
-        let mut arena = PrimaryMap::<TestId, u32>::new();
-        let first = arena.push(7);
-
         assert_eq!(arena[first], 7);
         arena[first] = 13;
         assert_eq!(arena[first], 13);

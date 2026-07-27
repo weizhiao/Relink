@@ -24,27 +24,34 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let fixtures = fixture_support::ensure_all();
-    let a = Relocator::new()
-        .run(LOADER.load_object(fixtures.a_object_str())?)
+    let base = Relocator::new()
+        .run(LOADER.load_object(fixtures.base_object_str())?)
         .scope([host_symbols()])
         .relocate()?;
-    let b = Relocator::new()
-        .run(LOADER.load_dylib(fixtures.libb_str())?)
-        .scope([ModuleHandle::from(host_symbols()), ModuleHandle::from(&a)])
-        .relocate()?;
-    let c = Relocator::new()
-        .run(LOADER.load_object(fixtures.c_object_str())?)
+    let middle = Relocator::new()
+        .run(LOADER.load_dylib(fixtures.middle_str())?)
         .scope([
             ModuleHandle::from(host_symbols()),
-            ModuleHandle::from(&a),
-            ModuleHandle::from(&b),
+            ModuleHandle::from(&base),
         ])
         .relocate()?;
-    let f = unsafe { a.get::<extern "C" fn() -> i32>("a").unwrap() };
+    let leaf = Relocator::new()
+        .run(LOADER.load_object(fixtures.leaf_object_str())?)
+        .scope([
+            ModuleHandle::from(host_symbols()),
+            ModuleHandle::from(&base),
+            ModuleHandle::from(&middle),
+        ])
+        .relocate()?;
+    let f = unsafe { base.get::<extern "C" fn() -> i32>("base_value").unwrap() };
     assert!(f() == 1);
-    let f = unsafe { b.get::<extern "C" fn() -> i32>("b").unwrap() };
+    let f = unsafe {
+        middle
+            .get::<extern "C" fn() -> i32>("middle_value")
+            .unwrap()
+    };
     assert!(f() == 2);
-    let f = unsafe { c.get::<extern "C" fn() -> i32>("c").unwrap() };
+    let f = unsafe { leaf.get::<extern "C" fn() -> i32>("leaf_value").unwrap() };
     assert!(f() == 3);
     Ok(())
 }

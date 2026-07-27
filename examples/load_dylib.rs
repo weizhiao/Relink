@@ -27,25 +27,29 @@ fn main() -> Result<()> {
 
     let fixtures = fixture_support::ensure_all();
     let host = host_symbols();
-    let liba = RELOCATOR
-        .run(LOADER.load_dylib(fixtures.liba_str())?)
+    let base = RELOCATOR
+        .run(LOADER.load_dylib(fixtures.base_str())?)
         .scope([host.clone()])
         .relocate()?;
-    let libb = RELOCATOR
-        .run(LOADER.load_dylib(fixtures.libb_str())?)
+    let middle = RELOCATOR
+        .run(LOADER.load_dylib(fixtures.middle_str())?)
         .scope([host.clone()])
-        .extend_scope([&liba])
+        .extend_scope([&base])
         .relocate()?;
-    let libc = RELOCATOR
-        .run(LOADER.load_dylib(fixtures.libc_str())?)
+    let leaf = RELOCATOR
+        .run(LOADER.load_dylib(fixtures.leaf_str())?)
         .scope([host])
-        .extend_scope([&liba, &libb])
+        .extend_scope([&base, &middle])
         .relocate()?;
-    let f = unsafe { liba.get::<fn() -> i32>("a").unwrap() };
+    let f = unsafe { base.get::<extern "C" fn() -> i32>("base_value").unwrap() };
     assert!(f() == 1);
-    let f = unsafe { libb.get::<fn() -> i32>("b").unwrap() };
+    let f = unsafe {
+        middle
+            .get::<extern "C" fn() -> i32>("middle_value")
+            .unwrap()
+    };
     assert!(f() == 2);
-    let f = unsafe { libc.get::<fn() -> i32>("c").unwrap() };
+    let f = unsafe { leaf.get::<extern "C" fn() -> i32>("leaf_value").unwrap() };
     assert!(f() == 3);
     Ok(())
 }

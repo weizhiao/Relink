@@ -125,8 +125,8 @@ pub enum ModuleCapability {
     /// The module exposes section metadata/data, but not enough retained
     /// relocation inputs to support section reordering repair.
     SectionData,
-    /// The module exposes enough retained relocation inputs for section-level
-    /// reordering and repair.
+    /// The module and target architecture support section-level reordering
+    /// and retained-relocation repair.
     SectionReorderable,
 }
 
@@ -553,7 +553,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         let capability = section_table
             .as_ref()
             .map_or(ModuleCapability::Opaque, |table| {
-                classify_module_capability(&table.sections)
+                classify_module_capability::<Arch>(&table.sections)
             });
 
         Ok(Self {
@@ -840,7 +840,13 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
     }
 }
 
-fn classify_module_capability<L: ElfLayout>(sections: &[ElfShdr<L>]) -> ModuleCapability {
+fn classify_module_capability<Arch: RelocationArch>(
+    sections: &[ElfShdr<Arch::Layout>],
+) -> ModuleCapability {
+    if !Arch::SUPPORTS_SECTION_REORDER {
+        return ModuleCapability::SectionData;
+    }
+
     for section in sections {
         if !matches!(
             section.section_type(),

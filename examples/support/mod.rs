@@ -10,58 +10,58 @@ use std::{
 
 use elf_loader::linker::SearchPathResolver;
 
-const RUST_FIXTURES: [(&str, &str); 3] = [("liba", "a"), ("libb", "b"), ("libc", "c")];
+const RUST_FIXTURES: [&str; 3] = ["base", "middle", "leaf"];
 static FIXTURE_BUILD_LOCK: Mutex<()> = Mutex::new(());
 
 pub(crate) struct FixturePaths {
-    pub(crate) liba: PathBuf,
-    pub(crate) libb: PathBuf,
-    pub(crate) libc: PathBuf,
-    pub(crate) a_object: PathBuf,
-    pub(crate) b_object: PathBuf,
-    pub(crate) c_object: PathBuf,
-    pub(crate) exec_a: PathBuf,
+    pub(crate) base: PathBuf,
+    pub(crate) middle: PathBuf,
+    pub(crate) leaf: PathBuf,
+    pub(crate) base_object: PathBuf,
+    pub(crate) middle_object: PathBuf,
+    pub(crate) leaf_object: PathBuf,
+    pub(crate) native_exec: PathBuf,
 }
 
 impl FixturePaths {
     fn new(rust_target_dir: PathBuf, exec_target_dir: PathBuf) -> Self {
         Self {
-            liba: rust_target_dir.join("liba.so"),
-            libb: rust_target_dir.join("libb.so"),
-            libc: rust_target_dir.join("libc.so"),
-            a_object: rust_target_dir.join("a.o"),
-            b_object: rust_target_dir.join("b.o"),
-            c_object: rust_target_dir.join("c.o"),
-            exec_a: exec_target_dir.join("exec_a"),
+            base: rust_target_dir.join("libbase.so"),
+            middle: rust_target_dir.join("libmiddle.so"),
+            leaf: rust_target_dir.join("libleaf.so"),
+            base_object: rust_target_dir.join("base.o"),
+            middle_object: rust_target_dir.join("middle.o"),
+            leaf_object: rust_target_dir.join("leaf.o"),
+            native_exec: exec_target_dir.join("native_exec"),
         }
     }
 
-    pub(crate) fn liba_str(&self) -> &str {
-        self.liba
+    pub(crate) fn base_str(&self) -> &str {
+        self.base
             .to_str()
             .expect("fixture path must be valid UTF-8")
     }
 
-    pub(crate) fn libb_str(&self) -> &str {
-        self.libb
+    pub(crate) fn middle_str(&self) -> &str {
+        self.middle
             .to_str()
             .expect("fixture path must be valid UTF-8")
     }
 
-    pub(crate) fn libc_str(&self) -> &str {
-        self.libc
+    pub(crate) fn leaf_str(&self) -> &str {
+        self.leaf
             .to_str()
             .expect("fixture path must be valid UTF-8")
     }
 
-    pub(crate) fn a_object_str(&self) -> &str {
-        self.a_object
+    pub(crate) fn base_object_str(&self) -> &str {
+        self.base_object
             .to_str()
             .expect("fixture path must be valid UTF-8")
     }
 
-    pub(crate) fn c_object_str(&self) -> &str {
-        self.c_object
+    pub(crate) fn leaf_object_str(&self) -> &str {
+        self.leaf_object
             .to_str()
             .expect("fixture path must be valid UTF-8")
     }
@@ -72,9 +72,9 @@ pub(crate) fn ensure_all() -> FixturePaths {
     FixturePaths::new(rust_target_dir(), exec_target_dir())
 }
 
-pub(crate) fn ensure_exec_a() -> PathBuf {
-    ensure_scope(FixtureScope::ExecA);
-    exec_target_dir().join("exec_a")
+pub(crate) fn ensure_native_exec() -> PathBuf {
+    ensure_scope(FixtureScope::NativeExec);
+    exec_target_dir().join("native_exec")
 }
 
 pub(crate) fn search_path_resolver<K>() -> SearchPathResolver<K> {
@@ -92,7 +92,7 @@ pub(crate) fn search_path_resolver<K>() -> SearchPathResolver<K> {
 
 enum FixtureScope {
     All,
-    ExecA,
+    NativeExec,
 }
 
 fn ensure_scope(scope: FixtureScope) {
@@ -115,7 +115,7 @@ fn ensure_scope(scope: FixtureScope) {
             build_rust_fixtures(&rust_target_dir);
             build_exec_fixture(&exec_target_dir);
         }
-        FixtureScope::ExecA => build_exec_fixture(&exec_target_dir),
+        FixtureScope::NativeExec => build_exec_fixture(&exec_target_dir),
     }
 }
 
@@ -123,10 +123,10 @@ fn build_rust_fixtures(target_dir: &Path) {
     let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
     let rust_target = rust_fixture_target();
 
-    for (filename, crate_name) in RUST_FIXTURES {
-        let source = fixture_dir().join(format!("{filename}.rs"));
-        let dylib = target_dir.join(format!("lib{crate_name}.so"));
-        let dylib_dep = rust_fixture_dylib_dependency(crate_name);
+    for name in RUST_FIXTURES {
+        let source = fixture_dir().join("deps").join(format!("{name}.rs"));
+        let dylib = target_dir.join(format!("lib{name}.so"));
+        let dylib_dep = rust_fixture_dylib_dependency(name);
         let needs_dylib_rebuild = needs_rebuild(&dylib, [&source])
             || dylib_dep.is_some_and(|dep| !dylib_mentions_needed(&dylib, dep))
             || !dylib_mentions_origin_runpath(&dylib);
@@ -135,7 +135,7 @@ fn build_rust_fixtures(target_dir: &Path) {
             cmd.arg(&source)
                 .arg("--crate-type=cdylib")
                 .arg("--crate-name")
-                .arg(crate_name)
+                .arg(name)
                 .arg("-O")
                 .arg("-C")
                 .arg("panic=abort")
@@ -158,10 +158,10 @@ fn build_rust_fixtures(target_dir: &Path) {
                     .arg("-l")
                     .arg(format!("dylib={dep}"));
             }
-            run(&mut cmd, &format!("compile {filename}.so"));
+            run(&mut cmd, &format!("compile {name}.so"));
         }
 
-        let object = target_dir.join(format!("{crate_name}.o"));
+        let object = target_dir.join(format!("{name}.o"));
         if needs_rebuild(&object, [&source]) {
             let mut cmd = Command::new(&rustc);
             cmd.arg(&source)
@@ -175,15 +175,15 @@ fn build_rust_fixtures(target_dir: &Path) {
             if let Some(target) = rust_target.as_deref() {
                 cmd.arg("--target").arg(target);
             }
-            run(&mut cmd, &format!("compile {filename}.o"));
+            run(&mut cmd, &format!("compile {name}.o"));
         }
     }
 }
 
-fn rust_fixture_dylib_dependency(crate_name: &str) -> Option<&'static str> {
-    match crate_name {
-        "b" => Some("a"),
-        "c" => Some("b"),
+fn rust_fixture_dylib_dependency(name: &str) -> Option<&'static str> {
+    match name {
+        "middle" => Some("base"),
+        "leaf" => Some("middle"),
         _ => None,
     }
 }
@@ -210,8 +210,8 @@ fn dylib_mentions_origin_runpath(dylib: &Path) -> bool {
 }
 
 fn build_exec_fixture(target_dir: &Path) {
-    let source = fixture_dir().join("exec_a.c");
-    let output = target_dir.join("exec_a");
+    let source = fixture_dir().join("native_exec.c");
+    let output = target_dir.join("native_exec");
     if !needs_rebuild(&output, [&source]) {
         return;
     }
@@ -224,7 +224,7 @@ fn build_exec_fixture(target_dir: &Path) {
         .arg("-o")
         .arg(&output);
 
-    run(&mut cmd, "compile exec_a");
+    run(&mut cmd, "compile native_exec");
 }
 
 fn run(cmd: &mut Command, step: &str) {

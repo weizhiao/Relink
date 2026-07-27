@@ -28,7 +28,6 @@ members = [
 	"crates/windows-elf-loader",
 	"crates/mini-loader",
 	"tools/gen-elf",
-	"tests/riscv64",
 ]
 exclude = ["examples/xtensa-qemu"]
 
@@ -110,6 +109,31 @@ object = { workspace = true, features = ["write"] }
 [[bench]]
 name = "benchmark"
 harness = false
+
+[[test]]
+name = "linker"
+path = "tests/linker/main.rs"
+
+[[test]]
+name = "observer"
+path = "tests/observer/main.rs"
+
+[[test]]
+name = "loader"
+path = "tests/loader/main.rs"
+
+[[test]]
+name = "relocator"
+path = "tests/relocator/main.rs"
+
+[[test]]
+name = "tls"
+path = "tests/tls/main.rs"
+
+[[test]]
+name = "lazy"
+path = "tests/lazy/main.rs"
+required-features = ["lazy-binding"]
 
 [[example]]
 name = "load_object"
