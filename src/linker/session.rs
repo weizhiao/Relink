@@ -1,6 +1,6 @@
 use super::{
     context::LinkContext,
-    storage::{CommittedStorage, KeySlot, ModuleId},
+    storage::{CommittedStorage, KeySlot, ModuleId, ModuleSlot},
 };
 use crate::{
     Result,
@@ -163,6 +163,7 @@ pub(crate) struct LoadSession<
 
 pub(crate) struct SessionCommit {
     pub(crate) ids: Box<[ModuleId]>,
+    pub(crate) init_order: Box<[ModuleSlot]>,
 }
 
 impl<D: 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
@@ -272,12 +273,14 @@ where
     pub(crate) fn init_order(&self) -> Vec<LoadedCore<D, Arch, R, Tls>> {
         self.init_order
             .iter()
-            .filter_map(|id| {
+            .map(|id| {
                 self.ready_to_commit
-                    .get(id)?
+                    .get(id)
+                    .expect("initialization order must refer to a ready module")
                     .module
                     .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
                     .cloned()
+                    .expect("initialization order must contain loaded dynamic modules")
             })
             .collect()
     }
@@ -372,7 +375,7 @@ where
         let Self {
             resolve,
             ready_to_commit,
-            init_order: _,
+            init_order,
         } = self;
         let mut ready = ready_to_commit;
         let mut committed_ids = Vec::with_capacity(ready.len());
@@ -390,7 +393,7 @@ where
                 direct_deps,
             } = entry;
             let direct_deps = committed.resolve_dep_edges(direct_deps)?;
-            committed_ids.push(committed.insert(id, module, direct_deps, Meta::default()));
+            committed_ids.push(committed.insert(id, module, direct_deps, Meta::default(), 0));
         }
         assert!(
             ready.is_empty(),
@@ -398,6 +401,15 @@ where
         );
         Ok(SessionCommit {
             ids: committed_ids.into_boxed_slice(),
+            init_order: init_order
+                .into_iter()
+                .map(|slot| {
+                    committed
+                        .module_for_key(slot)
+                        .expect("initialized module must be committed")
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
         })
     }
 }

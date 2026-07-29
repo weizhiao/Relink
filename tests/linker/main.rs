@@ -65,15 +65,24 @@ struct StaticVisibleModule {
 struct InitRecorder {
     calls: Arc<Mutex<Vec<String>>>,
     fail: bool,
+    record_fini: bool,
 }
 
 impl InitRecorder {
     fn new(calls: Arc<Mutex<Vec<String>>>) -> Self {
-        Self { calls, fail: false }
+        Self {
+            calls,
+            fail: false,
+            record_fini: false,
+        }
     }
 
     fn failing(calls: Arc<Mutex<Vec<String>>>) -> Self {
-        Self { calls, fail: true }
+        Self {
+            calls,
+            fail: true,
+            record_fini: true,
+        }
     }
 }
 
@@ -95,6 +104,14 @@ impl RelocationObserver for InitRecorder {
             }
             Ok(())
         });
+        if self.record_fini {
+            let calls = Arc::clone(&self.calls);
+            event.lifecycle_mut().set_fini_hook(move |event| {
+                calls.lock().unwrap().push(format!("fini:{}", event.name()));
+                event.lifecycle_mut().clear();
+                Ok(())
+            });
+        }
         Ok(())
     }
 }

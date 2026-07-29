@@ -16,7 +16,9 @@ use core::{fmt, marker::PhantomData, mem::MaybeUninit, ops::Deref, ptr};
 /// Result of a fully initialized linker load operation.
 ///
 /// `modules` contains the newly loaded modules' [`ModuleId`](crate::linker::ModuleId)
-/// values in load order.
+/// values in load order. Every successful load acquires the root module once;
+/// call [`LinkContext::release`](crate::LinkContext::release) with [`Self::root_id`]
+/// when that direct use ends.
 pub struct LoadResult<
     D: 'static,
     Arch: RelocationArch = NativeArch,

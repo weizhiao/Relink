@@ -1,5 +1,5 @@
 use super::{
-    AfterDynamicLoadEvent, BeforeLoadEvent, DynamicRelocatedEvent, HandleResult, LinkerInitEvent,
+    AfterDynamicLoadEvent, BeforeLoadEvent, DynamicRelocatedEvent, HandleResult,
     LinkerRelocationEvent, RelocationEvent, SymbolBindingEvent,
 };
 #[cfg(feature = "object")]
@@ -201,12 +201,6 @@ pub trait LinkerObserver<
     fn on_relocation(&mut self, _event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
         Ok(())
     }
-
-    /// Adjusts the constructor plan after relocation and before commit.
-    #[inline]
-    fn on_init(&mut self, _event: &mut LinkerInitEvent<'_, K, D, Arch, R, Tls>) -> Result<()> {
-        Ok(())
-    }
 }
 
 impl<D: 'static, Arch: RelocationArch> LoadObserver<D, Arch> for () {}
@@ -347,11 +341,6 @@ where
     fn on_relocation(&mut self, event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
         (**self).on_relocation(event)
     }
-
-    #[inline]
-    fn on_init(&mut self, event: &mut LinkerInitEvent<'_, K, D, Arch, R, Tls>) -> Result<()> {
-        (**self).on_init(event)
-    }
 }
 
 impl<D, Arch, O> LoadObserver<D, Arch> for Box<O>
@@ -479,10 +468,5 @@ where
     #[inline]
     fn on_relocation(&mut self, event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
         (**self).on_relocation(event)
-    }
-
-    #[inline]
-    fn on_init(&mut self, event: &mut LinkerInitEvent<'_, K, D, Arch, R, Tls>) -> Result<()> {
-        (**self).on_init(event)
     }
 }

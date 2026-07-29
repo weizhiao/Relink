@@ -14,9 +14,7 @@ use crate::{
     image::{LoadedCore, Module, ModuleScope, RawDynamic},
     lazy::LazyBinder,
     memory::{HostRegion, RegionAccess},
-    observer::{
-        LinkerInitEvent, LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver,
-    },
+    observer::{LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver},
     os::Mmap,
     relocation::{RelocationArch, RelocationValueProvider, SymbolRegistry},
     runtime::CodeExecutor,
@@ -24,7 +22,7 @@ use crate::{
     tls::TlsResolver,
 };
 use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
-use core::{borrow::Borrow, fmt, marker::PhantomData, mem, ops::Deref};
+use core::{borrow::Borrow, fmt, mem, ops::Deref};
 
 /// Per-run linker state.
 ///
@@ -166,7 +164,7 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         key: K,
-    ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -181,7 +179,7 @@ where
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         key: K,
         owner: SearchOwner<'_>,
-    ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -195,7 +193,7 @@ where
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         key: K,
         owner: Option<SearchOwner<'_>>,
-    ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -251,7 +249,7 @@ where
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         key: K,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
-    ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -284,7 +282,7 @@ where
         root: KeySlot,
         mut session: LoadSession<D, Arch, M::Region, Tls>,
         loader: &mut LoaderRun<'_, &mut Obs, D, Tls, Arch, M, Exec>,
-    ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -302,8 +300,8 @@ where
     /// Relocates a prepared module group without borrowing its link context.
     pub fn relocate(
         &mut self,
-        prepared: PreparedLoad<K, D, Arch, M::Region, Tls>,
-    ) -> Result<RelocatedLoad<K, D, Arch, M::Region, Tls>> {
+        prepared: PreparedLoad<D, Arch, M::Region, Tls>,
+    ) -> Result<RelocatedLoad<D, Arch, M::Region, Tls>> {
         let PreparedLoad {
             context,
             root: root_slot,
@@ -311,7 +309,6 @@ where
             mut session,
             scope,
             symbols,
-            root_key,
             mapped_runtime,
         } = prepared;
 
@@ -328,17 +325,14 @@ where
             mapped_runtime.protect()?;
         }
 
-        let mut init_order = session.init_order();
-        self.observer
-            .on_init(&mut LinkerInitEvent::new(&root_key, &root, &mut init_order))?;
+        let init_order = session.init_order().into_boxed_slice();
 
         Ok(RelocatedLoad {
             context,
             root: root_slot,
             root_module: root,
             session,
-            init_order: init_order.into_boxed_slice(),
-            marker: PhantomData,
+            init_order,
         })
     }
 
@@ -463,7 +457,6 @@ where
 /// A resolved and mapped load transaction that has not executed relocation.
 #[must_use = "a prepared load must be relocated or dropped"]
 pub struct PreparedLoad<
-    K,
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
@@ -475,21 +468,18 @@ pub struct PreparedLoad<
     session: LoadSession<D, Arch, R, Tls>,
     scope: ModuleScope<Arch, Tls>,
     symbols: Arc<SymbolRegistry<Arch, Tls>>,
-    root_key: K,
     mapped_runtime: Option<MappedRuntimeMemory<R>>,
 }
 
-impl<K, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    PreparedLoad<K, D, Arch, R, Tls>
-where
-    K: Clone + Ord,
+impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    PreparedLoad<D, Arch, R, Tls>
 {
-    fn visible<Meta, Q>(
+    fn visible<K, Meta, Q>(
         context: &LinkContext<K, D, Meta, Arch, Tls>,
         key: &Q,
     ) -> Result<Option<Self>>
     where
-        K: Borrow<Q>,
+        K: Clone + Ord + Borrow<Q>,
         Q: Ord + ?Sized,
     {
         let Some((root, _)): Option<(KeySlot, LoadedCore<D, Arch, R, Tls>)> =
@@ -500,19 +490,21 @@ where
         Self::new(root, LoadSession::new(), None, context).map(Some)
     }
 
-    pub(in crate::linker) fn new<Meta>(
+    pub(in crate::linker) fn new<K, Meta>(
         root: KeySlot,
         session: LoadSession<D, Arch, R, Tls>,
         mapped_runtime: Option<MappedRuntimeMemory<R>>,
         context: &LinkContext<K, D, Meta, Arch, Tls>,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        K: Ord,
+    {
         let existing_root = context
             .committed
             .get_by_key(root)
             .and_then(|module| module.downcast_ref::<LoadedCore<D, Arch, R, Tls>>())
             .cloned();
         let scope = session.build_scope(context)?;
-        let root_key = context.committed.key(root).clone();
         Ok(Self {
             context: context.context_id(),
             root,
@@ -520,7 +512,6 @@ where
             session,
             scope,
             symbols: Arc::clone(&context.symbols),
-            root_key,
             mapped_runtime,
         })
     }
@@ -529,7 +520,6 @@ where
 /// A relocated load transaction ready to publish into its original context.
 #[must_use = "a relocated load must be published or dropped"]
 pub struct RelocatedLoad<
-    K,
     D: 'static,
     Arch: RelocationArch,
     R: RegionAccess,
@@ -540,12 +530,10 @@ pub struct RelocatedLoad<
     root_module: LoadedCore<D, Arch, R, Tls>,
     session: LoadSession<D, Arch, R, Tls>,
     init_order: Box<[LoadedCore<D, Arch, R, Tls>]>,
-    marker: PhantomData<fn() -> K>,
 }
 
-impl<K, D: 'static, Arch, R, Tls> RelocatedLoad<K, D, Arch, R, Tls>
+impl<D: 'static, Arch, R, Tls> RelocatedLoad<D, Arch, R, Tls>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
@@ -554,11 +542,12 @@ where
     ///
     /// Published modules are visible to recursive loads but remain
     /// transactional until their initializers complete.
-    pub fn publish<Meta>(
+    pub fn publish<K, Meta>(
         self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
     ) -> Result<PublishedLoad<D, Arch, R, Tls>>
     where
+        K: Clone + Ord,
         Meta: Default,
     {
         if context.context_id() != self.context {
@@ -575,6 +564,10 @@ where
             .module_for_key(self.root)
             .map(|slot| context.committed.make_module_id(slot))
             .expect("published load root must have a module id");
+        context
+            .committed
+            .record_init_order(published.init_order.iter().copied());
+        context.acquire(root_id)?;
         Ok(PublishedLoad::new(
             root_id,
             self.root_module,
@@ -664,7 +657,7 @@ where
         Ok(LoadResult::new(self.root_id, self.root, self.modules))
     }
 
-    /// Removes this published module group from its link context.
+    /// Releases this publication and finalizes modules that become unreachable.
     pub fn rollback<K, Meta>(self, context: &mut LinkContext<K, D, Meta, Arch, Tls>) -> Result<()>
     where
         K: Clone + Ord,
@@ -677,12 +670,8 @@ where
             })
             .into());
         }
-        for id in self.modules.into_vec().into_iter().rev() {
-            context
-                .remove(id)
-                .expect("published load must remain removable from its publish context");
-        }
-        Ok(())
+
+        context.release(self.root_id)?.finalize()
     }
 }
 
@@ -760,9 +749,9 @@ where
 
 #[inline]
 pub(in crate::linker) fn visible_loaded<K, D, Meta, Arch, R, Q, Tls>(
-    context: &LinkContext<K, D, Meta, Arch, Tls>,
+    context: &mut LinkContext<K, D, Meta, Arch, Tls>,
     key: &Q,
-) -> Option<LoadResult<D, Arch, R, Tls>>
+) -> Result<Option<LoadResult<D, Arch, R, Tls>>>
 where
     K: Clone + Ord + Borrow<Q>,
     Q: Ord + ?Sized,
@@ -771,17 +760,21 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    let (key_slot, loaded) = visible_root(context, key)?;
+    let Some((key_slot, loaded)) = visible_root(context, key) else {
+        return Ok(None);
+    };
     let root_id = context
         .committed
         .module_for_key(key_slot)
-        .map(|slot| context.committed.make_module_id(slot))?;
+        .map(|slot| context.committed.make_module_id(slot))
+        .expect("visible root must have a committed module id");
+    context.acquire(root_id)?;
 
-    Some(LoadResult::new(
+    Ok(Some(LoadResult::new(
         root_id,
         loaded,
         Vec::new().into_boxed_slice(),
-    ))
+    )))
 }
 
 #[inline]

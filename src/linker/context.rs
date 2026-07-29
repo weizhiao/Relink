@@ -1,6 +1,7 @@
 use super::storage::{
     CommittedStorage, ContextId, DepEdge, EntryState, KeyId, ModuleId, ModuleSlot,
 };
+use super::unload::{UnloadGroup, UnloadedModule};
 use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
@@ -166,6 +167,7 @@ where
         module.handle().clone(),
         direct_deps,
         module.meta().clone(),
+        module.acquire_count(),
     );
     Ok(())
 }
@@ -329,7 +331,10 @@ where
         Ok(require_module(id, self.committed.module_mut(slot))?.meta_mut())
     }
 
-    /// Inserts an already retained module with default metadata.
+    /// Inserts a retained module with default metadata.
+    ///
+    /// New entries start with one direct acquisition. Replacing an existing
+    /// entry preserves its acquisition count.
     pub fn insert<R>(&mut self, key: K, module: R, direct_deps: Box<[K]>) -> Result<ModuleId>
     where
         M: Default,
@@ -338,7 +343,10 @@ where
         self.insert_with_meta(key, module, direct_deps, M::default())
     }
 
-    /// Inserts or replaces an already retained module with explicit metadata.
+    /// Inserts a retained module with explicit metadata.
+    ///
+    /// New entries start with one direct acquisition. Replacing an existing
+    /// entry preserves its acquisition count.
     pub fn insert_with_meta<R>(
         &mut self,
         key: K,
@@ -359,7 +367,7 @@ where
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let direct_deps = self.committed.resolve_dep_edges(direct_deps)?;
-        Ok(self.committed.insert(slot, module, direct_deps, meta))
+        Ok(self.committed.insert(slot, module, direct_deps, meta, 1))
     }
 
     /// Adds or replaces an alternate key for an already committed module.
@@ -381,19 +389,83 @@ where
             .map(|slot| self.committed.make_module_id(slot)))
     }
 
-    /// Removes a committed module and returns its handle, dependencies, and metadata.
-    #[inline]
-    pub fn remove(&mut self, id: ModuleId) -> Result<(ModuleHandle<Arch, Tls>, DirectDeps, M)> {
+    /// Adds one direct acquisition of a committed module.
+    ///
+    /// Acquisitions are roots for dependency reachability. Dependency edges do
+    /// not acquire their targets.
+    pub fn acquire(&mut self, id: ModuleId) -> Result<()> {
         let slot = self.committed.module_slot(id)?;
-        require_module(id, self.committed.module(slot))?
-            .handle()
-            .finalize()?;
-        let (module, direct_deps, meta) = require_module(id, self.committed.remove(slot))?;
-        Ok((
-            module,
-            DirectDeps::new(self.committed.context(), direct_deps),
-            meta,
-        ))
+        require_module(id, self.committed.module_mut(slot))?.acquire();
+        Ok(())
+    }
+
+    /// Releases one direct acquisition and detaches all modules that become unreachable.
+    ///
+    /// The returned collection keeps the entire unload group alive. Call
+    /// [`UnloadGroup::finalize`] after releasing any external registry lock.
+    pub fn release(&mut self, id: ModuleId) -> Result<UnloadGroup<M, Arch, Tls>> {
+        let slot = self.committed.module_slot(id)?;
+        let Some(refs) = require_module(id, self.committed.module_mut(slot))?.release() else {
+            return Err(LinkerError::context(LinkContextError::ModuleNotAcquired { id }).into());
+        };
+        if refs != 0 {
+            return Ok(UnloadGroup::new(Vec::new()));
+        }
+
+        let mut reachable = BTreeSet::new();
+        let mut pending = self
+            .committed
+            .load_order()
+            .filter(|slot| {
+                self.committed
+                    .module(*slot)
+                    .present()
+                    .is_some_and(|module| module.acquire_count() != 0)
+            })
+            .collect::<Vec<_>>();
+
+        while let Some(slot) = pending.pop() {
+            if !reachable.insert(slot) {
+                continue;
+            }
+            let module_id = self.committed.make_module_id(slot);
+            let module = require_module(module_id, self.committed.module(slot))?;
+            pending.extend(module.direct_deps().iter().map(|edge| edge.module()));
+        }
+
+        let mut unreachable = self
+            .committed
+            .load_order()
+            .filter(|slot| !reachable.contains(slot))
+            .collect::<BTreeSet<_>>();
+        let mut unload_order = self
+            .committed
+            .init_order()
+            .rev()
+            .filter(|slot| unreachable.remove(slot))
+            .collect::<Vec<_>>();
+        unload_order.extend(
+            self.committed
+                .load_order()
+                .rev()
+                .filter(|slot| unreachable.remove(slot)),
+        );
+        debug_assert!(unreachable.is_empty());
+
+        let context = self.committed.context();
+        let mut modules = Vec::with_capacity(unload_order.len());
+        for slot in unload_order {
+            let module_id = self.committed.make_module_id(slot);
+            let (module, direct_deps, meta) =
+                require_module(module_id, self.committed.remove(slot))?;
+            modules.push(UnloadedModule::new(
+                module_id,
+                module,
+                DirectDeps::new(context, direct_deps),
+                meta,
+            ));
+        }
+        Ok(UnloadGroup::new(modules))
     }
 
     /// Returns the breadth-first dependency scope rooted at `root`.
@@ -439,6 +511,23 @@ where
         for slot in other.committed.load_order() {
             copy_committed_module(self, other, slot, &mut copied)?;
         }
+        let init_order = other
+            .committed
+            .init_order()
+            .map(|slot| {
+                let module = other
+                    .committed
+                    .module(slot)
+                    .present()
+                    .expect("initialization order must refer to a committed module");
+                let key = other.committed.key(module.entry_key());
+                self.committed
+                    .key_slot_for(key)
+                    .and_then(|slot| self.committed.module_for_key(slot))
+                    .expect("copied initialization entry must resolve in target context")
+            })
+            .collect::<Vec<_>>();
+        self.committed.record_init_order(init_order);
 
         for (alias_slot, target_slot) in other.committed.aliases() {
             let alias = other.committed.key(alias_slot);
@@ -475,14 +564,57 @@ where
 mod tests {
     use super::LinkContext;
     use crate::{
-        Error,
+        Error, Result,
         arch::NativeArch,
-        image::{ModuleScopeBuilder, SyntheticModule},
+        image::{Module, ModuleHandle, ModuleScopeBuilder, SymbolExports, SyntheticModule},
         linker::{KeyId, ModuleId},
+        memory::ImageMemory,
+        relocation::RelocationArch,
         runtime::DomainId,
         sync::Arc,
     };
     use alloc::{boxed::Box, string::String, vec::Vec};
+    use spin::Mutex;
+
+    struct FinalizeModule {
+        name: &'static str,
+        module: SyntheticModule<NativeArch>,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl Module for FinalizeModule {
+        fn name(&self) -> &str {
+            Module::<NativeArch>::name(&self.module)
+        }
+
+        fn exports(&self) -> &dyn SymbolExports<<NativeArch as RelocationArch>::Layout> {
+            Module::<NativeArch>::exports(&self.module)
+        }
+
+        fn memory(&self) -> &dyn ImageMemory {
+            Module::<NativeArch>::memory(&self.module)
+        }
+
+        fn domain_id(&self) -> DomainId {
+            Module::<NativeArch>::domain_id(&self.module)
+        }
+
+        fn finalize(&self) -> Result<()> {
+            self.calls.lock().push(self.name);
+            Ok(())
+        }
+    }
+
+    fn finalize_module(
+        name: &'static str,
+        calls: &Arc<Mutex<Vec<&'static str>>>,
+    ) -> ModuleHandle<NativeArch> {
+        ModuleHandle::new(FinalizeModule {
+            name,
+            module: SyntheticModule::empty(name),
+            calls: Arc::clone(calls),
+        })
+    }
 
     fn domain_module(name: &'static str, domain: DomainId) -> SyntheticModule<NativeArch> {
         SyntheticModule::empty(name).with_domain(domain)
@@ -580,20 +712,109 @@ mod tests {
         let snapshot = context.snapshot();
         assert_eq!(context.context_id(), snapshot.context_id());
         assert!(Arc::ptr_eq(&context.symbols, &snapshot.symbols));
-        let (_, removed_deps, _) = context.remove(root).unwrap();
+        let unloaded = context.release(root).unwrap();
+        let removed_deps = unloaded.modules()[0]
+            .direct_deps()
+            .iter()
+            .collect::<Vec<_>>();
 
         assert!(!context.contains_module(root).unwrap());
         assert!(context.get(root).is_err());
-        assert_eq!(
-            removed_deps.into_iter().collect::<Vec<_>>(),
-            [(dep, dep_module)]
-        );
+        assert_eq!(removed_deps, [(dep, dep_module)]);
         assert!(snapshot.contains_module(root).unwrap());
         assert_eq!(snapshot.module_id(dep).unwrap(), Some(dep_module));
         assert_eq!(snapshot.module_key(root).unwrap(), &"root");
         assert_eq!(snapshot.key(dep).unwrap(), &"dep");
         assert_eq!(direct_deps(&snapshot, root), [(dep, dep_module)]);
         assert_eq!(snapshot.meta(root).unwrap(), &7);
+    }
+
+    #[test]
+    fn release_detaches_before_finalize() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+        let id = context
+            .insert("removed", finalize_module("removed", &calls), Box::new([]))
+            .unwrap();
+
+        let unloaded = context.release(id).unwrap();
+        assert!(!context.contains_module(id).unwrap());
+        assert!(calls.lock().is_empty());
+
+        unloaded.finalize().unwrap();
+        assert_eq!(calls.lock().as_slice(), &["removed"]);
+    }
+
+    #[test]
+    fn releases_all_acquisitions() {
+        let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+        let id = context
+            .insert("root", SyntheticModule::empty("root"), Box::new([]))
+            .unwrap();
+        context.acquire(id).unwrap();
+
+        assert!(context.release(id).unwrap().is_empty());
+        assert!(context.contains_module(id).unwrap());
+
+        let unloaded = context.release(id).unwrap();
+        assert_eq!(unloaded.len(), 1);
+        assert!(!context.contains_module(id).unwrap());
+    }
+
+    #[test]
+    fn shared_dependencies_remain_reachable() {
+        let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+        let shared = context
+            .insert("shared", SyntheticModule::empty("shared"), Box::new([]))
+            .unwrap();
+        let first = context
+            .insert(
+                "first",
+                SyntheticModule::empty("first"),
+                Box::new(["shared"]),
+            )
+            .unwrap();
+        let second = context
+            .insert(
+                "second",
+                SyntheticModule::empty("second"),
+                Box::new(["shared"]),
+            )
+            .unwrap();
+
+        assert!(context.release(shared).unwrap().is_empty());
+        let unloaded = context.release(first).unwrap();
+        assert_eq!(unloaded.modules()[0].id(), first);
+        assert!(context.contains_module(shared).unwrap());
+
+        let unloaded = context.release(second).unwrap();
+        assert_eq!(
+            unloaded
+                .modules()
+                .iter()
+                .map(|entry| entry.module().name())
+                .collect::<Vec<_>>(),
+            ["second", "shared"]
+        );
+        assert!(context.is_empty());
+    }
+
+    #[test]
+    fn finalizes_dependents_before_dependencies() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+        let dep = context
+            .insert("dep", finalize_module("dep", &calls), Box::new([]))
+            .unwrap();
+        let root = context
+            .insert("root", finalize_module("root", &calls), Box::new(["dep"]))
+            .unwrap();
+
+        assert!(context.release(dep).unwrap().is_empty());
+        let unloaded = context.release(root).unwrap();
+        unloaded.finalize().unwrap();
+
+        assert_eq!(calls.lock().as_slice(), &["root", "dep"]);
     }
 
     #[test]
@@ -830,5 +1051,36 @@ mod tests {
                 .as_slice(),
             &[target_root, target_canonical]
         );
+    }
+
+    #[test]
+    fn extend_preserves_init_order() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut source = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+        let dep = source
+            .insert("dep", finalize_module("dep", &calls), Box::new([]))
+            .unwrap();
+        let root = source
+            .insert("root", finalize_module("root", &calls), Box::new(["dep"]))
+            .unwrap();
+        source.committed.record_init_order([
+            source.committed.module_slot(root).unwrap(),
+            source.committed.module_slot(dep).unwrap(),
+        ]);
+
+        let mut target = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+        target.extend(&source).unwrap();
+        let target_dep = target
+            .key_id(&"dep")
+            .and_then(|key| target.module_id(key).unwrap())
+            .unwrap();
+        let target_root = target
+            .key_id(&"root")
+            .and_then(|key| target.module_id(key).unwrap())
+            .unwrap();
+
+        assert!(target.release(target_dep).unwrap().is_empty());
+        target.release(target_root).unwrap().finalize().unwrap();
+        assert_eq!(calls.lock().as_slice(), &["dep", "root"]);
     }
 }

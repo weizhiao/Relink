@@ -57,7 +57,7 @@ where
         Meta: Default,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
     {
-        if let Some(result) = visible_loaded(context, key.borrow()) {
+        if let Some(result) = visible_loaded(context, key.borrow())? {
             return Ok(result);
         }
 
@@ -75,7 +75,7 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         key: &K,
-    ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,

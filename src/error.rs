@@ -868,6 +868,11 @@ pub enum LinkContextError {
         /// The module id that could not be resolved.
         id: ModuleId,
     },
+    /// A module was released without a matching direct acquisition.
+    ModuleNotAcquired {
+        /// The module id that had no acquisition to release.
+        id: ModuleId,
+    },
     /// A key id does not resolve to a committed module.
     KeyNotCommitted {
         /// The key id that did not resolve to a committed module.
@@ -892,6 +897,9 @@ impl Display for LinkContextError {
                 id, expected
             ),
             Self::ModuleNotCommitted { id } => write!(f, "module id {} is not committed", id),
+            Self::ModuleNotAcquired { id } => {
+                write!(f, "module id {} has no acquisition to release", id)
+            }
             Self::KeyNotCommitted { id } => write!(f, "key id {} is not committed", id),
         }
     }

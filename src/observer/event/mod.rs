@@ -8,7 +8,7 @@ mod relocation;
 #[cfg(feature = "object")]
 pub use crate::object::layout::{SectionGroup, SectionGroups, SectionLifetime};
 pub use lifecycle::{LifecycleEvent, LifecycleHandlers};
-pub use linker::{LinkerInitEvent, LinkerRelocationEvent};
+pub use linker::LinkerRelocationEvent;
 pub use load::{AfterDynamicLoadEvent, BeforeLoadEvent};
 #[cfg(feature = "object")]
 pub use object::{

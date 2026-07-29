@@ -7,7 +7,7 @@ pub use crate::relocation::HandleResult;
 pub(crate) use event::LifecycleRunner;
 pub use event::{
     AfterDynamicLoadEvent, BeforeLoadEvent, DynamicRelocatedEvent, LifecycleEvent,
-    LifecycleHandlers, LinkerInitEvent, LinkerRelocationEvent, RelocationEvent, SymbolBindingEvent,
+    LifecycleHandlers, LinkerRelocationEvent, RelocationEvent, SymbolBindingEvent,
 };
 #[cfg(feature = "object")]
 pub use event::{

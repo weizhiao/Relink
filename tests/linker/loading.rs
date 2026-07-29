@@ -283,6 +283,74 @@ fn existing_alias_skips_planning() {
 }
 
 #[test]
+fn repeated_loads_acquire_the_root() {
+    let linker = Linker::new().resolver(dependency_resolver("acquired_root.so", "acquired_dep.so"));
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+
+    let first = linker
+        .load(&mut context, "root")
+        .expect("first load should succeed");
+    let second = linker
+        .load(&mut context, "root")
+        .expect("existing root should be acquired");
+
+    assert_eq!(first.root_id(), second.root_id());
+    assert_eq!(first.modules().len(), 2);
+    assert!(second.modules().is_empty());
+    let dep = context
+        .key_id(&DEP_KEY)
+        .and_then(|key| context.module_id(key).unwrap())
+        .expect("dependency should be committed");
+    assert!(matches!(
+        context.release(dep),
+        Err(Error::Linker(LinkerError::Context { reason }))
+            if matches!(*reason, LinkContextError::ModuleNotAcquired { id } if id == dep)
+    ));
+    assert!(context.release(first.root_id()).unwrap().is_empty());
+    assert!(context.contains_key(&"root"));
+    assert!(context.contains_key(&DEP_KEY));
+
+    let unloaded = context.release(second.root_id()).unwrap();
+    assert_eq!(
+        unloaded
+            .modules()
+            .iter()
+            .map(|entry| entry.module().name())
+            .collect::<Vec<_>>(),
+        ["acquired_root.so", "acquired_dep.so"]
+    );
+    assert!(context.is_empty());
+}
+
+#[test]
+fn rollback_releases_existing_root() {
+    let linker = Linker::new().resolver(dependency_resolver("rollback_root.so", "rollback_dep.so"));
+    let mut run = linker.run();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let loaded = run
+        .load(&mut context, "root")
+        .expect("initial load should succeed");
+
+    let prepared = run
+        .prepare_load(&mut context, "root")
+        .expect("existing root should prepare");
+    let relocated = run
+        .relocate(prepared)
+        .expect("existing root should relocate");
+    relocated
+        .publish(&mut context)
+        .expect("existing root should publish")
+        .rollback(&mut context)
+        .expect("rollback should release the temporary acquisition");
+
+    let unloaded = context
+        .release(loaded.root_id())
+        .expect("initial acquisition should remain");
+    assert_eq!(unloaded.len(), 2);
+    assert!(context.is_empty());
+}
+
+#[test]
 fn relocates_dependencies_first() {
     let planned = Rc::new(RefCell::new(Vec::new()));
     let resolver = dependency_resolver("root.so", "dep.so");
@@ -439,5 +507,8 @@ fn failed_init_can_roll_back() {
     let error = failed.rollback(&mut context);
     assert!(error.to_string().contains("initializer failed"));
     assert!(!context.contains_key(&"root"));
-    assert_eq!(calls.lock().unwrap().as_slice(), &["failing_init.so"]);
+    assert_eq!(
+        calls.lock().unwrap().as_slice(),
+        &["failing_init.so", "fini:failing_init.so"]
+    );
 }

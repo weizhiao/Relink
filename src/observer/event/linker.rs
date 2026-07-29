@@ -1,11 +1,10 @@
 use crate::{
     arch::NativeArch,
-    image::{LoadedCore, ModuleScope, RawDynamic},
+    image::{ModuleScope, RawDynamic},
     memory::{HostRegion, RegionAccess},
     relocation::{BindingMode, RelocationArch},
     tls::TlsResolver,
 };
-use alloc::vec::Vec;
 
 /// Mutable event for one module's relocation policy.
 pub struct LinkerRelocationEvent<
@@ -68,59 +67,5 @@ where
         BindingMode,
     ) {
         (self.raw, self.scope, self.binding)
-    }
-}
-
-/// Mutable event for constructors scheduled by one linker transaction.
-pub struct LinkerInitEvent<
-    'event,
-    K,
-    D: 'static,
-    Arch: RelocationArch = NativeArch,
-    R: RegionAccess = HostRegion,
-    Tls: TlsResolver<Arch> = (),
-> {
-    root_key: &'event K,
-    root: &'event LoadedCore<D, Arch, R, Tls>,
-    modules: &'event mut Vec<LoadedCore<D, Arch, R, Tls>>,
-}
-
-impl<'event, K, D: 'static, Arch, R, Tls> LinkerInitEvent<'event, K, D, Arch, R, Tls>
-where
-    Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch>,
-{
-    #[inline]
-    pub(crate) fn new(
-        root_key: &'event K,
-        root: &'event LoadedCore<D, Arch, R, Tls>,
-        modules: &'event mut Vec<LoadedCore<D, Arch, R, Tls>>,
-    ) -> Self {
-        Self {
-            root_key,
-            root,
-            modules,
-        }
-    }
-
-    #[inline]
-    pub const fn root_key(&self) -> &'event K {
-        self.root_key
-    }
-
-    #[inline]
-    pub const fn root(&self) -> &'event LoadedCore<D, Arch, R, Tls> {
-        self.root
-    }
-
-    #[inline]
-    pub fn modules(&self) -> &[LoadedCore<D, Arch, R, Tls>] {
-        self.modules
-    }
-
-    #[inline]
-    pub fn modules_mut(&mut self) -> &mut Vec<LoadedCore<D, Arch, R, Tls>> {
-        self.modules
     }
 }

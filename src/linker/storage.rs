@@ -169,6 +169,11 @@ where
     pub(crate) fn meta(&self) -> &'a M {
         &self.entry.meta
     }
+
+    #[inline]
+    pub(crate) const fn acquire_count(&self) -> usize {
+        self.entry.acquire_count
+    }
 }
 
 pub(in crate::linker) struct CommittedModuleMut<'a, M, Arch, Tls>
@@ -184,6 +189,22 @@ where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
+    #[inline]
+    pub(crate) fn acquire(&mut self) {
+        self.entry.acquire_count = self
+            .entry
+            .acquire_count
+            .checked_add(1)
+            .expect("module acquisition count overflow");
+    }
+
+    #[inline]
+    pub(crate) fn release(&mut self) -> Option<usize> {
+        let count = self.entry.acquire_count.checked_sub(1)?;
+        self.entry.acquire_count = count;
+        Some(count)
+    }
+
     #[inline]
     pub(crate) fn meta_mut(self) -> &'a mut M {
         &mut self.entry.meta
@@ -204,6 +225,7 @@ pub(crate) struct CommittedStorage<
     key_modules: SecondaryMap<KeySlot, ModuleSlot>,
     entries: PrimaryMap<ModuleSlot, Option<StoredEntry<M, Arch, Tls>>>,
     load_order: Vec<ModuleSlot>,
+    init_order: Vec<ModuleSlot>,
     marker: core::marker::PhantomData<fn() -> D>,
 }
 
@@ -224,6 +246,7 @@ where
             key_modules: self.key_modules.clone(),
             entries: self.entries.clone(),
             load_order: self.load_order.clone(),
+            init_order: self.init_order.clone(),
             marker: core::marker::PhantomData,
         }
     }
@@ -244,6 +267,7 @@ where
             key_modules: SecondaryMap::new(),
             entries: PrimaryMap::new(),
             load_order: Vec::new(),
+            init_order: Vec::new(),
             marker: core::marker::PhantomData,
         }
     }
@@ -374,8 +398,16 @@ where
     }
 
     #[inline]
-    pub(crate) fn load_order(&self) -> impl Iterator<Item = ModuleSlot> + '_ {
+    pub(crate) fn load_order(&self) -> impl DoubleEndedIterator<Item = ModuleSlot> + '_ {
         self.load_order
+            .iter()
+            .copied()
+            .filter(|slot| self.contains_module(*slot))
+    }
+
+    #[inline]
+    pub(crate) fn init_order(&self) -> impl DoubleEndedIterator<Item = ModuleSlot> + '_ {
+        self.init_order
             .iter()
             .copied()
             .filter(|slot| self.contains_module(*slot))
@@ -440,6 +472,14 @@ where
         previous.filter(|slot| *slot != module_slot)
     }
 
+    pub(crate) fn record_init_order(&mut self, order: impl IntoIterator<Item = ModuleSlot>) {
+        for slot in order {
+            if !self.init_order.contains(&slot) {
+                self.init_order.push(slot);
+            }
+        }
+    }
+
     pub(crate) fn ensure_module_slot(&mut self, slot: KeySlot) -> ModuleSlot {
         if let Some(module_slot) = self.key_modules.get(slot).copied() {
             return module_slot;
@@ -457,17 +497,19 @@ where
         module: ModuleHandle<Arch, Tls>,
         direct_deps: Box<[DepEdge]>,
         meta: M,
+        acquire_count: usize,
     ) -> ModuleId {
         let module_slot = self.ensure_module_slot(slot);
-        let entry_key = self.entries[module_slot]
+        let (entry_key, acquire_count) = self.entries[module_slot]
             .as_ref()
-            .map(|entry| entry.entry_key)
-            .unwrap_or(slot);
+            .map(|entry| (entry.entry_key, entry.acquire_count))
+            .unwrap_or((slot, acquire_count));
         self.entries[module_slot] = Some(StoredEntry {
             entry_key,
             module,
             direct_deps,
             meta,
+            acquire_count,
         });
         self.make_module_id(module_slot)
     }
@@ -498,6 +540,13 @@ where
         {
             self.load_order.remove(idx);
         }
+        if let Some(idx) = self
+            .init_order
+            .iter()
+            .position(|existing| *existing == slot)
+        {
+            self.init_order.remove(idx);
+        }
         EntryState::Present((removed.module, removed.direct_deps, removed.meta))
     }
 }
@@ -507,6 +556,7 @@ struct StoredEntry<M = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<A
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[DepEdge]>,
     meta: M,
+    acquire_count: usize,
 }
 
 impl<M, Arch, Tls> Clone for StoredEntry<M, Arch, Tls>
@@ -522,6 +572,7 @@ where
             module: self.module.clone(),
             direct_deps: self.direct_deps.clone(),
             meta: self.meta.clone(),
+            acquire_count: self.acquire_count,
         }
     }
 }
