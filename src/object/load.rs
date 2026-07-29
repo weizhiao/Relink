@@ -5,7 +5,7 @@ use super::{
 use crate::{
     Loader, LoaderRun, ParseShdrError, RelocationError, Result,
     elf::{ElfHeader, ElfLayout, ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr},
-    image::RawObject,
+    image::{Module, RawObject},
     input::{ElfReader, ElfReaderExt, IntoElfReader, PathBuf},
     loader::ExpectedElf,
     logging,
@@ -260,6 +260,7 @@ mod tests {
         Error, IoError, Loader, ParseShdrError, Result,
         arch::NativeArch,
         elf::{ElfEhdr, ElfLayout, ElfSectionFlags, ElfSectionId, ElfSectionType, NativeElfLayout},
+        image::Module,
         input::{ElfBinary, ElfReader, Path},
         memory::RegionAccess,
         observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent, LoadObserver},

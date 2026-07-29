@@ -8,6 +8,57 @@ use crate::{
 };
 use alloc::boxed::Box;
 
+/// Module metadata used to resolve caller-relative root search paths.
+#[derive(Clone, Copy, Debug)]
+pub struct SearchOwner<'a> {
+    name: &'a str,
+    path: &'a Path,
+    runpath: Option<&'a str>,
+    rpath: Option<&'a str>,
+}
+
+impl<'a> SearchOwner<'a> {
+    /// Creates search metadata for a loaded module.
+    #[inline]
+    pub const fn new(
+        name: &'a str,
+        path: &'a Path,
+        runpath: Option<&'a str>,
+        rpath: Option<&'a str>,
+    ) -> Self {
+        Self {
+            name,
+            path,
+            runpath,
+            rpath,
+        }
+    }
+
+    /// Returns the owner name used in diagnostics.
+    #[inline]
+    pub const fn name(self) -> &'a str {
+        self.name
+    }
+
+    /// Returns the loaded path of the owner.
+    #[inline]
+    pub const fn path(self) -> &'a Path {
+        self.path
+    }
+
+    /// Returns the owner's `DT_RUNPATH`, if present.
+    #[inline]
+    pub const fn runpath(self) -> Option<&'a str> {
+        self.runpath
+    }
+
+    /// Returns the owner's `DT_RPATH`, if present.
+    #[inline]
+    pub const fn rpath(self) -> Option<&'a str> {
+        self.rpath
+    }
+}
+
 /// Common metadata needed while resolving one dependency edge.
 pub trait DependencyOwner {
     /// Returns the owner path/key used by the loader.
@@ -105,19 +156,34 @@ impl<Arch: RelocationArch> DependencyOwner for ScannedDynamic<Arch> {
 /// A root module resolution request.
 pub struct RootRequest<'a, K: Clone, Q: ?Sized = K> {
     key: &'a K,
+    owner: Option<SearchOwner<'a>>,
     contains_key: &'a dyn Fn(&Q) -> bool,
 }
 
 impl<'a, K: Clone, Q: ?Sized> RootRequest<'a, K, Q> {
     #[inline]
-    pub(crate) fn new(key: &'a K, contains_key: &'a dyn Fn(&Q) -> bool) -> Self {
-        Self { key, contains_key }
+    pub(crate) fn new(
+        key: &'a K,
+        owner: Option<SearchOwner<'a>>,
+        contains_key: &'a dyn Fn(&Q) -> bool,
+    ) -> Self {
+        Self {
+            key,
+            owner,
+            contains_key,
+        }
     }
 
     /// Returns the root key requested by the caller.
     #[inline]
     pub fn key(&self) -> &'a K {
         self.key
+    }
+
+    /// Returns the loaded module that initiated this root request, if any.
+    #[inline]
+    pub const fn owner(&self) -> Option<SearchOwner<'a>> {
+        self.owner
     }
 
     /// Returns whether `key` names a module reusable by this request.

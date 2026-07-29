@@ -1,4 +1,4 @@
-use super::CoreInner;
+use super::{CoreInner, STATE_INIT, STATE_UNINIT};
 use crate::{
     Result,
     arch::NativeArch,
@@ -12,7 +12,7 @@ use crate::{
     relocation::{RelocationArch, SymbolRegistry},
     runtime::{CodeContext, CodeExecutor, DomainId, NativeCodeExecutor},
     segment::ElfSegments,
-    sync::{Arc, AtomicBool, Ordering, Weak},
+    sync::{Arc, AtomicUsize, Ordering, Weak},
     tls::{
         CoreTlsState, ModuleTls, TlsImageProvider, TlsImageSource, TlsResolver,
         tls_image_provider_handle,
@@ -101,7 +101,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     /// Returns whether the ELF object has been initialized.
     #[inline]
     pub fn is_init(&self) -> bool {
-        self.inner.is_init.load(Ordering::Acquire)
+        self.inner.phase.load(Ordering::Acquire) != STATE_UNINIT
     }
 
     /// Installs lifecycle behavior resolved during relocation.
@@ -111,24 +111,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
             self.inner.lifecycle.set(lifecycle).is_ok(),
             "lifecycle must be set only once",
         );
-    }
-
-    /// Executes this image's initialization functions at most once.
-    pub(crate) fn initialize(&self) -> Result<()> {
-        if self.inner.is_init.swap(true, Ordering::AcqRel) {
-            return Ok(());
-        }
-
-        let initializer = self
-            .inner
-            .lifecycle
-            .get()
-            .expect("lifecycle must be installed before initialization")
-            .initializer();
-        let executor = self.executor();
-        initializer.run(self.name(), self.segments(), |ctx, addr| {
-            executor.call_lifecycle(ctx, addr)
-        })
     }
 
     /// Creates a weak reference to this ELF core.
@@ -177,15 +159,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         &self.inner.path
     }
 
-    /// Returns the ELF module identity used for diagnostics.
-    ///
-    /// Dynamic images prefer `DT_SONAME`; other images fall back to the basename
-    /// of the loader source path.
-    #[inline]
-    pub fn name(&self) -> &str {
-        self.inner.name()
-    }
-
     /// Gets the base address of the ELF object
     #[inline]
     pub fn base(&self) -> VmAddr {
@@ -199,6 +172,21 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
             .dynamic_info
             .as_ref()
             .and_then(|info| info.soname)
+    }
+
+    /// Returns the `DT_RPATH` value when this core has dynamic metadata.
+    #[inline]
+    pub fn rpath(&self) -> Option<&str> {
+        self.inner.dynamic_info.as_ref().and_then(|info| info.rpath)
+    }
+
+    /// Returns the `DT_RUNPATH` value when this core has dynamic metadata.
+    #[inline]
+    pub fn runpath(&self) -> Option<&str> {
+        self.inner
+            .dynamic_info
+            .as_ref()
+            .and_then(|info| info.runpath)
     }
 
     /// Returns whether dynamic relocations in this image prefer definitions from itself.
@@ -233,12 +221,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         &self.inner.segments
     }
 
-    /// Returns the runtime symbol exports used by this image.
-    #[inline]
-    pub fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
-        &*self.inner.exports
-    }
-
     /// Gets the EH frame header pointer
     #[inline]
     pub fn eh_frame_hdr(&self) -> Option<NonNull<u8>> {
@@ -248,21 +230,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
             .and_then(|info| info.eh_frame_hdr)
     }
 
-    /// Returns TLS metadata when this image owns a TLS block.
-    #[inline]
-    pub fn tls(&self) -> Option<ModuleTls> {
-        self.inner.tls.module()
-    }
-
     #[inline]
     pub(crate) fn tls_resolver(&self) -> &Tls {
         self.inner.tls.resolver()
-    }
-
-    /// Returns the runtime domain in which this image was loaded.
-    #[inline]
-    pub fn domain_id(&self) -> DomainId {
-        self.inner.domain
     }
 
     pub(crate) fn publish_tls(&self) -> Result<()> {
@@ -326,19 +296,27 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
         let soname = dynamic
             .soname_off
             .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
+        let rpath = dynamic
+            .rpath_off
+            .map(|rpath_off| symtab.strtab().get_str(rpath_off.get()));
+        let runpath = dynamic
+            .runpath_off
+            .map(|runpath_off| symtab.strtab().get_str(runpath_off.get()));
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
         let inner = Arc::new(CoreInner {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>),
             domain: DomainId::PROCESS,
             path,
-            is_init: AtomicBool::new(true),
+            phase: AtomicUsize::new(STATE_INIT),
             lifecycle: OnceCell::new(),
             exports: exports_handle(exports),
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
                 eh_frame_hdr,
                 phdrs: ElfPhdrs::Vec(phdrs),
                 soname,
+                rpath,
+                runpath,
                 symbolic: dynamic.symbolic,
             })),
             scope: OnceCell::new(),
@@ -374,12 +352,12 @@ where
 {
     #[inline]
     fn name(&self) -> &str {
-        ElfCore::name(self)
+        self.inner.name()
     }
 
     #[inline]
     fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
-        ElfCore::exports(self)
+        self.inner.exports()
     }
 
     #[inline]
@@ -389,45 +367,22 @@ where
 
     #[inline]
     fn tls(&self) -> Option<ModuleTls> {
-        ElfCore::tls(self)
+        self.inner.tls()
     }
 
     #[inline]
     fn domain_id(&self) -> DomainId {
-        ElfCore::domain_id(self)
-    }
-}
-
-impl<D, Arch, R, Tls> Module<Arch, Tls> for CoreInner<D, Arch, R, Tls>
-where
-    D: 'static,
-    Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch> + 'static,
-{
-    #[inline]
-    fn name(&self) -> &str {
-        CoreInner::name(self)
+        self.inner.domain_id()
     }
 
     #[inline]
-    fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
-        &*self.exports
+    fn initialize(&self) -> Result<()> {
+        self.inner.initialize()
     }
 
     #[inline]
-    fn memory(&self) -> &dyn ImageMemory {
-        &self.segments
-    }
-
-    #[inline]
-    fn tls(&self) -> Option<ModuleTls> {
-        self.tls.module()
-    }
-
-    #[inline]
-    fn domain_id(&self) -> DomainId {
-        self.domain
+    fn finalize(&self) -> Result<()> {
+        self.inner.finalize()
     }
 }
 

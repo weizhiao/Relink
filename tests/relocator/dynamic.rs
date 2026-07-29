@@ -1,6 +1,6 @@
 use elf_loader::{
     Loader,
-    image::{LoadedCore, ModuleHandle, SyntheticModule, SyntheticSymbol},
+    image::{LoadedCore, Module, ModuleHandle, SyntheticModule, SyntheticSymbol},
     input::ElfBinary,
     memory::{ImageMemoryExt, VmAddr},
     relocation::Relocator,

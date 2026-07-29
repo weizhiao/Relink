@@ -4,7 +4,7 @@ use crate::{
         ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr, ElfSymbol,
         ElfSymbolType,
     },
-    image::{ElfCore, LoadedCore, LoadedObject, RawObject, exports_handle},
+    image::{ElfCore, LoadedCore, LoadedObject, Module, RawObject, exports_handle},
     lazy::LazyBinder,
     logging,
     memory::{RegionAccess, VmAddr, VmOffset},

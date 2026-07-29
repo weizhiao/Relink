@@ -339,15 +339,15 @@ fn phased_load_initializes_dependencies_first() {
     assert!(!context.contains_key(&"root"));
     assert!(!context.contains_key(&DEP_KEY));
 
-    let committed = run
-        .commit(&mut context, relocated)
-        .expect("commit should publish the relocated group");
+    let published = relocated
+        .publish(&mut context)
+        .expect("publish should expose the relocated group");
     assert!(context.contains_key(&"root"));
     assert!(context.contains_key(&DEP_KEY));
-    assert!(!committed.root().is_init());
+    assert!(!published.root().is_init());
 
-    let result = run
-        .initialize(committed)
+    let result = published
+        .initialize()
         .expect("initialization should succeed");
     assert_eq!(
         calls.lock().unwrap().as_slice(),
@@ -359,29 +359,60 @@ fn phased_load_initializes_dependencies_first() {
 }
 
 #[test]
-fn commit_rejects_other_context() {
+fn publish_rejects_other_context() {
     let linker = Linker::new().resolver(SingleBinaryResolver {
         key: "root",
         name: "context_bound.so",
         data: fixtures().provider,
     });
     let mut run = linker.run();
-    let mut prepared_context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let prepared = run
-        .prepare_load(&mut prepared_context, "root")
+        .prepare_load(&mut context, "root")
         .expect("prepare should succeed");
     let relocated = run.relocate(prepared).expect("relocation should succeed");
     let mut other_context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
 
-    let err = run
-        .commit(&mut other_context, relocated)
-        .expect_err("commit must reject another context");
+    let err = relocated
+        .publish(&mut other_context)
+        .expect_err("publish must reject another context");
     assert!(matches!(
         err,
         Error::Linker(LinkerError::Context {
             reason,
-        }) if matches!(*reason, LinkContextError::CommitContextMismatch { .. })
+        }) if matches!(*reason, LinkContextError::ContextMismatch { .. })
     ));
+    assert!(!other_context.contains_key(&"root"));
+}
+
+#[test]
+fn rollback_rejects_other_context() {
+    let linker = Linker::new().resolver(SingleBinaryResolver {
+        key: "root",
+        name: "context_bound.so",
+        data: fixtures().provider,
+    });
+    let mut run = linker.run();
+    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let prepared = run
+        .prepare_load(&mut context, "root")
+        .expect("prepare should succeed");
+    let relocated = run.relocate(prepared).expect("relocation should succeed");
+    let published = relocated
+        .publish(&mut context)
+        .expect("publish should succeed");
+    let mut other_context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+
+    let error = published
+        .rollback(&mut other_context)
+        .expect_err("rollback must reject another context");
+    assert!(matches!(
+        error,
+        Error::Linker(LinkerError::Context {
+            reason,
+        }) if matches!(*reason, LinkContextError::ContextMismatch { .. })
+    ));
+    assert!(context.contains_key(&"root"));
     assert!(!other_context.contains_key(&"root"));
 }
 
@@ -399,15 +430,13 @@ fn failed_init_can_roll_back() {
     let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
     let prepared = run.prepare_load(&mut context, "root").unwrap();
     let relocated = run.relocate(prepared).unwrap();
-    let committed = run.commit(&mut context, relocated).unwrap();
+    let published = relocated.publish(&mut context).unwrap();
 
-    let failed = run
-        .initialize(committed)
-        .expect_err("initializer should fail");
+    let failed = published.initialize().expect_err("initializer should fail");
     assert!(context.contains_key(&"root"));
     assert!(failed.error().to_string().contains("initializer failed"));
 
-    let error = run.rollback(&mut context, failed);
+    let error = failed.rollback(&mut context);
     assert!(error.to_string().contains("initializer failed"));
     assert!(!context.contains_key(&"root"));
     assert_eq!(calls.lock().unwrap().as_slice(), &["failing_init.so"]);

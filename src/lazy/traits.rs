@@ -116,7 +116,7 @@ where
         return Err(RelocationError::LazyBinding(LazyBindingError::Unsupported).into());
     }
 
-    let runtime = LazyRuntime::<Arch>::new(image.core_ref().inner.runtime());
+    let runtime = LazyRuntime::<Arch>::new(&image.core_ref().inner.runtime);
     let setup = binder.prepare_slots(runtime)?;
 
     if let LazyPlacement::Slots(slots) = placement {

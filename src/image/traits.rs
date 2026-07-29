@@ -1,4 +1,5 @@
 use crate::{
+    Result,
     arch::NativeArch,
     elf::{ElfLayout, ElfSymbol, SymbolLookup, SymbolTable},
     memory::ImageMemory,
@@ -83,6 +84,16 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
 
     /// Returns the runtime domain in which this module's addresses are meaningful.
     fn domain_id(&self) -> DomainId;
+
+    /// Runs module initialization at most once.
+    fn initialize(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Runs module finalization at most once before the module is removed.
+    fn finalize(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl<M, Arch, Tls> Module<Arch, Tls> for Arc<M>
@@ -114,5 +125,15 @@ where
     #[inline]
     fn domain_id(&self) -> DomainId {
         (**self).domain_id()
+    }
+
+    #[inline]
+    fn initialize(&self) -> Result<()> {
+        (**self).initialize()
+    }
+
+    #[inline]
+    fn finalize(&self) -> Result<()> {
+        (**self).finalize()
     }
 }

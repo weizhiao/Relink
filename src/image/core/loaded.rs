@@ -126,10 +126,16 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         self.core.path()
     }
 
-    /// Returns the ELF module identity used for diagnostics.
+    /// Returns the `DT_RPATH` value.
     #[inline]
-    pub fn name(&self) -> &str {
-        self.core.name()
+    pub fn rpath(&self) -> Option<&str> {
+        self.core.rpath()
+    }
+
+    /// Returns the `DT_RUNPATH` value.
+    #[inline]
+    pub fn runpath(&self) -> Option<&str> {
+        self.core.runpath()
     }
 
     /// Returns the base address of the ELF object.
@@ -160,15 +166,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     #[inline]
     pub fn is_init(&self) -> bool {
         self.core.is_init()
-    }
-
-    /// Executes this module's initialization functions at most once.
-    ///
-    /// The initialized state is set before retained hooks or target code run so
-    /// recursive initialization observes this module as already in progress.
-    #[inline]
-    pub fn initialize(&self) -> Result<()> {
-        self.core.initialize()
     }
 
     /// Returns the program headers of the ELF object.
@@ -320,12 +317,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     #[inline]
     pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R, Tls> {
         self.core.downgrade()
-    }
-
-    /// Returns TLS metadata when this image owns a TLS block.
-    #[inline]
-    pub fn tls(&self) -> Option<ModuleTls> {
-        self.core.tls()
     }
 
     /// Creates a [`LoadedCore`] from an [`ElfCore`] and its retained relocation lookup scope.
@@ -514,7 +505,7 @@ where
 {
     #[inline]
     fn name(&self) -> &str {
-        LoadedCore::name(self)
+        self.core.name()
     }
 
     #[inline]
@@ -529,11 +520,21 @@ where
 
     #[inline]
     fn tls(&self) -> Option<ModuleTls> {
-        LoadedCore::tls(self)
+        self.core.tls()
     }
 
     #[inline]
     fn domain_id(&self) -> DomainId {
         self.core.domain_id()
+    }
+
+    #[inline]
+    fn initialize(&self) -> Result<()> {
+        self.core.initialize()
+    }
+
+    #[inline]
+    fn finalize(&self) -> Result<()> {
+        self.core.finalize()
     }
 }

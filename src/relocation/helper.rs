@@ -4,7 +4,7 @@ use crate::{
     Error, RelocReason, Result,
     elf::{ElfRelEntry, ElfRelType, HashTable, SymbolEntry, SymbolTableView},
     hint::unlikely,
-    image::{ElfCore, ModuleScope},
+    image::{ElfCore, Module, ModuleScope},
     memory::{ImageMemory, RegionAccess, VmAddr},
     observer::{RelocationObserver, SymbolBindingEvent},
     relocate_context_error,

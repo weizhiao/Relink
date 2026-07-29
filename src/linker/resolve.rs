@@ -1,5 +1,7 @@
 use super::{
-    resolver::{DependencyOwner, DependencyRequest, KeyResolver, ResolvedKey, RootRequest},
+    resolver::{
+        DependencyOwner, DependencyRequest, KeyResolver, ResolvedKey, RootRequest, SearchOwner,
+    },
     session::{GraphEntry, ModuleEntry, ResolveSession},
     storage::{CommittedStorage, KeySlot},
 };
@@ -278,6 +280,7 @@ where
     pub(crate) fn resolve_root<'cfg, Q, R, Obs>(
         &self,
         key: &K,
+        owner: Option<SearchOwner<'_>>,
         resolver: &impl KeyResolver<K, Arch, Q, Tls>,
         observer: &Obs,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
@@ -288,7 +291,7 @@ where
         Obs: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
     {
         let contains_key = |key: &Q| self.contains_key::<Q, R, Obs>(key, observer);
-        let req = RootRequest::new(key, &contains_key);
+        let req = RootRequest::new(key, owner, &contains_key);
         resolver.load_root(&req)
     }
 

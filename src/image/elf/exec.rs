@@ -8,7 +8,7 @@ use crate::{
     ParsePhdrError, Result,
     arch::NativeArch,
     elf::ElfPhdr,
-    image::{LoadedCore, RawDynamic},
+    image::{LoadedCore, Module, RawDynamic},
     input::{Path, PathBuf},
     lazy::{LazyBinder, SupportLazy},
     loader::ImageBuilder,

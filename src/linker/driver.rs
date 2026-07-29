@@ -3,7 +3,7 @@ use crate::{
     Loader, Relocator,
     arch::NativeArch,
     const_builder::NoDrop,
-    image::LoadedCore,
+    image::{LoadedCore, Module},
     memory::{HostRegion, RegionAccess},
     os::Mmap,
     relocation::RelocationArch,
@@ -15,7 +15,7 @@ use core::{fmt, marker::PhantomData, mem::MaybeUninit, ops::Deref, ptr};
 
 /// Result of a fully initialized linker load operation.
 ///
-/// `committed` contains the newly committed modules' [`ModuleId`](crate::linker::ModuleId)
+/// `modules` contains the newly loaded modules' [`ModuleId`](crate::linker::ModuleId)
 /// values in load order.
 pub struct LoadResult<
     D: 'static,
@@ -25,7 +25,7 @@ pub struct LoadResult<
 > {
     root_id: ModuleId,
     root: LoadedCore<D, Arch, R, Tls>,
-    committed: Box<[ModuleId]>,
+    modules: Box<[ModuleId]>,
 }
 
 impl<D: 'static, Arch, R, Tls> fmt::Debug for LoadResult<D, Arch, R, Tls>
@@ -38,7 +38,7 @@ where
         f.debug_struct("LoadResult")
             .field("root_id", &self.root_id)
             .field("root", &self.root.name())
-            .field("committed", &self.committed)
+            .field("modules", &self.modules)
             .finish()
     }
 }
@@ -53,16 +53,16 @@ where
     pub(crate) fn new(
         root_id: ModuleId,
         root: LoadedCore<D, Arch, R, Tls>,
-        committed: Box<[ModuleId]>,
+        modules: Box<[ModuleId]>,
     ) -> Self {
         Self {
             root_id,
             root,
-            committed,
+            modules,
         }
     }
 
-    /// Returns the committed module id for the loaded root.
+    /// Returns the module id for the loaded root.
     #[inline]
     pub fn root_id(&self) -> ModuleId {
         self.root_id
@@ -74,10 +74,10 @@ where
         &self.root
     }
 
-    /// Returns module ids committed by this load operation in load order.
+    /// Returns module ids produced by this load operation in load order.
     #[inline]
-    pub fn committed(&self) -> &[ModuleId] {
-        &self.committed
+    pub fn modules(&self) -> &[ModuleId] {
+        &self.modules
     }
 
     /// Consumes the result and returns the loaded root module.

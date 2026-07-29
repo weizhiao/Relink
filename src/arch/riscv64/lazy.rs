@@ -30,6 +30,8 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         ",
         #[cfg(riscv_float_abi = "d")]
         "
+        .option push
+        .option arch, +d
         fsd fa0,8*9(sp)
         fsd fa1,8*10(sp)
         fsd fa2,8*11(sp)
@@ -38,9 +40,12 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         fsd fa5,8*14(sp)
         fsd fa6,8*15(sp)
         fsd fa7,8*16(sp)
+        .option pop
         ",
         #[cfg(riscv_float_abi = "f")]
         "
+        .option push
+        .option arch, +f
         fsw fa0,8*9(sp)
         fsw fa1,8*10(sp)
         fsw fa2,8*11(sp)
@@ -49,6 +54,7 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         fsw fa5,8*14(sp)
         fsw fa6,8*15(sp)
         fsw fa7,8*16(sp)
+        .option pop
         ",
         "
         // 这两个是plt代码设置的
@@ -70,6 +76,8 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         ",
         #[cfg(riscv_float_abi = "d")]
         "
+        .option push
+        .option arch, +d
         fld fa0,8*9(sp)
         fld fa1,8*10(sp)
         fld fa2,8*11(sp)
@@ -78,9 +86,12 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         fld fa5,8*14(sp)
         fld fa6,8*15(sp)
         fld fa7,8*16(sp)
+        .option pop
         ",
         #[cfg(riscv_float_abi = "f")]
         "
+        .option push
+        .option arch, +f
         flw fa0,8*9(sp)
         flw fa1,8*10(sp)
         flw fa2,8*11(sp)
@@ -89,6 +100,7 @@ pub(crate) extern "C" fn dl_runtime_resolve() {
         flw fa5,8*14(sp)
         flw fa6,8*15(sp)
         flw fa7,8*16(sp)
+        .option pop
         ",
         "
         addi sp,sp,18*8

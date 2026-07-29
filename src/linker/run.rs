@@ -2,7 +2,7 @@ use super::{
     context::LinkContext,
     driver::{Linker, LoadResult},
     resolve::LoadResolveContext,
-    resolver::KeyResolver,
+    resolver::{KeyResolver, SearchOwner},
     scan::{GotPltTarget, LinkPipeline, MappedRuntimeMemory},
     session::{GraphEntry, LoadSession},
     storage::{ContextId, KeySlot, ModuleId},
@@ -11,7 +11,7 @@ use crate::{
     ByteRepr, Error, LinkContextError, LinkerError, Loader, LoaderRun, Result,
     arch::NativeArch,
     elf::ElfRelType,
-    image::{LoadedCore, ModuleScope, RawDynamic},
+    image::{LoadedCore, Module, ModuleScope, RawDynamic},
     lazy::LazyBinder,
     memory::{HostRegion, RegionAccess},
     observer::{
@@ -121,12 +121,43 @@ where
         Meta: Default,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
     {
-        let prepared = self.prepare_load::<Meta, Q>(context, key)?;
+        self.load_with_owner::<Meta, Q>(context, key, None)
+    }
+
+    /// Loads one root using search metadata from the module that requested it.
+    pub fn load_from<'cfg, Meta, Q>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        key: K,
+        owner: SearchOwner<'_>,
+    ) -> Result<LoadResult<D, Arch, M::Region, Tls>>
+    where
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Meta: Default,
+        Resolver: KeyResolver<K, Arch, Q, Tls>,
+    {
+        self.load_with_owner::<Meta, Q>(context, key, Some(owner))
+    }
+
+    fn load_with_owner<'cfg, Meta, Q>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        key: K,
+        owner: Option<SearchOwner<'_>>,
+    ) -> Result<LoadResult<D, Arch, M::Region, Tls>>
+    where
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Meta: Default,
+        Resolver: KeyResolver<K, Arch, Q, Tls>,
+    {
+        let prepared = self.prepare_load_with_owner::<Meta, Q>(context, key, owner)?;
         let relocated = self.relocate(prepared)?;
-        let committed = self.commit(context, relocated)?;
-        match self.initialize(committed) {
+        let published = relocated.publish(context)?;
+        match published.initialize() {
             Ok(result) => Ok(result),
-            Err(failed) => Err(self.rollback(context, failed)),
+            Err(failed) => Err(failed.rollback(context)),
         }
     }
 
@@ -135,6 +166,35 @@ where
         &mut self,
         context: &mut LinkContext<K, D, Meta, Arch, Tls>,
         key: K,
+    ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
+    where
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Resolver: KeyResolver<K, Arch, Q, Tls>,
+    {
+        self.prepare_load_with_owner::<Meta, Q>(context, key, None)
+    }
+
+    /// Resolves and maps one caller-relative root without executing target code.
+    pub fn prepare_load_from<'cfg, Meta, Q>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        key: K,
+        owner: SearchOwner<'_>,
+    ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
+    where
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Resolver: KeyResolver<K, Arch, Q, Tls>,
+    {
+        self.prepare_load_with_owner::<Meta, Q>(context, key, Some(owner))
+    }
+
+    fn prepare_load_with_owner<'cfg, Meta, Q>(
+        &mut self,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        key: K,
+        owner: Option<SearchOwner<'_>>,
     ) -> Result<PreparedLoad<K, D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
@@ -155,6 +215,7 @@ where
             LoadResolveContext::new(&mut context.committed, session.resolve_mut());
         let resolved = resolve_context.resolve_root::<_, M::Region, _>(
             &key,
+            owner,
             &linker.resolver,
             &loader.observer,
         )?;
@@ -177,10 +238,10 @@ where
     {
         let prepared = self.prepare_mapped_root::<Meta, Q>(context, key, raw)?;
         let relocated = self.relocate(prepared)?;
-        let committed = self.commit(context, relocated)?;
-        match self.initialize(committed) {
+        let published = relocated.publish(context)?;
+        match published.initialize() {
             Ok(result) => Ok(result),
-            Err(failed) => Err(self.rollback(context, failed)),
+            Err(failed) => Err(failed.rollback(context)),
         }
     }
 
@@ -281,66 +342,6 @@ where
         })
     }
 
-    /// Commits a relocated module group into the context used for preparation.
-    pub fn commit<Meta>(
-        &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
-        relocated: RelocatedLoad<K, D, Arch, M::Region, Tls>,
-    ) -> Result<CommittedLoad<D, Arch, M::Region, Tls>>
-    where
-        Meta: Default,
-    {
-        if context.context_id() != relocated.context {
-            return Err(
-                LinkerError::context(LinkContextError::CommitContextMismatch {
-                    prepared: relocated.context,
-                    actual: context.context_id(),
-                })
-                .into(),
-            );
-        }
-
-        let committed = relocated.session.commit_into(&mut context.committed)?;
-        let root_id = context
-            .committed
-            .module_for_key(relocated.root)
-            .map(|slot| context.committed.make_module_id(slot))
-            .expect("committed load root must have a module id");
-        Ok(CommittedLoad::new(
-            root_id,
-            relocated.root_module,
-            committed.ids,
-            relocated.init_order,
-        ))
-    }
-
-    /// Initializes a committed module group in dependency order.
-    #[inline]
-    pub fn initialize(
-        &mut self,
-        committed: CommittedLoad<D, Arch, M::Region, Tls>,
-    ) -> core::result::Result<
-        LoadResult<D, Arch, M::Region, Tls>,
-        FailedLoad<D, Arch, M::Region, Tls>,
-    > {
-        committed.initialize()
-    }
-
-    /// Rolls back a committed module group after initialization failure.
-    pub fn rollback<Meta>(
-        &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
-        failed: FailedLoad<D, Arch, M::Region, Tls>,
-    ) -> Error {
-        let (error, committed) = failed.into_parts();
-        for id in committed.into_vec().into_iter().rev() {
-            context
-                .remove(id)
-                .expect("failed load must remain removable from its commit context");
-        }
-        error
-    }
-
     fn relocate_pending_modules(
         &mut self,
         root: KeySlot,
@@ -409,6 +410,22 @@ where
         Resolver: KeyResolver<K, Arch, Q, Tls>,
     {
         self.run().load::<Meta, Q>(context, key)
+    }
+
+    /// Loads one root using search metadata from the module that requested it.
+    pub fn load_from<'cfg, Meta, Q>(
+        &self,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        key: K,
+        owner: SearchOwner<'_>,
+    ) -> Result<LoadResult<D, Arch, M::Region, Tls>>
+    where
+        K: 'cfg + Borrow<Q>,
+        Q: ToOwned<Owned = K> + Ord + ?Sized,
+        Meta: Default,
+        Resolver: KeyResolver<K, Arch, Q, Tls>,
+    {
+        self.run().load_from::<Meta, Q>(context, key, owner)
     }
 
     /// Loads a pre-mapped root dynamic image and resolves its dependencies.
@@ -509,8 +526,8 @@ where
     }
 }
 
-/// A relocated load transaction ready to commit into its original context.
-#[must_use = "a relocated load must be committed or dropped"]
+/// A relocated load transaction ready to publish into its original context.
+#[must_use = "a relocated load must be published or dropped"]
 pub struct RelocatedLoad<
     K,
     D: 'static,
@@ -526,9 +543,50 @@ pub struct RelocatedLoad<
     marker: PhantomData<fn() -> K>,
 }
 
-/// A committed module group whose initializers have not completed yet.
-#[must_use = "a committed load must be initialized"]
-pub struct CommittedLoad<
+impl<K, D: 'static, Arch, R, Tls> RelocatedLoad<K, D, Arch, R, Tls>
+where
+    K: Clone + Ord,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    /// Publishes this relocated module group into its original context.
+    ///
+    /// Published modules are visible to recursive loads but remain
+    /// transactional until their initializers complete.
+    pub fn publish<Meta>(
+        self,
+        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+    ) -> Result<PublishedLoad<D, Arch, R, Tls>>
+    where
+        Meta: Default,
+    {
+        if context.context_id() != self.context {
+            return Err(LinkerError::context(LinkContextError::ContextMismatch {
+                expected: self.context,
+                actual: context.context_id(),
+            })
+            .into());
+        }
+
+        let published = self.session.commit_into(&mut context.committed)?;
+        let root_id = context
+            .committed
+            .module_for_key(self.root)
+            .map(|slot| context.committed.make_module_id(slot))
+            .expect("published load root must have a module id");
+        Ok(PublishedLoad::new(
+            root_id,
+            self.root_module,
+            published.ids,
+            self.init_order,
+        ))
+    }
+}
+
+/// A published module group whose initializers have not completed yet.
+#[must_use = "a published load must be initialized or rolled back"]
+pub struct PublishedLoad<
     D: 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
@@ -536,27 +594,27 @@ pub struct CommittedLoad<
 > {
     root_id: ModuleId,
     root: LoadedCore<D, Arch, R, Tls>,
-    committed: Box<[ModuleId]>,
+    modules: Box<[ModuleId]>,
     init_order: Box<[LoadedCore<D, Arch, R, Tls>]>,
 }
 
-impl<D: 'static, Arch, R, Tls> fmt::Debug for CommittedLoad<D, Arch, R, Tls>
+impl<D: 'static, Arch, R, Tls> fmt::Debug for PublishedLoad<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CommittedLoad")
+        f.debug_struct("PublishedLoad")
             .field("root_id", &self.root_id)
             .field("root", &self.root.name())
-            .field("committed", &self.committed)
+            .field("modules", &self.modules)
             .field("pending_initializers", &self.init_order.len())
             .finish()
     }
 }
 
-impl<D: 'static, Arch, R, Tls> CommittedLoad<D, Arch, R, Tls>
+impl<D: 'static, Arch, R, Tls> PublishedLoad<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -566,18 +624,18 @@ where
     fn new(
         root_id: ModuleId,
         root: LoadedCore<D, Arch, R, Tls>,
-        committed: Box<[ModuleId]>,
+        modules: Box<[ModuleId]>,
         init_order: Box<[LoadedCore<D, Arch, R, Tls>]>,
     ) -> Self {
         Self {
             root_id,
             root,
-            committed,
+            modules,
             init_order,
         }
     }
 
-    /// Returns the committed module id for the loaded root.
+    /// Returns the published module id for the loaded root.
     #[inline]
     pub fn root_id(&self) -> ModuleId {
         self.root_id
@@ -589,24 +647,46 @@ where
         &self.root
     }
 
-    /// Returns module ids committed by this load operation in load order.
+    /// Returns module ids published by this load operation in load order.
     #[inline]
-    pub fn committed(&self) -> &[ModuleId] {
-        &self.committed
+    pub fn modules(&self) -> &[ModuleId] {
+        &self.modules
     }
 
-    fn initialize(
+    /// Executes module initializers in dependency order.
+    pub fn initialize(
         self,
     ) -> core::result::Result<LoadResult<D, Arch, R, Tls>, FailedLoad<D, Arch, R, Tls>> {
-        let result = self.init_order.iter().try_for_each(LoadedCore::initialize);
+        let result = self.init_order.iter().try_for_each(Module::initialize);
         if let Err(error) = result {
             return Err(FailedLoad { error, load: self });
         }
-        Ok(LoadResult::new(self.root_id, self.root, self.committed))
+        Ok(LoadResult::new(self.root_id, self.root, self.modules))
+    }
+
+    /// Removes this published module group from its link context.
+    pub fn rollback<K, Meta>(self, context: &mut LinkContext<K, D, Meta, Arch, Tls>) -> Result<()>
+    where
+        K: Clone + Ord,
+    {
+        let expected = self.root_id.context();
+        if context.context_id() != expected {
+            return Err(LinkerError::context(LinkContextError::ContextMismatch {
+                expected,
+                actual: context.context_id(),
+            })
+            .into());
+        }
+        for id in self.modules.into_vec().into_iter().rev() {
+            context
+                .remove(id)
+                .expect("published load must remain removable from its publish context");
+        }
+        Ok(())
     }
 }
 
-impl<D: 'static, Arch, R, Tls> Deref for CommittedLoad<D, Arch, R, Tls>
+impl<D: 'static, Arch, R, Tls> Deref for PublishedLoad<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -620,8 +700,8 @@ where
     }
 }
 
-/// A committed load whose initialization failed and can be rolled back.
-#[must_use = "a failed load must be rolled back or converted into its error"]
+/// A published load whose initialization failed and can be rolled back.
+#[must_use = "a failed load must be rolled back"]
 pub struct FailedLoad<
     D: 'static,
     Arch: RelocationArch = NativeArch,
@@ -629,7 +709,7 @@ pub struct FailedLoad<
     Tls: TlsResolver<Arch> = (),
 > {
     error: Error,
-    load: CommittedLoad<D, Arch, R, Tls>,
+    load: PublishedLoad<D, Arch, R, Tls>,
 }
 
 impl<D: 'static, Arch, R, Tls> fmt::Debug for FailedLoad<D, Arch, R, Tls>
@@ -642,7 +722,7 @@ where
         f.debug_struct("FailedLoad")
             .field("error", &self.error)
             .field("root_id", &self.load.root_id)
-            .field("committed", &self.load.committed)
+            .field("modules", &self.load.modules)
             .finish()
     }
 }
@@ -659,21 +739,22 @@ where
         &self.error
     }
 
-    /// Returns module ids committed by the failed load in load order.
+    /// Returns module ids published by the failed load in load order.
     #[inline]
-    pub fn committed(&self) -> &[ModuleId] {
-        &self.load.committed
+    pub fn modules(&self) -> &[ModuleId] {
+        &self.load.modules
     }
 
-    #[inline]
-    fn into_parts(self) -> (Error, Box<[ModuleId]>) {
-        (self.error, self.load.committed)
-    }
-
-    /// Consumes the failed load and returns its initialization error.
-    #[inline]
-    pub fn into_error(self) -> Error {
-        self.error
+    /// Removes the published modules from their link context and returns the
+    /// initialization error.
+    pub fn rollback<K, Meta>(self, context: &mut LinkContext<K, D, Meta, Arch, Tls>) -> Error
+    where
+        K: Clone + Ord,
+    {
+        match self.load.rollback(context) {
+            Ok(()) => self.error,
+            Err(error) => error,
+        }
     }
 }
 

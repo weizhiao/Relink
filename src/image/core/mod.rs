@@ -9,6 +9,6 @@ mod handle;
 mod loaded;
 
 pub use defs::Symbol;
-pub(crate) use defs::{CoreInner, CoreRuntime};
+pub(crate) use defs::{CoreInner, CoreRuntime, STATE_INIT, STATE_UNINIT};
 pub use handle::{ElfCore, ElfCoreRef};
 pub use loaded::LoadedCore;

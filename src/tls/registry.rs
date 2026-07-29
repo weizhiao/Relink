@@ -137,16 +137,19 @@ impl<D> TlsRegistry<D> {
 
     /// Publishes the relocated initialization image for a registered module.
     pub fn publish(&mut self, source: TlsImageSource, mod_id: TlsModuleId) -> Result<()> {
-        self.slots
-            .get(mod_id.get())
-            .and_then(|slot| slot.module.as_ref())
+        let slot = self
+            .slots
+            .get_mut(mod_id.get())
             .ok_or(TlsError::InvalidModuleId { mod_id })?;
-        self.generation += 1;
-        let slot = &mut self.slots[mod_id.get()];
         let record = slot
             .module
             .as_mut()
-            .expect("TLS module was validated above");
+            .ok_or(TlsError::InvalidModuleId { mod_id })?;
+        if record.source.is_some() {
+            return Err(TlsError::AlreadyPublished { mod_id }.into());
+        }
+
+        self.generation += 1;
         record.source = Some(source);
         slot.generation = self.generation;
         Ok(())
@@ -236,6 +239,18 @@ impl<D> Default for TlsRegistry<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        sync::Arc,
+        tls::{TlsImageProvider, tls_image_provider_handle},
+    };
+
+    struct TestImage;
+
+    impl TlsImageProvider for TestImage {
+        fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+            f(&[0; 4])
+        }
+    }
 
     fn info() -> TlsInfo {
         TlsInfo {
@@ -273,5 +288,18 @@ mod tests {
         let invalid = TlsInfo { align: 3, ..info() };
         assert!(registry.register(invalid, TlsStorage::Dynamic, ()).is_err());
         assert_eq!(registry.generation(), 0);
+    }
+
+    #[test]
+    fn rejects_repeated_publication() {
+        let mut registry = TlsRegistry::new();
+        let module = registry.register(info(), TlsStorage::Dynamic, ()).unwrap();
+        let provider = tls_image_provider_handle(Arc::new(TestImage));
+        let source = TlsImageSource::new(Arc::downgrade(&provider));
+
+        registry.publish(source.clone(), module.mod_id()).unwrap();
+        let generation = registry.generation();
+        assert!(registry.publish(source, module.mod_id()).is_err());
+        assert_eq!(registry.generation(), generation);
     }
 }

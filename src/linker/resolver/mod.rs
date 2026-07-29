@@ -4,7 +4,7 @@ mod request;
 mod search_path;
 mod traits;
 
-pub use request::{DependencyOwner, DependencyRequest, RootRequest};
+pub use request::{DependencyOwner, DependencyRequest, RootRequest, SearchOwner};
 pub use search_path::{
     CandidateContext, CandidateRequest, FileNameKey, KeyRule, PathKey, SearchDirProvider,
     SearchPathEntry, SearchPathResolver,

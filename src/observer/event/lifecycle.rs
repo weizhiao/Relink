@@ -86,10 +86,6 @@ impl LifecycleHandlers {
         &mut self.finalizer
     }
 
-    #[inline]
-    pub(crate) fn into_finalizer(self) -> LifecycleRunner {
-        self.finalizer
-    }
     /// Returns the initialization lifecycle.
     #[inline]
     pub fn init(&self) -> &Lifecycle {

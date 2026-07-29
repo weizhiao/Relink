@@ -2,7 +2,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::SymbolEntry,
-    image::{DynamicInfo, PltRelocInfo, SymbolExports, WeakModuleScope},
+    image::{DynamicInfo, Module, PltRelocInfo, SymbolExports, WeakModuleScope},
     input::PathBuf,
     lazy::{LazySetup, LazyValues},
     logging,
@@ -11,8 +11,8 @@ use crate::{
     relocation::{RelocationArch, SymbolRegistry, SymbolResolver},
     runtime::{CodeExecutor, DomainId},
     segment::ElfSegments,
-    sync::{Arc, AtomicBool, Ordering, Weak},
-    tls::{CoreTlsState, TLS_GET_ADDR_SYMBOL, TlsResolver},
+    sync::{Arc, AtomicUsize, Ordering, Weak},
+    tls::{CoreTlsState, ModuleTls, TLS_GET_ADDR_SYMBOL, TlsResolver},
 };
 use alloc::boxed::Box;
 use core::{cell::OnceCell, marker::PhantomData, ops::Deref};
@@ -139,6 +139,10 @@ where
     }
 }
 
+pub(crate) const STATE_UNINIT: usize = 0;
+pub(crate) const STATE_INIT: usize = 1;
+pub(crate) const STATE_FINI: usize = 2;
+
 /// Inner structure for ElfCore
 pub(crate) struct CoreInner<
     D: 'static = (),
@@ -156,8 +160,8 @@ pub(crate) struct CoreInner<
     /// Runtime domain in which this image's addresses are meaningful.
     pub(crate) domain: DomainId,
 
-    /// Indicates whether initialization has started.
-    pub(crate) is_init: AtomicBool,
+    /// Current initialization/finalization state.
+    pub(crate) phase: AtomicUsize,
 
     /// Initialization and finalization behavior resolved during relocation.
     pub(crate) lifecycle: OnceCell<LifecycleHandlers>,
@@ -191,7 +195,22 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     CoreInner<D, Arch, R, Tls>
 {
     #[inline]
-    pub(crate) fn name(&self) -> &str {
+    pub(crate) fn bind_runtime_owner(inner: &Arc<Self>) {
+        inner
+            .runtime
+            .bind_core(VmAddr::from_ptr(Arc::as_ptr(inner)));
+    }
+}
+
+impl<D, Arch, R, Tls> Module<Arch, Tls> for CoreInner<D, Arch, R, Tls>
+where
+    D: 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch> + 'static,
+{
+    #[inline]
+    fn name(&self) -> &str {
         self.dynamic_info
             .as_ref()
             .and_then(|info| info.soname)
@@ -199,15 +218,66 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 
     #[inline]
-    pub(crate) const fn runtime(&self) -> &CoreRuntime<Arch> {
-        &self.runtime
+    fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
+        &*self.exports
     }
 
     #[inline]
-    pub(crate) fn bind_runtime_owner(inner: &Arc<Self>) {
-        inner
-            .runtime
-            .bind_core(VmAddr::from_ptr(Arc::as_ptr(inner)));
+    fn memory(&self) -> &dyn ImageMemory {
+        &self.segments
+    }
+
+    #[inline]
+    fn tls(&self) -> Option<ModuleTls> {
+        self.tls.module()
+    }
+
+    #[inline]
+    fn domain_id(&self) -> DomainId {
+        self.domain
+    }
+
+    fn initialize(&self) -> Result<()> {
+        if self
+            .phase
+            .compare_exchange(
+                STATE_UNINIT,
+                STATE_INIT,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        let initializer = self
+            .lifecycle
+            .get()
+            .expect("lifecycle must be installed before initialization")
+            .initializer();
+        let executor = self.executor.as_ref();
+        initializer.run(self.name(), &self.segments, |ctx, addr| {
+            executor.call_lifecycle(ctx, addr)
+        })
+    }
+
+    fn finalize(&self) -> Result<()> {
+        if self
+            .phase
+            .compare_exchange(STATE_INIT, STATE_FINI, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Ok(());
+        }
+        let Some(lifecycle) = self.lifecycle.get() else {
+            return Ok(());
+        };
+        let finalizer = lifecycle.finalizer();
+        let executor = self.executor.as_ref();
+        finalizer.run(self.name(), &self.segments, |ctx, addr| {
+            executor.call_lifecycle(ctx, addr)
+        })
     }
 }
 
@@ -216,17 +286,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
 {
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
-        if self.is_init.load(Ordering::Relaxed)
-            && let Some(lifecycle) = self.lifecycle.take()
-        {
-            let name = self.name();
-            let finalizer = lifecycle.into_finalizer();
-            let executor = self.executor.as_ref();
-            if let Err(err) = finalizer.run(name, &self.segments, |ctx, addr| {
-                executor.call_lifecycle(ctx, addr)
-            }) {
-                logging::error!("finalization lifecycle failed for {}: {err}", name);
-            }
+        if let Err(err) = self.finalize() {
+            logging::error!("finalization lifecycle failed for {}: {err}", self.name());
         }
     }
 }

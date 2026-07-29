@@ -17,13 +17,17 @@ use crate::{
     relocation::{DynamicRelocation, Relocatable, RelocateArgs, RelocationArch},
     runtime::DomainId,
     segment::{ElfSegments, MemoryProtection},
-    sync::{Arc, AtomicBool},
+    sync::{Arc, AtomicUsize},
     tls::{CoreTlsState, ModuleTls, TlsRequest, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{cell::OnceCell, mem::size_of, ptr::NonNull};
 
-use crate::image::{CoreRuntime, ElfCore, LoadedCore, core::CoreInner, exports_handle};
+use crate::image::{
+    CoreRuntime, ElfCore, LoadedCore, Module,
+    core::{CoreInner, STATE_UNINIT},
+    exports_handle,
+};
 
 impl<L: ElfLayout> SymbolTable<L> {
     pub(crate) fn from_dynamic<Arch, R>(
@@ -109,6 +113,8 @@ pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
     pub(crate) soname: Option<&'static str>,
+    pub(crate) rpath: Option<&'static str>,
+    pub(crate) runpath: Option<&'static str>,
     pub(crate) symbolic: bool,
 }
 
@@ -140,12 +146,6 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
 
     /// Finalization functions to resolve after relocation.
     fini: LifecycleSpec,
-
-    /// DT_RPATH value from the dynamic section
-    rpath: Option<&'static str>,
-
-    /// DT_RUNPATH value from the dynamic section
-    runpath: Option<&'static str>,
 
     /// List of needed library names from the dynamic section
     needed_libs: Box<[&'static str]>,
@@ -261,7 +261,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
     /// An optional string slice containing the RPATH value
     #[inline]
     pub fn rpath(&self) -> Option<&str> {
-        self.extra.rpath
+        self.module.rpath()
     }
 
     /// Gets the DT_RUNPATH value
@@ -270,7 +270,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
     /// An optional string slice containing the RUNPATH value
     #[inline]
     pub fn runpath(&self) -> Option<&str> {
-        self.extra.runpath
+        self.module.runpath()
     }
 
     /// Gets the DT_SONAME value
@@ -446,6 +446,12 @@ where
         let soname = dynamic
             .soname_off
             .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
+        let rpath = dynamic
+            .rpath_off
+            .map(|rpath_off| symtab.strtab().get_str(rpath_off.get()));
+        let runpath = dynamic
+            .runpath_off
+            .map(|runpath_off| symtab.strtab().get_str(runpath_off.get()));
 
         let tls = if let Some(info) = &self.tls_info {
             let image = self
@@ -471,7 +477,7 @@ where
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: self.executor,
             domain: self.domain,
-            is_init: AtomicBool::new(false),
+            phase: AtomicUsize::new(STATE_UNINIT),
             lifecycle: OnceCell::new(),
             path: self.path,
             exports: exports_handle(exports),
@@ -480,6 +486,8 @@ where
                 eh_frame_hdr: self.eh_frame_hdr,
                 phdrs,
                 soname,
+                rpath,
+                runpath,
                 symbolic: dynamic.symbolic,
             })),
             scope: OnceCell::new(),
@@ -501,13 +509,7 @@ where
                 relocation,
                 init: dynamic.init,
                 fini: dynamic.fini,
-                rpath: dynamic
-                    .rpath_off
-                    .map(|rpath_off| symtab.strtab().get_str(rpath_off.get())),
                 needed_libs: needed_libs.into_boxed_slice(),
-                runpath: dynamic
-                    .runpath_off
-                    .map(|runpath_off| symtab.strtab().get_str(runpath_off.get())),
                 symtab,
             },
             module: ElfCore { inner },

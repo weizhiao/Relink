@@ -77,6 +77,11 @@ impl ModuleId {
     pub(in crate::linker) const fn from_slot(context: ContextId, slot: ModuleSlot) -> Self {
         Self { context, slot }
     }
+
+    #[inline]
+    pub(in crate::linker) const fn context(self) -> ContextId {
+        self.context
+    }
 }
 
 impl Display for ModuleId {

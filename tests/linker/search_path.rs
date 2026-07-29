@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf as StdPathBuf};
 use elf_loader::{
     LinkContext, Linker,
     input::{Path as ElfPath, PathBuf},
-    linker::{CandidateRequest, SearchPathResolver},
+    linker::{CandidateRequest, SearchOwner, SearchPathResolver},
     runtime::DomainId,
 };
 
@@ -80,10 +80,12 @@ fn dynamic_dirs_precede_static_dirs() {
 fn origin_expands_and_runpath_wins() {
     let request = CandidateRequest::dependency(
         ElfPath::new("libdep.so"),
-        "libowner.so",
-        ElfPath::new("/tmp/owner/libowner.so"),
-        Some("$ORIGIN/run:${ORIGIN}/alt"),
-        Some("$ORIGIN/rpath"),
+        SearchOwner::new(
+            "libowner.so",
+            ElfPath::new("/tmp/owner/libowner.so"),
+            Some("$ORIGIN/run:${ORIGIN}/alt"),
+            Some("$ORIGIN/rpath"),
+        ),
     );
     let runpath = request.runpath().expect("expected parsed runpath");
     let rpath = request.rpath().expect("expected parsed rpath");

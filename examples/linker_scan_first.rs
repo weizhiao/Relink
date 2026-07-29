@@ -3,7 +3,7 @@ mod fixture_support;
 
 use elf_loader::{
     LinkContext, Linker, Result,
-    image::ModuleCapability,
+    image::{Module, ModuleCapability},
     input::PathBuf,
     linker::scan::{LinkPass, LinkPassPlan, Materialization, ReorderPass},
     runtime::DomainId,
@@ -42,7 +42,7 @@ fn main() -> Result<()> {
     println!(
         "scan-first loaded {} with {} committed modules; leaf_value() = {}",
         loaded.name(),
-        loaded.committed().len(),
+        loaded.modules().len(),
         value
     );
 

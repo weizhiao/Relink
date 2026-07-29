@@ -117,6 +117,15 @@ impl ThreadDtv {
             if slot.generation == module_slot.generation {
                 continue;
             }
+            // Registration precedes relocation, so another module may be
+            // usable while this slot is still waiting for its final image.
+            if module_slot
+                .module
+                .as_ref()
+                .is_some_and(|module| module.info.filesz != 0 && module.source.is_none())
+            {
+                continue;
+            }
 
             let entry = match &module_slot.module {
                 Some(module) => match module.tls {
@@ -179,8 +188,21 @@ impl Default for ThreadDtv {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tls::TlsStorage;
-    use crate::tls::{TlsInfo, TlsRegistry};
+    use crate::{
+        sync::Arc,
+        tls::{
+            TlsImageProvider, TlsImageSource, TlsInfo, TlsRegistry, TlsStorage,
+            tls_image_provider_handle,
+        },
+    };
+
+    struct TestImage;
+
+    impl TlsImageProvider for TestImage {
+        fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+            f(&[1, 2, 3, 4])
+        }
+    }
 
     fn info() -> TlsInfo {
         TlsInfo {
@@ -223,5 +245,34 @@ mod tests {
         let address = dtv.resolve(mod_id).unwrap();
         assert_ne!(address, 0);
         assert_eq!(dtv.resolve(mod_id).unwrap(), address);
+    }
+
+    #[test]
+    fn sync_skips_modules_until_their_image_is_published() {
+        let mut registry = TlsRegistry::new();
+        let module = registry
+            .register(
+                TlsInfo {
+                    filesz: 4,
+                    memsz: 4,
+                    ..TlsInfo::default()
+                },
+                TlsStorage::Static(TlsTpOffset::new(-4)),
+                (),
+            )
+            .unwrap();
+        let mod_id = module.mod_id();
+        let mut dtv = ThreadDtv::new();
+
+        dtv.sync(&registry.snapshot(), |_, _| unreachable!())
+            .unwrap();
+        assert_eq!(dtv.get(mod_id), None);
+
+        let provider = tls_image_provider_handle(Arc::new(TestImage));
+        registry
+            .publish(TlsImageSource::new(Arc::downgrade(&provider)), mod_id)
+            .unwrap();
+        dtv.sync(&registry.snapshot(), |_, _| Ok(0x1000)).unwrap();
+        assert_eq!(dtv.get(mod_id), Some(0x1000));
     }
 }

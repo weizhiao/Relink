@@ -4,7 +4,7 @@ use crate::{
     arch::NativeArch,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     hint::{likely, unlikely},
-    image::{LoadedCore, RawDynamic},
+    image::{LoadedCore, Module, RawDynamic},
     lazy::{LazyBinder, prepare_plt, relocate_jump_slot},
     logging,
     memory::{ImageMemory, ImageMemoryExt, MappedView, RegionAccess, VmOffset},

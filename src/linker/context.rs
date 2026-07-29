@@ -385,6 +385,9 @@ where
     #[inline]
     pub fn remove(&mut self, id: ModuleId) -> Result<(ModuleHandle<Arch, Tls>, DirectDeps, M)> {
         let slot = self.committed.module_slot(id)?;
+        require_module(id, self.committed.module(slot))?
+            .handle()
+            .finalize()?;
         let (module, direct_deps, meta) = require_module(id, self.committed.remove(slot))?;
         Ok((
             module,

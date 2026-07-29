@@ -7,7 +7,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::ElfPhdr,
-    image::{ElfCore, LoadedCore, RawDynamic},
+    image::{ElfCore, LoadedCore, Module, RawDynamic},
     input::Path,
     lazy::{LazyBinder, SupportLazy},
     memory::{HostRegion, RegionAccess, VmAddr},

@@ -2,7 +2,7 @@ use super::lifecycle::{LifecycleHandlers, LifecycleRunner};
 use crate::{
     arch::NativeArch,
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, HashTable, SymbolEntry, SymbolTableView},
-    image::{ElfCore, ModuleScope},
+    image::{ElfCore, Module, ModuleScope},
     input::Path,
     lazy::LazyValues,
     memory::{HostRegion, RegionAccess, VmAddr},
@@ -65,7 +65,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
     /// Returns values supplied by the lazy binder, when active.
     #[inline]
     pub fn lazy(&self) -> Option<LazyValues> {
-        self.lib().inner.runtime().lazy_values()
+        self.lib().inner.runtime.lazy_values()
     }
 
     /// Access a symbol table entry by index for this relocation context.

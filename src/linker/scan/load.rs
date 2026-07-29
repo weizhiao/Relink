@@ -63,10 +63,10 @@ where
 
         let prepared = self.prepare_scan_load::<Meta, Q>(context, &key)?;
         let relocated = self.relocate(prepared)?;
-        let committed = self.commit(context, relocated)?;
-        match self.initialize(committed) {
+        let published = relocated.publish(context)?;
+        match published.initialize() {
             Ok(result) => Ok(result),
-            Err(failed) => Err(self.rollback(context, failed)),
+            Err(failed) => Err(failed.rollback(context)),
         }
     }
 
@@ -90,6 +90,7 @@ where
         let mut resolve_context = ScanResolveContext::new(&mut context.committed, &mut session);
         let resolved = resolve_context.resolve_root::<Q, M::Region, _>(
             key,
+            None,
             &self.linker.resolver,
             &loader.observer,
         )?;

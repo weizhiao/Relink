@@ -840,13 +840,13 @@ impl Display for UnresolvedDependency {
     }
 }
 
-/// Structured committed linker-context failure details.
+/// Structured linker-context failure details.
 pub enum LinkContextError {
-    /// A prepared load was committed into a different context.
-    CommitContextMismatch {
-        /// Context used while preparing the load.
-        prepared: ContextId,
-        /// Context supplied for commit.
+    /// A load transaction was used with a different context.
+    ContextMismatch {
+        /// Context that owns the load transaction.
+        expected: ContextId,
+        /// Context supplied for the operation.
         actual: ContextId,
     },
     /// A key id from one [`crate::LinkContext`] was used with another context.
@@ -878,10 +878,10 @@ pub enum LinkContextError {
 impl Display for LinkContextError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::CommitContextMismatch { prepared, actual } => write!(
+            Self::ContextMismatch { expected, actual } => write!(
                 f,
-                "load prepared for link context {} was committed into context {}",
-                prepared, actual
+                "load transaction belongs to link context {} but was used with context {}",
+                expected, actual
             ),
             Self::KeyContextMismatch { id, expected } => {
                 write!(f, "key id {} was used with link context {}", id, expected)
@@ -1071,6 +1071,11 @@ pub enum TlsError {
         /// Module ID that could not be found.
         mod_id: TlsModuleId,
     },
+    /// The TLS initialization image was already published for this module.
+    AlreadyPublished {
+        /// Module ID whose initialization image was already published.
+        mod_id: TlsModuleId,
+    },
     /// The TLS segment metadata is invalid.
     InvalidInfo,
     /// The supplied module metadata does not match the registered module.
@@ -1086,6 +1091,9 @@ impl Display for TlsError {
             Self::TemplateUnavailable => f.write_str("TLS template image is no longer available"),
             Self::InvalidModuleId { mod_id } => {
                 write!(f, "TLS module ID {mod_id} is not registered")
+            }
+            Self::AlreadyPublished { mod_id } => {
+                write!(f, "TLS module ID {mod_id} is already published")
             }
             Self::InvalidInfo => f.write_str("TLS segment metadata is invalid"),
             Self::ModuleMismatch => {

@@ -22,8 +22,8 @@ pub use context::{DirectDeps, DirectDepsIntoIter, LinkContext};
 pub use driver::{Linker, LoadResult};
 pub use resolver::{
     CandidateContext, CandidateRequest, DependencyOwner, DependencyRequest, FileNameKey,
-    KeyResolver, KeyRule, PathKey, ResolvedKey, RootRequest, SearchDirProvider, SearchPathEntry,
-    SearchPathResolver,
+    KeyResolver, KeyRule, PathKey, ResolvedKey, RootRequest, SearchDirProvider, SearchOwner,
+    SearchPathEntry, SearchPathResolver,
 };
-pub use run::{CommittedLoad, FailedLoad, LinkerRun, PreparedLoad, RelocatedLoad};
+pub use run::{FailedLoad, LinkerRun, PreparedLoad, PublishedLoad, RelocatedLoad};
 pub use storage::{ContextId, KeyId, ModuleId};

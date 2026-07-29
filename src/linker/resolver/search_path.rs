@@ -1,6 +1,7 @@
-use super::{KeyResolver, ResolvedKey};
+use super::{KeyResolver, ResolvedKey, SearchOwner};
 use crate::{
     Error, IoError, LinkResolverError, LinkerError, ParseEhdrError, Result,
+    elf::{ElfHeader, ElfLayout},
     input::{ElfFile, ElfReader, Path, PathBuf},
     linker::{DependencyRequest, RootRequest},
     relocation::RelocationArch,
@@ -8,7 +9,7 @@ use crate::{
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{fmt, marker::PhantomData};
+use core::{fmt, marker::PhantomData, mem::MaybeUninit};
 
 fn expand_origin(value: &str, origin: &Path) -> PathBuf {
     PathBuf::from(
@@ -73,19 +74,15 @@ pub enum CandidateRequest<'a> {
     Root {
         /// Path requested by the root load.
         requested: &'a Path,
+        /// Module that initiated this root load, when called through `dlopen`.
+        owner: Option<SearchOwner<'a>>,
     },
     /// Resolving one `DT_NEEDED` entry for an already-loaded owner.
     Dependency {
         /// Dependency name after applying `$ORIGIN` to the requested value.
         requested: &'a Path,
-        /// Diagnostic name of the owner that requested this dependency.
-        owner_name: &'a str,
-        /// Loaded path/key of the owner that requested this dependency.
-        owner_path: &'a Path,
-        /// Raw `DT_RUNPATH` value, when present.
-        runpath: Option<&'a str>,
-        /// Raw `DT_RPATH` value, when present.
-        rpath: Option<&'a str>,
+        /// Module that owns the dependency edge.
+        owner: SearchOwner<'a>,
     },
 }
 
@@ -93,97 +90,85 @@ impl<'a> CandidateRequest<'a> {
     /// Creates a root candidate request.
     #[inline]
     pub const fn root(requested: &'a Path) -> Self {
-        Self::Root { requested }
+        Self::Root {
+            requested,
+            owner: None,
+        }
+    }
+
+    /// Creates a root candidate request initiated by a loaded module.
+    #[inline]
+    pub const fn root_from(requested: &'a Path, owner: SearchOwner<'a>) -> Self {
+        Self::Root {
+            requested,
+            owner: Some(owner),
+        }
     }
 
     /// Creates a dependency candidate request.
     #[inline]
-    pub const fn dependency(
-        requested: &'a Path,
-        owner_name: &'a str,
-        owner_path: &'a Path,
-        runpath: Option<&'a str>,
-        rpath: Option<&'a str>,
-    ) -> Self {
-        Self::Dependency {
-            requested,
-            owner_name,
-            owner_path,
-            runpath,
-            rpath,
-        }
+    pub const fn dependency(requested: &'a Path, owner: SearchOwner<'a>) -> Self {
+        Self::Dependency { requested, owner }
     }
-}
 
-impl<'a> CandidateRequest<'a> {
     /// Returns the requested root path or dependency name/path.
     #[inline]
     pub const fn requested(&self) -> &'a Path {
         match self {
-            Self::Root { requested } | Self::Dependency { requested, .. } => requested,
+            Self::Root { requested, .. } | Self::Dependency { requested, .. } => requested,
         }
     }
 
-    /// Returns the owner name for dependency requests.
+    #[inline]
+    const fn owner(&self) -> Option<SearchOwner<'a>> {
+        match *self {
+            Self::Root { owner, .. } => owner,
+            Self::Dependency { owner, .. } => Some(owner),
+        }
+    }
+
+    /// Returns the owner name for caller-aware roots and dependencies.
     #[inline]
     pub const fn owner_name(&self) -> Option<&'a str> {
-        match self {
-            Self::Root { .. } => None,
-            Self::Dependency { owner_name, .. } => Some(owner_name),
+        match self.owner() {
+            Some(owner) => Some(owner.name()),
+            None => None,
         }
     }
 
-    /// Returns the owner path for dependency requests.
+    /// Returns the owner path for caller-aware roots and dependencies.
     #[inline]
     pub const fn owner_path(&self) -> Option<&'a Path> {
-        match self {
-            Self::Root { .. } => None,
-            Self::Dependency { owner_path, .. } => Some(owner_path),
+        match self.owner() {
+            Some(owner) => Some(owner.path()),
+            None => None,
         }
     }
 
     /// Returns the owner directory used for `$ORIGIN` expansion.
     #[inline]
     pub fn origin(&self) -> Option<&'a Path> {
-        match self {
-            Self::Root { .. } => None,
-            Self::Dependency { owner_path, .. } => Some(owner_path.parent()),
-        }
+        self.owner_path().map(Path::parent)
     }
 
-    /// Returns expanded `DT_RUNPATH` directories for dependency requests.
+    /// Returns expanded `DT_RUNPATH` directories for caller-aware requests.
     #[inline]
     pub fn runpath(&self) -> Option<Vec<PathBuf>> {
-        match self {
-            Self::Root { .. } => None,
-            Self::Dependency { runpath, .. } => self.expand_dynamic_path_list(*runpath),
-        }
+        self.expand_dynamic_path_list(self.owner()?.runpath())
     }
 
-    /// Returns expanded `DT_RPATH` directories for dependency requests.
+    /// Returns expanded `DT_RPATH` directories for caller-aware requests.
     #[inline]
     pub fn rpath(&self) -> Option<Vec<PathBuf>> {
-        match self {
-            Self::Root { .. } => None,
-            Self::Dependency { rpath, .. } => self.expand_dynamic_path_list(*rpath),
-        }
+        self.expand_dynamic_path_list(self.owner()?.rpath())
     }
 
     fn expand_dynamic_path_list(&self, path_list: Option<&str>) -> Option<Vec<PathBuf>> {
-        let Self::Dependency {
-            requested,
-            owner_path,
-            ..
-        } = *self
-        else {
-            return None;
-        };
-
-        if requested.has_dir_separator() {
+        if self.requested().has_dir_separator() {
             return None;
         }
 
-        let origin = owner_path.parent();
+        let origin = self.origin()?;
         Some(
             path_list?
                 .split(':')
@@ -241,23 +226,15 @@ impl<LinkKey: fmt::Debug> fmt::Debug for CandidateContext<'_, LinkKey> {
 impl fmt::Debug for CandidateRequest<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Root { requested } => f
+            Self::Root { requested, owner } => f
                 .debug_struct("Root")
                 .field("requested", requested)
+                .field("owner", owner)
                 .finish(),
-            Self::Dependency {
-                requested,
-                owner_name,
-                owner_path,
-                runpath,
-                rpath,
-            } => f
+            Self::Dependency { requested, owner } => f
                 .debug_struct("Dependency")
                 .field("requested", requested)
-                .field("owner_name", owner_name)
-                .field("owner_path", owner_path)
-                .field("runpath", runpath)
-                .field("rpath", rpath)
+                .field("owner", owner)
                 .finish(),
         }
     }
@@ -390,7 +367,59 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
         &self.entries
     }
 
-    fn resolve_key<F>(
+    /// Visits filesystem candidates in search order until `inspect` accepts one.
+    pub fn find_candidate<T>(
+        &self,
+        request: CandidateRequest<'_>,
+        mut inspect: impl FnMut(&Path) -> Result<Option<T>>,
+    ) -> Result<Option<T>> {
+        self.find_candidate_with(request, |candidate, _| inspect(candidate))
+    }
+
+    fn find_candidate_with<T>(
+        &self,
+        request: CandidateRequest<'_>,
+        mut inspect: impl FnMut(&Path, bool) -> Result<Option<T>>,
+    ) -> Result<Option<T>> {
+        let expanded = match request {
+            CandidateRequest::Root {
+                requested,
+                owner: Some(owner),
+            } => Some(expand_origin(requested.as_str(), owner.path().parent())),
+            _ => None,
+        };
+        let requested = expanded
+            .as_ref()
+            .map_or_else(|| request.requested(), PathBuf::as_path);
+        if requested.has_dir_separator() {
+            return inspect(requested, false);
+        }
+
+        let mut dynamic_dirs = Vec::new();
+        for entry in &self.entries {
+            match entry {
+                SearchPathEntry::Dir(dir) => {
+                    let candidate = dir.join(requested.as_str());
+                    if let Some(found) = inspect(candidate.as_path(), true)? {
+                        return Ok(Some(found));
+                    }
+                }
+                SearchPathEntry::Dynamic(resolver) => {
+                    dynamic_dirs.clear();
+                    resolver(request, &mut dynamic_dirs)?;
+                    for dir in &dynamic_dirs {
+                        let candidate = dir.join(requested.as_str());
+                        if let Some(found) = inspect(candidate.as_path(), true)? {
+                            return Ok(Some(found));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn resolve_key<Arch, F>(
         &self,
         request: CandidateRequest<'_>,
         contains_key: &dyn Fn(&LinkKey) -> bool,
@@ -399,16 +428,26 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
     where
         Rule: KeyRule<LinkKey>,
         LinkKey: AsRef<Path>,
+        Arch: RelocationArch,
         F: for<'req> Fn(CandidateContext<'req, LinkKey>) -> Result<Option<LinkKey>> + ?Sized,
     {
-        let try_candidate = |candidate: &Path| -> Result<Option<ResolvedCandidate<LinkKey>>> {
+        let mut incompatible = None;
+        let mut try_candidate = |candidate: &Path,
+                                 continue_on_incompatible: bool|
+         -> Result<Option<ResolvedCandidate<LinkKey>>> {
             let key = Rule::key_for_candidate(candidate);
             if contains_key(&key) {
                 return Ok(Some(ResolvedCandidate::Existing(key)));
             }
 
-            let Some(file) = Self::open_elf(candidate)? else {
-                return Ok(None);
+            let file = match Self::open_elf::<Arch>(candidate) {
+                Ok(Some(file)) => file,
+                Ok(None) => return Ok(None),
+                Err(err) if continue_on_incompatible && Self::is_incompatible_elf(&err) => {
+                    incompatible.get_or_insert(err);
+                    return Ok(None);
+                }
+                Err(err) => return Err(err),
             };
 
             let context = CandidateContext::new(candidate, &key);
@@ -419,38 +458,14 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
             Ok(Some(ResolvedCandidate::Load { key, file }))
         };
 
-        let requested = request.requested();
-        let has_dir_separator = requested.has_dir_separator();
-        if has_dir_separator {
-            if let Some(resolved) = try_candidate(requested)? {
-                return Ok(Some(resolved));
-            }
-            return Ok(None);
+        if let Some(resolved) = self.find_candidate_with(request, &mut try_candidate)? {
+            return Ok(Some(resolved));
         }
 
-        let mut dynamic_dirs = Vec::new();
-        for entry in &self.entries {
-            match entry {
-                SearchPathEntry::Dir(dir) => {
-                    let candidate = dir.join(requested.as_str());
-                    if let Some(resolved) = try_candidate(candidate.as_path())? {
-                        return Ok(Some(resolved));
-                    }
-                }
-                SearchPathEntry::Dynamic(resolver) => {
-                    dynamic_dirs.clear();
-                    resolver(request, &mut dynamic_dirs)?;
-                    for dir in &dynamic_dirs {
-                        let candidate = dir.join(requested.as_str());
-                        if let Some(resolved) = try_candidate(candidate.as_path())? {
-                            return Ok(Some(resolved));
-                        }
-                    }
-                }
-            }
+        match incompatible {
+            Some(err) => Err(err),
+            None => Ok(None),
         }
-
-        Ok(None)
     }
 
     fn resolved_key<'cfg, Arch, Tls>(
@@ -482,11 +497,11 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
         F: for<'req> Fn(CandidateContext<'req, LinkKey>) -> Result<Option<LinkKey>> + ?Sized,
     {
         let contains_key = |key: &LinkKey| req.contains_key(key);
-        if let Some(resolved) = self.resolve_key(
-            CandidateRequest::root(req.key().as_ref()),
-            &contains_key,
-            reuse,
-        )? {
+        let request = match req.owner() {
+            Some(owner) => CandidateRequest::root_from(req.key().as_ref(), owner),
+            None => CandidateRequest::root(req.key().as_ref()),
+        };
+        if let Some(resolved) = self.resolve_key::<Arch, _>(request, &contains_key, reuse)? {
             return Ok(Self::resolved_key(resolved));
         }
 
@@ -511,35 +526,54 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
         let needed = expand_origin(req.needed(), origin);
         let request = CandidateRequest::dependency(
             needed.as_path(),
-            req.owner_name(),
-            req.owner_path(),
-            req.runpath(),
-            req.rpath(),
+            SearchOwner::new(
+                req.owner_name(),
+                req.owner_path(),
+                req.runpath(),
+                req.rpath(),
+            ),
         );
         let contains_key = |key: &LinkKey| req.contains_key(key);
-        if let Some(resolved) = self.resolve_key(request, &contains_key, reuse)? {
+        if let Some(resolved) = self.resolve_key::<Arch, _>(request, &contains_key, reuse)? {
             return Ok(Self::resolved_key(resolved));
         }
 
         Err(req.unresolved())
     }
 
-    /// Open `path` if it exists, returning `Ok(None)` for ordinary open
-    /// failures and propagating parse/read errors for files that were found.
-    fn open_elf(path: &Path) -> Result<Option<ElfFile>> {
+    /// Opens and validates a target-compatible ELF candidate.
+    fn open_elf<Arch: RelocationArch>(path: &Path) -> Result<Option<ElfFile>> {
         let file = match ElfFile::from_path(path) {
             Ok(file) => file,
             Err(Error::Io(IoError::OpenFailed { .. })) => return Ok(None),
             Err(err) => return Err(err),
         };
 
-        let mut magic = [0; 4];
-        file.read(&mut magic, 0)?;
-        if magic == *b"\x7fELF" {
-            Ok(Some(file))
-        } else {
-            Err(ParseEhdrError::InvalidMagic.into())
-        }
+        let mut raw = MaybeUninit::<<Arch::Layout as ElfLayout>::Ehdr>::uninit();
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(
+                raw.as_mut_ptr().cast::<u8>(),
+                <Arch::Layout as ElfLayout>::EHDR_SIZE,
+            )
+        };
+        file.read(bytes, 0)?;
+        let ehdr =
+            ElfHeader::<Arch::Layout>::from_raw(unsafe { raw.assume_init() }, Some(Arch::MACHINE))?;
+        Arch::validate_e_flags(ehdr.e_flags())?;
+        Ok(Some(file))
+    }
+
+    #[inline]
+    fn is_incompatible_elf(err: &Error) -> bool {
+        matches!(
+            err,
+            Error::ParseEhdr(
+                ParseEhdrError::FileClassMismatch { .. }
+                    | ParseEhdrError::FileEndianMismatch { .. }
+                    | ParseEhdrError::FileArchMismatch { .. }
+                    | ParseEhdrError::InvalidFlags { .. }
+            )
+        )
     }
 }
 

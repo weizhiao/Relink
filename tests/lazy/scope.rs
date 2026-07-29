@@ -2,6 +2,7 @@ use crate::{
     fixture::fixtures,
     support::{CALL_FIRST, FIRST, call, load_lazy, load_provider, slot, symbol},
 };
+use elf_loader::image::Module;
 
 #[test]
 fn retains_scope() {

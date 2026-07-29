@@ -18,13 +18,16 @@ use crate::{
     observer::RelocationObserver,
     relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},
     runtime::DomainId,
-    sync::{Arc, AtomicBool},
+    sync::{Arc, AtomicUsize},
     tls::{CoreTlsState, TlsResolver},
 };
 use alloc::boxed::Box;
 use core::{borrow::Borrow, cell::OnceCell, fmt::Debug, ops::Deref};
 
-use crate::image::{ElfCore, LoadedCore, ModuleHandle, core::CoreInner};
+use crate::image::{
+    ElfCore, LoadedCore, Module, ModuleHandle,
+    core::{CoreInner, STATE_UNINIT},
+};
 
 /// A relocatable ELF object.
 ///
@@ -85,7 +88,7 @@ where
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(None)),
             executor: self.executor,
             domain: self.domain,
-            is_init: AtomicBool::new(false),
+            phase: AtomicUsize::new(STATE_UNINIT),
             lifecycle: OnceCell::new(),
             path: self.path,
             exports: exports_handle(ObjectExports::<Arch::Layout>::empty()),

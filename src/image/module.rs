@@ -48,6 +48,12 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
         &*self.module
     }
 
+    /// Returns whether both handles retain the same module instance.
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.module, &other.module)
+    }
+
     /// Downcasts the retained module to a concrete type.
     #[inline]
     pub fn downcast_ref<T>(&self) -> Option<&T>

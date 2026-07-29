@@ -8,7 +8,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::ElfPhdr,
-    image::LoadedCore,
+    image::{LoadedCore, Module},
     input::Path,
     lazy::{LazyBinder, SupportLazy},
     memory::{HostRegion, RegionAccess, VmAddr},
