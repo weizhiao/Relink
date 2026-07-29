@@ -4,10 +4,10 @@ use crate::{
     arch::NativeArch,
     relocation::RelocationArch,
     runtime::DomainId,
-    sync::{Arc, Weak},
+    sync::{Arc, Weak, arc_unsize},
     tls::TlsResolver,
 };
-use alloc::{boxed::Box, vec::Vec};
+use alloc::vec::Vec;
 use core::{any::Any, fmt, ops::Deref, slice};
 
 /// Shared ownership handle for one retained module.
@@ -32,7 +32,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
         M: Module<Arch, Tls> + 'static,
     {
         Self {
-            module: Arc::from(Box::new(module) as Box<dyn Module<Arch, Tls>>),
+            module: arc_unsize!(Arc::new(module) => dyn Module<Arch, Tls>),
         }
     }
 
@@ -99,7 +99,7 @@ where
 {
     #[inline]
     fn from(module: Arc<M>) -> Self {
-        Self::new(module)
+        Self::from_shared(arc_unsize!(module => dyn Module<Arch, Tls>))
     }
 }
 
@@ -251,5 +251,20 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> WeakModuleScope<Arch, Tls> {
         self.modules
             .upgrade()
             .map(|modules| ModuleScope { modules })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image::SyntheticModule;
+
+    #[test]
+    fn shared_module_preserves_identity() {
+        let module = Arc::new(SyntheticModule::<NativeArch>::empty("shared"));
+        let first: ModuleHandle = module.clone().into();
+        let second: ModuleHandle = module.into();
+
+        assert!(first.ptr_eq(&second));
     }
 }

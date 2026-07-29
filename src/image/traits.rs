@@ -8,7 +8,6 @@ use crate::{
     sync::Arc,
     tls::{ModuleTls, TlsResolver},
 };
-use alloc::boxed::Box;
 use core::any::Any;
 
 /// Runtime symbol exports for a module.
@@ -27,15 +26,6 @@ pub trait SymbolExports<L: ElfLayout>: Send + Sync {
         &'exports self,
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'exports ElfSymbol<L>>;
-}
-
-#[inline]
-pub(crate) fn exports_handle<L, E>(exports: E) -> Arc<dyn SymbolExports<L>>
-where
-    L: ElfLayout,
-    E: SymbolExports<L> + 'static,
-{
-    Arc::from(Box::new(exports) as Box<dyn SymbolExports<L>>)
 }
 
 impl<L> SymbolExports<L> for SymbolTable<L>

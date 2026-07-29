@@ -12,7 +12,7 @@ mod state;
 mod thread;
 mod traits;
 
-pub(crate) use defs::{TLS_GET_ADDR_SYMBOL, TlsImageProvider, tls_image_provider_handle};
+pub(crate) use defs::{TLS_GET_ADDR_SYMBOL, TlsImageProvider};
 pub(crate) use state::CoreTlsState;
 
 pub use defs::{

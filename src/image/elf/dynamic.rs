@@ -17,16 +17,15 @@ use crate::{
     relocation::{DynamicRelocation, Relocatable, RelocateArgs, RelocationArch},
     runtime::DomainId,
     segment::{ElfSegments, MemoryProtection},
-    sync::{Arc, AtomicUsize},
+    sync::{Arc, AtomicUsize, arc_unsize},
     tls::{CoreTlsState, ModuleTls, TlsRequest, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{cell::OnceCell, mem::size_of, ptr::NonNull};
 
 use crate::image::{
-    CoreRuntime, ElfCore, LoadedCore, Module,
+    CoreRuntime, ElfCore, LoadedCore, Module, SymbolExports,
     core::{CoreInner, STATE_UNINIT},
-    exports_handle,
 };
 
 impl<L: ElfLayout> SymbolTable<L> {
@@ -480,7 +479,7 @@ where
             phase: AtomicUsize::new(STATE_UNINIT),
             lifecycle: OnceCell::new(),
             path: self.path,
-            exports: exports_handle(exports),
+            exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),
             user_data: self.user_data,
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
                 eh_frame_hdr: self.eh_frame_hdr,

@@ -189,11 +189,8 @@ impl Default for ThreadDtv {
 mod tests {
     use super::*;
     use crate::{
-        sync::Arc,
-        tls::{
-            TlsImageProvider, TlsImageSource, TlsInfo, TlsRegistry, TlsStorage,
-            tls_image_provider_handle,
-        },
+        sync::{Arc, arc_unsize},
+        tls::{TlsImageProvider, TlsImageSource, TlsInfo, TlsRegistry, TlsStorage},
     };
 
     struct TestImage;
@@ -268,7 +265,7 @@ mod tests {
             .unwrap();
         assert_eq!(dtv.get(mod_id), None);
 
-        let provider = tls_image_provider_handle(Arc::new(TestImage));
+        let provider = arc_unsize!(Arc::new(TestImage) => dyn TlsImageProvider);
         registry
             .publish(TlsImageSource::new(Arc::downgrade(&provider)), mod_id)
             .unwrap();

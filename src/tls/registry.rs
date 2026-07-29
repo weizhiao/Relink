@@ -240,8 +240,8 @@ impl<D> Default for TlsRegistry<D> {
 mod tests {
     use super::*;
     use crate::{
-        sync::Arc,
-        tls::{TlsImageProvider, tls_image_provider_handle},
+        sync::{Arc, arc_unsize},
+        tls::TlsImageProvider,
     };
 
     struct TestImage;
@@ -294,7 +294,7 @@ mod tests {
     fn rejects_repeated_publication() {
         let mut registry = TlsRegistry::new();
         let module = registry.register(info(), TlsStorage::Dynamic, ()).unwrap();
-        let provider = tls_image_provider_handle(Arc::new(TestImage));
+        let provider = arc_unsize!(Arc::new(TestImage) => dyn TlsImageProvider);
         let source = TlsImageSource::new(Arc::downgrade(&provider));
 
         registry.publish(source.clone(), module.mod_id()).unwrap();

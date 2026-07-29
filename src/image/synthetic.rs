@@ -7,10 +7,10 @@ use crate::{
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
     runtime::DomainId,
-    sync::Arc,
+    sync::{Arc, arc_unsize},
     tls::{ModuleTls, TlsResolver},
 };
-use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
+use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use core::ptr::NonNull;
 
 /// One synthetic symbol exported by a [`SyntheticModule`].
@@ -257,14 +257,6 @@ impl ImageMemory for UnmappedImageMemory {
     }
 }
 
-#[inline]
-fn image_memory<M>(memory: M) -> Arc<dyn ImageMemory>
-where
-    M: ImageMemory + 'static,
-{
-    Arc::from(Box::new(memory) as Box<dyn ImageMemory>)
-}
-
 /// A [`Module`] backed by a synthetic table of absolute symbols.
 ///
 /// The module owns stable synthetic ELF symbols, so it can be retained in a
@@ -320,7 +312,9 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     pub fn empty(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            memory: image_memory(UnmappedImageMemory::default()),
+            memory: arc_unsize!(
+                Arc::new(UnmappedImageMemory::default()) => dyn ImageMemory
+            ),
             tls: None,
             domain: DomainId::PROCESS,
             user_data: (),
@@ -368,7 +362,7 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
     where
         M: ImageMemory + 'static,
     {
-        self.memory = image_memory(memory);
+        self.memory = arc_unsize!(Arc::new(memory) => dyn ImageMemory);
         self
     }
 
@@ -743,7 +737,7 @@ mod tests {
 
     #[test]
     fn synthetic_module_can_delegate_image_memory() {
-        let bytes = Box::leak(Box::new([1u8, 2, 3, 4]));
+        let bytes = alloc::boxed::Box::leak(alloc::boxed::Box::new([1u8, 2, 3, 4]));
         let region =
             MappedRegion::local_alias_no_unmap(bytes.as_ptr().cast_mut().cast(), bytes.len());
         let base = VmAddr::from_ptr(bytes.as_ptr());

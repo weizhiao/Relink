@@ -3,20 +3,15 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
-    image::{
-        CoreRuntime, DynamicInfo, Module, ModuleScope, PltRelocInfo, SymbolExports, exports_handle,
-    },
+    image::{CoreRuntime, DynamicInfo, Module, ModuleScope, PltRelocInfo, SymbolExports},
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
     relocation::{RelocationArch, SymbolRegistry},
     runtime::{CodeContext, CodeExecutor, DomainId, NativeCodeExecutor},
     segment::ElfSegments,
-    sync::{Arc, AtomicUsize, Ordering, Weak},
-    tls::{
-        CoreTlsState, ModuleTls, TlsImageProvider, TlsImageSource, TlsResolver,
-        tls_image_provider_handle,
-    },
+    sync::{Arc, AtomicUsize, Ordering, Weak, arc_unsize},
+    tls::{CoreTlsState, ModuleTls, TlsImageProvider, TlsImageSource, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{cell::OnceCell, fmt::Debug, ptr::NonNull};
@@ -239,7 +234,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
         if self.inner.tls.module().is_none() {
             return Ok(());
         }
-        let provider = tls_image_provider_handle(self.inner.clone());
+        let provider = arc_unsize!(self.inner.clone() => dyn TlsImageProvider);
         self.inner
             .tls
             .publish(TlsImageSource::new(Arc::downgrade(&provider)))
@@ -305,12 +300,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
         let inner = Arc::new(CoreInner {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
-            executor: Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>),
+            executor: arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
             domain: DomainId::PROCESS,
             path,
             phase: AtomicUsize::new(STATE_INIT),
             lifecycle: OnceCell::new(),
-            exports: exports_handle(exports),
+            exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
                 eh_frame_hdr,
                 phdrs: ElfPhdrs::Vec(phdrs),

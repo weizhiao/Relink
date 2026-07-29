@@ -9,10 +9,9 @@ use crate::{
     os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
     runtime::{CodeExecutor, DomainId, NativeCodeExecutor},
-    sync::Arc,
+    sync::{Arc, arc_unsize},
     tls::TlsResolver,
 };
-use alloc::boxed::Box;
 use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 
 /// Reusable configuration for reading and mapping ELF images.
@@ -303,7 +302,7 @@ where
 
     #[inline]
     pub(crate) fn executor(&self) -> Arc<dyn CodeExecutor<Arch>> {
-        Arc::from(Box::new(self.executor.clone()) as Box<dyn CodeExecutor<Arch>>)
+        arc_unsize!(Arc::new(self.executor.clone()) => dyn CodeExecutor<Arch>)
     }
 
     /// Starts a loader run with fresh ELF metadata scratch space.

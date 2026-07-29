@@ -5,10 +5,10 @@ use crate::{
     input::{ElfFile, ElfReader, Path, PathBuf},
     linker::{DependencyRequest, RootRequest},
     relocation::RelocationArch,
-    sync::Arc,
+    sync::{Arc, arc_unsize},
     tls::TlsResolver,
 };
-use alloc::{boxed::Box, vec::Vec};
+use alloc::vec::Vec;
 use core::{fmt, marker::PhantomData, mem::MaybeUninit};
 
 fn expand_origin(value: &str, origin: &Path) -> PathBuf {
@@ -54,7 +54,7 @@ impl SearchPathEntry {
             + Sync
             + 'static,
     {
-        Self::Dynamic(Arc::from(Box::new(resolver) as Box<SearchDirProvider>))
+        Self::Dynamic(arc_unsize!(Arc::new(resolver) => SearchDirProvider))
     }
 }
 
@@ -356,9 +356,7 @@ impl<LinkKey, Rule> SearchPathResolver<LinkKey, Rule> {
             + Sync
             + 'static,
     {
-        self.push_entry(SearchPathEntry::Dynamic(Arc::from(
-            Box::new(provider) as Box<SearchDirProvider>
-        )))
+        self.push_entry(SearchPathEntry::dynamic(provider))
     }
 
     /// Returns the configured search-path entries in lookup order.

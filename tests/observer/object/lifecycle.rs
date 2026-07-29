@@ -1,4 +1,4 @@
-use elf_loader::{Relocator, image::Module};
+use elf_loader::{Module, Relocator};
 
 #[test]
 fn applies_final_protection() {

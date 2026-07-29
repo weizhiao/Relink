@@ -2,7 +2,7 @@ use crate::{
     Result, TlsError,
     elf::{ElfLayout, ElfPhdr, ElfProgramType},
     memory::VmAddr,
-    sync::{Arc, Weak},
+    sync::Weak,
 };
 
 pub(crate) const TLS_GET_ADDR_SYMBOL: &str = "__tls_get_addr";
@@ -86,15 +86,6 @@ impl TlsImageSource {
 
 pub(crate) trait TlsImageProvider: Send + Sync {
     fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()>;
-}
-
-pub(crate) fn tls_image_provider_handle<T>(provider: Arc<T>) -> Arc<dyn TlsImageProvider>
-where
-    T: TlsImageProvider + 'static,
-{
-    let ptr = Arc::into_raw(provider);
-    let ptr: *const dyn TlsImageProvider = ptr;
-    unsafe { Arc::from_raw(ptr) }
 }
 
 /// Two-word TLSDESC binding written into a loaded image.

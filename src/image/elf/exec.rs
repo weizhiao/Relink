@@ -3,7 +3,6 @@
 //! Use [`RawExec`] for an executable that has been mapped but not yet relocated,
 //! and [`LoadedExec`] for the final executable form produced by relocation.
 
-use crate::sync::Arc;
 use crate::{
     ParsePhdrError, Result,
     arch::NativeArch,
@@ -17,10 +16,8 @@ use crate::{
     relocation::{Relocatable, RelocateArgs, RelocationArch},
     runtime::DomainId,
     segment::ElfSegments,
-    tls::{
-        ModuleTls, TlsImageProvider, TlsImageSource, TlsRequest, TlsResolver,
-        tls_image_provider_handle,
-    },
+    sync::{Arc, arc_unsize},
+    tls::{ModuleTls, TlsImageProvider, TlsImageSource, TlsRequest, TlsResolver},
 };
 use alloc::vec::Vec;
 use core::fmt::Debug;
@@ -485,7 +482,7 @@ where
         });
 
         if let Some(image) = tls_image.as_ref() {
-            let provider = tls_image_provider_handle(image.clone());
+            let provider = arc_unsize!(image.clone() => dyn TlsImageProvider);
             let mod_id = module_tls
                 .expect("static TLS image must have registered module metadata")
                 .mod_id();

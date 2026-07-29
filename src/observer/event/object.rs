@@ -4,7 +4,7 @@ use crate::{
         ElfHeader, ElfLayout, ElfSectionId, ElfSectionType, ElfShdr, NativeElfLayout,
         SymbolTableView,
     },
-    image::{ElfCore, RawObject, SymbolExports, exports_handle},
+    image::{ElfCore, RawObject, SymbolExports},
     input::{ElfReader, ElfReaderExt, Path},
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     object::{
@@ -12,7 +12,7 @@ use crate::{
         layout::{SectionGroup, SectionPlacement},
     },
     relocation::{ObjectArch, RelocationArch},
-    sync::Arc,
+    sync::{Arc, arc_unsize},
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
@@ -225,7 +225,7 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver
     where
         E: SymbolExports<Arch::Layout> + 'static,
     {
-        self.exports = Some(exports_handle(exports));
+        self.exports = Some(arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>));
     }
 
     /// Clears all runtime exports.

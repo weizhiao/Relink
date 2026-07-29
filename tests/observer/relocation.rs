@@ -1,7 +1,6 @@
 use elf_loader::{
-    Loader, Relocator,
+    Loader, Module, Relocator,
     arch::NativeArch,
-    image::Module,
     input::ElfBinary,
     memory::{RegionAccess, VmAddr},
     observer::{

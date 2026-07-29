@@ -12,13 +12,13 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfSectionId, Lifecycle},
-    image::{CoreRuntime, exports_handle},
+    image::{CoreRuntime, SymbolExports},
     lazy::LazyBinder,
     memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
     relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},
     runtime::DomainId,
-    sync::{Arc, AtomicUsize},
+    sync::{Arc, AtomicUsize, arc_unsize},
     tls::{CoreTlsState, TlsResolver},
 };
 use alloc::boxed::Box;
@@ -91,7 +91,10 @@ where
             phase: AtomicUsize::new(STATE_UNINIT),
             lifecycle: OnceCell::new(),
             path: self.path,
-            exports: exports_handle(ObjectExports::<Arch::Layout>::empty()),
+            exports: arc_unsize!(
+                Arc::new(ObjectExports::<Arch::Layout>::empty())
+                    => dyn SymbolExports<Arch::Layout>
+            ),
             user_data: self.user_data,
             dynamic_info: None,
             scope: OnceCell::new(),

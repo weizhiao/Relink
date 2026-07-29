@@ -1,4 +1,4 @@
-use elf_loader::{arch::NativeArch, image::Module, memory::VmAddr, relocation::RelocationArch};
+use elf_loader::{Module, arch::NativeArch, memory::VmAddr, relocation::RelocationArch};
 use gen_elf::SectionKind;
 
 use crate::support::{DTPMOD, DTPOFF, FIRST, SECOND, scenario};

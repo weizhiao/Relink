@@ -4,7 +4,7 @@ use crate::{
         ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr, ElfSymbol,
         ElfSymbolType,
     },
-    image::{ElfCore, LoadedCore, LoadedObject, Module, RawObject, exports_handle},
+    image::{ElfCore, LoadedCore, LoadedObject, Module, RawObject, SymbolExports},
     lazy::LazyBinder,
     logging,
     memory::{RegionAccess, VmAddr, VmOffset},
@@ -15,7 +15,7 @@ use crate::{
     relocate_context_error,
     relocation::{ObjectArch, RelocHelper, RelocateArgs, RelocationArch, SymbolResolver},
     runtime::CodeContext,
-    sync::Arc,
+    sync::{Arc, arc_unsize},
     tls::TlsResolver,
 };
 
@@ -130,7 +130,11 @@ where
         );
         observer.on_object_relocated(&mut event)?;
         let (exports, mut lifecycle) = event.into_parts();
-        let exports = exports.unwrap_or_else(|| exports_handle(self.default_exports()));
+        let exports = exports.unwrap_or_else(|| {
+            arc_unsize!(
+                Arc::new(self.default_exports()) => dyn SymbolExports<Arch::Layout>
+            )
+        });
         let inner = Arc::get_mut(&mut self.core.inner)
             .ok_or_else(|| LinkerError::ObjectCoreRetainedBeforeExports)?;
         inner.exports = exports;

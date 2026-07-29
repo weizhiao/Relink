@@ -12,7 +12,7 @@ use crate::{
     relocation::{RelocationArch, RelocationValueProvider},
     runtime::{CodeExecutor, DomainId, NativeCodeExecutor},
     segment::ElfSegments,
-    sync::Arc,
+    sync::{Arc, arc_unsize},
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
@@ -282,7 +282,7 @@ where
         force_static_tls,
         1,
         D::default(),
-        Arc::from(Box::new(NativeCodeExecutor) as Box<dyn CodeExecutor<Arch>>),
+        arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
         domain,
         tls_resolver,
     );
