@@ -157,7 +157,7 @@ jobs:
       run: ./examples/xtensa-qemu/run.sh
     - name: Upload QEMU log
       if: failure()
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: xtensa-qemu-log
         path: examples/xtensa-qemu/target/qemu.log
