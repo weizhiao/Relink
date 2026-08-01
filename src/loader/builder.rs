@@ -21,7 +21,7 @@ use core::ptr::NonNull;
 /// building the final loaded image.
 pub(crate) struct ImageBuilder<
     Tls,
-    D: 'static = (),
+    D: Send + Sync + 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
 > where
@@ -101,7 +101,7 @@ impl<L: ElfLayout> ScanBuilder<L> {
     }
 }
 
-impl<Tls, D: 'static, Arch, R> ImageBuilder<Tls, D, Arch, R>
+impl<Tls, D: Send + Sync + 'static, Arch, R> ImageBuilder<Tls, D, Arch, R>
 where
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,

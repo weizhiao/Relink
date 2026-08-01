@@ -44,7 +44,11 @@ impl LoadObserver<UserData> for Observer {
 }
 
 impl RelocationObserver for Observer {
-    fn on_symbol_binding<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
+    fn on_symbol_binding<
+        D: Send + Sync + 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<NativeArch>,
+    >(
         &mut self,
         event: &mut SymbolBindingEvent<'_, D, NativeArch, R, Tls>,
     ) -> Result<()> {
@@ -54,7 +58,11 @@ impl RelocationObserver for Observer {
         Ok(())
     }
 
-    fn on_dynamic_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
+    fn on_dynamic_relocated<
+        D: Send + Sync + 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<NativeArch>,
+    >(
         &mut self,
         event: &mut DynamicRelocatedEvent<'_, D, NativeArch, R, Tls>,
     ) -> Result<()> {

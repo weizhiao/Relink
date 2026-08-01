@@ -82,7 +82,7 @@ impl<'event, L: ElfLayout> SectionLayoutEvent<'event, L> {
 /// before relocation.
 pub struct AfterObjectLoadEvent<
     'event,
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: ObjectArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -90,7 +90,7 @@ pub struct AfterObjectLoadEvent<
     raw: &'event mut RawObject<D, Arch, R, Tls>,
 }
 
-impl<'event, D: 'static, Arch, R, Tls> AfterObjectLoadEvent<'event, D, Arch, R, Tls>
+impl<'event, D: Send + Sync + 'static, Arch, R, Tls> AfterObjectLoadEvent<'event, D, Arch, R, Tls>
 where
     Arch: ObjectArch,
     R: RegionAccess,
@@ -125,7 +125,7 @@ where
 /// observers return.
 pub struct ObjectRelocatedEvent<
     'event,
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -138,8 +138,13 @@ pub struct ObjectRelocatedEvent<
     lifecycle: LifecycleHandlers,
 }
 
-impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    ObjectRelocatedEvent<'event, D, Arch, R, Tls>
+impl<
+    'event,
+    D: Send + Sync + 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+> ObjectRelocatedEvent<'event, D, Arch, R, Tls>
 {
     #[inline]
     pub(crate) fn new(
@@ -248,14 +253,14 @@ impl<'event, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver
 
 /// Event emitted after relocatable-object section headers are validated and
 /// before section contents are mapped.
-pub struct BeforeObjectLoadEvent<'event, D: 'static, L: ElfLayout = NativeElfLayout> {
+pub struct BeforeObjectLoadEvent<'event, D: Send + Sync + 'static, L: ElfLayout = NativeElfLayout> {
     ehdr: &'event ElfHeader<L>,
     sections: &'event mut ObjectSections<L>,
     object: &'event dyn ElfReader,
     user_data: &'event mut D,
 }
 
-impl<'event, D: 'static, L: ElfLayout> BeforeObjectLoadEvent<'event, D, L> {
+impl<'event, D: Send + Sync + 'static, L: ElfLayout> BeforeObjectLoadEvent<'event, D, L> {
     #[inline]
     pub(crate) fn new(
         ehdr: &'event ElfHeader<L>,

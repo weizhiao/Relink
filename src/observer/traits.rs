@@ -20,7 +20,7 @@ use alloc::boxed::Box;
 use core::borrow::Borrow;
 
 /// Event hook for images as they are loaded.
-pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
+pub trait LoadObserver<D: Send + Sync + 'static = (), Arch: RelocationArch = NativeArch> {
     /// Called after ELF program headers are available and before `PT_LOAD`
     /// segments are mapped.
     #[inline]
@@ -80,7 +80,7 @@ pub trait LoadObserver<D: 'static = (), Arch: RelocationArch = NativeArch> {
 pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     /// Called before built-in relocation handling.
     #[inline]
-    fn on_relocation_pre<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
+    fn on_relocation_pre<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &mut self,
         _ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
@@ -89,7 +89,7 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
 
     /// Called after built-in relocation handling did not handle a relocation.
     #[inline]
-    fn on_relocation_post<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
+    fn on_relocation_post<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &mut self,
         _ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
@@ -98,7 +98,7 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
 
     /// Called when a regular symbol relocation needs runtime binding.
     #[inline]
-    fn on_symbol_binding<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+    fn on_symbol_binding<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
         _event: &mut SymbolBindingEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
@@ -108,7 +108,7 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     /// Called after relocatable-object relocation and before memory protection and initialization.
     #[cfg(feature = "object")]
     #[inline]
-    fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+    fn on_object_relocated<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
         _event: &mut ObjectRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
@@ -120,7 +120,7 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     /// Implementations may adjust lifecycle tables or install retained
     /// initialization and finalization hooks before they are stored.
     #[inline]
-    fn on_dynamic_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+    fn on_dynamic_relocated<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
         _event: &mut DynamicRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
@@ -128,7 +128,10 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     }
 }
 
-/// A module made visible to one linker run, plus the keys of its direct dependencies.
+/// A module imported by one linker run, plus the keys of its direct dependencies.
+///
+/// When selected, the module is committed and participates in initialization
+/// and finalization with the rest of the load transaction.
 pub struct VisibleModule<K, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[K]>,
@@ -170,7 +173,7 @@ where
 /// Group-level policy hooks for dependency linking.
 pub trait LinkerObserver<
     K,
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -203,11 +206,11 @@ pub trait LinkerObserver<
     }
 }
 
-impl<D: 'static, Arch: RelocationArch> LoadObserver<D, Arch> for () {}
+impl<D: Send + Sync + 'static, Arch: RelocationArch> LoadObserver<D, Arch> for () {}
 
 impl<Arch: RelocationArch> RelocationObserver<Arch> for () {}
 
-impl<K, D: 'static, Arch, R, Tls> LinkerObserver<K, D, Arch, R, Tls> for ()
+impl<K, D: Send + Sync + 'static, Arch, R, Tls> LinkerObserver<K, D, Arch, R, Tls> for ()
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -215,9 +218,9 @@ where
 {
 }
 
-impl<D, Arch, O> LoadObserver<D, Arch> for &mut O
+impl<D: Send + Sync + 'static, Arch, O> LoadObserver<D, Arch> for &mut O
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     O: LoadObserver<D, Arch> + ?Sized,
 {
@@ -271,7 +274,7 @@ where
     O: RelocationObserver<Arch> + ?Sized,
 {
     #[inline]
-    fn on_relocation_pre<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
+    fn on_relocation_pre<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &mut self,
         ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
@@ -279,7 +282,7 @@ where
     }
 
     #[inline]
-    fn on_relocation_post<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
+    fn on_relocation_post<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &mut self,
         ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
@@ -287,7 +290,7 @@ where
     }
 
     #[inline]
-    fn on_symbol_binding<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+    fn on_symbol_binding<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
         event: &mut SymbolBindingEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
@@ -296,7 +299,7 @@ where
 
     #[cfg(feature = "object")]
     #[inline]
-    fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+    fn on_object_relocated<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
         event: &mut ObjectRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
@@ -304,7 +307,7 @@ where
     }
 
     #[inline]
-    fn on_dynamic_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+    fn on_dynamic_relocated<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
         event: &mut DynamicRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
@@ -312,7 +315,7 @@ where
     }
 }
 
-impl<K, D: 'static, Arch, R, Tls, O> LinkerObserver<K, D, Arch, R, Tls> for &mut O
+impl<K, D: Send + Sync + 'static, Arch, R, Tls, O> LinkerObserver<K, D, Arch, R, Tls> for &mut O
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -343,9 +346,9 @@ where
     }
 }
 
-impl<D, Arch, O> LoadObserver<D, Arch> for Box<O>
+impl<D: Send + Sync + 'static, Arch, O> LoadObserver<D, Arch> for Box<O>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     O: LoadObserver<D, Arch> + ?Sized,
 {
@@ -399,7 +402,7 @@ where
     O: RelocationObserver<Arch> + ?Sized,
 {
     #[inline]
-    fn on_relocation_pre<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
+    fn on_relocation_pre<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &mut self,
         ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
@@ -407,7 +410,7 @@ where
     }
 
     #[inline]
-    fn on_relocation_post<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
+    fn on_relocation_post<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &mut self,
         ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
@@ -415,7 +418,7 @@ where
     }
 
     #[inline]
-    fn on_symbol_binding<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+    fn on_symbol_binding<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
         event: &mut SymbolBindingEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
@@ -424,7 +427,7 @@ where
 
     #[cfg(feature = "object")]
     #[inline]
-    fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+    fn on_object_relocated<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
         event: &mut ObjectRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
@@ -432,7 +435,7 @@ where
     }
 
     #[inline]
-    fn on_dynamic_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
+    fn on_dynamic_relocated<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>>(
         &mut self,
         event: &mut DynamicRelocatedEvent<'_, D, Arch, R, Tls>,
     ) -> Result<()> {
@@ -440,7 +443,7 @@ where
     }
 }
 
-impl<K, D: 'static, Arch, R, Tls, O> LinkerObserver<K, D, Arch, R, Tls> for Box<O>
+impl<K, D: Send + Sync + 'static, Arch, R, Tls, O> LinkerObserver<K, D, Arch, R, Tls> for Box<O>
 where
     Arch: RelocationArch,
     R: RegionAccess,

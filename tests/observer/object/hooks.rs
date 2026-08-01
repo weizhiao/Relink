@@ -1,4 +1,4 @@
-use elf_loader::Relocator;
+use elf_loader::{Module, Relocator};
 
 #[test]
 fn exports_survive_init_symtab() {
@@ -65,7 +65,7 @@ fn exports_survive_init_symtab() {
         .relocate()
         .expect("relocation failed");
 
-    assert!(loaded_object.is_init());
+    assert!(loaded_object.state().is_initialized());
     assert!(
         unsafe {
             loaded_object
@@ -103,7 +103,11 @@ fn exposes_sections() {
     struct MetadataObserver;
 
     impl RelocationObserver for MetadataObserver {
-        fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
+        fn on_object_relocated<
+            D: Send + Sync + 'static,
+            R: RegionAccess,
+            Tls: TlsResolver<NativeArch>,
+        >(
             &mut self,
             event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R, Tls>,
         ) -> Result<()> {
@@ -171,7 +175,11 @@ fn can_clear_exports() {
     struct ClearExports;
 
     impl RelocationObserver for ClearExports {
-        fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
+        fn on_object_relocated<
+            D: Send + Sync + 'static,
+            R: RegionAccess,
+            Tls: TlsResolver<NativeArch>,
+        >(
             &mut self,
             event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R, Tls>,
         ) -> Result<()> {

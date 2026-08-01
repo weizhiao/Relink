@@ -42,7 +42,7 @@ struct ObjectSectionData<Arch: ObjectArch> {
     fini: Lifecycle,
 }
 
-impl<T, D, Arch, R> ObjectBuilder<T, D, Arch, R>
+impl<T, D: Send + Sync + 'static, Arch, R> ObjectBuilder<T, D, Arch, R>
 where
     T: TlsResolver<Arch>,
     Arch: ObjectArch,

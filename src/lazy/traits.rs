@@ -103,7 +103,7 @@ pub(crate) fn prepare_plt<Arch, Binder, D, R, Tls>(
 where
     Arch: RelocationArch,
     Binder: LazyBinder<Arch> + ?Sized,
-    D: 'static,
+    D: Send + Sync + 'static,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {

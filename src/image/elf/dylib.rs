@@ -29,14 +29,14 @@ use core::fmt::Debug;
 /// [`crate::Relocator::run`]. By default it is [`crate::arch::NativeArch`].
 pub struct RawDylib<D, Arch = NativeArch, R: RegionAccess = HostRegion, Tls: TlsResolver<Arch> = ()>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
 {
     /// The common part containing basic ELF object information.
     pub(crate) inner: RawDynamic<D, Arch, R, Tls>,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     for RawDylib<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -47,13 +47,13 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
-    for RawDylib<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    SupportLazy for RawDylib<D, Arch, R, Tls>
 {
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Relocatable<D>
-    for RawDylib<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    Relocatable<D> for RawDylib<D, Arch, R, Tls>
 {
     type Output = LoadedCore<D, Arch, R, Tls>;
     type Arch = Arch;
@@ -76,7 +76,9 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     }
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDylib<D, Arch, R, Tls> {
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    RawDylib<D, Arch, R, Tls>
+{
     /// Creates a new `RawDylib` from a `RawDynamic`.
     #[inline]
     pub fn from_dynamic(inner: RawDynamic<D, Arch, R, Tls>) -> Self {

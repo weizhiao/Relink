@@ -223,7 +223,7 @@ pub(crate) use error::*;
 
 pub use aligned_bytes::ByteRepr;
 pub use error::Error;
-pub use image::Module;
+pub use image::{Module, ModuleState};
 pub use linker::{LinkContext, Linker, LinkerRun};
 pub use loader::{Loader, LoaderRun};
 pub use relocation::{Relocator, RelocatorRun};

@@ -92,7 +92,7 @@ impl ObjectArch for RiscV64Arch {
         shdrs: &[ElfShdr<<Self as RelocationArch>::Layout>],
     ) -> Result<()>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -141,7 +141,7 @@ impl ObjectArch for RiscV64Arch {
         pltgot: &mut PltGotSection,
     ) -> Result<()>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -406,7 +406,7 @@ impl RiscV64Arch {
         pltgot: &mut PltGotSection,
     ) -> Result<i64>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -483,7 +483,7 @@ impl RiscV64Arch {
     ) -> Result<()>
     where
         T: WrappingRelocWord + ByteRepr,
-        D: 'static,
+        D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -575,7 +575,7 @@ fn branch_offset<D, R, Tls, Obs, H, Memory>(
     range: i64,
 ) -> Result<i64>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     R: RegionAccess,
     Tls: TlsResolver<RiscV64Arch>,
     Obs: RelocationObserver<RiscV64Arch> + ?Sized,

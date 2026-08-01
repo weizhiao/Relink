@@ -2,7 +2,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::SymbolEntry,
-    image::{DynamicInfo, Module, PltRelocInfo, SymbolExports, WeakModuleScope},
+    image::{DynamicInfo, Module, ModuleState, PltRelocInfo, SymbolExports, WeakModuleScope},
     input::PathBuf,
     lazy::{LazySetup, LazyValues},
     logging,
@@ -11,11 +11,11 @@ use crate::{
     relocation::{RelocationArch, SymbolRegistry, SymbolResolver},
     runtime::{CodeExecutor, DomainId},
     segment::ElfSegments,
-    sync::{Arc, AtomicUsize, Ordering, Weak},
+    sync::{Arc, OnceCell, Weak},
     tls::{CoreTlsState, ModuleTls, TLS_GET_ADDR_SYMBOL, TlsResolver},
 };
 use alloc::boxed::Box;
-use core::{cell::OnceCell, marker::PhantomData, ops::Deref};
+use core::{marker::PhantomData, ops::Deref};
 
 /// Stable runtime header shared by all [`CoreInner`] instantiations.
 #[repr(C)]
@@ -30,7 +30,7 @@ pub(crate) struct CoreRuntime<Arch: RelocationArch = NativeArch> {
 impl<Arch: RelocationArch> CoreRuntime<Arch> {
     pub(crate) fn new<D, R, Tls>(lazy_plt: Option<PltRelocInfo<Arch>>) -> Self
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<Arch>,
     {
@@ -91,7 +91,7 @@ pub(crate) trait CoreRuntimeModule<Arch: RelocationArch>: Send + Sync {
 #[inline]
 unsafe fn core_inner<D, Arch, R, Tls>(runtime: &CoreRuntime<Arch>) -> &CoreInner<D, Arch, R, Tls>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
@@ -101,7 +101,7 @@ where
 
 unsafe fn core_module<D, Arch, R, Tls>(runtime: &CoreRuntime<Arch>) -> &dyn CoreRuntimeModule<Arch>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
@@ -109,9 +109,9 @@ where
     unsafe { core_inner::<D, Arch, R, Tls>(runtime) }
 }
 
-impl<D, Arch, R, Tls> CoreRuntimeModule<Arch> for CoreInner<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> CoreRuntimeModule<Arch> for CoreInner<D, Arch, R, Tls>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
@@ -139,13 +139,9 @@ where
     }
 }
 
-pub(crate) const STATE_UNINIT: usize = 0;
-pub(crate) const STATE_INIT: usize = 1;
-pub(crate) const STATE_FINI: usize = 2;
-
 /// Inner structure for ElfCore
 pub(crate) struct CoreInner<
-    D: 'static = (),
+    D: Send + Sync + 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -160,8 +156,8 @@ pub(crate) struct CoreInner<
     /// Runtime domain in which this image's addresses are meaningful.
     pub(crate) domain: DomainId,
 
-    /// Current initialization/finalization state.
-    pub(crate) phase: AtomicUsize,
+    /// Lifecycle state shared by every handle for this module.
+    pub(crate) state: ModuleState,
 
     /// Initialization and finalization behavior resolved during relocation.
     pub(crate) lifecycle: OnceCell<LifecycleHandlers>,
@@ -191,7 +187,7 @@ pub(crate) struct CoreInner<
     pub(crate) user_data: D,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     CoreInner<D, Arch, R, Tls>
 {
     #[inline]
@@ -202,13 +198,18 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D, Arch, R, Tls> Module<Arch, Tls> for CoreInner<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> Module<Arch, Tls> for CoreInner<D, Arch, R, Tls>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> + 'static,
 {
+    #[inline]
+    fn state(&self) -> &ModuleState {
+        &self.state
+    }
+
     #[inline]
     fn name(&self) -> &str {
         self.dynamic_info
@@ -238,19 +239,6 @@ where
     }
 
     fn initialize(&self) -> Result<()> {
-        if self
-            .phase
-            .compare_exchange(
-                STATE_UNINIT,
-                STATE_INIT,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_err()
-        {
-            return Ok(());
-        }
-
         let initializer = self
             .lifecycle
             .get()
@@ -263,13 +251,6 @@ where
     }
 
     fn finalize(&self) -> Result<()> {
-        if self
-            .phase
-            .compare_exchange(STATE_INIT, STATE_FINI, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return Ok(());
-        }
         let Some(lifecycle) = self.lifecycle.get() else {
             return Ok(());
         };
@@ -281,25 +262,29 @@ where
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Drop
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Drop
     for CoreInner<D, Arch, R, Tls>
 {
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
-        if let Err(err) = self.finalize() {
+        if let Err(err) = self.state.finalize(|| Module::finalize(self)) {
             logging::error!("finalization lifecycle failed for {}: {err}", self.name());
         }
     }
 }
 
-// Safety: CoreInner can be shared between threads.
-unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Sync
-    for CoreInner<D, Arch, R, Tls>
+// Safety: mutable runtime state is synchronized by atomics or OnceCell. Raw
+// mapped views are immutable metadata, and memory access is mediated by the
+// Send + Sync RegionAccess implementation.
+unsafe impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    Sync for CoreInner<D, Arch, R, Tls>
 {
 }
-// Safety: CoreInner can be sent between threads.
-unsafe impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Send
-    for CoreInner<D, Arch, R, Tls>
+
+// Safety: see the Sync implementation above. Every owned field is Send, and
+// mapped addresses are values interpreted only through RegionAccess.
+unsafe impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    Send for CoreInner<D, Arch, R, Tls>
 {
 }
 

@@ -16,7 +16,7 @@ use crate::{
 /// Internal context for managing relocation state and handlers.
 pub(crate) struct RelocHelper<
     'find,
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> + 'static,
@@ -31,9 +31,10 @@ pub(crate) struct RelocHelper<
     pub(crate) observer: &'find mut Obs,
 }
 
-impl<'find, D, Arch, R, Tls, Obs, H, Memory> RelocHelper<'find, D, Arch, R, Tls, Obs, H, Memory>
+impl<'find, D: Send + Sync + 'static, Arch, R, Tls, Obs, H, Memory>
+    RelocHelper<'find, D, Arch, R, Tls, Obs, H, Memory>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,

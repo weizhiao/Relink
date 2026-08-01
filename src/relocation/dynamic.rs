@@ -16,7 +16,9 @@ use crate::{
 use alloc::vec;
 use core::num::NonZeroUsize;
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    RawDynamic<D, Arch, R, Tls>
+{
     fn apply_relro(&self, lazy: bool) -> Result<()> {
         if lazy {
             return Ok(());
@@ -33,7 +35,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
         args: RelocateArgs<'_, Arch, Tls, Obs, Binder>,
     ) -> Result<LoadedCore<D, Arch, R, Tls>>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         Obs: RelocationObserver<Arch> + ?Sized,
         Binder: LazyBinder<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: ByteRepr,
@@ -197,7 +199,9 @@ pub(crate) struct DynamicRelocation<Arch: RelocationArch = NativeArch> {
     dynrel: MappedView<ElfRelType<Arch>>,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    RawDynamic<D, Arch, R, Tls>
+{
     /// Relocate PLT (Procedure Linkage Table) entries
     fn relocate_pltrel<Obs>(
         &self,

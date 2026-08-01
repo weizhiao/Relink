@@ -1,6 +1,6 @@
 use super::{
     context::LinkContext,
-    storage::{CommittedStorage, KeySlot, ModuleId, ModuleSlot},
+    storage::{CommittedStorage, KeySlot, ModuleId},
 };
 use crate::{
     Result,
@@ -151,22 +151,17 @@ where
 }
 
 pub(crate) struct LoadSession<
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> = (),
 > {
     resolve: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
     ready_to_commit: BTreeMap<KeySlot, ReadyCommit<Arch, Tls>>,
-    init_order: Vec<KeySlot>,
+    lifecycle: Vec<KeySlot>,
 }
 
-pub(crate) struct SessionCommit {
-    pub(crate) ids: Box<[ModuleId]>,
-    pub(crate) init_order: Box<[ModuleSlot]>,
-}
-
-impl<D: 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -177,7 +172,7 @@ where
         Self {
             resolve: ResolveSession::new(),
             ready_to_commit: BTreeMap::new(),
-            init_order: Vec::new(),
+            lifecycle: Vec::new(),
         }
     }
 
@@ -196,12 +191,12 @@ where
                 group_order,
             },
             ready_to_commit: BTreeMap::new(),
-            init_order: Vec::new(),
+            lifecycle: Vec::new(),
         }
     }
 }
 
-impl<D: 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -239,27 +234,20 @@ where
     }
 
     #[inline]
-    pub(crate) fn push_relocated(
-        &mut self,
-        slot: KeySlot,
-        module: LoadedCore<D, Arch, R, Tls>,
-        direct_deps: Box<[KeySlot]>,
-    ) {
-        self.init_order.push(slot);
-        self.push_ready(slot, module, direct_deps);
+    pub(crate) fn push_lifecycle(&mut self, slot: KeySlot) {
+        self.lifecycle.push(slot);
     }
 
-    pub(crate) fn mark_module_handles_ready(&mut self) {
-        for (
-            id,
-            ModuleEntry {
-                module,
-                direct_deps,
-            },
-        ) in core::mem::take(&mut self.resolve.module_handles)
-        {
-            self.push_ready(id, module, direct_deps);
-        }
+    pub(crate) fn mark_module_ready(&mut self, slot: KeySlot) {
+        let ModuleEntry {
+            module,
+            direct_deps,
+        } = self
+            .resolve
+            .module_handles
+            .remove(&slot)
+            .expect("missing pending module handle while preparing lifecycle");
+        self.push_ready(slot, module, direct_deps);
     }
 
     pub(crate) fn loaded_root(&self, slot: KeySlot) -> Option<LoadedCore<D, Arch, R, Tls>> {
@@ -270,36 +258,33 @@ where
             .cloned()
     }
 
-    pub(crate) fn init_order(&self) -> Vec<LoadedCore<D, Arch, R, Tls>> {
-        self.init_order
+    pub(crate) fn initializers(&self) -> Vec<ModuleHandle<Arch, Tls>> {
+        self.lifecycle
             .iter()
             .map(|id| {
                 self.ready_to_commit
                     .get(id)
-                    .expect("initialization order must refer to a ready module")
+                    .expect("lifecycle order must refer to a ready module")
                     .module
-                    .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
-                    .cloned()
-                    .expect("initialization order must contain loaded dynamic modules")
+                    .clone()
             })
             .collect()
     }
 
-    pub(crate) fn build_relocation_order(&self, root: KeySlot, order: &mut Vec<KeySlot>) {
+    pub(crate) fn build_lifecycle_order(&self, root: KeySlot, order: &mut Vec<KeySlot>) {
         order.clear();
-        let dynamic_len = self.resolve.dynamics.len();
-        if order.capacity() < dynamic_len {
-            order.reserve(dynamic_len - order.capacity());
+        let pending_len = self.resolve.dynamics.len() + self.resolve.module_handles.len();
+        if order.capacity() < pending_len {
+            order.reserve(pending_len - order.capacity());
         }
 
         let mut visited = BTreeSet::new();
-        let pending_len = self.resolve.dynamics.len() + self.resolve.module_handles.len();
         let mut stack = Vec::with_capacity(pending_len.saturating_mul(2));
         stack.push((root, false));
 
         while let Some((id, expanded)) = stack.pop() {
             if expanded {
-                if self.resolve.dynamics.contains_key(&id) {
+                if self.resolve.contains_pending(id) {
                     order.push(id);
                 }
                 continue;
@@ -367,7 +352,7 @@ where
     pub(crate) fn commit_into<K, Meta>(
         self,
         committed: &mut CommittedStorage<K, D, Meta, Arch, Tls>,
-    ) -> Result<SessionCommit>
+    ) -> Result<Box<[ModuleId]>>
     where
         K: Clone + Ord,
         Meta: Default,
@@ -375,13 +360,17 @@ where
         let Self {
             resolve,
             ready_to_commit,
-            init_order,
+            lifecycle,
         } = self;
         let mut ready = ready_to_commit;
         let mut committed_ids = Vec::with_capacity(ready.len());
         for id in resolve.group_order.iter().copied() {
             if ready.contains_key(&id) {
-                committed.ensure_module_slot(id);
+                let slot = committed.ensure_module_slot(id);
+                debug_assert!(
+                    !committed.contains_module(slot),
+                    "pending module must not already be committed"
+                );
             }
         }
         for id in resolve.group_order {
@@ -393,23 +382,22 @@ where
                 direct_deps,
             } = entry;
             let direct_deps = committed.resolve_dep_edges(direct_deps)?;
-            committed_ids.push(committed.insert(id, module, direct_deps, Meta::default(), 0));
+            let slot = committed.insert(id, module, direct_deps, Meta::default(), 0);
+            committed_ids.push(committed.make_module_id(slot));
         }
         assert!(
             ready.is_empty(),
             "ready commit entries must all be present in group_order"
         );
-        Ok(SessionCommit {
-            ids: committed_ids.into_boxed_slice(),
-            init_order: init_order
-                .into_iter()
-                .map(|slot| {
-                    committed
-                        .module_for_key(slot)
-                        .expect("initialized module must be committed")
-                })
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        })
+        let lifecycle = lifecycle
+            .into_iter()
+            .map(|key| {
+                committed
+                    .module_for_key(key)
+                    .expect("lifecycle module must be committed")
+            })
+            .collect::<Vec<_>>();
+        committed.extend_lifecycle(&lifecycle);
+        Ok(committed_ids.into_boxed_slice())
     }
 }

@@ -4,7 +4,10 @@ use crate::{
     arch::{ArchKind, NativeArch},
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolType},
     hint::unlikely,
-    image::{Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, SymbolExports, SymbolLookup},
+    image::{
+        Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, ModuleState, SymbolExports,
+        SymbolLookup,
+    },
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymDef, SymbolRegistry},
@@ -22,7 +25,7 @@ use elf::abi::DF_STATIC_TLS;
 /// This is the common loaded representation used by relocated dylibs, dynamic
 /// [`crate::image::LoadedExec`] values, and loaded object-file images.
 pub struct LoadedCore<
-    D: 'static = (),
+    D: Send + Sync + 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -31,26 +34,23 @@ pub struct LoadedCore<
     scope: ModuleScope<Arch, Tls>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static> Debug
-    for LoadedCore<D, Arch, R, Tls>
+impl<
+    D: Send + Sync + 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch> + 'static,
+> Debug for LoadedCore<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LoadedCore")
             .field("name", &self.core.name())
             .field("base", &format_args!("{}", self.core.base()))
-            .field(
-                "scope",
-                &self
-                    .scope()
-                    .iter()
-                    .map(|module| module.name())
-                    .collect::<alloc::vec::Vec<_>>(),
-            )
+            .field("scope", &self.scope)
             .finish()
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for LoadedCore<D, Arch, R, Tls>
 {
     /// Clones the [`LoadedCore`], incrementing the reference count of its core and retained scope.
@@ -62,7 +62,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     From<&LoadedCore<D, Arch, R, Tls>> for LoadedCore<D, Arch, R, Tls>
 {
     #[inline]
@@ -71,8 +71,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
-    From<LoadedCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
+impl<
+    D: Send + Sync + 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch> + 'static,
+> From<LoadedCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
 {
     #[inline]
     fn from(module: LoadedCore<D, Arch, R, Tls>) -> Self {
@@ -80,8 +84,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
-    From<&LoadedCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
+impl<
+    D: Send + Sync + 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch> + 'static,
+> From<&LoadedCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
 {
     #[inline]
     fn from(module: &LoadedCore<D, Arch, R, Tls>) -> Self {
@@ -89,9 +97,19 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
-    LoadedCore<D, Arch, R, Tls>
+impl<
+    D: Send + Sync + 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch> + 'static,
+> LoadedCore<D, Arch, R, Tls>
 {
+    /// Runs this module's initialization lifecycle at most once.
+    #[inline]
+    pub fn initialize(&self) -> Result<()> {
+        self.core.initialize()
+    }
+
     /// Wraps an [`ElfCore`] into a [`LoadedCore`].
     ///
     /// # Safety
@@ -160,12 +178,6 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     #[inline]
     pub fn user_data_mut(&mut self) -> Option<&mut D> {
         self.core.user_data_mut()
-    }
-
-    /// Returns whether the ELF object has been initialized.
-    #[inline]
-    pub fn is_init(&self) -> bool {
-        self.core.is_init()
     }
 
     /// Returns the program headers of the ELF object.
@@ -241,6 +253,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     /// Tries to get a pointer to a function or static variable by symbol name.
     ///
     /// This resolves IFUNC symbols through the executor retained during relocation.
+    ///
+    /// # Safety
+    ///
+    /// `T` must match the type and ABI of the resolved symbol.
     #[inline]
     pub unsafe fn try_get<'lib, T>(&'lib self, name: &str) -> Result<Option<Symbol<'lib, T>>> {
         let mut lookup = SymbolLookup::new(name);
@@ -286,6 +302,10 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     /// Tries to load a versioned symbol from the ELF object.
     ///
     /// This resolves IFUNC symbols through the executor retained during relocation.
+    ///
+    /// # Safety
+    ///
+    /// `T` must match the type and ABI of the resolved symbol.
     #[cfg(feature = "version")]
     #[inline]
     pub unsafe fn try_get_version<'lib, T>(
@@ -353,7 +373,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
     LoadedCore<D, Arch, HostRegion, Tls>
 {
     fn read_dynamic_view(
@@ -496,13 +516,18 @@ impl<D: 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D, Arch, R, Tls> Module<Arch, Tls> for LoadedCore<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> Module<Arch, Tls> for LoadedCore<D, Arch, R, Tls>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> + 'static,
 {
+    #[inline]
+    fn state(&self) -> &ModuleState {
+        Module::state(&self.core)
+    }
+
     #[inline]
     fn name(&self) -> &str {
         self.core.name()
@@ -530,11 +555,11 @@ where
 
     #[inline]
     fn initialize(&self) -> Result<()> {
-        self.core.initialize()
+        Module::initialize(&self.core)
     }
 
     #[inline]
     fn finalize(&self) -> Result<()> {
-        self.core.finalize()
+        Module::finalize(&self.core)
     }
 }

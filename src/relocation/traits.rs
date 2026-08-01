@@ -124,7 +124,7 @@ pub trait RelocationArch: 'static {
     ) -> Result<HandleResult>
     where
         Self: Sized,
-        D: 'static,
+        D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<Self>,
     {
@@ -153,7 +153,7 @@ pub trait ObjectArch: RelocationArch {
     ) -> Result<()>
     where
         Self: Sized,
-        D: 'static,
+        D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,
@@ -173,7 +173,7 @@ pub trait ObjectArch: RelocationArch {
     ) -> Result<()>
     where
         Self: Sized,
-        D: 'static,
+        D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,

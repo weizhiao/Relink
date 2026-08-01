@@ -49,7 +49,7 @@ where
         })
 }
 
-impl<D: 'static, Arch, R, Tls> RawObject<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> RawObject<D, Arch, R, Tls>
 where
     Arch: ObjectArch,
     R: RegionAccess,
@@ -136,7 +136,7 @@ where
             )
         });
         let inner = Arc::get_mut(&mut self.core.inner)
-            .ok_or_else(|| LinkerError::ObjectCoreRetainedBeforeExports)?;
+            .ok_or(LinkerError::ObjectCoreRetainedBeforeExports)?;
         inner.exports = exports;
         let object_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
@@ -265,7 +265,7 @@ where
 #[cold]
 fn unresolved_symbol_error<D, Arch, R, Tls>(core: &ElfCore<D, Arch, R, Tls>, name: &str) -> Error
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,

@@ -16,7 +16,7 @@ use crate::{
 /// and the current symbol resolution scope.
 pub struct RelocationEvent<
     'a,
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -27,7 +27,7 @@ pub struct RelocationEvent<
     symbols: SymbolTableView<'a, Arch::Layout, H>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>, H>
+impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>, H>
     RelocationEvent<'a, D, Arch, R, Tls, H>
 {
     /// Construct a new `RelocationEvent`.
@@ -93,7 +93,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
 /// Observers may inspect the requested symbol and override the resolved address.
 pub struct SymbolBindingEvent<
     'a,
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -105,7 +105,7 @@ pub struct SymbolBindingEvent<
     resolved: Option<VmAddr>,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     SymbolBindingEvent<'a, D, Arch, R, Tls>
 {
     #[inline]
@@ -177,7 +177,7 @@ impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arc
 /// Event emitted after a dynamic image has been relocated.
 pub struct DynamicRelocatedEvent<
     'a,
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -187,7 +187,7 @@ pub struct DynamicRelocatedEvent<
     lifecycle: LifecycleHandlers,
 }
 
-impl<'a, D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     DynamicRelocatedEvent<'a, D, Arch, R, Tls>
 {
     #[inline]

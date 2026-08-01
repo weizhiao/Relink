@@ -75,7 +75,7 @@ impl RelocationArch for XtensaArch {
         event: &RelocationEvent<'_, D, Self, R, Tls, H>,
     ) -> Result<HandleResult>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<Self>,
     {

@@ -8,7 +8,7 @@ use crate::{
 
 /// Mutable event for one module's relocation policy.
 pub struct LinkerRelocationEvent<
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -18,7 +18,7 @@ pub struct LinkerRelocationEvent<
     binding: BindingMode,
 }
 
-impl<D: 'static, Arch, R, Tls> LinkerRelocationEvent<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> LinkerRelocationEvent<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,

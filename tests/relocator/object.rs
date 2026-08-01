@@ -1,5 +1,5 @@
 use elf_loader::{
-    Relocator,
+    Module, Relocator,
     image::{SyntheticModule, SyntheticSymbol},
 };
 use gen_elf::{ObjectElfOutput, RelocationInfo, SectionKind};
@@ -142,7 +142,7 @@ fn relocations_match() {
         .scope([host_symbols.module()])
         .relocate()
         .expect("relocation failed");
-    assert!(loaded_object.is_init());
+    assert!(loaded_object.state().is_initialized());
 
     let data_base =
         unsafe { loaded_object.get::<i32>(LOCAL_VAR_NAME).unwrap().into_raw() } as usize;

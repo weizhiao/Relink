@@ -41,7 +41,7 @@ impl ObjectArch for X86_64Arch {
         pltgot: &mut PltGotSection,
     ) -> Result<()>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         R: RegionAccess,
         Tls: TlsResolver<Self>,
         Obs: RelocationObserver<Self> + ?Sized,

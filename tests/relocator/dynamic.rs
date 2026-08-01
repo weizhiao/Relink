@@ -141,7 +141,7 @@ mod native {
         ] {
             let mut actual = vec![0; expected.len()];
             core.segments()
-                .read_bytes(symbol(&core, name), &mut actual)
+                .read_bytes(symbol(core, name), &mut actual)
                 .unwrap_or_else(|_| panic!("failed to read symbol {name}"));
             assert_eq!(actual, expected);
         }

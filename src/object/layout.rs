@@ -604,7 +604,7 @@ impl<Arch: ObjectArch> SectionSegments<Arch> {
         mapper: &M,
     ) -> Result<(Self, ObjectSegments<M::Region>)>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         Obs: LoadObserver<D, Arch>,
         M: Mmap + ?Sized,
     {

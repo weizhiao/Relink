@@ -30,11 +30,11 @@ use alloc::{
 use core::borrow::Borrow;
 
 #[allow(private_bounds)]
-impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, Obs>
+impl<'run, 'pipe, K, D: Send + Sync + 'static, Tls, Arch, M, Exec, Resolver, RelocBinder, Obs>
     LinkerRun<'run, 'pipe, K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls, Obs>
 where
     K: Clone + Ord,
-    D: Default + 'static,
+    D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     M: Mmap,
@@ -234,7 +234,7 @@ where
     }
 }
 
-fn apply_section_overrides<D, Arch, R, Tls>(
+fn apply_section_overrides<D: Send + Sync + 'static, Arch, R, Tls>(
     raw: &mut RawDynamic<D, Arch, R, Tls>,
     module_id: PlanModuleId,
     plan: &MemoryLayoutPlan,

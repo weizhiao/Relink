@@ -1,3 +1,4 @@
+use super::module::ModuleState;
 use crate::{
     Result,
     arch::NativeArch,
@@ -58,6 +59,13 @@ where
 pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>:
     Any + Send + Sync
 {
+    /// Returns the canonical lifecycle state for this logical module.
+    ///
+    /// Wrappers around the same module must return the same stable state
+    /// address. Relink uses it to coordinate ownership across link contexts
+    /// and module handles.
+    fn state(&self) -> &ModuleState;
+
     /// Returns the module name used for diagnostics.
     fn name(&self) -> &str;
 
@@ -75,12 +83,18 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
     /// Returns the runtime domain in which this module's addresses are meaningful.
     fn domain_id(&self) -> DomainId;
 
-    /// Runs module initialization at most once.
+    /// Performs this module's initialization hook.
+    ///
+    /// Relink invokes this through [`ModuleHandle`](super::ModuleHandle), which
+    /// guarantees that the hook runs at most once.
     fn initialize(&self) -> Result<()> {
         Ok(())
     }
 
-    /// Runs module finalization at most once before the module is removed.
+    /// Performs this module's finalization hook.
+    ///
+    /// Relink invokes this after the final committed owner has released the
+    /// module and guarantees that the hook runs at most once.
     fn finalize(&self) -> Result<()> {
         Ok(())
     }
@@ -92,6 +106,11 @@ where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch> + 'static,
 {
+    #[inline]
+    fn state(&self) -> &ModuleState {
+        (**self).state()
+    }
+
     #[inline]
     fn name(&self) -> &str {
         (**self).name()

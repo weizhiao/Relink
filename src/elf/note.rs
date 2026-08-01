@@ -158,9 +158,9 @@ impl<'a> ElfNotes<'a> {
     }
 
     #[inline]
-    fn finish_with(&mut self, err: ParseNoteError) -> Option<Result<ElfNote<'a>>> {
+    fn fail(&mut self, err: ParseNoteError) -> Result<ElfNote<'a>> {
         self.offset = self.bytes.len();
-        Some(Err(err.into()))
+        Err(err.into())
     }
 }
 
@@ -174,13 +174,13 @@ impl<'a> Iterator for ElfNotes<'a> {
         }
 
         let Some(header_end) = offset.checked_add(size_of::<ElfNhdr>()) else {
-            return self.finish_with(ParseNoteError::Overflow { offset });
+            return Some(self.fail(ParseNoteError::Overflow { offset }));
         };
         if header_end > self.bytes.len() {
-            return self.finish_with(ParseNoteError::Header {
+            return Some(self.fail(ParseNoteError::Header {
                 offset,
                 remaining: self.bytes.len().saturating_sub(offset),
-            });
+            }));
         }
 
         let mut raw = [0; size_of::<ElfNhdr>()];
@@ -194,35 +194,35 @@ impl<'a> Iterator for ElfNotes<'a> {
         let name_start = header_end;
         let name_size = header.n_namesz() as usize;
         let Some(name_end) = name_start.checked_add(name_size) else {
-            return self.finish_with(ParseNoteError::Overflow { offset });
+            return Some(self.fail(ParseNoteError::Overflow { offset }));
         };
         if name_end > self.bytes.len() {
-            return self.finish_with(ParseNoteError::Name {
+            return Some(self.fail(ParseNoteError::Name {
                 offset,
                 size: name_size,
                 remaining: self.bytes.len().saturating_sub(name_start),
-            });
+            }));
         }
         let name = &self.bytes[name_start..name_end];
 
         let Some(desc_start) = align_note(name_end, self.align) else {
-            return self.finish_with(ParseNoteError::Overflow { offset });
+            return Some(self.fail(ParseNoteError::Overflow { offset }));
         };
         let desc_size = header.n_descsz() as usize;
         let Some(desc_end) = desc_start.checked_add(desc_size) else {
-            return self.finish_with(ParseNoteError::Overflow { offset });
+            return Some(self.fail(ParseNoteError::Overflow { offset }));
         };
         if desc_end > self.bytes.len() {
-            return self.finish_with(ParseNoteError::Desc {
+            return Some(self.fail(ParseNoteError::Desc {
                 offset,
                 size: desc_size,
                 remaining: self.bytes.len().saturating_sub(desc_start),
-            });
+            }));
         }
         let desc = &self.bytes[desc_start..desc_end];
 
         let Some(next) = align_note(desc_end, self.align) else {
-            return self.finish_with(ParseNoteError::Overflow { offset });
+            return Some(self.fail(ParseNoteError::Overflow { offset }));
         };
         self.offset = next.min(self.bytes.len());
 
@@ -248,11 +248,11 @@ mod tests {
         bytes.extend_from_slice(&(desc.len() as u32).to_ne_bytes());
         bytes.extend_from_slice(&n_type.to_ne_bytes());
         bytes.extend_from_slice(name);
-        while bytes.len() % align != 0 {
+        while !bytes.len().is_multiple_of(align) {
             bytes.push(0);
         }
         bytes.extend_from_slice(desc);
-        while bytes.len() % align != 0 {
+        while !bytes.len().is_multiple_of(align) {
             bytes.push(0);
         }
     }

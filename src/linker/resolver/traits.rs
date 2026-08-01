@@ -16,8 +16,10 @@ pub enum ResolvedKey<'cfg, K, Arch: RelocationArch = NativeArch, Tls: TlsResolve
         /// Reader used to load the resolved ELF image.
         reader: Box<dyn ElfReader + 'cfg>,
     },
-    /// Provides a module handle and any dependencies it should place after
-    /// itself in the resolved dependency graph.
+    /// Provides a new module and its dependencies to the current load transaction.
+    ///
+    /// The module is published, initialized, and finalized with the rest of the
+    /// transaction. Use [`Self::Existing`] for an already committed module.
     Module {
         /// Canonical key that should identify the module.
         key: K,
@@ -44,7 +46,7 @@ impl<'cfg, K, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedKey<'cfg, K,
         }
     }
 
-    /// Creates a result backed by a provided module handle.
+    /// Creates a result backed by a new module owned by this load transaction.
     #[inline]
     pub fn module(
         key: K,

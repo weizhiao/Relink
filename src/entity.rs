@@ -120,7 +120,7 @@ where
 
     /// Iterates over ids and values together.
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (K, &V)> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (K, &V)> + ExactSizeIterator {
         self.values
             .iter()
             .enumerate()
@@ -248,6 +248,16 @@ where
         self.values.get_mut(key.index()).and_then(Option::as_mut)
     }
 
+    /// Retains only side-data entries accepted by `f`.
+    pub fn retain(&mut self, mut f: impl FnMut(K, &mut V) -> bool) {
+        for (index, value) in self.values.iter_mut().enumerate() {
+            let remove = value.as_mut().is_some_and(|value| !f(K::new(index), value));
+            if remove {
+                *value = None;
+            }
+        }
+    }
+
     /// Iterates over ids and present side-data values together.
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = (K, &V)> {
@@ -331,5 +341,8 @@ mod tests {
         assert_eq!(map.get(first), None);
         assert_eq!(map[third], "trois");
         assert_eq!(map.iter().collect::<Vec<_>>(), [(third, &"trois")]);
+
+        map.retain(|id, _| id == first);
+        assert!(map.iter().next().is_none());
     }
 }

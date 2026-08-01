@@ -12,22 +12,19 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfSectionId, Lifecycle},
-    image::{CoreRuntime, SymbolExports},
+    image::{CoreRuntime, ModuleState, SymbolExports},
     lazy::LazyBinder,
     memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
     relocation::{ObjectArch, Relocatable, RelocateArgs, RelocationArch},
     runtime::DomainId,
-    sync::{Arc, AtomicUsize, arc_unsize},
+    sync::{Arc, OnceCell, arc_unsize},
     tls::{CoreTlsState, TlsResolver},
 };
 use alloc::boxed::Box;
-use core::{borrow::Borrow, cell::OnceCell, fmt::Debug, ops::Deref};
+use core::{borrow::Borrow, fmt::Debug, ops::Deref};
 
-use crate::image::{
-    ElfCore, LoadedCore, Module, ModuleHandle,
-    core::{CoreInner, STATE_UNINIT},
-};
+use crate::image::{ElfCore, LoadedCore, Module, ModuleHandle, core::CoreInner};
 
 /// A relocatable ELF object.
 ///
@@ -35,7 +32,7 @@ use crate::image::{
 /// that has been loaded into memory and is ready for relocation. It contains
 /// all the necessary information to perform the relocation process.
 pub struct RawObject<
-    D: 'static = (),
+    D: Send + Sync + 'static = (),
     Arch: ObjectArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -65,7 +62,7 @@ pub struct RawObject<
     pub(crate) fini: Lifecycle,
 }
 
-impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
+impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
     for RawObject<D, Arch, R, Tls>
 {
     type Target = ElfCore<D, Arch, R, Tls>;
@@ -75,7 +72,7 @@ impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Dere
     }
 }
 
-impl<Tls, D: 'static, Arch, R> ObjectBuilder<Tls, D, Arch, R>
+impl<Tls, D: Send + Sync + 'static, Arch, R> ObjectBuilder<Tls, D, Arch, R>
 where
     Tls: TlsResolver<Arch>,
     Arch: ObjectArch,
@@ -88,7 +85,7 @@ where
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(None)),
             executor: self.executor,
             domain: self.domain,
-            phase: AtomicUsize::new(STATE_UNINIT),
+            state: ModuleState::new(),
             lifecycle: OnceCell::new(),
             path: self.path,
             exports: arc_unsize!(
@@ -118,7 +115,7 @@ where
     }
 }
 
-impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawObject<D, Arch, R, Tls>
 {
     /// Returns the retained object section metadata.
@@ -133,7 +130,7 @@ impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
+impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     for RawObject<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -143,7 +140,7 @@ impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debu
     }
 }
 
-impl<D: 'static, Arch, R, Tls> Relocatable<D> for RawObject<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> Relocatable<D> for RawObject<D, Arch, R, Tls>
 where
     Arch: ObjectArch,
     R: RegionAccess,
@@ -172,7 +169,7 @@ where
 
 /// A relocated object file.
 pub struct LoadedObject<
-    D: 'static = (),
+    D: Send + Sync + 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -180,7 +177,7 @@ pub struct LoadedObject<
     pub(crate) inner: LoadedCore<D, Arch, R, Tls>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for LoadedObject<D, Arch, R, Tls>
 {
     #[inline]
@@ -191,7 +188,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     for LoadedObject<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -201,7 +198,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
     for LoadedObject<D, Arch, R, Tls>
 {
     type Target = LoadedCore<D, Arch, R, Tls>;
@@ -211,7 +208,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     Borrow<LoadedCore<D, Arch, R, Tls>> for LoadedObject<D, Arch, R, Tls>
 {
     fn borrow(&self) -> &LoadedCore<D, Arch, R, Tls> {
@@ -219,7 +216,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     Borrow<LoadedCore<D, Arch, R, Tls>> for &LoadedObject<D, Arch, R, Tls>
 {
     fn borrow(&self) -> &LoadedCore<D, Arch, R, Tls> {
@@ -227,7 +224,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     From<LoadedObject<D, Arch, R, Tls>> for LoadedCore<D, Arch, R, Tls>
 {
     #[inline]
@@ -236,7 +233,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     From<&LoadedObject<D, Arch, R, Tls>> for LoadedCore<D, Arch, R, Tls>
 {
     #[inline]
@@ -245,8 +242,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
-    From<LoadedObject<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
+impl<
+    D: Send + Sync + 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch> + 'static,
+> From<LoadedObject<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
 {
     #[inline]
     fn from(object: LoadedObject<D, Arch, R, Tls>) -> Self {
@@ -254,8 +255,12 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
-    From<&LoadedObject<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
+impl<
+    D: Send + Sync + 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch> + 'static,
+> From<&LoadedObject<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
 {
     #[inline]
     fn from(object: &LoadedObject<D, Arch, R, Tls>) -> Self {

@@ -10,7 +10,7 @@ use crate::{
 
 /// Event emitted after ELF program headers are available and before `PT_LOAD`
 /// segments are mapped.
-pub struct BeforeLoadEvent<'a, D: 'static, L: ElfLayout = NativeElfLayout> {
+pub struct BeforeLoadEvent<'a, D: Send + Sync + 'static, L: ElfLayout = NativeElfLayout> {
     path: &'a Path,
     reader: &'a dyn ElfReader,
     ehdr: &'a ElfHeader<L>,
@@ -18,7 +18,7 @@ pub struct BeforeLoadEvent<'a, D: 'static, L: ElfLayout = NativeElfLayout> {
     user_data: &'a mut D,
 }
 
-impl<'a, D: 'static, L: ElfLayout> BeforeLoadEvent<'a, D, L> {
+impl<'a, D: Send + Sync + 'static, L: ElfLayout> BeforeLoadEvent<'a, D, L> {
     #[inline]
     pub(crate) const fn new(
         path: &'a Path,
@@ -84,7 +84,7 @@ impl<'a, D: 'static, L: ElfLayout> BeforeLoadEvent<'a, D, L> {
 /// Event emitted after a dynamic image has been mapped and parsed, before relocation.
 pub struct AfterDynamicLoadEvent<
     'a,
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -92,7 +92,7 @@ pub struct AfterDynamicLoadEvent<
     raw: &'a mut RawDynamic<D, Arch, R, Tls>,
 }
 
-impl<'a, D: 'static, Arch, R, Tls> AfterDynamicLoadEvent<'a, D, Arch, R, Tls>
+impl<'a, D: Send + Sync + 'static, Arch, R, Tls> AfterDynamicLoadEvent<'a, D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,

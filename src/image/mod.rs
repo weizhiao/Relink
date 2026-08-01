@@ -26,7 +26,7 @@ pub use elf::{LoadedElf, LoadedExec, RawDylib, RawDynamic, RawElf, RawExec, Stat
 #[cfg(feature = "object")]
 pub use elf::{LoadedObject, RawObject};
 pub(crate) use module::WeakModuleScope;
-pub use module::{ModuleHandle, ModuleScope, ModuleScopeBuilder};
+pub use module::{ModuleHandle, ModuleScope, ModuleScopeBuilder, ModuleState};
 pub(crate) use scanned::ScannedDynamicLoadParts;
 pub use scanned::{ModuleCapability, ScannedDynamic, ScannedElf, ScannedExec, ScannedSection};
 pub use synthetic::{SymbolVersion, SyntheticModule, SyntheticSymbol};

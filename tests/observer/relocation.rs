@@ -27,7 +27,12 @@ struct BindingState {
 struct BindingRecorder(Arc<Mutex<BindingState>>);
 
 impl RelocationObserver for BindingRecorder {
-    fn on_relocation_pre<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>, H>(
+    fn on_relocation_pre<
+        D: Send + Sync + 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<NativeArch>,
+        H,
+    >(
         &mut self,
         event: &RelocationEvent<'_, D, NativeArch, R, Tls, H>,
     ) -> elf_loader::Result<HandleResult> {
@@ -44,7 +49,11 @@ impl RelocationObserver for BindingRecorder {
         Ok(HandleResult::Unhandled)
     }
 
-    fn on_symbol_binding<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
+    fn on_symbol_binding<
+        D: Send + Sync + 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<NativeArch>,
+    >(
         &mut self,
         event: &mut SymbolBindingEvent<'_, D, NativeArch, R, Tls>,
     ) -> elf_loader::Result<()> {
@@ -115,7 +124,12 @@ struct FallbackState {
 struct FallbackRecorder(Arc<Mutex<FallbackState>>);
 
 impl RelocationObserver for FallbackRecorder {
-    fn on_relocation_pre<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>, H>(
+    fn on_relocation_pre<
+        D: Send + Sync + 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<NativeArch>,
+        H,
+    >(
         &mut self,
         event: &RelocationEvent<'_, D, NativeArch, R, Tls, H>,
     ) -> elf_loader::Result<HandleResult> {
@@ -134,7 +148,12 @@ impl RelocationObserver for FallbackRecorder {
         })
     }
 
-    fn on_relocation_post<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>, H>(
+    fn on_relocation_post<
+        D: Send + Sync + 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<NativeArch>,
+        H,
+    >(
         &mut self,
         event: &RelocationEvent<'_, D, NativeArch, R, Tls, H>,
     ) -> elf_loader::Result<HandleResult> {
@@ -178,7 +197,11 @@ struct LifecycleState {
 struct LifecycleRecorder(Arc<Mutex<LifecycleState>>);
 
 impl RelocationObserver for LifecycleRecorder {
-    fn on_dynamic_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
+    fn on_dynamic_relocated<
+        D: Send + Sync + 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<NativeArch>,
+    >(
         &mut self,
         event: &mut DynamicRelocatedEvent<'_, D, NativeArch, R, Tls>,
     ) -> elf_loader::Result<()> {
@@ -217,7 +240,7 @@ fn defers_initialization() {
         .relocate()
         .expect("dynamic image should relocate without initialization");
 
-    assert!(!loaded.is_init());
+    assert!(!loaded.state().is_initialized());
     {
         let state = state.lock().unwrap();
         assert!(state.relocated);
@@ -227,7 +250,7 @@ fn defers_initialization() {
     loaded
         .initialize()
         .expect("deferred initialization should succeed");
-    assert!(loaded.is_init());
+    assert!(loaded.state().is_initialized());
     assert_eq!(
         state.lock().unwrap().initialized.as_slice(),
         &["deferred.so"]

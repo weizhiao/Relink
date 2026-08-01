@@ -122,7 +122,7 @@ fn copy_committed_module<K, D, M, Arch, Tls>(
 ) -> Result<()>
 where
     K: Clone + Ord,
-    D: 'static,
+    D: Send + Sync + 'static,
     M: Clone,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -167,7 +167,7 @@ where
         module.handle().clone(),
         direct_deps,
         module.meta().clone(),
-        module.acquire_count(),
+        module.root_count(),
     );
     Ok(())
 }
@@ -184,7 +184,7 @@ where
 /// context identity so ids from different contexts cannot be mixed accidentally.
 pub struct LinkContext<
     K,
-    D: 'static = (),
+    D: Send + Sync + 'static = (),
     M = (),
     Arch: RelocationArch = NativeArch,
     Tls: TlsResolver<Arch> = (),
@@ -193,7 +193,7 @@ pub struct LinkContext<
     pub(super) symbols: Arc<SymbolRegistry<Arch, Tls>>,
 }
 
-impl<K, D: 'static, M, Arch, Tls> LinkContext<K, D, M, Arch, Tls>
+impl<K, D: Send + Sync + 'static, M, Arch, Tls> LinkContext<K, D, M, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -220,7 +220,7 @@ where
     }
 }
 
-impl<K, D: 'static, M, Arch, Tls> LinkContext<K, D, M, Arch, Tls>
+impl<K, D: Send + Sync + 'static, M, Arch, Tls> LinkContext<K, D, M, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -367,7 +367,15 @@ where
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let direct_deps = self.committed.resolve_dep_edges(direct_deps)?;
-        Ok(self.committed.insert(slot, module, direct_deps, meta, 1))
+        let is_new = self
+            .committed
+            .module_for_key(slot)
+            .is_none_or(|slot| !self.committed.contains_module(slot));
+        let module_slot = self.committed.insert(slot, module, direct_deps, meta, 1);
+        if is_new {
+            self.committed.extend_lifecycle(&[module_slot]);
+        }
+        Ok(self.committed.make_module_id(module_slot))
     }
 
     /// Adds or replaces an alternate key for an already committed module.
@@ -395,17 +403,17 @@ where
     /// not acquire their targets.
     pub fn acquire(&mut self, id: ModuleId) -> Result<()> {
         let slot = self.committed.module_slot(id)?;
-        require_module(id, self.committed.module_mut(slot))?.acquire();
+        require_module(id, self.committed.module_mut(slot))?.acquire_root();
         Ok(())
     }
 
     /// Releases one direct acquisition and detaches all modules that become unreachable.
     ///
-    /// The returned collection keeps the entire unload group alive. Call
-    /// [`UnloadGroup::finalize`] after releasing any external registry lock.
+    /// The returned collection keeps the entire unload group alive. Drop it
+    /// after releasing any external registry lock to run pending finalizers.
     pub fn release(&mut self, id: ModuleId) -> Result<UnloadGroup<M, Arch, Tls>> {
         let slot = self.committed.module_slot(id)?;
-        let Some(refs) = require_module(id, self.committed.module_mut(slot))?.release() else {
+        let Some(refs) = require_module(id, self.committed.module_mut(slot))?.release_root() else {
             return Err(LinkerError::context(LinkContextError::ModuleNotAcquired { id }).into());
         };
         if refs != 0 {
@@ -420,7 +428,7 @@ where
                 self.committed
                     .module(*slot)
                     .present()
-                    .is_some_and(|module| module.acquire_count() != 0)
+                    .is_some_and(|module| module.root_count() != 0)
             })
             .collect::<Vec<_>>();
 
@@ -433,31 +441,24 @@ where
             pending.extend(module.direct_deps().iter().map(|edge| edge.module()));
         }
 
-        let mut unreachable = self
+        let unreachable = self
             .committed
             .load_order()
             .filter(|slot| !reachable.contains(slot))
-            .collect::<BTreeSet<_>>();
-        let mut unload_order = self
+            .count();
+        let unload_order = self
             .committed
-            .init_order()
+            .lifecycle()
             .rev()
-            .filter(|slot| unreachable.remove(slot))
+            .filter(|slot| !reachable.contains(slot))
             .collect::<Vec<_>>();
-        unload_order.extend(
-            self.committed
-                .load_order()
-                .rev()
-                .filter(|slot| unreachable.remove(slot)),
-        );
-        debug_assert!(unreachable.is_empty());
+        debug_assert_eq!(unload_order.len(), unreachable);
 
         let context = self.committed.context();
         let mut modules = Vec::with_capacity(unload_order.len());
         for slot in unload_order {
             let module_id = self.committed.make_module_id(slot);
-            let (module, direct_deps, meta) =
-                require_module(module_id, self.committed.remove(slot))?;
+            let (module, direct_deps, meta) = self.committed.take(slot);
             modules.push(UnloadedModule::new(
                 module_id,
                 module,
@@ -465,6 +466,7 @@ where
                 meta,
             ));
         }
+        self.committed.prune_removed();
         Ok(UnloadGroup::new(modules))
     }
 
@@ -507,27 +509,29 @@ where
         M: Clone,
     {
         self.committed.ensure_domain(other.committed.domain())?;
+        let existing = self.committed.load_order().collect::<BTreeSet<_>>();
         let mut copied = BTreeSet::new();
         for slot in other.committed.load_order() {
             copy_committed_module(self, other, slot, &mut copied)?;
         }
-        let init_order = other
+        let lifecycle = other
             .committed
-            .init_order()
+            .lifecycle()
             .map(|slot| {
                 let module = other
                     .committed
                     .module(slot)
                     .present()
-                    .expect("initialization order must refer to a committed module");
+                    .expect("lifecycle order must refer to a committed module");
                 let key = other.committed.key(module.entry_key());
                 self.committed
                     .key_slot_for(key)
                     .and_then(|slot| self.committed.module_for_key(slot))
                     .expect("copied initialization entry must resolve in target context")
             })
+            .filter(|slot| !existing.contains(slot))
             .collect::<Vec<_>>();
-        self.committed.record_init_order(init_order);
+        self.committed.extend_lifecycle(&lifecycle);
 
         for (alias_slot, target_slot) in other.committed.aliases() {
             let alias = other.committed.key(alias_slot);
@@ -566,7 +570,9 @@ mod tests {
     use crate::{
         Error, Result,
         arch::NativeArch,
-        image::{Module, ModuleHandle, ModuleScopeBuilder, SymbolExports, SyntheticModule},
+        image::{
+            Module, ModuleHandle, ModuleScopeBuilder, ModuleState, SymbolExports, SyntheticModule,
+        },
         linker::{KeyId, ModuleId},
         memory::ImageMemory,
         relocation::RelocationArch,
@@ -583,6 +589,10 @@ mod tests {
     }
 
     impl Module for FinalizeModule {
+        fn state(&self) -> &ModuleState {
+            Module::<NativeArch>::state(&self.module)
+        }
+
         fn name(&self) -> &str {
             Module::<NativeArch>::name(&self.module)
         }
@@ -609,11 +619,13 @@ mod tests {
         name: &'static str,
         calls: &Arc<Mutex<Vec<&'static str>>>,
     ) -> ModuleHandle<NativeArch> {
-        ModuleHandle::new(FinalizeModule {
+        let module = ModuleHandle::new(FinalizeModule {
             name,
             module: SyntheticModule::empty(name),
             calls: Arc::clone(calls),
-        })
+        });
+        module.initialize().unwrap();
+        module
     }
 
     fn domain_module(name: &'static str, domain: DomainId) -> SyntheticModule<NativeArch> {
@@ -741,8 +753,47 @@ mod tests {
         assert!(!context.contains_module(id).unwrap());
         assert!(calls.lock().is_empty());
 
-        unloaded.finalize().unwrap();
+        drop(unloaded);
         assert_eq!(calls.lock().as_slice(), &["removed"]);
+    }
+
+    #[test]
+    fn shared_module_finalizes_after_last_handle() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let module = finalize_module("shared", &calls);
+        let mut first = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+        let mut second = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+        let first_id = first
+            .insert("shared", module.clone(), Box::new([]))
+            .unwrap();
+        let second_id = second
+            .insert("shared", module.clone(), Box::new([]))
+            .unwrap();
+
+        drop(first.release(first_id).unwrap());
+        assert!(calls.lock().is_empty());
+
+        drop(second.release(second_id).unwrap());
+        assert!(calls.lock().is_empty());
+
+        drop(module);
+        assert_eq!(calls.lock().as_slice(), &["shared"]);
+    }
+
+    #[test]
+    fn context_drop_finalizes_in_lifecycle_order() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        {
+            let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+            context
+                .insert("dep", finalize_module("dep", &calls), Box::new([]))
+                .unwrap();
+            context
+                .insert("root", finalize_module("root", &calls), Box::new(["dep"]))
+                .unwrap();
+        }
+
+        assert_eq!(calls.lock().as_slice(), &["root", "dep"]);
     }
 
     #[test]
@@ -812,7 +863,7 @@ mod tests {
 
         assert!(context.release(dep).unwrap().is_empty());
         let unloaded = context.release(root).unwrap();
-        unloaded.finalize().unwrap();
+        drop(unloaded);
 
         assert_eq!(calls.lock().as_slice(), &["root", "dep"]);
     }
@@ -1054,20 +1105,15 @@ mod tests {
     }
 
     #[test]
-    fn extend_preserves_init_order() {
+    fn extend_preserves_lifecycle() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let mut source = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
-        let dep = source
+        source
             .insert("dep", finalize_module("dep", &calls), Box::new([]))
             .unwrap();
-        let root = source
+        source
             .insert("root", finalize_module("root", &calls), Box::new(["dep"]))
             .unwrap();
-        source.committed.record_init_order([
-            source.committed.module_slot(root).unwrap(),
-            source.committed.module_slot(dep).unwrap(),
-        ]);
-
         let mut target = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
         target.extend(&source).unwrap();
         let target_dep = target
@@ -1079,8 +1125,9 @@ mod tests {
             .and_then(|key| target.module_id(key).unwrap())
             .unwrap();
 
+        drop(source);
         assert!(target.release(target_dep).unwrap().is_empty());
-        target.release(target_root).unwrap().finalize().unwrap();
-        assert_eq!(calls.lock().as_slice(), &["dep", "root"]);
+        drop(target.release(target_root).unwrap());
+        assert_eq!(calls.lock().as_slice(), &["root", "dep"]);
     }
 }

@@ -35,7 +35,7 @@ pub struct RelocatorRun<
 impl<Binder> Relocator<Binder> {
     /// Starts a relocation run using this reusable configuration.
     #[inline]
-    pub fn run<D, T, Arch, Tls>(
+    pub fn run<D: Send + Sync + 'static, T, Arch, Tls>(
         &self,
         object: T,
     ) -> RelocatorRun<'_, T, Arch, (), Tls, ModuleScopeBuilder<Arch, Tls>, Binder>
@@ -213,7 +213,7 @@ where
     /// Executes relocation with the current run state.
     pub fn relocate<D>(self) -> Result<<T as Relocatable<D>>::Output>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         T: Relocatable<D, Arch = Arch, Tls = Tls>,
     {
         let RelocatorRun {
@@ -248,7 +248,7 @@ where
     /// Executes relocation with the current run state.
     pub fn relocate<D>(self) -> Result<<T as Relocatable<D>>::Output>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         T: Relocatable<D, Arch = Arch, Tls = Tls>,
     {
         let RelocatorRun {

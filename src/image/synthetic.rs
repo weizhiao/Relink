@@ -1,4 +1,4 @@
-use super::{Module, ModuleHandle, SymbolExports, SymbolLookup};
+use super::{Module, ModuleHandle, ModuleState, SymbolExports, SymbolLookup};
 use crate::{
     Result,
     arch::NativeArch,
@@ -263,6 +263,7 @@ impl ImageMemory for UnmappedImageMemory {
 /// [`ModuleScope`](crate::image::ModuleScope) without borrowing callback-owned
 /// symbol metadata.
 pub struct SyntheticModule<Arch: RelocationArch = NativeArch, D = ()> {
+    state: ModuleState,
     name: String,
     memory: Arc<dyn ImageMemory>,
     tls: Option<ModuleTls>,
@@ -283,6 +284,7 @@ impl<Arch: RelocationArch, D: Clone> Clone for SyntheticModule<Arch, D> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
+            state: ModuleState::new(),
             name: self.name.clone(),
             memory: self.memory.clone(),
             tls: self.tls,
@@ -311,6 +313,7 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     /// Creates an empty synthetic module.
     pub fn empty(name: impl Into<String>) -> Self {
         Self {
+            state: ModuleState::new(),
             name: name.into(),
             memory: arc_unsize!(
                 Arc::new(UnmappedImageMemory::default()) => dyn ImageMemory
@@ -330,6 +333,7 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
     #[inline]
     pub fn with_user_data<NewD>(self, user_data: NewD) -> SyntheticModule<Arch, NewD> {
         SyntheticModule {
+            state: self.state,
             name: self.name,
             memory: self.memory,
             tls: self.tls,
@@ -480,7 +484,7 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
     }
 }
 
-impl<Arch, D, Tls> From<SyntheticModule<Arch, D>> for ModuleHandle<Arch, Tls>
+impl<Arch, D: Send + Sync + 'static, Tls> From<SyntheticModule<Arch, D>> for ModuleHandle<Arch, Tls>
 where
     Arch: RelocationArch,
     D: Send + Sync + 'static,
@@ -492,12 +496,17 @@ where
     }
 }
 
-impl<Arch, D, Tls> Module<Arch, Tls> for SyntheticModule<Arch, D>
+impl<Arch, D: Send + Sync + 'static, Tls> Module<Arch, Tls> for SyntheticModule<Arch, D>
 where
     Arch: RelocationArch,
     D: Send + Sync + 'static,
     Tls: TlsResolver<Arch> + 'static,
 {
+    #[inline]
+    fn state(&self) -> &ModuleState {
+        &self.state
+    }
+
     #[inline]
     fn name(&self) -> &str {
         &self.name

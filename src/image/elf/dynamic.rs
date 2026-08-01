@@ -17,15 +17,14 @@ use crate::{
     relocation::{DynamicRelocation, Relocatable, RelocateArgs, RelocationArch},
     runtime::DomainId,
     segment::{ElfSegments, MemoryProtection},
-    sync::{Arc, AtomicUsize, arc_unsize},
+    sync::{Arc, OnceCell, arc_unsize},
     tls::{CoreTlsState, ModuleTls, TlsRequest, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{cell::OnceCell, mem::size_of, ptr::NonNull};
+use core::{mem::size_of, ptr::NonNull};
 
 use crate::image::{
-    CoreRuntime, ElfCore, LoadedCore, Module, SymbolExports,
-    core::{CoreInner, STATE_UNINIT},
+    CoreRuntime, ElfCore, LoadedCore, Module, ModuleState, SymbolExports, core::CoreInner,
 };
 
 impl<L: ElfLayout> SymbolTable<L> {
@@ -177,7 +176,7 @@ pub struct RawDynamic<
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
 {
     /// Entry point of the ELF object.
@@ -190,8 +189,8 @@ pub struct RawDynamic<
     extra: ElfExtraData<Arch>,
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> core::fmt::Debug
-    for RawDynamic<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    core::fmt::Debug for RawDynamic<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RawDynamic")
@@ -202,12 +201,14 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> core::fmt
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
-    for RawDynamic<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    SupportLazy for RawDynamic<D, Arch, R, Tls>
 {
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynamic<D, Arch, R, Tls> {
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    RawDynamic<D, Arch, R, Tls>
+{
     /// Gets the entry point of the ELF object.
     #[inline]
     pub fn entry(&self) -> usize {
@@ -401,7 +402,8 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> RawDynami
     }
 }
 
-impl<Tls, D: 'static, Arch: RelocationArch, R: RegionAccess> ImageBuilder<Tls, D, Arch, R>
+impl<Tls, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess>
+    ImageBuilder<Tls, D, Arch, R>
 where
     Tls: TlsResolver<Arch>,
 {
@@ -476,7 +478,7 @@ where
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: self.executor,
             domain: self.domain,
-            phase: AtomicUsize::new(STATE_UNINIT),
+            state: ModuleState::new(),
             lifecycle: OnceCell::new(),
             path: self.path,
             exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),
@@ -516,9 +518,9 @@ where
     }
 }
 
-impl<D, Arch, R, Tls> Relocatable<D> for RawDynamic<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> Relocatable<D> for RawDynamic<D, Arch, R, Tls>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,

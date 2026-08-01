@@ -171,8 +171,8 @@ where
     }
 
     #[inline]
-    pub(crate) const fn acquire_count(&self) -> usize {
-        self.entry.acquire_count
+    pub(crate) const fn root_count(&self) -> usize {
+        self.entry.roots
     }
 }
 
@@ -190,18 +190,18 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn acquire(&mut self) {
-        self.entry.acquire_count = self
+    pub(crate) fn acquire_root(&mut self) {
+        self.entry.roots = self
             .entry
-            .acquire_count
+            .roots
             .checked_add(1)
             .expect("module acquisition count overflow");
     }
 
     #[inline]
-    pub(crate) fn release(&mut self) -> Option<usize> {
-        let count = self.entry.acquire_count.checked_sub(1)?;
-        self.entry.acquire_count = count;
+    pub(crate) fn release_root(&mut self) -> Option<usize> {
+        let count = self.entry.roots.checked_sub(1)?;
+        self.entry.roots = count;
         Some(count)
     }
 
@@ -213,7 +213,7 @@ where
 
 pub(crate) struct CommittedStorage<
     K,
-    D: 'static,
+    D: Send + Sync + 'static,
     M = (),
     Arch: RelocationArch = NativeArch,
     Tls: TlsResolver<Arch> = (),
@@ -224,12 +224,11 @@ pub(crate) struct CommittedStorage<
     keys: PrimaryMap<KeySlot, K>,
     key_modules: SecondaryMap<KeySlot, ModuleSlot>,
     entries: PrimaryMap<ModuleSlot, Option<StoredEntry<M, Arch, Tls>>>,
-    load_order: Vec<ModuleSlot>,
-    init_order: Vec<ModuleSlot>,
+    lifecycle: Vec<ModuleSlot>,
     marker: core::marker::PhantomData<fn() -> D>,
 }
 
-impl<K, D: 'static, M, Arch, Tls> Clone for CommittedStorage<K, D, M, Arch, Tls>
+impl<K, D: Send + Sync + 'static, M, Arch, Tls> Clone for CommittedStorage<K, D, M, Arch, Tls>
 where
     K: Clone,
     M: Clone,
@@ -245,14 +244,13 @@ where
             keys: self.keys.clone(),
             key_modules: self.key_modules.clone(),
             entries: self.entries.clone(),
-            load_order: self.load_order.clone(),
-            init_order: self.init_order.clone(),
+            lifecycle: self.lifecycle.clone(),
             marker: core::marker::PhantomData,
         }
     }
 }
 
-impl<K, D: 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
+impl<K, D: Send + Sync + 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -266,8 +264,7 @@ where
             keys: PrimaryMap::new(),
             key_modules: SecondaryMap::new(),
             entries: PrimaryMap::new(),
-            load_order: Vec::new(),
-            init_order: Vec::new(),
+            lifecycle: Vec::new(),
             marker: core::marker::PhantomData,
         }
     }
@@ -357,7 +354,7 @@ where
     }
 }
 
-impl<K, D: 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
+impl<K, D: Send + Sync + 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
 where
     K: Ord,
     Arch: RelocationArch,
@@ -399,15 +396,14 @@ where
 
     #[inline]
     pub(crate) fn load_order(&self) -> impl DoubleEndedIterator<Item = ModuleSlot> + '_ {
-        self.load_order
+        self.entries
             .iter()
-            .copied()
-            .filter(|slot| self.contains_module(*slot))
+            .filter_map(|(slot, entry)| entry.as_ref().map(|_| slot))
     }
 
     #[inline]
-    pub(crate) fn init_order(&self) -> impl DoubleEndedIterator<Item = ModuleSlot> + '_ {
-        self.init_order
+    pub(crate) fn lifecycle(&self) -> impl DoubleEndedIterator<Item = ModuleSlot> + '_ {
+        self.lifecycle
             .iter()
             .copied()
             .filter(|slot| self.contains_module(*slot))
@@ -449,7 +445,7 @@ where
     }
 }
 
-impl<K, D: 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
+impl<K, D: Send + Sync + 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -472,12 +468,19 @@ where
         previous.filter(|slot| *slot != module_slot)
     }
 
-    pub(crate) fn record_init_order(&mut self, order: impl IntoIterator<Item = ModuleSlot>) {
-        for slot in order {
-            if !self.init_order.contains(&slot) {
-                self.init_order.push(slot);
-            }
-        }
+    pub(crate) fn extend_lifecycle(&mut self, order: &[ModuleSlot]) {
+        debug_assert!(
+            order
+                .iter()
+                .enumerate()
+                .all(|(idx, slot)| !order[..idx].contains(slot)),
+            "lifecycle entries must be unique"
+        );
+        debug_assert!(
+            order.iter().all(|slot| !self.lifecycle.contains(slot)),
+            "lifecycle entries must only be recorded once"
+        );
+        self.lifecycle.extend_from_slice(order);
     }
 
     pub(crate) fn ensure_module_slot(&mut self, slot: KeySlot) -> ModuleSlot {
@@ -487,7 +490,6 @@ where
 
         let module_slot = self.entries.push(None);
         self.key_modules.insert(slot, module_slot);
-        self.load_order.push(module_slot);
         module_slot
     }
 
@@ -497,57 +499,40 @@ where
         module: ModuleHandle<Arch, Tls>,
         direct_deps: Box<[DepEdge]>,
         meta: M,
-        acquire_count: usize,
-    ) -> ModuleId {
+        roots: usize,
+    ) -> ModuleSlot {
         let module_slot = self.ensure_module_slot(slot);
-        let (entry_key, acquire_count) = self.entries[module_slot]
-            .as_ref()
-            .map(|entry| (entry.entry_key, entry.acquire_count))
-            .unwrap_or((slot, acquire_count));
+        let previous = self.entries[module_slot].as_ref();
+        let (entry_key, roots) = previous
+            .map(|entry| (entry.entry_key, entry.roots))
+            .unwrap_or((slot, roots));
         self.entries[module_slot] = Some(StoredEntry {
             entry_key,
             module,
             direct_deps,
             meta,
-            acquire_count,
+            roots,
         });
-        self.make_module_id(module_slot)
+        module_slot
     }
 
     #[inline]
-    pub(crate) fn remove(
+    pub(crate) fn take(
         &mut self,
         slot: ModuleSlot,
-    ) -> EntryState<(ModuleHandle<Arch, Tls>, Box<[DepEdge]>, M)> {
-        let Some(entry) = self.entries.get_mut(slot) else {
-            return EntryState::Absent;
-        };
-        let Some(removed) = entry.take() else {
-            return EntryState::Removed;
-        };
-        let aliases = self
-            .key_modules
-            .iter()
-            .filter_map(|(key_id, existing)| (*existing == slot).then_some(key_id))
-            .collect::<Vec<_>>();
-        for key_id in aliases {
-            self.key_modules.remove(key_id);
-        }
-        if let Some(idx) = self
-            .load_order
-            .iter()
-            .position(|existing| *existing == slot)
-        {
-            self.load_order.remove(idx);
-        }
-        if let Some(idx) = self
-            .init_order
-            .iter()
-            .position(|existing| *existing == slot)
-        {
-            self.init_order.remove(idx);
-        }
-        EntryState::Present((removed.module, removed.direct_deps, removed.meta))
+    ) -> (ModuleHandle<Arch, Tls>, Box<[DepEdge]>, M) {
+        let removed = self.entries[slot]
+            .take()
+            .expect("unload order must refer to a committed module");
+        (removed.module, removed.direct_deps, removed.meta)
+    }
+
+    pub(crate) fn prune_removed(&mut self) {
+        let entries = &self.entries;
+        self.key_modules
+            .retain(|_, slot| entries.get(*slot).is_some_and(Option::is_some));
+        self.lifecycle
+            .retain(|slot| entries.get(*slot).is_some_and(Option::is_some));
     }
 }
 
@@ -556,7 +541,7 @@ struct StoredEntry<M = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<A
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[DepEdge]>,
     meta: M,
-    acquire_count: usize,
+    roots: usize,
 }
 
 impl<M, Arch, Tls> Clone for StoredEntry<M, Arch, Tls>
@@ -572,7 +557,21 @@ where
             module: self.module.clone(),
             direct_deps: self.direct_deps.clone(),
             meta: self.meta.clone(),
-            acquire_count: self.acquire_count,
+            roots: self.roots,
+        }
+    }
+}
+
+impl<K, D: Send + Sync + 'static, M, Arch, Tls> Drop for CommittedStorage<K, D, M, Arch, Tls>
+where
+    Arch: RelocationArch,
+    Tls: TlsResolver<Arch>,
+{
+    fn drop(&mut self) {
+        // ModuleHandle performs the release. Taking entries here only preserves
+        // dependent-before-dependency finalization for modules without scopes.
+        for slot in self.lifecycle.iter().rev().copied() {
+            let _ = self.entries.get_mut(slot).and_then(Option::take);
         }
     }
 }

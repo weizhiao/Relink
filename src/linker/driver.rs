@@ -20,7 +20,7 @@ use core::{fmt, marker::PhantomData, mem::MaybeUninit, ops::Deref, ptr};
 /// call [`LinkContext::release`](crate::LinkContext::release) with [`Self::root_id`]
 /// when that direct use ends.
 pub struct LoadResult<
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -30,7 +30,7 @@ pub struct LoadResult<
     modules: Box<[ModuleId]>,
 }
 
-impl<D: 'static, Arch, R, Tls> fmt::Debug for LoadResult<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> fmt::Debug for LoadResult<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -45,7 +45,7 @@ where
     }
 }
 
-impl<D: 'static, Arch, R, Tls> LoadResult<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> LoadResult<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -89,7 +89,7 @@ where
     }
 }
 
-impl<D: 'static, Arch, R, Tls> Deref for LoadResult<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> Deref for LoadResult<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -312,15 +312,16 @@ where
             linker: self,
             pipeline: LinkPipeline::new(),
             observer: (),
-            scratch_relocation_order: Vec::new(),
+            scratch_order: Vec::new(),
         }
     }
 }
 
-impl<K, D, Tls, Arch, M, Exec, R> Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, R, (), Tls>
+impl<K, D: Send + Sync + 'static, Tls, Arch, M, Exec, R>
+    Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, R, (), Tls>
 where
     K: Clone + Ord,
-    D: 'static,
+    D: Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
@@ -337,7 +338,7 @@ where
     ) -> Linker<K, Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), NewTls>
     where
         Loader<D, Tls, Arch, M, Exec>: Copy,
-        NewD: 'static,
+        NewD: Send + Sync + 'static,
         NewTls: TlsResolver<Arch>,
         NewM: Mmap,
         NewExec: CodeExecutor<Arch> + Clone,
@@ -368,7 +369,7 @@ where
         ) -> Loader<NewD, NewTls, Arch, NewM, NewExec>,
     ) -> Linker<K, Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), NewTls>
     where
-        NewD: 'static,
+        NewD: Send + Sync + 'static,
         NewTls: TlsResolver<Arch>,
         NewM: Mmap,
         NewExec: CodeExecutor<Arch> + Clone,

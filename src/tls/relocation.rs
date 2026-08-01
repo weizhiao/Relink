@@ -14,9 +14,10 @@ pub(crate) enum TlsRelocOutcome {
     Failed(RelocReason),
 }
 
-impl<'find, D, Arch, R, Tls, Obs, H, Memory> RelocHelper<'find, D, Arch, R, Tls, Obs, H, Memory>
+impl<'find, D: Send + Sync + 'static, Arch, R, Tls, Obs, H, Memory>
+    RelocHelper<'find, D, Arch, R, Tls, Obs, H, Memory>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,

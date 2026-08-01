@@ -114,6 +114,7 @@ fn commits_visible_modules() {
     let fixtures = fixtures();
     let loader = Loader::new();
     let dep = Relocator::new()
+        .defer_init()
         .run(
             loader
                 .load_dylib(ElfBinary::new("visible_dep.so", fixtures.provider))
@@ -121,6 +122,7 @@ fn commits_visible_modules() {
         )
         .relocate()
         .expect("failed to relocate visible dependency");
+    assert!(!dep.state().is_initialized());
     let visible = StaticVisibleModule {
         key: DEP_KEY,
         module: dep.clone(),
@@ -140,6 +142,7 @@ fn commits_visible_modules() {
         .expect("load should resolve dependency through visible overlay");
 
     assert_eq!(root.path().file_name(), "visible_root.so");
+    assert!(dep.state().is_initialized());
     assert!(context.contains_key(&"root"));
     let root_id = context
         .key_id(&"root")
@@ -412,7 +415,7 @@ fn phased_load_initializes_dependencies_first() {
         .expect("publish should expose the relocated group");
     assert!(context.contains_key(&"root"));
     assert!(context.contains_key(&DEP_KEY));
-    assert!(!published.root().is_init());
+    assert!(!published.root().state().is_initialized());
 
     let result = published
         .initialize()
@@ -421,7 +424,7 @@ fn phased_load_initializes_dependencies_first() {
         calls.lock().unwrap().as_slice(),
         &["phased_dep.so".to_string(), "phased_root.so".to_string()]
     );
-    assert!(result.root().is_init());
+    assert!(result.root().state().is_initialized());
 
     assert_eq!(calls.lock().unwrap().len(), 2);
 }

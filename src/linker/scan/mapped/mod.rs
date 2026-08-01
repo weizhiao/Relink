@@ -260,7 +260,7 @@ pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch, R>(
     tls_resolver: Tls,
 ) -> Result<RawDynamic<D, Arch, R, Tls>>
 where
-    D: Default + 'static,
+    D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     R: RegionAccess,

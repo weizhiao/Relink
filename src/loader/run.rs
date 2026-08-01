@@ -34,7 +34,7 @@ use super::{ElfBuf, ExpectedElf, ImageBuilder, Loader, ScanBuilder};
 pub struct LoaderRun<
     'a,
     Obs = (),
-    D: 'static = (),
+    D: Send + Sync + 'static = (),
     Tls = (),
     Arch = NativeArch,
     M = DefaultMmap,
@@ -52,10 +52,11 @@ pub struct LoaderRun<
     pub(crate) object_groups: Arc<SectionGroups>,
 }
 
-impl<'a, Obs, D, Tls, Arch, M, Exec> LoaderRun<'a, Obs, D, Tls, Arch, M, Exec>
+impl<'a, Obs, D: Send + Sync + 'static, Tls, Arch, M, Exec>
+    LoaderRun<'a, Obs, D, Tls, Arch, M, Exec>
 where
     Obs: LoadObserver<D, Arch>,
-    D: 'static,
+    D: Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
@@ -80,7 +81,8 @@ where
     }
 }
 
-impl<'run, Obs, D, Tls, Arch, M, Exec> LoaderRun<'run, Obs, D, Tls, Arch, M, Exec>
+impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M, Exec>
+    LoaderRun<'run, Obs, D, Tls, Arch, M, Exec>
 where
     Obs: LoadObserver<D, Arch>,
     Tls: TlsResolver<Arch>,
@@ -142,10 +144,11 @@ where
     }
 }
 
-impl<'run, Obs, D, Tls, Arch, M, Exec> LoaderRun<'run, Obs, D, Tls, Arch, M, Exec>
+impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M, Exec>
+    LoaderRun<'run, Obs, D, Tls, Arch, M, Exec>
 where
     Obs: LoadObserver<D, Arch>,
-    D: 'static,
+    D: Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
@@ -177,10 +180,11 @@ where
     }
 }
 
-impl<'run, Obs, D, Tls, Arch, M, Exec> LoaderRun<'run, Obs, D, Tls, Arch, M, Exec>
+impl<'run, Obs, D: Send + Sync + 'static, Tls, Arch, M, Exec>
+    LoaderRun<'run, Obs, D, Tls, Arch, M, Exec>
 where
     Obs: LoadObserver<D, Arch>,
-    D: Default + 'static,
+    D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
@@ -193,7 +197,7 @@ where
     /// `ET_DYN` inputs are classified by inspecting the program headers.
     pub fn load<'a, I>(&mut self, input: I) -> Result<RawElf<D, Arch, M::Region, Tls>>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         Arch: ObjectArch,
         I: IntoElfReader<'a>,
     {
@@ -401,6 +405,11 @@ where
 
     /// Creates a raw dynamic image from an ELF object that is already mapped.
     ///
+    /// # Safety
+    ///
+    /// `load_bias` and `phdrs` must describe a live mapped image that remains
+    /// valid for the returned module's lifetime.
+    ///
     /// This is intended for dynamic-linker startup, where the kernel has already
     /// mapped the main executable before transferring control to the interpreter.
     /// The returned object is not relocated yet and can be passed through the
@@ -556,7 +565,7 @@ fn image_entry<Arch: RelocationArch>(base: VmAddr, ehdr: &ElfHeader<Arch::Layout
     }
 }
 
-impl<D, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
 where
     (): LoadObserver<D, Arch>,
     Tls: TlsResolver<Arch>,
@@ -571,10 +580,10 @@ where
     }
 }
 
-impl<D, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
 where
     (): LoadObserver<D, Arch>,
-    D: 'static,
+    D: Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
@@ -590,10 +599,10 @@ where
     }
 }
 
-impl<D, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
 where
     (): LoadObserver<D, Arch>,
-    D: Default + 'static,
+    D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
@@ -637,6 +646,12 @@ where
     }
 
     /// Creates a raw dynamic image from an ELF object that is already mapped.
+    ///
+    /// # Safety
+    ///
+    /// `load_bias` and `phdrs` must describe a valid mapped ELF image that
+    /// remains accessible through the configured memory mapper for the
+    /// lifetime of the returned image.
     #[inline]
     pub unsafe fn load_mapped_dynamic(
         &self,

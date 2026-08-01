@@ -36,7 +36,7 @@ pub use object::{LoadedObject, RawObject};
 #[derive(Debug)]
 pub enum RawElf<D, Arch = NativeArch, R: RegionAccess = HostRegion, Tls: TlsResolver<Arch> = ()>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: ObjectArch,
 {
     /// A dynamic library (shared object, typically `.so`).
@@ -50,8 +50,8 @@ where
     Object(RawObject<D, Arch, R, Tls>),
 }
 
-impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
-    for RawElf<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    SupportLazy for RawElf<D, Arch, R, Tls>
 {
 }
 
@@ -61,7 +61,7 @@ impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Supp
 /// Loaded images retain the dependencies that were actually used during relocation.
 #[derive(Debug)]
 pub enum LoadedElf<
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -78,7 +78,7 @@ pub enum LoadedElf<
 }
 
 // Keep this impl manual so cloning a loaded image wrapper does not require D, Arch, or R to be Clone.
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for LoadedElf<D, Arch, R, Tls>
 {
     #[inline]
@@ -92,7 +92,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     }
 }
 
-impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawElf<D, Arch, R, Tls>
 {
     /// Returns the loader source path or caller-provided source identifier.
@@ -162,7 +162,7 @@ impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     LoadedElf<D, Arch, R, Tls>
 {
     /// Converts this LoadedElf into the loaded core for a dylib if it is one.
@@ -279,8 +279,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D: 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>> Relocatable<D>
-    for RawElf<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    Relocatable<D> for RawElf<D, Arch, R, Tls>
 {
     type Output = LoadedElf<D, Arch, R, Tls>;
     type Arch = Arch;

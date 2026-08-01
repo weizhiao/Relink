@@ -12,6 +12,30 @@ mod inner {
 
 pub(crate) use inner::*;
 
+pub(crate) struct OnceCell<T>(spin::Once<T>);
+
+impl<T> OnceCell<T> {
+    #[inline]
+    pub(crate) const fn new() -> Self {
+        Self(spin::Once::new())
+    }
+
+    #[inline]
+    pub(crate) fn get(&self) -> Option<&T> {
+        self.0.get()
+    }
+
+    pub(crate) fn set(&self, value: T) -> Result<(), T> {
+        let mut value = Some(value);
+        self.0
+            .call_once(|| value.take().expect("once-cell value must be available"));
+        match value {
+            None => Ok(()),
+            Some(value) => Err(value),
+        }
+    }
+}
+
 macro_rules! arc_unsize {
     ($arc:expr => $target:ty) => {{
         let ptr = $crate::sync::Arc::into_raw($arc);
@@ -53,5 +77,13 @@ mod tests {
 
         drop(value);
         assert_eq!(Arc::strong_count(&concrete), 1);
+    }
+
+    #[test]
+    fn once_cell_rejects_replacement() {
+        let cell = OnceCell::new();
+        assert_eq!(cell.set(1), Ok(()));
+        assert_eq!(cell.set(2), Err(2));
+        assert_eq!(cell.get(), Some(&1));
     }
 }

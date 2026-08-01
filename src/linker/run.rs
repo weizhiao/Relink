@@ -11,7 +11,7 @@ use crate::{
     ByteRepr, Error, LinkContextError, LinkerError, Loader, LoaderRun, Result,
     arch::NativeArch,
     elf::ElfRelType,
-    image::{LoadedCore, Module, ModuleScope, RawDynamic},
+    image::{LoadedCore, Module, ModuleHandle, ModuleScope, RawDynamic},
     lazy::LazyBinder,
     memory::{HostRegion, RegionAccess},
     observer::{LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver},
@@ -42,7 +42,7 @@ pub struct LinkerRun<
     pub(super) linker: &'run Linker<K, Arch, L, R, RelocBinder, Tls>,
     pub(super) pipeline: LinkPipeline<'pipe, K, Arch, Tls>,
     pub(super) observer: Obs,
-    pub(super) scratch_relocation_order: Vec<KeySlot>,
+    pub(super) scratch_order: Vec<KeySlot>,
 }
 
 impl<'run, 'pipe, K, Arch, L, R, RelocBinder, Tls, Obs>
@@ -65,7 +65,7 @@ where
             linker: self.linker,
             pipeline: self.pipeline,
             observer,
-            scratch_relocation_order: self.scratch_relocation_order,
+            scratch_order: self.scratch_order,
         }
     }
 
@@ -79,24 +79,24 @@ where
             linker,
             pipeline,
             observer,
-            scratch_relocation_order,
+            scratch_order,
         } = self;
 
         Self {
             linker,
             pipeline: configure(pipeline),
             observer,
-            scratch_relocation_order,
+            scratch_order,
         }
     }
 }
 
 #[allow(private_bounds)]
-impl<'run, 'pipe, K, D, Tls, Arch, M, Exec, Resolver, RelocBinder, Obs>
+impl<'run, 'pipe, K, D: Send + Sync + 'static, Tls, Arch, M, Exec, Resolver, RelocBinder, Obs>
     LinkerRun<'run, 'pipe, K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls, Obs>
 where
     K: Clone + Ord,
-    D: Default + 'static,
+    D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     M: Mmap,
@@ -325,14 +325,14 @@ where
             mapped_runtime.protect()?;
         }
 
-        let init_order = session.init_order().into_boxed_slice();
+        let initializers = session.initializers().into_boxed_slice();
 
         Ok(RelocatedLoad {
             context,
             root: root_slot,
             root_module: root,
             session,
-            init_order,
+            initializers,
         })
     }
 
@@ -343,47 +343,47 @@ where
         symbols: &Arc<SymbolRegistry<Arch, Tls>>,
         session: &mut LoadSession<D, Arch, M::Region, Tls>,
     ) -> Result<()> {
-        let mut order = mem::take(&mut self.scratch_relocation_order);
-        session.build_relocation_order(root, &mut order);
+        let mut order = mem::take(&mut self.scratch_order);
+        session.build_lifecycle_order(root, &mut order);
 
         let result = (|| {
             for id in order.drain(..) {
-                let entry = session
-                    .take_pending_dynamic(id)
-                    .expect("missing pending dynamic module while relocating");
-                let (raw, direct_deps) = entry.into_parts();
-                let direct_deps =
-                    direct_deps.expect("missing resolved dependencies while relocating");
-                let mut event = LinkerRelocationEvent::new(raw, scope);
-                self.observer.on_relocation(&mut event)?;
-                let (raw, scope, binding) = event.into_parts();
-                let loaded = self
-                    .linker
-                    .relocator
-                    .run(raw)
-                    .shared_scope(scope)
-                    .symbol_registry(Arc::clone(symbols))
-                    .binding(binding)
-                    .observer(&mut self.observer)
-                    .relocate()?;
-                session.push_relocated(id, loaded, direct_deps);
+                if let Some(entry) = session.take_pending_dynamic(id) {
+                    let (raw, direct_deps) = entry.into_parts();
+                    let direct_deps =
+                        direct_deps.expect("missing resolved dependencies while relocating");
+                    let mut event = LinkerRelocationEvent::new(raw, scope);
+                    self.observer.on_relocation(&mut event)?;
+                    let (raw, scope, binding) = event.into_parts();
+                    let loaded = self
+                        .linker
+                        .relocator
+                        .run(raw)
+                        .shared_scope(scope)
+                        .symbol_registry(Arc::clone(symbols))
+                        .binding(binding)
+                        .observer(&mut self.observer)
+                        .relocate()?;
+                    session.push_ready(id, loaded, direct_deps);
+                } else {
+                    session.mark_module_ready(id);
+                }
+                session.push_lifecycle(id);
             }
-
-            session.mark_module_handles_ready();
             Ok(())
         })();
 
-        self.scratch_relocation_order = order;
+        self.scratch_order = order;
         result
     }
 }
 
 #[allow(private_bounds)]
-impl<K, D, Tls, Arch, M, Exec, Resolver, RelocBinder>
+impl<K, D: Send + Sync + 'static, Tls, Arch, M, Exec, Resolver, RelocBinder>
     Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls>
 where
     K: Clone + Ord,
-    D: Default + 'static,
+    D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     M: Mmap,
@@ -457,7 +457,7 @@ where
 /// A resolved and mapped load transaction that has not executed relocation.
 #[must_use = "a prepared load must be relocated or dropped"]
 pub struct PreparedLoad<
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> = (),
@@ -471,7 +471,7 @@ pub struct PreparedLoad<
     mapped_runtime: Option<MappedRuntimeMemory<R>>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     PreparedLoad<D, Arch, R, Tls>
 {
     fn visible<K, Meta, Q>(
@@ -520,7 +520,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
 /// A relocated load transaction ready to publish into its original context.
 #[must_use = "a relocated load must be published or dropped"]
 pub struct RelocatedLoad<
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> = (),
@@ -529,10 +529,10 @@ pub struct RelocatedLoad<
     root: KeySlot,
     root_module: LoadedCore<D, Arch, R, Tls>,
     session: LoadSession<D, Arch, R, Tls>,
-    init_order: Box<[LoadedCore<D, Arch, R, Tls>]>,
+    initializers: Box<[ModuleHandle<Arch, Tls>]>,
 }
 
-impl<D: 'static, Arch, R, Tls> RelocatedLoad<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> RelocatedLoad<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -558,21 +558,18 @@ where
             .into());
         }
 
-        let published = self.session.commit_into(&mut context.committed)?;
+        let modules = self.session.commit_into(&mut context.committed)?;
         let root_id = context
             .committed
             .module_for_key(self.root)
             .map(|slot| context.committed.make_module_id(slot))
             .expect("published load root must have a module id");
-        context
-            .committed
-            .record_init_order(published.init_order.iter().copied());
         context.acquire(root_id)?;
         Ok(PublishedLoad::new(
             root_id,
             self.root_module,
-            published.ids,
-            self.init_order,
+            modules,
+            self.initializers,
         ))
     }
 }
@@ -580,7 +577,7 @@ where
 /// A published module group whose initializers have not completed yet.
 #[must_use = "a published load must be initialized or rolled back"]
 pub struct PublishedLoad<
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -588,10 +585,10 @@ pub struct PublishedLoad<
     root_id: ModuleId,
     root: LoadedCore<D, Arch, R, Tls>,
     modules: Box<[ModuleId]>,
-    init_order: Box<[LoadedCore<D, Arch, R, Tls>]>,
+    initializers: Box<[ModuleHandle<Arch, Tls>]>,
 }
 
-impl<D: 'static, Arch, R, Tls> fmt::Debug for PublishedLoad<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> fmt::Debug for PublishedLoad<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -602,12 +599,12 @@ where
             .field("root_id", &self.root_id)
             .field("root", &self.root.name())
             .field("modules", &self.modules)
-            .field("pending_initializers", &self.init_order.len())
+            .field("pending_initializers", &self.initializers.len())
             .finish()
     }
 }
 
-impl<D: 'static, Arch, R, Tls> PublishedLoad<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> PublishedLoad<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -618,13 +615,13 @@ where
         root_id: ModuleId,
         root: LoadedCore<D, Arch, R, Tls>,
         modules: Box<[ModuleId]>,
-        init_order: Box<[LoadedCore<D, Arch, R, Tls>]>,
+        initializers: Box<[ModuleHandle<Arch, Tls>]>,
     ) -> Self {
         Self {
             root_id,
             root,
             modules,
-            init_order,
+            initializers,
         }
     }
 
@@ -650,7 +647,10 @@ where
     pub fn initialize(
         self,
     ) -> core::result::Result<LoadResult<D, Arch, R, Tls>, FailedLoad<D, Arch, R, Tls>> {
-        let result = self.init_order.iter().try_for_each(Module::initialize);
+        let result = self
+            .initializers
+            .iter()
+            .try_for_each(|module| module.initialize());
         if let Err(error) = result {
             return Err(FailedLoad { error, load: self });
         }
@@ -671,11 +671,12 @@ where
             .into());
         }
 
-        context.release(self.root_id)?.finalize()
+        drop(context.release(self.root_id)?);
+        Ok(())
     }
 }
 
-impl<D: 'static, Arch, R, Tls> Deref for PublishedLoad<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> Deref for PublishedLoad<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -692,7 +693,7 @@ where
 /// A published load whose initialization failed and can be rolled back.
 #[must_use = "a failed load must be rolled back"]
 pub struct FailedLoad<
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -701,7 +702,7 @@ pub struct FailedLoad<
     load: PublishedLoad<D, Arch, R, Tls>,
 }
 
-impl<D: 'static, Arch, R, Tls> fmt::Debug for FailedLoad<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> fmt::Debug for FailedLoad<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -716,7 +717,7 @@ where
     }
 }
 
-impl<D: 'static, Arch, R, Tls> FailedLoad<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> FailedLoad<D, Arch, R, Tls>
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -755,7 +756,7 @@ pub(in crate::linker) fn visible_loaded<K, D, Meta, Arch, R, Q, Tls>(
 where
     K: Clone + Ord + Borrow<Q>,
     Q: Ord + ?Sized,
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
@@ -785,7 +786,7 @@ fn visible_root<K, D, Meta, Arch, R, Q, Tls>(
 where
     K: Clone + Ord + Borrow<Q>,
     Q: Ord + ?Sized,
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,

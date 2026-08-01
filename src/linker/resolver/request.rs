@@ -77,8 +77,8 @@ pub trait DependencyOwner {
     fn needed_lib(&self, index: usize) -> Option<&str>;
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> DependencyOwner
-    for RawDynamic<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    DependencyOwner for RawDynamic<D, Arch, R, Tls>
 {
     #[inline]
     fn path(&self) -> &Path {

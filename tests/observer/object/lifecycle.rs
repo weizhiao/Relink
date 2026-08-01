@@ -380,7 +380,11 @@ fn defers_initialization() {
     struct InitObserver(VmAddr);
 
     impl RelocationObserver for InitObserver {
-        fn on_object_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
+        fn on_object_relocated<
+            D: Send + Sync + 'static,
+            R: RegionAccess,
+            Tls: TlsResolver<NativeArch>,
+        >(
             &mut self,
             event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R, Tls>,
         ) -> Result<()> {
@@ -435,13 +439,13 @@ fn defers_initialization() {
         .relocate()
         .expect("failed to relocate object");
 
-    assert!(!loaded.is_init());
+    assert!(!loaded.state().is_initialized());
     assert!(calls.lock().unwrap().is_empty());
 
     loaded.initialize().expect("initialization should succeed");
     loaded
         .initialize()
         .expect("repeated initialization should be a no-op");
-    assert!(loaded.is_init());
+    assert!(loaded.state().is_initialized());
     assert_eq!(&*calls.lock().unwrap(), &[init_addr.get()]);
 }

@@ -4,7 +4,7 @@ mod fixture;
 #[path = "../fixture_build/mod.rs"]
 mod fixture_build;
 use elf_loader::{
-    Error, LinkContext, Linker, Loader, Relocator,
+    Error, LinkContext, Linker, Loader, Module, Relocator,
     arch::NativeArch,
     error::{LinkContextError, LinkerError},
     image::{LoadedCore, ModuleCapability, SyntheticModule},
@@ -90,7 +90,11 @@ impl LoadObserver for InitRecorder {}
 impl LinkerObserver<&'static str, ()> for InitRecorder {}
 
 impl RelocationObserver for InitRecorder {
-    fn on_dynamic_relocated<D: 'static, R: RegionAccess, Tls: TlsResolver<NativeArch>>(
+    fn on_dynamic_relocated<
+        D: Send + Sync + 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<NativeArch>,
+    >(
         &mut self,
         event: &mut DynamicRelocatedEvent<'_, D, NativeArch, R, Tls>,
     ) -> elf_loader::Result<()> {

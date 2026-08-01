@@ -44,7 +44,7 @@ use core::{marker::PhantomData, mem::MaybeUninit, ptr};
 /// let lib = Relocator::new().run(raw).relocate().unwrap();
 /// ```
 pub struct Loader<
-    D: 'static = (),
+    D: Send + Sync + 'static = (),
     Tls = (),
     Arch = NativeArch,
     M = DefaultMmap,
@@ -63,9 +63,9 @@ pub struct Loader<
     _marker: PhantomData<fn() -> (D, Tls, Arch)>,
 }
 
-impl<D, Tls, Arch, M, Exec> Copy for Loader<D, Tls, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Tls, Arch, M, Exec> Copy for Loader<D, Tls, Arch, M, Exec>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Tls: TlsResolver<Arch> + Copy,
     Arch: RelocationArch,
     M: Mmap + Copy,
@@ -86,7 +86,7 @@ impl<Tls, M, Exec> LoaderFields<Tls, M, Exec> {
     #[inline]
     const fn into_loader<D, Arch>(self) -> Loader<D, Tls, Arch, M, Exec>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         Tls: TlsResolver<Arch>,
         Arch: RelocationArch,
         M: Mmap,
@@ -116,7 +116,7 @@ impl<Tls, M, Exec> LoaderFields<Tls, M, Exec> {
         executor: NewExec,
     ) -> Loader<D, Tls, Arch, M, NewExec>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         Tls: TlsResolver<Arch>,
         Arch: RelocationArch,
         M: Mmap,
@@ -144,7 +144,7 @@ impl<Tls, M, Exec> LoaderFields<Tls, M, Exec> {
     #[inline]
     const fn with_mapper<D, Arch, NewM>(self, mapper: NewM) -> Loader<D, Tls, Arch, NewM, Exec>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         Tls: TlsResolver<Arch>,
         Arch: RelocationArch,
         NewM: Mmap,
@@ -172,7 +172,7 @@ impl<Tls, M, Exec> LoaderFields<Tls, M, Exec> {
     #[inline]
     const fn with_default_tls<D>(self) -> Loader<D, DefaultTlsResolver, NativeArch, M, Exec>
     where
-        D: 'static,
+        D: Send + Sync + 'static,
         Tls: TlsResolver<NativeArch> + Copy,
         M: Mmap,
     {
@@ -196,9 +196,9 @@ impl<Tls, M, Exec> LoaderFields<Tls, M, Exec> {
     }
 }
 
-impl<D, Tls, Arch, M, Exec> Clone for Loader<D, Tls, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Tls, Arch, M, Exec> Clone for Loader<D, Tls, Arch, M, Exec>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap + Clone,
@@ -248,9 +248,9 @@ impl Default for Loader<(), (), NativeArch, DefaultMmap, NativeCodeExecutor> {
     }
 }
 
-impl<D, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
@@ -282,9 +282,9 @@ where
     }
 }
 
-impl<D, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
+impl<D: Send + Sync + 'static, Tls, Arch, M, Exec> Loader<D, Tls, Arch, M, Exec>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
     M: Mmap,
@@ -343,7 +343,7 @@ where
     /// on the configured load observer.
     pub const fn with_data<NewD>(self) -> Loader<NewD, Tls, Arch, M, Exec>
     where
-        NewD: Default + 'static,
+        NewD: Default + Send + Sync + 'static,
     {
         self.into_fields().into_loader()
     }
@@ -413,9 +413,9 @@ where
     }
 }
 
-impl<D, Tls, M, Exec> Loader<D, Tls, NativeArch, M, Exec>
+impl<D: Send + Sync + 'static, Tls, M, Exec> Loader<D, Tls, NativeArch, M, Exec>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Tls: TlsResolver<NativeArch> + Copy,
     M: Mmap,
     Exec: CodeExecutor<NativeArch> + Clone,

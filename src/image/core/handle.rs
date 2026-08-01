@@ -1,20 +1,22 @@
-use super::{CoreInner, STATE_INIT, STATE_UNINIT};
+use super::CoreInner;
 use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
-    image::{CoreRuntime, DynamicInfo, Module, ModuleScope, PltRelocInfo, SymbolExports},
+    image::{
+        CoreRuntime, DynamicInfo, Module, ModuleScope, ModuleState, PltRelocInfo, SymbolExports,
+    },
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
     relocation::{RelocationArch, SymbolRegistry},
     runtime::{CodeContext, CodeExecutor, DomainId, NativeCodeExecutor},
     segment::ElfSegments,
-    sync::{Arc, AtomicUsize, Ordering, Weak, arc_unsize},
+    sync::{Arc, OnceCell, Weak, arc_unsize},
     tls::{CoreTlsState, ModuleTls, TlsImageProvider, TlsImageSource, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{cell::OnceCell, fmt::Debug, ptr::NonNull};
+use core::{fmt::Debug, ptr::NonNull};
 
 /// A non-owning reference to an [`ElfCore`].
 ///
@@ -22,7 +24,7 @@ use core::{cell::OnceCell, fmt::Debug, ptr::NonNull};
 /// when you want to avoid extending the lifetime of a loaded image unnecessarily
 /// or need to detect when the image has been dropped.
 pub struct ElfCoreRef<
-    D: 'static = (),
+    D: Send + Sync + 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -32,7 +34,7 @@ pub struct ElfCoreRef<
 }
 
 // Keep this impl manual so cloning a weak core handle does not require D, Arch, or R to be Clone.
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for ElfCoreRef<D, Arch, R, Tls>
 {
     #[inline]
@@ -43,7 +45,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     ElfCoreRef<D, Arch, R, Tls>
 {
     /// Attempts to upgrade the weak pointer to an [`ElfCore`].
@@ -56,8 +58,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> TlsImageProvider
-    for CoreInner<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    TlsImageProvider for CoreInner<D, Arch, R, Tls>
 {
     fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
         self.tls.with_image(f)
@@ -70,7 +72,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
 /// handlers behind an [`Arc`]. Higher-level image wrappers delegate most common
 /// operations to this type.
 pub struct ElfCore<
-    D: 'static = (),
+    D: Send + Sync + 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -79,7 +81,7 @@ pub struct ElfCore<
     pub(crate) inner: Arc<CoreInner<D, Arch, R, Tls>>,
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for ElfCore<D, Arch, R, Tls>
 {
     /// Clones the [`ElfCore`], incrementing the internal reference count.
@@ -90,13 +92,19 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> + 'static>
-    ElfCore<D, Arch, R, Tls>
+impl<
+    D: Send + Sync + 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch> + 'static,
+> ElfCore<D, Arch, R, Tls>
 {
-    /// Returns whether the ELF object has been initialized.
+    /// Runs this ELF module's initialization lifecycle at most once.
     #[inline]
-    pub fn is_init(&self) -> bool {
-        self.inner.phase.load(Ordering::Acquire) != STATE_UNINIT
+    pub fn initialize(&self) -> Result<()> {
+        self.inner
+            .state
+            .initialize(|| Module::initialize(&*self.inner))
     }
 
     /// Installs lifecycle behavior resolved during relocation.
@@ -261,7 +269,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> +
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     ElfCore<D, Arch, R, Tls>
 {
     /// Creates an `ElfCore` from raw components.
@@ -303,7 +311,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
             executor: arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
             domain: DomainId::PROCESS,
             path,
-            phase: AtomicUsize::new(STATE_INIT),
+            state: ModuleState::initialized(),
             lifecycle: OnceCell::new(),
             exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
@@ -325,7 +333,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     for ElfCore<D, Arch, R, Tls>
 {
     /// Formats the ElfCore for debugging purposes.
@@ -338,13 +346,18 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     }
 }
 
-impl<D, Arch, R, Tls> Module<Arch, Tls> for ElfCore<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> Module<Arch, Tls> for ElfCore<D, Arch, R, Tls>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> + 'static,
 {
+    #[inline]
+    fn state(&self) -> &ModuleState {
+        &self.inner.state
+    }
+
     #[inline]
     fn name(&self) -> &str {
         self.inner.name()
@@ -372,12 +385,12 @@ where
 
     #[inline]
     fn initialize(&self) -> Result<()> {
-        self.inner.initialize()
+        Module::initialize(&*self.inner)
     }
 
     #[inline]
     fn finalize(&self) -> Result<()> {
-        self.inner.finalize()
+        Module::finalize(&*self.inner)
     }
 }
 

@@ -36,7 +36,7 @@ pub struct StaticExec<
 }
 
 // Keep this impl manual so cloning a static executable handle does not require D, Arch, or R to be Clone.
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for StaticExec<D, Arch, R, Tls>
 {
     #[inline]
@@ -47,7 +47,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     }
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     for StaticExec<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -57,7 +57,7 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     StaticExec<D, Arch, R, Tls>
 {
     /// Returns the source path or caller-provided path identifier.
@@ -159,8 +159,8 @@ impl TlsImageProvider for StaticTlsImage {
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Relocatable<D>
-    for RawExec<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    Relocatable<D> for RawExec<D, Arch, R, Tls>
 {
     type Output = LoadedExec<D, Arch, R, Tls>;
     type Arch = Arch;
@@ -213,7 +213,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
 #[allow(clippy::large_enum_variant)]
 pub enum RawExec<D, Arch = NativeArch, R: RegionAccess = HostRegion, Tls: TlsResolver<Arch> = ()>
 where
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch,
 {
     /// A dynamically linked executable with `PT_DYNAMIC`.
@@ -223,7 +223,7 @@ where
     Static(StaticExec<D, Arch, R, Tls>),
 }
 
-impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     for RawExec<D, Arch, R, Tls>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -233,12 +233,12 @@ impl<D, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Debug
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> SupportLazy
-    for RawExec<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    SupportLazy for RawExec<D, Arch, R, Tls>
 {
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawExec<D, Arch, R, Tls>
 {
     /// Returns the loader source path or caller-provided source identifier.
@@ -320,7 +320,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
 /// static executables expose a smaller set of metadata directly on this wrapper.
 #[derive(Debug)]
 pub struct LoadedExec<
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -333,7 +333,7 @@ pub struct LoadedExec<
 
 #[derive(Debug)]
 enum LoadedExecInner<
-    D: 'static,
+    D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
@@ -343,7 +343,7 @@ enum LoadedExecInner<
 }
 
 // Keep this impl manual so cloning a loaded executable does not require D, Arch, or R to be Clone.
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for LoadedExec<D, Arch, R, Tls>
 {
     #[inline]
@@ -355,7 +355,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
     for LoadedExecInner<D, Arch, R, Tls>
 {
     #[inline]
@@ -367,7 +367,7 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> 
     }
 }
 
-impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     LoadedExec<D, Arch, R, Tls>
 {
     /// Returns the entry point of the executable.
@@ -436,7 +436,8 @@ impl<D: 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     }
 }
 
-impl<Tls, D: 'static, Arch: RelocationArch, R: RegionAccess> ImageBuilder<Tls, D, Arch, R>
+impl<Tls, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess>
+    ImageBuilder<Tls, D, Arch, R>
 where
     Tls: TlsResolver<Arch>,
 {

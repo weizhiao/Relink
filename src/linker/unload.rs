@@ -1,7 +1,5 @@
 use super::{context::DirectDeps, storage::ModuleId};
-use crate::{
-    Result, arch::NativeArch, image::ModuleHandle, relocation::RelocationArch, tls::TlsResolver,
-};
+use crate::{arch::NativeArch, image::ModuleHandle, relocation::RelocationArch, tls::TlsResolver};
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -56,12 +54,6 @@ where
     pub const fn meta(&self) -> &M {
         &self.meta
     }
-
-    /// Consumes the entry and returns all detached state.
-    #[inline]
-    pub fn into_parts(self) -> (ModuleId, ModuleHandle<Arch, Tls>, DirectDeps, M) {
-        (self.id, self.module, self.direct_deps, self.meta)
-    }
 }
 
 impl<M, Arch, Tls> fmt::Debug for UnloadedModule<M, Arch, Tls>
@@ -72,7 +64,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UnloadedModule")
             .field("id", &self.id)
-            .field("name", &self.module.name())
+            .field("name", &self.module().name())
             .field("direct_deps", &self.direct_deps.len())
             .finish_non_exhaustive()
     }
@@ -82,7 +74,7 @@ where
 ///
 /// The collection retains the complete unload group so finalizers may still
 /// call code in dependencies that were detached at the same time.
-#[must_use = "detached modules should be finalized or handled explicitly"]
+#[must_use = "keep the unload group alive until it is safe to run finalizers"]
 pub struct UnloadGroup<M, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     modules: Vec<UnloadedModule<M, Arch, Tls>>,
 }
@@ -115,35 +107,12 @@ where
         &self.modules
     }
 
-    /// Consumes the collection without running finalizers.
+    /// Splits the collection into independently retained detached modules.
+    ///
+    /// Each returned entry releases its module when dropped.
     #[inline]
     pub fn into_modules(self) -> Vec<UnloadedModule<M, Arch, Tls>> {
         self.modules
-    }
-}
-
-impl<M, Arch, Tls> UnloadGroup<M, Arch, Tls>
-where
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch> + 'static,
-{
-    /// Consumes the collection and executes all finalizers.
-    ///
-    /// The complete unload group remains alive until every finalizer has run.
-    /// Finalization continues after an error and returns the first failure.
-    pub fn finalize(self) -> Result<()> {
-        let mut error = None;
-        for entry in &self.modules {
-            if let Err(current) = entry.module.finalize()
-                && error.is_none()
-            {
-                error = Some(current);
-            }
-        }
-        match error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
     }
 }
 

@@ -61,7 +61,7 @@ where
 pub(crate) struct ResolveContext<
     'a,
     K: Clone,
-    D: 'static,
+    D: Send + Sync + 'static,
     Meta = (),
     Arch: RelocationArch = NativeArch,
     P = (),
@@ -84,7 +84,8 @@ pub(crate) type LoadResolveContext<
 pub(crate) type ScanResolveContext<'a, K, D, Meta = (), Arch = NativeArch, Tls = ()> =
     ResolveContext<'a, K, D, Meta, Arch, ScannedDynamic<Arch>, Tls>;
 
-impl<'a, K: Clone, D: 'static, Meta, Arch, P, Tls> ResolveContext<'a, K, D, Meta, Arch, P, Tls>
+impl<'a, K: Clone, D: Send + Sync + 'static, Meta, Arch, P, Tls>
+    ResolveContext<'a, K, D, Meta, Arch, P, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -98,7 +99,7 @@ where
     }
 }
 
-impl<K, D: 'static, Meta, Arch, P, Tls> ResolveContext<'_, K, D, Meta, Arch, P, Tls>
+impl<K, D: Send + Sync + 'static, Meta, Arch, P, Tls> ResolveContext<'_, K, D, Meta, Arch, P, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -118,15 +119,14 @@ where
         R: RegionAccess,
         Obs: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
     {
-        if let Some(slot) = self.committed.key_slot_for(key) {
-            if self.session.contains_pending(slot)
+        if let Some(slot) = self.committed.key_slot_for(key)
+            && (self.session.contains_pending(slot)
                 || self
                     .committed
                     .module_for_key(slot)
-                    .is_some_and(|slot| self.committed.contains_module(slot))
-            {
-                return true;
-            }
+                    .is_some_and(|slot| self.committed.contains_module(slot)))
+        {
+            return true;
         }
 
         observer.contains_visible(key)
@@ -366,7 +366,7 @@ where
     }
 }
 
-impl<K, D: 'static, Meta, Arch, R, Tls>
+impl<K, D: Send + Sync + 'static, Meta, Arch, R, Tls>
     ResolveContext<'_, K, D, Meta, Arch, RawDynamic<D, Arch, R, Tls>, Tls>
 where
     K: Clone + Ord,
@@ -435,7 +435,8 @@ where
     }
 }
 
-impl<K, D: 'static, Meta, Arch, Tls> ResolveContext<'_, K, D, Meta, Arch, ScannedDynamic<Arch>, Tls>
+impl<K, D: Send + Sync + 'static, Meta, Arch, Tls>
+    ResolveContext<'_, K, D, Meta, Arch, ScannedDynamic<Arch>, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
