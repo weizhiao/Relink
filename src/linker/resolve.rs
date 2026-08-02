@@ -61,45 +61,35 @@ where
 pub(crate) struct ResolveContext<
     'a,
     K: Clone,
-    D: Send + Sync + 'static,
-    Meta = (),
     Arch: RelocationArch = NativeArch,
     P = (),
     Tls: TlsResolver<Arch> = (),
 > {
-    committed: &'a mut CommittedStorage<K, D, Meta, Arch, Tls>,
+    committed: &'a mut CommittedStorage<K, Arch, Tls>,
     session: &'a mut ResolveSession<P, Arch, Tls>,
 }
 
-pub(crate) type LoadResolveContext<
-    'a,
-    K,
-    D,
-    Meta = (),
-    Arch = NativeArch,
-    R = HostRegion,
-    Tls = (),
-> = ResolveContext<'a, K, D, Meta, Arch, RawDynamic<D, Arch, R, Tls>, Tls>;
+pub(crate) type LoadResolveContext<'a, K, D, Arch = NativeArch, R = HostRegion, Tls = ()> =
+    ResolveContext<'a, K, Arch, RawDynamic<D, Arch, R, Tls>, Tls>;
 
-pub(crate) type ScanResolveContext<'a, K, D, Meta = (), Arch = NativeArch, Tls = ()> =
-    ResolveContext<'a, K, D, Meta, Arch, ScannedDynamic<Arch>, Tls>;
+pub(crate) type ScanResolveContext<'a, K, Arch = NativeArch, Tls = ()> =
+    ResolveContext<'a, K, Arch, ScannedDynamic<Arch>, Tls>;
 
-impl<'a, K: Clone, D: Send + Sync + 'static, Meta, Arch, P, Tls>
-    ResolveContext<'a, K, D, Meta, Arch, P, Tls>
+impl<'a, K: Clone, Arch, P, Tls> ResolveContext<'a, K, Arch, P, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new(
-        committed: &'a mut CommittedStorage<K, D, Meta, Arch, Tls>,
+        committed: &'a mut CommittedStorage<K, Arch, Tls>,
         session: &'a mut ResolveSession<P, Arch, Tls>,
     ) -> Self {
         Self { committed, session }
     }
 }
 
-impl<K, D: Send + Sync + 'static, Meta, Arch, P, Tls> ResolveContext<'_, K, D, Meta, Arch, P, Tls>
+impl<K, Arch, P, Tls> ResolveContext<'_, K, Arch, P, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -112,8 +102,9 @@ where
     }
 
     #[inline]
-    fn contains_key<Q, R, Obs>(&self, key: &Q, observer: &Obs) -> bool
+    fn contains_key<D, Q, R, Obs>(&self, key: &Q, observer: &Obs) -> bool
     where
+        D: Send + Sync + 'static,
         K: Borrow<Q>,
         Q: Ord + ?Sized,
         R: RegionAccess,
@@ -160,8 +151,9 @@ where
         Ok(slot)
     }
 
-    fn stage_existing_key<Q, R, Obs>(&mut self, key: K, observer: &Obs) -> Result<KeySlot>
+    fn stage_existing_key<D, Q, R, Obs>(&mut self, key: K, observer: &Obs) -> Result<KeySlot>
     where
+        D: Send + Sync + 'static,
         K: Borrow<Q>,
         Q: Ord + ?Sized,
         R: RegionAccess,
@@ -186,18 +178,19 @@ where
             .into_boxed_slice();
         let slot = self.stage_module_handle(key, module, direct_deps)?;
         for dep in direct_dep_keys {
-            self.stage_existing_key::<Q, R, Obs>(dep, observer)?;
+            self.stage_existing_key::<D, Q, R, Obs>(dep, observer)?;
         }
         Ok(slot)
     }
 
-    fn stage_module_deps<'cfg, Obs, F, M, Exec>(
+    fn stage_module_deps<'cfg, D, Obs, F, M, Exec>(
         &mut self,
         deps: Vec<ResolvedKey<'cfg, K, Arch, Tls>>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         mut stage: F,
     ) -> Result<Box<[KeySlot]>>
     where
+        D: Send + Sync + 'static,
         Obs: LoadObserver<D, Arch>,
         M: Mmap,
         F: FnMut(
@@ -257,7 +250,7 @@ where
         entry.set_direct_deps(direct_deps);
     }
 
-    fn resolve_dependency_edge<'cfg, Q, R, Obs>(
+    fn resolve_dependency_edge<'cfg, D, Q, R, Obs>(
         &self,
         slot: KeySlot,
         needed_index: usize,
@@ -265,19 +258,20 @@ where
         observer: &Obs,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
+        D: Send + Sync + 'static,
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         R: RegionAccess,
         Obs: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
     {
-        let contains_key = |key: &Q| self.contains_key::<Q, R, Obs>(key, observer);
+        let contains_key = |key: &Q| self.contains_key::<D, Q, R, Obs>(key, observer);
         let owner = self.owner(slot);
         let owner_key = self.key(slot);
         let req = DependencyRequest::new(owner_key, owner, needed_index, &contains_key);
         resolver.resolve_dependency(&req)
     }
 
-    pub(crate) fn resolve_root<'cfg, Q, R, Obs>(
+    pub(crate) fn resolve_root<'cfg, D, Q, R, Obs>(
         &self,
         key: &K,
         owner: Option<SearchOwner<'_>>,
@@ -285,17 +279,18 @@ where
         observer: &Obs,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
+        D: Send + Sync + 'static,
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         R: RegionAccess,
         Obs: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
     {
-        let contains_key = |key: &Q| self.contains_key::<Q, R, Obs>(key, observer);
+        let contains_key = |key: &Q| self.contains_key::<D, Q, R, Obs>(key, observer);
         let req = RootRequest::new(key, owner, &contains_key);
         resolver.load_root(&req)
     }
 
-    fn direct_deps_for<'cfg, Obs, F, M, Exec, Q>(
+    fn direct_deps_for<'cfg, D, Obs, F, M, Exec, Q>(
         &mut self,
         slot: KeySlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
@@ -303,6 +298,7 @@ where
         stage: &mut F,
     ) -> Result<Vec<KeySlot>>
     where
+        D: Send + Sync + 'static,
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
@@ -322,7 +318,7 @@ where
         let needed_len = self.owner(slot).needed_len();
         let mut direct_deps = Vec::with_capacity(needed_len);
         for idx in 0..needed_len {
-            let key = self.resolve_dependency_edge::<Q, M::Region, Obs>(
+            let key = self.resolve_dependency_edge::<D, Q, M::Region, Obs>(
                 slot,
                 idx,
                 resolver,
@@ -337,7 +333,7 @@ where
         Ok(direct_deps)
     }
 
-    fn resolve_dependency_graph_with<'cfg, Obs, F, M, Exec, Q>(
+    fn resolve_dependency_graph_with<'cfg, D, Obs, F, M, Exec, Q>(
         &mut self,
         root: KeySlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
@@ -345,6 +341,7 @@ where
         mut stage: F,
     ) -> Result<()>
     where
+        D: Send + Sync + 'static,
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
@@ -366,8 +363,8 @@ where
     }
 }
 
-impl<K, D: Send + Sync + 'static, Meta, Arch, R, Tls>
-    ResolveContext<'_, K, D, Meta, Arch, RawDynamic<D, Arch, R, Tls>, Tls>
+impl<K, D: Send + Sync + 'static, Arch, R, Tls>
+    ResolveContext<'_, K, Arch, RawDynamic<D, Arch, R, Tls>, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -390,10 +387,10 @@ where
     {
         match resolved {
             ResolvedKey::Existing(key) => {
-                self.stage_existing_key::<Q, M::Region, Obs>(key, &loader.observer)
+                self.stage_existing_key::<D, Q, M::Region, Obs>(key, &loader.observer)
             }
             ResolvedKey::Load { key, reader } => {
-                if self.contains_key::<Q, M::Region, Obs>(key.borrow(), &loader.observer) {
+                if self.contains_key::<D, Q, M::Region, Obs>(key.borrow(), &loader.observer) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
                 let raw = loader.load_dynamic(reader)?;
@@ -402,7 +399,7 @@ where
                 Ok(slot)
             }
             ResolvedKey::Module { key, module, deps } => {
-                if self.contains_key::<Q, M::Region, Obs>(key.borrow(), &loader.observer) {
+                if self.contains_key::<D, Q, M::Region, Obs>(key.borrow(), &loader.observer) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
 
@@ -435,19 +432,19 @@ where
     }
 }
 
-impl<K, D: Send + Sync + 'static, Meta, Arch, Tls>
-    ResolveContext<'_, K, D, Meta, Arch, ScannedDynamic<Arch>, Tls>
+impl<K, Arch, Tls> ResolveContext<'_, K, Arch, ScannedDynamic<Arch>, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn stage<Obs, M, Exec, Q>(
+    pub(crate) fn stage<D, Obs, M, Exec, Q>(
         &mut self,
         resolved: ResolvedKey<'static, K, Arch, Tls>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
     ) -> Result<KeySlot>
     where
+        D: Send + Sync + 'static,
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         D: Default,
@@ -458,10 +455,10 @@ where
     {
         match resolved {
             ResolvedKey::Existing(key) => {
-                self.stage_existing_key::<Q, M::Region, Obs>(key, &loader.observer)
+                self.stage_existing_key::<D, Q, M::Region, Obs>(key, &loader.observer)
             }
             ResolvedKey::Load { key, reader } => {
-                if self.contains_key::<Q, M::Region, Obs>(key.borrow(), &loader.observer) {
+                if self.contains_key::<D, Q, M::Region, Obs>(key.borrow(), &loader.observer) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
                 let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
@@ -472,25 +469,26 @@ where
                 Ok(slot)
             }
             ResolvedKey::Module { key, module, deps } => {
-                if self.contains_key::<Q, M::Region, Obs>(key.borrow(), &loader.observer) {
+                if self.contains_key::<D, Q, M::Region, Obs>(key.borrow(), &loader.observer) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
 
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
-                    ctx.stage::<Obs, M, Exec, Q>(dep, loader)
+                    ctx.stage::<D, Obs, M, Exec, Q>(dep, loader)
                 })?;
                 self.stage_module_handle(key, module, direct_deps)
             }
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<Obs, M, Exec, Q>(
+    pub(crate) fn resolve_dependency_graph<D, Obs, M, Exec, Q>(
         &mut self,
         root: KeySlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         resolver: &impl KeyResolver<K, Arch, Q, Tls>,
     ) -> Result<()>
     where
+        D: Send + Sync + 'static,
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         D: Default,

@@ -102,7 +102,7 @@ fn load_manual_memory(fixtures: &FixtureBytes) -> LoadedCore<()> {
 }
 
 fn load_linker(root: PathBuf) {
-    let mut context: LinkContext<PathBuf, ()> = LinkContext::new(DomainId::PROCESS);
+    let mut context: LinkContext<PathBuf> = LinkContext::new(DomainId::PROCESS);
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
         .load(&mut context, black_box(root))
@@ -111,7 +111,7 @@ fn load_linker(root: PathBuf) {
 }
 
 fn load_scan_first(root: PathBuf) {
-    let mut context: LinkContext<PathBuf, ()> = LinkContext::new(DomainId::PROCESS);
+    let mut context: LinkContext<PathBuf> = LinkContext::new(DomainId::PROCESS);
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
         .run()

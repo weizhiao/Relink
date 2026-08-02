@@ -62,8 +62,8 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
     /// Returns the canonical lifecycle state for this logical module.
     ///
     /// Wrappers around the same module must return the same stable state
-    /// address. Relink uses it to coordinate ownership across link contexts
-    /// and module handles.
+    /// address. Relink uses it to coordinate initialization and finalization
+    /// across wrappers around the same underlying module.
     fn state(&self) -> &ModuleState;
 
     /// Returns the module name used for diagnostics.
@@ -93,8 +93,9 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
 
     /// Performs this module's finalization hook.
     ///
-    /// Relink invokes this after the final committed owner has released the
-    /// module and guarantees that the hook runs at most once.
+    /// The module's owning allocation should invoke this through
+    /// [`ModuleState::finalize`] from its `Drop` implementation. Core-backed ELF
+    /// modules already do this in `CoreInner`.
     fn finalize(&self) -> Result<()> {
         Ok(())
     }

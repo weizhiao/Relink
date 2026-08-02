@@ -2,7 +2,7 @@ use super::Module;
 use crate::{
     Result,
     arch::NativeArch,
-    custom_error, logging,
+    custom_error,
     relocation::RelocationArch,
     runtime::DomainId,
     sync::{Arc, AtomicUsize, Ordering, Weak, arc_unsize},
@@ -12,17 +12,14 @@ use alloc::vec::Vec;
 use core::{any::Any, fmt, ops::Deref, slice};
 
 const UNINITIALIZED: usize = 0;
-const PHASE_SHIFT: u32 = usize::BITS - 2;
-const INITIALIZED: usize = 1 << PHASE_SHIFT;
-const FINALIZED: usize = 2 << PHASE_SHIFT;
-const PHASE_MASK: usize = 3 << PHASE_SHIFT;
-const REFS_MASK: usize = !PHASE_MASK;
+const INITIALIZED: usize = 1;
+const FINALIZED: usize = 2;
 
-/// Lifecycle state shared by every handle for one logical module.
+/// Lifecycle state shared by every view of one logical module.
 ///
 /// Module implementations store this value and return it from
-/// [`Module::state`]. Relink uses it to coordinate context ownership and to run
-/// initialization and finalization hooks at most once.
+/// [`Module::state`]. It coordinates initialization and finalization without
+/// duplicating the ownership count already maintained by [`Arc`].
 pub struct ModuleState {
     value: AtomicUsize,
 }
@@ -47,32 +44,7 @@ impl ModuleState {
     /// Returns whether the module is currently initialized.
     #[inline]
     pub fn is_initialized(&self) -> bool {
-        self.value.load(Ordering::Acquire) & PHASE_MASK == INITIALIZED
-    }
-
-    /// Acquires one ownership reference to the module.
-    ///
-    /// A finalized module cannot be acquired again. Every successful acquire
-    /// must be paired with one call to [`release`](Self::release).
-    pub fn acquire(&self) -> Result<()> {
-        let mut value = self.value.load(Ordering::Acquire);
-        loop {
-            if value & PHASE_MASK == FINALIZED {
-                return Err(custom_error("cannot acquire a finalized module"));
-            }
-            if value & REFS_MASK == REFS_MASK {
-                return Err(custom_error("module reference count overflow"));
-            }
-            match self.value.compare_exchange_weak(
-                value,
-                value + 1,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(current) => value = current,
-            }
-        }
+        self.value.load(Ordering::Acquire) == INITIALIZED
     }
 
     /// Runs the module initializer at most once.
@@ -82,14 +54,14 @@ impl ModuleState {
     pub fn initialize(&self, initialize: impl FnOnce() -> Result<()>) -> Result<()> {
         let mut value = self.value.load(Ordering::Acquire);
         loop {
-            match value & PHASE_MASK {
+            match value {
                 INITIALIZED => return Ok(()),
                 FINALIZED => return Err(custom_error("cannot initialize a finalized module")),
                 _ => {}
             }
             match self.value.compare_exchange_weak(
                 value,
-                value | INITIALIZED,
+                INITIALIZED,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
@@ -99,34 +71,12 @@ impl ModuleState {
         }
     }
 
-    /// Releases one owner and runs the finalizer when the last owner leaves.
+    /// Runs the module finalizer at most once after successful initialization.
     ///
-    /// The finalizer only runs for an initialized module and runs at most once.
-    pub fn release(&self, finalize: impl FnOnce() -> Result<()>) -> Result<()> {
-        let mut value = self.value.load(Ordering::Acquire);
-        loop {
-            let refs = value & REFS_MASK;
-            if refs == 0 {
-                return Err(custom_error("module release has no matching acquire"));
-            }
-            let should_finalize = refs == 1 && value & PHASE_MASK == INITIALIZED;
-            let next = if should_finalize {
-                FINALIZED
-            } else {
-                value - 1
-            };
-            match self
-                .value
-                .compare_exchange_weak(value, next, Ordering::AcqRel, Ordering::Acquire)
-            {
-                Ok(_) if should_finalize => return finalize(),
-                Ok(_) => return Ok(()),
-                Err(current) => value = current,
-            }
-        }
-    }
-
-    pub(crate) fn finalize(&self, finalize: impl FnOnce() -> Result<()>) -> Result<()> {
+    /// A module with finalization work should call this from its owning
+    /// allocation's [`Drop`] implementation. For core-backed ELF modules,
+    /// `CoreInner` already provides that integration.
+    pub fn finalize(&self, finalize: impl FnOnce() -> Result<()>) -> Result<()> {
         if self
             .value
             .compare_exchange(INITIALIZED, FINALIZED, Ordering::AcqRel, Ordering::Acquire)
@@ -148,8 +98,9 @@ impl Default for ModuleState {
 
 /// One shared ownership reference to a module.
 ///
-/// Creating or cloning a handle acquires the module. Dropping it releases that
-/// ownership and finalizes an initialized module when the last handle leaves.
+/// Finalization follows the lifetime of the underlying module allocation, not
+/// an individual handle. Cloning or dropping a handle only changes the [`Arc`]
+/// ownership count.
 pub struct ModuleHandle<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     module: Arc<dyn Module<Arch, Tls>>,
 }
@@ -157,26 +108,8 @@ pub struct ModuleHandle<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleHandle<Arch, Tls> {
     #[inline]
     fn clone(&self) -> Self {
-        let module = Arc::clone(&self.module);
-        module
-            .state()
-            .acquire()
-            .expect("a live module handle must remain acquirable");
-        Self { module }
-    }
-}
-
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Drop for ModuleHandle<Arch, Tls> {
-    fn drop(&mut self) {
-        if let Err(err) = self
-            .module
-            .state()
-            .release(|| Module::finalize(&*self.module))
-        {
-            logging::error!(
-                "module finalization failed for {}: {err}",
-                self.module.name()
-            );
+        Self {
+            module: Arc::clone(&self.module),
         }
     }
 }
@@ -186,10 +119,6 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
     ///
     /// Clone this handle when the same logical module is used in another scope
     /// or link context.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the module has already been finalized.
     #[inline]
     pub fn new<M>(module: M) -> Self
     where
@@ -199,16 +128,8 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
     }
 
     /// Wraps a shared module while preserving the state owned by that module.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the module has already been finalized.
     #[inline]
     pub fn from_shared(module: Arc<dyn Module<Arch, Tls>>) -> Self {
-        module
-            .state()
-            .acquire()
-            .expect("a new module handle cannot wrap a finalized module");
         Self { module }
     }
 

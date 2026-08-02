@@ -132,7 +132,7 @@ fn commits_visible_modules() {
     let resolver = VisibleDependencyResolver {
         root_data: fixtures.dependent,
     };
-    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
 
     let linker = Linker::new().resolver(resolver);
     let root = linker
@@ -167,7 +167,7 @@ fn scan_loads_synthetic_dependency() {
     let resolver = SyntheticDependencyResolver {
         root_data: &fixtures().synthetic_root.data,
     };
-    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
 
     let root = Linker::new()
         .resolver(resolver)
@@ -200,7 +200,7 @@ fn scan_loads_synthetic_dependency() {
 
 #[test]
 fn unresolved_dependency_does_not_commit() {
-    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
 
     let error = Linker::new()
         .resolver(SingleBinaryResolver {
@@ -227,7 +227,7 @@ fn loads_dynamic_exec() {
     let fixtures = fixtures();
 
     for scan_first in [false, true] {
-        let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
         let linker = Linker::new().resolver(MultiBinaryResolver {
             root: "root",
             modules: vec![
@@ -259,7 +259,7 @@ fn loads_dynamic_exec() {
 fn existing_alias_skips_planning() {
     let bytes = fixtures().provider;
 
-    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
 
     let load_resolver = SingleBinaryResolver {
         key: "canonical",
@@ -288,7 +288,7 @@ fn existing_alias_skips_planning() {
 #[test]
 fn repeated_loads_acquire_the_root() {
     let linker = Linker::new().resolver(dependency_resolver("acquired_root.so", "acquired_dep.so"));
-    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
 
     let first = linker
         .load(&mut context, "root")
@@ -329,7 +329,7 @@ fn repeated_loads_acquire_the_root() {
 fn rollback_releases_existing_root() {
     let linker = Linker::new().resolver(dependency_resolver("rollback_root.so", "rollback_dep.so"));
     let mut run = linker.run();
-    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
     let loaded = run
         .load(&mut context, "root")
         .expect("initial load should succeed");
@@ -371,7 +371,7 @@ fn relocates_dependencies_first() {
         }
     }
 
-    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
     let linker = Linker::new().resolver(resolver);
     linker
         .run()
@@ -396,7 +396,7 @@ fn phased_load_initializes_dependencies_first() {
     let mut run = linker
         .run()
         .with_observer(InitRecorder::new(Arc::clone(&calls)));
-    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
 
     let prepared = run
         .prepare_load(&mut context, "root")
@@ -437,12 +437,12 @@ fn publish_rejects_other_context() {
         data: fixtures().provider,
     });
     let mut run = linker.run();
-    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
     let prepared = run
         .prepare_load(&mut context, "root")
         .expect("prepare should succeed");
     let relocated = run.relocate(prepared).expect("relocation should succeed");
-    let mut other_context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut other_context = LinkContext::<&'static str>::new(DomainId::PROCESS);
 
     let err = relocated
         .publish(&mut other_context)
@@ -464,7 +464,7 @@ fn rollback_rejects_other_context() {
         data: fixtures().provider,
     });
     let mut run = linker.run();
-    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
     let prepared = run
         .prepare_load(&mut context, "root")
         .expect("prepare should succeed");
@@ -472,7 +472,7 @@ fn rollback_rejects_other_context() {
     let published = relocated
         .publish(&mut context)
         .expect("publish should succeed");
-    let mut other_context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut other_context = LinkContext::<&'static str>::new(DomainId::PROCESS);
 
     let error = published
         .rollback(&mut other_context)
@@ -498,7 +498,7 @@ fn failed_init_can_roll_back() {
     let mut run = linker
         .run()
         .with_observer(InitRecorder::failing(Arc::clone(&calls)));
-    let mut context = LinkContext::<&'static str, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
     let prepared = run.prepare_load(&mut context, "root").unwrap();
     let relocated = run.relocate(prepared).unwrap();
     let published = relocated.publish(&mut context).unwrap();

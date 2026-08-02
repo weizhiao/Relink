@@ -269,7 +269,7 @@ mod tests {
             panic!("generated dylib should scan as dynamic");
         };
         let mut entries = BTreeMap::new();
-        let mut context = LinkContext::<&str, ()>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<&str>::new(DomainId::PROCESS);
         context
             .insert("root", SyntheticModule::empty("root"), Box::new([]))
             .unwrap();

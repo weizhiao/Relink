@@ -10,7 +10,7 @@ use elf_loader::{
 #[test]
 fn loads_dependency_chain() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<PathBuf, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
@@ -28,7 +28,7 @@ fn loads_dependency_chain() {
 #[cfg(target_arch = "x86_64")]
 fn scan_loads_dependency_chain() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<PathBuf, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
@@ -67,7 +67,7 @@ fn dynamic_dirs_precede_static_dirs() {
     });
     resolver.push_fixed_dir(static_dir);
 
-    let mut context = LinkContext::<PathBuf, ()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
     let loaded = Linker::new()
         .resolver(resolver)
         .load(&mut context, PathBuf::from("libpick.so"))

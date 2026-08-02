@@ -316,9 +316,9 @@ where
         }
     }
 
-    pub(crate) fn build_scope<K, Meta>(
+    pub(crate) fn build_scope<K>(
         &self,
-        context: &LinkContext<K, D, Meta, Arch, Tls>,
+        context: &LinkContext<K, Arch, Tls>,
     ) -> Result<ModuleScope<Arch, Tls>>
     where
         K: Ord,
@@ -349,13 +349,12 @@ where
         scope.into_scope()
     }
 
-    pub(crate) fn commit_into<K, Meta>(
+    pub(crate) fn commit_into<K>(
         self,
-        committed: &mut CommittedStorage<K, D, Meta, Arch, Tls>,
+        committed: &mut CommittedStorage<K, Arch, Tls>,
     ) -> Result<Box<[ModuleId]>>
     where
         K: Clone + Ord,
-        Meta: Default,
     {
         let Self {
             resolve,
@@ -382,7 +381,7 @@ where
                 direct_deps,
             } = entry;
             let direct_deps = committed.resolve_dep_edges(direct_deps)?;
-            let slot = committed.insert(id, module, direct_deps, Meta::default(), 0);
+            let slot = committed.insert(id, module, direct_deps, 0);
             committed_ids.push(committed.make_module_id(slot));
         }
         assert!(

@@ -129,7 +129,7 @@ where
 ///     resolver.push_fixed_dir("plugins");
 ///
 ///     let linker = Linker::<PathBuf>::new().resolver(resolver);
-///     let mut context: LinkContext<PathBuf, ()> = LinkContext::new(DomainId::PROCESS);
+///     let mut context: LinkContext<PathBuf> = LinkContext::new(DomainId::PROCESS);
 ///
 ///     let mut run = linker.run();
 ///     let loaded = run.load(&mut context, PathBuf::from("libplugin.so"))?;

@@ -137,15 +137,15 @@ impl DepEdge {
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::linker) struct CommittedModule<'a, M, Arch, Tls>
+pub(in crate::linker) struct CommittedModule<'a, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    entry: &'a StoredEntry<M, Arch, Tls>,
+    entry: &'a StoredEntry<Arch, Tls>,
 }
 
-impl<'a, M, Arch, Tls> CommittedModule<'a, M, Arch, Tls>
+impl<'a, Arch, Tls> CommittedModule<'a, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -166,25 +166,20 @@ where
     }
 
     #[inline]
-    pub(crate) fn meta(&self) -> &'a M {
-        &self.entry.meta
-    }
-
-    #[inline]
     pub(crate) const fn root_count(&self) -> usize {
         self.entry.roots
     }
 }
 
-pub(in crate::linker) struct CommittedModuleMut<'a, M, Arch, Tls>
+pub(in crate::linker) struct CommittedModuleMut<'a, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    entry: &'a mut StoredEntry<M, Arch, Tls>,
+    entry: &'a mut StoredEntry<Arch, Tls>,
 }
 
-impl<'a, M, Arch, Tls> CommittedModuleMut<'a, M, Arch, Tls>
+impl<'a, Arch, Tls> CommittedModuleMut<'a, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -204,17 +199,10 @@ where
         self.entry.roots = count;
         Some(count)
     }
-
-    #[inline]
-    pub(crate) fn meta_mut(self) -> &'a mut M {
-        &mut self.entry.meta
-    }
 }
 
 pub(crate) struct CommittedStorage<
     K,
-    D: Send + Sync + 'static,
-    M = (),
     Arch: RelocationArch = NativeArch,
     Tls: TlsResolver<Arch> = (),
 > {
@@ -223,15 +211,13 @@ pub(crate) struct CommittedStorage<
     key_slots: BTreeMap<K, KeySlot>,
     keys: PrimaryMap<KeySlot, K>,
     key_modules: SecondaryMap<KeySlot, ModuleSlot>,
-    entries: PrimaryMap<ModuleSlot, Option<StoredEntry<M, Arch, Tls>>>,
+    entries: PrimaryMap<ModuleSlot, Option<StoredEntry<Arch, Tls>>>,
     lifecycle: Vec<ModuleSlot>,
-    marker: core::marker::PhantomData<fn() -> D>,
 }
 
-impl<K, D: Send + Sync + 'static, M, Arch, Tls> Clone for CommittedStorage<K, D, M, Arch, Tls>
+impl<K, Arch, Tls> Clone for CommittedStorage<K, Arch, Tls>
 where
     K: Clone,
-    M: Clone,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
@@ -245,12 +231,11 @@ where
             key_modules: self.key_modules.clone(),
             entries: self.entries.clone(),
             lifecycle: self.lifecycle.clone(),
-            marker: core::marker::PhantomData,
         }
     }
 }
 
-impl<K, D: Send + Sync + 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
+impl<K, Arch, Tls> CommittedStorage<K, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -265,7 +250,6 @@ where
             key_modules: SecondaryMap::new(),
             entries: PrimaryMap::new(),
             lifecycle: Vec::new(),
-            marker: core::marker::PhantomData,
         }
     }
 
@@ -323,7 +307,7 @@ where
     pub(in crate::linker) fn module(
         &self,
         slot: ModuleSlot,
-    ) -> EntryState<CommittedModule<'_, M, Arch, Tls>> {
+    ) -> EntryState<CommittedModule<'_, Arch, Tls>> {
         match self.entries.get(slot) {
             Some(Some(entry)) => EntryState::Present(CommittedModule { entry }),
             Some(None) => EntryState::Removed,
@@ -335,7 +319,7 @@ where
     pub(crate) fn module_mut(
         &mut self,
         slot: ModuleSlot,
-    ) -> EntryState<CommittedModuleMut<'_, M, Arch, Tls>> {
+    ) -> EntryState<CommittedModuleMut<'_, Arch, Tls>> {
         match self.entries.get_mut(slot) {
             Some(Some(entry)) => EntryState::Present(CommittedModuleMut { entry }),
             Some(None) => EntryState::Removed,
@@ -354,7 +338,7 @@ where
     }
 }
 
-impl<K, D: Send + Sync + 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
+impl<K, Arch, Tls> CommittedStorage<K, Arch, Tls>
 where
     K: Ord,
     Arch: RelocationArch,
@@ -445,7 +429,7 @@ where
     }
 }
 
-impl<K, D: Send + Sync + 'static, M, Arch, Tls> CommittedStorage<K, D, M, Arch, Tls>
+impl<K, Arch, Tls> CommittedStorage<K, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -498,7 +482,6 @@ where
         slot: KeySlot,
         module: ModuleHandle<Arch, Tls>,
         direct_deps: Box<[DepEdge]>,
-        meta: M,
         roots: usize,
     ) -> ModuleSlot {
         let module_slot = self.ensure_module_slot(slot);
@@ -510,21 +493,17 @@ where
             entry_key,
             module,
             direct_deps,
-            meta,
             roots,
         });
         module_slot
     }
 
     #[inline]
-    pub(crate) fn take(
-        &mut self,
-        slot: ModuleSlot,
-    ) -> (ModuleHandle<Arch, Tls>, Box<[DepEdge]>, M) {
+    pub(crate) fn take(&mut self, slot: ModuleSlot) -> (ModuleHandle<Arch, Tls>, Box<[DepEdge]>) {
         let removed = self.entries[slot]
             .take()
             .expect("unload order must refer to a committed module");
-        (removed.module, removed.direct_deps, removed.meta)
+        (removed.module, removed.direct_deps)
     }
 
     pub(crate) fn prune_removed(&mut self) {
@@ -536,17 +515,15 @@ where
     }
 }
 
-struct StoredEntry<M = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+struct StoredEntry<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     entry_key: KeySlot,
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[DepEdge]>,
-    meta: M,
     roots: usize,
 }
 
-impl<M, Arch, Tls> Clone for StoredEntry<M, Arch, Tls>
+impl<Arch, Tls> Clone for StoredEntry<Arch, Tls>
 where
-    M: Clone,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
@@ -556,13 +533,12 @@ where
             entry_key: self.entry_key,
             module: self.module.clone(),
             direct_deps: self.direct_deps.clone(),
-            meta: self.meta.clone(),
             roots: self.roots,
         }
     }
 }
 
-impl<K, D: Send + Sync + 'static, M, Arch, Tls> Drop for CommittedStorage<K, D, M, Arch, Tls>
+impl<K, Arch, Tls> Drop for CommittedStorage<K, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,

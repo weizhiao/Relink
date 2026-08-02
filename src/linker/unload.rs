@@ -4,14 +4,13 @@ use alloc::vec::Vec;
 use core::fmt;
 
 /// One module detached from a link context by [`super::LinkContext::release`].
-pub struct UnloadedModule<M, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+pub struct UnloadedModule<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     id: ModuleId,
     module: ModuleHandle<Arch, Tls>,
     direct_deps: DirectDeps,
-    meta: M,
 }
 
-impl<M, Arch, Tls> UnloadedModule<M, Arch, Tls>
+impl<Arch, Tls> UnloadedModule<Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -21,13 +20,11 @@ where
         id: ModuleId,
         module: ModuleHandle<Arch, Tls>,
         direct_deps: DirectDeps,
-        meta: M,
     ) -> Self {
         Self {
             id,
             module,
             direct_deps,
-            meta,
         }
     }
 
@@ -48,15 +45,9 @@ where
     pub const fn direct_deps(&self) -> &DirectDeps {
         &self.direct_deps
     }
-
-    /// Returns the module's user metadata.
-    #[inline]
-    pub const fn meta(&self) -> &M {
-        &self.meta
-    }
 }
 
-impl<M, Arch, Tls> fmt::Debug for UnloadedModule<M, Arch, Tls>
+impl<Arch, Tls> fmt::Debug for UnloadedModule<Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch> + 'static,
@@ -75,17 +66,17 @@ where
 /// The collection retains the complete unload group so finalizers may still
 /// call code in dependencies that were detached at the same time.
 #[must_use = "keep the unload group alive until it is safe to run finalizers"]
-pub struct UnloadGroup<M, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    modules: Vec<UnloadedModule<M, Arch, Tls>>,
+pub struct UnloadGroup<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+    modules: Vec<UnloadedModule<Arch, Tls>>,
 }
 
-impl<M, Arch, Tls> UnloadGroup<M, Arch, Tls>
+impl<Arch, Tls> UnloadGroup<Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(super) fn new(modules: Vec<UnloadedModule<M, Arch, Tls>>) -> Self {
+    pub(super) fn new(modules: Vec<UnloadedModule<Arch, Tls>>) -> Self {
         Self { modules }
     }
 
@@ -103,7 +94,7 @@ where
 
     /// Returns detached modules in finalization order.
     #[inline]
-    pub fn modules(&self) -> &[UnloadedModule<M, Arch, Tls>] {
+    pub fn modules(&self) -> &[UnloadedModule<Arch, Tls>] {
         &self.modules
     }
 
@@ -111,12 +102,12 @@ where
     ///
     /// Each returned entry releases its module when dropped.
     #[inline]
-    pub fn into_modules(self) -> Vec<UnloadedModule<M, Arch, Tls>> {
+    pub fn into_modules(self) -> Vec<UnloadedModule<Arch, Tls>> {
         self.modules
     }
 }
 
-impl<M, Arch, Tls> fmt::Debug for UnloadGroup<M, Arch, Tls>
+impl<Arch, Tls> fmt::Debug for UnloadGroup<Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch> + 'static,

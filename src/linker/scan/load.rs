@@ -46,22 +46,21 @@ where
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Discovers, plans, and loads one module through the scan-first path.
-    pub fn load_scan_first<Meta, Q>(
+    pub fn load_scan_first<Q>(
         &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        context: &mut LinkContext<K, Arch, Tls>,
         key: K,
     ) -> Result<LoadResult<D, Arch, M::Region, Tls>>
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Meta: Default,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
     {
         if let Some(result) = visible_loaded(context, key.borrow())? {
             return Ok(result);
         }
 
-        let prepared = self.prepare_scan_load::<Meta, Q>(context, &key)?;
+        let prepared = self.prepare_scan_load::<Q>(context, &key)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -71,9 +70,9 @@ where
     }
 
     /// Resolves and maps a scan-first module group without relocating it.
-    pub fn prepare_scan_load<Meta, Q>(
+    pub fn prepare_scan_load<Q>(
         &mut self,
-        context: &mut LinkContext<K, D, Meta, Arch, Tls>,
+        context: &mut LinkContext<K, Arch, Tls>,
         key: &K,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
@@ -88,7 +87,7 @@ where
 
         let mut loader = self.linker.loader.run().with_observer(&mut self.observer);
         let mut resolve_context = ScanResolveContext::new(&mut context.committed, &mut session);
-        let resolved = resolve_context.resolve_root::<Q, M::Region, _>(
+        let resolved = resolve_context.resolve_root::<D, Q, M::Region, _>(
             key,
             None,
             &self.linker.resolver,
@@ -98,7 +97,7 @@ where
         if !resolve_context.contains_pending(root) {
             return PreparedLoad::new(root, LoadSession::new(), None, context);
         }
-        resolve_context.resolve_dependency_graph::<_, _, _, Q>(
+        resolve_context.resolve_dependency_graph::<D, _, _, _, Q>(
             root,
             &mut loader,
             &self.linker.resolver,

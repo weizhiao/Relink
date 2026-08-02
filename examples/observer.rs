@@ -85,7 +85,7 @@ fn main() -> Result<()> {
     let linker = Linker::<PathBuf>::new()
         .loader(LOADER)
         .resolver(fixture_support::search_path_resolver());
-    let mut context: LinkContext<PathBuf, UserData> = LinkContext::new(DomainId::PROCESS);
+    let mut context: LinkContext<PathBuf> = LinkContext::new(DomainId::PROCESS);
     let middle = linker
         .run()
         .with_observer(Observer)
