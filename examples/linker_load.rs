@@ -1,7 +1,7 @@
 #[path = "support/mod.rs"]
 mod fixture_support;
 
-use elf_loader::{LinkContext, Linker, Module, Result, input::PathBuf, runtime::DomainId};
+use elf_loader::{LinkContext, Linker, Result, input::PathBuf, runtime::DomainId};
 
 fn main() -> Result<()> {
     let fixtures = fixture_support::ensure_all();

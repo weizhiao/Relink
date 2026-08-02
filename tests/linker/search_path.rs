@@ -1,5 +1,7 @@
 use std::{fs, path::PathBuf as StdPathBuf};
 
+use crate::loaded_core;
+
 use elf_loader::{
     LinkContext, Linker,
     input::{Path as ElfPath, PathBuf},
@@ -73,7 +75,7 @@ fn dynamic_dirs_precede_static_dirs() {
         .load(&mut context, PathBuf::from("libpick.so"))
         .unwrap();
 
-    assert_eq!(loaded.path().as_str(), expected_key);
+    assert_eq!(loaded_core(&loaded).path().as_str(), expected_key);
 }
 
 #[test]

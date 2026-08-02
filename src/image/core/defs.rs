@@ -1,15 +1,15 @@
 use crate::{
-    Result,
+    Result, TlsError,
     arch::NativeArch,
-    elf::SymbolEntry,
+    elf::{ElfSymbol, ElfSymbolType, SymbolEntry},
     image::{DynamicInfo, Module, ModuleState, PltRelocInfo, SymbolExports, WeakModuleScope},
     input::PathBuf,
     lazy::{LazySetup, LazyValues},
     logging,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
-    relocation::{RelocationArch, SymbolRegistry, SymbolResolver},
-    runtime::{CodeExecutor, DomainId},
+    relocation::{RelocationArch, SymDef, SymbolRegistry, SymbolResolver},
+    runtime::{CodeContext, CodeExecutor, DomainId},
     segment::ElfSegments,
     sync::{Arc, OnceCell, Weak},
     tls::{CoreTlsState, ModuleTls, TLS_GET_ADDR_SYMBOL, TlsResolver},
@@ -226,6 +226,23 @@ where
     #[inline]
     fn memory(&self) -> &dyn ImageMemory {
         &self.segments
+    }
+
+    fn resolve_symbol(&self, symbol: &ElfSymbol<Arch::Layout>) -> Result<VmAddr> {
+        if symbol.symbol_type() == ElfSymbolType::TLS {
+            let index = self
+                .tls
+                .index(symbol.st_value())
+                .ok_or(TlsError::TemplateUnavailable)?;
+            let resolver = self.tls.resolver().bind_tls_get_addr()?;
+            self.executor.resolve_tls(
+                CodeContext::new(self.name(), &self.segments),
+                resolver,
+                index,
+            )
+        } else {
+            SymDef::<Arch, Tls>::defined(symbol, self).resolve(self.executor.as_ref())
+        }
     }
 
     #[inline]

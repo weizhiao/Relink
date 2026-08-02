@@ -6,15 +6,8 @@ use super::{
     unload::UnloadGroup,
 };
 use crate::{
-    Loader, Relocator, Result,
-    arch::NativeArch,
-    const_builder::NoDrop,
-    image::{LoadedCore, Module},
-    memory::{HostRegion, RegionAccess},
-    os::Mmap,
-    relocation::RelocationArch,
-    runtime::CodeExecutor,
-    tls::TlsResolver,
+    Loader, Relocator, Result, arch::NativeArch, const_builder::NoDrop, image::ModuleHandle,
+    os::Mmap, relocation::RelocationArch, runtime::CodeExecutor, tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt, marker::PhantomData, mem::MaybeUninit, ops::Deref, ptr};
@@ -25,47 +18,40 @@ use core::{fmt, marker::PhantomData, mem::MaybeUninit, ops::Deref, ptr};
 /// values in load order. The result owns one lease for the root module; release
 /// the result when that direct use ends.
 #[must_use = "a loaded module lease must eventually be released"]
-pub struct LoadResult<
-    D: Send + Sync + 'static,
-    Arch: RelocationArch = NativeArch,
-    R: RegionAccess = HostRegion,
-    Tls: TlsResolver<Arch> = (),
-> {
+pub struct LoadResult<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     lease: ModuleLease,
-    root: LoadedCore<D, Arch, R, Tls>,
+    module: ModuleHandle<Arch, Tls>,
     modules: Box<[ModuleId]>,
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> fmt::Debug for LoadResult<D, Arch, R, Tls>
+impl<Arch, Tls> fmt::Debug for LoadResult<Arch, Tls>
 where
     Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch>,
+    Tls: TlsResolver<Arch> + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoadResult")
             .field("root_id", &self.lease.id())
-            .field("root", &self.root.name())
+            .field("root", &self.module.name())
             .field("modules", &self.modules)
             .finish()
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> LoadResult<D, Arch, R, Tls>
+impl<Arch, Tls> LoadResult<Arch, Tls>
 where
     Arch: RelocationArch,
-    R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new(
         lease: ModuleLease,
-        root: LoadedCore<D, Arch, R, Tls>,
+        module: ModuleHandle<Arch, Tls>,
         modules: Box<[ModuleId]>,
     ) -> Self {
         Self {
             lease,
-            root,
+            module,
             modules,
         }
     }
@@ -76,6 +62,12 @@ where
         &self.lease
     }
 
+    /// Returns the loaded root module.
+    #[inline]
+    pub const fn module(&self) -> &ModuleHandle<Arch, Tls> {
+        &self.module
+    }
+
     /// Returns module ids produced by this load operation in load order.
     #[inline]
     pub fn modules(&self) -> &[ModuleId] {
@@ -84,8 +76,8 @@ where
 
     /// Consumes the result and returns its root module and acquisition lease.
     #[inline]
-    pub fn into_parts(self) -> (LoadedCore<D, Arch, R, Tls>, ModuleLease) {
-        (self.root, self.lease)
+    pub fn into_parts(self) -> (ModuleHandle<Arch, Tls>, ModuleLease) {
+        (self.module, self.lease)
     }
 
     /// Releases the root acquisition represented by this load.
@@ -101,17 +93,16 @@ where
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> Deref for LoadResult<D, Arch, R, Tls>
+impl<Arch, Tls> Deref for LoadResult<Arch, Tls>
 where
     Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch>,
+    Tls: TlsResolver<Arch> + 'static,
 {
-    type Target = LoadedCore<D, Arch, R, Tls>;
+    type Target = ModuleHandle<Arch, Tls>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.root
+        &self.module
     }
 }
 

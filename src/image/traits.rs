@@ -3,7 +3,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfLayout, ElfSymbol, SymbolLookup, SymbolTable},
-    memory::ImageMemory,
+    memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
     runtime::DomainId,
     sync::Arc,
@@ -75,6 +75,13 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
     /// Returns this module's runtime memory view.
     fn memory(&self) -> &dyn ImageMemory;
 
+    /// Resolves one of this module's exported symbols to its runtime address.
+    ///
+    /// `symbol` must come from this module's [`SymbolExports`]. Implementations
+    /// define how ordinary, absolute, TLS, IFUNC, and module-specific symbols
+    /// become target-visible addresses.
+    fn resolve_symbol(&self, symbol: &ElfSymbol<Arch::Layout>) -> Result<VmAddr>;
+
     /// Returns TLS metadata when this module owns a TLS block.
     fn tls(&self) -> Option<ModuleTls> {
         None
@@ -125,6 +132,11 @@ where
     #[inline]
     fn memory(&self) -> &dyn ImageMemory {
         (**self).memory()
+    }
+
+    #[inline]
+    fn resolve_symbol(&self, symbol: &ElfSymbol<Arch::Layout>) -> Result<VmAddr> {
+        (**self).resolve_symbol(symbol)
     }
 
     #[inline]

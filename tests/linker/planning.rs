@@ -118,7 +118,7 @@ fn arena_materializes_section_bytes() {
         .expect("failed to execute arena-backed scan-first load");
 
     assert!(
-        !loaded.segments().is_contiguous_mapping(),
+        !loaded_core(&loaded).segments().is_contiguous_mapping(),
         "arena-backed load should expose a sparse mapped span",
     );
     assert!(context.contains_key(&"root"));
@@ -128,7 +128,11 @@ fn arena_materializes_section_bytes() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
+        assert!(
+            loaded_core(&loaded)
+                .segments()
+                .contains_addr(VmAddr::new(ptr as usize))
+        );
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
     }
 }
@@ -200,7 +204,7 @@ fn arena_supports_assign_next() {
     assert_eq!(observed_offset, Some(0));
     assert_eq!(observed_size, Some(8));
     assert!(
-        !loaded.segments().is_contiguous_mapping(),
+        !loaded_core(&loaded).segments().is_contiguous_mapping(),
         "arena-backed load should expose a sparse mapped span",
     );
     assert!(context.contains_key(&"root"));
@@ -210,7 +214,11 @@ fn arena_supports_assign_next() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
+        assert!(
+            loaded_core(&loaded)
+                .segments()
+                .contains_addr(VmAddr::new(ptr as usize))
+        );
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[4, 3, 2, 1]);
     }
 }
@@ -248,7 +256,7 @@ fn defaults_to_section_regions() {
         Some(ModuleCapability::SectionReorderable),
     );
     assert!(
-        !loaded.segments().is_contiguous_mapping(),
+        !loaded_core(&loaded).segments().is_contiguous_mapping(),
         "section-region default should materialize alloc sections into mapped arenas",
     );
 
@@ -257,7 +265,11 @@ fn defaults_to_section_regions() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
+        assert!(
+            loaded_core(&loaded)
+                .segments()
+                .contains_addr(VmAddr::new(ptr as usize))
+        );
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
     }
 }
@@ -305,7 +317,11 @@ fn missing_sections_become_opaque() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
+        assert!(
+            loaded_core(&loaded)
+                .segments()
+                .contains_addr(VmAddr::new(ptr as usize))
+        );
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
     }
 }
@@ -400,7 +416,11 @@ fn whole_dso_supports_section_overrides() {
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
-        assert!(loaded.segments().contains_addr(VmAddr::new(ptr as usize)));
+        assert!(
+            loaded_core(&loaded)
+                .segments()
+                .contains_addr(VmAddr::new(ptr as usize))
+        );
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
     }
 }

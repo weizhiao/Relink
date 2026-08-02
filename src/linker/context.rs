@@ -500,11 +500,12 @@ mod tests {
     use crate::{
         Error, LinkContextError, LinkerError, Result,
         arch::NativeArch,
+        elf::ElfSymbol,
         image::{
             Module, ModuleHandle, ModuleScopeBuilder, ModuleState, SymbolExports, SyntheticModule,
         },
         linker::ModuleId,
-        memory::ImageMemory,
+        memory::{ImageMemory, VmAddr},
         relocation::RelocationArch,
         runtime::DomainId,
         sync::Arc,
@@ -533,6 +534,13 @@ mod tests {
 
         fn memory(&self) -> &dyn ImageMemory {
             Module::<NativeArch>::memory(&self.module)
+        }
+
+        fn resolve_symbol(
+            &self,
+            symbol: &ElfSymbol<<NativeArch as RelocationArch>::Layout>,
+        ) -> Result<VmAddr> {
+            Module::<NativeArch>::resolve_symbol(&self.module, symbol)
         }
 
         fn domain_id(&self) -> DomainId {

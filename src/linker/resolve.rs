@@ -311,7 +311,7 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<'cfg, Obs, M, Exec, Q>(
+    pub(crate) fn resolve_pending<'cfg, Obs, M, Exec, Q>(
         &mut self,
         root: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
@@ -326,6 +326,9 @@ where
         M: Mmap<Region = R>,
         Exec: CodeExecutor<Arch> + Clone,
     {
+        if !self.contains_pending(root) {
+            return Ok(());
+        }
         self.resolve_dependency_graph_with(root, loader, resolver, |ctx, resolved, loader| {
             ctx.stage(resolved, loader)
         })

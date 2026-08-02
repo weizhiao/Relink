@@ -135,7 +135,7 @@ fn commits_resolver_modules() {
         .load(&mut context, "root")
         .expect("load should accept a resolver-provided module");
 
-    assert_eq!(root.path().file_name(), "visible_root.so");
+    assert_eq!(loaded_core(&root).path().file_name(), "visible_root.so");
     assert!(dep.state().is_initialized());
     assert!(context.contains_key(&"root"));
     let root_id = context
@@ -153,6 +153,26 @@ fn commits_resolver_modules() {
 }
 
 #[test]
+fn loads_module_root() {
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let linker = Linker::new().resolver(SyntheticRootResolver);
+
+    let first = linker.load(&mut context, "root").unwrap();
+    assert!(first.module().downcast_ref::<SyntheticModule>().is_some());
+    let value = unsafe {
+        first
+            .get::<extern "C" fn() -> i32>("synthetic_value")
+            .unwrap()
+    };
+    assert_eq!(value(), 42);
+
+    let second = linker.load(&mut context, "root").unwrap();
+    assert!(first.module().ptr_eq(second.module()));
+    assert!(first.release(&mut context).unwrap().is_empty());
+    assert_eq!(second.release(&mut context).unwrap().len(), 1);
+}
+
+#[test]
 fn scan_loads_synthetic_dependency() {
     let resolver = SyntheticDependencyResolver {
         root_data: &fixtures().synthetic_root.data,
@@ -164,7 +184,10 @@ fn scan_loads_synthetic_dependency() {
         .load_scan_first(&mut context, "root")
         .expect("scan-first load should accept a synthetic dependency");
 
-    assert_eq!(root.path().file_name(), "scan_synthetic_root.so");
+    assert_eq!(
+        loaded_core(&root).path().file_name(),
+        "scan_synthetic_root.so"
+    );
     assert!(context.contains_key(&"root"));
     assert!(context.contains_key(&"dep"));
 
@@ -329,7 +352,10 @@ fn existing_alias_skips_planning() {
         .load_scan_first(&mut context, "alias")
         .expect("failed to reuse existing scan root");
 
-    assert_eq!(alias_loaded.base(), loaded.base());
+    assert_eq!(
+        loaded_core(&alias_loaded).base(),
+        loaded_core(&loaded).base()
+    );
     assert!(context.contains_key(&"canonical"));
     assert!(!context.contains_key(&"alias"));
 }
@@ -477,7 +503,7 @@ fn phased_load_initializes_dependencies_first() {
         .expect("publish should expose the relocated group");
     assert!(context.contains_key(&"root"));
     assert!(context.contains_key(&DEP_KEY));
-    assert!(!published.state().is_initialized());
+    assert!(!published.module().state().is_initialized());
 
     let result = published
         .initialize()

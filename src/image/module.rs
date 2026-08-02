@@ -1,8 +1,10 @@
-use super::Module;
+use super::{Module, Symbol};
 use crate::{
     Result,
     arch::NativeArch,
     custom_error,
+    elf::SymbolLookup,
+    memory::VmAddr,
     relocation::RelocationArch,
     runtime::DomainId,
     sync::{Arc, AtomicUsize, Ordering, Weak, arc_unsize},
@@ -14,6 +16,24 @@ use core::{any::Any, fmt, ops::Deref, slice};
 const UNINITIALIZED: usize = 0;
 const INITIALIZED: usize = 1;
 const FINALIZED: usize = 2;
+
+#[inline]
+pub(super) fn lookup_symbol<Arch, Tls>(
+    module: &dyn Module<Arch, Tls>,
+    lookup: &mut SymbolLookup<'_>,
+) -> Result<Option<VmAddr>>
+where
+    Arch: RelocationArch,
+    Tls: TlsResolver<Arch>,
+{
+    let Some(symbol) = module.exports().lookup(lookup) else {
+        return Ok(None);
+    };
+    if !symbol.is_exported() {
+        return Ok(None);
+    }
+    module.resolve_symbol(symbol).map(Some)
+}
 
 /// Lifecycle state shared by every view of one logical module.
 ///
@@ -150,6 +170,73 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
     pub fn initialize(&self) -> Result<()> {
         let module = self.as_dyn();
         module.state().initialize(|| module.initialize())
+    }
+
+    /// Tries to get a typed function or object exported by this module.
+    ///
+    /// The module performs any runtime-specific TLS or IFUNC resolution before
+    /// the typed symbol is returned.
+    ///
+    /// # Safety
+    ///
+    /// `T` must match the type and ABI of the resolved symbol.
+    #[inline]
+    pub unsafe fn try_get<'module, T>(
+        &'module self,
+        name: &str,
+    ) -> Result<Option<Symbol<'module, T>>> {
+        let addr = lookup_symbol(self.as_dyn(), &mut SymbolLookup::new(name))?;
+        Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
+    }
+
+    /// Gets a typed function or object exported by this module.
+    ///
+    /// Resolution failures and missing symbols both produce `None`. Use
+    /// [`ModuleHandle::try_get`] when the error must be preserved.
+    ///
+    /// # Safety
+    ///
+    /// `T` must match the type and ABI of the resolved symbol.
+    #[inline]
+    pub unsafe fn get<'module, T>(&'module self, name: &str) -> Option<Symbol<'module, T>> {
+        unsafe { self.try_get(name).ok().flatten() }
+    }
+
+    /// Tries to get a versioned typed symbol exported by this module.
+    ///
+    /// # Safety
+    ///
+    /// `T` must match the type and ABI of the resolved symbol.
+    #[cfg(feature = "version")]
+    #[inline]
+    pub unsafe fn try_get_version<'module, T>(
+        &'module self,
+        name: &str,
+        version: &str,
+    ) -> Result<Option<Symbol<'module, T>>> {
+        let addr = lookup_symbol(
+            self.as_dyn(),
+            &mut SymbolLookup::with_version(name, version),
+        )?;
+        Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
+    }
+
+    /// Gets a versioned typed symbol exported by this module.
+    ///
+    /// Resolution failures and missing symbols both produce `None`. Use
+    /// [`ModuleHandle::try_get_version`] when the error must be preserved.
+    ///
+    /// # Safety
+    ///
+    /// `T` must match the type and ABI of the resolved symbol.
+    #[cfg(feature = "version")]
+    #[inline]
+    pub unsafe fn get_version<'module, T>(
+        &'module self,
+        name: &str,
+        version: &str,
+    ) -> Option<Symbol<'module, T>> {
+        unsafe { self.try_get_version(name, version).ok().flatten() }
     }
 
     /// Downcasts the retained module to a concrete type.

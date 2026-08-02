@@ -3,7 +3,7 @@ mod fixture_support;
 
 use elf_loader::{
     LinkContext, Linker, Result,
-    image::{Module, ModuleCapability},
+    image::ModuleCapability,
     input::PathBuf,
     linker::scan::{LinkPass, LinkPassPlan, Materialization, ReorderPass},
     runtime::DomainId,

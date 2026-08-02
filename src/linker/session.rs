@@ -143,9 +143,29 @@ where
         debug_assert!(previous.is_none(), "pending modules must be unique");
     }
 
-    #[inline]
-    pub(crate) fn take_dynamics(&mut self) -> BTreeMap<ModuleSlot, GraphEntry<P>> {
-        core::mem::take(&mut self.dynamics)
+    pub(crate) fn split_dynamics<Q>(
+        self,
+    ) -> (
+        BTreeMap<ModuleSlot, GraphEntry<P>>,
+        ResolveSession<Q, Arch, Tls>,
+    ) {
+        let Self {
+            dynamics,
+            modules,
+            pending,
+            observed,
+            group_order,
+        } = self;
+        (
+            dynamics,
+            ResolveSession {
+                dynamics: BTreeMap::new(),
+                modules,
+                pending,
+                observed,
+                group_order,
+            },
+        )
     }
 
     pub(crate) fn restore_dynamic(
@@ -190,6 +210,43 @@ where
     }
 }
 
+impl<D: Send + Sync + 'static, Arch, R, Tls> ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>
+where
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch>,
+{
+    pub(crate) fn build_scope<K>(
+        &self,
+        context: &LinkContext<K, Arch, Tls>,
+    ) -> Result<ModuleScope<Arch, Tls>>
+    where
+        K: Ord,
+    {
+        let modules = self
+            .group_order
+            .iter()
+            .map(|id| {
+                if let Some(raw) = self.dynamics.get(id).map(GraphEntry::payload) {
+                    let module = unsafe { LoadedCore::from_core(raw.core()) };
+                    ModuleHandle::from(module)
+                } else if let Some(module) = self.modules.get(id).map(PendingModule::module) {
+                    module.clone()
+                } else {
+                    context
+                        .committed
+                        .module(*id)
+                        .map(|module| module.handle().clone())
+                        .expect("scope slot must resolve to a committed module")
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut scope = ModuleScopeBuilder::new(context.domain_id());
+        scope.extend(modules);
+        scope.into_scope()
+    }
+}
+
 pub(crate) struct LoadSession<
     D: Send + Sync + 'static,
     Arch: RelocationArch,
@@ -208,49 +265,14 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn new() -> Self {
+    pub(crate) fn from_resolve(
+        resolve: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
+    ) -> Self {
         Self {
-            resolve: ResolveSession::new(),
+            resolve,
             ready_to_commit: BTreeMap::new(),
             lifecycle: Vec::new(),
         }
-    }
-
-    #[inline]
-    pub(crate) fn from_resolve<P>(resolve: ResolveSession<P, Arch, Tls>) -> Self {
-        let ResolveSession {
-            dynamics,
-            modules,
-            pending,
-            observed,
-            group_order,
-        } = resolve;
-        debug_assert!(dynamics.is_empty());
-        Self {
-            resolve: ResolveSession {
-                dynamics: BTreeMap::new(),
-                modules,
-                pending,
-                observed,
-                group_order,
-            },
-            ready_to_commit: BTreeMap::new(),
-            lifecycle: Vec::new(),
-        }
-    }
-}
-
-impl<D: Send + Sync + 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
-where
-    Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch>,
-{
-    #[inline]
-    pub(crate) fn resolve_mut(
-        &mut self,
-    ) -> &mut ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls> {
-        &mut self.resolve
     }
 
     #[inline]
@@ -298,12 +320,10 @@ where
         self.push_ready(slot, module, direct_deps);
     }
 
-    pub(crate) fn loaded_root(&self, slot: ModuleSlot) -> Option<LoadedCore<D, Arch, R, Tls>> {
+    pub(crate) fn root_module(&self, slot: ModuleSlot) -> Option<ModuleHandle<Arch, Tls>> {
         self.ready_to_commit
-            .get(&slot)?
-            .module
-            .downcast_ref::<LoadedCore<D, Arch, R, Tls>>()
-            .cloned()
+            .get(&slot)
+            .map(|entry| entry.module.clone())
     }
 
     pub(crate) fn initializers(&self) -> Vec<ModuleHandle<Arch, Tls>> {
@@ -362,38 +382,6 @@ where
                 stack.push((dep, false));
             }
         }
-    }
-
-    pub(crate) fn build_scope<K>(
-        &self,
-        context: &LinkContext<K, Arch, Tls>,
-    ) -> Result<ModuleScope<Arch, Tls>>
-    where
-        K: Ord,
-    {
-        let modules = self
-            .resolve
-            .group_order
-            .iter()
-            .map(|id| {
-                if let Some(raw) = self.resolve.dynamics.get(id).map(GraphEntry::payload) {
-                    let module = unsafe { LoadedCore::from_core(raw.core()) };
-                    ModuleHandle::from(module)
-                } else if let Some(module) = self.resolve.modules.get(id).map(PendingModule::module)
-                {
-                    module.clone()
-                } else {
-                    context
-                        .committed
-                        .module(*id)
-                        .map(|module| module.handle().clone())
-                        .expect("scope slot must resolve to a committed module")
-                }
-            })
-            .collect::<Vec<_>>();
-        let mut scope = ModuleScopeBuilder::new(context.domain_id());
-        scope.extend(modules);
-        scope.into_scope()
     }
 
     pub(crate) fn commit_into<K>(

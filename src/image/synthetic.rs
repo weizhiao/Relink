@@ -4,7 +4,7 @@ use crate::{
     arch::NativeArch,
     custom_error,
     elf::{ElfLayout, ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType},
-    memory::{ImageMemory, VmAddr},
+    memory::{ImageMemory, VmAddr, VmOffset},
     relocation::RelocationArch,
     runtime::DomainId,
     sync::{Arc, arc_unsize},
@@ -520,6 +520,28 @@ where
     #[inline]
     fn memory(&self) -> &dyn ImageMemory {
         &*self.memory
+    }
+
+    fn resolve_symbol(&self, symbol: &ElfSymbol<Arch::Layout>) -> Result<VmAddr> {
+        match symbol.symbol_type() {
+            ElfSymbolType::TLS => {
+                return Err(custom_error(
+                    "synthetic module cannot resolve TLS symbol addresses",
+                ));
+            }
+            ElfSymbolType::GNU_IFUNC => {
+                return Err(custom_error(
+                    "synthetic module cannot execute IFUNC resolvers",
+                ));
+            }
+            _ => {}
+        }
+
+        if symbol.st_shndx().is_abs() {
+            Ok(VmAddr::new(symbol.st_value()))
+        } else {
+            Ok(self.memory.base() + VmOffset::new(symbol.st_value()))
+        }
     }
 
     #[inline]

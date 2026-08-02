@@ -7,10 +7,10 @@ use elf_loader::{
     Error, LinkContext, Linker, Loader, Module, Relocator,
     arch::NativeArch,
     error::{LinkContextError, LinkResolverError, LinkerError},
-    image::{LoadedCore, ModuleCapability, SyntheticModule},
+    image::{LoadedCore, ModuleCapability, SyntheticModule, SyntheticSymbol},
     input::ElfBinary,
     linker::{
-        KeyResolver, ResolvedKey, RootRequest,
+        KeyResolver, LoadResult, ResolvedKey, RootRequest,
         scan::{DataPass, LinkPass, LinkPassPlan, Materialization, PassScopeMode},
     },
     memory::{RegionAccess, VmAddr},
@@ -36,6 +36,13 @@ use std::{
 
 const DEP_KEY: &str = "libprovider.so";
 
+fn loaded_core(loaded: &LoadResult) -> &LoadedCore<()> {
+    loaded
+        .module()
+        .downcast_ref()
+        .expect("linker root should be a loaded ELF core")
+}
+
 struct SingleBinaryResolver {
     key: &'static str,
     name: &'static str,
@@ -58,6 +65,12 @@ struct ExistingDependencyResolver {
 
 struct SyntheticDependencyResolver {
     root_data: &'static [u8],
+}
+
+struct SyntheticRootResolver;
+
+extern "C" fn synthetic_value() -> i32 {
+    42
 }
 
 struct InitRecorder {
@@ -254,6 +267,38 @@ impl KeyResolver<&'static str> for SyntheticDependencyResolver {
             SyntheticModule::empty("dep"),
             Vec::new(),
         ))
+    }
+}
+
+impl KeyResolver<&'static str> for SyntheticRootResolver {
+    fn load_root<'cfg>(
+        &self,
+        req: &RootRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
+        Ok(ResolvedKey::module(
+            *req.key(),
+            SyntheticModule::new(
+                "synthetic-root",
+                [SyntheticSymbol::function(
+                    "synthetic_value",
+                    synthetic_value as *const (),
+                )],
+            ),
+            Vec::new(),
+        ))
+    }
+
+    fn resolve_dependency<'cfg>(
+        &self,
+        _req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
+        unreachable!("synthetic root has no dependencies")
     }
 }
 

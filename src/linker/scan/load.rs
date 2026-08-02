@@ -13,8 +13,8 @@ use crate::{
         driver::LoadResult,
         resolve::ScanResolveContext,
         resolver::KeyResolver,
-        run::{LinkerRun, PreparedLoad, visible_loaded},
-        session::{LoadSession, ResolveSession},
+        run::{LinkerRun, PreparedLoad},
+        session::ResolveSession,
     },
     memory::{ImageMemory, RegionAccess, VmOffset},
     observer::{LinkerObserver, LoadObserver, RelocationObserver},
@@ -45,14 +45,20 @@ where
         &mut self,
         context: &mut LinkContext<K, Arch, Tls>,
         key: K,
-    ) -> Result<LoadResult<D, Arch, M::Region, Tls>>
+    ) -> Result<LoadResult<Arch, Tls>>
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
     {
-        if let Some(result) = visible_loaded(context, key.borrow())? {
-            return Ok(result);
+        if let Some(id) = context.module_id(key.borrow()) {
+            let module = context.get(id)?.clone();
+            let lease = context.acquire(id)?;
+            return Ok(LoadResult::new(
+                lease,
+                module,
+                Vec::new().into_boxed_slice(),
+            ));
         }
 
         let prepared = self.prepare_scan_load::<Q>(context, &key)?;
@@ -85,7 +91,7 @@ where
         let resolved = resolve_context.resolve_root::<Q>(key, None, &self.linker.resolver)?;
         let root = resolve_context.stage(resolved, &mut loader)?;
         if !resolve_context.contains_pending(root) {
-            return PreparedLoad::new(root, LoadSession::new(), None, context);
+            return PreparedLoad::new(root, ResolveSession::new(), None, context);
         }
         resolve_context.resolve_dependency_graph::<D, _, _, _, Q>(
             root,
@@ -93,7 +99,7 @@ where
             &self.linker.resolver,
         )?;
 
-        let dynamics = session.take_dynamics();
+        let (dynamics, mut session) = session.split_dynamics();
         let dynamic_ids = dynamics.keys().copied().collect::<EntitySet<_>>();
         let entries: BTreeMap<_, _> = dynamics
             .into_iter()
@@ -132,7 +138,6 @@ where
             let (_, _, entries, memory_layout) = plan.into_parts();
             Some((entries, memory_layout))
         };
-        let mut session = LoadSession::from_resolve(session);
         if let Some((entries, memory_layout)) = planned {
             for (module_id, entry) in entries {
                 let (id, _key, module, direct_deps) = entry.into_parts();
@@ -142,7 +147,7 @@ where
                     module_id,
                     module,
                 )?;
-                session.resolve_mut().restore_dynamic(id, raw, direct_deps);
+                session.restore_dynamic(id, raw, direct_deps);
             }
         }
 

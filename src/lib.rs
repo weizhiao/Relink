@@ -141,7 +141,7 @@
 //!   `Loader::with_default_tls_resolver` or provide a custom TLS resolver.
 //! - `lazy-binding`: enables `Relocator::lazy` and PLT/GOT lazy binding.
 //! - `object`: enables `Loader::load_object` and relocatable object (`ET_REL`) loading.
-//! - `version`: enables version-aware symbol lookup via `ElfCore::get_version`.
+//! - `version`: enables version-aware symbol lookup via `ModuleHandle::get_version`.
 //! - `log`, `portable-atomic`, and `use-syscall`: optional integrations for diagnostics and
 //!   specialized targets.
 //!

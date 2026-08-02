@@ -2,7 +2,7 @@ use super::CoreInner;
 use crate::{
     Result,
     arch::NativeArch,
-    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
+    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, SymbolTable},
     image::{
         CoreRuntime, DynamicInfo, Module, ModuleScope, ModuleState, PltRelocInfo, SymbolExports,
     },
@@ -10,7 +10,7 @@ use crate::{
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
     relocation::{RelocationArch, SymbolRegistry},
-    runtime::{CodeContext, CodeExecutor, DomainId, NativeCodeExecutor},
+    runtime::{CodeExecutor, DomainId, NativeCodeExecutor},
     segment::ElfSegments,
     sync::{Arc, OnceCell, Weak, arc_unsize},
     tls::{CoreTlsState, ModuleTls, TlsImageProvider, TlsImageSource, TlsResolver},
@@ -248,21 +248,6 @@ impl<
             .publish(TlsImageSource::new(Arc::downgrade(&provider)))
     }
 
-    pub(crate) fn tls_addr(&self, offset: usize) -> Result<Option<VmAddr>> {
-        let Some(index) = self.inner.tls.index(offset) else {
-            return Ok(None);
-        };
-        let resolver = self.inner.tls.resolver().bind_tls_get_addr()?;
-        self.inner
-            .executor
-            .resolve_tls(
-                CodeContext::new(self.name(), &self.inner.segments),
-                resolver,
-                index,
-            )
-            .map(Some)
-    }
-
     #[inline]
     pub(crate) fn executor(&self) -> &dyn CodeExecutor<Arch> {
         self.inner.executor.as_ref()
@@ -371,6 +356,11 @@ where
     #[inline]
     fn memory(&self) -> &dyn ImageMemory {
         self.segments()
+    }
+
+    #[inline]
+    fn resolve_symbol(&self, symbol: &ElfSymbol<Arch::Layout>) -> Result<VmAddr> {
+        self.inner.resolve_symbol(symbol)
     }
 
     #[inline]

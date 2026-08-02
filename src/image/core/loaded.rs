@@ -2,15 +2,14 @@ use super::{ElfCore, ElfCoreRef, Symbol};
 use crate::{
     ParsePhdrError, Result,
     arch::{ArchKind, NativeArch},
-    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol, ElfSymbolType},
-    hint::unlikely,
+    elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol},
     image::{
         Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, ModuleState, SymbolExports,
-        SymbolLookup,
+        SymbolLookup, module::lookup_symbol,
     },
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
-    relocation::{RelocationArch, SymDef, SymbolRegistry},
+    relocation::{RelocationArch, SymbolRegistry},
     runtime::DomainId,
     segment::ElfSegments,
     sync::Arc,
@@ -192,20 +191,6 @@ impl<
         self.core.eh_frame_hdr()
     }
 
-    #[inline]
-    fn lookup_addr(&self, sym: &ElfSymbol<Arch::Layout>) -> Result<Option<VmAddr>> {
-        if !sym.is_exported() {
-            return Ok(None);
-        }
-        if unlikely(sym.symbol_type() == ElfSymbolType::TLS) {
-            self.core.tls_addr(sym.st_value())
-        } else {
-            SymDef::<Arch, Tls>::defined(sym, self)
-                .resolve(self.core.executor())
-                .map(Some)
-        }
-    }
-
     /// Gets a pointer to a function or static variable by symbol name.
     ///
     /// The symbol is interpreted as-is; no mangling is done. This means
@@ -259,12 +244,8 @@ impl<
     /// `T` must match the type and ABI of the resolved symbol.
     #[inline]
     pub unsafe fn try_get<'lib, T>(&'lib self, name: &str) -> Result<Option<Symbol<'lib, T>>> {
-        let mut lookup = SymbolLookup::new(name);
-        let Some(sym) = self.core.exports().lookup(&mut lookup) else {
-            return Ok(None);
-        };
-        self.lookup_addr(sym)
-            .map(|addr| addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
+        let addr = lookup_symbol(self, &mut SymbolLookup::new(name))?;
+        Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
     }
 
     /// Load a versioned symbol from the ELF object.
@@ -313,12 +294,8 @@ impl<
         name: &str,
         version: &str,
     ) -> Result<Option<Symbol<'lib, T>>> {
-        let mut lookup = SymbolLookup::with_version(name, version);
-        let Some(sym) = self.core.exports().lookup(&mut lookup) else {
-            return Ok(None);
-        };
-        self.lookup_addr(sym)
-            .map(|addr| addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
+        let addr = lookup_symbol(self, &mut SymbolLookup::with_version(name, version))?;
+        Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
     }
 
     /// Gets the number of strong references to the ELF object
@@ -541,6 +518,11 @@ where
     #[inline]
     fn memory(&self) -> &dyn ImageMemory {
         self.core.segments()
+    }
+
+    #[inline]
+    fn resolve_symbol(&self, symbol: &ElfSymbol<Arch::Layout>) -> Result<VmAddr> {
+        self.core.resolve_symbol(symbol)
     }
 
     #[inline]
