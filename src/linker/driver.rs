@@ -1,6 +1,12 @@
-use super::{run::LinkerRun, scan::LinkPipeline, storage::ModuleId};
+use super::{
+    context::LinkContext,
+    run::LinkerRun,
+    scan::LinkPipeline,
+    storage::{ModuleId, ModuleLease},
+    unload::UnloadGroup,
+};
 use crate::{
-    Loader, Relocator,
+    Loader, Relocator, Result,
     arch::NativeArch,
     const_builder::NoDrop,
     image::{LoadedCore, Module},
@@ -16,16 +22,16 @@ use core::{fmt, marker::PhantomData, mem::MaybeUninit, ops::Deref, ptr};
 /// Result of a fully initialized linker load operation.
 ///
 /// `modules` contains the newly loaded modules' [`ModuleId`](crate::linker::ModuleId)
-/// values in load order. Every successful load acquires the root module once;
-/// call [`LinkContext::release`](crate::LinkContext::release) with [`Self::root_id`]
-/// when that direct use ends.
+/// values in load order. The result owns one lease for the root module; release
+/// the result when that direct use ends.
+#[must_use = "a loaded module lease must eventually be released"]
 pub struct LoadResult<
     D: Send + Sync + 'static,
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
-    root_id: ModuleId,
+    lease: ModuleLease,
     root: LoadedCore<D, Arch, R, Tls>,
     modules: Box<[ModuleId]>,
 }
@@ -38,7 +44,7 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoadResult")
-            .field("root_id", &self.root_id)
+            .field("root_id", &self.lease.id())
             .field("root", &self.root.name())
             .field("modules", &self.modules)
             .finish()
@@ -53,27 +59,21 @@ where
 {
     #[inline]
     pub(crate) fn new(
-        root_id: ModuleId,
+        lease: ModuleLease,
         root: LoadedCore<D, Arch, R, Tls>,
         modules: Box<[ModuleId]>,
     ) -> Self {
         Self {
-            root_id,
+            lease,
             root,
             modules,
         }
     }
 
-    /// Returns the module id for the loaded root.
+    /// Returns the direct acquisition held for the loaded root.
     #[inline]
-    pub fn root_id(&self) -> ModuleId {
-        self.root_id
-    }
-
-    /// Returns the loaded root module.
-    #[inline]
-    pub fn root(&self) -> &LoadedCore<D, Arch, R, Tls> {
-        &self.root
+    pub const fn root(&self) -> &ModuleLease {
+        &self.lease
     }
 
     /// Returns module ids produced by this load operation in load order.
@@ -82,10 +82,22 @@ where
         &self.modules
     }
 
-    /// Consumes the result and returns the loaded root module.
+    /// Consumes the result and returns its root module and acquisition lease.
     #[inline]
-    pub fn into_root(self) -> LoadedCore<D, Arch, R, Tls> {
-        self.root
+    pub fn into_parts(self) -> (LoadedCore<D, Arch, R, Tls>, ModuleLease) {
+        (self.root, self.lease)
+    }
+
+    /// Releases the root acquisition represented by this load.
+    #[inline]
+    pub fn release<K>(
+        self,
+        context: &mut LinkContext<K, Arch, Tls>,
+    ) -> Result<UnloadGroup<Arch, Tls>>
+    where
+        K: Clone + Ord,
+    {
+        context.release(self.lease)
     }
 }
 

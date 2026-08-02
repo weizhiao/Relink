@@ -78,7 +78,7 @@ impl RelocationObserver for Observer {
     }
 }
 
-impl LinkerObserver<PathBuf, UserData> for Observer {}
+impl LinkerObserver<UserData> for Observer {}
 
 fn main() -> Result<()> {
     let fixtures = fixture_support::ensure_all();

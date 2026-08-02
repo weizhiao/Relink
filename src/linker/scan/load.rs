@@ -40,9 +40,7 @@ where
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
     ElfRelType<Arch>: ByteRepr,
-    Obs: LinkerObserver<K, D, Arch, M::Region, Tls>
-        + LoadObserver<D, Arch>
-        + RelocationObserver<Arch>,
+    Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch> + RelocationObserver<Arch>,
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Discovers, plans, and loads one module through the scan-first path.
@@ -87,12 +85,7 @@ where
 
         let mut loader = self.linker.loader.run().with_observer(&mut self.observer);
         let mut resolve_context = ScanResolveContext::new(&mut context.committed, &mut session);
-        let resolved = resolve_context.resolve_root::<D, Q, M::Region, _>(
-            key,
-            None,
-            &self.linker.resolver,
-            &loader.observer,
-        )?;
+        let resolved = resolve_context.resolve_root::<Q>(key, None, &self.linker.resolver)?;
         let root = resolve_context.stage(resolved, &mut loader)?;
         if !resolve_context.contains_pending(root) {
             return PreparedLoad::new(root, LoadSession::new(), None, context);

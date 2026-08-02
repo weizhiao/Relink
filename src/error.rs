@@ -868,11 +868,6 @@ pub enum LinkContextError {
         /// The module id that could not be resolved.
         id: ModuleId,
     },
-    /// A module was released without a matching direct acquisition.
-    ModuleNotAcquired {
-        /// The module id that had no acquisition to release.
-        id: ModuleId,
-    },
     /// A key id does not resolve to a committed module.
     KeyNotCommitted {
         /// The key id that did not resolve to a committed module.
@@ -897,9 +892,6 @@ impl Display for LinkContextError {
                 id, expected
             ),
             Self::ModuleNotCommitted { id } => write!(f, "module id {} is not committed", id),
-            Self::ModuleNotAcquired { id } => {
-                write!(f, "module id {} has no acquisition to release", id)
-            }
             Self::KeyNotCommitted { id } => write!(f, "key id {} is not committed", id),
         }
     }
@@ -907,8 +899,8 @@ impl Display for LinkContextError {
 
 /// Structured resolver failure details.
 pub enum LinkResolverError {
-    /// The resolver returned `Existing`, but the key is not visible.
-    ExistingKeyNotVisible,
+    /// The resolver returned `Existing`, but the key is not committed.
+    ExistingKeyMissing,
     /// The resolver returned a new module source, but the key is already known.
     NewKeyAlreadyKnown,
     /// The root module could not be found by a resolver.
@@ -918,8 +910,8 @@ pub enum LinkResolverError {
 impl Display for LinkResolverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ExistingKeyNotVisible => {
-                f.write_str("resolver referenced an unknown visible key")
+            Self::ExistingKeyMissing => {
+                f.write_str("resolver referenced an uncommitted existing key")
             }
             Self::NewKeyAlreadyKnown => {
                 f.write_str("resolver produced an already-known key; use Existing to reuse it")

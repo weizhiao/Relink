@@ -11,13 +11,11 @@ use crate::relocation::ObjectArch;
 use crate::{
     Result,
     arch::NativeArch,
-    image::ModuleHandle,
     memory::{HostRegion, RegionAccess},
     relocation::RelocationArch,
     tls::TlsResolver,
 };
 use alloc::boxed::Box;
-use core::borrow::Borrow;
 
 /// Event hook for images as they are loaded.
 pub trait LoadObserver<D: Send + Sync + 'static = (), Arch: RelocationArch = NativeArch> {
@@ -128,77 +126,14 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     }
 }
 
-/// A module imported by one linker run, plus the keys of its direct dependencies.
-///
-/// When selected, the module is committed and participates in initialization
-/// and finalization with the rest of the load transaction.
-pub struct VisibleModule<K, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    module: ModuleHandle<Arch, Tls>,
-    direct_deps: Box<[K]>,
-}
-
-impl<K, Arch, Tls> VisibleModule<K, Arch, Tls>
-where
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
-{
-    /// Creates a visible module with the keys of its direct dependencies.
-    #[inline]
-    pub fn new(module: impl Into<ModuleHandle<Arch, Tls>>, direct_deps: Box<[K]>) -> Self {
-        Self {
-            module: module.into(),
-            direct_deps,
-        }
-    }
-
-    /// Returns the module handle made visible to the link operation.
-    #[inline]
-    pub fn module(&self) -> &ModuleHandle<Arch, Tls> {
-        &self.module
-    }
-
-    /// Returns the direct dependency keys associated with this visible module.
-    #[inline]
-    pub fn direct_deps(&self) -> &[K] {
-        &self.direct_deps
-    }
-
-    /// Consumes this value into the module handle and direct dependency keys.
-    #[inline]
-    pub fn into_parts(self) -> (ModuleHandle<Arch, Tls>, Box<[K]>) {
-        (self.module, self.direct_deps)
-    }
-}
-
-/// Group-level policy hooks for dependency linking.
+/// Policy hooks for linker-specific stages.
 pub trait LinkerObserver<
-    K,
-    D: Send + Sync + 'static,
+    D: Send + Sync + 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 >
 {
-    /// Returns whether `key` names an externally visible module.
-    #[inline]
-    fn contains_visible<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        self.visible_module(key).is_some()
-    }
-
-    /// Returns an externally visible module and its direct dependency keys.
-    #[inline]
-    fn visible_module<Q>(&self, _key: &Q) -> Option<VisibleModule<K, Arch, Tls>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        None
-    }
-
     /// Adjusts the scope and binding mode for one module before relocation.
     #[inline]
     fn on_relocation(&mut self, _event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
@@ -210,7 +145,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch> LoadObserver<D, Arch> for (
 
 impl<Arch: RelocationArch> RelocationObserver<Arch> for () {}
 
-impl<K, D: Send + Sync + 'static, Arch, R, Tls> LinkerObserver<K, D, Arch, R, Tls> for ()
+impl<D: Send + Sync + 'static, Arch, R, Tls> LinkerObserver<D, Arch, R, Tls> for ()
 where
     Arch: RelocationArch,
     R: RegionAccess,
@@ -315,31 +250,13 @@ where
     }
 }
 
-impl<K, D: Send + Sync + 'static, Arch, R, Tls, O> LinkerObserver<K, D, Arch, R, Tls> for &mut O
+impl<D: Send + Sync + 'static, Arch, R, Tls, O> LinkerObserver<D, Arch, R, Tls> for &mut O
 where
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
-    O: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
+    O: LinkerObserver<D, Arch, R, Tls> + ?Sized,
 {
-    #[inline]
-    fn contains_visible<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        (**self).contains_visible(key)
-    }
-
-    #[inline]
-    fn visible_module<Q>(&self, key: &Q) -> Option<VisibleModule<K, Arch, Tls>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        (**self).visible_module(key)
-    }
-
     #[inline]
     fn on_relocation(&mut self, event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
         (**self).on_relocation(event)
@@ -443,31 +360,13 @@ where
     }
 }
 
-impl<K, D: Send + Sync + 'static, Arch, R, Tls, O> LinkerObserver<K, D, Arch, R, Tls> for Box<O>
+impl<D: Send + Sync + 'static, Arch, R, Tls, O> LinkerObserver<D, Arch, R, Tls> for Box<O>
 where
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
-    O: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
+    O: LinkerObserver<D, Arch, R, Tls> + ?Sized,
 {
-    #[inline]
-    fn contains_visible<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        (**self).contains_visible(key)
-    }
-
-    #[inline]
-    fn visible_module<Q>(&self, key: &Q) -> Option<VisibleModule<K, Arch, Tls>>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        (**self).visible_module(key)
-    }
-
     #[inline]
     fn on_relocation(&mut self, event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
         (**self).on_relocation(event)

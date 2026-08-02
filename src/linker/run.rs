@@ -5,7 +5,7 @@ use super::{
     resolver::{KeyResolver, SearchOwner},
     scan::{GotPltTarget, LinkPipeline, MappedRuntimeMemory},
     session::{GraphEntry, LoadSession},
-    storage::{ContextId, KeySlot, ModuleId},
+    storage::{ContextId, KeySlot, ModuleId, ModuleLease},
 };
 use crate::{
     ByteRepr, Error, LinkContextError, LinkerError, Loader, LoaderRun, Result,
@@ -102,9 +102,7 @@ where
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
     ElfRelType<Arch>: ByteRepr,
-    Obs: LinkerObserver<K, D, Arch, M::Region, Tls>
-        + LoadObserver<D, Arch>
-        + RelocationObserver<Arch>,
+    Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch> + RelocationObserver<Arch>,
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Loads, commits, and initializes one module and its dependency group.
@@ -208,12 +206,7 @@ where
         let mut loader = linker.loader.run().with_observer(&mut self.observer);
         let mut resolve_context =
             LoadResolveContext::new(&mut context.committed, session.resolve_mut());
-        let resolved = resolve_context.resolve_root::<D, Q, M::Region, _>(
-            &key,
-            owner,
-            &linker.resolver,
-            &loader.observer,
-        )?;
+        let resolved = resolve_context.resolve_root::<Q>(&key, owner, &linker.resolver)?;
         let root = resolve_context.stage(resolved, &mut loader)?;
         Self::prepare_direct_load::<Q>(context, &linker.resolver, root, session, &mut loader)
     }
@@ -552,9 +545,9 @@ where
             .module_for_key(self.root)
             .map(|slot| context.committed.make_module_id(slot))
             .expect("published load root must have a module id");
-        context.acquire(root_id)?;
+        let lease = context.acquire(root_id)?;
         Ok(PublishedLoad::new(
-            root_id,
+            lease,
             self.root_module,
             modules,
             self.initializers,
@@ -570,7 +563,7 @@ pub struct PublishedLoad<
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
-    root_id: ModuleId,
+    lease: ModuleLease,
     root: LoadedCore<D, Arch, R, Tls>,
     modules: Box<[ModuleId]>,
     initializers: Box<[ModuleHandle<Arch, Tls>]>,
@@ -584,7 +577,7 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PublishedLoad")
-            .field("root_id", &self.root_id)
+            .field("root_id", &self.lease.id())
             .field("root", &self.root.name())
             .field("modules", &self.modules)
             .field("pending_initializers", &self.initializers.len())
@@ -600,29 +593,23 @@ where
 {
     #[inline]
     fn new(
-        root_id: ModuleId,
+        lease: ModuleLease,
         root: LoadedCore<D, Arch, R, Tls>,
         modules: Box<[ModuleId]>,
         initializers: Box<[ModuleHandle<Arch, Tls>]>,
     ) -> Self {
         Self {
-            root_id,
+            lease,
             root,
             modules,
             initializers,
         }
     }
 
-    /// Returns the published module id for the loaded root.
+    /// Returns the direct acquisition held for the published root.
     #[inline]
-    pub fn root_id(&self) -> ModuleId {
-        self.root_id
-    }
-
-    /// Returns the loaded root module.
-    #[inline]
-    pub fn root(&self) -> &LoadedCore<D, Arch, R, Tls> {
-        &self.root
+    pub const fn root(&self) -> &ModuleLease {
+        &self.lease
     }
 
     /// Returns module ids published by this load operation in load order.
@@ -642,7 +629,7 @@ where
         if let Err(error) = result {
             return Err(FailedLoad { error, load: self });
         }
-        Ok(LoadResult::new(self.root_id, self.root, self.modules))
+        Ok(LoadResult::new(self.lease, self.root, self.modules))
     }
 
     /// Releases this publication and finalizes modules that become unreachable.
@@ -650,7 +637,7 @@ where
     where
         K: Clone + Ord,
     {
-        let expected = self.root_id.context();
+        let expected = self.lease.id().context();
         if context.context_id() != expected {
             return Err(LinkerError::context(LinkContextError::ContextMismatch {
                 expected,
@@ -659,7 +646,7 @@ where
             .into());
         }
 
-        drop(context.release(self.root_id)?);
+        context.release(self.lease)?;
         Ok(())
     }
 }
@@ -699,7 +686,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FailedLoad")
             .field("error", &self.error)
-            .field("root_id", &self.load.root_id)
+            .field("root_id", &self.load.lease.id())
             .field("modules", &self.load.modules)
             .finish()
     }
@@ -757,10 +744,10 @@ where
         .module_for_key(key_slot)
         .map(|slot| context.committed.make_module_id(slot))
         .expect("visible root must have a committed module id");
-    context.acquire(root_id)?;
+    let lease = context.acquire(root_id)?;
 
     Ok(Some(LoadResult::new(
-        root_id,
+        lease,
         loaded,
         Vec::new().into_boxed_slice(),
     )))

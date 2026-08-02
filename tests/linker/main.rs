@@ -6,11 +6,11 @@ mod fixture_build;
 use elf_loader::{
     Error, LinkContext, Linker, Loader, Module, Relocator,
     arch::NativeArch,
-    error::{LinkContextError, LinkerError},
+    error::{LinkContextError, LinkResolverError, LinkerError},
     image::{LoadedCore, ModuleCapability, SyntheticModule},
     input::ElfBinary,
     linker::{
-        KeyResolver, ResolvedKey, RootRequest, VisibleModule,
+        KeyResolver, ResolvedKey, RootRequest,
         scan::{DataPass, LinkPass, LinkPassPlan, Materialization, PassScopeMode},
     },
     memory::{RegionAccess, VmAddr},
@@ -28,7 +28,6 @@ use elf_loader::{
 };
 use gen_elf::{Arch, DylibWriter, ElfWriteOutput, ElfWriterConfig};
 use std::{
-    boxed::Box,
     cell::RefCell,
     rc::Rc,
     sync::{Arc, Mutex},
@@ -48,18 +47,13 @@ struct ExistingRootResolver {
     existing: &'static str,
 }
 
-struct VisibleDependencyResolver {
+struct ModuleDependencyResolver {
     root_data: &'static [u8],
+    dep: LoadedCore<()>,
 }
 
 struct SyntheticDependencyResolver {
     root_data: &'static [u8],
-}
-
-struct StaticVisibleModule {
-    key: &'static str,
-    module: LoadedCore<()>,
-    direct_deps: Box<[&'static str]>,
 }
 
 struct InitRecorder {
@@ -87,7 +81,7 @@ impl InitRecorder {
 }
 
 impl LoadObserver for InitRecorder {}
-impl LinkerObserver<&'static str, ()> for InitRecorder {}
+impl LinkerObserver for InitRecorder {}
 
 impl RelocationObserver for InitRecorder {
     fn on_dynamic_relocated<
@@ -157,7 +151,6 @@ impl KeyResolver<&'static str> for ExistingRootResolver {
     {
         let key = req.key();
         assert_eq!(*key, self.requested);
-        assert!(req.contains_key(&self.existing));
         Ok(ResolvedKey::existing(self.existing))
     }
 
@@ -172,7 +165,7 @@ impl KeyResolver<&'static str> for ExistingRootResolver {
     }
 }
 
-impl KeyResolver<&'static str> for VisibleDependencyResolver {
+impl KeyResolver<&'static str> for ModuleDependencyResolver {
     fn load_root<'cfg>(
         &self,
         req: &RootRequest<'_, &'static str>,
@@ -196,8 +189,8 @@ impl KeyResolver<&'static str> for VisibleDependencyResolver {
         &'static str: 'cfg,
     {
         assert_eq!(req.needed(), DEP_KEY);
-        assert!(req.contains_key(&DEP_KEY));
-        Ok(ResolvedKey::existing(DEP_KEY))
+        assert!(!req.contains_key(&DEP_KEY));
+        Ok(ResolvedKey::module(DEP_KEY, self.dep.clone(), Vec::new()))
     }
 }
 
@@ -230,28 +223,6 @@ impl KeyResolver<&'static str> for SyntheticDependencyResolver {
             SyntheticModule::empty("dep"),
             Vec::new(),
         ))
-    }
-}
-
-impl LoadObserver for StaticVisibleModule {}
-impl RelocationObserver for StaticVisibleModule {}
-
-impl LinkerObserver<&'static str, ()> for StaticVisibleModule {
-    fn contains_visible<Q>(&self, key: &Q) -> bool
-    where
-        &'static str: std::borrow::Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        <&'static str as std::borrow::Borrow<Q>>::borrow(&self.key) == key
-    }
-
-    fn visible_module<Q>(&self, key: &Q) -> Option<VisibleModule<&'static str>>
-    where
-        &'static str: std::borrow::Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
-        (<&'static str as std::borrow::Borrow<Q>>::borrow(&self.key) == key)
-            .then(|| VisibleModule::new(self.module.clone(), self.direct_deps.clone()))
     }
 }
 

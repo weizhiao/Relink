@@ -91,6 +91,32 @@ impl Display for ModuleId {
     }
 }
 
+/// One direct acquisition of a committed module.
+///
+/// A lease is created by [`LinkContext::insert`](super::LinkContext::insert),
+/// [`LinkContext::acquire`](super::LinkContext::acquire), or a linker load. It
+/// is intentionally neither [`Clone`] nor [`Copy`]; pass it to
+/// [`LinkContext::release`](super::LinkContext::release) exactly once when the
+/// direct use ends.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use = "a module lease must eventually be released"]
+pub struct ModuleLease {
+    id: ModuleId,
+}
+
+impl ModuleLease {
+    #[inline]
+    pub(in crate::linker) const fn new(id: ModuleId) -> Self {
+        Self { id }
+    }
+
+    /// Returns the identity of the acquired module.
+    #[inline]
+    pub const fn id(&self) -> ModuleId {
+        self.id
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::linker) enum EntryState<T> {
     Absent,
@@ -213,26 +239,6 @@ pub(crate) struct CommittedStorage<
     key_modules: SecondaryMap<KeySlot, ModuleSlot>,
     entries: PrimaryMap<ModuleSlot, Option<StoredEntry<Arch, Tls>>>,
     lifecycle: Vec<ModuleSlot>,
-}
-
-impl<K, Arch, Tls> Clone for CommittedStorage<K, Arch, Tls>
-where
-    K: Clone,
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
-{
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            key_slots: self.key_slots.clone(),
-            context: self.context,
-            domain: self.domain,
-            keys: self.keys.clone(),
-            key_modules: self.key_modules.clone(),
-            entries: self.entries.clone(),
-            lifecycle: self.lifecycle.clone(),
-        }
-    }
 }
 
 impl<K, Arch, Tls> CommittedStorage<K, Arch, Tls>
@@ -394,16 +400,6 @@ where
     }
 
     #[inline]
-    pub(crate) fn aliases(&self) -> impl Iterator<Item = (KeySlot, ModuleSlot)> + '_ {
-        self.key_modules
-            .iter()
-            .filter_map(|(alias_slot, module_slot)| {
-                let entry_key = self.entries.get(*module_slot)?.as_ref()?.entry_key;
-                (alias_slot != entry_key).then_some((alias_slot, *module_slot))
-            })
-    }
-
-    #[inline]
     pub(crate) fn get_by_key(&self, slot: KeySlot) -> Option<&ModuleHandle<Arch, Tls>> {
         let module_slot = self.module_for_key(slot)?;
         self.module(module_slot)
@@ -520,22 +516,6 @@ struct StoredEntry<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = (
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[DepEdge]>,
     roots: usize,
-}
-
-impl<Arch, Tls> Clone for StoredEntry<Arch, Tls>
-where
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
-{
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            entry_key: self.entry_key,
-            module: self.module.clone(),
-            direct_deps: self.direct_deps.clone(),
-            roots: self.roots,
-        }
-    }
 }
 
 impl<K, Arch, Tls> Drop for CommittedStorage<K, Arch, Tls>

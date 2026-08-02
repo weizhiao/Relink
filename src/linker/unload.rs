@@ -65,7 +65,6 @@ where
 ///
 /// The collection retains the complete unload group so finalizers may still
 /// call code in dependencies that were detached at the same time.
-#[must_use = "keep the unload group alive until it is safe to run finalizers"]
 pub struct UnloadGroup<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     modules: Vec<UnloadedModule<Arch, Tls>>,
 }

@@ -102,25 +102,12 @@ where
     }
 
     #[inline]
-    fn contains_key<D, Q, R, Obs>(&self, key: &Q, observer: &Obs) -> bool
+    fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        D: Send + Sync + 'static,
         K: Borrow<Q>,
         Q: Ord + ?Sized,
-        R: RegionAccess,
-        Obs: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
     {
-        if let Some(slot) = self.committed.key_slot_for(key)
-            && (self.session.contains_pending(slot)
-                || self
-                    .committed
-                    .module_for_key(slot)
-                    .is_some_and(|slot| self.committed.contains_module(slot)))
-        {
-            return true;
-        }
-
-        observer.contains_visible(key)
+        self.pending_or_committed(key).is_some()
     }
 
     fn pending_or_committed<Q>(&self, key: &Q) -> Option<KeySlot>
@@ -151,36 +138,13 @@ where
         Ok(slot)
     }
 
-    fn stage_existing_key<D, Q, R, Obs>(&mut self, key: K, observer: &Obs) -> Result<KeySlot>
+    fn existing_key<Q>(&self, key: &Q) -> Result<KeySlot>
     where
-        D: Send + Sync + 'static,
         K: Borrow<Q>,
         Q: Ord + ?Sized,
-        R: RegionAccess,
-        Obs: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
     {
-        if let Some(slot) = self.pending_or_committed(key.borrow()) {
-            return Ok(slot);
-        }
-
-        let visible_key = key.borrow();
-        let module = observer
-            .visible_module(visible_key)
-            .ok_or_else(|| LinkerError::resolver(LinkResolverError::ExistingKeyNotVisible))?;
-        let (module, direct_deps) = module.into_parts();
-
-        let direct_dep_keys = direct_deps.into_vec();
-        let direct_deps = direct_dep_keys
-            .iter()
-            .cloned()
-            .map(|key| self.intern_key(key))
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let slot = self.stage_module_handle(key, module, direct_deps)?;
-        for dep in direct_dep_keys {
-            self.stage_existing_key::<D, Q, R, Obs>(dep, observer)?;
-        }
-        Ok(slot)
+        self.pending_or_committed(key)
+            .ok_or_else(|| LinkerError::resolver(LinkResolverError::ExistingKeyMissing).into())
     }
 
     fn stage_module_deps<'cfg, D, Obs, F, M, Exec>(
@@ -250,42 +214,34 @@ where
         entry.set_direct_deps(direct_deps);
     }
 
-    fn resolve_dependency_edge<'cfg, D, Q, R, Obs>(
+    fn resolve_dependency_edge<'cfg, Q>(
         &self,
         slot: KeySlot,
         needed_index: usize,
         resolver: &impl KeyResolver<K, Arch, Q, Tls>,
-        observer: &Obs,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
-        D: Send + Sync + 'static,
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        R: RegionAccess,
-        Obs: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
     {
-        let contains_key = |key: &Q| self.contains_key::<D, Q, R, Obs>(key, observer);
+        let contains_key = |key: &Q| self.contains_key(key);
         let owner = self.owner(slot);
         let owner_key = self.key(slot);
         let req = DependencyRequest::new(owner_key, owner, needed_index, &contains_key);
         resolver.resolve_dependency(&req)
     }
 
-    pub(crate) fn resolve_root<'cfg, D, Q, R, Obs>(
+    pub(crate) fn resolve_root<'cfg, Q>(
         &self,
         key: &K,
         owner: Option<SearchOwner<'_>>,
         resolver: &impl KeyResolver<K, Arch, Q, Tls>,
-        observer: &Obs,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
-        D: Send + Sync + 'static,
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        R: RegionAccess,
-        Obs: LinkerObserver<K, D, Arch, R, Tls> + ?Sized,
     {
-        let contains_key = |key: &Q| self.contains_key::<D, Q, R, Obs>(key, observer);
+        let contains_key = |key: &Q| self.contains_key(key);
         let req = RootRequest::new(key, owner, &contains_key);
         resolver.load_root(&req)
     }
@@ -301,7 +257,7 @@ where
         D: Send + Sync + 'static,
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
+        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
@@ -318,12 +274,7 @@ where
         let needed_len = self.owner(slot).needed_len();
         let mut direct_deps = Vec::with_capacity(needed_len);
         for idx in 0..needed_len {
-            let key = self.resolve_dependency_edge::<D, Q, M::Region, Obs>(
-                slot,
-                idx,
-                resolver,
-                &loader.observer,
-            )?;
+            let key = self.resolve_dependency_edge::<Q>(slot, idx, resolver)?;
             let dep_id = stage(self, key, loader)?;
             if !direct_deps.contains(&dep_id) {
                 direct_deps.push(dep_id);
@@ -344,7 +295,7 @@ where
         D: Send + Sync + 'static,
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
+        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
@@ -380,17 +331,15 @@ where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         D: Default,
-        Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
+        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
         Exec: CodeExecutor<Arch> + Clone,
     {
         match resolved {
-            ResolvedKey::Existing(key) => {
-                self.stage_existing_key::<D, Q, M::Region, Obs>(key, &loader.observer)
-            }
+            ResolvedKey::Existing(key) => self.existing_key(key.borrow()),
             ResolvedKey::Load { key, reader } => {
-                if self.contains_key::<D, Q, M::Region, Obs>(key.borrow(), &loader.observer) {
+                if self.contains_key(key.borrow()) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
                 let raw = loader.load_dynamic(reader)?;
@@ -399,7 +348,7 @@ where
                 Ok(slot)
             }
             ResolvedKey::Module { key, module, deps } => {
-                if self.contains_key::<D, Q, M::Region, Obs>(key.borrow(), &loader.observer) {
+                if self.contains_key(key.borrow()) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
 
@@ -421,7 +370,7 @@ where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         D: Default,
-        Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
+        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
         Exec: CodeExecutor<Arch> + Clone,
@@ -448,17 +397,15 @@ where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         D: Default,
-        Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
+        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
     {
         match resolved {
-            ResolvedKey::Existing(key) => {
-                self.stage_existing_key::<D, Q, M::Region, Obs>(key, &loader.observer)
-            }
+            ResolvedKey::Existing(key) => self.existing_key(key.borrow()),
             ResolvedKey::Load { key, reader } => {
-                if self.contains_key::<D, Q, M::Region, Obs>(key.borrow(), &loader.observer) {
+                if self.contains_key(key.borrow()) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
                 let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
@@ -469,7 +416,7 @@ where
                 Ok(slot)
             }
             ResolvedKey::Module { key, module, deps } => {
-                if self.contains_key::<D, Q, M::Region, Obs>(key.borrow(), &loader.observer) {
+                if self.contains_key(key.borrow()) {
                     return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
                 }
 
@@ -492,7 +439,7 @@ where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         D: Default,
-        Obs: LinkerObserver<K, D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
+        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,

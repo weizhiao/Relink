@@ -18,7 +18,6 @@ mod session;
 mod storage;
 mod unload;
 
-pub use crate::observer::VisibleModule;
 pub use context::{DirectDeps, DirectDepsIntoIter, LinkContext};
 pub use driver::{Linker, LoadResult};
 pub use resolver::{
@@ -27,5 +26,5 @@ pub use resolver::{
     SearchPathEntry, SearchPathResolver,
 };
 pub use run::{FailedLoad, LinkerRun, PreparedLoad, PublishedLoad, RelocatedLoad};
-pub use storage::{ContextId, KeyId, ModuleId};
+pub use storage::{ContextId, KeyId, ModuleId, ModuleLease};
 pub use unload::{UnloadGroup, UnloadedModule};

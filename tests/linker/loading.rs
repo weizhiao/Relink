@@ -110,7 +110,7 @@ fn dependency_resolver(root_name: &'static str, dep_name: &'static str) -> Multi
 }
 
 #[test]
-fn commits_visible_modules() {
+fn commits_resolver_modules() {
     let fixtures = fixtures();
     let loader = Loader::new();
     let dep = Relocator::new()
@@ -123,36 +123,30 @@ fn commits_visible_modules() {
         .relocate()
         .expect("failed to relocate visible dependency");
     assert!(!dep.state().is_initialized());
-    let visible = StaticVisibleModule {
-        key: DEP_KEY,
-        module: dep.clone(),
-        direct_deps: Box::new([]),
-    };
-
-    let resolver = VisibleDependencyResolver {
+    let resolver = ModuleDependencyResolver {
         root_data: fixtures.dependent,
+        dep: dep.clone(),
     };
     let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
 
     let linker = Linker::new().resolver(resolver);
     let root = linker
         .run()
-        .with_observer(visible)
         .load(&mut context, "root")
-        .expect("load should resolve dependency through visible overlay");
+        .expect("load should accept a resolver-provided module");
 
     assert_eq!(root.path().file_name(), "visible_root.so");
     assert!(dep.state().is_initialized());
     assert!(context.contains_key(&"root"));
     let root_id = context
         .key_id(&"root")
-        .and_then(|id| context.module_id(id).unwrap())
+        .and_then(|id| context.resolve_key(id).unwrap())
         .unwrap();
     let dep_id = context.key_id(&DEP_KEY).unwrap();
     let dep_module_id = context
-        .module_id(dep_id)
+        .resolve_key(dep_id)
         .unwrap()
-        .expect("visible dependency should be committed into the context");
+        .expect("resolver-provided dependency should be committed into the context");
     assert_eq!(context.get(dep_module_id).unwrap().name(), "visible_dep.so");
     let direct_deps = context
         .direct_deps(root_id)
@@ -180,10 +174,10 @@ fn scan_loads_synthetic_dependency() {
 
     let root_id = context
         .key_id(&"root")
-        .and_then(|id| context.module_id(id).unwrap())
+        .and_then(|id| context.resolve_key(id).unwrap())
         .unwrap();
     let dep_id = context.key_id(&"dep").unwrap();
-    let dep_module_id = context.module_id(dep_id).unwrap().unwrap();
+    let dep_module_id = context.resolve_key(dep_id).unwrap().unwrap();
     let dep_module = context
         .get(dep_module_id)
         .expect("synthetic dependency committed");
@@ -286,6 +280,27 @@ fn existing_alias_skips_planning() {
 }
 
 #[test]
+fn existing_requires_committed_key() {
+    let resolver = ExistingRootResolver {
+        requested: "alias",
+        existing: "missing",
+    };
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+
+    let error = Linker::new()
+        .resolver(resolver)
+        .load_scan_first(&mut context, "alias")
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::Linker(LinkerError::Resolver {
+            reason: LinkResolverError::ExistingKeyMissing
+        })
+    ));
+}
+
+#[test]
 fn repeated_loads_acquire_the_root() {
     let linker = Linker::new().resolver(dependency_resolver("acquired_root.so", "acquired_dep.so"));
     let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
@@ -297,23 +312,14 @@ fn repeated_loads_acquire_the_root() {
         .load(&mut context, "root")
         .expect("existing root should be acquired");
 
-    assert_eq!(first.root_id(), second.root_id());
+    assert_eq!(first.root().id(), second.root().id());
     assert_eq!(first.modules().len(), 2);
     assert!(second.modules().is_empty());
-    let dep = context
-        .key_id(&DEP_KEY)
-        .and_then(|key| context.module_id(key).unwrap())
-        .expect("dependency should be committed");
-    assert!(matches!(
-        context.release(dep),
-        Err(Error::Linker(LinkerError::Context { reason }))
-            if matches!(*reason, LinkContextError::ModuleNotAcquired { id } if id == dep)
-    ));
-    assert!(context.release(first.root_id()).unwrap().is_empty());
+    assert!(first.release(&mut context).unwrap().is_empty());
     assert!(context.contains_key(&"root"));
     assert!(context.contains_key(&DEP_KEY));
 
-    let unloaded = context.release(second.root_id()).unwrap();
+    let unloaded = second.release(&mut context).unwrap();
     assert_eq!(
         unloaded
             .modules()
@@ -346,8 +352,8 @@ fn rollback_releases_existing_root() {
         .rollback(&mut context)
         .expect("rollback should release the temporary acquisition");
 
-    let unloaded = context
-        .release(loaded.root_id())
+    let unloaded = loaded
+        .release(&mut context)
         .expect("initial acquisition should remain");
     assert_eq!(unloaded.len(), 2);
     assert!(context.is_empty());
@@ -361,7 +367,7 @@ fn relocates_dependencies_first() {
 
     impl LoadObserver for PlanningObserver {}
     impl RelocationObserver for PlanningObserver {}
-    impl LinkerObserver<&'static str, ()> for PlanningObserver {
+    impl LinkerObserver for PlanningObserver {
         fn on_relocation(
             &mut self,
             event: &mut LinkerRelocationEvent<()>,
@@ -373,7 +379,7 @@ fn relocates_dependencies_first() {
 
     let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
     let linker = Linker::new().resolver(resolver);
-    linker
+    let loaded = linker
         .run()
         .with_observer(PlanningObserver(Rc::clone(&planned)))
         .load(&mut context, "root")
@@ -386,6 +392,7 @@ fn relocates_dependencies_first() {
     );
     assert!(context.contains_key(&"root"));
     assert!(context.contains_key(&DEP_KEY));
+    drop(loaded.release(&mut context).unwrap());
 }
 
 #[test]
@@ -415,7 +422,7 @@ fn phased_load_initializes_dependencies_first() {
         .expect("publish should expose the relocated group");
     assert!(context.contains_key(&"root"));
     assert!(context.contains_key(&DEP_KEY));
-    assert!(!published.root().state().is_initialized());
+    assert!(!published.state().is_initialized());
 
     let result = published
         .initialize()
@@ -424,7 +431,7 @@ fn phased_load_initializes_dependencies_first() {
         calls.lock().unwrap().as_slice(),
         &["phased_dep.so".to_string(), "phased_root.so".to_string()]
     );
-    assert!(result.root().state().is_initialized());
+    assert!(result.state().is_initialized());
 
     assert_eq!(calls.lock().unwrap().len(), 2);
 }

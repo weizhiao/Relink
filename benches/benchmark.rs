@@ -107,7 +107,7 @@ fn load_linker(root: PathBuf) {
         .resolver(fixture_support::search_path_resolver())
         .load(&mut context, black_box(root))
         .unwrap();
-    black_box(loaded);
+    drop(black_box(loaded));
 }
 
 fn load_scan_first(root: PathBuf) {
@@ -121,7 +121,7 @@ fn load_scan_first(root: PathBuf) {
         })
         .load_scan_first(&mut context, black_box(root))
         .unwrap();
-    black_box(loaded);
+    drop(black_box(loaded));
 }
 
 fn dlopen_leaf(fixtures: &fixture_support::FixturePaths, flags: i32) {

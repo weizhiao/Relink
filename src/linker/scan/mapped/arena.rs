@@ -270,7 +270,7 @@ mod tests {
         };
         let mut entries = BTreeMap::new();
         let mut context = LinkContext::<&str>::new(DomainId::PROCESS);
-        context
+        let _ = context
             .insert("root", SyntheticModule::empty("root"), Box::new([]))
             .unwrap();
         let root_id = context.key_id(&"root").unwrap();
