@@ -18,7 +18,7 @@ mod session;
 mod storage;
 mod unload;
 
-pub use context::{DirectDeps, DirectDepsIntoIter, LinkContext};
+pub use context::LinkContext;
 pub use driver::{Linker, LoadResult};
 pub use resolver::{
     CandidateContext, CandidateRequest, DependencyOwner, DependencyRequest, FileNameKey,

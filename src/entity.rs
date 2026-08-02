@@ -14,6 +14,50 @@ pub trait EntityRef: Copy + Eq {
     fn index(self) -> usize;
 }
 
+/// Compact set for dense typed entity references.
+#[derive(Debug, Clone)]
+pub struct EntitySet<K> {
+    values: Vec<bool>,
+    marker: PhantomData<fn() -> K>,
+}
+
+impl<K> Default for EntitySet<K> {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            values: Vec::new(),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<K: EntityRef> EntitySet<K> {
+    /// Inserts `key`, returning whether it was not already present.
+    pub fn insert(&mut self, key: K) -> bool {
+        let index = key.index();
+        if self.values.len() <= index {
+            self.values.resize(index + 1, false);
+        }
+        !core::mem::replace(&mut self.values[index], true)
+    }
+
+    /// Returns whether `key` is present.
+    #[inline]
+    pub fn contains(&self, key: K) -> bool {
+        self.values.get(key.index()).copied().unwrap_or(false)
+    }
+}
+
+impl<K: EntityRef> FromIterator<K> for EntitySet<K> {
+    fn from_iter<T: IntoIterator<Item = K>>(iter: T) -> Self {
+        let mut set = Self::default();
+        for key in iter {
+            set.insert(key);
+        }
+        set
+    }
+}
+
 macro_rules! entity_ref {
     ($name:ident) => {
         impl $name {

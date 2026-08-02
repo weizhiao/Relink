@@ -52,6 +52,10 @@ struct ModuleDependencyResolver {
     dep: LoadedCore<()>,
 }
 
+struct ExistingDependencyResolver {
+    root_data: &'static [u8],
+}
+
 struct SyntheticDependencyResolver {
     root_data: &'static [u8],
 }
@@ -191,6 +195,33 @@ impl KeyResolver<&'static str> for ModuleDependencyResolver {
         assert_eq!(req.needed(), DEP_KEY);
         assert!(!req.contains_key(&DEP_KEY));
         Ok(ResolvedKey::module(DEP_KEY, self.dep.clone(), Vec::new()))
+    }
+}
+
+impl KeyResolver<&'static str> for ExistingDependencyResolver {
+    fn load_root<'cfg>(
+        &self,
+        req: &RootRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
+        assert_eq!(*req.key(), "root");
+        Ok(ResolvedKey::load(
+            "root",
+            ElfBinary::new("existing_dep_root.so", self.root_data),
+        ))
+    }
+
+    fn resolve_dependency<'cfg>(
+        &self,
+        req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
+    where
+        &'static str: 'cfg,
+    {
+        assert_eq!(req.needed(), DEP_KEY);
+        Ok(ResolvedKey::existing(DEP_KEY))
     }
 }
 

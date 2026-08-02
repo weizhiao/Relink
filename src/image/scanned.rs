@@ -168,8 +168,6 @@ pub struct ScannedExec<Arch: RelocationArch = NativeArch> {
     phdrs: Box<[ElfPhdr<Arch::Layout>]>,
     interp: Option<Box<[u8]>>,
     section_table: Option<SectionTable<Arch::Layout>>,
-    #[allow(dead_code)]
-    reader: Box<dyn ElfReader + 'static>,
 }
 
 /// A scanned ELF image classified by the metadata available before mapping.
@@ -756,7 +754,6 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
             phdrs,
             interp,
             section_table,
-            reader,
         })
     }
 

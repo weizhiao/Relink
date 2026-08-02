@@ -5,6 +5,7 @@ use super::{
 use crate::{
     ByteRepr, LinkerError, Loader, Result,
     elf::ElfRelType,
+    entity::EntitySet,
     image::{RawDynamic, ScannedDynamic},
     lazy::LazyBinder,
     linker::{
@@ -13,7 +14,7 @@ use crate::{
         resolve::ScanResolveContext,
         resolver::KeyResolver,
         run::{LinkerRun, PreparedLoad, visible_loaded},
-        session::{GraphEntry, LoadSession, ResolveSession},
+        session::{LoadSession, ResolveSession},
     },
     memory::{ImageMemory, RegionAccess, VmOffset},
     observer::{LinkerObserver, LoadObserver, RelocationObserver},
@@ -22,11 +23,7 @@ use crate::{
     runtime::CodeExecutor,
     tls::TlsResolver,
 };
-use alloc::{
-    borrow::ToOwned,
-    collections::{BTreeMap, BTreeSet},
-    vec::Vec,
-};
+use alloc::{borrow::ToOwned, collections::BTreeMap, vec::Vec};
 use core::borrow::Borrow;
 
 #[allow(private_bounds)]
@@ -97,11 +94,12 @@ where
         )?;
 
         let dynamics = session.take_dynamics();
-        let dynamic_ids = dynamics.keys().copied().collect::<BTreeSet<_>>();
+        let dynamic_ids = dynamics.keys().copied().collect::<EntitySet<_>>();
         let entries: BTreeMap<_, _> = dynamics
             .into_iter()
             .map(|(id, entry)| {
-                let key = context.committed.key(id).clone();
+                let key_slot = context.committed.entry_key(id);
+                let key = context.committed.key(key_slot).clone();
                 let (module, full_deps) = entry.into_parts();
                 let full_deps =
                     full_deps.expect("missing resolved dependencies while building scan plan");
@@ -112,21 +110,21 @@ where
         let planned = if entries.is_empty() {
             None
         } else {
-            let plan_root = if dynamic_ids.contains(&root) {
+            let plan_root = if dynamic_ids.contains(root) {
                 root
             } else {
                 session
-                    .group_order
+                    .group_order()
                     .iter()
                     .copied()
-                    .find(|id| dynamic_ids.contains(id))
+                    .find(|id| dynamic_ids.contains(*id))
                     .expect("dynamic id set must contain at least one group id")
             };
             let plan_group_order = session
-                .group_order
+                .group_order()
                 .iter()
                 .copied()
-                .filter(|id| dynamic_ids.contains(id))
+                .filter(|id| dynamic_ids.contains(*id))
                 .collect::<Vec<_>>();
             let mut plan = LinkPlan::new(plan_root, plan_group_order, entries);
             self.pipeline.run(&mut plan)?;
@@ -144,10 +142,7 @@ where
                     module_id,
                     module,
                 )?;
-                session
-                    .resolve_mut()
-                    .dynamics
-                    .insert(id, GraphEntry::with_direct_deps(raw, direct_deps));
+                session.resolve_mut().restore_dynamic(id, raw, direct_deps);
             }
         }
 

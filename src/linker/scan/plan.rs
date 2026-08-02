@@ -8,7 +8,7 @@ use crate::{
     elf::ElfSectionId,
     entity::{PrimaryMap, entity_ref},
     image::{ModuleCapability, ScannedDynamic},
-    linker::storage::KeySlot,
+    linker::storage::ModuleSlot,
     relocation::RelocationArch,
     tls::TlsResolver,
 };
@@ -21,24 +21,24 @@ pub(in crate::linker) struct ModuleId(usize);
 entity_ref!(ModuleId);
 
 pub struct PlannedModule<K, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
-    key_slot: KeySlot,
+    slot: ModuleSlot,
     key: K,
     module: ScannedDynamic<Arch>,
-    full_deps: Box<[KeySlot]>,
+    full_deps: Box<[ModuleSlot]>,
     direct_deps: Box<[ModuleId]>,
     _marker: PhantomData<fn() -> Tls>,
 }
 
-type PlannedEntry<K, Arch> = (K, ScannedDynamic<Arch>, Box<[KeySlot]>);
-type PlannedEntries<K, Arch> = BTreeMap<KeySlot, PlannedEntry<K, Arch>>;
+type PlannedEntry<K, Arch> = (K, ScannedDynamic<Arch>, Box<[ModuleSlot]>);
+type PlannedEntries<K, Arch> = BTreeMap<ModuleSlot, PlannedEntry<K, Arch>>;
 
 fn resolve_direct_deps(
-    module_ids: &BTreeMap<KeySlot, ModuleId>,
-    direct_deps: &[KeySlot],
+    module_ids: &BTreeMap<ModuleSlot, ModuleId>,
+    direct_deps: &[ModuleSlot],
 ) -> Box<[ModuleId]> {
     direct_deps
         .iter()
-        .filter_map(|dep_id| module_ids.get(dep_id).copied())
+        .filter_map(|dep| module_ids.get(dep).copied())
         .collect::<Vec<_>>()
         .into_boxed_slice()
 }
@@ -50,14 +50,14 @@ where
 {
     #[inline]
     pub(in crate::linker) fn new(
-        key_slot: KeySlot,
+        slot: ModuleSlot,
         key: K,
         module: ScannedDynamic<Arch>,
-        full_deps: Box<[KeySlot]>,
+        full_deps: Box<[ModuleSlot]>,
         direct_deps: Box<[ModuleId]>,
     ) -> Self {
         Self {
-            key_slot,
+            slot,
             key,
             module,
             full_deps,
@@ -82,8 +82,8 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (KeySlot, K, ScannedDynamic<Arch>, Box<[KeySlot]>) {
-        (self.key_slot, self.key, self.module, self.full_deps)
+    pub(crate) fn into_parts(self) -> (ModuleSlot, K, ScannedDynamic<Arch>, Box<[ModuleSlot]>) {
+        (self.slot, self.key, self.module, self.full_deps)
     }
 }
 
@@ -115,8 +115,8 @@ where
 {
     #[inline]
     pub(in crate::linker) fn new(
-        root: KeySlot,
-        group_order: Vec<KeySlot>,
+        root: ModuleSlot,
+        group_order: Vec<ModuleSlot>,
         mut entries: PlannedEntries<K, Arch>,
     ) -> Self {
         let group_ids = group_order;
@@ -124,17 +124,17 @@ where
         let mut planned_ids = BTreeMap::new();
         let mut group_order = Vec::with_capacity(group_ids.len());
         let mut pending_entries = PrimaryMap::default();
-        for key_slot in group_ids {
+        for module_slot in group_ids {
             let (key, module, direct_deps) = entries
-                .remove(&key_slot)
+                .remove(&module_slot)
                 .expect("scan plan group order referenced a missing discovered module");
-            let id = pending_entries.push((key_slot, key.clone(), module, direct_deps));
+            let id = pending_entries.push((module_slot, key.clone(), module, direct_deps));
             let previous = module_ids.insert(key, id);
             assert!(
                 previous.is_none(),
                 "scan plan discovered duplicate module key"
             );
-            let previous = planned_ids.insert(key_slot, id);
+            let previous = planned_ids.insert(module_slot, id);
             assert!(
                 previous.is_none(),
                 "scan plan discovered duplicate module id"
@@ -147,9 +147,9 @@ where
             .expect("scan plan root must exist in discovery order");
 
         let planned_entries =
-            pending_entries.map_values(|_, (key_slot, key, module, direct_deps)| {
+            pending_entries.map_values(|_, (module_slot, key, module, direct_deps)| {
                 let plan_deps = resolve_direct_deps(&planned_ids, &direct_deps);
-                PlannedModule::new(key_slot, key, module, direct_deps, plan_deps)
+                PlannedModule::new(module_slot, key, module, direct_deps, plan_deps)
             });
         assert!(
             entries.is_empty(),

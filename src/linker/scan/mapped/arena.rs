@@ -270,11 +270,10 @@ mod tests {
         };
         let mut entries = BTreeMap::new();
         let mut context = LinkContext::<&str>::new(DomainId::PROCESS);
-        let _ = context
+        let root = context
             .insert("root", SyntheticModule::empty("root"), Box::new([]))
             .unwrap();
-        let root_id = context.key_id(&"root").unwrap();
-        let root_slot = context.committed.key_slot(root_id).unwrap();
+        let root_slot = context.committed.module_slot(root.id()).unwrap();
         entries.insert(root_slot, ("root", scanned, Vec::new().into_boxed_slice()));
         let mut plan: LinkPlan<&str> = LinkPlan::new(root_slot, Vec::from([root_slot]), entries);
         let root = plan.root_module();

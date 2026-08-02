@@ -1,124 +1,28 @@
-use super::storage::{
-    CommittedStorage, ContextId, DepEdge, EntryState, KeyId, ModuleId, ModuleLease, ModuleSlot,
-};
+use super::storage::{CommittedStorage, ContextId, KeyId, ModuleId, ModuleLease, ModuleSlot};
 use super::unload::{UnloadGroup, UnloadedModule};
 use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
+    entity::{EntitySet, SecondaryMap},
     image::ModuleHandle,
     relocation::{RelocationArch, SymbolRegistry},
     runtime::DomainId,
     sync::Arc,
     tls::TlsResolver,
 };
-use alloc::{
-    boxed::Box,
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    vec::Vec,
-};
+use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
 use core::borrow::Borrow;
 
 #[inline]
-fn require_module<T>(id: ModuleId, state: EntryState<T>) -> Result<T> {
-    state
-        .present()
-        .ok_or_else(|| LinkerError::context(LinkContextError::ModuleNotCommitted { id }).into())
-}
-
-#[inline]
-fn dep_ids(context: ContextId, edge: DepEdge) -> (KeyId, ModuleId) {
-    (
-        KeyId::from_slot(context, edge.key()),
-        ModuleId::from_slot(context, edge.module()),
-    )
-}
-
-/// Owned direct dependency edges removed from a link context.
-pub struct DirectDeps {
-    context: ContextId,
-    edges: Box<[DepEdge]>,
-}
-
-/// Consuming iterator over dependency key/module pairs.
-pub struct DirectDepsIntoIter {
-    context: ContextId,
-    edges: alloc::vec::IntoIter<DepEdge>,
-}
-
-impl Iterator for DirectDepsIntoIter {
-    type Item = (KeyId, ModuleId);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.edges.next().map(|edge| dep_ids(self.context, edge))
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.edges.size_hint()
-    }
-}
-
-impl DoubleEndedIterator for DirectDepsIntoIter {
-    #[inline]
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.edges
-            .next_back()
-            .map(|edge| dep_ids(self.context, edge))
-    }
-}
-
-impl ExactSizeIterator for DirectDepsIntoIter {}
-impl core::iter::FusedIterator for DirectDepsIntoIter {}
-
-impl DirectDeps {
-    #[inline]
-    fn new(context: ContextId, edges: Box<[DepEdge]>) -> Self {
-        Self { context, edges }
-    }
-
-    /// Returns true when no direct dependency edges were removed.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.edges.is_empty()
-    }
-
-    /// Returns the number of direct dependency edges.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.edges.len()
-    }
-
-    /// Iterates over removed dependency key/module pairs.
-    #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (KeyId, ModuleId)> + '_ {
-        let context = self.context;
-        self.edges
-            .iter()
-            .copied()
-            .map(move |edge| dep_ids(context, edge))
-    }
-}
-
-impl IntoIterator for DirectDeps {
-    type Item = (KeyId, ModuleId);
-    type IntoIter = DirectDepsIntoIter;
-
-    /// Consumes the collection and yields removed dependency key/module pairs.
-    #[inline]
-    fn into_iter(self) -> Self::IntoIter {
-        DirectDepsIntoIter {
-            context: self.context,
-            edges: self.edges.into_vec().into_iter(),
-        }
-    }
+fn require_module<T>(id: ModuleId, module: Option<T>) -> Result<T> {
+    module.ok_or_else(|| LinkerError::context(LinkContextError::ModuleNotCommitted { id }).into())
 }
 
 fn collect_import_modules<K, Arch, Tls>(
     target: &mut LinkContext<K, Arch, Tls>,
     source: &LinkContext<K, Arch, Tls>,
     slot: ModuleSlot,
-    mapped: &mut BTreeMap<ModuleSlot, ModuleSlot>,
+    mapped: &mut SecondaryMap<ModuleSlot, ModuleSlot>,
     new_modules: &mut Vec<ModuleSlot>,
 ) -> Result<()>
 where
@@ -126,7 +30,7 @@ where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    if mapped.contains_key(&slot) {
+    if mapped.get(slot).is_some() {
         return Ok(());
     }
 
@@ -144,10 +48,10 @@ where
         return Ok(());
     }
 
-    let target_slot = target.committed.ensure_module_slot(key);
+    let target_slot = target.committed.intern_module(key);
     mapped.insert(slot, target_slot);
-    for dep in module.direct_deps().iter().copied() {
-        collect_import_modules(target, source, dep.module(), mapped, new_modules)?;
+    for &dep in module.direct_deps() {
+        collect_import_modules(target, source, dep, mapped, new_modules)?;
     }
     new_modules.push(slot);
     Ok(())
@@ -157,7 +61,7 @@ fn copy_new_modules<K, Arch, Tls>(
     target: &mut LinkContext<K, Arch, Tls>,
     source: &LinkContext<K, Arch, Tls>,
     new_modules: &[ModuleSlot],
-    mapped: &BTreeMap<ModuleSlot, ModuleSlot>,
+    mapped: &SecondaryMap<ModuleSlot, ModuleSlot>,
 ) -> Result<()>
 where
     K: Clone + Ord,
@@ -168,29 +72,22 @@ where
     for &slot in new_modules {
         let id = source.committed.make_module_id(slot);
         let module = require_module(id, source.committed.module(slot))?;
-        let entry_key = target
-            .committed
-            .key_slot_for(source.committed.key(module.entry_key()))
-            .expect("collected module key must be interned");
         let direct_deps = module
             .direct_deps()
             .iter()
             .map(|dep| {
-                let key = target
-                    .committed
-                    .intern_key(source.committed.key(dep.key()).clone());
-                let module = *mapped
-                    .get(&dep.module())
-                    .expect("dependency closure must contain every bound module");
-                DepEdge::new(key, module)
+                *mapped
+                    .get(*dep)
+                    .expect("dependency closure must contain every bound module")
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let target_slot =
-            target
-                .committed
-                .insert(entry_key, module.handle().clone(), direct_deps, 0);
-        debug_assert_eq!(target_slot, mapped[&slot]);
+        let target_slot = *mapped
+            .get(slot)
+            .expect("collected module must have a target slot");
+        target
+            .committed
+            .insert(target_slot, module.handle().clone(), direct_deps, 0);
         lifecycle.push(target_slot);
     }
     target.committed.extend_lifecycle(&lifecycle);
@@ -201,13 +98,13 @@ fn copy_import_closure<K, Arch, Tls>(
     target: &mut LinkContext<K, Arch, Tls>,
     source: &LinkContext<K, Arch, Tls>,
     roots: &[ModuleSlot],
-) -> Result<BTreeMap<ModuleSlot, ModuleSlot>>
+) -> Result<SecondaryMap<ModuleSlot, ModuleSlot>>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    let mut mapped = BTreeMap::new();
+    let mut mapped = SecondaryMap::default();
     let mut new_modules = Vec::new();
     for &root in roots {
         collect_import_modules(target, source, root, &mut mapped, &mut new_modules)?;
@@ -288,9 +185,7 @@ where
     /// Returns whether the context contains the committed module `id`.
     #[inline]
     pub fn contains_module(&self, id: ModuleId) -> Result<bool> {
-        Ok(self
-            .committed
-            .contains_module(self.committed.module_slot(id)?))
+        self.committed.contains_id(id)
     }
 
     /// Returns the interned id for a known key.
@@ -322,6 +217,7 @@ where
         self.committed
             .key_slot_for(key)
             .and_then(|slot| self.committed.module_for_key(slot))
+            .filter(|slot| self.committed.contains_module(*slot))
             .map(|slot| self.committed.make_module_id(slot))
     }
 
@@ -332,6 +228,7 @@ where
         Ok(self
             .committed
             .module_for_key(slot)
+            .filter(|slot| self.committed.contains_module(*slot))
             .map(|slot| self.committed.make_module_id(slot)))
     }
 
@@ -357,19 +254,15 @@ where
         Ok(require_module(id, self.committed.module(slot))?.handle())
     }
 
-    /// Returns direct dependency keys and bound modules for a committed module.
+    /// Returns direct dependency modules for a committed module.
     #[inline]
-    pub fn direct_deps(
-        &self,
-        id: ModuleId,
-    ) -> Result<impl Iterator<Item = (KeyId, ModuleId)> + '_> {
+    pub fn direct_deps(&self, id: ModuleId) -> Result<impl Iterator<Item = ModuleId> + '_> {
         let slot = self.committed.module_slot(id)?;
-        let context = self.committed.context();
         Ok(require_module(id, self.committed.module(slot))?
             .direct_deps()
             .iter()
             .copied()
-            .map(move |edge| dep_ids(context, edge)))
+            .map(|slot| self.committed.make_module_id(slot)))
     }
 
     /// Iterates committed modules in load order.
@@ -391,24 +284,32 @@ where
         let module = module.into();
         self.committed.ensure_domain(module.domain_id())?;
         let slot = self.committed.intern_key(key);
-        let direct_deps = direct_deps
-            .into_vec()
-            .into_iter()
-            .map(|key| self.committed.intern_key(key))
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        let direct_deps = self.committed.resolve_dep_edges(direct_deps)?;
+        let mut resolved_deps = Vec::with_capacity(direct_deps.len());
+        for key in direct_deps.into_vec() {
+            let key = self.committed.intern_key(key);
+            let module = self
+                .committed
+                .module_for_key(key)
+                .filter(|module| self.committed.contains_module(*module))
+                .ok_or_else(|| {
+                    LinkerError::context(LinkContextError::KeyNotCommitted {
+                        id: self.committed.make_key_id(key),
+                    })
+                })?;
+            resolved_deps.push(module);
+        }
+        let direct_deps = resolved_deps.into_boxed_slice();
         let is_new = self
             .committed
             .module_for_key(slot)
             .is_none_or(|slot| !self.committed.contains_module(slot));
-        let module_slot = self.committed.insert(slot, module, direct_deps, 1);
+        let module_slot = self.committed.intern_module(slot);
+        self.committed.insert(module_slot, module, direct_deps, 1);
         if is_new {
             self.committed.extend_lifecycle(&[module_slot]);
         } else {
             self.committed
                 .module_mut(module_slot)
-                .present()
                 .expect("inserted module must be committed")
                 .acquire_root();
         }
@@ -431,6 +332,7 @@ where
         Ok(self
             .committed
             .add_alias(module_slot, alias)
+            .filter(|slot| self.committed.contains_module(*slot))
             .map(|slot| self.committed.make_module_id(slot)))
     }
 
@@ -451,21 +353,18 @@ where
     pub fn release(&mut self, lease: ModuleLease) -> Result<UnloadGroup<Arch, Tls>> {
         let id = lease.id();
         let slot = self.committed.module_slot(id)?;
-        let refs = require_module(id, self.committed.module_mut(slot))?
-            .release_root()
-            .expect("module lease must represent a direct acquisition");
+        let refs = require_module(id, self.committed.module_mut(slot))?.release_root();
         if refs != 0 {
             return Ok(UnloadGroup::new(Vec::new()));
         }
 
-        let mut reachable = BTreeSet::new();
+        let mut reachable = EntitySet::default();
         let mut pending = self
             .committed
-            .load_order()
+            .lifecycle()
             .filter(|slot| {
                 self.committed
                     .module(*slot)
-                    .present()
                     .is_some_and(|module| module.root_count() != 0)
             })
             .collect::<Vec<_>>();
@@ -476,32 +375,30 @@ where
             }
             let module_id = self.committed.make_module_id(slot);
             let module = require_module(module_id, self.committed.module(slot))?;
-            pending.extend(module.direct_deps().iter().map(|edge| edge.module()));
+            pending.extend(module.direct_deps());
         }
 
-        let unreachable = self
-            .committed
-            .load_order()
-            .filter(|slot| !reachable.contains(slot))
-            .count();
         let unload_order = self
             .committed
             .lifecycle()
             .rev()
-            .filter(|slot| !reachable.contains(slot))
+            .filter(|slot| !reachable.contains(*slot))
             .collect::<Vec<_>>();
-        debug_assert_eq!(unload_order.len(), unreachable);
-
-        let context = self.committed.context();
         let mut modules = Vec::with_capacity(unload_order.len());
         for slot in unload_order {
-            let module_id = self.committed.make_module_id(slot);
-            let (module, direct_deps) = self.committed.take(slot);
-            modules.push(UnloadedModule::new(
-                module_id,
-                module,
-                DirectDeps::new(context, direct_deps),
-            ));
+            let id = self.committed.make_module_id(slot);
+            let direct_deps = self
+                .committed
+                .module(slot)
+                .expect("lifecycle order must refer to a committed module")
+                .direct_deps()
+                .iter()
+                .copied()
+                .map(|slot| self.committed.make_module_id(slot))
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            let module = self.committed.take(slot);
+            modules.push(UnloadedModule::new(id, module, direct_deps));
         }
         self.committed.prune_removed();
         Ok(UnloadGroup::new(modules))
@@ -510,14 +407,8 @@ where
     /// Returns the breadth-first dependency scope rooted at `root`.
     pub fn dependency_scope(&self, root: ModuleId) -> Result<Vec<ModuleId>> {
         let root_slot = self.committed.module_slot(root)?;
-        if !self.committed.contains_module(root_slot) {
-            return Err(
-                LinkerError::context(LinkContextError::ModuleNotCommitted { id: root }).into(),
-            );
-        }
-
         let mut scope = Vec::new();
-        let mut visited = BTreeSet::new();
+        let mut visited = EntitySet::default();
         let mut queue = VecDeque::new();
         visited.insert(root_slot);
         queue.push_back(root_slot);
@@ -527,8 +418,7 @@ where
             let module = require_module(id, self.committed.module(slot))?;
 
             scope.push(id);
-            for dep in module.direct_deps().iter().copied() {
-                let dep = dep.module();
+            for &dep in module.direct_deps() {
                 let dep_id = self.committed.make_module_id(dep);
                 require_module(dep_id, self.committed.module(dep))?;
                 if visited.insert(dep) {
@@ -560,7 +450,9 @@ where
 
         let mapped = copy_import_closure(self, source, &[source_root])?;
 
-        let root = mapped[&source_root];
+        let root = *mapped
+            .get(source_root)
+            .expect("imported root must have a target slot");
         let id = self.committed.make_module_id(root);
         require_module(id, self.committed.module_mut(root))?.acquire_root();
         Ok(ModuleLease::new(id))
@@ -585,14 +477,15 @@ where
                 source
                     .committed
                     .module(*slot)
-                    .present()
                     .is_some_and(|module| module.root_count() != 0)
             })
             .collect::<Vec<_>>();
         let mapped = copy_import_closure(self, source, &roots)?;
         let mut imported = Vec::with_capacity(roots.len());
         for root in roots {
-            let root = mapped[&root];
+            let root = *mapped
+                .get(root)
+                .expect("imported root must have a target slot");
             let id = self.committed.make_module_id(root);
             require_module(id, self.committed.module_mut(root))?.acquire_root();
             imported.push(ModuleLease::new(id));
@@ -605,12 +498,12 @@ where
 mod tests {
     use super::LinkContext;
     use crate::{
-        Error, Result,
+        Error, LinkContextError, LinkerError, Result,
         arch::NativeArch,
         image::{
             Module, ModuleHandle, ModuleScopeBuilder, ModuleState, SymbolExports, SyntheticModule,
         },
-        linker::{KeyId, ModuleId},
+        linker::ModuleId,
         memory::ImageMemory,
         relocation::RelocationArch,
         runtime::DomainId,
@@ -718,7 +611,7 @@ mod tests {
     fn direct_deps<K: Clone + Ord>(
         context: &LinkContext<K, NativeArch>,
         id: ModuleId,
-    ) -> Vec<(KeyId, ModuleId)> {
+    ) -> Vec<ModuleId> {
         context
             .direct_deps(id)
             .expect("direct deps should resolve")
@@ -766,6 +659,35 @@ mod tests {
 
         drop(unloaded);
         assert_eq!(calls.lock().as_slice(), &["removed"]);
+    }
+
+    #[test]
+    fn reload_invalidates_old_module_id() {
+        let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let first = context
+            .insert("module", SyntheticModule::empty("first"), Box::new([]))
+            .unwrap();
+        let first_id = first.id();
+        let key_id = context.key_id(&"module").unwrap();
+
+        drop(context.release(first).unwrap());
+        assert!(!context.contains_module(first_id).unwrap());
+        assert_eq!(context.module_id(&"module"), None);
+
+        let second = context
+            .insert("module", SyntheticModule::empty("second"), Box::new([]))
+            .unwrap();
+        assert_ne!(second.id(), first_id);
+        assert_eq!(context.key_id(&"module"), Some(key_id));
+        assert_eq!(context.module_id(&"module"), Some(second.id()));
+        let error = match context.get(first_id) {
+            Ok(_) => panic!("stale module id should fail"),
+            Err(error) => error,
+        };
+        let Error::Linker(LinkerError::Context { reason }) = error else {
+            panic!("unexpected stale module error: {error}");
+        };
+        assert!(matches!(*reason, LinkContextError::StaleModuleId { id } if id == first_id));
     }
 
     #[test]
@@ -871,6 +793,7 @@ mod tests {
         assert!(context.contains_module(shared_id).unwrap());
 
         let unloaded = context.release(second).unwrap();
+        assert_eq!(unloaded.modules()[0].direct_deps(), [shared_id]);
         assert_eq!(
             unloaded
                 .modules()
@@ -940,7 +863,7 @@ mod tests {
         assert!(context.resolve_key(alias_id).unwrap().is_some());
         assert_eq!(context.key_id("alias"), Some(alias_id));
         assert_eq!(context.resolve_key(alias_id).unwrap(), Some(replacement_id));
-        assert_eq!(direct_deps(&context, root_id), [(alias_id, canonical_id)]);
+        assert_eq!(direct_deps(&context, root_id), [canonical_id]);
         assert_eq!(
             context
                 .dependency_scope(root_id)
@@ -1012,18 +935,11 @@ mod tests {
                 Box::new(["new"]),
             )
             .expect("failed to replace root module");
-        let new_dep = context
-            .key_id(&"new")
-            .expect("new dependency should be interned");
-
         assert_eq!(replaced.id(), root_id);
         assert_eq!(context.key_id(&"root"), Some(root_key));
         assert_eq!(context.resolve_key(root_key).unwrap(), Some(root_id));
         assert_eq!(context.module_key(root_id).unwrap(), &"root");
-        assert_eq!(
-            direct_deps(&context, root_id),
-            [(new_dep, new_dep_module_id)]
-        );
+        assert_eq!(direct_deps(&context, root_id), [new_dep_module_id]);
     }
 
     #[test]
@@ -1045,14 +961,10 @@ mod tests {
         let replaced = context
             .insert("alias", SyntheticModule::empty("alias"), Box::new(["dep"]))
             .expect("failed to replace alias target");
-        let dep = context
-            .key_id(&"dep")
-            .expect("dependency should be interned");
-
         assert_eq!(replaced.id(), root_id);
         assert_eq!(context.resolve_key(alias).unwrap(), Some(root_id));
         assert_eq!(context.module_key(root_id).unwrap(), &"root");
-        assert_eq!(direct_deps(&context, root_id), [(dep, dep_module_id)]);
+        assert_eq!(direct_deps(&context, root_id), [dep_module_id]);
     }
 
     #[test]
@@ -1069,9 +981,6 @@ mod tests {
         source
             .add_alias(canonical_id, "alias")
             .expect("failed to add alias");
-        let alias = source
-            .key_id(&"alias")
-            .expect("dependency key should be interned before root insertion");
         let root = source
             .insert("root", SyntheticModule::empty("root"), Box::new(["alias"]))
             .expect("failed to insert root module");
@@ -1095,7 +1004,6 @@ mod tests {
         let target_root = target
             .module_id("root")
             .expect("root module should be copied");
-        let target_alias = target.key_id(&"alias").expect("alias key should be copied");
         let target_canonical = target
             .module_id("canonical")
             .expect("canonical key should be copied");
@@ -1103,7 +1011,7 @@ mod tests {
             .module_id("replacement")
             .expect("replacement key should be copied");
 
-        assert_eq!(direct_deps(&source, root_id), [(alias, canonical_id)]);
+        assert_eq!(direct_deps(&source, root_id), [canonical_id]);
         assert_eq!(
             source
                 .dependency_scope(root_id)
@@ -1111,10 +1019,7 @@ mod tests {
                 .as_slice(),
             &[root_id, canonical_id]
         );
-        assert_eq!(
-            direct_deps(&target, target_root),
-            [(target_alias, target_canonical)]
-        );
+        assert_eq!(direct_deps(&target, target_root), [target_canonical]);
         assert_eq!(target.module_id("alias"), None);
         assert!(target.contains_module(target_replacement).unwrap());
         assert_eq!(

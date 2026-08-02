@@ -2,12 +2,13 @@ use super::{
     resolver::{
         DependencyOwner, DependencyRequest, KeyResolver, ResolvedKey, RootRequest, SearchOwner,
     },
-    session::{GraphEntry, ModuleEntry, ResolveSession},
-    storage::{CommittedStorage, KeySlot},
+    session::ResolveSession,
+    storage::{CommittedStorage, ModuleSlot},
 };
 use crate::{
     LinkResolverError, LinkerError, LoaderRun, ParsePhdrError, Result,
     arch::NativeArch,
+    entity::EntitySet,
     image::{ModuleHandle, RawDynamic, ScannedDynamic, ScannedElf},
     memory::{HostRegion, RegionAccess},
     observer::{LinkerObserver, LoadObserver},
@@ -16,46 +17,14 @@ use crate::{
     runtime::CodeExecutor,
     tls::TlsResolver,
 };
-use alloc::{borrow::ToOwned, boxed::Box, collections::BTreeSet, vec::Vec};
+use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
 use core::borrow::Borrow;
 
-fn walk_breadth_first<K, E, F>(queue: &mut Vec<K>, mut visit: F) -> core::result::Result<(), E>
-where
-    K: Clone,
-    F: FnMut(&K, &mut Vec<K>) -> core::result::Result<(), E>,
-{
-    let mut cursor = 0;
-
-    while cursor < queue.len() {
-        let key = queue[cursor].clone();
-        cursor += 1;
-        visit(&key, queue)?;
+#[inline]
+fn push_dep(deps: &mut Vec<ModuleSlot>, dep: ModuleSlot) {
+    if !deps.contains(&dep) {
+        deps.push(dep);
     }
-
-    Ok(())
-}
-
-fn extend_breadth_first<K, E, F>(
-    group_order: &mut Vec<K>,
-    root: K,
-    mut direct_deps: F,
-) -> core::result::Result<(), E>
-where
-    K: Clone + Ord,
-    F: FnMut(&K) -> core::result::Result<Vec<K>, E>,
-{
-    let mut visited = BTreeSet::new();
-    visited.insert(root.clone());
-    group_order.push(root);
-
-    walk_breadth_first(group_order, |key, queue| {
-        for dep_key in direct_deps(key)? {
-            if visited.insert(dep_key.clone()) {
-                queue.push(dep_key);
-            }
-        }
-        Ok(())
-    })
 }
 
 pub(crate) struct ResolveContext<
@@ -97,7 +66,7 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn contains_pending(&self, slot: KeySlot) -> bool {
+    pub(crate) fn contains_pending(&self, slot: ModuleSlot) -> bool {
         self.session.contains_pending(slot)
     }
 
@@ -107,43 +76,60 @@ where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        self.pending_or_committed(key).is_some()
+        self.known_module(key).is_some()
     }
 
-    fn pending_or_committed<Q>(&self, key: &Q) -> Option<KeySlot>
+    fn ensure_new<Q>(&self, key: &Q) -> Result<()>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let slot = self.committed.key_slot_for(key)?;
-        (self.session.contains_pending(slot)
-            || self
-                .committed
-                .module_for_key(slot)
-                .is_some_and(|slot| self.committed.contains_module(slot)))
-        .then_some(slot)
+        if self.contains_key(key) {
+            return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
+        }
+        Ok(())
     }
 
-    fn stage_module_handle(
+    fn known_module<Q>(&self, key: &Q) -> Option<ModuleSlot>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let key = self.committed.key_slot_for(key)?;
+        let module = self.committed.module_for_key(key)?;
+        (self.session.contains_pending(module) || self.committed.contains_module(module))
+            .then_some(module)
+    }
+
+    fn stage_dynamic(&mut self, key: K, payload: P) -> ModuleSlot {
+        let key = self.committed.intern_key(key);
+        let slot = self.committed.intern_module(key);
+        let generation = self.committed.generation(slot);
+        self.session.stage_dynamic(slot, generation, payload);
+        slot
+    }
+
+    fn stage_module(
         &mut self,
         key: K,
         module: ModuleHandle<Arch, Tls>,
-        direct_deps: Box<[KeySlot]>,
-    ) -> Result<KeySlot> {
+        direct_deps: Box<[ModuleSlot]>,
+    ) -> Result<ModuleSlot> {
         self.committed.ensure_domain(module.domain_id())?;
-        let slot = self.intern_key(key);
+        let key = self.committed.intern_key(key);
+        let slot = self.committed.intern_module(key);
+        let generation = self.committed.generation(slot);
         self.session
-            .module_handles
-            .insert(slot, ModuleEntry::new(module, direct_deps));
+            .stage_module(slot, generation, module, direct_deps);
         Ok(slot)
     }
 
-    fn existing_key<Q>(&self, key: &Q) -> Result<KeySlot>
+    fn existing<Q>(&mut self, key: &Q) -> Result<ModuleSlot>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        self.pending_or_committed(key)
+        self.known_module(key)
             .ok_or_else(|| LinkerError::resolver(LinkResolverError::ExistingKeyMissing).into())
     }
 
@@ -152,7 +138,7 @@ where
         deps: Vec<ResolvedKey<'cfg, K, Arch, Tls>>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         mut stage: F,
-    ) -> Result<Box<[KeySlot]>>
+    ) -> Result<Box<[ModuleSlot]>>
     where
         D: Send + Sync + 'static,
         Obs: LoadObserver<D, Arch>,
@@ -161,74 +147,30 @@ where
             &mut Self,
             ResolvedKey<'cfg, K, Arch, Tls>,
             &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
-        ) -> Result<KeySlot>,
+        ) -> Result<ModuleSlot>,
     {
         let mut direct_deps = Vec::with_capacity(deps.len());
         for dep in deps {
-            let dep_id = stage(self, dep, loader)?;
-            if !direct_deps.contains(&dep_id) {
-                direct_deps.push(dep_id);
-            }
+            push_dep(&mut direct_deps, stage(self, dep, loader)?);
         }
         Ok(direct_deps.into_boxed_slice())
     }
 
-    fn intern_key(&mut self, key: K) -> KeySlot {
-        self.committed.intern_key(key)
-    }
-
-    fn key(&self, slot: KeySlot) -> &K {
-        self.committed.key(slot)
-    }
-
-    fn known_direct_deps(&self, slot: KeySlot) -> Option<Vec<KeySlot>> {
-        if let Some(entry) = self.session.dynamics.get(&slot) {
-            return entry.direct_deps().map(<[KeySlot]>::to_vec);
-        }
-        if let Some(entry) = self.session.module_handles.get(&slot) {
-            return Some(entry.direct_deps().to_vec());
+    fn known_direct_deps(&self, slot: ModuleSlot) -> Option<&[ModuleSlot]> {
+        if let Some(direct_deps) = self.session.direct_deps(slot) {
+            return Some(direct_deps);
         }
 
-        if let Some(module_slot) = self.committed.module_for_key(slot) {
-            let module = self.committed.module(module_slot).present()?;
-            return Some(module.direct_deps().iter().map(|edge| edge.key()).collect());
-        }
-
-        None
+        self.committed
+            .module(slot)
+            .map(|module| module.direct_deps())
     }
 
-    fn owner(&self, slot: KeySlot) -> &dyn DependencyOwner {
+    fn owner(&self, slot: ModuleSlot) -> &dyn DependencyOwner {
         self.session
-            .dynamics
-            .get(&slot)
+            .dynamic_payload(slot)
             .expect("dependency owner must be present for a staged dynamic module")
-            .payload() as &dyn DependencyOwner
-    }
-
-    fn set_direct_deps(&mut self, slot: KeySlot, direct_deps: Vec<KeySlot>) {
-        let entry = self
-            .session
-            .dynamics
-            .get_mut(&slot)
-            .expect("session entry must exist for staged key");
-        entry.set_direct_deps(direct_deps);
-    }
-
-    fn resolve_dependency_edge<'cfg, Q>(
-        &self,
-        slot: KeySlot,
-        needed_index: usize,
-        resolver: &impl KeyResolver<K, Arch, Q, Tls>,
-    ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
-    where
-        K: 'cfg + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-    {
-        let contains_key = |key: &Q| self.contains_key(key);
-        let owner = self.owner(slot);
-        let owner_key = self.key(slot);
-        let req = DependencyRequest::new(owner_key, owner, needed_index, &contains_key);
-        resolver.resolve_dependency(&req)
+            as &dyn DependencyOwner
     }
 
     pub(crate) fn resolve_root<'cfg, Q>(
@@ -248,11 +190,11 @@ where
 
     fn direct_deps_for<'cfg, D, Obs, F, M, Exec, Q>(
         &mut self,
-        slot: KeySlot,
+        slot: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         resolver: &impl KeyResolver<K, Arch, Q, Tls>,
         stage: &mut F,
-    ) -> Result<Vec<KeySlot>>
+    ) -> Result<&[ModuleSlot]>
     where
         D: Send + Sync + 'static,
         K: 'cfg + Borrow<Q>,
@@ -265,28 +207,34 @@ where
             &mut Self,
             ResolvedKey<'cfg, K, Arch, Tls>,
             &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
-        ) -> Result<KeySlot>,
+        ) -> Result<ModuleSlot>,
     {
-        if let Some(direct_deps) = self.known_direct_deps(slot) {
-            return Ok(direct_deps);
+        if !self.session.contains_pending(slot) && self.committed.contains_module(slot) {
+            self.session.observe(slot, self.committed.generation(slot));
         }
-
-        let needed_len = self.owner(slot).needed_len();
-        let mut direct_deps = Vec::with_capacity(needed_len);
-        for idx in 0..needed_len {
-            let key = self.resolve_dependency_edge::<Q>(slot, idx, resolver)?;
-            let dep_id = stage(self, key, loader)?;
-            if !direct_deps.contains(&dep_id) {
-                direct_deps.push(dep_id);
+        if self.known_direct_deps(slot).is_none() {
+            let needed_len = self.owner(slot).needed_len();
+            let mut direct_deps = Vec::with_capacity(needed_len);
+            for idx in 0..needed_len {
+                let key = {
+                    let contains_key = |key: &Q| self.contains_key(key);
+                    let owner = self.owner(slot);
+                    let owner_key = self.committed.key(self.committed.entry_key(slot));
+                    let req = DependencyRequest::new(owner_key, owner, idx, &contains_key);
+                    resolver.resolve_dependency(&req)?
+                };
+                push_dep(&mut direct_deps, stage(self, key, loader)?);
             }
+            self.session.set_direct_deps(slot, direct_deps);
         }
-        self.set_direct_deps(slot, direct_deps.clone());
-        Ok(direct_deps)
+        Ok(self
+            .known_direct_deps(slot)
+            .expect("resolved module must retain its direct dependencies"))
     }
 
     fn resolve_dependency_graph_with<'cfg, D, Obs, F, M, Exec, Q>(
         &mut self,
-        root: KeySlot,
+        root: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         resolver: &impl KeyResolver<K, Arch, Q, Tls>,
         mut stage: F,
@@ -303,13 +251,23 @@ where
             &mut Self,
             ResolvedKey<'cfg, K, Arch, Tls>,
             &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
-        ) -> Result<KeySlot>,
+        ) -> Result<ModuleSlot>,
     {
+        let mut visited = EntitySet::default();
+        visited.insert(root);
         let mut group_order = Vec::new();
-        extend_breadth_first(&mut group_order, root, |key| {
-            self.direct_deps_for(*key, loader, resolver, &mut stage)
-        })?;
-        self.session.group_order = group_order;
+        group_order.push(root);
+        let mut cursor = 0;
+        while cursor < group_order.len() {
+            let slot = group_order[cursor];
+            cursor += 1;
+            for &dep in self.direct_deps_for(slot, loader, resolver, &mut stage)? {
+                if visited.insert(dep) {
+                    group_order.push(dep);
+                }
+            }
+        }
+        self.session.set_group_order(group_order);
         Ok(())
     }
 }
@@ -326,7 +284,7 @@ where
         &mut self,
         resolved: ResolvedKey<'cfg, K, Arch, Tls>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
-    ) -> Result<KeySlot>
+    ) -> Result<ModuleSlot>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
@@ -337,32 +295,25 @@ where
         Exec: CodeExecutor<Arch> + Clone,
     {
         match resolved {
-            ResolvedKey::Existing(key) => self.existing_key(key.borrow()),
+            ResolvedKey::Existing(key) => self.existing(key.borrow()),
             ResolvedKey::Load { key, reader } => {
-                if self.contains_key(key.borrow()) {
-                    return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
-                }
+                self.ensure_new(key.borrow())?;
                 let raw = loader.load_dynamic(reader)?;
-                let slot = self.intern_key(key);
-                self.session.dynamics.insert(slot, GraphEntry::new(raw));
-                Ok(slot)
+                Ok(self.stage_dynamic(key, raw))
             }
             ResolvedKey::Module { key, module, deps } => {
-                if self.contains_key(key.borrow()) {
-                    return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
-                }
-
+                self.ensure_new(key.borrow())?;
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
                     ctx.stage::<Obs, M, Exec, Q>(dep, loader)
                 })?;
-                self.stage_module_handle(key, module, direct_deps)
+                self.stage_module(key, module, direct_deps)
             }
         }
     }
 
     pub(crate) fn resolve_dependency_graph<'cfg, Obs, M, Exec, Q>(
         &mut self,
-        root: KeySlot,
+        root: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         resolver: &impl KeyResolver<K, Arch, Q, Tls>,
     ) -> Result<()>
@@ -391,7 +342,7 @@ where
         &mut self,
         resolved: ResolvedKey<'static, K, Arch, Tls>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
-    ) -> Result<KeySlot>
+    ) -> Result<ModuleSlot>
     where
         D: Send + Sync + 'static,
         K: 'static + Borrow<Q>,
@@ -403,34 +354,27 @@ where
         Exec: CodeExecutor<Arch> + Clone,
     {
         match resolved {
-            ResolvedKey::Existing(key) => self.existing_key(key.borrow()),
+            ResolvedKey::Existing(key) => self.existing(key.borrow()),
             ResolvedKey::Load { key, reader } => {
-                if self.contains_key(key.borrow()) {
-                    return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
-                }
+                self.ensure_new(key.borrow())?;
                 let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
                     return Err(ParsePhdrError::MissingDynamicSection.into());
                 };
-                let slot = self.intern_key(key);
-                self.session.dynamics.insert(slot, GraphEntry::new(module));
-                Ok(slot)
+                Ok(self.stage_dynamic(key, module))
             }
             ResolvedKey::Module { key, module, deps } => {
-                if self.contains_key(key.borrow()) {
-                    return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
-                }
-
+                self.ensure_new(key.borrow())?;
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
                     ctx.stage::<D, Obs, M, Exec, Q>(dep, loader)
                 })?;
-                self.stage_module_handle(key, module, direct_deps)
+                self.stage_module(key, module, direct_deps)
             }
         }
     }
 
     pub(crate) fn resolve_dependency_graph<D, Obs, M, Exec, Q>(
         &mut self,
-        root: KeySlot,
+        root: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         resolver: &impl KeyResolver<K, Arch, Q, Tls>,
     ) -> Result<()>
@@ -447,32 +391,5 @@ where
         self.resolve_dependency_graph_with(root, loader, resolver, |ctx, resolved, loader| {
             ctx.stage(resolved, loader)
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::walk_breadth_first;
-    use alloc::{collections::BTreeMap, vec, vec::Vec};
-
-    #[test]
-    fn breadth_first_walk_visits_siblings_before_descendants() {
-        let graph = BTreeMap::from([
-            ("A", vec!["B", "C"]),
-            ("B", vec!["D"]),
-            ("C", Vec::new()),
-            ("D", Vec::new()),
-        ]);
-        let mut queue = vec!["A"];
-        let mut visited = Vec::new();
-
-        walk_breadth_first(&mut queue, |key, queue| {
-            visited.push(*key);
-            queue.extend(graph.get(key).into_iter().flatten().copied());
-            Ok::<_, ()>(())
-        })
-        .unwrap();
-
-        assert_eq!(visited, vec!["A", "B", "C", "D"]);
     }
 }

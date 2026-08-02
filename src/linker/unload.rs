@@ -1,13 +1,13 @@
-use super::{context::DirectDeps, storage::ModuleId};
+use super::storage::ModuleId;
 use crate::{arch::NativeArch, image::ModuleHandle, relocation::RelocationArch, tls::TlsResolver};
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
 
 /// One module detached from a link context by [`super::LinkContext::release`].
 pub struct UnloadedModule<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     id: ModuleId,
     module: ModuleHandle<Arch, Tls>,
-    direct_deps: DirectDeps,
+    direct_deps: Box<[ModuleId]>,
 }
 
 impl<Arch, Tls> UnloadedModule<Arch, Tls>
@@ -19,7 +19,7 @@ where
     pub(super) const fn new(
         id: ModuleId,
         module: ModuleHandle<Arch, Tls>,
-        direct_deps: DirectDeps,
+        direct_deps: Box<[ModuleId]>,
     ) -> Self {
         Self {
             id,
@@ -42,7 +42,7 @@ where
 
     /// Returns the module's former direct dependencies.
     #[inline]
-    pub const fn direct_deps(&self) -> &DirectDeps {
+    pub const fn direct_deps(&self) -> &[ModuleId] {
         &self.direct_deps
     }
 }

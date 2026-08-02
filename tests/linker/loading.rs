@@ -148,12 +148,8 @@ fn commits_resolver_modules() {
         .unwrap()
         .expect("resolver-provided dependency should be committed into the context");
     assert_eq!(context.get(dep_module_id).unwrap().name(), "visible_dep.so");
-    let direct_deps = context
-        .direct_deps(root_id)
-        .unwrap()
-        .map(|(key, module)| (*context.key(key).unwrap(), module))
-        .collect::<Vec<_>>();
-    assert_eq!(direct_deps, vec![(DEP_KEY, dep_module_id)]);
+    let direct_deps = context.direct_deps(root_id).unwrap().collect::<Vec<_>>();
+    assert_eq!(direct_deps, vec![dep_module_id]);
 }
 
 #[test]
@@ -184,12 +180,8 @@ fn scan_loads_synthetic_dependency() {
     assert_eq!(dep_module.name(), "dep");
     assert!(dep_module.downcast_ref::<SyntheticModule>().is_some());
 
-    let direct_deps = context
-        .direct_deps(root_id)
-        .unwrap()
-        .map(|(key, module)| (*context.key(key).unwrap(), module))
-        .collect::<Vec<_>>();
-    assert_eq!(direct_deps, vec![("dep", dep_module_id)]);
+    let direct_deps = context.direct_deps(root_id).unwrap().collect::<Vec<_>>();
+    assert_eq!(direct_deps, vec![dep_module_id]);
 }
 
 #[test]
@@ -210,6 +202,69 @@ fn unresolved_dependency_does_not_commit() {
         Error::Linker(LinkerError::UnresolvedDependency(_))
     ));
     assert!(!context.contains_key(&"root"));
+}
+
+#[test]
+fn publish_rejects_changed_module() {
+    let linker = Linker::new().resolver(SingleBinaryResolver {
+        key: "root",
+        name: "pending.so",
+        data: fixtures().provider,
+    });
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut run = linker.run();
+    let prepared = run
+        .prepare_load(&mut context, "root")
+        .expect("failed to prepare root");
+    let relocated = run.relocate(prepared).expect("failed to relocate root");
+    let _replacement = context
+        .insert("root", SyntheticModule::empty("replacement"), Box::new([]))
+        .expect("failed to publish competing root");
+
+    let error = relocated
+        .publish(&mut context)
+        .expect_err("stale transaction should not replace a committed module");
+    let Error::Linker(LinkerError::Context { reason }) = error else {
+        panic!("unexpected publication error: {error}");
+    };
+    assert!(matches!(*reason, LinkContextError::ModuleChanged { .. }));
+}
+
+#[test]
+fn publish_rejects_reloaded_dependency() {
+    let loader = Loader::new();
+    let dep = Relocator::new()
+        .run(
+            loader
+                .load_dylib(ElfBinary::new("existing_dep.so", fixtures().provider))
+                .expect("failed to load dependency"),
+        )
+        .relocate()
+        .expect("failed to relocate dependency");
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let dep_lease = context
+        .insert(DEP_KEY, dep.clone(), Box::new([]))
+        .expect("failed to insert dependency");
+    let linker = Linker::new().resolver(ExistingDependencyResolver {
+        root_data: fixtures().dependent,
+    });
+    let mut run = linker.run();
+    let prepared = run
+        .prepare_load(&mut context, "root")
+        .expect("failed to prepare root");
+    let relocated = run.relocate(prepared).expect("failed to relocate root");
+
+    drop(context.release(dep_lease).unwrap());
+    let _new_dep = context
+        .insert(DEP_KEY, dep, Box::new([]))
+        .expect("failed to reload dependency");
+    let error = relocated
+        .publish(&mut context)
+        .expect_err("dependency generation changed before publication");
+    let Error::Linker(LinkerError::Context { reason }) = error else {
+        panic!("unexpected publication error: {error}");
+    };
+    assert!(matches!(*reason, LinkContextError::ModuleChanged { .. }));
 }
 
 #[test]

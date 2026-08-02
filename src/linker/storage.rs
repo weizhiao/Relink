@@ -65,17 +65,30 @@ impl Display for KeyId {
     }
 }
 
-/// Stable id for a committed module stored in a [`LinkContext`](super::LinkContext).
+/// Identity of one committed module incarnation in a
+/// [`LinkContext`](super::LinkContext).
+///
+/// An id becomes stale after its module is unloaded, even if the same key is
+/// loaded again later.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ModuleId {
     context: ContextId,
     slot: ModuleSlot,
+    generation: u32,
 }
 
 impl ModuleId {
     #[inline]
-    pub(in crate::linker) const fn from_slot(context: ContextId, slot: ModuleSlot) -> Self {
-        Self { context, slot }
+    pub(in crate::linker) const fn from_slot(
+        context: ContextId,
+        slot: ModuleSlot,
+        generation: u32,
+    ) -> Self {
+        Self {
+            context,
+            slot,
+            generation,
+        }
     }
 
     #[inline]
@@ -87,7 +100,11 @@ impl ModuleId {
 impl Display for ModuleId {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} in link context {}", self.slot.0, self.context)
+        write!(
+            f,
+            "{}:{} in link context {}",
+            self.slot.0, self.generation, self.context
+        )
     }
 }
 
@@ -117,57 +134,13 @@ impl ModuleLease {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::linker) enum EntryState<T> {
-    Absent,
-    Removed,
-    Present(T),
-}
-
-impl<T> EntryState<T> {
-    #[inline]
-    pub(in crate::linker) fn is_present(&self) -> bool {
-        matches!(self, Self::Present(_))
-    }
-
-    #[inline]
-    pub(in crate::linker) fn present(self) -> Option<T> {
-        match self {
-            Self::Present(value) => Some(value),
-            Self::Absent | Self::Removed => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::linker) struct DepEdge {
-    key: KeySlot,
-    module: ModuleSlot,
-}
-
-impl DepEdge {
-    #[inline]
-    pub(in crate::linker) fn new(key: KeySlot, module: ModuleSlot) -> Self {
-        Self { key, module }
-    }
-
-    #[inline]
-    pub(in crate::linker) fn key(self) -> KeySlot {
-        self.key
-    }
-
-    #[inline]
-    pub(in crate::linker) fn module(self) -> ModuleSlot {
-        self.module
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(in crate::linker) struct CommittedModule<'a, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
+    entry_key: KeySlot,
     entry: &'a StoredEntry<Arch, Tls>,
 }
 
@@ -178,7 +151,7 @@ where
 {
     #[inline]
     pub(in crate::linker) fn entry_key(&self) -> KeySlot {
-        self.entry.entry_key
+        self.entry_key
     }
 
     #[inline]
@@ -187,7 +160,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn direct_deps(&self) -> &'a [DepEdge] {
+    pub(crate) fn direct_deps(&self) -> &'a [ModuleSlot] {
         &self.entry.direct_deps
     }
 
@@ -220,10 +193,13 @@ where
     }
 
     #[inline]
-    pub(crate) fn release_root(&mut self) -> Option<usize> {
-        let count = self.entry.roots.checked_sub(1)?;
-        self.entry.roots = count;
-        Some(count)
+    pub(crate) fn release_root(&mut self) -> usize {
+        self.entry.roots = self
+            .entry
+            .roots
+            .checked_sub(1)
+            .expect("module lease must represent a direct acquisition");
+        self.entry.roots
     }
 }
 
@@ -237,7 +213,7 @@ pub(crate) struct CommittedStorage<
     key_slots: BTreeMap<K, KeySlot>,
     keys: PrimaryMap<KeySlot, K>,
     key_modules: SecondaryMap<KeySlot, ModuleSlot>,
-    entries: PrimaryMap<ModuleSlot, Option<StoredEntry<Arch, Tls>>>,
+    entries: PrimaryMap<ModuleSlot, ModuleCell<Arch, Tls>>,
     lifecycle: Vec<ModuleSlot>,
 }
 
@@ -280,7 +256,7 @@ where
 
     #[inline]
     pub(in crate::linker) fn make_module_id(&self, slot: ModuleSlot) -> ModuleId {
-        ModuleId::from_slot(self.context, slot)
+        ModuleId::from_slot(self.context, slot, self.entries[slot].generation)
     }
 
     #[inline]
@@ -298,26 +274,54 @@ where
 
     #[inline]
     pub(in crate::linker) fn module_slot(&self, id: ModuleId) -> Result<ModuleSlot> {
-        (id.context == self.context)
-            .then_some(id.slot)
-            .ok_or_else(|| {
+        if id.context != self.context {
+            return Err(
                 LinkerError::context(LinkContextError::ModuleContextMismatch {
                     id,
                     expected: self.context,
                 })
-                .into()
-            })
+                .into(),
+            );
+        }
+        self.entries
+            .get(id.slot)
+            .filter(|entry| entry.generation == id.generation)
+            .map(|_| id.slot)
+            .ok_or_else(|| LinkerError::context(LinkContextError::StaleModuleId { id }).into())
+    }
+
+    #[inline]
+    pub(in crate::linker) fn contains_id(&self, id: ModuleId) -> Result<bool> {
+        if id.context != self.context {
+            return Err(
+                LinkerError::context(LinkContextError::ModuleContextMismatch {
+                    id,
+                    expected: self.context,
+                })
+                .into(),
+            );
+        }
+        Ok(self
+            .entries
+            .get(id.slot)
+            .is_some_and(|entry| entry.generation == id.generation && entry.entry.is_some()))
     }
 
     #[inline]
     pub(in crate::linker) fn module(
         &self,
         slot: ModuleSlot,
-    ) -> EntryState<CommittedModule<'_, Arch, Tls>> {
+    ) -> Option<CommittedModule<'_, Arch, Tls>> {
         match self.entries.get(slot) {
-            Some(Some(entry)) => EntryState::Present(CommittedModule { entry }),
-            Some(None) => EntryState::Removed,
-            None => EntryState::Absent,
+            Some(ModuleCell {
+                entry_key,
+                entry: Some(entry),
+                ..
+            }) => Some(CommittedModule {
+                entry_key: *entry_key,
+                entry,
+            }),
+            _ => None,
         }
     }
 
@@ -325,11 +329,12 @@ where
     pub(crate) fn module_mut(
         &mut self,
         slot: ModuleSlot,
-    ) -> EntryState<CommittedModuleMut<'_, Arch, Tls>> {
+    ) -> Option<CommittedModuleMut<'_, Arch, Tls>> {
         match self.entries.get_mut(slot) {
-            Some(Some(entry)) => EntryState::Present(CommittedModuleMut { entry }),
-            Some(None) => EntryState::Removed,
-            None => EntryState::Absent,
+            Some(ModuleCell {
+                entry: Some(entry), ..
+            }) => Some(CommittedModuleMut { entry }),
+            _ => None,
         }
     }
 
@@ -340,7 +345,19 @@ where
 
     #[inline]
     pub(in crate::linker) fn contains_module(&self, slot: ModuleSlot) -> bool {
-        self.module(slot).is_present()
+        self.entries
+            .get(slot)
+            .is_some_and(|cell| cell.entry.is_some())
+    }
+
+    #[inline]
+    pub(in crate::linker) fn generation(&self, slot: ModuleSlot) -> u32 {
+        self.entries[slot].generation
+    }
+
+    #[inline]
+    pub(in crate::linker) fn entry_key(&self, slot: ModuleSlot) -> KeySlot {
+        self.entries[slot].entry_key
     }
 }
 
@@ -381,47 +398,19 @@ where
 
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries.iter().all(|(_, entry)| entry.is_none())
+        self.lifecycle.is_empty()
     }
 
     #[inline]
     pub(crate) fn load_order(&self) -> impl DoubleEndedIterator<Item = ModuleSlot> + '_ {
         self.entries
             .iter()
-            .filter_map(|(slot, entry)| entry.as_ref().map(|_| slot))
+            .filter_map(|(slot, cell)| cell.entry.as_ref().map(|_| slot))
     }
 
     #[inline]
     pub(crate) fn lifecycle(&self) -> impl DoubleEndedIterator<Item = ModuleSlot> + '_ {
-        self.lifecycle
-            .iter()
-            .copied()
-            .filter(|slot| self.contains_module(*slot))
-    }
-
-    #[inline]
-    pub(crate) fn get_by_key(&self, slot: KeySlot) -> Option<&ModuleHandle<Arch, Tls>> {
-        let module_slot = self.module_for_key(slot)?;
-        self.module(module_slot)
-            .present()
-            .map(|module| module.handle())
-    }
-
-    pub(crate) fn resolve_dep_edges(&self, direct_deps: Box<[KeySlot]>) -> Result<Box<[DepEdge]>> {
-        direct_deps
-            .into_vec()
-            .into_iter()
-            .map(|key| {
-                let Some(module) = self.module_for_key(key) else {
-                    return Err(LinkerError::context(LinkContextError::KeyNotCommitted {
-                        id: self.make_key_id(key),
-                    })
-                    .into());
-                };
-                Ok(DepEdge::new(key, module))
-            })
-            .collect::<Result<Vec<_>>>()
-            .map(Vec::into_boxed_slice)
+        self.lifecycle.iter().copied()
     }
 }
 
@@ -463,58 +452,71 @@ where
         self.lifecycle.extend_from_slice(order);
     }
 
-    pub(crate) fn ensure_module_slot(&mut self, slot: KeySlot) -> ModuleSlot {
+    pub(crate) fn intern_module(&mut self, slot: KeySlot) -> ModuleSlot {
         if let Some(module_slot) = self.key_modules.get(slot).copied() {
             return module_slot;
         }
 
-        let module_slot = self.entries.push(None);
+        let module_slot = self.entries.push(ModuleCell {
+            entry_key: slot,
+            generation: 0,
+            entry: None,
+        });
         self.key_modules.insert(slot, module_slot);
         module_slot
     }
 
     pub(crate) fn insert(
         &mut self,
-        slot: KeySlot,
+        slot: ModuleSlot,
         module: ModuleHandle<Arch, Tls>,
-        direct_deps: Box<[DepEdge]>,
+        direct_deps: Box<[ModuleSlot]>,
         roots: usize,
-    ) -> ModuleSlot {
-        let module_slot = self.ensure_module_slot(slot);
-        let previous = self.entries[module_slot].as_ref();
-        let (entry_key, roots) = previous
-            .map(|entry| (entry.entry_key, entry.roots))
-            .unwrap_or((slot, roots));
-        self.entries[module_slot] = Some(StoredEntry {
-            entry_key,
+    ) {
+        let cell = &mut self.entries[slot];
+        let roots = cell.entry.as_ref().map_or(roots, |entry| entry.roots);
+        cell.entry = Some(StoredEntry {
             module,
             direct_deps,
             roots,
         });
-        module_slot
     }
 
     #[inline]
-    pub(crate) fn take(&mut self, slot: ModuleSlot) -> (ModuleHandle<Arch, Tls>, Box<[DepEdge]>) {
-        let removed = self.entries[slot]
+    pub(crate) fn take(&mut self, slot: ModuleSlot) -> ModuleHandle<Arch, Tls> {
+        let cell = &mut self.entries[slot];
+        let removed = cell
+            .entry
             .take()
             .expect("unload order must refer to a committed module");
-        (removed.module, removed.direct_deps)
+        cell.generation = cell
+            .generation
+            .checked_add(1)
+            .expect("module generation overflowed");
+        removed.module
     }
 
     pub(crate) fn prune_removed(&mut self) {
         let entries = &self.entries;
-        self.key_modules
-            .retain(|_, slot| entries.get(*slot).is_some_and(Option::is_some));
+        self.key_modules.retain(|key, slot| {
+            entries
+                .get(*slot)
+                .is_some_and(|cell| cell.entry.is_some() || cell.entry_key == key)
+        });
         self.lifecycle
-            .retain(|slot| entries.get(*slot).is_some_and(Option::is_some));
+            .retain(|slot| entries.get(*slot).is_some_and(|cell| cell.entry.is_some()));
     }
 }
 
-struct StoredEntry<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+struct ModuleCell<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     entry_key: KeySlot,
+    generation: u32,
+    entry: Option<StoredEntry<Arch, Tls>>,
+}
+
+struct StoredEntry<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     module: ModuleHandle<Arch, Tls>,
-    direct_deps: Box<[DepEdge]>,
+    direct_deps: Box<[ModuleSlot]>,
     roots: usize,
 }
 
@@ -527,7 +529,9 @@ where
         // ModuleHandle performs the release. Taking entries here only preserves
         // dependent-before-dependency finalization for modules without scopes.
         for slot in self.lifecycle.iter().rev().copied() {
-            let _ = self.entries.get_mut(slot).and_then(Option::take);
+            if let Some(cell) = self.entries.get_mut(slot) {
+                let _ = cell.entry.take();
+            }
         }
     }
 }

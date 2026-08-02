@@ -863,9 +863,19 @@ pub enum LinkContextError {
         /// The context that received the module id.
         expected: ContextId,
     },
-    /// A module id no longer resolves to committed state.
+    /// A module id refers to an earlier incarnation of its slot.
+    StaleModuleId {
+        /// The stale module id.
+        id: ModuleId,
+    },
+    /// A valid module id does not currently resolve to committed state.
     ModuleNotCommitted {
         /// The module id that could not be resolved.
+        id: ModuleId,
+    },
+    /// Module state changed after a load transaction was prepared.
+    ModuleChanged {
+        /// The stale module identity recorded by the transaction.
         id: ModuleId,
     },
     /// A key id does not resolve to a committed module.
@@ -891,7 +901,11 @@ impl Display for LinkContextError {
                 "module id {} was used with link context {}",
                 id, expected
             ),
+            Self::StaleModuleId { id } => write!(f, "module id {} is stale", id),
             Self::ModuleNotCommitted { id } => write!(f, "module id {} is not committed", id),
+            Self::ModuleChanged { id } => {
+                write!(f, "module id {} changed before publication", id)
+            }
             Self::KeyNotCommitted { id } => write!(f, "key id {} is not committed", id),
         }
     }
