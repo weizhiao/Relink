@@ -71,7 +71,7 @@ where
             observer,
             ..
         } = args;
-        scope.ensure_domain(self.core.domain_id())?;
+        scope.check_domain(self.core.domain_id())?;
         let resolver =
             SymbolResolver::new(&self.core, scope, symbols.as_deref(), self.core.symbolic());
         Self::simplify_symbols(
@@ -123,7 +123,7 @@ where
         let mut event = ObjectRelocatedEvent::new(
             &self.core,
             &self.sections,
-            self.symtab.view(),
+            &self.symtab,
             event_segments,
             initializer,
             finalizer,
@@ -192,7 +192,7 @@ where
         // The mandatory null symbol stays zero and never participates in lookup.
         for idx in 1..symbol_count {
             let value = {
-                let entry = symtab.symbol_idx(idx);
+                let entry = symtab.view().entry(idx);
                 let symbol = entry.symbol();
                 if symbol.symbol_type() == ElfSymbolType::FILE {
                     continue;
@@ -234,7 +234,7 @@ where
     fn default_exports(&self) -> ObjectExports<Arch::Layout> {
         let mut exports = ObjectExports::empty();
         for idx in 0..self.symtab.symbols().len() {
-            let entry = self.symtab.symbol_idx(idx);
+            let entry = self.symtab.view().entry(idx);
             let symbol = entry.symbol();
             if !symbol.is_exported() || self.symbol_uses_init_memory(symbol) {
                 continue;

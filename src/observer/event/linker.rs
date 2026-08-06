@@ -1,6 +1,6 @@
 use crate::{
     arch::NativeArch,
-    image::{ModuleScope, RawDynamic},
+    image::{LookupScope, ModuleScope, RawDynamic},
     memory::{HostRegion, RegionAccess},
     relocation::{BindingMode, RelocationArch},
     tls::TlsResolver,
@@ -14,7 +14,7 @@ pub struct LinkerRelocationEvent<
     Tls: TlsResolver<Arch> = (),
 > {
     raw: RawDynamic<D, Arch, R, Tls>,
-    scope: ModuleScope<Arch, Tls>,
+    scope: LookupScope<Arch, Tls>,
     binding: BindingMode,
 }
 
@@ -28,7 +28,7 @@ where
     pub(crate) fn new(raw: RawDynamic<D, Arch, R, Tls>, scope: &ModuleScope<Arch, Tls>) -> Self {
         Self {
             raw,
-            scope: scope.clone(),
+            scope: LookupScope::from_group(scope.clone()),
             binding: BindingMode::Default,
         }
     }
@@ -39,12 +39,12 @@ where
     }
 
     #[inline]
-    pub const fn scope(&self) -> &ModuleScope<Arch, Tls> {
+    pub const fn scope(&self) -> &LookupScope<Arch, Tls> {
         &self.scope
     }
 
     #[inline]
-    pub fn set_scope(&mut self, scope: ModuleScope<Arch, Tls>) {
+    pub fn set_scope(&mut self, scope: LookupScope<Arch, Tls>) {
         self.scope = scope;
     }
 
@@ -63,7 +63,7 @@ where
         self,
     ) -> (
         RawDynamic<D, Arch, R, Tls>,
-        ModuleScope<Arch, Tls>,
+        LookupScope<Arch, Tls>,
         BindingMode,
     ) {
         (self.raw, self.scope, self.binding)

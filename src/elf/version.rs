@@ -98,18 +98,11 @@ impl fmt::Debug for VersionIndexTable {
 }
 
 impl VersionIndexTable {
-    fn parse<R: RegionAccess>(
-        addr: VmAddr,
-        symbol_count: usize,
-        segments: &ElfSegments<R>,
-    ) -> Result<Self> {
-        let byte_len = symbol_count
-            .checked_mul(size_of::<u16>())
-            .ok_or(ParseDynamicError::AddressOverflow)?;
+    fn parse<R: RegionAccess>(addr: VmAddr, segments: &ElfSegments<R>) -> Result<Self> {
         let offset = addr
             .checked_offset_from(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
-        let entries = segments.read_view(offset, byte_len).ok_or(
+        let entries = segments.read_tail_view(offset).ok_or(
             ParseDynamicError::MalformedVersionTable {
                 detail: "DT_VERSYM table is outside mapped ELF segments or has invalid alignment",
             },
@@ -153,7 +146,6 @@ impl ELFVersion {
         version_ids_addr: Option<NonZeroUsize>,
         verneeds: Option<NonZeroUsize>,
         verdefs: Option<NonZeroUsize>,
-        symbol_count: usize,
         strtab: &ElfStringTable,
         segments: &ElfSegments<R>,
     ) -> Result<Option<Self>> {
@@ -161,8 +153,7 @@ impl ELFVersion {
             return Ok(None);
         };
 
-        let version_ids =
-            VersionIndexTable::parse(VmAddr::new(version_ids_addr.get()), symbol_count, segments)?;
+        let version_ids = VersionIndexTable::parse(VmAddr::new(version_ids_addr.get()), segments)?;
         let mut versions = Vec::new();
         versions.resize_with(2, || None);
 
@@ -506,7 +497,6 @@ mod tests {
             Some(fixture.versym),
             Some(fixture.verneed),
             Some(fixture.verdef),
-            4,
             &fixture.strtab,
             &fixture.segments,
         )

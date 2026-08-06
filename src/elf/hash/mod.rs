@@ -139,12 +139,14 @@ impl<L: ElfLayout> HashTable<L> {
         }))
     }
 
-    /// Returns the number of symbols covered by the parsed hash table.
-    #[inline]
-    pub fn count_syms(&self) -> usize {
+    pub(crate) fn for_each<H>(
+        &self,
+        table: SymbolTableView<'_, L, H>,
+        visitor: &mut dyn FnMut(&ElfSymbol<L>),
+    ) {
         match &self.0 {
-            HashTableKind::Gnu(hashtab) => hashtab.count_syms(),
-            HashTableKind::Sysv(hashtab) => hashtab.count_syms(),
+            HashTableKind::Gnu(hashtab) => hashtab.for_each(table, visitor),
+            HashTableKind::Sysv(hashtab) => hashtab.for_each(table, visitor),
         }
     }
 }

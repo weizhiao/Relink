@@ -2,7 +2,7 @@
 
 use crate::{
     ByteRepr, LazyBindingError, RelocationError, Result,
-    elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelocationType, ElfWord, SymbolEntry},
+    elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord, SymbolEntry},
     image::CoreRuntime,
     memory::{ImageMemory, ImageMemoryExt, VmAddr},
     relocation::RelocationArch,
@@ -166,17 +166,15 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
     /// Returns one PLT relocation by lazy relocation index.
     #[inline]
     pub fn plt_relocation(&self, rela_idx: usize) -> Option<LazyPltReloc<'_, Arch>> {
-        let rel = self.core().lazy_plt()?.relocs.as_slice().get(rela_idx)?;
-        Some(LazyPltReloc {
-            runtime: *self,
-            index: rela_idx,
-            rel,
-        })
+        let plt = self.core().lazy_plt()?;
+        let rel = plt.relocs.as_slice().get(rela_idx)?;
+        let symbol = plt.symbols.view().entry(rel.r_symbol());
+        Some(LazyPltReloc { rel, symbol })
     }
 
     /// Looks up a symbol through Relink's normal lazy binding lookup path.
     #[inline]
-    pub fn lookup_symbol(&self, symbol: SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>> {
+    pub fn lookup_symbol(&self, symbol: &SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>> {
         self.core().module().lookup_symbol(symbol)
     }
 
@@ -186,7 +184,8 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
         <Arch::Layout as ElfLayout>::Word: ByteRepr,
     {
         let word = <Arch::Layout as ElfLayout>::Word::from_usize(value.get());
-        unsafe { self.memory().write_value(reloc.place(), word) }
+        let place = self.memory().base() + reloc.rel.r_offset();
+        unsafe { self.memory().write_value(place, word) }
     }
 
     /// Performs Relink's default lazy binding flow and writes the jump slot.
@@ -200,13 +199,11 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
                 LazyBindingError::RelocIndexOutOfRange,
             ))?;
 
-        if !reloc.is_jump_slot() || reloc.symbol_index() == 0 {
+        if reloc.rel.r_type() != Arch::JUMP_SLOT || reloc.rel.r_symbol() == 0 {
             return Err(RelocationError::LazyBinding(LazyBindingError::InvalidPltReloc).into());
         }
 
-        let symbol = reloc.symbol().ok_or(RelocationError::LazyBinding(
-            LazyBindingError::SymbolIndexOutOfRange,
-        ))?;
+        let symbol = reloc.symbol();
         let resolved = self.lookup_symbol(symbol)?;
         if let Some(addr) = resolved {
             self.write_jump_slot(&reloc, addr)?;
@@ -215,60 +212,22 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
     }
 }
 
-/// One lazy PLT relocation plus access to its runtime context.
+/// One lazy PLT relocation and its referenced symbol.
 pub struct LazyPltReloc<'a, Arch: RelocationArch> {
-    runtime: LazyRuntime<Arch>,
-    index: usize,
     rel: &'a ElfRelType<Arch>,
+    symbol: SymbolEntry<'a, Arch::Layout>,
 }
 
 impl<'a, Arch: RelocationArch> LazyPltReloc<'a, Arch> {
-    /// Returns the lazy relocation index.
-    #[inline]
-    pub const fn index(&self) -> usize {
-        self.index
-    }
-
     /// Returns the raw ELF relocation entry.
     #[inline]
     pub const fn relocation(&self) -> &'a ElfRelType<Arch> {
         self.rel
     }
 
-    /// Returns the relocation type.
+    /// Returns the referenced symbol entry.
     #[inline]
-    pub fn r_type(&self) -> ElfRelocationType {
-        self.rel.r_type()
-    }
-
-    /// Returns the symbol table index referenced by this relocation.
-    #[inline]
-    pub fn symbol_index(&self) -> usize {
-        self.rel.r_symbol()
-    }
-
-    /// Returns the target-visible jump-slot address.
-    #[inline]
-    pub fn place(&self) -> VmAddr {
-        self.runtime.memory().base() + self.rel.r_offset()
-    }
-
-    /// Returns whether this relocation is the architecture's jump-slot relocation.
-    #[inline]
-    pub fn is_jump_slot(&self) -> bool {
-        self.r_type() == Arch::JUMP_SLOT
-    }
-
-    /// Returns the referenced symbol entry, if the symbol index is valid.
-    #[inline]
-    pub fn symbol(&self) -> Option<SymbolEntry<'_, Arch::Layout>> {
-        let symtab = self.runtime.core().lazy_plt()?.symbols.view();
-        (self.symbol_index() < symtab.count_syms()).then(|| symtab.symbol_idx(self.symbol_index()))
-    }
-
-    /// Returns the referenced symbol name, if the symbol index is valid.
-    #[inline]
-    pub fn symbol_name(&self) -> Option<&str> {
-        self.symbol().map(|symbol| symbol.name())
+    pub const fn symbol(&self) -> &SymbolEntry<'a, Arch::Layout> {
+        &self.symbol
     }
 }

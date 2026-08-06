@@ -106,23 +106,29 @@ where
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Loads, commits, and initializes one module and its dependency group.
-    pub fn load<'cfg, Q>(
+    ///
+    /// Initialization failure is rolled back before the error is returned. Use
+    /// the staged API when the caller needs to choose another failure policy.
+    pub fn load<'cfg, Q, Meta>(
         &mut self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
     ) -> Result<LoadResult<Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
+        Meta: Default,
     {
-        self.load_with_owner::<Q>(context, key, None)
+        self.load_with_owner::<Q, Meta>(context, key, None)
     }
 
     /// Loads one root using search metadata from the module that requested it.
-    pub fn load_from<'cfg, Q>(
+    ///
+    /// Initialization failure is rolled back before the error is returned.
+    pub fn load_from<'cfg, Q, Meta>(
         &mut self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         owner: SearchOwner<'_>,
     ) -> Result<LoadResult<Arch, Tls>>
@@ -130,13 +136,14 @@ where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
+        Meta: Default,
     {
-        self.load_with_owner::<Q>(context, key, Some(owner))
+        self.load_with_owner::<Q, Meta>(context, key, Some(owner))
     }
 
-    fn load_with_owner<'cfg, Q>(
+    fn load_with_owner<'cfg, Q, Meta>(
         &mut self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         owner: Option<SearchOwner<'_>>,
     ) -> Result<LoadResult<Arch, Tls>>
@@ -144,8 +151,9 @@ where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
+        Meta: Default,
     {
-        let prepared = self.prepare_load_with_owner::<Q>(context, key, owner)?;
+        let prepared = self.prepare_load_with_owner::<Q, Meta>(context, key, owner)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -155,9 +163,9 @@ where
     }
 
     /// Resolves and maps one module group without executing target code.
-    pub fn prepare_load<'cfg, Q>(
+    pub fn prepare_load<'cfg, Q, Meta>(
         &mut self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
@@ -165,13 +173,13 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
     {
-        self.prepare_load_with_owner::<Q>(context, key, None)
+        self.prepare_load_with_owner::<Q, Meta>(context, key, None)
     }
 
     /// Resolves and maps one caller-relative root without executing target code.
-    pub fn prepare_load_from<'cfg, Q>(
+    pub fn prepare_load_from<'cfg, Q, Meta>(
         &mut self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         owner: SearchOwner<'_>,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
@@ -180,12 +188,12 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
     {
-        self.prepare_load_with_owner::<Q>(context, key, Some(owner))
+        self.prepare_load_with_owner::<Q, Meta>(context, key, Some(owner))
     }
 
-    fn prepare_load_with_owner<'cfg, Q>(
+    fn prepare_load_with_owner<'cfg, Q, Meta>(
         &mut self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         owner: Option<SearchOwner<'_>>,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
@@ -212,9 +220,11 @@ where
     }
 
     /// Loads, commits, and initializes a pre-mapped root dynamic image.
-    pub fn load_mapped_root<'cfg, Q>(
+    ///
+    /// Initialization failure is rolled back before the error is returned.
+    pub fn load_mapped_root<'cfg, Q, Meta>(
         &mut self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
     ) -> Result<LoadResult<Arch, Tls>>
@@ -222,8 +232,9 @@ where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
+        Meta: Default,
     {
-        let prepared = self.prepare_mapped_root::<Q>(context, key, raw)?;
+        let prepared = self.prepare_mapped_root::<Q, Meta>(context, key, raw)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -233,9 +244,9 @@ where
     }
 
     /// Resolves dependencies for a pre-mapped root without relocating it.
-    pub fn prepare_mapped_root<'cfg, Q>(
+    pub fn prepare_mapped_root<'cfg, Q, Meta>(
         &mut self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
@@ -330,7 +341,7 @@ where
                         .linker
                         .relocator
                         .run(raw)
-                        .shared_scope(scope)
+                        .lookup_scope(scope)
                         .symbol_registry(Arc::clone(symbols))
                         .binding(binding)
                         .observer(&mut self.observer)
@@ -363,23 +374,24 @@ where
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Loads one module into this linker's relocation domain.
-    pub fn load<'cfg, Q>(
+    pub fn load<'cfg, Q, Meta>(
         &self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
     ) -> Result<LoadResult<Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
+        Meta: Default,
     {
-        self.run().load::<Q>(context, key)
+        self.run().load::<Q, Meta>(context, key)
     }
 
     /// Loads one root using search metadata from the module that requested it.
-    pub fn load_from<'cfg, Q>(
+    pub fn load_from<'cfg, Q, Meta>(
         &self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         owner: SearchOwner<'_>,
     ) -> Result<LoadResult<Arch, Tls>>
@@ -387,14 +399,15 @@ where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
+        Meta: Default,
     {
-        self.run().load_from::<Q>(context, key, owner)
+        self.run().load_from::<Q, Meta>(context, key, owner)
     }
 
     /// Loads a pre-mapped root dynamic image and resolves its dependencies.
-    pub fn load_mapped_root<'cfg, Q>(
+    pub fn load_mapped_root<'cfg, Q, Meta>(
         &self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
     ) -> Result<LoadResult<Arch, Tls>>
@@ -402,22 +415,24 @@ where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
+        Meta: Default,
     {
-        self.run().load_mapped_root::<Q>(context, key, raw)
+        self.run().load_mapped_root::<Q, Meta>(context, key, raw)
     }
 
     /// Discovers, plans, and loads one module through the scan-first path.
-    pub fn load_scan_first<Q>(
+    pub fn load_scan_first<Q, Meta>(
         &self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
     ) -> Result<LoadResult<Arch, Tls>>
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
+        Meta: Default,
     {
-        self.run().load_scan_first::<Q>(context, key)
+        self.run().load_scan_first::<Q, Meta>(context, key)
     }
 }
 
@@ -441,7 +456,10 @@ pub struct PreparedLoad<
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     PreparedLoad<D, Arch, R, Tls>
 {
-    fn visible<K, Q>(context: &LinkContext<K, Arch, Tls>, key: &Q) -> Result<Option<Self>>
+    fn visible<K, Q, Meta>(
+        context: &LinkContext<K, Meta, Arch, Tls>,
+        key: &Q,
+    ) -> Result<Option<Self>>
     where
         K: Ord + Borrow<Q>,
         Q: Ord + ?Sized,
@@ -457,11 +475,11 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         Self::new(root, ResolveSession::new(), None, context).map(Some)
     }
 
-    pub(in crate::linker) fn new<K>(
+    pub(in crate::linker) fn new<K, Meta>(
         root: ModuleSlot,
         session: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
         mapped_runtime: Option<MappedRuntimeMemory<R>>,
-        context: &LinkContext<K, Arch, Tls>,
+        context: &LinkContext<K, Meta, Arch, Tls>,
     ) -> Result<Self>
     where
         K: Ord,
@@ -508,12 +526,13 @@ where
     ///
     /// Published modules are visible to recursive loads but remain
     /// transactional until their initializers complete.
-    pub fn publish<K>(
+    pub fn publish<K, Meta>(
         self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
     ) -> Result<PublishedLoad<Arch, Tls>>
     where
         K: Clone + Ord,
+        Meta: Default,
     {
         if context.context_id() != self.context {
             return Err(LinkerError::context(LinkContextError::ContextMismatch {
@@ -610,7 +629,7 @@ where
     }
 
     /// Releases this publication and finalizes modules that become unreachable.
-    pub fn rollback<K>(self, context: &mut LinkContext<K, Arch, Tls>) -> Result<()>
+    pub fn rollback<K, Meta>(self, context: &mut LinkContext<K, Meta, Arch, Tls>) -> Result<()>
     where
         K: Clone + Ord,
     {
@@ -628,8 +647,11 @@ where
     }
 }
 
-/// A published load whose initialization failed and can be rolled back.
-#[must_use = "a failed load must be rolled back"]
+/// A published load whose initialization failed.
+///
+/// Continuing execution requires rolling the load back. Runtimes that treat
+/// initialization failure as fatal may inspect the error and terminate.
+#[must_use = "a failed load must be rolled back or treated as fatal"]
 pub struct FailedLoad<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     error: Error,
     load: PublishedLoad<Arch, Tls>,
@@ -644,7 +666,6 @@ where
         f.debug_struct("FailedLoad")
             .field("error", &self.error)
             .field("root_id", &self.load.lease.id())
-            .field("modules", &self.load.modules)
             .finish()
     }
 }
@@ -660,15 +681,8 @@ where
         &self.error
     }
 
-    /// Returns module ids published by the failed load in load order.
-    #[inline]
-    pub fn modules(&self) -> &[ModuleId] {
-        &self.load.modules
-    }
-
-    /// Removes the published modules from their link context and returns the
-    /// initialization error.
-    pub fn rollback<K>(self, context: &mut LinkContext<K, Arch, Tls>) -> Error
+    /// Removes the published modules and returns the initialization error.
+    pub fn rollback<K, Meta>(self, context: &mut LinkContext<K, Meta, Arch, Tls>) -> Error
     where
         K: Clone + Ord,
     {

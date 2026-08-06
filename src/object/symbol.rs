@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::elf::{ElfLayout, ElfShdr, ElfStringTable, ElfSymbol, SymbolEntry, SymbolTableView};
+use crate::elf::{ElfLayout, ElfShdr, ElfStringTable, ElfSymbol, SymbolTableView};
 use crate::memory::{ImageMemory, MappedView};
 use crate::object::{CustomHash, section_bytes, section_entries_mut};
 use core::fmt::Debug;
@@ -62,10 +62,5 @@ impl<L: ElfLayout> ObjectSymbolTable<L> {
     #[inline]
     pub(crate) fn symbols_mut(&mut self) -> &mut [ElfSymbol<L>] {
         self.symbols
-    }
-
-    #[inline]
-    pub(crate) fn symbol_idx<'symtab>(&'symtab self, idx: usize) -> SymbolEntry<'symtab, L> {
-        self.view().symbol_idx(idx)
     }
 }

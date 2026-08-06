@@ -4,8 +4,8 @@ use crate::{
     arch::{ArchKind, NativeArch},
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol},
     image::{
-        Module, ModuleHandle, ModuleScope, ModuleScopeBuilder, ModuleState, SymbolExports,
-        SymbolLookup, module::lookup_symbol,
+        LookupScope, Module, ModuleHandle, ModuleState, SymbolExports, SymbolLookup,
+        module::lookup_symbol,
     },
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
@@ -30,7 +30,7 @@ pub struct LoadedCore<
     Tls: TlsResolver<Arch> = (),
 > {
     core: ElfCore<D, Arch, R, Tls>,
-    scope: ModuleScope<Arch, Tls>,
+    scope: LookupScope<Arch, Tls>,
 }
 
 impl<
@@ -119,16 +119,14 @@ impl<
         let domain = core.domain_id();
         LoadedCore {
             core,
-            scope: ModuleScopeBuilder::new(domain)
-                .into_scope()
-                .expect("empty module scope must be valid"),
+            scope: LookupScope::empty(domain),
         }
     }
 
     /// Returns the retained user-provided relocation lookup scope.
     #[inline]
-    pub fn scope(&self) -> &[ModuleHandle<Arch, Tls>] {
-        self.scope.as_slice()
+    pub const fn scope(&self) -> &LookupScope<Arch, Tls> {
+        &self.scope
     }
 
     /// Returns the target architecture used by this loaded module.
@@ -153,6 +151,18 @@ impl<
     #[inline]
     pub fn runpath(&self) -> Option<&str> {
         self.core.runpath()
+    }
+
+    /// Returns the `DT_SONAME` value.
+    #[inline]
+    pub fn soname(&self) -> Option<&str> {
+        self.core.soname()
+    }
+
+    /// Returns the `DT_NEEDED` names retained from the dynamic section.
+    #[inline]
+    pub fn needed_libs(&self) -> &[&str] {
+        self.core.needed_libs()
     }
 
     /// Returns the base address of the ELF object.
@@ -323,14 +333,14 @@ impl<
     #[inline]
     pub unsafe fn from_core_scope(
         core: ElfCore<D, Arch, R, Tls>,
-        scope: ModuleScope<Arch, Tls>,
+        scope: LookupScope<Arch, Tls>,
     ) -> Self {
         unsafe { Self::from_core_scope_registry(core, scope, None) }
     }
 
     pub(crate) unsafe fn from_core_scope_registry(
         core: ElfCore<D, Arch, R, Tls>,
-        scope: ModuleScope<Arch, Tls>,
+        scope: LookupScope<Arch, Tls>,
         symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
     ) -> Self {
         core.set_scope(&scope);

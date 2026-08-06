@@ -21,7 +21,7 @@ use crate::{
     tls::{CoreTlsState, ModuleTls, TlsRequest, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{mem::size_of, ptr::NonNull};
+use core::ptr::NonNull;
 
 use crate::image::{
     CoreRuntime, ElfCore, LoadedCore, Module, ModuleState, SymbolExports, core::CoreInner,
@@ -37,19 +37,14 @@ impl<L: ElfLayout> SymbolTable<L> {
         R: RegionAccess,
     {
         let hashtab = HashTable::from_dynamic(dynamic, segments)?;
-        let symbol_count = hashtab.count_syms();
-
         let symtab_off = dynamic
             .symtab
             .checked_offset_from(segments.base())
             .ok_or(ParseDynamicError::AddressOverflow)?;
-        let symtab_size = symbol_count
-            .checked_mul(size_of::<ElfSymbol<L>>())
-            .ok_or(ParseDynamicError::AddressOverflow)?;
         let symbols = segments
-            .read_view::<ElfSymbol<L>>(symtab_off, symtab_size)
+            .read_tail_view::<ElfSymbol<L>>(symtab_off)
             .ok_or(ParseDynamicError::MalformedSymbolTable {
-                detail: "DT_SYMTAB symbol table size is malformed",
+                detail: "DT_SYMTAB is outside mapped ELF segments or has invalid alignment",
             })?
             .as_slice();
 
@@ -74,7 +69,6 @@ impl<L: ElfLayout> SymbolTable<L> {
             dynamic.version_idx,
             dynamic.verneed,
             dynamic.verdef,
-            symbols.len(),
             &strtab,
             segments,
         )?;
@@ -110,6 +104,7 @@ impl<Arch: RelocationArch> PltRelocInfo<Arch> {
 pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
+    pub(crate) needed_libs: Box<[&'static str]>,
     pub(crate) soname: Option<&'static str>,
     pub(crate) rpath: Option<&'static str>,
     pub(crate) runpath: Option<&'static str>,
@@ -145,9 +140,6 @@ struct ElfExtraData<Arch: RelocationArch = NativeArch> {
     /// Finalization functions to resolve after relocation.
     fini: LifecycleSpec,
 
-    /// List of needed library names from the dynamic section
-    needed_libs: Box<[&'static str]>,
-
     /// Relocation-only dynamic symbol table.
     symtab: SymbolTable<Arch::Layout>,
 }
@@ -157,7 +149,6 @@ impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
         f.debug_struct("ElfExtraData")
             .field("lazy", &self.lazy)
             .field("relro", &self.relro.is_some())
-            .field("needed_libs", &self.needed_libs)
             .finish()
     }
 }
@@ -362,7 +353,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     /// Gets the list of needed library names from the dynamic section
     pub fn needed_libs(&self) -> &[&str] {
-        &self.extra.needed_libs
+        self.module.needed_libs()
     }
 
     #[inline]
@@ -486,6 +477,7 @@ where
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
                 eh_frame_hdr: self.eh_frame_hdr,
                 phdrs,
+                needed_libs: needed_libs.into_boxed_slice(),
                 soname,
                 rpath,
                 runpath,
@@ -510,7 +502,6 @@ where
                 relocation,
                 init: dynamic.init,
                 fini: dynamic.fini,
-                needed_libs: needed_libs.into_boxed_slice(),
                 symtab,
             },
             module: ElfCore { inner },

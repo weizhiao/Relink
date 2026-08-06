@@ -2,7 +2,7 @@ use super::lifecycle::{LifecycleHandlers, LifecycleRunner};
 use crate::{
     arch::NativeArch,
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, HashTable, SymbolEntry, SymbolTableView},
-    image::{ElfCore, Module, ModuleScope},
+    image::{ElfCore, LookupScope, Module},
     input::Path,
     lazy::LazyValues,
     memory::{HostRegion, RegionAccess, VmAddr},
@@ -58,7 +58,7 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
 
     /// Access the current resolution scope.
     #[inline]
-    pub fn scope(&self) -> &ModuleScope<Arch, Tls> {
+    pub fn scope(&self) -> &LookupScope<Arch, Tls> {
         self.resolver.scope()
     }
 
@@ -71,7 +71,7 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
     /// Access a symbol table entry by index for this relocation context.
     #[inline]
     pub fn symbol(&self, r_sym: usize) -> SymbolEntry<'a, Arch::Layout> {
-        self.symbols.symbol_idx(r_sym)
+        self.symbols.entry(r_sym)
     }
 
     /// Access the symbol referenced by the current relocation, if it has one.

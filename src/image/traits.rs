@@ -16,8 +16,8 @@ use core::any::Any;
 /// Export backends may be backed by an ELF dynamic symbol table, an object export
 /// table, kernel export metadata, or a caller-provided synthetic table.
 pub trait SymbolExports<L: ElfLayout>: Send + Sync {
-    /// Returns exported symbol entries when this backend can enumerate them.
-    fn symbols(&self) -> &[ElfSymbol<L>];
+    /// Visits symbols that can participate in exported-symbol lookup.
+    fn for_each(&self, visitor: &mut dyn FnMut(&ElfSymbol<L>));
 
     /// Returns the name for a symbol entry from this export table.
     fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports str>;
@@ -34,8 +34,8 @@ where
     L: ElfLayout,
 {
     #[inline]
-    fn symbols(&self) -> &[ElfSymbol<L>] {
-        self.view().symbols()
+    fn for_each(&self, visitor: &mut dyn FnMut(&ElfSymbol<L>)) {
+        self.hashtab.for_each(self.view(), visitor);
     }
 
     #[inline]

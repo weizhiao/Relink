@@ -183,13 +183,12 @@ fn can_clear_exports() {
             &mut self,
             event: &mut ObjectRelocatedEvent<'_, D, NativeArch, R, Tls>,
         ) -> Result<()> {
-            let symtab = event.symtab();
             assert!(
-                (0..symtab.symbols().len()).any(|idx| symtab.symbol_idx(idx).name() == VALUE),
+                event.symbols().any(|symbol| symbol.name() == VALUE),
                 "relocated object symbol table should include the global object symbol"
             );
-            let symbol = (0..symtab.symbols().len())
-                .map(|idx| symtab.symbol_idx(idx))
+            let symbol = event
+                .symbols()
                 .find(|entry| entry.name() == VALUE)
                 .expect("value symbol should exist");
             let addr = event.core().base() + VmOffset::new(symbol.symbol().st_value());

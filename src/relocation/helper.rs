@@ -4,7 +4,7 @@ use crate::{
     Error, RelocReason, Result,
     elf::{ElfRelEntry, ElfRelType, HashTable, SymbolEntry, SymbolTableView},
     hint::unlikely,
-    image::{ElfCore, Module, ModuleScope},
+    image::{ElfCore, LookupScope, Module},
     memory::{ImageMemory, RegionAccess, VmAddr},
     observer::{RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
@@ -58,7 +58,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_scope(self) -> ModuleScope<Arch, Tls> {
+    pub(crate) fn into_scope(self) -> LookupScope<Arch, Tls> {
         self.resolver.into_scope()
     }
 
@@ -108,7 +108,7 @@ where
             relocate_context_error(
                 self.core.name(),
                 r_type_str,
-                Some(self.symbols.symbol_idx(r_sym).name()),
+                Some(self.symbols.entry(r_sym).name()),
                 reason,
             )
         }
@@ -120,13 +120,13 @@ where
         if r_sym == 0 {
             return VmAddr::null();
         }
-        let symbol = self.symbols.symbol_idx(r_sym);
+        let symbol = self.symbols.entry(r_sym);
         self.core.base() + VmOffset::new(symbol.symbol().st_value())
     }
 
     #[inline]
     pub(crate) fn symbol_entry(&self, rel: &ElfRelType<Arch>) -> SymbolEntry<'find, Arch::Layout> {
-        self.symbols.symbol_idx(rel.r_symbol())
+        self.symbols.entry(rel.r_symbol())
     }
 
     #[inline]

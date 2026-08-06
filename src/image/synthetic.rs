@@ -561,8 +561,8 @@ where
     D: Send + Sync,
 {
     #[inline]
-    fn symbols(&self) -> &[ElfSymbol<Arch::Layout>] {
-        &self.symbols
+    fn for_each(&self, visitor: &mut dyn FnMut(&ElfSymbol<Arch::Layout>)) {
+        self.symbols.iter().for_each(visitor);
     }
 
     #[inline]
@@ -595,7 +595,7 @@ mod tests {
     use super::*;
     use crate::{
         elf::ElfSymbolVisibility,
-        image::ModuleScopeBuilder,
+        image::ModuleScope,
         memory::{MappedRegion, VmOffset},
         segment::ElfSegments,
         tls::{TlsModuleId, TlsTpOffset},
@@ -615,9 +615,8 @@ mod tests {
             VmAddr::null()
         );
 
-        let mut scope = ModuleScopeBuilder::<NativeArch>::new(DomainId::PROCESS);
+        let mut scope = ModuleScope::<NativeArch>::new(DomainId::PROCESS);
         scope.extend([module]);
-        let scope = scope.into_scope().unwrap();
         let mut lookup = SymbolLookup::new("host_double");
 
         let module = scope
@@ -636,7 +635,6 @@ mod tests {
         assert_eq!(symbol.symbol_type(), ElfSymbolType::FUNC);
         assert!(symbol.st_shndx().is_abs());
         assert_eq!(module.exports().symbol_name(symbol), Some("host_double"));
-        assert_eq!(module.exports().symbols().len(), 1);
     }
 
     #[cfg(feature = "version")]
@@ -719,9 +717,8 @@ mod tests {
                 None,
             )],
         );
-        let mut scope = ModuleScopeBuilder::<NativeArch>::new(DomainId::PROCESS);
+        let mut scope = ModuleScope::<NativeArch>::new(DomainId::PROCESS);
         scope.extend([module]);
-        let scope = scope.into_scope().unwrap();
         let mut lookup = SymbolLookup::new("tls_slot");
 
         let module = scope

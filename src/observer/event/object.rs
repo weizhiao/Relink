@@ -8,7 +8,7 @@ use crate::{
     input::{ElfReader, ElfReaderExt, Path},
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     object::{
-        CustomHash, ObjectExports, ObjectSections, ObjectSegmentView,
+        CustomHash, ObjectExports, ObjectSections, ObjectSegmentView, ObjectSymbolTable,
         layout::{SectionGroup, SectionPlacement},
     },
     relocation::{ObjectArch, RelocationArch},
@@ -132,7 +132,7 @@ pub struct ObjectRelocatedEvent<
 > {
     core: &'event ElfCore<D, Arch, R, Tls>,
     sections: &'event ObjectSections<Arch::Layout>,
-    symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
+    symtab: &'event ObjectSymbolTable<Arch::Layout>,
     memory: ObjectSegmentView<'event, R>,
     exports: ObjectExportsHandle<Arch::Layout>,
     lifecycle: LifecycleHandlers,
@@ -150,7 +150,7 @@ impl<
     pub(crate) fn new(
         core: &'event ElfCore<D, Arch, R, Tls>,
         sections: &'event ObjectSections<Arch::Layout>,
-        symtab: SymbolTableView<'event, Arch::Layout, CustomHash>,
+        symtab: &'event ObjectSymbolTable<Arch::Layout>,
         memory: ObjectSegmentView<'event, R>,
         initializer: LifecycleRunner,
         finalizer: LifecycleRunner,
@@ -185,8 +185,15 @@ impl<
 
     /// Returns the relocated object symbol table view.
     #[inline]
-    pub const fn symtab(&self) -> SymbolTableView<'event, Arch::Layout, CustomHash> {
-        self.symtab
+    pub fn symtab(&self) -> SymbolTableView<'event, Arch::Layout, CustomHash> {
+        self.symtab.view()
+    }
+
+    /// Iterates over relocated object symbols.
+    #[inline]
+    pub fn symbols(&self) -> impl Iterator<Item = crate::elf::SymbolEntry<'event, Arch::Layout>> {
+        let view = self.symtab.view();
+        (0..self.symtab.symbols().len()).map(move |index| view.entry(index))
     }
 
     /// Returns relocated object memory.

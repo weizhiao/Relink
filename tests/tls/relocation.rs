@@ -1,4 +1,6 @@
-use elf_loader::{Module, arch::NativeArch, memory::VmAddr, relocation::RelocationArch};
+use elf_loader::{
+    Module, arch::NativeArch, elf::SymbolLookup, memory::VmAddr, relocation::RelocationArch,
+};
 use gen_elf::SectionKind;
 
 use crate::support::{DTPMOD, DTPOFF, FIRST, SECOND, scenario};
@@ -20,10 +22,9 @@ fn applies_dynamic_relocations() {
 
         let dtpoff = scenario.relocation(DTPOFF, name);
         let exports = provider.exports();
+        let mut lookup = SymbolLookup::new(name);
         let symbol = exports
-            .symbols()
-            .iter()
-            .find(|symbol| exports.symbol_name(symbol) == Some(name))
+            .lookup(&mut lookup)
             .unwrap_or_else(|| panic!("missing TLS symbol {name}"));
         let addend = isize::try_from(dtpoff.addend).expect("TLS addend should fit isize");
         let expected = VmAddr::new(symbol.st_value())

@@ -33,32 +33,40 @@ pub(crate) struct ResolveContext<
     Arch: RelocationArch = NativeArch,
     P = (),
     Tls: TlsResolver<Arch> = (),
+    Meta = (),
 > {
-    committed: &'a mut CommittedStorage<K, Arch, Tls>,
+    committed: &'a mut CommittedStorage<K, Meta, Arch, Tls>,
     session: &'a mut ResolveSession<P, Arch, Tls>,
 }
 
-pub(crate) type LoadResolveContext<'a, K, D, Arch = NativeArch, R = HostRegion, Tls = ()> =
-    ResolveContext<'a, K, Arch, RawDynamic<D, Arch, R, Tls>, Tls>;
+pub(crate) type LoadResolveContext<
+    'a,
+    K,
+    D,
+    Arch = NativeArch,
+    R = HostRegion,
+    Tls = (),
+    Meta = (),
+> = ResolveContext<'a, K, Arch, RawDynamic<D, Arch, R, Tls>, Tls, Meta>;
 
-pub(crate) type ScanResolveContext<'a, K, Arch = NativeArch, Tls = ()> =
-    ResolveContext<'a, K, Arch, ScannedDynamic<Arch>, Tls>;
+pub(crate) type ScanResolveContext<'a, K, Arch = NativeArch, Tls = (), Meta = ()> =
+    ResolveContext<'a, K, Arch, ScannedDynamic<Arch>, Tls, Meta>;
 
-impl<'a, K: Clone, Arch, P, Tls> ResolveContext<'a, K, Arch, P, Tls>
+impl<'a, K: Clone, Arch, P, Tls, Meta> ResolveContext<'a, K, Arch, P, Tls, Meta>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new(
-        committed: &'a mut CommittedStorage<K, Arch, Tls>,
+        committed: &'a mut CommittedStorage<K, Meta, Arch, Tls>,
         session: &'a mut ResolveSession<P, Arch, Tls>,
     ) -> Self {
         Self { committed, session }
     }
 }
 
-impl<K, Arch, P, Tls> ResolveContext<'_, K, Arch, P, Tls>
+impl<K, Arch, P, Tls, Meta> ResolveContext<'_, K, Arch, P, Tls, Meta>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -272,8 +280,8 @@ where
     }
 }
 
-impl<K, D: Send + Sync + 'static, Arch, R, Tls>
-    ResolveContext<'_, K, Arch, RawDynamic<D, Arch, R, Tls>, Tls>
+impl<K, D: Send + Sync + 'static, Arch, R, Tls, Meta>
+    ResolveContext<'_, K, Arch, RawDynamic<D, Arch, R, Tls>, Tls, Meta>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -335,7 +343,7 @@ where
     }
 }
 
-impl<K, Arch, Tls> ResolveContext<'_, K, Arch, ScannedDynamic<Arch>, Tls>
+impl<K, Arch, Tls, Meta> ResolveContext<'_, K, Arch, ScannedDynamic<Arch>, Tls, Meta>
 where
     K: Clone + Ord,
     Arch: RelocationArch,

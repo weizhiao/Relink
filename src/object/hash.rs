@@ -96,6 +96,6 @@ impl<L: ElfLayout> SymbolHash<L> for CustomHash {
         lookup: &mut SymbolLookup<'_>,
     ) -> Option<&'sym ElfSymbol<L>> {
         self.lookup_idx(lookup)
-            .map(|idx| table.symbol_idx(idx).symbol())
+            .and_then(|index| table.get_raw(index))
     }
 }

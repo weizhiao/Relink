@@ -9,7 +9,7 @@ use crate::{
     ByteRepr, RelocReason, Result,
     arch::ArchKind,
     elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelocationType, ElfWord},
-    image::ModuleScope,
+    image::LookupScope,
     lazy::{LazyBinder, LazyPlacement},
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr},
     observer::{RelocationEvent, RelocationObserver},
@@ -281,7 +281,7 @@ pub struct RelocateArgs<
     Obs: ?Sized,
     Binder: ?Sized,
 > {
-    pub(crate) scope: ModuleScope<Arch, Tls>,
+    pub(crate) scope: LookupScope<Arch, Tls>,
     pub(crate) symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
     pub(crate) binding: BindingMode,
     pub(crate) run_init: bool,

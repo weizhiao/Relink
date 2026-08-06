@@ -82,10 +82,10 @@ where
 
     /// Releases the root acquisition represented by this load.
     #[inline]
-    pub fn release<K>(
+    pub fn release<K, Meta>(
         self,
-        context: &mut LinkContext<K, Arch, Tls>,
-    ) -> Result<UnloadGroup<Arch, Tls>>
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
+    ) -> Result<UnloadGroup<Meta, Arch, Tls>>
     where
         K: Clone + Ord,
     {

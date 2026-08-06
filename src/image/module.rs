@@ -14,8 +14,18 @@ use alloc::vec::Vec;
 use core::{any::Any, fmt, ops::Deref, slice};
 
 const UNINITIALIZED: usize = 0;
-const INITIALIZED: usize = 1;
-const FINALIZED: usize = 2;
+const INITIALIZING: usize = 1;
+const INITIALIZED: usize = 2;
+const FAILED: usize = 3;
+const FINALIZED: usize = 4;
+
+struct InitializationGuard<'a>(&'a AtomicUsize);
+
+impl Drop for InitializationGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(FAILED, Ordering::Release);
+    }
+}
 
 #[inline]
 pub(super) fn lookup_symbol<Arch, Tls>(
@@ -69,42 +79,59 @@ impl ModuleState {
 
     /// Runs the module initializer at most once.
     ///
-    /// The module is considered initialized once the caller wins the state
-    /// transition, even if `initialize` returns an error.
+    /// Recursive callers observe an initialization in progress as already
+    /// claimed and do not run the initializer again.
     pub fn initialize(&self, initialize: impl FnOnce() -> Result<()>) -> Result<()> {
         let mut value = self.value.load(Ordering::Acquire);
         loop {
             match value {
-                INITIALIZED => return Ok(()),
+                INITIALIZING | INITIALIZED => return Ok(()),
+                FAILED => return Err(custom_error("cannot initialize a failed module")),
                 FINALIZED => return Err(custom_error("cannot initialize a finalized module")),
                 _ => {}
             }
             match self.value.compare_exchange_weak(
                 value,
-                INITIALIZED,
+                INITIALIZING,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
-                Ok(_) => return initialize(),
+                Ok(_) => {
+                    let guard = InitializationGuard(&self.value);
+                    let result = initialize();
+                    self.value.store(
+                        if result.is_ok() { INITIALIZED } else { FAILED },
+                        Ordering::Release,
+                    );
+                    core::mem::forget(guard);
+                    return result;
+                }
                 Err(current) => value = current,
             }
         }
     }
 
-    /// Runs the module finalizer at most once after successful initialization.
+    /// Runs the module finalizer at most once after initialization was attempted.
     ///
     /// A module with finalization work should call this from its owning
     /// allocation's [`Drop`] implementation. For core-backed ELF modules,
     /// `CoreInner` already provides that integration.
     pub fn finalize(&self, finalize: impl FnOnce() -> Result<()>) -> Result<()> {
-        if self
-            .value
-            .compare_exchange(INITIALIZED, FINALIZED, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            finalize()
-        } else {
-            Ok(())
+        let mut value = self.value.load(Ordering::Acquire);
+        loop {
+            match value {
+                INITIALIZED | FAILED => {}
+                _ => return Ok(()),
+            }
+            match self.value.compare_exchange_weak(
+                value,
+                FINALIZED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return finalize(),
+                Err(current) => value = current,
+            }
         }
     }
 }
@@ -270,76 +297,28 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> AsRef<dyn Module<Ar
     }
 }
 
-/// Ordered, retained modules used for relocation symbol lookup.
+/// Copy-on-write ordered modules used for relocation symbol lookup.
 ///
 /// Modules are searched in order and held alive by relocated outputs that keep
-/// this scope.
+/// this scope. Clones remain stable when another clone is modified.
 pub struct ModuleScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    modules: Arc<[ModuleHandle<Arch, Tls>]>,
-}
-
-/// Weak reference to a retained module scope.
-pub(crate) struct WeakModuleScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    modules: Weak<[ModuleHandle<Arch, Tls>]>,
-}
-
-/// Mutable builder for a [`ModuleScope`].
-pub struct ModuleScopeBuilder<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    modules: Vec<ModuleHandle<Arch, Tls>>,
+    modules: Arc<Vec<ModuleHandle<Arch, Tls>>>,
     domain: DomainId,
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleScopeBuilder<Arch, Tls> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            modules: self.modules.clone(),
-            domain: self.domain,
-        }
-    }
+/// Ordered groups used for symbol lookup.
+///
+/// Groups preserve lookup-policy boundaries such as the global scope and one
+/// object's dependency scope without copying their module lists.
+pub struct LookupScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+    groups: Arc<[ModuleScope<Arch, Tls>]>,
+    domain: DomainId,
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScopeBuilder<Arch, Tls> {
-    /// Creates an empty module-scope builder for `domain`.
-    #[inline]
-    pub const fn new(domain: DomainId) -> Self {
-        Self {
-            modules: Vec::new(),
-            domain,
-        }
-    }
-
-    pub(crate) fn replace<I, R>(&mut self, modules: I)
-    where
-        I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch, Tls>>,
-    {
-        self.modules.clear();
-        self.modules.extend(modules.into_iter().map(Into::into));
-    }
-
-    /// Appends modules to the scope being built.
-    pub fn extend<I, R>(&mut self, modules: I)
-    where
-        I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch, Tls>>,
-    {
-        self.modules.extend(modules.into_iter().map(Into::into));
-    }
-
-    /// Finishes the builder and returns an immutable module scope.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the modules belong to incompatible runtime domains.
-    pub fn into_scope(self) -> Result<ModuleScope<Arch, Tls>> {
-        for module in &self.modules {
-            self.domain.ensure(module.domain_id())?;
-        }
-        Ok(ModuleScope {
-            modules: Arc::from(self.modules),
-        })
-    }
+/// Weak reference to a retained lookup scope.
+pub(crate) struct WeakLookupScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+    groups: Weak<[ModuleScope<Arch, Tls>]>,
+    domain: DomainId,
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleScope<Arch, Tls> {
@@ -347,6 +326,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for ModuleScope<Arch, T
     fn clone(&self) -> Self {
         Self {
             modules: Arc::clone(&self.modules),
+            domain: self.domain,
         }
     }
 }
@@ -364,18 +344,28 @@ where
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScope<Arch, Tls> {
-    pub(crate) fn ensure_domain(&self, expected: DomainId) -> Result<()> {
-        match self.modules.first() {
-            Some(module) => expected.ensure(module.domain_id()),
-            None => Ok(()),
+    /// Creates an empty module scope for `domain`.
+    #[inline]
+    pub fn new(domain: DomainId) -> Self {
+        Self {
+            modules: Arc::new(Vec::new()),
+            domain,
         }
     }
 
+    /// Returns the runtime domain shared by this module group.
     #[inline]
-    pub(crate) fn downgrade(&self) -> WeakModuleScope<Arch, Tls> {
-        WeakModuleScope {
-            modules: Arc::downgrade(&self.modules),
+    pub const fn domain_id(&self) -> DomainId {
+        self.domain
+    }
+
+    /// Checks that this scope and all its modules belong to `expected`.
+    pub fn check_domain(&self, expected: DomainId) -> Result<()> {
+        expected.ensure(self.domain)?;
+        for module in self.modules.iter() {
+            expected.ensure(module.domain_id())?;
         }
+        Ok(())
     }
 
     /// Returns the modules in lookup order.
@@ -401,19 +391,148 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScope<Arch, Tls> {
     pub fn is_empty(&self) -> bool {
         self.modules.is_empty()
     }
+
+    /// Appends a module without modifying existing snapshots.
+    pub fn push(&mut self, module: ModuleHandle<Arch, Tls>) {
+        Arc::make_mut(&mut self.modules).push(module);
+    }
+
+    /// Replaces this scope's modules without modifying existing snapshots.
+    pub fn replace<I, R>(&mut self, modules: I)
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<ModuleHandle<Arch, Tls>>,
+    {
+        if let Some(current) = Arc::get_mut(&mut self.modules) {
+            current.clear();
+            current.extend(modules.into_iter().map(Into::into));
+        } else {
+            self.modules = Arc::new(modules.into_iter().map(Into::into).collect());
+        }
+    }
+
+    /// Appends modules without modifying existing snapshots.
+    pub fn extend<I, R>(&mut self, modules: I)
+    where
+        I: IntoIterator<Item = R>,
+        R: Into<ModuleHandle<Arch, Tls>>,
+    {
+        Arc::make_mut(&mut self.modules).extend(modules.into_iter().map(Into::into));
+    }
+
+    /// Retains only modules accepted by `keep` without modifying existing snapshots.
+    pub fn retain(&mut self, keep: impl FnMut(&ModuleHandle<Arch, Tls>) -> bool) {
+        Arc::make_mut(&mut self.modules).retain(keep);
+    }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> WeakModuleScope<Arch, Tls> {
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for LookupScope<Arch, Tls> {
     #[inline]
-    pub(crate) fn upgrade(&self) -> Option<ModuleScope<Arch, Tls>> {
-        self.modules
-            .upgrade()
-            .map(|modules| ModuleScope { modules })
+    fn clone(&self) -> Self {
+        Self {
+            groups: Arc::clone(&self.groups),
+            domain: self.domain,
+        }
+    }
+}
+
+impl<Arch, Tls> fmt::Debug for LookupScope<Arch, Tls>
+where
+    Arch: RelocationArch,
+    Tls: TlsResolver<Arch>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.groups.iter()).finish()
+    }
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
+    /// Creates an empty lookup scope for `domain`.
+    #[inline]
+    pub fn empty(domain: DomainId) -> Self {
+        Self {
+            groups: Arc::from([]),
+            domain,
+        }
+    }
+
+    /// Creates a lookup scope containing one module group.
+    #[inline]
+    pub fn from_group(group: ModuleScope<Arch, Tls>) -> Self {
+        Self {
+            domain: group.domain,
+            groups: Arc::from([group]),
+        }
+    }
+
+    /// Combines retained module groups in lookup order.
+    pub fn from_groups<I>(domain: DomainId, groups: I) -> Self
+    where
+        I: IntoIterator<Item = ModuleScope<Arch, Tls>>,
+    {
+        Self {
+            groups: Arc::from(groups.into_iter().collect::<Vec<_>>()),
+            domain,
+        }
+    }
+
+    #[inline]
+    /// Checks that every group and module belongs to `expected`.
+    pub fn check_domain(&self, expected: DomainId) -> Result<()> {
+        expected.ensure(self.domain)?;
+        for group in self.groups.iter() {
+            group.check_domain(expected)?;
+        }
+        Ok(())
+    }
+
+    #[inline]
+    pub(crate) fn downgrade(&self) -> WeakLookupScope<Arch, Tls> {
+        WeakLookupScope {
+            groups: Arc::downgrade(&self.groups),
+            domain: self.domain,
+        }
+    }
+
+    /// Returns module groups in lookup order.
+    #[inline]
+    pub fn groups(&self) -> &[ModuleScope<Arch, Tls>] {
+        &self.groups
+    }
+
+    /// Iterates over modules in lookup order.
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &ModuleHandle<Arch, Tls>> {
+        self.groups.iter().flat_map(ModuleScope::iter)
+    }
+
+    /// Returns the total number of module entries in all groups.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.groups.iter().map(ModuleScope::len).sum()
+    }
+
+    /// Returns whether every module group is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.groups.iter().all(ModuleScope::is_empty)
+    }
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> WeakLookupScope<Arch, Tls> {
+    #[inline]
+    pub(crate) fn upgrade(&self) -> Option<LookupScope<Arch, Tls>> {
+        self.groups.upgrade().map(|groups| LookupScope {
+            groups,
+            domain: self.domain,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
     use crate::image::SyntheticModule;
 
@@ -424,5 +543,35 @@ mod tests {
         let second: ModuleHandle = ModuleHandle::new(module);
 
         assert!(first.ptr_eq(&second));
+    }
+
+    #[test]
+    fn module_scope_mutation_preserves_snapshots() {
+        let first: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty("first"));
+        let second: ModuleHandle =
+            ModuleHandle::new(SyntheticModule::<NativeArch>::empty("second"));
+        let mut scope: ModuleScope = ModuleScope::new(DomainId::PROCESS);
+        scope.push(first);
+        let snapshot = scope.clone();
+
+        scope.push(second);
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(scope.len(), 2);
+
+        scope.retain(|module| module.name() == "second");
+        assert_eq!(snapshot.iter().next().unwrap().name(), "first");
+        assert_eq!(scope.iter().next().unwrap().name(), "second");
+    }
+
+    #[test]
+    fn initializer_panic_marks_module_failed() {
+        let state = ModuleState::new();
+        let panic = std::panic::catch_unwind(|| {
+            let _ = state.initialize(|| -> crate::Result<()> { panic!("initializer panic") });
+        });
+
+        assert!(panic.is_err());
+        assert!(!state.is_initialized());
+        assert!(state.initialize(|| Ok(())).is_err());
     }
 }

@@ -3,7 +3,7 @@ use crate::{
     Result,
     elf::{ElfSymbol, ElfSymbolBind, ElfSymbolType, SymbolEntry},
     hint::unlikely,
-    image::{Module, ModuleHandle, ModuleScope, SymbolLookup},
+    image::{LookupScope, Module, ModuleHandle, SymbolLookup},
     logging,
     memory::{VmAddr, VmOffset},
     runtime::{CodeContext, CodeExecutor},
@@ -171,7 +171,7 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
 
 pub(crate) struct SymbolResolver<'lib, Source, Arch: RelocationArch, Tls: TlsResolver<Arch>> {
     source: &'lib Source,
-    scope: ModuleScope<Arch, Tls>,
+    scope: LookupScope<Arch, Tls>,
     registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
     symbolic: bool,
 }
@@ -185,7 +185,7 @@ where
     #[inline]
     pub(crate) fn new(
         source: &'lib Source,
-        scope: ModuleScope<Arch, Tls>,
+        scope: LookupScope<Arch, Tls>,
         registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
         symbolic: bool,
     ) -> Self {
@@ -203,12 +203,12 @@ where
     }
 
     #[inline]
-    pub(crate) const fn scope(&self) -> &ModuleScope<Arch, Tls> {
+    pub(crate) const fn scope(&self) -> &LookupScope<Arch, Tls> {
         &self.scope
     }
 
     #[inline]
-    pub(crate) fn into_scope(self) -> ModuleScope<Arch, Tls> {
+    pub(crate) fn into_scope(self) -> LookupScope<Arch, Tls> {
         self.scope
     }
 
@@ -354,24 +354,25 @@ mod tests {
         arch::NativeArch,
         elf::{
             ElfSectionIndex, ElfSymbolBind, ElfSymbolType, ElfSymbolVisibility, NativeElfLayout,
-            SymbolEntry, SymbolInfo,
+            SymbolEntry, SymbolInfo, SymbolLookup,
         },
-        image::{ModuleScope, ModuleScopeBuilder, SymbolExports, SyntheticModule, SyntheticSymbol},
+        image::{LookupScope, ModuleScope, SymbolExports, SyntheticModule, SyntheticSymbol},
         memory::VmAddr,
         runtime::DomainId,
     };
 
     fn symbol(module: &SyntheticModule<NativeArch>) -> SymbolEntry<'_, NativeElfLayout> {
-        let symbol = SymbolExports::symbols(module)
-            .first()
+        let mut lookup = SymbolLookup::new("value");
+        let symbol = module
+            .lookup(&mut lookup)
             .expect("test module must contain a symbol");
         SymbolEntry::new(symbol, SymbolInfo::from_str("value", None))
     }
 
-    fn scope(modules: impl IntoIterator<Item = SyntheticModule<NativeArch>>) -> ModuleScope {
-        let mut scope = ModuleScopeBuilder::new(DomainId::PROCESS);
+    fn scope(modules: impl IntoIterator<Item = SyntheticModule<NativeArch>>) -> LookupScope {
+        let mut scope = ModuleScope::new(DomainId::PROCESS);
         scope.extend(modules);
-        scope.into_scope().expect("test scope must be valid")
+        LookupScope::from_group(scope)
     }
 
     #[test]

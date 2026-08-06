@@ -5,7 +5,7 @@ use super::{
 use crate::{
     LinkContextError, LinkerError, Result,
     entity::EntitySet,
-    image::{LoadedCore, ModuleHandle, ModuleScope, ModuleScopeBuilder, RawDynamic},
+    image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic},
     memory::RegionAccess,
     relocation::RelocationArch,
     tls::TlsResolver,
@@ -216,9 +216,9 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn build_scope<K>(
+    pub(crate) fn build_scope<K, Meta>(
         &self,
-        context: &LinkContext<K, Arch, Tls>,
+        context: &LinkContext<K, Meta, Arch, Tls>,
     ) -> Result<ModuleScope<Arch, Tls>>
     where
         K: Ord,
@@ -241,9 +241,9 @@ where
                 }
             })
             .collect::<Vec<_>>();
-        let mut scope = ModuleScopeBuilder::new(context.domain_id());
+        let mut scope = ModuleScope::new(context.domain_id());
         scope.extend(modules);
-        scope.into_scope()
+        Ok(scope)
     }
 }
 
@@ -384,12 +384,13 @@ where
         }
     }
 
-    pub(crate) fn commit_into<K>(
+    pub(crate) fn commit_into<K, Meta>(
         self,
-        committed: &mut CommittedStorage<K, Arch, Tls>,
+        committed: &mut CommittedStorage<K, Meta, Arch, Tls>,
     ) -> Result<Box<[ModuleId]>>
     where
         K: Clone + Ord,
+        Meta: Default,
     {
         let Self {
             resolve,
@@ -422,7 +423,7 @@ where
                 module,
                 direct_deps,
             } = entry;
-            committed.insert(slot, module, direct_deps, 0);
+            committed.insert(slot, module, direct_deps, 0, Meta::default());
             committed_ids.push(committed.make_module_id(slot));
         }
         assert!(

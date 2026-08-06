@@ -236,38 +236,20 @@ impl<L: ElfLayout> ElfGnuHash<L> {
 }
 
 impl<L: ElfLayout> ElfGnuHash<L> {
-    /// Get the number of symbols in the hash table
-    ///
-    /// This method calculates the number of symbols by examining the bucket
-    /// and chain arrays to determine the highest symbol index.
-    ///
-    /// # Returns
-    /// The number of symbols in the hash table
-    pub(crate) fn count_syms(&self) -> usize {
-        let symbias = self.header.symbias as usize;
-        let mut nsym = 0;
-        let buckets = self.buckets.as_slice();
-        let chains = self.chains.as_slice();
-
-        // Find the maximum symbol index referenced by buckets
-        for bucket in buckets {
-            nsym = nsym.max(*bucket as usize);
-        }
-
-        // If we found a valid symbol index, check the chains for the end marker
-        if nsym > 0 {
-            let mut idx = nsym.saturating_sub(self.header.symbias as usize);
-            while chains.get(idx).is_some_and(|chain| chain & 1 == 0) {
-                nsym += 1;
-                idx += 1;
-            }
-        }
-
-        if nsym == 0 {
-            symbias
-        } else {
-            // Include the last symbol referenced by the chain.
-            nsym + 1
+    pub(crate) fn for_each<H>(
+        &self,
+        table: SymbolTableView<'_, L, H>,
+        visitor: &mut dyn FnMut(&ElfSymbol<L>),
+    ) {
+        let start = self.header.symbias as usize;
+        let Some(end) = start.checked_add(self.chains.len()) else {
+            return;
+        };
+        for index in start..end {
+            let Some(symbol) = table.get_raw(index) else {
+                break;
+            };
+            visitor(symbol);
         }
     }
 
@@ -335,7 +317,7 @@ impl<L: ElfLayout> ElfGnuHash<L> {
 
             // Check if this chain entry matches our hash (ignoring LSB)
             if hash | 1 == chain_hash | 1 {
-                let cur_symbol = table.symbols().get(cur_symbol_idx)?;
+                let cur_symbol = table.get_raw(cur_symbol_idx)?;
                 let sym_name = table.strtab.get_str(cur_symbol.st_name());
 
                 // Check if this is the symbol we're looking for

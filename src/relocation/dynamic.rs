@@ -51,7 +51,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             observer,
             ..
         } = args;
-        scope.ensure_domain(self.core_ref().domain_id())?;
+        scope.check_domain(self.core_ref().domain_id())?;
         let relocation = self.relocation();
         if relocation.is_empty() {
             logging::debug!("No relocations needed for {}", self.name());

@@ -43,8 +43,8 @@ impl<L: ElfLayout> ObjectExports<L> {
 
 impl<L: ElfLayout> SymbolExports<L> for ObjectExports<L> {
     #[inline]
-    fn symbols(&self) -> &[ElfSymbol<L>] {
-        &self.symbols
+    fn for_each(&self, visitor: &mut dyn FnMut(&ElfSymbol<L>)) {
+        self.symbols.iter().for_each(visitor);
     }
 
     #[inline]
@@ -110,10 +110,8 @@ mod tests {
             ),
             Some("symbol"),
         );
-        assert_eq!(
-            <ObjectExports<NativeElfLayout> as SymbolExports<NativeElfLayout>>::symbols(&exports)
-                .len(),
-            1
-        );
+        let mut count = 0;
+        exports.for_each(&mut |_| count += 1);
+        assert_eq!(count, 1);
     }
 }

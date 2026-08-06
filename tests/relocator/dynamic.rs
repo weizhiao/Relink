@@ -218,8 +218,9 @@ fn synthetic_precedes_loaded() {
     );
     let scope = relocated.scope();
     assert_eq!(scope.len(), 2);
-    assert_eq!(scope[0].name(), "__host");
-    assert_eq!(scope[1].name(), provider.name());
+    let mut modules = scope.iter();
+    assert_eq!(modules.next().unwrap().name(), "__host");
+    assert_eq!(modules.next().unwrap().name(), provider.name());
 }
 
 #[test]
@@ -248,8 +249,9 @@ fn loaded_precedes_synthetic() {
     );
     let scope = relocated.scope();
     assert_eq!(scope.len(), 2);
-    assert_eq!(scope[0].name(), provider.name());
-    assert_eq!(scope[1].name(), "__host");
+    let mut modules = scope.iter();
+    assert_eq!(modules.next().unwrap().name(), provider.name());
+    assert_eq!(modules.next().unwrap().name(), "__host");
 }
 
 #[test]
@@ -285,8 +287,9 @@ fn extend_preserves_precedence() {
     );
     let scope = relocated.scope();
     assert_eq!(scope.len(), 2);
-    assert_eq!(scope[0].name(), first.name());
-    assert_eq!(scope[1].name(), second.name());
+    let mut modules = scope.iter();
+    assert_eq!(modules.next().unwrap().name(), first.name());
+    assert_eq!(modules.next().unwrap().name(), second.name());
 }
 
 #[test]

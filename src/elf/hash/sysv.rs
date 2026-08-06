@@ -118,13 +118,17 @@ impl ElfHash {
 }
 
 impl ElfHash {
-    /// Get the number of symbols in the hash table
-    ///
-    /// # Returns
-    /// The number of symbols (chain entries) in the hash table
-    #[inline]
-    pub(crate) fn count_syms(&self) -> usize {
-        self.header.nchain as usize
+    pub(crate) fn for_each<L: ElfLayout, H>(
+        &self,
+        table: SymbolTableView<'_, L, H>,
+        visitor: &mut dyn FnMut(&ElfSymbol<L>),
+    ) {
+        for index in 0..self.header.nchain as usize {
+            let Some(symbol) = table.get_raw(index) else {
+                break;
+            };
+            visitor(symbol);
+        }
     }
 
     /// Look up a symbol in the SYSV hash table
@@ -164,7 +168,7 @@ impl ElfHash {
 
             // Get the current symbol and its name
             let next_chain = *chains.get(chain_idx)? as usize;
-            let cur_symbol = table.symbols().get(chain_idx)?;
+            let cur_symbol = table.get_raw(chain_idx)?;
             let sym_name = table.strtab.get_str(cur_symbol.st_name());
 
             // Check if this is the symbol we're looking for

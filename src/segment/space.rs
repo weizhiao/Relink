@@ -229,6 +229,34 @@ impl<R: RegionAccess> ElfSegments<R> {
         self.region.read_view(region_offset, byte_len)
     }
 
+    /// Reads typed entries from `offset` to the end of its mapped range.
+    ///
+    /// This is useful for ELF tables such as `DT_SYMTAB`, whose dynamic tags
+    /// provide a base address but no logical entry count. The returned view is
+    /// bounded by mapped memory; callers must still obtain valid indices from
+    /// the table's associated metadata.
+    pub(crate) fn read_tail_view<T: ByteRepr + 'static>(
+        &self,
+        offset: VmOffset,
+    ) -> Option<MappedView<T>> {
+        let entry_size = core::mem::size_of::<T>();
+        if entry_size == 0 {
+            return None;
+        }
+
+        let idx = self
+            .ranges
+            .partition_point(|range| range.offset.get() <= offset.get());
+        let range = *self.ranges.get(idx.checked_sub(1)?)?;
+        let relative = offset.get().checked_sub(range.offset.get())?;
+        let remaining = range.len.checked_sub(relative)?;
+        let byte_len = remaining - remaining % entry_size;
+        if byte_len == 0 {
+            return None;
+        }
+        self.read_view(offset, byte_len)
+    }
+
     #[inline]
     pub(crate) fn zero_bytes(&self, addr: VmAddr, len: usize) -> Result<()> {
         debug_assert!(self.contains_range(addr, len));

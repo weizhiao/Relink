@@ -729,8 +729,6 @@ pub enum LazyBindingError {
     RelocIndexOutOfRange,
     /// The relocation is not a valid lazy PLT relocation.
     InvalidPltReloc,
-    /// The relocation references a symbol table entry that does not exist.
-    SymbolIndexOutOfRange,
 }
 
 impl Display for LazyBindingError {
@@ -743,7 +741,6 @@ impl Display for LazyBindingError {
             Self::MissingGotPlt => f.write_str("missing GOT/PLTGOT entry"),
             Self::RelocIndexOutOfRange => f.write_str("relocation index is out of range"),
             Self::InvalidPltReloc => f.write_str("invalid PLT relocation"),
-            Self::SymbolIndexOutOfRange => f.write_str("symbol index is out of range"),
         }
     }
 }
@@ -883,6 +880,11 @@ pub enum LinkContextError {
         /// The key id that did not resolve to a committed module.
         id: KeyId,
     },
+    /// A batch attempted to insert the same module key more than once.
+    DuplicateKey {
+        /// The duplicated key.
+        id: KeyId,
+    },
 }
 
 impl Display for LinkContextError {
@@ -907,6 +909,7 @@ impl Display for LinkContextError {
                 write!(f, "module id {} changed before publication", id)
             }
             Self::KeyNotCommitted { id } => write!(f, "key id {} is not committed", id),
+            Self::DuplicateKey { id } => write!(f, "key id {} appears more than once", id),
         }
     }
 }

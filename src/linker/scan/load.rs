@@ -41,15 +41,18 @@ where
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Discovers, plans, and loads one module through the scan-first path.
-    pub fn load_scan_first<Q>(
+    ///
+    /// Initialization failure is rolled back before the error is returned.
+    pub fn load_scan_first<Q, Meta>(
         &mut self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
     ) -> Result<LoadResult<Arch, Tls>>
     where
         K: 'static + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
+        Meta: Default,
     {
         if let Some(id) = context.module_id(key.borrow()) {
             let module = context.get(id)?.clone();
@@ -61,7 +64,7 @@ where
             ));
         }
 
-        let prepared = self.prepare_scan_load::<Q>(context, &key)?;
+        let prepared = self.prepare_scan_load::<Q, Meta>(context, &key)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -71,9 +74,9 @@ where
     }
 
     /// Resolves and maps a scan-first module group without relocating it.
-    pub fn prepare_scan_load<Q>(
+    pub fn prepare_scan_load<Q, Meta>(
         &mut self,
-        context: &mut LinkContext<K, Arch, Tls>,
+        context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: &K,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where

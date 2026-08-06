@@ -135,16 +135,16 @@ impl ModuleLease {
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::linker) struct CommittedModule<'a, Arch, Tls>
+pub(in crate::linker) struct CommittedModule<'a, Meta, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
     entry_key: KeySlot,
-    entry: &'a StoredEntry<Arch, Tls>,
+    entry: &'a StoredEntry<Meta, Arch, Tls>,
 }
 
-impl<'a, Arch, Tls> CommittedModule<'a, Arch, Tls>
+impl<'a, Meta, Arch, Tls> CommittedModule<'a, Meta, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -165,20 +165,25 @@ where
     }
 
     #[inline]
-    pub(crate) const fn root_count(&self) -> usize {
-        self.entry.roots
+    pub(crate) const fn is_root(&self) -> bool {
+        self.entry.pinned || self.entry.roots != 0
+    }
+
+    #[inline]
+    pub(crate) const fn meta(&self) -> &'a Meta {
+        &self.entry.meta
     }
 }
 
-pub(in crate::linker) struct CommittedModuleMut<'a, Arch, Tls>
+pub(in crate::linker) struct CommittedModuleMut<'a, Meta, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    entry: &'a mut StoredEntry<Arch, Tls>,
+    entry: &'a mut StoredEntry<Meta, Arch, Tls>,
 }
 
-impl<'a, Arch, Tls> CommittedModuleMut<'a, Arch, Tls>
+impl<'a, Meta, Arch, Tls> CommittedModuleMut<'a, Meta, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -201,10 +206,22 @@ where
             .expect("module lease must represent a direct acquisition");
         self.entry.roots
     }
+
+    #[inline]
+    pub(crate) fn pin_root(&mut self) {
+        self.release_root();
+        self.entry.pinned = true;
+    }
+
+    #[inline]
+    pub(crate) fn meta_mut(self) -> &'a mut Meta {
+        &mut self.entry.meta
+    }
 }
 
 pub(crate) struct CommittedStorage<
     K,
+    Meta = (),
     Arch: RelocationArch = NativeArch,
     Tls: TlsResolver<Arch> = (),
 > {
@@ -213,11 +230,11 @@ pub(crate) struct CommittedStorage<
     key_slots: BTreeMap<K, KeySlot>,
     keys: PrimaryMap<KeySlot, K>,
     key_modules: SecondaryMap<KeySlot, ModuleSlot>,
-    entries: PrimaryMap<ModuleSlot, ModuleCell<Arch, Tls>>,
+    entries: PrimaryMap<ModuleSlot, ModuleCell<Meta, Arch, Tls>>,
     lifecycle: Vec<ModuleSlot>,
 }
 
-impl<K, Arch, Tls> CommittedStorage<K, Arch, Tls>
+impl<K, Meta, Arch, Tls> CommittedStorage<K, Meta, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -311,7 +328,7 @@ where
     pub(in crate::linker) fn module(
         &self,
         slot: ModuleSlot,
-    ) -> Option<CommittedModule<'_, Arch, Tls>> {
+    ) -> Option<CommittedModule<'_, Meta, Arch, Tls>> {
         match self.entries.get(slot) {
             Some(ModuleCell {
                 entry_key,
@@ -329,7 +346,7 @@ where
     pub(crate) fn module_mut(
         &mut self,
         slot: ModuleSlot,
-    ) -> Option<CommittedModuleMut<'_, Arch, Tls>> {
+    ) -> Option<CommittedModuleMut<'_, Meta, Arch, Tls>> {
         match self.entries.get_mut(slot) {
             Some(ModuleCell {
                 entry: Some(entry), ..
@@ -361,7 +378,7 @@ where
     }
 }
 
-impl<K, Arch, Tls> CommittedStorage<K, Arch, Tls>
+impl<K, Meta, Arch, Tls> CommittedStorage<K, Meta, Arch, Tls>
 where
     K: Ord,
     Arch: RelocationArch,
@@ -414,7 +431,7 @@ where
     }
 }
 
-impl<K, Arch, Tls> CommittedStorage<K, Arch, Tls>
+impl<K, Meta, Arch, Tls> CommittedStorage<K, Meta, Arch, Tls>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
@@ -472,18 +489,24 @@ where
         module: ModuleHandle<Arch, Tls>,
         direct_deps: Box<[ModuleSlot]>,
         roots: usize,
+        meta: Meta,
     ) {
         let cell = &mut self.entries[slot];
-        let roots = cell.entry.as_ref().map_or(roots, |entry| entry.roots);
+        let (roots, pinned) = cell
+            .entry
+            .as_ref()
+            .map_or((roots, false), |entry| (entry.roots, entry.pinned));
         cell.entry = Some(StoredEntry {
             module,
             direct_deps,
             roots,
+            pinned,
+            meta,
         });
     }
 
     #[inline]
-    pub(crate) fn take(&mut self, slot: ModuleSlot) -> ModuleHandle<Arch, Tls> {
+    pub(crate) fn take(&mut self, slot: ModuleSlot) -> (ModuleHandle<Arch, Tls>, Meta) {
         let cell = &mut self.entries[slot];
         let removed = cell
             .entry
@@ -493,7 +516,7 @@ where
             .generation
             .checked_add(1)
             .expect("module generation overflowed");
-        removed.module
+        (removed.module, removed.meta)
     }
 
     pub(crate) fn prune_removed(&mut self) {
@@ -508,19 +531,21 @@ where
     }
 }
 
-struct ModuleCell<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+struct ModuleCell<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     entry_key: KeySlot,
     generation: u32,
-    entry: Option<StoredEntry<Arch, Tls>>,
+    entry: Option<StoredEntry<Meta, Arch, Tls>>,
 }
 
-struct StoredEntry<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+struct StoredEntry<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[ModuleSlot]>,
     roots: usize,
+    pinned: bool,
+    meta: Meta,
 }
 
-impl<K, Arch, Tls> Drop for CommittedStorage<K, Arch, Tls>
+impl<K, Meta, Arch, Tls> Drop for CommittedStorage<K, Meta, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,

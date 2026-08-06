@@ -4,7 +4,7 @@ use crate::{
     arch::NativeArch,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, SymbolTable},
     image::{
-        CoreRuntime, DynamicInfo, Module, ModuleScope, ModuleState, PltRelocInfo, SymbolExports,
+        CoreRuntime, DynamicInfo, LookupScope, Module, ModuleState, PltRelocInfo, SymbolExports,
     },
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
@@ -192,6 +192,15 @@ impl<
             .and_then(|info| info.runpath)
     }
 
+    /// Returns the `DT_NEEDED` names retained from the dynamic section.
+    #[inline]
+    pub fn needed_libs(&self) -> &[&str] {
+        self.inner
+            .dynamic_info
+            .as_ref()
+            .map_or(&[], |info| info.needed_libs.as_ref())
+    }
+
     /// Returns whether dynamic relocations in this image prefer definitions from itself.
     #[inline]
     pub(crate) fn symbolic(&self) -> bool {
@@ -203,7 +212,7 @@ impl<
 
     /// Installs the retained relocation lookup scope for this core.
     #[inline]
-    pub(crate) fn set_scope(&self, scope: &ModuleScope<Arch, Tls>) {
+    pub(crate) fn set_scope(&self, scope: &LookupScope<Arch, Tls>) {
         assert!(
             self.inner.scope.set(scope.downgrade()).is_ok(),
             "relocation scope must be installed only once",
@@ -281,6 +290,12 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         let symtab = SymbolTable::from_dynamic(&dynamic, &segments)?;
         let exports = symtab.clone();
         let lazy_symtab = symtab.clone();
+        let needed_libs = dynamic
+            .needed_libs
+            .iter()
+            .map(|needed| symtab.strtab().get_str(needed.get()))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         let soname = dynamic
             .soname_off
             .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
@@ -302,6 +317,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
                 eh_frame_hdr,
                 phdrs: ElfPhdrs::Vec(phdrs),
+                needed_libs,
                 soname,
                 rpath,
                 runpath,

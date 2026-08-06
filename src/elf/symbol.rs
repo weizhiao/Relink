@@ -510,7 +510,6 @@ impl<L: ElfLayout, H: Debug> Debug for SymbolTable<L, H> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SymbolTable")
             .field("hashtab", &self.hashtab)
-            .field("symbol_count", &self.symbols.len())
             .finish()
     }
 }
@@ -718,33 +717,21 @@ impl<L: ElfLayout, H> SymbolTable<L, H> {
 }
 
 impl<'symtab, L: ElfLayout, H> SymbolTableView<'symtab, L, H> {
-    /// Returns all symbol table entries.
+    /// Returns the raw symbol at `index` when it lies inside mapped memory.
     #[inline]
-    pub fn symbols(&self) -> &'symtab [ElfSymbol<L>] {
-        self.symbols
+    pub(crate) fn get_raw(&self, index: usize) -> Option<&'symtab ElfSymbol<L>> {
+        self.symbols.get(index)
     }
 
     /// Returns the symbol table entry for the given index.
-    pub fn symbol_idx(&self, idx: usize) -> SymbolEntry<'symtab, L> {
-        // Get the symbol at the specified index
-        let symbol = self
-            .symbols
-            .get(idx)
-            .expect("ELF symbol index is out of bounds");
-
-        // Get the symbol name as a C-style string
-        let cname = self.strtab.get_cstr(symbol.st_name());
-
-        // Convert to a Rust string slice
-        let name = ElfStringTable::convert_cstr(cname);
-
-        // Create and return the symbol and its information
+    pub fn entry(&self, index: usize) -> SymbolEntry<'symtab, L> {
+        let symbol = &self.symbols[index];
         SymbolEntry::new(
             symbol,
             SymbolInfo {
-                name,
+                name: self.strtab.get_str(symbol.st_name()),
                 #[cfg(feature = "version")]
-                version: self.get_requirement(idx),
+                version: self.get_requirement(index),
             },
         )
     }
@@ -763,11 +750,5 @@ impl<'symtab, L: ElfLayout> SymbolTableView<'symtab, L> {
         let name = name.as_ref();
         let mut lookup = SymbolLookup::new(name);
         self.lookup(&mut lookup)
-    }
-
-    /// Returns the number of symbols in the symbol table.
-    #[inline]
-    pub fn count_syms(&self) -> usize {
-        self.hashtab.count_syms()
     }
 }

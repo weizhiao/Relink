@@ -1,7 +1,7 @@
 use crate::{
     Relocator, Result,
     arch::NativeArch,
-    image::{ModuleHandle, ModuleScope, ModuleScopeBuilder},
+    image::{LookupScope, ModuleHandle, ModuleScope},
     lazy::{LazyBinder, SupportLazy},
     observer::RelocationObserver,
     relocation::{BindingMode, Relocatable, RelocateArgs, RelocationArch, SymbolRegistry},
@@ -20,7 +20,7 @@ pub struct RelocatorRun<
     Arch: RelocationArch = NativeArch,
     Obs = (),
     Tls: TlsResolver<Arch> = (),
-    ScopeState = ModuleScopeBuilder<Arch, Tls>,
+    ScopeState = ModuleScope<Arch, Tls>,
     Binder = (),
 > {
     object: T,
@@ -38,7 +38,7 @@ impl<Binder> Relocator<Binder> {
     pub fn run<D: Send + Sync + 'static, T, Arch, Tls>(
         &self,
         object: T,
-    ) -> RelocatorRun<'_, T, Arch, (), Tls, ModuleScopeBuilder<Arch, Tls>, Binder>
+    ) -> RelocatorRun<'_, T, Arch, (), Tls, ModuleScope<Arch, Tls>, Binder>
     where
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
@@ -47,7 +47,7 @@ impl<Binder> Relocator<Binder> {
         let domain = object.domain_id();
         RelocatorRun {
             object,
-            scope: ModuleScopeBuilder::new(domain),
+            scope: ModuleScope::new(domain),
             observer: (),
             binding: BindingMode::Default,
             symbols: None,
@@ -136,7 +136,7 @@ where
 }
 
 impl<'cfg, T, Arch, Obs, Tls, Binder>
-    RelocatorRun<'cfg, T, Arch, Obs, Tls, ModuleScopeBuilder<Arch, Tls>, Binder>
+    RelocatorRun<'cfg, T, Arch, Obs, Tls, ModuleScope<Arch, Tls>, Binder>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -152,11 +152,11 @@ where
         self
     }
 
-    /// Replaces the current module scope with a shared scope owner.
-    pub fn shared_scope(
+    /// Replaces the current module scope with a complete lookup scope.
+    pub fn lookup_scope(
         self,
-        scope: ModuleScope<Arch, Tls>,
-    ) -> RelocatorRun<'cfg, T, Arch, Obs, Tls, ModuleScope<Arch, Tls>, Binder> {
+        scope: LookupScope<Arch, Tls>,
+    ) -> RelocatorRun<'cfg, T, Arch, Obs, Tls, LookupScope<Arch, Tls>, Binder> {
         RelocatorRun {
             object: self.object,
             scope,
@@ -203,7 +203,7 @@ where
 }
 
 impl<'cfg, T, Arch, Obs, Tls, Binder>
-    RelocatorRun<'cfg, T, Arch, Obs, Tls, ModuleScopeBuilder<Arch, Tls>, Binder>
+    RelocatorRun<'cfg, T, Arch, Obs, Tls, ModuleScope<Arch, Tls>, Binder>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -227,7 +227,7 @@ where
         } = self;
 
         object.relocate(RelocateArgs {
-            scope: scope.into_scope()?,
+            scope: LookupScope::from_group(scope),
             symbols,
             binding,
             run_init: relocator.run_init,
@@ -238,7 +238,7 @@ where
 }
 
 impl<'cfg, T, Arch, Obs, Tls, Binder>
-    RelocatorRun<'cfg, T, Arch, Obs, Tls, ModuleScope<Arch, Tls>, Binder>
+    RelocatorRun<'cfg, T, Arch, Obs, Tls, LookupScope<Arch, Tls>, Binder>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,

@@ -2,7 +2,7 @@ use crate::{
     Result, TlsError,
     arch::NativeArch,
     elf::{ElfSymbol, ElfSymbolType, SymbolEntry},
-    image::{DynamicInfo, Module, ModuleState, PltRelocInfo, SymbolExports, WeakModuleScope},
+    image::{DynamicInfo, Module, ModuleState, PltRelocInfo, SymbolExports, WeakLookupScope},
     input::PathBuf,
     lazy::{LazySetup, LazyValues},
     logging,
@@ -85,7 +85,7 @@ impl<Arch: RelocationArch> CoreRuntime<Arch> {
 pub(crate) trait CoreRuntimeModule<Arch: RelocationArch>: Send + Sync {
     fn memory(&self) -> &dyn ImageMemory;
 
-    fn lookup_symbol(&self, symbol: SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>>;
+    fn lookup_symbol(&self, symbol: &SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>>;
 }
 
 #[inline]
@@ -121,19 +121,19 @@ where
         &self.segments
     }
 
-    fn lookup_symbol(&self, symbol: SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>> {
+    fn lookup_symbol(&self, symbol: &SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>> {
         if Tls::OVERRIDE_TLS_GET_ADDR && symbol.name() == TLS_GET_ADDR_SYMBOL {
             return self.tls.resolver().bind_tls_get_addr().map(Some);
         }
 
-        let Some(scope) = self.scope.get().and_then(WeakModuleScope::upgrade) else {
+        let Some(scope) = self.scope.get().and_then(WeakLookupScope::upgrade) else {
             return Ok(None);
         };
         let symbolic = self.dynamic_info.as_ref().is_some_and(|info| info.symbolic);
         let executor = self.executor.as_ref();
         let symbols = self.symbols.get().and_then(Weak::upgrade);
         SymbolResolver::new(self, scope, symbols.as_deref(), symbolic)
-            .find(&symbol)
+            .find(symbol)
             .map(|symdef| symdef.resolve(executor))
             .transpose()
     }
@@ -172,7 +172,7 @@ pub(crate) struct CoreInner<
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
 
     /// Relocation lookup scope retained for the loaded module lifetime.
-    pub(crate) scope: OnceCell<WeakModuleScope<Arch, Tls>>,
+    pub(crate) scope: OnceCell<WeakLookupScope<Arch, Tls>>,
 
     /// Namespace symbol state used by deferred lookup.
     pub(crate) symbols: OnceCell<Weak<SymbolRegistry<Arch, Tls>>>,
