@@ -11,6 +11,8 @@ use crate::{
 };
 use core::any::Any;
 
+use super::search::ModuleSearch;
+
 /// Runtime symbol exports for a module.
 ///
 /// Export backends may be backed by an ELF dynamic symbol table, an object export
@@ -59,15 +61,16 @@ where
 pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>:
     Any + Send + Sync
 {
-    /// Returns the canonical lifecycle state for this logical module.
-    ///
-    /// Wrappers around the same module must return the same stable state
-    /// address. Relink uses it to coordinate initialization and finalization
-    /// across wrappers around the same underlying module.
-    fn state(&self) -> &ModuleState;
-
     /// Returns the module name used for diagnostics.
     fn name(&self) -> &str;
+
+    /// Returns the runtime domain in which this module's addresses are meaningful.
+    fn domain_id(&self) -> DomainId;
+
+    /// Returns metadata used when this module initiates another load.
+    fn search(&self) -> Option<&ModuleSearch> {
+        None
+    }
 
     /// Returns the runtime symbol exports for this module.
     fn exports(&self) -> &dyn SymbolExports<Arch::Layout>;
@@ -87,8 +90,12 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
         None
     }
 
-    /// Returns the runtime domain in which this module's addresses are meaningful.
-    fn domain_id(&self) -> DomainId;
+    /// Returns the canonical lifecycle state for this logical module.
+    ///
+    /// Wrappers around the same module must return the same stable state
+    /// address. Relink uses it to coordinate initialization and finalization
+    /// across wrappers around the same underlying module.
+    fn state(&self) -> &ModuleState;
 
     /// Performs this module's initialization hook.
     ///
@@ -115,13 +122,18 @@ where
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
-    fn state(&self) -> &ModuleState {
-        (**self).state()
+    fn name(&self) -> &str {
+        (**self).name()
     }
 
     #[inline]
-    fn name(&self) -> &str {
-        (**self).name()
+    fn domain_id(&self) -> DomainId {
+        (**self).domain_id()
+    }
+
+    #[inline]
+    fn search(&self) -> Option<&ModuleSearch> {
+        (**self).search()
     }
 
     #[inline]
@@ -145,8 +157,8 @@ where
     }
 
     #[inline]
-    fn domain_id(&self) -> DomainId {
-        (**self).domain_id()
+    fn state(&self) -> &ModuleState {
+        (**self).state()
     }
 
     #[inline]

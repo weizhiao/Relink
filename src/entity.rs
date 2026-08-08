@@ -6,7 +6,7 @@ use core::{
 };
 
 /// A typed entity reference backed by a zero-based dense index.
-pub trait EntityRef: Copy + Eq {
+pub(crate) trait EntityRef: Copy + Eq {
     /// Creates a new entity reference from a zero-based index.
     fn new(index: usize) -> Self;
 
@@ -16,7 +16,7 @@ pub trait EntityRef: Copy + Eq {
 
 /// Compact set for dense typed entity references.
 #[derive(Debug, Clone)]
-pub struct EntitySet<K> {
+pub(crate) struct EntitySet<K> {
     values: Vec<bool>,
     marker: PhantomData<fn() -> K>,
 }
@@ -33,7 +33,7 @@ impl<K> Default for EntitySet<K> {
 
 impl<K: EntityRef> EntitySet<K> {
     /// Inserts `key`, returning whether it was not already present.
-    pub fn insert(&mut self, key: K) -> bool {
+    pub(crate) fn insert(&mut self, key: K) -> bool {
         let index = key.index();
         if self.values.len() <= index {
             self.values.resize(index + 1, false);
@@ -43,7 +43,7 @@ impl<K: EntityRef> EntitySet<K> {
 
     /// Returns whether `key` is present.
     #[inline]
-    pub fn contains(&self, key: K) -> bool {
+    pub(crate) fn contains(&self, key: K) -> bool {
         self.values.get(key.index()).copied().unwrap_or(false)
     }
 }
@@ -60,18 +60,24 @@ impl<K: EntityRef> FromIterator<K> for EntitySet<K> {
 
 macro_rules! entity_ref {
     ($name:ident) => {
+        entity_ref!(@impl $name, pub(crate));
+    };
+    ($name:ident, $vis:vis) => {
+        entity_ref!(@impl $name, $vis);
+    };
+    (@impl $name:ident, $vis:vis) => {
         impl $name {
             /// Creates a new typed entity reference from a zero-based index.
             #[inline]
             #[allow(dead_code)]
-            pub const fn new(index: usize) -> Self {
+            $vis const fn new(index: usize) -> Self {
                 Self(index)
             }
 
             /// Returns the zero-based index represented by this reference.
             #[inline]
             #[allow(dead_code)]
-            pub const fn index(self) -> usize {
+            $vis const fn index(self) -> usize {
                 self.0
             }
         }
@@ -97,12 +103,12 @@ pub(crate) use entity_ref;
 /// This is a small self-contained equivalent of the arena style used in
 /// Cranelift: ids are dense indices and storage is backed by a single `Vec<T>`.
 #[derive(Debug, Clone)]
-pub struct PrimaryMap<K, V> {
+pub(crate) struct PrimaryMap<K, V> {
     values: Vec<V>,
     marker: PhantomData<fn() -> K>,
 }
 
-pub struct PrimaryMapIntoIter<K, V> {
+pub(crate) struct PrimaryMapIntoIter<K, V> {
     values: Enumerate<IntoIter<V>>,
     marker: PhantomData<fn() -> K>,
 }
@@ -124,13 +130,13 @@ where
     /// Creates an empty primary map.
     #[inline]
     #[allow(dead_code)]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Appends one value and returns its typed id.
     #[inline]
-    pub fn push(&mut self, value: V) -> K {
+    pub(crate) fn push(&mut self, value: V) -> K {
         let key = K::new(self.values.len());
         self.values.push(value);
         key
@@ -152,19 +158,19 @@ where
 
     /// Returns one stored value by id.
     #[inline]
-    pub fn get(&self, key: K) -> Option<&V> {
+    pub(crate) fn get(&self, key: K) -> Option<&V> {
         self.values.get(key.index())
     }
 
     /// Returns one stored value by id mutably.
     #[inline]
-    pub fn get_mut(&mut self, key: K) -> Option<&mut V> {
+    pub(crate) fn get_mut(&mut self, key: K) -> Option<&mut V> {
         self.values.get_mut(key.index())
     }
 
     /// Iterates over ids and values together.
     #[inline]
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (K, &V)> + ExactSizeIterator {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = (K, &V)> + ExactSizeIterator {
         self.values
             .iter()
             .enumerate()
@@ -239,7 +245,7 @@ where
 /// owning storage or external lookup key. Missing ids are represented by empty
 /// slots, so sparse side data does not need placeholder values.
 #[derive(Debug, Clone)]
-pub struct SecondaryMap<K, V> {
+pub(crate) struct SecondaryMap<K, V> {
     values: Vec<Option<V>>,
     marker: PhantomData<fn() -> K>,
 }
@@ -261,12 +267,12 @@ where
     /// Creates an empty secondary map.
     #[inline]
     #[allow(dead_code)]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Inserts side data for `key`, returning the previous value if present.
-    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+    pub(crate) fn insert(&mut self, key: K, value: V) -> Option<V> {
         let index = key.index();
         if self.values.len() <= index {
             self.values.resize_with(index + 1, || None);
@@ -276,24 +282,24 @@ where
 
     /// Removes side data for `key`, returning it if present.
     #[inline]
-    pub fn remove(&mut self, key: K) -> Option<V> {
+    pub(crate) fn remove(&mut self, key: K) -> Option<V> {
         self.values.get_mut(key.index()).and_then(Option::take)
     }
 
     /// Returns side data for `key`.
     #[inline]
-    pub fn get(&self, key: K) -> Option<&V> {
+    pub(crate) fn get(&self, key: K) -> Option<&V> {
         self.values.get(key.index()).and_then(Option::as_ref)
     }
 
     /// Returns side data for `key` mutably.
     #[inline]
-    pub fn get_mut(&mut self, key: K) -> Option<&mut V> {
+    pub(crate) fn get_mut(&mut self, key: K) -> Option<&mut V> {
         self.values.get_mut(key.index()).and_then(Option::as_mut)
     }
 
     /// Retains only side-data entries accepted by `f`.
-    pub fn retain(&mut self, mut f: impl FnMut(K, &mut V) -> bool) {
+    pub(crate) fn retain(&mut self, mut f: impl FnMut(K, &mut V) -> bool) {
         for (index, value) in self.values.iter_mut().enumerate() {
             let remove = value.as_mut().is_some_and(|value| !f(K::new(index), value));
             if remove {
@@ -304,7 +310,7 @@ where
 
     /// Iterates over ids and present side-data values together.
     #[inline]
-    pub fn iter(&self) -> impl Iterator<Item = (K, &V)> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (K, &V)> {
         self.values
             .iter()
             .enumerate()

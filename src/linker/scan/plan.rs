@@ -20,7 +20,7 @@ use core::marker::PhantomData;
 pub(in crate::linker) struct ModuleId(usize);
 entity_ref!(ModuleId);
 
-pub struct PlannedModule<K, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+pub(in crate::linker) struct PlannedModule<K, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     slot: ModuleSlot,
     key: K,
     module: ScannedDynamic<Arch>,
@@ -67,7 +67,7 @@ where
     }
 
     #[inline]
-    pub fn key(&self) -> &K {
+    pub(in crate::linker) fn key(&self) -> &K {
         &self.key
     }
 

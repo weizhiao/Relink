@@ -4,7 +4,7 @@ use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
     entity::{EntitySet, SecondaryMap},
-    image::ModuleHandle,
+    image::{ModuleHandle, SearchPathPool},
     relocation::{RelocationArch, SymbolRegistry},
     runtime::DomainId,
     sync::Arc,
@@ -138,6 +138,7 @@ pub struct LinkContext<K, Meta = (), Arch: RelocationArch = NativeArch, Tls: Tls
 {
     pub(super) committed: CommittedStorage<K, Meta, Arch, Tls>,
     pub(super) symbols: Arc<SymbolRegistry<Arch, Tls>>,
+    pub(crate) search_paths: SearchPathPool,
 }
 
 impl<K, Meta, Arch, Tls> LinkContext<K, Meta, Arch, Tls>
@@ -151,6 +152,7 @@ where
         Self {
             committed: CommittedStorage::new(ContextId::fresh(), domain),
             symbols: Arc::new(SymbolRegistry::new()),
+            search_paths: SearchPathPool::default(),
         }
     }
 

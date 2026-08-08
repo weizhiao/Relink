@@ -8,6 +8,7 @@ use crate::{
         ElfSectionId, ElfSectionType, ElfShdr, ElfStringTable, NativeElfLayout,
         parse_dynamic_entries,
     },
+    image::ModuleSearch,
     input::{ElfReader, ElfReaderExt, Path, PathBuf},
     loader::ScanBuilder,
     memory::MappedView,
@@ -66,8 +67,8 @@ impl DynamicScanParts {
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let soname = parsed.soname_off.map(|offset| offset.get());
-        let rpath = parsed.rpath_off.map(|offset| offset.get());
-        let runpath = parsed.runpath_off.map(|offset| offset.get());
+        let rpath = parsed.rpath_off;
+        let runpath = parsed.runpath_off;
 
         Ok(Self {
             strtab: strtab.into_boxed_slice(),
@@ -146,16 +147,13 @@ impl ModuleCapability {
 
 /// A dynamic ELF image that has been parsed but not yet mapped into memory.
 pub struct ScannedDynamic<Arch: RelocationArch = NativeArch> {
-    path: PathBuf,
+    search: ModuleSearch,
     ehdr: ElfHeader<Arch::Layout>,
     phdrs: Box<[ElfPhdr<Arch::Layout>]>,
     interp: Option<Box<[u8]>>,
     _strtab_bytes: Box<[u8]>,
     strtab: ElfStringTable,
     section_table: Option<SectionTable<Arch::Layout>>,
-    soname: Option<usize>,
-    rpath: Option<usize>,
-    runpath: Option<usize>,
     needed_libs: Box<[usize]>,
     capability: ModuleCapability,
     reader: Box<dyn ElfReader + 'static>,
@@ -374,7 +372,7 @@ impl<'a, L: ElfLayout> fmt::Debug for ScannedSection<'a, L> {
 impl<Arch: RelocationArch> fmt::Debug for ScannedDynamic<Arch> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScannedDynamic")
-            .field("path", &self.path)
+            .field("path", &self.path())
             .field("soname", &self.soname())
             .field("needed_libs", &self.needed_libs().collect::<Vec<_>>())
             .field(
@@ -536,6 +534,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             ehdr,
             phdrs,
             mut reader,
+            search_paths,
         } = builder;
         let interp = read_interp(reader.as_mut(), &phdrs)?;
         let DynamicScanParts {
@@ -548,6 +547,13 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         let section_table = SectionTable::new(reader.as_mut(), &ehdr)?;
         let strtab_bytes = unsafe { core::slice::from_raw_parts(strtab.as_ptr(), strtab.len()) };
         let strtab_view = ElfStringTable::new(MappedView::from_slice(strtab_bytes));
+        let search = ModuleSearch::from_dynamic_in(
+            path,
+            soname.map(|offset| strtab_view.get_str(offset)),
+            runpath.map(|offset| strtab_view.get_str(offset)),
+            rpath.map(|offset| strtab_view.get_str(offset)),
+            &search_paths,
+        );
         let capability = section_table
             .as_ref()
             .map_or(ModuleCapability::Opaque, |table| {
@@ -555,16 +561,13 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             });
 
         Ok(Self {
-            path,
+            search,
             ehdr,
             phdrs,
             interp,
             _strtab_bytes: strtab,
             strtab: strtab_view,
             section_table,
-            soname,
-            rpath,
-            runpath,
             needed_libs,
             capability,
             reader,
@@ -574,13 +577,13 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     /// Returns the loader source path or caller-provided source identifier.
     #[inline]
     pub fn path(&self) -> &Path {
-        self.path.as_path()
+        self.search.path()
     }
 
     /// Returns the ELF image identity used for diagnostics.
     #[inline]
     pub fn name(&self) -> &str {
-        self.soname().unwrap_or_else(|| self.path().file_name())
+        self.search.name()
     }
 
     /// Returns the parsed ELF header.
@@ -607,22 +610,16 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         })
     }
 
-    /// Returns the DT_RPATH string when present.
+    /// Returns expanded module search metadata.
     #[inline]
-    pub fn rpath(&self) -> Option<&str> {
-        self.rpath.map(|offset| self.strtab.get_str(offset))
-    }
-
-    /// Returns the DT_RUNPATH string when present.
-    #[inline]
-    pub fn runpath(&self) -> Option<&str> {
-        self.runpath.map(|offset| self.strtab.get_str(offset))
+    pub fn search(&self) -> &ModuleSearch {
+        &self.search
     }
 
     /// Returns the DT_SONAME string when present.
     #[inline]
     pub fn soname(&self) -> Option<&str> {
-        self.soname.map(|offset| self.strtab.get_str(offset))
+        self.search.soname()
     }
 
     /// Returns one `DT_NEEDED` entry by index.
@@ -744,6 +741,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
             ehdr,
             phdrs,
             mut reader,
+            search_paths: _,
         } = builder;
         let interp = read_interp(reader.as_mut(), &phdrs)?;
         let section_table = SectionTable::new(reader.as_mut(), &ehdr)?;

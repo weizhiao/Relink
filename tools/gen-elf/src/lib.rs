@@ -1,5 +1,6 @@
 //! `gen-elf` is a utility for generating ELF files (Shared Objects and Relocatable Objects)
 //! specifically designed for testing ELF loaders.
+#![warn(unreachable_pub)]
 
 mod arch;
 mod common;

@@ -61,7 +61,7 @@ impl MultiBinaryResolver {
 }
 
 impl KeyResolver<&'static str> for MultiBinaryResolver {
-    fn load_root<'cfg>(
+    fn resolve_root<'cfg>(
         &self,
         req: &RootRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>

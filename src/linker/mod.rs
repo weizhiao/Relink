@@ -21,9 +21,8 @@ mod unload;
 pub use context::LinkContext;
 pub use driver::{Linker, LoadResult};
 pub use resolver::{
-    CandidateContext, CandidateRequest, DependencyOwner, DependencyRequest, FileNameKey,
-    KeyResolver, KeyRule, PathKey, ResolvedKey, RootRequest, SearchDirProvider, SearchOwner,
-    SearchPathEntry, SearchPathResolver,
+    CandidateContext, CandidateRequest, DependencyRequest, FileNameKey, KeyMapper, KeyResolver,
+    PathKey, ResolvedKey, RootRequest, SearchPathResolver,
 };
 pub use run::{FailedLoad, LinkerRun, PreparedLoad, PublishedLoad, RelocatedLoad};
 pub use storage::{ContextId, KeyId, ModuleId, ModuleLease};

@@ -20,6 +20,10 @@ pub(crate) struct Fixtures {
     pub(crate) provider_path: PathBuf,
     #[cfg(any(feature = "libc", feature = "use-syscall"))]
     pub(crate) root_path: PathBuf,
+    #[cfg(any(feature = "libc", feature = "use-syscall"))]
+    pub(crate) rpath_root_path: PathBuf,
+    #[cfg(any(feature = "libc", feature = "use-syscall"))]
+    pub(crate) rpath_caller_path: PathBuf,
 }
 
 pub(crate) fn fixtures() -> &'static Fixtures {
@@ -30,14 +34,8 @@ pub(crate) fn fixtures() -> &'static Fixtures {
 #[cfg(any(feature = "libc", feature = "use-syscall"))]
 pub(crate) fn search_path_resolver<K>() -> SearchPathResolver<K> {
     let mut resolver = SearchPathResolver::new();
-    resolver.push_search_dir_provider(|request, out| {
-        if let Some(dirs) = request.runpath() {
-            out.extend(dirs);
-        } else if let Some(dirs) = request.rpath() {
-            out.extend(dirs);
-        }
-        Ok(())
-    });
+    resolver.push_rpath();
+    resolver.push_runpath();
     resolver
 }
 
@@ -66,6 +64,42 @@ fn build() -> Fixtures {
     let dependent_path = dylib("dependent", Some(("provider", &provider_path)));
     #[cfg(any(feature = "libc", feature = "use-syscall"))]
     let root_path = dylib("root", Some(("dependent", &dependent_path)));
+
+    #[cfg(any(feature = "libc", feature = "use-syscall"))]
+    let (rpath_root_path, rpath_caller_path) = {
+        let build = FixtureBuild::c("tests/linker/fixtures", "linker");
+        let dir = build.output("rpath");
+        fs::create_dir_all(&dir).expect("failed to create RPATH fixture directory");
+        let leaf = build.c_shared("rpath_leaf.c", "rpath/libleaf.so", &[], |command| {
+            command.arg("-Wl,-soname,libleaf.so");
+        });
+        let middle = build.c_shared(
+            "rpath_middle.c",
+            "rpath/libmiddle.so",
+            &[leaf.as_path()],
+            |command| {
+                command
+                    .arg("-Wl,-soname,libmiddle.so")
+                    .arg(format!("-L{}", dir.display()))
+                    .arg("-lleaf");
+            },
+        );
+        let root = build.c_shared(
+            "rpath_root.c",
+            "librpath_root.so",
+            &[middle.as_path()],
+            |command| {
+                command
+                    .arg(format!("-L{}", dir.display()))
+                    .arg("-lmiddle")
+                    .arg("-Wl,--disable-new-dtags,-rpath,$ORIGIN/rpath");
+            },
+        );
+        let caller = build.c_shared("rpath_caller.c", "librpath_caller.so", &[], |command| {
+            command.arg("-Wl,--disable-new-dtags,-rpath,$ORIGIN/rpath");
+        });
+        (root, caller)
+    };
 
     let plain = build.rust_cdylib("plain.rs", "plain", &[], |_| {});
 
@@ -117,5 +151,9 @@ fn build() -> Fixtures {
         provider_path,
         #[cfg(any(feature = "libc", feature = "use-syscall"))]
         root_path,
+        #[cfg(any(feature = "libc", feature = "use-syscall"))]
+        rpath_root_path,
+        #[cfg(any(feature = "libc", feature = "use-syscall"))]
+        rpath_caller_path,
     }
 }

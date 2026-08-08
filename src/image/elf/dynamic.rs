@@ -24,7 +24,8 @@ use alloc::{boxed::Box, vec::Vec};
 use core::ptr::NonNull;
 
 use crate::image::{
-    CoreRuntime, ElfCore, LoadedCore, Module, ModuleState, SymbolExports, core::CoreInner,
+    CoreRuntime, ElfCore, LoadedCore, Module, ModuleSearch, ModuleState, SymbolExports,
+    core::CoreInner,
 };
 
 impl<L: ElfLayout> SymbolTable<L> {
@@ -105,9 +106,6 @@ pub(crate) struct DynamicInfo<Arch: RelocationArch = NativeArch> {
     pub(crate) eh_frame_hdr: Option<NonNull<u8>>,
     pub(crate) phdrs: ElfPhdrs<Arch::Layout>,
     pub(crate) needed_libs: Box<[&'static str]>,
-    pub(crate) soname: Option<&'static str>,
-    pub(crate) rpath: Option<&'static str>,
-    pub(crate) runpath: Option<&'static str>,
     pub(crate) symbolic: bool,
 }
 
@@ -244,24 +242,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     #[inline]
     pub(crate) fn got_plt(&self) -> Option<VmAddr> {
         self.extra.got_plt
-    }
-
-    /// Gets the DT_RPATH value
-    ///
-    /// # Returns
-    /// An optional string slice containing the RPATH value
-    #[inline]
-    pub fn rpath(&self) -> Option<&str> {
-        self.module.rpath()
-    }
-
-    /// Gets the DT_RUNPATH value
-    ///
-    /// # Returns
-    /// An optional string slice containing the RUNPATH value
-    #[inline]
-    pub fn runpath(&self) -> Option<&str> {
-        self.module.runpath()
     }
 
     /// Gets the DT_SONAME value
@@ -440,10 +420,12 @@ where
             .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
         let rpath = dynamic
             .rpath_off
-            .map(|rpath_off| symtab.strtab().get_str(rpath_off.get()));
+            .map(|rpath_off| symtab.strtab().get_str(rpath_off));
         let runpath = dynamic
             .runpath_off
-            .map(|runpath_off| symtab.strtab().get_str(runpath_off.get()));
+            .map(|runpath_off| symtab.strtab().get_str(runpath_off));
+        let search =
+            ModuleSearch::from_dynamic_in(self.path, soname, runpath, rpath, &self.search_paths);
 
         let tls = if let Some(info) = &self.tls_info {
             let image = self
@@ -471,16 +453,13 @@ where
             domain: self.domain,
             state: ModuleState::new(),
             lifecycle: OnceCell::new(),
-            path: self.path,
+            search,
             exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),
             user_data: self.user_data,
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
                 eh_frame_hdr: self.eh_frame_hdr,
                 phdrs,
                 needed_libs: needed_libs.into_boxed_slice(),
-                soname,
-                rpath,
-                runpath,
                 symbolic: dynamic.symbolic,
             })),
             scope: OnceCell::new(),

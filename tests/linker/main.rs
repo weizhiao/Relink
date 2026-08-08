@@ -132,7 +132,7 @@ impl RelocationObserver for InitRecorder {
 }
 
 impl KeyResolver<&'static str> for SingleBinaryResolver {
-    fn load_root<'cfg>(
+    fn resolve_root<'cfg>(
         &self,
         req: &RootRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
@@ -159,7 +159,7 @@ impl KeyResolver<&'static str> for SingleBinaryResolver {
 }
 
 impl KeyResolver<&'static str> for ExistingRootResolver {
-    fn load_root<'cfg>(
+    fn resolve_root<'cfg>(
         &self,
         req: &RootRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
@@ -183,7 +183,7 @@ impl KeyResolver<&'static str> for ExistingRootResolver {
 }
 
 impl KeyResolver<&'static str> for ModuleDependencyResolver {
-    fn load_root<'cfg>(
+    fn resolve_root<'cfg>(
         &self,
         req: &RootRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
@@ -212,7 +212,7 @@ impl KeyResolver<&'static str> for ModuleDependencyResolver {
 }
 
 impl KeyResolver<&'static str> for ExistingDependencyResolver {
-    fn load_root<'cfg>(
+    fn resolve_root<'cfg>(
         &self,
         req: &RootRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
@@ -239,7 +239,7 @@ impl KeyResolver<&'static str> for ExistingDependencyResolver {
 }
 
 impl KeyResolver<&'static str> for SyntheticDependencyResolver {
-    fn load_root<'cfg>(
+    fn resolve_root<'cfg>(
         &self,
         req: &RootRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
@@ -271,7 +271,7 @@ impl KeyResolver<&'static str> for SyntheticDependencyResolver {
 }
 
 impl KeyResolver<&'static str> for SyntheticRootResolver {
-    fn load_root<'cfg>(
+    fn resolve_root<'cfg>(
         &self,
         req: &RootRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>

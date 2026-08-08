@@ -62,20 +62,9 @@ impl Path {
 
     /// Joins a child path or filename to this directory.
     pub fn join(&self, name: impl AsRef<str>) -> PathBuf {
-        let dir = self.as_str();
-        let name = name.as_ref();
-        if dir.is_empty() || dir == "." {
-            return PathBuf::from(name);
-        }
-
-        let needs_separator = !dir.ends_with('/') && !dir.ends_with('\\');
-        let mut path = String::with_capacity(dir.len() + usize::from(needs_separator) + name.len());
-        path.push_str(dir);
-        if needs_separator {
-            path.push('/');
-        }
-        path.push_str(name);
-        PathBuf::from(path)
+        let mut path = PathBuf::default();
+        path.set_joined(self, name.as_ref());
+        path
     }
 }
 
@@ -122,7 +111,7 @@ impl AsRef<Path> for String {
 }
 
 /// Owned ELF loader path.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct PathBuf(String);
 
 impl PathBuf {
@@ -148,6 +137,24 @@ impl PathBuf {
     #[inline]
     pub fn into_string(self) -> String {
         self.0
+    }
+
+    pub(crate) fn set_joined(&mut self, dir: &Path, name: &str) {
+        self.0.clear();
+        let dir = dir.as_str();
+        if dir.is_empty() || dir == "." {
+            self.0.push_str(name);
+            return;
+        }
+
+        let needs_separator = !dir.ends_with('/') && !dir.ends_with('\\');
+        self.0
+            .reserve(dir.len() + usize::from(needs_separator) + name.len());
+        self.0.push_str(dir);
+        if needs_separator {
+            self.0.push('/');
+        }
+        self.0.push_str(name);
     }
 }
 

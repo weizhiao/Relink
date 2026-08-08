@@ -154,28 +154,28 @@ cfg_if::cfg_if! {
         // `SUPPORTS_NATIVE_RUNTIME` on each per-ISA ZST is `cfg!(target_arch
         // = "<isa>")`, this re-export is the only place that turns "host
         // runtime hooks enabled" on.
-        pub use x86_64::relocation::X86_64Arch as NativeArch;
+        pub use x86_64::X86_64Arch as NativeArch;
     }else if #[cfg(target_arch = "riscv64")]{
         pub use riscv64::*;
-        pub use riscv64::relocation::RiscV64Arch as NativeArch;
+        pub use riscv64::RiscV64Arch as NativeArch;
     }else if #[cfg(target_arch = "riscv32")]{
         pub use riscv32::*;
-        pub use riscv32::relocation::RiscV32Arch as NativeArch;
+        pub use riscv32::RiscV32Arch as NativeArch;
     }else if #[cfg(target_arch="aarch64")]{
         pub use aarch64::*;
-        pub use aarch64::relocation::AArch64Arch as NativeArch;
+        pub use aarch64::AArch64Arch as NativeArch;
     }else if #[cfg(target_arch="loongarch64")]{
         pub use loongarch64::*;
-        pub use loongarch64::relocation::LoongArch64Arch as NativeArch;
+        pub use loongarch64::LoongArch64Arch as NativeArch;
     }else if #[cfg(target_arch = "x86")]{
         pub use x86::*;
-        pub use x86::relocation::X86Arch as NativeArch;
+        pub use x86::X86Arch as NativeArch;
     }else if #[cfg(target_arch = "arm")]{
         pub use arm::*;
-        pub use arm::relocation::ArmArch as NativeArch;
+        pub use arm::ArmArch as NativeArch;
     }else if #[cfg(target_arch = "xtensa")]{
         pub use xtensa::*;
-        pub use xtensa::relocation::XtensaArch as NativeArch;
+        pub use xtensa::XtensaArch as NativeArch;
     }
 }
 

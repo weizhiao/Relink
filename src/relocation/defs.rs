@@ -48,12 +48,12 @@ pub(crate) enum RelocationValueKind {
 
 impl<T> RelocValue<T> {
     #[inline]
-    pub const fn new(val: T) -> Self {
+    pub(crate) const fn new(val: T) -> Self {
         Self(val)
     }
 
     #[inline]
-    pub fn into_inner(self) -> T {
+    pub(crate) fn into_inner(self) -> T {
         self.0
     }
 }
@@ -85,7 +85,7 @@ impl VmAddr {
 #[cfg(feature = "object")]
 impl RelocSWord32 {
     #[inline]
-    pub const fn to_ne_bytes(self) -> [u8; 4] {
+    pub(crate) const fn to_ne_bytes(self) -> [u8; 4] {
         self.0.to_ne_bytes()
     }
 }

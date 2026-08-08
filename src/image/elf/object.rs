@@ -12,7 +12,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfSectionId, Lifecycle},
-    image::{CoreRuntime, ModuleState, SymbolExports},
+    image::{CoreRuntime, ModuleSearch, ModuleState, SymbolExports},
     lazy::LazyBinder,
     memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
@@ -87,7 +87,7 @@ where
             domain: self.domain,
             state: ModuleState::new(),
             lifecycle: OnceCell::new(),
-            path: self.path,
+            search: ModuleSearch::new(self.path),
             exports: arc_unsize!(
                 Arc::new(ObjectExports::<Arch::Layout>::empty())
                     => dyn SymbolExports<Arch::Layout>

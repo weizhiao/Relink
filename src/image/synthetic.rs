@@ -503,13 +503,13 @@ where
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
-    fn state(&self) -> &ModuleState {
-        &self.state
+    fn name(&self) -> &str {
+        &self.name
     }
 
     #[inline]
-    fn name(&self) -> &str {
-        &self.name
+    fn domain_id(&self) -> DomainId {
+        self.domain
     }
 
     #[inline]
@@ -550,8 +550,8 @@ where
     }
 
     #[inline]
-    fn domain_id(&self) -> DomainId {
-        self.domain
+    fn state(&self) -> &ModuleState {
+        &self.state
     }
 }
 

@@ -71,7 +71,7 @@ pub trait KeyResolver<
 >
 {
     /// Resolves the root key passed to a linker load operation.
-    fn load_root<'cfg>(
+    fn resolve_root<'cfg>(
         &self,
         req: &RootRequest<'_, K, Q>,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>

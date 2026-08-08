@@ -79,14 +79,8 @@ pub(crate) fn ensure_native_exec() -> PathBuf {
 
 pub(crate) fn search_path_resolver<K>() -> SearchPathResolver<K> {
     let mut resolver = SearchPathResolver::new();
-    resolver.push_search_dir_provider(|request, out| {
-        if let Some(dirs) = request.runpath() {
-            out.extend(dirs);
-        } else if let Some(dirs) = request.rpath() {
-            out.extend(dirs);
-        }
-        Ok(())
-    });
+    resolver.push_rpath();
+    resolver.push_runpath();
     resolver
 }
 

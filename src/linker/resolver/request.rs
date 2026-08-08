@@ -1,145 +1,48 @@
 use crate::{
-    Error, LinkerError, UnresolvedDependency,
-    image::{RawDynamic, ScannedDynamic},
-    input::Path,
+    Error, LinkerError, Result, UnresolvedDependency,
+    image::{Module, ModuleSearch, RawDynamic, ScannedDynamic},
     memory::RegionAccess,
     relocation::RelocationArch,
     tls::TlsResolver,
 };
 use alloc::boxed::Box;
 
-/// Module metadata used to resolve caller-relative root search paths.
-#[derive(Clone, Copy, Debug)]
-pub struct SearchOwner<'a> {
-    name: &'a str,
-    path: &'a Path,
-    runpath: Option<&'a str>,
-    rpath: Option<&'a str>,
-}
+pub(crate) type LoaderVisitor<'visit> =
+    dyn for<'search> FnMut(&'search ModuleSearch) -> Result<bool> + 'visit;
+pub(super) type LoaderProvider<'a> =
+    dyn for<'visit> Fn(&mut LoaderVisitor<'visit>) -> Result<()> + 'a;
 
-impl<'a> SearchOwner<'a> {
-    /// Creates search metadata for a loaded module.
-    #[inline]
-    pub const fn new(
-        name: &'a str,
-        path: &'a Path,
-        runpath: Option<&'a str>,
-        rpath: Option<&'a str>,
-    ) -> Self {
-        Self {
-            name,
-            path,
-            runpath,
-            rpath,
-        }
-    }
-
-    /// Returns the owner name used in diagnostics.
-    #[inline]
-    pub const fn name(self) -> &'a str {
-        self.name
-    }
-
-    /// Returns the loaded path of the owner.
-    #[inline]
-    pub const fn path(self) -> &'a Path {
-        self.path
-    }
-
-    /// Returns the owner's `DT_RUNPATH`, if present.
-    #[inline]
-    pub const fn runpath(self) -> Option<&'a str> {
-        self.runpath
-    }
-
-    /// Returns the owner's `DT_RPATH`, if present.
-    #[inline]
-    pub const fn rpath(self) -> Option<&'a str> {
-        self.rpath
-    }
-}
-
-/// Common metadata needed while resolving one dependency edge.
-pub trait DependencyOwner {
-    /// Returns the owner path/key used by the loader.
-    fn path(&self) -> &Path;
-    /// Returns the owner name used in diagnostics.
-    fn name(&self) -> &str;
-    /// Returns the owner's `DT_RPATH`, if present.
-    fn rpath(&self) -> Option<&str>;
-    /// Returns the owner's `DT_RUNPATH`, if present.
-    fn runpath(&self) -> Option<&str>;
-    /// Returns the owner's `PT_INTERP` path, if present.
-    fn interp(&self) -> Option<&str>;
-    /// Returns the number of `DT_NEEDED` entries.
+pub(crate) trait DependencySource {
+    fn search(&self) -> &ModuleSearch;
     fn needed_len(&self) -> usize;
-    /// Returns one `DT_NEEDED` entry by index.
-    fn needed_lib(&self, index: usize) -> Option<&str>;
+    fn needed(&self, index: usize) -> Option<&str>;
 }
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    DependencyOwner for RawDynamic<D, Arch, R, Tls>
+    DependencySource for RawDynamic<D, Arch, R, Tls>
 {
     #[inline]
-    fn path(&self) -> &Path {
-        self.path()
-    }
-
-    #[inline]
-    fn name(&self) -> &str {
-        self.name()
-    }
-
-    #[inline]
-    fn rpath(&self) -> Option<&str> {
-        self.rpath()
-    }
-
-    #[inline]
-    fn runpath(&self) -> Option<&str> {
-        self.runpath()
-    }
-
-    #[inline]
-    fn interp(&self) -> Option<&str> {
-        self.interp()
+    fn search(&self) -> &ModuleSearch {
+        self.core_ref()
+            .search()
+            .expect("ELF cores always retain filesystem search metadata")
     }
 
     #[inline]
     fn needed_len(&self) -> usize {
-        self.needed_libs().len()
+        self.core_ref().needed_libs().len()
     }
 
     #[inline]
-    fn needed_lib(&self, index: usize) -> Option<&str> {
-        self.needed_libs().get(index).copied()
+    fn needed(&self, index: usize) -> Option<&str> {
+        self.core_ref().needed_libs().get(index).copied()
     }
 }
 
-impl<Arch: RelocationArch> DependencyOwner for ScannedDynamic<Arch> {
+impl<Arch: RelocationArch> DependencySource for ScannedDynamic<Arch> {
     #[inline]
-    fn path(&self) -> &Path {
-        self.path()
-    }
-
-    #[inline]
-    fn name(&self) -> &str {
-        self.name()
-    }
-
-    #[inline]
-    fn rpath(&self) -> Option<&str> {
-        self.rpath()
-    }
-
-    #[inline]
-    fn runpath(&self) -> Option<&str> {
-        self.runpath()
-    }
-
-    #[inline]
-    fn interp(&self) -> Option<&str> {
-        self.interp()
+    fn search(&self) -> &ModuleSearch {
+        ScannedDynamic::search(self)
     }
 
     #[inline]
@@ -148,7 +51,7 @@ impl<Arch: RelocationArch> DependencyOwner for ScannedDynamic<Arch> {
     }
 
     #[inline]
-    fn needed_lib(&self, index: usize) -> Option<&str> {
+    fn needed(&self, index: usize) -> Option<&str> {
         self.needed_lib(index)
     }
 }
@@ -156,7 +59,7 @@ impl<Arch: RelocationArch> DependencyOwner for ScannedDynamic<Arch> {
 /// A root module resolution request.
 pub struct RootRequest<'a, K: Clone, Q: ?Sized = K> {
     key: &'a K,
-    owner: Option<SearchOwner<'a>>,
+    search: Option<&'a ModuleSearch>,
     contains_key: &'a dyn Fn(&Q) -> bool,
 }
 
@@ -164,12 +67,12 @@ impl<'a, K: Clone, Q: ?Sized> RootRequest<'a, K, Q> {
     #[inline]
     pub(crate) fn new(
         key: &'a K,
-        owner: Option<SearchOwner<'a>>,
+        search: Option<&'a ModuleSearch>,
         contains_key: &'a dyn Fn(&Q) -> bool,
     ) -> Self {
         Self {
             key,
-            owner,
+            search,
             contains_key,
         }
     }
@@ -180,10 +83,10 @@ impl<'a, K: Clone, Q: ?Sized> RootRequest<'a, K, Q> {
         self.key
     }
 
-    /// Returns the loaded module that initiated this root request, if any.
+    /// Returns search metadata for the module that initiated this request.
     #[inline]
-    pub const fn owner(&self) -> Option<SearchOwner<'a>> {
-        self.owner
+    pub const fn search(&self) -> Option<&'a ModuleSearch> {
+        self.search
     }
 
     /// Returns whether `key` names a module reusable by this request.
@@ -196,8 +99,9 @@ impl<'a, K: Clone, Q: ?Sized> RootRequest<'a, K, Q> {
 /// A single dependency-resolution request.
 pub struct DependencyRequest<'a, K: Clone, Q: ?Sized = K> {
     owner_key: &'a K,
-    owner: &'a dyn DependencyOwner,
-    needed_index: usize,
+    search: &'a ModuleSearch,
+    needed: &'a str,
+    loaders: &'a LoaderProvider<'a>,
     contains_key: &'a dyn Fn(&Q) -> bool,
 }
 
@@ -205,14 +109,16 @@ impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
     #[inline]
     pub(crate) fn new(
         owner_key: &'a K,
-        owner: &'a dyn DependencyOwner,
-        needed_index: usize,
+        search: &'a ModuleSearch,
+        needed: &'a str,
+        loaders: &'a LoaderProvider<'a>,
         contains_key: &'a dyn Fn(&Q) -> bool,
     ) -> Self {
         Self {
             owner_key,
-            owner,
-            needed_index,
+            search,
+            needed,
+            loaders,
             contains_key,
         }
     }
@@ -223,54 +129,25 @@ impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
         self.owner_key
     }
 
-    /// Returns metadata for the owner that requested this dependency.
+    /// Returns search metadata for the module that owns this dependency edge.
     #[inline]
-    pub fn owner(&self) -> &'a dyn DependencyOwner {
-        self.owner
-    }
-
-    /// Returns the owner name used in diagnostics.
-    #[inline]
-    pub fn owner_name(&self) -> &'a str {
-        self.owner.name()
-    }
-
-    /// Returns the owner path/key used by search-path resolvers.
-    #[inline]
-    pub fn owner_path(&self) -> &'a Path {
-        self.owner.path()
+    pub const fn search(&self) -> &'a ModuleSearch {
+        self.search
     }
 
     /// Returns the `DT_NEEDED` entry being resolved.
     #[inline]
     pub fn needed(&self) -> &'a str {
-        self.owner
-            .needed_lib(self.needed_index)
-            .expect("DT_NEEDED index out of bounds")
+        self.needed
     }
 
-    /// Returns the index of this dependency in the owner's `DT_NEEDED` list.
+    /// Visits loaders in direct-to-root order until `visitor` returns `false`.
     #[inline]
-    pub fn needed_index(&self) -> usize {
-        self.needed_index
-    }
-
-    /// Returns the owner's `DT_RPATH`, if present.
-    #[inline]
-    pub fn rpath(&self) -> Option<&'a str> {
-        self.owner.rpath()
-    }
-
-    /// Returns the owner's `DT_RUNPATH`, if present.
-    #[inline]
-    pub fn runpath(&self) -> Option<&'a str> {
-        self.owner.runpath()
-    }
-
-    /// Returns the owner's `PT_INTERP` path, if present.
-    #[inline]
-    pub fn interp(&self) -> Option<&'a str> {
-        self.owner.interp()
+    pub fn visit_loaders(
+        &self,
+        mut visitor: impl for<'search> FnMut(&'search ModuleSearch) -> Result<bool>,
+    ) -> Result<()> {
+        (self.loaders)(&mut visitor)
     }
 
     /// Returns whether `key` names a module reusable by this request.
@@ -283,7 +160,7 @@ impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
     #[inline]
     pub fn unresolved(&self) -> Error {
         LinkerError::UnresolvedDependency(Box::new(UnresolvedDependency::new(
-            self.owner_name(),
+            self.search.name(),
             self.needed(),
         )))
         .into()

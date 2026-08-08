@@ -13,6 +13,7 @@ mod core;
 mod elf;
 mod module;
 mod scanned;
+mod search;
 mod synthetic;
 mod traits;
 
@@ -29,5 +30,7 @@ pub(crate) use module::WeakLookupScope;
 pub use module::{LookupScope, ModuleHandle, ModuleScope, ModuleState};
 pub(crate) use scanned::ScannedDynamicLoadParts;
 pub use scanned::{ModuleCapability, ScannedDynamic, ScannedElf, ScannedExec, ScannedSection};
+pub use search::{ModuleSearch, SearchPathPool};
+pub(crate) use search::{SharedDir, expand_origin, normalize_dir};
 pub use synthetic::{SymbolVersion, SyntheticModule, SyntheticSymbol};
 pub use traits::{Module, SymbolExports};

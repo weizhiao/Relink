@@ -6,6 +6,7 @@ use crate::{
     MmapError, Result,
     arch::NativeArch,
     const_builder::NoDrop,
+    image::SearchPathPool,
     os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
     runtime::{CodeExecutor, DomainId, NativeCodeExecutor},
@@ -312,6 +313,7 @@ where
             loader: self,
             observer: (),
             buf: super::ElfBuf::new(),
+            search_paths: SearchPathPool::default(),
             #[cfg(feature = "object")]
             object_groups: Arc::new(SectionGroups::default()),
         }
@@ -437,7 +439,7 @@ where
 ///
 /// ```no_run
 /// use elf_loader::Loader;
-/// use elf_loader::arch::x86_64::relocation::X86_64Arch;
+/// use elf_loader::arch::x86_64::X86_64Arch;
 ///
 /// let _loader = Loader::new()
 ///     .for_arch::<X86_64Arch>()
@@ -464,7 +466,7 @@ where
     ///
     /// This is the primary entry point for cross-architecture loading. Picking
     /// a non-host architecture (e.g.
-    /// [`X86_64Arch`](crate::arch::x86_64::relocation::X86_64Arch)) makes
+    /// [`X86_64Arch`](crate::arch::x86_64::X86_64Arch)) makes
     /// every subsequent `load_*` call validate the ELF `e_machine` against
     /// `NewArch::MACHINE` instead of the host's, and stamps the resulting
     /// raw images with `NewArch` so [`Relocator::run`](crate::Relocator::run)

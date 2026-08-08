@@ -19,4 +19,5 @@ pub(crate) use tls::{
     tlsdesc_resolver_undefweak,
 };
 
-pub mod relocation;
+pub(crate) mod relocation;
+pub use relocation::RiscV64Arch;

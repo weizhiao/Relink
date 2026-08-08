@@ -14,11 +14,11 @@ use core::num::NonZeroUsize;
 use elf::abi::*;
 
 /// This element holds the total size, in bytes, of the DT_RELR relocation table.
-pub const DT_RELRSZ: i64 = 35;
+const DT_RELRSZ: i64 = 35;
 /// This element is similar to DT_RELA, except its table has implicit addends and info.
-pub const DT_RELR: i64 = 36;
+const DT_RELR: i64 = 36;
 /// This element holds the size, in bytes, of the DT_RELR relocation entry.
-pub const DT_RELRENT: i64 = 37;
+const DT_RELRENT: i64 = 37;
 
 /// Semantic wrapper for the ELF `d_tag` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -274,8 +274,8 @@ pub(crate) struct ParsedDynamic {
     pub(crate) verneed_off: Option<NonZeroUsize>,
     pub(crate) verdef_off: Option<NonZeroUsize>,
     pub(crate) soname_off: Option<NonZeroUsize>,
-    pub(crate) rpath_off: Option<NonZeroUsize>,
-    pub(crate) runpath_off: Option<NonZeroUsize>,
+    pub(crate) rpath_off: Option<usize>,
+    pub(crate) runpath_off: Option<usize>,
     pub(crate) dt_debug_idx: Option<usize>,
     pub(crate) bind_now: bool,
     pub(crate) symbolic: bool,
@@ -338,8 +338,8 @@ impl ParsedDynamic {
             ElfDynamicTag::VERSYM => self.version_ids_off = NonZeroUsize::new(value),
             ElfDynamicTag::VERNEED => self.verneed_off = NonZeroUsize::new(value),
             ElfDynamicTag::VERDEF => self.verdef_off = NonZeroUsize::new(value),
-            ElfDynamicTag::RPATH => self.rpath_off = NonZeroUsize::new(value),
-            ElfDynamicTag::RUNPATH => self.runpath_off = NonZeroUsize::new(value),
+            ElfDynamicTag::RPATH => self.rpath_off = Some(value),
+            ElfDynamicTag::RUNPATH => self.runpath_off = Some(value),
             ElfDynamicTag::STRSZ => self.strtab_size = NonZeroUsize::new(value),
             ElfDynamicTag::DEBUG => self.dt_debug_idx = Some(idx),
             ElfDynamicTag::NULL => return true,
@@ -370,7 +370,7 @@ where
     Arch: RelocationArch,
 {
     /// Parse the dynamic section of an ELF file
-    pub fn new<R: RegionAccess>(
+    pub(crate) fn new<R: RegionAccess>(
         dynamic_entries: MappedView<ElfDyn<Arch::Layout>>,
         dynamic_addr: VmAddr,
         segments: &ElfSegments<R>,
@@ -626,7 +626,7 @@ impl LifecycleSpec {
 }
 
 /// Hash table type used for symbol lookup
-pub enum ElfDynamicHashTab {
+pub(crate) enum ElfDynamicHashTab {
     /// GNU-style hash table (DT_GNU_HASH)
     Gnu(VmAddr),
     /// Traditional ELF hash table (DT_HASH)
@@ -637,51 +637,51 @@ pub enum ElfDynamicHashTab {
 /// Information from the ELF dynamic section.
 pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     /// Runtime address of the DT_DEBUG entry, when present.
-    pub dt_debug_addr: Option<VmAddr>,
+    pub(crate) dt_debug_addr: Option<VmAddr>,
     /// Hash table information.
-    pub hashtab: ElfDynamicHashTab,
+    pub(crate) hashtab: ElfDynamicHashTab,
     /// Symbol table address.
-    pub symtab: VmAddr,
+    pub(crate) symtab: VmAddr,
     /// String table address.
-    pub strtab: VmAddr,
+    pub(crate) strtab: VmAddr,
     /// String table size.
-    pub strtab_size: Option<NonZeroUsize>,
+    pub(crate) strtab_size: Option<NonZeroUsize>,
     /// Whether to bind symbols immediately.
-    pub bind_now: bool,
+    pub(crate) bind_now: bool,
     /// Whether relocations in this object prefer definitions from itself.
-    pub symbolic: bool,
+    pub(crate) symbolic: bool,
     /// Whether the object uses static thread-local storage.
-    pub static_tls: bool,
+    pub(crate) static_tls: bool,
     /// Global Offset Table address.
-    pub got_plt: Option<VmAddr>,
+    pub(crate) got_plt: Option<VmAddr>,
     /// Initialization lifecycle functions.
-    pub init: LifecycleSpec,
+    pub(crate) init: LifecycleSpec,
     /// Finalization lifecycle functions.
-    pub fini: LifecycleSpec,
+    pub(crate) fini: LifecycleSpec,
     /// PLT relocation entries.
-    pub pltrel: Option<MappedView<ElfRelType<Arch>>>,
+    pub(crate) pltrel: Option<MappedView<ElfRelType<Arch>>>,
     /// Dynamic relocation entries.
-    pub dynrel: Option<MappedView<ElfRelType<Arch>>>,
+    pub(crate) dynrel: Option<MappedView<ElfRelType<Arch>>>,
     /// RELR relocation entries.
-    pub relr: Option<MappedView<ElfRelr<Arch::Layout>>>,
+    pub(crate) relr: Option<MappedView<ElfRelr<Arch::Layout>>>,
     /// Whether PLT relocation entries are the tail of the dynamic relocation table.
-    pub pltrel_is_dynrel_tail: bool,
+    pub(crate) pltrel_is_dynrel_tail: bool,
     /// Count of relative relocations.
-    pub rel_count: Option<NonZeroUsize>,
+    pub(crate) rel_count: Option<NonZeroUsize>,
     /// Required libraries.
-    pub needed_libs: Vec<NonZeroUsize>,
+    pub(crate) needed_libs: Vec<NonZeroUsize>,
     /// Symbol version index.
-    pub version_idx: Option<NonZeroUsize>,
+    pub(crate) version_idx: Option<NonZeroUsize>,
     /// Version needed information.
-    pub verneed: Option<NonZeroUsize>,
+    pub(crate) verneed: Option<NonZeroUsize>,
     /// Version definition information.
-    pub verdef: Option<NonZeroUsize>,
+    pub(crate) verdef: Option<NonZeroUsize>,
     /// Shared-object name.
-    pub soname_off: Option<NonZeroUsize>,
+    pub(crate) soname_off: Option<NonZeroUsize>,
     /// Runtime library search path.
-    pub rpath_off: Option<NonZeroUsize>,
+    pub(crate) rpath_off: Option<usize>,
     /// Runtime library search path (overrides RPATH).
-    pub runpath_off: Option<NonZeroUsize>,
+    pub(crate) runpath_off: Option<usize>,
 }
 
 impl<Arch: RelocationArch> Debug for ElfDynamic<Arch> {
@@ -765,5 +765,12 @@ mod tests {
         assert_eq!(parsed.rela_entry_size, Some(24));
         assert_eq!(parsed.rel_entry_size, Some(16));
         assert_eq!(parsed.relr_entry_size, Some(8));
+    }
+
+    #[test]
+    fn preserves_empty_runpath_tag() {
+        let parsed = parse_dynamic_entries([(ElfDynamicTag::RUNPATH, 0), (ElfDynamicTag::NULL, 0)]);
+
+        assert_eq!(parsed.runpath_off, Some(0));
     }
 }

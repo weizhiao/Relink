@@ -126,18 +126,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         self.inner.tls()
     }
 
-    /// Returns the DT_RPATH value.
-    #[inline]
-    pub fn rpath(&self) -> Option<&str> {
-        self.inner.rpath()
-    }
-
-    /// Returns the DT_RUNPATH value.
-    #[inline]
-    pub fn runpath(&self) -> Option<&str> {
-        self.inner.runpath()
-    }
-
     /// Returns the DT_SONAME value.
     #[inline]
     pub fn soname(&self) -> Option<&str> {

@@ -8,7 +8,7 @@ use crate::{
     elf::{ElfFileType, ElfHeader, ElfLayout, ElfPhdr, ElfProgramType, ElfShdr},
     image::{
         RawDylib, RawDynamic, RawElf, RawExec, ScannedDynamic, ScannedDynamicLoadParts, ScannedElf,
-        ScannedExec,
+        ScannedExec, SearchPathPool,
     },
     input::{ElfReader, IntoElfReader, PathBuf},
     logging,
@@ -48,6 +48,7 @@ pub struct LoaderRun<
     pub(crate) loader: &'a Loader<D, Tls, Arch, M, Exec>,
     pub(crate) observer: Obs,
     pub(super) buf: ElfBuf,
+    pub(crate) search_paths: SearchPathPool,
     #[cfg(feature = "object")]
     pub(crate) object_groups: Arc<SectionGroups>,
 }
@@ -75,9 +76,18 @@ where
             loader: self.loader,
             observer,
             buf: self.buf,
+            search_paths: self.search_paths,
             #[cfg(feature = "object")]
             object_groups: self.object_groups,
         }
+    }
+
+    /// Uses `pool` to share canonical `DT_RPATH` and `DT_RUNPATH` directories
+    /// with modules produced by other loader runs using the same pool.
+    #[inline]
+    pub fn with_search_path_pool(mut self, pool: SearchPathPool) -> Self {
+        self.search_paths = pool;
+        self
     }
 }
 
@@ -170,7 +180,13 @@ where
         let has_dynamic = has_dynamic_phdr(phdrs);
         let phdrs = Box::from(phdrs);
         let path = PathBuf::from(object.path());
-        let builder = ScanBuilder::new(path, ehdr, phdrs, Box::new(object));
+        let builder = ScanBuilder::new(
+            path,
+            ehdr,
+            phdrs,
+            Box::new(object),
+            self.search_paths.clone(),
+        );
 
         if has_dynamic {
             return ScannedDynamic::<Arch>::from_builder(builder).map(ScannedElf::Dynamic);
@@ -330,6 +346,7 @@ where
             executor,
             self.loader.domain_id(),
             self.loader.tls_resolver(),
+            self.search_paths.clone(),
         );
         let mut image = builder.build_dynamic(phdrs)?;
         self.observer
@@ -389,6 +406,7 @@ where
             self.loader.executor(),
             self.loader.domain_id(),
             self.loader.tls_resolver(),
+            self.search_paths.clone(),
         );
         let mut image = builder.build_dynamic(&phdrs)?;
         self.observer
@@ -457,6 +475,7 @@ where
             self.loader.executor(),
             self.loader.domain_id(),
             self.loader.tls_resolver(),
+            self.search_paths.clone(),
         );
         let mut image = builder.build_dynamic(&phdrs)?;
         self.observer
@@ -530,6 +549,7 @@ where
             executor,
             self.loader.domain_id(),
             self.loader.tls_resolver(),
+            self.search_paths.clone(),
         );
         let mut exec = builder.build_exec(phdrs, has_dynamic)?;
         if let RawExec::Dynamic(dynamic) = &mut exec {

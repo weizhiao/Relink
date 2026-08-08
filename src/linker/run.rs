@@ -2,7 +2,7 @@ use super::{
     context::LinkContext,
     driver::{Linker, LoadResult},
     resolve::LoadResolveContext,
-    resolver::{KeyResolver, SearchOwner},
+    resolver::KeyResolver,
     scan::{GotPltTarget, LinkPipeline, MappedRuntimeMemory},
     session::{LoadSession, ResolveSession},
     storage::{ContextId, ModuleId, ModuleLease, ModuleSlot},
@@ -120,17 +120,17 @@ where
         Resolver: KeyResolver<K, Arch, Q, Tls>,
         Meta: Default,
     {
-        self.load_with_owner::<Q, Meta>(context, key, None)
+        self.load_with_caller::<Q, Meta>(context, key, None)
     }
 
-    /// Loads one root using search metadata from the module that requested it.
+    /// Loads one root on behalf of a module already committed to `context`.
     ///
     /// Initialization failure is rolled back before the error is returned.
     pub fn load_from<'cfg, Q, Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
-        owner: SearchOwner<'_>,
+        caller: ModuleId,
     ) -> Result<LoadResult<Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
@@ -138,14 +138,14 @@ where
         Resolver: KeyResolver<K, Arch, Q, Tls>,
         Meta: Default,
     {
-        self.load_with_owner::<Q, Meta>(context, key, Some(owner))
+        self.load_with_caller::<Q, Meta>(context, key, Some(caller))
     }
 
-    fn load_with_owner<'cfg, Q, Meta>(
+    fn load_with_caller<'cfg, Q, Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
-        owner: Option<SearchOwner<'_>>,
+        caller: Option<ModuleId>,
     ) -> Result<LoadResult<Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
@@ -153,7 +153,7 @@ where
         Resolver: KeyResolver<K, Arch, Q, Tls>,
         Meta: Default,
     {
-        let prepared = self.prepare_load_with_owner::<Q, Meta>(context, key, owner)?;
+        let prepared = self.prepare_load_with_caller::<Q, Meta>(context, key, caller)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -173,7 +173,7 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
     {
-        self.prepare_load_with_owner::<Q, Meta>(context, key, None)
+        self.prepare_load_with_caller::<Q, Meta>(context, key, None)
     }
 
     /// Resolves and maps one caller-relative root without executing target code.
@@ -181,21 +181,21 @@ where
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
-        owner: SearchOwner<'_>,
+        caller: ModuleId,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
         Q: ToOwned<Owned = K> + Ord + ?Sized,
         Resolver: KeyResolver<K, Arch, Q, Tls>,
     {
-        self.prepare_load_with_owner::<Q, Meta>(context, key, Some(owner))
+        self.prepare_load_with_caller::<Q, Meta>(context, key, Some(caller))
     }
 
-    fn prepare_load_with_owner<'cfg, Q, Meta>(
+    fn prepare_load_with_caller<'cfg, Q, Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
-        owner: Option<SearchOwner<'_>>,
+        caller: Option<ModuleId>,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
     where
         K: 'cfg + Borrow<Q>,
@@ -205,18 +205,33 @@ where
         context
             .committed
             .ensure_domain(self.linker.loader.domain_id())?;
-        if let Some(prepared) = PreparedLoad::visible(context, key.borrow())? {
+        let caller = caller
+            .map(|id| -> Result<ModuleSlot> {
+                let slot = context.committed.module_slot(id)?;
+                if !context.committed.contains_module(slot) {
+                    return Err(
+                        LinkerError::context(LinkContextError::ModuleNotCommitted { id }).into(),
+                    );
+                }
+                Ok(slot)
+            })
+            .transpose()?;
+        if let Some(prepared) = PreparedLoad::visible(context, key.borrow()) {
             return Ok(prepared);
         }
 
         let linker = self.linker;
         let mut session = ResolveSession::new();
-        let mut loader = linker.loader.run().with_observer(&mut self.observer);
+        let mut loader = linker
+            .loader
+            .run()
+            .with_search_path_pool(context.search_paths.clone())
+            .with_observer(&mut self.observer);
         let mut resolve_context = LoadResolveContext::new(&mut context.committed, &mut session);
-        let resolved = resolve_context.resolve_root::<Q>(&key, owner, &linker.resolver)?;
-        let root = resolve_context.stage(resolved, &mut loader)?;
+        let resolved = resolve_context.resolve_root::<Q>(&key, caller, &linker.resolver)?;
+        let root = resolve_context.stage(resolved, caller, &mut loader)?;
         resolve_context.resolve_pending::<_, _, _, Q>(root, &mut loader, &linker.resolver)?;
-        PreparedLoad::new(root, session, None, context)
+        Ok(PreparedLoad::new(root, session, None, context))
     }
 
     /// Loads, commits, and initializes a pre-mapped root dynamic image.
@@ -261,7 +276,7 @@ where
         context
             .committed
             .ensure_domain(raw.core_ref().domain_id())?;
-        if let Some(prepared) = PreparedLoad::visible(context, key.borrow())? {
+        if let Some(prepared) = PreparedLoad::visible(context, key.borrow()) {
             return Ok(prepared);
         }
 
@@ -270,11 +285,15 @@ where
         let key = context.committed.intern_key(key);
         let root = context.committed.intern_module(key);
         let generation = context.committed.generation(root);
-        session.stage_dynamic(root, generation, raw);
-        let mut loader = linker.loader.run().with_observer(&mut self.observer);
+        session.stage_dynamic(root, generation, raw, None);
+        let mut loader = linker
+            .loader
+            .run()
+            .with_search_path_pool(context.search_paths.clone())
+            .with_observer(&mut self.observer);
         let mut resolve_context = LoadResolveContext::new(&mut context.committed, &mut session);
         resolve_context.resolve_pending::<_, _, _, Q>(root, &mut loader, &linker.resolver)?;
-        PreparedLoad::new(root, session, None, context)
+        Ok(PreparedLoad::new(root, session, None, context))
     }
 
     /// Relocates a prepared module group without borrowing its link context.
@@ -388,12 +407,12 @@ where
         self.run().load::<Q, Meta>(context, key)
     }
 
-    /// Loads one root using search metadata from the module that requested it.
+    /// Loads one root on behalf of a module already committed to `context`.
     pub fn load_from<'cfg, Q, Meta>(
         &self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
-        owner: SearchOwner<'_>,
+        caller: ModuleId,
     ) -> Result<LoadResult<Arch, Tls>>
     where
         K: 'cfg + Borrow<Q>,
@@ -401,7 +420,7 @@ where
         Resolver: KeyResolver<K, Arch, Q, Tls>,
         Meta: Default,
     {
-        self.run().load_from::<Q, Meta>(context, key, owner)
+        self.run().load_from::<Q, Meta>(context, key, caller)
     }
 
     /// Loads a pre-mapped root dynamic image and resolves its dependencies.
@@ -456,23 +475,17 @@ pub struct PreparedLoad<
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     PreparedLoad<D, Arch, R, Tls>
 {
-    fn visible<K, Q, Meta>(
-        context: &LinkContext<K, Meta, Arch, Tls>,
-        key: &Q,
-    ) -> Result<Option<Self>>
+    fn visible<K, Q, Meta>(context: &LinkContext<K, Meta, Arch, Tls>, key: &Q) -> Option<Self>
     where
         K: Ord + Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        let Some(root) = context
+        let root = context
             .committed
             .key_slot_for(key)
             .and_then(|key| context.committed.module_for_key(key))
-            .filter(|module| context.committed.contains_module(*module))
-        else {
-            return Ok(None);
-        };
-        Self::new(root, ResolveSession::new(), None, context).map(Some)
+            .filter(|module| context.committed.contains_module(*module))?;
+        Some(Self::new(root, ResolveSession::new(), None, context))
     }
 
     pub(in crate::linker) fn new<K, Meta>(
@@ -480,7 +493,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         session: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
         mapped_runtime: Option<MappedRuntimeMemory<R>>,
         context: &LinkContext<K, Meta, Arch, Tls>,
-    ) -> Result<Self>
+    ) -> Self
     where
         K: Ord,
     {
@@ -488,8 +501,8 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             .committed
             .module(root)
             .map(|module| module.handle().clone());
-        let scope = session.build_scope(context)?;
-        Ok(Self {
+        let scope = session.build_scope(context);
+        Self {
             context: context.context_id(),
             root,
             module,
@@ -497,7 +510,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             scope,
             symbols: Arc::clone(&context.symbols),
             mapped_runtime,
-        })
+        }
     }
 }
 

@@ -4,7 +4,7 @@ use crate::{
     arch::{ArchKind, NativeArch},
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol},
     image::{
-        LookupScope, Module, ModuleHandle, ModuleState, SymbolExports, SymbolLookup,
+        LookupScope, Module, ModuleHandle, ModuleSearch, ModuleState, SymbolExports, SymbolLookup,
         module::lookup_symbol,
     },
     input::{Path, PathBuf},
@@ -139,18 +139,6 @@ impl<
     #[inline]
     pub fn path(&self) -> &Path {
         self.core.path()
-    }
-
-    /// Returns the `DT_RPATH` value.
-    #[inline]
-    pub fn rpath(&self) -> Option<&str> {
-        self.core.rpath()
-    }
-
-    /// Returns the `DT_RUNPATH` value.
-    #[inline]
-    pub fn runpath(&self) -> Option<&str> {
-        self.core.runpath()
     }
 
     /// Returns the `DT_SONAME` value.
@@ -511,13 +499,18 @@ where
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
-    fn state(&self) -> &ModuleState {
-        Module::state(&self.core)
+    fn name(&self) -> &str {
+        self.core.name()
     }
 
     #[inline]
-    fn name(&self) -> &str {
-        self.core.name()
+    fn domain_id(&self) -> DomainId {
+        self.core.domain_id()
+    }
+
+    #[inline]
+    fn search(&self) -> Option<&ModuleSearch> {
+        self.core.search()
     }
 
     #[inline]
@@ -541,8 +534,8 @@ where
     }
 
     #[inline]
-    fn domain_id(&self) -> DomainId {
-        self.core.domain_id()
+    fn state(&self) -> &ModuleState {
+        Module::state(&self.core)
     }
 
     #[inline]

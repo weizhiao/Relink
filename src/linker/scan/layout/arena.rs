@@ -174,7 +174,7 @@ impl ArenaDescriptor {
 /// A planner-assigned arena identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ArenaId(usize);
-entity_ref!(ArenaId);
+entity_ref!(ArenaId, pub);
 
 /// Whether an arena is reserved for one module or shared across modules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -5,7 +5,7 @@ use crate::loaded_core;
 use elf_loader::{
     LinkContext, Linker,
     input::{Path as ElfPath, PathBuf},
-    linker::{CandidateRequest, SearchOwner, SearchPathResolver},
+    linker::SearchPathResolver,
     runtime::DomainId,
 };
 
@@ -24,6 +24,90 @@ fn loads_dependency_chain() {
 
     let root_value = unsafe { loaded.get::<extern "C" fn() -> i32>("root_value").unwrap() };
     assert_eq!(root_value(), 3);
+}
+
+#[test]
+fn inherits_rpath() {
+    let fixtures = crate::fixture::fixtures();
+    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+
+    let loaded = Linker::new()
+        .resolver(crate::fixture::search_path_resolver())
+        .load(
+            &mut context,
+            PathBuf::from(fixtures.rpath_root_path.to_str().unwrap()),
+        )
+        .unwrap();
+
+    let search = loaded
+        .module()
+        .search()
+        .expect("loaded ELF modules should retain search metadata");
+    assert_eq!(
+        search.path().as_str(),
+        fixtures.rpath_root_path.to_str().unwrap()
+    );
+    let expected_rpath = fixtures
+        .rpath_root_path
+        .parent()
+        .unwrap()
+        .join("rpath")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        search
+            .rpath()
+            .unwrap()
+            .map(ElfPath::as_str)
+            .collect::<Vec<_>>(),
+        [expected_rpath]
+    );
+    assert!(search.runpath().is_none());
+
+    let value = unsafe { loaded.get::<extern "C" fn() -> i32>("rpath_value").unwrap() };
+    assert_eq!(value(), 3);
+}
+
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn scan_inherits_rpath() {
+    let fixtures = crate::fixture::fixtures();
+    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+
+    let loaded = Linker::new()
+        .resolver(crate::fixture::search_path_resolver())
+        .load_scan_first(
+            &mut context,
+            PathBuf::from(fixtures.rpath_root_path.to_str().unwrap()),
+        )
+        .unwrap();
+
+    let value = unsafe { loaded.get::<extern "C" fn() -> i32>("rpath_value").unwrap() };
+    assert_eq!(value(), 3);
+}
+
+#[test]
+fn loads_from_module_rpath() {
+    let fixtures = crate::fixture::fixtures();
+    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+
+    let caller = linker
+        .load(
+            &mut context,
+            PathBuf::from(fixtures.rpath_caller_path.to_str().unwrap()),
+        )
+        .unwrap();
+    let loaded = linker
+        .load_from(
+            &mut context,
+            PathBuf::from("libleaf.so"),
+            caller.root().id(),
+        )
+        .unwrap();
+
+    let value = unsafe { loaded.get::<extern "C" fn() -> i32>("rpath_leaf").unwrap() };
+    assert_eq!(value(), 1);
 }
 
 #[test]
@@ -76,26 +160,6 @@ fn dynamic_dirs_precede_static_dirs() {
         .unwrap();
 
     assert_eq!(loaded_core(&loaded).path().as_str(), expected_key);
-}
-
-#[test]
-fn origin_expands_and_runpath_wins() {
-    let request = CandidateRequest::dependency(
-        ElfPath::new("libdep.so"),
-        SearchOwner::new(
-            "libowner.so",
-            ElfPath::new("/tmp/owner/libowner.so"),
-            Some("$ORIGIN/run:${ORIGIN}/alt"),
-            Some("$ORIGIN/rpath"),
-        ),
-    );
-    let runpath = request.runpath().expect("expected parsed runpath");
-    let rpath = request.rpath().expect("expected parsed rpath");
-
-    let runpath = runpath.iter().map(PathBuf::as_str).collect::<Vec<_>>();
-    let rpath = rpath.iter().map(PathBuf::as_str).collect::<Vec<_>>();
-    assert_eq!(runpath, ["/tmp/owner/run", "/tmp/owner/alt"]);
-    assert_eq!(rpath, ["/tmp/owner/rpath"]);
 }
 
 fn unique_test_dir(name: &str) -> StdPathBuf {

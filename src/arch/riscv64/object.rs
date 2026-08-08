@@ -1,6 +1,6 @@
 use crate::{
     ByteRepr, RelocReason, Result,
-    arch::riscv64::relocation::RiscV64Arch,
+    arch::riscv64::RiscV64Arch,
     elf::{ElfRelEntry, ElfRelType, ElfRelocationType, ElfShdr},
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
     object::{

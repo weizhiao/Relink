@@ -2,8 +2,10 @@ use crate::{
     Result, TlsError,
     arch::NativeArch,
     elf::{ElfSymbol, ElfSymbolType, SymbolEntry},
-    image::{DynamicInfo, Module, ModuleState, PltRelocInfo, SymbolExports, WeakLookupScope},
-    input::PathBuf,
+    image::{
+        DynamicInfo, Module, ModuleSearch, ModuleState, PltRelocInfo, SymbolExports,
+        WeakLookupScope,
+    },
     lazy::{LazySetup, LazyValues},
     logging,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
@@ -162,8 +164,8 @@ pub(crate) struct CoreInner<
     /// Initialization and finalization behavior resolved during relocation.
     pub(crate) lifecycle: OnceCell<LifecycleHandlers>,
 
-    /// Loader source path or caller-provided source identifier.
-    pub(crate) path: PathBuf,
+    /// Filesystem identity and dependency search metadata.
+    pub(crate) search: ModuleSearch,
 
     /// Runtime exports used for module symbol lookup.
     pub(crate) exports: Arc<dyn SymbolExports<Arch::Layout>>,
@@ -206,16 +208,18 @@ where
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
-    fn state(&self) -> &ModuleState {
-        &self.state
+    fn name(&self) -> &str {
+        self.search.name()
     }
 
     #[inline]
-    fn name(&self) -> &str {
-        self.dynamic_info
-            .as_ref()
-            .and_then(|info| info.soname)
-            .unwrap_or_else(|| self.path.file_name())
+    fn domain_id(&self) -> DomainId {
+        self.domain
+    }
+
+    #[inline]
+    fn search(&self) -> Option<&ModuleSearch> {
+        Some(&self.search)
     }
 
     #[inline]
@@ -251,8 +255,8 @@ where
     }
 
     #[inline]
-    fn domain_id(&self) -> DomainId {
-        self.domain
+    fn state(&self) -> &ModuleState {
+        &self.state
     }
 
     fn initialize(&self) -> Result<()> {

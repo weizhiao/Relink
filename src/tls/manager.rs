@@ -275,7 +275,7 @@ extern "C" fn tls_get_addr(ti: *const TlsIndex) -> *mut u8 {
 
 /// Optional: Manually cleanup TLS for the current thread.
 /// Should be called when a thread exits to prevent memory leaks in our map.
-pub fn cleanup_current_thread_tls() {
+fn cleanup_current_thread_tls() {
     let tid = current_thread_id();
     let mut map = THREAD_DTVS.lock();
     map.remove(&tid);

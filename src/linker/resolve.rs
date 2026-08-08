@@ -1,6 +1,6 @@
 use super::{
     resolver::{
-        DependencyOwner, DependencyRequest, KeyResolver, ResolvedKey, RootRequest, SearchOwner,
+        DependencyRequest, DependencySource, KeyResolver, LoaderVisitor, ResolvedKey, RootRequest,
     },
     session::ResolveSession,
     storage::{CommittedStorage, ModuleSlot},
@@ -9,7 +9,7 @@ use crate::{
     LinkResolverError, LinkerError, LoaderRun, ParsePhdrError, Result,
     arch::NativeArch,
     entity::EntitySet,
-    image::{ModuleHandle, RawDynamic, ScannedDynamic, ScannedElf},
+    image::{ModuleHandle, ModuleSearch, RawDynamic, ScannedDynamic, ScannedElf},
     memory::{HostRegion, RegionAccess},
     observer::{LinkerObserver, LoadObserver},
     os::Mmap,
@@ -70,7 +70,7 @@ impl<K, Arch, P, Tls, Meta> ResolveContext<'_, K, Arch, P, Tls, Meta>
 where
     K: Clone + Ord,
     Arch: RelocationArch,
-    P: DependencyOwner,
+    P: DependencySource,
     Tls: TlsResolver<Arch>,
 {
     #[inline]
@@ -109,11 +109,12 @@ where
             .then_some(module)
     }
 
-    fn stage_dynamic(&mut self, key: K, payload: P) -> ModuleSlot {
+    fn stage_dynamic(&mut self, key: K, payload: P, loader: Option<ModuleSlot>) -> ModuleSlot {
         let key = self.committed.intern_key(key);
         let slot = self.committed.intern_module(key);
         let generation = self.committed.generation(slot);
-        self.session.stage_dynamic(slot, generation, payload);
+        self.session
+            .stage_dynamic(slot, generation, payload, loader);
         slot
     }
 
@@ -174,17 +175,41 @@ where
             .map(|module| module.direct_deps())
     }
 
-    fn owner(&self, slot: ModuleSlot) -> &dyn DependencyOwner {
+    fn source(&self, slot: ModuleSlot) -> &P {
         self.session
             .dynamic_payload(slot)
-            .expect("dependency owner must be present for a staged dynamic module")
-            as &dyn DependencyOwner
+            .expect("dependency source must be present for a staged dynamic module")
+    }
+
+    fn search(&self, slot: ModuleSlot) -> Option<&ModuleSearch> {
+        self.session
+            .dynamic_payload(slot)
+            .map(DependencySource::search)
+            .or_else(|| {
+                self.committed
+                    .module(slot)
+                    .and_then(|module| module.handle().search())
+            })
+    }
+
+    fn visit_loaders(&self, mut slot: ModuleSlot, visitor: &mut LoaderVisitor<'_>) -> Result<()> {
+        loop {
+            if let Some(search) = self.search(slot)
+                && !visitor(search)?
+            {
+                return Ok(());
+            }
+            let Some(loader) = self.session.loader(slot) else {
+                return Ok(());
+            };
+            slot = loader;
+        }
     }
 
     pub(crate) fn resolve_root<'cfg, Q>(
         &self,
         key: &K,
-        owner: Option<SearchOwner<'_>>,
+        caller: Option<ModuleSlot>,
         resolver: &impl KeyResolver<K, Arch, Q, Tls>,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
@@ -192,8 +217,12 @@ where
         Q: ToOwned<Owned = K> + Ord + ?Sized,
     {
         let contains_key = |key: &Q| self.contains_key(key);
-        let req = RootRequest::new(key, owner, &contains_key);
-        resolver.load_root(&req)
+        let req = RootRequest::new(
+            key,
+            caller.and_then(|slot| self.search(slot)),
+            &contains_key,
+        );
+        resolver.resolve_root(&req)
     }
 
     fn direct_deps_for<'cfg, D, Obs, F, M, Exec, Q>(
@@ -214,6 +243,7 @@ where
         F: FnMut(
             &mut Self,
             ResolvedKey<'cfg, K, Arch, Tls>,
+            ModuleSlot,
             &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         ) -> Result<ModuleSlot>,
     {
@@ -221,17 +251,24 @@ where
             self.session.observe(slot, self.committed.generation(slot));
         }
         if self.known_direct_deps(slot).is_none() {
-            let needed_len = self.owner(slot).needed_len();
+            let needed_len = self.source(slot).needed_len();
             let mut direct_deps = Vec::with_capacity(needed_len);
             for idx in 0..needed_len {
                 let key = {
                     let contains_key = |key: &Q| self.contains_key(key);
-                    let owner = self.owner(slot);
+                    let source = self.source(slot);
+                    let search = source.search();
+                    let needed = source
+                        .needed(idx)
+                        .expect("DT_NEEDED index must be within the parsed dependency list");
                     let owner_key = self.committed.key(self.committed.entry_key(slot));
-                    let req = DependencyRequest::new(owner_key, owner, idx, &contains_key);
+                    let loaders =
+                        |visitor: &mut LoaderVisitor<'_>| self.visit_loaders(slot, visitor);
+                    let req =
+                        DependencyRequest::new(owner_key, search, needed, &loaders, &contains_key);
                     resolver.resolve_dependency(&req)?
                 };
-                push_dep(&mut direct_deps, stage(self, key, loader)?);
+                push_dep(&mut direct_deps, stage(self, key, slot, loader)?);
             }
             self.session.set_direct_deps(slot, direct_deps);
         }
@@ -258,6 +295,7 @@ where
         F: FnMut(
             &mut Self,
             ResolvedKey<'cfg, K, Arch, Tls>,
+            ModuleSlot,
             &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         ) -> Result<ModuleSlot>,
     {
@@ -291,6 +329,7 @@ where
     pub(crate) fn stage<'cfg, Obs, M, Exec, Q>(
         &mut self,
         resolved: ResolvedKey<'cfg, K, Arch, Tls>,
+        parent: Option<ModuleSlot>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
     ) -> Result<ModuleSlot>
     where
@@ -307,12 +346,12 @@ where
             ResolvedKey::Load { key, reader } => {
                 self.ensure_new(key.borrow())?;
                 let raw = loader.load_dynamic(reader)?;
-                Ok(self.stage_dynamic(key, raw))
+                Ok(self.stage_dynamic(key, raw, parent))
             }
             ResolvedKey::Module { key, module, deps } => {
                 self.ensure_new(key.borrow())?;
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
-                    ctx.stage::<Obs, M, Exec, Q>(dep, loader)
+                    ctx.stage::<Obs, M, Exec, Q>(dep, parent, loader)
                 })?;
                 self.stage_module(key, module, direct_deps)
             }
@@ -337,9 +376,12 @@ where
         if !self.contains_pending(root) {
             return Ok(());
         }
-        self.resolve_dependency_graph_with(root, loader, resolver, |ctx, resolved, loader| {
-            ctx.stage(resolved, loader)
-        })
+        self.resolve_dependency_graph_with(
+            root,
+            loader,
+            resolver,
+            |ctx, resolved, parent, loader| ctx.stage(resolved, Some(parent), loader),
+        )
     }
 }
 
@@ -352,6 +394,7 @@ where
     pub(crate) fn stage<D, Obs, M, Exec, Q>(
         &mut self,
         resolved: ResolvedKey<'static, K, Arch, Tls>,
+        parent: Option<ModuleSlot>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
     ) -> Result<ModuleSlot>
     where
@@ -371,12 +414,12 @@ where
                 let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
                     return Err(ParsePhdrError::MissingDynamicSection.into());
                 };
-                Ok(self.stage_dynamic(key, module))
+                Ok(self.stage_dynamic(key, module, parent))
             }
             ResolvedKey::Module { key, module, deps } => {
                 self.ensure_new(key.borrow())?;
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
-                    ctx.stage::<D, Obs, M, Exec, Q>(dep, loader)
+                    ctx.stage::<D, Obs, M, Exec, Q>(dep, parent, loader)
                 })?;
                 self.stage_module(key, module, direct_deps)
             }
@@ -399,8 +442,11 @@ where
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
     {
-        self.resolve_dependency_graph_with(root, loader, resolver, |ctx, resolved, loader| {
-            ctx.stage(resolved, loader)
-        })
+        self.resolve_dependency_graph_with(
+            root,
+            loader,
+            resolver,
+            |ctx, resolved, parent, loader| ctx.stage(resolved, Some(parent), loader),
+        )
     }
 }

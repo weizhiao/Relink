@@ -3,13 +3,13 @@ use anyhow::Result;
 use object::Architecture;
 use object::elf::*;
 
-pub mod aarch64;
-pub mod arm;
-pub mod loongarch64;
-pub mod riscv32;
-pub mod riscv64;
-pub mod x86;
-pub mod x86_64;
+pub(crate) mod aarch64;
+pub(crate) mod arm;
+pub(crate) mod loongarch64;
+pub(crate) mod riscv32;
+pub(crate) mod riscv64;
+pub(crate) mod x86;
+pub(crate) mod x86_64;
 
 /// Supported CPU architectures for ELF generation.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -334,7 +334,7 @@ pub(crate) fn calculate_addend(
     }
 }
 
-pub fn generate_helper_code(arch: Arch) -> Vec<u8> {
+pub(crate) fn generate_helper_code(arch: Arch) -> Vec<u8> {
     match arch {
         Arch::X86_64 => x86_64::generate_helper_code(),
         Arch::X86 => x86::generate_helper_code(),
@@ -346,7 +346,7 @@ pub fn generate_helper_code(arch: Arch) -> Vec<u8> {
     }
 }
 
-pub fn generate_tls_helper_code(arch: Arch) -> Vec<u8> {
+pub(crate) fn generate_tls_helper_code(arch: Arch) -> Vec<u8> {
     match arch {
         Arch::X86_64 => x86_64::generate_tls_helper_code(),
         Arch::X86 => x86::generate_tls_helper_code(),
@@ -358,7 +358,7 @@ pub fn generate_tls_helper_code(arch: Arch) -> Vec<u8> {
     }
 }
 
-pub fn patch_plt_testers(
+pub(crate) fn patch_plt_testers(
     arch: Arch,
     text_data: &mut [u8],
     helper_text_off: usize,
@@ -393,7 +393,7 @@ pub fn patch_plt_testers(
     }
 }
 
-pub fn patch_tls_tester(
+pub(crate) fn patch_tls_tester(
     arch: Arch,
     text_data: &mut [u8],
     helper_text_off: usize,
@@ -456,7 +456,7 @@ pub fn patch_tls_tester(
     }
 }
 
-pub fn get_ifunc_resolver_code(arch: Arch) -> Vec<u8> {
+pub(crate) fn get_ifunc_resolver_code(arch: Arch) -> Vec<u8> {
     match arch {
         Arch::X86_64 => x86_64::get_ifunc_resolver_code(),
         Arch::X86 => x86::get_ifunc_resolver_code(),
@@ -468,7 +468,7 @@ pub fn get_ifunc_resolver_code(arch: Arch) -> Vec<u8> {
     }
 }
 
-pub fn patch_ifunc_resolver(
+pub(crate) fn patch_ifunc_resolver(
     arch: Arch,
     text_data: &mut [u8],
     offset: usize,
@@ -496,7 +496,7 @@ pub fn patch_ifunc_resolver(
     }
 }
 
-pub fn generate_plt0_code(arch: Arch) -> Vec<u8> {
+pub(crate) fn generate_plt0_code(arch: Arch) -> Vec<u8> {
     match arch {
         Arch::X86_64 => x86_64::generate_plt0_code(),
         Arch::X86 => x86::generate_plt0_code(),
@@ -508,7 +508,11 @@ pub fn generate_plt0_code(arch: Arch) -> Vec<u8> {
     }
 }
 
-pub fn generate_plt_entry_code(arch: Arch, reloc_idx: u32, plt_entry_offset: u64) -> Vec<u8> {
+pub(crate) fn generate_plt_entry_code(
+    arch: Arch,
+    reloc_idx: u32,
+    plt_entry_offset: u64,
+) -> Vec<u8> {
     match arch {
         Arch::X86_64 => x86_64::generate_plt_entry_code(reloc_idx, plt_entry_offset),
         Arch::X86 => x86::generate_plt_entry_code(reloc_idx, plt_entry_offset),
@@ -520,7 +524,7 @@ pub fn generate_plt_entry_code(arch: Arch, reloc_idx: u32, plt_entry_offset: u64
     }
 }
 
-pub fn patch_plt0(
+pub(crate) fn patch_plt0(
     arch: Arch,
     plt_data: &mut [u8],
     plt0_off: usize,
@@ -538,7 +542,7 @@ pub fn patch_plt0(
     }
 }
 
-pub fn patch_plt_entry(
+pub(crate) fn patch_plt_entry(
     arch: Arch,
     plt_data: &mut [u8],
     plt_entry_off: usize,
@@ -575,7 +579,7 @@ pub fn patch_plt_entry(
     Ok(())
 }
 
-pub fn get_got_plt_init_value(arch: Arch, plt_vaddr: u64, plt_entry_off: u64) -> u64 {
+pub(crate) fn get_got_plt_init_value(arch: Arch, plt_vaddr: u64, plt_entry_off: u64) -> u64 {
     // The initial value to be placed in the GOT.PLT entrys points to the instruction
     // in the PLT entry that jumps to the resolver code. This varies by architecture.
     match arch {
@@ -585,7 +589,7 @@ pub fn get_got_plt_init_value(arch: Arch, plt_vaddr: u64, plt_entry_off: u64) ->
     }
 }
 
-pub fn get_plt0_size(arch: Arch) -> u64 {
+pub(crate) fn get_plt0_size(arch: Arch) -> u64 {
     match arch {
         Arch::X86_64 | Arch::X86 => 16,
         Arch::Arm => 20,
@@ -593,7 +597,7 @@ pub fn get_plt0_size(arch: Arch) -> u64 {
     }
 }
 
-pub fn get_plt_entry_size(arch: Arch) -> u64 {
+pub(crate) fn get_plt_entry_size(arch: Arch) -> u64 {
     match arch {
         Arch::Arm => 12,
         Arch::X86_64 | Arch::X86 | Arch::Aarch64 | Arch::Riscv64 => 16,

@@ -4,7 +4,7 @@ use crate::{
     ByteRepr, LinkerError, Result,
     elf::{ElfPhdr, ElfProgramType, ElfRelType},
     entity::SecondaryMap,
-    image::{RawDynamic, ScannedDynamic},
+    image::{RawDynamic, ScannedDynamic, SearchPathPool},
     input::PathBuf,
     loader::ImageBuilder,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
@@ -258,6 +258,7 @@ pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch, R>(
     force_static_tls: bool,
     domain: DomainId,
     tls_resolver: Tls,
+    search_paths: SearchPathPool,
 ) -> Result<RawDynamic<D, Arch, R, Tls>>
 where
     D: Default + Send + Sync + 'static,
@@ -285,6 +286,7 @@ where
         arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
         domain,
         tls_resolver,
+        search_paths,
     );
     builder.build_dynamic(&phdrs)
 }

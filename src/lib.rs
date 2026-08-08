@@ -82,9 +82,12 @@
 //! fn main() -> Result<()> {
 //!     let root = PathBuf::from("path/to/plugin.so");
 //!     let mut context: LinkContext<PathBuf> = LinkContext::new(DomainId::PROCESS);
+//!     let mut resolver = SearchPathResolver::new();
+//!     resolver.push_rpath();
+//!     resolver.push_runpath();
 //!
 //!     let loaded = Linker::new()
-//!         .resolver(SearchPathResolver::new())
+//!         .resolver(resolver)
 //!         .load(&mut context, root)?;
 //!
 //!     let run = unsafe {
@@ -159,6 +162,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![no_std]
 #![warn(
+    unreachable_pub,
     clippy::unnecessary_wraps,
     clippy::unnecessary_lazy_evaluations,
     clippy::collapsible_if,
@@ -223,7 +227,7 @@ pub(crate) use error::*;
 
 pub use aligned_bytes::ByteRepr;
 pub use error::Error;
-pub use image::{Module, ModuleState};
+pub use image::{Module, ModuleSearch, ModuleState, SearchPathPool};
 pub use linker::{LinkContext, Linker, LinkerRun};
 pub use loader::{Loader, LoaderRun};
 pub use relocation::{Relocator, RelocatorRun};

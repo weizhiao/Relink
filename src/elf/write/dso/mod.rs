@@ -20,8 +20,8 @@ pub use types::{DsoExport, DsoExportLayout, DsoImage, DsoSymbolBind, DsoSymbolKi
 mod tests {
     use super::{DsoBuilder, sysv_hash};
     use crate::{
-        Loader, Relocator, arch::x86_64::relocation::X86_64Arch, input::ElfBinary,
-        memory::VmOffset, relocation::RelocationArch,
+        Loader, Relocator, arch::x86_64::X86_64Arch, input::ElfBinary, memory::VmOffset,
+        relocation::RelocationArch,
     };
 
     #[test]

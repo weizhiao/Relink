@@ -85,9 +85,12 @@ const LINKER: Linker<'static, PathBuf> = Linker::new();
 fn main() -> Result<()> {
     let root = PathBuf::from("path/to/plugin.so");
     let mut context: LinkContext<PathBuf, ()> = LinkContext::new(DomainId::PROCESS);
+    let mut resolver = SearchPathResolver::new();
+    resolver.push_rpath();
+    resolver.push_runpath();
 
     let loaded = LINKER
-        .resolver(SearchPathResolver::new())
+        .resolver(resolver)
         .load(&mut context, root)?;
 
     let run = unsafe {

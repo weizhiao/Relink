@@ -14,6 +14,7 @@ use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 
 pub(crate) struct GraphEntry<P> {
     payload: P,
+    loader: Option<ModuleSlot>,
     direct_deps: Option<Box<[ModuleSlot]>>,
 }
 
@@ -26,6 +27,11 @@ impl<P> GraphEntry<P> {
     #[inline]
     pub(crate) fn direct_deps(&self) -> Option<&[ModuleSlot]> {
         self.direct_deps.as_deref()
+    }
+
+    #[inline]
+    pub(crate) const fn loader(&self) -> Option<ModuleSlot> {
+        self.loader
     }
 
     #[inline]
@@ -110,6 +116,11 @@ where
         self.dynamics.get(&slot).map(GraphEntry::payload)
     }
 
+    #[inline]
+    pub(crate) fn loader(&self, slot: ModuleSlot) -> Option<ModuleSlot> {
+        self.dynamics.get(&slot).and_then(GraphEntry::loader)
+    }
+
     pub(crate) fn set_direct_deps(&mut self, slot: ModuleSlot, direct_deps: Vec<ModuleSlot>) {
         self.dynamics
             .get_mut(&slot)
@@ -117,12 +128,19 @@ where
             .set_direct_deps(direct_deps);
     }
 
-    pub(crate) fn stage_dynamic(&mut self, slot: ModuleSlot, generation: u32, payload: P) {
+    pub(crate) fn stage_dynamic(
+        &mut self,
+        slot: ModuleSlot,
+        generation: u32,
+        payload: P,
+        loader: Option<ModuleSlot>,
+    ) {
         self.reserve(slot, generation);
         let previous = self.dynamics.insert(
             slot,
             GraphEntry {
                 payload,
+                loader,
                 direct_deps: None,
             },
         );
@@ -178,6 +196,7 @@ where
             slot,
             GraphEntry {
                 payload,
+                loader: None,
                 direct_deps: Some(direct_deps),
             },
         );
@@ -219,31 +238,26 @@ where
     pub(crate) fn build_scope<K, Meta>(
         &self,
         context: &LinkContext<K, Meta, Arch, Tls>,
-    ) -> Result<ModuleScope<Arch, Tls>>
+    ) -> ModuleScope<Arch, Tls>
     where
         K: Ord,
     {
-        let modules = self
-            .group_order
-            .iter()
-            .map(|id| {
-                if let Some(raw) = self.dynamics.get(id).map(GraphEntry::payload) {
-                    let module = unsafe { LoadedCore::from_core(raw.core()) };
-                    ModuleHandle::from(module)
-                } else if let Some(module) = self.modules.get(id).map(PendingModule::module) {
-                    module.clone()
-                } else {
-                    context
-                        .committed
-                        .module(*id)
-                        .map(|module| module.handle().clone())
-                        .expect("scope slot must resolve to a committed module")
-                }
-            })
-            .collect::<Vec<_>>();
         let mut scope = ModuleScope::new(context.domain_id());
-        scope.extend(modules);
-        Ok(scope)
+        scope.extend(self.group_order.iter().map(|id| {
+            if let Some(raw) = self.dynamics.get(id).map(GraphEntry::payload) {
+                let module = unsafe { LoadedCore::from_core(raw.core()) };
+                ModuleHandle::from(module)
+            } else if let Some(module) = self.modules.get(id).map(PendingModule::module) {
+                module.clone()
+            } else {
+                context
+                    .committed
+                    .module(*id)
+                    .map(|module| module.handle().clone())
+                    .expect("scope slot must resolve to a committed module")
+            }
+        }));
+        scope
     }
 }
 

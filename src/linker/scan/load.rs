@@ -6,7 +6,7 @@ use crate::{
     ByteRepr, LinkerError, Loader, Result,
     elf::ElfRelType,
     entity::EntitySet,
-    image::{RawDynamic, ScannedDynamic},
+    image::{RawDynamic, ScannedDynamic, SearchPathPool},
     lazy::LazyBinder,
     linker::{
         context::LinkContext,
@@ -89,12 +89,22 @@ where
             .ensure_domain(self.linker.loader.domain_id())?;
         let mut session = ResolveSession::new();
 
-        let mut loader = self.linker.loader.run().with_observer(&mut self.observer);
+        let mut loader = self
+            .linker
+            .loader
+            .run()
+            .with_search_path_pool(context.search_paths.clone())
+            .with_observer(&mut self.observer);
         let mut resolve_context = ScanResolveContext::new(&mut context.committed, &mut session);
         let resolved = resolve_context.resolve_root::<Q>(key, None, &self.linker.resolver)?;
-        let root = resolve_context.stage(resolved, &mut loader)?;
+        let root = resolve_context.stage(resolved, None, &mut loader)?;
         if !resolve_context.contains_pending(root) {
-            return PreparedLoad::new(root, ResolveSession::new(), None, context);
+            return Ok(PreparedLoad::new(
+                root,
+                ResolveSession::new(),
+                None,
+                context,
+            ));
         }
         resolve_context.resolve_dependency_graph::<D, _, _, _, Q>(
             root,
@@ -103,6 +113,7 @@ where
         )?;
 
         let (dynamics, mut session) = session.split_dynamics();
+        let search_paths = context.search_paths.clone();
         let dynamic_ids = dynamics.keys().copied().collect::<EntitySet<_>>();
         let entries: BTreeMap<_, _> = dynamics
             .into_iter()
@@ -149,12 +160,13 @@ where
                     &mut mapped_runtime,
                     module_id,
                     module,
+                    &search_paths,
                 )?;
                 session.restore_dynamic(id, raw, direct_deps);
             }
         }
 
-        PreparedLoad::new(root, session, mapped_runtime, context)
+        Ok(PreparedLoad::new(root, session, mapped_runtime, context))
     }
 
     fn prepare_mapped_runtime(
@@ -186,16 +198,22 @@ where
         mapped_runtime: &mut Option<MappedRuntimeMemory<M::Region>>,
         module_id: PlanModuleId,
         scanned: ScannedDynamic<Arch>,
+        search_paths: &SearchPathPool,
     ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         match plan
             .materialization(module_id)
             .unwrap_or(Materialization::WholeDsoRegion)
         {
             Materialization::SectionRegions => {
-                self.materialize_arena_raw(mapped_runtime, module_id, scanned)
+                self.materialize_arena_raw(mapped_runtime, module_id, scanned, search_paths)
             }
             Materialization::WholeDsoRegion => {
-                let mut raw = self.linker.loader.load_scanned_dynamic(scanned)?;
+                let mut raw = self
+                    .linker
+                    .loader
+                    .run()
+                    .with_search_path_pool(search_paths.clone())
+                    .load_scanned_dynamic(scanned)?;
                 apply_section_overrides(&mut raw, module_id, plan)?;
                 Ok(raw)
             }
@@ -207,6 +225,7 @@ where
         mapped_runtime: &mut Option<MappedRuntimeMemory<M::Region>>,
         module_id: PlanModuleId,
         scanned: ScannedDynamic<Arch>,
+        search_paths: &SearchPathPool,
     ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         let runtime = mapped_runtime
             .as_mut()
@@ -224,6 +243,7 @@ where
             force_static_tls,
             self.linker.loader.domain_id(),
             self.linker.loader.tls_resolver(),
+            search_paths.clone(),
         )?;
         Ok(raw)
     }

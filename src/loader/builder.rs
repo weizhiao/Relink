@@ -2,6 +2,7 @@ use crate::{
     ParsePhdrError, Result,
     arch::NativeArch,
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
+    image::SearchPathPool,
     input::{ElfReader, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     os::ProtFlags,
@@ -30,6 +31,9 @@ pub(crate) struct ImageBuilder<
 {
     /// Loader source path or caller-provided source identifier.
     pub(crate) path: PathBuf,
+
+    /// Canonical directory storage used by module search metadata.
+    pub(crate) search_paths: SearchPathPool,
 
     /// ELF header, when the loader owns the original ELF header metadata.
     ehdr: Option<ElfHeader<Arch::Layout>>,
@@ -82,6 +86,7 @@ pub(crate) struct ScanBuilder<L: ElfLayout = NativeElfLayout> {
     pub(crate) ehdr: ElfHeader<L>,
     pub(crate) phdrs: Box<[ElfPhdr<L>]>,
     pub(crate) reader: Box<dyn ElfReader + 'static>,
+    pub(crate) search_paths: SearchPathPool,
 }
 
 impl<L: ElfLayout> ScanBuilder<L> {
@@ -91,12 +96,14 @@ impl<L: ElfLayout> ScanBuilder<L> {
         ehdr: ElfHeader<L>,
         phdrs: Box<[ElfPhdr<L>]>,
         reader: Box<dyn ElfReader + 'static>,
+        search_paths: SearchPathPool,
     ) -> Self {
         Self {
             path,
             ehdr,
             phdrs,
             reader,
+            search_paths,
         }
     }
 }
@@ -124,9 +131,11 @@ where
         executor: Arc<dyn CodeExecutor<Arch>>,
         domain: DomainId,
         tls_resolver: Tls,
+        search_paths: SearchPathPool,
     ) -> Self {
         Self {
             path,
+            search_paths,
             ehdr,
             entry,
             relro: None,

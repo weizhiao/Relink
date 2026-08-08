@@ -4,7 +4,8 @@ use crate::{
     arch::NativeArch,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, SymbolTable},
     image::{
-        CoreRuntime, DynamicInfo, LookupScope, Module, ModuleState, PltRelocInfo, SymbolExports,
+        CoreRuntime, DynamicInfo, LookupScope, Module, ModuleSearch, ModuleState, PltRelocInfo,
+        SymbolExports,
     },
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
@@ -159,7 +160,7 @@ impl<
     /// Returns the loader source path or caller-provided source identifier.
     #[inline]
     pub fn path(&self) -> &Path {
-        &self.inner.path
+        self.inner.search.path()
     }
 
     /// Gets the base address of the ELF object
@@ -171,25 +172,7 @@ impl<
     /// Returns the DT_SONAME value when this core has dynamic metadata.
     #[inline]
     pub(crate) fn soname(&self) -> Option<&str> {
-        self.inner
-            .dynamic_info
-            .as_ref()
-            .and_then(|info| info.soname)
-    }
-
-    /// Returns the `DT_RPATH` value when this core has dynamic metadata.
-    #[inline]
-    pub fn rpath(&self) -> Option<&str> {
-        self.inner.dynamic_info.as_ref().and_then(|info| info.rpath)
-    }
-
-    /// Returns the `DT_RUNPATH` value when this core has dynamic metadata.
-    #[inline]
-    pub fn runpath(&self) -> Option<&str> {
-        self.inner
-            .dynamic_info
-            .as_ref()
-            .and_then(|info| info.runpath)
+        self.inner.search.soname()
     }
 
     /// Returns the `DT_NEEDED` names retained from the dynamic section.
@@ -301,16 +284,17 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             .map(|soname_off| symtab.strtab().get_str(soname_off.get()));
         let rpath = dynamic
             .rpath_off
-            .map(|rpath_off| symtab.strtab().get_str(rpath_off.get()));
+            .map(|rpath_off| symtab.strtab().get_str(rpath_off));
         let runpath = dynamic
             .runpath_off
-            .map(|runpath_off| symtab.strtab().get_str(runpath_off.get()));
+            .map(|runpath_off| symtab.strtab().get_str(runpath_off));
+        let search = ModuleSearch::from_dynamic(path, soname, runpath, rpath);
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
         let inner = Arc::new(CoreInner {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
             domain: DomainId::PROCESS,
-            path,
+            search,
             state: ModuleState::initialized(),
             lifecycle: OnceCell::new(),
             exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),
@@ -318,9 +302,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 eh_frame_hdr,
                 phdrs: ElfPhdrs::Vec(phdrs),
                 needed_libs,
-                soname,
-                rpath,
-                runpath,
                 symbolic: dynamic.symbolic,
             })),
             scope: OnceCell::new(),
@@ -340,7 +321,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     /// Formats the ElfCore for debugging purposes.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfCore")
-            .field("path", &self.inner.path)
+            .field("path", &self.inner.search.path())
             .field("base", &format_args!("{}", self.base()))
             .field("tls", &self.tls())
             .finish()
@@ -355,13 +336,18 @@ where
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
-    fn state(&self) -> &ModuleState {
-        &self.inner.state
+    fn name(&self) -> &str {
+        self.inner.name()
     }
 
     #[inline]
-    fn name(&self) -> &str {
-        self.inner.name()
+    fn domain_id(&self) -> DomainId {
+        self.inner.domain_id()
+    }
+
+    #[inline]
+    fn search(&self) -> Option<&ModuleSearch> {
+        self.inner.search()
     }
 
     #[inline]
@@ -385,8 +371,8 @@ where
     }
 
     #[inline]
-    fn domain_id(&self) -> DomainId {
-        self.inner.domain_id()
+    fn state(&self) -> &ModuleState {
+        &self.inner.state
     }
 
     #[inline]
