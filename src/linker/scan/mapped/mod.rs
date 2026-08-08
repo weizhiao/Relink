@@ -258,7 +258,7 @@ pub(crate) fn build_arena_raw_dynamic<D, Tls, Arch, R>(
     force_static_tls: bool,
     domain: DomainId,
     tls_resolver: Tls,
-    search_paths: SearchPathPool,
+    search_paths: &mut SearchPathPool,
 ) -> Result<RawDynamic<D, Arch, R, Tls>>
 where
     D: Default + Send + Sync + 'static,
@@ -286,9 +286,8 @@ where
         arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
         domain,
         tls_resolver,
-        search_paths,
     );
-    builder.build_dynamic(&phdrs)
+    builder.build_dynamic(&phdrs, Some(search_paths))
 }
 
 fn remap_runtime_phdrs<Arch, R>(

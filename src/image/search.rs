@@ -4,17 +4,13 @@ use crate::{
 };
 use alloc::{boxed::Box, collections::BTreeSet, string::String, vec::Vec};
 use core::fmt;
-use spin::Mutex;
 
 pub(crate) type SharedDir = Arc<str>;
 
-/// Shared storage for canonical module search directories.
-///
-/// Clones refer to the same directory set. A linker context uses one pool for
-/// all of its modules, while a standalone loader run creates a private pool.
-#[derive(Clone, Default)]
+/// Storage for canonical module search directories.
+#[derive(Default)]
 pub struct SearchPathPool {
-    dirs: Arc<Mutex<BTreeSet<SharedDir>>>,
+    dirs: BTreeSet<SharedDir>,
 }
 
 impl SearchPathPool {
@@ -24,39 +20,30 @@ impl SearchPathPool {
         Self::default()
     }
 
-    fn expand(&self, value: &str, origin: &Path) -> Box<[SharedDir]> {
-        if value.is_empty() {
-            return Box::new([]);
+    fn intern(&mut self, path: String) -> SharedDir {
+        if let Some(dir) = self.dirs.get(path.as_str()) {
+            return Arc::clone(dir);
         }
-        let mut pool = self.dirs.lock();
-        let mut dirs = Vec::new();
-        for value in value.split(':') {
-            let path = normalize_dir(if value.is_empty() {
-                PathBuf::from(".")
-            } else {
-                expand_origin(value, origin)
-            })
-            .into_string();
-            let dir = if let Some(dir) = pool.get(path.as_str()) {
-                Arc::clone(dir)
-            } else {
-                let dir = Arc::from(path);
-                pool.insert(Arc::clone(&dir));
-                dir
-            };
-            if !dirs.iter().any(|existing| Arc::ptr_eq(existing, &dir)) {
-                dirs.push(dir);
-            }
-        }
-        dirs.into_boxed_slice()
+        let dir = Arc::from(path);
+        self.dirs.insert(Arc::clone(&dir));
+        dir
+    }
+
+    pub(crate) fn module_search(
+        &mut self,
+        path: PathBuf,
+        soname: Option<&str>,
+        runpath: Option<&str>,
+        rpath: Option<&str>,
+    ) -> ModuleSearch {
+        ModuleSearch::from_dynamic_with(path, soname, runpath, rpath, |path| self.intern(path))
     }
 }
 
 /// Filesystem identity and dynamic search metadata retained by a module.
 ///
 /// `DT_RUNPATH` and `DT_RPATH` are expanded when this value is created. Their
-/// directories are shared with other modules loaded through the same linker
-/// context or loader run.
+/// directories may be shared with other modules through a [`SearchPathPool`].
 pub struct ModuleSearch {
     path: PathBuf,
     soname: Option<Box<str>>,
@@ -75,29 +62,25 @@ impl ModuleSearch {
         }
     }
 
-    /// Creates independently owned dynamic-section search metadata.
-    ///
-    /// Loader and linker paths use an internal shared pool so directories are
-    /// also deduplicated across modules.
     pub(crate) fn from_dynamic(
         path: PathBuf,
         soname: Option<&str>,
         runpath: Option<&str>,
         rpath: Option<&str>,
     ) -> Self {
-        Self::from_dynamic_in(path, soname, runpath, rpath, &SearchPathPool::default())
+        Self::from_dynamic_with(path, soname, runpath, rpath, Arc::from)
     }
 
-    pub(crate) fn from_dynamic_in(
+    fn from_dynamic_with(
         path: PathBuf,
         soname: Option<&str>,
         runpath: Option<&str>,
         rpath: Option<&str>,
-        paths: &SearchPathPool,
+        mut intern: impl FnMut(String) -> SharedDir,
     ) -> Self {
-        let origin = PathBuf::from(path.parent());
-        let runpath = runpath.map(|value| paths.expand(value, origin.as_path()));
-        let rpath = rpath.map(|value| paths.expand(value, origin.as_path()));
+        let origin = path.parent();
+        let runpath = runpath.map(|value| expand_dirs(value, origin, &mut intern));
+        let rpath = rpath.map(|value| expand_dirs(value, origin, &mut intern));
         Self {
             path,
             soname: soname.map(Box::from),
@@ -139,16 +122,30 @@ impl ModuleSearch {
             .as_deref()
             .map(|dirs| dirs.iter().map(|dir| Path::new(dir.as_ref())))
     }
+}
 
-    #[inline]
-    pub(crate) fn runpath_dirs(&self) -> Option<&[SharedDir]> {
-        self.runpath.as_deref()
+fn expand_dirs(
+    value: &str,
+    origin: &Path,
+    intern: &mut impl FnMut(String) -> SharedDir,
+) -> Box<[SharedDir]> {
+    if value.is_empty() {
+        return Box::new([]);
     }
-
-    #[inline]
-    pub(crate) fn rpath_dirs(&self) -> Option<&[SharedDir]> {
-        self.rpath.as_deref()
+    let mut dirs = Vec::new();
+    for value in value.split(':') {
+        let path = normalize_dir(if value.is_empty() {
+            PathBuf::from(".")
+        } else {
+            expand_origin(value, origin)
+        })
+        .into_string();
+        let dir = intern(path);
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
     }
+    dirs.into_boxed_slice()
 }
 
 impl fmt::Debug for ModuleSearch {
@@ -213,5 +210,35 @@ pub(crate) fn normalize_dir(path: PathBuf) -> PathBuf {
         path
     } else {
         PathBuf::from(&value[..len])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dirs_are_shared() {
+        let mut paths = SearchPathPool::default();
+        let first = paths.module_search(
+            PathBuf::from("/opt/app/first.so"),
+            None,
+            Some("$ORIGIN/lib:$ORIGIN/lib/:/usr/lib/"),
+            Some("/ignored"),
+        );
+        let second = paths.module_search(
+            PathBuf::from("/opt/app/second.so"),
+            None,
+            Some("$ORIGIN/lib:/usr/lib"),
+            None,
+        );
+        let first = first.runpath.as_deref().unwrap();
+        let second = second.runpath.as_deref().unwrap();
+
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].as_ref(), "/opt/app/lib");
+        assert_eq!(first[1].as_ref(), "/usr/lib");
+        assert!(Arc::ptr_eq(&first[0], &second[0]));
+        assert!(Arc::ptr_eq(&first[1], &second[1]));
     }
 }

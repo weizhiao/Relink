@@ -8,7 +8,7 @@ use crate::{
         ElfSectionId, ElfSectionType, ElfShdr, ElfStringTable, NativeElfLayout,
         parse_dynamic_entries,
     },
-    image::ModuleSearch,
+    image::{ModuleSearch, SearchPathPool},
     input::{ElfReader, ElfReaderExt, Path, PathBuf},
     loader::ScanBuilder,
     memory::MappedView,
@@ -528,13 +528,15 @@ impl<Arch: RelocationArch> ScannedElf<Arch> {
 }
 
 impl<Arch: RelocationArch> ScannedDynamic<Arch> {
-    pub(crate) fn from_builder(builder: ScanBuilder<Arch::Layout>) -> Result<Self> {
+    pub(crate) fn from_builder(
+        builder: ScanBuilder<Arch::Layout>,
+        search_paths: Option<&mut SearchPathPool>,
+    ) -> Result<Self> {
         let ScanBuilder {
             path,
             ehdr,
             phdrs,
             mut reader,
-            search_paths,
         } = builder;
         let interp = read_interp(reader.as_mut(), &phdrs)?;
         let DynamicScanParts {
@@ -547,13 +549,13 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         let section_table = SectionTable::new(reader.as_mut(), &ehdr)?;
         let strtab_bytes = unsafe { core::slice::from_raw_parts(strtab.as_ptr(), strtab.len()) };
         let strtab_view = ElfStringTable::new(MappedView::from_slice(strtab_bytes));
-        let search = ModuleSearch::from_dynamic_in(
-            path,
-            soname.map(|offset| strtab_view.get_str(offset)),
-            runpath.map(|offset| strtab_view.get_str(offset)),
-            rpath.map(|offset| strtab_view.get_str(offset)),
-            &search_paths,
-        );
+        let soname = soname.map(|offset| strtab_view.get_str(offset));
+        let runpath = runpath.map(|offset| strtab_view.get_str(offset));
+        let rpath = rpath.map(|offset| strtab_view.get_str(offset));
+        let search = match search_paths {
+            Some(paths) => paths.module_search(path, soname, runpath, rpath),
+            None => ModuleSearch::from_dynamic(path, soname, runpath, rpath),
+        };
         let capability = section_table
             .as_ref()
             .map_or(ModuleCapability::Opaque, |table| {
@@ -741,7 +743,6 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
             ehdr,
             phdrs,
             mut reader,
-            search_paths: _,
         } = builder;
         let interp = read_interp(reader.as_mut(), &phdrs)?;
         let section_table = SectionTable::new(reader.as_mut(), &ehdr)?;

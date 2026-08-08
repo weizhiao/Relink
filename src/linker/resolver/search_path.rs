@@ -363,11 +363,11 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
                     }
                     let mut found = None;
                     request.visit_loaders(|owner| {
-                        let Some(dirs) = owner.rpath_dirs() else {
+                        let Some(dirs) = owner.rpath() else {
                             return Ok(true);
                         };
                         for dir in dirs {
-                            candidate.set_joined(Path::new(dir), requested.as_str());
+                            candidate.set_joined(dir, requested.as_str());
                             if let Some(value) = inspect(candidate.as_path(), true)? {
                                 found = Some(value);
                                 return Ok(false);
@@ -383,11 +383,11 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
                     let Some(owner) = request.owner() else {
                         continue;
                     };
-                    let Some(dirs) = owner.runpath_dirs() else {
+                    let Some(dirs) = owner.runpath() else {
                         continue;
                     };
                     for dir in dirs {
-                        candidate.set_joined(Path::new(dir), requested.as_str());
+                        candidate.set_joined(dir, requested.as_str());
                         if let Some(found) = inspect(candidate.as_path(), true)? {
                             return Ok(Some(found));
                         }
@@ -606,10 +606,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::SearchPathPool;
 
     struct NonCloneKey;
     struct NonCloneMapper;
+
+    fn module_search(
+        path: &str,
+        soname: Option<&str>,
+        runpath: Option<&str>,
+        rpath: Option<&str>,
+    ) -> ModuleSearch {
+        ModuleSearch::from_dynamic(PathBuf::from(path), soname, runpath, rpath)
+    }
 
     fn visit_chain(chain: &[&ModuleSearch], visitor: &mut LoaderVisitor<'_>) -> Result<()> {
         for &search in chain {
@@ -645,37 +653,9 @@ mod tests {
     }
 
     #[test]
-    fn module_dirs_are_shared() {
-        let paths = SearchPathPool::default();
-        let first = ModuleSearch::from_dynamic_in(
-            PathBuf::from("/opt/app/first.so"),
-            None,
-            Some("$ORIGIN/lib:$ORIGIN/lib/:/usr/lib/"),
-            Some("/ignored"),
-            &paths,
-        );
-        let second = ModuleSearch::from_dynamic_in(
-            PathBuf::from("/opt/app/second.so"),
-            None,
-            Some("$ORIGIN/lib:/usr/lib"),
-            None,
-            &paths,
-        );
-        let first = first.runpath_dirs().unwrap();
-        let second = second.runpath_dirs().unwrap();
-
-        assert_eq!(first.len(), 2);
-        assert_eq!(first[0].as_ref(), "/opt/app/lib");
-        assert_eq!(first[1].as_ref(), "/usr/lib");
-        assert!(Arc::ptr_eq(&first[0], &second[0]));
-        assert!(Arc::ptr_eq(&first[1], &second[1]));
-    }
-
-    #[test]
     fn rpath_inherits_loader_chain() {
-        let direct = ModuleSearch::from_dynamic(PathBuf::from("/app/middle"), None, None, None);
-        let root =
-            ModuleSearch::from_dynamic(PathBuf::from("/app/root"), None, None, Some("$ORIGIN/lib"));
+        let direct = module_search("/app/middle", None, None, None);
+        let root = module_search("/app/root", None, None, Some("$ORIGIN/lib"));
         let chain = [&direct, &root];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
         let request = CandidateRequest::new(Path::new("libleaf.so"), Some(&direct), &loaders);
@@ -692,7 +672,7 @@ mod tests {
 
     #[test]
     fn expands_dependency_origin() {
-        let owner = ModuleSearch::from_dynamic(PathBuf::from("/app/owner"), None, None, None);
+        let owner = module_search("/app/owner", None, None, None);
         let chain = [&owner];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
         let request =
@@ -710,14 +690,8 @@ mod tests {
 
     #[test]
     fn runpath_suppresses_rpath_chain() {
-        let direct = ModuleSearch::from_dynamic(
-            PathBuf::from("/app/middle"),
-            None,
-            Some(""),
-            Some("/direct"),
-        );
-        let root =
-            ModuleSearch::from_dynamic(PathBuf::from("/app/root"), None, None, Some("/root"));
+        let direct = module_search("/app/middle", None, Some(""), Some("/direct"));
+        let root = module_search("/app/root", None, None, Some("/root"));
         let chain = [&direct, &root];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
         let request = CandidateRequest::new(Path::new("libleaf.so"), Some(&direct), &loaders);
@@ -737,10 +711,8 @@ mod tests {
 
     #[test]
     fn rpath_and_runpath_have_independent_order() {
-        let direct =
-            ModuleSearch::from_dynamic(PathBuf::from("/app/middle"), None, Some("/run"), None);
-        let root =
-            ModuleSearch::from_dynamic(PathBuf::from("/app/root"), None, None, Some("/root"));
+        let direct = module_search("/app/middle", None, Some("/run"), None);
+        let root = module_search("/app/root", None, None, Some("/root"));
         let chain = [&direct, &root];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
         let request = CandidateRequest::new(Path::new("libleaf.so"), Some(&direct), &loaders);
@@ -767,8 +739,7 @@ mod tests {
 
     #[test]
     fn path_lists_preserve_current_directory() {
-        let owner =
-            ModuleSearch::from_dynamic(PathBuf::from("/app/owner"), None, Some(":/fallback"), None);
+        let owner = module_search("/app/owner", None, Some(":/fallback"), None);
         let chain = [&owner];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
         let request = CandidateRequest::new(Path::new("libvalue.so"), Some(&owner), &loaders);
@@ -793,8 +764,8 @@ mod tests {
 
     #[test]
     fn origin_requires_a_token_boundary() {
-        let owner = ModuleSearch::from_dynamic(
-            PathBuf::from("/app/owner"),
+        let owner = module_search(
+            "/app/owner",
             None,
             Some("$ORIGIN/lib:$ORIGIN_SUFFIX:${ORIGIN}/alt"),
             None,

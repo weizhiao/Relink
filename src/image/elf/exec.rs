@@ -7,7 +7,7 @@ use crate::{
     ParsePhdrError, Result,
     arch::NativeArch,
     elf::ElfPhdr,
-    image::{LoadedCore, Module, RawDynamic},
+    image::{LoadedCore, Module, RawDynamic, SearchPathPool},
     input::{Path, PathBuf},
     lazy::{LazyBinder, SupportLazy},
     loader::ImageBuilder,
@@ -498,9 +498,10 @@ where
         self,
         phdrs: &[ElfPhdr<Arch::Layout>],
         has_dynamic: bool,
+        search_paths: Option<&mut SearchPathPool>,
     ) -> Result<RawExec<D, Arch, R, Tls>> {
         if has_dynamic {
-            Ok(RawExec::Dynamic(self.build_dynamic(phdrs)?))
+            Ok(RawExec::Dynamic(self.build_dynamic(phdrs, search_paths)?))
         } else {
             Ok(RawExec::Static(self.build_static_exec(phdrs)?))
         }

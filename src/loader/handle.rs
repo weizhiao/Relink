@@ -6,7 +6,6 @@ use crate::{
     MmapError, Result,
     arch::NativeArch,
     const_builder::NoDrop,
-    image::SearchPathPool,
     os::{DefaultMmap, Mmap, PageSize},
     relocation::RelocationArch,
     runtime::{CodeExecutor, DomainId, NativeCodeExecutor},
@@ -313,7 +312,7 @@ where
             loader: self,
             observer: (),
             buf: super::ElfBuf::new(),
-            search_paths: SearchPathPool::default(),
+            search_paths: None,
             #[cfg(feature = "object")]
             object_groups: Arc::new(SectionGroups::default()),
         }

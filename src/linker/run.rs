@@ -225,7 +225,7 @@ where
         let mut loader = linker
             .loader
             .run()
-            .with_search_path_pool(context.search_paths.clone())
+            .with_search_path_pool(&mut context.search_paths)
             .with_observer(&mut self.observer);
         let mut resolve_context = LoadResolveContext::new(&mut context.committed, &mut session);
         let resolved = resolve_context.resolve_root::<Q>(&key, caller, &linker.resolver)?;
@@ -289,7 +289,7 @@ where
         let mut loader = linker
             .loader
             .run()
-            .with_search_path_pool(context.search_paths.clone())
+            .with_search_path_pool(&mut context.search_paths)
             .with_observer(&mut self.observer);
         let mut resolve_context = LoadResolveContext::new(&mut context.committed, &mut session);
         resolve_context.resolve_pending::<_, _, _, Q>(root, &mut loader, &linker.resolver)?;

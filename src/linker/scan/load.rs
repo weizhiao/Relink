@@ -89,31 +89,34 @@ where
             .ensure_domain(self.linker.loader.domain_id())?;
         let mut session = ResolveSession::new();
 
-        let mut loader = self
-            .linker
-            .loader
-            .run()
-            .with_search_path_pool(context.search_paths.clone())
-            .with_observer(&mut self.observer);
-        let mut resolve_context = ScanResolveContext::new(&mut context.committed, &mut session);
-        let resolved = resolve_context.resolve_root::<Q>(key, None, &self.linker.resolver)?;
-        let root = resolve_context.stage(resolved, None, &mut loader)?;
-        if !resolve_context.contains_pending(root) {
-            return Ok(PreparedLoad::new(
+        let root = {
+            let mut loader = self
+                .linker
+                .loader
+                .run()
+                .with_search_path_pool(&mut context.search_paths)
+                .with_observer(&mut self.observer);
+            let mut resolve_context = ScanResolveContext::new(&mut context.committed, &mut session);
+            let resolved = resolve_context.resolve_root::<Q>(key, None, &self.linker.resolver)?;
+            let root = resolve_context.stage(resolved, None, &mut loader)?;
+            if !resolve_context.contains_pending(root) {
+                return Ok(PreparedLoad::new(
+                    root,
+                    ResolveSession::new(),
+                    None,
+                    context,
+                ));
+            }
+            resolve_context.resolve_dependency_graph::<D, _, _, _, Q>(
                 root,
-                ResolveSession::new(),
-                None,
-                context,
-            ));
-        }
-        resolve_context.resolve_dependency_graph::<D, _, _, _, Q>(
-            root,
-            &mut loader,
-            &self.linker.resolver,
-        )?;
+                &mut loader,
+                &self.linker.resolver,
+            )?;
+            root
+        };
 
         let (dynamics, mut session) = session.split_dynamics();
-        let search_paths = context.search_paths.clone();
+        let search_paths = &mut context.search_paths;
         let dynamic_ids = dynamics.keys().copied().collect::<EntitySet<_>>();
         let entries: BTreeMap<_, _> = dynamics
             .into_iter()
@@ -160,7 +163,7 @@ where
                     &mut mapped_runtime,
                     module_id,
                     module,
-                    &search_paths,
+                    search_paths,
                 )?;
                 session.restore_dynamic(id, raw, direct_deps);
             }
@@ -198,7 +201,7 @@ where
         mapped_runtime: &mut Option<MappedRuntimeMemory<M::Region>>,
         module_id: PlanModuleId,
         scanned: ScannedDynamic<Arch>,
-        search_paths: &SearchPathPool,
+        search_paths: &mut SearchPathPool,
     ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         match plan
             .materialization(module_id)
@@ -212,7 +215,7 @@ where
                     .linker
                     .loader
                     .run()
-                    .with_search_path_pool(search_paths.clone())
+                    .with_search_path_pool(search_paths)
                     .load_scanned_dynamic(scanned)?;
                 apply_section_overrides(&mut raw, module_id, plan)?;
                 Ok(raw)
@@ -225,7 +228,7 @@ where
         mapped_runtime: &mut Option<MappedRuntimeMemory<M::Region>>,
         module_id: PlanModuleId,
         scanned: ScannedDynamic<Arch>,
-        search_paths: &SearchPathPool,
+        search_paths: &mut SearchPathPool,
     ) -> Result<RawDynamic<D, Arch, M::Region, Tls>> {
         let runtime = mapped_runtime
             .as_mut()
@@ -243,7 +246,7 @@ where
             force_static_tls,
             self.linker.loader.domain_id(),
             self.linker.loader.tls_resolver(),
-            search_paths.clone(),
+            search_paths,
         )?;
         Ok(raw)
     }

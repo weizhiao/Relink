@@ -24,8 +24,8 @@ use alloc::{boxed::Box, vec::Vec};
 use core::ptr::NonNull;
 
 use crate::image::{
-    CoreRuntime, ElfCore, LoadedCore, Module, ModuleSearch, ModuleState, SymbolExports,
-    core::CoreInner,
+    CoreRuntime, ElfCore, LoadedCore, Module, ModuleSearch, ModuleState, SearchPathPool,
+    SymbolExports, core::CoreInner,
 };
 
 impl<L: ElfLayout> SymbolTable<L> {
@@ -382,6 +382,7 @@ where
     pub(crate) fn build_dynamic(
         mut self,
         phdrs: &[ElfPhdr<Arch::Layout>],
+        search_paths: Option<&mut SearchPathPool>,
     ) -> Result<RawDynamic<D, Arch, R, Tls>> {
         self.parse_phdrs(phdrs)?;
 
@@ -424,8 +425,10 @@ where
         let runpath = dynamic
             .runpath_off
             .map(|runpath_off| symtab.strtab().get_str(runpath_off));
-        let search =
-            ModuleSearch::from_dynamic_in(self.path, soname, runpath, rpath, &self.search_paths);
+        let search = match search_paths {
+            Some(paths) => paths.module_search(self.path, soname, runpath, rpath),
+            None => ModuleSearch::from_dynamic(self.path, soname, runpath, rpath),
+        };
 
         let tls = if let Some(info) = &self.tls_info {
             let image = self
