@@ -11,7 +11,7 @@ use crate::{
     ByteRepr, Error, LinkContextError, LinkerError, Loader, Result,
     arch::NativeArch,
     elf::ElfRelType,
-    image::{Module, ModuleHandle, ModuleScope, RawDynamic},
+    image::{Module, ModuleHandle, ModuleScope, ModuleSearch, RawDynamic},
     lazy::LazyBinder,
     memory::RegionAccess,
     observer::{LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver},
@@ -21,8 +21,8 @@ use crate::{
     sync::Arc,
     tls::TlsResolver,
 };
-use alloc::{borrow::ToOwned, boxed::Box, vec::Vec};
-use core::{borrow::Borrow, fmt, mem};
+use alloc::{boxed::Box, vec::Vec};
+use core::{fmt, mem};
 
 /// Per-run linker state.
 ///
@@ -103,57 +103,49 @@ where
     Exec: CodeExecutor<Arch> + Clone,
     ElfRelType<Arch>: ByteRepr,
     Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch> + RelocationObserver<Arch>,
+    Resolver: KeyResolver<K, Arch, Tls>,
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Loads, commits, and initializes one module and its dependency group.
     ///
     /// Initialization failure is rolled back before the error is returned. Use
     /// the staged API when the caller needs to choose another failure policy.
-    pub fn load<'cfg, Q, Meta>(
+    pub fn load<Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
+        request: Resolver::Request,
     ) -> Result<LoadResult<Arch, Tls>>
     where
-        K: 'cfg + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
         Meta: Default,
     {
-        self.load_with_caller::<Q, Meta>(context, key, None)
+        self.load_with_caller(context, request, None)
     }
 
     /// Loads one root on behalf of a module already committed to `context`.
     ///
     /// Initialization failure is rolled back before the error is returned.
-    pub fn load_from<'cfg, Q, Meta>(
+    pub fn load_from<Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
+        request: Resolver::Request,
         caller: ModuleId,
     ) -> Result<LoadResult<Arch, Tls>>
     where
-        K: 'cfg + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
         Meta: Default,
     {
-        self.load_with_caller::<Q, Meta>(context, key, Some(caller))
+        self.load_with_caller(context, request, Some(caller))
     }
 
-    fn load_with_caller<'cfg, Q, Meta>(
+    fn load_with_caller<Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
+        request: Resolver::Request,
         caller: Option<ModuleId>,
     ) -> Result<LoadResult<Arch, Tls>>
     where
-        K: 'cfg + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
         Meta: Default,
     {
-        let prepared = self.prepare_load_with_caller::<Q, Meta>(context, key, caller)?;
+        let prepared = self.prepare_load_with_caller(context, request, caller)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -163,45 +155,30 @@ where
     }
 
     /// Resolves and maps one module group without executing target code.
-    pub fn prepare_load<'cfg, Q, Meta>(
+    pub fn prepare_load<Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
-    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
-    where
-        K: 'cfg + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
-    {
-        self.prepare_load_with_caller::<Q, Meta>(context, key, None)
+        request: Resolver::Request,
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
+        self.prepare_load_with_caller(context, request, None)
     }
 
     /// Resolves and maps one caller-relative root without executing target code.
-    pub fn prepare_load_from<'cfg, Q, Meta>(
+    pub fn prepare_load_from<Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
+        request: Resolver::Request,
         caller: ModuleId,
-    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
-    where
-        K: 'cfg + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
-    {
-        self.prepare_load_with_caller::<Q, Meta>(context, key, Some(caller))
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
+        self.prepare_load_with_caller(context, request, Some(caller))
     }
 
-    fn prepare_load_with_caller<'cfg, Q, Meta>(
+    fn prepare_load_with_caller<Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
+        request: Resolver::Request,
         caller: Option<ModuleId>,
-    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
-    where
-        K: 'cfg + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
-    {
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
         context
             .committed
             .ensure_domain(self.linker.loader.domain_id())?;
@@ -216,10 +193,12 @@ where
                 Ok(slot)
             })
             .transpose()?;
-        if let Some(prepared) = PreparedLoad::visible(context, key.borrow()) {
+        let key = self.linker.resolver.map_request(&request);
+        if let Some(key) = key.as_ref()
+            && let Some(prepared) = PreparedLoad::visible(context, key)
+        {
             return Ok(prepared);
         }
-
         let linker = self.linker;
         let mut session = ResolveSession::new();
         let mut loader = linker
@@ -228,28 +207,25 @@ where
             .with_search_path_pool(&mut context.search_paths)
             .with_observer(&mut self.observer);
         let mut resolve_context = LoadResolveContext::new(&mut context.committed, &mut session);
-        let resolved = resolve_context.resolve_root::<Q>(&key, caller, &linker.resolver)?;
-        let root = resolve_context.stage(resolved, caller, &mut loader)?;
-        resolve_context.resolve_pending::<_, _, _, Q>(root, &mut loader, &linker.resolver)?;
+        let resolved = resolve_context.resolve_root(&request, key, caller, &linker.resolver)?;
+        let root = resolve_context.stage(resolved, caller, &mut loader, &linker.resolver)?;
+        resolve_context.resolve_pending(root, &mut loader, &linker.resolver)?;
         Ok(PreparedLoad::new(root, session, None, context))
     }
 
     /// Loads, commits, and initializes a pre-mapped root dynamic image.
     ///
     /// Initialization failure is rolled back before the error is returned.
-    pub fn load_mapped_root<'cfg, Q, Meta>(
+    pub fn load_mapped_root<Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
     ) -> Result<LoadResult<Arch, Tls>>
     where
-        K: 'cfg + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
         Meta: Default,
     {
-        let prepared = self.prepare_mapped_root::<Q, Meta>(context, key, raw)?;
+        let prepared = self.prepare_mapped_root(context, key, raw)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -259,24 +235,19 @@ where
     }
 
     /// Resolves dependencies for a pre-mapped root without relocating it.
-    pub fn prepare_mapped_root<'cfg, Q, Meta>(
+    pub fn prepare_mapped_root<Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
-    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
-    where
-        K: 'cfg + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
-    {
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
         context
             .committed
             .ensure_domain(self.linker.loader.domain_id())?;
         context
             .committed
             .ensure_domain(raw.core_ref().domain_id())?;
-        if let Some(prepared) = PreparedLoad::visible(context, key.borrow()) {
+        if let Some(prepared) = PreparedLoad::visible(context, &key) {
             return Ok(prepared);
         }
 
@@ -285,14 +256,23 @@ where
         let key = context.committed.intern_key(key);
         let root = context.committed.intern_module(key);
         let generation = context.committed.generation(root);
+        let alias = raw
+            .core_ref()
+            .search()
+            .and_then(ModuleSearch::soname)
+            .and_then(|name| linker.resolver.map_name(name));
         session.stage_dynamic(root, generation, raw, None);
+        if let Some(alias) = alias {
+            let alias = context.committed.intern_key(alias);
+            session.stage_alias(alias, root);
+        }
         let mut loader = linker
             .loader
             .run()
             .with_search_path_pool(&mut context.search_paths)
             .with_observer(&mut self.observer);
         let mut resolve_context = LoadResolveContext::new(&mut context.committed, &mut session);
-        resolve_context.resolve_pending::<_, _, _, Q>(root, &mut loader, &linker.resolver)?;
+        resolve_context.resolve_pending(root, &mut loader, &linker.resolver)?;
         Ok(PreparedLoad::new(root, session, None, context))
     }
 
@@ -390,68 +370,58 @@ where
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
     ElfRelType<Arch>: ByteRepr,
+    Resolver: KeyResolver<K, Arch, Tls>,
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Loads one module into this linker's relocation domain.
-    pub fn load<'cfg, Q, Meta>(
+    pub fn load<Meta>(
         &self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
+        request: Resolver::Request,
     ) -> Result<LoadResult<Arch, Tls>>
     where
-        K: 'cfg + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
         Meta: Default,
     {
-        self.run().load::<Q, Meta>(context, key)
+        self.run().load(context, request)
     }
 
     /// Loads one root on behalf of a module already committed to `context`.
-    pub fn load_from<'cfg, Q, Meta>(
+    pub fn load_from<Meta>(
         &self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
+        request: Resolver::Request,
         caller: ModuleId,
     ) -> Result<LoadResult<Arch, Tls>>
     where
-        K: 'cfg + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
         Meta: Default,
     {
-        self.run().load_from::<Q, Meta>(context, key, caller)
+        self.run().load_from(context, request, caller)
     }
 
     /// Loads a pre-mapped root dynamic image and resolves its dependencies.
-    pub fn load_mapped_root<'cfg, Q, Meta>(
+    pub fn load_mapped_root<Meta>(
         &self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
     ) -> Result<LoadResult<Arch, Tls>>
     where
-        K: 'cfg + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
         Meta: Default,
     {
-        self.run().load_mapped_root::<Q, Meta>(context, key, raw)
+        self.run().load_mapped_root(context, key, raw)
     }
 
     /// Discovers, plans, and loads one module through the scan-first path.
-    pub fn load_scan_first<Q, Meta>(
+    pub fn load_scan_first<Meta>(
         &self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
+        request: Resolver::Request,
     ) -> Result<LoadResult<Arch, Tls>>
     where
-        K: 'static + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
+        K: 'static,
         Meta: Default,
     {
-        self.run().load_scan_first::<Q, Meta>(context, key)
+        self.run().load_scan_first(context, request)
     }
 }
 
@@ -475,16 +445,17 @@ pub struct PreparedLoad<
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     PreparedLoad<D, Arch, R, Tls>
 {
-    fn visible<K, Q, Meta>(context: &LinkContext<K, Meta, Arch, Tls>, key: &Q) -> Option<Self>
+    pub(in crate::linker) fn visible<K, Meta>(
+        context: &LinkContext<K, Meta, Arch, Tls>,
+        key: &K,
+    ) -> Option<Self>
     where
-        K: Ord + Borrow<Q>,
-        Q: Ord + ?Sized,
+        K: Ord,
     {
         let root = context
             .committed
             .key_slot_for(key)
-            .and_then(|key| context.committed.module_for_key(key))
-            .filter(|module| context.committed.contains_module(*module))?;
+            .and_then(|key| context.committed.module_for_key(key))?;
         Some(Self::new(root, ResolveSession::new(), None, context))
     }
 

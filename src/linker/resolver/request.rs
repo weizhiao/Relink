@@ -57,30 +57,39 @@ impl<Arch: RelocationArch> DependencySource for ScannedDynamic<Arch> {
 }
 
 /// A root module resolution request.
-pub struct RootRequest<'a, K: Clone, Q: ?Sized = K> {
-    key: &'a K,
+pub struct RootRequest<'a, Request, K> {
+    request: &'a Request,
+    key: Option<K>,
     search: Option<&'a ModuleSearch>,
-    contains_key: &'a dyn Fn(&Q) -> bool,
+    contains_key: &'a dyn Fn(&K) -> bool,
 }
 
-impl<'a, K: Clone, Q: ?Sized> RootRequest<'a, K, Q> {
+impl<'a, Request, K> RootRequest<'a, Request, K> {
     #[inline]
     pub(crate) fn new(
-        key: &'a K,
+        request: &'a Request,
+        key: Option<K>,
         search: Option<&'a ModuleSearch>,
-        contains_key: &'a dyn Fn(&Q) -> bool,
+        contains_key: &'a dyn Fn(&K) -> bool,
     ) -> Self {
         Self {
+            request,
             key,
             search,
             contains_key,
         }
     }
 
-    /// Returns the root key requested by the caller.
+    /// Returns the root request supplied by the caller.
     #[inline]
-    pub fn key(&self) -> &'a K {
-        self.key
+    pub fn request(&self) -> &'a Request {
+        self.request
+    }
+
+    /// Returns the precomputed lookup key for this request, when available.
+    #[inline]
+    pub fn key(&self) -> Option<&K> {
+        self.key.as_ref()
     }
 
     /// Returns search metadata for the module that initiated this request.
@@ -91,28 +100,28 @@ impl<'a, K: Clone, Q: ?Sized> RootRequest<'a, K, Q> {
 
     /// Returns whether `key` names a module reusable by this request.
     #[inline]
-    pub fn contains_key(&self, key: &Q) -> bool {
+    pub fn contains_key(&self, key: &K) -> bool {
         (self.contains_key)(key)
     }
 }
 
 /// A single dependency-resolution request.
-pub struct DependencyRequest<'a, K: Clone, Q: ?Sized = K> {
+pub struct DependencyRequest<'a, K> {
     owner_key: &'a K,
     search: &'a ModuleSearch,
     needed: &'a str,
     loaders: &'a LoaderProvider<'a>,
-    contains_key: &'a dyn Fn(&Q) -> bool,
+    contains_key: &'a dyn Fn(&K) -> bool,
 }
 
-impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
+impl<'a, K> DependencyRequest<'a, K> {
     #[inline]
     pub(crate) fn new(
         owner_key: &'a K,
         search: &'a ModuleSearch,
         needed: &'a str,
         loaders: &'a LoaderProvider<'a>,
-        contains_key: &'a dyn Fn(&Q) -> bool,
+        contains_key: &'a dyn Fn(&K) -> bool,
     ) -> Self {
         Self {
             owner_key,
@@ -152,7 +161,7 @@ impl<'a, K: Clone, Q: ?Sized> DependencyRequest<'a, K, Q> {
 
     /// Returns whether `key` names a module reusable by this request.
     #[inline]
-    pub fn contains_key(&self, key: &Q) -> bool {
+    pub fn contains_key(&self, key: &K) -> bool {
         (self.contains_key)(key)
     }
 

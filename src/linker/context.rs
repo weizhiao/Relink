@@ -41,7 +41,7 @@ where
         .intern_key(source.committed.key(module.entry_key()).clone());
     if let Some(target_slot) = target
         .committed
-        .module_for_key(key)
+        .canonical_module(key)
         .filter(|slot| target.committed.contains_module(*slot))
     {
         mapped.insert(slot, target_slot);
@@ -226,7 +226,6 @@ where
         self.committed
             .key_slot_for(key)
             .and_then(|slot| self.committed.module_for_key(slot))
-            .filter(|slot| self.committed.contains_module(*slot))
             .map(|slot| self.committed.make_module_id(slot))
     }
 
@@ -237,7 +236,6 @@ where
         Ok(self
             .committed
             .module_for_key(slot)
-            .filter(|slot| self.committed.contains_module(*slot))
             .map(|slot| self.committed.make_module_id(slot)))
     }
 
@@ -352,8 +350,9 @@ where
                 let key = self.committed.intern_key(key);
                 let dep = self
                     .committed
-                    .module_for_key(key)
+                    .canonical_module(key)
                     .filter(|dep| self.committed.contains_module(*dep) || group.contains(*dep))
+                    .or_else(|| self.committed.module_for_key(key))
                     .ok_or_else(|| {
                         LinkerError::context(LinkContextError::KeyNotCommitted {
                             id: self.committed.make_key_id(key),
@@ -404,23 +403,16 @@ where
         let mut resolved_deps = Vec::with_capacity(direct_deps.len());
         for key in direct_deps.into_vec() {
             let key = self.committed.intern_key(key);
-            let module = self
-                .committed
-                .module_for_key(key)
-                .filter(|module| self.committed.contains_module(*module))
-                .ok_or_else(|| {
-                    LinkerError::context(LinkContextError::KeyNotCommitted {
-                        id: self.committed.make_key_id(key),
-                    })
-                })?;
+            let module = self.committed.module_for_key(key).ok_or_else(|| {
+                LinkerError::context(LinkContextError::KeyNotCommitted {
+                    id: self.committed.make_key_id(key),
+                })
+            })?;
             resolved_deps.push(module);
         }
         let direct_deps = resolved_deps.into_boxed_slice();
-        let is_new = self
-            .committed
-            .module_for_key(slot)
-            .is_none_or(|slot| !self.committed.contains_module(slot));
         let module_slot = self.committed.intern_module(slot);
+        let is_new = !self.committed.contains_module(module_slot);
         self.committed
             .insert(module_slot, module, direct_deps, 1, meta);
         if is_new {
@@ -434,11 +426,14 @@ where
         Ok(ModuleLease::new(self.committed.make_module_id(module_slot)))
     }
 
-    /// Adds or replaces an alternate key for an already committed module.
+    /// Registers an alternate key for an already committed module.
     ///
-    /// Returns the previous committed module id when `alias` used to resolve to
-    /// a different module.
-    pub fn add_alias(&mut self, module_id: ModuleId, alias: K) -> Result<Option<ModuleId>> {
+    /// A module committed directly under `alias` takes precedence over this
+    /// alternate binding.
+    ///
+    /// Alias candidates retain registration order. If the current target is
+    /// unloaded, lookup falls back to the next registered module.
+    pub fn add_alias(&mut self, module_id: ModuleId, alias: K) -> Result<()> {
         let module_slot = self.committed.module_slot(module_id)?;
         if !self.committed.contains_module(module_slot) {
             return Err(LinkerError::context(LinkContextError::ModuleNotCommitted {
@@ -447,11 +442,9 @@ where
             .into());
         }
 
-        Ok(self
-            .committed
-            .add_alias(module_slot, alias)
-            .filter(|slot| self.committed.contains_module(*slot))
-            .map(|slot| self.committed.make_module_id(slot)))
+        let alias = self.committed.intern_key(alias);
+        self.committed.add_alias(alias, module_slot);
+        Ok(())
     }
 
     /// Adds one direct acquisition of a committed module.
@@ -1022,7 +1015,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_edges_keep_their_bound_module_when_alias_changes() {
+    fn alias_growth_preserves_bound_dependencies() {
         let mut context = LinkContext::<String, (), NativeArch>::new(DomainId::PROCESS);
         let canonical = context
             .insert(
@@ -1056,11 +1049,11 @@ mod tests {
         let replacement_id = replacement.id();
         context
             .add_alias(replacement_id, String::from("alias"))
-            .expect("failed to replace alias");
+            .expect("failed to add alias fallback");
 
         assert!(context.resolve_key(alias_id).unwrap().is_some());
         assert_eq!(context.key_id("alias"), Some(alias_id));
-        assert_eq!(context.resolve_key(alias_id).unwrap(), Some(replacement_id));
+        assert_eq!(context.resolve_key(alias_id).unwrap(), Some(canonical_id));
         assert_eq!(direct_deps(&context, root_id), [canonical_id]);
         assert_eq!(
             context
@@ -1072,7 +1065,7 @@ mod tests {
     }
 
     #[test]
-    fn add_alias_replaces_existing_target() {
+    fn alias_uses_registration_order() {
         let mut context = LinkContext::<&'static str, (), NativeArch>::new(DomainId::PROCESS);
         let first = context
             .insert("first", SyntheticModule::empty("first"), Box::new([]))
@@ -1083,27 +1076,23 @@ mod tests {
         let first_id = first.id();
         let second_id = second.id();
 
-        assert_eq!(
-            context
-                .add_alias(first_id, "alias")
-                .expect("failed to add alias"),
-            None
-        );
+        context
+            .add_alias(first_id, "alias")
+            .expect("failed to add alias");
         let alias = context.key_id(&"alias").expect("alias key should exist");
         assert_eq!(context.resolve_key(alias).unwrap(), Some(first_id));
-        assert_eq!(
-            context
-                .add_alias(second_id, "alias")
-                .expect("failed to replace alias"),
-            Some(first_id)
-        );
+        context
+            .add_alias(second_id, "alias")
+            .expect("failed to add alias fallback");
+        context
+            .add_alias(second_id, "alias")
+            .expect("failed to keep alias fallback");
+        assert_eq!(context.resolve_key(alias).unwrap(), Some(first_id));
+
+        assert_eq!(context.release(first).unwrap().len(), 1);
         assert_eq!(context.resolve_key(alias).unwrap(), Some(second_id));
-        assert_eq!(
-            context
-                .add_alias(second_id, "alias")
-                .expect("failed to keep alias"),
-            None
-        );
+        assert_eq!(context.release(second).unwrap().len(), 1);
+        assert_eq!(context.resolve_key(alias).unwrap(), None);
     }
 
     #[test]
@@ -1141,7 +1130,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_replaces_alias_target_in_place() {
+    fn canonical_key_takes_precedence_over_alias() {
         let mut context = LinkContext::<&'static str, (), NativeArch>::new(DomainId::PROCESS);
         let root = context
             .insert("root", SyntheticModule::empty("root"), Box::new([]))
@@ -1156,13 +1145,17 @@ mod tests {
             .expect("failed to insert dependency");
         let dep_module_id = dep_module.id();
 
-        let replaced = context
+        let canonical = context
             .insert("alias", SyntheticModule::empty("alias"), Box::new(["dep"]))
-            .expect("failed to replace alias target");
-        assert_eq!(replaced.id(), root_id);
-        assert_eq!(context.resolve_key(alias).unwrap(), Some(root_id));
+            .expect("failed to insert canonical module");
+        assert_ne!(canonical.id(), root_id);
+        assert_eq!(context.resolve_key(alias).unwrap(), Some(canonical.id()));
         assert_eq!(context.module_key(root_id).unwrap(), &"root");
-        assert_eq!(direct_deps(&context, root_id), [dep_module_id]);
+        assert_eq!(context.module_key(canonical.id()).unwrap(), &"alias");
+        assert_eq!(direct_deps(&context, canonical.id()), [dep_module_id]);
+
+        assert_eq!(context.release(canonical).unwrap().len(), 1);
+        assert_eq!(context.resolve_key(alias).unwrap(), Some(root_id));
     }
 
     #[test]
@@ -1192,7 +1185,7 @@ mod tests {
             .expect("failed to insert replacement module");
         source
             .add_alias(replacement.id(), "alias")
-            .expect("failed to replace alias");
+            .expect("failed to add alias fallback");
 
         let mut target = LinkContext::<&'static str, (), NativeArch>::new(DomainId::PROCESS);
         let imported = target

@@ -1,10 +1,10 @@
 use super::{
     context::LinkContext,
-    storage::{CommittedStorage, ModuleId, ModuleSlot},
+    storage::{CommittedStorage, KeySlot, ModuleId, ModuleSlot},
 };
 use crate::{
     LinkContextError, LinkerError, Result,
-    entity::EntitySet,
+    entity::{EntitySet, SecondaryMap},
     image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic},
     memory::RegionAccess,
     relocation::RelocationArch,
@@ -80,6 +80,7 @@ pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch>
     pending: Vec<(ModuleSlot, u32)>,
     observed: Vec<(ModuleSlot, u32)>,
     group_order: Vec<ModuleSlot>,
+    aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
 }
 
 impl<P, Arch, Tls> ResolveSession<P, Arch, Tls>
@@ -95,12 +96,28 @@ where
             pending: Vec::new(),
             observed: Vec::new(),
             group_order: Vec::new(),
+            aliases: SecondaryMap::new(),
         }
     }
 
     #[inline]
     pub(crate) fn contains_pending(&self, slot: ModuleSlot) -> bool {
         self.dynamics.contains_key(&slot) || self.modules.contains_key(&slot)
+    }
+
+    #[inline]
+    pub(crate) fn alias_module(&self, alias: KeySlot) -> Option<ModuleSlot> {
+        self.aliases
+            .get(alias)
+            .and_then(|modules| modules.first().copied())
+    }
+
+    #[inline]
+    pub(crate) fn stage_alias(&mut self, alias: KeySlot, module: ModuleSlot) {
+        let modules = self.aliases.get_or_default(alias);
+        if !modules.contains(&module) {
+            modules.push(module);
+        }
     }
 
     #[inline]
@@ -173,6 +190,7 @@ where
             pending,
             observed,
             group_order,
+            aliases,
         } = self;
         (
             dynamics,
@@ -182,6 +200,7 @@ where
                 pending,
                 observed,
                 group_order,
+                aliases,
             },
         )
     }
@@ -411,9 +430,16 @@ where
             ready_to_commit,
             lifecycle,
         } = self;
+        let ResolveSession {
+            pending,
+            observed,
+            group_order,
+            aliases,
+            ..
+        } = resolve;
         let mut ready = ready_to_commit;
         let mut committed_ids = Vec::with_capacity(ready.len());
-        for &(slot, generation) in &resolve.pending {
+        for &(slot, generation) in &pending {
             if committed.generation(slot) != generation || committed.contains_module(slot) {
                 return Err(LinkerError::context(LinkContextError::ModuleChanged {
                     id: ModuleId::from_slot(committed.context(), slot, generation),
@@ -421,7 +447,7 @@ where
                 .into());
             }
         }
-        for &(slot, generation) in &resolve.observed {
+        for &(slot, generation) in &observed {
             if committed.generation(slot) != generation || !committed.contains_module(slot) {
                 return Err(LinkerError::context(LinkContextError::ModuleChanged {
                     id: ModuleId::from_slot(committed.context(), slot, generation),
@@ -429,7 +455,7 @@ where
                 .into());
             }
         }
-        for slot in resolve.group_order {
+        for slot in group_order {
             let Some(entry) = ready.remove(&slot) else {
                 continue;
             };
@@ -444,6 +470,11 @@ where
             ready.is_empty(),
             "ready commit entries must all be present in group_order"
         );
+        for (alias, modules) in aliases.iter() {
+            for &module in modules {
+                committed.add_alias(alias, module);
+            }
+        }
         committed.extend_lifecycle(&lifecycle);
         Ok(committed_ids.into_boxed_slice())
     }

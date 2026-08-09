@@ -21,11 +21,7 @@ fn dynamic_reuses_mapping() {
     .expect("failed to wrap borrowed mapping");
 
     assert_eq!(borrowed.path().as_str(), "borrowed-main");
-    assert_eq!(
-        borrowed.name(),
-        owner.soname().unwrap_or("borrowed-main"),
-        "module names should prefer DT_SONAME and otherwise use their own path",
-    );
+    assert_eq!(borrowed.name(), "borrowed-main");
     assert_eq!(borrowed.base(), owner.base());
     assert_eq!(borrowed.entry(), owner.entry());
     assert!(borrowed.segments().contains_addr(owner.base()));
@@ -63,7 +59,7 @@ fn scanned_dynamic_reuses_metadata() {
 
     assert_eq!(raw.path().as_str(), "scanned.so");
     assert_eq!(raw.soname(), soname.as_deref());
-    assert_eq!(raw.name(), soname.as_deref().unwrap_or("scanned.so"));
+    assert_eq!(raw.name(), "scanned.so");
     assert!(
         raw.phdrs()
             .iter()

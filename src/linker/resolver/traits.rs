@@ -63,17 +63,32 @@ impl<'cfg, K, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedKey<'cfg, K,
 }
 
 /// Key-resolution policy used by [`super::super::Linker`].
-pub trait KeyResolver<
-    K: Clone,
-    Arch: RelocationArch = NativeArch,
-    Q: ?Sized = K,
-    Tls: TlsResolver<Arch> = (),
->
-{
+pub trait KeyResolver<K, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+    /// Root request accepted by this resolver.
+    type Request;
+
+    /// Maps a root request to the key used for an existing-module lookup.
+    ///
+    /// Returning `None` skips the lookup and delegates directly to
+    /// [`resolve_root`](Self::resolve_root).
+    #[inline]
+    fn map_request(&self, _request: &Self::Request) -> Option<K> {
+        None
+    }
+
+    /// Maps an ELF module name such as `DT_SONAME` or `DT_NEEDED` to a key.
+    ///
+    /// Returning `None` disables linker-managed name aliases. Dependency
+    /// requests are still passed to [`resolve_dependency`](Self::resolve_dependency).
+    #[inline]
+    fn map_name(&self, _name: &str) -> Option<K> {
+        None
+    }
+
     /// Resolves the root key passed to a linker load operation.
     fn resolve_root<'cfg>(
         &self,
-        req: &RootRequest<'_, K, Q>,
+        req: &RootRequest<'_, Self::Request, K>,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
         K: 'cfg;
@@ -81,7 +96,7 @@ pub trait KeyResolver<
     /// Resolves one `DT_NEEDED` dependency for an already scanned owner.
     fn resolve_dependency<'cfg>(
         &self,
-        req: &DependencyRequest<'_, K, Q>,
+        req: &DependencyRequest<'_, K>,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
     where
         K: 'cfg;

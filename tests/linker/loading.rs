@@ -61,14 +61,20 @@ impl MultiBinaryResolver {
 }
 
 impl KeyResolver<&'static str> for MultiBinaryResolver {
+    type Request = &'static str;
+
+    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
+        Some(*request)
+    }
+
     fn resolve_root<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str>,
+        req: &RootRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        let key = req.key();
+        let key = req.request();
         assert_eq!(*key, self.root);
         let module = self.module(key).expect("missing root module");
         Ok(ResolvedKey::load(

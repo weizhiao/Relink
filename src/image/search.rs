@@ -89,10 +89,10 @@ impl ModuleSearch {
         }
     }
 
-    /// Returns the module name used in diagnostics.
+    /// Returns the loaded path's file name for diagnostics.
     #[inline]
     pub fn name(&self) -> &str {
-        self.soname().unwrap_or_else(|| self.path.file_name())
+        self.path.file_name()
     }
 
     /// Returns the module's loaded path.

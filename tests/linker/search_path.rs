@@ -5,9 +5,24 @@ use crate::loaded_core;
 use elf_loader::{
     LinkContext, Linker,
     input::{Path as ElfPath, PathBuf},
-    linker::SearchPathResolver,
+    linker::{KeyMapper, SearchPathResolver},
     runtime::DomainId,
 };
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct OpaqueKey(String);
+
+struct OpaqueMapper;
+
+impl KeyMapper<OpaqueKey> for OpaqueMapper {
+    fn map_path(&self, candidate: &ElfPath) -> OpaqueKey {
+        OpaqueKey(format!("path:{}", candidate.as_str()))
+    }
+
+    fn map_name(&self, name: &str) -> OpaqueKey {
+        OpaqueKey(format!("name:{name}"))
+    }
+}
 
 #[test]
 fn loads_dependency_chain() {
@@ -24,6 +39,36 @@ fn loads_dependency_chain() {
 
     let root_value = unsafe { loaded.get::<extern "C" fn() -> i32>("root_value").unwrap() };
     assert_eq!(root_value(), 3);
+}
+
+#[test]
+fn maps_requests_and_names_separately() {
+    let fixtures = crate::fixture::fixtures();
+    let mut resolver = SearchPathResolver::with_mapper(OpaqueMapper);
+    resolver.push_rpath().push_runpath();
+    let mut context = LinkContext::<OpaqueKey>::new(DomainId::PROCESS);
+    let linker = Linker::new().resolver(resolver);
+
+    let loaded = linker
+        .load(
+            &mut context,
+            PathBuf::from(fixtures.root_path.to_str().unwrap()),
+        )
+        .unwrap();
+
+    let root_value = unsafe { loaded.get::<extern "C" fn() -> i32>("root_value").unwrap() };
+    assert_eq!(root_value(), 3);
+
+    let leaf = linker
+        .load(
+            &mut context,
+            PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap()),
+        )
+        .unwrap();
+    assert_eq!(
+        context.module_id(&OpaqueKey("name:libleaf.so".into())),
+        Some(leaf.root().id())
+    );
 }
 
 #[test]
@@ -108,6 +153,51 @@ fn loads_from_module_rpath() {
 
     let value = unsafe { loaded.get::<extern "C" fn() -> i32>("rpath_leaf").unwrap() };
     assert_eq!(value(), 1);
+}
+
+#[test]
+fn reuses_soname() {
+    let fixtures = crate::fixture::fixtures();
+    let dir = unique_test_dir("soname");
+    fs::create_dir_all(&dir).unwrap();
+    let alias = dir.join("leaf-implementation.so");
+    fs::copy(&fixtures.rpath_leaf_path, &alias).unwrap();
+
+    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let first = linker
+        .load(&mut context, PathBuf::from(alias.to_str().unwrap()))
+        .unwrap();
+    let duplicate = linker
+        .load(
+            &mut context,
+            PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap()),
+        )
+        .unwrap();
+    assert_ne!(first.root().id(), duplicate.root().id());
+
+    let by_name = linker
+        .load(&mut context, PathBuf::from("libleaf.so"))
+        .unwrap();
+    assert_eq!(first.root().id(), by_name.root().id());
+    by_name.release(&mut context).unwrap();
+    first.release(&mut context).unwrap();
+
+    let by_name = linker
+        .load(&mut context, PathBuf::from("libleaf.so"))
+        .unwrap();
+    assert_eq!(duplicate.root().id(), by_name.root().id());
+    assert_eq!(context.load_order().count(), 1);
+
+    let root = linker
+        .load(
+            &mut context,
+            PathBuf::from(fixtures.rpath_root_path.to_str().unwrap()),
+        )
+        .unwrap();
+    let value = unsafe { root.get::<extern "C" fn() -> i32>("rpath_value").unwrap() };
+    assert_eq!(value(), 3);
+    assert_eq!(context.load_order().count(), 3);
 }
 
 #[test]

@@ -298,6 +298,18 @@ where
         self.values.get_mut(key.index()).and_then(Option::as_mut)
     }
 
+    /// Returns mutable side data for `key`, inserting its default value when absent.
+    pub(crate) fn get_or_default(&mut self, key: K) -> &mut V
+    where
+        V: Default,
+    {
+        let index = key.index();
+        if self.values.len() <= index {
+            self.values.resize_with(index + 1, || None);
+        }
+        self.values[index].get_or_insert_default()
+    }
+
     /// Retains only side-data entries accepted by `f`.
     pub(crate) fn retain(&mut self, mut f: impl FnMut(K, &mut V) -> bool) {
         for (index, value) in self.values.iter_mut().enumerate() {

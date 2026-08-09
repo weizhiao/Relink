@@ -23,14 +23,13 @@ use crate::{
     runtime::CodeExecutor,
     tls::TlsResolver,
 };
-use alloc::{borrow::ToOwned, collections::BTreeMap, vec::Vec};
-use core::borrow::Borrow;
+use alloc::{collections::BTreeMap, vec::Vec};
 
 #[allow(private_bounds)]
 impl<'run, 'pipe, K, D: Send + Sync + 'static, Tls, Arch, M, Exec, Resolver, RelocBinder, Obs>
     LinkerRun<'run, 'pipe, K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls, Obs>
 where
-    K: Clone + Ord,
+    K: Clone + Ord + 'static,
     D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
@@ -38,33 +37,21 @@ where
     Exec: CodeExecutor<Arch> + Clone,
     ElfRelType<Arch>: ByteRepr,
     Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch> + RelocationObserver<Arch>,
+    Resolver: KeyResolver<K, Arch, Tls>,
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Discovers, plans, and loads one module through the scan-first path.
     ///
     /// Initialization failure is rolled back before the error is returned.
-    pub fn load_scan_first<Q, Meta>(
+    pub fn load_scan_first<Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
+        request: Resolver::Request,
     ) -> Result<LoadResult<Arch, Tls>>
     where
-        K: 'static + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
         Meta: Default,
     {
-        if let Some(id) = context.module_id(key.borrow()) {
-            let module = context.get(id)?.clone();
-            let lease = context.acquire(id)?;
-            return Ok(LoadResult::new(
-                lease,
-                module,
-                Vec::new().into_boxed_slice(),
-            ));
-        }
-
-        let prepared = self.prepare_scan_load::<Q, Meta>(context, &key)?;
+        let prepared = self.prepare_scan_load(context, &request)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -74,19 +61,20 @@ where
     }
 
     /// Resolves and maps a scan-first module group without relocating it.
-    pub fn prepare_scan_load<Q, Meta>(
+    pub fn prepare_scan_load<Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: &K,
-    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>>
-    where
-        K: 'static + Borrow<Q>,
-        Q: ToOwned<Owned = K> + Ord + ?Sized,
-        Resolver: KeyResolver<K, Arch, Q, Tls>,
-    {
+        request: &Resolver::Request,
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
         context
             .committed
             .ensure_domain(self.linker.loader.domain_id())?;
+        let key = self.linker.resolver.map_request(request);
+        if let Some(key) = key.as_ref()
+            && let Some(prepared) = PreparedLoad::visible(context, key)
+        {
+            return Ok(prepared);
+        }
         let mut session = ResolveSession::new();
 
         let root = {
@@ -97,8 +85,9 @@ where
                 .with_search_path_pool(&mut context.search_paths)
                 .with_observer(&mut self.observer);
             let mut resolve_context = ScanResolveContext::new(&mut context.committed, &mut session);
-            let resolved = resolve_context.resolve_root::<Q>(key, None, &self.linker.resolver)?;
-            let root = resolve_context.stage(resolved, None, &mut loader)?;
+            let resolved =
+                resolve_context.resolve_root(request, key, None, &self.linker.resolver)?;
+            let root = resolve_context.stage(resolved, None, &mut loader, &self.linker.resolver)?;
             if !resolve_context.contains_pending(root) {
                 return Ok(PreparedLoad::new(
                     root,
@@ -107,11 +96,7 @@ where
                     context,
                 ));
             }
-            resolve_context.resolve_dependency_graph::<D, _, _, _, Q>(
-                root,
-                &mut loader,
-                &self.linker.resolver,
-            )?;
+            resolve_context.resolve_dependency_graph(root, &mut loader, &self.linker.resolver)?;
             root
         };
 

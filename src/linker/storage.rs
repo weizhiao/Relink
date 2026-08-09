@@ -229,7 +229,8 @@ pub(crate) struct CommittedStorage<
     domain: DomainId,
     key_slots: BTreeMap<K, KeySlot>,
     keys: PrimaryMap<KeySlot, K>,
-    key_modules: SecondaryMap<KeySlot, ModuleSlot>,
+    canonical: SecondaryMap<KeySlot, ModuleSlot>,
+    aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
     entries: PrimaryMap<ModuleSlot, ModuleCell<Meta, Arch, Tls>>,
     lifecycle: Vec<ModuleSlot>,
 }
@@ -246,7 +247,8 @@ where
             domain,
             key_slots: BTreeMap::new(),
             keys: PrimaryMap::new(),
-            key_modules: SecondaryMap::new(),
+            canonical: SecondaryMap::new(),
+            aliases: SecondaryMap::new(),
             entries: PrimaryMap::new(),
             lifecycle: Vec::new(),
         }
@@ -357,7 +359,23 @@ where
 
     #[inline]
     pub(in crate::linker) fn module_for_key(&self, slot: KeySlot) -> Option<ModuleSlot> {
-        self.key_modules.get(slot).copied()
+        self.canonical_module(slot)
+            .filter(|module| self.contains_module(*module))
+            .or_else(|| self.alias_module(slot))
+    }
+
+    #[inline]
+    pub(crate) fn canonical_module(&self, slot: KeySlot) -> Option<ModuleSlot> {
+        self.canonical.get(slot).copied()
+    }
+
+    #[inline]
+    pub(crate) fn alias_module(&self, slot: KeySlot) -> Option<ModuleSlot> {
+        self.aliases
+            .get(slot)?
+            .iter()
+            .copied()
+            .find(|module| self.contains_module(*module))
     }
 
     #[inline]
@@ -410,7 +428,7 @@ where
     {
         self.key_slot_for(key)
             .and_then(|slot| self.module_for_key(slot))
-            .is_some_and(|slot| self.contains_module(slot))
+            .is_some()
     }
 
     #[inline]
@@ -448,10 +466,11 @@ where
         slot
     }
 
-    pub(crate) fn add_alias(&mut self, module_slot: ModuleSlot, alias: K) -> Option<ModuleSlot> {
-        let slot = self.intern_key(alias);
-        let previous = self.key_modules.insert(slot, module_slot);
-        previous.filter(|slot| *slot != module_slot)
+    pub(crate) fn add_alias(&mut self, alias: KeySlot, module: ModuleSlot) {
+        let modules = self.aliases.get_or_default(alias);
+        if !modules.contains(&module) {
+            modules.push(module);
+        }
     }
 
     pub(crate) fn extend_lifecycle(&mut self, order: &[ModuleSlot]) {
@@ -470,7 +489,7 @@ where
     }
 
     pub(crate) fn intern_module(&mut self, slot: KeySlot) -> ModuleSlot {
-        if let Some(module_slot) = self.key_modules.get(slot).copied() {
+        if let Some(module_slot) = self.canonical.get(slot).copied() {
             return module_slot;
         }
 
@@ -479,7 +498,7 @@ where
             generation: 0,
             entry: None,
         });
-        self.key_modules.insert(slot, module_slot);
+        self.canonical.insert(slot, module_slot);
         module_slot
     }
 
@@ -507,24 +526,26 @@ where
 
     #[inline]
     pub(crate) fn take(&mut self, slot: ModuleSlot) -> (ModuleHandle<Arch, Tls>, Meta) {
-        let cell = &mut self.entries[slot];
-        let removed = cell
-            .entry
-            .take()
-            .expect("unload order must refer to a committed module");
-        cell.generation = cell
-            .generation
-            .checked_add(1)
-            .expect("module generation overflowed");
+        let removed = {
+            let cell = &mut self.entries[slot];
+            let removed = cell
+                .entry
+                .take()
+                .expect("unload order must refer to a committed module");
+            cell.generation = cell
+                .generation
+                .checked_add(1)
+                .expect("module generation overflowed");
+            removed
+        };
         (removed.module, removed.meta)
     }
 
     pub(crate) fn prune_removed(&mut self) {
         let entries = &self.entries;
-        self.key_modules.retain(|key, slot| {
-            entries
-                .get(*slot)
-                .is_some_and(|cell| cell.entry.is_some() || cell.entry_key == key)
+        self.aliases.retain(|_, modules| {
+            modules.retain(|slot| entries.get(*slot).is_some_and(|cell| cell.entry.is_some()));
+            !modules.is_empty()
         });
         self.lifecycle
             .retain(|slot| entries.get(*slot).is_some_and(|cell| cell.entry.is_some()));

@@ -164,8 +164,17 @@ impl fmt::Debug for CandidateRequest<'_> {
 
 /// Maps a resolved filesystem candidate to its [`LinkContext`](crate::LinkContext) key.
 pub trait KeyMapper<LinkKey> {
-    /// Returns the key for a resolved filesystem candidate.
-    fn map(candidate: &Path) -> LinkKey;
+    /// Maps a resolved filesystem path to its linker key.
+    fn map_path(&self, candidate: &Path) -> LinkKey;
+
+    /// Maps an ELF module name to the same key namespace.
+    ///
+    /// Override this when path keys and `DT_SONAME`/`DT_NEEDED` keys use
+    /// different representations.
+    #[inline]
+    fn map_name(&self, name: &str) -> LinkKey {
+        self.map_path(Path::new(name))
+    }
 }
 
 /// Default filesystem key behavior for [`SearchPathResolver`].
@@ -179,7 +188,7 @@ where
     LinkKey: From<PathBuf>,
 {
     #[inline]
-    fn map(candidate: &Path) -> LinkKey {
+    fn map_path(&self, candidate: &Path) -> LinkKey {
         LinkKey::from(PathBuf::from(candidate))
     }
 }
@@ -193,7 +202,7 @@ where
     LinkKey: From<PathBuf>,
 {
     #[inline]
-    fn map(candidate: &Path) -> LinkKey {
+    fn map_path(&self, candidate: &Path) -> LinkKey {
         LinkKey::from(PathBuf::from(candidate.file_name()))
     }
 }
@@ -216,23 +225,25 @@ where
 /// File existence and final lookup results are not cached.
 pub struct SearchPathResolver<LinkKey = PathBuf, Mapper = PathKey> {
     entries: Vec<SearchPathEntry>,
-    _marker: PhantomData<fn() -> (LinkKey, Mapper)>,
+    mapper: Mapper,
+    _marker: PhantomData<fn() -> LinkKey>,
 }
 
-// Keep this impl manual so cloning a resolver does not require LinkKey or Mapper to be Clone.
-impl<LinkKey, Mapper> Clone for SearchPathResolver<LinkKey, Mapper> {
+// Keep this impl manual so cloning a resolver does not require LinkKey to be Clone.
+impl<LinkKey, Mapper: Clone> Clone for SearchPathResolver<LinkKey, Mapper> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
             entries: self.entries.clone(),
+            mapper: self.mapper.clone(),
             _marker: PhantomData,
         }
     }
 }
 
-impl<LinkKey, Mapper> Default for SearchPathResolver<LinkKey, Mapper> {
+impl<LinkKey, Mapper: Default> Default for SearchPathResolver<LinkKey, Mapper> {
     fn default() -> Self {
-        Self::empty()
+        Self::with_mapper(Mapper::default())
     }
 }
 
@@ -250,15 +261,17 @@ impl<LinkKey> SearchPathResolver<LinkKey, PathKey> {
     /// Creates an empty search-path resolver using the default path key rule.
     #[inline]
     pub const fn new() -> Self {
-        Self::empty()
+        Self::with_mapper(PathKey)
     }
 }
 
 impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
+    /// Creates an empty resolver with a custom key-mapping policy.
     #[inline]
-    const fn empty() -> Self {
+    pub const fn with_mapper(mapper: Mapper) -> Self {
         Self {
             entries: Vec::new(),
+            mapper,
             _marker: PhantomData,
         }
     }
@@ -414,22 +427,31 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
         Ok(None)
     }
 
-    fn resolve_key<Arch, F>(
+    fn resolve_candidate<Arch, F>(
         &self,
         request: CandidateRequest<'_>,
+        lookup_key: Option<&LinkKey>,
         contains_key: &dyn Fn(&LinkKey) -> bool,
         reuse: &F,
     ) -> Result<Option<ResolvedCandidate<LinkKey>>>
     where
         Mapper: KeyMapper<LinkKey>,
+        LinkKey: Clone,
         Arch: RelocationArch,
         F: for<'req> Fn(CandidateContext<'req, LinkKey>) -> Result<Option<LinkKey>> + ?Sized,
     {
+        let requested = request.requested();
         let mut incompatible = None;
         let mut try_candidate = |candidate: &Path,
                                  continue_on_incompatible: bool|
          -> Result<Option<ResolvedCandidate<LinkKey>>> {
-            let key = Mapper::map(candidate);
+            let key = if candidate.as_str() == requested.as_str() {
+                lookup_key
+                    .cloned()
+                    .unwrap_or_else(|| self.mapper.map_path(candidate))
+            } else {
+                self.mapper.map_path(candidate)
+            };
             if contains_key(&key) {
                 return Ok(Some(ResolvedCandidate::Existing(key)));
             }
@@ -462,30 +484,17 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
         }
     }
 
-    fn resolved_key<'cfg, Arch, Tls>(
-        resolved: ResolvedCandidate<LinkKey>,
-    ) -> ResolvedKey<'cfg, LinkKey, Arch, Tls>
-    where
-        LinkKey: 'cfg,
-        Arch: RelocationArch,
-        Tls: TlsResolver<Arch>,
-    {
-        match resolved {
-            ResolvedCandidate::Existing(key) => ResolvedKey::existing(key),
-            ResolvedCandidate::Load { key, file } => ResolvedKey::load(key, file),
-        }
-    }
-
     /// Resolves a root key using the configured search policy plus a
     /// per-operation reuse callback.
-    pub fn resolve_root_with<'cfg, Arch, Tls, F>(
+    pub fn resolve_root_with<'cfg, Arch, Tls, F, Request>(
         &self,
-        req: &RootRequest<'_, LinkKey>,
+        req: &RootRequest<'_, Request, LinkKey>,
         reuse: &F,
     ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>>
     where
         Mapper: KeyMapper<LinkKey>,
-        LinkKey: Clone + AsRef<Path> + 'cfg,
+        LinkKey: Clone + 'cfg,
+        Request: AsRef<Path>,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
         F: for<'req> Fn(CandidateContext<'req, LinkKey>) -> Result<Option<LinkKey>> + ?Sized,
@@ -498,9 +507,11 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
             Ok(())
         };
         let contains_key = |key: &LinkKey| req.contains_key(key);
-        let request = CandidateRequest::new(req.key().as_ref(), search, &loaders);
-        if let Some(resolved) = self.resolve_key::<Arch, _>(request, &contains_key, reuse)? {
-            return Ok(Self::resolved_key(resolved));
+        let request = CandidateRequest::new(req.request().as_ref(), search, &loaders);
+        if let Some(resolved) =
+            self.resolve_candidate::<Arch, _>(request, req.key(), &contains_key, reuse)?
+        {
+            return Ok(resolved.into_resolved());
         }
 
         Err(LinkerError::resolver(LinkResolverError::RootNotFound).into())
@@ -520,12 +531,15 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
         Tls: TlsResolver<Arch>,
         F: for<'req> Fn(CandidateContext<'req, LinkKey>) -> Result<Option<LinkKey>> + ?Sized,
     {
+        let requested = Path::new(req.needed());
         let search = req.search();
         let loaders = |visitor: &mut LoaderVisitor<'_>| req.visit_loaders(visitor);
-        let request = CandidateRequest::new(Path::new(req.needed()), Some(search), &loaders);
+        let request = CandidateRequest::new(requested, Some(search), &loaders);
         let contains_key = |key: &LinkKey| req.contains_key(key);
-        if let Some(resolved) = self.resolve_key::<Arch, _>(request, &contains_key, reuse)? {
-            return Ok(Self::resolved_key(resolved));
+        if let Some(resolved) =
+            self.resolve_candidate::<Arch, _>(request, None, &contains_key, reuse)?
+        {
+            return Ok(resolved.into_resolved());
         }
 
         Err(req.unresolved())
@@ -572,23 +586,54 @@ enum ResolvedCandidate<LinkKey> {
     Load { key: LinkKey, file: ElfFile },
 }
 
-impl<LinkKey, Arch, Tls, Mapper> KeyResolver<LinkKey, Arch, LinkKey, Tls>
+impl<LinkKey> ResolvedCandidate<LinkKey> {
+    #[inline]
+    fn into_resolved<'cfg, Arch, Tls>(self) -> ResolvedKey<'cfg, LinkKey, Arch, Tls>
+    where
+        LinkKey: 'cfg,
+        Arch: RelocationArch,
+        Tls: TlsResolver<Arch>,
+    {
+        match self {
+            Self::Existing(key) => ResolvedKey::existing(key),
+            Self::Load { key, file } => ResolvedKey::load(key, file),
+        }
+    }
+}
+
+impl<LinkKey, Arch, Tls, Mapper> KeyResolver<LinkKey, Arch, Tls>
     for SearchPathResolver<LinkKey, Mapper>
 where
     Mapper: KeyMapper<LinkKey>,
-    LinkKey: Clone + AsRef<Path>,
+    LinkKey: Clone,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
+    type Request = PathBuf;
+
+    #[inline]
+    fn map_request(&self, request: &Self::Request) -> Option<LinkKey> {
+        Some(if request.has_dir_separator() {
+            self.mapper.map_path(request)
+        } else {
+            self.mapper.map_name(request.as_str())
+        })
+    }
+
+    #[inline]
+    fn map_name(&self, name: &str) -> Option<LinkKey> {
+        Some(self.mapper.map_name(name))
+    }
+
     fn resolve_root<'cfg>(
         &self,
-        req: &RootRequest<'_, LinkKey>,
+        req: &RootRequest<'_, Self::Request, LinkKey>,
     ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>>
     where
         LinkKey: 'cfg,
     {
         let no_reuse = |_context: CandidateContext<'_, LinkKey>| Ok(None);
-        self.resolve_root_with::<Arch, Tls, _>(req, &no_reuse)
+        self.resolve_root_with::<Arch, Tls, _, _>(req, &no_reuse)
     }
 
     fn resolve_dependency<'cfg>(
@@ -608,7 +653,8 @@ mod tests {
     use super::*;
 
     struct NonCloneKey;
-    struct NonCloneMapper;
+    #[derive(Clone)]
+    struct TestMapper;
 
     fn module_search(
         path: &str,
@@ -629,10 +675,10 @@ mod tests {
     }
 
     #[test]
-    fn clone_needs_no_key_or_mapper_clone() {
+    fn clone_needs_no_key_clone() {
         fn assert_clone<T: Clone>() {}
 
-        assert_clone::<SearchPathResolver<NonCloneKey, NonCloneMapper>>();
+        assert_clone::<SearchPathResolver<NonCloneKey, TestMapper>>();
     }
 
     #[test]

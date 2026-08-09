@@ -132,14 +132,20 @@ impl RelocationObserver for InitRecorder {
 }
 
 impl KeyResolver<&'static str> for SingleBinaryResolver {
+    type Request = &'static str;
+
+    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
+        Some(*request)
+    }
+
     fn resolve_root<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str>,
+        req: &RootRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        let key = req.key();
+        let key = req.request();
         assert_eq!(*key, self.key);
         Ok(ResolvedKey::load(
             self.key,
@@ -159,14 +165,20 @@ impl KeyResolver<&'static str> for SingleBinaryResolver {
 }
 
 impl KeyResolver<&'static str> for ExistingRootResolver {
+    type Request = &'static str;
+
+    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
+        Some(*request)
+    }
+
     fn resolve_root<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str>,
+        req: &RootRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        let key = req.key();
+        let key = req.request();
         assert_eq!(*key, self.requested);
         Ok(ResolvedKey::existing(self.existing))
     }
@@ -183,14 +195,20 @@ impl KeyResolver<&'static str> for ExistingRootResolver {
 }
 
 impl KeyResolver<&'static str> for ModuleDependencyResolver {
+    type Request = &'static str;
+
+    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
+        Some(*request)
+    }
+
     fn resolve_root<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str>,
+        req: &RootRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        let key = req.key();
+        let key = req.request();
         assert_eq!(*key, "root");
         Ok(ResolvedKey::load(
             "root",
@@ -212,14 +230,20 @@ impl KeyResolver<&'static str> for ModuleDependencyResolver {
 }
 
 impl KeyResolver<&'static str> for ExistingDependencyResolver {
+    type Request = &'static str;
+
+    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
+        Some(*request)
+    }
+
     fn resolve_root<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str>,
+        req: &RootRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        assert_eq!(*req.key(), "root");
+        assert_eq!(*req.request(), "root");
         Ok(ResolvedKey::load(
             "root",
             ElfBinary::new("existing_dep_root.so", self.root_data),
@@ -239,14 +263,20 @@ impl KeyResolver<&'static str> for ExistingDependencyResolver {
 }
 
 impl KeyResolver<&'static str> for SyntheticDependencyResolver {
+    type Request = &'static str;
+
+    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
+        Some(*request)
+    }
+
     fn resolve_root<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str>,
+        req: &RootRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        let key = req.key();
+        let key = req.request();
         assert_eq!(*key, "root");
         Ok(ResolvedKey::load(
             "root",
@@ -271,15 +301,21 @@ impl KeyResolver<&'static str> for SyntheticDependencyResolver {
 }
 
 impl KeyResolver<&'static str> for SyntheticRootResolver {
+    type Request = &'static str;
+
+    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
+        Some(*request)
+    }
+
     fn resolve_root<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str>,
+        req: &RootRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
         Ok(ResolvedKey::module(
-            *req.key(),
+            *req.request(),
             SyntheticModule::new(
                 "synthetic-root",
                 [SyntheticSymbol::function(
