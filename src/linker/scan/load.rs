@@ -76,6 +76,7 @@ where
             return Ok(prepared);
         }
         let mut session = ResolveSession::new();
+        let tokens = context.search_paths.tokens();
 
         let root = {
             let mut loader = self
@@ -84,7 +85,8 @@ where
                 .run()
                 .with_search_path_pool(&mut context.search_paths)
                 .with_observer(&mut self.observer);
-            let mut resolve_context = ScanResolveContext::new(&mut context.committed, &mut session);
+            let mut resolve_context =
+                ScanResolveContext::new(&mut context.committed, &mut session, tokens);
             let resolved =
                 resolve_context.resolve_root(request, key, None, &self.linker.resolver)?;
             let root = resolve_context.stage(resolved, None, &mut loader, &self.linker.resolver)?;

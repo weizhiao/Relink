@@ -167,6 +167,15 @@ where
     pub fn domain_id(&self) -> DomainId {
         self.committed.domain()
     }
+
+    /// Returns the shared dynamic search-path pool for target token configuration.
+    ///
+    /// Configure `$LIB` and `$PLATFORM` before loading modules so their
+    /// `DT_RPATH` and `DT_RUNPATH` entries can be expanded once while loading.
+    #[inline]
+    pub fn search_paths_mut(&mut self) -> &mut SearchPathPool {
+        &mut self.search_paths
+    }
 }
 
 impl<K, Meta, Arch, Tls> LinkContext<K, Meta, Arch, Tls>

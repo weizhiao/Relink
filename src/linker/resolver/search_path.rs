@@ -5,7 +5,7 @@ use super::{
 use crate::{
     Error, IoError, LinkResolverError, LinkerError, ParseEhdrError, Result,
     elf::{ElfHeader, ElfLayout},
-    image::{ModuleSearch, SharedDir, expand_origin, normalize_dir},
+    image::{ModuleSearch, PathTokens, SharedDir, normalize_dir},
     input::{ElfFile, ElfReader, Path, PathBuf},
     linker::{DependencyRequest, RootRequest},
     relocation::RelocationArch,
@@ -49,6 +49,7 @@ impl fmt::Debug for SearchPathEntry {
 pub struct CandidateRequest<'a> {
     requested: &'a Path,
     owner: Option<&'a ModuleSearch>,
+    tokens: &'a PathTokens,
     loaders: &'a LoaderProvider<'a>,
 }
 
@@ -57,11 +58,13 @@ impl<'a> CandidateRequest<'a> {
     const fn new(
         requested: &'a Path,
         owner: Option<&'a ModuleSearch>,
+        tokens: &'a PathTokens,
         loaders: &'a LoaderProvider<'a>,
     ) -> Self {
         Self {
             requested,
             owner,
+            tokens,
             loaders,
         }
     }
@@ -75,6 +78,11 @@ impl<'a> CandidateRequest<'a> {
     #[inline]
     const fn owner(&self) -> Option<&'a ModuleSearch> {
         self.owner
+    }
+
+    #[inline]
+    const fn tokens(&self) -> &'a PathTokens {
+        self.tokens
     }
 
     fn visit_loaders(
@@ -220,9 +228,9 @@ where
 /// system library directories unless callers add runtime directory providers
 /// for them.
 ///
-/// Module-owned `DT_RPATH` and `DT_RUNPATH` entries are already expanded and
-/// shared by the loader. Resolver clones retain the configured search sources.
-/// File existence and final lookup results are not cached.
+/// Module-owned `DT_RPATH` and `DT_RUNPATH` entries have their dynamic string
+/// tokens expanded by the loader and are shared between modules. File existence
+/// and final lookup results are not cached.
 pub struct SearchPathResolver<LinkKey = PathBuf, Mapper = PathKey> {
     entries: Vec<SearchPathEntry>,
     mapper: Mapper,
@@ -353,9 +361,15 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
         request: CandidateRequest<'_>,
         mut inspect: impl FnMut(&Path, bool) -> Result<Option<T>>,
     ) -> Result<Option<T>> {
-        let expanded = request
-            .owner()
-            .map(|owner| expand_origin(request.requested().as_str(), owner.path().parent()));
+        let requested_value = request.requested().as_str();
+        let expanded = if requested_value.contains('$') {
+            let Some(expanded) = request.tokens().expand(requested_value, request.origin()) else {
+                return Ok(None);
+            };
+            Some(expanded)
+        } else {
+            None
+        };
         let requested = expanded
             .as_ref()
             .map_or_else(|| request.requested(), PathBuf::as_path);
@@ -507,7 +521,7 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
             Ok(())
         };
         let contains_key = |key: &LinkKey| req.contains_key(key);
-        let request = CandidateRequest::new(req.request().as_ref(), search, &loaders);
+        let request = CandidateRequest::new(req.request().as_ref(), search, req.tokens(), &loaders);
         if let Some(resolved) =
             self.resolve_candidate::<Arch, _>(request, req.key(), &contains_key, reuse)?
         {
@@ -534,7 +548,7 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
         let requested = Path::new(req.needed());
         let search = req.search();
         let loaders = |visitor: &mut LoaderVisitor<'_>| req.visit_loaders(visitor);
-        let request = CandidateRequest::new(requested, Some(search), &loaders);
+        let request = CandidateRequest::new(requested, Some(search), req.tokens(), &loaders);
         let contains_key = |key: &LinkKey| req.contains_key(key);
         if let Some(resolved) =
             self.resolve_candidate::<Arch, _>(request, None, &contains_key, reuse)?
@@ -704,7 +718,9 @@ mod tests {
         let root = module_search("/app/root", None, None, Some("$ORIGIN/lib"));
         let chain = [&direct, &root];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
-        let request = CandidateRequest::new(Path::new("libleaf.so"), Some(&direct), &loaders);
+        let tokens = PathTokens::default();
+        let request =
+            CandidateRequest::new(Path::new("libleaf.so"), Some(&direct), &tokens, &loaders);
         let mut resolver = SearchPathResolver::<PathBuf>::new();
         resolver.push_rpath();
 
@@ -721,8 +737,13 @@ mod tests {
         let owner = module_search("/app/owner", None, None, None);
         let chain = [&owner];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
-        let request =
-            CandidateRequest::new(Path::new("$ORIGIN/libvalue.so"), Some(&owner), &loaders);
+        let tokens = PathTokens::default();
+        let request = CandidateRequest::new(
+            Path::new("$ORIGIN/libvalue.so"),
+            Some(&owner),
+            &tokens,
+            &loaders,
+        );
         let resolver = SearchPathResolver::<PathBuf>::new();
 
         let found = resolver
@@ -735,12 +756,88 @@ mod tests {
     }
 
     #[test]
+    fn expands_target_tokens() {
+        let mut paths = crate::image::SearchPathPool::new();
+        paths.set_lib("lib64").set_platform("target-v1");
+        let tokens = paths.tokens();
+        let owner = paths.module_search(
+            PathBuf::from("/app/owner"),
+            None,
+            None,
+            Some("$ORIGIN/$LIB/${PLATFORM}"),
+            None,
+        );
+        let chain = [&owner];
+        let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
+        let request =
+            CandidateRequest::new(Path::new("libleaf.so"), Some(&owner), &tokens, &loaders);
+        let mut resolver = SearchPathResolver::<PathBuf>::new();
+        resolver.push_runpath();
+
+        let found = resolver
+            .find_candidate_with(request, |path, _| {
+                Ok((path.as_str() == "/app/lib64/target-v1/libleaf.so").then_some(()))
+            })
+            .unwrap();
+        assert_eq!(found, Some(()));
+    }
+
+    #[test]
+    fn expands_tokens_in_dependency_name() {
+        let owner = module_search("/app/owner", None, None, None);
+        let mut paths = crate::image::SearchPathPool::new();
+        paths.set_lib("lib64").set_platform("target-v1");
+        let tokens = paths.tokens();
+        let chain = [&owner];
+        let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
+        let request = CandidateRequest::new(
+            Path::new("$LIB/${PLATFORM}/libleaf.so"),
+            Some(&owner),
+            &tokens,
+            &loaders,
+        );
+        let resolver = SearchPathResolver::<PathBuf>::new();
+
+        let found = resolver
+            .find_candidate_with(request, |path, searched| {
+                assert!(!searched);
+                Ok((path.as_str() == "lib64/target-v1/libleaf.so").then_some(()))
+            })
+            .unwrap();
+        assert_eq!(found, Some(()));
+    }
+
+    #[test]
+    fn missing_target_token_discards_path() {
+        let owner = module_search("/app/owner", None, Some("$ORIGIN/$PLATFORM"), None);
+        let chain = [&owner];
+        let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
+        let tokens = PathTokens::default();
+        let request =
+            CandidateRequest::new(Path::new("libleaf.so"), Some(&owner), &tokens, &loaders);
+        let mut resolver = SearchPathResolver::<PathBuf>::new();
+        resolver.push_runpath();
+        let mut inspected = false;
+
+        let found = resolver
+            .find_candidate_with(request, |_, _| {
+                inspected = true;
+                Ok(Some(()))
+            })
+            .unwrap();
+        assert_eq!(found, None);
+        assert!(!inspected);
+    }
+
+    #[test]
     fn runpath_suppresses_rpath_chain() {
         let direct = module_search("/app/middle", None, Some(""), Some("/direct"));
         let root = module_search("/app/root", None, None, Some("/root"));
         let chain = [&direct, &root];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
-        let request = CandidateRequest::new(Path::new("libleaf.so"), Some(&direct), &loaders);
+        let tokens = PathTokens::default();
+        let request =
+            CandidateRequest::new(Path::new("libleaf.so"), Some(&direct), &tokens, &loaders);
         let mut resolver = SearchPathResolver::<PathBuf>::new();
         resolver.push_rpath();
         let mut candidates = Vec::new();
@@ -761,7 +858,9 @@ mod tests {
         let root = module_search("/app/root", None, None, Some("/root"));
         let chain = [&direct, &root];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
-        let request = CandidateRequest::new(Path::new("libleaf.so"), Some(&direct), &loaders);
+        let tokens = PathTokens::default();
+        let request =
+            CandidateRequest::new(Path::new("libleaf.so"), Some(&direct), &tokens, &loaders);
         let mut resolver = SearchPathResolver::<PathBuf>::new();
         resolver.push_rpath();
         resolver.push_fixed_dir("/env");
@@ -788,7 +887,9 @@ mod tests {
         let owner = module_search("/app/owner", None, Some(":/fallback"), None);
         let chain = [&owner];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
-        let request = CandidateRequest::new(Path::new("libvalue.so"), Some(&owner), &loaders);
+        let tokens = PathTokens::default();
+        let request =
+            CandidateRequest::new(Path::new("libvalue.so"), Some(&owner), &tokens, &loaders);
         let mut resolver = SearchPathResolver::<PathBuf>::new();
         resolver.push_runpath();
         let mut candidates = Vec::new();

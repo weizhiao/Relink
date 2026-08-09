@@ -201,12 +201,14 @@ where
         }
         let linker = self.linker;
         let mut session = ResolveSession::new();
+        let tokens = context.search_paths.tokens();
         let mut loader = linker
             .loader
             .run()
             .with_search_path_pool(&mut context.search_paths)
             .with_observer(&mut self.observer);
-        let mut resolve_context = LoadResolveContext::new(&mut context.committed, &mut session);
+        let mut resolve_context =
+            LoadResolveContext::new(&mut context.committed, &mut session, tokens);
         let resolved = resolve_context.resolve_root(&request, key, caller, &linker.resolver)?;
         let root = resolve_context.stage(resolved, caller, &mut loader, &linker.resolver)?;
         resolve_context.resolve_pending(root, &mut loader, &linker.resolver)?;
@@ -273,12 +275,14 @@ where
             let alias = context.committed.intern_key(alias);
             session.stage_alias(alias, root);
         }
+        let tokens = context.search_paths.tokens();
         let mut loader = linker
             .loader
             .run()
             .with_search_path_pool(&mut context.search_paths)
             .with_observer(&mut self.observer);
-        let mut resolve_context = LoadResolveContext::new(&mut context.committed, &mut session);
+        let mut resolve_context =
+            LoadResolveContext::new(&mut context.committed, &mut session, tokens);
         resolve_context.resolve_pending(root, &mut loader, &linker.resolver)?;
         Ok(PreparedLoad::new(root, session, None, context))
     }

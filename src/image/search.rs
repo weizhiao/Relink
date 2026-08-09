@@ -7,10 +7,51 @@ use core::fmt;
 
 pub(crate) type SharedDir = Arc<str>;
 
+#[derive(Clone, Default)]
+pub(crate) struct PathTokens {
+    lib: Option<Arc<str>>,
+    platform: Option<Arc<str>>,
+}
+
+impl PathTokens {
+    fn set_lib(&mut self, lib: impl AsRef<str>) {
+        self.lib = Some(Arc::from(lib.as_ref()));
+    }
+
+    fn set_platform(&mut self, platform: impl AsRef<str>) {
+        self.platform = Some(Arc::from(platform.as_ref()));
+    }
+
+    pub(crate) fn expand(&self, value: &str, origin: Option<&Path>) -> Option<PathBuf> {
+        let mut expanded = String::with_capacity(value.len());
+        let mut input = value;
+        while let Some(pos) = input.find('$') {
+            expanded.push_str(&input[..pos]);
+            let token = &input[pos + 1..];
+            let (len, replacement) = if let Some(len) = token_len(token, "ORIGIN") {
+                (len, origin.map(Path::as_str))
+            } else if let Some(len) = token_len(token, "LIB") {
+                (len, self.lib.as_deref())
+            } else if let Some(len) = token_len(token, "PLATFORM") {
+                (len, self.platform.as_deref())
+            } else {
+                expanded.push('$');
+                input = token;
+                continue;
+            };
+            expanded.push_str(replacement?);
+            input = &token[len..];
+        }
+        expanded.push_str(input);
+        Some(PathBuf::from(expanded))
+    }
+}
+
 /// Storage for canonical module search directories.
 #[derive(Default)]
 pub struct SearchPathPool {
     dirs: BTreeSet<SharedDir>,
+    tokens: PathTokens,
 }
 
 impl SearchPathPool {
@@ -20,12 +61,34 @@ impl SearchPathPool {
         Self::default()
     }
 
-    fn intern(&mut self, path: String) -> SharedDir {
-        if let Some(dir) = self.dirs.get(path.as_str()) {
+    /// Sets the target ABI directory substituted for `$LIB` in dynamic paths.
+    ///
+    /// This describes the target filesystem layout and is intentionally not
+    /// inferred from the host running Relink.
+    pub fn set_lib(&mut self, lib: impl AsRef<str>) -> &mut Self {
+        self.tokens.set_lib(lib);
+        self
+    }
+
+    /// Sets the target runtime string substituted for `$PLATFORM` in dynamic paths.
+    ///
+    /// Native ELF loaders commonly obtain this value from `AT_PLATFORM`.
+    pub fn set_platform(&mut self, platform: impl AsRef<str>) -> &mut Self {
+        self.tokens.set_platform(platform);
+        self
+    }
+
+    #[inline]
+    pub(crate) fn tokens(&self) -> PathTokens {
+        self.tokens.clone()
+    }
+
+    fn intern(dirs: &mut BTreeSet<SharedDir>, path: String) -> SharedDir {
+        if let Some(dir) = dirs.get(path.as_str()) {
             return Arc::clone(dir);
         }
         let dir = Arc::from(path);
-        self.dirs.insert(Arc::clone(&dir));
+        dirs.insert(Arc::clone(&dir));
         dir
     }
 
@@ -37,16 +100,18 @@ impl SearchPathPool {
         runpath: Option<&str>,
         rpath: Option<&str>,
     ) -> ModuleSearch {
-        ModuleSearch::from_dynamic_with(path, file_id, soname, runpath, rpath, |path| {
-            self.intern(path)
+        let Self { dirs, tokens } = self;
+        ModuleSearch::from_dynamic_with(path, file_id, soname, runpath, rpath, tokens, |path| {
+            Self::intern(dirs, path)
         })
     }
 }
 
 /// Filesystem identity and dynamic search metadata retained by a module.
 ///
-/// `DT_RUNPATH` and `DT_RPATH` are expanded when this value is created. Their
-/// directories may be shared with other modules through a [`SearchPathPool`].
+/// Dynamic string tokens in `DT_RUNPATH` and `DT_RPATH` are expanded when this
+/// value is created. Their directories may be shared with other modules through
+/// a [`SearchPathPool`].
 pub struct ModuleSearch {
     path: PathBuf,
     file_id: Option<FileId>,
@@ -74,7 +139,15 @@ impl ModuleSearch {
         runpath: Option<&str>,
         rpath: Option<&str>,
     ) -> Self {
-        Self::from_dynamic_with(path, file_id, soname, runpath, rpath, Arc::from)
+        Self::from_dynamic_with(
+            path,
+            file_id,
+            soname,
+            runpath,
+            rpath,
+            &PathTokens::default(),
+            Arc::from,
+        )
     }
 
     fn from_dynamic_with(
@@ -83,11 +156,12 @@ impl ModuleSearch {
         soname: Option<&str>,
         runpath: Option<&str>,
         rpath: Option<&str>,
+        tokens: &PathTokens,
         mut intern: impl FnMut(String) -> SharedDir,
     ) -> Self {
         let origin = path.parent();
-        let runpath = runpath.map(|value| expand_dirs(value, origin, &mut intern));
-        let rpath = rpath.map(|value| expand_dirs(value, origin, &mut intern));
+        let runpath = runpath.map(|value| expand_dirs(value, origin, tokens, &mut intern));
+        let rpath = rpath.map(|value| expand_dirs(value, origin, tokens, &mut intern));
         Self {
             path,
             file_id,
@@ -141,6 +215,7 @@ impl ModuleSearch {
 fn expand_dirs(
     value: &str,
     origin: &Path,
+    tokens: &PathTokens,
     intern: &mut impl FnMut(String) -> SharedDir,
 ) -> Box<[SharedDir]> {
     if value.is_empty() {
@@ -148,12 +223,14 @@ fn expand_dirs(
     }
     let mut dirs = Vec::new();
     for value in value.split(':') {
-        let path = normalize_dir(if value.is_empty() {
-            PathBuf::from(".")
+        let Some(path) = (if value.is_empty() {
+            Some(PathBuf::from("."))
         } else {
-            expand_origin(value, origin)
-        })
-        .into_string();
+            tokens.expand(value, Some(origin))
+        }) else {
+            continue;
+        };
+        let path = normalize_dir(path).into_string();
         let dir = intern(path);
         if !dirs.contains(&dir) {
             dirs.push(dir);
@@ -174,34 +251,20 @@ impl fmt::Debug for ModuleSearch {
     }
 }
 
-fn origin_token(value: &str) -> Option<usize> {
-    if value.starts_with("{ORIGIN}") {
-        return Some("{ORIGIN}".len());
+fn token_len(value: &str, name: &str) -> Option<usize> {
+    if value
+        .strip_prefix('{')
+        .is_some_and(|value| value.starts_with(name))
+        && value.as_bytes().get(name.len() + 1) == Some(&b'}')
+    {
+        return Some(name.len() + 2);
     }
-    let rest = value.strip_prefix("ORIGIN")?;
+    let rest = value.strip_prefix(name)?;
     (!rest
         .as_bytes()
         .first()
         .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_'))
-    .then_some("ORIGIN".len())
-}
-
-pub(crate) fn expand_origin(value: &str, origin: &Path) -> PathBuf {
-    let mut expanded = String::with_capacity(value.len());
-    let mut input = value;
-    while let Some(pos) = input.find('$') {
-        expanded.push_str(&input[..pos]);
-        let token = &input[pos + 1..];
-        if let Some(len) = origin_token(token) {
-            expanded.push_str(origin.as_str());
-            input = &token[len..];
-        } else {
-            expanded.push('$');
-            input = token;
-        }
-    }
-    expanded.push_str(input);
-    PathBuf::from(expanded)
+    .then_some(name.len())
 }
 
 pub(crate) fn normalize_dir(path: PathBuf) -> PathBuf {

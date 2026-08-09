@@ -9,7 +9,7 @@ use crate::{
     LinkResolverError, LinkerError, LoaderRun, ParsePhdrError, Result,
     arch::NativeArch,
     entity::EntitySet,
-    image::{ModuleHandle, ModuleSearch, RawDynamic, ScannedDynamic, ScannedElf},
+    image::{ModuleHandle, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic, ScannedElf},
     input::FileId,
     memory::{HostRegion, RegionAccess},
     observer::{LinkerObserver, LoadObserver},
@@ -37,6 +37,7 @@ pub(crate) struct ResolveContext<
 > {
     committed: &'a mut CommittedStorage<K, Meta, Arch, Tls>,
     session: &'a mut ResolveSession<P, Arch, Tls>,
+    tokens: PathTokens,
 }
 
 pub(crate) type LoadResolveContext<
@@ -61,8 +62,13 @@ where
     pub(crate) fn new(
         committed: &'a mut CommittedStorage<K, Meta, Arch, Tls>,
         session: &'a mut ResolveSession<P, Arch, Tls>,
+        tokens: PathTokens,
     ) -> Self {
-        Self { committed, session }
+        Self {
+            committed,
+            session,
+            tokens,
+        }
     }
 }
 
@@ -251,6 +257,7 @@ where
             request,
             key,
             caller.and_then(|slot| self.search(slot)),
+            &self.tokens,
             &contains_key,
         );
         resolver.resolve_root(&req)
@@ -305,6 +312,7 @@ where
                             owner_key,
                             search,
                             needed,
+                            &self.tokens,
                             &loaders,
                             &contains_key,
                         );

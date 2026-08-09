@@ -1,6 +1,6 @@
 use crate::{
     Error, LinkerError, Result, UnresolvedDependency,
-    image::{Module, ModuleSearch, RawDynamic, ScannedDynamic},
+    image::{Module, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic},
     memory::RegionAccess,
     relocation::RelocationArch,
     tls::TlsResolver,
@@ -61,6 +61,7 @@ pub struct RootRequest<'a, Request, K> {
     request: &'a Request,
     key: Option<K>,
     search: Option<&'a ModuleSearch>,
+    tokens: &'a PathTokens,
     contains_key: &'a dyn Fn(&K) -> bool,
 }
 
@@ -70,12 +71,14 @@ impl<'a, Request, K> RootRequest<'a, Request, K> {
         request: &'a Request,
         key: Option<K>,
         search: Option<&'a ModuleSearch>,
+        tokens: &'a PathTokens,
         contains_key: &'a dyn Fn(&K) -> bool,
     ) -> Self {
         Self {
             request,
             key,
             search,
+            tokens,
             contains_key,
         }
     }
@@ -98,6 +101,11 @@ impl<'a, Request, K> RootRequest<'a, Request, K> {
         self.search
     }
 
+    #[inline]
+    pub(crate) const fn tokens(&self) -> &'a PathTokens {
+        self.tokens
+    }
+
     /// Returns whether `key` names a module reusable by this request.
     #[inline]
     pub fn contains_key(&self, key: &K) -> bool {
@@ -110,6 +118,7 @@ pub struct DependencyRequest<'a, K> {
     owner_key: &'a K,
     search: &'a ModuleSearch,
     needed: &'a str,
+    tokens: &'a PathTokens,
     loaders: &'a LoaderProvider<'a>,
     contains_key: &'a dyn Fn(&K) -> bool,
 }
@@ -120,6 +129,7 @@ impl<'a, K> DependencyRequest<'a, K> {
         owner_key: &'a K,
         search: &'a ModuleSearch,
         needed: &'a str,
+        tokens: &'a PathTokens,
         loaders: &'a LoaderProvider<'a>,
         contains_key: &'a dyn Fn(&K) -> bool,
     ) -> Self {
@@ -127,6 +137,7 @@ impl<'a, K> DependencyRequest<'a, K> {
             owner_key,
             search,
             needed,
+            tokens,
             loaders,
             contains_key,
         }
@@ -148,6 +159,11 @@ impl<'a, K> DependencyRequest<'a, K> {
     #[inline]
     pub fn needed(&self) -> &'a str {
         self.needed
+    }
+
+    #[inline]
+    pub(crate) const fn tokens(&self) -> &'a PathTokens {
+        self.tokens
     }
 
     /// Visits loaders in direct-to-root order until `visitor` returns `false`.
