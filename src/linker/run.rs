@@ -256,7 +256,7 @@ where
         let file = raw.core_ref().search().and_then(ModuleSearch::file_id);
         let key = context.committed.intern_key(key);
         if let Some(root) = file.and_then(|id| context.committed.file_module(id)) {
-            session.observe(root, context.committed.generation(root));
+            session.track(root, context.committed.generation(root));
             session.stage_alias(key, root);
             return Ok(PreparedLoad::new(root, session, None, context));
         }
@@ -291,7 +291,6 @@ where
         let PreparedLoad {
             context,
             root: root_slot,
-            module,
             session,
             scope,
             symbols,
@@ -301,26 +300,20 @@ where
         let mut session = LoadSession::from_resolve(session);
 
         if !session.pending_is_empty() {
-            self.relocate_pending_modules(root_slot, &scope, &symbols, &mut session)?;
+            let scope = scope
+                .as_ref()
+                .expect("pending modules must have a lookup scope");
+            self.relocate_pending_modules(root_slot, scope, &symbols, &mut session)?;
         }
-
-        let module = session
-            .root_module(root_slot)
-            .or(module)
-            .expect("load root must resolve to a module before commit");
 
         if let Some(mapped_runtime) = mapped_runtime.as_ref() {
             mapped_runtime.protect()?;
         }
 
-        let initializers = session.initializers().into_boxed_slice();
-
         Ok(RelocatedLoad {
             context,
             root: root_slot,
-            module,
             session,
-            initializers,
         })
     }
 
@@ -442,9 +435,8 @@ pub struct PreparedLoad<
 > {
     context: ContextId,
     root: ModuleSlot,
-    module: Option<ModuleHandle<Arch, Tls>>,
     session: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
-    scope: ModuleScope<Arch, Tls>,
+    scope: Option<ModuleScope<Arch, Tls>>,
     symbols: Arc<SymbolRegistry<Arch, Tls>>,
     mapped_runtime: Option<MappedRuntimeMemory<R>>,
 }
@@ -464,7 +456,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             .key_slot_for(key)
             .and_then(|key| context.committed.module_for_key(key))?;
         let mut session = ResolveSession::new();
-        session.observe(root, context.committed.generation(root));
+        session.track(root, context.committed.generation(root));
         Some(Self::new(root, session, None, context))
     }
 
@@ -477,15 +469,10 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     where
         K: Ord,
     {
-        let module = context
-            .committed
-            .module(root)
-            .map(|module| module.handle().clone());
-        let scope = session.build_scope(context);
+        let scope = (!session.pending_is_empty()).then(|| session.build_scope(context));
         Self {
             context: context.context_id(),
             root,
-            module,
             session,
             scope,
             symbols: Arc::clone(&context.symbols),
@@ -504,9 +491,7 @@ pub struct RelocatedLoad<
 > {
     context: ContextId,
     root: ModuleSlot,
-    module: ModuleHandle<Arch, Tls>,
     session: LoadSession<D, Arch, R, Tls>,
-    initializers: Box<[ModuleHandle<Arch, Tls>]>,
 }
 
 impl<D: Send + Sync + 'static, Arch, R, Tls> RelocatedLoad<D, Arch, R, Tls>
@@ -535,15 +520,12 @@ where
             .into());
         }
 
+        let initializers = self.session.initializers().into_boxed_slice();
         let modules = self.session.commit_into(&mut context.committed)?;
         let root_id = context.committed.make_module_id(self.root);
+        let module = context.get(root_id)?.clone();
         let lease = context.acquire(root_id)?;
-        Ok(PublishedLoad::new(
-            lease,
-            self.module,
-            modules,
-            self.initializers,
-        ))
+        Ok(PublishedLoad::new(lease, module, modules, initializers))
     }
 }
 

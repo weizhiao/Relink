@@ -543,30 +543,16 @@ where
         meta: Meta,
     ) {
         let file = module.search().and_then(|search| search.file_id());
-        let previous = {
-            let cell = &mut self.entries[slot];
-            let (roots, pinned) = cell
-                .entry
-                .as_ref()
-                .map_or((roots, false), |entry| (entry.roots, entry.pinned));
-            cell.entry.replace(StoredEntry {
-                module,
-                direct_deps,
-                roots,
-                pinned,
-                meta,
-            })
-        };
-        let previous_file = previous
-            .as_ref()
-            .and_then(|entry| entry.module.search())
-            .and_then(|search| search.file_id());
-        if previous_file == file {
-            return;
-        }
-        if let Some(id) = previous_file {
-            self.remove_file(id, slot);
-        }
+        let cell = &mut self.entries[slot];
+        assert!(cell.entry.is_none(), "module slot is already committed");
+        cell.advance_generation();
+        cell.entry = Some(StoredEntry {
+            module,
+            direct_deps,
+            roots,
+            pinned: false,
+            meta,
+        });
         if let Some(id) = file {
             self.add_file(id, slot);
         }
@@ -580,10 +566,7 @@ where
                 .entry
                 .take()
                 .expect("unload order must refer to a committed module");
-            cell.generation = cell
-                .generation
-                .checked_add(1)
-                .expect("module generation overflowed");
+            cell.advance_generation();
             removed
         };
         if let Some(id) = removed.module.search().and_then(|search| search.file_id()) {
@@ -607,6 +590,16 @@ struct ModuleCell<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver
     entry_key: KeySlot,
     generation: u32,
     entry: Option<StoredEntry<Meta, Arch, Tls>>,
+}
+
+impl<Meta, Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleCell<Meta, Arch, Tls> {
+    #[inline]
+    fn advance_generation(&mut self) {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("module generation overflowed");
+    }
 }
 
 struct StoredEntry<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {

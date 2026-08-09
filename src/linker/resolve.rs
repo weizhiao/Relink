@@ -279,7 +279,7 @@ where
         ) -> Result<ModuleSlot>,
     {
         if !self.session.contains_pending(slot) && self.committed.contains_module(slot) {
-            self.session.observe(slot, self.committed.generation(slot));
+            self.session.track(slot, self.committed.generation(slot));
         }
         if self.known_direct_deps(slot).is_none() {
             let needed_len = self.source(slot).needed_len();
@@ -428,7 +428,7 @@ where
     {
         if !self.contains_pending(root) {
             if self.committed.contains_module(root) {
-                self.session.observe(root, self.committed.generation(root));
+                self.session.track(root, self.committed.generation(root));
             }
             return Ok(());
         }

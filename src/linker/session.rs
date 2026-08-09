@@ -78,11 +78,15 @@ where
 pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     dynamics: BTreeMap<ModuleSlot, GraphEntry<P>>,
     modules: BTreeMap<ModuleSlot, PendingModule<Arch, Tls>>,
-    pending: Vec<(ModuleSlot, u32)>,
-    observed: Vec<(ModuleSlot, u32)>,
+    guards: Vec<ModuleGuard>,
     group_order: Vec<ModuleSlot>,
     aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
     files: BTreeMap<FileId, ModuleSlot>,
+}
+
+struct ModuleGuard {
+    slot: ModuleSlot,
+    generation: u32,
 }
 
 impl<P, Arch, Tls> ResolveSession<P, Arch, Tls>
@@ -95,8 +99,7 @@ where
         Self {
             dynamics: BTreeMap::new(),
             modules: BTreeMap::new(),
-            pending: Vec::new(),
-            observed: Vec::new(),
+            guards: Vec::new(),
             group_order: Vec::new(),
             aliases: SecondaryMap::new(),
             files: BTreeMap::new(),
@@ -106,6 +109,11 @@ where
     #[inline]
     pub(crate) fn contains_pending(&self, slot: ModuleSlot) -> bool {
         self.dynamics.contains_key(&slot) || self.modules.contains_key(&slot)
+    }
+
+    #[inline]
+    pub(crate) fn pending_is_empty(&self) -> bool {
+        self.dynamics.is_empty() && self.modules.is_empty()
     }
 
     #[inline]
@@ -167,7 +175,7 @@ where
         payload: P,
         loader: Option<ModuleSlot>,
     ) {
-        self.reserve(slot, generation);
+        self.track(slot, generation);
         let previous = self.dynamics.insert(
             slot,
             GraphEntry {
@@ -186,7 +194,7 @@ where
         module: ModuleHandle<Arch, Tls>,
         direct_deps: Box<[ModuleSlot]>,
     ) {
-        self.reserve(slot, generation);
+        self.track(slot, generation);
         let previous = self
             .modules
             .insert(slot, PendingModule::new(module, direct_deps));
@@ -202,8 +210,7 @@ where
         let Self {
             dynamics,
             modules,
-            pending,
-            observed,
+            guards,
             group_order,
             aliases,
             files,
@@ -213,8 +220,7 @@ where
             ResolveSession {
                 dynamics: BTreeMap::new(),
                 modules,
-                pending,
-                observed,
+                guards,
                 group_order,
                 aliases,
                 files,
@@ -253,15 +259,9 @@ where
     }
 
     #[inline]
-    pub(crate) fn observe(&mut self, slot: ModuleSlot, generation: u32) {
-        debug_assert!(!self.observed.iter().any(|(observed, _)| *observed == slot));
-        self.observed.push((slot, generation));
-    }
-
-    #[inline]
-    fn reserve(&mut self, slot: ModuleSlot, generation: u32) {
-        debug_assert!(!self.pending.iter().any(|(pending, _)| *pending == slot));
-        self.pending.push((slot, generation));
+    pub(crate) fn track(&mut self, slot: ModuleSlot, generation: u32) {
+        debug_assert!(!self.guards.iter().any(|guard| guard.slot == slot));
+        self.guards.push(ModuleGuard { slot, generation });
     }
 }
 
@@ -327,7 +327,7 @@ where
 
     #[inline]
     pub(crate) fn pending_is_empty(&self) -> bool {
-        self.resolve.dynamics.is_empty() && self.resolve.modules.is_empty()
+        self.resolve.pending_is_empty()
     }
 
     #[inline]
@@ -368,12 +368,6 @@ where
             .remove(&slot)
             .expect("missing pending module handle while preparing lifecycle");
         self.push_ready(slot, module, direct_deps);
-    }
-
-    pub(crate) fn root_module(&self, slot: ModuleSlot) -> Option<ModuleHandle<Arch, Tls>> {
-        self.ready_to_commit
-            .get(&slot)
-            .map(|entry| entry.module.clone())
     }
 
     pub(crate) fn initializers(&self) -> Vec<ModuleHandle<Arch, Tls>> {
@@ -448,24 +442,15 @@ where
             lifecycle,
         } = self;
         let ResolveSession {
-            pending,
-            observed,
+            guards,
             group_order,
             aliases,
             ..
         } = resolve;
         let mut ready = ready_to_commit;
         let mut committed_ids = Vec::with_capacity(ready.len());
-        for &(slot, generation) in &pending {
-            if committed.generation(slot) != generation || committed.contains_module(slot) {
-                return Err(LinkerError::context(LinkContextError::ModuleChanged {
-                    id: ModuleId::from_slot(committed.context(), slot, generation),
-                })
-                .into());
-            }
-        }
-        for &(slot, generation) in &observed {
-            if committed.generation(slot) != generation || !committed.contains_module(slot) {
+        for ModuleGuard { slot, generation } in guards {
+            if committed.generation(slot) != generation {
                 return Err(LinkerError::context(LinkContextError::ModuleChanged {
                     id: ModuleId::from_slot(committed.context(), slot, generation),
                 })

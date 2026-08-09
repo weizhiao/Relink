@@ -296,8 +296,8 @@ where
 
     /// Inserts a retained module.
     ///
-    /// The returned lease represents one direct acquisition. Replacing an
-    /// existing entry preserves its previous acquisitions and adds this one.
+    /// The returned lease represents one direct acquisition. The canonical
+    /// key must not already refer to a committed module.
     pub fn insert<R>(&mut self, key: K, module: R, direct_deps: Box<[K]>) -> Result<ModuleLease>
     where
         Meta: Default,
@@ -333,18 +333,17 @@ where
         for (key, module, deps) in modules {
             let key = self.committed.intern_key(key);
             let slot = self.committed.intern_module(key);
-            if !group.insert(slot) {
-                return Err(LinkerError::context(LinkContextError::DuplicateKey {
+            if self.committed.contains_module(slot) || !group.insert(slot) {
+                return Err(LinkerError::context(LinkContextError::KeyOccupied {
                     id: self.committed.make_key_id(key),
                 })
                 .into());
             }
-            let is_new = !self.committed.contains_module(slot);
-            planned.push((slot, module, deps, is_new));
+            planned.push((slot, module, deps));
         }
 
         let mut resolved = Vec::with_capacity(planned.len());
-        for (slot, module, deps, is_new) in planned {
+        for (slot, module, deps) in planned {
             let mut resolved_deps = Vec::with_capacity(deps.len());
             for key in deps.into_vec() {
                 let key = self.committed.intern_key(key);
@@ -360,22 +359,15 @@ where
                     })?;
                 resolved_deps.push(dep);
             }
-            resolved.push((slot, module, resolved_deps.into_boxed_slice(), is_new));
+            resolved.push((slot, module, resolved_deps.into_boxed_slice()));
         }
 
-        let mut lifecycle = Vec::new();
         let mut leases = Vec::with_capacity(resolved.len());
-        for (slot, module, deps, is_new) in resolved {
+        let mut lifecycle = Vec::with_capacity(resolved.len());
+        for (slot, module, deps) in resolved {
             self.committed
                 .insert(slot, module, deps, 1, Meta::default());
-            if is_new {
-                lifecycle.push(slot);
-            } else {
-                self.committed
-                    .module_mut(slot)
-                    .expect("inserted module must be committed")
-                    .acquire_root();
-            }
+            lifecycle.push(slot);
             leases.push(ModuleLease::new(self.committed.make_module_id(slot)));
         }
         self.committed.extend_lifecycle(&lifecycle);
@@ -384,9 +376,8 @@ where
 
     /// Inserts a retained module with explicit context metadata.
     ///
-    /// The returned lease represents one direct acquisition. Replacing an
-    /// existing entry preserves its previous acquisitions and replaces its
-    /// metadata.
+    /// The returned lease represents one direct acquisition. The canonical
+    /// key must not already refer to a committed module.
     pub fn insert_with_meta<R>(
         &mut self,
         key: K,
@@ -399,7 +390,18 @@ where
     {
         let module = module.into();
         self.committed.ensure_domain(module.domain_id())?;
-        let slot = self.committed.intern_key(key);
+        let key = self.committed.intern_key(key);
+        if self
+            .committed
+            .canonical_module(key)
+            .filter(|slot| self.committed.contains_module(*slot))
+            .is_some()
+        {
+            return Err(LinkerError::context(LinkContextError::KeyOccupied {
+                id: self.committed.make_key_id(key),
+            })
+            .into());
+        }
         let mut resolved_deps = Vec::with_capacity(direct_deps.len());
         for key in direct_deps.into_vec() {
             let key = self.committed.intern_key(key);
@@ -411,18 +413,10 @@ where
             resolved_deps.push(module);
         }
         let direct_deps = resolved_deps.into_boxed_slice();
-        let module_slot = self.committed.intern_module(slot);
-        let is_new = !self.committed.contains_module(module_slot);
+        let module_slot = self.committed.intern_module(key);
         self.committed
             .insert(module_slot, module, direct_deps, 1, meta);
-        if is_new {
-            self.committed.extend_lifecycle(&[module_slot]);
-        } else {
-            self.committed
-                .module_mut(module_slot)
-                .expect("inserted module must be committed")
-                .acquire_root();
-        }
+        self.committed.extend_lifecycle(&[module_slot]);
         Ok(ModuleLease::new(self.committed.make_module_id(module_slot)))
     }
 
@@ -1096,37 +1090,25 @@ mod tests {
     }
 
     #[test]
-    fn insert_replaces_existing_key_in_place() {
+    fn insert_rejects_occupied_key() {
         let mut context = LinkContext::<&'static str, (), NativeArch>::new(DomainId::PROCESS);
-        let _ = context
-            .insert("old", SyntheticModule::empty("old"), Box::new([]))
-            .expect("failed to insert old dependency");
         let root = context
-            .insert(
-                "root",
-                SyntheticModule::empty("old-root"),
-                Box::new(["old"]),
-            )
+            .insert("root", SyntheticModule::empty("old-root"), Box::new([]))
             .expect("failed to insert root module");
         let root_id = root.id();
         let root_key = context.key_id(&"root").expect("root key should exist");
-        let new_dep_module = context
-            .insert("new", SyntheticModule::empty("new"), Box::new([]))
-            .expect("failed to insert new dependency");
-        let new_dep_module_id = new_dep_module.id();
 
-        let replaced = context
-            .insert(
-                "root",
-                SyntheticModule::empty("new-root"),
-                Box::new(["new"]),
-            )
-            .expect("failed to replace root module");
-        assert_eq!(replaced.id(), root_id);
+        let error = context
+            .insert("root", SyntheticModule::empty("new-root"), Box::new([]))
+            .expect_err("occupied key must not be replaced");
+        let Error::Linker(LinkerError::Context { reason }) = error else {
+            panic!("unexpected insertion error: {error}");
+        };
+        assert!(matches!(*reason, LinkContextError::KeyOccupied { id } if id == root_key));
         assert_eq!(context.key_id(&"root"), Some(root_key));
         assert_eq!(context.resolve_key(root_key).unwrap(), Some(root_id));
         assert_eq!(context.module_key(root_id).unwrap(), &"root");
-        assert_eq!(direct_deps(&context, root_id), [new_dep_module_id]);
+        assert!(direct_deps(&context, root_id).is_empty());
     }
 
     #[test]
@@ -1305,26 +1287,24 @@ mod tests {
     #[test]
     fn import_handles_dependency_cycles() {
         let mut source = LinkContext::<&'static str>::new(DomainId::PROCESS);
-        let _ = source
-            .insert("first", SyntheticModule::empty("first"), Box::new([]))
+        let source_modules = source
+            .insert_batch([
+                (
+                    "first",
+                    SyntheticModule::empty("first"),
+                    Vec::from(["second"]).into_boxed_slice(),
+                ),
+                (
+                    "second",
+                    SyntheticModule::empty("second"),
+                    Vec::from(["first"]).into_boxed_slice(),
+                ),
+            ])
             .unwrap();
-        let _ = source
-            .insert(
-                "second",
-                SyntheticModule::empty("second"),
-                Box::new(["first"]),
-            )
-            .unwrap();
-        let source_first = source
-            .insert(
-                "first",
-                SyntheticModule::empty("first"),
-                Box::new(["second"]),
-            )
-            .unwrap();
+        let source_first = source_modules[0].id();
 
         let mut target = LinkContext::<&'static str>::new(DomainId::PROCESS);
-        let first = target.import(&source, source_first.id()).unwrap();
+        let first = target.import(&source, source_first).unwrap();
         let first_id = first.id();
         let second = target.module_id("second").unwrap();
 

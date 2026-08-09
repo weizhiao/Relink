@@ -888,9 +888,9 @@ pub enum LinkContextError {
         /// The key id that did not resolve to a committed module.
         id: KeyId,
     },
-    /// A batch attempted to insert the same module key more than once.
-    DuplicateKey {
-        /// The duplicated key.
+    /// A module key is already occupied by another insertion.
+    KeyOccupied {
+        /// The occupied key.
         id: KeyId,
     },
 }
@@ -917,7 +917,7 @@ impl Display for LinkContextError {
                 write!(f, "module id {} changed before publication", id)
             }
             Self::KeyNotCommitted { id } => write!(f, "key id {} is not committed", id),
-            Self::DuplicateKey { id } => write!(f, "key id {} appears more than once", id),
+            Self::KeyOccupied { id } => write!(f, "key id {} is already occupied", id),
         }
     }
 }
