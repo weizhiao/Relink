@@ -3,6 +3,7 @@ use crate::{
     arch::NativeArch,
     entity::{PrimaryMap, SecondaryMap, entity_ref},
     image::ModuleHandle,
+    input::FileId,
     relocation::RelocationArch,
     runtime::DomainId,
     sync::{AtomicUsize, Ordering},
@@ -231,6 +232,7 @@ pub(crate) struct CommittedStorage<
     keys: PrimaryMap<KeySlot, K>,
     canonical: SecondaryMap<KeySlot, ModuleSlot>,
     aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
+    files: BTreeMap<FileId, ModuleSlot>,
     entries: PrimaryMap<ModuleSlot, ModuleCell<Meta, Arch, Tls>>,
     lifecycle: Vec<ModuleSlot>,
 }
@@ -249,6 +251,7 @@ where
             keys: PrimaryMap::new(),
             canonical: SecondaryMap::new(),
             aliases: SecondaryMap::new(),
+            files: BTreeMap::new(),
             entries: PrimaryMap::new(),
             lifecycle: Vec::new(),
         }
@@ -378,6 +381,10 @@ where
             .find(|module| self.contains_module(*module))
     }
 
+    pub(crate) fn file_module(&self, id: FileId) -> Option<ModuleSlot> {
+        self.files.get(&id).copied()
+    }
+
     #[inline]
     pub(in crate::linker) fn contains_module(&self, slot: ModuleSlot) -> bool {
         self.entries
@@ -473,6 +480,31 @@ where
         }
     }
 
+    fn add_file(&mut self, id: FileId, module: ModuleSlot) {
+        self.files.entry(id).or_insert(module);
+    }
+
+    fn remove_file(&mut self, id: FileId, module: ModuleSlot) {
+        if self.files.get(&id) != Some(&module) {
+            return;
+        }
+        let replacement = self.entries.iter().find_map(|(slot, cell)| {
+            (slot != module
+                && cell
+                    .entry
+                    .as_ref()
+                    .and_then(|entry| entry.module.search())
+                    .and_then(|search| search.file_id())
+                    == Some(id))
+            .then_some(slot)
+        });
+        if let Some(slot) = replacement {
+            self.files.insert(id, slot);
+        } else {
+            self.files.remove(&id);
+        }
+    }
+
     pub(crate) fn extend_lifecycle(&mut self, order: &[ModuleSlot]) {
         debug_assert!(
             order
@@ -510,18 +542,34 @@ where
         roots: usize,
         meta: Meta,
     ) {
-        let cell = &mut self.entries[slot];
-        let (roots, pinned) = cell
-            .entry
+        let file = module.search().and_then(|search| search.file_id());
+        let previous = {
+            let cell = &mut self.entries[slot];
+            let (roots, pinned) = cell
+                .entry
+                .as_ref()
+                .map_or((roots, false), |entry| (entry.roots, entry.pinned));
+            cell.entry.replace(StoredEntry {
+                module,
+                direct_deps,
+                roots,
+                pinned,
+                meta,
+            })
+        };
+        let previous_file = previous
             .as_ref()
-            .map_or((roots, false), |entry| (entry.roots, entry.pinned));
-        cell.entry = Some(StoredEntry {
-            module,
-            direct_deps,
-            roots,
-            pinned,
-            meta,
-        });
+            .and_then(|entry| entry.module.search())
+            .and_then(|search| search.file_id());
+        if previous_file == file {
+            return;
+        }
+        if let Some(id) = previous_file {
+            self.remove_file(id, slot);
+        }
+        if let Some(id) = file {
+            self.add_file(id, slot);
+        }
     }
 
     #[inline]
@@ -538,6 +586,9 @@ where
                 .expect("module generation overflowed");
             removed
         };
+        if let Some(id) = removed.module.search().and_then(|search| search.file_id()) {
+            self.remove_file(id, slot);
+        }
         (removed.module, removed.meta)
     }
 

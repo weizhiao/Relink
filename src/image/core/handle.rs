@@ -288,7 +288,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         let runpath = dynamic
             .runpath_off
             .map(|runpath_off| symtab.strtab().get_str(runpath_off));
-        let search = ModuleSearch::from_dynamic(path, soname, runpath, rpath);
+        let search = ModuleSearch::from_dynamic(path, None, soname, runpath, rpath);
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
         let inner = Arc::new(CoreInner {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),

@@ -1,13 +1,14 @@
 use crate::{
     IoError, MmapError, Result,
-    input::{ElfReader, Path, PathBuf},
+    input::{ElfReader, FileId, Path, PathBuf},
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
 use alloc::ffi::CString;
 use core::ffi::c_void;
+use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use libc::{_SC_PAGESIZE, O_RDONLY, SEEK_END, madvise, mmap, mprotect, munmap, pread, sysconf};
+use libc::{_SC_PAGESIZE, O_RDONLY, madvise, mmap, mprotect, munmap, pread, sysconf};
 
 #[inline]
 fn last_os_error_code() -> u32 {
@@ -80,6 +81,7 @@ pub(crate) struct RawFile {
     path: PathBuf,
     fd: isize,
     len: usize,
+    file_id: FileId,
 }
 
 impl Mmap for DefaultMmap {
@@ -231,32 +233,41 @@ impl RawFile {
             }
             .into());
         }
-        let fd = fd as isize;
-        Ok(Self {
-            path: PathBuf::from(path),
-            fd,
-            len: Self::query_len(fd)?,
-        })
+        Self::from_fd(path, fd as isize)
     }
 
     pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Result<Self> {
-        let fd = raw_fd as isize;
+        Self::from_fd(path, raw_fd as isize)
+    }
+
+    fn from_fd(path: &Path, fd: isize) -> Result<Self> {
+        let (len, file_id) = match Self::query(fd) {
+            Ok(info) => info,
+            Err(err) => {
+                unsafe { libc::close(fd as i32) };
+                return Err(err);
+            }
+        };
         Ok(Self {
             path: PathBuf::from(path),
             fd,
-            len: Self::query_len(fd)?,
+            len,
+            file_id,
         })
     }
 
-    fn query_len(fd: isize) -> Result<usize> {
-        let off = unsafe { libc::lseek(fd as i32, 0, SEEK_END) };
-        if off < 0 {
-            return Err(IoError::SeekFailed {
+    fn query(fd: isize) -> Result<(usize, FileId)> {
+        let mut stat = MaybeUninit::<libc::stat>::uninit();
+        if unsafe { libc::fstat(fd as i32, stat.as_mut_ptr()) } != 0 {
+            return Err(IoError::FileInfoFailed {
                 code: last_os_error_code(),
             }
             .into());
         }
-        Ok(off as usize)
+        let stat = unsafe { stat.assume_init() };
+        let len = usize::try_from(stat.st_size).map_err(|_| IoError::ReadBufferTooLarge)?;
+        let file_id = FileId::new(stat.st_dev as u64, stat.st_ino as u128);
+        Ok((len, file_id))
     }
 }
 
@@ -285,6 +296,11 @@ impl ElfReader for RawFile {
                 Ok(result as usize)
             }
         })
+    }
+
+    #[inline]
+    fn file_id(&self) -> Option<FileId> {
+        Some(self.file_id)
     }
 
     fn path(&self) -> &Path {

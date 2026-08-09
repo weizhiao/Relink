@@ -333,6 +333,7 @@ where
         let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
             segments,
             path,
+            object.file_id(),
             Some(ehdr),
             entry,
             force_static_tls,
@@ -392,6 +393,7 @@ where
         let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
             segments,
             path,
+            reader.file_id(),
             Some(ehdr),
             entry,
             force_static_tls,
@@ -460,6 +462,7 @@ where
         let builder = ImageBuilder::<Tls, D, Arch, M::Region>::new(
             segments,
             path,
+            None,
             None,
             VmAddr::new(entry),
             self.loader.force_static_tls(),
@@ -533,6 +536,7 @@ where
         let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
             segments,
             path,
+            object.file_id(),
             Some(ehdr),
             entry,
             force_static_tls,

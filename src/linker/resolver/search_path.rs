@@ -662,7 +662,7 @@ mod tests {
         runpath: Option<&str>,
         rpath: Option<&str>,
     ) -> ModuleSearch {
-        ModuleSearch::from_dynamic(PathBuf::from(path), soname, runpath, rpath)
+        ModuleSearch::from_dynamic(PathBuf::from(path), None, soname, runpath, rpath)
     }
 
     fn visit_chain(chain: &[&ModuleSearch], visitor: &mut LoaderVisitor<'_>) -> Result<()> {

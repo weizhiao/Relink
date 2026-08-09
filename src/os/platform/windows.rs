@@ -1,10 +1,10 @@
 use crate::{
     IoError, MmapError, Result,
-    input::{ElfReader, Path, PathBuf},
+    input::{ElfReader, FileId, Path, PathBuf},
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
-use alloc::{boxed::Box, vec::Vec};
+use alloc::vec::Vec;
 use core::{
     ffi::c_void,
     mem::MaybeUninit,
@@ -15,7 +15,8 @@ use windows_sys::Win32::{
         CloseHandle, GENERIC_EXECUTE, GENERIC_READ, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
     },
     Storage::FileSystem::{
-        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GetFileSizeEx, OPEN_EXISTING, ReadFile,
+        BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
+        GetFileInformationByHandle, OPEN_EXISTING, ReadFile,
     },
     System::Memory::{
         self as Memory, CreateFileMappingW, MEM_COMMIT, MEM_PRESERVE_PLACEHOLDER, MEM_RELEASE,
@@ -60,6 +61,7 @@ pub(crate) struct RawFile {
     path: PathBuf,
     fd: HANDLE,
     len: usize,
+    file_id: FileId,
     /// Stores the mapping handle for the file.
     mapping: HANDLE,
 }
@@ -255,29 +257,7 @@ impl Drop for RawFile {
 
 impl RawFile {
     pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Result<Self> {
-        let handle = raw_fd as isize as HANDLE;
-        let mapping_handle = unsafe {
-            CreateFileMappingW(
-                handle,
-                null_mut(),
-                PAGE_EXECUTE_WRITECOPY,
-                0 as u32,
-                0 as u32,
-                null(),
-            )
-        };
-
-        if mapping_handle.is_null() {
-            let err_code = unsafe { GetLastError() };
-            return Err(MmapError::CreateFileMappingW { code: err_code }.into());
-        }
-
-        Ok(Self {
-            path: PathBuf::from(path),
-            fd: handle,
-            len: Self::query_len(handle)?,
-            mapping: mapping_handle,
-        })
+        Self::from_handle(path, raw_fd as isize as HANDLE)
     }
 
     pub(crate) fn from_path(path: &Path) -> Result<Self> {
@@ -309,7 +289,18 @@ impl RawFile {
             .into());
         }
 
-        let mapping_handle = unsafe {
+        Self::from_handle(path, handle)
+    }
+
+    fn from_handle(path: &Path, handle: HANDLE) -> Result<Self> {
+        let (len, file_id) = match Self::query(handle) {
+            Ok(info) => info,
+            Err(err) => {
+                unsafe { CloseHandle(handle) };
+                return Err(err);
+            }
+        };
+        let mapping = unsafe {
             CreateFileMappingW(
                 handle,
                 null_mut(),
@@ -319,29 +310,34 @@ impl RawFile {
                 null(),
             )
         };
-        if mapping_handle.is_null() {
-            let err_code = unsafe { GetLastError() };
-            return Err(MmapError::CreateFileMappingW { code: err_code }.into());
+        if mapping.is_null() {
+            let code = unsafe { GetLastError() };
+            unsafe { CloseHandle(handle) };
+            return Err(MmapError::CreateFileMappingW { code }.into());
         }
 
         Ok(Self {
             path: PathBuf::from(path),
             fd: handle,
-            len: Self::query_len(handle)?,
-            mapping: mapping_handle,
+            len,
+            file_id,
+            mapping,
         })
     }
 
-    fn query_len(handle: HANDLE) -> Result<usize> {
-        let mut size = 0i64;
-        if unsafe { GetFileSizeEx(handle, &mut size) } == 0 {
-            let err_code = unsafe { GetLastError() };
-            return Err(IoError::SeekFailed { code: err_code }.into());
+    fn query(handle: HANDLE) -> Result<(usize, FileId)> {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        if unsafe { GetFileInformationByHandle(handle, &mut info) } == 0 {
+            return Err(IoError::FileInfoFailed {
+                code: unsafe { GetLastError() },
+            }
+            .into());
         }
-        if size < 0 || size as u64 > usize::MAX as u64 {
-            return Err(IoError::FailedToFillBuffer.into());
-        }
-        Ok(size as usize)
+        let file = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+        let file_id = FileId::new(u64::from(info.dwVolumeSerialNumber), u128::from(file));
+        let size = (u64::from(info.nFileSizeHigh) << 32) | u64::from(info.nFileSizeLow);
+        let len = usize::try_from(size).map_err(|_| IoError::ReadBufferTooLarge)?;
+        Ok((len, file_id))
     }
 }
 
@@ -390,6 +386,11 @@ impl ElfReader for RawFile {
         super::read_exact_at(buf, offset, |bytes, offset| {
             win_read_at(self.fd as HANDLE, bytes, offset)
         })
+    }
+
+    #[inline]
+    fn file_id(&self) -> Option<FileId> {
+        Some(self.file_id)
     }
 
     fn path(&self) -> &Path {

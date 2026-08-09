@@ -1,4 +1,4 @@
-use crate::input::{ElfReader, Path, PathBuf};
+use crate::input::{ElfReader, FileId, Path, PathBuf};
 #[cfg(target_pointer_width = "32")]
 use crate::os::PageSize;
 use crate::{
@@ -7,7 +7,10 @@ use crate::{
     os::{MadviseAdvice, MapFlags, Mmap, ProtFlags},
 };
 use alloc::ffi::CString;
-use core::ffi::{c_int, c_void};
+use core::{
+    ffi::{c_int, c_void},
+    mem::MaybeUninit,
+};
 use syscalls::Sysno;
 
 /// Default raw-syscall mapping backend for Linux `use-syscall` builds.
@@ -75,6 +78,42 @@ pub(crate) struct RawFile {
     path: PathBuf,
     fd: isize,
     len: usize,
+    file_id: Option<FileId>,
+}
+
+#[repr(C)]
+struct StatxTimestamp {
+    seconds: i64,
+    nanoseconds: u32,
+    reserved: i32,
+}
+
+#[repr(C)]
+struct Statx {
+    mask: u32,
+    block_size: u32,
+    attributes: u64,
+    links: u32,
+    uid: u32,
+    gid: u32,
+    mode: u16,
+    reserved: u16,
+    inode: u64,
+    size: u64,
+    blocks: u64,
+    attributes_mask: u64,
+    access_time: StatxTimestamp,
+    birth_time: StatxTimestamp,
+    change_time: StatxTimestamp,
+    modified_time: StatxTimestamp,
+    rdev_major: u32,
+    rdev_minor: u32,
+    dev_major: u32,
+    dev_minor: u32,
+    mount_id: u64,
+    direct_io_memory_alignment: u32,
+    direct_io_offset_alignment: u32,
+    spare: [u64; 12],
 }
 
 impl Mmap for DefaultMmap {
@@ -255,12 +294,7 @@ unsafe fn pread64(fd: isize, buf: *mut u8, len: usize, offset: usize) -> usize {
 
 impl RawFile {
     pub(crate) fn from_owned_fd(path: &Path, raw_fd: i32) -> Result<Self> {
-        let fd = raw_fd as isize;
-        Ok(Self {
-            path: PathBuf::from(path),
-            fd,
-            len: Self::query_len(fd)?,
-        })
+        Self::from_fd(path, raw_fd as isize)
     }
 
     pub(crate) fn from_path(path: &Path) -> Result<Self> {
@@ -300,22 +334,63 @@ impl RawFile {
             }
             res
         };
-        let fd = fd as isize;
-        Ok(RawFile {
+        Self::from_fd(path, fd as isize)
+    }
+
+    fn from_fd(path: &Path, fd: isize) -> Result<Self> {
+        let (len, file_id) = match Self::query(fd) {
+            Ok(info) => info,
+            Err(err) => {
+                unsafe { syscalls::raw_syscall!(Sysno::close, fd) };
+                return Err(err);
+            }
+        };
+        Ok(Self {
             path: PathBuf::from(path),
             fd,
-            len: Self::query_len(fd)?,
+            len,
+            file_id,
         })
     }
 
-    fn query_len(fd: isize) -> Result<usize> {
+    fn query(fd: isize) -> Result<(usize, Option<FileId>)> {
+        const AT_EMPTY_PATH: usize = 0x1000;
+        const STATX_BASIC_STATS: usize = 0x07ff;
+        const STATX_INO: u32 = 0x0100;
+        const STATX_SIZE: u32 = 0x0200;
         const SEEK_END: u32 = 2;
-        unsafe {
+
+        let mut stat = MaybeUninit::<Statx>::zeroed();
+        let result = unsafe {
+            syscalls::raw_syscall!(
+                Sysno::statx,
+                fd,
+                c"".as_ptr(),
+                AT_EMPTY_PATH,
+                STATX_BASIC_STATS,
+                stat.as_mut_ptr()
+            )
+        };
+        let mut file_id = None;
+        if result == 0 {
+            let stat = unsafe { stat.assume_init() };
+            if stat.mask & STATX_INO != 0 {
+                let volume = (u64::from(stat.dev_major) << 32) | u64::from(stat.dev_minor);
+                file_id = Some(FileId::new(volume, u128::from(stat.inode)));
+            }
+            if stat.mask & STATX_SIZE != 0 {
+                let len = usize::try_from(stat.size).map_err(|_| IoError::ReadBufferTooLarge)?;
+                return Ok((len, file_id));
+            }
+        }
+
+        let len = unsafe {
             from_ret(
                 syscalls::raw_syscall!(Sysno::lseek, fd, 0, SEEK_END),
                 |code| Error::from(IoError::SeekFailed { code }),
             )
-        }
+        }?;
+        Ok((len, file_id))
     }
 
     fn read_some(&self, bytes: &mut [u8], offset: usize) -> Result<usize> {
@@ -347,6 +422,11 @@ impl ElfReader for RawFile {
 
     fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
         super::read_exact_at(buf, offset, |bytes, offset| self.read_some(bytes, offset))
+    }
+
+    #[inline]
+    fn file_id(&self) -> Option<FileId> {
+        self.file_id
     }
 
     fn path(&self) -> &Path {

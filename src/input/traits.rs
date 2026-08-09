@@ -7,7 +7,7 @@ use core::{
 use crate::{AlignedBytes, ByteRepr, IoError, ReadBoundsError, Result, try_cast_bytes};
 use alloc::boxed::Box;
 
-use super::Path;
+use super::{FileId, Path};
 
 /// A trait for reading ELF data from various sources.
 ///
@@ -22,6 +22,15 @@ pub trait ElfReader {
 
     /// Reads data from the ELF object at the given offset into the provided buffer.
     fn read(&self, buf: &mut [u8], offset: usize) -> Result<()>;
+
+    /// Returns a stable identity for the underlying file, when available.
+    ///
+    /// Implementations must derive this from the opened source rather than
+    /// resolving the path separately. The default is suitable for memory and
+    /// remote readers that have no filesystem identity.
+    fn file_id(&self) -> Option<FileId> {
+        None
+    }
 
     /// Borrows bytes directly from the ELF object when the backend can provide
     /// a stable in-memory view.
@@ -166,6 +175,11 @@ impl<R: ElfReader + ?Sized> ElfReader for Box<R> {
     #[inline]
     fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
         (**self).read(buf, offset)
+    }
+
+    #[inline]
+    fn file_id(&self) -> Option<FileId> {
+        (**self).file_id()
     }
 
     #[inline]

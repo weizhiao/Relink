@@ -22,6 +22,11 @@ pub enum IoError {
         /// Platform error code returned by the open operation.
         code: u32,
     },
+    /// `file information query failed with error: {code}`
+    FileInfoFailed {
+        /// Platform error code returned by the metadata query.
+        code: u32,
+    },
     /// `seek failed with error: {code}`
     SeekFailed {
         /// Platform error code returned by the seek operation.
@@ -77,6 +82,9 @@ impl Display for IoError {
             Self::NullByteInPath => f.write_str("path contains an interior NUL byte"),
             Self::OpenFailed { path, code } => {
                 write!(f, "open failed for {path} with error: {code}")
+            }
+            Self::FileInfoFailed { code } => {
+                write!(f, "file information query failed with error: {code}")
             }
             Self::SeekFailed { code } => write!(f, "seek failed with error: {code}"),
             Self::ReadFailed { code } => write!(f, "read failed with error: {code}"),

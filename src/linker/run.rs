@@ -253,7 +253,13 @@ where
 
         let linker = self.linker;
         let mut session = ResolveSession::new();
+        let file = raw.core_ref().search().and_then(ModuleSearch::file_id);
         let key = context.committed.intern_key(key);
+        if let Some(root) = file.and_then(|id| context.committed.file_module(id)) {
+            session.observe(root, context.committed.generation(root));
+            session.stage_alias(key, root);
+            return Ok(PreparedLoad::new(root, session, None, context));
+        }
         let root = context.committed.intern_module(key);
         let generation = context.committed.generation(root);
         let alias = raw
@@ -262,6 +268,7 @@ where
             .and_then(ModuleSearch::soname)
             .and_then(|name| linker.resolver.map_name(name));
         session.stage_dynamic(root, generation, raw, None);
+        session.stage_file(file, root);
         if let Some(alias) = alias {
             let alias = context.committed.intern_key(alias);
             session.stage_alias(alias, root);
@@ -456,7 +463,9 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             .committed
             .key_slot_for(key)
             .and_then(|key| context.committed.module_for_key(key))?;
-        Some(Self::new(root, ResolveSession::new(), None, context))
+        let mut session = ResolveSession::new();
+        session.observe(root, context.committed.generation(root));
+        Some(Self::new(root, session, None, context))
     }
 
     pub(in crate::linker) fn new<K, Meta>(

@@ -6,6 +6,7 @@ use crate::{
     LinkContextError, LinkerError, Result,
     entity::{EntitySet, SecondaryMap},
     image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic},
+    input::FileId,
     memory::RegionAccess,
     relocation::RelocationArch,
     tls::TlsResolver,
@@ -81,6 +82,7 @@ pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch>
     observed: Vec<(ModuleSlot, u32)>,
     group_order: Vec<ModuleSlot>,
     aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
+    files: BTreeMap<FileId, ModuleSlot>,
 }
 
 impl<P, Arch, Tls> ResolveSession<P, Arch, Tls>
@@ -97,6 +99,7 @@ where
             observed: Vec::new(),
             group_order: Vec::new(),
             aliases: SecondaryMap::new(),
+            files: BTreeMap::new(),
         }
     }
 
@@ -117,6 +120,18 @@ where
         let modules = self.aliases.get_or_default(alias);
         if !modules.contains(&module) {
             modules.push(module);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn file_module(&self, id: FileId) -> Option<ModuleSlot> {
+        self.files.get(&id).copied()
+    }
+
+    #[inline]
+    pub(crate) fn stage_file(&mut self, id: Option<FileId>, module: ModuleSlot) {
+        if let Some(id) = id {
+            self.files.entry(id).or_insert(module);
         }
     }
 
@@ -191,6 +206,7 @@ where
             observed,
             group_order,
             aliases,
+            files,
         } = self;
         (
             dynamics,
@@ -201,6 +217,7 @@ where
                 observed,
                 group_order,
                 aliases,
+                files,
             },
         )
     }

@@ -553,8 +553,8 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         let runpath = runpath.map(|offset| strtab_view.get_str(offset));
         let rpath = rpath.map(|offset| strtab_view.get_str(offset));
         let search = match search_paths {
-            Some(paths) => paths.module_search(path, soname, runpath, rpath),
-            None => ModuleSearch::from_dynamic(path, soname, runpath, rpath),
+            Some(paths) => paths.module_search(path, reader.file_id(), soname, runpath, rpath),
+            None => ModuleSearch::from_dynamic(path, reader.file_id(), soname, runpath, rpath),
         };
         let capability = section_table
             .as_ref()

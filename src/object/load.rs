@@ -76,6 +76,7 @@ where
         let mut sections = ObjectSections::new(shdrs, shstrtab);
         let mut user_data = D::default();
         let path = PathBuf::from(object.path());
+        let file_id = object.file_id();
         let page_size = self.loader.page_size()?.bytes();
         let executor = self.loader.executor();
         let object_groups = Arc::clone(&self.object_groups);
@@ -97,6 +98,7 @@ where
         )?;
         let builder = ObjectBuilder::<Tls, D, Arch, M::Region>::new(
             path,
+            file_id,
             sections,
             segments,
             section_segments,

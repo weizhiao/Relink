@@ -3,7 +3,8 @@ use std::{fs, path::PathBuf as StdPathBuf};
 use crate::loaded_core;
 
 use elf_loader::{
-    LinkContext, Linker,
+    Error, LinkContext, Linker,
+    error::{LinkContextError, LinkerError},
     input::{Path as ElfPath, PathBuf},
     linker::{KeyMapper, SearchPathResolver},
     runtime::DomainId,
@@ -198,6 +199,106 @@ fn reuses_soname() {
     let value = unsafe { root.get::<extern "C" fn() -> i32>("rpath_value").unwrap() };
     assert_eq!(value(), 3);
     assert_eq!(context.load_order().count(), 3);
+}
+
+#[test]
+fn reuses_file() {
+    let fixtures = crate::fixture::fixtures();
+    let alias_path = fixtures
+        .rpath_leaf_path
+        .with_file_name(format!("libleaf-file-id-{}.so", std::process::id()));
+    let _ = fs::remove_file(&alias_path);
+    fs::hard_link(&fixtures.rpath_leaf_path, &alias_path).unwrap();
+
+    let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
+    let alias = PathBuf::from(alias_path.to_str().unwrap());
+    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let first = linker.load(&mut context, original.clone()).unwrap();
+    let second = linker.load(&mut context, alias.clone()).unwrap();
+
+    assert_eq!(first.root().id(), second.root().id());
+    assert_eq!(context.module_id(&original), Some(first.root().id()));
+    assert_eq!(context.module_id(&alias), Some(first.root().id()));
+    assert_eq!(context.load_order().count(), 1);
+
+    let old = first.root().id();
+    second.release(&mut context).unwrap();
+    first.release(&mut context).unwrap();
+    assert!(context.is_empty());
+
+    let reloaded = linker.load(&mut context, alias).unwrap();
+    assert_ne!(reloaded.root().id(), old);
+    assert_eq!(context.load_order().count(), 1);
+    reloaded.release(&mut context).unwrap();
+    fs::remove_file(alias_path).unwrap();
+}
+
+#[test]
+fn reindexes_file() {
+    let fixtures = crate::fixture::fixtures();
+    let alias_path = fixtures
+        .rpath_leaf_path
+        .with_file_name(format!("libleaf-index-{}.so", std::process::id()));
+    let next_path = fixtures
+        .rpath_leaf_path
+        .with_file_name(format!("libleaf-next-{}.so", std::process::id()));
+    let _ = fs::remove_file(&alias_path);
+    let _ = fs::remove_file(&next_path);
+    fs::hard_link(&fixtures.rpath_leaf_path, &alias_path).unwrap();
+    fs::hard_link(&fixtures.rpath_leaf_path, &next_path).unwrap();
+
+    let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
+    let alias = PathBuf::from(alias_path.to_str().unwrap());
+    let next = PathBuf::from(next_path.to_str().unwrap());
+    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let mut source = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let source_module = linker.load(&mut source, original).unwrap();
+    let mut target = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let first = linker.load(&mut target, alias).unwrap();
+    let imported = target.import(&source, source_module.root().id()).unwrap();
+    assert_eq!(target.load_order().count(), 2);
+
+    first.release(&mut target).unwrap();
+    let reused = linker.load(&mut target, next).unwrap();
+    assert_eq!(reused.root().id(), imported.id());
+    assert_eq!(target.load_order().count(), 1);
+
+    reused.release(&mut target).unwrap();
+    target.release(imported).unwrap();
+    fs::remove_file(alias_path).unwrap();
+    fs::remove_file(next_path).unwrap();
+}
+
+#[test]
+fn rejects_reloaded_file() {
+    let fixtures = crate::fixture::fixtures();
+    let alias_path = fixtures
+        .rpath_leaf_path
+        .with_file_name(format!("libleaf-stale-{}.so", std::process::id()));
+    let _ = fs::remove_file(&alias_path);
+    fs::hard_link(&fixtures.rpath_leaf_path, &alias_path).unwrap();
+
+    let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
+    let alias = PathBuf::from(alias_path.to_str().unwrap());
+    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let mut run = linker.run();
+    let loaded = run.load(&mut context, original.clone()).unwrap();
+    let prepared = run.prepare_load(&mut context, alias).unwrap();
+    let relocated = run.relocate(prepared).unwrap();
+
+    loaded.release(&mut context).unwrap();
+    let replacement = run.load(&mut context, original).unwrap();
+    let error = relocated
+        .publish(&mut context)
+        .expect_err("reloaded file must invalidate the prepared transaction");
+    let Error::Linker(LinkerError::Context { reason }) = error else {
+        panic!("unexpected publication error: {error}");
+    };
+    assert!(matches!(*reason, LinkContextError::ModuleChanged { .. }));
+    replacement.release(&mut context).unwrap();
+    fs::remove_file(alias_path).unwrap();
 }
 
 #[test]

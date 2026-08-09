@@ -7,7 +7,7 @@ use crate::{
     RelocationError, Result,
     arch::NativeArch,
     elf::{ElfSectionType, ElfShdr, Lifecycle},
-    input::PathBuf,
+    input::{FileId, PathBuf},
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
     relocation::ObjectArch,
     runtime::{CodeExecutor, DomainId},
@@ -24,6 +24,7 @@ pub(crate) struct ObjectBuilder<
     R: RegionAccess = HostRegion,
 > {
     pub(crate) path: PathBuf,
+    pub(crate) file_id: Option<FileId>,
     pub(crate) sections: ObjectSections<Arch::Layout>,
     pub(crate) symtab: ObjectSymbolTable<Arch::Layout>,
     pub(crate) init: Lifecycle,
@@ -91,6 +92,7 @@ where
 
     pub(crate) fn new(
         path: PathBuf,
+        file_id: Option<FileId>,
         sections: ObjectSections<Arch::Layout>,
         segments: ObjectSegments<R>,
         section_segments: SectionSegments<Arch>,
@@ -107,6 +109,7 @@ where
 
         Ok(Self {
             path,
+            file_id,
             sections,
             symtab,
             segments,

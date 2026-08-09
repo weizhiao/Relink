@@ -1,4 +1,4 @@
-use super::{ElfReader, IntoElfReader, Path, PathBuf};
+use super::{ElfReader, FileId, IntoElfReader, Path, PathBuf};
 use crate::{IoError, ReadBoundsError, Result, logging, os::RawFile};
 use alloc::{borrow::Cow, boxed::Box, string::String, vec::Vec};
 use core::ops::Range;
@@ -131,6 +131,11 @@ impl ElfReader for ElfFile {
     /// Reads data from the file-based ELF object.
     fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
         self.inner.read(buf, offset)
+    }
+
+    #[inline]
+    fn file_id(&self) -> Option<FileId> {
+        self.inner.file_id()
     }
 
     /// Returns the raw file descriptor for the underlying file.

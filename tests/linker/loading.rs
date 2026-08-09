@@ -297,6 +297,31 @@ fn publish_rejects_reloaded_dependency() {
 }
 
 #[test]
+fn publish_rejects_reloaded_root() {
+    let linker = Linker::new().resolver(SingleBinaryResolver {
+        key: "root",
+        name: "reloaded_root.so",
+        data: fixtures().provider,
+    });
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut run = linker.run();
+    let loaded = run.load(&mut context, "root").unwrap();
+    let prepared = run.prepare_load(&mut context, "root").unwrap();
+    let relocated = run.relocate(prepared).unwrap();
+
+    loaded.release(&mut context).unwrap();
+    let replacement = run.load(&mut context, "root").unwrap();
+    let error = relocated
+        .publish(&mut context)
+        .expect_err("reloaded root must invalidate the prepared transaction");
+    let Error::Linker(LinkerError::Context { reason }) = error else {
+        panic!("unexpected publication error: {error}");
+    };
+    assert!(matches!(*reason, LinkContextError::ModuleChanged { .. }));
+    replacement.release(&mut context).unwrap();
+}
+
+#[test]
 #[cfg(any(
     feature = "use-syscall",
     all(any(target_os = "linux", target_os = "android"), feature = "libc")

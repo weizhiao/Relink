@@ -10,6 +10,7 @@ use crate::{
     arch::NativeArch,
     entity::EntitySet,
     image::{ModuleHandle, ModuleSearch, RawDynamic, ScannedDynamic, ScannedElf},
+    input::FileId,
     memory::{HostRegion, RegionAccess},
     observer::{LinkerObserver, LoadObserver},
     os::Mmap,
@@ -100,6 +101,16 @@ where
             .or_else(|| self.session.alias_module(key))
     }
 
+    fn reuse_file(&mut self, key: &K, id: Option<FileId>) -> Option<ModuleSlot> {
+        let id = id?;
+        let slot = self
+            .committed
+            .file_module(id)
+            .or_else(|| self.session.file_module(id))?;
+        self.stage_alias(Some(key.clone()), slot);
+        Some(slot)
+    }
+
     fn stage_alias(&mut self, alias: Option<K>, slot: ModuleSlot) {
         if let Some(alias) = alias {
             let alias = self.committed.intern_key(alias);
@@ -117,15 +128,15 @@ where
     where
         Resolver: KeyResolver<K, Arch, Tls>,
     {
-        let alias = payload
-            .search()
-            .soname()
-            .and_then(|name| resolver.map_name(name));
+        let search = payload.search();
+        let file = search.file_id();
+        let alias = search.soname().and_then(|name| resolver.map_name(name));
         let key = self.committed.intern_key(key);
         let slot = self.committed.intern_module(key);
         let generation = self.committed.generation(slot);
         self.session
             .stage_dynamic(slot, generation, payload, loader);
+        self.session.stage_file(file, slot);
         self.stage_alias(alias, slot);
         slot
     }
@@ -136,13 +147,13 @@ where
         module: ModuleHandle<Arch, Tls>,
         direct_deps: Box<[ModuleSlot]>,
         resolver: &Resolver,
-    ) -> Result<ModuleSlot>
+    ) -> ModuleSlot
     where
         Resolver: KeyResolver<K, Arch, Tls>,
     {
-        self.committed.ensure_domain(module.domain_id())?;
-        let alias = module
-            .search()
+        let search = module.search();
+        let file = search.and_then(ModuleSearch::file_id);
+        let alias = search
             .and_then(ModuleSearch::soname)
             .and_then(|name| resolver.map_name(name));
         let key = self.committed.intern_key(key);
@@ -150,8 +161,9 @@ where
         let generation = self.committed.generation(slot);
         self.session
             .stage_module(slot, generation, module, direct_deps);
+        self.session.stage_file(file, slot);
         self.stage_alias(alias, slot);
-        Ok(slot)
+        slot
     }
 
     fn existing(&self, key: &K) -> Result<ModuleSlot> {
@@ -377,15 +389,24 @@ where
             ResolvedKey::Existing(key) => self.existing(&key),
             ResolvedKey::Load { key, reader } => {
                 self.ensure_new(&key)?;
+                if let Some(slot) = self.reuse_file(&key, reader.file_id()) {
+                    return Ok(slot);
+                }
                 let raw = loader.load_dynamic(reader)?;
                 Ok(self.stage_dynamic(key, raw, parent, resolver))
             }
             ResolvedKey::Module { key, module, deps } => {
+                self.committed.ensure_domain(module.domain_id())?;
                 self.ensure_new(&key)?;
+                if let Some(slot) =
+                    self.reuse_file(&key, module.search().and_then(ModuleSearch::file_id))
+                {
+                    return Ok(slot);
+                }
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
                     ctx.stage::<Obs, M, Exec, Resolver>(dep, parent, loader, resolver)
                 })?;
-                self.stage_module(key, module, direct_deps, resolver)
+                Ok(self.stage_module(key, module, direct_deps, resolver))
             }
         }
     }
@@ -406,6 +427,9 @@ where
         Exec: CodeExecutor<Arch> + Clone,
     {
         if !self.contains_pending(root) {
+            if self.committed.contains_module(root) {
+                self.session.observe(root, self.committed.generation(root));
+            }
             return Ok(());
         }
         self.resolve_dependency_graph_with(
@@ -444,17 +468,26 @@ where
             ResolvedKey::Existing(key) => self.existing(&key),
             ResolvedKey::Load { key, reader } => {
                 self.ensure_new(&key)?;
+                if let Some(slot) = self.reuse_file(&key, reader.file_id()) {
+                    return Ok(slot);
+                }
                 let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
                     return Err(ParsePhdrError::MissingDynamicSection.into());
                 };
                 Ok(self.stage_dynamic(key, module, parent, resolver))
             }
             ResolvedKey::Module { key, module, deps } => {
+                self.committed.ensure_domain(module.domain_id())?;
                 self.ensure_new(&key)?;
+                if let Some(slot) =
+                    self.reuse_file(&key, module.search().and_then(ModuleSearch::file_id))
+                {
+                    return Ok(slot);
+                }
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
                     ctx.stage::<D, Obs, M, Exec, Resolver>(dep, parent, loader, resolver)
                 })?;
-                self.stage_module(key, module, direct_deps, resolver)
+                Ok(self.stage_module(key, module, direct_deps, resolver))
             }
         }
     }

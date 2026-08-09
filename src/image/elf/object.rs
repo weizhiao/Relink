@@ -87,7 +87,7 @@ where
             domain: self.domain,
             state: ModuleState::new(),
             lifecycle: OnceCell::new(),
-            search: ModuleSearch::new(self.path),
+            search: ModuleSearch::new(self.path, self.file_id),
             exports: arc_unsize!(
                 Arc::new(ObjectExports::<Arch::Layout>::empty())
                     => dyn SymbolExports<Arch::Layout>
