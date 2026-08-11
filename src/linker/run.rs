@@ -4,7 +4,7 @@ use super::{
     resolve::LoadResolveContext,
     resolver::KeyResolver,
     scan::{GotPltTarget, LinkPipeline, MappedRuntimeMemory},
-    session::{LoadSession, ResolveSession},
+    session::{LoadSession, ModuleIndex, ResolveSession},
     storage::{ContextId, ModuleId, ModuleLease, ModuleSlot},
 };
 use crate::{
@@ -114,7 +114,7 @@ where
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         request: Resolver::Request,
-    ) -> Result<LoadResult<Arch, Tls>>
+    ) -> Result<LoadResult>
     where
         Meta: Default,
     {
@@ -129,7 +129,7 @@ where
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         request: Resolver::Request,
         caller: ModuleId,
-    ) -> Result<LoadResult<Arch, Tls>>
+    ) -> Result<LoadResult>
     where
         Meta: Default,
     {
@@ -141,7 +141,7 @@ where
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         request: Resolver::Request,
         caller: Option<ModuleId>,
-    ) -> Result<LoadResult<Arch, Tls>>
+    ) -> Result<LoadResult>
     where
         Meta: Default,
     {
@@ -223,7 +223,7 @@ where
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
-    ) -> Result<LoadResult<Arch, Tls>>
+    ) -> Result<LoadResult>
     where
         Meta: Default,
     {
@@ -296,18 +296,20 @@ where
             context,
             root: root_slot,
             session,
-            scope,
-            symbols,
+            relocation,
             mapped_runtime,
         } = prepared;
 
         let mut session = LoadSession::from_resolve(session);
 
-        if !session.pending_is_empty() {
-            let scope = scope
-                .as_ref()
-                .expect("pending modules must have a lookup scope");
-            self.relocate_pending_modules(root_slot, scope, &symbols, &mut session)?;
+        if let Some(relocation) = relocation {
+            self.relocate_pending_modules(
+                root_slot,
+                &relocation.scope,
+                &relocation.modules,
+                &relocation.symbols,
+                &mut session,
+            )?;
         }
 
         if let Some(mapped_runtime) = mapped_runtime.as_ref() {
@@ -325,6 +327,7 @@ where
         &mut self,
         root: ModuleSlot,
         scope: &ModuleScope<Arch, Tls>,
+        slots: &ModuleIndex,
         symbols: &Arc<SymbolRegistry<Arch, Tls>>,
         session: &mut LoadSession<D, Arch, M::Region, Tls>,
     ) -> Result<()> {
@@ -349,7 +352,7 @@ where
                         .binding(binding)
                         .observer(&mut self.observer)
                         .relocate()?;
-                    session.push_ready(id, loaded, direct_deps);
+                    session.push_ready(id, loaded, direct_deps, slots);
                 } else {
                     session.mark_module_ready(id);
                 }
@@ -382,7 +385,7 @@ where
         &self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         request: Resolver::Request,
-    ) -> Result<LoadResult<Arch, Tls>>
+    ) -> Result<LoadResult>
     where
         Meta: Default,
     {
@@ -395,7 +398,7 @@ where
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         request: Resolver::Request,
         caller: ModuleId,
-    ) -> Result<LoadResult<Arch, Tls>>
+    ) -> Result<LoadResult>
     where
         Meta: Default,
     {
@@ -408,7 +411,7 @@ where
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         key: K,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
-    ) -> Result<LoadResult<Arch, Tls>>
+    ) -> Result<LoadResult>
     where
         Meta: Default,
     {
@@ -420,7 +423,7 @@ where
         &self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         request: Resolver::Request,
-    ) -> Result<LoadResult<Arch, Tls>>
+    ) -> Result<LoadResult>
     where
         K: 'static,
         Meta: Default,
@@ -440,9 +443,14 @@ pub struct PreparedLoad<
     context: ContextId,
     root: ModuleSlot,
     session: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
-    scope: Option<ModuleScope<Arch, Tls>>,
-    symbols: Arc<SymbolRegistry<Arch, Tls>>,
+    relocation: Option<PreparedRelocation<Arch, Tls>>,
     mapped_runtime: Option<MappedRuntimeMemory<R>>,
+}
+
+struct PreparedRelocation<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+    scope: ModuleScope<Arch, Tls>,
+    modules: ModuleIndex,
+    symbols: Arc<SymbolRegistry<Arch, Tls>>,
 }
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
@@ -466,20 +474,28 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     pub(in crate::linker) fn new<K, Meta>(
         root: ModuleSlot,
-        session: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
+        mut session: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
         mapped_runtime: Option<MappedRuntimeMemory<R>>,
         context: &LinkContext<K, Meta, Arch, Tls>,
     ) -> Self
     where
         K: Ord,
     {
-        let scope = (!session.pending_is_empty()).then(|| session.build_scope(context));
+        let relocation = if session.pending_is_empty() {
+            None
+        } else {
+            let (scope, pending) = session.build_scope(context);
+            Some(PreparedRelocation {
+                scope,
+                modules: ModuleIndex::new(context.committed.identity_snapshot(), pending),
+                symbols: Arc::clone(&context.symbols),
+            })
+        };
         Self {
             context: context.context_id(),
             root,
             session,
-            scope,
-            symbols: Arc::clone(&context.symbols),
+            relocation,
             mapped_runtime,
         }
     }
@@ -525,11 +541,15 @@ where
         }
 
         let initializers = self.session.initializers().into_boxed_slice();
-        let modules = self.session.commit_into(&mut context.committed)?;
+        let commit = self.session.commit_into(&mut context.committed)?;
         let root_id = context.committed.make_module_id(self.root);
-        let module = context.get(root_id)?.clone();
         let lease = context.acquire(root_id)?;
-        Ok(PublishedLoad::new(lease, module, modules, initializers))
+        Ok(PublishedLoad {
+            lease,
+            modules: commit.modules,
+            pins: commit.pins,
+            initializers,
+        })
     }
 }
 
@@ -537,8 +557,8 @@ where
 #[must_use = "a published load must be initialized or rolled back"]
 pub struct PublishedLoad<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     lease: ModuleLease,
-    module: ModuleHandle<Arch, Tls>,
     modules: Box<[ModuleId]>,
+    pins: Box<[ModuleId]>,
     initializers: Box<[ModuleHandle<Arch, Tls>]>,
 }
 
@@ -550,7 +570,6 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PublishedLoad")
             .field("root_id", &self.lease.id())
-            .field("root", &self.module.name())
             .field("modules", &self.modules)
             .field("pending_initializers", &self.initializers.len())
             .finish()
@@ -562,31 +581,10 @@ where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
+    /// Returns the published root module id.
     #[inline]
-    fn new(
-        lease: ModuleLease,
-        module: ModuleHandle<Arch, Tls>,
-        modules: Box<[ModuleId]>,
-        initializers: Box<[ModuleHandle<Arch, Tls>]>,
-    ) -> Self {
-        Self {
-            lease,
-            module,
-            modules,
-            initializers,
-        }
-    }
-
-    /// Returns the direct acquisition held for the published root.
-    #[inline]
-    pub const fn root(&self) -> &ModuleLease {
-        &self.lease
-    }
-
-    /// Returns the loaded root module.
-    #[inline]
-    pub const fn module(&self) -> &ModuleHandle<Arch, Tls> {
-        &self.module
+    pub const fn root(&self) -> ModuleId {
+        self.lease.id()
     }
 
     /// Returns module ids published by this load operation in load order.
@@ -596,7 +594,7 @@ where
     }
 
     /// Executes module initializers in dependency order.
-    pub fn initialize(self) -> core::result::Result<LoadResult<Arch, Tls>, FailedLoad<Arch, Tls>> {
+    pub fn initialize(self) -> core::result::Result<LoadResult, FailedLoad<Arch, Tls>> {
         let result = self
             .initializers
             .iter()
@@ -604,7 +602,7 @@ where
         if let Err(error) = result {
             return Err(FailedLoad { error, load: self });
         }
-        Ok(LoadResult::new(self.lease, self.module, self.modules))
+        Ok(LoadResult::new(self.lease, self.modules))
     }
 
     /// Releases this publication and finalizes modules that become unreachable.
@@ -621,6 +619,7 @@ where
             .into());
         }
 
+        context.unpin(&self.pins)?;
         context.release(self.lease)?;
         Ok(())
     }

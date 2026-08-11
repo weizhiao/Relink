@@ -244,6 +244,11 @@ impl<
     pub(crate) fn executor(&self) -> &dyn CodeExecutor<Arch> {
         self.inner.executor.as_ref()
     }
+
+    #[inline]
+    pub(crate) fn into_module_handle(self) -> crate::image::ModuleHandle<Arch, Tls> {
+        crate::image::ModuleHandle::from_shared(arc_unsize!(self.inner => dyn Module<Arch, Tls>))
+    }
 }
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>

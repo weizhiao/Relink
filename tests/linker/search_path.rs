@@ -1,7 +1,5 @@
 use std::{fs, path::PathBuf as StdPathBuf};
 
-use crate::loaded_core;
-
 use elf_loader::{
     Error, LinkContext, Linker,
     error::{LinkContextError, LinkerError},
@@ -38,7 +36,13 @@ fn loads_dependency_chain() {
         )
         .unwrap();
 
-    let root_value = unsafe { loaded.get::<extern "C" fn() -> i32>("root_value").unwrap() };
+    let root_value = unsafe {
+        context
+            .module(loaded.root())
+            .unwrap()
+            .get::<extern "C" fn() -> i32>("root_value")
+            .unwrap()
+    };
     assert_eq!(root_value(), 3);
 }
 
@@ -57,7 +61,13 @@ fn maps_requests_and_names_separately() {
         )
         .unwrap();
 
-    let root_value = unsafe { loaded.get::<extern "C" fn() -> i32>("root_value").unwrap() };
+    let root_value = unsafe {
+        context
+            .module(loaded.root())
+            .unwrap()
+            .get::<extern "C" fn() -> i32>("root_value")
+            .unwrap()
+    };
     assert_eq!(root_value(), 3);
 
     let leaf = linker
@@ -68,7 +78,7 @@ fn maps_requests_and_names_separately() {
         .unwrap();
     assert_eq!(
         context.module_id(&OpaqueKey("name:libleaf.so".into())),
-        Some(leaf.root().id())
+        Some(leaf.root())
     );
 }
 
@@ -85,8 +95,9 @@ fn inherits_rpath() {
         )
         .unwrap();
 
-    let search = loaded
-        .module()
+    let search = context
+        .module(loaded.root())
+        .unwrap()
         .search()
         .expect("loaded ELF modules should retain search metadata");
     assert_eq!(
@@ -110,7 +121,13 @@ fn inherits_rpath() {
     );
     assert!(search.runpath().is_none());
 
-    let value = unsafe { loaded.get::<extern "C" fn() -> i32>("rpath_value").unwrap() };
+    let value = unsafe {
+        context
+            .module(loaded.root())
+            .unwrap()
+            .get::<extern "C" fn() -> i32>("rpath_value")
+            .unwrap()
+    };
     assert_eq!(value(), 3);
 }
 
@@ -128,7 +145,13 @@ fn scan_inherits_rpath() {
         )
         .unwrap();
 
-    let value = unsafe { loaded.get::<extern "C" fn() -> i32>("rpath_value").unwrap() };
+    let value = unsafe {
+        context
+            .module(loaded.root())
+            .unwrap()
+            .get::<extern "C" fn() -> i32>("rpath_value")
+            .unwrap()
+    };
     assert_eq!(value(), 3);
 }
 
@@ -145,14 +168,16 @@ fn loads_from_module_rpath() {
         )
         .unwrap();
     let loaded = linker
-        .load_from(
-            &mut context,
-            PathBuf::from("libleaf.so"),
-            caller.root().id(),
-        )
+        .load_from(&mut context, PathBuf::from("libleaf.so"), caller.root())
         .unwrap();
 
-    let value = unsafe { loaded.get::<extern "C" fn() -> i32>("rpath_leaf").unwrap() };
+    let value = unsafe {
+        context
+            .module(loaded.root())
+            .unwrap()
+            .get::<extern "C" fn() -> i32>("rpath_leaf")
+            .unwrap()
+    };
     assert_eq!(value(), 1);
 }
 
@@ -175,19 +200,19 @@ fn reuses_soname() {
             PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap()),
         )
         .unwrap();
-    assert_ne!(first.root().id(), duplicate.root().id());
+    assert_ne!(first.root(), duplicate.root());
 
     let by_name = linker
         .load(&mut context, PathBuf::from("libleaf.so"))
         .unwrap();
-    assert_eq!(first.root().id(), by_name.root().id());
+    assert_eq!(first.root(), by_name.root());
     by_name.release(&mut context).unwrap();
     first.release(&mut context).unwrap();
 
     let by_name = linker
         .load(&mut context, PathBuf::from("libleaf.so"))
         .unwrap();
-    assert_eq!(duplicate.root().id(), by_name.root().id());
+    assert_eq!(duplicate.root(), by_name.root());
     assert_eq!(context.load_order().count(), 1);
 
     let root = linker
@@ -196,7 +221,13 @@ fn reuses_soname() {
             PathBuf::from(fixtures.rpath_root_path.to_str().unwrap()),
         )
         .unwrap();
-    let value = unsafe { root.get::<extern "C" fn() -> i32>("rpath_value").unwrap() };
+    let value = unsafe {
+        context
+            .module(root.root())
+            .unwrap()
+            .get::<extern "C" fn() -> i32>("rpath_value")
+            .unwrap()
+    };
     assert_eq!(value(), 3);
     assert_eq!(context.load_order().count(), 3);
 }
@@ -217,18 +248,18 @@ fn reuses_file() {
     let first = linker.load(&mut context, original.clone()).unwrap();
     let second = linker.load(&mut context, alias.clone()).unwrap();
 
-    assert_eq!(first.root().id(), second.root().id());
-    assert_eq!(context.module_id(&original), Some(first.root().id()));
-    assert_eq!(context.module_id(&alias), Some(first.root().id()));
+    assert_eq!(first.root(), second.root());
+    assert_eq!(context.module_id(&original), Some(first.root()));
+    assert_eq!(context.module_id(&alias), Some(first.root()));
     assert_eq!(context.load_order().count(), 1);
 
-    let old = first.root().id();
+    let old = first.root();
     second.release(&mut context).unwrap();
     first.release(&mut context).unwrap();
     assert!(context.is_empty());
 
     let reloaded = linker.load(&mut context, alias).unwrap();
-    assert_ne!(reloaded.root().id(), old);
+    assert_ne!(reloaded.root(), old);
     assert_eq!(context.load_order().count(), 1);
     reloaded.release(&mut context).unwrap();
     fs::remove_file(alias_path).unwrap();
@@ -256,12 +287,12 @@ fn reindexes_file() {
     let source_module = linker.load(&mut source, original).unwrap();
     let mut target = LinkContext::<PathBuf>::new(DomainId::PROCESS);
     let first = linker.load(&mut target, alias).unwrap();
-    let imported = target.import(&source, source_module.root().id()).unwrap();
+    let imported = target.import(&source, source_module.root()).unwrap();
     assert_eq!(target.load_order().count(), 2);
 
     first.release(&mut target).unwrap();
     let reused = linker.load(&mut target, next).unwrap();
-    assert_eq!(reused.root().id(), imported.id());
+    assert_eq!(reused.root(), imported.id());
     assert_eq!(target.load_order().count(), 1);
 
     reused.release(&mut target).unwrap();
@@ -315,7 +346,13 @@ fn scan_loads_dependency_chain() {
         )
         .unwrap();
 
-    let root_value = unsafe { loaded.get::<extern "C" fn() -> i32>("root_value").unwrap() };
+    let root_value = unsafe {
+        context
+            .module(loaded.root())
+            .unwrap()
+            .get::<extern "C" fn() -> i32>("root_value")
+            .unwrap()
+    };
     assert_eq!(root_value(), 3);
 }
 
@@ -350,7 +387,16 @@ fn dynamic_dirs_precede_static_dirs() {
         .load(&mut context, PathBuf::from("libpick.so"))
         .unwrap();
 
-    assert_eq!(loaded_core(&loaded).path().as_str(), expected_key);
+    assert_eq!(
+        context
+            .module(loaded.root())
+            .unwrap()
+            .search()
+            .unwrap()
+            .path()
+            .as_str(),
+        expected_key
+    );
 }
 
 fn unique_test_dir(name: &str) -> StdPathBuf {

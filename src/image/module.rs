@@ -1,4 +1,4 @@
-use super::{Module, Symbol};
+use super::Module;
 use crate::{
     Result,
     arch::NativeArch,
@@ -11,13 +11,17 @@ use crate::{
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
-use core::{any::Any, fmt, ops::Deref, slice};
+use core::{fmt, ops::Deref, slice};
 
 const UNINITIALIZED: usize = 0;
 const INITIALIZING: usize = 1;
 const INITIALIZED: usize = 2;
 const FAILED: usize = 3;
 const FINALIZED: usize = 4;
+
+/// Identity of one live shared module allocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ModuleIdentity(usize);
 
 struct InitializationGuard<'a>(&'a AtomicUsize);
 
@@ -180,16 +184,20 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
         Self { module }
     }
 
+    #[inline]
+    pub(crate) fn downgrade(&self) -> Weak<dyn Module<Arch, Tls>> {
+        Arc::downgrade(&self.module)
+    }
+
     /// Returns the underlying dynamic module reference.
     #[inline]
     pub fn as_dyn(&self) -> &(dyn Module<Arch, Tls> + 'static) {
         &*self.module
     }
 
-    /// Returns whether both handles share the same logical module state.
     #[inline]
-    pub fn ptr_eq(&self, other: &Self) -> bool {
-        core::ptr::eq(self.as_dyn().state(), other.as_dyn().state())
+    pub(crate) fn identity(&self) -> ModuleIdentity {
+        ModuleIdentity(core::ptr::from_ref(self.as_dyn().state()).addr())
     }
 
     /// Runs this module's initialization hook at most once.
@@ -197,85 +205,6 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
     pub fn initialize(&self) -> Result<()> {
         let module = self.as_dyn();
         module.state().initialize(|| module.initialize())
-    }
-
-    /// Tries to get a typed function or object exported by this module.
-    ///
-    /// The module performs any runtime-specific TLS or IFUNC resolution before
-    /// the typed symbol is returned.
-    ///
-    /// # Safety
-    ///
-    /// `T` must match the type and ABI of the resolved symbol.
-    #[inline]
-    pub unsafe fn try_get<'module, T>(
-        &'module self,
-        name: &str,
-    ) -> Result<Option<Symbol<'module, T>>> {
-        let addr = lookup_symbol(self.as_dyn(), &mut SymbolLookup::new(name))?;
-        Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
-    }
-
-    /// Gets a typed function or object exported by this module.
-    ///
-    /// Resolution failures and missing symbols both produce `None`. Use
-    /// [`ModuleHandle::try_get`] when the error must be preserved.
-    ///
-    /// # Safety
-    ///
-    /// `T` must match the type and ABI of the resolved symbol.
-    #[inline]
-    pub unsafe fn get<'module, T>(&'module self, name: &str) -> Option<Symbol<'module, T>> {
-        unsafe { self.try_get(name).ok().flatten() }
-    }
-
-    /// Tries to get a versioned typed symbol exported by this module.
-    ///
-    /// # Safety
-    ///
-    /// `T` must match the type and ABI of the resolved symbol.
-    #[cfg(feature = "version")]
-    #[inline]
-    pub unsafe fn try_get_version<'module, T>(
-        &'module self,
-        name: &str,
-        version: &str,
-    ) -> Result<Option<Symbol<'module, T>>> {
-        let addr = lookup_symbol(
-            self.as_dyn(),
-            &mut SymbolLookup::with_version(name, version),
-        )?;
-        Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
-    }
-
-    /// Gets a versioned typed symbol exported by this module.
-    ///
-    /// Resolution failures and missing symbols both produce `None`. Use
-    /// [`ModuleHandle::try_get_version`] when the error must be preserved.
-    ///
-    /// # Safety
-    ///
-    /// `T` must match the type and ABI of the resolved symbol.
-    #[cfg(feature = "version")]
-    #[inline]
-    pub unsafe fn get_version<'module, T>(
-        &'module self,
-        name: &str,
-        version: &str,
-    ) -> Option<Symbol<'module, T>> {
-        unsafe { self.try_get_version(name, version).ok().flatten() }
-    }
-
-    /// Downcasts the retained module to a concrete type.
-    #[inline]
-    pub fn downcast_ref<T>(&self) -> Option<&T>
-    where
-        T: Module<Arch, Tls> + 'static,
-    {
-        let module = self.as_dyn() as &dyn Any;
-        module
-            .downcast_ref::<T>()
-            .or_else(|| module.downcast_ref::<Arc<T>>().map(|module| &**module))
     }
 }
 
@@ -542,7 +471,7 @@ mod tests {
         let first: ModuleHandle = ModuleHandle::new(module.clone());
         let second: ModuleHandle = ModuleHandle::new(module);
 
-        assert!(first.ptr_eq(&second));
+        assert!(first.as_dyn().ptr_eq(second.as_dyn()));
     }
 
     #[test]

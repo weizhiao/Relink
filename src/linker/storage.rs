@@ -2,11 +2,11 @@ use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
     entity::{PrimaryMap, SecondaryMap, entity_ref},
-    image::ModuleHandle,
+    image::{LookupScope, ModuleHandle, ModuleIdentity},
     input::FileId,
     relocation::RelocationArch,
     runtime::DomainId,
-    sync::{AtomicUsize, Ordering},
+    sync::{Arc, AtomicUsize, Ordering},
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
@@ -44,6 +44,12 @@ entity_ref!(KeySlot);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(in crate::linker) struct ModuleSlot(usize);
 entity_ref!(ModuleSlot);
+
+#[derive(Clone, Copy)]
+pub(in crate::linker) struct ModuleGuard {
+    pub(in crate::linker) slot: ModuleSlot,
+    pub(in crate::linker) generation: u32,
+}
 
 /// Stable id for a module key stored in a [`LinkContext`](super::LinkContext).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -166,6 +172,25 @@ where
     }
 
     #[inline]
+    pub(crate) fn reloc_deps(&self) -> &'a [ModuleSlot] {
+        &self.entry.reloc_deps
+    }
+
+    #[inline]
+    pub(crate) fn dependencies(&self) -> impl Iterator<Item = ModuleSlot> + 'a {
+        self.entry
+            .direct_deps
+            .iter()
+            .chain(self.entry.reloc_deps.iter())
+            .copied()
+    }
+
+    #[inline]
+    pub(crate) fn scope(&self) -> Option<&'a LookupScope<Arch, Tls>> {
+        self.entry.scope.as_ref()
+    }
+
+    #[inline]
     pub(crate) const fn is_root(&self) -> bool {
         self.entry.pinned || self.entry.roots != 0
     }
@@ -191,10 +216,15 @@ where
 {
     #[inline]
     pub(crate) fn acquire_root(&mut self) {
+        self.acquire_roots(1);
+    }
+
+    #[inline]
+    pub(crate) fn acquire_roots(&mut self, count: usize) {
         self.entry.roots = self
             .entry
             .roots
-            .checked_add(1)
+            .checked_add(count)
             .expect("module acquisition count overflow");
     }
 
@@ -212,6 +242,16 @@ where
     pub(crate) fn pin_root(&mut self) {
         self.release_root();
         self.entry.pinned = true;
+    }
+
+    #[inline]
+    pub(crate) fn pin(&mut self) -> bool {
+        !core::mem::replace(&mut self.entry.pinned, true)
+    }
+
+    #[inline]
+    pub(crate) fn unpin(&mut self) {
+        self.entry.pinned = false;
     }
 
     #[inline]
@@ -233,6 +273,7 @@ pub(crate) struct CommittedStorage<
     canonical: SecondaryMap<KeySlot, ModuleSlot>,
     aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
     files: BTreeMap<FileId, ModuleSlot>,
+    identities: Arc<BTreeMap<ModuleIdentity, ModuleGuard>>,
     entries: PrimaryMap<ModuleSlot, ModuleCell<Meta, Arch, Tls>>,
     lifecycle: Vec<ModuleSlot>,
 }
@@ -252,6 +293,7 @@ where
             canonical: SecondaryMap::new(),
             aliases: SecondaryMap::new(),
             files: BTreeMap::new(),
+            identities: Arc::new(BTreeMap::new()),
             entries: PrimaryMap::new(),
             lifecycle: Vec::new(),
         }
@@ -398,6 +440,21 @@ where
     }
 
     #[inline]
+    pub(in crate::linker) fn identity_snapshot(
+        &self,
+    ) -> Arc<BTreeMap<ModuleIdentity, ModuleGuard>> {
+        Arc::clone(&self.identities)
+    }
+
+    #[inline]
+    pub(in crate::linker) fn identity_module(
+        &self,
+        identity: ModuleIdentity,
+    ) -> Option<ModuleSlot> {
+        self.identities.get(&identity).map(|guard| guard.slot)
+    }
+
+    #[inline]
     pub(in crate::linker) fn entry_key(&self, slot: ModuleSlot) -> KeySlot {
         self.entries[slot].entry_key
     }
@@ -480,6 +537,17 @@ where
         }
     }
 
+    pub(crate) fn prefer_alias(&mut self, alias: KeySlot, module: ModuleSlot) {
+        let modules = self.aliases.get_or_default(alias);
+        if modules.first() == Some(&module) {
+            return;
+        }
+        if let Some(idx) = modules.iter().position(|candidate| *candidate == module) {
+            modules.remove(idx);
+        }
+        modules.insert(0, module);
+    }
+
     fn add_file(&mut self, id: FileId, module: ModuleSlot) {
         self.files.entry(id).or_insert(module);
     }
@@ -534,32 +602,33 @@ where
         module_slot
     }
 
-    pub(crate) fn insert(
-        &mut self,
-        slot: ModuleSlot,
-        module: ModuleHandle<Arch, Tls>,
-        direct_deps: Box<[ModuleSlot]>,
-        roots: usize,
-        meta: Meta,
-    ) {
-        let file = module.search().and_then(|search| search.file_id());
+    pub(crate) fn insert(&mut self, slot: ModuleSlot, entry: StoredEntry<Meta, Arch, Tls>) {
+        let identity = entry.module.identity();
+        assert!(
+            !self.identities.contains_key(&identity),
+            "module identity is already committed"
+        );
+        let file = entry.module.search().and_then(|search| search.file_id());
         let cell = &mut self.entries[slot];
         assert!(cell.entry.is_none(), "module slot is already committed");
         cell.advance_generation();
-        cell.entry = Some(StoredEntry {
-            module,
-            direct_deps,
-            roots,
-            pinned: false,
-            meta,
-        });
+        let generation = cell.generation;
+        cell.entry = Some(entry);
+        Arc::make_mut(&mut self.identities).insert(identity, ModuleGuard { slot, generation });
         if let Some(id) = file {
             self.add_file(id, slot);
         }
     }
 
     #[inline]
-    pub(crate) fn take(&mut self, slot: ModuleSlot) -> (ModuleHandle<Arch, Tls>, Meta) {
+    pub(crate) fn take(
+        &mut self,
+        slot: ModuleSlot,
+    ) -> (
+        ModuleHandle<Arch, Tls>,
+        Option<LookupScope<Arch, Tls>>,
+        Meta,
+    ) {
         let removed = {
             let cell = &mut self.entries[slot];
             let removed = cell
@@ -572,7 +641,13 @@ where
         if let Some(id) = removed.module.search().and_then(|search| search.file_id()) {
             self.remove_file(id, slot);
         }
-        (removed.module, removed.meta)
+        let identity = removed.module.identity();
+        let identities = Arc::make_mut(&mut self.identities);
+        let guard = identities
+            .remove(&identity)
+            .expect("committed module must have an identity entry");
+        debug_assert_eq!(guard.slot, slot);
+        (removed.module, removed.scope, removed.meta)
     }
 
     pub(crate) fn prune_removed(&mut self) {
@@ -602,12 +677,54 @@ impl<Meta, Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleCell<Meta, Arch, 
     }
 }
 
-struct StoredEntry<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+pub(in crate::linker) struct StoredEntry<
+    Meta = (),
+    Arch: RelocationArch = NativeArch,
+    Tls: TlsResolver<Arch> = (),
+> {
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[ModuleSlot]>,
+    reloc_deps: Box<[ModuleSlot]>,
+    scope: Option<LookupScope<Arch, Tls>>,
     roots: usize,
     pinned: bool,
     meta: Meta,
+}
+
+impl<Meta, Arch, Tls> StoredEntry<Meta, Arch, Tls>
+where
+    Arch: RelocationArch,
+    Tls: TlsResolver<Arch>,
+{
+    #[inline]
+    pub(in crate::linker) fn new(
+        module: ModuleHandle<Arch, Tls>,
+        direct_deps: Box<[ModuleSlot]>,
+        roots: usize,
+        meta: Meta,
+    ) -> Self {
+        Self::relocated(module, direct_deps, Box::new([]), None, roots, meta)
+    }
+
+    #[inline]
+    pub(in crate::linker) fn relocated(
+        module: ModuleHandle<Arch, Tls>,
+        direct_deps: Box<[ModuleSlot]>,
+        reloc_deps: Box<[ModuleSlot]>,
+        scope: Option<LookupScope<Arch, Tls>>,
+        roots: usize,
+        meta: Meta,
+    ) -> Self {
+        Self {
+            module,
+            direct_deps,
+            reloc_deps,
+            scope,
+            roots,
+            pinned: false,
+            meta,
+        }
+    }
 }
 
 impl<K, Meta, Arch, Tls> Drop for CommittedStorage<K, Meta, Arch, Tls>

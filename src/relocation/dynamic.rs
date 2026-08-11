@@ -67,7 +67,8 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             scope,
             symbols.as_deref(),
             self.core_ref().symbolic(),
-        );
+        )
+        .retain_scope(lazy);
         let mut helper = RelocHelper::new(
             resolver,
             self.symtab().view(),
@@ -81,7 +82,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 .relocate_pltrel(lazy, &mut helper)?;
         }
 
-        let scope = helper.into_scope();
+        let (scope, bindings) = helper.into_parts();
 
         let (init, fini) = self.resolve_lifecycle()?;
         let initializer = LifecycleRunner::new(init);
@@ -110,7 +111,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
         logging::info!("Relocation completed for {}", self.name());
 
-        Ok(unsafe { LoadedCore::from_core_scope_registry(self.into_core(), scope, symbols) })
+        Ok(unsafe { LoadedCore::from_relocated(self.into_core(), scope, symbols, bindings) })
     }
 }
 

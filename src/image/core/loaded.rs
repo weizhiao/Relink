@@ -9,7 +9,7 @@ use crate::{
     },
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
-    relocation::{RelocationArch, SymbolRegistry},
+    relocation::{BindingDeps, RelocationArch, SymbolRegistry},
     runtime::DomainId,
     segment::ElfSegments,
     sync::Arc,
@@ -31,6 +31,7 @@ pub struct LoadedCore<
 > {
     core: ElfCore<D, Arch, R, Tls>,
     scope: LookupScope<Arch, Tls>,
+    bindings: BindingDeps<Arch, Tls>,
 }
 
 impl<
@@ -57,6 +58,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         LoadedCore {
             core: self.core.clone(),
             scope: self.scope.clone(),
+            bindings: self.bindings.clone(),
         }
     }
 }
@@ -120,6 +122,7 @@ impl<
         LoadedCore {
             core,
             scope: LookupScope::empty(domain),
+            bindings: BindingDeps::default(),
         }
     }
 
@@ -323,19 +326,44 @@ impl<
         core: ElfCore<D, Arch, R, Tls>,
         scope: LookupScope<Arch, Tls>,
     ) -> Self {
-        unsafe { Self::from_core_scope_registry(core, scope, None) }
+        core.set_scope(&scope);
+        Self {
+            core,
+            scope,
+            bindings: BindingDeps::default(),
+        }
     }
 
-    pub(crate) unsafe fn from_core_scope_registry(
+    pub(crate) unsafe fn from_relocated(
         core: ElfCore<D, Arch, R, Tls>,
         scope: LookupScope<Arch, Tls>,
         symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
+        bindings: BindingDeps<Arch, Tls>,
     ) -> Self {
         core.set_scope(&scope);
         if let Some(symbols) = &symbols {
             core.set_symbol_registry(symbols);
         }
-        Self { core, scope }
+        Self {
+            core,
+            scope,
+            bindings,
+        }
+    }
+
+    pub(crate) fn into_context_parts(
+        self,
+    ) -> (
+        ModuleHandle<Arch, Tls>,
+        LookupScope<Arch, Tls>,
+        BindingDeps<Arch, Tls>,
+    ) {
+        let Self {
+            core,
+            scope,
+            bindings,
+        } = self;
+        (core.into_module_handle(), scope, bindings)
     }
 
     /// Returns a reference to the underlying [`ElfCore`].

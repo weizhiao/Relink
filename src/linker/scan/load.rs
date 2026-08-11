@@ -47,7 +47,7 @@ where
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
         request: Resolver::Request,
-    ) -> Result<LoadResult<Arch, Tls>>
+    ) -> Result<LoadResult>
     where
         Meta: Default,
     {

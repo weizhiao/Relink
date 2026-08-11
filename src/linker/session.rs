@@ -1,14 +1,15 @@
 use super::{
     context::LinkContext,
-    storage::{CommittedStorage, KeySlot, ModuleId, ModuleSlot},
+    storage::{CommittedStorage, KeySlot, ModuleGuard, ModuleId, ModuleSlot, StoredEntry},
 };
 use crate::{
     LinkContextError, LinkerError, Result,
     entity::{EntitySet, SecondaryMap},
-    image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic},
+    image::{LoadedCore, LookupScope, ModuleHandle, ModuleIdentity, ModuleScope, RawDynamic},
     input::FileId,
     memory::RegionAccess,
     relocation::RelocationArch,
+    sync::Arc,
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
@@ -49,6 +50,13 @@ impl<P> GraphEntry<P> {
 pub(crate) struct PendingModule<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[ModuleSlot]>,
+    scope: Option<LookupScope<Arch, Tls>>,
+    bindings: Box<[PendingBinding]>,
+}
+
+struct PendingBinding {
+    slot: ModuleSlot,
+    pin: bool,
 }
 
 impl<Arch, Tls> PendingModule<Arch, Tls>
@@ -61,6 +69,8 @@ where
         Self {
             module,
             direct_deps,
+            scope: None,
+            bindings: Box::new([]),
         }
     }
 
@@ -82,11 +92,36 @@ pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch>
     group_order: Vec<ModuleSlot>,
     aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
     files: BTreeMap<FileId, ModuleSlot>,
+    identities: BTreeMap<ModuleIdentity, ModuleGuard>,
 }
 
-struct ModuleGuard {
-    slot: ModuleSlot,
-    generation: u32,
+pub(crate) struct ModuleIndex {
+    committed: Arc<BTreeMap<ModuleIdentity, ModuleGuard>>,
+    pending: BTreeMap<ModuleIdentity, ModuleGuard>,
+}
+
+impl ModuleIndex {
+    #[inline]
+    pub(crate) fn new(
+        committed: Arc<BTreeMap<ModuleIdentity, ModuleGuard>>,
+        pending: BTreeMap<ModuleIdentity, ModuleGuard>,
+    ) -> Self {
+        assert!(
+            pending
+                .keys()
+                .all(|identity| !committed.contains_key(identity)),
+            "pending module identity must not already be committed"
+        );
+        Self { committed, pending }
+    }
+
+    #[inline]
+    fn get(&self, identity: ModuleIdentity) -> Option<ModuleGuard> {
+        self.committed
+            .get(&identity)
+            .or_else(|| self.pending.get(&identity))
+            .copied()
+    }
 }
 
 impl<P, Arch, Tls> ResolveSession<P, Arch, Tls>
@@ -103,6 +138,7 @@ where
             group_order: Vec::new(),
             aliases: SecondaryMap::new(),
             files: BTreeMap::new(),
+            identities: BTreeMap::new(),
         }
     }
 
@@ -134,6 +170,11 @@ where
     #[inline]
     pub(crate) fn file_module(&self, id: FileId) -> Option<ModuleSlot> {
         self.files.get(&id).copied()
+    }
+
+    #[inline]
+    pub(crate) fn identity_module(&self, identity: ModuleIdentity) -> Option<ModuleSlot> {
+        self.identities.get(&identity).map(|guard| guard.slot)
     }
 
     #[inline]
@@ -195,10 +236,18 @@ where
         direct_deps: Box<[ModuleSlot]>,
     ) {
         self.track(slot, generation);
+        let identity = module.identity();
         let previous = self
             .modules
             .insert(slot, PendingModule::new(module, direct_deps));
         debug_assert!(previous.is_none(), "pending modules must be unique");
+        let previous = self
+            .identities
+            .insert(identity, ModuleGuard { slot, generation });
+        assert!(
+            previous.is_none(),
+            "pending module identities must be unique"
+        );
     }
 
     pub(crate) fn split_dynamics<Q>(
@@ -214,6 +263,7 @@ where
             group_order,
             aliases,
             files,
+            identities,
         } = self;
         (
             dynamics,
@@ -224,6 +274,7 @@ where
                 group_order,
                 aliases,
                 files,
+                identities,
             },
         )
     }
@@ -260,7 +311,10 @@ where
 
     #[inline]
     pub(crate) fn track(&mut self, slot: ModuleSlot, generation: u32) {
-        debug_assert!(!self.guards.iter().any(|guard| guard.slot == slot));
+        if let Some(guard) = self.guards.iter().find(|guard| guard.slot == slot) {
+            debug_assert_eq!(guard.generation, generation);
+            return;
+        }
         self.guards.push(ModuleGuard { slot, generation });
     }
 }
@@ -272,28 +326,43 @@ where
     Tls: TlsResolver<Arch>,
 {
     pub(crate) fn build_scope<K, Meta>(
-        &self,
+        &mut self,
         context: &LinkContext<K, Meta, Arch, Tls>,
-    ) -> ModuleScope<Arch, Tls>
-    where
-        K: Ord,
-    {
+    ) -> (
+        ModuleScope<Arch, Tls>,
+        BTreeMap<ModuleIdentity, ModuleGuard>,
+    ) {
         let mut scope = ModuleScope::new(context.domain_id());
-        scope.extend(self.group_order.iter().map(|id| {
-            if let Some(raw) = self.dynamics.get(id).map(GraphEntry::payload) {
+        for &id in &self.group_order {
+            let dynamic = self.dynamics.contains_key(&id);
+            let module = if let Some(raw) = self.dynamics.get(&id).map(GraphEntry::payload) {
                 let module = unsafe { LoadedCore::from_core(raw.core()) };
                 ModuleHandle::from(module)
-            } else if let Some(module) = self.modules.get(id).map(PendingModule::module) {
+            } else if let Some(module) = self.modules.get(&id).map(PendingModule::module) {
                 module.clone()
             } else {
                 context
                     .committed
-                    .module(*id)
+                    .module(id)
                     .map(|module| module.handle().clone())
                     .expect("scope slot must resolve to a committed module")
+            };
+            if dynamic {
+                let previous = self.identities.insert(
+                    module.identity(),
+                    ModuleGuard {
+                        slot: id,
+                        generation: context.committed.generation(id),
+                    },
+                );
+                assert!(
+                    previous.is_none(),
+                    "pending module identities must be unique"
+                );
             }
-        }));
-        scope
+            scope.push(module);
+        }
+        (scope, core::mem::take(&mut self.identities))
     }
 }
 
@@ -326,11 +395,6 @@ where
     }
 
     #[inline]
-    pub(crate) fn pending_is_empty(&self) -> bool {
-        self.resolve.pending_is_empty()
-    }
-
-    #[inline]
     pub(crate) fn take_pending_dynamic(
         &mut self,
         slot: ModuleSlot,
@@ -339,17 +403,36 @@ where
     }
 
     #[inline]
-    pub(crate) fn push_ready<T>(
+    pub(crate) fn push_ready(
         &mut self,
         slot: ModuleSlot,
-        module: T,
+        loaded: LoadedCore<D, Arch, R, Tls>,
         direct_deps: Box<[ModuleSlot]>,
-    ) where
-        T: Into<ModuleHandle<Arch, Tls>>,
-    {
-        let previous = self
-            .ready_to_commit
-            .insert(slot, PendingModule::new(module.into(), direct_deps));
+        slots: &ModuleIndex,
+    ) {
+        let (module, scope, bindings) = loaded.into_context_parts();
+        let bindings = bindings.into_bindings(&scope);
+        let mut pending = Vec::with_capacity(bindings.len());
+        for binding in bindings {
+            let (module, pin) = binding.into_parts();
+            let Some(guard) = slots.get(module.identity()) else {
+                continue;
+            };
+            self.resolve.track(guard.slot, guard.generation);
+            pending.push(PendingBinding {
+                slot: guard.slot,
+                pin,
+            });
+        }
+        let previous = self.ready_to_commit.insert(
+            slot,
+            PendingModule {
+                module,
+                direct_deps,
+                scope: Some(scope),
+                bindings: pending.into_boxed_slice(),
+            },
+        );
         debug_assert!(previous.is_none(), "ready commit entries must be unique");
     }
 
@@ -359,26 +442,24 @@ where
     }
 
     pub(crate) fn mark_module_ready(&mut self, slot: ModuleSlot) {
-        let PendingModule {
-            module,
-            direct_deps,
-        } = self
+        let module = self
             .resolve
             .modules
             .remove(&slot)
             .expect("missing pending module handle while preparing lifecycle");
-        self.push_ready(slot, module, direct_deps);
+        let previous = self.ready_to_commit.insert(slot, module);
+        debug_assert!(previous.is_none(), "ready commit entries must be unique");
     }
 
     pub(crate) fn initializers(&self) -> Vec<ModuleHandle<Arch, Tls>> {
         self.lifecycle
             .iter()
             .map(|id| {
-                self.ready_to_commit
+                let module = self
+                    .ready_to_commit
                     .get(id)
-                    .expect("lifecycle order must refer to a ready module")
-                    .module
-                    .clone()
+                    .expect("lifecycle order must refer to a ready module");
+                module.module.clone()
             })
             .collect()
     }
@@ -431,7 +512,7 @@ where
     pub(crate) fn commit_into<K, Meta>(
         self,
         committed: &mut CommittedStorage<K, Meta, Arch, Tls>,
-    ) -> Result<Box<[ModuleId]>>
+    ) -> Result<CommitResult>
     where
         K: Clone + Ord,
         Meta: Default,
@@ -457,6 +538,7 @@ where
                 .into());
             }
         }
+        let mut requested_pins = Vec::new();
         for slot in group_order {
             let Some(entry) = ready.remove(&slot) else {
                 continue;
@@ -464,8 +546,29 @@ where
             let PendingModule {
                 module,
                 direct_deps,
+                scope,
+                bindings,
             } = entry;
-            committed.insert(slot, module, direct_deps, 0, Meta::default());
+            let mut reloc_deps = Vec::with_capacity(bindings.len());
+            for binding in bindings {
+                if binding.slot != slot && !direct_deps.contains(&binding.slot) {
+                    reloc_deps.push(binding.slot);
+                }
+                if binding.pin {
+                    requested_pins.push(binding.slot);
+                }
+            }
+            committed.insert(
+                slot,
+                StoredEntry::relocated(
+                    module,
+                    direct_deps,
+                    reloc_deps.into_boxed_slice(),
+                    scope,
+                    0,
+                    Meta::default(),
+                ),
+            );
             committed_ids.push(committed.make_module_id(slot));
         }
         assert!(
@@ -478,6 +581,23 @@ where
             }
         }
         committed.extend_lifecycle(&lifecycle);
-        Ok(committed_ids.into_boxed_slice())
+        let mut pins = Vec::new();
+        for slot in requested_pins {
+            let newly_pinned = committed
+                .module_mut(slot)
+                .is_some_and(|mut module| module.pin());
+            if newly_pinned {
+                pins.push(committed.make_module_id(slot));
+            }
+        }
+        Ok(CommitResult {
+            modules: committed_ids.into_boxed_slice(),
+            pins: pins.into_boxed_slice(),
+        })
     }
+}
+
+pub(crate) struct CommitResult {
+    pub(crate) modules: Box<[ModuleId]>,
+    pub(crate) pins: Box<[ModuleId]>,
 }

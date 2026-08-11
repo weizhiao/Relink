@@ -117,6 +117,16 @@ where
         Some(slot)
     }
 
+    fn reuse_module(&mut self, key: &K, module: &ModuleHandle<Arch, Tls>) -> Option<ModuleSlot> {
+        let identity = module.identity();
+        let slot = self
+            .committed
+            .identity_module(identity)
+            .or_else(|| self.session.identity_module(identity))?;
+        self.stage_alias(Some(key.clone()), slot);
+        Some(slot)
+    }
+
     fn stage_alias(&mut self, alias: Option<K>, slot: ModuleSlot) {
         if let Some(alias) = alias {
             let alias = self.committed.intern_key(alias);
@@ -406,6 +416,9 @@ where
             ResolvedKey::Module { key, module, deps } => {
                 self.committed.ensure_domain(module.domain_id())?;
                 self.ensure_new(&key)?;
+                if let Some(slot) = self.reuse_module(&key, &module) {
+                    return Ok(slot);
+                }
                 if let Some(slot) =
                     self.reuse_file(&key, module.search().and_then(ModuleSearch::file_id))
                 {
@@ -487,6 +500,9 @@ where
             ResolvedKey::Module { key, module, deps } => {
                 self.committed.ensure_domain(module.domain_id())?;
                 self.ensure_new(&key)?;
+                if let Some(slot) = self.reuse_module(&key, &module) {
+                    return Ok(slot);
+                }
                 if let Some(slot) =
                     self.reuse_file(&key, module.search().and_then(ModuleSearch::file_id))
                 {

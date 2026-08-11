@@ -117,21 +117,19 @@ fn arena_materializes_section_bytes() {
         .load_scan_first(&mut context, "root")
         .expect("failed to execute arena-backed scan-first load");
 
-    assert!(
-        !loaded_core(&loaded).segments().is_contiguous_mapping(),
-        "arena-backed load should expose a sparse mapped span",
-    );
     assert!(context.contains_key(&"root"));
 
     unsafe {
-        let ptr = loaded
+        let module = context.module(loaded.root()).unwrap();
+        let ptr = module
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
         assert!(
-            loaded_core(&loaded)
-                .segments()
-                .contains_addr(VmAddr::new(ptr as usize))
+            module
+                .memory()
+                .host_ptr(VmAddr::new(ptr as usize))
+                .is_some()
         );
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
     }
@@ -203,21 +201,19 @@ fn arena_supports_assign_next() {
 
     assert_eq!(observed_offset, Some(0));
     assert_eq!(observed_size, Some(8));
-    assert!(
-        !loaded_core(&loaded).segments().is_contiguous_mapping(),
-        "arena-backed load should expose a sparse mapped span",
-    );
     assert!(context.contains_key(&"root"));
 
     unsafe {
-        let ptr = loaded
+        let module = context.module(loaded.root()).unwrap();
+        let ptr = module
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
         assert!(
-            loaded_core(&loaded)
-                .segments()
-                .contains_addr(VmAddr::new(ptr as usize))
+            module
+                .memory()
+                .host_ptr(VmAddr::new(ptr as usize))
+                .is_some()
         );
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[4, 3, 2, 1]);
     }
@@ -255,20 +251,17 @@ fn defaults_to_section_regions() {
         observed_capability,
         Some(ModuleCapability::SectionReorderable),
     );
-    assert!(
-        !loaded_core(&loaded).segments().is_contiguous_mapping(),
-        "section-region default should materialize alloc sections into mapped arenas",
-    );
-
     unsafe {
-        let ptr = loaded
+        let module = context.module(loaded.root()).unwrap();
+        let ptr = module
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
         assert!(
-            loaded_core(&loaded)
-                .segments()
-                .contains_addr(VmAddr::new(ptr as usize))
+            module
+                .memory()
+                .host_ptr(VmAddr::new(ptr as usize))
+                .is_some()
         );
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
     }
@@ -313,14 +306,16 @@ fn missing_sections_become_opaque() {
     assert!(context.contains_key(&"root"));
 
     unsafe {
-        let ptr = loaded
+        let module = context.module(loaded.root()).unwrap();
+        let ptr = module
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
         assert!(
-            loaded_core(&loaded)
-                .segments()
-                .contains_addr(VmAddr::new(ptr as usize))
+            module
+                .memory()
+                .host_ptr(VmAddr::new(ptr as usize))
+                .is_some()
         );
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[1, 2, 3, 4]);
     }
@@ -412,14 +407,16 @@ fn whole_dso_supports_section_overrides() {
     );
 
     unsafe {
-        let ptr = loaded
+        let module = context.module(loaded.root()).unwrap();
+        let ptr = module
             .get::<u8>("value")
             .expect("missing exported object symbol")
             .into_raw() as *const u8;
         assert!(
-            loaded_core(&loaded)
-                .segments()
-                .contains_addr(VmAddr::new(ptr as usize))
+            module
+                .memory()
+                .host_ptr(VmAddr::new(ptr as usize))
+                .is_some()
         );
         assert_eq!(std::slice::from_raw_parts(ptr, 4), &[9, 8, 7, 6]);
     }

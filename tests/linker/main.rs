@@ -7,10 +7,13 @@ use elf_loader::{
     Error, LinkContext, Linker, Loader, Module, Relocator,
     arch::NativeArch,
     error::{LinkContextError, LinkResolverError, LinkerError},
-    image::{LoadedCore, ModuleCapability, SyntheticModule, SyntheticSymbol},
+    image::{
+        LoadedCore, LookupScope, ModuleCapability, ModuleHandle, ModuleScope, SyntheticModule,
+        SyntheticSymbol,
+    },
     input::ElfBinary,
     linker::{
-        KeyResolver, LoadResult, ResolvedKey, RootRequest,
+        KeyResolver, ResolvedKey, RootRequest,
         scan::{DataPass, LinkPass, LinkPassPlan, Materialization, PassScopeMode},
     },
     memory::{RegionAccess, VmAddr},
@@ -35,13 +38,6 @@ use std::{
 };
 
 const DEP_KEY: &str = "libprovider.so";
-
-fn loaded_core(loaded: &LoadResult) -> &LoadedCore<()> {
-    loaded
-        .module()
-        .downcast_ref()
-        .expect("linker root should be a loaded ELF core")
-}
 
 struct SingleBinaryResolver {
     key: &'static str,

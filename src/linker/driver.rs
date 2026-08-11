@@ -6,11 +6,11 @@ use super::{
     unload::UnloadGroup,
 };
 use crate::{
-    Loader, Relocator, Result, arch::NativeArch, const_builder::NoDrop, image::ModuleHandle,
-    os::Mmap, relocation::RelocationArch, runtime::CodeExecutor, tls::TlsResolver,
+    Loader, Relocator, Result, arch::NativeArch, const_builder::NoDrop, os::Mmap,
+    relocation::RelocationArch, runtime::CodeExecutor, tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{fmt, marker::PhantomData, mem::MaybeUninit, ops::Deref, ptr};
+use core::{fmt, marker::PhantomData, mem::MaybeUninit, ptr};
 
 /// Result of a fully initialized linker load operation.
 ///
@@ -18,54 +18,30 @@ use core::{fmt, marker::PhantomData, mem::MaybeUninit, ops::Deref, ptr};
 /// values in load order. The result owns one lease for the root module; release
 /// the result when that direct use ends.
 #[must_use = "a loaded module lease must eventually be released"]
-pub struct LoadResult<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+pub struct LoadResult {
     lease: ModuleLease,
-    module: ModuleHandle<Arch, Tls>,
     modules: Box<[ModuleId]>,
 }
 
-impl<Arch, Tls> fmt::Debug for LoadResult<Arch, Tls>
-where
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch> + 'static,
-{
+impl fmt::Debug for LoadResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoadResult")
             .field("root_id", &self.lease.id())
-            .field("root", &self.module.name())
             .field("modules", &self.modules)
             .finish()
     }
 }
 
-impl<Arch, Tls> LoadResult<Arch, Tls>
-where
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
-{
+impl LoadResult {
     #[inline]
-    pub(crate) fn new(
-        lease: ModuleLease,
-        module: ModuleHandle<Arch, Tls>,
-        modules: Box<[ModuleId]>,
-    ) -> Self {
-        Self {
-            lease,
-            module,
-            modules,
-        }
+    pub(crate) fn new(lease: ModuleLease, modules: Box<[ModuleId]>) -> Self {
+        Self { lease, modules }
     }
 
-    /// Returns the direct acquisition held for the loaded root.
+    /// Returns the loaded root module id.
     #[inline]
-    pub const fn root(&self) -> &ModuleLease {
-        &self.lease
-    }
-
-    /// Returns the loaded root module.
-    #[inline]
-    pub const fn module(&self) -> &ModuleHandle<Arch, Tls> {
-        &self.module
+    pub const fn root(&self) -> ModuleId {
+        self.lease.id()
     }
 
     /// Returns module ids produced by this load operation in load order.
@@ -74,35 +50,18 @@ where
         &self.modules
     }
 
-    /// Consumes the result and returns its root module and acquisition lease.
-    #[inline]
-    pub fn into_parts(self) -> (ModuleHandle<Arch, Tls>, ModuleLease) {
-        (self.module, self.lease)
-    }
-
     /// Releases the root acquisition represented by this load.
     #[inline]
-    pub fn release<K, Meta>(
+    pub fn release<K, Meta, Arch, Tls>(
         self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
     ) -> Result<UnloadGroup<Meta, Arch, Tls>>
     where
         K: Clone + Ord,
+        Arch: RelocationArch,
+        Tls: TlsResolver<Arch>,
     {
         context.release(self.lease)
-    }
-}
-
-impl<Arch, Tls> Deref for LoadResult<Arch, Tls>
-where
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch> + 'static,
-{
-    type Target = ModuleHandle<Arch, Tls>;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.module
     }
 }
 
@@ -137,7 +96,8 @@ where
 ///     let mut run = linker.run();
 ///     let loaded = run.load(&mut context, PathBuf::from("libplugin.so"))?;
 ///     let entry = unsafe {
-///         loaded
+///         context
+///             .module(loaded.root())?
 ///             .get::<extern "C" fn()>("plugin_entry")
 ///             .expect("symbol `plugin_entry` not found")
 ///     };

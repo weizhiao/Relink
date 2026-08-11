@@ -36,12 +36,13 @@ fn main() -> Result<()> {
         })
         .load_scan_first(&mut context, PathBuf::from(fixtures.leaf_str()))?;
 
-    let leaf_value = unsafe { loaded.get::<extern "C" fn() -> i32>("leaf_value").unwrap() };
+    let module = context.module(loaded.root())?;
+    let leaf_value = unsafe { module.get::<extern "C" fn() -> i32>("leaf_value").unwrap() };
     let value = leaf_value();
     assert_eq!(value, 3);
     println!(
         "scan-first loaded {} with {} committed modules; leaf_value() = {}",
-        loaded.name(),
+        module.name(),
         loaded.modules().len(),
         value
     );

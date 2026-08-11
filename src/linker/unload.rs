@@ -1,6 +1,11 @@
 use super::storage::ModuleId;
-use crate::{arch::NativeArch, image::ModuleHandle, relocation::RelocationArch, tls::TlsResolver};
-use alloc::{boxed::Box, vec::Vec};
+use crate::{
+    arch::NativeArch,
+    image::{LookupScope, Module, ModuleHandle},
+    relocation::RelocationArch,
+    tls::TlsResolver,
+};
+use alloc::vec::Vec;
 use core::fmt;
 
 /// One module detached from a link context by [`super::LinkContext::release`].
@@ -8,7 +13,7 @@ pub struct UnloadedModule<Meta = (), Arch: RelocationArch = NativeArch, Tls: Tls
 {
     id: ModuleId,
     module: ModuleHandle<Arch, Tls>,
-    direct_deps: Box<[ModuleId]>,
+    _scope: Option<LookupScope<Arch, Tls>>,
     meta: Meta,
 }
 
@@ -21,13 +26,13 @@ where
     pub(super) const fn new(
         id: ModuleId,
         module: ModuleHandle<Arch, Tls>,
-        direct_deps: Box<[ModuleId]>,
+        scope: Option<LookupScope<Arch, Tls>>,
         meta: Meta,
     ) -> Self {
         Self {
             id,
             module,
-            direct_deps,
+            _scope: scope,
             meta,
         }
     }
@@ -38,16 +43,10 @@ where
         self.id
     }
 
-    /// Returns the retained module handle.
+    /// Borrows the detached module while its unload group retains dependencies.
     #[inline]
-    pub const fn module(&self) -> &ModuleHandle<Arch, Tls> {
-        &self.module
-    }
-
-    /// Returns the module's former direct dependencies.
-    #[inline]
-    pub const fn direct_deps(&self) -> &[ModuleId] {
-        &self.direct_deps
+    pub fn module(&self) -> &dyn Module<Arch, Tls> {
+        self.module.as_dyn()
     }
 
     /// Returns metadata detached with this context entry.
@@ -56,10 +55,13 @@ where
         &self.meta
     }
 
-    /// Consumes the entry and returns all detached state.
+    /// Consumes the entry and returns its context metadata.
+    ///
+    /// The module and retained lookup scope are dropped together so a bare
+    /// module handle cannot outlive its relocation providers accidentally.
     #[inline]
-    pub fn into_parts(self) -> (ModuleId, ModuleHandle<Arch, Tls>, Box<[ModuleId]>, Meta) {
-        (self.id, self.module, self.direct_deps, self.meta)
+    pub fn into_meta(self) -> Meta {
+        self.meta
     }
 }
 
@@ -72,7 +74,6 @@ where
         f.debug_struct("UnloadedModule")
             .field("id", &self.id)
             .field("name", &self.module().name())
-            .field("direct_deps", &self.direct_deps.len())
             .finish_non_exhaustive()
     }
 }
@@ -111,14 +112,6 @@ where
     #[inline]
     pub fn modules(&self) -> &[UnloadedModule<Meta, Arch, Tls>] {
         &self.modules
-    }
-
-    /// Splits the collection into independently retained detached modules.
-    ///
-    /// Each returned entry releases its module when dropped.
-    #[inline]
-    pub fn into_modules(self) -> Vec<UnloadedModule<Meta, Arch, Tls>> {
-        self.modules
     }
 }
 

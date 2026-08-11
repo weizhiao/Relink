@@ -91,7 +91,8 @@
 //!         .load(&mut context, root)?;
 //!
 //!     let run = unsafe {
-//!         loaded
+//!         context
+//!             .module(loaded.root())?
 //!             .get::<extern "C" fn() -> i32>("run")
 //!             .expect("symbol `run` not found")
 //!     };

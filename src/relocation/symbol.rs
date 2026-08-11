@@ -7,16 +7,100 @@ use crate::{
     logging,
     memory::{VmAddr, VmOffset},
     runtime::{CodeContext, CodeExecutor},
-    sync::Arc,
+    sync::{Arc, Weak},
     tls::TlsResolver,
 };
-use alloc::{boxed::Box, collections::BTreeMap};
-use core::ptr;
+use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use core::{cell::RefCell, ptr};
 use spin::Mutex;
 
 struct UniqueDef<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
     symbol: Arc<ElfSymbol<Arch::Layout>>,
-    source: ModuleHandle<Arch, Tls>,
+    source: Weak<dyn Module<Arch, Tls>>,
+}
+
+pub(crate) struct BindingDep<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+    module: ModuleHandle<Arch, Tls>,
+    pin: bool,
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for BindingDep<Arch, Tls> {
+    fn clone(&self) -> Self {
+        Self {
+            module: self.module.clone(),
+            pin: self.pin,
+        }
+    }
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> BindingDep<Arch, Tls> {
+    #[inline]
+    pub(crate) fn into_parts(self) -> (ModuleHandle<Arch, Tls>, bool) {
+        (self.module, self.pin)
+    }
+}
+
+pub(crate) struct BindingDeps<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+    modules: Vec<BindingDep<Arch, Tls>>,
+    retain_scope: bool,
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Default for BindingDeps<Arch, Tls> {
+    fn default() -> Self {
+        Self {
+            modules: Vec::new(),
+            retain_scope: false,
+        }
+    }
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for BindingDeps<Arch, Tls> {
+    fn clone(&self) -> Self {
+        Self {
+            modules: self.modules.clone(),
+            retain_scope: self.retain_scope,
+        }
+    }
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> BindingDeps<Arch, Tls> {
+    #[inline]
+    fn record(&mut self, module: &ModuleHandle<Arch, Tls>, pin: bool) {
+        if let Some(binding) = self
+            .modules
+            .iter_mut()
+            .find(|binding| binding.module.identity() == module.identity())
+        {
+            binding.pin |= pin;
+        } else {
+            self.modules.push(BindingDep {
+                module: module.clone(),
+                pin,
+            });
+        }
+    }
+
+    #[inline]
+    fn provider(&mut self, module: &ModuleHandle<Arch, Tls>) {
+        self.record(module, false);
+    }
+
+    #[inline]
+    fn pin(&mut self, module: &ModuleHandle<Arch, Tls>) {
+        self.record(module, true);
+    }
+
+    pub(crate) fn into_bindings(
+        mut self,
+        scope: &LookupScope<Arch, Tls>,
+    ) -> Box<[BindingDep<Arch, Tls>]> {
+        if self.retain_scope {
+            for module in scope.iter() {
+                self.provider(module);
+            }
+        }
+        self.modules.into_boxed_slice()
+    }
 }
 
 /// GNU unique symbol state shared by one linker context.
@@ -39,11 +123,14 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolRegistry<Arch, Tls> {
         source: &ModuleHandle<Arch, Tls>,
     ) -> SymDef<'lib, Arch, Tls> {
         let mut defs = self.unique.lock();
-        if let Some(definition) = defs.get(name) {
-            return SymDef::Unique {
-                symbol: Arc::clone(&definition.symbol),
-                source: definition.source.clone(),
-            };
+        if let Some((symbol, source)) = defs.get(name).and_then(|definition| {
+            definition
+                .source
+                .upgrade()
+                .map(ModuleHandle::from_shared)
+                .map(|source| (Arc::clone(&definition.symbol), source))
+        }) {
+            return SymDef::Unique { symbol, source };
         }
 
         let symbol = Arc::new(symbol.clone());
@@ -51,7 +138,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolRegistry<Arch, Tls> {
             Box::from(name),
             UniqueDef {
                 symbol: Arc::clone(&symbol),
-                source: source.clone(),
+                source: source.downgrade(),
             },
         );
         SymDef::Unique {
@@ -67,7 +154,10 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolRegistry<Arch, Tls> {
         source: &ModuleHandle<Arch, Tls>,
     ) {
         let mut defs = self.unique.lock();
-        if defs.contains_key(name) {
+        if defs
+            .get(name)
+            .is_some_and(|definition| definition.source.upgrade().is_some())
+        {
             return;
         }
 
@@ -75,7 +165,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolRegistry<Arch, Tls> {
             Box::from(name),
             UniqueDef {
                 symbol: Arc::new(symbol.clone()),
-                source: source.clone(),
+                source: source.downgrade(),
             },
         );
     }
@@ -174,6 +264,7 @@ pub(crate) struct SymbolResolver<'lib, Source, Arch: RelocationArch, Tls: TlsRes
     scope: LookupScope<Arch, Tls>,
     registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
     symbolic: bool,
+    bindings: RefCell<BindingDeps<Arch, Tls>>,
 }
 
 impl<'lib, Source, Arch, Tls> SymbolResolver<'lib, Source, Arch, Tls>
@@ -194,7 +285,14 @@ where
             scope,
             registry,
             symbolic,
+            bindings: RefCell::new(BindingDeps::default()),
         }
+    }
+
+    #[inline]
+    pub(crate) fn retain_scope(self, retain: bool) -> Self {
+        self.bindings.borrow_mut().retain_scope = retain;
+        self
     }
 
     #[inline]
@@ -208,8 +306,8 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_scope(self) -> LookupScope<Arch, Tls> {
-        self.scope
+    pub(crate) fn into_parts(self) -> (LookupScope<Arch, Tls>, BindingDeps<Arch, Tls>) {
+        (self.scope, self.bindings.into_inner())
     }
 
     #[cold]
@@ -281,6 +379,9 @@ where
         if unlikely(symbol.bind() == ElfSymbolBind::GNU_UNIQUE) {
             self.bind_unique(name, symbol, source, handle)
         } else {
+            if let Some(handle) = handle.filter(|handle| !self.is_source(handle)) {
+                self.bindings.borrow_mut().provider(handle);
+            }
             SymDef::defined(symbol, source)
         }
     }
@@ -301,7 +402,11 @@ where
             debug_assert!(false, "linker scope must retain its relocation source");
             return SymDef::defined(symbol, source);
         };
-        registry.resolve_unique(name, symbol, handle)
+        let definition = registry.resolve_unique(name, symbol, handle);
+        if let SymDef::Unique { source, .. } = &definition {
+            self.bindings.borrow_mut().pin(source);
+        }
+        definition
     }
 
     pub(crate) fn find<'find>(
@@ -332,7 +437,9 @@ where
             && let Some(destination) = self.source_handle()
         {
             registry.register_copy(entry.name(), entry.symbol(), destination);
+            self.bindings.borrow_mut().pin(destination);
         }
+        self.bindings.borrow_mut().provider(source);
         Some(SymDef::defined(symbol, &**source))
     }
 

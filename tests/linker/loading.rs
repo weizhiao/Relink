@@ -115,6 +115,33 @@ fn dependency_resolver(root_name: &'static str, dep_name: &'static str) -> Multi
     }
 }
 
+fn load_provider(name: &'static str) -> LoadedCore<()> {
+    Relocator::new()
+        .run(
+            Loader::new()
+                .load_dylib(ElfBinary::new(name, fixtures().provider))
+                .expect("failed to load provider"),
+        )
+        .relocate()
+        .expect("failed to relocate provider")
+}
+
+struct Interpose(ModuleHandle);
+
+impl LoadObserver for Interpose {}
+impl RelocationObserver for Interpose {}
+impl LinkerObserver for Interpose {
+    fn on_relocation(&mut self, event: &mut LinkerRelocationEvent<()>) -> elf_loader::Result<()> {
+        let mut interposer = ModuleScope::new(DomainId::PROCESS);
+        interposer.push(self.0.clone());
+        event.set_scope(LookupScope::from_groups(
+            DomainId::PROCESS,
+            core::iter::once(interposer).chain(event.scope().groups().iter().cloned()),
+        ));
+        Ok(())
+    }
+}
+
 #[test]
 fn commits_resolver_modules() {
     let fixtures = fixtures();
@@ -141,7 +168,16 @@ fn commits_resolver_modules() {
         .load(&mut context, "root")
         .expect("load should accept a resolver-provided module");
 
-    assert_eq!(loaded_core(&root).path().file_name(), "visible_root.so");
+    assert_eq!(
+        context
+            .module(root.root())
+            .unwrap()
+            .search()
+            .unwrap()
+            .path()
+            .file_name(),
+        "visible_root.so"
+    );
     assert!(dep.state().is_initialized());
     assert!(context.contains_key(&"root"));
     let root_id = context
@@ -153,7 +189,10 @@ fn commits_resolver_modules() {
         .resolve_key(dep_id)
         .unwrap()
         .expect("resolver-provided dependency should be committed into the context");
-    assert_eq!(context.get(dep_module_id).unwrap().name(), "visible_dep.so");
+    assert_eq!(
+        context.module(dep_module_id).unwrap().name(),
+        "visible_dep.so"
+    );
     let direct_deps = context.direct_deps(root_id).unwrap().collect::<Vec<_>>();
     assert_eq!(direct_deps, vec![dep_module_id]);
 }
@@ -164,16 +203,29 @@ fn loads_module_root() {
     let linker = Linker::new().resolver(SyntheticRootResolver);
 
     let first = linker.load(&mut context, "root").unwrap();
-    assert!(first.module().downcast_ref::<SyntheticModule>().is_some());
+    assert!(
+        context
+            .module(first.root())
+            .unwrap()
+            .downcast_ref::<SyntheticModule>()
+            .is_some()
+    );
     let value = unsafe {
-        first
+        context
+            .module(first.root())
+            .unwrap()
             .get::<extern "C" fn() -> i32>("synthetic_value")
             .unwrap()
     };
     assert_eq!(value(), 42);
 
     let second = linker.load(&mut context, "root").unwrap();
-    assert!(first.module().ptr_eq(second.module()));
+    assert!(
+        context
+            .module(first.root())
+            .unwrap()
+            .ptr_eq(context.module(second.root()).unwrap())
+    );
     assert!(first.release(&mut context).unwrap().is_empty());
     assert_eq!(second.release(&mut context).unwrap().len(), 1);
 }
@@ -191,7 +243,13 @@ fn scan_loads_synthetic_dependency() {
         .expect("scan-first load should accept a synthetic dependency");
 
     assert_eq!(
-        loaded_core(&root).path().file_name(),
+        context
+            .module(root.root())
+            .unwrap()
+            .search()
+            .unwrap()
+            .path()
+            .file_name(),
         "scan_synthetic_root.so"
     );
     assert!(context.contains_key(&"root"));
@@ -204,7 +262,7 @@ fn scan_loads_synthetic_dependency() {
     let dep_id = context.key_id(&"dep").unwrap();
     let dep_module_id = context.resolve_key(dep_id).unwrap().unwrap();
     let dep_module = context
-        .get(dep_module_id)
+        .module(dep_module_id)
         .expect("synthetic dependency committed");
     assert_eq!(dep_module.name(), "dep");
     assert!(dep_module.downcast_ref::<SyntheticModule>().is_some());
@@ -297,6 +355,68 @@ fn publish_rejects_reloaded_dependency() {
 }
 
 #[test]
+fn publish_rejects_released_binding() {
+    let interposer = load_provider("interposer.so");
+    let observer = Interpose(ModuleHandle::from(&interposer));
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let interposer = context
+        .insert("interposer", interposer, Box::new([]))
+        .expect("failed to insert interposer");
+    let provider = context
+        .insert(DEP_KEY, load_provider("provider.so"), Box::new([]))
+        .expect("failed to insert provider");
+    let linker = Linker::new().resolver(ExistingDependencyResolver {
+        root_data: fixtures().dependent,
+    });
+    let mut run = linker.run().with_observer(observer);
+    let prepared = run.prepare_load(&mut context, "root").unwrap();
+    let relocated = run.relocate(prepared).unwrap();
+
+    drop(context.release(interposer).unwrap());
+    let error = relocated
+        .publish(&mut context)
+        .expect_err("released binding must invalidate the transaction");
+    let Error::Linker(LinkerError::Context { reason }) = error else {
+        panic!("unexpected publication error: {error}");
+    };
+    assert!(matches!(*reason, LinkContextError::ModuleChanged { .. }));
+    drop(context.release(provider).unwrap());
+}
+
+#[test]
+fn binding_retains_provider() {
+    let interposer = load_provider("interposer.so");
+    let observer = Interpose(ModuleHandle::from(&interposer));
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let interposer = context
+        .insert("interposer", interposer, Box::new([]))
+        .expect("failed to insert interposer");
+    let provider = context
+        .insert(DEP_KEY, load_provider("provider.so"), Box::new([]))
+        .expect("failed to insert provider");
+    let linker = Linker::new().resolver(ExistingDependencyResolver {
+        root_data: fixtures().dependent,
+    });
+    let loaded = linker
+        .run()
+        .with_observer(observer)
+        .load(&mut context, "root")
+        .expect("failed to load root");
+
+    assert!(context.release(interposer).unwrap().is_empty());
+    assert!(context.release(provider).unwrap().is_empty());
+    let unloaded = loaded.release(&mut context).unwrap();
+    assert_eq!(
+        unloaded
+            .modules()
+            .iter()
+            .map(|entry| entry.module().name())
+            .collect::<Vec<_>>(),
+        ["existing_dep_root.so", "provider.so", "interposer.so"]
+    );
+}
+
+#[test]
 fn publish_rejects_reloaded_root() {
     let linker = Linker::new().resolver(SingleBinaryResolver {
         key: "root",
@@ -384,8 +504,8 @@ fn existing_alias_skips_planning() {
         .expect("failed to reuse existing scan root");
 
     assert_eq!(
-        loaded_core(&alias_loaded).base(),
-        loaded_core(&loaded).base()
+        context.module(alias_loaded.root()).unwrap().memory().base(),
+        context.module(loaded.root()).unwrap().memory().base()
     );
     assert!(context.contains_key(&"canonical"));
     assert!(!context.contains_key(&"alias"));
@@ -424,7 +544,7 @@ fn repeated_loads_acquire_the_root() {
         .load(&mut context, "root")
         .expect("existing root should be acquired");
 
-    assert_eq!(first.root().id(), second.root().id());
+    assert_eq!(first.root(), second.root());
     assert_eq!(first.modules().len(), 2);
     assert!(second.modules().is_empty());
     assert!(first.release(&mut context).unwrap().is_empty());
@@ -534,7 +654,13 @@ fn phased_load_initializes_dependencies_first() {
         .expect("publish should expose the relocated group");
     assert!(context.contains_key(&"root"));
     assert!(context.contains_key(&DEP_KEY));
-    assert!(!published.module().state().is_initialized());
+    assert!(
+        !context
+            .module(published.root())
+            .unwrap()
+            .state()
+            .is_initialized()
+    );
 
     let result = published
         .initialize()
@@ -543,7 +669,13 @@ fn phased_load_initializes_dependencies_first() {
         calls.lock().unwrap().as_slice(),
         &["phased_dep.so".to_string(), "phased_root.so".to_string()]
     );
-    assert!(result.state().is_initialized());
+    assert!(
+        context
+            .module(result.root())
+            .unwrap()
+            .state()
+            .is_initialized()
+    );
 
     assert_eq!(calls.lock().unwrap().len(), 2);
 }

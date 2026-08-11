@@ -8,7 +8,9 @@ use crate::{
     memory::{ImageMemory, RegionAccess, VmAddr},
     observer::{RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
-    relocation::{HandleResult, RelocationArch, RelocationEvent, SymDef, SymbolResolver},
+    relocation::{
+        BindingDeps, HandleResult, RelocationArch, RelocationEvent, SymDef, SymbolResolver,
+    },
     segment::ElfSegments,
     tls::{TLS_GET_ADDR_SYMBOL, TlsResolver},
 };
@@ -58,8 +60,8 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_scope(self) -> LookupScope<Arch, Tls> {
-        self.resolver.into_scope()
+    pub(crate) fn into_parts(self) -> (LookupScope<Arch, Tls>, BindingDeps<Arch, Tls>) {
+        self.resolver.into_parts()
     }
 
     #[inline]

@@ -4,7 +4,6 @@ mod fixture_support;
 use elf_loader::{
     LinkContext, Linker, Loader, Result,
     arch::NativeArch,
-    image::LoadedCore,
     input::PathBuf,
     memory::{RegionAccess, VmAddr},
     observer::{
@@ -91,20 +90,13 @@ fn main() -> Result<()> {
         .run()
         .with_observer(Observer)
         .load(&mut context, PathBuf::from(fixtures.middle_str()))?;
-    let module = middle
-        .module()
-        .downcast_ref::<LoadedCore<UserData>>()
-        .expect("linker root should be a loaded ELF core");
+    let module = context.module(middle.root())?;
 
     let middle_value = unsafe {
-        middle
+        module
             .get::<extern "C" fn() -> i32>("middle_value")
             .expect("missing middle_value")
     };
-    println!(
-        "middle_value() = {}, user data = {:?}",
-        middle_value(),
-        module.user_data()
-    );
+    println!("middle_value() = {} from {}", middle_value(), module.name());
     Ok(())
 }

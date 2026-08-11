@@ -114,7 +114,7 @@ where
             }
         }
 
-        let scope = helper.into_scope();
+        let (scope, bindings) = helper.into_parts();
 
         let initializer = LifecycleRunner::new(core::mem::take(&mut self.init));
         let finalizer = LifecycleRunner::new(core::mem::take(&mut self.fini));
@@ -172,7 +172,7 @@ where
         logging::info!("Relocation completed for {}", core.name());
 
         Ok(LoadedObject {
-            inner: unsafe { LoadedCore::from_core_scope_registry(core, scope, symbols) },
+            inner: unsafe { LoadedCore::from_relocated(core, scope, symbols, bindings) },
         })
     }
 

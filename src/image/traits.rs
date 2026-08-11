@@ -1,4 +1,7 @@
-use super::module::ModuleState;
+use super::{
+    Symbol,
+    module::{ModuleState, lookup_symbol},
+};
 use crate::{
     Result,
     arch::NativeArch,
@@ -112,6 +115,75 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
     /// modules already do this in `CoreInner`.
     fn finalize(&self) -> Result<()> {
         Ok(())
+    }
+}
+
+impl<Arch, Tls> dyn Module<Arch, Tls>
+where
+    Arch: RelocationArch,
+    Tls: TlsResolver<Arch>,
+{
+    /// Downcasts this borrowed module to a concrete implementation.
+    #[inline]
+    pub fn downcast_ref<M>(&self) -> Option<&M>
+    where
+        M: Module<Arch, Tls> + 'static,
+    {
+        (self as &dyn Any).downcast_ref()
+    }
+
+    /// Returns whether two borrowed views refer to the same logical module.
+    #[inline]
+    pub fn ptr_eq(&self, other: &dyn Module<Arch, Tls>) -> bool {
+        core::ptr::eq(self.state(), other.state())
+    }
+
+    /// Tries to resolve a typed symbol while this module remains borrowed.
+    ///
+    /// # Safety
+    ///
+    /// `T` must match the symbol's type and calling convention.
+    #[inline]
+    pub unsafe fn try_get<T>(&self, name: &str) -> Result<Option<Symbol<'_, T>>> {
+        let addr = lookup_symbol(self, &mut SymbolLookup::new(name))?;
+        Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
+    }
+
+    /// Resolves a typed symbol, discarding lookup errors.
+    ///
+    /// # Safety
+    ///
+    /// `T` must match the symbol's type and calling convention.
+    #[inline]
+    pub unsafe fn get<T>(&self, name: &str) -> Option<Symbol<'_, T>> {
+        unsafe { self.try_get(name).ok().flatten() }
+    }
+
+    /// Tries to resolve a versioned typed symbol while this module remains borrowed.
+    ///
+    /// # Safety
+    ///
+    /// `T` must match the symbol's type and calling convention.
+    #[cfg(feature = "version")]
+    #[inline]
+    pub unsafe fn try_get_version<T>(
+        &self,
+        name: &str,
+        version: &str,
+    ) -> Result<Option<Symbol<'_, T>>> {
+        let addr = lookup_symbol(self, &mut SymbolLookup::with_version(name, version))?;
+        Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
+    }
+
+    /// Resolves a versioned typed symbol, discarding lookup errors.
+    ///
+    /// # Safety
+    ///
+    /// `T` must match the symbol's type and calling convention.
+    #[cfg(feature = "version")]
+    #[inline]
+    pub unsafe fn get_version<T>(&self, name: &str, version: &str) -> Option<Symbol<'_, T>> {
+        unsafe { self.try_get_version(name, version).ok().flatten() }
     }
 }
 
