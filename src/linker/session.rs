@@ -173,14 +173,27 @@ where
     }
 
     #[inline]
-    pub(crate) fn identity_module(&self, identity: ModuleIdentity) -> Option<ModuleSlot> {
-        self.identities.get(&identity).map(|guard| guard.slot)
+    pub(crate) fn matching_module(&self, module: &ModuleHandle<Arch, Tls>) -> Option<ModuleSlot> {
+        self.identities
+            .get(&module.identity())
+            .map(|guard| guard.slot)
+            .or_else(|| {
+                module
+                    .search()
+                    .and_then(|search| search.file_id())
+                    .and_then(|id| self.files.get(&id).copied())
+            })
     }
 
     #[inline]
     pub(crate) fn stage_file(&mut self, id: Option<FileId>, module: ModuleSlot) {
         if let Some(id) = id {
-            self.files.entry(id).or_insert(module);
+            assert!(
+                !self.files.contains_key(&id),
+                "pending module file identities must be unique"
+            );
+            let previous = self.files.insert(id, module);
+            debug_assert!(previous.is_none());
         }
     }
 

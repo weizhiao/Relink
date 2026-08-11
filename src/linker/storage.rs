@@ -423,6 +423,7 @@ where
             .find(|module| self.contains_module(*module))
     }
 
+    #[inline]
     pub(crate) fn file_module(&self, id: FileId) -> Option<ModuleSlot> {
         self.files.get(&id).copied()
     }
@@ -447,11 +448,19 @@ where
     }
 
     #[inline]
-    pub(in crate::linker) fn identity_module(
+    pub(in crate::linker) fn matching_module(
         &self,
-        identity: ModuleIdentity,
+        module: &ModuleHandle<Arch, Tls>,
     ) -> Option<ModuleSlot> {
-        self.identities.get(&identity).map(|guard| guard.slot)
+        self.identities
+            .get(&module.identity())
+            .map(|guard| guard.slot)
+            .or_else(|| {
+                module
+                    .search()
+                    .and_then(|search| search.file_id())
+                    .and_then(|id| self.files.get(&id).copied())
+            })
     }
 
     #[inline]
@@ -548,31 +557,6 @@ where
         modules.insert(0, module);
     }
 
-    fn add_file(&mut self, id: FileId, module: ModuleSlot) {
-        self.files.entry(id).or_insert(module);
-    }
-
-    fn remove_file(&mut self, id: FileId, module: ModuleSlot) {
-        if self.files.get(&id) != Some(&module) {
-            return;
-        }
-        let replacement = self.entries.iter().find_map(|(slot, cell)| {
-            (slot != module
-                && cell
-                    .entry
-                    .as_ref()
-                    .and_then(|entry| entry.module.search())
-                    .and_then(|search| search.file_id())
-                    == Some(id))
-            .then_some(slot)
-        });
-        if let Some(slot) = replacement {
-            self.files.insert(id, slot);
-        } else {
-            self.files.remove(&id);
-        }
-    }
-
     pub(crate) fn extend_lifecycle(&mut self, order: &[ModuleSlot]) {
         debug_assert!(
             order
@@ -609,6 +593,10 @@ where
             "module identity is already committed"
         );
         let file = entry.module.search().and_then(|search| search.file_id());
+        assert!(
+            file.map(|id| !self.files.contains_key(&id)).unwrap_or(true),
+            "module file identity is already committed"
+        );
         let cell = &mut self.entries[slot];
         assert!(cell.entry.is_none(), "module slot is already committed");
         cell.advance_generation();
@@ -616,7 +604,8 @@ where
         cell.entry = Some(entry);
         Arc::make_mut(&mut self.identities).insert(identity, ModuleGuard { slot, generation });
         if let Some(id) = file {
-            self.add_file(id, slot);
+            let previous = self.files.insert(id, slot);
+            debug_assert!(previous.is_none());
         }
     }
 
@@ -639,7 +628,11 @@ where
             removed
         };
         if let Some(id) = removed.module.search().and_then(|search| search.file_id()) {
-            self.remove_file(id, slot);
+            let indexed = self
+                .files
+                .remove(&id)
+                .expect("committed module must have a file identity entry");
+            debug_assert_eq!(indexed, slot);
         }
         let identity = removed.module.identity();
         let identities = Arc::make_mut(&mut self.identities);

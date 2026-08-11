@@ -55,7 +55,7 @@ where
         return Ok(());
     }
 
-    if let Some(target_slot) = target.committed.identity_module(module.handle().identity()) {
+    if let Some(target_slot) = target.committed.matching_module(module.handle()) {
         aliases.push((key, target_slot));
         mapped.insert(slot, target_slot);
         return Ok(());
@@ -371,9 +371,9 @@ where
     ///
     /// All keys and dependency edges are resolved before any module is
     /// committed, so cyclic dependency graphs are supported. Returned leases
-    /// follow the input order. Repeated handles share one slot; the first
-    /// occurrence supplies the module's dependencies and later keys become
-    /// preferred aliases.
+    /// follow the input order. Repeated handles or file identities share one
+    /// slot; the first occurrence supplies the module's dependencies and later
+    /// keys become preferred aliases.
     pub fn insert_batch<R>(
         &mut self,
         modules: impl IntoIterator<Item = (K, R, Box<[K]>)>,
@@ -393,6 +393,7 @@ where
         let mut keys = EntitySet::default();
         let mut batch = SecondaryMap::default();
         let mut identities = BTreeMap::new();
+        let mut files = BTreeMap::new();
         let mut reused = BTreeMap::<ModuleSlot, usize>::new();
         let mut aliases = Vec::new();
         let mut result_slots = Vec::with_capacity(modules.len());
@@ -412,18 +413,30 @@ where
             }
 
             let identity = module.identity();
-            let slot = if let Some(slot) = self.committed.identity_module(identity) {
+            let file = module.search().and_then(|search| search.file_id());
+            let slot = if let Some(slot) = self.committed.matching_module(&module) {
                 *reused.entry(slot).or_default() += 1;
                 aliases.push((key, slot));
                 slot
-            } else if let Some(&idx) = identities.get(&identity) {
+            } else if let Some(idx) = identities
+                .get(&identity)
+                .copied()
+                .or_else(|| file.and_then(|id| files.get(&id).copied()))
+            {
                 let (slot, _, _, roots) = &mut planned[idx];
                 *roots += 1;
                 aliases.push((key, *slot));
+                identities.insert(identity, idx);
+                if let Some(id) = file {
+                    files.insert(id, idx);
+                }
                 *slot
             } else {
                 let slot = self.committed.intern_module(key);
                 identities.insert(identity, planned.len());
+                if let Some(id) = file {
+                    files.insert(id, planned.len());
+                }
                 planned.push((slot, module, deps, 1usize));
                 slot
             };
@@ -480,9 +493,9 @@ where
     /// Inserts a retained module with explicit context metadata.
     ///
     /// The returned lease represents one direct acquisition. The canonical
-    /// key must not already refer to a committed module. If `module` is already
-    /// committed under another key, the new key becomes its preferred alias;
-    /// the existing dependencies and metadata are retained.
+    /// key must not already refer to a committed module. If `module` or its
+    /// backing file is already committed under another key, the new key becomes
+    /// its preferred alias; the existing dependencies and metadata are retained.
     pub fn insert_with_meta<R>(
         &mut self,
         key: K,
@@ -507,7 +520,7 @@ where
             })
             .into());
         }
-        if let Some(slot) = self.committed.identity_module(module.identity()) {
+        if let Some(slot) = self.committed.matching_module(&module) {
             self.committed.prefer_alias(key, slot);
             self.committed
                 .module_mut(slot)

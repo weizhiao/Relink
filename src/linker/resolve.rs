@@ -118,11 +118,10 @@ where
     }
 
     fn reuse_module(&mut self, key: &K, module: &ModuleHandle<Arch, Tls>) -> Option<ModuleSlot> {
-        let identity = module.identity();
         let slot = self
             .committed
-            .identity_module(identity)
-            .or_else(|| self.session.identity_module(identity))?;
+            .matching_module(module)
+            .or_else(|| self.session.matching_module(module))?;
         self.stage_alias(Some(key.clone()), slot);
         Some(slot)
     }
@@ -419,11 +418,6 @@ where
                 if let Some(slot) = self.reuse_module(&key, &module) {
                     return Ok(slot);
                 }
-                if let Some(slot) =
-                    self.reuse_file(&key, module.search().and_then(ModuleSearch::file_id))
-                {
-                    return Ok(slot);
-                }
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
                     ctx.stage::<Obs, M, Exec, Resolver>(dep, parent, loader, resolver)
                 })?;
@@ -501,11 +495,6 @@ where
                 self.committed.ensure_domain(module.domain_id())?;
                 self.ensure_new(&key)?;
                 if let Some(slot) = self.reuse_module(&key, &module) {
-                    return Ok(slot);
-                }
-                if let Some(slot) =
-                    self.reuse_file(&key, module.search().and_then(ModuleSearch::file_id))
-                {
                     return Ok(slot);
                 }
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {

@@ -266,7 +266,7 @@ fn reuses_file() {
 }
 
 #[test]
-fn reindexes_file() {
+fn imports_reuse_file() {
     let fixtures = crate::fixture::fixtures();
     let alias_path = fixtures
         .rpath_leaf_path
@@ -288,7 +288,8 @@ fn reindexes_file() {
     let mut target = LinkContext::<PathBuf>::new(DomainId::PROCESS);
     let first = linker.load(&mut target, alias).unwrap();
     let imported = target.import(&source, source_module.root()).unwrap();
-    assert_eq!(target.load_order().count(), 2);
+    assert_eq!(imported.id(), first.root());
+    assert_eq!(target.load_order().count(), 1);
 
     first.release(&mut target).unwrap();
     let reused = linker.load(&mut target, next).unwrap();
