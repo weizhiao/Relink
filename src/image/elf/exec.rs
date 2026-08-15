@@ -434,6 +434,14 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             LoadedExecInner::Static(static_image) => static_image.tls(),
         }
     }
+
+    /// Returns the runtime base address.
+    pub fn base(&self) -> VmAddr {
+        match &self.inner {
+            LoadedExecInner::Dynamic(module) => module.base(),
+            LoadedExecInner::Static(static_image) => static_image.base(),
+        }
+    }
 }
 
 impl<Tls, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess>
