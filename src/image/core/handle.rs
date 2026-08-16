@@ -247,7 +247,7 @@ impl<
 
     #[inline]
     pub(crate) fn into_module_handle(self) -> crate::image::ModuleHandle<Arch, Tls> {
-        crate::image::ModuleHandle::from_shared(arc_unsize!(self.inner => dyn Module<Arch, Tls>))
+        crate::image::ModuleHandle::new(self)
     }
 }
 

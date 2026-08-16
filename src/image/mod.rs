@@ -30,6 +30,7 @@ pub use module::{LookupScope, ModuleHandle, ModuleScope, ModuleState};
 pub(crate) use module::{ModuleIdentity, WeakLookupScope};
 pub(crate) use scanned::ScannedDynamicLoadParts;
 pub use scanned::{ModuleCapability, ScannedDynamic, ScannedElf, ScannedExec, ScannedSection};
+pub(crate) use search::DEFAULT_MODULE_SEARCH;
 pub use search::{ModuleSearch, SearchPathPool};
 pub(crate) use search::{PathTokens, SharedDir, normalize_dir};
 pub use synthetic::{SymbolVersion, SyntheticModule, SyntheticSymbol};

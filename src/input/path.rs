@@ -115,6 +115,11 @@ impl AsRef<Path> for String {
 pub struct PathBuf(String);
 
 impl PathBuf {
+    #[inline]
+    pub(crate) const fn empty() -> Self {
+        Self(String::new())
+    }
+
     /// Creates an owned loader path.
     #[inline]
     pub fn new(path: impl Into<String>) -> Self {

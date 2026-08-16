@@ -3,9 +3,7 @@ use crate::{
     Result, custom_error,
     elf::{
         ElfLayout, ElfMachine,
-        abi::{
-            EI_CLASS, EI_DATA, EI_NIDENT, EI_VERSION, ELFDATA2LSB, ELFMAGIC, ET_DYN, EV_CURRENT,
-        },
+        abi::{EI_CLASS, EI_DATA, EI_NIDENT, EI_VERSION, ELFMAGIC, ET_DYN, EV_CURRENT},
     },
 };
 
@@ -102,8 +100,8 @@ impl<'a> Writer<'a> {
         let is_64 = is_64::<L>();
         let mut ident = [0u8; EI_NIDENT];
         ident[0..4].copy_from_slice(&ELFMAGIC);
-        ident[EI_CLASS] = L::E_CLASS;
-        ident[EI_DATA] = ELFDATA2LSB;
+        ident[EI_CLASS] = L::CLASS.raw();
+        ident[EI_DATA] = L::DATA_ENCODING.raw();
         ident[EI_VERSION] = EV_CURRENT;
 
         let mut out = ByteWriter::new(&mut self.bytes[self.offset..]);

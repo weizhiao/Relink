@@ -1,5 +1,5 @@
 use crate::{
-    Error, LinkerError, Result, UnresolvedDependency,
+    Error, LinkResolverError, LinkerError, Result, UnresolvedDependency,
     image::{Module, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic},
     memory::RegionAccess,
     relocation::RelocationArch,
@@ -56,109 +56,75 @@ impl<Arch: RelocationArch> DependencySource for ScannedDynamic<Arch> {
     }
 }
 
-/// A root module resolution request.
-pub struct RootRequest<'a, Request, K> {
-    request: &'a Request,
-    key: Option<K>,
-    search: Option<&'a ModuleSearch>,
-    tokens: &'a PathTokens,
-    contains_key: &'a dyn Fn(&K) -> bool,
+/// The input being resolved by a [`ResolveRequest`].
+pub enum ResolveInput<'a, Request, K> {
+    /// A root supplied directly to a linker load operation.
+    Root { request: Request, key: K },
+    /// One `DT_NEEDED` edge of an already scanned module.
+    Dependency { needed: &'a str },
 }
 
-impl<'a, Request, K> RootRequest<'a, Request, K> {
-    #[inline]
-    pub(crate) fn new(
-        request: &'a Request,
-        key: Option<K>,
-        search: Option<&'a ModuleSearch>,
-        tokens: &'a PathTokens,
-        contains_key: &'a dyn Fn(&K) -> bool,
-    ) -> Self {
-        Self {
-            request,
-            key,
-            search,
-            tokens,
-            contains_key,
-        }
-    }
-
-    /// Returns the root request supplied by the caller.
-    #[inline]
-    pub fn request(&self) -> &'a Request {
-        self.request
-    }
-
-    /// Returns the precomputed lookup key for this request, when available.
-    #[inline]
-    pub fn key(&self) -> Option<&K> {
-        self.key.as_ref()
-    }
-
-    /// Returns search metadata for the module that initiated this request.
-    #[inline]
-    pub const fn search(&self) -> Option<&'a ModuleSearch> {
-        self.search
-    }
-
-    #[inline]
-    pub(crate) const fn tokens(&self) -> &'a PathTokens {
-        self.tokens
-    }
-
-    /// Returns whether `key` names a module reusable by this request.
-    #[inline]
-    pub fn contains_key(&self, key: &K) -> bool {
-        (self.contains_key)(key)
-    }
-}
-
-/// A single dependency-resolution request.
-pub struct DependencyRequest<'a, K> {
-    owner_key: &'a K,
+/// A root or dependency resolution request.
+pub struct ResolveRequest<'a, Request, K> {
+    input: ResolveInput<'a, Request, K>,
     search: &'a ModuleSearch,
-    needed: &'a str,
     tokens: &'a PathTokens,
     loaders: &'a LoaderProvider<'a>,
     contains_key: &'a dyn Fn(&K) -> bool,
 }
 
-impl<'a, K> DependencyRequest<'a, K> {
+impl<'a, Request, K> ResolveRequest<'a, Request, K> {
     #[inline]
-    pub(crate) fn new(
-        owner_key: &'a K,
+    pub(crate) const fn root(
+        request: Request,
+        key: K,
         search: &'a ModuleSearch,
-        needed: &'a str,
         tokens: &'a PathTokens,
         loaders: &'a LoaderProvider<'a>,
         contains_key: &'a dyn Fn(&K) -> bool,
     ) -> Self {
         Self {
-            owner_key,
+            input: ResolveInput::Root { request, key },
             search,
-            needed,
             tokens,
             loaders,
             contains_key,
         }
     }
 
-    /// Returns the key of the module that owns this dependency edge.
     #[inline]
-    pub fn owner_key(&self) -> &'a K {
-        self.owner_key
+    pub(crate) const fn dependency(
+        needed: &'a str,
+        search: &'a ModuleSearch,
+        tokens: &'a PathTokens,
+        loaders: &'a LoaderProvider<'a>,
+        contains_key: &'a dyn Fn(&K) -> bool,
+    ) -> Self {
+        Self {
+            input: ResolveInput::Dependency { needed },
+            search,
+            tokens,
+            loaders,
+            contains_key,
+        }
     }
 
-    /// Returns search metadata for the module that owns this dependency edge.
+    /// Returns the kind-specific input being resolved.
+    #[inline]
+    pub const fn input(&self) -> &ResolveInput<'a, Request, K> {
+        &self.input
+    }
+
+    /// Returns mutable access to the kind-specific input.
+    #[inline]
+    pub fn input_mut(&mut self) -> &mut ResolveInput<'a, Request, K> {
+        &mut self.input
+    }
+
+    /// Returns search metadata for the request owner.
     #[inline]
     pub const fn search(&self) -> &'a ModuleSearch {
         self.search
-    }
-
-    /// Returns the `DT_NEEDED` entry being resolved.
-    #[inline]
-    pub fn needed(&self) -> &'a str {
-        self.needed
     }
 
     #[inline]
@@ -181,13 +147,16 @@ impl<'a, K> DependencyRequest<'a, K> {
         (self.contains_key)(key)
     }
 
-    /// Creates the standard unresolved-dependency error for this edge.
-    #[inline]
+    /// Creates the standard not-found error for this request.
     pub fn unresolved(&self) -> Error {
-        LinkerError::UnresolvedDependency(Box::new(UnresolvedDependency::new(
-            self.search.name(),
-            self.needed(),
-        )))
-        .into()
+        match self.input() {
+            ResolveInput::Root { .. } => {
+                LinkerError::resolver(LinkResolverError::RootNotFound).into()
+            }
+            ResolveInput::Dependency { needed } => LinkerError::UnresolvedDependency(Box::new(
+                UnresolvedDependency::new(self.search.name(), needed),
+            ))
+            .into(),
+        }
     }
 }

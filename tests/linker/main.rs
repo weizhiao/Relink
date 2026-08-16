@@ -13,7 +13,7 @@ use elf_loader::{
     },
     input::ElfBinary,
     linker::{
-        KeyResolver, ResolvedKey, RootRequest,
+        KeyResolver, ResolveInput, ResolveRequest, ResolvedKey,
         scan::{DataPass, LinkPass, LinkPassPlan, Materialization, PassScopeMode},
     },
     memory::{RegionAccess, VmAddr},
@@ -130,207 +130,181 @@ impl RelocationObserver for InitRecorder {
 impl KeyResolver<&'static str> for SingleBinaryResolver {
     type Request = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
-        Some(*request)
+    fn map_request(&self, request: &Self::Request) -> &'static str {
+        *request
     }
 
-    fn resolve_root<'cfg>(
+    fn resolve<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str, &'static str>,
+        req: ResolveRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        let key = req.request();
-        assert_eq!(*key, self.key);
-        Ok(ResolvedKey::load(
-            self.key,
-            ElfBinary::new(self.name, self.data),
-        ))
-    }
-
-    fn resolve_dependency<'cfg>(
-        &self,
-        req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
-        Err(req.unresolved())
+        match req.input() {
+            ResolveInput::Root { request, .. } => {
+                assert_eq!(*request, self.key);
+                Ok(ResolvedKey::load(
+                    self.key,
+                    ElfBinary::new(self.name, self.data),
+                ))
+            }
+            ResolveInput::Dependency { .. } => Err(req.unresolved()),
+        }
     }
 }
 
 impl KeyResolver<&'static str> for ExistingRootResolver {
     type Request = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
-        Some(*request)
+    fn map_request(&self, request: &Self::Request) -> &'static str {
+        *request
     }
 
-    fn resolve_root<'cfg>(
+    fn resolve<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str, &'static str>,
+        req: ResolveRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        let key = req.request();
-        assert_eq!(*key, self.requested);
-        Ok(ResolvedKey::existing(self.existing))
-    }
-
-    fn resolve_dependency<'cfg>(
-        &self,
-        _req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
-        panic!("existing scan root should not resolve dependencies")
+        match req.input() {
+            ResolveInput::Root { request, .. } => {
+                assert_eq!(*request, self.requested);
+                Ok(ResolvedKey::existing(self.existing))
+            }
+            ResolveInput::Dependency { .. } => {
+                panic!("existing scan root should not resolve dependencies")
+            }
+        }
     }
 }
 
 impl KeyResolver<&'static str> for ModuleDependencyResolver {
     type Request = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
-        Some(*request)
+    fn map_request(&self, request: &Self::Request) -> &'static str {
+        *request
     }
 
-    fn resolve_root<'cfg>(
+    fn resolve<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str, &'static str>,
+        req: ResolveRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        let key = req.request();
-        assert_eq!(*key, "root");
-        Ok(ResolvedKey::load(
-            "root",
-            ElfBinary::new("visible_root.so", self.root_data),
-        ))
-    }
-
-    fn resolve_dependency<'cfg>(
-        &self,
-        req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
-        assert_eq!(req.needed(), DEP_KEY);
-        assert!(!req.contains_key(&DEP_KEY));
-        Ok(ResolvedKey::module(DEP_KEY, self.dep.clone(), Vec::new()))
+        match req.input() {
+            ResolveInput::Root { request, .. } => {
+                assert_eq!(*request, "root");
+                Ok(ResolvedKey::load(
+                    "root",
+                    ElfBinary::new("visible_root.so", self.root_data),
+                ))
+            }
+            ResolveInput::Dependency { needed } => {
+                assert_eq!(*needed, DEP_KEY);
+                assert!(!req.contains_key(&DEP_KEY));
+                Ok(ResolvedKey::module(DEP_KEY, self.dep.clone(), Vec::new()))
+            }
+        }
     }
 }
 
 impl KeyResolver<&'static str> for ExistingDependencyResolver {
     type Request = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
-        Some(*request)
+    fn map_request(&self, request: &Self::Request) -> &'static str {
+        *request
     }
 
-    fn resolve_root<'cfg>(
+    fn resolve<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str, &'static str>,
+        req: ResolveRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        assert_eq!(*req.request(), "root");
-        Ok(ResolvedKey::load(
-            "root",
-            ElfBinary::new("existing_dep_root.so", self.root_data),
-        ))
-    }
-
-    fn resolve_dependency<'cfg>(
-        &self,
-        req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
-        assert_eq!(req.needed(), DEP_KEY);
-        Ok(ResolvedKey::existing(DEP_KEY))
+        match req.input() {
+            ResolveInput::Root { request, .. } => {
+                assert_eq!(*request, "root");
+                Ok(ResolvedKey::load(
+                    "root",
+                    ElfBinary::new("existing_dep_root.so", self.root_data),
+                ))
+            }
+            ResolveInput::Dependency { needed } => {
+                assert_eq!(*needed, DEP_KEY);
+                Ok(ResolvedKey::existing(DEP_KEY))
+            }
+        }
     }
 }
 
 impl KeyResolver<&'static str> for SyntheticDependencyResolver {
     type Request = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
-        Some(*request)
+    fn map_request(&self, request: &Self::Request) -> &'static str {
+        *request
     }
 
-    fn resolve_root<'cfg>(
+    fn resolve<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str, &'static str>,
+        req: ResolveRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        let key = req.request();
-        assert_eq!(*key, "root");
-        Ok(ResolvedKey::load(
-            "root",
-            ElfBinary::new("scan_synthetic_root.so", self.root_data),
-        ))
-    }
-
-    fn resolve_dependency<'cfg>(
-        &self,
-        req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
-        assert_eq!(req.needed(), "dep");
-        Ok(ResolvedKey::module(
-            "dep",
-            SyntheticModule::empty("dep"),
-            Vec::new(),
-        ))
+        match req.input() {
+            ResolveInput::Root { request, .. } => {
+                assert_eq!(*request, "root");
+                Ok(ResolvedKey::load(
+                    "root",
+                    ElfBinary::new("scan_synthetic_root.so", self.root_data),
+                ))
+            }
+            ResolveInput::Dependency { needed } => {
+                assert_eq!(*needed, "dep");
+                Ok(ResolvedKey::module(
+                    "dep",
+                    SyntheticModule::empty("dep"),
+                    Vec::new(),
+                ))
+            }
+        }
     }
 }
 
 impl KeyResolver<&'static str> for SyntheticRootResolver {
     type Request = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
-        Some(*request)
+    fn map_request(&self, request: &Self::Request) -> &'static str {
+        *request
     }
 
-    fn resolve_root<'cfg>(
+    fn resolve<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str, &'static str>,
+        req: ResolveRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        Ok(ResolvedKey::module(
-            *req.request(),
-            SyntheticModule::new(
-                "synthetic-root",
-                [SyntheticSymbol::function(
-                    "synthetic_value",
-                    synthetic_value as *const (),
-                )],
-            ),
-            Vec::new(),
-        ))
-    }
-
-    fn resolve_dependency<'cfg>(
-        &self,
-        _req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
-        unreachable!("synthetic root has no dependencies")
+        match req.input() {
+            ResolveInput::Root { request, .. } => Ok(ResolvedKey::module(
+                *request,
+                SyntheticModule::new(
+                    "synthetic-root",
+                    [SyntheticSymbol::function(
+                        "synthetic_value",
+                        synthetic_value as *const (),
+                    )],
+                ),
+                Vec::new(),
+            )),
+            ResolveInput::Dependency { .. } => {
+                unreachable!("synthetic root has no dependencies")
+            }
+        }
     }
 }
 

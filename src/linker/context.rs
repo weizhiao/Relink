@@ -6,7 +6,7 @@ use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
     entity::{EntitySet, SecondaryMap},
-    image::{Module, ModuleHandle, SearchPathPool},
+    image::{Module, ModuleHandle, ModuleScope, SearchPathPool},
     relocation::{RelocationArch, SymbolRegistry},
     runtime::DomainId,
     sync::Arc,
@@ -155,6 +155,49 @@ where
         target.committed.prefer_alias(alias, module);
     }
     Ok(mapped)
+}
+
+struct LoadGroupInner<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+    root: ModuleId,
+    members: Box<[ModuleId]>,
+    scope: ModuleScope<Arch, Tls>,
+}
+
+/// One retained breadth-first dependency group.
+///
+/// The member ids and retained modules have the same order. Clones share the
+/// complete group without copying either list.
+pub struct LoadGroup<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+    inner: Arc<LoadGroupInner<Arch, Tls>>,
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for LoadGroup<Arch, Tls> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LoadGroup<Arch, Tls> {
+    /// Returns the root module id.
+    #[inline]
+    pub fn root(&self) -> ModuleId {
+        self.inner.root
+    }
+
+    /// Returns member ids in breadth-first lookup order.
+    #[inline]
+    pub fn members(&self) -> &[ModuleId] {
+        &self.inner.members
+    }
+
+    /// Returns retained modules in the same order as [`Self::members`].
+    #[inline]
+    pub fn scope(&self) -> &ModuleScope<Arch, Tls> {
+        &self.inner.scope
+    }
 }
 
 /// Local repository of committed modules and their dependency graph.
@@ -645,10 +688,14 @@ where
         Ok(())
     }
 
-    /// Returns the breadth-first dependency scope rooted at `root`.
-    pub fn dependency_scope(&self, root: ModuleId) -> Result<Vec<ModuleId>> {
+    /// Returns the retained dependency group rooted at `root`.
+    ///
+    /// Member ids and module handles are captured from one graph traversal and
+    /// remain stable for the lifetime of the returned group.
+    pub fn load_group(&self, root: ModuleId) -> Result<LoadGroup<Arch, Tls>> {
         let root_slot = self.committed.module_slot(root)?;
-        let mut scope = Vec::new();
+        let mut members = Vec::new();
+        let mut scope = ModuleScope::new(self.domain_id());
         let mut visited = EntitySet::default();
         let mut queue = VecDeque::new();
         visited.insert(root_slot);
@@ -658,7 +705,8 @@ where
             let id = self.committed.make_module_id(slot);
             let module = require_module(id, self.committed.module(slot))?;
 
-            scope.push(id);
+            members.push(id);
+            scope.push(module.handle().clone());
             for &dep in module.direct_deps() {
                 let dep_id = self.committed.make_module_id(dep);
                 require_module(dep_id, self.committed.module(dep))?;
@@ -668,7 +716,13 @@ where
             }
         }
 
-        Ok(scope)
+        Ok(LoadGroup {
+            inner: Arc::new(LoadGroupInner {
+                root,
+                members: members.into_boxed_slice(),
+                scope,
+            }),
+        })
     }
 
     /// Imports one module and its bound dependency closure from another context.
@@ -893,7 +947,17 @@ mod tests {
 
         assert_eq!(direct_deps(&context, first), [second]);
         assert_eq!(direct_deps(&context, second), [first]);
-        assert_eq!(context.dependency_scope(first).unwrap(), [first, second]);
+        let group = context.load_group(first).unwrap();
+        assert_eq!(group.root(), first);
+        assert_eq!(group.members(), [first, second]);
+        assert_eq!(
+            group
+                .scope()
+                .iter()
+                .map(|module| module.name())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
     }
 
     #[test]
@@ -939,7 +1003,7 @@ mod tests {
         assert!(second.module(first_root.id()).is_err());
         assert!(second.key(first_key).is_err());
         assert!(second.resolve_key(first_key).is_err());
-        assert!(second.dependency_scope(first_root.id()).is_err());
+        assert!(second.load_group(first_root.id()).is_err());
         assert!(second.contains_module(second_root.id()).unwrap());
     }
 
@@ -1220,9 +1284,9 @@ mod tests {
         assert_eq!(direct_deps(&context, root_id), [canonical_id]);
         assert_eq!(
             context
-                .dependency_scope(root_id)
+                .load_group(root_id)
                 .expect("dependency scope should resolve")
-                .as_slice(),
+                .members(),
             &[root_id, canonical_id]
         );
     }
@@ -1356,9 +1420,9 @@ mod tests {
         assert_eq!(direct_deps(&source, root_id), [canonical_id]);
         assert_eq!(
             source
-                .dependency_scope(root_id)
+                .load_group(root_id)
                 .expect("source scope should resolve")
-                .as_slice(),
+                .members(),
             &[root_id, canonical_id]
         );
         assert_eq!(direct_deps(&target, target_root), [target_canonical]);
@@ -1366,9 +1430,9 @@ mod tests {
         assert!(target.contains_module(target_replacement).unwrap());
         assert_eq!(
             target
-                .dependency_scope(target_root)
+                .load_group(target_root)
                 .expect("target scope should resolve")
-                .as_slice(),
+                .members(),
             &[target_root, target_canonical]
         );
     }
@@ -1441,7 +1505,10 @@ mod tests {
                 .unwrap()
                 .ptr_eq(source.module(source_dep_id).unwrap())
         );
-        assert_eq!(target.dependency_scope(root_id).unwrap(), [root_id, dep]);
+        assert_eq!(
+            target.load_group(root_id).unwrap().members(),
+            [root_id, dep]
+        );
 
         let unloaded = target.release(root).unwrap();
         assert_eq!(
@@ -1478,7 +1545,7 @@ mod tests {
         let second = target.module_id("second").unwrap();
 
         assert_eq!(
-            target.dependency_scope(first_id).unwrap(),
+            target.load_group(first_id).unwrap().members(),
             [first_id, second]
         );
         assert_eq!(target.release(first).unwrap().len(), 2);

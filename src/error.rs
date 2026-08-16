@@ -457,6 +457,16 @@ impl Display for ParseNoteError {
 pub enum ParseEhdrError {
     /// The ELF magic bytes do not match `0x7fELF`.
     InvalidMagic,
+    /// `invalid ELF class: {found}`
+    InvalidClass {
+        /// ELF class found in the file header.
+        found: ElfClass,
+    },
+    /// `invalid ELF data encoding: {found}`
+    InvalidDataEncoding {
+        /// ELF data encoding found in the file header.
+        found: ElfDataEncoding,
+    },
     /// `file class mismatch: expected {expected}, found {found}`
     FileClassMismatch {
         /// ELF class expected by the selected loader configuration.
@@ -512,6 +522,10 @@ impl Display for ParseEhdrError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidMagic => f.write_str("invalid ELF magic"),
+            Self::InvalidClass { found } => write!(f, "invalid ELF class: {found}"),
+            Self::InvalidDataEncoding { found } => {
+                write!(f, "invalid ELF data encoding: {found}")
+            }
             Self::FileClassMismatch { expected, found } => {
                 write!(f, "file class mismatch: expected {expected}, found {found}")
             }

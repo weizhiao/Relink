@@ -8,7 +8,7 @@ use crate::object::layout::PltGotSection;
 use crate::{
     ByteRepr, RelocReason, Result,
     arch::ArchKind,
-    elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelocationType, ElfWord},
+    elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelocationType, ElfTarget, ElfWord},
     image::LookupScope,
     lazy::{LazyBinder, LazyPlacement},
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr},
@@ -35,6 +35,13 @@ pub trait RelocationArch: 'static {
 
     /// ELF class/layout used by this architecture.
     type Layout: ElfLayout;
+
+    /// Complete ELF target accepted by this relocation architecture.
+    const TARGET: ElfTarget = ElfTarget::new(
+        <Self::Layout as ElfLayout>::CLASS,
+        <Self::Layout as ElfLayout>::DATA_ENCODING,
+        Self::MACHINE,
+    );
 
     /// Dynamic relocation entry format used by this architecture.
     type Relocation: ByteRepr + ElfRelEntry<Self::Layout> + 'static;

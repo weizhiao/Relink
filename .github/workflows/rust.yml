@@ -111,8 +111,7 @@ jobs:
       run: cargo +stable install --locked cross --git https://github.com/cross-rs/cross
     - name: Run RISC-V object relocation tests
       env:
-        RUSTFLAGS: -C target-cpu=generic-rv64 -C target-feature=+m,+a,+f,+d,+c,+crt-static
-        CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=generic-rv64 -C target-feature=+m,+a,+f,+d,+c,+crt-static
+        CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C target-cpu=generic-rv64 -C target-feature=+m,+a,+f,+d,+c
         CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
         CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_AR: riscv64-linux-gnu-ar
       run: >

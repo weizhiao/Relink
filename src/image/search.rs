@@ -120,7 +120,19 @@ pub struct ModuleSearch {
     rpath: Option<Box<[SharedDir]>>,
 }
 
+pub(crate) static DEFAULT_MODULE_SEARCH: ModuleSearch = ModuleSearch::empty();
+
 impl ModuleSearch {
+    const fn empty() -> Self {
+        Self {
+            path: PathBuf::empty(),
+            file_id: None,
+            soname: None,
+            runpath: None,
+            rpath: None,
+        }
+    }
+
     #[cfg(feature = "object")]
     pub(crate) fn new(path: PathBuf, file_id: Option<FileId>) -> Self {
         Self {

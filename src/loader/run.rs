@@ -102,15 +102,15 @@ where
 {
     /// Reads the ELF header.
     ///
-    /// The header's `e_machine` is required to equal `Arch::MACHINE`. To
+    /// The header target is required to equal `Arch::TARGET`. To
     /// load an ELF whose target architecture differs from the host, switch
     /// the loader's target architecture with
     /// [`Loader::for_arch`](super::Loader::for_arch) before calling
-    /// `load_*`; the gate will then accept ELFs targeting `NewArch::MACHINE`.
+    /// `load_*`; the gate will then accept ELFs targeting `NewArch::TARGET`.
     pub fn read_ehdr(&mut self, object: &impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
         let ehdr = self
             .buf
-            .prepare_ehdr::<Arch::Layout>(object, Some(<Arch as RelocationArch>::MACHINE))?;
+            .prepare_ehdr::<Arch::Layout>(object, Arch::TARGET)?;
         Arch::validate_e_flags(ehdr.e_flags())?;
         Ok(ehdr)
     }
@@ -777,7 +777,7 @@ mod tests {
     fn make_header(phentsize: usize, phnum: usize, shentsize: usize, shnum: usize) -> ElfHeader {
         let mut ehdr = unsafe { core::mem::zeroed::<ElfEhdr>() };
         ehdr.e_ident[0..4].copy_from_slice(&ELFMAGIC);
-        ehdr.e_ident[EI_CLASS] = <NativeElfLayout as ElfLayout>::E_CLASS;
+        ehdr.e_ident[EI_CLASS] = <NativeElfLayout as ElfLayout>::CLASS.raw();
         ehdr.e_ident[EI_DATA] = <NativeElfLayout as ElfLayout>::DATA_ENCODING.raw();
         ehdr.e_ident[EI_VERSION] = EV_CURRENT;
         ehdr.e_type = ET_DYN as _;
@@ -791,8 +791,7 @@ mod tests {
         ehdr.e_shentsize = shentsize as _;
         ehdr.e_shnum = shnum as _;
 
-        ElfHeader::from_raw(ehdr, Some(NativeArch::MACHINE))
-            .expect("failed to parse crafted header")
+        ElfHeader::from_raw(ehdr, NativeArch::TARGET).expect("failed to parse crafted header")
     }
 
     #[test]

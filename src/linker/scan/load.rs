@@ -51,7 +51,7 @@ where
     where
         Meta: Default,
     {
-        let prepared = self.prepare_scan_load(context, &request)?;
+        let prepared = self.prepare_scan_load(context, request)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -64,15 +64,13 @@ where
     pub fn prepare_scan_load<Meta>(
         &mut self,
         context: &mut LinkContext<K, Meta, Arch, Tls>,
-        request: &Resolver::Request,
+        request: Resolver::Request,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
         context
             .committed
             .ensure_domain(self.linker.loader.domain_id())?;
-        let key = self.linker.resolver.map_request(request);
-        if let Some(key) = key.as_ref()
-            && let Some(prepared) = PreparedLoad::visible(context, key)
-        {
+        let key = self.linker.resolver.map_request(&request);
+        if let Some(prepared) = PreparedLoad::visible(context, &key) {
             return Ok(prepared);
         }
         let mut session = ResolveSession::new();

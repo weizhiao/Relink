@@ -4,8 +4,8 @@ mod request;
 mod search_path;
 mod traits;
 
-pub use request::{DependencyRequest, RootRequest};
 pub(crate) use request::{DependencySource, LoaderVisitor};
+pub use request::{ResolveInput, ResolveRequest};
 pub use search_path::{
     CandidateContext, CandidateRequest, FileNameKey, KeyMapper, PathKey, SearchPathResolver,
 };

@@ -194,9 +194,7 @@ where
             })
             .transpose()?;
         let key = self.linker.resolver.map_request(&request);
-        if let Some(key) = key.as_ref()
-            && let Some(prepared) = PreparedLoad::visible(context, key)
-        {
+        if let Some(prepared) = PreparedLoad::visible(context, &key) {
             return Ok(prepared);
         }
         let linker = self.linker;
@@ -209,7 +207,7 @@ where
             .with_observer(&mut self.observer);
         let mut resolve_context =
             LoadResolveContext::new(&mut context.committed, &mut session, tokens);
-        let resolved = resolve_context.resolve_root(&request, key, caller, &linker.resolver)?;
+        let resolved = resolve_context.resolve_root(request, key, caller, &linker.resolver)?;
         let root = resolve_context.stage(resolved, caller, &mut loader, &linker.resolver)?;
         resolve_context.resolve_pending(root, &mut loader, &linker.resolver)?;
         Ok(PreparedLoad::new(root, session, None, context))

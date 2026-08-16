@@ -23,11 +23,11 @@
 // when built for a single host, the items in non-native submodules look
 // dead but are intentionally kept available.
 
-use crate::{elf::ElfMachine, relocation::RelocationArch};
-use elf::abi::{
-    ELFCLASS32, ELFCLASS64, ELFDATA2LSB, ELFDATA2MSB, EM_386, EM_AARCH64, EM_ARM, EM_LOONGARCH,
-    EM_RISCV, EM_X86_64, EM_XTENSA,
+use crate::{
+    elf::{ElfClass, ElfMachine, ElfTarget},
+    relocation::RelocationArch,
 };
+use elf::abi::{EM_386, EM_AARCH64, EM_ARM, EM_LOONGARCH, EM_RISCV, EM_X86_64, EM_XTENSA};
 
 /// Runtime tag for a supported target architecture.
 ///
@@ -87,35 +87,32 @@ impl ArchKind {
     /// header should prefer [`Self::from_elf_bytes`] over checking
     /// [`Self::e_machine`] alone.
     #[inline]
-    pub const fn from_e_machine(machine: ElfMachine, class: u8) -> Option<Self> {
+    pub const fn from_e_machine(machine: ElfMachine, class: ElfClass) -> Option<Self> {
         match (machine.raw(), class) {
-            (EM_X86_64, ELFCLASS64) => Some(Self::X86_64),
-            (EM_AARCH64, ELFCLASS64) => Some(Self::AArch64),
-            (EM_RISCV, ELFCLASS64) => Some(Self::RiscV64),
-            (EM_RISCV, ELFCLASS32) => Some(Self::RiscV32),
-            (EM_LOONGARCH, ELFCLASS64) => Some(Self::LoongArch64),
-            (EM_386, ELFCLASS32) => Some(Self::X86),
-            (EM_ARM, ELFCLASS32) => Some(Self::Arm),
-            (EM_XTENSA, ELFCLASS32) => Some(Self::Xtensa),
+            (EM_X86_64, ElfClass::ELF64) => Some(Self::X86_64),
+            (EM_AARCH64, ElfClass::ELF64) => Some(Self::AArch64),
+            (EM_RISCV, ElfClass::ELF64) => Some(Self::RiscV64),
+            (EM_RISCV, ElfClass::ELF32) => Some(Self::RiscV32),
+            (EM_LOONGARCH, ElfClass::ELF64) => Some(Self::LoongArch64),
+            (EM_386, ElfClass::ELF32) => Some(Self::X86),
+            (EM_ARM, ElfClass::ELF32) => Some(Self::Arm),
+            (EM_XTENSA, ElfClass::ELF32) => Some(Self::Xtensa),
             _ => None,
         }
+    }
+
+    /// Resolves an ELF target description into a supported architecture kind.
+    #[inline]
+    pub const fn from_elf_target(target: ElfTarget) -> Option<Self> {
+        Self::from_e_machine(target.machine(), target.class())
     }
 
     /// Detects the architecture kind from raw ELF header bytes.
     ///
     /// Requires at least 20 bytes, covering `e_ident`, `e_type`, and
     /// `e_machine`.
-    pub fn from_elf_bytes(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 20 || !bytes.starts_with(b"\x7fELF") {
-            return None;
-        }
-        let class = bytes[4];
-        let machine = match bytes[5] {
-            ELFDATA2LSB => u16::from_le_bytes([bytes[18], bytes[19]]),
-            ELFDATA2MSB => u16::from_be_bytes([bytes[18], bytes[19]]),
-            _ => return None,
-        };
-        Self::from_e_machine(ElfMachine::new(machine), class)
+    pub fn from_elf_bytes(bytes: &[u8]) -> crate::Result<Option<Self>> {
+        Ok(Self::from_elf_target(ElfTarget::from_bytes(bytes)?))
     }
 }
 

@@ -1,8 +1,11 @@
 //! ELF class and byte-order layout selection.
 
-use super::raw::{
-    Elf32Sym, ElfDynRaw, ElfEhdrRaw, ElfPhdrRaw, ElfRelRaw, ElfRelaRaw, ElfShdrRaw, ElfSymRaw,
-    ElfWord,
+use super::{
+    ElfClass,
+    raw::{
+        Elf32Sym, ElfDynRaw, ElfEhdrRaw, ElfPhdrRaw, ElfRelRaw, ElfRelaRaw, ElfShdrRaw, ElfSymRaw,
+        ElfWord,
+    },
 };
 use core::fmt::{self, Display};
 use elf::abi::{ELFDATA2LSB, ELFDATA2MSB, ELFDATANONE};
@@ -60,8 +63,8 @@ impl Display for ElfDataEncoding {
 
 /// Groups the raw ELF types/constants selected for one ELF class.
 pub trait ElfLayout: 'static {
-    /// ELF class value (`ELFCLASS32` or `ELFCLASS64`).
-    const E_CLASS: u8;
+    /// ELF class represented by this layout.
+    const CLASS: ElfClass;
     /// ELF data encoding expected by this layout's raw field accessors.
     const DATA_ENCODING: ElfDataEncoding = if cfg!(target_endian = "little") {
         ElfDataEncoding::LSB
@@ -100,7 +103,7 @@ pub trait ElfLayout: 'static {
 pub struct Elf32Layout;
 
 impl ElfLayout for Elf32Layout {
-    const E_CLASS: u8 = elf::abi::ELFCLASS32;
+    const CLASS: ElfClass = ElfClass::ELF32;
     const REL_MASK: usize = 0xFF;
     const REL_BIT: usize = 8;
     const EHDR_SIZE: usize = core::mem::size_of::<Self::Ehdr>();
@@ -121,7 +124,7 @@ impl ElfLayout for Elf32Layout {
 pub struct Elf64Layout;
 
 impl ElfLayout for Elf64Layout {
-    const E_CLASS: u8 = elf::abi::ELFCLASS64;
+    const CLASS: ElfClass = ElfClass::ELF64;
     const REL_MASK: usize = 0xFFFFFFFF;
     const REL_BIT: usize = 32;
     const EHDR_SIZE: usize = core::mem::size_of::<Self::Ehdr>();

@@ -1,7 +1,7 @@
 use crate::{
     AlignedBytes, ParseEhdrError, Result,
     elf::{
-        Elf32Layout, Elf64Layout, ElfFileType, ElfHeader, ElfLayout, ElfMachine, ElfPhdr, ElfShdr,
+        Elf32Layout, Elf64Layout, ElfFileType, ElfHeader, ElfLayout, ElfPhdr, ElfShdr, ElfTarget,
     },
     input::{ElfReader, ElfReaderExt},
 };
@@ -21,19 +21,18 @@ impl ElfBuf {
 
     /// Reads and parses the ELF header.
     ///
-    /// When `expected_machine` is `Some(machine)` the parsed header is
-    /// rejected unless its `e_machine` equals `machine`. `None` skips the
-    /// machine check entirely (cross-architecture loading).
+    /// The parsed header must match `expected` in class, byte order, and
+    /// machine architecture.
     pub(crate) fn prepare_ehdr<L: ElfLayout>(
         &mut self,
         object: &impl ElfReader,
-        expected_machine: Option<ElfMachine>,
+        expected: ElfTarget,
     ) -> Result<ElfHeader<L>> {
         let mut raw = MaybeUninit::<L::Ehdr>::uninit();
         let bytes =
             unsafe { core::slice::from_raw_parts_mut(raw.as_mut_ptr().cast::<u8>(), L::EHDR_SIZE) };
         object.read(bytes, 0)?;
-        ElfHeader::from_raw(unsafe { raw.assume_init() }, expected_machine)
+        ElfHeader::from_raw(unsafe { raw.assume_init() }, expected)
     }
 
     pub(crate) fn prepare_phdrs<'a, L: ElfLayout>(

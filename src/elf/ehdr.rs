@@ -8,6 +8,7 @@ use super::raw::ElfEhdrRaw;
 use crate::{
     IoError, ParseEhdrError, ParsePhdrError, ParseShdrError, ReadBoundsError, Result,
     elf::{ElfDataEncoding, ElfLayout, ElfPhdr, ElfShdr, NativeElfLayout},
+    input::ElfReader,
 };
 use alloc::boxed::Box;
 use core::{
@@ -22,6 +23,11 @@ use elf::abi::*;
 pub struct ElfClass(u8);
 
 impl ElfClass {
+    /// 32-bit ELF layout.
+    pub const ELF32: Self = Self(ELFCLASS32);
+    /// 64-bit ELF layout.
+    pub const ELF64: Self = Self(ELFCLASS64);
+
     /// Creates an ELF class wrapper from a raw `EI_CLASS` value.
     #[inline]
     pub const fn new(raw: u8) -> Self {
@@ -32,6 +38,12 @@ impl ElfClass {
     #[inline]
     pub const fn raw(self) -> u8 {
         self.0
+    }
+
+    /// Returns whether this is the 64-bit ELF class.
+    #[inline]
+    pub const fn is_64(self) -> bool {
+        matches!(self, Self::ELF64)
     }
 }
 
@@ -107,6 +119,109 @@ impl Display for ElfMachine {
     }
 }
 
+/// Architecture-relevant fields shared by every ELF header layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ElfTarget {
+    class: ElfClass,
+    encoding: ElfDataEncoding,
+    machine: ElfMachine,
+}
+
+impl ElfTarget {
+    /// Creates an ELF target description.
+    #[inline]
+    pub const fn new(class: ElfClass, encoding: ElfDataEncoding, machine: ElfMachine) -> Self {
+        Self {
+            class,
+            encoding,
+            machine,
+        }
+    }
+
+    /// Parses the architecture fields from an ELF header prefix.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() < 20 {
+            return Err(IoError::ReadOutOfBounds(Box::new(ReadBoundsError::new(
+                0,
+                20,
+                bytes.len(),
+            )))
+            .into());
+        }
+        if !bytes.starts_with(&ELFMAGIC) {
+            return Err(ParseEhdrError::InvalidMagic.into());
+        }
+
+        let class = ElfClass::new(bytes[EI_CLASS]);
+        if !matches!(class, ElfClass::ELF32 | ElfClass::ELF64) {
+            return Err(ParseEhdrError::InvalidClass { found: class }.into());
+        }
+
+        let encoding = ElfDataEncoding::new(bytes[EI_DATA]);
+        let machine = match encoding {
+            ElfDataEncoding::LSB => u16::from_le_bytes([bytes[18], bytes[19]]),
+            ElfDataEncoding::MSB => u16::from_be_bytes([bytes[18], bytes[19]]),
+            _ => {
+                return Err(ParseEhdrError::InvalidDataEncoding { found: encoding }.into());
+            }
+        };
+        if bytes[EI_VERSION] != EV_CURRENT {
+            return Err(ParseEhdrError::InvalidVersion.into());
+        }
+        Ok(Self::new(class, encoding, ElfMachine::new(machine)))
+    }
+
+    /// Reads and parses the architecture fields from an ELF source.
+    pub fn read(reader: &(impl ElfReader + ?Sized)) -> Result<Self> {
+        let mut header = [0; 20];
+        reader.read(&mut header, 0)?;
+        Self::from_bytes(&header)
+    }
+
+    /// Returns the ELF class used by this target.
+    #[inline]
+    pub const fn class(self) -> ElfClass {
+        self.class
+    }
+
+    /// Returns the ELF byte order used by this target.
+    #[inline]
+    pub const fn encoding(self) -> ElfDataEncoding {
+        self.encoding
+    }
+
+    /// Returns the ELF machine used by this target.
+    #[inline]
+    pub const fn machine(self) -> ElfMachine {
+        self.machine
+    }
+
+    fn ensure_matches(self, expected: Self) -> Result<()> {
+        if self.class != expected.class {
+            return Err(ParseEhdrError::FileClassMismatch {
+                expected: expected.class,
+                found: self.class,
+            }
+            .into());
+        }
+        if self.encoding != expected.encoding {
+            return Err(ParseEhdrError::FileEndianMismatch {
+                expected: expected.encoding,
+                found: self.encoding,
+            }
+            .into());
+        }
+        if self.machine != expected.machine {
+            return Err(ParseEhdrError::FileArchMismatch {
+                expected: expected.machine,
+                found: self.machine,
+            }
+            .into());
+        }
+        Ok(())
+    }
+}
+
 /// Semantic wrapper for the ELF `e_type` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -178,15 +293,12 @@ pub struct ElfHeader<L: ElfLayout = NativeElfLayout> {
 impl<L: ElfLayout> ElfHeader<L> {
     /// Wraps a raw header and validates it.
     ///
-    /// When `expected_machine` is `Some(value)`, validation requires
-    /// `e_machine == value`. When it is `None`, the machine architecture
-    /// check is skipped, enabling cross-architecture loading (for example
-    /// mapping an x86-64 ELF on a RISC-V host). All other validations
-    /// (magic, class, version) always run.
+    /// `expected` describes the class, byte order, and machine required by the
+    /// selected relocation architecture.
     #[inline]
-    pub(crate) fn from_raw(ehdr: L::Ehdr, expected_machine: Option<ElfMachine>) -> Result<Self> {
+    pub(crate) fn from_raw(ehdr: L::Ehdr, expected: ElfTarget) -> Result<Self> {
         let ehdr = Self { ehdr };
-        ehdr.validate(expected_machine)?;
+        ehdr.validate(expected)?;
         Ok(ehdr)
     }
 
@@ -221,6 +333,12 @@ impl<L: ElfLayout> ElfHeader<L> {
         ElfMachine::new(self.ehdr.e_machine())
     }
 
+    /// Returns the architecture-relevant fields of this header.
+    #[inline]
+    pub fn target(&self) -> ElfTarget {
+        ElfTarget::new(self.class(), self.data_encoding(), self.machine())
+    }
+
     /// Returns the processor-specific ELF header flags (`e_flags`).
     #[inline]
     pub fn e_flags(&self) -> u32 {
@@ -239,52 +357,18 @@ impl<L: ElfLayout> ElfHeader<L> {
         self.ehdr.e_entry()
     }
 
-    /// Validates the ELF header magic, class, version, and optionally architecture.
-    ///
-    /// When `expected_machine` is `None`, the machine architecture check is
-    /// skipped. This is intended for cross-architecture loaders that map ELF
-    /// files targeting a different CPU than the host. When `Some(value)`,
-    /// the header's `e_machine` must equal `value`.
-    pub(crate) fn validate(&self, expected_machine: Option<ElfMachine>) -> Result<()> {
+    /// Validates the ELF header and its target against `expected`.
+    pub(crate) fn validate(&self, expected: ElfTarget) -> Result<()> {
         // Check ELF magic bytes
         if self.ehdr.e_ident()[0..4] != ELFMAGIC {
             return Err(ParseEhdrError::InvalidMagic.into());
         }
 
-        // Check file class (32-bit vs 64-bit)
-        let class = self.class();
-        if class.raw() != L::E_CLASS {
-            return Err(ParseEhdrError::FileClassMismatch {
-                expected: ElfClass::new(L::E_CLASS),
-                found: class,
-            }
-            .into());
-        }
-
-        let data_encoding = self.data_encoding();
-        if data_encoding != L::DATA_ENCODING {
-            return Err(ParseEhdrError::FileEndianMismatch {
-                expected: L::DATA_ENCODING,
-                found: data_encoding,
-            }
-            .into());
-        }
+        self.target().ensure_matches(expected)?;
 
         // Check ELF version
         if self.ehdr.e_ident()[EI_VERSION] != EV_CURRENT {
             return Err(ParseEhdrError::InvalidVersion.into());
-        }
-
-        if let Some(expected) = expected_machine {
-            // Check machine architecture against the caller-supplied target.
-            let machine = self.machine();
-            if machine != expected {
-                return Err(ParseEhdrError::FileArchMismatch {
-                    expected,
-                    found: machine,
-                }
-                .into());
-            }
         }
 
         Ok(())

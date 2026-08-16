@@ -1,4 +1,5 @@
 use super::*;
+use elf_loader::image::ElfCore;
 use std::sync::OnceLock;
 
 struct LoadingFixtures {
@@ -63,34 +64,25 @@ impl MultiBinaryResolver {
 impl KeyResolver<&'static str> for MultiBinaryResolver {
     type Request = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> Option<&'static str> {
-        Some(*request)
+    fn map_request(&self, request: &Self::Request) -> &'static str {
+        *request
     }
 
-    fn resolve_root<'cfg>(
+    fn resolve<'cfg>(
         &self,
-        req: &RootRequest<'_, &'static str, &'static str>,
+        req: ResolveRequest<'_, &'static str, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
     where
         &'static str: 'cfg,
     {
-        let key = req.request();
-        assert_eq!(*key, self.root);
-        let module = self.module(key).expect("missing root module");
-        Ok(ResolvedKey::load(
-            module.key,
-            ElfBinary::new(module.name, module.data),
-        ))
-    }
-
-    fn resolve_dependency<'cfg>(
-        &self,
-        req: &elf_loader::linker::DependencyRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
-        self.module(req.needed())
+        let key = match req.input() {
+            ResolveInput::Root { request, .. } => {
+                assert_eq!(*request, self.root);
+                *request
+            }
+            ResolveInput::Dependency { needed } => *needed,
+        };
+        self.module(key)
             .map(|module| ResolvedKey::load(module.key, ElfBinary::new(module.name, module.data)))
             .ok_or_else(|| req.unresolved())
     }
@@ -167,6 +159,15 @@ fn commits_resolver_modules() {
         .run()
         .load(&mut context, "root")
         .expect("load should accept a resolver-provided module");
+
+    assert!(
+        context
+            .module(root.root())
+            .unwrap()
+            .downcast_ref::<ElfCore>()
+            .is_some(),
+        "link contexts must retain the public ELF core view"
+    );
 
     assert_eq!(
         context

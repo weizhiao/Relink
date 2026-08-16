@@ -1,7 +1,5 @@
 use super::{
-    resolver::{
-        DependencyRequest, DependencySource, KeyResolver, LoaderVisitor, ResolvedKey, RootRequest,
-    },
+    resolver::{DependencySource, KeyResolver, LoaderVisitor, ResolveRequest, ResolvedKey},
     session::ResolveSession,
     storage::{CommittedStorage, ModuleSlot},
 };
@@ -9,7 +7,10 @@ use crate::{
     LinkResolverError, LinkerError, LoaderRun, ParsePhdrError, Result,
     arch::NativeArch,
     entity::EntitySet,
-    image::{ModuleHandle, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic, ScannedElf},
+    image::{
+        DEFAULT_MODULE_SEARCH, ModuleHandle, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic,
+        ScannedElf,
+    },
     input::FileId,
     memory::{HostRegion, RegionAccess},
     observer::{LinkerObserver, LoadObserver},
@@ -252,8 +253,8 @@ where
 
     pub(crate) fn resolve_root<'cfg, Resolver>(
         &self,
-        request: &Resolver::Request,
-        key: Option<K>,
+        request: Resolver::Request,
+        key: K,
         caller: Option<ModuleSlot>,
         resolver: &Resolver,
     ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
@@ -262,14 +263,15 @@ where
         Resolver: KeyResolver<K, Arch, Tls>,
     {
         let contains_key = |key: &K| self.contains_key(key);
-        let req = RootRequest::new(
-            request,
-            key,
-            caller.and_then(|slot| self.search(slot)),
-            &self.tokens,
-            &contains_key,
-        );
-        resolver.resolve_root(&req)
+        let search = caller
+            .and_then(|slot| self.search(slot))
+            .unwrap_or(&DEFAULT_MODULE_SEARCH);
+        let loaders = |visitor: &mut LoaderVisitor<'_>| match caller {
+            Some(slot) => self.visit_loaders(slot, visitor),
+            None => Ok(()),
+        };
+        let req = ResolveRequest::root(request, key, search, &self.tokens, &loaders, &contains_key);
+        resolver.resolve(req)
     }
 
     fn direct_deps_for<'cfg, D, Obs, F, M, Exec, Resolver>(
@@ -308,7 +310,6 @@ where
                     let needed = source
                         .needed(idx)
                         .expect("DT_NEEDED index must be within the parsed dependency list");
-                    let owner_key = self.committed.key(self.committed.entry_key(slot));
                     let loaders =
                         |visitor: &mut LoaderVisitor<'_>| self.visit_loaders(slot, visitor);
                     if let Some(key) = resolver
@@ -317,15 +318,14 @@ where
                     {
                         ResolvedKey::existing(key)
                     } else {
-                        let req = DependencyRequest::new(
-                            owner_key,
-                            search,
+                        let req = ResolveRequest::dependency(
                             needed,
+                            search,
                             &self.tokens,
                             &loaders,
                             &contains_key,
                         );
-                        resolver.resolve_dependency(&req)?
+                        resolver.resolve(req)?
                     }
                 };
                 push_dep(&mut direct_deps, stage(self, key, slot, loader)?);

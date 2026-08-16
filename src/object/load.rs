@@ -368,14 +368,14 @@ mod tests {
     fn make_object_header(shentsize: usize, shnum: usize) -> ElfHeader {
         let ehdr = make_raw_object_header(shentsize, shnum);
 
-        ElfHeader::from_raw(ehdr, Some(NativeArch::MACHINE))
+        ElfHeader::from_raw(ehdr, NativeArch::TARGET)
             .expect("failed to parse crafted object header")
     }
 
     fn make_raw_object_header(shentsize: usize, shnum: usize) -> ElfEhdr {
         let mut ehdr = unsafe { core::mem::zeroed::<ElfEhdr>() };
         ehdr.e_ident[0..4].copy_from_slice(&ELFMAGIC);
-        ehdr.e_ident[EI_CLASS] = <NativeElfLayout as ElfLayout>::E_CLASS;
+        ehdr.e_ident[EI_CLASS] = <NativeElfLayout as ElfLayout>::CLASS.raw();
         ehdr.e_ident[EI_DATA] = <NativeElfLayout as ElfLayout>::DATA_ENCODING.raw();
         ehdr.e_ident[EI_VERSION] = EV_CURRENT;
         ehdr.e_type = ET_REL as _;

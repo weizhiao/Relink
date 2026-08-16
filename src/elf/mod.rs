@@ -37,7 +37,7 @@ pub(crate) use symbol::SymbolInfo;
 // Public API exports
 pub use dynamic::{ElfDyn, ElfDynamicTag};
 /// Core ELF data types for program headers, relocations, and symbols.
-pub use ehdr::{ElfClass, ElfFileType, ElfHeader, ElfMachine};
+pub use ehdr::{ElfClass, ElfFileType, ElfHeader, ElfMachine, ElfTarget};
 pub use hash::HashTable;
 pub use layout::{Elf32Layout, Elf64Layout, ElfDataEncoding, ElfLayout, NativeElfLayout};
 pub use lifecycle::Lifecycle;
