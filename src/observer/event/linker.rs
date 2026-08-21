@@ -1,6 +1,6 @@
 use crate::{
     arch::NativeArch,
-    image::{LookupScope, ModuleScope, RawDynamic},
+    image::{LookupScope, RawDynamic},
     memory::{HostRegion, RegionAccess},
     relocation::{BindingMode, RelocationArch},
     tls::TlsResolver,
@@ -25,10 +25,10 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn new(raw: RawDynamic<D, Arch, R, Tls>, scope: &ModuleScope<Arch, Tls>) -> Self {
+    pub(crate) fn new(raw: RawDynamic<D, Arch, R, Tls>, scope: LookupScope<Arch, Tls>) -> Self {
         Self {
             raw,
-            scope: LookupScope::from_group(scope.clone()),
+            scope,
             binding: BindingMode::Default,
         }
     }
@@ -44,8 +44,8 @@ where
     }
 
     #[inline]
-    pub fn set_scope(&mut self, scope: LookupScope<Arch, Tls>) {
-        self.scope = scope;
+    pub fn scope_mut(&mut self) -> &mut LookupScope<Arch, Tls> {
+        &mut self.scope
     }
 
     #[inline]

@@ -85,9 +85,10 @@ where
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(None)),
             executor: self.executor,
             domain: self.domain,
+            source_id: self.source_id,
             state: ModuleState::new(),
             lifecycle: OnceCell::new(),
-            search: ModuleSearch::new(self.path, self.file_id),
+            search: ModuleSearch::new(self.path),
             exports: arc_unsize!(
                 Arc::new(ObjectExports::<Arch::Layout>::empty())
                     => dyn SymbolExports<Arch::Layout>

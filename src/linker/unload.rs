@@ -13,7 +13,7 @@ pub struct UnloadedModule<Meta = (), Arch: RelocationArch = NativeArch, Tls: Tls
 {
     id: ModuleId,
     module: ModuleHandle<Arch, Tls>,
-    _scope: Option<LookupScope<Arch, Tls>>,
+    _scope: LookupScope<Arch, Tls>,
     meta: Meta,
 }
 
@@ -26,7 +26,7 @@ where
     pub(super) const fn new(
         id: ModuleId,
         module: ModuleHandle<Arch, Tls>,
-        scope: Option<LookupScope<Arch, Tls>>,
+        scope: LookupScope<Arch, Tls>,
         meta: Meta,
     ) -> Self {
         Self {

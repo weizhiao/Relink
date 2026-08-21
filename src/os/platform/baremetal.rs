@@ -1,6 +1,6 @@
 use crate::{
     IoError, Result,
-    input::{ElfReader, Path},
+    input::{ElfReader, ModuleSourceId, Path},
 };
 use core::ffi::c_void;
 
@@ -40,6 +40,10 @@ impl ElfReader for RawFile {
     }
 
     fn read(&self, _buf: &mut [u8], _offset: usize) -> Result<()> {
+        match *self {}
+    }
+
+    fn source_id(&self) -> ModuleSourceId {
         match *self {}
     }
 

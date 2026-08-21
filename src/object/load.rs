@@ -76,7 +76,7 @@ where
         let mut sections = ObjectSections::new(shdrs, shstrtab);
         let mut user_data = D::default();
         let path = PathBuf::from(object.path());
-        let file_id = object.file_id();
+        let source_id = object.source_id();
         let page_size = self.loader.page_size()?.bytes();
         let executor = self.loader.executor();
         let object_groups = Arc::clone(&self.object_groups);
@@ -98,7 +98,7 @@ where
         )?;
         let builder = ObjectBuilder::<Tls, D, Arch, M::Region>::new(
             path,
-            file_id,
+            source_id,
             sections,
             segments,
             section_segments,
@@ -264,7 +264,7 @@ mod tests {
         arch::NativeArch,
         elf::{ElfEhdr, ElfLayout, ElfSectionFlags, ElfSectionId, ElfSectionType, NativeElfLayout},
         image::Module,
-        input::{ElfBinary, ElfReader, Path},
+        input::{ElfBinary, ElfReader, ModuleSourceId, Path},
         memory::RegionAccess,
         observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent, LoadObserver},
         relocation::RelocationArch,
@@ -358,6 +358,10 @@ mod tests {
         fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
             buf.copy_from_slice(&self.bytes[offset..offset + buf.len()]);
             Ok(())
+        }
+
+        fn source_id(&self) -> ModuleSourceId {
+            ModuleSourceId::opaque(0, 3)
         }
 
         fn as_fd(&self) -> Option<isize> {

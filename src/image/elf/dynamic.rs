@@ -426,8 +426,8 @@ where
             .runpath_off
             .map(|runpath_off| symtab.strtab().get_str(runpath_off));
         let search = match search_paths {
-            Some(paths) => paths.module_search(self.path, self.file_id, soname, runpath, rpath),
-            None => ModuleSearch::from_dynamic(self.path, self.file_id, soname, runpath, rpath),
+            Some(paths) => paths.module_search(self.path, soname, runpath, rpath),
+            None => ModuleSearch::from_dynamic(self.path, soname, runpath, rpath),
         };
 
         let tls = if let Some(info) = &self.tls_info {
@@ -454,6 +454,7 @@ where
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: self.executor,
             domain: self.domain,
+            source_id: self.source_id,
             state: ModuleState::new(),
             lifecycle: OnceCell::new(),
             search,

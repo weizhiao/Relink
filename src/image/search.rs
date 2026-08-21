@@ -1,5 +1,5 @@
 use crate::{
-    input::{FileId, Path, PathBuf},
+    input::{Path, PathBuf},
     sync::Arc,
 };
 use alloc::{boxed::Box, collections::BTreeSet, string::String, vec::Vec};
@@ -95,26 +95,24 @@ impl SearchPathPool {
     pub(crate) fn module_search(
         &mut self,
         path: PathBuf,
-        file_id: Option<FileId>,
         soname: Option<&str>,
         runpath: Option<&str>,
         rpath: Option<&str>,
     ) -> ModuleSearch {
         let Self { dirs, tokens } = self;
-        ModuleSearch::from_dynamic_with(path, file_id, soname, runpath, rpath, tokens, |path| {
+        ModuleSearch::from_dynamic_with(path, soname, runpath, rpath, tokens, |path| {
             Self::intern(dirs, path)
         })
     }
 }
 
-/// Filesystem identity and dynamic search metadata retained by a module.
+/// Dynamic search metadata retained by a module.
 ///
 /// Dynamic string tokens in `DT_RUNPATH` and `DT_RPATH` are expanded when this
 /// value is created. Their directories may be shared with other modules through
 /// a [`SearchPathPool`].
 pub struct ModuleSearch {
     path: PathBuf,
-    file_id: Option<FileId>,
     soname: Option<Box<str>>,
     runpath: Option<Box<[SharedDir]>>,
     rpath: Option<Box<[SharedDir]>>,
@@ -126,7 +124,6 @@ impl ModuleSearch {
     const fn empty() -> Self {
         Self {
             path: PathBuf::empty(),
-            file_id: None,
             soname: None,
             runpath: None,
             rpath: None,
@@ -134,10 +131,9 @@ impl ModuleSearch {
     }
 
     #[cfg(feature = "object")]
-    pub(crate) fn new(path: PathBuf, file_id: Option<FileId>) -> Self {
+    pub(crate) fn new(path: PathBuf) -> Self {
         Self {
             path,
-            file_id,
             soname: None,
             runpath: None,
             rpath: None,
@@ -146,14 +142,12 @@ impl ModuleSearch {
 
     pub(crate) fn from_dynamic(
         path: PathBuf,
-        file_id: Option<FileId>,
         soname: Option<&str>,
         runpath: Option<&str>,
         rpath: Option<&str>,
     ) -> Self {
         Self::from_dynamic_with(
             path,
-            file_id,
             soname,
             runpath,
             rpath,
@@ -164,7 +158,6 @@ impl ModuleSearch {
 
     fn from_dynamic_with(
         path: PathBuf,
-        file_id: Option<FileId>,
         soname: Option<&str>,
         runpath: Option<&str>,
         rpath: Option<&str>,
@@ -176,7 +169,6 @@ impl ModuleSearch {
         let rpath = rpath.map(|value| expand_dirs(value, origin, tokens, &mut intern));
         Self {
             path,
-            file_id,
             soname: soname.map(Box::from),
             runpath,
             rpath,
@@ -193,12 +185,6 @@ impl ModuleSearch {
     #[inline]
     pub fn path(&self) -> &Path {
         self.path.as_path()
-    }
-
-    /// Returns the identity of the backing file, when supplied by the reader.
-    #[inline]
-    pub const fn file_id(&self) -> Option<FileId> {
-        self.file_id
     }
 
     /// Returns `DT_SONAME`, if present.
@@ -255,7 +241,6 @@ impl fmt::Debug for ModuleSearch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ModuleSearch")
             .field("path", &self.path)
-            .field("file_id", &self.file_id)
             .field("soname", &self.soname)
             .field("runpath", &self.runpath)
             .field("rpath", &self.rpath)
@@ -313,13 +298,11 @@ mod tests {
         let first = paths.module_search(
             PathBuf::from("/opt/app/first.so"),
             None,
-            None,
             Some("$ORIGIN/lib:$ORIGIN/lib/:/usr/lib/"),
             Some("/ignored"),
         );
         let second = paths.module_search(
             PathBuf::from("/opt/app/second.so"),
-            None,
             None,
             Some("$ORIGIN/lib:/usr/lib"),
             None,

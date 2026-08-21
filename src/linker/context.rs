@@ -6,7 +6,7 @@ use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
     entity::{EntitySet, SecondaryMap},
-    image::{Module, ModuleHandle, ModuleScope, SearchPathPool},
+    image::{GlobalScope, LookupScope, Module, ModuleHandle, ModuleScope, SearchPathPool},
     relocation::{RelocationArch, SymbolRegistry},
     runtime::DomainId,
     sync::Arc,
@@ -55,7 +55,10 @@ where
         return Ok(());
     }
 
-    if let Some(target_slot) = target.committed.matching_module(module.handle()) {
+    if let Some(target_slot) = target
+        .committed
+        .module_for_source(module.handle().source_id())
+    {
         aliases.push((key, target_slot));
         mapped.insert(slot, target_slot);
         return Ok(());
@@ -63,7 +66,14 @@ where
 
     let target_slot = target.committed.intern_module(key);
     mapped.insert(slot, target_slot);
-    for dep in module.dependencies() {
+    for dep in module.direct_deps().iter().copied() {
+        collect_import_modules(target, source, dep, mapped, new_modules, aliases)?;
+    }
+    for source_id in module.handle().state().bindings().iter().copied() {
+        let dep = source
+            .committed
+            .module_for_source(source_id)
+            .expect("bound module must remain committed with its dependent");
         collect_import_modules(target, source, dep, mapped, new_modules, aliases)?;
     }
     new_modules.push(slot);
@@ -96,26 +106,15 @@ where
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let reloc_deps = module
-            .reloc_deps()
-            .iter()
-            .map(|dep| {
-                *mapped
-                    .get(*dep)
-                    .expect("dependency closure must contain every bound module")
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
         let target_slot = *mapped
             .get(slot)
             .expect("collected module must have a target slot");
         target.committed.insert(
             target_slot,
-            StoredEntry::relocated(
+            StoredEntry::new(
                 module.handle().clone(),
                 direct_deps,
-                reloc_deps,
-                module.scope().cloned(),
+                module.scope().clone(),
                 0,
                 TargetMeta::default(),
             ),
@@ -217,6 +216,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LoadGroup<Arch, Tls> {
 /// belongs in the concrete module type instead.
 pub struct LinkContext<K, Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
 {
+    pub(super) global: GlobalScope<Arch, Tls>,
     pub(super) committed: CommittedStorage<K, Meta, Arch, Tls>,
     pub(super) symbols: Arc<SymbolRegistry<Arch, Tls>>,
     pub(crate) search_paths: SearchPathPool,
@@ -231,6 +231,7 @@ where
     #[inline]
     pub fn new(domain: DomainId) -> Self {
         Self {
+            global: GlobalScope::new(domain),
             committed: CommittedStorage::new(ContextId::fresh(), domain),
             symbols: Arc::new(SymbolRegistry::new()),
             search_paths: SearchPathPool::default(),
@@ -382,11 +383,15 @@ where
     #[inline]
     pub fn reloc_deps(&self, id: ModuleId) -> Result<impl Iterator<Item = ModuleId> + '_> {
         let slot = self.committed.module_slot(id)?;
-        Ok(require_module(id, self.committed.module(slot))?
-            .reloc_deps()
+        let deps = require_module(id, self.committed.module(slot))?
+            .handle()
+            .state()
+            .bindings()
             .iter()
-            .copied()
-            .map(|slot| self.committed.make_module_id(slot)))
+            .filter_map(|source| self.committed.module_for_source(*source))
+            .map(|slot| self.committed.make_module_id(slot))
+            .collect::<Vec<_>>();
+        Ok(deps.into_iter())
     }
 
     /// Iterates committed modules in load order.
@@ -414,7 +419,7 @@ where
     ///
     /// All keys and dependency edges are resolved before any module is
     /// committed, so cyclic dependency graphs are supported. Returned leases
-    /// follow the input order. Repeated handles or file identities share one
+    /// follow the input order. Modules with the same source share one
     /// slot; the first occurrence supplies the module's dependencies and later
     /// keys become preferred aliases.
     pub fn insert_batch<R>(
@@ -435,8 +440,7 @@ where
 
         let mut keys = EntitySet::default();
         let mut batch = SecondaryMap::default();
-        let mut identities = BTreeMap::new();
-        let mut files = BTreeMap::new();
+        let mut sources = BTreeMap::new();
         let mut reused = BTreeMap::<ModuleSlot, usize>::new();
         let mut aliases = Vec::new();
         let mut result_slots = Vec::with_capacity(modules.len());
@@ -455,31 +459,20 @@ where
                 .into());
             }
 
-            let identity = module.identity();
-            let file = module.search().and_then(|search| search.file_id());
-            let slot = if let Some(slot) = self.committed.matching_module(&module) {
+            let source = module.source_id();
+            let slot = if let Some(slot) = self.committed.module_for_source(module.source_id()) {
                 *reused.entry(slot).or_default() += 1;
                 aliases.push((key, slot));
                 slot
-            } else if let Some(idx) = identities
-                .get(&identity)
-                .copied()
-                .or_else(|| file.and_then(|id| files.get(&id).copied()))
-            {
+            } else if let Some(idx) = sources.get(&source).copied() {
                 let (slot, _, _, roots) = &mut planned[idx];
                 *roots += 1;
                 aliases.push((key, *slot));
-                identities.insert(identity, idx);
-                if let Some(id) = file {
-                    files.insert(id, idx);
-                }
+                sources.insert(source, idx);
                 *slot
             } else {
                 let slot = self.committed.intern_module(key);
-                identities.insert(identity, planned.len());
-                if let Some(id) = file {
-                    files.insert(id, planned.len());
-                }
+                sources.insert(source, planned.len());
                 planned.push((slot, module, deps, 1usize));
                 slot
             };
@@ -513,14 +506,17 @@ where
 
         let mut lifecycle = Vec::with_capacity(resolved.len());
         for (slot, module, deps, roots) in resolved {
-            self.committed
-                .insert(slot, StoredEntry::new(module, deps, roots, Meta::default()));
+            let scope = LookupScope::empty(module.domain_id());
+            self.committed.insert(
+                slot,
+                StoredEntry::new(module, deps, scope, roots, Meta::default()),
+            );
             lifecycle.push(slot);
         }
         for (slot, count) in reused {
             self.committed
                 .module_mut(slot)
-                .expect("identity index must refer to a committed module")
+                .expect("source index must refer to a committed module")
                 .acquire_roots(count);
         }
         for (alias, module) in aliases {
@@ -537,7 +533,7 @@ where
     ///
     /// The returned lease represents one direct acquisition. The canonical
     /// key must not already refer to a committed module. If `module` or its
-    /// backing file is already committed under another key, the new key becomes
+    /// source is already committed under another key, the new key becomes
     /// its preferred alias; the existing dependencies and metadata are retained.
     pub fn insert_with_meta<R>(
         &mut self,
@@ -563,11 +559,11 @@ where
             })
             .into());
         }
-        if let Some(slot) = self.committed.matching_module(&module) {
+        if let Some(slot) = self.committed.module_for_source(module.source_id()) {
             self.committed.prefer_alias(key, slot);
             self.committed
                 .module_mut(slot)
-                .expect("identity index must refer to a committed module")
+                .expect("source index must refer to a committed module")
                 .acquire_root();
             return Ok(ModuleLease::new(self.committed.make_module_id(slot)));
         }
@@ -583,8 +579,11 @@ where
         }
         let direct_deps = resolved_deps.into_boxed_slice();
         let module_slot = self.committed.intern_module(key);
-        self.committed
-            .insert(module_slot, StoredEntry::new(module, direct_deps, 1, meta));
+        let scope = LookupScope::empty(module.domain_id());
+        self.committed.insert(
+            module_slot,
+            StoredEntry::new(module, direct_deps, scope, 1, meta),
+        );
         self.committed.extend_lifecycle(&[module_slot]);
         Ok(ModuleLease::new(self.committed.make_module_id(module_slot)))
     }
@@ -632,6 +631,33 @@ where
         Ok(())
     }
 
+    /// Adds a module and its direct dependency closure to this namespace's
+    /// global symbol lookup order.
+    ///
+    /// Promotion changes visibility only. Existing leases and dependency
+    /// reachability continue to control module lifetime.
+    pub fn promote_global(&mut self, root: ModuleId) -> Result<()> {
+        let root = self.committed.module_slot(root)?;
+        let mut visited = EntitySet::default();
+        let mut queue = VecDeque::from([root]);
+        let mut global = self.global.write();
+        while let Some(slot) = queue.pop_front() {
+            if !visited.insert(slot) {
+                continue;
+            }
+            let id = self.committed.make_module_id(slot);
+            let module = require_module(id, self.committed.module(slot))?;
+            if !global
+                .iter()
+                .any(|candidate| candidate.source_id() == module.handle().source_id())
+            {
+                global.push(module.handle().clone());
+            }
+            queue.extend(module.direct_deps().iter().copied());
+        }
+        Ok(())
+    }
+
     /// Releases one direct acquisition and detaches all modules that become unreachable.
     ///
     /// The returned collection keeps the entire unload group alive. Drop it
@@ -644,6 +670,8 @@ where
             return Ok(UnloadGroup::new(Vec::new()));
         }
 
+        let global = self.global.clone();
+        let mut global = global.write();
         let mut reachable = EntitySet::default();
         let mut pending = self
             .committed
@@ -651,7 +679,7 @@ where
             .filter(|slot| {
                 self.committed
                     .module(*slot)
-                    .is_some_and(|module| module.is_root())
+                    .is_some_and(|module| module.is_root() || module.handle().state().is_nodelete())
             })
             .collect::<Vec<_>>();
 
@@ -661,7 +689,15 @@ where
             }
             let module_id = self.committed.make_module_id(slot);
             let module = require_module(module_id, self.committed.module(slot))?;
-            pending.extend(module.dependencies());
+            pending.extend(module.direct_deps().iter().copied());
+            pending.extend(
+                module
+                    .handle()
+                    .state()
+                    .bindings()
+                    .iter()
+                    .filter_map(|source| self.committed.module_for_source(*source)),
+            );
         }
 
         let unload_order = self
@@ -670,6 +706,15 @@ where
             .rev()
             .filter(|slot| !reachable.contains(*slot))
             .collect::<Vec<_>>();
+        let sources = unload_order
+            .iter()
+            .map(|slot| {
+                let id = self.committed.make_module_id(*slot);
+                require_module(id, self.committed.module(*slot))
+                    .map(|module| module.handle().source_id())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        global.retain(|module| !sources.contains(&module.source_id()));
         let mut modules = Vec::with_capacity(unload_order.len());
         for slot in unload_order {
             let id = self.committed.make_module_id(slot);
@@ -678,14 +723,6 @@ where
         }
         self.committed.prune_removed();
         Ok(UnloadGroup::new(modules))
-    }
-
-    pub(in crate::linker) fn unpin(&mut self, ids: &[ModuleId]) -> Result<()> {
-        for &id in ids {
-            let slot = self.committed.module_slot(id)?;
-            require_module(id, self.committed.module_mut(slot))?.unpin();
-        }
-        Ok(())
     }
 
     /// Returns the retained dependency group rooted at `root`.
@@ -803,6 +840,7 @@ mod tests {
         arch::NativeArch,
         elf::ElfSymbol,
         image::{Module, ModuleHandle, ModuleScope, ModuleState, SymbolExports, SyntheticModule},
+        input::ModuleSourceId,
         linker::ModuleId,
         memory::{ImageMemory, VmAddr},
         relocation::RelocationArch,
@@ -844,6 +882,10 @@ mod tests {
 
         fn domain_id(&self) -> DomainId {
             Module::<NativeArch>::domain_id(&self.module)
+        }
+
+        fn source_id(&self) -> ModuleSourceId {
+            Module::<NativeArch>::source_id(&self.module)
         }
 
         fn finalize(&self) -> Result<()> {
@@ -1111,7 +1153,7 @@ mod tests {
     fn duplicate_handles_share_slot() {
         let fallback = ModuleHandle::new(SyntheticModule::empty("fallback"));
         let module = ModuleHandle::new(SyntheticModule::empty("shared"));
-        let identity = module.identity();
+        let source = module.source_id();
         let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
         let fallback = context.insert("fallback", fallback, Box::new([])).unwrap();
         context.add_alias(fallback.id(), "second").unwrap();
@@ -1122,10 +1164,8 @@ mod tests {
 
         assert_eq!(first.id(), second.id());
         assert_eq!(context.module_id("second"), Some(first.id()));
-        let index = context.committed.identity_snapshot();
-        let guard = index.get(&identity).unwrap();
-        assert_eq!(context.committed.make_module_id(guard.slot), first.id());
-        drop(index);
+        let slot = context.committed.module_for_source(source).unwrap();
+        assert_eq!(context.committed.make_module_id(slot), first.id());
 
         assert!(context.release(first).unwrap().is_empty());
         assert_eq!(context.release(second).unwrap().len(), 1);

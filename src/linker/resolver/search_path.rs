@@ -628,7 +628,7 @@ mod tests {
         runpath: Option<&str>,
         rpath: Option<&str>,
     ) -> ModuleSearch {
-        ModuleSearch::from_dynamic(PathBuf::from(path), None, soname, runpath, rpath)
+        ModuleSearch::from_dynamic(PathBuf::from(path), soname, runpath, rpath)
     }
 
     fn visit_chain(chain: &[&ModuleSearch], visitor: &mut LoaderVisitor<'_>) -> Result<()> {
@@ -709,7 +709,6 @@ mod tests {
         let tokens = paths.tokens();
         let owner = paths.module_search(
             PathBuf::from("/app/owner"),
-            None,
             None,
             Some("$ORIGIN/$LIB/${PLATFORM}"),
             None,

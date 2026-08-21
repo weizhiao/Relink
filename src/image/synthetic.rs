@@ -4,6 +4,7 @@ use crate::{
     arch::NativeArch,
     custom_error,
     elf::{ElfLayout, ElfSectionIndex, ElfSymbol, ElfSymbolBind, ElfSymbolType},
+    input::ModuleSourceId,
     memory::{ImageMemory, VmAddr, VmOffset},
     relocation::RelocationArch,
     runtime::DomainId,
@@ -264,6 +265,7 @@ impl ImageMemory for UnmappedImageMemory {
 /// symbol metadata.
 pub struct SyntheticModule<Arch: RelocationArch = NativeArch, D = ()> {
     state: ModuleState,
+    source_id: ModuleSourceId,
     name: String,
     memory: Arc<dyn ImageMemory>,
     tls: Option<ModuleTls>,
@@ -285,6 +287,7 @@ impl<Arch: RelocationArch, D: Clone> Clone for SyntheticModule<Arch, D> {
     fn clone(&self) -> Self {
         Self {
             state: ModuleState::new(),
+            source_id: ModuleSourceId::fresh(),
             name: self.name.clone(),
             memory: self.memory.clone(),
             tls: self.tls,
@@ -314,6 +317,7 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     pub fn empty(name: impl Into<String>) -> Self {
         Self {
             state: ModuleState::new(),
+            source_id: ModuleSourceId::fresh(),
             name: name.into(),
             memory: arc_unsize!(
                 Arc::new(UnmappedImageMemory::default()) => dyn ImageMemory
@@ -334,6 +338,7 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
     pub fn with_user_data<NewD>(self, user_data: NewD) -> SyntheticModule<Arch, NewD> {
         SyntheticModule {
             state: self.state,
+            source_id: self.source_id,
             name: self.name,
             memory: self.memory,
             tls: self.tls,
@@ -510,6 +515,11 @@ where
     #[inline]
     fn domain_id(&self) -> DomainId {
         self.domain
+    }
+
+    #[inline]
+    fn source_id(&self) -> ModuleSourceId {
+        self.source_id
     }
 
     #[inline]

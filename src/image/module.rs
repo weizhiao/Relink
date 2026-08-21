@@ -4,24 +4,22 @@ use crate::{
     arch::NativeArch,
     custom_error,
     elf::SymbolLookup,
+    input::ModuleSourceId,
     memory::VmAddr,
     relocation::RelocationArch,
     runtime::DomainId,
-    sync::{Arc, AtomicUsize, Ordering, Weak, arc_unsize},
+    sync::{Arc, AtomicBool, AtomicUsize, Ordering, Weak, arc_unsize},
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
 use core::{fmt, ops::Deref, slice};
+use spin::{Mutex, MutexGuard, RwLock, RwLockWriteGuard};
 
 const UNINITIALIZED: usize = 0;
 const INITIALIZING: usize = 1;
 const INITIALIZED: usize = 2;
 const FAILED: usize = 3;
 const FINALIZED: usize = 4;
-
-/// Identity of one live shared module allocation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ModuleIdentity(usize);
 
 struct InitializationGuard<'a>(&'a AtomicUsize);
 
@@ -56,6 +54,8 @@ where
 /// duplicating the ownership count already maintained by [`Arc`].
 pub struct ModuleState {
     value: AtomicUsize,
+    bindings: Mutex<Vec<ModuleSourceId>>,
+    nodelete: AtomicBool,
 }
 
 impl ModuleState {
@@ -64,6 +64,8 @@ impl ModuleState {
     pub const fn new() -> Self {
         Self {
             value: AtomicUsize::new(UNINITIALIZED),
+            bindings: Mutex::new(Vec::new()),
+            nodelete: AtomicBool::new(false),
         }
     }
 
@@ -72,7 +74,32 @@ impl ModuleState {
     pub const fn initialized() -> Self {
         Self {
             value: AtomicUsize::new(INITIALIZED),
+            bindings: Mutex::new(Vec::new()),
+            nodelete: AtomicBool::new(false),
         }
+    }
+
+    #[inline]
+    pub(crate) fn bind(&self, provider: ModuleSourceId) {
+        let mut bindings = self.bindings.lock();
+        if !bindings.contains(&provider) {
+            bindings.push(provider);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn bindings(&self) -> MutexGuard<'_, Vec<ModuleSourceId>> {
+        self.bindings.lock()
+    }
+
+    #[inline]
+    pub(crate) fn mark_nodelete(&self) {
+        self.nodelete.store(true, Ordering::Release);
+    }
+
+    #[inline]
+    pub(crate) fn is_nodelete(&self) -> bool {
+        self.nodelete.load(Ordering::Acquire)
     }
 
     /// Returns whether the module is currently initialized.
@@ -195,11 +222,6 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
         &*self.module
     }
 
-    #[inline]
-    pub(crate) fn identity(&self) -> ModuleIdentity {
-        ModuleIdentity(core::ptr::from_ref(self.as_dyn().state()).addr())
-    }
-
     /// Runs this module's initialization hook at most once.
     #[inline]
     pub fn initialize(&self) -> Result<()> {
@@ -235,18 +257,36 @@ pub struct ModuleScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch>
     domain: DomainId,
 }
 
-/// Ordered groups used for symbol lookup.
+/// Complete module scope used for symbol lookup.
 ///
-/// Groups preserve lookup-policy boundaries such as the global scope and one
-/// object's dependency scope without copying their module lists.
+/// Groups preserve an object's local dependency boundaries without copying
+/// their module lists. Linker-managed scopes use a fixed global lookup order
+/// during relocation and retain the live global scope for deferred lookup.
 pub struct LookupScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     groups: Arc<[ModuleScope<Arch, Tls>]>,
+    global: Option<GlobalLookup<Arch, Tls>>,
     domain: DomainId,
 }
 
-/// Weak reference to a retained lookup scope.
+struct GlobalLookup<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+    modules: ModuleScope<Arch, Tls>,
+    source: GlobalScope<Arch, Tls>,
+}
+
+/// Weak reference to a retained lookup scope and its live global scope.
 pub(crate) struct WeakLookupScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     groups: Weak<[ModuleScope<Arch, Tls>]>,
+    global: Option<Weak<GlobalScopeInner<Arch, Tls>>>,
+    domain: DomainId,
+}
+
+/// Shared mutable global lookup order owned by one [`LinkContext`](crate::LinkContext).
+pub(crate) struct GlobalScope<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+    inner: Arc<GlobalScopeInner<Arch, Tls>>,
+}
+
+struct GlobalScopeInner<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+    modules: RwLock<ModuleScope<Arch, Tls>>,
     domain: DomainId,
 }
 
@@ -360,7 +400,27 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for LookupScope<Arch, T
     fn clone(&self) -> Self {
         Self {
             groups: Arc::clone(&self.groups),
+            global: self.global.clone(),
             domain: self.domain,
+        }
+    }
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for GlobalLookup<Arch, Tls> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            modules: self.modules.clone(),
+            source: self.source.clone(),
+        }
+    }
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for GlobalScope<Arch, Tls> {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
         }
     }
 }
@@ -371,7 +431,14 @@ where
     Tls: TlsResolver<Arch>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.groups.iter()).finish()
+        f.debug_list()
+            .entries(
+                self.global
+                    .iter()
+                    .map(|global| &global.modules)
+                    .chain(self.groups.iter()),
+            )
+            .finish()
     }
 }
 
@@ -381,6 +448,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
     pub fn empty(domain: DomainId) -> Self {
         Self {
             groups: Arc::from([]),
+            global: None,
             domain,
         }
     }
@@ -391,6 +459,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
         Self {
             domain: group.domain,
             groups: Arc::from([group]),
+            global: None,
         }
     }
 
@@ -401,14 +470,25 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
     {
         Self {
             groups: Arc::from(groups.into_iter().collect::<Vec<_>>()),
+            global: None,
             domain,
         }
+    }
+
+    /// Returns the runtime domain shared by this lookup scope.
+    #[inline]
+    pub const fn domain_id(&self) -> DomainId {
+        self.domain
     }
 
     #[inline]
     /// Checks that every group and module belongs to `expected`.
     pub fn check_domain(&self, expected: DomainId) -> Result<()> {
         expected.ensure(self.domain)?;
+        if let Some(global) = &self.global {
+            expected.ensure(global.source.domain_id())?;
+            global.modules.check_domain(expected)?;
+        }
         for group in self.groups.iter() {
             group.check_domain(expected)?;
         }
@@ -419,42 +499,145 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
     pub(crate) fn downgrade(&self) -> WeakLookupScope<Arch, Tls> {
         WeakLookupScope {
             groups: Arc::downgrade(&self.groups),
+            global: self.global.as_ref().map(|global| global.source.downgrade()),
             domain: self.domain,
         }
     }
 
-    /// Returns module groups in lookup order.
+    #[inline]
+    pub(crate) fn with_global(mut self, source: GlobalScope<Arch, Tls>) -> Self {
+        debug_assert_eq!(self.domain, source.domain_id());
+        let modules = source.modules();
+        self.global = Some(GlobalLookup { modules, source });
+        self
+    }
+
+    #[inline]
+    pub(crate) fn into_local(mut self) -> Self {
+        self.global = None;
+        self
+    }
+
+    #[inline]
+    pub(crate) fn global(&self) -> Option<&GlobalScope<Arch, Tls>> {
+        self.global.as_ref().map(|global| &global.source)
+    }
+
+    /// Returns the retained local module groups in lookup order.
     #[inline]
     pub fn groups(&self) -> &[ModuleScope<Arch, Tls>] {
         &self.groups
     }
 
-    /// Iterates over modules in lookup order.
+    /// Inserts a local module group before the existing local lookup order.
+    pub fn prepend_group(&mut self, group: ModuleScope<Arch, Tls>) {
+        debug_assert_eq!(self.domain, group.domain_id());
+        self.groups = Arc::from(
+            core::iter::once(group)
+                .chain(self.groups.iter().cloned())
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    /// Iterates over all modules in lookup order.
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &ModuleHandle<Arch, Tls>> {
-        self.groups.iter().flat_map(ModuleScope::iter)
+        self.global
+            .iter()
+            .flat_map(|global| global.modules.iter())
+            .chain(self.groups.iter().flat_map(ModuleScope::iter))
     }
 
-    /// Returns the total number of module entries in all groups.
+    /// Returns the number of module entries in the complete lookup scope.
     #[inline]
     pub fn len(&self) -> usize {
-        self.groups.iter().map(ModuleScope::len).sum()
+        self.global
+            .as_ref()
+            .map_or(0, |global| global.modules.len())
+            + self.groups.iter().map(ModuleScope::len).sum::<usize>()
     }
 
-    /// Returns whether every module group is empty.
+    /// Returns whether the complete lookup scope contains no modules.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.groups.iter().all(ModuleScope::is_empty)
+        self.global
+            .as_ref()
+            .is_none_or(|global| global.modules.is_empty())
+            && self.groups.iter().all(ModuleScope::is_empty)
     }
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> WeakLookupScope<Arch, Tls> {
     #[inline]
     pub(crate) fn upgrade(&self) -> Option<LookupScope<Arch, Tls>> {
-        self.groups.upgrade().map(|groups| LookupScope {
+        let groups = self.groups.upgrade()?;
+        let global = self
+            .global
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .map(|inner| GlobalScope { inner });
+        let global = global.map(|source| GlobalLookup {
+            modules: source.modules(),
+            source,
+        });
+        Some(LookupScope {
             groups,
+            global,
             domain: self.domain,
         })
+    }
+}
+
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> GlobalScope<Arch, Tls> {
+    #[inline]
+    pub(crate) fn new(domain: DomainId) -> Self {
+        Self {
+            inner: Arc::new(GlobalScopeInner {
+                modules: RwLock::new(ModuleScope::new(domain)),
+                domain,
+            }),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn domain_id(&self) -> DomainId {
+        self.inner.domain
+    }
+
+    #[inline]
+    fn downgrade(&self) -> Weak<GlobalScopeInner<Arch, Tls>> {
+        Arc::downgrade(&self.inner)
+    }
+
+    #[inline]
+    pub(crate) fn modules(&self) -> ModuleScope<Arch, Tls> {
+        self.inner.modules.read().clone()
+    }
+
+    #[inline]
+    pub(crate) fn write(&self) -> RwLockWriteGuard<'_, ModuleScope<Arch, Tls>> {
+        self.inner.modules.write()
+    }
+
+    #[inline]
+    pub(crate) fn bind(
+        &self,
+        source: &ModuleState,
+        provider: &ModuleHandle<Arch, Tls>,
+        pin: bool,
+    ) -> bool {
+        let modules = self.inner.modules.read();
+        if !modules
+            .iter()
+            .any(|module| module.as_dyn().ptr_eq(provider.as_dyn()))
+        {
+            return false;
+        }
+        source.bind(provider.source_id());
+        if pin {
+            provider.state().mark_nodelete();
+        }
+        true
     }
 }
 
@@ -493,11 +676,40 @@ mod tests {
     }
 
     #[test]
+    fn lookup_scope_preserves_prepared_and_reads_live_globals() {
+        let first: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty("first"));
+        let second: ModuleHandle =
+            ModuleHandle::new(SyntheticModule::<NativeArch>::empty("second"));
+        let local: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty("local"));
+        let global = GlobalScope::new(DomainId::PROCESS);
+        global.write().push(first);
+
+        let mut local_scope = ModuleScope::new(DomainId::PROCESS);
+        local_scope.push(local);
+        let scope = LookupScope::from_group(local_scope).with_global(global.clone());
+        let weak = scope.downgrade();
+
+        global.write().replace([second]);
+        assert_eq!(
+            scope.iter().map(|module| module.name()).collect::<Vec<_>>(),
+            ["first", "local"]
+        );
+        assert_eq!(
+            weak.upgrade()
+                .unwrap()
+                .iter()
+                .map(|module| module.name())
+                .collect::<Vec<_>>(),
+            ["second", "local"]
+        );
+    }
+
+    #[test]
     fn initializer_panic_marks_module_failed() {
         let state = ModuleState::new();
-        let panic = std::panic::catch_unwind(|| {
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = state.initialize(|| -> crate::Result<()> { panic!("initializer panic") });
-        });
+        }));
 
         assert!(panic.is_err());
         assert!(!state.is_initialized());

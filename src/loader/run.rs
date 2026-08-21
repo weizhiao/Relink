@@ -10,7 +10,7 @@ use crate::{
         RawDylib, RawDynamic, RawElf, RawExec, ScannedDynamic, ScannedDynamicLoadParts, ScannedElf,
         ScannedExec, SearchPathPool,
     },
-    input::{ElfReader, IntoElfReader, PathBuf},
+    input::{ElfReader, IntoElfReader, ModuleSourceId, PathBuf},
     logging,
     memory::{VmAddr, VmOffset},
     observer::{AfterDynamicLoadEvent, BeforeLoadEvent, LoadObserver},
@@ -333,7 +333,7 @@ where
         let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
             segments,
             path,
-            object.file_id(),
+            object.source_id(),
             Some(ehdr),
             entry,
             force_static_tls,
@@ -393,7 +393,7 @@ where
         let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
             segments,
             path,
-            reader.file_id(),
+            reader.source_id(),
             Some(ehdr),
             entry,
             force_static_tls,
@@ -462,7 +462,7 @@ where
         let builder = ImageBuilder::<Tls, D, Arch, M::Region>::new(
             segments,
             path,
-            None,
+            ModuleSourceId::fresh(),
             None,
             VmAddr::new(entry),
             self.loader.force_static_tls(),
@@ -536,7 +536,7 @@ where
         let builder: ImageBuilder<Tls, D, Arch, M::Region> = ImageBuilder::new(
             segments,
             path,
-            object.file_id(),
+            object.source_id(),
             Some(ehdr),
             entry,
             force_static_tls,
@@ -698,7 +698,7 @@ mod tests {
         Error, IoError, ParsePhdrError, Result,
         arch::NativeArch,
         elf::{ElfEhdr, ElfLayout, NativeElfLayout},
-        input::{ElfReader, Path},
+        input::{ElfReader, ModuleSourceId, Path},
         loader::ElfBuf,
         relocation::RelocationArch,
     };
@@ -736,6 +736,10 @@ mod tests {
             Ok(())
         }
 
+        fn source_id(&self) -> ModuleSourceId {
+            ModuleSourceId::opaque(0, 1)
+        }
+
         fn as_fd(&self) -> Option<isize> {
             None
         }
@@ -762,6 +766,10 @@ mod tests {
             let offset = offset + 1;
             buf.copy_from_slice(&self.bytes[offset..offset + buf.len()]);
             Ok(())
+        }
+
+        fn source_id(&self) -> ModuleSourceId {
+            ModuleSourceId::opaque(0, 2)
         }
 
         fn borrow_bytes(&self, offset: usize, len: usize) -> Result<Option<&[u8]>> {

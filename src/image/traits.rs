@@ -6,6 +6,7 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfLayout, ElfSymbol, SymbolLookup, SymbolTable},
+    input::ModuleSourceId,
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
     runtime::DomainId,
@@ -74,6 +75,9 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
     fn search(&self) -> Option<&ModuleSearch> {
         None
     }
+
+    /// Returns the stable identity of the source backing this module.
+    fn source_id(&self) -> ModuleSourceId;
 
     /// Returns the runtime symbol exports for this module.
     fn exports(&self) -> &dyn SymbolExports<Arch::Layout>;
@@ -206,6 +210,11 @@ where
     #[inline]
     fn search(&self) -> Option<&ModuleSearch> {
         (**self).search()
+    }
+
+    #[inline]
+    fn source_id(&self) -> ModuleSourceId {
+        (**self).source_id()
     }
 
     #[inline]

@@ -19,26 +19,64 @@ mod backend;
 mod path;
 mod traits;
 
-/// Stable identity of one file within a storage volume.
+use crate::sync::{AtomicUsize, Ordering};
+
+static NEXT_SOURCE_ID: AtomicUsize = AtomicUsize::new(1);
+
+/// Stable identity of the source backing one module.
 ///
 /// File-backed readers derive this from the opened handle, so different paths,
-/// hard links, and symbolic links to the same file compare equal. Custom
-/// readers may provide their own volume and file values through [`FileId::new`].
+/// hard links, and symbolic links to the same file compare equal. Memory,
+/// synthetic, and remote sources may provide an opaque caller-defined identity.
+/// The representation is intentionally opaque; consumers should only compare,
+/// order, or hash it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FileId {
-    volume: u64,
-    file_high: u64,
-    file_low: u64,
+pub struct ModuleSourceId([u64; 4]);
+
+impl ModuleSourceId {
+    const FILE: u64 = 0;
+    const OPAQUE: u64 = 1;
+    const GENERATED: u64 = 2;
+
+    /// Creates an identity for a file within a storage volume.
+    #[inline]
+    pub const fn file(volume: u64, file: u128) -> Self {
+        Self([Self::FILE, volume, (file >> 64) as u64, file as u64])
+    }
+
+    /// Creates a stable identity in a caller-defined namespace.
+    ///
+    /// Callers must ensure that `(namespace, value)` uniquely identifies one
+    /// source for as long as it may be present in a link context.
+    #[inline]
+    pub const fn opaque(namespace: u64, value: u128) -> Self {
+        Self([Self::OPAQUE, namespace, (value >> 64) as u64, value as u64])
+    }
+
+    /// Creates a fresh process-local identity for an anonymous source.
+    #[inline]
+    pub fn fresh() -> Self {
+        let value = NEXT_SOURCE_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .expect("module source identity space is exhausted");
+        Self([Self::GENERATED, 0, 0, value as u64])
+    }
 }
 
-impl FileId {
-    /// Creates a file identity from backend-defined volume and file values.
-    #[inline]
-    pub const fn new(volume: u64, file: u128) -> Self {
-        Self {
-            volume,
-            file_high: (file >> 64) as u64,
-            file_low: file as u64,
-        }
+#[cfg(test)]
+mod tests {
+    use super::ModuleSourceId;
+
+    #[test]
+    fn source_kinds_do_not_overlap() {
+        let file = ModuleSourceId::file(7, u128::MAX);
+        let opaque = ModuleSourceId::opaque(7, u128::MAX);
+        let generated = ModuleSourceId::fresh();
+
+        assert_ne!(file, opaque);
+        assert_ne!(file, generated);
+        assert_ne!(opaque, generated);
     }
 }

@@ -1,6 +1,7 @@
 use crate::{
     Error, LinkResolverError, LinkerError, Result, UnresolvedDependency,
     image::{Module, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic},
+    input::ModuleSourceId,
     memory::RegionAccess,
     relocation::RelocationArch,
     tls::TlsResolver,
@@ -14,6 +15,7 @@ pub(super) type LoaderProvider<'a> =
 
 pub(crate) trait DependencySource {
     fn search(&self) -> &ModuleSearch;
+    fn source_id(&self) -> ModuleSourceId;
     fn needed_len(&self) -> usize;
     fn needed(&self, index: usize) -> Option<&str>;
 }
@@ -26,6 +28,11 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         self.core_ref()
             .search()
             .expect("ELF cores always retain filesystem search metadata")
+    }
+
+    #[inline]
+    fn source_id(&self) -> ModuleSourceId {
+        self.core_ref().source_id()
     }
 
     #[inline]
@@ -43,6 +50,11 @@ impl<Arch: RelocationArch> DependencySource for ScannedDynamic<Arch> {
     #[inline]
     fn search(&self) -> &ModuleSearch {
         ScannedDynamic::search(self)
+    }
+
+    #[inline]
+    fn source_id(&self) -> ModuleSourceId {
+        ScannedDynamic::source_id(self)
     }
 
     #[inline]

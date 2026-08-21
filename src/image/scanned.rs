@@ -9,7 +9,7 @@ use crate::{
         parse_dynamic_entries,
     },
     image::{ModuleSearch, SearchPathPool},
-    input::{ElfReader, ElfReaderExt, Path, PathBuf},
+    input::{ElfReader, ElfReaderExt, ModuleSourceId, Path, PathBuf},
     loader::ScanBuilder,
     memory::MappedView,
     relocation::RelocationArch,
@@ -147,6 +147,7 @@ impl ModuleCapability {
 
 /// A dynamic ELF image that has been parsed but not yet mapped into memory.
 pub struct ScannedDynamic<Arch: RelocationArch = NativeArch> {
+    source_id: ModuleSourceId,
     search: ModuleSearch,
     ehdr: ElfHeader<Arch::Layout>,
     phdrs: Box<[ElfPhdr<Arch::Layout>]>,
@@ -538,6 +539,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             phdrs,
             mut reader,
         } = builder;
+        let source_id = reader.source_id();
         let interp = read_interp(reader.as_mut(), &phdrs)?;
         let DynamicScanParts {
             strtab,
@@ -553,8 +555,8 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
         let runpath = runpath.map(|offset| strtab_view.get_str(offset));
         let rpath = rpath.map(|offset| strtab_view.get_str(offset));
         let search = match search_paths {
-            Some(paths) => paths.module_search(path, reader.file_id(), soname, runpath, rpath),
-            None => ModuleSearch::from_dynamic(path, reader.file_id(), soname, runpath, rpath),
+            Some(paths) => paths.module_search(path, soname, runpath, rpath),
+            None => ModuleSearch::from_dynamic(path, soname, runpath, rpath),
         };
         let capability = section_table
             .as_ref()
@@ -563,6 +565,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
             });
 
         Ok(Self {
+            source_id,
             search,
             ehdr,
             phdrs,
@@ -586,6 +589,12 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
     #[inline]
     pub fn name(&self) -> &str {
         self.search.name()
+    }
+
+    /// Returns the stable identity of this scanned source.
+    #[inline]
+    pub const fn source_id(&self) -> ModuleSourceId {
+        self.source_id
     }
 
     /// Returns the parsed ELF header.

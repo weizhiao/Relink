@@ -3,7 +3,9 @@ use crate::{
     Result,
     elf::{ElfSymbol, ElfSymbolBind, ElfSymbolType, SymbolEntry},
     hint::unlikely,
-    image::{LookupScope, Module, ModuleHandle, SymbolLookup},
+    image::{
+        GlobalScope, LookupScope, Module, ModuleHandle, ModuleScope, ModuleState, SymbolLookup,
+    },
     logging,
     memory::{VmAddr, VmOffset},
     runtime::{CodeContext, CodeExecutor},
@@ -24,41 +26,14 @@ pub(crate) struct BindingDep<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
     pin: bool,
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for BindingDep<Arch, Tls> {
-    fn clone(&self) -> Self {
-        Self {
-            module: self.module.clone(),
-            pin: self.pin,
-        }
-    }
-}
-
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> BindingDep<Arch, Tls> {
-    #[inline]
-    pub(crate) fn into_parts(self) -> (ModuleHandle<Arch, Tls>, bool) {
-        (self.module, self.pin)
-    }
-}
-
 pub(crate) struct BindingDeps<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
     modules: Vec<BindingDep<Arch, Tls>>,
-    retain_scope: bool,
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Default for BindingDeps<Arch, Tls> {
     fn default() -> Self {
         Self {
             modules: Vec::new(),
-            retain_scope: false,
-        }
-    }
-}
-
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for BindingDeps<Arch, Tls> {
-    fn clone(&self) -> Self {
-        Self {
-            modules: self.modules.clone(),
-            retain_scope: self.retain_scope,
         }
     }
 }
@@ -69,7 +44,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> BindingDeps<Arch, T
         if let Some(binding) = self
             .modules
             .iter_mut()
-            .find(|binding| binding.module.identity() == module.identity())
+            .find(|binding| binding.module.as_dyn().ptr_eq(module.as_dyn()))
         {
             binding.pin |= pin;
         } else {
@@ -90,16 +65,39 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> BindingDeps<Arch, T
         self.record(module, true);
     }
 
-    pub(crate) fn into_bindings(
-        mut self,
-        scope: &LookupScope<Arch, Tls>,
-    ) -> Box<[BindingDep<Arch, Tls>]> {
-        if self.retain_scope {
-            for module in scope.iter() {
-                self.provider(module);
+    #[inline]
+    pub(crate) fn install(&self, source: &ModuleState) {
+        for binding in &self.modules {
+            if binding.pin {
+                binding.module.state().mark_nodelete();
             }
+            source.bind(binding.module.source_id());
         }
-        self.modules.into_boxed_slice()
+    }
+
+    #[inline]
+    fn runtime_bind(
+        &self,
+        local: &LookupScope<Arch, Tls>,
+        global: Option<&GlobalScope<Arch, Tls>>,
+        source: &ModuleState,
+    ) -> bool {
+        self.modules.iter().all(|binding| {
+            if local
+                .groups()
+                .iter()
+                .flat_map(ModuleScope::iter)
+                .any(|module| module.as_dyn().ptr_eq(binding.module.as_dyn()))
+            {
+                source.bind(binding.module.source_id());
+                if binding.pin {
+                    binding.module.state().mark_nodelete();
+                }
+                true
+            } else {
+                global.is_some_and(|scope| scope.bind(source, &binding.module, binding.pin))
+            }
+        })
     }
 }
 
@@ -290,12 +288,6 @@ where
     }
 
     #[inline]
-    pub(crate) fn retain_scope(self, retain: bool) -> Self {
-        self.bindings.borrow_mut().retain_scope = retain;
-        self
-    }
-
-    #[inline]
     pub(crate) const fn source(&self) -> &'lib Source {
         self.source
     }
@@ -308,6 +300,16 @@ where
     #[inline]
     pub(crate) fn into_parts(self) -> (LookupScope<Arch, Tls>, BindingDeps<Arch, Tls>) {
         (self.scope, self.bindings.into_inner())
+    }
+
+    #[inline]
+    pub(crate) fn bind_runtime(
+        &self,
+        local: &LookupScope<Arch, Tls>,
+        global: Option<&GlobalScope<Arch, Tls>>,
+        source: &ModuleState,
+    ) -> bool {
+        self.bindings.borrow().runtime_bind(local, global, source)
     }
 
     #[cold]

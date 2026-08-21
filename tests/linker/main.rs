@@ -8,8 +8,7 @@ use elf_loader::{
     arch::NativeArch,
     error::{LinkContextError, LinkResolverError, LinkerError},
     image::{
-        LoadedCore, LookupScope, ModuleCapability, ModuleHandle, ModuleScope, SyntheticModule,
-        SyntheticSymbol,
+        LoadedCore, ModuleCapability, ModuleHandle, ModuleScope, SyntheticModule, SyntheticSymbol,
     },
     input::ElfBinary,
     linker::{

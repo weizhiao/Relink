@@ -1,6 +1,6 @@
 use crate::{
     IoError, MmapError, Result,
-    input::{ElfReader, FileId, Path, PathBuf},
+    input::{ElfReader, ModuleSourceId, Path, PathBuf},
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
@@ -81,7 +81,7 @@ pub(crate) struct RawFile {
     path: PathBuf,
     fd: isize,
     len: usize,
-    file_id: FileId,
+    source_id: ModuleSourceId,
 }
 
 impl Mmap for DefaultMmap {
@@ -241,7 +241,7 @@ impl RawFile {
     }
 
     fn from_fd(path: &Path, fd: isize) -> Result<Self> {
-        let (len, file_id) = match Self::query(fd) {
+        let (len, source_id) = match Self::query(fd) {
             Ok(info) => info,
             Err(err) => {
                 unsafe { libc::close(fd as i32) };
@@ -252,11 +252,11 @@ impl RawFile {
             path: PathBuf::from(path),
             fd,
             len,
-            file_id,
+            source_id,
         })
     }
 
-    fn query(fd: isize) -> Result<(usize, FileId)> {
+    fn query(fd: isize) -> Result<(usize, ModuleSourceId)> {
         let mut stat = MaybeUninit::<libc::stat>::uninit();
         if unsafe { libc::fstat(fd as i32, stat.as_mut_ptr()) } != 0 {
             return Err(IoError::FileInfoFailed {
@@ -266,8 +266,8 @@ impl RawFile {
         }
         let stat = unsafe { stat.assume_init() };
         let len = usize::try_from(stat.st_size).map_err(|_| IoError::ReadBufferTooLarge)?;
-        let file_id = FileId::new(stat.st_dev as u64, stat.st_ino as u128);
-        Ok((len, file_id))
+        let source_id = ModuleSourceId::file(stat.st_dev as u64, stat.st_ino as u128);
+        Ok((len, source_id))
     }
 }
 
@@ -299,8 +299,8 @@ impl ElfReader for RawFile {
     }
 
     #[inline]
-    fn file_id(&self) -> Option<FileId> {
-        Some(self.file_id)
+    fn source_id(&self) -> ModuleSourceId {
+        self.source_id
     }
 
     fn path(&self) -> &Path {

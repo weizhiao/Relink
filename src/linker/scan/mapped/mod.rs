@@ -278,7 +278,7 @@ where
     let builder = ImageBuilder::<Tls, D, Arch, R>::new(
         runtime.segments,
         path,
-        scanned.search().file_id(),
+        scanned.source_id(),
         None,
         entry,
         force_static_tls,

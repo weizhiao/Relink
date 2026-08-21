@@ -7,7 +7,7 @@ use crate::{
         CoreRuntime, DynamicInfo, LookupScope, Module, ModuleSearch, ModuleState, PltRelocInfo,
         SymbolExports,
     },
-    input::{Path, PathBuf},
+    input::{ModuleSourceId, Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
     relocation::{RelocationArch, SymbolRegistry},
@@ -293,12 +293,13 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         let runpath = dynamic
             .runpath_off
             .map(|runpath_off| symtab.strtab().get_str(runpath_off));
-        let search = ModuleSearch::from_dynamic(path, None, soname, runpath, rpath);
+        let search = ModuleSearch::from_dynamic(path, soname, runpath, rpath);
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
         let inner = Arc::new(CoreInner {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
             domain: DomainId::PROCESS,
+            source_id: ModuleSourceId::fresh(),
             search,
             state: ModuleState::initialized(),
             lifecycle: OnceCell::new(),
@@ -348,6 +349,11 @@ where
     #[inline]
     fn domain_id(&self) -> DomainId {
         self.inner.domain_id()
+    }
+
+    #[inline]
+    fn source_id(&self) -> ModuleSourceId {
+        self.inner.source_id()
     }
 
     #[inline]

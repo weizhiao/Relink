@@ -67,8 +67,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             scope,
             symbols.as_deref(),
             self.core_ref().symbolic(),
-        )
-        .retain_scope(lazy);
+        );
         let mut helper = RelocHelper::new(
             resolver,
             self.symtab().view(),
@@ -89,7 +88,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         let finalizer = LifecycleRunner::new(fini);
 
         if !scope.is_empty() {
-            logging::debug!("[{}] Bound dependencies: {:?}", self.name(), &scope);
+            logging::debug!("[{}] Lookup scope: {:?}", self.name(), &scope);
         }
 
         self.apply_relro(lazy)?;

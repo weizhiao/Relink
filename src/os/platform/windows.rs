@@ -1,6 +1,6 @@
 use crate::{
     IoError, MmapError, Result,
-    input::{ElfReader, FileId, Path, PathBuf},
+    input::{ElfReader, ModuleSourceId, Path, PathBuf},
     memory::{HostRegion, MappedRegion, VmAddr},
     os::{MadviseAdvice, MapFlags, Mmap, PageSize, ProtFlags},
 };
@@ -61,7 +61,7 @@ pub(crate) struct RawFile {
     path: PathBuf,
     fd: HANDLE,
     len: usize,
-    file_id: FileId,
+    source_id: ModuleSourceId,
     /// Stores the mapping handle for the file.
     mapping: HANDLE,
 }
@@ -293,7 +293,7 @@ impl RawFile {
     }
 
     fn from_handle(path: &Path, handle: HANDLE) -> Result<Self> {
-        let (len, file_id) = match Self::query(handle) {
+        let (len, source_id) = match Self::query(handle) {
             Ok(info) => info,
             Err(err) => {
                 unsafe { CloseHandle(handle) };
@@ -320,12 +320,12 @@ impl RawFile {
             path: PathBuf::from(path),
             fd: handle,
             len,
-            file_id,
+            source_id,
             mapping,
         })
     }
 
-    fn query(handle: HANDLE) -> Result<(usize, FileId)> {
+    fn query(handle: HANDLE) -> Result<(usize, ModuleSourceId)> {
         let mut info = BY_HANDLE_FILE_INFORMATION::default();
         if unsafe { GetFileInformationByHandle(handle, &mut info) } == 0 {
             return Err(IoError::FileInfoFailed {
@@ -334,10 +334,11 @@ impl RawFile {
             .into());
         }
         let file = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
-        let file_id = FileId::new(u64::from(info.dwVolumeSerialNumber), u128::from(file));
+        let source_id =
+            ModuleSourceId::file(u64::from(info.dwVolumeSerialNumber), u128::from(file));
         let size = (u64::from(info.nFileSizeHigh) << 32) | u64::from(info.nFileSizeLow);
         let len = usize::try_from(size).map_err(|_| IoError::ReadBufferTooLarge)?;
-        Ok((len, file_id))
+        Ok((len, source_id))
     }
 }
 
@@ -389,8 +390,8 @@ impl ElfReader for RawFile {
     }
 
     #[inline]
-    fn file_id(&self) -> Option<FileId> {
-        Some(self.file_id)
+    fn source_id(&self) -> ModuleSourceId {
+        self.source_id
     }
 
     fn path(&self) -> &Path {

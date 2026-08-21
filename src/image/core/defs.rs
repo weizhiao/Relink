@@ -6,6 +6,7 @@ use crate::{
         DynamicInfo, Module, ModuleSearch, ModuleState, PltRelocInfo, SymbolExports,
         WeakLookupScope,
     },
+    input::ModuleSourceId,
     lazy::{LazySetup, LazyValues},
     logging,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
@@ -128,16 +129,23 @@ where
             return self.tls.resolver().bind_tls_get_addr().map(Some);
         }
 
-        let Some(scope) = self.scope.get().and_then(WeakLookupScope::upgrade) else {
+        let Some(scope) = self.scope.get() else {
             return Ok(None);
         };
-        let symbolic = self.dynamic_info.as_ref().is_some_and(|info| info.symbolic);
-        let executor = self.executor.as_ref();
-        let symbols = self.symbols.get().and_then(Weak::upgrade);
-        SymbolResolver::new(self, scope, symbols.as_deref(), symbolic)
-            .find(symbol)
-            .map(|symdef| symdef.resolve(executor))
-            .transpose()
+        loop {
+            let Some(lookup) = scope.upgrade() else {
+                return Ok(None);
+            };
+            let symbolic = self.dynamic_info.as_ref().is_some_and(|info| info.symbolic);
+            let symbols = self.symbols.get().and_then(Weak::upgrade);
+            let resolver = SymbolResolver::new(self, lookup.clone(), symbols.as_deref(), symbolic);
+            let Some(symdef) = resolver.find(symbol) else {
+                return Ok(None);
+            };
+            if resolver.bind_runtime(&lookup, lookup.global(), &self.state) {
+                return symdef.resolve(self.executor.as_ref()).map(Some);
+            }
+        }
     }
 }
 
@@ -158,13 +166,16 @@ pub(crate) struct CoreInner<
     /// Runtime domain in which this image's addresses are meaningful.
     pub(crate) domain: DomainId,
 
+    /// Stable identity of the source backing this module.
+    pub(crate) source_id: ModuleSourceId,
+
     /// Lifecycle state shared by every handle for this module.
     pub(crate) state: ModuleState,
 
     /// Initialization and finalization behavior resolved during relocation.
     pub(crate) lifecycle: OnceCell<LifecycleHandlers>,
 
-    /// Filesystem identity and dependency search metadata.
+    /// Dependency search metadata.
     pub(crate) search: ModuleSearch,
 
     /// Runtime exports used for module symbol lookup.
@@ -173,7 +184,7 @@ pub(crate) struct CoreInner<
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
 
-    /// Relocation lookup scope retained for the loaded module lifetime.
+    /// Local relocation scope retained by the loaded image.
     pub(crate) scope: OnceCell<WeakLookupScope<Arch, Tls>>,
 
     /// Namespace symbol state used by deferred lookup.
@@ -215,6 +226,11 @@ where
     #[inline]
     fn domain_id(&self) -> DomainId {
         self.domain
+    }
+
+    #[inline]
+    fn source_id(&self) -> ModuleSourceId {
+        self.source_id
     }
 
     #[inline]

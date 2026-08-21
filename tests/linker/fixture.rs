@@ -10,6 +10,7 @@ use crate::fixture_build::FixtureBuild;
 pub(crate) struct Fixtures {
     pub(crate) provider: Vec<u8>,
     pub(crate) dependent: Vec<u8>,
+    pub(crate) global: Vec<u8>,
     pub(crate) plain: Vec<u8>,
     #[cfg(any(
         feature = "use-syscall",
@@ -64,6 +65,7 @@ fn build() -> Fixtures {
     };
     let provider_path = dylib("provider", None);
     let dependent_path = dylib("dependent", Some(("provider", &provider_path)));
+    let global_path = dylib("global", None);
     #[cfg(any(feature = "libc", feature = "use-syscall"))]
     let root_path = dylib("root", Some(("dependent", &dependent_path)));
 
@@ -143,6 +145,7 @@ fn build() -> Fixtures {
     Fixtures {
         provider: fs::read(&provider_path).expect("failed to read linker provider fixture"),
         dependent: fs::read(dependent_path).expect("failed to read linker dependent fixture"),
+        global: fs::read(global_path).expect("failed to read linker global fixture"),
         plain: fs::read(plain).expect("failed to read linker plain fixture"),
         #[cfg(any(
             feature = "use-syscall",

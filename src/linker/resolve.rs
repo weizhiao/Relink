@@ -11,7 +11,7 @@ use crate::{
         DEFAULT_MODULE_SEARCH, ModuleHandle, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic,
         ScannedElf,
     },
-    input::FileId,
+    input::ModuleSourceId,
     memory::{HostRegion, RegionAccess},
     observer::{LinkerObserver, LoadObserver},
     os::Mmap,
@@ -108,21 +108,11 @@ where
             .or_else(|| self.session.alias_module(key))
     }
 
-    fn reuse_file(&mut self, key: &K, id: Option<FileId>) -> Option<ModuleSlot> {
-        let id = id?;
+    fn reuse_source(&mut self, key: &K, id: ModuleSourceId) -> Option<ModuleSlot> {
         let slot = self
             .committed
-            .file_module(id)
-            .or_else(|| self.session.file_module(id))?;
-        self.stage_alias(Some(key.clone()), slot);
-        Some(slot)
-    }
-
-    fn reuse_module(&mut self, key: &K, module: &ModuleHandle<Arch, Tls>) -> Option<ModuleSlot> {
-        let slot = self
-            .committed
-            .matching_module(module)
-            .or_else(|| self.session.matching_module(module))?;
+            .module_for_source(id)
+            .or_else(|| self.session.source_module(id))?;
         self.stage_alias(Some(key.clone()), slot);
         Some(slot)
     }
@@ -144,15 +134,15 @@ where
     where
         Resolver: KeyResolver<K, Arch, Tls>,
     {
+        let source = payload.source_id();
         let search = payload.search();
-        let file = search.file_id();
         let alias = search.soname().and_then(|name| resolver.map_name(name));
         let key = self.committed.intern_key(key);
         let slot = self.committed.intern_module(key);
         let generation = self.committed.generation(slot);
         self.session
             .stage_dynamic(slot, generation, payload, loader);
-        self.session.stage_file(file, slot);
+        self.session.stage_source(source, slot);
         self.stage_alias(alias, slot);
         slot
     }
@@ -168,7 +158,6 @@ where
         Resolver: KeyResolver<K, Arch, Tls>,
     {
         let search = module.search();
-        let file = search.and_then(ModuleSearch::file_id);
         let alias = search
             .and_then(ModuleSearch::soname)
             .and_then(|name| resolver.map_name(name));
@@ -177,7 +166,6 @@ where
         let generation = self.committed.generation(slot);
         self.session
             .stage_module(slot, generation, module, direct_deps);
-        self.session.stage_file(file, slot);
         self.stage_alias(alias, slot);
         slot
     }
@@ -406,7 +394,7 @@ where
             ResolvedKey::Existing(key) => self.existing(&key),
             ResolvedKey::Load { key, reader } => {
                 self.ensure_new(&key)?;
-                if let Some(slot) = self.reuse_file(&key, reader.file_id()) {
+                if let Some(slot) = self.reuse_source(&key, reader.source_id()) {
                     return Ok(slot);
                 }
                 let raw = loader.load_dynamic(reader)?;
@@ -415,7 +403,7 @@ where
             ResolvedKey::Module { key, module, deps } => {
                 self.committed.ensure_domain(module.domain_id())?;
                 self.ensure_new(&key)?;
-                if let Some(slot) = self.reuse_module(&key, &module) {
+                if let Some(slot) = self.reuse_source(&key, module.source_id()) {
                     return Ok(slot);
                 }
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
@@ -483,7 +471,7 @@ where
             ResolvedKey::Existing(key) => self.existing(&key),
             ResolvedKey::Load { key, reader } => {
                 self.ensure_new(&key)?;
-                if let Some(slot) = self.reuse_file(&key, reader.file_id()) {
+                if let Some(slot) = self.reuse_source(&key, reader.source_id()) {
                     return Ok(slot);
                 }
                 let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
@@ -494,7 +482,7 @@ where
             ResolvedKey::Module { key, module, deps } => {
                 self.committed.ensure_domain(module.domain_id())?;
                 self.ensure_new(&key)?;
-                if let Some(slot) = self.reuse_module(&key, &module) {
+                if let Some(slot) = self.reuse_source(&key, module.source_id()) {
                     return Ok(slot);
                 }
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {

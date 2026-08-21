@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 struct LoadingFixtures {
     provider: &'static [u8],
     dependent: &'static [u8],
+    global: &'static [u8],
     #[cfg(any(
         feature = "use-syscall",
         all(any(target_os = "linux", target_os = "android"), feature = "libc")
@@ -20,6 +21,7 @@ impl LoadingFixtures {
         Self {
             provider: &real.provider,
             dependent: &real.dependent,
+            global: &real.global,
             #[cfg(any(
                 feature = "use-syscall",
                 all(any(target_os = "linux", target_os = "android"), feature = "libc")
@@ -126,10 +128,7 @@ impl LinkerObserver for Interpose {
     fn on_relocation(&mut self, event: &mut LinkerRelocationEvent<()>) -> elf_loader::Result<()> {
         let mut interposer = ModuleScope::new(DomainId::PROCESS);
         interposer.push(self.0.clone());
-        event.set_scope(LookupScope::from_groups(
-            DomainId::PROCESS,
-            core::iter::once(interposer).chain(event.scope().groups().iter().cloned()),
-        ));
+        event.scope_mut().prepend_group(interposer);
         Ok(())
     }
 }
@@ -415,6 +414,74 @@ fn binding_retains_provider() {
             .collect::<Vec<_>>(),
         ["existing_dep_root.so", "provider.so", "interposer.so"]
     );
+}
+
+#[test]
+fn global_scope_binds_and_retains_provider() {
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let provider = context
+        .insert(DEP_KEY, load_provider("global-provider.so"), Box::new([]))
+        .unwrap();
+    context.promote_global(provider.id()).unwrap();
+    let linker = Linker::new().resolver(SingleBinaryResolver {
+        key: "global",
+        name: "global.so",
+        data: fixtures().global,
+    });
+    let loaded = linker.load(&mut context, "global").unwrap();
+    let value = unsafe {
+        context
+            .module(loaded.root())
+            .unwrap()
+            .get::<extern "C" fn() -> i32>("global_value")
+            .unwrap()
+    };
+
+    assert_eq!(value(), 2);
+    assert!(context.release(provider).unwrap().is_empty());
+    let unloaded = loaded.release(&mut context).unwrap();
+    assert_eq!(
+        unloaded
+            .modules()
+            .iter()
+            .map(|entry| entry.module().name())
+            .collect::<Vec<_>>(),
+        ["global.so", "global-provider.so"]
+    );
+}
+
+#[test]
+fn relocation_reads_current_globals() {
+    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let linker = Linker::new().resolver(SingleBinaryResolver {
+        key: "global",
+        name: "global.so",
+        data: fixtures().global,
+    });
+    let mut run = linker.run();
+    let prepared = run.prepare_load(&mut context, "global").unwrap();
+    let provider = context
+        .insert(DEP_KEY, load_provider("late-global.so"), Box::new([]))
+        .unwrap();
+    context.promote_global(provider.id()).unwrap();
+
+    let relocated = run.relocate(prepared).unwrap();
+    let loaded = relocated
+        .publish(&mut context)
+        .unwrap()
+        .initialize()
+        .unwrap();
+    let value = unsafe {
+        context
+            .module(loaded.root())
+            .unwrap()
+            .get::<extern "C" fn() -> i32>("global_value")
+            .unwrap()
+    };
+
+    assert_eq!(value(), 2);
+    assert!(context.release(provider).unwrap().is_empty());
+    assert_eq!(loaded.release(&mut context).unwrap().modules().len(), 2);
 }
 
 #[test]

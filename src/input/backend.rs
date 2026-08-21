@@ -1,4 +1,4 @@
-use super::{ElfReader, FileId, IntoElfReader, Path, PathBuf};
+use super::{ElfReader, IntoElfReader, ModuleSourceId, Path, PathBuf};
 use crate::{IoError, ReadBoundsError, Result, logging, os::RawFile};
 use alloc::{borrow::Cow, boxed::Box, string::String, vec::Vec};
 use core::ops::Range;
@@ -21,6 +21,8 @@ fn checked_read_range(offset: usize, len: usize, available: usize) -> Result<Ran
 pub struct ElfBinary<'bytes> {
     /// Loader source path or caller-provided source identifier.
     path: PathBuf,
+    /// Stable identity allocated for this memory source.
+    source_id: ModuleSourceId,
     /// The raw ELF data.
     bytes: Cow<'bytes, [u8]>,
 }
@@ -38,6 +40,7 @@ impl<'bytes> ElfBinary<'bytes> {
     pub fn new(path: impl Into<PathBuf>, bytes: &'bytes [u8]) -> Self {
         Self {
             path: path.into(),
+            source_id: ModuleSourceId::fresh(),
             bytes: Cow::Borrowed(bytes),
         }
     }
@@ -49,8 +52,16 @@ impl<'bytes> ElfBinary<'bytes> {
     pub fn owned(path: impl Into<PathBuf>, bytes: impl Into<Vec<u8>>) -> Self {
         Self {
             path: path.into(),
+            source_id: ModuleSourceId::fresh(),
             bytes: Cow::Owned(bytes.into()),
         }
+    }
+
+    /// Replaces the identity assigned to this memory source.
+    #[inline]
+    pub fn with_source_id(mut self, source_id: ModuleSourceId) -> Self {
+        self.source_id = source_id;
+        self
     }
 }
 
@@ -71,6 +82,11 @@ impl<'bytes> ElfReader for ElfBinary<'bytes> {
         let range = checked_read_range(offset, buf.len(), bytes.len())?;
         buf.copy_from_slice(&bytes[range]);
         Ok(())
+    }
+
+    #[inline]
+    fn source_id(&self) -> ModuleSourceId {
+        self.source_id
     }
 
     /// Borrows data directly from the memory-based ELF object.
@@ -134,49 +150,13 @@ impl ElfReader for ElfFile {
     }
 
     #[inline]
-    fn file_id(&self) -> Option<FileId> {
-        self.inner.file_id()
+    fn source_id(&self) -> ModuleSourceId {
+        self.inner.source_id()
     }
 
     /// Returns the raw file descriptor for the underlying file.
     fn as_fd(&self) -> Option<isize> {
         self.inner.as_fd()
-    }
-}
-
-// Implementation of `ElfReader` for byte slices.
-//
-// This allows users to pass a byte slice directly to loading functions
-// for in-memory ELF data.
-impl ElfReader for &[u8] {
-    /// Returns a generic name for memory-based data.
-    fn path(&self) -> &Path {
-        Path::new("<memory>")
-    }
-
-    /// Returns the byte length of the slice-backed ELF object.
-    fn len(&self) -> usize {
-        (**self).len()
-    }
-
-    /// Reads data from the byte slice at the specified offset.
-    fn read(&self, buf: &mut [u8], offset: usize) -> Result<()> {
-        let bytes = *self;
-        let range = checked_read_range(offset, buf.len(), bytes.len())?;
-        buf.copy_from_slice(&bytes[range]);
-        Ok(())
-    }
-
-    /// Borrows data directly from the byte slice.
-    fn borrow_bytes(&self, offset: usize, len: usize) -> Result<Option<&[u8]>> {
-        let bytes = *self;
-        let range = checked_read_range(offset, len, bytes.len())?;
-        Ok(Some(&bytes[range]))
-    }
-
-    /// Memory-based readers do not have file descriptors.
-    fn as_fd(&self) -> Option<isize> {
-        None
     }
 }
 

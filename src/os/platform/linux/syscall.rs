@@ -1,4 +1,4 @@
-use crate::input::{ElfReader, FileId, Path, PathBuf};
+use crate::input::{ElfReader, ModuleSourceId, Path, PathBuf};
 #[cfg(target_pointer_width = "32")]
 use crate::os::PageSize;
 use crate::{
@@ -78,7 +78,7 @@ pub(crate) struct RawFile {
     path: PathBuf,
     fd: isize,
     len: usize,
-    file_id: Option<FileId>,
+    source_id: ModuleSourceId,
 }
 
 #[repr(C)]
@@ -338,7 +338,7 @@ impl RawFile {
     }
 
     fn from_fd(path: &Path, fd: isize) -> Result<Self> {
-        let (len, file_id) = match Self::query(fd) {
+        let (len, source_id) = match Self::query(fd) {
             Ok(info) => info,
             Err(err) => {
                 unsafe { syscalls::raw_syscall!(Sysno::close, fd) };
@@ -349,11 +349,11 @@ impl RawFile {
             path: PathBuf::from(path),
             fd,
             len,
-            file_id,
+            source_id,
         })
     }
 
-    fn query(fd: isize) -> Result<(usize, Option<FileId>)> {
+    fn query(fd: isize) -> Result<(usize, ModuleSourceId)> {
         const AT_EMPTY_PATH: usize = 0x1000;
         const STATX_BASIC_STATS: usize = 0x07ff;
         const STATX_INO: u32 = 0x0100;
@@ -371,16 +371,16 @@ impl RawFile {
                 stat.as_mut_ptr()
             )
         };
-        let mut file_id = None;
+        let mut source_id = None;
         if result == 0 {
             let stat = unsafe { stat.assume_init() };
             if stat.mask & STATX_INO != 0 {
                 let volume = (u64::from(stat.dev_major) << 32) | u64::from(stat.dev_minor);
-                file_id = Some(FileId::new(volume, u128::from(stat.inode)));
+                source_id = Some(ModuleSourceId::file(volume, u128::from(stat.inode)));
             }
             if stat.mask & STATX_SIZE != 0 {
                 let len = usize::try_from(stat.size).map_err(|_| IoError::ReadBufferTooLarge)?;
-                return Ok((len, file_id));
+                return Ok((len, source_id.unwrap_or_else(ModuleSourceId::fresh)));
             }
         }
 
@@ -390,7 +390,7 @@ impl RawFile {
                 |code| Error::from(IoError::SeekFailed { code }),
             )
         }?;
-        Ok((len, file_id))
+        Ok((len, source_id.unwrap_or_else(ModuleSourceId::fresh)))
     }
 
     fn read_some(&self, bytes: &mut [u8], offset: usize) -> Result<usize> {
@@ -425,8 +425,8 @@ impl ElfReader for RawFile {
     }
 
     #[inline]
-    fn file_id(&self) -> Option<FileId> {
-        self.file_id
+    fn source_id(&self) -> ModuleSourceId {
+        self.source_id
     }
 
     fn path(&self) -> &Path {

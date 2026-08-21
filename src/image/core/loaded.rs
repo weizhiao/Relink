@@ -7,7 +7,7 @@ use crate::{
         LookupScope, Module, ModuleHandle, ModuleSearch, ModuleState, SymbolExports, SymbolLookup,
         module::lookup_symbol,
     },
-    input::{Path, PathBuf},
+    input::{ModuleSourceId, Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{BindingDeps, RelocationArch, SymbolRegistry},
     runtime::DomainId,
@@ -31,7 +31,6 @@ pub struct LoadedCore<
 > {
     core: ElfCore<D, Arch, R, Tls>,
     scope: LookupScope<Arch, Tls>,
-    bindings: BindingDeps<Arch, Tls>,
 }
 
 impl<
@@ -58,7 +57,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         LoadedCore {
             core: self.core.clone(),
             scope: self.scope.clone(),
-            bindings: self.bindings.clone(),
         }
     }
 }
@@ -122,7 +120,6 @@ impl<
         LoadedCore {
             core,
             scope: LookupScope::empty(domain),
-            bindings: BindingDeps::default(),
         }
     }
 
@@ -329,8 +326,7 @@ impl<
         core.set_scope(&scope);
         Self {
             core,
-            scope,
-            bindings: BindingDeps::default(),
+            scope: scope.into_local(),
         }
     }
 
@@ -341,29 +337,19 @@ impl<
         bindings: BindingDeps<Arch, Tls>,
     ) -> Self {
         core.set_scope(&scope);
+        bindings.install(core.state());
         if let Some(symbols) = &symbols {
             core.set_symbol_registry(symbols);
         }
         Self {
             core,
-            scope,
-            bindings,
+            scope: scope.into_local(),
         }
     }
 
-    pub(crate) fn into_context_parts(
-        self,
-    ) -> (
-        ModuleHandle<Arch, Tls>,
-        LookupScope<Arch, Tls>,
-        BindingDeps<Arch, Tls>,
-    ) {
-        let Self {
-            core,
-            scope,
-            bindings,
-        } = self;
-        (core.into_module_handle(), scope, bindings)
+    pub(crate) fn into_context_parts(self) -> (ModuleHandle<Arch, Tls>, LookupScope<Arch, Tls>) {
+        let Self { core, scope } = self;
+        (core.into_module_handle(), scope)
     }
 
     /// Returns a reference to the underlying [`ElfCore`].
@@ -534,6 +520,11 @@ where
     #[inline]
     fn domain_id(&self) -> DomainId {
         self.core.domain_id()
+    }
+
+    #[inline]
+    fn source_id(&self) -> ModuleSourceId {
+        self.core.source_id()
     }
 
     #[inline]

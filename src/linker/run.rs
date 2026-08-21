@@ -4,14 +4,16 @@ use super::{
     resolve::LoadResolveContext,
     resolver::KeyResolver,
     scan::{GotPltTarget, LinkPipeline, MappedRuntimeMemory},
-    session::{LoadSession, ModuleIndex, ResolveSession},
+    session::{LoadSession, ResolveSession},
     storage::{ContextId, ModuleId, ModuleLease, ModuleSlot},
 };
 use crate::{
     ByteRepr, Error, LinkContextError, LinkerError, Loader, Result,
     arch::NativeArch,
     elf::ElfRelType,
-    image::{Module, ModuleHandle, ModuleScope, ModuleSearch, RawDynamic},
+    image::{
+        GlobalScope, LookupScope, Module, ModuleHandle, ModuleScope, ModuleSearch, RawDynamic,
+    },
     lazy::LazyBinder,
     memory::RegionAccess,
     observer::{LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver},
@@ -253,9 +255,9 @@ where
 
         let linker = self.linker;
         let mut session = ResolveSession::new();
-        let file = raw.core_ref().search().and_then(ModuleSearch::file_id);
+        let source = raw.core_ref().source_id();
         let key = context.committed.intern_key(key);
-        if let Some(root) = file.and_then(|id| context.committed.file_module(id)) {
+        if let Some(root) = context.committed.module_for_source(source) {
             session.track(root, context.committed.generation(root));
             session.stage_alias(key, root);
             return Ok(PreparedLoad::new(root, session, None, context));
@@ -268,7 +270,7 @@ where
             .and_then(ModuleSearch::soname)
             .and_then(|name| linker.resolver.map_name(name));
         session.stage_dynamic(root, generation, raw, None);
-        session.stage_file(file, root);
+        session.stage_source(source, root);
         if let Some(alias) = alias {
             let alias = context.committed.intern_key(alias);
             session.stage_alias(alias, root);
@@ -303,8 +305,8 @@ where
         if let Some(relocation) = relocation {
             self.relocate_pending_modules(
                 root_slot,
-                &relocation.scope,
-                &relocation.modules,
+                &relocation.local,
+                &relocation.global,
                 &relocation.symbols,
                 &mut session,
             )?;
@@ -324,8 +326,8 @@ where
     fn relocate_pending_modules(
         &mut self,
         root: ModuleSlot,
-        scope: &ModuleScope<Arch, Tls>,
-        slots: &ModuleIndex,
+        local: &ModuleScope<Arch, Tls>,
+        global: &GlobalScope<Arch, Tls>,
         symbols: &Arc<SymbolRegistry<Arch, Tls>>,
         session: &mut LoadSession<D, Arch, M::Region, Tls>,
     ) -> Result<()> {
@@ -338,6 +340,7 @@ where
                     let (raw, direct_deps) = entry.into_parts();
                     let direct_deps =
                         direct_deps.expect("missing resolved dependencies while relocating");
+                    let scope = LookupScope::from_group(local.clone()).with_global(global.clone());
                     let mut event = LinkerRelocationEvent::new(raw, scope);
                     self.observer.on_relocation(&mut event)?;
                     let (raw, scope, binding) = event.into_parts();
@@ -350,7 +353,7 @@ where
                         .binding(binding)
                         .observer(&mut self.observer)
                         .relocate()?;
-                    session.push_ready(id, loaded, direct_deps, slots);
+                    session.push_ready(id, loaded, direct_deps);
                 } else {
                     session.mark_module_ready(id);
                 }
@@ -446,8 +449,8 @@ pub struct PreparedLoad<
 }
 
 struct PreparedRelocation<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
-    scope: ModuleScope<Arch, Tls>,
-    modules: ModuleIndex,
+    local: ModuleScope<Arch, Tls>,
+    global: GlobalScope<Arch, Tls>,
     symbols: Arc<SymbolRegistry<Arch, Tls>>,
 }
 
@@ -482,10 +485,10 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         let relocation = if session.pending_is_empty() {
             None
         } else {
-            let (scope, pending) = session.build_scope(context);
+            let local = session.build_scope(context);
             Some(PreparedRelocation {
-                scope,
-                modules: ModuleIndex::new(context.committed.identity_snapshot(), pending),
+                local,
+                global: context.global.clone(),
                 symbols: Arc::clone(&context.symbols),
             })
         };
@@ -539,13 +542,12 @@ where
         }
 
         let initializers = self.session.initializers().into_boxed_slice();
-        let commit = self.session.commit_into(&mut context.committed)?;
+        let modules = self.session.commit_into(&mut context.committed)?;
         let root_id = context.committed.make_module_id(self.root);
         let lease = context.acquire(root_id)?;
         Ok(PublishedLoad {
             lease,
-            modules: commit.modules,
-            pins: commit.pins,
+            modules,
             initializers,
         })
     }
@@ -556,7 +558,6 @@ where
 pub struct PublishedLoad<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     lease: ModuleLease,
     modules: Box<[ModuleId]>,
-    pins: Box<[ModuleId]>,
     initializers: Box<[ModuleHandle<Arch, Tls>]>,
 }
 
@@ -617,7 +618,6 @@ where
             .into());
         }
 
-        context.unpin(&self.pins)?;
         context.release(self.lease)?;
         Ok(())
     }

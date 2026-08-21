@@ -2,7 +2,7 @@ use crate::{
     ParsePhdrError, Result,
     arch::NativeArch,
     elf::{ElfDyn, ElfHeader, ElfLayout, ElfPhdr, ElfPhdrs, ElfProgramType, NativeElfLayout},
-    input::{ElfReader, FileId, PathBuf},
+    input::{ElfReader, ModuleSourceId, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     os::ProtFlags,
     relocation::RelocationArch,
@@ -31,8 +31,8 @@ pub(crate) struct ImageBuilder<
     /// Loader source path or caller-provided source identifier.
     pub(crate) path: PathBuf,
 
-    /// Identity of the opened source file, when available.
-    pub(crate) file_id: Option<FileId>,
+    /// Identity of the opened source.
+    pub(crate) source_id: ModuleSourceId,
 
     /// ELF header, when the loader owns the original ELF header metadata.
     ehdr: Option<ElfHeader<Arch::Layout>>,
@@ -119,7 +119,7 @@ where
     pub(crate) fn new(
         segments: ElfSegments<R>,
         path: PathBuf,
-        file_id: Option<FileId>,
+        source_id: ModuleSourceId,
         ehdr: Option<ElfHeader<Arch::Layout>>,
         entry: VmAddr,
         static_tls: bool,
@@ -131,7 +131,7 @@ where
     ) -> Self {
         Self {
             path,
-            file_id,
+            source_id,
             ehdr,
             entry,
             relro: None,
