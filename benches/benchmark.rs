@@ -30,8 +30,8 @@ impl FixtureBytes {
 
 struct UseRootSectionRegions;
 
-impl LinkPass<PathBuf, ReorderPass> for UseRootSectionRegions {
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, PathBuf, ReorderPass>) -> Result<()> {
+impl LinkPass<ReorderPass> for UseRootSectionRegions {
+    fn run(&mut self, plan: &mut LinkPassPlan<'_, ReorderPass>) -> Result<()> {
         let root = plan.root().expect("root module should be visible");
         assert_eq!(root.capability(plan), ModuleCapability::SectionReorderable);
         root.set_materialization(plan, Materialization::SectionRegions);
@@ -102,7 +102,7 @@ fn load_manual_memory(fixtures: &FixtureBytes) -> LoadedCore<()> {
 }
 
 fn load_linker(root: PathBuf) {
-    let mut context: LinkContext<PathBuf> = LinkContext::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
         .load(&mut context, black_box(root))
@@ -111,7 +111,7 @@ fn load_linker(root: PathBuf) {
 }
 
 fn load_scan_first(root: PathBuf) {
-    let mut context: LinkContext<PathBuf> = LinkContext::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
         .run()

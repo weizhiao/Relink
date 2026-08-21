@@ -80,11 +80,11 @@ use elf_loader::{
     runtime::DomainId,
 };
 
-const LINKER: Linker<'static, PathBuf> = Linker::new();
+const LINKER: Linker = Linker::new();
 
 fn main() -> Result<()> {
     let root = PathBuf::from("path/to/plugin.so");
-    let mut context: LinkContext<PathBuf, ()> = LinkContext::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let mut resolver = SearchPathResolver::new();
     resolver.push_rpath();
     resolver.push_runpath();

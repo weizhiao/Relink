@@ -182,12 +182,8 @@ impl<R: RegionAccess> ImageMemory for RuntimeModuleMemory<R> {
 }
 
 impl<R: RegionAccess> MappedRuntimeMemory<R> {
-    pub(crate) fn map<K, Arch, Tls, M>(
-        mapper: &M,
-        plan: &LinkPlan<K, Arch, Tls>,
-    ) -> Result<Option<Self>>
+    pub(crate) fn map<Arch, Tls, M>(mapper: &M, plan: &LinkPlan<Arch, Tls>) -> Result<Option<Self>>
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R> + ?Sized,
@@ -211,13 +207,12 @@ impl<R: RegionAccess> MappedRuntimeMemory<R> {
         Ok(())
     }
 
-    pub(crate) fn repair_module<K, Arch, Tls>(
+    pub(crate) fn repair_module<Arch, Tls>(
         &mut self,
         id: ModuleId,
-        plan: &mut LinkPlan<K, Arch, Tls>,
+        plan: &mut LinkPlan<Arch, Tls>,
     ) -> Result<()>
     where
-        K: Clone + Ord,
         Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
         Tls: TlsResolver<Arch>,
         ElfRelType<Arch>: ByteRepr,
@@ -225,13 +220,12 @@ impl<R: RegionAccess> MappedRuntimeMemory<R> {
         let runtime = self.modules.get(id).ok_or_else(|| {
             LinkerError::runtime_memory("section-region module runtime memory was not cached")
         })?;
-        let mut rewriter = RuntimeMetadataRewriter::<_, Arch, R, Tls>::new(id, plan, runtime);
+        let mut rewriter = RuntimeMetadataRewriter::<Arch, R, Tls>::new(id, plan, runtime);
         rewriter.rewrite()
     }
 
-    pub(crate) fn populate<K, Arch, Tls>(&mut self, plan: &mut LinkPlan<K, Arch, Tls>) -> Result<()>
+    pub(crate) fn populate<Arch, Tls>(&mut self, plan: &mut LinkPlan<Arch, Tls>) -> Result<()>
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {

@@ -63,24 +63,21 @@ impl MultiBinaryResolver {
     }
 }
 
-impl KeyResolver<&'static str> for MultiBinaryResolver {
-    type Request = &'static str;
+impl KeyResolver for MultiBinaryResolver {
+    type Root = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> &'static str {
-        *request
+    fn root_key(&self, root: &Self::Root) -> ModuleKey {
+        (*root).into()
     }
 
     fn resolve<'cfg>(
         &self,
-        req: ResolveRequest<'_, &'static str, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
+        req: ResolveRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'cfg>> {
         let key = match req.input() {
-            ResolveInput::Root { request, .. } => {
-                assert_eq!(*request, self.root);
-                *request
+            ResolveInput::Root { root } => {
+                assert_eq!(*root, self.root);
+                *root
             }
             ResolveInput::Dependency { needed } => *needed,
         };
@@ -151,7 +148,7 @@ fn commits_resolver_modules() {
         root_data: fixtures.dependent,
         dep: dep.clone(),
     };
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let linker = Linker::new().resolver(resolver);
     let root = linker
@@ -179,12 +176,12 @@ fn commits_resolver_modules() {
         "visible_root.so"
     );
     assert!(dep.state().is_initialized());
-    assert!(context.contains_key(&"root"));
+    assert!(context.contains_key("root"));
     let root_id = context
-        .key_id(&"root")
+        .key_id("root")
         .and_then(|id| context.resolve_key(id).unwrap())
         .unwrap();
-    let dep_id = context.key_id(&DEP_KEY).unwrap();
+    let dep_id = context.key_id(DEP_KEY).unwrap();
     let dep_module_id = context
         .resolve_key(dep_id)
         .unwrap()
@@ -199,7 +196,7 @@ fn commits_resolver_modules() {
 
 #[test]
 fn loads_module_root() {
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let linker = Linker::new().resolver(SyntheticRootResolver);
 
     let first = linker.load(&mut context, "root").unwrap();
@@ -235,7 +232,7 @@ fn scan_loads_synthetic_dependency() {
     let resolver = SyntheticDependencyResolver {
         root_data: &fixtures().synthetic_root.data,
     };
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let root = Linker::new()
         .resolver(resolver)
@@ -252,15 +249,15 @@ fn scan_loads_synthetic_dependency() {
             .file_name(),
         "scan_synthetic_root.so"
     );
-    assert!(context.contains_key(&"root"));
-    assert!(context.contains_key(&"dep"));
+    assert!(context.contains_key("root"));
+    assert!(context.contains_key("dep"));
 
     let root_id = context
-        .key_id(&"root")
+        .key_id("root")
         .and_then(|id| context.resolve_key(id).unwrap())
         .unwrap();
-    let dep_id = context.key_id(&"dep").unwrap();
-    let dep_module_id = context.resolve_key(dep_id).unwrap().unwrap();
+    let dep_module_id = context.module_id("dep").unwrap();
+    assert_eq!(context.module_id("synthetic-dep"), Some(dep_module_id));
     let dep_module = context
         .module(dep_module_id)
         .expect("synthetic dependency committed");
@@ -273,7 +270,7 @@ fn scan_loads_synthetic_dependency() {
 
 #[test]
 fn unresolved_dependency_does_not_commit() {
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let error = Linker::new()
         .resolver(SingleBinaryResolver {
@@ -288,7 +285,7 @@ fn unresolved_dependency_does_not_commit() {
         error,
         Error::Linker(LinkerError::UnresolvedDependency(_))
     ));
-    assert!(!context.contains_key(&"root"));
+    assert!(!context.contains_key("root"));
 }
 
 #[test]
@@ -298,7 +295,7 @@ fn publish_rejects_changed_module() {
         name: "pending.so",
         data: fixtures().provider,
     });
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let mut run = linker.run();
     let prepared = run
         .prepare_load(&mut context, "root")
@@ -328,7 +325,7 @@ fn publish_rejects_reloaded_dependency() {
         )
         .relocate()
         .expect("failed to relocate dependency");
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let dep_lease = context
         .insert(DEP_KEY, dep.clone(), Box::new([]))
         .expect("failed to insert dependency");
@@ -358,7 +355,7 @@ fn publish_rejects_reloaded_dependency() {
 fn publish_rejects_released_binding() {
     let interposer = load_provider("interposer.so");
     let observer = Interpose(ModuleHandle::from(&interposer));
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let interposer = context
         .insert("interposer", interposer, Box::new([]))
         .expect("failed to insert interposer");
@@ -387,7 +384,7 @@ fn publish_rejects_released_binding() {
 fn binding_retains_provider() {
     let interposer = load_provider("interposer.so");
     let observer = Interpose(ModuleHandle::from(&interposer));
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let interposer = context
         .insert("interposer", interposer, Box::new([]))
         .expect("failed to insert interposer");
@@ -418,7 +415,7 @@ fn binding_retains_provider() {
 
 #[test]
 fn global_scope_binds_and_retains_provider() {
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let provider = context
         .insert(DEP_KEY, load_provider("global-provider.so"), Box::new([]))
         .unwrap();
@@ -452,7 +449,7 @@ fn global_scope_binds_and_retains_provider() {
 
 #[test]
 fn relocation_reads_current_globals() {
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let linker = Linker::new().resolver(SingleBinaryResolver {
         key: "global",
         name: "global.so",
@@ -491,7 +488,7 @@ fn publish_rejects_reloaded_root() {
         name: "reloaded_root.so",
         data: fixtures().provider,
     });
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let mut run = linker.run();
     let loaded = run.load(&mut context, "root").unwrap();
     let prepared = run.prepare_load(&mut context, "root").unwrap();
@@ -518,7 +515,7 @@ fn loads_dynamic_exec() {
     let fixtures = fixtures();
 
     for scan_first in [false, true] {
-        let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
         let linker = Linker::new().resolver(MultiBinaryResolver {
             root: "root",
             modules: vec![
@@ -541,42 +538,53 @@ fn loads_dynamic_exec() {
         }
         .expect("linker should accept dynamic ET_EXEC roots");
 
-        assert!(context.contains_key(&"root"));
-        assert!(context.contains_key(&DEP_KEY));
+        assert!(context.contains_key("root"));
+        assert!(context.contains_key(DEP_KEY));
     }
 }
 
 #[test]
-fn existing_alias_skips_planning() {
-    let bytes = fixtures().provider;
+fn existing_root_records_request_key() {
+    for scan_first in [false, true] {
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let linker = Linker::new().resolver(SingleBinaryResolver {
+            key: "canonical",
+            name: "canonical.so",
+            data: fixtures().provider,
+        });
+        let loaded = if scan_first {
+            linker.load_scan_first(&mut context, "canonical")
+        } else {
+            linker.load(&mut context, "canonical")
+        }
+        .expect("failed to load canonical root");
 
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let linker = Linker::new().resolver(ExistingRootResolver {
+            requested: "alias",
+            existing: "canonical",
+        });
+        let alias = if scan_first {
+            linker.load_scan_first(&mut context, "alias")
+        } else {
+            linker.load(&mut context, "alias")
+        }
+        .expect("failed to reuse existing root");
 
-    let load_resolver = SingleBinaryResolver {
-        key: "canonical",
-        name: "canonical.so",
-        data: bytes,
-    };
-    let loaded = Linker::new()
-        .resolver(load_resolver)
-        .load_scan_first(&mut context, "canonical")
-        .expect("failed to load canonical scan root");
+        assert_eq!(alias.root(), loaded.root());
+        assert_eq!(context.module_id("alias"), Some(loaded.root()));
 
-    let alias_resolver = ExistingRootResolver {
-        requested: "alias",
-        existing: "canonical",
-    };
-    let alias_loaded = Linker::new()
-        .resolver(alias_resolver)
-        .load_scan_first(&mut context, "alias")
-        .expect("failed to reuse existing scan root");
-
-    assert_eq!(
-        context.module(alias_loaded.root()).unwrap().memory().base(),
-        context.module(loaded.root()).unwrap().memory().base()
-    );
-    assert!(context.contains_key(&"canonical"));
-    assert!(!context.contains_key(&"alias"));
+        let linker = Linker::new().resolver(ExistingRootResolver {
+            requested: "alias",
+            existing: "missing",
+        });
+        let reused = if scan_first {
+            linker.load_scan_first(&mut context, "alias")
+        } else {
+            linker.load(&mut context, "alias")
+        }
+        .expect("recorded request key should bypass the resolver");
+        assert_eq!(reused.root(), loaded.root());
+    }
 }
 
 #[test]
@@ -585,7 +593,7 @@ fn existing_requires_committed_key() {
         requested: "alias",
         existing: "missing",
     };
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let error = Linker::new()
         .resolver(resolver)
@@ -603,7 +611,7 @@ fn existing_requires_committed_key() {
 #[test]
 fn repeated_loads_acquire_the_root() {
     let linker = Linker::new().resolver(dependency_resolver("acquired_root.so", "acquired_dep.so"));
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let first = linker
         .load(&mut context, "root")
@@ -616,8 +624,8 @@ fn repeated_loads_acquire_the_root() {
     assert_eq!(first.modules().len(), 2);
     assert!(second.modules().is_empty());
     assert!(first.release(&mut context).unwrap().is_empty());
-    assert!(context.contains_key(&"root"));
-    assert!(context.contains_key(&DEP_KEY));
+    assert!(context.contains_key("root"));
+    assert!(context.contains_key(DEP_KEY));
 
     let unloaded = second.release(&mut context).unwrap();
     assert_eq!(
@@ -635,7 +643,7 @@ fn repeated_loads_acquire_the_root() {
 fn rollback_releases_existing_root() {
     let linker = Linker::new().resolver(dependency_resolver("rollback_root.so", "rollback_dep.so"));
     let mut run = linker.run();
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let loaded = run
         .load(&mut context, "root")
         .expect("initial load should succeed");
@@ -677,7 +685,7 @@ fn relocates_dependencies_first() {
         }
     }
 
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let linker = Linker::new().resolver(resolver);
     let loaded = linker
         .run()
@@ -690,8 +698,8 @@ fn relocates_dependencies_first() {
         vec!["dep.so".to_string(), "root.so".to_string()],
         "relocation should still run in dependency-first order"
     );
-    assert!(context.contains_key(&"root"));
-    assert!(context.contains_key(&DEP_KEY));
+    assert!(context.contains_key("root"));
+    assert!(context.contains_key(DEP_KEY));
     drop(loaded.release(&mut context).unwrap());
 }
 
@@ -703,25 +711,25 @@ fn phased_load_initializes_dependencies_first() {
     let mut run = linker
         .run()
         .with_observer(InitRecorder::new(Arc::clone(&calls)));
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let prepared = run
         .prepare_load(&mut context, "root")
         .expect("prepare should resolve the module group");
-    assert!(!context.contains_key(&"root"));
-    assert!(!context.contains_key(&DEP_KEY));
+    assert!(!context.contains_key("root"));
+    assert!(!context.contains_key(DEP_KEY));
 
     let relocated = run
         .relocate(prepared)
         .expect("relocation should succeed without a context borrow");
-    assert!(!context.contains_key(&"root"));
-    assert!(!context.contains_key(&DEP_KEY));
+    assert!(!context.contains_key("root"));
+    assert!(!context.contains_key(DEP_KEY));
 
     let published = relocated
         .publish(&mut context)
         .expect("publish should expose the relocated group");
-    assert!(context.contains_key(&"root"));
-    assert!(context.contains_key(&DEP_KEY));
+    assert!(context.contains_key("root"));
+    assert!(context.contains_key(DEP_KEY));
     assert!(
         !context
             .module(published.root())
@@ -756,12 +764,12 @@ fn publish_rejects_other_context() {
         data: fixtures().provider,
     });
     let mut run = linker.run();
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let prepared = run
         .prepare_load(&mut context, "root")
         .expect("prepare should succeed");
     let relocated = run.relocate(prepared).expect("relocation should succeed");
-    let mut other_context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut other_context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let err = relocated
         .publish(&mut other_context)
@@ -772,7 +780,7 @@ fn publish_rejects_other_context() {
             reason,
         }) if matches!(*reason, LinkContextError::ContextMismatch { .. })
     ));
-    assert!(!other_context.contains_key(&"root"));
+    assert!(!other_context.contains_key("root"));
 }
 
 #[test]
@@ -783,7 +791,7 @@ fn rollback_rejects_other_context() {
         data: fixtures().provider,
     });
     let mut run = linker.run();
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let prepared = run
         .prepare_load(&mut context, "root")
         .expect("prepare should succeed");
@@ -791,7 +799,7 @@ fn rollback_rejects_other_context() {
     let published = relocated
         .publish(&mut context)
         .expect("publish should succeed");
-    let mut other_context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut other_context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let error = published
         .rollback(&mut other_context)
@@ -802,8 +810,8 @@ fn rollback_rejects_other_context() {
             reason,
         }) if matches!(*reason, LinkContextError::ContextMismatch { .. })
     ));
-    assert!(context.contains_key(&"root"));
-    assert!(!other_context.contains_key(&"root"));
+    assert!(context.contains_key("root"));
+    assert!(!other_context.contains_key("root"));
 }
 
 #[test]
@@ -817,18 +825,18 @@ fn failed_init_can_roll_back() {
     let mut run = linker
         .run()
         .with_observer(InitRecorder::failing(Arc::clone(&calls)));
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let prepared = run.prepare_load(&mut context, "root").unwrap();
     let relocated = run.relocate(prepared).unwrap();
     let published = relocated.publish(&mut context).unwrap();
 
     let failed = published.initialize().expect_err("initializer should fail");
-    assert!(context.contains_key(&"root"));
+    assert!(context.contains_key("root"));
     assert!(failed.error().to_string().contains("initializer failed"));
 
     let error = failed.rollback(&mut context);
     assert!(error.to_string().contains("initializer failed"));
-    assert!(!context.contains_key(&"root"));
+    assert!(!context.contains_key("root"));
     assert_eq!(
         calls.lock().unwrap().as_slice(),
         &["failing_init.so", "fini:failing_init.so"]

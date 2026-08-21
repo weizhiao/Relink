@@ -11,8 +11,8 @@ use elf_loader::{
 
 struct ConfigureRootSectionRegions;
 
-impl LinkPass<PathBuf, ReorderPass> for ConfigureRootSectionRegions {
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, PathBuf, ReorderPass>) -> Result<()> {
+impl LinkPass<ReorderPass> for ConfigureRootSectionRegions {
+    fn run(&mut self, plan: &mut LinkPassPlan<'_, ReorderPass>) -> Result<()> {
         let root = plan.root().expect("root module should be visible");
         assert_eq!(root.capability(plan), ModuleCapability::SectionReorderable,);
         root.set_materialization(plan, Materialization::SectionRegions);
@@ -25,7 +25,7 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let fixtures = fixture_support::ensure_all();
-    let mut context: LinkContext<PathBuf> = LinkContext::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())

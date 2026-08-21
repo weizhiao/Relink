@@ -1,6 +1,6 @@
 use super::{
     context::LinkContext,
-    storage::{CommittedStorage, KeySlot, ModuleGuard, ModuleId, ModuleSlot, StoredEntry},
+    storage::{CommittedStorage, KeySlot, ModuleId, ModuleSlot, StoredEntry},
 };
 use crate::{
     LinkContextError, LinkerError, Result,
@@ -11,7 +11,11 @@ use crate::{
     relocation::RelocationArch,
     tls::TlsResolver,
 };
-use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, btree_map::Entry},
+    vec::Vec,
+};
 
 pub(crate) struct GraphEntry<P> {
     payload: P,
@@ -81,7 +85,7 @@ where
 pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     dynamics: BTreeMap<ModuleSlot, GraphEntry<P>>,
     modules: BTreeMap<ModuleSlot, PendingModule<Arch, Tls>>,
-    guards: Vec<ModuleGuard>,
+    guards: BTreeMap<ModuleSlot, u32>,
     group_order: Vec<ModuleSlot>,
     aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
     sources: BTreeMap<ModuleSourceId, ModuleSlot>,
@@ -97,7 +101,7 @@ where
         Self {
             dynamics: BTreeMap::new(),
             modules: BTreeMap::new(),
-            guards: Vec::new(),
+            guards: BTreeMap::new(),
             group_order: Vec::new(),
             aliases: SecondaryMap::new(),
             sources: BTreeMap::new(),
@@ -130,7 +134,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn source_module(&self, id: ModuleSourceId) -> Option<ModuleSlot> {
+    pub(crate) fn module_for_source(&self, id: ModuleSourceId) -> Option<ModuleSlot> {
         self.sources.get(&id).copied()
     }
 
@@ -260,11 +264,12 @@ where
 
     #[inline]
     pub(crate) fn track(&mut self, slot: ModuleSlot, generation: u32) {
-        if let Some(guard) = self.guards.iter().find(|guard| guard.slot == slot) {
-            debug_assert_eq!(guard.generation, generation);
-            return;
+        match self.guards.entry(slot) {
+            Entry::Vacant(entry) => {
+                entry.insert(generation);
+            }
+            Entry::Occupied(entry) => debug_assert_eq!(*entry.get(), generation),
         }
-        self.guards.push(ModuleGuard { slot, generation });
     }
 }
 
@@ -274,14 +279,13 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn build_scope<K, Meta>(
-        &mut self,
-        context: &LinkContext<K, Meta, Arch, Tls>,
+    pub(crate) fn build_scope<Meta>(
+        &self,
+        context: &LinkContext<Meta, Arch, Tls>,
     ) -> ModuleScope<Arch, Tls> {
         let mut scope = ModuleScope::new(context.domain_id());
         for index in 0..self.group_order.len() {
             let id = self.group_order[index];
-            let dynamic = self.dynamics.contains_key(&id);
             let module = if let Some(raw) = self.dynamics.get(&id).map(GraphEntry::payload) {
                 let module = unsafe { LoadedCore::from_core(raw.core()) };
                 ModuleHandle::from(module)
@@ -294,9 +298,6 @@ where
                     .map(|module| module.handle().clone())
                     .expect("scope slot must resolve to a committed module")
             };
-            if dynamic {
-                self.stage_source(module.source_id(), id);
-            }
             scope.push(module);
         }
         scope
@@ -431,12 +432,11 @@ where
         }
     }
 
-    pub(crate) fn commit_into<K, Meta>(
+    pub(crate) fn commit_into<Meta>(
         self,
-        committed: &mut CommittedStorage<K, Meta, Arch, Tls>,
+        committed: &mut CommittedStorage<Meta, Arch, Tls>,
     ) -> Result<Box<[ModuleId]>>
     where
-        K: Clone + Ord,
         Meta: Default,
     {
         let Self {
@@ -453,7 +453,7 @@ where
         } = resolve;
         let mut ready = ready_to_commit;
         let mut committed_ids = Vec::with_capacity(ready.len());
-        for ModuleGuard { slot, generation } in guards {
+        for (slot, generation) in guards {
             if committed.generation(slot) != generation {
                 return Err(LinkerError::context(LinkContextError::ModuleChanged {
                     id: ModuleId::from_slot(committed.context(), slot, generation),

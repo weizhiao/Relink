@@ -22,12 +22,11 @@ pub(crate) struct MappedArenaMap<R: RegionAccess = HostRegion> {
 }
 
 impl<R: RegionAccess> MappedArenaMap<R> {
-    pub(super) fn map_plan<K, Arch, Tls, M>(
+    pub(super) fn map_plan<Arch, Tls, M>(
         mapper: &M,
-        plan: &LinkPlan<K, Arch, Tls>,
+        plan: &LinkPlan<Arch, Tls>,
     ) -> Result<Option<Self>>
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R> + ?Sized,
@@ -92,9 +91,8 @@ impl<R: RegionAccess> MappedArenaMap<R> {
         Ok(Some(arenas))
     }
 
-    pub(super) fn populate<K, Arch, Tls>(&mut self, plan: &mut LinkPlan<K, Arch, Tls>) -> Result<()>
+    pub(super) fn populate<Arch, Tls>(&mut self, plan: &mut LinkPlan<Arch, Tls>) -> Result<()>
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
@@ -245,7 +243,7 @@ mod tests {
     use crate::{
         image::{ScannedElf, SyntheticModule},
         input::ElfBinary,
-        linker::LinkContext,
+        linker::{LinkContext, ModuleKey},
         loader::Loader,
         runtime::DomainId,
     };
@@ -269,13 +267,20 @@ mod tests {
             panic!("generated dylib should scan as dynamic");
         };
         let mut entries = BTreeMap::new();
-        let mut context = LinkContext::<&str>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
         let root = context
             .insert("root", SyntheticModule::empty("root"), Box::new([]))
             .unwrap();
         let root_slot = context.committed.module_slot(root.id()).unwrap();
-        entries.insert(root_slot, ("root", scanned, Vec::new().into_boxed_slice()));
-        let mut plan: LinkPlan<&str> = LinkPlan::new(root_slot, Vec::from([root_slot]), entries);
+        entries.insert(
+            root_slot,
+            (
+                ModuleKey::from("root"),
+                scanned,
+                Vec::new().into_boxed_slice(),
+            ),
+        );
+        let mut plan: LinkPlan = LinkPlan::new(root_slot, Vec::from([root_slot]), entries);
         let root = plan.root_module();
         let section = plan
             .memory_layout()

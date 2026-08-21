@@ -1,14 +1,30 @@
 use crate::{
     AlignedBytes, ParseEhdrError, Result,
-    elf::{
-        Elf32Layout, Elf64Layout, ElfFileType, ElfHeader, ElfLayout, ElfPhdr, ElfShdr, ElfTarget,
-    },
+    elf::{Elf32Layout, Elf64Layout, ElfFileType, ElfHeader, ElfLayout, ElfPhdr, ElfShdr},
     input::{ElfReader, ElfReaderExt},
+    relocation::RelocationArch,
 };
 use core::mem::{MaybeUninit, align_of, size_of};
 
 pub(crate) struct ElfBuf {
     buf: AlignedBytes,
+}
+
+/// Reads and validates an ELF header for `Arch`.
+pub(crate) fn read_ehdr<Arch: RelocationArch>(
+    object: &impl ElfReader,
+) -> Result<ElfHeader<Arch::Layout>> {
+    let mut raw = MaybeUninit::<<Arch::Layout as ElfLayout>::Ehdr>::uninit();
+    let bytes = unsafe {
+        core::slice::from_raw_parts_mut(
+            raw.as_mut_ptr().cast::<u8>(),
+            <Arch::Layout as ElfLayout>::EHDR_SIZE,
+        )
+    };
+    object.read(bytes, 0)?;
+    let ehdr = ElfHeader::from_raw(unsafe { raw.assume_init() }, Arch::TARGET)?;
+    Arch::validate_e_flags(ehdr.e_flags())?;
+    Ok(ehdr)
 }
 
 impl ElfBuf {
@@ -17,22 +33,6 @@ impl ElfBuf {
             buf: AlignedBytes::with_len(size_of::<elf::file::Elf64_Ehdr>())
                 .expect("failed to initialize ElfBuf"),
         }
-    }
-
-    /// Reads and parses the ELF header.
-    ///
-    /// The parsed header must match `expected` in class, byte order, and
-    /// machine architecture.
-    pub(crate) fn prepare_ehdr<L: ElfLayout>(
-        &mut self,
-        object: &impl ElfReader,
-        expected: ElfTarget,
-    ) -> Result<ElfHeader<L>> {
-        let mut raw = MaybeUninit::<L::Ehdr>::uninit();
-        let bytes =
-            unsafe { core::slice::from_raw_parts_mut(raw.as_mut_ptr().cast::<u8>(), L::EHDR_SIZE) };
-        object.read(bytes, 0)?;
-        ElfHeader::from_raw(unsafe { raw.assume_init() }, expected)
     }
 
     pub(crate) fn prepare_phdrs<'a, L: ElfLayout>(

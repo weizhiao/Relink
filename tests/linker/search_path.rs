@@ -4,29 +4,14 @@ use elf_loader::{
     Error, LinkContext, Linker,
     error::{LinkContextError, LinkerError},
     input::{Path as ElfPath, PathBuf},
-    linker::{KeyMapper, SearchPathResolver},
+    linker::SearchPathResolver,
     runtime::DomainId,
 };
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct OpaqueKey(String);
-
-struct OpaqueMapper;
-
-impl KeyMapper<OpaqueKey> for OpaqueMapper {
-    fn map_path(&self, candidate: &ElfPath) -> OpaqueKey {
-        OpaqueKey(format!("path:{}", candidate.as_str()))
-    }
-
-    fn map_name(&self, name: &str) -> OpaqueKey {
-        OpaqueKey(format!("name:{name}"))
-    }
-}
 
 #[test]
 fn loads_dependency_chain() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
@@ -47,45 +32,9 @@ fn loads_dependency_chain() {
 }
 
 #[test]
-fn maps_requests_and_names_separately() {
-    let fixtures = crate::fixture::fixtures();
-    let mut resolver = SearchPathResolver::with_mapper(OpaqueMapper);
-    resolver.push_rpath().push_runpath();
-    let mut context = LinkContext::<OpaqueKey>::new(DomainId::PROCESS);
-    let linker = Linker::new().resolver(resolver);
-
-    let loaded = linker
-        .load(
-            &mut context,
-            PathBuf::from(fixtures.root_path.to_str().unwrap()),
-        )
-        .unwrap();
-
-    let root_value = unsafe {
-        context
-            .module(loaded.root())
-            .unwrap()
-            .get::<extern "C" fn() -> i32>("root_value")
-            .unwrap()
-    };
-    assert_eq!(root_value(), 3);
-
-    let leaf = linker
-        .load(
-            &mut context,
-            PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap()),
-        )
-        .unwrap();
-    assert_eq!(
-        context.module_id(&OpaqueKey("name:libleaf.so".into())),
-        Some(leaf.root())
-    );
-}
-
-#[test]
 fn inherits_rpath() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
@@ -135,7 +84,7 @@ fn inherits_rpath() {
 #[cfg(target_arch = "x86_64")]
 fn scan_inherits_rpath() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
@@ -158,7 +107,7 @@ fn scan_inherits_rpath() {
 #[test]
 fn loads_from_module_rpath() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
 
     let caller = linker
@@ -189,7 +138,7 @@ fn reuses_soname() {
     let alias = dir.join("leaf-implementation.so");
     fs::copy(&fixtures.rpath_leaf_path, &alias).unwrap();
 
-    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
     let first = linker
         .load(&mut context, PathBuf::from(alias.to_str().unwrap()))
@@ -243,14 +192,14 @@ fn reuses_file() {
 
     let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
     let alias = PathBuf::from(alias_path.to_str().unwrap());
-    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
     let first = linker.load(&mut context, original.clone()).unwrap();
     let second = linker.load(&mut context, alias.clone()).unwrap();
 
     assert_eq!(first.root(), second.root());
-    assert_eq!(context.module_id(&original), Some(first.root()));
-    assert_eq!(context.module_id(&alias), Some(first.root()));
+    assert_eq!(context.module_id(original.as_str()), Some(first.root()));
+    assert_eq!(context.module_id(alias.as_str()), Some(first.root()));
     assert_eq!(context.load_order().count(), 1);
 
     let old = first.root();
@@ -283,9 +232,9 @@ fn imports_reuse_file() {
     let alias = PathBuf::from(alias_path.to_str().unwrap());
     let next = PathBuf::from(next_path.to_str().unwrap());
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
-    let mut source = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let mut source = LinkContext::<()>::new(DomainId::PROCESS);
     let source_module = linker.load(&mut source, original).unwrap();
-    let mut target = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let mut target = LinkContext::<()>::new(DomainId::PROCESS);
     let first = linker.load(&mut target, alias).unwrap();
     let imported = target.import(&source, source_module.root()).unwrap();
     assert_eq!(imported.id(), first.root());
@@ -314,7 +263,7 @@ fn rejects_reloaded_file() {
     let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
     let alias = PathBuf::from(alias_path.to_str().unwrap());
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
-    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let mut run = linker.run();
     let loaded = run.load(&mut context, original.clone()).unwrap();
     let prepared = run.prepare_load(&mut context, alias).unwrap();
@@ -337,7 +286,7 @@ fn rejects_reloaded_file() {
 #[cfg(target_arch = "x86_64")]
 fn scan_loads_dependency_chain() {
     let fixtures = crate::fixture::fixtures();
-    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
@@ -382,7 +331,7 @@ fn dynamic_dirs_precede_static_dirs() {
     });
     resolver.push_fixed_dir(static_dir);
 
-    let mut context = LinkContext::<PathBuf>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let loaded = Linker::new()
         .resolver(resolver)
         .load(&mut context, PathBuf::from("libpick.so"))

@@ -940,8 +940,6 @@ impl Display for LinkContextError {
 pub enum LinkResolverError {
     /// The resolver returned `Existing`, but the key is not committed.
     ExistingKeyMissing,
-    /// The resolver returned a new module source, but the key is already known.
-    NewKeyAlreadyKnown,
     /// The root module could not be found by a resolver.
     RootNotFound,
 }
@@ -951,9 +949,6 @@ impl Display for LinkResolverError {
         match self {
             Self::ExistingKeyMissing => {
                 f.write_str("resolver referenced an uncommitted existing key")
-            }
-            Self::NewKeyAlreadyKnown => {
-                f.write_str("resolver produced an already-known key; use Existing to reuse it")
             }
             Self::RootNotFound => f.write_str("root module was not found by resolver"),
         }

@@ -1,4 +1,4 @@
-use super::ResolveRequest;
+use super::{super::ModuleKey, ResolveRequest};
 use crate::{
     Result, arch::NativeArch, image::ModuleHandle, input::ElfReader, relocation::RelocationArch,
     tls::TlsResolver,
@@ -6,43 +6,46 @@ use crate::{
 use alloc::{boxed::Box, vec::Vec};
 
 /// A key-resolution result chosen by caller policy.
-pub enum ResolvedKey<'cfg, K, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+pub enum ResolvedKey<'cfg, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     /// Reuses a module that is already visible in the current link context.
-    Existing(K),
-    /// Loads a new module for the provided canonical key and target arch.
+    Existing(ModuleKey),
+    /// Provides a load candidate for the canonical key and target arch.
+    ///
+    /// The linker reuses a visible module with the same key before loading the
+    /// reader.
     Load {
         /// Canonical key that should identify the loaded module.
-        key: K,
+        key: ModuleKey,
         /// Reader used to load the resolved ELF image.
         reader: Box<dyn ElfReader + 'cfg>,
     },
-    /// Provides a module not yet committed to the current context and its dependencies.
+    /// Provides a module candidate and its dependencies.
     ///
-    /// The underlying allocation may already be shared elsewhere. The module is
-    /// published and initialized with this transaction. Use [`Self::Existing`]
-    /// only for a key already committed to the current context.
+    /// The underlying allocation may already be shared elsewhere. A visible
+    /// module with the same key is reused; otherwise this module is published
+    /// and initialized with the transaction.
     Module {
         /// Canonical key that should identify the module.
-        key: K,
+        key: ModuleKey,
         /// Module exposed for symbol lookup.
         module: ModuleHandle<Arch, Tls>,
         /// Dependencies resolved as part of this graph fragment.
-        deps: Vec<ResolvedKey<'cfg, K, Arch, Tls>>,
+        deps: Vec<ResolvedKey<'cfg, Arch, Tls>>,
     },
 }
 
-impl<'cfg, K, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedKey<'cfg, K, Arch, Tls> {
+impl<'cfg, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedKey<'cfg, Arch, Tls> {
     /// Creates a result that reuses an already committed visible key.
     #[inline]
-    pub fn existing(key: K) -> Self {
-        Self::Existing(key)
+    pub fn existing(key: impl Into<ModuleKey>) -> Self {
+        Self::Existing(key.into())
     }
 
     /// Creates a result that loads a new module from the provided reader.
     #[inline]
-    pub fn load(key: K, reader: impl ElfReader + 'cfg) -> Self {
+    pub fn load(key: impl Into<ModuleKey>, reader: impl ElfReader + 'cfg) -> Self {
         Self::Load {
-            key,
+            key: key.into(),
             reader: Box::new(reader),
         }
     }
@@ -50,12 +53,12 @@ impl<'cfg, K, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedKey<'cfg, K,
     /// Creates a result backed by a module not yet committed to this context.
     #[inline]
     pub fn module(
-        key: K,
+        key: impl Into<ModuleKey>,
         module: impl Into<ModuleHandle<Arch, Tls>>,
-        deps: impl Into<Vec<ResolvedKey<'cfg, K, Arch, Tls>>>,
+        deps: impl Into<Vec<ResolvedKey<'cfg, Arch, Tls>>>,
     ) -> Self {
         Self::Module {
-            key,
+            key: key.into(),
             module: module.into(),
             deps: deps.into(),
         }
@@ -63,29 +66,18 @@ impl<'cfg, K, Arch: RelocationArch, Tls: TlsResolver<Arch>> ResolvedKey<'cfg, K,
 }
 
 /// Key-resolution policy used by [`super::super::Linker`].
-pub trait KeyResolver<K, Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    /// Per-load root input owned by this resolver invocation.
+pub trait KeyResolver<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+    /// Root input owned by one linker load operation.
     ///
     /// It may carry non-cloneable resources such as an already-open file.
-    type Request;
+    type Root;
 
-    /// Maps a root request to the key used for an existing-module lookup.
-    fn map_request(&self, request: &Self::Request) -> K;
-
-    /// Maps an ELF module name such as `DT_SONAME` or `DT_NEEDED` to a key.
-    ///
-    /// Returning `None` disables linker-managed name aliases. Dependency
-    /// requests are still passed to [`resolve`](Self::resolve).
-    #[inline]
-    fn map_name(&self, _name: &str) -> Option<K> {
-        None
-    }
+    /// Maps a root input to the key used for an existing-module lookup.
+    fn root_key(&self, root: &Self::Root) -> ModuleKey;
 
     /// Resolves a root input or one `DT_NEEDED` dependency.
     fn resolve<'cfg>(
         &self,
-        req: ResolveRequest<'_, Self::Request, K>,
-    ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
-    where
-        K: 'cfg;
+        req: ResolveRequest<'_, Self::Root>,
+    ) -> Result<ResolvedKey<'cfg, Arch, Tls>>;
 }

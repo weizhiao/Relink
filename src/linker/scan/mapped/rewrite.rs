@@ -255,25 +255,23 @@ impl<R: RegionAccess> RuntimeModuleMemory<R> {
 
 pub(crate) struct RuntimeMetadataRewriter<
     'a,
-    K,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch> = (),
 > {
     module_id: ModuleId,
-    plan: &'a mut LinkPlan<K, Arch, Tls>,
+    plan: &'a mut LinkPlan<Arch, Tls>,
     runtime: &'a RuntimeModuleMemory<R>,
 }
 
-struct RewriteContext<'a, K, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> = ()> {
-    plan: &'a LinkPlan<K, Arch, Tls>,
+struct RewriteContext<'a, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch> = ()> {
+    plan: &'a LinkPlan<Arch, Tls>,
     module_id: ModuleId,
     runtime: &'a RuntimeModuleMemory<R>,
 }
 
-impl<'a, K, Arch, R, Tls> RuntimeMetadataRewriter<'a, K, Arch, R, Tls>
+impl<'a, Arch, R, Tls> RuntimeMetadataRewriter<'a, Arch, R, Tls>
 where
-    K: Clone + Ord,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
@@ -281,7 +279,7 @@ where
 {
     pub(crate) fn new(
         module_id: ModuleId,
-        plan: &'a mut LinkPlan<K, Arch, Tls>,
+        plan: &'a mut LinkPlan<Arch, Tls>,
         runtime: &'a RuntimeModuleMemory<R>,
     ) -> Self {
         Self {
@@ -346,7 +344,7 @@ where
         };
 
         for entry in entries {
-            write_retained_relocation::<K, Arch, R, Tls>(&ctx, target_section, entry, symbols)?;
+            write_retained_relocation::<Arch, R, Tls>(&ctx, target_section, entry, symbols)?;
         }
 
         Ok(())
@@ -374,7 +372,7 @@ where
                 let mut symbol = self
                     .runtime
                     .read_section_entry::<ElfSymbol<Arch::Layout>>(section, index)?;
-                let value = remapped_symbol_value::<K, Arch, R, Tls>(&ctx, &symbol)?;
+                let value = remapped_symbol_value::<Arch, R, Tls>(&ctx, &symbol)?;
                 symbol.set_value(value);
                 ctx.runtime.write_section_entry(section, index, symbol)?;
             }
@@ -453,14 +451,13 @@ fn cast_section_bytes<T: ByteRepr>(bytes: &[u8]) -> Result<&[T]> {
     })
 }
 
-fn write_retained_relocation<K, Arch, R, Tls>(
-    ctx: &RewriteContext<'_, K, Arch, R, Tls>,
+fn write_retained_relocation<Arch, R, Tls>(
+    ctx: &RewriteContext<'_, Arch, R, Tls>,
     target_section: SectionId,
     entry: &ElfRelType<Arch>,
     symbols: &[ElfSymbol<Arch::Layout>],
 ) -> Result<()>
 where
-    K: Clone + Ord,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
@@ -480,7 +477,7 @@ where
     })?;
     let place = ctx.runtime.base() + VmOffset::new(site.place.get());
     let addend = entry.read_addend(ctx.runtime, place)?;
-    let symbol_value = retained_relocation_target::<K, Arch, R, Tls>(
+    let symbol_value = retained_relocation_target::<Arch, R, Tls>(
         ctx,
         target_section,
         entry,
@@ -523,12 +520,11 @@ fn retained_relocation_value_error(reason: RelocReason) -> Error {
     .into()
 }
 
-fn remapped_symbol_value<K, Arch, R, Tls>(
-    ctx: &RewriteContext<'_, K, Arch, R, Tls>,
+fn remapped_symbol_value<Arch, R, Tls>(
+    ctx: &RewriteContext<'_, Arch, R, Tls>,
     symbol: &ElfSymbol<Arch::Layout>,
 ) -> Result<usize>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
@@ -550,8 +546,8 @@ where
         .remap_symbol_value(symbol_section, symbol.st_value())
 }
 
-fn retained_relocation_target<K, Arch, R, Tls>(
-    ctx: &RewriteContext<'_, K, Arch, R, Tls>,
+fn retained_relocation_target<Arch, R, Tls>(
+    ctx: &RewriteContext<'_, Arch, R, Tls>,
     target_section: SectionId,
     entry: &ElfRelType<Arch>,
     symbol: &ElfSymbol<Arch::Layout>,
@@ -559,7 +555,6 @@ fn retained_relocation_target<K, Arch, R, Tls>(
     addend: isize,
 ) -> Result<usize>
 where
-    K: Clone + Ord,
     Arch: RelocationArch + GotPltTarget,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,

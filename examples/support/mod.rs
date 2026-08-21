@@ -77,7 +77,7 @@ pub(crate) fn ensure_native_exec() -> PathBuf {
     exec_target_dir().join("native_exec")
 }
 
-pub(crate) fn search_path_resolver<K>() -> SearchPathResolver<K> {
+pub(crate) fn search_path_resolver() -> SearchPathResolver {
     let mut resolver = SearchPathResolver::new();
     resolver.push_rpath();
     resolver.push_runpath();

@@ -31,12 +31,11 @@ impl<'plan> Arena<'plan> {
 impl<'scope> Arena<'scope> {
     /// Returns this arena's descriptor through `plan`.
     #[inline]
-    pub fn descriptor<'borrow, K, S, Arch, Tls>(
+    pub fn descriptor<'borrow, S, Arch, Tls>(
         self,
-        plan: &'borrow LinkPassPlan<'scope, K, S, Arch, Tls>,
+        plan: &'borrow LinkPassPlan<'scope, S, Arch, Tls>,
     ) -> &'borrow ArenaDescriptor
     where
-        K: Clone + Ord,
         S: ReorderAccess,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
@@ -46,9 +45,8 @@ impl<'scope> Arena<'scope> {
 
     /// Returns this arena's derived usage summary through `plan`.
     #[inline]
-    pub fn usage<K, S, Arch, Tls>(self, plan: &LinkPassPlan<'scope, K, S, Arch, Tls>) -> ArenaUsage
+    pub fn usage<S, Arch, Tls>(self, plan: &LinkPassPlan<'scope, S, Arch, Tls>) -> ArenaUsage
     where
-        K: Clone + Ord,
         S: ReorderAccess,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,

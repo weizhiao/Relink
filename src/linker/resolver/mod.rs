@@ -6,7 +6,5 @@ mod traits;
 
 pub(crate) use request::{DependencySource, LoaderVisitor};
 pub use request::{ResolveInput, ResolveRequest};
-pub use search_path::{
-    CandidateContext, CandidateRequest, FileNameKey, KeyMapper, PathKey, SearchPathResolver,
-};
+pub use search_path::{CandidateRequest, SearchPathResolver};
 pub use traits::{KeyResolver, ResolvedKey};

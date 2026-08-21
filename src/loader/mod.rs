@@ -17,6 +17,6 @@ mod handle;
 mod run;
 
 pub(crate) use builder::{ImageBuilder, ScanBuilder};
-pub(crate) use defs::{ElfBuf, ExpectedElf};
+pub(crate) use defs::{ElfBuf, ExpectedElf, read_ehdr};
 pub use handle::Loader;
 pub use run::LoaderRun;

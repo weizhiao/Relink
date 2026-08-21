@@ -81,7 +81,7 @@
 //!
 //! fn main() -> Result<()> {
 //!     let root = PathBuf::from("path/to/plugin.so");
-//!     let mut context: LinkContext<PathBuf> = LinkContext::new(DomainId::PROCESS);
+//!     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 //!     let mut resolver = SearchPathResolver::new();
 //!     resolver.push_rpath();
 //!     resolver.push_runpath();
@@ -230,7 +230,7 @@ pub use aligned_bytes::ByteRepr;
 pub use error::Error;
 pub use image::{Module, ModuleSearch, ModuleState, SearchPathPool};
 pub use input::ModuleSourceId;
-pub use linker::{LinkContext, Linker, LinkerRun};
+pub use linker::{LinkContext, Linker, LinkerRun, ModuleKey};
 pub use loader::{Loader, LoaderRun};
 pub use relocation::{Relocator, RelocatorRun};
 

@@ -1,18 +1,19 @@
+use super::super::ModuleKey;
 use super::{
     KeyResolver, ResolveInput, ResolveRequest, ResolvedKey,
     request::{LoaderProvider, LoaderVisitor},
 };
 use crate::{
     Error, IoError, ParseEhdrError, Result,
-    elf::{ElfHeader, ElfLayout},
     image::{ModuleSearch, PathTokens, SharedDir, normalize_dir},
-    input::{ElfFile, ElfReader, Path, PathBuf},
+    input::{ElfFile, Path, PathBuf},
+    loader::read_ehdr,
     relocation::RelocationArch,
     sync::{Arc, arc_unsize},
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
-use core::{fmt, marker::PhantomData, mem::MaybeUninit};
+use core::fmt;
 
 /// Runtime directory provider used by
 /// [`SearchPathResolver::push_search_dir_provider`].
@@ -110,101 +111,12 @@ impl<'a> CandidateRequest<'a> {
     }
 }
 
-/// Context passed to existing-candidate reuse callbacks.
-pub struct CandidateContext<'a, LinkKey> {
-    candidate: &'a Path,
-    key: &'a LinkKey,
-}
-
-// Keep these impls manual so callback contexts remain copyable for any LinkKey.
-impl<LinkKey> Clone for CandidateContext<'_, LinkKey> {
-    #[inline]
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<LinkKey> Copy for CandidateContext<'_, LinkKey> {}
-
-impl<'a, LinkKey> CandidateContext<'a, LinkKey> {
-    #[inline]
-    fn new(candidate: &'a Path, key: &'a LinkKey) -> Self {
-        Self { candidate, key }
-    }
-
-    /// Returns the concrete filesystem candidate currently being considered.
-    #[inline]
-    pub const fn candidate(&self) -> &'a Path {
-        self.candidate
-    }
-
-    /// Returns the key that would be used if the current candidate were loaded.
-    #[inline]
-    pub const fn key(&self) -> &'a LinkKey {
-        self.key
-    }
-}
-
-impl<LinkKey: fmt::Debug> fmt::Debug for CandidateContext<'_, LinkKey> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CandidateContext")
-            .field("candidate", &self.candidate)
-            .field("key", &self.key)
-            .finish_non_exhaustive()
-    }
-}
-
 impl fmt::Debug for CandidateRequest<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CandidateRequest")
             .field("requested", &self.requested)
             .field("owner", &self.owner)
             .finish()
-    }
-}
-
-/// Maps a resolved filesystem candidate to its [`LinkContext`](crate::LinkContext) key.
-pub trait KeyMapper<LinkKey> {
-    /// Maps a resolved filesystem path to its linker key.
-    fn map_path(&self, candidate: &Path) -> LinkKey;
-
-    /// Maps an ELF module name to the same key namespace.
-    ///
-    /// Override this when path keys and `DT_SONAME`/`DT_NEEDED` keys use
-    /// different representations.
-    #[inline]
-    fn map_name(&self, name: &str) -> LinkKey {
-        self.map_path(Path::new(name))
-    }
-}
-
-/// Default filesystem key behavior for [`SearchPathResolver`].
-///
-/// Loads use the concrete resolved candidate path.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PathKey;
-
-impl<LinkKey> KeyMapper<LinkKey> for PathKey
-where
-    LinkKey: From<PathBuf>,
-{
-    #[inline]
-    fn map_path(&self, candidate: &Path) -> LinkKey {
-        LinkKey::from(PathBuf::from(candidate))
-    }
-}
-
-/// Uses the resolved candidate's last path component as the linker key.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct FileNameKey;
-
-impl<LinkKey> KeyMapper<LinkKey> for FileNameKey
-where
-    LinkKey: From<PathBuf>,
-{
-    #[inline]
-    fn map_path(&self, candidate: &Path) -> LinkKey {
-        LinkKey::from(PathBuf::from(candidate.file_name()))
     }
 }
 
@@ -224,56 +136,25 @@ where
 /// Module-owned `DT_RPATH` and `DT_RUNPATH` entries have their dynamic string
 /// tokens expanded by the loader and are shared between modules. File existence
 /// and final lookup results are not cached.
-pub struct SearchPathResolver<LinkKey = PathBuf, Mapper = PathKey> {
+#[derive(Clone, Default)]
+pub struct SearchPathResolver {
     entries: Vec<SearchPathEntry>,
-    mapper: Mapper,
-    _marker: PhantomData<fn() -> LinkKey>,
 }
 
-// Keep this impl manual so cloning a resolver does not require LinkKey to be Clone.
-impl<LinkKey, Mapper: Clone> Clone for SearchPathResolver<LinkKey, Mapper> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            entries: self.entries.clone(),
-            mapper: self.mapper.clone(),
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<LinkKey, Mapper: Default> Default for SearchPathResolver<LinkKey, Mapper> {
-    fn default() -> Self {
-        Self::with_mapper(Mapper::default())
-    }
-}
-
-impl<LinkKey, Mapper> fmt::Debug for SearchPathResolver<LinkKey, Mapper> {
+impl fmt::Debug for SearchPathResolver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SearchPathResolver")
             .field("entries", &self.entries)
-            .field("link_key", &core::any::type_name::<LinkKey>())
-            .field("key_mapper", &core::any::type_name::<Mapper>())
             .finish()
     }
 }
 
-impl<LinkKey> SearchPathResolver<LinkKey, PathKey> {
-    /// Creates an empty search-path resolver using the default path key rule.
+impl SearchPathResolver {
+    /// Creates an empty search-path resolver.
     #[inline]
     pub const fn new() -> Self {
-        Self::with_mapper(PathKey)
-    }
-}
-
-impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
-    /// Creates an empty resolver with a custom key-mapping policy.
-    #[inline]
-    pub const fn with_mapper(mapper: Mapper) -> Self {
         Self {
             entries: Vec::new(),
-            mapper,
-            _marker: PhantomData,
         }
     }
 
@@ -349,11 +230,27 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
         ))
     }
 
-    fn find_candidate_with<T>(
+    fn resolve_candidate<Arch: RelocationArch>(
         &self,
         request: CandidateRequest<'_>,
-        mut inspect: impl FnMut(&Path, bool) -> Result<Option<T>>,
-    ) -> Result<Option<T>> {
+    ) -> Result<Option<(ModuleKey, ElfFile)>> {
+        let mut incompatible = None;
+        let mut try_candidate = |candidate: &Path,
+                                 continue_on_incompatible: bool|
+         -> Result<Option<(ModuleKey, ElfFile)>> {
+            let key = ModuleKey::from(candidate);
+            let file = match Self::open_elf::<Arch>(candidate) {
+                Ok(Some(file)) => file,
+                Ok(None) => return Ok(None),
+                Err(err) if continue_on_incompatible && Self::is_incompatible_elf(&err) => {
+                    incompatible.get_or_insert(err);
+                    return Ok(None);
+                }
+                Err(err) => return Err(err),
+            };
+            Ok(Some((key, file)))
+        };
+
         let requested_value = request.requested().as_str();
         let expanded = if requested_value.contains('$') {
             let Some(expanded) = request
@@ -370,7 +267,7 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
             .as_ref()
             .map_or_else(|| request.requested(), PathBuf::as_path);
         if requested.has_dir_separator() {
-            return inspect(requested, false);
+            return try_candidate(requested, false);
         }
 
         let mut dirs = Vec::new();
@@ -388,7 +285,7 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
                         };
                         for dir in dirs {
                             candidate.set_joined(dir, requested.as_str());
-                            if let Some(value) = inspect(candidate.as_path(), true)? {
+                            if let Some(value) = try_candidate(candidate.as_path(), true)? {
                                 found = Some(value);
                                 return Ok(false);
                             }
@@ -405,14 +302,14 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
                     };
                     for dir in dirs {
                         candidate.set_joined(dir, requested.as_str());
-                        if let Some(found) = inspect(candidate.as_path(), true)? {
+                        if let Some(found) = try_candidate(candidate.as_path(), true)? {
                             return Ok(Some(found));
                         }
                     }
                 }
                 SearchPathEntry::Dir(dir) => {
                     candidate.set_joined(Path::new(dir), requested.as_str());
-                    if let Some(found) = inspect(candidate.as_path(), true)? {
+                    if let Some(found) = try_candidate(candidate.as_path(), true)? {
                         return Ok(Some(found));
                     }
                 }
@@ -421,107 +318,18 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
                     resolver(request, &mut dirs)?;
                     for dir in &dirs {
                         candidate.set_joined(dir, requested.as_str());
-                        if let Some(found) = inspect(candidate.as_path(), true)? {
+                        if let Some(found) = try_candidate(candidate.as_path(), true)? {
                             return Ok(Some(found));
                         }
                     }
                 }
             }
         }
-        Ok(None)
-    }
-
-    fn resolve_candidate<Arch, F>(
-        &self,
-        request: CandidateRequest<'_>,
-        contains_key: &dyn Fn(&LinkKey) -> bool,
-        reuse: &F,
-    ) -> Result<Option<ResolvedCandidate<LinkKey>>>
-    where
-        Mapper: KeyMapper<LinkKey>,
-        LinkKey: Clone,
-        Arch: RelocationArch,
-        F: for<'req> Fn(CandidateContext<'req, LinkKey>) -> Result<Option<LinkKey>> + ?Sized,
-    {
-        let mut incompatible = None;
-        let mut try_candidate = |candidate: &Path,
-                                 continue_on_incompatible: bool|
-         -> Result<Option<ResolvedCandidate<LinkKey>>> {
-            let key = self.mapper.map_path(candidate);
-            if contains_key(&key) {
-                return Ok(Some(ResolvedCandidate::Existing(key)));
-            }
-
-            let file = match Self::open_elf::<Arch>(candidate) {
-                Ok(Some(file)) => file,
-                Ok(None) => return Ok(None),
-                Err(err) if continue_on_incompatible && Self::is_incompatible_elf(&err) => {
-                    incompatible.get_or_insert(err);
-                    return Ok(None);
-                }
-                Err(err) => return Err(err),
-            };
-
-            let context = CandidateContext::new(candidate, &key);
-            if let Some(existing) = reuse(context)? {
-                return Ok(Some(ResolvedCandidate::Existing(existing)));
-            }
-
-            Ok(Some(ResolvedCandidate::Load { key, file }))
-        };
-
-        if let Some(resolved) = self.find_candidate_with(request, &mut try_candidate)? {
-            return Ok(Some(resolved));
-        }
 
         match incompatible {
             Some(err) => Err(err),
             None => Ok(None),
         }
-    }
-
-    /// Resolves a root or dependency using the configured search policy plus
-    /// a per-operation reuse callback.
-    pub fn resolve_with<'cfg, Arch, Tls, F, Request>(
-        &self,
-        req: &ResolveRequest<'_, Request, LinkKey>,
-        reuse: &F,
-    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>>
-    where
-        Mapper: KeyMapper<LinkKey>,
-        LinkKey: Clone + 'cfg,
-        Request: AsRef<Path>,
-        Arch: RelocationArch,
-        Tls: TlsResolver<Arch>,
-        F: for<'req> Fn(CandidateContext<'req, LinkKey>) -> Result<Option<LinkKey>> + ?Sized,
-    {
-        let requested = match req.input() {
-            ResolveInput::Root { request, .. } => request.as_ref(),
-            ResolveInput::Dependency { needed } => Path::new(needed),
-        };
-        let loaders = |visitor: &mut LoaderVisitor<'_>| req.visit_loaders(visitor);
-        let contains_key = |key: &LinkKey| req.contains_key(key);
-        let request = CandidateRequest::new(requested, req.search(), req.tokens(), &loaders);
-        if let Some(resolved) = self.resolve_candidate::<Arch, _>(request, &contains_key, reuse)? {
-            return Ok(resolved.into_resolved());
-        }
-
-        Err(req.unresolved())
-    }
-
-    /// Resolves a root or dependency using the configured search policy.
-    pub fn resolve<'cfg, Arch, Tls, Request>(
-        &self,
-        req: &ResolveRequest<'_, Request, LinkKey>,
-    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>>
-    where
-        Mapper: KeyMapper<LinkKey>,
-        LinkKey: Clone + 'cfg,
-        Request: AsRef<Path>,
-        Arch: RelocationArch,
-        Tls: TlsResolver<Arch>,
-    {
-        self.resolve_with(req, &|_| Ok(None))
     }
 
     /// Opens and validates a target-compatible ELF candidate.
@@ -532,16 +340,7 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
             Err(err) => return Err(err),
         };
 
-        let mut raw = MaybeUninit::<<Arch::Layout as ElfLayout>::Ehdr>::uninit();
-        let bytes = unsafe {
-            core::slice::from_raw_parts_mut(
-                raw.as_mut_ptr().cast::<u8>(),
-                <Arch::Layout as ElfLayout>::EHDR_SIZE,
-            )
-        };
-        file.read(bytes, 0)?;
-        let ehdr = ElfHeader::<Arch::Layout>::from_raw(unsafe { raw.assume_init() }, Arch::TARGET)?;
-        Arch::validate_e_flags(ehdr.e_flags())?;
+        read_ehdr::<Arch>(&file)?;
         Ok(Some(file))
     }
 
@@ -559,68 +358,42 @@ impl<LinkKey, Mapper> SearchPathResolver<LinkKey, Mapper> {
     }
 }
 
-enum ResolvedCandidate<LinkKey> {
-    Existing(LinkKey),
-    Load { key: LinkKey, file: ElfFile },
-}
-
-impl<LinkKey> ResolvedCandidate<LinkKey> {
-    #[inline]
-    fn into_resolved<'cfg, Arch, Tls>(self) -> ResolvedKey<'cfg, LinkKey, Arch, Tls>
-    where
-        LinkKey: 'cfg,
-        Arch: RelocationArch,
-        Tls: TlsResolver<Arch>,
-    {
-        match self {
-            Self::Existing(key) => ResolvedKey::existing(key),
-            Self::Load { key, file } => ResolvedKey::load(key, file),
-        }
-    }
-}
-
-impl<LinkKey, Arch, Tls, Mapper> KeyResolver<LinkKey, Arch, Tls>
-    for SearchPathResolver<LinkKey, Mapper>
+impl<Arch, Tls> KeyResolver<Arch, Tls> for SearchPathResolver
 where
-    Mapper: KeyMapper<LinkKey>,
-    LinkKey: Clone,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    type Request = PathBuf;
+    type Root = PathBuf;
 
     #[inline]
-    fn map_request(&self, request: &Self::Request) -> LinkKey {
-        if request.has_dir_separator() {
-            self.mapper.map_path(request)
-        } else {
-            self.mapper.map_name(request.as_str())
-        }
-    }
-
-    #[inline]
-    fn map_name(&self, name: &str) -> Option<LinkKey> {
-        Some(self.mapper.map_name(name))
+    fn root_key(&self, root: &Self::Root) -> ModuleKey {
+        ModuleKey::from(root.as_path())
     }
 
     fn resolve<'cfg>(
         &self,
-        req: ResolveRequest<'_, Self::Request, LinkKey>,
-    ) -> Result<ResolvedKey<'cfg, LinkKey, Arch, Tls>>
-    where
-        LinkKey: 'cfg,
-    {
-        SearchPathResolver::resolve::<Arch, Tls, _>(self, &req)
+        req: ResolveRequest<'_, Self::Root>,
+    ) -> Result<ResolvedKey<'cfg, Arch, Tls>> {
+        let requested = match req.input() {
+            ResolveInput::Root { root } => root.as_path(),
+            ResolveInput::Dependency { needed } => Path::new(needed),
+        };
+        let loaders = |visitor: &mut LoaderVisitor<'_>| req.visit_loaders(visitor);
+        let request = CandidateRequest::new(requested, req.search(), req.tokens(), &loaders);
+        match self.resolve_candidate::<Arch>(request)? {
+            Some((key, file)) => Ok(ResolvedKey::load(key, file)),
+            None => Err(req.unresolved()),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    extern crate std;
 
-    struct NonCloneKey;
-    #[derive(Clone)]
-    struct TestMapper;
+    use super::*;
+    use crate::arch::NativeArch;
+    use std::{fs, path::Path as StdPath};
 
     fn module_search(
         path: &str,
@@ -640,16 +413,45 @@ mod tests {
         Ok(())
     }
 
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(std::format!(
+            "elf_loader_search_{name}_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn install_elf(path: &StdPath) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let source = std::env::current_exe().unwrap();
+        if fs::hard_link(&source, path).is_err() {
+            fs::copy(source, path).unwrap();
+        }
+    }
+
+    fn resolve_path(
+        resolver: &SearchPathResolver,
+        request: CandidateRequest<'_>,
+    ) -> Option<PathBuf> {
+        resolver
+            .resolve_candidate::<NativeArch>(request)
+            .unwrap()
+            .map(|(key, _)| PathBuf::from(key.as_str()))
+    }
+
     #[test]
-    fn clone_needs_no_key_clone() {
+    fn resolver_is_clone() {
         fn assert_clone<T: Clone>() {}
 
-        assert_clone::<SearchPathResolver<NonCloneKey, TestMapper>>();
+        assert_clone::<SearchPathResolver>();
     }
 
     #[test]
     fn fixed_dirs_are_shared_and_deduplicated() {
-        let mut resolver = SearchPathResolver::<PathBuf>::new();
+        let mut resolver = SearchPathResolver::new();
         resolver.push_fixed_dir("/usr/lib/");
         resolver.push_fixed_dir("/usr/lib");
         assert_eq!(resolver.entries.len(), 1);
@@ -666,49 +468,57 @@ mod tests {
 
     #[test]
     fn rpath_inherits_loader_chain() {
-        let direct = module_search("/app/middle", None, None, None);
-        let root = module_search("/app/root", None, None, Some("$ORIGIN/lib"));
+        let base = temp_dir("rpath_chain");
+        let direct_path = base.join("middle");
+        let root_path = base.join("root");
+        let expected = base.join("lib/libleaf.so");
+        install_elf(&expected);
+        let direct = module_search(direct_path.to_str().unwrap(), None, None, None);
+        let root = module_search(root_path.to_str().unwrap(), None, None, Some("$ORIGIN/lib"));
         let chain = [&direct, &root];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
         let tokens = PathTokens::default();
         let request = CandidateRequest::new(Path::new("libleaf.so"), &direct, &tokens, &loaders);
-        let mut resolver = SearchPathResolver::<PathBuf>::new();
+        let mut resolver = SearchPathResolver::new();
         resolver.push_rpath();
 
-        let found = resolver
-            .find_candidate_with(request, |path, _| {
-                Ok((path.as_str() == "/app/lib/libleaf.so").then_some(()))
-            })
-            .unwrap();
-        assert_eq!(found, Some(()));
+        assert_eq!(
+            resolve_path(&resolver, request).unwrap().as_str(),
+            expected.to_str().unwrap()
+        );
     }
 
     #[test]
     fn expands_dependency_origin() {
-        let owner = module_search("/app/owner", None, None, None);
+        let base = temp_dir("dependency_origin");
+        let owner_path = base.join("owner");
+        let expected = base.join("libvalue.so");
+        install_elf(&expected);
+        let owner = module_search(owner_path.to_str().unwrap(), None, None, None);
         let chain = [&owner];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
         let tokens = PathTokens::default();
         let request =
             CandidateRequest::new(Path::new("$ORIGIN/libvalue.so"), &owner, &tokens, &loaders);
-        let resolver = SearchPathResolver::<PathBuf>::new();
+        let resolver = SearchPathResolver::new();
 
-        let found = resolver
-            .find_candidate_with(request, |path, searched| {
-                assert!(!searched);
-                Ok((path.as_str() == "/app/libvalue.so").then_some(()))
-            })
-            .unwrap();
-        assert_eq!(found, Some(()));
+        assert_eq!(
+            resolve_path(&resolver, request).unwrap().as_str(),
+            expected.to_str().unwrap()
+        );
     }
 
     #[test]
     fn expands_target_tokens() {
+        let base = temp_dir("target_tokens");
+        let owner_path = base.join("owner");
+        let expected = base.join("lib64/target-v1/libleaf.so");
+        install_elf(&expected);
         let mut paths = crate::image::SearchPathPool::new();
         paths.set_lib("lib64").set_platform("target-v1");
         let tokens = paths.tokens();
         let owner = paths.module_search(
-            PathBuf::from("/app/owner"),
+            PathBuf::from(owner_path.to_str().unwrap()),
             None,
             Some("$ORIGIN/$LIB/${PLATFORM}"),
             None,
@@ -716,22 +526,25 @@ mod tests {
         let chain = [&owner];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
         let request = CandidateRequest::new(Path::new("libleaf.so"), &owner, &tokens, &loaders);
-        let mut resolver = SearchPathResolver::<PathBuf>::new();
+        let mut resolver = SearchPathResolver::new();
         resolver.push_runpath();
 
-        let found = resolver
-            .find_candidate_with(request, |path, _| {
-                Ok((path.as_str() == "/app/lib64/target-v1/libleaf.so").then_some(()))
-            })
-            .unwrap();
-        assert_eq!(found, Some(()));
+        assert_eq!(
+            resolve_path(&resolver, request).unwrap().as_str(),
+            expected.to_str().unwrap()
+        );
     }
 
     #[test]
     fn expands_tokens_in_dependency_name() {
+        let base = temp_dir("dependency_tokens");
+        let expected = base.join("target-v1/libleaf.so");
+        install_elf(&expected);
         let owner = module_search("/app/owner", None, None, None);
         let mut paths = crate::image::SearchPathPool::new();
-        paths.set_lib("lib64").set_platform("target-v1");
+        paths
+            .set_lib(base.to_str().unwrap())
+            .set_platform("target-v1");
         let tokens = paths.tokens();
         let chain = [&owner];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
@@ -741,15 +554,12 @@ mod tests {
             &tokens,
             &loaders,
         );
-        let resolver = SearchPathResolver::<PathBuf>::new();
+        let resolver = SearchPathResolver::new();
 
-        let found = resolver
-            .find_candidate_with(request, |path, searched| {
-                assert!(!searched);
-                Ok((path.as_str() == "lib64/target-v1/libleaf.so").then_some(()))
-            })
-            .unwrap();
-        assert_eq!(found, Some(()));
+        assert_eq!(
+            resolve_path(&resolver, request).unwrap().as_str(),
+            expected.to_str().unwrap()
+        );
     }
 
     #[test]
@@ -759,18 +569,9 @@ mod tests {
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
         let tokens = PathTokens::default();
         let request = CandidateRequest::new(Path::new("libleaf.so"), &owner, &tokens, &loaders);
-        let mut resolver = SearchPathResolver::<PathBuf>::new();
+        let mut resolver = SearchPathResolver::new();
         resolver.push_runpath();
-        let mut inspected = false;
-
-        let found = resolver
-            .find_candidate_with(request, |_, _| {
-                inspected = true;
-                Ok(Some(()))
-            })
-            .unwrap();
-        assert_eq!(found, None);
-        assert!(!inspected);
+        assert!(resolve_path(&resolver, request).is_none());
     }
 
     #[test]
@@ -781,72 +582,52 @@ mod tests {
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
         let tokens = PathTokens::default();
         let request = CandidateRequest::new(Path::new("libleaf.so"), &direct, &tokens, &loaders);
-        let mut resolver = SearchPathResolver::<PathBuf>::new();
+        let mut resolver = SearchPathResolver::new();
         resolver.push_rpath();
-        let mut candidates = Vec::new();
-
-        let found = resolver
-            .find_candidate_with(request, |path, _| {
-                candidates.push(PathBuf::from(path));
-                Ok(None::<()>)
-            })
-            .unwrap();
-        assert_eq!(found, None);
-        assert!(candidates.is_empty());
+        assert!(resolve_path(&resolver, request).is_none());
     }
 
     #[test]
     fn rpath_and_runpath_have_independent_order() {
-        let direct = module_search("/app/middle", None, Some("/run"), None);
-        let root = module_search("/app/root", None, None, Some("/root"));
+        let base = temp_dir("search_order");
+        let fixed = base.join("fixed");
+        let run = base.join("run");
+        let fixed_candidate = fixed.join("libleaf.so");
+        let run_candidate = run.join("libleaf.so");
+        install_elf(&fixed_candidate);
+        install_elf(&run_candidate);
+        let direct = module_search("/app/middle", None, Some(run.to_str().unwrap()), None);
+        let root = module_search("/app/root", None, None, Some("/unused"));
         let chain = [&direct, &root];
         let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
         let tokens = PathTokens::default();
         let request = CandidateRequest::new(Path::new("libleaf.so"), &direct, &tokens, &loaders);
-        let mut resolver = SearchPathResolver::<PathBuf>::new();
+        let mut resolver = SearchPathResolver::new();
         resolver.push_rpath();
-        resolver.push_fixed_dir("/env");
+        resolver.push_fixed_dir(fixed.to_str().unwrap());
         resolver.push_runpath();
-        let mut candidates = Vec::new();
-
-        resolver
-            .find_candidate_with(request, |path, _| {
-                candidates.push(PathBuf::from(path));
-                Ok(None::<()>)
-            })
-            .unwrap();
         assert_eq!(
-            candidates,
-            [
-                PathBuf::from("/env/libleaf.so"),
-                PathBuf::from("/run/libleaf.so")
-            ]
+            resolve_path(&resolver, request).unwrap().as_str(),
+            fixed_candidate.to_str().unwrap()
+        );
+
+        fs::remove_file(fixed_candidate).unwrap();
+        assert_eq!(
+            resolve_path(&resolver, request).unwrap().as_str(),
+            run_candidate.to_str().unwrap()
         );
     }
 
     #[test]
     fn path_lists_preserve_current_directory() {
         let owner = module_search("/app/owner", None, Some(":/fallback"), None);
-        let chain = [&owner];
-        let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
-        let tokens = PathTokens::default();
-        let request = CandidateRequest::new(Path::new("libvalue.so"), &owner, &tokens, &loaders);
-        let mut resolver = SearchPathResolver::<PathBuf>::new();
-        resolver.push_runpath();
-        let mut candidates = Vec::new();
-
-        resolver
-            .find_candidate_with(request, |path, _| {
-                candidates.push(PathBuf::from(path));
-                Ok(None::<()>)
-            })
-            .unwrap();
         assert_eq!(
-            candidates,
-            [
-                PathBuf::from("libvalue.so"),
-                PathBuf::from("/fallback/libvalue.so")
-            ]
+            owner
+                .runpath()
+                .unwrap()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>(),
+            [PathBuf::from("."), PathBuf::from("/fallback")]
         );
     }
 

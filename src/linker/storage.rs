@@ -3,17 +3,98 @@ use crate::{
     arch::NativeArch,
     entity::{PrimaryMap, SecondaryMap, entity_ref},
     image::{LookupScope, ModuleHandle},
-    input::ModuleSourceId,
+    input::{ModuleSourceId, Path, PathBuf},
     relocation::RelocationArch,
     runtime::DomainId,
-    sync::{AtomicUsize, Ordering},
+    sync::{Arc, AtomicUsize, Ordering},
     tls::TlsResolver,
 };
-use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 use core::{
     borrow::Borrow,
     fmt::{self, Display},
+    ops::Deref,
 };
+
+/// Logical name used to address a module inside a [`LinkContext`](super::LinkContext).
+///
+/// Keys identify canonical entries and aliases such as resolved paths,
+/// `DT_SONAME`, and `DT_NEEDED` names. Physical module reuse is tracked
+/// separately by [`ModuleSourceId`].
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ModuleKey(Arc<str>);
+
+impl ModuleKey {
+    /// Creates a key from a loader-visible name or path.
+    #[inline]
+    pub fn new(value: impl AsRef<str>) -> Self {
+        Self(Arc::from(value.as_ref()))
+    }
+
+    /// Returns the key as a string slice.
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Deref for ModuleKey {
+    type Target = str;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for ModuleKey {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Borrow<str> for ModuleKey {
+    #[inline]
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Display for ModuleKey {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for ModuleKey {
+    #[inline]
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for ModuleKey {
+    #[inline]
+    fn from(value: String) -> Self {
+        Self(Arc::from(value))
+    }
+}
+
+impl From<&Path> for ModuleKey {
+    #[inline]
+    fn from(value: &Path) -> Self {
+        Self::new(value.as_str())
+    }
+}
+
+impl From<PathBuf> for ModuleKey {
+    #[inline]
+    fn from(value: PathBuf) -> Self {
+        Self(Arc::from(value.into_string()))
+    }
+}
 
 /// Symbol-namespace identity of a [`LinkContext`](super::LinkContext).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -44,12 +125,6 @@ entity_ref!(KeySlot);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(in crate::linker) struct ModuleSlot(usize);
 entity_ref!(ModuleSlot);
-
-#[derive(Clone, Copy)]
-pub(in crate::linker) struct ModuleGuard {
-    pub(in crate::linker) slot: ModuleSlot,
-    pub(in crate::linker) generation: u32,
-}
 
 /// Stable id for a module key stored in a [`LinkContext`](super::LinkContext).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -237,15 +312,14 @@ where
 }
 
 pub(crate) struct CommittedStorage<
-    K,
     Meta = (),
     Arch: RelocationArch = NativeArch,
     Tls: TlsResolver<Arch> = (),
 > {
     context: ContextId,
     domain: DomainId,
-    key_slots: BTreeMap<K, KeySlot>,
-    keys: PrimaryMap<KeySlot, K>,
+    key_slots: BTreeMap<ModuleKey, KeySlot>,
+    keys: PrimaryMap<KeySlot, ModuleKey>,
     canonical: SecondaryMap<KeySlot, ModuleSlot>,
     aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
     sources: BTreeMap<ModuleSourceId, ModuleSlot>,
@@ -253,7 +327,7 @@ pub(crate) struct CommittedStorage<
     lifecycle: Vec<ModuleSlot>,
 }
 
-impl<K, Meta, Arch, Tls> CommittedStorage<K, Meta, Arch, Tls>
+impl<Meta, Arch, Tls> CommittedStorage<Meta, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -423,14 +497,13 @@ where
     }
 }
 
-impl<K, Meta, Arch, Tls> CommittedStorage<K, Meta, Arch, Tls>
+impl<Meta, Arch, Tls> CommittedStorage<Meta, Arch, Tls>
 where
-    K: Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn key(&self, slot: KeySlot) -> &K {
+    pub(crate) fn key(&self, slot: KeySlot) -> &ModuleKey {
         debug_assert!(
             self.keys.get(slot).is_some(),
             "key id must resolve to an interned key"
@@ -439,20 +512,12 @@ where
     }
 
     #[inline]
-    pub(crate) fn key_slot_for<Q>(&self, key: &Q) -> Option<KeySlot>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
+    pub(crate) fn key_slot_for(&self, key: &str) -> Option<KeySlot> {
         self.key_slots.get(key).copied()
     }
 
     #[inline]
-    pub(crate) fn contains_key<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
+    pub(crate) fn contains_key(&self, key: &str) -> bool {
         self.key_slot_for(key)
             .and_then(|slot| self.module_for_key(slot))
             .is_some()
@@ -476,13 +541,12 @@ where
     }
 }
 
-impl<K, Meta, Arch, Tls> CommittedStorage<K, Meta, Arch, Tls>
+impl<Meta, Arch, Tls> CommittedStorage<Meta, Arch, Tls>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    pub(in crate::linker) fn intern_key(&mut self, key: K) -> KeySlot {
+    pub(in crate::linker) fn intern_key(&mut self, key: ModuleKey) -> KeySlot {
         if let Some(slot) = self.key_slot_for(&key) {
             return slot;
         }
@@ -558,27 +622,21 @@ where
         &mut self,
         slot: ModuleSlot,
     ) -> (ModuleHandle<Arch, Tls>, LookupScope<Arch, Tls>, Meta) {
-        let source = self.entries[slot]
-            .entry
-            .as_ref()
-            .expect("unload order must refer to a committed module")
-            .module
-            .source_id();
-        let indexed = self
-            .sources
-            .remove(&source)
-            .expect("committed module must have a source entry");
-        assert_eq!(indexed, slot, "module source must refer to its slot");
-        let removed = {
+        let entry = {
             let cell = &mut self.entries[slot];
-            let removed = cell
+            let entry = cell
                 .entry
                 .take()
                 .expect("unload order must refer to a committed module");
             cell.advance_generation();
-            removed
+            entry
         };
-        (removed.module, removed.scope, removed.meta)
+        let indexed = self
+            .sources
+            .remove(&entry.module.source_id())
+            .expect("committed module must have a source entry");
+        assert_eq!(indexed, slot, "module source must refer to its slot");
+        (entry.module, entry.scope, entry.meta)
     }
 
     pub(crate) fn prune_removed(&mut self) {
@@ -645,7 +703,7 @@ where
     }
 }
 
-impl<K, Meta, Arch, Tls> Drop for CommittedStorage<K, Meta, Arch, Tls>
+impl<Meta, Arch, Tls> Drop for CommittedStorage<Meta, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,

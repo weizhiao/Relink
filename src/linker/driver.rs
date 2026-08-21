@@ -52,12 +52,11 @@ impl LoadResult {
 
     /// Releases the root acquisition represented by this load.
     #[inline]
-    pub fn release<K, Meta, Arch, Tls>(
+    pub fn release<Meta, Arch, Tls>(
         self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
+        context: &mut LinkContext<Meta, Arch, Tls>,
     ) -> Result<UnloadGroup<Meta, Arch, Tls>>
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
@@ -87,11 +86,11 @@ impl LoadResult {
 /// };
 ///
 /// fn main() -> Result<()> {
-///     let mut resolver = SearchPathResolver::<PathBuf>::new();
+///     let mut resolver = SearchPathResolver::new();
 ///     resolver.push_fixed_dir("plugins");
 ///
-///     let linker = Linker::<PathBuf>::new().resolver(resolver);
-///     let mut context: LinkContext<PathBuf> = LinkContext::new(DomainId::PROCESS);
+///     let linker = Linker::new().resolver(resolver);
+///     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 ///
 ///     let mut run = linker.run();
 ///     let loaded = run.load(&mut context, PathBuf::from("libplugin.so"))?;
@@ -106,7 +105,6 @@ impl LoadResult {
 /// }
 /// ```
 pub struct Linker<
-    K: Clone + Ord,
     Arch: RelocationArch = NativeArch,
     L = Loader<(), (), Arch>,
     R = (),
@@ -116,12 +114,11 @@ pub struct Linker<
     pub(super) loader: L,
     pub(super) resolver: R,
     pub(super) relocator: Relocator<RelocBinder>,
-    marker: PhantomData<(K, Arch, Tls)>,
+    marker: PhantomData<(Arch, Tls)>,
 }
 
-impl<K, Arch, L, R, RelocBinder, Tls> Clone for Linker<K, Arch, L, R, RelocBinder, Tls>
+impl<Arch, L, R, RelocBinder, Tls> Clone for Linker<Arch, L, R, RelocBinder, Tls>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     L: Clone,
     R: Clone,
@@ -145,10 +142,7 @@ struct LinkerFields<L, R, RelocBinder> {
     relocator: NoDrop<Relocator<RelocBinder>>,
 }
 
-impl<K> Linker<K>
-where
-    K: Clone + Ord,
-{
+impl Linker {
     /// Creates a linker using the default loader and native target architecture.
     #[inline]
     pub const fn new() -> Self {
@@ -167,7 +161,7 @@ where
     /// `NewArch`.
     #[inline]
     #[allow(clippy::type_complexity)]
-    pub const fn for_arch<NewArch>(self) -> Linker<K, NewArch, Loader<(), (), NewArch>, (), ()>
+    pub const fn for_arch<NewArch>(self) -> Linker<NewArch, Loader<(), (), NewArch>, (), ()>
     where
         NewArch: RelocationArch,
     {
@@ -180,19 +174,15 @@ where
     }
 }
 
-impl<K> Default for Linker<K>
-where
-    K: Clone + Ord,
-{
+impl Default for Linker {
     #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K, L, R, RelocBinder, Arch, Tls> Linker<K, Arch, L, R, RelocBinder, Tls>
+impl<L, R, RelocBinder, Arch, Tls> Linker<Arch, L, R, RelocBinder, Tls>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
@@ -215,7 +205,7 @@ where
     }
 
     /// Sets the key resolver used to resolve root keys and dependencies.
-    pub const fn resolver<NewR>(self, resolver: NewR) -> Linker<K, Arch, L, NewR, RelocBinder, Tls>
+    pub const fn resolver<NewR>(self, resolver: NewR) -> Linker<Arch, L, NewR, RelocBinder, Tls>
     where
         R: Copy,
     {
@@ -237,7 +227,7 @@ where
     pub const fn relocator<NewRelocBinder>(
         self,
         relocator: Relocator<NewRelocBinder>,
-    ) -> Linker<K, Arch, L, R, NewRelocBinder, Tls>
+    ) -> Linker<Arch, L, R, NewRelocBinder, Tls>
     where
         Relocator<RelocBinder>: Copy,
     {
@@ -259,7 +249,7 @@ where
     pub fn map_relocator<NewRelocBinder>(
         self,
         configure: impl FnOnce(Relocator<RelocBinder>) -> Relocator<NewRelocBinder>,
-    ) -> Linker<K, Arch, L, R, NewRelocBinder, Tls> {
+    ) -> Linker<Arch, L, R, NewRelocBinder, Tls> {
         Linker {
             loader: self.loader,
             resolver: self.resolver,
@@ -270,7 +260,7 @@ where
 
     /// Starts a linker run with fresh scratch storage.
     #[inline]
-    pub fn run<'pipe>(&self) -> LinkerRun<'_, 'pipe, K, Arch, L, R, RelocBinder, Tls, ()> {
+    pub fn run<'pipe>(&self) -> LinkerRun<'_, 'pipe, Arch, L, R, RelocBinder, Tls, ()> {
         LinkerRun {
             linker: self,
             pipeline: LinkPipeline::new(),
@@ -280,10 +270,9 @@ where
     }
 }
 
-impl<K, D: Send + Sync + 'static, Tls, Arch, M, Exec, R>
-    Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, R, (), Tls>
+impl<D: Send + Sync + 'static, Tls, Arch, M, Exec, R>
+    Linker<Arch, Loader<D, Tls, Arch, M, Exec>, R, (), Tls>
 where
-    K: Clone + Ord,
     D: Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch,
@@ -298,7 +287,7 @@ where
     pub const fn loader<NewD, NewTls, NewM, NewExec>(
         self,
         loader: Loader<NewD, NewTls, Arch, NewM, NewExec>,
-    ) -> Linker<K, Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), NewTls>
+    ) -> Linker<Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), NewTls>
     where
         Loader<D, Tls, Arch, M, Exec>: Copy,
         NewD: Send + Sync + 'static,
@@ -330,7 +319,7 @@ where
         configure: impl FnOnce(
             Loader<D, Tls, Arch, M, Exec>,
         ) -> Loader<NewD, NewTls, Arch, NewM, NewExec>,
-    ) -> Linker<K, Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), NewTls>
+    ) -> Linker<Arch, Loader<NewD, NewTls, Arch, NewM, NewExec>, R, (), NewTls>
     where
         NewD: Send + Sync + 'static,
         NewTls: TlsResolver<Arch>,

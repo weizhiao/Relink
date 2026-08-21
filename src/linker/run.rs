@@ -5,7 +5,7 @@ use super::{
     resolver::KeyResolver,
     scan::{GotPltTarget, LinkPipeline, MappedRuntimeMemory},
     session::{LoadSession, ResolveSession},
-    storage::{ContextId, ModuleId, ModuleLease, ModuleSlot},
+    storage::{ContextId, ModuleId, ModuleKey, ModuleLease, ModuleSlot},
 };
 use crate::{
     ByteRepr, Error, LinkContextError, LinkerError, Loader, Result,
@@ -33,7 +33,6 @@ use core::{fmt, mem};
 pub struct LinkerRun<
     'run,
     'pipe,
-    K: Clone + Ord,
     Arch: RelocationArch,
     L,
     R,
@@ -41,16 +40,15 @@ pub struct LinkerRun<
     Tls: TlsResolver<Arch>,
     Obs = (),
 > {
-    pub(super) linker: &'run Linker<K, Arch, L, R, RelocBinder, Tls>,
-    pub(super) pipeline: LinkPipeline<'pipe, K, Arch, Tls>,
+    pub(super) linker: &'run Linker<Arch, L, R, RelocBinder, Tls>,
+    pub(super) pipeline: LinkPipeline<'pipe, Arch, Tls>,
     pub(super) observer: Obs,
     pub(super) scratch_order: Vec<ModuleSlot>,
 }
 
-impl<'run, 'pipe, K, Arch, L, R, RelocBinder, Tls, Obs>
-    LinkerRun<'run, 'pipe, K, Arch, L, R, RelocBinder, Tls, Obs>
+impl<'run, 'pipe, Arch, L, R, RelocBinder, Tls, Obs>
+    LinkerRun<'run, 'pipe, Arch, L, R, RelocBinder, Tls, Obs>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
@@ -59,7 +57,7 @@ where
     pub fn with_observer<NewObs>(
         self,
         observer: NewObs,
-    ) -> LinkerRun<'run, 'pipe, K, Arch, L, R, RelocBinder, Tls, NewObs>
+    ) -> LinkerRun<'run, 'pipe, Arch, L, R, RelocBinder, Tls, NewObs>
     where
         NewObs: RelocationObserver<Arch>,
     {
@@ -75,7 +73,7 @@ where
     #[inline]
     pub fn map_pipeline(
         self,
-        configure: impl FnOnce(LinkPipeline<'pipe, K, Arch, Tls>) -> LinkPipeline<'pipe, K, Arch, Tls>,
+        configure: impl FnOnce(LinkPipeline<'pipe, Arch, Tls>) -> LinkPipeline<'pipe, Arch, Tls>,
     ) -> Self {
         let Self {
             linker,
@@ -94,10 +92,9 @@ where
 }
 
 #[allow(private_bounds)]
-impl<'run, 'pipe, K, D: Send + Sync + 'static, Tls, Arch, M, Exec, Resolver, RelocBinder, Obs>
-    LinkerRun<'run, 'pipe, K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls, Obs>
+impl<'run, 'pipe, D: Send + Sync + 'static, Tls, Arch, M, Exec, Resolver, RelocBinder, Obs>
+    LinkerRun<'run, 'pipe, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls, Obs>
 where
-    K: Clone + Ord,
     D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
@@ -105,7 +102,7 @@ where
     Exec: CodeExecutor<Arch> + Clone,
     ElfRelType<Arch>: ByteRepr,
     Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch> + RelocationObserver<Arch>,
-    Resolver: KeyResolver<K, Arch, Tls>,
+    Resolver: KeyResolver<Arch, Tls>,
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Loads, commits, and initializes one module and its dependency group.
@@ -114,13 +111,13 @@ where
     /// the staged API when the caller needs to choose another failure policy.
     pub fn load<Meta>(
         &mut self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
-        request: Resolver::Request,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        root: Resolver::Root,
     ) -> Result<LoadResult>
     where
         Meta: Default,
     {
-        self.load_with_caller(context, request, None)
+        self.load_with_caller(context, root, None)
     }
 
     /// Loads one root on behalf of a module already committed to `context`.
@@ -128,26 +125,26 @@ where
     /// Initialization failure is rolled back before the error is returned.
     pub fn load_from<Meta>(
         &mut self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
-        request: Resolver::Request,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        root: Resolver::Root,
         caller: ModuleId,
     ) -> Result<LoadResult>
     where
         Meta: Default,
     {
-        self.load_with_caller(context, request, Some(caller))
+        self.load_with_caller(context, root, Some(caller))
     }
 
     fn load_with_caller<Meta>(
         &mut self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
-        request: Resolver::Request,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        root: Resolver::Root,
         caller: Option<ModuleId>,
     ) -> Result<LoadResult>
     where
         Meta: Default,
     {
-        let prepared = self.prepare_load_with_caller(context, request, caller)?;
+        let prepared = self.prepare_load_with_caller(context, root, caller)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -159,26 +156,26 @@ where
     /// Resolves and maps one module group without executing target code.
     pub fn prepare_load<Meta>(
         &mut self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
-        request: Resolver::Request,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        root: Resolver::Root,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
-        self.prepare_load_with_caller(context, request, None)
+        self.prepare_load_with_caller(context, root, None)
     }
 
     /// Resolves and maps one caller-relative root without executing target code.
     pub fn prepare_load_from<Meta>(
         &mut self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
-        request: Resolver::Request,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        root: Resolver::Root,
         caller: ModuleId,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
-        self.prepare_load_with_caller(context, request, Some(caller))
+        self.prepare_load_with_caller(context, root, Some(caller))
     }
 
     fn prepare_load_with_caller<Meta>(
         &mut self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
-        request: Resolver::Request,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        root: Resolver::Root,
         caller: Option<ModuleId>,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
         context
@@ -195,7 +192,7 @@ where
                 Ok(slot)
             })
             .transpose()?;
-        let key = self.linker.resolver.map_request(&request);
+        let key = self.linker.resolver.root_key(&root);
         if let Some(prepared) = PreparedLoad::visible(context, &key) {
             return Ok(prepared);
         }
@@ -209,8 +206,9 @@ where
             .with_observer(&mut self.observer);
         let mut resolve_context =
             LoadResolveContext::new(&mut context.committed, &mut session, tokens);
-        let resolved = resolve_context.resolve_root(request, key, caller, &linker.resolver)?;
-        let root = resolve_context.stage(resolved, caller, &mut loader, &linker.resolver)?;
+        let resolved = resolve_context.resolve_root(root, caller, &linker.resolver)?;
+        let root = resolve_context.stage(resolved, caller, &mut loader)?;
+        resolve_context.bind_key(key, root);
         resolve_context.resolve_pending(root, &mut loader, &linker.resolver)?;
         Ok(PreparedLoad::new(root, session, None, context))
     }
@@ -220,8 +218,8 @@ where
     /// Initialization failure is rolled back before the error is returned.
     pub fn load_mapped_root<Meta>(
         &mut self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        key: ModuleKey,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
     ) -> Result<LoadResult>
     where
@@ -239,8 +237,8 @@ where
     /// Resolves dependencies for a pre-mapped root without relocating it.
     pub fn prepare_mapped_root<Meta>(
         &mut self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        key: ModuleKey,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
         context
@@ -268,7 +266,7 @@ where
             .core_ref()
             .search()
             .and_then(ModuleSearch::soname)
-            .and_then(|name| linker.resolver.map_name(name));
+            .map(ModuleKey::from);
         session.stage_dynamic(root, generation, raw, None);
         session.stage_source(source, root);
         if let Some(alias) = alias {
@@ -333,6 +331,7 @@ where
     ) -> Result<()> {
         let mut order = mem::take(&mut self.scratch_order);
         session.build_lifecycle_order(root, &mut order);
+        let scope = LookupScope::from_group(local.clone()).with_global(global.clone());
 
         let result = (|| {
             for id in order.drain(..) {
@@ -340,8 +339,7 @@ where
                     let (raw, direct_deps) = entry.into_parts();
                     let direct_deps =
                         direct_deps.expect("missing resolved dependencies while relocating");
-                    let scope = LookupScope::from_group(local.clone()).with_global(global.clone());
-                    let mut event = LinkerRelocationEvent::new(raw, scope);
+                    let mut event = LinkerRelocationEvent::new(raw, scope.clone());
                     self.observer.on_relocation(&mut event)?;
                     let (raw, scope, binding) = event.into_parts();
                     let loaded = self
@@ -368,49 +366,48 @@ where
 }
 
 #[allow(private_bounds)]
-impl<K, D: Send + Sync + 'static, Tls, Arch, M, Exec, Resolver, RelocBinder>
-    Linker<K, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls>
+impl<D: Send + Sync + 'static, Tls, Arch, M, Exec, Resolver, RelocBinder>
+    Linker<Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls>
 where
-    K: Clone + Ord,
     D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
     Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
     ElfRelType<Arch>: ByteRepr,
-    Resolver: KeyResolver<K, Arch, Tls>,
+    Resolver: KeyResolver<Arch, Tls>,
     RelocBinder: LazyBinder<Arch> + Clone,
 {
     /// Loads one module into this linker's relocation domain.
     pub fn load<Meta>(
         &self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
-        request: Resolver::Request,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        root: Resolver::Root,
     ) -> Result<LoadResult>
     where
         Meta: Default,
     {
-        self.run().load(context, request)
+        self.run().load(context, root)
     }
 
     /// Loads one root on behalf of a module already committed to `context`.
     pub fn load_from<Meta>(
         &self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
-        request: Resolver::Request,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        root: Resolver::Root,
         caller: ModuleId,
     ) -> Result<LoadResult>
     where
         Meta: Default,
     {
-        self.run().load_from(context, request, caller)
+        self.run().load_from(context, root, caller)
     }
 
     /// Loads a pre-mapped root dynamic image and resolves its dependencies.
     pub fn load_mapped_root<Meta>(
         &self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
-        key: K,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        key: ModuleKey,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
     ) -> Result<LoadResult>
     where
@@ -422,14 +419,13 @@ where
     /// Discovers, plans, and loads one module through the scan-first path.
     pub fn load_scan_first<Meta>(
         &self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
-        request: Resolver::Request,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        root: Resolver::Root,
     ) -> Result<LoadResult>
     where
-        K: 'static,
         Meta: Default,
     {
-        self.run().load_scan_first(context, request)
+        self.run().load_scan_first(context, root)
     }
 }
 
@@ -457,13 +453,10 @@ struct PreparedRelocation<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     PreparedLoad<D, Arch, R, Tls>
 {
-    pub(in crate::linker) fn visible<K, Meta>(
-        context: &LinkContext<K, Meta, Arch, Tls>,
-        key: &K,
-    ) -> Option<Self>
-    where
-        K: Ord,
-    {
+    pub(in crate::linker) fn visible<Meta>(
+        context: &LinkContext<Meta, Arch, Tls>,
+        key: &ModuleKey,
+    ) -> Option<Self> {
         let root = context
             .committed
             .key_slot_for(key)
@@ -473,15 +466,12 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         Some(Self::new(root, session, None, context))
     }
 
-    pub(in crate::linker) fn new<K, Meta>(
+    pub(in crate::linker) fn new<Meta>(
         root: ModuleSlot,
-        mut session: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
+        session: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
         mapped_runtime: Option<MappedRuntimeMemory<R>>,
-        context: &LinkContext<K, Meta, Arch, Tls>,
-    ) -> Self
-    where
-        K: Ord,
-    {
+        context: &LinkContext<Meta, Arch, Tls>,
+    ) -> Self {
         let relocation = if session.pending_is_empty() {
             None
         } else {
@@ -525,12 +515,11 @@ where
     ///
     /// Published modules are visible to recursive loads but remain
     /// transactional until their initializers complete.
-    pub fn publish<K, Meta>(
+    pub fn publish<Meta>(
         self,
-        context: &mut LinkContext<K, Meta, Arch, Tls>,
+        context: &mut LinkContext<Meta, Arch, Tls>,
     ) -> Result<PublishedLoad<Arch, Tls>>
     where
-        K: Clone + Ord,
         Meta: Default,
     {
         if context.context_id() != self.context {
@@ -605,10 +594,7 @@ where
     }
 
     /// Releases this publication and finalizes modules that become unreachable.
-    pub fn rollback<K, Meta>(self, context: &mut LinkContext<K, Meta, Arch, Tls>) -> Result<()>
-    where
-        K: Clone + Ord,
-    {
+    pub fn rollback<Meta>(self, context: &mut LinkContext<Meta, Arch, Tls>) -> Result<()> {
         let expected = self.lease.id().context();
         if context.context_id() != expected {
             return Err(LinkerError::context(LinkContextError::ContextMismatch {
@@ -658,10 +644,7 @@ where
     }
 
     /// Removes the published modules and returns the initialization error.
-    pub fn rollback<K, Meta>(self, context: &mut LinkContext<K, Meta, Arch, Tls>) -> Error
-    where
-        K: Clone + Ord,
-    {
+    pub fn rollback<Meta>(self, context: &mut LinkContext<Meta, Arch, Tls>) -> Error {
         match self.load.rollback(context) {
             Ok(()) => self.error,
             Err(error) => error,

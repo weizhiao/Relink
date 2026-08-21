@@ -12,7 +12,7 @@ use elf_loader::{
     },
     input::ElfBinary,
     linker::{
-        KeyResolver, ResolveInput, ResolveRequest, ResolvedKey,
+        KeyResolver, ModuleKey, ResolveInput, ResolveRequest, ResolvedKey,
         scan::{DataPass, LinkPass, LinkPassPlan, Materialization, PassScopeMode},
     },
     memory::{RegionAccess, VmAddr},
@@ -126,23 +126,20 @@ impl RelocationObserver for InitRecorder {
     }
 }
 
-impl KeyResolver<&'static str> for SingleBinaryResolver {
-    type Request = &'static str;
+impl KeyResolver for SingleBinaryResolver {
+    type Root = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> &'static str {
-        *request
+    fn root_key(&self, root: &Self::Root) -> ModuleKey {
+        (*root).into()
     }
 
     fn resolve<'cfg>(
         &self,
-        req: ResolveRequest<'_, &'static str, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
+        req: ResolveRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'cfg>> {
         match req.input() {
-            ResolveInput::Root { request, .. } => {
-                assert_eq!(*request, self.key);
+            ResolveInput::Root { root } => {
+                assert_eq!(*root, self.key);
                 Ok(ResolvedKey::load(
                     self.key,
                     ElfBinary::new(self.name, self.data),
@@ -153,23 +150,20 @@ impl KeyResolver<&'static str> for SingleBinaryResolver {
     }
 }
 
-impl KeyResolver<&'static str> for ExistingRootResolver {
-    type Request = &'static str;
+impl KeyResolver for ExistingRootResolver {
+    type Root = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> &'static str {
-        *request
+    fn root_key(&self, root: &Self::Root) -> ModuleKey {
+        (*root).into()
     }
 
     fn resolve<'cfg>(
         &self,
-        req: ResolveRequest<'_, &'static str, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
+        req: ResolveRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'cfg>> {
         match req.input() {
-            ResolveInput::Root { request, .. } => {
-                assert_eq!(*request, self.requested);
+            ResolveInput::Root { root } => {
+                assert_eq!(*root, self.requested);
                 Ok(ResolvedKey::existing(self.existing))
             }
             ResolveInput::Dependency { .. } => {
@@ -179,23 +173,20 @@ impl KeyResolver<&'static str> for ExistingRootResolver {
     }
 }
 
-impl KeyResolver<&'static str> for ModuleDependencyResolver {
-    type Request = &'static str;
+impl KeyResolver for ModuleDependencyResolver {
+    type Root = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> &'static str {
-        *request
+    fn root_key(&self, root: &Self::Root) -> ModuleKey {
+        (*root).into()
     }
 
     fn resolve<'cfg>(
         &self,
-        req: ResolveRequest<'_, &'static str, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
+        req: ResolveRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'cfg>> {
         match req.input() {
-            ResolveInput::Root { request, .. } => {
-                assert_eq!(*request, "root");
+            ResolveInput::Root { root } => {
+                assert_eq!(*root, "root");
                 Ok(ResolvedKey::load(
                     "root",
                     ElfBinary::new("visible_root.so", self.root_data),
@@ -203,30 +194,26 @@ impl KeyResolver<&'static str> for ModuleDependencyResolver {
             }
             ResolveInput::Dependency { needed } => {
                 assert_eq!(*needed, DEP_KEY);
-                assert!(!req.contains_key(&DEP_KEY));
                 Ok(ResolvedKey::module(DEP_KEY, self.dep.clone(), Vec::new()))
             }
         }
     }
 }
 
-impl KeyResolver<&'static str> for ExistingDependencyResolver {
-    type Request = &'static str;
+impl KeyResolver for ExistingDependencyResolver {
+    type Root = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> &'static str {
-        *request
+    fn root_key(&self, root: &Self::Root) -> ModuleKey {
+        (*root).into()
     }
 
     fn resolve<'cfg>(
         &self,
-        req: ResolveRequest<'_, &'static str, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
+        req: ResolveRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'cfg>> {
         match req.input() {
-            ResolveInput::Root { request, .. } => {
-                assert_eq!(*request, "root");
+            ResolveInput::Root { root } => {
+                assert_eq!(*root, "root");
                 Ok(ResolvedKey::load(
                     "root",
                     ElfBinary::new("existing_dep_root.so", self.root_data),
@@ -240,23 +227,20 @@ impl KeyResolver<&'static str> for ExistingDependencyResolver {
     }
 }
 
-impl KeyResolver<&'static str> for SyntheticDependencyResolver {
-    type Request = &'static str;
+impl KeyResolver for SyntheticDependencyResolver {
+    type Root = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> &'static str {
-        *request
+    fn root_key(&self, root: &Self::Root) -> ModuleKey {
+        (*root).into()
     }
 
     fn resolve<'cfg>(
         &self,
-        req: ResolveRequest<'_, &'static str, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
+        req: ResolveRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'cfg>> {
         match req.input() {
-            ResolveInput::Root { request, .. } => {
-                assert_eq!(*request, "root");
+            ResolveInput::Root { root } => {
+                assert_eq!(*root, "root");
                 Ok(ResolvedKey::load(
                     "root",
                     ElfBinary::new("scan_synthetic_root.so", self.root_data),
@@ -265,7 +249,7 @@ impl KeyResolver<&'static str> for SyntheticDependencyResolver {
             ResolveInput::Dependency { needed } => {
                 assert_eq!(*needed, "dep");
                 Ok(ResolvedKey::module(
-                    "dep",
+                    "synthetic-dep",
                     SyntheticModule::empty("dep"),
                     Vec::new(),
                 ))
@@ -274,23 +258,20 @@ impl KeyResolver<&'static str> for SyntheticDependencyResolver {
     }
 }
 
-impl KeyResolver<&'static str> for SyntheticRootResolver {
-    type Request = &'static str;
+impl KeyResolver for SyntheticRootResolver {
+    type Root = &'static str;
 
-    fn map_request(&self, request: &Self::Request) -> &'static str {
-        *request
+    fn root_key(&self, root: &Self::Root) -> ModuleKey {
+        (*root).into()
     }
 
     fn resolve<'cfg>(
         &self,
-        req: ResolveRequest<'_, &'static str, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg, &'static str>>
-    where
-        &'static str: 'cfg,
-    {
+        req: ResolveRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'cfg>> {
         match req.input() {
-            ResolveInput::Root { request, .. } => Ok(ResolvedKey::module(
-                *request,
+            ResolveInput::Root { root } => Ok(ResolvedKey::module(
+                *root,
                 SyntheticModule::new(
                     "synthetic-root",
                     [SyntheticSymbol::function(
@@ -309,12 +290,12 @@ impl KeyResolver<&'static str> for SyntheticRootResolver {
 
 struct TestPass<F>(F);
 
-impl<S, F> LinkPass<&'static str, S> for TestPass<F>
+impl<S, F> LinkPass<S> for TestPass<F>
 where
     S: PassScopeMode,
-    F: for<'a> FnMut(&mut LinkPassPlan<'a, &'static str, S>) -> elf_loader::Result<()>,
+    F: for<'a> FnMut(&mut LinkPassPlan<'a, S>) -> elf_loader::Result<()>,
 {
-    fn run(&mut self, plan: &mut LinkPassPlan<'_, &'static str, S>) -> elf_loader::Result<()> {
+    fn run(&mut self, plan: &mut LinkPassPlan<'_, S>) -> elf_loader::Result<()> {
         (self.0)(plan)
     }
 }

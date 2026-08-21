@@ -2,7 +2,10 @@ use super::{LinkPassPlan, PassScopeMode, Section, SectionDataAccess};
 use crate::{
     elf::ElfSectionId,
     image::{ModuleCapability, ScannedDynamic},
-    linker::scan::{Materialization, ModuleId, ModuleLayout},
+    linker::{
+        ModuleKey,
+        scan::{Materialization, ModuleId, ModuleLayout},
+    },
     relocation::RelocationArch,
     tls::TlsResolver,
 };
@@ -31,12 +34,11 @@ where
 {
     /// Returns this module's canonical key through `plan`.
     #[inline]
-    pub fn key<'borrow, K, Arch, Tls>(
+    pub fn key<'borrow, Arch, Tls>(
         self,
-        plan: &'borrow LinkPassPlan<'scope, K, S, Arch, Tls>,
-    ) -> &'borrow K
+        plan: &'borrow LinkPassPlan<'scope, S, Arch, Tls>,
+    ) -> &'borrow ModuleKey
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
@@ -47,12 +49,11 @@ where
 
     /// Returns this module's scanned image through `plan`.
     #[inline]
-    pub fn scanned<'borrow, K, Arch, Tls>(
+    pub fn scanned<'borrow, Arch, Tls>(
         self,
-        plan: &'borrow LinkPassPlan<'scope, K, S, Arch, Tls>,
+        plan: &'borrow LinkPassPlan<'scope, S, Arch, Tls>,
     ) -> &'borrow ScannedDynamic<Arch>
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
@@ -64,12 +65,11 @@ where
 
     /// Iterates over visible direct dependency modules recorded for this module.
     #[inline]
-    pub fn direct_deps<'borrow, K, Arch, Tls>(
+    pub fn direct_deps<'borrow, Arch, Tls>(
         self,
-        plan: &'borrow LinkPassPlan<'scope, K, S, Arch, Tls>,
+        plan: &'borrow LinkPassPlan<'scope, S, Arch, Tls>,
     ) -> impl Iterator<Item = Self> + 'borrow
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
         'scope: 'borrow,
@@ -85,12 +85,11 @@ where
 
     /// Returns this module's planning capability.
     #[inline]
-    pub fn capability<K, Arch, Tls>(
+    pub fn capability<Arch, Tls>(
         self,
-        plan: &LinkPassPlan<'scope, K, S, Arch, Tls>,
+        plan: &LinkPassPlan<'scope, S, Arch, Tls>,
     ) -> ModuleCapability
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
@@ -101,12 +100,11 @@ where
 
     /// Returns this module's configured materialization mode.
     #[inline]
-    pub fn materialization<K, Arch, Tls>(
+    pub fn materialization<Arch, Tls>(
         self,
-        plan: &LinkPassPlan<'scope, K, S, Arch, Tls>,
+        plan: &LinkPassPlan<'scope, S, Arch, Tls>,
     ) -> Option<Materialization>
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
@@ -115,13 +113,12 @@ where
 
     /// Selects this module's materialization mode through `plan`.
     #[inline]
-    pub fn set_materialization<K, Arch, Tls>(
+    pub fn set_materialization<Arch, Tls>(
         self,
-        plan: &mut LinkPassPlan<'scope, K, S, Arch, Tls>,
+        plan: &mut LinkPassPlan<'scope, S, Arch, Tls>,
         mode: Materialization,
     ) -> Option<Materialization>
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
@@ -135,12 +132,11 @@ where
 {
     /// Returns this module's planned layout through `plan`.
     #[inline]
-    pub fn layout<'borrow, K, Arch, Tls>(
+    pub fn layout<'borrow, Arch, Tls>(
         self,
-        plan: &'borrow LinkPassPlan<'scope, K, S, Arch, Tls>,
+        plan: &'borrow LinkPassPlan<'scope, S, Arch, Tls>,
     ) -> &'borrow ModuleLayout
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
@@ -149,13 +145,12 @@ where
 
     /// Returns one checked section handle for a scanned section in this module.
     #[inline]
-    pub fn section<K, Arch, Tls>(
+    pub fn section<Arch, Tls>(
         self,
-        plan: &LinkPassPlan<'scope, K, S, Arch, Tls>,
+        plan: &LinkPassPlan<'scope, S, Arch, Tls>,
         id: ElfSectionId,
     ) -> Option<Section<'scope, S>>
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {

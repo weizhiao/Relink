@@ -35,7 +35,7 @@ pub(crate) fn fixtures() -> &'static Fixtures {
 }
 
 #[cfg(any(feature = "libc", feature = "use-syscall"))]
-pub(crate) fn search_path_resolver<K>() -> SearchPathResolver<K> {
+pub(crate) fn search_path_resolver() -> SearchPathResolver {
     let mut resolver = SearchPathResolver::new();
     resolver.push_rpath();
     resolver.push_runpath();

@@ -1,5 +1,6 @@
 use super::storage::{
-    CommittedStorage, ContextId, KeyId, KeySlot, ModuleId, ModuleLease, ModuleSlot, StoredEntry,
+    CommittedStorage, ContextId, KeyId, KeySlot, ModuleId, ModuleKey, ModuleLease, ModuleSlot,
+    StoredEntry,
 };
 use super::unload::{UnloadGroup, UnloadedModule};
 use crate::{
@@ -17,23 +18,21 @@ use alloc::{
     collections::{BTreeMap, VecDeque},
     vec::Vec,
 };
-use core::borrow::Borrow;
 
 #[inline]
 fn require_module<T>(id: ModuleId, module: Option<T>) -> Result<T> {
     module.ok_or_else(|| LinkerError::context(LinkContextError::ModuleNotCommitted { id }).into())
 }
 
-fn collect_import_modules<K, Arch, Tls, TargetMeta, SourceMeta>(
-    target: &mut LinkContext<K, TargetMeta, Arch, Tls>,
-    source: &LinkContext<K, SourceMeta, Arch, Tls>,
+fn collect_import_modules<Arch, Tls, TargetMeta, SourceMeta>(
+    target: &mut LinkContext<TargetMeta, Arch, Tls>,
+    source: &LinkContext<SourceMeta, Arch, Tls>,
     slot: ModuleSlot,
     mapped: &mut SecondaryMap<ModuleSlot, ModuleSlot>,
     new_modules: &mut Vec<ModuleSlot>,
     aliases: &mut Vec<(KeySlot, ModuleSlot)>,
 ) -> Result<()>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
@@ -80,14 +79,13 @@ where
     Ok(())
 }
 
-fn copy_new_modules<K, Arch, Tls, TargetMeta, SourceMeta>(
-    target: &mut LinkContext<K, TargetMeta, Arch, Tls>,
-    source: &LinkContext<K, SourceMeta, Arch, Tls>,
+fn copy_new_modules<Arch, Tls, TargetMeta, SourceMeta>(
+    target: &mut LinkContext<TargetMeta, Arch, Tls>,
+    source: &LinkContext<SourceMeta, Arch, Tls>,
     new_modules: &[ModuleSlot],
     mapped: &SecondaryMap<ModuleSlot, ModuleSlot>,
 ) -> Result<()>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
     TargetMeta: Default,
@@ -125,13 +123,12 @@ where
     Ok(())
 }
 
-fn copy_import_closure<K, Arch, Tls, TargetMeta, SourceMeta>(
-    target: &mut LinkContext<K, TargetMeta, Arch, Tls>,
-    source: &LinkContext<K, SourceMeta, Arch, Tls>,
+fn copy_import_closure<Arch, Tls, TargetMeta, SourceMeta>(
+    target: &mut LinkContext<TargetMeta, Arch, Tls>,
+    source: &LinkContext<SourceMeta, Arch, Tls>,
     roots: &[ModuleSlot],
 ) -> Result<SecondaryMap<ModuleSlot, ModuleSlot>>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
     TargetMeta: Default,
@@ -214,15 +211,14 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LoadGroup<Arch, Tls> {
 /// when a shared module is imported into another context and is detached with the
 /// entry during unloading. State that must follow the underlying module allocation
 /// belongs in the concrete module type instead.
-pub struct LinkContext<K, Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
-{
+pub struct LinkContext<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     pub(super) global: GlobalScope<Arch, Tls>,
-    pub(super) committed: CommittedStorage<K, Meta, Arch, Tls>,
+    pub(super) committed: CommittedStorage<Meta, Arch, Tls>,
     pub(super) symbols: Arc<SymbolRegistry<Arch, Tls>>,
     pub(crate) search_paths: SearchPathPool,
 }
 
-impl<K, Meta, Arch, Tls> LinkContext<K, Meta, Arch, Tls>
+impl<Meta, Arch, Tls> LinkContext<Meta, Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
@@ -260,9 +256,8 @@ where
     }
 }
 
-impl<K, Meta, Arch, Tls> LinkContext<K, Meta, Arch, Tls>
+impl<Meta, Arch, Tls> LinkContext<Meta, Arch, Tls>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
@@ -274,11 +269,7 @@ where
 
     /// Returns whether the context contains a module with `key`.
     #[inline]
-    pub fn contains_key<Q>(&self, key: &Q) -> bool
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
+    pub fn contains_key(&self, key: &str) -> bool {
         self.committed.contains_key(key)
     }
 
@@ -290,11 +281,7 @@ where
 
     /// Returns the interned id for a known key.
     #[inline]
-    pub fn key_id<Q>(&self, key: &Q) -> Option<KeyId>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
+    pub fn key_id(&self, key: &str) -> Option<KeyId> {
         self.committed
             .key_slot_for(key)
             .map(|slot| self.committed.make_key_id(slot))
@@ -302,18 +289,14 @@ where
 
     /// Returns the key associated with an interned id.
     #[inline]
-    pub fn key(&self, id: KeyId) -> Result<&K> {
+    pub fn key(&self, id: KeyId) -> Result<&ModuleKey> {
         let slot = self.committed.key_slot(id)?;
         Ok(self.committed.key(slot))
     }
 
     /// Returns the committed module id associated with `key`.
     #[inline]
-    pub fn module_id<Q>(&self, key: &Q) -> Option<ModuleId>
-    where
-        K: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
+    pub fn module_id(&self, key: &str) -> Option<ModuleId> {
         self.committed
             .key_slot_for(key)
             .and_then(|slot| self.committed.module_for_key(slot))
@@ -332,7 +315,7 @@ where
 
     /// Returns the representative key associated with a committed module id.
     #[inline]
-    pub fn module_key(&self, id: ModuleId) -> Result<&K> {
+    pub fn module_key(&self, id: ModuleId) -> Result<&ModuleKey> {
         let module_slot = self.committed.module_slot(id)?;
         let module = require_module(id, self.committed.module(module_slot))?;
         Ok(self.committed.key(module.entry_key()))
@@ -406,7 +389,12 @@ where
     ///
     /// The returned lease represents one direct acquisition. The canonical
     /// key must not already refer to a committed module.
-    pub fn insert<R>(&mut self, key: K, module: R, direct_deps: Box<[K]>) -> Result<ModuleLease>
+    pub fn insert<R>(
+        &mut self,
+        key: impl Into<ModuleKey>,
+        module: R,
+        direct_deps: Box<[ModuleKey]>,
+    ) -> Result<ModuleLease>
     where
         Meta: Default,
         R: Into<ModuleHandle<Arch, Tls>>,
@@ -422,17 +410,18 @@ where
     /// follow the input order. Modules with the same source share one
     /// slot; the first occurrence supplies the module's dependencies and later
     /// keys become preferred aliases.
-    pub fn insert_batch<R>(
+    pub fn insert_batch<Name, R>(
         &mut self,
-        modules: impl IntoIterator<Item = (K, R, Box<[K]>)>,
+        modules: impl IntoIterator<Item = (Name, R, Box<[ModuleKey]>)>,
     ) -> Result<Vec<ModuleLease>>
     where
         Meta: Default,
+        Name: Into<ModuleKey>,
         R: Into<ModuleHandle<Arch, Tls>>,
     {
         let modules = modules
             .into_iter()
-            .map(|(key, module, deps)| (key, module.into(), deps))
+            .map(|(key, module, deps)| (key.into(), module.into(), deps))
             .collect::<Vec<_>>();
         for (_, module, _) in &modules {
             self.committed.ensure_domain(module.domain_id())?;
@@ -468,7 +457,6 @@ where
                 let (slot, _, _, roots) = &mut planned[idx];
                 *roots += 1;
                 aliases.push((key, *slot));
-                sources.insert(source, idx);
                 *slot
             } else {
                 let slot = self.committed.intern_module(key);
@@ -488,11 +476,6 @@ where
                 let dep = batch
                     .get(key)
                     .copied()
-                    .or_else(|| {
-                        self.committed
-                            .canonical_module(key)
-                            .filter(|dep| self.committed.contains_module(*dep))
-                    })
                     .or_else(|| self.committed.module_for_key(key))
                     .ok_or_else(|| {
                         LinkerError::context(LinkContextError::KeyNotCommitted {
@@ -537,9 +520,9 @@ where
     /// its preferred alias; the existing dependencies and metadata are retained.
     pub fn insert_with_meta<R>(
         &mut self,
-        key: K,
+        key: impl Into<ModuleKey>,
         module: R,
-        direct_deps: Box<[K]>,
+        direct_deps: Box<[ModuleKey]>,
         meta: Meta,
     ) -> Result<ModuleLease>
     where
@@ -547,7 +530,7 @@ where
     {
         let module = module.into();
         self.committed.ensure_domain(module.domain_id())?;
-        let key = self.committed.intern_key(key);
+        let key = self.committed.intern_key(key.into());
         if self
             .committed
             .canonical_module(key)
@@ -595,7 +578,7 @@ where
     ///
     /// Alias candidates retain registration order. If the current target is
     /// unloaded, lookup falls back to the next registered module.
-    pub fn add_alias(&mut self, module_id: ModuleId, alias: K) -> Result<()> {
+    pub fn add_alias(&mut self, module_id: ModuleId, alias: impl Into<ModuleKey>) -> Result<()> {
         let module_slot = self.committed.module_slot(module_id)?;
         if !self.committed.contains_module(module_slot) {
             return Err(LinkerError::context(LinkContextError::ModuleNotCommitted {
@@ -604,7 +587,7 @@ where
             .into());
         }
 
-        let alias = self.committed.intern_key(alias);
+        let alias = self.committed.intern_key(alias.into());
         self.committed.add_alias(alias, module_slot);
         Ok(())
     }
@@ -670,8 +653,7 @@ where
             return Ok(UnloadGroup::new(Vec::new()));
         }
 
-        let global = self.global.clone();
-        let mut global = global.write();
+        let mut global = self.global.write();
         let mut reachable = EntitySet::default();
         let mut pending = self
             .committed
@@ -706,15 +688,11 @@ where
             .rev()
             .filter(|slot| !reachable.contains(*slot))
             .collect::<Vec<_>>();
-        let sources = unload_order
-            .iter()
-            .map(|slot| {
-                let id = self.committed.make_module_id(*slot);
-                require_module(id, self.committed.module(*slot))
-                    .map(|module| module.handle().source_id())
-            })
-            .collect::<Result<Vec<_>>>()?;
-        global.retain(|module| !sources.contains(&module.source_id()));
+        global.retain(|module| {
+            self.committed
+                .module_for_source(module.source_id())
+                .is_some_and(|slot| reachable.contains(slot))
+        });
         let mut modules = Vec::with_capacity(unload_order.len());
         for slot in unload_order {
             let id = self.committed.make_module_id(slot);
@@ -773,7 +751,7 @@ where
     /// The returned lease represents one direct acquisition in this context.
     pub fn import<SourceMeta>(
         &mut self,
-        source: &LinkContext<K, SourceMeta, Arch, Tls>,
+        source: &LinkContext<SourceMeta, Arch, Tls>,
         id: ModuleId,
     ) -> Result<ModuleLease>
     where
@@ -802,7 +780,7 @@ where
     /// they belong to the source namespace.
     pub fn import_roots<SourceMeta>(
         &mut self,
-        source: &LinkContext<K, SourceMeta, Arch, Tls>,
+        source: &LinkContext<SourceMeta, Arch, Tls>,
     ) -> Result<Box<[ModuleLease]>>
     where
         Meta: Default,
@@ -834,7 +812,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::LinkContext;
+    use super::{LinkContext, ModuleKey};
     use crate::{
         Error, LinkContextError, LinkerError, Result,
         arch::NativeArch,
@@ -918,11 +896,15 @@ mod tests {
         SyntheticModule::empty(name).with_domain(domain)
     }
 
+    fn key(name: &str) -> ModuleKey {
+        ModuleKey::from(name)
+    }
+
     #[test]
     fn context_rejects_modules_from_another_domain() {
         let first = DomainId::new();
         let second = DomainId::new();
-        let mut context = LinkContext::<&'static str, (), NativeArch>::new(first);
+        let mut context = LinkContext::<(), NativeArch>::new(first);
 
         let _ = context
             .insert("first", domain_module("first", first), Box::new([]))
@@ -957,10 +939,7 @@ mod tests {
         ));
     }
 
-    fn direct_deps<K: Clone + Ord>(
-        context: &LinkContext<K, (), NativeArch>,
-        id: ModuleId,
-    ) -> Vec<ModuleId> {
+    fn direct_deps(context: &LinkContext<(), NativeArch>, id: ModuleId) -> Vec<ModuleId> {
         context
             .direct_deps(id)
             .expect("direct deps should resolve")
@@ -969,18 +948,18 @@ mod tests {
 
     #[test]
     fn batch_insert_supports_cyclic_dependencies() {
-        let mut context = LinkContext::<&'static str, (), NativeArch>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
         let leases = context
             .insert_batch([
                 (
                     "first",
                     SyntheticModule::empty("first"),
-                    Vec::from(["second"]).into_boxed_slice(),
+                    Vec::from([key("second")]).into_boxed_slice(),
                 ),
                 (
                     "second",
                     SyntheticModule::empty("second"),
-                    Vec::from(["first"]).into_boxed_slice(),
+                    Vec::from([key("first")]).into_boxed_slice(),
                 ),
             ])
             .unwrap();
@@ -1005,7 +984,7 @@ mod tests {
     #[test]
     fn batch_insert_coalesces_shared_handles() {
         let module = ModuleHandle::new(SyntheticModule::empty("shared"));
-        let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
         let leases = context
             .insert_batch([
                 ("first", module.clone(), Vec::new().into_boxed_slice()),
@@ -1025,17 +1004,17 @@ mod tests {
 
     #[test]
     fn ids_do_not_cross_contexts() {
-        let mut first = LinkContext::<&'static str, (), NativeArch>::new(DomainId::PROCESS);
+        let mut first = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
         let first_root = first
             .insert("root", SyntheticModule::empty("first"), Box::new([]))
             .expect("failed to insert first module");
-        let first_key = first.key_id(&"root").expect("root key should be interned");
+        let first_key = first.key_id("root").expect("root key should be interned");
 
-        let mut second = LinkContext::<&'static str, (), NativeArch>::new(DomainId::PROCESS);
+        let mut second = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
         let second_root = second
             .insert("root", SyntheticModule::empty("second"), Box::new([]))
             .expect("failed to insert second module");
-        let second_key = second.key_id(&"root").expect("root key should be interned");
+        let second_key = second.key_id("root").expect("root key should be interned");
 
         assert_ne!(first.context_id(), second.context_id());
         assert!(!Arc::ptr_eq(&first.symbols, &second.symbols));
@@ -1052,7 +1031,7 @@ mod tests {
     #[test]
     fn release_detaches_before_finalize() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
         let id = context
             .insert("removed", finalize_module("removed", &calls), Box::new([]))
             .unwrap();
@@ -1069,7 +1048,7 @@ mod tests {
     #[test]
     fn pin_keeps_module_until_context_drop() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
         let dependency = context
             .insert(
                 "dependency",
@@ -1081,7 +1060,7 @@ mod tests {
             .insert(
                 "pinned",
                 finalize_module("pinned", &calls),
-                Box::new(["dependency"]),
+                Box::new([key("dependency")]),
             )
             .unwrap();
         let id = lease.id();
@@ -1099,23 +1078,23 @@ mod tests {
 
     #[test]
     fn reload_invalidates_old_module_id() {
-        let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
         let first = context
             .insert("module", SyntheticModule::empty("first"), Box::new([]))
             .unwrap();
         let first_id = first.id();
-        let key_id = context.key_id(&"module").unwrap();
+        let key_id = context.key_id("module").unwrap();
 
         drop(context.release(first).unwrap());
         assert!(!context.contains_module(first_id).unwrap());
-        assert_eq!(context.module_id(&"module"), None);
+        assert_eq!(context.module_id("module"), None);
 
         let second = context
             .insert("module", SyntheticModule::empty("second"), Box::new([]))
             .unwrap();
         assert_ne!(second.id(), first_id);
-        assert_eq!(context.key_id(&"module"), Some(key_id));
-        assert_eq!(context.module_id(&"module"), Some(second.id()));
+        assert_eq!(context.key_id("module"), Some(key_id));
+        assert_eq!(context.module_id("module"), Some(second.id()));
         let error = match context.module(first_id) {
             Ok(_) => panic!("stale module id should fail"),
             Err(error) => error,
@@ -1130,8 +1109,8 @@ mod tests {
     fn shared_module_finalizes_after_last_handle() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let module = finalize_module("shared", &calls);
-        let mut first = LinkContext::<&'static str>::new(DomainId::PROCESS);
-        let mut second = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut first = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut second = LinkContext::<()>::new(DomainId::PROCESS);
         let first_id = first
             .insert("shared", module.clone(), Box::new([]))
             .unwrap();
@@ -1154,7 +1133,7 @@ mod tests {
         let fallback = ModuleHandle::new(SyntheticModule::empty("fallback"));
         let module = ModuleHandle::new(SyntheticModule::empty("shared"));
         let source = module.source_id();
-        let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
         let fallback = context.insert("fallback", fallback, Box::new([])).unwrap();
         context.add_alias(fallback.id(), "second").unwrap();
         let first = context
@@ -1177,7 +1156,7 @@ mod tests {
         let module = ModuleHandle::new(
             SyntheticModule::empty("stateful").with_user_data(String::from("module data")),
         );
-        let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
         let id = context
             .insert("stateful", module.clone(), Box::new([]))
             .unwrap();
@@ -1194,12 +1173,16 @@ mod tests {
     fn context_drop_finalizes_in_lifecycle_order() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         {
-            let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+            let mut context = LinkContext::<()>::new(DomainId::PROCESS);
             let _ = context
                 .insert("dep", finalize_module("dep", &calls), Box::new([]))
                 .unwrap();
             let _ = context
-                .insert("root", finalize_module("root", &calls), Box::new(["dep"]))
+                .insert(
+                    "root",
+                    finalize_module("root", &calls),
+                    Box::new([key("dep")]),
+                )
                 .unwrap();
         }
 
@@ -1208,7 +1191,7 @@ mod tests {
 
     #[test]
     fn releases_all_acquisitions() {
-        let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
         let id = context
             .insert("root", SyntheticModule::empty("root"), Box::new([]))
             .unwrap();
@@ -1225,7 +1208,7 @@ mod tests {
 
     #[test]
     fn shared_dependencies_remain_reachable() {
-        let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
         let shared = context
             .insert("shared", SyntheticModule::empty("shared"), Box::new([]))
             .unwrap();
@@ -1233,14 +1216,14 @@ mod tests {
             .insert(
                 "first",
                 SyntheticModule::empty("first"),
-                Box::new(["shared"]),
+                Box::new([key("shared")]),
             )
             .unwrap();
         let second = context
             .insert(
                 "second",
                 SyntheticModule::empty("second"),
-                Box::new(["shared"]),
+                Box::new([key("shared")]),
             )
             .unwrap();
 
@@ -1266,12 +1249,16 @@ mod tests {
     #[test]
     fn finalizes_dependents_before_dependencies() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
         let dep = context
             .insert("dep", finalize_module("dep", &calls), Box::new([]))
             .unwrap();
         let root = context
-            .insert("root", finalize_module("root", &calls), Box::new(["dep"]))
+            .insert(
+                "root",
+                finalize_module("root", &calls),
+                Box::new([key("dep")]),
+            )
             .unwrap();
 
         assert!(context.release(dep).unwrap().is_empty());
@@ -1283,39 +1270,39 @@ mod tests {
 
     #[test]
     fn alias_growth_preserves_bound_dependencies() {
-        let mut context = LinkContext::<String, (), NativeArch>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
         let canonical = context
             .insert(
-                String::from("canonical"),
+                "canonical",
                 SyntheticModule::empty("canonical"),
                 Box::new([]),
             )
             .expect("failed to insert canonical module");
         let canonical_id = canonical.id();
         context
-            .add_alias(canonical_id, String::from("alias"))
+            .add_alias(canonical_id, "alias")
             .expect("failed to add alias");
         let alias_id = context
             .key_id("alias")
             .expect("dependency key should be interned before root insertion");
         let root = context
             .insert(
-                String::from("root"),
+                "root",
                 SyntheticModule::empty("root"),
-                Box::new([String::from("alias")]),
+                Box::new([key("alias")]),
             )
             .expect("failed to insert root module");
         let root_id = root.id();
         let replacement = context
             .insert(
-                String::from("replacement"),
+                "replacement",
                 SyntheticModule::empty("replacement"),
                 Box::new([]),
             )
             .expect("failed to insert replacement module");
         let replacement_id = replacement.id();
         context
-            .add_alias(replacement_id, String::from("alias"))
+            .add_alias(replacement_id, "alias")
             .expect("failed to add alias fallback");
 
         assert!(context.resolve_key(alias_id).unwrap().is_some());
@@ -1333,7 +1320,7 @@ mod tests {
 
     #[test]
     fn alias_uses_registration_order() {
-        let mut context = LinkContext::<&'static str, (), NativeArch>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
         let first = context
             .insert("first", SyntheticModule::empty("first"), Box::new([]))
             .expect("failed to insert first module");
@@ -1346,7 +1333,7 @@ mod tests {
         context
             .add_alias(first_id, "alias")
             .expect("failed to add alias");
-        let alias = context.key_id(&"alias").expect("alias key should exist");
+        let alias = context.key_id("alias").expect("alias key should exist");
         assert_eq!(context.resolve_key(alias).unwrap(), Some(first_id));
         context
             .add_alias(second_id, "alias")
@@ -1364,12 +1351,12 @@ mod tests {
 
     #[test]
     fn insert_rejects_occupied_key() {
-        let mut context = LinkContext::<&'static str, (), NativeArch>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
         let root = context
             .insert("root", SyntheticModule::empty("old-root"), Box::new([]))
             .expect("failed to insert root module");
         let root_id = root.id();
-        let root_key = context.key_id(&"root").expect("root key should exist");
+        let root_key = context.key_id("root").expect("root key should exist");
 
         let error = context
             .insert("root", SyntheticModule::empty("new-root"), Box::new([]))
@@ -1378,15 +1365,15 @@ mod tests {
             panic!("unexpected insertion error: {error}");
         };
         assert!(matches!(*reason, LinkContextError::KeyOccupied { id } if id == root_key));
-        assert_eq!(context.key_id(&"root"), Some(root_key));
+        assert_eq!(context.key_id("root"), Some(root_key));
         assert_eq!(context.resolve_key(root_key).unwrap(), Some(root_id));
-        assert_eq!(context.module_key(root_id).unwrap(), &"root");
+        assert_eq!(context.module_key(root_id).unwrap().as_str(), "root");
         assert!(direct_deps(&context, root_id).is_empty());
     }
 
     #[test]
     fn canonical_key_takes_precedence_over_alias() {
-        let mut context = LinkContext::<&'static str, (), NativeArch>::new(DomainId::PROCESS);
+        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
         let root = context
             .insert("root", SyntheticModule::empty("root"), Box::new([]))
             .expect("failed to insert root module");
@@ -1394,19 +1381,26 @@ mod tests {
         context
             .add_alias(root_id, "alias")
             .expect("failed to add alias");
-        let alias = context.key_id(&"alias").expect("alias key should exist");
+        let alias = context.key_id("alias").expect("alias key should exist");
         let dep_module = context
             .insert("dep", SyntheticModule::empty("dep"), Box::new([]))
             .expect("failed to insert dependency");
         let dep_module_id = dep_module.id();
 
         let canonical = context
-            .insert("alias", SyntheticModule::empty("alias"), Box::new(["dep"]))
+            .insert(
+                "alias",
+                SyntheticModule::empty("alias"),
+                Box::new([key("dep")]),
+            )
             .expect("failed to insert canonical module");
         assert_ne!(canonical.id(), root_id);
         assert_eq!(context.resolve_key(alias).unwrap(), Some(canonical.id()));
-        assert_eq!(context.module_key(root_id).unwrap(), &"root");
-        assert_eq!(context.module_key(canonical.id()).unwrap(), &"alias");
+        assert_eq!(context.module_key(root_id).unwrap().as_str(), "root");
+        assert_eq!(
+            context.module_key(canonical.id()).unwrap().as_str(),
+            "alias"
+        );
         assert_eq!(direct_deps(&context, canonical.id()), [dep_module_id]);
 
         assert_eq!(context.release(canonical).unwrap().len(), 1);
@@ -1415,7 +1409,7 @@ mod tests {
 
     #[test]
     fn import_roots_preserves_bound_dependencies() {
-        let mut source = LinkContext::<&'static str, (), NativeArch>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
         let canonical = source
             .insert(
                 "canonical",
@@ -1428,7 +1422,11 @@ mod tests {
             .add_alias(canonical_id, "alias")
             .expect("failed to add alias");
         let root = source
-            .insert("root", SyntheticModule::empty("root"), Box::new(["alias"]))
+            .insert(
+                "root",
+                SyntheticModule::empty("root"),
+                Box::new([key("alias")]),
+            )
             .expect("failed to insert root module");
         let root_id = root.id();
         let replacement = source
@@ -1442,7 +1440,7 @@ mod tests {
             .add_alias(replacement.id(), "alias")
             .expect("failed to add alias fallback");
 
-        let mut target = LinkContext::<&'static str, (), NativeArch>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
         let imported = target
             .import_roots(&source)
             .expect("failed to import context roots");
@@ -1479,13 +1477,13 @@ mod tests {
 
     #[test]
     fn imported_modules_have_context_local_metadata() {
-        let mut source = LinkContext::<&'static str, usize>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<usize>::new(DomainId::PROCESS);
         let source_lease = source
             .insert_with_meta("module", SyntheticModule::empty("module"), Box::new([]), 7)
             .unwrap();
         let source_id = source_lease.id();
 
-        let mut target = LinkContext::<&'static str, String>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<String>::new(DomainId::PROCESS);
         let target_lease = target.import(&source, source_id).unwrap();
         let target_id = target_lease.id();
 
@@ -1508,12 +1506,16 @@ mod tests {
 
     #[test]
     fn import_copies_only_dependency_closure() {
-        let mut source = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
         let source_dep = source
             .insert("dep", SyntheticModule::empty("dep"), Box::new([]))
             .unwrap();
         let source_root = source
-            .insert("root", SyntheticModule::empty("root"), Box::new(["dep"]))
+            .insert(
+                "root",
+                SyntheticModule::empty("root"),
+                Box::new([key("dep")]),
+            )
             .unwrap();
         let source_dep_id = source_dep.id();
         let source_root_id = source_root.id();
@@ -1525,14 +1527,14 @@ mod tests {
             )
             .unwrap();
 
-        let mut target = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
         let root = target.import(&source, source_root_id).unwrap();
         let root_id = root.id();
         let dep = target
             .module_id("dep")
             .expect("dependency should be imported");
 
-        assert!(!target.contains_key(&"unrelated"));
+        assert!(!target.contains_key("unrelated"));
         assert!(
             target
                 .module(root_id)
@@ -1562,24 +1564,24 @@ mod tests {
 
     #[test]
     fn import_handles_dependency_cycles() {
-        let mut source = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
         let source_modules = source
             .insert_batch([
                 (
                     "first",
                     SyntheticModule::empty("first"),
-                    Vec::from(["second"]).into_boxed_slice(),
+                    Vec::from([key("second")]).into_boxed_slice(),
                 ),
                 (
                     "second",
                     SyntheticModule::empty("second"),
-                    Vec::from(["first"]).into_boxed_slice(),
+                    Vec::from([key("first")]).into_boxed_slice(),
                 ),
             ])
             .unwrap();
         let source_first = source_modules[0].id();
 
-        let mut target = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
         let first = target.import(&source, source_first).unwrap();
         let first_id = first.id();
         let second = target.module_id("second").unwrap();
@@ -1593,7 +1595,7 @@ mod tests {
 
     #[test]
     fn import_stops_at_existing_module() {
-        let mut source = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
         let _ = source
             .insert("dep", SyntheticModule::empty("dep"), Box::new([]))
             .unwrap();
@@ -1601,11 +1603,11 @@ mod tests {
             .insert(
                 "root",
                 SyntheticModule::empty("source-root"),
-                Box::new(["dep"]),
+                Box::new([key("dep")]),
             )
             .unwrap();
 
-        let mut target = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
         let existing = target
             .insert("root", SyntheticModule::empty("target-root"), Box::new([]))
             .unwrap();
@@ -1613,7 +1615,7 @@ mod tests {
         let imported = target.import(&source, source_root.id()).unwrap();
 
         assert_eq!(imported.id(), existing_id);
-        assert!(!target.contains_key(&"dep"));
+        assert!(!target.contains_key("dep"));
         assert_eq!(target.release(imported).unwrap().len(), 0);
         let unloaded = target.release(existing).unwrap();
         assert_eq!(unloaded.len(), 1);
@@ -1622,7 +1624,7 @@ mod tests {
 
     #[test]
     fn import_uses_entry_key() {
-        let mut source = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
         let source_root = source
             .insert(
                 "canonical",
@@ -1632,22 +1634,25 @@ mod tests {
             .unwrap();
         source.add_alias(source_root.id(), "alias").unwrap();
 
-        let mut target = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
         let imported = target.import(&source, source_root.id()).unwrap();
 
-        assert_eq!(target.module_key(imported.id()).unwrap(), &"canonical");
-        assert!(target.contains_key(&"canonical"));
-        assert!(!target.contains_key(&"alias"));
+        assert_eq!(
+            target.module_key(imported.id()).unwrap().as_str(),
+            "canonical"
+        );
+        assert!(target.contains_key("canonical"));
+        assert!(!target.contains_key("alias"));
     }
 
     #[test]
     fn import_reuses_shared_handle() {
         let module = ModuleHandle::new(SyntheticModule::empty("shared"));
-        let mut source = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
         let source_lease = source
             .insert("source", module.clone(), Box::new([]))
             .unwrap();
-        let mut target = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
         let target_lease = target.insert("target", module, Box::new([])).unwrap();
 
         let imported = target.import(&source, source_lease.id()).unwrap();
@@ -1661,13 +1666,13 @@ mod tests {
 
     #[test]
     fn import_does_not_follow_target_alias() {
-        let mut source = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
         let source_root = source
             .insert("source", SyntheticModule::empty("source"), Box::new([]))
             .unwrap();
         source.add_alias(source_root.id(), "alias").unwrap();
 
-        let mut target = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
         let existing = target
             .insert("target", SyntheticModule::empty("target"), Box::new([]))
             .unwrap();
@@ -1676,21 +1681,25 @@ mod tests {
         let imported = target.import(&source, source_root.id()).unwrap();
 
         assert_ne!(imported.id(), existing_id);
-        assert!(target.contains_key(&"source"));
+        assert!(target.contains_key("source"));
         assert_eq!(target.module_id("alias"), Some(existing_id));
     }
 
     #[test]
     fn import_roots_preserves_lifecycle() {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut source = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
         let _ = source
             .insert("dep", finalize_module("dep", &calls), Box::new([]))
             .unwrap();
         let _ = source
-            .insert("root", finalize_module("root", &calls), Box::new(["dep"]))
+            .insert(
+                "root",
+                finalize_module("root", &calls),
+                Box::new([key("dep")]),
+            )
             .unwrap();
-        let mut target = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
         let imported = target.import_roots(&source).unwrap();
         let target_dep_id = target.module_id("dep").unwrap();
         let target_root_id = target.module_id("root").unwrap();
@@ -1708,14 +1717,14 @@ mod tests {
 
     #[test]
     fn import_roots_acquires_each_root_once() {
-        let mut source = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
         let source_root = source
             .insert("root", SyntheticModule::empty("root"), Box::new([]))
             .unwrap();
         let source_root_id = source_root.id();
         let _second = source.acquire(source_root_id).unwrap();
 
-        let mut target = LinkContext::<&'static str>::new(DomainId::PROCESS);
+        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
         let imported = target.import_roots(&source).unwrap();
 
         assert_eq!(imported.len(), 1);

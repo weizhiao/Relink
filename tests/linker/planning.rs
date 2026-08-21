@@ -67,45 +67,44 @@ fn break_section_name_table(mut bytes: Vec<u8>) -> Vec<u8> {
 fn arena_materializes_section_bytes() {
     let bytes = fixtures().retained;
 
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "arena_root.so",
         data: bytes,
     };
-    let configure =
-        |plan: &mut LinkPassPlan<'_, &'static str, ReorderPass>| -> elf_loader::Result<()> {
-            let root = plan.root().expect("root module should be visible");
-            assert!(
-                root.capability(plan) == ModuleCapability::SectionReorderable,
-                "compiled dylib should expose retained relocation repair inputs",
-            );
+    let configure = |plan: &mut LinkPassPlan<'_, ReorderPass>| -> elf_loader::Result<()> {
+        let root = plan.root().expect("root module should be visible");
+        assert!(
+            root.capability(plan) == ModuleCapability::SectionReorderable,
+            "compiled dylib should expose retained relocation repair inputs",
+        );
 
-            let data_section = root
-                .scanned(plan)
-                .alloc_sections()
-                .find(|section| section.name() == ".data")
-                .expect("compiled dylib should contain a .data section")
-                .id();
-            let layout_section = root
-                .section(plan, data_section)
-                .expect("missing planned .data section");
-            {
-                layout_section
-                    .data_mut(plan)?
-                    .copy_from_slice(&[9, 8, 7, 6]);
-                let arena = plan.create_arena(ArenaDescriptor::new(
-                    PageSize::Base,
-                    MemoryClass::WritableData,
-                    ArenaSharing::Private,
-                ));
-                assert!(
-                    layout_section.assign(plan, arena, 0),
-                    "failed to assign .data into arena",
-                );
-            }
-            Ok(())
-        };
+        let data_section = root
+            .scanned(plan)
+            .alloc_sections()
+            .find(|section| section.name() == ".data")
+            .expect("compiled dylib should contain a .data section")
+            .id();
+        let layout_section = root
+            .section(plan, data_section)
+            .expect("missing planned .data section");
+        {
+            layout_section
+                .data_mut(plan)?
+                .copy_from_slice(&[9, 8, 7, 6]);
+            let arena = plan.create_arena(ArenaDescriptor::new(
+                PageSize::Base,
+                MemoryClass::WritableData,
+                ArenaSharing::Private,
+            ));
+            assert!(
+                layout_section.assign(plan, arena, 0),
+                "failed to assign .data into arena",
+            );
+        }
+        Ok(())
+    };
 
     let loaded = Linker::new()
         .resolver(resolver)
@@ -117,7 +116,7 @@ fn arena_materializes_section_bytes() {
         .load_scan_first(&mut context, "root")
         .expect("failed to execute arena-backed scan-first load");
 
-    assert!(context.contains_key(&"root"));
+    assert!(context.contains_key("root"));
 
     unsafe {
         let module = context.module(loaded.root()).unwrap();
@@ -140,7 +139,7 @@ fn arena_materializes_section_bytes() {
 fn arena_supports_assign_next() {
     let bytes = fixtures().retained;
 
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "arena_assign_next_root.so",
@@ -148,46 +147,45 @@ fn arena_supports_assign_next() {
     };
     let mut observed_offset = None;
     let mut observed_size = None;
-    let configure =
-        |plan: &mut LinkPassPlan<'_, &'static str, ReorderPass>| -> elf_loader::Result<()> {
-            let root = plan.root().expect("root module should be visible");
-            assert!(
-                root.capability(plan) == ModuleCapability::SectionReorderable,
-                "compiled dylib should expose retained relocation repair inputs",
-            );
+    let configure = |plan: &mut LinkPassPlan<'_, ReorderPass>| -> elf_loader::Result<()> {
+        let root = plan.root().expect("root module should be visible");
+        assert!(
+            root.capability(plan) == ModuleCapability::SectionReorderable,
+            "compiled dylib should expose retained relocation repair inputs",
+        );
 
-            let data_section = root
-                .scanned(plan)
-                .alloc_sections()
-                .find(|section| section.name() == ".data")
-                .expect("compiled dylib should contain a .data section")
-                .id();
-            let layout_section = root
-                .section(plan, data_section)
-                .expect("missing planned .data section");
-            layout_section.resize(plan, 8)?;
-            assert_eq!(layout_section.metadata(plan).size(), 8);
-            layout_section
-                .data_mut(plan)?
-                .copy_from_slice(&[4, 3, 2, 1, 8, 7, 6, 5]);
+        let data_section = root
+            .scanned(plan)
+            .alloc_sections()
+            .find(|section| section.name() == ".data")
+            .expect("compiled dylib should contain a .data section")
+            .id();
+        let layout_section = root
+            .section(plan, data_section)
+            .expect("missing planned .data section");
+        layout_section.resize(plan, 8)?;
+        assert_eq!(layout_section.metadata(plan).size(), 8);
+        layout_section
+            .data_mut(plan)?
+            .copy_from_slice(&[4, 3, 2, 1, 8, 7, 6, 5]);
 
-            let arena = plan.create_arena(ArenaDescriptor::new(
-                PageSize::Base,
-                MemoryClass::WritableData,
-                ArenaSharing::Private,
-            ));
-            assert!(
-                layout_section.assign_next(plan, arena),
-                "failed to assign .data into arena at the next aligned offset",
-            );
-            observed_offset = layout_section
-                .placement(plan)
-                .map(|placement| placement.offset());
-            observed_size = layout_section
-                .placement(plan)
-                .map(|placement| placement.size());
-            Ok(())
-        };
+        let arena = plan.create_arena(ArenaDescriptor::new(
+            PageSize::Base,
+            MemoryClass::WritableData,
+            ArenaSharing::Private,
+        ));
+        assert!(
+            layout_section.assign_next(plan, arena),
+            "failed to assign .data into arena at the next aligned offset",
+        );
+        observed_offset = layout_section
+            .placement(plan)
+            .map(|placement| placement.offset());
+        observed_size = layout_section
+            .placement(plan)
+            .map(|placement| placement.size());
+        Ok(())
+    };
 
     let loaded = Linker::new()
         .resolver(resolver)
@@ -201,7 +199,7 @@ fn arena_supports_assign_next() {
 
     assert_eq!(observed_offset, Some(0));
     assert_eq!(observed_size, Some(8));
-    assert!(context.contains_key(&"root"));
+    assert!(context.contains_key("root"));
 
     unsafe {
         let module = context.module(loaded.root()).unwrap();
@@ -224,14 +222,14 @@ fn arena_supports_assign_next() {
 fn defaults_to_section_regions() {
     let bytes = fixtures().retained;
 
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "default_section_regions_root.so",
         data: bytes,
     };
     let mut observed_capability = None;
-    let configure = |plan: &mut LinkPassPlan<'_, &'static str>| -> elf_loader::Result<()> {
+    let configure = |plan: &mut LinkPassPlan<'_>| -> elf_loader::Result<()> {
         let root = plan.root().expect("root module should be visible");
         observed_capability = Some(root.capability(plan));
         Ok(())
@@ -271,7 +269,7 @@ fn defaults_to_section_regions() {
 fn missing_sections_become_opaque() {
     let bytes = fixtures().missing_sections.as_slice();
 
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "opaque_root.so",
@@ -279,7 +277,7 @@ fn missing_sections_become_opaque() {
     };
     let mut observed_capability = None;
     let mut saw_missing_section_headers = false;
-    let configure = |plan: &mut LinkPassPlan<'_, &'static str>| -> elf_loader::Result<()> {
+    let configure = |plan: &mut LinkPassPlan<'_>| -> elf_loader::Result<()> {
         let root = plan.root().expect("root module should be visible");
         observed_capability = Some(root.capability(plan));
         saw_missing_section_headers = root.scanned(plan).section_headers().is_none();
@@ -303,7 +301,7 @@ fn missing_sections_become_opaque() {
         "opaque modules should not expose a usable section table",
     );
 
-    assert!(context.contains_key(&"root"));
+    assert!(context.contains_key("root"));
 
     unsafe {
         let module = context.module(loaded.root()).unwrap();
@@ -325,14 +323,14 @@ fn missing_sections_become_opaque() {
 fn invalid_sections_become_opaque() {
     let bytes = fixtures().invalid_sections.as_slice();
 
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "broken_shstr_root.so",
         data: bytes,
     };
     let mut observed_capability = None;
-    let configure = |plan: &mut LinkPassPlan<'_, &'static str>| -> elf_loader::Result<()> {
+    let configure = |plan: &mut LinkPassPlan<'_>| -> elf_loader::Result<()> {
         let root = plan.root().expect("root module should be visible");
         observed_capability = Some(root.capability(plan));
         Ok(())
@@ -355,7 +353,7 @@ fn invalid_sections_become_opaque() {
 fn whole_dso_supports_section_overrides() {
     let bytes = fixtures().basic;
 
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "whole_region_root.so",
@@ -363,28 +361,27 @@ fn whole_dso_supports_section_overrides() {
     };
     let mut observed_capability = None;
     let mut observed_materialization = None;
-    let configure =
-        |plan: &mut LinkPassPlan<'_, &'static str, DataPass>| -> elf_loader::Result<()> {
-            let root = plan.root().expect("root module should be visible");
-            observed_capability = Some(root.capability(plan));
-            observed_materialization = root.materialization(plan);
+    let configure = |plan: &mut LinkPassPlan<'_, DataPass>| -> elf_loader::Result<()> {
+        let root = plan.root().expect("root module should be visible");
+        observed_capability = Some(root.capability(plan));
+        observed_materialization = root.materialization(plan);
 
-            let data_section = root
-                .scanned(plan)
-                .alloc_sections()
-                .find(|section| section.name() == ".data")
-                .expect("compiled dylib should contain a .data section")
-                .id();
-            let layout_section = root
-                .section(plan, data_section)
-                .expect("missing planned .data section");
-            layout_section
-                .data_mut(plan)?
-                .copy_from_slice(&[9, 8, 7, 6]);
-            root.set_materialization(plan, Materialization::WholeDsoRegion);
-            observed_materialization = root.materialization(plan);
-            Ok(())
-        };
+        let data_section = root
+            .scanned(plan)
+            .alloc_sections()
+            .find(|section| section.name() == ".data")
+            .expect("compiled dylib should contain a .data section")
+            .id();
+        let layout_section = root
+            .section(plan, data_section)
+            .expect("missing planned .data section");
+        layout_section
+            .data_mut(plan)?
+            .copy_from_slice(&[9, 8, 7, 6]);
+        root.set_materialization(plan, Materialization::WholeDsoRegion);
+        observed_materialization = root.materialization(plan);
+        Ok(())
+    };
 
     let loaded = Linker::new()
         .resolver(resolver)
@@ -426,7 +423,7 @@ fn whole_dso_supports_section_overrides() {
 fn section_data_rejects_section_regions() {
     let bytes = fixtures().basic;
 
-    let mut context = LinkContext::<&'static str>::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let resolver = SingleBinaryResolver {
         key: "root",
         name: "illegal_section_region_root.so",
@@ -434,18 +431,17 @@ fn section_data_rejects_section_regions() {
     };
     let mut observed_capability = None;
     let mut observed_materialization = None;
-    let configure =
-        |plan: &mut LinkPassPlan<'_, &'static str, DataPass>| -> elf_loader::Result<()> {
-            let root = plan.root().expect("root module should be visible");
-            observed_capability = Some(root.capability(plan));
+    let configure = |plan: &mut LinkPassPlan<'_, DataPass>| -> elf_loader::Result<()> {
+        let root = plan.root().expect("root module should be visible");
+        observed_capability = Some(root.capability(plan));
 
-            assert_eq!(
-                root.set_materialization(plan, Materialization::SectionRegions),
-                None,
-            );
-            observed_materialization = root.materialization(plan);
-            Ok(())
-        };
+        assert_eq!(
+            root.set_materialization(plan, Materialization::SectionRegions),
+            None,
+        );
+        observed_materialization = root.materialization(plan);
+        Ok(())
+    };
 
     let err = Linker::new()
         .resolver(resolver)

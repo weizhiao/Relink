@@ -25,7 +25,7 @@ use crate::{
 };
 use alloc::{boxed::Box, vec::Vec};
 
-use super::{ElfBuf, ExpectedElf, ImageBuilder, Loader, ScanBuilder};
+use super::{ElfBuf, ExpectedElf, ImageBuilder, Loader, ScanBuilder, read_ehdr};
 
 /// Per-run loader state.
 ///
@@ -107,12 +107,8 @@ where
     /// the loader's target architecture with
     /// [`Loader::for_arch`](super::Loader::for_arch) before calling
     /// `load_*`; the gate will then accept ELFs targeting `NewArch::TARGET`.
-    pub fn read_ehdr(&mut self, object: &impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
-        let ehdr = self
-            .buf
-            .prepare_ehdr::<Arch::Layout>(object, Arch::TARGET)?;
-        Arch::validate_e_flags(ehdr.e_flags())?;
-        Ok(ehdr)
+    pub fn read_ehdr(&self, object: &impl ElfReader) -> Result<ElfHeader<Arch::Layout>> {
+        read_ehdr::<Arch>(object)
     }
 
     /// Reads the program header table.
@@ -134,7 +130,7 @@ where
     }
 
     pub(crate) fn read_expected_ehdr(
-        &mut self,
+        &self,
         object: &impl ElfReader,
         expected: ExpectedElf,
     ) -> Result<ElfHeader<Arch::Layout>> {

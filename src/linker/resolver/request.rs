@@ -69,38 +69,34 @@ impl<Arch: RelocationArch> DependencySource for ScannedDynamic<Arch> {
 }
 
 /// The input being resolved by a [`ResolveRequest`].
-pub enum ResolveInput<'a, Request, K> {
+pub enum ResolveInput<'a, Root> {
     /// A root supplied directly to a linker load operation.
-    Root { request: Request, key: K },
+    Root { root: Root },
     /// One `DT_NEEDED` edge of an already scanned module.
     Dependency { needed: &'a str },
 }
 
 /// A root or dependency resolution request.
-pub struct ResolveRequest<'a, Request, K> {
-    input: ResolveInput<'a, Request, K>,
+pub struct ResolveRequest<'a, Root> {
+    input: ResolveInput<'a, Root>,
     search: &'a ModuleSearch,
     tokens: &'a PathTokens,
     loaders: &'a LoaderProvider<'a>,
-    contains_key: &'a dyn Fn(&K) -> bool,
 }
 
-impl<'a, Request, K> ResolveRequest<'a, Request, K> {
+impl<'a, Root> ResolveRequest<'a, Root> {
     #[inline]
     pub(crate) const fn root(
-        request: Request,
-        key: K,
+        root: Root,
         search: &'a ModuleSearch,
         tokens: &'a PathTokens,
         loaders: &'a LoaderProvider<'a>,
-        contains_key: &'a dyn Fn(&K) -> bool,
     ) -> Self {
         Self {
-            input: ResolveInput::Root { request, key },
+            input: ResolveInput::Root { root },
             search,
             tokens,
             loaders,
-            contains_key,
         }
     }
 
@@ -110,27 +106,19 @@ impl<'a, Request, K> ResolveRequest<'a, Request, K> {
         search: &'a ModuleSearch,
         tokens: &'a PathTokens,
         loaders: &'a LoaderProvider<'a>,
-        contains_key: &'a dyn Fn(&K) -> bool,
     ) -> Self {
         Self {
             input: ResolveInput::Dependency { needed },
             search,
             tokens,
             loaders,
-            contains_key,
         }
     }
 
     /// Returns the kind-specific input being resolved.
     #[inline]
-    pub const fn input(&self) -> &ResolveInput<'a, Request, K> {
+    pub const fn input(&self) -> &ResolveInput<'a, Root> {
         &self.input
-    }
-
-    /// Returns mutable access to the kind-specific input.
-    #[inline]
-    pub fn input_mut(&mut self) -> &mut ResolveInput<'a, Request, K> {
-        &mut self.input
     }
 
     /// Returns search metadata for the request owner.
@@ -151,12 +139,6 @@ impl<'a, Request, K> ResolveRequest<'a, Request, K> {
         mut visitor: impl for<'search> FnMut(&'search ModuleSearch) -> Result<bool>,
     ) -> Result<()> {
         (self.loaders)(&mut visitor)
-    }
-
-    /// Returns whether `key` names a module reusable by this request.
-    #[inline]
-    pub fn contains_key(&self, key: &K) -> bool {
-        (self.contains_key)(key)
     }
 
     /// Creates the standard not-found error for this request.

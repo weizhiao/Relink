@@ -82,10 +82,10 @@ impl LinkerObserver<UserData> for Observer {}
 
 fn main() -> Result<()> {
     let fixtures = fixture_support::ensure_all();
-    let linker = Linker::<PathBuf>::new()
+    let linker = Linker::new()
         .loader(LOADER)
         .resolver(fixture_support::search_path_resolver());
-    let mut context: LinkContext<PathBuf> = LinkContext::new(DomainId::PROCESS);
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let middle = linker
         .run()
         .with_observer(Observer)

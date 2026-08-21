@@ -10,9 +10,8 @@ use crate::{
 };
 use alloc::{collections::BTreeMap, vec::Vec};
 
-impl<K, Arch, Tls> LinkPlan<K, Arch, Tls>
+impl<Arch, Tls> LinkPlan<Arch, Tls>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
@@ -40,12 +39,11 @@ where
     }
 }
 
-fn resolve_materialization_mode<K, Arch, Tls>(
-    plan: &LinkPlan<K, Arch, Tls>,
+fn resolve_materialization_mode<Arch, Tls>(
+    plan: &LinkPlan<Arch, Tls>,
     module_id: ModuleId,
 ) -> Result<Materialization>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
@@ -100,9 +98,8 @@ impl ArenaState {
         }
     }
 
-    fn record_placed<K, Arch, Tls>(&mut self, plan: &LinkPlan<K, Arch, Tls>, modules: &[ModuleId])
+    fn record_placed<Arch, Tls>(&mut self, plan: &LinkPlan<Arch, Tls>, modules: &[ModuleId])
     where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
@@ -120,13 +117,12 @@ impl ArenaState {
         }
     }
 
-    fn assign_unplaced<K, Arch, Tls>(
+    fn assign_unplaced<Arch, Tls>(
         &mut self,
-        plan: &mut LinkPlan<K, Arch, Tls>,
+        plan: &mut LinkPlan<Arch, Tls>,
         modules: &[ModuleId],
         policy: PackingPolicy,
     ) where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
@@ -141,14 +137,13 @@ impl ArenaState {
         }
     }
 
-    fn register_existing_section<K, Arch, Tls>(
+    fn register_existing_section<Arch, Tls>(
         &mut self,
-        plan: &LinkPlan<K, Arch, Tls>,
+        plan: &LinkPlan<Arch, Tls>,
         module_id: ModuleId,
         section_id: SectionId,
         placement: SectionPlacement,
     ) where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {
@@ -172,14 +167,13 @@ impl ArenaState {
         }
     }
 
-    fn assign_fallback_section<K, Arch, Tls>(
+    fn assign_fallback_section<Arch, Tls>(
         &mut self,
-        plan: &mut LinkPlan<K, Arch, Tls>,
+        plan: &mut LinkPlan<Arch, Tls>,
         module_id: ModuleId,
         section_id: SectionId,
         policy: PackingPolicy,
     ) where
-        K: Clone + Ord,
         Arch: RelocationArch,
         Tls: TlsResolver<Arch>,
     {

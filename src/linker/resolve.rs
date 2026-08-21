@@ -1,7 +1,7 @@
 use super::{
     resolver::{DependencySource, KeyResolver, LoaderVisitor, ResolveRequest, ResolvedKey},
     session::ResolveSession,
-    storage::{CommittedStorage, ModuleSlot},
+    storage::{CommittedStorage, ModuleKey, ModuleSlot},
 };
 use crate::{
     LinkResolverError, LinkerError, LoaderRun, ParsePhdrError, Result,
@@ -30,38 +30,30 @@ fn push_dep(deps: &mut Vec<ModuleSlot>, dep: ModuleSlot) {
 
 pub(crate) struct ResolveContext<
     'a,
-    K: Clone,
     Arch: RelocationArch = NativeArch,
     P = (),
     Tls: TlsResolver<Arch> = (),
     Meta = (),
 > {
-    committed: &'a mut CommittedStorage<K, Meta, Arch, Tls>,
+    committed: &'a mut CommittedStorage<Meta, Arch, Tls>,
     session: &'a mut ResolveSession<P, Arch, Tls>,
     tokens: PathTokens,
 }
 
-pub(crate) type LoadResolveContext<
-    'a,
-    K,
-    D,
-    Arch = NativeArch,
-    R = HostRegion,
-    Tls = (),
-    Meta = (),
-> = ResolveContext<'a, K, Arch, RawDynamic<D, Arch, R, Tls>, Tls, Meta>;
+pub(crate) type LoadResolveContext<'a, D, Arch = NativeArch, R = HostRegion, Tls = (), Meta = ()> =
+    ResolveContext<'a, Arch, RawDynamic<D, Arch, R, Tls>, Tls, Meta>;
 
-pub(crate) type ScanResolveContext<'a, K, Arch = NativeArch, Tls = (), Meta = ()> =
-    ResolveContext<'a, K, Arch, ScannedDynamic<Arch>, Tls, Meta>;
+pub(crate) type ScanResolveContext<'a, Arch = NativeArch, Tls = (), Meta = ()> =
+    ResolveContext<'a, Arch, ScannedDynamic<Arch>, Tls, Meta>;
 
-impl<'a, K: Clone, Arch, P, Tls, Meta> ResolveContext<'a, K, Arch, P, Tls, Meta>
+impl<'a, Arch, P, Tls, Meta> ResolveContext<'a, Arch, P, Tls, Meta>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
     #[inline]
     pub(crate) fn new(
-        committed: &'a mut CommittedStorage<K, Meta, Arch, Tls>,
+        committed: &'a mut CommittedStorage<Meta, Arch, Tls>,
         session: &'a mut ResolveSession<P, Arch, Tls>,
         tokens: PathTokens,
     ) -> Self {
@@ -73,9 +65,8 @@ where
     }
 }
 
-impl<K, Arch, P, Tls, Meta> ResolveContext<'_, K, Arch, P, Tls, Meta>
+impl<Arch, P, Tls, Meta> ResolveContext<'_, Arch, P, Tls, Meta>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     P: DependencySource,
     Tls: TlsResolver<Arch>,
@@ -85,19 +76,7 @@ where
         self.session.contains_pending(slot)
     }
 
-    #[inline]
-    fn contains_key(&self, key: &K) -> bool {
-        self.known_module(key).is_some()
-    }
-
-    fn ensure_new(&self, key: &K) -> Result<()> {
-        if self.contains_key(key) {
-            return Err(LinkerError::resolver(LinkResolverError::NewKeyAlreadyKnown).into());
-        }
-        Ok(())
-    }
-
-    fn known_module(&self, key: &K) -> Option<ModuleSlot> {
+    fn known_module(&self, key: &str) -> Option<ModuleSlot> {
         let key = self.committed.key_slot_for(key)?;
         self.committed
             .canonical_module(key)
@@ -108,76 +87,67 @@ where
             .or_else(|| self.session.alias_module(key))
     }
 
-    fn reuse_source(&mut self, key: &K, id: ModuleSourceId) -> Option<ModuleSlot> {
-        let slot = self
-            .committed
+    fn module_for_source(&self, id: ModuleSourceId) -> Option<ModuleSlot> {
+        self.committed
             .module_for_source(id)
-            .or_else(|| self.session.source_module(id))?;
-        self.stage_alias(Some(key.clone()), slot);
-        Some(slot)
+            .or_else(|| self.session.module_for_source(id))
     }
 
-    fn stage_alias(&mut self, alias: Option<K>, slot: ModuleSlot) {
-        if let Some(alias) = alias {
-            let alias = self.committed.intern_key(alias);
-            self.session.stage_alias(alias, slot);
+    pub(crate) fn bind_key(&mut self, key: ModuleKey, slot: ModuleSlot) {
+        let key = self.committed.intern_key(key);
+        if self.committed.canonical_module(key) != Some(slot) {
+            self.session.stage_alias(key, slot);
         }
     }
 
-    fn stage_dynamic<Resolver>(
+    fn stage_dynamic(
         &mut self,
-        key: K,
+        key: ModuleKey,
         payload: P,
         loader: Option<ModuleSlot>,
-        resolver: &Resolver,
-    ) -> ModuleSlot
-    where
-        Resolver: KeyResolver<K, Arch, Tls>,
-    {
+    ) -> ModuleSlot {
         let source = payload.source_id();
         let search = payload.search();
-        let alias = search.soname().and_then(|name| resolver.map_name(name));
+        let alias = search.soname().map(ModuleKey::from);
         let key = self.committed.intern_key(key);
         let slot = self.committed.intern_module(key);
         let generation = self.committed.generation(slot);
         self.session
             .stage_dynamic(slot, generation, payload, loader);
         self.session.stage_source(source, slot);
-        self.stage_alias(alias, slot);
+        if let Some(alias) = alias {
+            self.bind_key(alias, slot);
+        }
         slot
     }
 
-    fn stage_module<Resolver>(
+    fn stage_module(
         &mut self,
-        key: K,
+        key: ModuleKey,
         module: ModuleHandle<Arch, Tls>,
         direct_deps: Box<[ModuleSlot]>,
-        resolver: &Resolver,
-    ) -> ModuleSlot
-    where
-        Resolver: KeyResolver<K, Arch, Tls>,
-    {
+    ) -> ModuleSlot {
         let search = module.search();
-        let alias = search
-            .and_then(ModuleSearch::soname)
-            .and_then(|name| resolver.map_name(name));
+        let alias = search.and_then(ModuleSearch::soname).map(ModuleKey::from);
         let key = self.committed.intern_key(key);
         let slot = self.committed.intern_module(key);
         let generation = self.committed.generation(slot);
         self.session
             .stage_module(slot, generation, module, direct_deps);
-        self.stage_alias(alias, slot);
+        if let Some(alias) = alias {
+            self.bind_key(alias, slot);
+        }
         slot
     }
 
-    fn existing(&self, key: &K) -> Result<ModuleSlot> {
+    fn existing(&self, key: &ModuleKey) -> Result<ModuleSlot> {
         self.known_module(key)
             .ok_or_else(|| LinkerError::resolver(LinkResolverError::ExistingKeyMissing).into())
     }
 
     fn stage_module_deps<'cfg, D, Obs, F, M, Exec>(
         &mut self,
-        deps: Vec<ResolvedKey<'cfg, K, Arch, Tls>>,
+        deps: Vec<ResolvedKey<'cfg, Arch, Tls>>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         mut stage: F,
     ) -> Result<Box<[ModuleSlot]>>
@@ -187,7 +157,7 @@ where
         M: Mmap,
         F: FnMut(
             &mut Self,
-            ResolvedKey<'cfg, K, Arch, Tls>,
+            ResolvedKey<'cfg, Arch, Tls>,
             &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         ) -> Result<ModuleSlot>,
     {
@@ -241,16 +211,13 @@ where
 
     pub(crate) fn resolve_root<'cfg, Resolver>(
         &self,
-        request: Resolver::Request,
-        key: K,
+        root: Resolver::Root,
         caller: Option<ModuleSlot>,
         resolver: &Resolver,
-    ) -> Result<ResolvedKey<'cfg, K, Arch, Tls>>
+    ) -> Result<ResolvedKey<'cfg, Arch, Tls>>
     where
-        K: 'cfg,
-        Resolver: KeyResolver<K, Arch, Tls>,
+        Resolver: KeyResolver<Arch, Tls>,
     {
-        let contains_key = |key: &K| self.contains_key(key);
         let search = caller
             .and_then(|slot| self.search(slot))
             .unwrap_or(&DEFAULT_MODULE_SEARCH);
@@ -258,7 +225,7 @@ where
             Some(slot) => self.visit_loaders(slot, visitor),
             None => Ok(()),
         };
-        let req = ResolveRequest::root(request, key, search, &self.tokens, &loaders, &contains_key);
+        let req = ResolveRequest::root(root, search, &self.tokens, &loaders);
         resolver.resolve(req)
     }
 
@@ -271,15 +238,14 @@ where
     ) -> Result<&[ModuleSlot]>
     where
         D: Send + Sync + 'static,
-        K: 'cfg,
-        Resolver: KeyResolver<K, Arch, Tls>,
+        Resolver: KeyResolver<Arch, Tls>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
         F: FnMut(
             &mut Self,
-            ResolvedKey<'cfg, K, Arch, Tls>,
+            ResolvedKey<'cfg, Arch, Tls>,
             ModuleSlot,
             &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         ) -> Result<ModuleSlot>,
@@ -291,32 +257,26 @@ where
             let needed_len = self.source(slot).needed_len();
             let mut direct_deps = Vec::with_capacity(needed_len);
             for idx in 0..needed_len {
-                let key = {
-                    let contains_key = |key: &K| self.contains_key(key);
+                let resolved = {
                     let source = self.source(slot);
                     let search = source.search();
                     let needed = source
                         .needed(idx)
                         .expect("DT_NEEDED index must be within the parsed dependency list");
+                    if let Some(dep) = self.known_module(needed) {
+                        push_dep(&mut direct_deps, dep);
+                        continue;
+                    }
                     let loaders =
                         |visitor: &mut LoaderVisitor<'_>| self.visit_loaders(slot, visitor);
-                    if let Some(key) = resolver
-                        .map_name(needed)
-                        .filter(|key| self.contains_key(key))
-                    {
-                        ResolvedKey::existing(key)
-                    } else {
-                        let req = ResolveRequest::dependency(
-                            needed,
-                            search,
-                            &self.tokens,
-                            &loaders,
-                            &contains_key,
-                        );
-                        resolver.resolve(req)?
-                    }
+                    let req = ResolveRequest::dependency(needed, search, &self.tokens, &loaders);
+                    let resolved = resolver.resolve(req)?;
+                    (ModuleKey::from(needed), resolved)
                 };
-                push_dep(&mut direct_deps, stage(self, key, slot, loader)?);
+                let (request_key, resolved) = resolved;
+                let dep = stage(self, resolved, slot, loader)?;
+                self.bind_key(request_key, dep);
+                push_dep(&mut direct_deps, dep);
             }
             self.session.set_direct_deps(slot, direct_deps);
         }
@@ -334,15 +294,14 @@ where
     ) -> Result<()>
     where
         D: Send + Sync + 'static,
-        K: 'cfg,
-        Resolver: KeyResolver<K, Arch, Tls>,
+        Resolver: KeyResolver<Arch, Tls>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
         F: FnMut(
             &mut Self,
-            ResolvedKey<'cfg, K, Arch, Tls>,
+            ResolvedKey<'cfg, Arch, Tls>,
             ModuleSlot,
             &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         ) -> Result<ModuleSlot>,
@@ -366,63 +325,64 @@ where
     }
 }
 
-impl<K, D: Send + Sync + 'static, Arch, R, Tls, Meta>
-    ResolveContext<'_, K, Arch, RawDynamic<D, Arch, R, Tls>, Tls, Meta>
+impl<D: Send + Sync + 'static, Arch, R, Tls, Meta>
+    ResolveContext<'_, Arch, RawDynamic<D, Arch, R, Tls>, Tls, Meta>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn stage<'cfg, Obs, M, Exec, Resolver>(
+    pub(crate) fn stage<'cfg, Obs, M, Exec>(
         &mut self,
-        resolved: ResolvedKey<'cfg, K, Arch, Tls>,
+        resolved: ResolvedKey<'cfg, Arch, Tls>,
         parent: Option<ModuleSlot>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
-        resolver: &Resolver,
     ) -> Result<ModuleSlot>
     where
-        K: 'cfg,
         D: Default,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap<Region = R>,
         Exec: CodeExecutor<Arch> + Clone,
-        Resolver: KeyResolver<K, Arch, Tls>,
     {
         match resolved {
             ResolvedKey::Existing(key) => self.existing(&key),
             ResolvedKey::Load { key, reader } => {
-                self.ensure_new(&key)?;
-                if let Some(slot) = self.reuse_source(&key, reader.source_id()) {
+                if let Some(slot) = self.known_module(&key) {
+                    return Ok(slot);
+                }
+                if let Some(slot) = self.module_for_source(reader.source_id()) {
+                    self.bind_key(key, slot);
                     return Ok(slot);
                 }
                 let raw = loader.load_dynamic(reader)?;
-                Ok(self.stage_dynamic(key, raw, parent, resolver))
+                Ok(self.stage_dynamic(key, raw, parent))
             }
             ResolvedKey::Module { key, module, deps } => {
+                if let Some(slot) = self.known_module(&key) {
+                    return Ok(slot);
+                }
                 self.committed.ensure_domain(module.domain_id())?;
-                self.ensure_new(&key)?;
-                if let Some(slot) = self.reuse_source(&key, module.source_id()) {
+                if let Some(slot) = self.module_for_source(module.source_id()) {
+                    self.bind_key(key, slot);
                     return Ok(slot);
                 }
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
-                    ctx.stage::<Obs, M, Exec, Resolver>(dep, parent, loader, resolver)
+                    ctx.stage::<Obs, M, Exec>(dep, parent, loader)
                 })?;
-                Ok(self.stage_module(key, module, direct_deps, resolver))
+                Ok(self.stage_module(key, module, direct_deps))
             }
         }
     }
 
-    pub(crate) fn resolve_pending<'cfg, Obs, M, Exec, Resolver>(
+    pub(crate) fn resolve_pending<Obs, M, Exec, Resolver>(
         &mut self,
         root: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
         resolver: &Resolver,
     ) -> Result<()>
     where
-        K: 'cfg,
-        Resolver: KeyResolver<K, Arch, Tls>,
+        Resolver: KeyResolver<Arch, Tls>,
         D: Default,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
@@ -439,56 +399,57 @@ where
             root,
             loader,
             resolver,
-            |ctx, resolved, parent, loader| ctx.stage(resolved, Some(parent), loader, resolver),
+            |ctx, resolved, parent, loader| ctx.stage(resolved, Some(parent), loader),
         )
     }
 }
 
-impl<K, Arch, Tls, Meta> ResolveContext<'_, K, Arch, ScannedDynamic<Arch>, Tls, Meta>
+impl<Arch, Tls, Meta> ResolveContext<'_, Arch, ScannedDynamic<Arch>, Tls, Meta>
 where
-    K: Clone + Ord,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    pub(crate) fn stage<D, Obs, M, Exec, Resolver>(
+    pub(crate) fn stage<D, Obs, M, Exec>(
         &mut self,
-        resolved: ResolvedKey<'static, K, Arch, Tls>,
+        resolved: ResolvedKey<'static, Arch, Tls>,
         parent: Option<ModuleSlot>,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
-        resolver: &Resolver,
     ) -> Result<ModuleSlot>
     where
-        D: Send + Sync + 'static,
-        K: 'static,
-        D: Default,
+        D: Default + Send + Sync + 'static,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
-        Resolver: KeyResolver<K, Arch, Tls>,
     {
         match resolved {
             ResolvedKey::Existing(key) => self.existing(&key),
             ResolvedKey::Load { key, reader } => {
-                self.ensure_new(&key)?;
-                if let Some(slot) = self.reuse_source(&key, reader.source_id()) {
+                if let Some(slot) = self.known_module(&key) {
+                    return Ok(slot);
+                }
+                if let Some(slot) = self.module_for_source(reader.source_id()) {
+                    self.bind_key(key, slot);
                     return Ok(slot);
                 }
                 let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
                     return Err(ParsePhdrError::MissingDynamicSection.into());
                 };
-                Ok(self.stage_dynamic(key, module, parent, resolver))
+                Ok(self.stage_dynamic(key, module, parent))
             }
             ResolvedKey::Module { key, module, deps } => {
+                if let Some(slot) = self.known_module(&key) {
+                    return Ok(slot);
+                }
                 self.committed.ensure_domain(module.domain_id())?;
-                self.ensure_new(&key)?;
-                if let Some(slot) = self.reuse_source(&key, module.source_id()) {
+                if let Some(slot) = self.module_for_source(module.source_id()) {
+                    self.bind_key(key, slot);
                     return Ok(slot);
                 }
                 let direct_deps = self.stage_module_deps(deps, loader, |ctx, dep, loader| {
-                    ctx.stage::<D, Obs, M, Exec, Resolver>(dep, parent, loader, resolver)
+                    ctx.stage::<D, Obs, M, Exec>(dep, parent, loader)
                 })?;
-                Ok(self.stage_module(key, module, direct_deps, resolver))
+                Ok(self.stage_module(key, module, direct_deps))
             }
         }
     }
@@ -500,10 +461,8 @@ where
         resolver: &Resolver,
     ) -> Result<()>
     where
-        D: Send + Sync + 'static,
-        K: 'static,
-        Resolver: KeyResolver<K, Arch, Tls>,
-        D: Default,
+        D: Default + Send + Sync + 'static,
+        Resolver: KeyResolver<Arch, Tls>,
         Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
         Tls: TlsResolver<Arch>,
         M: Mmap,
@@ -513,7 +472,7 @@ where
             root,
             loader,
             resolver,
-            |ctx, resolved, parent, loader| ctx.stage(resolved, Some(parent), loader, resolver),
+            |ctx, resolved, parent, loader| ctx.stage(resolved, Some(parent), loader),
         )
     }
 }
