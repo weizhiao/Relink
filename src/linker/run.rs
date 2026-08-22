@@ -3,7 +3,7 @@ use super::{
     driver::{Linker, LoadResult},
     resolve::LoadResolveContext,
     resolver::KeyResolver,
-    scan::{GotPltTarget, LinkPipeline, MappedRuntimeMemory},
+    scan::{LinkPipeline, MappedRuntimeMemory},
     session::{LoadSession, PublishSession, ResolveSession},
     storage::{ContextId, ModuleId, ModuleKey, ModuleLease, ModuleSlot},
 };
@@ -18,7 +18,7 @@ use crate::{
     memory::RegionAccess,
     observer::{LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver},
     os::Mmap,
-    relocation::{RelocationArch, RelocationValueProvider, SymbolRegistry},
+    relocation::{RelocationArch, SymbolRegistry},
     runtime::CodeExecutor,
     sync::Arc,
     tls::TlsResolver,
@@ -91,13 +91,12 @@ where
     }
 }
 
-#[allow(private_bounds)]
 impl<'run, 'pipe, D: Send + Sync + 'static, Tls, Arch, M, Exec, Resolver, RelocBinder, Obs>
     LinkerRun<'run, 'pipe, Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls, Obs>
 where
     D: Default + Send + Sync + 'static,
     Tls: TlsResolver<Arch>,
-    Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
+    Arch: RelocationArch,
     M: Mmap,
     Exec: CodeExecutor<Arch> + Clone,
     ElfRelType<Arch>: ByteRepr,
@@ -362,70 +361,6 @@ where
 
         self.scratch_order = order;
         result
-    }
-}
-
-#[allow(private_bounds)]
-impl<D: Send + Sync + 'static, Tls, Arch, M, Exec, Resolver, RelocBinder>
-    Linker<Arch, Loader<D, Tls, Arch, M, Exec>, Resolver, RelocBinder, Tls>
-where
-    D: Default + Send + Sync + 'static,
-    Tls: TlsResolver<Arch>,
-    Arch: RelocationArch + RelocationValueProvider + GotPltTarget,
-    M: Mmap,
-    Exec: CodeExecutor<Arch> + Clone,
-    ElfRelType<Arch>: ByteRepr,
-    Resolver: KeyResolver<Arch, Tls>,
-    RelocBinder: LazyBinder<Arch> + Clone,
-{
-    /// Loads one module into this linker's relocation domain.
-    pub fn load<Meta>(
-        &self,
-        context: &mut LinkContext<Meta, Arch, Tls>,
-        root: Resolver::Root,
-    ) -> Result<LoadResult>
-    where
-        Meta: Default,
-    {
-        self.run().load(context, root)
-    }
-
-    /// Loads one root on behalf of a module already committed to `context`.
-    pub fn load_from<Meta>(
-        &self,
-        context: &mut LinkContext<Meta, Arch, Tls>,
-        root: Resolver::Root,
-        caller: ModuleId,
-    ) -> Result<LoadResult>
-    where
-        Meta: Default,
-    {
-        self.run().load_from(context, root, caller)
-    }
-
-    /// Loads a pre-mapped root dynamic image and resolves its dependencies.
-    pub fn load_mapped_root<Meta>(
-        &self,
-        context: &mut LinkContext<Meta, Arch, Tls>,
-        key: ModuleKey,
-        raw: RawDynamic<D, Arch, M::Region, Tls>,
-    ) -> Result<LoadResult>
-    where
-        Meta: Default,
-    {
-        self.run().load_mapped_root(context, key, raw)
-    }
-
-    /// Discovers, plans, and loads one module through the scan-first path.
-    pub fn load_scan_first<Meta>(
-        &self,
-        context: &mut LinkContext<Meta, Arch, Tls>,
-        root: Resolver::Root,
-    ) -> Result<LoadResult>
-    where
-        Meta: Default,
-    {
-        self.run().load_scan_first(context, root)
     }
 }
 

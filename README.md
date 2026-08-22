@@ -92,6 +92,7 @@ fn main() -> Result<()> {
 
     let loaded = LINKER
         .resolver(resolver)
+        .run()
         .load(&mut context, root)?;
 
     let run = unsafe {

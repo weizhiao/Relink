@@ -72,8 +72,9 @@ impl LoadResult {
 /// dependency graph into a [`LinkContext`](crate::LinkContext).
 ///
 /// The linker is configuration; committed modules live in the context passed to
-/// [`Linker::load`]. This lets the same linker value be reused with independent
-/// contexts while keeping each context's module ids and dependency graph isolated.
+/// [`LinkerRun::load`](super::LinkerRun::load). This lets the same linker value
+/// be reused with independent contexts while keeping each context's module ids
+/// and dependency graph isolated.
 ///
 /// # Example
 ///

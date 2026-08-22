@@ -15,6 +15,7 @@ fn loads_dependency_chain() {
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
+        .run()
         .load(
             &mut context,
             PathBuf::from(fixtures.root_path.to_str().unwrap()),
@@ -38,6 +39,7 @@ fn inherits_rpath() {
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
+        .run()
         .load(
             &mut context,
             PathBuf::from(fixtures.rpath_root_path.to_str().unwrap()),
@@ -88,6 +90,7 @@ fn scan_inherits_rpath() {
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
+        .run()
         .load_scan_first(
             &mut context,
             PathBuf::from(fixtures.rpath_root_path.to_str().unwrap()),
@@ -111,12 +114,14 @@ fn loads_from_module_rpath() {
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
 
     let caller = linker
+        .run()
         .load(
             &mut context,
             PathBuf::from(fixtures.rpath_caller_path.to_str().unwrap()),
         )
         .unwrap();
     let loaded = linker
+        .run()
         .load_from(&mut context, PathBuf::from("libleaf.so"), caller.root())
         .unwrap();
 
@@ -141,9 +146,11 @@ fn reuses_soname() {
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
     let first = linker
+        .run()
         .load(&mut context, PathBuf::from(alias.to_str().unwrap()))
         .unwrap();
     let duplicate = linker
+        .run()
         .load(
             &mut context,
             PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap()),
@@ -152,6 +159,7 @@ fn reuses_soname() {
     assert_ne!(first.root(), duplicate.root());
 
     let by_name = linker
+        .run()
         .load(&mut context, PathBuf::from("libleaf.so"))
         .unwrap();
     assert_eq!(first.root(), by_name.root());
@@ -159,12 +167,14 @@ fn reuses_soname() {
     first.release(&mut context).unwrap();
 
     let by_name = linker
+        .run()
         .load(&mut context, PathBuf::from("libleaf.so"))
         .unwrap();
     assert_eq!(duplicate.root(), by_name.root());
     assert_eq!(context.load_order().count(), 1);
 
     let root = linker
+        .run()
         .load(
             &mut context,
             PathBuf::from(fixtures.rpath_root_path.to_str().unwrap()),
@@ -194,8 +204,8 @@ fn reuses_file() {
     let alias = PathBuf::from(alias_path.to_str().unwrap());
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
-    let first = linker.load(&mut context, original.clone()).unwrap();
-    let second = linker.load(&mut context, alias.clone()).unwrap();
+    let first = linker.run().load(&mut context, original.clone()).unwrap();
+    let second = linker.run().load(&mut context, alias.clone()).unwrap();
 
     assert_eq!(first.root(), second.root());
     assert_eq!(context.module_id(original.as_str()), Some(first.root()));
@@ -207,7 +217,7 @@ fn reuses_file() {
     first.release(&mut context).unwrap();
     assert!(context.is_empty());
 
-    let reloaded = linker.load(&mut context, alias).unwrap();
+    let reloaded = linker.run().load(&mut context, alias).unwrap();
     assert_ne!(reloaded.root(), old);
     assert_eq!(context.load_order().count(), 1);
     reloaded.release(&mut context).unwrap();
@@ -233,15 +243,15 @@ fn imports_reuse_file() {
     let next = PathBuf::from(next_path.to_str().unwrap());
     let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
     let mut source = LinkContext::<()>::new(DomainId::PROCESS);
-    let source_module = linker.load(&mut source, original).unwrap();
+    let source_module = linker.run().load(&mut source, original).unwrap();
     let mut target = LinkContext::<()>::new(DomainId::PROCESS);
-    let first = linker.load(&mut target, alias).unwrap();
+    let first = linker.run().load(&mut target, alias).unwrap();
     let imported = target.import(&source, source_module.root()).unwrap();
     assert_eq!(imported.id(), first.root());
     assert_eq!(target.load_order().count(), 1);
 
     first.release(&mut target).unwrap();
-    let reused = linker.load(&mut target, next).unwrap();
+    let reused = linker.run().load(&mut target, next).unwrap();
     assert_eq!(reused.root(), imported.id());
     assert_eq!(target.load_order().count(), 1);
 
@@ -290,6 +300,7 @@ fn scan_loads_dependency_chain() {
 
     let loaded = Linker::new()
         .resolver(crate::fixture::search_path_resolver())
+        .run()
         .load_scan_first(
             &mut context,
             PathBuf::from(fixtures.root_path.to_str().unwrap()),
@@ -334,6 +345,7 @@ fn dynamic_dirs_precede_static_dirs() {
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let loaded = Linker::new()
         .resolver(resolver)
+        .run()
         .load(&mut context, PathBuf::from("libpick.so"))
         .unwrap();
 

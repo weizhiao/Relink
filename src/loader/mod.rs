@@ -13,10 +13,10 @@
 
 mod builder;
 mod defs;
-mod handle;
+mod loader;
 mod run;
 
 pub(crate) use builder::{ImageBuilder, ScanBuilder};
 pub(crate) use defs::{ElfBuf, ExpectedElf, read_ehdr};
-pub use handle::Loader;
+pub use loader::Loader;
 pub use run::LoaderRun;

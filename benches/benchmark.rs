@@ -105,6 +105,7 @@ fn load_linker(root: PathBuf) {
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
+        .run()
         .load(&mut context, black_box(root))
         .unwrap();
     drop(black_box(loaded));

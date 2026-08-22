@@ -207,7 +207,7 @@ fn loads_module_root() {
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let linker = Linker::new().resolver(SyntheticRootResolver);
 
-    let first = linker.load(&mut context, "root").unwrap();
+    let first = linker.run().load(&mut context, "root").unwrap();
     assert!(
         context
             .module(first.root())
@@ -224,7 +224,7 @@ fn loads_module_root() {
     };
     assert_eq!(value(), 42);
 
-    let second = linker.load(&mut context, "root").unwrap();
+    let second = linker.run().load(&mut context, "root").unwrap();
     assert!(
         context
             .module(first.root())
@@ -244,6 +244,7 @@ fn scan_loads_synthetic_dependency() {
 
     let root = Linker::new()
         .resolver(resolver)
+        .run()
         .load_scan_first(&mut context, "root")
         .expect("scan-first load should accept a synthetic dependency");
 
@@ -286,6 +287,7 @@ fn unresolved_dependency_does_not_commit() {
             name: "unresolved_root.so",
             data: fixtures().dependent,
         })
+        .run()
         .load(&mut context, "root")
         .expect_err("missing dependency should fail before commit");
 
@@ -412,7 +414,7 @@ fn global_scope_binds_and_retains_provider() {
         name: "global.so",
         data: fixtures().global,
     });
-    let loaded = linker.load(&mut context, "global").unwrap();
+    let loaded = linker.run().load(&mut context, "global").unwrap();
     let value = unsafe {
         context
             .module(loaded.root())
@@ -448,7 +450,7 @@ fn unused_global_is_not_retained() {
         name: "root.so",
         data: fixtures().provider,
     });
-    let loaded = linker.load(&mut context, "root").unwrap();
+    let loaded = linker.run().load(&mut context, "root").unwrap();
 
     drop(context.release(global).unwrap());
     assert!(weak.upgrade().is_none());
@@ -562,9 +564,9 @@ fn loads_dynamic_exec() {
             ],
         });
         let _loaded = if scan_first {
-            linker.load_scan_first(&mut context, "root")
+            linker.run().load_scan_first(&mut context, "root")
         } else {
-            linker.load(&mut context, "root")
+            linker.run().load(&mut context, "root")
         }
         .expect("linker should accept dynamic ET_EXEC roots");
 
@@ -583,9 +585,9 @@ fn existing_root_records_request_key() {
             data: fixtures().provider,
         });
         let loaded = if scan_first {
-            linker.load_scan_first(&mut context, "canonical")
+            linker.run().load_scan_first(&mut context, "canonical")
         } else {
-            linker.load(&mut context, "canonical")
+            linker.run().load(&mut context, "canonical")
         }
         .expect("failed to load canonical root");
 
@@ -594,9 +596,9 @@ fn existing_root_records_request_key() {
             existing: "canonical",
         });
         let alias = if scan_first {
-            linker.load_scan_first(&mut context, "alias")
+            linker.run().load_scan_first(&mut context, "alias")
         } else {
-            linker.load(&mut context, "alias")
+            linker.run().load(&mut context, "alias")
         }
         .expect("failed to reuse existing root");
 
@@ -608,9 +610,9 @@ fn existing_root_records_request_key() {
             existing: "missing",
         });
         let reused = if scan_first {
-            linker.load_scan_first(&mut context, "alias")
+            linker.run().load_scan_first(&mut context, "alias")
         } else {
-            linker.load(&mut context, "alias")
+            linker.run().load(&mut context, "alias")
         }
         .expect("recorded request key should bypass the resolver");
         assert_eq!(reused.root(), loaded.root());
@@ -627,6 +629,7 @@ fn existing_requires_committed_key() {
 
     let error = Linker::new()
         .resolver(resolver)
+        .run()
         .load_scan_first(&mut context, "alias")
         .unwrap_err();
 
@@ -644,9 +647,11 @@ fn repeated_loads_acquire_the_root() {
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
 
     let first = linker
+        .run()
         .load(&mut context, "root")
         .expect("first load should succeed");
     let second = linker
+        .run()
         .load(&mut context, "root")
         .expect("existing root should be acquired");
 

@@ -65,7 +65,7 @@
 //!
 //! ## Loading Dependencies With [`Linker`]
 //!
-//! Use [`Linker::load`] when you want a reusable [`LinkContext`]
+//! Use [`Linker::run`] and [`LinkerRun::load`] when you want a reusable [`LinkContext`]
 //! and resolver-driven `DT_NEEDED` dependency loading. The built-in
 //! [`linker::SearchPathResolver`] covers the common filesystem search-path case;
 //! implement [`linker::KeyResolver`] when dependencies come from memory,
@@ -88,6 +88,7 @@
 //!
 //!     let loaded = Linker::new()
 //!         .resolver(resolver)
+//!         .run()
 //!         .load(&mut context, root)?;
 //!
 //!     let run = unsafe {
@@ -152,7 +153,7 @@
 //! ## More
 //!
 //! - The [`examples`](https://github.com/weizhiao/Relink/tree/main/examples) directory
-//!   covers loading from memory, `Linker::load`, scan-first linking, observer hooks,
+//!   covers loading from memory, `LinkerRun::load`, scan-first linking, observer hooks,
 //!   and object loading.
 //! - The crate currently targets `x86_64`, `x86`, `aarch64`, `arm`, `riscv64`, `riscv32`,
 //!   and `loongarch64`.

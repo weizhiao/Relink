@@ -9,6 +9,7 @@ fn main() -> Result<()> {
 
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())
+        .run()
         .load(&mut context, PathBuf::from(fixtures.leaf_str()))?;
 
     let module = context.module(loaded.root())?;
