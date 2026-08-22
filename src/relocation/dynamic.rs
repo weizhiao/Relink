@@ -4,12 +4,12 @@ use crate::{
     arch::NativeArch,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     hint::{likely, unlikely},
-    image::{LoadedCore, Module, RawDynamic},
+    image::{GlobalScope, LoadedCore, Module, RawDynamic},
     lazy::{LazyBinder, prepare_plt, relocate_jump_slot},
     logging,
     memory::{ImageMemory, ImageMemoryExt, MappedView, RegionAccess, VmOffset},
     observer::{DynamicRelocatedEvent, LifecycleRunner, RelocationObserver},
-    relocation::{RelocHelper, RelocateArgs, RelocationArch, SymbolResolver},
+    relocation::{BindingDeps, RelocHelper, RelocateArgs, RelocationArch, SymbolResolver},
     runtime::CodeContext,
     tls::{TlsRelocOutcome, TlsResolver},
 };
@@ -44,6 +44,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
         let RelocateArgs {
             scope,
+            global,
             symbols,
             binding,
             run_init,
@@ -51,7 +52,12 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             observer,
             ..
         } = args;
-        scope.check_domain(self.core_ref().domain_id())?;
+        let domain = self.core_ref().domain_id();
+        scope.check_domain(domain)?;
+        if let Some(global) = &global {
+            domain.ensure(global.domain_id())?;
+        }
+        let global_snapshot = global.as_ref().map(GlobalScope::modules);
         let relocation = self.relocation();
         if relocation.is_empty() {
             logging::debug!("No relocations needed for {}", self.name());
@@ -62,14 +68,18 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             logging::debug!("Using lazy binding for {}", self.name());
         }
         prepare_plt(lazy_binder, lazy, &self)?;
+        let source = self.core_ref().module_handle();
         let resolver = SymbolResolver::new(
-            self.core_ref(),
+            &source,
             scope,
+            global_snapshot,
             symbols.as_deref(),
             self.core_ref().symbolic(),
         );
         let mut helper = RelocHelper::new(
+            self.core_ref(),
             resolver,
+            BindingDeps::new(),
             self.symtab().view(),
             self.core_ref().segments(),
             observer,
@@ -81,7 +91,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 .relocate_pltrel(lazy, &mut helper)?;
         }
 
-        let (scope, bindings) = helper.into_parts();
+        let (scope, global_snapshot, bindings) = helper.into_parts();
 
         let (init, fini) = self.resolve_lifecycle()?;
         let initializer = LifecycleRunner::new(init);
@@ -110,7 +120,11 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
         logging::info!("Relocation completed for {}", self.name());
 
-        Ok(unsafe { LoadedCore::from_relocated(self.into_core(), scope, symbols, bindings) })
+        let core = self.into_core();
+        bindings.install(core.state());
+        let loaded = unsafe { LoadedCore::from_relocated(core, scope, global.as_ref(), symbols) };
+        drop(global_snapshot);
+        Ok(loaded)
     }
 }
 
@@ -144,7 +158,6 @@ where
 {
     debug_assert!(rel.iter().all(|rel| rel.r_type() == Arch::RELATIVE));
     for entry in rel {
-        debug_assert!(entry.r_type() == Arch::RELATIVE);
         Arch::apply_relative(entry, memory)?;
     }
     Ok(())
@@ -233,9 +246,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 }
 
                 let symbol = helper.symbol_entry(rel);
-                let symdef = helper.find_symdef(&symbol);
-                let addr = helper.resolve_symbol_addr(&symbol, symdef.as_ref())?;
-                if let Some(addr) = helper.bind_symbol_addr(rel, &symbol, addr)? {
+                if let Some(addr) = helper.bind_symbol_addr(rel, symbol)? {
                     let word = <Arch::Layout as ElfLayout>::Word::from_usize(addr.get());
                     unsafe { helper.memory().write_value(place, word)? };
                     continue;
@@ -326,9 +337,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             if r_type == Arch::GOT || r_type == Arch::SYMBOLIC {
                 // Handle GOT and symbolic relocations
                 let symbol = helper.symbol_entry(rel);
-                let symdef = helper.find_symdef(&symbol);
-                let addr = helper.resolve_symbol_addr(&symbol, symdef.as_ref())?;
-                if let Some(addr) = helper.bind_symbol_addr(rel, &symbol, addr)? {
+                if let Some(addr) = helper.bind_symbol_addr(rel, symbol)? {
                     let r_addend = rel.read_addend(helper.memory(), place)?;
                     let value = addr.wrapping_add_signed(r_addend);
                     let word = <Arch::Layout as ElfLayout>::Word::from_usize(value.get());
@@ -341,11 +350,15 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 let symbol = helper.symbol_entry(rel);
                 let len = symbol.symbol().st_size();
                 if let Some(symdef) = helper.find_copy_symdef(&symbol)
-                    && let Some((_, source)) = symdef.parts()
+                    && let Some((symbol, source)) = symdef.definition()
                 {
+                    let provider = symdef.provider_id();
                     let mut src = vec![0; len];
-                    source.memory().read_bytes(symdef.addr(), &mut src)?;
+                    source
+                        .memory()
+                        .read_bytes(source.resolve_symbol(symbol)?, &mut src)?;
                     helper.memory().write_bytes(base + rel.r_offset(), &src)?;
+                    helper.record_binding(provider);
                     continue;
                 }
                 failure_reason = RelocReason::UnknownSymbol;

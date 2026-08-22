@@ -2,7 +2,7 @@ use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
     entity::{PrimaryMap, SecondaryMap, entity_ref},
-    image::{LookupScope, ModuleHandle},
+    image::{LookupScope, ModuleHandle, ModuleInstanceId},
     input::{ModuleSourceId, Path, PathBuf},
     relocation::RelocationArch,
     runtime::DomainId,
@@ -492,6 +492,15 @@ where
     }
 
     #[inline]
+    pub(in crate::linker) fn module_for_binding(
+        &self,
+        binding: ModuleInstanceId,
+    ) -> Option<ModuleSlot> {
+        let slot = self.module_for_source(binding.source_id())?;
+        (binding == self.module(slot)?.handle().state().instance_id()).then_some(slot)
+    }
+
+    #[inline]
     pub(in crate::linker) fn entry_key(&self, slot: ModuleSlot) -> KeySlot {
         self.entries[slot].entry_key
     }
@@ -526,13 +535,6 @@ where
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.lifecycle.is_empty()
-    }
-
-    #[inline]
-    pub(crate) fn load_order(&self) -> impl DoubleEndedIterator<Item = ModuleSlot> + '_ {
-        self.entries
-            .iter()
-            .filter_map(|(slot, cell)| cell.entry.as_ref().map(|_| slot))
     }
 
     #[inline]

@@ -72,7 +72,7 @@ impl RelocationArch for XtensaArch {
 
     #[inline]
     fn relocate_custom<D, R, Tls, H>(
-        event: &RelocationEvent<'_, D, Self, R, Tls, H>,
+        event: &mut RelocationEvent<'_, D, Self, R, Tls, H>,
     ) -> Result<HandleResult>
     where
         D: Send + Sync + 'static,

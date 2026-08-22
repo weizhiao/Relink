@@ -1,11 +1,11 @@
-use super::CoreInner;
+use super::{CoreInner, defs::LazyLookup};
 use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, SymbolTable},
     image::{
-        CoreRuntime, DynamicInfo, LookupScope, Module, ModuleSearch, ModuleState, PltRelocInfo,
-        SymbolExports,
+        CoreRuntime, DynamicInfo, GlobalScope, LookupScope, Module, ModuleSearch, ModuleState,
+        PltRelocInfo, SymbolExports,
     },
     input::{ModuleSourceId, Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
@@ -193,20 +193,28 @@ impl<
             .is_some_and(|info| info.symbolic)
     }
 
-    /// Installs the retained relocation lookup scope for this core.
+    /// Installs the weak state needed by lazy symbol lookup.
     #[inline]
-    pub(crate) fn set_scope(&self, scope: &LookupScope<Arch, Tls>) {
+    pub(crate) fn set_lazy_lookup(
+        &self,
+        scope: &LookupScope<Arch, Tls>,
+        global: Option<&GlobalScope<Arch, Tls>>,
+        symbols: Option<&Arc<SymbolRegistry<Arch, Tls>>>,
+    ) {
+        if self.inner.runtime.lazy_values().is_none() {
+            return;
+        }
+        let source = self.module_handle();
         assert!(
-            self.inner.scope.set(scope.downgrade()).is_ok(),
-            "relocation scope must be installed only once",
-        );
-    }
-
-    #[inline]
-    pub(crate) fn set_symbol_registry(&self, symbols: &Arc<SymbolRegistry<Arch, Tls>>) {
-        assert!(
-            self.inner.symbols.set(Arc::downgrade(symbols)).is_ok(),
-            "symbol registry must be installed only once",
+            self.inner
+                .lazy_lookup
+                .set(LazyLookup {
+                    source: source.downgrade(),
+                    scope: scope.downgrade(global),
+                    symbols: symbols.map(Arc::downgrade),
+                })
+                .is_ok(),
+            "lazy lookup state must be installed only once",
         );
     }
 
@@ -247,7 +255,14 @@ impl<
 
     #[inline]
     pub(crate) fn into_module_handle(self) -> crate::image::ModuleHandle<Arch, Tls> {
-        crate::image::ModuleHandle::new(self)
+        crate::image::ModuleHandle::from_shared(arc_unsize!(self.inner => dyn Module<Arch, Tls>))
+    }
+
+    #[inline]
+    pub(crate) fn module_handle(&self) -> crate::image::ModuleHandle<Arch, Tls> {
+        crate::image::ModuleHandle::from_shared(
+            arc_unsize!(Arc::clone(&self.inner) => dyn Module<Arch, Tls>),
+        )
     }
 }
 
@@ -295,13 +310,13 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             .map(|runpath_off| symtab.strtab().get_str(runpath_off));
         let search = ModuleSearch::from_dynamic(path, soname, runpath, rpath);
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
+        let source = ModuleSourceId::fresh();
         let inner = Arc::new(CoreInner {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
             domain: DomainId::PROCESS,
-            source_id: ModuleSourceId::fresh(),
             search,
-            state: ModuleState::initialized(),
+            state: ModuleState::initialized(source),
             lifecycle: OnceCell::new(),
             exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
@@ -310,8 +325,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 needed_libs,
                 symbolic: dynamic.symbolic,
             })),
-            scope: OnceCell::new(),
-            symbols: OnceCell::new(),
+            lazy_lookup: OnceCell::new(),
             tls,
             segments,
             user_data,
@@ -349,11 +363,6 @@ where
     #[inline]
     fn domain_id(&self) -> DomainId {
         self.inner.domain_id()
-    }
-
-    #[inline]
-    fn source_id(&self) -> ModuleSourceId {
-        self.inner.source_id()
     }
 
     #[inline]

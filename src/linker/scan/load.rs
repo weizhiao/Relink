@@ -15,6 +15,7 @@ use crate::{
         resolver::KeyResolver,
         run::{LinkerRun, PreparedLoad},
         session::ResolveSession,
+        storage::ModuleKey,
     },
     memory::{ImageMemory, RegionAccess, VmOffset},
     observer::{LinkerObserver, LoadObserver, RelocationObserver},
@@ -69,9 +70,10 @@ where
             .committed
             .ensure_domain(self.linker.loader.domain_id())?;
         let key = self.linker.resolver.root_key(&root);
-        if let Some(prepared) = PreparedLoad::visible(context, &key) {
+        if let Some(prepared) = PreparedLoad::visible(context, key) {
             return Ok(prepared);
         }
+        let key = ModuleKey::from(key);
         let mut session = ResolveSession::new();
         let tokens = context.search_paths.tokens();
 
@@ -84,17 +86,7 @@ where
                 .with_observer(&mut self.observer);
             let mut resolve_context =
                 ScanResolveContext::new(&mut context.committed, &mut session, tokens);
-            let resolved = resolve_context.resolve_root(root, None, &self.linker.resolver)?;
-            let root = resolve_context.stage(resolved, None, &mut loader)?;
-            resolve_context.bind_key(key, root);
-            if resolve_context.contains_pending(root) {
-                resolve_context.resolve_dependency_graph(
-                    root,
-                    &mut loader,
-                    &self.linker.resolver,
-                )?;
-            }
-            root
+            resolve_context.resolve_root(root, key, None, &mut loader, &self.linker.resolver)?
         };
 
         let (dynamics, mut session) = session.split_dynamics();

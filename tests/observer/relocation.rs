@@ -34,7 +34,7 @@ impl RelocationObserver for BindingRecorder {
         H,
     >(
         &mut self,
-        event: &RelocationEvent<'_, D, NativeArch, R, Tls, H>,
+        event: &mut RelocationEvent<'_, D, NativeArch, R, Tls, H>,
     ) -> elf_loader::Result<HandleResult> {
         let symbol = event
             .relocation_symbol()
@@ -44,7 +44,7 @@ impl RelocationObserver for BindingRecorder {
         assert!(event.lazy().is_none());
         assert!(SYMBOLS.contains(&symbol.name()));
         assert_eq!(event.symbol(event.rel().r_symbol()).name(), symbol.name());
-        assert!(event.find_symdef(event.rel().r_symbol()).is_some());
+        assert!(event.bind_symdef(event.rel().r_symbol()).is_some());
         self.0.lock().unwrap().pre.push(symbol.name().to_string());
         Ok(HandleResult::Unhandled)
     }
@@ -131,7 +131,7 @@ impl RelocationObserver for FallbackRecorder {
         H,
     >(
         &mut self,
-        event: &RelocationEvent<'_, D, NativeArch, R, Tls, H>,
+        event: &mut RelocationEvent<'_, D, NativeArch, R, Tls, H>,
     ) -> elf_loader::Result<HandleResult> {
         let symbol = event
             .relocation_symbol()
@@ -139,7 +139,7 @@ impl RelocationObserver for FallbackRecorder {
         assert_eq!(event.lib().name(), "unresolved.so");
         assert!(event.scope().is_empty());
         assert!(event.lazy().is_none());
-        assert!(event.find_symdef(event.rel().r_symbol()).is_none());
+        assert!(event.bind_symdef(event.rel().r_symbol()).is_none());
         self.0.lock().unwrap().pre.push(symbol.name().to_string());
         Ok(if symbol.name() == PRE_SYMBOL {
             HandleResult::Handled
@@ -155,7 +155,7 @@ impl RelocationObserver for FallbackRecorder {
         H,
     >(
         &mut self,
-        event: &RelocationEvent<'_, D, NativeArch, R, Tls, H>,
+        event: &mut RelocationEvent<'_, D, NativeArch, R, Tls, H>,
     ) -> elf_loader::Result<HandleResult> {
         let symbol = event
             .relocation_symbol()

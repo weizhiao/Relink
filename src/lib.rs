@@ -228,7 +228,7 @@ pub(crate) use error::*;
 
 pub use aligned_bytes::ByteRepr;
 pub use error::Error;
-pub use image::{Module, ModuleSearch, ModuleState, SearchPathPool};
+pub use image::{Module, ModuleInstanceId, ModuleSearch, ModuleState, SearchPathPool};
 pub use input::ModuleSourceId;
 pub use linker::{LinkContext, Linker, LinkerRun, ModuleKey};
 pub use loader::{Loader, LoaderRun};

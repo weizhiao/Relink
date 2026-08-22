@@ -1,5 +1,4 @@
 use super::*;
-use elf_loader::image::ElfCore;
 use std::sync::OnceLock;
 
 struct LoadingFixtures {
@@ -66,8 +65,8 @@ impl MultiBinaryResolver {
 impl KeyResolver for MultiBinaryResolver {
     type Root = &'static str;
 
-    fn root_key(&self, root: &Self::Root) -> ModuleKey {
-        (*root).into()
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
+        root
     }
 
     fn resolve<'cfg>(
@@ -107,26 +106,44 @@ fn dependency_resolver(root_name: &'static str, dep_name: &'static str) -> Multi
 }
 
 fn load_provider(name: &'static str) -> LoadedCore<()> {
+    load_provider_with_source(name, ModuleSourceId::fresh())
+}
+
+fn load_provider_with_source(name: &'static str, source: ModuleSourceId) -> LoadedCore<()> {
     Relocator::new()
         .run(
             Loader::new()
-                .load_dylib(ElfBinary::new(name, fixtures().provider))
+                .load_dylib(ElfBinary::new(name, fixtures().provider).with_source_id(source))
                 .expect("failed to load provider"),
         )
         .relocate()
         .expect("failed to relocate provider")
 }
 
-struct Interpose(ModuleHandle);
+struct CustomBinding;
 
-impl LoadObserver for Interpose {}
-impl RelocationObserver for Interpose {}
-impl LinkerObserver for Interpose {
-    fn on_relocation(&mut self, event: &mut LinkerRelocationEvent<()>) -> elf_loader::Result<()> {
-        let mut interposer = ModuleScope::new(DomainId::PROCESS);
-        interposer.push(self.0.clone());
-        event.scope_mut().prepend_group(interposer);
-        Ok(())
+impl LoadObserver for CustomBinding {}
+impl LinkerObserver for CustomBinding {}
+impl RelocationObserver for CustomBinding {
+    fn on_relocation_pre<
+        D: Send + Sync + 'static,
+        R: RegionAccess,
+        Tls: TlsResolver<NativeArch>,
+        H,
+    >(
+        &mut self,
+        event: &mut RelocationEvent<'_, D, NativeArch, R, Tls, H>,
+    ) -> elf_loader::Result<HandleResult> {
+        let Some(symbol) = event.relocation_symbol() else {
+            return Ok(HandleResult::Unhandled);
+        };
+        if symbol.name() != "provider_value" {
+            return Ok(HandleResult::Unhandled);
+        }
+
+        let r_sym = event.rel().r_symbol();
+        assert!(event.bind_symdef(r_sym).is_some());
+        Ok(HandleResult::Handled)
     }
 }
 
@@ -155,15 +172,6 @@ fn commits_resolver_modules() {
         .run()
         .load(&mut context, "root")
         .expect("load should accept a resolver-provided module");
-
-    assert!(
-        context
-            .module(root.root())
-            .unwrap()
-            .downcast_ref::<ElfCore>()
-            .is_some(),
-        "link contexts must retain the public ELF core view"
-    );
 
     assert_eq!(
         context
@@ -352,65 +360,44 @@ fn publish_rejects_reloaded_dependency() {
 }
 
 #[test]
-fn publish_rejects_released_binding() {
-    let interposer = load_provider("interposer.so");
-    let observer = Interpose(ModuleHandle::from(&interposer));
+fn publish_rejects_reloaded_global_provider() {
+    let source = ModuleSourceId::fresh();
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
-    let interposer = context
-        .insert("interposer", interposer, Box::new([]))
-        .expect("failed to insert interposer");
     let provider = context
-        .insert(DEP_KEY, load_provider("provider.so"), Box::new([]))
-        .expect("failed to insert provider");
-    let linker = Linker::new().resolver(ExistingDependencyResolver {
-        root_data: fixtures().dependent,
+        .insert(
+            DEP_KEY,
+            load_provider_with_source("old-global.so", source),
+            Box::new([]),
+        )
+        .unwrap();
+    context.promote_global(provider.id()).unwrap();
+    let linker = Linker::new().resolver(SingleBinaryResolver {
+        key: "global",
+        name: "global.so",
+        data: fixtures().global,
     });
-    let mut run = linker.run().with_observer(observer);
-    let prepared = run.prepare_load(&mut context, "root").unwrap();
-    let relocated = run.relocate(prepared).unwrap();
+    let mut run = linker.run();
+    let prepared = run.prepare_load(&mut context, "global").unwrap();
+    let relocated = run.with_observer(CustomBinding).relocate(prepared).unwrap();
 
-    drop(context.release(interposer).unwrap());
+    drop(context.release(provider).unwrap());
+    let replacement = context
+        .insert(
+            DEP_KEY,
+            load_provider_with_source("new-global.so", source),
+            Box::new([]),
+        )
+        .unwrap();
+    context.promote_global(replacement.id()).unwrap();
+
     let error = relocated
         .publish(&mut context)
-        .expect_err("released binding must invalidate the transaction");
+        .expect_err("a new instance of the same source cannot satisfy an existing binding");
     let Error::Linker(LinkerError::Context { reason }) = error else {
         panic!("unexpected publication error: {error}");
     };
     assert!(matches!(*reason, LinkContextError::ModuleChanged { .. }));
-    drop(context.release(provider).unwrap());
-}
-
-#[test]
-fn binding_retains_provider() {
-    let interposer = load_provider("interposer.so");
-    let observer = Interpose(ModuleHandle::from(&interposer));
-    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
-    let interposer = context
-        .insert("interposer", interposer, Box::new([]))
-        .expect("failed to insert interposer");
-    let provider = context
-        .insert(DEP_KEY, load_provider("provider.so"), Box::new([]))
-        .expect("failed to insert provider");
-    let linker = Linker::new().resolver(ExistingDependencyResolver {
-        root_data: fixtures().dependent,
-    });
-    let loaded = linker
-        .run()
-        .with_observer(observer)
-        .load(&mut context, "root")
-        .expect("failed to load root");
-
-    assert!(context.release(interposer).unwrap().is_empty());
-    assert!(context.release(provider).unwrap().is_empty());
-    let unloaded = loaded.release(&mut context).unwrap();
-    assert_eq!(
-        unloaded
-            .modules()
-            .iter()
-            .map(|entry| entry.module().name())
-            .collect::<Vec<_>>(),
-        ["existing_dep_root.so", "provider.so", "interposer.so"]
-    );
+    drop(context.release(replacement).unwrap());
 }
 
 #[test]
@@ -445,6 +432,49 @@ fn global_scope_binds_and_retains_provider() {
             .collect::<Vec<_>>(),
         ["global.so", "global-provider.so"]
     );
+}
+
+#[test]
+fn unused_global_is_not_retained() {
+    let global = load_provider("unused-global.so");
+    let weak = global.downgrade();
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let global = context
+        .insert("unused-global", global, Box::new([]))
+        .unwrap();
+    context.promote_global(global.id()).unwrap();
+    let linker = Linker::new().resolver(SingleBinaryResolver {
+        key: "root",
+        name: "root.so",
+        data: fixtures().provider,
+    });
+    let loaded = linker.load(&mut context, "root").unwrap();
+
+    drop(context.release(global).unwrap());
+    assert!(weak.upgrade().is_none());
+    drop(loaded.release(&mut context).unwrap());
+}
+
+#[test]
+fn observer_binding_retains_provider() {
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let provider = context
+        .insert(DEP_KEY, load_provider("bound-provider.so"), Box::new([]))
+        .unwrap();
+    context.promote_global(provider.id()).unwrap();
+    let linker = Linker::new().resolver(SingleBinaryResolver {
+        key: "bound",
+        name: "bound.so",
+        data: fixtures().global,
+    });
+    let loaded = linker
+        .run()
+        .with_observer(CustomBinding)
+        .load(&mut context, "bound")
+        .unwrap();
+
+    assert!(context.release(provider).unwrap().is_empty());
+    assert_eq!(loaded.release(&mut context).unwrap().modules().len(), 2);
 }
 
 #[test]

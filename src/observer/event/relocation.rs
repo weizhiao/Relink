@@ -6,7 +6,7 @@ use crate::{
     input::Path,
     lazy::LazyValues,
     memory::{HostRegion, RegionAccess, VmAddr},
-    relocation::{RelocationArch, SymDef, SymbolResolver},
+    relocation::{BindingDeps, RelocationArch, SymDef, SymbolResolver},
     tls::TlsResolver,
 };
 
@@ -22,8 +22,10 @@ pub struct RelocationEvent<
     Tls: TlsResolver<Arch> = (),
     H = HashTable<<Arch as RelocationArch>::Layout>,
 > {
+    core: &'a ElfCore<D, Arch, R, Tls>,
     rel: &'a ElfRelType<Arch>,
-    resolver: &'a SymbolResolver<'a, ElfCore<D, Arch, R, Tls>, Arch, Tls>,
+    resolver: &'a SymbolResolver<'a, Arch, Tls>,
+    bindings: &'a mut BindingDeps,
     symbols: SymbolTableView<'a, Arch::Layout, H>,
 }
 
@@ -33,13 +35,17 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
     /// Construct a new `RelocationEvent`.
     #[inline]
     pub(crate) const fn new(
+        core: &'a ElfCore<D, Arch, R, Tls>,
         rel: &'a ElfRelType<Arch>,
-        resolver: &'a SymbolResolver<'a, ElfCore<D, Arch, R, Tls>, Arch, Tls>,
+        resolver: &'a SymbolResolver<'a, Arch, Tls>,
+        bindings: &'a mut BindingDeps,
         symbols: SymbolTableView<'a, Arch::Layout, H>,
     ) -> Self {
         Self {
+            core,
             rel,
             resolver,
+            bindings,
             symbols,
         }
     }
@@ -53,10 +59,13 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
     /// Access the core component where the relocation appears.
     #[inline]
     pub fn lib(&self) -> &ElfCore<D, Arch, R, Tls> {
-        self.resolver.source()
+        self.core
     }
 
-    /// Access the current resolution scope.
+    /// Returns the retained lookup scope.
+    ///
+    /// [`bind_symdef`](Self::bind_symdef) also searches the linker-global scope
+    /// active for this relocation.
     #[inline]
     pub fn scope(&self) -> &LookupScope<Arch, Tls> {
         self.resolver.scope()
@@ -81,10 +90,14 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
         (r_sym != 0).then(|| self.symbol(r_sym))
     }
 
-    /// Find symbol definition in the current scope.
+    /// Finds a symbol definition and records its provider as a runtime dependency.
     #[inline]
-    pub fn find_symdef(&self, r_sym: usize) -> Option<SymDef<'a, Arch, Tls>> {
-        self.resolver.find(&self.symbol(r_sym))
+    pub fn bind_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, Arch, Tls>> {
+        let definition = self.resolver.find(&self.symbol(r_sym));
+        if let Some(provider) = definition.as_ref().and_then(SymDef::provider_id) {
+            self.bindings.record(self.core.state(), provider);
+        }
+        definition
     }
 }
 

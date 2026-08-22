@@ -80,7 +80,7 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     #[inline]
     fn on_relocation_pre<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &mut self,
-        _ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
+        _ctx: &mut RelocationEvent<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
         Ok(HandleResult::Unhandled)
     }
@@ -89,7 +89,7 @@ pub trait RelocationObserver<Arch: RelocationArch = NativeArch> {
     #[inline]
     fn on_relocation_post<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &mut self,
-        _ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
+        _ctx: &mut RelocationEvent<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
         Ok(HandleResult::Unhandled)
     }
@@ -211,7 +211,7 @@ where
     #[inline]
     fn on_relocation_pre<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &mut self,
-        ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
+        ctx: &mut RelocationEvent<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
         (**self).on_relocation_pre(ctx)
     }
@@ -219,7 +219,7 @@ where
     #[inline]
     fn on_relocation_post<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &mut self,
-        ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
+        ctx: &mut RelocationEvent<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
         (**self).on_relocation_post(ctx)
     }
@@ -321,7 +321,7 @@ where
     #[inline]
     fn on_relocation_pre<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &mut self,
-        ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
+        ctx: &mut RelocationEvent<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
         (**self).on_relocation_pre(ctx)
     }
@@ -329,7 +329,7 @@ where
     #[inline]
     fn on_relocation_post<D: Send + Sync + 'static, R: RegionAccess, Tls: TlsResolver<Arch>, H>(
         &mut self,
-        ctx: &RelocationEvent<'_, D, Arch, R, Tls, H>,
+        ctx: &mut RelocationEvent<'_, D, Arch, R, Tls, H>,
     ) -> Result<HandleResult> {
         (**self).on_relocation_post(ctx)
     }

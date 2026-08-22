@@ -230,108 +230,6 @@ impl SearchPathResolver {
         ))
     }
 
-    fn resolve_candidate<Arch: RelocationArch>(
-        &self,
-        request: CandidateRequest<'_>,
-    ) -> Result<Option<(ModuleKey, ElfFile)>> {
-        let mut incompatible = None;
-        let mut try_candidate = |candidate: &Path,
-                                 continue_on_incompatible: bool|
-         -> Result<Option<(ModuleKey, ElfFile)>> {
-            let key = ModuleKey::from(candidate);
-            let file = match Self::open_elf::<Arch>(candidate) {
-                Ok(Some(file)) => file,
-                Ok(None) => return Ok(None),
-                Err(err) if continue_on_incompatible && Self::is_incompatible_elf(&err) => {
-                    incompatible.get_or_insert(err);
-                    return Ok(None);
-                }
-                Err(err) => return Err(err),
-            };
-            Ok(Some((key, file)))
-        };
-
-        let requested_value = request.requested().as_str();
-        let expanded = if requested_value.contains('$') {
-            let Some(expanded) = request
-                .tokens()
-                .expand(requested_value, Some(request.origin()))
-            else {
-                return Ok(None);
-            };
-            Some(expanded)
-        } else {
-            None
-        };
-        let requested = expanded
-            .as_ref()
-            .map_or_else(|| request.requested(), PathBuf::as_path);
-        if requested.has_dir_separator() {
-            return try_candidate(requested, false);
-        }
-
-        let mut dirs = Vec::new();
-        let mut candidate = PathBuf::default();
-        for entry in &self.entries {
-            match entry {
-                SearchPathEntry::Rpath => {
-                    if request.owner().runpath().is_some() {
-                        continue;
-                    }
-                    let mut found = None;
-                    request.visit_loaders(|owner| {
-                        let Some(dirs) = owner.rpath() else {
-                            return Ok(true);
-                        };
-                        for dir in dirs {
-                            candidate.set_joined(dir, requested.as_str());
-                            if let Some(value) = try_candidate(candidate.as_path(), true)? {
-                                found = Some(value);
-                                return Ok(false);
-                            }
-                        }
-                        Ok(true)
-                    })?;
-                    if found.is_some() {
-                        return Ok(found);
-                    }
-                }
-                SearchPathEntry::Runpath => {
-                    let Some(dirs) = request.owner().runpath() else {
-                        continue;
-                    };
-                    for dir in dirs {
-                        candidate.set_joined(dir, requested.as_str());
-                        if let Some(found) = try_candidate(candidate.as_path(), true)? {
-                            return Ok(Some(found));
-                        }
-                    }
-                }
-                SearchPathEntry::Dir(dir) => {
-                    candidate.set_joined(Path::new(dir), requested.as_str());
-                    if let Some(found) = try_candidate(candidate.as_path(), true)? {
-                        return Ok(Some(found));
-                    }
-                }
-                SearchPathEntry::Dynamic(resolver) => {
-                    dirs.clear();
-                    resolver(request, &mut dirs)?;
-                    for dir in &dirs {
-                        candidate.set_joined(dir, requested.as_str());
-                        if let Some(found) = try_candidate(candidate.as_path(), true)? {
-                            return Ok(Some(found));
-                        }
-                    }
-                }
-            }
-        }
-
-        match incompatible {
-            Some(err) => Err(err),
-            None => Ok(None),
-        }
-    }
-
     /// Opens and validates a target-compatible ELF candidate.
     fn open_elf<Arch: RelocationArch>(path: &Path) -> Result<Option<ElfFile>> {
         let file = match ElfFile::from_path(path) {
@@ -366,8 +264,8 @@ where
     type Root = PathBuf;
 
     #[inline]
-    fn root_key(&self, root: &Self::Root) -> ModuleKey {
-        ModuleKey::from(root.as_path())
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
+        root.as_str()
     }
 
     fn resolve<'cfg>(
@@ -380,8 +278,100 @@ where
         };
         let loaders = |visitor: &mut LoaderVisitor<'_>| req.visit_loaders(visitor);
         let request = CandidateRequest::new(requested, req.search(), req.tokens(), &loaders);
-        match self.resolve_candidate::<Arch>(request)? {
-            Some((key, file)) => Ok(ResolvedKey::load(key, file)),
+
+        let mut incompatible = None;
+        let mut try_candidate = |candidate: &Path,
+                                 continue_on_incompatible: bool|
+         -> Result<Option<ResolvedKey<'cfg, Arch, Tls>>> {
+            let file = match Self::open_elf::<Arch>(candidate) {
+                Ok(Some(file)) => file,
+                Ok(None) => return Ok(None),
+                Err(err) if continue_on_incompatible && Self::is_incompatible_elf(&err) => {
+                    incompatible.get_or_insert(err);
+                    return Ok(None);
+                }
+                Err(err) => return Err(err),
+            };
+            Ok(Some(ResolvedKey::load(ModuleKey::from(candidate), file)))
+        };
+
+        let requested_value = request.requested().as_str();
+        let expanded = if requested_value.contains('$') {
+            let Some(expanded) = request
+                .tokens()
+                .expand(requested_value, Some(request.origin()))
+            else {
+                return Err(req.unresolved());
+            };
+            Some(expanded)
+        } else {
+            None
+        };
+        let requested = expanded
+            .as_ref()
+            .map_or_else(|| request.requested(), PathBuf::as_path);
+        if requested.has_dir_separator() {
+            return try_candidate(requested, false)?.ok_or_else(|| req.unresolved());
+        }
+
+        let mut dirs = Vec::new();
+        let mut candidate = PathBuf::default();
+        for entry in &self.entries {
+            match entry {
+                SearchPathEntry::Rpath => {
+                    if request.owner().runpath().is_some() {
+                        continue;
+                    }
+                    let mut found = None;
+                    request.visit_loaders(|owner| {
+                        let Some(dirs) = owner.rpath() else {
+                            return Ok(true);
+                        };
+                        for dir in dirs {
+                            candidate.set_joined(dir, requested.as_str());
+                            if let Some(value) = try_candidate(candidate.as_path(), true)? {
+                                found = Some(value);
+                                return Ok(false);
+                            }
+                        }
+                        Ok(true)
+                    })?;
+                    if let Some(found) = found {
+                        return Ok(found);
+                    }
+                }
+                SearchPathEntry::Runpath => {
+                    let Some(dirs) = request.owner().runpath() else {
+                        continue;
+                    };
+                    for dir in dirs {
+                        candidate.set_joined(dir, requested.as_str());
+                        if let Some(found) = try_candidate(candidate.as_path(), true)? {
+                            return Ok(found);
+                        }
+                    }
+                }
+                SearchPathEntry::Dir(dir) => {
+                    candidate.set_joined(Path::new(dir), requested.as_str());
+                    if let Some(found) = try_candidate(candidate.as_path(), true)? {
+                        return Ok(found);
+                    }
+                }
+                SearchPathEntry::Dynamic(resolver) => {
+                    dirs.clear();
+                    resolver(request, &mut dirs)?;
+                    for dir in &dirs {
+                        candidate.set_joined(dir, requested.as_str());
+                        if let Some(found) = try_candidate(candidate.as_path(), true)? {
+                            return Ok(found);
+                        }
+                    }
+                }
+            }
+        }
+
+        match incompatible {
+            Some(err) => Err(err),
             None => Err(req.unresolved()),
         }
     }
@@ -436,10 +426,16 @@ mod tests {
         resolver: &SearchPathResolver,
         request: CandidateRequest<'_>,
     ) -> Option<PathBuf> {
-        resolver
-            .resolve_candidate::<NativeArch>(request)
-            .unwrap()
-            .map(|(key, _)| PathBuf::from(key.as_str()))
+        let req = ResolveRequest::dependency(
+            request.requested().as_str(),
+            request.owner(),
+            request.tokens(),
+            request.loaders,
+        );
+        match <SearchPathResolver as KeyResolver<NativeArch>>::resolve(resolver, req) {
+            Ok(ResolvedKey::Load { key, .. }) => Some(PathBuf::from(key.as_str())),
+            Ok(_) | Err(_) => None,
+        }
     }
 
     #[test]

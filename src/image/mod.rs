@@ -27,7 +27,7 @@ pub use elf::{LoadedElf, LoadedExec, RawDylib, RawDynamic, RawElf, RawExec, Stat
 #[cfg(feature = "object")]
 pub use elf::{LoadedObject, RawObject};
 pub(crate) use module::{GlobalScope, WeakLookupScope};
-pub use module::{LookupScope, ModuleHandle, ModuleScope, ModuleState};
+pub use module::{LookupScope, ModuleHandle, ModuleInstanceId, ModuleScope, ModuleState};
 pub(crate) use scanned::ScannedDynamicLoadParts;
 pub use scanned::{ModuleCapability, ScannedDynamic, ScannedElf, ScannedExec, ScannedSection};
 pub(crate) use search::DEFAULT_MODULE_SEARCH;

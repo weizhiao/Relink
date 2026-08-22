@@ -4,12 +4,12 @@ use crate::{
     arch::{ArchKind, NativeArch},
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol},
     image::{
-        LookupScope, Module, ModuleHandle, ModuleSearch, ModuleState, SymbolExports, SymbolLookup,
-        module::lookup_symbol,
+        GlobalScope, LookupScope, Module, ModuleHandle, ModuleSearch, ModuleState, SymbolExports,
+        SymbolLookup, module::lookup_symbol,
     },
-    input::{ModuleSourceId, Path, PathBuf},
+    input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
-    relocation::{BindingDeps, RelocationArch, SymbolRegistry},
+    relocation::{RelocationArch, SymbolRegistry},
     runtime::DomainId,
     segment::ElfSegments,
     sync::Arc,
@@ -123,7 +123,7 @@ impl<
         }
     }
 
-    /// Returns the retained user-provided relocation lookup scope.
+    /// Returns the relocation lookup scope retained by this module.
     #[inline]
     pub const fn scope(&self) -> &LookupScope<Arch, Tls> {
         &self.scope
@@ -323,28 +323,18 @@ impl<
         core: ElfCore<D, Arch, R, Tls>,
         scope: LookupScope<Arch, Tls>,
     ) -> Self {
-        core.set_scope(&scope);
-        Self {
-            core,
-            scope: scope.into_local(),
-        }
+        core.set_lazy_lookup(&scope, None, None);
+        Self { core, scope }
     }
 
     pub(crate) unsafe fn from_relocated(
         core: ElfCore<D, Arch, R, Tls>,
         scope: LookupScope<Arch, Tls>,
+        global: Option<&GlobalScope<Arch, Tls>>,
         symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
-        bindings: BindingDeps<Arch, Tls>,
     ) -> Self {
-        core.set_scope(&scope);
-        bindings.install(core.state());
-        if let Some(symbols) = &symbols {
-            core.set_symbol_registry(symbols);
-        }
-        Self {
-            core,
-            scope: scope.into_local(),
-        }
+        core.set_lazy_lookup(&scope, global, symbols.as_ref());
+        Self { core, scope }
     }
 
     pub(crate) fn into_context_parts(self) -> (ModuleHandle<Arch, Tls>, LookupScope<Arch, Tls>) {
@@ -520,11 +510,6 @@ where
     #[inline]
     fn domain_id(&self) -> DomainId {
         self.core.domain_id()
-    }
-
-    #[inline]
-    fn source_id(&self) -> ModuleSourceId {
-        self.core.source_id()
     }
 
     #[inline]

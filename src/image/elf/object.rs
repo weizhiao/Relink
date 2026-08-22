@@ -5,7 +5,8 @@
 //! contain code and data that need to be relocated before they can be executed.
 
 use crate::object::{
-    ObjectBuilder, ObjectExports, ObjectSections, ObjectSymbolTable, PltGotSection, SectionSegments,
+    ObjectBuilder, ObjectExportsCell, ObjectSections, ObjectSymbolTable, PltGotSection,
+    SectionSegments,
 };
 use crate::segment::ElfSegments;
 use crate::{
@@ -42,6 +43,9 @@ pub struct RawObject<
 
     /// Relocation-only object symbol table.
     pub(crate) symtab: ObjectSymbolTable<Arch::Layout>,
+
+    /// Runtime exports installed after object symbols have been simplified.
+    pub(crate) exports: Arc<ObjectExportsCell<Arch::Layout>>,
 
     /// Rebased section headers paired with their section-name string table.
     pub(crate) sections: ObjectSections<Arch::Layout>,
@@ -81,22 +85,18 @@ where
     pub(crate) fn build_object(mut self) -> RawObject<D, Arch, R, Tls> {
         let (segments, init_segments) = self.segments.into_parts();
         let pltgot = self.section_segments.take_pltgot();
+        let exports = Arc::new(ObjectExportsCell::new());
         let inner = CoreInner {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(None)),
             executor: self.executor,
             domain: self.domain,
-            source_id: self.source_id,
-            state: ModuleState::new(),
+            state: ModuleState::new(self.source_id),
             lifecycle: OnceCell::new(),
             search: ModuleSearch::new(self.path),
-            exports: arc_unsize!(
-                Arc::new(ObjectExports::<Arch::Layout>::empty())
-                    => dyn SymbolExports<Arch::Layout>
-            ),
+            exports: arc_unsize!(Arc::clone(&exports) => dyn SymbolExports<Arch::Layout>),
             user_data: self.user_data,
             dynamic_info: None,
-            scope: OnceCell::new(),
-            symbols: OnceCell::new(),
+            lazy_lookup: OnceCell::new(),
             tls: CoreTlsState::without_module(self.tls_resolver),
             segments,
         };
@@ -106,6 +106,7 @@ where
         RawObject {
             core: ElfCore { inner },
             symtab: self.symtab,
+            exports,
             sections: self.sections,
             pltgot,
             section_segments: self.section_segments,

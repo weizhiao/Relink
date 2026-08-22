@@ -23,8 +23,8 @@ mod traits;
 pub(crate) use defs::{RelocValue, RelocationValueFormula, RelocationValueKind};
 pub(crate) use dynamic::DynamicRelocation;
 pub use dynamic::{relocate_relative, relocate_relr};
-pub(crate) use helper::RelocHelper;
-pub(crate) use symbol::{BindingDeps, SymDef, SymbolRegistry, SymbolResolver};
+pub(crate) use helper::{BindingDeps, RelocHelper};
+pub(crate) use symbol::{SymDef, SymbolRegistry, SymbolResolver};
 pub use traits::{ObjectArch, RelocationArch};
 pub(crate) use traits::{Relocatable, RelocateArgs, RelocationValueInput, RelocationValueProvider};
 

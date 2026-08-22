@@ -7,18 +7,16 @@ use elf_loader::{
     Error, LinkContext, Linker, Loader, Module, Relocator,
     arch::NativeArch,
     error::{LinkContextError, LinkResolverError, LinkerError},
-    image::{
-        LoadedCore, ModuleCapability, ModuleHandle, ModuleScope, SyntheticModule, SyntheticSymbol,
-    },
-    input::ElfBinary,
+    image::{LoadedCore, ModuleCapability, SyntheticModule, SyntheticSymbol},
+    input::{ElfBinary, ModuleSourceId},
     linker::{
-        KeyResolver, ModuleKey, ResolveInput, ResolveRequest, ResolvedKey,
+        KeyResolver, ResolveInput, ResolveRequest, ResolvedKey,
         scan::{DataPass, LinkPass, LinkPassPlan, Materialization, PassScopeMode},
     },
     memory::{RegionAccess, VmAddr},
     observer::{
-        DynamicRelocatedEvent, LinkerObserver, LinkerRelocationEvent, LoadObserver,
-        RelocationObserver,
+        DynamicRelocatedEvent, HandleResult, LinkerObserver, LinkerRelocationEvent, LoadObserver,
+        RelocationEvent, RelocationObserver,
     },
     runtime::DomainId,
     tls::TlsResolver,
@@ -129,8 +127,8 @@ impl RelocationObserver for InitRecorder {
 impl KeyResolver for SingleBinaryResolver {
     type Root = &'static str;
 
-    fn root_key(&self, root: &Self::Root) -> ModuleKey {
-        (*root).into()
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
+        root
     }
 
     fn resolve<'cfg>(
@@ -153,8 +151,8 @@ impl KeyResolver for SingleBinaryResolver {
 impl KeyResolver for ExistingRootResolver {
     type Root = &'static str;
 
-    fn root_key(&self, root: &Self::Root) -> ModuleKey {
-        (*root).into()
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
+        root
     }
 
     fn resolve<'cfg>(
@@ -176,8 +174,8 @@ impl KeyResolver for ExistingRootResolver {
 impl KeyResolver for ModuleDependencyResolver {
     type Root = &'static str;
 
-    fn root_key(&self, root: &Self::Root) -> ModuleKey {
-        (*root).into()
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
+        root
     }
 
     fn resolve<'cfg>(
@@ -203,8 +201,8 @@ impl KeyResolver for ModuleDependencyResolver {
 impl KeyResolver for ExistingDependencyResolver {
     type Root = &'static str;
 
-    fn root_key(&self, root: &Self::Root) -> ModuleKey {
-        (*root).into()
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
+        root
     }
 
     fn resolve<'cfg>(
@@ -230,8 +228,8 @@ impl KeyResolver for ExistingDependencyResolver {
 impl KeyResolver for SyntheticDependencyResolver {
     type Root = &'static str;
 
-    fn root_key(&self, root: &Self::Root) -> ModuleKey {
-        (*root).into()
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
+        root
     }
 
     fn resolve<'cfg>(
@@ -261,8 +259,8 @@ impl KeyResolver for SyntheticDependencyResolver {
 impl KeyResolver for SyntheticRootResolver {
     type Root = &'static str;
 
-    fn root_key(&self, root: &Self::Root) -> ModuleKey {
-        (*root).into()
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
+        root
     }
 
     fn resolve<'cfg>(

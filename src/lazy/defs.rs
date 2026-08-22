@@ -189,7 +189,7 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
     }
 
     /// Performs Relink's default lazy binding flow and writes the jump slot.
-    pub fn resolve_default(&self, rela_idx: usize) -> Result<Option<VmAddr>>
+    pub fn resolve_default(&self, rela_idx: usize) -> Result<VmAddr>
     where
         <Arch::Layout as ElfLayout>::Word: ByteRepr,
     {
@@ -204,10 +204,12 @@ impl<Arch: RelocationArch> LazyRuntime<Arch> {
         }
 
         let symbol = reloc.symbol();
-        let resolved = self.lookup_symbol(symbol)?;
-        if let Some(addr) = resolved {
-            self.write_jump_slot(&reloc, addr)?;
-        }
+        let resolved = self
+            .lookup_symbol(symbol)?
+            .ok_or(RelocationError::LazyBinding(
+                LazyBindingError::UnknownSymbol,
+            ))?;
+        self.write_jump_slot(&reloc, resolved)?;
         Ok(resolved)
     }
 }

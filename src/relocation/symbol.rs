@@ -1,104 +1,20 @@
 use super::traits::RelocationArch;
 use crate::{
     Result,
-    elf::{ElfSymbol, ElfSymbolBind, ElfSymbolType, SymbolEntry},
+    elf::{ElfSymbol, ElfSymbolBind, SymbolEntry},
     hint::unlikely,
-    image::{
-        GlobalScope, LookupScope, Module, ModuleHandle, ModuleScope, ModuleState, SymbolLookup,
-    },
+    image::{LookupScope, Module, ModuleHandle, ModuleInstanceId, ModuleScope, SymbolLookup},
     logging,
-    memory::{VmAddr, VmOffset},
-    runtime::{CodeContext, CodeExecutor},
+    memory::VmAddr,
     sync::{Arc, Weak},
     tls::TlsResolver,
 };
-use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
-use core::{cell::RefCell, ptr};
+use alloc::{boxed::Box, collections::BTreeMap};
 use spin::Mutex;
 
 struct UniqueDef<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
     symbol: Arc<ElfSymbol<Arch::Layout>>,
     source: Weak<dyn Module<Arch, Tls>>,
-}
-
-pub(crate) struct BindingDep<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
-    module: ModuleHandle<Arch, Tls>,
-    pin: bool,
-}
-
-pub(crate) struct BindingDeps<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
-    modules: Vec<BindingDep<Arch, Tls>>,
-}
-
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Default for BindingDeps<Arch, Tls> {
-    fn default() -> Self {
-        Self {
-            modules: Vec::new(),
-        }
-    }
-}
-
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> BindingDeps<Arch, Tls> {
-    #[inline]
-    fn record(&mut self, module: &ModuleHandle<Arch, Tls>, pin: bool) {
-        if let Some(binding) = self
-            .modules
-            .iter_mut()
-            .find(|binding| binding.module.as_dyn().ptr_eq(module.as_dyn()))
-        {
-            binding.pin |= pin;
-        } else {
-            self.modules.push(BindingDep {
-                module: module.clone(),
-                pin,
-            });
-        }
-    }
-
-    #[inline]
-    fn provider(&mut self, module: &ModuleHandle<Arch, Tls>) {
-        self.record(module, false);
-    }
-
-    #[inline]
-    fn pin(&mut self, module: &ModuleHandle<Arch, Tls>) {
-        self.record(module, true);
-    }
-
-    #[inline]
-    pub(crate) fn install(&self, source: &ModuleState) {
-        for binding in &self.modules {
-            if binding.pin {
-                binding.module.state().mark_nodelete();
-            }
-            source.bind(binding.module.source_id());
-        }
-    }
-
-    #[inline]
-    fn runtime_bind(
-        &self,
-        local: &LookupScope<Arch, Tls>,
-        global: Option<&GlobalScope<Arch, Tls>>,
-        source: &ModuleState,
-    ) -> bool {
-        self.modules.iter().all(|binding| {
-            if local
-                .groups()
-                .iter()
-                .flat_map(ModuleScope::iter)
-                .any(|module| module.as_dyn().ptr_eq(binding.module.as_dyn()))
-            {
-                source.bind(binding.module.source_id());
-                if binding.pin {
-                    binding.module.state().mark_nodelete();
-                }
-                true
-            } else {
-                global.is_some_and(|scope| scope.bind(source, &binding.module, binding.pin))
-            }
-        })
-    }
 }
 
 /// GNU unique symbol state shared by one linker context.
@@ -121,51 +37,28 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolRegistry<Arch, Tls> {
         source: &ModuleHandle<Arch, Tls>,
     ) -> SymDef<'lib, Arch, Tls> {
         let mut defs = self.unique.lock();
-        if let Some((symbol, source)) = defs.get(name).and_then(|definition| {
-            definition
-                .source
-                .upgrade()
-                .map(ModuleHandle::from_shared)
-                .map(|source| (Arc::clone(&definition.symbol), source))
-        }) {
-            return SymDef::Unique { symbol, source };
-        }
-
-        let symbol = Arc::new(symbol.clone());
-        defs.insert(
-            Box::from(name),
-            UniqueDef {
-                symbol: Arc::clone(&symbol),
-                source: source.downgrade(),
-            },
-        );
-        SymDef::Unique {
-            symbol,
-            source: source.clone(),
-        }
-    }
-
-    fn register_copy(
-        &self,
-        name: &str,
-        symbol: &ElfSymbol<Arch::Layout>,
-        source: &ModuleHandle<Arch, Tls>,
-    ) {
-        let mut defs = self.unique.lock();
-        if defs
-            .get(name)
-            .is_some_and(|definition| definition.source.upgrade().is_some())
-        {
-            return;
-        }
-
-        defs.insert(
-            Box::from(name),
-            UniqueDef {
-                symbol: Arc::new(symbol.clone()),
-                source: source.downgrade(),
-            },
-        );
+        let (symbol, source) = if let Some((symbol, source)) =
+            defs.get(name).and_then(|definition| {
+                definition
+                    .source
+                    .upgrade()
+                    .map(ModuleHandle::from_shared)
+                    .map(|source| (Arc::clone(&definition.symbol), source))
+            }) {
+            (symbol, source)
+        } else {
+            let symbol = Arc::new(symbol.clone());
+            defs.insert(
+                Box::from(name),
+                UniqueDef {
+                    symbol: Arc::clone(&symbol),
+                    source: source.downgrade(),
+                },
+            );
+            (symbol, source.clone())
+        };
+        source.state().mark_nodelete();
+        SymDef::Unique { symbol, source }
     }
 }
 
@@ -195,7 +88,7 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
     }
 
     #[inline]
-    pub(crate) fn parts(&self) -> Option<(&ElfSymbol<Arch::Layout>, &dyn Module<Arch, Tls>)> {
+    pub(crate) fn definition(&self) -> Option<(&ElfSymbol<Arch::Layout>, &dyn Module<Arch, Tls>)> {
         match self {
             Self::Defined { symbol, source } => Some((symbol, *source)),
             Self::Unique { symbol, source } => Some((symbol, source.as_dyn())),
@@ -204,92 +97,53 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
     }
 
     #[inline]
+    pub(crate) fn provider_id(&self) -> Option<ModuleInstanceId> {
+        self.definition()
+            .map(|(_, source)| source.state().instance_id())
+    }
+
+    #[inline]
     pub(crate) const fn is_weak_undef(&self) -> bool {
         matches!(self, Self::WeakUndef)
     }
 
-    /// Computes the symbol address (base + st_value).
-    ///
-    /// For regular symbols, returns base + st_value. For absolute symbols,
-    /// returns st_value unchanged.
-    /// For IFUNC symbols, returns the resolver address without executing it.
-    /// For undefined weak symbols, returns null.
-    pub(crate) fn addr(&self) -> VmAddr {
-        let Some((symbol, source)) = self.parts() else {
-            return VmAddr::null();
-        };
-        Self::defined_addr(symbol, source)
-    }
-
     #[inline]
-    fn defined_addr(symbol: &ElfSymbol<Arch::Layout>, source: &dyn Module<Arch, Tls>) -> VmAddr {
-        if symbol.st_shndx().is_abs() {
-            VmAddr::new(symbol.st_value())
-        } else {
-            source.memory().base() + VmOffset::new(symbol.st_value())
-        }
-    }
-
-    #[inline]
-    pub(crate) fn resolve(&self, executor: &dyn CodeExecutor<Arch>) -> Result<VmAddr> {
-        let Some((symbol, source)) = self.parts() else {
+    pub(crate) fn resolve(&self) -> Result<VmAddr> {
+        let Some((symbol, source)) = self.definition() else {
             return Ok(VmAddr::null());
         };
-        let addr = Self::defined_addr(symbol, source);
-        if unlikely(symbol.symbol_type() == ElfSymbolType::GNU_IFUNC) {
-            Self::resolve_ifunc(executor, source, addr)
-        } else {
-            Ok(addr)
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn resolve_ifunc(
-        executor: &dyn CodeExecutor<Arch>,
-        source: &dyn Module<Arch, Tls>,
-        resolver: VmAddr,
-    ) -> Result<VmAddr> {
-        executor.resolve_ifunc(
-            CodeContext::<Arch>::new(source.name(), source.memory()),
-            resolver,
-        )
+        source.resolve_symbol(symbol)
     }
 }
 
-pub(crate) struct SymbolResolver<'lib, Source, Arch: RelocationArch, Tls: TlsResolver<Arch>> {
-    source: &'lib Source,
+pub(crate) struct SymbolResolver<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+    source: &'lib ModuleHandle<Arch, Tls>,
     scope: LookupScope<Arch, Tls>,
+    global: Option<ModuleScope<Arch, Tls>>,
     registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
     symbolic: bool,
-    bindings: RefCell<BindingDeps<Arch, Tls>>,
 }
 
-impl<'lib, Source, Arch, Tls> SymbolResolver<'lib, Source, Arch, Tls>
+impl<'lib, Arch, Tls> SymbolResolver<'lib, Arch, Tls>
 where
-    Source: Module<Arch, Tls>,
     Arch: RelocationArch,
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
     pub(crate) fn new(
-        source: &'lib Source,
+        source: &'lib ModuleHandle<Arch, Tls>,
         scope: LookupScope<Arch, Tls>,
+        global: Option<ModuleScope<Arch, Tls>>,
         registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
         symbolic: bool,
     ) -> Self {
         Self {
             source,
             scope,
+            global,
             registry,
             symbolic,
-            bindings: RefCell::new(BindingDeps::default()),
         }
-    }
-
-    #[inline]
-    pub(crate) const fn source(&self) -> &'lib Source {
-        self.source
     }
 
     #[inline]
@@ -298,29 +152,8 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (LookupScope<Arch, Tls>, BindingDeps<Arch, Tls>) {
-        (self.scope, self.bindings.into_inner())
-    }
-
-    #[inline]
-    pub(crate) fn bind_runtime(
-        &self,
-        local: &LookupScope<Arch, Tls>,
-        global: Option<&GlobalScope<Arch, Tls>>,
-        source: &ModuleState,
-    ) -> bool {
-        self.bindings.borrow().runtime_bind(local, global, source)
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn source_handle(&self) -> Option<&ModuleHandle<Arch, Tls>> {
-        self.scope.iter().find(|module| self.is_source(module))
-    }
-
-    #[inline]
-    fn is_source(&self, module: &ModuleHandle<Arch, Tls>) -> bool {
-        ptr::eq(module.memory(), self.source.memory())
+    pub(crate) fn into_parts(self) -> (LookupScope<Arch, Tls>, Option<ModuleScope<Arch, Tls>>) {
+        (self.scope, self.global)
     }
 
     fn lookup<'find>(
@@ -342,15 +175,24 @@ where
         Some(symbol)
     }
 
-    fn find_in_scope<'find>(
+    fn lookup_in_scope<'find>(
         &'find self,
         entry: &SymbolEntry<'find, Arch::Layout>,
-    ) -> Option<SymDef<'find, Arch, Tls>> {
+        mut accept: impl FnMut(&ModuleHandle<Arch, Tls>) -> bool,
+    ) -> Option<(
+        &'find ElfSymbol<Arch::Layout>,
+        &'find ModuleHandle<Arch, Tls>,
+    )> {
         let mut lookup = SymbolLookup::from_info(entry.info().clone());
-        self.scope.iter().find_map(|source| {
-            let symbol = self.lookup(entry, &mut lookup, source)?;
-            Some(self.bind(entry.name(), symbol, &**source, Some(source)))
-        })
+        self.global
+            .iter()
+            .flat_map(ModuleScope::iter)
+            .chain(self.scope.iter())
+            .filter(|source| accept(source))
+            .find_map(|source| {
+                self.lookup(entry, &mut lookup, source)
+                    .map(|symbol| (symbol, source))
+            })
     }
 
     fn find_def<'find>(
@@ -358,16 +200,19 @@ where
         entry: &SymbolEntry<'find, Arch::Layout>,
     ) -> Option<SymDef<'find, Arch, Tls>> {
         let sym = entry.symbol();
-        let self_def =
-            || (!sym.is_undef()).then(|| self.bind(entry.name(), sym, self.source, None));
+        let self_def = || (!sym.is_undef()).then(|| self.bind(entry.name(), sym, self.source));
+        let scope_def = || {
+            let (symbol, source) = self.lookup_in_scope(entry, |_| true)?;
+            Some(self.bind(entry.name(), symbol, source))
+        };
         if unlikely(sym.binds_local()) {
             return self_def();
         }
 
         if self.symbolic {
-            self_def().or_else(|| self.find_in_scope(entry))
+            self_def().or_else(scope_def)
         } else {
-            self.find_in_scope(entry).or_else(self_def)
+            scope_def().or_else(self_def)
         }
     }
 
@@ -375,16 +220,12 @@ where
         &self,
         name: &str,
         symbol: &'find ElfSymbol<Arch::Layout>,
-        source: &'find dyn Module<Arch, Tls>,
-        handle: Option<&'find ModuleHandle<Arch, Tls>>,
+        source: &'find ModuleHandle<Arch, Tls>,
     ) -> SymDef<'find, Arch, Tls> {
         if unlikely(symbol.bind() == ElfSymbolBind::GNU_UNIQUE) {
-            self.bind_unique(name, symbol, source, handle)
+            self.bind_unique(name, symbol, source)
         } else {
-            if let Some(handle) = handle.filter(|handle| !self.is_source(handle)) {
-                self.bindings.borrow_mut().provider(handle);
-            }
-            SymDef::defined(symbol, source)
+            SymDef::defined(symbol, source.as_dyn())
         }
     }
 
@@ -394,21 +235,14 @@ where
         &self,
         name: &str,
         symbol: &'find ElfSymbol<Arch::Layout>,
-        source: &'find dyn Module<Arch, Tls>,
-        handle: Option<&'find ModuleHandle<Arch, Tls>>,
+        source: &'find ModuleHandle<Arch, Tls>,
     ) -> SymDef<'find, Arch, Tls> {
-        let Some(registry) = &self.registry else {
-            return SymDef::defined(symbol, source);
-        };
-        let Some(handle) = handle.or_else(|| self.source_handle()) else {
-            debug_assert!(false, "linker scope must retain its relocation source");
-            return SymDef::defined(symbol, source);
-        };
-        let definition = registry.resolve_unique(name, symbol, handle);
-        if let SymDef::Unique { source, .. } = &definition {
-            self.bindings.borrow_mut().pin(source);
+        if let Some(registry) = &self.registry {
+            registry.resolve_unique(name, symbol, source)
+        } else {
+            source.state().mark_nodelete();
+            SymDef::defined(symbol, source.as_dyn())
         }
-        definition
     }
 
     pub(crate) fn find<'find>(
@@ -425,23 +259,14 @@ where
         &'find self,
         entry: &SymbolEntry<'find, Arch::Layout>,
     ) -> Option<SymDef<'find, Arch, Tls>> {
-        let mut lookup = SymbolLookup::from_info(entry.info().clone());
-        let (symbol, source) = self
-            .scope
-            .iter()
-            .filter(|source| !self.is_source(source))
-            .find_map(|source| {
-                self.lookup(entry, &mut lookup, source)
-                    .map(|symbol| (symbol, source))
-            })?;
+        let source_id = self.source.source_id();
+        let (symbol, source) =
+            self.lookup_in_scope(entry, |source| source.source_id() != source_id)?;
         if symbol.bind() == ElfSymbolBind::GNU_UNIQUE
             && let Some(registry) = &self.registry
-            && let Some(destination) = self.source_handle()
         {
-            registry.register_copy(entry.name(), entry.symbol(), destination);
-            self.bindings.borrow_mut().pin(destination);
+            let _ = registry.resolve_unique(entry.name(), entry.symbol(), self.source);
         }
-        self.bindings.borrow_mut().provider(source);
         Some(SymDef::defined(symbol, &**source))
     }
 
@@ -465,14 +290,15 @@ mod tests {
             ElfSectionIndex, ElfSymbolBind, ElfSymbolType, ElfSymbolVisibility, NativeElfLayout,
             SymbolEntry, SymbolInfo, SymbolLookup,
         },
-        image::{LookupScope, ModuleScope, SymbolExports, SyntheticModule, SyntheticSymbol},
+        image::{LookupScope, ModuleHandle, ModuleScope, SyntheticModule, SyntheticSymbol},
         memory::VmAddr,
         runtime::DomainId,
     };
 
-    fn symbol(module: &SyntheticModule<NativeArch>) -> SymbolEntry<'_, NativeElfLayout> {
+    fn symbol(module: &ModuleHandle<NativeArch>) -> SymbolEntry<'_, NativeElfLayout> {
         let mut lookup = SymbolLookup::new("value");
         let symbol = module
+            .exports()
             .lookup(&mut lookup)
             .expect("test module must contain a symbol");
         SymbolEntry::new(symbol, SymbolInfo::from_str("value", None))
@@ -486,23 +312,23 @@ mod tests {
 
     #[test]
     fn symbol_visibility_controls_scope_lookup() {
-        let source = SyntheticModule::new(
+        let source = ModuleHandle::new(SyntheticModule::new(
             "source",
             [SyntheticSymbol::function("value", 0x100usize as *const ())
                 .with_other(ElfSymbolVisibility::PROTECTED.raw())],
-        );
+        ));
         let external = SyntheticModule::new(
             "external",
             [SyntheticSymbol::function("value", 0x200usize as *const ())],
         );
         let external_scope = scope([external]);
-        let resolver = SymbolResolver::new(&source, external_scope, None, false);
+        let resolver = SymbolResolver::new(&source, external_scope, None, None, false);
         let def = resolver
             .find(&symbol(&source))
             .expect("protected definition must resolve locally");
-        assert_eq!(def.addr(), VmAddr::new(0x100));
+        assert_eq!(def.resolve().unwrap(), VmAddr::new(0x100));
 
-        let source = SyntheticModule::new(
+        let source = ModuleHandle::new(SyntheticModule::new(
             "source",
             [SyntheticSymbol::from_fields(
                 "value",
@@ -514,7 +340,7 @@ mod tests {
                 ElfSectionIndex::UNDEF,
                 None,
             )],
-        );
+        ));
         let hidden = SyntheticModule::new(
             "hidden",
             [SyntheticSymbol::function("value", 0x200usize as *const ())
@@ -525,13 +351,13 @@ mod tests {
             [SyntheticSymbol::function("value", 0x300usize as *const ())],
         );
         let scope = scope([hidden, visible]);
-        let resolver = SymbolResolver::new(&source, scope.clone(), None, false);
+        let resolver = SymbolResolver::new(&source, scope.clone(), None, None, false);
         let def = resolver
             .find(&symbol(&source))
             .expect("lookup must continue past a hidden definition");
-        assert_eq!(def.addr(), VmAddr::new(0x300));
+        assert_eq!(def.resolve().unwrap(), VmAddr::new(0x300));
 
-        let hidden_ref = SyntheticModule::new(
+        let hidden_ref = ModuleHandle::new(SyntheticModule::new(
             "source",
             [SyntheticSymbol::from_fields(
                 "value",
@@ -543,9 +369,9 @@ mod tests {
                 ElfSectionIndex::UNDEF,
                 None,
             )],
-        );
+        ));
         assert!(
-            SymbolResolver::new(&hidden_ref, scope, None, false)
+            SymbolResolver::new(&hidden_ref, scope, None, None, false)
                 .find(&symbol(&hidden_ref))
                 .is_none(),
             "hidden undefined reference must not resolve outside its module"
@@ -554,7 +380,7 @@ mod tests {
 
     #[test]
     fn gnu_unique_is_canonical_within_one_registry() {
-        let source = SyntheticModule::new(
+        let source = ModuleHandle::new(SyntheticModule::new(
             "source",
             [SyntheticSymbol::from_fields(
                 "value",
@@ -566,7 +392,7 @@ mod tests {
                 ElfSectionIndex::UNDEF,
                 None,
             )],
-        );
+        ));
         let unique = |name, value| {
             SyntheticModule::new(
                 name,
@@ -587,22 +413,23 @@ mod tests {
         let first = SymbolResolver::new(
             &source,
             scope([unique("first", 0x100)]),
+            None,
             Some(&registry),
             false,
         );
-        assert_eq!(
-            first.find(&symbol(&source)).unwrap().addr(),
-            VmAddr::new(0x100)
-        );
+        let definition = first.find(&symbol(&source)).unwrap();
+        assert_eq!(definition.resolve().unwrap(), VmAddr::new(0x100));
+        assert!(definition.definition().unwrap().1.state().is_nodelete());
 
         let second = SymbolResolver::new(
             &source,
             scope([unique("second", 0x200)]),
+            None,
             Some(&registry),
             false,
         );
         assert_eq!(
-            second.find(&symbol(&source)).unwrap().addr(),
+            second.find(&symbol(&source)).unwrap().resolve().unwrap(),
             VmAddr::new(0x100)
         );
 
@@ -610,11 +437,12 @@ mod tests {
         let other = SymbolResolver::new(
             &source,
             scope([unique("other", 0x300)]),
+            None,
             Some(&other_registry),
             false,
         );
         assert_eq!(
-            other.find(&symbol(&source)).unwrap().addr(),
+            other.find(&symbol(&source)).unwrap().resolve().unwrap(),
             VmAddr::new(0x300)
         );
     }

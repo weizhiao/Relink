@@ -71,11 +71,6 @@ where
     P: DependencySource,
     Tls: TlsResolver<Arch>,
 {
-    #[inline]
-    pub(crate) fn contains_pending(&self, slot: ModuleSlot) -> bool {
-        self.session.contains_pending(slot)
-    }
-
     fn known_module(&self, key: &str) -> Option<ModuleSlot> {
         let key = self.committed.key_slot_for(key)?;
         self.committed
@@ -209,7 +204,7 @@ where
         }
     }
 
-    pub(crate) fn resolve_root<'cfg, Resolver>(
+    fn resolve_root_input<'cfg, Resolver>(
         &self,
         root: Resolver::Root,
         caller: Option<ModuleSlot>,
@@ -332,6 +327,28 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
+    pub(crate) fn resolve_root<Obs, M, Exec, Resolver>(
+        &mut self,
+        root: Resolver::Root,
+        key: ModuleKey,
+        caller: Option<ModuleSlot>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        resolver: &Resolver,
+    ) -> Result<ModuleSlot>
+    where
+        D: Default,
+        Resolver: KeyResolver<Arch, Tls>,
+        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
+        M: Mmap<Region = R>,
+        Exec: CodeExecutor<Arch> + Clone,
+    {
+        let resolved = self.resolve_root_input(root, caller, resolver)?;
+        let root = self.stage(resolved, caller, loader)?;
+        self.bind_key(key, root);
+        self.resolve_graph(root, loader, resolver)?;
+        Ok(root)
+    }
+
     pub(crate) fn stage<'cfg, Obs, M, Exec>(
         &mut self,
         resolved: ResolvedKey<'cfg, Arch, Tls>,
@@ -375,7 +392,7 @@ where
         }
     }
 
-    pub(crate) fn resolve_pending<Obs, M, Exec, Resolver>(
+    pub(super) fn resolve_graph<Obs, M, Exec, Resolver>(
         &mut self,
         root: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
@@ -389,7 +406,7 @@ where
         M: Mmap<Region = R>,
         Exec: CodeExecutor<Arch> + Clone,
     {
-        if !self.contains_pending(root) {
+        if !self.session.contains_pending(root) {
             if self.committed.contains_module(root) {
                 self.session.track(root, self.committed.generation(root));
             }
@@ -409,6 +426,28 @@ where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
+    pub(crate) fn resolve_root<D, Obs, M, Exec, Resolver>(
+        &mut self,
+        root: Resolver::Root,
+        key: ModuleKey,
+        caller: Option<ModuleSlot>,
+        loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
+        resolver: &Resolver,
+    ) -> Result<ModuleSlot>
+    where
+        D: Default + Send + Sync + 'static,
+        Resolver: KeyResolver<Arch, Tls>,
+        Obs: LinkerObserver<D, Arch, M::Region, Tls> + LoadObserver<D, Arch>,
+        M: Mmap,
+        Exec: CodeExecutor<Arch> + Clone,
+    {
+        let resolved = self.resolve_root_input(root, caller, resolver)?;
+        let root = self.stage(resolved, caller, loader)?;
+        self.bind_key(key, root);
+        self.resolve_graph(root, loader, resolver)?;
+        Ok(root)
+    }
+
     pub(crate) fn stage<D, Obs, M, Exec>(
         &mut self,
         resolved: ResolvedKey<'static, Arch, Tls>,
@@ -454,7 +493,7 @@ where
         }
     }
 
-    pub(crate) fn resolve_dependency_graph<D, Obs, M, Exec, Resolver>(
+    fn resolve_graph<D, Obs, M, Exec, Resolver>(
         &mut self,
         root: ModuleSlot,
         loader: &mut LoaderRun<'_, Obs, D, Tls, Arch, M, Exec>,
@@ -468,6 +507,12 @@ where
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
     {
+        if !self.session.contains_pending(root) {
+            if self.committed.contains_module(root) {
+                self.session.track(root, self.committed.generation(root));
+            }
+            return Ok(());
+        }
         self.resolve_dependency_graph_with(
             root,
             loader,

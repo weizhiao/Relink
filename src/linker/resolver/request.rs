@@ -32,7 +32,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     #[inline]
     fn source_id(&self) -> ModuleSourceId {
-        self.core_ref().source_id()
+        self.core_ref().state().instance_id().source_id()
     }
 
     #[inline]

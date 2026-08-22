@@ -11,7 +11,7 @@ mod sections;
 mod symbol;
 
 pub(crate) use builder::ObjectBuilder;
-pub(crate) use exports::ObjectExports;
+pub(crate) use exports::{ObjectExports, ObjectExportsCell};
 pub use hash::CustomHash;
 pub use layout::SectionLifetime;
 pub use layout::{ObjectSegmentView, SectionGroups};

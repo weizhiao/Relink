@@ -287,8 +287,7 @@ where
         for index in 0..self.group_order.len() {
             let id = self.group_order[index];
             let module = if let Some(raw) = self.dynamics.get(&id).map(GraphEntry::payload) {
-                let module = unsafe { LoadedCore::from_core(raw.core()) };
-                ModuleHandle::from(module)
+                raw.core_ref().module_handle()
             } else if let Some(module) = self.modules.get(&id).map(PendingModule::module) {
                 module.clone()
             } else {
@@ -312,6 +311,15 @@ pub(crate) struct LoadSession<
 > {
     resolve: ResolveSession<RawDynamic<D, Arch, R, Tls>, Arch, Tls>,
     ready_to_commit: BTreeMap<ModuleSlot, PendingModule<Arch, Tls>>,
+    lifecycle: Vec<ModuleSlot>,
+}
+
+pub(crate) struct PublishSession<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+    guards: BTreeMap<ModuleSlot, u32>,
+    modules: BTreeMap<ModuleSlot, PendingModule<Arch, Tls>>,
+    order: Vec<ModuleSlot>,
+    aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
+    pending_sources: BTreeMap<ModuleSourceId, ModuleSlot>,
     lifecycle: Vec<ModuleSlot>,
 }
 
@@ -374,19 +382,6 @@ where
         debug_assert!(previous.is_none(), "ready commit entries must be unique");
     }
 
-    pub(crate) fn initializers(&self) -> Vec<ModuleHandle<Arch, Tls>> {
-        self.lifecycle
-            .iter()
-            .map(|id| {
-                let module = self
-                    .ready_to_commit
-                    .get(id)
-                    .expect("lifecycle order must refer to a ready module");
-                module.module.clone()
-            })
-            .collect()
-    }
-
     pub(crate) fn build_lifecycle_order(&self, root: ModuleSlot, order: &mut Vec<ModuleSlot>) {
         order.clear();
         let pending_len = self.resolve.dynamics.len() + self.resolve.modules.len();
@@ -432,6 +427,54 @@ where
         }
     }
 
+    pub(crate) fn into_publish(self) -> PublishSession<Arch, Tls> {
+        let Self {
+            resolve,
+            ready_to_commit,
+            lifecycle,
+        } = self;
+        let ResolveSession {
+            dynamics,
+            modules,
+            guards,
+            group_order,
+            aliases,
+            sources,
+        } = resolve;
+        assert!(
+            dynamics.is_empty() && modules.is_empty(),
+            "all pending modules must be relocated before publication"
+        );
+        PublishSession {
+            guards,
+            modules: ready_to_commit,
+            order: group_order,
+            aliases,
+            pending_sources: sources,
+            lifecycle,
+        }
+    }
+}
+
+impl<Arch, Tls> PublishSession<Arch, Tls>
+where
+    Arch: RelocationArch,
+    Tls: TlsResolver<Arch>,
+{
+    pub(crate) fn initializers(&self) -> Box<[ModuleHandle<Arch, Tls>]> {
+        self.lifecycle
+            .iter()
+            .map(|id| {
+                let module = self
+                    .modules
+                    .get(id)
+                    .expect("lifecycle order must refer to a ready module");
+                module.module.clone()
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+    }
+
     pub(crate) fn commit_into<Meta>(
         self,
         committed: &mut CommittedStorage<Meta, Arch, Tls>,
@@ -440,18 +483,14 @@ where
         Meta: Default,
     {
         let Self {
-            resolve,
-            ready_to_commit,
+            guards,
+            modules,
+            order,
+            aliases,
+            pending_sources,
             lifecycle,
         } = self;
-        let ResolveSession {
-            guards,
-            group_order,
-            aliases,
-            sources,
-            ..
-        } = resolve;
-        let mut ready = ready_to_commit;
+        let mut ready = modules;
         let mut committed_ids = Vec::with_capacity(ready.len());
         for (slot, generation) in guards {
             if committed.generation(slot) != generation {
@@ -462,11 +501,16 @@ where
             }
         }
         for (&slot, entry) in &ready {
+            debug_assert_eq!(pending_sources.get(&entry.module.source_id()), Some(&slot));
             let bindings = entry.module.state().bindings();
-            if bindings.iter().any(|source| {
-                !sources.contains_key(source) && committed.module_for_source(*source).is_none()
-            }) {
-                debug_assert_eq!(sources.get(&entry.module.source_id()), Some(&slot));
+            let providers_available = bindings.iter().copied().all(|provider| {
+                pending_sources
+                    .get(&provider.source_id())
+                    .and_then(|slot| ready.get(slot))
+                    .is_some_and(|entry| provider == entry.module.state().instance_id())
+                    || committed.module_for_binding(provider).is_some()
+            });
+            if !providers_available {
                 let generation = committed.generation(slot);
                 return Err(LinkerError::context(LinkContextError::ModuleChanged {
                     id: ModuleId::from_slot(committed.context(), slot, generation),
@@ -474,7 +518,7 @@ where
                 .into());
             }
         }
-        for slot in group_order {
+        for slot in order {
             let Some(entry) = ready.remove(&slot) else {
                 continue;
             };

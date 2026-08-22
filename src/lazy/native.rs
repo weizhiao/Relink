@@ -14,12 +14,6 @@ use crate::{
 
 #[cold]
 #[inline(never)]
-fn unresolved_symbol(rela_idx: usize) -> ! {
-    panic!("lazy binding failed: unresolved symbol for PLT relocation {rela_idx}");
-}
-
-#[cold]
-#[inline(never)]
 fn resolve_error(error: Error) -> ! {
     panic!("{error}");
 }
@@ -31,8 +25,7 @@ where
 {
     let runtime = unsafe { LazyRuntime::<Arch>::from_runtime(runtime) };
     match runtime.resolve_default(rela_idx) {
-        Ok(Some(symbol)) => symbol.get(),
-        Ok(None) => unresolved_symbol(rela_idx),
+        Ok(symbol) => symbol.get(),
         Err(error) => resolve_error(error),
     }
 }

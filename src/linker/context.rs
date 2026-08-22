@@ -68,11 +68,19 @@ where
     for dep in module.direct_deps().iter().copied() {
         collect_import_modules(target, source, dep, mapped, new_modules, aliases)?;
     }
-    for source_id in module.handle().state().bindings().iter().copied() {
-        let dep = source
-            .committed
-            .module_for_source(source_id)
-            .expect("bound module must remain committed with its dependent");
+    let bound = module
+        .handle()
+        .state()
+        .bindings()
+        .iter()
+        .map(|binding| {
+            source
+                .committed
+                .module_for_binding(*binding)
+                .expect("bound module must remain committed with its dependent")
+        })
+        .collect::<Vec<_>>();
+    for dep in bound {
         collect_import_modules(target, source, dep, mapped, new_modules, aliases)?;
     }
     new_modules.push(slot);
@@ -371,7 +379,7 @@ where
             .state()
             .bindings()
             .iter()
-            .filter_map(|source| self.committed.module_for_source(*source))
+            .filter_map(|binding| self.committed.module_for_binding(*binding))
             .map(|slot| self.committed.make_module_id(slot))
             .collect::<Vec<_>>();
         Ok(deps.into_iter())
@@ -381,7 +389,7 @@ where
     #[inline]
     pub fn load_order(&self) -> impl Iterator<Item = ModuleId> + '_ {
         self.committed
-            .load_order()
+            .lifecycle()
             .map(|slot| self.committed.make_module_id(slot))
     }
 
@@ -449,7 +457,7 @@ where
             }
 
             let source = module.source_id();
-            let slot = if let Some(slot) = self.committed.module_for_source(module.source_id()) {
+            let slot = if let Some(slot) = self.committed.module_for_source(source) {
                 *reused.entry(slot).or_default() += 1;
                 aliases.push((key, slot));
                 slot
@@ -678,7 +686,7 @@ where
                     .state()
                     .bindings()
                     .iter()
-                    .filter_map(|source| self.committed.module_for_source(*source)),
+                    .filter_map(|binding| self.committed.module_for_binding(*binding)),
             );
         }
 
@@ -818,7 +826,6 @@ mod tests {
         arch::NativeArch,
         elf::ElfSymbol,
         image::{Module, ModuleHandle, ModuleScope, ModuleState, SymbolExports, SyntheticModule},
-        input::ModuleSourceId,
         linker::ModuleId,
         memory::{ImageMemory, VmAddr},
         relocation::RelocationArch,
@@ -860,10 +867,6 @@ mod tests {
 
         fn domain_id(&self) -> DomainId {
             Module::<NativeArch>::domain_id(&self.module)
-        }
-
-        fn source_id(&self) -> ModuleSourceId {
-            Module::<NativeArch>::source_id(&self.module)
         }
 
         fn finalize(&self) -> Result<()> {
@@ -1347,6 +1350,30 @@ mod tests {
         assert_eq!(context.resolve_key(alias).unwrap(), Some(second_id));
         assert_eq!(context.release(second).unwrap().len(), 1);
         assert_eq!(context.resolve_key(alias).unwrap(), None);
+    }
+
+    #[test]
+    fn load_order_tracks_reused_slots() {
+        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let first = context
+            .insert("first", SyntheticModule::empty("first"), Box::new([]))
+            .unwrap();
+        let second = context
+            .insert("second", SyntheticModule::empty("second"), Box::new([]))
+            .unwrap();
+
+        drop(context.release(first).unwrap());
+        let first = context
+            .insert("first", SyntheticModule::empty("first"), Box::new([]))
+            .unwrap();
+        let names = context
+            .load_order()
+            .map(|id| context.module(id).unwrap().name())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["second", "first"]);
+
+        drop(context.release(second).unwrap());
+        drop(context.release(first).unwrap());
     }
 
     #[test]

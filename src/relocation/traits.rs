@@ -9,7 +9,7 @@ use crate::{
     ByteRepr, RelocReason, Result,
     arch::ArchKind,
     elf::{ElfLayout, ElfMachine, ElfRelEntry, ElfRelocationType, ElfTarget, ElfWord},
-    image::LookupScope,
+    image::{GlobalScope, LookupScope},
     lazy::{LazyBinder, LazyPlacement},
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr},
     observer::{RelocationEvent, RelocationObserver},
@@ -127,7 +127,7 @@ pub trait RelocationArch: 'static {
     /// leave the relocation to the observer.
     #[inline]
     fn relocate_custom<D, R, Tls, H>(
-        _event: &RelocationEvent<'_, D, Self, R, Tls, H>,
+        _event: &mut RelocationEvent<'_, D, Self, R, Tls, H>,
     ) -> Result<HandleResult>
     where
         Self: Sized,
@@ -289,6 +289,7 @@ pub struct RelocateArgs<
     Binder: ?Sized,
 > {
     pub(crate) scope: LookupScope<Arch, Tls>,
+    pub(crate) global: Option<GlobalScope<Arch, Tls>>,
     pub(crate) symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
     pub(crate) binding: BindingMode,
     pub(crate) run_init: bool,

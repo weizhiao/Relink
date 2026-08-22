@@ -2,6 +2,7 @@ use crate::{
     elf::{ElfLayout, ElfSymbol},
     image::{SymbolExports, SymbolLookup},
     object::CustomHash,
+    sync::{Arc, OnceCell},
 };
 use alloc::{string::String, vec::Vec};
 
@@ -13,6 +14,55 @@ pub(crate) struct ObjectExports<L: ElfLayout> {
     hashtab: CustomHash<String>,
     names: Vec<String>,
     symbols: Vec<ElfSymbol<L>>,
+}
+
+pub(crate) struct ObjectExportsCell<L: ElfLayout> {
+    exports: OnceCell<Arc<dyn SymbolExports<L>>>,
+}
+
+impl<L: ElfLayout> ObjectExportsCell<L> {
+    #[inline]
+    pub(crate) const fn new() -> Self {
+        Self {
+            exports: OnceCell::new(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn set(&self, exports: Arc<dyn SymbolExports<L>>) {
+        assert!(
+            self.exports.set(exports).is_ok(),
+            "object exports must be installed only once",
+        );
+    }
+
+    #[inline]
+    fn get(&self) -> &dyn SymbolExports<L> {
+        self.exports
+            .get()
+            .expect("object exports must be installed before lookup")
+            .as_ref()
+    }
+}
+
+impl<L: ElfLayout> SymbolExports<L> for ObjectExportsCell<L> {
+    #[inline]
+    fn for_each(&self, visitor: &mut dyn FnMut(&ElfSymbol<L>)) {
+        self.get().for_each(visitor);
+    }
+
+    #[inline]
+    fn symbol_name<'exports>(&'exports self, symbol: &ElfSymbol<L>) -> Option<&'exports str> {
+        self.get().symbol_name(symbol)
+    }
+
+    #[inline]
+    fn lookup<'exports>(
+        &'exports self,
+        lookup: &mut SymbolLookup<'_>,
+    ) -> Option<&'exports ElfSymbol<L>> {
+        self.get().lookup(lookup)
+    }
 }
 
 impl<L: ElfLayout> ObjectExports<L> {

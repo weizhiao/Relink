@@ -751,6 +751,8 @@ pub enum LazyBindingError {
     RelocIndexOutOfRange,
     /// The relocation is not a valid lazy PLT relocation.
     InvalidPltReloc,
+    /// The referenced symbol could not be resolved.
+    UnknownSymbol,
 }
 
 impl Display for LazyBindingError {
@@ -763,6 +765,7 @@ impl Display for LazyBindingError {
             Self::MissingGotPlt => f.write_str("missing GOT/PLTGOT entry"),
             Self::RelocIndexOutOfRange => f.write_str("relocation index is out of range"),
             Self::InvalidPltReloc => f.write_str("invalid PLT relocation"),
+            Self::UnknownSymbol => f.write_str("unknown symbol"),
         }
     }
 }
@@ -1010,8 +1013,6 @@ pub enum LinkerError {
         /// Structured resolver failure reason.
         reason: LinkResolverError,
     },
-    /// Object exports were installed after the core had already been retained.
-    ObjectCoreRetainedBeforeExports,
     /// Scan-first/planned-load state was inconsistent.
     Scan {
         /// Structured scan failure reason.
@@ -1086,9 +1087,6 @@ impl Display for LinkerError {
             Self::UnresolvedDependency(err) => Display::fmt(err, f),
             Self::Context { reason } => Display::fmt(reason, f),
             Self::Resolver { reason } => Display::fmt(reason, f),
-            Self::ObjectCoreRetainedBeforeExports => {
-                f.write_str("raw object core was retained before runtime exports were installed")
-            }
             Self::Scan { reason } => Display::fmt(reason, f),
         }
     }

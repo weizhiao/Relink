@@ -73,7 +73,7 @@ pub trait KeyResolver<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> 
     type Root;
 
     /// Maps a root input to the key used for an existing-module lookup.
-    fn root_key(&self, root: &Self::Root) -> ModuleKey;
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str;
 
     /// Resolves a root input or one `DT_NEEDED` dependency.
     fn resolve<'cfg>(

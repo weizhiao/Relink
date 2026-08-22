@@ -4,16 +4,46 @@ use crate::{
     Error, RelocReason, Result,
     elf::{ElfRelEntry, ElfRelType, HashTable, SymbolEntry, SymbolTableView},
     hint::unlikely,
-    image::{ElfCore, LookupScope, Module},
+    image::{ElfCore, LookupScope, Module, ModuleInstanceId, ModuleScope, ModuleState},
     memory::{ImageMemory, RegionAccess, VmAddr},
     observer::{RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
-    relocation::{
-        BindingDeps, HandleResult, RelocationArch, RelocationEvent, SymDef, SymbolResolver,
-    },
+    relocation::{HandleResult, RelocationArch, RelocationEvent, SymDef, SymbolResolver},
     segment::ElfSegments,
     tls::{TLS_GET_ADDR_SYMBOL, TlsResolver},
 };
+use alloc::vec::Vec;
+
+pub(crate) struct BindingDeps {
+    providers: Vec<ModuleInstanceId>,
+}
+
+impl BindingDeps {
+    #[inline]
+    pub(crate) const fn new() -> Self {
+        Self {
+            providers: Vec::new(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn record(&mut self, source: &ModuleState, provider: ModuleInstanceId) {
+        if provider != source.instance_id() && !self.providers.contains(&provider) {
+            self.providers.push(provider);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn install(self, state: &ModuleState) {
+        let mut bindings = state.bindings();
+        bindings.reserve(self.providers.len());
+        for provider in self.providers {
+            if !bindings.contains(&provider) {
+                bindings.push(provider);
+            }
+        }
+    }
+}
 
 /// Internal context for managing relocation state and handlers.
 pub(crate) struct RelocHelper<
@@ -27,7 +57,8 @@ pub(crate) struct RelocHelper<
     Memory = &'find ElfSegments<R>,
 > {
     pub(crate) core: &'find ElfCore<D, Arch, R, Tls>,
-    resolver: SymbolResolver<'find, ElfCore<D, Arch, R, Tls>, Arch, Tls>,
+    resolver: SymbolResolver<'find, Arch, Tls>,
+    bindings: BindingDeps,
     symbols: SymbolTableView<'find, Arch::Layout, H>,
     memory: Memory,
     pub(crate) observer: &'find mut Obs,
@@ -44,15 +75,17 @@ where
     Memory: ImageMemory,
 {
     pub(crate) fn new(
-        resolver: SymbolResolver<'find, ElfCore<D, Arch, R, Tls>, Arch, Tls>,
+        core: &'find ElfCore<D, Arch, R, Tls>,
+        resolver: SymbolResolver<'find, Arch, Tls>,
+        bindings: BindingDeps,
         symbols: SymbolTableView<'find, Arch::Layout, H>,
         memory: Memory,
         observer: &'find mut Obs,
     ) -> Self {
-        let core = resolver.source();
         Self {
             core,
             resolver,
+            bindings,
             symbols,
             memory,
             observer,
@@ -60,8 +93,15 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (LookupScope<Arch, Tls>, BindingDeps<Arch, Tls>) {
-        self.resolver.into_parts()
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        LookupScope<Arch, Tls>,
+        Option<ModuleScope<Arch, Tls>>,
+        BindingDeps,
+    ) {
+        let (scope, global) = self.resolver.into_parts();
+        (scope, global, self.bindings)
     }
 
     #[inline]
@@ -71,15 +111,27 @@ where
 
     #[inline]
     pub(crate) fn handle_pre(&mut self, rel: &ElfRelType<Arch>) -> Result<HandleResult> {
-        let event = RelocationEvent::new(rel, &self.resolver, self.symbols);
-        self.observer.on_relocation_pre(&event)
+        let mut event = RelocationEvent::new(
+            self.core,
+            rel,
+            &self.resolver,
+            &mut self.bindings,
+            self.symbols,
+        );
+        self.observer.on_relocation_pre(&mut event)
     }
 
     #[cfg(feature = "object")]
     #[inline]
     pub(crate) fn handle_post(&mut self, rel: &ElfRelType<Arch>) -> Result<HandleResult> {
-        let event = RelocationEvent::new(rel, &self.resolver, self.symbols);
-        self.observer.on_relocation_post(&event)
+        let mut event = RelocationEvent::new(
+            self.core,
+            rel,
+            &self.resolver,
+            &mut self.bindings,
+            self.symbols,
+        );
+        self.observer.on_relocation_post(&mut event)
     }
 
     #[inline]
@@ -88,13 +140,19 @@ where
         rel: &ElfRelType<Arch>,
         reason: RelocReason,
     ) -> Result<()> {
-        let event = RelocationEvent::new(rel, &self.resolver, self.symbols);
+        let mut event = RelocationEvent::new(
+            self.core,
+            rel,
+            &self.resolver,
+            &mut self.bindings,
+            self.symbols,
+        );
         if matches!(reason, RelocReason::Unsupported)
-            && !Arch::relocate_custom(&event)?.is_unhandled()
+            && !Arch::relocate_custom(&mut event)?.is_unhandled()
         {
             return Ok(());
         }
-        if self.observer.on_relocation_post(&event)?.is_unhandled() {
+        if self.observer.on_relocation_post(&mut event)?.is_unhandled() {
             return Err(self.reloc_error(rel, reason));
         }
         Ok(())
@@ -148,29 +206,27 @@ where
     }
 
     #[inline]
-    pub(crate) fn resolve_symbol_addr(
-        &self,
-        symbol: &SymbolEntry<'_, Arch::Layout>,
-        symdef: Option<&SymDef<'_, Arch, Tls>>,
-    ) -> Result<Option<VmAddr>> {
-        Ok(
-            if Tls::OVERRIDE_TLS_GET_ADDR && symbol.name() == TLS_GET_ADDR_SYMBOL {
-                Some(self.core.tls_resolver().bind_tls_get_addr()?)
-            } else {
-                symdef
-                    .map(|symdef| symdef.resolve(self.core.executor()))
-                    .transpose()?
-            },
-        )
+    pub(crate) fn record_binding(&mut self, provider: Option<ModuleInstanceId>) {
+        if let Some(provider) = provider {
+            self.bindings.record(self.core.state(), provider);
+        }
     }
 
     #[inline]
     pub(crate) fn bind_symbol_addr(
         &mut self,
         rel: &ElfRelType<Arch>,
-        symbol: &SymbolEntry<'_, Arch::Layout>,
-        resolved: Option<VmAddr>,
+        symbol: SymbolEntry<'_, Arch::Layout>,
     ) -> Result<Option<VmAddr>> {
+        let (resolved, provider) =
+            if Tls::OVERRIDE_TLS_GET_ADDR && symbol.name() == TLS_GET_ADDR_SYMBOL {
+                (Some(self.core.tls_resolver().bind_tls_get_addr()?), None)
+            } else {
+                let definition = self.resolver.find(&symbol);
+                let provider = definition.as_ref().and_then(SymDef::provider_id);
+                let resolved = definition.as_ref().map(SymDef::resolve).transpose()?;
+                (resolved, provider)
+            };
         let mut event = SymbolBindingEvent::new(
             self.core,
             Some(rel),
@@ -179,6 +235,10 @@ where
             resolved,
         );
         self.observer.on_symbol_binding(&mut event)?;
-        Ok(event.into_resolved_addr())
+        let resolved = event.into_resolved_addr();
+        if resolved.is_some() {
+            self.record_binding(provider);
+        }
+        Ok(resolved)
     }
 }

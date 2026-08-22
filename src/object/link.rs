@@ -1,10 +1,10 @@
 use crate::{
-    Error, LinkerError, RelocReason, Result,
+    Error, RelocReason, Result,
     elf::{
         ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr, ElfSymbol,
         ElfSymbolType,
     },
-    image::{ElfCore, LoadedCore, LoadedObject, Module, RawObject, SymbolExports},
+    image::{ElfCore, GlobalScope, LoadedCore, LoadedObject, Module, RawObject, SymbolExports},
     lazy::LazyBinder,
     logging,
     memory::{RegionAccess, VmAddr, VmOffset},
@@ -13,7 +13,9 @@ use crate::{
     },
     observer::{LifecycleRunner, ObjectRelocatedEvent, RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
-    relocation::{ObjectArch, RelocHelper, RelocateArgs, RelocationArch, SymbolResolver},
+    relocation::{
+        BindingDeps, ObjectArch, RelocHelper, RelocateArgs, RelocationArch, SymDef, SymbolResolver,
+    },
     runtime::CodeContext,
     sync::{Arc, arc_unsize},
     tls::TlsResolver,
@@ -66,26 +68,46 @@ where
         logging::debug!("Relocating object: {}", self.core.name());
         let RelocateArgs {
             scope,
+            global,
             symbols,
             run_init,
             observer,
             ..
         } = args;
-        scope.check_domain(self.core.domain_id())?;
-        let resolver =
-            SymbolResolver::new(&self.core, scope, symbols.as_deref(), self.core.symbolic());
+        let domain = self.core.domain_id();
+        scope.check_domain(domain)?;
+        if let Some(global) = &global {
+            domain.ensure(global.domain_id())?;
+        }
+        let global_snapshot = global.as_ref().map(GlobalScope::modules);
+        let source = self.core.module_handle();
+        let resolver = SymbolResolver::new(
+            &source,
+            scope,
+            global_snapshot,
+            symbols.as_deref(),
+            self.core.symbolic(),
+        );
+        let mut bindings = BindingDeps::new();
         Self::simplify_symbols(
             &self.core,
             &self.sections,
             &mut self.symtab,
             &resolver,
+            &mut bindings,
             observer,
         )?;
 
         let relocation_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
-        let mut helper =
-            RelocHelper::new(resolver, self.symtab.view(), relocation_segments, observer);
+        let mut helper = RelocHelper::new(
+            &self.core,
+            resolver,
+            bindings,
+            self.symtab.view(),
+            relocation_segments,
+            observer,
+        );
         let shdrs = self.sections.headers();
         let mut state = Arch::State::default();
         Arch::prepare_relocation(&mut state, &mut helper, shdrs)?;
@@ -114,7 +136,7 @@ where
             }
         }
 
-        let (scope, bindings) = helper.into_parts();
+        let (scope, global_snapshot, bindings) = helper.into_parts();
 
         let initializer = LifecycleRunner::new(core::mem::take(&mut self.init));
         let finalizer = LifecycleRunner::new(core::mem::take(&mut self.fini));
@@ -135,9 +157,7 @@ where
                 Arc::new(self.default_exports()) => dyn SymbolExports<Arch::Layout>
             )
         });
-        let inner = Arc::get_mut(&mut self.core.inner)
-            .ok_or(LinkerError::ObjectCoreRetainedBeforeExports)?;
-        inner.exports = exports;
+        self.exports.set(exports);
         let object_segments =
             ObjectSegmentView::new(self.core.segments(), self.init_segments.as_ref());
         self.section_segments.mprotect(&object_segments)?;
@@ -171,16 +191,18 @@ where
 
         logging::info!("Relocation completed for {}", core.name());
 
-        Ok(LoadedObject {
-            inner: unsafe { LoadedCore::from_relocated(core, scope, symbols, bindings) },
-        })
+        bindings.install(core.state());
+        let inner = unsafe { LoadedCore::from_relocated(core, scope, global.as_ref(), symbols) };
+        drop(global_snapshot);
+        Ok(LoadedObject { inner })
     }
 
     fn simplify_symbols<Obs>(
         core: &ElfCore<D, Arch, R, Tls>,
         sections: &ObjectSections<Arch::Layout>,
         symtab: &mut ObjectSymbolTable<Arch::Layout>,
-        resolver: &SymbolResolver<'_, ElfCore<D, Arch, R, Tls>, Arch, Tls>,
+        resolver: &SymbolResolver<'_, Arch, Tls>,
+        bindings: &mut BindingDeps,
         observer: &mut Obs,
     ) -> Result<()>
     where
@@ -199,17 +221,18 @@ where
                 }
 
                 let addr = if symbol.is_undef() {
-                    let resolved = if let Some(symdef) = resolver.find(&entry) {
-                        Some(symdef.resolve(core.executor())?)
-                    } else {
-                        None
-                    };
+                    let definition = resolver.find(&entry);
+                    let provider = definition.as_ref().and_then(SymDef::provider_id);
+                    let resolved = definition.as_ref().map(SymDef::resolve).transpose()?;
                     let mut event =
                         SymbolBindingEvent::new(core, None, symbol, entry.name(), resolved);
                     observer.on_symbol_binding(&mut event)?;
                     let Some(resolved) = event.into_resolved_addr() else {
                         return Err(unresolved_symbol_error(core, entry.name()));
                     };
+                    if let Some(provider) = provider {
+                        bindings.record(core.state(), provider);
+                    }
                     resolved
                 } else if symbol.st_shndx().is_abs() {
                     VmAddr::new(symbol.st_value())

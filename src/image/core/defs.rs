@@ -3,15 +3,14 @@ use crate::{
     arch::NativeArch,
     elf::{ElfSymbol, ElfSymbolType, SymbolEntry},
     image::{
-        DynamicInfo, Module, ModuleSearch, ModuleState, PltRelocInfo, SymbolExports,
-        WeakLookupScope,
+        DynamicInfo, GlobalScope, Module, ModuleHandle, ModuleSearch, ModuleState, PltRelocInfo,
+        SymbolExports, WeakLookupScope,
     },
-    input::ModuleSourceId,
     lazy::{LazySetup, LazyValues},
     logging,
-    memory::{HostRegion, ImageMemory, RegionAccess, VmAddr},
+    memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
     observer::LifecycleHandlers,
-    relocation::{RelocationArch, SymDef, SymbolRegistry, SymbolResolver},
+    relocation::{RelocationArch, SymbolRegistry, SymbolResolver},
     runtime::{CodeContext, CodeExecutor, DomainId},
     segment::ElfSegments,
     sync::{Arc, OnceCell, Weak},
@@ -91,6 +90,12 @@ pub(crate) trait CoreRuntimeModule<Arch: RelocationArch>: Send + Sync {
     fn lookup_symbol(&self, symbol: &SymbolEntry<'_, Arch::Layout>) -> Result<Option<VmAddr>>;
 }
 
+pub(crate) struct LazyLookup<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+    pub(super) source: Weak<dyn Module<Arch, Tls>>,
+    pub(super) scope: WeakLookupScope<Arch, Tls>,
+    pub(super) symbols: Option<Weak<SymbolRegistry<Arch, Tls>>>,
+}
+
 #[inline]
 unsafe fn core_inner<D, Arch, R, Tls>(runtime: &CoreRuntime<Arch>) -> &CoreInner<D, Arch, R, Tls>
 where
@@ -129,23 +134,30 @@ where
             return self.tls.resolver().bind_tls_get_addr().map(Some);
         }
 
-        let Some(scope) = self.scope.get() else {
+        let Some(lazy) = self.lazy_lookup.get() else {
             return Ok(None);
         };
-        loop {
-            let Some(lookup) = scope.upgrade() else {
-                return Ok(None);
-            };
-            let symbolic = self.dynamic_info.as_ref().is_some_and(|info| info.symbolic);
-            let symbols = self.symbols.get().and_then(Weak::upgrade);
-            let resolver = SymbolResolver::new(self, lookup.clone(), symbols.as_deref(), symbolic);
-            let Some(symdef) = resolver.find(symbol) else {
-                return Ok(None);
-            };
-            if resolver.bind_runtime(&lookup, lookup.global(), &self.state) {
-                return symdef.resolve(self.executor.as_ref()).map(Some);
-            }
+        let Some(source) = lazy.source.upgrade().map(ModuleHandle::from_shared) else {
+            return Ok(None);
+        };
+        let Some(lookup) = lazy.scope.upgrade_scope() else {
+            return Ok(None);
+        };
+        let global = lazy.scope.upgrade_global();
+        // Serialize lookup plus dependency recording with global-scope removal.
+        let global_guard = global.as_ref().map(GlobalScope::read);
+        let global = global_guard.as_deref().cloned();
+        let symbolic = self.dynamic_info.as_ref().is_some_and(|info| info.symbolic);
+        let symbols = lazy.symbols.as_ref().and_then(Weak::upgrade);
+        let resolver = SymbolResolver::new(&source, lookup, global, symbols.as_deref(), symbolic);
+        let Some(symdef) = resolver.find(symbol) else {
+            return Ok(None);
+        };
+        if let Some(provider) = symdef.provider_id() {
+            source.state().bind(provider);
         }
+        drop(global_guard);
+        symdef.resolve().map(Some)
     }
 }
 
@@ -166,9 +178,6 @@ pub(crate) struct CoreInner<
     /// Runtime domain in which this image's addresses are meaningful.
     pub(crate) domain: DomainId,
 
-    /// Stable identity of the source backing this module.
-    pub(crate) source_id: ModuleSourceId,
-
     /// Lifecycle state shared by every handle for this module.
     pub(crate) state: ModuleState,
 
@@ -184,11 +193,8 @@ pub(crate) struct CoreInner<
     /// Dynamic information
     pub(crate) dynamic_info: Option<Arc<DynamicInfo<Arch>>>,
 
-    /// Local relocation scope retained by the loaded image.
-    pub(crate) scope: OnceCell<WeakLookupScope<Arch, Tls>>,
-
-    /// Namespace symbol state used by deferred lookup.
-    pub(crate) symbols: OnceCell<Weak<SymbolRegistry<Arch, Tls>>>,
+    /// Weak state used by lazy symbol lookup without retaining dependencies.
+    pub(crate) lazy_lookup: OnceCell<LazyLookup<Arch, Tls>>,
 
     /// TLS runtime state for this loaded object.
     pub(crate) tls: CoreTlsState<Arch, Tls>,
@@ -208,6 +214,15 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         inner
             .runtime
             .bind_core(VmAddr::from_ptr(Arc::as_ptr(inner)));
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn resolve_ifunc(&self, resolver: VmAddr) -> Result<VmAddr> {
+        self.executor.resolve_ifunc(
+            CodeContext::<Arch>::new(self.search.name(), &self.segments),
+            resolver,
+        )
     }
 }
 
@@ -229,18 +244,13 @@ where
     }
 
     #[inline]
-    fn source_id(&self) -> ModuleSourceId {
-        self.source_id
-    }
-
-    #[inline]
     fn search(&self) -> Option<&ModuleSearch> {
         Some(&self.search)
     }
 
     #[inline]
     fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
-        &*self.exports
+        self.exports.as_ref()
     }
 
     #[inline]
@@ -261,7 +271,16 @@ where
                 index,
             )
         } else {
-            SymDef::<Arch, Tls>::defined(symbol, self).resolve(self.executor.as_ref())
+            let addr = if symbol.st_shndx().is_abs() {
+                VmAddr::new(symbol.st_value())
+            } else {
+                self.segments.base() + VmOffset::new(symbol.st_value())
+            };
+            if symbol.symbol_type() == ElfSymbolType::GNU_IFUNC {
+                self.resolve_ifunc(addr)
+            } else {
+                Ok(addr)
+            }
         }
     }
 

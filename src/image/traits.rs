@@ -6,7 +6,6 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfLayout, ElfSymbol, SymbolLookup, SymbolTable},
-    input::ModuleSourceId,
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
     runtime::DomainId,
@@ -76,9 +75,6 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
         None
     }
 
-    /// Returns the stable identity of the source backing this module.
-    fn source_id(&self) -> ModuleSourceId;
-
     /// Returns the runtime symbol exports for this module.
     fn exports(&self) -> &dyn SymbolExports<Arch::Layout>;
 
@@ -87,9 +83,9 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
 
     /// Resolves one of this module's exported symbols to its runtime address.
     ///
-    /// `symbol` must come from this module's [`SymbolExports`]. Implementations
-    /// define how ordinary, absolute, TLS, IFUNC, and module-specific symbols
-    /// become target-visible addresses.
+    /// `symbol` must describe a definition exposed by this module's
+    /// [`SymbolExports`]. Implementations define how ordinary, absolute, TLS,
+    /// IFUNC, and module-specific symbols become target-visible addresses.
     fn resolve_symbol(&self, symbol: &ElfSymbol<Arch::Layout>) -> Result<VmAddr>;
 
     /// Returns TLS metadata when this module owns a TLS block.
@@ -210,11 +206,6 @@ where
     #[inline]
     fn search(&self) -> Option<&ModuleSearch> {
         (**self).search()
-    }
-
-    #[inline]
-    fn source_id(&self) -> ModuleSourceId {
-        (**self).source_id()
     }
 
     #[inline]

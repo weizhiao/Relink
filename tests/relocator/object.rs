@@ -246,9 +246,9 @@ fn addends_apply() {
 }
 
 #[test]
-fn retained_core_rejects_relocation() {
+fn retained_core_allows_relocation() {
     use crate::LOCAL_VAR_NAME;
-    use elf_loader::{Error, error::LinkerError};
+    use elf_loader::image::SymbolLookup;
     use gen_elf::{Arch, ObjectWriter, SymbolDesc};
 
     let object_file = ObjectWriter::new(Arch::current())
@@ -264,14 +264,16 @@ fn retained_core_rejects_relocation() {
             &object_file.data,
         ))
         .expect("failed to load object");
-    let _retained_core = (*raw).clone();
+    let retained_core = (*raw).clone();
 
-    let err = Relocator::new()
+    let _loaded = Relocator::new()
         .run(raw)
         .relocate()
-        .expect_err("retained raw object core should reject relocation");
-    assert!(matches!(
-        err,
-        Error::Linker(LinkerError::ObjectCoreRetainedBeforeExports)
-    ));
+        .expect("retaining the raw object core must not prevent export installation");
+    assert!(
+        retained_core
+            .exports()
+            .lookup(&mut SymbolLookup::new(LOCAL_VAR_NAME))
+            .is_some()
+    );
 }

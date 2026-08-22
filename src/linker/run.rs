@@ -4,7 +4,7 @@ use super::{
     resolve::LoadResolveContext,
     resolver::KeyResolver,
     scan::{GotPltTarget, LinkPipeline, MappedRuntimeMemory},
-    session::{LoadSession, ResolveSession},
+    session::{LoadSession, PublishSession, ResolveSession},
     storage::{ContextId, ModuleId, ModuleKey, ModuleLease, ModuleSlot},
 };
 use crate::{
@@ -193,9 +193,10 @@ where
             })
             .transpose()?;
         let key = self.linker.resolver.root_key(&root);
-        if let Some(prepared) = PreparedLoad::visible(context, &key) {
+        if let Some(prepared) = PreparedLoad::visible(context, key) {
             return Ok(prepared);
         }
+        let key = ModuleKey::from(key);
         let linker = self.linker;
         let mut session = ResolveSession::new();
         let tokens = context.search_paths.tokens();
@@ -206,10 +207,8 @@ where
             .with_observer(&mut self.observer);
         let mut resolve_context =
             LoadResolveContext::new(&mut context.committed, &mut session, tokens);
-        let resolved = resolve_context.resolve_root(root, caller, &linker.resolver)?;
-        let root = resolve_context.stage(resolved, caller, &mut loader)?;
-        resolve_context.bind_key(key, root);
-        resolve_context.resolve_pending(root, &mut loader, &linker.resolver)?;
+        let root =
+            resolve_context.resolve_root(root, key, caller, &mut loader, &linker.resolver)?;
         Ok(PreparedLoad::new(root, session, None, context))
     }
 
@@ -253,7 +252,7 @@ where
 
         let linker = self.linker;
         let mut session = ResolveSession::new();
-        let source = raw.core_ref().source_id();
+        let source = raw.core_ref().state().instance_id().source_id();
         let key = context.committed.intern_key(key);
         if let Some(root) = context.committed.module_for_source(source) {
             session.track(root, context.committed.generation(root));
@@ -281,7 +280,7 @@ where
             .with_observer(&mut self.observer);
         let mut resolve_context =
             LoadResolveContext::new(&mut context.committed, &mut session, tokens);
-        resolve_context.resolve_pending(root, &mut loader, &linker.resolver)?;
+        resolve_context.resolve_graph(root, &mut loader, &linker.resolver)?;
         Ok(PreparedLoad::new(root, session, None, context))
     }
 
@@ -289,7 +288,7 @@ where
     pub fn relocate(
         &mut self,
         prepared: PreparedLoad<D, Arch, M::Region, Tls>,
-    ) -> Result<RelocatedLoad<D, Arch, M::Region, Tls>> {
+    ) -> Result<RelocatedLoad<Arch, Tls>> {
         let PreparedLoad {
             context,
             root: root_slot,
@@ -317,7 +316,7 @@ where
         Ok(RelocatedLoad {
             context,
             root: root_slot,
-            session,
+            session: session.into_publish(),
         })
     }
 
@@ -331,7 +330,7 @@ where
     ) -> Result<()> {
         let mut order = mem::take(&mut self.scratch_order);
         session.build_lifecycle_order(root, &mut order);
-        let scope = LookupScope::from_group(local.clone()).with_global(global.clone());
+        let scope = LookupScope::from_group(local.clone());
 
         let result = (|| {
             for id in order.drain(..) {
@@ -347,6 +346,7 @@ where
                         .relocator
                         .run(raw)
                         .lookup_scope(scope)
+                        .global_scope(global.clone())
                         .symbol_registry(Arc::clone(symbols))
                         .binding(binding)
                         .observer(&mut self.observer)
@@ -455,7 +455,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 {
     pub(in crate::linker) fn visible<Meta>(
         context: &LinkContext<Meta, Arch, Tls>,
-        key: &ModuleKey,
+        key: &str,
     ) -> Option<Self> {
         let root = context
             .committed
@@ -494,21 +494,15 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
 /// A relocated load transaction ready to publish into its original context.
 #[must_use = "a relocated load must be published or dropped"]
-pub struct RelocatedLoad<
-    D: Send + Sync + 'static,
-    Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch> = (),
-> {
+pub struct RelocatedLoad<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     context: ContextId,
     root: ModuleSlot,
-    session: LoadSession<D, Arch, R, Tls>,
+    session: PublishSession<Arch, Tls>,
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> RelocatedLoad<D, Arch, R, Tls>
+impl<Arch, Tls> RelocatedLoad<Arch, Tls>
 where
     Arch: RelocationArch,
-    R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
     /// Publishes this relocated module group into its original context.
@@ -530,7 +524,7 @@ where
             .into());
         }
 
-        let initializers = self.session.initializers().into_boxed_slice();
+        let initializers = self.session.initializers();
         let modules = self.session.commit_into(&mut context.committed)?;
         let root_id = context.committed.make_module_id(self.root);
         let lease = context.acquire(root_id)?;

@@ -38,13 +38,21 @@ where
         &self.raw
     }
 
+    /// Returns the module's retained lookup scope.
+    ///
+    /// Linker-global modules participate in relocation separately and are not
+    /// retained by this scope.
     #[inline]
     pub const fn scope(&self) -> &LookupScope<Arch, Tls> {
         &self.scope
     }
 
+    /// Returns the mutable lookup scope used to relocate this module.
+    ///
+    /// Linker-global modules are managed separately and are not part of this
+    /// scope.
     #[inline]
-    pub fn scope_mut(&mut self) -> &mut LookupScope<Arch, Tls> {
+    pub const fn scope_mut(&mut self) -> &mut LookupScope<Arch, Tls> {
         &mut self.scope
     }
 
