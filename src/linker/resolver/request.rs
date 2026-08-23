@@ -1,5 +1,5 @@
 use crate::{
-    Error, LinkResolverError, LinkerError, Result, UnresolvedDependency,
+    Error, LinkerError, Result, UnresolvedDependency,
     image::{Module, ModuleSearch, PathTokens, RawDynamic, ScannedDynamic},
     input::ModuleSourceId,
     memory::RegionAccess,
@@ -148,9 +148,7 @@ impl<'a, Root> ResolveRequest<'a, Root> {
     /// Creates the standard not-found error for this request.
     pub fn unresolved(&self) -> Error {
         match self.input() {
-            ResolveInput::Root { .. } => {
-                LinkerError::resolver(LinkResolverError::RootNotFound).into()
-            }
+            ResolveInput::Root { .. } => LinkerError::RootNotFound.into(),
             ResolveInput::Dependency { needed } => LinkerError::UnresolvedDependency(Box::new(
                 UnresolvedDependency::new(self.search.name(), needed),
             ))

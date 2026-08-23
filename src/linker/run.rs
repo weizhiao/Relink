@@ -11,9 +11,7 @@ use crate::{
     ByteRepr, Error, LinkContextError, LinkerError, Loader, Result,
     arch::NativeArch,
     elf::ElfRelType,
-    image::{
-        GlobalScope, LookupScope, Module, ModuleHandle, ModuleScope, ModuleSearch, RawDynamic,
-    },
+    image::{GlobalScope, LookupScope, ModuleHandle, ModuleScope, RawDynamic},
     lazy::LazyBinder,
     memory::RegionAccess,
     observer::{LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver},
@@ -192,15 +190,7 @@ where
             .committed
             .ensure_domain(self.linker.loader.domain_id())?;
         let caller = caller
-            .map(|id| -> Result<ModuleSlot> {
-                let slot = context.committed.module_slot(id)?;
-                if !context.committed.contains_module(slot) {
-                    return Err(
-                        LinkerError::context(LinkContextError::ModuleNotCommitted { id }).into(),
-                    );
-                }
-                Ok(slot)
-            })
+            .map(|id| context.committed.module_slot(id))
             .transpose()?;
         let key = self.linker.resolver.root_key(&root);
         if let Some(prepared) = PreparedLoad::visible(context, key) {
@@ -261,24 +251,10 @@ where
         let linker = self.linker;
         let mut session = ResolveSession::new();
         let source = raw.state().instance_id().source_id();
-        let key = context.committed.intern_key(key);
         if let Some(root) = context.committed.module_for_source(source) {
             session.track(root, context.committed.generation(root));
             session.bind_key(key, root);
             return Ok(PreparedLoad::new(root, session, None, context));
-        }
-        let root = context.committed.alloc_module(key);
-        let generation = context.committed.generation(root);
-        let alias = raw
-            .search()
-            .and_then(ModuleSearch::soname)
-            .map(ModuleKey::from);
-        session.stage_dynamic(root, generation, raw, None);
-        session.stage_source(source, root);
-        session.bind_key(key, root);
-        if let Some(alias) = alias {
-            let alias = context.committed.intern_key(alias);
-            session.bind_key(alias, root);
         }
         let tokens = context.search_paths.tokens();
         let mut loader = linker
@@ -288,6 +264,7 @@ where
             .with_observer(&mut self.observer);
         let mut resolve_context =
             LoadResolveContext::new(&mut context.committed, &mut session, tokens);
+        let root = resolve_context.stage_dynamic(key, raw, None);
         resolve_context.resolve_graph(root, &mut loader, &linker.resolver)?;
         Ok(PreparedLoad::new(root, session, None, context))
     }
@@ -343,7 +320,7 @@ where
         let result = (|| {
             for id in order.drain(..) {
                 if let Some(entry) = session.take_pending_dynamic(id) {
-                    let (raw, direct_deps) = entry.into_parts();
+                    let (key, raw, direct_deps) = entry.into_parts();
                     let direct_deps =
                         direct_deps.expect("missing resolved dependencies while relocating");
                     let mut event =
@@ -361,7 +338,7 @@ where
                         .binding(binding)
                         .observer(&mut self.observer)
                         .relocate()?;
-                    session.push_ready(id, loaded, direct_deps);
+                    session.push_ready(id, key, loaded, direct_deps);
                 } else {
                     session.mark_module_ready(id);
                 }
@@ -403,10 +380,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         context: &LinkContext<Meta, Arch, Tls>,
         key: &str,
     ) -> Option<Self> {
-        let root = context
-            .committed
-            .key_slot_for(key)
-            .and_then(|key| context.committed.module_for_key(key))?;
+        let root = context.committed.module_for_key(key)?;
         let mut session = ResolveSession::new();
         session.track(root, context.committed.generation(root));
         Some(Self::new(root, session, None, context))

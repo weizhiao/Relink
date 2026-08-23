@@ -1,10 +1,10 @@
 use super::{
     context::LinkContext,
-    storage::{CommittedStorage, KeySlot, ModuleId, ModuleSlot, StoredEntry},
+    storage::{CommittedStorage, ModuleId, ModuleKey, ModuleSlot, StoredEntry},
 };
 use crate::{
     LinkContextError, LinkerError, Result,
-    entity::{EntitySet, SecondaryMap},
+    entity::EntitySet,
     image::{LoadedCore, LookupScope, ModuleHandle, ModuleScope, RawDynamic},
     input::ModuleSourceId,
     memory::RegionAccess,
@@ -18,6 +18,7 @@ use alloc::{
 };
 
 pub(crate) struct GraphEntry<P> {
+    entry_key: ModuleKey,
     payload: P,
     loader: Option<ModuleSlot>,
     direct_deps: Option<Box<[ModuleSlot]>>,
@@ -45,12 +46,13 @@ impl<P> GraphEntry<P> {
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (P, Option<Box<[ModuleSlot]>>) {
-        (self.payload, self.direct_deps)
+    pub(crate) fn into_parts(self) -> (ModuleKey, P, Option<Box<[ModuleSlot]>>) {
+        (self.entry_key, self.payload, self.direct_deps)
     }
 }
 
 pub(crate) struct PendingModule<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
+    entry_key: ModuleKey,
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[ModuleSlot]>,
     scope: LookupScope<Arch, Tls>,
@@ -62,9 +64,14 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn new(module: ModuleHandle<Arch, Tls>, direct_deps: Box<[ModuleSlot]>) -> Self {
+    pub(crate) fn new(
+        entry_key: ModuleKey,
+        module: ModuleHandle<Arch, Tls>,
+        direct_deps: Box<[ModuleSlot]>,
+    ) -> Self {
         let scope = LookupScope::empty(module.domain_id());
         Self {
+            entry_key,
             module,
             direct_deps,
             scope,
@@ -89,7 +96,7 @@ pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch>
     // transaction if any referenced slot changed before commit.
     guards: BTreeMap<ModuleSlot, u32>,
     group_order: Vec<ModuleSlot>,
-    bindings: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
+    bindings: BTreeMap<ModuleKey, Vec<ModuleSlot>>,
     sources: BTreeMap<ModuleSourceId, ModuleSlot>,
 }
 
@@ -105,7 +112,7 @@ where
             modules: BTreeMap::new(),
             guards: BTreeMap::new(),
             group_order: Vec::new(),
-            bindings: SecondaryMap::new(),
+            bindings: BTreeMap::new(),
             sources: BTreeMap::new(),
         }
     }
@@ -121,15 +128,15 @@ where
     }
 
     #[inline]
-    pub(crate) fn module_for_key(&self, key: KeySlot) -> Option<ModuleSlot> {
+    pub(crate) fn module_for_key(&self, key: &str) -> Option<ModuleSlot> {
         self.bindings
             .get(key)
             .and_then(|modules| modules.first().copied())
     }
 
     #[inline]
-    pub(crate) fn bind_key(&mut self, key: KeySlot, module: ModuleSlot) {
-        let modules = self.bindings.get_or_default(key);
+    pub(crate) fn bind_key(&mut self, key: ModuleKey, module: ModuleSlot) {
+        let modules = self.bindings.entry(key).or_default();
         if !modules.contains(&module) {
             modules.push(module);
         }
@@ -176,6 +183,7 @@ where
         &mut self,
         slot: ModuleSlot,
         generation: u32,
+        entry_key: ModuleKey,
         payload: P,
         loader: Option<ModuleSlot>,
     ) {
@@ -183,6 +191,7 @@ where
         let previous = self.dynamics.insert(
             slot,
             GraphEntry {
+                entry_key,
                 payload,
                 loader,
                 direct_deps: None,
@@ -195,6 +204,7 @@ where
         &mut self,
         slot: ModuleSlot,
         generation: u32,
+        entry_key: ModuleKey,
         module: ModuleHandle<Arch, Tls>,
         direct_deps: Box<[ModuleSlot]>,
     ) {
@@ -202,7 +212,7 @@ where
         let source = module.source_id();
         let previous = self
             .modules
-            .insert(slot, PendingModule::new(module, direct_deps));
+            .insert(slot, PendingModule::new(entry_key, module, direct_deps));
         debug_assert!(previous.is_none(), "pending modules must be unique");
         self.stage_source(source, slot);
     }
@@ -237,12 +247,14 @@ where
     pub(crate) fn restore_dynamic(
         &mut self,
         slot: ModuleSlot,
+        entry_key: ModuleKey,
         payload: P,
         direct_deps: Box<[ModuleSlot]>,
     ) {
         let previous = self.dynamics.insert(
             slot,
             GraphEntry {
+                entry_key,
                 payload,
                 loader: None,
                 direct_deps: Some(direct_deps),
@@ -319,8 +331,7 @@ pub(crate) struct LoadSession<
 pub(crate) struct PublishSession<Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     guards: BTreeMap<ModuleSlot, u32>,
     modules: BTreeMap<ModuleSlot, PendingModule<Arch, Tls>>,
-    order: Vec<ModuleSlot>,
-    bindings: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
+    bindings: BTreeMap<ModuleKey, Vec<ModuleSlot>>,
     pending_sources: BTreeMap<ModuleSourceId, ModuleSlot>,
     lifecycle: Vec<ModuleSlot>,
 }
@@ -354,6 +365,7 @@ where
     pub(crate) fn push_ready(
         &mut self,
         slot: ModuleSlot,
+        entry_key: ModuleKey,
         loaded: LoadedCore<D, Arch, R, Tls>,
         direct_deps: Box<[ModuleSlot]>,
     ) {
@@ -361,6 +373,7 @@ where
         let previous = self.ready_to_commit.insert(
             slot,
             PendingModule {
+                entry_key,
                 module,
                 direct_deps,
                 scope,
@@ -439,7 +452,7 @@ where
             dynamics,
             modules,
             guards,
-            group_order,
+            group_order: _,
             bindings,
             sources,
         } = resolve;
@@ -450,7 +463,6 @@ where
         PublishSession {
             guards,
             modules: ready_to_commit,
-            order: group_order,
             bindings,
             pending_sources: sources,
             lifecycle,
@@ -487,7 +499,6 @@ where
         let Self {
             guards,
             modules,
-            order,
             bindings,
             pending_sources,
             lifecycle,
@@ -532,28 +543,29 @@ where
                 .into());
             }
         }
-        for slot in order {
-            let Some(entry) = ready.remove(&slot) else {
-                continue;
-            };
+        for &slot in &lifecycle {
+            let entry = ready
+                .remove(&slot)
+                .expect("lifecycle order must contain every ready module");
             let PendingModule {
+                entry_key,
                 module,
                 direct_deps,
                 scope,
             } = entry;
             committed.insert(
                 slot,
-                StoredEntry::new(module, direct_deps, scope, 0, Meta::default()),
+                StoredEntry::new(entry_key, module, direct_deps, scope, 0, Meta::default()),
             );
             committed_ids.push(committed.make_module_id(slot));
         }
         assert!(
             ready.is_empty(),
-            "ready commit entries must all be present in group_order"
+            "ready commit entries must all be present in lifecycle order"
         );
-        for (key, modules) in bindings.iter() {
-            for &module in modules {
-                committed.bind_key(key, module);
+        for (key, modules) in bindings {
+            for module in modules {
+                committed.bind_key(key.clone(), module);
             }
         }
         committed.extend_lifecycle(&lifecycle);

@@ -116,7 +116,7 @@ fn arena_materializes_section_bytes() {
         .load_scan_first(&mut context, "root")
         .expect("failed to execute arena-backed scan-first load");
 
-    assert!(context.contains_key("root"));
+    assert!(context.module_id("root").is_some());
 
     unsafe {
         let module = context.module(loaded.root()).unwrap();
@@ -199,7 +199,7 @@ fn arena_supports_assign_next() {
 
     assert_eq!(observed_offset, Some(0));
     assert_eq!(observed_size, Some(8));
-    assert!(context.contains_key("root"));
+    assert!(context.module_id("root").is_some());
 
     unsafe {
         let module = context.module(loaded.root()).unwrap();
@@ -301,7 +301,7 @@ fn missing_sections_become_opaque() {
         "opaque modules should not expose a usable section table",
     );
 
-    assert!(context.contains_key("root"));
+    assert!(context.module_id("root").is_some());
 
     unsafe {
         let module = context.module(loaded.root()).unwrap();

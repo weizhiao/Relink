@@ -6,11 +6,11 @@ mod fixture_build;
 use elf_loader::{
     Error, GraphModule, LinkContext, Linker, Loader, Module, Relocator,
     arch::NativeArch,
-    error::{LinkContextError, LinkResolverError, LinkerError},
+    error::{LinkContextError, LinkerError},
     image::{ElfModule, LoadedCore, ModuleCapability, SyntheticModule, SyntheticSymbol},
     input::{ElfBinary, ModuleSourceId},
     linker::{
-        KeyResolver, ResolveInput, ResolveRequest, ResolvedKey,
+        KeyResolver, ResolveInput, ResolveRequest, ResolvedDependency, ResolvedKey,
         scan::{DataPass, LinkPass, LinkPassPlan, Materialization, PassScopeMode},
     },
     memory::{RegionAccess, VmAddr},
@@ -42,18 +42,9 @@ struct SingleBinaryResolver {
     data: &'static [u8],
 }
 
-struct ExistingRootResolver {
-    requested: &'static str,
-    existing: &'static str,
-}
-
 struct ModuleDependencyResolver {
     root_data: &'static [u8],
     dep: LoadedCore<()>,
-}
-
-struct ExistingDependencyResolver {
-    root_data: &'static [u8],
 }
 
 struct SyntheticDependencyResolver {
@@ -61,6 +52,8 @@ struct SyntheticDependencyResolver {
 }
 
 struct SyntheticRootResolver;
+
+struct ResolvedGraphResolver;
 
 extern "C" fn synthetic_value() -> i32 {
     42
@@ -138,35 +131,9 @@ impl KeyResolver for SingleBinaryResolver {
         match req.input() {
             ResolveInput::Root { root } => {
                 assert_eq!(*root, self.key);
-                Ok(ResolvedKey::load(
-                    self.key,
-                    ElfBinary::new(self.name, self.data),
-                ))
+                Ok(ResolvedKey::load(ElfBinary::new(self.name, self.data)))
             }
             ResolveInput::Dependency { .. } => Err(req.unresolved()),
-        }
-    }
-}
-
-impl KeyResolver for ExistingRootResolver {
-    type Root = &'static str;
-
-    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
-        root
-    }
-
-    fn resolve<'cfg>(
-        &self,
-        req: ResolveRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg>> {
-        match req.input() {
-            ResolveInput::Root { root } => {
-                assert_eq!(*root, self.requested);
-                Ok(ResolvedKey::existing(self.existing))
-            }
-            ResolveInput::Dependency { .. } => {
-                panic!("existing scan root should not resolve dependencies")
-            }
         }
     }
 }
@@ -185,41 +152,14 @@ impl KeyResolver for ModuleDependencyResolver {
         match req.input() {
             ResolveInput::Root { root } => {
                 assert_eq!(*root, "root");
-                Ok(ResolvedKey::load(
-                    "root",
-                    ElfBinary::new("visible_root.so", self.root_data),
-                ))
+                Ok(ResolvedKey::load(ElfBinary::new(
+                    "visible_root.so",
+                    self.root_data,
+                )))
             }
             ResolveInput::Dependency { needed } => {
                 assert_eq!(*needed, DEP_KEY);
-                Ok(ResolvedKey::module(DEP_KEY, self.dep.clone(), Vec::new()))
-            }
-        }
-    }
-}
-
-impl KeyResolver for ExistingDependencyResolver {
-    type Root = &'static str;
-
-    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
-        root
-    }
-
-    fn resolve<'cfg>(
-        &self,
-        req: ResolveRequest<'_, &'static str>,
-    ) -> elf_loader::Result<ResolvedKey<'cfg>> {
-        match req.input() {
-            ResolveInput::Root { root } => {
-                assert_eq!(*root, "root");
-                Ok(ResolvedKey::load(
-                    "root",
-                    ElfBinary::new("existing_dep_root.so", self.root_data),
-                ))
-            }
-            ResolveInput::Dependency { needed } => {
-                assert_eq!(*needed, DEP_KEY);
-                Ok(ResolvedKey::existing(DEP_KEY))
+                Ok(ResolvedKey::module(self.dep.clone(), Vec::new()))
             }
         }
     }
@@ -239,15 +179,14 @@ impl KeyResolver for SyntheticDependencyResolver {
         match req.input() {
             ResolveInput::Root { root } => {
                 assert_eq!(*root, "root");
-                Ok(ResolvedKey::load(
-                    "root",
-                    ElfBinary::new("scan_synthetic_root.so", self.root_data),
-                ))
+                Ok(ResolvedKey::load(ElfBinary::new(
+                    "scan_synthetic_root.so",
+                    self.root_data,
+                )))
             }
             ResolveInput::Dependency { needed } => {
                 assert_eq!(*needed, "dep");
                 Ok(ResolvedKey::module(
-                    "synthetic-dep",
                     SyntheticModule::empty("dep"),
                     Vec::new(),
                 ))
@@ -268,8 +207,7 @@ impl KeyResolver for SyntheticRootResolver {
         req: ResolveRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg>> {
         match req.input() {
-            ResolveInput::Root { root } => Ok(ResolvedKey::module(
-                *root,
+            ResolveInput::Root { .. } => Ok(ResolvedKey::module(
                 SyntheticModule::new(
                     "synthetic-root",
                     [SyntheticSymbol::function(
@@ -281,6 +219,32 @@ impl KeyResolver for SyntheticRootResolver {
             )),
             ResolveInput::Dependency { .. } => {
                 unreachable!("synthetic root has no dependencies")
+            }
+        }
+    }
+}
+
+impl KeyResolver for ResolvedGraphResolver {
+    type Root = &'static str;
+
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
+        root
+    }
+
+    fn resolve<'cfg>(
+        &self,
+        req: ResolveRequest<'_, &'static str>,
+    ) -> elf_loader::Result<ResolvedKey<'cfg>> {
+        match req.input() {
+            ResolveInput::Root { root } => Ok(ResolvedKey::module(
+                SyntheticModule::empty(*root),
+                [ResolvedDependency::new(
+                    "dep",
+                    ResolvedKey::module(SyntheticModule::empty("dep"), Vec::new()),
+                )],
+            )),
+            ResolveInput::Dependency { .. } => {
+                unreachable!("the synthetic graph is already resolved")
             }
         }
     }

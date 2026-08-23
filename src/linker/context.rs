@@ -1,7 +1,7 @@
-use super::storage::{CommittedStorage, ContextId, KeyId, ModuleId, ModuleKey, ModuleLease};
+use super::storage::{CommittedStorage, ContextId, ModuleId, ModuleKey, ModuleLease};
 use super::unload::{UnloadGroup, UnloadedModule};
 use crate::{
-    LinkContextError, LinkerError, Result,
+    Result,
     arch::NativeArch,
     entity::EntitySet,
     image::{GlobalScope, Module, ModuleScope, SearchPathPool},
@@ -11,11 +11,6 @@ use crate::{
     tls::TlsResolver,
 };
 use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
-
-#[inline]
-pub(super) fn require_module<T>(id: ModuleId, module: Option<T>) -> Result<T> {
-    module.ok_or_else(|| LinkerError::context(LinkContextError::ModuleNotCommitted { id }).into())
-}
 
 struct LoadGroupInner<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
     root: ModuleId,
@@ -68,8 +63,8 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LoadGroup<Arch, Tls> {
 ///
 /// Each context is one symbol namespace. Multiple contexts may target the same
 /// runtime domain while retaining independent module graphs and GNU unique
-/// symbol definitions. Module ids and key ids are branded with the namespace's
-/// context identity so ids from different contexts cannot be mixed accidentally.
+/// symbol definitions. Module ids are branded with the namespace's context
+/// identity so ids from different contexts cannot be mixed accidentally.
 ///
 /// `Meta` stores state specific to one context entry. It is created independently
 /// when a shared module is imported into another context and is detached with the
@@ -141,58 +136,29 @@ where
         self.committed.is_empty()
     }
 
-    /// Returns whether the context contains a module with `key`.
-    #[inline]
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.committed.contains_key(key)
-    }
-
     /// Returns whether the context contains the committed module `id`.
     #[inline]
     pub fn contains_module(&self, id: ModuleId) -> Result<bool> {
         self.committed.contains_id(id)
     }
 
-    /// Returns the interned id for a known key.
-    #[inline]
-    pub fn key_id(&self, key: &str) -> Option<KeyId> {
-        self.committed
-            .key_slot_for(key)
-            .map(|slot| self.committed.make_key_id(slot))
-    }
-
-    /// Returns the key associated with an interned id.
-    #[inline]
-    pub fn key(&self, id: KeyId) -> Result<&ModuleKey> {
-        let slot = self.committed.key_slot(id)?;
-        Ok(self.committed.key(slot))
-    }
-
     /// Returns the committed module id associated with `key`.
     #[inline]
     pub fn module_id(&self, key: &str) -> Option<ModuleId> {
         self.committed
-            .key_slot_for(key)
-            .and_then(|slot| self.committed.module_for_key(slot))
+            .module_for_key(key)
             .map(|slot| self.committed.make_module_id(slot))
-    }
-
-    /// Resolves an interned key id to its committed module id.
-    #[inline]
-    pub fn resolve_key(&self, id: KeyId) -> Result<Option<ModuleId>> {
-        let slot = self.committed.key_slot(id)?;
-        Ok(self
-            .committed
-            .module_for_key(slot)
-            .map(|slot| self.committed.make_module_id(slot)))
     }
 
     /// Returns the representative key associated with a committed module id.
     #[inline]
     pub fn module_key(&self, id: ModuleId) -> Result<&ModuleKey> {
         let module_slot = self.committed.module_slot(id)?;
-        let module = require_module(id, self.committed.module(module_slot))?;
-        Ok(self.committed.key(module.entry_key()))
+        let module = self
+            .committed
+            .module(module_slot)
+            .expect("validated module id must refer to committed state");
+        Ok(module.entry_key())
     }
 
     /// Returns the committed module associated with an id.
@@ -207,7 +173,10 @@ where
     #[inline]
     pub fn module(&self, id: ModuleId) -> Result<&dyn Module<Arch, Tls>> {
         let slot = self.committed.module_slot(id)?;
-        Ok(require_module(id, self.committed.module(slot))?
+        Ok(self
+            .committed
+            .module(slot)
+            .expect("validated module id must refer to committed state")
             .handle()
             .as_ref())
     }
@@ -216,21 +185,32 @@ where
     #[inline]
     pub fn meta(&self, id: ModuleId) -> Result<&Meta> {
         let slot = self.committed.module_slot(id)?;
-        Ok(require_module(id, self.committed.module(slot))?.meta())
+        Ok(self
+            .committed
+            .module(slot)
+            .expect("validated module id must refer to committed state")
+            .meta())
     }
 
     /// Returns mutable metadata owned by this context entry.
     #[inline]
     pub fn meta_mut(&mut self, id: ModuleId) -> Result<&mut Meta> {
         let slot = self.committed.module_slot(id)?;
-        Ok(require_module(id, self.committed.module_mut(slot))?.meta_mut())
+        Ok(self
+            .committed
+            .module_mut(slot)
+            .expect("validated module id must refer to committed state")
+            .meta_mut())
     }
 
     /// Returns direct dependency modules for a committed module.
     #[inline]
     pub fn direct_deps(&self, id: ModuleId) -> Result<impl Iterator<Item = ModuleId> + '_> {
         let slot = self.committed.module_slot(id)?;
-        Ok(require_module(id, self.committed.module(slot))?
+        Ok(self
+            .committed
+            .module(slot)
+            .expect("validated module id must refer to committed state")
             .direct_deps()
             .iter()
             .copied()
@@ -241,7 +221,10 @@ where
     #[inline]
     pub fn reloc_deps(&self, id: ModuleId) -> Result<impl Iterator<Item = ModuleId> + '_> {
         let slot = self.committed.module_slot(id)?;
-        let deps = require_module(id, self.committed.module(slot))?
+        let deps = self
+            .committed
+            .module(slot)
+            .expect("validated module id must refer to committed state")
             .handle()
             .state()
             .with_bindings(|bindings| {
@@ -268,15 +251,7 @@ where
     /// unloaded, lookup falls back to the next registered module.
     pub fn add_alias(&mut self, module_id: ModuleId, alias: impl Into<ModuleKey>) -> Result<()> {
         let module_slot = self.committed.module_slot(module_id)?;
-        if !self.committed.contains_module(module_slot) {
-            return Err(LinkerError::context(LinkContextError::ModuleNotCommitted {
-                id: module_id,
-            })
-            .into());
-        }
-
-        let alias = self.committed.intern_key(alias.into());
-        self.committed.bind_key(alias, module_slot);
+        self.committed.bind_key(alias.into(), module_slot);
         Ok(())
     }
 
@@ -286,7 +261,10 @@ where
     /// not acquire their targets.
     pub fn acquire(&mut self, id: ModuleId) -> Result<ModuleLease> {
         let slot = self.committed.module_slot(id)?;
-        require_module(id, self.committed.module_mut(slot))?.acquire_root();
+        self.committed
+            .module_mut(slot)
+            .expect("validated module id must refer to committed state")
+            .acquire_root();
         Ok(ModuleLease::new(id))
     }
 
@@ -298,7 +276,10 @@ where
     pub fn pin(&mut self, lease: ModuleLease) -> Result<()> {
         let id = lease.id();
         let slot = self.committed.module_slot(id)?;
-        require_module(id, self.committed.module_mut(slot))?.pin_root();
+        self.committed
+            .module_mut(slot)
+            .expect("validated module id must refer to committed state")
+            .pin_root();
         Ok(())
     }
 
@@ -316,8 +297,10 @@ where
             if !visited.insert(slot) {
                 continue;
             }
-            let id = self.committed.make_module_id(slot);
-            let module = require_module(id, self.committed.module(slot))?;
+            let module = self
+                .committed
+                .module(slot)
+                .expect("global traversal must only contain committed modules");
             if !global
                 .iter()
                 .any(|candidate| candidate.source_id() == module.handle().source_id())
@@ -336,7 +319,11 @@ where
     pub fn release(&mut self, lease: ModuleLease) -> Result<UnloadGroup<Meta, Arch, Tls>> {
         let id = lease.id();
         let slot = self.committed.module_slot(id)?;
-        let refs = require_module(id, self.committed.module_mut(slot))?.release_root();
+        let refs = self
+            .committed
+            .module_mut(slot)
+            .expect("validated module id must refer to committed state")
+            .release_root();
         if refs != 0 {
             return Ok(UnloadGroup::new(Vec::new()));
         }
@@ -357,8 +344,10 @@ where
             if !reachable.insert(slot) {
                 continue;
             }
-            let module_id = self.committed.make_module_id(slot);
-            let module = require_module(module_id, self.committed.module(slot))?;
+            let module = self
+                .committed
+                .module(slot)
+                .expect("lifecycle must only contain committed modules");
             pending.extend(module.direct_deps().iter().copied());
             module.handle().state().with_bindings(|bindings| {
                 pending.extend(
@@ -405,13 +394,14 @@ where
 
         while let Some(slot) = queue.pop_front() {
             let id = self.committed.make_module_id(slot);
-            let module = require_module(id, self.committed.module(slot))?;
+            let module = self
+                .committed
+                .module(slot)
+                .expect("load group traversal must only contain committed modules");
 
             members.push(id);
             scope.push(module.handle().clone());
             for &dep in module.direct_deps() {
-                let dep_id = self.committed.make_module_id(dep);
-                require_module(dep_id, self.committed.module(dep))?;
                 if visited.insert(dep) {
                     queue.push_back(dep);
                 }
@@ -563,27 +553,22 @@ mod tests {
     }
 
     #[test]
-    fn ids_do_not_cross_contexts() {
+    fn module_ids_do_not_cross_contexts() {
         let mut first = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
         let first_root = first
             .insert(node("root", SyntheticModule::empty("first")))
             .expect("failed to insert first module");
-        let first_key = first.key_id("root").expect("root key should be interned");
 
         let mut second = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
         let second_root = second
             .insert(node("root", SyntheticModule::empty("second")))
             .expect("failed to insert second module");
-        let second_key = second.key_id("root").expect("root key should be interned");
 
         assert_ne!(first.context_id(), second.context_id());
         assert!(!Arc::ptr_eq(&first.symbols, &second.symbols));
         assert_ne!(first_root.id(), second_root.id());
-        assert_ne!(first_key, second_key);
         assert!(second.contains_module(first_root.id()).is_err());
         assert!(second.module(first_root.id()).is_err());
-        assert!(second.key(first_key).is_err());
-        assert!(second.resolve_key(first_key).is_err());
         assert!(second.load_group(first_root.id()).is_err());
         assert!(second.contains_module(second_root.id()).unwrap());
     }
@@ -639,8 +624,6 @@ mod tests {
             .insert(node("module", SyntheticModule::empty("first")))
             .unwrap();
         let first_id = first.id();
-        let key_id = context.key_id("module").unwrap();
-
         drop(context.release(first).unwrap());
         assert!(!context.contains_module(first_id).unwrap());
         assert_eq!(context.module_id("module"), None);
@@ -649,7 +632,6 @@ mod tests {
             .insert(node("module", SyntheticModule::empty("second")))
             .unwrap();
         assert_ne!(second.id(), first_id);
-        assert_eq!(context.key_id("module"), Some(key_id));
         assert_eq!(context.module_id("module"), Some(second.id()));
         let error = match context.module(first_id) {
             Ok(_) => panic!("stale module id should fail"),
@@ -815,9 +797,6 @@ mod tests {
         context
             .add_alias(canonical_id, "alias")
             .expect("failed to add alias");
-        let alias_id = context
-            .key_id("alias")
-            .expect("dependency key should be interned before root insertion");
         let canonical_instance = instance(&context, canonical_id);
         let root = context
             .insert(node("root", SyntheticModule::empty("root")).dependencies([canonical_instance]))
@@ -831,9 +810,7 @@ mod tests {
             .add_alias(replacement_id, "alias")
             .expect("failed to add alias fallback");
 
-        assert!(context.resolve_key(alias_id).unwrap().is_some());
-        assert_eq!(context.key_id("alias"), Some(alias_id));
-        assert_eq!(context.resolve_key(alias_id).unwrap(), Some(canonical_id));
+        assert_eq!(context.module_id("alias"), Some(canonical_id));
         assert_eq!(direct_deps(&context, root_id), [canonical_id]);
         assert_eq!(
             context
@@ -859,20 +836,19 @@ mod tests {
         context
             .add_alias(first_id, "alias")
             .expect("failed to add alias");
-        let alias = context.key_id("alias").expect("alias key should exist");
-        assert_eq!(context.resolve_key(alias).unwrap(), Some(first_id));
+        assert_eq!(context.module_id("alias"), Some(first_id));
         context
             .add_alias(second_id, "alias")
             .expect("failed to add alias fallback");
         context
             .add_alias(second_id, "alias")
             .expect("failed to keep alias fallback");
-        assert_eq!(context.resolve_key(alias).unwrap(), Some(first_id));
+        assert_eq!(context.module_id("alias"), Some(first_id));
 
         assert_eq!(context.release(first).unwrap().len(), 1);
-        assert_eq!(context.resolve_key(alias).unwrap(), Some(second_id));
+        assert_eq!(context.module_id("alias"), Some(second_id));
         assert_eq!(context.release(second).unwrap().len(), 1);
-        assert_eq!(context.resolve_key(alias).unwrap(), None);
+        assert_eq!(context.module_id("alias"), None);
     }
 
     #[test]
@@ -906,15 +882,13 @@ mod tests {
             .insert(node("root", SyntheticModule::empty("old-root")))
             .expect("failed to insert root module");
         let first_id = first.id();
-        let root_key = context.key_id("root").expect("root key should exist");
         let second = context
             .insert(node("root", SyntheticModule::empty("new-root")))
             .expect("failed to insert fallback module");
 
-        assert_eq!(context.key_id("root"), Some(root_key));
-        assert_eq!(context.resolve_key(root_key).unwrap(), Some(first_id));
+        assert_eq!(context.module_id("root"), Some(first_id));
         assert_eq!(context.release(first).unwrap().len(), 1);
-        assert_eq!(context.resolve_key(root_key).unwrap(), Some(second.id()));
+        assert_eq!(context.module_id("root"), Some(second.id()));
         assert_eq!(context.release(second).unwrap().len(), 1);
     }
 
@@ -928,7 +902,6 @@ mod tests {
         context
             .add_alias(root_id, "alias")
             .expect("failed to add alias");
-        let alias = context.key_id("alias").expect("alias key should exist");
         let dep_module = context
             .insert(node("dep", SyntheticModule::empty("dep")))
             .expect("failed to insert dependency");
@@ -939,13 +912,13 @@ mod tests {
             .insert(node("alias", SyntheticModule::empty("alias")).dependencies([dep_instance]))
             .expect("failed to insert fallback module");
         assert_ne!(fallback.id(), root_id);
-        assert_eq!(context.resolve_key(alias).unwrap(), Some(root_id));
+        assert_eq!(context.module_id("alias"), Some(root_id));
         assert_eq!(context.module_key(root_id).unwrap().as_str(), "root");
         assert_eq!(context.module_key(fallback.id()).unwrap().as_str(), "alias");
         assert_eq!(direct_deps(&context, fallback.id()), [dep_module_id]);
 
         assert_eq!(context.release(root).unwrap().len(), 1);
-        assert_eq!(context.resolve_key(alias).unwrap(), Some(fallback.id()));
+        assert_eq!(context.module_id("alias"), Some(fallback.id()));
         assert_eq!(context.release(fallback).unwrap().len(), 1);
         assert_eq!(context.release(dep_module).unwrap().len(), 1);
     }
@@ -1065,7 +1038,7 @@ mod tests {
             .module_id("dep")
             .expect("dependency should be imported");
 
-        assert!(!target.contains_key("unrelated"));
+        assert!(target.module_id("unrelated").is_none());
         assert!(
             target
                 .module(root_id)
@@ -1115,7 +1088,7 @@ mod tests {
 
         assert_ne!(imported.id(), existing_id);
         assert_eq!(target.module_id("root"), Some(existing_id));
-        assert!(target.contains_key("dep"));
+        assert!(target.module_id("dep").is_some());
         assert_eq!(target.release(existing).unwrap().len(), 1);
         assert_eq!(target.module_id("root"), Some(imported.id()));
         assert_eq!(target.release(imported).unwrap().len(), 2);
@@ -1136,8 +1109,8 @@ mod tests {
             target.module_key(imported.id()).unwrap().as_str(),
             "canonical"
         );
-        assert!(target.contains_key("canonical"));
-        assert!(!target.contains_key("alias"));
+        assert!(target.module_id("canonical").is_some());
+        assert!(target.module_id("alias").is_none());
     }
 
     #[test]
@@ -1174,7 +1147,7 @@ mod tests {
         let imported = target.import(&source, source_root.id()).unwrap();
 
         assert_ne!(imported.id(), existing_id);
-        assert!(target.contains_key("source"));
+        assert!(target.module_id("source").is_some());
         assert_eq!(target.module_id("alias"), Some(existing_id));
     }
 

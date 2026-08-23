@@ -95,9 +95,7 @@ where
         let entries: BTreeMap<_, _> = dynamics
             .into_iter()
             .map(|(id, entry)| {
-                let key_slot = context.committed.entry_key(id);
-                let key = context.committed.key(key_slot).clone();
-                let (module, full_deps) = entry.into_parts();
+                let (key, module, full_deps) = entry.into_parts();
                 let full_deps =
                     full_deps.expect("missing resolved dependencies while building scan plan");
                 Ok((id, (key, module, full_deps)))
@@ -131,7 +129,7 @@ where
         };
         if let Some((entries, memory_layout)) = planned {
             for (module_id, entry) in entries {
-                let (id, _key, module, direct_deps) = entry.into_parts();
+                let (id, key, module, direct_deps) = entry.into_parts();
                 let raw = self.materialize_planned_raw(
                     &memory_layout,
                     &mut mapped_runtime,
@@ -139,7 +137,7 @@ where
                     module,
                     search_paths,
                 )?;
-                session.restore_dynamic(id, raw, direct_deps);
+                session.restore_dynamic(id, key, raw, direct_deps);
             }
         }
 

@@ -23,8 +23,9 @@ pub use context::{LinkContext, LoadGroup};
 pub use driver::{Linker, LoadResult};
 pub use import::GraphModule;
 pub use resolver::{
-    CandidateRequest, KeyResolver, ResolveInput, ResolveRequest, ResolvedKey, SearchPathResolver,
+    CandidateRequest, KeyResolver, ResolveInput, ResolveRequest, ResolvedDependency, ResolvedKey,
+    SearchPathResolver,
 };
 pub use run::{FailedLoad, LinkerRun, PreparedLoad, PublishedLoad, RelocatedLoad};
-pub use storage::{ContextId, KeyId, ModuleId, ModuleKey, ModuleLease};
+pub use storage::{ContextId, ModuleId, ModuleKey, ModuleLease};
 pub use unload::{UnloadGroup, UnloadedModule};

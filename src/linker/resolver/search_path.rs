@@ -1,4 +1,3 @@
-use super::super::ModuleKey;
 use super::{
     KeyResolver, ResolveInput, ResolveRequest, ResolvedKey,
     request::{LoaderProvider, LoaderVisitor},
@@ -292,7 +291,7 @@ where
                 }
                 Err(err) => return Err(err),
             };
-            Ok(Some(ResolvedKey::load(ModuleKey::from(candidate), file)))
+            Ok(Some(ResolvedKey::load(file)))
         };
 
         let requested_value = request.requested().as_str();
@@ -433,7 +432,7 @@ mod tests {
             request.loaders,
         );
         match <SearchPathResolver as KeyResolver<NativeArch>>::resolve(resolver, req) {
-            Ok(ResolvedKey::Load { key, .. }) => Some(PathBuf::from(key.as_str())),
+            Ok(ResolvedKey::Load(reader)) => Some(PathBuf::from(reader.path().as_str())),
             Ok(_) | Err(_) => None,
         }
     }

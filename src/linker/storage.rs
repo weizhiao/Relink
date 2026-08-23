@@ -1,7 +1,7 @@
 use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
-    entity::{PrimaryMap, SecondaryMap, entity_ref},
+    entity::{PrimaryMap, entity_ref},
     image::{LookupScope, ModuleHandle, ModuleInstanceId},
     input::{ModuleSourceId, Path, PathBuf},
     relocation::RelocationArch,
@@ -9,7 +9,12 @@ use crate::{
     sync::{Arc, AtomicUsize, Ordering},
     tls::TlsResolver,
 };
-use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, btree_map::Entry},
+    string::String,
+    vec::Vec,
+};
 use core::{
     borrow::Borrow,
     fmt::{self, Display},
@@ -119,33 +124,8 @@ impl Display for ContextId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::linker) struct KeySlot(usize);
-entity_ref!(KeySlot);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(in crate::linker) struct ModuleSlot(usize);
 entity_ref!(ModuleSlot);
-
-/// Stable id for a module key stored in a [`LinkContext`](super::LinkContext).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct KeyId {
-    context: ContextId,
-    slot: KeySlot,
-}
-
-impl KeyId {
-    #[inline]
-    pub(in crate::linker) const fn from_slot(context: ContextId, slot: KeySlot) -> Self {
-        Self { context, slot }
-    }
-}
-
-impl Display for KeyId {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} in link context {}", self.slot.0, self.context)
-    }
-}
 
 /// Identity of one committed module incarnation in a
 /// [`LinkContext`](super::LinkContext).
@@ -223,7 +203,6 @@ where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    entry_key: KeySlot,
     entry: &'a StoredEntry<Meta, Arch, Tls>,
 }
 
@@ -233,8 +212,8 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(in crate::linker) fn entry_key(&self) -> KeySlot {
-        self.entry_key
+    pub(in crate::linker) const fn entry_key(&self) -> &'a ModuleKey {
+        &self.entry.entry_key
     }
 
     #[inline]
@@ -319,9 +298,7 @@ pub(crate) struct CommittedStorage<
 > {
     context: ContextId,
     domain: DomainId,
-    key_slots: BTreeMap<ModuleKey, KeySlot>,
-    keys: PrimaryMap<KeySlot, ModuleKey>,
-    bindings: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
+    bindings: BTreeMap<ModuleKey, Vec<ModuleSlot>>,
     sources: BTreeMap<ModuleSourceId, ModuleSlot>,
     entries: PrimaryMap<ModuleSlot, ModuleCell<Meta, Arch, Tls>>,
     lifecycle: Vec<ModuleSlot>,
@@ -337,9 +314,7 @@ where
         Self {
             context,
             domain,
-            key_slots: BTreeMap::new(),
-            keys: PrimaryMap::new(),
-            bindings: SecondaryMap::new(),
+            bindings: BTreeMap::new(),
             sources: BTreeMap::new(),
             entries: PrimaryMap::new(),
             lifecycle: Vec::new(),
@@ -361,26 +336,8 @@ where
     }
 
     #[inline]
-    pub(in crate::linker) fn make_key_id(&self, slot: KeySlot) -> KeyId {
-        KeyId::from_slot(self.context, slot)
-    }
-
-    #[inline]
     pub(in crate::linker) fn make_module_id(&self, slot: ModuleSlot) -> ModuleId {
         ModuleId::from_slot(self.context, slot, self.entries[slot].generation)
-    }
-
-    #[inline]
-    pub(in crate::linker) fn key_slot(&self, id: KeyId) -> Result<KeySlot> {
-        (id.context == self.context)
-            .then_some(id.slot)
-            .ok_or_else(|| {
-                LinkerError::context(LinkContextError::KeyContextMismatch {
-                    id,
-                    expected: self.context,
-                })
-                .into()
-            })
     }
 
     #[inline]
@@ -396,7 +353,7 @@ where
         }
         self.entries
             .get(id.slot)
-            .filter(|entry| entry.generation == id.generation)
+            .filter(|entry| entry.generation == id.generation && entry.entry.is_some())
             .map(|_| id.slot)
             .ok_or_else(|| LinkerError::context(LinkContextError::StaleModuleId { id }).into())
     }
@@ -425,10 +382,7 @@ where
     ) -> Option<CommittedModule<'_, Meta, Arch, Tls>> {
         let cell = self.entries.get(slot)?;
         let entry = cell.entry.as_ref()?;
-        Some(CommittedModule {
-            entry_key: cell.entry_key(),
-            entry,
-        })
+        Some(CommittedModule { entry })
     }
 
     #[inline]
@@ -445,8 +399,8 @@ where
     }
 
     #[inline]
-    pub(in crate::linker) fn module_for_key(&self, slot: KeySlot) -> Option<ModuleSlot> {
-        let module = self.bindings.get(slot)?.first().copied()?;
+    pub(in crate::linker) fn module_for_key(&self, key: &str) -> Option<ModuleSlot> {
+        let module = self.bindings.get(key)?.first().copied()?;
         debug_assert!(
             self.contains_module(module),
             "key bindings must only contain committed modules"
@@ -484,38 +438,6 @@ where
     }
 
     #[inline]
-    pub(in crate::linker) fn entry_key(&self, slot: ModuleSlot) -> KeySlot {
-        self.entries[slot].entry_key()
-    }
-}
-
-impl<Meta, Arch, Tls> CommittedStorage<Meta, Arch, Tls>
-where
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
-{
-    #[inline]
-    pub(crate) fn key(&self, slot: KeySlot) -> &ModuleKey {
-        debug_assert!(
-            self.keys.get(slot).is_some(),
-            "key id must resolve to an interned key"
-        );
-        &self.keys[slot]
-    }
-
-    #[inline]
-    pub(crate) fn key_slot_for(&self, key: &str) -> Option<KeySlot> {
-        self.key_slots.get(key).copied()
-    }
-
-    #[inline]
-    pub(crate) fn contains_key(&self, key: &str) -> bool {
-        self.key_slot_for(key)
-            .and_then(|slot| self.module_for_key(slot))
-            .is_some()
-    }
-
-    #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.lifecycle.is_empty()
     }
@@ -524,36 +446,46 @@ where
     pub(crate) fn lifecycle(&self) -> impl DoubleEndedIterator<Item = ModuleSlot> + '_ {
         self.lifecycle.iter().copied()
     }
-}
 
-impl<Meta, Arch, Tls> CommittedStorage<Meta, Arch, Tls>
-where
-    Arch: RelocationArch,
-    Tls: TlsResolver<Arch>,
-{
-    pub(in crate::linker) fn intern_key(&mut self, key: ModuleKey) -> KeySlot {
-        if let Some(slot) = self.key_slot_for(&key) {
-            return slot;
-        }
-
-        let slot = self.keys.push(key.clone());
-        let previous = self.key_slots.insert(key, slot);
-        debug_assert!(previous.is_none(), "interned key inserted twice");
-        slot
-    }
-
-    pub(crate) fn bind_key(&mut self, key: KeySlot, module: ModuleSlot) {
+    pub(crate) fn bind_key(&mut self, key: ModuleKey, module: ModuleSlot) {
         assert!(
             self.contains_module(module),
             "key bindings must refer to committed modules"
         );
-        let modules = self.bindings.get_or_default(key);
-        if !modules.contains(&module) {
-            modules.push(module);
-            let keys = &mut self.entries[module].keys;
-            if !keys.contains(&key) {
-                keys.push(key);
+        let entry_key = &self.entries[module]
+            .entry
+            .as_ref()
+            .expect("key bindings must refer to committed modules")
+            .entry_key;
+        let is_alias = entry_key != &key;
+        let mut alias = None;
+        let inserted = match self.bindings.entry(key) {
+            Entry::Vacant(entry) => {
+                if is_alias {
+                    alias = Some(entry.key().clone());
+                }
+                entry.insert(Vec::from([module]));
+                true
             }
+            Entry::Occupied(mut entry) => {
+                if entry.get().contains(&module) {
+                    false
+                } else {
+                    if is_alias {
+                        alias = Some(entry.key().clone());
+                    }
+                    entry.get_mut().push(module);
+                    true
+                }
+            }
+        };
+        if inserted && let Some(alias) = alias {
+            let entry = self.entries[module]
+                .entry
+                .as_mut()
+                .expect("key bindings must refer to committed modules");
+            debug_assert!(!entry.aliases.contains(&alias));
+            entry.aliases.push(alias);
         }
     }
 
@@ -572,9 +504,8 @@ where
         self.lifecycle.extend_from_slice(order);
     }
 
-    pub(crate) fn alloc_module(&mut self, key: KeySlot) -> ModuleSlot {
+    pub(crate) fn alloc_module(&mut self) -> ModuleSlot {
         self.entries.push(ModuleCell {
-            keys: Vec::from([key]),
             generation: 0,
             entry: None,
         })
@@ -598,17 +529,16 @@ where
         &mut self,
         slot: ModuleSlot,
     ) -> (ModuleHandle<Arch, Tls>, LookupScope<Arch, Tls>, Meta) {
-        let (entry, keys) = {
+        let entry = {
             let cell = &mut self.entries[slot];
             let entry = cell
                 .entry
                 .take()
                 .expect("unload order must refer to a committed module");
-            let keys = core::mem::take(&mut cell.keys);
             cell.advance_generation();
-            (entry, keys)
+            entry
         };
-        for key in keys {
+        for key in core::iter::once(&entry.entry_key).chain(&entry.aliases) {
             let empty = {
                 let modules = self
                     .bindings
@@ -637,8 +567,6 @@ where
 }
 
 struct ModuleCell<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    // The first key is the module's entry key; later keys are alternate names.
-    keys: Vec<KeySlot>,
     // Incremented on publication and removal to guard transactional references
     // and make ids stale as soon as a module is unloaded.
     generation: u32,
@@ -646,14 +574,6 @@ struct ModuleCell<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver
 }
 
 impl<Meta, Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleCell<Meta, Arch, Tls> {
-    #[inline]
-    fn entry_key(&self) -> KeySlot {
-        *self
-            .keys
-            .first()
-            .expect("allocated module slots must retain their entry key")
-    }
-
     #[inline]
     fn advance_generation(&mut self) {
         self.generation = self
@@ -668,6 +588,8 @@ pub(in crate::linker) struct StoredEntry<
     Arch: RelocationArch = NativeArch,
     Tls: TlsResolver<Arch> = (),
 > {
+    entry_key: ModuleKey,
+    aliases: Vec<ModuleKey>,
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[ModuleSlot]>,
     scope: LookupScope<Arch, Tls>,
@@ -683,6 +605,7 @@ where
 {
     #[inline]
     pub(in crate::linker) fn new(
+        entry_key: ModuleKey,
         module: ModuleHandle<Arch, Tls>,
         direct_deps: Box<[ModuleSlot]>,
         scope: LookupScope<Arch, Tls>,
@@ -690,6 +613,8 @@ where
         meta: Meta,
     ) -> Self {
         Self {
+            entry_key,
+            aliases: Vec::new(),
             module,
             direct_deps,
             scope,

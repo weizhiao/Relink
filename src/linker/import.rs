@@ -1,6 +1,6 @@
 use super::{
-    context::{LinkContext, require_module},
-    storage::{KeySlot, ModuleId, ModuleKey, ModuleLease, ModuleSlot, StoredEntry},
+    context::LinkContext,
+    storage::{ModuleId, ModuleKey, ModuleLease, ModuleSlot, StoredEntry},
 };
 use crate::{
     LinkContextError, LinkerError, Result,
@@ -18,7 +18,7 @@ use alloc::{
 };
 
 struct PreparedModule<Meta, Arch: RelocationArch, Tls: TlsResolver<Arch>> {
-    key: KeySlot,
+    key: ModuleKey,
     existing: Option<ModuleSlot>,
     instance: ModuleInstanceId,
     module: ModuleHandle<Arch, Tls>,
@@ -96,9 +96,11 @@ where
         return Ok(());
     }
 
-    let id = source.committed.make_module_id(slot);
-    let module = require_module(id, source.committed.module(slot))?;
-    let key = source.committed.key(module.entry_key());
+    let module = source
+        .committed
+        .module(slot)
+        .expect("import traversal must only contain committed modules");
+    let key = module.entry_key();
 
     if let Some(target_slot) = target
         .committed
@@ -145,16 +147,17 @@ fn copy_modules<Arch, Tls, TargetMeta, SourceMeta>(
     source: &LinkContext<SourceMeta, Arch, Tls>,
     modules: &[ModuleSlot],
     mapped: &SecondaryMap<ModuleSlot, ModuleSlot>,
-) -> Result<()>
-where
+) where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
     TargetMeta: Default,
 {
     let mut lifecycle = Vec::with_capacity(modules.len());
     for &slot in modules {
-        let id = source.committed.make_module_id(slot);
-        let module = require_module(id, source.committed.module(slot))?;
+        let module = source
+            .committed
+            .module(slot)
+            .expect("collected imports must only contain committed modules");
         let deps = module
             .direct_deps()
             .iter()
@@ -171,6 +174,7 @@ where
         target.committed.insert(
             target_slot,
             StoredEntry::new(
+                module.entry_key().clone(),
                 module.handle().clone(),
                 deps,
                 module.scope().clone(),
@@ -181,7 +185,6 @@ where
         lifecycle.push(target_slot);
     }
     target.committed.extend_lifecycle(&lifecycle);
-    Ok(())
 }
 
 fn copy_closure<Arch, Tls, TargetMeta, SourceMeta>(
@@ -210,17 +213,17 @@ where
         )?;
     }
     for &slot in &modules {
-        let id = source.committed.make_module_id(slot);
-        let module = require_module(id, source.committed.module(slot))?;
-        let module_key = source.committed.key(module.entry_key()).clone();
-        let key = target.committed.intern_key(module_key.clone());
-        let target_slot = target.committed.alloc_module(key);
+        let module = source
+            .committed
+            .module(slot)
+            .expect("collected imports must only contain committed modules");
+        let module_key = module.entry_key().clone();
+        let target_slot = target.committed.alloc_module();
         bindings.push((module_key, target_slot));
         mapped.insert(slot, target_slot);
     }
-    copy_modules(target, source, &modules, &mapped)?;
+    copy_modules(target, source, &modules, &mapped);
     for (key, module) in bindings {
-        let key = target.committed.intern_key(key);
         target.committed.bind_key(key, module);
     }
     Ok(mapped)
@@ -230,17 +233,19 @@ fn reusable_root<Arch, Tls, TargetMeta, SourceMeta>(
     target: &LinkContext<TargetMeta, Arch, Tls>,
     source: &LinkContext<SourceMeta, Arch, Tls>,
     slot: ModuleSlot,
-) -> Result<Option<(ModuleSlot, ModuleKey)>>
+) -> Option<(ModuleSlot, ModuleKey)>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
-    let id = source.committed.make_module_id(slot);
-    let module = require_module(id, source.committed.module(slot))?;
-    Ok(target
+    let module = source
+        .committed
+        .module(slot)
+        .expect("import roots must refer to committed modules");
+    target
         .committed
         .module_for_source(module.handle().source_id())
-        .map(|target| (target, source.committed.key(module.entry_key()).clone())))
+        .map(|target| (target, module.entry_key().clone()))
 }
 
 impl<Meta, Arch, Tls> LinkContext<Meta, Arch, Tls>
@@ -289,7 +294,6 @@ where
             meta,
         } in modules
         {
-            let key = self.committed.intern_key(module_key);
             let instance = module.state().instance_id();
             let source = instance.source_id();
             if !sources.insert(source) {
@@ -316,7 +320,7 @@ where
             };
             instances.insert(instance);
             planned.push(PreparedModule {
-                key,
+                key: module_key,
                 existing,
                 instance,
                 module,
@@ -346,7 +350,7 @@ where
         for node in &planned {
             let slot = match node.existing {
                 Some(slot) => slot,
-                None => self.committed.alloc_module(node.key),
+                None => self.committed.alloc_module(),
             };
             slots.insert(node.instance, slot);
         }
@@ -379,7 +383,7 @@ where
                 let scope = LookupScope::empty(node.module.domain_id());
                 self.committed.insert(
                     slot,
-                    StoredEntry::new(node.module, deps, scope, 1, node.meta),
+                    StoredEntry::new(node.key.clone(), node.module, deps, scope, 1, node.meta),
                 );
                 lifecycle.push(slot);
             } else {
@@ -415,11 +419,13 @@ where
     {
         self.committed.ensure_domain(source.committed.domain())?;
         let source_root = source.committed.module_slot(id)?;
-        if let Some((root, key)) = reusable_root(self, source, source_root)? {
-            let key = self.committed.intern_key(key);
+        if let Some((root, key)) = reusable_root(self, source, source_root) {
             self.committed.bind_key(key, root);
             let id = self.committed.make_module_id(root);
-            require_module(id, self.committed.module_mut(root))?.acquire_root();
+            self.committed
+                .module_mut(root)
+                .expect("reused import root must remain committed")
+                .acquire_root();
             return Ok(ModuleLease::new(id));
         }
 
@@ -428,7 +434,10 @@ where
             .get(source_root)
             .expect("imported root must have a target slot");
         let id = self.committed.make_module_id(root);
-        require_module(id, self.committed.module_mut(root))?.acquire_root();
+        self.committed
+            .module_mut(root)
+            .expect("copied import root must be committed")
+            .acquire_root();
         Ok(ModuleLease::new(id))
     }
 
@@ -461,7 +470,7 @@ where
         let mut reused = Vec::new();
         let mut copied = Vec::new();
         for &root in &roots {
-            if let Some((target, key)) = reusable_root(self, source, root)? {
+            if let Some((target, key)) = reusable_root(self, source, root) {
                 reused.push((root, target, key));
             } else {
                 copied.push(root);
@@ -469,7 +478,6 @@ where
         }
         let mut mapped = copy_closure(self, source, &copied)?;
         for (source, target, key) in reused {
-            let key = self.committed.intern_key(key);
             self.committed.bind_key(key, target);
             mapped.insert(source, target);
         }
@@ -479,7 +487,10 @@ where
                 .get(root)
                 .expect("imported root must have a target slot");
             let id = self.committed.make_module_id(root);
-            require_module(id, self.committed.module_mut(root))?.acquire_root();
+            self.committed
+                .module_mut(root)
+                .expect("imported root must be committed")
+                .acquire_root();
             imported.push(ModuleLease::new(id));
         }
         Ok(imported.into_boxed_slice())

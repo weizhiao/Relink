@@ -4,7 +4,7 @@ use crate::{
     elf::{ElfClass, ElfDataEncoding, ElfDynamicTag, ElfFileType, ElfMachine},
     image::ModuleInstanceId,
     input::ModuleSourceId,
-    linker::{ContextId, KeyId, ModuleId},
+    linker::{ContextId, ModuleId},
     runtime::DomainId,
     tls::TlsModuleId,
 };
@@ -873,13 +873,6 @@ pub enum LinkContextError {
         /// Context supplied for the operation.
         actual: ContextId,
     },
-    /// A key id from one [`crate::LinkContext`] was used with another context.
-    KeyContextMismatch {
-        /// The key id that failed the context check.
-        id: KeyId,
-        /// The context that received the key id.
-        expected: ContextId,
-    },
     /// A module id from one [`crate::LinkContext`] was used with another context.
     ModuleContextMismatch {
         /// The module id that failed the context check.
@@ -892,20 +885,10 @@ pub enum LinkContextError {
         /// The stale module id.
         id: ModuleId,
     },
-    /// A valid module id does not currently resolve to committed state.
-    ModuleNotCommitted {
-        /// The module id that could not be resolved.
-        id: ModuleId,
-    },
     /// Module state changed after a load transaction was prepared.
     ModuleChanged {
         /// The stale module identity recorded by the transaction.
         id: ModuleId,
-    },
-    /// A key id does not resolve to a committed module.
-    KeyNotCommitted {
-        /// The key id that did not resolve to a committed module.
-        id: KeyId,
     },
     /// A source is already represented by another module instance.
     SourceOccupied {
@@ -927,20 +910,15 @@ impl Display for LinkContextError {
                 "load transaction belongs to link context {} but was used with context {}",
                 expected, actual
             ),
-            Self::KeyContextMismatch { id, expected } => {
-                write!(f, "key id {} was used with link context {}", id, expected)
-            }
             Self::ModuleContextMismatch { id, expected } => write!(
                 f,
                 "module id {} was used with link context {}",
                 id, expected
             ),
             Self::StaleModuleId { id } => write!(f, "module id {} is stale", id),
-            Self::ModuleNotCommitted { id } => write!(f, "module id {} is not committed", id),
             Self::ModuleChanged { id } => {
                 write!(f, "module id {} changed before publication", id)
             }
-            Self::KeyNotCommitted { id } => write!(f, "key id {} is not committed", id),
             Self::SourceOccupied { source } => {
                 write!(
                     f,
@@ -950,25 +928,6 @@ impl Display for LinkContextError {
             Self::DependencyMissing { id } => {
                 write!(f, "module dependency {id:?} is not available")
             }
-        }
-    }
-}
-
-/// Structured resolver failure details.
-pub enum LinkResolverError {
-    /// The resolver returned `Existing`, but the key is not committed.
-    ExistingKeyMissing,
-    /// The root module could not be found by a resolver.
-    RootNotFound,
-}
-
-impl Display for LinkResolverError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ExistingKeyMissing => {
-                f.write_str("resolver referenced an uncommitted existing key")
-            }
-            Self::RootNotFound => f.write_str("root module was not found by resolver"),
         }
     }
 }
@@ -1018,15 +977,12 @@ impl Display for LinkScanError {
 pub enum LinkerError {
     /// A dependency could not be resolved by the resolver callback.
     UnresolvedDependency(Box<UnresolvedDependency>),
+    /// The root module could not be found by the resolver.
+    RootNotFound,
     /// Committed linker context state rejected an operation.
     Context {
         /// Structured context failure reason.
         reason: Box<LinkContextError>,
-    },
-    /// Resolver state was inconsistent with the current link context.
-    Resolver {
-        /// Structured resolver failure reason.
-        reason: LinkResolverError,
     },
     /// Scan-first/planned-load state was inconsistent.
     Scan {
@@ -1041,11 +997,6 @@ impl LinkerError {
         Self::Context {
             reason: Box::new(reason),
         }
-    }
-
-    #[inline]
-    pub(crate) fn resolver(reason: LinkResolverError) -> Self {
-        Self::Resolver { reason }
     }
 
     #[inline]
@@ -1100,8 +1051,8 @@ impl Display for LinkerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnresolvedDependency(err) => Display::fmt(err, f),
+            Self::RootNotFound => f.write_str("root module was not found by resolver"),
             Self::Context { reason } => Display::fmt(reason, f),
-            Self::Resolver { reason } => Display::fmt(reason, f),
             Self::Scan { reason } => Display::fmt(reason, f),
         }
     }
