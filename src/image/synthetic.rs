@@ -268,7 +268,6 @@ pub struct SyntheticModule<Arch: RelocationArch = NativeArch, D = ()> {
     name: String,
     memory: Arc<dyn ImageMemory>,
     tls: Option<ModuleTls>,
-    domain: DomainId,
     user_data: D,
     names: Vec<String>,
     symbols: Vec<ElfSymbol<Arch::Layout>>,
@@ -285,11 +284,10 @@ impl<Arch: RelocationArch, D: Clone> Clone for SyntheticModule<Arch, D> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
-            state: ModuleState::new(ModuleSourceId::fresh()),
+            state: ModuleState::new(ModuleSourceId::fresh(), self.state.domain_id()),
             name: self.name.clone(),
             memory: self.memory.clone(),
             tls: self.tls,
-            domain: self.domain,
             user_data: self.user_data.clone(),
             names: self.names.clone(),
             symbols: self.symbols.clone(),
@@ -314,13 +312,12 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     /// Creates an empty synthetic module.
     pub fn empty(name: impl Into<String>) -> Self {
         Self {
-            state: ModuleState::new(ModuleSourceId::fresh()),
+            state: ModuleState::new(ModuleSourceId::fresh(), DomainId::PROCESS),
             name: name.into(),
             memory: arc_unsize!(
                 Arc::new(UnmappedImageMemory::default()) => dyn ImageMemory
             ),
             tls: None,
-            domain: DomainId::PROCESS,
             user_data: (),
             names: Vec::new(),
             symbols: Vec::new(),
@@ -338,7 +335,6 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
             name: self.name,
             memory: self.memory,
             tls: self.tls,
-            domain: self.domain,
             user_data,
             names: self.names,
             symbols: self.symbols,
@@ -381,7 +377,7 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
     /// Binds this synthetic module to one runtime domain.
     #[inline]
     pub fn with_domain(mut self, domain: DomainId) -> Self {
-        self.domain = domain;
+        self.state.set_domain(domain);
         self
     }
 
@@ -506,11 +502,6 @@ where
     #[inline]
     fn name(&self) -> &str {
         &self.name
-    }
-
-    #[inline]
-    fn domain_id(&self) -> DomainId {
-        self.domain
     }
 
     #[inline]

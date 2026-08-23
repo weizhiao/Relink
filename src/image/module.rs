@@ -8,18 +8,18 @@ use crate::{
     memory::VmAddr,
     relocation::RelocationArch,
     runtime::DomainId,
-    sync::{Arc, AtomicBool, AtomicUsize, Ordering, Weak, arc_unsize},
+    sync::{Arc, AtomicBool, AtomicU8, AtomicUsize, Ordering, Weak, arc_unsize},
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
 use core::{fmt, ops::Deref, slice};
-use spin::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-const UNINITIALIZED: usize = 0;
-const INITIALIZING: usize = 1;
-const INITIALIZED: usize = 2;
-const FAILED: usize = 3;
-const FINALIZED: usize = 4;
+const UNINITIALIZED: u8 = 0;
+const INITIALIZING: u8 = 1;
+const INITIALIZED: u8 = 2;
+const FAILED: u8 = 3;
+const FINALIZED: u8 = 4;
 
 static NEXT_INSTANCE: AtomicUsize = AtomicUsize::new(1);
 
@@ -32,7 +32,7 @@ fn next_instance() -> usize {
         .expect("module instance identity space is exhausted")
 }
 
-struct InitializationGuard<'a>(&'a AtomicUsize);
+struct InitializationGuard<'a>(&'a AtomicU8);
 
 impl Drop for InitializationGuard<'_> {
     fn drop(&mut self) {
@@ -61,12 +61,13 @@ where
 /// Identity and runtime state shared by every view of one logical module.
 ///
 /// Module implementations store this value and return it from
-/// [`Module::state`]. It owns the canonical instance identity and coordinates
-/// initialization, finalization, and runtime bindings without duplicating the
-/// ownership count already maintained by [`Arc`].
+/// [`Module::state`]. It owns the canonical instance identity and runtime domain,
+/// and coordinates initialization, finalization, and runtime bindings without
+/// duplicating the ownership count already maintained by [`Arc`].
 pub struct ModuleState {
     id: ModuleInstanceId,
-    value: AtomicUsize,
+    domain: DomainId,
+    phase: AtomicU8,
     bindings: Mutex<Vec<ModuleInstanceId>>,
     nodelete: AtomicBool,
 }
@@ -100,10 +101,11 @@ impl ModuleInstanceId {
 impl ModuleState {
     /// Creates state for a module whose initializer has not run.
     #[inline]
-    pub fn new(source: ModuleSourceId) -> Self {
+    pub fn new(source: ModuleSourceId, domain: DomainId) -> Self {
         Self {
             id: ModuleInstanceId::new(source),
-            value: AtomicUsize::new(UNINITIALIZED),
+            domain,
+            phase: AtomicU8::new(UNINITIALIZED),
             bindings: Mutex::new(Vec::new()),
             nodelete: AtomicBool::new(false),
         }
@@ -111,10 +113,11 @@ impl ModuleState {
 
     /// Creates state for a module that is already initialized.
     #[inline]
-    pub fn initialized(source: ModuleSourceId) -> Self {
+    pub fn initialized(source: ModuleSourceId, domain: DomainId) -> Self {
         Self {
             id: ModuleInstanceId::new(source),
-            value: AtomicUsize::new(INITIALIZED),
+            domain,
+            phase: AtomicU8::new(INITIALIZED),
             bindings: Mutex::new(Vec::new()),
             nodelete: AtomicBool::new(false),
         }
@@ -126,20 +129,21 @@ impl ModuleState {
         self.id
     }
 
+    /// Returns the runtime domain in which this module's addresses are meaningful.
     #[inline]
-    pub(crate) fn bind(&self, provider: ModuleInstanceId) {
-        if provider == self.instance_id() {
-            return;
-        }
-        let mut bindings = self.bindings.lock();
-        if !bindings.contains(&provider) {
-            bindings.push(provider);
-        }
+    pub const fn domain_id(&self) -> DomainId {
+        self.domain
     }
 
     #[inline]
-    pub(crate) fn bindings(&self) -> MutexGuard<'_, Vec<ModuleInstanceId>> {
-        self.bindings.lock()
+    pub(super) fn set_domain(&mut self, domain: DomainId) {
+        self.domain = domain;
+    }
+
+    #[inline]
+    pub(crate) fn with_bindings<T>(&self, f: impl FnOnce(&mut Vec<ModuleInstanceId>) -> T) -> T {
+        let mut bindings = self.bindings.lock();
+        f(&mut bindings)
     }
 
     #[inline]
@@ -155,7 +159,7 @@ impl ModuleState {
     /// Returns whether the module is currently initialized.
     #[inline]
     pub fn is_initialized(&self) -> bool {
-        self.value.load(Ordering::Acquire) == INITIALIZED
+        self.phase.load(Ordering::Acquire) == INITIALIZED
     }
 
     /// Runs the module initializer at most once.
@@ -163,31 +167,31 @@ impl ModuleState {
     /// Recursive callers observe an initialization in progress as already
     /// claimed and do not run the initializer again.
     pub fn initialize(&self, initialize: impl FnOnce() -> Result<()>) -> Result<()> {
-        let mut value = self.value.load(Ordering::Acquire);
+        let mut phase = self.phase.load(Ordering::Acquire);
         loop {
-            match value {
+            match phase {
                 INITIALIZING | INITIALIZED => return Ok(()),
                 FAILED => return Err(custom_error("cannot initialize a failed module")),
                 FINALIZED => return Err(custom_error("cannot initialize a finalized module")),
                 _ => {}
             }
-            match self.value.compare_exchange_weak(
-                value,
+            match self.phase.compare_exchange_weak(
+                phase,
                 INITIALIZING,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    let guard = InitializationGuard(&self.value);
+                    let guard = InitializationGuard(&self.phase);
                     let result = initialize();
-                    self.value.store(
+                    self.phase.store(
                         if result.is_ok() { INITIALIZED } else { FAILED },
                         Ordering::Release,
                     );
                     core::mem::forget(guard);
                     return result;
                 }
-                Err(current) => value = current,
+                Err(current) => phase = current,
             }
         }
     }
@@ -198,20 +202,20 @@ impl ModuleState {
     /// allocation's [`Drop`] implementation. For core-backed ELF modules,
     /// `CoreInner` already provides that integration.
     pub fn finalize(&self, finalize: impl FnOnce() -> Result<()>) -> Result<()> {
-        let mut value = self.value.load(Ordering::Acquire);
+        let mut phase = self.phase.load(Ordering::Acquire);
         loop {
-            match value {
+            match phase {
                 INITIALIZED | FAILED => {}
                 _ => return Ok(()),
             }
-            match self.value.compare_exchange_weak(
-                value,
+            match self.phase.compare_exchange_weak(
+                phase,
                 FINALIZED,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
                 Ok(_) => return finalize(),
-                Err(current) => value = current,
+                Err(current) => phase = current,
             }
         }
     }
@@ -220,7 +224,7 @@ impl ModuleState {
 impl Default for ModuleState {
     #[inline]
     fn default() -> Self {
-        Self::new(ModuleSourceId::fresh())
+        Self::new(ModuleSourceId::fresh(), DomainId::PROCESS)
     }
 }
 
@@ -276,6 +280,12 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
     #[inline]
     pub fn source_id(&self) -> ModuleSourceId {
         self.module.state().instance_id().source_id()
+    }
+
+    /// Returns the runtime domain in which this module's addresses are meaningful.
+    #[inline]
+    pub fn domain_id(&self) -> DomainId {
+        self.module.state().domain_id()
     }
 
     /// Runs this module's initialization hook at most once.
@@ -747,7 +757,7 @@ mod tests {
 
     #[test]
     fn initializer_panic_marks_module_failed() {
-        let state = ModuleState::new(ModuleSourceId::fresh());
+        let state = ModuleState::new(ModuleSourceId::fresh(), DomainId::PROCESS);
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = state.initialize(|| -> crate::Result<()> { panic!("initializer panic") });
         }));
@@ -763,17 +773,21 @@ mod tests {
         let state = <SyntheticModule<NativeArch> as Module<NativeArch>>::state(&module);
         let binding = state.instance_id();
 
-        state.bind(binding);
+        state.with_bindings(|bindings| {
+            if binding != state.instance_id() && !bindings.contains(&binding) {
+                bindings.push(binding);
+            }
+        });
 
-        assert!(state.bindings().is_empty());
+        assert!(state.with_bindings(|bindings| bindings.is_empty()));
     }
 
     #[test]
     fn binding_distinguishes_reloaded_source() {
         let source = ModuleSourceId::fresh();
-        let old = ModuleState::new(source);
+        let old = ModuleState::new(source, DomainId::PROCESS);
         let binding = old.instance_id();
-        let replacement = ModuleState::new(source);
+        let replacement = ModuleState::new(source, DomainId::PROCESS);
 
         assert_eq!(binding, old.instance_id());
         assert_ne!(binding, replacement.instance_id());

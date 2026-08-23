@@ -453,8 +453,7 @@ where
         let inner = Arc::new(CoreInner {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: self.executor,
-            domain: self.domain,
-            state: ModuleState::new(self.source_id),
+            state: ModuleState::new(self.source_id, self.domain),
             lifecycle: OnceCell::new(),
             search,
             exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),

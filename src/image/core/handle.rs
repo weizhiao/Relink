@@ -100,6 +100,12 @@ impl<
     Tls: TlsResolver<Arch> + 'static,
 > ElfCore<D, Arch, R, Tls>
 {
+    /// Returns the runtime domain in which this ELF image's addresses are meaningful.
+    #[inline]
+    pub fn domain_id(&self) -> DomainId {
+        self.inner.state.domain_id()
+    }
+
     /// Runs this ELF module's initialization lifecycle at most once.
     #[inline]
     pub fn initialize(&self) -> Result<()> {
@@ -314,9 +320,8 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         let inner = Arc::new(CoreInner {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
-            domain: DomainId::PROCESS,
             search,
-            state: ModuleState::initialized(source),
+            state: ModuleState::initialized(source, DomainId::PROCESS),
             lifecycle: OnceCell::new(),
             exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),
             dynamic_info: Some(Arc::new(DynamicInfo::<Arch> {
@@ -358,11 +363,6 @@ where
     #[inline]
     fn name(&self) -> &str {
         self.inner.name()
-    }
-
-    #[inline]
-    fn domain_id(&self) -> DomainId {
-        self.inner.domain_id()
     }
 
     #[inline]

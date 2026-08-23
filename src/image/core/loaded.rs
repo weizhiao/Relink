@@ -10,7 +10,6 @@ use crate::{
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{RelocationArch, SymbolRegistry},
-    runtime::DomainId,
     segment::ElfSegments,
     sync::Arc,
     tls::{CoreTlsState, ModuleTls, TlsInfo, TlsRequest, TlsResolver, TlsTpOffset},
@@ -505,11 +504,6 @@ where
     #[inline]
     fn name(&self) -> &str {
         self.core.name()
-    }
-
-    #[inline]
-    fn domain_id(&self) -> DomainId {
-        self.core.domain_id()
     }
 
     #[inline]

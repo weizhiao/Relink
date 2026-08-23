@@ -13,11 +13,7 @@ use crate::{
     sync::Arc,
     tls::TlsResolver,
 };
-use alloc::{
-    boxed::Box,
-    collections::{BTreeMap, VecDeque},
-    vec::Vec,
-};
+use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
 
 #[inline]
 fn require_module<T>(id: ModuleId, module: Option<T>) -> Result<T> {
@@ -68,18 +64,17 @@ where
     for dep in module.direct_deps().iter().copied() {
         collect_import_modules(target, source, dep, mapped, new_modules, aliases)?;
     }
-    let bound = module
-        .handle()
-        .state()
-        .bindings()
-        .iter()
-        .map(|binding| {
-            source
-                .committed
-                .module_for_binding(*binding)
-                .expect("bound module must remain committed with its dependent")
-        })
-        .collect::<Vec<_>>();
+    let bound = module.handle().state().with_bindings(|bindings| {
+        bindings
+            .iter()
+            .map(|binding| {
+                source
+                    .committed
+                    .module_for_binding(*binding)
+                    .expect("bound module must remain committed with its dependent")
+            })
+            .collect::<Vec<_>>()
+    });
     for dep in bound {
         collect_import_modules(target, source, dep, mapped, new_modules, aliases)?;
     }
@@ -377,11 +372,13 @@ where
         let deps = require_module(id, self.committed.module(slot))?
             .handle()
             .state()
-            .bindings()
-            .iter()
-            .filter_map(|binding| self.committed.module_for_binding(*binding))
-            .map(|slot| self.committed.make_module_id(slot))
-            .collect::<Vec<_>>();
+            .with_bindings(|bindings| {
+                bindings
+                    .iter()
+                    .filter_map(|binding| self.committed.module_for_binding(*binding))
+                    .map(|slot| self.committed.make_module_id(slot))
+                    .collect::<Vec<_>>()
+            });
         Ok(deps.into_iter())
     }
 
@@ -408,116 +405,6 @@ where
         R: Into<ModuleHandle<Arch, Tls>>,
     {
         self.insert_with_meta(key, module, direct_deps, Meta::default())
-    }
-
-    /// Inserts a group of retained modules whose dependencies may refer to
-    /// other modules in the same group.
-    ///
-    /// All keys and dependency edges are resolved before any module is
-    /// committed, so cyclic dependency graphs are supported. Returned leases
-    /// follow the input order. Modules with the same source share one
-    /// slot; the first occurrence supplies the module's dependencies and later
-    /// keys become preferred aliases.
-    pub fn insert_batch<Name, R>(
-        &mut self,
-        modules: impl IntoIterator<Item = (Name, R, Box<[ModuleKey]>)>,
-    ) -> Result<Vec<ModuleLease>>
-    where
-        Meta: Default,
-        Name: Into<ModuleKey>,
-        R: Into<ModuleHandle<Arch, Tls>>,
-    {
-        let modules = modules
-            .into_iter()
-            .map(|(key, module, deps)| (key.into(), module.into(), deps))
-            .collect::<Vec<_>>();
-        for (_, module, _) in &modules {
-            self.committed.ensure_domain(module.domain_id())?;
-        }
-
-        let mut keys = EntitySet::default();
-        let mut batch = SecondaryMap::default();
-        let mut sources = BTreeMap::new();
-        let mut reused = BTreeMap::<ModuleSlot, usize>::new();
-        let mut aliases = Vec::new();
-        let mut result_slots = Vec::with_capacity(modules.len());
-        let mut planned = Vec::with_capacity(modules.len());
-        for (key, module, deps) in modules {
-            let key = self.committed.intern_key(key);
-            if !keys.insert(key)
-                || self
-                    .committed
-                    .canonical_module(key)
-                    .is_some_and(|slot| self.committed.contains_module(slot))
-            {
-                return Err(LinkerError::context(LinkContextError::KeyOccupied {
-                    id: self.committed.make_key_id(key),
-                })
-                .into());
-            }
-
-            let source = module.source_id();
-            let slot = if let Some(slot) = self.committed.module_for_source(source) {
-                *reused.entry(slot).or_default() += 1;
-                aliases.push((key, slot));
-                slot
-            } else if let Some(idx) = sources.get(&source).copied() {
-                let (slot, _, _, roots) = &mut planned[idx];
-                *roots += 1;
-                aliases.push((key, *slot));
-                *slot
-            } else {
-                let slot = self.committed.intern_module(key);
-                sources.insert(source, planned.len());
-                planned.push((slot, module, deps, 1usize));
-                slot
-            };
-            batch.insert(key, slot);
-            result_slots.push(slot);
-        }
-
-        let mut resolved = Vec::with_capacity(planned.len());
-        for (slot, module, deps, roots) in planned {
-            let mut resolved_deps = Vec::with_capacity(deps.len());
-            for key in deps.into_vec() {
-                let key = self.committed.intern_key(key);
-                let dep = batch
-                    .get(key)
-                    .copied()
-                    .or_else(|| self.committed.module_for_key(key))
-                    .ok_or_else(|| {
-                        LinkerError::context(LinkContextError::KeyNotCommitted {
-                            id: self.committed.make_key_id(key),
-                        })
-                    })?;
-                resolved_deps.push(dep);
-            }
-            resolved.push((slot, module, resolved_deps.into_boxed_slice(), roots));
-        }
-
-        let mut lifecycle = Vec::with_capacity(resolved.len());
-        for (slot, module, deps, roots) in resolved {
-            let scope = LookupScope::empty(module.domain_id());
-            self.committed.insert(
-                slot,
-                StoredEntry::new(module, deps, scope, roots, Meta::default()),
-            );
-            lifecycle.push(slot);
-        }
-        for (slot, count) in reused {
-            self.committed
-                .module_mut(slot)
-                .expect("source index must refer to a committed module")
-                .acquire_roots(count);
-        }
-        for (alias, module) in aliases {
-            self.committed.prefer_alias(alias, module);
-        }
-        self.committed.extend_lifecycle(&lifecycle);
-        Ok(result_slots
-            .into_iter()
-            .map(|slot| ModuleLease::new(self.committed.make_module_id(slot)))
-            .collect())
     }
 
     /// Inserts a retained module with explicit context metadata.
@@ -680,14 +567,13 @@ where
             let module_id = self.committed.make_module_id(slot);
             let module = require_module(module_id, self.committed.module(slot))?;
             pending.extend(module.direct_deps().iter().copied());
-            pending.extend(
-                module
-                    .handle()
-                    .state()
-                    .bindings()
-                    .iter()
-                    .filter_map(|binding| self.committed.module_for_binding(*binding)),
-            );
+            module.handle().state().with_bindings(|bindings| {
+                pending.extend(
+                    bindings
+                        .iter()
+                        .filter_map(|binding| self.committed.module_for_binding(*binding)),
+                );
+            });
         }
 
         let unload_order = self
@@ -865,10 +751,6 @@ mod tests {
             Module::<NativeArch>::resolve_symbol(&self.module, symbol)
         }
 
-        fn domain_id(&self) -> DomainId {
-            Module::<NativeArch>::domain_id(&self.module)
-        }
-
         fn finalize(&self) -> Result<()> {
             self.calls.lock().push(self.name);
             Ok(())
@@ -947,62 +829,6 @@ mod tests {
             .direct_deps(id)
             .expect("direct deps should resolve")
             .collect()
-    }
-
-    #[test]
-    fn batch_insert_supports_cyclic_dependencies() {
-        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
-        let leases = context
-            .insert_batch([
-                (
-                    "first",
-                    SyntheticModule::empty("first"),
-                    Vec::from([key("second")]).into_boxed_slice(),
-                ),
-                (
-                    "second",
-                    SyntheticModule::empty("second"),
-                    Vec::from([key("first")]).into_boxed_slice(),
-                ),
-            ])
-            .unwrap();
-        let first = leases[0].id();
-        let second = leases[1].id();
-
-        assert_eq!(direct_deps(&context, first), [second]);
-        assert_eq!(direct_deps(&context, second), [first]);
-        let group = context.load_group(first).unwrap();
-        assert_eq!(group.root(), first);
-        assert_eq!(group.members(), [first, second]);
-        assert_eq!(
-            group
-                .scope()
-                .iter()
-                .map(|module| module.name())
-                .collect::<Vec<_>>(),
-            ["first", "second"]
-        );
-    }
-
-    #[test]
-    fn batch_insert_coalesces_shared_handles() {
-        let module = ModuleHandle::new(SyntheticModule::empty("shared"));
-        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
-        let leases = context
-            .insert_batch([
-                ("first", module.clone(), Vec::new().into_boxed_slice()),
-                ("second", module, Vec::new().into_boxed_slice()),
-            ])
-            .unwrap();
-
-        let mut leases = leases.into_iter();
-        let first = leases.next().unwrap();
-        let second = leases.next().unwrap();
-        assert_eq!(first.id(), second.id());
-        assert_eq!(context.module_id("second"), Some(first.id()));
-        assert_eq!(context.load_order().count(), 1);
-        assert!(context.release(first).unwrap().is_empty());
-        assert_eq!(context.release(second).unwrap().len(), 1);
     }
 
     #[test]
@@ -1587,37 +1413,6 @@ mod tests {
         );
         assert!(source.contains_module(source_root_id).unwrap());
         assert!(source.contains_module(source_dep_id).unwrap());
-    }
-
-    #[test]
-    fn import_handles_dependency_cycles() {
-        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
-        let source_modules = source
-            .insert_batch([
-                (
-                    "first",
-                    SyntheticModule::empty("first"),
-                    Vec::from([key("second")]).into_boxed_slice(),
-                ),
-                (
-                    "second",
-                    SyntheticModule::empty("second"),
-                    Vec::from([key("first")]).into_boxed_slice(),
-                ),
-            ])
-            .unwrap();
-        let source_first = source_modules[0].id();
-
-        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
-        let first = target.import(&source, source_first).unwrap();
-        let first_id = first.id();
-        let second = target.module_id("second").unwrap();
-
-        assert_eq!(
-            target.load_group(first_id).unwrap().members(),
-            [first_id, second]
-        );
-        assert_eq!(target.release(first).unwrap().len(), 2);
     }
 
     #[test]

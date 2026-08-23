@@ -11,7 +11,7 @@ use crate::{
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
     observer::LifecycleHandlers,
     relocation::{RelocationArch, SymbolRegistry, SymbolResolver},
-    runtime::{CodeContext, CodeExecutor, DomainId},
+    runtime::{CodeContext, CodeExecutor},
     segment::ElfSegments,
     sync::{Arc, OnceCell, Weak},
     tls::{CoreTlsState, ModuleTls, TLS_GET_ADDR_SYMBOL, TlsResolver},
@@ -154,7 +154,11 @@ where
             return Ok(None);
         };
         if let Some(provider) = symdef.provider_id() {
-            source.state().bind(provider);
+            source.state().with_bindings(|bindings| {
+                if provider != source.state().instance_id() && !bindings.contains(&provider) {
+                    bindings.push(provider);
+                }
+            });
         }
         drop(global_guard);
         symdef.resolve().map(Some)
@@ -174,9 +178,6 @@ pub(crate) struct CoreInner<
 
     /// Executor retained for IFUNC and runtime-code resolution.
     pub(crate) executor: Arc<dyn CodeExecutor<Arch>>,
-
-    /// Runtime domain in which this image's addresses are meaningful.
-    pub(crate) domain: DomainId,
 
     /// Lifecycle state shared by every handle for this module.
     pub(crate) state: ModuleState,
@@ -236,11 +237,6 @@ where
     #[inline]
     fn name(&self) -> &str {
         self.search.name()
-    }
-
-    #[inline]
-    fn domain_id(&self) -> DomainId {
-        self.domain
     }
 
     #[inline]

@@ -8,7 +8,6 @@ use crate::{
     elf::{ElfLayout, ElfSymbol, SymbolLookup, SymbolTable},
     memory::{ImageMemory, VmAddr},
     relocation::RelocationArch,
-    runtime::DomainId,
     sync::Arc,
     tls::{ModuleTls, TlsResolver},
 };
@@ -67,9 +66,6 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
     /// Returns the module name used for diagnostics.
     fn name(&self) -> &str;
 
-    /// Returns the runtime domain in which this module's addresses are meaningful.
-    fn domain_id(&self) -> DomainId;
-
     /// Returns metadata used when this module initiates another load.
     fn search(&self) -> Option<&ModuleSearch> {
         None
@@ -93,7 +89,7 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
         None
     }
 
-    /// Returns the canonical lifecycle state for this logical module.
+    /// Returns the canonical identity, domain, and lifecycle state for this module.
     ///
     /// Wrappers around the same module must return the same stable state
     /// address. Relink uses it to coordinate initialization and finalization
@@ -196,11 +192,6 @@ where
     #[inline]
     fn name(&self) -> &str {
         (**self).name()
-    }
-
-    #[inline]
-    fn domain_id(&self) -> DomainId {
-        (**self).domain_id()
     }
 
     #[inline]

@@ -89,8 +89,7 @@ where
         let inner = CoreInner {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(None)),
             executor: self.executor,
-            domain: self.domain,
-            state: ModuleState::new(self.source_id),
+            state: ModuleState::new(self.source_id, self.domain),
             lifecycle: OnceCell::new(),
             search: ModuleSearch::new(self.path),
             exports: arc_unsize!(Arc::clone(&exports) => dyn SymbolExports<Arch::Layout>),
@@ -154,7 +153,7 @@ where
 
     #[inline]
     fn domain_id(&self) -> DomainId {
-        self.core.domain_id()
+        self.core.state().domain_id()
     }
 
     fn relocate<Obs, Binder>(

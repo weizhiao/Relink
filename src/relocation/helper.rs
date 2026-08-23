@@ -35,13 +35,14 @@ impl BindingDeps {
 
     #[inline]
     pub(crate) fn install(self, state: &ModuleState) {
-        let mut bindings = state.bindings();
-        bindings.reserve(self.providers.len());
-        for provider in self.providers {
-            if !bindings.contains(&provider) {
-                bindings.push(provider);
+        state.with_bindings(|bindings| {
+            bindings.reserve(self.providers.len());
+            for provider in self.providers {
+                if !bindings.contains(&provider) {
+                    bindings.push(provider);
+                }
             }
-        }
+        });
     }
 }
 

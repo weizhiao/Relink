@@ -502,13 +502,14 @@ where
         }
         for (&slot, entry) in &ready {
             debug_assert_eq!(pending_sources.get(&entry.module.source_id()), Some(&slot));
-            let bindings = entry.module.state().bindings();
-            let providers_available = bindings.iter().copied().all(|provider| {
-                pending_sources
-                    .get(&provider.source_id())
-                    .and_then(|slot| ready.get(slot))
-                    .is_some_and(|entry| provider == entry.module.state().instance_id())
-                    || committed.module_for_binding(provider).is_some()
+            let providers_available = entry.module.state().with_bindings(|bindings| {
+                bindings.iter().copied().all(|provider| {
+                    pending_sources
+                        .get(&provider.source_id())
+                        .and_then(|slot| ready.get(slot))
+                        .is_some_and(|entry| provider == entry.module.state().instance_id())
+                        || committed.module_for_binding(provider).is_some()
+                })
             });
             if !providers_available {
                 let generation = committed.generation(slot);
