@@ -86,7 +86,7 @@ fn collect_modules<Arch, Tls, TargetMeta, SourceMeta>(
     visited: &mut EntitySet<ModuleSlot>,
     mapped: &mut SecondaryMap<ModuleSlot, ModuleSlot>,
     modules: &mut Vec<ModuleSlot>,
-    aliases: &mut Vec<(ModuleKey, ModuleSlot, bool)>,
+    bindings: &mut Vec<(ModuleKey, ModuleSlot)>,
 ) -> Result<()>
 where
     Arch: RelocationArch,
@@ -99,11 +99,6 @@ where
     let id = source.committed.make_module_id(slot);
     let module = require_module(id, source.committed.module(slot))?;
     let key = source.committed.key(module.entry_key());
-    let canonical = target
-        .committed
-        .key_slot_for(key)
-        .and_then(|key| target.committed.canonical_module(key))
-        .filter(|slot| target.committed.contains_module(*slot));
 
     if let Some(target_slot) = target
         .committed
@@ -119,17 +114,15 @@ where
             })
             .into());
         }
-        if canonical != Some(target_slot) {
-            aliases.push((key.clone(), target_slot, true));
-        }
+        bindings.push((key.clone(), target_slot));
         mapped.insert(slot, target_slot);
         return Ok(());
     }
 
     for dep in module.direct_deps().iter().copied() {
-        collect_modules(target, source, dep, visited, mapped, modules, aliases)?;
+        collect_modules(target, source, dep, visited, mapped, modules, bindings)?;
     }
-    let bindings = module.handle().state().with_bindings(|bindings| {
+    let providers = module.handle().state().with_bindings(|bindings| {
         bindings
             .iter()
             .map(|binding| {
@@ -140,8 +133,8 @@ where
             })
             .collect::<Vec<_>>()
     });
-    for dep in bindings {
-        collect_modules(target, source, dep, visited, mapped, modules, aliases)?;
+    for dep in providers {
+        collect_modules(target, source, dep, visited, mapped, modules, bindings)?;
     }
     modules.push(slot);
     Ok(())
@@ -204,7 +197,7 @@ where
     let mut mapped = SecondaryMap::default();
     let mut visited = EntitySet::default();
     let mut modules = Vec::new();
-    let mut aliases = Vec::new();
+    let mut bindings = Vec::new();
     for &root in roots {
         collect_modules(
             target,
@@ -213,37 +206,22 @@ where
             &mut visited,
             &mut mapped,
             &mut modules,
-            &mut aliases,
+            &mut bindings,
         )?;
     }
-    let mut reserved = EntitySet::default();
     for &slot in &modules {
         let id = source.committed.make_module_id(slot);
         let module = require_module(id, source.committed.module(slot))?;
         let module_key = source.committed.key(module.entry_key()).clone();
         let key = target.committed.intern_key(module_key.clone());
-        let canonical = target.committed.canonical_module(key);
-        let target_slot = match canonical {
-            None => target.committed.intern_module(key),
-            Some(slot) if !target.committed.contains_module(slot) && !reserved.contains(slot) => {
-                slot
-            }
-            Some(_) => target.committed.push_module(key),
-        };
-        reserved.insert(target_slot);
-        if canonical != Some(target_slot) {
-            aliases.push((module_key, target_slot, false));
-        }
+        let target_slot = target.committed.alloc_module(key);
+        bindings.push((module_key, target_slot));
         mapped.insert(slot, target_slot);
     }
     copy_modules(target, source, &modules, &mapped)?;
-    for (alias, module, prefer) in aliases {
-        let alias = target.committed.intern_key(alias);
-        if prefer {
-            target.committed.prefer_alias(alias, module);
-        } else {
-            target.committed.add_alias(alias, module);
-        }
+    for (key, module) in bindings {
+        let key = target.committed.intern_key(key);
+        target.committed.bind_key(key, module);
     }
     Ok(mapped)
 }
@@ -288,9 +266,9 @@ where
     /// including cycles. Each input node adds one direct acquisition and returns
     /// one lease in input order. Modules sharing a key become ordered lookup
     /// candidates. An exact instance already in this context is reused and its
-    /// new key becomes a preferred alias; the supplied metadata and dependency
-    /// list are then ignored. A different instance of an occupied source is
-    /// rejected.
+    /// new key is bound to the existing module; the supplied metadata and
+    /// dependency list are then ignored. A different instance of an occupied
+    /// source is rejected.
     pub fn insert_batch(
         &mut self,
         modules: impl IntoIterator<Item = GraphModule<Meta, Arch, Tls>>,
@@ -365,23 +343,11 @@ where
         }
 
         let mut slots = BTreeMap::<ModuleInstanceId, ModuleSlot>::new();
-        let mut reserved = EntitySet::default();
         for node in &planned {
             let slot = match node.existing {
                 Some(slot) => slot,
-                None => match self.committed.canonical_module(node.key) {
-                    None => self.committed.intern_module(node.key),
-                    Some(slot)
-                        if !self.committed.contains_module(slot) && !reserved.contains(slot) =>
-                    {
-                        slot
-                    }
-                    Some(_) => self.committed.push_module(node.key),
-                },
+                None => self.committed.alloc_module(node.key),
             };
-            if node.existing.is_none() {
-                reserved.insert(slot);
-            }
             slots.insert(node.instance, slot);
         }
         let resolved = planned
@@ -415,19 +381,14 @@ where
                     slot,
                     StoredEntry::new(node.module, deps, scope, 1, node.meta),
                 );
-                if self.committed.canonical_module(node.key) != Some(slot) {
-                    self.committed.add_alias(node.key, slot);
-                }
                 lifecycle.push(slot);
             } else {
                 self.committed
                     .module_mut(slot)
                     .expect("reused module must remain committed")
                     .acquire_root();
-                if self.committed.canonical_module(node.key) != Some(slot) {
-                    self.committed.prefer_alias(node.key, slot);
-                }
             }
+            self.committed.bind_key(node.key, slot);
             leases.push(ModuleLease::new(self.committed.make_module_id(slot)));
         }
         self.committed.extend_lifecycle(&lifecycle);
@@ -456,9 +417,7 @@ where
         let source_root = source.committed.module_slot(id)?;
         if let Some((root, key)) = reusable_root(self, source, source_root)? {
             let key = self.committed.intern_key(key);
-            if self.committed.canonical_module(key) != Some(root) {
-                self.committed.prefer_alias(key, root);
-            }
+            self.committed.bind_key(key, root);
             let id = self.committed.make_module_id(root);
             require_module(id, self.committed.module_mut(root))?.acquire_root();
             return Ok(ModuleLease::new(id));
@@ -511,9 +470,7 @@ where
         let mut mapped = copy_closure(self, source, &copied)?;
         for (source, target, key) in reused {
             let key = self.committed.intern_key(key);
-            if self.committed.canonical_module(key) != Some(target) {
-                self.committed.prefer_alias(key, target);
-            }
+            self.committed.bind_key(key, target);
             mapped.insert(source, target);
         }
         let mut imported = Vec::with_capacity(roots.len());

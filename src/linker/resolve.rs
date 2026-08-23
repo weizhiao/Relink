@@ -74,12 +74,8 @@ where
     fn known_module(&self, key: &str) -> Option<ModuleSlot> {
         let key = self.committed.key_slot_for(key)?;
         self.committed
-            .canonical_module(key)
-            .filter(|module| {
-                self.session.contains_pending(*module) || self.committed.contains_module(*module)
-            })
-            .or_else(|| self.committed.alias_module(key))
-            .or_else(|| self.session.alias_module(key))
+            .module_for_key(key)
+            .or_else(|| self.session.module_for_key(key))
     }
 
     fn module_for_source(&self, id: ModuleSourceId) -> Option<ModuleSlot> {
@@ -90,9 +86,7 @@ where
 
     pub(crate) fn bind_key(&mut self, key: ModuleKey, slot: ModuleSlot) {
         let key = self.committed.intern_key(key);
-        if self.committed.canonical_module(key) != Some(slot) {
-            self.session.stage_alias(key, slot);
-        }
+        self.session.bind_key(key, slot);
     }
 
     fn stage_dynamic(
@@ -105,11 +99,12 @@ where
         let search = payload.search();
         let alias = search.soname().map(ModuleKey::from);
         let key = self.committed.intern_key(key);
-        let slot = self.committed.intern_module(key);
+        let slot = self.committed.alloc_module(key);
         let generation = self.committed.generation(slot);
         self.session
             .stage_dynamic(slot, generation, payload, loader);
         self.session.stage_source(source, slot);
+        self.session.bind_key(key, slot);
         if let Some(alias) = alias {
             self.bind_key(alias, slot);
         }
@@ -125,10 +120,11 @@ where
         let search = module.search();
         let alias = search.and_then(ModuleSearch::soname).map(ModuleKey::from);
         let key = self.committed.intern_key(key);
-        let slot = self.committed.intern_module(key);
+        let slot = self.committed.alloc_module(key);
         let generation = self.committed.generation(slot);
         self.session
             .stage_module(slot, generation, module, direct_deps);
+        self.session.bind_key(key, slot);
         if let Some(alias) = alias {
             self.bind_key(alias, slot);
         }

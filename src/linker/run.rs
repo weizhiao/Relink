@@ -266,10 +266,10 @@ where
         let key = context.committed.intern_key(key);
         if let Some(root) = context.committed.module_for_source(source) {
             session.track(root, context.committed.generation(root));
-            session.stage_alias(key, root);
+            session.bind_key(key, root);
             return Ok(PreparedLoad::new(root, session, None, context));
         }
-        let root = context.committed.intern_module(key);
+        let root = context.committed.alloc_module(key);
         let generation = context.committed.generation(root);
         let alias = raw
             .core_ref()
@@ -278,9 +278,10 @@ where
             .map(ModuleKey::from);
         session.stage_dynamic(root, generation, raw, None);
         session.stage_source(source, root);
+        session.bind_key(key, root);
         if let Some(alias) = alias {
             let alias = context.committed.intern_key(alias);
-            session.stage_alias(alias, root);
+            session.bind_key(alias, root);
         }
         let tokens = context.search_paths.tokens();
         let mut loader = linker

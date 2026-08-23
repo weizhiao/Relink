@@ -263,10 +263,7 @@ where
 
     /// Registers an alternate key for an already committed module.
     ///
-    /// A module committed directly under `alias` takes precedence over this
-    /// alternate binding.
-    ///
-    /// Alias candidates retain registration order. If the current target is
+    /// Candidates retain registration order. If the current target is
     /// unloaded, lookup falls back to the next registered module.
     pub fn add_alias(&mut self, module_id: ModuleId, alias: impl Into<ModuleKey>) -> Result<()> {
         let module_slot = self.committed.module_slot(module_id)?;
@@ -278,7 +275,7 @@ where
         }
 
         let alias = self.committed.intern_key(alias.into());
-        self.committed.add_alias(alias, module_slot);
+        self.committed.bind_key(alias, module_slot);
         Ok(())
     }
 
@@ -385,10 +382,10 @@ where
         let mut modules = Vec::with_capacity(unload_order.len());
         for slot in unload_order {
             let id = self.committed.make_module_id(slot);
-            let (module, scope, meta) = self.committed.take(slot);
+            let (module, scope, meta) = self.committed.remove(slot);
             modules.push(UnloadedModule::new(id, module, scope, meta));
         }
-        self.committed.prune_removed();
+        self.committed.prune_lifecycle();
         Ok(UnloadGroup::new(modules))
     }
 
@@ -694,13 +691,14 @@ mod tests {
         let second = context.insert(node("second", module)).unwrap();
 
         assert_eq!(first.id(), second.id());
-        assert_eq!(context.module_id("second"), Some(first.id()));
+        assert_eq!(context.module_id("second"), Some(fallback.id()));
         let slot = context.committed.module_for_source(source).unwrap();
         assert_eq!(context.committed.make_module_id(slot), first.id());
 
         assert!(context.release(first).unwrap().is_empty());
+        assert_eq!(context.release(fallback).unwrap().len(), 1);
+        assert_eq!(context.module_id("second"), Some(second.id()));
         assert_eq!(context.release(second).unwrap().len(), 1);
-        assert_eq!(context.module_id("second"), Some(fallback.id()));
     }
 
     #[test]
@@ -921,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_key_takes_precedence_over_alias() {
+    fn keys_use_registration_order() {
         let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
         let root = context
             .insert(node("root", SyntheticModule::empty("root")))
@@ -937,20 +935,19 @@ mod tests {
         let dep_module_id = dep_module.id();
         let dep_instance = instance(&context, dep_module_id);
 
-        let canonical = context
+        let fallback = context
             .insert(node("alias", SyntheticModule::empty("alias")).dependencies([dep_instance]))
-            .expect("failed to insert canonical module");
-        assert_ne!(canonical.id(), root_id);
-        assert_eq!(context.resolve_key(alias).unwrap(), Some(canonical.id()));
-        assert_eq!(context.module_key(root_id).unwrap().as_str(), "root");
-        assert_eq!(
-            context.module_key(canonical.id()).unwrap().as_str(),
-            "alias"
-        );
-        assert_eq!(direct_deps(&context, canonical.id()), [dep_module_id]);
-
-        assert_eq!(context.release(canonical).unwrap().len(), 1);
+            .expect("failed to insert fallback module");
+        assert_ne!(fallback.id(), root_id);
         assert_eq!(context.resolve_key(alias).unwrap(), Some(root_id));
+        assert_eq!(context.module_key(root_id).unwrap().as_str(), "root");
+        assert_eq!(context.module_key(fallback.id()).unwrap().as_str(), "alias");
+        assert_eq!(direct_deps(&context, fallback.id()), [dep_module_id]);
+
+        assert_eq!(context.release(root).unwrap().len(), 1);
+        assert_eq!(context.resolve_key(alias).unwrap(), Some(fallback.id()));
+        assert_eq!(context.release(fallback).unwrap().len(), 1);
+        assert_eq!(context.release(dep_module).unwrap().len(), 1);
     }
 
     #[test]

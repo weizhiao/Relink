@@ -89,7 +89,7 @@ pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch>
     // transaction if any referenced slot changed before commit.
     guards: BTreeMap<ModuleSlot, u32>,
     group_order: Vec<ModuleSlot>,
-    aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
+    bindings: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
     sources: BTreeMap<ModuleSourceId, ModuleSlot>,
 }
 
@@ -105,7 +105,7 @@ where
             modules: BTreeMap::new(),
             guards: BTreeMap::new(),
             group_order: Vec::new(),
-            aliases: SecondaryMap::new(),
+            bindings: SecondaryMap::new(),
             sources: BTreeMap::new(),
         }
     }
@@ -121,15 +121,15 @@ where
     }
 
     #[inline]
-    pub(crate) fn alias_module(&self, alias: KeySlot) -> Option<ModuleSlot> {
-        self.aliases
-            .get(alias)
+    pub(crate) fn module_for_key(&self, key: KeySlot) -> Option<ModuleSlot> {
+        self.bindings
+            .get(key)
             .and_then(|modules| modules.first().copied())
     }
 
     #[inline]
-    pub(crate) fn stage_alias(&mut self, alias: KeySlot, module: ModuleSlot) {
-        let modules = self.aliases.get_or_default(alias);
+    pub(crate) fn bind_key(&mut self, key: KeySlot, module: ModuleSlot) {
+        let modules = self.bindings.get_or_default(key);
         if !modules.contains(&module) {
             modules.push(module);
         }
@@ -218,7 +218,7 @@ where
             modules,
             guards,
             group_order,
-            aliases,
+            bindings,
             sources,
         } = self;
         (
@@ -228,7 +228,7 @@ where
                 modules,
                 guards,
                 group_order,
-                aliases,
+                bindings,
                 sources,
             },
         )
@@ -320,7 +320,7 @@ pub(crate) struct PublishSession<Arch: RelocationArch, Tls: TlsResolver<Arch> = 
     guards: BTreeMap<ModuleSlot, u32>,
     modules: BTreeMap<ModuleSlot, PendingModule<Arch, Tls>>,
     order: Vec<ModuleSlot>,
-    aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
+    bindings: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
     pending_sources: BTreeMap<ModuleSourceId, ModuleSlot>,
     lifecycle: Vec<ModuleSlot>,
 }
@@ -440,7 +440,7 @@ where
             modules,
             guards,
             group_order,
-            aliases,
+            bindings,
             sources,
         } = resolve;
         assert!(
@@ -451,7 +451,7 @@ where
             guards,
             modules: ready_to_commit,
             order: group_order,
-            aliases,
+            bindings,
             pending_sources: sources,
             lifecycle,
         }
@@ -488,7 +488,7 @@ where
             guards,
             modules,
             order,
-            aliases,
+            bindings,
             pending_sources,
             lifecycle,
         } = self;
@@ -502,6 +502,13 @@ where
                     id: ModuleId::from_slot(committed.context(), slot, generation),
                 })
                 .into());
+            }
+        }
+        for &source in pending_sources.keys() {
+            if committed.module_for_source(source).is_some() {
+                return Err(
+                    LinkerError::context(LinkContextError::SourceOccupied { source }).into(),
+                );
             }
         }
         // Relocation records exact provider instances. Verify those providers
@@ -544,9 +551,9 @@ where
             ready.is_empty(),
             "ready commit entries must all be present in group_order"
         );
-        for (alias, modules) in aliases.iter() {
+        for (key, modules) in bindings.iter() {
             for &module in modules {
-                committed.add_alias(alias, module);
+                committed.bind_key(key, module);
             }
         }
         committed.extend_lifecycle(&lifecycle);

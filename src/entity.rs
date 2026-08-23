@@ -310,16 +310,6 @@ where
         self.values[index].get_or_insert_default()
     }
 
-    /// Retains only side-data entries accepted by `f`.
-    pub(crate) fn retain(&mut self, mut f: impl FnMut(K, &mut V) -> bool) {
-        for (index, value) in self.values.iter_mut().enumerate() {
-            let remove = value.as_mut().is_some_and(|value| !f(K::new(index), value));
-            if remove {
-                *value = None;
-            }
-        }
-    }
-
     /// Iterates over ids and present side-data values together.
     #[inline]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (K, &V)> {
@@ -403,8 +393,5 @@ mod tests {
         assert_eq!(map.get(first), None);
         assert_eq!(map[third], "trois");
         assert_eq!(map.iter().collect::<Vec<_>>(), [(third, &"trois")]);
-
-        map.retain(|id, _| id == first);
-        assert!(map.iter().next().is_none());
     }
 }

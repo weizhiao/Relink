@@ -299,7 +299,7 @@ fn unresolved_dependency_does_not_commit() {
 }
 
 #[test]
-fn publish_rejects_changed_module() {
+fn publish_preserves_key_order() {
     let linker = Linker::new().resolver(SingleBinaryResolver {
         key: "root",
         name: "pending.so",
@@ -311,20 +311,64 @@ fn publish_rejects_changed_module() {
         .prepare_load(&mut context, "root")
         .expect("failed to prepare root");
     let relocated = run.relocate(prepared).expect("failed to relocate root");
-    let _replacement = context
+    let replacement = context
         .insert(GraphModule::new(
             "root",
             SyntheticModule::empty("replacement"),
         ))
         .expect("failed to publish competing root");
 
+    let published = relocated
+        .publish(&mut context)
+        .expect("distinct modules may share a lookup key");
+    assert_eq!(context.module_id("root"), Some(replacement.id()));
+    drop(context.release(replacement).unwrap());
+    assert_eq!(context.module_id("root"), Some(published.root()));
+    published.rollback(&mut context).unwrap();
+}
+
+#[test]
+fn publish_rejects_occupied_source() {
+    let source = ModuleSourceId::fresh();
+    let load = |name| {
+        Loader::new()
+            .load_dylib(ElfBinary::new(name, fixtures().provider).with_source_id(source))
+            .expect("failed to load provider")
+    };
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let linker = Linker::new().resolver(SingleBinaryResolver {
+        key: "unused",
+        name: "unused.so",
+        data: fixtures().provider,
+    });
+    let mut run = linker.run();
+    let prepared = run
+        .prepare_mapped_root(
+            &mut context,
+            "pending".into(),
+            load("pending.so").into_dynamic(),
+        )
+        .expect("failed to prepare root");
+    let relocated = run.relocate(prepared).expect("failed to relocate root");
+    let replacement = Relocator::new()
+        .run(load("replacement.so"))
+        .relocate()
+        .expect("failed to relocate replacement");
+    let replacement = context
+        .insert(GraphModule::new("replacement", replacement))
+        .expect("failed to commit replacement");
+
     let error = relocated
         .publish(&mut context)
-        .expect_err("stale transaction should not replace a committed module");
+        .expect_err("a source may identify only one committed module");
     let Error::Linker(LinkerError::Context { reason }) = error else {
         panic!("unexpected publication error: {error}");
     };
-    assert!(matches!(*reason, LinkContextError::ModuleChanged { .. }));
+    assert!(matches!(
+        *reason,
+        LinkContextError::SourceOccupied { source: actual } if actual == source
+    ));
+    drop(context.release(replacement).unwrap());
 }
 
 #[test]

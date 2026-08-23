@@ -18,9 +18,9 @@ use core::{
 
 /// Logical name used to address a module inside a [`LinkContext`](super::LinkContext).
 ///
-/// Keys identify canonical entries and aliases such as resolved paths,
-/// `DT_SONAME`, and `DT_NEEDED` names. Physical module reuse is tracked
-/// separately by [`ModuleSourceId`].
+/// A key is an ordered lookup name such as a resolved path, `DT_SONAME`, or
+/// `DT_NEEDED` name. Physical module identity is tracked separately by
+/// [`ModuleSourceId`], so several modules may be registered under one key.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ModuleKey(Arc<str>);
 
@@ -321,8 +321,7 @@ pub(crate) struct CommittedStorage<
     domain: DomainId,
     key_slots: BTreeMap<ModuleKey, KeySlot>,
     keys: PrimaryMap<KeySlot, ModuleKey>,
-    canonical: SecondaryMap<KeySlot, ModuleSlot>,
-    aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
+    bindings: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
     sources: BTreeMap<ModuleSourceId, ModuleSlot>,
     entries: PrimaryMap<ModuleSlot, ModuleCell<Meta, Arch, Tls>>,
     lifecycle: Vec<ModuleSlot>,
@@ -340,8 +339,7 @@ where
             domain,
             key_slots: BTreeMap::new(),
             keys: PrimaryMap::new(),
-            canonical: SecondaryMap::new(),
-            aliases: SecondaryMap::new(),
+            bindings: SecondaryMap::new(),
             sources: BTreeMap::new(),
             entries: PrimaryMap::new(),
             lifecycle: Vec::new(),
@@ -425,17 +423,12 @@ where
         &self,
         slot: ModuleSlot,
     ) -> Option<CommittedModule<'_, Meta, Arch, Tls>> {
-        match self.entries.get(slot) {
-            Some(ModuleCell {
-                entry_key,
-                entry: Some(entry),
-                ..
-            }) => Some(CommittedModule {
-                entry_key: *entry_key,
-                entry,
-            }),
-            _ => None,
-        }
+        let cell = self.entries.get(slot)?;
+        let entry = cell.entry.as_ref()?;
+        Some(CommittedModule {
+            entry_key: cell.entry_key(),
+            entry,
+        })
     }
 
     #[inline]
@@ -453,23 +446,12 @@ where
 
     #[inline]
     pub(in crate::linker) fn module_for_key(&self, slot: KeySlot) -> Option<ModuleSlot> {
-        self.canonical_module(slot)
-            .filter(|module| self.contains_module(*module))
-            .or_else(|| self.alias_module(slot))
-    }
-
-    #[inline]
-    pub(crate) fn canonical_module(&self, slot: KeySlot) -> Option<ModuleSlot> {
-        self.canonical.get(slot).copied()
-    }
-
-    #[inline]
-    pub(crate) fn alias_module(&self, slot: KeySlot) -> Option<ModuleSlot> {
-        self.aliases
-            .get(slot)?
-            .iter()
-            .copied()
-            .find(|module| self.contains_module(*module))
+        let module = self.bindings.get(slot)?.first().copied()?;
+        debug_assert!(
+            self.contains_module(module),
+            "key bindings must only contain committed modules"
+        );
+        Some(module)
     }
 
     #[inline]
@@ -503,7 +485,7 @@ where
 
     #[inline]
     pub(in crate::linker) fn entry_key(&self, slot: ModuleSlot) -> KeySlot {
-        self.entries[slot].entry_key
+        self.entries[slot].entry_key()
     }
 }
 
@@ -560,22 +542,19 @@ where
         slot
     }
 
-    pub(crate) fn add_alias(&mut self, alias: KeySlot, module: ModuleSlot) {
-        let modules = self.aliases.get_or_default(alias);
+    pub(crate) fn bind_key(&mut self, key: KeySlot, module: ModuleSlot) {
+        assert!(
+            self.contains_module(module),
+            "key bindings must refer to committed modules"
+        );
+        let modules = self.bindings.get_or_default(key);
         if !modules.contains(&module) {
             modules.push(module);
+            let keys = &mut self.entries[module].keys;
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
         }
-    }
-
-    pub(crate) fn prefer_alias(&mut self, alias: KeySlot, module: ModuleSlot) {
-        let modules = self.aliases.get_or_default(alias);
-        if modules.first() == Some(&module) {
-            return;
-        }
-        if let Some(idx) = modules.iter().position(|candidate| *candidate == module) {
-            modules.remove(idx);
-        }
-        modules.insert(0, module);
     }
 
     pub(crate) fn extend_lifecycle(&mut self, order: &[ModuleSlot]) {
@@ -593,19 +572,9 @@ where
         self.lifecycle.extend_from_slice(order);
     }
 
-    pub(crate) fn intern_module(&mut self, slot: KeySlot) -> ModuleSlot {
-        if let Some(module_slot) = self.canonical.get(slot).copied() {
-            return module_slot;
-        }
-
-        let module_slot = self.push_module(slot);
-        self.canonical.insert(slot, module_slot);
-        module_slot
-    }
-
-    pub(crate) fn push_module(&mut self, slot: KeySlot) -> ModuleSlot {
+    pub(crate) fn alloc_module(&mut self, key: KeySlot) -> ModuleSlot {
         self.entries.push(ModuleCell {
-            entry_key: slot,
+            keys: Vec::from([key]),
             generation: 0,
             entry: None,
         })
@@ -625,19 +594,33 @@ where
     }
 
     #[inline]
-    pub(crate) fn take(
+    pub(crate) fn remove(
         &mut self,
         slot: ModuleSlot,
     ) -> (ModuleHandle<Arch, Tls>, LookupScope<Arch, Tls>, Meta) {
-        let entry = {
+        let (entry, keys) = {
             let cell = &mut self.entries[slot];
             let entry = cell
                 .entry
                 .take()
                 .expect("unload order must refer to a committed module");
+            let keys = core::mem::take(&mut cell.keys);
             cell.advance_generation();
-            entry
+            (entry, keys)
         };
+        for key in keys {
+            let empty = {
+                let modules = self
+                    .bindings
+                    .get_mut(key)
+                    .expect("module key must have a binding list");
+                modules.retain(|candidate| *candidate != slot);
+                modules.is_empty()
+            };
+            if empty {
+                self.bindings.remove(key);
+            }
+        }
         let indexed = self
             .sources
             .remove(&entry.module.source_id())
@@ -646,26 +629,31 @@ where
         (entry.module, entry.scope, entry.meta)
     }
 
-    pub(crate) fn prune_removed(&mut self) {
+    pub(crate) fn prune_lifecycle(&mut self) {
         let entries = &self.entries;
-        self.aliases.retain(|_, modules| {
-            modules.retain(|slot| entries.get(*slot).is_some_and(|cell| cell.entry.is_some()));
-            !modules.is_empty()
-        });
         self.lifecycle
             .retain(|slot| entries.get(*slot).is_some_and(|cell| cell.entry.is_some()));
     }
 }
 
 struct ModuleCell<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    entry_key: KeySlot,
-    // Incremented on both publication and removal so an id can never become
-    // valid again when this stable slot is reused.
+    // The first key is the module's entry key; later keys are alternate names.
+    keys: Vec<KeySlot>,
+    // Incremented on publication and removal to guard transactional references
+    // and make ids stale as soon as a module is unloaded.
     generation: u32,
     entry: Option<StoredEntry<Meta, Arch, Tls>>,
 }
 
 impl<Meta, Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleCell<Meta, Arch, Tls> {
+    #[inline]
+    fn entry_key(&self) -> KeySlot {
+        *self
+            .keys
+            .first()
+            .expect("allocated module slots must retain their entry key")
+    }
+
     #[inline]
     fn advance_generation(&mut self) {
         self.generation = self
