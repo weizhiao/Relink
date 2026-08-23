@@ -8,7 +8,7 @@ mod defs;
 mod handle;
 mod loaded;
 
-pub use defs::Symbol;
-pub(crate) use defs::{CoreInner, CoreRuntime};
+pub(crate) use defs::CoreRuntime;
+pub use defs::{ElfModule, Symbol};
 pub use handle::{ElfCore, ElfCoreRef};
 pub use loaded::LoadedCore;

@@ -4,7 +4,7 @@ use crate::{
     Error, RelocReason, Result,
     elf::{ElfRelEntry, ElfRelType, HashTable, SymbolEntry, SymbolTableView},
     hint::unlikely,
-    image::{ElfCore, LookupScope, Module, ModuleInstanceId, ModuleScope, ModuleState},
+    image::{ElfCore, LookupScope, ModuleInstanceId, ModuleScope, ModuleState},
     memory::{ImageMemory, RegionAccess, VmAddr},
     observer::{RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
@@ -186,7 +186,7 @@ where
             return VmAddr::null();
         }
         let symbol = self.symbols.entry(r_sym);
-        self.core.base() + VmOffset::new(symbol.symbol().st_value())
+        self.core.segments().base() + VmOffset::new(symbol.symbol().st_value())
     }
 
     #[inline]

@@ -6,24 +6,22 @@
 use crate::{
     Result,
     arch::NativeArch,
-    elf::ElfPhdr,
-    image::{ElfCore, LoadedCore, RawDynamic},
-    input::Path,
+    image::{LoadedCore, RawDynamic},
     lazy::{LazyBinder, SupportLazy},
-    memory::{HostRegion, RegionAccess, VmAddr},
+    memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
     relocation::{Relocatable, RelocateArgs, RelocationArch},
     runtime::DomainId,
-    segment::ElfSegments,
-    tls::{ModuleTls, TlsResolver},
+    tls::TlsResolver,
 };
-use core::fmt::Debug;
+use core::{fmt::Debug, ops::Deref};
 
 /// A mapped but unrelocated shared object.
 ///
 /// Values of this type are returned by [`crate::Loader::load_dylib`]. They expose
 /// ELF metadata immediately and can later be turned into a [`LoadedCore`] by running
-/// relocation.
+/// relocation. The wrapper dereferences to [`RawDynamic`], which owns the common
+/// implementation for dynamic ELF images.
 ///
 /// The optional `Arch` type parameter selects the target architecture used by
 /// [`crate::Relocator::run`]. By default it is [`crate::arch::NativeArch`].
@@ -61,7 +59,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     #[inline]
     fn domain_id(&self) -> DomainId {
-        self.inner.core_ref().domain_id()
+        self.inner.state().domain_id()
     }
 
     fn relocate<Obs, Binder>(
@@ -79,105 +77,38 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     RawDylib<D, Arch, R, Tls>
 {
-    /// Creates a new `RawDylib` from a `RawDynamic`.
-    #[inline]
-    pub fn from_dynamic(inner: RawDynamic<D, Arch, R, Tls>) -> Self {
-        Self { inner }
-    }
-
-    /// Converts this `RawDylib` into a `RawDynamic`.
-    #[inline]
-    pub fn into_dynamic(self) -> RawDynamic<D, Arch, R, Tls> {
-        self.inner
-    }
-
-    /// Gets the entry point of the ELF object.
-    #[inline]
-    pub fn entry(&self) -> usize {
-        self.inner.entry()
-    }
-
-    /// Gets the core component reference of the ELF object.
-    #[inline]
-    pub fn core_ref(&self) -> &ElfCore<D, Arch, R, Tls> {
-        self.inner.core_ref()
-    }
-
-    /// Gets the core component of the ELF object.
-    #[inline]
-    pub fn core(&self) -> ElfCore<D, Arch, R, Tls> {
-        self.inner.core()
-    }
-
-    /// Converts this object into its core component.
-    #[inline]
-    pub fn into_core(self) -> ElfCore<D, Arch, R, Tls> {
-        self.inner.into_core()
-    }
-
-    /// Whether lazy binding is enabled for the current ELF object
-    #[inline]
-    pub fn is_lazy(&self) -> bool {
-        self.inner.is_lazy()
-    }
-
-    /// Returns TLS metadata when this image owns a TLS block.
-    pub fn tls(&self) -> Option<ModuleTls> {
-        self.inner.tls()
-    }
-
-    /// Returns the DT_SONAME value.
-    #[inline]
-    pub fn soname(&self) -> Option<&str> {
-        self.inner.soname()
-    }
-
-    /// Returns the PT_INTERP value.
-    #[inline]
-    pub fn interp(&self) -> Option<&str> {
-        self.inner.interp()
-    }
-
-    /// Returns the loader source path or caller-provided source identifier.
-    #[inline]
-    pub fn path(&self) -> &Path {
-        self.inner.path()
-    }
-
-    /// Returns the ELF module identity used for diagnostics.
-    #[inline]
-    pub fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    /// Returns the program headers of the ELF object.
-    pub fn phdrs(&self) -> &[ElfPhdr<Arch::Layout>] {
-        self.inner.phdrs()
-    }
-
-    /// Returns the base address of the loaded ELF object.
-    pub fn base(&self) -> VmAddr {
-        self.inner.base()
-    }
-
-    /// Returns the mapped segments owned by this image.
-    pub fn segments(&self) -> &ElfSegments<R> {
-        self.inner.segments()
-    }
-
-    /// Returns the list of needed library names from the dynamic section.
-    pub fn needed_libs(&self) -> &[&str] {
-        self.inner.needed_libs()
-    }
-
-    /// Returns a reference to the user data.
-    pub fn user_data(&self) -> &D {
-        self.inner.user_data()
-    }
-
-    /// Returns a mutable reference to the user data.
+    /// Returns a mutable reference to the user data when the core is uniquely owned.
     #[inline]
     pub fn user_data_mut(&mut self) -> Option<&mut D> {
         self.inner.user_data_mut()
+    }
+}
+
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
+    for RawDylib<D, Arch, R, Tls>
+{
+    type Target = RawDynamic<D, Arch, R, Tls>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    From<RawDynamic<D, Arch, R, Tls>> for RawDylib<D, Arch, R, Tls>
+{
+    #[inline]
+    fn from(inner: RawDynamic<D, Arch, R, Tls>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
+    From<RawDylib<D, Arch, R, Tls>> for RawDynamic<D, Arch, R, Tls>
+{
+    #[inline]
+    fn from(dylib: RawDylib<D, Arch, R, Tls>) -> Self {
+        dylib.inner
     }
 }

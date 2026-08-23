@@ -5,7 +5,7 @@ use super::{
 use crate::{
     Loader, LoaderRun, ParseShdrError, RelocationError, Result,
     elf::{ElfHeader, ElfLayout, ElfRelEntry, ElfRelType, ElfSectionType, ElfShdr},
-    image::{Module, RawObject},
+    image::RawObject,
     input::{ElfReader, ElfReaderExt, IntoElfReader, PathBuf},
     loader::ExpectedElf,
     logging,
@@ -109,7 +109,7 @@ where
         )?;
         let mut raw = builder.build_object();
         observer.on_after_object_load(AfterObjectLoadEvent::new(&mut raw))?;
-        let base = raw.base();
+        let base = raw.segments().base();
 
         logging::info!("Loaded object: {} at {}", raw.name(), base);
 
@@ -263,7 +263,6 @@ mod tests {
         Error, IoError, Loader, ParseShdrError, Result,
         arch::NativeArch,
         elf::{ElfEhdr, ElfLayout, ElfSectionFlags, ElfSectionId, ElfSectionType, NativeElfLayout},
-        image::Module,
         input::{ElfBinary, ElfReader, ModuleSourceId, Path},
         memory::RegionAccess,
         observer::{AfterObjectLoadEvent, BeforeObjectLoadEvent, LoadObserver},

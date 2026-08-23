@@ -2,7 +2,7 @@ use super::lifecycle::{LifecycleHandlers, LifecycleRunner};
 use crate::{
     arch::NativeArch,
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, HashTable, SymbolEntry, SymbolTableView},
-    image::{ElfCore, LookupScope, Module},
+    image::{ElfCore, LookupScope},
     input::Path,
     lazy::LazyValues,
     memory::{HostRegion, RegionAccess, VmAddr},
@@ -238,7 +238,7 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
     /// Returns the load base used by this image.
     #[inline]
     pub fn base(&self) -> VmAddr {
-        self.core.base()
+        self.core.segments().base()
     }
 
     /// Returns the runtime address of the first dynamic entry.

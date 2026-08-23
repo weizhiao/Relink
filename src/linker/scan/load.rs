@@ -237,8 +237,7 @@ where
     Tls: TlsResolver<Arch>,
 {
     let module = plan.module(module_id);
-    let core = raw.core_ref();
-    let segments = core.segments();
+    let segments = raw.segments();
 
     for section_id in module.alloc_sections().iter().copied() {
         if !plan.section_is_override(section_id) {

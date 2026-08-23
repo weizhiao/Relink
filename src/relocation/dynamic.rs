@@ -4,7 +4,7 @@ use crate::{
     arch::NativeArch,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfRelr, ElfWord},
     hint::{likely, unlikely},
-    image::{GlobalScope, LoadedCore, Module, RawDynamic},
+    image::{GlobalScope, LoadedCore, RawDynamic},
     lazy::{LazyBinder, prepare_plt, relocate_jump_slot},
     logging,
     memory::{ImageMemory, ImageMemoryExt, MappedView, RegionAccess, VmOffset},
@@ -25,7 +25,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         }
 
         if let Some(relro) = self.relro() {
-            relro.apply(self.core_ref().segments())?;
+            relro.apply(self.segments())?;
         }
         Ok(())
     }
@@ -53,7 +53,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             observer,
             ..
         } = args;
-        let domain = self.core_ref().domain_id();
+        let domain = self.domain_id();
         scope.check_domain(domain)?;
         if let Some(global) = &global {
             domain.ensure(global.domain_id())?;
@@ -69,21 +69,21 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             logging::debug!("Using lazy binding for {}", self.name());
         }
         prepare_plt(lazy_binder, lazy, &self)?;
-        let source = self.core_ref().module_handle();
+        let source = self.module_handle();
         let resolver = SymbolResolver::new(
             &source,
             scope,
             global_snapshot,
             symbols.as_deref(),
-            self.core_ref().symbolic(),
+            self.symbolic(),
             lookup_order,
         );
         let mut helper = RelocHelper::new(
-            self.core_ref(),
+            &self,
             resolver,
             BindingDeps::new(),
             self.symtab().view(),
-            self.core_ref().segments(),
+            self.segments(),
             observer,
         );
 
@@ -104,20 +104,15 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         }
 
         self.apply_relro(lazy)?;
-        let mut dynamic_event = DynamicRelocatedEvent::new(
-            self.core_ref(),
-            self.dynamic_addr(),
-            initializer,
-            finalizer,
-        );
+        let mut dynamic_event =
+            DynamicRelocatedEvent::new(&self, self.dynamic_addr(), initializer, finalizer);
         observer.on_dynamic_relocated(&mut dynamic_event)?;
-        self.core_ref()
-            .set_lifecycle(dynamic_event.into_lifecycle());
-        self.core_ref().publish_tls()?;
+        self.set_lifecycle(dynamic_event.into_lifecycle());
+        self.publish_tls()?;
 
         logging::debug!("Preparing initialization functions for {}", self.name());
         if run_init {
-            self.core_ref().initialize()?;
+            self.initialize()?;
         }
 
         logging::info!("Relocation completed for {}", self.name());
@@ -229,8 +224,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         Obs: RelocationObserver<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: ByteRepr,
     {
-        let core = self.core_ref();
-        let base = core.base();
+        let base = self.segments().base();
         let reloc = self.relocation();
 
         // Process PLT relocations
@@ -262,7 +256,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 let resolved = helper
                     .core
                     .executor()
-                    .resolve_ifunc(CodeContext::<Arch>::new(core.name(), helper.memory()), addr)?;
+                    .resolve_ifunc(CodeContext::<Arch>::new(self.name(), helper.memory()), addr)?;
                 let word = <Arch::Layout as ElfLayout>::Word::from_usize(resolved.get());
                 unsafe { helper.memory().write_value(place, word)? };
                 continue;
@@ -318,9 +312,8 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             S = Value of the symbol whose index resides in the relocation entry
         */
 
-        let core = self.core_ref();
         let reloc = self.relocation();
-        let base = core.base();
+        let base = self.segments().base();
 
         // Process each dynamic relocation entry
         let dynrel = reloc.dynrel.as_slice();
@@ -372,7 +365,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 let resolved = helper
                     .core
                     .executor()
-                    .resolve_ifunc(CodeContext::<Arch>::new(core.name(), helper.memory()), addr)?;
+                    .resolve_ifunc(CodeContext::<Arch>::new(self.name(), helper.memory()), addr)?;
                 let word = <Arch::Layout as ElfLayout>::Word::from_usize(resolved.get());
                 unsafe { helper.memory().write_value(place, word)? };
                 continue;

@@ -191,7 +191,7 @@ fn can_clear_exports() {
                 .symbols()
                 .find(|entry| entry.name() == VALUE)
                 .expect("value symbol should exist");
-            let addr = event.core().base() + VmOffset::new(symbol.symbol().st_value());
+            let addr = event.core().segments().base() + VmOffset::new(symbol.symbol().st_value());
             let mut bytes = [0u8; 4];
             event.memory().read_bytes(addr, &mut bytes)?;
             assert_eq!(bytes, [1, 2, 3, 4]);

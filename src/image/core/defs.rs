@@ -1,25 +1,26 @@
 use crate::{
     Result, TlsError,
     arch::NativeArch,
-    elf::{ElfSymbol, ElfSymbolType, SymbolEntry},
+    elf::{ElfPhdr, ElfSymbol, ElfSymbolType, SymbolEntry},
     image::{
         DynamicInfo, GlobalScope, Module, ModuleHandle, ModuleSearch, ModuleState, PltRelocInfo,
         SymbolExports, WeakLookupScope,
     },
+    input::Path,
     lazy::{LazySetup, LazyValues},
     logging,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
     observer::LifecycleHandlers,
     relocation::{LookupOrder, RelocationArch, SymbolRegistry, SymbolResolver},
-    runtime::{CodeContext, CodeExecutor},
-    segment::ElfSegments,
+    runtime::{CodeContext, CodeExecutor, DomainId},
+    segment::{ElfSegments, MappedRange},
     sync::{Arc, OnceCell, Weak},
     tls::{CoreTlsState, ModuleTls, TLS_GET_ADDR_SYMBOL, TlsResolver},
 };
 use alloc::boxed::Box;
-use core::{marker::PhantomData, ops::Deref};
+use core::{marker::PhantomData, ops::Deref, ptr::NonNull};
 
-/// Stable runtime header shared by all [`CoreInner`] instantiations.
+/// Stable runtime header shared by all [`ElfModule`] instantiations.
 #[repr(C)]
 pub(crate) struct CoreRuntime<Arch: RelocationArch = NativeArch> {
     core: OnceCell<VmAddr>,
@@ -98,14 +99,14 @@ pub(crate) struct LazyLookup<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
 }
 
 #[inline]
-unsafe fn core_inner<D, Arch, R, Tls>(runtime: &CoreRuntime<Arch>) -> &CoreInner<D, Arch, R, Tls>
+unsafe fn elf_module<D, Arch, R, Tls>(runtime: &CoreRuntime<Arch>) -> &ElfModule<D, Arch, R, Tls>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    unsafe { &*runtime.core().as_ptr::<CoreInner<D, Arch, R, Tls>>() }
+    unsafe { &*runtime.core().as_ptr::<ElfModule<D, Arch, R, Tls>>() }
 }
 
 unsafe fn core_module<D, Arch, R, Tls>(runtime: &CoreRuntime<Arch>) -> &dyn CoreRuntimeModule<Arch>
@@ -115,10 +116,10 @@ where
     R: RegionAccess,
     Tls: TlsResolver<Arch>,
 {
-    unsafe { core_inner::<D, Arch, R, Tls>(runtime) }
+    unsafe { elf_module::<D, Arch, R, Tls>(runtime) }
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> CoreRuntimeModule<Arch> for CoreInner<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> CoreRuntimeModule<Arch> for ElfModule<D, Arch, R, Tls>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
@@ -173,8 +174,13 @@ where
     }
 }
 
-/// Inner structure for ElfCore
-pub(crate) struct CoreInner<
+/// Shared allocation backing one loaded ELF module.
+///
+/// `ElfModule` is the concrete module type stored by [`ModuleHandle`] for ELF
+/// images managed by [`crate::LinkContext`]. Its fields remain private to
+/// Relink, while its read-only methods expose ELF metadata and caller data
+/// without another allocation or a capability wrapper.
+pub struct ElfModule<
     D: Send + Sync + 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
@@ -216,8 +222,113 @@ pub(crate) struct CoreInner<
 }
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    CoreInner<D, Arch, R, Tls>
+    ElfModule<D, Arch, R, Tls>
 {
+    /// Returns the runtime domain in which this ELF image's addresses are meaningful.
+    #[inline]
+    pub fn domain_id(&self) -> DomainId {
+        self.state.domain_id()
+    }
+
+    /// Runs this ELF module's initialization lifecycle at most once.
+    #[inline]
+    pub fn initialize(&self) -> Result<()> {
+        self.state.initialize(|| Module::initialize(self))
+    }
+
+    /// Returns the ELF module name used for diagnostics.
+    #[inline]
+    pub fn name(&self) -> &str {
+        self.search.name()
+    }
+
+    /// Returns the `DT_SONAME` value, when present.
+    #[inline]
+    pub fn soname(&self) -> Option<&str> {
+        self.search.soname()
+    }
+
+    /// Returns the canonical identity, domain, and lifecycle state.
+    #[inline]
+    pub const fn state(&self) -> &ModuleState {
+        &self.state
+    }
+
+    /// Returns TLS metadata when this image owns a TLS block.
+    #[inline]
+    pub fn tls(&self) -> Option<ModuleTls> {
+        self.tls.module()
+    }
+
+    /// Returns caller-owned data associated with this ELF module.
+    #[inline]
+    pub const fn user_data(&self) -> &D {
+        &self.user_data
+    }
+
+    /// Returns the retained program headers, when available.
+    #[inline]
+    pub fn phdrs(&self) -> Option<&[ElfPhdr<Arch::Layout>]> {
+        self.dynamic_info.as_ref().map(|info| info.phdrs.as_slice())
+    }
+
+    /// Returns the loader source path or caller-provided source identifier.
+    #[inline]
+    pub fn path(&self) -> &Path {
+        self.search.path()
+    }
+
+    /// Returns the names recorded by `DT_NEEDED`.
+    #[inline]
+    pub fn needed_libs(&self) -> &[&str] {
+        self.dynamic_info
+            .as_ref()
+            .map_or(&[], |info| info.needed_libs.as_ref())
+    }
+
+    /// Returns the mapped segments owned by this ELF image.
+    #[inline]
+    pub const fn segments(&self) -> &ElfSegments<R> {
+        &self.segments
+    }
+
+    /// Returns the mapped module-relative ranges owned by this ELF image.
+    #[inline]
+    pub fn mapped_ranges(&self) -> &[MappedRange] {
+        self.segments.ranges()
+    }
+
+    /// Returns the `PT_GNU_EH_FRAME` header address, when present.
+    #[inline]
+    pub fn eh_frame_hdr(&self) -> Option<NonNull<u8>> {
+        self.dynamic_info
+            .as_ref()
+            .and_then(|info| info.eh_frame_hdr)
+    }
+
+    #[inline]
+    pub(crate) fn set_lifecycle(&self, lifecycle: LifecycleHandlers) {
+        assert!(
+            self.lifecycle.set(lifecycle).is_ok(),
+            "lifecycle must be set only once",
+        );
+    }
+
+    #[inline]
+    pub(crate) fn symbolic(&self) -> bool {
+        self.dynamic_info.as_ref().is_some_and(|info| info.symbolic)
+    }
+
+    #[inline]
+    pub(crate) fn tls_resolver(&self) -> &Tls {
+        self.tls.resolver()
+    }
+
+    #[inline]
+    pub(crate) fn executor(&self) -> &dyn CodeExecutor<Arch> {
+        self.executor.as_ref()
+    }
+
     #[inline]
     pub(crate) fn bind_runtime_owner(inner: &Arc<Self>) {
         inner
@@ -235,7 +346,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     }
 }
 
-impl<D: Send + Sync + 'static, Arch, R, Tls> Module<Arch, Tls> for CoreInner<D, Arch, R, Tls>
+impl<D: Send + Sync + 'static, Arch, R, Tls> Module<Arch, Tls> for ElfModule<D, Arch, R, Tls>
 where
     D: Send + Sync + 'static,
     Arch: RelocationArch,
@@ -244,7 +355,7 @@ where
 {
     #[inline]
     fn name(&self) -> &str {
-        self.search.name()
+        self.name()
     }
 
     #[inline]
@@ -290,12 +401,12 @@ where
 
     #[inline]
     fn tls(&self) -> Option<ModuleTls> {
-        self.tls.module()
+        self.tls()
     }
 
     #[inline]
     fn state(&self) -> &ModuleState {
-        &self.state
+        self.state()
     }
 
     fn initialize(&self) -> Result<()> {
@@ -323,7 +434,7 @@ where
 }
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Drop
-    for CoreInner<D, Arch, R, Tls>
+    for ElfModule<D, Arch, R, Tls>
 {
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
@@ -337,14 +448,14 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 // mapped views are immutable metadata, and memory access is mediated by the
 // Send + Sync RegionAccess implementation.
 unsafe impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    Sync for CoreInner<D, Arch, R, Tls>
+    Sync for ElfModule<D, Arch, R, Tls>
 {
 }
 
 // Safety: see the Sync implementation above. Every owned field is Send, and
 // mapped addresses are values interpreted only through RegionAccess.
 unsafe impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    Send for CoreInner<D, Arch, R, Tls>
+    Send for ElfModule<D, Arch, R, Tls>
 {
 }
 

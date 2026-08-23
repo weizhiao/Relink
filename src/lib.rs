@@ -230,7 +230,9 @@ pub(crate) use error::*;
 
 pub use aligned_bytes::ByteRepr;
 pub use error::Error;
-pub use image::{GlobalScope, Module, ModuleInstanceId, ModuleSearch, ModuleState, SearchPathPool};
+pub use image::{
+    ElfModule, GlobalScope, Module, ModuleInstanceId, ModuleSearch, ModuleState, SearchPathPool,
+};
 pub use input::ModuleSourceId;
 pub use linker::{GraphModule, LinkContext, Linker, LinkerRun, ModuleKey};
 pub use loader::{Loader, LoaderRun};

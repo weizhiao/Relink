@@ -6,7 +6,7 @@ use crate::{
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
-use core::fmt;
+use core::{fmt, ops::Deref};
 
 /// One module detached from a link context by [`super::LinkContext::release`].
 pub struct UnloadedModule<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
@@ -46,7 +46,7 @@ where
     /// Borrows the detached module while its unload group retains dependencies.
     #[inline]
     pub fn module(&self) -> &dyn Module<Arch, Tls> {
-        self.module.as_dyn()
+        self.module.as_ref()
     }
 
     /// Returns metadata detached with this context entry.
@@ -81,7 +81,8 @@ where
 /// Modules made unreachable and detached by [`super::LinkContext::release`].
 ///
 /// The collection retains the complete unload group so finalizers may still
-/// call code in dependencies that were detached at the same time.
+/// call code in dependencies that were detached at the same time. It dereferences
+/// to the detached modules in finalization order.
 pub struct UnloadGroup<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     modules: Vec<UnloadedModule<Meta, Arch, Tls>>,
 }
@@ -95,22 +96,18 @@ where
     pub(super) fn new(modules: Vec<UnloadedModule<Meta, Arch, Tls>>) -> Self {
         Self { modules }
     }
+}
 
-    /// Returns true when releasing the acquisition detached no modules.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.modules.is_empty()
-    }
-
-    /// Returns the number of detached modules.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.modules.len()
-    }
+impl<Meta, Arch, Tls> Deref for UnloadGroup<Meta, Arch, Tls>
+where
+    Arch: RelocationArch,
+    Tls: TlsResolver<Arch>,
+{
+    type Target = [UnloadedModule<Meta, Arch, Tls>];
 
     /// Returns detached modules in finalization order.
     #[inline]
-    pub fn modules(&self) -> &[UnloadedModule<Meta, Arch, Tls>] {
+    fn deref(&self) -> &Self::Target {
         &self.modules
     }
 }

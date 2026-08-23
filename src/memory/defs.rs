@@ -1,4 +1,4 @@
-use core::ptr::NonNull;
+use core::{ops::Deref, ptr::NonNull};
 
 use crate::{ByteRepr, Result, os::ProtFlags, sync::Arc, try_cast_bytes};
 
@@ -339,16 +339,6 @@ impl<T: 'static> MappedView<T> {
     }
 
     #[inline]
-    pub(crate) fn len(&self) -> usize {
-        self.as_slice().len()
-    }
-
-    #[inline]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.as_slice().is_empty()
-    }
-
-    #[inline]
     pub(crate) fn split_at(&self, mid: usize) -> Option<(Self, Self)> {
         if mid > self.len() {
             return None;
@@ -358,9 +348,18 @@ impl<T: 'static> MappedView<T> {
     }
 }
 
+impl<T: 'static> Deref for MappedView<T> {
+    type Target = [T];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.slice
+    }
+}
+
 impl<T: 'static> AsRef<[T]> for MappedView<T> {
     #[inline]
     fn as_ref(&self) -> &[T] {
-        self.as_slice()
+        self
     }
 }

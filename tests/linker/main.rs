@@ -7,7 +7,7 @@ use elf_loader::{
     Error, GraphModule, LinkContext, Linker, Loader, Module, Relocator,
     arch::NativeArch,
     error::{LinkContextError, LinkResolverError, LinkerError},
-    image::{LoadedCore, ModuleCapability, SyntheticModule, SyntheticSymbol},
+    image::{ElfModule, LoadedCore, ModuleCapability, SyntheticModule, SyntheticSymbol},
     input::{ElfBinary, ModuleSourceId},
     linker::{
         KeyResolver, ResolveInput, ResolveRequest, ResolvedKey,

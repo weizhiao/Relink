@@ -4,7 +4,7 @@ use crate::{
         ElfRelType, ElfSectionId, ElfSectionIndex, ElfSectionType, ElfShdr, ElfSymbol,
         ElfSymbolType,
     },
-    image::{ElfCore, GlobalScope, LoadedCore, LoadedObject, Module, RawObject, SymbolExports},
+    image::{ElfCore, GlobalScope, LoadedCore, LoadedObject, RawObject, SymbolExports},
     lazy::LazyBinder,
     logging,
     memory::{RegionAccess, VmAddr, VmOffset},
@@ -212,7 +212,7 @@ where
     where
         Obs: RelocationObserver<Arch> + ?Sized,
     {
-        let base = core.base();
+        let base = core.segments().base();
         let symbol_count = symtab.symbols().len();
 
         // The mandatory null symbol stays zero and never participates in lookup.

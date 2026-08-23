@@ -154,10 +154,10 @@ impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolv
     #[inline]
     pub fn base(&self) -> VmAddr {
         match self {
-            RawElf::Dylib(dylib) => dylib.base(),
+            RawElf::Dylib(dylib) => dylib.segments().base(),
             RawElf::Exec(exec) => exec.base(),
             #[cfg(feature = "object")]
-            RawElf::Object(object) => object.base(),
+            RawElf::Object(object) => object.segments().base(),
         }
     }
 }

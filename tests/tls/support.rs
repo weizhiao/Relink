@@ -39,7 +39,7 @@ impl TlsScenario {
     }
 
     pub(crate) fn slot(&self, relocation: &RelocationInfo) -> u64 {
-        let addr = self.consumer.base()
+        let addr = self.consumer.segments().base()
             + VmOffset::new(
                 relocation
                     .vaddr

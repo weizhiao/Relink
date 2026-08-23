@@ -25,24 +25,22 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 {
     #[inline]
     fn search(&self) -> &ModuleSearch {
-        self.core_ref()
-            .search()
-            .expect("ELF cores always retain filesystem search metadata")
+        Module::search(&***self).expect("ELF cores always retain filesystem search metadata")
     }
 
     #[inline]
     fn source_id(&self) -> ModuleSourceId {
-        self.core_ref().state().instance_id().source_id()
+        self.state().instance_id().source_id()
     }
 
     #[inline]
     fn needed_len(&self) -> usize {
-        self.core_ref().needed_libs().len()
+        self.needed_libs().len()
     }
 
     #[inline]
     fn needed(&self, index: usize) -> Option<&str> {
-        self.core_ref().needed_libs().get(index).copied()
+        self.needed_libs().get(index).copied()
     }
 }
 

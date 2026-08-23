@@ -253,16 +253,14 @@ where
         context
             .committed
             .ensure_domain(self.linker.loader.domain_id())?;
-        context
-            .committed
-            .ensure_domain(raw.core_ref().domain_id())?;
+        context.committed.ensure_domain(raw.domain_id())?;
         if let Some(prepared) = PreparedLoad::visible(context, &key) {
             return Ok(prepared);
         }
 
         let linker = self.linker;
         let mut session = ResolveSession::new();
-        let source = raw.core_ref().state().instance_id().source_id();
+        let source = raw.state().instance_id().source_id();
         let key = context.committed.intern_key(key);
         if let Some(root) = context.committed.module_for_source(source) {
             session.track(root, context.committed.generation(root));
@@ -272,7 +270,6 @@ where
         let root = context.committed.alloc_module(key);
         let generation = context.committed.generation(root);
         let alias = raw
-            .core_ref()
             .search()
             .and_then(ModuleSearch::soname)
             .map(ModuleKey::from);

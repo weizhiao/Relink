@@ -1,23 +1,22 @@
-use super::{CoreInner, defs::LazyLookup};
+use super::{ElfModule, defs::LazyLookup};
 use crate::{
     Result,
     arch::NativeArch,
-    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, ElfSymbol, SymbolTable},
+    elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
     image::{
-        CoreRuntime, DynamicInfo, GlobalScope, LookupScope, Module, ModuleSearch, ModuleState,
-        PltRelocInfo, SymbolExports,
+        CoreRuntime, DynamicInfo, GlobalScope, LookupScope, Module, ModuleHandle, ModuleSearch,
+        ModuleState, PltRelocInfo, SymbolExports,
     },
-    input::{ModuleSourceId, Path, PathBuf},
-    memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
-    observer::LifecycleHandlers,
+    input::{ModuleSourceId, PathBuf},
+    memory::{HostRegion, MappedView, RegionAccess, VmAddr},
     relocation::{LookupOrder, RelocationArch, SymbolRegistry},
     runtime::{CodeExecutor, DomainId, NativeCodeExecutor},
     segment::ElfSegments,
     sync::{Arc, OnceCell, Weak, arc_unsize},
-    tls::{CoreTlsState, ModuleTls, TlsImageProvider, TlsImageSource, TlsResolver},
+    tls::{CoreTlsState, TlsImageProvider, TlsImageSource, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::{fmt::Debug, ptr::NonNull};
+use core::{fmt::Debug, ops::Deref, ptr::NonNull};
 
 /// A non-owning reference to an [`ElfCore`].
 ///
@@ -31,7 +30,7 @@ pub struct ElfCoreRef<
     Tls: TlsResolver<Arch> = (),
 > {
     /// Weak reference to the shared core allocation.
-    inner: Weak<CoreInner<D, Arch, R, Tls>>,
+    inner: Weak<ElfModule<D, Arch, R, Tls>>,
 }
 
 // Keep this impl manual so cloning a weak core handle does not require D, Arch, or R to be Clone.
@@ -60,26 +59,25 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 }
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    TlsImageProvider for CoreInner<D, Arch, R, Tls>
+    TlsImageProvider for ElfModule<D, Arch, R, Tls>
 {
     fn with_tls_image(&self, f: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
         self.tls.with_image(f)
     }
 }
 
-/// Shared core state for a loaded ELF image.
+/// Typed owning handle for a shared [`ElfModule`].
 ///
-/// `ElfCore` stores metadata, runtime exports, segments, TLS state, and lifecycle
-/// handlers behind an [`Arc`]. Higher-level image wrappers delegate most common
-/// operations to this type.
+/// Cloning this handle reuses the same module allocation. Read-only module and
+/// ELF metadata methods are available through [`Deref`].
 pub struct ElfCore<
     D: Send + Sync + 'static = (),
     Arch: RelocationArch = NativeArch,
     R: RegionAccess = HostRegion,
     Tls: TlsResolver<Arch> = (),
 > {
-    /// Shared reference to the inner component data.
-    pub(crate) inner: Arc<CoreInner<D, Arch, R, Tls>>,
+    /// Shared reference to the concrete module allocation.
+    pub(crate) inner: Arc<ElfModule<D, Arch, R, Tls>>,
 }
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Clone
@@ -100,29 +98,6 @@ impl<
     Tls: TlsResolver<Arch> + 'static,
 > ElfCore<D, Arch, R, Tls>
 {
-    /// Returns the runtime domain in which this ELF image's addresses are meaningful.
-    #[inline]
-    pub fn domain_id(&self) -> DomainId {
-        self.inner.state.domain_id()
-    }
-
-    /// Runs this ELF module's initialization lifecycle at most once.
-    #[inline]
-    pub fn initialize(&self) -> Result<()> {
-        self.inner
-            .state
-            .initialize(|| Module::initialize(&*self.inner))
-    }
-
-    /// Installs lifecycle behavior resolved during relocation.
-    #[inline]
-    pub(crate) fn set_lifecycle(&self, lifecycle: LifecycleHandlers) {
-        assert!(
-            self.inner.lifecycle.set(lifecycle).is_ok(),
-            "lifecycle must be set only once",
-        );
-    }
-
     /// Creates a weak reference to this ELF core.
     #[inline]
     pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R, Tls> {
@@ -131,72 +106,10 @@ impl<
         }
     }
 
-    /// Gets user data from the ELF object
-    #[inline]
-    pub fn user_data(&self) -> &D {
-        &self.inner.user_data
-    }
-
-    /// Returns the program headers of the ELF object.
-    pub fn phdrs(&self) -> Option<&[ElfPhdr<Arch::Layout>]> {
-        self.inner
-            .dynamic_info
-            .as_ref()
-            .map(|info| info.phdrs.as_slice())
-    }
-
     /// Returns a mutable reference to the user-defined data.
     #[inline]
     pub fn user_data_mut(&mut self) -> Option<&mut D> {
         Arc::get_mut(&mut self.inner).map(|inner| &mut inner.user_data)
-    }
-
-    /// Gets the number of strong references to the ELF object
-    #[inline]
-    pub fn strong_count(&self) -> usize {
-        Arc::strong_count(&self.inner)
-    }
-
-    /// Gets the number of weak references to the ELF object
-    #[inline]
-    pub fn weak_count(&self) -> usize {
-        Arc::weak_count(&self.inner)
-    }
-
-    /// Returns the loader source path or caller-provided source identifier.
-    #[inline]
-    pub fn path(&self) -> &Path {
-        self.inner.search.path()
-    }
-
-    /// Gets the base address of the ELF object
-    #[inline]
-    pub fn base(&self) -> VmAddr {
-        self.inner.segments.base()
-    }
-
-    /// Returns the DT_SONAME value when this core has dynamic metadata.
-    #[inline]
-    pub(crate) fn soname(&self) -> Option<&str> {
-        self.inner.search.soname()
-    }
-
-    /// Returns the `DT_NEEDED` names retained from the dynamic section.
-    #[inline]
-    pub fn needed_libs(&self) -> &[&str] {
-        self.inner
-            .dynamic_info
-            .as_ref()
-            .map_or(&[], |info| info.needed_libs.as_ref())
-    }
-
-    /// Returns whether dynamic relocations in this image prefer definitions from itself.
-    #[inline]
-    pub(crate) fn symbolic(&self) -> bool {
-        self.inner
-            .dynamic_info
-            .as_ref()
-            .is_some_and(|info| info.symbolic)
     }
 
     /// Installs the weak state needed by lazy symbol lookup.
@@ -226,26 +139,6 @@ impl<
         );
     }
 
-    /// Returns the mapped segments owned by this image.
-    #[inline]
-    pub fn segments(&self) -> &ElfSegments<R> {
-        &self.inner.segments
-    }
-
-    /// Gets the EH frame header pointer
-    #[inline]
-    pub fn eh_frame_hdr(&self) -> Option<NonNull<u8>> {
-        self.inner
-            .dynamic_info
-            .as_ref()
-            .and_then(|info| info.eh_frame_hdr)
-    }
-
-    #[inline]
-    pub(crate) fn tls_resolver(&self) -> &Tls {
-        self.inner.tls.resolver()
-    }
-
     pub(crate) fn publish_tls(&self) -> Result<()> {
         if self.inner.tls.module().is_none() {
             return Ok(());
@@ -254,11 +147,6 @@ impl<
         self.inner
             .tls
             .publish(TlsImageSource::new(Arc::downgrade(&provider)))
-    }
-
-    #[inline]
-    pub(crate) fn executor(&self) -> &dyn CodeExecutor<Arch> {
-        self.inner.executor.as_ref()
     }
 
     #[inline]
@@ -271,6 +159,43 @@ impl<
         crate::image::ModuleHandle::from_shared(
             arc_unsize!(Arc::clone(&self.inner) => dyn Module<Arch, Tls>),
         )
+    }
+}
+
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
+    for ElfCore<D, Arch, R, Tls>
+{
+    type Target = ElfModule<D, Arch, R, Tls>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<
+    D: Send + Sync + 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch> + 'static,
+> From<ElfCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
+{
+    #[inline]
+    fn from(core: ElfCore<D, Arch, R, Tls>) -> Self {
+        core.into_module_handle()
+    }
+}
+
+impl<
+    D: Send + Sync + 'static,
+    Arch: RelocationArch,
+    R: RegionAccess,
+    Tls: TlsResolver<Arch> + 'static,
+> From<&ElfCore<D, Arch, R, Tls>> for ModuleHandle<Arch, Tls>
+{
+    #[inline]
+    fn from(core: &ElfCore<D, Arch, R, Tls>) -> Self {
+        core.module_handle()
     }
 }
 
@@ -319,7 +244,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         let search = ModuleSearch::from_dynamic(path, soname, runpath, rpath);
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel, lazy_symtab);
         let source = ModuleSourceId::fresh();
-        let inner = Arc::new(CoreInner {
+        let inner = Arc::new(ElfModule {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: arc_unsize!(Arc::new(NativeCodeExecutor) => dyn CodeExecutor<Arch>),
             search,
@@ -337,7 +262,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             segments,
             user_data,
         });
-        CoreInner::bind_runtime_owner(&inner);
+        ElfModule::bind_runtime_owner(&inner);
         Ok(Self { inner })
     }
 }
@@ -349,62 +274,9 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ElfCore")
             .field("path", &self.inner.search.path())
-            .field("base", &format_args!("{}", self.base()))
+            .field("base", &format_args!("{}", self.segments().base()))
             .field("tls", &self.tls())
             .finish()
-    }
-}
-
-impl<D: Send + Sync + 'static, Arch, R, Tls> Module<Arch, Tls> for ElfCore<D, Arch, R, Tls>
-where
-    D: Send + Sync + 'static,
-    Arch: RelocationArch,
-    R: RegionAccess,
-    Tls: TlsResolver<Arch> + 'static,
-{
-    #[inline]
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    #[inline]
-    fn search(&self) -> Option<&ModuleSearch> {
-        self.inner.search()
-    }
-
-    #[inline]
-    fn exports(&self) -> &dyn SymbolExports<Arch::Layout> {
-        self.inner.exports()
-    }
-
-    #[inline]
-    fn memory(&self) -> &dyn ImageMemory {
-        self.segments()
-    }
-
-    #[inline]
-    fn resolve_symbol(&self, symbol: &ElfSymbol<Arch::Layout>) -> Result<VmAddr> {
-        self.inner.resolve_symbol(symbol)
-    }
-
-    #[inline]
-    fn tls(&self) -> Option<ModuleTls> {
-        self.inner.tls()
-    }
-
-    #[inline]
-    fn state(&self) -> &ModuleState {
-        &self.inner.state
-    }
-
-    #[inline]
-    fn initialize(&self) -> Result<()> {
-        Module::initialize(&*self.inner)
-    }
-
-    #[inline]
-    fn finalize(&self) -> Result<()> {
-        Module::finalize(&*self.inner)
     }
 }
 

@@ -1,13 +1,13 @@
-use super::{ElfCore, ElfCoreRef, Symbol};
+use super::{ElfCore, Symbol};
 use crate::{
     ParsePhdrError, Result,
-    arch::{ArchKind, NativeArch},
+    arch::NativeArch,
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol},
     image::{
         GlobalScope, LookupScope, Module, ModuleHandle, ModuleSearch, ModuleState, SymbolExports,
         SymbolLookup, module::lookup_symbol,
     },
-    input::{Path, PathBuf},
+    input::PathBuf,
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
     relocation::{LookupOrder, RelocationArch, SymbolRegistry},
     segment::ElfSegments,
@@ -15,13 +15,14 @@ use crate::{
     tls::{CoreTlsState, ModuleTls, TlsInfo, TlsRequest, TlsResolver, TlsTpOffset},
 };
 use alloc::vec::Vec;
-use core::{ffi::c_void, fmt::Debug, ptr::NonNull};
+use core::{ffi::c_void, fmt::Debug, ops::Deref};
 use elf::abi::DF_STATIC_TLS;
 
 /// A fully loaded and relocated ELF module with a retained relocation lookup scope.
 ///
 /// This is the common loaded representation used by relocated dylibs, dynamic
-/// [`crate::image::LoadedExec`] values, and loaded object-file images.
+/// [`crate::image::LoadedExec`] values, and loaded object-file images. It dereferences
+/// to [`ElfCore`], so shared ELF metadata does not need another forwarding API.
 pub struct LoadedCore<
     D: Send + Sync + 'static = (),
     Arch: RelocationArch = NativeArch,
@@ -42,7 +43,7 @@ impl<
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LoadedCore")
             .field("name", &self.core.name())
-            .field("base", &format_args!("{}", self.core.base()))
+            .field("base", &format_args!("{}", self.core.segments().base()))
             .field("scope", &self.scope)
             .finish()
     }
@@ -57,15 +58,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             core: self.core.clone(),
             scope: self.scope.clone(),
         }
-    }
-}
-
-impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    From<&LoadedCore<D, Arch, R, Tls>> for LoadedCore<D, Arch, R, Tls>
-{
-    #[inline]
-    fn from(module: &LoadedCore<D, Arch, R, Tls>) -> Self {
-        module.clone()
     }
 }
 
@@ -103,6 +95,9 @@ impl<
 > LoadedCore<D, Arch, R, Tls>
 {
     /// Runs this module's initialization lifecycle at most once.
+    ///
+    /// This inherent method intentionally shadows the raw [`Module::initialize`]
+    /// hook implemented by `LoadedCore` for dynamic dispatch.
     #[inline]
     pub fn initialize(&self) -> Result<()> {
         self.core.initialize()
@@ -128,64 +123,10 @@ impl<
         &self.scope
     }
 
-    /// Returns the target architecture used by this loaded module.
-    #[inline]
-    pub const fn arch_kind(&self) -> ArchKind {
-        Arch::KIND
-    }
-
-    /// Returns the loader source path or caller-provided source identifier.
-    #[inline]
-    pub fn path(&self) -> &Path {
-        self.core.path()
-    }
-
-    /// Returns the `DT_SONAME` value.
-    #[inline]
-    pub fn soname(&self) -> Option<&str> {
-        self.core.soname()
-    }
-
-    /// Returns the `DT_NEEDED` names retained from the dynamic section.
-    #[inline]
-    pub fn needed_libs(&self) -> &[&str] {
-        self.core.needed_libs()
-    }
-
-    /// Returns the base address of the ELF object.
-    #[inline]
-    pub fn base(&self) -> VmAddr {
-        self.core.base()
-    }
-
-    /// Returns the mapped segments owned by this module.
-    #[inline]
-    pub fn segments(&self) -> &ElfSegments<R> {
-        self.core.segments()
-    }
-
-    /// Gets the user-defined data associated with the ELF object
-    #[inline]
-    pub fn user_data(&self) -> &D {
-        self.core.user_data()
-    }
-
     /// Returns a mutable reference to the user-defined data.
     #[inline]
     pub fn user_data_mut(&mut self) -> Option<&mut D> {
         self.core.user_data_mut()
-    }
-
-    /// Returns the program headers of the ELF object.
-    #[inline]
-    pub fn phdrs(&self) -> Option<&[ElfPhdr<Arch::Layout>]> {
-        self.core.phdrs()
-    }
-
-    /// Gets the EH frame header pointer
-    #[inline]
-    pub fn eh_frame_hdr(&self) -> Option<NonNull<u8>> {
-        self.core.eh_frame_hdr()
     }
 
     /// Gets a pointer to a function or static variable by symbol name.
@@ -295,24 +236,6 @@ impl<
         Ok(addr.map(|addr| unsafe { Symbol::from_raw(addr.as_mut_ptr()) }))
     }
 
-    /// Gets the number of strong references to the ELF object
-    #[inline]
-    pub fn strong_count(&self) -> usize {
-        self.core.strong_count()
-    }
-
-    /// Gets the number of weak references to the ELF object
-    #[inline]
-    pub fn weak_count(&self) -> usize {
-        self.core.weak_count()
-    }
-
-    /// Creates a weak reference to this ELF core.
-    #[inline]
-    pub fn downgrade(&self) -> ElfCoreRef<D, Arch, R, Tls> {
-        self.core.downgrade()
-    }
-
     /// Creates a [`LoadedCore`] from an [`ElfCore`] and its retained relocation lookup scope.
     ///
     /// # Safety
@@ -341,13 +264,15 @@ impl<
         let Self { core, scope } = self;
         (core.into_module_handle(), scope)
     }
+}
 
-    /// Returns a reference to the underlying [`ElfCore`].
-    ///
-    /// # Safety
-    /// Lifecycle information is lost if this reference is used carelessly.
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
+    for LoadedCore<D, Arch, R, Tls>
+{
+    type Target = ElfCore<D, Arch, R, Tls>;
+
     #[inline]
-    pub unsafe fn core_ref(&self) -> &ElfCore<D, Arch, R, Tls> {
+    fn deref(&self) -> &Self::Target {
         &self.core
     }
 }
@@ -534,16 +459,16 @@ where
 
     #[inline]
     fn state(&self) -> &ModuleState {
-        Module::state(&self.core)
+        Module::state(&*self.core)
     }
 
     #[inline]
     fn initialize(&self) -> Result<()> {
-        Module::initialize(&self.core)
+        Module::initialize(&*self.core)
     }
 
     #[inline]
     fn finalize(&self) -> Result<()> {
-        Module::finalize(&self.core)
+        Module::finalize(&*self.core)
     }
 }

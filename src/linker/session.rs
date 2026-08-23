@@ -289,7 +289,7 @@ where
         for index in 0..self.group_order.len() {
             let id = self.group_order[index];
             let module = if let Some(raw) = self.dynamics.get(&id).map(GraphEntry::payload) {
-                raw.core_ref().module_handle()
+                raw.module_handle()
             } else if let Some(module) = self.modules.get(&id).map(PendingModule::module) {
                 module.clone()
             } else {

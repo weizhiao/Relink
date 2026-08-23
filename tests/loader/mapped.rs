@@ -9,22 +9,18 @@ fn dynamic_reuses_mapping() {
     let owner = LOADER
         .load_dylib(ElfBinary::new("owner.so", &bytes))
         .expect("failed to map owner dylib");
+    let base = owner.segments().base();
 
     let borrowed = unsafe {
-        LOADER.load_mapped_dynamic(
-            "borrowed-main",
-            owner.base(),
-            owner.phdrs().to_vec(),
-            owner.entry(),
-        )
+        LOADER.load_mapped_dynamic("borrowed-main", base, owner.phdrs().to_vec(), owner.entry())
     }
     .expect("failed to wrap borrowed mapping");
 
     assert_eq!(borrowed.path().as_str(), "borrowed-main");
     assert_eq!(borrowed.name(), "borrowed-main");
-    assert_eq!(borrowed.base(), owner.base());
+    assert_eq!(borrowed.segments().base(), base);
     assert_eq!(borrowed.entry(), owner.entry());
-    assert!(borrowed.segments().contains_addr(owner.base()));
+    assert!(borrowed.segments().contains_addr(base));
     assert_eq!(borrowed.phdrs().len(), owner.phdrs().len());
     assert!(
         borrowed

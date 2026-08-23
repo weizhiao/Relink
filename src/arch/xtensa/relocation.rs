@@ -84,7 +84,7 @@ impl RelocationArch for XtensaArch {
             return Ok(HandleResult::Unhandled);
         }
 
-        let place = event.lib().base() + rel.r_offset();
+        let place = event.lib().segments().base() + rel.r_offset();
         let addend = rel.read_addend(event.lib().segments(), place)?;
         let value = match addend {
             1 => event.lazy().map(|lazy| lazy.resolver()),

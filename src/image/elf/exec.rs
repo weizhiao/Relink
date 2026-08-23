@@ -168,7 +168,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     fn domain_id(&self) -> DomainId {
         match self {
-            Self::Dynamic(image) => image.core_ref().domain_id(),
+            Self::Dynamic(image) => image.domain_id(),
             Self::Static(image) => image.inner.domain,
         }
     }
@@ -308,7 +308,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     /// Returns the runtime base address.
     pub fn base(&self) -> VmAddr {
         match self {
-            RawExec::Dynamic(image) => image.base(),
+            RawExec::Dynamic(image) => image.segments().base(),
             RawExec::Static(image) => image.base(),
         }
     }
@@ -438,7 +438,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     /// Returns the runtime base address.
     pub fn base(&self) -> VmAddr {
         match &self.inner {
-            LoadedExecInner::Dynamic(module) => module.base(),
+            LoadedExecInner::Dynamic(module) => module.segments().base(),
             LoadedExecInner::Static(static_image) => static_image.base(),
         }
     }

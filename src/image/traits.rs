@@ -108,7 +108,7 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
     ///
     /// The module's owning allocation should invoke this through
     /// [`ModuleState::finalize`] from its `Drop` implementation. Core-backed ELF
-    /// modules already do this in `CoreInner`.
+    /// modules already do this in `ElfModule`.
     fn finalize(&self) -> Result<()> {
         Ok(())
     }

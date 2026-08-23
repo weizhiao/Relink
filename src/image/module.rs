@@ -12,7 +12,7 @@ use crate::{
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
-use core::{fmt, ops::Deref, slice};
+use core::{fmt, ops::Deref};
 use spin::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 const UNINITIALIZED: u8 = 0;
@@ -204,7 +204,7 @@ impl ModuleState {
     ///
     /// A module with finalization work should call this from its owning
     /// allocation's [`Drop`] implementation. For core-backed ELF modules,
-    /// `CoreInner` already provides that integration. Calls made before
+    /// `ElfModule` already provides that integration. Calls made before
     /// initialization or after another finalizer claimed the module are no-ops.
     pub fn finalize(&self, finalize: impl FnOnce() -> Result<()>) -> Result<()> {
         let mut phase = self.phase.load(Ordering::Acquire);
@@ -275,12 +275,6 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
         Arc::downgrade(&self.module)
     }
 
-    /// Returns the underlying dynamic module reference.
-    #[inline]
-    pub fn as_dyn(&self) -> &(dyn Module<Arch, Tls> + 'static) {
-        &*self.module
-    }
-
     /// Returns the stable identity of the source backing this module.
     #[inline]
     pub fn source_id(&self) -> ModuleSourceId {
@@ -296,7 +290,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> ModuleHandle<Arch, 
     /// Runs this module's initialization hook at most once.
     #[inline]
     pub fn initialize(&self) -> Result<()> {
-        let module = self.as_dyn();
+        let module = &*self.module;
         module.state().initialize(|| module.initialize())
     }
 }
@@ -306,7 +300,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> Deref for ModuleHan
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.as_dyn()
+        &*self.module
     }
 }
 
@@ -315,14 +309,15 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> AsRef<dyn Module<Ar
 {
     #[inline]
     fn as_ref(&self) -> &(dyn Module<Arch, Tls> + 'static) {
-        self.as_dyn()
+        &*self.module
     }
 }
 
 /// Copy-on-write ordered modules used for relocation symbol lookup.
 ///
 /// Modules are searched in order and held alive by relocated outputs that keep
-/// this scope. Clones remain stable when another clone is modified.
+/// this scope. Clones remain stable when another clone is modified. The scope
+/// dereferences to its ordered module slice for read-only access.
 pub struct ModuleScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     modules: Arc<Vec<ModuleHandle<Arch, Tls>>>,
     domain: DomainId,
@@ -381,6 +376,15 @@ where
     }
 }
 
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Deref for ModuleScope<Arch, Tls> {
+    type Target = [ModuleHandle<Arch, Tls>];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.modules
+    }
+}
+
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScope<Arch, Tls> {
     /// Creates an empty module scope for `domain`.
     #[inline]
@@ -404,30 +408,6 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScope<Arch, Tls> {
             expected.ensure(module.domain_id())?;
         }
         Ok(())
-    }
-
-    /// Returns the modules in lookup order.
-    #[inline]
-    pub fn as_slice(&self) -> &[ModuleHandle<Arch, Tls>] {
-        &self.modules
-    }
-
-    /// Iterates over modules in lookup order.
-    #[inline]
-    pub fn iter(&self) -> slice::Iter<'_, ModuleHandle<Arch, Tls>> {
-        self.modules.iter()
-    }
-
-    /// Returns the number of modules in this scope.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.modules.len()
-    }
-
-    /// Returns whether the scope contains no modules.
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.modules.is_empty()
     }
 
     /// Appends a module without modifying existing snapshots.
@@ -593,19 +573,19 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
     /// Iterates over all modules in lookup order.
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &ModuleHandle<Arch, Tls>> {
-        self.groups.iter().flat_map(ModuleScope::iter)
+        self.groups.iter().flat_map(|group| group.iter())
     }
 
     /// Returns the number of module entries in the lookup scope.
     #[inline]
     pub fn len(&self) -> usize {
-        self.groups.iter().map(ModuleScope::len).sum()
+        self.groups.iter().map(|group| group.len()).sum()
     }
 
     /// Returns whether the lookup scope contains no modules.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.groups.iter().all(ModuleScope::is_empty)
+        self.groups.iter().all(|group| group.is_empty())
     }
 }
 
@@ -682,7 +662,7 @@ mod tests {
         let first: ModuleHandle = ModuleHandle::new(module.clone());
         let second: ModuleHandle = ModuleHandle::new(module);
 
-        assert!(first.as_dyn().ptr_eq(second.as_dyn()));
+        assert!(first.as_ref().ptr_eq(second.as_ref()));
     }
 
     #[test]

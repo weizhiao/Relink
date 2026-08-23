@@ -173,16 +173,16 @@ fn commits_resolver_modules() {
         .load(&mut context, "root")
         .expect("load should accept a resolver-provided module");
 
-    assert_eq!(
-        context
-            .module(root.root())
-            .unwrap()
-            .search()
-            .unwrap()
-            .path()
-            .file_name(),
-        "visible_root.so"
-    );
+    let root_module = context.module(root.root()).unwrap();
+    let elf = root_module
+        .downcast_ref::<ElfModule<()>>()
+        .expect("linker-loaded ELF should retain its concrete module type");
+    assert_eq!(elf.path().file_name(), "visible_root.so");
+    assert_eq!(elf.needed_libs(), [DEP_KEY]);
+    assert!(elf.phdrs().is_some_and(|phdrs| !phdrs.is_empty()));
+    assert!(!elf.mapped_ranges().is_empty());
+    let _: &() = elf.user_data();
+
     assert!(dep.state().is_initialized());
     assert!(context.contains_key("root"));
     let root_id = context
@@ -343,11 +343,7 @@ fn publish_rejects_occupied_source() {
     });
     let mut run = linker.run();
     let prepared = run
-        .prepare_mapped_root(
-            &mut context,
-            "pending".into(),
-            load("pending.so").into_dynamic(),
-        )
+        .prepare_mapped_root(&mut context, "pending".into(), load("pending.so").into())
         .expect("failed to prepare root");
     let relocated = run.relocate(prepared).expect("failed to relocate root");
     let replacement = Relocator::new()
@@ -477,7 +473,6 @@ fn global_scope_binds_and_retains_provider() {
     let unloaded = loaded.release(&mut context).unwrap();
     assert_eq!(
         unloaded
-            .modules()
             .iter()
             .map(|entry| entry.module().name())
             .collect::<Vec<_>>(),
@@ -528,7 +523,7 @@ fn observer_binding_retains_provider() {
         .unwrap();
 
     assert!(context.release(provider).unwrap().is_empty());
-    assert_eq!(loaded.release(&mut context).unwrap().modules().len(), 2);
+    assert_eq!(loaded.release(&mut context).unwrap().len(), 2);
 }
 
 #[test]
@@ -562,7 +557,7 @@ fn relocation_reads_current_globals() {
 
     assert_eq!(value(), 2);
     assert!(context.release(provider).unwrap().is_empty());
-    assert_eq!(loaded.release(&mut context).unwrap().modules().len(), 2);
+    assert_eq!(loaded.release(&mut context).unwrap().len(), 2);
 }
 
 #[test]
@@ -717,7 +712,6 @@ fn repeated_loads_acquire_the_root() {
     let unloaded = second.release(&mut context).unwrap();
     assert_eq!(
         unloaded
-            .modules()
             .iter()
             .map(|entry| entry.module().name())
             .collect::<Vec<_>>(),

@@ -13,7 +13,10 @@ use crate::{
     Result,
     arch::NativeArch,
     elf::{ElfSectionId, Lifecycle},
-    image::{CoreRuntime, ModuleSearch, ModuleState, SymbolExports},
+    image::{
+        CoreRuntime, ElfCore, ElfModule, LoadedCore, ModuleHandle, ModuleSearch, ModuleState,
+        SymbolExports,
+    },
     lazy::LazyBinder,
     memory::{HostRegion, RegionAccess},
     observer::RelocationObserver,
@@ -23,9 +26,7 @@ use crate::{
     tls::{CoreTlsState, TlsResolver},
 };
 use alloc::boxed::Box;
-use core::{borrow::Borrow, fmt::Debug, ops::Deref};
-
-use crate::image::{ElfCore, LoadedCore, Module, ModuleHandle, core::CoreInner};
+use core::{fmt::Debug, ops::Deref};
 
 /// A relocatable ELF object.
 ///
@@ -86,7 +87,7 @@ where
         let (segments, init_segments) = self.segments.into_parts();
         let pltgot = self.section_segments.take_pltgot();
         let exports = Arc::new(ObjectExportsCell::new());
-        let inner = CoreInner {
+        let inner = ElfModule {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(None)),
             executor: self.executor,
             state: ModuleState::new(self.source_id, self.domain),
@@ -100,7 +101,7 @@ where
             segments,
         };
         let inner = Arc::new(inner);
-        CoreInner::bind_runtime_owner(&inner);
+        ElfModule::bind_runtime_owner(&inner);
 
         RawObject {
             core: ElfCore { inner },
@@ -210,36 +211,11 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 }
 
 impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    Borrow<LoadedCore<D, Arch, R, Tls>> for LoadedObject<D, Arch, R, Tls>
-{
-    fn borrow(&self) -> &LoadedCore<D, Arch, R, Tls> {
-        &self.inner
-    }
-}
-
-impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    Borrow<LoadedCore<D, Arch, R, Tls>> for &LoadedObject<D, Arch, R, Tls>
-{
-    fn borrow(&self) -> &LoadedCore<D, Arch, R, Tls> {
-        &self.inner
-    }
-}
-
-impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
     From<LoadedObject<D, Arch, R, Tls>> for LoadedCore<D, Arch, R, Tls>
 {
     #[inline]
     fn from(object: LoadedObject<D, Arch, R, Tls>) -> Self {
         object.inner
-    }
-}
-
-impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>>
-    From<&LoadedObject<D, Arch, R, Tls>> for LoadedCore<D, Arch, R, Tls>
-{
-    #[inline]
-    fn from(object: &LoadedObject<D, Arch, R, Tls>) -> Self {
-        object.inner.clone()
     }
 }
 

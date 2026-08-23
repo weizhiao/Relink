@@ -86,7 +86,7 @@ pub(crate) fn slot(image: &Image, bytes: &[u8], name: &str) -> u64 {
     unsafe {
         image
             .segments()
-            .read_value::<usize>(image.base() + VmOffset::new(offset as usize))
+            .read_value::<usize>(image.segments().base() + VmOffset::new(offset as usize))
             .expect("failed to read lazy-binding slot") as u64
     }
 }

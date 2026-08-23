@@ -92,7 +92,7 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
     pub(crate) fn definition(&self) -> Option<(&ElfSymbol<Arch::Layout>, &dyn Module<Arch, Tls>)> {
         match self {
             Self::Defined { symbol, source } => Some((symbol, *source)),
-            Self::Unique { symbol, source } => Some((symbol, source.as_dyn())),
+            Self::Unique { symbol, source } => Some((symbol, source.as_ref())),
             Self::WeakUndef => None,
         }
     }
@@ -192,7 +192,7 @@ where
             LookupOrder::GlobalFirst => self
                 .global
                 .iter()
-                .flat_map(ModuleScope::iter)
+                .flat_map(|group| group.iter())
                 .chain(self.scope.iter())
                 .filter(|source| accept(source))
                 .find_map(|source| {
@@ -202,7 +202,7 @@ where
             LookupOrder::LocalFirst => self
                 .scope
                 .iter()
-                .chain(self.global.iter().flat_map(ModuleScope::iter))
+                .chain(self.global.iter().flat_map(|group| group.iter()))
                 .filter(|source| accept(source))
                 .find_map(|source| {
                     self.lookup(entry, &mut lookup, source)
@@ -241,7 +241,7 @@ where
         if unlikely(symbol.bind() == ElfSymbolBind::GNU_UNIQUE) {
             self.bind_unique(name, symbol, source)
         } else {
-            SymDef::defined(symbol, source.as_dyn())
+            SymDef::defined(symbol, source.as_ref())
         }
     }
 
@@ -257,7 +257,7 @@ where
             registry.resolve_unique(name, symbol, source)
         } else {
             source.state().mark_nodelete();
-            SymDef::defined(symbol, source.as_dyn())
+            SymDef::defined(symbol, source.as_ref())
         }
     }
 

@@ -2,7 +2,7 @@ use super::defs::{ModuleTls, TlsDescRequest};
 use crate::{
     ByteRepr, RelocReason, Result,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
-    image::{Module, ModuleInstanceId},
+    image::ModuleInstanceId,
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
     relocation::{RelocHelper, RelocationArch},

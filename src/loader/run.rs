@@ -237,7 +237,7 @@ where
                     Ok(RawElf::Exec(self.load_exec_from_ehdr(&object, ehdr)?))
                 } else {
                     let dynamic = self.load_dynamic_impl(&object, ehdr)?;
-                    Ok(RawElf::Dylib(RawDylib::from_dynamic(dynamic)))
+                    Ok(RawElf::Dylib(dynamic.into()))
                 }
             }
             other => Err(ParseEhdrError::ExpectedExecutable { found: other }.into()),
@@ -277,7 +277,7 @@ where
         let object = input.into_reader()?;
         let ehdr = self.read_expected_ehdr(&object, ExpectedElf::Dylib)?;
         let dynamic = self.load_dynamic_impl(&object, ehdr)?;
-        let dylib = RawDylib::from_dynamic(dynamic);
+        let dylib = dynamic.into();
 
         Ok(dylib)
     }

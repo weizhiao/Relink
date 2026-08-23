@@ -8,7 +8,6 @@ use crate::{
         ElfDyn, ElfDynamic, ElfDynamicTag, ElfLayout, ElfPhdr, ElfPhdrs, ElfStringTable, ElfSymbol,
         HashTable, Lifecycle, LifecycleSpec, SymbolTable,
     },
-    input::Path,
     lazy::{LazyBinder, SupportLazy},
     loader::ImageBuilder,
     logging,
@@ -18,14 +17,14 @@ use crate::{
     runtime::DomainId,
     segment::{ElfSegments, MemoryProtection},
     sync::{Arc, OnceCell, arc_unsize},
-    tls::{CoreTlsState, ModuleTls, TlsRequest, TlsResolver},
+    tls::{CoreTlsState, TlsRequest, TlsResolver},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::ptr::NonNull;
+use core::{ops::Deref, ptr::NonNull};
 
 use crate::image::{
-    CoreRuntime, ElfCore, LoadedCore, Module, ModuleSearch, ModuleState, SearchPathPool,
-    SymbolExports, core::CoreInner,
+    CoreRuntime, ElfCore, ElfModule, LoadedCore, ModuleSearch, ModuleState, SearchPathPool,
+    SymbolExports,
 };
 
 impl<L: ElfLayout> SymbolTable<L> {
@@ -155,6 +154,8 @@ impl<Arch: RelocationArch> core::fmt::Debug for ElfExtraData<Arch> {
 ///
 /// This is the common raw representation for ELF images with a `PT_DYNAMIC`
 /// segment, including shared objects and dynamically linked executables.
+/// It dereferences to [`ElfCore`]; methods on the core and its [`ElfModule`]
+/// allocation are therefore available without cloning the handle.
 ///
 /// The optional `Arch` type parameter selects the target architecture used
 /// during [`crate::Relocator::run`]. By default it is
@@ -209,27 +210,10 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         self.entry
     }
 
-    /// Returns TLS metadata when this image owns a TLS block.
-    pub fn tls(&self) -> Option<ModuleTls> {
-        self.module.tls()
-    }
-
-    /// Gets the core component reference of the ELF object.
-    #[inline]
-    pub fn core_ref(&self) -> &ElfCore<D, Arch, R, Tls> {
-        &self.module
-    }
-
-    /// Gets the core component of the ELF object.
-    #[inline]
-    pub fn core(&self) -> ElfCore<D, Arch, R, Tls> {
-        self.core_ref().clone()
-    }
-
     /// Converts this object into its core component.
     #[inline]
     pub fn into_core(self) -> ElfCore<D, Arch, R, Tls> {
-        self.core()
+        self.module
     }
 
     /// Whether lazy binding is enabled for the current ELF object
@@ -244,15 +228,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         self.extra.got_plt
     }
 
-    /// Gets the DT_SONAME value
-    ///
-    /// # Returns
-    /// An optional string slice containing the shared-object name
-    #[inline]
-    pub fn soname(&self) -> Option<&str> {
-        self.module.soname()
-    }
-
     /// Gets the PT_INTERP value
     ///
     /// # Returns
@@ -260,18 +235,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     #[inline]
     pub fn interp(&self) -> Option<&str> {
         self.interp
-    }
-
-    /// Returns the loader source path or caller-provided source identifier.
-    #[inline]
-    pub fn path(&self) -> &Path {
-        self.module.path()
-    }
-
-    /// Gets the ELF module identity used for diagnostics.
-    #[inline]
-    pub fn name(&self) -> &str {
-        self.module.name()
     }
 
     /// Gets the program headers of the ELF object
@@ -321,21 +284,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         self.module.user_data_mut()
     }
 
-    /// Gets the base address of the loaded ELF object
-    pub fn base(&self) -> VmAddr {
-        self.module.base()
-    }
-
-    /// Returns the mapped segments owned by this image.
-    pub fn segments(&self) -> &ElfSegments<R> {
-        self.module.segments()
-    }
-
-    /// Gets the list of needed library names from the dynamic section
-    pub fn needed_libs(&self) -> &[&str] {
-        self.module.needed_libs()
-    }
-
     #[inline]
     pub(crate) fn dynamic_addr(&self) -> VmAddr {
         self.extra.dynamic_addr
@@ -365,11 +313,16 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     pub(crate) fn symtab(&self) -> &SymbolTable<Arch::Layout> {
         &self.extra.symtab
     }
+}
+
+impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsResolver<Arch>> Deref
+    for RawDynamic<D, Arch, R, Tls>
+{
+    type Target = ElfCore<D, Arch, R, Tls>;
 
     #[inline]
-    /// Gets a reference to the user data
-    pub fn user_data(&self) -> &D {
-        self.module.user_data()
+    fn deref(&self) -> &Self::Target {
+        &self.module
     }
 }
 
@@ -450,7 +403,7 @@ where
         };
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel.clone(), lazy_symtab);
 
-        let inner = Arc::new(CoreInner {
+        let inner = Arc::new(ElfModule {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: self.executor,
             state: ModuleState::new(self.source_id, self.domain),
@@ -468,7 +421,7 @@ where
             tls,
             segments: self.segments,
         });
-        CoreInner::bind_runtime_owner(&inner);
+        ElfModule::bind_runtime_owner(&inner);
 
         Ok(RawDynamic {
             entry: self.entry,
@@ -503,7 +456,7 @@ where
 
     #[inline]
     fn domain_id(&self) -> DomainId {
-        self.core_ref().domain_id()
+        self.module.domain_id()
     }
 
     fn relocate<Obs, Binder>(

@@ -202,13 +202,14 @@ where
     /// ```ignore
     /// let module = context.module(id)?;
     /// let synthetic = module.downcast_ref::<SyntheticModule<MyArch, MyData>>();
+    /// let elf = module.downcast_ref::<ElfModule<MyData, MyArch, MyRegion, MyTls>>();
     /// ```
     #[inline]
     pub fn module(&self, id: ModuleId) -> Result<&dyn Module<Arch, Tls>> {
         let slot = self.committed.module_slot(id)?;
         Ok(require_module(id, self.committed.module(slot))?
             .handle()
-            .as_dyn())
+            .as_ref())
     }
 
     /// Returns metadata owned by this context entry.
@@ -771,13 +772,12 @@ mod tests {
         let shared_id = shared.id();
         assert!(context.release(shared).unwrap().is_empty());
         let unloaded = context.release(first).unwrap();
-        assert_eq!(unloaded.modules()[0].id(), first_id);
+        assert_eq!(unloaded[0].id(), first_id);
         assert!(context.contains_module(shared_id).unwrap());
 
         let unloaded = context.release(second).unwrap();
         assert_eq!(
             unloaded
-                .modules()
                 .iter()
                 .map(|entry| entry.module().name())
                 .collect::<Vec<_>>(),
@@ -1035,9 +1035,9 @@ mod tests {
         assert_eq!(source.meta(source_id).unwrap(), &7);
 
         let target_unload = target.release(target_lease).unwrap();
-        assert_eq!(target_unload.modules()[0].meta(), "target");
+        assert_eq!(target_unload[0].meta(), "target");
         let source_unload = source.release(source_lease).unwrap();
-        assert_eq!(*source_unload.modules()[0].meta(), 7);
+        assert_eq!(*source_unload[0].meta(), 7);
     }
 
     #[test]
