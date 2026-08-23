@@ -2,7 +2,7 @@ use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
     entity::{PrimaryMap, entity_ref},
-    image::{LookupScope, ModuleHandle, ModuleInstanceId},
+    image::{ModuleHandle, ModuleInstanceId, ModuleScope},
     input::{ModuleSourceId, Path, PathBuf},
     relocation::RelocationArch,
     runtime::DomainId,
@@ -227,8 +227,8 @@ where
     }
 
     #[inline]
-    pub(crate) const fn scope(&self) -> &'a LookupScope<Arch, Tls> {
-        &self.entry.scope
+    pub(crate) const fn retained(&self) -> &'a ModuleScope<Arch, Tls> {
+        &self.entry.retained
     }
 
     #[inline]
@@ -528,7 +528,7 @@ where
     pub(crate) fn remove(
         &mut self,
         slot: ModuleSlot,
-    ) -> (ModuleHandle<Arch, Tls>, LookupScope<Arch, Tls>, Meta) {
+    ) -> (ModuleHandle<Arch, Tls>, ModuleScope<Arch, Tls>, Meta) {
         let entry = {
             let cell = &mut self.entries[slot];
             let entry = cell
@@ -556,7 +556,7 @@ where
             .remove(&entry.module.source_id())
             .expect("committed module must have a source entry");
         assert_eq!(indexed, slot, "module source must refer to its slot");
-        (entry.module, entry.scope, entry.meta)
+        (entry.module, entry.retained, entry.meta)
     }
 
     pub(crate) fn prune_lifecycle(&mut self) {
@@ -592,7 +592,9 @@ pub(in crate::linker) struct StoredEntry<
     aliases: Vec<ModuleKey>,
     module: ModuleHandle<Arch, Tls>,
     direct_deps: Box<[ModuleSlot]>,
-    scope: LookupScope<Arch, Tls>,
+    // Keeps only this module's dependency closure alive for deferred lookup and
+    // finalization; the wider relocation group is owned by its root entry.
+    retained: ModuleScope<Arch, Tls>,
     roots: usize,
     pinned: bool,
     meta: Meta,
@@ -608,7 +610,7 @@ where
         entry_key: ModuleKey,
         module: ModuleHandle<Arch, Tls>,
         direct_deps: Box<[ModuleSlot]>,
-        scope: LookupScope<Arch, Tls>,
+        retained: ModuleScope<Arch, Tls>,
         roots: usize,
         meta: Meta,
     ) -> Self {
@@ -617,7 +619,7 @@ where
             aliases: Vec::new(),
             module,
             direct_deps,
-            scope,
+            retained,
             roots,
             pinned: false,
             meta,

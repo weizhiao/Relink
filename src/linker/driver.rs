@@ -80,6 +80,9 @@ impl LoadResult {
 /// [`LinkerRun::load`](super::LinkerRun::load). This lets the same linker value
 /// be reused with independent contexts while keeping each context's module ids
 /// and dependency graph isolated.
+/// Eager relocations use the complete load-group scope. Deferred PLT lookup is
+/// deliberately narrower: it searches the requesting module's retained
+/// dependency closure together with the context-global scope.
 ///
 /// # Example
 ///

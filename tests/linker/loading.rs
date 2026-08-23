@@ -495,6 +495,48 @@ fn global_scope_binds_and_retains_provider() {
 }
 
 #[test]
+fn extend_global_preserves_supplied_order_without_traversing_dependencies() {
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let dependency = context
+        .insert(GraphModule::new(
+            "dependency",
+            SyntheticModule::empty("dependency"),
+        ))
+        .unwrap();
+    let dependency_instance = context
+        .module(dependency.id())
+        .unwrap()
+        .state()
+        .instance_id();
+    let root = context
+        .insert(
+            GraphModule::new("root", SyntheticModule::empty("root"))
+                .dependencies([dependency_instance]),
+        )
+        .unwrap();
+    let preload = context
+        .insert(GraphModule::new(
+            "preload",
+            SyntheticModule::empty("preload"),
+        ))
+        .unwrap();
+
+    context
+        .extend_global(&[root.id(), preload.id(), dependency.id()])
+        .unwrap();
+
+    assert_eq!(
+        context
+            .global_scope()
+            .modules()
+            .iter()
+            .map(|module| module.name())
+            .collect::<Vec<_>>(),
+        ["root", "preload", "dependency"]
+    );
+}
+
+#[test]
 fn unused_global_is_not_retained() {
     let global = load_provider("unused-global.so");
     let weak = global.downgrade();
@@ -666,6 +708,45 @@ fn repeated_loads_acquire_the_root() {
         ["acquired_root.so", "acquired_dep.so"]
     );
     assert!(context.is_empty());
+}
+
+#[test]
+fn pinned_dependency_does_not_retain_released_root() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let linker = Linker::new().resolver(dependency_resolver("root.so", "dep.so"));
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let loaded = linker
+        .run()
+        .with_observer(InitRecorder {
+            calls: Arc::clone(&calls),
+            fail: false,
+            record_fini: true,
+        })
+        .load(&mut context, "root")
+        .expect("failed to load root with dependency");
+
+    let dependency = context
+        .module_id(DEP_KEY)
+        .expect("dependency should be committed");
+    let dependency = context
+        .acquire(dependency)
+        .expect("failed to acquire dependency");
+    context.pin(dependency).expect("failed to pin dependency");
+    calls.lock().unwrap().clear();
+
+    let unloaded = loaded
+        .release(&mut context)
+        .expect("failed to release root");
+    assert_eq!(
+        unloaded
+            .iter()
+            .map(|entry| entry.module().name())
+            .collect::<Vec<_>>(),
+        ["root.so"]
+    );
+    drop(unloaded);
+
+    assert_eq!(calls.lock().unwrap().as_slice(), ["fini:root.so"]);
 }
 
 #[test]

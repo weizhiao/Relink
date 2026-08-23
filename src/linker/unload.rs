@@ -1,7 +1,7 @@
 use super::storage::ModuleId;
 use crate::{
     arch::NativeArch,
-    image::{LookupScope, Module, ModuleHandle},
+    image::{Module, ModuleHandle, ModuleScope},
     relocation::RelocationArch,
     tls::TlsResolver,
 };
@@ -13,7 +13,7 @@ pub struct UnloadedModule<Meta = (), Arch: RelocationArch = NativeArch, Tls: Tls
 {
     id: ModuleId,
     module: ModuleHandle<Arch, Tls>,
-    _scope: LookupScope<Arch, Tls>,
+    _retained: ModuleScope<Arch, Tls>,
     meta: Meta,
 }
 
@@ -26,13 +26,13 @@ where
     pub(super) const fn new(
         id: ModuleId,
         module: ModuleHandle<Arch, Tls>,
-        scope: LookupScope<Arch, Tls>,
+        retained: ModuleScope<Arch, Tls>,
         meta: Meta,
     ) -> Self {
         Self {
             id,
             module,
-            _scope: scope,
+            _retained: retained,
             meta,
         }
     }

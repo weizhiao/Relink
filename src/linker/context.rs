@@ -107,9 +107,10 @@ where
 
     /// Returns this namespace's live global symbol scope.
     ///
-    /// The scope is updated by [`promote_global`](Self::promote_global) and by
-    /// unloading. It can be supplied to a standalone [`Relocator`](crate::Relocator)
-    /// run when that relocation should share this context's global namespace.
+    /// The scope is updated by [`promote_global`](Self::promote_global),
+    /// [`extend_global`](Self::extend_global), and unloading. It can be supplied
+    /// to a standalone [`Relocator`](crate::Relocator) run when that relocation
+    /// should share this context's global namespace.
     #[inline]
     pub const fn global_scope(&self) -> &GlobalScope<Arch, Tls> {
         &self.global
@@ -312,6 +313,38 @@ where
         Ok(())
     }
 
+    /// Appends existing modules themselves to global lookup order.
+    ///
+    /// Unlike [`promote_global`](Self::promote_global), this method does not
+    /// traverse dependency edges. It is intended for importing an existing
+    /// namespace whose complete lookup order is already known, such as the
+    /// initial process link map. Module lifetime remains controlled by leases,
+    /// pins, and dependency reachability.
+    pub fn extend_global(&mut self, modules: &[ModuleId]) -> Result<()> {
+        for &id in modules {
+            self.committed.module_slot(id)?;
+        }
+
+        let mut global = self.global.write();
+        for &id in modules {
+            let slot = self
+                .committed
+                .module_slot(id)
+                .expect("validated global module id must remain committed");
+            let module = self
+                .committed
+                .module(slot)
+                .expect("validated global module id must refer to committed state");
+            if !global
+                .iter()
+                .any(|candidate| candidate.source_id() == module.handle().source_id())
+            {
+                global.push(module.handle().clone());
+            }
+        }
+        Ok(())
+    }
+
     /// Releases one direct acquisition and detaches all modules that become unreachable.
     ///
     /// The returned collection keeps the entire unload group alive. Drop it
@@ -372,8 +405,8 @@ where
         let mut modules = Vec::with_capacity(unload_order.len());
         for slot in unload_order {
             let id = self.committed.make_module_id(slot);
-            let (module, scope, meta) = self.committed.remove(slot);
-            modules.push(UnloadedModule::new(id, module, scope, meta));
+            let (module, retained, meta) = self.committed.remove(slot);
+            modules.push(UnloadedModule::new(id, module, retained, meta));
         }
         self.committed.prune_lifecycle();
         Ok(UnloadGroup::new(modules))

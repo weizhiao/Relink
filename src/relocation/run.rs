@@ -1,7 +1,7 @@
 use crate::{
     Relocator, Result,
     arch::NativeArch,
-    image::{GlobalScope, LookupScope, ModuleHandle},
+    image::{GlobalScope, LookupScope, ModuleHandle, ModuleScope},
     lazy::{LazyBinder, SupportLazy},
     observer::RelocationObserver,
     relocation::{
@@ -155,16 +155,15 @@ where
         I: IntoIterator<Item = R>,
         R: Into<ModuleHandle<Arch, Tls>>,
     {
-        self.scope.replace(scope);
+        let mut group = ModuleScope::new(self.scope.domain_id());
+        group.replace(scope);
+        self.scope = LookupScope::new([group.clone()], group);
         self.global = None;
         self.symbols = None;
         self
     }
 
     /// Replaces the current module scope with a prepared lookup scope.
-    ///
-    /// Unlike [`scope`](Self::scope), this preserves the scope's module-group
-    /// boundaries.
     pub fn lookup_scope(mut self, scope: LookupScope<Arch, Tls>) -> Self {
         self.scope = scope;
         self.global = None;
@@ -178,7 +177,7 @@ where
         I: IntoIterator<Item = R>,
         R: Into<ModuleHandle<Arch, Tls>>,
     {
-        self.scope.extend(scope);
+        self.scope.extend_modules(scope);
         self
     }
 }
@@ -201,6 +200,18 @@ where
     #[inline]
     pub fn lazy(mut self) -> Self {
         self.binding = BindingMode::Lazy;
+        self
+    }
+
+    /// Uses a separate local scope for deferred PLT symbol lookup.
+    ///
+    /// Eager relocations continue to use the regular lookup scope. If this is
+    /// not configured, lazy binding uses that regular scope as well. A linker
+    /// can supply the module's retained dependency closure here to avoid
+    /// exposing unrelated members of its transient load group.
+    #[inline]
+    pub fn lazy_scope(mut self, scope: ModuleScope<Arch, Tls>) -> Self {
+        self.scope.set_lazy_scope(scope);
         self
     }
 }

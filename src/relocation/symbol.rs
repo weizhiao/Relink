@@ -323,7 +323,7 @@ mod tests {
     fn scope(modules: impl IntoIterator<Item = SyntheticModule<NativeArch>>) -> LookupScope {
         let mut scope = ModuleScope::new(DomainId::PROCESS);
         scope.extend(modules);
-        LookupScope::from_group(scope)
+        LookupScope::new([scope.clone()], scope)
     }
 
     fn definition(name: &str, value: usize) -> SyntheticModule<NativeArch> {

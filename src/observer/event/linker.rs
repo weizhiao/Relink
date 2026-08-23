@@ -45,7 +45,7 @@ where
         &self.raw
     }
 
-    /// Returns the module's retained lookup scope.
+    /// Returns the module's lookup scope for this relocation.
     ///
     /// Linker-global modules participate in relocation separately and are not
     /// retained by this scope.

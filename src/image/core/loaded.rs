@@ -260,9 +260,9 @@ impl<
         Self { core, scope }
     }
 
-    pub(crate) fn into_context_parts(self) -> (ModuleHandle<Arch, Tls>, LookupScope<Arch, Tls>) {
-        let Self { core, scope } = self;
-        (core.into_module_handle(), scope)
+    #[inline]
+    pub(crate) fn into_module_handle(self) -> ModuleHandle<Arch, Tls> {
+        self.core.into_module_handle()
     }
 }
 

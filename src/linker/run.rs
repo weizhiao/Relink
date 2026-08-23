@@ -315,16 +315,18 @@ where
     ) -> Result<()> {
         let mut order = mem::take(&mut self.scratch_order);
         session.build_lifecycle_order(root, &mut order);
-        let scope = LookupScope::from_group(local.clone());
-
+        let retained = session.build_retained_scopes(root, local, &order);
         let result = (|| {
-            for id in order.drain(..) {
+            for (id, retained) in order.drain(..).zip(retained) {
                 if let Some(entry) = session.take_pending_dynamic(id) {
                     let (key, raw, direct_deps) = entry.into_parts();
                     let direct_deps =
                         direct_deps.expect("missing resolved dependencies while relocating");
-                    let mut event =
-                        LinkerRelocationEvent::new(raw, scope.clone(), self.lookup_order);
+                    let mut event = LinkerRelocationEvent::new(
+                        raw,
+                        LookupScope::new([local.clone()], retained.clone()),
+                        self.lookup_order,
+                    );
                     self.observer.on_relocation(&mut event)?;
                     let (raw, scope, binding, lookup_order) = event.into_parts();
                     let loaded = self
@@ -338,9 +340,9 @@ where
                         .binding(binding)
                         .observer(&mut self.observer)
                         .relocate()?;
-                    session.push_ready(id, key, loaded, direct_deps);
+                    session.push_ready(id, key, loaded, direct_deps, retained);
                 } else {
-                    session.mark_module_ready(id);
+                    session.mark_module_ready(id, retained);
                 }
                 session.push_lifecycle(id);
             }

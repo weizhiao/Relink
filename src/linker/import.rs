@@ -6,7 +6,7 @@ use crate::{
     LinkContextError, LinkerError, Result,
     arch::NativeArch,
     entity::{EntitySet, SecondaryMap},
-    image::{LookupScope, ModuleHandle, ModuleInstanceId},
+    image::{ModuleHandle, ModuleInstanceId, ModuleScope},
     input::ModuleSourceId,
     relocation::RelocationArch,
     tls::TlsResolver,
@@ -177,7 +177,7 @@ fn copy_modules<Arch, Tls, TargetMeta, SourceMeta>(
                 module.entry_key().clone(),
                 module.handle().clone(),
                 deps,
-                module.scope().clone(),
+                module.retained().clone(),
                 0,
                 TargetMeta::default(),
             ),
@@ -380,10 +380,10 @@ where
         for (node, deps) in planned.into_iter().zip(resolved) {
             let slot = slots[&node.instance];
             if node.existing.is_none() {
-                let scope = LookupScope::empty(node.module.domain_id());
+                let retained = ModuleScope::new(node.module.domain_id());
                 self.committed.insert(
                     slot,
-                    StoredEntry::new(node.key.clone(), node.module, deps, scope, 1, node.meta),
+                    StoredEntry::new(node.key.clone(), node.module, deps, retained, 1, node.meta),
                 );
                 lifecycle.push(slot);
             } else {

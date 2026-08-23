@@ -255,6 +255,16 @@ where
     {
         if !self.session.contains_pending(slot) && self.committed.contains_module(slot) {
             self.session.track(slot, self.committed.generation(slot));
+            if self.session.direct_deps(slot).is_none() {
+                let direct_deps = self
+                    .committed
+                    .module(slot)
+                    .expect("committed module must remain available while resolving")
+                    .direct_deps()
+                    .to_vec()
+                    .into_boxed_slice();
+                self.session.cache_committed_deps(slot, direct_deps);
+            }
         }
         if self.known_direct_deps(slot).is_none() {
             let needed_len = self.source(slot).needed_len();

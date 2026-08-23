@@ -313,7 +313,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> AsRef<dyn Module<Ar
     }
 }
 
-/// Copy-on-write ordered modules used for relocation symbol lookup.
+/// Copy-on-write ordered modules used for symbol lookup and dependency retention.
 ///
 /// Modules are searched in order and held alive by relocated outputs that keep
 /// this scope. Clones remain stable when another clone is modified. The scope
@@ -323,19 +323,23 @@ pub struct ModuleScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch>
     domain: DomainId,
 }
 
-/// Retained module scope used for symbol lookup.
+/// Eager and deferred local scopes used while relocating one module.
 ///
-/// Groups preserve an object's local dependency boundaries without copying
-/// their module lists. Linker-managed global modules are supplied separately so
-/// they are not retained by loaded outputs.
+/// The eager scope is used for ordinary relocation. The lazy scope is always
+/// present and is retained by standalone loaded images. Linker-managed images
+/// normally use their dependency closure as the lazy scope.
 pub struct LookupScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     groups: Arc<[ModuleScope<Arch, Tls>]>,
-    domain: DomainId,
+    lazy: ModuleScope<Arch, Tls>,
 }
 
 /// Weak references used by deferred lookup to recover local and global scopes.
+///
+/// Linker-managed images use their retained dependency closure instead of the
+/// wider eager-relocation load group. This deliberately gives lazy binding the
+/// conservative `retained + global` lookup semantics documented by the linker.
 pub(crate) struct WeakLookupScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    groups: Weak<[ModuleScope<Arch, Tls>]>,
+    scope: Weak<Vec<ModuleHandle<Arch, Tls>>>,
     global: Option<Weak<GlobalScopeInner<Arch, Tls>>>,
     domain: DomainId,
 }
@@ -343,7 +347,8 @@ pub(crate) struct WeakLookupScope<Arch: RelocationArch = NativeArch, Tls: TlsRes
 /// Shared live global lookup order owned by a [`LinkContext`](crate::LinkContext).
 ///
 /// Clones refer to the same global scope. Use
-/// [`LinkContext::promote_global`](crate::LinkContext::promote_global) to change
+/// [`LinkContext::promote_global`](crate::LinkContext::promote_global) or
+/// [`LinkContext::extend_global`](crate::LinkContext::extend_global) to change
 /// its contents without bypassing the context's lifetime bookkeeping.
 pub struct GlobalScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     inner: Arc<GlobalScopeInner<Arch, Tls>>,
@@ -449,7 +454,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for LookupScope<Arch, T
     fn clone(&self) -> Self {
         Self {
             groups: Arc::clone(&self.groups),
-            domain: self.domain,
+            lazy: self.lazy.clone(),
         }
     }
 }
@@ -469,7 +474,10 @@ where
     Tls: TlsResolver<Arch>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.groups.iter()).finish()
+        f.debug_struct("LookupScope")
+            .field("groups", &self.groups)
+            .field("lazy", &self.lazy)
+            .finish()
     }
 }
 
@@ -477,46 +485,39 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
     /// Creates an empty lookup scope for `domain`.
     #[inline]
     pub fn empty(domain: DomainId) -> Self {
-        Self {
-            groups: Arc::from([]),
-            domain,
-        }
+        Self::new([], ModuleScope::new(domain))
     }
 
-    /// Creates a lookup scope containing one module group.
-    #[inline]
-    pub fn from_group(group: ModuleScope<Arch, Tls>) -> Self {
-        Self {
-            domain: group.domain,
-            groups: Arc::from([group]),
-        }
-    }
-
-    /// Combines retained module groups in lookup order.
-    pub fn from_groups<I>(domain: DomainId, groups: I) -> Self
+    /// Creates a lookup scope with explicit eager groups and deferred scope.
+    pub fn new<I>(groups: I, lazy: ModuleScope<Arch, Tls>) -> Self
     where
         I: IntoIterator<Item = ModuleScope<Arch, Tls>>,
     {
+        let groups = groups.into_iter().collect::<Vec<_>>();
+        debug_assert!(
+            groups
+                .iter()
+                .all(|group| group.domain_id() == lazy.domain_id())
+        );
         Self {
-            groups: Arc::from(groups.into_iter().collect::<Vec<_>>()),
-            domain,
+            groups: Arc::from(groups),
+            lazy,
         }
     }
 
     /// Returns the runtime domain shared by this lookup scope.
     #[inline]
     pub const fn domain_id(&self) -> DomainId {
-        self.domain
+        self.lazy.domain_id()
     }
 
-    /// Checks that every group and module belongs to `expected`.
+    /// Checks that both lookup scopes and their modules belong to `expected`.
     #[inline]
     pub fn check_domain(&self, expected: DomainId) -> Result<()> {
-        expected.ensure(self.domain)?;
         for group in self.groups.iter() {
             group.check_domain(expected)?;
         }
-        Ok(())
+        self.lazy.check_domain(expected)
     }
 
     #[inline]
@@ -524,78 +525,112 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
         &self,
         global: Option<&GlobalScope<Arch, Tls>>,
     ) -> WeakLookupScope<Arch, Tls> {
-        debug_assert!(global.is_none_or(|global| global.domain_id() == self.domain));
+        let domain = self.domain_id();
+        debug_assert!(global.is_none_or(|global| global.domain_id() == domain));
         WeakLookupScope {
-            groups: Arc::downgrade(&self.groups),
+            scope: Arc::downgrade(&self.lazy.modules),
             global: global.map(GlobalScope::downgrade),
-            domain: self.domain,
+            domain,
         }
     }
 
-    /// Returns the retained module groups in lookup order.
+    /// Returns the eager module groups in lookup order.
     #[inline]
     pub fn groups(&self) -> &[ModuleScope<Arch, Tls>] {
         &self.groups
     }
 
-    pub(crate) fn replace<I, R>(&mut self, modules: I)
-    where
-        I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch, Tls>>,
-    {
-        if self.groups.len() == 1 {
-            Arc::make_mut(&mut self.groups)[0].replace(modules);
-        } else {
-            let mut group = ModuleScope::new(self.domain);
-            group.replace(modules);
-            self.groups = Arc::from([group]);
-        }
-    }
-
+    /// Returns the local scope retained for deferred PLT lookup.
     #[inline]
-    pub(crate) fn extend<I, R>(&mut self, modules: I)
+    pub const fn lazy_scope(&self) -> &ModuleScope<Arch, Tls> {
+        &self.lazy
+    }
+
+    /// Appends an eager lookup group without changing deferred lookup.
+    pub fn push(&mut self, group: ModuleScope<Arch, Tls>) {
+        debug_assert_eq!(group.domain_id(), self.domain_id());
+        let mut groups = Vec::with_capacity(self.groups.len() + 1);
+        groups.extend(self.groups.iter().cloned());
+        groups.push(group);
+        self.groups = Arc::from(groups);
+    }
+
+    /// Appends eager lookup groups without changing deferred lookup.
+    pub fn extend<I>(&mut self, groups: I)
+    where
+        I: IntoIterator<Item = ModuleScope<Arch, Tls>>,
+    {
+        let mut groups = groups.into_iter().peekable();
+        if groups.peek().is_none() {
+            return;
+        }
+        let (lower, _) = groups.size_hint();
+        let mut current = Vec::with_capacity(self.groups.len() + lower);
+        current.extend(self.groups.iter().cloned());
+        for group in groups {
+            debug_assert_eq!(group.domain_id(), self.domain_id());
+            current.push(group);
+        }
+        self.groups = Arc::from(current);
+    }
+
+    pub(crate) fn extend_modules<I, R>(&mut self, modules: I)
     where
         I: IntoIterator<Item = R>,
         R: Into<ModuleHandle<Arch, Tls>>,
     {
+        let follows_eager =
+            self.groups.len() == 1 && Arc::ptr_eq(&self.groups[0].modules, &self.lazy.modules);
         if self.groups.is_empty() {
-            let mut group = ModuleScope::new(self.domain);
+            let mut group = ModuleScope::new(self.domain_id());
             group.extend(modules);
+            self.lazy = group.clone();
             self.groups = Arc::from([group]);
         } else {
-            Arc::make_mut(&mut self.groups)
+            let group = Arc::make_mut(&mut self.groups)
                 .last_mut()
-                .expect("non-empty lookup scope must have a final group")
-                .extend(modules);
+                .expect("non-empty lookup scope must have a final group");
+            group.extend(modules);
+            if follows_eager {
+                self.lazy = group.clone();
+            }
         }
     }
 
-    /// Iterates over all modules in lookup order.
+    /// Iterates over eager lookup modules in order.
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &ModuleHandle<Arch, Tls>> {
         self.groups.iter().flat_map(|group| group.iter())
     }
 
-    /// Returns the number of module entries in the lookup scope.
+    /// Returns the number of eager lookup entries.
     #[inline]
     pub fn len(&self) -> usize {
         self.groups.iter().map(|group| group.len()).sum()
     }
 
-    /// Returns whether the lookup scope contains no modules.
+    /// Returns whether the eager lookup scope is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.groups.iter().all(|group| group.is_empty())
+    }
+
+    /// Replaces the local scope retained for deferred PLT lookup.
+    #[inline]
+    pub fn set_lazy_scope(&mut self, scope: ModuleScope<Arch, Tls>) {
+        debug_assert_eq!(scope.domain_id(), self.domain_id());
+        self.lazy = scope;
     }
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> WeakLookupScope<Arch, Tls> {
     #[inline]
     pub(crate) fn upgrade_scope(&self) -> Option<LookupScope<Arch, Tls>> {
-        Some(LookupScope {
-            groups: self.groups.upgrade()?,
+        let scope = ModuleScope {
+            modules: self.scope.upgrade()?,
             domain: self.domain,
-        })
+        };
+        Some(LookupScope::new([scope.clone()], scope))
     }
 
     #[inline]
@@ -695,7 +730,7 @@ mod tests {
 
         let mut local_scope = ModuleScope::new(DomainId::PROCESS);
         local_scope.push(local);
-        let scope = LookupScope::from_group(local_scope);
+        let scope = LookupScope::new([local_scope.clone()], local_scope);
         let weak = scope.downgrade(Some(&global));
 
         global.write().replace([second]);
@@ -747,6 +782,50 @@ mod tests {
             scope.iter().map(|module| module.name()).collect::<Vec<_>>(),
             ["local"]
         );
+    }
+
+    #[test]
+    fn deferred_scope_uses_retained_dependencies() {
+        let root: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty("root"));
+        let dependency: ModuleHandle =
+            ModuleHandle::new(SyntheticModule::<NativeArch>::empty("dependency"));
+        let unrelated: ModuleHandle =
+            ModuleHandle::new(SyntheticModule::<NativeArch>::empty("unrelated"));
+        let mut group = ModuleScope::new(DomainId::PROCESS);
+        group.extend([root, dependency.clone()]);
+        let mut retained = ModuleScope::new(DomainId::PROCESS);
+        retained.push(dependency);
+        let owner = retained.clone();
+        let mut scope = LookupScope::new([group], retained);
+        let mut extra = ModuleScope::new(DomainId::PROCESS);
+        extra.push(unrelated);
+        scope.push(extra);
+        let weak = scope.downgrade(None);
+
+        assert_eq!(
+            scope.iter().map(|module| module.name()).collect::<Vec<_>>(),
+            ["root", "dependency", "unrelated"]
+        );
+        assert_eq!(
+            scope
+                .lazy_scope()
+                .iter()
+                .map(|module| module.name())
+                .collect::<Vec<_>>(),
+            ["dependency"]
+        );
+        assert_eq!(
+            weak.upgrade_scope()
+                .unwrap()
+                .iter()
+                .map(|module| module.name())
+                .collect::<Vec<_>>(),
+            ["dependency"]
+        );
+
+        drop(scope);
+        drop(owner);
+        assert!(weak.upgrade_scope().is_none());
     }
 
     #[test]
