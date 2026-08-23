@@ -2,6 +2,8 @@
 
 use crate::{
     elf::{ElfClass, ElfDataEncoding, ElfDynamicTag, ElfFileType, ElfMachine},
+    image::ModuleInstanceId,
+    input::ModuleSourceId,
     linker::{ContextId, KeyId, ModuleId},
     runtime::DomainId,
     tls::TlsModuleId,
@@ -905,10 +907,15 @@ pub enum LinkContextError {
         /// The key id that did not resolve to a committed module.
         id: KeyId,
     },
-    /// A module key is already occupied by another insertion.
-    KeyOccupied {
-        /// The occupied key.
-        id: KeyId,
+    /// A source is already represented by another module instance.
+    SourceOccupied {
+        /// Identity of the conflicting source.
+        source: ModuleSourceId,
+    },
+    /// A graph dependency does not identify an available module instance.
+    DependencyMissing {
+        /// Missing module instance.
+        id: ModuleInstanceId,
     },
 }
 
@@ -934,7 +941,15 @@ impl Display for LinkContextError {
                 write!(f, "module id {} changed before publication", id)
             }
             Self::KeyNotCommitted { id } => write!(f, "key id {} is not committed", id),
-            Self::KeyOccupied { id } => write!(f, "key id {} is already occupied", id),
+            Self::SourceOccupied { source } => {
+                write!(
+                    f,
+                    "module source {source:?} is occupied by another instance"
+                )
+            }
+            Self::DependencyMissing { id } => {
+                write!(f, "module dependency {id:?} is not available")
+            }
         }
     }
 }

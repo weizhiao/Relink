@@ -32,4 +32,4 @@ pub use crate::observer::RelocationEvent;
 pub use defs::HandleResult;
 pub use relocator::Relocator;
 pub use run::RelocatorRun;
-pub use traits::BindingMode;
+pub use traits::{BindingMode, LookupOrder};

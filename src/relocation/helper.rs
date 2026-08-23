@@ -14,6 +14,10 @@ use crate::{
 };
 use alloc::vec::Vec;
 
+/// Providers actually selected while relocating one module.
+///
+/// Collection is kept separate from [`ModuleState`] so a failed relocation
+/// cannot leave lifetime edges installed for an image that was never published.
 pub(crate) struct BindingDeps {
     providers: Vec<ModuleInstanceId>,
 }

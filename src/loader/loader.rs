@@ -277,6 +277,10 @@ where
     }
 
     #[inline]
+    /// Returns the runtime domain assigned to newly loaded modules.
+    ///
+    /// Modules from different domains cannot share addresses or participate in
+    /// the same relocation scope.
     pub const fn domain_id(&self) -> DomainId {
         self.domain
     }

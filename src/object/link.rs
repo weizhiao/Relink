@@ -70,6 +70,7 @@ where
             scope,
             global,
             symbols,
+            lookup_order,
             run_init,
             observer,
             ..
@@ -87,6 +88,7 @@ where
             global_snapshot,
             symbols.as_deref(),
             self.core.symbolic(),
+            lookup_order,
         );
         let mut bindings = BindingDeps::new();
         Self::simplify_symbols(
@@ -192,7 +194,9 @@ where
         logging::info!("Relocation completed for {}", core.name());
 
         bindings.install(core.state());
-        let inner = unsafe { LoadedCore::from_relocated(core, scope, global.as_ref(), symbols) };
+        let inner = unsafe {
+            LoadedCore::from_relocated(core, scope, global.as_ref(), symbols, lookup_order)
+        };
         drop(global_snapshot);
         Ok(LoadedObject { inner })
     }

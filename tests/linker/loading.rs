@@ -312,7 +312,10 @@ fn publish_rejects_changed_module() {
         .expect("failed to prepare root");
     let relocated = run.relocate(prepared).expect("failed to relocate root");
     let _replacement = context
-        .insert("root", SyntheticModule::empty("replacement"), Box::new([]))
+        .insert(GraphModule::new(
+            "root",
+            SyntheticModule::empty("replacement"),
+        ))
         .expect("failed to publish competing root");
 
     let error = relocated
@@ -337,7 +340,7 @@ fn publish_rejects_reloaded_dependency() {
         .expect("failed to relocate dependency");
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let dep_lease = context
-        .insert(DEP_KEY, dep.clone(), Box::new([]))
+        .insert(GraphModule::new(DEP_KEY, dep.clone()))
         .expect("failed to insert dependency");
     let linker = Linker::new().resolver(ExistingDependencyResolver {
         root_data: fixtures().dependent,
@@ -350,7 +353,7 @@ fn publish_rejects_reloaded_dependency() {
 
     drop(context.release(dep_lease).unwrap());
     let _new_dep = context
-        .insert(DEP_KEY, dep, Box::new([]))
+        .insert(GraphModule::new(DEP_KEY, dep))
         .expect("failed to reload dependency");
     let error = relocated
         .publish(&mut context)
@@ -366,11 +369,10 @@ fn publish_rejects_reloaded_global_provider() {
     let source = ModuleSourceId::fresh();
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let provider = context
-        .insert(
+        .insert(GraphModule::new(
             DEP_KEY,
             load_provider_with_source("old-global.so", source),
-            Box::new([]),
-        )
+        ))
         .unwrap();
     context.promote_global(provider.id()).unwrap();
     let linker = Linker::new().resolver(SingleBinaryResolver {
@@ -384,11 +386,10 @@ fn publish_rejects_reloaded_global_provider() {
 
     drop(context.release(provider).unwrap());
     let replacement = context
-        .insert(
+        .insert(GraphModule::new(
             DEP_KEY,
             load_provider_with_source("new-global.so", source),
-            Box::new([]),
-        )
+        ))
         .unwrap();
     context.promote_global(replacement.id()).unwrap();
 
@@ -406,9 +407,13 @@ fn publish_rejects_reloaded_global_provider() {
 fn global_scope_binds_and_retains_provider() {
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let provider = context
-        .insert(DEP_KEY, load_provider("global-provider.so"), Box::new([]))
+        .insert(GraphModule::new(
+            DEP_KEY,
+            load_provider("global-provider.so"),
+        ))
         .unwrap();
     context.promote_global(provider.id()).unwrap();
+    assert_eq!(context.global_scope().modules().len(), 1);
     let linker = Linker::new().resolver(SingleBinaryResolver {
         key: "global",
         name: "global.so",
@@ -442,7 +447,7 @@ fn unused_global_is_not_retained() {
     let weak = global.downgrade();
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let global = context
-        .insert("unused-global", global, Box::new([]))
+        .insert(GraphModule::new("unused-global", global))
         .unwrap();
     context.promote_global(global.id()).unwrap();
     let linker = Linker::new().resolver(SingleBinaryResolver {
@@ -461,7 +466,10 @@ fn unused_global_is_not_retained() {
 fn observer_binding_retains_provider() {
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let provider = context
-        .insert(DEP_KEY, load_provider("bound-provider.so"), Box::new([]))
+        .insert(GraphModule::new(
+            DEP_KEY,
+            load_provider("bound-provider.so"),
+        ))
         .unwrap();
     context.promote_global(provider.id()).unwrap();
     let linker = Linker::new().resolver(SingleBinaryResolver {
@@ -490,7 +498,7 @@ fn relocation_reads_current_globals() {
     let mut run = linker.run();
     let prepared = run.prepare_load(&mut context, "global").unwrap();
     let provider = context
-        .insert(DEP_KEY, load_provider("late-global.so"), Box::new([]))
+        .insert(GraphModule::new(DEP_KEY, load_provider("late-global.so")))
         .unwrap();
     context.promote_global(provider.id()).unwrap();
 

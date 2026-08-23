@@ -23,32 +23,54 @@ pub enum SymbolScope {
 /// Purpose or category of an ELF section.
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub enum SectionKind {
+    /// Mandatory null section.
     Null,
+    /// Dynamic string table.
     DynStr,
+    /// Dynamic symbol table.
     DynSym,
+    /// General RELA relocation table.
     RelaDyn,
+    /// PLT RELA relocation table.
     RelaPlt,
+    /// Retained data relocation section using RELA entries.
     RetainedRelaData,
+    /// General REL relocation table.
     RelDyn,
+    /// PLT REL relocation table.
     RelPlt,
+    /// Retained data relocation section using REL entries.
     RetainedRelData,
+    /// Dynamic linking metadata.
     Dynamic,
+    /// ELF symbol hash table.
     Hash,
+    /// Section-name string table.
     ShStrTab,
+    /// Procedure linkage table.
     Plt,
+    /// Executable code.
     Text,
+    /// Writable data.
     Data,
+    /// Global offset table.
     Got,
+    /// PLT portion of the global offset table.
     GotPlt,
+    /// Thread-local data.
     Tls,
 }
 
 /// Section kinds that can carry generated symbol content.
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub enum ContentKind {
+    /// Executable code content.
     Text,
+    /// Writable data content.
     Data,
+    /// Procedure linkage table content.
     Plt,
+    /// Thread-local data content.
     Tls,
 }
 

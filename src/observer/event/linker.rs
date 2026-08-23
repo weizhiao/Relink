@@ -2,7 +2,7 @@ use crate::{
     arch::NativeArch,
     image::{LookupScope, RawDynamic},
     memory::{HostRegion, RegionAccess},
-    relocation::{BindingMode, RelocationArch},
+    relocation::{BindingMode, LookupOrder, RelocationArch},
     tls::TlsResolver,
 };
 
@@ -16,6 +16,7 @@ pub struct LinkerRelocationEvent<
     raw: RawDynamic<D, Arch, R, Tls>,
     scope: LookupScope<Arch, Tls>,
     binding: BindingMode,
+    lookup_order: LookupOrder,
 }
 
 impl<D: Send + Sync + 'static, Arch, R, Tls> LinkerRelocationEvent<D, Arch, R, Tls>
@@ -25,14 +26,20 @@ where
     Tls: TlsResolver<Arch>,
 {
     #[inline]
-    pub(crate) fn new(raw: RawDynamic<D, Arch, R, Tls>, scope: LookupScope<Arch, Tls>) -> Self {
+    pub(crate) fn new(
+        raw: RawDynamic<D, Arch, R, Tls>,
+        scope: LookupScope<Arch, Tls>,
+        lookup_order: LookupOrder,
+    ) -> Self {
         Self {
             raw,
             scope,
             binding: BindingMode::Default,
+            lookup_order,
         }
     }
 
+    /// Returns the loaded image that is about to be relocated.
     #[inline]
     pub const fn raw(&self) -> &RawDynamic<D, Arch, R, Tls> {
         &self.raw
@@ -56,14 +63,28 @@ where
         &mut self.scope
     }
 
+    /// Returns the symbol-binding policy selected for this module.
     #[inline]
     pub const fn binding(&self) -> BindingMode {
         self.binding
     }
 
+    /// Replaces the symbol-binding policy used for this module.
     #[inline]
     pub fn set_binding(&mut self, binding: BindingMode) {
         self.binding = binding;
+    }
+
+    /// Returns precedence between local and context-global symbol scopes.
+    #[inline]
+    pub const fn lookup_order(&self) -> LookupOrder {
+        self.lookup_order
+    }
+
+    /// Replaces precedence between local and context-global symbol scopes.
+    #[inline]
+    pub fn set_lookup_order(&mut self, order: LookupOrder) {
+        self.lookup_order = order;
     }
 
     #[inline]
@@ -73,7 +94,8 @@ where
         RawDynamic<D, Arch, R, Tls>,
         LookupScope<Arch, Tls>,
         BindingMode,
+        LookupOrder,
     ) {
-        (self.raw, self.scope, self.binding)
+        (self.raw, self.scope, self.binding, self.lookup_order)
     }
 }

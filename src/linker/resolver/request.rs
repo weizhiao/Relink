@@ -71,9 +71,15 @@ impl<Arch: RelocationArch> DependencySource for ScannedDynamic<Arch> {
 /// The input being resolved by a [`ResolveRequest`].
 pub enum ResolveInput<'a, Root> {
     /// A root supplied directly to a linker load operation.
-    Root { root: Root },
+    Root {
+        /// Resolver-specific root input supplied by the caller.
+        root: Root,
+    },
     /// One `DT_NEEDED` edge of an already scanned module.
-    Dependency { needed: &'a str },
+    Dependency {
+        /// Library name stored in the owner's `DT_NEEDED` entry.
+        needed: &'a str,
+    },
 }
 
 /// A root or dependency resolution request.

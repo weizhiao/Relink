@@ -10,7 +10,7 @@ use crate::{
     logging,
     memory::{HostRegion, ImageMemory, RegionAccess, VmAddr, VmOffset},
     observer::LifecycleHandlers,
-    relocation::{RelocationArch, SymbolRegistry, SymbolResolver},
+    relocation::{LookupOrder, RelocationArch, SymbolRegistry, SymbolResolver},
     runtime::{CodeContext, CodeExecutor},
     segment::ElfSegments,
     sync::{Arc, OnceCell, Weak},
@@ -94,6 +94,7 @@ pub(crate) struct LazyLookup<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
     pub(super) source: Weak<dyn Module<Arch, Tls>>,
     pub(super) scope: WeakLookupScope<Arch, Tls>,
     pub(super) symbols: Option<Weak<SymbolRegistry<Arch, Tls>>>,
+    pub(super) order: LookupOrder,
 }
 
 #[inline]
@@ -149,7 +150,14 @@ where
         let global = global_guard.as_deref().cloned();
         let symbolic = self.dynamic_info.as_ref().is_some_and(|info| info.symbolic);
         let symbols = lazy.symbols.as_ref().and_then(Weak::upgrade);
-        let resolver = SymbolResolver::new(&source, lookup, global, symbols.as_deref(), symbolic);
+        let resolver = SymbolResolver::new(
+            &source,
+            lookup,
+            global,
+            symbols.as_deref(),
+            symbolic,
+            lazy.order,
+        );
         let Some(symdef) = resolver.find(symbol) else {
             return Ok(None);
         };

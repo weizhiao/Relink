@@ -47,6 +47,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             global,
             symbols,
             binding,
+            lookup_order,
             run_init,
             lazy_binder,
             observer,
@@ -75,6 +76,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             global_snapshot,
             symbols.as_deref(),
             self.core_ref().symbolic(),
+            lookup_order,
         );
         let mut helper = RelocHelper::new(
             self.core_ref(),
@@ -122,7 +124,9 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
         let core = self.into_core();
         bindings.install(core.state());
-        let loaded = unsafe { LoadedCore::from_relocated(core, scope, global.as_ref(), symbols) };
+        let loaded = unsafe {
+            LoadedCore::from_relocated(core, scope, global.as_ref(), symbols, lookup_order)
+        };
         drop(global_snapshot);
         Ok(loaded)
     }

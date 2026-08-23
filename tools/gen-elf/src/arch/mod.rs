@@ -14,12 +14,19 @@ pub(crate) mod x86_64;
 /// Supported CPU architectures for ELF generation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Arch {
+    /// 64-bit x86.
     X86_64,
+    /// 32-bit x86.
     X86,
+    /// 64-bit Arm.
     Aarch64,
+    /// 64-bit RISC-V.
     Riscv64,
+    /// 32-bit RISC-V.
     Riscv32,
+    /// 32-bit Arm.
     Arm,
+    /// 64-bit LoongArch.
     Loongarch64,
 }
 
@@ -115,6 +122,7 @@ impl Arch {
         }
     }
 
+    /// Returns the architecture-specific `IRELATIVE` relocation type.
     pub fn irelative_reloc(&self) -> u32 {
         match self {
             Arch::X86_64 => R_X86_64_IRELATIVE,
@@ -126,6 +134,7 @@ impl Arch {
         }
     }
 
+    /// Returns the architecture's native absolute relocation type.
     pub fn abs_reloc(&self) -> u32 {
         match self {
             Arch::X86_64 => R_X86_64_64,
@@ -138,6 +147,7 @@ impl Arch {
         }
     }
 
+    /// Returns the architecture-specific `COPY` relocation type.
     pub fn copy_reloc(&self) -> u32 {
         match self {
             Arch::X86_64 => R_X86_64_COPY,
@@ -149,6 +159,7 @@ impl Arch {
         }
     }
 
+    /// Returns the relocation type that writes a TLS module identifier.
     pub fn dtpmod_reloc(&self) -> u32 {
         match self {
             Arch::X86_64 => R_X86_64_DTPMOD64,
@@ -161,6 +172,7 @@ impl Arch {
         }
     }
 
+    /// Returns the relocation type that writes a dynamic TLS offset.
     pub fn dtpoff_reloc(&self) -> u32 {
         match self {
             Arch::X86_64 => R_X86_64_DTPOFF64,

@@ -4,7 +4,7 @@ mod fixture;
 #[path = "../fixture_build/mod.rs"]
 mod fixture_build;
 use elf_loader::{
-    Error, LinkContext, Linker, Loader, Module, Relocator,
+    Error, GraphModule, LinkContext, Linker, Loader, Module, Relocator,
     arch::NativeArch,
     error::{LinkContextError, LinkResolverError, LinkerError},
     image::{LoadedCore, ModuleCapability, SyntheticModule, SyntheticSymbol},

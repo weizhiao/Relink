@@ -9,7 +9,7 @@ use crate::{
     },
     input::{Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
-    relocation::{RelocationArch, SymbolRegistry},
+    relocation::{LookupOrder, RelocationArch, SymbolRegistry},
     segment::ElfSegments,
     sync::Arc,
     tls::{CoreTlsState, ModuleTls, TlsInfo, TlsRequest, TlsResolver, TlsTpOffset},
@@ -322,7 +322,7 @@ impl<
         core: ElfCore<D, Arch, R, Tls>,
         scope: LookupScope<Arch, Tls>,
     ) -> Self {
-        core.set_lazy_lookup(&scope, None, None);
+        core.set_lazy_lookup(&scope, None, None, LookupOrder::GlobalFirst);
         Self { core, scope }
     }
 
@@ -331,8 +331,9 @@ impl<
         scope: LookupScope<Arch, Tls>,
         global: Option<&GlobalScope<Arch, Tls>>,
         symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
+        order: LookupOrder,
     ) -> Self {
-        core.set_lazy_lookup(&scope, global, symbols.as_ref());
+        core.set_lazy_lookup(&scope, global, symbols.as_ref(), order);
         Self { core, scope }
     }
 

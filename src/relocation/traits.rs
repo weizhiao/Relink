@@ -280,6 +280,21 @@ pub enum BindingMode {
     Lazy,
 }
 
+/// Precedence between the context-global and module-local lookup scopes.
+///
+/// This is independent of [`BindingMode`]: the same order applies to eager
+/// relocation and deferred lazy binding.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LookupOrder {
+    /// Search the context-global scope before the module's local load group.
+    #[default]
+    GlobalFirst,
+    /// Search the module's local load group before the context-global scope.
+    ///
+    /// Runtime linkers can use this mode to implement deep binding.
+    LocalFirst,
+}
+
 /// Internal relocation configuration shared across raw image types.
 pub struct RelocateArgs<
     'a,
@@ -292,6 +307,7 @@ pub struct RelocateArgs<
     pub(crate) global: Option<GlobalScope<Arch, Tls>>,
     pub(crate) symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
     pub(crate) binding: BindingMode,
+    pub(crate) lookup_order: LookupOrder,
     pub(crate) run_init: bool,
     pub(crate) lazy_binder: &'a Binder,
     pub(crate) observer: &'a mut Obs,

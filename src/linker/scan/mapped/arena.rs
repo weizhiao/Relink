@@ -243,11 +243,11 @@ mod tests {
     use crate::{
         image::{ScannedElf, SyntheticModule},
         input::ElfBinary,
-        linker::{LinkContext, ModuleKey},
+        linker::{GraphModule, LinkContext, ModuleKey},
         loader::Loader,
         runtime::DomainId,
     };
-    use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+    use alloc::{collections::BTreeMap, vec::Vec};
     use gen_elf::{Arch, DylibWriter, ElfWriterConfig, SymbolDesc};
 
     #[test]
@@ -269,7 +269,7 @@ mod tests {
         let mut entries = BTreeMap::new();
         let mut context = LinkContext::<()>::new(DomainId::PROCESS);
         let root = context
-            .insert("root", SyntheticModule::empty("root"), Box::new([]))
+            .insert(GraphModule::new("root", SyntheticModule::empty("root")))
             .unwrap();
         let root_slot = context.committed.module_slot(root.id()).unwrap();
         entries.insert(

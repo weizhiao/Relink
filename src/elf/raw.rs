@@ -2,11 +2,19 @@
 
 use crate::ByteRepr;
 
+/// Integer representation used for ELF addresses, offsets, and sizes.
+///
+/// ELF32 layouts use `u32`, while ELF64 layouts use `u64`. The conversions
+/// provide one layout-independent boundary for the higher-level ELF readers.
 pub trait ElfWord: Copy + ByteRepr + 'static {
+    /// Width of this ELF word in bits.
     const BITS: usize;
 
+    /// Converts a host-sized value into an ELF word.
     fn from_usize(value: usize) -> Self;
+    /// Converts an ELF word into a host-sized value.
     fn to_usize(self) -> usize;
+    /// Converts an ELF word into `u64` without losing an ELF32 value.
     fn to_u64(self) -> u64;
 }
 

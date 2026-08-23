@@ -164,6 +164,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![no_std]
 #![warn(
+    missing_docs,
     unreachable_pub,
     clippy::unnecessary_wraps,
     clippy::unnecessary_lazy_evaluations,
@@ -229,9 +230,9 @@ pub(crate) use error::*;
 
 pub use aligned_bytes::ByteRepr;
 pub use error::Error;
-pub use image::{Module, ModuleInstanceId, ModuleSearch, ModuleState, SearchPathPool};
+pub use image::{GlobalScope, Module, ModuleInstanceId, ModuleSearch, ModuleState, SearchPathPool};
 pub use input::ModuleSourceId;
-pub use linker::{LinkContext, Linker, LinkerRun, ModuleKey};
+pub use linker::{GraphModule, LinkContext, Linker, LinkerRun, ModuleKey};
 pub use loader::{Loader, LoaderRun};
 pub use relocation::{Relocator, RelocatorRun};
 

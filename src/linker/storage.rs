@@ -193,8 +193,9 @@ impl Display for ModuleId {
 /// One direct acquisition of a committed module.
 ///
 /// A lease is created by [`LinkContext::insert`](super::LinkContext::insert),
-/// [`LinkContext::acquire`](super::LinkContext::acquire), or a linker load. It
-/// is intentionally neither [`Clone`] nor [`Copy`]; pass it to
+/// [`LinkContext::insert_batch`](super::LinkContext::insert_batch),
+/// [`LinkContext::acquire`](super::LinkContext::acquire), or a linker load. It is
+/// intentionally neither [`Clone`] nor [`Copy`]; pass it to
 /// [`LinkContext::release`](super::LinkContext::release) exactly once when the
 /// direct use ends.
 #[derive(Debug, PartialEq, Eq)]
@@ -597,13 +598,17 @@ where
             return module_slot;
         }
 
-        let module_slot = self.entries.push(ModuleCell {
+        let module_slot = self.push_module(slot);
+        self.canonical.insert(slot, module_slot);
+        module_slot
+    }
+
+    pub(crate) fn push_module(&mut self, slot: KeySlot) -> ModuleSlot {
+        self.entries.push(ModuleCell {
             entry_key: slot,
             generation: 0,
             entry: None,
-        });
-        self.canonical.insert(slot, module_slot);
-        module_slot
+        })
     }
 
     pub(crate) fn insert(&mut self, slot: ModuleSlot, entry: StoredEntry<Meta, Arch, Tls>) {
@@ -654,6 +659,8 @@ where
 
 struct ModuleCell<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     entry_key: KeySlot,
+    // Incremented on both publication and removal so an id can never become
+    // valid again when this stable slot is reused.
     generation: u32,
     entry: Option<StoredEntry<Meta, Arch, Tls>>,
 }

@@ -10,6 +10,7 @@
 
 mod context;
 mod driver;
+mod import;
 mod resolve;
 mod resolver;
 mod run;
@@ -20,6 +21,7 @@ mod unload;
 
 pub use context::{LinkContext, LoadGroup};
 pub use driver::{Linker, LoadResult};
+pub use import::GraphModule;
 pub use resolver::{
     CandidateRequest, KeyResolver, ResolveInput, ResolveRequest, ResolvedKey, SearchPathResolver,
 };

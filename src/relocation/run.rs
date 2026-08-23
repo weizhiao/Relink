@@ -4,7 +4,9 @@ use crate::{
     image::{GlobalScope, LookupScope, ModuleHandle},
     lazy::{LazyBinder, SupportLazy},
     observer::RelocationObserver,
-    relocation::{BindingMode, Relocatable, RelocateArgs, RelocationArch, SymbolRegistry},
+    relocation::{
+        BindingMode, LookupOrder, Relocatable, RelocateArgs, RelocationArch, SymbolRegistry,
+    },
     sync::Arc,
     tls::TlsResolver,
 };
@@ -26,6 +28,7 @@ pub struct RelocatorRun<
     global: Option<GlobalScope<Arch, Tls>>,
     observer: Obs,
     binding: BindingMode,
+    lookup_order: LookupOrder,
     symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
     relocator: &'cfg Relocator<Binder>,
 }
@@ -49,6 +52,7 @@ impl<Binder> Relocator<Binder> {
             global: None,
             observer: (),
             binding: BindingMode::Default,
+            lookup_order: LookupOrder::GlobalFirst,
             symbols: None,
             relocator: self,
         }
@@ -70,6 +74,7 @@ where
             global: self.global.clone(),
             observer: self.observer.clone(),
             binding: self.binding,
+            lookup_order: self.lookup_order,
             symbols: self.symbols.clone(),
             relocator: self.relocator,
         }
@@ -95,6 +100,7 @@ where
             scope,
             global,
             binding,
+            lookup_order,
             symbols,
             relocator,
             observer: _,
@@ -106,6 +112,7 @@ where
             global,
             observer,
             binding,
+            lookup_order,
             symbols,
             relocator,
         }
@@ -118,10 +125,11 @@ where
         self
     }
 
-    /// Updates the relocation binding mode in place.
+    /// Sets precedence between the local and context-global lookup scopes.
     #[inline]
-    pub fn set_binding(&mut self, binding: BindingMode) {
-        self.binding = binding;
+    pub fn lookup_order(mut self, order: LookupOrder) -> Self {
+        self.lookup_order = order;
+        self
     }
 
     #[inline]
@@ -130,9 +138,14 @@ where
         self
     }
 
+    /// Uses a [`LinkContext`](crate::LinkContext) global symbol scope.
+    ///
+    /// The shared handle is retained only for the relocation run. Deferred
+    /// binding stores a weak reference and therefore does not keep the context
+    /// or unrelated global modules alive.
     #[inline]
-    pub(crate) fn global_scope(mut self, global: GlobalScope<Arch, Tls>) -> Self {
-        self.global = Some(global);
+    pub fn global_scope(mut self, global: &GlobalScope<Arch, Tls>) -> Self {
+        self.global = Some(global.clone());
         self
     }
 
@@ -211,6 +224,7 @@ where
             global,
             mut observer,
             binding,
+            lookup_order,
             symbols,
             relocator,
         } = self;
@@ -220,6 +234,7 @@ where
             global,
             symbols,
             binding,
+            lookup_order,
             run_init: relocator.run_init,
             lazy_binder: &relocator.lazy_binder,
             observer: &mut observer,

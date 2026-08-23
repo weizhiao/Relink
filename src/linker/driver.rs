@@ -6,8 +6,13 @@ use super::{
     unload::UnloadGroup,
 };
 use crate::{
-    Loader, Relocator, Result, arch::NativeArch, const_builder::NoDrop, os::Mmap,
-    relocation::RelocationArch, runtime::CodeExecutor, tls::TlsResolver,
+    Loader, Relocator, Result,
+    arch::NativeArch,
+    const_builder::NoDrop,
+    os::Mmap,
+    relocation::{LookupOrder, RelocationArch},
+    runtime::CodeExecutor,
+    tls::TlsResolver,
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::{fmt, marker::PhantomData, mem::MaybeUninit, ptr};
@@ -266,6 +271,7 @@ where
             linker: self,
             pipeline: LinkPipeline::new(),
             observer: (),
+            lookup_order: LookupOrder::GlobalFirst,
             scratch_order: Vec::new(),
         }
     }

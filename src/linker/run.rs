@@ -18,7 +18,7 @@ use crate::{
     memory::RegionAccess,
     observer::{LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver},
     os::Mmap,
-    relocation::{RelocationArch, SymbolRegistry},
+    relocation::{LookupOrder, RelocationArch, SymbolRegistry},
     runtime::CodeExecutor,
     sync::Arc,
     tls::TlsResolver,
@@ -43,6 +43,7 @@ pub struct LinkerRun<
     pub(super) linker: &'run Linker<Arch, L, R, RelocBinder, Tls>,
     pub(super) pipeline: LinkPipeline<'pipe, Arch, Tls>,
     pub(super) observer: Obs,
+    pub(super) lookup_order: LookupOrder,
     pub(super) scratch_order: Vec<ModuleSlot>,
 }
 
@@ -65,6 +66,7 @@ where
             linker: self.linker,
             pipeline: self.pipeline,
             observer,
+            lookup_order: self.lookup_order,
             scratch_order: self.scratch_order,
         }
     }
@@ -79,6 +81,7 @@ where
             linker,
             pipeline,
             observer,
+            lookup_order,
             scratch_order,
         } = self;
 
@@ -86,8 +89,16 @@ where
             linker,
             pipeline: configure(pipeline),
             observer,
+            lookup_order,
             scratch_order,
         }
+    }
+
+    /// Sets symbol-scope precedence for modules relocated by this run.
+    #[inline]
+    pub fn lookup_order(mut self, order: LookupOrder) -> Self {
+        self.lookup_order = order;
+        self
     }
 }
 
@@ -337,15 +348,17 @@ where
                     let (raw, direct_deps) = entry.into_parts();
                     let direct_deps =
                         direct_deps.expect("missing resolved dependencies while relocating");
-                    let mut event = LinkerRelocationEvent::new(raw, scope.clone());
+                    let mut event =
+                        LinkerRelocationEvent::new(raw, scope.clone(), self.lookup_order);
                     self.observer.on_relocation(&mut event)?;
-                    let (raw, scope, binding) = event.into_parts();
+                    let (raw, scope, binding, lookup_order) = event.into_parts();
                     let loaded = self
                         .linker
                         .relocator
                         .run(raw)
                         .lookup_scope(scope)
-                        .global_scope(global.clone())
+                        .global_scope(global)
+                        .lookup_order(lookup_order)
                         .symbol_registry(Arc::clone(symbols))
                         .binding(binding)
                         .observer(&mut self.observer)

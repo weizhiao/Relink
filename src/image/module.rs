@@ -36,6 +36,7 @@ struct InitializationGuard<'a>(&'a AtomicU8);
 
 impl Drop for InitializationGuard<'_> {
     fn drop(&mut self) {
+        // A panic must not leave the module permanently stuck in INITIALIZING.
         self.0.store(FAILED, Ordering::Release);
     }
 }
@@ -165,7 +166,8 @@ impl ModuleState {
     /// Runs the module initializer at most once.
     ///
     /// Recursive callers observe an initialization in progress as already
-    /// claimed and do not run the initializer again.
+    /// claimed and do not run the initializer again. If the callback returns
+    /// an error or unwinds, the state becomes permanently failed.
     pub fn initialize(&self, initialize: impl FnOnce() -> Result<()>) -> Result<()> {
         let mut phase = self.phase.load(Ordering::Acquire);
         loop {
@@ -182,6 +184,8 @@ impl ModuleState {
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
+                    // The guard covers unwinding; the explicit store below
+                    // records the callback's normal return value.
                     let guard = InitializationGuard(&self.phase);
                     let result = initialize();
                     self.phase.store(
@@ -200,7 +204,8 @@ impl ModuleState {
     ///
     /// A module with finalization work should call this from its owning
     /// allocation's [`Drop`] implementation. For core-backed ELF modules,
-    /// `CoreInner` already provides that integration.
+    /// `CoreInner` already provides that integration. Calls made before
+    /// initialization or after another finalizer claimed the module are no-ops.
     pub fn finalize(&self, finalize: impl FnOnce() -> Result<()>) -> Result<()> {
         let mut phase = self.phase.load(Ordering::Acquire);
         loop {
@@ -340,8 +345,12 @@ pub(crate) struct WeakLookupScope<Arch: RelocationArch = NativeArch, Tls: TlsRes
     domain: DomainId,
 }
 
-/// Shared mutable global lookup order owned by one [`LinkContext`](crate::LinkContext).
-pub(crate) struct GlobalScope<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
+/// Shared live global lookup order owned by a [`LinkContext`](crate::LinkContext).
+///
+/// Clones refer to the same global scope. Use
+/// [`LinkContext::promote_global`](crate::LinkContext::promote_global) to change
+/// its contents without bypassing the context's lifetime bookkeeping.
+pub struct GlobalScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     inner: Arc<GlobalScopeInner<Arch, Tls>>,
 }
 
@@ -630,7 +639,8 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> GlobalScope<Arch, Tls> {
     }
 
     #[inline]
-    pub(crate) fn domain_id(&self) -> DomainId {
+    /// Returns the runtime domain shared by modules in this scope.
+    pub fn domain_id(&self) -> DomainId {
         self.inner.domain
     }
 
@@ -640,7 +650,11 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> GlobalScope<Arch, Tls> {
     }
 
     #[inline]
-    pub(crate) fn modules(&self) -> ModuleScope<Arch, Tls> {
+    /// Captures the current global lookup order.
+    ///
+    /// The returned copy-on-write scope remains stable if the context later
+    /// promotes or unloads modules.
+    pub fn modules(&self) -> ModuleScope<Arch, Tls> {
         self.read().clone()
     }
 

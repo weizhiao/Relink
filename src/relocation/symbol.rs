@@ -1,3 +1,4 @@
+use super::LookupOrder;
 use super::traits::RelocationArch;
 use crate::{
     Result,
@@ -122,6 +123,7 @@ pub(crate) struct SymbolResolver<'lib, Arch: RelocationArch, Tls: TlsResolver<Ar
     global: Option<ModuleScope<Arch, Tls>>,
     registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
     symbolic: bool,
+    order: LookupOrder,
 }
 
 impl<'lib, Arch, Tls> SymbolResolver<'lib, Arch, Tls>
@@ -136,6 +138,7 @@ where
         global: Option<ModuleScope<Arch, Tls>>,
         registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
         symbolic: bool,
+        order: LookupOrder,
     ) -> Self {
         Self {
             source,
@@ -143,6 +146,7 @@ where
             global,
             registry,
             symbolic,
+            order,
         }
     }
 
@@ -184,15 +188,27 @@ where
         &'find ModuleHandle<Arch, Tls>,
     )> {
         let mut lookup = SymbolLookup::from_info(entry.info().clone());
-        self.global
-            .iter()
-            .flat_map(ModuleScope::iter)
-            .chain(self.scope.iter())
-            .filter(|source| accept(source))
-            .find_map(|source| {
-                self.lookup(entry, &mut lookup, source)
-                    .map(|symbol| (symbol, source))
-            })
+        match self.order {
+            LookupOrder::GlobalFirst => self
+                .global
+                .iter()
+                .flat_map(ModuleScope::iter)
+                .chain(self.scope.iter())
+                .filter(|source| accept(source))
+                .find_map(|source| {
+                    self.lookup(entry, &mut lookup, source)
+                        .map(|symbol| (symbol, source))
+                }),
+            LookupOrder::LocalFirst => self
+                .scope
+                .iter()
+                .chain(self.global.iter().flat_map(ModuleScope::iter))
+                .filter(|source| accept(source))
+                .find_map(|source| {
+                    self.lookup(entry, &mut lookup, source)
+                        .map(|symbol| (symbol, source))
+                }),
+        }
     }
 
     fn find_def<'find>(
@@ -283,7 +299,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{SymbolRegistry, SymbolResolver};
+    use super::{LookupOrder, SymbolRegistry, SymbolResolver};
     use crate::{
         arch::NativeArch,
         elf::{
@@ -310,6 +326,51 @@ mod tests {
         LookupScope::from_group(scope)
     }
 
+    fn definition(name: &str, value: usize) -> SyntheticModule<NativeArch> {
+        SyntheticModule::new(
+            name,
+            [SyntheticSymbol::function("value", value as *const ())],
+        )
+    }
+
+    #[test]
+    fn lookup_order_selects_scope() {
+        let source = ModuleHandle::new(SyntheticModule::new(
+            "source",
+            [SyntheticSymbol::from_fields(
+                "value",
+                0,
+                0,
+                ElfSymbolBind::GLOBAL,
+                ElfSymbolType::NOTYPE,
+                ElfSymbolVisibility::DEFAULT.raw(),
+                ElfSectionIndex::UNDEF,
+                None,
+            )],
+        ));
+        let local = scope([definition("local", 0x100)]);
+        let mut global = ModuleScope::new(DomainId::PROCESS);
+        global.push(ModuleHandle::new(definition("global", 0x200)));
+
+        for (order, expected) in [
+            (LookupOrder::GlobalFirst, 0x200),
+            (LookupOrder::LocalFirst, 0x100),
+        ] {
+            let resolver = SymbolResolver::new(
+                &source,
+                local.clone(),
+                Some(global.clone()),
+                None,
+                false,
+                order,
+            );
+            assert_eq!(
+                resolver.find(&symbol(&source)).unwrap().resolve().unwrap(),
+                VmAddr::new(expected)
+            );
+        }
+    }
+
     #[test]
     fn symbol_visibility_controls_scope_lookup() {
         let source = ModuleHandle::new(SyntheticModule::new(
@@ -322,7 +383,14 @@ mod tests {
             [SyntheticSymbol::function("value", 0x200usize as *const ())],
         );
         let external_scope = scope([external]);
-        let resolver = SymbolResolver::new(&source, external_scope, None, None, false);
+        let resolver = SymbolResolver::new(
+            &source,
+            external_scope,
+            None,
+            None,
+            false,
+            LookupOrder::GlobalFirst,
+        );
         let def = resolver
             .find(&symbol(&source))
             .expect("protected definition must resolve locally");
@@ -351,7 +419,14 @@ mod tests {
             [SyntheticSymbol::function("value", 0x300usize as *const ())],
         );
         let scope = scope([hidden, visible]);
-        let resolver = SymbolResolver::new(&source, scope.clone(), None, None, false);
+        let resolver = SymbolResolver::new(
+            &source,
+            scope.clone(),
+            None,
+            None,
+            false,
+            LookupOrder::GlobalFirst,
+        );
         let def = resolver
             .find(&symbol(&source))
             .expect("lookup must continue past a hidden definition");
@@ -371,9 +446,16 @@ mod tests {
             )],
         ));
         assert!(
-            SymbolResolver::new(&hidden_ref, scope, None, None, false)
-                .find(&symbol(&hidden_ref))
-                .is_none(),
+            SymbolResolver::new(
+                &hidden_ref,
+                scope,
+                None,
+                None,
+                false,
+                LookupOrder::GlobalFirst,
+            )
+            .find(&symbol(&hidden_ref))
+            .is_none(),
             "hidden undefined reference must not resolve outside its module"
         );
     }
@@ -416,6 +498,7 @@ mod tests {
             None,
             Some(&registry),
             false,
+            LookupOrder::GlobalFirst,
         );
         let definition = first.find(&symbol(&source)).unwrap();
         assert_eq!(definition.resolve().unwrap(), VmAddr::new(0x100));
@@ -427,6 +510,7 @@ mod tests {
             None,
             Some(&registry),
             false,
+            LookupOrder::GlobalFirst,
         );
         assert_eq!(
             second.find(&symbol(&source)).unwrap().resolve().unwrap(),
@@ -440,6 +524,7 @@ mod tests {
             None,
             Some(&other_registry),
             false,
+            LookupOrder::GlobalFirst,
         );
         assert_eq!(
             other.find(&symbol(&source)).unwrap().resolve().unwrap(),

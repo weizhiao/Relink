@@ -85,6 +85,8 @@ where
 pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch> = ()> {
     dynamics: BTreeMap<ModuleSlot, GraphEntry<P>>,
     modules: BTreeMap<ModuleSlot, PendingModule<Arch, Tls>>,
+    // Generations observed while resolving. Publication rejects the whole
+    // transaction if any referenced slot changed before commit.
     guards: BTreeMap<ModuleSlot, u32>,
     group_order: Vec<ModuleSlot>,
     aliases: SecondaryMap<KeySlot, Vec<ModuleSlot>>,
@@ -492,6 +494,8 @@ where
         } = self;
         let mut ready = modules;
         let mut committed_ids = Vec::with_capacity(ready.len());
+        // Slot generations protect references resolved through the context;
+        // no committed state is changed until every guard has been checked.
         for (slot, generation) in guards {
             if committed.generation(slot) != generation {
                 return Err(LinkerError::context(LinkContextError::ModuleChanged {
@@ -500,6 +504,8 @@ where
                 .into());
             }
         }
+        // Relocation records exact provider instances. Verify those providers
+        // still exist, not merely another load of the same source.
         for (&slot, entry) in &ready {
             debug_assert_eq!(pending_sources.get(&entry.module.source_id()), Some(&slot));
             let providers_available = entry.module.state().with_bindings(|bindings| {

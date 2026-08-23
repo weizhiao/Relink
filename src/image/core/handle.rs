@@ -10,7 +10,7 @@ use crate::{
     input::{ModuleSourceId, Path, PathBuf},
     memory::{HostRegion, ImageMemory, MappedView, RegionAccess, VmAddr},
     observer::LifecycleHandlers,
-    relocation::{RelocationArch, SymbolRegistry},
+    relocation::{LookupOrder, RelocationArch, SymbolRegistry},
     runtime::{CodeExecutor, DomainId, NativeCodeExecutor},
     segment::ElfSegments,
     sync::{Arc, OnceCell, Weak, arc_unsize},
@@ -206,6 +206,7 @@ impl<
         scope: &LookupScope<Arch, Tls>,
         global: Option<&GlobalScope<Arch, Tls>>,
         symbols: Option<&Arc<SymbolRegistry<Arch, Tls>>>,
+        order: LookupOrder,
     ) {
         if self.inner.runtime.lazy_values().is_none() {
             return;
@@ -218,6 +219,7 @@ impl<
                     source: source.downgrade(),
                     scope: scope.downgrade(global),
                     symbols: symbols.map(Arc::downgrade),
+                    order,
                 })
                 .is_ok(),
             "lazy lookup state must be installed only once",

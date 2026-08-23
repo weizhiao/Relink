@@ -52,6 +52,7 @@ impl StringTable {
 }
 
 #[derive(Clone)]
+/// Options controlling the layout and dynamic metadata of a generated ELF.
 pub struct ElfWriterConfig {
     /// Base address for memory mapping (default: 0x400000)
     pub base_addr: u64,
