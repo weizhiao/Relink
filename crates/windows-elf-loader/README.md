@@ -28,7 +28,7 @@ fn main() {
                 .load_file(r".\crates\windows-elf-loader\example_dylib\liba.so")
                 .unwrap(),
         )
-        .scope([host])
+        .modules([host])
         .relocate()
         .unwrap();
     // Call function a in liba.so

@@ -93,7 +93,7 @@ fn observes_symbol_binding() {
                 .load_dylib(ElfBinary::new("consumer.so", &fixtures.dependent))
                 .expect("failed to load symbol consumer"),
         )
-        .scope([&provider])
+        .modules([&provider])
         .observer(BindingRecorder(Arc::clone(&state)))
         .relocate()
         .expect("failed to relocate symbol consumer");

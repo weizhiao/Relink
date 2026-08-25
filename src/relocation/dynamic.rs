@@ -58,7 +58,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         if let Some(global) = &global {
             domain.ensure(global.domain_id())?;
         }
-        let global_snapshot = global.as_ref().map(GlobalScope::modules);
         let relocation = self.relocation();
         if relocation.is_empty() {
             logging::debug!("No relocations needed for {}", self.name());
@@ -69,11 +68,14 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
             logging::debug!("Using lazy binding for {}", self.name());
         }
         prepare_plt(lazy_binder, lazy, &self)?;
+        // Stabilize global lookup order and retain providers until dependency
+        // bindings have been installed on the relocated module.
+        let global_snapshot = global.as_ref().map(GlobalScope::modules);
         let source = self.module_handle();
         let resolver = SymbolResolver::new(
             &source,
             scope,
-            global_snapshot,
+            global_snapshot.as_ref(),
             symbols.as_deref(),
             self.symbolic(),
             lookup_order,
@@ -93,7 +95,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 .relocate_pltrel(lazy, &mut helper)?;
         }
 
-        let (scope, global_snapshot, bindings) = helper.into_parts();
+        let (scope, bindings) = helper.into_parts();
 
         let (init, fini) = self.resolve_lifecycle()?;
         let initializer = LifecycleRunner::new(init);
@@ -122,7 +124,6 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         let loaded = unsafe {
             LoadedCore::from_relocated(core, scope, global.as_ref(), symbols, lookup_order)
         };
-        drop(global_snapshot);
         Ok(loaded)
     }
 }
@@ -474,7 +475,9 @@ mod tests {
 
     fn mapped_view<T: ByteRepr + 'static>(slice: &'static [T]) -> MappedView<T> {
         let byte_len = core::mem::size_of_val(slice);
-        let region = MappedRegion::local_alias_no_unmap(slice.as_ptr().cast_mut().cast(), byte_len);
+        let region = unsafe {
+            MappedRegion::local_alias_no_unmap(slice.as_ptr().cast_mut().cast(), byte_len)
+        };
         region.read_view::<T>(0, byte_len).unwrap()
     }
 

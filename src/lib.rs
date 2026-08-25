@@ -22,8 +22,8 @@
 //!
 //! - Safer symbol lifetimes. Typed symbols borrow the loaded image, so they cannot outlive
 //!   the library that produced them.
-//! - Hybrid linking. Compose `.so`, `.o`, and synthetic modules at runtime with `scope()` and
-//!   `extend_scope()`.
+//! - Hybrid linking. Compose `.so`, `.o`, and synthetic modules at runtime with `modules()` or an
+//!   explicit [`LocalScope`].
 //! - Explicit dependency loading. Build your own dependency policy with an
 //!   actual [`Loader`], [`linker::KeyResolver`], [`Linker`], and [`LinkContext`].
 //! - Deep customization. Inject host or bridge symbols with
@@ -51,7 +51,7 @@
 //!
 //!     let lib = Relocator::new()
 //!         .run(Loader::new().load_dylib("path/to/plugin.so")?)
-//!         .scope([host])
+//!         .modules([host])
 //!         .relocate()?;
 //!
 //!     let run = unsafe {
@@ -231,7 +231,8 @@ pub(crate) use error::*;
 pub use aligned_bytes::ByteRepr;
 pub use error::Error;
 pub use image::{
-    ElfModule, GlobalScope, Module, ModuleInstanceId, ModuleSearch, ModuleState, SearchPathPool,
+    ElfModule, GlobalScope, LocalScope, Module, ModuleInstanceId, ModuleScope, ModuleSearch,
+    ModuleState, SearchPathPool,
 };
 pub use input::ModuleSourceId;
 pub use linker::{GraphModule, LinkContext, Linker, LinkerRun, ModuleKey};

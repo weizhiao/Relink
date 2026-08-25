@@ -4,7 +4,7 @@ use crate::{
     arch::NativeArch,
     elf::{ElfDyn, ElfDynamic, ElfPhdr, ElfPhdrs, SymbolTable},
     image::{
-        CoreRuntime, DynamicInfo, GlobalScope, LookupScope, Module, ModuleHandle, ModuleSearch,
+        CoreRuntime, DynamicInfo, GlobalScope, LocalScope, Module, ModuleHandle, ModuleSearch,
         ModuleState, PltRelocInfo, SymbolExports,
     },
     input::{ModuleSourceId, PathBuf},
@@ -116,7 +116,7 @@ impl<
     #[inline]
     pub(crate) fn set_lazy_lookup(
         &self,
-        scope: &LookupScope<Arch, Tls>,
+        scope: &LocalScope<Arch, Tls>,
         global: Option<&GlobalScope<Arch, Tls>>,
         symbols: Option<&Arc<SymbolRegistry<Arch, Tls>>>,
         order: LookupOrder,

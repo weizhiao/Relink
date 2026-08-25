@@ -1,6 +1,6 @@
 use crate::{
     arch::NativeArch,
-    image::{LookupScope, RawDynamic},
+    image::{LocalScope, RawDynamic},
     memory::{HostRegion, RegionAccess},
     relocation::{BindingMode, LookupOrder, RelocationArch},
     tls::TlsResolver,
@@ -14,7 +14,7 @@ pub struct LinkerRelocationEvent<
     Tls: TlsResolver<Arch> = (),
 > {
     raw: RawDynamic<D, Arch, R, Tls>,
-    scope: LookupScope<Arch, Tls>,
+    scope: LocalScope<Arch, Tls>,
     binding: BindingMode,
     lookup_order: LookupOrder,
 }
@@ -28,7 +28,7 @@ where
     #[inline]
     pub(crate) fn new(
         raw: RawDynamic<D, Arch, R, Tls>,
-        scope: LookupScope<Arch, Tls>,
+        scope: LocalScope<Arch, Tls>,
         lookup_order: LookupOrder,
     ) -> Self {
         Self {
@@ -50,7 +50,7 @@ where
     /// Linker-global modules participate in relocation separately and are not
     /// retained by this scope.
     #[inline]
-    pub const fn scope(&self) -> &LookupScope<Arch, Tls> {
+    pub const fn scope(&self) -> &LocalScope<Arch, Tls> {
         &self.scope
     }
 
@@ -59,7 +59,7 @@ where
     /// Linker-global modules are managed separately and are not part of this
     /// scope.
     #[inline]
-    pub const fn scope_mut(&mut self) -> &mut LookupScope<Arch, Tls> {
+    pub const fn scope_mut(&mut self) -> &mut LocalScope<Arch, Tls> {
         &mut self.scope
     }
 
@@ -92,7 +92,7 @@ where
         self,
     ) -> (
         RawDynamic<D, Arch, R, Tls>,
-        LookupScope<Arch, Tls>,
+        LocalScope<Arch, Tls>,
         BindingMode,
         LookupOrder,
     ) {

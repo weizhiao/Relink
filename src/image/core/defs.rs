@@ -4,7 +4,7 @@ use crate::{
     elf::{ElfPhdr, ElfSymbol, ElfSymbolType, SymbolEntry},
     image::{
         DynamicInfo, GlobalScope, Module, ModuleHandle, ModuleSearch, ModuleState, PltRelocInfo,
-        SymbolExports, WeakLookupScope,
+        SymbolExports, WeakLocalScope,
     },
     input::Path,
     lazy::{LazySetup, LazyValues},
@@ -93,7 +93,7 @@ pub(crate) trait CoreRuntimeModule<Arch: RelocationArch>: Send + Sync {
 
 pub(crate) struct LazyLookup<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
     pub(super) source: Weak<dyn Module<Arch, Tls>>,
-    pub(super) scope: WeakLookupScope<Arch, Tls>,
+    pub(super) scope: WeakLocalScope<Arch, Tls>,
     pub(super) symbols: Option<Weak<SymbolRegistry<Arch, Tls>>>,
     pub(super) order: LookupOrder,
 }
@@ -142,19 +142,18 @@ where
         let Some(source) = lazy.source.upgrade().map(ModuleHandle::from_shared) else {
             return Ok(None);
         };
-        let Some(lookup) = lazy.scope.upgrade_scope() else {
+        let Some(lookup) = lazy.scope.upgrade_local() else {
             return Ok(None);
         };
         let global = lazy.scope.upgrade_global();
         // Serialize lookup plus dependency recording with global-scope removal.
         let global_guard = global.as_ref().map(GlobalScope::read);
-        let global = global_guard.as_deref().cloned();
         let symbolic = self.dynamic_info.as_ref().is_some_and(|info| info.symbolic);
         let symbols = lazy.symbols.as_ref().and_then(Weak::upgrade);
         let resolver = SymbolResolver::new(
             &source,
             lookup,
-            global,
+            global_guard.as_deref(),
             symbols.as_deref(),
             symbolic,
             lazy.order,
@@ -169,7 +168,6 @@ where
                 }
             });
         }
-        drop(global_guard);
         symdef.resolve().map(Some)
     }
 }

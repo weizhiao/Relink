@@ -4,7 +4,7 @@ use crate::{
     Result,
     elf::{ElfSymbol, ElfSymbolBind, SymbolEntry},
     hint::unlikely,
-    image::{LookupScope, Module, ModuleHandle, ModuleInstanceId, ModuleScope, SymbolLookup},
+    image::{LocalScope, Module, ModuleHandle, ModuleInstanceId, ModuleScope, SymbolLookup},
     logging,
     memory::VmAddr,
     sync::{Arc, Weak},
@@ -119,8 +119,8 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
 
 pub(crate) struct SymbolResolver<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch>> {
     source: &'lib ModuleHandle<Arch, Tls>,
-    scope: LookupScope<Arch, Tls>,
-    global: Option<ModuleScope<Arch, Tls>>,
+    scope: LocalScope<Arch, Tls>,
+    global: Option<&'lib ModuleScope<Arch, Tls>>,
     registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
     symbolic: bool,
     order: LookupOrder,
@@ -134,8 +134,8 @@ where
     #[inline]
     pub(crate) fn new(
         source: &'lib ModuleHandle<Arch, Tls>,
-        scope: LookupScope<Arch, Tls>,
-        global: Option<ModuleScope<Arch, Tls>>,
+        scope: LocalScope<Arch, Tls>,
+        global: Option<&'lib ModuleScope<Arch, Tls>>,
         registry: Option<&'lib SymbolRegistry<Arch, Tls>>,
         symbolic: bool,
         order: LookupOrder,
@@ -151,13 +151,13 @@ where
     }
 
     #[inline]
-    pub(crate) const fn scope(&self) -> &LookupScope<Arch, Tls> {
+    pub(crate) const fn scope(&self) -> &LocalScope<Arch, Tls> {
         &self.scope
     }
 
     #[inline]
-    pub(crate) fn into_parts(self) -> (LookupScope<Arch, Tls>, Option<ModuleScope<Arch, Tls>>) {
-        (self.scope, self.global)
+    pub(crate) fn into_scope(self) -> LocalScope<Arch, Tls> {
+        self.scope
     }
 
     fn lookup<'find>(
@@ -306,7 +306,7 @@ mod tests {
             ElfSectionIndex, ElfSymbolBind, ElfSymbolType, ElfSymbolVisibility, NativeElfLayout,
             SymbolEntry, SymbolInfo, SymbolLookup,
         },
-        image::{LookupScope, ModuleHandle, ModuleScope, SyntheticModule, SyntheticSymbol},
+        image::{LocalScope, ModuleHandle, ModuleScope, SyntheticModule, SyntheticSymbol},
         memory::VmAddr,
         runtime::DomainId,
     };
@@ -320,10 +320,10 @@ mod tests {
         SymbolEntry::new(symbol, SymbolInfo::from_str("value", None))
     }
 
-    fn scope(modules: impl IntoIterator<Item = SyntheticModule<NativeArch>>) -> LookupScope {
+    fn scope(modules: impl IntoIterator<Item = SyntheticModule<NativeArch>>) -> LocalScope {
         let mut scope = ModuleScope::new(DomainId::PROCESS);
         scope.extend(modules);
-        LookupScope::new([scope.clone()], scope)
+        LocalScope::new([scope.clone()], scope)
     }
 
     fn definition(name: &str, value: usize) -> SyntheticModule<NativeArch> {
@@ -356,14 +356,8 @@ mod tests {
             (LookupOrder::GlobalFirst, 0x200),
             (LookupOrder::LocalFirst, 0x100),
         ] {
-            let resolver = SymbolResolver::new(
-                &source,
-                local.clone(),
-                Some(global.clone()),
-                None,
-                false,
-                order,
-            );
+            let resolver =
+                SymbolResolver::new(&source, local.clone(), Some(&global), None, false, order);
             assert_eq!(
                 resolver.find(&symbol(&source)).unwrap().resolve().unwrap(),
                 VmAddr::new(expected)

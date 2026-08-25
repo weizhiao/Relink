@@ -4,7 +4,7 @@ use crate::{
     Error, RelocReason, Result,
     elf::{ElfRelEntry, ElfRelType, HashTable, SymbolEntry, SymbolTableView},
     hint::unlikely,
-    image::{ElfCore, LookupScope, ModuleInstanceId, ModuleScope, ModuleState},
+    image::{ElfCore, LocalScope, ModuleInstanceId, ModuleState},
     memory::{ImageMemory, RegionAccess, VmAddr},
     observer::{RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
@@ -98,15 +98,8 @@ where
     }
 
     #[inline]
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        LookupScope<Arch, Tls>,
-        Option<ModuleScope<Arch, Tls>>,
-        BindingDeps,
-    ) {
-        let (scope, global) = self.resolver.into_parts();
-        (scope, global, self.bindings)
+    pub(crate) fn into_parts(self) -> (LocalScope<Arch, Tls>, BindingDeps) {
+        (self.resolver.into_scope(), self.bindings)
     }
 
     #[inline]

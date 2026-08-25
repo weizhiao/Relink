@@ -36,7 +36,7 @@ fn resolves_external_symbols() {
                 )
                 .expect("failed to load a.o"),
         )
-        .scope([&b])
+        .modules([&b])
         .relocate()
         .expect("failed to relocate a.o");
 

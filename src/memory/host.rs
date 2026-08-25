@@ -50,16 +50,13 @@ impl MappedRegion<HostRegion> {
         ))
     }
 
+    /// Creates a host-backed alias without taking ownership of the mapping.
+    ///
+    /// # Safety
+    /// `host_ptr..host_ptr + len` must remain mapped and accessible for the
+    /// lifetime of every clone of the returned region.
     #[inline]
-    pub(crate) fn local_with_munmap<F>(host_ptr: *mut c_void, len: usize, munmap: F) -> Self
-    where
-        F: Fn(*mut c_void, usize) -> Result<()> + Send + Sync + 'static,
-    {
-        Self::local(host_ptr, len, MunmapAdapter { munmap })
-    }
-
-    #[inline]
-    pub(crate) fn local_alias_no_unmap(host_ptr: *mut c_void, len: usize) -> Self {
+    pub unsafe fn local_alias_no_unmap(host_ptr: *mut c_void, len: usize) -> Self {
         Self::local_alias(host_ptr, len, NoopMmap)
     }
 }
@@ -209,65 +206,6 @@ unsafe impl Send for HostRegion {}
 // Safety: shared access only exposes byte operations over the mapped range.
 unsafe impl Sync for HostRegion {}
 
-struct MunmapAdapter<F> {
-    munmap: F,
-}
-
-impl<F> Mmap for MunmapAdapter<F>
-where
-    F: Fn(*mut c_void, usize) -> Result<()> + Send + Sync + 'static,
-{
-    type Region = HostRegion;
-
-    unsafe fn create_space(
-        &self,
-        _addr: Option<VmAddr>,
-        _len: usize,
-        _prot: ProtFlags,
-        _populate_later: bool,
-    ) -> Result<MappedRegion<Self::Region>> {
-        unreachable!("MunmapAdapter only supports munmap")
-    }
-
-    unsafe fn alias_space(&self, _addr: VmAddr, _len: usize) -> Result<MappedRegion<Self::Region>> {
-        unreachable!("MunmapAdapter only supports munmap")
-    }
-
-    unsafe fn map_file_at(
-        &self,
-        _addr: VmAddr,
-        _len: usize,
-        _prot: ProtFlags,
-        _flags: MapFlags,
-        _offset: usize,
-        _fd: isize,
-    ) -> Result<()> {
-        unreachable!("MunmapAdapter only supports munmap")
-    }
-
-    unsafe fn map_zero_at(
-        &self,
-        _addr: VmAddr,
-        _len: usize,
-        _prot: ProtFlags,
-        _flags: MapFlags,
-    ) -> Result<()> {
-        unreachable!("MunmapAdapter only supports munmap")
-    }
-
-    unsafe fn munmap(&self, addr: VmAddr, len: usize) -> Result<()> {
-        (self.munmap)(addr.as_mut_ptr(), len)
-    }
-
-    unsafe fn madvise(&self, _addr: VmAddr, _len: usize, _behavior: MadviseAdvice) -> Result<()> {
-        unreachable!("MunmapAdapter only supports munmap")
-    }
-
-    unsafe fn mprotect(&self, _addr: VmAddr, _len: usize, _prot: ProtFlags) -> Result<()> {
-        unreachable!("MunmapAdapter only supports munmap")
-    }
-}
-
 struct NoopMmap;
 
 impl Mmap for NoopMmap {
@@ -288,7 +226,7 @@ impl Mmap for NoopMmap {
     }
 
     unsafe fn alias_space(&self, addr: VmAddr, len: usize) -> Result<MappedRegion<Self::Region>> {
-        Ok(MappedRegion::local_alias_no_unmap(addr.as_mut_ptr(), len))
+        Ok(unsafe { MappedRegion::local_alias_no_unmap(addr.as_mut_ptr(), len) })
     }
 
     unsafe fn map_file_at(

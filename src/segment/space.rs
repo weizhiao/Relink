@@ -137,7 +137,7 @@ impl<R: RegionAccess> ElfSegments<R> {
 
     /// Create a new contiguous [`ElfSegments`] instance whose mapped bytes begin
     /// at the module-relative `offset`.
-    pub(crate) fn new(region: MappedRegion<R>, base: VmAddr, offset: VmOffset) -> Self {
+    pub fn new(region: MappedRegion<R>, base: VmAddr, offset: VmOffset) -> Self {
         let len = region.len();
         let range = MappedRange::new(offset, len);
         let ranges = Box::new([range]);
@@ -150,11 +150,7 @@ impl<R: RegionAccess> ElfSegments<R> {
 
     /// Creates an [`ElfSegments`] instance from mapped ranges inside one shared
     /// backing region.
-    pub(crate) fn from_ranges(
-        region: MappedRegion<R>,
-        base: VmAddr,
-        ranges: Vec<(usize, usize)>,
-    ) -> Self {
+    pub fn from_ranges(region: MappedRegion<R>, base: VmAddr, ranges: Vec<(usize, usize)>) -> Self {
         let ranges = ranges
             .into_iter()
             .map(|(offset, len)| MappedRange::new(VmOffset::new(offset), len))
@@ -280,6 +276,15 @@ impl<R: RegionAccess> ImageMemory for ElfSegments<R> {
     #[inline]
     fn base(&self) -> VmAddr {
         self.base()
+    }
+
+    fn range_at(&self, addr: VmAddr) -> Option<core::ops::Range<VmAddr>> {
+        if !self.contains_addr(addr) {
+            return None;
+        }
+        let first = *self.ranges.first()?;
+        let last = *self.ranges.last()?;
+        Some(self.range_base(first)..self.base.checked_add(last.end())?)
     }
 
     #[inline]

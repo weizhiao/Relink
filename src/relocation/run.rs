@@ -1,7 +1,7 @@
 use crate::{
     Relocator, Result,
     arch::NativeArch,
-    image::{GlobalScope, LookupScope, ModuleHandle, ModuleScope},
+    image::{GlobalScope, LocalScope, ModuleHandle, ModuleScope},
     lazy::{LazyBinder, SupportLazy},
     observer::RelocationObserver,
     relocation::{
@@ -24,7 +24,7 @@ pub struct RelocatorRun<
     Binder = (),
 > {
     object: T,
-    scope: LookupScope<Arch, Tls>,
+    scope: LocalScope<Arch, Tls>,
     global: Option<GlobalScope<Arch, Tls>>,
     observer: Obs,
     binding: BindingMode,
@@ -48,7 +48,7 @@ impl<Binder> Relocator<Binder> {
         let domain = object.domain_id();
         RelocatorRun {
             object,
-            scope: LookupScope::empty(domain),
+            scope: LocalScope::empty(domain),
             global: None,
             observer: (),
             binding: BindingMode::Default,
@@ -149,35 +149,21 @@ where
         self
     }
 
-    /// Replaces the current module scope used for symbol resolution.
-    pub fn scope<I, R>(mut self, scope: I) -> Self
+    /// Uses the same ordered modules for eager and deferred symbol lookup.
+    pub fn modules<I, R>(mut self, modules: I) -> Self
     where
         I: IntoIterator<Item = R>,
         R: Into<ModuleHandle<Arch, Tls>>,
     {
         let mut group = ModuleScope::new(self.scope.domain_id());
-        group.replace(scope);
-        self.scope = LookupScope::new([group.clone()], group);
-        self.global = None;
-        self.symbols = None;
+        group.replace(modules);
+        self.scope = LocalScope::new([group.clone()], group);
         self
     }
 
-    /// Replaces the current module scope with a prepared lookup scope.
-    pub fn lookup_scope(mut self, scope: LookupScope<Arch, Tls>) -> Self {
+    /// Replaces the complete eager and deferred symbol lookup scope.
+    pub fn local_scope(mut self, scope: LocalScope<Arch, Tls>) -> Self {
         self.scope = scope;
-        self.global = None;
-        self.symbols = None;
-        self
-    }
-
-    /// Appends more modules to the symbol-resolution scope.
-    pub fn extend_scope<I, R>(mut self, scope: I) -> Self
-    where
-        I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch, Tls>>,
-    {
-        self.scope.extend_modules(scope);
         self
     }
 }
@@ -200,18 +186,6 @@ where
     #[inline]
     pub fn lazy(mut self) -> Self {
         self.binding = BindingMode::Lazy;
-        self
-    }
-
-    /// Uses a separate local scope for deferred PLT symbol lookup.
-    ///
-    /// Eager relocations continue to use the regular lookup scope. If this is
-    /// not configured, lazy binding uses that regular scope as well. A linker
-    /// can supply the module's retained dependency closure here to avoid
-    /// exposing unrelated members of its transient load group.
-    #[inline]
-    pub fn lazy_scope(mut self, scope: ModuleScope<Arch, Tls>) -> Self {
-        self.scope.set_lazy_scope(scope);
         self
     }
 }

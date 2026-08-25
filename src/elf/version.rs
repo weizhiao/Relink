@@ -477,8 +477,9 @@ mod tests {
 
         let bytes: &'static [u8] = &storage.0;
         let base = VmAddr::from_ptr(bytes.as_ptr());
-        let region =
-            MappedRegion::local_alias_no_unmap(bytes.as_ptr().cast_mut().cast(), bytes.len());
+        let region = unsafe {
+            MappedRegion::local_alias_no_unmap(bytes.as_ptr().cast_mut().cast(), bytes.len())
+        };
         let segments = ElfSegments::new(region, base, VmOffset::new(0));
         let strtab = ElfStringTable::new(MappedView::from_slice(&bytes[STRTAB_OFFSET..]));
         let addr = |offset| NonZeroUsize::new((base + VmOffset::new(offset)).get()).unwrap();

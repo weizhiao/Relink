@@ -56,7 +56,7 @@ fn load_manual_file(fixtures: &fixture_support::FixturePaths) -> LoadedCore<()> 
                 .load_dylib(ElfFile::from_path(black_box(fixtures.middle_str())).unwrap())
                 .unwrap(),
         )
-        .scope([&base])
+        .modules([&base])
         .relocate()
         .unwrap();
     relocator
@@ -65,7 +65,7 @@ fn load_manual_file(fixtures: &fixture_support::FixturePaths) -> LoadedCore<()> 
                 .load_dylib(ElfFile::from_path(black_box(fixtures.leaf_str())).unwrap())
                 .unwrap(),
         )
-        .scope([&base, &middle])
+        .modules([&base, &middle])
         .relocate()
         .unwrap()
 }
@@ -87,7 +87,7 @@ fn load_manual_memory(fixtures: &FixtureBytes) -> LoadedCore<()> {
                 .load_dylib(black_box(fixtures.middle.as_slice()))
                 .unwrap(),
         )
-        .scope([&base])
+        .modules([&base])
         .relocate()
         .unwrap();
     relocator
@@ -96,7 +96,7 @@ fn load_manual_memory(fixtures: &FixtureBytes) -> LoadedCore<()> {
                 .load_dylib(black_box(fixtures.leaf.as_slice()))
                 .unwrap(),
         )
-        .scope([&base, &middle])
+        .modules([&base, &middle])
         .relocate()
         .unwrap()
 }

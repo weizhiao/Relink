@@ -26,18 +26,18 @@ fn main() -> Result<()> {
     let fixtures = fixture_support::ensure_all();
     let base = Relocator::new()
         .run(LOADER.load_object(fixtures.base_object_str())?)
-        .scope([host_symbols()])
+        .modules([host_symbols()])
         .relocate()?;
     let middle = Relocator::new()
         .run(LOADER.load_dylib(fixtures.middle_str())?)
-        .scope([
+        .modules([
             ModuleHandle::from(host_symbols()),
             ModuleHandle::from(&base),
         ])
         .relocate()?;
     let leaf = Relocator::new()
         .run(LOADER.load_object(fixtures.leaf_object_str())?)
-        .scope([
+        .modules([
             ModuleHandle::from(host_symbols()),
             ModuleHandle::from(&base),
             ModuleHandle::from(&middle),

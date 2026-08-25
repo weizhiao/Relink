@@ -2,7 +2,7 @@ use super::lifecycle::{LifecycleHandlers, LifecycleRunner};
 use crate::{
     arch::NativeArch,
     elf::{ElfRelEntry, ElfRelType, ElfSymbol, HashTable, SymbolEntry, SymbolTableView},
-    image::{ElfCore, LookupScope},
+    image::{ElfCore, LocalScope},
     input::Path,
     lazy::LazyValues,
     memory::{HostRegion, RegionAccess, VmAddr},
@@ -62,12 +62,12 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
         self.core
     }
 
-    /// Returns the retained lookup scope.
+    /// Returns the local lookup scope.
     ///
     /// [`bind_symdef`](Self::bind_symdef) also searches the linker-global scope
     /// active for this relocation.
     #[inline]
-    pub fn scope(&self) -> &LookupScope<Arch, Tls> {
+    pub fn scope(&self) -> &LocalScope<Arch, Tls> {
         self.resolver.scope()
     }
 

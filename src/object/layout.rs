@@ -141,6 +141,13 @@ impl<R: RegionAccess> ImageMemory for ObjectSegmentView<'_, R> {
     }
 
     #[inline]
+    fn range_at(&self, addr: VmAddr) -> Option<core::ops::Range<VmAddr>> {
+        self.core
+            .range_at(addr)
+            .or_else(|| self.init?.range_at(addr))
+    }
+
+    #[inline]
     fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
         self.host_ptr_range(addr, 1)
     }

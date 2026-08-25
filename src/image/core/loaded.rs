@@ -4,11 +4,11 @@ use crate::{
     arch::NativeArch,
     elf::{ElfDyn, ElfDynamicTag, ElfPhdr, ElfProgramType, ElfSymbol},
     image::{
-        GlobalScope, LookupScope, Module, ModuleHandle, ModuleSearch, ModuleState, SymbolExports,
+        GlobalScope, LocalScope, Module, ModuleHandle, ModuleSearch, ModuleState, SymbolExports,
         SymbolLookup, module::lookup_symbol,
     },
     input::PathBuf,
-    memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr, VmOffset},
+    memory::{HostRegion, ImageMemory, MappedRegion, MappedView, RegionAccess, VmAddr},
     relocation::{LookupOrder, RelocationArch, SymbolRegistry},
     segment::ElfSegments,
     sync::Arc,
@@ -30,7 +30,7 @@ pub struct LoadedCore<
     Tls: TlsResolver<Arch> = (),
 > {
     core: ElfCore<D, Arch, R, Tls>,
-    scope: LookupScope<Arch, Tls>,
+    scope: LocalScope<Arch, Tls>,
 }
 
 impl<
@@ -113,13 +113,13 @@ impl<
         let domain = core.domain_id();
         LoadedCore {
             core,
-            scope: LookupScope::empty(domain),
+            scope: LocalScope::empty(domain),
         }
     }
 
     /// Returns the relocation lookup scope retained by this module.
     #[inline]
-    pub const fn scope(&self) -> &LookupScope<Arch, Tls> {
+    pub const fn scope(&self) -> &LocalScope<Arch, Tls> {
         &self.scope
     }
 
@@ -243,7 +243,7 @@ impl<
     #[inline]
     pub unsafe fn from_core_scope(
         core: ElfCore<D, Arch, R, Tls>,
-        scope: LookupScope<Arch, Tls>,
+        scope: LocalScope<Arch, Tls>,
     ) -> Self {
         core.set_lazy_lookup(&scope, None, None, LookupOrder::GlobalFirst);
         Self { core, scope }
@@ -251,7 +251,7 @@ impl<
 
     pub(crate) unsafe fn from_relocated(
         core: ElfCore<D, Arch, R, Tls>,
-        scope: LookupScope<Arch, Tls>,
+        scope: LocalScope<Arch, Tls>,
         global: Option<&GlobalScope<Arch, Tls>>,
         symbols: Option<Arc<SymbolRegistry<Arch, Tls>>>,
         order: LookupOrder,
@@ -295,7 +295,8 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
 
         let addr = base + phdr.p_vaddr();
         let byte_len = phdr.p_filesz();
-        let region = MappedRegion::local_alias_no_unmap(addr.as_mut_ptr::<c_void>(), byte_len);
+        let region =
+            unsafe { MappedRegion::local_alias_no_unmap(addr.as_mut_ptr::<c_void>(), byte_len) };
         let view = region
             .read_view::<ElfDyn<Arch::Layout>>(0, byte_len)
             .ok_or(ParsePhdrError::malformed(malformed))?;
@@ -314,8 +315,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
     /// # Arguments
     /// * `path` - Loader source path or caller-provided source identifier
     /// * `phdrs` - The program headers
-    /// * `memory` - The mapped memory (pointer and length)
-    /// * `munmap` - Function to unmap the memory
+    /// * `segments` - The mapped ELF segments and their module-relative ranges
     /// * `tls_tp_offset` - TLS thread pointer offset
     /// * `user_data` - User-defined data to associate with the ELF
     ///
@@ -325,19 +325,11 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, Tls: TlsResolver<Arch>>
     pub unsafe fn new_unchecked(
         path: impl Into<PathBuf>,
         phdrs: impl Into<Vec<ElfPhdr<Arch::Layout>>>,
-        memory: (*mut c_void, usize),
-        munmap: unsafe fn(*mut c_void, usize) -> Result<()>,
+        segments: ElfSegments,
         tls_resolver: Tls,
         tls_tp_offset: Option<TlsTpOffset>,
         user_data: D,
     ) -> Result<Self> {
-        let segments = ElfSegments::new(
-            MappedRegion::local_with_munmap(memory.0, memory.1, move |addr, len| unsafe {
-                munmap(addr, len)
-            }),
-            VmAddr::from_ptr(memory.0),
-            VmOffset::new(0),
-        );
         let base = segments.base();
         let mut dynamic = None;
         let mut dynamic_addr = None;

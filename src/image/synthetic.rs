@@ -226,6 +226,11 @@ impl ImageMemory for UnmappedImageMemory {
     }
 
     #[inline]
+    fn range_at(&self, _addr: VmAddr) -> Option<core::ops::Range<VmAddr>> {
+        None
+    }
+
+    #[inline]
     fn host_ptr(&self, _addr: VmAddr) -> Option<NonNull<u8>> {
         None
     }
@@ -758,8 +763,9 @@ mod tests {
     #[test]
     fn synthetic_module_can_delegate_image_memory() {
         let bytes = alloc::boxed::Box::leak(alloc::boxed::Box::new([1u8, 2, 3, 4]));
-        let region =
-            MappedRegion::local_alias_no_unmap(bytes.as_ptr().cast_mut().cast(), bytes.len());
+        let region = unsafe {
+            MappedRegion::local_alias_no_unmap(bytes.as_ptr().cast_mut().cast(), bytes.len())
+        };
         let base = VmAddr::from_ptr(bytes.as_ptr());
         let memory = ElfSegments::new(region, base, VmOffset::new(0));
         let module = SyntheticModule::<NativeArch>::empty("__data").with_memory(memory);

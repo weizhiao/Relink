@@ -44,7 +44,7 @@ pub(crate) fn load_lazy(provider: &Image) -> Image {
                 ))
                 .expect("failed to load lazy-binding consumer"),
         )
-        .scope([provider])
+        .modules([provider])
         .relocate()
         .expect("failed to relocate lazy-binding consumer")
 }
@@ -59,7 +59,7 @@ pub(crate) fn load_eager(provider: &Image) -> Image {
                 ))
                 .expect("failed to load bind-now consumer"),
         )
-        .scope([provider])
+        .modules([provider])
         .relocate()
         .expect("failed to relocate bind-now consumer")
 }

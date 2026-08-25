@@ -93,7 +93,7 @@ mod native {
                     ))
                     .expect("failed to load relocation consumer"),
             )
-            .scope([&provider])
+            .modules([&provider])
             .relocate()
             .expect("failed to relocate consumer");
 
@@ -128,7 +128,7 @@ mod native {
                     ))
                     .expect("failed to load COPY relocation executable"),
             )
-            .scope([&provider])
+            .modules([&provider])
             .relocate()
             .expect("failed to relocate COPY executable");
         let core = loaded
@@ -205,7 +205,7 @@ fn synthetic_precedes_loaded() {
                 ))
                 .expect("failed to load symbol consumer"),
         )
-        .scope([
+        .modules([
             ModuleHandle::from(host_module()),
             ModuleHandle::from(&provider),
         ])
@@ -236,7 +236,7 @@ fn loaded_precedes_synthetic() {
                 ))
                 .expect("failed to load symbol consumer"),
         )
-        .scope([
+        .modules([
             ModuleHandle::from(&provider),
             ModuleHandle::from(host_module()),
         ])
@@ -276,8 +276,7 @@ fn extend_preserves_precedence() {
                 ))
                 .expect("failed to load symbol consumer"),
         )
-        .scope(std::slice::from_ref(&first))
-        .extend_scope(std::slice::from_ref(&second))
+        .modules([&first, &second])
         .relocate()
         .expect("failed to relocate symbol consumer");
 
@@ -302,7 +301,7 @@ fn scope_interposes_by_default() {
                 .load_dylib(ElfBinary::new("defining.so", &fixtures.scope.defining))
                 .expect("failed to load defining symbol fixture"),
         )
-        .scope(std::slice::from_ref(&provider))
+        .modules(std::slice::from_ref(&provider))
         .relocate()
         .expect("failed to relocate defining symbol fixture");
 
@@ -322,7 +321,7 @@ fn symbolic_prefers_self() {
                 .load_dylib(ElfBinary::new("symbolic.so", &fixtures.scope.symbolic))
                 .expect("failed to load DF_SYMBOLIC fixture"),
         )
-        .scope(std::slice::from_ref(&provider))
+        .modules(std::slice::from_ref(&provider))
         .relocate()
         .expect("failed to relocate DF_SYMBOLIC fixture");
 

@@ -328,7 +328,7 @@ pub struct ModuleScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch>
 /// The eager scope is used for ordinary relocation. The lazy scope is always
 /// present and is retained by standalone loaded images. Linker-managed images
 /// normally use their dependency closure as the lazy scope.
-pub struct LookupScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+pub struct LocalScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     groups: Arc<[ModuleScope<Arch, Tls>]>,
     lazy: ModuleScope<Arch, Tls>,
 }
@@ -338,8 +338,8 @@ pub struct LookupScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch>
 /// Linker-managed images use their retained dependency closure instead of the
 /// wider eager-relocation load group. This deliberately gives lazy binding the
 /// conservative `retained + global` lookup semantics documented by the linker.
-pub(crate) struct WeakLookupScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    scope: Weak<Vec<ModuleHandle<Arch, Tls>>>,
+pub(crate) struct WeakLocalScope<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
+    local: Weak<Vec<ModuleHandle<Arch, Tls>>>,
     global: Option<Weak<GlobalScopeInner<Arch, Tls>>>,
     domain: DomainId,
 }
@@ -449,7 +449,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> ModuleScope<Arch, Tls> {
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for LookupScope<Arch, Tls> {
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for LocalScope<Arch, Tls> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -468,27 +468,27 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for GlobalScope<Arch, T
     }
 }
 
-impl<Arch, Tls> fmt::Debug for LookupScope<Arch, Tls>
+impl<Arch, Tls> fmt::Debug for LocalScope<Arch, Tls>
 where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LookupScope")
+        f.debug_struct("LocalScope")
             .field("groups", &self.groups)
             .field("lazy", &self.lazy)
             .finish()
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
-    /// Creates an empty lookup scope for `domain`.
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LocalScope<Arch, Tls> {
+    /// Creates an empty local scope for `domain`.
     #[inline]
     pub fn empty(domain: DomainId) -> Self {
         Self::new([], ModuleScope::new(domain))
     }
 
-    /// Creates a lookup scope with explicit eager groups and deferred scope.
+    /// Creates a local scope with explicit eager groups and deferred scope.
     pub fn new<I>(groups: I, lazy: ModuleScope<Arch, Tls>) -> Self
     where
         I: IntoIterator<Item = ModuleScope<Arch, Tls>>,
@@ -511,7 +511,7 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
         self.lazy.domain_id()
     }
 
-    /// Checks that both lookup scopes and their modules belong to `expected`.
+    /// Checks that the eager and deferred scopes belong to `expected`.
     #[inline]
     pub fn check_domain(&self, expected: DomainId) -> Result<()> {
         for group in self.groups.iter() {
@@ -524,11 +524,11 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
     pub(crate) fn downgrade(
         &self,
         global: Option<&GlobalScope<Arch, Tls>>,
-    ) -> WeakLookupScope<Arch, Tls> {
+    ) -> WeakLocalScope<Arch, Tls> {
         let domain = self.domain_id();
         debug_assert!(global.is_none_or(|global| global.domain_id() == domain));
-        WeakLookupScope {
-            scope: Arc::downgrade(&self.lazy.modules),
+        WeakLocalScope {
+            local: Arc::downgrade(&self.lazy.modules),
             global: global.map(GlobalScope::downgrade),
             domain,
         }
@@ -574,29 +574,6 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
         self.groups = Arc::from(current);
     }
 
-    pub(crate) fn extend_modules<I, R>(&mut self, modules: I)
-    where
-        I: IntoIterator<Item = R>,
-        R: Into<ModuleHandle<Arch, Tls>>,
-    {
-        let follows_eager =
-            self.groups.len() == 1 && Arc::ptr_eq(&self.groups[0].modules, &self.lazy.modules);
-        if self.groups.is_empty() {
-            let mut group = ModuleScope::new(self.domain_id());
-            group.extend(modules);
-            self.lazy = group.clone();
-            self.groups = Arc::from([group]);
-        } else {
-            let group = Arc::make_mut(&mut self.groups)
-                .last_mut()
-                .expect("non-empty lookup scope must have a final group");
-            group.extend(modules);
-            if follows_eager {
-                self.lazy = group.clone();
-            }
-        }
-    }
-
     /// Iterates over eager lookup modules in order.
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &ModuleHandle<Arch, Tls>> {
@@ -623,14 +600,14 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LookupScope<Arch, Tls> {
     }
 }
 
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> WeakLookupScope<Arch, Tls> {
+impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> WeakLocalScope<Arch, Tls> {
     #[inline]
-    pub(crate) fn upgrade_scope(&self) -> Option<LookupScope<Arch, Tls>> {
+    pub(crate) fn upgrade_local(&self) -> Option<LocalScope<Arch, Tls>> {
         let scope = ModuleScope {
-            modules: self.scope.upgrade()?,
+            modules: self.local.upgrade()?,
             domain: self.domain,
         };
-        Some(LookupScope::new([scope.clone()], scope))
+        Some(LocalScope::new([scope.clone()], scope))
     }
 
     #[inline]
@@ -719,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn lookup_scope_retains_local_and_tracks_live_global() {
+    fn local_scope_retains_modules_and_tracks_live_global() {
         let first: ModuleHandle = ModuleHandle::new(SyntheticModule::<NativeArch>::empty("first"));
         let second: ModuleHandle =
             ModuleHandle::new(SyntheticModule::<NativeArch>::empty("second"));
@@ -730,7 +707,7 @@ mod tests {
 
         let mut local_scope = ModuleScope::new(DomainId::PROCESS);
         local_scope.push(local);
-        let scope = LookupScope::new([local_scope.clone()], local_scope);
+        let scope = LocalScope::new([local_scope.clone()], local_scope);
         let weak = scope.downgrade(Some(&global));
 
         global.write().replace([second]);
@@ -742,7 +719,7 @@ mod tests {
             ["first"]
         );
         assert_eq!(
-            weak.upgrade_scope()
+            weak.upgrade_local()
                 .unwrap()
                 .iter()
                 .map(|module| module.name())
@@ -750,7 +727,7 @@ mod tests {
             ["local"]
         );
 
-        let deferred = weak.upgrade_scope().unwrap();
+        let deferred = weak.upgrade_local().unwrap();
         let live = weak.upgrade_global().unwrap();
         assert_eq!(
             live.modules()
@@ -769,7 +746,7 @@ mod tests {
 
         drop(live);
         drop(global);
-        let deferred = weak.upgrade_scope().unwrap();
+        let deferred = weak.upgrade_local().unwrap();
         assert!(weak.upgrade_global().is_none());
         assert_eq!(
             deferred
@@ -796,7 +773,7 @@ mod tests {
         let mut retained = ModuleScope::new(DomainId::PROCESS);
         retained.push(dependency);
         let owner = retained.clone();
-        let mut scope = LookupScope::new([group], retained);
+        let mut scope = LocalScope::new([group], retained);
         let mut extra = ModuleScope::new(DomainId::PROCESS);
         extra.push(unrelated);
         scope.push(extra);
@@ -815,7 +792,7 @@ mod tests {
             ["dependency"]
         );
         assert_eq!(
-            weak.upgrade_scope()
+            weak.upgrade_local()
                 .unwrap()
                 .iter()
                 .map(|module| module.name())
@@ -825,7 +802,7 @@ mod tests {
 
         drop(scope);
         drop(owner);
-        assert!(weak.upgrade_scope().is_none());
+        assert!(weak.upgrade_local().is_none());
     }
 
     #[test]

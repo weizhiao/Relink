@@ -26,9 +26,9 @@ pub(crate) use elf::PltRelocInfo;
 pub use elf::{LoadedElf, LoadedExec, RawDylib, RawDynamic, RawElf, RawExec, StaticExec};
 #[cfg(feature = "object")]
 pub use elf::{LoadedObject, RawObject};
-pub(crate) use module::WeakLookupScope;
+pub(crate) use module::WeakLocalScope;
 pub use module::{
-    GlobalScope, LookupScope, ModuleHandle, ModuleInstanceId, ModuleScope, ModuleState,
+    GlobalScope, LocalScope, ModuleHandle, ModuleInstanceId, ModuleScope, ModuleState,
 };
 pub(crate) use scanned::ScannedDynamicLoadParts;
 pub use scanned::{ModuleCapability, ScannedDynamic, ScannedElf, ScannedExec, ScannedSection};

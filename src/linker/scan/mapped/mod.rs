@@ -161,6 +161,11 @@ impl<R: RegionAccess> ImageMemory for RuntimeModuleMemory<R> {
     }
 
     #[inline]
+    fn range_at(&self, addr: VmAddr) -> Option<core::ops::Range<VmAddr>> {
+        self.segments.range_at(addr)
+    }
+
+    #[inline]
     fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>> {
         self.segments.host_ptr(addr)
     }

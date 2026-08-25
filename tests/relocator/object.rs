@@ -139,7 +139,7 @@ fn relocations_match() {
                 ))
                 .expect("failed to load object"),
         )
-        .scope([host_symbols.module()])
+        .modules([host_symbols.module()])
         .relocate()
         .expect("relocation failed");
     assert!(loaded_object.state().is_initialized());
@@ -231,7 +231,7 @@ fn addends_apply() {
                 ))
                 .expect("failed to load object"),
         )
-        .scope([host_symbols.module()])
+        .modules([host_symbols.module()])
         .relocate()
         .expect("relocation failed");
 

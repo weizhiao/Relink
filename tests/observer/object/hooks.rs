@@ -61,7 +61,7 @@ fn exports_survive_init_symtab() {
                 .load_object(ElfBinary::new("dependent.o", &fixtures.dependent_object))
                 .expect("failed to load object"),
         )
-        .scope([&provider])
+        .modules([&provider])
         .relocate()
         .expect("relocation failed");
 

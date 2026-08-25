@@ -113,7 +113,7 @@ fn load() -> TlsScenario {
                 .load_dylib(ElfBinary::new("consumer.so", &output.data))
                 .expect("failed to load TLS consumer"),
         )
-        .scope([&provider])
+        .modules([&provider])
         .relocate()
         .expect("failed to relocate TLS consumer");
 

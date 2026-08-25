@@ -11,7 +11,7 @@ use crate::{
     ByteRepr, Error, LinkContextError, LinkerError, Loader, Result,
     arch::NativeArch,
     elf::ElfRelType,
-    image::{GlobalScope, LookupScope, ModuleHandle, ModuleScope, RawDynamic},
+    image::{GlobalScope, LocalScope, ModuleHandle, ModuleScope, RawDynamic},
     lazy::LazyBinder,
     memory::RegionAccess,
     observer::{LinkerObserver, LinkerRelocationEvent, LoadObserver, RelocationObserver},
@@ -324,7 +324,7 @@ where
                         direct_deps.expect("missing resolved dependencies while relocating");
                     let mut event = LinkerRelocationEvent::new(
                         raw,
-                        LookupScope::new([local.clone()], retained.clone()),
+                        LocalScope::new([local.clone()], retained.clone()),
                         self.lookup_order,
                     );
                     self.observer.on_relocation(&mut event)?;
@@ -333,7 +333,7 @@ where
                         .linker
                         .relocator
                         .run(raw)
-                        .lookup_scope(scope)
+                        .local_scope(scope)
                         .global_scope(global)
                         .lookup_order(lookup_order)
                         .symbol_registry(Arc::clone(symbols))

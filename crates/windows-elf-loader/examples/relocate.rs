@@ -23,7 +23,7 @@ fn main() {
                 .load_file(r".\crates\windows-elf-loader\example_dylib\liba.so")
                 .unwrap(),
         )
-        .scope([host.clone()])
+        .modules([host.clone()])
         .relocate()
         .unwrap();
     let libb = Relocator::new()
@@ -32,7 +32,7 @@ fn main() {
                 .load_file(r".\crates\windows-elf-loader\example_dylib\libb.so")
                 .unwrap(),
         )
-        .scope([host.clone(), ModuleHandle::from(&liba)])
+        .modules([host.clone(), ModuleHandle::from(&liba)])
         .relocate()
         .unwrap();
     let libc = Relocator::new()
@@ -41,7 +41,7 @@ fn main() {
                 .load_file(r".\crates\windows-elf-loader\example_dylib\libc.so")
                 .unwrap(),
         )
-        .scope([host.clone(), ModuleHandle::from(&libb)])
+        .modules([host.clone(), ModuleHandle::from(&libb)])
         .relocate()
         .unwrap();
     let f = unsafe { liba.get::<extern "sysv64" fn() -> i32>("a").unwrap() };

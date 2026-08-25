@@ -28,7 +28,7 @@
 ///     let raw = Loader::new().load_dylib("plugin.so")?;
 ///     let loaded = Relocator::new()
 ///         .run(raw)
-///         .scope([host])
+///         .modules([host])
 ///         .relocate()?;
 ///
 ///     let run = unsafe {

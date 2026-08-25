@@ -14,12 +14,7 @@ use crate::{
 use alloc::vec::Vec;
 use core::fmt;
 
-/// Runtime directory provider used by
-/// [`SearchPathResolver::push_search_dir_provider`].
-///
-/// Implementations append directories to `out` in the order they should be
-/// searched for `request.requested()`.
-type SearchDirProvider = dyn for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()>
+type PathProvider = dyn for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()>
     + Send
     + Sync
     + 'static;
@@ -29,7 +24,8 @@ enum SearchPathEntry {
     Rpath,
     Runpath,
     Dir(SharedDir),
-    Dynamic(Arc<SearchDirProvider>),
+    DirProvider(Arc<PathProvider>),
+    CandidateProvider(Arc<PathProvider>),
 }
 
 impl fmt::Debug for SearchPathEntry {
@@ -38,7 +34,8 @@ impl fmt::Debug for SearchPathEntry {
             Self::Rpath => f.write_str("Rpath"),
             Self::Runpath => f.write_str("Runpath"),
             Self::Dir(dir) => f.debug_tuple("Dir").field(dir).finish(),
-            Self::Dynamic(_) => f.write_str("Dynamic(..)"),
+            Self::DirProvider(_) => f.write_str("DirProvider(..)"),
+            Self::CandidateProvider(_) => f.write_str("CandidateProvider(..)"),
         }
     }
 }
@@ -187,7 +184,7 @@ impl SearchPathResolver {
                 }
                 SearchPathEntry::Dir(dir)
             }
-            SearchPathEntry::Dynamic(provider) => SearchPathEntry::Dynamic(provider),
+            entry => entry,
         };
         self.entries.push(entry);
         self
@@ -224,9 +221,26 @@ impl SearchPathResolver {
             + Sync
             + 'static,
     {
-        self.push_entry(SearchPathEntry::Dynamic(
-            arc_unsize!(Arc::new(provider) => SearchDirProvider),
+        self.push_entry(SearchPathEntry::DirProvider(
+            arc_unsize!(Arc::new(provider) => PathProvider),
         ))
+    }
+
+    /// Appends a callback that can provide complete file candidates per request.
+    ///
+    /// Candidates are opened in the order supplied and are not joined with the
+    /// requested library name. This is suitable for sources such as
+    /// `/etc/ld.so.cache` that have already selected an exact file path.
+    pub fn push_candidate_provider<F>(&mut self, provider: F) -> &mut Self
+    where
+        F: for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.push_entry(SearchPathEntry::CandidateProvider(arc_unsize!(
+            Arc::new(provider) => PathProvider
+        )))
     }
 
     /// Opens and validates a target-compatible ELF candidate.
@@ -313,7 +327,7 @@ where
             return try_candidate(requested, false)?.ok_or_else(|| req.unresolved());
         }
 
-        let mut dirs = Vec::new();
+        let mut provided = Vec::new();
         let mut candidate = PathBuf::default();
         for entry in &self.entries {
             match entry {
@@ -356,11 +370,20 @@ where
                         return Ok(found);
                     }
                 }
-                SearchPathEntry::Dynamic(resolver) => {
-                    dirs.clear();
-                    resolver(request, &mut dirs)?;
-                    for dir in &dirs {
+                SearchPathEntry::DirProvider(provider) => {
+                    provided.clear();
+                    provider(request, &mut provided)?;
+                    for dir in &provided {
                         candidate.set_joined(dir, requested.as_str());
+                        if let Some(found) = try_candidate(candidate.as_path(), true)? {
+                            return Ok(found);
+                        }
+                    }
+                }
+                SearchPathEntry::CandidateProvider(provider) => {
+                    provided.clear();
+                    provider(request, &mut provided)?;
+                    for candidate in &provided {
                         if let Some(found) = try_candidate(candidate.as_path(), true)? {
                             return Ok(found);
                         }

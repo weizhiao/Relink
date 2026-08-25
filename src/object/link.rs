@@ -80,12 +80,14 @@ where
         if let Some(global) = &global {
             domain.ensure(global.domain_id())?;
         }
+        // Stabilize global lookup order and retain providers until dependency
+        // bindings have been installed on the relocated module.
         let global_snapshot = global.as_ref().map(GlobalScope::modules);
         let source = self.core.module_handle();
         let resolver = SymbolResolver::new(
             &source,
             scope,
-            global_snapshot,
+            global_snapshot.as_ref(),
             symbols.as_deref(),
             self.core.symbolic(),
             lookup_order,
@@ -138,7 +140,7 @@ where
             }
         }
 
-        let (scope, global_snapshot, bindings) = helper.into_parts();
+        let (scope, bindings) = helper.into_parts();
 
         let initializer = LifecycleRunner::new(core::mem::take(&mut self.init));
         let finalizer = LifecycleRunner::new(core::mem::take(&mut self.fini));
@@ -197,7 +199,6 @@ where
         let inner = unsafe {
             LoadedCore::from_relocated(core, scope, global.as_ref(), symbols, lookup_order)
         };
-        drop(global_snapshot);
         Ok(LoadedObject { inner })
     }
 

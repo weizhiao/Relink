@@ -29,17 +29,15 @@ fn main() -> Result<()> {
     let host = host_symbols();
     let base = RELOCATOR
         .run(LOADER.load_dylib(fixtures.base_str())?)
-        .scope([host.clone()])
+        .modules([host.clone()])
         .relocate()?;
     let middle = RELOCATOR
         .run(LOADER.load_dylib(fixtures.middle_str())?)
-        .scope([host.clone()])
-        .extend_scope([&base])
+        .modules([host.clone(), ModuleHandle::from(&base)])
         .relocate()?;
     let leaf = RELOCATOR
         .run(LOADER.load_dylib(fixtures.leaf_str())?)
-        .scope([host])
-        .extend_scope([&base, &middle])
+        .modules([host, ModuleHandle::from(&base), ModuleHandle::from(&middle)])
         .relocate()?;
     let f = unsafe { base.get::<extern "C" fn() -> i32>("base_value").unwrap() };
     assert!(f() == 1);

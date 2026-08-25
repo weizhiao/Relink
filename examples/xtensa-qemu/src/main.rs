@@ -50,7 +50,7 @@ fn main() -> ! {
     let plugin = Loader::new()
         .with_mmap(plugin_memory())
         .load_dylib(ElfBinary::new("fixture.so", FIXTURE))
-        .and_then(|raw| Relocator::new().run(raw).scope([host]).relocate());
+        .and_then(|raw| Relocator::new().run(raw).modules([host]).relocate());
 
     match plugin {
         Ok(plugin) => {

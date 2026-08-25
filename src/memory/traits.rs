@@ -1,5 +1,6 @@
 use core::{
     mem::{MaybeUninit, size_of},
+    ops::Range,
     ptr::NonNull,
 };
 
@@ -142,6 +143,13 @@ pub trait ImageMemory: Send + Sync {
     /// Returns the load base used by this image.
     fn base(&self) -> VmAddr;
 
+    /// Returns the address range owned by this image that contains `addr`.
+    ///
+    /// The returned range may span multiple mapped subranges belonging to one
+    /// logical image. Implementations with no mapped address range return
+    /// `None`.
+    fn range_at(&self, addr: VmAddr) -> Option<Range<VmAddr>>;
+
     /// Translates an image VM address into a host-accessible pointer.
     fn host_ptr(&self, addr: VmAddr) -> Option<NonNull<u8>>;
 
@@ -217,6 +225,11 @@ where
     #[inline]
     fn base(&self) -> VmAddr {
         (**self).base()
+    }
+
+    #[inline]
+    fn range_at(&self, addr: VmAddr) -> Option<Range<VmAddr>> {
+        (**self).range_at(addr)
     }
 
     #[inline]
