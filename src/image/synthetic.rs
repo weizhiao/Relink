@@ -268,15 +268,40 @@ impl ImageMemory for UnmappedImageMemory {
 /// The module owns stable synthetic ELF symbols, so it can be retained in a
 /// [`ModuleScope`](crate::image::ModuleScope) without borrowing callback-owned
 /// symbol metadata.
-pub struct SyntheticModule<Arch: RelocationArch = NativeArch, D = ()> {
+pub struct SyntheticModule<Arch: RelocationArch = NativeArch, D = (), R = ()> {
     state: ModuleState,
     name: String,
     memory: Arc<dyn ImageMemory>,
     tls: Option<ModuleTls>,
+    resolve_hook: R,
     user_data: D,
     names: Vec<String>,
     symbols: Vec<ElfSymbol<Arch::Layout>>,
     index: BTreeMap<String, SymbolIndex>,
+}
+
+/// Runtime callback invoked when a synthetic symbol is resolved.
+pub trait ResolveHook<Arch: RelocationArch>: Send + Sync {
+    /// Prepares runtime state associated with `symbol` and its stable address.
+    fn resolve(&self, symbol: &ElfSymbol<Arch::Layout>, address: VmAddr) -> Result<()>;
+}
+
+impl<Arch: RelocationArch> ResolveHook<Arch> for () {
+    #[inline]
+    fn resolve(&self, _symbol: &ElfSymbol<Arch::Layout>, _address: VmAddr) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl<Arch, F> ResolveHook<Arch> for F
+where
+    Arch: RelocationArch,
+    F: Fn(&ElfSymbol<Arch::Layout>, VmAddr) -> Result<()> + Send + Sync,
+{
+    #[inline]
+    fn resolve(&self, symbol: &ElfSymbol<Arch::Layout>, address: VmAddr) -> Result<()> {
+        self(symbol, address)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -285,7 +310,7 @@ struct SymbolIndex {
     versions: Vec<(SymbolVersion, usize)>,
 }
 
-impl<Arch: RelocationArch, D: Clone> Clone for SyntheticModule<Arch, D> {
+impl<Arch: RelocationArch, D: Clone, R: Clone> Clone for SyntheticModule<Arch, D, R> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -293,6 +318,7 @@ impl<Arch: RelocationArch, D: Clone> Clone for SyntheticModule<Arch, D> {
             name: self.name.clone(),
             memory: self.memory.clone(),
             tls: self.tls,
+            resolve_hook: self.resolve_hook.clone(),
             user_data: self.user_data.clone(),
             names: self.names.clone(),
             symbols: self.symbols.clone(),
@@ -323,6 +349,7 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
                 Arc::new(UnmappedImageMemory::default()) => dyn ImageMemory
             ),
             tls: None,
+            resolve_hook: (),
             user_data: (),
             names: Vec::new(),
             symbols: Vec::new(),
@@ -331,15 +358,16 @@ impl<Arch: RelocationArch> SyntheticModule<Arch> {
     }
 }
 
-impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
+impl<Arch: RelocationArch, D, R> SyntheticModule<Arch, D, R> {
     /// Replaces the user data associated with this synthetic module.
     #[inline]
-    pub fn with_user_data<NewD>(self, user_data: NewD) -> SyntheticModule<Arch, NewD> {
+    pub fn with_user_data<NewD>(self, user_data: NewD) -> SyntheticModule<Arch, NewD, R> {
         SyntheticModule {
             state: self.state,
             name: self.name,
             memory: self.memory,
             tls: self.tls,
+            resolve_hook: self.resolve_hook,
             user_data,
             names: self.names,
             symbols: self.symbols,
@@ -377,6 +405,28 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
     pub fn with_tls(mut self, tls: ModuleTls) -> Self {
         self.tls = Some(tls);
         self
+    }
+
+    /// Runs a callback when a synthetic symbol is resolved.
+    ///
+    /// The callback receives the symbol's stable address and may prepare lazy
+    /// runtime state before that address is returned.
+    #[inline]
+    pub fn with_resolve_hook<F>(self, hook: F) -> SyntheticModule<Arch, D, F>
+    where
+        F: Fn(&ElfSymbol<Arch::Layout>, VmAddr) -> Result<()> + Send + Sync,
+    {
+        SyntheticModule {
+            state: self.state,
+            name: self.name,
+            memory: self.memory,
+            tls: self.tls,
+            resolve_hook: hook,
+            user_data: self.user_data,
+            names: self.names,
+            symbols: self.symbols,
+            index: self.index,
+        }
     }
 
     /// Binds this synthetic module to one runtime domain.
@@ -486,22 +536,24 @@ impl<Arch: RelocationArch, D> SyntheticModule<Arch, D> {
     }
 }
 
-impl<Arch, D: Send + Sync + 'static, Tls> From<SyntheticModule<Arch, D>> for ModuleHandle<Arch, Tls>
+impl<Arch, D, R, Tls> From<SyntheticModule<Arch, D, R>> for ModuleHandle<Arch, Tls>
 where
     Arch: RelocationArch,
     D: Send + Sync + 'static,
+    R: ResolveHook<Arch> + 'static,
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
-    fn from(module: SyntheticModule<Arch, D>) -> Self {
+    fn from(module: SyntheticModule<Arch, D, R>) -> Self {
         Self::new(module)
     }
 }
 
-impl<Arch, D: Send + Sync + 'static, Tls> Module<Arch, Tls> for SyntheticModule<Arch, D>
+impl<Arch, D, R, Tls> Module<Arch, Tls> for SyntheticModule<Arch, D, R>
 where
     Arch: RelocationArch,
     D: Send + Sync + 'static,
+    R: ResolveHook<Arch> + 'static,
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
@@ -534,11 +586,13 @@ where
             _ => {}
         }
 
-        if symbol.st_shndx().is_abs() {
-            Ok(VmAddr::new(symbol.st_value()))
+        let address = if symbol.st_shndx().is_abs() {
+            VmAddr::new(symbol.st_value())
         } else {
-            Ok(self.memory.base() + VmOffset::new(symbol.st_value()))
-        }
+            self.memory.base() + VmOffset::new(symbol.st_value())
+        };
+        self.resolve_hook.resolve(symbol, address)?;
+        Ok(address)
     }
 
     #[inline]
@@ -552,10 +606,11 @@ where
     }
 }
 
-impl<Arch, D> SymbolExports<Arch::Layout> for SyntheticModule<Arch, D>
+impl<Arch, D, R> SymbolExports<Arch::Layout> for SyntheticModule<Arch, D, R>
 where
     Arch: RelocationArch,
     D: Send + Sync,
+    R: Send + Sync,
 {
     #[inline]
     fn for_each(&self, visitor: &mut dyn FnMut(&ElfSymbol<Arch::Layout>)) {
@@ -597,6 +652,7 @@ mod tests {
         segment::ElfSegments,
         tls::{TlsModuleId, TlsTpOffset},
     };
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn synthetic_module_resolves_absolute_symbols_from_scope() {
@@ -632,6 +688,35 @@ mod tests {
         assert_eq!(symbol.symbol_type(), ElfSymbolType::FUNC);
         assert!(symbol.st_shndx().is_abs());
         assert_eq!(module.exports().symbol_name(symbol), Some("host_double"));
+    }
+
+    #[test]
+    fn resolve_hook_observes_address_and_propagates_errors() {
+        let observed = Arc::new(AtomicUsize::new(0));
+        let hook_observed = Arc::clone(&observed);
+        let module = SyntheticModule::<NativeArch>::new(
+            "__hook",
+            [SyntheticSymbol::function("entry", 0x1234usize as *const ())],
+        )
+        .with_resolve_hook(move |symbol: &ElfSymbol<_>, address| {
+            assert_eq!(symbol.st_value(), 0x1234);
+            hook_observed.store(address.get(), Ordering::Relaxed);
+            Ok(())
+        });
+        let mut lookup = SymbolLookup::new("entry");
+        let symbol = module.lookup(&mut lookup).unwrap();
+
+        let address = Module::<NativeArch, ()>::resolve_symbol(&module, symbol).unwrap();
+        assert_eq!(address, VmAddr::new(0x1234));
+        assert_eq!(observed.load(Ordering::Relaxed), 0x1234);
+
+        let failing = SyntheticModule::<NativeArch>::new(
+            "__failing_hook",
+            [SyntheticSymbol::function("entry", 0x1234usize as *const ())],
+        )
+        .with_resolve_hook(|_: &ElfSymbol<_>, _| Err(crate::custom_error("hook failed")));
+        let symbol = failing.lookup(&mut lookup).unwrap();
+        assert!(Module::<NativeArch, ()>::resolve_symbol(&failing, symbol).is_err());
     }
 
     #[cfg(feature = "version")]

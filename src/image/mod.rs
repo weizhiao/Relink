@@ -35,5 +35,5 @@ pub use scanned::{ModuleCapability, ScannedDynamic, ScannedElf, ScannedExec, Sca
 pub(crate) use search::DEFAULT_MODULE_SEARCH;
 pub use search::{ModuleSearch, SearchPathPool};
 pub(crate) use search::{PathTokens, SharedDir, normalize_dir};
-pub use synthetic::{SymbolVersion, SyntheticModule, SyntheticSymbol};
+pub use synthetic::{ResolveHook, SymbolVersion, SyntheticModule, SyntheticSymbol};
 pub use traits::{Module, SymbolExports};
