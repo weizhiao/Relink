@@ -233,7 +233,7 @@ where
 
     #[inline]
     pub(crate) const fn is_root(&self) -> bool {
-        self.entry.pinned || self.entry.roots != 0
+        self.entry.pins != 0 || self.entry.roots != 0
     }
 
     #[inline]
@@ -282,7 +282,25 @@ where
     #[inline]
     pub(crate) fn pin_root(&mut self) {
         self.release_root();
-        self.entry.pinned = true;
+        self.pin();
+    }
+
+    #[inline]
+    pub(crate) fn pin(&mut self) {
+        self.entry.pins = self
+            .entry
+            .pins
+            .checked_add(1)
+            .expect("module pin count overflow");
+    }
+
+    #[inline]
+    pub(crate) fn unpin(&mut self) {
+        self.entry.pins = self
+            .entry
+            .pins
+            .checked_sub(1)
+            .expect("module must have a matching pin");
     }
 
     #[inline]
@@ -596,7 +614,7 @@ pub(in crate::linker) struct StoredEntry<
     // finalization; the wider relocation group is owned by its root entry.
     retained: ModuleScope<Arch, Tls>,
     roots: usize,
-    pinned: bool,
+    pins: usize,
     meta: Meta,
 }
 
@@ -621,7 +639,7 @@ where
             direct_deps,
             retained,
             roots,
-            pinned: false,
+            pins: 0,
             meta,
         }
     }

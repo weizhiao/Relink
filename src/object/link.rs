@@ -227,7 +227,7 @@ where
 
                 let addr = if symbol.is_undef() {
                     let definition = resolver.find(&entry);
-                    let provider = definition.as_ref().and_then(SymDef::provider_id);
+                    let effect = definition.as_ref().map(SymDef::effect).unwrap_or_default();
                     let resolved = definition.as_ref().map(SymDef::resolve).transpose()?;
                     let mut event =
                         SymbolBindingEvent::new(core, None, symbol, entry.name(), resolved);
@@ -235,9 +235,7 @@ where
                     let Some(resolved) = event.into_resolved_addr() else {
                         return Err(unresolved_symbol_error(core, entry.name()));
                     };
-                    if let Some(provider) = provider {
-                        bindings.record(core.state(), provider);
-                    }
+                    bindings.record(effect);
                     resolved
                 } else if symbol.st_shndx().is_abs() {
                     VmAddr::new(symbol.st_value())

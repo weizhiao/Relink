@@ -10,7 +10,7 @@ use crate::{
     sync::{Arc, Weak},
     tls::TlsResolver,
 };
-use alloc::{boxed::Box, collections::BTreeMap};
+use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use spin::Mutex;
 
 struct UniqueDef<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
@@ -21,6 +21,7 @@ struct UniqueDef<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
 /// GNU unique symbol state shared by one linker context.
 pub(crate) struct SymbolRegistry<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
     unique: Mutex<BTreeMap<Box<str>, UniqueDef<Arch, Tls>>>,
+    pending_pins: Mutex<Vec<ModuleInstanceId>>,
 }
 
 impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolRegistry<Arch, Tls> {
@@ -28,7 +29,21 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolRegistry<Arch, Tls> {
     pub(crate) const fn new() -> Self {
         Self {
             unique: Mutex::new(BTreeMap::new()),
+            pending_pins: Mutex::new(Vec::new()),
         }
+    }
+
+    #[inline]
+    pub(crate) fn queue_pin(&self, provider: ModuleInstanceId) {
+        let mut pins = self.pending_pins.lock();
+        if !pins.contains(&provider) {
+            pins.push(provider);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn take_pending_pins(&self) -> Vec<ModuleInstanceId> {
+        core::mem::take(&mut *self.pending_pins.lock())
     }
 
     fn resolve_unique<'lib>(
@@ -58,8 +73,20 @@ impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> SymbolRegistry<Arch, Tls> {
             );
             (symbol, source.clone())
         };
-        source.state().mark_nodelete();
         SymDef::Unique { symbol, source }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct BindingEffect {
+    pub(crate) provider: Option<ModuleInstanceId>,
+    pin: Option<ModuleInstanceId>,
+}
+
+impl BindingEffect {
+    #[inline]
+    pub(crate) const fn pin(self) -> Option<ModuleInstanceId> {
+        self.pin
     }
 }
 
@@ -98,9 +125,18 @@ impl<'lib, Arch: RelocationArch, Tls: TlsResolver<Arch> + 'static> SymDef<'lib, 
     }
 
     #[inline]
-    pub(crate) fn provider_id(&self) -> Option<ModuleInstanceId> {
-        self.definition()
-            .map(|(_, source)| source.state().instance_id())
+    pub(crate) fn effect(&self) -> BindingEffect {
+        let provider = self
+            .definition()
+            .map(|(_, source)| source.state().instance_id());
+        BindingEffect {
+            provider,
+            pin: if matches!(self, Self::Unique { .. }) {
+                provider
+            } else {
+                None
+            },
+        }
     }
 
     #[inline]
@@ -256,8 +292,10 @@ where
         if let Some(registry) = &self.registry {
             registry.resolve_unique(name, symbol, source)
         } else {
-            source.state().mark_nodelete();
-            SymDef::defined(symbol, source.as_ref())
+            SymDef::Unique {
+                symbol: Arc::new(symbol.clone()),
+                source: source.clone(),
+            }
         }
     }
 
@@ -274,16 +312,24 @@ where
     pub(crate) fn find_copy<'find>(
         &'find self,
         entry: &SymbolEntry<'find, Arch::Layout>,
-    ) -> Option<SymDef<'find, Arch, Tls>> {
+    ) -> Option<(SymDef<'find, Arch, Tls>, BindingEffect)> {
         let source_id = self.source.source_id();
         let (symbol, source) =
             self.lookup_in_scope(entry, |source| source.source_id() != source_id)?;
-        if symbol.bind() == ElfSymbolBind::GNU_UNIQUE
-            && let Some(registry) = &self.registry
-        {
-            let _ = registry.resolve_unique(entry.name(), entry.symbol(), self.source);
-        }
-        Some(SymDef::defined(symbol, &**source))
+        let pin = if symbol.bind() != ElfSymbolBind::GNU_UNIQUE {
+            None
+        } else if let Some(registry) = &self.registry {
+            registry
+                .resolve_unique(entry.name(), entry.symbol(), self.source)
+                .effect()
+                .pin()
+        } else {
+            Some(self.source.state().instance_id())
+        };
+        let definition = SymDef::defined(symbol, &**source);
+        let mut effect = definition.effect();
+        effect.pin = pin;
+        Some((definition, effect))
     }
 
     #[cold]
@@ -496,7 +542,10 @@ mod tests {
         );
         let definition = first.find(&symbol(&source)).unwrap();
         assert_eq!(definition.resolve().unwrap(), VmAddr::new(0x100));
-        assert!(definition.definition().unwrap().1.state().is_nodelete());
+        assert_eq!(
+            definition.effect().pin(),
+            Some(definition.definition().unwrap().1.state().instance_id())
+        );
 
         let second = SymbolResolver::new(
             &source,

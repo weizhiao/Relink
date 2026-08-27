@@ -8,7 +8,7 @@ use crate::{
     memory::VmAddr,
     relocation::RelocationArch,
     runtime::DomainId,
-    sync::{Arc, AtomicBool, AtomicU8, AtomicUsize, Ordering, Weak, arc_unsize},
+    sync::{Arc, AtomicU8, AtomicUsize, Ordering, Weak, arc_unsize},
     tls::TlsResolver,
 };
 use alloc::vec::Vec;
@@ -69,8 +69,15 @@ pub struct ModuleState {
     id: ModuleInstanceId,
     domain: DomainId,
     phase: AtomicU8,
-    bindings: Mutex<Vec<ModuleInstanceId>>,
-    nodelete: AtomicBool,
+    // Relocation facts follow this concrete module across context imports.
+    // Context-specific pin counts remain owned by LinkContext.
+    effects: Mutex<ModuleEffects>,
+}
+
+#[derive(Default)]
+struct ModuleEffects {
+    bindings: Vec<ModuleInstanceId>,
+    pins: Vec<ModuleInstanceId>,
 }
 
 /// Non-owning identity of one loaded module instance.
@@ -107,8 +114,7 @@ impl ModuleState {
             id: ModuleInstanceId::new(source),
             domain,
             phase: AtomicU8::new(UNINITIALIZED),
-            bindings: Mutex::new(Vec::new()),
-            nodelete: AtomicBool::new(false),
+            effects: Mutex::new(ModuleEffects::default()),
         }
     }
 
@@ -119,8 +125,7 @@ impl ModuleState {
             id: ModuleInstanceId::new(source),
             domain,
             phase: AtomicU8::new(INITIALIZED),
-            bindings: Mutex::new(Vec::new()),
-            nodelete: AtomicBool::new(false),
+            effects: Mutex::new(ModuleEffects::default()),
         }
     }
 
@@ -142,19 +147,30 @@ impl ModuleState {
     }
 
     #[inline]
-    pub(crate) fn with_bindings<T>(&self, f: impl FnOnce(&mut Vec<ModuleInstanceId>) -> T) -> T {
-        let mut bindings = self.bindings.lock();
-        f(&mut bindings)
+    pub(crate) fn with_effects<T>(
+        &self,
+        f: impl FnOnce(&[ModuleInstanceId], &[ModuleInstanceId]) -> T,
+    ) -> T {
+        let effects = self.effects.lock();
+        f(&effects.bindings, &effects.pins)
     }
 
-    #[inline]
-    pub(crate) fn mark_nodelete(&self) {
-        self.nodelete.store(true, Ordering::Release);
-    }
-
-    #[inline]
-    pub(crate) fn is_nodelete(&self) -> bool {
-        self.nodelete.load(Ordering::Acquire)
+    pub(crate) fn install_effects(
+        &self,
+        bindings: impl IntoIterator<Item = ModuleInstanceId>,
+        pins: impl IntoIterator<Item = ModuleInstanceId>,
+    ) {
+        let mut effects = self.effects.lock();
+        for binding in bindings {
+            if binding != self.id && !effects.bindings.contains(&binding) {
+                effects.bindings.push(binding);
+            }
+        }
+        for pin in pins {
+            if !effects.pins.contains(&pin) {
+                effects.pins.push(pin);
+            }
+        }
     }
 
     /// Returns whether the module is currently initialized.
@@ -823,13 +839,9 @@ mod tests {
         let state = <SyntheticModule<NativeArch> as Module<NativeArch>>::state(&module);
         let binding = state.instance_id();
 
-        state.with_bindings(|bindings| {
-            if binding != state.instance_id() && !bindings.contains(&binding) {
-                bindings.push(binding);
-            }
-        });
+        state.install_effects([binding], []);
 
-        assert!(state.with_bindings(|bindings| bindings.is_empty()));
+        assert!(state.with_effects(|bindings, _| bindings.is_empty()));
     }
 
     #[test]

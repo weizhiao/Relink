@@ -8,7 +8,9 @@ use crate::{
     memory::{ImageMemory, RegionAccess, VmAddr},
     observer::{RelocationObserver, SymbolBindingEvent},
     relocate_context_error,
-    relocation::{HandleResult, RelocationArch, RelocationEvent, SymDef, SymbolResolver},
+    relocation::{
+        BindingEffect, HandleResult, RelocationArch, RelocationEvent, SymDef, SymbolResolver,
+    },
     segment::ElfSegments,
     tls::{TLS_GET_ADDR_SYMBOL, TlsResolver},
 };
@@ -20,6 +22,7 @@ use alloc::vec::Vec;
 /// cannot leave lifetime edges installed for an image that was never published.
 pub(crate) struct BindingDeps {
     providers: Vec<ModuleInstanceId>,
+    pins: Vec<ModuleInstanceId>,
 }
 
 impl BindingDeps {
@@ -27,26 +30,29 @@ impl BindingDeps {
     pub(crate) const fn new() -> Self {
         Self {
             providers: Vec::new(),
+            pins: Vec::new(),
         }
     }
 
     #[inline]
-    pub(crate) fn record(&mut self, source: &ModuleState, provider: ModuleInstanceId) {
-        if provider != source.instance_id() && !self.providers.contains(&provider) {
+    pub(crate) fn record(&mut self, effect: BindingEffect) {
+        if let Some(provider) = effect.provider
+            && !self.providers.contains(&provider)
+        {
             self.providers.push(provider);
+        }
+        if let Some(pin) = effect.pin()
+            && !self.pins.contains(&pin)
+        {
+            self.pins.push(pin);
         }
     }
 
     #[inline]
     pub(crate) fn install(self, state: &ModuleState) {
-        state.with_bindings(|bindings| {
-            bindings.reserve(self.providers.len());
-            for provider in self.providers {
-                if !bindings.contains(&provider) {
-                    bindings.push(provider);
-                }
-            }
-        });
+        if !self.providers.is_empty() || !self.pins.is_empty() {
+            state.install_effects(self.providers, self.pins);
+        }
     }
 }
 
@@ -199,15 +205,13 @@ where
     pub(crate) fn find_copy_symdef<'a>(
         &'a self,
         symbol: &SymbolEntry<'a, Arch::Layout>,
-    ) -> Option<SymDef<'a, Arch, Tls>> {
+    ) -> Option<(SymDef<'a, Arch, Tls>, BindingEffect)> {
         self.resolver.find_copy(symbol)
     }
 
     #[inline]
-    pub(crate) fn record_binding(&mut self, provider: Option<ModuleInstanceId>) {
-        if let Some(provider) = provider {
-            self.bindings.record(self.core.state(), provider);
-        }
+    pub(crate) fn record_binding(&mut self, effect: BindingEffect) {
+        self.bindings.record(effect);
     }
 
     #[inline]
@@ -216,14 +220,17 @@ where
         rel: &ElfRelType<Arch>,
         symbol: SymbolEntry<'_, Arch::Layout>,
     ) -> Result<Option<VmAddr>> {
-        let (resolved, provider) =
+        let (resolved, effect) =
             if Tls::OVERRIDE_TLS_GET_ADDR && symbol.name() == TLS_GET_ADDR_SYMBOL {
-                (Some(self.core.tls_resolver().bind_tls_get_addr()?), None)
+                (
+                    Some(self.core.tls_resolver().bind_tls_get_addr()?),
+                    BindingEffect::default(),
+                )
             } else {
                 let definition = self.resolver.find(&symbol);
-                let provider = definition.as_ref().and_then(SymDef::provider_id);
+                let effect = definition.as_ref().map(SymDef::effect).unwrap_or_default();
                 let resolved = definition.as_ref().map(SymDef::resolve).transpose()?;
-                (resolved, provider)
+                (resolved, effect)
             };
         let mut event = SymbolBindingEvent::new(
             self.core,
@@ -235,7 +242,7 @@ where
         self.observer.on_symbol_binding(&mut event)?;
         let resolved = event.into_resolved_addr();
         if resolved.is_some() {
-            self.record_binding(provider);
+            self.record_binding(effect);
         }
         Ok(resolved)
     }

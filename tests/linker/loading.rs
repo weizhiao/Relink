@@ -236,7 +236,9 @@ fn loads_module_root() {
 fn loads_resolved_graph() {
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
     let loaded = Linker::new()
-        .resolver(ResolvedGraphResolver)
+        .resolver(ResolvedGraphResolver {
+            pin_dependency: false,
+        })
         .run()
         .load(&mut context, "root")
         .expect("pre-resolved graph should load");
@@ -249,6 +251,91 @@ fn loads_resolved_graph() {
             .collect::<Vec<_>>(),
         vec![dep]
     );
+}
+
+#[test]
+fn resolver_pins_dependency() {
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let loaded = Linker::new()
+        .resolver(ResolvedGraphResolver {
+            pin_dependency: true,
+        })
+        .run()
+        .load(&mut context, "root")
+        .expect("pinned dependency graph should load");
+    let dependency = context.module_id("dep").expect("dependency not committed");
+
+    let unloaded = loaded.release(&mut context).expect("root release failed");
+
+    assert_eq!(unloaded.len(), 1);
+    assert_eq!(unloaded[0].module().name(), "root");
+    assert_eq!(context.module_id("dep"), Some(dependency));
+}
+
+#[test]
+fn resolver_pins_existing_dependency() {
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let dependency = context
+        .insert(GraphModule::new("dep", SyntheticModule::empty("existing")))
+        .expect("failed to insert dependency");
+    let dependency_id = dependency.id();
+    let loaded = Linker::new()
+        .resolver(ResolvedGraphResolver {
+            pin_dependency: true,
+        })
+        .run()
+        .load(&mut context, "root")
+        .expect("graph should reuse the committed dependency");
+
+    assert_eq!(context.module_id("dep"), Some(dependency_id));
+    assert!(context.release(dependency).unwrap().is_empty());
+    let unloaded = loaded.release(&mut context).unwrap();
+
+    assert_eq!(unloaded.len(), 1);
+    assert_eq!(unloaded[0].module().name(), "root");
+    assert_eq!(context.module_id("dep"), Some(dependency_id));
+}
+
+#[test]
+fn rollback_removes_resolver_pin() {
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let linker = Linker::new().resolver(ResolvedGraphResolver {
+        pin_dependency: true,
+    });
+    let mut run = linker.run();
+    let prepared = run.prepare_load(&mut context, "root").unwrap();
+    let relocated = run.relocate(prepared).unwrap();
+    let published = relocated.publish(&mut context).unwrap();
+
+    assert!(context.module_id("dep").is_some());
+    published.rollback(&mut context).unwrap();
+
+    assert!(context.is_empty());
+}
+
+#[test]
+fn rollback_removes_pin_from_existing_dependency() {
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let dependency = context
+        .insert(GraphModule::new("dep", SyntheticModule::empty("existing")))
+        .unwrap();
+    let linker = Linker::new().resolver(ResolvedGraphResolver {
+        pin_dependency: true,
+    });
+    let mut run = linker.run();
+    let prepared = run.prepare_load(&mut context, "root").unwrap();
+    let relocated = run.relocate(prepared).unwrap();
+
+    relocated
+        .publish(&mut context)
+        .unwrap()
+        .rollback(&mut context)
+        .unwrap();
+    let unloaded = context.release(dependency).unwrap();
+
+    assert_eq!(unloaded.len(), 1);
+    assert_eq!(unloaded[0].module().name(), "existing");
+    assert!(context.is_empty());
 }
 
 #[test]
@@ -428,6 +515,7 @@ fn publish_rejects_reloaded_global_provider() {
             load_provider_with_source("old-global.so", source),
         ))
         .unwrap();
+    let provider_instance = context.module(provider.id()).unwrap().state().instance_id();
     context.promote_global(provider.id()).unwrap();
     let linker = Linker::new().resolver(SingleBinaryResolver {
         key: "global",
@@ -453,7 +541,10 @@ fn publish_rejects_reloaded_global_provider() {
     let Error::Linker(LinkerError::Context { reason }) = error else {
         panic!("unexpected publication error: {error}");
     };
-    assert!(matches!(*reason, LinkContextError::ModuleChanged { .. }));
+    assert!(matches!(
+        *reason,
+        LinkContextError::DependencyMissing { id } if id == provider_instance
+    ));
     drop(context.release(replacement).unwrap());
 }
 

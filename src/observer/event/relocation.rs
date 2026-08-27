@@ -94,8 +94,8 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
     #[inline]
     pub fn bind_symdef(&mut self, r_sym: usize) -> Option<SymDef<'_, Arch, Tls>> {
         let definition = self.resolver.find(&self.symbol(r_sym));
-        if let Some(provider) = definition.as_ref().and_then(SymDef::provider_id) {
-            self.bindings.record(self.core.state(), provider);
+        if let Some(definition) = &definition {
+            self.bindings.record(definition.effect());
         }
         definition
     }

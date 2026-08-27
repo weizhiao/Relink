@@ -124,9 +124,10 @@ where
     for dep in module.direct_deps().iter().copied() {
         collect_modules(target, source, dep, visited, mapped, modules, bindings)?;
     }
-    let providers = module.handle().state().with_bindings(|bindings| {
+    let providers = module.handle().state().with_effects(|bindings, pins| {
         bindings
             .iter()
+            .chain(pins)
             .map(|binding| {
                 source
                     .committed
@@ -153,6 +154,7 @@ fn copy_modules<Arch, Tls, TargetMeta, SourceMeta>(
     TargetMeta: Default,
 {
     let mut lifecycle = Vec::with_capacity(modules.len());
+    let mut pins = Vec::new();
     for &slot in modules {
         let module = source
             .committed
@@ -182,9 +184,30 @@ fn copy_modules<Arch, Tls, TargetMeta, SourceMeta>(
                 TargetMeta::default(),
             ),
         );
+        module.handle().state().with_effects(|_, requested| {
+            for provider in requested {
+                let source_slot = source
+                    .committed
+                    .module_for_binding(*provider)
+                    .expect("pinned provider must remain committed with its dependent");
+                let target_slot = *mapped
+                    .get(source_slot)
+                    .expect("import closure must contain every pinned provider");
+                if !pins.contains(&target_slot) {
+                    pins.push(target_slot);
+                }
+            }
+        });
         lifecycle.push(target_slot);
     }
     target.committed.extend_lifecycle(&lifecycle);
+    for slot in pins {
+        target
+            .committed
+            .module_mut(slot)
+            .expect("imported pin must refer to a committed module")
+            .pin();
+    }
 }
 
 fn copy_closure<Arch, Tls, TargetMeta, SourceMeta>(
@@ -341,9 +364,9 @@ where
                     })
             };
             node.deps.iter().copied().try_for_each(&validate)?;
-            node.module
-                .state()
-                .with_bindings(|bindings| bindings.iter().copied().try_for_each(validate))?;
+            node.module.state().with_effects(|bindings, pins| {
+                bindings.iter().chain(pins).copied().try_for_each(validate)
+            })?;
         }
 
         let mut slots = BTreeMap::<ModuleInstanceId, ModuleSlot>::new();
@@ -375,6 +398,25 @@ where
             })
             .collect::<Vec<_>>();
 
+        let mut pins = Vec::new();
+        for node in &planned {
+            if node.existing.is_some() {
+                continue;
+            }
+            node.module.state().with_effects(|_, requested| {
+                for provider in requested {
+                    let slot = slots
+                        .get(provider)
+                        .copied()
+                        .or_else(|| self.committed.module_for_binding(*provider))
+                        .expect("validated pin must have a module slot");
+                    if !pins.contains(&slot) {
+                        pins.push(slot);
+                    }
+                }
+            });
+        }
+
         let mut lifecycle = Vec::with_capacity(planned.len());
         let mut leases = Vec::with_capacity(planned.len());
         for (node, deps) in planned.into_iter().zip(resolved) {
@@ -396,6 +438,12 @@ where
             leases.push(ModuleLease::new(self.committed.make_module_id(slot)));
         }
         self.committed.extend_lifecycle(&lifecycle);
+        for slot in pins {
+            self.committed
+                .module_mut(slot)
+                .expect("inserted pin must refer to a committed module")
+                .pin();
+        }
         Ok(leases.into_boxed_slice())
     }
 

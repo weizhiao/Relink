@@ -404,7 +404,7 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use crate::arch::NativeArch;
+    use crate::{arch::NativeArch, linker::resolver::ResolvedKind};
     use std::{fs, path::Path as StdPath};
 
     fn module_search(
@@ -454,9 +454,13 @@ mod tests {
             request.tokens(),
             request.loaders,
         );
-        match <SearchPathResolver as KeyResolver<NativeArch>>::resolve(resolver, req) {
-            Ok(ResolvedKey::Load(reader)) => Some(PathBuf::from(reader.path().as_str())),
-            Ok(_) | Err(_) => None,
+        match <SearchPathResolver as KeyResolver<NativeArch>>::resolve(resolver, req)
+            .ok()?
+            .into_parts()
+            .0
+        {
+            ResolvedKind::Load(reader) => Some(PathBuf::from(reader.path().as_str())),
+            ResolvedKind::Module { .. } => None,
         }
     }
 

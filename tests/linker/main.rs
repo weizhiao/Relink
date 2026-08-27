@@ -53,7 +53,9 @@ struct SyntheticDependencyResolver {
 
 struct SyntheticRootResolver;
 
-struct ResolvedGraphResolver;
+struct ResolvedGraphResolver {
+    pin_dependency: bool,
+}
 
 extern "C" fn synthetic_value() -> i32 {
     42
@@ -236,13 +238,18 @@ impl KeyResolver for ResolvedGraphResolver {
         req: ResolveRequest<'_, &'static str>,
     ) -> elf_loader::Result<ResolvedKey<'cfg>> {
         match req.input() {
-            ResolveInput::Root { root } => Ok(ResolvedKey::module(
-                SyntheticModule::empty(*root),
-                [ResolvedDependency::new(
-                    "dep",
-                    ResolvedKey::module(SyntheticModule::empty("dep"), Vec::new()),
-                )],
-            )),
+            ResolveInput::Root { root } => {
+                let dependency = ResolvedKey::module(SyntheticModule::empty("dep"), Vec::new());
+                let dependency = if self.pin_dependency {
+                    dependency.pinned()
+                } else {
+                    dependency
+                };
+                Ok(ResolvedKey::module(
+                    SyntheticModule::empty(*root),
+                    [ResolvedDependency::new("dep", dependency)],
+                ))
+            }
             ResolveInput::Dependency { .. } => {
                 unreachable!("the synthetic graph is already resolved")
             }

@@ -5,7 +5,7 @@ use super::{
 use crate::{
     LinkContextError, LinkerError, Result,
     entity::EntitySet,
-    image::{LoadedCore, ModuleHandle, ModuleScope, RawDynamic},
+    image::{LoadedCore, ModuleHandle, ModuleInstanceId, ModuleScope, RawDynamic},
     input::ModuleSourceId,
     memory::RegionAccess,
     relocation::RelocationArch,
@@ -113,6 +113,7 @@ pub(crate) struct ResolveSession<P, Arch: RelocationArch, Tls: TlsResolver<Arch>
     group_order: Vec<ModuleSlot>,
     bindings: BTreeMap<ModuleKey, Vec<ModuleSlot>>,
     sources: BTreeMap<ModuleSourceId, ModuleSlot>,
+    pins: Vec<ModuleSlot>,
 }
 
 impl<P, Arch, Tls> ResolveSession<P, Arch, Tls>
@@ -130,6 +131,7 @@ where
             group_order: Vec::new(),
             bindings: BTreeMap::new(),
             sources: BTreeMap::new(),
+            pins: Vec::new(),
         }
     }
 
@@ -167,6 +169,13 @@ where
     pub(crate) fn stage_source(&mut self, id: ModuleSourceId, module: ModuleSlot) {
         if let Some(previous) = self.sources.insert(id, module) {
             assert_eq!(previous, module, "pending module sources must be unique");
+        }
+    }
+
+    #[inline]
+    pub(crate) fn pin(&mut self, slot: ModuleSlot) {
+        if !self.pins.contains(&slot) {
+            self.pins.push(slot);
         }
     }
 
@@ -261,6 +270,7 @@ where
             group_order,
             bindings,
             sources,
+            pins,
         } = self;
         (
             dynamics,
@@ -272,6 +282,7 @@ where
                 group_order,
                 bindings,
                 sources,
+                pins,
             },
         )
     }
@@ -365,7 +376,13 @@ pub(crate) struct PublishSession<Arch: RelocationArch, Tls: TlsResolver<Arch> = 
     modules: BTreeMap<ModuleSlot, ReadyModule<Arch, Tls>>,
     bindings: BTreeMap<ModuleKey, Vec<ModuleSlot>>,
     pending_sources: BTreeMap<ModuleSourceId, ModuleSlot>,
+    pins: Vec<ModuleSlot>,
     lifecycle: Vec<ModuleSlot>,
+}
+
+pub(crate) struct CommitResult {
+    pub(crate) modules: Box<[ModuleId]>,
+    pub(crate) pins: Box<[ModuleSlot]>,
 }
 
 impl<D: Send + Sync + 'static, Arch, R, Tls> LoadSession<D, Arch, R, Tls>
@@ -539,6 +556,7 @@ where
             group_order: _,
             bindings,
             sources,
+            pins,
         } = resolve;
         assert!(
             dynamics.is_empty() && modules.is_empty(),
@@ -549,6 +567,7 @@ where
             modules: ready_to_commit,
             bindings,
             pending_sources: sources,
+            pins,
             lifecycle,
         }
     }
@@ -576,7 +595,7 @@ where
     pub(crate) fn commit_into<Meta>(
         self,
         committed: &mut CommittedStorage<Meta, Arch, Tls>,
-    ) -> Result<Box<[ModuleId]>>
+    ) -> Result<CommitResult>
     where
         Meta: Default,
     {
@@ -585,6 +604,7 @@ where
             modules,
             bindings,
             pending_sources,
+            mut pins,
             lifecycle,
         } = self;
         let mut ready = modules;
@@ -611,21 +631,34 @@ where
         for (&slot, entry) in &ready {
             let module = entry.module();
             debug_assert_eq!(pending_sources.get(&module.source_id()), Some(&slot));
-            let providers_available = module.state().with_bindings(|bindings| {
-                bindings.iter().copied().all(|provider| {
-                    pending_sources
-                        .get(&provider.source_id())
-                        .and_then(|slot| ready.get(slot))
-                        .is_some_and(|entry| provider == entry.module().state().instance_id())
-                        || committed.module_for_binding(provider).is_some()
-                })
+            let find_provider = |provider: ModuleInstanceId| {
+                pending_sources
+                    .get(&provider.source_id())
+                    .and_then(|slot| ready.get(slot).map(|entry| (*slot, entry)))
+                    .filter(|(_, entry)| provider == entry.module().state().instance_id())
+                    .map(|(slot, _)| slot)
+                    .or_else(|| committed.module_for_binding(provider))
+            };
+            let missing_provider = module.state().with_effects(|bindings, requested_pins| {
+                for provider in bindings.iter().copied() {
+                    if find_provider(provider).is_none() {
+                        return Some(provider);
+                    }
+                }
+                for provider in requested_pins.iter().copied() {
+                    let Some(slot) = find_provider(provider) else {
+                        return Some(provider);
+                    };
+                    if !pins.contains(&slot) {
+                        pins.push(slot);
+                    }
+                }
+                None
             });
-            if !providers_available {
-                let generation = committed.generation(slot);
-                return Err(LinkerError::context(LinkContextError::ModuleChanged {
-                    id: ModuleId::from_slot(committed.context(), slot, generation),
-                })
-                .into());
+            if let Some(id) = missing_provider {
+                return Err(
+                    LinkerError::context(LinkContextError::DependencyMissing { id }).into(),
+                );
             }
         }
         for &slot in &lifecycle {
@@ -654,6 +687,15 @@ where
             }
         }
         committed.extend_lifecycle(&lifecycle);
-        Ok(committed_ids.into_boxed_slice())
+        for &slot in &pins {
+            committed
+                .module_mut(slot)
+                .expect("resolved pin must refer to a committed module")
+                .pin();
+        }
+        Ok(CommitResult {
+            modules: committed_ids.into_boxed_slice(),
+            pins: pins.into_boxed_slice(),
+        })
     }
 }

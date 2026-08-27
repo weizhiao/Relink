@@ -161,12 +161,11 @@ where
         let Some(symdef) = resolver.find(symbol) else {
             return Ok(None);
         };
-        if let Some(provider) = symdef.provider_id() {
-            source.state().with_bindings(|bindings| {
-                if provider != source.state().instance_id() && !bindings.contains(&provider) {
-                    bindings.push(provider);
-                }
-            });
+        let effect = symdef.effect();
+        let pin = effect.pin();
+        source.state().install_effects(effect.provider, pin);
+        if let (Some(symbols), Some(pin)) = (symbols.as_ref(), pin) {
+            symbols.queue_pin(pin);
         }
         symdef.resolve().map(Some)
     }

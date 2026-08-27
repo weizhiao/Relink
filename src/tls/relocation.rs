@@ -2,10 +2,9 @@ use super::defs::{ModuleTls, TlsDescRequest};
 use crate::{
     ByteRepr, RelocReason, Result,
     elf::{ElfLayout, ElfRelEntry, ElfRelType, ElfWord},
-    image::ModuleInstanceId,
     memory::{ImageMemory, ImageMemoryExt, RegionAccess, VmAddr, VmOffset},
     observer::RelocationObserver,
-    relocation::{RelocHelper, RelocationArch},
+    relocation::{BindingEffect, RelocHelper, RelocationArch},
     tls::TlsResolver,
 };
 
@@ -17,7 +16,7 @@ pub(crate) enum TlsRelocOutcome {
 struct TlsDef {
     offset: usize,
     module: ModuleTls,
-    provider: ModuleInstanceId,
+    effect: BindingEffect,
 }
 
 impl<'find, D: Send + Sync + 'static, Arch, R, Tls, Obs, H, Memory>
@@ -40,6 +39,7 @@ where
         if symdef.is_weak_undef() {
             Err(TlsRelocOutcome::Applied)
         } else {
+            let effect = symdef.effect();
             let (symbol, source) = symdef
                 .definition()
                 .expect("defined TLS symbol must retain its provider");
@@ -49,7 +49,7 @@ where
             Ok(TlsDef {
                 offset: symbol.st_value(),
                 module,
-                provider: source.state().instance_id(),
+                effect,
             })
         }
     }
@@ -61,7 +61,7 @@ where
         let base = memory.base();
         let place = base + rel.r_offset();
         let r_addend = rel.read_addend(memory, place)?;
-        let mut provider = None;
+        let mut effect = BindingEffect::default();
 
         match r_type {
             value if Arch::DTPOFF == value => {
@@ -72,7 +72,7 @@ where
                         Ok(symbol) => symbol,
                         Err(outcome) => return Ok(outcome),
                     };
-                    provider = Some(symbol.provider);
+                    effect = symbol.effect;
                     symbol.offset
                 };
                 let tls_val = VmAddr::new(symbol_value)
@@ -94,7 +94,7 @@ where
                         Ok(symbol) => symbol,
                         Err(outcome) => return Ok(outcome),
                     };
-                    provider = Some(symbol.provider);
+                    effect = symbol.effect;
                     Some(symbol.module)
                 };
                 let Some(tls) = tls else {
@@ -116,7 +116,7 @@ where
                         Ok(symbol) => symbol,
                         Err(outcome) => return Ok(outcome),
                     };
-                    provider = Some(symbol.provider);
+                    effect = symbol.effect;
                     (Some(symbol.module), symbol.offset)
                 };
                 let Some(tp_offset) = tls.and_then(ModuleTls::tp_offset) else {
@@ -142,7 +142,7 @@ where
                         addend: r_addend as usize,
                     },
                     Some(symdef) => {
-                        provider = symdef.provider_id();
+                        effect = symdef.effect();
                         let (sym, source) = symdef
                             .definition()
                             .expect("defined TLS symbol must retain its provider");
@@ -173,7 +173,7 @@ where
             }
             _ => unreachable!("handle_tls_reloc called with a non-TLS relocation"),
         }
-        self.record_binding(provider);
+        self.record_binding(effect);
         Ok(TlsRelocOutcome::Applied)
     }
 }

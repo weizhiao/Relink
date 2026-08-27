@@ -1,7 +1,7 @@
 use super::{
     resolver::{
         DependencySource, KeyResolver, LoaderVisitor, ResolveRequest, ResolvedDependency,
-        ResolvedKey,
+        ResolvedKey, ResolvedKind,
     },
     session::ResolveSession,
     storage::{CommittedStorage, ModuleKey, ModuleSlot},
@@ -387,32 +387,39 @@ where
         M: Mmap<Region = R>,
         Exec: CodeExecutor<Arch> + Clone,
     {
-        if let Some(slot) = self.known_module(&entry_key) {
-            return Ok(slot);
-        }
-
-        match resolved {
-            ResolvedKey::Load(reader) => {
-                if let Some(slot) = self.module_for_source(reader.source_id()) {
-                    self.session.bind_key(entry_key, slot);
-                    return Ok(slot);
+        let (resolved, pinned) = resolved.into_parts();
+        let slot = if let Some(slot) = self.known_module(&entry_key) {
+            slot
+        } else {
+            match resolved {
+                ResolvedKind::Load(reader) => {
+                    if let Some(slot) = self.module_for_source(reader.source_id()) {
+                        self.session.bind_key(entry_key, slot);
+                        slot
+                    } else {
+                        let raw = loader.load_dynamic(reader)?;
+                        self.stage_dynamic(entry_key, raw, parent)
+                    }
                 }
-                let raw = loader.load_dynamic(reader)?;
-                Ok(self.stage_dynamic(entry_key, raw, parent))
-            }
-            ResolvedKey::Module { module, deps } => {
-                self.committed.ensure_domain(module.domain_id())?;
-                if let Some(slot) = self.module_for_source(module.source_id()) {
-                    self.session.bind_key(entry_key, slot);
-                    return Ok(slot);
+                ResolvedKind::Module { module, deps } => {
+                    self.committed.ensure_domain(module.domain_id())?;
+                    if let Some(slot) = self.module_for_source(module.source_id()) {
+                        self.session.bind_key(entry_key, slot);
+                        slot
+                    } else {
+                        let direct_deps =
+                            self.stage_module_deps(deps, loader, |ctx, key, dep, loader| {
+                                ctx.stage::<Obs, M, Exec>(key, dep, parent, loader)
+                            })?;
+                        self.stage_module(entry_key, module, direct_deps)
+                    }
                 }
-                let direct_deps =
-                    self.stage_module_deps(deps, loader, |ctx, key, dep, loader| {
-                        ctx.stage::<Obs, M, Exec>(key, dep, parent, loader)
-                    })?;
-                Ok(self.stage_module(entry_key, module, direct_deps))
             }
+        };
+        if pinned {
+            self.session.pin(slot);
         }
+        Ok(slot)
     }
 
     pub(super) fn resolve_graph<Obs, M, Exec, Resolver>(
@@ -478,34 +485,41 @@ where
         M: Mmap,
         Exec: CodeExecutor<Arch> + Clone,
     {
-        if let Some(slot) = self.known_module(&entry_key) {
-            return Ok(slot);
-        }
-
-        match resolved {
-            ResolvedKey::Load(reader) => {
-                if let Some(slot) = self.module_for_source(reader.source_id()) {
-                    self.session.bind_key(entry_key, slot);
-                    return Ok(slot);
+        let (resolved, pinned) = resolved.into_parts();
+        let slot = if let Some(slot) = self.known_module(&entry_key) {
+            slot
+        } else {
+            match resolved {
+                ResolvedKind::Load(reader) => {
+                    if let Some(slot) = self.module_for_source(reader.source_id()) {
+                        self.session.bind_key(entry_key, slot);
+                        slot
+                    } else {
+                        let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
+                            return Err(ParsePhdrError::MissingDynamicSection.into());
+                        };
+                        self.stage_dynamic(entry_key, module, parent)
+                    }
                 }
-                let ScannedElf::Dynamic(module) = loader.scan(reader)? else {
-                    return Err(ParsePhdrError::MissingDynamicSection.into());
-                };
-                Ok(self.stage_dynamic(entry_key, module, parent))
-            }
-            ResolvedKey::Module { module, deps } => {
-                self.committed.ensure_domain(module.domain_id())?;
-                if let Some(slot) = self.module_for_source(module.source_id()) {
-                    self.session.bind_key(entry_key, slot);
-                    return Ok(slot);
+                ResolvedKind::Module { module, deps } => {
+                    self.committed.ensure_domain(module.domain_id())?;
+                    if let Some(slot) = self.module_for_source(module.source_id()) {
+                        self.session.bind_key(entry_key, slot);
+                        slot
+                    } else {
+                        let direct_deps =
+                            self.stage_module_deps(deps, loader, |ctx, key, dep, loader| {
+                                ctx.stage::<D, Obs, M, Exec>(key, dep, parent, loader)
+                            })?;
+                        self.stage_module(entry_key, module, direct_deps)
+                    }
                 }
-                let direct_deps =
-                    self.stage_module_deps(deps, loader, |ctx, key, dep, loader| {
-                        ctx.stage::<D, Obs, M, Exec>(key, dep, parent, loader)
-                    })?;
-                Ok(self.stage_module(entry_key, module, direct_deps))
             }
+        };
+        if pinned {
+            self.session.pin(slot);
         }
+        Ok(slot)
     }
 
     fn resolve_graph<D, Obs, M, Exec, Resolver>(

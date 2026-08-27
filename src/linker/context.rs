@@ -228,7 +228,7 @@ where
             .expect("validated module id must refer to committed state")
             .handle()
             .state()
-            .with_bindings(|bindings| {
+            .with_effects(|bindings, _| {
                 bindings
                     .iter()
                     .filter_map(|binding| self.committed.module_for_binding(*binding))
@@ -362,6 +362,14 @@ where
         }
 
         let mut global = self.global.write();
+        for provider in self.symbols.take_pending_pins() {
+            if let Some(slot) = self.committed.module_for_binding(provider) {
+                self.committed
+                    .module_mut(slot)
+                    .expect("lazy pin provider must remain committed")
+                    .pin();
+            }
+        }
         let mut reachable = EntitySet::default();
         let mut pending = self
             .committed
@@ -369,7 +377,7 @@ where
             .filter(|slot| {
                 self.committed
                     .module(*slot)
-                    .is_some_and(|module| module.is_root() || module.handle().state().is_nodelete())
+                    .is_some_and(|module| module.is_root())
             })
             .collect::<Vec<_>>();
 
@@ -382,7 +390,7 @@ where
                 .module(slot)
                 .expect("lifecycle must only contain committed modules");
             pending.extend(module.direct_deps().iter().copied());
-            module.handle().state().with_bindings(|bindings| {
+            module.handle().state().with_effects(|bindings, _| {
                 pending.extend(
                     bindings
                         .iter()
@@ -648,6 +656,51 @@ mod tests {
 
         drop(context);
         assert_eq!(calls.lock().as_slice(), &["pinned", "dependency"]);
+    }
+
+    fn modules_with_pinned_binding() -> (ModuleHandle<NativeArch>, ModuleHandle<NativeArch>) {
+        let provider = ModuleHandle::new(SyntheticModule::empty("provider"));
+        let owner = ModuleHandle::new(SyntheticModule::empty("owner"));
+        let provider_id = provider.state().instance_id();
+        owner.state().install_effects([provider_id], [provider_id]);
+        (provider, owner)
+    }
+
+    #[test]
+    fn insert_applies_binding_pin() {
+        let (provider, owner) = modules_with_pinned_binding();
+        let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+        let mut leases = context
+            .insert_batch([node("provider", provider), node("owner", owner)])
+            .unwrap()
+            .into_vec();
+        let owner = leases.pop().unwrap();
+        let provider = leases.pop().unwrap();
+
+        assert!(context.release(provider).unwrap().is_empty());
+        let unloaded = context.release(owner).unwrap();
+
+        assert_eq!(unloaded.len(), 1);
+        assert_eq!(unloaded[0].module().name(), "owner");
+        assert!(context.module_id("provider").is_some());
+    }
+
+    #[test]
+    fn import_applies_binding_pin() {
+        let (provider, owner) = modules_with_pinned_binding();
+        let mut source = LinkContext::<()>::new(DomainId::PROCESS);
+        let leases = source
+            .insert_batch([node("provider", provider), node("owner", owner)])
+            .unwrap();
+        let owner = leases[1].id();
+        let mut target = LinkContext::<()>::new(DomainId::PROCESS);
+
+        let owner = target.import(&source, owner).unwrap();
+        let unloaded = target.release(owner).unwrap();
+
+        assert_eq!(unloaded.len(), 1);
+        assert_eq!(unloaded[0].module().name(), "owner");
+        assert!(target.module_id("provider").is_some());
     }
 
     #[test]

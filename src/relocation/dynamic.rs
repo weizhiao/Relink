@@ -347,16 +347,15 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
                 // Handle copy relocations (typically for global data)
                 let symbol = helper.symbol_entry(rel);
                 let len = symbol.symbol().st_size();
-                if let Some(symdef) = helper.find_copy_symdef(&symbol)
+                if let Some((symdef, effect)) = helper.find_copy_symdef(&symbol)
                     && let Some((symbol, source)) = symdef.definition()
                 {
-                    let provider = symdef.provider_id();
                     let mut src = vec![0; len];
                     source
                         .memory()
                         .read_bytes(source.resolve_symbol(symbol)?, &mut src)?;
                     helper.memory().write_bytes(base + rel.r_offset(), &src)?;
-                    helper.record_binding(provider);
+                    helper.record_binding(effect);
                     continue;
                 }
                 failure_reason = RelocReason::UnknownSymbol;

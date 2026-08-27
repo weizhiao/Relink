@@ -4,7 +4,7 @@ use super::{
     resolve::LoadResolveContext,
     resolver::KeyResolver,
     scan::{LinkPipeline, MappedRuntimeMemory},
-    session::{LoadSession, PublishSession, ResolveSession},
+    session::{CommitResult, LoadSession, PublishSession, ResolveSession},
     storage::{ContextId, ModuleId, ModuleKey, ModuleLease, ModuleSlot},
 };
 use crate::{
@@ -447,12 +447,13 @@ where
         }
 
         let initializers = self.session.initializers();
-        let modules = self.session.commit_into(&mut context.committed)?;
+        let CommitResult { modules, pins } = self.session.commit_into(&mut context.committed)?;
         let root_id = context.committed.make_module_id(self.root);
         let lease = context.acquire(root_id)?;
         Ok(PublishedLoad {
             lease,
             modules,
+            pins,
             initializers,
         })
     }
@@ -463,6 +464,7 @@ where
 pub struct PublishedLoad<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
     lease: ModuleLease,
     modules: Box<[ModuleId]>,
+    pins: Box<[ModuleSlot]>,
     initializers: Box<[ModuleHandle<Arch, Tls>]>,
 }
 
@@ -520,6 +522,13 @@ where
             .into());
         }
 
+        for slot in self.pins.iter().copied() {
+            context
+                .committed
+                .module_mut(slot)
+                .expect("published pin must remain committed until rollback")
+                .unpin();
+        }
         context.release(self.lease)?;
         Ok(())
     }
