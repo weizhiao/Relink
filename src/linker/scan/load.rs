@@ -69,6 +69,10 @@ where
         context
             .committed
             .ensure_domain(self.linker.loader.domain_id())?;
+        let caller = self
+            .caller
+            .map(|id| context.committed.module_slot(id))
+            .transpose()?;
         let key = self.linker.resolver.root_key(&root);
         if let Some(prepared) = PreparedLoad::visible(context, key) {
             return Ok(prepared);
@@ -86,7 +90,7 @@ where
                 .with_observer(&mut self.observer);
             let mut resolve_context =
                 ScanResolveContext::new(&mut context.committed, &mut session, tokens);
-            resolve_context.resolve_root(root, key, None, &mut loader, &self.linker.resolver)?
+            resolve_context.resolve_root(root, key, caller, &mut loader, &self.linker.resolver)?
         };
 
         let (dynamics, mut session) = session.split_dynamics();

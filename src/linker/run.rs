@@ -41,6 +41,7 @@ pub struct LinkerRun<
     pub(super) linker: &'run Linker<Arch, L, R, RelocBinder, Tls>,
     pub(super) pipeline: LinkPipeline<'pipe, Arch, Tls>,
     pub(super) observer: Obs,
+    pub(super) caller: Option<ModuleId>,
     pub(super) lookup_order: LookupOrder,
     pub(super) scratch_order: Vec<ModuleSlot>,
 }
@@ -64,6 +65,7 @@ where
             linker: self.linker,
             pipeline: self.pipeline,
             observer,
+            caller: self.caller,
             lookup_order: self.lookup_order,
             scratch_order: self.scratch_order,
         }
@@ -79,6 +81,7 @@ where
             linker,
             pipeline,
             observer,
+            caller,
             lookup_order,
             scratch_order,
         } = self;
@@ -87,6 +90,7 @@ where
             linker,
             pipeline: configure(pipeline),
             observer,
+            caller,
             lookup_order,
             scratch_order,
         }
@@ -96,6 +100,13 @@ where
     #[inline]
     pub fn lookup_order(mut self, order: LookupOrder) -> Self {
         self.lookup_order = order;
+        self
+    }
+
+    /// Sets the module whose search context is used to resolve roots.
+    #[inline]
+    pub fn with_caller(mut self, caller: impl Into<Option<ModuleId>>) -> Self {
+        self.caller = caller.into();
         self
     }
 }
@@ -125,34 +136,7 @@ where
     where
         Meta: Default,
     {
-        self.load_with_caller(context, root, None)
-    }
-
-    /// Loads one root on behalf of a module already committed to `context`.
-    ///
-    /// Initialization failure is rolled back before the error is returned.
-    pub fn load_from<Meta>(
-        &mut self,
-        context: &mut LinkContext<Meta, Arch, Tls>,
-        root: Resolver::Root,
-        caller: ModuleId,
-    ) -> Result<LoadResult>
-    where
-        Meta: Default,
-    {
-        self.load_with_caller(context, root, Some(caller))
-    }
-
-    fn load_with_caller<Meta>(
-        &mut self,
-        context: &mut LinkContext<Meta, Arch, Tls>,
-        root: Resolver::Root,
-        caller: Option<ModuleId>,
-    ) -> Result<LoadResult>
-    where
-        Meta: Default,
-    {
-        let prepared = self.prepare_load_with_caller(context, root, caller)?;
+        let prepared = self.prepare_load(context, root)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -161,35 +145,48 @@ where
         }
     }
 
+    /// Resolves `root` and returns its committed identity without loading it.
+    pub fn resolve_committed<Meta>(
+        &mut self,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        root: Resolver::Root,
+    ) -> Result<Option<ModuleId>> {
+        let caller = self
+            .caller
+            .map(|id| context.committed.module_slot(id))
+            .transpose()?;
+        let key = ModuleKey::from(self.linker.resolver.root_key(&root));
+        if let Some(id) = context.module_id(&key) {
+            return Ok(Some(id));
+        }
+
+        let slot = {
+            let mut session: ResolveSession<RawDynamic<D, Arch, M::Region, Tls>, Arch, Tls> =
+                ResolveSession::new();
+            let tokens = context.search_paths.tokens();
+            let resolve_context =
+                LoadResolveContext::new(&mut context.committed, &mut session, tokens);
+            resolve_context.resolve_committed_root(root, caller, &self.linker.resolver)?
+        };
+        let Some(slot) = slot else {
+            return Ok(None);
+        };
+        let id = context.committed.make_module_id(slot);
+        context.add_alias(id, key)?;
+        Ok(Some(id))
+    }
+
     /// Resolves and maps one module group without executing target code.
     pub fn prepare_load<Meta>(
         &mut self,
         context: &mut LinkContext<Meta, Arch, Tls>,
         root: Resolver::Root,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
-        self.prepare_load_with_caller(context, root, None)
-    }
-
-    /// Resolves and maps one caller-relative root without executing target code.
-    pub fn prepare_load_from<Meta>(
-        &mut self,
-        context: &mut LinkContext<Meta, Arch, Tls>,
-        root: Resolver::Root,
-        caller: ModuleId,
-    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
-        self.prepare_load_with_caller(context, root, Some(caller))
-    }
-
-    fn prepare_load_with_caller<Meta>(
-        &mut self,
-        context: &mut LinkContext<Meta, Arch, Tls>,
-        root: Resolver::Root,
-        caller: Option<ModuleId>,
-    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
         context
             .committed
             .ensure_domain(self.linker.loader.domain_id())?;
-        let caller = caller
+        let caller = self
+            .caller
             .map(|id| context.committed.module_slot(id))
             .transpose()?;
         let key = self.linker.resolver.root_key(&root);
@@ -224,36 +221,7 @@ where
     where
         Meta: Default,
     {
-        self.load_mapped_with_caller(context, key, raw, None)
-    }
-
-    /// Loads a pre-mapped root on behalf of a module already committed to `context`.
-    ///
-    /// Initialization failure is rolled back before the error is returned.
-    pub fn load_mapped_from<Meta>(
-        &mut self,
-        context: &mut LinkContext<Meta, Arch, Tls>,
-        key: ModuleKey,
-        raw: RawDynamic<D, Arch, M::Region, Tls>,
-        caller: ModuleId,
-    ) -> Result<LoadResult>
-    where
-        Meta: Default,
-    {
-        self.load_mapped_with_caller(context, key, raw, Some(caller))
-    }
-
-    fn load_mapped_with_caller<Meta>(
-        &mut self,
-        context: &mut LinkContext<Meta, Arch, Tls>,
-        key: ModuleKey,
-        raw: RawDynamic<D, Arch, M::Region, Tls>,
-        caller: Option<ModuleId>,
-    ) -> Result<LoadResult>
-    where
-        Meta: Default,
-    {
-        let prepared = self.prepare_mapped_with_caller(context, key, raw, caller)?;
+        let prepared = self.prepare_mapped(context, key, raw)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -269,32 +237,12 @@ where
         key: ModuleKey,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
-        self.prepare_mapped_with_caller(context, key, raw, None)
-    }
-
-    /// Resolves dependencies for a caller-relative pre-mapped root without relocating it.
-    pub fn prepare_mapped_from<Meta>(
-        &mut self,
-        context: &mut LinkContext<Meta, Arch, Tls>,
-        key: ModuleKey,
-        raw: RawDynamic<D, Arch, M::Region, Tls>,
-        caller: ModuleId,
-    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
-        self.prepare_mapped_with_caller(context, key, raw, Some(caller))
-    }
-
-    fn prepare_mapped_with_caller<Meta>(
-        &mut self,
-        context: &mut LinkContext<Meta, Arch, Tls>,
-        key: ModuleKey,
-        raw: RawDynamic<D, Arch, M::Region, Tls>,
-        caller: Option<ModuleId>,
-    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
         context
             .committed
             .ensure_domain(self.linker.loader.domain_id())?;
         context.committed.ensure_domain(raw.domain_id())?;
-        let caller = caller
+        let caller = self
+            .caller
             .map(|id| context.committed.module_slot(id))
             .transpose()?;
         if let Some(prepared) = PreparedLoad::visible(context, &key) {

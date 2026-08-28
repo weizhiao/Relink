@@ -231,6 +231,24 @@ where
         resolver.resolve(req)
     }
 
+    pub(crate) fn resolve_committed_root<Resolver>(
+        &self,
+        root: Resolver::Root,
+        caller: Option<ModuleSlot>,
+        resolver: &Resolver,
+    ) -> Result<Option<ModuleSlot>>
+    where
+        Resolver: KeyResolver<Arch, Tls>,
+    {
+        let resolved = self.resolve_root_input(root, caller, resolver)?;
+        let (resolved, _) = resolved.into_parts();
+        let source = match resolved {
+            ResolvedKind::Load(reader) => reader.source_id(),
+            ResolvedKind::Module { module, .. } => module.source_id(),
+        };
+        Ok(self.module_for_source(source))
+    }
+
     fn direct_deps_for<'cfg, D, Obs, F, M, Exec, Resolver>(
         &mut self,
         slot: ModuleSlot,

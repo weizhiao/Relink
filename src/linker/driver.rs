@@ -274,6 +274,7 @@ where
             linker: self,
             pipeline: LinkPipeline::new(),
             observer: (),
+            caller: None,
             lookup_order: LookupOrder::GlobalFirst,
             scratch_order: Vec::new(),
         }

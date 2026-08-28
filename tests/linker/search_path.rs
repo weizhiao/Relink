@@ -33,6 +33,44 @@ fn loads_dependency_chain() {
 }
 
 #[test]
+fn resolves_committed_by_source_identity() {
+    let fixtures = crate::fixture::fixtures();
+    let alias_path = fixtures
+        .rpath_leaf_path
+        .with_file_name(format!("libleaf-loaded-{}.so", std::process::id()));
+    let _ = fs::remove_file(&alias_path);
+    fs::hard_link(&fixtures.rpath_leaf_path, &alias_path).unwrap();
+
+    let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
+    let alias = PathBuf::from(alias_path.to_str().unwrap());
+    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+
+    assert_eq!(
+        linker
+            .run()
+            .resolve_committed(&mut context, original.clone())
+            .unwrap(),
+        None
+    );
+    assert_eq!(context.load_order().count(), 0);
+
+    let loaded = linker.run().load(&mut context, original).unwrap();
+    assert_eq!(
+        linker
+            .run()
+            .resolve_committed(&mut context, alias.clone())
+            .unwrap(),
+        Some(loaded.root())
+    );
+    assert_eq!(context.module_id(alias.as_str()), Some(loaded.root()));
+    assert_eq!(context.load_order().count(), 1);
+
+    loaded.release(&mut context).unwrap();
+    fs::remove_file(alias_path).unwrap();
+}
+
+#[test]
 fn inherits_rpath() {
     let fixtures = crate::fixture::fixtures();
     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
@@ -122,7 +160,8 @@ fn loads_from_module_rpath() {
         .unwrap();
     let loaded = linker
         .run()
-        .load_from(&mut context, PathBuf::from("libleaf.so"), caller.root())
+        .with_caller(caller.root())
+        .load(&mut context, PathBuf::from("libleaf.so"))
         .unwrap();
 
     let value = unsafe {
@@ -157,12 +196,8 @@ fn loads_mapped_from_module_rpath() {
         .unwrap();
     let loaded = linker
         .run()
-        .load_mapped_from(
-            &mut context,
-            "mapped-middle".into(),
-            raw.into(),
-            caller.root(),
-        )
+        .with_caller(caller.root())
+        .load_mapped(&mut context, "mapped-middle".into(), raw.into())
         .unwrap();
 
     let value = unsafe {
