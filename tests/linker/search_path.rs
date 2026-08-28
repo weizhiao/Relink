@@ -1,9 +1,9 @@
 use std::{fs, path::PathBuf as StdPathBuf};
 
 use elf_loader::{
-    Error, LinkContext, Linker,
+    Error, LinkContext, Linker, Loader,
     error::{LinkContextError, LinkerError},
-    input::{Path as ElfPath, PathBuf},
+    input::{ElfBinary, Path as ElfPath, PathBuf},
     linker::SearchPathResolver,
     runtime::DomainId,
 };
@@ -30,6 +30,44 @@ fn loads_dependency_chain() {
             .unwrap()
     };
     assert_eq!(root_value(), 3);
+}
+
+#[test]
+fn resolves_committed_by_source_identity() {
+    let fixtures = crate::fixture::fixtures();
+    let alias_path = fixtures
+        .rpath_leaf_path
+        .with_file_name(format!("libleaf-loaded-{}.so", std::process::id()));
+    let _ = fs::remove_file(&alias_path);
+    fs::hard_link(&fixtures.rpath_leaf_path, &alias_path).unwrap();
+
+    let original = PathBuf::from(fixtures.rpath_leaf_path.to_str().unwrap());
+    let alias = PathBuf::from(alias_path.to_str().unwrap());
+    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+
+    assert_eq!(
+        linker
+            .run()
+            .resolve_committed(&mut context, original.clone())
+            .unwrap(),
+        None
+    );
+    assert_eq!(context.load_order().count(), 0);
+
+    let loaded = linker.run().load(&mut context, original).unwrap();
+    assert_eq!(
+        linker
+            .run()
+            .resolve_committed(&mut context, alias.clone())
+            .unwrap(),
+        Some(loaded.root())
+    );
+    assert_eq!(context.module_id(alias.as_str()), Some(loaded.root()));
+    assert_eq!(context.load_order().count(), 1);
+
+    loaded.release(&mut context).unwrap();
+    fs::remove_file(alias_path).unwrap();
 }
 
 #[test]
@@ -122,7 +160,8 @@ fn loads_from_module_rpath() {
         .unwrap();
     let loaded = linker
         .run()
-        .load_from(&mut context, PathBuf::from("libleaf.so"), caller.root())
+        .with_caller(caller.root())
+        .load(&mut context, PathBuf::from("libleaf.so"))
         .unwrap();
 
     let value = unsafe {
@@ -133,6 +172,42 @@ fn loads_from_module_rpath() {
             .unwrap()
     };
     assert_eq!(value(), 1);
+}
+
+#[test]
+fn loads_mapped_from_module_rpath() {
+    let fixtures = crate::fixture::fixtures();
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+
+    let caller = linker
+        .run()
+        .load(
+            &mut context,
+            PathBuf::from(fixtures.rpath_caller_path.to_str().unwrap()),
+        )
+        .unwrap();
+    let middle = fs::read(&fixtures.rpath_middle_path).unwrap();
+    let raw = Loader::new()
+        .load_dylib(ElfBinary::new(
+            fixtures.rpath_middle_path.to_str().unwrap(),
+            &middle,
+        ))
+        .unwrap();
+    let loaded = linker
+        .run()
+        .with_caller(caller.root())
+        .load_mapped(&mut context, "mapped-middle".into(), raw.into())
+        .unwrap();
+
+    let value = unsafe {
+        context
+            .module(loaded.root())
+            .unwrap()
+            .get::<extern "C" fn() -> i32>("rpath_middle")
+            .unwrap()
+    };
+    assert_eq!(value(), 2);
 }
 
 #[test]

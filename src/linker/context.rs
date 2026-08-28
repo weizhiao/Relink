@@ -5,6 +5,7 @@ use crate::{
     arch::NativeArch,
     entity::EntitySet,
     image::{GlobalScope, Module, ModuleScope, SearchPathPool},
+    memory::VmAddr,
     relocation::{RelocationArch, SymbolRegistry},
     runtime::DomainId,
     sync::Arc,
@@ -149,6 +150,16 @@ where
         self.committed
             .module_for_key(key)
             .map(|slot| self.committed.make_module_id(slot))
+    }
+
+    /// Returns the first committed module whose runtime memory contains `addr`.
+    ///
+    /// Overlapping module ranges are resolved in load order.
+    pub fn module_id_at(&self, addr: VmAddr) -> Option<ModuleId> {
+        self.load_order().find(|id| {
+            self.module(*id)
+                .is_ok_and(|module| module.memory().range_at(addr).is_some())
+        })
     }
 
     /// Returns the representative key associated with a committed module id.
