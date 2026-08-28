@@ -55,6 +55,12 @@ impl LoadResult {
         &self.modules
     }
 
+    /// Splits this result into its root lease and newly loaded module ids.
+    #[inline]
+    pub fn into_parts(self) -> (ModuleLease, Box<[ModuleId]>) {
+        (self.lease, self.modules)
+    }
+
     /// Releases the root acquisition represented by this load.
     #[inline]
     pub fn release<Meta, Arch, Tls>(
