@@ -1,3 +1,6 @@
+use crate::Arch;
+use object::elf::RelocationType as ObjectRelocationType;
+
 /// Type of an ELF symbol.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SymbolType {
@@ -215,18 +218,43 @@ impl SymbolDesc {
 }
 
 /// Wrapper for architecture-specific relocation types.
+#[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct RelocType(pub u32);
+pub struct RelocType(u32);
 
 impl RelocType {
-    /// Returns the relocation type as a u32.
-    pub fn as_u32(&self) -> u32 {
-        self.0
+    /// Creates a relocation type from its architecture-specific raw value.
+    pub const fn new(value: u32) -> Self {
+        Self(value)
     }
 
-    /// Returns the relocation type as a u64.
-    pub fn as_u64(&self) -> u64 {
-        self.0 as u64
+    /// Returns the architecture-specific raw value.
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for RelocType {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<ObjectRelocationType> for RelocType {
+    fn from(value: ObjectRelocationType) -> Self {
+        Self(value.0)
+    }
+}
+
+impl From<RelocType> for ObjectRelocationType {
+    fn from(value: RelocType) -> Self {
+        Self(value.0)
+    }
+}
+
+impl PartialEq<ObjectRelocationType> for RelocType {
+    fn eq(&self, other: &ObjectRelocationType) -> bool {
+        self.0 == other.0
     }
 }
 
@@ -243,19 +271,19 @@ pub struct RelocEntry {
 
 impl RelocEntry {
     /// Create a new relocation entry referencing a symbol.
-    pub fn with_name(symbol_name: impl Into<String>, r_type: u32) -> Self {
+    pub fn with_name(symbol_name: impl Into<String>, r_type: impl Into<RelocType>) -> Self {
         Self {
             symbol_name: symbol_name.into(),
-            r_type: RelocType(r_type),
+            r_type: r_type.into(),
             addend: 0,
         }
     }
 
     /// Create a new relocation entry without a symbol reference (e.g., RELATIVE).
-    pub fn new(r_type: u32) -> Self {
+    pub fn new(r_type: impl Into<RelocType>) -> Self {
         Self {
             symbol_name: String::new(),
-            r_type: RelocType(r_type),
+            r_type: r_type.into(),
             addend: 0,
         }
     }
@@ -306,4 +334,3 @@ impl RelocEntry {
         Self::with_name(symbol_name, arch.abs_reloc())
     }
 }
-use crate::Arch;

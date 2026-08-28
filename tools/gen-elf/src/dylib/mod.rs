@@ -382,7 +382,7 @@ impl DylibWriter {
             ident: self.get_ident(),
             type_: ET_DYN,
             machine: self.get_machine(),
-            version: EV_CURRENT as u32,
+            version: EV_CURRENT,
             entry: 0,
             phoff: ehdr_size,
             shoff: layout.file_off,
@@ -454,7 +454,7 @@ impl DylibWriter {
         }
     }
 
-    fn get_machine(&self) -> u16 {
+    fn get_machine(&self) -> Machine {
         match self.arch {
             Arch::X86_64 => EM_X86_64,
             Arch::X86 => EM_386,
@@ -487,9 +487,9 @@ impl DylibWriter {
 
 struct ElfHeader {
     ident: [u8; 16],
-    type_: u16,
-    machine: u16,
-    version: u32,
+    type_: FileType,
+    machine: Machine,
+    version: FileVersion,
     entry: u64,
     phoff: u64,
     shoff: u64,
@@ -505,9 +505,9 @@ struct ElfHeader {
 impl ElfHeader {
     fn write(&self, buf: &mut Vec<u8>, is_64: bool) -> Result<()> {
         buf.extend_from_slice(&self.ident);
-        buf.write_u16::<LittleEndian>(self.type_)?;
-        buf.write_u16::<LittleEndian>(self.machine)?;
-        buf.write_u32::<LittleEndian>(self.version)?;
+        buf.write_u16::<LittleEndian>(self.type_.0)?;
+        buf.write_u16::<LittleEndian>(self.machine.0)?;
+        buf.write_u32::<LittleEndian>(u32::from(self.version.0))?;
         if is_64 {
             buf.write_u64::<LittleEndian>(self.entry)?;
             buf.write_u64::<LittleEndian>(self.phoff)?;

@@ -233,7 +233,7 @@ impl RelocMetaData {
                 section: r.slot_section,
                 offset: r.slot_offset,
                 vaddr: Some(r.slot_vaddr),
-                r_type: r.r_type.0,
+                r_type: r.r_type.raw(),
                 symbol_name: r.symbol_name.clone(),
                 addend: r.addend,
                 sym_size: r.sym_size,
@@ -584,14 +584,14 @@ impl Reloc {
         let sym_idx = self.sym_idx;
         if is_64 {
             buf.write_u64::<LittleEndian>(self.slot_vaddr)?;
-            let r_info = (sym_idx << 32) | (self.r_type.as_u64() & 0xffffffff);
+            let r_info = (sym_idx << 32) | (u64::from(self.r_type.raw()) & 0xffffffff);
             buf.write_u64::<LittleEndian>(r_info)?;
             if is_rela {
                 buf.write_i64::<LittleEndian>(self.addend)?;
             }
         } else {
             buf.write_u32::<LittleEndian>(self.slot_vaddr as u32)?;
-            let r_info = ((sym_idx as u32) << 8) | (self.r_type.as_u32() & 0xff);
+            let r_info = ((sym_idx as u32) << 8) | (self.r_type.raw() & 0xff);
             buf.write_u32::<LittleEndian>(r_info)?;
             if is_rela {
                 buf.write_i32::<LittleEndian>(self.addend as i32)?;
