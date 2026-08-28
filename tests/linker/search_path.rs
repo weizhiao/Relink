@@ -1,9 +1,9 @@
 use std::{fs, path::PathBuf as StdPathBuf};
 
 use elf_loader::{
-    Error, LinkContext, Linker,
+    Error, LinkContext, Linker, Loader,
     error::{LinkContextError, LinkerError},
-    input::{Path as ElfPath, PathBuf},
+    input::{ElfBinary, Path as ElfPath, PathBuf},
     linker::SearchPathResolver,
     runtime::DomainId,
 };
@@ -133,6 +133,46 @@ fn loads_from_module_rpath() {
             .unwrap()
     };
     assert_eq!(value(), 1);
+}
+
+#[test]
+fn loads_mapped_from_module_rpath() {
+    let fixtures = crate::fixture::fixtures();
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let linker = Linker::new().resolver(crate::fixture::search_path_resolver());
+
+    let caller = linker
+        .run()
+        .load(
+            &mut context,
+            PathBuf::from(fixtures.rpath_caller_path.to_str().unwrap()),
+        )
+        .unwrap();
+    let middle = fs::read(&fixtures.rpath_middle_path).unwrap();
+    let raw = Loader::new()
+        .load_dylib(ElfBinary::new(
+            fixtures.rpath_middle_path.to_str().unwrap(),
+            &middle,
+        ))
+        .unwrap();
+    let loaded = linker
+        .run()
+        .load_mapped_from(
+            &mut context,
+            "mapped-middle".into(),
+            raw.into(),
+            caller.root(),
+        )
+        .unwrap();
+
+    let value = unsafe {
+        context
+            .module(loaded.root())
+            .unwrap()
+            .get::<extern "C" fn() -> i32>("rpath_middle")
+            .unwrap()
+    };
+    assert_eq!(value(), 2);
 }
 
 #[test]

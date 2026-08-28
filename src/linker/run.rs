@@ -215,7 +215,7 @@ where
     /// Loads, commits, and initializes a pre-mapped root dynamic image.
     ///
     /// Initialization failure is rolled back before the error is returned.
-    pub fn load_mapped_root<Meta>(
+    pub fn load_mapped<Meta>(
         &mut self,
         context: &mut LinkContext<Meta, Arch, Tls>,
         key: ModuleKey,
@@ -224,7 +224,36 @@ where
     where
         Meta: Default,
     {
-        let prepared = self.prepare_mapped_root(context, key, raw)?;
+        self.load_mapped_with_caller(context, key, raw, None)
+    }
+
+    /// Loads a pre-mapped root on behalf of a module already committed to `context`.
+    ///
+    /// Initialization failure is rolled back before the error is returned.
+    pub fn load_mapped_from<Meta>(
+        &mut self,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        key: ModuleKey,
+        raw: RawDynamic<D, Arch, M::Region, Tls>,
+        caller: ModuleId,
+    ) -> Result<LoadResult>
+    where
+        Meta: Default,
+    {
+        self.load_mapped_with_caller(context, key, raw, Some(caller))
+    }
+
+    fn load_mapped_with_caller<Meta>(
+        &mut self,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        key: ModuleKey,
+        raw: RawDynamic<D, Arch, M::Region, Tls>,
+        caller: Option<ModuleId>,
+    ) -> Result<LoadResult>
+    where
+        Meta: Default,
+    {
+        let prepared = self.prepare_mapped_with_caller(context, key, raw, caller)?;
         let relocated = self.relocate(prepared)?;
         let published = relocated.publish(context)?;
         match published.initialize() {
@@ -234,16 +263,40 @@ where
     }
 
     /// Resolves dependencies for a pre-mapped root without relocating it.
-    pub fn prepare_mapped_root<Meta>(
+    pub fn prepare_mapped<Meta>(
         &mut self,
         context: &mut LinkContext<Meta, Arch, Tls>,
         key: ModuleKey,
         raw: RawDynamic<D, Arch, M::Region, Tls>,
     ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
+        self.prepare_mapped_with_caller(context, key, raw, None)
+    }
+
+    /// Resolves dependencies for a caller-relative pre-mapped root without relocating it.
+    pub fn prepare_mapped_from<Meta>(
+        &mut self,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        key: ModuleKey,
+        raw: RawDynamic<D, Arch, M::Region, Tls>,
+        caller: ModuleId,
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
+        self.prepare_mapped_with_caller(context, key, raw, Some(caller))
+    }
+
+    fn prepare_mapped_with_caller<Meta>(
+        &mut self,
+        context: &mut LinkContext<Meta, Arch, Tls>,
+        key: ModuleKey,
+        raw: RawDynamic<D, Arch, M::Region, Tls>,
+        caller: Option<ModuleId>,
+    ) -> Result<PreparedLoad<D, Arch, M::Region, Tls>> {
         context
             .committed
             .ensure_domain(self.linker.loader.domain_id())?;
         context.committed.ensure_domain(raw.domain_id())?;
+        let caller = caller
+            .map(|id| context.committed.module_slot(id))
+            .transpose()?;
         if let Some(prepared) = PreparedLoad::visible(context, &key) {
             return Ok(prepared);
         }
@@ -264,7 +317,7 @@ where
             .with_observer(&mut self.observer);
         let mut resolve_context =
             LoadResolveContext::new(&mut context.committed, &mut session, tokens);
-        let root = resolve_context.stage_dynamic(key, raw, None);
+        let root = resolve_context.stage_dynamic(key, raw, caller);
         resolve_context.resolve_graph(root, &mut loader, &linker.resolver)?;
         Ok(PreparedLoad::new(root, session, None, context))
     }

@@ -181,6 +181,13 @@ fn commits_resolver_modules() {
     assert_eq!(elf.needed_libs(), [DEP_KEY]);
     assert!(elf.phdrs().is_some_and(|phdrs| !phdrs.is_empty()));
     assert!(!elf.mapped_ranges().is_empty());
+    let first_range = elf.mapped_ranges()[0];
+    let mapped_addr = elf
+        .segments()
+        .base()
+        .checked_add(first_range.offset)
+        .expect("mapped address must not overflow");
+    assert_eq!(context.module_id_at(mapped_addr), Some(root.root()));
     let _: &() = elf.user_data();
 
     assert!(dep.state().is_initialized());
@@ -442,7 +449,7 @@ fn publish_rejects_occupied_source() {
     });
     let mut run = linker.run();
     let prepared = run
-        .prepare_mapped_root(&mut context, "pending".into(), load("pending.so").into())
+        .prepare_mapped(&mut context, "pending".into(), load("pending.so").into())
         .expect("failed to prepare root");
     let relocated = run.relocate(prepared).expect("failed to relocate root");
     let replacement = Relocator::new()
