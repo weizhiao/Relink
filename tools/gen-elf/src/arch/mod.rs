@@ -86,20 +86,20 @@ impl Arch {
     }
 
     /// Returns the architecture-specific JUMP_SLOT relocation type.
-    pub fn jump_slot_reloc(&self) -> u32 {
-        match self {
+    pub fn jump_slot_reloc(&self) -> RelocType {
+        RelocType::from(match self {
             Arch::X86_64 => R_X86_64_JUMP_SLOT,
             Arch::X86 => R_386_JMP_SLOT,
             Arch::Aarch64 => R_AARCH64_JUMP_SLOT,
             Arch::Arm => R_ARM_JUMP_SLOT,
             Arch::Riscv64 | Arch::Riscv32 => R_RISCV_JUMP_SLOT,
             Arch::Loongarch64 => R_LARCH_JUMP_SLOT,
-        }
+        })
     }
 
     /// Returns the architecture-specific GLOB_DAT relocation type.
-    pub fn glob_dat_reloc(&self) -> u32 {
-        match self {
+    pub fn glob_dat_reloc(&self) -> RelocType {
+        RelocType::from(match self {
             Arch::X86_64 => R_X86_64_GLOB_DAT,
             Arch::X86 => R_386_GLOB_DAT,
             Arch::Aarch64 => R_AARCH64_GLOB_DAT,
@@ -107,36 +107,36 @@ impl Arch {
             Arch::Riscv64 => R_RISCV_64,
             Arch::Riscv32 => R_RISCV_32,
             Arch::Loongarch64 => R_LARCH_64,
-        }
+        })
     }
 
     /// Returns the architecture-specific RELATIVE relocation type.
-    pub fn relative_reloc(&self) -> u32 {
-        match self {
+    pub fn relative_reloc(&self) -> RelocType {
+        RelocType::from(match self {
             Arch::X86_64 => R_X86_64_RELATIVE,
             Arch::X86 => R_386_RELATIVE,
             Arch::Aarch64 => R_AARCH64_RELATIVE,
             Arch::Riscv64 | Arch::Riscv32 => R_RISCV_RELATIVE,
             Arch::Arm => R_ARM_RELATIVE,
             Arch::Loongarch64 => R_LARCH_RELATIVE,
-        }
+        })
     }
 
     /// Returns the architecture-specific `IRELATIVE` relocation type.
-    pub fn irelative_reloc(&self) -> u32 {
-        match self {
+    pub fn irelative_reloc(&self) -> RelocType {
+        RelocType::from(match self {
             Arch::X86_64 => R_X86_64_IRELATIVE,
             Arch::X86 => R_386_IRELATIVE,
             Arch::Aarch64 => R_AARCH64_IRELATIVE,
             Arch::Arm => R_ARM_IRELATIVE,
             Arch::Riscv64 | Arch::Riscv32 => R_RISCV_IRELATIVE,
             Arch::Loongarch64 => R_LARCH_IRELATIVE,
-        }
+        })
     }
 
     /// Returns the architecture's native absolute relocation type.
-    pub fn abs_reloc(&self) -> u32 {
-        match self {
+    pub fn abs_reloc(&self) -> RelocType {
+        RelocType::from(match self {
             Arch::X86_64 => R_X86_64_64,
             Arch::X86 => R_386_32,
             Arch::Aarch64 => R_AARCH64_ABS64,
@@ -144,24 +144,24 @@ impl Arch {
             Arch::Riscv32 => R_RISCV_32,
             Arch::Arm => R_ARM_ABS32,
             Arch::Loongarch64 => R_LARCH_64,
-        }
+        })
     }
 
     /// Returns the architecture-specific `COPY` relocation type.
-    pub fn copy_reloc(&self) -> u32 {
-        match self {
+    pub fn copy_reloc(&self) -> RelocType {
+        RelocType::from(match self {
             Arch::X86_64 => R_X86_64_COPY,
             Arch::X86 => R_386_COPY,
             Arch::Aarch64 => R_AARCH64_COPY,
             Arch::Arm => R_ARM_COPY,
             Arch::Riscv64 | Arch::Riscv32 => R_RISCV_COPY,
             Arch::Loongarch64 => R_LARCH_COPY,
-        }
+        })
     }
 
     /// Returns the relocation type that writes a TLS module identifier.
-    pub fn dtpmod_reloc(&self) -> u32 {
-        match self {
+    pub fn dtpmod_reloc(&self) -> RelocType {
+        RelocType::from(match self {
             Arch::X86_64 => R_X86_64_DTPMOD64,
             Arch::X86 => R_386_TLS_DTPMOD32,
             Arch::Aarch64 => R_AARCH64_TLS_DTPMOD,
@@ -169,12 +169,12 @@ impl Arch {
             Arch::Riscv64 => R_RISCV_TLS_DTPMOD64,
             Arch::Riscv32 => R_RISCV_TLS_DTPMOD32,
             Arch::Loongarch64 => R_LARCH_TLS_DTPMOD64,
-        }
+        })
     }
 
     /// Returns the relocation type that writes a dynamic TLS offset.
-    pub fn dtpoff_reloc(&self) -> u32 {
-        match self {
+    pub fn dtpoff_reloc(&self) -> RelocType {
+        RelocType::from(match self {
             Arch::X86_64 => R_X86_64_DTPOFF64,
             Arch::X86 => R_386_TLS_DTPOFF32,
             Arch::Aarch64 => R_AARCH64_TLS_DTPREL,
@@ -182,7 +182,7 @@ impl Arch {
             Arch::Riscv64 => R_RISCV_TLS_DTPREL64,
             Arch::Riscv32 => R_RISCV_TLS_DTPREL32,
             Arch::Loongarch64 => R_LARCH_TLS_DTPREL64,
-        }
+        })
     }
 }
 
@@ -203,7 +203,7 @@ impl From<Arch> for Architecture {
 impl RelocType {
     /// Check if a relocation is a PLT-related type for the given architecture
     pub(crate) fn is_plt_reloc(&self, arch: Arch) -> bool {
-        let r_type = self.as_u32();
+        let r_type = *self;
         match arch {
             Arch::X86_64 => r_type == R_X86_64_JUMP_SLOT,
             Arch::X86 => r_type == R_386_JMP_SLOT,
@@ -216,7 +216,7 @@ impl RelocType {
     }
 
     pub(crate) fn is_irelative_reloc(&self, arch: Arch) -> bool {
-        let r_type = self.as_u32();
+        let r_type = *self;
         match arch {
             Arch::X86_64 => r_type == R_X86_64_IRELATIVE,
             Arch::X86 => r_type == R_386_IRELATIVE,
@@ -230,7 +230,7 @@ impl RelocType {
 
     /// Check if a relocation is RELATIVE type (doesn't depend on symbols)
     pub(crate) fn is_relative_reloc(&self, arch: Arch) -> bool {
-        let r_type = self.as_u32();
+        let r_type = *self;
         match arch {
             Arch::X86_64 => r_type == R_X86_64_RELATIVE,
             Arch::X86 => r_type == R_386_RELATIVE,
@@ -242,7 +242,7 @@ impl RelocType {
     }
 
     pub(crate) fn is_abs_reloc(&self, arch: Arch) -> bool {
-        let r_type = self.as_u32();
+        let r_type = *self;
         match arch {
             Arch::X86_64 => r_type == R_X86_64_64,
             Arch::X86 => r_type == R_386_32,
@@ -255,7 +255,7 @@ impl RelocType {
     }
 
     pub(crate) fn is_glob_dat_reloc(&self, arch: Arch) -> bool {
-        let r_type = self.as_u32();
+        let r_type = *self;
         match arch {
             Arch::X86_64 => r_type == R_X86_64_GLOB_DAT,
             Arch::X86 => r_type == R_386_GLOB_DAT,
@@ -268,7 +268,7 @@ impl RelocType {
     }
 
     pub(crate) fn is_copy_reloc(&self, arch: Arch) -> bool {
-        let r_type = self.as_u32();
+        let r_type = *self;
         match arch {
             Arch::X86_64 => r_type == R_X86_64_COPY,
             Arch::X86 => r_type == R_386_COPY,
@@ -280,7 +280,7 @@ impl RelocType {
     }
 
     pub(crate) fn is_tls_reloc(&self, arch: Arch) -> bool {
-        let r_type = self.as_u32();
+        let r_type = *self;
         match arch {
             Arch::X86_64 => {
                 r_type == R_X86_64_DTPMOD64

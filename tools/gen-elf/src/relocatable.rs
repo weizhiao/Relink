@@ -160,7 +160,7 @@ fn gen_static_elf(
                 },
                 offset,
                 vaddr: None,
-                r_type: reloc.r_type.0,
+                r_type: reloc.r_type.raw(),
                 symbol_name: if reloc.symbol_name.is_empty() {
                     None
                 } else {
@@ -171,7 +171,7 @@ fn gen_static_elf(
             });
 
             let flags = object::write::RelocationFlags::Elf {
-                r_type: reloc.r_type.0,
+                r_type: reloc.r_type.into(),
             };
 
             obj.add_relocation(

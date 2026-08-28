@@ -12,7 +12,7 @@ use crate::dylib::{
 
 #[derive(Debug, Clone)]
 struct DynamicEntry {
-    tag: i64,
+    tag: DynamicTag,
     value: u64,
 }
 
@@ -45,15 +45,15 @@ impl DynamicMetadata {
         for offset in needed_offsets {
             instance.insert_entry(DT_NEEDED, *offset as u64);
         }
-        let mut flags = 0;
+        let mut flags = DynamicFlags(0);
         if bind_now {
-            flags |= DF_BIND_NOW as u64;
+            flags |= DF_BIND_NOW;
         }
         if symbolic {
-            flags |= DF_SYMBOLIC as u64;
+            flags |= DF_SYMBOLIC;
         }
-        if flags != 0 {
-            instance.update_entry(DT_FLAGS, flags);
+        if flags != DynamicFlags(0) {
+            instance.update_entry(DT_FLAGS, flags.0);
         }
         instance
     }
@@ -112,9 +112,9 @@ impl DynamicMetadata {
                     self.add_entry(
                         DT_PLTREL,
                         if is_rela {
-                            DT_RELA as u64
+                            DT_RELA.0 as u64
                         } else {
-                            DT_REL as u64
+                            DT_REL.0 as u64
                         },
                     );
                 }
@@ -124,11 +124,11 @@ impl DynamicMetadata {
         self.add_entry(DT_NULL, 0);
     }
 
-    pub(crate) fn add_entry(&mut self, tag: i64, value: u64) {
+    pub(crate) fn add_entry(&mut self, tag: DynamicTag, value: u64) {
         self.dyn_entries.push(DynamicEntry { tag, value });
     }
 
-    pub(crate) fn insert_entry(&mut self, tag: i64, value: u64) {
+    pub(crate) fn insert_entry(&mut self, tag: DynamicTag, value: u64) {
         if let Some(pos) = self.null_entry_position() {
             self.dyn_entries.insert(pos, DynamicEntry { tag, value });
         } else {
@@ -136,7 +136,7 @@ impl DynamicMetadata {
         }
     }
 
-    pub(crate) fn update_entry(&mut self, tag: i64, value: u64) {
+    pub(crate) fn update_entry(&mut self, tag: DynamicTag, value: u64) {
         if let Some(entry) = self.dyn_entries.iter_mut().find(|e| e.tag == tag) {
             entry.value = value;
         } else {
@@ -200,10 +200,10 @@ impl DynamicMetadata {
     pub(crate) fn write<W: std::io::Write>(&self, mut writer: W, is_64: bool) -> Result<()> {
         for entry in &self.dyn_entries {
             if is_64 {
-                writer.write_i64::<LittleEndian>(entry.tag)?;
+                writer.write_i64::<LittleEndian>(entry.tag.0)?;
                 writer.write_u64::<LittleEndian>(entry.value)?;
             } else {
-                writer.write_i32::<LittleEndian>(entry.tag as i32)?;
+                writer.write_i32::<LittleEndian>(entry.tag.0 as i32)?;
                 writer.write_u32::<LittleEndian>(entry.value as u32)?;
             }
         }

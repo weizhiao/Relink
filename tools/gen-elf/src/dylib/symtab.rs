@@ -186,16 +186,19 @@ impl SymTabMetadata {
         let name = s.name.clone();
         let name_idx = self.dynstr.cur_idx();
 
-        let info = match s.scope {
-            SymbolScope::Global => STB_GLOBAL,
-            SymbolScope::Local => STB_LOCAL,
-            SymbolScope::Weak => STB_WEAK,
-        } << 4
-            | match s.sym_type {
+        let info = SymbolInfo::new(
+            match s.scope {
+                SymbolScope::Global => STB_GLOBAL,
+                SymbolScope::Local => STB_LOCAL,
+                SymbolScope::Weak => STB_WEAK,
+            },
+            match s.sym_type {
                 SymbolType::Func => STT_FUNC,
                 SymbolType::Object => STT_OBJECT,
                 SymbolType::Tls => STT_TLS,
-            };
+            },
+        )
+        .0;
 
         let (shdr_type, value) = if let Some(content) = &s.content {
             let off = match content.kind {

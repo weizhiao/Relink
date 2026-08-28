@@ -80,7 +80,8 @@ pub(crate) fn slot(image: &Image, bytes: &[u8], name: &str) -> u64 {
             let RelocationFlags::Elf { r_type } = relocation.flags() else {
                 return None;
             };
-            (r_type == JUMP_SLOT && symbol.name_bytes().ok()? == name.as_bytes()).then_some(offset)
+            (r_type.0 == JUMP_SLOT && symbol.name_bytes().ok()? == name.as_bytes())
+                .then_some(offset)
         })
         .unwrap_or_else(|| panic!("missing jump slot for {name}"));
     unsafe {

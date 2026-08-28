@@ -19,8 +19,8 @@ pub(crate) struct SectionHeader {
 }
 
 struct PhdrFields {
-    p_type: u32,
-    p_flags: u32,
+    p_type: ProgramType,
+    p_flags: ProgramFlags,
     p_offset: u64,
     p_vaddr: u64,
     p_filesz: u64,
@@ -59,7 +59,7 @@ impl SectionKind {
         }
     }
 
-    fn shtype(&self) -> u32 {
+    fn shtype(&self) -> SectionType {
         match self {
             SectionKind::Null => SHT_NULL,
             SectionKind::DynStr | SectionKind::ShStrTab => SHT_STRTAB,
@@ -74,22 +74,20 @@ impl SectionKind {
         }
     }
 
-    fn flags(&self) -> u64 {
+    fn flags(&self) -> SectionFlags {
         match self {
-            SectionKind::Plt | SectionKind::Text => (SHF_ALLOC | SHF_EXECINSTR) as u64,
-            SectionKind::Data | SectionKind::Got | SectionKind::GotPlt => {
-                (SHF_ALLOC | SHF_WRITE) as u64
-            }
-            SectionKind::Tls => (SHF_ALLOC | SHF_WRITE | SHF_TLS) as u64,
-            SectionKind::Dynamic => (SHF_ALLOC | SHF_WRITE) as u64,
+            SectionKind::Plt | SectionKind::Text => SHF_ALLOC | SHF_EXECINSTR,
+            SectionKind::Data | SectionKind::Got | SectionKind::GotPlt => SHF_ALLOC | SHF_WRITE,
+            SectionKind::Tls => SHF_ALLOC | SHF_WRITE | SHF_TLS,
+            SectionKind::Dynamic => SHF_ALLOC | SHF_WRITE,
             SectionKind::DynStr
             | SectionKind::DynSym
             | SectionKind::RelaDyn
             | SectionKind::RelaPlt
             | SectionKind::RelDyn
             | SectionKind::RelPlt
-            | SectionKind::Hash => SHF_ALLOC as u64,
-            _ => 0,
+            | SectionKind::Hash => SHF_ALLOC,
+            _ => SectionFlags(0),
         }
     }
 
@@ -229,10 +227,10 @@ impl ShdrManager {
         // Order: R (Read-only) -> RX (Code) -> RW (Read-write) -> Non-Alloc (Metadata)
         self.shdrs.sort_by_key(|s| {
             let flags = s.header.shtype.flags();
-            if flags & (SHF_ALLOC as u64) != 0 {
-                if flags & (SHF_WRITE as u64) == 0 && flags & (SHF_EXECINSTR as u64) == 0 {
+            if flags.contains(SHF_ALLOC) {
+                if !flags.contains(SHF_WRITE) && !flags.contains(SHF_EXECINSTR) {
                     0 // R: .hash, .dynsym, .dynstr, .rela.dyn
-                } else if flags & (SHF_EXECINSTR as u64) != 0 {
+                } else if flags.contains(SHF_EXECINSTR) {
                     1 // RX: .text, .plt
                 } else {
                     2 // RW: .dynamic, .got, .data
@@ -246,10 +244,10 @@ impl ShdrManager {
         let mut last_group = None;
         for sec in &mut self.shdrs {
             let flags = sec.header.shtype.flags();
-            let current_group = if flags & (SHF_ALLOC as u64) != 0 {
-                if flags & (SHF_WRITE as u64) == 0 && flags & (SHF_EXECINSTR as u64) == 0 {
+            let current_group = if flags.contains(SHF_ALLOC) {
+                if !flags.contains(SHF_WRITE) && !flags.contains(SHF_EXECINSTR) {
                     Some(0)
-                } else if flags & (SHF_EXECINSTR as u64) != 0 {
+                } else if flags.contains(SHF_EXECINSTR) {
                     Some(1)
                 } else {
                     Some(2)
@@ -266,7 +264,7 @@ impl ShdrManager {
 
             let (off, vaddr) = layout.add_section(sec.header.size, sec.header.addralign);
             sec.header.offset = off;
-            if flags & (SHF_ALLOC as u64) != 0 {
+            if flags.contains(SHF_ALLOC) {
                 sec.header.addr = vaddr;
             } else {
                 sec.header.addr = 0;
@@ -280,10 +278,10 @@ impl ShdrManager {
 
         for sec in &self.shdrs {
             let flags = sec.header.shtype.flags();
-            if flags & (SHF_ALLOC as u64) != 0 {
-                if flags & (SHF_EXECINSTR as u64) != 0 {
+            if flags.contains(SHF_ALLOC) {
+                if flags.contains(SHF_EXECINSTR) {
                     rx.push(sec.clone());
-                } else if flags & (SHF_WRITE as u64) == 0 {
+                } else if !flags.contains(SHF_WRITE) {
                     r.push(sec.clone());
                 } else {
                     rw.push(sec.clone());
@@ -378,10 +376,10 @@ impl ShdrManager {
 
         for sec in &self.shdrs {
             let flags = sec.header.shtype.flags();
-            if flags & (SHF_ALLOC as u64) != 0 {
-                if flags & (SHF_EXECINSTR as u64) != 0 {
+            if flags.contains(SHF_ALLOC) {
+                if flags.contains(SHF_EXECINSTR) {
                     has_rx = true;
-                } else if flags & (SHF_WRITE as u64) == 0 {
+                } else if !flags.contains(SHF_WRITE) {
                     has_r = true;
                 } else {
                     has_rw = true;
@@ -434,8 +432,8 @@ impl ShdrManager {
             let h = &sec.header;
             if is_64 {
                 writer.write_u32::<LittleEndian>(h.name_off)?;
-                writer.write_u32::<LittleEndian>(h.shtype.shtype())?;
-                writer.write_u64::<LittleEndian>(h.shtype.flags())?;
+                writer.write_u32::<LittleEndian>(h.shtype.shtype().0)?;
+                writer.write_u64::<LittleEndian>(h.shtype.flags().0)?;
                 writer.write_u64::<LittleEndian>(h.addr)?;
                 writer.write_u64::<LittleEndian>(h.offset)?;
                 writer.write_u64::<LittleEndian>(h.size)?;
@@ -445,8 +443,8 @@ impl ShdrManager {
                 writer.write_u64::<LittleEndian>(h.shtype.entsize(is_64))?;
             } else {
                 writer.write_u32::<LittleEndian>(h.name_off)?;
-                writer.write_u32::<LittleEndian>(h.shtype.shtype())?;
-                writer.write_u32::<LittleEndian>(h.shtype.flags() as u32)?;
+                writer.write_u32::<LittleEndian>(h.shtype.shtype().0)?;
+                writer.write_u32::<LittleEndian>(h.shtype.flags().0 as u32)?;
                 writer.write_u32::<LittleEndian>(h.addr as u32)?;
                 writer.write_u32::<LittleEndian>(h.offset as u32)?;
                 writer.write_u32::<LittleEndian>(h.size as u32)?;
@@ -620,8 +618,8 @@ impl ShdrManager {
 
     fn write_phdr<W: std::io::Write>(mut writer: W, is_64: bool, fields: PhdrFields) -> Result<()> {
         if is_64 {
-            writer.write_u32::<LittleEndian>(fields.p_type)?;
-            writer.write_u32::<LittleEndian>(fields.p_flags)?;
+            writer.write_u32::<LittleEndian>(fields.p_type.0)?;
+            writer.write_u32::<LittleEndian>(fields.p_flags.0)?;
             writer.write_u64::<LittleEndian>(fields.p_offset)?;
             writer.write_u64::<LittleEndian>(fields.p_vaddr)?;
             writer.write_u64::<LittleEndian>(fields.p_vaddr)?; // p_paddr
@@ -629,13 +627,13 @@ impl ShdrManager {
             writer.write_u64::<LittleEndian>(fields.p_memsz)?;
             writer.write_u64::<LittleEndian>(fields.p_align)?;
         } else {
-            writer.write_u32::<LittleEndian>(fields.p_type)?;
+            writer.write_u32::<LittleEndian>(fields.p_type.0)?;
             writer.write_u32::<LittleEndian>(fields.p_offset as u32)?;
             writer.write_u32::<LittleEndian>(fields.p_vaddr as u32)?;
             writer.write_u32::<LittleEndian>(fields.p_vaddr as u32)?; // p_paddr
             writer.write_u32::<LittleEndian>(fields.p_filesz as u32)?;
             writer.write_u32::<LittleEndian>(fields.p_memsz as u32)?;
-            writer.write_u32::<LittleEndian>(fields.p_flags)?;
+            writer.write_u32::<LittleEndian>(fields.p_flags.0)?;
             writer.write_u32::<LittleEndian>(fields.p_align as u32)?;
         }
         Ok(())

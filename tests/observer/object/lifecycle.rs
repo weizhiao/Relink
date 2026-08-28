@@ -327,13 +327,10 @@ fn finalizer_runs_on_drop() {
             flags: SymbolFlags::None,
         });
 
-        let fini = object.add_section(
-            Vec::new(),
-            b".fini_array".to_vec(),
-            SectionKind::Elf(SHT_FINI_ARRAY),
-        );
+        let fini = object.add_section(Vec::new(), b".fini_array".to_vec(), SectionKind::Data);
         object.section_mut(fini).flags = SectionFlags::Elf {
-            sh_flags: u64::from(SHF_ALLOC | SHF_WRITE),
+            sh_type: SHT_FINI_ARRAY,
+            sh_flags: SHF_ALLOC | SHF_WRITE,
         };
         object.append_section_data(fini, &fini_addr.to_ne_bytes(), 8);
         object.write().expect("failed to generate fini object")
