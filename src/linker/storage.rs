@@ -232,6 +232,11 @@ where
     }
 
     #[inline]
+    pub(super) const fn load_group(&self) -> Option<&'a ModuleScope<Arch, Tls>> {
+        self.entry.load_group.as_ref()
+    }
+
+    #[inline]
     pub(crate) const fn is_root(&self) -> bool {
         self.entry.pins != 0 || self.entry.roots != 0
     }
@@ -255,6 +260,12 @@ where
     Arch: RelocationArch,
     Tls: TlsResolver<Arch>,
 {
+    #[inline]
+    pub(super) fn cache_load_group(&mut self, scope: ModuleScope<Arch, Tls>) {
+        debug_assert!(self.entry.load_group.is_none());
+        self.entry.load_group = Some(scope);
+    }
+
     #[inline]
     pub(crate) fn acquire_root(&mut self) {
         self.acquire_roots(1);
@@ -613,6 +624,8 @@ pub(in crate::linker) struct StoredEntry<
     // Keeps only this module's dependency closure alive for deferred lookup and
     // finalization; the wider relocation group is owned by its root entry.
     retained: ModuleScope<Arch, Tls>,
+    // Direct dependency edges are immutable for one committed incarnation.
+    load_group: Option<ModuleScope<Arch, Tls>>,
     roots: usize,
     pins: usize,
     meta: Meta,
@@ -638,6 +651,7 @@ where
             module,
             direct_deps,
             retained,
+            load_group: None,
             roots,
             pins: 0,
             meta,

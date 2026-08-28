@@ -11,50 +11,7 @@ use crate::{
     sync::Arc,
     tls::TlsResolver,
 };
-use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
-
-struct LoadGroupInner<Arch: RelocationArch, Tls: TlsResolver<Arch>> {
-    root: ModuleId,
-    members: Box<[ModuleId]>,
-    scope: ModuleScope<Arch, Tls>,
-}
-
-/// One retained breadth-first dependency group.
-///
-/// The member ids and retained modules have the same order. Clones share the
-/// complete group without copying either list.
-pub struct LoadGroup<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()> {
-    inner: Arc<LoadGroupInner<Arch, Tls>>,
-}
-
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> Clone for LoadGroup<Arch, Tls> {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
-}
-
-impl<Arch: RelocationArch, Tls: TlsResolver<Arch>> LoadGroup<Arch, Tls> {
-    /// Returns the root module id.
-    #[inline]
-    pub fn root(&self) -> ModuleId {
-        self.inner.root
-    }
-
-    /// Returns member ids in breadth-first lookup order.
-    #[inline]
-    pub fn members(&self) -> &[ModuleId] {
-        &self.inner.members
-    }
-
-    /// Returns retained modules in the same order as [`Self::members`].
-    #[inline]
-    pub fn scope(&self) -> &ModuleScope<Arch, Tls> {
-        &self.inner.scope
-    }
-}
+use alloc::{collections::VecDeque, vec::Vec};
 
 /// Local repository of committed modules and their dependency graph.
 ///
@@ -431,13 +388,17 @@ where
         Ok(UnloadGroup::new(modules))
     }
 
-    /// Returns the retained dependency group rooted at `root`.
-    ///
-    /// Member ids and module handles are captured from one graph traversal and
-    /// remain stable for the lifetime of the returned group.
-    pub fn load_group(&self, root: ModuleId) -> Result<LoadGroup<Arch, Tls>> {
+    /// Returns the retained breadth-first dependency scope rooted at `root`.
+    pub fn load_group(&mut self, root: ModuleId) -> Result<ModuleScope<Arch, Tls>> {
         let root_slot = self.committed.module_slot(root)?;
-        let mut members = Vec::new();
+        let root_module = self
+            .committed
+            .module(root_slot)
+            .expect("validated module id must refer to committed state");
+        if let Some(scope) = root_module.load_group() {
+            return Ok(scope.clone());
+        }
+
         let mut scope = ModuleScope::new(self.domain_id());
         let mut visited = EntitySet::default();
         let mut queue = VecDeque::new();
@@ -445,13 +406,11 @@ where
         queue.push_back(root_slot);
 
         while let Some(slot) = queue.pop_front() {
-            let id = self.committed.make_module_id(slot);
             let module = self
                 .committed
                 .module(slot)
                 .expect("load group traversal must only contain committed modules");
 
-            members.push(id);
             scope.push(module.handle().clone());
             for &dep in module.direct_deps() {
                 if visited.insert(dep) {
@@ -460,13 +419,11 @@ where
             }
         }
 
-        Ok(LoadGroup {
-            inner: Arc::new(LoadGroupInner {
-                root,
-                members: members.into_boxed_slice(),
-                scope,
-            }),
-        })
+        self.committed
+            .module_mut(root_slot)
+            .expect("validated module id must refer to committed state")
+            .cache_load_group(scope.clone());
+        Ok(scope)
     }
 }
 
@@ -556,6 +513,38 @@ mod tests {
 
     fn instance(context: &LinkContext<(), NativeArch>, id: ModuleId) -> ModuleInstanceId {
         context.module(id).unwrap().state().instance_id()
+    }
+
+    fn load_group_names(context: &mut LinkContext<(), NativeArch>, root: ModuleId) -> Vec<String> {
+        context
+            .load_group(root)
+            .unwrap()
+            .iter()
+            .map(|module| String::from(module.name()))
+            .collect()
+    }
+
+    #[test]
+    fn load_group_is_cached_by_its_root_entry() {
+        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let dependency = context
+            .insert(node("dependency", SyntheticModule::empty("dependency")))
+            .unwrap();
+        let root = context
+            .insert(
+                node("root", SyntheticModule::empty("root"))
+                    .dependencies([instance(&context, dependency.id())]),
+            )
+            .unwrap();
+
+        let first = context.load_group(root.id()).unwrap();
+        let second = context.load_group(root.id()).unwrap();
+
+        assert_eq!(first.as_ptr(), second.as_ptr());
+        assert_eq!(
+            load_group_names(&mut context, root.id()),
+            ["root", "dependency"]
+        );
     }
 
     #[test]
@@ -910,11 +899,8 @@ mod tests {
         assert_eq!(context.module_id("alias"), Some(canonical_id));
         assert_eq!(direct_deps(&context, root_id), [canonical_id]);
         assert_eq!(
-            context
-                .load_group(root_id)
-                .expect("dependency scope should resolve")
-                .members(),
-            &[root_id, canonical_id]
+            load_group_names(&mut context, root_id),
+            ["root", "canonical"]
         );
     }
 
@@ -1059,21 +1045,15 @@ mod tests {
 
         assert_eq!(direct_deps(&source, root_id), [canonical_id]);
         assert_eq!(
-            source
-                .load_group(root_id)
-                .expect("source scope should resolve")
-                .members(),
-            &[root_id, canonical_id]
+            load_group_names(&mut source, root_id),
+            ["root", "canonical"]
         );
         assert_eq!(direct_deps(&target, target_root), [target_canonical]);
         assert_eq!(target.module_id("alias"), None);
         assert!(target.contains_module(target_replacement).unwrap());
         assert_eq!(
-            target
-                .load_group(target_root)
-                .expect("target scope should resolve")
-                .members(),
-            &[target_root, target_canonical]
+            load_group_names(&mut target, target_root),
+            ["root", "canonical"]
         );
     }
 
@@ -1148,10 +1128,7 @@ mod tests {
                 .unwrap()
                 .ptr_eq(source.module(source_dep_id).unwrap())
         );
-        assert_eq!(
-            target.load_group(root_id).unwrap().members(),
-            [root_id, dep]
-        );
+        assert_eq!(load_group_names(&mut target, root_id), ["root", "dep"]);
 
         let unloaded = target.release(root).unwrap();
         assert_eq!(
