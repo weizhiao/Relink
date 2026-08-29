@@ -109,6 +109,16 @@ where
             .map(|slot| self.committed.make_module_id(slot))
     }
 
+    /// Returns the committed module id for this exact loaded module instance.
+    ///
+    /// A different instance loaded from the same source does not match.
+    #[inline]
+    pub fn module_id_for(&self, module: &dyn Module<Arch, Tls>) -> Option<ModuleId> {
+        self.committed
+            .module_for_binding(module.state().instance_id())
+            .map(|slot| self.committed.make_module_id(slot))
+    }
+
     /// Returns the first committed module whose runtime memory contains `addr`.
     ///
     /// Overlapping module ranges are resolved in load order.
@@ -132,7 +142,7 @@ where
 
     /// Returns the committed module associated with an id.
     ///
-    /// The handle can be downcast to access state owned by a concrete module:
+    /// The returned module can be downcast to access state owned by a concrete type:
     ///
     /// ```ignore
     /// let module = context.module(id)?;
@@ -314,6 +324,9 @@ where
     }
 
     /// Releases one direct acquisition and detaches all modules that become unreachable.
+    ///
+    /// This consumes the corresponding [`ModuleLease`]. Dropping a lease without
+    /// calling this method leaves the acquisition active until this context is dropped.
     ///
     /// The returned collection keeps the entire unload group alive. Drop it
     /// after releasing any external registry lock to run pending finalizers.
@@ -545,6 +558,19 @@ mod tests {
             load_group_names(&mut context, root.id()),
             ["root", "dependency"]
         );
+    }
+
+    #[test]
+    fn module_id_for_tracks_committed_instance() {
+        let mut context = LinkContext::<(), NativeArch>::new(DomainId::PROCESS);
+        let module = ModuleHandle::new(SyntheticModule::empty("module"));
+        let lease = context.insert(node("module", module.clone())).unwrap();
+
+        assert_eq!(context.module_id_for(module.as_ref()), Some(lease.id()));
+
+        let unloaded = context.release(lease).unwrap();
+        assert_eq!(context.module_id_for(module.as_ref()), None);
+        drop(unloaded);
     }
 
     #[test]

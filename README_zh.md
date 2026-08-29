@@ -1,7 +1,7 @@
 # Relink：Rust ELF 加载器与运行时链接器
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/weizhiao/elf_loader/main/docs/assets/logo.svg" width="560" alt="Relink logo">
+  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo.svg" width="560" alt="Relink logo">
 </p>
 
 <p align="center">
@@ -9,7 +9,7 @@
   <a href="https://crates.io/crates/elf_loader"><img src="https://img.shields.io/crates/d/elf_loader.svg" alt="Crates.io downloads"></a>
   <a href="https://docs.rs/elf_loader"><img src="https://docs.rs/elf_loader/badge.svg" alt="Docs.rs"></a>
   <img src="https://img.shields.io/badge/rust-1.93.0%2B-blue.svg" alt="Minimum supported Rust version">
-  <a href="https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml"><img src="https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg" alt="Build status"></a>
+  <a href="https://github.com/weizhiao/Relink/actions/workflows/rust.yml"><img src="https://github.com/weizhiao/Relink/actions/workflows/rust.yml/badge.svg" alt="Build status"></a>
   <img src="https://img.shields.io/crates/l/elf_loader.svg" alt="MIT/Apache-2.0 license">
 </p>
 
@@ -47,7 +47,7 @@ Relink 是一个高可定制、高性能的 Rust ELF 加载与运行时链接库
 | 内存加载 | ✅ 可从路径、字节缓冲区或已解析 ELF 输入加载 | ❌ |
 | `ET_REL` 加载 | ✅ 可加载和重定位 `.o` / `.ko` / `ET_REL` 文件 | ❌ |
 | 链接前规划 | ✅ 可先解析依赖和 section，再决定映射方式 | ❌ |
-| 加载前布局优化 | ✅ 可在映射前调整 section 布局，用于热路径聚集或自定义重排 | ❌ |
+| Section 重排 | ✅ 在 `x86_64` 上可于映射前调整 section 布局，用于热路径聚集或自定义重排 | ❌ |
 | 映射策略 | ✅ 可替换 mmap、页大小、权限和内存访问后端 | ❌ |
 | 依赖与符号策略 | ✅ 可自定义 `DT_NEEDED` 解析、符号 scope 和重定位拦截 | ❌ |
 | Observer 事件 | ✅ 可在加载、符号绑定、重定位等阶段插入 hook | ❌ |
@@ -56,18 +56,18 @@ Relink 是一个高可定制、高性能的 Rust ELF 加载与运行时链接库
 
 ## 快速开始
 
-默认 feature 集合是 `full`，适合直接加载动态库、可执行文件、可重定位目标文件、TLS 和 lazy binding：
+默认 feature 集合是 `full`，包含 libc 后端、可重定位目标文件加载和内置的本机 lazy binder：
 
 ```toml
 [dependencies]
-elf_loader = "0.16.0"
+elf_loader = "0.17.0"
 ```
 
 如果你需要更小的构建，可以关闭默认 feature 后按需选择：
 
 ```toml
 [dependencies]
-elf_loader = { version = "0.16.0", default-features = false, features = ["libc"] }
+elf_loader = { version = "0.17.0", default-features = false, features = ["libc"] }
 ```
 
 ### 使用 Linker 加载依赖
@@ -95,11 +95,13 @@ fn main() -> Result<()> {
         .load(&mut context, root)?;
 
     let run = unsafe {
-        loaded
+        context
+            .module(loaded.root())?
             .get::<extern "C" fn() -> i32>("run")
             .expect("symbol `run` not found")
     };
     let _ = run();
+    drop(loaded.release(&mut context)?);
 
     Ok(())
 }
@@ -133,8 +135,8 @@ fn main() -> Result<()> {
 
 | Feature | 默认 | 作用 |
 | --- | --- | --- |
-| `libc` | 是 | 在 Unix-like 平台使用 libc 后端 |
-| `lazy-binding` | 是 | 启用 PLT/GOT lazy binding 和 lazy fixup 查找配置 |
+| `libc` | 是 | 在 Linux 和 Android 上使用 libc 后端 |
+| `lazy-binding` | 是 | 启用内置的本机 PLT/GOT lazy binder |
 | `object` | 是 | 启用可重定位目标文件（`ET_REL`）加载和 `Loader::load_object()` |
 | `version` | 否 | 启用带符号版本的查找，例如 `get_version()` |
 | `log` | 否 | 启用基于 `log` 的加载与重定位诊断输出 |
@@ -145,23 +147,26 @@ fn main() -> Result<()> {
 说明：
 
 - TLS 重定位和 `DefaultTlsResolver` 始终可用；自定义 runtime 仍可提供自己的 resolver。
+- 本机模块使用 TLS 时需调用 `Loader::with_default_tls_resolver()`；`Loader::new()` 默认不配置 TLS runtime。
+- 自定义 `LazyBinder` 始终可用；`lazy-binding` 只额外提供 `NativeLazyBinder`。
+- `Relocator::new()` 在通过 `lazy_binder()` 配置 binder 前默认使用 eager binding。
 - 默认 feature 是 `full`，等价于 `lazy-binding` + `object` + `libc`。
 - `load_object()` 仍由 `object` feature 控制；默认构建已包含该 feature，`--no-default-features` 时需要显式开启。
 
 ## 平台支持
 
-| 指令集 | 动态库 / 可执行文件 | 加载前布局优化 | `.o` / `ET_REL` |
+| 指令集 | 动态库 / 可执行文件 | Section 重排 | `.o` / `ET_REL` |
 | --- | --- | --- | --- |
 | `x86_64` | ✅ | ✅ | ✅ |
-| `x86` | ✅ | 🔧 | 🚧 |
-| `aarch64` | ✅ | 🔧 | 🚧 |
-| `arm` | ✅ | 🔧 | 🚧 |
-| `riscv64` | ✅ | 🔧 | ✅ |
-| `riscv32` | ✅ | 🔧 | 🚧 |
-| `loongarch64` | ✅ | 🔧 | 🚧 |
+| `x86` | ✅ | 🚧 | 🚧 |
+| `aarch64` | ✅ | 🚧 | 🚧 |
+| `arm` | ✅ | 🚧 | 🚧 |
+| `riscv64` | ✅ | 🚧 | ✅ |
+| `riscv32` | ✅ | 🚧 | 🚧 |
+| `loongarch64` | ✅ | 🚧 | 🚧 |
 | `xtensa` | 🔧 | 🚧 | 🚧 |
 
-符号：✅ 支持，🔧 基础支持，🚧 待补齐。复杂 section 重排修复和 `.o` / `ET_REL` 目前主要围绕 `x86_64` 与 `riscv64` 的重定位实现展开；其他架构欢迎补齐。
+符号：✅ 支持，🔧 基础支持，🚧 待补齐。Section 重排修复目前支持 `x86_64`；`.o` / `ET_REL` 重定位支持 `x86_64` 和 `riscv64`。其他架构欢迎补齐。
 
 Xtensa 目前支持动态重定位，但尚不支持 lazy binding 和 TLS 相关重定位。
 
@@ -178,6 +183,6 @@ Xtensa 目前支持动态重定位，但尚不支持 lazy binding 和 TLS 相关
 
 ## 贡献者
 
-<a href="https://github.com/weizhiao/elf_loader/graphs/contributors">
-  <img src="https://contributors-img.web.app/image?repo=weizhiao/elf_loader" alt="Project contributors">
+<a href="https://github.com/weizhiao/Relink/graphs/contributors">
+  <img src="https://contributors-img.web.app/image?repo=weizhiao/Relink" alt="Project contributors">
 </a>

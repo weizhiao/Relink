@@ -178,6 +178,10 @@ impl Display for ModuleId {
 /// intentionally neither [`Clone`] nor [`Copy`]; pass it to
 /// [`LinkContext::release`](super::LinkContext::release) exactly once when the
 /// direct use ends.
+///
+/// Dropping a lease does not mutate its [`LinkContext`](super::LinkContext) and
+/// therefore does not release the acquisition. A lost lease keeps its module
+/// rooted until that context is dropped.
 #[derive(Debug, PartialEq, Eq)]
 #[must_use = "a module lease must eventually be released"]
 pub struct ModuleLease {

@@ -1,6 +1,6 @@
 [package]
 name = "elf_loader"
-version = "0.16.0"
+version = "0.17.0"
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -10,7 +10,7 @@ readme = "README.md"
 keywords = ["elf", "loader", "jit", "linker", "no-std"]
 categories = ["no-std", "os", "parsing", "embedded", "compilers"]
 description = "A no_std-friendly ELF loader and runtime linker for Rust."
-exclude = [".gitignore", "ci", "docs"]
+exclude = [".gitignore", ".github", "ci", "docs"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -19,7 +19,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [workspace.package]
 authors = ["wzhao <1207410841@qq.com>"]
 edition = "2024"
-repository = "https://github.com/weizhiao/elf_loader"
+repository = "https://github.com/weizhiao/Relink"
 license = "MIT/Apache-2.0"
 rust-version = "1.93.0"
 
@@ -35,7 +35,7 @@ exclude = ["examples/xtensa-qemu"]
 syscalls = { version = "0.8.1", default-features = false }
 elf = { version = "0.8", default-features = false }
 cfg-if = '1.0'
-elf_loader = { version = "0.16.0", path = ".", default-features = false }
+elf_loader = { version = "0.17.0", path = ".", default-features = false }
 object = "0.40"
 
 [target.'cfg(windows)'.dependencies]

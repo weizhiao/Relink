@@ -28,8 +28,8 @@
 //!   actual [`Loader`], [`linker::KeyResolver`], [`Linker`], and [`LinkContext`].
 //! - Deep customization. Inject host or bridge symbols with
 //!   [`image::SyntheticModule`] and intercept relocations with handlers.
-//! - Optional advanced features. Lazy binding, relocatable object loading, logging, and
-//!   versioned symbol lookup are feature-gated; TLS supports both the built-in and custom resolvers.
+//! - Optional built-ins. The native lazy binder, relocatable object loading, logging, and
+//!   versioned symbol lookup are feature-gated; TLS and custom lazy binders remain available.
 //!
 //! ## Example
 //!
@@ -98,6 +98,7 @@
 //!             .expect("symbol `run` not found")
 //!     };
 //!     let _ = run();
+//!     drop(loaded.release(&mut context)?);
 //!
 //!     Ok(())
 //! }
@@ -144,9 +145,11 @@
 //!
 //! - TLS relocation handling is always available. For TLS-using modules, start from
 //!   `Loader::with_default_tls_resolver` or provide a custom TLS resolver.
-//! - `lazy-binding`: enables `Relocator::lazy` and PLT/GOT lazy binding.
+//! - `lazy-binding`: enables the built-in `NativeLazyBinder`. Custom
+//!   [`lazy::LazyBinder`] implementations and [`RelocatorRun::lazy`] are always available;
+//!   [`Relocator::new`] remains eager until a binder is configured.
 //! - `object`: enables `Loader::load_object` and relocatable object (`ET_REL`) loading.
-//! - `version`: enables version-aware symbol lookup via `ModuleHandle::get_version`.
+//! - `version`: enables version-aware `get_version` symbol lookups.
 //! - `log`, `portable-atomic`, and `use-syscall`: optional integrations for diagnostics and
 //!   specialized targets.
 //!
@@ -158,8 +161,8 @@
 //! - The crate currently targets `x86_64`, `x86`, `aarch64`, `arm`, `riscv64`, `riscv32`,
 //!   and `loongarch64`.
 //! - Little-endian Xtensa ELF32 images have basic cross-architecture dynamic
-//!   relocation and custom-binder lazy binding support; native runtime hooks and
-//!   full TLS support are pending.
+//!   relocation support; lazy binding, native runtime hooks, and TLS relocation
+//!   support are pending.
 //! - Relocatable object support is currently centered on `x86_64` and `riscv64`.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![no_std]

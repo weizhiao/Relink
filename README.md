@@ -1,7 +1,7 @@
 # Relink: Rust ELF Loader and Runtime Linker
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/weizhiao/elf_loader/main/docs/assets/logo.svg" width="560" alt="Relink logo">
+  <img src="https://raw.githubusercontent.com/weizhiao/Relink/main/docs/assets/logo.svg" width="560" alt="Relink logo">
 </p>
 
 <p align="center">
@@ -9,7 +9,7 @@
   <a href="https://crates.io/crates/elf_loader"><img src="https://img.shields.io/crates/d/elf_loader.svg" alt="Crates.io downloads"></a>
   <a href="https://docs.rs/elf_loader"><img src="https://docs.rs/elf_loader/badge.svg" alt="Docs.rs"></a>
   <img src="https://img.shields.io/badge/rust-1.93.0%2B-blue.svg" alt="Minimum supported Rust version">
-  <a href="https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml"><img src="https://github.com/weizhiao/elf_loader/actions/workflows/rust.yml/badge.svg" alt="Build status"></a>
+  <a href="https://github.com/weizhiao/Relink/actions/workflows/rust.yml"><img src="https://github.com/weizhiao/Relink/actions/workflows/rust.yml/badge.svg" alt="Build status"></a>
   <img src="https://img.shields.io/crates/l/elf_loader.svg" alt="MIT/Apache-2.0 license">
 </p>
 
@@ -47,7 +47,7 @@ Relink is a highly customizable, high-performance Rust ELF loading and runtime l
 | In-memory loading | ✅ Load from paths, byte buffers, or already parsed ELF inputs | ❌ |
 | `ET_REL` loading | ✅ Load and relocate `.o` / `.ko` / `ET_REL` files | ❌ |
 | Pre-link planning | ✅ Resolve dependencies and sections first, then decide how to map | ❌ |
-| Pre-load layout optimization | ✅ Adjust section layout before mapping for hot-code packing or custom reordering | ❌ |
+| Section reordering | ✅ On `x86_64`, adjust section layout before mapping for hot-code packing or custom reordering | ❌ |
 | Mapping policy | ✅ Replace mmap, page size, permissions, and memory-access backends | ❌ |
 | Dependency and symbol policy | ✅ Customize `DT_NEEDED` resolution, symbol scopes, and relocation interception | ❌ |
 | Observer events | ✅ Hook load, symbol binding, relocation, and related stages | ❌ |
@@ -56,19 +56,19 @@ Relink is a highly customizable, high-performance Rust ELF loading and runtime l
 
 ## Quick Start
 
-The default feature set is `full`, which is suitable for loading dynamic libraries, executables,
-relocatable objects, TLS, and lazy binding:
+The default feature set is `full`. It includes the libc backend, relocatable-object loading,
+and the built-in native lazy binder:
 
 ```toml
 [dependencies]
-elf_loader = "0.16.0"
+elf_loader = "0.17.0"
 ```
 
 For a smaller build, disable default features and opt in only to what you need:
 
 ```toml
 [dependencies]
-elf_loader = { version = "0.16.0", default-features = false, features = ["libc"] }
+elf_loader = { version = "0.17.0", default-features = false, features = ["libc"] }
 ```
 
 ### Use Linker to Load Dependencies
@@ -96,11 +96,13 @@ fn main() -> Result<()> {
         .load(&mut context, root)?;
 
     let run = unsafe {
-        loaded
+        context
+            .module(loaded.root())?
             .get::<extern "C" fn() -> i32>("run")
             .expect("symbol `run` not found")
     };
     let _ = run();
+    drop(loaded.release(&mut context)?);
 
     Ok(())
 }
@@ -134,8 +136,8 @@ Symbol lookup was measured after both loaders had already loaded the fixture cha
 
 | Feature | Default | Purpose |
 | --- | --- | --- |
-| `libc` | Yes | Use the libc backend on Unix-like platforms |
-| `lazy-binding` | Yes | Enable PLT/GOT lazy binding and lazy-fixup lookup configuration |
+| `libc` | Yes | Use the libc backend on Linux and Android |
+| `lazy-binding` | Yes | Enable the built-in native PLT/GOT lazy binder |
 | `object` | Yes | Enable relocatable object (`ET_REL`) loading and `Loader::load_object()` |
 | `version` | No | Enable version-aware symbol lookup such as `get_version()` |
 | `log` | No | Enable `log` integration for loader and relocation diagnostics |
@@ -146,23 +148,26 @@ Symbol lookup was measured after both loaders had already loaded the fixture cha
 Notes:
 
 - TLS relocation and `DefaultTlsResolver` are always available; custom runtimes can provide their own resolver.
+- Call `Loader::with_default_tls_resolver()` when native modules use TLS; `Loader::new()` starts with no TLS runtime.
+- Custom `LazyBinder` implementations are always available; `lazy-binding` only adds `NativeLazyBinder`.
+- `Relocator::new()` uses eager binding until a binder is configured with `lazy_binder()`.
 - The default feature set is `full`, equivalent to `lazy-binding` + `object` + `libc`.
 - `load_object()` is still controlled by the `object` feature. Default builds include it; with `--no-default-features`, enable it explicitly.
 
 ## Platform Support
 
-| Instruction set | Dynamic libraries / executables | Pre-load layout optimization | `.o` / `ET_REL` |
+| Instruction set | Dynamic libraries / executables | Section reordering | `.o` / `ET_REL` |
 | --- | --- | --- | --- |
 | `x86_64` | ✅ | ✅ | ✅ |
-| `x86` | ✅ | 🔧 | 🚧 |
-| `aarch64` | ✅ | 🔧 | 🚧 |
-| `arm` | ✅ | 🔧 | 🚧 |
-| `riscv64` | ✅ | 🔧 | ✅ |
-| `riscv32` | ✅ | 🔧 | 🚧 |
-| `loongarch64` | ✅ | 🔧 | 🚧 |
+| `x86` | ✅ | 🚧 | 🚧 |
+| `aarch64` | ✅ | 🚧 | 🚧 |
+| `arm` | ✅ | 🚧 | 🚧 |
+| `riscv64` | ✅ | 🚧 | ✅ |
+| `riscv32` | ✅ | 🚧 | 🚧 |
+| `loongarch64` | ✅ | 🚧 | 🚧 |
 | `xtensa` | 🔧 | 🚧 | 🚧 |
 
-Legend: ✅ supported, 🔧 basic support, 🚧 pending. Complex section-reorder repair and `.o` / `ET_REL` support are currently centered on `x86_64` and `riscv64` relocation handling; contributions for the other architectures are welcome.
+Legend: ✅ supported, 🔧 basic support, 🚧 pending. Section-reorder repair is currently available on `x86_64`; `.o` / `ET_REL` relocation is available on `x86_64` and `riscv64`. Contributions for the other architectures are welcome.
 
 Xtensa currently supports dynamic relocation, but not lazy binding or TLS
 relocations.
@@ -180,6 +185,6 @@ This project is dual-licensed under either of the following:
 
 ## Contributors
 
-<a href="https://github.com/weizhiao/elf_loader/graphs/contributors">
-  <img src="https://contributors-img.web.app/image?repo=weizhiao/elf_loader" alt="Project contributors">
+<a href="https://github.com/weizhiao/Relink/graphs/contributors">
+  <img src="https://contributors-img.web.app/image?repo=weizhiao/Relink" alt="Project contributors">
 </a>

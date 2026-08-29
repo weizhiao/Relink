@@ -21,7 +21,8 @@ use core::{fmt, marker::PhantomData, mem::MaybeUninit, ptr};
 ///
 /// `modules` contains the newly loaded modules' [`ModuleId`](crate::linker::ModuleId)
 /// values in load order. The result owns one lease for the root module; release
-/// the result when that direct use ends.
+/// the result when that direct use ends. Dropping `LoadResult` alone does not
+/// release that acquisition from its [`LinkContext`].
 #[must_use = "a loaded module lease must eventually be released"]
 pub struct LoadResult {
     lease: ModuleLease,
@@ -116,6 +117,7 @@ impl LoadResult {
 ///             .expect("symbol `plugin_entry` not found")
 ///     };
 ///     entry();
+///     drop(loaded.release(&mut context)?);
 ///     Ok(())
 /// }
 /// ```

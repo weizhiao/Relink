@@ -116,7 +116,9 @@ pub trait RegionAccess: Send + Sync + 'static {
     /// Borrows directly readable host bytes without checking bounds.
     ///
     /// # Safety
-    /// The caller must ensure `offset..offset + len` is inside this region.
+    /// The caller must ensure `offset..offset + len` is inside this region, keep
+    /// the backing mapping alive for the returned slice, and prevent mutation of
+    /// the same bytes while that slice is in use.
     unsafe fn borrow_bytes(&self, offset: usize, len: usize) -> Option<&'static [u8]>;
 
     /// Returns a host-accessible pointer without checking bounds.
