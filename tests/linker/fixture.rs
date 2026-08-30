@@ -12,6 +12,7 @@ pub(crate) struct Fixtures {
     pub(crate) dependent: Vec<u8>,
     pub(crate) global: Vec<u8>,
     pub(crate) plain: Vec<u8>,
+    pub(crate) nodelete: Vec<u8>,
     #[cfg(any(
         feature = "use-syscall",
         all(any(target_os = "linux", target_os = "android"), feature = "libc")
@@ -108,6 +109,13 @@ fn build() -> Fixtures {
     };
 
     let plain = build.rust_cdylib("plain.rs", "plain", &[], |_| {});
+    let nodelete = build.rust_cdylib("plain.rs", "nodelete", &[], |command| {
+        command
+            .arg("-C")
+            .arg("link-arg=-z")
+            .arg("-C")
+            .arg("link-arg=nodelete");
+    });
 
     #[cfg(any(
         feature = "use-syscall",
@@ -149,6 +157,7 @@ fn build() -> Fixtures {
         dependent: fs::read(dependent_path).expect("failed to read linker dependent fixture"),
         global: fs::read(global_path).expect("failed to read linker global fixture"),
         plain: fs::read(plain).expect("failed to read linker plain fixture"),
+        nodelete: fs::read(nodelete).expect("failed to read linker NODELETE fixture"),
         #[cfg(any(
             feature = "use-syscall",
             all(any(target_os = "linux", target_os = "android"), feature = "libc")

@@ -173,6 +173,12 @@ impl ModuleState {
         }
     }
 
+    /// Records that this module must remain committed once publication succeeds.
+    #[inline]
+    pub(crate) fn pin_self(&self) {
+        self.install_effects([], [self.id]);
+    }
+
     /// Returns whether the module is currently initialized.
     #[inline]
     pub fn is_initialized(&self) -> bool {

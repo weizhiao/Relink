@@ -9,6 +9,7 @@ use crate::{
     segment::ElfSegments,
 };
 use alloc::vec::Vec;
+use bitflags::bitflags;
 use core::fmt::{self, Debug, Display};
 use core::num::NonZeroUsize;
 use elf::abi::*;
@@ -245,6 +246,23 @@ impl<L: ElfLayout> ElfDyn<L> {
     }
 }
 
+bitflags! {
+    /// Flags carried by `DT_FLAGS`.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct ElfDynamicFlags: usize {
+        const SYMBOLIC = DF_SYMBOLIC as usize;
+        const BIND_NOW = DF_BIND_NOW as usize;
+        const STATIC_TLS = DF_STATIC_TLS as usize;
+    }
+
+    /// Flags carried by `DT_FLAGS_1`.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct ElfDynamicFlags1: usize {
+        const NOW = DF_1_NOW as usize;
+        const NODELETE = DF_1_NODELETE as usize;
+    }
+}
+
 /// Raw dynamic-section fields decoded from the DT entries.
 #[derive(Debug, Default)]
 pub(crate) struct ParsedDynamic {
@@ -279,8 +297,8 @@ pub(crate) struct ParsedDynamic {
     pub(crate) dt_debug_idx: Option<usize>,
     pub(crate) bind_now: bool,
     pub(crate) symbolic: bool,
-    pub(crate) flags: usize,
-    pub(crate) flags_1: usize,
+    pub(crate) flags: ElfDynamicFlags,
+    pub(crate) flags_1: ElfDynamicFlags1,
     pub(crate) is_rela: Option<bool>,
     pub(crate) needed_libs: Vec<NonZeroUsize>,
 }
@@ -294,8 +312,8 @@ impl ParsedDynamic {
     #[inline]
     fn apply(&mut self, idx: usize, tag: ElfDynamicTag, value: usize) -> bool {
         match tag {
-            ElfDynamicTag::FLAGS => self.flags = value,
-            ElfDynamicTag::FLAGS_1 => self.flags_1 = value,
+            ElfDynamicTag::FLAGS => self.flags = ElfDynamicFlags::from_bits_retain(value),
+            ElfDynamicTag::FLAGS_1 => self.flags_1 = ElfDynamicFlags1::from_bits_retain(value),
             ElfDynamicTag::PLTGOT => self.got_off = NonZeroUsize::new(value),
             ElfDynamicTag::NEEDED => {
                 if let Some(val) = NonZeroUsize::new(value) {
@@ -557,10 +575,11 @@ where
             strtab_size: parsed.strtab_size,
             // Check if binding should be done immediately
             bind_now: parsed.bind_now
-                || parsed.flags & DF_BIND_NOW as usize != 0
-                || parsed.flags_1 & DF_1_NOW as usize != 0,
-            symbolic: parsed.symbolic || parsed.flags & DF_SYMBOLIC as usize != 0,
-            static_tls: parsed.flags & DF_STATIC_TLS as usize != 0,
+                || parsed.flags.contains(ElfDynamicFlags::BIND_NOW)
+                || parsed.flags_1.contains(ElfDynamicFlags1::NOW),
+            nodelete: parsed.flags_1.contains(ElfDynamicFlags1::NODELETE),
+            symbolic: parsed.symbolic || parsed.flags.contains(ElfDynamicFlags::SYMBOLIC),
+            static_tls: parsed.flags.contains(ElfDynamicFlags::STATIC_TLS),
             got_plt: parsed.got_off.map(|off| add_base(off.get())).transpose()?,
             needed_libs: parsed.needed_libs,
             pltrel,
@@ -648,6 +667,8 @@ pub(crate) struct ElfDynamic<Arch: RelocationArch = NativeArch> {
     pub(crate) strtab_size: Option<NonZeroUsize>,
     /// Whether to bind symbols immediately.
     pub(crate) bind_now: bool,
+    /// Whether the object must remain loaded for the lifetime of its namespace.
+    pub(crate) nodelete: bool,
     /// Whether relocations in this object prefer definitions from itself.
     pub(crate) symbolic: bool,
     /// Whether the object uses static thread-local storage.
@@ -691,6 +712,7 @@ impl<Arch: RelocationArch> Debug for ElfDynamic<Arch> {
             .field("symtab", &format_args!("0x{:x}", self.symtab.get()))
             .field("strtab", &format_args!("0x{:x}", self.strtab.get()))
             .field("bind_now", &self.bind_now)
+            .field("nodelete", &self.nodelete)
             .field("symbolic", &self.symbolic)
             .field("static_tls", &self.static_tls)
             .field("got_plt", &self.got_plt)
@@ -713,7 +735,7 @@ impl<Arch: RelocationArch> Debug for ElfDynamic<Arch> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ElfDyn, ElfDynamicTag, parse_dynamic_entries};
+    use super::{ElfDyn, ElfDynamicFlags, ElfDynamicTag, parse_dynamic_entries};
     use core::num::NonZeroUsize;
     use elf::abi::DF_SYMBOLIC;
 
@@ -750,7 +772,7 @@ mod tests {
         ]);
 
         assert!(parsed.symbolic);
-        assert_eq!(parsed.flags & DF_SYMBOLIC as usize, DF_SYMBOLIC as usize);
+        assert!(parsed.flags.contains(ElfDynamicFlags::SYMBOLIC));
     }
 
     #[test]

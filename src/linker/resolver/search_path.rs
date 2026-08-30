@@ -333,10 +333,7 @@ where
 
         let requested_value = request.requested().as_str();
         let expanded = if requested_value.contains('$') {
-            let Some(expanded) = request
-                .tokens()
-                .expand(requested_value, Some(request.origin()))
-            else {
+            let Some(expanded) = request.tokens().expand(requested_value, request.origin()) else {
                 return Err(req.unresolved());
             };
             Some(expanded)

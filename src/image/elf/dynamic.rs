@@ -403,10 +403,14 @@ where
         };
         let lazy_plt = PltRelocInfo::new(dynamic.pltrel.clone(), lazy_symtab);
 
+        let state = ModuleState::new(self.source_id, self.domain);
+        if dynamic.nodelete {
+            state.pin_self();
+        }
         let inner = Arc::new(ElfModule {
             runtime: Box::new(CoreRuntime::new::<D, R, Tls>(Some(lazy_plt))),
             executor: self.executor,
-            state: ModuleState::new(self.source_id, self.domain),
+            state,
             lifecycle: OnceCell::new(),
             search,
             exports: arc_unsize!(Arc::new(exports) => dyn SymbolExports<Arch::Layout>),

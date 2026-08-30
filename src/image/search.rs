@@ -133,14 +133,14 @@ impl PathTokens {
         self.platform = Some(Arc::from(platform.as_ref()));
     }
 
-    pub(crate) fn expand(&self, value: &str, origin: Option<&Path>) -> Option<PathBuf> {
+    pub(crate) fn expand(&self, value: &str, origin: &Path) -> Option<PathBuf> {
         let mut expanded = String::with_capacity(value.len());
         let mut input = value;
         while let Some(pos) = input.find('$') {
             expanded.push_str(&input[..pos]);
             let token = &input[pos + 1..];
             let (len, replacement) = if let Some(len) = token_len(token, "ORIGIN") {
-                (len, origin.map(Path::as_str))
+                (len, Some(origin.as_str()))
             } else if let Some(len) = token_len(token, "LIB") {
                 (len, self.lib.as_deref())
             } else if let Some(len) = token_len(token, "PLATFORM") {
@@ -345,7 +345,7 @@ fn expand_dirs(
         let Some(path) = (if value.is_empty() {
             Some(PathBuf::from("."))
         } else {
-            tokens.expand(value, Some(origin))
+            tokens.expand(value, origin)
         }) else {
             continue;
         };

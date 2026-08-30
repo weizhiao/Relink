@@ -5,6 +5,7 @@ struct LoadingFixtures {
     provider: &'static [u8],
     dependent: &'static [u8],
     global: &'static [u8],
+    nodelete: &'static [u8],
     #[cfg(any(
         feature = "use-syscall",
         all(any(target_os = "linux", target_os = "android"), feature = "libc")
@@ -21,6 +22,7 @@ impl LoadingFixtures {
             provider: &real.provider,
             dependent: &real.dependent,
             global: &real.global,
+            nodelete: &real.nodelete,
             #[cfg(any(
                 feature = "use-syscall",
                 all(any(target_os = "linux", target_os = "android"), feature = "libc")
@@ -342,6 +344,48 @@ fn rollback_removes_pin_from_existing_dependency() {
 
     assert_eq!(unloaded.len(), 1);
     assert_eq!(unloaded[0].module().name(), "existing");
+    assert!(context.is_empty());
+}
+
+#[test]
+fn nodelete_remains_loaded() {
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let loaded = Linker::new()
+        .resolver(SingleBinaryResolver {
+            key: "nodelete",
+            name: "libnodelete.so",
+            data: &fixtures().nodelete,
+        })
+        .run()
+        .load(&mut context, "nodelete")
+        .expect("NODELETE module should load");
+    let id = loaded.root();
+
+    assert!(loaded.release(&mut context).unwrap().is_empty());
+    assert_eq!(context.module_id("nodelete"), Some(id));
+}
+
+#[test]
+fn nodelete_rolls_back_with_failed_load() {
+    let linker = Linker::new().resolver(SingleBinaryResolver {
+        key: "nodelete",
+        name: "libnodelete.so",
+        data: &fixtures().nodelete,
+    });
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut run = linker
+        .run()
+        .with_observer(InitRecorder::failing(Arc::clone(&calls)));
+    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let prepared = run.prepare_load(&mut context, "nodelete").unwrap();
+    let relocated = run.relocate(prepared).unwrap();
+    let failed = relocated
+        .publish(&mut context)
+        .unwrap()
+        .initialize()
+        .expect_err("initializer should fail");
+
+    failed.rollback(&mut context);
     assert!(context.is_empty());
 }
 
