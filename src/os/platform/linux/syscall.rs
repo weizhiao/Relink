@@ -29,6 +29,33 @@ pub(crate) fn current_thread_id() -> usize {
     unsafe { syscalls::raw_syscall!(Sysno::gettid) }
 }
 
+pub(crate) fn path_is_dir(path: &Path) -> bool {
+    const AT_FDCWD: core::ffi::c_int = -100;
+    const STATX_TYPE: u32 = 1;
+    const S_IFMT: u16 = 0o170000;
+    const S_IFDIR: u16 = 0o040000;
+
+    let Ok(path) = CString::new(path.as_str()) else {
+        return false;
+    };
+    let mut stat = MaybeUninit::<Statx>::zeroed();
+    let result = unsafe {
+        syscalls::raw_syscall!(
+            Sysno::statx,
+            AT_FDCWD,
+            path.as_ptr(),
+            0,
+            STATX_TYPE,
+            stat.as_mut_ptr()
+        )
+    };
+    if result != 0 {
+        return false;
+    }
+    let stat = unsafe { stat.assume_init() };
+    stat.mask & STATX_TYPE != 0 && stat.mode & S_IFMT == S_IFDIR
+}
+
 pub(crate) unsafe fn register_thread_destructor(
     _destructor: unsafe extern "C" fn(*mut c_void),
     _value: *mut c_void,

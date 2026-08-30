@@ -15,8 +15,9 @@ use windows_sys::Win32::{
         CloseHandle, GENERIC_EXECUTE, GENERIC_READ, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
     },
     Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
-        GetFileInformationByHandle, OPEN_EXISTING, ReadFile,
+        BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
+        FILE_SHARE_READ, GetFileAttributesW, GetFileInformationByHandle, INVALID_FILE_ATTRIBUTES,
+        OPEN_EXISTING, ReadFile,
     },
     System::Memory::{
         self as Memory, CreateFileMappingW, MEM_COMMIT, MEM_PRESERVE_PLACEHOLDER, MEM_RELEASE,
@@ -44,6 +45,18 @@ impl DefaultMmap {
 
 pub(crate) fn current_thread_id() -> usize {
     unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() as usize }
+}
+
+fn wide_path(path: &Path) -> Vec<u16> {
+    let mut wide = path.as_str().encode_utf16().collect::<Vec<_>>();
+    wide.push(0);
+    wide
+}
+
+pub(crate) fn path_is_dir(path: &Path) -> bool {
+    let path = wide_path(path);
+    let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
+    attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_DIRECTORY != 0
 }
 
 /// Registers a destructor (Stub for Windows)
@@ -262,11 +275,7 @@ impl RawFile {
 
     pub(crate) fn from_path(path: &Path) -> Result<Self> {
         let path_str = path.as_str();
-        let mut wide_path = Vec::<u16>::with_capacity(path_str.len() + 1);
-        for c in path_str.encode_utf16() {
-            wide_path.push(c);
-        }
-        wide_path.push(0);
+        let wide_path = wide_path(path);
 
         let handle = unsafe {
             CreateFileW(

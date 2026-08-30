@@ -4,6 +4,11 @@ use crate::{
 };
 use core::ffi::c_void;
 
+#[inline]
+pub(crate) fn path_is_dir(_path: &Path) -> bool {
+    false
+}
+
 pub(crate) fn current_thread_id() -> usize {
     0
 }

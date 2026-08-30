@@ -98,7 +98,6 @@ impl LoadResult {
 ///     LinkContext, Linker, Result,
 ///     input::PathBuf,
 ///     linker::SearchPathResolver,
-///     runtime::DomainId,
 /// };
 ///
 /// fn main() -> Result<()> {
@@ -106,7 +105,7 @@ impl LoadResult {
 ///     resolver.push_fixed_dir("plugins");
 ///
 ///     let linker = Linker::new().resolver(resolver);
-///     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+///     let mut context = LinkContext::for_process();
 ///
 ///     let mut run = linker.run();
 ///     let loaded = run.load(&mut context, PathBuf::from("libplugin.so"))?;

@@ -1,11 +1,122 @@
 use crate::{
     input::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, AtomicU8, Ordering},
 };
 use alloc::{boxed::Box, collections::BTreeSet, string::String, vec::Vec};
-use core::fmt;
+use core::{borrow::Borrow, cmp::Ordering as CmpOrdering, fmt, ops::Deref};
 
-pub(crate) type SharedDir = Arc<str>;
+#[repr(u8)]
+enum DirStatus {
+    Unknown,
+    Existing,
+    Missing,
+}
+
+struct SearchDir {
+    path: String,
+    status: AtomicU8,
+}
+
+#[derive(Clone)]
+pub(crate) struct SharedDir(Arc<SearchDir>);
+
+impl SharedDir {
+    pub(crate) fn new(path: String) -> Self {
+        let status = if Path::new(&path).is_absolute() {
+            DirStatus::Unknown
+        } else {
+            DirStatus::Existing
+        };
+        Self(Arc::new(SearchDir {
+            path,
+            status: AtomicU8::new(status as u8),
+        }))
+    }
+
+    #[inline]
+    pub(crate) fn path(&self) -> &Path {
+        Path::new(&self.0.path)
+    }
+
+    #[inline]
+    pub(crate) fn is_missing(&self) -> bool {
+        self.0.status.load(Ordering::Relaxed) == DirStatus::Missing as u8
+    }
+
+    #[inline]
+    pub(crate) fn needs_check(&self) -> bool {
+        self.0.status.load(Ordering::Relaxed) == DirStatus::Unknown as u8
+    }
+
+    #[inline]
+    pub(crate) fn mark_existing(&self) {
+        self.0
+            .status
+            .store(DirStatus::Existing as u8, Ordering::Relaxed);
+    }
+
+    pub(crate) fn mark_missing(&self) {
+        let _ = self.0.status.compare_exchange(
+            DirStatus::Unknown as u8,
+            DirStatus::Missing as u8,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+    }
+}
+
+impl Deref for SharedDir {
+    type Target = str;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0.path
+    }
+}
+
+impl AsRef<str> for SharedDir {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        self
+    }
+}
+
+impl Borrow<str> for SharedDir {
+    #[inline]
+    fn borrow(&self) -> &str {
+        self
+    }
+}
+
+impl PartialEq for SharedDir {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl Eq for SharedDir {}
+
+impl PartialOrd for SharedDir {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SharedDir {
+    #[inline]
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        self.as_ref().cmp(other.as_ref())
+    }
+}
+
+impl fmt::Debug for SharedDir {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self)
+    }
+}
 
 #[derive(Clone, Default)]
 pub(crate) struct PathTokens {
@@ -85,10 +196,10 @@ impl SearchPathPool {
 
     fn intern(dirs: &mut BTreeSet<SharedDir>, path: String) -> SharedDir {
         if let Some(dir) = dirs.get(path.as_str()) {
-            return Arc::clone(dir);
+            return dir.clone();
         }
-        let dir = Arc::from(path);
-        dirs.insert(Arc::clone(&dir));
+        let dir = SharedDir::new(path);
+        dirs.insert(dir.clone());
         dir
     }
 
@@ -152,7 +263,7 @@ impl ModuleSearch {
             runpath,
             rpath,
             &PathTokens::default(),
-            Arc::from,
+            SharedDir::new,
         )
     }
 
@@ -198,7 +309,7 @@ impl ModuleSearch {
     pub fn runpath(&self) -> Option<impl ExactSizeIterator<Item = &Path>> {
         self.runpath
             .as_deref()
-            .map(|dirs| dirs.iter().map(|dir| Path::new(dir.as_ref())))
+            .map(|dirs| dirs.iter().map(SharedDir::path))
     }
 
     /// Iterates over expanded `DT_RPATH` directories, if the tag is present.
@@ -206,7 +317,17 @@ impl ModuleSearch {
     pub fn rpath(&self) -> Option<impl ExactSizeIterator<Item = &Path>> {
         self.rpath
             .as_deref()
-            .map(|dirs| dirs.iter().map(|dir| Path::new(dir.as_ref())))
+            .map(|dirs| dirs.iter().map(SharedDir::path))
+    }
+
+    #[inline]
+    pub(crate) fn runpath_dirs(&self) -> Option<&[SharedDir]> {
+        self.runpath.as_deref()
+    }
+
+    #[inline]
+    pub(crate) fn rpath_dirs(&self) -> Option<&[SharedDir]> {
+        self.rpath.as_deref()
     }
 }
 
@@ -313,7 +434,7 @@ mod tests {
         assert_eq!(first.len(), 2);
         assert_eq!(first[0].as_ref(), "/opt/app/lib");
         assert_eq!(first[1].as_ref(), "/usr/lib");
-        assert!(Arc::ptr_eq(&first[0], &second[0]));
-        assert!(Arc::ptr_eq(&first[1], &second[1]));
+        assert!(Arc::ptr_eq(&first[0].0, &second[0].0));
+        assert!(Arc::ptr_eq(&first[1].0, &second[1].0));
     }
 }

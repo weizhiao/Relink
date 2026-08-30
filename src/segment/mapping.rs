@@ -8,7 +8,7 @@ use super::{ElfSegment, ElfSegments};
 impl ElfSegment {
     #[inline]
     fn mapping_prot(&self) -> ProtFlags {
-        if self.from_relocatable {
+        if self.from_object {
             ProtFlags::PROT_READ | ProtFlags::PROT_WRITE
         } else {
             self.prot
@@ -55,7 +55,10 @@ impl ElfSegment {
         debug_assert!(len.is_multiple_of(self.page_size));
 
         self.need_copy = true;
-        if !self.from_relocatable {
+        // ET_REL segments combine separately laid-out sections and must be
+        // populated piece by piece. A program-header segment has one contiguous
+        // file range, so it can be mapped directly when an fd is available.
+        if !self.from_object {
             debug_assert_eq!(self.map_info.len(), 1);
             debug_assert!(self.map_info[0].offset.is_multiple_of(self.page_size));
             if let Some(fd) = object.as_fd() {
@@ -102,7 +105,7 @@ impl ElfSegment {
     where
         R: RegionAccess,
     {
-        if self.need_copy || self.from_relocatable {
+        if self.need_copy || self.from_object {
             let len = self.len;
             debug_assert!(len.is_multiple_of(self.page_size));
             let addr = self.vm_addr(space.base());

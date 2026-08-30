@@ -76,12 +76,11 @@
 //!     LinkContext, Linker, Result,
 //!     input::PathBuf,
 //!     linker::SearchPathResolver,
-//!     runtime::DomainId,
 //! };
 //!
 //! fn main() -> Result<()> {
 //!     let root = PathBuf::from("path/to/plugin.so");
-//!     let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+//!     let mut context = LinkContext::for_process();
 //!     let mut resolver = SearchPathResolver::new();
 //!     resolver.push_rpath();
 //!     resolver.push_runpath();

@@ -1,12 +1,12 @@
-use super::{
-    KeyResolver, ResolveInput, ResolveRequest, ResolvedKey,
-    request::{LoaderProvider, LoaderVisitor},
-};
+#[cfg(test)]
+use super::request::LoaderVisitor;
+use super::{KeyResolver, ResolveInput, ResolveRequest, ResolvedKey, request::LoaderProvider};
 use crate::{
     Error, IoError, ParseEhdrError, Result,
     image::{ModuleSearch, PathTokens, SharedDir, normalize_dir},
     input::{ElfFile, Path, PathBuf},
     loader::read_ehdr,
+    os::path_is_dir,
     relocation::RelocationArch,
     sync::{Arc, arc_unsize},
     tls::TlsResolver,
@@ -26,6 +26,16 @@ enum SearchPathEntry {
     Dir(SharedDir),
     DirProvider(Arc<PathProvider>),
     CandidateProvider(Arc<PathProvider>),
+}
+
+impl SearchPathEntry {
+    fn duplicates(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Rpath, Self::Rpath) | (Self::Runpath, Self::Runpath) => true,
+            (Self::Dir(left), Self::Dir(right)) => left.as_ref() == right.as_ref(),
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Debug for SearchPathEntry {
@@ -130,8 +140,9 @@ impl fmt::Debug for CandidateRequest<'_> {
 /// for them.
 ///
 /// Module-owned `DT_RPATH` and `DT_RUNPATH` entries have their dynamic string
-/// tokens expanded by the loader and are shared between modules. File existence
-/// and final lookup results are not cached.
+/// tokens expanded by the loader and are shared between modules. Absolute
+/// directories found not to exist are remembered and skipped by later lookups;
+/// relative directories and final lookup results are not cached.
 #[derive(Clone, Default)]
 pub struct SearchPathResolver {
     entries: Vec<SearchPathEntry>,
@@ -155,37 +166,9 @@ impl SearchPathResolver {
     }
 
     fn push_entry(&mut self, entry: SearchPathEntry) -> &mut Self {
-        let entry = match entry {
-            SearchPathEntry::Rpath => {
-                if self
-                    .entries
-                    .iter()
-                    .any(|entry| matches!(entry, SearchPathEntry::Rpath))
-                {
-                    return self;
-                }
-                SearchPathEntry::Rpath
-            }
-            SearchPathEntry::Runpath => {
-                if self
-                    .entries
-                    .iter()
-                    .any(|entry| matches!(entry, SearchPathEntry::Runpath))
-                {
-                    return self;
-                }
-                SearchPathEntry::Runpath
-            }
-            SearchPathEntry::Dir(dir) => {
-                if self.entries.iter().any(|entry| {
-                    matches!(entry, SearchPathEntry::Dir(existing) if existing.as_ref() == dir.as_ref())
-                }) {
-                    return self;
-                }
-                SearchPathEntry::Dir(dir)
-            }
-            entry => entry,
-        };
+        if self.entries.iter().any(|other| entry.duplicates(other)) {
+            return self;
+        }
         self.entries.push(entry);
         self
     }
@@ -208,12 +191,15 @@ impl SearchPathResolver {
 
     /// Appends a fixed search directory.
     pub fn push_fixed_dir(&mut self, dir: impl Into<PathBuf>) -> &mut Self {
-        self.push_entry(SearchPathEntry::Dir(Arc::from(
+        self.push_entry(SearchPathEntry::Dir(SharedDir::new(
             normalize_dir(dir.into()).into_string(),
         )))
     }
 
     /// Appends a callback that can provide search directories per request.
+    ///
+    /// Provider results are treated as dynamic and are therefore not retained
+    /// or negatively cached between requests.
     pub fn push_search_dir_provider<F>(&mut self, provider: F) -> &mut Self
     where
         F: for<'req> Fn(CandidateRequest<'req>, &mut Vec<PathBuf>) -> Result<()>
@@ -243,20 +229,8 @@ impl SearchPathResolver {
         )))
     }
 
-    /// Opens and validates a target-compatible ELF candidate.
-    fn open_elf<Arch: RelocationArch>(path: &Path) -> Result<Option<ElfFile>> {
-        let file = match ElfFile::from_path(path) {
-            Ok(file) => file,
-            Err(Error::Io(IoError::OpenFailed { .. })) => return Ok(None),
-            Err(err) => return Err(err),
-        };
-
-        read_ehdr::<Arch>(&file)?;
-        Ok(Some(file))
-    }
-
     #[inline]
-    fn is_incompatible_elf(err: &Error) -> bool {
+    fn is_incompatible(err: &Error) -> bool {
         matches!(
             err,
             Error::ParseEhdr(
@@ -266,6 +240,70 @@ impl SearchPathResolver {
                     | ParseEhdrError::InvalidFlags { .. }
             )
         )
+    }
+
+    /// Opens and validates a target-compatible ELF candidate.
+    fn try_candidate<Arch: RelocationArch>(
+        path: &Path,
+        dir: Option<&SharedDir>,
+        skip_incompatible: bool,
+        incompatible: &mut Option<Error>,
+    ) -> Result<Option<ElfFile>> {
+        let file = match ElfFile::from_path(path) {
+            Ok(file) => {
+                if let Some(dir) = dir {
+                    dir.mark_existing();
+                }
+                file
+            }
+            Err(Error::Io(IoError::OpenFailed { .. })) => {
+                if let Some(dir) = dir.filter(|dir| dir.needs_check()) {
+                    if path_is_dir(dir.path()) {
+                        dir.mark_existing();
+                    } else {
+                        dir.mark_missing();
+                    }
+                }
+                return Ok(None);
+            }
+            Err(err) => return Err(err),
+        };
+
+        match read_ehdr::<Arch>(&file) {
+            Ok(_) => Ok(Some(file)),
+            Err(err) if skip_incompatible && Self::is_incompatible(&err) => {
+                incompatible.get_or_insert(err);
+                Ok(None)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn try_dir<Arch: RelocationArch>(
+        dir: &SharedDir,
+        requested: &Path,
+        candidate: &mut PathBuf,
+        incompatible: &mut Option<Error>,
+    ) -> Result<Option<ElfFile>> {
+        if dir.is_missing() {
+            return Ok(None);
+        }
+        candidate.set_joined(dir.path(), requested.as_str());
+        Self::try_candidate::<Arch>(candidate, Some(dir), true, incompatible)
+    }
+
+    fn try_dirs<Arch: RelocationArch>(
+        dirs: &[SharedDir],
+        requested: &Path,
+        candidate: &mut PathBuf,
+        incompatible: &mut Option<Error>,
+    ) -> Result<Option<ElfFile>> {
+        for dir in dirs {
+            if let Some(file) = Self::try_dir::<Arch>(dir, requested, candidate, incompatible)? {
+                return Ok(Some(file));
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -289,24 +327,9 @@ where
             ResolveInput::Root { root } => root.as_path(),
             ResolveInput::Dependency { needed } => Path::new(needed),
         };
-        let loaders = |visitor: &mut LoaderVisitor<'_>| req.visit_loaders(visitor);
-        let request = CandidateRequest::new(requested, req.search(), req.tokens(), &loaders);
+        let request = CandidateRequest::new(requested, req.search(), req.tokens(), req.loaders());
 
         let mut incompatible = None;
-        let mut try_candidate = |candidate: &Path,
-                                 continue_on_incompatible: bool|
-         -> Result<Option<ResolvedKey<'cfg, Arch, Tls>>> {
-            let file = match Self::open_elf::<Arch>(candidate) {
-                Ok(Some(file)) => file,
-                Ok(None) => return Ok(None),
-                Err(err) if continue_on_incompatible && Self::is_incompatible_elf(&err) => {
-                    incompatible.get_or_insert(err);
-                    return Ok(None);
-                }
-                Err(err) => return Err(err),
-            };
-            Ok(Some(ResolvedKey::load(file)))
-        };
 
         let requested_value = request.requested().as_str();
         let expanded = if requested_value.contains('$') {
@@ -324,7 +347,9 @@ where
             .as_ref()
             .map_or_else(|| request.requested(), PathBuf::as_path);
         if requested.has_dir_separator() {
-            return try_candidate(requested, false)?.ok_or_else(|| req.unresolved());
+            return Self::try_candidate::<Arch>(requested, None, false, &mut incompatible)?
+                .map(ResolvedKey::load)
+                .ok_or_else(|| req.unresolved());
         }
 
         let mut provided = Vec::new();
@@ -332,42 +357,41 @@ where
         for entry in &self.entries {
             match entry {
                 SearchPathEntry::Rpath => {
-                    if request.owner().runpath().is_some() {
+                    if request.owner().runpath_dirs().is_some() {
                         continue;
                     }
                     let mut found = None;
                     request.visit_loaders(|owner| {
-                        let Some(dirs) = owner.rpath() else {
+                        let Some(dirs) = owner.rpath_dirs() else {
                             return Ok(true);
                         };
-                        for dir in dirs {
-                            candidate.set_joined(dir, requested.as_str());
-                            if let Some(value) = try_candidate(candidate.as_path(), true)? {
-                                found = Some(value);
-                                return Ok(false);
-                            }
-                        }
-                        Ok(true)
+                        found = Self::try_dirs::<Arch>(
+                            dirs,
+                            requested,
+                            &mut candidate,
+                            &mut incompatible,
+                        )?;
+                        Ok(found.is_none())
                     })?;
-                    if let Some(found) = found {
-                        return Ok(found);
+                    if let Some(file) = found {
+                        return Ok(ResolvedKey::load(file));
                     }
                 }
                 SearchPathEntry::Runpath => {
-                    let Some(dirs) = request.owner().runpath() else {
+                    let Some(dirs) = request.owner().runpath_dirs() else {
                         continue;
                     };
-                    for dir in dirs {
-                        candidate.set_joined(dir, requested.as_str());
-                        if let Some(found) = try_candidate(candidate.as_path(), true)? {
-                            return Ok(found);
-                        }
+                    if let Some(file) =
+                        Self::try_dirs::<Arch>(dirs, requested, &mut candidate, &mut incompatible)?
+                    {
+                        return Ok(ResolvedKey::load(file));
                     }
                 }
                 SearchPathEntry::Dir(dir) => {
-                    candidate.set_joined(Path::new(dir), requested.as_str());
-                    if let Some(found) = try_candidate(candidate.as_path(), true)? {
-                        return Ok(found);
+                    if let Some(file) =
+                        Self::try_dir::<Arch>(dir, requested, &mut candidate, &mut incompatible)?
+                    {
+                        return Ok(ResolvedKey::load(file));
                     }
                 }
                 SearchPathEntry::DirProvider(provider) => {
@@ -375,8 +399,10 @@ where
                     provider(request, &mut provided)?;
                     for dir in &provided {
                         candidate.set_joined(dir, requested.as_str());
-                        if let Some(found) = try_candidate(candidate.as_path(), true)? {
-                            return Ok(found);
+                        if let Some(file) =
+                            Self::try_candidate::<Arch>(&candidate, None, true, &mut incompatible)?
+                        {
+                            return Ok(ResolvedKey::load(file));
                         }
                     }
                 }
@@ -384,18 +410,17 @@ where
                     provided.clear();
                     provider(request, &mut provided)?;
                     for candidate in &provided {
-                        if let Some(found) = try_candidate(candidate.as_path(), true)? {
-                            return Ok(found);
+                        if let Some(file) =
+                            Self::try_candidate::<Arch>(candidate, None, true, &mut incompatible)?
+                        {
+                            return Ok(ResolvedKey::load(file));
                         }
                     }
                 }
             }
         }
 
-        match incompatible {
-            Some(err) => Err(err),
-            None => Err(req.unresolved()),
-        }
+        Err(incompatible.unwrap_or_else(|| req.unresolved()))
     }
 }
 
@@ -465,27 +490,100 @@ mod tests {
     }
 
     #[test]
-    fn resolver_is_clone() {
-        fn assert_clone<T: Clone>() {}
-
-        assert_clone::<SearchPathResolver>();
-    }
-
-    #[test]
-    fn fixed_dirs_are_shared_and_deduplicated() {
+    fn fixed_dirs_are_deduplicated() {
         let mut resolver = SearchPathResolver::new();
         resolver.push_fixed_dir("/usr/lib/");
         resolver.push_fixed_dir("/usr/lib");
         assert_eq!(resolver.entries.len(), 1);
+    }
 
-        let cloned = resolver.clone();
-        let SearchPathEntry::Dir(first) = &resolver.entries[0] else {
-            panic!("expected fixed directory");
-        };
-        let SearchPathEntry::Dir(second) = &cloned.entries[0] else {
-            panic!("expected fixed directory");
-        };
-        assert!(Arc::ptr_eq(first, second));
+    #[test]
+    fn missing_absolute_dirs_are_cached_across_clones() {
+        let base = temp_dir("missing_absolute");
+        let missing = base.join("missing");
+        let library = missing.join("libleaf.so");
+        let owner = module_search("/app/owner", None, None, None);
+        let chain = [&owner];
+        let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
+        let tokens = PathTokens::default();
+        let request = CandidateRequest::new(Path::new("libleaf.so"), &owner, &tokens, &loaders);
+        let mut resolver = SearchPathResolver::new();
+        resolver.push_fixed_dir(missing.to_str().unwrap());
+        let clone = resolver.clone();
+
+        assert!(resolve_path(&resolver, request).is_none());
+        install_elf(&library);
+        assert!(resolve_path(&clone, request).is_none());
+    }
+
+    #[test]
+    fn existing_absolute_dirs_are_retried() {
+        let dir = temp_dir("existing_absolute");
+        let library = dir.join("libleaf.so");
+        let owner = module_search("/app/owner", None, None, None);
+        let chain = [&owner];
+        let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
+        let tokens = PathTokens::default();
+        let request = CandidateRequest::new(Path::new("libleaf.so"), &owner, &tokens, &loaders);
+        let mut resolver = SearchPathResolver::new();
+        resolver.push_fixed_dir(dir.to_str().unwrap());
+
+        assert!(resolve_path(&resolver, request).is_none());
+        install_elf(&library);
+        assert_eq!(
+            resolve_path(&resolver, request).unwrap().as_str(),
+            library.to_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn relative_dirs_are_not_cached_as_missing() {
+        let dir = std::path::PathBuf::from(std::format!(
+            "target/elf_loader_search_relative_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let library = dir.join("libleaf.so");
+        let owner = module_search("/app/owner", None, None, None);
+        let chain = [&owner];
+        let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
+        let tokens = PathTokens::default();
+        let request = CandidateRequest::new(Path::new("libleaf.so"), &owner, &tokens, &loaders);
+        let mut resolver = SearchPathResolver::new();
+        resolver.push_fixed_dir(dir.to_str().unwrap());
+
+        assert!(resolve_path(&resolver, request).is_none());
+        install_elf(&library);
+        assert_eq!(
+            resolve_path(&resolver, request).unwrap().as_str(),
+            library.to_str().unwrap()
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn provided_dirs_are_not_cached_as_missing() {
+        let base = temp_dir("provided");
+        let dir = base.join("missing");
+        let library = dir.join("libleaf.so");
+        let provided = PathBuf::from(dir.to_str().unwrap());
+        let owner = module_search("/app/owner", None, None, None);
+        let chain = [&owner];
+        let loaders = |visitor: &mut LoaderVisitor<'_>| visit_chain(&chain, visitor);
+        let tokens = PathTokens::default();
+        let request = CandidateRequest::new(Path::new("libleaf.so"), &owner, &tokens, &loaders);
+        let mut resolver = SearchPathResolver::new();
+        resolver.push_search_dir_provider(move |_, dirs| {
+            dirs.push(provided.clone());
+            Ok(())
+        });
+
+        assert!(resolve_path(&resolver, request).is_none());
+        install_elf(&library);
+        assert_eq!(
+            resolve_path(&resolver, request).unwrap().as_str(),
+            library.to_str().unwrap()
+        );
     }
 
     #[test]

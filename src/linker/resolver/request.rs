@@ -132,6 +132,11 @@ impl<'a, Root> ResolveRequest<'a, Root> {
     }
 
     #[inline]
+    pub(super) const fn loaders(&self) -> &'a LoaderProvider<'a> {
+        self.loaders
+    }
+
+    #[inline]
     pub(crate) const fn tokens(&self) -> &'a PathTokens {
         self.tokens
     }

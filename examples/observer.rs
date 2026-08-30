@@ -11,7 +11,6 @@ use elf_loader::{
         SymbolBindingEvent,
     },
     relocation::RelocationArch,
-    runtime::DomainId,
     tls::TlsResolver,
 };
 
@@ -85,7 +84,7 @@ fn main() -> Result<()> {
     let linker = Linker::new()
         .loader(LOADER)
         .resolver(fixture_support::search_path_resolver());
-    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::for_process();
     let middle = linker
         .run()
         .with_observer(Observer)

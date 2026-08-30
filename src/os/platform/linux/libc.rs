@@ -37,6 +37,17 @@ pub(crate) fn current_thread_id() -> usize {
     unsafe { libc::pthread_self() as usize }
 }
 
+pub(crate) fn path_is_dir(path: &Path) -> bool {
+    let Ok(path) = CString::new(path.as_str()) else {
+        return false;
+    };
+    let mut stat = MaybeUninit::<libc::stat>::uninit();
+    if unsafe { libc::stat(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return false;
+    }
+    unsafe { stat.assume_init() }.st_mode & libc::S_IFMT == libc::S_IFDIR
+}
+
 static TLS_CLEANUP_KEY: AtomicUsize = AtomicUsize::new(0);
 
 /// Registers a destructor that will be called when the current thread exits.

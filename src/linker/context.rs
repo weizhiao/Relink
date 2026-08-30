@@ -35,6 +35,17 @@ pub struct LinkContext<Meta = (), Arch: RelocationArch = NativeArch, Tls: TlsRes
     pub(crate) search_paths: SearchPathPool,
 }
 
+impl LinkContext<(), NativeArch, ()> {
+    /// Creates an empty namespace targeting the current native process.
+    ///
+    /// Use [`new`](Self::new) when the namespace needs custom metadata, an
+    /// explicit target architecture or TLS resolver, or another runtime domain.
+    #[inline]
+    pub fn for_process() -> Self {
+        Self::new(DomainId::PROCESS)
+    }
+}
+
 impl<Meta, Arch, Tls> LinkContext<Meta, Arch, Tls>
 where
     Arch: RelocationArch,
@@ -558,6 +569,14 @@ mod tests {
             load_group_names(&mut context, root.id()),
             ["root", "dependency"]
         );
+    }
+
+    #[test]
+    fn process_context_uses_native_defaults() {
+        let context = LinkContext::for_process();
+
+        assert_eq!(context.domain_id(), DomainId::PROCESS);
+        assert!(context.is_empty());
     }
 
     #[test]

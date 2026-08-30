@@ -81,5 +81,5 @@ pub(crate) struct ElfSegment {
     /// Indicates if data needs to be copied manually
     pub(crate) need_copy: bool,
     /// Indicates if this segment comes from a relocatable object
-    pub(crate) from_relocatable: bool,
+    pub(crate) from_object: bool,
 }

@@ -1,11 +1,11 @@
 #[path = "support/mod.rs"]
 mod fixture_support;
 
-use elf_loader::{LinkContext, Linker, Result, input::PathBuf, runtime::DomainId};
+use elf_loader::{LinkContext, Linker, Result, input::PathBuf};
 
 fn main() -> Result<()> {
     let fixtures = fixture_support::ensure_all();
-    let mut context = LinkContext::<()>::new(DomainId::PROCESS);
+    let mut context = LinkContext::for_process();
 
     let loaded = Linker::new()
         .resolver(fixture_support::search_path_resolver())

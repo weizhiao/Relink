@@ -1066,7 +1066,7 @@ impl<'shdr, L: ElfLayout> SectionUnit<'shdr, L> {
             need_copy: false,
             flags: MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED,
             map_info,
-            from_relocatable: true,
+            from_object: true,
         })
     }
 }

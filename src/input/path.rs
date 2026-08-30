@@ -31,6 +31,20 @@ impl Path {
         self.as_str().contains('/') || self.as_str().contains('\\')
     }
 
+    #[cfg(not(windows))]
+    #[inline]
+    pub(crate) fn is_absolute(&self) -> bool {
+        self.as_str().starts_with('/')
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn is_absolute(&self) -> bool {
+        let bytes = self.as_str().as_bytes();
+        let is_separator = |byte| byte == b'/' || byte == b'\\';
+        (bytes.len() >= 2 && is_separator(bytes[0]) && is_separator(bytes[1]))
+            || (bytes.len() >= 3 && bytes[1] == b':' && is_separator(bytes[2]))
+    }
+
     /// Returns the parent directory used for `$ORIGIN` expansion.
     ///
     /// Paths without a directory separator return `"."`; paths directly under

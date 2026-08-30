@@ -221,7 +221,7 @@ impl<L: ElfLayout> ElfPhdr<L> {
                 offset,
             }],
             need_copy: false,
-            from_relocatable: false,
+            from_object: false,
         }
     }
 }

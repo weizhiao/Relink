@@ -6,7 +6,7 @@ cfg_if::cfg_if! {
 
         pub use syscall::DefaultMmap;
         pub(crate) use syscall::{
-            RawFile, current_thread_id, get_thread_local_ptr, getauxval,
+            RawFile, current_thread_id, get_thread_local_ptr, getauxval, path_is_dir,
             register_thread_destructor,
         };
     } else {
@@ -14,7 +14,7 @@ cfg_if::cfg_if! {
 
         pub use libc::DefaultMmap;
         pub(crate) use libc::{
-            RawFile, current_thread_id, get_thread_local_ptr, getauxval,
+            RawFile, current_thread_id, get_thread_local_ptr, getauxval, path_is_dir,
             register_thread_destructor,
         };
     }
