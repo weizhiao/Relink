@@ -11,7 +11,7 @@
 //! - blanket [`IntoElfReader`] implementations for `&str`, `String`, `&[u8]`, and `&Vec<u8>`
 
 pub use backend::{ElfBinary, ElfFile};
-pub use path::{Path, PathBuf};
+pub use path::{Path, PathBuf, PathStr, PathString};
 pub(crate) use traits::ElfReaderExt;
 pub use traits::{ElfReader, IntoElfReader};
 
@@ -56,6 +56,7 @@ impl ModuleSourceId {
     /// Creates a fresh process-local identity for an anonymous source.
     #[inline]
     pub fn fresh() -> Self {
+        #[allow(deprecated)]
         let value = NEXT_SOURCE_ID
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)

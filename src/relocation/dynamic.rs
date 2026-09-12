@@ -40,7 +40,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         Binder: LazyBinder<Arch> + ?Sized,
         <Arch::Layout as ElfLayout>::Word: ByteRepr,
     {
-        logging::info!("Relocating dynamic library: {}", self.name());
+        logging::info!("Relocating dynamic library: {}", self.name().escape_ascii());
 
         let RelocateArgs {
             scope,
@@ -60,12 +60,12 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         }
         let relocation = self.relocation();
         if relocation.is_empty() {
-            logging::debug!("No relocations needed for {}", self.name());
+            logging::debug!("No relocations needed for {}", self.name().escape_ascii());
         }
 
         let lazy = lazy_binder.resolve_binding(binding, self.is_lazy());
         if lazy {
-            logging::debug!("Using lazy binding for {}", self.name());
+            logging::debug!("Using lazy binding for {}", self.name().escape_ascii());
         }
         prepare_plt(lazy_binder, lazy, &self)?;
         // Stabilize global lookup order and retain providers until dependency
@@ -102,7 +102,11 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         let finalizer = LifecycleRunner::new(fini);
 
         if !scope.is_empty() {
-            logging::debug!("[{}] Lookup scope: {:?}", self.name(), &scope);
+            logging::debug!(
+                "[{}] Lookup scope: {:?}",
+                self.name().escape_ascii(),
+                &scope
+            );
         }
 
         self.apply_relro(lazy)?;
@@ -112,12 +116,15 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         self.set_lifecycle(dynamic_event.into_lifecycle());
         self.publish_tls()?;
 
-        logging::debug!("Preparing initialization functions for {}", self.name());
+        logging::debug!(
+            "Preparing initialization functions for {}",
+            self.name().escape_ascii()
+        );
         if run_init {
             self.initialize()?;
         }
 
-        logging::info!("Relocation completed for {}", self.name());
+        logging::info!("Relocation completed for {}", self.name().escape_ascii());
 
         let core = self.into_core();
         bindings.install(core.state());

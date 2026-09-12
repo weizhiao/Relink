@@ -67,8 +67,8 @@ impl MultiBinaryResolver {
 impl KeyResolver for MultiBinaryResolver {
     type Root = &'static str;
 
-    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
-        root
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a [u8] {
+        root.as_bytes()
     }
 
     fn resolve<'cfg>(
@@ -179,7 +179,7 @@ fn commits_resolver_modules() {
     let elf = root_module
         .downcast_ref::<ElfModule<()>>()
         .expect("linker-loaded ELF should retain its concrete module type");
-    assert_eq!(elf.path().file_name(), "visible_root.so");
+    assert_eq!(elf.path().file_name(), b"visible_root.so");
     assert_eq!(elf.needed_libs(), [DEP_KEY]);
     assert!(elf.phdrs().is_some_and(|phdrs| !phdrs.is_empty()));
     assert!(!elf.mapped_ranges().is_empty());
@@ -202,7 +202,7 @@ fn commits_resolver_modules() {
     assert_eq!(context.module_id("visible_dep.so"), Some(dep_module_id));
     assert_eq!(
         context.module(dep_module_id).unwrap().name(),
-        "visible_dep.so"
+        b"visible_dep.so"
     );
     let direct_deps = context.direct_deps(root_id).unwrap().collect::<Vec<_>>();
     assert_eq!(direct_deps, vec![dep_module_id]);
@@ -277,7 +277,7 @@ fn resolver_pins_dependency() {
     let unloaded = loaded.release(&mut context).expect("root release failed");
 
     assert_eq!(unloaded.len(), 1);
-    assert_eq!(unloaded[0].module().name(), "root");
+    assert_eq!(unloaded[0].module().name(), b"root");
     assert_eq!(context.module_id("dep"), Some(dependency));
 }
 
@@ -301,7 +301,7 @@ fn resolver_pins_existing_dependency() {
     let unloaded = loaded.release(&mut context).unwrap();
 
     assert_eq!(unloaded.len(), 1);
-    assert_eq!(unloaded[0].module().name(), "root");
+    assert_eq!(unloaded[0].module().name(), b"root");
     assert_eq!(context.module_id("dep"), Some(dependency_id));
 }
 
@@ -343,7 +343,7 @@ fn rollback_removes_pin_from_existing_dependency() {
     let unloaded = context.release(dependency).unwrap();
 
     assert_eq!(unloaded.len(), 1);
-    assert_eq!(unloaded[0].module().name(), "existing");
+    assert_eq!(unloaded[0].module().name(), b"existing");
     assert!(context.is_empty());
 }
 
@@ -410,7 +410,7 @@ fn scan_loads_synthetic_dependency() {
             .unwrap()
             .path()
             .file_name(),
-        "scan_synthetic_root.so"
+        b"scan_synthetic_root.so"
     );
     assert!(context.module_id("root").is_some());
     assert!(context.module_id("dep").is_some());
@@ -420,7 +420,7 @@ fn scan_loads_synthetic_dependency() {
     let dep_module = context
         .module(dep_module_id)
         .expect("synthetic dependency committed");
-    assert_eq!(dep_module.name(), "dep");
+    assert_eq!(dep_module.name(), b"dep");
     assert!(dep_module.downcast_ref::<SyntheticModule>().is_some());
 
     let direct_deps = context.direct_deps(root_id).unwrap().collect::<Vec<_>>();
@@ -632,7 +632,7 @@ fn global_scope_binds_and_retains_provider() {
             .iter()
             .map(|entry| entry.module().name())
             .collect::<Vec<_>>(),
-        ["global.so", "global-provider.so"]
+        ["global.so".as_bytes(), "global-provider.so".as_bytes()]
     );
 }
 
@@ -674,7 +674,11 @@ fn extend_global_preserves_supplied_order_without_traversing_dependencies() {
             .iter()
             .map(|module| module.name())
             .collect::<Vec<_>>(),
-        ["root", "preload", "dependency"]
+        [
+            "root".as_bytes(),
+            "preload".as_bytes(),
+            "dependency".as_bytes()
+        ]
     );
 }
 
@@ -847,7 +851,7 @@ fn repeated_loads_acquire_the_root() {
             .iter()
             .map(|entry| entry.module().name())
             .collect::<Vec<_>>(),
-        ["acquired_root.so", "acquired_dep.so"]
+        ["acquired_root.so".as_bytes(), "acquired_dep.so".as_bytes()]
     );
     assert!(context.is_empty());
 }
@@ -884,7 +888,7 @@ fn pinned_dependency_does_not_retain_released_root() {
             .iter()
             .map(|entry| entry.module().name())
             .collect::<Vec<_>>(),
-        ["root.so"]
+        ["root.so".as_bytes()]
     );
     drop(unloaded);
 
@@ -932,7 +936,9 @@ fn relocates_dependencies_first() {
             &mut self,
             event: &mut LinkerRelocationEvent<()>,
         ) -> elf_loader::Result<()> {
-            self.0.borrow_mut().push(event.raw().name().to_string());
+            self.0
+                .borrow_mut()
+                .push(event.raw().name().escape_ascii().to_string());
             Ok(())
         }
     }

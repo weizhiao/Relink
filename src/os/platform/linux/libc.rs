@@ -38,7 +38,7 @@ pub(crate) fn current_thread_id() -> usize {
 }
 
 pub(crate) fn path_is_dir(path: &Path) -> bool {
-    let Ok(path) = CString::new(path.as_str()) else {
+    let Ok(path) = CString::new(path) else {
         return false;
     };
     let mut stat = MaybeUninit::<libc::stat>::uninit();
@@ -234,12 +234,11 @@ impl Drop for RawFile {
 
 impl RawFile {
     pub(crate) fn from_path(path: &Path) -> Result<Self> {
-        let path_str = path.as_str();
-        let name = CString::new(path_str).map_err(|_| IoError::NullByteInPath)?;
+        let name = CString::new(path).map_err(|_| IoError::NullByteInPath)?;
         let fd = unsafe { libc::open(name.as_ptr(), O_RDONLY) };
         if fd == -1 {
             return Err(IoError::OpenFailed {
-                path: path_str.into(),
+                path: path.as_bytes().into(),
                 code: last_os_error_code(),
             }
             .into());

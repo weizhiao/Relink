@@ -420,7 +420,7 @@ where
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
-    fn name(&self) -> &str {
+    fn name(&self) -> &[u8] {
         self.core.name()
     }
 

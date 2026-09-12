@@ -164,7 +164,7 @@
 //!   support are pending.
 //! - Relocatable object support is currently centered on `x86_64` and `riscv64`.
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![warn(
     missing_docs,
     unreachable_pub,

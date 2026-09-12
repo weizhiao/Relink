@@ -111,7 +111,7 @@ where
         observer.on_after_object_load(AfterObjectLoadEvent::new(&mut raw))?;
         let base = raw.segments().base();
 
-        logging::info!("Loaded object: {} at {}", raw.name(), base);
+        logging::info!("Loaded object: {} at {}", raw.name().escape_ascii(), base);
 
         Ok(raw)
     }
@@ -331,7 +331,7 @@ mod tests {
             &mut self,
             event: AfterObjectLoadEvent<'_, ObjectData, NativeArch, R, Tls>,
         ) -> Result<()> {
-            self.after_object_name_seen = event.raw().name() == "metadata.o";
+            self.after_object_name_seen = event.raw().name() == b"metadata.o";
             self.after_object_load_seen = true;
             Ok(())
         }

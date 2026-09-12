@@ -1,8 +1,8 @@
 use crate::{
-    input::{Path, PathBuf},
+    input::{Path, PathBuf, PathStr, PathString},
     sync::{Arc, AtomicU8, Ordering},
 };
-use alloc::{boxed::Box, collections::BTreeSet, string::String, vec::Vec};
+use alloc::{borrow::ToOwned, boxed::Box, collections::BTreeSet, vec::Vec};
 use core::{borrow::Borrow, cmp::Ordering as CmpOrdering, fmt, ops::Deref};
 
 #[repr(u8)]
@@ -13,7 +13,7 @@ enum DirStatus {
 }
 
 struct SearchDir {
-    path: String,
+    path: PathBuf,
     status: AtomicU8,
 }
 
@@ -21,12 +21,15 @@ struct SearchDir {
 pub(crate) struct SharedDir(Arc<SearchDir>);
 
 impl SharedDir {
-    pub(crate) fn new(path: String) -> Self {
-        let status = if Path::new(&path).is_absolute() {
+    pub(crate) fn new(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+
+        let status = if path.is_absolute() {
             DirStatus::Unknown
         } else {
             DirStatus::Existing
         };
+
         Self(Arc::new(SearchDir {
             path,
             status: AtomicU8::new(status as u8),
@@ -35,7 +38,7 @@ impl SharedDir {
 
     #[inline]
     pub(crate) fn path(&self) -> &Path {
-        Path::new(&self.0.path)
+        &self.0.path
     }
 
     #[inline]
@@ -66,7 +69,7 @@ impl SharedDir {
 }
 
 impl Deref for SharedDir {
-    type Target = str;
+    type Target = Path;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -74,16 +77,16 @@ impl Deref for SharedDir {
     }
 }
 
-impl AsRef<str> for SharedDir {
+impl AsRef<Path> for SharedDir {
     #[inline]
-    fn as_ref(&self) -> &str {
+    fn as_ref(&self) -> &Path {
         self
     }
 }
 
-impl Borrow<str> for SharedDir {
+impl Borrow<Path> for SharedDir {
     #[inline]
-    fn borrow(&self) -> &str {
+    fn borrow(&self) -> &Path {
         self
     }
 }
@@ -114,7 +117,7 @@ impl Ord for SharedDir {
 impl fmt::Debug for SharedDir {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self)
+        write!(f, r#""{}""#, self.as_bytes().escape_ascii())
     }
 }
 
@@ -133,27 +136,33 @@ impl PathTokens {
         self.platform = Some(Arc::from(platform.as_ref()));
     }
 
-    pub(crate) fn expand(&self, value: &str, origin: &Path) -> Option<PathBuf> {
-        let mut expanded = String::with_capacity(value.len());
-        let mut input = value;
-        while let Some(pos) = input.find('$') {
-            expanded.push_str(&input[..pos]);
+    pub(crate) fn expand(&self, value: &Path, origin: &Path) -> Option<PathBuf> {
+        let mut input = value.as_bytes();
+        let mut expanded = PathString::new();
+        expanded.reserve(input.len());
+        while let Some(pos) = input.iter().position(|&x| x == b'$') {
+            // SAFETY: `input` is split at a non-empty UTF-8 substring.
+            expanded.push(unsafe { PathStr::new(&input[..pos]) });
+
             let token = &input[pos + 1..];
             let (len, replacement) = if let Some(len) = token_len(token, "ORIGIN") {
-                (len, Some(origin.as_str()))
+                (len, Some(origin))
             } else if let Some(len) = token_len(token, "LIB") {
-                (len, self.lib.as_deref())
+                (len, self.lib.as_deref().map(|p| p.as_ref()))
             } else if let Some(len) = token_len(token, "PLATFORM") {
-                (len, self.platform.as_deref())
+                (len, self.platform.as_deref().map(|p| p.as_ref()))
             } else {
-                expanded.push('$');
+                expanded.push("$");
                 input = token;
                 continue;
             };
-            expanded.push_str(replacement?);
+            expanded.push(replacement?);
             input = &token[len..];
         }
-        expanded.push_str(input);
+        // SAFETY: `input` is split at a non-empty UTF-8 substring.
+        expanded.push(unsafe { PathStr::new(input) });
+
+        // SAFETY: `expanded` is created by replacing part a UTF-8 substring, so the result stays a UTF-8 string or superset.
         Some(PathBuf::from(expanded))
     }
 }
@@ -194,8 +203,8 @@ impl SearchPathPool {
         self.tokens.clone()
     }
 
-    fn intern(dirs: &mut BTreeSet<SharedDir>, path: String) -> SharedDir {
-        if let Some(dir) = dirs.get(path.as_str()) {
+    fn intern(dirs: &mut BTreeSet<SharedDir>, path: PathBuf) -> SharedDir {
+        if let Some(dir) = dirs.get(path.as_path()) {
             return dir.clone();
         }
         let dir = SharedDir::new(path);
@@ -234,7 +243,7 @@ pub(crate) static DEFAULT_MODULE_SEARCH: ModuleSearch = ModuleSearch::empty();
 impl ModuleSearch {
     const fn empty() -> Self {
         Self {
-            path: PathBuf::empty(),
+            path: PathBuf::new(),
             soname: None,
             runpath: None,
             rpath: None,
@@ -273,7 +282,7 @@ impl ModuleSearch {
         runpath: Option<&str>,
         rpath: Option<&str>,
         tokens: &PathTokens,
-        mut intern: impl FnMut(String) -> SharedDir,
+        mut intern: impl FnMut(PathBuf) -> SharedDir,
     ) -> Self {
         let origin = path.parent();
         let runpath = runpath.map(|value| expand_dirs(value, origin, tokens, &mut intern));
@@ -288,7 +297,7 @@ impl ModuleSearch {
 
     /// Returns the loaded path's file name for diagnostics.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         self.path.file_name()
     }
 
@@ -335,7 +344,7 @@ fn expand_dirs(
     value: &str,
     origin: &Path,
     tokens: &PathTokens,
-    intern: &mut impl FnMut(String) -> SharedDir,
+    intern: &mut impl FnMut(PathBuf) -> SharedDir,
 ) -> Box<[SharedDir]> {
     if value.is_empty() {
         return Box::new([]);
@@ -345,11 +354,11 @@ fn expand_dirs(
         let Some(path) = (if value.is_empty() {
             Some(PathBuf::from("."))
         } else {
-            tokens.expand(value, origin)
+            tokens.expand(Path::new(value), origin)
         }) else {
             continue;
         };
-        let path = normalize_dir(path).into_string();
+        let path = normalize_dir(path);
         let dir = intern(path);
         if !dirs.contains(&dir) {
             dirs.push(dir);
@@ -369,25 +378,28 @@ impl fmt::Debug for ModuleSearch {
     }
 }
 
-fn token_len(value: &str, name: &str) -> Option<usize> {
-    if value
-        .strip_prefix('{')
-        .is_some_and(|value| value.starts_with(name))
-        && value.as_bytes().get(name.len() + 1) == Some(&b'}')
+fn token_len(value: &[u8], name: &str) -> Option<usize> {
+    if value.get(0) == Some(&b'{')
+        && value.get(1..(1 + name.len())) == Some(name.as_bytes())
+        && value.get(1 + name.len()) == Some(&b'}')
     {
         return Some(name.len() + 2);
     }
-    let rest = value.strip_prefix(name)?;
+
+    let rest = if value.get(..name.len()) == Some(name.as_bytes()) {
+        &value[name.len()..]
+    } else {
+        return None;
+    };
+
     (!rest
-        .as_bytes()
         .first()
         .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_'))
     .then_some(name.len())
 }
 
-pub(crate) fn normalize_dir(path: PathBuf) -> PathBuf {
-    let value = path.as_str();
-    let bytes = value.as_bytes();
+pub(crate) fn normalize_dir<P: AsRef<Path>>(path: P) -> PathBuf {
+    let bytes = path.as_ref().as_bytes();
     let is_separator = |byte| byte == b'/' || byte == b'\\';
     let min_len = if bytes.len() >= 2 && is_separator(bytes[0]) && is_separator(bytes[1]) {
         2
@@ -403,9 +415,10 @@ pub(crate) fn normalize_dir(path: PathBuf) -> PathBuf {
         len -= 1;
     }
     if len == bytes.len() {
-        path
+        path.as_ref().to_owned()
     } else {
-        PathBuf::from(&value[..len])
+        // SAFETY: `bytes` up to `len` is a valid UTF-8 superset, since we split it at an ASCII separator.
+        PathBuf::from(unsafe { PathStr::new(&bytes[..len]) })
     }
 }
 
@@ -432,8 +445,8 @@ mod tests {
         let second = second.runpath.as_deref().unwrap();
 
         assert_eq!(first.len(), 2);
-        assert_eq!(first[0].as_ref(), "/opt/app/lib");
-        assert_eq!(first[1].as_ref(), "/usr/lib");
+        assert_eq!(first[0].as_bytes(), b"/opt/app/lib");
+        assert_eq!(first[1].as_bytes(), b"/usr/lib");
         assert!(Arc::ptr_eq(&first[0].0, &second[0].0));
         assert!(Arc::ptr_eq(&first[1].0, &second[1].0));
     }

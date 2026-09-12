@@ -35,7 +35,7 @@ pub(crate) fn path_is_dir(path: &Path) -> bool {
     const S_IFMT: u16 = 0o170000;
     const S_IFDIR: u16 = 0o040000;
 
-    let Ok(path) = CString::new(path.as_str()) else {
+    let Ok(path) = CString::new(path) else {
         return false;
     };
     let mut stat = MaybeUninit::<Statx>::zeroed();
@@ -326,8 +326,7 @@ impl RawFile {
 
     pub(crate) fn from_path(path: &Path) -> Result<Self> {
         const RDONLY: u32 = 0;
-        let path_str = path.as_str();
-        let c_path = CString::new(path_str).map_err(|_| IoError::NullByteInPath)?;
+        let c_path = CString::new(path).map_err(|_| IoError::NullByteInPath)?;
         #[cfg(not(any(
             target_arch = "aarch64",
             target_arch = "riscv64",
@@ -337,7 +336,7 @@ impl RawFile {
             let res = syscalls::raw_syscall!(Sysno::open, c_path.as_ptr(), RDONLY, 0);
             if res > -4096isize as usize {
                 return Err(IoError::OpenFailed {
-                    path: path_str.into(),
+                    path: path.as_bytes().into(),
                     code: (-(res as isize)) as u32,
                 }
                 .into());
@@ -354,7 +353,7 @@ impl RawFile {
             let res = syscalls::raw_syscall!(Sysno::openat, AT_FDCWD, c_path.as_ptr(), RDONLY, 0);
             if res > -4096isize as usize {
                 return Err(IoError::OpenFailed {
-                    path: path_str.into(),
+                    path: path.as_bytes().into(),
                     code: (-(res as isize)) as u32,
                 }
                 .into());

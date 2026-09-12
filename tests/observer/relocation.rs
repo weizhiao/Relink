@@ -39,7 +39,7 @@ impl RelocationObserver for BindingRecorder {
         let symbol = event
             .relocation_symbol()
             .expect("GOT relocation should reference a symbol");
-        assert_eq!(event.lib().name(), "consumer.so");
+        assert_eq!(event.lib().name(), b"consumer.so");
         assert_eq!(event.scope().len(), 1);
         assert!(event.lazy().is_none());
         assert!(SYMBOLS.contains(&symbol.name()));
@@ -57,7 +57,7 @@ impl RelocationObserver for BindingRecorder {
         &mut self,
         event: &mut SymbolBindingEvent<'_, D, NativeArch, R, Tls>,
     ) -> elf_loader::Result<()> {
-        assert_eq!(event.core().name(), "consumer.so");
+        assert_eq!(event.core().name(), b"consumer.so");
         assert!(event.rel().is_some());
         assert!(event.symbol().is_undef());
         assert!(SYMBOLS.contains(&event.symbol_name()));
@@ -136,7 +136,7 @@ impl RelocationObserver for FallbackRecorder {
         let symbol = event
             .relocation_symbol()
             .expect("GOT relocation should reference a symbol");
-        assert_eq!(event.lib().name(), "unresolved.so");
+        assert_eq!(event.lib().name(), b"unresolved.so");
         assert!(event.scope().is_empty());
         assert!(event.lazy().is_none());
         assert!(event.bind_symdef(event.rel().r_symbol()).is_none());
@@ -205,8 +205,8 @@ impl RelocationObserver for LifecycleRecorder {
         &mut self,
         event: &mut DynamicRelocatedEvent<'_, D, NativeArch, R, Tls>,
     ) -> elf_loader::Result<()> {
-        assert_eq!(event.name(), "deferred.so");
-        assert_eq!(event.path().file_name(), "deferred.so");
+        assert_eq!(event.name(), b"deferred.so");
+        assert_eq!(event.path().file_name(), b"deferred.so");
         assert_eq!(event.core().name(), event.name());
         assert_ne!(event.base(), VmAddr::null());
         assert!(event.core().segments().contains_addr(event.dynamic_addr()));
@@ -218,7 +218,7 @@ impl RelocationObserver for LifecycleRecorder {
                 .lock()
                 .unwrap()
                 .initialized
-                .push(event.name().to_string());
+                .push(event.name().escape_ascii().to_string());
             event.lifecycle_mut().clear();
             Ok(())
         });

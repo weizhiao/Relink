@@ -27,49 +27,49 @@ use core::{
 /// `DT_NEEDED` name. Physical module identity is tracked separately by
 /// [`ModuleSourceId`], so several modules may be registered under one key.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ModuleKey(Arc<str>);
+pub struct ModuleKey(Arc<[u8]>);
 
 impl ModuleKey {
     /// Creates a key from a loader-visible name or path.
     #[inline]
-    pub fn new(value: impl AsRef<str>) -> Self {
+    pub fn new(value: impl AsRef<[u8]>) -> Self {
         Self(Arc::from(value.as_ref()))
     }
 
-    /// Returns the key as a string slice.
+    /// Returns the key as a byte slice.
     #[inline]
-    pub fn as_str(&self) -> &str {
+    pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 }
 
 impl Deref for ModuleKey {
-    type Target = str;
+    type Target = [u8];
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.as_str()
+        self.as_bytes()
     }
 }
 
-impl AsRef<str> for ModuleKey {
+impl AsRef<[u8]> for ModuleKey {
     #[inline]
-    fn as_ref(&self) -> &str {
-        self.as_str()
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
     }
 }
 
-impl Borrow<str> for ModuleKey {
+impl Borrow<[u8]> for ModuleKey {
     #[inline]
-    fn borrow(&self) -> &str {
-        self.as_str()
+    fn borrow(&self) -> &[u8] {
+        self.as_bytes()
     }
 }
 
 impl Display for ModuleKey {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        self.0.escape_ascii().fmt(f)
     }
 }
 
@@ -83,21 +83,35 @@ impl From<&str> for ModuleKey {
 impl From<String> for ModuleKey {
     #[inline]
     fn from(value: String) -> Self {
+        Self::from(value.into_bytes())
+    }
+}
+
+impl From<&[u8]> for ModuleKey {
+    #[inline]
+    fn from(value: &[u8]) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<Vec<u8>> for ModuleKey {
+    #[inline]
+    fn from(value: Vec<u8>) -> Self {
         Self(Arc::from(value))
     }
 }
 
 impl From<&Path> for ModuleKey {
     #[inline]
-    fn from(value: &Path) -> Self {
-        Self::new(value.as_str())
+    fn from(path: &Path) -> Self {
+        Self::new(path.as_bytes())
     }
 }
 
 impl From<PathBuf> for ModuleKey {
     #[inline]
     fn from(value: PathBuf) -> Self {
-        Self(Arc::from(value.into_string()))
+        Self(Arc::from(value.into_bytes()))
     }
 }
 
@@ -432,8 +446,8 @@ where
     }
 
     #[inline]
-    pub(in crate::linker) fn module_for_key(&self, key: &str) -> Option<ModuleSlot> {
-        let module = self.bindings.get(key)?.first().copied()?;
+    pub(in crate::linker) fn module_for_key(&self, key: impl AsRef<[u8]>) -> Option<ModuleSlot> {
+        let module = self.bindings.get(key.as_ref())?.first().copied()?;
         debug_assert!(
             self.contains_module(module),
             "key bindings must only contain committed modules"

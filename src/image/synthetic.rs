@@ -557,8 +557,8 @@ where
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
-    fn name(&self) -> &str {
-        &self.name
+    fn name(&self) -> &[u8] {
+        self.name.as_bytes()
     }
 
     #[inline]
@@ -674,7 +674,7 @@ mod tests {
 
         let module = scope
             .iter()
-            .find(|module| module.name() == "__bridge")
+            .find(|module| module.name() == b"__bridge")
             .expect("synthetic module should be retained in scope");
         assert_eq!(module.memory().base(), VmAddr::null());
         let symbol = module
@@ -805,7 +805,7 @@ mod tests {
 
         let module = scope
             .iter()
-            .find(|module| module.name() == "__tls")
+            .find(|module| module.name() == b"__tls")
             .expect("synthetic module should be retained in scope");
         let symbol = module
             .exports()

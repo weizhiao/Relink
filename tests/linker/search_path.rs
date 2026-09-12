@@ -63,7 +63,7 @@ fn resolves_committed_by_source_identity() {
             .unwrap(),
         Some(loaded.root())
     );
-    assert_eq!(context.module_id(alias.as_str()), Some(loaded.root()));
+    assert_eq!(context.module_id(alias.as_bytes()), Some(loaded.root()));
     assert_eq!(context.load_order().count(), 1);
 
     loaded.release(&mut context).unwrap();
@@ -90,8 +90,8 @@ fn inherits_rpath() {
         .search()
         .expect("loaded ELF modules should retain search metadata");
     assert_eq!(
-        search.path().as_str(),
-        fixtures.rpath_root_path.to_str().unwrap()
+        search.path().as_bytes(),
+        fixtures.rpath_root_path.as_os_str().as_encoded_bytes()
     );
     let expected_rpath = fixtures
         .rpath_root_path
@@ -104,9 +104,9 @@ fn inherits_rpath() {
         search
             .rpath()
             .unwrap()
-            .map(ElfPath::as_str)
+            .map(ElfPath::as_bytes)
             .collect::<Vec<_>>(),
-        [expected_rpath]
+        [expected_rpath.as_bytes()]
     );
     assert!(search.runpath().is_none());
 
@@ -283,8 +283,8 @@ fn reuses_file() {
     let second = linker.run().load(&mut context, alias.clone()).unwrap();
 
     assert_eq!(first.root(), second.root());
-    assert_eq!(context.module_id(original.as_str()), Some(first.root()));
-    assert_eq!(context.module_id(alias.as_str()), Some(first.root()));
+    assert_eq!(context.module_id(original.as_bytes()), Some(first.root()));
+    assert_eq!(context.module_id(alias.as_bytes()), Some(first.root()));
     assert_eq!(context.load_order().count(), 1);
 
     let old = first.root();
@@ -431,8 +431,8 @@ fn dynamic_dirs_precede_static_dirs() {
             .search()
             .unwrap()
             .path()
-            .as_str(),
-        expected_key
+            .as_bytes(),
+        expected_key.as_bytes()
     );
 }
 

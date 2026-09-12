@@ -344,7 +344,7 @@ where
             .on_after_dynamic_load(AfterDynamicLoadEvent::new(&mut image))?;
         logging::info!(
             "Loaded dynamic image: {} ({})",
-            image.name(),
+            image.name().escape_ascii(),
             image.segments()
         );
         Ok(image)
@@ -405,7 +405,7 @@ where
 
         logging::info!(
             "Loaded scanned dynamic image: {} ({})",
-            image.name(),
+            image.name().escape_ascii(),
             image.segments()
         );
 
@@ -474,7 +474,7 @@ where
 
         logging::info!(
             "Borrowed dynamic image: {} ({})",
-            image.name(),
+            image.name().escape_ascii(),
             image.segments()
         );
 
@@ -551,7 +551,7 @@ where
 
         logging::debug!(
             "Load executable: {} at {} ({})",
-            exec.name(),
+            exec.name().escape_ascii(),
             base,
             if has_dynamic { "dynamic" } else { "static" }
         );

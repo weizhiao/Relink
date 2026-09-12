@@ -64,7 +64,7 @@ pub trait Module<Arch: RelocationArch = NativeArch, Tls: TlsResolver<Arch> = ()>
     Any + Send + Sync
 {
     /// Returns the module name used for diagnostics.
-    fn name(&self) -> &str;
+    fn name(&self) -> &[u8];
 
     /// Returns metadata used when this module initiates another load.
     fn search(&self) -> Option<&ModuleSearch> {
@@ -190,7 +190,7 @@ where
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
-    fn name(&self) -> &str {
+    fn name(&self) -> &[u8] {
         (**self).name()
     }
 

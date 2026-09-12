@@ -146,7 +146,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn module_for_key(&self, key: &str) -> Option<ModuleSlot> {
+    pub(crate) fn module_for_key(&self, key: &[u8]) -> Option<ModuleSlot> {
         self.bindings
             .get(key)
             .and_then(|modules| modules.first().copied())

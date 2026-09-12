@@ -66,7 +66,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     }
 
     /// Returns the final path component.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         self.path().file_name()
     }
 
@@ -250,7 +250,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     }
 
     /// Returns the executable identity used for diagnostics.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         match self {
             RawExec::Dynamic(image) => image.name(),
             RawExec::Static(image) => image.name(),
@@ -387,7 +387,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     /// Returns the executable identity used for diagnostics.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         match &self.inner {
             LoadedExecInner::Dynamic(module) => module.name(),
             LoadedExecInner::Static(static_image) => static_image.name(),

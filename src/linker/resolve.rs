@@ -33,13 +33,15 @@ fn push_dep(deps: &mut Vec<ModuleSlot>, dep: ModuleSlot) {
 
 fn search_aliases(
     search: &ModuleSearch,
-    entry_key: &str,
+    entry_key: &[u8],
 ) -> (Option<ModuleKey>, Option<ModuleKey>) {
-    let path = search.path().as_str();
+    let path = search.path().as_bytes();
     let path = (path != entry_key).then(|| ModuleKey::from(path));
     let soname = search
         .soname()
-        .filter(|soname| *soname != entry_key && Some(*soname) != path.as_deref())
+        .filter(|soname| {
+            soname.as_bytes() != entry_key && Some(soname.as_bytes()) != path.as_deref()
+        })
         .map(ModuleKey::from);
     (path, soname)
 }
@@ -87,7 +89,7 @@ where
     P: DependencySource,
     Tls: TlsResolver<Arch>,
 {
-    fn known_module(&self, key: &str) -> Option<ModuleSlot> {
+    fn known_module(&self, key: &[u8]) -> Option<ModuleSlot> {
         self.committed
             .module_for_key(key)
             .or_else(|| self.session.module_for_key(key))
@@ -294,7 +296,7 @@ where
                     let needed = source
                         .needed(idx)
                         .expect("DT_NEEDED index must be within the parsed dependency list");
-                    if let Some(dep) = self.known_module(needed) {
+                    if let Some(dep) = self.known_module(needed.as_bytes()) {
                         push_dep(&mut direct_deps, dep);
                         continue;
                     }

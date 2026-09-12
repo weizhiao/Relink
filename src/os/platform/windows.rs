@@ -48,7 +48,23 @@ pub(crate) fn current_thread_id() -> usize {
 }
 
 fn wide_path(path: &Path) -> Vec<u16> {
-    let mut wide = path.as_str().encode_utf16().collect::<Vec<_>>();
+    let mut wide: Vec<_> = {
+        if let Ok(path_str) = str::from_utf8(path.as_bytes()) {
+            path_str.encode_utf16().collect()
+        } else {
+            #[cfg(feature = "std")]
+            {
+                use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
+
+                // SAFETY: `Path` contains either UTF-8 or the encoded bytes of an `OsStr`, which is a superset of UTF-8.
+                let os_str = unsafe { OsStr::from_encoded_bytes_unchecked(path.as_bytes()) };
+                os_str.encode_wide().collect()
+            }
+
+            #[cfg(not(feature = "std"))]
+            unreachable!("Path is guaranteed to contain UTF-8 or `OsStr` bytes.")
+        }
+    };
     wide.push(0);
     wide
 }
@@ -274,7 +290,6 @@ impl RawFile {
     }
 
     pub(crate) fn from_path(path: &Path) -> Result<Self> {
-        let path_str = path.as_str();
         let wide_path = wide_path(path);
 
         let handle = unsafe {
@@ -292,7 +307,7 @@ impl RawFile {
         if handle == INVALID_HANDLE_VALUE {
             let err_code = unsafe { GetLastError() };
             return Err(IoError::OpenFailed {
-                path: path_str.into(),
+                path: path.as_bytes().into(),
                 code: err_code,
             }
             .into());

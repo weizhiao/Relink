@@ -381,7 +381,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 {
     pub(in crate::linker) fn visible<Meta>(
         context: &LinkContext<Meta, Arch, Tls>,
-        key: &str,
+        key: impl AsRef<[u8]>,
     ) -> Option<Self> {
         let root = context.committed.module_for_key(key)?;
         let mut session = ResolveSession::new();

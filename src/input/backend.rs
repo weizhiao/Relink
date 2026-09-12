@@ -186,7 +186,25 @@ impl<'a> IntoElfReader<'a> for &'a Path {
     }
 }
 
+#[cfg(feature = "std")]
+impl<'a> IntoElfReader<'a> for &'a std::path::Path {
+    type Reader = ElfFile;
+
+    fn into_reader(self) -> Result<Self::Reader> {
+        ElfFile::from_path(self)
+    }
+}
+
 impl<'a> IntoElfReader<'a> for PathBuf {
+    type Reader = ElfFile;
+
+    fn into_reader(self) -> Result<Self::Reader> {
+        ElfFile::from_path(self)
+    }
+}
+
+#[cfg(feature = "std")]
+impl<'a> IntoElfReader<'a> for std::path::PathBuf {
     type Reader = ElfFile;
 
     fn into_reader(self) -> Result<Self::Reader> {

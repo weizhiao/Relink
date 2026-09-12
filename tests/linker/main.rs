@@ -100,7 +100,10 @@ impl RelocationObserver for InitRecorder {
         let calls = Arc::clone(&self.calls);
         let fail = self.fail;
         event.lifecycle_mut().set_init_hook(move |event| {
-            calls.lock().unwrap().push(event.name().to_string());
+            calls
+                .lock()
+                .unwrap()
+                .push(event.name().escape_ascii().to_string());
             event.lifecycle_mut().clear();
             if fail {
                 return Err(elf_loader::error::CustomError::message("initializer failed").into());
@@ -110,7 +113,10 @@ impl RelocationObserver for InitRecorder {
         if self.record_fini {
             let calls = Arc::clone(&self.calls);
             event.lifecycle_mut().set_fini_hook(move |event| {
-                calls.lock().unwrap().push(format!("fini:{}", event.name()));
+                calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("fini:{}", event.name().escape_ascii()));
                 event.lifecycle_mut().clear();
                 Ok(())
             });
@@ -122,8 +128,8 @@ impl RelocationObserver for InitRecorder {
 impl KeyResolver for SingleBinaryResolver {
     type Root = &'static str;
 
-    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
-        root
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a [u8] {
+        root.as_bytes()
     }
 
     fn resolve<'cfg>(
@@ -143,8 +149,8 @@ impl KeyResolver for SingleBinaryResolver {
 impl KeyResolver for ModuleDependencyResolver {
     type Root = &'static str;
 
-    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
-        root
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a [u8] {
+        root.as_bytes()
     }
 
     fn resolve<'cfg>(
@@ -170,8 +176,8 @@ impl KeyResolver for ModuleDependencyResolver {
 impl KeyResolver for SyntheticDependencyResolver {
     type Root = &'static str;
 
-    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
-        root
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a [u8] {
+        root.as_bytes()
     }
 
     fn resolve<'cfg>(
@@ -200,8 +206,8 @@ impl KeyResolver for SyntheticDependencyResolver {
 impl KeyResolver for SyntheticRootResolver {
     type Root = &'static str;
 
-    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
-        root
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a [u8] {
+        root.as_bytes()
     }
 
     fn resolve<'cfg>(
@@ -229,8 +235,8 @@ impl KeyResolver for SyntheticRootResolver {
 impl KeyResolver for ResolvedGraphResolver {
     type Root = &'static str;
 
-    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
-        root
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a [u8] {
+        root.as_bytes()
     }
 
     fn resolve<'cfg>(

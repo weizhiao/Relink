@@ -231,7 +231,7 @@ impl<'a, D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: T
 
     /// Returns the module identity used for diagnostics.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         self.core.name()
     }
 

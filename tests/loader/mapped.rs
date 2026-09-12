@@ -16,8 +16,8 @@ fn dynamic_reuses_mapping() {
     }
     .expect("failed to wrap borrowed mapping");
 
-    assert_eq!(borrowed.path().as_str(), "borrowed-main");
-    assert_eq!(borrowed.name(), "borrowed-main");
+    assert_eq!(borrowed.path().as_bytes(), b"borrowed-main");
+    assert_eq!(borrowed.name(), b"borrowed-main");
     assert_eq!(borrowed.segments().base(), base);
     assert_eq!(borrowed.entry(), owner.entry());
     assert!(borrowed.segments().contains_addr(base));
@@ -53,9 +53,9 @@ fn scanned_dynamic_reuses_metadata() {
         .load_scanned_dynamic(scanned)
         .expect("failed to load scanned dynamic image");
 
-    assert_eq!(raw.path().as_str(), "scanned.so");
+    assert_eq!(raw.path().as_bytes(), b"scanned.so");
     assert_eq!(raw.soname(), soname.as_deref());
-    assert_eq!(raw.name(), "scanned.so");
+    assert_eq!(raw.name(), b"scanned.so");
     assert!(
         raw.phdrs()
             .iter()

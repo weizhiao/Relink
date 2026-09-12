@@ -108,7 +108,7 @@ impl<D: Send + Sync + 'static, Arch: ObjectArch, R: RegionAccess, Tls: TlsResolv
 
     /// Gets the ELF image identity used for diagnostics.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         match self {
             RawElf::Dylib(dylib) => dylib.name(),
             RawElf::Exec(exec) => exec.name(),
@@ -258,7 +258,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     /// Gets the ELF image identity used for diagnostics.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         match self {
             LoadedElf::Dylib(dylib) => dylib.name(),
             LoadedElf::Exec(exec) => exec.name(),

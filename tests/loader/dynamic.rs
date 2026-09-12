@@ -77,7 +77,7 @@ fn loads_dylib() {
         ))
         .expect("load_dylib should accept ET_DYN");
 
-    assert_eq!(loaded.path().as_str(), "provider.so");
+    assert_eq!(loaded.path().as_bytes(), b"provider.so");
     assert!(
         loaded
             .phdrs()

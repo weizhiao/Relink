@@ -415,7 +415,7 @@ impl<Arch: RelocationArch> ScannedElf<Arch> {
 
     /// Returns the ELF image identity used for diagnostics.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         match self {
             Self::Dynamic(image) => image.name(),
             Self::StaticExec(image) => image.name(),
@@ -587,7 +587,7 @@ impl<Arch: RelocationArch> ScannedDynamic<Arch> {
 
     /// Returns the ELF image identity used for diagnostics.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         self.search.name()
     }
 
@@ -773,7 +773,7 @@ impl<Arch: RelocationArch> ScannedExec<Arch> {
 
     /// Returns the executable identity used for diagnostics.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         self.path().file_name()
     }
 

@@ -100,7 +100,7 @@ impl<'a> CandidateRequest<'a> {
 
     /// Returns the owner name for caller-aware roots and dependencies.
     #[inline]
-    pub fn owner_name(&self) -> &'a str {
+    pub fn owner_name(&self) -> &'a [u8] {
         self.owner().name()
     }
 
@@ -190,10 +190,8 @@ impl SearchPathResolver {
     }
 
     /// Appends a fixed search directory.
-    pub fn push_fixed_dir(&mut self, dir: impl Into<PathBuf>) -> &mut Self {
-        self.push_entry(SearchPathEntry::Dir(SharedDir::new(
-            normalize_dir(dir.into()).into_string(),
-        )))
+    pub fn push_fixed_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
+        self.push_entry(SearchPathEntry::Dir(SharedDir::new(normalize_dir(dir))))
     }
 
     /// Appends a callback that can provide search directories per request.
@@ -288,7 +286,7 @@ impl SearchPathResolver {
         if dir.is_missing() {
             return Ok(None);
         }
-        candidate.set_joined(dir.path(), requested.as_str());
+        candidate.set_joined(dir.path(), requested);
         Self::try_candidate::<Arch>(candidate, Some(dir), true, incompatible)
     }
 
@@ -315,8 +313,8 @@ where
     type Root = PathBuf;
 
     #[inline]
-    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a str {
-        root.as_str()
+    fn root_key<'a>(&self, root: &'a Self::Root) -> &'a [u8] {
+        root.as_bytes()
     }
 
     fn resolve<'cfg>(
@@ -331,8 +329,8 @@ where
 
         let mut incompatible = None;
 
-        let requested_value = request.requested().as_str();
-        let expanded = if requested_value.contains('$') {
+        let requested_value = request.requested();
+        let expanded = if requested_value.as_bytes().contains(&b'$') {
             let Some(expanded) = request.tokens().expand(requested_value, request.origin()) else {
                 return Err(req.unresolved());
             };
@@ -395,7 +393,7 @@ where
                     provided.clear();
                     provider(request, &mut provided)?;
                     for dir in &provided {
-                        candidate.set_joined(dir, requested.as_str());
+                        candidate.set_joined(dir, requested);
                         if let Some(file) =
                             Self::try_candidate::<Arch>(&candidate, None, true, &mut incompatible)?
                         {
@@ -471,7 +469,7 @@ mod tests {
         request: CandidateRequest<'_>,
     ) -> Option<PathBuf> {
         let req = ResolveRequest::dependency(
-            request.requested().as_str(),
+            core::str::from_utf8(request.requested().as_bytes()).unwrap(),
             request.owner(),
             request.tokens(),
             request.loaders,
@@ -481,7 +479,7 @@ mod tests {
             .into_parts()
             .0
         {
-            ResolvedKind::Load(reader) => Some(PathBuf::from(reader.path().as_str())),
+            ResolvedKind::Load(reader) => Some(PathBuf::from(reader.path())),
             ResolvedKind::Module { .. } => None,
         }
     }
@@ -528,8 +526,8 @@ mod tests {
         assert!(resolve_path(&resolver, request).is_none());
         install_elf(&library);
         assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_str(),
-            library.to_str().unwrap()
+            resolve_path(&resolver, request).unwrap().as_bytes(),
+            library.as_os_str().as_encoded_bytes()
         );
     }
 
@@ -552,8 +550,8 @@ mod tests {
         assert!(resolve_path(&resolver, request).is_none());
         install_elf(&library);
         assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_str(),
-            library.to_str().unwrap()
+            resolve_path(&resolver, request).unwrap().as_bytes(),
+            library.as_os_str().as_encoded_bytes()
         );
         fs::remove_dir_all(dir).unwrap();
     }
@@ -578,8 +576,8 @@ mod tests {
         assert!(resolve_path(&resolver, request).is_none());
         install_elf(&library);
         assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_str(),
-            library.to_str().unwrap()
+            resolve_path(&resolver, request).unwrap().as_bytes(),
+            library.as_os_str().as_encoded_bytes()
         );
     }
 
@@ -600,8 +598,8 @@ mod tests {
         resolver.push_rpath();
 
         assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_str(),
-            expected.to_str().unwrap()
+            resolve_path(&resolver, request).unwrap().as_bytes(),
+            expected.as_os_str().as_encoded_bytes()
         );
     }
 
@@ -620,8 +618,8 @@ mod tests {
         let resolver = SearchPathResolver::new();
 
         assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_str(),
-            expected.to_str().unwrap()
+            resolve_path(&resolver, request).unwrap().as_bytes(),
+            expected.as_os_str().as_encoded_bytes()
         );
     }
 
@@ -647,8 +645,8 @@ mod tests {
         resolver.push_runpath();
 
         assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_str(),
-            expected.to_str().unwrap()
+            resolve_path(&resolver, request).unwrap().as_bytes(),
+            expected.as_os_str().as_encoded_bytes()
         );
     }
 
@@ -674,8 +672,8 @@ mod tests {
         let resolver = SearchPathResolver::new();
 
         assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_str(),
-            expected.to_str().unwrap()
+            resolve_path(&resolver, request).unwrap().as_bytes(),
+            expected.as_os_str().as_encoded_bytes()
         );
     }
 
@@ -724,14 +722,14 @@ mod tests {
         resolver.push_fixed_dir(fixed.to_str().unwrap());
         resolver.push_runpath();
         assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_str(),
-            fixed_candidate.to_str().unwrap()
+            resolve_path(&resolver, request).unwrap().as_bytes(),
+            fixed_candidate.as_os_str().as_encoded_bytes()
         );
 
         fs::remove_file(fixed_candidate).unwrap();
         assert_eq!(
-            resolve_path(&resolver, request).unwrap().as_str(),
-            run_candidate.to_str().unwrap()
+            resolve_path(&resolver, request).unwrap().as_bytes(),
+            run_candidate.as_os_str().as_encoded_bytes()
         );
     }
 

@@ -145,6 +145,7 @@ path = "examples/support/build_fixtures.rs"
 
 [features]
 default = ["full"]
+std = []
 
 # A feature that enables the libc backend for Linux and Android.
 libc = ["dep:libc"]

@@ -16,7 +16,7 @@ fn main() -> Result<()> {
             .to_str()
             .expect("fixture path must be valid UTF-8"),
     )?;
-    println!("Loaded executable: {}", exec.name());
+    println!("Loaded executable: {}", exec.name().escape_ascii());
     println!("Entry point: 0x{:x}", exec.entry());
     println!("Base address: {}", exec.base());
 

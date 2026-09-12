@@ -114,7 +114,7 @@ where
 
     /// Returns the committed module id associated with `key`.
     #[inline]
-    pub fn module_id(&self, key: &str) -> Option<ModuleId> {
+    pub fn module_id(&self, key: impl AsRef<[u8]>) -> Option<ModuleId> {
         self.committed
             .module_for_key(key)
             .map(|slot| self.committed.make_module_id(slot))
@@ -482,7 +482,7 @@ mod tests {
             Module::<NativeArch>::state(&self.module)
         }
 
-        fn name(&self) -> &str {
+        fn name(&self) -> &[u8] {
             Module::<NativeArch>::name(&self.module)
         }
 
@@ -544,7 +544,7 @@ mod tests {
             .load_group(root)
             .unwrap()
             .iter()
-            .map(|module| String::from(module.name()))
+            .map(|module| String::from_utf8(module.name().to_vec()).unwrap())
             .collect()
     }
 
@@ -726,7 +726,7 @@ mod tests {
         let unloaded = context.release(owner).unwrap();
 
         assert_eq!(unloaded.len(), 1);
-        assert_eq!(unloaded[0].module().name(), "owner");
+        assert_eq!(unloaded[0].module().name(), b"owner");
         assert!(context.module_id("provider").is_some());
     }
 
@@ -744,7 +744,7 @@ mod tests {
         let unloaded = target.release(owner).unwrap();
 
         assert_eq!(unloaded.len(), 1);
-        assert_eq!(unloaded[0].module().name(), "owner");
+        assert_eq!(unloaded[0].module().name(), b"owner");
         assert!(target.module_id("provider").is_some());
     }
 
@@ -894,7 +894,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.module().name())
                 .collect::<Vec<_>>(),
-            ["second", "shared"]
+            ["second".as_bytes(), "shared".as_bytes()]
         );
         assert!(context.is_empty());
     }
@@ -997,7 +997,7 @@ mod tests {
             .load_order()
             .map(|id| context.module(id).unwrap().name())
             .collect::<Vec<_>>();
-        assert_eq!(names, ["second", "first"]);
+        assert_eq!(names, [b"second".as_slice(), b"first".as_slice()]);
 
         drop(context.release(second).unwrap());
         drop(context.release(first).unwrap());
@@ -1041,8 +1041,11 @@ mod tests {
             .expect("failed to insert fallback module");
         assert_ne!(fallback.id(), root_id);
         assert_eq!(context.module_id("alias"), Some(root_id));
-        assert_eq!(context.module_key(root_id).unwrap().as_str(), "root");
-        assert_eq!(context.module_key(fallback.id()).unwrap().as_str(), "alias");
+        assert_eq!(context.module_key(root_id).unwrap().as_bytes(), b"root");
+        assert_eq!(
+            context.module_key(fallback.id()).unwrap().as_bytes(),
+            b"alias"
+        );
         assert_eq!(direct_deps(&context, fallback.id()), [dep_module_id]);
 
         assert_eq!(context.release(root).unwrap().len(), 1);
@@ -1225,8 +1228,8 @@ mod tests {
         let imported = target.import(&source, source_root.id()).unwrap();
 
         assert_eq!(
-            target.module_key(imported.id()).unwrap().as_str(),
-            "canonical"
+            target.module_key(imported.id()).unwrap().as_bytes(),
+            b"canonical"
         );
         assert!(target.module_id("canonical").is_some());
         assert!(target.module_id("alias").is_none());

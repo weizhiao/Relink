@@ -170,7 +170,7 @@ impl LifecycleRunner {
         })));
     }
 
-    pub(crate) fn run<Arch, F>(&self, name: &str, memory: &dyn ImageMemory, call: F) -> Result<()>
+    pub(crate) fn run<Arch, F>(&self, name: &[u8], memory: &dyn ImageMemory, call: F) -> Result<()>
     where
         Arch: RelocationArch,
         F: Fn(CodeContext<'_, Arch>, VmAddr) -> Result<()>,
@@ -192,13 +192,13 @@ impl LifecycleRunner {
 /// A hook may inspect, filter, reorder, or replace the lifecycle function
 /// address list before it is executed.
 pub struct LifecycleEvent<'event> {
-    name: &'event str,
+    name: &'event [u8],
     lifecycle: Lifecycle,
 }
 
 impl<'event> LifecycleEvent<'event> {
     #[inline]
-    pub(crate) fn new(name: &'event str, lifecycle: &Lifecycle) -> Self {
+    pub(crate) fn new(name: &'event [u8], lifecycle: &Lifecycle) -> Self {
         Self {
             name,
             lifecycle: lifecycle.clone(),
@@ -207,7 +207,7 @@ impl<'event> LifecycleEvent<'event> {
 
     /// Returns the module identity used for diagnostics.
     #[inline]
-    pub const fn name(&self) -> &'event str {
+    pub const fn name(&self) -> &'event [u8] {
         self.name
     }
 

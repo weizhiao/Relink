@@ -68,7 +68,7 @@ impl RelocationObserver for Observer {
         event.lifecycle_mut().set_init_hook(|event| {
             println!(
                 "initializing {} with {} functions",
-                event.name(),
+                event.name().escape_ascii(),
                 event.lifecycle().func_addrs().count()
             );
             Ok(())
@@ -96,6 +96,10 @@ fn main() -> Result<()> {
             .get::<extern "C" fn() -> i32>("middle_value")
             .expect("missing middle_value")
     };
-    println!("middle_value() = {} from {}", middle_value(), module.name());
+    println!(
+        "middle_value() = {} from {}",
+        middle_value(),
+        module.name().escape_ascii()
+    );
     Ok(())
 }

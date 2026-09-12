@@ -20,6 +20,7 @@ impl DomainId {
     /// Creates an identity for an independent runtime environment.
     pub fn new() -> Self {
         Self(
+            #[allow(deprecated)]
             NEXT_DOMAIN_ID
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
                 .expect("runtime domain identity space is exhausted"),

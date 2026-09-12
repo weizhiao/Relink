@@ -46,7 +46,7 @@ pub trait ElfReader {
     fn as_fd(&self) -> Option<isize>;
 
     /// Returns the final path component of the ELF source path.
-    fn file_name(&self) -> &str {
+    fn file_name(&self) -> &[u8] {
         self.path().file_name()
     }
 }

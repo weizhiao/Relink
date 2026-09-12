@@ -20,7 +20,7 @@ impl LoadObserver<LoadState> for Recorder {
         &mut self,
         mut event: BeforeLoadEvent<'_, LoadState>,
     ) -> elf_loader::Result<()> {
-        assert_eq!(event.path().file_name(), "observed.so");
+        assert_eq!(event.path().file_name(), b"observed.so");
         assert_eq!(
             event.reader().len(),
             crate::fixture::fixtures().provider.len()

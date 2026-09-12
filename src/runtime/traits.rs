@@ -10,7 +10,7 @@ use core::marker::PhantomData;
 
 /// Runtime context for executing code addresses owned by one mapped image.
 pub struct CodeContext<'a, Arch: RelocationArch = NativeArch> {
-    name: &'a str,
+    name: &'a [u8],
     memory: &'a dyn ImageMemory,
     _marker: PhantomData<fn() -> Arch>,
 }
@@ -26,7 +26,7 @@ impl<Arch: RelocationArch> Copy for CodeContext<'_, Arch> {}
 
 impl<'a, Arch: RelocationArch> CodeContext<'a, Arch> {
     #[inline]
-    pub(crate) fn new(name: &'a str, memory: &'a dyn ImageMemory) -> Self {
+    pub(crate) fn new(name: &'a [u8], memory: &'a dyn ImageMemory) -> Self {
         Self {
             name,
             memory,
@@ -36,7 +36,7 @@ impl<'a, Arch: RelocationArch> CodeContext<'a, Arch> {
 
     /// Returns the module identity used for diagnostics.
     #[inline]
-    pub const fn name(&self) -> &'a str {
+    pub const fn name(&self) -> &'a [u8] {
         self.name
     }
 

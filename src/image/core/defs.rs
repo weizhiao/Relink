@@ -235,7 +235,7 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
 
     /// Returns the ELF module name used for diagnostics.
     #[inline]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &[u8] {
         self.search.name()
     }
 
@@ -351,7 +351,7 @@ where
     Tls: TlsResolver<Arch> + 'static,
 {
     #[inline]
-    fn name(&self) -> &str {
+    fn name(&self) -> &[u8] {
         self.name()
     }
 
@@ -436,7 +436,10 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
     /// Executes finalization functions when the component is dropped
     fn drop(&mut self) {
         if let Err(err) = self.state.finalize(|| Module::finalize(self)) {
-            logging::error!("finalization lifecycle failed for {}: {err}", self.name());
+            logging::error!(
+                "finalization lifecycle failed for {}: {err}",
+                self.name().escape_ascii()
+            );
         }
     }
 }

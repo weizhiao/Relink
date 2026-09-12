@@ -208,8 +208,8 @@ where
             .filter(|symbol| symbol.is_exported())?;
         logging::trace!(
             "binding file [{}] to [{}]: symbol [{}]",
-            self.source.name(),
-            source.name(),
+            self.source.name().escape_ascii(),
+            source.name().escape_ascii(),
             entry.name()
         );
         Some(symbol)

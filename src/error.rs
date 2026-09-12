@@ -20,7 +20,7 @@ pub enum IoError {
     /// `open failed for {path} with error: {code}`
     OpenFailed {
         /// Path that failed to open.
-        path: Box<str>,
+        path: Box<[u8]>,
         /// Platform error code returned by the open operation.
         code: u32,
     },
@@ -83,7 +83,7 @@ impl Display for IoError {
             }
             Self::NullByteInPath => f.write_str("path contains an interior NUL byte"),
             Self::OpenFailed { path, code } => {
-                write!(f, "open failed for {path} with error: {code}")
+                write!(f, "open failed for {} with error: {code}", path.escape_ascii())
             }
             Self::FileInfoFailed { code } => {
                 write!(f, "file information query failed with error: {code}")
@@ -684,7 +684,7 @@ impl Display for RelocReason {
 
 /// Detailed relocation failure carried separately so the top-level [`Error`] stays compact.
 pub struct RelocationFailure {
-    file: Box<str>,
+    file: Box<[u8]>,
     r_type: &'static str,
     symbol: Option<Box<str>>,
     reason: RelocReason,
@@ -693,7 +693,7 @@ pub struct RelocationFailure {
 impl RelocationFailure {
     #[inline]
     pub(crate) fn new(
-        file: &str,
+        file: &[u8],
         r_type: &'static str,
         symbol: Option<&str>,
         reason: RelocReason,
@@ -709,7 +709,12 @@ impl RelocationFailure {
 
 impl Display for RelocationFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "file: {}, relocation type: {}, ", self.file, self.r_type)?;
+        write!(
+            f,
+            "file: {}, relocation type: {}, ",
+            self.file.escape_ascii(),
+            self.r_type
+        )?;
         if let Some(symbol) = &self.symbol {
             write!(f, "symbol name: {symbol}, ")?;
         } else {
@@ -840,13 +845,13 @@ impl core::error::Error for CustomError {
 
 /// Unresolved dependency details carried separately so the top-level [`Error`] stays compact.
 pub struct UnresolvedDependency {
-    owner: Box<str>,
+    owner: Box<[u8]>,
     dependency: Box<str>,
 }
 
 impl UnresolvedDependency {
     #[inline]
-    pub(crate) fn new(owner: &str, dependency: &str) -> Self {
+    pub(crate) fn new(owner: &[u8], dependency: &str) -> Self {
         Self {
             owner: owner.into(),
             dependency: dependency.into(),
@@ -859,7 +864,8 @@ impl Display for UnresolvedDependency {
         write!(
             f,
             "unresolved dependency [{}] needed by [{}]",
-            self.dependency, self.owner
+            self.dependency,
+            self.owner.escape_ascii()
         )
     }
 }
@@ -1304,7 +1310,7 @@ debug_as_display!(
 #[cold]
 #[inline(never)]
 pub(crate) fn relocate_context_error(
-    file: &str,
+    file: &[u8],
     r_type: &'static str,
     symbol: Option<&str>,
     reason: RelocReason,

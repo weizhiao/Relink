@@ -65,7 +65,7 @@ where
         Obs: RelocationObserver<Arch> + ?Sized,
         Binder: LazyBinder<Arch> + ?Sized,
     {
-        logging::debug!("Relocating object: {}", self.core.name());
+        logging::debug!("Relocating object: {}", self.core.name().escape_ascii());
         let RelocateArgs {
             scope,
             global,
@@ -189,11 +189,11 @@ where
         core.set_lifecycle(lifecycle);
 
         if run_init {
-            logging::trace!("[{}] Executing init functions", core.name());
+            logging::trace!("[{}] Executing init functions", core.name().escape_ascii());
             core.initialize()?;
         }
 
-        logging::info!("Relocation completed for {}", core.name());
+        logging::info!("Relocation completed for {}", core.name().escape_ascii());
 
         bindings.install(core.state());
         let inner = unsafe {

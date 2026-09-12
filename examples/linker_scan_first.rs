@@ -41,7 +41,7 @@ fn main() -> Result<()> {
     assert_eq!(value, 3);
     println!(
         "scan-first loaded {} with {} committed modules; leaf_value() = {}",
-        module.name(),
+        module.name().escape_ascii(),
         loaded.modules().len(),
         value
     );
