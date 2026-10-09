@@ -4,7 +4,8 @@ use core::{borrow::Borrow, fmt, ops::Deref};
 /// A string that can be part of a path.
 ///
 /// This exists for compatibility with `std::ffi::OsStr` and must
-/// contain UTF-8 or a superset of it.
+/// contain UTF-8 or a superset of it. On Unix and bare-metal targets,
+/// arbitrary bytes are accepted.
 #[derive(Ord, PartialOrd, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct PathStr([u8]);
@@ -15,6 +16,7 @@ impl PathStr {
     /// # Safety
     ///
     /// `bytes` must be either UTF-8 (`str`), or a superset of UTF-8 (`OsStr`).
+    /// On Unix and bare-metal targets all byte sequences are valid.
     pub(crate) unsafe fn new(bytes: &[u8]) -> &Self {
         // `PathStr` is a transparent wrapper around `[u8]`, so the metadata and address are identical.
         unsafe { &*(bytes as *const [u8] as *const Self) }
@@ -36,6 +38,33 @@ impl AsRef<PathStr> for str {
     fn as_ref(&self) -> &PathStr {
         // SAFETY: `self` is a UTF-8 string.
         unsafe { PathStr::new(self.as_bytes()) }
+    }
+}
+
+// Unix and bare-metal loader paths preserve arbitrary bytes.
+// C strings exclude the terminating NUL. Bare-metal targets include ELF
+// interpreters built for target_os = "none" that still use Unix path bytes.
+// Windows OsStr uses WTF-8, so arbitrary C string bytes are not valid there.
+#[cfg(any(unix, target_os = "none"))]
+impl AsRef<PathStr> for core::ffi::CStr {
+    fn as_ref(&self) -> &PathStr {
+        // SAFETY: Unix and bare-metal paths accept arbitrary bytes.
+        unsafe { PathStr::new(self.to_bytes()) }
+    }
+}
+
+#[cfg(any(unix, target_os = "none"))]
+impl AsRef<Path> for core::ffi::CStr {
+    fn as_ref(&self) -> &Path {
+        Path::new(self)
+    }
+}
+
+#[cfg(any(unix, target_os = "none"))]
+impl AsRef<PathStr> for [u8] {
+    fn as_ref(&self) -> &PathStr {
+        // SAFETY: Unix and bare-metal paths use raw bytes.
+        unsafe { PathStr::new(self) }
     }
 }
 
@@ -248,6 +277,20 @@ impl AsRef<Path> for std::path::PathBuf {
     #[inline]
     fn as_ref(&self) -> &Path {
         Path::new(self.as_os_str())
+    }
+}
+
+#[cfg(feature = "std")]
+impl AsRef<Path> for std::ffi::OsStr {
+    fn as_ref(&self) -> &Path {
+        Path::new(self)
+    }
+}
+
+#[cfg(feature = "std")]
+impl AsRef<Path> for std::ffi::OsString {
+    fn as_ref(&self) -> &Path {
+        Path::new(self)
     }
 }
 
