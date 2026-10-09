@@ -284,8 +284,9 @@ impl<D: Send + Sync + 'static, Arch: RelocationArch, R: RegionAccess, Tls: TlsRe
         self.module.user_data_mut()
     }
 
+    /// Returns the runtime address of the dynamic section.
     #[inline]
-    pub(crate) fn dynamic_addr(&self) -> VmAddr {
+    pub fn dynamic_addr(&self) -> VmAddr {
         self.extra.dynamic_addr
     }
 

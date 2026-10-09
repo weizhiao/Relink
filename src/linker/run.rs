@@ -57,10 +57,7 @@ where
     pub fn with_observer<NewObs>(
         self,
         observer: NewObs,
-    ) -> LinkerRun<'run, 'pipe, Arch, L, R, RelocBinder, Tls, NewObs>
-    where
-        NewObs: RelocationObserver<Arch>,
-    {
+    ) -> LinkerRun<'run, 'pipe, Arch, L, R, RelocBinder, Tls, NewObs> {
         LinkerRun {
             linker: self.linker,
             pipeline: self.pipeline,
@@ -326,19 +323,17 @@ where
                     let mut event = LinkerRelocationEvent::new(
                         raw,
                         LocalScope::new([local.clone()], retained.clone()),
-                        self.lookup_order,
                     );
                     self.observer.on_relocation(&mut event)?;
-                    let (raw, scope, binding, lookup_order) = event.into_parts();
+                    let (raw, scope) = event.into_parts();
                     let loaded = self
                         .linker
                         .relocator
                         .run(raw)
                         .local_scope(scope)
                         .global_scope(global)
-                        .lookup_order(lookup_order)
+                        .lookup_order(self.lookup_order)
                         .symbol_registry(Arc::clone(symbols))
-                        .binding(binding)
                         .observer(&mut self.observer)
                         .relocate()?;
                     session.push_ready(id, key, loaded, direct_deps, retained);

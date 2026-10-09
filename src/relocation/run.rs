@@ -51,7 +51,7 @@ impl<Binder> Relocator<Binder> {
             scope: LocalScope::empty(domain),
             global: None,
             observer: (),
-            binding: BindingMode::Default,
+            binding: self.binding,
             lookup_order: LookupOrder::GlobalFirst,
             symbols: None,
             relocator: self,

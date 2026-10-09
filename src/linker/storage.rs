@@ -286,15 +286,10 @@ where
 
     #[inline]
     pub(crate) fn acquire_root(&mut self) {
-        self.acquire_roots(1);
-    }
-
-    #[inline]
-    pub(crate) fn acquire_roots(&mut self, count: usize) {
         self.entry.roots = self
             .entry
             .roots
-            .checked_add(count)
+            .checked_add(1)
             .expect("module acquisition count overflow");
     }
 
@@ -306,12 +301,6 @@ where
             .checked_sub(1)
             .expect("module lease must represent a direct acquisition");
         self.entry.roots
-    }
-
-    #[inline]
-    pub(crate) fn pin_root(&mut self) {
-        self.release_root();
-        self.pin();
     }
 
     #[inline]

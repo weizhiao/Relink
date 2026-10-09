@@ -134,7 +134,7 @@ pub trait LinkerObserver<
     Tls: TlsResolver<Arch> = (),
 >
 {
-    /// Adjusts the scope and binding mode for one module before relocation.
+    /// Adjusts the lookup scope for one module before relocation.
     #[inline]
     fn on_relocation(&mut self, _event: &mut LinkerRelocationEvent<D, Arch, R, Tls>) -> Result<()> {
         Ok(())

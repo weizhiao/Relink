@@ -1,3 +1,5 @@
+use super::BindingMode;
+
 /// Reusable configuration for relocating one raw image at a time.
 ///
 /// A `Relocator` stores the stable relocation policy, including the lazy PLT
@@ -43,6 +45,7 @@
 pub struct Relocator<Binder = ()> {
     pub(super) lazy_binder: Binder,
     pub(super) run_init: bool,
+    pub(super) binding: BindingMode,
 }
 
 impl<Binder> Clone for Relocator<Binder>
@@ -54,6 +57,7 @@ where
         Self {
             lazy_binder: self.lazy_binder.clone(),
             run_init: self.run_init,
+            binding: self.binding,
         }
     }
 }
@@ -67,6 +71,7 @@ impl Relocator<()> {
         Self {
             lazy_binder: (),
             run_init: true,
+            binding: BindingMode::Default,
         }
     }
 }
@@ -79,6 +84,16 @@ impl Default for Relocator<()> {
 }
 
 impl<Binder> Relocator<Binder> {
+    /// Sets the binding policy inherited by relocation runs.
+    ///
+    /// `BindingMode::Default` follows the ELF object's binding requirements.
+    /// A relocation run may override this policy.
+    #[inline]
+    pub const fn binding(mut self, binding: BindingMode) -> Self {
+        self.binding = binding;
+        self
+    }
+
     /// Overrides the lazy PLT binder used to prepare runtime binding.
     pub const fn lazy_binder<NewBinder>(self, binder: NewBinder) -> Relocator<NewBinder>
     where
@@ -88,6 +103,7 @@ impl<Binder> Relocator<Binder> {
         Relocator {
             lazy_binder: binder,
             run_init: self.run_init,
+            binding: self.binding,
         }
     }
 

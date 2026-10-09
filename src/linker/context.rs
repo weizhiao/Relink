@@ -266,10 +266,12 @@ where
     pub fn pin(&mut self, lease: ModuleLease) -> Result<()> {
         let id = lease.id();
         let slot = self.committed.module_slot(id)?;
-        self.committed
+        let mut module = self
+            .committed
             .module_mut(slot)
-            .expect("validated module id must refer to committed state")
-            .pin_root();
+            .expect("validated module id must refer to committed state");
+        module.release_root();
+        module.pin();
         Ok(())
     }
 
